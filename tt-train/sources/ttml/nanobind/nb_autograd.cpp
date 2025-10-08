@@ -61,6 +61,11 @@ void py_module(nb::module_& m) {
         py_tensor.def(nb::init<const tt::tt_metal::Tensor&, bool>());
         py_tensor.def("set_value", &Tensor::set_value, nb::arg("value"), "Set underlying tensor");
         py_tensor.def("set_grad", &Tensor::set_grad, nb::arg("grad"), "Set gradient");
+        py_tensor.def(
+            "set_grad_from_tensor",
+            [](Tensor& self, const TensorPtr& grad_tensor) { self.set_grad(grad_tensor->get_value()); },
+            nb::arg("grad_tensor"),
+            "Set gradient from tensor");
         py_tensor.def("set_node", &Tensor::set_node, nb::arg("node"), "Set node");
         py_tensor.def("clean_node", &Tensor::clean_node, "Clean(unset) node");
         py_tensor.def("add_grad", &Tensor::add_grad, nb::arg("grad"), "Add to gradient");
@@ -210,31 +215,47 @@ void py_module(nb::module_& m) {
         py_auto_context.def("close_device", &AutoContext::close_device, "Close mesh device");
         py_auto_context.def("get_device", &AutoContext::get_device, nb::rv_policy::reference, "Get mesh device");
         // TODO: argv's char** not supported
-        // py_auto_context.def("initialize_distributed_context", &AutoContext::initialize_distributed_context);
         py_auto_context.def(
             "initialize_distributed_context",
             [](AutoContext& auto_context, nb::args args) {
                 const auto argc = args.size();
-                std::vector<std::string> argv_strings;
-                std::vector<const char*> argv;
-                argv_strings.reserve(argc);
-                argv.reserve(argc + 1);
 
+                std::vector<std::string> storage;
+                storage.reserve(argc);
                 for (const auto& arg : args) {
-                    argv_strings.push_back(nb::cast<std::string>(arg));
-                    argv.push_back(argv_strings.back().c_str());
+                    storage.emplace_back(nb::str(arg).c_str());
+                }
+
+                std::vector<char*> argv;
+                argv.reserve(argc);
+                for (auto& s : storage) {
+                    argv.push_back(s.data());
                 }
                 argv.push_back(nullptr);
 
-                auto_context.initialize_distributed_context(argc, const_cast<char**>(argv.data()));
+                auto_context.initialize_distributed_context(static_cast<int>(argc), argv.data());
             },
             nb::arg("args"),
             "Initialize distributed context");
         py_auto_context.def(
-            "get_distributed_context", &AutoContext::get_distributed_context, "Get distributed context");
+            "get_distributed_context",
+            [](AutoContext& self) -> tt::tt_metal::distributed::multihost::DistributedContext* {
+                return self.get_distributed_context().get();
+            },
+            nb::rv_policy::reference,
+            "Get distributed context");
         py_auto_context.def("get_profiler", &AutoContext::get_profiler, "Get profiler");
         py_auto_context.def("close_profiler", &AutoContext::close_profiler, "Close profiler");
         py_auto_context.def("get_ccl_resources", &AutoContext::get_ccl_resources, "Get CCL resources");
+
+        // Socket manager controls
+        py_auto_context.def(
+            "initialize_socket_manager",
+            &AutoContext::initialize_socket_manager,
+            nb::arg("socket_type"),
+            "Initialize socket manager");
+        py_auto_context.def(
+            "get_socket_manager", &AutoContext::get_socket_manager, nb::rv_policy::reference, "Get socket manager");
     }
 }
 
