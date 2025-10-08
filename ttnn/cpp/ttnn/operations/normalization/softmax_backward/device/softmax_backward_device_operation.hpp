@@ -21,30 +21,6 @@ struct SoftmaxBackwardDeviceOperation {
     using spec_return_value_t = softmax_backward::spec_return_value_t;
     using tensor_return_value_t = softmax_backward::tensor_return_value_t;
 
-    // Note spec_return_value_t and tensor_return_value_t should follow the same pattern
-    // i.e. if spec_return_value_t is a std::vector<std::optional<ttnn::TensorSpec>> then tensor_return_value_t should
-    // be std::vector<std::optional<Tensor>>
-    struct SingleCore {
-        using shared_variables_t = SoftmaxBackwardProgramFactory::shared_variables_t;
-        using cached_program_t = SoftmaxBackwardProgramFactory::cached_program_t;
-
-        static cached_program_t create(
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value) {
-            return SoftmaxBackwardProgramFactory::create(operation_attributes, tensor_args, tensor_return_value);
-        }
-
-        static void override_runtime_arguments(
-            cached_program_t& cached_program,
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value) {
-            SoftmaxBackwardProgramFactory::override_runtime_arguments(
-                cached_program, operation_attributes, tensor_args, tensor_return_value);
-        }
-    };
-
     struct MultiCore {
         using shared_variables_t = SoftmaxBackwardProgramFactory::shared_variables_t;
         using cached_program_t = SoftmaxBackwardProgramFactory::cached_program_t;
@@ -66,7 +42,7 @@ struct SoftmaxBackwardDeviceOperation {
         }
     };
 
-    using program_factory_t = std::variant<SingleCore, MultiCore>;
+    using program_factory_t = std::variant<MultiCore>;
 
     // Mandatory methods
 

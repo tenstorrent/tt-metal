@@ -76,9 +76,14 @@ void bind_normalization_softmax_backward_operation(py::module& module) {
             [](const OperationType& self,
                const ttnn::Tensor& softmax_output_tensor,
                const ttnn::Tensor& grad_tensor,
-               const uint32_t dim) -> ttnn::Tensor {
+               int32_t dim) -> ttnn::Tensor {
+                // Convert negative dimension to positive (Python convention: -1 means last dimension)
+                const auto rank = softmax_output_tensor.logical_shape().rank();
+                uint32_t normalized_dim = dim < 0 ? static_cast<uint32_t>(dim + rank) : static_cast<uint32_t>(dim);
                 return self(
-                    softmax_output_tensor, grad_tensor, dim /*, memory_config, compute_kernel_config, numeric_stable*/);
+                    softmax_output_tensor,
+                    grad_tensor,
+                    normalized_dim /*, memory_config, compute_kernel_config, numeric_stable*/);
             },
             py::arg("softmax_output_tensor").noconvert(),
             py::arg("grad_tensor").noconvert(),
