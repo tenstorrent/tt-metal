@@ -547,10 +547,36 @@ void py_module(py::module& module) {
                   - TILE
 
         Memory Support:
-            - Interleaved: DRAM and L1
-            - Input A also supports sharding (width, height, block), with row major orientation, depending on the program config
-            - Input B also supports sharding (width, height, block), with row major orientation depending on the program config, although in a more limited manner than Input A
-            - Sharded outputs (when used): must match Input A buffer type and memory layout; some configs disallow width sharded outputs
+            The supported memory configurations for the two input tensors are program config dependent, as described below:
+
+            .. list-table:: Supported Memory Configurations
+                :header-rows: 1
+
+                * - Config
+                  - Input A
+                  - Input B
+                * - MatmulMultiCoreReuseProgramConfig
+                  - Interleaved (L1/DRAM), Height Sharded (L1), or Block Sharded (L1)
+                  - Interleaved (L1/DRAM), Height Sharded (L1), or Block Sharded (L1)
+                * - MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig
+                  - Width Sharded (L1)
+                  - Width Sharded (DRAM)
+                * - MatmulMultiCoreReuseMultiCastProgramConfig
+                  - Interleaved (L1/DRAM), Block Sharded (L1)
+                  - Interleaved (L1/DRAM)
+                * - MatmulMultiCoreReuseMultiCastProgramConfig (only for row major orientation without transpose multicast)
+                  - Interleaved (L1/DRAM), Height Sharded (L1)
+                  - Interleaved (L1/DRAM), Width Sharded (L1)
+                * - MatmulMultiCoreReuseMultiCast1DProgramConfig (mcast_in0=False)
+                  - Interleaved (L1/DRAM), Width Sharded (L1)
+                  - Interleaved (L1/DRAM), Width Sharded (L1)
+                * - MatmulMultiCoreReuseMultiCast1DProgramConfig (mcast_in0=True)
+                  - Interleaved (L1/DRAM), Height Sharded (L1)
+                  - Interleaved (L1/DRAM)
+
+
+
+            When sharded output tensors are provided, they should match :attr:`input_tensor_a`'s buffer type and memory layout.
 
         Example:
             >>> # matrix x matrix - no batch dimensions
