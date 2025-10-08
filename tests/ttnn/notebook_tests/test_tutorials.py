@@ -54,6 +54,7 @@ def prepare_test_data(model_location_generator) -> None:
     """
     # Find tt-metal home directory
     current_file_path = Path(__file__).resolve()
+    print(f"!!! CURRENT PATH: {current_file_path}")
     # Find 'tt-metal' in the path by iterating through parents
     current_path = current_file_path
     while current_path.name != "tt-metal" and current_path.parent != current_path:
