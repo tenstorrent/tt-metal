@@ -658,7 +658,10 @@ void MetalContext::reset_cores(chip_id_t device_id) {
                 llrt::internal_::return_to_base_firmware_and_wait_for_heartbeat(device_id, virtual_core);
             }
             // Only send reset to subordinate cores
-            tt::umd::RiscType reset_val = tt::umd::RiscType::BRISC;
+            TensixSoftResetOptions reset_val = TENSIX_ASSERT_SOFT_RESET;
+            reset_val =
+                reset_val & static_cast<TensixSoftResetOptions>(
+                                ~std::underlying_type<TensixSoftResetOptions>::type(TensixSoftResetOptions::BRISC));
             tt::tt_metal::MetalContext::instance().get_cluster().assert_risc_reset_at_core(
                 tt_cxy_pair(device_id, virtual_core), reset_val);
         }
