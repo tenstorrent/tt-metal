@@ -812,7 +812,9 @@ def test_demo_text(
             # Use specific prompt for each batch (A,A,B,B,C,C pattern)
             repeat_batch_prompts.append([original_prompts_for_repeat_batch[i] for j in range(batch_size)])
         else:
-            repeat_batch_prompts.append([input_prompts[(j + i) % len(input_prompts)] for j in range(len(input_prompts))])
+            repeat_batch_prompts.append(
+                [input_prompts[(j + i) % len(input_prompts)] for j in range(len(input_prompts))]
+            )
 
     num_tokens_generated_decode = []
 
@@ -1013,22 +1015,22 @@ def test_demo_text(
 
         # Store outputs for repeat batch tests
         if "repeat-batch-1" in test_id:
-            if not hasattr(test_demo_text, 'batch_outputs'):
+            if not hasattr(test_demo_text, "batch_outputs"):
                 test_demo_text.batch_outputs = []
             if batch_idx == 0:
                 test_demo_text.batch_outputs = []
-            
+
             if all_outputs and len(all_outputs) > 0:
                 final_output_text = tokenizer.decode(all_outputs[0])
                 test_demo_text.batch_outputs.append(final_output_text)
                 logger.info(f"Stored output for batch {batch_idx}: {final_output_text[:100]}...")
 
         if "repeat-batch-32" in test_id:
-            if not hasattr(test_demo_text, 'batch32_outputs'):
+            if not hasattr(test_demo_text, "batch32_outputs"):
                 test_demo_text.batch32_outputs = []
             if batch_idx == 0:
                 test_demo_text.batch32_outputs = []
-            
+
             batch_outputs = []
             if all_outputs and len(all_outputs) > 0:
                 for user_idx in range(len(all_outputs)):
@@ -1319,64 +1321,82 @@ def test_demo_text(
             ), f"Top-5 accuracy {total_top5_acc:.1f}% is too low (expected >={min_top5_acc}%)"
             logger.info("Checks of top-1 and top-5 accuracy against PERF.md passed")
 
-    if "repeat-batch-1" in test_id and hasattr(test_demo_text, 'batch_outputs') and len(test_demo_text.batch_outputs) == repeat_batches:
+    if (
+        "repeat-batch-1" in test_id
+        and hasattr(test_demo_text, "batch_outputs")
+        and len(test_demo_text.batch_outputs) == repeat_batches
+    ):
         logger.info("=== Repeat Batch Output Comparison ===")
 
         # Compare paired batches (A<->A, B<->B, C<->C)
-        comparisons = [(i, i+1) for i in range(0, repeat_batches, 2)]
+        comparisons = [(i, i + 1) for i in range(0, repeat_batches, 2)]
         comparison_names = [f"Batch{i//2+1}<->Batch{i//2+1}" for i in range(0, repeat_batches, 2)]
-        
+
         all_matches = True
         for i, (batch1_idx, batch2_idx) in enumerate(comparisons):
             output1 = test_demo_text.batch_outputs[batch1_idx]
             output2 = test_demo_text.batch_outputs[batch2_idx]
             
             if output1 == output2:
-                logger.info(f"{comparison_names[i]} comparison PASSED: Batches {batch1_idx+1} and {batch2_idx+1} outputs match")
+                logger.info(
+                    f"{comparison_names[i]} comparison PASSED: Batches {batch1_idx+1} and {batch2_idx+1} outputs match"
+                )
             else:
-                logger.warning(f"{comparison_names[i]} comparison FAILED: Batches {batch1_idx+1} and {batch2_idx+1} outputs differ")
+                logger.warning(
+                    f"{comparison_names[i]} comparison FAILED: Batches {batch1_idx+1} and {batch2_idx+1} outputs differ"
+                )
                 logger.info(f"  Batch {batch1_idx+1} output: {output1[:100]}...")
                 logger.info(f"  Batch {batch2_idx+1} output: {output2[:100]}...")
                 all_matches = False
         
         assert all_matches, "Repeat batch outputs should be identical"
 
-    if "repeat-batch-32" in test_id and hasattr(test_demo_text, 'batch32_outputs') and len(test_demo_text.batch32_outputs) > 1:
+    if (
+        "repeat-batch-32" in test_id
+        and hasattr(test_demo_text, "batch32_outputs")
+        and len(test_demo_text.batch32_outputs) > 1
+    ):
         logger.info("=== Batch32 Shifting Test Output Comparison ===")
-        
+
         num_batches = len(test_demo_text.batch32_outputs)
         num_users = len(test_demo_text.batch32_outputs[0])
-        
+
         logger.info(f"Comparing {num_batches} batches with {num_users} users each")
-        
+
         consistency_checks = []
         
         for batch_idx in range(num_batches - 1):
             current_batch = test_demo_text.batch32_outputs[batch_idx]
             next_batch = test_demo_text.batch32_outputs[batch_idx + 1]
-            
+
             logger.info(f"Comparing batch {batch_idx} vs batch {batch_idx + 1}")
-            
+
             for user_offset in range(num_users):
                 current_user_idx = (user_offset + 1) % num_users
                 next_user_idx = user_offset
-                
+
                 current_output = current_batch[current_user_idx]
                 next_output = next_batch[next_user_idx]
-                
+
                 expected_prompt_idx = (user_offset + batch_idx + 1) % num_users
                 
                 if current_output == next_output:
                     consistency_checks.append(True)
-                    logger.info(f"User {current_user_idx} (batch {batch_idx}) matches User {next_user_idx} (batch {batch_idx + 1}) - both used prompt[{expected_prompt_idx}]")
+                    logger.info(
+                        f"User {current_user_idx} (batch {batch_idx}) matches User {next_user_idx} (batch {batch_idx + 1}) - both used prompt[{expected_prompt_idx}]"
+                    )
                 else:
                     consistency_checks.append(False)
-                    logger.warning(f"User {current_user_idx} (batch {batch_idx}) differs from User {next_user_idx} (batch {batch_idx + 1}) - both should use prompt[{expected_prompt_idx}]")
+                    logger.warning(
+                        f"User {current_user_idx} (batch {batch_idx}) differs from User {next_user_idx} (batch {batch_idx + 1}) - both should use prompt[{expected_prompt_idx}]"
+                    )
                     logger.info(f"  Batch {batch_idx} User {current_user_idx}: {current_output[:50]}...")
                     logger.info(f"  Batch {batch_idx + 1} User {next_user_idx}: {next_output[:50]}...")
         
         all_consistent = all(consistency_checks)
         failed_checks = sum(1 for check in consistency_checks if not check)
         total_checks = len(consistency_checks)
-        
-        assert all_consistent, f"Batch32 repeat batch outputs should be identical - {failed_checks} out of {total_checks} consistency checks failed"
+
+        assert (
+            all_consistent
+        ), f"Batch32 repeat batch outputs should be identical - {failed_checks} out of {total_checks} consistency checks failed"
