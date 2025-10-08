@@ -73,58 +73,50 @@ def train(cfg, model, optim, train_ids: np.ndarray, val_ids: np.ndarray, use_ddp
     val_losses = []
 
     # Gradient accumulation state
-    accum_step = 0
     accum_loss = 0.0
     last_val_loss = None
 
     bar = tqdm(range(1, cfg.steps + 1))
     for step in bar:
-        tt_x, tt_y = get_batch_ttml(train_ids, cfg.seq_len, cfg.batch_size, use_ddp)
+        optim.zero_grad()
+        accum_loss = 0.0
 
-        # Zero grad only at the start of accumulation
-        if accum_step == 0:
-            optim.zero_grad()
+        # Inner loop for gradient accumulation
+        for _ in range(cfg.gradient_accumulation_steps):
+            tt_x, tt_y = get_batch_ttml(train_ids, cfg.seq_len, cfg.batch_size, use_ddp)
 
-        # ---- forward/backward ----
-        logits = model(tt_x, tt_mask)
-        loss = loss_fn(logits, tt_y, reduce)
+            # ---- forward/backward ----
+            logits = model(tt_x, tt_mask)
+            loss = loss_fn(logits, tt_y, reduce)
 
-        # Scale loss by accumulation steps
-        if cfg.gradient_accumulation_steps > 1:
-            loss = ttml.ops.mul(loss, 1.0 / cfg.gradient_accumulation_steps)
+            # Scale loss by accumulation steps
+            if cfg.gradient_accumulation_steps > 1:
+                loss = loss * (1.0 / cfg.gradient_accumulation_steps)
 
-        loss.backward(False)
-        ttml.autograd.AutoContext.get_instance().reset_graph()
+            loss.backward(False)
+            ttml.autograd.AutoContext.get_instance().reset_graph()
 
-        # For DDP, composer concatenates losses from all devices - take mean
-        loss_numpy = loss.to_numpy(composer=composer)
-        train_loss = loss_numpy.mean()
+            # For DDP, composer concatenates losses from all devices - take mean
+            loss_numpy = loss.to_numpy(composer=composer)
+            train_loss = loss_numpy.mean()
 
-        # Accumulate loss
-        accum_loss += train_loss
-        accum_step += 1
+            # Accumulate loss
+            accum_loss += train_loss
 
-        # Step optimizer when accumulation is complete
-        if accum_step >= cfg.gradient_accumulation_steps:
-            # Synchronize gradients for DDP
-            if use_ddp:
-                ttml.core.distributed.synchronize_parameters(model.parameters())
+        # Synchronize gradients for DDP
+        if use_ddp:
+            ttml.core.distributed.synchronize_parameters(model.parameters())
 
-            optim.step()
+        optim.step()
 
-            # Record average accumulated loss
-            avg_loss = accum_loss / cfg.gradient_accumulation_steps
-            train_losses.append(avg_loss)
+        # Record accumulated loss
+        train_losses.append(accum_loss)
 
-            # Update progress bar - preserve val_loss if it exists
-            postfix = {"train_loss": f"{avg_loss:.4f}"}
-            if last_val_loss is not None:
-                postfix["val_loss"] = f"{last_val_loss:.4f}"
-            bar.set_postfix(postfix, refresh=False)
-
-            # Reset accumulation
-            accum_step = 0
-            accum_loss = 0.0
+        # Update progress bar - preserve val_loss if it exists
+        postfix = {"train_loss": f"{accum_loss:.4f}"}
+        if last_val_loss is not None:
+            postfix["val_loss"] = f"{last_val_loss:.4f}"
+        bar.set_postfix(postfix, refresh=False)
 
         # ---- occasional eval on val set ----
         if (step % cfg.eval_every) == 0 or step == 1:
