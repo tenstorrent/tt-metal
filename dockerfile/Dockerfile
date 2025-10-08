@@ -134,7 +134,10 @@ RUN set -eu && \
     fi
 
 RUN cmake --build build --target package
-RUN ls -1sh build/*.deb build/*.ddeb || true
+RUN mkdir /build
+RUN mv build/*.deb build/*.ddeb /build/
+
+RUN ls -1sh /build/*.deb /build/*.ddeb || true
 
 # Prepare and tar artifacts
 RUN set -eu && \
