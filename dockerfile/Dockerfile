@@ -62,7 +62,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgtest-dev \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Set up virtual environment
 ENV PYTHON_ENV_DIR=/opt/venv
 RUN umask 000 && python3 -m venv $PYTHON_ENV_DIR
 
@@ -76,9 +75,114 @@ RUN echo "source $PYTHON_ENV_DIR/bin/activate" >> /etc/bash.bashrc
 # Numpy needed for tt-train to build
 RUN python3 -m pip install --no-cache-dir build numpy setuptools
 
-RUN git config --global --add safe.directory '*'
-
 ENV CCACHE_TEMPDIR=/tmp/ccache
+
+#############################################################
+FROM ci-build as build-artifacts
+
+# Copy files required for build only (omit scripts, docs, tests not needed for build
+# misc
+#COPY tools /tt-metal/tools
+#COPY tt_telemetry /tt-metal/tt_telemetry
+#COPY cmake /tt-metal/cmake
+#COPY tt-train /tt-metal/tt-train
+#COPY tt_stl /tt-metal/tt_stl
+#COPY build_metal.sh /tt-metal/build_metal.sh
+#COPY CMakeLists.txt /tt-metal/CMakeLists.txt
+#COPY CMakePresets.json /tt-metal/CMakePresets.json
+
+# tt-metal
+#COPY tt_metal /tt-metal/tt_metal
+
+# ttnn
+#COPY ttnn /tt-metal/ttnn
+
+# Tests
+#COPY tests/CMakeLists.txt /tt-metal/tests/CMakeLists.txt
+#COPY tests/tt_metal /tt-metal/tests/tt_metal
+#COPY tests/tt_eager /tt-metal/tests/tt_eager
+#COPY tests/ttnn /tt-metal/tests/ttnn
+
+COPY . /tt-metal
+
+WORKDIR /tt-metal
+
+# Override version to not rely at all on git
+RUN sed -i 's/set(fallbackVersion "\$Format:%(describe)\$")/set(fallbackVersion "0.0.0")/; s/set(fallbackHash "\$Format:%h\$")/set(fallbackHash "000")/' cmake/version.cmake
+
+
+ARG SKIP_TT_TRAIN="true"
+ARG BUILD_TYPE="Release"
+ARG TOOLCHAIN="cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake"
+ARG TRACY="false"
+ARG DISTRIBUTED="true"
+ARG PROFILE="false"
+ARG BUILD_UMD_TESTS="false"
+ARG PUBLISH_ARTIFACT="true"
+
+RUN set -eu && \
+    BUILD_ARGS=$([ "${SKIP_TT_TRAIN}" = "true" ] && echo "--build-metal-tests --build-ttnn-tests --build-programming-examples" || echo "--build-all") && \
+    BUILD_COMMAND="./build_metal.sh --build-dir build --build-type ${BUILD_TYPE} --toolchain-path ${TOOLCHAIN} ${BUILD_ARGS} --enable-ccache --configure-only" && \
+    \
+    # Conditionally add Tracy profiler
+    if [ "${TRACY}" = "true" ]; then \
+        BUILD_COMMAND="${BUILD_COMMAND} --enable-profiler"; \
+    fi && \
+    \
+    # Conditionally disable distributed
+    if [ "${DISTRIBUTED}" = "false" ]; then \
+        BUILD_COMMAND="${BUILD_COMMAND} --without-distributed"; \
+    fi && \
+    \
+    # Conditionally add profiling options
+    if [ "${PROFILE}" = "true" ]; then \
+        BUILD_COMMAND="${BUILD_COMMAND} --enable-time-trace --disable-unity-builds"; \
+    fi && \
+    \
+    # Conditionally build UMD tests
+    if [ "${BUILD_UMD_TESTS}" = "true" ]; then \
+        BUILD_COMMAND="${BUILD_COMMAND} --build-umd-tests"; \
+    fi && \
+    \
+    # Execute the build command
+    echo "Build command: ${BUILD_COMMAND}" && \
+    ${BUILD_COMMAND}
+
+# this pollutes the system - likely needs --components... (if some missing)
+RUN cmake --build build --target install 
+
+# Conditional profiling step
+RUN set -eu && \
+    if [ "${PROFILE}" = "true" ]; then \
+        echo "maxNameLength = 300" > ClangBuildAnalyzer.ini && \
+        ClangBuildAnalyzer --all build capture.bin && \
+        ClangBuildAnalyzer --analyze capture.bin; \
+    fi
+
+RUN cmake --build build --target package
+RUN mkdir /build
+RUN mv build/*.deb build/*.ddeb /build/
+
+RUN ls -1sh /build/*.deb /build/*.ddeb || true
+
+# Prepare and tar artifacts
+RUN set -eu && \
+    if [ "${PUBLISH_ARTIFACT}" = "true" ]; then \
+        ARTIFACT_PATHS="ttnn/ttnn/*.so build/lib ttnn/ttnn/*.so build/programming_examples build/test build/tools runtime"; \
+        \
+        if [ "${SKIP_TT_TRAIN}" != "true" ]; then \
+            ARTIFACT_PATHS="${ARTIFACT_PATHS} build/tt-train data"; \
+        fi && \
+        \
+        mkdir -p /artifacts && \
+        tar -cvhf /artifacts/ttm_any.tar ${ARTIFACT_PATHS}; \
+    fi
+
+RUN python3 -m build --wheel -o /artifacts .
+
+FROM scratch AS artifacts
+COPY --from=build-artifacts /artifacts /artifacts
+COPY --from=build-artifacts /build /build
 
 #############################################################
 
@@ -115,7 +219,6 @@ RUN if [ "$UBUNTU_VERSION" = "22.04" ]; then \
 #############################################################
 
 FROM ci-test AS dev
-
 
 ARG UBUNTU_VERSION=22.04
 # Install dev deps
@@ -165,6 +268,31 @@ COPY /dockerfile/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+
+## Evaluation image - everything installed & ready to go
+FROM dev as evaluation
+CMD ["tail", "-f", "/dev/null"]
+COPY --from=artifacts /artifacts /artifacts
+COPY --from=artifacts /build /build
+
+RUN apt update && apt install -y nlohmann-json3-dev libxtensor-dev
+
+RUN dpkg -i /build/tt-metalium_0.0.0~ubuntu24.04_amd64.deb
+RUN dpkg -i /build/tt-nn_0.0.0~ubuntu24.04_amd64.deb
+RUN dpkg -i /build/*
+
+ENV LD_LIBRARY_PATH="/opt/openmpi-v5.0.7-ulfm/lib:$LD_LIBRARY_PATH"
+RUN pip3 install /artifacts/ttnn-0.0.0.dev0-cp312-cp312-linux_x86_64.whl
+
+COPY . ./tt-metal
+
+RUN tar -xf /artifacts/ttm_any.tar -C /tt-metal
+ENV TT_METAL_HOME=/tt-metal
+#ENV TT_METAL_RUNTIME_ROOT=/tt-metal
+
+# Required for MPI
+RUN mkdir -p /run/sshd
+RUN echo "StrictModes no" >> /etc/ssh/sshd_config
 
 #############################################################
 
