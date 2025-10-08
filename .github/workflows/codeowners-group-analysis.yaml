@@ -260,14 +260,14 @@ jobs:
 
           while true; do
             REVIEWS_API="https://api.github.com/repos/${{ github.repository }}/pulls/$PR_NUMBER/reviews?per_page=100&page=$PAGE"
-            REVIEWS_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-                             -H "Accept: application/vnd.github.v3+json" \
-                             "$REVIEWS_API" 2>/dev/null)
+          REVIEWS_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+                           -H "Accept: application/vnd.github.v3+json" \
+                           "$REVIEWS_API" 2>/dev/null)
 
-            # Check if API call was successful
-            REVIEWS_HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-                             -H "Accept: application/vnd.github.v3+json" \
-                             "$REVIEWS_API")
+          # Check if API call was successful
+          REVIEWS_HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+                           -H "Accept: application/vnd.github.v3+json" \
+                           "$REVIEWS_API")
 
             if [ "$REVIEWS_HTTP_CODE" = "200" ] && [ -n "$REVIEWS_DATA" ] && [ "$REVIEWS_DATA" != "null" ] && [ "$REVIEWS_DATA" != "[]" ]; then
               # Merge this page with existing reviews
@@ -288,7 +288,7 @@ jobs:
               fi
             else
               if [ $PAGE -eq 1 ]; then
-                echo "Warning: Could not fetch PR reviews (HTTP $REVIEWS_HTTP_CODE)"
+            echo "Warning: Could not fetch PR reviews (HTTP $REVIEWS_HTTP_CODE)"
               fi
               break
             fi
@@ -637,7 +637,7 @@ jobs:
 
   post-comment:
     needs: [find-pr, analyze-codeowners, get-reviews, parse-comment]
-    if: always() && needs.find-pr.outputs.pr-exists == 'true' && needs.parse-comment.outputs.is-direct-ping != 'true'
+    if: always() && needs.find-pr.outputs.pr-exists == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Generate comment data
@@ -1298,7 +1298,7 @@ jobs:
                           if is_moreh_member "$member"; then
                             echo "Excluding $member (thirdparty-moreh team member) from selection"
                           else
-                            TEAM_UNAPPROVED="$TEAM_UNAPPROVED$member,"
+                          TEAM_UNAPPROVED="$TEAM_UNAPPROVED$member,"
                           fi
                         fi
                       done
@@ -1359,7 +1359,7 @@ jobs:
                     if is_moreh_member "$username"; then
                       echo "Excluding $username (thirdparty-moreh team member) from pattern selection"
                     else
-                      PATTERN_UNAPPROVED="$PATTERN_UNAPPROVED$username,"
+                    PATTERN_UNAPPROVED="$PATTERN_UNAPPROVED$username,"
                     fi
                   fi
                 done
