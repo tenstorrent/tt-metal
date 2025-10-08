@@ -18,12 +18,7 @@ def main():
     transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
 
     # Load CIFAR-10 test data
-    testset = torchvision.datasets.CIFAR10(
-        root="./data",
-        train=False,
-        download=True,
-        transform=transform,
-    )
+    testset = torchvision.datasets.CIFAR10(root="./data", train=False, download=True, transform=transform)
     testloader = torch.utils.data.DataLoader(testset, batch_size=1, shuffle=False)
 
     if os.path.exists("simple_cnn_cifar10_weights.pt"):
