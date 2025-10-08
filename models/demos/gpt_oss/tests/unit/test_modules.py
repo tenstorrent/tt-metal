@@ -32,7 +32,7 @@ def run_attention_component(
     mask,
     tt_mask,
     position_embeddings,
-    rope_stuff,
+    rope_mats,
     tt_position_idx,
     reference_layer,
     decoder_layer,
@@ -58,7 +58,7 @@ def run_attention_component(
 
     # TTNN attention forward
     attention_module = decoder_layer.self_attn
-    tt_out = attention_module(tt_hidden_states, tt_mask, rope_stuff, tt_position_idx)
+    tt_out = attention_module(tt_hidden_states, tt_mask, rope_mats, tt_position_idx)
 
     # Compare outputs
     passing, output = run_component_comparison(tt_out, reference_out, mesh_device, pcc_threshold=0.99)
@@ -209,7 +209,6 @@ def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, re
 
     with torch.no_grad():
         for name, param in reference_layer.named_parameters():
-            print(name)
             if any(proj in name for proj in ["router", "experts", "sinks"]):
                 param.data.normal_(0, 1)
 
@@ -264,7 +263,7 @@ def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, re
     from models.demos.gpt_oss.tt.rope import ApplyRotaryPosEmb
 
     apply_rope = ApplyRotaryPosEmb(config)
-    rope_stuff = (apply_rope, tt_cos, tt_sin)
+    rope_mats = (apply_rope, tt_cos, tt_sin)
 
     # Create position index for TTNN
     tt_position_idx = ttnn.from_torch(
@@ -297,7 +296,7 @@ def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, re
         mask,
         tt_mask,
         position_embeddings,
-        rope_stuff,
+        rope_mats,
         tt_position_idx,
         reference_layer,
         decoder_layer,
@@ -309,7 +308,7 @@ def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, re
 
     # Test full decoder layer integration
     tt_output = decoder_layer(
-        tt_hidden_states, attention_mask=tt_mask, position_embeddings=rope_stuff, position_idx=tt_position_idx
+        tt_hidden_states, attention_mask=tt_mask, position_embeddings=rope_mats, position_idx=tt_position_idx
     )
 
     # Compare outputs

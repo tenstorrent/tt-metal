@@ -19,7 +19,7 @@ class MeshConfig:
 
         self.mesh_shape = tuple(mesh_shape)
         self.tp = tp
-        self.ep = mesh_shape[0]
+        self.ep = ep
         self.tp_axis = tp_axis
         self.ep_axis = 0 if tp_axis == 1 else 1
 

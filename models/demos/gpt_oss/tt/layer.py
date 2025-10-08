@@ -75,7 +75,7 @@ class DecoderLayer:
         hidden_states = self.self_attn(
             x=hidden_states_post_norm,
             mask=attention_mask,
-            rope_stuff=position_embeddings,
+            rope_mats=position_embeddings,
             position_idx=position_idx,
             page_table=page_table,
             kv_cache=kv_cache,

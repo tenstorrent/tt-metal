@@ -227,7 +227,7 @@ class Attention:
             packer_l1_acc=False,
         )
 
-    def __call__(self, x: ttnn.Tensor, mask, rope_stuff, position_idx=None, page_table=None, kv_cache=None):
+    def __call__(self, x: ttnn.Tensor, mask, rope_mats, position_idx=None, page_table=None, kv_cache=None):
         batch_size, seq_len, hidden_size = x.shape
         tt_q = ttnn.matmul(x, self.q_proj)
         tt_q = ttnn.add(tt_q, self.q_proj_bias, output_tensor=tt_q)
@@ -241,7 +241,7 @@ class Attention:
         tt_v = ttnn.add(tt_v, self.v_proj_bias, output_tensor=tt_v)
         tt_v = ttnn.reshape(tt_v, [1, seq_len * batch_size, -1, self.head_dim])
 
-        apply_rope, tt_cos, tt_sin = rope_stuff
+        apply_rope, tt_cos, tt_sin = rope_mats
         tt_q_rope = apply_rope(tt_q, tt_cos, tt_sin)
         tt_q.deallocate(True)
         tt_q = tt_q_rope
