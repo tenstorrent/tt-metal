@@ -404,7 +404,19 @@ def run(test_module_name, input_queue, output_queue, config: SweepsConfig):
             if config.measure_device_perf:
                 perf_result = gather_single_test_perf(device, status)
                 message = get_updated_message(message, perf_result)
-                output_queue.put([status, message, e2e_perf, perf_result])
+                # Simplify perf_result to only include essential metrics to avoid serialization issues
+                simplified_perf = {}
+                if perf_result:
+                    for key in [
+                        "DEVICE FW DURATION [ns]",
+                        "DEVICE KERNEL DURATION [ns]",
+                        "OP TO OP LATENCY [ns]",
+                        "DEVICE BRISC FW DURATION [ns]",
+                        "DEVICE NCRISC FW DURATION [ns]",
+                    ]:
+                        if key in perf_result:
+                            simplified_perf[key] = perf_result[key]
+                output_queue.put([status, message, e2e_perf, simplified_perf])
             else:
                 output_queue.put([status, message, e2e_perf, None])
 
@@ -892,6 +904,7 @@ def enable_profiler():
     os.environ["TT_METAL_DEVICE_PROFILER"] = "1"
     os.environ["ENABLE_TRACY"] = "1"
     os.environ["TT_METAL_PROFILER_MID_RUN_DUMP"] = "1"
+    os.environ["TT_METAL_PROFILER_SYNC"] = "1"
 
 
 def disable_profiler():
@@ -899,6 +912,7 @@ def disable_profiler():
     os.environ.pop("TT_METAL_DEVICE_PROFILER")
     os.environ.pop("ENABLE_TRACY")
     os.environ.pop("TT_METAL_PROFILER_MID_RUN_DUMP")
+    os.environ.pop("TT_METAL_PROFILER_SYNC")
 
 
 if __name__ == "__main__":

@@ -64,13 +64,30 @@ def get_run_return(torch_output_tensor, output_tensor, expected_pcc, tensors, e2
 def get_updated_message(message, perf_result):
     if perf_result is None:
         return message
+
+    # Convert message to string if it's not already
+    message = str(message)
+
     key = "DEVICE FW DURATION [ns]"
+    # perf_result is a dictionary
+    logger.info(
+        f"perf_result type: {type(perf_result)}, keys: {list(perf_result.keys()) if isinstance(perf_result, dict) else 'N/A'}"
+    )
     if key in perf_result:
-        value = float(perf_result[key])
-        tokens = message.split()
-        for i in range(len(tokens)):
-            if tokens[i] == "ROOFLINE":
-                message += f" ROOFLINE% {float(tokens[i+1])/value}"
-            if tokens[i] == "FLOP_COUNT":
-                message += f" TFLOPS {float(tokens[i+1])/1e3/value}"  # flop_count / tera(10^12)*nano(10^-9) / ns
+        try:
+            value = float(perf_result[key])
+            tokens = message.split()
+            logger.info(f"Processing message with {len(tokens)} tokens")
+            for i in range(len(tokens)):
+                if tokens[i] == "ROOFLINE":
+                    if i + 1 < len(tokens):  # Bounds check
+                        message += f" ROOFLINE% {float(tokens[i+1])/value}"
+                if tokens[i] == "FLOP_COUNT":
+                    if i + 1 < len(tokens):  # Bounds check
+                        message += (
+                            f" TFLOPS {float(tokens[i+1])/1e3/value}"  # flop_count / tera(10^12)*nano(10^-9) / ns
+                        )
+            logger.info("Message processing complete")
+        except Exception as e:
+            logger.warning(f"Error processing message: {e}")
     return message
