@@ -4,11 +4,13 @@
 
 #include <dataflow_api.h>
 #include <cstdint>
-#include <tt-metalium/constants.hpp>
 
 void kernel_main() {
     // Compile time args
     constexpr uint32_t out_cb_id = get_compile_time_arg_val(0);
+
+    // Set up tensor accessor
+    constexpr auto output_args = TensorAccessorArgs<1>();
 
     // Runtime args
     uint32_t rt_args_idx = 0;
@@ -16,14 +18,11 @@ void kernel_main() {
     const uint32_t start_tile = get_arg_val<uint32_t>(rt_args_idx++);
     const uint32_t num_tiles = get_arg_val<uint32_t>(rt_args_idx++);
 
-    // Set up data movement for output tensor
-    const InterleavedAddrGenFast<false> output_addrg = {
-        .bank_base_address = output_addr,
-        .page_size = tt::constants::TILE_HW * sizeof(uint16_t),
-        .data_format = DataFormat::Float16_b};
+    // Get tile size
+    const uint32_t out_tile_size = get_tile_size(out_cb_id);
 
-    // For simplicity, assume we're processing one tile at a time
-    // In a more complete implementation, this would handle multiple tiles per row
+    // Create tensor accessor
+    const auto output_accessor = TensorAccessor(output_args, output_addr, out_tile_size);
 
     // Write output tiles
     for (uint32_t tile_idx = 0; tile_idx < num_tiles; ++tile_idx) {
@@ -34,7 +33,7 @@ void kernel_main() {
         uint32_t l1_read_addr = get_read_ptr(out_cb_id);
 
         // Write tile to output
-        noc_async_write_tile(current_tile, output_addrg, l1_read_addr);
+        noc_async_write(l1_read_addr, output_accessor.get_noc_addr(current_tile), out_tile_size);
         noc_async_write_barrier();
         cb_pop_front(out_cb_id, 1);
     }

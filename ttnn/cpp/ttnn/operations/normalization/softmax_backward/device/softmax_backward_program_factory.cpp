@@ -43,9 +43,7 @@ SoftmaxBackwardProgramFactory::cached_program_t SoftmaxBackwardProgramFactory::c
 
     // For simplicity, we'll implement for the last dimension (most common case)
     // This can be extended to support other dimensions
-    TT_ASSERT(
-        dim == rank - 1 || dim == static_cast<uint32_t>(-1),
-        "Currently only supporting softmax_backward on last dimension");
+    TT_ASSERT(dim == rank - 1, "Currently only supporting softmax_backward on last dimension");
 
     const auto height = shape[-2];
     const auto width = shape[-1];
@@ -153,12 +151,11 @@ SoftmaxBackwardProgramFactory::cached_program_t SoftmaxBackwardProgramFactory::c
         CoreCoord core = {core_idx / num_cores_y, core_idx % num_cores_y};
 
         uint32_t start_tile = core_idx * tiles_per_core;
-        uint32_t end_tile = std::min(start_tile + tiles_per_core, num_rows);
-        uint32_t num_tiles_this_core = end_tile - start_tile;
-
-        if (num_tiles_this_core == 0) {
+        if (start_tile >= num_rows) {
             continue;
         }
+        uint32_t end_tile = std::min(start_tile + tiles_per_core, num_rows);
+        uint32_t num_tiles_this_core = end_tile - start_tile;
 
         // Reader runtime args
         SetRuntimeArgs(

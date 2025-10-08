@@ -18,7 +18,7 @@ SoftmaxBackwardDeviceOperation::program_factory_t SoftmaxBackwardDeviceOperation
     // For now, always use the fused kernel implementation
     // In the future, we could add logic to choose between different implementations
     // based on tensor size, device capabilities, etc.
-    return SingleCore{};
+    return MultiCore{};
 }
 
 void SoftmaxBackwardDeviceOperation::validate_on_program_cache_miss(
@@ -45,9 +45,7 @@ void SoftmaxBackwardDeviceOperation::validate_on_program_cache_miss(
 
     // Validate dimension
     const auto rank = softmax_output.logical_shape().rank();
-    TT_ASSERT(
-        attributes.dim == rank - 1 || attributes.dim == static_cast<uint32_t>(-1),
-        "Currently only supporting softmax_backward on last dimension");
+    TT_ASSERT(attributes.dim == rank - 1, "Currently only supporting softmax_backward on last dimension");
 }
 
 void SoftmaxBackwardDeviceOperation::validate_on_program_cache_hit(
@@ -67,7 +65,7 @@ SoftmaxBackwardDeviceOperation::spec_return_value_t SoftmaxBackwardDeviceOperati
     return {
         input_tensor.logical_shape(),
         tt::tt_metal::TensorLayout(
-            input_tensor.dtype(), tt::tt_metal::PageConfig(input_tensor.layout()), MemoryConfig{})};
+            input_tensor.dtype(), tt::tt_metal::PageConfig(input_tensor.layout()), input_tensor.memory_config())};
 }
 
 SoftmaxBackwardDeviceOperation::tensor_return_value_t SoftmaxBackwardDeviceOperation::create_output_tensors(

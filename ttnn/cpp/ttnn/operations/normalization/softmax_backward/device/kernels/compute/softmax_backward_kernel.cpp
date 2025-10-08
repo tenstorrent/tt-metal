@@ -25,33 +25,28 @@ void MAIN {
     const uint32_t num_tiles = get_arg_val<uint32_t>(0);
 
     // Initialize compute
-    binary_op_init_common(src0_cb_id, src1_cb_id, intermed0_cb_id);
-
-    // For simplicity, implement element-wise softmax backward for single tiles
-    // This is a simplified version that doesn't handle the full reduction
-    // A complete implementation would need to handle the sum reduction properly
+    binary_op_init_common(src0_cb_id, src1_cb_id, out_cb_id);
+    mul_tiles_init(src0_cb_id, src1_cb_id);
 
     // Process each tile individually
     for (uint32_t tile_idx = 0; tile_idx < num_tiles; ++tile_idx) {
         // Step 1: Compute y * grad (element-wise multiplication)
+        cb_reserve_back(out_cb_id, 1);
         cb_wait_front(src0_cb_id, 1);  // softmax_output
         cb_wait_front(src1_cb_id, 1);  // upstream_grad
-        cb_reserve_back(out_cb_id, 1);
 
         tile_regs_acquire();
-
         // Multiply y * grad
         mul_tiles(src0_cb_id, src1_cb_id, 0, 0, 0);
+        tile_regs_commit();
 
-        // Pack result directly to output for now
-        // This is a simplified implementation
+        tile_regs_wait();
         pack_tile(0, out_cb_id);
+        tile_regs_release();
 
         cb_pop_front(src0_cb_id, 1);
         cb_pop_front(src1_cb_id, 1);
         cb_push_back(out_cb_id, 1);
-
-        tile_regs_release();
     }
 }
 }  // namespace NAMESPACE
