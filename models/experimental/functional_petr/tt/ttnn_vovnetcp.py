@@ -4,8 +4,8 @@
 
 import ttnn
 from models.experimental.functional_petr.tt.common import Conv, Conv_with_split
-import torch
 import torch.nn.functional as F
+from loguru import logger
 
 
 class ttnn_hsigmoid:
@@ -305,18 +305,37 @@ class ttnn_osa_stage:
 
     def __call__(self, device, x):
         if self.pooling is True:
-            x = ttnn.max_pool2d(
-                input_tensor=x,
-                batch_size=x.shape[0],
-                input_h=x.shape[1],
-                input_w=x.shape[2],
-                channels=x.shape[3],
-                kernel_size=[3, 3],
-                stride=[2, 2],
-                padding=[0, 0],
-                dilation=[1, 1],
-                ceil_mode=True,
-            )
+            # x = ttnn.max_pool2d(
+            #     input_tensor=x,
+            #     batch_size=x.shape[0],
+            #     input_h=x.shape[1],
+            #     input_w=x.shape[2],
+            #     channels=x.shape[3],
+            #     kernel_size=[3, 3],
+            #     stride=[2, 2],
+            #     padding=[0, 0],
+            #     dilation=[1, 1],
+            #     ceil_mode=True,
+            # )
+            x_torch = ttnn.to_torch(x)  # [B, H, W, C] in NHWC
+
+            # Check input shape
+            logger.debug(f"Before pooling (NHWC): {x_torch.shape}")
+
+            # Convert to NCHW for PyTorch
+            x_torch = x_torch.permute(0, 3, 1, 2)  # [B, C, H, W]
+
+            # Apply pooling
+            x_torch = F.max_pool2d(x_torch, kernel_size=3, stride=2, padding=0, ceil_mode=True)
+
+            # Convert back to NHWC
+            x_torch = x_torch.permute(0, 2, 3, 1)  # [B, H, W, C]
+
+            logger.debug(f"After pooling (NHWC): {x_torch.shape}")
+
+            # Convert back to ttnn
+            x = ttnn.from_torch(x_torch, dtype=ttnn.bfloat16, device=device)
+            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
 
         for module_name in self.blocks:
             module = getattr(self, module_name)  # Retrieve the block by name
@@ -334,51 +353,138 @@ class ttnn_VoVNetCP:
         out_features=["stage5", "stage4"],
     ):
         self.device = device
+        # self.stem_parameters = stem_parameters
+        # self.device = device
         self.stem_parameters = stem_parameters
         self.out_features = out_features
+
+        # Initialize stem convolutions using Conv class
+        self.stem_conv1 = Conv(
+            [2, 2, 1, 1], stem_parameters["stem_1"], activation="relu", height_sharding=False  # stride=2, padding=1
+        )
+
+        self.stem_conv2 = Conv(
+            [1, 1, 1, 1], stem_parameters["stem_2"], activation="relu", height_sharding=False  # stride=1, padding=1
+        )
+
+        self.stem_conv3 = Conv(
+            [2, 2, 1, 1], stem_parameters["stem_3"], activation="relu", height_sharding=False  # stride=2, padding=1
+        )
+
+        # Initialize stages
+        self.stage2 = ttnn_osa_stage(parameters.stage2, 128, 128, 256, 1, 5, 2, SE=True, depthwise=False)
+        self.stage3 = ttnn_osa_stage(parameters.stage3, 256, 160, 512, 3, 5, 3, SE=True, depthwise=False)
+        self.stage4 = ttnn_osa_stage(parameters.stage4, 512, 192, 768, 9, 5, 4, SE=True, depthwise=False)
+        self.stage5 = ttnn_osa_stage(parameters.stage5, 768, 224, 1024, 3, 5, 5, SE=True, depthwise=False)
+        # self.out_features = out_features
 
         self.stage2 = ttnn_osa_stage(parameters.stage2, 128, 128, 256, 1, 5, 2, SE=True, depthwise=False)
         self.stage3 = ttnn_osa_stage(parameters.stage3, 256, 160, 512, 3, 5, 3, SE=True, depthwise=False)
         self.stage4 = ttnn_osa_stage(parameters.stage4, 512, 192, 768, 9, 5, 4, SE=True, depthwise=False)
         self.stage5 = ttnn_osa_stage(parameters.stage5, 768, 224, 1024, 3, 5, 5, SE=True, depthwise=False)
 
+    # def __call__(self, device, x):
+    #     outputs = []
+    #     x = ttnn.permute(x, (0, 3, 1, 2))
+    #     x = ttnn.to_torch(x)
+    #     if x.dtype == torch.bfloat16:
+    #         x = x.to(torch.float32)
+    #     input_device = x.device
+    #     logger.info(f"Input to stem: shape={x.shape}, dtype={x.dtype}, device={x.device}")
+    #     logger.info(f"Input stats: mean={x.mean():.6f}, std={x.std():.6f}, min={x.min():.6f}, max={x.max():.6f}")
+
+    #     # Stem conv 1
+    #     stem1_weight = self.stem_parameters["stem_1"]["weight"]
+    #     stem1_bias = self.stem_parameters["stem_1"]["bias"]
+
+    #     # Ensure same device and dtype
+    #     stem1_weight = stem1_weight.to(device=input_device, dtype=torch.float32)
+    #     stem1_bias = stem1_bias.to(device=input_device, dtype=torch.float32)
+
+    #     logger.info(f"Stem1 weight: shape={stem1_weight.shape}, device={stem1_weight.device}, dtype={stem1_weight.dtype}")
+    #     logger.info(f"Stem1 weight stats: mean={stem1_weight.mean():.6f}, std={stem1_weight.std():.6f}")
+
+    #     x = F.conv2d(
+    #         x,
+    #         self.stem_parameters["stem_1"]["weight"],
+    #         bias=self.stem_parameters["stem_1"]["bias"],
+    #         stride=2,
+    #         padding=1,
+    #     )
+    #     logger.info(f"After stem1: shape={x.shape}, mean={x.mean():.6f}, std={x.std():.6f}")
+
+    #     # Stem conv 2
+    #     stem2_weight = self.stem_parameters["stem_2"]["weight"].to(device=input_device, dtype=torch.float32)
+    #     stem2_bias = self.stem_parameters["stem_2"]["bias"].to(device=input_device, dtype=torch.float32)
+
+    #     x = F.conv2d(
+    #         x,
+    #         self.stem_parameters["stem_2"]["weight"],
+    #         bias=self.stem_parameters["stem_2"]["bias"],
+    #         stride=1,
+    #         padding=1,
+    #     )
+    #     logger.info(f"After stem2: shape={x.shape}, mean={x.mean():.6f}, std={x.std():.6f}")
+
+    #     # Stem conv 3
+    #     stem3_weight = self.stem_parameters["stem_3"]["weight"].to(device=input_device, dtype=torch.float32)
+    #     stem3_bias = self.stem_parameters["stem_3"]["bias"].to(device=input_device, dtype=torch.float32)
+
+    #     stem = F.conv2d(
+    #         x,
+    #         self.stem_parameters["stem_3"]["weight"],
+    #         bias=self.stem_parameters["stem_3"]["bias"],
+    #         stride=2,
+    #         padding=1,
+    #     )
+    #     logger.info(f"After stem3 (final): shape={stem.shape}, mean={stem.mean():.6f}, std={stem.std():.6f}")
+
+    #     x = ttnn.from_torch(stem.permute(0, 2, 3, 1), layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+    #     stage2 = self.stage2(device, x)
+
+    #     stage3 = self.stage3(device, stage2)
+    #     # stage3 = ttnn.reshape(stage3, (1, 512, 40, 100))
+    #     print("stage3", stage3.shape)
+    #     stage4 = self.stage4(device, stage3)
+    #     stage5 = self.stage5(device, stage4)
+
+    #     tensors = {"stem": stem, "stage2": stage2, "stage3": stage3, "stage4": stage4, "stage5": stage5}
+
+    #     for name, tensor in tensors.items():
+    #         if name in self.out_features:
+    #             outputs.append(tensor)
+    #     return outputs
     def __call__(self, device, x):
         outputs = []
-        x = ttnn.permute(x, (0, 3, 1, 2))
-        x = ttnn.to_torch(x)
-        if x.dtype == torch.bfloat16:
-            x = x.to(torch.float)
-        x = F.conv2d(
-            x,
-            self.stem_parameters["stem_1"]["weight"],
-            bias=self.stem_parameters["stem_1"]["bias"],
-            stride=2,
-            padding=1,
-        )
-        x = F.conv2d(
-            x,
-            self.stem_parameters["stem_2"]["weight"],
-            bias=self.stem_parameters["stem_2"]["bias"],
-            stride=1,
-            padding=1,
-        )
-        stem = F.conv2d(
-            x,
-            self.stem_parameters["stem_3"]["weight"],
-            bias=self.stem_parameters["stem_3"]["bias"],
-            stride=2,
-            padding=1,
-        )
-        x = ttnn.from_torch(stem.permute(0, 2, 3, 1), layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
-        stage2 = self.stage2(device, x)
 
+        # Input is NHWC, convert to NCHW for processing
+        print(f"[STEM] Initial input (NHWC): shape={x.shape}")
+
+        # Stem conv 1: stride=2, padding=1
+        x = self.stem_conv1(device, x)
+        print(
+            f"[STEM] After conv1: shape={x.shape}, mean={ttnn.to_torch(x).mean():.6f}, std={ttnn.to_torch(x).std():.6f}"
+        )
+
+        # Stem conv 2: stride=1, padding=1
+        x = self.stem_conv2(device, x)
+        print(
+            f"[STEM] After conv2: shape={x.shape}, mean={ttnn.to_torch(x).mean():.6f}, std={ttnn.to_torch(x).std():.6f}"
+        )
+
+        # Stem conv 3: stride=2, padding=1
+        x = self.stem_conv3(device, x)
+        print(
+            f"[STEM] After conv3: shape={x.shape}, mean={ttnn.to_torch(x).mean():.6f}, std={ttnn.to_torch(x).std():.6f}"
+        )
+
+        # Now x is ready for stages
+        stage2 = self.stage2(device, x)
         stage3 = self.stage3(device, stage2)
-        # stage3 = ttnn.reshape(stage3, (1, 512, 40, 100))
-        print("stage3", stage3.shape)
         stage4 = self.stage4(device, stage3)
         stage5 = self.stage5(device, stage4)
 
-        tensors = {"stem": stem, "stage2": stage2, "stage3": stage3, "stage4": stage4, "stage5": stage5}
+        tensors = {"stem": x, "stage2": stage2, "stage3": stage3, "stage4": stage4, "stage5": stage5}
 
         for name, tensor in tensors.items():
             if name in self.out_features:
