@@ -17,8 +17,6 @@ NB_MAKE_OPAQUE(ttml::serialization::NamedParameters)
 #include <nanobind/stl/bind_map.h>
 #include <nanobind/stl/unordered_map.h>
 
-#include <core/ttnn_all_includes.hpp>
-
 #include "nb_autograd.hpp"
 #include "nb_core.hpp"
 #include "nb_export_enum.hpp"
