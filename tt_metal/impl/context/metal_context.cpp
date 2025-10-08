@@ -1326,10 +1326,14 @@ void MetalContext::initialize_and_launch_firmware(chip_id_t device_id) {
             continue;
         }
 
-        tt::umd::RiscType reset_val = tt::umd::RiscType::BRISC;
+        TensixSoftResetOptions reset_val = TENSIX_DEASSERT_SOFT_RESET;
         if (multi_risc_active_eth_cores.contains(worker_core)) {
             // bit 12 needs to be deasserted to run second erisc on BH
-            reset_val |= tt::umd::RiscType::ERISC1;
+            reset_val = TENSIX_DEASSERT_SOFT_RESET &
+                        static_cast<TensixSoftResetOptions>(
+                            ~std::underlying_type<TensixSoftResetOptions>::type(TensixSoftResetOptions::TRISC0));
+        } else {
+            reset_val = TENSIX_DEASSERT_SOFT_RESET;
         }
         cluster_->deassert_risc_reset_at_core(tt_cxy_pair(device_id, worker_core), reset_val);
     }
