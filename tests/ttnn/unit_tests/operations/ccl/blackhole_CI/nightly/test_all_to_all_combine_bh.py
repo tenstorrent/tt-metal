@@ -170,9 +170,8 @@ def test_all_to_all_combine_no_trace(
     test_skew,
 ):
     validate_test(num_devices, topology, bh_1d_mesh_device.shape, axis)
-    devices = mesh_shape[0] * mesh_shape[1]
-    batch = batches_per_device * devices
-    experts = experts_per_device * devices
+    batch = batches_per_device * num_devices
+    experts = experts_per_device * num_devices
 
     bh_1d_mesh_device.disable_and_clear_program_cache()
     submesh_device = bh_1d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
