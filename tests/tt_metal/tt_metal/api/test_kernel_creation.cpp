@@ -194,7 +194,7 @@ TEST_F(CompileProgramWithKernelPathEnvVarFixture, TensixTestDifferentUnpackToDes
 // But the method is the same.
 TEST_F(MeshDispatchFixture, TestCreateKernelFromBinary) {
     const std::string kernel_file = "tests/tt_metal/tt_metal/test_kernels/compute/simple_add.cpp";
-    const std::string binary_kernel_path = "tests/tt_metal/tt_metal/api/simple_add_binaries";
+    const std::string binary_kernel_path = "/home/ubuntu/.cache/tt-metal-cache/6ebc6ed857";
 
     for (const auto& mesh_device : this->devices_) {
         CoreCoord core = {0, 0};

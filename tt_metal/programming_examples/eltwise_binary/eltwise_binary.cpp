@@ -15,11 +15,29 @@
 #include <string_view>
 #include <vector>
 #include "tt-metalium/base_types.hpp"
+#include <cstdlib>
 
 using namespace tt::tt_metal;
 #ifndef OVERRIDE_KERNEL_PREFIX
 #define OVERRIDE_KERNEL_PREFIX ""
 #endif
+
+template <typename ConfigType>
+KernelHandle CompileOrLoadKernel(
+    Program& program,
+    const CoreCoord& core,
+    const char* kernel_binary_prefix,
+    const std::string& source_path,
+    const std::string& binary_name,
+    const ConfigType& config) {
+    if (kernel_binary_prefix) {
+        fmt::print("Loading pre-compiled kernel: {}\n", binary_name);
+        return tt::tt_metal::experimental::CreateKernelFromBinary(
+            program, binary_name, core, config, OVERRIDE_KERNEL_PREFIX + source_path);
+    }
+    return CreateKernel(program, OVERRIDE_KERNEL_PREFIX + source_path, core, config);
+}
+
 int main(int argc, char** argv) {
     bool pass = true;
 
@@ -28,6 +46,12 @@ int main(int argc, char** argv) {
         // Create a 1x1 mesh on device 0. The same API scales to multi-device meshes.
         constexpr int device_id = 0;
         std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
+
+        const char* kernel_binary_prefix = std::getenv("TT_BINARY_PATH");
+        if (kernel_binary_prefix) {
+            fmt::print("Setting kernel binary path prefix to: {}\n", kernel_binary_prefix);
+            tt::tt_metal::experimental::SetKernelBinaryPathPrefix(mesh_device.get(), kernel_binary_prefix);
+        }
 
         // Submit work via a mesh command queue: data uploads/downloads and program execution.
         distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
@@ -118,22 +142,34 @@ int main(int argc, char** argv) {
         std::vector<uint32_t> reader_compile_time_args;
         TensorAccessorArgs(*src0_dram_buffer).append_to(reader_compile_time_args);
         TensorAccessorArgs(*src1_dram_buffer).append_to(reader_compile_time_args);
-        auto reader = CreateKernel(
+        auto reader = CompileOrLoadKernel(
             program,
-            OVERRIDE_KERNEL_PREFIX "eltwise_binary/kernels/dataflow/read_tiles.cpp",
             core,
-            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = reader_compile_time_args});
+            kernel_binary_prefix,
+            "eltwise_binary/kernels/dataflow/read_tiles.cpp",
+            "read_tiles",
+            DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_0,
+                .noc = NOC::RISCV_0_default,
+                .compile_args = reader_compile_time_args});
         std::vector<uint32_t> writer_compile_time_args;
         TensorAccessorArgs(*dst_dram_buffer).append_to(writer_compile_time_args);
-        auto writer = CreateKernel(
+        auto writer = CompileOrLoadKernel(
             program,
-            OVERRIDE_KERNEL_PREFIX "eltwise_binary/kernels/dataflow/write_tile.cpp",
             core,
-            DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = writer_compile_time_args});
-        auto compute = CreateKernel(
+            kernel_binary_prefix,
+            "eltwise_binary/kernels/dataflow/write_tile.cpp",
+            "write_tile",
+            DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_1,
+                .noc = NOC::RISCV_1_default,
+                .compile_args = writer_compile_time_args});
+        auto compute = CompileOrLoadKernel(
             program,
-            OVERRIDE_KERNEL_PREFIX "eltwise_binary/kernels/compute/tiles_add.cpp",
             core,
+            kernel_binary_prefix,
+            "eltwise_binary/kernels/compute/tiles_add.cpp",
+            "tiles_add",
             ComputeConfig{.math_fidelity = MathFidelity::HiFi4});   // There's different math fidelity modes (for the tensor engine)
                                                                 // that trade off performance for accuracy. HiFi4 is the most accurate
                                                                 // mode. The other modes are HiFi3, HiFi2, HiFi1 and LoFi. The

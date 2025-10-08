@@ -14,6 +14,26 @@ using namespace tt::tt_metal;
 #ifndef OVERRIDE_KERNEL_PREFIX
 #define OVERRIDE_KERNEL_PREFIX ""
 #endif
+
+// Helper function to create kernels conditionally based on binary path availability
+template <typename ConfigType>
+KernelHandle CompileOrLoadKernel(
+    Program& program,
+    const CoreCoord& core,
+    const char* kernel_binary_prefix,
+    const std::string& source_path,
+    const std::string& binary_name,
+    const ConfigType& config) {
+    if (kernel_binary_prefix) {
+        fmt::print("Loading pre-compiled kernel: {}\n", binary_name);
+        // Compute hash for original path to hide source location
+        // auto kernel_hash = tt::tt_metal::experimental::ComputeKernelOriginalPathHash(source_path);
+        return tt::tt_metal::experimental::CreateKernelFromBinary(
+            program, binary_name, core, config, OVERRIDE_KERNEL_PREFIX + source_path);
+    } else {
+        return CreateKernel(program, OVERRIDE_KERNEL_PREFIX + source_path, core, config);
+    }
+}
 int main() {
     // Ensure printing from kernel is enabled (so we can see the output of the Data Movement kernels).
     char* env_var = std::getenv("TT_METAL_DPRINT_CORES");
@@ -28,6 +48,13 @@ int main() {
     // single object, maintaining uniform memory and runtime state across all physical devices. A UnitMesh is a 1x1
     // MeshDevice that allows users to interface with a single physical device.
     std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(0);
+
+    // Set up kernel binary path prefix if provided via environment variable
+    const char* kernel_binary_prefix = std::getenv("TT_BINARY_PATH");
+    if (kernel_binary_prefix) {
+        fmt::print("Setting kernel binary path prefix to: {}\n", kernel_binary_prefix);
+        tt::tt_metal::experimental::SetKernelBinaryPathPrefix(mesh_device.get(), kernel_binary_prefix);
+    }
 
     // In Metalium, submitting operations to the device is done through a command queue. This includes
     // uploading/downloading data to/from the device, and executing programs.
@@ -95,23 +122,31 @@ int main() {
     // These kernels work together to form a pipeline. The reader reads data from the DRAM buffer and makes them
     // available in the compute kernel. The compute kernel does math and pushes the result into the writer kernel. The
     // writer kernel writes the result back to DRAM.
-    KernelHandle binary_reader_kernel_id = CreateKernel(
+
+    // Create kernels using binary path if prefix is set, otherwise compile from source
+    KernelHandle binary_reader_kernel_id = CompileOrLoadKernel(
         program,
-        OVERRIDE_KERNEL_PREFIX "add_2_integers_in_compute/kernels/dataflow/reader_binary_1_tile.cpp",
         core,
+        kernel_binary_prefix,
+        "add_2_integers_in_compute/kernels/dataflow/reader_binary_1_tile.cpp",
+        "reader_binary_1_tile",
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
 
-    KernelHandle unary_writer_kernel_id = CreateKernel(
+    KernelHandle unary_writer_kernel_id = CompileOrLoadKernel(
         program,
-        OVERRIDE_KERNEL_PREFIX "add_2_integers_in_compute/kernels/dataflow/writer_1_tile.cpp",
         core,
+        kernel_binary_prefix,
+        "add_2_integers_in_compute/kernels/dataflow/writer_1_tile.cpp",
+        "writer_1_tile",
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
     // This kernel performs the actual addition of the two input tiles
-    KernelHandle eltwise_binary_kernel_id = CreateKernel(
+    KernelHandle eltwise_binary_kernel_id = CompileOrLoadKernel(
         program,
-        OVERRIDE_KERNEL_PREFIX "add_2_integers_in_compute/kernels/compute/add_2_tiles.cpp",
         core,
+        kernel_binary_prefix,
+        "add_2_integers_in_compute/kernels/compute/add_2_tiles.cpp",
+        "add_2_tiles",
         ComputeConfig{.math_fidelity = MathFidelity::HiFi4, .fp32_dest_acc_en = false, .math_approx_mode = false});
 
     // Create the data that will be used as input to the kernels.

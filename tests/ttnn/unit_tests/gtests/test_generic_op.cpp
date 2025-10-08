@@ -785,7 +785,7 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpEltwiseSFPU) {
 //    b. binary_hash = <hash from step 1>
 //    c. source_type = tt::tt_metal::KernelDescriptor::SourceType::BINARY_PATH
 TEST_F(TTNNFixtureWithDevice, TestGenericOpMatmulFromBinary) {
-    const std::string binary_kernel_path = "tests/ttnn/unit_tests/matmul_binaries";
+    const std::string binary_kernel_path = "/home/ubuntu/.cache/tt-metal-cache/6ebc6ed857";
     auto device = this->device_;
 
     // 1. Set the binary path prefix for the device.
