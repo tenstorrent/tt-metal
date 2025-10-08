@@ -199,10 +199,7 @@ void MAIN {
                         tensix_sync();
                         unary_op_init_common(curr_in_cb_id, tile_tmp_cb_id);
                         tensix_sync();
-
-                        tensix_sync();
                         tilize_init(curr_in_cb_id, topk_output_tiles, tile_tmp_cb_id);
-                        tensix_sync();
 
                         cb_reserve_back(tile_tmp_cb_id, topk_output_tiles);
 
@@ -230,11 +227,16 @@ void MAIN {
 
                         copy_tile_init(tile_tmp_cb_id);
                         if constexpr (pack_untilize_reinit) {
-                            // note pack_untilize_dest_init must be called immediately after copy_tile_init see issue
-                            // #27314
-                            tensix_sync();
-                            pack_untilize_dest_init<topk_output_tiles>(out_cb_id, num_out_sticks, output_faces);
-                            tensix_sync();
+// note pack_untilize_dest_init must be called immediately after copy_tile_init see issue
+// https://github.com/tenstorrent/tt-metal/issues/#27314
+#ifdef ARCH_BLACKHOLE
+                            // Needed for setting swizzle_32b:
+                            MATH((llk_math_hw_configure_disaggregated<true, true>(0, 0)));
+#endif
+                            PACK(
+                                (llk_pack_untilize_init<topk_output_tiles, topk_output_tiles, false, false, TILE_C_DIM>(
+                                    out_cb_id, num_out_sticks, output_faces)));
+                            PACK((llk_init_packer_dest_offset_registers<true, false>()));
                         }
                         copy_tile(tile_tmp_cb_id, 0, data_dst_idx);
                         copy_tile(tile_idx_tmp_cb_id, 0, index_dst_idx);
@@ -321,9 +323,13 @@ void MAIN {
             } else {
                 if constexpr (use_tilize_dest) {
                     if constexpr (pack_untilize_reinit) {
-                        tensix_sync();
-                        pack_untilize_dest_init<topk_output_tiles>(out_cb_id, num_out_sticks, output_faces);
-                        tensix_sync();
+#ifdef ARCH_BLACKHOLE
+                        // Needed for setting swizzle_32b:
+                        MATH((llk_math_hw_configure_disaggregated<true, true>(0, 0)));
+#endif
+                        PACK((llk_pack_untilize_init<topk_output_tiles, topk_output_tiles, false, false, TILE_C_DIM>(
+                            out_cb_id, num_out_sticks, output_faces)));
+                        PACK((llk_init_packer_dest_offset_registers<true, false>()));
                     }
                 }
 
@@ -335,9 +341,7 @@ void MAIN {
                     out_idx_cb_id, 1, 0, num_out_sticks, output_faces);
 
                 if constexpr (pack_untilize_reinit) {
-                    tensix_sync();
                     pack_untilize_uninit(out_cb_id);
-                    tensix_sync();
                 }
                 cb_push_back(out_cb_id, output_faces);
                 if constexpr (return_indices) {
