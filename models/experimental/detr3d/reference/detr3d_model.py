@@ -387,7 +387,7 @@ class TransformerEncoder(nn.Module):
         self.layers = get_clones(encoder_layer, num_layers)
         self.num_layers = num_layers
         self.norm = norm
-        self._reset_parameters(weight_init_name)
+        # self._reset_parameters(weight_init_name)
 
     def _reset_parameters(self, weight_init_name):
         func = nn.init.xavier_uniform_

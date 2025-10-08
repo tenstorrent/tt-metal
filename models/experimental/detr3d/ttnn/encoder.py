@@ -130,13 +130,13 @@ class TtMaskedTransformerEncoder(LightweightModule):
         output = src
         xyz_dist = None
         xyz_inds = None
-        print(f"//////////////////////////////////Starting the encoder//////////////////////////////////////")
+        # print(f"//////////////////////////////////Starting the encoder//////////////////////////////////////")
 
         for idx, layer in enumerate(self.layers):
             attn_mask = None
-            print(
-                f"//////////////////////////////////Starting the encoder layer {idx}//////////////////////////////////////"
-            )
+            # print(
+            #     f"//////////////////////////////////Starting the encoder layer {idx}//////////////////////////////////////"
+            # )
             if self.masking_radius[idx] > 0:
                 attn_mask, xyz_dist = self.compute_mask(xyz, self.masking_radius[idx], xyz_dist)
 
@@ -163,11 +163,11 @@ class TtMaskedTransformerEncoder(LightweightModule):
             # print(f"{attn_mask.shape=}")
             output = ttnn.permute(output, (1, 0, 2))
 
-            print(f"{output.shape=}")
-            # print(f"{attn_mask.shape=}")
-            print(
-                f"//////////////////////////////////Finished the encoder layer {idx}//////////////////////////////////////"
-            )
+            # print(f"{output.shape=}")
+            # # print(f"{attn_mask.shape=}")
+            # print(
+            #     f"//////////////////////////////////Finished the encoder layer {idx}//////////////////////////////////////"
+            # )
 
             if idx == 0 and self.interim_downsampling:
                 # Reshape for downsampling: (npoints, batch, channel) -> (batch, channel, npoints)
@@ -175,13 +175,22 @@ class TtMaskedTransformerEncoder(LightweightModule):
                 output = ttnn.permute(output, (0, 2, 1))  # 1, 2048, 256 -> 1, 256, 2048
                 print(f"{output.shape=}")
 
+                if not isinstance(xyz, torch.Tensor):
+                    xyz_torch = ttnn.to_torch(xyz, dtype=torch.float)
+                if not isinstance(output, torch.Tensor):
+                    output_torch = ttnn.to_torch(output, dtype=torch.float)
+
                 # Apply downsampling (this would need to be implemented in ttnn)
-                xyz, output, xyz_inds = self.interim_downsampling(xyz, output)
+                xyz_torch, output_torch, xyz_inds = self.interim_downsampling(xyz_torch, output_torch)
+
+                xyz = ttnn.from_torch(xyz_torch, device=self.device, dtype=ttnn.bfloat16)
+                output = ttnn.from_torch(output_torch, device=self.device, dtype=ttnn.bfloat16)
                 print(f"{output.shape=}")
 
                 # output = ttnn.permute(output, (1, 0, 2)) # 2048, 1, 256 -> 1, 2048, 256
                 # output = ttnn.permute(output, (0, 2, 1)) # 1, 2048, 256 -> 1, 256, 2048
                 output = ttnn.permute(output, (2, 0, 1))
+                print(f"{output.shape=}")
 
         if self.norm is not None:
             output = self.norm(output)
@@ -192,5 +201,6 @@ class TtMaskedTransformerEncoder(LightweightModule):
             output = ttnn.transpose(output, 1, 2)  # (bs, c, h*w)
             output = ttnn.reshape(output, (bs, c, h, w))
         print(f"//////////////////////////////////Finished the encoder//////////////////////////////////////")
+        print(f"{output.shape=}")
 
-        return xyz, output  # , xyz_inds
+        return xyz, output, xyz_inds

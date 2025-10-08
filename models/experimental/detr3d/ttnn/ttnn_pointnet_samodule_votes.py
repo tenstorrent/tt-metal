@@ -65,7 +65,7 @@ def _fallback_pointnet(
             ret_unique_cnt=ret_unique_cnt,
         )
     else:
-        raise NotImplementedError("\(-_-)/")
+        raise NotImplementedError("(-_-)")
 
     gather_operation = GatherOperation()
     furthest_point_sample = FurthestPointSampling()
@@ -98,6 +98,7 @@ def _fallback_pointnet(
     if inds is not None:
         inds = ttnn.from_torch(inds, dtype=ttnn.bfloat16, device=device)
     new_xyz = ttnn.from_torch(new_xyz, dtype=ttnn.bfloat16, device=device)
+    new_xyz = ttnn.reallocate(new_xyz)
     grouped_features = ttnn.from_torch(grouped_features, dtype=ttnn.bfloat16, device=device)
     grouped_xyz = ttnn.from_torch(grouped_xyz, dtype=ttnn.bfloat16, device=device)
     if unique_cnt is not None:

@@ -46,7 +46,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
             False,  # sample_uniformly
             False,  # ret_unique_cnt
             (1, 2048, 3),  # xyz
-            None,  # features
+            (1, 256, 2048),  # features
             None,  # inds
         ),
     ],

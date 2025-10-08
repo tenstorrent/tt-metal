@@ -13,7 +13,6 @@ from models.experimental.detr3d.reference.detr3d_model import (
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.experimental.detr3d.ttnn.transformer import TTTransformerEncoderLayer
-from models.experimental.detr3d.ttnn.ttnn_pointnet_samodule_votes import TtnnPointnetSAModuleVotes
 
 # from models.experimental.detr3d.tests.pcc.test_ttnn_shared_mlp import (
 #     custom_preprocessor_whole_model as custom_preprocessor_shared_mlp,
@@ -199,9 +198,9 @@ from models.experimental.detr3d.ttnn.custom_preprocessing import create_custom_m
     "num_layers,masking_radius,norm, weight_init_name,src_shape,mask,src_key_padding_mask,pos,xyz_shape,transpose_swap",
     [
         (
-            1,
-            [0.16000000000000003],
-            # [0.16000000000000003, 0.6400000000000001, 1.44],
+            3,
+            # [0.16000000000000003],
+            [0.16000000000000003, 0.6400000000000001, 1.44],
             None,
             "xavier_uniform",
             (2048, 1, 256),
@@ -248,6 +247,7 @@ def test_masked_transformer_encoder(
     ret_unique_cnt,
     device,
 ):
+    torch.manual_seed(0)
     encoder_layer = ref_encoder_layer(
         d_model,
         nhead,
@@ -306,7 +306,23 @@ def test_masked_transformer_encoder(
     )
 
     tt_encoder_layer = TTTransformerEncoderLayer
-    tt_interim_downsampling = TtnnPointnetSAModuleVotes(
+    # tt_interim_downsampling = TtnnPointnetSAModuleVotes(
+    #     mlp=mlp[:],
+    #     npoint=npoint,
+    #     radius=radius,
+    #     nsample=nsample,
+    #     bn=bn,
+    #     use_xyz=use_xyz,
+    #     pooling=pooling,
+    #     sigma=sigma,
+    #     normalize_xyz=normalize_xyz,
+    #     sample_uniformly=sample_uniformly,
+    #     ret_unique_cnt=ret_unique_cnt,
+    #     module=interim_downsampling,
+    #     parameters=ref_module_parameters.interim_downsampling.mlp_module,
+    #     device=device,
+    # )
+    tt_interim_downsampling = ref_point_net_module_votes(
         mlp=mlp[:],
         npoint=npoint,
         radius=radius,
@@ -318,9 +334,6 @@ def test_masked_transformer_encoder(
         normalize_xyz=normalize_xyz,
         sample_uniformly=sample_uniformly,
         ret_unique_cnt=ret_unique_cnt,
-        module=interim_downsampling,
-        parameters=ref_module_parameters.interim_downsampling.mlp_module,
-        device=device,
     )
     tt_module = TtMaskedTransformerEncoder(
         tt_encoder_layer,
@@ -346,6 +359,8 @@ def test_masked_transformer_encoder(
         src,
         device=device,
         dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     tt_xyz = ttnn.from_torch(
         xyz,
@@ -374,6 +389,10 @@ def test_masked_transformer_encoder(
         print(
             f"//////////////////////////////////Finished the output torch reshape //////////////////////////////////////"
         )
+
+    import pdb
+
+    pdb.set_trace()
 
     pcc_pass, pcc_message = assert_with_pcc(ref_out[0], ttnn_torch_out[0], 0.1)
     print(f"{pcc_message=}")

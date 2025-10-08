@@ -15,7 +15,7 @@ class TtnnSharedMLP:
             parameters.layer0.conv,
             device,
             activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
-            is_dealloc_act=True,
+            is_dealloc_act=False,
             return_dims=True,
         )
         self.conv2 = TtnnConv2D(
