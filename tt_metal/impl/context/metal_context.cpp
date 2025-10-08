@@ -745,8 +745,10 @@ void MetalContext::assert_cores(chip_id_t device_id) {
                 llrt::internal_::return_to_base_firmware_and_wait_for_heartbeat(device_id, virtual_eth_core);
             }
             // Stop subordinate
-            // Assert all cores except ERISC0, which is running base firmware.
-            tt::umd::RiscType reset_val = tt::umd::RiscType::ALL & ~tt::umd::RiscType::ERISC0;
+            TensixSoftResetOptions reset_val =
+                TENSIX_ASSERT_SOFT_RESET &
+                static_cast<TensixSoftResetOptions>(
+                    ~std::underlying_type<TensixSoftResetOptions>::type(TensixSoftResetOptions::BRISC));
             cluster_->assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_eth_core), reset_val);
         };
 
