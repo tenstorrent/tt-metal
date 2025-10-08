@@ -494,3 +494,25 @@ auto make_abstract_tensor_accessor_wrappers(const std::tuple<Accessors...>& acce
     return tensor_accessor::detail::make_abstract_tensor_accessor_wrappers(
         accessors, std::make_integer_sequence<uint32_t, sizeof...(Accessors)>());
 }
+
+// Adapters for experimental NoC APIs
+template <typename Accessor>
+struct PageView {
+    const Accessor& accessor;
+    explicit PageView(const Accessor& acc) : accessor(acc) {}
+
+    uint64_t get_noc_addr(uint32_t page_id, uint32_t offset, uint8_t noc) const {
+        return accessor.get_noc_addr(page_id, offset, noc);
+    }
+};
+
+template <typename Accessor>
+struct ShardView {
+    const Accessor& accessor;
+    explicit ShardView(const Accessor& acc) : accessor(acc) {}
+
+    bool is_local_shard(uint32_t shard_id, uint8_t noc) const { return accessor.is_local_shard(shard_id, noc); }
+    uint64_t get_noc_addr(uint32_t shard_id, uint32_t offset, uint8_t noc) const {
+        return accessor.get_shard_noc_addr(shard_id, offset, noc);
+    }
+};
