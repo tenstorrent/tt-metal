@@ -522,7 +522,7 @@ run_t3000_ccl_tests() {
   pytest -n auto tests/nightly/t3000/ccl/test_minimal_all_gather_async.py::test_all_gather_async_sharded_to_interleaved[wormhole_b0-fabric_linear-check-i2s_shape0-1-layout0-ag_input_dtype0-mesh_device0]
   # 10 iteration trace test with fabric ring
   pytest -n auto tests/nightly/t3000/ccl/test_minimal_all_gather_async.py::test_all_gather_async[wormhole_b0-fabric_ring-barrier_without_persistent_buffers-perf-mem_config_input0-mem_config_ag0-dit_shape-1link-mesh_device0]
-  # 2D fabric case – not working on main??
+  # 2D fabric case – hanging on main? tracking with issue #30250
   # pytest -n auto tests/nightly/t3000/2d_ccl/test_minimal_all_gather_async.py::test_all_gather_async_training_shapes[wormhole_b0-fabric_2d_dynamic_linear-check-mem_config_input0-mem_config_ag0-tt_training_test_one-mesh_device0-1link]
   # training shapes
   pytest -n auto tests/nightly/t3000/ccl/test_minimal_all_gather_async.py::test_all_gather_async_training_shapes[wormhole_b0-fabric_linear-check-mem_config_input0-mem_config_ag0-tt_training_test_four-mesh_device0-1link]
