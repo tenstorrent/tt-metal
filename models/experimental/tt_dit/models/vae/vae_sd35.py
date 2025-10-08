@@ -27,7 +27,6 @@ class ResnetBlock:
         out_channels=None,
         num_groups=None,
         eps=None,
-        norm_out_blocks=-1,
         mesh_device=None,
         norm_core_grid=None,
         parallel_config=None,
@@ -41,7 +40,6 @@ class ResnetBlock:
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             core_grid=norm_core_grid,
-            num_out_blocks=norm_out_blocks,
             torch_ref=torch_ref.norm1 if torch_ref is not None else None,
         )
         self.norm2 = GroupNorm(
@@ -51,7 +49,6 @@ class ResnetBlock:
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             core_grid=norm_core_grid,
-            num_out_blocks=norm_out_blocks,
             torch_ref=torch_ref.norm2 if torch_ref is not None else None,
         )
         self.conv1 = Conv2d(
@@ -101,7 +98,6 @@ class ResnetBlock:
     def from_torch(
         cls,
         torch_ref,
-        norm_out_blocks=-1,
         mesh_device=None,
         norm_core_grid=None,
         parallel_config=None,
@@ -109,7 +105,6 @@ class ResnetBlock:
     ):
         resnet_block = cls(
             torch_ref=torch_ref,
-            norm_out_blocks=norm_out_blocks,
             mesh_device=mesh_device,
             norm_core_grid=norm_core_grid,
             parallel_config=parallel_config,
