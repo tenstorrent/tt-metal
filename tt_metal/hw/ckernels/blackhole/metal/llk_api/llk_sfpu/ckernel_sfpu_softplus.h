@@ -24,7 +24,7 @@ inline sfpi::vFloat softplus(sfpi::vFloat x) {
        based on what gave the best compromise of speed vs. accuracy.
     */
     sfpi::vFloat result;
-    v_if(x < -20.0f) { result = vConst0; }
+    v_if(x < -20.0f) { result = sfpi::vConst0; }
     v_elseif(x < -5.0f) {
         // Coefficients for [-20, -5]
         result =

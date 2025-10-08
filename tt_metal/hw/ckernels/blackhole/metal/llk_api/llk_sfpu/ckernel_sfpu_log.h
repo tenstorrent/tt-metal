@@ -16,7 +16,7 @@ sfpi_inline void calculate_log_body(const uint log_base_scale_factor) {
     // Load From dest + "normalize to calculation range"
     ////////////////////////////
     sfpi::vFloat in = sfpi::dst_reg[0];
-    sfpi::vFloat x = setexp(in, 127);  // set exp to exp bias (put in range of 1-2)
+    sfpi::vFloat x = sfpi::setexp(in, 127);  // set exp to exp bias (put in range of 1-2)
 
     // XXXXXX ask Namal? if we can derive the coefficients below to higher precision
     ////////////////////////////
@@ -31,20 +31,20 @@ sfpi_inline void calculate_log_body(const uint log_base_scale_factor) {
     // D' = -A + B - C + D
     // A':0.1058, B':-0.7116, C':2.0871, D':-1.4753
     ////////////////////////////
-    sfpi::vFloat a = vConstFloatPrgm1;
-    sfpi::vFloat b = vConstFloatPrgm2;
+    sfpi::vFloat a = sfpi::vConstFloatPrgm1;
+    sfpi::vFloat b = sfpi::vConstFloatPrgm2;
     // XXXXX try variants of the below: B'=.7122, C'=2.0869
     sfpi::vFloat series_result = x * (x * (x * a + b) + 2.0871) + -1.4753f;
 
     ////////////////////////////
     // Convert exponent to float
     ////////////////////////////
-    sfpi::vInt exp = exexp(in);
-    v_if(exp < 0) { exp = setsgn(~exp + 1, 1); }
+    sfpi::vInt exp = sfpi::exexp(in);
+    v_if(exp < 0) { exp = sfpi::setsgn(~exp + 1, 1); }
     v_endif;
 
     sfpi::vFloat expf = int32_to_float(exp, 0);
-    sfpi::vFloat vConstLn2 = vConstFloatPrgm0;
+    sfpi::vFloat vConstLn2 = sfpi::vConstFloatPrgm0;
     sfpi::vFloat result = expf * vConstLn2 + series_result;  // exp correction: ln(1+x) + exp*ln(2)
 
     if constexpr (HAS_BASE_SCALING) {
@@ -80,11 +80,11 @@ inline void calculate_log(uint log_base_scale_factor) {
 
 template <bool APPROXIMATION_MODE, bool FAST_APPROX>
 inline void log_init() {
-    vConstFloatPrgm0 = 0.692871f;  // ln2
+    sfpi::vConstFloatPrgm0 = 0.692871f;  // ln2
 
     // XXXXX could do these to higher precision
-    vConstFloatPrgm1 = 0.1058f;
-    vConstFloatPrgm2 = -0.7166f;
+    sfpi::vConstFloatPrgm1 = 0.1058f;
+    sfpi::vConstFloatPrgm2 = -0.7166f;
 }
 
 }  // namespace sfpu

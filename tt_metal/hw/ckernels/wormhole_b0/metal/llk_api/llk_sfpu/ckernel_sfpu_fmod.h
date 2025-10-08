@@ -13,17 +13,17 @@ namespace sfpu {
 
 template <bool APPROXIMATION_MODE>
 inline void init_fmod(const uint value, const uint recip) {
-    // load vConstFloatPrgm0 = value
+    // load sfpi::vConstFloatPrgm0 = value
     _sfpu_load_config32_(0xC, (value >> 16) & 0xFFFF, value & 0xFFFF);
-    // load vConstFloatPrgm1 = recip
+    // load sfpi::vConstFloatPrgm1 = recip
     _sfpu_load_config32_(0xD, (recip >> 16) & 0xFFFF, recip & 0xFFFF);
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_fmod(const uint value, const uint recip) {
     // SFPU microcode
-    sfpi::vFloat s = vConstFloatPrgm0;
-    sfpi::vFloat recip_val = vConstFloatPrgm1;
+    sfpi::vFloat s = sfpi::vConstFloatPrgm0;
+    sfpi::vFloat recip_val = sfpi::vConstFloatPrgm1;
     s = sfpi::abs(s);
     recip_val = sfpi::abs(recip_val);
 
@@ -33,8 +33,8 @@ inline void calculate_fmod(const uint value, const uint recip) {
         sfpi::vFloat v = sfpi::abs(val);
 
         sfpi::vFloat quotient;
-        sfpi::vInt exp = exexp(v * recip_val);
-        v_if(exp < 0) { quotient = vConst0; }
+        sfpi::vInt exp = sfpi::exexp(v * recip_val);
+        v_if(exp < 0) { quotient = sfpi::vConst0; }
         // Since fp32 has 23 mantissa bits, the LSB represents the fractional part when exp < 23.
         // We effectively round off the fractional bits to zero by right shifting using (exp - 23) and then left
         // shifting it back using (0 - (exp - 23)).
@@ -51,7 +51,7 @@ inline void calculate_fmod(const uint value, const uint recip) {
         v_endif;
         v = v - quotient * s;
 
-        v = setsgn(v, val);
+        v = sfpi::setsgn(v, val);
 
         v_if(s == 0) { v = std::numeric_limits<float>::quiet_NaN(); }
         v_endif;

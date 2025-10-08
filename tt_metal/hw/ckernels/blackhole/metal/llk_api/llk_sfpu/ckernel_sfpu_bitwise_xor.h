@@ -21,7 +21,7 @@ inline void calculate_bitwise_xor(const uint value) {
         sfpi::vInt res = input ^ v;
         v_if(res > INT_MIN && res < 0) {
             res = 0 - res;
-            res = setsgn(res, v);
+            res = sfpi::setsgn(res, v);
         }
         v_endif
 

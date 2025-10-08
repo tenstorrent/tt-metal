@@ -22,10 +22,10 @@ inline void calculate_tanh_derivative() {
         sfpi::vFloat val = sfpi::dst_reg[0];
 
         if constexpr (!WITH_PRECOMPUTED_TANH) {
-            val = lut(val, l0, l1, l2);
+            val = sfpi::lut(val, l0, l1, l2);
         }
 
-        val = val * (-val) + vConst1;
+        val = val * (-val) + sfpi::vConst1;
         sfpi::dst_reg[0] = val;
 
         sfpi::dst_reg++;

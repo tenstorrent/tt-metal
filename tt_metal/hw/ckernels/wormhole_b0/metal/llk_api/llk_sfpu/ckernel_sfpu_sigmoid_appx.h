@@ -21,7 +21,7 @@ inline void calculate_sigmoid_appx() {
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat val = sfpi::dst_reg[0];
 
-        sfpi::dst_reg[0] = lut(val, l0, l1, l2) + 0.5f;
+        sfpi::dst_reg[0] = sfpi::lut(val, l0, l1, l2) + 0.5f;
 
         sfpi::dst_reg++;
     }

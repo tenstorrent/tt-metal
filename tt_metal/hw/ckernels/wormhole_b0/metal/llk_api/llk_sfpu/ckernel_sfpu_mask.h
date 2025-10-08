@@ -19,7 +19,7 @@ inline void calculate_mask() {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat mask = sfpi::dst_reg[mask_val_idx];
-        v_if(_sfpu_is_fp16_zero_(mask, exponent_size_8)) { sfpi::dst_reg[0] = vConst0; }
+        v_if(_sfpu_is_fp16_zero_(mask, exponent_size_8)) { sfpi::dst_reg[0] = sfpi::vConst0; }
         v_endif;
         sfpi::dst_reg++;
     }
@@ -31,7 +31,7 @@ inline void calculate_int_mask() {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vInt mask = sfpi::dst_reg[mask_idx];
-        v_if(mask == 0) { sfpi::dst_reg[0] = vConst0; }
+        v_if(mask == 0) { sfpi::dst_reg[0] = sfpi::vConst0; }
         v_endif;
         sfpi::dst_reg++;
     }

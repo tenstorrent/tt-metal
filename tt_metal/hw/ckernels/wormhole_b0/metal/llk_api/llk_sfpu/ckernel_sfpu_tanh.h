@@ -21,7 +21,7 @@ inline void calculate_tanh() {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat val = sfpi::dst_reg[0];
-        val = lut(val, l0, l1, l2);
+        val = sfpi::lut(val, l0, l1, l2);
         sfpi::dst_reg[0] = val;
 
         sfpi::dst_reg++;

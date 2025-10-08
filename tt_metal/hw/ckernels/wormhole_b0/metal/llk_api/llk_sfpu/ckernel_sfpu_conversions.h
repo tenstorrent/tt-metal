@@ -9,7 +9,7 @@
 // and makes it faster
 sfpi_inline sfpi::vInt _float_to_int32_positive_(sfpi::vFloat in) {
     sfpi::vInt result;
-    sfpi::vInt exp = exexp(in);  // extract exponent
+    sfpi::vInt exp = sfpi::exexp(in);  // extract exponent
     v_if(exp < 0) { result = 0; }
     v_elseif(exp > 30)  // overflow occurs above this range
     {
@@ -18,7 +18,7 @@ sfpi_inline sfpi::vInt _float_to_int32_positive_(sfpi::vFloat in) {
     }
     v_else {
         // extract mantissa
-        sfpi::vInt man = exman8(in);
+        sfpi::vInt man = sfpi::exman8(in);
         // shift the mantissa by (23-exponent) to the right
         sfpi::vInt shift = exp - 23;  // 23 is number of mantissa bits in float32
         man = sfpi::reinterpret<sfpi::vInt>(shft(sfpi::reinterpret<sfpi::vUInt>(man), shift));

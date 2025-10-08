@@ -32,9 +32,9 @@ namespace sfpu {
  * - Overflow/underflow: Clamped to appropriate limits
  *
  * @note This function assumes that the programmable constants are set to the following values:
- * - vConstFloatPrgm0 = 1.4426950408889634f;
- * - vConstFloatPrgm1 = -127.0f;
- * - vConstFloatPrgm2 = std::numeric_limits<float>::quiet_NaN();
+ * - sfpi::vConstFloatPrgm0 = 1.4426950408889634f;
+ * - sfpi::vConstFloatPrgm1 = -127.0f;
+ * - sfpi::vConstFloatPrgm2 = std::numeric_limits<float>::quiet_NaN();
  *
  * @see Moroz et al. 2022 - "Simple Multiple Precision Algorithms for Exponential Functions"
  *      ( https://doi.org/10.1109/MSP.2022.3157460 )
@@ -47,7 +47,7 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_(sfpi::vFloat base, sfpi::vFloat pow
 
     // Step 1: Compute log2(base)
     // Normalize base to calculation range
-    sfpi::vFloat absbase = setsgn(base, 0);       // set base as positive
+    sfpi::vFloat absbase = sfpi::setsgn(base, 0);  // set base as positive
     sfpi::vFloat x = sfpi::setexp(absbase, 127);  // set exp to exp bias (put base in range of 1-2)
 
     // 3rd order polynomial approx - determined using rminimax over [1,2]
@@ -93,7 +93,7 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_(sfpi::vFloat base, sfpi::vFloat pow
     const sfpi::vFloat bias = sfpi::vFloat(0x3f800000);
     sfpi::vInt z = _float_to_int32_positive_(z_f32 + bias);
 
-    sfpi::vInt zii = exexp(sfpi::reinterpret<sfpi::vFloat>(z));         // Note: z & 0x7f800000 in paper
+    sfpi::vInt zii = sfpi::exexp(sfpi::reinterpret<sfpi::vFloat>(z));   // Note: z & 0x7f800000 in paper
     sfpi::vInt zif = sfpi::exman9(sfpi::reinterpret<sfpi::vFloat>(z));  // Note: z & 0x007fffff in paper
 
     // Compute formula in Horner form
@@ -125,7 +125,7 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_(sfpi::vFloat base, sfpi::vFloat pow
         // If pow is odd integer then result is negative
         // If power is even, then result is positive
         // To get the sign bit of result, we can shift last bit of pow_int to the 1st bit
-        y = setsgn(y, pow_int << 31);
+        y = sfpi::setsgn(y, pow_int << 31);
 
         // Check for integer power, if it is not then overwrite result with NaN
         v_if(pow_rounded != pow) {  // negative base and non-integer power => set to NaN

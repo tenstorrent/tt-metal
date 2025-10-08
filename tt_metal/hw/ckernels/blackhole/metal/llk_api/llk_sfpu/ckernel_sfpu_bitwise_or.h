@@ -17,7 +17,7 @@ inline void calculate_bitwise_or(const uint value) {
         sfpi::vInt res = input | scalar_value;
         v_if(res > INT_MIN && res < 0) {
             res = 0 - res;
-            res = setsgn(res, scalar_value);
+            res = sfpi::setsgn(res, scalar_value);
         }
         v_endif
 

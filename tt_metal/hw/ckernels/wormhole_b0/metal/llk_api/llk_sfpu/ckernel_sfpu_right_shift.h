@@ -18,11 +18,11 @@ inline void calculate_right_shift(const uint shift_amt) {
         sfpi::vInt input = sfpi::dst_reg[0];
         sfpi::vUInt val = sfpi::reinterpret<sfpi::vUInt>(input);
 
-        v_if(input < 0) { val = setsgn(val - 1, 0); }
+        v_if(input < 0) { val = sfpi::setsgn(val - 1, 0); }
         v_endif;
         sfpi::vInt res = sfpi::reinterpret<sfpi::vInt>(val >> shift_amt);
 
-        v_if(input < 0) { res = setsgn(res + 1, input); }
+        v_if(input < 0) { res = sfpi::setsgn(res + 1, input); }
         v_endif;
 
         sfpi::dst_reg[0] = res;

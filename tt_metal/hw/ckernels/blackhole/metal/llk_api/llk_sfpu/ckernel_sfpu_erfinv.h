@@ -17,7 +17,7 @@ sfpi_inline sfpi::vFloat calculate_sqrt_custom(sfpi::vFloat in) {
     sfpi::vFloat val = in;
     sfpi::vFloat out;
     v_if(val != 0.0f) {
-        sfpi::vUInt magic = sfpi::reinterpret<sfpi::vUInt>(sfpi::vFloat(s2vFloat16b(0x5f37)));
+        sfpi::vUInt magic = sfpi::reinterpret<sfpi::vUInt>(sfpi::vFloat(sfpi::s2vFloat16b(0x5f37)));
         sfpi::vFloat approx = sfpi::reinterpret<sfpi::vFloat>(magic - (sfpi::reinterpret<sfpi::vUInt>(val) >> 1));
         for (int r = 0; r < 2; r++) {
             approx = ((approx * approx) * (val * -0.5f) + 1.5f) * approx;
@@ -69,9 +69,9 @@ inline void calculate_erfinv() {
 
 template <bool APPROXIMATION_MODE>
 void erfinv_init() {
-    vConstFloatPrgm0 = 0.692871f;  // ln2
-    vConstFloatPrgm1 = 0.1058f;
-    vConstFloatPrgm2 = -0.7166f;
+    sfpi::vConstFloatPrgm0 = 0.692871f;  // ln2
+    sfpi::vConstFloatPrgm1 = 0.1058f;
+    sfpi::vConstFloatPrgm2 = -0.7166f;
 }
 
 }  // namespace sfpu

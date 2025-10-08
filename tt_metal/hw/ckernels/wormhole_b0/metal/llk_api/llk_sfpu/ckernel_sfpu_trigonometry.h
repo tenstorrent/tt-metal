@@ -37,7 +37,7 @@ static sfpi_inline sfpi::vFloat sfpu_tan_large(sfpi::vFloat x) {
          2.514385f) *
             r +
         3.0097759f;
-    return setsgn(y, x);
+    return sfpi::setsgn(y, x);
 }
 
 template <bool APPROXIMATION_MODE>
@@ -79,7 +79,7 @@ inline void calculate_tangent() {
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat v = sfpi::dst_reg[0] * FRAC_1_PI;
-        v -= int32_to_float(float_to_int16(v, 0), 0);
+        v -= int32_to_float(sfpi::float_to_int16(v, 0), 0);
         sfpi::dst_reg[0] = sfpu_tan<APPROXIMATION_MODE>(PI * v);
         sfpi::dst_reg++;
     }
@@ -108,7 +108,7 @@ inline void calculate_sine() {
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat v = sfpi::dst_reg[0] * FRAC_1_PI;
-        sfpi::vInt whole_v = float_to_int16(v, 0);
+        sfpi::vInt whole_v = sfpi::float_to_int16(v, 0);
         v -= int32_to_float(whole_v, 0);
         v = sfpu_sinpi<APPROXIMATION_MODE>(v);
 
@@ -124,7 +124,7 @@ inline void calculate_cosine() {
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat v = sfpi::dst_reg[0] * FRAC_1_PI + 0.5f;
-        sfpi::vInt whole_v = float_to_int16(v, 0);
+        sfpi::vInt whole_v = sfpi::float_to_int16(v, 0);
         v -= int32_to_float(whole_v, 0);
         v = sfpu_sinpi<APPROXIMATION_MODE>(v);
 
@@ -214,7 +214,7 @@ inline void calculate_asin() {
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat v = sfpi::dst_reg[0];
-        v_if(v < vConstNeg1 || v > vConst1) { sfpi::dst_reg[0] = std::numeric_limits<float>::quiet_NaN(); }
+        v_if(v < vConstNeg1 || v > sfpi::vConst1) { sfpi::dst_reg[0] = std::numeric_limits<float>::quiet_NaN(); }
         v_else { sfpi::dst_reg[0] = sfpu_asine_maclaurin_series<APPROXIMATION_MODE>(v); }
         v_endif;
         sfpi::dst_reg++;
@@ -227,14 +227,14 @@ inline void calculate_acos() {
     // acos = (pi/2 - asin)
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat v = sfpi::dst_reg[0];
-        v_if(v < vConstNeg1 || v > vConst1) { sfpi::dst_reg[0] = std::numeric_limits<float>::quiet_NaN(); }
+        v_if(v < vConstNeg1 || v > sfpi::vConst1) { sfpi::dst_reg[0] = std::numeric_limits<float>::quiet_NaN(); }
         v_else { sfpi::dst_reg[0] = PI_2 - sfpu_asine_maclaurin_series<APPROXIMATION_MODE>(v); }
         v_endif;
         sfpi::dst_reg++;
     }
 }
 
-// cosh = (sfpi::exp(x) + sfpi::exp(-x)) / 2
+// cosh = (exp(x) + exp(-x)) / 2
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_cosh() {
     // SFPU microcode
@@ -246,7 +246,7 @@ inline void calculate_cosh() {
     }
 }
 
-// sinh = (sfpi::exp(x) - sfpi::exp(-x)) / 2
+// sinh = (exp(x) - exp(-x)) / 2
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_sinh() {
     // SFPU microcode
