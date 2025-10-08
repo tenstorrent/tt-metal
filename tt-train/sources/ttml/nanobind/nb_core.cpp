@@ -101,6 +101,7 @@ void py_module(nb::module_& m) {
                DistributedContext* distributed_ctx,
                int rank,
                bool use_grad) {
+                // TODO: Refactor binding of DistributedContext so we don't need this hack
                 std::shared_ptr<DistributedContext> ctx(distributed_ctx, [](DistributedContext*) {});
                 if (use_grad) {
                     self.send(tensor.get_grad(), ctx, Rank{rank});
@@ -119,6 +120,7 @@ void py_module(nb::module_& m) {
                DistributedContext* distributed_ctx,
                int rank,
                bool use_grad) -> ttml::autograd::Tensor& {
+                // TODO: Refactor binding of DistributedContext so we don't need this hack
                 std::shared_ptr<DistributedContext> ctx(distributed_ctx, [](DistributedContext*) {});
                 if (use_grad) {
                     if (!tensor.is_grad_initialized()) {
