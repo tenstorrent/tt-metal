@@ -18,22 +18,22 @@ arch:
 chips:
   {}
 chip_unique_ids:
-  15: 591435212423967540
-  14: 591434117207306580
-  13: 519377618386039604
-  0: 87030958941811028
-  1: 87032054158471988
-  2: 159088552979738964
-  3: 159089648196399924
-  4: 231146147017666900
-  5: 231147242234327860
-  6: 303203741055594836
-  7: 303204836272255796
-  8: 375261335093522772
-  9: 375262430310183732
-  10: 447318929131450708
-  11: 447320024348111668
-  12: 519376523169378644
+  15: 591431948248822070
+  14: 591431948248821830
+  13: 519374354210894134
+  0: 87028789983326278
+  1: 87028789983326518
+  2: 159086384021254214
+  3: 159086384021254454
+  4: 231143978059182150
+  5: 231143978059182390
+  6: 303201572097110086
+  7: 303201572097110326
+  8: 375259166135038022
+  9: 375259166135038262
+  10: 447316760172965958
+  11: 447316760172966198
+  12: 519374354210893894
 ethernet_connections:
   -
     - chip: 0
@@ -599,180 +599,180 @@ ethernet_connections_to_remote_devices:
   -
     - chip: 15
       chan: 11
-    - remote_chip_id: 591435212423967537
+    - remote_chip_id: 591431948248821838
       chan: 11
   -
     - chip: 15
       chan: 10
-    - remote_chip_id: 591435212423967537
+    - remote_chip_id: 591431948248821838
       chan: 10
   -
     - chip: 15
       chan: 9
-    - remote_chip_id: 591435212423967537
+    - remote_chip_id: 591431948248821838
       chan: 9
   -
     - chip: 15
       chan: 8
-    - remote_chip_id: 591435212423967537
+    - remote_chip_id: 591431948248821838
       chan: 8
   -
     - chip: 9
       chan: 7
-    - remote_chip_id: 375262430310183729
+    - remote_chip_id: 375259166135038030
       chan: 7
   -
     - chip: 9
       chan: 6
-    - remote_chip_id: 375262430310183729
+    - remote_chip_id: 375259166135038030
       chan: 6
   -
     - chip: 9
       chan: 5
-    - remote_chip_id: 375262430310183729
+    - remote_chip_id: 375259166135038030
       chan: 5
   -
     - chip: 9
       chan: 4
-    - remote_chip_id: 375262430310183729
+    - remote_chip_id: 375259166135038030
       chan: 4
   -
     - chip: 8
       chan: 7
-    - remote_chip_id: 375262430310183730
+    - remote_chip_id: 375259166135038027
       chan: 7
   -
     - chip: 8
       chan: 6
-    - remote_chip_id: 375262430310183730
+    - remote_chip_id: 375259166135038027
       chan: 6
   -
     - chip: 8
       chan: 5
-    - remote_chip_id: 375262430310183730
+    - remote_chip_id: 375259166135038027
       chan: 5
   -
     - chip: 8
       chan: 4
-    - remote_chip_id: 375262430310183730
+    - remote_chip_id: 375259166135038027
       chan: 4
   -
     - chip: 7
       chan: 11
-    - remote_chip_id: 303204836272255793
+    - remote_chip_id: 303201572097110094
       chan: 11
   -
     - chip: 7
       chan: 10
-    - remote_chip_id: 303204836272255793
+    - remote_chip_id: 303201572097110094
       chan: 10
   -
     - chip: 7
       chan: 9
-    - remote_chip_id: 303204836272255793
+    - remote_chip_id: 303201572097110094
       chan: 9
   -
     - chip: 7
       chan: 8
-    - remote_chip_id: 303204836272255793
+    - remote_chip_id: 303201572097110094
       chan: 8
   -
     - chip: 6
       chan: 11
-    - remote_chip_id: 303204836272255794
+    - remote_chip_id: 303201572097110091
       chan: 11
   -
     - chip: 6
       chan: 10
-    - remote_chip_id: 303204836272255794
+    - remote_chip_id: 303201572097110091
       chan: 10
   -
     - chip: 6
       chan: 9
-    - remote_chip_id: 303204836272255794
+    - remote_chip_id: 303201572097110091
       chan: 9
   -
     - chip: 6
       chan: 8
-    - remote_chip_id: 303204836272255794
+    - remote_chip_id: 303201572097110091
       chan: 8
   -
     - chip: 14
       chan: 11
-    - remote_chip_id: 591435212423967538
+    - remote_chip_id: 591431948248821835
       chan: 11
   -
     - chip: 14
       chan: 10
-    - remote_chip_id: 591435212423967538
+    - remote_chip_id: 591431948248821835
       chan: 10
   -
     - chip: 14
       chan: 9
-    - remote_chip_id: 591435212423967538
+    - remote_chip_id: 591431948248821835
       chan: 9
   -
     - chip: 14
       chan: 8
-    - remote_chip_id: 591435212423967538
+    - remote_chip_id: 591431948248821835
       chan: 8
   -
     - chip: 1
       chan: 7
-    - remote_chip_id: 87032054158471985
+    - remote_chip_id: 87028789983326286
       chan: 7
   -
     - chip: 1
       chan: 6
-    - remote_chip_id: 87032054158471985
+    - remote_chip_id: 87028789983326286
       chan: 6
   -
     - chip: 1
       chan: 5
-    - remote_chip_id: 87032054158471985
+    - remote_chip_id: 87028789983326286
       chan: 5
   -
     - chip: 1
       chan: 4
-    - remote_chip_id: 87032054158471985
+    - remote_chip_id: 87028789983326286
       chan: 4
   -
     - chip: 0
       chan: 7
-    - remote_chip_id: 87032054158471986
+    - remote_chip_id: 87028789983326283
       chan: 7
   -
     - chip: 0
       chan: 6
-    - remote_chip_id: 87032054158471986
+    - remote_chip_id: 87028789983326283
       chan: 6
   -
     - chip: 0
       chan: 5
-    - remote_chip_id: 87032054158471986
+    - remote_chip_id: 87028789983326283
       chan: 5
   -
     - chip: 0
       chan: 4
-    - remote_chip_id: 87032054158471986
+    - remote_chip_id: 87028789983326283
       chan: 4
 chips_with_mmio:
-  - 0: 18
-  - 1: 28
-  - 2: 16
-  - 3: 25
-  - 4: 19
-  - 5: 29
-  - 6: 22
-  - 7: 26
-  - 8: 20
-  - 9: 24
-  - 10: 23
-  - 11: 27
-  - 12: 21
-  - 13: 31
-  - 14: 17
-  - 15: 30
+  - 0: 28
+  - 1: 22
+  - 2: 26
+  - 3: 21
+  - 4: 29
+  - 5: 19
+  - 6: 24
+  - 7: 16
+  - 8: 30
+  - 9: 17
+  - 10: 31
+  - 11: 23
+  - 12: 27
+  - 13: 20
+  - 14: 25
+  - 15: 18
 harvesting:
   0:
     noc_translation: true
@@ -904,25 +904,25 @@ chip_to_boardtype:
   14: ubb
   15: ubb
 chip_to_bus_id:
-  0: 0x0001
-  1: 0x0041
-  2: 0x0002
-  3: 0x0042
-  4: 0x0003
-  5: 0x0043
-  6: 0x0004
-  7: 0x0044
-  8: 0x0005
-  9: 0x0045
-  10: 0x0006
-  11: 0x0046
-  12: 0x0007
-  13: 0x0047
-  14: 0x0008
-  15: 0x0048
+  0: 0x0041
+  1: 0x0001
+  2: 0x0042
+  3: 0x0002
+  4: 0x0043
+  5: 0x0003
+  6: 0x0044
+  7: 0x0004
+  8: 0x0045
+  9: 0x0005
+  10: 0x0046
+  11: 0x0006
+  12: 0x0047
+  13: 0x0007
+  14: 0x0048
+  15: 0x0008
 boards:
   -
-    - board_id: 72061240465162240
+    - board_id: 72061241270468608
     - board_type: ubb
     - chips:
         - 15
