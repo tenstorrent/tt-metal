@@ -245,4 +245,33 @@ class TtTransfuserBackbone:
         image_features_layer1 = ttnn.permute(image_features_layer1, (0, 2, 3, 1))
         lidar_features_layer1 = ttnn.permute(lidar_features_layer1, (0, 2, 3, 1))
 
-        return image_features_layer1, lidar_features_layer1
+        logger.info(f"Layer1 image and lidar interpolation- bilinear")
+        logger.info(f"bilinear_image")
+        image_features_layer1 = ttnn.to_layout(image_features_layer1, ttnn.ROW_MAJOR_LAYOUT)
+        image_features_layer1 = ttnn.to_memory_config(image_features_layer1, ttnn.DRAM_MEMORY_CONFIG)
+        image_features_layer1 = ttnn.pad(
+            image_features_layer1, padding=((0, 0), (0, 0), (0, 0), (0, 24)), value=0.0  # Pad 24 channels (96 - 72)
+        )
+        image_features_layer1 = ttnn.upsample(
+            image_features_layer1, scale_factor=(8, 8), mode="bilinear", memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        # Slice back to original 72 channels
+        image_features_layer1 = ttnn.slice(image_features_layer1, [0, 0, 0, 0], [1, 40, 176, 72])
+        image_features_layer1 = ttnn.to_layout(image_features_layer1, ttnn.TILE_LAYOUT)
+
+        logger.info(f"bilinear_lidar")
+        lidar_features_layer1 = ttnn.to_layout(lidar_features_layer1, ttnn.ROW_MAJOR_LAYOUT)
+        lidar_features_layer1 = ttnn.to_memory_config(lidar_features_layer1, ttnn.DRAM_MEMORY_CONFIG)
+        lidar_features_layer1 = ttnn.pad(lidar_features_layer1, padding=((0, 0), (0, 0), (0, 0), (0, 24)), value=0.0)
+        lidar_features_layer1 = ttnn.upsample(
+            lidar_features_layer1, scale_factor=(8, 8), mode="bilinear", memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        # Slice back to original 72 channels
+        lidar_features_layer1 = ttnn.slice(lidar_features_layer1, [0, 0, 0, 0], [1, 64, 64, 72])
+        lidar_features_layer1 = ttnn.to_layout(lidar_features_layer1, ttnn.TILE_LAYOUT)
+
+        logger.info("Image and lidar - add")
+        image_features = ttnn.add(image_out, image_features_layer1)
+        lidar_features = ttnn.add(lidar_out, lidar_features_layer1)
+
+        return image_features, lidar_features
