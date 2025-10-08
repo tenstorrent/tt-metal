@@ -242,6 +242,7 @@ def model_location_generator(is_ci_v2_env):
         download_if_ci_v2=False,
         ci_v2_timeout_in_s=300,
         endpoint_prefix="http://large-file-cache.large-file-cache.svc.cluster.local//mldata/model_checkpoints/pytorch/huggingface",
+        download_dir_suffix="model_weights",
     ):
         model_folder = Path("tt_dnn-models") / model_subdir
         internal_weka_path = Path("/mnt/MLPerf") / model_folder / model_version
@@ -258,7 +259,7 @@ def model_location_generator(is_ci_v2_env):
             ), f"model_subdir is set to {model_subdir}, but we don't support further levels of directories in the large file cache in CIv2"
             civ2_download_path = CIv2ModelDownloadUtils_.download_from_ci_v2_cache(
                 model_version,
-                download_dir_suffix="model_weights",
+                download_dir_suffix=download_dir_suffix,
                 timeout_in_s=ci_v2_timeout_in_s,
                 endpoint_prefix=endpoint_prefix,
             )

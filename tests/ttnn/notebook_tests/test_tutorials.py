@@ -68,19 +68,22 @@ def setup_once(model_location_generator):
 
         # Download data using model_location_generator
         data_placement = model_location_generator(
-            external_path, download_if_ci_v2=True, endpoint_prefix=EXTERNAL_SERVER_BASE_URL
+            external_path,
+            download_if_ci_v2=True,
+            endpoint_prefix=EXTERNAL_SERVER_BASE_URL,
+            download_dir_suffix=external_path,
         )
         print(data_placement)
-        data_placement = Path("/tmp/ttnn_model_cache/model_weights")
+        data_placement = Path("/tmp/ttnn_model_cache/ttnn_simplecnn_inference")
 
         # Iterate over elements in this directory
-        for item in data_placement.iterdir():
+        for item in data_placement.parent.iterdir():
             print(f"Found item: {item}")
 
         # Create symbolic link from local_path to data_placement
         if local_path_obj.exists():
             local_path_obj.unlink()  # Remove existing symlink/file
-        local_path_obj.symlink_to(data_placement)
+        local_path_obj.symlink_to(data_placement.parent)
 
 
 def collect_ttnn_tutorials(path: Path, extension: str = "*.py"):
