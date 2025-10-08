@@ -11,7 +11,7 @@ from loguru import logger
 # This test will run all the nightly fast dispatch tests for all supported TTT models in CI [N150 / N300 only]
 @pytest.mark.parametrize(
     "hf_model_name",
-    ["google/gemma-3-4b-it", "google/gemma-3-27b-it"],
+    ["mstojko-gemma", "google/gemma-3-27b-it"],
     ids=["gemma-3-4b-it", "gemma-3-27b-it"],
 )
 def test_ci_dispatch(hf_model_name, is_ci_env, is_ci_v2_env, model_location_generator):
