@@ -330,15 +330,8 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     // Iterate over all programs. Update dispatch commands per program to reflect
     // current device state. Write the finalized program command sequence to each
     // physical device tied to the program.
+    TracyTTMetalEnqueueMeshWorkloadTrace(mesh_device_, mesh_workload, this->trace_id());
     for (auto& [device_range, program] : mesh_workload.get_programs()) {
-#if defined(TRACY_ENABLE)
-        if (this->trace_id().has_value()) {
-            for_each_local(mesh_device_, device_range, [&](const auto& coord) {
-                auto device = mesh_device_->get_device(coord);
-                TracyTTMetalEnqueueProgramTrace(device->id(), *(this->trace_id().value()), program.get_runtime_id());
-            });
-        }
-#endif
         auto& program_cmd_seq = mesh_workload.impl().get_dispatch_cmds_for_program(program, command_hash);
         TT_ASSERT(
             use_prefetcher_cache == program_cmd_seq.prefetcher_cache_used,
