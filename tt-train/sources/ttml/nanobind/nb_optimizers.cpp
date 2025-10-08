@@ -19,6 +19,7 @@ NB_MAKE_OPAQUE(ttml::serialization::NamedParameters)
 #include "nanobind/nb_fwd.hpp"
 #include "optimizers/adamw.hpp"
 #include "optimizers/optimizer_base.hpp"
+#include "optimizers/remote_optimizer.hpp"
 #include "optimizers/sgd.hpp"
 
 namespace ttml::nanobind::optimizers {
@@ -30,6 +31,7 @@ void py_module_types(nb::module_& m) {
     nb::class_<SGD, OptimizerBase>(m, "SGD");
     nb::class_<AdamWConfig>(m, "AdamWConfig");
     nb::class_<MorehAdamW, OptimizerBase>(m, "AdamW");
+    nb::class_<RemoteOptimizer, OptimizerBase>(m, "RemoteOptimizer");
 }
 
 void py_module(nb::module_& m) {
@@ -93,6 +95,15 @@ void py_module(nb::module_& m) {
         auto py_adamw = static_cast<nb::class_<MorehAdamW, OptimizerBase>>(m.attr("AdamW"));
         py_adamw.def(
             nb::init<serialization::NamedParameters, const AdamWConfig&>(), nb::arg("parameters"), nb::arg("config"));
+    }
+
+    {
+        auto py_remote_optimizer = static_cast<nb::class_<RemoteOptimizer, OptimizerBase>>(m.attr("RemoteOptimizer"));
+        py_remote_optimizer.def(
+            nb::init<serialization::NamedParameters, int>(), nb::arg("parameters"), nb::arg("aggregator_rank"));
+        py_remote_optimizer.def("send_gradients", &RemoteOptimizer::send_gradients);
+        py_remote_optimizer.def("receive_weights", &RemoteOptimizer::receive_weights);
+        py_remote_optimizer.def("get_sorted_parameters", &RemoteOptimizer::get_sorted_parameters);
     }
 }
 
