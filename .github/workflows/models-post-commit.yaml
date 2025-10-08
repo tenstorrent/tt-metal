@@ -23,10 +23,10 @@ on:
         description: 'Enable watcher'
         default: false
         type: boolean
-      invoking-workflow:
-        description: 'The name of the workflow that invoked this workflow'
-        default: 'apc'
-        type: string
+      # invoking-workflow:
+      #   description: 'The name of the workflow that invoked this workflow'
+      #   default: 'apc'
+      #   type: string
 
 jobs:
   models:
@@ -69,7 +69,7 @@ jobs:
         timeout-minutes: ${{ inputs.timeout }}
         run: |
           source tests/scripts/run_python_model_tests.sh
-          run_python_model_tests_${{ inputs.invoking-workflow }}_${{ inputs.arch }}
+          run_python_model_tests_${{ github.job == 'models-unit-tests-l2nightly' && 'l2nightly' || 'apc' }}_${{ inputs.arch }}
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
