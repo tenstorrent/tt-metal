@@ -159,7 +159,7 @@ ttnn::Tensor bound_matmul(
         const UnaryOpType& op_type = parameters.user_fused_activation.value().op_type;
         output_tensor = ttnn::operations::unary::Unary_chain::invoke(
             output_tensor,
-            {ttnn::operations::unary::EltwiseUnaryWithParam{op_type}},
+            {ttnn::operations::unary::EltwiseUnaryWithParam{op_type, {static_cast<float>(false)}}},
             parameters.output_mem_config,
             optional_output_tensor);
     }
