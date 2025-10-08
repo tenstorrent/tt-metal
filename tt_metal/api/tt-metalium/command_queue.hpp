@@ -1,23 +1,26 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-#include <condition_variable>
+#include <optional>
 #include <cstdint>
 #include <memory>
-#include <thread>
+#include <variant>
 
-#include <tt-metalium/command_queue_interface.hpp>
-
+#include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/vector_aligned.hpp>
+#include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/buffer.hpp>
+
+#include <tt_stl/span.hpp>
 
 namespace tt::tt_metal {
 
 struct Event;
 class Program;
-class Kernel;
+class IDevice;
 class SystemMemoryManager;
 class WorkerConfigBufferMgr;
 struct TraceDescriptor;

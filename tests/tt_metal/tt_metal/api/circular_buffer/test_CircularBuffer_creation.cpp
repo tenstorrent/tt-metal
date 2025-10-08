@@ -24,7 +24,7 @@
 #include <tt-metalium/hal_types.hpp>
 #include "hostdevcommon/kernel_structs.h"
 #include <tt-metalium/program.hpp>
-#include "umd/device/tt_core_coordinates.h"
+#include <umd/device/types/core_coordinates.hpp>
 
 // Access to internal API: ProgramImpl::get_sem_base_addr, ProgramImpl::get_cb_size
 #include "impl/program/program_impl.hpp"
@@ -40,7 +40,7 @@ namespace basic_tests::circular_buffer {
 
 bool test_cb_config_written_to_core(
     distributed::MeshWorkload& workload,
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const CoreRangeSet& cr_set,
     const std::map<uint8_t, std::vector<uint32_t>>& cb_config_per_buffer_index) {
     bool pass = true;
@@ -89,7 +89,7 @@ TEST_F(MeshDeviceFixture, TensixTestCreateCircularBufferAtValidIndices) {
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program;
     initialize_program(program, cr_set);
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
 
     uint32_t l1_unreserved_base = devices_.at(0)->allocator()->get_base_allocator_addr(HalMemType::L1);

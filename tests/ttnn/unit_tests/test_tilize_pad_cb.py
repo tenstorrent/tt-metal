@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -10,7 +10,7 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc_without_tensor_printout
-from models.utility_functions import is_grayskull, is_blackhole, torch_random, skip_for_grayskull
+from models.common.utility_functions import is_grayskull, is_blackhole, torch_random
 
 
 @pytest.mark.parametrize("in_dtype", [ttnn.bfloat16, ttnn.float32])

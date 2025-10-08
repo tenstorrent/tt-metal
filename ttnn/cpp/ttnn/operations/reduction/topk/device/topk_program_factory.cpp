@@ -4,7 +4,6 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include "ttnn/operation.hpp"
 #include "topk_utils.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -304,7 +303,7 @@ operation::ProgramWithCallbacks topk_multicore_interleaved(
 
     uint32_t Wt_local = local_topk_input_size / TILE_WIDTH;
     uint32_t Wt_final = final_topk_input_size / TILE_WIDTH;
-    uint32_t Kt = k % TILE_WIDTH == 0 ? k / TILE_WIDTH : k / TILE_WIDTH + 1;
+    uint32_t Kt = k % TILE_WIDTH == 0 ? k / TILE_WIDTH : (k / TILE_WIDTH) + 1;
 
     // for streaming in input
     uint32_t num_cb_unit = 2;

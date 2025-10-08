@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,7 +6,7 @@
 
 #include <vector>
 #include <cstdint>
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 
 namespace tt::tt_fabric::fabric_tests {
 
@@ -101,8 +101,7 @@ struct SenderMemoryMap {
     // Default constructor
     SenderMemoryMap() : common(), packet_headers(0, 0), payload_buffers(0, 0), highest_usable_address(0) {}
 
-    SenderMemoryMap(
-        uint32_t l1_unreserved_base, uint32_t l1_unreserved_size, uint32_t l1_alignment, uint32_t num_configs) :
+    SenderMemoryMap(uint32_t l1_unreserved_base, uint32_t l1_unreserved_size, uint32_t l1_alignment) :
         common(0, 0, 0, 0, 0, 0),  // Will be set below
         packet_headers(0, 0),      // Will be set below
         payload_buffers(0, 0),     // Will be set below
@@ -135,12 +134,6 @@ struct SenderMemoryMap {
         current_addr += PACKET_HEADER_BUFFER_SIZE;
         packet_headers = BaseMemoryRegion(packet_header_base, PACKET_HEADER_BUFFER_SIZE);
 
-        // Payload buffers - use small fixed size per config since sender buffer is virtual
-        uint32_t payload_buffer_base = current_addr;
-        uint32_t payload_buffer_size = MAX_PAYLOAD_SIZE_PER_CONFIG * num_configs;
-        current_addr += payload_buffer_size;
-        payload_buffers = BaseMemoryRegion(payload_buffer_base, payload_buffer_size);
-
         // global sync region
         uint32_t global_sync_region_base = current_addr;
         uint32_t global_sync_region_size = l1_alignment;
@@ -152,6 +145,13 @@ struct SenderMemoryMap {
         uint32_t local_sync_region_size = l1_alignment;
         current_addr += local_sync_region_size;
         local_sync_region = BaseMemoryRegion(local_sync_region_base, local_sync_region_size);
+
+        // Payload buffers - use small fixed size per config since sender buffer is virtual
+        // needs to be after the sync regions to avoid overflow
+        uint32_t payload_buffer_base = current_addr;
+        uint32_t payload_buffer_size = highest_usable_address - current_addr;
+        current_addr += payload_buffer_size;
+        payload_buffers = BaseMemoryRegion(payload_buffer_base, payload_buffer_size);
 
         TT_FATAL(
             current_addr <= highest_usable_address,

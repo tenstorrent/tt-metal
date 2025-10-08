@@ -5,14 +5,12 @@
 #pragma once
 
 #include <memory>
-#include <utility>
 
 #include <tt-metalium/device.hpp>
 #include <hostdevcommon/common_values.hpp>
 #include <hostdevcommon/kernel_structs.h>  // Leaked up to ttnn level from here
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/command_queue_interface.hpp>
 #include <tt-metalium/command_queue.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/sub_device.hpp>
@@ -20,8 +18,6 @@
 #include <tt_stl/span.hpp>
 #include <tt-metalium/program_cache.hpp>
 
-struct go_msg_t;
-struct launch_msg_t;
 namespace tt::tt_metal {
 class SubDeviceManagerTracker;
 
@@ -46,8 +42,8 @@ public:
     Device(const Device& other) = delete;
     Device& operator=(const Device& other) = delete;
 
-    Device(Device&& other);
-    Device& operator=(Device&& other);
+    Device(Device&& other) noexcept;
+    Device& operator=(Device&& other) noexcept;
 
     tt::ARCH arch() const override;
 
@@ -119,7 +115,7 @@ public:
     uint32_t get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& cores) const override;
 
     SystemMemoryManager& sysmem_manager() override { return *sysmem_manager_; }
-    CommandQueue& command_queue(size_t cq_id = 0) override;
+    CommandQueue& command_queue(std::optional<uint8_t> cq_id = std::nullopt) override;
 
     // Metal trace device capture mode
     uint32_t get_trace_buffers_size() const override { return trace_buffers_size_; }
@@ -177,7 +173,9 @@ public:
     bool is_mmio_capable() const override;
     // TODO #20966: Remove these APIs
     std::shared_ptr<distributed::MeshDevice> get_mesh_device() override;
-    void set_mesh_device(std::shared_ptr<distributed::MeshDevice> mesh_device) { this->mesh_device = mesh_device; };
+    void set_mesh_device(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+        this->mesh_device = mesh_device;
+    };
 
 private:
     static constexpr uint32_t DEFAULT_NUM_SUB_DEVICES = 1;

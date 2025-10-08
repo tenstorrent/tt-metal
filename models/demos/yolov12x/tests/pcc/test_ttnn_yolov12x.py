@@ -6,11 +6,11 @@ import pytest
 import torch
 
 import ttnn
+from models.common.utility_functions import run_for_wormhole_b0
 from models.demos.yolov12x.common import YOLOV12_L1_SMALL_SIZE, load_torch_model
 from models.demos.yolov12x.reference import yolov12x
 from models.demos.yolov12x.tt.model_preprocessing import create_yolov12x_input_tensors, create_yolov12x_model_parameters
 from models.demos.yolov12x.tt.yolov12x import YoloV12x
-from models.utility_functions import run_for_wormhole_b0
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 

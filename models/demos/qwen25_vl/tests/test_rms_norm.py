@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 import os
@@ -9,10 +9,10 @@ from loguru import logger
 
 import ttnn
 from models.common.rmsnorm import RMSNorm as RMSNorm
+from models.common.utility_functions import comp_allclose, comp_pcc
 from models.demos.qwen25_vl.tt.model_config import VisionModelArgs
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
-from models.utility_functions import comp_allclose, comp_pcc
 
 
 @torch.no_grad()

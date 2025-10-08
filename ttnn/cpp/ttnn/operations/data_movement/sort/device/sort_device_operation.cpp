@@ -47,7 +47,7 @@ SortDeviceOperation::program_factory_t SortDeviceOperation::select_program_facto
 
 void SortDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    return validate_on_program_cache_miss(attributes, tensor_args);
+    validate_on_program_cache_miss(attributes, tensor_args);
 }
 
 void SortDeviceOperation::validate_on_program_cache_miss(

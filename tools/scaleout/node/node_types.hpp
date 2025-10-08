@@ -17,6 +17,10 @@ enum class NodeType {
     WH_GALAXY_XY_TORUS,
     P150_QB_GLOBAL,
     P300_QB_AMERICA,
+    BH_GALAXY,
+    BH_GALAXY_X_TORUS,
+    BH_GALAXY_Y_TORUS,
+    BH_GALAXY_XY_TORUS,
 };
 
 NodeType get_node_type_from_string(const std::string& node_name);

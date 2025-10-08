@@ -10,7 +10,7 @@ from models.experimental.yolov3.tt.yolov3_bottleneck import TtBottleneck
 from models.experimental.yolov3.reference.models.common import (
     DetectMultiBackend,
 )
-from models.utility_functions import (
+from models.common.utility_functions import (
     comp_pcc,
     torch2tt_tensor,
     tt2torch_tensor,

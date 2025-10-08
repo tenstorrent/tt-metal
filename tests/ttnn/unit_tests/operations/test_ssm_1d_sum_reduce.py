@@ -9,7 +9,7 @@ import ttnn
 import pytest
 from loguru import logger
 
-from models.utility_functions import tt2torch_tensor, comp_pcc
+from models.common.utility_functions import tt2torch_tensor, comp_pcc
 
 
 def run_ssm_1d_sum_reduce(H: int, W: int, latent_size: int, dtype, in_mem_config, out_mem_config, device):

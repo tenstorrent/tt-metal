@@ -205,6 +205,7 @@ def split_conv2d(
                 return_output_dim=True,
                 return_weights_and_bias=True,
                 dtype=conv_dtype,
+                slice_config=ttnn.Conv2dL1FullSliceConfig,
             )
 
             device_weights[idx_out].append(d_w)

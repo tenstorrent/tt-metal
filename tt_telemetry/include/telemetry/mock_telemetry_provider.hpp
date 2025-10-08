@@ -26,19 +26,22 @@
 
 #include <telemetry/telemetry_subscriber.hpp>
 
-class MockTelemetryProvider {
+class MockTelemetryCollector {
 private:
     static constexpr auto UPDATE_INTERVAL_SECONDS = std::chrono::seconds(5);
 
-    // Telemetry metrics state
-    const std::vector<std::string> bool_metric_names_ = {
-        "foo/bar/baz1", "foo/bar/baz2", "foo/bar/baz3", "foo/glorp/cpu1", "foo/glorp/cpu2", "foo/glorp/cpu3"};
-    std::vector<size_t> bool_metric_ids_;
-    std::vector<bool> bool_metric_values_;
-    const std::vector<std::string> uint_metric_names_ = {"foo/bar/baz4int", "ints/intermediate/intvalue"};
-    const std::vector<MetricUnit> uint_metric_units_ = {MetricUnit::WATTS, MetricUnit::REVOLUTIONS_PER_MINUTE};
-    std::vector<size_t> uint_metric_ids_;
-    std::vector<uint64_t> uint_metric_values_;
+    // Telemetry metrics state - using same structure as TelemetrySnapshot
+    std::unordered_map<std::string, bool> bool_metrics_ = {
+        {"foo/bar/baz1", false},
+        {"foo/bar/baz2", false},
+        {"foo/bar/baz3", false},
+        {"foo/glorp/cpu1", false},
+        {"foo/glorp/cpu2", false},
+        {"foo/glorp/cpu3", false}};
+    std::unordered_map<std::string, uint64_t> uint_metrics_ = {
+        {"foo/bar/baz4int", 0}, {"ints/intermediate/intvalue", 0}};
+    const std::unordered_map<std::string, MetricUnit> uint_metric_units_ = {
+        {"foo/bar/baz4int", MetricUnit::WATTS}, {"ints/intermediate/intvalue", MetricUnit::REVOLUTIONS_PER_MINUTE}};
 
     // Snapshot and distribution to consumers
     std::mutex mtx_;
@@ -69,7 +72,7 @@ private:
             // Custom deleter: do not delete, just return to pool. We use shared_ptr for its
             // thread-safe reference counting, allowing a buffer to be passed to multiple
             // consumers.
-            std::cout << "[MockTelemetryProvider] Returned buffer" << std::endl;
+            std::cout << "[MockTelemetryCollector] Returned buffer" << std::endl;
             return_buffer_to_pool(buffer);
         });
     }
@@ -82,11 +85,11 @@ private:
             // Get a free buffer
             buffer = available_buffers_.front();
             available_buffers_.pop();
-            std::cout << "[MockTelemetryProvider] Got buffer from pool" << std::endl;
+            std::cout << "[MockTelemetryCollector] Got buffer from pool" << std::endl;
         } else {
             // Pool exhausted, create new buffer
             buffer = new TelemetrySnapshot();
-            std::cout << "[MockTelemetryProvider] Allocated new buffer" << std::endl;
+            std::cout << "[MockTelemetryCollector] Allocated new buffer" << std::endl;
         }
 
         // Return a RAII handle that will automatically return buffer to pool
@@ -94,48 +97,56 @@ private:
     }
 
     void create_random_updates(std::shared_ptr<TelemetrySnapshot> delta) {
+        // Create a vector of bool metric paths for random selection
+        std::vector<std::string> bool_paths;
+        for (const auto& [path, value] : bool_metrics_) {
+            bool_paths.push_back(path);
+        }
+
         // Select random bool metrics to update
-        std::uniform_int_distribution<> bool_metric_dist(0, bool_metric_names_.size() - 1);
+        std::uniform_int_distribution<> bool_metric_dist(0, bool_paths.size() - 1);
         int num_updates = num_updates_dist_(gen_);
         for (int i = 0; i < num_updates; ++i) {
-            size_t idx = bool_metric_dist(gen_);
-            size_t id = bool_metric_ids_[idx];
+            const std::string& path = bool_paths[bool_metric_dist(gen_)];
             bool new_value = bool_dist_(gen_) & 1;
 
             // Only add to updates if state actually changes
-            if (bool_metric_values_[idx] != new_value) {
-                bool_metric_values_[idx] = new_value;
-                delta->bool_metric_ids.push_back(id);
-                delta->bool_metric_values.push_back(new_value);
+            if (bool_metrics_[path] != new_value) {
+                bool_metrics_[path] = new_value;
+                delta->bool_metrics[path] = new_value;
                 // Add current timestamp
                 uint64_t timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
                     std::chrono::system_clock::now().time_since_epoch()).count();
-                delta->bool_metric_timestamps.push_back(timestamp);
+                delta->bool_metric_timestamps[path] = timestamp;
             }
+        }
+
+        // Create a vector of uint metric paths for random selection
+        std::vector<std::string> uint_paths;
+        for (const auto& [path, value] : uint_metrics_) {
+            uint_paths.push_back(path);
         }
 
         // Select random uint metrics to update
-        std::uniform_int_distribution<> uint_metric_dist(0, uint_metric_names_.size() - 1);
+        std::uniform_int_distribution<> uint_metric_dist(0, uint_paths.size() - 1);
         num_updates = num_updates_dist_(gen_);
         for (int i = 0; i < num_updates; ++i) {
-            size_t idx = uint_metric_dist(gen_);
-            size_t id = uint_metric_ids_[idx];
+            const std::string& path = uint_paths[uint_metric_dist(gen_)];
             uint64_t new_value = uint_dist_(gen_);
 
             // Only add to updates if state actually changes
-            if (uint_metric_values_[idx] != new_value) {
-                uint_metric_values_[idx] = new_value;
-                delta->uint_metric_ids.push_back(id);
-                delta->uint_metric_values.push_back(new_value);
+            if (uint_metrics_[path] != new_value) {
+                uint_metrics_[path] = new_value;
+                delta->uint_metrics[path] = new_value;
                 // Add current timestamp
                 uint64_t timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
                     std::chrono::system_clock::now().time_since_epoch()).count();
-                delta->uint_metric_timestamps.push_back(timestamp);
+                delta->uint_metric_timestamps[path] = timestamp;
             }
         }
 
-        std::cout << "[MockTelemetryProvider] Updated: "
-                  << (delta->bool_metric_ids.size() + delta->uint_metric_ids.size()) << " values pending" << std::endl;
+        std::cout << "[MockTelemetryCollector] Updated: " << (delta->bool_metrics.size() + delta->uint_metrics.size())
+                  << " values pending" << std::endl;
     }
 
     void update_telemetry_randomly() {
@@ -143,29 +154,27 @@ private:
         {
             std::shared_ptr<TelemetrySnapshot> snapshot = get_writeable_buffer();
             snapshot->clear();
-            for (size_t i = 0; i < bool_metric_names_.size(); i++) {
-                size_t id = bool_metric_ids_[i];
-                snapshot->bool_metric_ids.push_back(id);
-                snapshot->bool_metric_names.push_back(bool_metric_names_[i]);
-                snapshot->bool_metric_values.push_back(bool_metric_values_[i]);
+
+            // Copy all bool metrics
+            for (const auto& [path, value] : bool_metrics_) {
+                snapshot->bool_metrics[path] = value;
                 // Add current timestamp for initial snapshot
                 uint64_t timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
                     std::chrono::system_clock::now().time_since_epoch()).count();
-                snapshot->bool_metric_timestamps.push_back(timestamp);
-            }
-            for (size_t i = 0; i < uint_metric_names_.size(); i++) {
-                size_t id = uint_metric_ids_[i];
-                snapshot->uint_metric_ids.push_back(id);
-                snapshot->uint_metric_names.push_back(uint_metric_names_[i]);
-                snapshot->uint_metric_units.push_back(static_cast<uint16_t>(uint_metric_units_[i]));
-                snapshot->uint_metric_values.push_back(uint_metric_values_[i]);
-                // Add current timestamp for initial snapshot
-                uint64_t timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
-                    std::chrono::system_clock::now().time_since_epoch()).count();
-                snapshot->uint_metric_timestamps.push_back(timestamp);
+                snapshot->bool_metric_timestamps[path] = timestamp;
             }
 
-            // Populate unit label maps when names are populated
+            // Copy all uint metrics
+            for (const auto& [path, value] : uint_metrics_) {
+                snapshot->uint_metrics[path] = value;
+                snapshot->uint_metric_units[path] = static_cast<uint16_t>(uint_metric_units_.at(path));
+                // Add current timestamp for initial snapshot
+                uint64_t timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::system_clock::now().time_since_epoch()).count();
+                snapshot->uint_metric_timestamps[path] = timestamp;
+            }
+
+            // Populate unit label maps for initial snapshot
             snapshot->metric_unit_display_label_by_code = create_metric_unit_display_label_map();
             snapshot->metric_unit_full_label_by_code = create_metric_unit_full_label_map();
 
@@ -193,34 +202,20 @@ private:
     }
 
 public:
-    explicit MockTelemetryProvider(std::initializer_list<std::shared_ptr<TelemetrySubscriber>> subscribers) :
+    explicit MockTelemetryCollector(const std::vector<std::shared_ptr<TelemetrySubscriber>>& subscribers) :
         subscribers_(subscribers), gen_(rd_()), bool_dist_(0, 1), uint_dist_(0, 1000), num_updates_dist_(1, 4) {
-        // Init telemetry randomly
-        bool_metric_ids_.clear();
-        bool_metric_ids_.reserve(bool_metric_names_.size());
-        bool_metric_values_.clear();
-        bool_metric_values_.reserve(bool_metric_names_.size());
-        uint_metric_ids_.clear();
-        uint_metric_ids_.reserve(uint_metric_names_.size());
-        uint_metric_values_.clear();
-        uint_metric_values_.reserve(uint_metric_names_.size());
-
-        size_t id = 1;
-        for (size_t i = 0; i < bool_metric_names_.size(); ++i) {
-            bool initial_value = bool_dist_(gen_) & 1;
-            bool_metric_values_.push_back(initial_value);
-            bool_metric_ids_.push_back(id++);
+        // Initialize telemetry with random values
+        for (auto& [path, value] : bool_metrics_) {
+            value = bool_dist_(gen_) & 1;
         }
-        for (size_t i = 0; i < uint_metric_names_.size(); ++i) {
-            uint64_t initial_value = uint_dist_(gen_);
-            uint_metric_values_.push_back(initial_value);
-            uint_metric_ids_.push_back(id++);
+        for (auto& [path, value] : uint_metrics_) {
+            value = uint_dist_(gen_);
         }
     }
 
     void run() {
         // Run mock telemetry update thread
-        auto t = std::async(std::launch::async, &MockTelemetryProvider::update_telemetry_randomly, this);
+        auto t = std::async(std::launch::async, &MockTelemetryCollector::update_telemetry_randomly, this);
         t.wait();
     }
 };

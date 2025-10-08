@@ -107,9 +107,8 @@ struct ExampleMultipleReturnDeviceOperation {
     // API call to map user arguments to operation attributes and tensor args.
     // This is the only method that is called by the user
     // The user will be able to call the operation using `tensor_return_value_t output =
-    // ttnn::prim::example(input_tensor)` after the op is registered Keep in mind that the the overload with `queue_id`
-    // argument will be added automatically for primitive operations So, the user can also call this operation using
-    // `tensor_return_value_t output = ttnn::prim::example(queue_id, input_tensor)`
+    // ttnn::prim::example(input_tensor)` after the op is registered
+    // `tensor_return_value_t output = ttnn::prim::exampleinput_tensor)`
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const Tensor& input_tensor, bool return_output1, bool return_output2);
 

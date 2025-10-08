@@ -42,7 +42,6 @@ class TtConv2D:
             shard_layout=shard_layout,
             deallocate_activation=dealloc_act,
             enable_act_double_buffer=False,
-            enable_split_reader=False,
             reshard_if_not_optimal=True,
             activation=activation,
         )
@@ -73,6 +72,7 @@ class TtConv2D:
             stride=self.stride,
             padding=self.padding,
             conv_config=self.conv_config,
+            slice_config=ttnn.Conv2dL1FullSliceConfig,
             groups=self.groups,
             compute_config=self.compute_config,
             return_output_dim=True,

@@ -10,8 +10,6 @@
 
 namespace ckernel {
 
-// New LLK SFPU APIs
-
 // Unary Not equal
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_unary_ne_int32(

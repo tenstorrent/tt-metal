@@ -6,7 +6,6 @@
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/kernel.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <gtest/gtest.h>
 #include "debug_tools_fixture.hpp"
@@ -19,7 +18,8 @@ using namespace tt;
 using namespace tt::tt_metal;
 
 namespace {
-void RunOneTest(MeshWatcherFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device, unsigned free) {
+void RunOneTest(
+    MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device, unsigned free) {
     static const char* const names[] = {"brisc", "ncrisc", "trisc0", "trisc1", "trisc2", "aerisc", "ierisc"};
     const std::string path = "tests/tt_metal/tt_metal/test_kernels/misc/watcher_stack.cpp";
     auto msg = [&](std::vector<std::string> &msgs, const char *cpu, unsigned free) {
@@ -36,7 +36,7 @@ void RunOneTest(MeshWatcherFixture* fixture, std::shared_ptr<distributed::MeshDe
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program = Program();
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
     auto device = mesh_device->get_devices()[0];
 
@@ -88,7 +88,7 @@ void RunOneTest(MeshWatcherFixture* fixture, std::shared_ptr<distributed::MeshDe
 }
 
 template <uint32_t Free>
-void RunTest(MeshWatcherFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     RunOneTest(fixture, mesh_device, Free);
 }
 

@@ -5,7 +5,7 @@
 import pytest
 from loguru import logger
 import ttnn
-from models.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero, roundup32
+from models.common.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero, roundup32
 import torch
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_equal,

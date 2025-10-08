@@ -8,12 +8,13 @@ from transformers import DeiTForImageClassification, AutoImageProcessor
 from loguru import logger
 
 from models.experimental.deit.tt.deit_model import TtDeiTModel
-from models.utility_functions import (
+from models.common.utility_functions import (
     torch_to_tt_tensor_rm,
     tt_to_torch_tensor,
     comp_pcc,
     comp_allclose_and_pcc,
 )
+
 
 def test_deit_model_inference(device, hf_cat_image_sample_input, pcc=0.95):
     head_mask = None
@@ -24,18 +25,14 @@ def test_deit_model_inference(device, hf_cat_image_sample_input, pcc=0.95):
 
     with torch.no_grad():
         # setup pytorch model
-        model = DeiTForImageClassification.from_pretrained(
-            "facebook/deit-base-distilled-patch16-224"
-        )
+        model = DeiTForImageClassification.from_pretrained("facebook/deit-base-distilled-patch16-224")
         model.eval()
         state_dict = model.state_dict()
         base_address = "deit"
 
         # synthesize the input
         image = hf_cat_image_sample_input
-        image_processor = AutoImageProcessor.from_pretrained(
-            "facebook/deit-base-distilled-patch16-224"
-        )
+        image_processor = AutoImageProcessor.from_pretrained("facebook/deit-base-distilled-patch16-224")
         input_image = image_processor(images=image, return_tensors="pt")
         input_image = input_image["pixel_values"]
 

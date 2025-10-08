@@ -121,11 +121,7 @@ void kernel_main() {
                                 // Calculate local index
                                 const uint32_t tile_idx = global_index >> __builtin_ctz(tile_width);
 
-                                ASSERT(
-                                    tile_idx <= Wt_input,
-                                    "Index out of range. Index: {}, Max index: {}",
-                                    global_index,
-                                    Wt_input * tile_width);
+                                ASSERT(tile_idx <= Wt_input);
 
                                 if (tile_idx != wi) {
                                     // Index not in current input tile, skip

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -72,7 +72,9 @@ void py_cluster_module_types(py::module& module) {
         .value("SIMULATOR_WORMHOLE_B0", tt::tt_metal::ClusterType::SIMULATOR_WORMHOLE_B0, "Simulator Wormhole B0")
         .value("SIMULATOR_BLACKHOLE", tt::tt_metal::ClusterType::SIMULATOR_BLACKHOLE, "Simulator Blackhole")
         .value("N300_2x2", tt::tt_metal::ClusterType::N300_2x2, "2 N300 cards, ethernet connected to form 2x2")
-        .value("P300", tt::tt_metal::ClusterType::P300, "Production P300");
+        .value("P300", tt::tt_metal::ClusterType::P300, "Production P300")
+        .value(
+            "BLACKHOLE_GALAXY", tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, "Blackhole Galaxy, all chips with mmio");
 }
 
 void py_cluster_module(py::module& module) {

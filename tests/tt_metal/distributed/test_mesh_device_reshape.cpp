@@ -26,21 +26,13 @@
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "tests/tt_metal/test_utils/env_vars.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
-#include "umd/device/types/arch.h"
+#include <umd/device/types/arch.hpp>
 
 namespace tt::tt_metal::distributed {
 namespace {
 
 using ::testing::ElementsAre;
 using ::testing::SizeIs;
-
-std::vector<chip_id_t> get_physical_device_ids(const MeshDevice& mesh) {
-    std::vector<chip_id_t> device_ids;
-    for (auto* device : mesh.get_devices()) {
-        device_ids.push_back(device->id());
-    }
-    return device_ids;
-}
 
 std::vector<MeshShape> get_mesh_shapes() {
     static tt::stl::Indestructible<std::vector<MeshShape>> kMeshShapes(std::vector<MeshShape>{

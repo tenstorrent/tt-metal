@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,7 +10,7 @@
 namespace tt {
 
 template <typename T1, typename T2>
-inline constexpr std::common_type_t<T1, T2> align(T1 addr, T2 alignment) {
+constexpr std::common_type_t<T1, T2> align(T1 addr, T2 alignment) {
     static_assert(std::is_integral<T1>::value, "align() requires integral types");
     static_assert(std::is_integral<T2>::value, "align() requires integral types");
     using T = std::common_type_t<T1, T2>;

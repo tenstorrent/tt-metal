@@ -4,6 +4,9 @@
 
 #pragma once
 
+#include <array>
+#include <variant>
+
 #include "ttnn/core.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/run_operation.hpp"
@@ -24,21 +27,8 @@ struct FoldOperation {
         uint32_t stride_w,
         bool use_transpose_as_fold = false,
         const std::optional<const ttnn::Shape>& output_shape = std::nullopt,
-        uint32_t pad_c = 0,
-        uint32_t pad_h = 0,
-        uint32_t pad_w = 0,
-        const std::optional<CoreRangeSet>& core_grid = std::nullopt,
-        const std::optional<MemoryConfig>& override_memory_config = std::nullopt);
-    static ttnn::Tensor invoke(
-        QueueId queue_id,
-        const ttnn::Tensor& input_tensor,
-        uint32_t stride_h,
-        uint32_t stride_w,
-        bool use_transpose_as_fold = false,
-        const std::optional<const ttnn::Shape>& output_shape = std::nullopt,
-        uint32_t pad_c = 0,
-        uint32_t pad_h = 0,
-        uint32_t pad_w = 0,
+        std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>, std::array<uint32_t, 6>> padding =
+            std::array<uint32_t, 2>{0, 0},
         const std::optional<CoreRangeSet>& core_grid = std::nullopt,
         const std::optional<MemoryConfig>& override_memory_config = std::nullopt);
 };

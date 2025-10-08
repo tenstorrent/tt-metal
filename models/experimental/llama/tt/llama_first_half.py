@@ -10,7 +10,7 @@ from models.experimental.llama.llama_utils import (
     _expand_mask,
 )
 
-from models.utility_functions import (
+from models.common.utility_functions import (
     torch_to_tt_tensor_rm,
 )
 

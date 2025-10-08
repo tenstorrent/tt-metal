@@ -11,7 +11,7 @@ from loguru import logger
 import ttnn
 from ttnn.model_preprocessing import preprocess_model_parameters
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import comp_pcc, divup
+from models.common.utility_functions import comp_pcc, divup
 import ttnn
 
 torch.manual_seed(0)

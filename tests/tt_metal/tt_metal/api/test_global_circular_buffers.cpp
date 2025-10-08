@@ -33,12 +33,11 @@ TEST_F(MeshDispatchFixture, TensixCreateGlobalCircularBuffers) {
     CoreRangeSet cores2(CoreRange({1, 1}, {2, 2}));
     CoreRangeSet cores3(CoreRange({3, 3}, {3, 3}));
     auto mesh_device = devices_[0];
-    auto device = mesh_device->get_devices()[0];
 
     {
         std::vector<std::pair<CoreCoord, CoreRangeSet>> sender_receiver_core_mapping = {{CoreCoord(0, 0), cores}};
         auto global_cb = tt::tt_metal::experimental::CreateGlobalCircularBuffer(
-            device, sender_receiver_core_mapping, 3200, tt::tt_metal::BufferType::L1);
+            mesh_device.get(), sender_receiver_core_mapping, 3200, tt::tt_metal::BufferType::L1);
     }
     {
         std::vector<std::pair<CoreCoord, CoreRangeSet>> sender_receiver_core_mapping = {
@@ -46,7 +45,7 @@ TEST_F(MeshDispatchFixture, TensixCreateGlobalCircularBuffers) {
         // sender receiver cores overlap
         EXPECT_THROW(
             tt::tt_metal::experimental::CreateGlobalCircularBuffer(
-                device, sender_receiver_core_mapping, 3200, tt::tt_metal::BufferType::L1),
+                mesh_device.get(), sender_receiver_core_mapping, 3200, tt::tt_metal::BufferType::L1),
             std::exception);
     }
     {
@@ -55,7 +54,7 @@ TEST_F(MeshDispatchFixture, TensixCreateGlobalCircularBuffers) {
         // receiver cores overlap
         EXPECT_THROW(
             tt::tt_metal::experimental::CreateGlobalCircularBuffer(
-                device, sender_receiver_core_mapping, 3200, tt::tt_metal::BufferType::L1),
+                mesh_device.get(), sender_receiver_core_mapping, 3200, tt::tt_metal::BufferType::L1),
             std::exception);
     }
 }
@@ -70,15 +69,14 @@ TEST_F(MeshDispatchFixture, TensixProgramGlobalCircularBuffersAPI) {
     auto all_cores = sender_cores.merge(receiver_cores).merge(dummy_receiver_cores);
 
     auto mesh_device = devices_[0];
-    auto device = mesh_device->get_devices()[0];
 
     std::vector<std::pair<CoreCoord, CoreRangeSet>> sender_receiver_core_mapping = {{sender_core, receiver_cores}};
     auto global_cb = tt::tt_metal::experimental::CreateGlobalCircularBuffer(
-        device, sender_receiver_core_mapping, 3200, tt::tt_metal::BufferType::L1);
+        mesh_device.get(), sender_receiver_core_mapping, 3200, tt::tt_metal::BufferType::L1);
     std::vector<std::pair<CoreCoord, CoreRangeSet>> dummy_sender_receiver_core_mapping = {
         {CoreCoord(0, 0), dummy_receiver_cores}};
     auto dummy_global_cb = tt::tt_metal::experimental::CreateGlobalCircularBuffer(
-        device, dummy_sender_receiver_core_mapping, 3200, tt::tt_metal::BufferType::L1);
+        mesh_device.get(), dummy_sender_receiver_core_mapping, 3200, tt::tt_metal::BufferType::L1);
     {
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -103,8 +101,8 @@ TEST_F(MeshDispatchFixture, TensixProgramGlobalCircularBuffersAPI) {
             std::exception);
         auto remote_cb =
             tt::tt_metal::experimental::CreateCircularBuffer(program, receiver_cores, global_cb_config, global_cb);
-        tt::tt_metal::detail::CompileProgram(device, program);
-        program.impl().finalize_offsets(device);
+        tt::tt_metal::detail::CompileProgram(mesh_device.get(), program);
+        program.impl().finalize_offsets(mesh_device.get());
         tt::tt_metal::experimental::UpdateDynamicCircularBufferAddress(program, remote_cb, global_cb);
         EXPECT_THROW(UpdateDynamicCircularBufferAddress(program, remote_cb, dummy_global_cb), std::exception);
     }
@@ -126,9 +124,9 @@ TEST_F(MeshDispatchFixture, TensixProgramGlobalCircularBuffersAPI) {
         global_cb_config.remote_index(remote_cb_index).set_page_size(cb_page_size).set_data_format(tile_format);
         global_cb_config.index(local_cb_index).set_page_size(cb_page_size).set_data_format(tile_format);
         tt::tt_metal::experimental::CreateCircularBuffer(program, receiver_cores, global_cb_config, global_cb);
-        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+        workload.add_program(device_range, std::move(program));
         auto& program_ = workload.get_programs().at(device_range);
-        EXPECT_THROW(program_.impl().finalize_offsets(device), std::exception);
+        EXPECT_THROW(program_.impl().finalize_offsets(mesh_device.get()), std::exception);
     }
 }
 

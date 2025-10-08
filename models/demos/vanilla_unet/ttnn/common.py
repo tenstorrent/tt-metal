@@ -89,6 +89,7 @@ class Conv:
             return_output_dim=True,
             return_weights_and_bias=True,
             dtype=self.dtype,
+            slice_config=ttnn.Conv2dL1FullSliceConfig,
         )
 
         output_tensor = ttnn.reshape(

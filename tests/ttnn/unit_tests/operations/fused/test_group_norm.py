@@ -10,8 +10,21 @@ from loguru import logger
 
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc
-from models.utility_functions import skip_for_wormhole_b0, comp_pcc
+from tests.ttnn.utils_for_testing import assert_with_pcc
+from models.common.utility_functions import comp_pcc, is_blackhole, run_for_blackhole
+from tests.ttnn.unit_tests.test_bh_20_cores_sharding import skip_if_not_blackhole_20_cores
+
+
+# Helper function to get welford parameters based on device type
+def get_welford_params():
+    """Return welford parameters - only legacy mode for Blackhole, both modes for other devices"""
+    if is_blackhole():
+        return (False,), ("legacy",)
+    else:
+        return (True, False), ("welford", "legacy")
+
+
+welford_flavors, welford_ids = get_welford_params()
 
 
 # for debug purpose
@@ -40,7 +53,8 @@ def manual_group_norm(input_tensor, num_groups, eps=1e-2):
 @pytest.mark.parametrize("H", [32])
 @pytest.mark.parametrize("W", [32])
 @pytest.mark.parametrize("num_groups", [32])
-def test_group_norm_with_height_sharded(device, N, C, H, W, num_groups):
+@pytest.mark.parametrize("use_welford", welford_flavors, ids=welford_ids)
+def test_group_norm_with_height_sharded(device, N, C, H, W, num_groups, use_welford):
     torch.manual_seed(0)
 
     grid_size = ttnn.CoreGrid(y=1, x=8)
@@ -108,13 +122,14 @@ def test_group_norm_with_height_sharded(device, N, C, H, W, num_groups):
         bias=beta_t,
         memory_config=sharded_mem_config,
         core_grid=grid_size,
+        use_welford=use_welford,
     )
 
     output_tensor = ttnn.to_memory_config(output_tensor, ttnn.DRAM_MEMORY_CONFIG)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.9998)
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.9997 if use_welford else 0.9998)
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
@@ -128,7 +143,8 @@ def test_group_norm_with_height_sharded(device, N, C, H, W, num_groups):
         # (1, 960, 1, 4096, 32),
     ],
 )
-def test_group_norm_with_block_sharded_v2_8x4_grid(device, N, C, H, W, num_groups):
+@pytest.mark.parametrize("use_welford", welford_flavors, ids=welford_ids)
+def test_group_norm_with_block_sharded_v2_8x4_grid(device, N, C, H, W, num_groups, use_welford):
     torch.manual_seed(0)
 
     grid_size = ttnn.CoreGrid(y=4, x=8)
@@ -200,6 +216,7 @@ def test_group_norm_with_block_sharded_v2_8x4_grid(device, N, C, H, W, num_group
         bias=beta_t,
         memory_config=sharded_mem_config,
         core_grid=grid_size,
+        use_welford=use_welford,
     )
 
     # output tensor
@@ -229,7 +246,8 @@ def test_group_norm_with_block_sharded_v2_8x4_grid(device, N, C, H, W, num_group
         # (1, 640, 1, 8192, 32),
     ],
 )
-def test_group_norm_with_block_sharded_v2_8x8_grid(device, N, C, H, W, num_groups):
+@pytest.mark.parametrize("use_welford", welford_flavors, ids=welford_ids)
+def test_group_norm_with_block_sharded_v2_8x8_grid(device, N, C, H, W, num_groups, use_welford):
     torch.manual_seed(0)
     if device.core_grid.y == 7:
         pytest.skip()
@@ -303,6 +321,7 @@ def test_group_norm_with_block_sharded_v2_8x8_grid(device, N, C, H, W, num_group
         bias=beta_t,
         memory_config=sharded_mem_config,
         core_grid=grid_size,
+        use_welford=use_welford,
     )
 
     # output tensor
@@ -322,7 +341,8 @@ def test_group_norm_with_block_sharded_v2_8x8_grid(device, N, C, H, W, num_group
         (1, 2560, 1, 512, 32),
     ],
 )
-def test_group_norm_with_block_sharded_v2_8x8_grid_tile_layout(device, N, C, H, W, num_groups):
+@pytest.mark.parametrize("use_welford", welford_flavors, ids=welford_ids)
+def test_group_norm_with_block_sharded_v2_8x8_grid_tile_layout(device, N, C, H, W, num_groups, use_welford):
     torch.manual_seed(0)
     if device.core_grid.y == 7:
         pytest.skip()
@@ -397,6 +417,7 @@ def test_group_norm_with_block_sharded_v2_8x8_grid_tile_layout(device, N, C, H, 
         memory_config=sharded_mem_config,
         core_grid=grid_size,
         inplace=False,
+        use_welford=use_welford,
     )
 
     # output tensor
@@ -446,7 +467,8 @@ def generate_sdxl_test_inputs():
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
 @pytest.mark.parametrize("input_shape", generate_sdxl_test_inputs())
-def test_sdxl_base_group_norm(device, input_shape):
+@pytest.mark.parametrize("use_welford", welford_flavors, ids=welford_ids)
+def test_sdxl_base_group_norm(device, input_shape, use_welford):
     num_groups = 32  #  always 32 for SDXL Base 1024x1024
     N, C, H, W = input_shape
     torch.manual_seed(0)
@@ -500,6 +522,7 @@ def test_sdxl_base_group_norm(device, input_shape):
         memory_config=sharded_mem_config,
         core_grid=grid_size,
         inplace=tt_input_tensor.layout != ttnn.TILE_LAYOUT,
+        use_welford=use_welford,
     )
 
     tt_output_tensor = ttnn.from_device(tt_output_tensor)
@@ -707,3 +730,104 @@ def test_group_norm_compute_config(device, N, C, H, W, num_groups):
 
     # Verify that the higher-accuracy config is closer to torch
     assert pcc_high > pcc_low, "High-accuracy config should have higher PCC than low-accuracy config"
+
+
+@pytest.mark.parametrize(
+    "N, C, H, W, num_groups, shard, eps",
+    [
+        (1, 256, 12, 40, 16, "BS", 1e-5),
+        (1, 256, 24, 80, 16, "HS", 1e-5),
+        (1, 256, 48, 160, 16, "HS", 1e-5),
+        (1, 512, 12, 40, 16, "BS", 1e-5),
+        (1, 64, 96, 320, 16, "HS", 1e-5),
+    ],
+)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
+@run_for_blackhole("blackhole specific tests")
+def test_group_norm_oft(device, N, C, H, W, num_groups, shard, eps):
+    assert C % num_groups == 0, "Number of channels must be divisible by number of groups"
+
+    skip_if_not_blackhole_20_cores(device)
+    compute_grid = device.compute_with_storage_grid_size()
+    grid_size = ttnn.CoreGrid(y=compute_grid.y, x=compute_grid.x)
+    # Generate torch tensor
+    torch.manual_seed(0)
+    torch_input_tensor = torch.rand((N, C, H, W), dtype=torch.bfloat16)
+    torch_weight = torch.rand((C,), dtype=torch.bfloat16)
+    torch_bias = torch.rand((C,), dtype=torch.bfloat16)
+    # Execute torch group_norm
+    torch_output_tensor = torch.nn.functional.group_norm(
+        torch_input_tensor, num_groups, weight=torch_weight, bias=torch_bias, eps=eps
+    )
+    torch_output_tensor = torch_output_tensor.permute(0, 2, 3, 1).view(N, 1, W * H, C)
+
+    input_tensor = torch_input_tensor.permute(0, 2, 3, 1).view(N, 1, W * H, C)
+    input_tensor = ttnn.from_torch(
+        input_tensor,
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    # Generate input mask
+    if shard == "HS":
+        grid_x = grid_size.x * grid_size.y
+        grid_y = 1
+    else:
+        grid_x = grid_size.x
+        grid_y = grid_size.y
+    input_mask_tensor = ttnn.create_group_norm_input_mask(C, num_groups, grid_y)
+    input_mask_tensor = ttnn.from_torch(
+        input_mask_tensor,
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    # Generate gamma/beta tensors
+    gamma = ttnn.create_group_norm_weight_bias_rm(torch_weight, C, grid_y)
+    beta = ttnn.create_group_norm_weight_bias_rm(torch_bias, C, grid_y)
+
+    gamma_t = ttnn.from_torch(
+        gamma,
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    beta_t = ttnn.from_torch(
+        beta,
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    # Generate shard config
+    grid_coord = ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1)
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
+    shard_shape = (H * W) // grid_x, C // grid_y
+    if shard == "HS":
+        shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+        sharded_mem_config = ttnn.MemoryConfig(
+            ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
+        )
+    elif shard == "BS":
+        shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.COL_MAJOR)
+        sharded_mem_config = ttnn.MemoryConfig(
+            ttnn.types.TensorMemoryLayout.BLOCK_SHARDED, ttnn.types.BufferType.L1, shard_spec
+        )
+    input_tensor = ttnn.to_memory_config(input_tensor, memory_config=sharded_mem_config)
+
+    output_tensor = ttnn.group_norm(
+        input_tensor,
+        num_groups=num_groups,
+        input_mask=input_mask_tensor,
+        weight=gamma_t,
+        bias=beta_t,
+        memory_config=sharded_mem_config,
+        core_grid=grid_size,
+        epsilon=eps,
+    )
+    output_tensor = ttnn.to_torch(output_tensor)
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.999)

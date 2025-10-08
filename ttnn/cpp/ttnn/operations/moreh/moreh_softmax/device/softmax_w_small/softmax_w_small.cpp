@@ -4,7 +4,7 @@
 
 #include <string>
 
-#include "tt-metalium/assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "ttnn/operations/moreh/moreh_softmax/device/moreh_softmax_device_operation.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
@@ -43,7 +43,7 @@ MorehSoftmaxOperation::MorehSoftmaxWSmallFactory::create(
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(arch, compute_kernel_config);
 
-    if (input.dtype() == DataType::FLOAT32 && fp32_dest_acc_en != true) {
+    if (input.dtype() == DataType::FLOAT32 && !fp32_dest_acc_en) {
         TT_THROW(
             "FP32 destination accumulation must be enabled when input tensor has FLOAT32 data type. Please update the "
             "compute kernel configuration.");
@@ -124,7 +124,7 @@ MorehSoftmaxOperation::MorehSoftmaxWSmallFactory::create(
     auto core_y_offset = core_range.start_coord.y;
 
     for (uint32_t i = 0, tile_offset = 0; i < num_cores; i++) {
-        CoreCoord core = {i / core_h + core_x_offset, i % core_h + core_y_offset};
+        CoreCoord core = {(i / core_h) + core_x_offset, (i % core_h) + core_y_offset};
         uint32_t num_tiles_per_core;
         if (core_group_1.contains(core)) {
             num_tiles_per_core = num_tiles_per_core_group_1;

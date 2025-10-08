@@ -18,7 +18,6 @@ from models.demos.segformer.tests.pcc.test_segformer_overlap_path_embeddings imp
 from models.demos.segformer.tt.common import preprocess_layernorm_parameter
 from models.demos.segformer.tt.ttnn_segformer_encoder import TtSegformerEncoder
 from models.demos.utils.common_demo_utils import get_mesh_mappers
-from models.utility_functions import skip_for_grayskull
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
@@ -78,7 +77,6 @@ def move_to_device(object, device):
         return object
 
 
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "batch_size, num_channels, height, width",
     [

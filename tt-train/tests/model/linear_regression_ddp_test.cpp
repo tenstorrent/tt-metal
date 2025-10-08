@@ -1,12 +1,12 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
-#include <umd/device/cluster.h>
 
 #include <core/ttnn_all_includes.hpp>
 #include <core/xtensor_utils.hpp>
+#include <umd/device/cluster.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
@@ -18,6 +18,7 @@
 #include "modules/linear_module.hpp"
 #include "ops/losses.hpp"
 #include "optimizers/sgd.hpp"
+#include "ttnn_fixed/distributed/tt_metal.hpp"
 
 namespace {
 
@@ -34,7 +35,7 @@ protected:
             GTEST_SKIP() << "Skipping N300 specific tests";
         }
 
-        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_1D);
+        ttml::ttnn_fixed::distributed::enable_fabric(2U);
         ttml::autograd::ctx().open_device(tt::tt_metal::distributed::MeshShape(1, 2));
     }
 

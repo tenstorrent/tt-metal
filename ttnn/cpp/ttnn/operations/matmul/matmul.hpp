@@ -33,7 +33,6 @@ ttnn::Tensor bound_matmul(
     const ttnn::Tensor& input_tensor_b,
     const std::optional<const ttnn::Tensor>& bias,
     const struct Matmul& parameters,
-    const uint8_t& queue_id,
     std::optional<ttnn::Tensor>& optional_output_tensor);
 
 struct MatmulOperation {
@@ -106,8 +105,7 @@ struct AddmmOperation {
         std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
         std::optional<const CoreGrid> core_grid = std::nullopt,
         const std::optional<const tt::tt_metal::Tile>& output_tile = std::nullopt,
-        std::optional<Tensor> optional_output_tensor = std::nullopt,
-        QueueId queue_id = DefaultQueueId);
+        std::optional<Tensor> optional_output_tensor = std::nullopt);
 };
 
 struct SparseMatmulOperation {
@@ -123,7 +121,7 @@ struct SparseMatmulOperation {
         std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
         std::optional<const CoreGrid> core_grid = std::nullopt,
         const std::optional<const tt::tt_metal::Tile>& output_tile = std::nullopt,
-        std::optional<Tensor> optional_output_tensor = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt,
         const std::optional<const GlobalCircularBuffer>& global_cb = std::nullopt,
         const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
 };

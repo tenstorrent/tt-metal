@@ -27,7 +27,9 @@ void MAIN {
     const bool is_allgather_worker = get_compile_time_arg_val(8) == 1;
     constexpr uint32_t num_tiles_per_block = get_compile_time_arg_val(9);
     constexpr bool FLOAT32_DTYPE = get_compile_time_arg_val(10) == 1;
-    constexpr uint32_t num_blocks_second_stage = get_compile_time_arg_val(11);
+    constexpr bool FLOAT32_REDUCTION = get_compile_time_arg_val(11) == 1;
+    // LEGACY_RSQRT at index 12 is not used but needed for consistency across sharded compute kernels
+    constexpr uint32_t num_blocks_second_stage = get_compile_time_arg_val(13);
 
     const uint32_t num_reduce_tiles_per_block_h =
         get_arg_val<uint32_t>(0);  // This value is the same for all cores, except ones that have padding tiles in it.
@@ -119,13 +121,13 @@ void MAIN {
 #endif
     // E[x],
     index_h_offset = 0;
-    reduce_init(cb_in0, cb_scaler, cb_ex_partial2);
+    reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_in0, cb_scaler, cb_ex_partial2);
 
     cb_reserve_back(cb_ex_partial2, block_h);
     for (uint32_t i = 0; i < block_h; i++) {
         tile_regs_acquire();
         for (uint32_t w = 0; w < num_reduce_tiles_per_block_h; w++) {
-            reduce_tile(cb_in, cb_scaler, w + index_h_offset, scaler0, dst0);
+            reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_in, cb_scaler, w + index_h_offset, scaler0, dst0);
         }
         tile_regs_commit();
         tile_regs_wait();
@@ -177,12 +179,12 @@ void MAIN {
 
     cb_reserve_back(cb_ex_partial2, block_h);  // RMS E(x2) #Layernorm //E(x) and E(x^2)
 
-    reduce_init(cb_x2, cb_scaler, cb_ex_partial2);
+    reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_x2, cb_scaler, cb_ex_partial2);
     index_h_offset = 0;
     for (uint32_t i = 0; i < block_h; i++) {
         tile_regs_acquire();
         for (uint32_t w = 0; w < num_reduce_tiles_per_block_h; w++) {
-            reduce_tile(cb_x2, cb_scaler, w + index_h_offset, scaler0, dst0);
+            reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_x2, cb_scaler, w + index_h_offset, scaler0, dst0);
         }
 
         tile_regs_commit();

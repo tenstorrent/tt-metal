@@ -12,7 +12,7 @@
 #include <variant>
 #include <vector>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "dispatch/command_queue_common.hpp"
 #include "device.hpp"
 #include "dispatch/kernel_config/fd_kernel.hpp"
@@ -24,7 +24,7 @@
 #include "prefetch.hpp"
 #include "impl/context/metal_context.hpp"
 #include "rtoptions.hpp"
-#include <umd/device/types/xy_pair.h>
+#include <umd/device/types/xy_pair.hpp>
 #include "dispatch/system_memory_manager.hpp"
 
 #include "tt_metal/api/tt-metalium/device_pool.hpp"
@@ -212,7 +212,7 @@ void DispatchKernel::GenerateDependentConfigs() {
             dependent_config_.prefetch_h_noc_xy = tt::tt_metal::MetalContext::instance().hal().noc_xy_encoding(
                 prefetch_kernel->GetVirtualCore().x, prefetch_kernel->GetVirtualCore().y);
             dependent_config_.prefetch_h_local_downstream_sem_addr =
-                prefetch_kernel->GetStaticConfig().my_downstream_cb_sem_id.value();
+                prefetch_kernel->GetStaticConfig().my_downstream_cb_sem_id;
         }
 
         // Downstream
@@ -223,7 +223,7 @@ void DispatchKernel::GenerateDependentConfigs() {
             dependent_config_.downstream_s_logical_core = dispatch_s_kernel->GetLogicalCore();
         } else {
             // If no dispatch_s, no downstream
-            TT_ASSERT(downstream_kernels_.size() == 0);
+            TT_ASSERT(downstream_kernels_.empty());
             dependent_config_.downstream_s_logical_core = UNUSED_LOGICAL_CORE;
         }
         dependent_config_.downstream_logical_core = UNUSED_LOGICAL_CORE;  // Unused
@@ -239,8 +239,7 @@ void DispatchKernel::GenerateDependentConfigs() {
         TT_ASSERT(upstream_kernels_.size() == 1);
         if (auto dispatch_d = dynamic_cast<DispatchKernel*>(upstream_kernels_[0])) {
             dependent_config_.upstream_logical_core = dispatch_d->GetLogicalCore();
-            dependent_config_.upstream_dispatch_cb_sem_id =
-                dispatch_d->GetStaticConfig().my_downstream_cb_sem_id.value();
+            dependent_config_.upstream_dispatch_cb_sem_id = dispatch_d->GetStaticConfig().my_downstream_cb_sem_id;
             dependent_config_.upstream_sync_sem = 0;  // Unused
             dependent_config_.num_hops = tt::tt_metal::get_num_hops(device_id_, dispatch_d->GetDeviceId());
             assemble_2d_fabric_packet_header_args(this->dependent_config_, GetDeviceId(), dispatch_d->GetDeviceId());
@@ -305,7 +304,7 @@ void DispatchKernel::GenerateDependentConfigs() {
             dependent_config_.prefetch_h_noc_xy = tt::tt_metal::MetalContext::instance().hal().noc_xy_encoding(
                 prefetch_kernel->GetVirtualCore().x, prefetch_kernel->GetVirtualCore().y);
             dependent_config_.prefetch_h_local_downstream_sem_addr =
-                prefetch_kernel->GetStaticConfig().my_downstream_cb_sem_id.value();
+                prefetch_kernel->GetStaticConfig().my_downstream_cb_sem_id;
         }
 
         // Downstream, expect a MUX_D
@@ -325,9 +324,8 @@ void DispatchKernel::GenerateDependentConfigs() {
                 TT_ASSERT(!found_dispatch_h, "DISPATCH_D has multiple downstream DISPATCH_H kernels.");
                 dependent_config_.downstream_logical_core = dispatch_h_kernel->GetLogicalCore();
                 dependent_config_.downstream_cb_size = dispatch_h_kernel->GetDispatchBufferSize();
-                dependent_config_.downstream_cb_base = dispatch_h_kernel->GetStaticConfig().dispatch_cb_base.value();
-                dependent_config_.downstream_cb_sem_id =
-                    dispatch_h_kernel->GetStaticConfig().my_dispatch_cb_sem_id.value();
+                dependent_config_.downstream_cb_base = dispatch_h_kernel->GetStaticConfig().dispatch_cb_base;
+                dependent_config_.downstream_cb_sem_id = dispatch_h_kernel->GetStaticConfig().my_dispatch_cb_sem_id;
                 dependent_config_.num_hops = tt::tt_metal::get_num_hops(dispatch_h_kernel->GetDeviceId(), device_id_);
                 assemble_2d_fabric_packet_header_args(
                     this->dependent_config_, GetDeviceId(), dispatch_h_kernel->GetDeviceId());

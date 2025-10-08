@@ -8,6 +8,7 @@ target_sources(
     PRIVATE
         allocator/test_free_list_opt_allocator.cpp
         allocator/test_l1_banking_allocator.cpp
+        allocator/test_overlapped_bank_manager.cpp
         circular_buffer/test_CircularBuffer_allocation.cpp
         circular_buffer/test_CircularBuffer_creation.cpp
         circular_buffer/test_CircularBuffer_non_blocking.cpp
@@ -43,6 +44,7 @@ target_sources(
         test_simple_dram_buffer.cpp
         test_simple_l1_buffer.cpp
         test_soc_descriptor.cpp
+        test_stream_scratch_register.cpp
         test_tilize_untilize.cpp
         test_worker_config_buffer.cpp
         test_blockfloat_common.cpp

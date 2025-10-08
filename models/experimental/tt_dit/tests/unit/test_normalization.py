@@ -10,7 +10,7 @@ from loguru import logger
 
 from ...utils.tensor import bf16_tensor
 from ...utils.check import assert_quality
-from ...layers.normalization import RMSNorm, LayerNorm, DistributedLayerNorm, GroupNorm
+from ...layers.normalization import RMSNorm, LayerNorm, DistributedLayerNorm, GroupNorm, DistributedRMSNorm
 from ...parallel.manager import CCLManager
 
 
@@ -159,6 +159,78 @@ def test_layernorm(
     for t in ttnn.get_device_tensors(tt_output):
         t = ttnn.to_torch(t)
         assert_quality(torch_output, t, pcc=MIN_PCC)
+
+
+@pytest.mark.parametrize(
+    "mesh_device, mesh_axis",
+    [
+        [(1, 2), 1],
+        [(2, 1), 0],
+        [(2, 2), 0],
+        [(2, 2), 1],
+        [(2, 4), 0],
+        [(4, 2), 1],
+    ],
+    indirect=["mesh_device"],
+)
+@pytest.mark.parametrize(
+    ("input_shape"),
+    [
+        (1, 1, 4096, 2432),  # spatial norm
+        (1, 1, 333, 2432),  # prompt norm
+    ],
+)
+@pytest.mark.parametrize(
+    ("norm_eltwise_affine, bias"),
+    [
+        (True, False),
+        (False, False),
+    ],
+)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+def test_distributed_rms_norm(
+    mesh_device: ttnn.MeshDevice,
+    mesh_axis: int,
+    input_shape: tuple[int, int, int, int],
+    norm_eltwise_affine: bool,
+    bias: bool,
+) -> None:
+    torch_dtype = torch.bfloat16
+    torch_model = TorchRMSNorm(
+        embedding_dim=input_shape[-1], norm_elementwise_affine=norm_eltwise_affine, bias=bias
+    ).to(dtype=torch_dtype)
+    torch_model.eval()
+
+    ccl_manager = CCLManager(mesh_device=mesh_device, topology=ttnn.Topology.Linear)
+
+    tt_model = DistributedRMSNorm(
+        embedding_dim=input_shape[-1],
+        norm_elementwise_affine=norm_eltwise_affine,
+        bias=bias,
+        mesh_device=mesh_device,
+        mesh_axis=mesh_axis,
+        ccl_manager=ccl_manager,
+    )
+    tt_model.load_state_dict(torch_model.state_dict())
+
+    torch_input_tensor = torch.randn(input_shape, dtype=torch_dtype) * 2 + 4
+
+    tt_input_tensor = bf16_tensor(torch_input_tensor, device=mesh_device, mesh_axis=mesh_axis, shard_dim=-1)
+
+    with torch.no_grad():
+        torch_output = torch_model(torch_input_tensor)
+
+    tt_output = tt_model(tt_input_tensor)
+
+    shard_dims = [None, None]
+    shard_dims[mesh_axis] = -1
+    shard_dims[1 - mesh_axis] = 0
+    tt_output = ttnn.to_torch(
+        tt_output,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=shard_dims, mesh_shape=tuple(mesh_device.shape)),
+    )
+    for i in range(tt_output.shape[0]):
+        assert_quality(torch_output.squeeze(), tt_output[i].squeeze(), pcc=0.999_300)
 
 
 @pytest.mark.parametrize(

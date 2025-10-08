@@ -11,6 +11,7 @@ from loguru import logger
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
+from models.common.utility_functions import is_blackhole, is_wormhole_b0, profiler
 from models.demos.wormhole.stable_diffusion.common import SD_L1_SMALL_SIZE, SD_TRACE_REGION_SIZE
 from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
 from models.demos.wormhole.stable_diffusion.sd_helper_funcs import run
@@ -21,7 +22,6 @@ from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_unet_2d_condition
 from models.demos.wormhole.stable_diffusion.tt.vae.ttnn_vae import Vae
 from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
 from models.perf.perf_utils import prep_perf_report
-from models.utility_functions import is_blackhole, is_wormhole_b0, profiler
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from ttnn import unsqueeze_to_4D
 
@@ -251,7 +251,7 @@ def test_stable_diffusion_vae_trace(device):
 @pytest.mark.parametrize(
     "batch_size, num_inference_steps, expected_compile_time, expected_inference_time",
     [
-        (1, 50, 3600, 6.31),  # Issue 7816 Inference time
+        (1, 50, 3600, 6.31) if is_wormhole_b0() else (1, 50, 3600, 3.50),  # Wormhole B0 vs Blackhole performance
     ],
 )
 def test_stable_diffusion_perf(device, batch_size, num_inference_steps, expected_compile_time, expected_inference_time):
@@ -408,7 +408,7 @@ def test_stable_diffusion_perf(device, batch_size, num_inference_steps, expected
 @pytest.mark.models_device_performance_bare_metal
 @pytest.mark.parametrize(
     "expected_kernel_samples_per_second",
-    ((12.8),),
+    ((12.8) if is_wormhole_b0() else (20.0),),
 )
 def test_stable_diffusion_device_perf(expected_kernel_samples_per_second):
     subdir = "ttnn_stable_diffusion"

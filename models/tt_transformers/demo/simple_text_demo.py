@@ -15,6 +15,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import is_wormhole_b0
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.common import (
@@ -242,7 +243,8 @@ def prepare_generator_args(
     tokenizer = model_args[
         0
     ].tokenizer  # TODO Should we support Data Parallel different models? If so, we need to support multiple tokenizers
-    return model_args, model, page_table, tt_kv_cache, tokenizer
+    processor = model_args[0].processor
+    return model_args, model, page_table, tt_kv_cache, tokenizer, processor
 
 
 # List of supported Parameters for demo.py
@@ -698,16 +700,16 @@ def test_demo_text(
         pytest.skip(f"Invalid number of DP groups: {data_parallel}, for {num_devices} devices")
 
     if is_ci_env:
-        llama_dir = os.getenv("LLAMA_DIR", "")
-        is_33_70b = "3.3-70B" in llama_dir
-        is_32_1b = "3.2-1B" in llama_dir
-        is_31_8b = "3.1-8B" in llama_dir
+        hf_model = os.getenv("HF_MODEL", "")
+        is_33_70b = "3.3-70B" in hf_model
+        is_32_1b = "3.2-1B" in hf_model
+        is_31_8b = "3.1-8B" in hf_model
 
         tg_enabled = (data_parallel == 4 and is_33_70b) or (data_parallel in [4, 16, 32] and is_31_8b)
 
         if num_devices == 32 and not tg_enabled:
             pytest.skip("CI only runs Llama3 70b DP = 4, TP = 8 or Llama3 8b DP = 4/16/32, TP = 8/2/1 on TG")
-        if num_devices == 8 and data_parallel > 1 and not (is_32_1b or is_31_8b):
+        if num_devices == 8 and data_parallel > 1 and not (is_32_1b or is_31_8b) and is_wormhole_b0():
             pytest.skip("CI only runs hybrid Llama3 1b and 8b on T3K")
 
     if not stop_at_eos:
@@ -738,7 +740,7 @@ def test_demo_text(
     # This loop will rotate the prompts between the users for each batch, to simulate users sending different requests
     # If batch_size=1, the same prompt is repeated for each batch
 
-    model_args, model, page_table, tt_kv_cache, tokenizer = prepare_generator_args(
+    model_args, model, page_table, tt_kv_cache, tokenizer, processor = prepare_generator_args(
         num_devices=num_devices,
         data_parallel=data_parallel,
         mesh_device=mesh_device,
@@ -759,7 +761,7 @@ def test_demo_text(
                 f"Max seq len {max_seq_len} not supported by model {m_args.model_name}. The model's max context len is {m_args.max_context_len}"
             )
 
-    generator = Generator(model, model_args, mesh_device, tokenizer=tokenizer)
+    generator = Generator(model, model_args, mesh_device, processor=processor, tokenizer=tokenizer)
 
     if token_accuracy:
         input_prompts[0] = token_acc.prepare_ref_tokens(tokenizer)
@@ -805,11 +807,13 @@ def test_demo_text(
                     k_cache, v_cache = layer.attention.layer_past
                     k_cache = ttnn.mul(k_cache, 0, output_tensor=k_cache)
                     v_cache = ttnn.mul(v_cache, 0, output_tensor=v_cache)
+            generator.prev_page_table = None
 
         input_tokens_prefill_pt = torch.stack(input_tokens_prefill_pt).view(global_batch_size, -1)
 
         logger.info("Starting prefill warmup...")
         profiler.start(f"compile_prefill", iteration=batch_idx)
+
         logits = generator.prefill_forward_text(
             input_tokens_prefill_pt,  # Prefill warmup for all users, in case some users have different seqlens than others
             page_table=page_table,
@@ -1183,17 +1187,17 @@ def test_demo_text(
             # and observed/0.95 for TTFT (lower is better) to allow 5% buffer + 5% room for growth
             ci_target_ttft = {
                 # N150 targets (milliseconds) - lower is better
-                "N150_Llama-3.2-1B": 22,
-                "N150_Llama-3.2-3B": 57,
-                "N150_Llama-3.1-8B": 112,
+                "N150_Llama-3.2-1B": 25,
+                "N150_Llama-3.2-3B": 62,
+                "N150_Llama-3.1-8B": 120,
                 "N150_Mistral-7B": 106,
                 # N300 targets
                 "N300_Qwen2.5-7B": 90,
                 # T3K targets
                 "T3K_Llama-3.1-70B": 204,
-                "T3K_Qwen2.5-Coder-32B": 173,
-                "T3K_Qwen2.5-72B": 257,
-                "T3K_Qwen3-32B": 166.5,
+                "T3K_Qwen2.5-Coder-32B": 173,  # `f10cs08`
+                "T3K_Qwen2.5-72B": 240,
+                "T3K_Qwen3-32B": 230,  # Issue: Perf regression being tracked on issue #29834
             }
             ci_target_decode_tok_s_u = {
                 # N150 targets - higher is better

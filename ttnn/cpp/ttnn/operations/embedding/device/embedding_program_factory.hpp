@@ -10,9 +10,9 @@
 #include "ttnn/operations/math.hpp"
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/tt_align.hpp>
 
 #include <tracy/Tracy.hpp>
 
@@ -79,6 +79,7 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_fused(
     Tensor& output,
     EmbeddingsType embeddings_type,
     std::optional<uint32_t> pad_token) {
+    using namespace tt::constants;
     ////////////////////////////////////////////////////////////////////////////
     //                 Buffer Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -151,9 +152,9 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_fused(
     }
 
     tt::DataFormat weights_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(weights.dtype());
-    uint32_t weights_single_tile_size = tt::tt_metal::detail::TileSize(weights_cb_data_format);
+    uint32_t weights_single_tile_size = tt::tile_size(weights_cb_data_format);
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
-    uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_cb_data_format);
+    uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
 
     // Hardcoded limit to reduce L1 usage. Should be updated to be tuned based on overall L1 usage
     constexpr uint32_t max_double_buffer_tiles = 64;
@@ -441,7 +442,7 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_rm(
     tt::DataFormat weights_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(weights.dtype());
 
     constexpr uint32_t out_cb_index = tt::CBIndex::c_0;
-    uint32_t rounded_weight_page_size = round_up_to_mul32(weight_page_size);
+    uint32_t rounded_weight_page_size = tt::align(weight_page_size, alignment);
     uint32_t out_cb_size;
     if (output_sharded) {
         out_cb_size = output.buffer()->aligned_size_per_bank();
@@ -606,6 +607,7 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_tilized_indices(
     Tensor& output,
     EmbeddingsType embeddings_type,
     std::optional<uint32_t> pad_token) {
+    using namespace tt::constants;
     ////////////////////////////////////////////////////////////////////////////
     //                 Buffer Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -759,11 +761,11 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_tilized_indices(
         row = weight_offset / num_cols;
 
         uint32_t local_num_blocks = i < g1_numcores ? num_blocks_per_core_group_1 : num_blocks_per_core_group_2;
-        uint32_t r_f_offset = ((row % TILE_HEIGHT) / FACE_HEIGHT) * 2 * FACE_HW + (row % FACE_HEIGHT) * FACE_HEIGHT;
+        uint32_t r_f_offset = (((row % TILE_HEIGHT) / FACE_HEIGHT) * 2 * FACE_HW) + ((row % FACE_HEIGHT) * FACE_HEIGHT);
         // Offset by one face size if we are in the right half of the tile + where we are in the row
         uint32_t c_f_offset = ((col_offset % TILE_HEIGHT) / FACE_HEIGHT) * FACE_HW;
         uint32_t face_offset = r_f_offset + c_f_offset;
-        uint32_t curr_tile = (row / TILE_HEIGHT) * tiles_per_tile_row + (col_offset / TILE_HEIGHT);
+        uint32_t curr_tile = ((row / TILE_HEIGHT) * tiles_per_tile_row) + (col_offset / TILE_HEIGHT);
 
         // Reader
         {

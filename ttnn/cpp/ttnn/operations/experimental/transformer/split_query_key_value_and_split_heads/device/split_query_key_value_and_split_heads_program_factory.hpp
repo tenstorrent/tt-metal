@@ -4,7 +4,6 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/tensor/tensor.hpp"
 
@@ -20,7 +19,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_split_query_key_value_a
 
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
 
-    uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
+    uint32_t single_tile_size = tt::tile_size(cb_data_format);
     tt_metal::Buffer* in0_buffer = a.buffer();
     TT_ASSERT(in0_buffer->size() % single_tile_size == 0);
 
@@ -159,11 +158,11 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_split_query_key_value_a
                 (core_idx_x + core_idx_y * num_cores_c) * per_core_tiles,  // in0_tensor_tile_id
             };
             std::vector<uint32_t> writer_runtime_args = {
-                (std::uint32_t)q_buffer->address(),                 // q_tensor_addr
-                (std::uint32_t)k_buffer->address(),                 // k_tensor_addr
-                (std::uint32_t)v_buffer->address(),                 // v_tensor_addr
-                core_idx_x * out_w_tiles + core_idx_y * out_CHtWt,  // out_tensor_tile_id
-                core_idx_x + core_idx_y * out_CHtWt,                // out_tensor_tile_id_with_transpose
+                (std::uint32_t)q_buffer->address(),                     // q_tensor_addr
+                (std::uint32_t)k_buffer->address(),                     // k_tensor_addr
+                (std::uint32_t)v_buffer->address(),                     // v_tensor_addr
+                (core_idx_x * out_w_tiles) + (core_idx_y * out_CHtWt),  // out_tensor_tile_id
+                core_idx_x + (core_idx_y * out_CHtWt),                  // out_tensor_tile_id_with_transpose
             };
 
             tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
@@ -209,7 +208,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_split_query_key_value_a
 tt::tt_metal::operation::ProgramWithCallbacks multi_core_split_query_key_value_and_split_heads_sharded(
     const Tensor& a, std::vector<Tensor>& output, CoreCoord compute_with_storage_grid_size) {
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
-    uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
+    uint32_t single_tile_size = tt::tile_size(cb_data_format);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      TM Parameters Setup

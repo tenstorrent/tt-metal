@@ -45,7 +45,7 @@ void kernel_main() {
     cb_push_back(packet_header_cb_id, 1);
 
     auto* packet_header_ptr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_addr);
-    packet_header_ptr->to_chip_unicast(dst_num_hops);
+    fabric_set_unicast_route<false>((tt::tt_fabric::LowLatencyPacketHeader*)packet_header_ptr, dst_num_hops);
 
     const auto dst_buffer = TensorAccessor(dst_buffer_args, receiver_base_address, payload_size_bytes);
 
@@ -105,7 +105,7 @@ void kernel_main() {
     const uint64_t receive_sem_noc_addr = get_noc_addr(receive_semaphore_addr);
 
     auto* sem_header_ptr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(sem_header_addr);
-    sem_header_ptr->to_chip_unicast(dst_num_hops);
+    fabric_set_unicast_route<false>((tt::tt_fabric::LowLatencyPacketHeader*)sem_header_ptr, dst_num_hops);
     sem_header_ptr->to_noc_unicast_atomic_inc(
         tt::tt_fabric::NocUnicastAtomicIncCommandHeader{receive_sem_noc_addr, 1, 32});
 

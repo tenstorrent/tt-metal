@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -11,7 +11,7 @@ import traceback
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from tests.ttnn.utils_for_testing import check_with_pcc
-from models.utility_functions import disable_persistent_kernel_cache
+from models.common.utility_functions import disable_persistent_kernel_cache
 
 aten = torch.ops.aten
 

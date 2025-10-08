@@ -4,7 +4,6 @@
 
 #include "hc_sum_reduce_program_factory.hpp"
 
-#include "ttnn/common/queue_id.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
@@ -47,10 +46,10 @@ operation::ProgramWithCallbacks multi_core_ssm_1d_sum_reduce(
     TT_ASSERT(a.dtype() == output.dtype(), "Input and output tensors must be of same type");
 
     const tt::DataFormat input_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
-    const uint32_t input_tile_size = tt::tt_metal::detail::TileSize(input_format);
+    const uint32_t input_tile_size = tt::tile_size(input_format);
 
     const tt::DataFormat intermediary_format = tt::DataFormat::Float16_b;
-    const uint32_t intermediary_tile_size = tt::tt_metal::detail::TileSize(intermediary_format);
+    const uint32_t intermediary_tile_size = tt::tile_size(intermediary_format);
 
     const uint32_t cb_size = 2;
 

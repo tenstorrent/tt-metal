@@ -10,6 +10,7 @@ import torch.nn as nn
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import is_grayskull
 from models.demos.wormhole.stable_diffusion.sd_helper_funcs import reshard_for_output_channels_divisibility
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_cross_attention_down_block_2d_new_conv import (
     cross_attention_down_block_2d,
@@ -29,7 +30,6 @@ from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions
     get_default_compute_config,
     pre_process_input,
 )
-from models.utility_functions import is_grayskull
 
 fp32_accum = True
 
@@ -374,6 +374,7 @@ class UNet2DConditionModel:
             "groups": 1,
             "device": self.device,
             "conv_config": conv_config,
+            "slice_config": ttnn.Conv2dL1FullSliceConfig,
         }
 
         sample, [self.conv_in_weights, self.conv_in_bias] = ttnn.conv2d(
@@ -641,6 +642,7 @@ class UNet2DConditionModel:
             "groups": 1,
             "device": self.device,
             "conv_config": conv_config,
+            "slice_config": ttnn.Conv2dL1FullSliceConfig,
         }
 
         sample, [self.conv_out_weights, self.conv_out_bias] = ttnn.conv2d(

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -46,7 +46,7 @@ TEST(MultiHostSocketTest, MultiProcessHandshaking) {
             sender_logical_coords.push_back(CoreCoord(x, y));
             recv_logical_coords.push_back(CoreCoord(x, y));
             sender_chip_ids.push_back(core_idx % 4);
-            recv_chip_ids.push_back(4 + core_idx % 4);
+            recv_chip_ids.push_back(4 + (core_idx % 4));
             sender_device_coords.push_back(MeshCoordinate(0, core_idx % 4));
             recv_device_coords.push_back(MeshCoordinate(1, core_idx % 4));
             core_idx++;

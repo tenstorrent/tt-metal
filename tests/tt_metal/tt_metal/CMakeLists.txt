@@ -84,6 +84,7 @@ add_custom_target(
         unit_tests_api
         unit_tests_data_movement
         unit_tests_debug_tools
+        unit_tests_inspector
         unit_tests_device
         unit_tests_dispatch
         unit_tests_eth

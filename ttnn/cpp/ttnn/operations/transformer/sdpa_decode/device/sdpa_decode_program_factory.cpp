@@ -11,7 +11,6 @@
 #include "sdpa_decode_op.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include "ttnn/operation.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -421,7 +420,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     if (use_cur_pos_tensor) {
         auto pos_buffer = cur_pos_tensor.value().buffer();
         tt::DataFormat pos_df = tt_metal::datatype_to_dataformat_converter(cur_pos_tensor.value().dtype());
-        pos_tensor_tile_size = tt_metal::detail::TileSize(pos_df);
+        pos_tensor_tile_size = tt::tile_size(pos_df);
         index_stick_size = pos_buffer->aligned_page_size();
 
         // cb pos
@@ -660,7 +659,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
 
     for (uint32_t i = 0; i < num_active_cores; ++i) {
         CoreCoord core = core_group[i];
-        uint32_t worker_id_for_reduce = i % num_cores_per_head - 1;
+        uint32_t worker_id_for_reduce = (i % num_cores_per_head) - 1;
         bool do_reduce = (worker_id_for_reduce == -1);
         if (do_reduce) {
             reduce_core_noc_x = core.x;
@@ -686,7 +685,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
 
     for (uint32_t i = 0; i < num_active_cores; ++i) {
         CoreCoord core = core_group[i];
-        uint32_t worker_id_for_output = i % num_cores_per_batch - 1;
+        uint32_t worker_id_for_output = (i % num_cores_per_batch) - 1;
         bool do_output = (worker_id_for_output == -1);
         if (do_output) {
             output_core_noc_x = core.x;
@@ -900,8 +899,8 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     // Set rt args
     for (uint32_t i = 0; i < num_active_cores; ++i) {
         CoreCoord core = core_group[i];
-        uint32_t worker_id_for_reduce = i % num_cores_per_head - 1;
-        uint32_t worker_id_for_output = i % num_cores_per_batch - 1;
+        uint32_t worker_id_for_reduce = (i % num_cores_per_head) - 1;
+        uint32_t worker_id_for_output = (i % num_cores_per_batch) - 1;
         bool do_reduce = (worker_id_for_reduce == -1);
         bool do_output = (worker_id_for_output == -1);
 
@@ -1046,8 +1045,8 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
             // Set rt args
             for (uint32_t i = 0; i < num_active_cores; ++i) {
                 CoreCoord core = core_group[i];
-                uint32_t worker_id_for_reduce = (num_cores_per_head == 0) ? -1 : i % num_cores_per_head - 1;
-                uint32_t worker_id_for_output = i % num_cores_per_batch - 1;
+                uint32_t worker_id_for_reduce = (num_cores_per_head == 0) ? -1 : (i % num_cores_per_head) - 1;
+                uint32_t worker_id_for_output = (i % num_cores_per_batch) - 1;
                 bool do_reduce = (worker_id_for_reduce == -1);
                 bool do_output = (worker_id_for_output == -1);
                 uint32_t cur_head = (num_cores_per_head == 0) ? 0 : (i % num_cores_per_batch) / num_cores_per_head;

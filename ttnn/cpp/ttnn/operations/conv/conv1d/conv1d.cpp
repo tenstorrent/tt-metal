@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -30,13 +30,10 @@
 namespace ttnn {
 namespace operations::conv {
 using namespace tt;
-using sliding_window::ParallelConfig;
-using sliding_window::SlidingWindowConfig;
 
 namespace conv1d {
 
 Result conv1d(
-    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
     MeshDevice* device,
@@ -79,7 +76,6 @@ Result conv1d(
 
     auto [output_tensor, output_dimensions, weights_and_bias] =
         std::get<static_cast<int>(ResultType::OUTPUT_DIM_WEIGHTS_AND_BIAS)>(ttnn::conv2d(
-            queue_id,
             input_tensor_4d,
             weight_tensor,
             device,
@@ -98,7 +94,8 @@ Result conv1d(
             conv_config,
             compute_config,
             memory_config,
-            std::nullopt,
+            Conv2dSliceConfig{
+                .slice_type = Conv2dSliceConfig::SliceType::L1_FULL},  // Conv1D doesn't support DRAM Slicing. Only L1
             true,
             true));
 
@@ -113,7 +110,6 @@ Result conv1d(
     };
 }
 Result Conv1dOperation::invoke(
-    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
     MeshDevice* device,
@@ -134,7 +130,6 @@ Result Conv1dOperation::invoke(
     bool return_output_dim,
     bool return_weights_and_bias) {
     return conv1d(
-        queue_id,
         input_tensor,
         weight_tensor,
         device,

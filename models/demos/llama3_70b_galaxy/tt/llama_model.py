@@ -420,6 +420,7 @@ class TtTransformer(LightweightModule):
             x_split = ttnn.split(x, x.shape[-2] // batch_size, dim=2)
         else:
             x_split = [x]
+
         toks_list = []
         for i, x in enumerate(x_split):
             if isinstance(last_token_idx, list):
@@ -441,6 +442,7 @@ class TtTransformer(LightweightModule):
             )
 
             tt_logits = ttnn.untilize(tt_logits, use_multicore=True)
+
             tt_logits = ttnn.reshape(
                 tt_logits,
                 ttnn.Shape([1, 1, 1, tt_logits.shape[-1]]),
@@ -510,6 +512,7 @@ class TtTransformer(LightweightModule):
         kv_cache=None,
         tt_out_logits_saved=None,
         is_cur_pos_sharded=False,
+        return_logits=False,
     ):
         """
         This method will take device tensors and any other args to run forward.
@@ -525,6 +528,8 @@ class TtTransformer(LightweightModule):
             page_table=page_table,
             kv_cache=kv_cache,
         )
+        if return_logits:
+            return tt_logits[0]
 
         # sampling
         tt_toks = self.tt_sampling(tt_logits[0], tt_out_tok=x)
@@ -547,6 +552,7 @@ class TtTransformer(LightweightModule):
             sub_core_grids=self.args.sub_core_grids
             if is_cur_pos_sharded
             else ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
+            skip_negative_entries=True,
         )
         ttnn.plus_one(
             rot_mat_idxs,

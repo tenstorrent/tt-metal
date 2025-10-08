@@ -5,7 +5,6 @@
 #pragma once
 
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/util.hpp>
 
 using namespace tt::tt_metal;
 using namespace tt::tt_metal::detail;
@@ -14,7 +13,7 @@ namespace basic_tests::circular_buffer {
 
 struct CBConfig {
     const uint32_t num_pages = 1;
-    const uint32_t page_size = TileSize(tt::DataFormat::Float16_b);
+    const uint32_t page_size = tt::tile_size(tt::DataFormat::Float16_b);
     const tt::DataFormat data_format = tt::DataFormat::Float16_b;
 };
 

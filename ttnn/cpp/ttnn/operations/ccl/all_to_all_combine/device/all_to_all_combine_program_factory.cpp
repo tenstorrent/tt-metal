@@ -14,6 +14,7 @@
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/fabric.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/tt_align.hpp>
 #include "ttnn/global_semaphore.hpp"
 
 namespace ttnn::operations::ccl {
@@ -264,9 +265,9 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
         writer_config);
 
     std::vector<uint32_t> reader_runtime_args = {
-        mapping_tensor.mesh_buffer()->get_device_buffer(mesh_coordinate)->address(),
-        metadata_tensor.mesh_buffer()->get_device_buffer(mesh_coordinate)->address(),
-        input_tensor.mesh_buffer()->get_device_buffer(mesh_coordinate)->address(),
+        mapping_tensor.buffer()->address(),
+        metadata_tensor.buffer()->address(),
+        input_tensor.buffer()->address(),
         0,
         tokens_per_device,
     };
@@ -276,7 +277,7 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
     log_debug(tt::LogOp, "Runtime arguments are being calculated for MeshCoordinate {}", mesh_coordinate);
     for (uint32_t i = 0; i < sender_cores.size(); i++) {
         std::vector<uint32_t> writer_runtime_args = {
-            output_tensor.mesh_buffer()->get_device_buffer(mesh_coordinate)->address(),
+            output_tensor.buffer()->address(),
             (uint32_t)cross_device_semaphore.address(),
             (uint32_t)init_semaphore.address(),
             0,
@@ -332,11 +333,11 @@ void AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::override_runtime
             auto& reader_runtime_args = GetRuntimeArgs(program, ternary_reader_kernel_id, core);
             auto& writer_runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
 
-            reader_runtime_args.at(0) = tensor_args.mapping_tensor.mesh_buffer()->get_device_buffer(coord)->address();
-            reader_runtime_args.at(1) = tensor_args.metadata_tensor.mesh_buffer()->get_device_buffer(coord)->address();
-            reader_runtime_args.at(2) = tensor_args.input_tensor.mesh_buffer()->get_device_buffer(coord)->address();
+            reader_runtime_args.at(0) = tensor_args.mapping_tensor.buffer()->address();
+            reader_runtime_args.at(1) = tensor_args.metadata_tensor.buffer()->address();
+            reader_runtime_args.at(2) = tensor_args.input_tensor.buffer()->address();
 
-            writer_runtime_args.at(0) = tensor_return_value.mesh_buffer()->get_device_buffer(coord)->address();
+            writer_runtime_args.at(0) = tensor_return_value.buffer()->address();
             writer_runtime_args.at(1) = (uint32_t)shared_variables.cross_device_semaphore.address();
             writer_runtime_args.at(2) = (uint32_t)shared_variables.init_semaphore.address();
         }

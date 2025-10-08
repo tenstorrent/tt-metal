@@ -38,7 +38,6 @@ void py_bind_recv_async(pybind11::module& module) {
         module,
         ttnn::experimental::recv_async,
         R"doc(
-
         Performs a recv operation from a :attr:`mesh_socket`.
 
         Args:

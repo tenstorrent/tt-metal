@@ -10,7 +10,7 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc_without_tensor_printout
-from models.utility_functions import is_grayskull, is_blackhole, torch_random, skip_for_grayskull
+from models.common.utility_functions import is_grayskull, is_blackhole, torch_random
 
 
 @pytest.mark.parametrize("height", [32, 30])
@@ -234,7 +234,6 @@ def test_to_layout_sharded(dtype, device):
     assert_with_pcc(torch_input_tensor1, ttnn.to_torch(output), 0.9999)
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize("batch_size", [9, 32])
 @pytest.mark.parametrize("sentence_size", [32, 256])
 def test_int_untilize(device, batch_size, sentence_size):

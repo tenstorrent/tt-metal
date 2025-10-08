@@ -76,6 +76,7 @@ class TtUpsample2D(LightweightModule):
             input_width=W,
             conv_config=self.conv_config,
             compute_config=self.compute_config,
+            slice_config=ttnn.Conv2dL1FullSliceConfig,
             groups=self.groups,
             memory_config=None,
             return_output_dim=True,

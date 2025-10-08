@@ -8,7 +8,7 @@ import pytest
 from loguru import logger
 
 from transformers import AutoTokenizer, T5Model
-from models.utility_functions import (
+from models.common.utility_functions import (
     tt2torch_tensor,
     comp_pcc,
     is_wormhole_b0,

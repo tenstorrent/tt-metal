@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -14,7 +14,6 @@ namespace operations::reduction::accumulation {
 
 struct CumprodOperation {
     static Tensor invoke(
-        const QueueId& queue_id,
         const Tensor& input_tensor,
         const int32_t& dim,
         std::optional<DataType>& dtype,

@@ -23,9 +23,9 @@ ExampleDeviceOperation::MultiCore::cached_program_t ExampleDeviceOperation::Mult
     tt::tt_metal::Program program{};
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
-    uint32_t single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
+    uint32_t single_tile_size = tt::tile_size(cb_data_format);
     tt::DataFormat cb_data_format_output = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
-    uint32_t single_tile_size_output = tt::tt_metal::detail::TileSize(cb_data_format_output);
+    uint32_t single_tile_size_output = tt::tile_size(cb_data_format_output);
 
     uint32_t num_tiles = input_tensor.physical_volume() / tt::constants::TILE_HW;
 

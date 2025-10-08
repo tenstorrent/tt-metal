@@ -105,7 +105,7 @@ Tensor distribute_tensor(
     const Tensor& tensor,
     const TensorToMesh& mapper,
     std::optional<std::reference_wrapper<MeshDevice>> mesh_device = std::nullopt,
-    ttnn::QueueId cq_id = ttnn::DefaultQueueId);
+    std::optional<ttnn::QueueId> cq_id = std::nullopt);
 
 // Creates a distributed tensor from a span of logical data specified in `buffer`.
 // `global_shape` must match the size of `buffer`; shapes of shards will be derived automatically based on the `mapper`,
@@ -119,7 +119,7 @@ Tensor create_distributed_tensor(
     const tt::tt_metal::TensorLayout& shard_layout,
     const TensorToMesh& mapper,
     std::optional<std::reference_wrapper<MeshDevice>> mesh_device = std::nullopt,
-    ttnn::QueueId cq_id = ttnn::DefaultQueueId,
+    std::optional<ttnn::QueueId> cq_id = std::nullopt,
     T pad_value = 0);
 
 // Overload for unowned spans of data.
@@ -130,7 +130,7 @@ Tensor create_distributed_tensor(
     const tt::tt_metal::TensorLayout& shard_layout,
     const TensorToMesh& mapper,
     std::optional<std::reference_wrapper<MeshDevice>> mesh_device = std::nullopt,
-    ttnn::QueueId cq_id = ttnn::DefaultQueueId,
+    std::optional<ttnn::QueueId> cq_id = std::nullopt,
     T pad_value = 0);
 
 // Aggregates a multi-device tensor into a host tensor according to the `composer`.

@@ -10,8 +10,6 @@
 
 namespace ckernel {
 
-// New LLK SFPU APIs
-
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_left_shift_init() {
     llk_math_eltwise_unary_sfpu_init<SfpuType::left_shift, APPROXIMATE>();

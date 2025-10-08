@@ -9,7 +9,7 @@ import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-from models.utility_functions import is_wormhole_b0, is_blackhole
+from models.common.utility_functions import is_wormhole_b0, is_blackhole
 
 
 @pytest.mark.parametrize("mem_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG])

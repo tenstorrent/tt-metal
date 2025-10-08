@@ -27,11 +27,26 @@ void kernel_main() {
 
     for (uint32_t i = 0; i < num_shards; ++i) {
         uint32_t shard_id = first_shard_id + i * num_cores;
+
+#ifdef BIG_STEP
+        for (uint32_t start_offset = 0; start_offset < BIG_STEP; ++start_offset) {
+            auto shard_pages = tensor_accessor_src.shard_pages(shard_id, start_offset);
+            auto it = shard_pages.begin();
+
+            while (it != shard_pages.end()) {
+                noc_async_write_page(it->page_id(), tensor_accessor_dst, it->noc_addr());
+                noc_async_writes_flushed();
+                it += BIG_STEP;
+            }
+        }
+
+#else
         auto shard_pages = tensor_accessor_src.shard_pages(shard_id);
         for (const auto& page : shard_pages) {
-            noc_async_write_page(page.page_id(), tensor_accessor_dst, page.get_noc_addr());
+            noc_async_write_page(page.page_id(), tensor_accessor_dst, page.noc_addr());
             noc_async_writes_flushed();
         }
+#endif
     }
     noc_async_write_barrier();
 }

@@ -2,8 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/common/queue_id.hpp"
-
 #include <tt-metalium/constants.hpp>
 
 #include "all_to_all_combine.hpp"
@@ -19,7 +17,6 @@
 namespace ttnn::operations::ccl {
 
 ttnn::Tensor ExecuteAllToAllCombine::invoke(
-    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& expert_mapping_tensor,
     const ttnn::Tensor& expert_metadata_tensor,
@@ -28,12 +25,13 @@ ttnn::Tensor ExecuteAllToAllCombine::invoke(
     std::optional<tt::tt_fabric::Topology> topology,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<uint32_t>& axis,
+    const std::optional<uint32_t>& output_shard_dim,
     const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
     const std::optional<ttnn::Tensor>& optional_output_tensor) {
     auto mesh_device = input_tensor.device();
     auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
     auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
-
+    uint32_t shard_dim = output_shard_dim.value_or(1);
     uint32_t num_links_ = num_links.value_or(common::get_num_links(*mesh_device, axis));
     tt::tt_fabric::Topology topology_ = topology.value_or(tt::tt_fabric::get_fabric_topology());
     auto memory_config_ = memory_config.value_or(input_tensor.memory_config());
@@ -48,6 +46,7 @@ ttnn::Tensor ExecuteAllToAllCombine::invoke(
                 .num_links = num_links_,
                 .topology = topology_,
                 .locally_reduced = locally_reduced,
+                .output_shard_dim = shard_dim,
             },
             AllToAllCombineDeviceOperation::tensor_args_t{
                 .input_tensor = input_tensor,
@@ -77,7 +76,8 @@ ttnn::Tensor ExecuteAllToAllCombine::invoke(
         axis,
         optional_output_tensor_,
         locally_reduced,
-        subdevice_core_range_set);
+        subdevice_core_range_set,
+        shard_dim);
 }
 
 }  // namespace ttnn::operations::ccl

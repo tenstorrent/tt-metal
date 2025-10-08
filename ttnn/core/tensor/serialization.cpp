@@ -39,9 +39,12 @@ constexpr std::uint32_t kFlatbufferAlignment = alignof(std::uint64_t);
 void dump_tensor_flatbuffer(const std::string& file_name, const Tensor& tensor) {
     Tensor cpu_tensor = tensor.cpu();
 
-    // Dump tensor to disk from rank 0 host.
+    // Dump tensor to disk from (global) rank 0 host.
+    // Note we use global context as opposed to context embedded to the host-side tensor, since the tensor may already
+    // be fully host-local. In this latter case, host buffer context will consist of a single (local) host rank, and
+    // each host will attempt to flush the serialized tensor file to disk.
     cpu_tensor = ttnn::distributed::host_ccl::all_gather(cpu_tensor);
-    const auto& ctx = cpu_tensor.host_storage().buffer().context();
+    const auto& ctx = distributed::multihost::DistributedContext::get_current_world();
     if (ctx->rank() == tt::tt_metal::distributed::multihost::Rank(0)) {
         FILE* output_file = fopen(file_name.c_str(), "wb");
         TT_FATAL(output_file != nullptr, "Cannot open \"{}\"", file_name);

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,6 +9,7 @@
 #include <random>
 
 #include "core/distributed/ccl_resources.hpp"
+#include "core/distributed/socket_manager.hpp"
 #include "core/mesh_device.hpp"
 #include "core/tt_profiler.hpp"
 #include "graph.hpp"
@@ -65,6 +66,9 @@ public:
 
     [[nodiscard]] core::distributed::CCLResources& get_ccl_resources();
 
+    void initialize_socket_manager(ttnn::distributed::SocketType socket_type);
+    [[nodiscard]] core::distributed::SocketManager& get_socket_manager();
+
 private:
     AutoContext();
     uint32_t m_seed = 5489U;
@@ -79,7 +83,9 @@ private:
     std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext> m_distributed_context;
     std::unique_ptr<core::TTProfiler> m_profiler;
 
-    std::unique_ptr<core::distributed::CCLResources> m_ccl_resources{};
+    std::unique_ptr<core::distributed::CCLResources> m_ccl_resources;
+
+    std::unique_ptr<core::distributed::SocketManager> m_socket_manager;
 
     friend class ttsl::Indestructible<AutoContext>;
 };

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -233,7 +233,7 @@ void train_test(bool use_tensor_parallel = false, bool use_ddp = false) {
     config.transformer_config.vocab_size =
         round_up_to_tile(tokenizer->get_vocab_size(), (use_tensor_parallel ? num_devices : 1U) * 32U);
 
-    std::shared_ptr<ttml::autograd::ModuleBase> model;
+    std::shared_ptr<ttml::modules::ModuleBase> model;
     if (use_tensor_parallel) {
         config.transformer_config.num_groups = num_devices;
         config.transformer_config.num_heads = num_devices * 3;
@@ -348,19 +348,22 @@ If one of these tests fails, it means one (or more) of the following:
 */
 
 TEST_F(NanoLlamaTest, NIGHTLY_Default) {
-    if (should_run_nightly_tests()) {
-        train_test();
+    if (!should_run_nightly_tests()) {
+        GTEST_SKIP() << "Skipping Nightly test.";
     }
+    train_test();
 }
 
 TEST_F(NanoLlamaMultiDeviceTest, DISABLED_NIGHTLY_TensorParallel) {
-    if (should_run_multi_device_tests()) {
-        train_test(/*use_tensor_parallel=*/true, /*use_ddp=*/false);
+    if (!should_run_multi_device_tests()) {
+        GTEST_SKIP() << "Skipping test as we are running on a single device.";
     }
+    train_test(/*use_tensor_parallel=*/true, /*use_ddp=*/false);
 }
 
 TEST_F(NanoLlamaMultiDeviceTest, NIGHTLY_DDP) {
-    if (should_run_multi_device_tests()) {
-        train_test(/*use_tensor_parallel=*/false, /*use_ddp=*/true);
+    if (!should_run_multi_device_tests()) {
+        GTEST_SKIP() << "Skipping test as we are running on a single device.";
     }
+    train_test(/*use_tensor_parallel=*/false, /*use_ddp=*/true);
 }

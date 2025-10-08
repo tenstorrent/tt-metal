@@ -11,33 +11,51 @@
 
 namespace ttnn {
 
-void ReduceScatterMinimalAsync::validate_with_output_tensors(
-    const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
-    TT_FATAL(input_tensors.size() == 1, "Error, Input tensor size should be 1 but has {}", input_tensors.size());
-    const auto& input_tensor = input_tensors[0];
-    const auto& layout = input_tensors[0].layout();
-    const auto& dtype = input_tensors[0].dtype();
-    const auto& page_size = input_tensors[0].buffer()->page_size();
+void reduce_scatter_common_validates(
+    const ttnn::Tensor& input_tensor,
+    ttnn::ccl::Topology topology,
+    uint32_t dim,
+    uint32_t num_links,
+    uint32_t ring_size,
+    const ttnn::MemoryConfig& memory_config,
+    const std::optional<ttnn::Tensor>& optional_output_tensor) {
+    const auto page_size = input_tensor.buffer()->page_size();
     TT_FATAL(
-        page_size % input_tensors[0].buffer()->alignment() == 0,
+        topology == ::ttnn::ccl::Topology::Ring || topology == ::ttnn::ccl::Topology::Linear,
+        "topology must be Ring or Linear");
+    TT_FATAL(
+        page_size % input_tensor.buffer()->alignment() == 0,
         "reduce_scatter_minimal_async currently requires aligned pages");
-
-    TT_FATAL(this->dim == 3, "reduce_scatter_minimal_async currently only supports reducing on dim 3");
-
+    if (topology == ::ttnn::ccl::Topology::Linear) {
+        TT_FATAL(
+            dim == 3, "reduce_scatter_minimal_async line topology implementation only supports scattering on dim 3");
+    } else if (topology == ::ttnn::ccl::Topology::Ring) {
+        TT_FATAL(
+            dim == 1 || dim == 2 || dim == 3,
+            "reduce_scatter_minimal_async ring topology implementation only supports scattering on dim 1, 2, or 3");
+    } else {
+        TT_FATAL(false, "reduce_scatter_minimal_async only supports linear or ring topology");
+    }
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to all_gather need to be on device!");
     TT_FATAL(
         input_tensor.buffer() != nullptr,
         "Operands to reduce_scatter_minimal_async need to be allocated in buffers on device!");
-    TT_FATAL(this->num_links > 0, "Error, num_links should be more than 0 but has {}", this->num_links);
+    TT_FATAL(num_links > 0, "Error, num_links should be more than 0 but has {}", num_links);
 
-    const auto& input_shape = input_tensor.padded_shape();
-    TT_FATAL(
-        (input_shape[this->dim] / tt::constants::TILE_WIDTH) % this->ring_size == 0,
-        "Error, The number of tiles at input tensor dimension {} should be divisible by ring_size but the number of "
-        "tiles is {} and the ring_size is {}",
-        this->dim,
-        input_shape[this->dim] / tt::constants::TILE_WIDTH,
-        this->ring_size);
+    TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "input_tensor must be on device");
+    TT_FATAL(input_tensor.buffer() != nullptr, "input_tensor must have a buffer");
+
+    if (dim == 2 || dim == 3) {
+        const auto& input_shape = input_tensor.padded_shape();
+        uint32_t tile_size = dim == 2 ? tt::constants::TILE_HEIGHT : tt::constants::TILE_WIDTH;
+        TT_FATAL(
+            (input_shape[dim] / tile_size) % ring_size == 0,
+            "Error, The number of tiles at input tensor dimension {} should be divisible by ring_size but the number "
+            "of tiles is {} and the ring_size is {}",
+            dim,
+            input_shape[dim] / tile_size,
+            ring_size);
+    }
 
     TT_FATAL(
         input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED ||
@@ -47,7 +65,94 @@ void ReduceScatterMinimalAsync::validate_with_output_tensors(
         "Unsupported input tensor memory layout {}.",
         input_tensor.memory_config().memory_layout());
 
-    if (output_tensors.size() > 0) {
+    if (input_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
+        TT_FATAL(
+            input_tensor.memory_config().buffer_type() == BufferType::L1, "We don't support input DRAM block sharding");
+    }
+
+    if (optional_output_tensor.has_value()) {
+        const auto& output_tensor = optional_output_tensor.value();
+
+        TT_FATAL(
+            output_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED ||
+                output_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED ||
+                output_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED ||
+                output_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
+            "Unsupported output tensor memory layout {}.",
+            output_tensor.memory_config().memory_layout());
+
+        TT_FATAL(
+            output_tensor.storage_type() == StorageType::DEVICE,
+            "Operands to reduce_scatter_minimal_async need to be on device!");
+        TT_FATAL(
+            output_tensor.layout() == input_tensor.layout(),
+            "Error, Output tensor layout should be same as input tensor layout but has {}",
+            output_tensor.layout());
+        TT_FATAL(
+            output_tensor.dtype() == input_tensor.dtype(),
+            "Error, Output tensor dtype should be same as input tensor dtype but has {}",
+            output_tensor.dtype());
+        TT_FATAL(
+            output_tensor.tensor_spec().page_config() == input_tensor.tensor_spec().page_config(),
+            "Error, Output tensor page config should be same as input tensor page config but has {}",
+            output_tensor.tensor_spec().page_config());
+        TT_FATAL(
+            output_tensor.memory_config() == memory_config,
+            "Error, Output tensor memory config {} should be same as output_mem_config {}",
+            output_tensor.memory_config(),
+            memory_config);
+
+        // check the output tensor size
+        auto output_shape = output_tensor.padded_shape();
+        auto input_shape = input_tensor.padded_shape();
+        TT_FATAL(
+            output_shape.size() == input_shape.size(),
+            "Error, Output tensor shape should have same number of dimensions as input tensor but has {}",
+            output_shape.size());
+        for (size_t i = 0; i < input_shape.size(); ++i) {
+            if (i == dim) {
+                TT_FATAL(
+                    output_shape[i] == input_shape[i] / ring_size,
+                    "Error, Output tensor shape at dimension {} should be {} but has {}",
+                    i,
+                    input_shape[i] / ring_size,
+                    output_shape[i]);
+            } else {
+                TT_FATAL(
+                    output_shape[i] == input_shape[i],
+                    "Error, Output tensor shape at dimension {} should be {} but has {}",
+                    i,
+                    input_shape[i],
+                    output_shape[i]);
+            }
+        }
+
+        // Don't support DRAM block sharding
+        if (output_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
+            TT_FATAL(
+                output_tensor.memory_config().buffer_type() == BufferType::L1,
+                "We don't support output DRAM block sharding");
+        }
+    }
+}
+
+void ReduceScatterMinimalAsync::validate_with_output_tensors(
+    const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
+    TT_FATAL(input_tensors.size() == 1, "Error, Input tensor size should be 1 but has {}", input_tensors.size());
+    const auto& input_tensor = input_tensors[0];
+    std::optional<Tensor> optional_output_tensor =
+        (output_tensors.size() == 2 && output_tensors[1].has_value()) ? output_tensors[1] : std::nullopt;
+    reduce_scatter_common_validates(
+        input_tensor,
+        this->topology,
+        this->dim,
+        this->num_links,
+        this->ring_size,
+        this->output_mem_config,
+        optional_output_tensor);
+    const auto layout = input_tensor.layout();
+    const auto dtype = input_tensor.dtype();
+    if (!output_tensors.empty()) {
         TT_FATAL(
             output_tensors.size() == 2,
             "Error, Number of output tensors should be 2 but has {}",
@@ -92,77 +197,6 @@ void ReduceScatterMinimalAsync::validate_with_output_tensors(
                     "We don't support DRAM block sharding");
             }
         }
-
-        // output tensor
-        if (output_tensors[1].has_value()) {
-            const auto& output_tensor = output_tensors[1].value();
-
-            TT_FATAL(
-                output_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED ||
-                    output_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED ||
-                    output_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED ||
-                    output_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
-                "Unsupported output tensor memory layout {}.",
-                output_tensor.memory_config().memory_layout());
-
-            TT_FATAL(
-                output_tensor.storage_type() == StorageType::DEVICE,
-                "Operands to reduce_scatter_minimal_async need to be on device!");
-            TT_FATAL(
-                output_tensor.layout() == layout,
-                "Error, Output tensor layout should be same as input tensor layout but has {}",
-                output_tensor.layout());
-            TT_FATAL(
-                output_tensor.dtype() == dtype,
-                "Error, Output tensor dtype should be same as input tensor dtype but has {}",
-                output_tensor.dtype());
-            TT_FATAL(
-                output_tensor.tensor_spec().page_config() == input_tensor.tensor_spec().page_config(),
-                "Error, Output tensor page config should be same as input tensor page config but has {}",
-                output_tensor.tensor_spec().page_config());
-            TT_FATAL(
-                output_tensor.memory_config() == this->output_mem_config,
-                "Error, Output tensor memory config should be same as output_mem_config but has {}",
-                output_tensor.memory_config());
-
-            // check the output tensor size
-            auto output_shape = output_tensor.padded_shape();
-            auto input_shape = input_tensor.padded_shape();
-            TT_FATAL(
-                output_shape.size() == input_shape.size(),
-                "Error, Output tensor shape should have same number of dimensions as input tensor but has {}",
-                output_shape.size());
-            for (size_t i = 0; i < input_shape.size(); ++i) {
-                if (i == this->dim) {
-                    TT_FATAL(
-                        output_shape[i] == input_shape[i] / this->ring_size,
-                        "Error, Output tensor shape at dimension {} should be {} but has {}",
-                        i,
-                        input_shape[i] / this->ring_size,
-                        output_shape[i]);
-                } else {
-                    TT_FATAL(
-                        output_shape[i] == input_shape[i],
-                        "Error, Output tensor shape at dimension {} should be {} but has {}",
-                        i,
-                        input_shape[i],
-                        output_shape[i]);
-                }
-            }
-
-            // Don't support DRAM block sharding
-            if (output_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
-                TT_FATAL(
-                    output_tensor.memory_config().buffer_type() == BufferType::L1,
-                    "We don't support output DRAM block sharding");
-            }
-        }
-    }
-
-    // Don't support input DRAM block sharding
-    if (input_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
-        TT_FATAL(
-            input_tensor.memory_config().buffer_type() == BufferType::L1, "We don't support input DRAM block sharding");
     }
 
     // Each direction has a ready semaphore and there's a global sync semaphore, per link.
@@ -223,46 +257,28 @@ tt::tt_metal::operation::MeshWorkloadWithCallbacks ReduceScatterMinimalAsync::cr
 
 tt::tt_metal::operation::ProgramWithCallbacks ReduceScatterMinimalAsync::create_program_at(
     const MeshCoordinate& coord, const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
-    log_debug(tt::LogOp, "DEBUG: create_program_at is called");
-    auto mesh_device = input_tensors[0].device();
-    IDevice* target_device = mesh_device ? mesh_device->get_device(coord) : input_tensors[0].device();
-    std::vector<IDevice*> devices_to_use = {};
-    const auto& mesh_view = input_tensors[0].device()->get_view();
-    if (this->cluster_axis.has_value()) {
-        // User specified the cluster-axis. Derive devices based on the current coordinate
-        // and the cluster-axis.
-        devices_to_use = (this->cluster_axis.value() == 0) ? mesh_view.get_devices_on_column(coord[1])
-                                                           : mesh_view.get_devices_on_row(coord[0]);
-    } else {
-        devices_to_use = devices;
-    }
-    uint32_t target_ring_size = devices_to_use.size();
+    log_debug(tt::LogOp, "DEBUG: create_program_at {} is called", coord);
+    uint32_t target_ring_size = ::ttnn::ccl::get_topological_dimension(input_tensors[0], this->cluster_axis);
 
-    std::optional<IDevice*> forward_device = std::nullopt;
-    std::optional<IDevice*> backward_device = std::nullopt;
-    uint32_t device_index = 0;  // Initialize device index
-    for (uint32_t i = 0; i < target_ring_size; ++i) {
-        if (devices_to_use.at(i) == target_device) {
-            device_index = i;
-            if (i != 0) {
-                backward_device = devices_to_use.at(i - 1);
-            } else if (topology == ttnn::ccl::Topology::Ring) {
-                backward_device = devices_to_use.at(target_ring_size - 1);
-            }
-            if (i != target_ring_size - 1) {
-                forward_device = devices_to_use.at(i + 1);
-            } else if (topology == ttnn::ccl::Topology::Ring) {
-                forward_device = devices_to_use.at(0);
-            }
-        }
-    }
+    log_debug(tt::LogOp, "Getting forward neighbor for {}", coord);
+    const std::optional<MeshCoordinate> forward_coord =
+        ccl::get_physical_neighbor_from_physical_coord(input_tensors[0], coord, 1, this->topology, this->cluster_axis);
+
+    log_debug(tt::LogOp, "Getting backward neighbor for {}", coord);
+    const std::optional<MeshCoordinate> backward_coord =
+        ccl::get_physical_neighbor_from_physical_coord(input_tensors[0], coord, -1, this->topology, this->cluster_axis);
+    TT_FATAL(forward_coord.has_value() || backward_coord.has_value(), "DEBUG: forward_coord or backward_coord is null");
+
+    log_debug(tt::LogOp, "Getting device index for {}", coord);
+    uint32_t device_index = ccl::get_linearized_index_from_physical_coord(input_tensors[0], coord, this->cluster_axis);
+    log_debug(tt::LogOp, "Device index for {} is {}", coord, device_index);
 
     return reduce_scatter_minimal_async(
         input_tensors[0],
         output_tensors[0],
-        target_device,
-        forward_device,
-        backward_device,
+        coord,
+        forward_coord,
+        backward_coord,
         output_tensors[1],
         this->dim,
         this->num_links,
@@ -317,7 +333,6 @@ Tensor reduce_scatter_minimal_async_impl(
     const std::optional<MemoryConfig>& intermeidate_memory_config,
     const ttnn::ccl::Topology topology,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
-    const std::vector<IDevice*>& devices,
     const std::optional<uint32_t>& cluster_axis,
     const std::optional<uint32_t>& chunks_per_sync,
     const std::optional<uint32_t>& num_workers_per_link,
@@ -331,17 +346,7 @@ Tensor reduce_scatter_minimal_async_impl(
 
     // For reduce_scatter_minimal_async_impl, we need to calculate the ring size based on cluster_axis
     // Since we don't have a specific coordinate here, we use the maximum possible devices
-    uint32_t num_devices;
-    if (cluster_axis.has_value()) {
-        auto mesh_device = input_tensor.device();
-        TT_FATAL(mesh_device != nullptr, "Mesh device is required when cluster_axis is set");
-        const auto& mesh_view = mesh_device->get_view();
-        // Use the mesh dimensions to determine the ring size
-        num_devices = (cluster_axis.value() == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
-    } else {
-        num_devices = devices.size();
-    }
-
+    uint32_t num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
     TT_FATAL(
         num_devices > 1, "reduce_scatter_minimal_async op will only work for num_devices > 1, but has {}", num_devices);
     ttnn::ccl::Topology ccl_topology = topology;
@@ -350,11 +355,10 @@ Tensor reduce_scatter_minimal_async_impl(
         ccl_topology = ttnn::ccl::Topology::Linear;
     }
 
-    log_debug(tt::LogOp, "DEBUG: creating line_fabric with num devices: {}, num links: {}", devices.size(), num_links);
     log_debug(tt::LogOp, "DEBUG: line_fabric is created");
 
     // create this semaphore for all cores since we don't know which core will be used for teardown draining
-    CoreCoord grid_size = devices[0]->compute_with_storage_grid_size();
+    CoreCoord grid_size = input_tensor.device()->compute_with_storage_grid_size();
     auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
 
     bool using_persistent_buffers = persistent_output_buffers.has_value();
@@ -366,7 +370,6 @@ Tensor reduce_scatter_minimal_async_impl(
 
     return tt::tt_metal::operation::run(
                ttnn::ReduceScatterMinimalAsync(
-                   devices,
                    scatter_dim,
                    num_links,
                    num_devices,
@@ -403,7 +406,6 @@ Tensor reduce_scatter_minimal_async(
     std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel) {
-    std::vector<IDevice*> devices = ttnn::ccl::get_active_physical_devices(input_tensor);
     return reduce_scatter_minimal_async_impl(
         input_tensor,
         persistent_output_buffers,
@@ -415,7 +417,6 @@ Tensor reduce_scatter_minimal_async(
         intermeidate_memory_config,
         topology,
         sub_device_id,
-        devices,
         cluster_axis,
         chunks_per_sync,
         num_workers_per_link,

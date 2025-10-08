@@ -6,7 +6,6 @@
 
 #include <cstdint>
 
-#include "ttnn/common/queue_id.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -15,7 +14,6 @@ namespace ttnn::operations::reduction::accumulation {
 
 struct CumsumOperation {
     static Tensor invoke(
-        QueueId queue_id,
         const Tensor& input,
         const int32_t& dim,
         std::optional<ttnn::DataType> dtype = std::nullopt,

@@ -49,7 +49,7 @@ ALWI void process_tile(
     for (uint32_t j = tile_start; j < freq; ++j) {
         PREPROCESS(OTHER_OP, CB_PRE_OTHER, CB_POST_OTHER, cb_out, num_tiles_per_cycle);
         cb_wait_front(CB_POST_OTHER, num_tiles_per_cycle);
-        cb_reserve_back(cb_llk_post, 1);
+        cb_reserve_back(cb_llk_post, num_tiles_per_cycle);
         unary_bcast_init<BroadcastType::ROW>(CB_POST_OTHER, cb_llk_post);
 
         tile_regs_acquire();
@@ -58,14 +58,14 @@ ALWI void process_tile(
 
         tile_regs_wait();
         pack_tile(0, cb_llk_post);
-        cb_push_back(cb_llk_post, 1);
+        cb_push_back(cb_llk_post, num_tiles_per_cycle);
         tile_regs_release();
 
-        cb_pop_front(CB_POST_OTHER, 1);
+        cb_pop_front(CB_POST_OTHER, num_tiles_per_cycle);
         binary_tiles_init<true, BINARY_OP_TYPE>(cb_left, cb_right);
 
         cb_reserve_back(cb_out, num_tiles_per_cycle);
-        cb_wait_front(cb_llk_post, 1);
+        cb_wait_front(cb_llk_post, num_tiles_per_cycle);
         tile_regs_acquire();
         BINARY_OP(cb_left, cb_right, 0, 0, 0);
         PROCESS_POST_ACTIVATIONS(0);

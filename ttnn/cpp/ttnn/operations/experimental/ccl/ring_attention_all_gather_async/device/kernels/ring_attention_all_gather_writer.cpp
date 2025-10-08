@@ -5,6 +5,7 @@
 #include "dataflow_api.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 #include "cpp/ttnn/operations/ccl/ccl_host_types.hpp"
 #include "cpp/ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
@@ -77,7 +78,7 @@ void kernel_main() {
 
     // pre-populate packet headers
     volatile PACKET_HEADER_TYPE* pkt_hdr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_addr);
-    pkt_hdr->to_chip_unicast(1);
+    fabric_set_unicast_route<false>(pkt_hdr, 1);
 
     fabric_connection.open();
 
@@ -198,7 +199,7 @@ void kernel_main() {
     // Write the unicast packet
     if constexpr (num_targets_in_direction) {
         fabric_direction_connection->wait_for_empty_write_slot();
-        pkt_hdr_sem_inc->to_chip_unicast(1);
+        fabric_set_unicast_route<false>(pkt_hdr_sem_inc, 1);
         fabric_direction_connection->send_payload_flush_blocking_from_address(
             packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
     }
@@ -305,7 +306,7 @@ void kernel_main() {
 
         // 2. unicast output ready semaphore forward
         fabric_direction_connection->wait_for_empty_write_slot();
-        pkt_hdr_sem_inc->to_chip_unicast(1);
+        fabric_set_unicast_route<false>(pkt_hdr_sem_inc, 1);
         fabric_direction_connection->send_payload_flush_blocking_from_address(
             packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
 

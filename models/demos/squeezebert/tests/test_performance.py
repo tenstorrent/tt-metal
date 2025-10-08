@@ -11,10 +11,14 @@ from loguru import logger
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
+from models.common.utility_functions import (
+    disable_persistent_kernel_cache,
+    enable_persistent_kernel_cache,
+    is_grayskull,
+)
 from models.demos.squeezebert.tt import ttnn_functional_squeezebert
 from models.experimental.functional_common.attention_mask_functions import get_extended_attention_mask
 from models.perf.perf_utils import prep_perf_report
-from models.utility_functions import disable_persistent_kernel_cache, enable_persistent_kernel_cache, is_grayskull
 
 
 def preprocess_inputs(
@@ -52,6 +56,7 @@ def get_expected_times(squeezebert):
 @pytest.mark.parametrize("sequence_size", [384])
 @pytest.mark.parametrize("squeezebert", [ttnn_functional_squeezebert])
 def test_performance(device, model_name, sequence_size, squeezebert):
+    pytest.skip("https://github.com/tenstorrent/tt-metal/issues/28328")
     disable_persistent_kernel_cache()
 
     num_iterations = 2

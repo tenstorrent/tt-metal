@@ -6,7 +6,6 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
@@ -43,10 +42,10 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(
                                             ? tt::DataFormat::Float32
                                             : tt::DataFormat::Float16_b;
     tt::DataFormat output_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
-    uint32_t in0_single_tile_size = tt::tt_metal::detail::TileSize(in0_data_format);
-    uint32_t in1_single_tile_size = tt::tt_metal::detail::TileSize(in1_data_format);
-    uint32_t interm_single_tile_size = tt::tt_metal::detail::TileSize(interm_data_format);
-    uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_data_format);
+    uint32_t in0_single_tile_size = tt::tile_size(in0_data_format);
+    uint32_t in1_single_tile_size = tt::tile_size(in1_data_format);
+    uint32_t interm_single_tile_size = tt::tile_size(interm_data_format);
+    uint32_t output_single_tile_size = tt::tile_size(output_data_format);
 
     if (in0_data_format == tt::DataFormat::Float32 or in1_data_format == tt::DataFormat::Float32 or
         output_data_format == tt::DataFormat::Float32) {
@@ -239,7 +238,7 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(
     }
 
     tt::tt_metal::NOC reader_noc =
-        tt::tt_metal::detail::GetPreferredNOCForDRAMRead(device->arch());  // Default is NOC_1
+        tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());  // Default is NOC_1
     const bool reader_noc_is_NOC_0 = reader_noc == tt::tt_metal::NOC::NOC_0;
     tt::tt_metal::NOC writer_noc = reader_noc_is_NOC_0 ? tt::tt_metal::NOC::NOC_1 : tt::tt_metal::NOC::NOC_0;
     auto reader_id = tt::tt_metal::CreateKernel(
@@ -382,7 +381,7 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(
         uint32_t in1_block_num_tiles_per_kv_heads = in0_block_w * out_subblock_w;
         uint32_t in1_block_num_tiles = KV_HEADS * in1_block_num_tiles_per_kv_heads;
         uint32_t in1_num_blocks =
-            (Nt - 1) / out_block_w + 1;  // Rounds up to include nearest out_block_w; "padding" is handled internally
+            ((Nt - 1) / out_block_w) + 1;  // Rounds up to include nearest out_block_w; "padding" is handled internally
 
         uint32_t Nt_bytes = Nt * in1_single_tile_size;
         uint32_t out_last_subblock_w = Nt % out_block_w == 0 ? out_block_w : Nt % out_block_w;

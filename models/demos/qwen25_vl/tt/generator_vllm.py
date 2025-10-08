@@ -1,24 +1,26 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
 
 from types import SimpleNamespace
+from typing import Mapping, Optional
 
 import torch
 from loguru import logger
 from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import (
     Qwen2_5_VLForConditionalGeneration as Ref_Qwen2_5_VLForConditionalGeneration,
 )
-from vllm.inputs import INPUT_REGISTRY
 from vllm.model_executor.models.interfaces import SupportsMultiModal
+from vllm.model_executor.models.qwen2_5_vl import Qwen2_5_VLProcessingInfo
+from vllm.multimodal import MULTIMODAL_REGISTRY
 
 import ttnn
 from models.demos.qwen25_vl.tt.common import merge_vision_tokens, multimodal_rope_from_hf, preprocess_inputs_prefill
 from models.demos.qwen25_vl.tt.generator import Generator as QwenVLGenerator
 from models.demos.qwen25_vl.tt.model import DropInVisionTransformer, Transformer
 from models.demos.qwen25_vl.tt.model_config import VisionModelArgs
-from models.tt_transformers.tt.generator_vllm import input_processor_for_multimodal
+from models.tt_transformers.tt.generator_vllm import DummyInputsBuilder, MultiModalProcessor
 from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs
 
 
@@ -45,7 +47,7 @@ def allocate_vllm_kv_cache(kv_cache_shape, dtype, num_layers, model: Transformer
 
 def get_platform_specific_optimizations(model_name):
     is_72B = "72B" in model_name
-    max_seq_len = 4096 if is_72B else 12288
+    max_seq_len = 65536 if is_72B else 131072
 
     performance_opt = lambda model_args: DecodersPrecision.performance(model_args.n_layers, model_args.model_name)
 
@@ -89,7 +91,15 @@ class CustomNamespace(SimpleNamespace):
         return key in self.__dict__
 
 
-@INPUT_REGISTRY.register_input_processor(input_processor_for_multimodal)
+class TT_Qwen2_5_VLProcessingInfo(Qwen2_5_VLProcessingInfo):
+    def get_supported_mm_limits(self) -> Mapping[str, Optional[int]]:
+        return {"image": 1, "video": 0}  # [INFO] videos are not supported yet, only supporting 1 image for now
+
+
+# TODO: Eventually replace MultiModalProcessor with vllm.model_executor.models.qwen2_5_vl::Qwen2_5_VLMultiModalProcessor
+@MULTIMODAL_REGISTRY.register_processor(
+    MultiModalProcessor, info=TT_Qwen2_5_VLProcessingInfo, dummy_inputs=DummyInputsBuilder
+)
 class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
     def __init__(self, *args, **kwargs):
         self.reference_model = kwargs.pop("reference_model", None)
@@ -167,15 +177,17 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
 
         # reconstruct the inputs that Qwen2.5-VL expects
         inputs = CustomNamespace()
-        inputs.input_ids = tokens.to(images[0].attention_mask.dtype)
+        inputs.input_ids = tokens.to(images[0].attention_mask.dtype) if images[0] is not None else tokens
         inputs.attention_mask = torch.concat(
             [
                 torch.nn.functional.pad(im.attention_mask, (0, padded_seq_len - im.attention_mask.shape[-1]), value=0)
-                for im in images
+                if im is not None
+                else torch.ones_like(tokens[i : i + 1], dtype=tokens.dtype)
+                for i, im in enumerate(images)
             ],
             dim=0,
         )
-        if "pixel_values" in images[0]:
+        if images[0] is not None and "pixel_values" in images[0]:
             # we currently do not support mixed inputs of text-only users and text-image users; hence checking images[0] is enough
             inputs.pixel_values = torch.concat([im.pixel_values for im in images], dim=0)
             inputs.image_grid_thw = torch.concat([im.image_grid_thw for im in images], dim=0)
@@ -211,13 +223,13 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
             kv_cache=kv_cache,
             prompt_lens=decoding_pos,
         )
-
         return logits, rot_mats
 
     def decode_forward(self, *args, **kwargs):
-        rot_mats_list: list = kwargs.pop("rot_mats_all_users", None)
-        assert rot_mats_list is not None, "rot_mats_all_users must be provided for Qwen2.5-VL"
-        # [INFO] update the cos/sin matrices for the current users in the batch
-        super().update_cos_sin_rows(rot_mats_list)
+        rot_mats_list: list = kwargs.pop(
+            "rot_mats_all_users", None
+        )  # [INFO] update the cos/sin matrices for the current users in the batch
+        if rot_mats_list is not None:
+            super().update_cos_sin_rows(rot_mats_list)
 
         return super().decode_forward_text(*args, **kwargs)

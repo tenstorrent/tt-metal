@@ -13,9 +13,9 @@ from transformers import BertForQuestionAnswering, BertTokenizer, pipeline
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
+from models.common.utility_functions import disable_persistent_kernel_cache, profiler
 from models.datasets.dataset_squadv2 import squadv2_1K_samples_input, squadv2_answer_decode_batch
 from models.demos.bert.tt import ttnn_bert, ttnn_optimized_bert, ttnn_optimized_sharded_bert
-from models.utility_functions import disable_persistent_kernel_cache, profiler
 
 
 def load_inputs(input_path, batch):
