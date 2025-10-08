@@ -124,7 +124,8 @@ class TransfuserBackbone(nn.Module):
             out_features=self.config.perception_output_features,
         )
         # print(self.image_encoder)
-        # print("#################################################################")
+        print("#################################################################")
+        print(f"{use_velocity=}")
         # print(self.lidar_encoder)
 
         self.transformer1 = GPT(
@@ -305,6 +306,7 @@ class TransfuserBackbone(nn.Module):
         )
         image_features = image_features + image_features_layer1
         lidar_features = lidar_features + lidar_features_layer1
+        return image_features, lidar_features
 
         image_features = self.image_encoder.features.layer2(image_features)
         lidar_features = self.lidar_encoder._model.layer2(lidar_features)
