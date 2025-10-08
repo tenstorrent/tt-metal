@@ -452,4 +452,31 @@ class TtTransfuserBackbone:
         )
         image_features_layer2 = ttnn.permute(image_features_layer2, (0, 2, 3, 1))
         lidar_features_layer2 = ttnn.permute(lidar_features_layer2, (0, 2, 3, 1))
-        return image_features_layer2, lidar_features_layer2
+
+        logger.info(f"Layer2 image and lidar interpolation- bilinear")
+        logger.info(f"bilinear_image")
+        image_features_layer2 = ttnn.to_layout(image_features_layer2, ttnn.ROW_MAJOR_LAYOUT)
+        image_features_layer2 = ttnn.to_memory_config(image_features_layer2, ttnn.DRAM_MEMORY_CONFIG)
+        image_features_layer2 = ttnn.pad(image_features_layer2, padding=((0, 0), (0, 0), (0, 0), (0, 8)), value=0.0)
+        image_features_layer2 = ttnn.upsample(
+            image_features_layer2, scale_factor=(4, 4), mode="bilinear", memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        # Slice back to original 216 channels
+        image_features_layer2 = ttnn.slice(image_features_layer2, [0, 0, 0, 0], [1, 20, 88, 216])
+        image_features_layer2 = ttnn.to_layout(image_features_layer2, ttnn.TILE_LAYOUT)
+
+        logger.info(f"bilinear_lidar")
+        lidar_features_layer2 = ttnn.to_layout(lidar_features_layer2, ttnn.ROW_MAJOR_LAYOUT)
+        lidar_features_layer2 = ttnn.to_memory_config(lidar_features_layer2, ttnn.DRAM_MEMORY_CONFIG)
+        lidar_features_layer2 = ttnn.pad(lidar_features_layer2, padding=((0, 0), (0, 0), (0, 0), (0, 8)), value=0.0)
+        lidar_features_layer2 = ttnn.upsample(
+            lidar_features_layer2, scale_factor=(4, 4), mode="bilinear", memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        # Slice back to original 216 channels
+        lidar_features_layer2 = ttnn.slice(lidar_features_layer2, [0, 0, 0, 0], [1, 32, 32, 216])
+        lidar_features_layer2 = ttnn.to_layout(lidar_features_layer2, ttnn.TILE_LAYOUT)
+
+        logger.info("layer2 Image and lidar - add")
+        image_features = ttnn.add(image_features, image_features_layer2)
+        lidar_features = ttnn.add(lidar_features, lidar_features_layer2)
+        return image_features, lidar_features
