@@ -5,6 +5,7 @@ class GlobalConfig:
     """base architecture configurations"""
 
     # Data
+    use_velocity = False
     seq_len = 1  # input timesteps
     # use different seq len for image and lidar
     img_seq_len = 1

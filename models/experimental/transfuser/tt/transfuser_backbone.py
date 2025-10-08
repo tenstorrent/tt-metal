@@ -6,6 +6,7 @@ from models.experimental.transfuser.tt.utils import TTConv2D
 from typing import List
 from loguru import logger
 from models.experimental.transfuser.tt.bottleneck import TTRegNetBottleneck
+from models.experimental.transfuser.tt.gpt import TTGpt
 
 
 class TtTransfuserBackbone:
@@ -73,21 +74,21 @@ class TtTransfuserBackbone:
             stage_name="layer1",
         )
 
-        # self.transformer1 = TTGpt(
-        #     device=self.device,
-        #     parameters=parameters["transformer1"],
-        #     n_head=config.n_head,
-        #     n_layer=config.n_layer,
-        #     use_velocity=config.use_velocity,
-        #     img_vert_anchors=config.img_vert_anchors,
-        #     img_horz_anchors=config.img_horz_anchors,
-        #     lidar_vert_anchors=config.lidar_vert_anchors,
-        #     lidar_horz_anchors=config.lidar_horz_anchors,
-        #     seq_len=config.seq_len,
-        #     n_embd=72,  # layer1 output channels
-        #     dtype=ttnn.bfloat16,
-        #     memory_config=ttnn.L1_MEMORY_CONFIG,
-        # )
+        self.transformer1 = TTGpt(
+            device=self.device,
+            parameters=parameters["transformer1"],
+            n_head=config.n_head,
+            n_layer=config.n_layer,
+            use_velocity=config.use_velocity,
+            img_vert_anchors=config.img_vert_anchors,
+            img_horz_anchors=config.img_horz_anchors,
+            lidar_vert_anchors=config.lidar_vert_anchors,
+            lidar_horz_anchors=config.lidar_horz_anchors,
+            seq_len=config.seq_len,
+            n_embd=72,  # layer1 output channels
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
 
     def _make_layer(
         self,
@@ -172,7 +173,7 @@ class TtTransfuserBackbone:
 
         return x
 
-    def __call__(self, image_x, lidar_x, device):
+    def __call__(self, image_x, lidar_x, velocity, device):
         # Process image input
         logger.info(f"image_encoder_conv1")
         image_x = self.normalize_imagenet_ttnn(image_x)
@@ -230,5 +231,18 @@ class TtTransfuserBackbone:
             channels=lidar_c,
             output_size=[self.config.lidar_vert_anchors, self.config.lidar_horz_anchors],
         )
+        logger.info(f"Layer1 transformer")
 
-        return image_embd_layer1, lidar_embd_layer1
+        image_embd_layer1 = ttnn.to_memory_config(image_embd_layer1, ttnn.DRAM_MEMORY_CONFIG)
+        image_embd_layer1 = ttnn.to_layout(image_embd_layer1, ttnn.TILE_LAYOUT)
+
+        lidar_embd_layer1 = ttnn.to_memory_config(lidar_embd_layer1, ttnn.DRAM_MEMORY_CONFIG)
+        lidar_embd_layer1 = ttnn.to_layout(lidar_embd_layer1, ttnn.TILE_LAYOUT)
+
+        image_features_layer1, lidar_features_layer1 = self.transformer1(
+            image_embd_layer1, lidar_embd_layer1, velocity, 72
+        )
+        image_features_layer1 = ttnn.permute(image_features_layer1, (0, 2, 3, 1))
+        lidar_features_layer1 = ttnn.permute(lidar_features_layer1, (0, 2, 3, 1))
+
+        return image_features_layer1, lidar_features_layer1

@@ -53,7 +53,8 @@ class TTGptBlock(LightweightModule):
         ln1 = ttnn.layer_norm(x, weight=self.parameters["ln1_weight"], bias=self.parameters["ln1_bias"])
         x = ttnn.add(x, self.attn(ln1), memory_config=self.memory_config)
         ln2 = ttnn.layer_norm(x, weight=self.parameters["ln2_weight"], bias=self.parameters["ln2_bias"])
-        x = ttnn.add(x, ln2, memory_config=self.memory_config)
-        mlp = self.mlp(x)
+        # x = ttnn.add(x, ln2, memory_config=self.memory_config)
+        # mlp = self.mlp(x)
+        mlp = self.mlp(ln2)
         x = ttnn.add(x, mlp, memory_config=self.memory_config)
         return x

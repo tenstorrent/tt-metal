@@ -22,6 +22,7 @@ from tests.ttnn.utils_for_testing import check_with_pcc
 
 
 def generate_token_embeddings(image_tensor, lidar_tensor, seq_len, n_embd):
+    print(f"{image_tensor.shape,lidar_tensor.shape=}")
     bz = lidar_tensor.shape[0]
     lidar_h, lidar_w = lidar_tensor.shape[2:4]
     img_h, img_w = image_tensor.shape[2:4]
@@ -71,6 +72,16 @@ def post_process_output(
 def create_gpt_preprocessor(device, n_layer, weight_dtype=ttnn.bfloat16):
     def custom_preprocessor(torch_model, name, ttnn_module_args):
         parameters = {}
+        if hasattr(torch_model, "pos_emb"):
+            parameters["pos_emb"] = ttnn.from_torch(
+                torch_model.pos_emb,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+            )
+        if hasattr(torch_model, "vel_emb"):
+            parameters["vel_emb_weight"] = preprocess_linear_weight(torch_model.vel_emb.weight, dtype=weight_dtype)
+            parameters["vel_emb_bias"] = preprocess_linear_weight(torch_model.vel_emb.bias, dtype=weight_dtype)
         if hasattr(torch_model, "ln_f"):
             parameters["ln_f_weight"] = preprocess_linear_weight(torch_model.ln_f.weight, dtype=weight_dtype)
             parameters["ln_f_bias"] = preprocess_linear_weight(torch_model.ln_f.bias, dtype=weight_dtype)

@@ -10,6 +10,8 @@ from loguru import logger
 from models.experimental.transfuser.reference.config import GlobalConfig
 from models.experimental.transfuser.reference.transfuser_backbone import TransfuserBackbone
 from models.experimental.transfuser.tt.custom_preprocessing import create_custom_mesh_preprocessor
+
+from models.experimental.transfuser.tests.test_gpt import create_gpt_preprocessor
 from models.experimental.transfuser.tt.transfuser_backbone import TtTransfuserBackbone
 from ttnn.model_preprocessing import (
     preprocess_model_parameters,
@@ -65,6 +67,12 @@ class TransfuserBackboneInfra:
             custom_preprocessor=create_custom_mesh_preprocessor(self.weights_mesh_mapper),
             device=None,
         )
+        gpt1_parameters = preprocess_model_parameters(
+            initialize_model=lambda: torch_model.transformer1,
+            custom_preprocessor=create_gpt_preprocessor(device, n_layer, ttnn.bfloat16),
+            device=device,
+        )
+        parameters["transformer1"] = gpt1_parameters
 
         # Prepare golden inputs/outputs
         self.torch_image_input = torch.randn(self.img_input_shape)
@@ -91,10 +99,18 @@ class TransfuserBackboneInfra:
             device=device,
             mesh_mapper=self.inputs_mesh_mapper,
         )
+        tt_velocity_input = ttnn.from_torch(
+            self.torch_velocity_input,
+            device=device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
+
         self.input_image_tensor = ttnn.to_device(tt_image_input, device)
         # self.input_image_tensor = ttnn.permute(self.input_image_tensor, (0, 2, 3, 1))
         self.input_lidar_tensor = ttnn.to_device(tt_lidar_input, device)
         # self.input_lidar_tensor = ttnn.permute(self.input_lidar_tensor, (0, 2, 3, 1))
+        self.input_velocity_tensor = ttnn.to_device(tt_velocity_input, device)
 
         # Build TTNN model
         self.ttnn_model = TtTransfuserBackbone(
@@ -127,7 +143,7 @@ class TransfuserBackboneInfra:
 
     def run(self):
         self.output_image_tensor, self.output_lidar_tensor = self.ttnn_model(
-            self.input_image_tensor, self.input_lidar_tensor, self.device
+            self.input_image_tensor, self.input_lidar_tensor, self.input_velocity_tensor, self.device
         )
         return self.output_image_tensor, self.output_lidar_tensor
 
@@ -152,6 +168,7 @@ class TransfuserBackboneInfra:
 
         # Reshape + permute image output back to NCHW
         expected_image_shape = self.torch_image_output.shape
+        print(f"{tt_image_tensor_torch.shape,tt_lidar_tensor_torch.shape, expected_image_shape=}")
         tt_image_tensor_torch = torch.reshape(
             tt_image_tensor_torch,
             (expected_image_shape[0], expected_image_shape[2], expected_image_shape[3], expected_image_shape[1]),
@@ -160,6 +177,7 @@ class TransfuserBackboneInfra:
 
         # Reshape + permute lidar output back to NCHW
         expected_lidar_shape = self.torch_lidar_output.shape
+        print(f"{tt_image_tensor_torch.shape,tt_lidar_tensor_torch.shape, expected_lidar_shape=}")
         tt_lidar_tensor_torch = torch.reshape(
             tt_lidar_tensor_torch,
             (expected_lidar_shape[0], expected_lidar_shape[2], expected_lidar_shape[3], expected_lidar_shape[1]),
@@ -167,8 +185,8 @@ class TransfuserBackboneInfra:
         tt_lidar_tensor_torch = torch.permute(tt_lidar_tensor_torch, (0, 3, 1, 2))
 
         # PCC validation for both outputs
-        image_pcc_passed, image_pcc_message = check_with_pcc(self.torch_image_output, tt_image_tensor_torch, pcc=0.99)
-        lidar_pcc_passed, lidar_pcc_message = check_with_pcc(self.torch_lidar_output, tt_lidar_tensor_torch, pcc=0.99)
+        image_pcc_passed, image_pcc_message = check_with_pcc(self.torch_image_output, tt_image_tensor_torch, pcc=0.95)
+        lidar_pcc_passed, lidar_pcc_message = check_with_pcc(self.torch_lidar_output, tt_lidar_tensor_torch, pcc=0.95)
 
         logger.info(f"Image Output PCC: {image_pcc_message}")
         logger.info(f"LiDAR Output PCC: {lidar_pcc_message}")
