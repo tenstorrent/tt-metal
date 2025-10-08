@@ -20,6 +20,7 @@
 #include "ttnn/types.hpp"
 #include "ttnn/decorators.hpp"
 
+#include "ttnn/operations/data_movement/reshape_view/device/reshape_device_operation.hpp"
 #include "ttnn/operations/data_movement/reshape_view/device/hostdevcommon/common.hpp"
 #include "reshape_program_factory.hpp"
 
@@ -418,19 +419,44 @@ tt::tt_metal::operation::ProgramWithCallbacks reshape_tiled_program_factory(
         [reader_kernel_id,
          writer_kernel_id,
          utilized_cores,
-         // cache this tensor
-         mapping_tensor_device_buffer = mapping_tensor.device_storage()](
+         // capture this to cache the computed mapping tensor. Cheap copy since data is on device.
+         mapping_tensor](
             const void* operation,
             Program& program,
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-            const std::vector<Tensor>& output_tensors) {
-            const auto input_buffer_addr = input_tensors.at(0).buffer()->address();
-            const auto output_buffer_addr = output_tensors.at(0).buffer()->address();
+            const std::vector<Tensor>& output_tensors) mutable {
+            const auto& input_tensor = input_tensors.at(0);
+            const auto& output_tensor = output_tensors.at(0);
+
+            const auto& op = *reinterpret_cast<const ttnn::ReshapeDeviceOperation*>(operation);
+            if (op.recreate_mapping_tensor) {
+                const auto& tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
+                const auto& face_shape = input_tensor.tensor_spec().tile().get_face_shape();
+                const uint32_t num_input_pages =
+                    tt::div_up(input_tensor.physical_volume(), tile_shape[0] * tile_shape[1]);
+                const uint32_t num_output_pages =
+                    tt::div_up(output_tensor.physical_volume(), tile_shape[0] * tile_shape[1]);
+
+                mapping_tensor = detail::compute_reshape_mapping_host_tensor(
+                                     num_input_pages,
+                                     num_output_pages,
+                                     input_tensor.logical_shape(),
+                                     output_tensor.logical_shape(),
+                                     tile_shape,
+                                     face_shape)
+                                     .to_device(input_tensor.device());
+            }
+
+            const auto input_buffer_addr = input_tensor.buffer()->address();
+            const auto output_buffer_addr = output_tensor.buffer()->address();
 
             for (const auto& core : utilized_cores) {
                 auto& reader_runtime_args_core = GetRuntimeArgs(program, reader_kernel_id, core);
                 reader_runtime_args_core.at(0) = input_buffer_addr;
+                if (op.recreate_mapping_tensor) {
+                    reader_runtime_args_core.at(1) = mapping_tensor.buffer()->address();
+                }
 
                 auto& writer_runtime_args_core = GetRuntimeArgs(program, writer_kernel_id, core);
                 writer_runtime_args_core.at(0) = output_buffer_addr;
