@@ -21,6 +21,7 @@ void kernel_main() {
     constexpr uint32_t input_tile_size = get_compile_time_arg_val(9);
     uint32_t in1_mcast_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(10));
     uint32_t in1_mcast_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(11));
+    constexpr uint32_t is_output_writer = get_compile_time_arg_val(12);
 
     // Load input/output addresses and range parameters
     uint32_t argidx = 0;
@@ -29,7 +30,7 @@ void kernel_main() {
     const uint32_t in1_mcast_sender_noc_y = get_arg_val<uint32_t>(argidx++);
 
     // Tensor accessor for output tensor
-    constexpr auto out_args = TensorAccessorArgs<12>();
+    constexpr auto out_args = TensorAccessorArgs<13>();
     const auto out_reader = TensorAccessor(out_args, out_addr, input_tile_size);
 
     constexpr uint32_t K_num_blocks = K_tiles / K_block_tiles;
@@ -77,25 +78,23 @@ void kernel_main() {
             k_forward = !k_forward;
             // We have an output block to write out
             cb_wait_front(cb_id_in1_dm_out, out_block_num_tiles);
-            if (n_block_iter == (N_num_blocks - 1)) {
-                // This is the last iteration of the N block loop, so we will stride M next and get reuse, so we should
-                // write the output.
 
+            if constexpr (is_output_writer) {
 #ifndef SKIP_OUT
-                // uint32_t out_read_ptr = get_read_ptr(cb_id_in1_dm_out);
-                // // safe_print_bf16_tile(out_read_ptr);
-                // DPRINT << "in1recv: write out on m_block: " << m_block << ", n_block: " << n_block << ENDL();
-                // for (uint32_t m = 0; m < M_block_tiles; m++) {
-                //     uint32_t m_id = m_block * M_block_tiles + m;
-                //     for (uint32_t n = 0; n < N_block_tiles; n++) {
-                //         uint32_t n_id = n_block * N_block_tiles + n;
-                //         uint32_t tile_id = m_id * N_tiles + n_id;
-                //         // DPRINT << "write out tile " << tile_id << ENDL();
-                //         noc_async_write_tile(tile_id, out_reader, out_read_ptr);
-                //         out_read_ptr += input_tile_size;
-                //     }
-                // }
-                // noc_async_writes_flushed();
+                uint32_t out_read_ptr = get_read_ptr(cb_id_in1_dm_out);
+                // safe_print_bf16_tile(out_read_ptr);
+                DPRINT << "in1recv: write out on m_block: " << m_block << ", n_block: " << n_block << ENDL();
+                for (uint32_t m = 0; m < M_block_tiles; m++) {
+                    uint32_t m_id = m_block * M_block_tiles + m;
+                    for (uint32_t n = 0; n < N_block_tiles; n++) {
+                        uint32_t n_id = n_block * N_block_tiles + n;
+                        uint32_t tile_id = m_id * N_tiles + n_id;
+                        // DPRINT << "write out tile " << tile_id << ENDL();
+                        noc_async_write_tile(tile_id, out_reader, out_read_ptr);
+                        out_read_ptr += input_tile_size;
+                    }
+                }
+                noc_async_writes_flushed();
 #endif
             }
             cb_pop_front(cb_id_in1_dm_out, out_block_num_tiles);
