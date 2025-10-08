@@ -482,7 +482,9 @@ class TtConv2d:
             if slice_config_dict["mode"] == "channel":
                 num_slices = slice_config_dict["num_slices"]
         parameters.slice_config = SliceConfig(mode=SliceMode.CHANNEL, num_slices=num_slices)
-        return cls(parameters, stride=stride, padding=padding, conv_path=conv_path, model_configs=model_configs, dtype=dtype)
+        return cls(
+            parameters, stride=stride, padding=padding, conv_path=conv_path, model_configs=model_configs, dtype=dtype
+        )
 
     @classmethod
     def create_with_height_slicing(
@@ -503,7 +505,9 @@ class TtConv2d:
             if slice_config_dict["mode"] == "height":
                 num_slices = slice_config_dict["num_slices"]
         parameters.slice_config = SliceConfig(mode=SliceMode.HEIGHT, num_slices=num_slices)
-        return cls(parameters, stride=stride, padding=padding, conv_path=conv_path, model_configs=model_configs, dtype=dtype)
+        return cls(
+            parameters, stride=stride, padding=padding, conv_path=conv_path, model_configs=model_configs, dtype=dtype
+        )
 
     @classmethod
     def create_with_width_slicing(
@@ -524,7 +528,9 @@ class TtConv2d:
             if slice_config_dict["mode"] == "width":
                 num_slices = slice_config_dict["num_slices"]
         parameters.slice_config = SliceConfig(mode=SliceMode.WIDTH, num_slices=num_slices)
-        return cls(parameters, stride=stride, padding=padding, conv_path=conv_path, model_configs=model_configs, dtype=dtype)
+        return cls(
+            parameters, stride=stride, padding=padding, conv_path=conv_path, model_configs=model_configs, dtype=dtype
+        )
 
     @classmethod
     def create(
@@ -539,4 +545,6 @@ class TtConv2d:
     ) -> "TtConv2d":
         """Create TtConv2d without any slicing."""
         parameters.slice_config = SliceConfig(mode=SliceMode.NONE)
-        return cls(parameters, stride=stride, padding=padding, conv_path=conv_path, model_configs=model_configs, dtype=dtype)
+        return cls(
+            parameters, stride=stride, padding=padding, conv_path=conv_path, model_configs=model_configs, dtype=dtype
+        )

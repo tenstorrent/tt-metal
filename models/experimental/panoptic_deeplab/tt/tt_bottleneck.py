@@ -73,7 +73,7 @@ class TtBottleneck(LightweightModule):
             padding=conv2_padding,
             conv_path=f"{block_id}.conv2",
             model_configs=model_configs,
-            dtype=dtype
+            dtype=dtype,
         )
 
         self.conv3 = TtConv2d(
