@@ -1520,35 +1520,79 @@ jobs:
           if [ "$SEND_SLACK" = "true" ] && [ -n "$SELECTED_OWNERS" ]; then
             echo "Sending Slack notification to channel: $SLACK_CHANNEL"
 
-            # Function to find Slack user ID by full name (simplified version)
+            # Function to find Slack user ID by full name (with pagination)
             find_slack_user_id() {
               local full_name="$1"
               local github_username="$2"
 
-              USER_SEARCH_RESPONSE=$(curl -s -X GET \
-                -H "Authorization: Bearer ${{ secrets.CODEOWNERS_PING_BOT }}" \
-                -H "Content-Type: application/json" \
-                "https://slack.com/api/users.list?limit=1000")
+              # Fetch ALL users using pagination
+              ALL_USERS=""
+              CURSOR=""
 
-              if [ "$(echo "$USER_SEARCH_RESPONSE" | jq -r '.ok')" = "true" ]; then
-                ALL_USERS=$(echo "$USER_SEARCH_RESPONSE" | jq -r '.members')
-
-                # Try exact matching first
-                USER_ID=$(echo "$ALL_USERS" | jq -r --arg name "$full_name" '.[] | select(.real_name == $name or .profile.real_name == $name) | .id' | head -n1)
-
-                if [ -z "$USER_ID" ] || [ "$USER_ID" = "null" ]; then
-                  USER_ID=$(echo "$ALL_USERS" | jq -r --arg name "$full_name" '.[] | select(.profile.display_name == $name) | .id' | head -n1)
-                fi
-
-                if [ -z "$USER_ID" ] || [ "$USER_ID" = "null" ]; then
-                  USER_ID=$(echo "$ALL_USERS" | jq -r --arg username "$github_username" '.[] | select(.name == $username or .profile.display_name == $username) | .id' | head -n1)
-                fi
-
-                if [ -n "$USER_ID" ] && [ "$USER_ID" != "null" ]; then
-                  echo "$USER_ID"
+              while true; do
+                if [ -n "$CURSOR" ]; then
+                  API_URL="https://slack.com/api/users.list?limit=1000&cursor=$CURSOR"
                 else
-                  echo ""
+                  API_URL="https://slack.com/api/users.list?limit=1000"
                 fi
+
+                USER_SEARCH_RESPONSE=$(curl -s -X GET \
+                  -H "Authorization: Bearer ${{ secrets.CODEOWNERS_PING_BOT }}" \
+                  -H "Content-Type: application/json" \
+                  "$API_URL")
+
+                if [ "$(echo "$USER_SEARCH_RESPONSE" | jq -r '.ok')" = "true" ]; then
+                  # Append users from this page
+                  USERS_PAGE=$(echo "$USER_SEARCH_RESPONSE" | jq -r '.members')
+                  if [ "$ALL_USERS" = "" ]; then
+                    ALL_USERS="$USERS_PAGE"
+                  else
+                    # Merge arrays
+                    ALL_USERS=$(echo "$ALL_USERS $USERS_PAGE" | jq -s 'add')
+                  fi
+
+                  # Check if there's a next page
+                  CURSOR=$(echo "$USER_SEARCH_RESPONSE" | jq -r '.response_metadata.next_cursor // empty')
+                  if [ -z "$CURSOR" ] || [ "$CURSOR" = "null" ]; then
+                    break
+                  fi
+                else
+                  echo "Error: Failed to search Slack users: $(echo "$USER_SEARCH_RESPONSE" | jq -r '.error // "Unknown error"')" >&2
+                  return
+                fi
+              done
+
+              # Try exact matching first
+              USER_ID=$(echo "$ALL_USERS" | jq -r --arg name "$full_name" '.[] | select(.real_name == $name or .profile.real_name == $name) | .id' | head -n1)
+
+              if [ -z "$USER_ID" ] || [ "$USER_ID" = "null" ]; then
+                USER_ID=$(echo "$ALL_USERS" | jq -r --arg name "$full_name" '.[] | select(.profile.display_name == $name) | .id' | head -n1)
+              fi
+
+              if [ -z "$USER_ID" ] || [ "$USER_ID" = "null" ]; then
+                USER_ID=$(echo "$ALL_USERS" | jq -r --arg username "$github_username" '.[] | select(.name == $username or .profile.display_name == $username) | .id' | head -n1)
+              fi
+
+              # Add basic fuzzy matching for common cases
+              if [ -z "$USER_ID" ] || [ "$USER_ID" = "null" ]; then
+                echo "Trying fuzzy matching for: $full_name" >&2
+
+                # Try partial name matching (case insensitive)
+                IFS=' ' read -ra NAME_WORDS <<< "$full_name"
+                for word in "${NAME_WORDS[@]}"; do
+                  if [ ${#word} -ge 3 ]; then
+                    USER_ID=$(echo "$ALL_USERS" | jq -r --arg word "$word" '.[] | select((.real_name // "" | ascii_downcase | contains($word | ascii_downcase)) or (.profile.real_name // "" | ascii_downcase | contains($word | ascii_downcase)) or (.profile.display_name // "" | ascii_downcase | contains($word | ascii_downcase))) | .id' | head -n1)
+                    if [ -n "$USER_ID" ] && [ "$USER_ID" != "null" ]; then
+                      MATCHED_NAME=$(echo "$ALL_USERS" | jq -r --arg id "$USER_ID" '.[] | select(.id == $id) | .real_name // .profile.real_name // .name')
+                      echo "✅ Found fuzzy match: $full_name -> $MATCHED_NAME ($USER_ID)" >&2
+                      break
+                    fi
+                  fi
+                done
+              fi
+
+              if [ -n "$USER_ID" ] && [ "$USER_ID" != "null" ]; then
+                echo "$USER_ID"
               else
                 echo ""
               fi
