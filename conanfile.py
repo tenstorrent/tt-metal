@@ -124,7 +124,7 @@ class TTNNConan(ConanFile):
         run_env.generate()
 
         build_env = VirtualBuildEnv(self)
-        for dep in ["openmpi", "hwloc"]:
+        for dep in ["openmpi", "hwloc", "libnuma"]:
             lib_path = os.path.join(self.dependencies[dep].package_folder, "lib")
             build_env.environment().prepend_path("LD_LIBRARY_PATH", lib_path)
 
