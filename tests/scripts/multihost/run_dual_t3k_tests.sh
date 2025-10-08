@@ -14,7 +14,7 @@ run_dual_t3k_unit_tests() {
 
   echo "LOG_METAL: Running run_dual_t3k_unit_tests"
 
-  source ./python_env/bin/activate
+  source python_env/bin/activate
 
   local mpirun_args="--hostfile /etc/mpirun/hostfile --mca btl_tcp_if_exclude docker0,lo"
   local mpi_args="$mpirun_args --tag-output"
