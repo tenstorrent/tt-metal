@@ -395,6 +395,18 @@ def test_transformer_decoder_layer_inference(
     assert passing, f"PCC value is lower than 0.99. Check implementation! {pcc_message}"
 
 
+def compute_mask(device, xyz, radius, dist=None):
+    with torch.no_grad():
+        if dist is None or dist.shape[1] != xyz.shape[1]:
+            dist = torch.cdist(xyz, xyz, p=2)
+        # entries that are True in the mask do not contribute to self-attention
+        # so points outside the radius are not considered
+        mask = dist >= radius
+    mask_ttnn = torch.zeros_like(mask, dtype=torch.float).masked_fill_(mask, float("-inf"))
+    mask_ttnn = ttnn.from_torch(mask_ttnn, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+    return mask, mask_ttnn
+
+
 @torch.no_grad()
 @skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
@@ -412,19 +424,34 @@ def test_transformer_encoder_layer_inference(
     d_model,
     nhead,
     normalize_before,
+    device,
 ):
     """Test TTTransformerEncoderLayer against PyTorch reference implementation"""
 
+    torch.manual_seed(0)
+    mesh_device = device
     dtype = ttnn.bfloat16
     dim_feedforward = d_model * 4
 
     # Initialize reference model
     reference_model = TransformerEncoderLayer(
-        d_model, nhead, dim_feedforward, dropout=0.0, normalize_before=normalize_before
+        d_model,
+        nhead,
+        dim_feedforward,
+        dropout=0.0,
+        normalize_before=normalize_before,
     ).eval()
 
     # Create test inputs
     src_input = torch.randn(seq_len, batch_size, d_model, dtype=torch.float32)
+    xyz = torch.randn(batch_size, seq_len, 3, dtype=torch.float32)
+    attn_mask, attn_mask_ttnn = compute_mask(mesh_device, xyz, 0.16000000000000003, None)
+    # mask must be tiled to num_heads of the transformer
+    bsz, n, n = attn_mask.shape
+    attn_mask = attn_mask.unsqueeze(1)
+    attn_mask = attn_mask.repeat(1, nhead, 1, 1)
+    attn_mask = attn_mask.view(bsz * nhead, n, n)
+    attn_mask_ttnn = ttnn.unsqueeze(attn_mask_ttnn, 1)
 
     # Create positional embeddings
     pos = torch.randn(seq_len, batch_size, d_model, dtype=torch.float32)
@@ -433,12 +460,11 @@ def test_transformer_encoder_layer_inference(
     with torch.no_grad():
         ref_output = reference_model(
             src_input,
-            src_mask=None,
+            src_mask=attn_mask,
             src_key_padding_mask=None,
             pos=pos,
         )
 
-    mesh_device = ttnn.open_device(device_id=0, l1_small_size=32768)
     # preprocessor = create_transformer_encoder_layer_preprocessor(mesh_device)
     preprocessor = create_transformer_decoder_layer_preprocessor(mesh_device)
     parameters = preprocessor(reference_model, "encoder_layer", {})
@@ -470,7 +496,8 @@ def test_transformer_encoder_layer_inference(
     )
 
     # Run TTNN model
-    tt_output = tt_model(tt_src, pos=tt_pos, return_attn_weights=False)
+    tt_output = tt_model(tt_src, src_mask=attn_mask_ttnn, pos=None, return_attn_weights=False)
+    # tt_output = tt_model(tt_src, src_mask=attn_mask_ttnn, pos=tt_pos, return_attn_weights=False)
 
     if isinstance(ref_output, tuple):
         ref_output = ref_output[0]  # Get the tensor, ignore attention weights

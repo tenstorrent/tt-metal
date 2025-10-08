@@ -428,6 +428,7 @@ class TTTransformerEncoderLayer(LightweightModule):
         pos=None,
         return_attn_weights=False,
     ):
+        src = ttnn.to_layout(src, ttnn.TILE_LAYOUT)
         # Pre-norm self-attention
         src2 = ttnn.layer_norm(src, weight=self.norm1_weights, bias=getattr(self, "norm1_bias", None))
         value = src2
