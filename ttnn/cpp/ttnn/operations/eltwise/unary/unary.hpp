@@ -78,6 +78,7 @@ struct LogSigmoid {
 struct Sigmoid_accurate {
     static Tensor invoke(
         const Tensor& input,
+        bool approximate_mode = false,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
