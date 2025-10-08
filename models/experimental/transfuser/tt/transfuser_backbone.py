@@ -56,6 +56,7 @@ class TtTransfuserBackbone:
             stride=2,
             groups=3,  # conv2
             model_config=model_config,
+            stage_name="layer1",
         )
 
         self.lidar_layer1 = self._make_layer(
@@ -65,6 +66,7 @@ class TtTransfuserBackbone:
             stride=2,
             groups=3,
             model_config=model_config,
+            stage_name="layer1",
         )
 
     def _make_layer(
@@ -75,8 +77,22 @@ class TtTransfuserBackbone:
         stride: int,
         groups: int = 1,
         model_config=None,
+        stage_name=None,
     ) -> List[TTRegNetBottleneck]:
         layers = []
+
+        # Determine shard layout based on stage name
+        if stage_name == "layer1":
+            shard_layout = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+        elif stage_name == "layer2":
+            shard_layout = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+        elif stage_name == "layer3":
+            shard_layout = ttnn.TensorMemoryLayout.WIDTH_SHARDED
+        elif stage_name == "layer4":
+            shard_layout = ttnn.TensorMemoryLayout.WIDTH_SHARDED
+        else:
+            # Default to HEIGHT_SHARDED for backward compatibility
+            shard_layout = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
 
         # First block (may have downsample)
         downsample = stride != 1 or self.inplanes != planes
@@ -87,6 +103,7 @@ class TtTransfuserBackbone:
                 stride=stride,
                 downsample=downsample,
                 groups=groups,
+                shard_layout=shard_layout,
             )
         )
         self.inplanes = planes
@@ -101,6 +118,7 @@ class TtTransfuserBackbone:
                     stride=1,
                     downsample=False,
                     groups=groups,
+                    shard_layout=shard_layout,
                 )
             )
 
