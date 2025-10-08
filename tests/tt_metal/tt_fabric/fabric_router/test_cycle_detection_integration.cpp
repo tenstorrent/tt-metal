@@ -184,5 +184,104 @@ TEST(MultiHost, TestBigMesh2x4CycleDetectionNoCycles) {
         << "Bidirectional intermesh traffic in big mesh 2x4 setup should NOT be detected as cycles";
 }
 
+TEST(MultiHost, TestGalaxy4x4DualMeshUnicastNoCycle) {
+    // This test verifies cycle-free unicast traffic pattern across two 4x4 meshes
+    // Pattern: [0,15] -> [0,12] -> [1,0] -> [1,3] -> [0,15] (should NOT form a cycle)
+    // Run with: tt-run --mock-cluster-rank-binding
+    // tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/6u_cluster_desc.yaml
+    //           --rank-binding tests/tt_metal/distributed/config/galaxy_4x4_strict_connection_rank_bindings.yaml
+
+    // Configure ethernet cores for fabric routing
+    uint8_t num_routing_planes = std::numeric_limits<uint8_t>::max();
+    tt::tt_metal::MetalContext::instance().get_cluster().configure_ethernet_cores_for_fabric_routers(
+        kFabricConfig, num_routing_planes);
+
+    const std::filesystem::path mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/galaxy_4x4_dual_mesh_graph_strict.yaml";
+
+    auto control_plane = std::make_unique<ControlPlane>(mesh_graph_desc_path.string());
+    control_plane->initialize_fabric_context(kFabricConfig);
+    control_plane->configure_routing_tables_for_fabric_ethernet_channels(kFabricConfig, kReliabilityMode);
+
+    // Define traffic pattern from test_4x4_cycles.yaml - UnicastNoCycle
+    // Device topology: Each mesh is 4x4 in row-major order
+    // [0,15] -> [0,12] -> [1,0] -> [1,3] -> [0,15]
+    std::vector<std::pair<FabricNodeId, FabricNodeId>> traffic_pairs = {
+        {FabricNodeId(MeshId{0}, 15), FabricNodeId(MeshId{0}, 12)},  // [0,15] -> [0,12] (intramesh)
+        {FabricNodeId(MeshId{0}, 12), FabricNodeId(MeshId{1}, 0)},   // [0,12] -> [1,0]  (intermesh)
+        {FabricNodeId(MeshId{1}, 0), FabricNodeId(MeshId{1}, 3)},    // [1,0]  -> [1,3]  (intramesh)
+        {FabricNodeId(MeshId{1}, 3), FabricNodeId(MeshId{0}, 15)},   // [1,3]  -> [0,15] (intermesh)
+    };
+
+    log_info(
+        tt::LogTest,
+        "Testing {} unicast traffic pairs for cycles in 4x4 dual mesh (UnicastNoCycle pattern)",
+        traffic_pairs.size());
+    log_info(tt::LogTest, "Traffic pattern: [0,15] -> [0,12] -> [1,0] -> [1,3] -> [0,15]");
+
+    // Test cycle detection - this pattern should NOT create a cycle
+    bool has_cycles = control_plane->detect_inter_mesh_cycles(traffic_pairs, "Galaxy4x4UnicastNoCycle");
+
+    // Debug: Print result before asserting
+    log_info(tt::LogTest, "=== Cycle Detection Result ===");
+    log_info(tt::LogTest, "Expected: NO cycles");
+    log_info(tt::LogTest, "Actual: {} cycles detected", has_cycles ? "HAS" : "NO");
+    log_info(tt::LogTest, "==============================");
+
+    EXPECT_FALSE(has_cycles) << "Unicast traffic pattern [0,15] -> [0,12] -> [1,0] -> [1,3] -> [0,15] should NOT "
+                                "form a cycle";
+}
+
+TEST(MultiHost, TestGalaxy4x4DualMeshUnicastHasCycle) {
+    // This test verifies cycle detection with a traffic pattern that creates cycles
+    // Pattern involves: [0,15] -> [0,12], [0,13] -> [1,1], [1,0] -> [1,3], [1,2] -> [0,14]
+    // Expected cycles from devices: [0,15] [0,14] [0,13] [0,12] [1,0] [1,1] [1,2] [1,3]
+    // Run with: tt-run --mock-cluster-rank-binding
+    // tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/6u_cluster_desc.yaml
+    //           --rank-binding tests/tt_metal/distributed/config/galaxy_4x4_strict_connection_rank_bindings.yaml
+
+    // Configure ethernet cores for fabric routing
+    uint8_t num_routing_planes = std::numeric_limits<uint8_t>::max();
+    tt::tt_metal::MetalContext::instance().get_cluster().configure_ethernet_cores_for_fabric_routers(
+        kFabricConfig, num_routing_planes);
+
+    const std::filesystem::path mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/galaxy_4x4_dual_mesh_graph_strict.yaml";
+
+    auto control_plane = std::make_unique<ControlPlane>(mesh_graph_desc_path.string());
+    control_plane->initialize_fabric_context(kFabricConfig);
+    control_plane->configure_routing_tables_for_fabric_ethernet_channels(kFabricConfig, kReliabilityMode);
+
+    // Define traffic pattern from test_4x4_cycles.yaml - UnicastHasCycle
+    // This pattern creates cycles involving 8 devices across two meshes
+    std::vector<std::pair<FabricNodeId, FabricNodeId>> traffic_pairs = {
+        {FabricNodeId(MeshId{0}, 15), FabricNodeId(MeshId{0}, 12)},  // [0,15] -> [0,12] (intramesh)
+        {FabricNodeId(MeshId{0}, 13), FabricNodeId(MeshId{1}, 1)},   // [0,13] -> [1,1]  (intermesh)
+        {FabricNodeId(MeshId{1}, 0), FabricNodeId(MeshId{1}, 3)},    // [1,0]  -> [1,3]  (intramesh)
+        {FabricNodeId(MeshId{1}, 2), FabricNodeId(MeshId{0}, 14)},   // [1,2]  -> [0,14] (intermesh)
+    };
+
+    log_info(
+        tt::LogTest,
+        "Testing {} unicast traffic pairs for cycles in 4x4 dual mesh (UnicastHasCycle pattern)",
+        traffic_pairs.size());
+    log_info(
+        tt::LogTest, "Traffic pattern creates cycles involving: [0,15] [0,14] [0,13] [0,12] [1,0] [1,1] [1,2] [1,3]");
+
+    // Test cycle detection - this pattern SHOULD create cycles
+    bool has_cycles = control_plane->detect_inter_mesh_cycles(traffic_pairs, "Galaxy4x4UnicastHasCycle");
+
+    // Debug: Print result before asserting
+    log_info(tt::LogTest, "=== Cycle Detection Result ===");
+    log_info(tt::LogTest, "Expected: HAS cycles");
+    log_info(tt::LogTest, "Actual: {} cycles detected", has_cycles ? "HAS" : "NO");
+    log_info(tt::LogTest, "==============================");
+
+    EXPECT_TRUE(has_cycles) << "Unicast traffic pattern with cross-mesh dependencies should form cycles and be "
+                               "detected";
+}
+
 }  // namespace multi_host_tests
 }  // namespace tt::tt_fabric
