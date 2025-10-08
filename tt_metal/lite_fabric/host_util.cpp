@@ -85,7 +85,10 @@ void SetResetState(tt::Cluster& cluster, tt_cxy_pair virtual_core, bool assert_r
         cluster.assert_risc_reset_at_core(virtual_core, reset_val);
     } else {
         // Deassert only ERISC1.
-        tt::umd::RiscType reset_val = tt::umd::RiscType::ERISC1;
+        TensixSoftResetOptions reset_val =
+            TENSIX_DEASSERT_SOFT_RESET &
+            static_cast<TensixSoftResetOptions>(
+                ~std::underlying_type<TensixSoftResetOptions>::type(TensixSoftResetOptions::TRISC0));
         cluster.deassert_risc_reset_at_core(virtual_core, reset_val);
     }
 }
