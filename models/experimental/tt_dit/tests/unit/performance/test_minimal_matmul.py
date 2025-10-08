@@ -35,9 +35,9 @@ def run_test_linear(device, M, K, N):
 
     # This is the optimal single-core config for 4096x4096x4096
     matmul_config = ttnn.MinimalMatmulConfig(
-        M_block_size=4,
-        K_block_size=32,
-        N_block_size=4,
+        M_block_size=8,
+        K_block_size=8,
+        N_block_size=8,
         subblock_h=2,
         subblock_w=2,
         compute_with_storage_grid_size=core_grid,
@@ -170,6 +170,7 @@ def test_linear_sweep_blocks(device):
 
     from itertools import product
 
+    iteration = 0
     for M_block_size, K_block_size, N_block_size, (subblock_h, subblock_w) in product(
         mn_block_sizes, k_block_sizes, mn_block_sizes, subblocks
     ):
@@ -195,6 +196,8 @@ def test_linear_sweep_blocks(device):
             )
             tt_output = ttnn.to_torch(tt_output)
             check_result = assert_quality(torch_output, tt_output)
+            logger.info(f"Finished iteration {iteration}\n")
+            iteration = iteration + 1
         except Exception as e:
             if isinstance(e, KeyboardInterrupt):
                 raise

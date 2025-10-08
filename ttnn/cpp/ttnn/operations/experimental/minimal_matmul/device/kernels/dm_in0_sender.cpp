@@ -85,9 +85,11 @@ void kernel_main() {
                     noc_semaphore_inc(in0_sender_semaphore_noc_addr, 1);
                     noc_semaphore_wait(in0_receiver_semaphore_addr_ptr, VALID);
                 }
+#endif
 
                 cb_push_back(cb_id_in0, in0_block_num_tiles);
 
+#ifndef SKIP_IN0
                 if (!is_last_chip) {
                     noc_semaphore_wait(in0_sender_semaphore_addr_ptr, 1);
                     noc_semaphore_set(in0_sender_semaphore_addr_ptr, 0);
@@ -98,9 +100,9 @@ void kernel_main() {
 
                     noc_semaphore_set_remote(in0_valid_semaphore_addr, in0_receiver_semaphore_noc_addr);
                 }
+#endif
                 cb_reserve_back(cb_id_in0_done, 1);
                 cb_push_back(cb_id_in0_done, 1);
-#endif
             }
         }
     }

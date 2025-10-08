@@ -91,9 +91,11 @@ void kernel_main() {
                     noc_semaphore_inc(in1_sender_semaphore_noc_addr, 1);
                     noc_semaphore_wait(in1_receiver_semaphore_addr_ptr, VALID);
                 }
+#endif
 
                 cb_push_back(cb_id_in1, in1_block_num_tiles);
 
+#ifndef SKIP_IN1
                 if (!is_last_chip) {
                     noc_semaphore_wait(in1_sender_semaphore_addr_ptr, 1);
                     noc_semaphore_set(in1_sender_semaphore_addr_ptr, 0);
@@ -104,9 +106,9 @@ void kernel_main() {
 
                     noc_semaphore_set_remote(in1_valid_semaphore_addr, in1_receiver_semaphore_noc_addr);
                 }
+#endif
                 cb_reserve_back(cb_id_in1_done, 1);
                 cb_push_back(cb_id_in1_done, 1);
-#endif
             }
             // We have an output block to write out
             cb_wait_front(cb_id_out, out_block_num_tiles);
