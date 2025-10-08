@@ -34,7 +34,6 @@ class TtResNet(LightweightModule):
         parameters,
         device: ttnn.MeshDevice,
         dtype: Union[ttnn.DataType, dict[str, ttnn.DataType]] = ttnn.bfloat8_b,
-        layer_dtypes: dict = None,
         model_configs=None,
     ):
         super().__init__()

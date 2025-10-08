@@ -91,9 +91,14 @@ class TtPanopticDeepLab:
         logger.debug("Initializing ResNet backbone with preprocessed parameters")
         # Handle both dict and object parameter formats
         backbone_params = parameters["backbone"] if isinstance(parameters, dict) else parameters.backbone
+
+        # Use resnet_layer_dtypes if provided, otherwise default to bfloat8_b for all layers
+        backbone_dtype = resnet_layer_dtypes if resnet_layer_dtypes is not None else ttnn.bfloat8_b
+
         self.backbone = TtResNet(
-            parameters=backbone_params, device=device, dtype=ttnn.bfloat8_b, layer_dtypes=resnet_layer_dtypes, model_configs=model_configs
+            parameters=backbone_params, device=device, dtype=backbone_dtype, model_configs=model_configs
         )
+
         logger.debug("ResNet backbone initialization complete")
 
         # Define feature map specifications based on ResNet output
