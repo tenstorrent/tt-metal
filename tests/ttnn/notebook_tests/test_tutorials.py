@@ -29,9 +29,37 @@ TUTORIALS_DATA_PATHS = {
 }
 
 
+@pytest.fixture(scope="module", autouse=True)
+def setup_once(model_location_generator):
+    tt_metal_path = os.environ.get("TT_METAL_HOME", "/work")
+
+    for tutorial_id in TUTORIALS_DATA_PATHS.keys():
+        # Download data from external server
+        local_path = TUTORIALS_DATA_PATHS[tutorial_id][LOCAL_SOURCE_PATH_KEY]
+        external_path = TUTORIALS_DATA_PATHS[tutorial_id][EXTERNAL_SOURCE_PATH_KEY]
+
+        # Skip if local path exists and has content
+        local_path_obj = Path(tt_metal_path) / Path(local_path)
+
+        if local_path_obj.exists() and any(local_path_obj.iterdir()):
+            continue
+
+        print("!!! Downloading")
+        # Download data using model_location_generator
+        data_placement = model_location_generator(
+            external_path, download_if_ci_v2=True, endpoint_prefix=EXTERNAL_SERVER_BASE_URL
+        )
+        print("!!! After Downloading")
+        # Create symbolic link from local_path to data_placement
+        if local_path_obj.exists():
+            local_path_obj.unlink()  # Remove existing symlink/file
+        local_path_obj.symlink_to(data_placement)
+        print(f"!!! Created symlink {local_path_obj} to {data_placement}")
+
+
+"""
 # Helper functions
 def prepare_test_data(model_location_generator) -> None:
-    """
     Prepare test data for tutorial tests by setting up symbolic links.
 
     This function iterates over data needed for tutorial tests. If the data is present
@@ -52,7 +80,7 @@ def prepare_test_data(model_location_generator) -> None:
         - Downloads data from external servers via model_location_generator
         - Creates symbolic links from local paths to downloaded data locations
         - Removes existing symlinks/files at local paths if they exist
-    """
+
     # Find tt-metal directory
     tt_metal_path = os.environ.get("TT_METAL_HOME", "/work")
 
@@ -111,6 +139,7 @@ def prepare_test_data(model_location_generator) -> None:
         b = any(local_path_obj.iterdir()) if a else False
         print(f"!!! Local path exists: {a}, has content: {b}")
         print(f"!!! issymlink {local_path_obj.is_symlink()}")
+"""
 
 
 def collect_ttnn_tutorials(path: Path, extension: str = "*.py"):
@@ -121,8 +150,9 @@ def collect_ttnn_tutorials(path: Path, extension: str = "*.py"):
 # Tests
 @skip_for_blackhole("Fails on BH. Issue #25579")
 @pytest.mark.parametrize("notebook_path", collect_ttnn_tutorials(path=TUTORIALS_NOTEBOOK_PATH, extension="*.ipynb"))
-def test_ttnn_notebook_tutorials(notebook_path, model_location_generator):
-    prepare_test_data(model_location_generator)
+def test_ttnn_notebook_tutorials(notebook_path):
+    print("B")
+    # prepare_test_data(model_location_generator)
     # with open(notebook_path) as f:
     #     notebook = nbformat.read(f, as_version=4)
     #     ep = ExecutePreprocessor(timeout=180, kernel_name="python3")
@@ -131,8 +161,9 @@ def test_ttnn_notebook_tutorials(notebook_path, model_location_generator):
 
 @skip_for_blackhole("Fails on BH. Issue #25579")
 @pytest.mark.parametrize("python_path", collect_ttnn_tutorials(path=TUTORIALS_PYTHON_PATH, extension="*.py"))
-def test_ttnn_python_tutorials(python_path, model_location_generator):
-    prepare_test_data(model_location_generator)
+def test_ttnn_python_tutorials(python_path):
+    # prepare_test_data(model_location_generator)
+    print("A")
     # result = subprocess.run(
     #     ["python3", str(python_path)],
     #     capture_output=True,
