@@ -16,7 +16,7 @@ namespace py = pybind11;
 
 void bind_permute(py::module& module) {
     auto doc =
-        R"doc(permute(input_tensor: ttnn.Tensor, dims: List[int], memory_config: Optional[MemoryConfig] = std::nullopt, queue_id: int = 0) -> ttnn.Tensor
+        R"doc(permute(input_tensor: ttnn.Tensor, dims: List[int], memory_config: Optional[MemoryConfig] = std::nullopt)) -> ttnn.Tensor
 
             Permutes the dimensions of the input tensor according to the specified permutation.
 
@@ -26,7 +26,6 @@ void bind_permute(py::module& module) {
 
             Keyword Args:
                 memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
-                queue_id (int, optional): command queue id. Defaults to `0`.
                 pad_value (float, optional): padding value for when tiles are broken in a transpose. Defaults to `0.0`. If set to None, it will be random garbage values.
 
            Returns:
@@ -49,15 +48,11 @@ void bind_permute(py::module& module) {
                const ttnn::Tensor& input_tensor,
                const ttnn::SmallVector<int64_t>& dims,
                const std::optional<ttnn::MemoryConfig>& memory_config,
-               QueueId queue_id,
-               const std::optional<float>& pad_value) {
-                return self(queue_id, input_tensor, dims, memory_config, pad_value);
-            },
+               const std::optional<float>& pad_value) { return self(input_tensor, dims, memory_config, pad_value); },
             py::arg("input_tensor").noconvert(),
             py::arg("dims"),
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
-            py::arg("queue_id") = DefaultQueueId,
             py::arg("pad_value") = 0.0f,
         });
 }

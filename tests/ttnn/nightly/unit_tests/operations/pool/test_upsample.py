@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -189,3 +189,70 @@ def test_upsample_various(device, input_shape, core_range, scale_h, scale_w, sha
     isequal = torch.equal(output_tensor, torch_result)
 
     assert isequal
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 37888}], indirect=True)
+@pytest.mark.parametrize(
+    "batch_size, num_channels, height, width, scale_h, scale_w, num_slices",
+    (
+        (1, 256, 64, 128, 2, 2, 2),
+        (1, 128, 64, 128, 2, 2, 2),
+    ),
+)
+def test_panoptic_upsample_sliced(device, batch_size, num_channels, height, width, scale_h, scale_w, num_slices):
+    input_shape_nchw = [batch_size, num_channels, height, width]
+    scale_factor = (scale_h, scale_w)
+    mode_pytorch = "nearest"  # we only did nearest in panoptic due to pcc dropping very little and bilinear not being able to fit in memory as of now
+    mode_ttnn = "nearest"
+    dtype_torch = torch.bfloat16
+    dtype_ttnn = ttnn.bfloat16
+
+    batch_size, channels, input_h, input_w = input_shape_nchw
+    assert channels % num_slices == 0, "Channels must be divisible by num_slices"
+    slice_channels = channels // num_slices
+
+    logger.info(f"Running Panoptic Upsample with Channel Slicing (slices={num_slices})")
+
+    torch.manual_seed(0)
+    torch_input_nchw = torch.rand(input_shape_nchw, dtype=dtype_torch)
+
+    torch_upsample = nn.Upsample(scale_factor=scale_factor, mode=mode_pytorch)
+    torch_output_nchw = torch_upsample(torch_input_nchw)
+
+    ttnn_input_nhwc = ttnn.from_torch(
+        torch_input_nchw.permute(0, 2, 3, 1), device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=dtype_ttnn
+    )
+
+    sliced_results = []
+    for slice_idx in range(num_slices):
+        start_ch = slice_idx * slice_channels
+        end_ch_exclusive = (slice_idx + 1) * slice_channels
+
+        x_slice_nhwc = ttnn.slice(
+            ttnn_input_nhwc, [0, 0, 0, start_ch], [batch_size, input_h, input_w, end_ch_exclusive]
+        )
+
+        x_slice_upsampled = ttnn.upsample(
+            x_slice_nhwc,
+            scale_factor=scale_factor,
+            mode=mode_ttnn,
+        )
+        x_slice_upsampled = ttnn.to_memory_config(x_slice_upsampled, ttnn.DRAM_MEMORY_CONFIG)
+        sliced_results.append(x_slice_upsampled)
+
+        ttnn.deallocate(x_slice_nhwc)
+
+    ttnn.deallocate(ttnn_input_nhwc)
+
+    ttnn_output_nhwc = ttnn.concat(sliced_results, dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    for slice_result in sliced_results:
+        ttnn.deallocate(slice_result)
+
+    torch_output_nhwc = torch_output_nchw.permute(0, 2, 3, 1)
+
+    ttnn_output_torch_nhwc = ttnn.to_torch(ttnn_output_nhwc)
+
+    passed, pcc_message = assert_with_pcc(torch_output_nhwc, ttnn_output_torch_nhwc, pcc=0.99)
+    logger.info(pcc_message)
+    assert passed, f"PCC check failed. {pcc_message}"

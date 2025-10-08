@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,8 +8,6 @@
 #include "llk_math_eltwise_binary_sfpu_params.h"
 
 namespace ckernel {
-
-// New LLK SFPU APIs
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_binary_sfpu_sub_int_init() {

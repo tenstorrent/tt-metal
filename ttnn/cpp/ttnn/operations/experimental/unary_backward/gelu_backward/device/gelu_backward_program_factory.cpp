@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,7 +6,6 @@
 #include "gelu_backward_device_operation_types.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
@@ -22,11 +21,11 @@ GeluBackwardProgramFactory::cached_program_t GeluBackwardProgramFactory::create(
     tt::tt_metal::Program program{};
 
     tt::DataFormat src0_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
-    uint32_t src0_single_tile_size = tt::tt_metal::detail::TileSize(src0_cb_data_format);
+    uint32_t src0_single_tile_size = tt::tile_size(src0_cb_data_format);
     tt::DataFormat src1_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(grad_output.dtype());
-    uint32_t src1_single_tile_size = tt::tt_metal::detail::TileSize(src1_cb_data_format);
+    uint32_t src1_single_tile_size = tt::tile_size(src1_cb_data_format);
     tt::DataFormat dst_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
-    uint32_t dst_single_tile_size = tt::tt_metal::detail::TileSize(dst_cb_data_format);
+    uint32_t dst_single_tile_size = tt::tile_size(dst_cb_data_format);
 
     // NOTE: There is an assumption that number of tiles in grad_output is the same as in input
     uint32_t num_tiles = input.physical_volume() / tt::constants::TILE_HW;

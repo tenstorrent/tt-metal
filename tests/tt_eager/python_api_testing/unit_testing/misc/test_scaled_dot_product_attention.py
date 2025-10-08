@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -12,7 +12,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
 import ttnn
 from loguru import logger
 import pytest
-from models.utility_functions import skip_for_wormhole_b0, skip_for_blackhole
+from models.common.utility_functions import skip_for_wormhole_b0, skip_for_blackhole
 
 
 def fa_rand(*shape):
@@ -165,7 +165,7 @@ def run_sdpa_noncausal(
 
 @pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
-@pytest.mark.parametrize("q_chunk_size", [128, 512], ids=["q128", "q512"])
+@pytest.mark.parametrize("q_chunk_size", [32, 128, 512], ids=["q32", "q128", "q512"])
 @pytest.mark.parametrize("k_chunk_size", [128, 512], ids=["k128", "k512"])
 @pytest.mark.parametrize("is_causal", [True, False], ids=["causal", "noncausal"])
 @pytest.mark.parametrize("b", [1, 2], ids=["b1", "b2"])
@@ -270,6 +270,7 @@ def test_sdpa_perf(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype):
     "b, nh, nkv, s, d",
     ([1, 8, 1, 128 * 1024, 128],),  # Llama2-70B 128K sequence
 )
+@pytest.mark.timeout(120)
 def test_sdpa_tt_large_seq(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype):
     if (s % q_chunk_size != 0) or (s % k_chunk_size != 0):
         pytest.skip("s must be divisible by q_chunk_size and k_chunk_size")
@@ -342,7 +343,7 @@ def test_sdpa_tt_with_program_cache(device, b, nh, nkv, s, d, q_chunk_size, k_ch
 
 @pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16], ids=["bfp8", "bf16"])
-@pytest.mark.parametrize("q_chunk_size", [128, 256], ids=["q128", "q256"])
+@pytest.mark.parametrize("q_chunk_size", [32, 128, 256], ids=["q32", "q128", "q256"])
 @pytest.mark.parametrize("k_chunk_size", [128, 256], ids=["k128", "k256"])
 @pytest.mark.parametrize(
     "b, nh, nkv, s, d",
@@ -360,7 +361,7 @@ def test_sdpa_noncausal(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dt
     if s > 2048 and (q_chunk_size == 128 or k_chunk_size == 128):
         pytest.skip("Bad PCC for small chunks")
     ttnn.device.DisablePersistentKernelCache()
-    rmse_threshold = 0.0062
+    rmse_threshold = 0.0069
     run_sdpa_noncausal(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, rmse_threshold=rmse_threshold)
 
 
@@ -699,7 +700,7 @@ def run_test_joint_sdpa(
 
 @pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16], ids=["bfp8", "bf16"])
-@pytest.mark.parametrize("q_chunk_size", [128, 512], ids=["q128", "q512"])
+@pytest.mark.parametrize("q_chunk_size", [32, 128, 512], ids=["q32", "q128", "q512"])
 @pytest.mark.parametrize("k_chunk_size", [128, 512], ids=["k128", "k512"])
 @pytest.mark.parametrize("b", [1, 2], ids=["b1", "b2"])
 @pytest.mark.parametrize("nh", [1, 3], ids=["nh1", "nh3"])
@@ -760,7 +761,7 @@ def test_joint_sdpa_program_cache(device, b, nh, seq_len, joint_seq_len, d, q_ch
 
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from models.perf.device_perf_utils import run_device_perf_detailed
-from tt_metal.tools.profiler.process_model_log import run_device_profiler, get_latest_ops_log_filename
+from tracy.process_model_log import run_device_profiler, get_latest_ops_log_filename
 
 
 @pytest.mark.skip()

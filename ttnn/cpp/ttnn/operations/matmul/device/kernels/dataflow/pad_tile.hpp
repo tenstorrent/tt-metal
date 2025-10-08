@@ -6,8 +6,6 @@
 
 #include <tt-metalium/constants.hpp>
 
-using namespace tt::constants;
-
 /**
  * @brief Pads a face within a tile.
  *
@@ -65,6 +63,8 @@ template <
     uint32_t face_h,
     uint32_t face_w>
 void fill_pad_face(T* tile_ptr, T fill_value) {
+    using namespace tt::constants;
+
     // Calculate face offset
     constexpr uint32_t face_offset = (face_h * num_faces_w + face_w) * FACE_HW;
     auto face_ptr = tile_ptr + face_offset;
@@ -129,8 +129,8 @@ template <
     typename T,
     uint32_t num_elements_unpadded_w,
     uint32_t num_elements_unpadded_h,
-    uint32_t num_faces_w = TILE_WIDTH / FACE_WIDTH,
-    uint32_t num_faces_h = TILE_HEIGHT / FACE_HEIGHT>
+    uint32_t num_faces_w = tt::constants::TILE_WIDTH / tt::constants::FACE_WIDTH,
+    uint32_t num_faces_h = tt::constants::TILE_HEIGHT / tt::constants::FACE_HEIGHT>
 void fill_pad_tile(uint32_t l1_tile_ptr, T fill_value) {
     auto tile_ptr = reinterpret_cast<T*>(l1_tile_ptr);
 
@@ -170,6 +170,7 @@ void fill_pad_tile(uint32_t l1_tile_ptr, T fill_value) {
  */
 template <DataFormat in0_data_format, uint32_t in0_last_ktile_w>
 void pad_last_ktile(uint32_t l1_write_addr_in0) {
+    using namespace tt::constants;
     if constexpr (in0_data_format == DataFormat::Float32) {
         fill_pad_tile<uint32_t, in0_last_ktile_w, /*num_elements_unpadded_h=*/TILE_HEIGHT>(
             l1_write_addr_in0, /*pad_value=*/0);

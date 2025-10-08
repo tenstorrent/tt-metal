@@ -24,7 +24,7 @@ from models.experimental.yolov3.reference.utils.torch_utils import (
     scale_img,
     time_sync,
 )
-from models.utility_functions import torch2tt_tensor
+from models.common.utility_functions import torch2tt_tensor
 
 
 def parse_model(state_dict, base_address, yaml_dict, ch, device):  # model_dict, input_channels(3)

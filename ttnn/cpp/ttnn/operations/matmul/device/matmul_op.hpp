@@ -360,7 +360,6 @@ Tensor matmul(
     const Tensor& input_tensor_b,
     const std::optional<const Tensor>& bias = std::nullopt,
     const struct Matmul& parameters = Matmul{},
-    QueueId queue_id = DefaultQueueId,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
 std::vector<Tensor> matmul_batched_weights(
@@ -368,7 +367,6 @@ std::vector<Tensor> matmul_batched_weights(
     const std::vector<Tensor>& input_tensors_b,
     const std::optional<const Tensor>& bias = std::nullopt,
     const struct Matmul& parameters = Matmul{},
-    QueueId queue_id = DefaultQueueId,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
 Tensor sparse_matmul(
@@ -376,7 +374,6 @@ Tensor sparse_matmul(
     const Tensor& input_tensor_b,
     const Tensor& sparsity,
     const struct SparseMatmul& parameters = SparseMatmul{},
-    QueueId queue_id = DefaultQueueId,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
 }  // namespace matmul

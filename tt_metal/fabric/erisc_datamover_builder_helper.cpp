@@ -71,10 +71,10 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
         [&](tt::tt_metal::IDevice* src_device, tt::tt_metal::IDevice* dest_device, size_t min_link_count) {
             const auto& src_device_sockets = src_device->get_ethernet_sockets(dest_device->id());
             const auto& dest_device_sockets = dest_device->get_ethernet_sockets(src_device->id());
-            if (src_device_sockets.size() > 0) {
+            if (!src_device_sockets.empty()) {
                 min_link_count = std::min(min_link_count, src_device_sockets.size());
             }
-            if (src_device_sockets.size() > 0) {
+            if (!src_device_sockets.empty()) {
                 min_link_count = std::min(min_link_count, dest_device_sockets.size());
             }
             return min_link_count;
@@ -351,7 +351,7 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
         // re-order the connected_sockets based on virtual coords
         auto reordered_connected_sockets = reorder_connected_sockets(local_device, connected_sockets);
 
-        TT_FATAL(edm_builders.size() == 0, "EDM builders already exist for this device");
+        TT_FATAL(edm_builders.empty(), "EDM builders already exist for this device");
         edm_builders.clear();
         for (const auto& core : reordered_connected_sockets) {
             if (!local_device->is_active_ethernet_core(core, true)) {
@@ -418,7 +418,7 @@ SenderWorkerAdapterSpec EdmLineFabricOpInterface::uniquely_connect_worker(
     const auto next_link = link_count_map[device->id()];
     link_count_map[device->id()] = (next_link + 1) % edm_builders.size();
 
-    TT_FATAL(edm_builders.size() > 0, "No EDM builders found for device {}", device->id());
+    TT_FATAL(!edm_builders.empty(), "No EDM builders found for device {}", device->id());
     TT_FATAL(
         next_link < edm_builders.size(), "Next link index {} is out of bounds for device {}", next_link, device->id());
     return edm_builders.at(next_link).build_connection_to_worker_channel();
@@ -523,7 +523,7 @@ EdmLineFabricOpInterface::generate_ordered_termination_info_farthest_to_nearest(
         tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes +
         sizeof(tt::tt_fabric::PacketHeader);
     static const auto config = tt::tt_fabric::FabricEriscDatamoverConfig(edm_buffer_size);
-    TT_ASSERT(device_sequence.size() > 0);
+    TT_ASSERT(!device_sequence.empty());
     const size_t num_hops = device_sequence.size() - 1;
     TT_ASSERT(num_hops > 0);
     std::vector<tt::tt_fabric::edm_termination_info_t> edm_termination_infos;

@@ -11,7 +11,7 @@ import traceback
 import pytest
 
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
-from models.utility_functions import torch_random
+from models.common.utility_functions import torch_random
 
 TIMEOUT = 15
 TILE_HEIGHT = TILE_WIDTH = 32

@@ -10,8 +10,6 @@
 
 namespace ckernel {
 
-// New LLK SFPU APIs
-
 template <bool APPROXIMATE, bool legacy_compat>
 inline void llk_math_eltwise_unary_sfpu_rsqrt_init() {
     llk_math_eltwise_unary_sfpu_init<SfpuType::rsqrt, APPROXIMATE>(sfpu::rsqrt_init<APPROXIMATE, legacy_compat>);

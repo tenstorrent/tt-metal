@@ -5,14 +5,6 @@
 import ttnn
 from models.demos.yolov6l.tt.common import Yolov6l_Conv2D
 
-try:
-    from tracy import signpost
-
-    use_signpost = True
-
-except ModuleNotFoundError:
-    use_signpost = False
-
 
 class TtBottleRep:
     def __init__(self, device, parameters, model_params, shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED):
@@ -36,8 +28,6 @@ class TtBottleRep:
         )
 
     def __call__(self, x):
-        if use_signpost:
-            signpost(header="TtBottleRep Start")
         x_conv1 = self.cv1(x)
         x_conv2, out_h, out_w = self.cv2(x_conv1)
 
@@ -56,6 +46,4 @@ class TtBottleRep:
 
         ttnn.deallocate(x_conv2)
         ttnn.deallocate(x)
-        if use_signpost:
-            signpost(header="TtBottleRep End")
         return output, out_h, out_w

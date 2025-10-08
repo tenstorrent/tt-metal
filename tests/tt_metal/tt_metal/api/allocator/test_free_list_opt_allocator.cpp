@@ -3,12 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
+#include <gmock/gmock.h>
 #include <stddef.h>
 #include <optional>
 #include <utility>
 #include <vector>
 
-#include <tt-metalium/allocator_types.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include "tt_metal/impl/allocator/algorithms/free_list_opt.hpp"
 
@@ -344,4 +344,133 @@ TEST(FreeListOptTest, FirstFitAllocateAtAddressInteractions) {
     auto b = allocator.allocate(1_KiB);
     ASSERT_TRUE(b.has_value());
     ASSERT_EQ(b.value(), 1_KiB);
+}
+
+TEST(FreeListOptTest, ReallocateAtSameAddressWithAllocateAtAddress) {
+    auto allocator = tt::tt_metal::allocator::FreeListOpt(1_GiB, 0, 1_KiB, 1_KiB);
+
+    /*
+     * Any non-zero address stress tests necessary guard against stale metablocks in allocate_at_address impl:
+     * 1. Allocate, then deallocate results in two block_addresses_
+          * If address is 0, then first block_address_ is the fully merged and alive metablock
+          * If address is non-zero, then first block_address_ is the stale (previously allocated) metablock
+     * 2. segregated_list will fail to find the reallocated address if the stale metablock is not skipped
+          * You can build in Debug mode or switch to TT_FATAL for this assert:
+            TT_FATAL(it != segregated_list.end(), "Block not found in size segregated list");
+    */
+    const size_t alloc_address = 1_KiB;
+
+    // Allocate with allocate_at_address
+    auto a = allocator.allocate_at_address(alloc_address, 1_KiB);
+    ASSERT_THAT(a, ::testing::Optional(alloc_address));
+
+    allocator.deallocate(a.value());
+
+    // Try to reallocate at the same address
+    auto a_realloc = allocator.allocate_at_address(alloc_address, 1_KiB);
+    ASSERT_THAT(a_realloc, ::testing::Optional(alloc_address));
+}
+
+TEST(FreeListOptTest, AllocatedAddresses) {
+    auto allocator = tt::tt_metal::allocator::FreeListOpt(1_GiB, 0, 1_KiB, 1_KiB);
+
+    // Check that allocated addresses is empty
+    auto empty_allocated_addresses = allocator.allocated_addresses();
+    ASSERT_TRUE(empty_allocated_addresses.empty());
+
+    // Allocate some blocks and validate allocated addresses
+    auto a = allocator.allocate(512_KiB, /*bottom_up=*/false);
+    ASSERT_THAT(a, ::testing::Optional(1_GiB - 512_KiB));
+
+    auto b = allocator.allocate(2_KiB);
+    ASSERT_THAT(b, ::testing::Optional(0));
+
+    // Unaligned size should be aligned to the next multiple of 1_KiB
+    auto c = allocator.allocate(500);
+    ASSERT_THAT(c, ::testing::Optional(2_KiB));
+
+    auto allocated_addresses = allocator.allocated_addresses();
+    ASSERT_EQ(allocated_addresses.size(), 3);
+
+    // Allocated addresses are not sorted by start address; in this case, it should be in order of: a, b, c
+    ASSERT_EQ(allocated_addresses[0], (std::pair<tt::tt_metal::DeviceAddr, tt::tt_metal::DeviceAddr>{1_GiB - 512_KiB, 1_GiB}));
+    ASSERT_EQ(allocated_addresses[1], (std::pair<tt::tt_metal::DeviceAddr, tt::tt_metal::DeviceAddr>{0, 2_KiB}));
+    ASSERT_EQ(allocated_addresses[2], (std::pair<tt::tt_metal::DeviceAddr, tt::tt_metal::DeviceAddr>{2_KiB, 3_KiB}));
+
+    /*********************************************************
+     * Check allocated_addresses is correct after other APIs *
+     *********************************************************/
+    // Deallocate first block
+    allocator.deallocate(a.value());
+    auto after_free = allocator.allocated_addresses();
+    ASSERT_EQ(after_free.size(), 2);
+    ASSERT_EQ(after_free[0], (std::pair<tt::tt_metal::DeviceAddr, tt::tt_metal::DeviceAddr>{0_KiB, 2_KiB}));
+    ASSERT_EQ(after_free[1], (std::pair<tt::tt_metal::DeviceAddr, tt::tt_metal::DeviceAddr>{2_KiB, 3_KiB}));
+
+    // Clear -> empty again
+    allocator.clear();
+    auto after_clear = allocator.allocated_addresses();
+    ASSERT_TRUE(after_clear.empty());
+
+    // Allocate from top to leave space at bottom, then shrink and reset
+    allocator.allocate(1_KiB, /*bottom_up=*/false);
+    auto after_top = allocator.allocated_addresses();
+    ASSERT_EQ(after_top.size(), 1);
+    ASSERT_EQ(after_top[0], (std::pair<tt::tt_metal::DeviceAddr, tt::tt_metal::DeviceAddr>{1_GiB - 1_KiB, 1_GiB}));
+
+    // Shrink from bottom (should not affect allocated block near top)
+    allocator.shrink_size(1_KiB);
+    auto after_shrink = allocator.allocated_addresses();
+    ASSERT_EQ(after_shrink, after_top);
+
+    // Reset size back
+    allocator.reset_size();
+    auto after_reset = allocator.allocated_addresses();
+    ASSERT_EQ(after_reset, after_top);
+}
+
+TEST(FreeListOptTest, AddressesAPIWithNonzeroOffset) {
+    // Test APIs that expose addresses as inputs/outputs correctly expose absolute addresses with offset added
+    const size_t offset = 2_KiB;
+    const size_t alloc_size = 1_GiB;
+    auto allocator = tt::tt_metal::allocator::FreeListOpt(alloc_size, offset, 1_KiB, 1_KiB);
+
+    auto available_addresses = allocator.available_addresses(1_KiB);
+    ASSERT_EQ(available_addresses.size(), 1);
+    ASSERT_EQ(available_addresses[0].first, offset);
+    ASSERT_EQ(available_addresses[0].second, alloc_size + offset);
+
+    // Allocate a block with allocate_at_address
+    // The way offsets are used is essentially to manually block off some lower region of address space
+    // So we convert absolute addresses to local allocator address by subtracting the offset
+    // This means, in practice, we should only be allocating above the offset; otherwise UB
+    auto a = allocator.allocate_at_address(offset, 3_KiB);
+    // This assert is not that interesting; it will always return input absolute address
+    ASSERT_THAT(a, ::testing::Optional(offset));
+
+    auto allocated_addresses = allocator.allocated_addresses();
+    ASSERT_EQ(allocated_addresses.size(), 1);
+    ASSERT_EQ(allocated_addresses[0].first, offset);
+    ASSERT_EQ(allocated_addresses[0].second, 3_KiB + offset);
+
+    available_addresses = allocator.available_addresses(1_KiB);
+    ASSERT_EQ(available_addresses.size(), 1);
+    ASSERT_EQ(available_addresses[0].first, 3_KiB + offset);
+    ASSERT_EQ(available_addresses[0].second, alloc_size + offset);
+
+    // Allocate another block above using allocate
+    auto b = allocator.allocate(2_KiB, /*bottom_up=*/false);
+    ASSERT_THAT(b, ::testing::Optional(alloc_size - 2_KiB + offset));
+
+    allocated_addresses = allocator.allocated_addresses();
+    ASSERT_EQ(allocated_addresses.size(), 2);
+    ASSERT_EQ(allocated_addresses[0].first, offset);
+    ASSERT_EQ(allocated_addresses[0].second, 3_KiB + offset);
+    ASSERT_EQ(allocated_addresses[1].first, alloc_size - 2_KiB + offset);
+    ASSERT_EQ(allocated_addresses[1].second, alloc_size + offset);
+
+    available_addresses = allocator.available_addresses(1_KiB);
+    ASSERT_EQ(available_addresses.size(), 1);
+    ASSERT_EQ(available_addresses[0].first, 3_KiB + offset);
+    ASSERT_EQ(available_addresses[0].second, alloc_size - 2_KiB + offset);
 }

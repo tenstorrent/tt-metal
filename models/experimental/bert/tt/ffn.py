@@ -10,7 +10,7 @@ from transformers import BertForQuestionAnswering
 import ttnn
 from tt_lib.utils import pad_activation, pad_weight
 from models.experimental.bert.fused_ops.linear import Linear as TtLinear
-from models.utility_functions import comp_pcc, comp_allclose
+from models.common.utility_functions import comp_pcc, comp_allclose
 
 
 def feed_forward(ffn_dim, hidden_dim, ff1_weighta, ff1_biasa, ff2_weighta, ff2_biasa, device):

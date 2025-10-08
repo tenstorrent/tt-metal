@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -135,8 +135,8 @@ RMSNormForwardProgramFactory::cached_program_t RMSNormForwardProgramFactory::cre
     tt::DataFormat input_data_format = datatype_to_dataformat_converter(input.dtype());
     TT_FATAL(input_data_format == tt::DataFormat::Float16_b, "Input data format must be Float16_b");
 
-    uint32_t bfloat16_single_tile_size_bytes = tt::tt_metal::detail::TileSize(tt::DataFormat::Float16_b);
-    uint32_t float32_single_tile_size_bytes = tt::tt_metal::detail::TileSize(tt::DataFormat::Float32);
+    uint32_t bfloat16_single_tile_size_bytes = tt::tile_size(tt::DataFormat::Float16_b);
+    uint32_t float32_single_tile_size_bytes = tt::tile_size(tt::DataFormat::Float32);
 
     auto padded_tensor_shape = input.padded_shape();
     auto padded_tensor_volume = input.physical_volume();

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -75,7 +75,7 @@ void set_mcast_header(
         s_hops = 0;
     }
 
-    fabric_set_mcast_route((LowLatencyMeshPacketHeader*)packet_header, 0, 0, e_hops, w_hops, n_hops, s_hops);
+    fabric_set_mcast_route((HybridMeshPacketHeader*)packet_header, 0, 0, e_hops, w_hops, n_hops, s_hops);
 }
 
 inline void teardown_connection(tt::tt_fabric::WorkerToFabricEdmSender& connection) { connection.close(); }

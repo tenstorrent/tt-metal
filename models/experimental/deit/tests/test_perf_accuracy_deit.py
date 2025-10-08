@@ -14,14 +14,14 @@ from transformers import AutoImageProcessor, DeiTForImageClassificationWithTeach
 from models.experimental.deit.tt.deit_for_image_classification_with_teacher import (
     deit_for_image_classification_with_teacher,
 )
-from models.utility_functions import (
+from models.common.utility_functions import (
     disable_persistent_kernel_cache,
     enable_persistent_kernel_cache,
     torch_to_tt_tensor_rm,
     profiler,
 )
 from models.perf.perf_utils import prep_perf_report
-from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor
+from models.common.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor
 from models.experimental.deit.tests.demo_utils import get_data
 
 

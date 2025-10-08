@@ -179,7 +179,7 @@ public:
         uint32_t bank_id = flattened_shard_id % dspec().num_banks();
         uint32_t bank_shard_id = flattened_shard_id / dspec().num_banks();
 
-        uint32_t bank_page_offset = bank_shard_id * dspec().shard_volume() + page_offset_within_shard;
+        uint32_t bank_page_offset = (bank_shard_id * dspec().shard_volume()) + page_offset_within_shard;
 
         return {bank_id, bank_page_offset};
     }
@@ -218,14 +218,21 @@ public:
 
     // Returns a proxy for shard pages iterator
     tensor_accessor::ShardPages<TensorAccessor> shard_pages(
-        uint32_t shard_id, uint32_t start_page_offset = 0, uint8_t noc = noc_index) const {
+        uint32_t shard_id,
+        uint32_t start_page_offset = 0,
+        uint32_t end_page_offset = 0,
+        uint8_t noc = noc_index) const {
         static_assert(DSpec::has_static_rank, "ShardPages is only supported for static rank");
-        return tensor_accessor::ShardPages<TensorAccessor>(*this, shard_id, start_page_offset, noc);
+        uint32_t actual_end_page_offset = (end_page_offset == 0) ? dspec().shard_volume() : end_page_offset;
+        return tensor_accessor::ShardPages<TensorAccessor>(
+            *this, shard_id, start_page_offset, actual_end_page_offset, noc);
     }
 
     // Returns a proxy for pages iterator (iterates over all pages in the tensor)
-    tensor_accessor::Pages<TensorAccessor> pages(uint32_t start_page_id = 0, uint8_t noc = noc_index) const {
-        return tensor_accessor::Pages<TensorAccessor>(*this, start_page_id, noc);
+    tensor_accessor::Pages<TensorAccessor> pages(
+        uint32_t start_page_id = 0, uint32_t end_page_id = 0, uint8_t noc = noc_index) const {
+        uint32_t actual_end_page_id = (end_page_id == 0) ? dspec().tensor_volume() : end_page_id;
+        return tensor_accessor::Pages<TensorAccessor>(*this, start_page_id, actual_end_page_id, noc);
     }
 
 private:
@@ -238,7 +245,7 @@ private:
         auto bank_y = get_bank_y(packed_xy_coords[page_mapping.bank_id]);
         auto bank_start = DSpec::is_dram ? tensor_accessor::get_dram_bank_base_offset(bank_x, noc)
                                          : NOC_XY_ADDR(DYNAMIC_NOC_X(noc, bank_x), DYNAMIC_NOC_Y(noc, bank_y), 0);
-        return bank_start + bank_base_address + page_mapping.bank_page_offset * page_size + offset;
+        return bank_start + bank_base_address + (page_mapping.bank_page_offset * page_size) + offset;
     }
 
     PageMapping get_bank_and_offset_from_page_id(uint32_t page_id) const {
@@ -257,7 +264,7 @@ private:
         size_t bank_id = flattened_shard_id % dspec().num_banks();
         size_t bank_shard_id = flattened_shard_id / dspec().num_banks();
 
-        size_t bank_page_offset = bank_shard_id * dspec().shard_volume() + page_offset_within_shard;
+        size_t bank_page_offset = (bank_shard_id * dspec().shard_volume()) + page_offset_within_shard;
 
         return {bank_id, bank_page_offset};
     }
@@ -273,7 +280,8 @@ public:
     const uint32_t page_size = 0;
 
     friend class tensor_accessor::ShardPagesAddressIterator<TensorAccessor>;
-    friend class tensor_accessor::PagesAddressIterator<TensorAccessor>;
+    friend class tensor_accessor::PagesAddressIteratorSharded<TensorAccessor>;
+    friend class tensor_accessor::PagesAddressIteratorInterleaved<TensorAccessor>;
 };
 
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
@@ -348,7 +356,10 @@ struct TensorAccessor<tensor_accessor::DistributionSpec<
 
     // Returns a proxy for shard pages iterator
     tensor_accessor::ShardPages<TensorAccessor> shard_pages(
-        uint32_t shard_id, uint32_t start_page_offset = 0, uint8_t noc = noc_index) const {
+        uint32_t shard_id,
+        uint32_t start_page_offset = 0,
+        uint32_t end_page_offset = 0,
+        uint8_t noc = noc_index) const {
         static_assert(
             tensor_accessor::detail::always_false_v<TensorAccessor>,
             "TensorAccessor::shard_pages is not supported by the interleaved tensor accessor");
@@ -356,11 +367,11 @@ struct TensorAccessor<tensor_accessor::DistributionSpec<
     }
 
     // Returns a proxy for pages iterator (iterates over all pages in the tensor)
-    tensor_accessor::Pages<TensorAccessor> pages(uint32_t start_page_id = 0, uint8_t noc = noc_index) const {
-        static_assert(
-            tensor_accessor::detail::always_false_v<TensorAccessor>,
-            "TensorAccessor::pages is not supported by the interleaved tensor accessor");
-        return {};
+    // For interleaved tensors, start_page_id and end_page_id must be provided since the accessor doesn't know tensor
+    // volume
+    tensor_accessor::Pages<TensorAccessor> pages(
+        uint32_t start_page_id, uint32_t end_page_id, uint8_t noc = noc_index) const {
+        return tensor_accessor::Pages<TensorAccessor>(*this, start_page_id, end_page_id, noc);
     }
 };
 #endif

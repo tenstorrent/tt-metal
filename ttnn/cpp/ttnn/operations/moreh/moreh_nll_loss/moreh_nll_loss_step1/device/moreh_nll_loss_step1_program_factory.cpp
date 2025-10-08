@@ -56,9 +56,9 @@ MorehNllLossStep1DeviceOperation::Factory::cached_program_t MorehNllLossStep1Dev
     const auto data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
     const auto intermed_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format;
 
-    const auto target_tile_size = tt_metal::detail::TileSize(target_data_format);
-    const auto data_tile_size = tt_metal::detail::TileSize(data_format);
-    const auto intermed_tile_size = tt_metal::detail::TileSize(intermed_data_format);
+    const auto target_tile_size = tt::tile_size(target_data_format);
+    const auto data_tile_size = tt::tile_size(data_format);
+    const auto intermed_tile_size = tt::tile_size(intermed_data_format);
 
     const uint32_t available_L1 =
         device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(HalMemType::L1);
@@ -67,8 +67,8 @@ MorehNllLossStep1DeviceOperation::Factory::cached_program_t MorehNllLossStep1Dev
     uint32_t weight_num_tile = weight_has_value ? div_up(channel_size, tt::constants::TILE_WIDTH) : 0;
     uint32_t intermed_num_tile = 1;
     uint32_t output_num_tile = 1;
-    uint32_t cb_usage = target_num_tile * target_tile_size + weight_num_tile * data_tile_size +
-                        intermed_num_tile * intermed_tile_size + output_num_tile * data_tile_size;
+    uint32_t cb_usage = (target_num_tile * target_tile_size) + (weight_num_tile * data_tile_size) +
+                        (intermed_num_tile * intermed_tile_size) + (output_num_tile * data_tile_size);
 
     const bool use_large_algorithm = cb_usage >= available_L1;
 

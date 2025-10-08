@@ -7,7 +7,7 @@ if [[ -z "$TT_METAL_HOME" ]]; then
   exit 1
 fi
 
-PROFILER_SCRIPTS_ROOT=$TT_METAL_HOME/tt_metal/tools/profiler
+PROFILER_SCRIPTS_ROOT=$TT_METAL_HOME/tools/tracy
 PROFILER_TEST_SCRIPTS_ROOT=$TT_METAL_HOME/tests/tt_metal/tools/profiler
 PROFILER_ARTIFACTS_DIR=$TT_METAL_HOME/generated/profiler
 if [[ "$TT_METAL_PROFILER_DIR" ]]; then

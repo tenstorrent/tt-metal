@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024-2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024-2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -19,18 +19,10 @@ using MeshEvent = tt::tt_metal::distributed::MeshEvent;
 
 namespace events {
 
-// Single Device APIs
-std::shared_ptr<tt::tt_metal::Event> record_event(
-    tt::tt_metal::IDevice* device, QueueId cq_id, const std::vector<tt::tt_metal::SubDeviceId>& sub_device_ids = {});
-void wait_for_event(QueueId cq_id, const std::shared_ptr<tt::tt_metal::Event>& event);
-
 // Multi Device APIs
 struct MultiDeviceEvent {
     std::vector<std::shared_ptr<tt::tt_metal::Event>> events;
 };
-MultiDeviceEvent record_event(
-    MeshDevice* mesh_device, QueueId cq_id, const std::vector<tt::tt_metal::SubDeviceId>& sub_device_ids = {});
-void wait_for_event(QueueId cq_id, const MultiDeviceEvent& event);
 
 MeshEvent record_mesh_event(
     MeshDevice* mesh_device,

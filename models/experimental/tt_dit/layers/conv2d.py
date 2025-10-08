@@ -161,7 +161,7 @@ class Conv2d:
         b, h, w, c = x.shape
         slice_config = ttnn.Conv2dSliceConfig(
             num_slices=self.slice_params[tuple(self.mesh_device.shape)][(h, w, self.in_channels, self.out_channels)],
-            slice_type=ttnn.Conv2dSliceWidth,
+            slice_type=ttnn.Conv2dDRAMSliceWidth,
         )
 
         output_tensor, [_out_height, _out_width] = ttnn.conv2d(

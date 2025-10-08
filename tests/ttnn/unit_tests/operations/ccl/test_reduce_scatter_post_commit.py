@@ -8,7 +8,6 @@ from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 from tests.tests_common.skip_reasons import LEGACY_CCL_SKIP
-from models.utility_functions import skip_for_grayskull
 
 
 def is_unsupported_case(input_shape, dim, math_op, mem_config, num_devices, num_links, input_dtype, layout):
@@ -193,7 +192,6 @@ def run_reduce_scatter_test(
 
 
 # ~2:45 extra time in the current state
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.timeout(120)
 @pytest.mark.parametrize(
     "num_devices, num_links",
@@ -257,7 +255,6 @@ def test_ring_reduce_scatter_post_commit(
 
 
 # ~2:45 extra time in the current state
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.timeout(120)
 @pytest.mark.parametrize(
     "num_devices, num_links",
@@ -318,7 +315,6 @@ def test_line_reduce_scatter_post_commit(
 
 
 # ~2:45 extra time in the current state
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.timeout(120)
 @pytest.mark.parametrize(
     "num_devices, num_links",
@@ -514,7 +510,6 @@ def run_reduce_scatter_sharded_test(
     assert not mismatch, f"{i} FAILED: {output}"
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.timeout(120)
 @pytest.mark.parametrize(
     "num_devices, num_links",
@@ -602,7 +597,6 @@ def test_width_sharded_reduce_scatter_post_commit(
     )
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.timeout(120)
 @pytest.mark.parametrize(
     "num_devices, num_links",
@@ -688,7 +682,6 @@ def test_width_sharded_reduce_scatter_post_commit_4chip(
     )
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.skip("Hangs")
 @pytest.mark.timeout(120)
 @pytest.mark.parametrize(
@@ -758,7 +751,6 @@ def test_height_sharded_reduce_scatter_post_commit(
     )
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.timeout(120)
 @pytest.mark.parametrize(
     "num_devices, num_links",

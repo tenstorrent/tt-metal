@@ -10,11 +10,11 @@ from tqdm import tqdm
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
+from models.common.utility_functions import nearest_32
 from models.tt_transformers.tt.decoder import TransformerBlock
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
 from models.tt_transformers.tt.multimodal.llama_cross_block import TtLlamaCrossAttentionTransformerBlock
 from models.tt_transformers.tt.rope import RotarySetup
-from models.utility_functions import nearest_32
 
 
 def _get_full_row_masked_out_mask(
@@ -61,7 +61,11 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
         self.tok_embeddings = torch.nn.Embedding(configuration.vocab_size, configuration.dim)
         tok_embedding_prefix = f"{state_dict_prefix}tok_embeddings."
         self.tok_embeddings.load_state_dict(
-            {k[len(tok_embedding_prefix) :]: v for k, v in state_dict.items() if k.startswith(tok_embedding_prefix)}
+            {
+                k[len(tok_embedding_prefix) :]: v[: configuration.vocab_size]
+                for k, v in state_dict.items()
+                if k.startswith(tok_embedding_prefix)
+            }
         )
 
         self.norm = DistributedNorm(
@@ -114,9 +118,17 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
             configuration.dim,
         )
         learn_embedding_prefix = f"{state_dict_prefix}learnable_embedding."
-        self.learnable_embedding.load_state_dict(
-            {k[len(learn_embedding_prefix) :]: v for k, v in state_dict.items() if k.startswith(learn_embedding_prefix)}
-        )
+        emb_state_dict = {
+            k[len(learn_embedding_prefix) :]: v for k, v in state_dict.items() if k.startswith(learn_embedding_prefix)
+        }
+        if len(emb_state_dict) == 0:
+            # HF weights combines tok_embedding and learn_embedding into single weights
+            emb_state_dict = {
+                k[len(tok_embedding_prefix) :]: v[-8:]
+                for k, v in state_dict.items()
+                if k.startswith(tok_embedding_prefix)
+            }
+        self.learnable_embedding.load_state_dict(emb_state_dict)
         self.num_frozen_embeddings = self.tok_embeddings.num_embeddings
         self._thresh = self.num_frozen_embeddings - 1
 

@@ -8,7 +8,6 @@ from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from tests.tests_common.skip_reasons import LEGACY_CCL_SKIP
-from models.utility_functions import skip_for_grayskull
 from ttnn import ShardTensor2dMesh, ConcatMesh2dToTensor
 
 
@@ -347,7 +346,6 @@ def run_line_reduce_scatter_on_TG_with_mesh_tensor_along_rows(
 
 
 # Enumerate the post-commit cases explicitly
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "num_devices, num_links, per_chip_output_shape, dim, layout",
     [
@@ -409,7 +407,6 @@ def test_line_reduce_scatter_on_TG_rows_post_commit(
     )
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "num_devices, num_links, per_chip_output_shape, dim, layout",
     [

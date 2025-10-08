@@ -8,8 +8,6 @@ from enum import Enum
 from types import NoneType
 from typing import Any, overload
 
-from loguru import logger
-
 import ttnn
 from models.demos.deepseek_v3.utils.config_dataclass import FromWeightConfig, MeshDeviceStub, OpConfigBase, SavedWeight
 
@@ -18,7 +16,9 @@ MESH_DEVICE_STATE_DICT_KEY = "mesh_device"
 WeightConfig = (
     dict[str, "WeightConfig | SavedWeight | None"]
     | list["WeightConfig | SavedWeight | None"]
-    | tuple["WeightConfig | SavedWeight | None"]  # TODO: bring regular tensor saving back once Issue #26763 is resolved
+    | tuple[
+        "WeightConfig | SavedWeight | None", ...
+    ]  # TODO: bring regular tensor saving back once Issue #26763 is resolved
 )
 
 _PRIMITIVE_COPYABLE_TYPES = bool | int | float | complex | str | bytes | None | Enum
@@ -96,8 +96,6 @@ def create_run_config(model_config, weight_config, *model_states):
         mb_mesh_device=None,
     )
 
-    logger.info(f"run config: {_convert_run_config_to_pretty_print(run_config)}")
-
     return run_config
 
 
@@ -126,9 +124,12 @@ def _merge_model_config_state_items(model_config_item: Any, state_item: Any, mb_
 
 
 def _merge_run_config(model_state_config_item: Any, weight_config_item: Any, _: ttnn.Device | None) -> Any:
-    if isinstance(model_state_config_item, FromWeightConfig) and isinstance(
-        weight_config_item, SavedWeight
+    if isinstance(
+        model_state_config_item, FromWeightConfig
     ):  # TODO: bring regular tensor saving back once Issue #26763 is resolved
+        assert isinstance(
+            weight_config_item, SavedWeight
+        ), "Expected a SavedWeight in the weight config for a FromWeightConfig in the model state config"
         return load_weight(weight_config_item, model_state_config_item.mesh_device)
 
     if weight_config_item is None:
@@ -347,7 +348,6 @@ def load_weight(saved_weight: SavedWeight, device: ttnn.Device) -> ttnn.Tensor:
     """
     Load a weight tensor from a SavedWeight object to a given mesh device.
     """
-
     return ttnn.load_tensor(
         saved_weight.path,
     ).to(

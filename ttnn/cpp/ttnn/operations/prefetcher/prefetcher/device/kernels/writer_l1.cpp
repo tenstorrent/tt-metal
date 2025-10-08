@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -73,6 +73,8 @@ void kernel_main() {
     }
 
     experimental::update_remote_cb_config_in_l1(remote_cb_id);
+
+    noc_async_atomic_barrier();
 
     // reset noc counters here because we didn't properly update ptrs for better perf.
     if (noc_mode == DM_DEDICATED_NOC) {

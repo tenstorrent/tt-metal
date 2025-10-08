@@ -55,7 +55,6 @@ jobs:
               version="$baseVersion-rc$newNumber"
             elif [ "$tagType" = "dev" ]; then
               dateInt=$(date +%Y%m%d)
-              gitHash=$(git rev-parse --short=8 HEAD)
               version="$baseVersion-dev$dateInt"
             else
               version="$baseVersion"
@@ -123,7 +122,7 @@ jobs:
                 await github.rest.git.updateRef({
                   owner: owner,
                   repo: repo,
-                  ref: `refs/tags/${version}`,
+                  ref: `tags/${version}`,
                   sha: sha,
                   force: true,
                 });

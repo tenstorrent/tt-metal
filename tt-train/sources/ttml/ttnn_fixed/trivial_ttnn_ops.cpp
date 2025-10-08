@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -28,7 +28,7 @@ tt::tt_metal::Tensor log_softmax(const tt::tt_metal::Tensor& t, int dim) {
     auto t_sub_max_exp = ttnn::exp(t_sub_max);
     auto t_sum_over_dim = sum_over_dim(t_sub_max_exp, dim);
 
-    auto log_t_sum_over_dim = ttnn::log(t_sum_over_dim);
+    auto log_t_sum_over_dim = ttnn::log(t_sum_over_dim, /*fast_and_approximate_mode=*/true);
     return ttnn::subtract(t_sub_max, log_t_sum_over_dim);
 }
 
@@ -44,7 +44,7 @@ tt::tt_metal::Tensor softmax(const tt::tt_metal::Tensor& t, int dim) {
 }
 
 tt::tt_metal::Tensor divide(const tt::tt_metal::Tensor& a, const tt::tt_metal::Tensor& b) {
-    auto inv_b = ttnn::reciprocal(ttnn::DefaultQueueId, b);
+    auto inv_b = ttnn::reciprocal(b);
     return ttnn::multiply(a, inv_b);
 }
 
@@ -74,6 +74,41 @@ tt::tt_metal::Tensor sum_moreh(const tt::tt_metal::Tensor& t, int dim, bool keep
 }
 tt::tt_metal::Tensor sum_ttnn(const tt::tt_metal::Tensor& t, int dim, bool keep_dim) {
     return ttnn::sum(t, dim, keep_dim, std::nullopt, core::ComputeKernelConfig::precise());
+}
+
+tt::tt_metal::Tensor sample(
+    const tt::tt_metal::Tensor& t,
+    float temperature,
+    uint32_t seed,
+    std::optional<tt::tt_metal::Tensor> logits_padding_mask) {
+    auto* device = &ttml::autograd::ctx().get_device();
+
+    ttnn::Tensor out = t;
+
+    if (temperature > 0.0F) {
+        auto rand = ttnn::rand(
+            /* size */ out.logical_shape(),
+            /* device */ *device,
+            /* dtype */ out.dtype(),
+            /* layout */ out.layout(),
+            /* memory_config */ ttnn::types::DRAM_MEMORY_CONFIG,
+            /* from */ 0.00001F,
+            /* to */ 0.99F,
+            /* seed */ seed);
+
+        // Gumbel sampling trick: -log(-log(U)), where U ~ Uniform(0, 1)
+        // See: https://en.wikipedia.org/wiki/Gumbel_distribution#Random_variate_generation
+        rand = ttnn::neg(ttnn::log(ttnn::neg(ttnn::log(rand))));
+        out = ttnn::mul_sfpu(out, 1.0F / temperature);
+        out = ttnn::add(out, rand);
+    }
+
+    if (logits_padding_mask.has_value()) {
+        // subtract a large number from the logits where the padding mask is set
+        out = ttnn::subtract(out, logits_padding_mask.value());
+    }
+
+    return ttnn::argmax(ttnn::untilize(out), 3, true, std::nullopt, true);
 }
 
 tt::tt_metal::Tensor to_l1_interleaved(const tt::tt_metal::Tensor& t) {

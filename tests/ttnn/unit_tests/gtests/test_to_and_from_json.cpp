@@ -42,7 +42,7 @@ INSTANTIATE_TEST_SUITE_P(
                 ttnn::BufferType::DRAM
             }
         },
-        // Physical shard mode
+        // Sharded
         TestMemoryConfigParams{
             ttnn::MemoryConfig{
                 ttnn::TensorMemoryLayout::WIDTH_SHARDED,
@@ -51,32 +51,6 @@ INSTANTIATE_TEST_SUITE_P(
                     CoreRangeSet{std::set<CoreRange>{CoreRange{CoreCoord{1, 2}, CoreCoord{7, 4}}}},
                     {32, 128},
                     tt::tt_metal::ShardOrientation::ROW_MAJOR
-                )
-            }
-        },
-        // Logical shard mode
-        TestMemoryConfigParams{
-            ttnn::MemoryConfig{
-                ttnn::TensorMemoryLayout::BLOCK_SHARDED,
-                ttnn::BufferType::DRAM,
-                tt::tt_metal::ShardSpec(
-                    CoreRangeSet{std::set<CoreRange>{CoreRange{CoreCoord{0, 0}, CoreCoord{7, 4}}}},
-                    {5, 6},
-                    tt::tt_metal::ShardOrientation::ROW_MAJOR,
-                    tt::tt_metal::ShardMode::LOGICAL
-                )
-            }
-        },
-        // Logical shard mode + custom physical shard shape
-        TestMemoryConfigParams{
-            ttnn::MemoryConfig{
-                ttnn::TensorMemoryLayout::HEIGHT_SHARDED,
-                ttnn::BufferType::L1,
-                tt::tt_metal::ShardSpec(
-                    CoreRangeSet{std::set<CoreRange>{CoreRange{CoreCoord{0, 0}, CoreCoord{7, 7}}}},
-                    {3, 4},
-                    {32, 32},
-                    tt::tt_metal::ShardOrientation::COL_MAJOR
                 )
             }
         }

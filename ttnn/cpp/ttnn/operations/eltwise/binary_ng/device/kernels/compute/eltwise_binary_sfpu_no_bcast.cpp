@@ -19,6 +19,7 @@
 #include "compute_kernel_api/gcd.h"
 #include "compute_kernel_api/lcm.h"
 #include "compute_kernel_api/xlogy.h"
+#include "compute_kernel_api/binary_comp.h"
 
 #include "eltwise_utils_common.hpp"
 #include "eltwise_utils_sfpu.hpp"

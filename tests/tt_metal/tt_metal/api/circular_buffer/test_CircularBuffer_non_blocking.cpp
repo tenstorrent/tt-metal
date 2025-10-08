@@ -25,13 +25,7 @@
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
-#include "umd/device/tt_core_coordinates.h"
-
-namespace tt {
-namespace tt_metal {
-class IDevice;
-}  // namespace tt_metal
-}  // namespace tt
+#include <umd/device/types/core_coordinates.hpp>
 
 using namespace tt::tt_metal;
 
@@ -42,7 +36,7 @@ constexpr size_t n_cbs = 32;
 constexpr size_t data_buffer_size = cb_n_pages * cb_n_pages;
 
 std::vector<std::shared_ptr<Buffer>> create_output_buffers(
-    distributed::MeshWorkload& workload, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+    distributed::MeshWorkload& workload, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     auto device = mesh_device->get_devices()[0];
@@ -88,7 +82,7 @@ TEST_F(MeshDeviceFixture, TensixTestCircularBufferNonBlockingAPIs) {
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         distributed::MeshWorkload workload;
         Program program;
-        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+        workload.add_program(device_range, std::move(program));
         auto& program_ = workload.get_programs().at(device_range);
 
         const auto master_semaphore = CreateSemaphore(program_, worker_core, 0, CoreType::WORKER);

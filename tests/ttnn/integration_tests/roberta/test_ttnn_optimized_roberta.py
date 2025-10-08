@@ -12,7 +12,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.demos.bert.tt import ttnn_optimized_bert, ttnn_bert
 from ttnn.model_preprocessing import preprocess_model_parameters
 from transformers import RobertaForQuestionAnswering, RobertaConfig
-from models.utility_functions import skip_for_wormhole_b0, is_grayskull
+from models.common.utility_functions import skip_for_wormhole_b0, is_grayskull
 
 
 def create_position_ids_from_input_ids(input_ids, padding_idx, past_key_values_length=0):

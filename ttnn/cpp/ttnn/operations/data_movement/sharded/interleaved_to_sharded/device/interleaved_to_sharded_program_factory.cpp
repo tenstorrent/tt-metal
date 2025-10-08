@@ -49,8 +49,8 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
     bool is_blackhole = (input.device()->arch() == tt::ARCH::BLACKHOLE);
 
     if (input.layout() == Layout::TILE) {
-        input_unit_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
-        output_unit_size = tt::tt_metal::detail::TileSize(output_cb_data_format);
+        input_unit_size = tt::tile_size(input_cb_data_format);
+        output_unit_size = tt::tile_size(output_cb_data_format);
         TT_FATAL(
             shard_spec.shape[0] % TILE_HEIGHT == 0 && shard_spec.shape[1] % TILE_WIDTH == 0,
             "Shard shape {} must be tile {}x{} sized!",
@@ -333,7 +333,7 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
             if (dst_is_dram) {
                 uint32_t page_id_within_row = curr_idx_w / input_unit_size;
                 uint32_t output_width_in_pages = tt::div_up(num_units_per_row, input_unit_size);
-                uint32_t start_id = curr_idx_h * output_width_in_pages + page_id_within_row;
+                uint32_t start_id = (curr_idx_h * output_width_in_pages) + page_id_within_row;
                 writer_run_time_args = {
                     dst_buffer->address(),
                     shard_height,

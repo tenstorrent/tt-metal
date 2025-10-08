@@ -12,8 +12,6 @@
 namespace tt::tt_metal {
 namespace {
 
-using ::testing::Eq;
-
 TEST(MemoryPinTest, Lifecycle) {
     int inc_count = 0;
     int dec_count = 0;

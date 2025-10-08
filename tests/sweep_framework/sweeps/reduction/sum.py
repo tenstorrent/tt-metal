@@ -13,7 +13,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_f
 from loguru import logger
 
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
-from models.utility_functions import torch_random
+from models.common.utility_functions import torch_random
 from tests.sweep_framework.sweep_utils.reduction_common import run_sum
 
 # Override the default timeout in seconds for hang detection.
@@ -75,6 +75,17 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         return True, "Row major is only supported for fp32 & fp16"
     if not test_vector["keepdim"]:
         return True, "keepdim = false is not supported"
+
+    # Validate dim parameter for duplicate dimensions
+    dim = test_vector["dim"]
+    if isinstance(dim, (list, tuple)):
+        input_shape = test_vector["input_shape"]
+        normalized_dims = []
+        for d in dim:
+            normalized_d = d % len(input_shape)
+            if normalized_d in normalized_dims:
+                return True, f"Duplicate dimension {d} found in dim list"
+            normalized_dims.append(normalized_d)
 
     return False, None
 

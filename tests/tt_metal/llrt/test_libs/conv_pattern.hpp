@@ -5,7 +5,7 @@
 #pragma once
 #include <map>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/constants.hpp>
 using namespace tt::constants;
 class ConvParameters {

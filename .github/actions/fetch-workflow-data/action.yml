@@ -23,6 +23,10 @@ inputs:
   GITHUB_TOKEN:
     description: 'GitHub token for API access'
     required: true
+  test_run_id:
+    description: 'Run ID to use for testing (optional)'
+    required: false
+    default: ''
 
 outputs:
   total-runs:
@@ -31,6 +35,16 @@ outputs:
     description: 'Number of unique workflows found'
   cache-path:
     description: 'Absolute path to the written workflow data JSON file'
+  commits-path:
+    description: 'Absolute path to JSON array of commits on main in the last N days'
+  annotations-root:
+    description: 'Absolute path to directory containing per-run annotations'
+  annotations-index-path:
+    description: 'Absolute path to JSON mapping of run_id -> annotations dir'
+  logs-root:
+    description: 'Absolute path to directory containing downloaded logs per run (subset: failing gtest jobs)'
+  logs-index-path:
+    description: 'Absolute path to JSON mapping of run_id -> logs dir'
 
 runs:
   using: 'node20'

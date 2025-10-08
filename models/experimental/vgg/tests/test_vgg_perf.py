@@ -9,7 +9,7 @@ from torchvision import models
 from loguru import logger
 
 from models.experimental.vgg.tt.vgg import *
-from models.utility_functions import (
+from models.common.utility_functions import (
     profiler,
     enable_persistent_kernel_cache,
     disable_persistent_kernel_cache,

@@ -11,10 +11,14 @@ from transformers import BertForQuestionAnswering
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
+from models.common.utility_functions import (
+    disable_persistent_kernel_cache,
+    enable_persistent_kernel_cache,
+    is_wormhole_b0,
+)
 from models.demos.bert_tiny.tt.bert_tiny import bert_for_question_answering
 from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
 from models.perf.perf_utils import prep_perf_report
-from models.utility_functions import disable_persistent_kernel_cache, enable_persistent_kernel_cache, is_wormhole_b0
 
 
 def get_expected_times(bert_tiny):

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -14,7 +14,6 @@
 
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 
 namespace ttnn::operations::experimental::ternary {
 
@@ -55,7 +54,7 @@ ElementWiseMultiCoreWhereProgram::cached_program_t ElementWiseMultiCoreWhereProg
         return tt::tt_metal::CreateCircularBuffer(program, all_device_cores, cb_config);
     };
 
-    uint32_t single_tile_size = tt_metal::detail::TileSize(dtype);
+    uint32_t single_tile_size = tt::tile_size(dtype);
     /* Use L1 circular buffers to set input and output buffers that the compute engine will use */
     auto condition_cb = tt::CBIndex::c_0;
     auto true_values_cb = tt::CBIndex::c_1;

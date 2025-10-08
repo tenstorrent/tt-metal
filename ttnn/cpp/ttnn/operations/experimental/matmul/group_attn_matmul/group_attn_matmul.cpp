@@ -12,7 +12,6 @@
 namespace ttnn::operations::experimental::matmul {
 
 ttnn::Tensor GroupAttnMatmulOperation::invoke(
-    QueueId queue_id,
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const CoreCoord& compute_with_storage_grid_size,
@@ -69,8 +68,7 @@ ttnn::Tensor GroupAttnMatmulOperation::invoke(
                    kernel_config_val},
                {input_tensor_a, input_tensor_b},
                {},
-               {std::move(optional_output_tensor)},
-               queue_id)
+               {std::move(optional_output_tensor)})
         .at(0);
 }
 

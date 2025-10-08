@@ -9,7 +9,6 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import skip_for_grayskull
 
 
 def run_moe_test(N, C, H, W, k, E, e, dtype, device):
@@ -51,7 +50,6 @@ def run_moe_test(N, C, H, W, k, E, e, dtype, device):
         assert_with_pcc(torch_weights_1SB1, ttnn_weights_1SB1, pcc_values)
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize(
     "dtype",
     (ttnn.bfloat16,),

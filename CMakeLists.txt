@@ -154,7 +154,6 @@ target_link_libraries(
     INTERFACE
         dl
         pthread
-        atomic
         hwloc
         numa
 )
@@ -171,8 +170,6 @@ add_compile_options(
     # Vars that are used only in Asserts will appear as dead stores in builds
     # where the preprocessor has stripped away the assert.
     -Wno-unused-but-set-variable
-    -Wno-unused-function
-    -Wno-unused-variable
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-c++11-narrowing>"
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-deprecated-volatile>"
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-logical-op-parentheses>"
@@ -236,6 +233,11 @@ if(ENABLE_CODE_TIMERS)
     add_compile_definitions(TT_ENABLE_CODE_TIMERS)
 endif()
 include(tracy)
+
+if(ENABLE_TRACY AND TARGET TracyClient)
+    message(STATUS "Adding -Wno-unused-variable to TracyClient")
+    target_compile_options(TracyClient PRIVATE -Wno-unused-variable)
+endif()
 
 add_library(metal_common_pch STATIC)
 add_library(TT::CommonPCH ALIAS metal_common_pch)

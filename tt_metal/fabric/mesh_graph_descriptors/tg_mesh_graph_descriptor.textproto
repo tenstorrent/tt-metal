@@ -1,0 +1,87 @@
+# --- Meshes ---------------------------------------------------------------
+
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 1 ] }
+  host_topology   { dims: [ 1, 1] }
+  channels {
+    count: 4
+    policy: STRICT
+  }
+}
+
+mesh_descriptors {
+  name: "M1"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 4, 8 ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels {
+    count: 4
+    policy: STRICT
+  }
+}
+
+# --- Graphs ---------------------------------------------------------------
+
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 3 } }
+  instances { mesh { mesh_descriptor: "M1" mesh_id: 4 } }
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 device_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M1" mesh_id: 4 device_id: 0 } }
+    channels { count: 1 policy: STRICT }
+    routing_direction : [ S, N ]
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 device_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M1" mesh_id: 4 device_id: 1 } }
+    channels { count: 1 policy: STRICT }
+    routing_direction : [ S, N ]
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 device_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M1" mesh_id: 4 device_id: 2 } }
+    channels { count: 1 policy: STRICT }
+    routing_direction : [ S, N ]
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 device_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M1" mesh_id: 4 device_id: 3 } }
+    channels { count: 1 policy: STRICT }
+    routing_direction : [ S, N ]
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 2 device_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M1" mesh_id: 4 device_id: 4 } }
+    channels { count: 1 policy: STRICT }
+    routing_direction : [ S, N ]
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 2 device_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M1" mesh_id: 4 device_id: 5 } }
+    channels { count: 1 policy: STRICT }
+    routing_direction : [ S, N ]
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 3 device_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M1" mesh_id: 4 device_id: 6 } }
+    channels { count: 1 policy: STRICT }
+    routing_direction : [ S, N ]
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 3 device_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M1" mesh_id: 4 device_id: 7 } }
+    channels { count: 1 policy: STRICT }
+    routing_direction : [ S, N ]
+  }
+}
+
+
+# --- Instantiation ----------------------------------------------------------
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }

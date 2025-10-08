@@ -10,7 +10,7 @@ import torch.nn.functional as F
 import ttnn
 
 from tests.ttnn.utils_for_testing import check_with_pcc
-from models.utility_functions import torch_random
+from models.common.utility_functions import torch_random
 
 
 parameters = {

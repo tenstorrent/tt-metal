@@ -11,7 +11,7 @@ from tests.sweep_framework.sweep_utils.utils import gen_shapes
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
-from models.utility_functions import torch_random
+from models.common.utility_functions import torch_random
 
 # Ref: https://github.com/tenstorrent/pytorch2.0_ttnn/blob/main/docs/operations/aten.eq.Scalar.md
 

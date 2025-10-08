@@ -12,7 +12,7 @@ from models.experimental.yolov3.reference.models.common import (
 from models.experimental.yolov3.reference.utils.dataloaders import LoadImages
 from models.experimental.yolov3.reference.utils.general import check_img_size
 from models.experimental.yolov3.tt.yolov3_conv import TtConv
-from models.utility_functions import (
+from models.common.utility_functions import (
     comp_pcc,
     torch2tt_tensor,
     tt2torch_tensor,

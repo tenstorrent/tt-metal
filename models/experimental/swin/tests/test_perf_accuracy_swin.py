@@ -17,7 +17,7 @@ from models.experimental.swin.tt.swin_for_image_classification import (
 )
 from transformers import SwinForImageClassification as HF_SwinForImageClassification
 
-from models.utility_functions import (
+from models.common.utility_functions import (
     profiler,
     enable_persistent_kernel_cache,
     disable_persistent_kernel_cache,

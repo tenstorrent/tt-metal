@@ -14,7 +14,7 @@ namespace ttnn {
 void RingAttentionAllGatherAsync::validate_with_output_tensors(
     const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
     TT_FATAL(
-        input_tensors.size() > 0, "Error, Input tensor size should be greater than 0 but has {}", input_tensors.size());
+        !input_tensors.empty(), "Error, Input tensor size should be greater than 0 but has {}", input_tensors.size());
 
     const auto& first_input_tensor = input_tensors[0];
     const auto& dtype = first_input_tensor.dtype();
@@ -55,7 +55,7 @@ void RingAttentionAllGatherAsync::validate_with_output_tensors(
         memory_config.memory_layout());
 
     // Validate output tensors if provided
-    if (output_tensors.size() > 0) {
+    if (!output_tensors.empty()) {
         TT_FATAL(
             output_tensors.size() == input_tensors.size(),
             "Number of output tensors ({}) must match number of input tensors ({})",

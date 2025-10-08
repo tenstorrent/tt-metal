@@ -7,7 +7,6 @@
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operation.hpp"

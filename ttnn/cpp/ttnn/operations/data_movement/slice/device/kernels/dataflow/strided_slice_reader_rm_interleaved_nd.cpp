@@ -8,7 +8,8 @@
 void kernel_main() {
     constexpr uint32_t page_size = get_compile_time_arg_val(0);
     constexpr uint32_t dims = get_compile_time_arg_val(1);
-    constexpr auto src_args = TensorAccessorArgs<2>();
+    constexpr uint32_t element_size = get_compile_time_arg_val(2);
+    constexpr auto src_args = TensorAccessorArgs<3>();
 
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
 
@@ -36,7 +37,7 @@ void kernel_main() {
     constexpr uint32_t cb_id_in0 = 0;
     constexpr uint32_t cb_id_out0 = 24;
     uint32_t src_buffer_l1_addr = get_write_ptr(cb_id_in0);
-    volatile tt_l1_ptr uint16_t* in_stick = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(src_buffer_l1_addr);
+    volatile tt_l1_ptr uint8_t* in_stick = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(src_buffer_l1_addr);
 
     uint32_t index[dims];  // To hold current index in each of the first dims-1 dimensions
     index[dims - 1] = 0;   // Initialize the last index to 0
@@ -63,9 +64,13 @@ void kernel_main() {
         noc_async_read_barrier();
         for (uint32_t l = starts[dims - 1]; l < ends[dims - 1]; l += strides[dims - 1]) {
             // Write the element into the output buffer
-            volatile tt_l1_ptr uint16_t* out_stick =
-                reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(cb_id_out0));
-            out_stick[out_stick_id] = in_stick[l];  // Assuming you write one element at a time
+            volatile tt_l1_ptr uint8_t* out_stick =
+                reinterpret_cast<volatile tt_l1_ptr uint8_t*>(get_write_ptr(cb_id_out0));
+            uint32_t src_offset = l * element_size;
+            uint32_t dst_offset = out_stick_id * element_size;
+            for (uint32_t byte = 0; byte < element_size; byte++) {
+                out_stick[dst_offset + byte] = in_stick[src_offset + byte];
+            }
             out_stick_id++;
         }
         cb_push_back(cb_id_out0, 1);

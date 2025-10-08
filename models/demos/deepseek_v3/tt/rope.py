@@ -1,12 +1,12 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
 
 import ttnn
+from models.common.utility_functions import nearest_32
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3YarnRotaryEmbedding
-from models.utility_functions import nearest_32
 
 
 def get_rot_transformation_mat():

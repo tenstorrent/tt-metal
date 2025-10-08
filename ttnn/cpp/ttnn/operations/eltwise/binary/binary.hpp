@@ -10,77 +10,67 @@
 #include "ttnn/operations/eltwise/binary/common/binary_op_types.hpp"
 
 namespace ttnn {
-
-namespace operations {
-namespace unary {
-struct UnaryWithParam;
-}
-namespace binary {
+namespace operations::binary {
 
 bool is_legacy_only(
     const Tensor& lhs,
     const auto& rhs,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output,
-    tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> lhs_activations,
-    tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations);
+    tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations,
+    tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations);
 
 template <BinaryOpType binary_op_type>
 struct BinaryOperation {
     static Tensor invoke(
-        QueueId queue_id,
         const Tensor& lhs,
         const Tensor& rhs,
         const std::optional<const DataType>& output_dtype = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& output = std::nullopt,
-        tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> post_activations = {},
-        tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> lhs_activations = {},
-        tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations = {},
+        tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations = {},
+        tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
+        tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
         const std::optional<bool>& use_legacy = std::nullopt);
 
     static Tensor invoke(
-        QueueId queue_id,
         const ttnn::Tensor& lhs,
         float rhs,
         const std::optional<const DataType>& output_dtype = std::nullopt,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& output = std::nullopt,
-        tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> post_activations = {},
-        tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> lhs_activations = {},
-        tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations = {},
+        tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations = {},
+        tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
+        tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
         const std::optional<bool>& use_legacy = std::nullopt);
 };
 
 template <BinaryOpType binary_op_type>
 struct RelationalBinary {
     static Tensor invoke(
-        QueueId queue_id,
         const Tensor& lhs,
         const Tensor& rhs,
         const std::optional<const DataType>& output_dtype = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& output = std::nullopt,
-        tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> post_activations = {},
-        tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> lhs_activations = {},
-        tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations = {},
+        tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations = {},
+        tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
+        tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
         const std::optional<bool>& use_legacy = std::nullopt);
 
     static Tensor invoke(
-        QueueId queue_id,
         const ttnn::Tensor& lhs,
         float rhs,
         const std::optional<const DataType>& dtype = std::nullopt,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& output = std::nullopt,
-        tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> post_activations = {},
-        tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> lhs_activations = {},
-        tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations = {},
+        tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations = {},
+        tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
+        tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
         const std::optional<bool>& use_legacy = std::nullopt);
 
     // rhs - tensor combination not available on Pytorch for this op
     static Tensor invoke(
-        QueueId queue_id,
         float rhs,
         const ttnn::Tensor& lhs,
         const std::optional<const DataType>& dtype = std::nullopt,
@@ -91,76 +81,69 @@ struct RelationalBinary {
 template <BinaryOpType binary_op_type>
 struct InplaceRelationalBinary {
     static Tensor invoke(
-        QueueId queue_id,
         const Tensor& lhs,
         const Tensor& rhs,
-        tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> post_activations = {},
-        tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> lhs_activations = {},
-        tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations = {},
+        tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations = {},
+        tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
+        tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
         std::optional<bool> use_legacy = std::nullopt);
 
     static Tensor invoke(
-        QueueId queue_id,
         const Tensor& lhs,
         float rhs,
-        tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> post_activations = {},
-        tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> lhs_activations = {},
-        tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations = {},
+        tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations = {},
+        tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
+        tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
         std::optional<bool> use_legacy = std::nullopt);
 };
 
 template <BinaryOpType binary_op_type>
 struct InplaceLogicalBinary {
     static Tensor invoke(
-        QueueId queue_id,
         const Tensor& lhs,
         const Tensor& rhs,
-        tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> post_activations = {},
-        tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> lhs_activations = {},
-        tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations = {},
+        tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations = {},
+        tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
+        tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
         std::optional<bool> use_legacy = std::nullopt);
 };
 
 template <BinaryOpType binary_op_type>
 struct InplaceBinaryOperation {
     static Tensor invoke(
-        QueueId queue_id,
         const Tensor& lhs,
         const Tensor& rhs,
-        tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> post_activations = {},
-        tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> lhs_activations = {},
-        tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations = {},
+        tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations = {},
+        tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
+        tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
         std::optional<bool> use_legacy = std::nullopt);
 
     static Tensor invoke(
-        QueueId queue_id,
         const Tensor& lhs,
         float rhs,
-        tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> post_activations = {},
-        tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> lhs_activations = {},
-        tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations = {},
+        tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations = {},
+        tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
+        tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
         std::optional<bool> use_legacy = std::nullopt);
 };
 
 template <BinaryOpType binary_op_type>
 struct BinaryOperationSfpu {
     static Tensor invoke(
-        QueueId queue_id,
         const Tensor& lhs,
         const Tensor& rhs,
         const std::optional<const DataType>& output_dtype = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& output = std::nullopt,
-        tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> post_activations = {},
-        tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> lhs_activations = {},
-        tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations = {},
+        tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations = {},
+        tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
+        tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
         std::optional<bool> use_legacy = std::nullopt);
 };
 
 template <BinaryOpType binary_op_type>
 struct BinaryOperationAddalpha {
     static Tensor invoke(
-        QueueId queue_id,
         const Tensor& lhs,
         const Tensor& rhs,
         float alpha,
@@ -171,7 +154,6 @@ struct BinaryOperationAddalpha {
 template <BinaryOpType binary_op_type>
 struct BinaryOperationSubalpha {
     static Tensor invoke(
-        QueueId queue_id,
         const Tensor& lhs,
         const Tensor& rhs,
         float alpha,
@@ -179,8 +161,7 @@ struct BinaryOperationSubalpha {
         const std::optional<Tensor>& output = std::nullopt);
 };
 
-}  // namespace binary
-}  // namespace operations
+}  // namespace operations::binary
 
 constexpr auto add =
     ttnn::register_operation<"ttnn::add", operations::binary::BinaryOperation<operations::binary::BinaryOpType::ADD>>();

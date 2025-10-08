@@ -11,7 +11,6 @@ from models.demos.t3000.falcon40b.reference.hf_modeling_falcon import FalconForC
 from models.demos.t3000.falcon40b.tt.falcon_ccl import TT_CCL
 from models.demos.t3000.falcon40b.tt.falcon_mlp import TtFalconMLP
 from models.demos.t3000.falcon40b.tt.model_config import get_model_config
-from models.utility_functions import skip_for_grayskull
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 from ttnn import ConcatMeshToTensor
 
@@ -97,7 +96,6 @@ def run_test_FalconMLP_inference(
         assert does_pass, f"PCC value is lower than {pcc}"
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize("num_devices", (8,), ids=["8chips"])
 @pytest.mark.parametrize(
     "llm_mode, batch, seq_len",

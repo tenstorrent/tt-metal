@@ -9,7 +9,7 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
-from models.utility_functions import torch_random
+from models.common.utility_functions import torch_random
 from tests.sweep_framework.sweep_utils.roofline_utils import get_run_return
 
 TIMEOUT = 15

@@ -6,6 +6,11 @@ TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_unary_backward)
 
 target_sources(
     ttnn_op_experimental_unary_backward
+    PUBLIC
+        FILE_SET api
+        TYPE HEADERS
+        BASE_DIRS ${FixmeOpAPIDir}
+        FILES gelu_backward/gelu_backward.hpp
     PRIVATE
         gelu_backward/device/gelu_backward_device_operation.cpp
         gelu_backward/device/gelu_backward_program_factory.cpp
@@ -13,11 +18,18 @@ target_sources(
 )
 
 target_include_directories(ttnn_op_experimental_unary_backward PRIVATE ${FixmeOpIncDirs})
-target_link_libraries(
-    ttnn_op_experimental_unary_backward
-    PRIVATE
-        TT::Metalium
-        TTNN::Core
+target_link_libraries(ttnn_op_experimental_unary_backward PUBLIC TTNN::Core PRIVATE TT::Metalium)
+
+install(
+    TARGETS
+        ttnn_op_experimental_unary_backward
+    FILE_SET
+    api
+        COMPONENT ttnn-dev
+    FILE_SET
+    kernels
+        DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/experimental/unary_backward
+        COMPONENT ttnn-runtime
 )
 
 install(TARGETS ttnn_op_experimental_unary_backward LIBRARY COMPONENT tar)

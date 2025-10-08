@@ -218,7 +218,7 @@ void TensorSpec::populate_sharding_specs() {
         if (auto upd_mem_config = populate_legacy_shard_spec_from_nd()) {
             tensor_layout_ = tensor_layout_.with_memory_config(std::move(*upd_mem_config));
         }
-    } else if (memory_config().shard_spec() && memory_config().shard_spec()->mode == ShardMode::PHYSICAL) {
+    } else if (memory_config().shard_spec()) {
         tensor_layout_ = tensor_layout_.with_memory_config(populate_nd_shard_spec_from_legacy());
     }
 }

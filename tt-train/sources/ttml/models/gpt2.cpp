@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -87,7 +87,7 @@ Transformer::Transformer(const TransformerConfig &config) {
     auto create_positional_embedding = [position_embedding_type,
                                         max_sequence_length,
                                         embedding_dim,
-                                        dropout_prob]() -> std::shared_ptr<autograd::ModuleBase> {
+                                        dropout_prob]() -> std::shared_ptr<modules::ModuleBase> {
         if (position_embedding_type == PositionalEmbeddingType::Trainable) {
             return std::make_shared<ttml::modules::TrainablePositionalEmbedding>(
                 ttml::modules::PositionalEmbeddingConfig{
@@ -221,10 +221,7 @@ void load_model_from_safetensors(const std::filesystem::path &path, serializatio
         [&parameters, &get_parameter](
             const serialization::SafetensorSerialization::TensorInfo &info, std::span<const std::byte> bytes) {
             fmt::print("Loading tensor: {}, shape:{}, format: {}\n", info.name, info.shape, info.dtype);
-            if (info.dtype != "F32") {
-                throw std::runtime_error(fmt::format("Unsupported dtype: {}", info.dtype));
-            }
-            auto float_vec = serialization::SafetensorSerialization::bytes_to_floats_copy(bytes);
+            auto float_vec = serialization::SafetensorSerialization::bytes_to_float_vec(bytes, info.dtype);
             if (info.name == "wte.weight") {
                 auto out_tensor1 = get_parameter("transformer/fc/weight");
                 fmt::print("Original shape {}, {}", info.shape[0], info.shape[1]);

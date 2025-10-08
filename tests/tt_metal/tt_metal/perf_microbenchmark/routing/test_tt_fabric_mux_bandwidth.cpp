@@ -148,7 +148,6 @@ void create_mux_kernel(
 
     auto default_channel_type = tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL;
     size_t mux_status_address = mux_kernel_config->get_status_address();
-    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
 
     std::vector<uint32_t> mux_ct_args = mux_kernel_config->get_fabric_mux_compile_time_args();
     // Point to the drainer's status address instead of the worker's status address
@@ -165,7 +164,7 @@ void create_mux_kernel(
 
     auto memory_regions_to_clear = mux_kernel_config->get_memory_regions_to_clear();
     std::vector<uint32_t> memory_regions_to_clear_args;
-    memory_regions_to_clear_args.reserve(memory_regions_to_clear.size() * 2 + 1);
+    memory_regions_to_clear_args.reserve((memory_regions_to_clear.size() * 2) + 1);
     memory_regions_to_clear_args.push_back(static_cast<uint32_t>(memory_regions_to_clear.size()));
     for (const auto& [address, size] : memory_regions_to_clear) {
         memory_regions_to_clear_args.push_back(static_cast<uint32_t>(address));
@@ -232,7 +231,7 @@ void create_drainer_kernel(
 
     auto memory_regions_to_clear = drainer_kernel_config->get_memory_regions_to_clear();
     std::vector<uint32_t> memory_regions_to_clear_args;
-    memory_regions_to_clear_args.reserve(memory_regions_to_clear.size() * 2 + 1);
+    memory_regions_to_clear_args.reserve((memory_regions_to_clear.size() * 2) + 1);
     memory_regions_to_clear_args.push_back(static_cast<uint32_t>(memory_regions_to_clear.size()));
     for (const auto& [address, size] : memory_regions_to_clear) {
         memory_regions_to_clear_args.push_back(static_cast<uint32_t>(address));
@@ -490,7 +489,7 @@ int main(int argc, char** argv) {
 
     log_info(tt::LogTest, "Launching programs");
     auto& cq = mesh_device->mesh_command_queue();
-    distributed::AddProgramToMeshWorkload(mesh_workload, std::move(program), device_range);
+    mesh_workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
 
     log_info(tt::LogTest, "Waiting for workers to complete");

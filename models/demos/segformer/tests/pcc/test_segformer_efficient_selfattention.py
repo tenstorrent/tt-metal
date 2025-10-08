@@ -16,7 +16,6 @@ from models.demos.segformer.tt.common import (
 )
 from models.demos.segformer.tt.ttnn_segformer_efficient_selfattention import TtSegformerEfficientSelfAttention
 from models.demos.utils.common_demo_utils import get_mesh_mappers
-from models.utility_functions import skip_for_grayskull
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
@@ -74,7 +73,6 @@ def create_custom_mesh_preprocessor(mesh_mapper=None):
     return custom_mesh_preprocessor
 
 
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "batch_size, seq_len, hidden_size, height, width, num_attention_heads, sequence_reduction_ratio, block_i, efficient_self_attention_i",
     [

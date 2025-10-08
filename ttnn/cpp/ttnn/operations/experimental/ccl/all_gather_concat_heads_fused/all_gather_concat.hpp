@@ -13,7 +13,6 @@ namespace operations::experimental::ccl {
 
 struct ExecuteAllGatherConcat {
     static ttnn::Tensor invoke(
-        QueueId queue_id,
         const ttnn::Tensor& input_tensor,
         ttnn::Tensor& buffer_tensor,
         int32_t dim,

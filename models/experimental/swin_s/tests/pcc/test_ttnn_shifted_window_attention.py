@@ -6,7 +6,6 @@ import torch
 import pytest
 
 import ttnn
-from models.utility_functions import skip_for_grayskull
 from models.experimental.swin_s.reference.shifted_window_attention import ShiftedWindowAttention
 from models.experimental.swin_s.tt.tt_shifted_window_attention import TtShiftedWindowAttention
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -95,7 +94,6 @@ def custom_preprocessor(torch_model, name, mesh_mapper=None):
     return parameters
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SWIN_S_L1_SMALL_SIZE}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size",

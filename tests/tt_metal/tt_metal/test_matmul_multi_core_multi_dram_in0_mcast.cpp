@@ -122,8 +122,8 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, tt_metal::KernelHandle, tt
     }
 
     std::vector<uint32_t> reader_compile_time_args;
-    tt::tt_metal::TensorAccessorArgs().append_to(reader_compile_time_args);  // in0 placeholder
-    tt::tt_metal::TensorAccessorArgs().append_to(reader_compile_time_args);  // in1 placeholder
+    tt::tt_metal::TensorAccessorArgs::create_dram_interleaved().append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs::create_dram_interleaved().append_to(reader_compile_time_args);
 
     auto mm_reader_kernel_sender = tt_metal::CreateKernel(
         program,
@@ -144,7 +144,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, tt_metal::KernelHandle, tt
             .compile_args = reader_compile_time_args});
 
     std::vector<uint32_t> writer_compile_time_args;
-    tt::tt_metal::TensorAccessorArgs().append_to(writer_compile_time_args);  // out placeholder
+    tt::tt_metal::TensorAccessorArgs::create_dram_interleaved().append_to(writer_compile_time_args);
 
     auto unary_writer_kernel = tt_metal::CreateKernel(
         program,

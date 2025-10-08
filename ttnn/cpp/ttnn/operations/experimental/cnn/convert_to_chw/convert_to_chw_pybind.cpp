@@ -21,6 +21,9 @@ void bind_convert_to_chw(py::module& module) {
     Convert a tensor from HWC channel ordering to CHW channel ordering.
 
     The input tensor is expected to be tiled and height-sharded in L1. The output is a row-major width-sharded tensor.
+
+    The output memory configuration is automatically inferred to create a width-sharded output
+    with appropriate shard dimensions based on the input tensor's sharding configuration.
     )doc";
 
     ttnn::bind_registered_operation(
@@ -28,16 +31,12 @@ void bind_convert_to_chw(py::module& module) {
         ttnn::experimental::convert_to_chw,
         doc,
         ttnn::pybind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input,
-               const std::optional<MemoryConfig>& memory_config,
-               const std::optional<DataType> dtype,
-               QueueId queue_id) { return self(queue_id, input, memory_config, dtype); },
+            [](const OperationType& self, const ttnn::Tensor& input, const std::optional<DataType> dtype) {
+                return self(input, dtype);
+            },
             py::arg("input"),
             py::kw_only(),
-            py::arg("memory_config") = std::nullopt,
-            py::arg("dtype") = std::nullopt,
-            py::arg("queue_id") = DefaultQueueId});
+            py::arg("dtype") = std::nullopt});
 }
 
 }  // namespace ttnn::operations::experimental::cnn::detail

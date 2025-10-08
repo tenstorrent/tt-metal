@@ -28,9 +28,8 @@ void bind_reshape(pybind11::module& module, const data_movement_operation_t& ope
                int Z,
                int Y,
                int X,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               QueueId queue_id) -> ttnn::Tensor {
-                return self(queue_id, input_tensor, ttnn::SmallVector<int32_t>{W, Z, Y, X}, memory_config);
+               const std::optional<ttnn::MemoryConfig>& memory_config) -> ttnn::Tensor {
+                return self(input_tensor, ttnn::SmallVector<int32_t>{W, Z, Y, X}, memory_config);
             },
             py::arg("input_tensor"),
             py::arg("W"),
@@ -38,8 +37,7 @@ void bind_reshape(pybind11::module& module, const data_movement_operation_t& ope
             py::arg("Y"),
             py::arg("X"),
             py::kw_only(),
-            py::arg("memory_config") = std::nullopt,
-            py::arg("queue_id") = DefaultQueueId});
+            py::arg("memory_config") = std::nullopt});
 }
 
 }  // namespace detail
@@ -72,7 +70,6 @@ void py_bind_reshape(pybind11::module& module) {
 
         Keyword Args:
             * :attr:`memory_config`: Memory Config of the output tensor
-            * :attr:`queue_id` (Optional[uint8]): command queue id
 
         Example:
 

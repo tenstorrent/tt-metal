@@ -9,7 +9,6 @@
 namespace tt::tt_metal {
 class Tensor;
 class MemoryConfig;
-class CommandQueue;
 namespace distributed {
 class MeshDevice;
 }  // namespace distributed
@@ -21,11 +20,11 @@ Tensor tensor_to_device(
     const Tensor& input_tensor,
     distributed::MeshDevice* mesh_device,
     ttsl::optional_reference<const MemoryConfig> mem_config,
-    QueueId cq_id);
+    std::optional<QueueId> cq_id);
 
 Tensor tensor_to_layout(const Tensor& input_tensor, Layout target_layout);
 
-Tensor tensor_cpu(const Tensor& input_tensor, bool blocking, QueueId cq_id);
+Tensor tensor_cpu(const Tensor& input_tensor, bool blocking, std::optional<QueueId> cq_id);
 
 void tensor_print(const Tensor& input_tensor);
 

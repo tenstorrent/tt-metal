@@ -4,12 +4,12 @@
 
 #pragma once
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include <tt_stl/reflection.hpp>
 
-#include <umd/device/tt_core_coordinates.h>  // CoreType
+#include <umd/device/types/core_coordinates.hpp>  // CoreType
 
 namespace tt::tt_metal {
 

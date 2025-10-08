@@ -13,11 +13,13 @@ class TestStatus(Enum):
     FAIL_L1_OUT_OF_MEM = 4
     FAIL_WATCHER = 5
     FAIL_UNSUPPORTED_DEVICE_PERF = 6
+    XFAIL = 7  # Expected failure - test failed as expected
+    XPASS = 8  # Unexpected pass - test passed when it was expected to fail
 
 
-class VectorValidity(Enum):
-    VALID = 0
-    INVALID = 1
+class VectorValidity(str, Enum):
+    VALID = "VALID"
+    INVALID = "INVALID"
 
 
 class VectorStatus(Enum):

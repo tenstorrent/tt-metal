@@ -6,10 +6,10 @@ import torch
 
 import ttnn
 import pytest
-from models.utility_functions import comp_allclose_and_pcc
+from models.common.utility_functions import comp_allclose_and_pcc
 from loguru import logger
 import torch.nn.functional as F
-from models.utility_functions import is_wormhole_b0
+from models.common.utility_functions import is_wormhole_b0
 
 from tests.ttnn.unit_tests.operations.test_utils import (
     get_compute_kernel_options,

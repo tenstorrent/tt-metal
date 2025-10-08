@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -209,6 +209,7 @@ def test_sort_program_cache(shape, dim, descending, device):
         ([32, 64], -1, False, torch.bfloat16, ttnn.bfloat16, ttnn.uint32),
         ([32, 64], -1, False, torch.uint8, ttnn.uint16, ttnn.uint16),
         ([32, 64], -1, False, torch.uint8, ttnn.uint16, ttnn.uint32),
+        ([1, 8], -1, False, torch.uint8, ttnn.uint16, ttnn.uint16),
     ],
 )
 def test_sort_datatypes(shape, dim, descending, torch_value_dtype, ttnn_value_dtype, ttnn_index_dtype, device):
