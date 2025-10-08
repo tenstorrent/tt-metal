@@ -5,6 +5,7 @@
 #include <tt-metalium/constants.hpp>
 #include <optional>
 #include <tuple>
+#include "debug/dprint.h"
 
 inline uint32_t nearest_n(uint32_t x, uint32_t n) { return ((x + n - 1) / n) * n; }
 
@@ -43,7 +44,7 @@ inline std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t> ge
 
     if (sliding_window.has_value() && sliding_window.value() > 0) {
         // Calculate actual window bounds
-        uint32_t window_end = cur_pos;  // exclusive end
+        uint32_t window_end = cur_pos + 1;  // exclusive end
         window_start_unaligned = (window_end > sliding_window.value()) ? (window_end - sliding_window.value()) : 0;
 
         // Round window_start down to chunk boundary to ensure we capture the full window
@@ -64,20 +65,20 @@ inline std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t> ge
 
     uint32_t pst_value = valid_seq_len / tt::constants::TILE_HEIGHT;
     uint32_t window_start_chunk = window_start / k_chunk_size;
-    uint32_t total_chunks = valid_seq_len / k_chunk_size;
-    uint32_t active_chunks = total_chunks - window_start_chunk;
+    uint32_t num_chunks_value = valid_seq_len / k_chunk_size;
+    // uint32_t active_chunks = total_chunks - window_start_chunk;
 
     uint32_t k_chunk_start = window_start_chunk;
     uint32_t k_chunk_end = window_start_chunk;
 
     // Distribute active chunks among cores
-    if (num_cores_per_batch > int(active_chunks)) {
-        int chunks_per_core = (core_num < int(active_chunks)) ? 1 : 0;
-        k_chunk_start = window_start_chunk + (active_chunks - core_num - 1) * chunks_per_core;
-        k_chunk_end = window_start_chunk + (active_chunks - core_num) * chunks_per_core;
+    if (num_cores_per_batch > int(num_chunks_value)) {
+        int chunks_per_core = (core_num < int(num_chunks_value)) ? 1 : 0;
+        k_chunk_start = window_start_chunk + (num_chunks_value - core_num - 1) * chunks_per_core;
+        k_chunk_end = window_start_chunk + (num_chunks_value - core_num) * chunks_per_core;
     } else {
-        int chunks_per_core = active_chunks / num_cores_per_batch;
-        int residuals = active_chunks % num_cores_per_batch;
+        int chunks_per_core = num_chunks_value / num_cores_per_batch;
+        int residuals = num_chunks_value % num_cores_per_batch;
         int reversed_core_num = num_cores_per_batch - core_num - 1;
         k_chunk_start =
             window_start_chunk + reversed_core_num * chunks_per_core + std::min(residuals, reversed_core_num);
@@ -87,7 +88,7 @@ inline std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t> ge
         }
     }
 
-    return {pst_value, active_chunks, k_chunk_start, k_chunk_end, window_start_unaligned, window_start_chunk};
+    return {pst_value, num_chunks_value, k_chunk_start, k_chunk_end, window_start_unaligned, window_start_chunk};
 }
 
 template <uint32_t Sk_chunk_t, uint32_t max_size>
