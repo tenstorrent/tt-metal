@@ -23,7 +23,7 @@ pytest --disable-warnings models/demos/yolov12x/tests/pcc/test_ttnn_yolov12x.py:
 
 #### Single Device (BS=1):
 
-- For `640x640`, end-2-end perf is `29` FPS :
+- For `640x640`, end-2-end perf is `33` FPS :
 
   ```
   pytest --disable-warnings models/demos/yolov12x/tests/perf/test_e2e_performant.py::test_e2e_performant
