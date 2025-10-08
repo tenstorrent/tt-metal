@@ -54,9 +54,6 @@ std::unordered_map<MeshId, HostRank> TopologyMapper::build_host_mesh_mappings() 
     // Get the current mesh to start with
     auto mesh_id = local_mesh_binding_.mesh_ids[0];
 
-    // Populate initial current host mapping
-    mesh_id_to_host_rank[mesh_id] = {current_host};
-
     std::unordered_set<HostName> visited_hosts = {};
     std::unordered_set<MeshId> visited_meshes = {};
 
@@ -100,17 +97,29 @@ bool TopologyMapper::discover_hosts_dfs(
 
     // Add the chain to the mapping
     visited_hosts.insert(host_name);
-    visited_meshes.insert(mesh_id);
 
     // If Equal to 1, Single mesh per host
     if (rank_size == 1) {
         mesh_id_to_host_rank[mesh_id] = {host_name};
+        visited_meshes.insert(mesh_id);
     } else if (rank_size > 1) {
         mesh_id_to_host_rank[mesh_id].resize(host_ranks.size());
-        auto host_rank = host_ranks.at(MeshCoordinate(0, 0));
-        mesh_id_to_host_rank[mesh_id][host_rank.get()] = host_name;
+        mesh_id_to_host_rank[mesh_id][physical_system_descriptor_.get_rank_for_hostname(host_name)] = host_name;
+
+        // Check if full mesh has been visited
+        bool full_mesh_visited = true;
+        for (const auto& host_name : mesh_id_to_host_rank[mesh_id]) {
+            if (host_name.empty()) {
+                full_mesh_visited = false;
+                break;
+            }
+        }
+        if (full_mesh_visited) {
+            visited_meshes.insert(mesh_id);
+        }
     } else {
         mesh_id_to_host_rank[mesh_id] = {host_name};
+        visited_meshes.insert(mesh_id);
     }
 
     // Check if all hosts and meshes have been visited

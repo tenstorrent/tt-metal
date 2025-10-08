@@ -26,14 +26,14 @@ TEST(PhysicalDiscovery, TestPhysicalSystemDescriptor) {
     using namespace tt::tt_metal::distributed::multihost;
     auto distributed_context = tt::tt_metal::MetalContext::instance().get_distributed_context_ptr();
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    constexpr bool using_mock_cluster_descriptor = false;
+    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
     constexpr bool run_discovery = true;
 
     auto physical_system_desc = tt::tt_metal::PhysicalSystemDescriptor(
         cluster.get_driver(),
         distributed_context,
         &tt::tt_metal::MetalContext::instance().hal(),
-        using_mock_cluster_descriptor,
+        rtoptions,
         run_discovery);
     // Run discovery again to ensure that state is cleared before re-discovery
     physical_system_desc.run_discovery();

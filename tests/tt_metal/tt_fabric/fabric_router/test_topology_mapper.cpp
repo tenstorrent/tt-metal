@@ -35,11 +35,12 @@ TEST_F(TopologyMapperTest, T3kMeshGraphTest) {
     // Create PhysicalSystemDescriptor with proper parameters from MetalContext
     auto distributed_context = tt::tt_metal::MetalContext::instance().get_distributed_context_ptr();
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    constexpr bool using_mock_cluster_descriptor = false;
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
     constexpr bool run_discovery = true;
 
     auto physical_system_descriptor = tt::tt_metal::PhysicalSystemDescriptor(
-        cluster.get_driver(), distributed_context, using_mock_cluster_descriptor, run_discovery);
+        cluster.get_driver(), distributed_context, &hal, rtoptions, run_discovery);
 
     // Create a local mesh binding for testing
     LocalMeshBinding local_mesh_binding;
@@ -61,11 +62,12 @@ TEST_F(TopologyMapperTest, T3kBigMeshTest) {
     // Create PhysicalSystemDescriptor with proper parameters from MetalContext
     auto distributed_context = tt::tt_metal::MetalContext::instance().get_distributed_context_ptr();
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    constexpr bool using_mock_cluster_descriptor = false;
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
     constexpr bool run_discovery = true;
 
     auto physical_system_descriptor = tt::tt_metal::PhysicalSystemDescriptor(
-        cluster.get_driver(), distributed_context, using_mock_cluster_descriptor, run_discovery);
+        cluster.get_driver(), distributed_context, &hal, rtoptions, run_discovery);
 
     // Create a local mesh binding for testing
     LocalMeshBinding local_mesh_binding;
