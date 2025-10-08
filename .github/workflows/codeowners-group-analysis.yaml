@@ -663,7 +663,7 @@ jobs:
           fi
 
           # Use #tt-metal-pr-review-requests Slack channel
-          SLACK_CHANNEL="C09HT5VSXRB"
+          SLACK_CHANNEL="C07G47JMQHM"
 
           echo "Using parameters: CREATE_NEW=$CREATE_NEW, PING_OWNERS=$PING_OWNERS, SEND_SLACK=$SEND_SLACK, SLACK_CHANNEL=$SLACK_CHANNEL"
 
@@ -949,7 +949,7 @@ jobs:
           AUTHOR_NOTES="${{ needs.parse-comment.outputs.author-notes }}"
 
           # Use #tt-metal-pr-review-requests Slack channel
-          SLACK_CHANNEL="C09HT5VSXRB"
+          SLACK_CHANNEL="C07G47JMQHM"
 
           echo "Processing direct ping for users: $DIRECT_PING_USERS"
 
@@ -1411,7 +1411,7 @@ jobs:
           PR_NUMBER="${{ steps.generate-comment.outputs.pr-number }}"
 
           # Use #tt-metal-pr-review-requests Slack channel
-          SLACK_CHANNEL="C09HT5VSXRB"
+          SLACK_CHANNEL="C07G47JMQHM"
 
           # Define API endpoint
           COMMENTS_API="https://api.github.com/repos/${{ github.repository }}/issues/$PR_NUMBER/comments"
@@ -1514,7 +1514,7 @@ jobs:
           PR_NUMBER="${{ steps.generate-comment.outputs.pr-number }}"
 
           # Use #tt-metal-pr-review-requests Slack channel
-          SLACK_CHANNEL="C09HT5VSXRB"
+          SLACK_CHANNEL="C07G47JMQHM"
 
           # Send Slack notification if enabled
           if [ "$SEND_SLACK" = "true" ] && [ -n "$SELECTED_OWNERS" ]; then
