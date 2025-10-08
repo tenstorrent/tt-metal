@@ -90,14 +90,14 @@ class TtMaskedTransformerEncoder(LightweightModule):
     #     return mask, dist
 
     def compute_mask(self, xyz, radius, dist=None):
-        xyz_torch = ttnn.to_torch(xyz)
-        if dist is None or dist.shape[1] != xyz_torch.shape[1]:
-            dist = torch.cdist(xyz_torch, xyz_torch, p=2)
-        # entries that are True in the mask do not contribute to self-attention
-        # so points outside the radius are not considered
-        mask = dist >= radius
-        mask = torch.zeros_like(mask, dtype=torch.float).masked_fill_(mask, float("-inf"))
-        mask_ttnn = ttnn.from_torch(mask, dtype=ttnn.bfloat16, device=self.device, layout=ttnn.TILE_LAYOUT)
+        with torch.no_grad():
+            if dist is None or dist.shape[1] != xyz.shape[1]:
+                dist = torch.cdist(xyz, xyz, p=2)
+            # entries that are True in the mask do not contribute to self-attention
+            # so points outside the radius are not considered
+            mask = dist >= radius
+        mask_ttnn = torch.zeros_like(mask, dtype=torch.float).masked_fill_(mask, float("-inf"))
+        mask_ttnn = ttnn.from_torch(mask_ttnn, dtype=ttnn.bfloat16, device=self.device, layout=ttnn.TILE_LAYOUT)
         return mask_ttnn, dist
 
     def forward(
@@ -170,27 +170,15 @@ class TtMaskedTransformerEncoder(LightweightModule):
             # )
 
             if idx == 0 and self.interim_downsampling:
-                # Reshape for downsampling: (npoints, batch, channel) -> (batch, channel, npoints)
-                output = ttnn.permute(output, (1, 0, 2))  # 2048, 1, 256 -> 1, 2048, 256
-                output = ttnn.permute(output, (0, 2, 1))  # 1, 2048, 256 -> 1, 256, 2048
-                print(f"{output.shape=}")
+                output = ttnn.permute(output, (1, 2, 0))  # 2048, 1, 256 -> 1, 256, 2048
 
-                if not isinstance(xyz, torch.Tensor):
-                    xyz_torch = ttnn.to_torch(xyz, dtype=torch.float)
                 if not isinstance(output, torch.Tensor):
-                    output_torch = ttnn.to_torch(output, dtype=torch.float)
-
-                # Apply downsampling (this would need to be implemented in ttnn)
-                xyz_torch, output_torch, xyz_inds = self.interim_downsampling(xyz_torch, output_torch)
-
-                xyz = ttnn.from_torch(xyz_torch, device=self.device, dtype=ttnn.bfloat16)
+                    output_torch = ttnn.typecast(output, ttnn.float32)
+                    output_torch = ttnn.to_torch(output_torch, dtype=torch.float)
+                xyz, output_torch, xyz_inds = self.interim_downsampling(xyz, output_torch)
                 output = ttnn.from_torch(output_torch, device=self.device, dtype=ttnn.bfloat16)
-                print(f"{output.shape=}")
 
-                # output = ttnn.permute(output, (1, 0, 2)) # 2048, 1, 256 -> 1, 2048, 256
-                # output = ttnn.permute(output, (0, 2, 1)) # 1, 2048, 256 -> 1, 256, 2048
                 output = ttnn.permute(output, (2, 0, 1))
-                print(f"{output.shape=}")
 
         if self.norm is not None:
             output = self.norm(output)
