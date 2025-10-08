@@ -66,7 +66,7 @@ run_gemma3_perf() {
 }
 
 run_phi4_perf() {
-  HF_MODEL=microsoft/phi-4 pytest models/tt_transformers/demo/simple_text_demo.py
+  HF_MODEL=microsoft/phi-4 pytest models/tt_transformers/demo/simple_text_demo.py -k "ci-token-matching"
   echo "LOG_METAL: Phi4 perf tests completed (text only)"
 }
 
