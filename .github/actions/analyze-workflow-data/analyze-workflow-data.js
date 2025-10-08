@@ -413,12 +413,14 @@ function renderCommitsTable(commits) {
       ? `<a href="${escapeHtml(c.author_url)}">@${escapeHtml(c.author_login)}</a>`
       : escapeHtml(who);
     const shaHtml = url ? `<a href="${escapeHtml(url)}"><code>${escapeHtml(short)}</code></a>` : `<code>${escapeHtml(short)}</code>`;
-    return `<tr><td>${shaHtml}</td><td>${whoHtml}</td></tr>`;
+    const desc = (typeof c.description === 'string' && c.description) || (typeof c.message === 'string' && (c.message.split(/\r?\n/)[0] || '')) || '';
+    const descHtml = escapeHtml(desc);
+    return `<tr><td>${shaHtml}</td><td>${whoHtml}</td><td>${descHtml}</td></tr>`;
   }).join('\n');
   return [
     '<table>',
     '<thead>',
-    '<tr><th>SHA</th><th>Author</th></tr>',
+    '<tr><th>SHA</th><th>Author</th><th>Description</th></tr>',
     '</thead>',
     '<tbody>',
     rows,
