@@ -27,6 +27,11 @@ on:
         required: false
         default: ''
         type: string
+      slack-channel:
+        description: 'Slack channel ID for notifications (e.g., C07G47JMQHM)'
+        required: false
+        default: 'C07G47JMQHM'
+        type: string
   issue_comment:
     types: [created]
 
@@ -644,8 +649,9 @@ jobs:
         id: generate-comment
         run: |
           PR_NUMBER="${{ needs.find-pr.outputs.pr-number }}"
-          TEAMS="${{ needs.analyze-codeowners.outputs.codeowners-teams }}"
-          INDIVIDUALS="${{ needs.analyze-codeowners.outputs.codeowners-individuals }}"
+          # Handle cases where analyze-codeowners job might be skipped (direct ping)
+          TEAMS="${{ needs.analyze-codeowners.outputs.codeowners-teams || '' }}"
+          INDIVIDUALS="${{ needs.analyze-codeowners.outputs.codeowners-individuals || '' }}"
           APPROVED_REVIEWERS="${{ needs.get-reviews.outputs.approved-reviewers }}"
 
           # Determine parameters based on trigger type
@@ -662,8 +668,12 @@ jobs:
             AUTHOR_NOTES="${{ needs.parse-comment.outputs.author-notes }}"
           fi
 
-          # Use #tt-metal-pr-review-requests Slack channel
-          SLACK_CHANNEL="C07G47JMQHM"
+          # Configure Slack channel (use input or default)
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            SLACK_CHANNEL="${{ github.event.inputs.slack-channel }}"
+          else
+            SLACK_CHANNEL="C07G47JMQHM"  # Default for comment triggers
+          fi
 
           echo "Using parameters: CREATE_NEW=$CREATE_NEW, PING_OWNERS=$PING_OWNERS, SEND_SLACK=$SEND_SLACK, SLACK_CHANNEL=$SLACK_CHANNEL"
 
@@ -948,19 +958,46 @@ jobs:
           DIRECT_PING_USERS="${{ needs.parse-comment.outputs.direct-ping-users }}"
           AUTHOR_NOTES="${{ needs.parse-comment.outputs.author-notes }}"
 
-          # Use #tt-metal-pr-review-requests Slack channel
+          # Configure Slack channel (default for comment triggers)
           SLACK_CHANNEL="C07G47JMQHM"
 
           echo "Processing direct ping for users: $DIRECT_PING_USERS"
 
-          # Get PR information
+          # Get PR information with error handling
           PR_API="https://api.github.com/repos/${{ github.repository }}/pulls/$PR_NUMBER"
+
+          # Check API response status
+          PR_HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+                         -H "Accept: application/vnd.github.v3+json" \
+                         "$PR_API")
+
+          if [ "$PR_HTTP_CODE" != "200" ]; then
+            echo "❌ ERROR: Failed to fetch PR information (HTTP $PR_HTTP_CODE)"
+            echo "API URL: $PR_API"
+            exit 1
+          fi
+
           PR_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
                          -H "Accept: application/vnd.github.v3+json" \
                          "$PR_API")
+
+          # Validate PR data
+          if [ -z "$PR_DATA" ] || [ "$PR_DATA" = "null" ]; then
+            echo "❌ ERROR: Empty PR data returned from API"
+            exit 1
+          fi
+
           PR_TITLE=$(echo "$PR_DATA" | jq -r '.title')
           PR_AUTHOR_LOGIN=$(echo "$PR_DATA" | jq -r '.user.login')
           PR_AUTHOR_NAME=$(echo "$PR_DATA" | jq -r '.user.name // .user.login')
+
+          # Validate critical fields
+          if [ -z "$PR_TITLE" ] || [ "$PR_TITLE" = "null" ] || [ -z "$PR_AUTHOR_LOGIN" ] || [ "$PR_AUTHOR_LOGIN" = "null" ]; then
+            echo "❌ ERROR: Invalid PR data - missing title or author"
+            echo "PR Title: $PR_TITLE"
+            echo "PR Author: $PR_AUTHOR_LOGIN"
+            exit 1
+          fi
 
           # Get full name for PR author
           PR_AUTHOR_FULL_NAME="$PR_AUTHOR_NAME"
@@ -973,18 +1010,6 @@ jobs:
             if [ -n "$AUTHOR_FULL_NAME" ] && [ "$AUTHOR_FULL_NAME" != "null" ]; then
               PR_AUTHOR_FULL_NAME="$AUTHOR_FULL_NAME"
             fi
-          fi
-
-          # Find Slack user ID for PR author
-          echo "Looking up PR author in Slack: $PR_AUTHOR_FULL_NAME"
-          PR_AUTHOR_SLACK_ID=$(find_slack_user_id "$PR_AUTHOR_FULL_NAME" "$PR_AUTHOR_LOGIN")
-
-          if [ -n "$PR_AUTHOR_SLACK_ID" ]; then
-            PR_AUTHOR_MENTION="<@$PR_AUTHOR_SLACK_ID>"
-            echo "✅ Found PR author in Slack: $PR_AUTHOR_FULL_NAME -> $PR_AUTHOR_SLACK_ID"
-          else
-            PR_AUTHOR_MENTION="$PR_AUTHOR_FULL_NAME (@$PR_AUTHOR_LOGIN)"
-            echo "⚠️  PR author not found in Slack: $PR_AUTHOR_FULL_NAME (@$PR_AUTHOR_LOGIN), using fallback"
           fi
 
           # Define the find_slack_user_id function (same as in Send notifications step)
@@ -1073,6 +1098,18 @@ jobs:
               echo ""
             fi
           }
+
+          # Find Slack user ID for PR author
+          echo "Looking up PR author in Slack: $PR_AUTHOR_FULL_NAME"
+          PR_AUTHOR_SLACK_ID=$(find_slack_user_id "$PR_AUTHOR_FULL_NAME" "$PR_AUTHOR_LOGIN")
+
+          if [ -n "$PR_AUTHOR_SLACK_ID" ]; then
+            PR_AUTHOR_MENTION="<@$PR_AUTHOR_SLACK_ID>"
+            echo "✅ Found PR author in Slack: $PR_AUTHOR_FULL_NAME -> $PR_AUTHOR_SLACK_ID"
+          else
+            PR_AUTHOR_MENTION="$PR_AUTHOR_FULL_NAME (@$PR_AUTHOR_LOGIN)"
+            echo "⚠️  PR author not found in Slack: $PR_AUTHOR_FULL_NAME (@$PR_AUTHOR_LOGIN), using fallback"
+          fi
 
           # Process each user to ping
           SLACK_USER_MENTIONS=""
@@ -1247,8 +1284,9 @@ jobs:
         id: select-owners
         run: |
           TEAM_MEMBERS="${{ steps.generate-comment.outputs.team-members }}"
-          TEAMS="${{ needs.analyze-codeowners.outputs.codeowners-teams }}"
-          INDIVIDUALS="${{ needs.analyze-codeowners.outputs.codeowners-individuals }}"
+          # Handle cases where analyze-codeowners job might be skipped (direct ping)
+          TEAMS="${{ needs.analyze-codeowners.outputs.codeowners-teams || '' }}"
+          INDIVIDUALS="${{ needs.analyze-codeowners.outputs.codeowners-individuals || '' }}"
           APPROVED_REVIEWERS="${{ needs.get-reviews.outputs.approved-reviewers }}"
           MOREH_TEAM_MEMBERS="${{ steps.setup-notifications.outputs.moreh-team-members }}"
 
@@ -1410,8 +1448,12 @@ jobs:
           AUTHOR_NOTES="${{ steps.generate-comment.outputs.author-notes }}"
           PR_NUMBER="${{ steps.generate-comment.outputs.pr-number }}"
 
-          # Use #tt-metal-pr-review-requests Slack channel
-          SLACK_CHANNEL="C07G47JMQHM"
+          # Configure Slack channel (use input or default)
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            SLACK_CHANNEL="${{ github.event.inputs.slack-channel }}"
+          else
+            SLACK_CHANNEL="C07G47JMQHM"  # Default for comment triggers
+          fi
 
           # Define API endpoint
           COMMENTS_API="https://api.github.com/repos/${{ github.repository }}/issues/$PR_NUMBER/comments"
@@ -1513,8 +1555,12 @@ jobs:
           AUTHOR_NOTES="${{ steps.generate-comment.outputs.author-notes }}"
           PR_NUMBER="${{ steps.generate-comment.outputs.pr-number }}"
 
-          # Use #tt-metal-pr-review-requests Slack channel
-          SLACK_CHANNEL="C07G47JMQHM"
+          # Configure Slack channel (use input or default)
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            SLACK_CHANNEL="${{ github.event.inputs.slack-channel }}"
+          else
+            SLACK_CHANNEL="C07G47JMQHM"  # Default for comment triggers
+          fi
 
           # Send Slack notification if enabled
           if [ "$SEND_SLACK" = "true" ] && [ -n "$SELECTED_OWNERS" ]; then
