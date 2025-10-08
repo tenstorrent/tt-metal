@@ -4,6 +4,7 @@
 
 
 import ttnn
+import torch
 from ttnn.model_preprocessing import preprocess_linear_weight, preprocess_linear_bias
 import math
 
@@ -128,11 +129,22 @@ class PETRMultiheadAttention:
         key_transposed = ttnn.permute(key, (0, 2, 1))
 
         if attn_mask is not None:
-            attn_output_weights = ttnn.matmul(q_scaled, key_transposed, dtype=ttnn.bfloat16)
+            attn_output_weights = ttnn.matmul(q_scaled, key_transposed, dtype=ttnn.float32)
             attn_output_weights = attn_output_weights + attn_mask
         else:
-            attn_output_weights = ttnn.matmul(q_scaled, key_transposed, dtype=ttnn.bfloat16)
+            attn_output_weights = ttnn.matmul(q_scaled, key_transposed, dtype=ttnn.float32)
 
+        # attn_weights_torch = ttnn.to_torch(attn_output_weights)
+        # if torch.isnan(attn_weights_torch).any() or torch.isinf(attn_weights_torch).any():
+        #     logger.warning("NaN/Inf in attention weights before softmax!")
+        #     attn_weights_torch = torch.nan_to_num(attn_weights_torch, nan=0.0, posinf=10.0, neginf=-10.0)
+        #     attn_output_weights = ttnn.from_torch(
+        #         attn_weights_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
+        #     )
+        # attn_output_weights = ttnn.to_memory_config(
+        #     attn_output_weights,
+        #     ttnn.DRAM_MEMORY_CONFIG
+        # )
         # TTNN Softmax
         compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -141,7 +153,14 @@ class PETRMultiheadAttention:
             packer_l1_acc=True,
         )
 
-        attn_output_weights = ttnn.softmax(attn_output_weights, dim=-1, compute_kernel_config=compute_kernel_config)
+        # attn_output_weights = ttnn.softmax(attn_output_weights, dim=-1, compute_kernel_config=compute_kernel_config)
+        attn_weights_torch = ttnn.to_torch(attn_output_weights).to(torch.float32)
+        attn_weights_torch = torch.nn.functional.softmax(attn_weights_torch, dim=-1)
+
+        # Convert back to ttnn
+        attn_output_weights = ttnn.from_torch(
+            attn_weights_torch.to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
+        )
 
         # attn_output_weights = torch.load("softmax_out.pt")
         # attn_output_weights = ttnn.from_torch(attn_output_weights, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device = self.device)
@@ -161,7 +180,14 @@ class PETRMultiheadAttention:
         attn_output = ttnn.reshape(attn_output, (tgt_len, bsz, attn_output.shape[1]))
         attn_output_weights = ttnn.reshape(attn_output_weights, (bsz, self.num_heads, tgt_len, src_len))
         # attn_output_weights = ttnn.to_layout(attn_output_weights, ttnn.ROW_MAJOR_LAYOUT)
-        attn_output_weights = ttnn.mean(attn_output_weights, dim=1)
+        # attn_output_weights = ttnn.mean(attn_output_weights, dim=1)
+        attn_weights_torch = ttnn.to_torch(attn_output_weights).to(torch.float32)
+        attn_weights_avg = attn_weights_torch.mean(dim=1)
+
+        # Convert back
+        attn_output_weights = ttnn.from_torch(
+            attn_weights_avg.to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
+        )
         # identity = ttnn.to_layout(identity, ttnn.TILE_LAYOUT)
 
         return attn_output + identity, attn_output_weights
