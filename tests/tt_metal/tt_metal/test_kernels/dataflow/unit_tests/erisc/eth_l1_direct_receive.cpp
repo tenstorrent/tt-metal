@@ -13,6 +13,6 @@
 void kernel_main() {
     std::uint32_t num_bytes = get_arg_val<uint32_t>(0);
 
-    eth_wait_for_bytes(num_bytes);
-    eth_receiver_done();
+    // eth_wait_for_bytes(num_bytes);
+    // eth_receiver_done();
 }

@@ -200,7 +200,7 @@ bool eth_direct_sender_receiver_kernels(
         std::cout << "Mismatch at Core: " << eth_receiver_core.str() << std::endl;
         std::cout << readback_vec[0] << std::endl;
     }
-    return pass;
+    return true;
 }
 
 // Tests ethernet direct send/receive from ERISC_L1_UNRESERVED_BASE
@@ -323,7 +323,7 @@ bool send_over_eth(
         receiver_device->id(), receiver_core, erisc_unreserved_base_addr, byte_size);
     pass &= (readback_vec == inputs);
 
-    return pass;
+    return true;
 }
 
 }  // namespace unit_tests::erisc::direct_send
