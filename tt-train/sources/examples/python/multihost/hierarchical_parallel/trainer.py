@@ -159,6 +159,9 @@ def worker(
         train_losses.append(accum_loss)
         if step % 10 == 0:
             samples_per_second, tokens_per_second = performance_meter.get_metrics()
+            # scale by number of workers
+            samples_per_second = samples_per_second * num_workers
+            tokens_per_second = tokens_per_second * num_workers
             print(
                 f"[Worker {rank}] Step {step}/{cfg.steps}: Loss = {accum_loss:.4f}, "
                 f"Samples/s = {samples_per_second:.2f}, Tokens/s = {tokens_per_second:.2f}"
