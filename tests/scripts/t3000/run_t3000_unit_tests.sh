@@ -533,7 +533,7 @@ run_t3000_ccl_tests() {
   # composite case
   pytest -n auto tests/nightly/t3000/ccl/test_minimal_reduce_scatter_async.py::test_reduce_scatter_async_training_shapes[wormhole_b0-fabric_linear-random-check-mem_config_input0-mem_config_rs0-tt_training_test_one-mesh_device0-1link]
   # long trace test on dim=1 with ring, currently hanging when run in the suite even though it passes when run in isolation
-  # pytest -n auto tests/nightly/t3000/ccl/test_minimal_reduce_scatter_async.py::test_reduce_scatter_async[wormhole_b0-fabric_ring-barrier_without_persistent_buffers-random-perf-mem_config_input0-mem_config_rs0-scatter_dim_1_test_one-1link-mesh_device0]|
+  pytest -n auto tests/nightly/t3000/ccl/test_minimal_reduce_scatter_async.py::test_reduce_scatter_async[wormhole_b0-fabric_ring-barrier_without_persistent_buffers-random-perf-mem_config_input0-mem_config_rs0-scatter_dim_1_test_one-1link-mesh_device0]
   # long running dim = 3 trace test without barrier and with persistent buffers
   pytest -n auto tests/nightly/t3000/ccl/test_minimal_reduce_scatter_async.py::test_reduce_scatter_async[wormhole_b0-fabric_ring-no_barrier_with_persistent_buffers-random-perf-mem_config_input0-mem_config_rs0-padded_dim_2_test_one-1link-mesh_device0]
 
