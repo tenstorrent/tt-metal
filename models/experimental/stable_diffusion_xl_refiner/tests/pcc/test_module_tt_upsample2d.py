@@ -17,14 +17,8 @@ from models.experimental.stable_diffusion_xl_refiner.tests.test_common import SD
 @pytest.mark.parametrize(
     "input_shape, block_id, block, pcc",
     [
-        # # UpBlock2D - Upsample2D
-        # # [(1, 1536, 16, 16)] [(1, 1536, 32, 32)]
         ((1, 1536, 16, 16), 0, "up_blocks", 0.999),
-        # # CrossAttnUpBlock2D - Upsample2D
-        # # [(1, 1536, 32, 32)]	[(1, 1536, 64, 64)]
         ((1, 1536, 32, 32), 1, "up_blocks", 0.999),
-        # # CrossAttnUpBlock2D - Upsample2D
-        # # [(1, 768, 64, 64)]	[(1, 768, 128, 128)]
         ((1, 768, 64, 64), 2, "up_blocks", 0.999),
     ],
 )
