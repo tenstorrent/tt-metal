@@ -1070,6 +1070,8 @@ function listCommitsBetweenOffline(context, startShaExclusive, endShaInclusive) 
     author_login: c.author_login,
     author_name: c.author_name,
     author_url: c.author_url,
+    message: c.message,
+    description: (typeof c.description === 'string' && c.description) || (typeof c.message === 'string' ? (c.message.split(/\r?\n/)[0] || '') : undefined),
   }));
 }
 
