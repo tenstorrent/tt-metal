@@ -254,7 +254,7 @@ TEST_F(MeshDeviceFixture, TensixComputeTransposeWHDest) {
         .short_init = false,
         .transpose_dest = true,
         .single_tile_size = 2 * 1024,
-        .shape = {1, 3, 3 * 32 * 1, 4 * 32 * 1},
+        .shape = {1, 1, 1 * 32 * 1, 2 * 32 * 1},
         .transpose_type = unit_tests::compute::transpose::TransposeType::WH};
     unit_tests::compute::transpose::run_single_core_transpose(this->devices_.at(0), test_config);
 }

@@ -117,12 +117,9 @@ operation::ProgramWithCallbacks transpose_cn_multi_core(const Tensor& a, Tensor&
 
     tt::tt_metal::Buffer* src0_buffer = a.buffer();
 
-    // This should allocate a DRAM buffer on the device
-    tt::tt_metal::IDevice* device = a.device();
-
     uint32_t num_tensor_tiles = a.physical_volume() / TILE_HW;
 
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    auto compute_with_storage_grid_size = CoreCoord{1u, 1u};
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     uint32_t num_cores_total = num_cores_x * num_cores_y;
@@ -433,7 +430,7 @@ void override_runtime_args_mc_hc_tiled_interleaved(
     auto& cached_reader_args = GetRuntimeArgs(program, reader_kernel_id);
     auto& cached_writer_args = GetRuntimeArgs(program, writer_kernel_id);
 
-    auto compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
+    auto compute_with_storage_grid_size = CoreCoord{1u, 1u};
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_tensor_tiles);
     auto
@@ -517,7 +514,7 @@ operation::ProgramWithCallbacks transpose_hc_multi_core_tiled_interleaved(
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
 
-    auto compute_with_storage_grid_size = a.device()->compute_with_storage_grid_size();
+    auto compute_with_storage_grid_size = CoreCoord{1u, 1u};
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     CoreRange total_cores({0, 0}, {num_cores_x - 1, num_cores_y - 1});
@@ -645,10 +642,7 @@ operation::ProgramWithCallbacks transpose_hc_multi_core(
     log_debug(tt::LogOp, "cb_data_format: {}", cb_data_format);
     log_debug(tt::LogOp, "single_tile_size: {}", single_tile_size);
 
-    // This should allocate a DRAM buffer on the device
-    tt::tt_metal::IDevice* device = a.device();
-
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    auto compute_with_storage_grid_size = CoreCoord{1u, 1u};
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     uint32_t num_cores_total = num_cores_x * num_cores_y;
@@ -1469,12 +1463,9 @@ operation::ProgramWithCallbacks transpose_wh_multi_core(const Tensor& a, Tensor&
 
     tt::tt_metal::Buffer* src0_buffer = a.buffer();
 
-    // This should allocate a DRAM buffer on the device
-    tt::tt_metal::IDevice* device = a.device();
-
     bool fp32_dest_acc_en = src0_cb_data_format == tt::DataFormat::Float32;
 
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    auto compute_with_storage_grid_size = CoreCoord{1u, 1u};
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     uint32_t num_cores_total = num_cores_x * num_cores_y;
@@ -1690,10 +1681,8 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded(const Tensor& a,
     const auto tile = a.tensor_spec().tile();
     const uint32_t tile_hw = tile.get_tile_hw();
 
-    tt::tt_metal::IDevice* device = a.device();
-
     bool fp32_dest_acc_en = src0_cb_data_format == tt::DataFormat::Float32;
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    auto compute_with_storage_grid_size = CoreCoord{1u, 1u};
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     CoreRange total_cores({0, 0}, {num_cores_x - 1, num_cores_y - 1});

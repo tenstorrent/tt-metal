@@ -595,6 +595,28 @@ def test_permute_4d_whyx_permutations(device, shape, perm, dtype):
     assert_equal(torch_output, output_tensor)
 
 
+def run_simple(device):
+    layout = ttnn.TILE_LAYOUT
+    dtype = ttnn.bfloat16
+    shape = (4, 4)
+    a = torch.rand(shape, dtype=torch.bfloat16)
+    b = torch.rand(shape, dtype=torch.bfloat16)
+    c = torch.add(a, b)
+
+    a_tt = ttnn.from_torch(a, layout=layout, dtype=dtype, device=device)
+    b_tt = ttnn.from_torch(b, layout=layout, dtype=dtype, device=device)
+    c_tt = ttnn.add(a_tt, b_tt)
+
+    c_tt_torch = ttnn.to_torch(c_tt)
+
+    print("a,b=", a, b)
+    print("expected c=", c)
+    print("actual c=", c_tt_torch)
+
+    assert c.shape == c_tt_torch.shape
+    assert torch.allclose(c, c_tt_torch, rtol=1e-2, atol=1e-3)
+
+
 @pytest.mark.parametrize("shape", [[1, 1, 32, 32], [1, 1, 128, 128], [32, 32, 32, 32], [96, 96, 96, 96]])
 @pytest.mark.parametrize("perm", [[0, 2, 3, 1], [0, 3, 1, 2], [1, 2, 3, 0], [2, 1, 3, 0], [2, 0, 3, 1]])
 @pytest.mark.parametrize(
@@ -612,6 +634,81 @@ def test_permute_4d_other_permutations(device, shape, perm, dtype):
     output_tensor = ttnn.to_torch(output_tensor)
     torch_output = torch.permute(torch_tensor, perm)
     assert_equal(torch_output, output_tensor)
+
+    run_simple(device)
+
+
+def test_permute_4d_state_issue(device):
+    """Test that runs INT32 -> BFLOAT16 -> INT32 -> BFLOAT16 to reproduce state issue"""
+    shape = [1, 1, 32, 32]
+    perm = [0, 3, 1, 2]
+
+    print("=== Sequential Test Execution ===")
+
+    # Test 1: INT32 (1st run)
+    print("Running INT32 (1st run)")
+    torch.manual_seed(2005)
+    print("Done with manual seed")
+
+    torch_tensor_int32_1 = random_torch_tensor(ttnn.int32, shape)
+    print("Done with random torch tensor")
+    input_tensor_int32_1 = ttnn.from_torch(
+        torch_tensor_int32_1, layout=ttnn.TILE_LAYOUT, dtype=ttnn.int32, device=device
+    )
+    print("Done with from torch")
+    output_tensor_int32_1 = ttnn.permute(input_tensor_int32_1, perm)
+    print("Done with permute")
+    output_tensor_int32_1 = ttnn.to_torch(output_tensor_int32_1)
+    print("✓ INT32 (1st run) completed")
+
+    # Test 2: BFLOAT16 after 1 INT32
+    print("Running BFLOAT16 after 1 INT32")
+    torch.manual_seed(2005)
+    print("Done with manual seed")
+    torch_tensor_bf16_1 = random_torch_tensor(ttnn.bfloat16, shape)
+    print("Done with random torch tensor")
+    input_tensor_bf16_1 = ttnn.from_torch(
+        torch_tensor_bf16_1, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device
+    )
+    print("Done with from torch")
+    output_tensor_bf16_1 = ttnn.permute(input_tensor_bf16_1, perm)
+    print("Done with permute")
+    output_tensor_bf16_1 = ttnn.to_torch(output_tensor_bf16_1)
+    print("✓ BFLOAT16 after 1 INT32 completed")
+
+    # Test 3: INT32 (2nd run)
+    print("Running INT32 (2nd run)")
+    torch.manual_seed(2005)
+    print("Done with manual seed")
+    torch_tensor_int32_2 = random_torch_tensor(ttnn.int32, shape)
+    print("Done with random torch tensor")
+    input_tensor_int32_2 = ttnn.from_torch(
+        torch_tensor_int32_2, layout=ttnn.TILE_LAYOUT, dtype=ttnn.int32, device=device
+    )
+    print("Done with from torch")
+    output_tensor_int32_2 = ttnn.permute(input_tensor_int32_2, perm)
+    print("Done with permute")
+    output_tensor_int32_2 = ttnn.to_torch(output_tensor_int32_2)
+    print("✓ INT32 (2nd run) completed")
+
+    # Test 4: BFLOAT16 after 2 INT32
+    print("Running BFLOAT16 after 2 INT32")
+    torch.manual_seed(2005)
+    print("Done with manual seed")
+    torch_tensor_bf16_2 = random_torch_tensor(ttnn.bfloat16, shape)
+    print("Done with random torch tensor")
+    input_tensor_bf16_2 = ttnn.from_torch(
+        torch_tensor_bf16_2, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device
+    )
+    print("Done with from torch")
+    input_tensor_bf16_2 = ttnn.from_torch(
+        torch_tensor_bf16_2, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device
+    )
+    print("Done with from torch")
+    output_tensor_bf16_2 = ttnn.permute(input_tensor_bf16_2, perm)
+    print("Done with permute")
+    output_tensor_bf16_2 = ttnn.to_torch(output_tensor_bf16_2)
+    print("✓ BFLOAT16 after 2 INT32 completed")
 
 
 @pytest.mark.parametrize("shape", [[33, 1, 17, 33, 33]])

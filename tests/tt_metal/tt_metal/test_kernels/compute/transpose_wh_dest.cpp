@@ -18,13 +18,13 @@ void MAIN {
     // - assumes the tiles come in in column major order from reader
     // - uses reader_unary_transpose_wh
     // - transpose_wh_dest each tile
-    for (uint32_t n = 0; n < NHtWt; n++) {
-        cb_wait_front(tt::CBIndex::c_0, 1);
-        cb_reserve_back(tt::CBIndex::c_16, 1);
+    cb_wait_front(tt::CBIndex::c_0, NHtWt);
+    cb_reserve_back(tt::CBIndex::c_16, NHtWt);
 
+    for (uint32_t n = 0; n < NHtWt; n++) {
         tile_regs_acquire();
         copy_tile_init(tt::CBIndex::c_0);
-        copy_tile(tt::CBIndex::c_0, 0, 0);
+        copy_tile(tt::CBIndex::c_0, n, 0);
 
         transpose_wh_dest_init_short();
         transpose_wh_dest(0);
@@ -33,9 +33,9 @@ void MAIN {
         tile_regs_wait();
         pack_tile(0, tt::CBIndex::c_16);
         tile_regs_release();
-
-        cb_push_back(tt::CBIndex::c_16, 1);
-        cb_pop_front(tt::CBIndex::c_0, 1);
     }
+
+    cb_push_back(tt::CBIndex::c_16, NHtWt);
+    cb_pop_front(tt::CBIndex::c_0, NHtWt);
 }
 }  // namespace NAMESPACE
