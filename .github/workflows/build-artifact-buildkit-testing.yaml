@@ -11,7 +11,7 @@ on:
 run-name: Test buildkit integration
 jobs:
   build-artifact:
-    uses: ./.github/workflows/build-artifact-buildkit.yaml@buildkit-artifacts-build
+    uses: ./.github/workflows/build-artifact-buildkit.yaml
     permissions:
       packages: write
     secrets: inherit
