@@ -6,10 +6,13 @@ import json
 
 def _tensor_info(obj):
     if isinstance(obj, torch.Tensor) and not obj.__class__.__name__ == "Trackable_Tensor" and obj.device.type != "meta":
+        min_max = (obj.min().item(), obj.max().item()) if obj.numel() > 0 else (0, 0)
+        if torch.isnan(torch.tensor(min_max)).any():
+            print("NaN detected in tensor...")
         return {
             "shape": list(obj.shape),
             "dtype": str(obj.dtype),
-            "min_max": (obj.min().item(), obj.max().item()) if obj.numel() > 0 else (0, 0),
+            "min_max": min_max,
         }
     elif isinstance(obj, (list, tuple)):
         return [_tensor_info(x) for x in obj]

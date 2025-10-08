@@ -1246,6 +1246,7 @@ class ConstantTensor(Parameter):
     def __post_init__(self):
         if self.id == "":
             self.id = f"const{ConstantTensor.counter}"
+            print(f"Warning: ConstantTensor not inferred from state_dict, generating a unique id {self.id}")
         ConstantTensor.counter += 1
 
     def generate_code(self) -> str:
