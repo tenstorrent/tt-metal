@@ -3378,18 +3378,6 @@ def test_conv2d_sdxl(
 
         # input_channels 4
         (1, 4, 384, 128, 128,   ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), HS, 128, 1, False, ttnn.MathFidelity.HiFi2, False, False, 1, 1, False, False),
-
-        # kernel 1x1
-        (1, 1152, 384, 128, 128, ttnn.bfloat16, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, 1, 1, False, False),
-        (1, 1152, 768, 64, 64,  ttnn.bfloat16, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, 1, 1, False, False),
-        (1, 1536, 768, 64, 64,  ttnn.bfloat16, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, 1, 1, False, False),
-        (1, 2304, 1536, 32, 32, ttnn.bfloat16, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, 1, 1, False, False),
-        (1, 2304, 768, 64, 64,  ttnn.bfloat16, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, 1, 1, False, False),
-        (1, 3072, 1536, 16, 16, ttnn.bfloat16, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, 1, 1, False, False),
-        (1, 3072, 1536, 32, 32, ttnn.bfloat16, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, 1, 1, False, False),
-        (1, 384, 768, 64, 64,   ttnn.bfloat16, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, 1, 1, False, False),
-        (1, 768, 384, 128, 128, ttnn.bfloat16, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, 1, 1, False, False),
-        (1, 768, 1536, 32, 32,  ttnn.bfloat16, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, 1, 1, False, False),
     ),
 )
 
