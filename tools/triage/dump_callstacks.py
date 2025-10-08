@@ -241,12 +241,14 @@ def _format_callstack(callstack: list[CallstackEntry]) -> list[str]:
 
 def format_callstack_with_message(callstack_with_message: KernelCallstackWithMessage) -> str:
     """Return string representation of the callstack with optional error message. Adding empty line at the beginning for prettier look."""
+    empty_line = ""  # For prettier look
     if callstack_with_message.message is not None:
         return "\n".join(
-            ["", f"{RED}{callstack_with_message.message}{RST}"] + _format_callstack(callstack_with_message.callstack)
+            [empty_line, f"{RED}{callstack_with_message.message}{RST}"]
+            + _format_callstack(callstack_with_message.callstack)
         )
     else:
-        return "\n".join([""] + _format_callstack(callstack_with_message.callstack))
+        return "\n".join([empty_line] + _format_callstack(callstack_with_message.callstack))
 
 
 @dataclass
@@ -328,10 +330,15 @@ def dump_callstacks(
             callstack_with_message = get_callstack(
                 location, risc_name, dispatcher_core_data, elfs_cache, full_callstack
             )
+            # If we have no callstack, we did not find any ELF files that contain the PC
+            if len(callstack_with_message.callstack) == 0:
+                callstack_with_message.message = "PC was not in range of any provided ELF files"
 
         result = DumpCallstacksData(
             dispatcher_core_data=dispatcher_core_data,
-            pc=callstack_with_message.callstack[0].pc if len(callstack_with_message.callstack) > 0 else None,
+            pc=callstack_with_message.callstack[0].pc
+            if len(callstack_with_message.callstack) > 0
+            else location._device.get_block(location).get_risc_debug(risc_name).get_pc(),
             kernel_callstack_with_message=callstack_with_message,
         )
 
