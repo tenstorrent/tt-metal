@@ -249,12 +249,12 @@ bool validate_data(
     for (uint32_t r = 0; r < block_h; ++r) {
         for (uint32_t c = 0; c < block_w_per_receiver; ++c) {
             uint32_t one_row_bytes = block_w * datums_per_tile * num_banks;
-            uint32_t input_step = input_start_index_for_core + r * one_row_bytes + c * datums_per_tile * num_banks;
+            uint32_t input_step = input_start_index_for_core + (r * one_row_bytes) + (c * datums_per_tile * num_banks);
             auto input_begin = input_data.begin() + input_step;
             auto input_end = input_begin + datums_per_tile;
             std::vector<T> input_slice(input_begin, input_end);
 
-            uint32_t result_step = r * (datums_per_tile * block_w_per_receiver) + c * datums_per_tile;
+            uint32_t result_step = (r * (datums_per_tile * block_w_per_receiver)) + (c * datums_per_tile);
             auto result_begin = result_data.begin() + result_step;
             auto result_end = result_begin + datums_per_tile;
             std::vector<T> result_slice(result_begin, result_end);

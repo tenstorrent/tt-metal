@@ -101,7 +101,7 @@ enum class ACCESS_TYPE { READ, WRITE };
 
 enum class BUFFER_TYPE { DRAM, L1 };
 
-std::string NOC_INDEXToString(NOC_INDEX enumValue) {
+inline std::string NOC_INDEXToString(NOC_INDEX enumValue) {
     switch (enumValue) {
         case NOC_INDEX::NOC_RISCV_0: return "NOC_RISCV_0";
         case NOC_INDEX::NOC_RISCV_1: return "NOC_RISCV_1";
@@ -109,7 +109,7 @@ std::string NOC_INDEXToString(NOC_INDEX enumValue) {
     }
 }
 
-std::string NOC_DIRECTIONToString(NOC_DIRECTION enumValue) {
+inline std::string NOC_DIRECTIONToString(NOC_DIRECTION enumValue) {
     switch (enumValue) {
         case NOC_DIRECTION::X_PLUS_DIR: return "X_PLUS_DIR";
         case NOC_DIRECTION::Y_MINUS_DIR: return "Y_MINUS_DIR";
@@ -119,7 +119,7 @@ std::string NOC_DIRECTIONToString(NOC_DIRECTION enumValue) {
     }
 }
 
-std::string ACCESS_TYPEToString(ACCESS_TYPE enumValue) {
+inline std::string ACCESS_TYPEToString(ACCESS_TYPE enumValue) {
     switch (enumValue) {
         case ACCESS_TYPE::READ: return "READ";
         case ACCESS_TYPE::WRITE: return "WRITE";
@@ -127,7 +127,7 @@ std::string ACCESS_TYPEToString(ACCESS_TYPE enumValue) {
     }
 }
 
-std::string BUFFER_TYPEToString(BUFFER_TYPE enumValue) {
+inline std::string BUFFER_TYPEToString(BUFFER_TYPE enumValue) {
     switch (enumValue) {
         case BUFFER_TYPE::DRAM: return "DRAM";
         case BUFFER_TYPE::L1: return "L1";

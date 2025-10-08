@@ -205,7 +205,7 @@ bool validation(
             auto input_bfp8 = unpack_bfp8_tiles_into_float_vec(input_vec, true, true);
 
             for (uint32_t i = 0; i < num_slices; ++i) {
-                uint32_t input_step = start_index + i * num_datum_per_slice * num_banks;
+                uint32_t input_step = start_index + (i * num_datum_per_slice * num_banks);
                 std::vector<float> input_slice(
                     input_bfp8.begin() + input_step, input_bfp8.begin() + input_step + num_datum_per_slice);
                 uint32_t result_step = i * num_datum_per_slice;
@@ -222,7 +222,7 @@ bool validation(
             auto input_bf16 = unpack_uint32_vec_into_bfloat16_vec(input_vec);
 
             for (uint32_t i = 0; i < num_slices; ++i) {
-                uint32_t input_step = start_index + i * num_datum_per_slice * num_banks;
+                uint32_t input_step = start_index + (i * num_datum_per_slice * num_banks);
                 std::vector<bfloat16> input_slice(
                     input_bf16.begin() + input_step, input_bf16.begin() + input_step + num_datum_per_slice);
                 uint32_t result_step = i * num_datum_per_slice;

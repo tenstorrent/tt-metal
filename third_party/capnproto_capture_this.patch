@@ -1,0 +1,123 @@
+diff --git a/c++/src/capnp/dynamic-capability.c++ b/c++/src/capnp/dynamic-capability.c++
+index 81a4ed35..549d1cc2 100644
+--- a/c++/src/capnp/dynamic-capability.c++
++++ b/c++/src/capnp/dynamic-capability.c++
+@@ -87,7 +87,7 @@ RemotePromise<DynamicStruct> Request<DynamicStruct, DynamicStruct>::send() {
+   // Explicitly upcast to kj::Promise to make clear that calling .then() doesn't invalidate the
+   // Pipeline part of the RemotePromise.
+   auto typedPromise = kj::implicitCast<kj::Promise<Response<AnyPointer>>&>(typelessPromise)
+-      .then([=](Response<AnyPointer>&& response) -> Response<DynamicStruct> {
++      .then([=, this](Response<AnyPointer>&& response) -> Response<DynamicStruct> {
+         return Response<DynamicStruct>(response.getAs<DynamicStruct>(resultSchemaCopy),
+                                        kj::mv(response.hook));
+       });
+diff --git a/c++/src/capnp/rpc.c++ b/c++/src/capnp/rpc.c++
+index d66d1a22..2fe58e69 100644
+--- a/c++/src/capnp/rpc.c++
++++ b/c++/src/capnp/rpc.c++
+@@ -1790,7 +1790,7 @@ private:
+         }
+
+         auto appPromise = sendResult.promise.then(
+-            [=](kj::Own<RpcResponse>&& response) {
++            [=, this](kj::Own<RpcResponse>&& response) {
+               auto reader = response->getResults();
+               return Response<AnyPointer>(reader, kj::mv(response));
+             });
+diff --git a/c++/src/kj/async-io-unix.c++ b/c++/src/kj/async-io-unix.c++
+index 7e1c85fc..c05c3966 100644
+--- a/c++/src/kj/async-io-unix.c++
++++ b/c++/src/kj/async-io-unix.c++
+@@ -199,7 +199,7 @@ public:
+
+     if (n < 0) {
+       // EAGAIN -- need to wait for writability and try again.
+-      return observer.whenBecomesWritable().then([=]() {
++      return observer.whenBecomesWritable().then([=, this]() {
+         return write(buffer, size);
+       });
+     } else if (n == size) {
+@@ -717,7 +717,7 @@ private:
+
+     if (n < 0) {
+       // Read would block.
+-      return observer.whenBecomesReadable().then([=]() {
++      return observer.whenBecomesReadable().then([=, this]() {
+         return tryReadInternal(buffer, minBytes, maxBytes, fdBuffer, maxFds, alreadyRead);
+       });
+     } else if (n == 0) {
+@@ -830,7 +830,7 @@ private:
+
+     if (n < 0) {
+       // Got EAGAIN. Nothing was written.
+-      return observer.whenBecomesWritable().then([=]() {
++      return observer.whenBecomesWritable().then([=, this]() {
+         return writeInternal(firstPiece, morePieces, fds);
+       });
+     } else if (n == 0) {
+diff --git a/c++/src/kj/async-io-win32.c++ b/c++/src/kj/async-io-win32.c++
+index 37bb4e48..67159421 100644
+--- a/c++/src/kj/async-io-win32.c++
++++ b/c++/src/kj/async-io-win32.c++
+@@ -221,7 +221,7 @@ public:
+   virtual ~AsyncStreamFd() noexcept(false) {}
+
+   Promise<size_t> read(void* buffer, size_t minBytes, size_t maxBytes) override {
+-    return tryRead(buffer, minBytes, maxBytes).then([=](size_t result) {
++    return tryRead(buffer, minBytes, maxBytes).then([=, this](size_t result) {
+       KJ_REQUIRE(result >= minBytes, "Premature EOF") {
+         // Pretend we read zeros from the input.
+         memset(reinterpret_cast<byte*>(buffer) + result, 0, minBytes - result);
+diff --git a/c++/src/kj/async-io.c++ b/c++/src/kj/async-io.c++
+index 5fea50d3..fba2794a 100644
+--- a/c++/src/kj/async-io.c++
++++ b/c++/src/kj/async-io.c++
+@@ -57,7 +57,7 @@ Promise<void> AsyncInputStream::read(void* buffer, size_t bytes) {
+ }
+
+ Promise<size_t> AsyncInputStream::read(void* buffer, size_t minBytes, size_t maxBytes) {
+-  return tryRead(buffer, minBytes, maxBytes).then([=](size_t result) {
++  return tryRead(buffer, minBytes, maxBytes).then([=, this](size_t result) {
+     if (result >= minBytes) {
+       return result;
+     } else {
+diff --git a/c++/src/kj/compat/http.c++ b/c++/src/kj/compat/http.c++
+index 6976335e..7a63bd89 100644
+--- a/c++/src/kj/compat/http.c++
++++ b/c++/src/kj/compat/http.c++
+@@ -1771,7 +1771,7 @@ public:
+     if (alreadyDone()) return constPromise<size_t, 0>();
+
+     return getInner().tryRead(buffer, minBytes, maxBytes)
+-        .then([=](size_t amount) {
++        .then([=, this](size_t amount) {
+       if (amount < minBytes) {
+         doneReading();
+       }
+@@ -1813,7 +1813,7 @@ private:
+     // We have to set minBytes to 1 here so that if we read any data at all, we update our
+     // counter immediately, so that we still know where we are in case of cancellation.
+     return getInner().tryRead(buffer, 1, kj::min(maxBytes, length))
+-        .then([=](size_t amount) -> kj::Promise<size_t> {
++        .then([=, this](size_t amount) -> kj::Promise<size_t> {
+       length -= amount;
+       if (length > 0) {
+         // We haven't reached the end of the entity body yet.
+@@ -1859,7 +1859,7 @@ private:
+       return alreadyRead;
+     } else if (chunkSize == 0) {
+       // Read next chunk header.
+-      return getInner().readChunkHeader().then([=](uint64_t nextChunkSize) {
++      return getInner().readChunkHeader().then([=, this](uint64_t nextChunkSize) {
+         if (nextChunkSize == 0) {
+           doneReading();
+         }
+@@ -1872,7 +1872,7 @@ private:
+       // We have to set minBytes to 1 here so that if we read any data at all, we update our
+       // counter immediately, so that we still know where we are in case of cancellation.
+       return getInner().tryRead(buffer, 1, kj::min(maxBytes, chunkSize))
+-          .then([=](size_t amount) -> kj::Promise<size_t> {
++          .then([=, this](size_t amount) -> kj::Promise<size_t> {
+         chunkSize -= amount;
+         if (amount == 0) {
+           kj::throwRecoverableException(KJ_EXCEPTION(DISCONNECTED, "premature EOF in HTTP chunk"));
