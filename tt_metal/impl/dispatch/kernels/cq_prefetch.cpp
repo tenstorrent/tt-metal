@@ -430,7 +430,6 @@ void fetch_q_get_cmds(uint32_t& fence, uint32_t& cmd_ptr, uint32_t& pcie_read_pt
             WAYPOINT("HQW");
             uint32_t heartbeat = 0;
             while ((fetch_size = *prefetch_q_rd_ptr) == 0) {
-                invalidate_l1_cache();
                 IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
             }
             fetch_q_get_cmds<preamble_size>(fence, cmd_ptr, pcie_read_ptr);
