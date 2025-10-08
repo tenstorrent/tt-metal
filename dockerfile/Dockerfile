@@ -79,6 +79,79 @@ RUN git config --global --add safe.directory '*'
 ENV CCACHE_TEMPDIR=/tmp/ccache
 
 #############################################################
+FROM ci-build as build-artifacts
+
+COPY . /tt-metal
+WORKDIR /tt-metal
+
+ARG SKIP_TT_TRAIN="true"
+ARG BUILD_TYPE="Release"
+ARG TOOLCHAIN="cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake"
+ARG TRACY="false"
+ARG DISTRIBUTED="true"
+ARG PROFILE="false"
+ARG BUILD_UMD_TESTS="false"
+ARG PUBLISH_ARTIFACT="true"
+
+RUN set -eu && \
+    BUILD_ARGS=$([ "${SKIP_TT_TRAIN}" = "true" ] && echo "--build-metal-tests --build-ttnn-tests --build-programming-examples" || echo "--build-all") && \
+    BUILD_COMMAND="./build_metal.sh --build-dir build --build-type ${BUILD_TYPE} --toolchain-path ${TOOLCHAIN} ${BUILD_ARGS} --enable-ccache --configure-only" && \
+    \
+    # Conditionally add Tracy profiler
+    if [ "${TRACY}" = "true" ]; then \
+        BUILD_COMMAND="${BUILD_COMMAND} --enable-profiler"; \
+    fi && \
+    \
+    # Conditionally disable distributed
+    if [ "${DISTRIBUTED}" = "false" ]; then \
+        BUILD_COMMAND="${BUILD_COMMAND} --without-distributed"; \
+    fi && \
+    \
+    # Conditionally add profiling options
+    if [ "${PROFILE}" = "true" ]; then \
+        BUILD_COMMAND="${BUILD_COMMAND} --enable-time-trace --disable-unity-builds"; \
+    fi && \
+    \
+    # Conditionally build UMD tests
+    if [ "${BUILD_UMD_TESTS}" = "true" ]; then \
+        BUILD_COMMAND="${BUILD_COMMAND} --build-umd-tests"; \
+    fi && \
+    \
+    # Execute the build command
+    echo "Build command: ${BUILD_COMMAND}" && \
+    ${BUILD_COMMAND}
+
+RUN cmake --build build --target install
+
+# Conditional profiling step
+RUN set -eu && \
+    if [ "${PROFILE}" = "true" ]; then \
+        echo "maxNameLength = 300" > ClangBuildAnalyzer.ini && \
+        ClangBuildAnalyzer --all build capture.bin && \
+        ClangBuildAnalyzer --analyze capture.bin; \
+    fi
+
+RUN cmake --build build --target package
+RUN ls -1sh build/*.deb build/*.ddeb || true
+
+# Prepare and tar artifacts
+RUN set -eu && \
+    if [ "${PUBLISH_ARTIFACT}" = "true" ]; then \
+        ARTIFACT_PATHS="ttnn/ttnn/*.so build/lib ttnn/ttnn/*.so build/programming_examples build/test build/tools runtime"; \
+        \
+        if [ "${SKIP_TT_TRAIN}" != "true" ]; then \
+            ARTIFACT_PATHS="${ARTIFACT_PATHS} build/tt-train data"; \
+        fi && \
+        \
+        mkdir -p /artifacts && \
+        tar -cvhf /artifacts/ttm_any.tar ${ARTIFACT_PATHS}; \
+    fi
+
+FROM scratch AS artifacts
+COPY --from=build-artifacts /artifacts /artifacts
+COPY --from=build-artifacts /tt-metal/build/*.deb /build
+
+#############################################################
 
 FROM ci-build AS ci-test
 
