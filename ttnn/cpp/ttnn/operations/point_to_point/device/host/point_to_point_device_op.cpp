@@ -85,7 +85,7 @@ Fabric1DRoute fabric_1d_routing(
     };
 
     if (topology == ::ttnn::ccl::Topology::Ring) {
-        int ring_hops = line_hops + (line_hops < 0 ? -1 : 1) * mesh_shape[dim];
+        int ring_hops = line_hops + ((line_hops < 0 ? -1 : 1) * mesh_shape[dim]);
 
         if (std::abs(ring_hops) < std::abs(line_hops)) {
             bool ring_is_forward = (ring_hops > 0);
@@ -175,7 +175,9 @@ PointToPointOp::tensor_return_value_t PointToPointOp::create_output_tensors(
 
     auto mesh_device = tensor_args.input_tensor.device();
 
-    const auto intermediate_output_tensor = create_device_tensor(output_specs.at(0), mesh_device);
+    const auto intermediate_output_tensor =
+        tensor_args.optional_intermediate_tensor.value_or(create_device_tensor(output_specs.at(0), mesh_device));
+
     const auto final_output_tensor =
         tensor_args.optional_output_tensor.value_or(create_device_tensor(output_specs.at(1), mesh_device));
 
