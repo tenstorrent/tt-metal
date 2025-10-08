@@ -178,3 +178,5 @@ jobs:
           ls
           echo " ================= "
           ls outputs
+          echo " ================= "
+          ls outputs/*
