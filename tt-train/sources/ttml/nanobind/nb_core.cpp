@@ -37,7 +37,8 @@ void py_module_types(nb::module_& m) {
     nb::class_<ttml::core::distributed::SocketManager>(py_distributed, "SocketManager");
     // Expose SocketType enum
     ttml::nanobind::util::export_enum<ttnn::distributed::SocketType>(py_distributed);
-    // Expose multihost DistributedContext under core.distributed as a non-owning type
+    // Expose multihost DistributedContext
+    // Note: This is held by shared_ptr in Python (returned from get_distributed_context)
     nb::class_<tt::tt_metal::distributed::multihost::DistributedContext>(py_distributed, "DistributedContext");
 }
 
@@ -82,7 +83,7 @@ void py_module(nb::module_& m) {
         py_dist_ctx.def("barrier", [](DistributedContext& self) { self.barrier(); });
         py_dist_ctx.def(
             "create_sub_context",
-            [](DistributedContext& self, const std::vector<int>& ranks) {
+            [](DistributedContext& self, const std::vector<int>& ranks) -> std::shared_ptr<DistributedContext> {
                 return self.create_sub_context(ttsl::Span<int>(const_cast<int*>(ranks.data()), ranks.size()));
             },
             nb::arg("ranks"));
@@ -98,14 +99,16 @@ void py_module(nb::module_& m) {
             "send",
             [](SocketManager& self,
                const ttml::autograd::Tensor& tensor,
-               DistributedContext* distributed_ctx,
+               nb::object distributed_ctx_obj,
                int rank,
                bool use_grad) {
-                std::shared_ptr<DistributedContext> ctx(distributed_ctx, [](DistributedContext*) {});
+                // Extract the shared_ptr from the Python object
+                // nanobind stores DistributedContext as shared_ptr since get_distributed_context returns one
+                auto ctx_ptr = nb::cast<std::shared_ptr<DistributedContext>>(distributed_ctx_obj);
                 if (use_grad) {
-                    self.send(tensor.get_grad(), ctx, Rank{rank});
+                    self.send(tensor.get_grad(), ctx_ptr, Rank{rank});
                 } else {
-                    self.send(tensor.get_value(), ctx, Rank{rank});
+                    self.send(tensor.get_value(), ctx_ptr, Rank{rank});
                 }
             },
             nb::arg("tensor"),
@@ -116,18 +119,20 @@ void py_module(nb::module_& m) {
             "recv",
             [](SocketManager& self,
                ttml::autograd::Tensor& tensor,
-               DistributedContext* distributed_ctx,
+               nb::object distributed_ctx_obj,
                int rank,
                bool use_grad) -> ttml::autograd::Tensor& {
-                std::shared_ptr<DistributedContext> ctx(distributed_ctx, [](DistributedContext*) {});
+                // Extract the shared_ptr from the Python object
+                // nanobind stores DistributedContext as shared_ptr since get_distributed_context returns one
+                auto ctx_ptr = nb::cast<std::shared_ptr<DistributedContext>>(distributed_ctx_obj);
                 if (use_grad) {
                     if (!tensor.is_grad_initialized()) {
                         tensor.set_grad(ttnn::empty_like(tensor.get_value()));
                     }
-                    auto filled = self.recv(tensor.get_grad(), ctx, Rank{rank});
+                    auto filled = self.recv(tensor.get_grad(), ctx_ptr, Rank{rank});
                     tensor.set_grad(filled);
                 } else {
-                    auto filled = self.recv(tensor.get_value(), ctx, Rank{rank});
+                    auto filled = self.recv(tensor.get_value(), ctx_ptr, Rank{rank});
                     tensor.set_value(filled);
                 }
                 return tensor;
