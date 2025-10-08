@@ -54,31 +54,31 @@ static const std::unordered_map<KernelLookupKey, KernelConfigEntry, KernelLookup
 
     // TTS configurations
     {{WhereVariant::TTS, WhereBroadcastType::COL_BCAST},
-     {KernelName::ReaderColBcastTTS, KernelName::ComputeColBcastTTSTST, KernelName::WriterNoBcast}},
+     {KernelName::ReaderColBcastTTS, KernelName::ComputeBcastTTS_TST, KernelName::WriterNoBcast}},
     {{WhereVariant::TTS, WhereBroadcastType::ROW_BCAST},
-     {KernelName::ReaderRowBcastTTS, KernelName::ComputeNoBcastTTSTST, KernelName::WriterNoBcast}},
+     {KernelName::ReaderRowBcastTTS, KernelName::ComputeNoBcastTTS_TST, KernelName::WriterNoBcast}},
     {{WhereVariant::TTS, WhereBroadcastType::OUTER_BCAST},
-     {KernelName::ReaderOuterBcastTTS, KernelName::ComputeNoBcastTTSTST, KernelName::WriterNoBcast}},
+     {KernelName::ReaderOuterBcastTTS, KernelName::ComputeNoBcastTTS_TST, KernelName::WriterNoBcast}},
     {{WhereVariant::TTS, WhereBroadcastType::SCALAR_A_BCAST},
-     {KernelName::ReaderScalarBcastTTS, KernelName::ComputeScalarBcastTTSTST, KernelName::WriterNoBcast}},
+     {KernelName::ReaderScalarBcastTTS, KernelName::ComputeBcastTTS_TST, KernelName::WriterNoBcast}},
     {{WhereVariant::TTS, WhereBroadcastType::SCALAR_B_BCAST},
-     {KernelName::ReaderScalarBcastTTS, KernelName::ComputeScalarBcastTTSTST, KernelName::WriterNoBcast}},
+     {KernelName::ReaderScalarBcastTTS, KernelName::ComputeBcastTTS_TST, KernelName::WriterNoBcast}},
     {{WhereVariant::TTS, WhereBroadcastType::NONE},
-     {KernelName::ReaderNoBcastTTS, KernelName::ComputeNoBcastTTSTST, KernelName::WriterNoBcast}},
+     {KernelName::ReaderNoBcastTTS, KernelName::ComputeNoBcastTTS_TST, KernelName::WriterNoBcast}},
 
     // TST configurations
     {{WhereVariant::TST, WhereBroadcastType::COL_BCAST},
-     {KernelName::ReaderColBcastTST, KernelName::ComputeColBcastTTSTST, KernelName::WriterNoBcast}},
+     {KernelName::ReaderColBcastTST, KernelName::ComputeBcastTTS_TST, KernelName::WriterNoBcast}},
     {{WhereVariant::TST, WhereBroadcastType::ROW_BCAST},
-     {KernelName::ReaderRowBcastTST, KernelName::ComputeNoBcastTTSTST, KernelName::WriterNoBcast}},
+     {KernelName::ReaderRowBcastTST, KernelName::ComputeNoBcastTTS_TST, KernelName::WriterNoBcast}},
     {{WhereVariant::TST, WhereBroadcastType::OUTER_BCAST},
-     {KernelName::ReaderOuterBcastTST, KernelName::ComputeNoBcastTTSTST, KernelName::WriterNoBcast}},
+     {KernelName::ReaderOuterBcastTST, KernelName::ComputeNoBcastTTS_TST, KernelName::WriterNoBcast}},
     {{WhereVariant::TST, WhereBroadcastType::SCALAR_A_BCAST},
-     {KernelName::ReaderScalarBcastTST, KernelName::ComputeScalarBcastTTSTST, KernelName::WriterNoBcast}},
+     {KernelName::ReaderScalarBcastTST, KernelName::ComputeBcastTTS_TST, KernelName::WriterNoBcast}},
     {{WhereVariant::TST, WhereBroadcastType::SCALAR_B_BCAST},
-     {KernelName::ReaderScalarBcastTST, KernelName::ComputeScalarBcastTTSTST, KernelName::WriterNoBcast}},
+     {KernelName::ReaderScalarBcastTST, KernelName::ComputeBcastTTS_TST, KernelName::WriterNoBcast}},
     {{WhereVariant::TST, WhereBroadcastType::NONE},
-     {KernelName::ReaderNoBcastTST, KernelName::ComputeNoBcastTTSTST, KernelName::WriterNoBcast}},
+     {KernelName::ReaderNoBcastTST, KernelName::ComputeNoBcastTTS_TST, KernelName::WriterNoBcast}},
 };
 
 WhereKernelConfig::WhereKernelConfig(WhereVariant where_variant, WhereBroadcastType broadcast_type) {
@@ -143,15 +143,12 @@ std::string get_kernel_file_path(KernelName kernel_name) {
                    "writer_unary_interleaved_start_id.cpp";
 
         case KernelName::ComputeNoBcastTTT: return fmt::format(compute, root, "where_sfpu_no_bcast_ttt.cpp");
-        case KernelName::ComputeScalarBcastTTSTST:
-            return fmt::format(compute, root, "where_sfpu_scalar_bcast_tts_tst.cpp");
         case KernelName::ComputeBcastTTT:
             return "ttnn/cpp/ttnn/operations/eltwise/ternary/where/device/kernels/compute/"
                    "where_sfpu_col_scalar_bcast_ttt.cpp";
-        case KernelName::ComputeColBcastTTSTST:
-            return "ttnn/cpp/ttnn/operations/eltwise/ternary/where/device/kernels/compute/"
-                   "where_sfpu_col_bcast_tts_tst.cpp";
-        case KernelName::ComputeNoBcastTTSTST:
+        case KernelName::ComputeBcastTTS_TST:
+            return fmt::format(compute, root, "where_sfpu_col_scalar_bcast_tts_tst.cpp");
+        case KernelName::ComputeNoBcastTTS_TST:
             return "ttnn/cpp/ttnn/operations/eltwise/ternary/where/device/kernels/compute/"
                    "where_sfpu_no_bcast_tts_tst.cpp";
         default: __builtin_unreachable();  // GCC 12 doesn't compile even though we exhaustively match

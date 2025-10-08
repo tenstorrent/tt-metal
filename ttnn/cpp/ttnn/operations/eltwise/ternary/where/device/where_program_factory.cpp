@@ -639,88 +639,40 @@ void set_or_update_runtime_arguments(
         };
         handle_args(program, writer_kernel_id, core, writer_runtime_args);
 
-        // Compute runtime args - binary_ng style for TTT column broadcast
-        if (variant == ttnn::operations::ternary::WhereVariant::TTT) {
-            if (broadcast_type == ttnn::operations::ternary::WhereBroadcastType::COL_BCAST) {
-                // Calculate freq and counter like binary_ng for column broadcast
-                uint32_t start_t = start_tile_id % (cHt * cWt);
-                uint32_t start_tw = start_t % cWt;
-                uint32_t freq = cWt;          // Column broadcast frequency
-                uint32_t counter = start_tw;  // Column broadcast counter
-
-                std::array compute_runtime_args = {num_tiles_per_core, freq, counter, 0u};
-                handle_args(program, compute_kernel_id, core, compute_runtime_args);
-            } else if (broadcast_type == ttnn::operations::ternary::WhereBroadcastType::SCALAR_BCAST) {
-                // Calculate freq and counter like binary_ng for scalar broadcast
-                uint32_t start_t = start_tile_id % (cHt * cWt);
-                uint32_t freq = cHt * cWt;   // scalar broadcast frequency
-                uint32_t counter = start_t;  // scalar broadcast counter
-
-                std::array compute_runtime_args = {num_tiles_per_core, freq, counter, 0u};
-                handle_args(program, compute_kernel_id, core, compute_runtime_args);
-            } else {
-                // TTT variant without subtile bcast and ROW_BCAST is also handled here
-                std::array compute_runtime_args = {num_tiles_per_core, 0u, 0u, 0u};
-                handle_args(program, compute_kernel_id, core, compute_runtime_args);
-            }
-
-        } else if (variant == WhereVariant::TTS) {
-            auto bit_cast_scalar =
-                pack_scalar_runtime_arg(operation_attributes.value_false_scalar.value(), output.dtype());
-
-            if (broadcast_type == ttnn::operations::ternary::WhereBroadcastType::COL_BCAST) {
-                // For TTS column broadcast, calculate freq and counter for dedicated kernel
-                uint32_t start_t = start_tile_id % (cHt * cWt);
-                uint32_t start_tw = start_t % cWt;
-
-                uint32_t freq = cWt;
-                uint32_t counter = start_tw;
-
-                std::array compute_runtime_args = {num_tiles_per_core, freq, counter, bit_cast_scalar};
-                handle_args(program, compute_kernel_id, core, compute_runtime_args);
-            } else if (
-                broadcast_type == ttnn::operations::ternary::WhereBroadcastType::SCALAR_A_BCAST ||
-                broadcast_type == ttnn::operations::ternary::WhereBroadcastType::SCALAR_B_BCAST) {
-                // Calculate freq and counter like binary_ng for scalar broadcast
-                auto HtWt = cHt * cWt;
-                uint32_t start_t = start_tile_id % HtWt;
-                uint32_t freq = HtWt;        // scalar broadcast frequency
-                uint32_t counter = start_t;  // scalar broadcast counter
-
-                std::array compute_runtime_args = {num_tiles_per_core, freq, counter, bit_cast_scalar};
-                handle_args(program, compute_kernel_id, core, compute_runtime_args);
-            } else {
-                std::array compute_runtime_args = {num_tiles_per_core, bit_cast_scalar, 0u, 0u};
-                handle_args(program, compute_kernel_id, core, compute_runtime_args);
-            }
+        // Compute runtime args
+        uint32_t scalar_arg = 0u;
+        if (variant == WhereVariant::TTS) {
+            scalar_arg = pack_scalar_runtime_arg(operation_attributes.value_false_scalar.value(), output.dtype());
         } else if (variant == WhereVariant::TST) {
-            auto bit_cast_scalar =
-                    pack_scalar_runtime_arg(operation_attributes.value_true_scalar.value(), output.dtype());
-            if (broadcast_type == ttnn::operations::ternary::WhereBroadcastType::COL_BCAST) {
-                // For TST column broadcast, calculate freq and counter for dedicated kernel
-                uint32_t start_t = start_tile_id % (cHt * cWt);
-                uint32_t start_tw = start_t % cWt;
-
-                uint32_t freq = cWt;
-                uint32_t counter = start_tw;
-
-                std::array compute_runtime_args = {num_tiles_per_core, freq, counter, bit_cast_scalar};
-                handle_args(program, compute_kernel_id, core, compute_runtime_args);
-            } else if (
-                broadcast_type == ttnn::operations::ternary::WhereBroadcastType::SCALAR_A_BCAST ||
-                broadcast_type == ttnn::operations::ternary::WhereBroadcastType::SCALAR_B_BCAST) {
-                // Calculate freq and counter like binary_ng for scalar broadcast
-                auto HtWt = cHt * cWt;
-                uint32_t start_t = start_tile_id % HtWt;
-                uint32_t freq = HtWt;        // scalar broadcast frequency
-                uint32_t counter = start_t;  // scalar broadcast counter
-                std::array compute_runtime_args = {num_tiles_per_core, freq, counter, bit_cast_scalar};
-                handle_args(program, compute_kernel_id, core, compute_runtime_args);
-            } else {
-                std::array compute_runtime_args = {num_tiles_per_core, bit_cast_scalar, 0u, 0u};
-                handle_args(program, compute_kernel_id, core, compute_runtime_args);
-            }
+            scalar_arg = pack_scalar_runtime_arg(operation_attributes.value_true_scalar.value(), output.dtype());
         }
+        auto [freq, counter] = [&] {
+            switch (broadcast_type) {
+                    // TODO: test for TTS and TST
+                    // case WhereBroadcastType::ROW_B_COL_A:
+                    // case WhereBroadcastType::ROW_A_COL_B:
+                case WhereBroadcastType::COL_BCAST: {
+                    uint32_t start_t = start_tile_id % (cHt * cWt);
+                    uint32_t start_tw = start_t % cWt;
+                    return std::pair{cWt, start_tw};
+                }
+                case WhereBroadcastType::SCALAR_BCAST:
+                case WhereBroadcastType::SCALAR_A_BCAST:
+                case WhereBroadcastType::SCALAR_B_BCAST: {
+                    uint32_t HtWt = cHt * cWt;
+                    uint32_t start_t = start_tile_id % HtWt;
+                    return std::pair{HtWt, start_t};
+                }
+                case WhereBroadcastType::NONE:
+                case WhereBroadcastType::OUTER_BCAST:
+                case WhereBroadcastType::ROW_BCAST: return std::pair{0u, 0u};
+                default: __builtin_unreachable();
+            }
+        }();
+
+        std::array<uint32_t, num_kernel_args> compute_runtime_args = {num_tiles_per_core, freq, counter, scalar_arg};
+        handle_args(program, compute_kernel_id, core, compute_runtime_args);
+
         start_tile_id += num_tiles_per_core;
     }
 }
@@ -752,39 +704,27 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
     auto* device = predicate_tensor.device();
 
     auto predicate_data_format = datatype_to_dataformat_converter(predicate_tensor.dtype());
-    // (predicate_tensor.dtype() == DataType::BFLOAT16) ? DataType::UINT16 : predicate_tensor.dtype());
+    /*  The where_llk uses UINT16 instrn set for bfloat16 inputs.
+        If the bfloat16 inputs' CBs are set to UINT16 dataformat this will enable us to get 'NaN' in the outputs even
+       for bfloat16 dtype. We need to test the impact of this hack on the composite ops that use where op and on the
+       models, since bfloat16 packs NaN as inf as this is an expected behaviour and a known HW limitation of bfloat16
+       dtype. Ex: Force the dataformat of all the bfloat16 inputs' CBs to be of UINT16 dataformat
+        (predicate_tensor.dtype() == DataType::BFLOAT16) ? DataType::UINT16 : predicate_tensor.dtype()); */
 
     // Handle data formats based on variant and tensor availability
     DataFormat value_true_data_format, value_false_data_format;
     if (variant == WhereVariant::TTS) {
         // TTS: only value_true tensor exists
         value_true_data_format = datatype_to_dataformat_converter(value_true_tensor.value().dtype());
-
-        // the bfloat16 impl of where_llk uses UINT16 instr set.
-        // If the bfloat16 inputs' CBs are set to UINT16 dataformat this will enable us to get 'NaN' for bfloat16 dtype
-        // We need to test the impact of this on the composite ops that use where op and on the models, since bfloat16
-        // packs nan as inf in all other ops.
-
-        // (value_true_tensor.value().dtype() == DataType::BFLOAT16) ? DataType::UINT16
-        //                                                           : value_true_tensor.value().dtype());
-
-        // Use predicate format as fallback for value_false
-        value_false_data_format = predicate_data_format;
+        value_false_data_format = value_true_data_format;
     } else if (variant == WhereVariant::TST) {
         // TST: only value_false tensor exists
         value_false_data_format = datatype_to_dataformat_converter(value_false_tensor.value().dtype());
-        // (value_false_tensor.value().dtype() == DataType::BFLOAT16) ? DataType::UINT16
-        //                                                            : value_false_tensor.value().dtype());
-        // Use predicate format as fallback for value_true
-        value_true_data_format = predicate_data_format;
+        value_true_data_format = value_false_data_format;
     } else {
         // TTT: both tensors exist
         value_true_data_format = datatype_to_dataformat_converter(value_true_tensor.value().dtype());
-        // (value_true_tensor.value().dtype() == DataType::BFLOAT16) ? DataType::UINT16
-        //                                                           : value_true_tensor.value().dtype());
         value_false_data_format = datatype_to_dataformat_converter(value_false_tensor.value().dtype());
-        // (value_false_tensor.value().dtype() == DataType::BFLOAT16) ? DataType::UINT16
-        //                                                            : value_false_tensor.value().dtype());
     }
 
     auto output_data_format = datatype_to_dataformat_converter(output.dtype());

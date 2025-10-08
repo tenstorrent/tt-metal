@@ -13,7 +13,7 @@
 namespace NAMESPACE {
 void MAIN {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
-    const uint32_t scalar_value = get_arg_val<uint32_t>(1);
+    const uint32_t scalar_value = get_arg_val<uint32_t>(3);
 
     constexpr uint32_t num_tiles_per_cycle = get_compile_time_arg_val(0);  // set to 1
     constexpr bool scalar_is_true = get_compile_time_arg_val(1);           // 1=TST (scalar=true), 0=TTS (scalar=false)
