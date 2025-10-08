@@ -4,10 +4,18 @@
 
 # May be called prior to project()
 function(ParseGitDescribe)
-    set(version "")
+
+    if(DEFINED TT_VERSION_OVERRIDE AND TT_VERSION_OVERRIDE)
+        message(STATUS "Using override version: ${TT_VERSION_OVERRIDE}")
+        set(VERSION_FULL "${TT_VERSION_OVERRIDE}" PARENT_SCOPE)
+        set(VERSION_DEB "${TT_VERSION_OVERRIDE}" PARENT_SCOPE)
+        set(VERSION_NUMERIC "${TT_VERSION_OVERRIDE}" PARENT_SCOPE)
+        set(VERSION_HASH "override" PARENT_SCOPE)
+        return()
+    endif()
+
     # These will be filled in by `git archive`.
-    # Building the source outside of git from something that was not exported via `git archive`
-    # is left as an exercise to whoever is wanting to do that.
+    set(version "")
     set(fallbackVersion "$Format:%(describe)$")
     set(fallbackHash "$Format:%h$")
 

@@ -52,6 +52,7 @@ show_help() {
     echo "  --without-distributed            Disable distributed compute support (OpenMPI dependency). Enabled by default."
     echo "  --without-python-bindings        Disable Python bindings (ttnncpp will be available as standalone library, otherwise ttnn will include the cpp backend and the python bindings), Enabled by default"
     echo "  --enable-fake-kernels-target     Enable fake kernels target, to enable generation of compile_commands.json for the kernels to enable IDE support."
+    echo "  --version-override               Override version instead of using git commands to determine it."
 }
 
 clean() {
@@ -87,6 +88,7 @@ cpm_source_cache=""
 c_compiler_path=""
 ttnn_shared_sub_libs="OFF"
 toolchain_path="cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake"
+version_override=""
 
 # Requested handling for 20.04 -> 22.04 migration
 if [[ "$FLAVOR" == "ubuntu" && "$VERSION" == "20.04" ]]; then
@@ -139,6 +141,7 @@ enable-coverage
 without-distributed
 without-python-bindings
 enable-fake-kernels-target
+version-override:
 "
 
 # Flatten LONGOPTIONS into a comma-separated string for getopt
@@ -200,6 +203,8 @@ while true; do
             ttnn_shared_sub_libs="ON";;
         --configure-only)
             configure_only="ON";;
+        --version-override)
+            version_override="$2";shift;;
         --without-python-bindings)
             with_python_bindings="OFF";;
         --enable-fake-kernels-target)
@@ -378,6 +383,11 @@ if [ "$build_all" = "ON" ]; then
     cmake_args+=("-DBUILD_PROGRAMMING_EXAMPLES=ON")
     cmake_args+=("-DBUILD_TT_TRAIN=ON")
     cmake_args+=("-DBUILD_TELEMETRY=ON")
+fi
+
+if [ "$version_override" != "" ]; then
+    echo "INFO: Overriding version with: $version_override"
+    cmake_args+=("-DTT_VERSION_OVERRIDE=$version_override")
 fi
 
 if [ "$light_metal_trace" = "ON" ]; then
