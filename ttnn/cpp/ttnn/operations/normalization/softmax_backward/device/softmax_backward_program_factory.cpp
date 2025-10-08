@@ -30,55 +30,57 @@ SoftmaxBackwardProgramFactory::cached_program_t SoftmaxBackwardProgramFactory::c
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
-    const auto& softmax_output = tensor_args.softmax_output;
-    const auto& upstream_grad = tensor_args.upstream_grad;
-    const auto dim = operation_attributes.dim;
+    const ttnn::Tensor& softmax_output = tensor_args.softmax_output;
+    const ttnn::Tensor& upstream_grad = tensor_args.upstream_grad;
+    const uint32_t dim = operation_attributes.dim;
 
-    auto* device = softmax_output.device();
-    auto program = CreateProgram();
+    distributed::MeshDevice* device = softmax_output.device();
+    Program program = CreateProgram();
 
     // Get tensor properties
-    const auto shape = softmax_output.padded_shape();
-    const auto rank = shape.rank();
+    const ttnn::Shape& shape = softmax_output.padded_shape();
+    const size_t rank = shape.rank();
 
     // For simplicity, we'll implement for the last dimension (most common case)
     // This can be extended to support other dimensions
-    TT_ASSERT(dim == rank - 1, "Currently only supporting softmax_backward on last dimension");
+    TT_ASSERT(
+        dim == rank - 1 || dim == static_cast<uint32_t>(-1),
+        "Currently only supporting softmax_backward on last dimension");
 
-    const auto height = shape[-2];
-    const auto width = shape[-1];
-    const auto height_tiles = height / constants::TILE_HEIGHT;
+    const uint32_t height = shape[-2];
+    const uint32_t width = shape[-1];
+    const uint32_t height_tiles = height / constants::TILE_HEIGHT;
 
     // Calculate number of tiles to process
-    auto num_outer_dims = softmax_output.physical_volume() / height / width;
-    uint32_t num_rows = num_outer_dims * height_tiles;
+    const auto num_outer_dims = softmax_output.physical_volume() / height / width;
+    const uint32_t num_rows = num_outer_dims * height_tiles;
 
     // Core configuration
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    uint32_t num_cores_x = compute_with_storage_grid_size.x;
-    uint32_t num_cores_y = compute_with_storage_grid_size.y;
-    auto all_cores = CoreRange({0, 0}, {num_cores_x - 1, num_cores_y - 1});
+    const CoreCoord compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    const uint32_t num_cores_x = compute_with_storage_grid_size.x;
+    const uint32_t num_cores_y = compute_with_storage_grid_size.y;
+    const CoreRange all_cores = CoreRange({0, 0}, {num_cores_x - 1, num_cores_y - 1});
 
     // Distribute work across cores
-    uint32_t num_cores = num_cores_x * num_cores_y;
-    uint32_t tiles_per_core = (num_rows + num_cores - 1) / num_cores;
+    const uint32_t num_cores = num_cores_x * num_cores_y;
+    const uint32_t tiles_per_core = (num_rows + num_cores - 1) / num_cores;
 
     // Data formats
-    auto input_data_format = datatype_to_dataformat_converter(softmax_output.dtype());
-    auto output_data_format = datatype_to_dataformat_converter(tensor_return_value.dtype());
-    auto intermed_data_format = DataFormat::Float16_b;  // Use bfloat16 for intermediate calculations
+    const auto input_data_format = datatype_to_dataformat_converter(softmax_output.dtype());
+    const auto output_data_format = datatype_to_dataformat_converter(tensor_return_value.dtype());
+    const auto intermed_data_format = DataFormat::Float16_b;  // Use bfloat16 for intermediate calculations
 
-    uint32_t input_tile_size = tile_size(input_data_format);
-    uint32_t output_tile_size = tile_size(output_data_format);
-    uint32_t intermed_tile_size = tile_size(intermed_data_format);
+    const uint32_t input_tile_size = tile_size(input_data_format);
+    const uint32_t output_tile_size = tile_size(output_data_format);
+    const uint32_t intermed_tile_size = tile_size(intermed_data_format);
 
     // Create circular buffers
-    uint32_t src0_cb_index = tt::CBIndex::c_0;        // softmax_output
-    uint32_t src1_cb_index = tt::CBIndex::c_1;        // upstream_grad
-    uint32_t out_cb_index = tt::CBIndex::c_16;        // output
-    uint32_t intermed0_cb_index = tt::CBIndex::c_24;  // y * grad
-    uint32_t intermed1_cb_index = tt::CBIndex::c_25;  // sum(y * grad)
-    uint32_t intermed2_cb_index = tt::CBIndex::c_26;  // grad - sum(y * grad)
+    const uint32_t src0_cb_index = tt::CBIndex::c_0;        // softmax_output
+    const uint32_t src1_cb_index = tt::CBIndex::c_1;        // upstream_grad
+    const uint32_t out_cb_index = tt::CBIndex::c_7;         // output
+    const uint32_t intermed0_cb_index = tt::CBIndex::c_13;  // y * grad
+    const uint32_t intermed1_cb_index = tt::CBIndex::c_14;  // sum(y * grad)
+    const uint32_t intermed2_cb_index = tt::CBIndex::c_15;  // grad - sum(y * grad)
 
     // Create circular buffers for simplified implementation
     auto c_in0_config = CircularBufferConfig(1 * input_tile_size, {{src0_cb_index, input_data_format}})
