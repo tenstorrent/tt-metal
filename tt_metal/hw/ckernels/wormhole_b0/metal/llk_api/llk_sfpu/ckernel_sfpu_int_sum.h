@@ -11,8 +11,6 @@
 
 #include "sfpi.h"
 
-using namespace sfpi;
-
 namespace ckernel {
 namespace sfpu {
 
@@ -23,9 +21,9 @@ namespace sfpu {
 #define SIGN 0x80000000
 #define MAGNITUDE 0x7FFFFFFF
 
-sfpi_inline vInt sfpu_sign_mag_to_twos_comp(vInt value) {
+sfpi_inline sfpi::vInt sfpu_sign_mag_to_twos_comp(sfpi::vInt value) {
     v_if(value & SIGN) {
-        vInt magnitude = value & MAGNITUDE;
+        sfpi::vInt magnitude = value & MAGNITUDE;
         value = (~magnitude + 1) & BIT_MASK_32;
     }
     v_endif;
@@ -34,9 +32,9 @@ sfpi_inline vInt sfpu_sign_mag_to_twos_comp(vInt value) {
 
 #endif  // SFPU_SIGN_MAG_TO_TWOS_COMP_DEFINED
 
-sfpi_inline vInt sfpu_twos_comp_to_sign_mag(vInt value) {
+sfpi_inline sfpi::vInt sfpu_twos_comp_to_sign_mag(sfpi::vInt value) {
     v_if(value & SIGN) {
-        vInt magnitude = (~value + 1) & MAGNITUDE;
+        sfpi::vInt magnitude = (~value + 1) & MAGNITUDE;
         value = SIGN | magnitude;
     }
     v_endif;
@@ -46,41 +44,41 @@ sfpi_inline vInt sfpu_twos_comp_to_sign_mag(vInt value) {
 template <bool APPROXIMATION_MODE>
 inline void calculate_sum_int_col() {
     for (unsigned i = 0; i < 2; ++i) {
-        vInt a = dst_reg[i];
+        sfpi::vInt a = sfpi::dst_reg[i];
         a = sfpu_twos_comp_to_sign_mag(a);
 
         for (unsigned j = 2; j < 8; j += 2) {
-            vInt b = dst_reg[i + j];
+            sfpi::vInt b = sfpi::dst_reg[i + j];
             b = sfpu_twos_comp_to_sign_mag(b);
             a += b;
         }
 
         for (unsigned j = 16; j < 24; j += 2) {
-            vInt b = dst_reg[i + j];
+            sfpi::vInt b = sfpi::dst_reg[i + j];
             b = sfpu_twos_comp_to_sign_mag(b);
             a += b;
         }
 
         a = sfpu_sign_mag_to_twos_comp(a);
-        dst_reg[i] = a;
+        sfpi::dst_reg[i] = a;
     }
 }
 
 template <bool APPROXIMATION_MODE>
 inline void calculate_sum_int_row() {
     for (unsigned i = 0; i < 8; i += 2) {
-        vInt a = dst_reg[i];
+        sfpi::vInt a = sfpi::dst_reg[i];
         a = sfpu_twos_comp_to_sign_mag(a);
 
         int arr[] = {1, 8, 9};
         for (unsigned j = 0; j < sizeof(arr) / sizeof(arr[0]); ++j) {
-            vInt b = dst_reg[i + arr[j]];
+            sfpi::vInt b = sfpi::dst_reg[i + arr[j]];
             b = sfpu_twos_comp_to_sign_mag(b);
             a += b;
         }
 
         a = sfpu_sign_mag_to_twos_comp(a);
-        dst_reg[i] = a;
+        sfpi::dst_reg[i] = a;
     }
 }
 
@@ -91,16 +89,16 @@ template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void add_int(const uint dst_offset) {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        vInt a = dst_reg[0];
-        vInt b = dst_reg[32];
+        sfpi::vInt a = sfpi::dst_reg[0];
+        sfpi::vInt b = sfpi::dst_reg[32];
         a = sfpu_twos_comp_to_sign_mag(a);
         b = sfpu_sign_mag_to_twos_comp(b);
 
-        vInt r = a + b;
+        sfpi::vInt r = a + b;
         r = sfpu_sign_mag_to_twos_comp(r);
 
-        dst_reg[0] = r;
-        dst_reg++;
+        sfpi::dst_reg[0] = r;
+        sfpi::dst_reg++;
     }
 }
 

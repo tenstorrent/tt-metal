@@ -9,8 +9,6 @@
 #include "sfpi.h"
 #include "noc_nonblocking_api.h"
 
-using namespace sfpi;
-
 namespace ckernel {
 namespace sfpu {
 
@@ -21,7 +19,7 @@ inline void calculate_bitwise_not() {
         TTI_SFPLOAD(p_sfpu::LREG0, p_sfpu::LREG4, ADDR_MOD_7, 0);
         TTI_SFPNOT(0, p_sfpu::LREG0, p_sfpu::LREG0, 0);
         TTI_SFPSTORE(p_sfpu::LREG0, p_sfpu::LREG4, ADDR_MOD_7, 0);
-        dst_reg++;
+        sfpi::dst_reg++;
     }
 }
 

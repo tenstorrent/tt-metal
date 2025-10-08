@@ -9,8 +9,6 @@
 #include "noc_nonblocking_api.h"
 #include "ckernel_sfpu_cumsum.h"
 
-using namespace sfpi;
-
 namespace ckernel {
 namespace sfpu {
 

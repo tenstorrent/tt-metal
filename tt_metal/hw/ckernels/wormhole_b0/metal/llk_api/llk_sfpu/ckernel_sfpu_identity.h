@@ -12,8 +12,6 @@
 
 #include "sfpi.h"
 
-using namespace sfpi;
-
 namespace ckernel {
 namespace sfpu {
 
@@ -21,9 +19,9 @@ template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_identity() {
 #pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++) {
-        vFloat v = dst_reg[0];
-        dst_reg[0] = v;
-        dst_reg++;
+        sfpi::vFloat v = sfpi::dst_reg[0];
+        sfpi::dst_reg[0] = v;
+        sfpi::dst_reg++;
     }
 }
 
@@ -31,9 +29,9 @@ template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_identity_uint() {
 #pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++) {
-        vUInt v = dst_reg[0];
-        dst_reg[0] = v;
-        dst_reg++;
+        sfpi::vUInt v = sfpi::dst_reg[0];
+        sfpi::dst_reg[0] = v;
+        sfpi::dst_reg++;
     }
 }
 

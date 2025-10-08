@@ -9,8 +9,6 @@
 #include "ckernel_sfpu_conversions.h"
 #include "sfpi.h"
 
-using namespace sfpi;
-
 namespace ckernel {
 namespace sfpu {
 

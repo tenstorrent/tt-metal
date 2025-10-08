@@ -9,8 +9,6 @@
 #include "noc_nonblocking_api.h"
 #include "sfpi.h"
 
-using namespace sfpi;
-
 namespace ckernel {
 namespace sfpu {
 
@@ -20,10 +18,10 @@ inline void calculate_mask() {
     const int mask_val_idx = 32;
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        vFloat mask = dst_reg[mask_val_idx];
-        v_if(_sfpu_is_fp16_zero_(mask, exponent_size_8)) { dst_reg[0] = vConst0; }
+        sfpi::vFloat mask = sfpi::dst_reg[mask_val_idx];
+        v_if(_sfpu_is_fp16_zero_(mask, exponent_size_8)) { sfpi::dst_reg[0] = vConst0; }
         v_endif;
-        dst_reg++;
+        sfpi::dst_reg++;
     }
 }
 
@@ -32,10 +30,10 @@ inline void calculate_int_mask() {
     const int mask_idx = 32;
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        vInt mask = dst_reg[mask_idx];
-        v_if(mask == 0) { dst_reg[0] = vConst0; }
+        sfpi::vInt mask = sfpi::dst_reg[mask_idx];
+        v_if(mask == 0) { sfpi::dst_reg[0] = vConst0; }
         v_endif;
-        dst_reg++;
+        sfpi::dst_reg++;
     }
 }
 
@@ -45,10 +43,10 @@ inline void calculate_mask_posinf() {
     const int mask_val_idx = 32;
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        vFloat mask = dst_reg[mask_val_idx];
-        v_if(_sfpu_is_fp16_zero_(mask, exponent_size_8)) { dst_reg[0] = std::numeric_limits<float>::infinity(); }
+        sfpi::vFloat mask = sfpi::dst_reg[mask_val_idx];
+        v_if(_sfpu_is_fp16_zero_(mask, exponent_size_8)) { sfpi::dst_reg[0] = std::numeric_limits<float>::infinity(); }
         v_endif;
-        dst_reg++;
+        sfpi::dst_reg++;
     }
 }
 

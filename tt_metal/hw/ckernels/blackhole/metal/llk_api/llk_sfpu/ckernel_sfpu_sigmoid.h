@@ -8,8 +8,6 @@
 #include "ckernel_defs.h"
 #include "ckernel_sfpu_sigmoid_appx.h"
 
-using namespace sfpi;
-
 namespace ckernel {
 namespace sfpu {
 
@@ -19,20 +17,20 @@ template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_sigmoid() {
     if constexpr (APPROXIMATION_MODE == false) {
         for (int d = 0; d < ITERATIONS; d++) {
-            vFloat val = dst_reg[0];
-            vFloat result = 0.0f;
+            sfpi::vFloat val = sfpi::dst_reg[0];
+            sfpi::vFloat result = 0.0f;
 
             v_if(val < 0.0f) { val = -val; }
             v_endif;
 
             result = _sigmoid_piecewise_linear_positive_(val);
 
-            val = dst_reg[0];
+            val = sfpi::dst_reg[0];
             v_if(val < 0.0f) { result = 1.0f - result; }
             v_endif;
 
-            dst_reg[0] = result;
-            dst_reg++;
+            sfpi::dst_reg[0] = result;
+            sfpi::dst_reg++;
         }
     } else {
         calculate_sigmoid_appx<ITERATIONS>();

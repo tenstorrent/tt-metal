@@ -8,8 +8,6 @@
 #include "ckernel_defs.h"
 #include "noc_nonblocking_api.h"
 
-using namespace sfpi;
-
 namespace ckernel {
 namespace sfpu {
 
@@ -17,9 +15,9 @@ template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_abs() {
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
-        vFloat v = dst_reg[0];
-        dst_reg[0] = sfpi::abs(v);
-        dst_reg++;
+        sfpi::vFloat v = sfpi::dst_reg[0];
+        sfpi::dst_reg[0] = sfpi::abs(v);
+        sfpi::dst_reg++;
     }
 }
 
@@ -30,7 +28,7 @@ inline void calculate_abs_int32() {
         TT_SFPLOAD(1, 4, 3, 0);
         TTI_SFPABS(0, 1, 0, 0);
         TTI_SFPSTORE(0, 4, 3, 0);
-        dst_reg++;
+        sfpi::dst_reg++;
     }
 }
 }  // namespace sfpu

@@ -6,8 +6,6 @@
 
 #include "sfpu/ckernel_sfpu_dropout.h"
 
-using namespace sfpi;
-
 namespace ckernel {
 namespace sfpu {
 

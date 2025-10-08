@@ -7,8 +7,6 @@
 #include "ckernel_defs.h"
 #include "ckernel.h"
 
-using namespace sfpi;
-
 namespace ckernel {
 namespace sfpu {
 

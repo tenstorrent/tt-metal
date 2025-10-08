@@ -11,8 +11,6 @@
 #include "sfpu/ckernel_sfpu_converter.h"
 
 #include "sfpi.h"
-using namespace sfpi;
-
 namespace ckernel {
 namespace sfpu {
 
@@ -23,13 +21,13 @@ void rsub_init() {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_rsub(uint value) {
-    vFloat arg2 = Converter::as_float(value);
+    sfpi::vFloat arg2 = Converter::as_float(value);
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        vFloat value = dst_reg[0];
-        dst_reg[0] = arg2 - value;
-        dst_reg++;
+        sfpi::vFloat value = sfpi::dst_reg[0];
+        sfpi::dst_reg[0] = arg2 - value;
+        sfpi::dst_reg++;
     }
 }
 

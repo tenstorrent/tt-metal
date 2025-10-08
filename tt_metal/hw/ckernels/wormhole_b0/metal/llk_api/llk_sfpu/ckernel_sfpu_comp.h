@@ -7,8 +7,6 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 
-using namespace sfpi;
-
 namespace ckernel {
 namespace sfpu {
 
@@ -22,9 +20,9 @@ namespace sfpu {
 #define MAGNITUDE 0x7FFFFFFF
 
 // Convert from sign-magnitude to two's complement format
-sfpi_inline vInt sfpu_sign_mag_to_twos_comp(vInt value) {
+sfpi_inline sfpi::vInt sfpu_sign_mag_to_twos_comp(sfpi::vInt value) {
     v_if(value & SIGN) {
-        vInt magnitude = value & MAGNITUDE;
+        sfpi::vInt magnitude = value & MAGNITUDE;
         value = (~magnitude + 1) & BIT_MASK_32;
     }
     v_endif;
@@ -35,10 +33,10 @@ sfpi_inline vInt sfpu_sign_mag_to_twos_comp(vInt value) {
 
 template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
 inline void calculate_comp(uint exponent_size_8) {
-    const vFloat zero = 0.0f;
-    const vFloat one = 1.0f;
+    const sfpi::vFloat zero = 0.0f;
+    const sfpi::vFloat one = 1.0f;
     for (int d = 0; d < ITERATIONS; d++) {
-        vFloat v = dst_reg[0];
+        sfpi::vFloat v = sfpi::dst_reg[0];
 
         // a[i] == 0
         if constexpr (COMP_MODE == SfpuType::equal_zero) {
@@ -82,16 +80,16 @@ inline void calculate_comp(uint exponent_size_8) {
             v_endif;
         }
 
-        dst_reg[0] = v;
-        dst_reg++;
+        sfpi::dst_reg[0] = v;
+        sfpi::dst_reg++;
     }
 }
 
 template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
 inline void calculate_comp_int() {
     for (int d = 0; d < ITERATIONS; d++) {
-        vInt v = dst_reg[0];
-        vInt zero = 0;
+        sfpi::vInt v = sfpi::dst_reg[0];
+        sfpi::vInt zero = 0;
 
         // a[i] == 0
         if constexpr (COMP_MODE == SfpuType::equal_zero) {
@@ -135,8 +133,8 @@ inline void calculate_comp_int() {
             v_endif;
         }
 
-        dst_reg[0] = v;
-        dst_reg++;
+        sfpi::dst_reg[0] = v;
+        sfpi::dst_reg++;
     }
 }
 
@@ -157,7 +155,7 @@ inline void calculate_comp_uint16() {
         TTI_SFPENCC(0, 0, 0, 0);
         // store result
         TTI_SFPSTORE(p_sfpu::LREG1, LO16, ADDR_MOD_3, 0);
-        dst_reg++;
+        sfpi::dst_reg++;
     }
 }
 
@@ -170,7 +168,7 @@ inline void calculate_eqz_uint32() {
         TTI_SFPLZ(0, 0, 1, 4);    // result in lreg1 is leading zero count
         TTI_SFPSHFT(0, 2, 1, 0);  // 32 >> 5 = 1 else 0
         TTI_SFPSTORE(p_sfpu::LREG1, INT32, ADDR_MOD_3, 0);
-        dst_reg++;
+        sfpi::dst_reg++;
     }
 }
 
@@ -188,7 +186,7 @@ inline void calculate_nez_uint32() {
         TTI_SFPENCC(0, 0, 0, 0);
         // store result
         TTI_SFPSTORE(p_sfpu::LREG1, INT32, ADDR_MOD_3, 0);
-        dst_reg++;
+        sfpi::dst_reg++;
     }
 }
 
@@ -202,12 +200,12 @@ inline void calculate_comp_unary_int(int scalar) {
     // - Perform comparison with both in two's complement format
 
     // Scalar stays in original two's complement format
-    vInt converted_scalar = scalar;
+    sfpi::vInt converted_scalar = scalar;
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        vInt v = dst_reg[0];
-        vInt val = 0;
+        sfpi::vInt v = sfpi::dst_reg[0];
+        sfpi::vInt val = 0;
 
         // Convert input data from sign-magnitude to two's complement
         v = sfpu_sign_mag_to_twos_comp(v);
@@ -222,8 +220,8 @@ inline void calculate_comp_unary_int(int scalar) {
             v_endif;
         }
 
-        dst_reg[0] = val;
-        dst_reg++;
+        sfpi::dst_reg[0] = val;
+        sfpi::dst_reg++;
     }
 }
 

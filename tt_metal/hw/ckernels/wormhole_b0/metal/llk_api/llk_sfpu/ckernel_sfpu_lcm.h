@@ -9,8 +9,6 @@
 #include "ckernel_sfpu_gcd.h"
 #include "sfpi.h"
 
-using namespace sfpi;
-
 namespace ckernel {
 namespace sfpu {
 
@@ -60,7 +58,7 @@ inline void calculate_sfpu_lcm(const uint dst_index_in0, const uint dst_index_in
         TT_SFPLOAD(p_sfpu::LREG0, 4, 3, dst_index_in0 * dst_tile_size);  // a
         TT_SFPLOAD(p_sfpu::LREG1, 4, 3, dst_index_in1 * dst_tile_size);  // b
 
-        // Binary GCD algorithm; assumes abs(a) < 2^15 and abs(b) < 2^15, hence gcd(a, b) < 2^15
+        // Binary GCD algorithm; assumes sfpi::abs(a) < 2^15 and sfpi::abs(b) < 2^15, hence gcd(a, b) < 2^15
         calculate_sfpu_gcd_body<15>();
 
         // Two iterations of Newton's method to find reciprocal of gcd(a, b)
@@ -101,7 +99,7 @@ inline void calculate_sfpu_lcm(const uint dst_index_in0, const uint dst_index_in
         calculate_sfpu_mul_u16_to_u32_body();
 
         TT_SFPSTORE(p_sfpu::LREG4, 4, 3, dst_index_out * dst_tile_size);
-        dst_reg++;
+        sfpi::dst_reg++;
     }
 }
 

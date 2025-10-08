@@ -9,8 +9,6 @@
 // TODO: RT review why this include is needed, but not for whb0
 #include "llk_sfpu_types.h"
 
-using namespace sfpi;
-
 namespace ckernel {
 namespace sfpu {
 
@@ -18,9 +16,9 @@ namespace sfpu {
     ((((coef4 * val + coef3) * val + coef2) * val + coef1) * val + coef0)
 
 template <bool APPROXIMATION_MODE>
-sfpi_inline vFloat calculate_erf_body(vFloat x) {
+sfpi_inline sfpi::vFloat calculate_erf_body(sfpi::vFloat x) {
     // assume x >= 0.
-    vFloat result = 1.0f;
+    sfpi::vFloat result = 1.0f;
     v_if(x >= 3.0f) { result = 1.0f; }
     v_elseif(x >= 1.0f) { result = POLYVAL5(-0.03170029f, 0.31310241f, -1.1603072f, 1.91684792f, -0.19469693f, x); }
     v_elseif(x >= 0.0f) {
@@ -37,15 +35,15 @@ template <bool APPROXIMATION_MODE>
 inline void calculate_erf() {
     for (int d = 0; d < 8; d++) {
         // SFPU microcode:
-        vFloat x = dst_reg[0];
+        sfpi::vFloat x = sfpi::dst_reg[0];
         v_if(x < 0.0f) {
             x = -x;
             x = -calculate_erf_body<APPROXIMATION_MODE>(x);
         }
         v_else { x = calculate_erf_body<APPROXIMATION_MODE>(x); }
         v_endif;
-        dst_reg[0] = x;
-        dst_reg++;
+        sfpi::dst_reg[0] = x;
+        sfpi::dst_reg++;
     }
 }
 
@@ -54,15 +52,15 @@ template <bool APPROXIMATION_MODE>
 inline void calculate_erfc() {
     // SFPU microcode:
     for (int d = 0; d < 8; d++) {
-        vFloat x = dst_reg[0];
+        sfpi::vFloat x = sfpi::dst_reg[0];
         v_if(x < 0.0f) {
             x = -x;
             x = 1.0 + (calculate_erf_body<APPROXIMATION_MODE>(x));
         }
         v_else { x = 1.0 - (calculate_erf_body<APPROXIMATION_MODE>(x)); }
         v_endif;
-        dst_reg[0] = x;
-        dst_reg++;
+        sfpi::dst_reg[0] = x;
+        sfpi::dst_reg++;
     }
 }
 

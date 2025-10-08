@@ -7,8 +7,6 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 
-using namespace sfpi;
-
 namespace ckernel {
 namespace sfpu {
 
@@ -30,7 +28,7 @@ inline void calculate_binary_max_min(const uint dst_index_in0, const uint dst_in
         } else {
             TT_SFPSTORE(p_sfpu::LREG0, INSTRUCTION_MODE, ADDR_MOD_3, dst_index_out * dst_tile_size);
         }
-        dst_reg++;
+        sfpi::dst_reg++;
     }
 }
 

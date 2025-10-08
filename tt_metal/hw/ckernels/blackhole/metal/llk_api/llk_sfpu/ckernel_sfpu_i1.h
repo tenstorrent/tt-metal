@@ -8,8 +8,6 @@
 #include "ckernel_defs.h"
 #include "noc_nonblocking_api.h"
 
-using namespace sfpi;
-
 namespace ckernel {
 
 namespace sfpu {
@@ -30,26 +28,26 @@ inline void calculate_i1() {
 #pragma GCC unroll 0
 
     for (int d = 0; d < ITERATIONS; d++) {
-        vFloat result = 0.0f;
-        vFloat input = dst_reg[0];
-        vFloat x = input * input;
+        sfpi::vFloat result = 0.0f;
+        sfpi::vFloat input = sfpi::dst_reg[0];
+        sfpi::vFloat x = input * input;
 
-        vFloat derivative = input * POLYVAL10_I1(
-                                        1.24695e-23f,
-                                        6.58387e-21f,
-                                        2.8969e-18f,
-                                        1.04289e-15f,
-                                        3.00351e-13f,
-                                        6.72786e-11f,
-                                        1.13028e-08f,
-                                        1.35634e-06f,
-                                        0.000108507f,
-                                        0.00520833f,
-                                        0.125f,
-                                        x);
+        sfpi::vFloat derivative = input * POLYVAL10_I1(
+                                              1.24695e-23f,
+                                              6.58387e-21f,
+                                              2.8969e-18f,
+                                              1.04289e-15f,
+                                              3.00351e-13f,
+                                              6.72786e-11f,
+                                              1.13028e-08f,
+                                              1.35634e-06f,
+                                              0.000108507f,
+                                              0.00520833f,
+                                              0.125f,
+                                              x);
         result = input * 0.5f + derivative;
-        dst_reg[0] = result;
-        dst_reg++;
+        sfpi::dst_reg[0] = result;
+        sfpi::dst_reg++;
     }
 }
 

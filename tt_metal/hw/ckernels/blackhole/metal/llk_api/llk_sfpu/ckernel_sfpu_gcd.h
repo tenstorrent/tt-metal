@@ -8,8 +8,6 @@
 #include "ckernel_defs.h"
 #include "sfpi.h"
 
-using namespace sfpi;
-
 namespace ckernel {
 namespace sfpu {
 
@@ -28,8 +26,8 @@ inline void calculate_sfpu_gcd_body() {
     TTI_SFPSETCC(0, p_sfpu::LREG2, 0, 6); // if c == 0 then b is even
     TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, 0); // swap(a, b)
     TTI_SFPENCC(0, 0, 0, 0);
-    TTI_SFPABS(0, p_sfpu::LREG0, p_sfpu::LREG0, 0); // a = abs(a)
-    TTI_SFPABS(0, p_sfpu::LREG1, p_sfpu::LREG1, 0); // b = abs(b)
+    TTI_SFPABS(0, p_sfpu::LREG0, p_sfpu::LREG0, 0);  // a = sfpi::abs(a)
+    TTI_SFPABS(0, p_sfpu::LREG1, p_sfpu::LREG1, 0);  // b = sfpi::abs(b)
 
     TTI_SFPIADD(0, p_sfpu::LCONST_0, p_sfpu::LREG0, SFPIADD_MOD1_CC_NONE | SFPIADD_MOD1_ARG_2SCOMP_LREG_DST); // a = -a
     TTI_SFPIADD(0, p_sfpu::LCONST_0, p_sfpu::LREG3, SFPIADD_MOD1_CC_NONE | SFPIADD_MOD1_ARG_2SCOMP_LREG_DST); // d = -d
@@ -63,7 +61,7 @@ inline void calculate_sfpu_gcd(const uint dst_index_in0, const uint dst_index_in
         calculate_sfpu_gcd_body<31>();
 
         TT_SFPSTORE(p_sfpu::LREG1, 4, 3, dst_index_out * dst_tile_size);
-        dst_reg++;
+        sfpi::dst_reg++;
     }
 }
 

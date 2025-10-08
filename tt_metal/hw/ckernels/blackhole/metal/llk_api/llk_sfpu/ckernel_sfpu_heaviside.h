@@ -8,28 +8,26 @@
 #include "ckernel_defs.h"
 #include "sfpu/ckernel_sfpu_converter.h"
 
-using namespace sfpi;
-
 namespace ckernel {
 namespace sfpu {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_heaviside(uint value) {
     // SFPU microcode
-    vFloat s = Converter::as_float(value);
+    sfpi::vFloat s = Converter::as_float(value);
 
 #pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++) {
-        vFloat v = dst_reg[0];
+        sfpi::vFloat v = sfpi::dst_reg[0];
 
         v_if(v < 0.0f) { v = 0.0f; }
         v_elseif(v > 0.0f) { v = 1.0f; }
         v_else { v = s; }
         v_endif;
 
-        dst_reg[0] = v;
+        sfpi::dst_reg[0] = v;
 
-        dst_reg++;
+        sfpi::dst_reg++;
     }
 }
 

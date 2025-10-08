@@ -9,8 +9,6 @@
 #include "noc_nonblocking_api.h"
 #include "sfpu/ckernel_sfpu_dropout.h"
 
-using namespace sfpi;
-
 namespace ckernel {
 namespace sfpu {
 

@@ -7,8 +7,6 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 
-using namespace sfpi;
-
 namespace ckernel {
 namespace sfpu {
 
@@ -17,8 +15,8 @@ inline void calculate_power_iterative(const uint exponent) {
 #pragma GCC unroll 8
     for (int d = 0; d < 8; d++) {
         uint exp = exponent;
-        vFloat in = dst_reg[0];
-        vFloat result = 1.0f;
+        sfpi::vFloat in = sfpi::dst_reg[0];
+        sfpi::vFloat result = 1.0f;
         while (exp > 0) {
             if (exp & 1){
                 result *= in;
@@ -26,8 +24,8 @@ inline void calculate_power_iterative(const uint exponent) {
             in *= in;
             exp >>= 1;
         }
-        dst_reg[0] = result;
-        dst_reg++;
+        sfpi::dst_reg[0] = result;
+        sfpi::dst_reg++;
     }
 }
 

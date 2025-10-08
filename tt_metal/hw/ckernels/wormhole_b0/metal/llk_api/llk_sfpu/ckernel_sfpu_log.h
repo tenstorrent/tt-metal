@@ -7,8 +7,6 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 
-using namespace sfpi;
-
 namespace ckernel {
 namespace sfpu {
 
@@ -17,8 +15,8 @@ sfpi_inline void calculate_log_body(const uint log_base_scale_factor) {
     ////////////////////////////
     // Load From dest + "normalize to calculation range"
     ////////////////////////////
-    vFloat in = dst_reg[0];
-    vFloat x = setexp(in, 127);  // set exp to exp bias (put in range of 1-2)
+    sfpi::vFloat in = sfpi::dst_reg[0];
+    sfpi::vFloat x = setexp(in, 127);  // set exp to exp bias (put in range of 1-2)
 
     // XXXXXX ask Namal? if we can derive the coefficients below to higher precision
     ////////////////////////////
@@ -33,21 +31,21 @@ sfpi_inline void calculate_log_body(const uint log_base_scale_factor) {
     // D' = -A + B - C + D
     // A':0.1058, B':-0.7116, C':2.0871, D':-1.4753
     ////////////////////////////
-    vFloat a = vConstFloatPrgm1;
-    vFloat b = vConstFloatPrgm2;
+    sfpi::vFloat a = vConstFloatPrgm1;
+    sfpi::vFloat b = vConstFloatPrgm2;
     // XXXXX try variants of the below: B'=.7122, C'=2.0869
-    vFloat series_result = x * (x * (x * a + b) + 2.0871) + -1.4753f;
+    sfpi::vFloat series_result = x * (x * (x * a + b) + 2.0871) + -1.4753f;
 
     ////////////////////////////
     // Convert exponent to float
     ////////////////////////////
-    vInt exp = exexp(in);
+    sfpi::vInt exp = exexp(in);
     v_if(exp < 0) { exp = setsgn(~exp + 1, 1); }
     v_endif;
 
-    vFloat expf = int32_to_float(exp, 0);
-    vFloat vConstLn2 = vConstFloatPrgm0;
-    vFloat result = expf * vConstLn2 + series_result;  // exp correction: ln(1+x) + exp*ln(2)
+    sfpi::vFloat expf = int32_to_float(exp, 0);
+    sfpi::vFloat vConstLn2 = vConstFloatPrgm0;
+    sfpi::vFloat result = expf * vConstLn2 + series_result;  // exp correction: ln(1+x) + exp*ln(2)
 
     if constexpr (HAS_BASE_SCALING) {
         result *= s2vFloat16a(log_base_scale_factor);
@@ -68,7 +66,7 @@ sfpi_inline void calculate_log_body(const uint log_base_scale_factor) {
         v_endif;
     }
 
-    dst_reg[0] = result;
+    sfpi::dst_reg[0] = result;
 }
 
 template <bool APPROXIMATION_MODE, bool FAST_APPROX, bool HAS_BASE_SCALING, int ITERATIONS = 8>
@@ -76,7 +74,7 @@ inline void calculate_log(uint log_base_scale_factor) {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         calculate_log_body<FAST_APPROX, HAS_BASE_SCALING>(log_base_scale_factor);
-        dst_reg++;
+        sfpi::dst_reg++;
     }
 }
 

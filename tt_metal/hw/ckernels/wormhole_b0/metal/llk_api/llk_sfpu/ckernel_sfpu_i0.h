@@ -8,8 +8,6 @@
 #include "ckernel_defs.h"
 #include "noc_nonblocking_api.h"
 
-using namespace sfpi;
-
 namespace ckernel {
 namespace sfpu {
 
@@ -28,9 +26,9 @@ inline void calculate_i0() {
 #pragma GCC unroll 0
 
     for (int d = 0; d < ITERATIONS; d++) {
-        vFloat result = 0.0f;
-        vFloat input = dst_reg[0];
-        vFloat x = input * input;
+        sfpi::vFloat result = 0.0f;
+        sfpi::vFloat input = sfpi::dst_reg[0];
+        sfpi::vFloat x = input * input;
 
         result = 1.0f + POLYVAL10(
                             1.50E-22f,
@@ -46,8 +44,8 @@ inline void calculate_i0() {
                             0.25f,
                             x);
 
-        dst_reg[0] = result;
-        dst_reg++;
+        sfpi::dst_reg[0] = result;
+        sfpi::dst_reg++;
     }
 }
 
