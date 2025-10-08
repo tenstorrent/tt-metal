@@ -10,11 +10,11 @@ from typing import TYPE_CHECKING
 import torch
 import ttnn
 
+from ...blocks.transformer_block import TransformerBlock
 from ...layers.embeddings import PatchEmbed
 from ...layers.feedforward import FeedForward
 from ...layers.linear import ColParallelLinear, Linear
 from ...layers.module import Module, ModuleList, Parameter
-from ...layers.transformer_block import TransformerBlock
 from ...utils.substate import rename_substate
 from ...utils.tensor import bf16_tensor
 

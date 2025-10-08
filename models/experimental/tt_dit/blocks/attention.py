@@ -9,11 +9,11 @@ from typing import TYPE_CHECKING
 import torch
 import ttnn
 
+from ..layers.linear import ColParallelLinear
+from ..layers.module import Module, Parameter
+from ..layers.normalization import RMSNorm
 from ..utils.padding import PaddingConfig, pad_weight_tensor
 from ..utils.substate import pop_substate
-from .linear import ColParallelLinear
-from .module import Module, Parameter
-from .normalization import RMSNorm
 
 if TYPE_CHECKING:
     from ..parallel.config import DiTParallelConfig

@@ -10,10 +10,10 @@ import ttnn
 
 from ..layers.feedforward import ParallelFeedForward
 from ..layers.linear import ColParallelLinear
+from ..layers.module import Module
 from ..layers.normalization import DistributedLayerNorm
 from ..utils.substate import rename_substate
 from .attention import Attention
-from .module import Module
 
 if TYPE_CHECKING:
     import torch

@@ -14,7 +14,7 @@ from ...layers.feedforward import ParallelFeedForward
 from ...layers.linear import ColParallelLinear, Linear, RowParallelLinear
 from ...layers.module import Module, ModuleList
 from ...layers.normalization import DistributedLayerNorm
-from ...utils.substate import substate
+from ...utils.substate import rename_substate, substate
 from .attention_flux1 import Flux1Attention
 
 if TYPE_CHECKING:
@@ -95,44 +95,24 @@ class Flux1SingleTransformerBlock(Module):
             ccl_manager=ccl_manager,
         )
 
-    # TODO: migrate to _prepare_torch_state
-    def load_state_dict(self, state_dict: dict[str, torch.Tensor], /) -> None:
-        embedding_dim = state_dict["norm.linear.weight"].shape[1]
+    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
+        rename_substate(state, "norm.linear", "time_embed")
 
-        self.attn.load_state_dict(substate(state_dict, "attn"))
-        self.norm.load_state_dict(substate(state_dict, "norm"))
-        self.time_embed.load_state_dict(self._shuffle_ada_norm_linear(substate(state_dict, "norm.linear")))
-        self.proj_mlp.load_state_dict(substate(state_dict, "proj_mlp"))
-        self.proj_out.load_state_dict(
-            _re_fuse_proj_out_parameters(
-                substate(state_dict, "proj_out"),
+        embedding_dim = state["time_embed.weight"].shape[1]
+
+        _shuffle_linear_output(
+            state,
+            prefix="time_embed",
+            device_count=self.parallel_config.tensor_parallel.factor,
+            chunks=3,
+        )
+
+        if "proj_out.weight" in state:
+            state["proj_out.weight"] = _re_fuse_proj_out_weight(
+                state["proj_out.weight"],
                 embedding_dim=embedding_dim,
                 device_count=self.parallel_config.tensor_parallel.factor,
             )
-        )
-
-    def _shuffle_ada_norm_linear(self, linear_state: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-        # Rearrange QKV projections such column-fracturing shards the heads
-        def _shuffle(x, in_dim):
-            ndev = self.parallel_config.tensor_parallel.factor
-            x = x.T
-            cur_in_dim = x.shape[0]  # in_dim for weight, 1 for bias
-            expansions = x.shape[-1] // in_dim
-            x = x.reshape(-1, expansions, ndev, in_dim // ndev)
-            x = x.permute(0, 2, 1, 3)
-            x = x.reshape(cur_in_dim, -1)
-            assert x.shape[1] == in_dim * expansions
-            x = x.T
-            return x
-
-        in_dim = linear_state["weight"].shape[1]
-        weight = _shuffle(linear_state["weight"], in_dim)
-        out_state = {"weight": weight}
-        if "bias" in linear_state:
-            bias = _shuffle(linear_state["bias"].reshape(-1, 1), in_dim)
-            bias = bias.squeeze()
-            out_state["bias"] = bias
-        return out_state
 
     # Since we do not have operations to concatenate and slice a tensor along a sharded dimension,
     # we keep the spatial and prompt tensors separate for now.
@@ -499,12 +479,29 @@ class Flux1TransformerBlock(Module):
         return spatial, prompt
 
 
-def _re_fuse_proj_out_parameters(
-    state: dict[str, torch.Tensor],
+def _shuffle_linear_output(state: dict[str, torch.Tensor], *, prefix: str, device_count: int, chunks: int) -> None:
+    weight_key = f"{prefix}.weight"
+    bias_key = f"{prefix}.bias"
+
+    weight = state.get(weight_key)
+    bias = state.get(bias_key)
+
+    if weight is not None:
+        _, in_dim = weight.shape
+        weight = weight.reshape([chunks, device_count, -1, in_dim]).transpose(0, 1).reshape([-1, in_dim])
+        state[weight_key] = weight
+
+    if bias is not None:
+        bias = state[bias_key].reshape([chunks, device_count, -1]).transpose(0, 1).reshape([-1])
+        state[bias_key] = bias
+
+
+def _re_fuse_proj_out_weight(
+    weight: torch.Tensor,
     *,
     embedding_dim: int,
     device_count: int,
-) -> dict[str, torch.Tensor]:
+) -> torch.Tensor:
     """Re-fuse out-projection parameters.
 
     The out-projection layer inputs are fused activations coming from the attention network and
@@ -512,23 +509,20 @@ def _re_fuse_proj_out_parameters(
     take into account mesh sharding.
     """
     if device_count == 1:
-        return state
+        return weight
 
-    w = state["weight"]
-    _, in_dim = w.shape
+    _, in_dim = weight.shape
 
     in_dim1 = embedding_dim
     in_dim2 = in_dim - in_dim1
 
     # unfuse
-    w1, w2 = w.split([in_dim1, in_dim2], dim=-1)
+    w1, w2 = weight.split([in_dim1, in_dim2], dim=-1)
 
     # re-fuse
     w1 = w1.reshape([-1, device_count, in_dim1 // device_count])
     w2 = w2.reshape([-1, device_count, in_dim2 // device_count])
-    w = torch.cat([w1, w2], dim=-1).reshape([-1, in_dim])
-
-    return {"weight": w, "bias": state["bias"]}
+    return torch.cat([w1, w2], dim=-1).reshape([-1, in_dim])
 
 
 # adapted from https://github.com/huggingface/diffusers/blob/v0.31.0/src/diffusers/models/transformers/transformer_flux.py
@@ -633,18 +627,9 @@ class Flux1Transformer(Module):
             mesh_device=mesh_device,
         )
 
-    # TODO: migrate to _prepare_torch_state
-    def load_state_dict(self, state_dict: dict[str, torch.Tensor], /) -> None:
-        self.time_text_embed.load_state_dict(substate(state_dict, "time_text_embed"))
-        self.context_embedder.load_state_dict(substate(state_dict, "context_embedder"))
-        self.x_embedder.load_state_dict(substate(state_dict, "x_embedder"))
-        for i, block in enumerate(self.transformer_blocks):
-            block.load_state_dict(substate(state_dict, f"transformer_blocks.{i}"))
-        for i, block in enumerate(self.single_transformer_blocks):
-            block.load_state_dict(substate(state_dict, f"single_transformer_blocks.{i}"))
-        self.time_embed_out.load_state_dict(substate(state_dict, "norm_out.linear"))  # chunks=2 if sharded
-        self.norm_out.load_state_dict(substate(state_dict, "norm_out.norm"))
-        self.proj_out.load_state_dict(substate(state_dict, "proj_out"))
+    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
+        rename_substate(state, "norm_out.linear", "time_embed_out")
+        rename_substate(state, "norm_out.norm", "norm_out")
 
     # We do not shard the last dimension of spatial, because its dimension is less than the tile
     # size for a device count of four and more. This requires padding, which is not currently

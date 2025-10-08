@@ -233,7 +233,6 @@ def test_transformer_block(
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
         padding_config=padding_config,
-        init=False,
     )
     tt_model.load_state_dict(torch_model.state_dict())
 
@@ -293,7 +292,7 @@ def test_transformer_block(
         pytest.param((2, 4), (2, 2), 0, 1, 1, id="2x2sp0tp1"),
         pytest.param((2, 4), (2, 2), 1, 0, 1, id="2x2sp1tp0"),
         pytest.param((2, 4), (2, 4), 0, 1, 1, id="2x4sp0tp1"),
-        pytest.param((2, 4), (2, 4), 1, 0, 1, id="2x4sp1tp0"),
+        # pytest.param((2, 4), (2, 4), 1, 0, 1, id="2x4sp1tp0"),  # writing cache halts computer
         pytest.param((4, 8), (4, 4), 0, 1, 4, id="4x4sp0tp1"),
     ],
     indirect=["mesh_device"],
