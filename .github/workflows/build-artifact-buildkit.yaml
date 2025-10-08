@@ -48,8 +48,6 @@ on:
         default: true
         description: "Make resulting artifact available in the workflow"
       skip-tt-train:
-        # FIXME: TT-Train needs to get fixed to not assume a specific toolchain.
-        #        Fow now enabling an opt-out. But this should get removed.
         required: false
         type: boolean
         default: true
@@ -98,55 +96,6 @@ on:
       wheel-artifact-name:
         description: "Name of the published wheel artifact"
         value: ${{ jobs.build-wheel.outputs.wheel_artifact_name }}
-
-  workflow_dispatch:
-    inputs:
-      build-type:
-        required: false
-        type: string
-        default: "Release"
-      tracy:
-        required: false
-        type: boolean
-        default: false
-        description: "Build with tracy enabled"
-      distributed:
-        required: false
-        type: boolean
-        default: true
-        description: "Build with distributed enabled (Adds OpenMPI dependency)"
-      build-wheel:
-        required: false
-        type: boolean
-        default: false
-        description: "Build Python Wheel"
-      distro:
-        required: false
-        type: string
-        default: "ubuntu"
-      version:
-        required: false
-        type: string
-        default: "22.04"
-      architecture:
-        required: false
-        type: string
-        default: "amd64"
-      toolchain:
-        required: false
-        type: string
-        default: "cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake"
-        description: "Toolchain file to use for build"
-      profile:
-        required: false
-        type: boolean
-        default: false
-        description: "Profile the compilation"
-      build-umd-tests:
-        required: false
-        type: boolean
-        default: false
-        description: "Build UMD tests"
 
 jobs:
   # build-debs-and-tarball:
