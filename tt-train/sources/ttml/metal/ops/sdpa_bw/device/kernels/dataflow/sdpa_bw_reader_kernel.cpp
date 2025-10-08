@@ -14,7 +14,7 @@
 #include "tt-train/sources/ttml/metal/ops/common/dataflow_utils.hpp"
 
 template <typename AddrGen>
-void read_head(
+void read_row(
     const uint32_t start_idx,
     const uint32_t num_of_tiles,
     const uint32_t cb_id,
@@ -53,7 +53,8 @@ void kernel_main() {
     constexpr uint32_t cb_value = tt::CBIndex::c_4;
     constexpr uint32_t cb_attn_mask = tt::CBIndex::c_5;
     constexpr uint32_t cb_intermediates = tt::CBIndex::c_6;
-    constexpr uint32_t cb_reduction_scaler = tt::CBIndex::c_13;
+    constexpr uint32_t cb_matmul_reduce = tt::CBIndex::c_7;
+    constexpr uint32_t cb_reduction_scaler = tt::CBIndex::c_8;
 
     // Get compile-time arguments
     constexpr uint32_t qWt = get_compile_time_arg_val(0);              // query width in tiles
@@ -77,6 +78,7 @@ void kernel_main() {
     constexpr auto intermediates_args = TensorAccessorArgs<mask_args.next_compile_time_args_offset()>();
 
     constexpr uint32_t onetile = 1U;
+    constexpr uint32_t num_of_interm_tiles = 2U;
 
     const uint32_t tile_bytes = get_tile_size(cb_grad_output);
     const DataFormat data_format = get_dataformat(cb_grad_output);
@@ -92,6 +94,7 @@ void kernel_main() {
 
     constexpr uint16_t one = 0x00003F80;                          // (bfloat16)1.0 -> uint16_t
     generate_tile_with_bfloat16_value(cb_reduction_scaler, one);  // generate tile with bfloat16 value 1.0
+    generate_matmul_row_reduce_tile(cb_matmul_reduce);  // generate tile for matmul row reduce
 
     const float scaler = uint32_to_float(scaler_bits);
     const float minus_one = uint32_to_float(minus_one_bits);
@@ -103,51 +106,59 @@ void kernel_main() {
            << ", kWt=" << kWt << ", Ht=" << Ht << ", q_heads =" << q_heads << ", scaler=" << scaler
            << ", minus_one=" << minus_one << ", custom_inf=" << custom_inf << ENDL();
 
-    // Process rows assigned to this core following backward pass logic
+    // process rows of K and V assigned to this core
+    // stream rows from Q, dO, O(for all heads associated with this group of K and V)
     for (uint32_t i = 0; i < num_rows_to_process; ++i) {
         uint32_t global_row_idx = start_row + i;
-        uint32_t grad_output_start_idx = global_row_idx * qWt;
+        uint32_t kv_start_idx = global_row_idx * kWt;
 
-        // Read query row
-        uint32_t q_start_idx = global_row_idx * qWt;
-        read_head(q_start_idx, qWt, cb_query, query_address_generator, tile_bytes);
+        read_row(kv_start_idx, kWt, cb_key, key_address_generator, tile_bytes);
+        read_row(kv_start_idx, kWt, cb_value, value_address_generator, tile_bytes);
 
-        // Read grad_output for this row
-        read_head(grad_output_start_idx, qWt, cb_grad_output, grad_output_address_generator, tile_bytes);
-        // Read attn_output for this row
-        read_head(grad_output_start_idx, qWt, cb_attn_output, attn_output_address_generator, tile_bytes);
+        uint32_t group_idx = (global_row_idx / Ht) % num_of_groups;  // which group of K and V we are processing
+        uint32_t batch_idx = global_row_idx / (Ht * num_of_groups);  // which batch we are processing
 
-        uint32_t q_head_idx = (global_row_idx / Ht) % q_heads;  // which head of Q we are processing
-        uint32_t batch_idx = global_row_idx / (Ht * q_heads);   // which batch we are processing
-        uint32_t kv_group_idx = q_head_idx / heads_per_group;   // which group of K and V
+        // the index of the first head in Q associated with this group of K and V
+        uint32_t first_q_head_idx = group_idx * heads_per_group;
+        uint32_t q_offset = (batch_idx * q_heads + first_q_head_idx) * Ht * qWt;
 
-        uint32_t kv_offset = (batch_idx * num_of_groups + kv_group_idx) * qWt * Ht;
+        // the offset of attn_mask associated with this group of K and V
+        // jump to relevent batch and head, then jump to the row in attn_mask associated with current row of K and V
+        uint32_t mask_offset = (batch_idx * q_heads + first_q_head_idx) * Ht * Ht + (global_row_idx % Ht);
 
-        uint32_t mask_offset = (batch_idx * q_heads + q_head_idx) * Ht * Ht + (global_row_idx % Ht) * Ht;
+        uint32_t intermediates_offset = (batch_idx * q_heads + first_q_head_idx) * Ht;
 
-        for (uint32_t h = 0; h < Ht; ++h) {
-            uint32_t kv_start_idx = kv_offset + h * qWt;
-            read_head(kv_start_idx, qWt, cb_key, key_address_generator, tile_bytes);
+        // TODO: add calculation for dO, O indexes because in forward pass they are stored with shape (B, 1, S,
+        // qNH*qEmbd)
+        for (uint32_t q_head_idx = 0; q_head_idx < heads_per_group; ++q_head_idx) {
+            for (uint32_t h = 0; h < Ht; ++h) {
+                uint32_t q_start_idx = q_offset + (q_head_idx * Ht + h) * qWt;
+                read_row(q_start_idx, qWt, cb_query, query_address_generator, tile_bytes);
+                read_row(q_start_idx, qWt, cb_grad_output, grad_output_address_generator, tile_bytes);
+                read_row(q_start_idx, qWt, cb_attn_output, attn_output_address_generator, tile_bytes);
 
-            // read one tile of attn_mask for current row of K and V
-            // row of K define the column in (QK^T) matrix, so it define the column of attn_mask
-            cb_reserve_back(cb_attn_mask, onetile);
-            uint32_t attn_mask_l1_writer_addr = get_write_ptr(cb_attn_mask);
-            noc_async_read_tile(mask_offset + h, mask_address_generator, attn_mask_l1_writer_addr);
-            noc_async_read_barrier();
-            cb_push_back(cb_attn_mask, onetile);
+                // read one tile of attn_mask for current row of K and V
+                // row of K define the column in (QK^T) matrix, so it define the column of attn_mask
+                cb_reserve_back(cb_attn_mask, onetile);
+                uint32_t attn_mask_l1_writer_addr = get_write_ptr(cb_attn_mask);
+                noc_async_read_tile(mask_offset + h * Ht, mask_address_generator, attn_mask_l1_writer_addr);
+                noc_async_read_barrier();
+                cb_push_back(cb_attn_mask, onetile);
 
-            read_head(kv_start_idx, qWt, cb_value, value_address_generator, tile_bytes);
+                // Read intermediates - one tile per row (contains 1/sum_exp values from forward pass)
+                // TODO[improve](vmelnykov): Now we share two intermediates values per head row: row-wise max value and
+                // 1/sum_exp In future we can think about optimizing this by sharing logsumexp only
+                uint32_t intermediates_idx = intermediates_offset + h * num_of_interm_tiles;
+                read_row(
+                    intermediates_idx,
+                    num_of_interm_tiles,
+                    cb_intermediates,
+                    intermediates_address_generator,
+                    tile_bytes);
+            }
+            // update offsets to point to the next head in attn_mask and intermediates
+            mask_offset += Ht * Ht;  // jump to the next head in attn_mask associated with current Q head
+            intermediates_offset += Ht * num_of_interm_tiles;  // jump to the head in intermediates
         }
-
-        // Read intermediates - one tile per row (contains 1/sum_exp values from forward pass)
-        // TODO[improve](vmelnykov): Now we share two intermediates values per head row: row-wise max value and
-        // 1/sum_exp In future we can think about optimizing this by sharing logsumexp only
-        uint32_t intermediates_idx = global_row_idx;
-        cb_reserve_back(cb_intermediates, onetile);
-        uint32_t intermediates_l1_write_addr = get_write_ptr(cb_intermediates);
-        noc_async_read_tile(intermediates_idx, intermediates_address_generator, intermediates_l1_write_addr);
-        noc_async_read_barrier();
-        cb_push_back(cb_intermediates, onetile);
     }
 }
