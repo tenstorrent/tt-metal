@@ -154,7 +154,7 @@ RUN set -eu && \
 
 FROM scratch AS artifacts
 COPY --from=build-artifacts /artifacts /artifacts
-COPY --from=build-artifacts /build/*.deb /build
+COPY --from=build-artifacts /build /build
 
 #############################################################
 
