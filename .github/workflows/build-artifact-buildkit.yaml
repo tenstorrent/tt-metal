@@ -160,5 +160,5 @@ jobs:
       - name: Build artifacts
         run: |
           mkdir outputs
-          ./build.sh --target=artifacts --local outputs
+          /home/runner/build.sh --target=artifacts --local outputs
           ls outputs
