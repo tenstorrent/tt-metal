@@ -73,15 +73,16 @@ def setup_once(model_location_generator):
             endpoint_prefix=EXTERNAL_SERVER_BASE_URL,
             download_dir_suffix="tutorials_data",
         )
+        data_placement = Path(data_placement)
 
         # Iterate over elements in this directory
-        for item in data_placement.iterdir():
+        for item in data_placement.parent.iterdir():
             print(f"Found item: {item}")
 
         # Create symbolic link from local_path to data_placement
         if local_path_obj.exists():
             local_path_obj.unlink()  # Remove existing symlink/file
-        local_path_obj.symlink_to(data_placement)
+        local_path_obj.symlink_to(data_placement.parent)
 
 
 def collect_ttnn_tutorials(path: Path, extension: str = "*.py"):
