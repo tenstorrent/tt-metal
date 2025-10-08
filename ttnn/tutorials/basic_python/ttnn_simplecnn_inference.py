@@ -19,7 +19,7 @@ def main():
 
     # Load CIFAR-10 test data
     testset = torchvision.datasets.CIFAR10(
-        root="/tmp/ttnn_model_cache/model_weights/ttnn_simplecnn_inference",
+        root="./data",
         train=False,
         download=True,
         transform=transform,

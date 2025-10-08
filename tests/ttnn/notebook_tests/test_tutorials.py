@@ -71,19 +71,17 @@ def setup_once(model_location_generator):
             external_path,
             download_if_ci_v2=True,
             endpoint_prefix=EXTERNAL_SERVER_BASE_URL,
-            download_dir_suffix=external_path,
+            download_dir_suffix="tutorials_data",
         )
-        print(data_placement)
-        data_placement = Path("/tmp/ttnn_model_cache/ttnn_simplecnn_inference")
 
         # Iterate over elements in this directory
-        for item in data_placement.parent.iterdir():
+        for item in data_placement.iterdir():
             print(f"Found item: {item}")
 
         # Create symbolic link from local_path to data_placement
         if local_path_obj.exists():
             local_path_obj.unlink()  # Remove existing symlink/file
-        local_path_obj.symlink_to(data_placement.parent)
+        local_path_obj.symlink_to(data_placement)
 
 
 def collect_ttnn_tutorials(path: Path, extension: str = "*.py"):
@@ -104,7 +102,7 @@ def collect_ttnn_tutorials(path: Path, extension: str = "*.py"):
 
 @skip_for_blackhole("Fails on BH. Issue #25579")
 # @pytest.mark.parametrize("python_path", collect_ttnn_tutorials(path=TUTORIALS_PYTHON_PATH, extension="*.py"))
-def test_ttnn_python_tutorials(python_path):
+def test_ttnn_python_tutorials():
     python_path = "ttnn/tutorials/basic_python/ttnn_simplecnn_inference.py"
     result = subprocess.run(
         ["python3", str(python_path)],
