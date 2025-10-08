@@ -1,10 +1,45 @@
-# 3-Tier Architecture Training
+# Hierarchical Parallel Training
 
-This directory contains a Python implementation of the 3-tier architecture training
+This directory contains a Python implementation of hierarchical parallel training with support for both 2-tier and 3-tier architectures.
 
 ## Architecture Overview
 
-The 3-tier architecture separates the training process into three types of workers:
+The training process can be configured in two different modes:
+
+### 2-Tier Architecture (Workers + AggregatorOptimizer)
+
+The 2-tier architecture combines gradient aggregation and optimization into a single host, reducing communication overhead:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    2-Tier Architecture                       │
+└─────────────────────────────────────────────────────────────┘
+
+┌──────────┐  ┌──────────┐  ┌──────────┐
+│ Worker 0 │  │ Worker 1 │  │ Worker N │  ← Compute forward/backward
+└─────┬────┘  └─────┬────┘  └─────┬────┘    Send gradients
+      │             │              │
+      └─────────────┴──────────────┘
+                    │ Gradients
+                    ▼
+        ┌───────────────────────────┐
+        │  AggregatorOptimizer      │      ← Average gradients
+        │      (Rank N)             │        Apply optimizer step
+        └───────────┬───────────────┘        Send updated weights
+                    │ Updated Weights
+      ┌─────────────┴──────────────┐
+      │             │              │
+      ▼             ▼              ▼
+┌──────────┐  ┌──────────┐  ┌──────────┐
+│ Worker 0 │  │ Worker 1 │  │ Worker N │  ← Receive updated weights
+└──────────┘  └──────────┘  └──────────┘
+```
+
+**Total ranks needed**: `num_workers + 1`
+
+### 3-Tier Architecture (Workers + Aggregator + Optimizer)
+
+The 3-tier architecture separates gradient aggregation and optimization into separate hosts:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -42,52 +77,85 @@ The 3-tier architecture separates the training process into three types of worke
 └──────────┘  └──────────┘  └──────────┘
 ```
 
-### Components
+**Total ranks needed**: `num_workers + 2`
 
-1. **Workers (Ranks 0 to N-1)**:
-   - Compute forward and backward passes
-   - Use `RemoteOptimizer` to communicate with aggregator
-   - Send gradients to aggregator after backward pass
-   - Receive updated weights from aggregator
+## Components
 
-2. **Aggregator (Rank N)**:
-   - Receives gradients from all workers
-   - Averages gradients across workers
-   - Optionally applies DDP reduction (cross-device averaging)
-   - Sends averaged gradients to optimizer
-   - Receives updated weights from optimizer
-   - Broadcasts weights to all workers
+### Common Components (Both Architectures)
 
-3. **Optimizer (Rank N+1)**:
-   - Receives averaged gradients from aggregator
-   - Applies optimizer step (e.g., AdamW with momentum, weight decay)
-   - Sends updated weights back to aggregator
+**Workers (Ranks 0 to N-1)**:
+- Compute forward and backward passes
+- Use `RemoteOptimizer` to communicate with aggregator/aggregator_optimizer
+- Send gradients after backward pass
+- Receive updated weights
+
+### 2-Tier Specific Components
+
+**AggregatorOptimizer (Rank N)**:
+- Receives gradients from all workers
+- Averages gradients across workers
+- Optionally applies DDP reduction (cross-device averaging)
+- Sets gradients on model parameters using `set_grad_from_tensor()`
+- Applies optimizer step (e.g., AdamW with momentum, weight decay)
+- Broadcasts updated weights to all workers
+
+### 3-Tier Specific Components
+
+**Aggregator (Rank N)**:
+- Receives gradients from all workers
+- Averages gradients across workers
+- Optionally applies DDP reduction (cross-device averaging)
+- Sends averaged gradients to optimizer
+- Receives updated weights from optimizer
+- Broadcasts weights to all workers
+
+**Optimizer (Rank N+1)**:
+- Receives averaged gradients from aggregator
+- Applies optimizer step (e.g., AdamW with momentum, weight decay)
+- Sends updated weights back to aggregator
 
 ## Files
 
-- `training.py` - Main entry point that dispatches to appropriate worker type
+- `training.py` - Main entry point that automatically detects architecture mode and dispatches to appropriate worker type
 - `trainer.py` - **All worker implementations in one file:**
-  - `worker()` - Worker training loop using RemoteOptimizer
-  - `aggregator()` - Aggregates gradients from workers
-  - `optimizer()` - Applies optimizer updates
+  - `worker()` - Worker training loop using RemoteOptimizer (both architectures)
+  - `aggregator_optimizer()` - Combined aggregation and optimization (2-tier only)
+  - `aggregator()` - Aggregates gradients from workers (3-tier only)
+  - `optimizer()` - Applies optimizer updates (3-tier only)
 - `data.py` - Data loading and preparation
 - `runner.sh` - Script to launch multi-host training
 
 ## Usage
 
-Use `training.py` which automatically dispatches to the correct worker type:
+The `training.py` script **automatically detects** which architecture to use based on `world_size` and `num_workers`:
+
+- **2-tier mode**: `world_size == num_workers + 1`
+- **3-tier mode**: `world_size == num_workers + 2`
+
+### 2-Tier Example
 
 ```bash
-# For num_workers=2, you need 4 total ranks: 2 workers + 1 aggregator + 1 optimizer
-./runner.sh
+# For num_workers=3, you need 4 total ranks: 3 workers + 1 aggregator_optimizer
+# Launch with 4 MPI ranks
+mpirun -n 4 python training.py -c config.yaml
 ```
 
 The script automatically determines worker type based on rank:
-- Ranks 0 to num_workers-1: Training workers → calls `worker()` from `trainer.py`
-- Rank num_workers: Aggregator → calls `aggregator()` from `trainer.py`
-- Rank num_workers+1: Optimizer → calls `optimizer()` from `trainer.py`
+- Ranks 0-2: Training workers → calls `worker()` from `trainer.py`
+- Rank 3: AggregatorOptimizer → calls `aggregator_optimizer()` from `trainer.py`
 
-All three worker implementations are in `trainer.py`, making it easy to see what each type of host does.
+### 3-Tier Example
+
+```bash
+# For num_workers=3, you need 5 total ranks: 3 workers + 1 aggregator + 1 optimizer
+# Launch with 5 MPI ranks
+mpirun -n 5 python training.py -c config.yaml
+```
+
+The script automatically determines worker type based on rank:
+- Ranks 0-2: Training workers → calls `worker()` from `trainer.py`
+- Rank 3: Aggregator → calls `aggregator()` from `trainer.py`
+- Rank 4: Optimizer → calls `optimizer()` from `trainer.py`
 
 
 ## Configuration
@@ -114,7 +182,17 @@ device_config:
 
 ## Communication Pattern
 
-### Per Training Step:
+### 2-Tier Architecture (Per Training Step):
+
+1. **Workers → AggregatorOptimizer**: Each worker sends gradients
+2. **AggregatorOptimizer**:
+   - Averages gradients across workers
+   - Applies DDP if enabled
+   - Sets gradients on model parameters
+   - Applies optimizer step (e.g., AdamW)
+3. **AggregatorOptimizer → Workers**: Broadcasts updated weights to all workers
+
+### 3-Tier Architecture (Per Training Step):
 
 1. **Workers → Aggregator**: Each worker sends gradients
 2. **Aggregator**: Averages gradients, applies DDP if enabled
@@ -129,7 +207,7 @@ device_config:
 The `RemoteOptimizer` class provides a simple interface for workers in the `worker()` function:
 
 ```python
-# Create remote optimizer pointing to aggregator
+# Create remote optimizer pointing to aggregator (or aggregator_optimizer in 2-tier)
 remote_opt = ttml.optimizers.RemoteOptimizer(model.parameters(), aggregator_rank)
 
 # Receive initial weights
