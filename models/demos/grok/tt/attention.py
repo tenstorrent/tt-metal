@@ -118,7 +118,7 @@ class Attention(LightweightModule):
         wqkv_torch = state_dict[f"{wqkv_str}.weight"].unsqueeze(0).unsqueeze(0)
         self.wqkv = ttnn.as_tensor(
             wqkv_torch,
-            dtype=self.wqkv_dtype,
+            dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,  # TG=True
@@ -134,7 +134,7 @@ class Attention(LightweightModule):
 
         self.wo = ttnn.as_tensor(
             wo_torch,
-            dtype=self.wo_dtype,
+            dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,  # TG=True

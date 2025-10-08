@@ -8,11 +8,10 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
-from models.demos.grok.reference.llama_clone import MoE
+from models.demos.grok.tt.ccl import CCL_Manager
 from models.demos.grok.tt.expert_mlp import ExpertMLP
 from models.demos.grok.tt.model_config import TtModelArgs
 from models.demos.grok.tt.moe import TtMoE
-from models.tt_transformers.tt.ccl import TT_CCL
 
 
 @torch.no_grad()
@@ -37,15 +36,15 @@ def test_grok_mlp_inference(mesh_device):
     logger.info(f"Model weights loaded")
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
-    first_layer_prefix = model_args.get_state_dict_prefix("ExpertMLP", 0)
-    partial_state_dict = {
-        k[len(first_layer_prefix) + 1 :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
-    }
+    # first_layer_prefix = model_args.get_state_dict_prefix("ExpertMLP", 0)
+    # partial_state_dict = {
+    #     k[len(first_layer_prefix) + 1 :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
+    # }
 
-    logger.info(f"Loading reference model weights")
-    reference_model = MoE(num_experts=8, gate=True)
-    reference_model.load_state_dict(partial_state_dict)
-    logger.info(f"Reference model weights loaded")
+    # logger.info(f"Loading reference model weights")
+    # reference_model = MoE(num_experts=8, gate=True)
+    # reference_model.load_state_dict(partial_state_dict)
+    # logger.info(f"Reference model weights loaded")
 
     torch_input = torch.load("torch_input.pt")
     # torch_input = torch.randn(1, 1, 32, 8192)
@@ -62,25 +61,26 @@ def test_grok_mlp_inference(mesh_device):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         layout=ttnn.TILE_LAYOUT,
     )
-    # tt_input = ttnn.repeat(tt_input, repeat_dims=(1, 8, 1, 1))
 
-    tt_ccl = TT_CCL(mesh_device)
+    tt_ccl = CCL_Manager(mesh_device)
     experts = ExpertMLP(
         mesh_device=mesh_device,
         tt_ccl=tt_ccl,
         state_dict=state_dict,
+        weight_cache_path=model_args.weight_cache_path(dtype),
         args=model_args,
         layer_num=0,
         dtypes={
-            "w1": ttnn.bfloat8_b,
-            "w2": ttnn.bfloat8_b,
-            "w3": ttnn.bfloat8_b,
+            "w1": ttnn.bfloat4_b,
+            "w2": ttnn.bfloat4_b,
+            "w3": ttnn.bfloat4_b,
         },
     )
     tt_model = TtMoE(
         mesh_device=mesh_device,
         tt_ccl=tt_ccl,
         state_dict=state_dict,
+        weight_cache_path=model_args.weight_cache_path(dtype),
         experts=experts,
         # experts=None,
         args=model_args,
@@ -90,20 +90,19 @@ def test_grok_mlp_inference(mesh_device):
 
     # torch_input = torch.randn(1, 1, 32, model_args.dim, dtype=torch.float32)
     # torch.save(torch_input, "torch_input.pt")
-    logger.info(f"Reference model input shape: {torch_input.shape}")
-    reference_output = reference_model(torch_input)
+    # logger.info(f"Reference model input shape: {torch_input.shape}")
+    # reference_output = reference_model(torch_input)
     # torch.save(reference_output, "reference_output_moe.pt")
-    logger.info(f"Reference model output shape: {reference_output.shape}")
+    # logger.info(f"Reference model output shape: {reference_output.shape}")
 
     logger.info("Run Grok MLP")
-    tt_output = tt_model(tt_input)
+    # tt_output = tt_model(tt_input)
+    tt_output = tt_model.forward_batch_1_tp_32(tt_input)
 
     tt_output_torch = ttnn.to_torch(
         tt_output,
         mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, 3), mesh_shape=model_args.cluster_shape),
     )
-    # breakpoint()
-
     tt_output_torch = tt_output_torch[:1, :, :, :]
 
     pcc_required = 0.99

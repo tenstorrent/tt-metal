@@ -200,7 +200,7 @@ void softcap_inplace(uint32_t in_cb, uint32_t num_tiles) {
         tanh_tile_init();
         tanh_tile(0);
 
-        // softcapping_fp32 * tanh(in / softcapping_fp32)
+        // softcapping_fp32 * tanh(in / softcapping_fp32) --> defer rescaling to sub_exp
         // binop_with_scalar_tile_init();
         // mul_unary_tile(0, softcapping_fp32);
 

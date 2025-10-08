@@ -108,7 +108,6 @@ class TtMoE(LightweightModule):
         router_scores, expert_weights, expert_indices = topk_router(gate_logits_1SB8, self.top8_mask_11B_64, 2)
         router_scores = router_scores[:, :, :, :8]
         router_scores = ttnn.permute(router_scores, (0, 3, 2, 1))
-
         gate_logits_1SB8.deallocate()
 
         # Apply expert MLP
@@ -120,3 +119,54 @@ class TtMoE(LightweightModule):
         ttnn.deallocate(expert_output)
 
         return results_11BH
+
+    def forward_batch_1_tp_32(self, inputs):
+        """
+        Grok MoE forward pass (decode mode only)
+        Simplified version without prefill mode
+        """
+        input_i_1SBH = inputs
+        expert_i_HH = self.experts
+
+        # Get gate logits for expert selection
+        gate_logits_1SB8 = ttnn.matmul(
+            input_i_1SBH,
+            self.gates_H8,
+            memory_config=self.model_config["GATE_MM_OUTPUT_MEMCFG_EXPERTS"],
+            compute_kernel_config=self.model_config["GATE_MM_OUTPUT_KERNEL_CONFIG_EXPERTS"],
+            core_grid=ttnn.CoreGrid(y=8, x=8),
+            dtype=ttnn.bfloat16,
+        )
+        gate_logits_1SB8 = tt_all_reduce(
+            gate_logits_1SB8,
+            self.mesh_device,
+            self.tt_ccl,
+            cluster_axis=1,
+            dim=2,
+            use_composite=True,
+            skip_reshape=True,
+        )
+
+        router_scores, expert_weights, expert_indices = topk_router(gate_logits_1SB8, self.top8_mask_11B_64, 2)
+        router_scores = router_scores[:, :, :, :8]
+        router_scores = ttnn.permute(router_scores, (0, 3, 2, 1))
+        gate_logits_1SB8.deallocate()
+
+        # Apply expert MLP
+        index_tensor = ttnn.from_torch(
+            torch.tensor([[0, 1]]), ttnn.uint16, layout=ttnn.Layout.TILE, device=self.mesh_device
+        )
+        # Get the indices and weights for the first user
+        expert_index = ttnn.gather(expert_indices[:, :, :1, :], dim=-1, index=index_tensor)[0]
+        expert_weight = ttnn.gather(expert_weights[:, :, :1, :], dim=-1, index=index_tensor)[0]
+
+        expert_index = ttnn.to_torch(expert_index, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0))[
+            :2
+        ].tolist()
+        expert_weight = ttnn.to_torch(expert_weight, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0))[
+            :2
+        ].tolist()
+
+        expert_output = expert_i_HH.forward_batch_1_tp_32(input_i_1SBH, expert_index, expert_weight)
+
+        return expert_output

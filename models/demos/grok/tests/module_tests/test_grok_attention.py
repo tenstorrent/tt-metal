@@ -118,7 +118,7 @@ def test_grok_attention_inference(
         mesh_device,
         tt_ccl,
         state_dict,
-        weight_cache_path=None,  # Use dummy weights
+        weight_cache_path=model_args.weight_cache_path(dtype),  # Use dummy weights
         layer_num=0,
         dtype=dtype,
         transformation_mats=transformation_mats,

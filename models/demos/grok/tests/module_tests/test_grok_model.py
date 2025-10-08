@@ -84,7 +84,7 @@ def test_grok_model_inference(
         mesh_device=mesh_device,
         tt_ccl=tt_ccl,
         state_dict=state_dict,
-        weight_cache_path="/localdev/ricozhu/tt-metal/model_cache_grok/",
+        weight_cache_path=model_args.weight_cache_path(dtype),
         args=model_args,
         dtype=dtype,
         paged_attention_config=paged_attention_config,

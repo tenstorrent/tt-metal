@@ -172,3 +172,134 @@ class ExpertMLP(LightweightModule):
         )
 
         return w2_out_reduced
+
+    def forward_batch_1_tp_32(self, x, expert_idx, expert_weights):
+        layer_num = max(self.layer_num, 0)  # cross_block uses the configutation of the first decoder
+        activation_dtype = self.model_config["DECODERS_OPTIMIZATIONS"].get_tensor_dtype(
+            decoder_id=layer_num, tensor=TensorGroup.ACTIVATION
+        )
+        li_ff1_3_compute_kernel_cfg = self.args.compute_kernel_config_hifi2
+        li_ff2_compute_kernel_cfg = self.args.compute_kernel_config_hifi2
+
+        # TG decode mode config (dim=8192 >= 4096)
+        pc_1 = self.model_config["FF1_3_TG_PROGCFG"]
+        pc_2 = self.model_config["FF2_TG_PROGCFG"]
+        pc_3 = self.model_config["FF1_3_TG_PROGCFG"]
+
+        # Decode mode memory config
+        memory_config = ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
+
+        output = ttnn.zeros_like(x)
+        for selected_expert_idx, selected_expert_weights in zip(expert_idx, expert_weights):
+            w1_out = ttnn.linear(
+                x,
+                self.w1[:, selected_expert_idx, :, :],
+                dtype=ttnn.bfloat8_b,  # TG=True
+                core_grid=None,
+                compute_kernel_config=li_ff1_3_compute_kernel_cfg,
+                program_config=pc_1,
+                memory_config=memory_config,
+            )
+
+            w3_out = ttnn.linear(
+                x,
+                self.w3[:, selected_expert_idx, :, :],
+                dtype=ttnn.bfloat8_b,
+                core_grid=None,
+                compute_kernel_config=li_ff1_3_compute_kernel_cfg,
+                program_config=pc_3,
+                memory_config=memory_config,
+            )
+
+            input_mem_cfg = w1_out.memory_config()
+            w1_out = ttnn.experimental.reduce_scatter_minimal_async(
+                w1_out,
+                persistent_output_buffers=None,
+                dim=3,
+                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(1),
+                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(1),
+                num_links=self.args.num_reduce_scatter_links,
+                cluster_axis=1,
+                memory_config=self.model_config["FF1_OUT_REDUCE_SCATTER_MEMCFG"],  # decode mode
+                intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                topology=ttnn.Topology.Linear,
+                chunks_per_sync=10,
+                num_workers_per_link=2,
+                num_buffers_per_channel=2,
+            )
+
+            w3_out = ttnn.experimental.reduce_scatter_minimal_async(
+                w3_out,
+                persistent_output_buffers=None,
+                dim=3,
+                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(1),
+                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(1),
+                num_links=1,
+                cluster_axis=1,
+                memory_config=self.model_config["FF1_OUT_REDUCE_SCATTER_MEMCFG"],  # decode mode
+                intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                topology=ttnn.Topology.Linear,
+                chunks_per_sync=10,
+                num_workers_per_link=2,
+                num_buffers_per_channel=2,
+            )
+
+            w2_in = ttnn.mul(
+                w1_out,
+                w3_out,
+                input_tensor_a_activations=[self.activation_type],
+                dtype=activation_dtype or ttnn.bfloat8_b,
+                memory_config=w1_out.memory_config(),
+            )
+
+            ttnn.deallocate(w3_out)
+            ttnn.deallocate(w1_out)
+
+            w2_in = ttnn.experimental.all_gather_async(
+                w2_in,
+                persistent_output_buffer=None,
+                dim=3,
+                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(1),
+                num_links=2,
+                cluster_axis=1,
+                topology=ttnn.Topology.Linear,
+                memory_config=input_mem_cfg,
+                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(1),
+                chunks_per_sync=10,
+                num_workers_per_link=2,
+                num_buffers_per_channel=2,
+            )
+
+            # Always decode mode
+            w2_in = ttnn.to_memory_config(w2_in, ttnn.L1_MEMORY_CONFIG)
+
+            w2_out = ttnn.linear(
+                w2_in,
+                self.w2[:, selected_expert_idx, :, :],
+                compute_kernel_config=li_ff2_compute_kernel_cfg,
+                dtype=self.args.ccl_dtype,  # TG=True
+                program_config=pc_2,
+                memory_config=memory_config,
+                core_grid=None,
+            )
+            ttnn.deallocate(w2_in)
+
+            w2_out_reduced = tt_all_reduce(
+                w2_out,
+                self.mesh_device,
+                self.tt_ccl,
+                cluster_axis=0,
+                dim=3,  # TG=True and dim=8192, so use dim=3
+                num_reduce_scatter_links=self.args.num_reduce_scatter_links,
+                num_all_gather_links=self.args.num_all_gather_links,
+                sharded=True,  # decode mode
+                memory_config=self.model_config["FF2_OUT_REDUCE_SCATTER_MEMCFG"],
+                dtype=self.args.ccl_dtype,
+                use_composite=True,  # dim=8192
+                topology=self.args.ccl_topology(),
+            )
+
+            w2_out_reduced = ttnn.mul(w2_out_reduced, selected_expert_weights)
+            output = ttnn.add(output, w2_out_reduced)
+
+        return output
