@@ -137,7 +137,7 @@ def test_all_to_all_dispatch_trace(
     bh_1d_mesh_device,
     trace_mode,
     mesh_shape,
-    num_devices
+    num_devices,
     cluster_axis,
     batches_per_device,
     experts_per_device,
