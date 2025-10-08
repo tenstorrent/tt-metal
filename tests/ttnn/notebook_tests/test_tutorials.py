@@ -20,6 +20,7 @@ please update this part.
 """
 LOCAL_SOURCE_PATH_KEY = "local"
 EXTERNAL_SOURCE_PATH_KEY = "external"
+EXTERNAL_SERVER_BASE_URL = "http://large-file-cache.large-file-cache.svc.cluster.local//tutorials_data"
 
 TUTORIALS_DATA_PATHS = {
     "ttnn_simplecnn_inference": {LOCAL_SOURCE_PATH_KEY: "./data", EXTERNAL_SOURCE_PATH_KEY: "ttnn_simplecnn_inference"},
@@ -51,18 +52,32 @@ def prepare_test_data(model_location_generator) -> None:
         - Creates symbolic links from local paths to downloaded data locations
         - Removes existing symlinks/files at local paths if they exist
     """
-    for path in TUTORIALS_DATA_PATHS.keys():
+    # Find tt-metal home directory
+    current_file_path = Path(__file__).resolve()
+    # Find 'tt-metal' in the path by iterating through parents
+    current_path = current_file_path
+    while current_path.name != "tt-metal" and current_path.parent != current_path:
+        current_path = current_path.parent
+
+    if current_path.name == "tt-metal":
+        tt_metal_path = current_path
+    else:
+        assert 0 != 0, "Program logic error. Failed to find tt-metal directory"
+
+    for tutorial_id in TUTORIALS_DATA_PATHS.keys():
         # Download data from external server
-        local_path = TUTORIALS_DATA_PATHS[path][LOCAL_SOURCE_PATH_KEY]
-        external_path = TUTORIALS_DATA_PATHS[path][EXTERNAL_SOURCE_PATH_KEY]
+        local_path = TUTORIALS_DATA_PATHS[tutorial_id][LOCAL_SOURCE_PATH_KEY]
+        external_path = TUTORIALS_DATA_PATHS[tutorial_id][EXTERNAL_SOURCE_PATH_KEY]
 
         # Skip if local path exists and has content
-        local_path_obj = Path(local_path)
+        local_path_obj = tt_metal_path / Path(local_path)
         if local_path_obj.exists() and any(local_path_obj.iterdir()):
             continue
 
         # Download data using model_location_generator
-        data_placement = model_location_generator(external_path, download_if_ci_v2=True)
+        data_placement = model_location_generator(
+            external_path, download_if_ci_v2=True, endpoint_prefix=EXTERNAL_SERVER_BASE_URL
+        )
 
         # Create symbolic link from local_path to data_placement
         if local_path_obj.exists():
