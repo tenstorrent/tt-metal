@@ -197,25 +197,108 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
         log_warning(tt::LogOp, "Skipping out data movement! PCC will be wrong!");
     }
 
-    // const uint32_t dst_size = fp32_dest_acc_en ? 4 : 8;
-    // const uint32_t in0_block_w = matmul_K_t;
-
-    // const uint32_t out_subblock_w = std::min(matmul_N_t, dst_size);
-    // TT_FATAL(matmul_N_t % out_subblock_w == 0, "matmul_N_t must be divisible by out_subblock_w");
-    // // If out_subblock_w is full row of output, scale subblock_h so volume = dst_size. Otherwise it's 1 to maintain
-    // // row-major intermediate buffer.
-    // const uint32_t out_subblock_h =
-    //     (out_subblock_w == matmul_N_t) ? (std::min(matmul_M_t, dst_size / out_subblock_w)) : 1;
-
-    // const uint32_t in0_num_subblocks = matmul_M_t / out_subblock_h;
-    // const uint32_t in1_num_subblocks = matmul_N_t / out_subblock_w;
-
     uint32_t input_addr = input_tensor.buffer()->address();
     uint32_t weight_addr = weight_tensor.buffer()->address();
     uint32_t out_addr = output_tensor.buffer()->address();
 
-    std::vector<tt::tt_metal::KernelHandle> reader_kernel_ids;
-    std::vector<tt::tt_metal::KernelHandle> writer_kernel_ids;
+    bool in0_is_output_writer = !transpose_core_grid;
+    bool in1_is_output_writer = transpose_core_grid;
+
+    /**
+     * Create kernels
+     *
+     */
+    auto in0_mcast_num_dests = transpose_core_grid ? grid_size.y - 1 : grid_size.x - 1;
+    auto in1_mcast_num_dests = transpose_core_grid ? grid_size.x - 1 : grid_size.y - 1;
+
+    std::vector<uint32_t> in0_sender_compile_time_args = {
+        K_tiles,
+        N_tiles,
+        M_block_tiles,
+        K_block_tiles,
+        N_block_tiles,
+        input_tile_size,
+        in0_mcast_sender_semaphore_id,
+        in0_mcast_receiver_semaphore_id,
+        in0_mcast_num_dests,
+        in0_is_output_writer};
+    tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer()).append_to(in0_sender_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(in0_sender_compile_time_args);
+    auto in0_sender_kernels_id = CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in0_sender.cpp",
+        in0_sender_cores,
+        tt::tt_metal::DataMovementConfig{
+            .processor = in0_risc, .noc = in0_noc, .compile_args = in0_sender_compile_time_args, .defines = defines});
+
+    std::vector<uint32_t> in0_receiver_compile_time_args = {
+        K_tiles,
+        N_tiles,
+        M_block_tiles,
+        K_block_tiles,
+        N_block_tiles,
+        input_tile_size,
+        in0_mcast_sender_semaphore_id,
+        in0_mcast_receiver_semaphore_id,
+        in0_is_output_writer};
+    tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(in0_receiver_compile_time_args);
+    auto in0_receiver_kernels_id = CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in0_receiver.cpp",
+        in0_receiver_cores,
+        tt::tt_metal::DataMovementConfig{
+            .processor = in0_risc, .noc = in0_noc, .compile_args = in0_receiver_compile_time_args, .defines = defines});
+
+    std::vector<uint32_t> in1_sender_compile_time_args = {
+        K_tiles,
+        N_tiles,
+        M_block_tiles,
+        K_block_tiles,
+        N_block_tiles,
+        input_tile_size,
+        in1_mcast_sender_semaphore_id,
+        in1_mcast_receiver_semaphore_id,
+        in1_mcast_num_dests,
+        in1_is_output_writer};
+    tt::tt_metal::TensorAccessorArgs(*weight_tensor.buffer()).append_to(in1_sender_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(in1_sender_compile_time_args);
+    auto in1_sender_kernels_id = CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in1_sender_out.cpp",
+        in1_sender_cores,
+        tt::tt_metal::DataMovementConfig{
+            .processor = in1_risc, .noc = in1_noc, .compile_args = in1_sender_compile_time_args, .defines = defines});
+
+    std::vector<uint32_t> in1_receiver_compile_time_args = {
+        K_tiles,
+        N_tiles,
+        M_block_tiles,
+        K_block_tiles,
+        N_block_tiles,
+        input_tile_size,
+        in1_mcast_sender_semaphore_id,
+        in1_mcast_receiver_semaphore_id,
+        in1_is_output_writer};
+    tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(in1_receiver_compile_time_args);
+    auto in1_receiver_kernels_id = CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in1_receiver_out.cpp",
+        in1_receiver_cores,
+        tt::tt_metal::DataMovementConfig{
+            .processor = in1_risc, .noc = in1_noc, .compile_args = in1_receiver_compile_time_args, .defines = defines});
+
+    std::vector<uint32_t> compute_compile_time_args = {
+        K_tiles, M_block_tiles, K_block_tiles, N_block_tiles, subblock_h, subblock_w};
+
+    auto compute_kernels_id = CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/compute.cpp",
+        core_grid,
+        tt::tt_metal::ComputeConfig{
+            .math_fidelity = math_fidelity,
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+            .math_approx_mode = math_approx_mode,
+            .compile_args = compute_compile_time_args});
 
     auto cores = corerange_to_cores(core_grid, num_cores, true);
 
@@ -243,14 +326,12 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
 
         auto in0_mcast_start = transpose_core_grid ? top_core_plus_one_physical : left_core_plus_one_physical;
         auto in0_mcast_end = transpose_core_grid ? bottom_core_physical : right_core_physical;
-        auto in0_mcast_num_dests = transpose_core_grid ? grid_size.y - 1 : grid_size.x - 1;
         if (in0_noc == tt::tt_metal::NOC::NOC_1) {
             std::swap(in0_mcast_start, in0_mcast_end);
         }
 
         auto in1_mcast_start = transpose_core_grid ? left_core_plus_one_physical : top_core_plus_one_physical;
         auto in1_mcast_end = transpose_core_grid ? right_core_physical : bottom_core_physical;
-        auto in1_mcast_num_dests = transpose_core_grid ? grid_size.x - 1 : grid_size.y - 1;
         if (in1_noc == tt::tt_metal::NOC::NOC_1) {
             std::swap(in1_mcast_start, in1_mcast_end);
         }
@@ -260,39 +341,8 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
         uint32_t N_start_block = N_blocks_per_core * in1_idx;
         uint32_t N_end_block = N_blocks_per_core * (in1_idx + 1) - 1;
 
-        bool in0_is_output_writer = !transpose_core_grid;
-        bool in1_is_output_writer = transpose_core_grid;
-
         if (in1_idx == 0) {
             // in0 sender
-            std::vector<uint32_t> in0_sender_compile_time_args = {
-                M_start_block,
-                M_end_block,
-                K_tiles,
-                N_tiles,
-                N_start_block,
-                N_end_block,
-                M_block_tiles,
-                K_block_tiles,
-                N_block_tiles,
-                input_tile_size,
-                in0_mcast_sender_semaphore_id,
-                in0_mcast_receiver_semaphore_id,
-                in0_mcast_num_dests,
-                in0_is_output_writer};
-            tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer()).append_to(in0_sender_compile_time_args);
-            tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(in0_sender_compile_time_args);
-            auto in0_sender_kernels_id = CreateKernel(
-                program,
-                "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in0_sender.cpp",
-                core,
-                tt::tt_metal::DataMovementConfig{
-                    .processor = in0_risc,
-                    .noc = in0_noc,
-                    .compile_args = in0_sender_compile_time_args,
-                    .defines = defines});
-            reader_kernel_ids.push_back(in0_sender_kernels_id);
-
             std::vector<uint32_t> in0_sender_args = {
                 input_addr,
                 out_addr,
@@ -300,74 +350,28 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
                 (std::uint32_t)in0_mcast_start.y,  // in0_mcast_dest_noc_start_y
                 (std::uint32_t)in0_mcast_end.x,    // in0_mcast_dest_noc_end_x
                 (std::uint32_t)in0_mcast_end.y,    // in0_mcast_dest_noc_end_y
+                M_start_block,
+                M_end_block,
+                N_start_block,
+                N_end_block,
             };
             SetRuntimeArgs(program, in0_sender_kernels_id, core, in0_sender_args);
         } else {
             // in0 receiver
-            std::vector<uint32_t> in0_receiver_compile_time_args = {
-                M_start_block,
-                M_end_block,
-                K_tiles,
-                N_tiles,
-                N_start_block,
-                N_end_block,
-                M_block_tiles,
-                K_block_tiles,
-                N_block_tiles,
-                input_tile_size,
-                in0_mcast_sender_semaphore_id,
-                in0_mcast_receiver_semaphore_id,
-                in0_is_output_writer};
-            tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(in0_receiver_compile_time_args);
-            auto in0_receiver_kernels_id = CreateKernel(
-                program,
-                "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in0_receiver.cpp",
-                core,
-                tt::tt_metal::DataMovementConfig{
-                    .processor = in0_risc,
-                    .noc = in0_noc,
-                    .compile_args = in0_receiver_compile_time_args,
-                    .defines = defines});
-            reader_kernel_ids.push_back(in0_receiver_kernels_id);
-
             std::vector<uint32_t> in0_receiver_args = {
                 out_addr,
                 (std::uint32_t)in0_mcast_sender.x,  // in0_mcast_sender_noc_x
-                (std::uint32_t)in0_mcast_sender.y   // in0_mcast_sender_noc_y
+                (std::uint32_t)in0_mcast_sender.y,  // in0_mcast_sender_noc_y
+                M_start_block,
+                M_end_block,
+                N_start_block,
+                N_end_block,
             };
             SetRuntimeArgs(program, in0_receiver_kernels_id, core, in0_receiver_args);
         }
 
         if (in0_idx == 0) {
             // in1 sender
-            std::vector<uint32_t> in1_sender_compile_time_args = {
-                M_start_block,
-                M_end_block,
-                K_tiles,
-                N_tiles,
-                N_start_block,
-                N_end_block,
-                M_block_tiles,
-                K_block_tiles,
-                N_block_tiles,
-                input_tile_size,
-                in1_mcast_sender_semaphore_id,
-                in1_mcast_receiver_semaphore_id,
-                in1_mcast_num_dests,
-                in1_is_output_writer};
-            tt::tt_metal::TensorAccessorArgs(*weight_tensor.buffer()).append_to(in1_sender_compile_time_args);
-            tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(in1_sender_compile_time_args);
-            auto in1_sender_kernels_id = CreateKernel(
-                program,
-                "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in1_sender_out.cpp",
-                core,
-                tt::tt_metal::DataMovementConfig{
-                    .processor = in1_risc,
-                    .noc = in1_noc,
-                    .compile_args = in1_sender_compile_time_args,
-                    .defines = defines});
-            writer_kernel_ids.push_back(in1_sender_kernels_id);
-
             std::vector<uint32_t> in1_sender_args = {
                 weight_addr,
                 out_addr,
@@ -375,70 +379,43 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
                 (std::uint32_t)in1_mcast_start.y,  // in1_mcast_dest_noc_start_y
                 (std::uint32_t)in1_mcast_end.x,    // in1_mcast_dest_noc_end_x
                 (std::uint32_t)in1_mcast_end.y,    // in1_mcast_dest_noc_end_y
+                M_start_block,
+                M_end_block,
+                N_start_block,
+                N_end_block,
             };
             SetRuntimeArgs(program, in1_sender_kernels_id, core, in1_sender_args);
         } else {
             // in1 receiver
-            std::vector<uint32_t> in1_receiver_compile_time_args = {
-                M_start_block,
-                M_end_block,
-                K_tiles,
-                N_tiles,
-                N_start_block,
-                N_end_block,
-                M_block_tiles,
-                K_block_tiles,
-                N_block_tiles,
-                input_tile_size,
-                in1_mcast_sender_semaphore_id,
-                in1_mcast_receiver_semaphore_id,
-                in1_is_output_writer};
-            tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(in1_receiver_compile_time_args);
-            auto in1_receiver_kernels_id = CreateKernel(
-                program,
-                "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in1_receiver_out.cpp",
-                core,
-                tt::tt_metal::DataMovementConfig{
-                    .processor = in1_risc,
-                    .noc = in1_noc,
-                    .compile_args = in1_receiver_compile_time_args,
-                    .defines = defines});
-            writer_kernel_ids.push_back(in1_receiver_kernels_id);
-
             std::vector<uint32_t> in1_receiver_args = {
                 out_addr,
                 (std::uint32_t)in1_mcast_sender.x,  // in1_mcast_sender_noc_x
                 (std::uint32_t)in1_mcast_sender.y,  // in1_mcast_sender_noc_y
+                M_start_block,
+                M_end_block,
+                N_start_block,
+                N_end_block,
             };
             SetRuntimeArgs(program, in1_receiver_kernels_id, core, in1_receiver_args);
         }
 
-        std::vector<uint32_t> compute_compile_time_args = {
+        std::vector<uint32_t> compute_runtime_args = {
             M_start_block,
             M_end_block,
-            K_tiles,
             N_start_block,
             N_end_block,
-            M_block_tiles,
-            K_block_tiles,
-            N_block_tiles,
-            subblock_h,
-            subblock_w};
-
-        // auto compute_kernels_id = CreateKernel(
-        CreateKernel(
-            program,
-            "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/compute.cpp",
-            core,
-            tt::tt_metal::ComputeConfig{
-                .math_fidelity = math_fidelity,
-                .fp32_dest_acc_en = fp32_dest_acc_en,
-                .math_approx_mode = math_approx_mode,
-                .compile_args = compute_compile_time_args});
+        };
+        SetRuntimeArgs(program, compute_kernels_id, core, compute_runtime_args);
     }
 
     auto override_runtime_arguments_callback =
-        [num_cores, cores, reader_kernel_ids, writer_kernel_ids, transpose_core_grid](
+        [num_cores,
+         cores,
+         in0_sender_kernels_id,
+         in0_receiver_kernels_id,
+         in1_sender_kernels_id,
+         in1_receiver_kernels_id,
+         transpose_core_grid](
             const void* operation,
             tt::tt_metal::Program& program,
             const std::vector<Tensor>& input_tensors,
@@ -448,25 +425,30 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
             auto weight_addr = input_tensors.at(1).buffer()->address();
             auto output_addr = output_tensors.at(0).buffer()->address();
 
+            auto& in0_sender_runtime_args = GetRuntimeArgs(program, in0_sender_kernels_id);
+            auto& in0_receiver_runtime_args = GetRuntimeArgs(program, in0_receiver_kernels_id);
+            auto& in1_sender_runtime_args = GetRuntimeArgs(program, in1_sender_kernels_id);
+            auto& in1_receiver_runtime_args = GetRuntimeArgs(program, in1_receiver_kernels_id);
+
             for (uint32_t i = 0; i < num_cores; ++i) {
                 CoreCoord core = cores.at(i);
-                auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_ids[i]);
-                auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_ids[i]);
                 uint32_t in0_idx = transpose_core_grid ? core.x : core.y;
                 uint32_t in1_idx = transpose_core_grid ? core.y : core.x;
-                auto& reader_args = reader_runtime_args[core.x][core.y];
                 if (in1_idx == 0) {
-                    reader_args[0] = input_addr;
-                    reader_args[1] = output_addr;
+                    auto& in0_sender_args = in0_sender_runtime_args[core.x][core.y];
+                    in0_sender_args[0] = input_addr;
+                    in0_sender_args[1] = output_addr;
                 } else {
-                    reader_args[0] = output_addr;
+                    auto& in0_receiver_args = in0_receiver_runtime_args[core.x][core.y];
+                    in0_receiver_args[0] = output_addr;
                 }
-                auto& writer_args = writer_runtime_args[core.x][core.y];
                 if (in0_idx == 0) {
-                    writer_args[0] = weight_addr;
-                    writer_args[1] = output_addr;
+                    auto& in1_sender_args = in1_sender_runtime_args[core.x][core.y];
+                    in1_sender_args[0] = weight_addr;
+                    in1_sender_args[1] = output_addr;
                 } else {
-                    writer_args[0] = output_addr;
+                    auto& in1_receiver_args = in1_receiver_runtime_args[core.x][core.y];
+                    in1_receiver_args[0] = output_addr;
                 }
             }
         };
