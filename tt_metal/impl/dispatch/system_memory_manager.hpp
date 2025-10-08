@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -87,7 +87,6 @@ public:
 private:
     chip_id_t device_id = 0;
     uint8_t num_hw_cqs = 0;
-    const std::function<void(uint32_t, uint32_t, uint8_t*)> fast_write_callable;
     std::vector<uint32_t> completion_byte_addrs;
     char* cq_sysmem_start = nullptr;
     std::vector<SystemMemoryCQInterface> cq_interfaces;
@@ -98,6 +97,7 @@ private:
     std::vector<std::mutex> cq_to_event_locks;
     std::vector<tt_cxy_pair> prefetcher_cores;
     std::vector<tt::Writer> prefetch_q_writers;
+    std::vector<tt::Writer> completion_q_writers;
     std::vector<uint32_t> prefetch_q_dev_ptrs;
     std::vector<uint32_t> prefetch_q_dev_fences;
 

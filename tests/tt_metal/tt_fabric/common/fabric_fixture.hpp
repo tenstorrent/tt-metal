@@ -73,6 +73,19 @@ public:
         } else {
             log_info(tt::LogTest, "Running fabric api tests with fast dispatch");
         }
+
+        // Fabric Reliability Mode
+        // Default to STRICT_SYSTEM_HEALTH_SETUP_MODE
+        // If runtime option RELIABILITY_MODE is set, use the value from the runtime option
+        tt::tt_fabric::FabricReliabilityMode reliability_mode =
+            tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
+        // Query runtime options for an env-parsed override
+        auto reliability_mode_override = tt::tt_metal::MetalContext::instance().rtoptions().get_reliability_mode();
+        if (reliability_mode_override.has_value()) {
+            reliability_mode = reliability_mode_override.value();
+        }
+        log_info(tt::LogTest, "Fabric Reliability Mode: {}", enchantum::to_string(reliability_mode));
+
         // Set up all available devices
         arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         auto num_devices = tt::tt_metal::GetNumAvailableDevices();
@@ -81,11 +94,7 @@ public:
         for (unsigned int id = 0; id < num_devices; id++) {
             ids.push_back(id);
         }
-        tt::tt_fabric::SetFabricConfig(
-            fabric_config,
-            tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
-            num_routing_planes,
-            fabric_tensix_config);
+        tt::tt_fabric::SetFabricConfig(fabric_config, reliability_mode, num_routing_planes, fabric_tensix_config);
         const auto& dispatch_core_config =
             tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
         devices_map_ = tt::tt_metal::distributed::MeshDevice::create_unit_meshes(
@@ -116,12 +125,11 @@ public:
             tt::tt_metal::distributed::MeshCommandQueue& cq = device->mesh_command_queue();
             // Create a mesh workload from the program
             auto& program_copy = program;
-            auto mesh_workload = tt::tt_metal::distributed::CreateMeshWorkload();
-            tt::tt_metal::distributed::AddProgramToMeshWorkload(
-                mesh_workload,
-                std::move(program_copy),
+            auto mesh_workload = tt::tt_metal::distributed::MeshWorkload();
+            mesh_workload.add_program(
                 tt::tt_metal::distributed::MeshCoordinateRange(
-                    tt::tt_metal::distributed::MeshCoordinate(0, 0), tt::tt_metal::distributed::MeshCoordinate(0, 0)));
+                    tt::tt_metal::distributed::MeshCoordinate(0, 0), tt::tt_metal::distributed::MeshCoordinate(0, 0)),
+                std::move(program_copy));
             tt::tt_metal::distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
         }
     }
@@ -151,9 +159,8 @@ private:
 
 protected:
     static void SetUpTestSuite() {
-        if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() ==
-                tt::tt_metal::ClusterType::GALAXY ||
-            tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() == tt::tt_metal::ClusterType::TG) {
+        if (tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy() ||
+            tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster()) {
             should_skip_ = true;
             return;
         }

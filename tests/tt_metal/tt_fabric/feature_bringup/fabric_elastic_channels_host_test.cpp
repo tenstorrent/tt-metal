@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -24,7 +24,7 @@
 #include <cstring>
 #include <iostream>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-logger/tt-logger.hpp>
@@ -37,6 +37,7 @@
 #include <umd/device/types/xy_pair.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/tt_align.hpp>
 
 #include <array>
 #include <bit>
@@ -469,16 +470,12 @@ void run_test(
 
     log_info(tt::LogAlways, "Launching programs");
 
-    tt_metal::distributed::MeshWorkload local_workload = tt_metal::distributed::CreateMeshWorkload();
-    tt_metal::distributed::MeshWorkload remote_workload = tt_metal::distributed::CreateMeshWorkload();
-    tt_metal::distributed::AddProgramToMeshWorkload(
-        local_workload,
-        std::move(test_resources.local_device.program),
-        tt_metal::distributed::MeshCoordinateRange({0, 0}, {0, 0}));
-    tt_metal::distributed::AddProgramToMeshWorkload(
-        remote_workload,
-        std::move(test_resources.remote_device.program),
-        tt_metal::distributed::MeshCoordinateRange({0, 0}, {0, 0}));
+    tt_metal::distributed::MeshWorkload local_workload;
+    tt_metal::distributed::MeshWorkload remote_workload;
+    local_workload.add_program(
+        tt_metal::distributed::MeshCoordinateRange({0, 0}, {0, 0}), std::move(test_resources.local_device.program));
+    remote_workload.add_program(
+        tt_metal::distributed::MeshCoordinateRange({0, 0}, {0, 0}), std::move(test_resources.remote_device.program));
 
     if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
         std::thread th2 = std::thread([&] {

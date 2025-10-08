@@ -45,7 +45,7 @@ enum ShardDistributionStrategy : ubyte {
     GRID_2D = 1,
 }
 
-enum ShardMode : ubyte {
+enum ShardModeDeprecated : ubyte {
     Physical,
     Logical,
 }
@@ -60,8 +60,8 @@ table ShardSpec {
     shape_h: uint32;
     shape_w: uint32;
     orientation: ShardOrientation;
-    shard_mode: ShardMode;
-    physical_shard_shape: ShardShape;
+    shard_mode_deprecated: ShardModeDeprecated;
+    physical_shard_shape_deprecated: ShardShape;
 }
 
 table NdShardSpec {

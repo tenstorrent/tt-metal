@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -36,6 +36,8 @@ void py_bind_llama_reduce_scatter(py::module& module) {
 
             Keyword Args:
                 memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+                topology (ttnn.Topology, optional): Communication topology to use. Defaults to `ttnn.Topology.Linear`.
+                use_noc1_only (bool, optional): Force NOC1-only transport. Defaults to `False`.
 
            Returns:
                ttnn.Tensor: the output tensor.

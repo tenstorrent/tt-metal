@@ -14,10 +14,9 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_pcc,
 )
 
-from models.utility_functions import (
+from models.common.utility_functions import (
     torch2tt_tensor,
     tt2torch_tensor,
-    skip_for_grayskull,
     get_devices_for_t3000,
     nearest_32,
 )
@@ -86,7 +85,6 @@ def run_test_concat_head(device, n_local_heads, padded_local_heads, head_dim, ba
     assert out_pass_q
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "n_local_heads, padded_local_heads, head_dim, batch_size",
     ((8, 32, 128, 32), (17, 32, 96, 32), (32, 32, 64, 32), (8, 32, 128, 16)),
@@ -107,7 +105,6 @@ def test_concat_head(
         run_test_concat_head(device, n_local_heads, padded_local_heads, head_dim, batch_size)
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "n_local_heads, padded_local_heads, head_dim, batch_size, sub_core_grids",
     (

@@ -35,8 +35,7 @@ jobs:
     name: ${{ matrix.test-group.name }}
     runs-on: >-
       ${{
-        (github.event.pull_request.head.repo.fork == true || contains('P150b', inputs.runner-label)) && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label)
-        || fromJSON(format('["{0}", "in-service", "cloud-virtual-machine"]', inputs.runner-label))
+        (github.event.pull_request.head.repo.fork == true) || format('tt-ubuntu-2204-{0}-stable', inputs.runner-label)
       }}
     container:
       image: ${{ inputs.docker-image }}

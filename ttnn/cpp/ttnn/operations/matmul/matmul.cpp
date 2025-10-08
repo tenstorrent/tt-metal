@@ -147,20 +147,21 @@ ttnn::Tensor bound_matmul(
     }
 
     if (post_process_bias) {
-        output_tensor = ttnn::add(output_tensor, bias.value(), std::nullopt, parameters.output_mem_config);
+        output_tensor = ttnn::add(
+            output_tensor,
+            bias.value(),
+            /*output_dtype=*/std::nullopt,
+            parameters.output_mem_config,
+            optional_output_tensor);
     }
 
     if (parameters.user_fused_activation.has_value() && !has_user_grid) {
         const UnaryOpType& op_type = parameters.user_fused_activation.value().op_type;
-        if (op_type == UnaryOpType::RELU) {
-            output_tensor = ttnn::relu(output_tensor, parameters.output_mem_config);
-        } else if (op_type == UnaryOpType::GELU) {
-            output_tensor = ttnn::gelu(output_tensor, false, parameters.output_mem_config);
-        } else if (op_type == UnaryOpType::SILU) {
-            output_tensor = ttnn::silu(output_tensor, parameters.output_mem_config);
-        } else {
-            TT_THROW("ttnn.matmul: Unsupported activation function");
-        }
+        output_tensor = ttnn::operations::unary::Unary_chain::invoke(
+            output_tensor,
+            {ttnn::operations::unary::EltwiseUnaryWithParam{op_type}},
+            parameters.output_mem_config,
+            optional_output_tensor);
     }
 
     return output_tensor;

@@ -6,6 +6,32 @@
 #include <telemetry/ethernet/ethernet_helpers.hpp>
 #include <chrono>
 
+/**************************************************************************************************
+ Metric Creation
+**************************************************************************************************/
+
+// Creates Ethernet metrics with contiguous IDs and returns the next free ID value
+void create_ethernet_metrics(
+    std::vector<std::unique_ptr<BoolMetric>>& bool_metrics,
+    std::vector<std::unique_ptr<UIntMetric>>& uint_metrics,
+    std::vector<std::unique_ptr<DoubleMetric>>& double_metrics,
+    const std::unique_ptr<tt::umd::Cluster>& cluster,
+    const std::unique_ptr<tt::tt_metal::Hal>& hal) {
+    for (const auto& [chip_id, endpoints] : get_ethernet_endpoints_by_chip(cluster)) {
+        for (const auto& endpoint : endpoints) {
+            bool_metrics.push_back(std::make_unique<EthernetEndpointUpMetric>(endpoint, hal));
+            uint_metrics.push_back(std::make_unique<EthernetRetrainCountMetric>(endpoint, cluster, hal));
+            if (hal->get_arch() == tt::ARCH::WORMHOLE_B0) {
+                // These are available only on Wormhole
+                uint_metrics.push_back(std::make_unique<EthernetCRCErrorCountMetric>(endpoint, cluster, hal));
+                uint_metrics.push_back(std::make_unique<EthernetCorrectedCodewordCountMetric>(endpoint, cluster, hal));
+                uint_metrics.push_back(
+                    std::make_unique<EthernetUncorrectedCodewordCountMetric>(endpoint, cluster, hal));
+            }
+        }
+    }
+    log_info(tt::LogAlways, "Created Ethernet metrics");
+}
 
 /**************************************************************************************************
  EthernetEndpointUpMetric
@@ -13,13 +39,13 @@
  Whether link is up.
 **************************************************************************************************/
 
-EthernetEndpointUpMetric::EthernetEndpointUpMetric(size_t id, const EthernetEndpoint &endpoint, const std::unique_ptr<tt::tt_metal::Hal> &hal)
-    : BoolMetric(id)
-    , endpoint_(endpoint)
-    , last_force_refresh_time_(std::chrono::steady_clock::time_point::min())
-    , link_up_addr_(hal->get_dev_addr(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::LINK_UP))
-{
-}
+EthernetEndpointUpMetric::EthernetEndpointUpMetric(
+    const EthernetEndpoint& endpoint, const std::unique_ptr<tt::tt_metal::Hal>& hal) :
+    BoolMetric(),
+    endpoint_(endpoint),
+    last_force_refresh_time_(std::chrono::steady_clock::time_point::min()),
+    link_up_addr_(hal->get_dev_addr(
+        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::LINK_UP)) {}
 
 const std::vector<std::string> EthernetEndpointUpMetric::telemetry_path() const {
     std::vector<std::string> path = endpoint_.telemetry_path();
@@ -52,8 +78,10 @@ void EthernetEndpointUpMetric::update(
 **************************************************************************************************/
 
 EthernetCRCErrorCountMetric::EthernetCRCErrorCountMetric(
-    size_t id, const EthernetEndpoint& endpoint, const std::unique_ptr<tt::umd::Cluster>& cluster, const std::unique_ptr<tt::tt_metal::Hal> &hal) :
-    UIntMetric(id), endpoint_(endpoint) {
+    const EthernetEndpoint& endpoint,
+    const std::unique_ptr<tt::umd::Cluster>& cluster,
+    const std::unique_ptr<tt::tt_metal::Hal>& hal) :
+    UIntMetric(), endpoint_(endpoint) {
     value_ = 0;
     tt::umd::TTDevice* device = cluster->get_tt_device(endpoint_.chip.id);
     TT_FATAL(device->get_arch() == tt::ARCH::WORMHOLE_B0, "Metric {} available only on Wormhole", __func__);
@@ -92,8 +120,10 @@ void EthernetCRCErrorCountMetric::update(
 **************************************************************************************************/
 
 EthernetRetrainCountMetric::EthernetRetrainCountMetric(
-    size_t id, const EthernetEndpoint& endpoint, const std::unique_ptr<tt::umd::Cluster>& cluster, const std::unique_ptr<tt::tt_metal::Hal> &hal) :
-    UIntMetric(id), endpoint_(endpoint) {
+    const EthernetEndpoint& endpoint,
+    const std::unique_ptr<tt::umd::Cluster>& cluster,
+    const std::unique_ptr<tt::tt_metal::Hal>& hal) :
+    UIntMetric(), endpoint_(endpoint) {
     value_ = 0;
     ethernet_core_ = tt::umd::CoreCoord(
         endpoint_.ethernet_core.x, endpoint_.ethernet_core.y, tt::umd::CoreType::ETH, tt::umd::CoordSystem::LOGICAL);
@@ -123,8 +153,10 @@ void EthernetRetrainCountMetric::update(
 **************************************************************************************************/
 
 EthernetCorrectedCodewordCountMetric::EthernetCorrectedCodewordCountMetric(
-    size_t id, const EthernetEndpoint& endpoint, const std::unique_ptr<tt::umd::Cluster>& cluster, const std::unique_ptr<tt::tt_metal::Hal> &hal) :
-    UIntMetric(id), endpoint_(endpoint) {
+    const EthernetEndpoint& endpoint,
+    const std::unique_ptr<tt::umd::Cluster>& cluster,
+    const std::unique_ptr<tt::tt_metal::Hal>& hal) :
+    UIntMetric(), endpoint_(endpoint) {
     value_ = 0;
     tt::umd::TTDevice* device = cluster->get_tt_device(endpoint_.chip.id);
     TT_FATAL(device->get_arch() == tt::ARCH::WORMHOLE_B0, "Metric {} available only on Wormhole", __func__);
@@ -165,8 +197,10 @@ void EthernetCorrectedCodewordCountMetric::update(
 **************************************************************************************************/
 
 EthernetUncorrectedCodewordCountMetric::EthernetUncorrectedCodewordCountMetric(
-    size_t id, const EthernetEndpoint& endpoint, const std::unique_ptr<tt::umd::Cluster>& cluster, const std::unique_ptr<tt::tt_metal::Hal> &hal) :
-    UIntMetric(id), endpoint_(endpoint) {
+    const EthernetEndpoint& endpoint,
+    const std::unique_ptr<tt::umd::Cluster>& cluster,
+    const std::unique_ptr<tt::tt_metal::Hal>& hal) :
+    UIntMetric(), endpoint_(endpoint) {
     value_ = 0;
     tt::umd::TTDevice* device = cluster->get_tt_device(endpoint_.chip.id);
     TT_FATAL(device->get_arch() == tt::ARCH::WORMHOLE_B0, "Metric {} available only on Wormhole", __func__);

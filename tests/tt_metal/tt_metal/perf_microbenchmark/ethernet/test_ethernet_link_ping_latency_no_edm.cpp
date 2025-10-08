@@ -26,7 +26,7 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/device.hpp>
 #include "df/float32.hpp"
@@ -162,11 +162,11 @@ void run(
     tt::tt_metal::distributed::MeshCoordinateRange device_range1 =
         tt::tt_metal::distributed::MeshCoordinateRange(zero_coord1, zero_coord1);
 
-    tt::tt_metal::distributed::MeshWorkload mesh_workload0 = tt::tt_metal::distributed::CreateMeshWorkload();
-    tt::tt_metal::distributed::AddProgramToMeshWorkload(mesh_workload0, std::move(program0), device_range0);
+    tt::tt_metal::distributed::MeshWorkload mesh_workload0;
+    mesh_workload0.add_program(device_range0, std::move(program0));
 
-    tt::tt_metal::distributed::MeshWorkload mesh_workload1 = tt::tt_metal::distributed::CreateMeshWorkload();
-    tt::tt_metal::distributed::AddProgramToMeshWorkload(mesh_workload1, std::move(program1), device_range1);
+    tt::tt_metal::distributed::MeshWorkload mesh_workload1;
+    mesh_workload1.add_program(device_range1, std::move(program1));
 
     if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
         // For slow dispatch mode, use threads with mesh workloads
@@ -187,8 +187,8 @@ void run(
         tt::tt_metal::distributed::Finish(device0->mesh_command_queue());
         tt::tt_metal::distributed::Finish(device1->mesh_command_queue());
     }
-    tt::tt_metal::detail::ReadDeviceProfilerResults(device0->get_devices()[0]);
-    tt::tt_metal::detail::ReadDeviceProfilerResults(device1->get_devices()[0]);
+    tt::tt_metal::ReadMeshDeviceProfilerResults(*device0);
+    tt::tt_metal::ReadMeshDeviceProfilerResults(*device1);
 }
 
 int main(int argc, char** argv) {
@@ -254,9 +254,10 @@ int main(int argc, char** argv) {
         }
         eth_sender_core_iter++;
     } while (device_id == std::numeric_limits<chip_id_t>::max() ||
-             !test_fixture.devices_.at(device_id)->is_mmio_capable());
+             !test_fixture.devices_.at(device_id)->get_devices()[0]->is_mmio_capable());
     TT_FATAL(device_id != std::numeric_limits<chip_id_t>::max(), "No valid receiver device found to connect to");
-    TT_FATAL(test_fixture.devices_.at(device_id)->is_mmio_capable(), "Receiver device is not mmio capable");
+    auto* receiver_device = test_fixture.devices_.at(device_id)->get_devices()[0];
+    TT_FATAL(receiver_device->is_mmio_capable(), "Receiver device is not mmio capable");
     const auto& device_1 = test_fixture.devices_.at(device_id);
 
     // Add more configurations here until proper argc parsing added

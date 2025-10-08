@@ -63,8 +63,8 @@ std::vector<ScalarInfo> get_bf16_avg_pool_config_scalars(
 
     for (uint32_t i = 0; i < config.out_nhw_per_core; i++) {
         // Compute starting and ending indices of the pooling window
-        int h_start = output_stick_x * config.stride_h - config.pad_t;
-        int w_start = output_stick_y * config.stride_w - config.pad_l;
+        int h_start = (output_stick_x * config.stride_h) - config.pad_t;
+        int w_start = (output_stick_y * config.stride_w) - config.pad_l;
         // omit any ceiling mode related padding from end point calculations as these are not used in the
         // calculation of the pool area even when count_include_pad is on
         int h_end = std::min(h_start + static_cast<int>(config.kernel_h), static_cast<int>(config.in_h + config.pad_b));
@@ -421,6 +421,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
 
     const bool is_output_tiled = output_layout == Layout::TILE;
     const bool is_output_block_format = is_block_float(outputs[0].dtype());
+    const bool zero_pages = is_output_tiled && is_output_block_format;
 
     // Conditionally allocate temporary CB - only needed for TILED output
     uint32_t pre_tilize_cb_id = 32;  // default invalid CB ID
@@ -573,7 +574,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         stride_w,                       // 33
         dilation_h,                     // 34
         dilation_w,                     // 35
-        (uint32_t)return_indices};      // 36
+        (uint32_t)return_indices,       // 36
+        (uint32_t)zero_pages};          // 37
     std::vector<uint32_t> reader1_ct_args = reader0_ct_args;
     reader1_ct_args[8] = 1;  // split reader id for reader1
 

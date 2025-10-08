@@ -5,7 +5,7 @@
 #include "binary_ng_utils.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 
 #include <fmt/core.h>
 #include <fmt/format.h>
@@ -33,67 +33,52 @@ struct fmt::formatter<ttnn::operations::binary_ng::Lowercase> : fmt::formatter<s
 namespace ttnn::operations::binary_ng {
 
 BinaryNgKernelConfig::BinaryNgKernelConfig(SubtileBroadcastType subtile_broadcast_type) {
+    // TODO: completely remove old kernels and its old kernel parameters
     switch (subtile_broadcast_type) {
         case SubtileBroadcastType::NONE:
             reader_kernel = KernelName::ReaderNoBcast;
             compute_kernel = KernelName::ComputeNoBcast;
-            writer_kernel = KernelName::WriterNoBcast;
+            writer_kernel = KernelName::WriterScalar;
             bcast_input = std::nullopt;
             break;
 
-        case SubtileBroadcastType::SCALAR_A:
-            reader_kernel = KernelName::ReaderScalarBcast;
+        case SubtileBroadcastType::SCALAR_A:;
             compute_kernel = KernelName::ComputeBcast;
-            writer_kernel = KernelName::WriterNoBcast;
             bcast_input = 0;
             break;
 
         case SubtileBroadcastType::SCALAR_B:
-            reader_kernel = KernelName::ReaderNoBcast;
             compute_kernel = KernelName::ComputeBcast;
-            writer_kernel = KernelName::WriterScalarBcast;
             bcast_input = 1;
             break;
 
         case SubtileBroadcastType::ROW_A:
-            reader_kernel = KernelName::ReaderRowBcast;
             compute_kernel = KernelName::ComputeNoBcast;
-            writer_kernel = KernelName::WriterNoBcast;
             bcast_input = std::nullopt;
             break;
 
         case SubtileBroadcastType::ROW_B:
-            reader_kernel = KernelName::ReaderNoBcast;
             compute_kernel = KernelName::ComputeNoBcast;
-            writer_kernel = KernelName::WriterRowBcast;
             bcast_input = std::nullopt;
             break;
 
         case SubtileBroadcastType::COL_A:
-            reader_kernel = KernelName::ReaderColBcast;
             compute_kernel = KernelName::ComputeBcast;
-            writer_kernel = KernelName::WriterNoBcast;
             bcast_input = 0;
             break;
 
         case SubtileBroadcastType::COL_B:
-            reader_kernel = KernelName::ReaderNoBcast;
             compute_kernel = KernelName::ComputeBcast;
-            writer_kernel = KernelName::WriterColBcast;
             bcast_input = 1;
             break;
 
         case SubtileBroadcastType::ROW_A_COL_B:
-            reader_kernel = KernelName::ReaderRowBcast;
             compute_kernel = KernelName::ComputeBcast;
-            writer_kernel = KernelName::WriterColBcast;
             bcast_input = 1;
             break;
 
         case SubtileBroadcastType::ROW_B_COL_A:
-            reader_kernel = KernelName::ReaderColBcast;
             compute_kernel = KernelName::ComputeBcast;
-            writer_kernel = KernelName::WriterRowBcast;
             bcast_input = 0;
             break;
     }
@@ -122,13 +107,6 @@ std::string get_kernel_file_path(KernelName kernel_name, bool is_sfpu) {
             return fmt::format(dataflow, root_ng, "reader_interleaved_scalar_bcast.cpp");
         case KernelName::WriterNoBcastNg: return fmt::format(dataflow, root_ng, "writer_interleaved_no_bcast.cpp");
         case KernelName::ReaderNoBcast: return fmt::format(dataflow, root, "reader_interleaved_no_bcast.cpp");
-        case KernelName::ReaderRowBcast: return fmt::format(dataflow, root, "reader_interleaved_row_bcast.cpp");
-        case KernelName::ReaderColBcast: return fmt::format(dataflow, root, "reader_interleaved_col_bcast.cpp");
-        case KernelName::ReaderScalarBcast: return fmt::format(dataflow, root, "reader_interleaved_scalar_bcast.cpp");
-        case KernelName::WriterNoBcast: return fmt::format(dataflow, root, "writer_interleaved_no_bcast.cpp");
-        case KernelName::WriterRowBcast: return fmt::format(dataflow, root, "writer_interleaved_row_bcast.cpp");
-        case KernelName::WriterColBcast: return fmt::format(dataflow, root, "writer_interleaved_col_bcast.cpp");
-        case KernelName::WriterScalarBcast: return fmt::format(dataflow, root, "writer_interleaved_scalar_bcast.cpp");
         case KernelName::WriterScalar: return fmt::format(dataflow, root, "writer_interleaved_scalar.cpp");
         case KernelName::ComputeNoBcast:
             return fmt::format(
@@ -188,8 +166,20 @@ OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>, std
                 binary_op = SfpuBinaryOp::GT;
             }
             break;
-        case BinaryOpType::GE: postprocess = unary::UnaryOpType::GEZ; break;
-        case BinaryOpType::LE: postprocess = unary::UnaryOpType::LEZ; break;
+        case BinaryOpType::GE:
+            if (dtype != DataType::INT32) {
+                postprocess = unary::UnaryOpType::GEZ;
+            } else {
+                binary_op = SfpuBinaryOp::GE;
+            }
+            break;
+        case BinaryOpType::LE:
+            if (dtype != DataType::INT32) {
+                postprocess = unary::UnaryOpType::LEZ;
+            } else {
+                binary_op = SfpuBinaryOp::LE;
+            }
+            break;
         case BinaryOpType::EQ: postprocess = unary::UnaryOpType::EQZ; break;
         case BinaryOpType::NE: postprocess = unary::UnaryOpType::NEZ; break;
         // (a-b)**2
@@ -453,6 +443,8 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
         case XLOGY: return {"xlogy_binary_tile_init();", "xlogy_binary_tile"};
         case LT: return {"lt_int32_tile_init();", "lt_int32_tile"};
         case GT: return {"gt_int32_tile_init();", "gt_int32_tile"};
+        case GE: return {"ge_int32_tile_init();", "ge_int32_tile"};
+        case LE: return {"le_int32_tile_init();", "le_int32_tile"};
         default: TT_THROW("Unsupported sfpu binary op {}", sfpu_binary_op);
     }
 }

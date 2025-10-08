@@ -13,7 +13,6 @@ from tqdm import tqdm
 from transformers import AutoTokenizer
 
 import ttnn
-from models.common.utility_functions import skip_for_grayskull
 from models.datasets.llm_dataset_utils import (
     calculate_acc_metrics,
     prepare_textgen_dataloader,
@@ -124,7 +123,6 @@ def test_mamba_reference_perplexity(
 
 
 @pytest.mark.timeout(1200)
-@skip_for_grayskull("Mamba not supported on Grayskull")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
     "model_version, mode, batch_size, max_seq_len, num_samples, expected_ppl, expected_top1, expected_top5",

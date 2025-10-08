@@ -8,7 +8,7 @@ import torch
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
-from models.demos.deepseek_v3.tt.ccl_1d import CCL1D
+from models.demos.deepseek_v3.tt.ccl import CCL
 from models.demos.deepseek_v3.tt.decoder_block.decoder_block_base import DecoderBlockBase
 from models.demos.deepseek_v3.tt.mlp.shared_expert import SharedExpert
 from models.demos.deepseek_v3.tt.moe import MoE
@@ -43,7 +43,7 @@ class MoEDecoderBlock(DecoderBlockBase):
             ),
             "moe": [
                 (
-                    MoE.convert_weights(hf_config, [state_dict], output_path / f"moe_{i}", mesh_device)
+                    MoE.convert_weights(hf_config, (state_dict,), output_path / f"moe_{i}", mesh_device)
                     if state_dict is not None
                     else None
                 )
@@ -122,7 +122,7 @@ class MoEDecoderBlock(DecoderBlockBase):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
-        ccl: CCL1D,
+        ccl: CCL,
         is_padding_layer: tuple[bool, ...] | None = None,
     ) -> ModelState:
         return {
@@ -132,6 +132,7 @@ class MoEDecoderBlock(DecoderBlockBase):
             "shared_expert": SharedExpert.create_state(hf_config, mesh_device, ccl),
             "revert_dp": {
                 "multi_device_global_semaphore": ccl.get_gather_sem(0),
+                "barrier_semaphore": ccl.get_barrier_sem(0),
             },
         }
 
