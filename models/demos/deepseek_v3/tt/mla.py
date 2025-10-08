@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Sequence
 
 import torch
+from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
@@ -719,6 +720,7 @@ class MLA(AbstractModule):
         mesh_device: ttnn.MeshDevice,
         page_table: torch.Tensor | None = None,
         batch_size: int = MAX_BATCH_SIZE,
+        return_torch: bool = False,
     ) -> ttnn.Tensor:
         """Helper function to allocate the page table for MLA on device.
 
@@ -747,7 +749,8 @@ class MLA(AbstractModule):
             page_table = page_table.reshape(batch_per_shard, even_int_div(max_num_blocks, batch_per_shard))
 
         assert page_table.numel() == paged_config.max_num_blocks
-
+        if return_torch:
+            return page_table
         return ttnn.from_torch(
             page_table,
             dtype=ttnn.int32,
@@ -768,7 +771,7 @@ class MLA(AbstractModule):
     ) -> ModelState:
         kvpe_dim = hf_config.kv_lora_rank + hf_config.qk_rope_head_dim
         cache_shape = (paged_config.max_num_blocks * mesh_device.shape[1], 1, paged_config.block_size, kvpe_dim)
-
+        logger.info(f"Allocating KVPE cache with shape {cache_shape} on device {mesh_device}.")
         assert (
             caches is None
             or len(caches) == mesh_device.shape[0]

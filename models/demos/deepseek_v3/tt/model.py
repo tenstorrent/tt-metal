@@ -6,6 +6,7 @@ from typing import Any, Callable, Sequence
 
 import numpy as np
 import torch
+from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
@@ -339,6 +340,9 @@ class Model(SharedStateAddOn, AbstractModule):
             for meta_layer_idx, (is_padding_layer, layer_idx) in enumerate(
                 zip(per_row_is_padding_layer, per_row_meta_layer_indices, strict=True)
             ):
+                logger.info(
+                    f"row_idx: {row_idx}, meta_layer_idx: {meta_layer_idx}, is_padding_layer: {is_padding_layer}, layer_idx: {layer_idx}"
+                )
                 if is_padding_layer:
                     continue
                 x_next = block_forward_fn(x, row_idx, block_configs[meta_layer_idx], page_tables[layer_idx])
@@ -417,8 +421,11 @@ class Model(SharedStateAddOn, AbstractModule):
         """Forward pass for prefill mode."""
 
         # Embedding
+        logger.info(f"x: {x.shape} before embedding")
         x = Embedding.forward_prefill(x, cfg["embedding"])
+        logger.info(f"x: {x.shape} after embedding")
 
+        logger.info(f"x: {x.shape} before forward_decoder_blocks MLP")
         x = cls.forward_decoder_blocks(
             x,
             cfg["num_rows"],
@@ -431,7 +438,9 @@ class Model(SharedStateAddOn, AbstractModule):
                 x_in, user_id, row_idx, block_cfg, rope_tensors, page_table
             ),
         )
+        logger.info(f"x: {x.shape} after forward_decoder_blocks MLP")
 
+        logger.info(f"x: {x.shape} before forward_decoder_blocks MOE")
         x = cls.forward_decoder_blocks(
             x,
             cfg["num_rows"],
@@ -444,17 +453,25 @@ class Model(SharedStateAddOn, AbstractModule):
                 x_in, user_id, row_idx, block_cfg, rope_tensors, page_table
             ),
         )
+        logger.info(f"x: {x.shape} after forward_decoder_blocks MOE")
 
         # Norm (no resharding needed for prefill)
+        logger.info(f"x: {x.shape} before DistributedRMSNorm")
         x_norm = DistributedRMSNorm.forward_prefill(x, cfg["norm"])
+        logger.info(f"x: {x_norm.shape} after DistributedRMSNorm")
         ttnn.deallocate(x)
 
         # All gather before LM Head (same as decode path)
+        logger.info(f"x: {x.shape} before all_gather")
         x_ag = ttnn.experimental.all_gather_async(x_norm, **cfg["lm_head"]["all_gather"])
+        logger.info(f"x: {x_ag.shape} after all_gather")
         ttnn.deallocate(x_norm)
 
         # LM Head
+        logger.info(f"x: {x.shape} before LMHead")
         x_lmhead = LMHead.forward_prefill(x_ag, cfg["lm_head"])
+        logger.info(f"x: {x_lmhead.shape} after LMHead")
         ttnn.deallocate(x_ag)
 
+        logger.info(f"x: {x_lmhead.shape} after forward_prefill")
         return x_lmhead

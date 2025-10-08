@@ -8,6 +8,7 @@ from glob import glob
 from typing import Any, Callable
 
 import torch
+from loguru import logger
 from safetensors.torch import load_file
 from tqdm import tqdm
 from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
@@ -17,6 +18,7 @@ from models.demos.deepseek_v3.utils.config_helpers import dequantize
 
 
 def load_tokenizer(model_path: str):
+    logger.info(f"Loading tokenizer from {model_path}")
     return AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
 
 

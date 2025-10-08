@@ -58,8 +58,9 @@ class DeepseekGenerator:
 
     def __init__(
         self,
-        mesh_device: ttnn.MeshDevice,
-        model_path: str | Path,
+        hf_config: AutoConfig | None = None,
+        mesh_device: ttnn.MeshDevice | None = None,
+        model_path: str | Path | None = None,
         cache_dir: str | Path | None = None,
         batch_size: int = MAX_BATCH_SIZE,
         tokenizer=None,
@@ -71,11 +72,13 @@ class DeepseekGenerator:
         self.mesh_device = mesh_device
         self.model_path = str(model_path)
         self.batch_size = min(MAX_BATCH_SIZE, batch_size)
+        self.cache_dir = str(cache_dir)
 
         # Load HF config + tokenizer
-        self.hf_config = AutoConfig.from_pretrained(self.model_path, trust_remote_code=True)
+        self.hf_config = hf_config or AutoConfig.from_pretrained(self.model_path, trust_remote_code=True)
         # self._ensure_max_seq_len(self.hf_config)
         self.hf_config.max_seq_len = 4096  # TODO: Change this when needed?
+
         # Optional overrides for layer counts before building states
         if override_num_layers is not None:
             try:
@@ -193,6 +196,8 @@ class DeepseekGenerator:
         logger.info("Creating model shared states...")
         self.model_shared_state = Model.create_shared_state(hf_config=self.hf_config, mesh_device=self.mesh_device)
 
+        logger.info("Creating model shared states...done")
+
     def _prepare_run_configs(self, mode: str) -> None:
         if mode == "prefill":
             logger.info("Creating model prefill config...")
@@ -294,18 +299,16 @@ class DeepseekGenerator:
 
         return logits  # [1, 1, B, V]
 
-    def _prefill(self, tokens_batched: torch.Tensor) -> torch.Tensor:
+    def _prefill(self, tokens_batched: torch.Tensor, user_id: int, seq_len: int) -> torch.Tensor:
         """Run prefill for the full prompt sequence and return logits for the last position.
 
         Args:
             tokens_batched: [MAX_BATCH_SIZE, seq_len] padded token sequences
 
         Returns:
-            logits: [1, 1, S, V] logits for the last token position
+            logits: [S, V] logits for the last token position
         """
 
-        seq_len = tokens_batched.numel()
-        user_id = 0  # TODO: Demo supports only single prompt/user for now
         tokens_batched = tokens_batched.view(1, 1, -1)
 
         # Prepare TT inputs for prefill - reshape to [1, 1, actual_seq_len]
@@ -342,18 +345,12 @@ class DeepseekGenerator:
         # Free device tensors for this step
         ttnn.deallocate(tt_tokens)
         ttnn.deallocate(logits_tt)
-
-        # TODO: Demo supports only single prompt/user for now. Fix batch_logits for multiple prompts.
-        # Extract logits for the last position and expand to match decode format [1, 1, seq_len, V]
         last_logits = logits[0, 0, -1:, :]
-        # Expand to batch size to match decode step format
-        batch_logits = last_logits.unsqueeze(0).unsqueeze(0).expand(1, 1, MAX_BATCH_SIZE, -1)  # [1, 1, seq_len, V]
-
-        return batch_logits
+        return last_logits.squeeze(0)
 
     def _sample_greedy(self, logits: torch.Tensor) -> torch.Tensor:
         # logits: [1, 1, B, V]
-        return torch.argmax(logits[0, 0], dim=-1)  # [B]
+        return torch.argmax(logits, dim=-1)  # [B]
 
     def _pad_batch(self, tokens_list: List[List[int]]) -> Tuple[torch.Tensor, List[int]]:
         """Pad/pack a list of token id sequences to batch of size MAX_BATCH_SIZE.
@@ -393,27 +390,51 @@ class DeepseekGenerator:
         assert 1 <= len(prompts) <= MAX_BATCH_SIZE, f"Supports 1..{MAX_BATCH_SIZE} prompts"
 
         # Tokenize using HF chat template
+        for i, p in enumerate(prompts):
+            logger.info(f"Prompt[{i}]: {p}")
+
         encoded: List[List[int]] = [self._encode_prompt(p) for p in prompts]
         tokens_batched, lengths = self._pad_batch(encoded)  # [MAX_BATCH_SIZE, seq_len]
 
+        logger.info(f"Tokens batched: {tokens_batched.shape}")
+        logger.info(f"Lengths: {lengths}")
         # Prefill
         self._prepare_run_configs("prefill")
-        logger.info("Running prefill for prompt processing")
-        tokens_batched = tokens_batched[0]  # TODO: Demo supports only single prompt/user for now
-        logger.info(f"Input to the prefill: {self.tokenizer.decode(tokens_batched.tolist(), skip_special_tokens=True)}")
-        last_logits = self._prefill(tokens_batched)
+        num_of_users = tokens_batched.shape[0]
+        last_logits = []
+        for user_id in range(num_of_users):
+            if lengths[user_id] == 0:
+                logger.info(f"Skipping prefill for user {user_id} because length is 0")
+                last_logits.append(torch.zeros(self.hf_config.vocab_size))
+                continue
+            logger.info(f"Running prefill for {user_id}")
+            logger.info(
+                f"Input to the prefill: {self.tokenizer.decode(tokens_batched[user_id].tolist(), skip_special_tokens=True)}"
+            )
+            logger.info(f"Length: {lengths[user_id]}, tokens_batched: {tokens_batched[user_id].shape}")
+            user_out = self._prefill(tokens_batched[user_id], user_id, lengths[user_id])
+            logger.info(f"User {user_id} output: {user_out.shape}")
+            last_logits.append(user_out)
+        # breakpoint()
+        last_logits = torch.stack(last_logits)
+
         self._cleanup_run_configs("prefill")
-        assert last_logits is not None
+        assert len(last_logits) == num_of_users
+
+        logger.info(f"finished prefill for all users {last_logits.shape}")
 
         # First sampled token after prompt
         next_tokens = self._sample_greedy(last_logits)
-        logger.info(
-            f"Prefill generated next_tokens[0]: {self.tokenizer.decode(next_tokens[0].item(), skip_special_tokens=True)}"
-        )
+        logger.info(f"Next tokens: {next_tokens.shape}")
+        for user_id in range(num_of_users):
+            logger.info(
+                f"Prefill generated next_tokens[{user_id}]: \
+                    {self.tokenizer.decode(next_tokens[user_id].item(), skip_special_tokens=True)}"
+            )
 
-        # Decode
+        # Decodege
         self._prepare_run_configs("decode")
-        positions = torch.zeros(MAX_BATCH_SIZE, dtype=torch.int32) + lengths
+        positions = torch.zeros(MAX_BATCH_SIZE, dtype=torch.int32) + lengths + 1
 
         # If teacher forcing is enabled, collect the model's predicted token and force GT for next step (single prompt)
         if teacher_forcing is not None:
@@ -427,6 +448,8 @@ class DeepseekGenerator:
         for gen_idx in range(max_new_tokens):
             # Decode one step with previous next_tokens
             logits = self._decode_step(next_tokens, positions)
+            logits = logits.squeeze(0).squeeze(0)
+            logger.info(f"decode {gen_idx}, Logits: {logits.shape}")
             pred_tokens = self._sample_greedy(logits)
             if teacher_forcing is not None:
                 forced = teacher_forcing.collect_predicted_tokens(int(pred_tokens[0].item()))
@@ -436,14 +459,16 @@ class DeepseekGenerator:
 
             # Collect only for the original batch size
             for i in range(len(prompts)):
-                generations[i].append(int(next_tokens[i].item()))
+                token_value = int(next_tokens[i].item())
+                generations[i].append(token_value)
                 if early_print_first_user and i == 0:
-                    print(self.tokenizer.decode(next_tokens[i].item(), skip_special_tokens=True), end="", flush=True)
+                    print(self.tokenizer.decode(token_value, skip_special_tokens=True), end="", flush=True)
 
         if early_print_first_user:
             logger.info("\n===== Done =====")
 
         self._cleanup_run_configs("decode")
+        breakpoint()
         return generations
 
     def _encode_prompt(self, prompt: str) -> List[int]:
