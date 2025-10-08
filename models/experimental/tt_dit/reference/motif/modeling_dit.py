@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: Copyright (c) 2025 Motif Technologies
+
+# SPDX-License-Identifier: MIT License
+
 """Diffusion Transformer (MMDiT) backbone and attention modules for Motif Image 6B Preview.
 
 This module defines the transformer blocks for multi-modal text–image conditioning, including

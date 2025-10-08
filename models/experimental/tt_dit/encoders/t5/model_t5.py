@@ -2,24 +2,18 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from __future__ import annotations
-
 import math
-from typing import TYPE_CHECKING
 
 import torch
 import ttnn
 
 from ...layers.linear import ColParallelLinear, RowParallelLinear
+from ...layers.module import Module, ModuleList
 from ...layers.normalization import RMSNorm
 from ...parallel.config import EncoderParallelConfig
 from ...parallel.manager import CCLManager
 from ...utils.substate import indexed_substates, substate
 from ...utils.tensor import bf16_tensor
-
-if TYPE_CHECKING:
-    from transformers import T5EncoderModel
-from ...layers.module import Module, ModuleList
 
 
 class T5Config:

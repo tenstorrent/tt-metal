@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
+
 from __future__ import annotations
 
 import math
@@ -333,7 +334,7 @@ class PatchEmbed(Module):
         """
         # Apply unfolded conv2d projection
         if already_unfolded:
-            latent = self.proj.forward(latent, compute_kernel_config=self.compute_kernel_config)
+            latent = self.proj(latent, compute_kernel_config=self.compute_kernel_config)
         else:
             latent = self._unfold_conv2d(latent)
 

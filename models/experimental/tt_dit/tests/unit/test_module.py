@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
 from __future__ import annotations
 
 from tempfile import TemporaryDirectory
@@ -28,8 +32,8 @@ class TinyFeedForward(Module):
     def __init__(self, in_dim: int, hidden_dim: int, out_dim: int, *, device: ttnn.MeshDevice) -> None:
         super().__init__()
 
-        self.linear1 = TinyLinear(in_dim, hidden_dim, device=device)
-        self.linear2 = TinyLinear(hidden_dim, out_dim, device=device)
+        self.linear1 = TinyLinear(in_dim, hidden_dim, device=device, bias=True)
+        self.linear2 = TinyLinear(hidden_dim, out_dim, device=device, bias=True)
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         x = self.linear1.forward(x)

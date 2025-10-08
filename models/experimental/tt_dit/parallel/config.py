@@ -20,7 +20,6 @@ class DiTParallelConfig(NamedTuple):
 
 class EncoderParallelConfig(NamedTuple):
     tensor_parallel: ParallelFactor
-    data_parallel: ParallelFactor
 
 
 class VAEParallelConfig(NamedTuple):

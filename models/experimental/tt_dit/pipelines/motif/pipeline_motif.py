@@ -102,7 +102,6 @@ class MotifPipeline:
 
         encoder_parallel_config = EncoderParallelConfig(
             tensor_parallel=ParallelFactor(factor=encoder_device.shape[1], mesh_axis=1),
-            data_parallel=ParallelFactor(factor=encoder_device.shape[0], mesh_axis=0),
         )
         self.encoder_parallel_config = encoder_parallel_config
         self.encoder_device = encoder_device
@@ -173,6 +172,7 @@ class MotifPipeline:
                     model_name="motif-image-6b",
                     subfolder="transformer",
                     parallel_config=self._parallel_config,
+                    mesh_shape=submesh_device.shape,
                     dtype="bf16",
                 )
                 # create cache if it doesn't exist
@@ -618,30 +618,30 @@ class MotifPipeline:
         negative_prompt_3 = [x if x is not None else "" for x in negative_prompt_3]
 
         with timer.time_section("text_encoding") if timer else nullcontext():
-            prompt_embeds, pooled_prompt_embeds = self._text_encoder.encode(
+            pos_prompt_embeds, pos_pooled_prompt_embeds = self._text_encoder.encode(
                 prompt_1, prompt_2, prompt_3, num_images_per_prompt=num_images_per_prompt
             )
 
-            negative_prompt_embeds, negative_pooled_prompt_embeds = self._text_encoder.encode(
+            neg_prompt_embeds, neg_pooled_prompt_embeds = self._text_encoder.encode(
                 negative_prompt_1, negative_prompt_2, negative_prompt_3, num_images_per_prompt=num_images_per_prompt
             )
 
         if not cfg_enabled:
-            return prompt_embeds, pooled_prompt_embeds, prompt_embeds, pooled_prompt_embeds
+            return pos_prompt_embeds, pos_pooled_prompt_embeds, pos_prompt_embeds, pos_pooled_prompt_embeds
 
-        zeroed_prompt_embeds = negative_prompt_embeds.clone()
-        zeroed_pooled_prompt_embeds = negative_pooled_prompt_embeds.clone()
+        zeroed_prompt_embeds = neg_prompt_embeds.clone()
+        zeroed_pooled_prompt_embeds = neg_pooled_prompt_embeds.clone()
 
         for i, no_neg in enumerate(no_negative_prompt):
             if no_neg:
                 zeroed_prompt_embeds[i] = 0
                 zeroed_pooled_prompt_embeds[i] = 0
 
-        prompt_embeds = torch.cat([negative_prompt_embeds, prompt_embeds], dim=0)
-        prompt_embeds_alt = torch.cat([zeroed_prompt_embeds, prompt_embeds], dim=0)
+        prompt_embeds = torch.cat([neg_prompt_embeds, pos_prompt_embeds], dim=0)
+        prompt_embeds_alt = torch.cat([zeroed_prompt_embeds, pos_prompt_embeds], dim=0)
 
-        pooled_prompt_embeds = torch.cat([negative_pooled_prompt_embeds, pooled_prompt_embeds], dim=0)
-        pooled_prompt_embeds_alt = torch.cat([zeroed_pooled_prompt_embeds, pooled_prompt_embeds], dim=0)
+        pooled_prompt_embeds = torch.cat([neg_pooled_prompt_embeds, pos_pooled_prompt_embeds], dim=0)
+        pooled_prompt_embeds_alt = torch.cat([zeroed_pooled_prompt_embeds, pos_pooled_prompt_embeds], dim=0)
 
         return prompt_embeds, pooled_prompt_embeds, prompt_embeds_alt, pooled_prompt_embeds_alt
 

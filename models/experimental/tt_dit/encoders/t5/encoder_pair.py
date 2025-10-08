@@ -83,6 +83,7 @@ class T5TokenizerEncoderPair:
                 model_name=checkpoint,
                 subfolder="",
                 parallel_config=self._parallel_config,
+                mesh_shape=self._device.shape,
                 dtype="bf16",
             )
             if cache.cache_dict_exists(cache_path):

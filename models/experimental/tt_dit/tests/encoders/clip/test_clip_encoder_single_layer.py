@@ -3,25 +3,26 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import sys
-import time
 from pathlib import Path
+import time
 
 sys.path.append(str(Path(__file__).resolve().parents[6]))
 
-import pytest
 import torch
+import pytest
 import ttnn
 from loguru import logger
+from transformers import CLIPTextModelWithProjection, CLIPTokenizer
+
 from models.experimental.tt_dit.encoders.clip.model_clip import (
-    CLIPConfig,
     CLIPEncoderLayer,
+    CLIPConfig,
     TextEmbeddings,
     create_4d_causal_attention_mask,
 )
-from models.experimental.tt_dit.parallel.config import EncoderParallelConfig, ParallelFactor
 from models.experimental.tt_dit.parallel.manager import CCLManager
+from models.experimental.tt_dit.parallel.config import EncoderParallelConfig, ParallelFactor
 from models.experimental.tt_dit.utils.check import assert_quality
-from transformers import CLIPTextModelWithProjection, CLIPTokenizer
 
 
 @pytest.mark.parametrize(
@@ -63,7 +64,6 @@ def test_clip_encoder_layer(
 
     parallel_config = EncoderParallelConfig(
         tensor_parallel=ParallelFactor(factor=encoder_submesh.shape[1], mesh_axis=1),
-        data_parallel=ParallelFactor(factor=encoder_submesh.shape[0], mesh_axis=0),
     )
     ccl_manager = CCLManager(
         mesh_device=encoder_submesh,
@@ -163,7 +163,9 @@ def test_clip_encoder_layer(
             hf_hidden_states,  # hidden_states
             None,  # attention_mask (we don't have one)
             hf_causal_mask,  # causal_attention_mask
-        )[0]  # HF returns tuple (hidden_states, attentions)
+        )[
+            0
+        ]  # HF returns tuple (hidden_states, attentions)
 
         hf_end_time = time.time()
         hf_execution_time = hf_end_time - hf_start_time

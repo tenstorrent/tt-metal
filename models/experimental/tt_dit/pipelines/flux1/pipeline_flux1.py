@@ -44,7 +44,6 @@ class PipelineTrace:
 
 
 class Flux1Pipeline:
-    # SD3:
     T5_SEQUENCE_LENGTH = 512
 
     def __init__(
@@ -95,15 +94,11 @@ class Flux1Pipeline:
             logger.info(f"Reshaping submesh device 0 from {cfg_shape} to (1, 4) for CLIP")
             self.desired_encoder_submesh_shape = (1, 4)
         else:
-            # vae_device can only be on submesh 1 if submesh is not getting reshaped.
-            # SD3:
-            # vae_submesh_idx = 1
             vae_submesh_idx = 0
         vae_device = self._submesh_devices[vae_submesh_idx]
 
         encoder_parallel_config = EncoderParallelConfig(
-            tensor_parallel=ParallelFactor(factor=encoder_device.shape[1], mesh_axis=1),
-            data_parallel=ParallelFactor(factor=encoder_device.shape[0], mesh_axis=0),
+            tensor_parallel=ParallelFactor(factor=4, mesh_axis=1)  # 1x4 submesh, parallel on axis 1
         )
         self.encoder_parallel_config = encoder_parallel_config
         self.encoder_device = encoder_device
@@ -116,18 +111,8 @@ class Flux1Pipeline:
         logger.info("loading models...")
         self._tokenizer_1 = CLIPTokenizer.from_pretrained(checkpoint_name, subfolder="tokenizer")
         self._t5_tokenizer = T5TokenizerFast.from_pretrained(checkpoint_name, subfolder="tokenizer_2")
-        # SD3
-        # self._tokenizer_2 = CLIPTokenizer.from_pretrained(checkpoint_name, subfolder="tokenizer_2")
-        # self._t5_tokenizer = T5TokenizerFast.from_pretrained(checkpoint_name, subfolder="tokenizer_3")
         torch_text_encoder_1 = CLIPTextModel.from_pretrained(checkpoint_name, subfolder="text_encoder")
-        # torch_text_encoder_1 = CLIPTextModelWithProjection.from_pretrained(
-        #     checkpoint_name, subfolder="text_encoder"
-        # )
         torch_text_encoder_1.eval()
-        # torch_text_encoder_2 = CLIPTextModelWithProjection.from_pretrained(
-        #     checkpoint_name, subfolder="text_encoder_2"
-        # )
-        # torch_text_encoder_2.eval()
         if enable_t5_text_encoder:
             # SD3:
             # torch_t5_text_encoder = T5EncoderModel.from_pretrained(checkpoint_name, subfolder="text_encoder_3")
@@ -155,26 +140,6 @@ class Flux1Pipeline:
 
         self.transformers = []
         for i, submesh_device in enumerate(self._submesh_devices):
-            # SD3:
-            # tt_transformer = SD35Transformer2DModel(
-            #     sample_size=128,
-            #     patch_size=2,
-            #     in_channels=16,
-            #     num_layers=38,
-            #     attention_head_dim=64,
-            #     num_attention_heads=38,
-            #     joint_attention_dim=4096,
-            #     caption_projection_dim=2432,
-            #     pooled_projection_dim=2048,
-            #     out_channels=16,
-            #     pos_embed_max_size=192,
-            #     dual_attention_layers=(),
-            #     mesh_device=submesh_device,
-            #     ccl_manager=self._ccl_managers[i],
-            #     parallel_config=self._parallel_config,
-            #     init=False,
-            #     padding_config=padding_config,
-            # )
             tt_transformer = Flux1Transformer(
                 patch_size=torch_transformer.config.patch_size,
                 in_channels=torch_transformer.config.in_channels,
@@ -195,7 +160,12 @@ class Flux1Pipeline:
 
             model_name = os.path.basename(checkpoint_name)
             if not cache.initialize_from_cache(
-                tt_transformer, torch_transformer, model_name, "transformer", parallel_config
+                tt_transformer,
+                torch_transformer,
+                model_name,
+                "transformer",
+                parallel_config,
+                tuple(submesh_device.shape),
             ):
                 logger.info(f"Loading transformer weights from PyTorch state dict")
                 tt_transformer.load_state_dict(torch_transformer.state_dict())
@@ -205,8 +175,6 @@ class Flux1Pipeline:
 
         self._pos_embed = torch_transformer.pos_embed
 
-        # SD3:
-        # self._num_channels_latents = torch_transformer.config.in_channels
         self._num_channels_latents = torch_transformer.config.in_channels // 4
         self._joint_attention_dim = torch_transformer.config.joint_attention_dim
         self._patch_size = torch_transformer.config.patch_size
@@ -216,8 +184,6 @@ class Flux1Pipeline:
         self._latents_scaling = self._torch_vae.config.scaling_factor
         self._latents_shift = self._torch_vae.config.shift_factor
 
-        # SD3:
-        # self._vae_scale_factor = 2 ** (len(self._block_out_channels) - 1)
         self._vae_scale_factor = 2 ** len(self._block_out_channels)
         self._image_processor = VaeImageProcessor(vae_scale_factor=self._vae_scale_factor)
 
@@ -229,8 +195,6 @@ class Flux1Pipeline:
 
         if use_torch_clip_text_encoder:
             self._text_encoder_1 = torch_text_encoder_1
-            # SD3:
-            # self._text_encoder_2 = torch_text_encoder_2
         else:
             clip_config_1 = CLIPConfig(
                 vocab_size=torch_text_encoder_1.config.vocab_size,
@@ -243,18 +207,6 @@ class Flux1Pipeline:
                 attention_dropout=torch_text_encoder_1.config.attention_dropout,
                 hidden_act=torch_text_encoder_1.config.hidden_act,
             )
-            # SD3:
-            # clip_config_2 = CLIPConfig(
-            #     vocab_size=torch_text_encoder_2.config.vocab_size,
-            #     embed_dim=torch_text_encoder_2.config.hidden_size,
-            #     ff_dim=torch_text_encoder_2.config.intermediate_size,
-            #     num_heads=torch_text_encoder_2.config.num_attention_heads,
-            #     num_hidden_layers=torch_text_encoder_2.config.num_hidden_layers,
-            #     max_prompt_length=77,
-            #     layer_norm_eps=torch_text_encoder_2.config.layer_norm_eps,
-            #     attention_dropout=torch_text_encoder_2.config.attention_dropout,
-            #     hidden_act=torch_text_encoder_2.config.hidden_act,
-            # )
 
             self._text_encoder_1 = CLIPEncoder(
                 config=clip_config_1,
@@ -263,14 +215,6 @@ class Flux1Pipeline:
                 parallel_config=encoder_parallel_config,
                 eos_token_id=2,  # default EOS token ID for CLIP
             )
-            # SD3:
-            # self._text_encoder_2 = CLIPEncoder(
-            #     config=clip_config_2,
-            #     mesh_device=encoder_device,
-            #     ccl_manager=self._ccl_managers[0],  # Use CCL manager for submesh 0
-            #     parallel_config=encoder_parallel_config,
-            #     eos_token_id=2,  # default EOS token ID for CLIP
-            # )
 
             self._text_encoder_1.load_state_dict(torch_text_encoder_1.state_dict())
             # SD3:
@@ -303,7 +247,12 @@ class Flux1Pipeline:
                 )
 
                 if not cache.initialize_from_cache(
-                    self._t5_text_encoder, torch_t5_text_encoder, model_name, "t5_text_encoder", encoder_parallel_config
+                    self._t5_text_encoder,
+                    torch_t5_text_encoder,
+                    model_name,
+                    "t5_text_encoder",
+                    encoder_parallel_config,
+                    tuple(encoder_device.shape),
                 ):
                     logger.info(f"Loading T5 text encoder weights from PyTorch state dict")
                     self._t5_text_encoder.load_state_dict(torch_t5_text_encoder.state_dict())
@@ -388,8 +337,6 @@ class Flux1Pipeline:
 
             logger.info("preparing timesteps...")
 
-            # SD3:
-            # self._scheduler.set_timesteps(num_inference_steps)
             self._scheduler.set_timesteps(
                 sigmas=np.linspace(1.0, 1 / num_inference_steps, num_inference_steps),
                 mu=_calculate_shift(
@@ -414,21 +361,12 @@ class Flux1Pipeline:
 
             # We let randn generate a permuted latent tensor, so that the generated noise matches the
             # reference implementation.
-            # SD3:
-            # shape = (
-            #     prompt_count * num_images_per_prompt,
-            #     self._num_channels_latents,
-            #     latents_height,
-            #     latents_width,
-            # )
             shape = [
                 prompt_count * num_images_per_prompt,
                 self._num_channels_latents,
                 latents_height * 2,
                 latents_width * 2,
             ]
-            # SD3:
-            # latents = torch.randn(shape, dtype=torch.bfloat16).permute(0, 2, 3, 1)
             latents = _pack_latents(
                 torch.randn(shape, dtype=torch.bfloat16),
                 prompt_count * num_images_per_prompt,
@@ -642,8 +580,6 @@ class Flux1Pipeline:
 
                 torch_latents = ttnn.to_torch(ttnn.get_device_tensors(tt_latents)[0])
                 torch_latents = (torch_latents / self._latents_scaling) + self._latents_shift
-
-                # not in SD3:
                 torch_latents = _unpack_latents(torch_latents, height, width, self._vae_scale_factor)
 
                 if self.desired_encoder_submesh_shape != self.original_submesh_shape:
@@ -704,14 +640,6 @@ class Flux1Pipeline:
             spatial_sequence_length=spatial_sequence_length,
             prompt_sequence_length=prompt_sequence_length,
         )
-
-        # SD3:
-        # noise_pred = _reshape_noise_pred(
-        #     noise_pred,
-        #     height=latent.shape[-3] * self._parallel_config.sequence_parallel.factor,
-        #     width=latent.shape[-2],
-        #     patch_size=self._patch_size,
-        # )
 
         return noise_pred
 
@@ -881,7 +809,6 @@ class Flux1Pipeline:
         self,
         prompt_1: list[str],
         prompt_2: list[str],
-        # prompt_3: list[str],
         num_images_per_prompt: int,
         clip_skip: int = 0,
     ) -> tuple[torch.Tensor, torch.Tensor]:
@@ -899,43 +826,19 @@ class Flux1Pipeline:
                 mesh_device=self.encoder_device,
                 clip_skip=clip_skip,
             )
-            # SD3:
-            # prompt_2_embeds, pooled_prompt_2_embeds = _get_clip_prompt_embeds(
-            #     prompts=prompt_2,
-            #     num_images_per_prompt=num_images_per_prompt,
-            #     tokenizer=self._tokenizer_2,
-            #     text_encoder=self._text_encoder_2,
-            #     sequence_length=tokenizer_max_length,
-            #     mesh_device=self.encoder_device,
-            #     clip_skip=clip_skip,
-            # )
-            # clip_prompt_embeds = torch.cat([prompt_1_embeds, prompt_2_embeds], dim=-1)
 
         with timer.time_section("t5_encoding") if timer else nullcontext():
             t5_prompt_embeds = _get_t5_prompt_embeds(
-                # SD3:
-                # prompts=prompt_3,
                 prompts=prompt_2,
                 text_encoder=self._t5_text_encoder,
                 tokenizer=self._t5_tokenizer,
                 sequence_length=self.T5_SEQUENCE_LENGTH,
-                # SD3:
-                # empty_sequence_length=tokenizer_max_length,
                 empty_sequence_length=self.T5_SEQUENCE_LENGTH,
                 num_images_per_prompt=num_images_per_prompt,
                 mesh_device=self.encoder_device,
                 embedding_dim=self._joint_attention_dim,
             )
 
-        # SD3:
-        # clip_prompt_embeds = torch.nn.functional.pad(
-        #     clip_prompt_embeds,
-        #     (0, t5_prompt_embeds.shape[-1] - clip_prompt_embeds.shape[-1]),
-        # )
-
-        # SD3:
-        # prompt_embeds = torch.cat([clip_prompt_embeds, t5_prompt_embeds], dim=-2)
-        # pooled_prompt_embeds = torch.cat([pooled_prompt_1__embeds, pooled_prompt_2_embeds], dim=-1)
         prompt_embeds = t5_prompt_embeds
         pooled_prompt_embeds = pooled_prompt_1_embeds
 
@@ -946,10 +849,8 @@ class Flux1Pipeline:
         *,
         prompt_1: list[str],
         prompt_2: list[str],
-        # prompt_3: list[str],
         negative_prompt_1: list[str] | None,
         negative_prompt_2: list[str] | None,
-        # negative_prompt_3: list[str],
         num_images_per_prompt: int,
         cfg_enabled: bool,
         clip_skip: int = 0,
@@ -957,7 +858,6 @@ class Flux1Pipeline:
         prompt_embeds, pooled_prompt_embeds = self._encode_prompts_partial(
             prompt_1=prompt_1,
             prompt_2=prompt_2,
-            # prompt_3=prompt_3,
             num_images_per_prompt=num_images_per_prompt,
             clip_skip=clip_skip,
         )
@@ -968,7 +868,6 @@ class Flux1Pipeline:
         negative_prompt_embeds, negative_pooled_prompt_embeds = self._encode_prompts_partial(
             prompt_1=negative_prompt_1,
             prompt_2=negative_prompt_2,
-            # prompt_3=negative_prompt_3,
             num_images_per_prompt=num_images_per_prompt,
             clip_skip=clip_skip,
         )
@@ -1094,38 +993,6 @@ def _get_t5_prompt_embeds(
         prompt_embeds = output.last_hidden_state.to("cpu")
 
     return prompt_embeds.repeat_interleave(num_images_per_prompt, dim=0)
-
-
-# SD3:
-# def _reshape_noise_pred(
-#     noise_pred: ttnn.Tensor,
-#     *,
-#     height: int,
-#     width: int,
-#     patch_size: int,
-# ) -> ttnn.Tensor:
-#     # B, H * W, P * Q * C -> B, H * P, W * Q, C
-
-#     patch_count_y = height // patch_size
-#     patch_count_x = width // patch_size
-
-#     shape1 = (
-#         noise_pred.shape[0] * patch_count_y,
-#         patch_count_x,
-#         patch_size,
-#         -1,
-#     )
-
-#     shape2 = (
-#         noise_pred.shape[0],
-#         patch_count_y * patch_size,
-#         patch_count_x * patch_size,
-#         -1,
-#     )
-
-#     noise_pred = noise_pred.reshape(shape1)
-#     noise_pred = ttnn.transpose(noise_pred, 1, 2)
-#     return noise_pred.reshape(shape2)
 
 
 # adapted from https://github.com/huggingface/diffusers/blob/v0.31.0/src/diffusers/pipelines/flux/pipeline_flux.py

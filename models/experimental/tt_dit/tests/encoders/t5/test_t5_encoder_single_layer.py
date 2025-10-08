@@ -3,21 +3,22 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import sys
-import time
 from pathlib import Path
+import time
 
 sys.path.append(str(Path(__file__).resolve().parents[6]))
 
-import pytest
 import torch
+import pytest
 import ttnn
 from loguru import logger
-from models.experimental.tt_dit.encoders.t5.model_t5 import RelativeTextEmbeddings, T5Config, T5EncoderLayer
-from models.experimental.tt_dit.parallel.config import EncoderParallelConfig, ParallelFactor
+from transformers.models.t5.modeling_t5 import T5EncoderModel
 from models.experimental.tt_dit.parallel.manager import CCLManager
+from models.experimental.tt_dit.parallel.config import EncoderParallelConfig, ParallelFactor
+
+from models.experimental.tt_dit.encoders.t5.model_t5 import RelativeTextEmbeddings, T5Config, T5EncoderLayer
 from models.experimental.tt_dit.utils.check import assert_quality
 from models.experimental.tt_dit.utils.substate import substate
-from transformers.models.t5.modeling_t5 import T5EncoderModel
 
 
 @pytest.mark.parametrize(
@@ -48,7 +49,6 @@ def test_t5_single_layer(
 
     parallel_config = EncoderParallelConfig(
         tensor_parallel=ParallelFactor(factor=encoder_submesh.shape[1], mesh_axis=1),
-        data_parallel=ParallelFactor(factor=encoder_submesh.shape[0], mesh_axis=0),
     )
     ccl_manager = CCLManager(
         mesh_device=encoder_submesh,

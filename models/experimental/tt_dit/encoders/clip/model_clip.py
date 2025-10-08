@@ -1,9 +1,8 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
-from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from __future__ import annotations
 
 import torch
 import ttnn
@@ -15,9 +14,6 @@ from ...parallel.config import EncoderParallelConfig
 from ...parallel.manager import CCLManager
 from ...utils.substate import indexed_substates, substate
 from ...utils.tensor import bf16_tensor
-
-if TYPE_CHECKING:
-    from transformers import CLIPTextModel, CLIPTextModelWithProjection
 
 
 class CLIPConfig:

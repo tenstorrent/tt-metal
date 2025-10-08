@@ -3,20 +3,21 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import sys
-import time
 from pathlib import Path
+import time
 
 sys.path.append(str(Path(__file__).resolve().parents[6]))
 
-import pytest
 import torch
+import pytest
 import ttnn
 from loguru import logger
-from models.experimental.tt_dit.encoders.clip.model_clip import CLIPConfig, CLIPEncoder
-from models.experimental.tt_dit.parallel.config import EncoderParallelConfig, ParallelFactor
-from models.experimental.tt_dit.parallel.manager import CCLManager
-from models.experimental.tt_dit.utils.check import assert_quality
 from transformers import CLIPTextModel, CLIPTokenizer
+
+from models.experimental.tt_dit.encoders.clip.model_clip import CLIPEncoder, CLIPConfig
+from models.experimental.tt_dit.parallel.manager import CCLManager
+from models.experimental.tt_dit.parallel.config import EncoderParallelConfig, ParallelFactor
+from models.experimental.tt_dit.utils.check import assert_quality
 
 
 @pytest.mark.parametrize(
@@ -58,7 +59,6 @@ def test_clip_encoder(
 
     parallel_config = EncoderParallelConfig(
         tensor_parallel=ParallelFactor(factor=encoder_submesh.shape[1], mesh_axis=1),
-        data_parallel=ParallelFactor(factor=encoder_submesh.shape[0], mesh_axis=0),
     )
     ccl_manager = CCLManager(
         mesh_device=encoder_submesh,
@@ -115,9 +115,7 @@ def test_clip_encoder(
 
     # times TT model inference only
     tt_start_time = time.time()
-    tt_sequence_output, tt_pooled_output, tt_normalized_output = tt_clip(
-        tt_prompt, encoder_submesh, return_normalized_state=True
-    )
+    tt_sequence_output, tt_projected_output = tt_clip(tt_prompt, encoder_submesh, with_projection=False)
     tt_end_time = time.time()
     tt_execution_time = tt_end_time - tt_start_time
 
@@ -128,26 +126,22 @@ def test_clip_encoder(
         hf_end_time = time.time()
         hf_execution_time = hf_end_time - hf_start_time
 
-    hf_sequence_output = hf_output.hidden_states[-1]
-    hf_pooled_output = hf_output.pooler_output
-    hf_normalized_output = hf_output.last_hidden_state
+    hf_sequence_output = hf_output.last_hidden_state  # after final layer norm
+    hf_projected_output = hf_output.pooler_output  # projected/pooled output
 
     # convert mesh tensor to torch tensor for pcc
     # since weights are replicated, can get the tensor from any single device
     tt_sequence_output_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_sequence_output[-1])[0])
-    tt_pooled_output_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_pooled_output)[0])
-    tt_normalized_output_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_normalized_output)[0])
+    tt_projected_output_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_projected_output)[0])
 
     logger.info(f"TT model execution time: {tt_execution_time:.4f} seconds")
     logger.info(f"HF model execution time: {hf_execution_time:.4f} seconds")
 
     assert hf_sequence_output.shape == tt_sequence_output_torch.shape
-    assert hf_pooled_output.shape == tt_pooled_output_torch.shape
-    assert hf_normalized_output.shape == tt_normalized_output_torch.shape
+    assert hf_projected_output.shape == tt_projected_output_torch.shape
 
     assert_quality(hf_sequence_output, tt_sequence_output_torch, pcc=expected_pcc)
-    assert_quality(hf_pooled_output, tt_pooled_output_torch, pcc=expected_pcc)
-    assert_quality(hf_normalized_output, tt_normalized_output_torch, pcc=expected_pcc)
+    assert_quality(hf_projected_output, tt_projected_output_torch, pcc=expected_pcc)
 
 
 if __name__ == "__main__":

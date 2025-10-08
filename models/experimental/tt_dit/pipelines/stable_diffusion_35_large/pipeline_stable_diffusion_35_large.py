@@ -5,9 +5,9 @@
 from __future__ import annotations
 
 import time
-from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import Dict, List
+from PIL import Image
 
 import torch
 import tqdm
@@ -18,20 +18,18 @@ from diffusers.models.transformers.transformer_sd3 import SD3Transformer2DModel 
 from diffusers.schedulers.scheduling_flow_match_euler_discrete import FlowMatchEulerDiscreteScheduler
 from loguru import logger
 from transformers import CLIPTextModelWithProjection, CLIPTokenizer, T5EncoderModel, T5TokenizerFast
+from contextlib import contextmanager, nullcontext
 
-from ...encoders.clip.model_clip import CLIPConfig, CLIPEncoder
-from ...encoders.t5.model_t5 import T5Config, T5Encoder
+from ...encoders.clip.model_clip import CLIPEncoder, CLIPConfig
+from ...encoders.t5.model_t5 import T5Encoder, T5Config
 
 # NOTE: SD35Transformer is the new tt-dit implementation
 from ...models.transformers.transformer_sd35 import SD35Transformer2DModel
 from ...models.vae.vae_sd35 import VAEDecoder
-from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, ParallelFactor, VAEParallelConfig
 from ...parallel.manager import CCLManager
-from ...utils.cache import cache_dict_exists, get_and_create_cache_path, load_cache_dict, save_cache_dict
+from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, VAEParallelConfig, ParallelFactor
 from ...utils.padding import PaddingConfig
-
-if TYPE_CHECKING:
-    from PIL import Image
+from ...utils.cache import save_cache_dict, load_cache_dict, cache_dict_exists, get_and_create_cache_path
 
 TILE_SIZE = 32
 
@@ -41,15 +39,15 @@ class TimingData:
     clip_encoding_time: float = 0.0
     t5_encoding_time: float = 0.0
     total_encoding_time: float = 0.0
-    denoising_step_times: list[float] = field(default_factory=list)
+    denoising_step_times: List[float] = field(default_factory=list)
     vae_decoding_time: float = 0.0
     total_time: float = 0.0
 
 
 class TimingCollector:
     def __init__(self):
-        self.timings: dict[str, float] = {}
-        self.step_timings: dict[str, list[float]] = {}
+        self.timings: Dict[str, float] = {}
+        self.step_timings: Dict[str, List[float]] = {}
 
     @contextmanager
     def time_section(self, name: str):
@@ -219,8 +217,7 @@ class StableDiffusion3Pipeline:
 
         # Create encoder parallel config
         encoder_parallel_config = EncoderParallelConfig(
-            tensor_parallel=ParallelFactor(factor=encoder_device.shape[1], mesh_axis=1),
-            data_parallel=ParallelFactor(factor=encoder_device.shape[0], mesh_axis=0),
+            tensor_parallel=ParallelFactor(factor=4, mesh_axis=1)  # 1x4 submesh, parallel on axis 1
         )
 
         self.encoder_parallel_config = encoder_parallel_config
@@ -301,6 +298,7 @@ class StableDiffusion3Pipeline:
                     model_name="stable-diffusion-3.5-large",
                     subfolder="transformer",
                     parallel_config=self.dit_parallel_config,
+                    mesh_shape=tuple(submesh_device.shape),
                     dtype="bf16",
                 )
                 # create cache if it doesn't exist
@@ -574,7 +572,7 @@ class StableDiffusion3Pipeline:
         seed: int | None = None,
         traced: bool = False,
         clip_skip: int | None = None,
-    ) -> list[Image.Image]:
+    ) -> List[Image.Image]:
         timer = self.timing_collector
 
         with timer.time_section("total") if timer else nullcontext():
@@ -637,7 +635,6 @@ class StableDiffusion3Pipeline:
             if seed is not None:
                 torch.manual_seed(seed)
             latents = torch.randn(latents_shape, dtype=prompt_embeds.dtype)  # .permute([0, 2, 3, 1])
-            latents = self.transformers[0].patchify(latents)
 
             tt_prompt_embeds_list = []
             tt_pooled_prompt_embeds_list = []
@@ -768,11 +765,6 @@ class StableDiffusion3Pipeline:
 
                 torch_latents = ttnn.to_torch(ttnn.get_device_tensors(tt_latents)[0])
                 torch_latents = (torch_latents / self._torch_vae_scaling_factor) + self._torch_vae_shift_factor
-                torch_latents = self.transformers[0].unpatchify(
-                    torch_latents,
-                    width=width // self._torch_vae_scale_factor,
-                    height=height // self._torch_vae_scale_factor,
-                )
 
                 if self.desired_encoder_submesh_shape != self.original_submesh_shape:
                     # HACK: reshape submesh device 0 from 2D to 1D
@@ -815,22 +807,22 @@ class StableDiffusion3Pipeline:
         *,
         do_classifier_free_guidance: bool,
         guidance_scale: float,
-        latents: list[ttnn.Tensor],  # device tensor
-        timestep: list[ttnn.Tensor],  # host tensor
-        pooled_prompt_embeds: list[ttnn.Tensor],  # device tensor
-        prompt_embeds: list[ttnn.Tensor],  # device tensor
-        sigma_difference: list[ttnn.Tensor],  # device tensor
+        latents: List[ttnn.Tensor],  # device tensor
+        timestep: List[ttnn.Tensor],  # host tensor
+        pooled_prompt_embeds: List[ttnn.Tensor],  # device tensor
+        prompt_embeds: List[ttnn.Tensor],  # device tensor
+        sigma_difference: List[ttnn.Tensor],  # device tensor
         prompt_sequence_length: int,
         spatial_sequence_length: int,
         traced: bool,
-    ) -> list[ttnn.Tensor]:
+    ) -> List[ttnn.Tensor]:
         def inner(latent, prompt, pooled_projection, timestep, cfg_index):
             if do_classifier_free_guidance and not self.dit_parallel_config.cfg_parallel.factor > 1:
                 latent_model_input = ttnn.concat([latent, latent])
             else:
                 latent_model_input = latent
 
-            return self.transformers[cfg_index](
+            noise_pred = self.transformers[cfg_index](
                 spatial=latent_model_input,
                 prompt_embed=prompt,
                 pooled_projections=pooled_projection,
@@ -838,6 +830,14 @@ class StableDiffusion3Pipeline:
                 N=spatial_sequence_length,
                 L=prompt_sequence_length,
             )
+
+            noise_pred = _reshape_noise_pred(
+                noise_pred,
+                height=latent.shape[-3] * self.dit_parallel_config.sequence_parallel.factor,
+                width=latent.shape[-2],
+                patch_size=self.patch_size,
+            )
+            return noise_pred
 
         if traced and self._trace is None:
             print(f"Tracing...")
@@ -1217,3 +1217,34 @@ def _get_t5_prompt_embeds(
     # duplicate text embeddings and attention mask for each generation per prompt, using mps friendly method
     prompt_embeds = prompt_embeds.repeat(1, num_images_per_prompt, 1)
     return prompt_embeds.view(batch_size * num_images_per_prompt, seq_len, -1)
+
+
+def _reshape_noise_pred(
+    noise_pred: ttnn.Tensor,
+    *,
+    height: int,
+    width: int,
+    patch_size: int,
+) -> ttnn.Tensor:
+    # B, H * W, P * Q * C -> B, H * P, W * Q, C
+
+    patch_count_y = height // patch_size
+    patch_count_x = width // patch_size
+
+    shape1 = (
+        noise_pred.shape[0] * patch_count_y,
+        patch_count_x,
+        patch_size,
+        -1,
+    )
+
+    shape2 = (
+        noise_pred.shape[0],
+        patch_count_y * patch_size,
+        patch_count_x * patch_size,
+        -1,
+    )
+
+    noise_pred = noise_pred.reshape(shape1)
+    noise_pred = ttnn.transpose(noise_pred, 1, 2)
+    return noise_pred.reshape(shape2)

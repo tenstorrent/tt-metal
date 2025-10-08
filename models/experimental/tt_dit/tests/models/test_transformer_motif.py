@@ -11,7 +11,7 @@ from loguru import logger
 from ...models.transformers.transformer_motif import MotifTransformer, convert_motif_transformer_state
 from ...parallel.config import DiTParallelConfig, ParallelFactor
 from ...parallel.manager import CCLManager
-from ...reference.motif_image import configuration_motifimage, modeling_dit
+from ...reference.motif import configuration_motifimage, modeling_dit
 from ...utils import cache
 from ...utils.check import assert_quality
 from ...utils.padding import PaddingConfig
@@ -156,6 +156,7 @@ def test_transformer_motif(
             model_name="motif-image-6b",
             subfolder="transformer",
             parallel_config=parallel_config,
+            mesh_shape=submesh_device.shape,
             dtype="bf16",
         )
         if cache.cache_dict_exists(cache_path):

@@ -281,6 +281,7 @@ def test_sd35_transformer2d_model(
             model_name="stable-diffusion-3.5-large",
             subfolder="transformer",
             parallel_config=parallel_config,
+            mesh_shape=tuple(mesh_device.shape),
             dtype="bf16",
         )
         assert os.path.exists(
@@ -326,7 +327,7 @@ def test_sd35_transformer2d_model(
     # Convert inputs to TT tensors with proper sharding
     # Spatial: sharded on sequence dimension (sp_axis) and feature dimension (tp_axis)
     tt_spatial = bf16_tensor(
-        tt_model.patchify(spatial_input_nhwc_tt), device=submesh_device, mesh_axis=sp_axis, shard_dim=1
+        spatial_input_nhwc_tt, device=submesh_device, mesh_axis=sp_axis, shard_dim=1
     )  # Sharded on H
 
     # Prompt: replicated
@@ -449,6 +450,7 @@ def test_sd35_transformer_model_caching(
         model_name="stable-diffusion-3.5-large",
         subfolder="transformer",
         parallel_config=parallel_config,
+        mesh_shape=tuple(mesh_device.shape),
         dtype="bf16",
     )
 

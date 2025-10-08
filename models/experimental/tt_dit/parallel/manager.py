@@ -2,11 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from __future__ import annotations
-
-import torch
 import ttnn
-
+import torch
 from ..utils.tensor import bf16_tensor
 
 

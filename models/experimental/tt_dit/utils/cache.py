@@ -14,37 +14,32 @@ def cache_dir_is_set() -> bool:
     return "TT_DIT_CACHE_DIR" in os.environ
 
 
-def get_cache_path(model_name, subfolder, parallel_config, dtype="bf16"):
+def get_cache_path(model_name, subfolder, parallel_config, mesh_shape, dtype="bf16"):
     cache_dir = os.environ.get("TT_DIT_CACHE_DIR")
     assert cache_dir is not None, "TT_DIT_CACHE_DIR environment variable must be set if using caching."
 
     model_path = os.path.join(cache_dir, model_name)
     model_path = os.path.join(model_path, subfolder)
-
-    name_parts = []
-
-    if hasattr(parallel_config, "tensor_parallel") and parallel_config.tensor_parallel is not None:
-        factor, axis = parallel_config.tensor_parallel.factor, parallel_config.tensor_parallel.mesh_axis
-        name_parts.append(f"tp{factor}_{axis}")
-
-    if hasattr(parallel_config, "sequence_parallel") and parallel_config.sequence_parallel is not None:
-        factor, axis = parallel_config.sequence_parallel.factor, parallel_config.sequence_parallel.mesh_axis
-        name_parts.append(f"sp{factor}_{axis}")
-
-    if hasattr(parallel_config, "data_parallel") and parallel_config.data_parallel is not None:
-        factor, axis = parallel_config.data_parallel.factor, parallel_config.data_parallel.mesh_axis
-        name_parts.append(f"dp{factor}_{axis}")
-
-    name_parts.append(dtype)
-    parallel_name = "_".join(name_parts)
-
+    tp_factor, tp_mesh_axis = (
+        (parallel_config.tensor_parallel.factor, parallel_config.tensor_parallel.mesh_axis)
+        if hasattr(parallel_config, "tensor_parallel") and parallel_config.tensor_parallel is not None
+        else (-1, -1)
+    )
+    sp_factor, sp_mesh_axis = (
+        (parallel_config.sequence_parallel.factor, parallel_config.sequence_parallel.mesh_axis)
+        if hasattr(parallel_config, "sequence_parallel") and parallel_config.sequence_parallel is not None
+        else (-1, -1)
+    )
+    parallel_name = (
+        f"tp{tp_factor}_{tp_mesh_axis}_sp{sp_factor}_{sp_mesh_axis}_mesh_{mesh_shape[0]}x{mesh_shape[1]}_{dtype}"
+    )
     cache_path = os.path.join(model_path, parallel_name) + os.sep
 
     return cache_path
 
 
-def get_and_create_cache_path(model_name, subfolder, parallel_config, dtype="bf16"):
-    cache_path = get_cache_path(model_name, subfolder, parallel_config, dtype)
+def get_and_create_cache_path(model_name, subfolder, parallel_config, mesh_shape, dtype="bf16"):
+    cache_path = get_cache_path(model_name, subfolder, parallel_config, mesh_shape, dtype)
     os.makedirs(cache_path, exist_ok=True)
     return cache_path
 
@@ -63,16 +58,17 @@ def cache_dict_exists(cache_path):
     return os.path.exists(os.path.join(cache_path, CACHE_DICT_FILE))
 
 
-def initialize_from_cache(tt_model, torch_model, model_name, subfolder, parallel_config, dtype="bf16"):
+def initialize_from_cache(tt_model, torch_model, model_name, subfolder, parallel_config, mesh_shape, dtype="bf16"):
     if cache_dir_is_set():
         cache_path = get_and_create_cache_path(
             model_name=model_name,
             subfolder=subfolder,
             parallel_config=parallel_config,
+            mesh_shape=mesh_shape,
             dtype=dtype,
         )
         if cache_dict_exists(cache_path):
-            logger.info(f"loading {subfolder} from cache...")
+            logger.info(f"loading {subfolder} from cache... {cache_path}")
             tt_model.from_cached_state_dict(load_cache_dict(cache_path))
         else:
             logger.info(

@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: Copyright (c) 2025 Motif Technologies
+
+# SPDX-License-Identifier: MIT License
+
 from typing import List, Optional, Tuple, Union
 
 import numpy as np

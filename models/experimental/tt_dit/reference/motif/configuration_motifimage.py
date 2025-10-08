@@ -1,9 +1,14 @@
+# SPDX-FileCopyrightText: Copyright (c) 2025 Motif Technologies
+
+# SPDX-License-Identifier: MIT License
+
 """Configuration dataclass for Motif Image (MMDiT + encoders/decoder).
 
 This module provides a lightweight, JSON-serializable configuration used to construct the
 inference model and control backbone options such as attention mode, register tokens, and
 positional embeddings.
 """
+
 import json
 from dataclasses import dataclass
 
@@ -27,6 +32,7 @@ class MotifImageConfig:
 
     Instances can be loaded via `from_json_file` to keep configs portable in repos and CLIs.
     """
+
     # General
     num_layers: int = 12
     hidden_dim: int = 768  # common hidden dimension for the transformer arch
@@ -80,7 +86,7 @@ class MotifImageConfig:
 
     # Preference optimization
     preference_train: bool = False
-    lora_rank: int = 64 
+    lora_rank: int = 64
     lora_alpha: int = 8
 
     skip_register_token_num: int = 0
