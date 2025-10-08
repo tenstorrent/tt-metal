@@ -212,7 +212,7 @@ The runner script:
 Located in `fabric_minimal_example/`, demonstrates basic distributed tensor operations using the fabric API with all-reduce synchronization.
 
 ### 2. Hierarchical Parallel Training
-Located in `hierarchical_parallel/`, implements a 3-tier hierarchical parallelism strategy with workers, aggregators, and optimizers.
+Located in `hierarchical_parallel/`, implements a 2-tier and 3-tier hierarchical parallelism strategy with workers, aggregators, and optimizers.
 
 ### 3. Pipeline Parallel Training
 Located in `pipeline_parallel_training/`, demonstrates pipeline parallelism for training large models across multiple devices.
