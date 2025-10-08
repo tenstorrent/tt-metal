@@ -22,6 +22,7 @@ def generate_token_embeddings_tt(image_tensor, lidar_tensor, seq_len, n_embd):
         token_embeddings: (batch, total_tokens, n_embd)
         Additional metadata for post-processing
     """
+    print(f"{image_tensor.shape,lidar_tensor.shape=}")
     bz = image_tensor.shape[0]
     img_num_tokens = image_tensor.shape[2]  # 110
     img_c = image_tensor.shape[3]  # 72
