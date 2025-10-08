@@ -1,0 +1,30 @@
+[build-system]
+requires = [
+    "scikit-build-core>0.8.0",
+    "nanobind>=2.9.2",
+    "numpy >=1.24.4,<2",
+    "wheel",
+]
+build-backend = "scikit_build_core.build"
+
+[tool.scikit-build]
+minimum-version = "0.4"
+build-dir = "build/{wheel_tag}"
+wheel.py-api = "cp312"
+
+[tool.setuptools]
+py-modules = ["ttml"]
+packages = ["ttml"]
+
+[project]
+name = "ttml"
+authors=[
+    {name = "Tenstorrent"},
+    {email = "info@tenstorrent.com"},
+]
+license="Apache-2.0"
+requires-python=">=3.10"
+dependencies = [
+    "numpy"
+]
+dynamic = ["version", "readme"]
