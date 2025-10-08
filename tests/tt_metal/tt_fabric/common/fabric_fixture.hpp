@@ -287,7 +287,7 @@ void FabricUnicastCommon(
     BaseFabricFixture* fixture,
     NocSendType noc_send_type,
     const std::vector<std::tuple<RoutingDirection, uint32_t /*num_hops*/>>& dir_configs,
-    const FabricApiType api_type = FabricApiType::Linear,
+    FabricApiType api_type = FabricApiType::Linear,
     bool with_state = false);
 
 void FabricMulticastCommon(

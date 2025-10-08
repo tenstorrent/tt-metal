@@ -2122,7 +2122,7 @@ void FabricUnicastCommon(
     BaseFabricFixture* fixture,
     NocSendType noc_send_type,
     const std::vector<std::tuple<RoutingDirection, uint32_t>>& pair_ordered_dirs,
-    const FabricApiType api_type,
+    FabricApiType api_type,
     bool with_state) {
     CoreCoord sender_logical_core = {0, 0};
     CoreCoord receiver_logical_core = {1, 0};
