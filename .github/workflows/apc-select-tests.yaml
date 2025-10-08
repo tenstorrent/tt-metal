@@ -67,19 +67,19 @@ jobs:
       skip-tt-train: false
       ref: ${{ inputs.commit || github.sha }}
 
-  build-artifact-profiler:
-    needs: parse-tests-json
-    if: ${{ contains(needs.parse-tests-json.outputs.tests-to-run, 'run-profiler-regression') }}
-    uses: ./.github/workflows/build-artifact.yaml
-    permissions:
-      packages: write
-    secrets: inherit
-    with:
-      build-type: ${{ inputs.build-type || 'Release' }}
-      build-wheel: true
-      tracy: true
-      version: ${{ inputs.version || '22.04' }}
-      ref: ${{ inputs.commit || github.sha }}
+  # build-artifact-profiler:
+  #   needs: parse-tests-json
+  #   if: ${{ contains(needs.parse-tests-json.outputs.tests-to-run, 'run-profiler-regression') }}
+  #   uses: ./.github/workflows/build-artifact.yaml
+  #   permissions:
+  #     packages: write
+  #   secrets: inherit
+  #   with:
+  #     build-type: ${{ inputs.build-type || 'Release' }}
+  #     build-wheel: true
+  #     tracy: true
+  #     version: ${{ inputs.version || '22.04' }}
+  #     ref: ${{ inputs.commit || github.sha }}
 
   # sd-unit-tests:
   #   needs: [parse-tests-json, build-artifact]
