@@ -1065,6 +1065,10 @@ def reset_tensix(tt_open_devices=None):
         smi_reset_result = run_process_and_get_result(f"tt-smi -r {tt_open_devices_str}")
 
     logger.info(f"tt-smi reset status: {smi_reset_result.returncode}")
+    if smi_reset_result.stdout:
+        logger.info(f"TT SMI output: {smi_reset_result.stdout.decode('utf-8')}")
+    if smi_reset_result.stderr:
+        logger.info(f"TT SMI stderr: {smi_reset_result.stderr.decode('utf-8')}")
 
 
 @pytest.hookimpl(tryfirst=True)
