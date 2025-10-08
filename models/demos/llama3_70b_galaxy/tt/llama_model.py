@@ -33,6 +33,7 @@ class TtTransformer(LightweightModule):
         enable_prefetcher_performance_mode=False,
         mode="decode",
         allocate_prefill_buffers=True,
+        decode_mode_only=False,
     ):
         super().__init__()
         self.args = args
@@ -47,6 +48,7 @@ class TtTransformer(LightweightModule):
         state_dict_prefix = args.get_state_dict_prefix("", None)
         self.allocate_prefill_buffers = allocate_prefill_buffers
         self.paged_attention_config = paged_attention_config
+        self.decode_mode_only = decode_mode_only
 
         self.embd = TtLlamaEmbedding(
             mesh_device=mesh_device,
@@ -73,12 +75,9 @@ class TtTransformer(LightweightModule):
         self.mesh_sub_device_manager_id_decode = None
         self.mesh_sub_device_manager_id_prefill = None
 
-        if mode == "decode":
-            self.setup_decode()
-            self.is_decode_setup = True
-        else:
-            self.setup_prefill()
-            self.is_prefill_setup = True
+        # First initialization of decode CCLs and prefetcher
+        self.setup_decode()
+        self.is_decode_setup = True
 
         self.layers = [
             TtTransformerBlock(
@@ -129,6 +128,13 @@ class TtTransformer(LightweightModule):
             tt_ccl=self.tt_ccl,
             prefetcher_setup=self.prefetcher_setup,
         )
+        if not self.decode_mode_only:  # demo_decode.py uses decode mode only. In this case avoid initializing prefill
+            # First initialization of prefill CCLs and prefetcher. It needs to be after initialization of layers, norm and lm_head since those switch modes as well
+            # This initialization is required to avoid race condition due to all buffers and semaphores not being allocated at initialization
+            self.switch_mode("prefill")
+            self.setup_prefill()
+            self.is_prefill_setup = True
+
         if mode == "decode":
             self.tt_tensors = self.prefetcher_setup.get_input_tensors()
         self.tt_rot_mats_prefill = None
