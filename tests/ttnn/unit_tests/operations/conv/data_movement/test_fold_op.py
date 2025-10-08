@@ -397,11 +397,12 @@ def test_fold(act_shape, stride_h, stride_w, device):
     torch.testing.assert_close(actual, expected)
 
 
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
     "act_shape,stride_h,stride_w,padding",
     [
         ((8, 224, 14, 8), 16, 1, (0, 0)),
-        ((16, 224, 224, 16), 2, 2, (0, 0)),
+        ((16, 224, 224, 8), 2, 2, (3, 3)),
         ((1, 16, 16, 8), 2, 2, (0, 0)),
         ((16, 42, 42, 64), 6, 6, (0, 0)),
         ((1, 16, 16, 8), 2, 2, (2, 2)),
