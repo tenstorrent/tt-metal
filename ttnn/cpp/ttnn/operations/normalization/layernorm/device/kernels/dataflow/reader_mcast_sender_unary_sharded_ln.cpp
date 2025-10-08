@@ -5,7 +5,9 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
-#include "debug/dprint.h"
+#include "noc_addr_utils.h"
+
+namespace df = norm::layernorm::device::kernels::dataflow;
 
 // split REDUCE across cores
 void kernel_main() {
@@ -36,8 +38,8 @@ void kernel_main() {
     const uint32_t start_x = get_arg_val<uint32_t>(4);
     const uint32_t start_y = get_arg_val<uint32_t>(5);
 
-    tt_l1_ptr uint32_t* in0_remote_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(6));
-    tt_l1_ptr uint32_t* in0_remote_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(6 + num_x));
+    df::L1Ptr in0_remote_noc_x = (df::L1Ptr)(get_arg_addr(6));
+    df::L1Ptr in0_remote_noc_y = (df::L1Ptr)(get_arg_addr(6 + num_x));
 
     constexpr uint32_t cb_ex_partial = tt::CBIndex::c_8;
     constexpr uint32_t cb_ex = tt::CBIndex::c_9;
@@ -50,31 +52,10 @@ void kernel_main() {
 
     const uint32_t single_tile_size_bytes = get_tile_size(cb_ex_partial);
 
-    uint64_t remote_noc_addrs[num_blocks];
-
-    uint32_t x = start_x, y = start_y;
-    for (uint32_t i = 0; i < num_blocks; ++i) {
-        remote_noc_addrs[i] = get_noc_addr(in0_remote_noc_x[x], in0_remote_noc_y[y], 0);
-        if constexpr (row_major) {
-            ++x;
-            if (x == num_x) {
-                x = 0;
-                ++y;
-                if (y == num_y) {
-                    y = 0;
-                }
-            }
-        } else {
-            ++y;
-            if (y == num_y) {
-                y = 0;
-                ++x;
-                if (x == num_x) {
-                    x = 0;
-                }
-            }
-        }
-    }
+    // Compute the NOC addresses for cores that interact with this core
+    df::RemoteNocAddrs<num_blocks> remote_noc_addrs{};
+    df::compute_single_stage_noc_addrs<row_major, num_blocks>(
+        remote_noc_addrs, in0_remote_noc_x, in0_remote_noc_y, start_x, start_y, num_x, num_y);
 
     const uint64_t multicast_data_noc = get_noc_multicast_addr(
         mcast_dest_noc_start_x, mcast_dest_noc_start_y, mcast_dest_noc_end_x, mcast_dest_noc_end_y, 0);
