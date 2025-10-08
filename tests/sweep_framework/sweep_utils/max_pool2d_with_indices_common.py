@@ -111,11 +111,9 @@ def run_max_pool2d_with_indices(
     output_allclose = torch.allclose(output_pytorch, golden_pytorch, atol=atol)
     output_isequal = torch.equal(output_pytorch, golden_pytorch)
 
-    def validate_indices_properly(
-        input_tensor, torch_indices, ttnn_indices, kernel_size, stride, padding, dilation, dtype
-    ):
+    def validate_indices(input_tensor, torch_indices, ttnn_indices, kernel_size, stride, padding, dilation, dtype):
         """
-        Validate indices using proper logic from test_mpwi.py
+        Validate indices using logic from test_mpwi.py
         Returns (indices_valid, tie_breaking_differences, actual_errors)
         """
         try:
@@ -129,13 +127,11 @@ def run_max_pool2d_with_indices(
             if indices_match:
                 return True, 0, 0
 
-            # Analyze mismatches
-            torch_indices_float = torch_indices.float()
-            ttnn_indices_float = ttnn_indices.float()
-            diff = torch.abs(torch_indices_float - ttnn_indices_float)
+            # Analyze mismatches - keep indices as integers
+            diff = torch.abs(torch_indices - ttnn_indices)
 
             # Find positions where indices don't match
-            mismatch_mask = diff > 1e-5
+            mismatch_mask = diff > 0
             mismatch_positions = torch.nonzero(mismatch_mask, as_tuple=False)
 
             tie_breaking_differences = 0
@@ -147,8 +143,8 @@ def run_max_pool2d_with_indices(
 
             for pos in mismatch_positions:
                 n, c, h, w = pos
-                torch_idx = int(torch_indices_float[n, c, h, w].item())
-                ttnn_idx = int(ttnn_indices_float[n, c, h, w].item())
+                torch_idx = int(torch_indices[n, c, h, w].item())
+                ttnn_idx = int(ttnn_indices[n, c, h, w].item())
 
                 # Convert linear indices to spatial coordinates
                 torch_h = torch_idx // input_w
@@ -157,13 +153,13 @@ def run_max_pool2d_with_indices(
                 ttnn_w = ttnn_idx % input_w
 
                 # Get input values at these positions
-                if torch_h < input_h and torch_w < input_w:
+                if torch_h >= 0 and torch_w >= 0 and torch_h < input_h and torch_w < input_w:
                     torch_input_val = input_tensor[n, c, torch_h, torch_w]
                 else:
                     actual_errors += 1
                     continue
 
-                if ttnn_h < input_h and ttnn_w < input_w:
+                if ttnn_h >= 0 and ttnn_w >= 0 and ttnn_h < input_h and ttnn_w < input_w:
                     ttnn_input_val = input_tensor[n, c, ttnn_h, ttnn_w]
                 else:
                     actual_errors += 1
@@ -213,13 +209,19 @@ def run_max_pool2d_with_indices(
         except Exception:
             return False, 0, 1
 
-    indices_valid, tie_breaking_diffs, actual_errors = validate_indices_properly(
+    indices_valid, tie_breaking_diffs, actual_errors = validate_indices(
         act, golden_indices, indices_pytorch, kernel_size, stride, padding, dilation, dtype
     )
 
-    assert output_allclose, "Reference and output tensor are not close"
-    if dtype == ttnn.bfloat16:
+    # For bfloat8: use torch.allclose and PCC check
+    # For bfloat16: use torch.equal, no PCC check necessary
+    # For max pool the bfloat16 values should be exactly equal (unlike average pool)
+    if dtype == ttnn.bfloat8_b:
+        assert output_allclose, "Reference and output tensor are not close"
+        pcc_result = check_with_pcc(output_pytorch, golden_pytorch, pcc=0.998)
+    else:  # bfloat16
         assert output_isequal, "Reference and output tensor are not equal"
+        pcc_result = [True, 1.0]  # Perfect match for bfloat16
 
     # For indices, use proper validation that checks:
     # 1. Values pointed to by indices are identical
@@ -229,5 +231,4 @@ def run_max_pool2d_with_indices(
         indices_valid
     ), f"Indices validation failed with {actual_errors} actual errors (tie-breaking differences: {tie_breaking_diffs})"
 
-    # check pcc and return
-    return [check_with_pcc(output_pytorch, golden_pytorch, pcc=0.998), e2e_perf, indices_valid]
+    return [pcc_result, e2e_perf, indices_valid]
