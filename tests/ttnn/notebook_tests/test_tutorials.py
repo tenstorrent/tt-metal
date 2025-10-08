@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 import subprocess
 from pathlib import Path
 
@@ -52,18 +53,8 @@ def prepare_test_data(model_location_generator) -> None:
         - Creates symbolic links from local paths to downloaded data locations
         - Removes existing symlinks/files at local paths if they exist
     """
-    # Find tt-metal home directory
-    current_file_path = Path(__file__).resolve()
-    print(f"!!! CURRENT PATH: {current_file_path}")
-    # Find 'tt-metal' in the path by iterating through parents
-    current_path = current_file_path
-    while current_path.name != "tt-metal" and current_path.parent != current_path:
-        current_path = current_path.parent
-
-    if current_path.name == "tt-metal":
-        tt_metal_path = current_path
-    else:
-        assert 0 != 0, "Program logic error. Failed to find tt-metal directory"
+    # Find tt-metal directory
+    tt_metal_path = os.environ.get("TT_METAL_HOME", "/work")
 
     for tutorial_id in TUTORIALS_DATA_PATHS.keys():
         # Download data from external server
@@ -71,7 +62,7 @@ def prepare_test_data(model_location_generator) -> None:
         external_path = TUTORIALS_DATA_PATHS[tutorial_id][EXTERNAL_SOURCE_PATH_KEY]
 
         # Skip if local path exists and has content
-        local_path_obj = tt_metal_path / Path(local_path)
+        local_path_obj = Path(tt_metal_path) / Path(local_path)
         if local_path_obj.exists() and any(local_path_obj.iterdir()):
             continue
 
