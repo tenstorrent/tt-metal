@@ -1,0 +1,197 @@
+name: "Build tt-metal artifacts with buildkit"
+
+permissions:
+  packages: write
+
+on:
+  workflow_call:
+    inputs:
+      build-type:
+        required: false
+        type: string
+        default: "Release"
+      tracy:
+        required: false
+        type: boolean
+        default: false
+        description: "Build with tracy enabled"
+      distributed:
+        required: false
+        type: boolean
+        default: true
+        description: "Build with distributed enabled (Adds OpenMPI dependency)"
+      build-wheel:
+        required: false
+        type: boolean
+        default: false
+        description: "Build Python Wheel"
+      distro:
+        required: false
+        type: string
+        default: "ubuntu"
+      version:
+        required: false
+        type: string
+        default: "24.04"
+      architecture:
+        required: false
+        type: string
+        default: "amd64"
+      toolchain:
+        required: false
+        type: string
+        default: "cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake"
+        description: "Toolchain file to use for build"
+      publish-artifact:
+        required: false
+        type: boolean
+        default: true
+        description: "Make resulting artifact available in the workflow"
+      skip-tt-train:
+        required: false
+        type: boolean
+        default: true
+      profile:
+        required: false
+        type: boolean
+        default: false
+        description: "Profile the compilation"
+      build-umd-tests:
+        required: false
+        type: boolean
+        default: false
+        description: "Build UMD tests"
+      fetch-depth:
+        required: false
+        type: number
+        default: 500
+        description: "Git fetch depth for the checkout step. Must be large enough to include all tags and history needed for `git describe`."
+      ref:
+        required: false
+        type: string
+        default: ""
+        description: 'Commit SHA to test (default: HEAD)'
+    outputs:
+      ci-build-docker-image:
+        description: "Docker tag for the CI Build Docker image for building TT-Metalium et al"
+        value: ${{ jobs.build-docker-image.outputs.ci-build-tag }}
+      ci-test-docker-image:
+        description: "Docker tag for the CI Test Docker image for testing TT-Metalium et al"
+        value: ${{ jobs.build-docker-image.outputs.ci-test-tag }}
+      dev-docker-image:
+        description: "Docker tag for the dev Docker image for developing TT-Metalium et al"
+        value: ${{ jobs.build-docker-image.outputs.dev-tag }}
+      basic-dev-docker-image:
+        description: "Docker tag for the basic dev Docker image for basic development"
+        value: ${{ jobs.build-docker-image.outputs.basic-dev-tag }}
+      basic-ttnn-runtime-docker-image:
+        description: "Docker tag for the basic TTNN runtime Docker image for running TTNN"
+        value: ${{ jobs.build-docker-image.outputs.basic-ttnn-runtime-tag }}
+      packages-artifact-name:
+        description: "Name to give download-artifact to get the packages"
+        value: ${{ jobs.build-artifact.outputs.packages-artifact-name }}
+      build-artifact-name:
+        description: "Name of the published build artifact"
+        value: ${{ jobs.build-artifact.outputs.build_artifact_name }}
+      wheel-artifact-name:
+        description: "Name of the published wheel artifact"
+        value: ${{ jobs.build-wheel.outputs.wheel_artifact_name }}
+
+jobs:
+  build-artifacts:
+    name: "🛠️ Build TAR & DEB - ${{ inputs.build-type }} ${{ inputs.distro }} ${{ inputs.version }}"
+    runs-on: tt-ubuntu-buildkit-poc
+    environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
+    outputs:
+      packages-artifact-name: ${{ steps.set-artifact-name.outputs.name }}
+      build_artifact_name: ${{ steps.set_build_artifact_name.outputs.build_artifact_name }}
+    env:
+      CCACHE_REMOTE_ONLY: "true"
+      CCACHE_TEMPDIR: /tmp/ccache
+      CARGO_HOME: /tmp/.cargo
+      TT_FROM_PRECOMPILED_DIR: /work
+      TRACY_NO_INVARIANT_CHECK: 1
+      TRACY_NO_ISA_EXTENSIONS: 1
+    steps:
+      - name: Check Redis credentials
+        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
+        run: |
+          if [ -z "${{ secrets.REDIS_PASSWORD }}" ]; then
+            echo "Redis password is missing. Did you forget 'secrets: inherit'?"
+            exit 1
+          fi
+          # Conditionally set this here so that it remains unset on forks, otherwise it resolves an invalid URL and the job fails
+          CCACHE_REMOTE_STORAGE="redis://${{ vars.REDIS_USER }}:${{ secrets.REDIS_PASSWORD }}@${{ vars.REDIS_HOST }}:${{ vars.REDIS_PORT }}|read-only=${{ vars.REDIS_IS_READONLY }}"
+          echo "CCACHE_REMOTE_STORAGE=${CCACHE_REMOTE_STORAGE}" >> $GITHUB_ENV
+          echo "CCACHE_REMOTE_STORAGE: ${CCACHE_REMOTE_STORAGE}"
+
+      - name: Set artifact name
+        id: set-artifact-name
+        run: |
+          TOOLCHAIN="${{ inputs.toolchain }}"
+          TOOLCHAIN_CLEANED=$(echo "$TOOLCHAIN" | sed -E 's/^cmake\///; s/-toolchain\.cmake$//')
+          # Use full sanitized ref/SHA and workflow run ID to ensure uniqueness across parallel builds
+          # Sanitize ref/SHA by replacing invalid characters with hyphens
+          RAW_REF="${{ inputs.ref || github.sha }}"
+          SANITIZED_REF=$(echo "$RAW_REF" | sed 's/[\/:"<>|*?\r\n\\]/-/g')
+          ARTIFACT_NAME="packages-${{ inputs.distro }}-${{ inputs.version }}-${{ inputs.architecture }}-${{ inputs.build-type }}-${TOOLCHAIN_CLEANED}${{ (inputs.tracy && '-profiler') || '' }}${{ (inputs.distributed == false && '-no-distributed') || '' }}-${SANITIZED_REF}-${{ github.run_id }}"
+
+          echo "name=$ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
+          echo "ARTIFACT_NAME=$ARTIFACT_NAME" >> "$GITHUB_ENV"
+
+      - name: ⬇️ Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          ref: ${{ inputs.ref || github.sha }}
+          fetch-depth: ${{ inputs.fetch-depth }}
+          fetch-tags: true 
+
+      - name: Create ccache tmpdir
+        run: |
+          mkdir -p /tmp/ccache
+
+      - name: Prepare ccache summary
+        run: |
+          # Zero out the stats so we can see how we did this build
+          # NOTE: may be inaccurate if we have >1 build runner on the same machine, using the same local cache
+          ccache -z
+
+#      - name: Build artifacts
+#        run: |
+#          mkdir outputs
+#          /home/runner/build.sh --target artifacts \
+#            --local outputs \
+#            --dockerfile-dir dockerfile \
+#            --dockerfile Dockerfile \
+#            --build-arg BUILD_TYPE=${{ inputs.build-type }} \
+#            --build-arg DISTRIBUTED=${{ inputs.distributed }} \
+#            --build-arg TRACY=${{ inputs.tracy }} \
+#            --build-arg BUILD_UMD_TESTS=${{ inputs.build-umd-tests }} \
+#            --build-arg TOOLCHAIN_FILE=${{ inputs.toolchain }} \
+#            --build-arg PROFILE=${{ inputs.profile }} \
+#            --build-arg SKIP_TT_TRAIN=${{ inputs.skip-tt-train }}
+#          ls outputs
+
+      - name: Authenticate to harbor & ghcr
+        run: |
+          docker login harbor.ci.tenstorrent.net -u $harbor_reg_user -p $harbor_reg_token
+          docker login ghcr.io -u $ghcr_reg_user -p $ghcr_reg_token
+
+
+      - name: Build evaluation image
+        run: |
+          mkdir outputs
+          /home/runner/build.sh --target evaluation \
+            --image ghcr.io/jlakistt/metal-ev:${{ github.sha }} \
+            --dockerfile-dir dockerfile \
+            --dockerfile Dockerfile \
+            --build-arg BUILD_TYPE=${{ inputs.build-type }} \
+            --build-arg DISTRIBUTED=${{ inputs.distributed }} \
+            --build-arg TRACY=${{ inputs.tracy }} \
+            --build-arg BUILD_UMD_TESTS=${{ inputs.build-umd-tests }} \
+            --build-arg TOOLCHAIN_FILE=${{ inputs.toolchain }} \
+            --build-arg PROFILE=${{ inputs.profile }} \
+            --build-arg SKIP_TT_TRAIN=${{ inputs.skip-tt-train }} \
+            --build-arg UBUNTU_VERSION=${{ inputs.version }} 
+

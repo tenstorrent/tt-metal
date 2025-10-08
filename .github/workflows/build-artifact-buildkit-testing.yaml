@@ -1,0 +1,21 @@
+name: "Test buildkit integration"
+
+permissions:
+  packages: write
+
+on:
+  push:
+    branches:
+      - buildkit-artifacts-build
+
+run-name: Test buildkit integration
+jobs:
+  build-artifact:
+    uses: ./.github/workflows/build-artifact-buildkit.yaml
+    permissions:
+      packages: write
+    secrets: inherit
+    with:
+      build-type: Release
+      build-wheel: true
+      skip-tt-train: false
