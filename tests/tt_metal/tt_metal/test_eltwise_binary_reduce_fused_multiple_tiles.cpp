@@ -1,48 +1,30 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <chrono>
-#include <errno.h>
-#include <fmt/base.h>
-#include <stdint.h>
-#include <stdlib.h>
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include <algorithm>
 #include <array>
-#include <cstring>
+#include <bit>
+#include <cstdint>
 #include <exception>
-#include <functional>
-#include <iostream>
 #include <map>
-#include <memory>
 #include <string>
-#include <utility>
-#include <variant>
 #include <vector>
 
-#include <tt_stl/assert.hpp>
+#include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
-#include "hostdevcommon/kernel_structs.h"
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
-#include <tt_stl/span.hpp>
-#include "test_gold_impls.hpp"
-#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-logger/tt-logger.hpp>
+#include <tt_stl/assert.hpp>
 
-namespace tt {
-namespace tt_metal {
-class CommandQueue;
-}  // namespace tt_metal
-}  // namespace tt
+#include "test_gold_impls.hpp"
 
 using std::vector;
 using namespace std;
@@ -89,8 +71,21 @@ int main(int argc, char** argv) {
     log_info(LogTest, "Tensor shape: NC={}, H={}, W={} (Ht={}, Wt={})", NC, H, W, Ht, Wt);
     log_info(LogTest, "Using fused API for multiple tiles processing");
 
-    // Test with MUL operation
+    // Default to MUL, but allow override via command line
     auto eltwise_op = EltwiseOp::MUL;
+
+    if (argc > 1) {
+        std::string op_name = argv[1];
+        if (op_name == "add" || op_name == "ADD") {
+            eltwise_op = EltwiseOp::ADD;
+        } else if (op_name == "sub" || op_name == "SUB") {
+            eltwise_op = EltwiseOp::SUB;
+        } else if (op_name == "mul" || op_name == "MUL") {
+            eltwise_op = EltwiseOp::MUL;
+        } else {
+            log_warning(LogTest, "Unknown operation '{}', defaulting to MUL", op_name);
+        }
+    }
 
     try {
         ////////////////////////////////////////////////////////////////////////////
@@ -102,52 +97,34 @@ int main(int argc, char** argv) {
         uint32_t single_tile_size = 2 * 1024;                             // FP16_B format
         uint32_t input_buffer_size = single_tile_size * num_input_tiles;  // 8 tiles
         uint32_t output_buffer_size = single_tile_size * 1;               // 1 tile output
-        uint32_t page_size = single_tile_size;
 
-        // Input buffers for eltwise binary operation (8 tiles each)
-        tt_metal::InterleavedBufferConfig input_config{
-            .device = device,
-            .size = input_buffer_size,
-            .page_size = page_size,
-            .buffer_type = tt_metal::BufferType::DRAM};
+        // Helper lambda for creating buffer configs
+        auto create_buffer_config = [&device](uint32_t size, uint32_t page_size) {
+            return tt_metal::InterleavedBufferConfig{
+                .device = device, .size = size, .page_size = page_size, .buffer_type = tt_metal::BufferType::DRAM};
+        };
 
-        auto src0_dram_buffer = CreateBuffer(input_config);
-        auto src1_dram_buffer = CreateBuffer(input_config);
-
-        // Output buffer for final result (1 tile)
-        tt_metal::InterleavedBufferConfig dst_config{
-            .device = device,
-            .size = output_buffer_size,
-            .page_size = page_size,
-            .buffer_type = tt_metal::BufferType::DRAM};
-        auto dst_dram_buffer = CreateBuffer(dst_config);
+        // Create input and output buffers
+        auto src0_dram_buffer = CreateBuffer(create_buffer_config(input_buffer_size, single_tile_size));
+        auto src1_dram_buffer = CreateBuffer(create_buffer_config(input_buffer_size, single_tile_size));
+        auto dst_dram_buffer = CreateBuffer(create_buffer_config(output_buffer_size, single_tile_size));
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Circular Buffers Setup
         ////////////////////////////////////////////////////////////////////////////
 
-        // Input CBs for eltwise binary operation
-        uint32_t src0_cb_index = tt::CBIndex::c_0;
         uint32_t cb_tiles = 32;  // Buffer capacity
-        tt_metal::CircularBufferConfig cb_src0_config =
-            tt_metal::CircularBufferConfig(cb_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
-                .set_page_size(src0_cb_index, single_tile_size);
-        tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
-        uint32_t src1_cb_index = tt::CBIndex::c_1;
-        tt_metal::CircularBufferConfig cb_src1_config =
-            tt_metal::CircularBufferConfig(cb_tiles * single_tile_size, {{src1_cb_index, tt::DataFormat::Float16_b}})
-                .set_page_size(src1_cb_index, single_tile_size);
-        tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
+        // Helper lambda for creating circular buffer configs
+        auto create_cb_config = [&single_tile_size](uint32_t cb_index, uint32_t num_tiles) {
+            return tt_metal::CircularBufferConfig(num_tiles * single_tile_size, {{cb_index, tt::DataFormat::Float16_b}})
+                .set_page_size(cb_index, single_tile_size);
+        };
 
-        // Output CB for final result
-        uint32_t output_cb_index = tt::CBIndex::c_16;
-        uint32_t num_output_cb_tiles = 32;
-        tt_metal::CircularBufferConfig cb_output_config =
-            tt_metal::CircularBufferConfig(
-                num_output_cb_tiles * single_tile_size, {{output_cb_index, tt::DataFormat::Float16_b}})
-                .set_page_size(output_cb_index, single_tile_size);
-        tt_metal::CreateCircularBuffer(program, core, cb_output_config);
+        // Create input and output circular buffers
+        tt_metal::CreateCircularBuffer(program, core, create_cb_config(tt::CBIndex::c_0, cb_tiles));
+        tt_metal::CreateCircularBuffer(program, core, create_cb_config(tt::CBIndex::c_1, cb_tiles));
+        tt_metal::CreateCircularBuffer(program, core, create_cb_config(tt::CBIndex::c_16, cb_tiles));
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Kernels Setup
@@ -309,19 +286,28 @@ int main(int argc, char** argv) {
             // Convert uint16_t to bfloat16, then to float for multiplication
             float val0 = static_cast<float>(std::bit_cast<bfloat16>(u16_src0_vec[i]));
             float val1 = static_cast<float>(std::bit_cast<bfloat16>(u16_src1_vec[i]));
-            float result_val = val0 * val1;  // Should be 2.0 * 2.0 = 4.0
+            float result_val = val0 * val1;
             golden_eltwise_result[i] = std::bit_cast<uint16_t>(bfloat16(result_val));
         }
 
+        constexpr uint32_t FACES_PER_TILE = 4;
+        constexpr uint32_t TILES = 8;
+        constexpr uint32_t ELEMENTS_PER_FACE = 16 * 16;
+        constexpr uint32_t FACE_WIDTH = 16;
+        constexpr uint32_t FACE_HEIGHT = 16;
+
+        std::vector<float> reduce_result(FACE_WIDTH*2, 0.0f);
+        bool second_half = false;
+        
         // CALCULATE THE REDUCE RESULT CORRECTLY
-        std::vector<float> reduce_result(32, 0);
-        for (uint32_t i = 0; i < 32; ++i) {
-            for (uint32_t j = 0; j < 32; ++j) {
-                for (uint32_t k = 0; k < 8; ++k) {
-                    reduce_result[i] +=
-                        static_cast<float>(std::bit_cast<bfloat16>(golden_eltwise_result[j * 32 + i + k * 32 * 32]));
+        for(uint32_t face = 0; face < FACES_PER_TILE*TILES; ++face) {
+            for(uint32_t row = 0; row < FACE_HEIGHT; ++row) {
+                for(uint32_t col = 0; col < FACE_WIDTH; ++col) {
+                    uint32_t index = face*ELEMENTS_PER_FACE + row*FACE_HEIGHT + col;
+                    reduce_result[col + (second_half ? FACE_WIDTH : 0)] += static_cast<float>(std::bit_cast<bfloat16>(golden_eltwise_result[index]));
                 }
             }
+            second_half = !second_half;
         }
 
         // Debug: Print first few elements of the reduce result, should be the same as cb output
@@ -374,7 +360,6 @@ int main(int argc, char** argv) {
     } catch (const std::exception& e) {
         pass = false;
         log_error(LogTest, "Exception: {}", e.what());
-        log_error(LogTest, "System error message: {}", std::strerror(errno));
     }
 
     ////////////////////////////////////////////////////////////////////////////
