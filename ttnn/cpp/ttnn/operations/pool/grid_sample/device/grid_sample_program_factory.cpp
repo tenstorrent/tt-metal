@@ -99,7 +99,7 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
     // Shape and dimensions
     const auto& [input_shape, grid_shape, output_shape] =
         std::tie(input_tensor.padded_shape(), grid_tensor.padded_shape(), output_tensor.padded_shape());
-    const uint32_t input_height = input_shape[1], input_width = input_shape[2];
+    const uint32_t input_batch = input_shape[0], input_height = input_shape[1], input_width = input_shape[2];
     const uint32_t grid_height = grid_shape[1], grid_width = grid_shape[2];
     const uint32_t grid_hw = grid_height * grid_width;
     const uint32_t grid_batching_factor = get_grid_batching_factor(grid_tensor, use_precomputed_grid);
@@ -195,18 +195,19 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
         scalar_cb_index_0,                           // ct_arg[2]: scalar_cb_index_0
         input_stick_size,                            // ct_arg[3]: input_stick_size
         grid_stick_size_arg,                         // ct_arg[4]: grid_stick_size
-        input_height,                                // ct_arg[5]: input_height
-        input_width,                                 // ct_arg[6]: input_width
-        grid_batching_factor,                        // ct_arg[7]: grid_batching_factor (shared)
-        static_cast<uint32_t>(grid_tensor.dtype()),  // ct_arg[8]: grid_dtype (shared)
-        grid_hw,                                     // ct_arg[9]: grid_hw (shared)
-        use_precomputed_grid ? 1U : 0U               // ct_arg[10]: use_precomputed_grid (shared)
+        input_batch,                                 // ct_arg[5]: input_batch
+        input_height,                                // ct_arg[6]: input_height
+        input_width,                                 // ct_arg[7]: input_width
+        grid_batching_factor,                        // ct_arg[8]: grid_batching_factor (shared)
+        static_cast<uint32_t>(grid_tensor.dtype()),  // ct_arg[9]: grid_dtype (shared)
+        grid_hw,                                     // ct_arg[10]: grid_hw (shared)
+        use_precomputed_grid ? 1U : 0U               // ct_arg[11]: use_precomputed_grid (shared)
     };
 
     if (is_sharded) {
-        reader_compile_time_args.push_back(enable_split_reader ? 1U : 0U);   // ct_arg[11]: enable_split_reader
-        reader_compile_time_args.push_back(0U);  // ct_arg[12]: reader_id (will be set later per reader)
-        reader_compile_time_args.push_back(grid_nsticks_per_core);  // ct_arg[13]: grid_nsticks_per_core
+        reader_compile_time_args.push_back(enable_split_reader ? 1U : 0U);  // ct_arg[12]: enable_split_reader
+        reader_compile_time_args.push_back(0U);  // ct_arg[13]: reader_id (will be set later per reader)
+        reader_compile_time_args.push_back(grid_nsticks_per_core);  // ct_arg[14]: grid_nsticks_per_core
     }
 
     tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer()).append_to(reader_compile_time_args);
@@ -227,7 +228,7 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
     tt::tt_metal::KernelHandle reader0_kernel_id, reader1_kernel_id = 0;
     if (is_sharded) {
         auto reader0_compile_time_args = reader_compile_time_args;
-        reader0_compile_time_args[12] = 0;  // ct_arg[12]: reader_id = 0
+        reader0_compile_time_args[13] = 0;  // ct_arg[13]: reader_id = 0
 
         reader0_kernel_id = tt::tt_metal::CreateKernel(
             program,
@@ -242,7 +243,7 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
             auto reader1_compile_time_args = reader_compile_time_args;
             reader1_compile_time_args[0] = input_cb_index_1;   // ct_arg[0]: input_cb_index_1
             reader1_compile_time_args[2] = scalar_cb_index_1;  // ct_arg[2]: scalar_cb_index_1
-            reader1_compile_time_args[12] = 1;                 // ct_arg[12]: reader_id = 1
+            reader1_compile_time_args[13] = 1;                 // ct_arg[13]: reader_id = 1
 
             reader1_kernel_id = tt::tt_metal::CreateKernel(
                 program,
