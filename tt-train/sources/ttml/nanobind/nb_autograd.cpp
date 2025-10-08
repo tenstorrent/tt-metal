@@ -188,26 +188,25 @@ void py_module(nb::module_& m) {
         py_auto_context.def("close_device", &AutoContext::close_device);
         py_auto_context.def("get_device", &AutoContext::get_device, nb::rv_policy::reference);
         // TODO: argv's char** not supported
-        // py_auto_context.def("initialize_distributed_context", &AutoContext::initialize_distributed_context);
         py_auto_context.def(
             "initialize_distributed_context",
             [](AutoContext& auto_context, nb::args args) {
-                const int argc = static_cast<int>(args.size());
+                const auto argc = args.size();
 
                 std::vector<std::string> storage;
-                storage.reserve(static_cast<size_t>(argc));
+                storage.reserve(argc);
                 for (const auto& arg : args) {
                     storage.emplace_back(nb::str(arg).c_str());
                 }
 
                 std::vector<char*> argv;
-                argv.reserve(static_cast<size_t>(argc));
+                argv.reserve(argc);
                 for (auto& s : storage) {
                     argv.push_back(s.data());
                 }
                 argv.push_back(nullptr);
 
-                auto_context.initialize_distributed_context(argc, argv.data());
+                auto_context.initialize_distributed_context(static_cast<int>(argc), argv.data());
             },
             nb::arg("args"));
         py_auto_context.def(
