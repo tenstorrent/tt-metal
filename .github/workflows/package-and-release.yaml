@@ -47,10 +47,11 @@ jobs:
           if [[ "${{ github.event_name }}" == "schedule" ]]; then
             echo "Cron job detected, setting default release-type to 'dev'"
             echo "RELEASE_TYPE=dev" >> "$GITHUB_ENV"
+            echo "Using release-type: dev"
           else
             echo "RELEASE_TYPE=${{ inputs.release-type }}" >> "$GITHUB_ENV"
+            echo "Using release-type: ${{ inputs.release-type }}"
           fi
-          echo "Using release-type: $RELEASE_TYPE"
       - name: Get is-release-candidate and tag-type
         id: get-is-release-candidate-and-tag-type
         run: |
