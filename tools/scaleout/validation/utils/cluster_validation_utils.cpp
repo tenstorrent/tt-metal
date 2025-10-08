@@ -265,7 +265,7 @@ void execute_workloads(
 
 bool link_unhealthy(const std::vector<LinkStatus>& link_stats) {
     auto retrain_count_increasing = [&](const std::vector<LinkStatus>& link_stats) {
-        uint32_t prev_retrain_count = 0;
+        uint32_t prev_retrain_count = link_stats[0].metrics.retrain_count;
         for (const auto& dumped_stat : link_stats) {
             const auto& metric = dumped_stat.metrics;
             if (metric.retrain_count > prev_retrain_count) {
@@ -276,10 +276,28 @@ bool link_unhealthy(const std::vector<LinkStatus>& link_stats) {
         return false;
     };
 
+    auto zero_retrain_count = [&](const std::vector<LinkStatus>& link_stats) {
+        return std::any_of(link_stats.begin(), link_stats.end(), [&](const LinkStatus& dumped_stat) {
+            return dumped_stat.metrics.retrain_count == 0;
+        });
+    };
+
     auto crc_error_reported = [&](const std::vector<LinkStatus>& link_stats) {
         return std::any_of(link_stats.begin(), link_stats.end(), [&](const LinkStatus& dumped_stat) {
             return dumped_stat.metrics.crc_error_count > 0;
         });
+    };
+
+    auto uncorrected_codewords_increasing = [&](const std::vector<LinkStatus>& link_stats) {
+        uint32_t prev_uncorrected_codeword_count = link_stats[0].metrics.uncorrected_codeword_count;
+        for (const auto& dumped_stat : link_stats) {
+            const auto& metric = dumped_stat.metrics;
+            if (metric.uncorrected_codeword_count > prev_uncorrected_codeword_count) {
+                return true;
+            }
+            prev_uncorrected_codeword_count = metric.uncorrected_codeword_count;
+        }
+        return false;
     };
 
     auto uncorrected_codewords_detected = [&](const std::vector<LinkStatus>& link_stats) {
@@ -293,9 +311,21 @@ bool link_unhealthy(const std::vector<LinkStatus>& link_stats) {
             return dumped_stat.num_mismatched_words > 0;
         });
     };
-
-    return retrain_count_increasing(link_stats) || crc_error_reported(link_stats) ||
-           uncorrected_codewords_detected(link_stats) || data_mismatch(link_stats);
+    bool retrain_count_increasing_ = retrain_count_increasing(link_stats);
+    bool crc_error_reported_ = crc_error_reported(link_stats);
+    bool uncorrected_codewords_detected_ = uncorrected_codewords_detected(link_stats);
+    bool uncorrected_codewords_increasing_ = uncorrected_codewords_increasing(link_stats);
+    bool data_mismatch_ = data_mismatch(link_stats);
+    bool zero_retrain_count_ = zero_retrain_count(link_stats);
+    std::cout << "Retrain count increasing: " << retrain_count_increasing_ << std::endl;
+    std::cout << "CRC error reported: " << crc_error_reported_ << std::endl;
+    std::cout << "Uncorrected codewords detected: " << uncorrected_codewords_detected_ << std::endl;
+    std::cout << "Uncorrected codewords increasing: " << uncorrected_codewords_increasing_ << std::endl;
+    std::cout << "Data mismatch: " << data_mismatch_ << std::endl;
+    std::cout << "Zero retrain count: " << zero_retrain_count_ << std::endl;
+    return retrain_count_increasing_ || crc_error_reported_ ||
+           (zero_retrain_count_ && uncorrected_codewords_detected_) || uncorrected_codewords_increasing_ ||
+           data_mismatch_;
 }
 
 LinkStatus get_first_failure(const std::vector<LinkStatus>& link_stats) {
@@ -379,7 +409,8 @@ LinkMetricsResult process_link_statuses(
 
     for (const auto& [channel_identifier, link_stats] : statuses_per_link) {
         bool is_unhealthy = link_unhealthy(link_stats);
-
+        std::cout << "Link " << *(channel_identifier.asic_id) << " " << +channel_identifier.channel << " is "
+                  << (is_unhealthy ? "unhealthy" : "healthy") << std::endl;
         if (log_all_ethernet_metrics) {
             // Log all iterations for all links
             for (const auto& link_status : link_stats) {
@@ -913,6 +944,120 @@ void log_link_metrics(
     }
 }
 
+void reset_unhealthy_links(
+    const PhysicalSystemDescriptor& physical_system_descriptor,
+    const std::vector<EthernetLinkMetrics>& unhealthy_links) {
+    if (unhealthy_links.empty()) {
+        return;
+    }
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    std::unordered_map<uint64_t, chip_id_t> asic_id_to_chip_id;
+
+    for (const auto& [chip_id, asic_id] : cluster.get_unique_chip_ids()) {
+        asic_id_to_chip_id[asic_id] = chip_id;
+    }
+    std::vector<uint32_t> set = {1};
+    std::unordered_map<uint64_t, std::set<uint8_t>> reset_cores;
+
+    for (const auto& link : unhealthy_links) {
+        auto src_asic = link.channel_identifier.asic_id;
+        auto src_chan = link.channel_identifier.channel;
+        auto src_chip = asic_id_to_chip_id[*src_asic];
+        auto [dst_asic, dst_chan] = physical_system_descriptor.get_connected_asic_and_channel(src_asic, src_chan);
+        auto dst_chip = asic_id_to_chip_id[*dst_asic];
+
+        if (reset_cores[*dst_asic].find(dst_chan) != reset_cores[*dst_asic].end()) {
+            TT_FATAL(
+                reset_cores[*src_asic].find(src_chan) != reset_cores[*src_asic].end(),
+                "Expected to channel {} on ASIC {} to be reset, but it is not",
+                +src_chan,
+                *src_asic);
+            continue;
+        }
+        reset_cores[*src_asic].insert(src_chan);
+        reset_cores[*dst_asic].insert(dst_chan);
+        const auto& src_soc_desc = cluster.get_soc_desc(src_chip);
+        const auto& dst_soc_desc = cluster.get_soc_desc(dst_chip);
+
+        auto src_logical_coord = src_soc_desc.get_eth_core_for_channel(src_chan, CoordSystem::LOGICAL);
+        auto dst_logical_coord = dst_soc_desc.get_eth_core_for_channel(dst_chan, CoordSystem::LOGICAL);
+        auto src_virtual_coord =
+            cluster.get_virtual_coordinate_from_logical_coordinates(src_chip, src_logical_coord, CoreType::ETH);
+        auto dst_virtual_coord =
+            cluster.get_virtual_coordinate_from_logical_coordinates(dst_chip, dst_logical_coord, CoreType::ETH);
+
+        // Issue reset on both channels
+        cluster.write_core(src_chip, src_virtual_coord, set, 0x1EFC);
+        cluster.write_core(dst_chip, dst_virtual_coord, set, 0x1EFC);
+
+        // Stall until reset has been acknowledged by both channels
+        bool reset = false;
+        while (!reset) {
+            std::vector<uint32_t> reset_0 = {0};
+            std::vector<uint32_t> reset_1 = {0};
+            cluster.read_core(reset_0, sizeof(uint32_t), tt_cxy_pair(src_chip, src_virtual_coord), 0x1EFC);
+            cluster.read_core(reset_1, sizeof(uint32_t), tt_cxy_pair(dst_chip, dst_virtual_coord), 0x1EFC);
+            reset = !(reset_0[0] || reset_1[0]);
+        }
+    }
+}
+
+void reset_ethernet_links(const PhysicalSystemDescriptor& physical_system_descriptor) {
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    std::unordered_map<uint64_t, chip_id_t> asic_id_to_chip_id;
+
+    for (const auto& [chip_id, asic_id] : cluster.get_unique_chip_ids()) {
+        asic_id_to_chip_id[asic_id] = chip_id;
+    }
+    std::vector<uint32_t> set = {1};
+    std::unordered_map<uint64_t, std::set<uint8_t>> reset_cores;
+    for (const auto& [asic_id, asic_connections] :
+         physical_system_descriptor.get_asic_topology(physical_system_descriptor.my_host_name())) {
+        auto sender_chip_id = asic_id_to_chip_id[*asic_id];
+        for (const auto& [dst_asic_id, eth_connections] : asic_connections) {
+            if (physical_system_descriptor.get_host_name_for_asic(dst_asic_id) !=
+                physical_system_descriptor.my_host_name()) {
+                continue;
+            }
+            auto receiver_chip_id = asic_id_to_chip_id[*dst_asic_id];
+            for (const auto& eth_connection : eth_connections) {
+                auto src_chan = eth_connection.src_chan;
+                auto dst_chan = eth_connection.dst_chan;
+
+                if (reset_cores[*dst_asic_id].find(dst_chan) != reset_cores[*dst_asic_id].end()) {
+                    TT_FATAL(reset_cores[*asic_id].find(src_chan) != reset_cores[*asic_id].end(), "Error");
+                    continue;
+                }
+                const auto& sender_soc_desc = cluster.get_soc_desc(sender_chip_id);
+                const auto& receiver_soc_desc = cluster.get_soc_desc(receiver_chip_id);
+                auto sender_coord = cluster.get_virtual_coordinate_from_logical_coordinates(
+                    sender_chip_id,
+                    sender_soc_desc.get_eth_core_for_channel(src_chan, CoordSystem::LOGICAL),
+                    CoreType::ETH);
+                auto receiver_coord = cluster.get_virtual_coordinate_from_logical_coordinates(
+                    receiver_chip_id,
+                    receiver_soc_desc.get_eth_core_for_channel(dst_chan, CoordSystem::LOGICAL),
+                    CoreType::ETH);
+                std::cout << "Resetting: " << +src_chan << " on " << *asic_id << " " << +dst_chan << " on "
+                          << *dst_asic_id << std::endl;
+                reset_cores[*asic_id].insert(src_chan);
+                reset_cores[*dst_asic_id].insert(dst_chan);
+                cluster.write_core(sender_chip_id, sender_coord, set, 0x1EFC);
+                cluster.write_core(receiver_chip_id, receiver_coord, set, 0x1EFC);
+                bool reset = false;
+                while (!reset) {
+                    std::vector<uint32_t> reset_0 = {0};
+                    std::vector<uint32_t> reset_1 = {0};
+
+                    cluster.read_core(reset_0, sizeof(uint32_t), tt_cxy_pair(sender_chip_id, sender_coord), 0x1EFC);
+                    cluster.read_core(reset_1, sizeof(uint32_t), tt_cxy_pair(receiver_chip_id, receiver_coord), 0x1EFC);
+                    reset = !(reset_0[0] || reset_1[0]);
+                }
+            }
+        }
+    }
+}
+
 // ============================================================================
 // Link Metrics Generation
 // ============================================================================
@@ -933,15 +1078,22 @@ bool generate_link_metrics(
 
     LinkMetricsResult result;
 
+    reset_ethernet_links(physical_system_descriptor);
+
     if (send_traffic) {
-        result = send_traffic_and_validate_links(
-            physical_system_descriptor,
-            num_iterations,
-            log_ethernet_metrics,
-            sweep_traffic_configs,
-            packet_size_bytes,
-            data_size,
-            asic_id_to_chip_id);
+        bool first_iter = true;
+        while (result.unhealthy_links.size() > 0 || first_iter) {
+            result = send_traffic_and_validate_links(
+                physical_system_descriptor,
+                num_iterations,
+                log_ethernet_metrics,
+                sweep_traffic_configs,
+                packet_size_bytes,
+                data_size,
+                asic_id_to_chip_id);
+            reset_unhealthy_links(physical_system_descriptor, result.unhealthy_links);
+            first_iter = false;
+        }
     } else {
         std::unordered_map<EthChannelIdentifier, std::vector<LinkStatus>> statuses_per_link;
         std::vector<uint32_t> inputs = {};
