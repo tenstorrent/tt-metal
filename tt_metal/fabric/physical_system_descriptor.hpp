@@ -30,6 +30,8 @@ class DistributedContext;
 
 namespace tt::tt_metal {
 
+class Hal;
+
 // Specify Physical ASIC Attributes
 struct ASICDescriptor {
     TrayID tray_id;
