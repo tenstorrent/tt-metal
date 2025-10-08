@@ -234,7 +234,7 @@ parameters = {
             [1, 32, 3, 224, 224, 3, 3, 2, 2, 1, 1, 1, 1, 1, False, [int(ttnn.TILE_LAYOUT), "dram", int(ttnn.bfloat16)], [int(ttnn.ROW_MAJOR_LAYOUT), "system_memory", int(ttnn.bfloat16)], [int(ttnn.TILE_LAYOUT), "dram", int(ttnn.bfloat16)], ],
             [1, 64, 3, 224, 224, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, [int(ttnn.TILE_LAYOUT), "dram", int(ttnn.bfloat16)], [int(ttnn.ROW_MAJOR_LAYOUT), "system_memory", int(ttnn.bfloat16)], [int(ttnn.TILE_LAYOUT), "dram", int(ttnn.bfloat16)], ],
             [1, 64, 3, 224, 224, 7, 7, 2, 2, 3, 3, 1, 1, 1, False, [int(ttnn.TILE_LAYOUT), "dram", int(ttnn.bfloat16)], [int(ttnn.ROW_MAJOR_LAYOUT), "system_memory", int(ttnn.bfloat16)], [int(ttnn.TILE_LAYOUT), "dram", int(ttnn.bfloat16)], ],
-            [1, 768, 3, 224, 224, 16, 16, 16, 16, 0, 0, 1, 1, 1, False, [int(ttnn.TILE_LAYOUT), "dram", int(ttnn.bfloat16)], [int(ttnn.ROW_MAJOR_LAYOUT), "system_memory", int(ttnn.bfloat16)], [int(ttnn.TILE_LAYOUT), "dram", int(ttnn.bfloat16)], ],
+            [1, 768, 3, 224, 224, 16, 16, 16, 16, 0, 0, 1, 1, 1, False, [int(ttnn.TILE_LAYOUT), "dram", int(ttnn.bfloat16)], [int(ttnn.ROW_MAJOR_LAYOUT), "system_memory", int(ttnn.bfloat16)], [int(ttnn.TILE_LAYOUT), "dram", int(ttnn.bfloat16)], ], #Added from Issue 29981
             [1, 768, 3, 224, 224, 32, 32, 32, 32, 0, 0, 1, 1, 1, False, [int(ttnn.TILE_LAYOUT), "dram", int(ttnn.bfloat16)], [int(ttnn.ROW_MAJOR_LAYOUT), "system_memory", int(ttnn.bfloat16)], [int(ttnn.TILE_LAYOUT), "dram", int(ttnn.bfloat16)], ],
             [1, 32, 3, 256, 256, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, [int(ttnn.TILE_LAYOUT), "dram", int(ttnn.bfloat16)], [int(ttnn.ROW_MAJOR_LAYOUT), "system_memory", int(ttnn.bfloat16)], [int(ttnn.TILE_LAYOUT), "dram", int(ttnn.bfloat16)], ],
             [1, 16, 3, 320, 320, 3, 3, 2, 2, 1, 1, 1, 1, 1, False, [int(ttnn.TILE_LAYOUT), "dram", int(ttnn.float32)], [int(ttnn.ROW_MAJOR_LAYOUT), "system_memory", int(ttnn.float32)], [int(ttnn.TILE_LAYOUT), "dram", int(ttnn.float32)], ],
@@ -519,7 +519,7 @@ parameters = {
             [2, 320, 640, 64, 64, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, [int(ttnn.ROW_MAJOR_LAYOUT), "dram", int(ttnn.float32)], [int(ttnn.ROW_MAJOR_LAYOUT), "system_memory", int(ttnn.float32)], [int(ttnn.TILE_LAYOUT), "dram", int(ttnn.float32)]],
             [2, 640, 640, 64, 64, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, [int(ttnn.ROW_MAJOR_LAYOUT), "dram", int(ttnn.float32)], [int(ttnn.ROW_MAJOR_LAYOUT), "system_memory", int(ttnn.float32)], [int(ttnn.TILE_LAYOUT), "dram", int(ttnn.float32)]],
             [2, 320, 960, 64, 64, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, [int(ttnn.ROW_MAJOR_LAYOUT), "dram", int(ttnn.float32)], [int(ttnn.ROW_MAJOR_LAYOUT), "system_memory", int(ttnn.float32)], [int(ttnn.TILE_LAYOUT), "dram", int(ttnn.float32)]],
-            [1, 1280, 3, 518, 518, 14, 14, 14, 14, 0, 0, 1, 1, 1, False, [int(ttnn.ROW_MAJOR_LAYOUT), "dram", int(ttnn.bfloat16)], [int(ttnn.ROW_MAJOR_LAYOUT), "system_memory", int(ttnn.bfloat16)], [int(ttnn.TILE_LAYOUT), "dram", int(ttnn.bfloat16)]],
+            [1, 1280, 3, 518, 518, 14, 14, 14, 14, 0, 0, 1, 1, 1, False, [int(ttnn.ROW_MAJOR_LAYOUT), "dram", int(ttnn.bfloat16)], [int(ttnn.ROW_MAJOR_LAYOUT), "system_memory", int(ttnn.bfloat16)], [int(ttnn.TILE_LAYOUT), "dram", int(ttnn.bfloat16)]], #Added from Issue 29981
        ],
         "is_conv1d": [False], },
     }
