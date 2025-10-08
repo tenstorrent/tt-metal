@@ -628,7 +628,7 @@ void set_or_update_runtime_arguments(
 
             handle_args(program, reader_kernel_id, core, reader_runtime_args);
         } else {
-            TT_THROW("Unsupported Where variant in WhereDeviceOperation. Supported: TTS, TST, TTT");
+            TT_FATAL(false, "Unsupported Where variant in WhereDeviceOperation. Supported: TTS, TST, TTT");
         }
 
         // Writer runtime args - use simple unary format (3 args: dst_addr, num_tiles, start_id)
@@ -863,7 +863,7 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
         value_false_tensor_cb = cb2;
         value_false_tensor_cb_handle = cb2_handle;
     } else {
-        TT_THROW("Unsupported Where variant in WhereDeviceOperation. Supported: TTS, TST, TTT");
+        TT_FATAL(false, "Unsupported Where variant in WhereDeviceOperation. Supported: TTS, TST, TTT");
     }
 
     // Output buffer - use c_3 for all cases now

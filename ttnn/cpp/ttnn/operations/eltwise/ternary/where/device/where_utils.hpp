@@ -35,7 +35,7 @@ enum class KernelName {
     ComputeBcastTTT,    // TTT : column and scalar bcast cases
     ComputeColBcastTTSTST,
     ComputeScalarBcastTTSTST,
-    ComputeUnifiedTTSTST,
+    ComputeNoBcastTTSTST,
 };
 
 struct WhereKernelConfig {

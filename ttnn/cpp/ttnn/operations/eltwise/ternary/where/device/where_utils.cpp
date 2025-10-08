@@ -56,32 +56,37 @@ static const std::unordered_map<KernelLookupKey, KernelConfigEntry, KernelLookup
     {{WhereVariant::TTS, WhereBroadcastType::COL_BCAST},
      {KernelName::ReaderColBcastTTS, KernelName::ComputeColBcastTTSTST, KernelName::WriterNoBcast}},
     {{WhereVariant::TTS, WhereBroadcastType::ROW_BCAST},
-     {KernelName::ReaderRowBcastTTS, KernelName::ComputeUnifiedTTSTST, KernelName::WriterNoBcast}},
+     {KernelName::ReaderRowBcastTTS, KernelName::ComputeNoBcastTTSTST, KernelName::WriterNoBcast}},
     {{WhereVariant::TTS, WhereBroadcastType::OUTER_BCAST},
-     {KernelName::ReaderOuterBcastTTS, KernelName::ComputeUnifiedTTSTST, KernelName::WriterNoBcast}},
+     {KernelName::ReaderOuterBcastTTS, KernelName::ComputeNoBcastTTSTST, KernelName::WriterNoBcast}},
     {{WhereVariant::TTS, WhereBroadcastType::SCALAR_A_BCAST},
      {KernelName::ReaderScalarBcastTTS, KernelName::ComputeScalarBcastTTSTST, KernelName::WriterNoBcast}},
     {{WhereVariant::TTS, WhereBroadcastType::SCALAR_B_BCAST},
      {KernelName::ReaderScalarBcastTTS, KernelName::ComputeScalarBcastTTSTST, KernelName::WriterNoBcast}},
     {{WhereVariant::TTS, WhereBroadcastType::NONE},
-     {KernelName::ReaderNoBcastTTS, KernelName::ComputeUnifiedTTSTST, KernelName::WriterNoBcast}},
+     {KernelName::ReaderNoBcastTTS, KernelName::ComputeNoBcastTTSTST, KernelName::WriterNoBcast}},
 
     // TST configurations
     {{WhereVariant::TST, WhereBroadcastType::COL_BCAST},
      {KernelName::ReaderColBcastTST, KernelName::ComputeColBcastTTSTST, KernelName::WriterNoBcast}},
     {{WhereVariant::TST, WhereBroadcastType::ROW_BCAST},
-     {KernelName::ReaderRowBcastTST, KernelName::ComputeUnifiedTTSTST, KernelName::WriterNoBcast}},
+     {KernelName::ReaderRowBcastTST, KernelName::ComputeNoBcastTTSTST, KernelName::WriterNoBcast}},
     {{WhereVariant::TST, WhereBroadcastType::OUTER_BCAST},
-     {KernelName::ReaderOuterBcastTST, KernelName::ComputeUnifiedTTSTST, KernelName::WriterNoBcast}},
+     {KernelName::ReaderOuterBcastTST, KernelName::ComputeNoBcastTTSTST, KernelName::WriterNoBcast}},
     {{WhereVariant::TST, WhereBroadcastType::SCALAR_A_BCAST},
      {KernelName::ReaderScalarBcastTST, KernelName::ComputeScalarBcastTTSTST, KernelName::WriterNoBcast}},
     {{WhereVariant::TST, WhereBroadcastType::SCALAR_B_BCAST},
      {KernelName::ReaderScalarBcastTST, KernelName::ComputeScalarBcastTTSTST, KernelName::WriterNoBcast}},
     {{WhereVariant::TST, WhereBroadcastType::NONE},
-     {KernelName::ReaderNoBcastTST, KernelName::ComputeUnifiedTTSTST, KernelName::WriterNoBcast}},
+     {KernelName::ReaderNoBcastTST, KernelName::ComputeNoBcastTTSTST, KernelName::WriterNoBcast}},
 };
 
 WhereKernelConfig::WhereKernelConfig(WhereVariant where_variant, WhereBroadcastType broadcast_type) {
+    // Check for unsupported TSS variant
+    if (where_variant == WhereVariant::TSS) {
+        TT_FATAL(false, "TSS variant is yet to be moved into Where Device Operation");
+    }
+
     // Find matching configuration using O(1) hash map lookup
     KernelLookupKey key{where_variant, broadcast_type};
     auto it = kernel_config_map.find(key);
@@ -92,12 +97,7 @@ WhereKernelConfig::WhereKernelConfig(WhereVariant where_variant, WhereBroadcastT
         return;
     }
 
-    // Fallback for TSS or invalid configurations
-    if (where_variant == WhereVariant::TSS) {
-        TT_THROW("TSS variant is yet to be moved into Where Device Operation");
-    }
-
-    TT_THROW("Invalid where variant or broadcast type combination");
+    TT_FATAL(false, "Invalid where variant or broadcast type combination");
 }
 
 std::string get_kernel_file_path(KernelName kernel_name) {
@@ -151,7 +151,7 @@ std::string get_kernel_file_path(KernelName kernel_name) {
         case KernelName::ComputeColBcastTTSTST:
             return "ttnn/cpp/ttnn/operations/eltwise/ternary/where/device/kernels/compute/"
                    "where_sfpu_col_bcast_tts_tst.cpp";
-        case KernelName::ComputeUnifiedTTSTST:
+        case KernelName::ComputeNoBcastTTSTST:
             return "ttnn/cpp/ttnn/operations/eltwise/ternary/where/device/kernels/compute/"
                    "where_sfpu_no_bcast_tts_tst.cpp";
         default: __builtin_unreachable();  // GCC 12 doesn't compile even though we exhaustively match
