@@ -6,7 +6,7 @@ import os
 import torch
 from dataclasses import dataclass
 
-from diffusers import StableDiffusionXLPipeline
+from diffusers import StableDiffusionXLPipeline, StableDiffusionXLInpaintPipeline
 from loguru import logger
 import ttnn
 
@@ -47,9 +47,12 @@ class TtSDXLPipeline(LightweightModule):
     def __init__(self, ttnn_device, torch_pipeline, pipeline_config: TtSDXLPipelineConfig):
         super().__init__()
 
-        assert isinstance(
-            torch_pipeline, StableDiffusionXLPipeline
-        ), "torch_pipeline must be an instance of StableDiffusionXLPipeline"
+        if not isinstance(torch_pipeline, StableDiffusionXLPipeline) and not isinstance(
+            torch_pipeline, StableDiffusionXLInpaintPipeline
+        ):
+            assert (
+                False
+            ), "torch_pipeline must be an instance of StableDiffusionXLPipeline or StableDiffusionXLInpaintPipeline"
         assert isinstance(torch_pipeline.text_encoder, CLIPTextModel), "pipeline.text_encoder is not a CLIPTextModel"
         assert isinstance(
             torch_pipeline.text_encoder_2, CLIPTextModelWithProjection
@@ -68,7 +71,7 @@ class TtSDXLPipeline(LightweightModule):
         self.allocated_device_tensors = False
         self.generated_input_tensors = False
 
-        if pipeline_config.is_galaxy:
+        if pipeline_config.is_galaxy == True:
             logger.info("Setting TT_MM_THROTTLE_PERF for Galaxy")
             os.environ["TT_MM_THROTTLE_PERF"] = "5"
             assert (
@@ -112,10 +115,11 @@ class TtSDXLPipeline(LightweightModule):
             dtype=ttnn.bfloat16,
         )
 
+        self.num_in_channels_unet = 4
         # Hardcoded input tensor parameters
 
         # Tensor shapes
-        B, C, H, W = 1, 4, 128, 128
+        B, C, H, W = 1, self.num_in_channels_unet, 128, 128
         self.tt_latents_shape = [B, C, H, W]
 
     def set_num_inference_steps(self, num_inference_steps: int):
@@ -305,11 +309,14 @@ class TtSDXLPipeline(LightweightModule):
 
         logger.info("Generating input tensors...")
         profiler.start("prepare_latents")
-        self.__prepare_timesteps()
+
+        self._prepare_timesteps()
 
         num_channels_latents = self.torch_pipeline.unet.config.in_channels
         height = width = 1024
-        assert num_channels_latents == 4, f"num_channels_latents is {num_channels_latents}, but it should be 4"
+        assert (
+            num_channels_latents == self.num_in_channels_unet
+        ), f"num_channels_latents is {num_channels_latents}, but it should be 4"
         assert start_latent_seed is None or isinstance(
             start_latent_seed, int
         ), "start_latent_seed must be an integer or None"
@@ -417,6 +424,13 @@ class TtSDXLPipeline(LightweightModule):
             use_cfg_parallel=self.pipeline_config.use_cfg_parallel,
         )
         return imgs
+
+    def _prepare_timesteps(self):
+        # Helper method for timestep preparation.
+
+        self.ttnn_timesteps, self.pipeline_config.num_inference_steps = retrieve_timesteps(
+            self.torch_pipeline.scheduler, self.pipeline_config.num_inference_steps, self.cpu_device, None, None
+        )
 
     def __load_tt_components(self, pipeline_config):
         # Method for instantiating TT components based on the torch pipeline.
@@ -555,13 +569,6 @@ class TtSDXLPipeline(LightweightModule):
         ttnn.synchronize_device(self.ttnn_device)
         profiler.end("create_user_tensors")
         return tt_latents, tt_prompt_embeds, tt_add_text_embeds
-
-    def __prepare_timesteps(self):
-        # Helper method for timestep preparation.
-
-        self.ttnn_timesteps, self.pipeline_config.num_inference_steps = retrieve_timesteps(
-            self.torch_pipeline.scheduler, self.pipeline_config.num_inference_steps, self.cpu_device, None, None
-        )
 
     def __trace_image_processing(self):
         # Helper method for image processing trace capture.

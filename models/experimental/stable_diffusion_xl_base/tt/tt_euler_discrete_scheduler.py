@@ -36,6 +36,7 @@ class TtEulerDiscreteScheduler(LightweightModule):
     ):
         # implements the Euler Discrete Scheduler with default params as in
         # https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0/blob/main/scheduler/scheduler_config.json
+        self.order = 1
         self.num_train_timesteps = num_train_timesteps
         self.beta_start = beta_start
         self.beta_end = beta_end
@@ -76,6 +77,9 @@ class TtEulerDiscreteScheduler(LightweightModule):
         self.device = device
         self.create_ttnn_timesteps(timesteps)
         self.create_ttnn_sigmas("sigmas")
+
+    def set_begin_index(self, begin_index: int):
+        self.begin_index = begin_index
 
     def inc_step_index(self):
         self.set_step_index(self.step_index + 1)
@@ -243,6 +247,11 @@ class TtEulerDiscreteScheduler(LightweightModule):
         Ensures interchangeability with schedulers that need to scale the denoising model input depending on the
         current timestep. Scales the denoising model input by `(sigma**2 + 1) ** 0.5` to match the Euler algorithm.
         """
+        if self.step_index == 0:
+            # print("Scheduler timesteps are: ", self.timesteps)
+            # print(f"Setting step index to begin index = {self.begin_index}")
+            self.set_step_index(self.begin_index)
+
         # timestep is not used in this implementation, step_index is already initialized at set_timesteps()
         # Note: Don't use inplace op here since UNet deallocates its input
         #       Permanent input is required for tracing
@@ -308,3 +317,22 @@ class TtEulerDiscreteScheduler(LightweightModule):
 
         # Note: We return None for pred_original_sample since it is never used
         return (prev_sample, None)
+
+    def add_noise(
+        self,
+        original_samples: ttnn._ttnn.tensor.Tensor,
+        noise: ttnn._ttnn.tensor.Tensor,
+        begin_or_step_index: int,  # In case of inpainting, use self.begin_index, and in case of img2img, use self.step_index
+    ) -> ttnn._ttnn.tensor.Tensor:
+        step_index = begin_or_step_index
+
+        # this is working
+        # sigma = self.sigmas[step_indices].flatten()
+        sigma = self.tt_sigmas[step_index]
+        while len(sigma.shape) < len(original_samples.shape):
+            sigma = ttnn.unsqueeze(sigma, dim=-1)
+
+        # temp workaround
+        sigma = ttnn.to_device(sigma, self.device)
+        noisy_samples = original_samples + noise * sigma
+        return noisy_samples
