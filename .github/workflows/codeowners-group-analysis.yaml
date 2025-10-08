@@ -1053,33 +1053,41 @@ jobs:
               USER_ID=$(echo "$ALL_USERS" | jq -r --arg username "$github_username" '.[] | select(.name == $username or .profile.display_name == $username) | .id' | head -n1)
             fi
 
-            # Fuzzy matching if still not found
+            # Smart word-by-word fuzzy matching if still not found
             if [ -z "$USER_ID" ] || [ "$USER_ID" = "null" ]; then
-              echo "Trying partial name matching for: $full_name" >&2
+              echo "Trying word-by-word fuzzy matching for: $full_name" >&2
               IFS=' ' read -ra NAME_WORDS <<< "$full_name"
-              POTENTIAL_MATCHES=""
 
+              # Try each word individually - use the first word that has exactly one match
               for word in "${NAME_WORDS[@]}"; do
                 if [ ${#word} -ge 3 ]; then
+                  echo "  Checking word: '$word'" >&2
+
+                  # Find all users that match this word
                   WORD_MATCHES=$(echo "$ALL_USERS" | jq -r --arg word "$word" '.[] | select((.real_name // "" | ascii_downcase | contains($word | ascii_downcase)) or (.profile.real_name // "" | ascii_downcase | contains($word | ascii_downcase)) or (.profile.display_name // "" | ascii_downcase | contains($word | ascii_downcase))) | .id + "|" + (.real_name // .profile.real_name // .name)')
 
                   if [ -n "$WORD_MATCHES" ]; then
-                    if [ -z "$POTENTIAL_MATCHES" ]; then
-                      POTENTIAL_MATCHES="$WORD_MATCHES"
+                    # Count unique matches for this word
+                    MATCH_COUNT=$(echo "$WORD_MATCHES" | wc -l)
+
+                    if [ "$MATCH_COUNT" -eq 1 ]; then
+                      # Exactly one match - use it!
+                      USER_ID=$(echo "$WORD_MATCHES" | cut -d'|' -f1)
+                      MATCHED_NAME=$(echo "$WORD_MATCHES" | cut -d'|' -f2)
+                      echo "✅ Found unique match for '$word': $full_name -> $MATCHED_NAME ($USER_ID)" >&2
+                      break  # Stop here, we found our match
                     else
-                      POTENTIAL_MATCHES=$(comm -12 <(echo "$POTENTIAL_MATCHES" | sort) <(echo "$WORD_MATCHES" | sort))
+                      echo "  '$word' matches $MATCH_COUNT users, skipping" >&2
                     fi
+                  else
+                    echo "  '$word' matches 0 users, skipping" >&2
                   fi
                 fi
               done
 
-              if [ -n "$POTENTIAL_MATCHES" ]; then
-                MATCH_COUNT=$(echo "$POTENTIAL_MATCHES" | wc -l)
-                if [ "$MATCH_COUNT" -eq 1 ]; then
-                  USER_ID=$(echo "$POTENTIAL_MATCHES" | cut -d'|' -f1)
-                  MATCHED_NAME=$(echo "$POTENTIAL_MATCHES" | cut -d'|' -f2)
-                  echo "✅ Found partial match: $full_name -> $MATCHED_NAME ($USER_ID)" >&2
-                fi
+              # If no unique word match found, report it
+              if [ -z "$USER_ID" ] || [ "$USER_ID" = "null" ]; then
+                echo "⚠️  No unique word matches found for: $full_name" >&2
               fi
             fi
 
@@ -1602,22 +1610,42 @@ jobs:
                 USER_ID=$(echo "$ALL_USERS" | jq -r --arg username "$github_username" '.[] | select(.name == $username or .profile.display_name == $username) | .id' | head -n1)
               fi
 
-              # Add basic fuzzy matching for common cases
+              # Smart word-by-word fuzzy matching if still not found
               if [ -z "$USER_ID" ] || [ "$USER_ID" = "null" ]; then
-                echo "Trying fuzzy matching for: $full_name" >&2
-
-                # Try partial name matching (case insensitive)
+                echo "Trying word-by-word fuzzy matching for: $full_name" >&2
                 IFS=' ' read -ra NAME_WORDS <<< "$full_name"
+
+                # Try each word individually - use the first word that has exactly one match
                 for word in "${NAME_WORDS[@]}"; do
                   if [ ${#word} -ge 3 ]; then
-                    USER_ID=$(echo "$ALL_USERS" | jq -r --arg word "$word" '.[] | select((.real_name // "" | ascii_downcase | contains($word | ascii_downcase)) or (.profile.real_name // "" | ascii_downcase | contains($word | ascii_downcase)) or (.profile.display_name // "" | ascii_downcase | contains($word | ascii_downcase))) | .id' | head -n1)
-                    if [ -n "$USER_ID" ] && [ "$USER_ID" != "null" ]; then
-                      MATCHED_NAME=$(echo "$ALL_USERS" | jq -r --arg id "$USER_ID" '.[] | select(.id == $id) | .real_name // .profile.real_name // .name')
-                      echo "✅ Found fuzzy match: $full_name -> $MATCHED_NAME ($USER_ID)" >&2
-                      break
+                    echo "  Checking word: '$word'" >&2
+
+                    # Find all users that match this word
+                    WORD_MATCHES=$(echo "$ALL_USERS" | jq -r --arg word "$word" '.[] | select((.real_name // "" | ascii_downcase | contains($word | ascii_downcase)) or (.profile.real_name // "" | ascii_downcase | contains($word | ascii_downcase)) or (.profile.display_name // "" | ascii_downcase | contains($word | ascii_downcase))) | .id + "|" + (.real_name // .profile.real_name // .name)')
+
+                    if [ -n "$WORD_MATCHES" ]; then
+                      # Count unique matches for this word
+                      MATCH_COUNT=$(echo "$WORD_MATCHES" | wc -l)
+
+                      if [ "$MATCH_COUNT" -eq 1 ]; then
+                        # Exactly one match - use it!
+                        USER_ID=$(echo "$WORD_MATCHES" | cut -d'|' -f1)
+                        MATCHED_NAME=$(echo "$WORD_MATCHES" | cut -d'|' -f2)
+                        echo "✅ Found unique match for '$word': $full_name -> $MATCHED_NAME ($USER_ID)" >&2
+                        break  # Stop here, we found our match
+                      else
+                        echo "  '$word' matches $MATCH_COUNT users, skipping" >&2
+                      fi
+                    else
+                      echo "  '$word' matches 0 users, skipping" >&2
                     fi
                   fi
                 done
+
+                # If no unique word match found, report it
+                if [ -z "$USER_ID" ] || [ "$USER_ID" = "null" ]; then
+                  echo "⚠️  No unique word matches found for: $full_name" >&2
+                fi
               fi
 
               if [ -n "$USER_ID" ] && [ "$USER_ID" != "null" ]; then
