@@ -298,10 +298,10 @@ void MAIN {
                 /* Logit soft-capping with eltwise scaling + tanh */
                 // Workaround: first apply scaling by sqrt(head_dim) before tanh and replace head_dim scaling fused with
                 // exp with softcap scalar
-                softcap_inplace<>(cb_qk_im, qk_chunk_tiles_dynamic)
+                // softcap_inplace<>(cb_qk_im, qk_chunk_tiles_dynamic);
 
-                    /* QK += MASK */
-                    if (!add_mask_fusion) {
+                /* QK += MASK */
+                if (!add_mask_fusion) {
                     if constexpr (is_causal) {
                         // For decode, we only apply mask at the last chunk for causal mode
                         if (k_chunk == k_chunk_end - 1 && apply_mask_at_last_chunk) {
