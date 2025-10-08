@@ -147,6 +147,10 @@ def map_vision_hf_to_meta_keys(state_dict, head_dim):
 
     vision_state_dict = map_hf_to_meta_keys_vision_only(vision_state_dict)
 
+    # remaps just this one key
+    val = other_state_dict.pop("lm_head.weight")
+    other_state_dict["output.weight"] = val
+
     return {**vision_state_dict, **text_state_dict, **other_state_dict}
 
 
