@@ -208,9 +208,6 @@ void physical_system_descriptor_to_proto(
         }
     }
 
-    // Set mock cluster flag
-    proto_desc->set_mock_cluster(descriptor.is_using_mock_cluster());
-
     // Convert ethernet metrics
     for (const auto& [asic_id, channel_metrics] : descriptor.get_ethernet_metrics()) {
         auto* proto_asic_metrics = proto_desc->add_ethernet_metrics();
@@ -231,7 +228,6 @@ std::unique_ptr<PhysicalSystemDescriptor> proto_to_physical_system_descriptor(
         PhysicalSystemDescriptor::null_cluster,
         nullptr,
         nullptr,
-        proto_desc.mock_cluster(),
         false);  // Don't run discovery
 
     // Convert system graph

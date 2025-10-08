@@ -69,16 +69,13 @@ std::string get_mobo_name() {
 }
 
 TrayID get_tray_id_for_chip(
-    const std::unique_ptr<tt::umd::Cluster>& cluster,
-    chip_id_t chip_id,
-    const std::string& mobo_name,
-    bool using_mock_cluster_desc) {
+    const std::unique_ptr<tt::umd::Cluster>& cluster, chip_id_t chip_id, const std::string& mobo_name) {
     static const std::unordered_map<std::string, std::vector<uint16_t>> mobo_to_bus_ids = {
         {"SIENAD8-2L2T", {0xc1, 0x01, 0x41, 0x42}},
         {"X12DPG-QT6", {0xb1, 0xca, 0x31, 0x4b}},
     };
 
-    if (using_mock_cluster_desc || mobo_to_bus_ids.find(mobo_name) == mobo_to_bus_ids.end()) {
+    if (mobo_to_bus_ids.find(mobo_name) == mobo_to_bus_ids.end()) {
         return TrayID{0};
     }
     const auto& ordered_bus_ids = mobo_to_bus_ids.at(mobo_name);
@@ -90,17 +87,16 @@ TrayID get_tray_id_for_chip(
 }
 
 std::pair<TrayID, ASICLocation> get_asic_position(
-    const std::unique_ptr<tt::umd::Cluster>& cluster, tt::ARCH arch, chip_id_t chip_id, bool using_mock_cluster_desc) {
+    const std::unique_ptr<tt::umd::Cluster>& cluster, tt::ARCH arch, chip_id_t chip_id) {
     auto cluster_desc = cluster->get_cluster_description();
     if (cluster_desc->get_board_type(chip_id) == BoardType::UBB) {
         constexpr std::string_view ubb_mobo_name = "S7T-MB";
 
-        TT_FATAL(
-            using_mock_cluster_desc || get_mobo_name() == ubb_mobo_name, "UBB systems must use S7T-MB motherboard.");
+        TT_FATAL(get_mobo_name() == ubb_mobo_name, "UBB systems must use S7T-MB motherboard.");
         auto ubb_id = tt::tt_fabric::get_ubb_id(chip_id);
         return {TrayID{ubb_id.tray_id}, ASICLocation{ubb_id.asic_id}};
     } else {
-        auto tray_id = get_tray_id_for_chip(cluster, chip_id, get_mobo_name(), using_mock_cluster_desc);
+        auto tray_id = get_tray_id_for_chip(cluster, chip_id, get_mobo_name());
         ASICLocation asic_location;
         if (arch == tt::ARCH::WORMHOLE_B0) {
             // Derive ASIC Location based on the tunnel depth for Wormhole systems
@@ -143,27 +139,15 @@ PhysicalSystemDescriptor::PhysicalSystemDescriptor(
     const std::unique_ptr<tt::umd::Cluster>& cluster,
     const std::shared_ptr<distributed::multihost::DistributedContext>& distributed_context,
     const Hal* hal,
-    const llrt::RunTimeOptions& rtoptions,
     bool run_discovery) :
-    PhysicalSystemDescriptor(cluster, distributed_context, hal, rtoptions.get_mock_enabled(), run_discovery) {}
-
-PhysicalSystemDescriptor::PhysicalSystemDescriptor(
-    const std::unique_ptr<tt::umd::Cluster>& cluster,
-    const std::shared_ptr<distributed::multihost::DistributedContext>& distributed_context,
-    const Hal* hal,
-    bool using_mock_cluster_descriptor,
-    bool run_discovery) :
-    cluster_(cluster),
-    distributed_context_(distributed_context),
-    hal_(hal),
-    using_mock_cluster_desc_(using_mock_cluster_descriptor) {
+    cluster_(cluster), distributed_context_(distributed_context), hal_(hal) {
     if (run_discovery) {
         this->run_discovery();
     }
 }
 
 PhysicalSystemDescriptor::PhysicalSystemDescriptor(const std::string& mock_proto_desc_path) :
-    cluster_(null_cluster), distributed_context_(nullptr), hal_(nullptr), using_mock_cluster_desc_(false) {
+    cluster_(null_cluster), distributed_context_(nullptr), hal_(nullptr) {
     auto proto_desc = deserialize_physical_system_descriptor_from_text_proto_file(mock_proto_desc_path);
     this->merge(std::move(proto_desc));
 }
@@ -264,8 +248,7 @@ void PhysicalSystemDescriptor::run_local_discovery() {
     auto& exit_nodes = exit_node_connection_table_[hostname];
 
     auto add_local_asic_descriptor = [&](AsicID src_unique_id, chip_id_t src_chip_id) {
-        auto [tray_id, asic_location] =
-            get_asic_position(cluster_, get_arch(cluster_), src_chip_id, using_mock_cluster_desc_);
+        auto [tray_id, asic_location] = get_asic_position(cluster_, get_arch(cluster_), src_chip_id);
         asic_descriptors_[src_unique_id] = ASICDescriptor{
             TrayID{tray_id}, asic_location, cluster_desc->get_board_type(src_chip_id), src_unique_id, hostname};
     };
@@ -356,11 +339,6 @@ void PhysicalSystemDescriptor::merge(PhysicalSystemDescriptor&& other) {
     for (auto&& [asic, metrics] : other.ethernet_metrics_) {
         ethernet_metrics_[asic] = std::move(metrics);
     }
-
-    // Merging PhysicalSystemDescriptors using mock and real clusters is undefined and unsupported
-    TT_FATAL(
-        is_using_mock_cluster() == other.is_using_mock_cluster(),
-        "Cannot merge physical and mock cluster physical system descriptors.");
 }
 
 void PhysicalSystemDescriptor::remove_unresolved_nodes() {
