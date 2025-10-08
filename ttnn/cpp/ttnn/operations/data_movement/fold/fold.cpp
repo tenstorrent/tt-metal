@@ -287,6 +287,27 @@ std::vector<Tensor> fold_with_transpose_sharded_(
     return output_tensors;
 }
 
+// Extract padding values from variant
+static std::array<uint32_t, 6> extract_padding_values(
+    const std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>, std::array<uint32_t, 6>>& padding) {
+    return std::visit(
+        [](const auto& pad_array) -> std::array<uint32_t, 6> {
+            using T = std::decay_t<decltype(pad_array)>;
+            if constexpr (std::is_same_v<T, std::array<uint32_t, 2>>) {
+                // [pad_h, pad_w] -> [pad_h, pad_h, pad_w, pad_w, 0, 0]
+                return {pad_array[0], pad_array[0], pad_array[1], pad_array[1], 0, 0};
+            } else if constexpr (std::is_same_v<T, std::array<uint32_t, 4>>) {
+                // [pad_h_top, pad_h_bottom, pad_w_left, pad_w_right] -> [pad_h_top, pad_h_bottom, pad_w_left,
+                // pad_w_right, 0, 0]
+                return {pad_array[0], pad_array[1], pad_array[2], pad_array[3], 0, 0};
+            } else {
+                // [pad_h_top, pad_h_bottom, pad_w_left, pad_w_right, pad_c_front, pad_c_back]
+                return pad_array;
+            }
+        },
+        padding);
+}
+
 // Helper function to validate height sharding
 static void validate_height_sharding(const Tensor& tensor) {
     if (tensor.is_sharded() && tensor.memory_config().memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED) {
@@ -370,26 +391,27 @@ Tensor FoldOperation::invoke(
     uint32_t stride_w,
     bool use_transpose_as_fold,
     const std::optional<const ttnn::Shape>& output_shape,
-    uint32_t pad_c,
-    std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
+    std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>, std::array<uint32_t, 6>> padding,
     const std::optional<CoreRangeSet>& core_grid,
     const std::optional<MemoryConfig>& override_memory_config) {
     // Extract padding values
-    const std::array<uint32_t, 4> padding_n4 = ttnn::operations::sliding_window::get_pair_n4_padding(padding);
-    const uint32_t pad_top = padding_n4[0];
-    const uint32_t pad_bottom = padding_n4[1];
-    const uint32_t pad_left = padding_n4[2];
-    const uint32_t pad_right = padding_n4[3];
+    const std::array<uint32_t, 6> padding_values = extract_padding_values(padding);
+    const uint32_t pad_top = padding_values[0];
+    const uint32_t pad_bottom = padding_values[1];
+    const uint32_t pad_left = padding_values[2];
+    const uint32_t pad_right = padding_values[3];
+    const uint32_t pad_c_front = padding_values[4];
+    const uint32_t pad_c_back = padding_values[5];
+    const uint32_t pad_c = pad_c_back;  // For backward compatibility, typically only end padding
+    const uint32_t pad_h = pad_top;     // Use top padding for symmetric case
+    const uint32_t pad_w = pad_left;    // Use left padding for symmetric case
     const bool has_hw_padding = (pad_top | pad_bottom | pad_left | pad_right) != 0;
-    const bool has_c_padding = pad_c != 0;
+    const bool has_c_padding = (pad_c_front | pad_c_back) != 0;
 
     const Tensor& input_tensor = input_tensor_;
 
     // Legacy transpose-based fold (TODO: remove when #29514 is solved)
     if (use_transpose_as_fold) {
-        const uint32_t pad_h = pad_top;   // Use top padding for symmetric case
-        const uint32_t pad_w = pad_left;  // Use left padding for symmetric case
-
         if (input_tensor.is_sharded()) {
             validate_height_sharding(input_tensor);
             return fold_with_transpose_sharded_(
@@ -425,8 +447,9 @@ Tensor FoldOperation::invoke(
                 static_cast<uint32_t>(current_shape[0]),
                 static_cast<uint32_t>(current_shape[1]),
                 static_cast<uint32_t>(current_shape[2]),
-                static_cast<uint32_t>(current_shape[3] + pad_c)};
-            processed_tensor = ttnn::pad(processed_tensor, padded_shape, tt::tt_metal::Array4D({0, 0, 0, 0}), 0);
+                static_cast<uint32_t>(current_shape[3] + pad_c_front + pad_c_back)};
+            processed_tensor =
+                ttnn::pad(processed_tensor, padded_shape, tt::tt_metal::Array4D({0, 0, 0, pad_c_front}), 0);
         }
 
         // Reshard if needed for optimal fold computation
@@ -444,7 +467,7 @@ Tensor FoldOperation::invoke(
             padding_spec.push_back({0, 0});                 // N dimension
             padding_spec.push_back({pad_top, pad_bottom});  // H dimension
             padding_spec.push_back({pad_left, pad_right});  // W dimension
-            padding_spec.push_back({pad_c, pad_c});         // C dimension
+            padding_spec.push_back({pad_c_front, pad_c_back});  // C dimension
 
             processed_tensor = ttnn::pad(processed_tensor, padding_spec, 0.0f, true, std::nullopt);
         }
@@ -473,8 +496,6 @@ Tensor FoldOperation::invoke(
         return output_tensor;
     }
     // Fallback case: interleaved tensor with symmetric padding
-    const uint32_t pad_h = pad_top;   // Use top padding for symmetric case
-    const uint32_t pad_w = pad_left;  // Use left padding for symmetric case
     return ttnn::prim::fold(input_tensor, stride_h, stride_w, output_shape, pad_c, pad_h, pad_w);
 }
 

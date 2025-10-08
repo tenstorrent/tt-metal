@@ -1615,7 +1615,7 @@ ttnn::Tensor fold_tensor(
     }
 
     // Core folding operation
-    tensor_on_device = ttnn::fold(tensor_on_device, stride[0], stride[1], false, std::nullopt, 0, padding_n4);
+    tensor_on_device = ttnn::fold(tensor_on_device, stride[0], stride[1], false, std::nullopt, padding_n4);
 
     return tensor_on_device;
 }

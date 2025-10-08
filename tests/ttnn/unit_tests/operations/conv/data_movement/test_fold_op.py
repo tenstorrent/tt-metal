@@ -316,8 +316,7 @@ def test_fold_with_permute_reshape_on_device_sharded(device, n, c, h, w, pad_h, 
         stride_h,
         stride_w,
         use_transpose_as_fold=True,
-        pad_c=_nearest_y(c, 4) - c,
-        padding=[pad_h, pad_w],
+        padding=[pad_h, pad_h, pad_w, pad_w, 0, _nearest_y(c, 4) - c],
         grid_size=grid_size,
     )
     tt_output_tensor = ttnn.to_torch(tt_output_tensor)
@@ -356,8 +355,7 @@ def test_fold_with_permute_reshape_on_device(device, n, c, h, w, pad_h, pad_w, s
         stride_w,
         use_transpose_as_fold=True,
         output_shape=(n, padded_h // stride_h, padded_w // stride_w, C * (stride_h * stride_w)),
-        pad_c=C - c,
-        padding=[0, 0],
+        padding=[0, 0, 0, 0, 0, C - c],
     )
     tt_output_tensor = ttnn.to_torch(tt_output_tensor)
     assert_with_pcc(torch_output_tensor, tt_output_tensor, 1)

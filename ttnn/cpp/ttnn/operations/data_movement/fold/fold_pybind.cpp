@@ -36,8 +36,7 @@ void bind_fold_operation(py::module& module) {
                uint32_t stride_w,
                bool use_transpose_as_fold,
                std::optional<ttnn::Shape> output_shape,
-               uint32_t pad_c,
-               std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
+               std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>, std::array<uint32_t, 6>> padding,
                std::optional<CoreRangeSet> grid_size,
                std::optional<MemoryConfig> override_memory_config) -> ttnn::Tensor {
                 return op(
@@ -46,7 +45,6 @@ void bind_fold_operation(py::module& module) {
                     stride_w,
                     use_transpose_as_fold,
                     output_shape,
-                    pad_c,
                     padding,
                     grid_size,
                     override_memory_config);
@@ -56,7 +54,6 @@ void bind_fold_operation(py::module& module) {
             py::arg("stride_w"),
             py::arg("use_transpose_as_fold") = false,
             py::arg("output_shape") = std::nullopt,
-            py::arg("pad_c") = 0,
             py::arg("padding") = std::array<uint32_t, 2>{0, 0},
             py::arg("grid_size") = std::nullopt,
             py::arg("override_memory_config") = std::nullopt});
