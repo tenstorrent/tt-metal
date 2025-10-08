@@ -307,11 +307,15 @@ class Attention(Module):
             prompt = ttnn.transformer.concatenate_heads(prompt)
 
         if self.to_out is not None:
-            spatial = self.ccl_manager.all_gather(spatial, dim=2, mesh_axis=tp_axis)
+            spatial = self.ccl_manager.all_gather_persistent_buffer(
+                spatial, dim=2, mesh_axis=tp_axis, use_hyperparams=True
+            )
             spatial = self.to_out(spatial, core_grid=core_grid)
 
         if self.to_add_out is not None:
-            prompt = self.ccl_manager.all_gather(prompt, dim=2, mesh_axis=tp_axis)
+            prompt = self.ccl_manager.all_gather_persistent_buffer(
+                prompt, dim=2, mesh_axis=tp_axis, use_hyperparams=True
+            )
             prompt = self.to_add_out(prompt, core_grid=core_grid)
 
         return spatial, prompt

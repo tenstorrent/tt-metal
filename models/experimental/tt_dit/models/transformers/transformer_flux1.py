@@ -172,11 +172,15 @@ class Flux1SingleTransformerBlock(Module):
         norm_spatial = spatial_normed * (1 + scale_msa) + shift_msa
         norm_prompt = prompt_normed * (1 + scale_msa) + shift_msa
 
-        # norm_combined = self.ccl_manager.all_gather(
-        #     norm_combined, dim=2, mesh_axis=tp_axis
+        # norm_combined = self.ccl_manager.all_gather_persistent_buffer(
+        #     norm_combined, dim=2, mesh_axis=tp_axis, use_hyperparams=True
         # )
-        norm_spatial = self.ccl_manager.all_gather(norm_spatial, dim=2, mesh_axis=tp_axis)
-        norm_prompt = self.ccl_manager.all_gather(norm_prompt, dim=2, mesh_axis=tp_axis)
+        norm_spatial = self.ccl_manager.all_gather_persistent_buffer(
+            norm_spatial, dim=2, mesh_axis=tp_axis, use_hyperparams=True
+        )
+        norm_prompt = self.ccl_manager.all_gather_persistent_buffer(
+            norm_prompt, dim=2, mesh_axis=tp_axis, use_hyperparams=True
+        )
 
         # call `unsqueeze` since RowParallelLinear currently requires rank 4 tensors
         # mlp_combined = ttnn.squeeze(self.proj_mlp(ttnn.unsqueeze(norm_combined, 0)), 0)
@@ -443,8 +447,12 @@ class Flux1TransformerBlock(Module):
         prompt_normed = prompt_normed * (1 + prompt_scale_attn) + prompt_shift_attn
 
         # Gather spatial, prompt before attention
-        spatial_normed = self.ccl_manager.all_gather(spatial_normed, dim=2, mesh_axis=tp_axis)
-        prompt_normed = self.ccl_manager.all_gather(prompt_normed, dim=2, mesh_axis=tp_axis)
+        spatial_normed = self.ccl_manager.all_gather_persistent_buffer(
+            spatial_normed, dim=2, mesh_axis=tp_axis, use_hyperparams=True
+        )
+        prompt_normed = self.ccl_manager.all_gather_persistent_buffer(
+            prompt_normed, dim=2, mesh_axis=tp_axis, use_hyperparams=True
+        )
 
         spatial_attn, prompt_attn = self.attn.forward(
             spatial=spatial_normed,
@@ -462,7 +470,9 @@ class Flux1TransformerBlock(Module):
         spatial_normed = ttnn.squeeze(self.norm2(ttnn.unsqueeze(spatial, 0)), 0)
         spatial_normed = spatial_normed * (1 + spatial_scale_ff) + spatial_shift_ff
 
-        spatial_normed = self.ccl_manager.all_gather(spatial_normed, dim=2, mesh_axis=tp_axis)
+        spatial_normed = self.ccl_manager.all_gather_persistent_buffer(
+            spatial_normed, dim=2, mesh_axis=tp_axis, use_hyperparams=True
+        )
 
         spatial_ff = ttnn.squeeze(self.ff(ttnn.unsqueeze(spatial_normed, 0), core_grid=self.core_grid), 0)
         spatial_ff = spatial_ff * spatial_gate_ff
@@ -477,7 +487,9 @@ class Flux1TransformerBlock(Module):
         prompt_normed = ttnn.squeeze(self.norm2_context(ttnn.unsqueeze(prompt, 0)), 0)
         prompt_normed = prompt_normed * (1 + prompt_scale_ff) + prompt_shift_ff
 
-        prompt_normed = self.ccl_manager.all_gather(prompt_normed, dim=2, mesh_axis=tp_axis)
+        prompt_normed = self.ccl_manager.all_gather_persistent_buffer(
+            prompt_normed, dim=2, mesh_axis=tp_axis, use_hyperparams=True
+        )
 
         prompt_ff = ttnn.squeeze(self.ff_context(ttnn.unsqueeze(prompt_normed, 0), core_grid=self.core_grid), 0)
         prompt_ff = prompt_ff * prompt_gate_ff
@@ -714,7 +726,7 @@ class Flux1Transformer(Module):
         spatial_time = self.time_embed_out(time_embed)
         [scale, shift] = _chunk_time3d(spatial_time, 2)
 
-        spatial = self.ccl_manager.all_gather(spatial, dim=2, mesh_axis=tp_axis)
+        spatial = self.ccl_manager.all_gather_persistent_buffer(spatial, dim=2, mesh_axis=tp_axis, use_hyperparams=True)
 
         spatial = spatial * (1 + scale) + shift
 
