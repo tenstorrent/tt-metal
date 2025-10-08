@@ -27,11 +27,6 @@ on:
         required: false
         default: ''
         type: string
-      slack-channel:
-        description: 'Slack channel ID for notifications (e.g., C07G47JMQHM)'
-        required: false
-        default: 'C07G47JMQHM'
-        type: string
   issue_comment:
     types: [created]
 
@@ -265,14 +260,14 @@ jobs:
 
           while true; do
             REVIEWS_API="https://api.github.com/repos/${{ github.repository }}/pulls/$PR_NUMBER/reviews?per_page=100&page=$PAGE"
-            REVIEWS_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-                             -H "Accept: application/vnd.github.v3+json" \
-                             "$REVIEWS_API" 2>/dev/null)
+          REVIEWS_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+                           -H "Accept: application/vnd.github.v3+json" \
+                           "$REVIEWS_API" 2>/dev/null)
 
-            # Check if API call was successful
-            REVIEWS_HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-                             -H "Accept: application/vnd.github.v3+json" \
-                             "$REVIEWS_API")
+          # Check if API call was successful
+          REVIEWS_HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+                           -H "Accept: application/vnd.github.v3+json" \
+                           "$REVIEWS_API")
 
             if [ "$REVIEWS_HTTP_CODE" = "200" ] && [ -n "$REVIEWS_DATA" ] && [ "$REVIEWS_DATA" != "null" ] && [ "$REVIEWS_DATA" != "[]" ]; then
               # Merge this page with existing reviews
@@ -293,7 +288,7 @@ jobs:
               fi
             else
               if [ $PAGE -eq 1 ]; then
-                echo "Warning: Could not fetch PR reviews (HTTP $REVIEWS_HTTP_CODE)"
+            echo "Warning: Could not fetch PR reviews (HTTP $REVIEWS_HTTP_CODE)"
               fi
               break
             fi
@@ -668,12 +663,8 @@ jobs:
             AUTHOR_NOTES="${{ needs.parse-comment.outputs.author-notes }}"
           fi
 
-          # Configure Slack channel (use input or default)
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            SLACK_CHANNEL="${{ github.event.inputs.slack-channel }}"
-          else
-            SLACK_CHANNEL="C07G47JMQHM"  # Default for comment triggers
-          fi
+          # Use hardcoded Slack channel
+          SLACK_CHANNEL="C07G47JMQHM"
 
           echo "Using parameters: CREATE_NEW=$CREATE_NEW, PING_OWNERS=$PING_OWNERS, SEND_SLACK=$SEND_SLACK, SLACK_CHANNEL=$SLACK_CHANNEL"
 
@@ -958,7 +949,7 @@ jobs:
           DIRECT_PING_USERS="${{ needs.parse-comment.outputs.direct-ping-users }}"
           AUTHOR_NOTES="${{ needs.parse-comment.outputs.author-notes }}"
 
-          # Configure Slack channel (default for comment triggers)
+          # Use hardcoded Slack channel
           SLACK_CHANNEL="C07G47JMQHM"
 
           echo "Processing direct ping for users: $DIRECT_PING_USERS"
@@ -1336,7 +1327,7 @@ jobs:
                           if is_moreh_member "$member"; then
                             echo "Excluding $member (thirdparty-moreh team member) from selection"
                           else
-                            TEAM_UNAPPROVED="$TEAM_UNAPPROVED$member,"
+                          TEAM_UNAPPROVED="$TEAM_UNAPPROVED$member,"
                           fi
                         fi
                       done
@@ -1397,7 +1388,7 @@ jobs:
                     if is_moreh_member "$username"; then
                       echo "Excluding $username (thirdparty-moreh team member) from pattern selection"
                     else
-                      PATTERN_UNAPPROVED="$PATTERN_UNAPPROVED$username,"
+                    PATTERN_UNAPPROVED="$PATTERN_UNAPPROVED$username,"
                     fi
                   fi
                 done
@@ -1448,12 +1439,8 @@ jobs:
           AUTHOR_NOTES="${{ steps.generate-comment.outputs.author-notes }}"
           PR_NUMBER="${{ steps.generate-comment.outputs.pr-number }}"
 
-          # Configure Slack channel (use input or default)
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            SLACK_CHANNEL="${{ github.event.inputs.slack-channel }}"
-          else
-            SLACK_CHANNEL="C07G47JMQHM"  # Default for comment triggers
-          fi
+          # Use hardcoded Slack channel
+          SLACK_CHANNEL="C07G47JMQHM"
 
           # Define API endpoint
           COMMENTS_API="https://api.github.com/repos/${{ github.repository }}/issues/$PR_NUMBER/comments"
@@ -1555,12 +1542,8 @@ jobs:
           AUTHOR_NOTES="${{ steps.generate-comment.outputs.author-notes }}"
           PR_NUMBER="${{ steps.generate-comment.outputs.pr-number }}"
 
-          # Configure Slack channel (use input or default)
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            SLACK_CHANNEL="${{ github.event.inputs.slack-channel }}"
-          else
-            SLACK_CHANNEL="C07G47JMQHM"  # Default for comment triggers
-          fi
+          # Use hardcoded Slack channel
+          SLACK_CHANNEL="C07G47JMQHM"
 
           # Send Slack notification if enabled
           if [ "$SEND_SLACK" = "true" ] && [ -n "$SELECTED_OWNERS" ]; then
