@@ -135,6 +135,12 @@ public:
 
     void deassert_risc_reset_at_core(
         const tt_cxy_pair& physical_chip_coord,
+        const TensixSoftResetOptions& soft_resets = TENSIX_DEASSERT_SOFT_RESET) const;
+    void assert_risc_reset_at_core(
+        const tt_cxy_pair& physical_chip_coord,
+        const TensixSoftResetOptions& soft_resets = TENSIX_ASSERT_SOFT_RESET) const;
+    void deassert_risc_reset_at_core(
+        const tt_cxy_pair& physical_chip_coord,
         const tt::umd::RiscType& soft_resets,
         bool staggered_start = true) const;
     void assert_risc_reset_at_core(const tt_cxy_pair& physical_chip_coord, const tt::umd::RiscType& soft_resets) const;
