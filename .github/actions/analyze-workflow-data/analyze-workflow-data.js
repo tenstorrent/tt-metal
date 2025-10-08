@@ -400,6 +400,21 @@ function renderErrorsTable(errorSnippets) {
   ].join('\n');
 }
 
+// Helper: derive a one-line description for a commit
+function getCommitDescription(commit) {
+  try {
+    if (!commit) return '';
+    const fromField = (typeof commit.description === 'string' && commit.description) || '';
+    if (fromField) return fromField;
+    const msg = typeof commit.message === 'string' ? commit.message : '';
+    if (!msg) return '';
+    const firstLine = String(msg).split(/\r?\n/)[0] || '';
+    return firstLine;
+  } catch (_) {
+    return '';
+  }
+}
+
 function renderCommitsTable(commits) {
   if (!Array.isArray(commits) || commits.length === 0) {
     return '<p><em>None</em></p>';
@@ -413,8 +428,7 @@ function renderCommitsTable(commits) {
       ? `<a href="${escapeHtml(c.author_url)}">@${escapeHtml(c.author_login)}</a>`
       : escapeHtml(who);
     const shaHtml = url ? `<a href="${escapeHtml(url)}"><code>${escapeHtml(short)}</code></a>` : `<code>${escapeHtml(short)}</code>`;
-    const desc = (typeof c.description === 'string' && c.description) || (typeof c.message === 'string' && (c.message.split(/\r?\n/)[0] || '')) || '';
-    const descHtml = escapeHtml(desc);
+    const descHtml = escapeHtml(getCommitDescription(c));
     return `<tr><td>${shaHtml}</td><td>${whoHtml}</td><td>${descHtml}</td></tr>`;
   }).join('\n');
   return [
@@ -1071,7 +1085,7 @@ function listCommitsBetweenOffline(context, startShaExclusive, endShaInclusive) 
     author_name: c.author_name,
     author_url: c.author_url,
     message: c.message,
-    description: (typeof c.description === 'string' && c.description) || (typeof c.message === 'string' ? (c.message.split(/\r?\n/)[0] || '') : undefined),
+    description: getCommitDescription(c),
   }));
 }
 
