@@ -13,6 +13,7 @@
 #include "models/base_transformer.hpp"
 #include "models/distributed/gpt2.hpp"
 #include "models/distributed/llama.hpp"
+#include "models/distributed/pipeline_parallel_llama.hpp"
 #include "models/gpt2.hpp"
 #include "models/linear_regression.hpp"
 #include "models/llama.hpp"
@@ -55,6 +56,13 @@ void py_module_types(nb::module_& m, nb::module_& m_modules) {
         auto m_distributed_llama = m_distributed.def_submodule("llama");
         nb::class_<ttml::models::distributed::llama::DistributedLlama, models::BaseTransformer>(
             m_distributed_llama, "DistributedLlama");
+
+        auto m_distributed_pp = m_distributed.def_submodule("pipeline_parallel");
+        auto m_distributed_pp_llama = m_distributed_pp.def_submodule("llama");
+        nb::class_<ttml::models::distributed::pipeline_parallel_llama::PipelineParallelLlama, models::BaseTransformer>(
+            m_distributed_pp_llama, "PipelineParallelLlama");
+        nb::class_<ttml::models::distributed::pipeline_parallel_llama::PipelineParallelConfig>(
+            m_distributed_pp_llama, "PipelineParallelConfig");
     }
 
     {
@@ -150,6 +158,33 @@ void py_module(nb::module_& m, nb::module_& m_modules) {
             "create_llama_model",
             [](const models::llama::LlamaConfig& config) { return ttml::models::distributed::llama::create(config); },
             "Create Llama model");
+
+        auto py_distributed_pp = py_distributed.def_submodule("pipeline_parallel");
+        auto py_distributed_pp_llama = py_distributed_pp.def_submodule("llama");
+        py_distributed_pp_llama.def(
+            "create_llama_model",
+            [](const models::llama::LlamaConfig& config,
+               const ttml::models::distributed::pipeline_parallel_llama::PipelineParallelConfig& pp_config,
+               bool is_tensor_parallel) {
+                return ttml::models::distributed::pipeline_parallel_llama::create(
+                    config, pp_config, is_tensor_parallel);
+            },
+            nb::arg("config"),
+            nb::arg("pipeline_parallel_config"),
+            nb::arg("is_tensor_parallel") = false,
+            "Create Pipeline Parallel Llama model");
+        auto py_distributed_pp_llama_cfg =
+            static_cast<nb::class_<ttml::models::distributed::pipeline_parallel_llama::PipelineParallelConfig>>(
+                py_distributed_pp_llama.attr("PipelineParallelConfig"));
+        py_distributed_pp_llama_cfg.def(nb::init<>());
+        py_distributed_pp_llama_cfg.def_rw(
+            "num_blocks",
+            &ttml::models::distributed::pipeline_parallel_llama::PipelineParallelConfig::num_blocks,
+            "Number of blocks");
+        py_distributed_pp_llama_cfg.def_rw(
+            "blocks_per_rank",
+            &ttml::models::distributed::pipeline_parallel_llama::PipelineParallelConfig::blocks_per_rank,
+            "Blocks per rank");
     }
 
     {
