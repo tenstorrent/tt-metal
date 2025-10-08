@@ -17,7 +17,6 @@ target_link_libraries(
     fabric_unit_tests
     PRIVATE
         tt_metal
-        fabric
         test_common_libs
 )
 
@@ -47,7 +46,6 @@ target_link_libraries(
     test_physical_discovery
     PRIVATE
         tt_metal
-        fabric
         test_common_libs
 )
 
@@ -80,7 +78,6 @@ target_link_libraries(
     fabric_elastic_channels_host_test
     PRIVATE
         tt_metal
-        fabric
         test_common_libs
 )
 
@@ -154,6 +151,7 @@ target_link_libraries(
 
 add_executable(fabric_smoke_tests)
 target_link_libraries(fabric_smoke_tests PRIVATE TT::Metalium::Test::Fabric::Smoke)
+
 set_target_properties(
     fabric_smoke_tests
     PROPERTIES
@@ -182,7 +180,6 @@ target_link_libraries(
     unit_tests_1d_fabric_latency
     PRIVATE
         tt_metal
-        fabric
         test_common_libs
 )
 target_sources(
@@ -203,7 +200,6 @@ target_link_libraries(
     bench_unicast
     PRIVATE
         tt_metal
-        fabric
         gtest
         test_common_libs
 )
