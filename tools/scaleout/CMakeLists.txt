@@ -1,6 +1,11 @@
 project(scaleout_tools)
 
-add_executable(run_cluster_validation validation/run_cluster_validation.cpp)
+add_executable(
+    run_cluster_validation
+    validation/run_cluster_validation.cpp
+    validation/utils/ethernet_link_metrics_serialization.cpp
+    validation/utils/cluster_validation_utils.cpp
+)
 
 # Library target
 add_library(scaleout_tools OBJECT)
@@ -12,6 +17,7 @@ set(PROTO_SCHEMAS
     ${CMAKE_CURRENT_SOURCE_DIR}/cabling_descriptor/schemas/node_config.proto
     ${CMAKE_CURRENT_SOURCE_DIR}/cabling_descriptor/schemas/cluster_config.proto
     ${CMAKE_CURRENT_SOURCE_DIR}/deployment_descriptor/schemas/deployment.proto
+    ${CMAKE_CURRENT_SOURCE_DIR}/validation/schemas/ethernet_link_metrics.proto
 )
 
 set(GENERATED_PROTO_SRCS)
@@ -47,6 +53,8 @@ target_include_directories(scaleout_tools PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_include_directories(scaleout_tools SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 
 target_include_directories(run_cluster_validation PRIVATE "$<TARGET_PROPERTY:TT::Metalium,INCLUDE_DIRECTORIES>")
+target_include_directories(run_cluster_validation PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(run_cluster_validation SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 
 target_link_libraries(
     scaleout_tools
