@@ -42,6 +42,11 @@ on:
         type: string
         default: "3"
         description: "Number of retries (default 3)"
+      non-deterministic:
+        required: true
+        type: boolean
+        default: false
+        description: "Treat any failure as bad; record pass rates"
 run-name: "Bisect on ${{ inputs.runner-label }}"
 jobs:
   test-dispatch:
@@ -110,4 +115,12 @@ jobs:
           GIT_COMMITTER_NAME: "GitHub Actions"
           GIT_COMMITTER_EMAIL: "actions@github.com"
         run: |
-          ./tests/scripts/tt_bisect.sh -t ${{ inputs.timeout }} -f "${{ inputs.command }}" -b ${{ inputs.bad-commit }} -g ${{ inputs.good-commit }} ${{ inputs.tracy == 'true' && '-p' || '' }} -r ${{ inputs.retries }}
+          ./tests/scripts/tt_bisect.sh -t ${{ inputs.timeout }} -f "${{ inputs.command }}" -b ${{ inputs.bad-commit }} -g ${{ inputs.good-commit }} ${{ inputs.tracy == 'true' && '-p' || '' }} ${{ inputs.non-deterministic == 'true' && '-n' || '' }} -r ${{ inputs.retries }}
+
+      - name: Upload pass-rate CSV
+        if: ${{ inputs.non-deterministic == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: bisect-pass-rates
+          path: generated/bisect_pass_rates.csv
+          if-no-files-found: ignore

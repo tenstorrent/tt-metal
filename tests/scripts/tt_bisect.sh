@@ -11,6 +11,7 @@ Usage:
   -t TIMEOUT     : per-iteration timeout (default 30m)
   -p             : enable Tracy profiling
   -r RETRIES     : number of retries (default 3)
+  -n             : non-deterministic mode (run exactly RETRIES, any failure => bad; record pass rate)
 END
 
 timeout_duration_iteration="30m"
@@ -19,8 +20,9 @@ good_commit=""
 bad_commit=""
 tracy_enabled=0
 retries=3
+nondeterministic=0
 
-while getopts ":f:g:b:t:pr:" opt; do
+while getopts ":f:g:b:t:pr:n" opt; do
   case "$opt" in
     f) test="$OPTARG" ;;
     g) good_commit="$OPTARG" ;;
@@ -28,6 +30,7 @@ while getopts ":f:g:b:t:pr:" opt; do
     t) timeout_duration_iteration="$OPTARG" ;;
     p) tracy_enabled=1 ;;
     r) retries="$OPTARG" ;;
+    n) nondeterministic=1 ;;
     \?) die "Invalid option: -$OPTARG" ;;
     :)  die "Option -$OPTARG requires an argument." ;;
   esac
@@ -44,6 +47,9 @@ echo "ARCH_NAME: ${ARCH_NAME:-}"
 echo "pwd: $(pwd)"
 if [ "$tracy_enabled" -eq 1 ]; then
   echo "Tracy profiling enabled for builds."
+fi
+if [ "$nondeterministic" -eq 1 ]; then
+  echo "Non-deterministic mode enabled: will run exactly $retries attempts per commit and record pass rates."
 fi
 
 # Creating virtual environment where we can install ttnn
@@ -125,58 +131,99 @@ while [[ "$found" == "false" ]]; do
   echo "::endgroup::"
 
   echo "::group::Testing $rev"
-  timeout_rc=1
-  max_retries=$retries
-  attempt=1
   output_file="bisect_test_output.log"
-  while [ $attempt -le $max_retries ]; do
-    echo "Attempt $attempt on $(git rev-parse HEAD) - need $attempt consecutive successes"
-    consecutive_successes=0
-    required_successes=$attempt
 
-    # Run the test $attempt times and count consecutive successes from the end
-    for run in $(seq 1 $attempt); do
-      echo "Run $run/$attempt: $test"
+  # Prepare CSV logging when in non-deterministic mode
+  csv_path="generated/bisect_pass_rates.csv"
+  if [ "$nondeterministic" -eq 1 ]; then
+    mkdir -p "$(dirname "$csv_path")"
+    if [ ! -f "$csv_path" ]; then
+      echo "commit_sha,short_rev,attempts,successes,pass_rate_percent,result" > "$csv_path"
+    fi
+  fi
+
+  if [ "$nondeterministic" -eq 1 ]; then
+    attempts=$retries
+    successes=0
+    failures=0
+    saw_timeout=0
+    for run in $(seq 1 $attempts); do
+      echo "Run $run/$attempts: $test"
       if timeout -k 10s "$timeout_duration_iteration" bash -lc "$test" 2>&1 | tee "$output_file"; then
-        consecutive_successes=$((consecutive_successes + 1))
-        echo "Success $consecutive_successes/$required_successes"
+        successes=$((successes + 1))
+        echo "Success $successes/$attempts"
       else
-        timeout_rc=$?
-        echo "Test failed (code $timeout_rc) - resetting consecutive count"
+        rc=$?
+        failures=$((failures + 1))
+        echo "Test failed (code $rc)"
         echo "--- Logs (run $run) ---"
         sed -n '1,200p' "$output_file" || true
         echo "------------------------------"
-        consecutive_successes=0
-        # Continue running remaining tests to get more diagnostic info
+        if [ $rc -eq 124 ] || [ $rc -eq 137 ] || [ $rc -eq 143 ]; then
+          saw_timeout=1
+        fi
       fi
     done
 
-    if [ $consecutive_successes -eq $required_successes ]; then
-      timeout_rc=0
-      echo "PASSED: Got $consecutive_successes consecutive successes as required"
-      echo "--- Final Logs ---"
-      sed -n '1,200p' "$output_file" || true
-      echo "------------------------------"
-      break
-    else
-      echo "FAILED: Only got $consecutive_successes consecutive successes, needed $required_successes"
-      echo "--- Final Logs ---"
-      sed -n '1,200p' "$output_file" || true
-      echo "------------------------------"
-      attempt=$((attempt+1))
+    pass_rate_percent=$(( successes * 100 / attempts ))
+    result="good"
+    if [ $failures -gt 0 ]; then
+      result="bad"
     fi
-  done
-  echo "Final exit code: $timeout_rc"
+    if [ $saw_timeout -eq 1 ]; then
+      result="skip"
+    fi
+
+    echo "Pass rate for $rev: $successes/$attempts (${pass_rate_percent}%) => $result"
+    if [ -f "$csv_path" ]; then
+      echo "$(git rev-parse HEAD),$rev,$attempts,$successes,$pass_rate_percent,$result" >> "$csv_path"
+    fi
+  else
+    # Normal mode: stop on first success, up to $retries attempts
+    attempts=$retries
+    successes=0
+    last_rc=1
+    for run in $(seq 1 $attempts); do
+      echo "Run $run/$attempts: $test"
+      if timeout -k 10s "$timeout_duration_iteration" bash -lc "$test" 2>&1 | tee "$output_file"; then
+        successes=$((successes + 1))
+        last_rc=0
+        echo "Success on attempt $run; stopping early"
+        echo "--- Final Logs ---"
+        sed -n '1,200p' "$output_file" || true
+        echo "------------------------------"
+        break
+      else
+        last_rc=$?
+        echo "Test failed (code $last_rc)"
+        echo "--- Logs (run $run) ---"
+        sed -n '1,200p' "$output_file" || true
+        echo "------------------------------"
+      fi
+    done
+  fi
   echo "::endgroup::"
 
-  if [ $timeout_rc -eq 0 ]; then
-    out="$(git bisect good || true)"
-  elif [ $timeout_rc -eq 124 ] || [ $timeout_rc -eq 137 ] || [ $timeout_rc -eq 143 ]; then
-    echo "Timeout/kill detected; skipping this commit"
-    git bisect skip
-    continue
+  if [ "$nondeterministic" -eq 1 ]; then
+    if [ "$result" = "skip" ]; then
+      echo "Timeout/kill detected; skipping this commit"
+      git bisect skip
+      continue
+    elif [ "$result" = "good" ]; then
+      out="$(git bisect good || true)"
+    else
+      out="$(git bisect bad || true)"
+    fi
   else
-    out="$(git bisect bad || true)"
+    if [ $successes -ge 1 ]; then
+      out="$(git bisect good || true)"
+    elif [ $last_rc -eq 124 ] || [ $last_rc -eq 137 ] || [ $last_rc -eq 143 ]; then
+      echo "Timeout/kill detected; skipping this commit"
+      git bisect skip
+      continue
+    else
+      out="$(git bisect bad || true)"
+    fi
   fi
 
   first_line="$(printf '%s\n' "$out" | head -n1)"
