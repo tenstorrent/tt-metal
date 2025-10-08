@@ -33,6 +33,8 @@ jobs:
         test-group:
           - name: CCL APC test
             cmd: pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/all_post_commit
+          - name: Fabric Ubench test
+            cmd: TT_METAL_CLEAR_L1=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_ubench_at_least_2x2_mesh.yaml
     name: ${{ inputs.arch }} ${{ inputs.runner-label }} ${{ matrix.test-group.name }}
     runs-on:
       - in-service
