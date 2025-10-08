@@ -79,14 +79,11 @@ def infer_out_subblock(per_core_M, per_core_N, dtype=None):
         tuple: (best_h, best_w) optimal subblock dimensions
 
     Constraints:
-        - out_subblock_h * out_subblock_w <= max_product (8 for BFloat16, 4 for BFloat32)
+        - out_subblock_h * out_subblock_w <= max_product (8 for BFloat16, 4 for Float32)
         - out_subblock_h must divide per_core_M evenly
         - out_subblock_w must divide per_core_N evenly
         - out_subblock_w must equal per_core_N OR out_subblock_h must equal 1
     """
-    # Input validation
-    if per_core_M <= 0 or per_core_N <= 0:
-        raise ValueError(f"Dimensions must be positive: got M={per_core_M}, N={per_core_N}")
 
     # Determine max product based on data type
     max_product = 4 if dtype == ttnn.float32 else 8
@@ -479,3 +476,135 @@ class Conv_fallback:
         tt_output = ttnn.from_torch(torch_output_nhwc, device=device, dtype=self.dtype, layout=self.output_layout)
 
         return tt_output, out_h, out_w
+
+
+class Linear:
+    def __init__(self, linear_weight, linear_bias, linear_pt, dtype=ttnn.bfloat16) -> None:
+        self.linear_weight = linear_weight
+        self.linear_bias = linear_bias
+        self.output_dtype = dtype
+
+        self.nhw = linear_pt["nhw"]
+        self.height_sharding = linear_pt["height_sharding"]
+        self.nhw = linear_pt["nhw"]
+        self.in_ch = linear_pt["in_channels"]
+        self.out_ch = linear_pt["out_channels"]
+
+        # Set sharding layout based on configuration
+        if self.height_sharding:
+            self.shard_layout = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+        else:
+            self.shard_layout = ttnn.TensorMemoryLayout.BLOCK_SHARDED
+
+    def get_program_config(self, device):
+        compute_grid = device.compute_with_storage_grid_size()
+        self.core_grid = ttnn.CoreGrid(y=compute_grid.y, x=compute_grid.x)
+        total_cores = self.core_grid.x * self.core_grid.y
+
+        if self.shard_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
+            self.per_core_M = math.ceil((self.nhw // ttnn.TILE_SIZE) / total_cores)
+            self.per_core_N = math.ceil(self.out_ch // ttnn.TILE_SIZE)
+
+            self.in0_block_w = 8
+            self.out_subblock = infer_out_subblock(self.per_core_M, self.per_core_N)
+            self.out_block = (self.per_core_M, self.per_core_N)
+
+            self.shard_height = self.per_core_M * ttnn.TILE_SIZE
+            self.in_shard_width = (self.in_ch + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE * ttnn.TILE_SIZE
+            self.out_shard_width = self.per_core_N * ttnn.TILE_SIZE
+
+            return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                compute_with_storage_grid_size=(self.core_grid.x, self.core_grid.y),
+                in0_block_w=self.in0_block_w,
+                out_subblock_h=self.out_subblock[0],
+                out_subblock_w=self.out_subblock[1],
+                per_core_M=self.per_core_M,
+                per_core_N=self.per_core_N,
+                out_block_h=self.out_block[0],
+                out_block_w=self.out_block[1],
+                fuse_batch=True,
+                fused_activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
+                mcast_in0=False,
+            )
+        elif self.shard_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED:
+            self.per_core_M = math.ceil((self.nhw // ttnn.TILE_SIZE) / self.core_grid.y)
+            self.per_core_N = math.ceil((self.out_ch // ttnn.TILE_SIZE) / self.core_grid.x)
+
+            self.in0_block_w = 4
+
+            self.out_subblock = infer_out_subblock(self.per_core_M, self.per_core_N)
+            self.out_block = (self.per_core_M, self.per_core_N)
+
+            self.shard_height = self.per_core_M * ttnn.TILE_SIZE
+            self.in_shard_width = (
+                (self.in_ch // self.core_grid.x + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE * ttnn.TILE_SIZE
+            )
+            self.out_shard_width = self.per_core_N * ttnn.TILE_SIZE
+
+            print(
+                f"Linear BLOCK_SHARDED: {self.per_core_M=}, {self.per_core_N=}, {self.out_subblock=}, {self.shard_height=}, {self.in_shard_width=}, {self.out_shard_width=}"
+            )
+
+            return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                compute_with_storage_grid_size=(self.core_grid.x, self.core_grid.y),
+                in0_block_w=self.in0_block_w,
+                out_subblock_h=self.out_subblock[0],
+                out_subblock_w=self.out_subblock[1],
+                per_core_M=self.per_core_M,
+                per_core_N=self.per_core_N,
+                out_block_h=self.out_block[0],
+                out_block_w=self.out_block[1],
+                fused_activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
+                transpose_mcast=False,
+            )
+        else:
+            return None
+
+    def __call__(self, input_tensor, device):
+        self.device = device
+
+        program_config = self.get_program_config(device)
+
+        if self.shard_layout is ttnn.TensorMemoryLayout.BLOCK_SHARDED:
+            memory_config = ttnn.create_sharded_memory_config(
+                (self.shard_height, self.in_shard_width),
+                self.core_grid,
+                ttnn.ShardStrategy.HEIGHT
+                if self.shard_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+                else ttnn.ShardStrategy.BLOCK,
+                ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+            input_tensor = ttnn.reshard(input_tensor, output_memory_config=memory_config)
+            print(f"Resharded input tensor to {memory_config}")
+
+        memory_config = ttnn.create_sharded_memory_config(
+            (self.shard_height, self.out_shard_width),
+            self.core_grid,
+            ttnn.ShardStrategy.HEIGHT
+            if self.shard_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+            else ttnn.ShardStrategy.BLOCK,
+            ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+        compute_config = ttnn.init_device_compute_kernel_config(
+            self.device.arch(),
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=True,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=False,
+            dst_full_sync_en=False,
+        )
+
+        output_tensor = ttnn.linear(
+            input_tensor,
+            self.linear_weight,
+            bias=self.linear_bias,
+            program_config=program_config,
+            memory_config=memory_config,
+            dtype=self.output_dtype,
+            compute_kernel_config=compute_config,
+        )
+
+        return output_tensor

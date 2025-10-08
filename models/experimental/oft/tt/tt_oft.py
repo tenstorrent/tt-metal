@@ -1,6 +1,7 @@
 import ttnn
 import torch
 import torch.nn.functional as F
+import math
 from loguru import logger
 
 try:
@@ -13,41 +14,14 @@ except ModuleNotFoundError:
 from models.experimental.oft.reference.oft import EPSILON
 from models.experimental.oft.reference.utils import perspective
 
-from models.experimental.oft.tt.common import infer_out_subblock, infer_per_core_dims, calculate_matmul_shard_dims
+from models.experimental.oft.tt.common import (
+    Linear,
+)
 
+GRID_SAMPLE_NHW = 159 * 159
 PAD_AMOUNT = 63
 PAD_VALUE = 0.0
 NUM_SLICES = 18
-
-
-def get_matmul_config(core_grid, in0_block_w, out_subblock, per_core_M, per_core_N, out_block, sharding_strategy):
-    if sharding_strategy == "height":
-        return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=(core_grid.x, core_grid.y),
-            in0_block_w=in0_block_w,
-            out_subblock_h=out_subblock[0],
-            out_subblock_w=out_subblock[1],
-            per_core_M=per_core_M,
-            per_core_N=per_core_N,
-            out_block_h=out_block[0],
-            out_block_w=out_block[1],
-            fuse_batch=True,
-            fused_activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
-            mcast_in0=False,
-        )
-    else:
-        return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=(core_grid.x, core_grid.y),
-            in0_block_w=in0_block_w,
-            out_subblock_h=out_subblock[0],
-            out_subblock_w=out_subblock[1],
-            per_core_M=per_core_M,
-            per_core_N=per_core_N,
-            out_block_h=out_block[0],
-            out_block_w=out_block[1],
-            fused_activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
-            transpose_mcast=False,
-        )
 
 
 def split_tensor(tensor, num_slices, dim=1):
@@ -189,7 +163,6 @@ def calculate_initialization_parameters(
         area_tt,
         [batch, height, depth, width],
     )
-    # return area_tt
 
 
 class OFT:
@@ -242,10 +215,12 @@ class OFT:
             num_slices=num_slices,
         )
 
-        in_channels = self.linear_weight.shape[0]
-        self.linear_weight = ttnn.reshape(self.linear_weight, [in_channels // self.shape[1], self.shape[1], channels])
+        self.in_channels = self.linear_weight.shape[0]
+        self.linear_weight = ttnn.reshape(
+            self.linear_weight, [self.in_channels // self.shape[1], self.shape[1], channels]
+        )
         self.linear_weight = ttnn.permute(self.linear_weight, (1, 0, 2))
-        self.linear_weight = ttnn.reshape(self.linear_weight, [in_channels, channels])
+        self.linear_weight = ttnn.reshape(self.linear_weight, [self.in_channels, channels])
 
         # integral_image_quantization_strategy
         # None - no quantization
@@ -258,8 +233,16 @@ class OFT:
             self.postscaler = ttnn.from_torch(torch.tensor(1 / 1024 / 1024), device=device, dtype=ttnn.bfloat16)
 
         # Initialize sharding and linear layer configurations
+        linear_pt = {
+            "in_channels": self.in_channels,
+            "out_channels": self.linear_weight.shape[1],
+            "nhw": (GRID_SAMPLE_NHW + PAD_AMOUNT) // self.num_slices,
+            "height_sharding": False,
+        }
+
         self._setup_sharding_configs()
         self._setup_linear_configs()
+        self.linear_layer = Linear(self.linear_weight, self.linear_bias, linear_pt)
 
     def _setup_sharding_configs(self):
         """Setup sharding configurations for slicing operations"""
@@ -273,28 +256,6 @@ class OFT:
             else ttnn.TensorMemoryLayout.BLOCK_SHARDED
         )
         self.shard_orientation = ttnn.ShardOrientation.ROW_MAJOR
-
-    def _setup_linear_configs(self):
-        """Setup configurations for linear layer operations"""
-        # Linear layer parameters
-        self.in0_block_w = 8
-        self.out_subblock = infer_out_subblock(4, 8)
-        print(f"Using out_subblock: {self.out_subblock}")
-
-        # Data types
-        self.input_dtype = ttnn.bfloat16
-        self.output_dtype = ttnn.bfloat16
-        self.weight_dtype = ttnn.bfloat16
-
-        # Compute configuration
-        self.compute_config = ttnn.init_device_compute_kernel_config(
-            self.device.arch(),
-            math_fidelity=ttnn.MathFidelity.LoFi,
-            math_approx_mode=True,
-            fp32_dest_acc_en=False,
-            packer_l1_acc=False,
-            dst_full_sync_en=False,
-        )
 
     def create_sharded_tensor(
         self,
@@ -399,55 +360,6 @@ class OFT:
 
         return sharded_tensor
 
-    def _calculate_dynamic_configs(self, n, h, w, in_ch, out_ch):
-        """Calculate dynamic configurations based on tensor dimensions"""
-        w_sliced = w // self.num_slices
-
-        # Calculate per-core dimensions
-        per_core_M, per_core_N = infer_per_core_dims(
-            n, h, w_sliced, in_ch, out_ch, self.core_grid, ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-        )
-        print(f"Calculated per_core_M: {per_core_M}, per_core_N: {per_core_N}")
-        # Calculate shard dimensions
-        shard_height, in_shard_width, out_shard_width = calculate_matmul_shard_dims(
-            per_core_M, per_core_N, in_ch, out_ch, self.core_grid, self.sharding_strategy
-        )
-
-        out_block = (per_core_M, per_core_N)
-
-        # Matmul configuration
-        matmul_config = get_matmul_config(
-            self.core_grid,
-            self.in0_block_w,
-            self.out_subblock,
-            per_core_M,
-            per_core_N,
-            out_block,
-            self.sharding_strategy,
-        )
-
-        # Shard strategy
-        shard_strategy = ttnn.ShardStrategy.HEIGHT if self.sharding_strategy == "height" else ttnn.ShardStrategy.BLOCK
-
-        # Output memory configuration
-        output_mem_config = ttnn.create_sharded_memory_config(
-            (shard_height, out_shard_width),
-            self.core_grid,
-            shard_strategy,
-            ttnn.ShardOrientation.ROW_MAJOR,
-            use_height_and_width_as_shard_shape=True,
-        )
-
-        return {
-            "per_core_M": per_core_M,
-            "per_core_N": per_core_N,
-            "shard_height": shard_height,
-            "in_shard_width": in_shard_width,
-            "out_shard_width": out_shard_width,
-            "matmul_config": matmul_config,
-            "output_mem_config": output_mem_config,
-        }
-
     def forward(self, device, features, calib, grid):
         if use_signpost:
             signpost(header="OFT block started")
@@ -477,37 +389,32 @@ class OFT:
         logger.debug(f"Integral image shape: {integral_image.shape}")
         logger.debug(f"Bounding box corners shape: {self.bbox_corners[0][0].shape}")
 
-        # Process grid samples for all slices
-        top_left_slices = []
-        btm_right_slices = []
-        top_right_slices = []
-        btm_left_slices = []
-
         grid_size = self.device.compute_with_storage_grid_size()
         core_grid = ttnn.CoreGrid(y=grid_size.y, x=grid_size.x)
 
-        n, h, w, in_ch = [1, 1, 25344, 1792]
+        n, h, w, in_ch = [1, 1, GRID_SAMPLE_NHW + PAD_AMOUNT, self.in_channels]  # features.shape
 
         # Get output channels from linear weight
         print(f"Linear weight shape: {self.linear_weight.shape}")
         out_ch = self.linear_weight.shape[1]
 
         # Calculate dynamic configurations based on tensor dimensions
-        configs = self._calculate_dynamic_configs(n, h, w, in_ch, out_ch)
+        grid_sample_shard_height = (
+            math.ceil(n * h * w // (self.num_slices * ttnn.TILE_SIZE) / (core_grid.y * core_grid.x)) * ttnn.TILE_SIZE
+        )
+        grid_sample_shard_width = math.ceil(in_ch // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+
+        logger.debug(
+            f"Grid sample shard dimensions - height: {grid_sample_shard_height}, width: {grid_sample_shard_width}, "
+            f"core_grid: {core_grid}"
+        )
 
         grid_sample_memory_config = ttnn.create_sharded_memory_config(
-            (configs["shard_height"], configs["in_shard_width"]),
+            (grid_sample_shard_height, grid_sample_shard_width),
             core_grid,
             ttnn.ShardStrategy.HEIGHT,
             ttnn.ShardOrientation.ROW_MAJOR,
             use_height_and_width_as_shard_shape=True,
-        )
-
-        print(configs)
-
-        logger.debug(f"OFT Block per_core_M: {configs['per_core_M']}, per_core_N: {configs['per_core_N']}")
-        logger.debug(
-            f"OFT Block shard_height: {configs['shard_height']}, in_shard_width: {configs['in_shard_width']}, out_shard_width: {configs['out_shard_width']}"
         )
 
         out_initial = torch.randn([n, h, w, out_ch], dtype=torch.float32)
@@ -525,7 +432,6 @@ class OFT:
                 memory_config=grid_sample_memory_config,
             )
             vox_feats_slice = ttnn.to_layout(vox_feats_slice, ttnn.TILE_LAYOUT)
-            # vox_feats_slice = ttnn.move(vox_feats_slice)
 
             # Top right corner slice
             top_right_slice = ttnn.grid_sample(
@@ -539,7 +445,6 @@ class OFT:
             top_right_slice = ttnn.to_layout(top_right_slice, ttnn.TILE_LAYOUT)
             ttnn.sub_(vox_feats_slice, top_right_slice)
             ttnn.deallocate(top_right_slice)
-            # vox_feats_slice = ttnn.move(vox_feats_slice)
 
             # Bottom right corner slice
             btm_right_slice = ttnn.grid_sample(
@@ -553,7 +458,6 @@ class OFT:
 
             ttnn.add_(vox_feats_slice, btm_right_slice)
             ttnn.deallocate(btm_right_slice)
-            # vox_feats_slice = ttnn.move(vox_feats_slice)
 
             # Bottom left corner slice
             btm_left_slice = ttnn.grid_sample(
@@ -566,7 +470,6 @@ class OFT:
             btm_left_slice = ttnn.to_layout(btm_left_slice, ttnn.TILE_LAYOUT)
             ttnn.sub_(vox_feats_slice, btm_left_slice)
             ttnn.deallocate(btm_left_slice)
-            # vox_feats_slice = ttnn.move(vox_feats_slice)
 
             logger.debug(f"Voxel features slice {i} shape: {vox_feats_slice.shape}")
             logger.debug(f"Area slice {i} shape: {self.area[i].shape}")
@@ -577,15 +480,7 @@ class OFT:
             ttnn.deallocate(area_slice)
 
             vox_feats_slice = ttnn.move(vox_feats_slice)
-            vox_feats_slice = ttnn.linear(
-                vox_feats_slice,
-                self.linear_weight,
-                bias=self.linear_bias,
-                program_config=configs["matmul_config"],
-                memory_config=configs["output_mem_config"],
-                dtype=self.output_dtype,
-                compute_kernel_config=self.compute_config,
-            )
+            vox_feats_slice = self.linear_layer(vox_feats_slice, device)
 
             ttnn.sharded_to_interleaved_partial(
                 vox_feats_slice, ortho_feats, self.num_slices, i, memory_config=ttnn.DRAM_MEMORY_CONFIG
