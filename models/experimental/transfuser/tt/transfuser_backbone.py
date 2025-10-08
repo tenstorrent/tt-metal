@@ -11,10 +11,14 @@ from models.experimental.transfuser.tt.bottleneck import TTRegNetBottleneck
 class TtTransfuserBackbone:
     def __init__(
         self,
+        device,
         parameters,
         stride,
         model_config,
+        config,
     ) -> None:
+        self.device = device
+        self.config = config
         self.inplanes = 32
         self.conv1 = TTConv2D(
             kernel_size=3,
@@ -68,6 +72,22 @@ class TtTransfuserBackbone:
             model_config=model_config,
             stage_name="layer1",
         )
+
+        # self.transformer1 = TTGpt(
+        #     device=self.device,
+        #     parameters=parameters["transformer1"],
+        #     n_head=config.n_head,
+        #     n_layer=config.n_layer,
+        #     use_velocity=config.use_velocity,
+        #     img_vert_anchors=config.img_vert_anchors,
+        #     img_horz_anchors=config.img_horz_anchors,
+        #     lidar_vert_anchors=config.lidar_vert_anchors,
+        #     lidar_horz_anchors=config.lidar_horz_anchors,
+        #     seq_len=config.seq_len,
+        #     n_embd=72,  # layer1 output channels
+        #     dtype=ttnn.bfloat16,
+        #     memory_config=ttnn.L1_MEMORY_CONFIG,
+        # )
 
     def _make_layer(
         self,
@@ -180,4 +200,35 @@ class TtTransfuserBackbone:
         for block in self.lidar_layer1:
             lidar_out = block(lidar_out, device)
 
-        return image_out, lidar_out
+        logger.info(f"img_avgpool")
+
+        image_h = image_out.shape[1]
+        image_w = image_out.shape[2]
+        image_c = image_out.shape[3]
+
+        image_features_flat = ttnn.reshape(image_out, (1, 1, image_out.shape[0] * image_h * image_w, image_c))
+        image_embd_layer1 = ttnn.adaptive_avg_pool2d(
+            input_tensor=image_features_flat,
+            batch_size=image_out.shape[0],
+            input_h=image_h,
+            input_w=image_w,
+            channels=image_c,
+            output_size=[self.config.img_vert_anchors, self.config.img_horz_anchors],
+        )
+        logger.info(f"lidar_avgpool")
+        lidar_h = lidar_out.shape[1]
+        lidar_w = lidar_out.shape[2]
+        lidar_c = lidar_out.shape[3]
+
+        lidar_features_flat = ttnn.reshape(lidar_out, (1, 1, lidar_out.shape[0] * lidar_h * lidar_w, lidar_c))
+
+        lidar_embd_layer1 = ttnn.adaptive_avg_pool2d(
+            input_tensor=lidar_features_flat,
+            batch_size=lidar_out.shape[0],
+            input_h=lidar_h,
+            input_w=lidar_w,
+            channels=lidar_c,
+            output_size=[self.config.lidar_vert_anchors, self.config.lidar_horz_anchors],
+        )
+
+        return image_embd_layer1, lidar_embd_layer1

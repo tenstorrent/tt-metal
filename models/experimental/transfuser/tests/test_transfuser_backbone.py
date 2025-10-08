@@ -98,9 +98,11 @@ class TransfuserBackboneInfra:
 
         # Build TTNN model
         self.ttnn_model = TtTransfuserBackbone(
+            device,
             parameters=parameters,
             stride=2,
             model_config=model_config,
+            config=self.config,
         )
 
         # Run + validate
