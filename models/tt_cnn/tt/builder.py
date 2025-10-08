@@ -53,6 +53,7 @@ SliceStrategy = Union[
 ]
 
 
+@dataclass(frozen=True)
 class ShardedStrategyConfiguration:
     def get_tensor_memory_layout(self):
         ...
@@ -381,10 +382,6 @@ class UpsampleConfiguration:
                     f"Number of channels ({self.channels}) must be divisible by number of slices ({self.slice_strategy.get_num_slices()})"
                 )
 
-        # Normalize scale_factor to tuple
-        if isinstance(self.scale_factor, (int, float)):
-            object.__setattr__(self, "scale_factor", (self.scale_factor, self.scale_factor))
-
         # Validate mode
         supported_modes = {"nearest", "bilinear"}
         if self.mode not in supported_modes:
@@ -403,6 +400,9 @@ class UpsampleConfiguration:
         scale_factor = torch_layer.scale_factor
         if isinstance(scale_factor, (list, tuple)):
             scale_factor = tuple(scale_factor)
+        elif isinstance(scale_factor, (int, float)):
+            # Normalize single number to tuple for consistency
+            scale_factor = (scale_factor, scale_factor)
         mode = torch_layer.mode
         return cls(
             input_height=input_height,
