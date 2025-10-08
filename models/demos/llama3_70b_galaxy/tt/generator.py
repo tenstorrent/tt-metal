@@ -283,15 +283,6 @@ class Generator:
         logger.info("Done Compiling Model")
 
         device_inputs = copy_host_to_device(host_inputs, mesh_device=self.mesh_device)
-        transformed_inputs = self.model.transform_prefill_inputs_device(*device_inputs)
-        tt_out_trace = self.model.ttnn_prefill_forward(
-            *transformed_inputs, kv_cache=kv_cache, get_last_token=last_token_idx, batch_size=batch_size
-        )
-
-        device_inputs = copy_host_to_device(host_inputs, mesh_device=self.mesh_device)
-        transformed_inputs = self.model.transform_prefill_inputs_device(*device_inputs)
-
-        device_inputs = copy_host_to_device(host_inputs, mesh_device=self.mesh_device)
         trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
         transformed_inputs = self.model.transform_prefill_inputs_device(*device_inputs)
         tt_out_trace = self.model.ttnn_prefill_forward(
