@@ -213,22 +213,19 @@ def run_max_pool2d_with_indices(
         act, golden_indices, indices_pytorch, kernel_size, stride, padding, dilation, dtype
     )
 
-    # For bfloat8: use torch.allclose and PCC check
-    # For bfloat16: use torch.equal, no PCC check necessary
-    # For max pool the bfloat16 values should be exactly equal (unlike average pool)
+    # Assert all validations as requested by colleague:
+
+    # 1. Output validation: allclose for bfloat8, equal for bfloat16
     if dtype == ttnn.bfloat8_b:
         assert output_allclose, "Reference and output tensor are not close"
-        pcc_result = check_with_pcc(output_pytorch, golden_pytorch, pcc=0.998)
     else:  # bfloat16
         assert output_isequal, "Reference and output tensor are not equal"
-        pcc_result = [True, 1.0]  # Perfect match for bfloat16
 
-    # For indices, use proper validation that checks:
-    # 1. Values pointed to by indices are identical
-    # 2. Both indices are within the same kernel window
-    # Only fail on actual errors, not tie-breaking differences
+    # 2. PCC check (do for both dtypes, even though bfloat16 should always be 1)
+    pcc_result = check_with_pcc(output_pytorch, golden_pytorch, pcc=0.998)
+    assert pcc_result[0], f"PCC check failed: {pcc_result[1]}"
+
+    # 3. Indices validation
     assert (
         indices_valid
     ), f"Indices validation failed with {actual_errors} actual errors (tie-breaking differences: {tie_breaking_diffs})"
-
-    return [pcc_result, e2e_perf, indices_valid]

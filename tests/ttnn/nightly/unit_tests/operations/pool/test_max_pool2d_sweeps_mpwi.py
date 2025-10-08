@@ -86,7 +86,8 @@ def test_max_pool2d_with_indices_sweep(device, dtype, input_spec):
 
     # All included test cases are verified to work with AUTO SHARDING
     # Based on comprehensive testing of GitHub issue traces using auto sharding
-    pcc_result, perf_result, indices_valid = run_max_pool2d_with_indices(
+    # All validation (output, PCC, indices) is handled inside run_max_pool2d_with_indices function
+    run_max_pool2d_with_indices(
         in_n,
         in_c,
         in_h,
@@ -105,6 +106,4 @@ def test_max_pool2d_with_indices_sweep(device, dtype, input_spec):
         ceil_mode,
     )
 
-    # Verify test passed successfully
-    assert pcc_result[0], f"PCC check failed: {pcc_result[1]}"
-    assert indices_valid, "Indices validation failed"
+    # If we reach here, all assertions in run_max_pool2d_with_indices passed successfully
