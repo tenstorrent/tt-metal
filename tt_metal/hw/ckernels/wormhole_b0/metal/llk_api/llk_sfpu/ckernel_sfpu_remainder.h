@@ -41,8 +41,8 @@ inline void calculate_remainder(const uint value, const uint recip) {
         // We effectively round off the fractional bits to zero by right shifting using (exp - 23) and then left
         // shifting it back using (0 - (exp - 23)).
         v_elseif(exp < 23) {
-            quotient = reinterpret<sfpi::vFloat>(
-                shft((shft(reinterpret<sfpi::vUInt>(v * recip_val), (exp - 23))), (0 - (exp - 23))));
+            quotient = sfpi::reinterpret<sfpi::vFloat>(
+                shft((shft(sfpi::reinterpret<sfpi::vUInt>(v * recip_val), (exp - 23))), (0 - (exp - 23))));
         }
         v_else { quotient = v * recip_val; }
         v_endif

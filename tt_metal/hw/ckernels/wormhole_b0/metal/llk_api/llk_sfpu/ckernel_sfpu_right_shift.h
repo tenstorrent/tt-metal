@@ -16,11 +16,11 @@ inline void calculate_right_shift(const uint shift_amt) {
 #pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vInt input = sfpi::dst_reg[0];
-        sfpi::vUInt val = reinterpret<sfpi::vUInt>(input);
+        sfpi::vUInt val = sfpi::reinterpret<sfpi::vUInt>(input);
 
         v_if(input < 0) { val = setsgn(val - 1, 0); }
         v_endif;
-        sfpi::vInt res = reinterpret<sfpi::vInt>(val >> shift_amt);
+        sfpi::vInt res = sfpi::reinterpret<sfpi::vInt>(val >> shift_amt);
 
         v_if(input < 0) { res = setsgn(res + 1, input); }
         v_endif;
