@@ -75,7 +75,7 @@ def test_all_to_all_dispatch_no_trace(
 
     if num_links == "MAX_LINKS":
         num_links = 1
-    submesh_device = bh_1d_mesh_device.create_submesh(ttnn.MeshShape((num_devices,1)))
+    submesh_device = bh_1d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
     run_all_to_all_dispatch_test(
         submesh_device,
         mesh_shape,
@@ -164,7 +164,7 @@ def test_all_to_all_dispatch_trace(
 
     if num_links == "MAX_LINKS":
         num_links = 1
-    submesh_device = bh_1d_mesh_device.create_submesh(ttnn.MeshShape((num_devices,1)))
+    submesh_device = bh_1d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
     run_all_to_all_dispatch_test(
         submesh_device,
         mesh_shape,

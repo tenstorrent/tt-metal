@@ -81,7 +81,7 @@ def test_all_to_all_combine_trace(
     devices = num_devices
     batch = batches_per_device * devices
     experts = experts_per_device * devices
-    submesh_device = bh_1d_mesh_device.create_submesh(ttnn.MeshShape((num_devices,1)))
+    submesh_device = bh_1d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
 
     trace_all_to_all_combine(
         submesh_device,
@@ -137,7 +137,7 @@ def test_all_to_all_combine_trace(
     ],
     indirect=["device_params"],
 )
-@pytest.mark.parametrize("num_devices, mesh_shape", [(4,(4,1)),(8,(8,1))])
+@pytest.mark.parametrize("num_devices, mesh_shape", [(4, (4, 1)), (8, (8, 1))])
 @pytest.mark.parametrize("batches_per_device", [8])
 @pytest.mark.parametrize("experts_per_device", [8])
 @pytest.mark.parametrize("select_experts_k", [8])
@@ -175,7 +175,7 @@ def test_all_to_all_combine_no_trace(
     experts = experts_per_device * devices
 
     bh_1d_mesh_device.disable_and_clear_program_cache()
-    submesh_device = bh_1d_mesh_device.create_submesh(ttnn.MeshShape((num_devices,1)))
+    submesh_device = bh_1d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
 
     run_all_to_all_combine_test(
         submesh_device,
