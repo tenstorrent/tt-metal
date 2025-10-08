@@ -50,14 +50,47 @@ void kernel_main() {
            << ", N_start_block: " << N_start_block << ", N_end_block: " << N_end_block << ENDL();
 
     constexpr uint32_t N_num_blocks = N_end_block - N_start_block + 1;
-
+    constexpr uint32_t N_local_block_offset = N_start_block / N_num_blocks;
+    constexpr uint32_t num_cores_y = (N_tiles / N_block_tiles) / N_num_blocks;
+    constexpr uint32_t K_blocks_per_core_y = K_num_blocks / num_cores_y;
+    // constexpr uint32_t defer_write_k_block = N_local_block_offset % K_num_blocks;
+    constexpr uint32_t defer_write_k_block = N_local_block_offset * K_blocks_per_core_y;
     bool k_forward = true;
     bool n_forward = true;
     bool reuse_block = false;
+
+    uint32_t defer_write_m_block = 0;
+    uint32_t defer_write_n_block = 0;
+    bool defer_write = false;
+
     for (uint32_t m_block = M_start_block; m_block <= M_end_block; m_block++) {
         for (uint32_t n_block_iter = 0; n_block_iter < N_num_blocks; n_block_iter++) {
             uint32_t n_block = n_forward ? N_start_block + n_block_iter : N_end_block - n_block_iter;
             for (uint32_t k_block_iter = 0; k_block_iter < K_num_blocks; k_block_iter++) {
+                if (defer_write && k_block_iter == defer_write_k_block) {
+                    cb_wait_front(cb_id_in1_dm_out, out_block_num_tiles);
+#ifndef SKIP_OUT
+                    if constexpr (is_output_writer) {
+                        uint32_t out_read_ptr = get_read_ptr(cb_id_in1_dm_out);
+                        // safe_print_bf16_tile(out_read_ptr);
+                        DPRINT << "in1recv: write out on defer_write_m_block: " << defer_write_m_block
+                               << ", defer_write_n_block: " << defer_write_n_block << ENDL();
+                        for (uint32_t m = 0; m < M_block_tiles; m++) {
+                            uint32_t m_id = defer_write_m_block * M_block_tiles + m;
+                            for (uint32_t n = 0; n < N_block_tiles; n++) {
+                                uint32_t n_id = defer_write_n_block * N_block_tiles + n;
+                                uint32_t tile_id = m_id * N_tiles + n_id;
+                                // DPRINT << "write out tile " << tile_id << ENDL();
+                                noc_async_write_tile(tile_id, out_reader, out_read_ptr);
+                                out_read_ptr += input_tile_size;
+                            }
+                        }
+                        noc_async_writes_flushed();
+                    }
+#endif
+                    cb_pop_front(cb_id_in1_dm_out, out_block_num_tiles);
+                }
+
                 uint32_t k_block = k_forward ? k_block_iter : (K_num_blocks - 1) - k_block_iter;
                 DPRINT << "in1recv: read in1 on m_block: " << m_block << ", n_block: " << n_block
                        << ", k_block: " << k_block << ENDL();
@@ -76,28 +109,39 @@ void kernel_main() {
                 cb_push_back(cb_id_in1, in1_block_num_tiles);
             }
             k_forward = !k_forward;
-            // We have an output block to write out
-            cb_wait_front(cb_id_in1_dm_out, out_block_num_tiles);
 
-            if constexpr (is_output_writer) {
+            defer_write_m_block = m_block;
+            defer_write_n_block = n_block;
+            /**
+             * If this isn't the last output block, defer writing until the defer_k_write_block iteration
+             * of the next output block.
+             */
+            defer_write = !((m_block == M_end_block) && (n_block_iter == (N_num_blocks - 1)));
+
+            if (!defer_write) {
+                // We have an output block to write out
+                cb_wait_front(cb_id_in1_dm_out, out_block_num_tiles);
+
+                if constexpr (is_output_writer) {
 #ifndef SKIP_OUT
-                uint32_t out_read_ptr = get_read_ptr(cb_id_in1_dm_out);
-                // safe_print_bf16_tile(out_read_ptr);
-                DPRINT << "in1recv: write out on m_block: " << m_block << ", n_block: " << n_block << ENDL();
-                for (uint32_t m = 0; m < M_block_tiles; m++) {
-                    uint32_t m_id = m_block * M_block_tiles + m;
-                    for (uint32_t n = 0; n < N_block_tiles; n++) {
-                        uint32_t n_id = n_block * N_block_tiles + n;
-                        uint32_t tile_id = m_id * N_tiles + n_id;
-                        // DPRINT << "write out tile " << tile_id << ENDL();
-                        noc_async_write_tile(tile_id, out_reader, out_read_ptr);
-                        out_read_ptr += input_tile_size;
+                    uint32_t out_read_ptr = get_read_ptr(cb_id_in1_dm_out);
+                    // safe_print_bf16_tile(out_read_ptr);
+                    DPRINT << "in1recv: write out on m_block: " << m_block << ", n_block: " << n_block << ENDL();
+                    for (uint32_t m = 0; m < M_block_tiles; m++) {
+                        uint32_t m_id = m_block * M_block_tiles + m;
+                        for (uint32_t n = 0; n < N_block_tiles; n++) {
+                            uint32_t n_id = n_block * N_block_tiles + n;
+                            uint32_t tile_id = m_id * N_tiles + n_id;
+                            // DPRINT << "write out tile " << tile_id << ENDL();
+                            noc_async_write_tile(tile_id, out_reader, out_read_ptr);
+                            out_read_ptr += input_tile_size;
+                        }
                     }
-                }
-                noc_async_writes_flushed();
+                    noc_async_writes_flushed();
 #endif
+                }
+                cb_pop_front(cb_id_in1_dm_out, out_block_num_tiles);
             }
-            cb_pop_front(cb_id_in1_dm_out, out_block_num_tiles);
         }
         n_forward = !n_forward;
         // We get reuse on in1 when striding M block
