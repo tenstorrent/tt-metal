@@ -18,7 +18,7 @@ from skimage.io import imsave
 from tqdm import tqdm
 
 import ttnn
-from models.common.utility_functions import disable_persistent_kernel_cache
+from models.common.utility_functions import disable_persistent_kernel_cache, is_blackhole, is_wormhole_b0
 from models.demos.vanilla_unet.common import VANILLA_UNET_L1_SMALL_SIZE
 from models.demos.yolov9c.common import YOLOV9C_L1_SMALL_SIZE
 
@@ -173,7 +173,16 @@ def evaluation(
             logger.info(f"{key}: {val:.2f}%")
 
     if model_name == "vgg_unet":
-        from models.demos.vgg_unet.demo.demo_utils import prediction, preprocess
+        if is_blackhole():
+            from models.demos.blackhole.vgg_unet.demo.demo_utils import prediction, preprocess
+
+            output_path = "models/demos/blackhole/"
+        elif is_wormhole_b0():
+            from models.demos.wormhole.vgg_unet.demo.demo_utils import prediction, preprocess
+
+            output_path = "models/demos/wormhole/"
+        else:
+            raise RuntimeError("Unsupported device: Only Blackhole and Wormhole are supported for this test.")
 
         path = kagglehub.dataset_download("mateuszbuda/lgg-mri-segmentation")
         for dirname, _, filenames in os.walk("/kaggle/input"):
@@ -193,14 +202,14 @@ def evaluation(
         # Define the output folder
         if model_type == "torch_model":
             if (device.get_num_devices()) > 1:
-                output_folder = "models/demos/vgg_unet/demo/output_images_dp"
+                output_folder = output_path + "vgg_unet/demo/output_images_dp"
             else:
-                output_folder = "models/demos/vgg_unet/demo/output_images"
+                output_folder = output_path + "vgg_unet/demo/output_images"
         else:
             if (device.get_num_devices()) > 1:
-                output_folder = "models/demos/vgg_unet/demo/output_images_ttnn_dp"
+                output_folder = output_path + "vgg_unet/demo/output_images_ttnn_dp"
             else:
-                output_folder = "models/demos/vgg_unet/demo/output_images_ttnn"
+                output_folder = output_path + "vgg_unet/demo/output_images_ttnn"
         if not os.path.exists(output_folder):
             os.makedirs(output_folder)
 

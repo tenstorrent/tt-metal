@@ -257,9 +257,9 @@ def postprocess(df_pred, x_test, model_type):
 
     # Define the output folder
     if model_type == "torch_model":
-        output_folder = "models/demos/vgg_unet/demo/output_images"
+        output_folder = "models/demos/blackhole/vgg_unet/demo/output_images"
     else:
-        output_folder = "models/demos/vgg_unet/demo/output_images_ttnn"
+        output_folder = "models/demos/blackhole/vgg_unet/demo/output_images_ttnn"
     if not os.path.exists(output_folder):
         os.makedirs(output_folder)
 

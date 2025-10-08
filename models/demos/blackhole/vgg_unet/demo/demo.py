@@ -10,8 +10,8 @@ import pytest
 from loguru import logger
 
 from models.common.utility_functions import disable_persistent_kernel_cache
+from models.demos.blackhole.vgg_unet.demo.demo_utils import postprocess, prediction, preprocess, process_single_image
 from models.demos.vgg_unet.common import load_torch_model
-from models.demos.vgg_unet.demo.demo_utils import postprocess, prediction, preprocess, process_single_image
 from models.demos.vgg_unet.reference.vgg_unet import UNetVGG19
 from models.demos.vgg_unet.runner.performant_runner import VggUnetTrace2CQ
 
@@ -72,7 +72,7 @@ def run_demo(
                 img_path,
                 mask_path,
                 model_seg,
-                output_dir="models/demos/vgg_unet/demo/output_single_image",
+                output_dir="models/demos/blackhole/vgg_unet/demo/output_single_image",
                 model_type=model_type,
             )
         else:
@@ -80,7 +80,7 @@ def run_demo(
                 img_path,
                 mask_path,
                 vgg_unet_trace_2cq,
-                output_dir="models/demos/vgg_unet/demo/output_single_image_ttnn",
+                output_dir="models/demos/blackhole/vgg_unet/demo/output_single_image_ttnn",
                 model_type=model_type,
             )
 
