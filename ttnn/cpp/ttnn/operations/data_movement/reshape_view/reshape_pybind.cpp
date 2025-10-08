@@ -16,8 +16,6 @@ namespace ttnn::operations::data_movement {
 
 namespace detail {
 
-using ttnn::TileReshapeMapMode;
-
 template <typename data_movement_operation_t>
 void bind_reshape_view(pybind11::module& module, const data_movement_operation_t& operation, const char* doc) {
     bind_registered_operation(
