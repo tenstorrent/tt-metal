@@ -103,9 +103,8 @@ def run_tt_refiner_denoising_step(
     ) = conditioning_tensors
 
     # Create timestep tensor
-    torch_timestep_tensor = torch.tensor([timestep], dtype=torch.bfloat16)
     ttnn_timestep_tensor = ttnn.from_torch(
-        torch_timestep_tensor,
+        timestep,
         dtype=ttnn.bfloat16,
         device=ttnn_device,
         layout=ttnn.TILE_LAYOUT,
@@ -188,7 +187,7 @@ def run_torch_refiner_denoising_step(
 ):
     # Run single torch refiner denoising step for comparison
     latent_model_input = torch.cat([latents] * 2)
-    latent_model_input = scheduler.scale_model_input(latent_model_input, timestep)
+    latent_model_input = scheduler.scale_model_input(latent_model_input)
 
     # Concatenate conditioning
     encoder_hidden_states = torch.cat([negative_prompt_embeds, prompt_embeds])
@@ -320,7 +319,7 @@ def run_refiner_unet_inference(ttnn_device, is_ci_env, prompts, num_inference_st
         torch_scheduler.set_timesteps(num_inference_steps)
 
         for i, t in tqdm(enumerate(timesteps), total=len(timesteps)):
-            scaled_latents = tt_scheduler.scale_model_input(tt_latents, t)
+            scaled_latents = tt_scheduler.scale_model_input(tt_latents)
 
             # Run TT iteration
             noise_pred = run_tt_refiner_denoising_step(
@@ -331,7 +330,7 @@ def run_refiner_unet_inference(ttnn_device, is_ci_env, prompts, num_inference_st
                 conditioning_tensors=iter_conditioning_tensors,
                 guidance_scale=guidance_scale,
             )
-            tt_latents = tt_scheduler.step(noise_pred, t, tt_latents).prev_sample
+            tt_latents = tt_scheduler.step(noise_pred, sample=tt_latents).prev_sample
 
             # Run torch iteration
             torch_noise_pred = run_torch_refiner_denoising_step(
@@ -347,7 +346,7 @@ def run_refiner_unet_inference(ttnn_device, is_ci_env, prompts, num_inference_st
                 time_ids_uncond=time_ids_uncond,
                 time_ids_cond=time_ids_cond,
             )
-            torch_latents = torch_scheduler.step(torch_noise_pred, t, torch_latents).prev_sample
+            torch_latents = torch_scheduler.step(torch_noise_pred, sample=torch_latents).prev_sample
 
             ttnn.synchronize_device(ttnn_device)
 

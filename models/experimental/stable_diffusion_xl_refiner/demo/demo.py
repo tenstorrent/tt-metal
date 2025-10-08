@@ -211,12 +211,11 @@ def generate_with_refiner_compare(
     )
 
     # Denoising loop
-    for t in timesteps:
-        scaled_latents = scheduler.scale_model_input(latents, t)
+    for _ in timesteps:
+        scaled_latents = scheduler.scale_model_input(latents)
 
-        torch_timestep_tensor = torch.tensor([t], dtype=torch.bfloat16)
         ttnn_timestep_tensor = ttnn.from_torch(
-            torch_timestep_tensor,
+            scheduler.timesteps[scheduler.step_index],
             dtype=ttnn.bfloat16,
             device=device,
             layout=ttnn.TILE_LAYOUT,
@@ -278,7 +277,7 @@ def generate_with_refiner_compare(
         noise_pred = noise_uncond + guidance_scale * (noise_cond - noise_uncond)
 
         # Step scheduler
-        latents = scheduler.step(noise_pred, t, latents).prev_sample
+        latents = scheduler.step(noise_pred, sample=latents).prev_sample
 
     logger.info("TT refiner denoising complete - converting latents to image...")
     with torch.no_grad():
