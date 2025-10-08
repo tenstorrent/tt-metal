@@ -21,6 +21,7 @@ void kernel_main() {
     uint32_t in0_mcast_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(10));
     uint32_t in0_mcast_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(11));
     constexpr uint32_t in0_mcast_num_dests = get_compile_time_arg_val(12);
+    constexpr uint32_t is_output_writer = get_compile_time_arg_val(13);
 
     // Load input/output addresses and range parameters
     uint32_t argidx = 0;
@@ -32,7 +33,7 @@ void kernel_main() {
     const uint32_t in0_mcast_dest_noc_end_y = get_arg_val<uint32_t>(argidx++);
 
     // Tensor accessor for input tensor
-    constexpr auto in0_args = TensorAccessorArgs<13>();
+    constexpr auto in0_args = TensorAccessorArgs<14>();
     const auto in0_reader = TensorAccessor(in0_args, in0_addr, input_tile_size);
     constexpr auto out_args = TensorAccessorArgs<in0_args.next_compile_time_args_offset()>();
     const auto out_reader = TensorAccessor(out_args, out_addr, input_tile_size);
@@ -138,10 +139,8 @@ void kernel_main() {
 
             cb_wait_front(cb_id_in0_dm_out, out_block_num_tiles);
 
-            // if (n_block_iter < N_num_blocks - 1) {
-            // This is not the last iteration of the N block loop, so we will get reuse on next block, so we should
-            // write output
 #ifndef SKIP_OUT
+            if constexpr (is_output_writer) {
                 uint32_t out_read_ptr = get_read_ptr(cb_id_in0_dm_out);
                 // safe_print_bf16_tile(out_read_ptr);
                 DPRINT << "in0send: write out on m_block: " << m_block << ", n_block: " << n_block << ENDL();
@@ -156,10 +155,9 @@ void kernel_main() {
                     }
                 }
                 noc_async_writes_flushed();
+            }
 #endif
-                // }
-
-                cb_pop_front(cb_id_in0_dm_out, out_block_num_tiles);
+            cb_pop_front(cb_id_in0_dm_out, out_block_num_tiles);
         }
         n_forward = !n_forward;
     }
