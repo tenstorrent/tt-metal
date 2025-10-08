@@ -157,6 +157,11 @@ jobs:
           # NOTE: may be inaccurate if we have >1 build runner on the same machine, using the same local cache
           ccache -z
 
+      - name: Debugging
+        run: |
+          ls
+          ls *
+
       - name: Build artifacts
         run: |
           mkdir outputs
