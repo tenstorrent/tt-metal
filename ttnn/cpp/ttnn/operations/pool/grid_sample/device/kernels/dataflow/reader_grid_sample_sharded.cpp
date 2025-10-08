@@ -23,7 +23,8 @@ ALWI void advance_grid_index(
     const uint32_t grid_batching_factor,
     const uint32_t grid_stick_nbytes,
     const uint32_t grid_hw,
-    const uint32_t grid_nsticks_per_core) {
+    const uint32_t grid_nsticks_per_core,
+    const uint32_t input_batch) {
     ++in_grid_row_idx;
     if (in_grid_row_idx == grid_batching_factor) {
         in_grid_row_idx = 0;
@@ -32,7 +33,9 @@ ALWI void advance_grid_index(
         ++grid_points_processed;
         if (grid_points_processed == grid_hw) {
             grid_points_processed = 0;
-            ++curr_batch;
+            if (curr_batch + 1 < input_batch) {
+                ++curr_batch;
+            }
         }
     }
 }
@@ -95,7 +98,8 @@ void kernel_main() {
             grid_batching_factor,
             grid_stick_nbytes,
             grid_hw,
-            grid_nsticks_per_core);
+            grid_nsticks_per_core,
+            input_batch);
     }
 
     while (grid_stick_idx < grid_nsticks_per_core) {
@@ -122,7 +126,8 @@ void kernel_main() {
             grid_batching_factor,
             grid_stick_nbytes,
             grid_hw,
-            grid_nsticks_per_core);
+            grid_nsticks_per_core,
+            input_batch);
 
         // For split reader, advance one more time to skip the coordinate that the other reader will process
         if constexpr (split_reader) {
@@ -135,7 +140,8 @@ void kernel_main() {
                 grid_batching_factor,
                 grid_stick_nbytes,
                 grid_hw,
-                grid_nsticks_per_core);
+                grid_nsticks_per_core,
+                input_batch);
         }
     }
 }
