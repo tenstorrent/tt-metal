@@ -211,8 +211,10 @@ void py_module(nb::module_& m) {
             nb::arg("args"));
         py_auto_context.def(
             "get_distributed_context",
-            &AutoContext::get_distributed_context,
-            "Get the distributed context as a shared pointer");
+            [](AutoContext& self) -> tt::tt_metal::distributed::multihost::DistributedContext* {
+                return self.get_distributed_context().get();
+            },
+            nb::rv_policy::reference);
         py_auto_context.def("get_profiler", &AutoContext::get_profiler);
         py_auto_context.def("close_profiler", &AutoContext::close_profiler);
         py_auto_context.def("get_ccl_resources", &AutoContext::get_ccl_resources);
