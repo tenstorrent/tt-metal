@@ -474,15 +474,15 @@ void MetalContext::set_fabric_config(
     force_reinit_ = true;
 
     if (this->fabric_config_ == tt_fabric::FabricConfig::DISABLED ||
-        fabric_config == tt_fabric::FabricConfig::DISABLED) {
-        this->fabric_config_ = fabric_config;
+        fabric_config__ == tt_fabric::FabricConfig::DISABLED) {
+        this->fabric_config_ = fabric_config__;
         this->fabric_reliability_mode_ = reliability_mode;
     } else {
         TT_FATAL(
-            this->fabric_config_ == fabric_config,
+            this->fabric_config_ == fabric_config__,
             "Tried to override previous value of fabric config: {}, with: {}",
             this->fabric_config_,
-            fabric_config);
+            fabric_config__);
     }
 
     if (this->fabric_config_ == tt_fabric::FabricConfig::DISABLED) {

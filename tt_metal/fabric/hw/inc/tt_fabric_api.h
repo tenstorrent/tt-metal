@@ -171,8 +171,8 @@ void fabric_set_unicast_route(
 
 void fabric_set_mcast_route(
     volatile tt_l1_ptr HybridMeshPacketHeader* packet_header,
-    uint16_t dst_dev_id,   // Ignore this, since Low Latency Mesh Fabric does not support arbitrary 2D Mcasts yet
-    uint16_t dst_mesh_id,  // Ignore this, since Low Latency Mesh Fabric is not used for Inter-Mesh Routing
+    uint16_t dst_dev_id,
+    uint16_t dst_mesh_id,
     uint16_t e_num_hops,
     uint16_t w_num_hops,
     uint16_t n_num_hops,

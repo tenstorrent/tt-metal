@@ -82,11 +82,6 @@ public:
         tt::tt_fabric::fabric_client_connect<mux_num_buffers_per_channel>(edm);
 
         if constexpr (FABRIC_2D) {
-#if (FABRIC_2D_DYNAMIC == 1)
-            // TODO: unify
-            tt::tt_fabric::fabric_set_unicast_route(
-                (tt::tt_fabric::HybridMeshPacketHeader*)packet_header_addr, to_dev_id, to_mesh_id);
-#else
 #if defined(GALAXY_CLUSTER)
             tt::tt_fabric::fabric_set_route(
                 (tt::tt_fabric::HybridMeshPacketHeader*)packet_header_addr,
@@ -98,7 +93,6 @@ public:
 #else
             tt::tt_fabric::fabric_set_unicast_route(
                 (tt::tt_fabric::HybridMeshPacketHeader*)packet_header_addr, to_dev_id, to_mesh_id);
-#endif
 #endif
         } else {
             auto header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(packet_header_addr);
