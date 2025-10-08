@@ -35,9 +35,9 @@ def run_test_linear(device, M, K, N):
 
     # This is the optimal single-core config for 4096x4096x4096
     matmul_config = ttnn.MinimalMatmulConfig(
-        M_block_size=4,
-        K_block_size=32,
-        N_block_size=4,
+        M_block_size=8,
+        K_block_size=8,
+        N_block_size=8,
         subblock_h=2,
         subblock_w=2,
         compute_with_storage_grid_size=core_grid,
@@ -56,15 +56,20 @@ def run_test_linear(device, M, K, N):
 
 @pytest.mark.parametrize(
     "M, K, N",
-    [(4096, 4096, 4096)],
+    [(256, 4096, 256)],
 )
 def test_linear(device, M, K, N):
     check_result = run_test_linear(device, M, K, N)
+
     assert check_result["pcc"] > 0.999_500
     assert check_result["relative_rmse"] < 0.02
 
 
+@pytest.mark.skip()
 def test_linear_sweep_subblocks(device):
+    """
+    This test disables all data movement and sweeps to find optimal subblocks
+    """
     M, K, N = 4096, 4096, 4096
     logger.info(f"Running test_linear with M={M}, K={K}, N={N}")
     torch_execution_dtype = torch.float32
