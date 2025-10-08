@@ -26,14 +26,16 @@ class TtResNet(LightweightModule):
         parameters,
         device: ttnn.MeshDevice,
         dtype: ttnn.DataType = ttnn.bfloat16,
+        model_configs=None,
     ):
         super().__init__()
         self.device = device
+        self.model_configs = model_configs
 
         logger.debug("Initializing TtResNet")
 
         # Initialize stem
-        self.stem = TtStem(parameters=parameters["stem"], device=device, dtype=dtype)
+        self.stem = TtStem(parameters=parameters["stem"], device=device, dtype=dtype, model_configs=model_configs)
 
         # Initialize residual layers
         self.res2 = self._build_res_layer("res2", parameters["res2"], device, dtype, 3, stride=1)
@@ -65,6 +67,7 @@ class TtResNet(LightweightModule):
                     dilation=dilation,
                     shortcut_stride=shortcut_stride,
                     block_id=block_id,
+                    model_configs=self.model_configs,
                 )
             )
 
