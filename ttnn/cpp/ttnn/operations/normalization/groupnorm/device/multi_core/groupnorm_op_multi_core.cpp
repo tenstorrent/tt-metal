@@ -452,7 +452,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
                 std::vector<CoreCoord> temp;
                 temp.reserve(num_cores_per_group);
                 for (int k = 0; k < num_cores_per_group; ++k) {
-                    temp.push_back(CoreCoord{(std::size_t)(k + i * num_cores_per_group), (std::size_t)j});
+                    temp.push_back(CoreCoord{(std::size_t)(k + (i * num_cores_per_group)), (std::size_t)j});
                 }
                 core_coords2D.push_back(temp);
             }
@@ -463,7 +463,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
                 std::vector<CoreCoord> temp;
                 temp.reserve(num_cores_per_group);
                 for (int k = 0; k < num_cores_per_group; ++k) {
-                    temp.push_back(CoreCoord{(std::size_t)j, (std::size_t)(k + i * num_cores_per_group)});
+                    temp.push_back(CoreCoord{(std::size_t)j, (std::size_t)(k + (i * num_cores_per_group))});
                 }
                 core_coords2D.push_back(temp);
             }
@@ -712,7 +712,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
         (std::uint32_t)block_wt_last,
         (std::uint32_t)(num_datum_row_per_group_mod_tile_w & (num_datum_row_per_group_mod_tile_w - 1)) == 0,
         (std::uint32_t)num_datum_row_per_group < TILE_WIDTH,
-        (std::uint32_t)num_datum_row_per_group - (block_wt - 1) * TILE_WIDTH};
+        (std::uint32_t)num_datum_row_per_group - ((block_wt - 1) * TILE_WIDTH)};
     if (use_welford) {
         mcast_sender_compute_compile_time_args.push_back(num_datum_row_per_group);  // num_cols_per_group
     }
@@ -745,13 +745,14 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
         (std::uint32_t)block_wt_last,
         (std::uint32_t)(num_datum_row_per_group_mod_tile_w & (num_datum_row_per_group_mod_tile_w - 1)) == 0,
         (std::uint32_t)num_datum_row_per_group < TILE_WIDTH,
-        (std::uint32_t)num_datum_row_per_group - (block_wt - 1) * TILE_WIDTH};
+        (std::uint32_t)num_datum_row_per_group - ((block_wt - 1) * TILE_WIDTH)};
     if (use_welford) {
         mcast_receiver_compute_compile_time_args.push_back(num_datum_row_per_group);  // num_cols_per_group
     }
     // compute kernel
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
+    eltwise_binary_defines["FP32_DEST_ACC"] = fp32_dest_acc_en ? "true" : "false";
     CreateKernel(
         program,
         (use_welford
@@ -1704,7 +1705,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         (std::uint32_t)block_wt_last,
         (std::uint32_t)(num_channels_per_group_mod_tile_w & (num_channels_per_group_mod_tile_w - 1)) == 0,
         (std::uint32_t)num_channels_per_group < TILE_WIDTH,
-        (std::uint32_t)num_channels_per_group - (block_wt - 1) * TILE_WIDTH,
+        (std::uint32_t)num_channels_per_group - ((block_wt - 1) * TILE_WIDTH),
         (std::uint32_t)num_out_blocks,
         (std::uint32_t)num_channels_per_group,
         (std::uint32_t)num_rows_per_batch_per_core_group_1,
@@ -1729,7 +1730,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         (std::uint32_t)block_wt_last,
         (std::uint32_t)(num_channels_per_group_mod_tile_w & (num_channels_per_group_mod_tile_w - 1)) == 0,
         (std::uint32_t)num_channels_per_group < TILE_WIDTH,
-        (std::uint32_t)num_channels_per_group - (block_wt - 1) * TILE_WIDTH,
+        (std::uint32_t)num_channels_per_group - ((block_wt - 1) * TILE_WIDTH),
         (std::uint32_t)num_out_blocks,
         (std::uint32_t)num_channels_per_group,
         (std::uint32_t)num_rows_per_batch_per_core_group_1};
@@ -1755,7 +1756,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         (std::uint32_t)block_wt_last,
         (std::uint32_t)(num_channels_per_group_mod_tile_w & (num_channels_per_group_mod_tile_w - 1)) == 0,
         (std::uint32_t)num_channels_per_group < TILE_WIDTH,
-        (std::uint32_t)num_channels_per_group - (block_wt - 1) * TILE_WIDTH,
+        (std::uint32_t)num_channels_per_group - ((block_wt - 1) * TILE_WIDTH),
         (std::uint32_t)num_out_blocks,
         (std::uint32_t)num_channels_per_group,
         (std::uint32_t)num_rows_per_batch_per_core_group_2};
@@ -1779,7 +1780,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         (std::uint32_t)block_wt_last,
         (std::uint32_t)(num_channels_per_group_mod_tile_w & (num_channels_per_group_mod_tile_w - 1)) == 0,
         (std::uint32_t)num_channels_per_group < TILE_WIDTH,
-        (std::uint32_t)num_channels_per_group - (block_wt - 1) * TILE_WIDTH,
+        (std::uint32_t)num_channels_per_group - ((block_wt - 1) * TILE_WIDTH),
         (std::uint32_t)num_out_blocks,
         (std::uint32_t)num_channels_per_group,
         (std::uint32_t)num_rows_per_batch_per_core_group_2};
@@ -1861,7 +1862,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         (std::uint32_t)block_wt_last,
         (std::uint32_t)(num_channels_per_group_mod_tile_w & (num_channels_per_group_mod_tile_w - 1)) == 0,
         (std::uint32_t)num_channels_per_group < TILE_WIDTH,
-        (std::uint32_t)num_channels_per_group - (block_wt - 1) * TILE_WIDTH,
+        (std::uint32_t)num_channels_per_group - ((block_wt - 1) * TILE_WIDTH),
         (std::uint32_t)num_out_blocks,
         (std::uint32_t)block_ht_group_1,
         (std::uint32_t)block_wt,
@@ -1883,7 +1884,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         (std::uint32_t)block_wt_last,
         (std::uint32_t)(num_channels_per_group_mod_tile_w & (num_channels_per_group_mod_tile_w - 1)) == 0,
         (std::uint32_t)num_channels_per_group < TILE_WIDTH,
-        (std::uint32_t)num_channels_per_group - (block_wt - 1) * TILE_WIDTH,
+        (std::uint32_t)num_channels_per_group - ((block_wt - 1) * TILE_WIDTH),
         (std::uint32_t)num_out_blocks,
         (std::uint32_t)block_ht_group_2,
         (std::uint32_t)block_wt,
@@ -1981,7 +1982,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         (std::uint32_t)block_wt_last,
         (std::uint32_t)(num_channels_per_group_mod_tile_w & (num_channels_per_group_mod_tile_w - 1)) == 0,
         (std::uint32_t)num_channels_per_group < TILE_WIDTH,
-        (std::uint32_t)num_channels_per_group - (block_wt - 1) * TILE_WIDTH,
+        (std::uint32_t)num_channels_per_group - ((block_wt - 1) * TILE_WIDTH),
         (std::uint32_t)num_out_blocks,
         (std::uint32_t)num_channels_per_group,
         (std::uint32_t)num_rows_per_batch_per_core_group_1,
@@ -2015,7 +2016,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         (std::uint32_t)block_wt_last,
         (std::uint32_t)(num_channels_per_group_mod_tile_w & (num_channels_per_group_mod_tile_w - 1)) == 0,
         (std::uint32_t)num_channels_per_group < TILE_WIDTH,
-        (std::uint32_t)num_channels_per_group - (block_wt - 1) * TILE_WIDTH,
+        (std::uint32_t)num_channels_per_group - ((block_wt - 1) * TILE_WIDTH),
         (std::uint32_t)num_out_blocks,
         (std::uint32_t)num_channels_per_group,
         (std::uint32_t)num_rows_per_batch_per_core_group_2,
@@ -2050,7 +2051,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         (std::uint32_t)block_wt_last,
         (std::uint32_t)(num_channels_per_group_mod_tile_w & (num_channels_per_group_mod_tile_w - 1)) == 0,
         (std::uint32_t)num_channels_per_group < TILE_WIDTH,
-        (std::uint32_t)num_channels_per_group - (block_wt - 1) * TILE_WIDTH,
+        (std::uint32_t)num_channels_per_group - ((block_wt - 1) * TILE_WIDTH),
         (std::uint32_t)num_out_blocks,
         (std::uint32_t)num_channels_per_group,
         (std::uint32_t)num_rows_per_batch_per_core_group_1,
@@ -2084,7 +2085,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         (std::uint32_t)block_wt_last,
         (std::uint32_t)(num_channels_per_group_mod_tile_w & (num_channels_per_group_mod_tile_w - 1)) == 0,
         (std::uint32_t)num_channels_per_group < TILE_WIDTH,
-        (std::uint32_t)num_channels_per_group - (block_wt - 1) * TILE_WIDTH,
+        (std::uint32_t)num_channels_per_group - ((block_wt - 1) * TILE_WIDTH),
         (std::uint32_t)num_out_blocks,
         (std::uint32_t)num_channels_per_group,
         (std::uint32_t)num_rows_per_batch_per_core_group_2,
@@ -2093,6 +2094,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     // compute kernel
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
+    eltwise_binary_defines["FP32_DEST_ACC"] = fp32_dest_acc_en ? "true" : "false";
     CreateKernel(
         program,
         (use_welford ? "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/welford_groupnorm.cpp"

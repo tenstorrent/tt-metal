@@ -229,7 +229,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
                 reader_kernel_id,
                 core,
                 {a.buffer()->address(),
-                 num_cols_read / Wt * HtWt + num_cols_read % Wt,
+                 (num_cols_read / Wt * HtWt) + (num_cols_read % Wt),
                  num_cols_read % Wt,
                  num_cols_per_core});
 

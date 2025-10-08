@@ -255,9 +255,9 @@ set(METAL_OPS_FILES
 
 list(APPEND SOURCES ${METAL_OPS_FILES})
 
-# Check if Metalium::Metal target exists
+# Check if TT::Metalium target exists
 # If it does not exist, assume that we are building with tt-train as top level project
-if(NOT TARGET Metalium::Metal)
+if(NOT TARGET TT::Metalium)
     if("$ENV{TT_METAL_HOME}" STREQUAL "")
         message(FATAL_ERROR "TT_METAL_HOME is not set")
     endif()
@@ -268,9 +268,9 @@ if(NOT TARGET Metalium::Metal)
         "$ENV{TT_METAL_HOME}/tt_metal"
         "$ENV{TT_METAL_HOME}/tt_metal/third_party/umd"
         "$ENV{TT_METAL_HOME}/tt_metal/third_party/tracy/public"
-        "$ENV{TT_METAL_HOME}/tt_metal/hw/inc/wormhole"
-        "$ENV{TT_METAL_HOME}/tt_metal/hw/inc/wormhole/wormhole_b0_defines"
-        "$ENV{TT_METAL_HOME}/tt_metal/hw/inc/"
+        "$ENV{TT_METAL_HOME}/tt_metal/hw/inc/tt-1xx/wormhole"
+        "$ENV{TT_METAL_HOME}/tt_metal/hw/inc/tt-1xx/wormhole/wormhole_b0_defines"
+        "$ENV{TT_METAL_HOME}/tt_metal/hw/inc/tt-1xx/blackhole"
         "$ENV{TT_METAL_HOME}/tt_metal/api/"
         "$ENV{TT_METAL_HOME}/tt_metal/third_party/umd/device/api"
         "$ENV{TT_METAL_HOME}/tt_metal/hostdevcommon/api"
@@ -291,7 +291,6 @@ if(NOT TARGET Metalium::Metal)
 
     # Try to find the library
     find_library(TT_METAL_LIBRARY NAMES "tt_metal" PATHS "${METALIUM_LIB_PATH}" NO_DEFAULT_PATH)
-    find_library(TTNN_LIBRARY NAMES "_ttnn.so" PATHS "${METALIUM_LIB_PATH}" NO_DEFAULT_PATH)
     find_library(TTNNCPP_LIBRARY NAMES "_ttnncpp.so" PATHS "${METALIUM_LIB_PATH}" NO_DEFAULT_PATH)
     find_library(DEVICE_LIBRARY NAMES "device" PATHS "${METALIUM_LIB_PATH}" NO_DEFAULT_PATH)
     find_library(TT_STL_LIBRARY NAMES "libtt_stl.so" PATHS "${METALIUM_LIB_PATH}" NO_DEFAULT_PATH)
@@ -312,9 +311,9 @@ if(NOT TARGET Metalium::Metal)
     endif()
 
     if(TT_METAL_LIBRARY)
-        add_library(Metalium::Metal SHARED IMPORTED)
+        add_library(TT::Metalium SHARED IMPORTED)
         set_target_properties(
-            Metalium::Metal
+            TT::Metalium
             PROPERTIES
                 IMPORTED_LOCATION
                     "${TT_METAL_LIBRARY}"
@@ -322,7 +321,7 @@ if(NOT TARGET Metalium::Metal)
                     "${METALIUM_INCLUDE_DIRS}"
         )
         target_link_libraries(
-            Metalium::Metal
+            TT::Metalium
             INTERFACE
                 ${DEVICE_LIBRARY}
                 Metalium::TT_STL
@@ -332,25 +331,10 @@ if(NOT TARGET Metalium::Metal)
     else()
         message(FATAL_ERROR "libtt_metal.so not found in ${METALIUM_LIB_PATH}")
     endif()
-    if(TTNN_LIBRARY)
-        add_library(Metalium::TTNN SHARED IMPORTED)
-        set_target_properties(
-            Metalium::TTNN
-            PROPERTIES
-                IMPORTED_LOCATION
-                    "${TTNN_LIBRARY}"
-                INTERFACE_INCLUDE_DIRECTORIES
-                    "${METALIUM_INCLUDE_DIRS}"
-        )
-        target_link_libraries(Metalium::TTNN INTERFACE Metalium::TT_STL)
-        message(STATUS "Successfully found _ttnn.so at ${TTNN_LIBRARY}")
-    else()
-        message(FATAL_ERROR "_ttnn.so not found in ${METALIUM_LIB_PATH}")
-    endif()
     if(TTNNCPP_LIBRARY)
-        add_library(Metalium::TTNNCPP SHARED IMPORTED)
+        add_library(TTNN::TTNN SHARED IMPORTED)
         set_target_properties(
-            Metalium::TTNNCPP
+            TTNN::TTNN
             PROPERTIES
                 IMPORTED_LOCATION
                     "${TTNNCPP_LIBRARY}"
@@ -481,6 +465,8 @@ set(TTML_SRC_NANOBIND
     ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_modules.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_ops.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_ops.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_core.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_core.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_optimizers.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_optimizers.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_util.cpp
@@ -488,25 +474,18 @@ set(TTML_SRC_NANOBIND
 )
 nanobind_add_module(
     _ttml
-    STABLE_ABI NB_SHARED LTO
+    STABLE_ABI NB_STATIC
     ${TTML_SRC_NANOBIND}
 )
 target_link_libraries(
     _ttml
     PRIVATE
         fmt::fmt-header-only
-        Metalium::Metal
-        Metalium::TTNN
-        Metalium::TTNNCPP
+        TT::Metalium
+        TTNN::TTNN
         Python3::Python
         ttml
 )
-target_include_directories(_ttml PUBLIC ${CMAKE_SOURCE_DIR})
-target_include_directories(_ttml PUBLIC ${CMAKE_SOURCE_DIR}/ttnn)
-target_include_directories(_ttml PUBLIC ${CMAKE_SOURCE_DIR}/ttnn/api)
-target_include_directories(_ttml PUBLIC ${CMAKE_SOURCE_DIR}/tt_metal/api)
-target_include_directories(_ttml PUBLIC ${CMAKE_SOURCE_DIR}/tt_metal/third_party/umd/device/api)
-target_include_directories(_ttml PUBLIC ${CMAKE_SOURCE_DIR}/tt_stl)
 target_include_directories(_ttml PUBLIC ${PROJECT_SOURCE_DIR})
 install(
     TARGETS
