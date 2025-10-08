@@ -11,8 +11,6 @@
 #include "ckernel_sfpu.h"
 #endif
 
-namespace ckernel {}  // namespace ckernel
-
 // clang-format off
 /**
  * Initializes the fused eltwise binary reduce operation.
@@ -42,7 +40,7 @@ ALWI void fused_eltwise_binary_reduce_init(uint32_t cb_inp0, uint32_t cb_inp1, b
     MATH((llk_math_hw_configure_disaggregated(cb_inp0, cb_inp1)));
     MATH((llk_math_eltwise_binary_init<eltwise_binary_type, NONE, MATH_FIDELITY>(0 /*transpose*/, acc_to_dest)));
 
-    // // Optional full initialization for UNPACK (conditional compilation)
+    // // Optional full initialization for UNPACK (conditional compilation), not sure about full init
     // if constexpr (full_init) {
     //     UNPACK((llk_unpack_AB_init<BroadcastType::NONE>(cb_inp0, cb_inp1, 0 /*transpose*/, acc_to_dest)));
     // }
@@ -111,6 +109,9 @@ ALWI void fused_eltwise_binary_reduce(
         if (i != 0) {
             MATH(eltwise_binary_reuse_dest_as_src_tile<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(i));
         }
+
+        dprint_tensix_dest_reg(0);
+
         MATH((llk_math_reduce_column<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY, false, fp32_transpose>(
             reduce_dst_idx)));
         UNPACK((llk_unpack_AB_but_fused_so_no_mop(0, 0, 0, 0)));
