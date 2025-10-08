@@ -157,11 +157,15 @@ ttnn::Tensor bound_matmul(
 
     if (parameters.user_fused_activation.has_value() && !has_user_grid) {
         const UnaryOpType& op_type = parameters.user_fused_activation.value().op_type;
-        output_tensor = ttnn::operations::unary::Unary_chain::invoke(
-            output_tensor,
-            {ttnn::operations::unary::EltwiseUnaryWithParam{op_type}},
-            parameters.output_mem_config,
-            optional_output_tensor);
+        if (op_type == UnaryOpType::RELU) {
+            output_tensor = ttnn::relu(output_tensor, parameters.output_mem_config, optional_output_tensor);
+        } else if (op_type == UnaryOpType::GELU) {
+            output_tensor = ttnn::gelu(output_tensor, false, parameters.output_mem_config, optional_output_tensor);
+        } else if (op_type == UnaryOpType::SILU) {
+            output_tensor = ttnn::silu(output_tensor, parameters.output_mem_config, optional_output_tensor);
+        } else {
+            TT_THROW("ttnn.matmul: Unsupported activation function");
+        }
     }
 
     return output_tensor;

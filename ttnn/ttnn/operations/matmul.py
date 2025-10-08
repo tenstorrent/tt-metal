@@ -6,7 +6,7 @@ import math
 from typing import Optional, Tuple
 
 import ttnn
-from ttnn.decorators import get_golden_function
+
 
 MatmulProgramConfig = ttnn._ttnn.operations.matmul.MatmulProgramConfig
 MatmulMultiCoreReuseProgramConfig = ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseProgramConfig
@@ -22,7 +22,6 @@ def _get_golden_activation_function(activation):
 
     golden_activations_map = {
         ttnn.UnaryOpType.RELU: torch.nn.functional.relu,
-        ttnn.UnaryOpType.RELU6: torch.nn.functional.relu6,
         ttnn.UnaryOpType.SILU: torch.nn.functional.silu,
         ttnn.UnaryOpType.MISH: torch.nn.functional.mish,
         ttnn.UnaryOpType.SIGMOID: torch.nn.functional.sigmoid,
@@ -37,18 +36,6 @@ def _get_golden_activation_function(activation):
         return golden_activations_map[activation]
     else:
         raise RuntimeError(f"{activation} is not supported as activation function")
-
-
-# Given a string like "relu6", return the corresponding torch activation function, for example torch.nn.functional.relu6
-def _get_torch_activation_from_string(name: str):
-    # Remove "_approx" suffix if present in the activation name
-    if name.endswith("_approx"):
-        name = name[:-7]
-
-    op = getattr(ttnn, name, None)
-    if op is None:
-        raise RuntimeError(f"Unsupported activation: {name}")
-    return get_golden_function(op)
 
 
 def _golden_function(
@@ -75,9 +62,13 @@ def _golden_function(
         program_config_activation = program_config.fused_activation.op_type
         output_tensor = _get_golden_activation_function(program_config_activation)(output_tensor)
 
-    # Do the composite op activation function if it is requested
+    # Then do the composite op activation function if it is requested as well
+    if activation in ("gelu", "gelu_approx"):
+        output_tensor = torch.nn.functional.gelu(output_tensor)
+    elif activation == "relu":
+        output_tensor = torch.nn.functional.relu(output_tensor)
     elif activation is not None:
-        output_tensor = _get_torch_activation_from_string(activation)(output_tensor)
+        raise RuntimeError(f"{activation} is not supported as activation function")
 
     while len(output_tensor.shape) > len(input_tensor_a.shape):
         output_tensor = output_tensor.squeeze(0)
@@ -121,9 +112,15 @@ def _golden_function(
         program_config_activation = program_config.fused_activation.op_type
         output_tensor = _get_golden_activation_function(program_config_activation)(output_tensor)
 
-    # Do the composite op activation function if it is requested
+    # Then do the composite op activation function if it is requested as well
+    if activation in ("gelu", "gelu_approx"):
+        output_tensor = torch.nn.functional.gelu(output_tensor)
+    elif activation == "relu":
+        output_tensor = torch.nn.functional.relu(output_tensor)
+    elif activation == "silu":
+        output_tensor = torch.nn.functional.silu(output_tensor)
     elif activation is not None:
-        output_tensor = _get_torch_activation_from_string(activation)(output_tensor)
+        raise RuntimeError(f"{activation} is not supported as activation function")
 
     while len(output_tensor.shape) > len(input_tensor_a.shape):
         output_tensor = output_tensor.squeeze(0)
