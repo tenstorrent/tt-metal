@@ -1,0 +1,13 @@
+# TT-Metalium Dockerfile
+
+#############################################################
+
+ARG UBUNTU_VERSION=24.04
+FROM public.ecr.aws/ubuntu/ubuntu:${UBUNTU_VERSION}
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    wget curl git gcc build-essential xxd \
+    pkg-config python3-pip python3-full python3-dev \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*

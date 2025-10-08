@@ -5,6 +5,7 @@
 #pragma once
 
 #include <vector>
+#include <span>
 #include <tt_stl/reflection.hpp>
 
 namespace ttnn::operations::unary {

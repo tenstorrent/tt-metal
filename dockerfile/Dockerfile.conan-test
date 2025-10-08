@@ -1,0 +1,47 @@
+# Platform-independent tt-metal build
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE} AS builder
+
+# Set up environment
+ENV TT_METAL_HOME=/tt-metal
+ENV PYTHONPATH=/tt-metal
+ENV HOME="/root"
+ENV PATH_FIRST="$PATH"
+
+WORKDIR $HOME
+
+# Create temporary virtual environment for initial conan setup
+ENV VIRTUAL_ENV=/root/tt-metal-virtualenv-tmp
+ENV PATH="$VIRTUAL_ENV/bin:$PATH_FIRST"
+RUN python3 -m venv $VIRTUAL_ENV
+
+# Install and configure conan
+RUN pip3 install conan
+RUN conan profile detect --force
+
+# Copy and apply the conan profile
+RUN git config --global --add safe.directory /workspace
+RUN conan profile detect --force
+RUN conan profile show
+
+# Copy minimal files for conan dependency installation
+WORKDIR /tt-conan
+COPY .git /tt-conan/.git
+COPY conanfile.py /tt-conan/conanfile.py
+COPY dockerfile/default_cxx20.txt /tt-conan/default_cxx20.txt
+# COPY /tt_metal/sfpi-version.sh /opt/tt_metal_infra/scripts/docker/sfpi-version.sh
+
+# Install conan dependencies
+RUN conan install . --build=missing \
+    -cc core.net.http:timeout=240 \
+    -o 'tt-nn/*:build_tests=True' \
+    --profile:build /tt-conan/default_cxx20.txt \
+    --profile:host /tt-conan/default_cxx20.txt
+
+
+# Copy the full tt-metal source
+WORKDIR /tt-metal
+COPY . /tt-metal
+
+# Default command
+CMD ["/bin/bash"]

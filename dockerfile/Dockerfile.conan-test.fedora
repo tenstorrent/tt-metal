@@ -1,0 +1,17 @@
+# TT-Metalium Dockerfile for Fedora
+
+#############################################################
+
+ARG FEDORA_VERSION=42
+FROM fedora:${FEDORA_VERSION}
+
+RUN dnf update -y && dnf install -y \
+    git wget curl which patch perl-core make \
+    python3-pip python3-devel python3-virtualenv python3 \
+    texinfo clang vim-common \
+    && dnf clean all
+
+# Ensure python3 command exists
+RUN if ! command -v python3 >/dev/null 2>&1; then \
+        ln -s /usr/bin/python /usr/bin/python3; \
+    fi

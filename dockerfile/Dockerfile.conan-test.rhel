@@ -1,0 +1,29 @@
+# TT-Metalium Dockerfile for RHEL
+
+#############################################################
+
+ARG RHEL_VERSION=10.0
+FROM redhat/ubi10:${RHEL_VERSION}
+
+RUN dnf update -y && dnf install -y \
+    git wget patch which pcre2-devel perl-core \
+    python3-pip python3-devel \
+    vim-common \
+    && dnf clean all
+
+
+# RHEL 10 does not provide the texinfo package, so it needs to be built
+# separately, to allow `flex` to be built by conan. `flex` is a transitive
+# dependency of the openmpi.
+RUN cd /tmp && \
+    wget https://ftp.gnu.org/gnu/texinfo/texinfo-7.1.tar.gz && \
+    tar -xzf texinfo-7.1.tar.gz && \
+    cd texinfo-7.1 && \
+    ./configure --prefix=/usr && \
+    make -j$(nproc) && \
+    make install
+
+# Ensure python3 command exists
+RUN if ! command -v python3 >/dev/null 2>&1; then \
+        ln -s /usr/bin/python /usr/bin/python3; \
+    fi
