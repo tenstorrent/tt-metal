@@ -74,7 +74,7 @@ void MetalContext::initialize(
         force_reinit_ = true;
     }
     // Settings that affect FW build can also trigger a re-initialization
-    auto fw_compile_hash = std::hash<std::string>{}(rtoptions_.get_compile_hash_string());
+    const size_t fw_compile_hash = std::hash<std::string>{}(rtoptions_.get_compile_hash_string());
     validate_worker_l1_size(worker_l1_size, *hal_);
     if (initialized_) {
         if (dispatch_core_config_ != dispatch_core_config or num_hw_cqs != num_hw_cqs_ or
@@ -174,11 +174,11 @@ void MetalContext::initialize(
         // fw_build_key is a combination of build_key and fw_compile_hash
         // If fw_compile_hash changes, the fw_build_key will change and FW will be rebuilt
         // if it's not already in firmware_built_keys_
-        // Note: Truncate fw_compile_hash to 32 bits to match the hash used in firmware paths
-        // and prevent corruption when bit-packing into the 64-bit fw_build_key
+        // Combine build_key and fw_compile_hash using XOR to create unique firmware build key
+        // Uses full 64-bit fw_compile_hash for proper change detection
         uint64_t fw_build_key =
-            (static_cast<uint64_t>(BuildEnvManager::get_instance().get_device_build_env(device_id).build_key) << 32) |
-            static_cast<uint32_t>(fw_compile_hash);
+            (static_cast<uint64_t>(BuildEnvManager::get_instance().get_device_build_env(device_id).build_key)) ^
+            fw_compile_hash;
 
         if (!firmware_built_keys_.contains(fw_build_key)) {
             BuildEnvManager::get_instance().build_firmware(device_id);
