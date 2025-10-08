@@ -362,37 +362,37 @@ def test_masked_transformer_encoder(
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    tt_xyz = ttnn.from_torch(
-        xyz,
-        device=device,
-        dtype=ttnn.bfloat16,
-    )
+    # tt_xyz = ttnn.from_torch(
+    #     xyz,
+    #     device=device,
+    #     dtype=ttnn.bfloat16,
+    # )
 
-    tt_output = tt_module(tt_src, mask, src_key_padding_mask, pos, tt_xyz, transpose_swap)
+    tt_output = tt_module(tt_src, mask, src_key_padding_mask, pos, xyz, transpose_swap)
     ttnn_torch_out = []
     for tt_out, torch_out in zip(tt_output, ref_out):
-        print(
-            f"//////////////////////////////////Starting the output torch convert //////////////////////////////////////"
-        )
-        print(f"{tt_out=}")
-        print(f"layout={tt_out.layout}")
-        print(f"tensor_on_device={ttnn.is_tensor_storage_on_device(tt_out)}")
-        tt_out_ = ttnn.to_torch(tt_out)
-        print(
-            f"//////////////////////////////////Finished the output torch convert //////////////////////////////////////"
-        )
-        ttnn_torch_out.append(tt_out_)
-        print(
-            f"//////////////////////////////////Starting the output torch reshape //////////////////////////////////////"
-        )
-        ttnn_torch_out[-1] = torch.reshape(ttnn_torch_out[-1], torch_out.shape)
-        print(
-            f"//////////////////////////////////Finished the output torch reshape //////////////////////////////////////"
-        )
+        if not isinstance(tt_out, torch.Tensor):
+            print(
+                f"//////////////////////////////////Starting the output torch convert //////////////////////////////////////"
+            )
+            tt_out_ = ttnn.to_torch(tt_out)
+            print(
+                f"//////////////////////////////////Finished the output torch convert //////////////////////////////////////"
+            )
+            print(
+                f"//////////////////////////////////Starting the output torch reshape //////////////////////////////////////"
+            )
+            tt_out_ = torch.reshape(tt_out_, torch_out.shape)
+            print(
+                f"//////////////////////////////////Finished the output torch reshape //////////////////////////////////////"
+            )
+            ttnn_torch_out.append(tt_out_)
+        else:
+            ttnn_torch_out.append(tt_out)
 
-    import pdb
+    # import pdb
 
-    pdb.set_trace()
+    # pdb.set_trace()
 
     pcc_pass, pcc_message = assert_with_pcc(ref_out[0], ttnn_torch_out[0], 0.1)
     print(f"{pcc_message=}")
