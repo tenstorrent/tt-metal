@@ -92,7 +92,7 @@ def test_sparse_matmul_with_nnz(device, mkn, num_experts, num_tokens, tile_h, ti
         assert_with_pcc(pt_out, output_tensor[b, s, 0, e, :, :], expected_pcc)
 
 
-@pytest.mark.parametrize("mkn", [(32, 128, 512)])
+@pytest.mark.parametrize("mkn", [(32, 128, 96)])
 @pytest.mark.parametrize("num_experts", [8])
 @pytest.mark.parametrize("num_tokens", [(1, 4)])
 @pytest.mark.parametrize("tile_h", [16])
