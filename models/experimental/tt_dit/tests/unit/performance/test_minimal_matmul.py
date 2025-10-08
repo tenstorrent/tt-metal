@@ -173,8 +173,19 @@ def test_linear_sweep_subblocks(device):
             )
 
 
-def test_linear_sweep_blocks(device):
-    M, K, N = 4096, 4096, 4096
+@pytest.mark.parametrize(
+    "M, K, N",
+    [
+        (512, 4096, 4096),
+        (1024, 4096, 4096),
+        (2048, 4096, 4096),
+        (4096, 4096, 4096),
+        (4096, 4096, 2048),
+        (4096, 4096, 1024),
+        (4096, 4096, 512),
+    ],
+)
+def test_linear_sweep_blocks(device, M, K, N):
     logger.info(f"Running test_linear with M={M}, K={K}, N={N}")
     torch_execution_dtype = torch.float32
     torch_dtype = torch.bfloat16
@@ -199,14 +210,21 @@ def test_linear_sweep_blocks(device):
 
     core_grid = ttnn.CoreCoord(8, 8)
     subblocks = [(2, 2)]
-    mn_block_sizes = (2, 4, 8, 16)
-    k_block_sizes = (2, 4, 8, 16, 32)
+    M_tiles_per_core = M // 32 // core_grid.y
+    N_tiles_per_core = N // 32 // core_grid.x
+    import math
+
+    m_block_sizes = [2**i for i in range(1, min(int(math.log2(M_tiles_per_core)), 8) + 1)]
+    n_block_sizes = [2**i for i in range(1, min(int(math.log2(N_tiles_per_core)), 8) + 1)]
+    k_block_sizes = [4, 8]
 
     from itertools import product
 
     for M_block_size, K_block_size, N_block_size, (subblock_h, subblock_w) in product(
-        mn_block_sizes, k_block_sizes, mn_block_sizes, subblocks
+        m_block_sizes, k_block_sizes, n_block_sizes, subblocks
     ):
+        if (M_block_size < subblock_h) or (N_block_size < subblock_w):
+            continue
         logger.info(
             f"Running minimal_matmul with M_block_size={M_block_size}, K_block_size={K_block_size}, N_block_size={N_block_size}, subblock_h={subblock_h}, subblock_w={subblock_w}"
         )

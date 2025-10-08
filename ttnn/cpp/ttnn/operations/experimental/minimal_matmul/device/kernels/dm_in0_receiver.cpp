@@ -8,30 +8,30 @@
 #include "debug/dprint.h"
 
 void kernel_main() {
-    constexpr uint32_t M_start_block = get_compile_time_arg_val(0);
-    constexpr uint32_t M_end_block = get_compile_time_arg_val(1);
-    constexpr uint32_t K_tiles = get_compile_time_arg_val(2);
-    constexpr uint32_t N_tiles = get_compile_time_arg_val(3);
-    constexpr uint32_t N_start_block = get_compile_time_arg_val(4);
-    constexpr uint32_t N_end_block = get_compile_time_arg_val(5);
-    constexpr uint32_t M_block_tiles = get_compile_time_arg_val(6);
-    constexpr uint32_t K_block_tiles = get_compile_time_arg_val(7);
-    constexpr uint32_t N_block_tiles = get_compile_time_arg_val(8);
-    constexpr uint32_t input_tile_size = get_compile_time_arg_val(9);
-    uint32_t in0_mcast_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(10));
-    uint32_t in0_mcast_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(11));
-    constexpr uint32_t is_output_writer = get_compile_time_arg_val(12);
+    constexpr uint32_t K_tiles = get_compile_time_arg_val(0);
+    constexpr uint32_t N_tiles = get_compile_time_arg_val(1);
+    constexpr uint32_t M_block_tiles = get_compile_time_arg_val(2);
+    constexpr uint32_t K_block_tiles = get_compile_time_arg_val(3);
+    constexpr uint32_t N_block_tiles = get_compile_time_arg_val(4);
+    constexpr uint32_t input_tile_size = get_compile_time_arg_val(5);
+    uint32_t in0_mcast_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(6));
+    uint32_t in0_mcast_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(7));
+    constexpr uint32_t is_output_writer = get_compile_time_arg_val(8);
 
     // Load input/output addresses and range parameters
     uint32_t argidx = 0;
     const uint32_t out_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t in0_mcast_sender_noc_x = get_arg_val<uint32_t>(argidx++);
     const uint32_t in0_mcast_sender_noc_y = get_arg_val<uint32_t>(argidx++);
+    const uint32_t M_start_block = get_arg_val<uint32_t>(argidx++);
+    const uint32_t M_end_block = get_arg_val<uint32_t>(argidx++);
+    const uint32_t N_start_block = get_arg_val<uint32_t>(argidx++);
+    const uint32_t N_end_block = get_arg_val<uint32_t>(argidx++);
 
     constexpr uint32_t K_num_blocks = K_tiles / K_block_tiles;
     constexpr uint32_t in0_block_num_tiles = M_block_tiles * K_block_tiles;
 
-    constexpr auto out_args = TensorAccessorArgs<13>();
+    constexpr auto out_args = TensorAccessorArgs<9>();
     const auto out_reader = TensorAccessor(out_args, out_addr, input_tile_size);
     constexpr uint32_t out_block_num_tiles = M_block_tiles * N_block_tiles;
 
@@ -47,12 +47,12 @@ void kernel_main() {
     DPRINT << "in0recv: M_start_block: " << M_start_block << ", M_end_block: " << M_end_block
            << ", N_start_block: " << N_start_block << ", N_end_block: " << N_end_block << ENDL();
 
-    constexpr uint32_t N_num_blocks = N_end_block - N_start_block + 1;
-    constexpr uint32_t N_local_block_offset = N_start_block / N_num_blocks;
-    constexpr uint32_t num_cores_y = (N_tiles / N_block_tiles) / N_num_blocks;
-    constexpr uint32_t K_blocks_per_core_y = K_num_blocks / num_cores_y;
+    const uint32_t N_num_blocks = N_end_block - N_start_block + 1;
+    const uint32_t N_local_block_offset = N_start_block / N_num_blocks;
+    const uint32_t num_cores_y = (N_tiles / N_block_tiles) / N_num_blocks;
+    const uint32_t K_blocks_per_core_y = K_num_blocks / num_cores_y;
     // constexpr uint32_t defer_write_k_block = N_local_block_offset % K_num_blocks;
-    constexpr uint32_t defer_write_k_block = N_local_block_offset * K_blocks_per_core_y;
+    const uint32_t defer_write_k_block = N_local_block_offset * K_blocks_per_core_y;
 
     bool k_forward = true;
     bool n_forward = true;
