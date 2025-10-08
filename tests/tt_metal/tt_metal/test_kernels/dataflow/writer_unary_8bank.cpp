@@ -30,7 +30,9 @@ void kernel_main() {
 
     DeviceZoneScopedN("WRITER");
     for (uint32_t i = 0; i < num_tiles; i++) {
+#ifndef DISABLE_CB_OPERATION
         cb_wait_front(cb_id_out0, onetile);
+#endif
 
 #ifdef WRITER_RISCV_WAIT
         riscv_wait(risc_wait);
@@ -46,6 +48,8 @@ void kernel_main() {
         noc_async_write_barrier();
 #endif
 
+#ifndef DISABLE_CB_OPERATION
         cb_pop_front(cb_id_out0, onetile);
+#endif
     }
 }

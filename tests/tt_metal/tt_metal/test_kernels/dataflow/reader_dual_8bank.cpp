@@ -41,7 +41,9 @@ void kernel_main() {
     // read ublocks from src0/src1 to CB0/CB1, then push ublocks to compute (unpacker)
     for (uint32_t i = 0; i < num_tiles; i += ublock_size_tiles) {
         if (i < src0_num_tiles) {
+#ifndef DISABLE_CB_OPERATION
             cb_reserve_back(cb_id_in0, ublock_size_tiles);
+#endif
 
 #ifdef READER_RISCV_WAIT
             riscv_wait(risc_wait);
@@ -57,11 +59,15 @@ void kernel_main() {
             noc_async_read_barrier();
 #endif
 
+#ifndef DISABLE_CB_OPERATION
             cb_push_back(cb_id_in0, ublock_size_tiles);
+#endif
         }
 
         if (i < src1_num_tiles) {
+#ifndef DISABLE_CB_OPERATION
             cb_reserve_back(cb_id_in1, ublock_size_tiles);
+#endif
 
 #ifdef READER_RISCV_WAIT
             riscv_wait(risc_wait);
@@ -77,7 +83,9 @@ void kernel_main() {
             noc_async_read_barrier();
 #endif
 
+#ifndef DISABLE_CB_OPERATION
             cb_push_back(cb_id_in1, ublock_size_tiles);
+#endif
         }
     }
 }

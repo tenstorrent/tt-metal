@@ -71,6 +71,12 @@ int main(int argc, char** argv) {
     bool use_zone_counter = false;
     std::tie(use_zone_counter, input_args) =
         test_args::has_command_option_and_remaining_args(input_args, "--use-zone-counter");
+    uint32_t num_tiles = 2048;
+    std::tie(num_tiles, input_args) =
+        test_args::get_command_option_uint32_and_remaining_args(input_args, "--num-tiles", 2048);
+    bool disable_cb_operation = false;
+    std::tie(disable_cb_operation, input_args) =
+        test_args::has_command_option_and_remaining_args(input_args, "--disable-cb-operation");
 
     bool pass = true;
     bool multibank = true;
@@ -103,7 +109,6 @@ int main(int argc, char** argv) {
             CoreCoord core = {0, 0};
 
             uint32_t single_tile_size = 2 * 1024;
-            uint32_t num_tiles = 2048;
             uint32_t dram_buffer_size =
                 single_tile_size * num_tiles;  // num_tiles of FP16_B, hard-coded in the reader/writer kernels
             uint32_t page_size = single_tile_size;
@@ -166,6 +171,9 @@ int main(int argc, char** argv) {
             if (use_zone_counter) {
                 reader_defines["USE_ZONE_COUNTER"] = "1";
             }
+            if (disable_cb_operation) {
+                reader_defines["DISABLE_CB_OPERATION"] = "1";
+            }
 
             std::map<std::string, std::string> writer_defines;
             uint32_t writer_wait_time = 0;
@@ -180,6 +188,9 @@ int main(int argc, char** argv) {
             }
             if (use_zone_counter) {
                 writer_defines["USE_ZONE_COUNTER"] = "1";
+            }
+            if (disable_cb_operation) {
+                writer_defines["DISABLE_CB_OPERATION"] = "1";
             }
 
             auto binary_reader_kernel = tt_metal::CreateKernel(
@@ -220,6 +231,9 @@ int main(int argc, char** argv) {
             }
             if (use_zone_counter) {
                 compute_defines["USE_ZONE_COUNTER"] = "1";
+            }
+            if (disable_cb_operation) {
+                compute_defines["DISABLE_CB_OPERATION"] = "1";
             }
 
             auto eltwise_binary_kernel = tt_metal::CreateKernel(

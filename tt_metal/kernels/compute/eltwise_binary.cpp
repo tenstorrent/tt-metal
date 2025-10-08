@@ -39,9 +39,11 @@ void MAIN {
 
     DeviceZoneScopedN("COMPUTE");
     for (uint32_t block = 0; block < per_core_block_cnt; ++block) {
+#ifndef DISABLE_CB_OPERATION
         cb_wait_front(cb_inp0, per_core_block_size);
         cb_wait_front(cb_inp1, per_core_block_size);
         cb_reserve_back(cb_out0, per_core_block_size);
+#endif
 
 #ifdef COMPUTE_RISCV_WAIT
         wait(riscv_wait);
@@ -62,9 +64,11 @@ void MAIN {
         tile_regs_release();
 #endif
 
+#ifndef DISABLE_CB_OPERATION
         cb_pop_front(cb_inp0, per_core_block_size);
         cb_pop_front(cb_inp1, per_core_block_size);
         cb_push_back(cb_out0, per_core_block_size);
+#endif
     }
 }
 }  // namespace NAMESPACE
