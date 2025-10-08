@@ -83,12 +83,15 @@ def prepare_test_data(model_location_generator) -> None:
         if local_path_obj.exists() and any(local_path_obj.iterdir()):
             print("!!!! local_path_obj exists")
             continue
-
+        if Path("/tmp/ttnn_model_cache/model_weights/ttnn_simplecnn_inference").exists():
+            print("!!! Skipping")
+            continue
+        print("!!! Downloading")
         # Download data using model_location_generator
         data_placement = model_location_generator(
             external_path, download_if_ci_v2=True, endpoint_prefix=EXTERNAL_SERVER_BASE_URL
         )
-
+        print("!!! After Downloading")
         # Create symbolic link from local_path to data_placement
         if local_path_obj.exists():
             local_path_obj.unlink()  # Remove existing symlink/file
