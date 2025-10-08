@@ -26,11 +26,9 @@ jobs:
   galaxy-multi-user-isolation-tests:
     needs: build-artifact
     runs-on:
-      - in-service
       - topology-6u
       - arch-wormhole_b0
-      - bare-metal
-      - ${{ inputs.extra-tag }}
+      - ${{ inputs.extra-tag || 'in-service' }}
     steps:
       - name: ⬇️ Checkout
         uses: actions/checkout@v4
