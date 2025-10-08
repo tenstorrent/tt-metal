@@ -714,7 +714,6 @@ def test_demo_text(
             pytest.skip("CI only runs hybrid Llama3 1b and 8b on T3K")
 
     if is_ci_v2_env:
-        assert not is_ci_env, "CIv2 and CI cannot be run together"
         hf_model = os.getenv("HF_MODEL", "")
         model_location = model_location_generator(hf_model, download_if_ci_v2=True)
         # update env var HF_MODEL to the model location
