@@ -196,8 +196,13 @@ ttnn::Tensor bound_matmul(
             optional_output_tensor);
     }
 
-    if (parameters.user_fused_activation.has_value() && !parameters.user_core_coord.has_value()) {
-        const UnaryWithParam& activation = parameters.user_fused_activation.value();
+    if (parameters.user_fused_activation.has_value() && !has_user_grid) {
+        const UnaryOpType& op_type = parameters.user_fused_activation.value().op_type;
+
+        // Gelu must have approximation disabled for model accuracy. Other activations are run as-is.
+        auto activation = (op_type == UnaryOpType::GELU)
+                              ? ttnn::operations::unary::EltwiseUnaryWithParam{op_type, static_cast<float>(false)}
+                              : ttnn::operations::unary::EltwiseUnaryWithParam{op_type};
 
         output_tensor = ttnn::operations::unary::Unary_chain::invoke(
             output_tensor, {activation}, parameters.output_mem_config, optional_output_tensor);
