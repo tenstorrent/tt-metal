@@ -90,7 +90,7 @@ void kernel_main() {
     constexpr uint32_t num_channels_per_group = get_named_compile_time_arg_val("num_channels_per_group");
     constexpr uint32_t num_rows_per_group = get_named_compile_time_arg_val("num_rows_per_group");
 
-    constexpr auto src0_args = TensorAccessorArgs<23>();
+    constexpr auto src0_args = TensorAccessorArgs<0>();
     constexpr auto out_args = TensorAccessorArgs<src0_args.next_compile_time_args_offset()>();
 
     constexpr uint32_t block_w_minus_one = block_w - 1;

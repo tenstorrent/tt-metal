@@ -85,7 +85,7 @@ void kernel_main() {
     constexpr uint32_t num_out_blocks = get_named_compile_time_arg_val("num_out_blocks");
 
     // 21 and 22 are used in welford version but unused in this version
-    constexpr auto src0_args = TensorAccessorArgs<23>();
+    constexpr auto src0_args = TensorAccessorArgs<0>();
     constexpr auto out_args = TensorAccessorArgs<src0_args.next_compile_time_args_offset()>();
 
     constexpr uint32_t block_w_minus_one = block_w - 1;
