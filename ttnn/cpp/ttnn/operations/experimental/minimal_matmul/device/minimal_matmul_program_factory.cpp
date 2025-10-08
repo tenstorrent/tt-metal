@@ -105,6 +105,12 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
     tt::tt_metal::create_cb(
         intermediate_cb_id, program, core_grid, intermediate_tile_size, interm_cb_num_tiles, intermediate_data_format);
 
+    uint32_t in0_done_cb_id = next_cb_index++;
+    tt::tt_metal::create_cb(in0_done_cb_id, program, core_grid, input_tile_size, 1, data_format);
+
+    uint32_t in1_done_cb_id = next_cb_index++;
+    tt::tt_metal::create_cb(in1_done_cb_id, program, core_grid, input_tile_size, 1, data_format);
+
     log_info(tt::LogOp, "in0_cb_id: {}", in0_cb_id);
     log_info(tt::LogOp, "in1_cb_id: {}", in1_cb_id);
     log_info(tt::LogOp, "out_cb_id: {}", out_cb_id);
@@ -176,8 +182,8 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
     std::vector<tt::tt_metal::KernelHandle> reader_kernel_ids;
     std::vector<tt::tt_metal::KernelHandle> writer_kernel_ids;
 
-    tt::tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
-    tt::tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
+    tt::tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
+    tt::tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
     // tt::tt_metal::NOC in0_split_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
     // tt::tt_metal::NOC in1_split_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
 

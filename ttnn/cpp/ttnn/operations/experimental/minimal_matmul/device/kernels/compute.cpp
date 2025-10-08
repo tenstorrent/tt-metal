@@ -119,6 +119,8 @@ void MAIN {
     constexpr uint32_t in1_cb = tt::CBIndex::c_1;
     constexpr uint32_t out_cb = tt::CBIndex::c_2;
     constexpr uint32_t intermediate_cb = tt::CBIndex::c_3;
+    constexpr uint32_t in0_done_cb = tt::CBIndex::c_4;
+    constexpr uint32_t in1_done_cb = tt::CBIndex::c_5;
 
     mm_init(in0_cb, in1_cb, intermediate_cb);
 
@@ -159,7 +161,12 @@ void MAIN {
                     subblock_h,
                     subblock_w,
                     k_block > 0);
+
+                cb_wait_front(in0_done_cb, 1);
+                cb_pop_front(in0_done_cb, 1);
                 cb_pop_front(in0_cb, in0_block_num_tiles);
+                cb_wait_front(in1_done_cb, 1);
+                cb_pop_front(in1_done_cb, 1);
                 cb_pop_front(in1_cb, in1_block_num_tiles);
             }
             cb_push_back(intermediate_cb, out_block_num_tiles);
