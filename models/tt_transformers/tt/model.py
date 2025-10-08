@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-from loguru import logger
 from tqdm import tqdm
 
 import ttnn

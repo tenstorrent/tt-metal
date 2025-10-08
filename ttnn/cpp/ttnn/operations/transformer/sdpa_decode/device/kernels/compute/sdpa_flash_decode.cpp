@@ -277,8 +277,7 @@ void MAIN {
                 // OPTIMIZATION: Add the attention mask directly on top of DST if chunk sizes are dynamic
 #ifdef DYNAMIC_CHUNK_SIZE
                 bool add_causal_mask_fusion = is_causal && k_chunk == k_chunk_end - 1 && apply_mask_at_last_chunk;
-                bool add_sliding_window_mask_fusion =
-                    k_chunk == window_start_chunk && (window_start_unaligned % 32) > 0;
+                bool add_sliding_window_mask_fusion = k_chunk == window_start_chunk;
                 bool add_mask_fusion = add_causal_mask_fusion || use_attention_mask || add_sliding_window_mask_fusion;
 #else
                 bool add_mask_fusion = false;
@@ -316,6 +315,13 @@ void MAIN {
                     if constexpr (is_causal) {
                         // For decode, we only apply mask at the last chunk for causal mode
                         if (k_chunk == k_chunk_end - 1 && apply_mask_at_last_chunk) {
+                            // for (int32_t r = 0; r < 32; ++r) {
+                            //     SliceRange sr = SliceRange{.h0 = uint8_t(r), .h1 = uint8_t(r+1), .hs = 1, .w0 = 0,
+                            //     .w1 = 32, .ws = 1};
+                            //     // Unpacker RISC only has rd_ptr and only input CBs, so no extra args
+                            //     DPRINT_UNPACK({ DPRINT << (uint)r << " --READ--causal-- " << TileSlice(cb_mask_in, 4,
+                            //     sr, true, true) << ENDL(); });
+                            // }
                             reconfig_data_format(cb_qk_im, cb_mask_in);
                             add_block_inplace<false>(cb_qk_im, cb_mask_in, qk_chunk_tiles_dynamic);
                         }
@@ -327,7 +333,16 @@ void MAIN {
                     }
 
                     // Apply sliding window mask to the first chunk (only on the core that processes it)
-                    if (k_chunk == window_start_chunk && (window_start_unaligned % 32) > 0) {
+                    // DPRINT << "k_chunk: " << k_chunk << " window_start_chunk: " << window_start_chunk << "
+                    // window_start_unaligned: " << window_start_unaligned << ENDL();
+                    if (k_chunk == window_start_chunk && window_start_unaligned > 0) {
+                        // for (int32_t r = 0; r < 32; ++r) {
+                        //     SliceRange sr = SliceRange{.h0 = uint8_t(r), .h1 = uint8_t(r+1), .hs = 1, .w0 = 0, .w1 =
+                        //     32, .ws = 1};
+                        //     // Unpacker RISC only has rd_ptr and only input CBs, so no extra args
+                        //     DPRINT_UNPACK({ DPRINT << (uint)r << " --READ--cin1-- " <<
+                        //     TileSlice(cb_sliding_window_mask_in, 4, sr, true, true) << ENDL(); });
+                        // }
                         reconfig_data_format(cb_qk_im, cb_sliding_window_mask_in);
                         add_block_inplace<false>(cb_qk_im, cb_sliding_window_mask_in, qk_chunk_tiles_dynamic);
                     }
