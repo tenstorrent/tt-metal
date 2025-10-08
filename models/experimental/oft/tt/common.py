@@ -12,6 +12,103 @@ def _nearest_32(x):
     return math.ceil(x / 32) * 32
 
 
+def calculate_matmul_shard_dims(per_core_M, per_core_N, in_ch, out_ch, core_grid, sharding_strategy):
+    if sharding_strategy == "height":
+        shard_height = per_core_M * ttnn.TILE_SIZE
+        in_shard_width = (in_ch + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE * ttnn.TILE_SIZE
+        out_shard_width = (out_ch + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE * ttnn.TILE_SIZE
+    else:
+        shard_height = per_core_M * ttnn.TILE_SIZE
+        in_shard_width = (in_ch // core_grid.x + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE * ttnn.TILE_SIZE
+        out_shard_width = per_core_N * ttnn.TILE_SIZE
+    return shard_height, in_shard_width, out_shard_width
+
+
+def infer_per_core_dims(n, h, w, in_ch, out_ch, core_grid, sharding_strategy):
+    """Infer per-core M and N dimensions based on sharding strategy.
+    For height sharded, go for the largest possible core number. starting from core_grid.y*core_grid.x and then search for divisors of n*h*w/32. If not found, search the closest value to the whole divisor
+
+    """
+    nhw = n * h * w
+
+    nhw_padded = _nearest_32(nhw)
+    in_ch_padded = _nearest_32(in_ch)
+    out_ch_padded = _nearest_32(out_ch)
+
+    if sharding_strategy == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
+        # For HEIGHT_SHARDED, determine optimal number of cores
+        total_cores = core_grid.y * core_grid.x
+        cores_to_use = total_cores
+        found_divisor = False
+
+        # Try all values from total_cores down to total_cores/2
+        for cores_to_try in range(total_cores, 15 - 1, -1):
+            if (nhw_padded // 32) % cores_to_try == 0:
+                cores_to_use = cores_to_try
+                found_divisor = True
+                break
+
+        if found_divisor:
+            print(f"Using {cores_to_use} cores for HEIGHT_SHARDED")
+            per_core_M = (nhw_padded // 32) // cores_to_use
+        else:
+            # Default to using max cores if no exact divisor found
+            print(f"No exact divisor found, using {total_cores} cores for HEIGHT_SHARDED {nhw_padded}")
+            per_core_M = math.ceil((nhw_padded // 32) / total_cores)
+
+        per_core_N = math.ceil(out_ch_padded / ttnn.TILE_SIZE)
+
+    elif sharding_strategy == ttnn.TensorMemoryLayout.BLOCK_SHARDED:
+        per_core_M = math.ceil(nhw_padded / core_grid.x / ttnn.TILE_SIZE)
+        per_core_N = math.ceil(out_ch_padded / core_grid.y / ttnn.TILE_SIZE)
+
+    return per_core_M, per_core_N
+
+
+def infer_out_subblock(per_core_M, per_core_N, dtype=None):
+    """
+    Infer optimal output subblock dimensions for given per-core dimensions.
+
+    Args:
+        per_core_M (int): Height dimension per core
+        per_core_N (int): Width dimension per core
+        dtype (ttnn.DataType, optional): Data type that affects constraints.
+            Defaults to None (which uses BFloat16 constraint).
+
+    Returns:
+        tuple: (best_h, best_w) optimal subblock dimensions
+
+    Constraints:
+        - out_subblock_h * out_subblock_w <= max_product (8 for BFloat16, 4 for BFloat32)
+        - out_subblock_h must divide per_core_M evenly
+        - out_subblock_w must divide per_core_N evenly
+        - out_subblock_w must equal per_core_N OR out_subblock_h must equal 1
+    """
+    # Input validation
+    if per_core_M <= 0 or per_core_N <= 0:
+        raise ValueError(f"Dimensions must be positive: got M={per_core_M}, N={per_core_N}")
+
+    # Determine max product based on data type
+    max_product = 4 if dtype == ttnn.float32 else 8
+
+    # Strategy 1: Set out_subblock_w = per_core_N
+    max_h = max_product // per_core_N if per_core_N > 0 else 0
+    if max_h > 0:
+        # Find largest divisor of per_core_M that is <= max_h
+        for h in range(min(max_h, per_core_M), 0, -1):
+            if per_core_M % h == 0:
+                return h, per_core_N
+
+    # Strategy 2: Set out_subblock_h = 1
+    max_w = min(max_product, per_core_N)
+    for w in range(max_w, 0, -1):
+        if per_core_N % w == 0:
+            return 1, w
+
+    # Fallback (shouldn't normally reach here)
+    return 1, 1
+
+
 class Conv:
     def __init__(
         self,

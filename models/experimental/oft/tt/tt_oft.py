@@ -13,28 +13,11 @@ except ModuleNotFoundError:
 from models.experimental.oft.reference.oft import EPSILON
 from models.experimental.oft.reference.utils import perspective
 
+from models.experimental.oft.tt.common import infer_out_subblock, infer_per_core_dims, calculate_matmul_shard_dims
 
-def calculate_per_core_dims(n, h, w, in_ch, out_ch, core_grid, sharding_strategy):
-    nhw = n * h * w
-    if sharding_strategy == "height":
-        per_core_M = (nhw // (core_grid.y * core_grid.x) + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE
-        per_core_N = (out_ch + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE
-    else:
-        per_core_M = (nhw // core_grid.y + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE
-        per_core_N = (out_ch // core_grid.x + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE
-    return per_core_M, per_core_N
-
-
-def calculate_shard_dims(per_core_M, per_core_N, in_ch, out_ch, core_grid, sharding_strategy):
-    if sharding_strategy == "height":
-        shard_height = per_core_M * ttnn.TILE_SIZE
-        in_shard_width = (in_ch + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE * ttnn.TILE_SIZE
-        out_shard_width = (out_ch + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE * ttnn.TILE_SIZE
-    else:
-        shard_height = per_core_M * ttnn.TILE_SIZE
-        in_shard_width = (in_ch // core_grid.x + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE * ttnn.TILE_SIZE
-        out_shard_width = per_core_N * ttnn.TILE_SIZE
-    return shard_height, in_shard_width, out_shard_width
+PAD_AMOUNT = 63
+PAD_VALUE = 0.0
+NUM_SLICES = 18
 
 
 def get_matmul_config(core_grid, in0_block_w, out_subblock, per_core_M, per_core_N, out_block, sharding_strategy):
@@ -67,8 +50,27 @@ def get_matmul_config(core_grid, in0_block_w, out_subblock, per_core_M, per_core
         )
 
 
+def split_tensor(tensor, num_slices, dim=1):
+    # tensor shape: [1, total_height, 1, channels] (default split on dim=1)
+    total_size = tensor.shape[dim]
+    slice_size = total_size // num_slices
+
+    splits = [slice_size] * (num_slices - 1)
+    splits.append(total_size - slice_size * (num_slices - 1))
+    return torch.split(tensor, splits, dim=dim)
+
+
 def calculate_initialization_parameters(
-    device, channels, cell_size, grid_height, feature_shape_hw, calib, grid, scale, use_precomputed_grid
+    device,
+    channels,
+    cell_size,
+    grid_height,
+    feature_shape_hw,
+    calib,
+    grid,
+    scale,
+    use_precomputed_grid,
+    num_slices=NUM_SLICES,
 ):
     y_corners = torch.arange(0, grid_height, cell_size) - grid_height / 2.0
     y_corners = F.pad(y_corners.view(-1, 1, 1, 1), [1, 1])
@@ -109,19 +111,26 @@ def calculate_initialization_parameters(
         .reshape(1, depth * width, 1, channels * height)
         .permute(0, 2, 1, 3)
     )  # Convert to N1HW*C format
+
     top_left_bc = bbox_corners[..., [0, 1]]
-    top_left_bc = torch.nn.functional.pad(top_left_bc, ((0, 0, 0, 0, 0, 63, 0, 0)), value=0.0)
+    top_left_bc = torch.nn.functional.pad(top_left_bc, ((0, 0, 0, 0, 0, PAD_AMOUNT, 0, 0)), value=PAD_VALUE)
     btm_right_bc = bbox_corners[..., [2, 3]]
-    btm_right_bc = torch.nn.functional.pad(btm_right_bc, ((0, 0, 0, 0, 0, 63, 0, 0)), value=0.0)
+    btm_right_bc = torch.nn.functional.pad(btm_right_bc, ((0, 0, 0, 0, 0, PAD_AMOUNT, 0, 0)), value=PAD_VALUE)
     top_right_bc = bbox_corners[..., [2, 1]]
-    top_right_bc = torch.nn.functional.pad(top_right_bc, ((0, 0, 0, 0, 0, 63, 0, 0)), value=0.0)
+    top_right_bc = torch.nn.functional.pad(top_right_bc, ((0, 0, 0, 0, 0, PAD_AMOUNT, 0, 0)), value=PAD_VALUE)
     btm_left_bc = bbox_corners[..., [0, 3]]
-    btm_left_bc = torch.nn.functional.pad(btm_left_bc, ((0, 0, 0, 0, 0, 63, 0, 0)), value=0.0)
+    btm_left_bc = torch.nn.functional.pad(btm_left_bc, ((0, 0, 0, 0, 0, PAD_AMOUNT, 0, 0)), value=PAD_VALUE)
 
     batch_size, grid_h, grid_w, _ = top_left_bc.shape
     input_shape_nhwc = [batch_size, feature_height, feature_width, channels]
 
-    # reshape
+    # Split each tensor into num_slices lists
+    top_left_bc_slices = split_tensor(top_left_bc, num_slices)
+    btm_right_bc_slices = split_tensor(btm_right_bc, num_slices)
+    top_right_bc_slices = split_tensor(top_right_bc, num_slices)
+    btm_left_bc_slices = split_tensor(btm_left_bc, num_slices)
+
+    # Convert each slice to TT tensor
     if use_precomputed_grid:
         prepare_grid_lambda = lambda torch_grid_bf16, input_shape_nhwc: ttnn.to_device(
             ttnn.prepare_grid_sample_grid(
@@ -133,29 +142,47 @@ def calculate_initialization_parameters(
             device,
         )
 
-        top_left_bc_tt = prepare_grid_lambda(top_left_bc, input_shape_nhwc)
-        btm_right_bc_tt = prepare_grid_lambda(btm_right_bc, input_shape_nhwc)
-        top_right_bc_tt = prepare_grid_lambda(top_right_bc, input_shape_nhwc)
-        btm_left_bc_tt = prepare_grid_lambda(btm_left_bc, input_shape_nhwc)
-
+        top_left_bc_tt = [prepare_grid_lambda(t, input_shape_nhwc) for t in top_left_bc_slices]
+        btm_right_bc_tt = [prepare_grid_lambda(t, input_shape_nhwc) for t in btm_right_bc_slices]
+        top_right_bc_tt = [prepare_grid_lambda(t, input_shape_nhwc) for t in top_right_bc_slices]
+        btm_left_bc_tt = [prepare_grid_lambda(t, input_shape_nhwc) for t in btm_left_bc_slices]
     else:
-        top_left_bc_tt = ttnn.from_torch(top_left_bc, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-        btm_right_bc_tt = ttnn.from_torch(
-            btm_right_bc, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
-        )
-        top_right_bc_tt = ttnn.from_torch(
-            top_right_bc, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
-        )
-        btm_left_bc_tt = ttnn.from_torch(btm_left_bc, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+        top_left_bc_tt = [
+            ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+            for t in top_left_bc_slices
+        ]
+        btm_right_bc_tt = [
+            ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+            for t in btm_right_bc_slices
+        ]
+        top_right_bc_tt = [
+            ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+            for t in top_right_bc_slices
+        ]
+        btm_left_bc_tt = [
+            ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+            for t in btm_left_bc_slices
+        ]
 
-    top_left_bc_tt = ttnn.reshape(top_left_bc_tt, [batch_size, grid_h, 1, grid_w * top_left_bc_tt.shape[-1]])
-    btm_right_bc_tt = ttnn.reshape(btm_right_bc_tt, [batch_size, grid_h, 1, grid_w * btm_right_bc_tt.shape[-1]])
-    top_right_bc_tt = ttnn.reshape(top_right_bc_tt, [batch_size, grid_h, 1, grid_w * top_right_bc_tt.shape[-1]])
-    btm_left_bc_tt = ttnn.reshape(btm_left_bc_tt, [batch_size, grid_h, 1, grid_w * btm_left_bc_tt.shape[-1]])
+    print(top_left_bc_tt[0].shape, btm_right_bc_tt[0].shape, top_right_bc_tt[0].shape, btm_left_bc_tt[0].shape)
+
+    top_left_bc_tt = [
+        ttnn.reshape(t, [batch_size, 1, grid_h // num_slices, grid_w * t.shape[-1]]) for t in top_left_bc_tt
+    ]
+    btm_right_bc_tt = [
+        ttnn.reshape(t, [batch_size, 1, grid_h // num_slices, grid_w * t.shape[-1]]) for t in btm_right_bc_tt
+    ]
+    top_right_bc_tt = [
+        ttnn.reshape(t, [batch_size, 1, grid_h // num_slices, grid_w * t.shape[-1]]) for t in top_right_bc_tt
+    ]
+    btm_left_bc_tt = [
+        ttnn.reshape(t, [batch_size, 1, grid_h // num_slices, grid_w * t.shape[-1]]) for t in btm_left_bc_tt
+    ]
 
     visible_tt = ttnn.from_torch(visible_nhwc, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    area = torch.nn.functional.pad(area_nhwc * visible_nhwc, ((0, 0, 0, 63, 0, 0, 0, 0)), value=0.0)
-    area_tt = ttnn.from_torch(area, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    area = torch.nn.functional.pad(area_nhwc * visible_nhwc, ((0, 0, 0, PAD_AMOUNT, 0, 0, 0, 0)), value=PAD_VALUE)
+    area = split_tensor(area, num_slices, dim=2)
+    area_tt = [ttnn.from_torch(a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device) for a in area]
     return (
         [top_left_bc_tt, btm_right_bc_tt, top_right_bc_tt, btm_left_bc_tt],
         visible_tt,
@@ -190,6 +217,7 @@ class OFT:
         grid,
         scale,
         use_precomputed_grid,
+        num_slices=NUM_SLICES,
     ):
         # params for conv3d
         self.linear_weight = parameters.conv3d.weight
@@ -199,10 +227,19 @@ class OFT:
         self.features_shape_hw = features_shape_hw
         self.device = device
 
-        self.num_slices = 11
+        self.num_slices = num_slices
 
         self.bbox_corners, self.visible, self.area, self.shape = calculate_initialization_parameters(
-            device, channels, cell_size, grid_height, features_shape_hw, calib, grid, self.scale, use_precomputed_grid
+            device,
+            channels,
+            cell_size,
+            grid_height,
+            features_shape_hw,
+            calib,
+            grid,
+            self.scale,
+            use_precomputed_grid,
+            num_slices=num_slices,
         )
 
         in_channels = self.linear_weight.shape[0]
@@ -226,8 +263,8 @@ class OFT:
 
     def _setup_sharding_configs(self):
         """Setup sharding configurations for slicing operations"""
-        self.core_grid = ttnn.CoreGrid(y=4, x=4)
-        self.sharding_strategy = "block"
+        self.core_grid = ttnn.CoreGrid(y=4, x=5)
+        self.sharding_strategy = "height"
 
         # Sharding parameters for slicing
         self.slice_memory_layout = (
@@ -240,8 +277,9 @@ class OFT:
     def _setup_linear_configs(self):
         """Setup configurations for linear layer operations"""
         # Linear layer parameters
-        self.in0_block_w = 2
-        self.out_subblock = (1, 2)
+        self.in0_block_w = 8
+        self.out_subblock = infer_out_subblock(4, 8)
+        print(f"Using out_subblock: {self.out_subblock}")
 
         # Data types
         self.input_dtype = ttnn.bfloat16
@@ -361,81 +399,17 @@ class OFT:
 
         return sharded_tensor
 
-    def create_sharded_slice(
-        self,
-        input_tensor,
-        shard_height,
-        shard_width,
-        num_slices,
-        slice_index,
-        core_grid=None,
-        sharding_strategy=None,
-        memory_layout=None,
-    ):
-        """
-        Helper function to create a sharded slice from an input tensor (similar to interleaved_to_sharded_partial).
-
-        Args:
-            input_tensor: Input tensor to be sliced and sharded
-            shard_height: Height of each shard
-            shard_width: Width of each shard
-            num_slices: Total number of slices
-            slice_index: Index of the current slice
-            core_grid: Core grid to use (optional, uses self.core_grid if None)
-            sharding_strategy: Sharding strategy (optional, uses self.sharding_strategy if None)
-            memory_layout: Memory layout (optional, uses self.slice_memory_layout if None)
-
-        Returns:
-            Sharded slice tensor
-
-        Example usage:
-            # Process tensor in slices (e.g., for memory management)
-            for i in range(num_slices):
-                slice_tensor = self.create_sharded_slice(
-                    large_tensor,
-                    shard_height=1024,
-                    shard_width=512,
-                    num_slices=11,
-                    slice_index=i
-                )
-                # Process slice_tensor...
-                ttnn.deallocate(slice_tensor)
-        """
-        # Use class defaults if not specified
-        grid = core_grid if core_grid is not None else self.core_grid
-        strategy = sharding_strategy if sharding_strategy is not None else self.sharding_strategy
-        mem_layout = memory_layout if memory_layout is not None else self.slice_memory_layout
-
-        # Create sharded slice using ttnn function
-        sharded_slice = ttnn.interleaved_to_sharded_partial(
-            input_tensor,
-            (grid.x, grid.y),
-            [shard_height, shard_width],
-            num_slices,
-            slice_index,
-            mem_layout,
-            self.shard_orientation,
-        )
-
-        logger.debug(
-            f"Created sharded slice {slice_index}/{num_slices} with "
-            f"shard dimensions [{shard_height}, {shard_width}], "
-            f"core_grid: {grid}, strategy: {strategy}"
-        )
-
-        return sharded_slice
-
     def _calculate_dynamic_configs(self, n, h, w, in_ch, out_ch):
         """Calculate dynamic configurations based on tensor dimensions"""
         w_sliced = w // self.num_slices
 
         # Calculate per-core dimensions
-        per_core_M, per_core_N = calculate_per_core_dims(
-            n, h, w_sliced, in_ch, out_ch, self.core_grid, self.sharding_strategy
+        per_core_M, per_core_N = infer_per_core_dims(
+            n, h, w_sliced, in_ch, out_ch, self.core_grid, ttnn.TensorMemoryLayout.HEIGHT_SHARDED
         )
-
+        print(f"Calculated per_core_M: {per_core_M}, per_core_N: {per_core_N}")
         # Calculate shard dimensions
-        shard_height, in_shard_width, out_shard_width = calculate_shard_dims(
+        shard_height, in_shard_width, out_shard_width = calculate_matmul_shard_dims(
             per_core_M, per_core_N, in_ch, out_ch, self.core_grid, self.sharding_strategy
         )
 
@@ -501,61 +475,35 @@ class OFT:
         integral_image = ttnn.to_memory_config(integral_image, ttnn.L1_MEMORY_CONFIG)
 
         logger.debug(f"Integral image shape: {integral_image.shape}")
-        logger.debug(f"Bounding box corners shape: {self.bbox_corners[0].shape}")
+        logger.debug(f"Bounding box corners shape: {self.bbox_corners[0][0].shape}")
 
-        top_left = ttnn.grid_sample(
-            integral_image,
-            self.bbox_corners[0],
-            use_precomputed_grid=self.use_precomputed_grid,
-            batch_output_channels=True,
-        )
+        # Process grid samples for all slices
+        top_left_slices = []
+        btm_right_slices = []
+        top_right_slices = []
+        btm_left_slices = []
 
-        top_left = ttnn.reshape(top_left, [top_left.shape[0], top_left.shape[2], top_left.shape[1], top_left.shape[3]])
-        n, h, w, in_ch = top_left.shape
-        # top_left = ttnn.tilize_with_val_padding(top_left, [n, h, w + 63, in_ch], 0.0)
-        top_left = ttnn.to_layout(top_left, ttnn.TILE_LAYOUT)
+        grid_size = self.device.compute_with_storage_grid_size()
+        core_grid = ttnn.CoreGrid(y=grid_size.y, x=grid_size.x)
 
-        btm_right = ttnn.grid_sample(
-            integral_image,
-            self.bbox_corners[1],
-            use_precomputed_grid=self.use_precomputed_grid,
-            batch_output_channels=True,
-        )
-        btm_right = ttnn.reshape(
-            btm_right, [btm_right.shape[0], btm_right.shape[2], btm_right.shape[1], btm_right.shape[3]]
-        )
-        # btm_right = ttnn.tilize_with_val_padding(btm_right, [n, h, w + 63, in_ch], 0.0)
-        btm_right = ttnn.to_layout(btm_right, ttnn.TILE_LAYOUT)
-
-        top_right = ttnn.grid_sample(
-            integral_image,
-            self.bbox_corners[2],
-            use_precomputed_grid=self.use_precomputed_grid,
-            batch_output_channels=True,
-        )
-        top_right = ttnn.reshape(
-            top_right, [top_right.shape[0], top_right.shape[2], top_right.shape[1], top_right.shape[3]]
-        )
-        # top_right = ttnn.tilize_with_val_padding(top_right, [n, h, w + 63, in_ch], 0.0)
-        top_right = ttnn.to_layout(top_right, ttnn.TILE_LAYOUT)
-
-        btm_left = ttnn.grid_sample(
-            integral_image,
-            self.bbox_corners[3],
-            use_precomputed_grid=self.use_precomputed_grid,
-            batch_output_channels=True,
-        )
-        btm_left = ttnn.reshape(btm_left, [btm_left.shape[0], btm_left.shape[2], btm_left.shape[1], btm_left.shape[3]])
-        # btm_left = ttnn.tilize_with_val_padding(btm_left, [n, h, w + 63, in_ch], 0.0)
-        btm_left = ttnn.to_layout(btm_left, ttnn.TILE_LAYOUT)
-
-        integral_image = ttnn.to_memory_config(integral_image, ttnn.DRAM_MEMORY_CONFIG)
+        n, h, w, in_ch = [1, 1, 25344, 1792]
 
         # Get output channels from linear weight
+        print(f"Linear weight shape: {self.linear_weight.shape}")
         out_ch = self.linear_weight.shape[1]
 
         # Calculate dynamic configurations based on tensor dimensions
         configs = self._calculate_dynamic_configs(n, h, w, in_ch, out_ch)
+
+        grid_sample_memory_config = ttnn.create_sharded_memory_config(
+            (configs["shard_height"], configs["in_shard_width"]),
+            core_grid,
+            ttnn.ShardStrategy.HEIGHT,
+            ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+        print(configs)
 
         logger.debug(f"OFT Block per_core_M: {configs['per_core_M']}, per_core_N: {configs['per_core_N']}")
         logger.debug(
@@ -568,40 +516,67 @@ class OFT:
         )
 
         for i in range(self.num_slices):
-            # Using the new helper function for sharded slicing
-            vox_feats_slice = self.create_sharded_slice(
-                top_left, configs["shard_height"], configs["in_shard_width"], self.num_slices, i
+            # Top left corner slice
+            vox_feats_slice = ttnn.grid_sample(
+                integral_image,
+                self.bbox_corners[0][i],
+                use_precomputed_grid=self.use_precomputed_grid,
+                batch_output_channels=True,
+                memory_config=grid_sample_memory_config,
+            )
+            vox_feats_slice = ttnn.to_layout(vox_feats_slice, ttnn.TILE_LAYOUT)
+            # vox_feats_slice = ttnn.move(vox_feats_slice)
+
+            # Top right corner slice
+            top_right_slice = ttnn.grid_sample(
+                integral_image,
+                self.bbox_corners[2][i],
+                use_precomputed_grid=self.use_precomputed_grid,
+                batch_output_channels=True,
+                memory_config=grid_sample_memory_config,
             )
 
-            top_right_slice = self.create_sharded_slice(
-                top_right, configs["shard_height"], configs["in_shard_width"], self.num_slices, i
-            )
-
+            top_right_slice = ttnn.to_layout(top_right_slice, ttnn.TILE_LAYOUT)
             ttnn.sub_(vox_feats_slice, top_right_slice)
-
             ttnn.deallocate(top_right_slice)
+            # vox_feats_slice = ttnn.move(vox_feats_slice)
 
-            bottom_right_slice = self.create_sharded_slice(
-                btm_right, configs["shard_height"], configs["in_shard_width"], self.num_slices, i
+            # Bottom right corner slice
+            btm_right_slice = ttnn.grid_sample(
+                integral_image,
+                self.bbox_corners[1][i],
+                use_precomputed_grid=self.use_precomputed_grid,
+                batch_output_channels=True,
+                memory_config=grid_sample_memory_config,
             )
+            btm_right_slice = ttnn.to_layout(btm_right_slice, ttnn.TILE_LAYOUT)
 
-            ttnn.add_(vox_feats_slice, bottom_right_slice)
-            ttnn.deallocate(bottom_right_slice)
+            ttnn.add_(vox_feats_slice, btm_right_slice)
+            ttnn.deallocate(btm_right_slice)
+            # vox_feats_slice = ttnn.move(vox_feats_slice)
 
-            bottom_left_slice = self.create_sharded_slice(
-                btm_left, configs["shard_height"], configs["in_shard_width"], self.num_slices, i
+            # Bottom left corner slice
+            btm_left_slice = ttnn.grid_sample(
+                integral_image,
+                self.bbox_corners[3][i],
+                use_precomputed_grid=self.use_precomputed_grid,
+                batch_output_channels=True,
+                memory_config=grid_sample_memory_config,
             )
+            btm_left_slice = ttnn.to_layout(btm_left_slice, ttnn.TILE_LAYOUT)
+            ttnn.sub_(vox_feats_slice, btm_left_slice)
+            ttnn.deallocate(btm_left_slice)
+            # vox_feats_slice = ttnn.move(vox_feats_slice)
 
-            ttnn.sub_(vox_feats_slice, bottom_left_slice)
-            ttnn.deallocate(bottom_left_slice)
-
-            area_slice = self.create_sharded_slice(
-                self.area, configs["shard_height"], configs["in_shard_width"], self.num_slices, i
-            )
-
+            logger.debug(f"Voxel features slice {i} shape: {vox_feats_slice.shape}")
+            logger.debug(f"Area slice {i} shape: {self.area[i].shape}")
+            area_slice = self.create_sharded_tensor(self.area[i])
+            print(area_slice.shape)
+            print(vox_feats_slice.shape)
             ttnn.mul_(vox_feats_slice, area_slice)
             ttnn.deallocate(area_slice)
 
+            vox_feats_slice = ttnn.move(vox_feats_slice)
             vox_feats_slice = ttnn.linear(
                 vox_feats_slice,
                 self.linear_weight,
@@ -616,6 +591,7 @@ class OFT:
                 vox_feats_slice, ortho_feats, self.num_slices, i, memory_config=ttnn.DRAM_MEMORY_CONFIG
             )
 
+        integral_image = ttnn.to_memory_config(integral_image, ttnn.DRAM_MEMORY_CONFIG)
         ortho_feats = ortho_feats[:, :, : w - 63, :]
 
         if use_signpost:

@@ -11,24 +11,24 @@ from loguru import logger
 
 
 @pytest.mark.parametrize(
-    "input_shape, channels, cell_size, grid_height, scale, torch_model_dtype, use_precomputed_grid, pcc_integral_img, pcc_output",
+    "input_shape, channels, cell_size, grid_height, scale, torch_model_dtype, use_precomputed_grid, pcc_integral_img, pcc_output, num_slices",
     [
         # fmt: off
         # feats8 {float32,bfloat16} x {use_precomputed_grid, no_use_precomputed_grid}
-        ((1, 256, 48, 160), 256, 0.5, 4, 1 / 8, torch.float32,  False, 0.999, 0.872),
-        ((1, 256, 48, 160), 256, 0.5, 4, 1 / 8, torch.float32,   True, 0.999, 0.808),
-        ((1, 256, 48, 160), 256, 0.5, 4, 1 / 8, torch.bfloat16, False, 0.999, 0.679),
-        ((1, 256, 48, 160), 256, 0.5, 4, 1 / 8, torch.bfloat16,  True, 0.999, 0.637),
-        # # feats16 {float32,bfloat16} x {use_precomputed_grid, no_use_precomputed_grid}
-        ((1, 256, 24, 80), 256, 0.5, 4, 1 / 16, torch.float32,  False, 0.999, 0.522),
-        ((1, 256, 24, 80), 256, 0.5, 4, 1 / 16, torch.float32,   True, 0.999, 0.453),
-        ((1, 256, 24, 80), 256, 0.5, 4, 1 / 16, torch.bfloat16, False, 0.999, 0.348),
-        ((1, 256, 24, 80), 256, 0.5, 4, 1 / 16, torch.bfloat16,  True, 0.999, 0.334),
-        # # feats32 {float32,bfloat16} x {use_precomputed_grid, no_use_precomputed_grid}
-        ((1, 256, 12, 40), 256, 0.5, 4, 1 / 32, torch.float32,  False, 0.999, 0.296),
-        ((1, 256, 12, 40), 256, 0.5, 4, 1 / 32, torch.float32,   True, 0.999, 0.290),
-        ((1, 256, 12, 40), 256, 0.5, 4, 1 / 32, torch.bfloat16, False, 0.999, 0.236),
-        ((1, 256, 12, 40), 256, 0.5, 4, 1 / 32, torch.bfloat16,  True, 0.999, 0.229),
+        ((1, 256, 48, 160), 256, 0.5, 4, 1 / 8, torch.float32,  False, 0.999, 0.872, 18),
+        ((1, 256, 48, 160), 256, 0.5, 4, 1 / 8, torch.float32,   True, 0.999, 0.808, 18),
+        ((1, 256, 48, 160), 256, 0.5, 4, 1 / 8, torch.bfloat16, False, 0.999, 0.679, 18),
+        ((1, 256, 48, 160), 256, 0.5, 4, 1 / 8, torch.bfloat16,  True, 0.999, 0.642, 18),
+        # feats16 {float32,bfloat16} x {use_precomputed_grid, no_use_precomputed_grid}
+        ((1, 256, 24, 80), 256, 0.5, 4, 1 / 16, torch.float32,  False, 0.999, 0.522, 18),
+        ((1, 256, 24, 80), 256, 0.5, 4, 1 / 16, torch.float32,   True, 0.999, 0.453, 12),
+        ((1, 256, 24, 80), 256, 0.5, 4, 1 / 16, torch.bfloat16, False, 0.999, 0.348, 18),
+        ((1, 256, 24, 80), 256, 0.5, 4, 1 / 16, torch.bfloat16,  True, 0.999, 0.334, 18),
+        # feats32 {float32,bfloat16} x {use_precomputed_grid, no_use_precomputed_grid}
+        ((1, 256, 12, 40), 256, 0.5, 4, 1 / 32, torch.float32,  False, 0.999, 0.296, 16),
+        ((1, 256, 12, 40), 256, 0.5, 4, 1 / 32, torch.float32,   True, 0.999, 0.290, 11),
+        ((1, 256, 12, 40), 256, 0.5, 4, 1 / 32, torch.bfloat16, False, 0.999, 0.236, 16),
+        ((1, 256, 12, 40), 256, 0.5, 4, 1 / 32, torch.bfloat16,  True, 0.999, 0.229, 16),
         # fmt: on
     ],
     ids=[
@@ -59,6 +59,7 @@ def test_oft_forward(
     use_precomputed_grid,
     pcc_integral_img,
     pcc_output,
+    num_slices,
     seed,
 ):
     torch.manual_seed(seed)
@@ -109,6 +110,7 @@ def test_oft_forward(
         grid,
         scale=scale,
         use_precomputed_grid=use_precomputed_grid,
+        num_slices=num_slices,
     )
     tt_out, tt_integral_img, bbox_top_left, bbox_btm_right, bbox_top_right, bbox_btm_left8 = tt_oft.forward(
         device, tt_features, tt_calib, tt_grid
