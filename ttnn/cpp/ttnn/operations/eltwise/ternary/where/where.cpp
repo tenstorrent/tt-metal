@@ -28,6 +28,7 @@ Tensor where_impl(
     const auto& value_false,
     const MemoryConfig& memory_config,
     std::optional<Tensor> output) {
+    log_debug(tt::LogOp, "Where Legacy");
     using FusedActivations = tt::stl::Span<const unary::EltwiseUnaryWithParam>;
     constexpr auto dtype = std::nullopt;
     const auto get_multiplied = [&](const Tensor& condition, const auto& value) -> Tensor {
@@ -80,106 +81,135 @@ inline MemoryConfig determine_memory_config(
 
 }  // namespace ternary_utils
 
-// Helper function to check if sharding is present
-bool has_sharding(
-    const Tensor& predicate,
-    const std::variant<float, Tensor>& value_true,
-    const std::variant<float, Tensor>& value_false,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& output) {
-    auto check_tensor_sharding = [](const auto& tensor) {
-        return std::holds_alternative<Tensor>(tensor) && std::get<Tensor>(tensor).memory_config().is_sharded();
-    };
+namespace {
 
-    return predicate.memory_config().is_sharded() || check_tensor_sharding(value_true) ||
-           check_tensor_sharding(value_false) || (memory_config.has_value() && memory_config->is_sharded()) ||
-           (output.has_value() && output->memory_config().is_sharded());
+inline bool is_sharded(const Tensor& t) { return t.memory_config().is_sharded(); }
+inline bool is_sharded(const std::optional<MemoryConfig>& mc) { return mc.has_value() && mc->is_sharded(); }
+inline bool is_sharded(const std::optional<Tensor>& t) { return t.has_value() && t->memory_config().is_sharded(); }
+inline bool is_invalid_bcast(const ttnn::operations::ternary::WhereBroadcastType& broadcast_type) {
+    return broadcast_type == ttnn::operations::ternary::WhereBroadcastType::INVALID_BCAST;
 }
 
-// Helper function to handle typecasting and prim::where invocation for TTT case
-Tensor handle_ttt_case(
+// TTT: tensor, tensor, tensor
+Tensor invoke_impl(
     Tensor condition,
     const Tensor& t_true,
     const Tensor& t_false,
-    const std::optional<DataType>& output_dtype,
-    const MemoryConfig& memory_config,
+    const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> output) {
+    auto broadcast_type = ttnn::operations::ternary::get_broadcast_type(
+        condition.logical_shape(), t_true.logical_shape(), t_false.logical_shape());
     bool typecast_needed = ternary_utils::typecast_predicate(condition, t_true, t_false);
     if (typecast_needed) {
         condition = ttnn::typecast(condition, t_true.dtype());
     }
-
-    auto broadcast_type = ttnn::operations::ternary::get_broadcast_type(
-        condition.logical_shape(), t_true.logical_shape(), t_false.logical_shape());
-
-    if (broadcast_type != ttnn::operations::ternary::WhereBroadcastType::INVALID_BCAST) {
-        log_info(tt::LogOp, "Where LLK - TTT");
-        return ttnn::prim::where(condition, t_true, t_false, output_dtype, memory_config, output);
+    if (is_sharded(condition) || is_sharded(t_true) || is_sharded(t_false) || is_sharded(memory_config) ||
+        is_sharded(output) || is_invalid_bcast(broadcast_type)) {
+        return ternary_utils::where_impl(
+            condition,
+            t_true,
+            t_false,
+            ternary_utils::determine_memory_config(memory_config, condition.memory_config()),
+            std::move(output));
     }
-    return ternary_utils::where_impl(condition, t_true, t_false, memory_config, std::move(output));
+    std::optional<DataType> output_dtype = ternary_utils::determine_output_dtype(output, t_true.dtype());
+
+    log_debug(tt::LogOp, "Where LLK - TTT");
+    return ttnn::prim::where(
+        std::move(condition),
+        t_true,
+        t_false,
+        output_dtype,
+        ternary_utils::determine_memory_config(memory_config, t_true.memory_config()),
+        std::move(output));
 }
 
-// Helper function to handle TTS case
-Tensor handle_tts_case(
+// TTS: tensor, tensor, scalar
+Tensor invoke_impl(
     Tensor condition,
     const Tensor& t_true,
     float scalar_false,
-    const std::optional<DataType>& output_dtype,
-    const MemoryConfig& memory_config,
+    const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> output) {
+    auto broadcast_type =
+        ttnn::operations::ternary::get_broadcast_type(condition.logical_shape(), t_true.logical_shape());
     bool typecast_needed = ternary_utils::typecast_predicate(condition, t_true);
     if (typecast_needed) {
         condition = ttnn::typecast(condition, t_true.dtype());
     }
 
-    auto broadcast_type =
-        ttnn::operations::ternary::get_broadcast_type(condition.logical_shape(), t_true.logical_shape());
-
-    if (broadcast_type != ttnn::operations::ternary::WhereBroadcastType::INVALID_BCAST) {
-        log_info(tt::LogOp, "Where LLK - TTS");
-        return ttnn::prim::where(condition, t_true, scalar_false, output_dtype, memory_config, output);
+    if (is_sharded(condition) || is_sharded(t_true) || is_sharded(memory_config) || is_sharded(output) ||
+        is_invalid_bcast(broadcast_type)) {
+        return ternary_utils::where_impl(
+            condition,
+            t_true,
+            scalar_false,
+            ternary_utils::determine_memory_config(memory_config, condition.memory_config()),
+            std::move(output));
     }
-    return ternary_utils::where_impl(condition, t_true, scalar_false, memory_config, std::move(output));
+
+    std::optional<DataType> output_dtype = ternary_utils::determine_output_dtype(output, t_true.dtype());
+    log_debug(tt::LogOp, "Where LLK - TTS");
+    return ttnn::prim::where(
+        std::move(condition),
+        t_true,
+        scalar_false,
+        output_dtype,
+        ternary_utils::determine_memory_config(memory_config, t_true.memory_config()),
+        std::move(output));
 }
 
-// Helper function to handle TST case
-Tensor handle_tst_case(
+// TST: tensor, scalar, tensor
+Tensor invoke_impl(
     Tensor condition,
     float scalar_true,
     const Tensor& t_false,
-    const std::optional<DataType>& output_dtype,
-    const MemoryConfig& memory_config,
+    const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> output) {
     bool typecast_needed = ternary_utils::typecast_predicate(condition, t_false);
     if (typecast_needed) {
         condition = ttnn::typecast(condition, t_false.dtype());
     }
-
     auto broadcast_type =
         ttnn::operations::ternary::get_broadcast_type(condition.logical_shape(), t_false.logical_shape());
-
-    if (broadcast_type != ttnn::operations::ternary::WhereBroadcastType::INVALID_BCAST) {
-        log_info(tt::LogOp, "Where LLK - TST");
-        return ttnn::prim::where(condition, scalar_true, t_false, output_dtype, memory_config, output);
+    if (is_sharded(condition) || is_sharded(t_false) || is_sharded(memory_config) || is_sharded(output) ||
+        is_invalid_bcast(broadcast_type)) {
+        return ternary_utils::where_impl(
+            condition,
+            scalar_true,
+            t_false,
+            ternary_utils::determine_memory_config(memory_config, condition.memory_config()),
+            std::move(output));
     }
-    return ternary_utils::where_impl(condition, scalar_true, t_false, memory_config, std::move(output));
+
+    std::optional<DataType> output_dtype = ternary_utils::determine_output_dtype(output, t_false.dtype());
+    log_debug(tt::LogOp, "Where LLK - TST");
+    return ttnn::prim::where(
+        std::move(condition),
+        scalar_true,
+        t_false,
+        output_dtype,
+        ternary_utils::determine_memory_config(memory_config, t_false.memory_config()),
+        std::move(output));
 }
 
-// Helper function to handle TSS case
-Tensor handle_tss_case(
-    const Tensor& predicate,
+// TSS: tensor, scalar, scalar
+Tensor invoke_impl(
+    Tensor condition,
     float t_true,
     float t_false,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> output) {
-    log_info(tt::LogOp, "Where LLK - TSS");
+    log_debug(tt::LogOp, "Where LLK - TSS");
     unary::UnaryOpType op_type = unary::UnaryOpType::WHERE_TSS;
     return ttnn::operations::unary::Unary_chain::invoke(
-        predicate,
+        condition,
         {unary::UnaryWithParam{op_type, {static_cast<float>(t_true), static_cast<float>(t_false)}}},
         memory_config,
-        output);
+        std::move(output));
 }
+
+}  // namespace
 
 Tensor WhereOperation::invoke(
     const Tensor& predicate,
@@ -187,73 +217,12 @@ Tensor WhereOperation::invoke(
     const std::variant<float, Tensor>& value_false,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> output) {
-    bool is_value_true_tensor = std::holds_alternative<Tensor>(value_true);
-    bool is_value_false_tensor = std::holds_alternative<Tensor>(value_false);
-    Tensor condition = predicate;
-
-    // Lambda to handle fallback to legacy implementation
-    auto fallback_to_legacy = [&](const char* reason) {
-        log_info(tt::LogOp, "Where - legacy ({})", reason);
-        return std::visit(
-            [&](const auto&... values) {
-                return ternary_utils::where_impl(
-                    condition, values..., memory_config.value_or(predicate.memory_config()), std::move(output));
-            },
-            value_true,
-            value_false);
-    };
-
-    // Check if sharding prevents optimized path
-    if (has_sharding(predicate, value_true, value_false, memory_config, output)) {
-        return fallback_to_legacy("sharding detected");
-    }
-
-    // Try optimized paths in order of preference
-    if (is_value_true_tensor && is_value_false_tensor) {
-        // TTT case: tensor-tensor-tensor
-        const auto& t_true = std::get<Tensor>(value_true);
-        const auto& t_false = std::get<Tensor>(value_false);
-        std::optional<DataType> output_dtype = ternary_utils::determine_output_dtype(output, t_true.dtype());
-        return handle_ttt_case(
-            condition,
-            t_true,
-            t_false,
-            output_dtype,
-            ternary_utils::determine_memory_config(memory_config, t_true.memory_config()),
-            output);
-    } else if (is_value_true_tensor && !is_value_false_tensor) {
-        // TTS case: tensor-tensor-scalar
-        const auto& t_true = std::get<Tensor>(value_true);
-        float scalar_false = std::get<float>(value_false);
-        std::optional<DataType> output_dtype = ternary_utils::determine_output_dtype(output, t_true.dtype());
-        return handle_tts_case(
-            condition,
-            t_true,
-            scalar_false,
-            output_dtype,
-            ternary_utils::determine_memory_config(memory_config, t_true.memory_config()),
-            output);
-    } else if (!is_value_true_tensor && is_value_false_tensor) {
-        // TST case: tensor-scalar-tensor
-        float scalar_true = std::get<float>(value_true);
-        const auto& t_false = std::get<Tensor>(value_false);
-        std::optional<DataType> output_dtype = ternary_utils::determine_output_dtype(output, t_false.dtype());
-        return handle_tst_case(
-            condition,
-            scalar_true,
-            t_false,
-            output_dtype,
-            ternary_utils::determine_memory_config(memory_config, t_false.memory_config()),
-            output);
-    } else if (!is_value_true_tensor && !is_value_false_tensor) {
-        // TSS case: tensor-scalar-scalar
-        float t_true = std::get<float>(value_true);
-        float t_false = std::get<float>(value_false);
-        return handle_tss_case(predicate, t_true, t_false, memory_config, output);
-    }
-
-    // Fallback to legacy implementation
-    return fallback_to_legacy("invalid broadcast detected");
+    return std::visit(
+        [&](const auto& true_val, const auto& false_val) {
+            return invoke_impl(Tensor{predicate}, true_val, false_val, memory_config, std::move(output));
+        },
+        value_true,
+        value_false);
 }
 
 }  // namespace ternary
