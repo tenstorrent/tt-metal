@@ -13,7 +13,7 @@
 #include "env_lib.hpp"
 #include <tt-metalium/tt_metal.hpp>
 #include "trace/trace_buffer.hpp"
-#include <tt-metalium/command_queue.hpp>
+#include "impl/dispatch/command_queue.hpp"
 #include <tt-metalium/device.hpp>
 #include "flatbuffer/base_types_from_flatbuffer.hpp"
 #include "flatbuffer/program_types_from_flatbuffer.hpp"
