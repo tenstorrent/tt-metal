@@ -991,6 +991,7 @@ private:
 
                     // Calculate bandwidth in Bytes/cycle and convert to GB/s
                     const auto device_frequency_mhz = get_device_frequency_mhz(device_id);
+                    log_info(tt::LogTest, "Device {} frequency: {} MHz", device_id.chip_id, device_frequency_mhz);
                     uint32_t device_frequency_hz = device_frequency_mhz * 1e6;
                     // use min frequency (in real senario we will have the same freq)
                     device_freq = std::min(device_freq, device_frequency_hz);

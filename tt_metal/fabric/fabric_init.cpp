@@ -173,6 +173,12 @@ void build_tt_fabric_program(
             // remote_fabric_node_id is only used to determine the handshake master, no functional impact
             // for now treat the mmio chips as the handshake master
             auto eth_logical_core = soc_desc.get_eth_core_for_channel(eth_chan, CoordSystem::LOGICAL);
+            log_info(
+                tt::LogMetal,
+                "MMIO Capable: Building edm builder for device: {}, eth channel: {}, logical core: {}",
+                device->id(),
+                eth_chan,
+                eth_logical_core.str());
             auto edm_builder = tt::tt_fabric::FabricEriscDatamoverBuilder::build(
                 device,
                 *fabric_program_ptr,
@@ -247,7 +253,7 @@ void build_tt_fabric_program(
         chip_neighbors.emplace(direction, neighbor_fabric_node_id);
 
         active_fabric_eth_channels.insert({direction, active_eth_chans});
-        log_debug(
+        log_info(
             tt::LogMetal,
             "Building fabric router -> device (phys): {}, (logical): {}, direction: {}, active_eth_chans.size(): {}, "
             "active_eth_chans: [{}]",
@@ -308,6 +314,15 @@ void build_tt_fabric_program(
                 has_tensix_extension = true;
             }
 
+            log_info(
+                tt::LogMetal,
+                "Building edm builder for device: {} fabric node id: {}, remote fabric node id: {}, eth channel: {}, "
+                "logical core: {}",
+                device->id(),
+                fabric_node_id,
+                remote_fabric_node_id,
+                eth_chan,
+                eth_logical_core.str());
             auto edm_builder = tt::tt_fabric::FabricEriscDatamoverBuilder::build(
                 device,
                 *fabric_program_ptr,
