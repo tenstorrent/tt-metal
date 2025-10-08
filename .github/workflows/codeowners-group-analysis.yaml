@@ -1211,6 +1211,24 @@ jobs:
 
           echo "Generating ping message for pending owners..."
 
+          # Get members of thirdparty-moreh team to exclude from selection (they're not in Slack)
+          MOREH_TEAM_MEMBERS=""
+          MOREH_MEMBERS_API="https://api.github.com/orgs/tenstorrent/teams/thirdparty-moreh/members"
+          MOREH_MEMBERS_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.ORG_READ_GITHUB_TOKEN }}" \
+                                   -H "Accept: application/vnd.github.v3+json" \
+                                   "$MOREH_MEMBERS_API" 2>/dev/null)
+
+          MOREH_HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer ${{ secrets.ORG_READ_GITHUB_TOKEN }}" \
+                                   -H "Accept: application/vnd.github.v3+json" \
+                                   "$MOREH_MEMBERS_API")
+
+          if [ "$MOREH_HTTP_CODE" = "200" ] && [ -n "$MOREH_MEMBERS_DATA" ] && [ "$MOREH_MEMBERS_DATA" != "null" ]; then
+            MOREH_TEAM_MEMBERS=$(echo "$MOREH_MEMBERS_DATA" | jq -r '.[].login' 2>/dev/null | tr '\n' ',' | sed 's/,$//')
+            echo "Found thirdparty-moreh team members to exclude: $MOREH_TEAM_MEMBERS"
+          else
+            echo "Warning: Could not fetch thirdparty-moreh team members (HTTP $MOREH_HTTP_CODE)"
+          fi
+
           # Get PR information
           PR_API="https://api.github.com/repos/${{ github.repository }}/pulls/$PR_NUMBER"
           PR_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
@@ -1219,6 +1237,16 @@ jobs:
           PR_TITLE=$(echo "$PR_DATA" | jq -r '.title')
           PR_AUTHOR_LOGIN=$(echo "$PR_DATA" | jq -r '.user.login')
           PR_AUTHOR_NAME=$(echo "$PR_DATA" | jq -r '.user.name // .user.login')
+
+          # Helper function to check if user is in thirdparty-moreh team
+          is_moreh_member() {
+            local username="$1"
+            if [ -n "$MOREH_TEAM_MEMBERS" ]; then
+              echo "$MOREH_TEAM_MEMBERS" | grep -q "$username"
+            else
+              return 1
+            fi
+          }
 
           # Collect 2 owners from EACH pending group, then deduplicate
           TEMP_SELECTED_OWNERS=""
@@ -1248,11 +1276,16 @@ jobs:
 
                     # Only select owners from pending teams
                     if [ "$team_has_approval" = false ]; then
-                      # Collect unapproved members for this team
+                      # Collect unapproved members for this team, excluding moreh team members
                       TEAM_UNAPPROVED=""
                       for member in "${MEMBERS_ARRAY[@]}"; do
                         if ! echo "$APPROVED_REVIEWERS" | grep -q "$member"; then
-                          TEAM_UNAPPROVED="$TEAM_UNAPPROVED$member,"
+                          # Check if member is in moreh team and exclude them
+                          if is_moreh_member "$member"; then
+                            echo "Excluding $member (thirdparty-moreh team member) from selection"
+                          else
+                            TEAM_UNAPPROVED="$TEAM_UNAPPROVED$member,"
+                          fi
                         fi
                       done
                       TEAM_UNAPPROVED=$(echo "$TEAM_UNAPPROVED" | sed 's/,$//')
@@ -1303,12 +1336,17 @@ jobs:
 
               # Only select owners from pending patterns
               if [ "$pattern_has_approval" = false ]; then
-                # Collect unapproved owners for this pattern
+                # Collect unapproved owners for this pattern, excluding moreh team members
                 PATTERN_UNAPPROVED=""
                 for owner_pair in "${OWNERS_ARRAY[@]}"; do
                   username=$(echo "$owner_pair" | cut -d'|' -f1)
                   if ! echo "$APPROVED_REVIEWERS" | grep -q "$username"; then
-                    PATTERN_UNAPPROVED="$PATTERN_UNAPPROVED$username,"
+                    # Check if user is in moreh team and exclude them
+                    if is_moreh_member "$username"; then
+                      echo "Excluding $username (thirdparty-moreh team member) from pattern selection"
+                    else
+                      PATTERN_UNAPPROVED="$PATTERN_UNAPPROVED$username,"
+                    fi
                   fi
                 done
                 PATTERN_UNAPPROVED=$(echo "$PATTERN_UNAPPROVED" | sed 's/,$//')
