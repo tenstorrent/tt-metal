@@ -160,8 +160,7 @@ jobs:
       - name: Build artifacts
         run: |
           mkdir outputs
-          /home/runner/build.sh \
-            --target artifacts \
+          /home/runner/build.sh --target artifacts \
             --local outputs \
             --dockerfile-dir dockerfile \
             --dockerfile Dockerfile \
@@ -171,5 +170,5 @@ jobs:
             --build-arg BUILD_UMD_TESTS=${{ inputs.build-umd-tests }} \
             --build-arg TOOLCHAIN_FILE=${{ inputs.toolchain }} \
             --build-arg PROFILE=${{ inputs.profile }} \\
-            --build-arg SKIP_TT_TRAIN=${{ inputs.skip-tt-train }} \
+            --build-arg SKIP_TT_TRAIN=${{ inputs.skip-tt-train }}
           ls outputs
