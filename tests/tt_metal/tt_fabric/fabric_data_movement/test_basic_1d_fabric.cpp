@@ -269,27 +269,8 @@ void RunTestLineMcast(BaseFabricFixture* fixture, const std::vector<McastRouting
 
     std::vector<uint32_t> mcast_header_rtas(4, 0);
     for (const auto& routing_info : mcast_routing_info) {
-        auto axis_hops = routing_info.num_mcast_hops;
-        if (spine_hops) {
-            // hops here include the mcast origin device.
-            // i.e mcast_routing_info specifies the size of mcast group, which included the mcast
-            // origin device.
-            // For example, if north is set to 4, it implies origin device + 3 north neighbors.
-            // Therefore, if there is an mcast trunk, decrement the trunk hop count by 1 to discount the origin
-            // device.
-            if (routing_info.mcast_dir == RoutingDirection::N or routing_info.mcast_dir == RoutingDirection::S) {
-                // Decrement the hop to account for mcast origin device.
-                axis_hops--;
-            }
-            // Also, if there is a a trunk present, we do not decrement the branch axis size.
-        } else {
-            // There is no Trunk, i.e branch line mcast.
-            // In this case decrement the branch axis hop count, because, origin devices counts as first
-            // mcast receiver device.
-            axis_hops--;
-        }
         mcast_header_rtas[static_cast<uint32_t>(
-            control_plane.routing_direction_to_eth_direction(routing_info.mcast_dir))] = axis_hops;
+            control_plane.routing_direction_to_eth_direction(routing_info.mcast_dir))] = routing_info.num_mcast_hops;
     }
     sender_runtime_args.insert(sender_runtime_args.end(), mcast_header_rtas.begin(), mcast_header_rtas.end());
     // append the EDM connection rt args

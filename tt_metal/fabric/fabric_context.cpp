@@ -68,10 +68,11 @@ bool FabricContext::is_2D_topology(tt::tt_fabric::Topology topology) {
 }
 
 bool FabricContext::is_dynamic_routing_config(tt::tt_fabric::FabricConfig fabric_config) {
-    return fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC ||
-           fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_X ||
-           fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_Y ||
-           fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_XY;
+    return false;
+    // return fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC ||
+    //        fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_X ||
+    //        fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_Y ||
+    //        fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_XY;
 }
 
 size_t FabricContext::get_packet_header_size_bytes() const {
@@ -120,6 +121,15 @@ FabricContext::FabricContext(tt::tt_fabric::FabricConfig fabric_config) {
         fabric_config != tt::tt_fabric::FabricConfig::DISABLED,
         "Trying to initialize fabric context for disabled fabric config");
 
+    if (fabric_config == tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC) {
+        fabric_config = tt_fabric::FabricConfig::FABRIC_2D;
+    } else if (fabric_config == tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_X) {
+        fabric_config = tt_fabric::FabricConfig::FABRIC_2D_TORUS_X;
+    } else if (fabric_config == tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_Y) {
+        fabric_config = tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y;
+    } else if (fabric_config == tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_XY) {
+        fabric_config = tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY;
+    }
     this->fabric_config_ = fabric_config;
 
     this->wrap_around_mesh_ = this->check_for_wrap_around_mesh();
