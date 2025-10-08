@@ -33,6 +33,22 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
             None,  # features
             None,  # inds
         ),
+        (
+            [256, 256, 256, 256],  # mlp
+            1024,  # npoint
+            0.4,  # radius
+            32,  # nsample
+            True,  # bn
+            True,  # use_xyz
+            "max",  # pooling
+            None,  # sigma
+            True,  # normalize_xyz
+            False,  # sample_uniformly
+            False,  # ret_unique_cnt
+            (1, 2048, 3),  # xyz
+            None,  # features
+            None,  # inds
+        ),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 79104}], indirect=True)

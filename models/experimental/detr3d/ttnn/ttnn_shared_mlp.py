@@ -16,7 +16,7 @@ class TtnnSharedMLP:
             device,
             activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
             is_dealloc_act=True,
-            return_dims=False,
+            return_dims=True,
         )
         self.conv2 = TtnnConv2D(
             module.layer1.conv,
@@ -24,7 +24,7 @@ class TtnnSharedMLP:
             device,
             activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
             is_dealloc_act=True,
-            return_dims=False,
+            return_dims=True,
         )
         self.conv3 = TtnnConv2D(
             module.layer2.conv,
@@ -32,16 +32,21 @@ class TtnnSharedMLP:
             device,
             activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
             is_dealloc_act=True,
-            return_dims=False,
+            return_dims=True,
         )
 
     def __call__(self, features):
-        # print(f"{features.shape=}")
-        conv1 = self.conv1(features)
-        # print(f"{conv1.shape=}")
-        conv2 = self.conv2(conv1)
-        # print(f"{conv2.shape=}")
-        conv3 = self.conv3(conv2)
-        # print(f"{conv3.shape=}")
-        # print(f"{_=}")
+        shape = features.shape
+        print(f"{features.shape=}")
+        print(f"{shape=}")
+        conv1, shape = self.conv1(features, shape)
+        print(f"{conv1.shape=}")
+        print(f"{shape=}")
+        conv2, shape = self.conv2(conv1, shape)
+        print(f"{conv2.shape=}")
+        print(f"{shape=}")
+        conv3, shape = self.conv3(conv2, shape)
+        print(f"{conv3.shape=}")
+        print(f"{shape=}")
+        conv3 = ttnn.reshape(conv3, shape)
         return conv3

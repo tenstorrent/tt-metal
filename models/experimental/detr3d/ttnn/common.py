@@ -177,7 +177,7 @@ class TtnnConv2D:
         #     self.weight = ttnn.to_device(self.weight, self.device)
         #     self.bias = ttnn.to_device(self.bias, self.device)
 
-        [x, shape, [self.weight, self.bias]] = ttnn.conv2d(
+        [x, [_out_height, _out_width], [self.weight, self.bias]] = ttnn.conv2d(
             input_tensor=x,
             weight_tensor=self.weight,
             bias_tensor=self.bias,
@@ -198,6 +198,7 @@ class TtnnConv2D:
             return_output_dim=True,
             return_weights_and_bias=True,
         )
+        shape = (batch_size, _out_height, _out_width, x.shape[-1])
         if self.return_dims:
             return x, shape
         else:
