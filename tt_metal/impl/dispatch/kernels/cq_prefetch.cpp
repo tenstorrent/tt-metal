@@ -1022,8 +1022,7 @@ uint32_t process_relay_linear_cmd(uint32_t cmd_ptr, uint32_t& downstream_data_pt
 
     downstream_data_ptr = round_up_pow2(downstream_data_ptr, downstream_cb_page_size);
 
-    // One page was acquired w/ the cmd in CMD_RELAY_INLINE_NOFLUSH
-    cb_release_pages<my_noc_index, downstream_noc_xy, downstream_cb_sem_id>(npages + 1);
+    cb_release_pages<my_noc_index, downstream_noc_xy, downstream_cb_sem_id>(npages);
 
     return CQ_PREFETCH_CMD_BARE_MIN_SIZE;
 }
