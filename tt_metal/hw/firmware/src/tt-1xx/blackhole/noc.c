@@ -51,9 +51,9 @@ uint32_t noc_get_cmd_buf() {
 
 void noc_set_active_instance(uint32_t noc_id) {
 #ifdef TB_NOC
-    api_set_active_noc_instance(noc_id);
+    api_set_active_noc_instance(NOC_CMD_BUF_OFFSET + noc_id);
 #else
-    active_noc_instance = noc_id;
+    active_noc_instance = NOC_CMD_BUF_OFFSET + noc_id;
 #endif
 }
 
