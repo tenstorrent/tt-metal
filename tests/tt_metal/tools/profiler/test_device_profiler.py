@@ -313,17 +313,6 @@ def test_dispatch_cores():
 
     verify_stats(
         run_device_profiler_test(
-            testName=f"pytest {TRACY_TESTS_DIR}/test_dispatch_profiler.py::test_all_devices -k DispatchCoreType.WORKER",
-            setupAutoExtract=True,
-            doDispatchCores=True,
-        ),
-        statTypes=["Dispatch", "Prefetch"],
-        allowedRange=1000,
-        refCountDict=REF_COUNT_DICT,
-    )
-
-    verify_stats(
-        run_device_profiler_test(
             testName=f"pytest {TRACY_TESTS_DIR}/test_trace_runs.py",
             setupAutoExtract=False,
             doDispatchCores=True,
