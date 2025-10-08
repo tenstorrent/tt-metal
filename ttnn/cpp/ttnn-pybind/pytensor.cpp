@@ -346,12 +346,16 @@ host_buffer_data_type get_py_tensor_type_info(const py::handle& py_tensor) {
             return host_buffer_data_type::INT32;
         } else if (py_dtype.equal(torch.attr("int64"))) {
             return host_buffer_data_type::INT64;
+        } else if (py_dtype.equal(torch.attr("uint32"))) {
+            return host_buffer_data_type::UINT32;
         } else if (py_dtype.equal(torch.attr("uint8"))) {
             return host_buffer_data_type::UINT8;
         } else if (py_dtype.equal(torch.attr("bool"))) {
             return host_buffer_data_type::BOOL;
         } else {
-            TT_THROW("Unsupported torch tensor dtype!");
+            TT_THROW(
+                "Unsupported torch tensor dtype: {}. Cannot map provided torch type to the host buffer data type.",
+                py::str(py_dtype).cast<std::string>());
         }
     } else if (py::object np = py::module_::import("numpy"); py::isinstance(py_tensor, np.attr("ndarray"))) {
         const auto py_dtype = py_tensor.attr("dtype");
@@ -380,7 +384,9 @@ host_buffer_data_type get_py_tensor_type_info(const py::handle& py_tensor) {
         } else if (py_dtype.equal(np.attr("bool_"))) {
             return host_buffer_data_type::BOOL;
         } else {
-            TT_THROW("Unsupported numpy array dtype!");
+            TT_THROW(
+                "Unsupported numpy array dtype: {}. Cannot map provided torch type to the host buffer data type.",
+                py::str(py_dtype).cast<std::string>());
         }
     } else {
         TT_THROW("The argument must be of type torch.Tensor or numpy.ndarray!");
@@ -565,6 +571,9 @@ Tensor convert_python_tensor_to_tt_tensor(
         pad_value,
         mesh_mapper);
 
+    bool data_type_requires_tile = optional_data_type.has_value() && (optional_data_type == DataType::BFLOAT4_B ||
+                                                                      optional_data_type == DataType::BFLOAT8_B);
+
     const auto shape = ttnn::Shape(py::cast<ttnn::SmallVector<uint32_t>>(py_tensor.attr("shape")));
 
     Tensor output = create_device_tensor_from_host_data(
@@ -572,7 +581,9 @@ Tensor convert_python_tensor_to_tt_tensor(
             shape,
             TensorLayout(
                 get_target_type(optional_data_type, py_tensor),
-                PageConfig(optional_layout.value_or(Layout::ROW_MAJOR), optional_tile),
+                PageConfig(
+                    optional_layout.value_or(data_type_requires_tile ? Layout::TILE : Layout::ROW_MAJOR),
+                    optional_tile),
                 memory_config)),
         get_py_tensor_type_info(py_tensor),
         [&](const DataType& dtype) -> HostBuffer {
