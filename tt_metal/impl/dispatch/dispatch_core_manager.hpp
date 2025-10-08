@@ -64,7 +64,6 @@ public:
     /// @param dispatch_core_config specfies the core type that is designated for dispatch functionality
     dispatch_core_manager(const DispatchCoreConfig& dispatch_core_config, uint8_t num_hw_cqs);
 
-    // TODO: this should probably be in command_queue_interface.hpp, but it's here for now due to circular dependency
     static constexpr uint8_t MAX_NUM_HW_CQS = 2;
 
     /// @brief Gets the location of the kernel desginated to read from the issue queue region from a particular command
