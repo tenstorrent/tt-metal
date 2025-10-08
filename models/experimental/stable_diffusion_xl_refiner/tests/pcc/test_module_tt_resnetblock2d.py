@@ -8,7 +8,7 @@ import torch
 import pytest
 import ttnn
 from diffusers import UNet2DConditionModel
-from models.utility_functions import torch_random
+from models.common.utility_functions import torch_random
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.experimental.stable_diffusion_xl_refiner.tt.tt_resnetblock2d import TtResnetBlock2D
 from models.experimental.stable_diffusion_xl_refiner.tests.test_common import SDXL_REFINER_L1_SMALL_SIZE
@@ -21,7 +21,7 @@ from models.experimental.stable_diffusion_xl_refiner.tests.test_common import SD
         ((1, 384, 64, 64), (1, 1536), 1, 0, "down_blocks", 0.999),
         ((1, 768, 64, 64), (1, 1536), 1, 1, "down_blocks", 0.999),
         ((1, 768, 32, 32), (1, 1536), 2, 0, "down_blocks", 0.999),
-        ((1, 1536, 32, 32), (1, 1536), 2, 1, "down_blocks", 0.999),
+        ((1, 1536, 32, 32), (1, 1536), 2, 1, "down_blocks", 0.999),  # failed 0.998
         ((1, 1536, 16, 16), (1, 1536), 3, 0, "down_blocks", 0.999),
         ((1, 3072, 16, 16), (1, 1536), 0, 0, "up_blocks", 0.999),
         ((1, 3072, 32, 32), (1, 1536), 1, 0, "up_blocks", 0.999),

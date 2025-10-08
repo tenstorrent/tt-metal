@@ -16,7 +16,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc, comp_pcc
 import matplotlib.pyplot as plt
 from models.common.utility_functions import is_wormhole_b0
 
-UNET_LOOP_PCC = {"20": 0.998, "50": 0.996}
+UNET_LOOP_PCC = {"20": 0.999, "50": 0.997}
 
 
 def prepare_refiner_tensors(

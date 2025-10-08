@@ -9,15 +9,15 @@ import ttnn
 from models.experimental.stable_diffusion_xl_refiner.tt.tt_transformer2dmodel import TtTransformer2DModel
 from diffusers import UNet2DConditionModel
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import torch_random
+from models.common.utility_functions import torch_random
 from models.experimental.stable_diffusion_xl_refiner.tests.test_common import SDXL_REFINER_L1_SMALL_SIZE
 
 
 @pytest.mark.parametrize(
     "input_shape, encoder_shape, down_block_id, pcc",
     [
-        ((1, 768, 64, 64), (1, 77, 1280), 1, 0.997),
-        ((1, 1536, 32, 32), (1, 77, 1280), 2, 0.984),
+        ((1, 768, 64, 64), (1, 77, 1280), 1, 0.997),  # 0.999
+        ((1, 1536, 32, 32), (1, 77, 1280), 2, 0.984),  # 0.998
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_REFINER_L1_SMALL_SIZE}], indirect=True)

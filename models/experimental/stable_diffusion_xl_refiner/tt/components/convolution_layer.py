@@ -132,7 +132,6 @@ class ConvolutionLayer:
             conv_config=self.conv_config.conv2d_config,
             compute_config=self.conv_config.compute_config,
             groups=self.conv_config.groups,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             return_output_dim=True,
             return_weights_and_bias=True,
             dtype=self.conv_config.conv_output_dtype,
