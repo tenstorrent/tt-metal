@@ -1069,8 +1069,8 @@ void bind_tanh_like(py::module& module, const unary_operation_t& operation) {
 
 template <typename unary_operation_t>
 void bind_sigmoid_accurate(py::module& module, const unary_operation_t& operation) {
-                        auto doc = fmt::format(
-                            R"doc(
+    auto doc = fmt::format(
+        R"doc(
         Applies {0} to :attr:`input_tensor` element-wise.
 
         .. math::
@@ -1078,6 +1078,7 @@ void bind_sigmoid_accurate(py::module& module, const unary_operation_t& operatio
 
         Args:
             input_tensor (ttnn.Tensor): the input tensor.
+            approximate_mode (bool, optional): whether to use approximate mode for exponential calculation. Defaults to `True`.
 
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
@@ -1104,24 +1105,26 @@ void bind_sigmoid_accurate(py::module& module, const unary_operation_t& operatio
             >>> tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
             >>> output = {1}(tensor)
         )doc",
-                            ttnn::sigmoid_accurate.base_name(),
-                            ttnn::sigmoid_accurate.python_fully_qualified_name());
+        ttnn::sigmoid_accurate.base_name(),
+        ttnn::sigmoid_accurate.python_fully_qualified_name());
 
-                        bind_registered_operation(
-                            module,
-                            ttnn::sigmoid_accurate,
-                            doc,
-                            ttnn::pybind_overload_t{
-                                [](const unary_operation_t& self,
-                                   const Tensor& input_tensor,
-                                   const std::optional<MemoryConfig>& memory_config,
-                                   const std::optional<Tensor>& output_tensor) -> ttnn::Tensor {
-                                    return self(input_tensor, memory_config, output_tensor);
-                                },
-                                py::arg("input_tensor"),
-                                py::kw_only(),
-                                py::arg("memory_config") = std::nullopt,
-                                py::arg("output_tensor") = std::nullopt});
+    bind_registered_operation(
+        module,
+        ttnn::sigmoid_accurate,
+        doc,
+        ttnn::pybind_overload_t{
+            [](const unary_operation_t& self,
+               const Tensor& input_tensor,
+               bool approximate_mode,
+               const std::optional<MemoryConfig>& memory_config,
+               const std::optional<Tensor>& output_tensor) -> ttnn::Tensor {
+                return self(input_tensor, approximate_mode, memory_config, output_tensor);
+            },
+            py::arg("input_tensor"),
+            py::arg("approximate_mode") = true,
+            py::kw_only(),
+            py::arg("memory_config") = std::nullopt,
+            py::arg("output_tensor") = std::nullopt});
 }
 
 template <typename unary_operation_t>
