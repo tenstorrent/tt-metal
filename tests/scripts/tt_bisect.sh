@@ -9,7 +9,8 @@ Usage:
   -g GOOD_SHA    : known good commit
   -b BAD_SHA     : known bad commit
   -t TIMEOUT     : per-iteration timeout (default 30m)
-  -p PROFILING   : enable Tracy profiling
+  -p             : enable Tracy profiling
+  -r RETRIES     : number of retries (default 3)
 END
 
 timeout_duration_iteration="30m"
@@ -17,14 +18,16 @@ test=""
 good_commit=""
 bad_commit=""
 tracy_enabled=0
+retries=3
 
-while getopts ":f:g:b:t:p" opt; do
+while getopts ":f:g:b:t:pr:" opt; do
   case "$opt" in
     f) test="$OPTARG" ;;
     g) good_commit="$OPTARG" ;;
     b) bad_commit="$OPTARG" ;;
     t) timeout_duration_iteration="$OPTARG" ;;
     p) tracy_enabled=1 ;;
+    r) retries="$OPTARG" ;;
     \?) die "Invalid option: -$OPTARG" ;;
     :)  die "Option -$OPTARG requires an argument." ;;
   esac
@@ -123,13 +126,13 @@ while [[ "$found" == "false" ]]; do
 
   echo "::group::Testing $rev"
   timeout_rc=1
-  max_retries=3
+  max_retries=$retries
   attempt=1
   output_file="bisect_test_output.log"
   while [ $attempt -le $max_retries ]; do
     echo "Attempt $attempt on $(git rev-parse HEAD)"
     echo "Run: $test"
-    if timeout -k 10s "$timeout_duration_iteration" bash -lc "$test" >"$output_file" 2>&1; then
+    if timeout -k 10s "$timeout_duration_iteration" bash -lc "$test" 2>&1 | tee "$output_file"; then
       timeout_rc=0
       echo "--- Logs (attempt $attempt) ---"
       sed -n '1,200p' "$output_file" || true
