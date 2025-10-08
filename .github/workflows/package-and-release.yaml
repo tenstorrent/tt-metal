@@ -76,8 +76,6 @@ jobs:
             echo "This indicates a problem with the 'Set default release-type for cron job' step."
             exit 1
           fi
-          echo "Invalid release-type input: ${{ inputs.release-type }}. Must be one of 'dev', 'rc', or 'prod'."
-          exit 1
 
       - name: Get should-create-release
         id: get-should-create-release
