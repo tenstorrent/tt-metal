@@ -945,7 +945,7 @@ FORCE_INLINE void noc_async_write_one_packet_set_state(
 // clang-format on
 template <bool posted = false>
 FORCE_INLINE void noc_async_write_one_packet_with_state(
-    uint32_t src_local_l1_addr, uint32_t dst_local_l1_addr, uint8_t noc = noc_index) {
+    uint32_t src_local_l1_addr, uint64_t dst_local_l1_addr, uint8_t noc = noc_index) {
     RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_WITH_STATE, 0ull, 0, -1);
 
     // In order to sanitize, need to grab full noc addr + xfer size from state.

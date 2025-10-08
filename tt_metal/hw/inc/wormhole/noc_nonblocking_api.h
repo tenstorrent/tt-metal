@@ -922,7 +922,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_write_set_state(
 // clang-format on
 template <uint8_t noc_mode = DM_DEDICATED_NOC, bool posted = false, bool update_counter = true, bool one_packet = false>
 inline __attribute__((always_inline)) void ncrisc_noc_write_with_state(
-    uint32_t noc, uint32_t cmd_buf, uint32_t src_local_addr, uint32_t dst_local_addr, uint32_t len_bytes = 0) {
+    uint32_t noc, uint32_t cmd_buf, uint32_t src_local_addr, uint64_t dst_local_addr, uint32_t len_bytes = 0) {
     if constexpr (update_counter && noc_mode == DM_DYNAMIC_NOC) {
         if constexpr (posted) {
             inc_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(noc, 1);
@@ -933,6 +933,16 @@ inline __attribute__((always_inline)) void ncrisc_noc_write_with_state(
     }
 
     while (!noc_cmd_buf_ready(noc, cmd_buf));
+
+    //uint32_t noc_cmd_field = NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(1) |
+    //                         0x0 |  // (linked ? NOC_CMD_VC_LINKED : 0x0)
+    //                         0x0 |  // (mcast ? (NOC_CMD_PATH_RESERVE | NOC_CMD_BRCST_PACKET) : 0x0)
+    //                         (!posted ? NOC_CMD_RESP_MARKED : 0x0);
+//
+    //NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL, noc_cmd_field);
+    //NOC_CMD_BUF_WRITE_REG(
+    //    noc, cmd_buf, NOC_RET_ADDR_COORDINATE, (uint32_t)(dst_local_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
+    //NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, 2304);
 
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, src_local_addr);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, dst_local_addr);

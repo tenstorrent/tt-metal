@@ -185,7 +185,7 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
         reader_core_range,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
-            .noc = tt::tt_metal::NOC::RISCV_0_default,
+            .noc = tt::tt_metal::NOC::NOC_1,
             .noc_mode = tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC,
             .compile_args = reader_ct_args,
             .defines = reader_defines});

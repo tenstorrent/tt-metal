@@ -206,6 +206,7 @@ struct NocDestinationStateSaver {
 #ifdef ARCH_BLACKHOLE
     uint32_t noc_ret_addr_mid_state;
 #endif
+    //uint32_t noc_at_len_state;
 
     inline __attribute__((always_inline)) NocDestinationStateSaver() {
         noc_ctrl_state = NOC_CMD_BUF_READ_REG(noc_index, write_cmd_buf, NOC_CTRL);
@@ -213,6 +214,7 @@ struct NocDestinationStateSaver {
 #ifdef ARCH_BLACKHOLE
         noc_ret_addr_mid_state = NOC_CMD_BUF_READ_REG(noc_index, write_cmd_buf, NOC_RET_ADDR_MID);
 #endif
+        //noc_at_len_state = NOC_CMD_BUF_READ_REG(noc_index, write_cmd_buf, NOC_AT_LEN_BE);
     }
 
     inline __attribute__((always_inline)) ~NocDestinationStateSaver() {
@@ -222,6 +224,7 @@ struct NocDestinationStateSaver {
 #ifdef ARCH_BLACKHOLE
         NOC_CMD_BUF_WRITE_REG(noc_index, write_cmd_buf, NOC_RET_ADDR_MID, noc_ret_addr_mid_state);
 #endif
+        //NOC_CMD_BUF_WRITE_REG(noc_index, write_cmd_buf, NOC_AT_LEN_BE, noc_at_len_state);
     }
 };
 
@@ -235,8 +238,9 @@ inline void __attribute__((always_inline)) profiler_noc_async_write_posted(
     std::uint32_t src_local_l1_addr, std::uint64_t dst_noc_addr, std::uint32_t size, uint8_t noc = noc_index) {
     WAYPOINT("NAWW");
     DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, dst_noc_addr, src_local_l1_addr, size);
+    auto cmd_buf = 0 == 1 ? write_cmd_buf : read_cmd_buf;
     ncrisc_noc_fast_write_any_len<noc_mode>(
-        noc, write_cmd_buf, src_local_l1_addr, dst_noc_addr, size, NOC_UNICAST_WRITE_VC, false, false, 1, true, true);
+        noc, cmd_buf, src_local_l1_addr, dst_noc_addr, size, NOC_UNICAST_WRITE_VC, false, false, 1, true, true);
     WAYPOINT("NAWD");
 }
 
