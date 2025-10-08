@@ -85,7 +85,8 @@ run_python_model_tests_l2nightly_wormhole_b0() {
     mistral_weights=mistralai/Mistral-7B-Instruct-v0.3
     HF_MODEL=$mistral_weights pytest models/tt_transformers/tests/test_model.py -k "quick" ; fail+=$?
 
-    run_python_model_tests_slow_runtime_mode_wormhole_b0()
+    run_python_model_tests_slow_runtime_mode_wormhole_b0
+    fail+=$?
 
 }
 
