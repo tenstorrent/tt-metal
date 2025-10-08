@@ -20,12 +20,6 @@ PERF_EXPECTATIONS = {
         "test_perf_2cqs": {"inference_time": 0.026, "compile_time": 60},
         "test_perf_trace_2cqs": {"inference_time": 0.0052, "compile_time": 60},
     },
-    "dual-galaxy": {
-        "test_perf": {"inference_time": 0.0500, "compile_time": 60},
-        "test_perf_trace": {"inference_time": 0.0081, "compile_time": 60},
-        "test_perf_2cqs": {"inference_time": 0.0530, "compile_time": 60},
-        "test_perf_trace_2cqs": {"inference_time": 0.0085, "compile_time": 60},
-    },
 }
 
 
@@ -36,8 +30,6 @@ def get_platform_config(mesh_device):
         return "t3000"
     elif num_devices == 32:
         return "tg"
-    elif num_devices == 64:
-        return "dual-galaxy"
     else:
         pytest.skip(f"Unsupported number of devices: {num_devices}. Expected 8 (T3000) or 32 (TG)")
 
