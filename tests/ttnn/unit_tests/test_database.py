@@ -216,3 +216,38 @@ def test_sample_data_for_visualizer(device):
 
         ttnn.to_torch(output_tensor)
         ttnn.deallocate(output_tensor)
+
+
+@pytest.mark.requires_fast_runtime_mode_off
+@pytest.mark.parametrize("height", [1024])
+@pytest.mark.parametrize("width", [1024])
+def test_error_details_saved(device, height, width):
+    torch.manual_seed(0)
+
+    with ttnn.manage_config("enable_logging", True):
+        with pytest.raises(Exception):
+            # Create an extremely large tensor that should exceed L1 memory limits
+            huge_tensor = ttnn.from_torch(
+                torch.rand((8192, 8192), dtype=torch.bfloat16),
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+
+    sqlite_connection = sqlite3.connect(ttnn.CONFIG.report_path / ttnn.database.SQLITE_DB_PATH)
+    cursor = sqlite_connection.cursor()
+    cursor.execute("SELECT * FROM errors")
+    error_records = []
+    for row in cursor.fetchall():
+        error_record = ttnn.database.ErrorRecord(*row)
+        error_records.append(error_record)
+
+    assert len(error_records) > 0
+
+    error_record = error_records[0]
+    assert error_record.operation_id == 1
+    assert error_record.operation_name == "ttnn.from_torch"
+    assert error_record.error_type == "RuntimeError"
+    assert "Out of Memory: Not enough space to allocate" in error_record.error_message
+    assert error_record.stack_trace.startswith("Traceback (most recent call last):")
+    assert error_record.timestamp is not None
