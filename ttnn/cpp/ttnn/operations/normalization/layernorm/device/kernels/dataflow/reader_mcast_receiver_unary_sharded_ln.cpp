@@ -69,29 +69,8 @@ void kernel_main() {
                 num_x,
                 num_y);
         } else {
-            uint32_t x = start_x, y = start_y;
-            for (uint32_t i = 0; i < num_blocks; ++i) {
-                remote_noc_addrs_first_stage[i] = get_noc_addr(in0_remote_noc_x[x], in0_remote_noc_y[y], 0);
-                if constexpr (row_major) {
-                    ++x;
-                    if (x == num_x) {
-                        x = 0;
-                        ++y;
-                        if (y == num_y) {
-                            y = 0;
-                        }
-                    }
-                } else {
-                    ++y;
-                    if (y == num_y) {
-                        y = 0;
-                        ++x;
-                        if (x == num_x) {
-                            x = 0;
-                        }
-                    }
-                }
-            }
+            df::compute_single_stage_noc_addrs<row_major, num_remote_noc_addrs_first_stage>(
+                remote_noc_addrs_first_stage, in0_remote_noc_x, in0_remote_noc_y, start_x, start_y, num_x, num_y);
         }
     } else {
         remote_noc_addrs_first_stage[0] = get_noc_addr(in0_remote_noc_x[0], in0_remote_noc_y[0], 0);
