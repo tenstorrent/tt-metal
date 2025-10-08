@@ -160,7 +160,7 @@ def custom_preprocessor(
     """
     DRY, refactored preprocessor:
     - Handles Conv2d (with inline BN folding)
-    - TransfuserBackbone (conv1 for image & lidar, layer1 pairs for both encoders)
+    - TransfuserBackbone (conv1 for image & lidar, stages layer1..layer4 for both encoders)
     - Standalone Bottleneck
     - Stage (generic by stage name using STAGE_STRUCTURE)
     """
@@ -171,7 +171,7 @@ def custom_preprocessor(
         _handle_conv2d(parameters, model, mesh_mapper=mesh_mapper)
         return parameters
 
-    # 2) TransfuserBackbone (conv1s + layer1 for image/lidar encoders)
+    # 2) TransfuserBackbone (conv1s + stages for image/lidar encoders)
     if isinstance(model, TransfuserBackbone):
         # Image conv1
         if hasattr(model, "image_encoder") and hasattr(model.image_encoder, "features"):
@@ -189,19 +189,21 @@ def custom_preprocessor(
                 w, b = _fold_and_pack_conv(lidar.conv1, lidar.bn1, mesh_mapper=mesh_mapper)
                 lid_conv1["weight"], lid_conv1["bias"] = w, b
 
-        # Image layer1
-        if hasattr(model, "image_encoder") and hasattr(model.image_encoder, "features"):
-            img_features = model.image_encoder.features
-            if hasattr(img_features, "layer1"):
-                img_l1 = _get_or_create(parameters, "image_encoder", "features")
-                _handle_stage(img_l1, img_features.layer1, "layer1", mesh_mapper=mesh_mapper)
+        # ---- Process stages for both encoders (now includes layer2) ----
+        for stage_name in ("layer1", "layer2", "layer3", "layer4"):
+            # Image stages
+            if hasattr(model, "image_encoder") and hasattr(model.image_encoder, "features"):
+                img_features = model.image_encoder.features
+                if hasattr(img_features, stage_name):
+                    img_dst = _get_or_create(parameters, "image_encoder", "features")
+                    _handle_stage(img_dst, getattr(img_features, stage_name), stage_name, mesh_mapper=mesh_mapper)
 
-        # Lidar layer1
-        if hasattr(model, "lidar_encoder") and hasattr(model.lidar_encoder, "_model"):
-            lidar = model.lidar_encoder._model
-            if hasattr(lidar, "layer1"):
-                lid_l1 = _get_or_create(parameters, "lidar_encoder", "_model")
-                _handle_stage(lid_l1, lidar.layer1, "layer1", mesh_mapper=mesh_mapper)
+            # Lidar stages
+            if hasattr(model, "lidar_encoder") and hasattr(model.lidar_encoder, "_model"):
+                lidar = model.lidar_encoder._model
+                if hasattr(lidar, stage_name):
+                    lid_dst = _get_or_create(parameters, "lidar_encoder", "_model")
+                    _handle_stage(lid_dst, getattr(lidar, stage_name), stage_name, mesh_mapper=mesh_mapper)
 
         return parameters
 

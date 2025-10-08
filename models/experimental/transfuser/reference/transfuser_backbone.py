@@ -320,10 +320,10 @@ class TransfuserBackbone(nn.Module):
         )
         image_features = image_features + image_features_layer1
         lidar_features = lidar_features + lidar_features_layer1
-        return image_features, lidar_features
 
         image_features = self.image_encoder.features.layer2(image_features)
         lidar_features = self.lidar_encoder._model.layer2(lidar_features)
+        return image_features, lidar_features
         # Image fusion at (B, 216, 20, 88)
         # Image fusion at (B, 216, 32, 32)
         image_embd_layer2 = self.avgpool_img(image_features)
