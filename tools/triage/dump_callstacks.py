@@ -178,12 +178,7 @@ def get_gdb_callstack(
     callstack = extract_callstack_from_gdb_output(
         gdb_client.communicate()[0], start_callstack_label, end_callstack_label
     )
-
-    # We handle errors in gdb_server by printing them therefore we do not have it here so we print generic message if we failed to get callstack
-    message = (
-        "Failed to get callstack from GDB. Look for error message above the table." if len(callstack) == 0 else None
-    )
-    return KernelCallstackWithMessage(callstack=callstack, message=message)
+    return KernelCallstackWithMessage(callstack=callstack, message=None)
 
 
 def get_callstack(
@@ -218,6 +213,7 @@ def get_callstack(
                         callstack=top_callstack(pc, elfs, offsets, context), message=error_message
                     )
                 except Exception as e:
+                    # If top callstack failed too, print both error messages
                     return KernelCallstackWithMessage(callstack=[], message="\n".join([error_message, str(e)]))
     except Exception as e:
         return KernelCallstackWithMessage(callstack=[], message=str(e))
@@ -293,6 +289,7 @@ def dump_callstacks(
                 callstack_with_message = get_callstack(
                     location, risc_name, dispatcher_core_data, elfs_cache, full_callstack=False
                 )
+                # If top callstack failed too, print both error messages
                 callstack_with_message.message = (
                     error_message
                     if callstack_with_message.message is None
@@ -309,6 +306,7 @@ def dump_callstacks(
                     callstack_with_message = get_callstack(
                         location, risc_name, dispatcher_core_data, elfs_cache, full_callstack=False
                     )
+                    # If top callstack failed too, print both error messages
                     callstack_with_message.message = (
                         error_message
                         if callstack_with_message.message is None
