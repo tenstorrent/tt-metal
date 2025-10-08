@@ -827,6 +827,464 @@ def run_test_sdpa_decode_paged_attention(
             causal = False
 
 
+def run_test_sdpa_decode_paged_attention_with_page_table_tensor(
+    device,
+    b,  # 32
+    nh,  # 14 -> 28 for N300
+    nkv,  # 2 -> 4 for N300
+    max_num_blocks,  # 1024
+    d,  # 128
+    kv_dtype,  # bfloat16
+    grid_size,  # (8, 8)
+    q_dtype,  # bfloat16
+    cur_pos_tensor,  # True
+    block_size,  # 32
+    max_start_idx=129,  # 129 is the first pos that does not produce correct token output
+):
+    """
+    Test function specifically for paged_scaled_dot_product_attention_decode with page_table_tensor argument.
+    This matches the usage pattern in tt_transformers/tt/attention.py lines 509-520.
+    """
+    compute_grid_size = device.compute_with_storage_grid_size()
+    if grid_size[0] > compute_grid_size.x or grid_size[1] > compute_grid_size.y:
+        pytest.skip(f"Need {grid_size} grid size to run this test but core grid is {compute_grid_size}")
+
+    # Page table
+    # Create page_table as used in attention.py
+    permutation = torch.randperm(max_num_blocks)
+    reverse_permutation = torch.argsort(permutation).repeat(1)  # data_parallel = 1
+    page_table = reverse_permutation.reshape(b, max_num_blocks // b // 1)  # 1024 // 32 // 1 = 32  #  (32, 32)
+    # move page_table to device with DRAM_MEMORY_CONFIG interleaved
+    # tt_page_table = ttnn.to_device(page_table, device=device)
+    # Create page_table_tensor as used in attention.py
+    # tt_page_table_tensor = ttnn.Tensor(page_table, ttnn.int32).to(device)
+    tt_page_table_tensor = ttnn.as_tensor(
+        page_table,
+        device=device,
+        dtype=ttnn.int32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+    )
+
+    # Create q tensor and paged k/v tensors
+    q_heads_1BQD = fa_rand(1, b, nh, d)
+    paged_k = fa_rand(max_num_blocks, nkv, block_size, d)
+    paged_v = fa_rand(max_num_blocks, nkv, block_size, d)
+
+    paged_k_shuffled = paged_k[permutation]
+    paged_v_shuffled = paged_v[permutation]
+
+    def to_contiguous_cache(paged_cache, batch, num_kv, max_num_blocks_per_seq, block_size, head_dim):
+        return (
+            paged_cache.reshape(batch, max_num_blocks_per_seq, num_kv, block_size, head_dim)
+            .transpose(1, 2)
+            .reshape(batch, num_kv, max_num_blocks_per_seq * block_size, head_dim)
+        )
+
+    # Set seed for reproducibility
+    torch.manual_seed(1234)
+
+    # Set current position to 129 which is the first pos that does not produce correct token output
+    current_pos = torch.tensor(
+        [max_start_idx] * b
+    )  # 32 # 129 is the first pos that does not produce correct token output
+    # tt_current_pos = ttnn.Tensor(current_pos, ttnn.int32).to(device)
+    tt_current_pos = ttnn.as_tensor(
+        current_pos,
+        device=device,
+        dtype=ttnn.int32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+    )
+
+    # Scale
+    scale = d**-0.5
+
+    # SDPA program config
+    sdpa_program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=(8, 8),
+        exp_approx_mode=False,
+        q_chunk_size=128,
+        k_chunk_size=128,
+    )
+
+    # Compute kernel config
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+
+    # Create specific memory config for q_heads_1BQD matching the production setup
+    # Grid: (x=0,y=0) - (x=7,y=3) which is 8x4 grid = 32 cores
+    # Shard shape: {32, 128}
+    q_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))})
+    q_shard_spec = ttnn.ShardSpec(q_shard_grid, (32, 128), ttnn.ShardOrientation.ROW_MAJOR)
+    q_height_sharded_memcfg = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, q_shard_spec
+    )
+
+    tt_q = ttnn.as_tensor(
+        q_heads_1BQD,
+        device=device,
+        dtype=q_dtype,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=q_height_sharded_memcfg,
+        mesh_mapper=ttnn.ShardTensorToMesh(device, dim=2),
+    )
+
+    tt_keys = ttnn.as_tensor(
+        paged_k_shuffled,
+        device=device,
+        dtype=kv_dtype,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensorToMesh(device, dim=1),
+    )
+    tt_values = ttnn.as_tensor(
+        paged_v_shuffled,
+        device=device,
+        dtype=kv_dtype,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensorToMesh(device, dim=1),
+    )
+
+    num_iters = 3
+    current_pos = current_pos - num_iters
+    for i in range(3):
+        tt_current_pos = ttnn.as_tensor(
+            current_pos,
+            device=device,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+        )
+        current_pos = current_pos + 1
+        # Execute tt implementation SDPA decode
+        tt_out = ttnn.transformer.paged_scaled_dot_product_attention_decode(
+            tt_q,
+            tt_keys,
+            tt_values,
+            cur_pos_tensor=tt_current_pos,
+            page_table_tensor=tt_page_table_tensor,
+            scale=scale,
+            program_config=sdpa_program_config,
+            compute_kernel_config=compute_kernel_config,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+    # torch_page_table = ttnn.to_torch(page_table, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0))
+    # # Convert tt_out from single device Tensor to torch Tensor
+    # torch_tt_out = ttnn.to_torch(tt_out)[:, :, :nh, :]
+    torch_tt_out = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(device, dim=2))
+
+    # 1. Unshuffle and convert to contiguous format
+    # Use the flattened page_table to unshuffle (this matches what TT hardware does)
+    # page_table_flat = page_table.flatten()  # (1024,) - flatten the 2D page table
+    paged_k_unshuffled = paged_k_shuffled[reverse_permutation]
+    paged_v_unshuffled = paged_v_shuffled[reverse_permutation]
+
+    logger.info(f"paged_k_shuffled shape: {paged_k_shuffled.shape}")
+    logger.info(f"paged_k_unshuffled shape: {paged_k_unshuffled.shape}")
+    # logger.info(f"page_table shape: {page_table.shape}, page_table_flat shape: {page_table_flat.shape}")
+
+    K = to_contiguous_cache(paged_k_unshuffled, b, nkv, max_num_blocks // b, block_size, d)
+    V = to_contiguous_cache(paged_v_unshuffled, b, nkv, max_num_blocks // b, block_size, d)
+
+    logger.info(f"K shape after to_contiguous_cache: {K.shape}")
+    logger.info(f"V shape after to_contiguous_cache: {V.shape}")
+
+    # 2. Calculate padded sequence length
+    max_pos = max_start_idx
+    k_chunk_size = 128
+    padded_seq_len = ((max_pos + 1 + k_chunk_size - 1) // k_chunk_size) * k_chunk_size
+
+    # 3. Slice K, V to padded_seq_len
+    K_slice = K[:, :, :padded_seq_len, :]  # (b, nkv, padded_seq_len, d)
+    V_slice = V[:, :, :padded_seq_len, :]  # (b, nkv, padded_seq_len, d)
+
+    # 4. Expand KV heads to match Q heads (for Grouped Query Attention)
+    K_slice = torch.cat(
+        [K_slice[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1
+    )  # (b, nh, padded_seq_len, d)
+    V_slice = torch.cat(
+        [V_slice[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1
+    )  # (b, nh, padded_seq_len, d)
+
+    # 5. Create attn_mask
+    attn_mask = torch.zeros((b, nh, 1, padded_seq_len), dtype=torch.float32)
+
+    for i in range(b):
+        attn_mask[i, :, :, max_start_idx + 1 :] = float("-inf")
+
+    # 6. Reshape Q for PyTorch SDPA: (1, b, nh, d) -> (b, nh, 1, d)
+    Q_slice = q_heads_1BQD.permute(1, 2, 0, 3)  # (b, nh, 1, d)
+
+    # 7. Run PyTorch reference
+    torch_ref = torch.nn.functional.scaled_dot_product_attention(
+        Q_slice,  # (b, nh, 1, d)
+        K_slice,  # (b, nh, padded_seq_len, d)
+        V_slice,  # (b, nh, padded_seq_len, d)
+        attn_mask,  # (b, nh, 1, padded_seq_len)
+        scale=scale,
+        is_causal=False,  # False because we provide explicit mask
+    )  # Output: (b, nh, 1, d)
+
+    # 8. Reshape back to match TT output format: (b, nh, 1, d) -> (1, b, nh, d)
+    torch_ref = torch_ref.permute(2, 0, 1, 3)  # (1, b, nh, d)
+
+    logger.info(f"torch_ref shape: {torch_ref.shape}")
+    logger.info(f"torch_tt_out shape: {torch_tt_out.shape}")
+    logger.info(f"torch_ref sample values: {torch_ref[0, 0, 0, :5]}")
+    logger.info(f"torch_tt_out sample values: {torch_tt_out[0, 0, 0, :5]}")
+
+    out_pass, out_pcc = comp_pcc(torch_ref, torch_tt_out, 0.99)
+
+    logger.info(f"PCC score: {out_pcc}")
+
+    assert out_pass
+
+
+def run_test_sdpa_decode_paged_attention_with_page_table_tensor_with_saved_tensors(
+    device,
+    b,  # 32
+    nh,  # 14 -> 28 for N300
+    nkv,  # 2 -> 4 for N300
+    max_num_blocks,  # 1024
+    d,  # 128
+    kv_dtype,  # bfloat16
+    grid_size,  # (8, 8)
+    q_dtype,  # bfloat16
+    cur_pos_tensor,  # True
+    block_size,  # 32
+    max_start_idx=129,  # 129 is the first pos that does not produce correct token output
+):
+    """
+    Test function specifically for paged_scaled_dot_product_attention_decode with page_table_tensor argument.
+    This matches the usage pattern in tt_transformers/tt/attention.py lines 509-520.
+    """
+    compute_grid_size = device.compute_with_storage_grid_size()
+    if grid_size[0] > compute_grid_size.x or grid_size[1] > compute_grid_size.y:
+        pytest.skip(f"Need {grid_size} grid size to run this test but core grid is {compute_grid_size}")
+
+    # Page table
+    # Create page_table as used in attention.py
+    permutation = torch.randperm(max_num_blocks)
+    reverse_permutation = torch.argsort(permutation).repeat(1)  # data_parallel = 1
+    page_table = reverse_permutation.reshape(b, max_num_blocks // b // 1)  # 1024 // 32 // 1 = 32  #  (32, 32)
+    # load page_table from file
+    page_table_from_file = torch.load(f"tensor_outputs/tensor_page_table_batch_{b}.pt")
+    # remove last dim half duplicates
+    page_table_from_file = page_table_from_file[..., : page_table_from_file.shape[-1] // 2]
+    assert page_table_from_file.shape == page_table.shape
+    page_table = page_table_from_file
+
+    # get permutation from page_table
+    reverse_permutation = page_table.flatten()
+    permutation = torch.argsort(reverse_permutation)
+
+    # move page_table to device with DRAM_MEMORY_CONFIG interleaved
+    # tt_page_table = ttnn.to_device(page_table, device=device)
+    # Create page_table_tensor as used in attention.py
+    # tt_page_table_tensor = ttnn.Tensor(page_table, ttnn.int32).to(device)
+    tt_page_table_tensor = ttnn.as_tensor(
+        page_table,
+        device=device,
+        dtype=ttnn.int32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+    )
+
+    # Create q tensor and paged k/v tensors
+    q_heads_1BQD = fa_rand(1, b, nh, d)
+    paged_k = fa_rand(max_num_blocks, nkv, block_size, d)
+    paged_v = fa_rand(max_num_blocks, nkv, block_size, d)
+
+    q_heads_1BQD_from_file = torch.load(f"tensor_outputs/tensor_3_0_batch_{b}.pt")
+    # reshape from (1, b, nh // 2, d*2) to (1, b, nh, d)
+    # chunk and cat to (1, b, nh, d)
+    q_heads_1BQD_from_file = torch.cat(torch.chunk(q_heads_1BQD_from_file, 2, dim=-1), dim=2)
+    # q_heads_1BQD_from_file = q_heads_1BQD_from_file.reshape(1, b, nh, d)
+    assert q_heads_1BQD_from_file.shape == q_heads_1BQD.shape
+    q_heads_1BQD = q_heads_1BQD_from_file
+
+    paged_k_shuffled = paged_k[permutation]
+    paged_v_shuffled = paged_v[permutation]
+
+    paged_k_shuffled_from_file = torch.load(f"tensor_outputs/tensor_keys_after_update_batch_{b}.pt")
+    paged_k_shuffled_from_file = torch.cat(torch.chunk(paged_k_shuffled_from_file, 2, dim=-1), dim=1)
+    assert paged_k_shuffled_from_file.shape == paged_k_shuffled.shape
+    paged_k_shuffled = paged_k_shuffled_from_file
+
+    paged_v_shuffled_from_file = torch.load(f"tensor_outputs/tensor_values_after_update_batch_{b}.pt")
+    paged_v_shuffled_from_file = torch.cat(torch.chunk(paged_v_shuffled_from_file, 2, dim=-1), dim=1)
+    assert paged_v_shuffled_from_file.shape == paged_v_shuffled.shape
+    paged_v_shuffled = paged_v_shuffled_from_file
+
+    def to_contiguous_cache(paged_cache, batch, num_kv, max_num_blocks_per_seq, block_size, head_dim):
+        return (
+            paged_cache.reshape(batch, max_num_blocks_per_seq, num_kv, block_size, head_dim)
+            .transpose(1, 2)
+            .reshape(batch, num_kv, max_num_blocks_per_seq * block_size, head_dim)
+        )
+
+    # Set current position to 129 which is the first pos that does not produce correct token output
+    current_pos = torch.tensor(
+        [max_start_idx] * b
+    )  # 32 # 129 is the first pos that does not produce correct token output
+    # tt_current_pos = ttnn.Tensor(current_pos, ttnn.int32).to(device)
+    tt_current_pos = ttnn.as_tensor(
+        current_pos,
+        device=device,
+        dtype=ttnn.int32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+    )
+
+    # Scale
+    scale = d**-0.5
+
+    # SDPA program config
+    sdpa_program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=(8, 8),
+        exp_approx_mode=False,
+        q_chunk_size=128,
+        k_chunk_size=128,
+    )
+
+    # Compute kernel config
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+
+    # Create specific memory config for q_heads_1BQD matching the production setup
+    # Grid: (x=0,y=0) - (x=7,y=3) which is 8x4 grid = 32 cores
+    # Shard shape: {32, 128}
+    q_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))})
+    q_shard_spec = ttnn.ShardSpec(q_shard_grid, (32, 128), ttnn.ShardOrientation.ROW_MAJOR)
+    q_height_sharded_memcfg = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, q_shard_spec
+    )
+
+    tt_q = ttnn.as_tensor(
+        q_heads_1BQD,
+        device=device,
+        dtype=q_dtype,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=q_height_sharded_memcfg,
+        mesh_mapper=ttnn.ShardTensorToMesh(device, dim=2),
+    )
+
+    tt_keys = ttnn.as_tensor(
+        paged_k_shuffled,
+        device=device,
+        dtype=kv_dtype,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensorToMesh(device, dim=1),
+    )
+    tt_values = ttnn.as_tensor(
+        paged_v_shuffled,
+        device=device,
+        dtype=kv_dtype,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensorToMesh(device, dim=1),
+    )
+
+    # Execute tt implementation SDPA decode
+    tt_out = ttnn.transformer.paged_scaled_dot_product_attention_decode(
+        tt_q,
+        tt_keys,
+        tt_values,
+        cur_pos_tensor=tt_current_pos,
+        page_table_tensor=tt_page_table_tensor,
+        scale=scale,
+        program_config=sdpa_program_config,
+        compute_kernel_config=compute_kernel_config,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    # torch_page_table = ttnn.to_torch(page_table, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0))
+    # # Convert tt_out from single device Tensor to torch Tensor
+    # torch_tt_out = ttnn.to_torch(tt_out)[:, :, :nh, :]
+    torch_tt_out = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(device, dim=2))
+
+    # 1. Unshuffle and convert to contiguous format
+    # Use the flattened page_table to unshuffle (this matches what TT hardware does)
+    # page_table_flat = page_table.flatten()  # (1024,) - flatten the 2D page table
+    paged_k_unshuffled = paged_k_shuffled[reverse_permutation]
+    paged_v_unshuffled = paged_v_shuffled[reverse_permutation]
+
+    logger.info(f"paged_k_shuffled shape: {paged_k_shuffled.shape}")
+    logger.info(f"paged_k_unshuffled shape: {paged_k_unshuffled.shape}")
+    # logger.info(f"page_table shape: {page_table.shape}, page_table_flat shape: {page_table_flat.shape}")
+
+    K = to_contiguous_cache(paged_k_unshuffled, b, nkv, max_num_blocks // b, block_size, d)
+    V = to_contiguous_cache(paged_v_unshuffled, b, nkv, max_num_blocks // b, block_size, d)
+
+    logger.info(f"K shape after to_contiguous_cache: {K.shape}")
+    logger.info(f"V shape after to_contiguous_cache: {V.shape}")
+
+    # 2. Calculate padded sequence length
+    max_pos = max_start_idx
+    k_chunk_size = 128
+    padded_seq_len = ((max_pos + 1 + k_chunk_size - 1) // k_chunk_size) * k_chunk_size
+
+    # 3. Slice K, V to padded_seq_len
+    K_slice = K[:, :, :padded_seq_len, :]  # (b, nkv, padded_seq_len, d)
+    V_slice = V[:, :, :padded_seq_len, :]  # (b, nkv, padded_seq_len, d)
+
+    # 4. Expand KV heads to match Q heads (for Grouped Query Attention)
+    K_slice = torch.cat(
+        [K_slice[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1
+    )  # (b, nh, padded_seq_len, d)
+    V_slice = torch.cat(
+        [V_slice[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1
+    )  # (b, nh, padded_seq_len, d)
+
+    # 5. Create attn_mask
+    attn_mask = torch.zeros((b, nh, 1, padded_seq_len), dtype=torch.float32)
+
+    for i in range(b):
+        attn_mask[i, :, :, max_start_idx + 1 :] = float("-inf")
+
+    # 6. Reshape Q for PyTorch SDPA: (1, b, nh, d) -> (b, nh, 1, d)
+    Q_slice = q_heads_1BQD.permute(1, 2, 0, 3)  # (b, nh, 1, d)
+
+    # 7. Run PyTorch reference
+    torch_ref = torch.nn.functional.scaled_dot_product_attention(
+        Q_slice,  # (b, nh, 1, d)
+        K_slice,  # (b, nh, padded_seq_len, d)
+        V_slice,  # (b, nh, padded_seq_len, d)
+        attn_mask,  # (b, nh, 1, padded_seq_len)
+        scale=scale,
+        is_causal=False,  # False because we provide explicit mask
+    )  # Output: (b, nh, 1, d)
+
+    # 8. Reshape back to match TT output format: (b, nh, 1, d) -> (1, b, nh, d)
+    torch_ref = torch_ref.permute(2, 0, 1, 3)  # (1, b, nh, d)
+
+    logger.info(f"torch_ref shape: {torch_ref.shape}")
+    logger.info(f"torch_tt_out shape: {torch_tt_out.shape}")
+    logger.info(f"torch_ref sample values: {torch_ref[0, 0, 0, :5]}")
+    logger.info(f"torch_tt_out sample values: {torch_tt_out[0, 0, 0, :5]}")
+
+    out_pass, out_pcc = comp_pcc(torch_ref, torch_tt_out, 0.99)
+
+    logger.info(f"PCC score: {out_pcc}")
+
+    assert out_pass
+
+
 def run_test_sdpa_decode_paged_attention_single_iter(
     device,
     b,
@@ -903,7 +1361,7 @@ def run_test_sdpa_decode_paged_attention_single_iter(
     assert torch.allclose(K, K_back)
     assert torch.allclose(V, V_back)
 
-    padded_num_heads = nearest_pow_2(nearest_n(nh, n=32))
+    padded_num_heads = 32  # nearest_pow_2(nearest_n(nh, n=32))
 
     min_pcc = 0.99
 
@@ -1077,6 +1535,86 @@ def test_sdpa_decode_paged_attention(
     )
 
     assert device.num_program_cache_entries() == 4
+
+
+@skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
+@pytest.mark.parametrize(
+    "kv_dtype, q_dtype",
+    [
+        [ttnn.bfloat16, ttnn.bfloat16],
+    ],
+    ids=[
+        "kv_bf16_q_bf16",
+    ],
+)
+@pytest.mark.parametrize(
+    "b, nh, nkv, s, d, grid_size, cur_pos_tensor, max_start_idx",
+    ([32, 28, 4, 1024, 128, (8, 8), True, 129],),
+)
+@pytest.mark.parametrize(
+    "mesh_device",
+    [
+        {
+            "N300": (1, 2),
+            # "N150x4": (1, 4),
+            # "T3K": (1, 8),
+            # "TG": (8, 4),
+            # "P150": (1, 1),
+            # "P300": (1, 2),
+            # "P150x4": (1, 4),
+            # "P150x8": (1, 8),
+        }.get(os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids()))
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "block_size",
+    (32,),
+    ids=[
+        "paged_32",
+    ],
+)
+# def test_run_test_sdpa_decode_paged_attention_single_iter(
+def test_sdpa_decode_paged_attention_with_page_table_tensor(
+    mesh_device,
+    b,
+    nh,
+    nkv,
+    s,
+    d,
+    kv_dtype,
+    grid_size,
+    q_dtype,
+    cur_pos_tensor,
+    block_size,
+    max_start_idx,
+    reset_seeds,
+):
+    """
+    Test for paged_scaled_dot_product_attention_decode with page_table_tensor argument.
+    This specifically tests the usage pattern from tt_transformers/tt/attention.py lines 509-520.
+    """
+    # ttnn.device.DisablePersistentKernelCache()
+    # run_test_sdpa_decode_paged_attention_single_iter(
+    # q_chunk_size=128,
+    # k_chunk_size=128,
+    # run_test_sdpa_decode_paged_attention_with_page_table_tensor(
+    run_test_sdpa_decode_paged_attention_with_page_table_tensor_with_saved_tensors(
+        mesh_device,
+        b,
+        nh,
+        nkv,
+        s,
+        d,
+        kv_dtype,
+        grid_size,
+        q_dtype,
+        max_start_idx,
+        block_size=block_size,
+        max_start_idx=max_start_idx,
+    )
+
+    # assert mesh_device.num_program_cache_entries() == 4
 
 
 @skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")

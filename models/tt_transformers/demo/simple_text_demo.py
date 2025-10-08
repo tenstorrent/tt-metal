@@ -222,7 +222,7 @@ def prepare_generator_args(
     [
         (  # Batch-1 run (Latency) - single user, small prompt
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
-            True,  # instruct mode
+            False,  # instruct mode
             1,  # repeat_batches
             1024,  # max_seq_len
             1,  # batch_size
@@ -238,7 +238,7 @@ def prepare_generator_args(
         ),
         (  # Batch-32 run (Throughput) - 32 users, small prompt
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
-            True,  # instruct mode
+            False,  # instruct mode
             1,  # repeat_batches
             1024,  # max_seq_len
             32,  # batch_size
@@ -779,7 +779,7 @@ def test_demo_text(
             logits = generator.decode_forward_text(
                 out_tok,
                 current_pos,
-                enable_trace=enable_trace,
+                enable_trace=False,  # enable_trace,
                 page_table=page_table,
                 kv_cache=tt_kv_cache,
                 sampling_params=device_sampling_params,

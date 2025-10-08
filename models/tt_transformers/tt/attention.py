@@ -28,7 +28,7 @@ class Attention(LightweightModule):
         use_paged_kv_cache=False,
     ):
         super().__init__()
-
+        self.save_tensor = False
         self.state_dict = state_dict
         self.mesh_device = mesh_device
         self.tt_ccl = tt_ccl
@@ -394,11 +394,19 @@ class Attention(LightweightModule):
         x: (seq_len, 1, batch, dim)
         current_pos: (batch_size), current token position in the sequence for each user
         """
-
+        if self.save_tensor:
+            batch_size = 1
+        else:
+            batch_size = x.shape[2]
         ###
         # QKV matmuls
         # Use HiFi2 for DRAM-sharded matmuls as they are otherwise flop-bound. Loses 1 bit of activation precision.
         ###
+        # if self.save_tensor:
+        #     # move tensor to cpu
+        #     # save tensor to file
+        #     torch_x = ttnn.to_torch(x, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=-1))
+        #     torch.save(torch_x, f"tensor_0_batch_{batch_size}.pt")
 
         xqkv_fused_sharded = ttnn.linear(
             x,
@@ -409,6 +417,13 @@ class Attention(LightweightModule):
             compute_kernel_config=self.li_qkv_decode_compute_kernel_cfg,
             dtype=self.ccl_dtype if self.TG else self.activation_dtype or ttnn.bfloat16,
         )
+
+        # if self.save_tensor:
+        #     # move tensor to cpu
+        #     # save tensor to file
+        #     torch_xqkv_fused_sharded = ttnn.to_torch(xqkv_fused_sharded, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=-1))
+        #     torch.save(torch_xqkv_fused_sharded, f"tensor_1_batch_{batch_size}.pt")
+
         # FIXME: File bug against dram-sharded matmuls with bias
         if self.wqkv_bias_decode:
             # select the bias tensor based on the number of tiles in the rows
@@ -429,6 +444,12 @@ class Attention(LightweightModule):
             dtype=self.ccl_dtype,
             topology=self.ccl_topology,
         )
+
+        # if self.save_tensor:
+        #     # move tensor to cpu
+        #     # save tensor to file
+        #     torch_xqkv_fused = ttnn.to_torch(xqkv_fused, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=-1))
+        #     torch.save(torch_xqkv_fused, f"tensor_2_batch_{batch_size}.pt")
 
         if self.TG:
             # TODO: Slice the fused_query_key_value tensor get batch=8
@@ -479,6 +500,36 @@ class Attention(LightweightModule):
             k_heads_pre_rot_1BKD, rot_mats[0], rot_mats[1], self.transformation_mats["decode"], is_decode_mode=True
         )
 
+        if self.save_tensor:
+            # move tensor to cpu
+            # save tensor to file
+            torch_q_heads_1BQD = ttnn.to_torch(
+                q_heads_1BQD, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=-1)
+            )
+            torch.save(torch_q_heads_1BQD, f"tensor_3_0_batch_{batch_size}.pt")
+
+            torch_k_heads_1BKD = ttnn.to_torch(
+                k_heads_1BKD, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=-1)
+            )
+            torch.save(torch_k_heads_1BKD, f"tensor_3_1_batch_{batch_size}.pt")
+
+            torch_v_heads_1BKD = ttnn.to_torch(
+                v_heads_1BKD, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=-1)
+            )
+            torch.save(torch_v_heads_1BKD, f"tensor_3_2_batch_{batch_size}.pt")
+
+            # save current_pos
+            torch_current_pos = ttnn.to_torch(
+                current_pos, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=-1)
+            )
+            torch.save(torch_current_pos, f"tensor_current_pos_batch_{batch_size}.pt")
+
+            # save page_table
+            torch_page_table = ttnn.to_torch(
+                page_table, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=-1)
+            )
+            torch.save(torch_page_table, f"tensor_page_table_batch_{batch_size}.pt")
+
         ttnn.deallocate(q_heads_pre_rot_1BQD)
         ttnn.deallocate(k_heads_pre_rot_1BKD)
 
@@ -494,10 +545,28 @@ class Attention(LightweightModule):
         # k_heads, [seqlen, n_kv_heads, bsz, head_dim]
         # v_heads [seqlen, n_kv_heads, bsz, head_dim]
         # keys, [max_batch_size, n_kv_heads // configuration.num_devices, max_seq_len, head_dim]
+
+        if self.save_tensor:
+            # move tensor to cpu
+            # save tensor to file
+            torch_keys = ttnn.to_torch(keys, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=-1))
+            torch.save(torch_keys, f"tensor_keys_before_update_batch_{batch_size}.pt")
+
+            torch_values = ttnn.to_torch(values, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=-1))
+            torch.save(torch_values, f"tensor_values_before_update_batch_{batch_size}.pt")
+
         ttnn.experimental.paged_update_cache(keys, k_heads_1BKD, update_idxs_tensor=current_pos, page_table=page_table)
         ttnn.experimental.paged_update_cache(
             values, v_heads_1BKD, update_idxs_tensor=current_pos, page_table=page_table
         )
+        if self.save_tensor:
+            # move tensor to cpu
+            # save tensor to file
+            torch_keys = ttnn.to_torch(keys, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=-1))
+            torch.save(torch_keys, f"tensor_keys_after_update_batch_{batch_size}.pt")
+
+            torch_values = ttnn.to_torch(values, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=-1))
+            torch.save(torch_values, f"tensor_values_after_update_batch_{batch_size}.pt")
 
         ttnn.deallocate(k_heads_1BKD)
         ttnn.deallocate(v_heads_1BKD)
@@ -529,6 +598,14 @@ class Attention(LightweightModule):
                 compute_kernel_config=self.sdpa_decode_compute_kernel_cfg,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,  # FIXME: why not L1 height sharded e.g. SCORES_BATCHED_MM_OUTPUT_MEMCFG?
             )
+
+        if self.save_tensor:
+            # move tensor to cpu
+            # save tensor to file
+            torch_attn_output_1G4D = ttnn.to_torch(
+                attn_output_1G4D, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=-1)
+            )
+            torch.save(torch_attn_output_1G4D, f"tensor_6_batch_{batch_size}.pt")
 
         ttnn.deallocate(q_heads_1BQD)
 
