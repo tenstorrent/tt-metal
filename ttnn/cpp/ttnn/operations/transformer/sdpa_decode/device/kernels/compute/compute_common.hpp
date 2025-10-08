@@ -167,6 +167,7 @@ void sub_exp_block_bcast_cols_inplace_reduce(uint32_t in1_cb, uint32_t reduce_cb
 }
 
 /* Tanh logit soft-capping with pre-scaling workaround */
+/*
 template <uint32_t softcapping_fp32, uint32_t head_scaling_fp32>
 void softcap_inplace(uint32_t in_cb, uint32_t num_tiles) {
     // Precondition: in_cb has num_tiles produced
@@ -213,7 +214,7 @@ void softcap_inplace(uint32_t in_cb, uint32_t num_tiles) {
     cb_pop_front(in_cb, num_tiles);
     cb_reserve_back(in_cb, num_tiles);
     cb_push_back(in_cb, num_tiles);
-}
+} */
 
 /**
  * in0_cb *= in1_cb

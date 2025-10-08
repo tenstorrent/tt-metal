@@ -110,10 +110,7 @@ class Attention(LightweightModule):
         self.li_o_prefill_compute_kernel_cfg = configuration.compute_kernel_config_hifi2
 
         layer_name = configuration.get_state_dict_prefix(self.__class__.__name__, layer_num)
-        if configuration.dummy_weights or (weight_cache_path is None):
-            cache_name = lambda _: None
-        else:
-            cache_name = lambda name: weight_cache_path / (f"{layer_name}.{name}")
+        cache_name = lambda name: f"{weight_cache_path}/{layer_name}.{name}"
 
         wqkv_str = f"{layer_name}.wqkv"
         wo_str = f"{layer_name}.wo"
@@ -128,7 +125,7 @@ class Attention(LightweightModule):
             mesh_mapper=ttnn.ShardTensor2dMesh(
                 self.mesh_device, dims=(3, 2), mesh_shape=configuration.cluster_shape  # TG=True
             ),
-            # cache_file_name=cache_name("wqkv_sharded_2d"),
+            cache_file_name=cache_name("wqkv_sharded_2d"),
         )
 
         # Simplified: use_fused_all_gather_matmul=False, TG=True
@@ -146,7 +143,7 @@ class Attention(LightweightModule):
                 dims=(2, 3),  # TG=True
                 mesh_shape=configuration.cluster_shape,
             ),
-            # cache_file_name=cache_name("wo_width_sharded_2d"),  # TG=True
+            cache_file_name=cache_name("wo_width_sharded_2d"),  # TG=True
         )
         if not use_paged_kv_cache:
             # vLLM provides its own kv cache

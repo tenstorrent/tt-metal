@@ -61,6 +61,7 @@ class Decoder(LightweightModule):
             mesh_device=mesh_device,
             tt_ccl=tt_ccl,
             state_dict=state_dict,
+            weight_cache_path=weight_cache_path,
             args=args,
             layer_num=layer_num,
             dtypes={
@@ -74,6 +75,7 @@ class Decoder(LightweightModule):
             mesh_device=mesh_device,
             tt_ccl=tt_ccl,
             state_dict=state_dict,
+            weight_cache_path=weight_cache_path,
             experts=self.experts,
             args=args,
             layer_num=layer_num,

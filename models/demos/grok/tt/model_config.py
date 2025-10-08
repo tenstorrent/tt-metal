@@ -519,7 +519,8 @@ class TtModelArgs:
         return model_config
 
     def weight_cache_path(self, dtype):
-        return self.model_cache_path / {ttnn.bfloat16: "tensor_cache_bf16", ttnn.bfloat8_b: "tensor_cache_bfp8"}[dtype]
+        dtype_string = {ttnn.bfloat16: "tensor_cache_bf16", ttnn.bfloat8_b: "tensor_cache_bfp8"}[dtype]
+        return f"{self.model_cache_path}/{dtype_string}"
 
     def load_weights_to_state_dict_no_experts(self, weights_path="/localdev/ricozhu/grok_2_weights/", fuse_qkv=True):
         """

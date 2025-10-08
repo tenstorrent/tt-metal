@@ -31,7 +31,7 @@ def topk_router(g, mask, experts_per_token):
 
 
 class TtMoE(LightweightModule):
-    def __init__(self, mesh_device, tt_ccl, state_dict, experts, args, layer_num, dtype):
+    def __init__(self, mesh_device, tt_ccl, state_dict, weight_cache_path, experts, args, layer_num, dtype):
         super().__init__()
         self.mesh_device = mesh_device
         self.tt_ccl = tt_ccl
@@ -44,7 +44,7 @@ class TtMoE(LightweightModule):
         gate_name = f"model.layers.{layer_num}.block_sparse_moe.gate.weight"
 
         # Simplified cache naming for minimal implementation
-        cache_name = None
+        cache_name = f"{weight_cache_path}/{gate_name}"
 
         # Prepare gate tensor - pad to 64 for top-k operation compatibility
         gates_tensor = (
@@ -58,7 +58,7 @@ class TtMoE(LightweightModule):
             dtype=ttnn.bfloat16,
             layout=self.model_config["GATE_W_LAYOUT_TILE_EXPERTS"],
             memory_config=self.model_config["GATE_WEIGHTS_MEMCFG_EXPERTS"],
-            # cache_file_name=cache_name,  # Simplified for minimal implementation
+            cache_file_name=cache_name,
             device=self.mesh_device,
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, 2), mesh_shape=(8, 4)),
         )

@@ -11,7 +11,9 @@ from models.tt_transformers.tt.model_config import TensorGroup
 
 
 class ExpertMLP(LightweightModule):
-    def __init__(self, mesh_device, tt_ccl, state_dict, args, layer_num, dtypes, deallocate_torch=False):
+    def __init__(
+        self, mesh_device, tt_ccl, state_dict, weight_cache_path, args, layer_num, dtypes, deallocate_torch=False
+    ):
         super().__init__()
 
         self.mesh_device = mesh_device
@@ -23,6 +25,10 @@ class ExpertMLP(LightweightModule):
 
         # Base name for expert weights in Grok
         base_name = lambda expert_num: f"model.layers.{layer_num}.block_sparse_moe.experts.{expert_num}"
+        cache_name = (
+            lambda name: args.weight_cache_path(dtypes[name])
+            + f"model.layers.{layer_num}.feed_forward_multidevice_unsqueezed.experts.{name}"
+        )
 
         # Concatenate weights from all 8 experts
         torch_weight = lambda name: torch.concat(
@@ -35,17 +41,6 @@ class ExpertMLP(LightweightModule):
             ],
             dim=1,  # [1, 8, 8192, 16384]
         )
-
-        # ShardTo2DMesh(mesh_shape=(8, 4), dims=(3,2))
-
-        # Cache naming for weights
-        if args.dummy_weights:
-            cache_name = lambda _: None
-        else:
-            # Use a simple cache path structure for Grok
-            cache_name = lambda name: args.weight_cache_path(dtypes[name]) / (
-                f"model.layers.{layer_num}.feed_forward_multidevice_unsqueezed.experts.{name}"
-            )
 
         # Convert torch weights to ttnn tensors
         as_tensor = lambda name: ttnn.as_tensor(

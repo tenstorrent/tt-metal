@@ -156,7 +156,7 @@ def test_grok_decoder_inference(
         mesh_device,
         tt_ccl,
         state_dict,
-        weight_cache_path=None,  # Use dummy weights
+        weight_cache_path=model_args.weight_cache_path(dtype),  # Use dummy weights
         args=model_args,
         layer_num=layer_num,
         dtype=dtype,

@@ -38,11 +38,7 @@ class MLP(LightweightModule):
         torch_weight = lambda name: torch.transpose(state_dict[f"{state_dict_prefix}.{name}.weight"], -2, -1)
         # If pading was applied (e.g. via env var), add the unpadded hidden dim to the cache name to avoid loading incorrect weights
         hidden_dim_string = f".hidden_dim_{args.hidden_dim}" if args.hidden_dim != args.unpadded_hidden_dim else ""
-
-        if args.dummy_weights:
-            cache_name = lambda _: None
-        else:
-            cache_name = lambda name: weight_cache_path / f"{state_dict_prefix}.{name}{hidden_dim_string}"
+        cache_name = lambda name: f"{weight_cache_path}/{state_dict_prefix}.{name}{hidden_dim_string}"
 
         layer_num = max(layer_num, 0)  # cross_block uses the configutation of the first decoder
 
@@ -60,7 +56,7 @@ class MLP(LightweightModule):
             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(-1, -2), mesh_shape=(8, 4)),
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            # cache_file_name=cache_name("w1_interleaved"),
+            cache_file_name=cache_name("w1_interleaved"),
         )
         self.w2 = ttnn.as_tensor(
             state_dict[f"{state_dict_prefix}.w2.weight"].transpose(-1, -2),
@@ -69,7 +65,7 @@ class MLP(LightweightModule):
             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(-2, -1), mesh_shape=(8, 4)),
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            # cache_file_name=cache_name("w2_interleaved"),
+            cache_file_name=cache_name("w2_interleaved"),
         )
         self.w3 = ttnn.as_tensor(
             state_dict[f"{state_dict_prefix}.w3.weight"].transpose(-1, -2),
@@ -78,7 +74,7 @@ class MLP(LightweightModule):
             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(-1, -2), mesh_shape=(8, 4)),
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            # cache_file_name=cache_name("w3_interleaved"),
+            cache_file_name=cache_name("w3_interleaved"),
         )
 
         if deallocate_torch:
