@@ -66,6 +66,7 @@ def prepare_test_data(model_location_generator) -> None:
         print(f"!!! Local path: {local_path_obj}, external path: {external_path}")
         # Debug: iterate over /work directory and print content
         work_path = Path("/work")
+        print("!!! BEFORE")
         if work_path.exists():
             print(f"!!! Contents of {work_path}:")
             for item in work_path.iterdir():
@@ -78,7 +79,7 @@ def prepare_test_data(model_location_generator) -> None:
         b = any(local_path_obj.iterdir()) if a else False
         print(f"!!! Local path exists: {a}, has content: {b}")
         print(f"!!! issymlink {local_path_obj.is_symlink()}")
-        print(f"!!! lstat {local_path_obj.lstat()}")
+        # print(f"!!! lstat {local_path_obj.lstat()}")
         if local_path_obj.exists() and any(local_path_obj.iterdir()):
             print("!!!! local_path_obj exists")
             continue
@@ -92,6 +93,21 @@ def prepare_test_data(model_location_generator) -> None:
         if local_path_obj.exists():
             local_path_obj.unlink()  # Remove existing symlink/file
         local_path_obj.symlink_to(data_placement)
+        print(f"!!! Created symlink {local_path_obj} to {data_placement}")
+
+        print("!!! AFTER")
+        if work_path.exists():
+            print(f"!!! Contents of {work_path}:")
+            for item in work_path.iterdir():
+                symlink_info = " (symlink)" if item.is_symlink() else ""
+                print(f"!!!   {item.name} ({'dir' if item.is_dir() else 'file'}){symlink_info}")
+        else:
+            print(f"!!! {work_path} does not exist")
+
+        a = local_path_obj.exists()
+        b = any(local_path_obj.iterdir()) if a else False
+        print(f"!!! Local path exists: {a}, has content: {b}")
+        print(f"!!! issymlink {local_path_obj.is_symlink()}")
 
 
 def collect_ttnn_tutorials(path: Path, extension: str = "*.py"):
