@@ -54,6 +54,22 @@ tt::tt_metal::distributed::MeshCoordinate::BoundaryMode get_boundary_mode(
     return tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::WRAP;
 }
 
+tt::tt_fabric::Topology get_usable_topology(
+    const Tensor& tensor, tt::tt_fabric::Topology whole_device_topology, const std::optional<uint32_t>& cluster_axis) {
+    if (whole_device_topology == tt::tt_fabric::Topology::Ring ||
+        whole_device_topology == tt::tt_fabric::Topology::Torus) {
+        auto boundary_mode = get_boundary_mode(tensor, whole_device_topology, cluster_axis);
+        if (boundary_mode == tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::WRAP) {
+            return whole_device_topology;
+        } else if (whole_device_topology == tt::tt_fabric::Topology::Torus) {
+            return tt::tt_fabric::Topology::Mesh;
+        } else {
+            return tt::tt_fabric::Topology::Linear;
+        }
+    }
+    return whole_device_topology;
+}
+
 uint32_t get_topological_dimension(const Tensor& tensor, const std::optional<uint32_t>& cluster_axis) {
     const auto& device_coords = tensor.device_storage().coords;
     TT_FATAL(!device_coords.empty(), "device_coords is empty");
