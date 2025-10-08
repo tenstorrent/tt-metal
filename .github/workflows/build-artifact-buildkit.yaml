@@ -147,9 +147,6 @@ on:
         type: boolean
         default: false
         description: "Build UMD tests"
-  push:
-    branches:
-      - buildkit-artifacts-build
 
 jobs:
   # build-debs-and-tarball:
