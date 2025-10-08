@@ -36,9 +36,25 @@ def run_sum(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(input_shape)
 
-    dim = dim % len(input_shape)
-
-    torch_output_tensor = torch.sum(torch_input_tensor_a, dim=dim, keepdim=keepdim)
+    if dim is None:
+        if keepdim:
+            # When dim=None and keepdim=True, sum over all dimensions but keep dimensions
+            all_dims = tuple(range(len(input_shape)))
+            torch_output_tensor = torch.sum(torch_input_tensor_a, dim=all_dims, keepdim=keepdim)
+        else:
+            torch_output_tensor = torch.sum(torch_input_tensor_a)
+    else:
+        # Handle both single dimension and list of dimensions
+        if isinstance(dim, (list, tuple)):
+            # Normalize dimensions (duplicates should be caught by invalidate_vector)
+            normalized_dims = []
+            for d in dim:
+                normalized_d = d % len(input_shape)
+                normalized_dims.append(normalized_d)
+            dim = tuple(normalized_dims)
+        else:
+            dim = dim % len(input_shape)
+        torch_output_tensor = torch.sum(torch_input_tensor_a, dim=dim, keepdim=keepdim)
 
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
@@ -49,7 +65,10 @@ def run_sum(
     )
 
     start_time = start_measuring_time()
-    op_output_tensor = ttnn.sum(input_tensor_a, dim=dim, memory_config=output_memory_config)
+    if keepdim:
+        op_output_tensor = ttnn.sum(input_tensor_a, dim=dim, keepdim=keepdim, memory_config=output_memory_config)
+    else:
+        op_output_tensor = ttnn.sum(input_tensor_a, dim=dim, memory_config=output_memory_config)
     output_tensor = ttnn.to_torch(op_output_tensor)
     e2e_perf = stop_measuring_time(start_time)
     expected_pcc = 0.999
@@ -74,9 +93,16 @@ def run_prod(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(input_shape)
 
-    dim = dim % len(input_shape)
-
-    torch_output_tensor = torch.prod(torch_input_tensor_a, dim=dim, keepdim=keepdim)
+    if dim is None:
+        if keepdim:
+            # When dim=None and keepdim=True, prod over all dimensions but keep dimensions
+            all_dims = tuple(range(len(input_shape)))
+            torch_output_tensor = torch.prod(torch_input_tensor_a, dim=all_dims, keepdim=keepdim)
+        else:
+            torch_output_tensor = torch.prod(torch_input_tensor_a)
+    else:
+        dim = dim % len(input_shape)
+        torch_output_tensor = torch.prod(torch_input_tensor_a, dim=dim, keepdim=keepdim)
 
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
