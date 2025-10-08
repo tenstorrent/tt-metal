@@ -275,11 +275,14 @@ def dump_callstacks(
         dispatcher_core_data = dispatcher_data.get_core_data(location, risc_name)
         if active_cores and dispatcher_core_data.go_message != "GO":
             return result
+        risc_debug = location._device.get_block(location).get_risc_debug(risc_name)
+        if risc_debug.is_in_reset():
+            return DumpCallstacksData(
+                dispatcher_core_data=dispatcher_core_data,
+                pc=None,
+                kernel_callstack_with_message=KernelCallstackWithMessage(callstack=[], message="Core is in reset"),
+            )
         if gdb_callstack:
-            risc_debug = location._device.get_block(location).get_risc_debug(risc_name)
-            if risc_debug.is_in_reset():
-                return result
-
             if risc_name == "ncrisc":
                 # Cannot attach to NCRISC process due to lack of debug hardware so we are defaulting to top callstack
                 error_message = (
