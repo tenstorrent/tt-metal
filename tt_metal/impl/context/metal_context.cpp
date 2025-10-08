@@ -693,7 +693,7 @@ void MetalContext::reset_cores(chip_id_t device_id) {
             CoreCoord worker_core =
                 cluster_->get_virtual_coordinate_from_logical_coordinates(device_id, logical_core, CoreType::WORKER);
             if (!storage_only_cores_set.contains(logical_core)) {
-                cluster_->assert_risc_reset_at_core(tt_cxy_pair(device_id, worker_core), tt::umd::RiscType::ALL);
+                cluster_->assert_risc_reset_at_core(tt_cxy_pair(device_id, worker_core));
             }
         }
     }
@@ -702,7 +702,7 @@ void MetalContext::reset_cores(chip_id_t device_id) {
     for (const auto& logical_core : this->get_control_plane().get_inactive_ethernet_cores(device_id)) {
         CoreCoord virtual_core =
             cluster_->get_virtual_coordinate_from_logical_coordinates(device_id, logical_core, CoreType::ETH);
-        cluster_->assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core), tt::umd::RiscType::ALL);
+        cluster_->assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core));
     }
 
     cluster_->l1_barrier(device_id);
@@ -730,7 +730,7 @@ void MetalContext::assert_cores(chip_id_t device_id) {
                         // Below will return to base FW
                         continue;
                     }
-                    cluster_->assert_risc_reset_at_core(tt_cxy_pair(device_id, worker_core), tt::umd::RiscType::ALL);
+                    cluster_->assert_risc_reset_at_core(tt_cxy_pair(device_id, worker_core));
                 }
             } else {
                 log_debug(tt::LogMetal, "{} will not be Reset when closing Device {}", worker_core.str(), device_id);
