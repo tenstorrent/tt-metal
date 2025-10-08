@@ -385,7 +385,9 @@ get_final_placements_and_shape(
             const auto& tensor_placements = tensor.tensor_topology().placements();
             i = 0;
             for (; i < tensor_placements.size(); i++) {
-                tt::tt_metal::distributed::MeshMapperConfig::Placement output_placement = result_placements[i];
+                tt::tt_metal::distributed::MeshMapperConfig::Placement output_placement =
+                    i < result_placements.size() ? result_placements[i]
+                                                 : tt::tt_metal::distributed::MeshMapperConfig::Replicate{};
                 if (std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Shard>(tensor_placements[i])) {
                     auto new_shard_placement =
                         std::get<tt::tt_metal::distributed::MeshMapperConfig::Shard>(tensor_placements[i]);
