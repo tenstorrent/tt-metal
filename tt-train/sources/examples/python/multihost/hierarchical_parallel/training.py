@@ -21,21 +21,27 @@ from ttml.common.model_factory import TransformerModelFactory
 from ttml.common.utils import create_optimizer, initialize_device, set_seed
 
 from data import prepare_data
-from trainer import worker, aggregator, optimizer
+from trainer import worker, aggregator, optimizer, aggregator_optimizer
 
 
 @click.command()
 @click.option("-c", "--config", type=str, default="training_shakespeare_tinyllama_tensor_parallel_3tier_fabric.yaml")
 @click.option(
     "--worker-type",
-    type=click.Choice(["worker", "aggregator", "optimizer"], case_sensitive=False),
+    type=click.Choice(["worker", "aggregator", "optimizer", "aggregator_optimizer"], case_sensitive=False),
     default=None,
     help="Type of worker (auto-detected if not specified)",
 )
 def main(config: str, worker_type: str):
-    """Main training function for 3-tier hierarchical parallel training.
+    """Main training function for hierarchical parallel training.
 
-    The system consists of three types of processes:
+    Supports two architectures:
+
+    2-tier (world_size == num_workers + 1):
+    - Workers (ranks 0 to num_workers-1): Compute forward/backward passes
+    - AggregatorOptimizer (rank num_workers): Aggregates gradients and applies optimizer
+
+    3-tier (world_size == num_workers + 2):
     - Workers (ranks 0 to num_workers-1): Compute forward/backward passes
     - Aggregator (rank num_workers): Aggregates gradients from workers
     - Optimizer (rank num_workers+1): Applies optimizer updates
@@ -58,16 +64,25 @@ def main(config: str, worker_type: str):
     multihost_config = MultiHostConfig(yaml_config)
     num_workers = multihost_config.num_workers
 
+    # Determine architecture based on world_size and num_workers
+    # 2-tier: world_size == num_workers + 1 (workers + aggregator_optimizer)
+    # 3-tier: world_size == num_workers + 2 (workers + aggregator + optimizer)
+    is_two_tier = world_size == num_workers + 1
+
     # Auto-detect worker type based on rank if not specified
     if worker_type is None:
         if rank < num_workers:
             worker_type = "worker"
         elif rank == num_workers:
-            worker_type = "aggregator"
+            if is_two_tier:
+                worker_type = "aggregator_optimizer"
+            else:
+                worker_type = "aggregator"
         else:
             worker_type = "optimizer"
 
-    print(f"Rank {rank}/{world_size}: Running as {worker_type}")
+    mode = "2-tier" if is_two_tier else "3-tier"
+    print(f"Rank {rank}/{world_size}: Running as {worker_type} ({mode} mode)")
 
     # Initialize socket manager
     socket_type = (
@@ -103,16 +118,20 @@ def main(config: str, worker_type: str):
     if worker_type == "worker":
         # Training worker - computes forward/backward and uses RemoteOptimizer
         train_losses, val_losses = worker(
-            training_cfg, model, train_ids, val_ids, device_config.enable_ddp, device_config.enable_tp
+            training_cfg, model, train_ids, val_ids, device_config.enable_ddp, device_config.enable_tp, num_workers
         )
         print(f"[Worker {rank}] Completed with {len(train_losses)} loss values")
     elif worker_type == "aggregator":
-        # Aggregator - averages gradients from workers and broadcasts weights
+        # Aggregator - averages gradients from workers and broadcasts weights (3-tier only)
         aggregator(model, training_cfg, device_config.enable_ddp)
     elif worker_type == "optimizer":
-        # Optimizer - applies optimizer updates
+        # Optimizer - applies optimizer updates (3-tier only)
         optimizer_instance = create_optimizer(model, yaml_config)
         optimizer(model, training_cfg, optimizer_instance)
+    elif worker_type == "aggregator_optimizer":
+        # Combined aggregator and optimizer for 2-tier architecture
+        optimizer_instance = create_optimizer(model, yaml_config)
+        aggregator_optimizer(model, training_cfg, optimizer_instance, device_config.enable_ddp)
 
     # Cleanup
     distributed_ctx.barrier()

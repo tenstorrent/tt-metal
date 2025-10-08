@@ -61,6 +61,10 @@ void py_module(nb::module_& m) {
         py_tensor.def(nb::init<const tt::tt_metal::Tensor&, bool>());
         py_tensor.def("set_value", &Tensor::set_value, nb::arg("value"));
         py_tensor.def("set_grad", &Tensor::set_grad, nb::arg("grad"));
+        py_tensor.def(
+            "set_grad_from_tensor",
+            [](Tensor& self, const TensorPtr& grad_tensor) { self.set_grad(grad_tensor->get_value()); },
+            nb::arg("grad_tensor"));
         py_tensor.def("set_node", &Tensor::set_node, nb::arg("node"));
         py_tensor.def("clean_node", &Tensor::clean_node);
         py_tensor.def("add_grad", &Tensor::add_grad, nb::arg("grad"));

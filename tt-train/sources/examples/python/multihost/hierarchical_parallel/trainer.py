@@ -2,12 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Training functions for 3-tier hierarchical parallel transformer training.
+"""Training functions for hierarchical parallel transformer training.
 
-This module contains the training logic for all three worker types:
+This module contains the training logic for both 2-tier and 3-tier architectures:
 - worker(): Worker training loop using RemoteOptimizer
-- aggregator(): Aggregates gradients from workers
-- optimizer(): Applies optimizer updates
+- aggregator(): Aggregates gradients from workers (3-tier only)
+- optimizer(): Applies optimizer updates (3-tier only)
+- aggregator_optimizer(): Combined aggregator+optimizer for 2-tier architecture
 """
 from time import time
 
@@ -52,7 +53,15 @@ def get_batch_ttml(ids: np.ndarray, seq_len: int, batch_size: int, use_ddp: bool
     return tt_x, tt_y
 
 
-def worker(cfg, model, train_ids: np.ndarray, val_ids: np.ndarray, use_ddp: bool = False, use_tp: bool = False):
+def worker(
+    cfg,
+    model,
+    train_ids: np.ndarray,
+    val_ids: np.ndarray,
+    use_ddp: bool = False,
+    use_tp: bool = False,
+    num_workers: int = None,
+):
     """Execute worker training loop.
 
     Workers compute forward/backward passes and use RemoteOptimizer to:
@@ -66,6 +75,7 @@ def worker(cfg, model, train_ids: np.ndarray, val_ids: np.ndarray, use_ddp: bool
         val_ids: Validation data token IDs (unused, for API compatibility)
         use_ddp: Whether to use distributed data parallel
         use_tp: Whether to use tensor parallel
+        num_workers: Number of worker ranks (if None, assumes 3-tier with world_size - 2)
 
     Returns:
         Tuple of (train_losses, val_losses) lists
@@ -85,15 +95,16 @@ def worker(cfg, model, train_ids: np.ndarray, val_ids: np.ndarray, use_ddp: bool
     rank = distributed_ctx.rank()
     world_size = distributed_ctx.size()
 
-    # In 3-tier: workers are ranks 0 to num_workers-1, aggregator is num_workers, optimizer is num_workers+1
-    # Here we assume the aggregator rank equals the number of workers
-    num_workers = world_size - 2  # Subtract aggregator and optimizer
+    # Determine num_workers if not provided
+    if num_workers is None:
+        # Default to 3-tier: workers are ranks 0 to num_workers-1, aggregator is num_workers, optimizer is num_workers+1
+        num_workers = world_size - 2  # Subtract aggregator and optimizer
+
     aggregator_rank = num_workers
 
-    assert world_size >= 3, f"3-tier architecture requires world_size >= 3, got {world_size}"
     assert rank < num_workers, f"Worker rank {rank} must be < num_workers {num_workers}"
 
-    # Create RemoteOptimizer that communicates with aggregator
+    # Create RemoteOptimizer that communicates with aggregator (or aggregator_optimizer in 2-tier)
     optimizer = ttml.optimizers.RemoteOptimizer(model.parameters(), aggregator_rank)
 
     # Create composer for distributed tensors if using DDP or TP
@@ -106,8 +117,8 @@ def worker(cfg, model, train_ids: np.ndarray, val_ids: np.ndarray, use_ddp: bool
     train_losses = []
     val_losses = []  # Unused, kept for API compatibility
 
-    # Receive initial weights from aggregator
-    print(f"[Worker {rank}] Receiving initial weights from aggregator {aggregator_rank}")
+    # Receive initial weights from aggregator (or aggregator_optimizer in 2-tier)
+    print(f"[Worker {rank}] Receiving initial weights from rank {aggregator_rank}")
     optimizer.receive_weights()
     print(f"[Worker {rank}] Received initial weights")
 
@@ -298,3 +309,87 @@ def optimizer(model, cfg, optimizer_instance):
             socket_manager.send(tensor_ptr, aggregator_and_optimizer_ctx, aggregator_local_rank)
 
     print(f"[Optimizer {rank}] Completed {cfg.steps} steps")
+
+
+def aggregator_optimizer(model, cfg, optimizer_instance, use_ddp: bool = False):
+    """Combined aggregator and optimizer for 2-tier hierarchical parallel training.
+
+    This function combines the roles of aggregator and optimizer:
+    1. Receives gradients from all workers
+    2. Averages the gradients
+    3. Optionally applies DDP reduction across devices
+    4. Sets the averaged gradients on model parameters
+    5. Applies optimizer step
+    6. Broadcasts updated weights to all workers
+
+    Args:
+        model: Model instance (for getting parameters)
+        cfg: Training configuration
+        optimizer_instance: Optimizer instance to use for updates
+        use_ddp: Whether to apply DDP reduction on gradients
+    """
+    # Setup distributed context
+    autograd_ctx = ttml.autograd.AutoContext.get_instance()
+    distributed_ctx = autograd_ctx.get_distributed_context()
+    socket_manager = autograd_ctx.get_socket_manager()
+
+    rank = distributed_ctx.rank()
+    world_size = distributed_ctx.size()
+
+    # Calculate number of workers (exclude aggregator_optimizer)
+    num_workers = world_size - 1
+
+    # Get sorted parameters for consistent ordering
+    parameters = model.parameters()
+    sorted_parameters = dict(sorted(parameters.items()))
+
+    # We need to create a sub-context for all workers to receive gradients from because of RemoteOptimizer that creates
+    # a sub-context for all workers and aggregator. In our case with aggregator_optimizer.
+    all_ranks = list(range(world_size))
+    all_ctx = distributed_ctx.create_sub_context(all_ranks)
+
+    # Send initial weights to all workers
+    print(f"[AggregatorOptimizer {rank}] Sending initial weights to {num_workers} workers")
+    for worker_id in range(num_workers):
+        for name, tensor_ptr in sorted_parameters.items():
+            socket_manager.send(tensor_ptr, all_ctx, worker_id)
+
+    print(f"[AggregatorOptimizer {rank}] Starting training loop for {cfg.steps} steps")
+
+    # Training loop
+    for step in range(cfg.steps):
+        # Receive and average gradients from all workers
+        for name, tensor_ptr in sorted_parameters.items():
+            # Receive gradient from first worker
+            with no_grad():
+                grad_tensor = ttml.core.empty_like(tensor_ptr)
+                socket_manager.recv(grad_tensor, all_ctx, 0)
+
+                # Receive and accumulate gradients from remaining workers
+                for worker_id in range(1, num_workers):
+                    to_add = ttml.core.empty_like(tensor_ptr)
+                    socket_manager.recv(to_add, all_ctx, worker_id)
+                    grad_tensor = grad_tensor + to_add
+
+                # Average the gradients
+                grad_tensor = grad_tensor * (1.0 / num_workers)
+
+                # Apply DDP reduction across devices if enabled
+                if use_ddp:
+                    grad_tensor = ttml.ops.distributed.all_reduce(grad_tensor)
+
+            # Set the gradient on the parameter for optimizer step
+            tensor_ptr.set_grad_from_tensor(grad_tensor)
+
+        # Apply optimizer step
+        optimizer_instance.step()
+
+        # Broadcast updated weights to all workers
+        for name, tensor_ptr in sorted_parameters.items():
+            for worker_id in range(num_workers):
+                socket_manager.send(tensor_ptr, all_ctx, worker_id)
+
+        if (step + 1) % 10 == 0:
+            print(f"[AggregatorOptimizer {rank}] Completed step {step + 1}/{cfg.steps}")
+
+    print(f"[AggregatorOptimizer {rank}] Completed {cfg.steps} steps")
