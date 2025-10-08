@@ -135,9 +135,9 @@ The `training.py` script **automatically detects** which architecture to use bas
 ### 2-Tier Example
 
 ```bash
-# For num_workers=3, you need 4 total ranks: 3 workers + 1 aggregator_optimizer
-# Launch with 4 MPI ranks
-mpirun -n 4 python training.py -c config.yaml
+# For num_workers=4, you need 5 total ranks: 4 workers + 1 aggregator_optimizer
+# Launch with 5 MPI ranks
+./runner.sh --config config_with_4_workers.yaml
 ```
 
 The script automatically determines worker type based on rank:
@@ -149,7 +149,7 @@ The script automatically determines worker type based on rank:
 ```bash
 # For num_workers=3, you need 5 total ranks: 3 workers + 1 aggregator + 1 optimizer
 # Launch with 5 MPI ranks
-mpirun -n 5 python training.py -c config.yaml
+./runner.sh --config config_with_3_workers.yaml
 ```
 
 The script automatically determines worker type based on rank:
