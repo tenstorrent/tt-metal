@@ -33,8 +33,8 @@ TEST_F(ReduceOpTest, TestMeanDim0) {
     ttml::autograd::ctx().set_seed(42);
     auto* device = &ttml::autograd::ctx().get_device();
     xt::xarray<float> xtensor_a = xt::empty<float>({128 * 64});
-    [[maybe_unused]] auto& rng = ttml::autograd::ctx().get_generator();
-    uint32_t seed = 3;  // rng();
+    auto& rng = ttml::autograd::ctx().get_generator();
+    uint32_t seed = rng();
     ttml::core::parallel_generate(
         std::span{xtensor_a.data(), xtensor_a.size()},
         []() { return std::uniform_real_distribution<float>(-0.5f, 0.5f); },
