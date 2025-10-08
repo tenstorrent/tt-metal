@@ -576,7 +576,9 @@ async function run() {
           const author_name = c.commit?.author?.name;
           const author_url = c.author?.html_url;
           const date = c.commit?.author?.date || c.commit?.committer?.date || null;
-          commits.push({ sha, short, url, author_login, author_name, author_url, date });
+          const message = c.commit?.message || '';
+          const description = typeof message === 'string' ? (message.split(/\r?\n/)[0] || '') : '';
+          commits.push({ sha, short, url, author_login, author_name, author_url, date, message, description });
         }
         if (arr.length < perPage) break;
         page++;
