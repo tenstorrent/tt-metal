@@ -383,8 +383,39 @@ def run(test_module_name, input_queue, output_queue, config: SweepsConfig):
                         status_cached, message_cached = results_cached
                         e2e_perf_cached = None
 
-                    # Use the cached run results as the primary results
-                    status, message = status_cached, message_cached
+                    # Check both run statuses and combine results
+                    if not status_uncached:
+                        # Uncached run failed
+                        if status_cached:
+                            # Uncached failed but cached passed
+                            status = False
+                            message = f"UNCACHED RUN FAILED: {message_uncached} (cached run passed: {message_cached})"
+                        else:
+                            # Both failed
+                            status = False
+                            message = f"BOTH RUNS FAILED - Uncached: {message_uncached}, Cached: {message_cached}"
+                    elif not status_cached:
+                        # Uncached passed but cached failed
+                        status = False
+                        message = f"CACHED RUN FAILED: {message_cached} (uncached run passed: {message_uncached})"
+                    else:
+                        # Both passed - verify messages are consistent
+                        status = True
+                        # Check if messages differ (they should be the same for correctness validation)
+                        if str(message_uncached) != str(message_cached):
+                            # Messages differ - this is a correctness issue
+                            message = (
+                                f"BOTH RUNS PASSED BUT MESSAGES DIFFER - "
+                                f"Uncached: {message_uncached}, Cached: {message_cached}"
+                            )
+                            logger.warning(
+                                f"Message mismatch between cached and uncached runs: "
+                                f"uncached={message_uncached}, cached={message_cached}"
+                            )
+                        else:
+                            # Messages match - use uncached message as canonical
+                            message = message_uncached
+
                     # Store both performance metrics
                     e2e_perf = {"uncached": e2e_perf_uncached, "cached": e2e_perf_cached}
                 else:
