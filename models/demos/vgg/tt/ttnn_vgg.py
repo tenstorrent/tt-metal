@@ -74,8 +74,6 @@ def ttnn_vgg16(
                 stride=[2, 2],
                 padding=[0, 0],
                 dilation=[1, 1],
-                deallocate_input=True,
-                reallocate_halo_output=True,
             )
 
         else:
@@ -86,8 +84,8 @@ def ttnn_vgg16(
             conv_config = ttnn.Conv2dConfig(
                 weights_dtype=model_config["WEIGHTS_DTYPE"],
                 activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
-                deallocate_activation=True,
-                reallocate_halo_output=True,
+                deallocate_activation=False,
+                reallocate_halo_output=False,
                 shard_layout=(
                     ttnn.TensorMemoryLayout.HEIGHT_SHARDED if h_sharding else ttnn.TensorMemoryLayout.BLOCK_SHARDED
                 ),
@@ -222,8 +220,6 @@ def ttnn_vgg11(
                 stride=[2, 2],
                 padding=[0, 0],
                 dilation=[1, 1],
-                deallocate_input=True,
-                reallocate_halo_output=True,
             )
 
         else:
@@ -236,8 +232,8 @@ def ttnn_vgg11(
             conv_config = ttnn.Conv2dConfig(
                 weights_dtype=model_config["WEIGHTS_DTYPE"],
                 activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
-                deallocate_activation=True,
-                reallocate_halo_output=True,
+                deallocate_activation=False,
+                reallocate_halo_output=False,
                 shard_layout=shard_layout,
                 enable_weights_double_buffer=True,
                 reshard_if_not_optimal=True if tt_x.memory_config().memory_layout != shard_layout else False,
