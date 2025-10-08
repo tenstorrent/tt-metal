@@ -247,7 +247,9 @@ class DispatcherData:
         except:
             pass
         try:
-            host_assigned_id = mem_access(fw_elf, f"mailboxes->launch[{launch_msg_rd_ptr}].kernel_config.host_assigned_id", loc_mem_reader)[0][0]
+            host_assigned_id = mem_access(
+                fw_elf, f"mailboxes->launch[{launch_msg_rd_ptr}].kernel_config.host_assigned_id", loc_mem_reader
+            )[0][0]
         except:
             pass
         try:
