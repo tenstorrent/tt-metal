@@ -249,11 +249,11 @@ def gather_single_test_perf(device, test_passed):
         import random
 
         dummy_data = {
-            "DEVICE FW DURATION [ns]": random.randint(8000000, 15000000),  # 8-15ms
-            "DEVICE KERNEL DURATION [ns]": random.randint(5000000, 12000000),  # 5-12ms
-            "OP TO OP LATENCY [ns]": random.randint(100000, 500000),  # 0.1-0.5ms
-            "DEVICE BRISC FW DURATION [ns]": random.randint(1000000, 3000000),  # 1-3ms
-            "DEVICE NCRISC FW DURATION [ns]": random.randint(2000000, 4000000),  # 2-4ms
+            "DEVICE FW DURATION [ns]": 0,  # 8-15ms
+            "DEVICE KERNEL DURATION [ns]": 0,  # 5-12ms
+            "OP TO OP LATENCY [ns]": 0,  # 0.1-0.5ms
+            "DEVICE BRISC FW DURATION [ns]": 0,  # 1-3ms
+            "DEVICE NCRISC FW DURATION [ns]": 0,  # 2-4ms
         }
         return dummy_data
     elif len(opPerfData) > 1:
