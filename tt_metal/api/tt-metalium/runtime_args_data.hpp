@@ -31,12 +31,12 @@ struct RuntimeArgsData {
     }
 
     std::uint32_t& operator[](std::size_t index) noexcept {
-        assert(in_bounds(index));
+        TT_ASSERT(in_bounds(index));
         return this->rt_args_data[index];
     }
 
     const std::uint32_t& operator[](std::size_t index) const noexcept {
-        assert(in_bounds(index));
+        TT_ASSERT(in_bounds(index));
         return this->rt_args_data[index];
     }
 
