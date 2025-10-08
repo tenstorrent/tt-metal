@@ -10,9 +10,7 @@ from models.experimental.stable_diffusion_xl_refiner.tt.components.group_normali
 )
 from models.experimental.stable_diffusion_xl_refiner.tt.components.convolution_layer import ConvConfig, make_conv_config
 
-
-# This whole file needs so much refactoring lol
-# Big plans
+# Issue: https://github.com/tenstorrent/tt-metal/issues/30191
 
 
 @dataclass
