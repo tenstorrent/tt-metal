@@ -133,12 +133,17 @@
 </ul>
 <p>The compute engines rely on four main register sets:</p>
 <ol class="arabic simple">
-<li><p><strong>SrcA</strong>: The first source register set for the matrix engine.</p></li>
-<li><p><strong>SrcB</strong>: The second source register set for the matrix engine.</p></li>
+<li><p><strong>SrcA</strong>: The first source register of the matrix engine.</p></li>
+<li><p><strong>SrcB</strong>: The second source register of the matrix engine.</p></li>
 <li><p><strong>Dst</strong>: The destination register set for the matrix engine, also used by the vector engine. This register set is exposed in the higher-level API.</p></li>
 <li><p><strong>LReg</strong>: Internal registers within the SFPU for holding vector data during computation.</p></li>
 </ol>
 <p>The following image illustrates the connection between the different components and the registers they can access.</p>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>The register names are historical and may not clearly reflect their roles. The matrix engine (FPU) was developed before the vector engine (SFPU), and the names <code class="docutils literal notranslate"><span class="pre">SrcA</span></code>, <code class="docutils literal notranslate"><span class="pre">SrcB</span></code>, and <code class="docutils literal notranslate"><span class="pre">Dst</span></code> were chosen based on their use in matrix operations: <code class="docutils literal notranslate"><span class="pre">SrcA</span></code> and <code class="docutils literal notranslate"><span class="pre">SrcB</span></code> as source operands, and <code class="docutils literal notranslate"><span class="pre">Dst</span></code> as the destination. These names remained unchanged when the vector engine was added.</p>
+<p><code class="docutils literal notranslate"><span class="pre">SrcA</span></code> and <code class="docutils literal notranslate"><span class="pre">SrcB</span></code> are physical registers inside the matrix engine. The names might suggest references to memory locations, but they are just hardware registers used for computation. And unlike <code class="docutils literal notranslate"><span class="pre">Dst</span></code>, <code class="docutils literal notranslate"><span class="pre">SrcA</span></code> and <code class="docutils literal notranslate"><span class="pre">SrcB</span></code> are single registers, not a register set.</p>
+</div>
 <div class="admonition note">
 <p class="admonition-title">Note</p>
 <p>Although a compute kernel is written as a single piece of code, it is compiled into three separate binaries, each running on a different RISC-V core (T0-2) within the Tensix. Synchronization is required to ensure correct data flow and avoid race conditions between these components.</p>
