@@ -9,7 +9,7 @@ import os
 
 from conan import ConanFile
 from conan.tools.cmake import CMake, CMakeToolchain, cmake_layout, CMakeDeps
-from conan.tools.env import VirtualRunEnv
+from conan.tools.env import VirtualRunEnv, VirtualBuildEnv
 
 
 class TTNNConan(ConanFile):
@@ -119,9 +119,16 @@ class TTNNConan(ConanFile):
         tc.generate()
 
         # Set environment variable for local builds
-        env = VirtualRunEnv(self)
-        env.environment().define("TT_METAL_HOME", self.source_folder)
-        env.generate()
+        run_env = VirtualRunEnv(self)
+        run_env.environment().define("TT_METAL_HOME", self.source_folder)
+        run_env.generate()
+
+        build_env = VirtualBuildEnv(self)
+        for dep in ["openmpi", "hwloc"]:
+            lib_path = os.path.join(self.dependencies[dep].package_folder, "lib")
+            build_env.environment().prepend_path("LD_LIBRARY_PATH", lib_path)
+
+        build_env.generate()
 
     def build(self):
         cmake = CMake(self)
@@ -136,7 +143,6 @@ class TTNNConan(ConanFile):
 
     def configure(self):
         self.options["libnuma"].shared = True
-        self.options["cpython"].with_tkinter = False
         self.options["hwloc"].shared = True
         self.options["openmpi"].shared = True
 
@@ -149,7 +155,6 @@ class TTNNConan(ConanFile):
         self.requires("zlib/1.3.1")
         self.requires("libevent/2.1.12")
         self.requires("boost/1.86.0")
-        self.requires("cpython/3.10.14")
 
     def package(self):
         cmake = CMake(self)

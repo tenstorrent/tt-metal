@@ -8,7 +8,7 @@ FROM redhat/ubi10:${RHEL_VERSION}
 RUN dnf update -y && dnf install -y \
     git wget patch which pcre2-devel perl-core \
     python3-pip python3-devel \
-    clang clang-tools-extra vim-common \
+    vim-common \
     && dnf clean all
 
 
