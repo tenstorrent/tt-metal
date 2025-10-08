@@ -292,13 +292,13 @@ Notes:
         Dist::EnqueueMeshWorkload(mcq, receiver_workload, /*blocking=*/false);
         Dist::EnqueueMeshWorkload(mcq, sender_workload, /*blocking=*/false);
     }
-    Dist::EndTraceCapture(mesh.get(), mcq.id(), trace_id);
+    mesh->end_mesh_trace(mcq.id(), trace_id);
     // 3) Replay measured section
     auto t0 = std::chrono::steady_clock::now();
-    Dist::ReplayTrace(mesh.get(), mcq.id(), trace_id, /*blocking=*/false);
+    mesh->replay_mesh_trace(mcq.id(), trace_id, /*blocking=*/false);
     Dist::Finish(mcq);
     auto t1 = std::chrono::steady_clock::now();
-    Dist::ReleaseTrace(mesh.get(), trace_id);
+    mesh->release_mesh_trace(trace_id);
 
     // Read back (single shard) and verify
     std::vector<uint32_t> rx(n_words, 0u);
