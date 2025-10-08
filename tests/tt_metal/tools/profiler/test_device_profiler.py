@@ -354,12 +354,8 @@ def test_dispatch_cores():
     REF_COUNT_DICT = {
         "Tensix CQ Dispatch*": [600, 760, 1310, 2330],
         "Tensix CQ Prefetch": [900, 1440, 3870, 5000],
-        "dispatch_total_cq_cmd_op_time": [
-            236
-        ],  # Updated the value to the value that was being reported by the assert in verify_stats()
-        "dispatch_go_send_wait_time": [
-            236
-        ],  # Updated the value to the value that was being reported by the assert in verify_stats()
+        "dispatch_total_cq_cmd_op_time": [236],
+        "dispatch_go_send_wait_time": [236],
     }
 
     verify_stats(

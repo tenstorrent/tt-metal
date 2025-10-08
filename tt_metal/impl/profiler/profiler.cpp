@@ -1165,7 +1165,6 @@ void DeviceProfiler::markTraceEnd(uint32_t trace_id) {
 void DeviceProfiler::markTraceReplay(uint32_t trace_id) { traces_replayed.push_back(trace_id); }
 
 void DeviceProfiler::addRuntimeIdToTrace(uint32_t trace_id, uint32_t runtime_id) {
-    // log_info(tt::LogMetal, "Adding runtime id {} to trace id {}", runtime_id, trace_id);
     TT_ASSERT(traces_being_recorded.find(trace_id) != traces_being_recorded.end());
     runtime_ids_per_trace[trace_id].insert(runtime_id);
 }
@@ -1435,20 +1434,14 @@ std::pair<uint64_t, uint64_t> DeviceProfiler::getTraceIdAndCount(
         return {tracy::TTDeviceMarker::INVALID_NUM, tracy::TTDeviceMarker::INVALID_NUM};
     }
 
-    // log_info(tt::LogMetal, "Device trace counter: {}", device_trace_counter);
-    // log_info(tt::LogMetal, "Traces replayed size: {}", traces_replayed.size());
     TT_ASSERT(device_trace_counter <= traces_replayed.size());
     const uint32_t trace_id = traces_replayed[device_trace_counter - 1];
-    // log_info(tt::LogMetal, "Trace id: {}", trace_id);
 
     if (runtime_ids_per_trace.find(trace_id) == runtime_ids_per_trace.end()) {
         return {tracy::TTDeviceMarker::INVALID_NUM, tracy::TTDeviceMarker::INVALID_NUM};
     }
 
     const std::unordered_set<uint32_t>& runtime_ids = runtime_ids_per_trace.at(trace_id);
-    // log_info(tt::LogMetal, "Runtime ids: {}", runtime_ids.size());
-    // log_info(tt::LogMetal, "Run host id: {}",
-    // tt::tt_metal::detail::DecodePerDeviceProgramID(run_host_id).base_program_id);
     const uint32_t base_program_id = tt::tt_metal::detail::DecodePerDeviceProgramID(run_host_id).base_program_id;
     if (runtime_ids.find(base_program_id) == runtime_ids.end()) {
         return {tracy::TTDeviceMarker::INVALID_NUM, tracy::TTDeviceMarker::INVALID_NUM};
@@ -1743,9 +1736,6 @@ void DeviceProfiler::dumpDeviceResults(bool is_mid_run_dump) {
 
         this->thread_pool->wait();
     }
-
-    // assert that last trace id in vector == (trace id for all cores on the last op)r
-    // TT_ASSERT(this->trace_ids.at(this->trace_ids.size() - 1) == );
 
     std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>> device_markers_vec =
         getSortedDeviceMarkersVector(this->device_markers_per_core_risc_map, *this->thread_pool);
