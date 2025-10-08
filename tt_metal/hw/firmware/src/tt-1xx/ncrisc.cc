@@ -109,8 +109,6 @@ int main(int argc, char* argv[]) {
     my_logical_x_ = mailboxes->core_info.absolute_logical_x;
     my_logical_y_ = mailboxes->core_info.absolute_logical_y;
 
-    signal_ncrisc_completion();
-
     DeviceProfilerInit();
     while (1) {
         WAYPOINT("W");
