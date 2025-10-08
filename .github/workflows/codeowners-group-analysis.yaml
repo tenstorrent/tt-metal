@@ -261,8 +261,8 @@ jobs:
           while true; do
             REVIEWS_API="https://api.github.com/repos/${{ github.repository }}/pulls/$PR_NUMBER/reviews?per_page=100&page=$PAGE"
             REVIEWS_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-                            -H "Accept: application/vnd.github.v3+json" \
-                            "$REVIEWS_API" 2>/dev/null)
+                              -H "Accept: application/vnd.github.v3+json" \
+                              "$REVIEWS_API" 2>/dev/null)
 
             # Check if API call was successful
             REVIEWS_HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
