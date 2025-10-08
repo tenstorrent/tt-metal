@@ -984,10 +984,12 @@ void MetalContext::initialize_firmware(
         case HalProgrammableCoreType::IDLE_ETH: {
             const bool is_idle_eth = core_type == HalProgrammableCoreType::IDLE_ETH;
             const bool is_active_eth = !is_idle_eth;
-            tt::umd::RiscType reset_val = tt::umd::RiscType::ALL;
+            TensixSoftResetOptions reset_val = TENSIX_ASSERT_SOFT_RESET;
             if (is_active_eth) {
                 // On idle eth, don't assert ERISC0, which is running base firmware.
-                reset_val &= ~tt::umd::RiscType::ERISC0;
+                reset_val =
+                    reset_val & static_cast<TensixSoftResetOptions>(
+                                    ~std::underlying_type<TensixSoftResetOptions>::type(TensixSoftResetOptions::BRISC));
             }
             if (is_idle_eth or !hal_->get_eth_fw_is_cooperative()) {
                 cluster_->assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core), reset_val);
