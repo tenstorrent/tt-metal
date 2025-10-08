@@ -23,7 +23,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
             [0, 0, 0, 0, 1, 0, 0],
             [1, 1, 1, 1, 1, 1, 1],
             [1, 1, 1, 1, 128, 1, 1],
-            [1, 256, 7, 7],
+            [1, 256, 20, 20],
         ),
     ],
 )
