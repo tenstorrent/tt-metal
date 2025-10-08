@@ -381,15 +381,15 @@ def run_prefetcher_mm(
     ##### Capture Trace #####
     logger.info("Capturing trace")
 
-    trace_id = ttnn.begin_trace_capture(device, cq_id=0)
-    outputs_t = run_op()
-    ttnn.end_trace_capture(device, trace_id, cq_id=0)
+    #trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+    #outputs_t = run_op()
+    #ttnn.end_trace_capture(device, trace_id, cq_id=0)
 
     ##### Run Trace #####
     logger.info("Running trace")
-    signpost("start")
-    ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
-    signpost("stop")
+    #signpost("start")
+    #ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
+    #signpost("stop")
 
     ##### Check Results #####
     all_passing = True

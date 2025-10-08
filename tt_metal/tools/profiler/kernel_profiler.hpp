@@ -19,6 +19,7 @@
 #include "risc_attribs.h"
 
 #include "dev_msgs.h"
+#include "debug/ring_buffer.h"
 
 #define DO_PRAGMA(x) _Pragma(#x)
 
@@ -206,6 +207,7 @@ struct NocDestinationStateSaver {
 #ifdef ARCH_BLACKHOLE
     uint32_t noc_ret_addr_mid_state;
 #endif
+    //uint32_t noc_at_len_state;
 
     inline __attribute__((always_inline)) NocDestinationStateSaver() {
         noc_ctrl_state = NOC_CMD_BUF_READ_REG(noc_index, write_cmd_buf, NOC_CTRL);
@@ -213,6 +215,9 @@ struct NocDestinationStateSaver {
 #ifdef ARCH_BLACKHOLE
         noc_ret_addr_mid_state = NOC_CMD_BUF_READ_REG(noc_index, write_cmd_buf, NOC_RET_ADDR_MID);
 #endif
+        //noc_at_len_state = NOC_CMD_BUF_READ_REG(noc_index, write_cmd_buf, NOC_AT_LEN_BE);
+        WATCHER_RING_BUFFER_PUSH(800);
+        WATCHER_RING_BUFFER_PUSH(noc_ctrl_state);
     }
 
     inline __attribute__((always_inline)) ~NocDestinationStateSaver() {
@@ -222,12 +227,54 @@ struct NocDestinationStateSaver {
 #ifdef ARCH_BLACKHOLE
         NOC_CMD_BUF_WRITE_REG(noc_index, write_cmd_buf, NOC_RET_ADDR_MID, noc_ret_addr_mid_state);
 #endif
+       // NOC_CMD_BUF_WRITE_REG(noc_index, write_cmd_buf, NOC_AT_LEN_BE, noc_at_len_state);
+
+       while (NOC_CMD_BUF_READ_REG(noc_index, write_cmd_buf, NOC_CTRL) != noc_ctrl_state);
+       while (NOC_CMD_BUF_READ_REG(noc_index, write_cmd_buf, NOC_RET_ADDR_COORDINATE) != noc_ret_addr_coord_state);
+       while (NOC_CMD_BUF_READ_REG(noc_index, write_cmd_buf, NOC_RET_ADDR_MID) != noc_ret_addr_mid_state);
+
+       #pragma GCC unroll 500
+        for (int i = 0; i < 500; i++) {
+            asm("nop");
+        }
     }
 };
 
 #else
 
-struct NocDestinationStateSaver {};
+// This is it!!!
+
+// Saves several NoC register states that may be setup by dispatch kernels and restores them
+// when the NocDestinationStateSaver is destroyed
+struct NocDestinationStateSaver {
+    uint32_t noc_ctrl_state;
+    uint32_t noc_ret_addr_coord_state;
+#ifdef ARCH_BLACKHOLE
+    uint32_t noc_ret_addr_mid_state;
+#endif
+    //uint32_t noc_at_len_state;
+
+    inline __attribute__((always_inline)) NocDestinationStateSaver() {
+        noc_ctrl_state = NOC_CMD_BUF_READ_REG(noc_index, write_cmd_buf, NOC_CTRL);
+        noc_ret_addr_coord_state = NOC_CMD_BUF_READ_REG(noc_index, write_cmd_buf, NOC_RET_ADDR_COORDINATE);
+#ifdef ARCH_BLACKHOLE
+        noc_ret_addr_mid_state = NOC_CMD_BUF_READ_REG(noc_index, write_cmd_buf, NOC_RET_ADDR_MID);
+#endif
+        //noc_at_len_state = NOC_CMD_BUF_READ_REG(noc_index, write_cmd_buf, NOC_AT_LEN_BE);
+        WATCHER_RING_BUFFER_PUSH(800);
+        WATCHER_RING_BUFFER_PUSH(noc_ctrl_state);
+    }
+
+    inline __attribute__((always_inline)) ~NocDestinationStateSaver() {
+        while (!noc_cmd_buf_ready(noc_index, write_cmd_buf));
+        NOC_CMD_BUF_WRITE_REG(noc_index, write_cmd_buf, NOC_CTRL, noc_ctrl_state);
+        NOC_CMD_BUF_WRITE_REG(noc_index, write_cmd_buf, NOC_RET_ADDR_COORDINATE, noc_ret_addr_coord_state);
+#ifdef ARCH_BLACKHOLE
+        NOC_CMD_BUF_WRITE_REG(noc_index, write_cmd_buf, NOC_RET_ADDR_MID, noc_ret_addr_mid_state);
+#endif
+       // NOC_CMD_BUF_WRITE_REG(noc_index, write_cmd_buf, NOC_AT_LEN_BE, noc_at_len_state);
+    }
+};
 
 #endif
 
@@ -235,15 +282,36 @@ inline void __attribute__((always_inline)) profiler_noc_async_write_posted(
     std::uint32_t src_local_l1_addr, std::uint64_t dst_noc_addr, std::uint32_t size, uint8_t noc = noc_index) {
     WAYPOINT("NAWW");
     DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, dst_noc_addr, src_local_l1_addr, size);
+    auto cmd_buf = 1 == 1 ? write_cmd_buf : read_cmd_buf;
+    //while (!noc_cmd_buf_ready(noc, cmd_buf));
+    //NocDestinationStateSaver noc_state;
     ncrisc_noc_fast_write_any_len<noc_mode>(
-        noc, write_cmd_buf, src_local_l1_addr, dst_noc_addr, size, NOC_UNICAST_WRITE_VC, false, false, 1, true, true);
+        noc, cmd_buf, src_local_l1_addr, dst_noc_addr, size, NOC_UNICAST_WRITE_VC, false, false, 1, true, true);
+    //ncrisc_noc_fast_write<noc_mode>(
+    //    noc,
+    //    cmd_buf,
+    //    src_local_l1_addr,
+    //    dst_noc_addr,
+    //    size,
+    //    NOC_UNICAST_WRITE_VC,
+    //    false /* mcast */,
+    //    false /* linked */,
+    //    1 /* num_dests */,
+    //    true /* multicast_path_reserve */,
+    //    true);
     WAYPOINT("NAWD");
 }
 
 FORCE_INLINE
 void profiler_noc_async_flush_posted_write(uint8_t noc = noc_index) {
     WAYPOINT("NPPW");
+    WATCHER_RING_BUFFER_PUSH(996);
+    //WATCHER_RING_BUFFER_PUSH(noc_posted_writes_num_issued[noc]);
+    WATCHER_RING_BUFFER_PUSH(NOC_STATUS_READ_REG(noc, NIU_MST_POSTED_WR_REQ_SENT));
     while (!ncrisc_noc_posted_writes_sent(noc));
+    //invalidate_l1_cache();
+    //WATCHER_RING_BUFFER_PUSH(noc_posted_writes_num_issued[noc]);
+    WATCHER_RING_BUFFER_PUSH(NOC_STATUS_READ_REG(noc, NIU_MST_POSTED_WR_REQ_SENT));
     WAYPOINT("NPPD");
 }
 
@@ -367,6 +435,8 @@ __attribute__((noinline)) void quick_push() {
 
     if (currEndIndex <= PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC) {
         NocDestinationStateSaver noc_state;
+        //WATCHER_RING_BUFFER_PUSH(998);
+        //WATCHER_RING_BUFFER_PUSH(wIndex);
         profiler_noc_async_write_posted(
             reinterpret_cast<uint32_t>(profiler_data_buffer[myRiscID].data),
             dram_bank_dst_noc_addr,

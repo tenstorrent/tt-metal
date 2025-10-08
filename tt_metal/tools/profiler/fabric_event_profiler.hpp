@@ -4,7 +4,7 @@
 
 #pragma once
 
-#if defined(PROFILE_NOC_EVENTS) && not defined(PROFILE_NOC_EVENTS_OVERRIDE) && \
+#if defined(PROFILE_NOC_EVENTS) && defined(PROFILE_NOC_EVENTS_OVERRIDE) && \
     (!defined(DISPATCH_KERNEL) || (defined(DISPATCH_KERNEL) && (PROFILE_KERNEL == PROFILER_OPT_DO_DISPATCH_CORES)))
 
 #include "tools/profiler/noc_event_profiler.hpp"
