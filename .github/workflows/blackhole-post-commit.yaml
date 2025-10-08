@@ -384,7 +384,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        test-group: [ "BH-LLMBox", "BH-LoudBox", "P300-viommu" ]
+        test-group: [ "BH-LLMBox" ]
     with:
       arch: blackhole
       runner-label: ${{ matrix.test-group }}

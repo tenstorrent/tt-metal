@@ -81,7 +81,9 @@ void SetResetState(tt::Cluster& cluster, tt_cxy_pair virtual_core, bool assert_r
     // We run on ERISC1. Don't touch ERISC0. It is running base firmware
     if (assert_reset) {
         // Assert all cores except ERISC0.
-        tt::umd::RiscType reset_val = tt::umd::RiscType::ALL & ~tt::umd::RiscType::ERISC0;
+        TensixSoftResetOptions reset_val = TENSIX_ASSERT_SOFT_RESET;
+        reset_val = reset_val & static_cast<TensixSoftResetOptions>(
+                                    ~std::underlying_type<TensixSoftResetOptions>::type(TensixSoftResetOptions::BRISC));
         cluster.assert_risc_reset_at_core(virtual_core, reset_val);
     } else {
         // Deassert only ERISC1.
