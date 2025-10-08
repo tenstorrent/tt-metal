@@ -611,6 +611,7 @@ jobs:
         GITHUB_ACTIONS: true
         ELASTIC_USERNAME: ${{ secrets.SWEEPS_ELASTIC_USERNAME }}
         ELASTIC_PASSWORD: ${{ secrets.SWEEPS_ELASTIC_PASSWORD }}
+        TRACY_NO_INVARIANT_CHECK: 1
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -738,6 +739,7 @@ jobs:
         ELASTIC_USERNAME: ${{ secrets.SWEEPS_ELASTIC_USERNAME }}
         ELASTIC_PASSWORD: ${{ secrets.SWEEPS_ELASTIC_PASSWORD }}
         TT_SMI_RESET_COMMAND: ${{ matrix.test-group.tt-smi-cmd }}
+        TRACY_NO_INVARIANT_CHECK: 1
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -828,6 +830,7 @@ jobs:
         ELASTIC_USERNAME: ${{ secrets.SWEEPS_ELASTIC_USERNAME }}
         ELASTIC_PASSWORD: ${{ secrets.SWEEPS_ELASTIC_PASSWORD }}
         TT_SMI_RESET_COMMAND: ${{ matrix.test-group.tt-smi-cmd }}
+        TRACY_NO_INVARIANT_CHECK: 1
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
