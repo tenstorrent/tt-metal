@@ -31,21 +31,6 @@ void kernel_main() {
     for (uint32_t i = 0; i < num_shards; ++i) {
         uint32_t shard_id = first_shard_id + i * num_cores;
         // For the purpose of testing, every second shard is read, and every other is written.
-#if 0  // TODO: delete one branch
-        ASSERT(tensor_accessor_src.is_local_shard(shard_id));
-        ASSERT(tensor_accessor_dst.is_local_shard(shard_id));
-        // Caveat: shard_pages takes a `noc` parameter for address calculation,
-        // overriding what is used by the Noc object.
-        auto src_shard_pages = tensor_accessor_src.shard_pages(shard_id);
-        auto dst_shard_pages = tensor_accessor_dst.shard_pages(shard_id);
-        if (i % 2 == 0) {
-            noc.async_read(*src_shard_pages.begin(), *dst_shard_pages.begin(), shard_size_bytes, {}, {});
-            noc.async_read_barrier();
-        } else {
-            noc.async_write(*src_shard_pages.begin(), *dst_shard_pages.begin(), shard_size_bytes, {}, {});
-            noc.async_write_barrier();
-        }
-#else
         if (i % 2 == 0) {
             noc.async_read(
                 ShardView(tensor_accessor_src),
@@ -63,6 +48,5 @@ void kernel_main() {
                 {.shard_id = shard_id});
             noc.async_write_barrier();
         }
-#endif
     }
 }
