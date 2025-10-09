@@ -23,9 +23,10 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* num_padded_sticks = num_unpadded_sticks + num_dims;
     volatile tt_l1_ptr uint32_t* id_per_dim = num_padded_sticks + num_dims;
 
-    constexpr uint32_t misalignment = get_compile_time_arg_val(0);
-    constexpr auto src_args = TensorAccessorArgs<1>();
-    uint32_t read_size = unpadded_stick_size + misalignment;
+    constexpr uint32_t is_non_aligned = get_compile_time_arg_val(0);
+    constexpr uint32_t cb_id_non_aligned = get_compile_time_arg_val(1);
+    constexpr auto src_args = TensorAccessorArgs<2>();
+    uint32_t read_size = unpadded_stick_size;
 
     const auto s0 = TensorAccessor(src_args, src_addr, padded_stick_size);
 
@@ -33,6 +34,7 @@ void kernel_main() {
 
     uint32_t src_stick_id = start_id;
     uint32_t sticks_read = 0;
+#define DEBUG
 #ifdef DEBUG
     DPRINT << "src_addr: " << src_addr << ", padded_stick_size: " << padded_stick_size
            << ", unpadded_stick_size: " << unpadded_stick_size << ", stick_size_offset: " << stick_size_offset
@@ -41,8 +43,8 @@ void kernel_main() {
            << ", num_sticks_per_core_read: " << num_sticks_per_core_read
            << ", num_read_per_barrier: " << num_read_per_barrier << ENDL();
 
-    DPRINT << "misalignment: " << misalignment << ", read_size: " << read_size << ", src_stick_id: " << src_stick_id
-           << ", sticks_read: " << sticks_read << ENDL();
+    DPRINT << "non_aligned: " << is_non_aligned << "cb = " << cb_id_non_aligned << ", read_size: " << read_size
+           << ", src_stick_id: " << src_stick_id << ", sticks_read: " << sticks_read << ENDL();
 
     DPRINT << "num_unpadded_sticks: " << num_unpadded_sticks[0] << " " << num_unpadded_sticks[1] << " "
            << num_unpadded_sticks[2] << " " << num_unpadded_sticks[3] << " " << ENDL();
@@ -52,7 +54,11 @@ void kernel_main() {
 #endif
     const uint32_t base_src_buffer_l1_addr = get_write_ptr(cb_id_in0);
     const uint64_t base_noc_addr = get_noc_addr(0, s0);
-
+    uint32_t non_aligned_temp_addr = 0;
+    if constexpr (is_non_aligned) {
+        cb_reserve_back(cb_id_non_aligned, 1);
+        non_aligned_temp_addr = get_write_ptr(cb_id_non_aligned);
+    }
     for (uint32_t iter = 0; iter < num_sticks_per_core_read and sticks_read < num_sticks_per_core; ++iter) {
         cb_reserve_back(cb_id_in0, num_read_per_barrier);
         uint32_t src_buffer_l1_addr = get_write_ptr(cb_id_in0);
@@ -60,7 +66,14 @@ void kernel_main() {
         for (uint32_t i = 0; i < num_read_per_barrier and sticks_read < num_sticks_per_core; ++i) {
             sticks_read++;
             uint64_t src_noc_addr = get_noc_addr(src_stick_id, s0);
-            noc_async_read(src_noc_addr, src_buffer_l1_addr, unpadded_stick_size);
+            if constexpr (is_non_aligned) {
+                noc_async_read(src_noc_addr, non_aligned_temp_addr, padded_stick_size);
+                noc_async_read_barrier();
+                noc_async_read(get_noc_addr(non_aligned_temp_addr), src_buffer_l1_addr, unpadded_stick_size);
+                noc_async_read_barrier();
+            } else {
+                noc_async_read(src_noc_addr, src_buffer_l1_addr, unpadded_stick_size);
+            }
             src_buffer_l1_addr += stick_size_offset;
             src_stick_id++;
             for (uint32_t j = 0; j < num_dims; j++) {
