@@ -50,7 +50,9 @@ jobs:
         id: get-next-semantic-base-version
         with:
           tag_prefix: "v"
-          debug: true
+          branch: ${{ github.ref_name }}
+          version_format: "v${major}.${minor}.${patch}"
+          bump_each_commit: ${{ inputs.bump_each_commit }}
 
       - name: Get tag version
         id: get-tag-version
