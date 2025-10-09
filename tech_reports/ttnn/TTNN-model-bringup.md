@@ -87,11 +87,10 @@ The diagram below illustrates the corresponding Downsample1 module:
 
   - STAGE 2 of optimization:
   - at this stage, we need to utilize several tools available to us. We will start by the perf_sheet. You will need to build metal with perf-analyzer enabled fist. Then follow the instructions to generate the perf sheet per your module or full model.
-  - When you build metal use:
+  - Build the project:
     ```
-    build_metal.sh -p
+    build_metal.sh
     ```
-. This will enable the profiler.
   - Once build with the command above to enable profiler, and once you have a pytest for your TTNN module or full model, you may follow the example bellow from the ResNet model replacing the path to the test_perf_resnet.py with the path to your implementation:
 
     ```

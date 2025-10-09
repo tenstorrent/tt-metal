@@ -9,7 +9,6 @@ The Swin-S (Small) model is a hierarchical Vision Transformer that serves as a g
 ## Prerequisites
 - Cloned [tt-metal repository](https://github.com/tenstorrent/tt-metal) for source code
 - Installed: [TT-Metalium™ / TT-NN™](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md)
-  - To obtain the perf reports through profiler, please build with: `./build_metal.sh -p`
 - login to huggingface with: `huggingface-cli login` or by setting the token with the command `export HF_TOKEN=<token>`
    - To obtain a huggingface token visit: https://huggingface.co/docs/hub/security-tokens
 
