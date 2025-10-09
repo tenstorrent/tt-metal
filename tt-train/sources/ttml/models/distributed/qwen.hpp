@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "autograd/module_base.hpp"
+#include "modules/module_base.hpp"
 #include "autograd/tensor.hpp"
 #include "models/common/transformer_common.hpp"
 #include "models/qwen.hpp"
@@ -20,10 +20,10 @@ using models::qwen::QwenConfig;
 class DistributedQwen : public BaseTransformer {
 private:
     RunnerType runner_type = RunnerType::Default;
-    std::shared_ptr<ttml::autograd::ModuleBase> tok_emb;
+    std::shared_ptr<ttml::modules::ModuleBase> tok_emb;
     std::vector<std::shared_ptr<ModuleBase>> blocks;
     std::shared_ptr<ModuleBase> ln_fc;
-    std::shared_ptr<ttml::autograd::ModuleBase> fc;
+    std::shared_ptr<ttml::modules::ModuleBase> fc;
     ops::RotaryEmbeddingParams m_rope_params;
 
 public:
