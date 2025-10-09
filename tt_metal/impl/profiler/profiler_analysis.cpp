@@ -39,11 +39,12 @@ namespace tt {
 
 namespace tt_metal {
 
-bool matches_start_end_risc(tracy::RiscType risc_type, AnalysisRiscTypes config_risc_types) {
+bool matches_start_end_risc(tracy::RiscType risc_type, const AnalysisRiscTypes& config_risc_types) {
     return config_risc_types.find(risc_type) != config_risc_types.end();
 }
 
-bool matches_start_end_marker_type(tracy::TTDeviceMarkerType marker_type, AnalysisMarkerTypes config_marker_types) {
+bool matches_start_end_marker_type(
+    tracy::TTDeviceMarkerType marker_type, const AnalysisMarkerTypes& config_marker_types) {
     return config_marker_types.find(marker_type) != config_marker_types.end();
 }
 
@@ -75,6 +76,8 @@ bool matches_start_end_config(const tracy::TTDeviceMarker& marker, const Analysi
 AnalysisResults parse_duration(
     const AnalysisConfig& analysis_config,
     const std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& markers) {
+    ZoneScoped;
+
     TT_FATAL(analysis_config.type == AnalysisType::OP_FIRST_TO_LAST_MARKER, "Unsupported analysis type");
 
     AnalysisResults analysis_results;
@@ -85,17 +88,18 @@ AnalysisResults parse_duration(
         const tracy::TTDeviceMarker& marker = marker_ref.get();
         const OpId op_id = {marker.runtime_host_id, marker.trace_id, marker.trace_id_counter};
         auto [op_id_results_it, _] = results_per_op_id.try_emplace(op_id, AnalysisResults::INVALID_SINGLE_RESULT);
+        AnalysisResults::SingleResult& op_results = op_id_results_it->second;
 
         if (matches_start_end_config(marker, analysis_config.start_config)) {
-            if (op_id_results_it->second == AnalysisResults::INVALID_SINGLE_RESULT) {
-                op_id_results_it->second.start_timestamp = marker.timestamp;
-                op_id_results_it->second.start_marker = marker_ref.get();
+            if (op_results == AnalysisResults::INVALID_SINGLE_RESULT) {
+                op_results.start_timestamp = marker.timestamp;
+                op_results.start_marker = marker;
             }
         }
         if (matches_start_end_config(marker, analysis_config.end_config)) {
-            if (op_id_results_it->second != AnalysisResults::INVALID_SINGLE_RESULT) {
-                op_id_results_it->second.end_timestamp = marker.timestamp;
-                op_id_results_it->second.end_marker = marker_ref.get();
+            if (op_results != AnalysisResults::INVALID_SINGLE_RESULT) {
+                op_results.end_timestamp = marker.timestamp;
+                op_results.end_marker = marker;
             }
         }
     }
@@ -198,13 +202,12 @@ OpsPerfResults generatePerfResultsForOps(
         i++;
     }
 
-    const std::map<OpId, OpsPerfResults::SingleOpPerfResults::OpMetaData> ops_meta_data =
-        getMetaDataForOps(device_markers);
+    std::map<OpId, OpsPerfResults::SingleOpPerfResults::OpMetaData> ops_meta_data = getMetaDataForOps(device_markers);
 
     thread_pool.wait();
 
-    for (const auto& [op_id, op_meta_data] : ops_meta_data) {
-        op_id_to_perf_results[op_id].op_meta_data = op_meta_data;
+    for (auto& [op_id, op_meta_data] : ops_meta_data) {
+        op_id_to_perf_results[op_id].op_meta_data = std::move(op_meta_data);
         OpsPerfResults::SingleOpPerfResults& op_perf_results = op_id_to_perf_results[op_id];
 
         for (const AnalysisResults& analysis_result : analysis_results) {
@@ -251,7 +254,6 @@ void writeOpsPerfResultsToCSV(const OpsPerfResults& ops_perf_results, const std:
                                                    (analysis_result == AnalysisResults::INVALID_SINGLE_RESULT
                                                         ? ""
                                                         : std::to_string(analysis_result.end_timestamp));
-                std::to_string(analysis_result.end_timestamp);
             }
         }
     }
@@ -284,7 +286,7 @@ void writeOpsPerfResultsToCSV(const OpsPerfResults& ops_perf_results, const std:
     }
 
     for (const auto& [_, results_string] : results_string_per_op_id) {
-        log_file_ofs << results_string << std::endl;
+        log_file_ofs << results_string << "\n";
     }
 
     log_file_ofs.close();
