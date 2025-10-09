@@ -1165,7 +1165,9 @@ jobs:
           # Build Slack message (same format as existing CodeOwners Review Request)
           SLACK_MESSAGE="🔔 *CodeOwners Review Request*"
           SLACK_MESSAGE="$SLACK_MESSAGE"$'\n\n'"Hi$SLACK_USER_MENTIONS!"
-          SLACK_MESSAGE="$SLACK_MESSAGE"$'\n\n'"📋 *PR:* <${{ github.server_url }}/${{ github.repository }}/pull/$PR_NUMBER|""$PR_TITLE"">"
+          # Escape special characters in PR title to prevent Slack auto-formatting
+          ESCAPED_PR_TITLE=$(echo "$PR_TITLE" | sed 's/`/\\`/g; s/_/\\_/g')
+          SLACK_MESSAGE="$SLACK_MESSAGE"$'\n\n'"📋 *PR:* <${{ github.server_url }}/${{ github.repository }}/pull/$PR_NUMBER|$ESCAPED_PR_TITLE>"
           SLACK_MESSAGE="$SLACK_MESSAGE"$'\n'"👤 *Author:* $PR_AUTHOR_MENTION"
           SLACK_MESSAGE="$SLACK_MESSAGE"$'\n'"🔍 *Action Required:* This PR needs your code review/approval to proceed with merging."
 
@@ -1884,7 +1886,9 @@ jobs:
               PR_AUTHOR_MENTION="$PR_AUTHOR_FULL_NAME (@$PR_AUTHOR_LOGIN)"
             fi
 
-            SLACK_MESSAGE="$SLACK_MESSAGE"$'\n\n'"📋 *PR:* <${{ github.server_url }}/${{ github.repository }}/pull/$PR_NUMBER|""$PR_TITLE"">"
+            # Escape special characters in PR title to prevent Slack auto-formatting
+            ESCAPED_PR_TITLE=$(echo "$PR_TITLE" | sed 's/`/\\`/g; s/_/\\_/g')
+            SLACK_MESSAGE="$SLACK_MESSAGE"$'\n\n'"📋 *PR:* <${{ github.server_url }}/${{ github.repository }}/pull/$PR_NUMBER|$ESCAPED_PR_TITLE>"
             SLACK_MESSAGE="$SLACK_MESSAGE"$'\n'"👤 *Author:* $PR_AUTHOR_MENTION"
             SLACK_MESSAGE="$SLACK_MESSAGE"$'\n'"🔍 *Action Required:* This PR needs your code review/approval to proceed with merging."
 
