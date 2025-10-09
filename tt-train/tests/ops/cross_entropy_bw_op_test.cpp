@@ -334,7 +334,6 @@ TEST_F(CrossEntropyBackwardTest, CrossEntropyForwardBackward_ReduceMeanVsNone) {
         []() { return std::uniform_real_distribution<float>(-10.0F, 10.0F); },
         seed);
     xt::xarray<uint32_t> target_tensor = xt::zeros<uint32_t>({N, H});
-    xt::xarray<float> grad_tensor = xt::ones<float>({1U, 1U, 1U, 1U});
 
     std::uniform_int_distribution<uint32_t> class_dist(0, W - 1);
     for (uint32_t n = 0; n < N; ++n) {
