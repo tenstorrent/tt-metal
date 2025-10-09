@@ -433,24 +433,6 @@ def run_unary_test_with_float_remainder(device, h, w, scalar, ttnn_function, pcc
     assert_with_pcc(torch_output_tensor, output_tensor, pcc)
 
 
-@pytest.mark.parametrize("scalar", [1, 2])
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_logit(device, h, w, scalar):
-    torch.manual_seed(0)
-
-    torch_input_tensor_a = torch.rand((h, w), dtype=torch.bfloat16)
-
-    golden_function = ttnn.get_golden_function(ttnn.logit)
-    torch_output_tensor = golden_function(torch_input_tensor_a, eps=scalar, device=device)
-
-    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
-
-    output_tensor = ttnn.logit(input_tensor_a, eps=scalar)
-    output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
-
-
 @pytest.mark.parametrize("scalar", [0, 1.0, 2])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
@@ -2041,3 +2023,74 @@ def test_unary_bitcast_ttnn(
                 ), f"Value {i}: Expected {expected}, got {actual}, diff: {abs(expected - actual)}"
             else:
                 assert expected == actual, f"Value {i}: Expected {expected}, got {actual}"
+
+
+@pytest.mark.parametrize(
+    "input_shape",
+    (
+        torch.Size([3, 128, 32]),
+        torch.Size([1, 1, 3, 64, 12]),
+    ),
+)
+@pytest.mark.parametrize(
+    "torch_dtype, ttnn_dtype, atol",
+    [
+        (torch.bfloat16, ttnn.bfloat16, 0.016),
+        (torch.float32, ttnn.float32, 0.015),
+    ],
+)
+@pytest.mark.parametrize(
+    "low, high",
+    [
+        (-100, 100),
+        (-1, 2),
+        (0, 2),
+    ],
+)
+@pytest.mark.parametrize("scalar", [0.25, 0.38, 0.5, 0.85])
+def test_unary_logit(input_shape, scalar, torch_dtype, ttnn_dtype, high, low, device, atol):
+    torch.manual_seed(0)
+    in_data = torch.empty(input_shape, dtype=torch_dtype).uniform_(low, high)
+    input_tensor_a = ttnn.from_torch(in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output_tensor = ttnn.logit(input_tensor_a, eps=scalar)
+    output_tensor = ttnn.to_torch(output_tensor)
+    golden_function = ttnn.get_golden_function(ttnn.logit)
+    golden_tensor = golden_function(in_data, eps=scalar)
+
+    assert_allclose(output_tensor, golden_tensor, rtol=1e-05, atol=atol)
+
+
+@pytest.mark.parametrize("input_shape", (torch.Size([3, 128, 32]),))
+@pytest.mark.parametrize(
+    "torch_dtype, ttnn_dtype, atol",
+    [
+        (torch.bfloat16, ttnn.bfloat16, 0.04),
+        (torch.float32, ttnn.float32, 0.016),
+    ],
+)
+@pytest.mark.parametrize("eps", [0.0, 1.0, None])
+def test_unary_logit_edge_cases(input_shape, torch_dtype, ttnn_dtype, device, eps, atol):
+    torch.manual_seed(0)
+    in_data = torch.empty(input_shape, dtype=torch_dtype).uniform_(-1, 1.1)
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output_tensor = ttnn.logit(input_tensor, eps=eps)
+    output_tensor = ttnn.to_torch(output_tensor)
+    golden_function = ttnn.get_golden_function(ttnn.logit)
+    golden_tensor = golden_function(in_data, eps=eps)
+    if eps is None:
+        golden_nonfinite = ~torch.isfinite(golden_tensor)
+        output_nonfinite = ~torch.isfinite(output_tensor)
+
+        # Verify non-finite values occur at the same indices
+        assert torch.equal(golden_nonfinite, output_nonfinite), f"Non-finite values don't match at the same indices."
+
+        # For finite values, check all of them
+        finite_mask = torch.isfinite(golden_tensor) & torch.isfinite(output_tensor)
+        if finite_mask.any():
+            assert torch.allclose(
+                output_tensor[finite_mask], golden_tensor[finite_mask], equal_nan=True, rtol=1e-05, atol=atol
+            )
+    else:
+        assert torch.allclose(output_tensor, golden_tensor, equal_nan=True, rtol=1e-05, atol=atol)
