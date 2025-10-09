@@ -24,6 +24,16 @@
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/moreh/moreh_sum/moreh_sum.hpp"
 
+namespace {
+inline bool is_fabric_2d() {
+    const auto fabric_config = tt::tt_fabric::GetFabricConfig();
+
+    return (
+        fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D ||
+        fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC);
+}
+}  // namespace
+
 namespace ttnn::operations::experimental::ccl {
 
 uint32_t finding_scatter_dim(const ttnn::Shape& input_tensor_padded_shape, const Layout& layout, size_t num_workers) {
@@ -191,17 +201,22 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
     bool composite_reduce_scatter =
         composite_common::use_composite_reduce_scatter(padded_tensor, topology, composite_dim, std::nullopt);
 
-    const auto fabric_config = tt::tt_fabric::GetFabricConfig();
-    bool fabric_2d =
-        (fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D ||
-         fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC);
+    // when input is sharded, shard specs are not compatible with the intermediate tensor shapes of the composite ops
+    // convert to interleaved in this case
+    auto interleaved_tensor = padded_tensor;
+    bool change_mem_config = input_is_sharded;
+    if (change_mem_config) {
+        MemoryConfig working_memory_config{TensorMemoryLayout::INTERLEAVED, input_tensor.memory_config().buffer_type()};
+        interleaved_tensor = ttnn::sharded_to_interleaved(padded_tensor, working_memory_config, std::nullopt);
+    }
 
-    if (composite_all_gather || composite_reduce_scatter || (dim != composite_dim) || fabric_2d) {
+    if (composite_all_gather || composite_reduce_scatter || (dim != composite_dim) || is_fabric_2d()) {
         // All reduce = all gather + local reduce
         composite_dim = 0;
         auto reshaped_tensor = ttnn::reshape(
-            padded_tensor, ttnn::Shape({1, initial_shape[0] * initial_shape[1], initial_shape[2], initial_shape[3]}));
-        padded_tensor.deallocate();
+            interleaved_tensor,
+            ttnn::Shape({1, initial_shape[0] * initial_shape[1], initial_shape[2], initial_shape[3]}));
+        interleaved_tensor.deallocate();
         auto gather_tensor = composite_common::composite_all_gather(
             reshaped_tensor,
             composite_dim,
@@ -220,19 +235,9 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
 
         return ttnn::reshape(sum_tensor, initial_shape);
     }
+
     // Reduce scatter + all gather
-    bool change_mem_config = false;
-    // when input is sharded, shard specs are not compatible with the intermediate tensor shapes of the composite ops
-    // convert to interleaved in this case
-    if (input_is_sharded) {
-        change_mem_config = true;
-    }
     bool use_llama_sharded = composite_common::use_all_gather_async_llama_sharded(padded_tensor, out_memory_config);
-    auto interleaved_tensor = padded_tensor;
-    if (change_mem_config) {
-        MemoryConfig working_memory_config{TensorMemoryLayout::INTERLEAVED, input_tensor.memory_config().buffer_type()};
-        interleaved_tensor = ttnn::sharded_to_interleaved(padded_tensor, working_memory_config, std::nullopt);
-    }
     padded_tensor.deallocate();
     ttnn::Tensor scattered_tensor = ttnn::operations::experimental::ccl::reduce_scatter_minimal_async(
         interleaved_tensor,
@@ -309,10 +314,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
     }
 
     // convert sharded tensors to interleaved because the shard specs are not compatible with composite intermediates
-    bool change_mem_config = false;
-    if (input_is_sharded) {
-        change_mem_config = true;
-    }
+    bool change_mem_config = input_is_sharded;
     auto interleaved_tensor = padded_tensor;
     if (change_mem_config) {
         MemoryConfig working_memory_config{TensorMemoryLayout::INTERLEAVED, input_tensor.memory_config().buffer_type()};
@@ -325,11 +327,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
         composite_common::use_composite_all_gather(padded_tensor, composite_dim, out_memory_config);
     bool composite_reduce_scatter =
         composite_common::use_composite_reduce_scatter(padded_tensor, topology, composite_dim, cluster_axis);
-    const auto fabric_config = tt::tt_fabric::GetFabricConfig();
-    bool fabric_2d =
-        (fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D ||
-         fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC);
-    if (composite_all_gather || composite_reduce_scatter || (dim != composite_dim) || fabric_2d) {
+    if (composite_all_gather || composite_reduce_scatter || (dim != composite_dim) || is_fabric_2d()) {
         // All reduce = all gather + local reduce
         composite_dim = 0;
         auto reshaped_tensor = ttnn::reshape(
