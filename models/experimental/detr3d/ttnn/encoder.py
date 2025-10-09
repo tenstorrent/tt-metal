@@ -1,6 +1,5 @@
 import ttnn
 import torch
-import copy
 from typing import Optional
 from models.common.lightweightmodule import LightweightModule
 from dataclasses import dataclass, asdict
@@ -9,33 +8,15 @@ from dataclasses import dataclass, asdict
 @dataclass
 class EncoderArgs:
     d_model: int = None
-    nhead: int = None
-    dim_feedforward: int = None
-    dropout: float = None
+    nhead: int = 4
+    dim_feedforward: int = 128
+    dropout: float = 0.0
+    dropout_attn: float = None
+    activation: str = "relu"
     normalize_before: bool = True
+    norm_name: str = "ln"
     use_ffn: bool = True
-    model_config: dict = None
-
-
-def get_clones(module, N):
-    return [copy.deepcopy(module) for i in range(N)]
-
-
-class TtTransformerEncoder(LightweightModule):
-    def __init__(self, encoder_layer, num_layers, norm=None):
-        super().__init__()
-        self.layers = get_clones(encoder_layer, num_layers)
-        self.num_layers = num_layers
-        self.norm = norm
-
-    def forward(self, x: ttnn.Tensor, mode="decode") -> ttnn.Tensor:
-        for layer in self.layers:
-            x = layer(x, mode=mode)
-
-        if self.norm is not None:
-            x = self.norm(x, mode=mode)
-
-        return x
+    ffn_use_bias: bool = True
 
 
 class TtMaskedTransformerEncoder(LightweightModule):
@@ -130,13 +111,9 @@ class TtMaskedTransformerEncoder(LightweightModule):
         output = src
         xyz_dist = None
         xyz_inds = None
-        # print(f"//////////////////////////////////Starting the encoder//////////////////////////////////////")
 
         for idx, layer in enumerate(self.layers):
             attn_mask = None
-            # print(
-            #     f"//////////////////////////////////Starting the encoder layer {idx}//////////////////////////////////////"
-            # )
             if self.masking_radius[idx] > 0:
                 attn_mask, xyz_dist = self.compute_mask(xyz, self.masking_radius[idx], xyz_dist)
 
@@ -148,36 +125,13 @@ class TtMaskedTransformerEncoder(LightweightModule):
                 # attn_mask = ttnn.reshape(attn_mask, (bsz * nhead, n, n))
                 # attn_mask = ttnn.reshape(attn_mask, (bsz, n, n))
 
-            # print(f"{output.shape=}")
-            # print(f"{attn_mask.shape=}")
-            # print(f"{src_key_padding_mask.shape=}")
-
             output = ttnn.permute(output, (1, 0, 2))
-
-            # print(f"{output.shape=}")
-            # print(f"{attn_mask.shape=}")
-            # Call transformer layer with ttnn-compatible attention
             output = layer(output, src_mask=attn_mask, src_key_padding_mask=src_key_padding_mask, pos=pos)
-
-            # print(f"{output.shape=}")
-            # print(f"{attn_mask.shape=}")
             output = ttnn.permute(output, (1, 0, 2))
-
-            # print(f"{output.shape=}")
-            # # print(f"{attn_mask.shape=}")
-            # print(
-            #     f"//////////////////////////////////Finished the encoder layer {idx}//////////////////////////////////////"
-            # )
 
             if idx == 0 and self.interim_downsampling:
                 output = ttnn.permute(output, (1, 2, 0))  # 2048, 1, 256 -> 1, 256, 2048
-
-                if not isinstance(output, torch.Tensor):
-                    output_torch = ttnn.typecast(output, ttnn.float32)
-                    output_torch = ttnn.to_torch(output_torch, dtype=torch.float)
-                xyz, output_torch, xyz_inds = self.interim_downsampling(xyz, output_torch)
-                output = ttnn.from_torch(output_torch, device=self.device, dtype=ttnn.bfloat16)
-
+                xyz, output, xyz_inds = self.interim_downsampling(xyz, output)
                 output = ttnn.permute(output, (2, 0, 1))
 
         if self.norm is not None:
@@ -188,7 +142,5 @@ class TtMaskedTransformerEncoder(LightweightModule):
             output = ttnn.transpose(output, 0, 1)  # (bs, h*w, c)
             output = ttnn.transpose(output, 1, 2)  # (bs, c, h*w)
             output = ttnn.reshape(output, (bs, c, h, w))
-        print(f"//////////////////////////////////Finished the encoder//////////////////////////////////////")
-        print(f"{output.shape=}")
 
         return xyz, output, xyz_inds

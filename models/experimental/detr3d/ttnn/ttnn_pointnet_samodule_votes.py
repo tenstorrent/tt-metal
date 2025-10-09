@@ -14,6 +14,7 @@ from models.experimental.detr3d.reference.model_utils import (
     GatherOperation,
     FurthestPointSampling,
 )
+from typing import List
 
 
 def _fallback_furthestpointsampling(
@@ -84,6 +85,7 @@ def _fallback_pointnet(
         assert inds.shape[1] == npoint
     new_xyz = gather_operation(xyz_flipped, inds).transpose(1, 2).contiguous() if npoint is not None else None
 
+    unique_cnt_ttnn = None
     unique_cnt = None
     if not ret_unique_cnt:
         grouped_features, grouped_xyz = grouper(xyz, new_xyz, features)  # (B, C, npoint, nsample)
@@ -92,24 +94,24 @@ def _fallback_pointnet(
             xyz, new_xyz, features
         )  # (B, C, npoint, nsample), (B,3,npoint,nsample), (B,npoint)
 
-    xyz = ttnn.from_torch(xyz, dtype=ttnn.bfloat16, device=device)
-    if features is not None:
-        features = ttnn.from_torch(features, dtype=ttnn.bfloat16, device=device)
     if inds is not None:
-        inds = ttnn.from_torch(inds, dtype=ttnn.bfloat16, device=device)
-    new_xyz = ttnn.from_torch(new_xyz, dtype=ttnn.bfloat16, device=device)
-    new_xyz = ttnn.reallocate(new_xyz)
-    grouped_features = ttnn.from_torch(grouped_features, dtype=ttnn.bfloat16, device=device)
-    grouped_xyz = ttnn.from_torch(grouped_xyz, dtype=ttnn.bfloat16, device=device)
+        inds_ttnn = ttnn.from_torch(inds, dtype=ttnn.bfloat16, device=device)
+    # new_xyz_ttnn = ttnn.from_torch(new_xyz, dtype=ttnn.bfloat16, device=device)
+    # new_xyz_ttnn = ttnn.reallocate(new_xyz_ttnn)
+    new_xyz_ttnn = new_xyz
+
+    grouped_features = torch.permute(grouped_features, (0, 2, 3, 1))
+    grouped_features_ttnn = ttnn.from_torch(grouped_features, dtype=ttnn.bfloat16, device=device)
+    grouped_xyz_ttnn = ttnn.from_torch(grouped_xyz, dtype=ttnn.bfloat16, device=device)
     if unique_cnt is not None:
-        unique_cnt = ttnn.from_torch(unique_cnt, dtype=ttnn.bfloat16, device=device)
+        unique_cnt_ttnn = ttnn.from_torch(unique_cnt, dtype=ttnn.bfloat16, device=device)
 
     return (
-        inds,
-        new_xyz,
-        grouped_features,
-        grouped_xyz,
-        unique_cnt,
+        inds_ttnn,
+        new_xyz_ttnn,
+        grouped_features_ttnn,
+        grouped_xyz_ttnn,
+        unique_cnt_ttnn,
     )
 
 
@@ -397,20 +399,20 @@ class TtnnFurthestPointSampling:
 class TtnnPointnetSAModuleVotes:
     def __init__(
         self,
-        mlp,
-        npoint,
-        radius,
-        nsample,
-        bn,
-        use_xyz,
-        pooling,
-        sigma,
-        normalize_xyz,
-        sample_uniformly,
-        ret_unique_cnt,
-        module,
-        parameters,
-        device,
+        mlp: List[int],
+        npoint: int = None,
+        radius: float = None,
+        nsample: int = None,
+        bn: bool = True,
+        use_xyz: bool = True,
+        pooling: str = "max",
+        sigma: float = None,  # for RBF pooling
+        normalize_xyz: bool = False,  # noramlize local XYZ with radius
+        sample_uniformly: bool = False,
+        ret_unique_cnt: bool = False,
+        module=None,
+        parameters=None,
+        device=None,
     ):
         self.device = device
         self.parameters = parameters
@@ -526,56 +528,83 @@ class TtnnPointnetSAModuleVotes:
             self.device,
         )
 
-        grouped_features = ttnn.permute(grouped_features, (0, 2, 3, 1))
+        # grouped_features = ttnn.permute(grouped_features, (0, 2, 3, 1))
         new_features = self.mlp_module(grouped_features)  # (B, mlp[-1], npoint, nsample)
 
-        print(
-            f"//////////////////////////////////Starting the partial_maxpool_out//////////////////////////////////////"
-        )
+        # import pdb
+        # pdb.set_trace()
+        # print(
+        #     f"//////////////////////////////////Starting the partial_maxpool_out//////////////////////////////////////"
+        # )
         if self.pooling == "max":
-            partial_maxpool_out = []
-            num_maxpool_slice = 2
-            # new_features = ttnn.reshape(new_features, (1, 2048, 64, 256))
-            slice_h = new_features.shape[-3] // num_maxpool_slice
-            B, H, W, C = (new_features.shape[-4], slice_h, new_features.shape[-2], new_features.shape[-1])
-            for slice in range(num_maxpool_slice):
-                print(
-                    f"//////////////////////////////////Starting the partial_maxpool_out {slice}//////////////////////////////////////"
-                )
-                slice_input = new_features[:, slice_h * slice : slice_h * (slice + 1), :, :]
-                slice_input = ttnn.reallocate(slice_input)
-                slice_input = ttnn.reshape(slice_input, (1, 1, B * H * W, C))
-                partial_maxpool_out.append(
-                    ttnn.max_pool2d(
-                        input_tensor=slice_input,
-                        batch_size=B,
-                        input_h=slice_h,
-                        input_w=W,
-                        channels=C,
-                        kernel_size=[1, W],
-                        stride=[1, W],
-                        padding=[0, 0],
-                        dilation=[1, 1],
-                        applied_shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            if new_features.shape[1] == 2048:
+                partial_maxpool_out = []
+                num_maxpool_slice = 2
+                # new_features = ttnn.reshape(new_features, (1, 2048, 64, 256))
+                slice_h = new_features.shape[-3] // num_maxpool_slice
+                B, H, W, C = (new_features.shape[-4], slice_h, new_features.shape[-2], new_features.shape[-1])
+                for slice in range(num_maxpool_slice):
+                    # print(
+                    #     f"//////////////////////////////////Starting the partial_maxpool_out {slice}//////////////////////////////////////"
+                    # )
+                    slice_input = new_features[:, slice_h * slice : slice_h * (slice + 1), :, :]
+                    slice_input = ttnn.reallocate(slice_input)
+                    slice_input = ttnn.reshape(slice_input, (1, 1, B * H * W, C))
+                    partial_maxpool_out.append(
+                        ttnn.max_pool2d(
+                            input_tensor=slice_input,
+                            batch_size=B,
+                            input_h=slice_h,
+                            input_w=W,
+                            channels=C,
+                            kernel_size=[1, W],
+                            stride=[1, W],
+                            padding=[0, 0],
+                            dilation=[1, 1],
+                            applied_shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        )
                     )
-                )
-            print(
-                f"//////////////////////////////////Finished the partial_maxpool_out {slice}//////////////////////////////////////"
-            )
+                # print(
+                #     f"//////////////////////////////////Finished the partial_maxpool_out {slice}//////////////////////////////////////"
+                # )
 
-            for i in range(len(partial_maxpool_out)):
-                partial_maxpool_out[i] = ttnn.reshape(partial_maxpool_out[i], (B, H, 1, C))
+                for i in range(len(partial_maxpool_out)):
+                    partial_maxpool_out[i] = ttnn.reshape(partial_maxpool_out[i], (B, H, 1, C))
 
-            new_features = ttnn.concat((partial_maxpool_out), dim=1)
+                new_features = ttnn.concat((partial_maxpool_out), dim=1)
+            else:
+                # (1, 1024, 32, 256)
+                new_features = ttnn.to_torch(new_features)
+                new_features = torch.permute(new_features, (0, 3, 1, 2))
+                new_features = torch.nn.functional.max_pool2d(
+                    new_features, kernel_size=[1, new_features.size(3)]
+                )  # (B, mlp[-1], npoint, 1)
+                new_features = torch.permute(new_features, (0, 2, 3, 1))
+                new_features = ttnn.from_torch(new_features, dtype=ttnn.bfloat16, device=self.device)
+                # B, H, W, C = new_features.shape
+                # new_features = ttnn.reshape(new_features, (1, 1, B * H * W, C))
+                # new_features = ttnn.max_pool2d(
+                #     input_tensor=new_features,
+                #     batch_size=B,
+                #     input_h=H,
+                #     input_w=W,
+                #     channels=C,
+                #     kernel_size=[1, W],
+                #     stride=[1, W],
+                #     padding=[0, 0],
+                #     dilation=[1, 1],
+                #     applied_shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                # )
         else:
             raise NotImplementedError("Currently only Maxpool is supported")
-        print(
-            f"//////////////////////////////////Finished the partial_maxpool_out//////////////////////////////////////"
-        )
+        # print(
+        #     f"//////////////////////////////////Finished the partial_maxpool_out//////////////////////////////////////"
+        # )
         new_features = ttnn.permute(new_features, (0, 3, 1, 2))
         new_features = ttnn.squeeze(new_features, -1)  # (B, mlp[-1], npoint)
-        print(f"//////////////////////////////////Finished the pointnet//////////////////////////////////////")
+        # print(f"//////////////////////////////////Finished the pointnet//////////////////////////////////////")
 
         if not self.ret_unique_cnt:
             return new_xyz, new_features, inds
