@@ -38,6 +38,7 @@ void kernel_main() {
     const uint32_t M_end_block = get_arg_val<uint32_t>(argidx++);
     const uint32_t N_start_block = get_arg_val<uint32_t>(argidx++);
     const uint32_t N_end_block = get_arg_val<uint32_t>(argidx++);
+    const uint32_t defer_write_k_block = get_arg_val<uint32_t>(argidx++);
 
     DPRINT << "in0send: M_blocks: [" << M_start_block << ", " << M_end_block << "], N_blocks: [" << N_start_block
            << ", " << N_end_block << "]" << ENDL();
@@ -85,11 +86,32 @@ void kernel_main() {
     bool k_forward = true;
     bool n_forward = true;
     bool reuse_block = false;
+
+    uint32_t defer_write_m_block = 0;
+    uint32_t defer_write_n_block = 0;
+    bool defer_write = false;
+
     for (uint32_t m_block = M_start_block; m_block <= M_end_block; m_block++) {
         reuse_block = false;
         for (uint32_t n_block_iter = 0; n_block_iter < N_num_blocks; n_block_iter++) {
             uint32_t n_block = n_forward ? N_start_block + n_block_iter : N_end_block - n_block_iter;
             for (uint32_t k_block_iter = 0; k_block_iter < K_num_blocks; k_block_iter++) {
+                if (defer_write && k_block_iter == defer_write_k_block) {
+                    if constexpr (is_output_writer) {
+                        DPRINT << "in0send: writing (M,N) = (" << m_block << ", " << n_block << ")" << ENDL();
+                        write_block_sync_granular(
+                            out_reader,
+                            out_shape,
+                            cb_id_out,
+                            N_block_tiles,
+                            input_tile_size,
+                            defer_write_m_block * M_block_tiles,
+                            (defer_write_m_block + 1) * M_block_tiles,
+                            defer_write_n_block * N_block_tiles,
+                            (defer_write_n_block + 1) * N_block_tiles);
+                    }
+                }
+
                 if (reuse_block && k_block_iter == 0) {
                     // We strided an N block and this is the first k block, so we get reuse and do not need to read in0
                     reuse_block = false;
@@ -147,18 +169,28 @@ void kernel_main() {
             // We get reuse on in0 when striding N block
             reuse_block = true;
 
-            if constexpr (is_output_writer) {
-                DPRINT << "in0send: writing (M,N) = (" << m_block << ", " << n_block << ")" << ENDL();
-                write_block_sync_granular(
-                    out_reader,
-                    out_shape,
-                    cb_id_out,
-                    N_block_tiles,
-                    input_tile_size,
-                    m_block * M_block_tiles,
-                    (m_block + 1) * M_block_tiles,
-                    n_block * N_block_tiles,
-                    (n_block + 1) * N_block_tiles);
+            defer_write_m_block = m_block;
+            defer_write_n_block = n_block;
+            /**
+             * If this isn't the last output block, defer writing until the defer_k_write_block iteration
+             * of the next output block.
+             */
+            defer_write = !((m_block == M_end_block) && (n_block_iter == (N_num_blocks - 1)));
+
+            if (!defer_write) {
+                if constexpr (is_output_writer) {
+                    DPRINT << "in0send: writing (M,N) = (" << m_block << ", " << n_block << ")" << ENDL();
+                    write_block_sync_granular(
+                        out_reader,
+                        out_shape,
+                        cb_id_out,
+                        N_block_tiles,
+                        input_tile_size,
+                        m_block * M_block_tiles,
+                        (m_block + 1) * M_block_tiles,
+                        n_block * N_block_tiles,
+                        (n_block + 1) * N_block_tiles);
+                }
             }
         }
         n_forward = !n_forward;
