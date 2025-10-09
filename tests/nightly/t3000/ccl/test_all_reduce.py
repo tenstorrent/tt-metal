@@ -35,6 +35,19 @@ from tests.ttnn.unit_tests.operations.ccl.test_all_reduce_async import run_all_r
         ([1, 4, 1024, 32]),
         ([2, 4, 2048, 32]),
     ],
+    ids=[
+        "1x1x32x4096",
+        "1x1x32x8192",
+        "1x1x32x1024",
+        "1x1x32x2048",
+        "1x1x4096x32",
+        "1x1x1024x32",
+        "1x1x2048x32",
+        "4x1x32x4096",
+        "8x1x32x1024",
+        "1x4x1024x32",
+        "2x4x2048x32",
+    ],
 )
 @pytest.mark.parametrize(
     "layout",
@@ -48,12 +61,20 @@ from tests.ttnn.unit_tests.operations.ccl.test_all_reduce_async import run_all_r
         ttnn.bfloat16,
         ttnn.bfloat8_b,
     ],
+    ids=[
+        "bfloat16",
+        "bfloat8_b",
+    ],
 )
 @pytest.mark.parametrize(
     "mem_config",
     [
         ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
         ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
+    ],
+    ids=[
+        "DRAM",
+        "L1",
     ],
 )
 @pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
