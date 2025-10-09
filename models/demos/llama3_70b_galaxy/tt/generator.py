@@ -325,6 +325,7 @@ class Generator:
         kv_cache=None,
         enable_trace=True,
         read_from_device=True,
+        async_read=False,
         sampling_params: SamplingParams = None,  # Should be None if not greedy decoding / sampling on device.
         reset_inputs=False,
         tt_out_logits_saved=None,
@@ -372,8 +373,12 @@ class Generator:
             tt_tok = self._decode_forward_no_trace_text(**decode_kwargs, return_logits=return_logits)
 
         if read_from_device:
-            tt_tok, read_event = self.read_decode_output(tt_tok, tokens.shape[0])
-            return tt_tok, read_event
+            tt_out = self.read_decode_output(tt_tok, async_read=async_read)
+            if async_read:
+                tt_tok, read_event = tt_out
+                return tt_tok, read_event
+            else:
+                return self.process_decode_output_host(tt_out, is_tokens=(not return_logits))
 
         return tt_tok
 
