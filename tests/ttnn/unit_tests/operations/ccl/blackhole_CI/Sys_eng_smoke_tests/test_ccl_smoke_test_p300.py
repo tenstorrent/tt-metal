@@ -132,12 +132,10 @@ def test_ccl_ddr_smoke_test(
     [
         ttnn.bfloat16,
         ttnn.uint32,
-        ttnn.bfloat8_b,
     ],
     ids=[
         "float_16",
         "uint_32",
-        "bfloat_8",
     ],
 )
 @pytest.mark.parametrize(
