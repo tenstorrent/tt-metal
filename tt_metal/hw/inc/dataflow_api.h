@@ -2668,7 +2668,7 @@ struct noc_traits_t<TensorAccessor<DSpecT>> {
     static auto src_addr(const TensorAccessor<DSpecT>& src, const Noc& noc, const src_args_type& args) {
         uint64_t noc_addr = src.get_noc_addr(args.page_id, args.offset_bytes, noc.get_noc_id());
         if constexpr (address_type == Noc::AddressType::LOCAL_L1) {
-            ASSERT(src.is_local_addr(noc_addr));
+            ASSERT(noc.is_local_addr(noc_addr));
             return static_cast<uint32_t>(noc_addr);
         } else {
             return noc_addr;
