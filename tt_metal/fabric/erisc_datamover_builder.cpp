@@ -306,7 +306,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topo
         // temporarily padded to have exact parity with addresses pre-refactor
         // because receiver_channels_local_buffer_index_address was removed (as dead code) and is no longer
         // needed. We still waste the L1 to minimize the incremental changes in builder refactor
-        buffer_address += field_size; 
+        buffer_address += field_size;
 
         // persistent mode field
         this->receiver_channels_downstream_flow_control_semaphore_address[i] = buffer_address;

@@ -153,7 +153,7 @@ constexpr size_t ANOTHER_SPECIAL_TAG_IDX = REMOTE_CHANNEL_INFO_START_IDX + (skip
 static_assert(
     get_compile_time_arg_val(ANOTHER_SPECIAL_TAG_IDX) == ANOTHER_SPECIAL_TAG,
     "ANOTHER_SPECIAL_TAG not found. This implies some arguments were misaligned between host and device. Double check the CT args.");
-    
+
 // constexpr size_t SENDER_NUM_BUFFERS_IDX = REMOTE_CHANNEL_INFO_START_IDX + (skip_src_ch_id_update ? 2 : 0);
 constexpr size_t SENDER_NUM_BUFFERS_IDX = ANOTHER_SPECIAL_TAG_IDX + 1;
 constexpr std::array<size_t, NUM_SENDER_CHANNELS> SENDER_NUM_BUFFERS_ARRAY =

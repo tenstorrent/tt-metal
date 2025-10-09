@@ -87,7 +87,7 @@ public:
     }
 
     void pack_inbound_channel_rt_args(uint32_t vc_idx, std::vector<uint32_t>& args_out) const override {
-        
+
         TT_FATAL(downstream_edm_vcs_buffer_base_address.size() > vc_idx, "VC index is out of bounds for downstream_edm_vcs_buffer_base_address");
         TT_FATAL(downstream_edm_vcs_worker_registration_address.size() > vc_idx, "VC index is out of bounds for downstream_edm_vcs_worker_registration_address");
         TT_FATAL(downstream_edm_vcs_worker_location_info_address.size() > vc_idx, "VC index is out of bounds for downstream_edm_vcs_worker_location_info_address");
@@ -99,7 +99,7 @@ public:
             this->pack_downstream_noc_y_rt_arg(vc_idx),//this->downstream_edm_vcs_noc_y[1].value_or(0),
             this->downstream_edm_vcs_worker_registration_address[vc_idx].value_or(0),
             this->downstream_edm_vcs_worker_location_info_address[vc_idx].value_or(0),
-            // this->receiver_channels_local_buffer_index_address[vc_idx]                
+            // this->receiver_channels_local_buffer_index_address[vc_idx]
         };
 
         args_out.reserve(args_out.size() + rt_args.size());
