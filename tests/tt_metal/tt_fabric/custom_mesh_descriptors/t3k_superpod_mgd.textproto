@@ -35,7 +35,7 @@ graph_descriptors {
   instances { graph { graph_descriptor: "G0" graph_id: 1 } }
   instances { graph { graph_descriptor: "G0" graph_id: 2 } }
   instances { graph { graph_descriptor: "G0" graph_id: 3 } }
-  
+
   graph_topology: {
     layout_type: ALL_TO_ALL
     channels { count: 2 }
