@@ -12,12 +12,12 @@ autograd::TensorPtr scaled_dot_product_attention(
     const autograd::TensorPtr& query,
     const autograd::TensorPtr& key,
     const autograd::TensorPtr& value,
-    const std::optional<autograd::TensorPtr>& mask = std::nullopt);
+    const autograd::TensorPtr& mask = nullptr);
 
 autograd::TensorPtr scaled_sigmoid_dot_product_attention(
     const autograd::TensorPtr& query,
     const autograd::TensorPtr& key,
     const autograd::TensorPtr& value,
-    const std::optional<autograd::TensorPtr>& mask = std::nullopt);
+    const autograd::TensorPtr& mask = nullptr);
 
 }  // namespace ttml::ops

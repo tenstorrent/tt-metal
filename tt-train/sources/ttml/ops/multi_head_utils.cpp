@@ -13,6 +13,8 @@
 
 namespace ttml::ops {
 
+#ifdef nlp_create_qkv_heads_program_factory_bug_fixed
+
 std::tuple<autograd::TensorPtr, autograd::TensorPtr, autograd::TensorPtr> heads_creation(
     const autograd::TensorPtr& qkv, uint32_t num_heads) {
     // qkv shape is (B, 1, S, E * 3)
@@ -51,6 +53,85 @@ std::tuple<autograd::TensorPtr, autograd::TensorPtr, autograd::TensorPtr> heads_
     out_v->set_node(autograd::ctx().add_backward_node([]() {}, links_kv));
     return {out_q, out_k, out_v};
 }
+
+#else  // #ifdef nlp_create_qkv_heads_program_factory_bug_fixed
+
+std::tuple<autograd::TensorPtr, autograd::TensorPtr, autograd::TensorPtr> heads_creation(
+    const autograd::TensorPtr& qkv, uint32_t num_heads) {
+    // qkv shape is (B, 1, S, E * 3)
+    auto qkv_shape = qkv->get_value().logical_shape();
+    auto batch_size = qkv_shape[0];
+    auto seq_len = qkv_shape[2];
+    auto total_dim = qkv_shape[3];
+    auto embedding_dim = total_dim / 3;
+    auto head_dim = embedding_dim / num_heads;
+
+    // Manual head splitting to work around ttnn bug when head_dim < 32
+    auto qkv_val = qkv->get_value();
+
+    // Split QKV into Q, K, V along last dimension
+    auto q_flat = ttnn::slice(
+        qkv_val,
+        ttnn::SmallVector<uint32_t>{0, 0, 0, 0},
+        ttnn::SmallVector<uint32_t>{batch_size, 1, seq_len, embedding_dim},
+        ttnn::SmallVector<uint32_t>{1, 1, 1, 1});
+    auto k_flat = ttnn::slice(
+        qkv_val,
+        ttnn::SmallVector<uint32_t>{0, 0, 0, embedding_dim},
+        ttnn::SmallVector<uint32_t>{batch_size, 1, seq_len, embedding_dim * 2},
+        ttnn::SmallVector<uint32_t>{1, 1, 1, 1});
+    auto v_flat = ttnn::slice(
+        qkv_val,
+        ttnn::SmallVector<uint32_t>{0, 0, 0, embedding_dim * 2},
+        ttnn::SmallVector<uint32_t>{batch_size, 1, seq_len, embedding_dim * 3},
+        ttnn::SmallVector<uint32_t>{1, 1, 1, 1});
+
+    // Reshape: (B, 1, S, E) -> (B, 1, S*H, E/H) -> (B, H, S, E/H)
+    // This works around the ttnn bug by doing reshape instead of nlp_create_qkv_heads
+    auto q_reshaped = ttnn::reshape(q_flat, ttnn::Shape{batch_size, 1, seq_len * num_heads, head_dim});
+    auto q = ttnn::reshape(q_reshaped, ttnn::Shape{batch_size, num_heads, seq_len, head_dim});
+
+    auto k_reshaped = ttnn::reshape(k_flat, ttnn::Shape{batch_size, 1, seq_len * num_heads, head_dim});
+    auto k = ttnn::reshape(k_reshaped, ttnn::Shape{batch_size, num_heads, seq_len, head_dim});
+
+    auto v_reshaped = ttnn::reshape(v_flat, ttnn::Shape{batch_size, 1, seq_len * num_heads, head_dim});
+    auto v = ttnn::reshape(v_reshaped, ttnn::Shape{batch_size, num_heads, seq_len, head_dim});
+
+    auto out_q = autograd::create_tensor(q);
+    auto out_k = autograd::create_tensor(k);
+    auto out_v = autograd::create_tensor(v);
+
+    autograd::GradFunction grad_q =
+        [out_q, out_k, out_v, qkv, num_heads, batch_size, seq_len, embedding_dim, head_dim]() {
+            auto grad_q = out_q->get_grad();
+            auto grad_k = out_k->get_grad();
+            auto grad_v = out_v->get_grad();
+
+            // Reverse the reshape: (B, H, S, E/H) -> (B, 1, S, E)
+            grad_q = ttnn::reshape(grad_q, ttnn::Shape{batch_size, 1, seq_len * num_heads, head_dim});
+            grad_q = ttnn::reshape(grad_q, ttnn::Shape{batch_size, 1, seq_len, embedding_dim});
+
+            grad_k = ttnn::reshape(grad_k, ttnn::Shape{batch_size, 1, seq_len * num_heads, head_dim});
+            grad_k = ttnn::reshape(grad_k, ttnn::Shape{batch_size, 1, seq_len, embedding_dim});
+
+            grad_v = ttnn::reshape(grad_v, ttnn::Shape{batch_size, 1, seq_len * num_heads, head_dim});
+            grad_v = ttnn::reshape(grad_v, ttnn::Shape{batch_size, 1, seq_len, embedding_dim});
+
+            // Concatenate back to (B, 1, S, E*3)
+            auto result = ttnn::concat(std::vector<ttnn::Tensor>({grad_q, grad_k, grad_v}), /* dim */ 3);
+            qkv->add_grad(result);
+        };
+
+    auto links_q = autograd::get_links(qkv);
+    out_q->set_node(autograd::ctx().add_backward_node(std::move(grad_q), links_q));
+    auto links_kv = autograd::get_links(qkv, out_q);
+    out_k->set_node(autograd::ctx().add_backward_node([]() {}, links_kv));
+    out_v->set_node(autograd::ctx().add_backward_node([]() {}, links_kv));
+
+    return {out_q, out_k, out_v};
+}
+
+#endif  // #else // #ifdef nlp_create_qkv_heads_program_factory_bug_fixed
 
 autograd::TensorPtr heads_fusion(const autograd::TensorPtr& x) {
     auto x_shape = x->get_value().logical_shape();
