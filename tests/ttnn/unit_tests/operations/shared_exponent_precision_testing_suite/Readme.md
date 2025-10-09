@@ -183,6 +183,7 @@ For each test case, the following metrics are computed:
 ### Running the Complete Suite
 
 ```bash
+cd tests/ttnn/unit_tests/operations/shared_exponent_precision_testing_suite
 python3 main.py
 ```
 
