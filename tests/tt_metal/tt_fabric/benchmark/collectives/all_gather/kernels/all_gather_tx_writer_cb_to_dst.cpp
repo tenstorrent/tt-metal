@@ -190,7 +190,9 @@ void kernel_main() {
         }
         // EAST branch on source row
         if (use_E) {
+            DPRINT << "writer:E before wait for empty write slot" << i << ENDL();
             conn_E.wait_for_empty_write_slot();
+            DPRINT << "writer:E after wait for empty write slot" << i << ENDL();
             if (should_log(i)) {
                 DPRINT << "writer:E route&send page " << i << ENDL();
             }
@@ -202,12 +204,17 @@ void kernel_main() {
                 0,
                 0,
                 0);
+            DPRINT << "writer:E after fabric_set_mcast_rout" << i << ENDL();
             hdr_E->to_noc_unicast_write(NocUnicastCommandHeader{dest_noc_addr}, PAGE_SIZE);
+            DPRINT << "writer:E after to_noc_unicast_write" << i << ENDL();
             conn_E.send_payload_without_header_non_blocking_from_address(src_l1_addr, PAGE_SIZE);
+            DPRINT << "writer:E after send_payload_without_header_non_blocking_from_address" << i << ENDL();
             conn_E.send_payload_blocking_from_address((uint32_t)hdr_E, sizeof(PACKET_HEADER_TYPE));
+            DPRINT << "writer:E after send_payload_blocking_from_address" << i << ENDL();
         }
-
+        DPRINT << "writer: Before cb_pop_front" << i << ENDL();
         cb_pop_front(CB_ID, 1);
+        DPRINT << "writer: After cb_pop_front" << i << ENDL();
     }
 
     DPRINT << "writer:payload loop done; flushing async writes" << ENDL();
