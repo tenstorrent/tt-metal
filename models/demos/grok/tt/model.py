@@ -3,6 +3,7 @@ from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
 from models.demos.grok.tt.decoder import Decoder
 from models.demos.grok.tt.distributed_norm import DistributedNorm
+from models.demos.grok.tt.lm_head import LMHead
 from models.tt_transformers.tt.rope import RotarySetup
 
 
@@ -63,6 +64,16 @@ class Transformer(LightweightModule):
             self.args,
             tt_ccl=tt_ccl,
         )
+        self.lm_head = LMHead(
+            args=args,
+            mesh_device=mesh_device,
+            tt_ccl=tt_ccl,
+            dtype=dtype,
+            state_dict=state_dict,
+            state_dict_prefix="model.lm_head",
+            weight_cache_path=weight_cache_path,
+            max_columns_per_device=self.args.max_columns_per_device_lm_head,
+        )
 
     def forward_decode(self, x, current_pos, rot_mats, page_table=None):
         for layer_idx, layer in enuermate(self.layers):
@@ -75,3 +86,5 @@ class Transformer(LightweightModule):
             )
 
         x = self.norm(x, mode="decode")
+        x = self.lm_head(x)
+        return x

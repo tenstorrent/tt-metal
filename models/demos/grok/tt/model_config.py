@@ -105,6 +105,26 @@ class TtModelArgs:
             "beta_slow": 1,
         }
 
+        lm_head_num_rows = 4
+        while self.dim % (32 * 32 * lm_head_num_rows) != 0:
+            lm_head_num_rows -= 1
+
+        lm_head_cores_per_row = 8
+        while self.dim % (32 * lm_head_num_rows * lm_head_cores_per_row) != 0:
+            lm_head_num_rows -= 1
+            if lm_head_num_rows == 0:
+                lm_head_cores_per_row -= 1
+                if lm_head_cores_per_row == 0:
+                    raise ValueError(
+                        f"Could not find a lm_head_num_rows such that self.dim(={self.dim}) % (lm_head_num_rows * 8) == 0"
+                    )
+                lm_head_num_rows = 8
+        self.lm_head_core_grid = ttnn.CoreGrid(y=lm_head_num_rows, x=lm_head_cores_per_row)
+        # 128256 comes from original llama 3 vocab size. 128256 / 4 was experimentally the maximum columns that worked per device.
+        # The LM head for that was on 48 cores, so we know 128256 / 4 / 48 = 668 columns per core is close to the L1 limit.
+        # FIXME: Update blackhole figure to be per-core as well.
+        self.max_columns_per_device_lm_head = (self.vocab_size // 8 // 48 + 1) * self.lm_head_core_grid.num_cores
+
     def prepare_residual_tensor_decode(self, x, input_mem_cfg, force_replicated=False, on_host=False):
         """
         Prepare inputs for decode mode.
