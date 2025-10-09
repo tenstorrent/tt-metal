@@ -33,6 +33,12 @@ autograd::TensorPtr mse_loss(
 
 autograd::TensorPtr cross_entropy_loss(
     const autograd::TensorPtr& prediction, const autograd::TensorPtr& target, ReduceType reduce) {
+    if (reduce != ReduceType::NONE && reduce != ReduceType::MEAN) {
+        throw std::logic_error(fmt::format(
+            "Unsupported cross entropy reduction type, only NONE and MEAN are supported. Got: {}",
+            enchantum::to_string(reduce)));
+    }
+
     auto prediction_shape = prediction->get_shape();
     auto target_shape = target->get_shape();
 
@@ -64,21 +70,28 @@ autograd::TensorPtr cross_entropy_loss(
     }
 
     auto loss = ttml::metal::cross_entropy_fw(prediction->get_value(), target->get_value());
-    auto shape = ttnn::Shape({1, 1, 1, 1});
-    autograd::TensorPtr out =
-        autograd::create_tensor(core::empty(shape, &autograd::ctx().get_device(), loss.memory_config()));
-    ttnn::moreh_mean(
-        loss,
-        std::nullopt,
-        true,
-        std::nullopt,
-        out->get_value(),
-        std::nullopt,
-        /* device_compute_kernel_config */ core::ComputeKernelConfig::precise());
+    autograd::TensorPtr out;
 
-    autograd::GradFunction grad = [target, prediction, out]() {
-        auto volume = target->get_value().logical_volume();
-        float scaler = 1.0F / static_cast<float>(volume);
+    if (reduce == ReduceType::NONE) {
+        out = autograd::create_tensor(loss);
+    } else {
+        auto shape = ttnn::Shape({1, 1, 1, 1});
+        out = autograd::create_tensor(core::empty(shape, &autograd::ctx().get_device(), loss.memory_config()));
+        ttnn::moreh_mean(
+            loss,
+            std::nullopt,
+            true,
+            std::nullopt,
+            out->get_value(),
+            std::nullopt,
+            /* device_compute_kernel_config */ core::ComputeKernelConfig::precise());
+    }
+    autograd::GradFunction grad = [target, prediction, out, reduce]() {
+        float scaler = 1.0F;
+        if (reduce == ReduceType::MEAN) {
+            auto volume = target->get_value().logical_volume();
+            scaler = 1.0F / static_cast<float>(volume);
+        }
         auto grad =
             ttml::metal::cross_entropy_bw(prediction->get_value(), target->get_value(), out->get_grad(), scaler);
         prediction->add_grad(grad);
