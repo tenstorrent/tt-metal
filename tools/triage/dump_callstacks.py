@@ -5,16 +5,17 @@
 
 """
 Usage:
-    dump_callstacks [--full-callstack] [--gdb-callstack] [--active-cores]
+    dump_callstacks [--full-callstack] [--gdb-callstack] [--show-details]
 
 Options:
     --full-callstack   Dump full callstack with all frames. Defaults to dumping only the top frame.
     --gdb-callstack    Dump callstack using GDB client instead of built-in methods.
-    --active-cores     Only dump callstacks for cores running kernels.
+    --show-details     Show verbose fields (RD PTR, Base, Offset, firmware/kernel paths).
 
 Description:
     Dumps callstacks for all devices in the system and for every supported risc processor.
-    If will also dump dispatcher data for each risc processor, including firmware path, kernel path, kernel offset, etc.
+    By default shows: Kernel ID:Name, Go Message, Subdevice, Preload, Waypoint, PC, and Callstack.
+    Use --show-details to see all dispatcher data fields.
 """
 
 from dataclasses import dataclass
@@ -35,6 +36,7 @@ import socket
 import subprocess
 import threading
 from contextlib import closing
+from pathlib import Path
 
 script_config = ScriptConfig(
     depends=["run_checks", "dispatcher_data", "elfs_cache"],
@@ -229,6 +231,8 @@ def _format_callstack(callstack: list[CallstackEntry]) -> list[str]:
     """Return string representation of the callstack."""
     frame_number_width = len(str(len(callstack) - 1))
     result = []
+    cwd = Path.cwd()
+
     for i, frame in enumerate(callstack):
         line = f"  #{i:<{frame_number_width}} "
         if frame.pc is not None:
@@ -236,14 +240,25 @@ def _format_callstack(callstack: list[CallstackEntry]) -> list[str]:
         if frame.function_name is not None:
             line += f"{ORANGE}{frame.function_name}{RST} () "
         if frame.file is not None:
-            line += f"at {GREEN}{frame.file}{RST}"
+            # Convert absolute path to relative path with ./ prefix
+            file_path = Path(frame.file)
+            try:
+                if file_path.is_absolute():
+                    rel_path = file_path.relative_to(cwd)
+                    display_path = f"./{rel_path}"
+                else:
+                    display_path = frame.file
+            except ValueError:
+                # Path is not relative to cwd, keep as is
+                display_path = frame.file
+            
+            line += f"at {GREEN}{display_path}{RST}"
             if frame.line is not None:
                 line += f" {GREEN}{frame.line}{RST}"
                 if frame.column is not None:
                     line += f"{GREEN}:{frame.column}{RST}"
         result.append(line)
     return result
-
 
 def format_callstack_with_message(callstack_with_message: KernelCallstackWithMessage) -> str:
     """Return string representation of the callstack with optional error message. Adding empty line at the beginning for prettier look."""
@@ -255,9 +270,23 @@ def format_callstack_with_message(callstack_with_message: KernelCallstackWithMes
     else:
         return "\n".join([empty_line] + _format_callstack(callstack_with_message.callstack))
 
-
 @dataclass
 class DumpCallstacksData:
+    """Callstack data showing essential fields: Kernel ID:Name, Go Message, Subdevice, Preload, Waypoint, PC, and Callstack."""
+    kernel_id_name: str = triage_field("Kernel ID:Name")
+    go_message: str = triage_field("Go Message")
+    subdevice: int = triage_field("Subdevice")
+    preload: bool = triage_field("Preload")
+    waypoint: str = triage_field("Waypoint")
+    pc: int | None = triage_field("PC", hex_serializer)
+    kernel_callstack_with_message: KernelCallstackWithMessage = triage_field(
+        "Kernel Callstack", format_callstack_with_message
+    )
+
+
+@dataclass
+class DumpCallstacksDataVerbose:
+    """Verbose callstack data showing all dispatcher fields."""
     dispatcher_core_data: DispatcherCoreData = recurse_field()
     pc: int | None = triage_field("PC", hex_serializer)
     kernel_callstack_with_message: KernelCallstackWithMessage = triage_field(
@@ -272,15 +301,17 @@ def dump_callstacks(
     elfs_cache: ElfsCache,
     full_callstack: bool,
     gdb_callstack: bool,
-    active_cores: bool,
     gdb_server: GdbServer | None,
     process_ids: dict[OnChipCoordinate, dict[str, int]] | None,
-) -> DumpCallstacksData | None:
-    result: DumpCallstacksData | None = None
+    show_details: bool = False,
+) -> DumpCallstacksData | DumpCallstacksDataVerbose | None:
+    result: DumpCallstacksData | DumpCallstacksDataVerbose | None = None
 
     try:
         dispatcher_core_data = dispatcher_data.get_core_data(location, risc_name)
-        if active_cores and dispatcher_core_data.go_message != "GO":
+
+        # In default mode (not show_details), filter out DONE cores
+        if not show_details and dispatcher_core_data.go_message == "DONE":
             return result
         risc_debug = location._device.get_block(location).get_risc_debug(risc_name)
         if risc_debug.is_in_reset():
@@ -336,13 +367,28 @@ def dump_callstacks(
                 location, risc_name, dispatcher_core_data, elfs_cache, full_callstack
             )
 
-        result = DumpCallstacksData(
-            dispatcher_core_data=dispatcher_core_data,
-            pc=callstack_with_message.callstack[0].pc
-            if len(callstack_with_message.callstack) > 0
-            else location._device.get_block(location).get_risc_debug(risc_name).get_pc(),
-            kernel_callstack_with_message=callstack_with_message,
-        )
+        if show_details:
+            result = DumpCallstacksDataVerbose(
+                dispatcher_core_data=dispatcher_core_data,
+                pc=callstack_with_message.callstack[0].pc
+                if len(callstack_with_message.callstack) > 0
+                else location._device.get_block(location).get_risc_debug(risc_name).get_pc(),
+                kernel_callstack_with_message=callstack_with_message,
+            )
+        else:
+            # Build kernel ID:Name string
+            kernel_id_name = f"{dispatcher_core_data.watcher_kernel_id}:{dispatcher_core_data.kernel_name or 'N/A'}"
+            result = DumpCallstacksData(
+                kernel_id_name=kernel_id_name,
+                go_message=dispatcher_core_data.go_message,
+                subdevice=dispatcher_core_data.subdevice,
+                preload=dispatcher_core_data.preload,
+                waypoint=dispatcher_core_data.waypoint,
+                pc=callstack_with_message.callstack[0].pc
+                if len(callstack_with_message.callstack) > 0
+                else location._device.get_block(location).get_risc_debug(risc_name).get_pc(),
+                kernel_callstack_with_message=callstack_with_message,
+            )
 
     except Exception as e:
         log_check(
@@ -390,7 +436,7 @@ def start_gdb_server(port: int, context: Context) -> GdbServer:
 def run(args, context: Context):
     full_callstack = args["--full-callstack"]
     gdb_callstack = args["--gdb-callstack"]
-    active_cores = args["--active-cores"]
+    show_details = args["--show-details"]
     BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth"]
     elfs_cache = get_elfs_cache(args, context)
     run_checks = get_run_checks(args, context)
@@ -413,9 +459,9 @@ def run(args, context: Context):
             elfs_cache,
             full_callstack,
             gdb_callstack,
-            active_cores,
             gdb_server,
             process_ids,
+            show_details,
         ),
         block_filter=BLOCK_TYPES_TO_CHECK,
     )

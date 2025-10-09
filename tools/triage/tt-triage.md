@@ -36,6 +36,19 @@ If a check is critical (such as a missing ELF file), the script should raise a `
 
 `tt-triage` will try to visualize data returned by scripts, so it is important to describe the data accordingly. For example, see `dump_callstacks` — `tt-triage` would generate a table with all callstacks.
 
+#### dump_callstacks output modes
+
+By default, `dump_callstacks` shows only essential fields:
+- Kernel ID:Name, Go Message, Subdevice, Preload, Waypoint, PC, and Callstack
+- **Automatically filters out DONE cores** to reduce noise
+
+To see all fields including DONE cores and verbose dispatcher data (RD PTR, Base, Offset, and full firmware/kernel paths), use:
+```bash
+./tools/tt-triage.py --run=dump_callstacks --show-details
+```
+
+This keeps the default output clean while allowing detailed inspection when needed.
+
 To enable rich visualization, a checker script should return data as a tagged `@dataclass` or a list of tagged `@dataclass` objects of the same type. Visualization in `tt-triage` is achieved by serializing data fields in a way that describes how they should appear in the output. You control this by using tagging methods and their arguments to specify how each field should be serialized and thus visualized:
 - `triage_field(serialized_name, serializer)` – The field will be serialized (and visualized) as `serialized_name` (or the original field name if not provided) using the specified `serializer` (or `default_serializer`). This controls how the field appears in the visualization.
 - `combined_field(additional_fields, serialized_name, serializer)` – The field will be serialized together with `additional_fields` under `serialized_name` using `serializer`. If none of the parameters are provided, visualization will be ignored, as it will be visualized with a different field. Example:
