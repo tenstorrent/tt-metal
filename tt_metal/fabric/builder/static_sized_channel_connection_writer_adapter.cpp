@@ -66,6 +66,10 @@ uint32_t StaticSizedChannelConnectionWriterAdapter::pack_downstream_noc_x_rt_arg
     return encode_noc_ord_for_2d(
         this->downstream_edms_connected_by_vc, vc_idx, [](CoreCoord noc_xy) { return noc_xy.x; });
 }
+/*
+ * For 2D fabric, downstream noc x/y coords are packed into uint32_t, one per byte
+ * X and Y have separate uint32s
+ */
 uint32_t StaticSizedChannelConnectionWriterAdapter::encode_noc_ord_for_2d(
     const std::array<std::vector<std::pair<eth_chan_directions, CoreCoord>>, builder_config::num_receiver_channels>& downstream_edms_connected_by_vc,
     uint32_t vc_idx,
