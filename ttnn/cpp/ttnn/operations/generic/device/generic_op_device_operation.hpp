@@ -73,7 +73,6 @@ struct GenericOpDeviceOperation {
                 tt::stl::hash::type_hash<GenericOpDeviceOperation>, operation_attributes, tensor_args);
         }
     }
-    // static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };  // struct GenericOpDeviceOperation
 
 }  // namespace ttnn::operations::generic
