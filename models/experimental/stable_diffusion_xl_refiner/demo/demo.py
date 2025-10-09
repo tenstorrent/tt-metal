@@ -214,9 +214,8 @@ def generate_with_refiner_compare(
     for t in timesteps:
         scaled_latents = scheduler.scale_model_input(latents, t)
 
-        torch_timestep_tensor = torch.tensor([t], dtype=torch.bfloat16)
         ttnn_timestep_tensor = ttnn.from_torch(
-            torch_timestep_tensor,
+            scheduler.timesteps[scheduler.step_index],
             dtype=ttnn.bfloat16,
             device=device,
             layout=ttnn.TILE_LAYOUT,

@@ -103,9 +103,8 @@ def run_tt_refiner_denoising_step(
     ) = conditioning_tensors
 
     # Create timestep tensor
-    torch_timestep_tensor = torch.tensor([timestep], dtype=torch.bfloat16)
     ttnn_timestep_tensor = ttnn.from_torch(
-        torch_timestep_tensor,
+        timestep,
         dtype=ttnn.bfloat16,
         device=ttnn_device,
         layout=ttnn.TILE_LAYOUT,
