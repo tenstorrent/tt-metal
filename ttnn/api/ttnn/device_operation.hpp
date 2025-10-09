@@ -396,13 +396,19 @@ get_final_placements_and_shape(
                                 output_placement)) {
                             auto existing_shard_placement =
                                 std::get<tt::tt_metal::distributed::MeshMapperConfig::Shard>(output_placement);
-                            TT_FATAL(
-                                new_shard_placement.dim == existing_shard_placement.dim,
-                                "Output tensor cannot shard different tensor dimensions across the same distribution "
-                                "dimension: tensor dims {} and {} across distribution dim {}",
-                                existing_shard_placement.dim,
-                                new_shard_placement.dim,
-                                i);
+                            if (new_shard_placement.dim != existing_shard_placement.dim) {
+                                log_warning(
+                                    tt::LogOp,
+                                    "Output tensor cannot shard different tensor dimensions across the same "
+                                    "distribution "
+                                    "dimension: tensor dims {} and {} across distribution dim {}",
+                                    existing_shard_placement.dim,
+                                    new_shard_placement.dim,
+                                    i);
+                            }
+
+                            // Keep the earliest-seen shard dimension.
+                            continue;
                         }
                         shard_dims.insert(new_shard_placement.dim);
                         output_placement = new_shard_placement;
