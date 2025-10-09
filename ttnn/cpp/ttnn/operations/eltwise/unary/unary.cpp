@@ -436,6 +436,21 @@ Tensor Clamp::invoke(
         optional_output_tensor);
 }
 
+template <typename T>
+Tensor Rsub::invoke(
+    const Tensor& input_tensor,
+    T param,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    UnaryOpType op_type = UnaryOpType::RSUB;
+    return detail::unary_impl(
+        input_tensor, {EltwiseUnaryWithParam{op_type, {param}}}, memory_config, optional_output_tensor);
+}
+template Tensor Rsub::invoke<float>(
+    const Tensor&, float, const std::optional<MemoryConfig>&, const std::optional<Tensor>&);
+template Tensor Rsub::invoke<int32_t>(
+    const Tensor&, int32_t, const std::optional<MemoryConfig>&, const std::optional<Tensor>&);
+
 Tensor Softshrink::invoke(
     const Tensor& input_tensor,
     const float lambda,
@@ -559,7 +574,6 @@ Tensor AsymmetricBinop<unary_op_type, unary_op_rev_type>::invoke(
     return detail::unary_impl(
         input_tensor, {EltwiseUnaryWithParam{unary_op_rev_type, (param)}}, memory_config, optional_output_tensor);
 }
-
 template struct AsymmetricBinop<UnaryOpType::SUB_UNARY_SFPU, UnaryOpType::RSUB>;
 template struct AsymmetricBinop<UnaryOpType::DIV_UNARY_SFPU, UnaryOpType::RDIV>;
 
