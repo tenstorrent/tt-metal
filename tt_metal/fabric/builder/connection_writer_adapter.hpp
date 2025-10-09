@@ -1,0 +1,174 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include "tt_metal/fabric/builder/fabric_builder_config.hpp"
+#include "core_coord.hpp"
+#include "tt_metal/fabric/builder/fabric_static_sized_channels_allocator.hpp"
+#include "impl/context/metal_context.hpp"
+#include "tt_metal/hostdevcommon/api/hostdevcommon/fabric_common.h"
+#include <vector>
+
+namespace tt::tt_fabric {
+
+struct SenderWorkerAdapterSpec {
+    size_t edm_noc_x = 0;
+    size_t edm_noc_y = 0;
+    size_t edm_buffer_base_addr = 0;
+    size_t num_buffers_per_channel = 0;
+    size_t edm_l1_sem_addr = 0;
+    size_t edm_connection_handshake_addr = 0;
+    size_t edm_worker_location_info_addr = 0;  // The EDM's location for `EDMChannelWorkerLocationInfo`
+    size_t buffer_size_bytes = 0;
+    size_t buffer_index_semaphore_id = 0;  // the semaphore ID on the EDM, not the worker
+    eth_chan_directions edm_direction = eth_chan_directions::EAST;
+};
+
+class ChannelConnectionWriterAdapter {
+public:
+    // Adds downstream noc x/y
+    virtual void add_downstream_connection(
+        SenderWorkerAdapterSpec const& adapter_spec,
+        uint32_t inbound_vc_idx,
+        eth_chan_directions downstream_direction,
+        CoreCoord downstream_noc_xy,
+        bool is_2D_routing,
+        bool is_vc1) = 0;
+
+    virtual void pack_inbound_channel_rt_args(uint32_t vc_idx, std::vector<uint32_t>& args_out) const = 0;
+    virtual void emit_ct_args(std::vector<uint32_t>& ct_args_out, size_t num_fwd_paths) const = 0;
+
+protected:
+    ~ChannelConnectionWriterAdapter() = default;
+
+private:
+    std::array<std::optional<size_t>, builder_config::num_receiver_channels> downstream_edm_vcs_noc_x = {};
+    std::array<std::optional<size_t>, builder_config::num_receiver_channels> downstream_edm_vcs_noc_y = {};
+    std::array<std::optional<size_t>, builder_config::num_receiver_channels> downstream_edm_vcs_worker_registration_address = {};
+    std::array<std::optional<size_t>, builder_config::num_receiver_channels> downstream_edm_vcs_worker_location_info_address = {};
+
+    // std::array<std::optional<size_t>, FabricEriscDatamoverConfig::max_downstream_edms> downstream_edm_vcs_noc_x = {};
+    // std::array<std::optional<size_t>, FabricEriscDatamoverConfig::max_downstream_edms> downstream_edm_vcs_noc_y = {};
+};
+
+// TODO: add transient vs persistent variants
+
+class StaticSizedChannelConnectionWriterAdapter final : public ChannelConnectionWriterAdapter {
+public:
+    StaticSizedChannelConnectionWriterAdapter(
+        FabricStaticSizedChannelsAllocator& allocator, tt::tt_fabric::Topology topology) :
+        is_2D_routing(topology == tt::tt_fabric::Topology::Mesh || topology == tt::tt_fabric::Topology::Torus) {}
+
+     void add_downstream_connection(
+        SenderWorkerAdapterSpec const& adapter_spec,
+        uint32_t inbound_vc_idx,
+        eth_chan_directions downstream_direction,
+        CoreCoord downstream_noc_xy,
+        bool is_2D_routing,
+        bool is_vc1) override {
+        downstream_edms_connected_by_vc.at(inbound_vc_idx).push_back(
+            {downstream_direction, CoreCoord(downstream_noc_xy.x, downstream_noc_xy.y)});
+
+        if (is_2D_routing) {
+            if (!is_vc1) {
+                this->downstream_edms_connected |= (1 << downstream_direction);
+            }
+        } else {
+            this->downstream_edms_connected = 1;
+        }
+
+        this->downstream_edm_vcs_buffer_base_address.at(inbound_vc_idx) = adapter_spec.edm_buffer_base_addr;
+        this->downstream_edm_vcs_worker_registration_address.at(inbound_vc_idx) = adapter_spec.edm_connection_handshake_addr;
+        this->downstream_edm_vcs_worker_location_info_address.at(inbound_vc_idx) = adapter_spec.edm_worker_location_info_addr;
+        this->downstream_sender_channels_num_buffers.at(inbound_vc_idx) = adapter_spec.num_buffers_per_channel;
+        this->downstream_edms_connected_by_vc_set.insert(inbound_vc_idx);
+    }
+
+    void pack_inbound_channel_rt_args(uint32_t vc_idx, std::vector<uint32_t>& args_out) const override {
+        
+        TT_FATAL(downstream_edm_vcs_buffer_base_address.size() > vc_idx, "VC index is out of bounds for downstream_edm_vcs_buffer_base_address");
+        TT_FATAL(downstream_edm_vcs_worker_registration_address.size() > vc_idx, "VC index is out of bounds for downstream_edm_vcs_worker_registration_address");
+        TT_FATAL(downstream_edm_vcs_worker_location_info_address.size() > vc_idx, "VC index is out of bounds for downstream_edm_vcs_worker_location_info_address");
+
+        auto rt_args = std::initializer_list<uint32_t>{
+            vc_idx == 0 ? this->downstream_edms_connected : this->downstream_edm_vcs_buffer_base_address[vc_idx] != std::nullopt,
+            this->downstream_edm_vcs_buffer_base_address[vc_idx].value_or(0),
+            this->pack_downstream_noc_x_rt_arg(vc_idx),//this->downstream_edm_vcs_noc_x[1].value_or(0),
+            this->pack_downstream_noc_y_rt_arg(vc_idx),//this->downstream_edm_vcs_noc_y[1].value_or(0),
+            this->downstream_edm_vcs_worker_registration_address[vc_idx].value_or(0),
+            this->downstream_edm_vcs_worker_location_info_address[vc_idx].value_or(0),
+            // this->receiver_channels_local_buffer_index_address[vc_idx]                
+        };
+
+        args_out.reserve(args_out.size() + rt_args.size());
+        std::copy(rt_args.begin(), rt_args.end(), std::back_inserter(args_out));
+    }
+
+    uint32_t get_downstream_edms_connected(bool is_2d_routing, bool is_vc1) const {
+        return this->downstream_edms_connected;
+    }
+
+private:
+    uint32_t pack_downstream_noc_y_rt_arg(uint32_t vc_idx) const {
+        return encode_noc_ord_for_2d(
+            this->downstream_edms_connected_by_vc, vc_idx, [](CoreCoord noc_xy) { return noc_xy.y; });
+    }
+    uint32_t pack_downstream_noc_x_rt_arg(uint32_t vc_idx) const {
+        return encode_noc_ord_for_2d(
+            this->downstream_edms_connected_by_vc, vc_idx, [](CoreCoord noc_xy) { return noc_xy.x; });
+    }
+    uint32_t encode_noc_ord_for_2d(
+        const std::array<std::vector<std::pair<eth_chan_directions, CoreCoord>>, builder_config::num_receiver_channels>& downstream_edms_connected_by_vc,
+        uint32_t vc_idx,
+        const std::function<uint32_t(CoreCoord)>& get_noc_ord) const {
+        if (vc_idx == 1 || !is_2D_routing) {
+            if (downstream_edms_connected_by_vc[vc_idx].size() == 0) {
+                return 0; // no connection here
+            }
+            TT_FATAL(downstream_edms_connected_by_vc[vc_idx].size() == 1, "Downstream edms connected by vc should be 1 for vc1 or non-2D routing. vc_idx: {}, size: {}", vc_idx, downstream_edms_connected_by_vc[vc_idx].size());
+            auto ord = get_noc_ord(downstream_edms_connected_by_vc[vc_idx].front().second);
+            return ord;
+        } else {
+            uint32_t ord = 0;
+            for (const auto& [direction, noc_xy] : downstream_edms_connected_by_vc[vc_idx]) {
+                ord |= (get_noc_ord(noc_xy) << (direction * 8));
+            }
+            return ord;
+        }
+    }
+
+    void emit_ct_args(std::vector<uint32_t>& ct_args_out, size_t num_fwd_paths) const override {
+        ct_args_out.insert(
+            ct_args_out.end(),
+            this->downstream_sender_channels_num_buffers.begin(),
+            this->downstream_sender_channels_num_buffers.begin() + num_fwd_paths);
+
+        for (size_t i = 0; i < num_fwd_paths; i++) {
+            if (this->downstream_edms_connected_by_vc_set.find(i) != this->downstream_edms_connected_by_vc_set.end()) {
+                TT_FATAL(this->downstream_sender_channels_num_buffers[i] !=0, "Downstream sender channels num buffers must be greater than 0 for vc_idx: {}", i);
+            }
+        }
+    }
+
+    std::unordered_set<uint32_t> downstream_edms_connected_by_vc_set = {};
+
+    std::array<std::vector<std::pair<eth_chan_directions, CoreCoord>>, builder_config::num_receiver_channels> downstream_edms_connected_by_vc = {};
+    std::array<std::optional<size_t>, builder_config::num_sender_channels> sender_channels_num_buffers = {};
+    std::array<std::optional<size_t>, builder_config::num_sender_channels> local_sender_channels_buffer_address = {};
+    std::array<std::optional<size_t>, builder_config::num_sender_channels> remote_sender_channels_base_address = {};
+    std::array<size_t, builder_config::num_receiver_channels> downstream_sender_channels_num_buffers = {};
+    std::array<std::optional<size_t>, builder_config::num_receiver_channels> downstream_edm_vcs_buffer_base_address = {};
+    uint32_t downstream_edms_connected = 0;
+
+    std::array<std::optional<size_t>, builder_config::num_receiver_channels>
+        downstream_edm_vcs_worker_registration_address = {};
+    std::array<std::optional<size_t>, builder_config::num_receiver_channels>
+        downstream_edm_vcs_worker_location_info_address = {};
+
+    bool is_2D_routing = false;
+};
+
+
+}  // namespace tt::tt_fabric

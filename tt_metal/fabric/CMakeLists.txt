@@ -37,6 +37,8 @@ target_sources(
         mesh_graph.cpp
         erisc_datamover_builder.cpp
         builder/fabric_core_placement.cpp
+        builder/fabric_channel_allocator.cpp
+        builder/fabric_static_sized_channels_allocator.cpp
         fabric.cpp
         fabric_init.cpp
         fabric_host_utils.cpp
