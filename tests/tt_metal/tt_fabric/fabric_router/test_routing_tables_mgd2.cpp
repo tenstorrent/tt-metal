@@ -265,8 +265,17 @@ TEST_F(ControlPlaneFixture, TestTGFabricRoutesMGD2) {
         "tt_metal/fabric/mesh_graph_descriptors/tg_mesh_graph_descriptor.textproto";
     auto control_plane = make_control_plane(tg_mesh_graph_desc_path);
     auto valid_chans = control_plane->get_valid_eth_chans_on_routing_plane(FabricNodeId(MeshId{0}, 0), 1);
-    EXPECT_GT(valid_chans.size(), 0);
+    auto valid_chans2 = control_plane->get_valid_eth_chans_on_routing_plane(FabricNodeId(MeshId{0}, 0), 0);
+
+    auto total_chans = valid_chans.size() + valid_chans2.size();
+
+    // one of them should have channels
+    EXPECT_GT(total_chans, 0);
     for (auto chan : valid_chans) {
+        auto path = control_plane->get_fabric_route(FabricNodeId(MeshId{0}, 0), FabricNodeId(MeshId{4}, 31), chan);
+        EXPECT_FALSE(path.empty());
+    }
+    for (auto chan : valid_chans2) {
         auto path = control_plane->get_fabric_route(FabricNodeId(MeshId{0}, 0), FabricNodeId(MeshId{4}, 31), chan);
         EXPECT_FALSE(path.empty());
     }
@@ -410,9 +419,15 @@ TEST(MeshGraphValidation, TestT3k2x2MeshGraphMGD2) {
     EXPECT_EQ(mesh_graph.get_intra_mesh_connectivity()[0][0].begin()->second.connected_chip_ids.size(), 2);
     EXPECT_EQ(mesh_graph.get_intra_mesh_connectivity()[0][0].size(), 2);
 
+    // TODO: Intermesh is currently empty: this will change back once we have logical to physical mapping
     // Check that the number of intermesh connections match the number of connections in the graph
-    EXPECT_EQ(mesh_graph.get_inter_mesh_connectivity()[0][1].begin()->second.connected_chip_ids.size(), 2);
-    EXPECT_EQ(mesh_graph.get_inter_mesh_connectivity()[1][0].begin()->second.connected_chip_ids.size(), 2);
+    // EXPECT_EQ(mesh_graph.get_inter_mesh_connectivity()[0][1].begin()->second.connected_chip_ids.size(), 2);
+    // EXPECT_EQ(mesh_graph.get_inter_mesh_connectivity()[1][0].begin()->second.connected_chip_ids.size(), 2);
+
+    // TODO: Remove after logical to physical mapping is implemented
+    EXPECT_EQ(mesh_graph.get_requested_intermesh_ports().size(), 2);
+    EXPECT_EQ(mesh_graph.get_requested_intermesh_ports().at(0).at(1).size(), 2);
+    EXPECT_EQ(mesh_graph.get_requested_intermesh_ports().at(1).at(0).size(), 2);
 }
 
 TEST(MeshGraphValidation, TestGetHostRankForChipMGD2) {

@@ -71,6 +71,36 @@ TEST(MeshGraphValidation, TestTGMeshGraphInit) {
         MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(3, 7)));
 }
 
+TEST(MeshGraphValidation, TestMGDConnections) {
+    // TODO: This test is currently not implemented completely connection types currently cannot be mixed
+    // Skip for now
+    log_warning(tt::LogTest, "Skipping TestMGDConnections because connection types currently cannot be mixed");
+    GTEST_SKIP();
+
+    const std::filesystem::path test_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/mgd_test_connections.textproto";
+    MeshGraph mesh_graph(test_desc_path.string());
+
+    auto connections = mesh_graph.get_requested_intermesh_connections();
+    EXPECT_EQ(connections[0][1], 5); // 2 (relaxed) + 3 (mixed, treated as relaxed)
+
+    auto ports = mesh_graph.get_requested_intermesh_ports();
+    EXPECT_EQ(ports[0][1].size(), 1); // 1 strict connection
+    auto [src_dev, dst_dev, count] = ports[0][1][0];
+    EXPECT_EQ(src_dev, 0);
+    EXPECT_EQ(dst_dev, 1);
+    EXPECT_EQ(count, 1);
+
+    // Bidirectional check
+    EXPECT_EQ(connections[1][0], 5);
+    EXPECT_EQ(ports[1][0].size(), 1);
+    auto [rev_src_dev, rev_dst_dev, rev_count] = ports[1][0][0];
+    EXPECT_EQ(rev_src_dev, 1);
+    EXPECT_EQ(rev_dst_dev, 0);
+    EXPECT_EQ(rev_count, 1);
+}
+
 TEST_F(ControlPlaneFixture, TestTGControlPlaneInit) {
     const std::filesystem::path tg_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
