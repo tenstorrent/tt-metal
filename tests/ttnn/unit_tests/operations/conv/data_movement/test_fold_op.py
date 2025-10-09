@@ -81,10 +81,13 @@ def fold_torch(input_tensor, stride_h, stride_w, padding=None):
 @pytest.mark.parametrize("stride", [(16, 16), (32, 32)])
 @pytest.mark.parametrize("padding", [(0, 0), (8, 8), (4, 12, 2, 6)])
 @pytest.mark.parametrize("input_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
-def test_fold_with_permute_for_dram_tensor(device, nhw, channels, stride, padding, input_layout):
+@pytest.mark.parametrize("input_dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
+def test_fold_with_permute_for_dram_tensor(device, nhw, channels, stride, padding, input_layout, input_dtype):
     batch_size, height, width = nhw
     stride_h, stride_w = stride
 
+    if input_dtype == ttnn.bfloat8_b and input_layout == ttnn.ROW_MAJOR_LAYOUT:
+        pytest.skip("bfloat8_b with row major layout is not supported")
     # Handle both symmetric and asymmetric padding
     if len(padding) == 2:
         # Symmetric padding: [pad_h, pad_w]
@@ -113,7 +116,7 @@ def test_fold_with_permute_for_dram_tensor(device, nhw, channels, stride, paddin
     torch_output_tensor = fold_torch(torch_input_tensor_nhwc, stride_h, stride_w, padding=padding)
     input_memory_config = ttnn.DRAM_MEMORY_CONFIG
     tt_input_tensor = ttnn.from_torch(
-        torch_input_tensor_nhwc, layout=input_layout, device=device, memory_config=input_memory_config
+        torch_input_tensor_nhwc, input_dtype, layout=input_layout, device=device, memory_config=input_memory_config
     )
     tt_output_tensor = ttnn.fold(
         tt_input_tensor,
@@ -122,8 +125,7 @@ def test_fold_with_permute_for_dram_tensor(device, nhw, channels, stride, paddin
         padding=list(padding),
     )
     tt_output_tensor = ttnn.to_torch(tt_output_tensor)
-    isequal = torch.equal(torch_output_tensor, tt_output_tensor)
-    assert isequal
+    assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.99)
 
 
 def pad_and_fold_with_permute_and_reshape_on_device(
