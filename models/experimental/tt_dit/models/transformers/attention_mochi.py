@@ -53,7 +53,6 @@ class MochiAttention:
             "norm_elementwise_affine": True,
             "bias": False,
             "mesh_device": mesh_device,
-            "init": init,
         }
 
         self.norm_q = RMSNorm(**rms_kwargs)
@@ -68,7 +67,6 @@ class MochiAttention:
             bias=bias,
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-            init=init,
             fsdp_mesh_axis=fsdp_mesh_axis,
             ccl_manager=ccl_manager,
         )
@@ -81,7 +79,6 @@ class MochiAttention:
             bias=added_proj_bias,
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-            init=init,
             fsdp_mesh_axis=fsdp_mesh_axis,
             ccl_manager=ccl_manager,
         )
@@ -92,7 +89,6 @@ class MochiAttention:
             bias=out_bias,
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-            init=init,
             fsdp_mesh_axis=fsdp_mesh_axis,
             ccl_manager=ccl_manager,
         )
@@ -104,7 +100,6 @@ class MochiAttention:
                 bias=out_bias,
                 mesh_device=mesh_device,
                 mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-                init=init,
                 fsdp_mesh_axis=fsdp_mesh_axis,
                 ccl_manager=ccl_manager,
             )

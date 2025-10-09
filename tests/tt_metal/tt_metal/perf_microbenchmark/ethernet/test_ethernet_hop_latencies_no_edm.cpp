@@ -45,7 +45,6 @@ using tt::tt_metal::IDevice;
 using tt::tt_metal::distributed::MeshCoordinate;
 using tt::tt_metal::distributed::MeshDevice;
 using tt::tt_metal::distributed::MeshDeviceConfig;
-using tt::tt_metal::distributed::MeshDeviceView;
 using tt::tt_metal::distributed::MeshShape;
 
 class T3000TestDevice {
@@ -366,7 +365,7 @@ void build_and_run_roundtrip_latency_test(
             tt::tt_metal::distributed::MeshCoordinateRange(zero_coord, zero_coord);
 
         tt::tt_metal::distributed::MeshWorkload mesh_workload;
-        tt::tt_metal::distributed::AddProgramToMeshWorkload(mesh_workload, std::move(*program_ptr), device_range);
+        mesh_workload.add_program(device_range, std::move(*program_ptr));
         tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device_ptr->mesh_command_queue(), mesh_workload, false);
     }
 

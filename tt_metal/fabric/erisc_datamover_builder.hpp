@@ -8,12 +8,14 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/hal.hpp>
+#include <tt-metalium/tt_align.hpp>
 
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <tt-metalium/fabric_edm_types.hpp>
 #include "fabric/fabric_edm_packet_header.hpp"
 #include <tt-metalium/edm_fabric_counters.hpp>
 #include <tt-metalium/routing_table_generator.hpp>  // for FabricNodeId
+#include <hostdevcommon/fabric_common.h>
 #include <unordered_map>
 #include <optional>
 #include <cstdint>
@@ -644,7 +646,6 @@ public:
     bool build_in_worker_connection_mode = false;
     size_t firmware_context_switch_interval = default_firmware_context_switch_interval;
     FabricEriscDatamoverContextSwitchType firmware_context_switch_type = default_firmware_context_switch_type;
-    bool enable_first_level_ack = false;
     bool fuse_receiver_flush_and_completion_ptr = true;
     FabricEriscDatamoverType fabric_edm_type = FabricEriscDatamoverType::Default;
     bool dateline_connection = false;

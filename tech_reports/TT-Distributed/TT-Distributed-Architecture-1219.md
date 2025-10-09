@@ -1174,13 +1174,13 @@ EnqueueWriteBuffer(device_0_cq_1_handle, mul_src_1, random_data_1);
 // Record that inputs were written
 EnqueueRecordEvent(device_0_cq_1_handle, device_0_write_event);
 // Wait until inputs were written
-EnqueueWaitForEvent(device_0_cq_0_handle, device_0_write_event);
+device_0_cq_0_handle.enqueue_wait_for_event(device_0_write_event);
 // Run compute
 EnqueueProgram(device_0_cq_0_handle, mul_program);
 // Record that compute was run and is completed
 EnqueueRecordEvent(device_0_cq_0_handle, device_0_compute_event);
 // Wait until compute has completed
-EnqueueWaitForEvent(device_0_cq_1_handle, device_0_compute_event);
+device_0_cq_1_handle.enqueue_wait_for_event(device_0_compute_event);
 // Read outputs
 EnqueueReadBuffer(device_0_cq_1_handle, mul_dst, mul_readback_data);
 
@@ -1630,13 +1630,13 @@ The functions listed below allow a MeshTrace to be captured, binarized and run/r
 // Maps to BeginTraceCapture
 void MeshDevice::begin_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id);
 
-// Maps to EndTraceCapture
+
 void MeshDevice::end_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id);
 
-// Maps to ReplayTrace
+
 void MeshDevice::replay_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id, bool blocking);
 
-// Maps to ReleaseTrace
+
 void MeshDevice::release_mesh_trace(const MeshTraceId& trace_id);
 
 // Get the underlying MeshTrace metadata corresponding to an ID.

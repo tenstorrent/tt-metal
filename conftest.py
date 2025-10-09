@@ -236,7 +236,14 @@ def model_location_generator(is_ci_v2_env):
     directory structure
     """
 
-    def model_location_generator_(model_version, model_subdir="", download_if_ci_v2=False, ci_v2_timeout_in_s=300):
+    def model_location_generator_(
+        model_version,
+        model_subdir="",
+        download_if_ci_v2=False,
+        ci_v2_timeout_in_s=300,
+        endpoint_prefix="http://large-file-cache.large-file-cache.svc.cluster.local//mldata/model_checkpoints/pytorch/huggingface",
+        download_dir_suffix="model_weights",
+    ):
         model_folder = Path("tt_dnn-models") / model_subdir
         internal_weka_path = Path("/mnt/MLPerf") / model_folder / model_version
         has_internal_weka = internal_weka_path.exists()
@@ -251,7 +258,10 @@ def model_location_generator(is_ci_v2_env):
                 not model_subdir
             ), f"model_subdir is set to {model_subdir}, but we don't support further levels of directories in the large file cache in CIv2"
             civ2_download_path = CIv2ModelDownloadUtils_.download_from_ci_v2_cache(
-                model_version, download_dir_suffix="model_weights", timeout_in_s=ci_v2_timeout_in_s
+                model_version,
+                download_dir_suffix=download_dir_suffix,
+                timeout_in_s=ci_v2_timeout_in_s,
+                endpoint_prefix=endpoint_prefix,
             )
             logger.info(f"For model location, using CIv2 large file cache: {civ2_download_path}")
             return civ2_download_path
@@ -960,53 +970,44 @@ def pytest_runtest_teardown(item, nextitem):
             reset_tensix(set(item.pci_ids))
 
 
-# This is overriding the timer setup hook from pytest-timeout
-# If --metal-timeout is passed, we define a new timeout method that spawns a timer process
-# At timeout, the process kills it's parent (the test process) and then itself
+def _metal_alarm_handler(signum, frame):
+    """Alarm handler for test timeouts; collects debug info then force-kills the process."""
+    try:
+        logger.warning("This test seems to have hung... Timing out test case")
+        run_debug_script()
+    except Exception as e:
+        logger.error(f"Failed to run debug script after timeout: {e}")
+    finally:
+        # Ensure the process is terminated even if debug collection fails
+        os.kill(os.getpid(), signal.SIGKILL)
+
+
+# This overrides the timer setup hook from pytest-timeout.
+# If --metal-timeout is passed or when using xdist, we arm a POSIX itimer.
+# On expiry, the alarm handler runs debug collection and kills the process.
 @pytest.hookimpl(tryfirst=True)
 def pytest_timeout_set_timer(item, settings):
     metal_timeout_enabled = item.config.getoption("--metal-timeout")
     using_xdist = int(os.getenv("PYTEST_XDIST_WORKER_COUNT", "0"))
 
     if metal_timeout_enabled is not None or using_xdist:
-        parent_pid = os.getpid()
-        logger.info(f"Metal timeout {settings.timeout} seconds {parent_pid} for {item.nodeid}")
+        current_pid = os.getpid()
+        logger.debug(f"Metal timeout {settings.timeout} seconds {current_pid} for {item.nodeid}")
 
-        def get_parent_status():
-            try:
-                parent = psutil.Process(parent_pid)
-            except:
-                return "already dead"
-            return parent.status()
+        # Install handler (idempotent is fine)
+        signal.signal(signal.SIGALRM, _metal_alarm_handler)
 
-        def run_timer(settings):
-            logger.info(f"Timer started for {item.nodeid}")
-            dead_status = ["zombie", "dead", "already dead"]
-            timeout = settings.timeout
-            parent_status = "running"
-            while parent_status not in dead_status and timeout > 0:
-                time.sleep(5)
-                timeout -= 5
-                parent_status = get_parent_status()
-            if parent_status != "already dead":
-                logger.warning(f"This test seems to have hung... Timing out test case")
-                # Run debug script before killing the test process
-                try:
-                    run_debug_script()
-                except Exception as e:
-                    logger.error(f"Failed to run debug script after timeout: {e}")
+        # Arm the REAL timer for this test
+        secs = float(settings.timeout)
+        signal.setitimer(signal.ITIMER_REAL, secs, 0.0)
 
-                os.kill(parent_pid, signal.SIGKILL)
-            logger.info(f"Killing timer")
-            os._exit(1)
-
+        # Provide a canceller for pytest-timeout
         def cancel():
-            logger.info(f"Cancelling timer")
-            metal_timer.terminate()
+            logger.debug("Cancelling timer")
+            # Disarm the timer
+            signal.setitimer(signal.ITIMER_REAL, 0.0, 0.0)
 
-        metal_timer = multiprocess.Process(target=run_timer, args=(settings,), daemon=True)
         item.cancel_timeout = cancel
-        metal_timer.start()
     return True
 
 
@@ -1030,7 +1031,7 @@ def run_debug_script():
         )
         return
 
-    debug_script_path = os.path.join(os.getenv("TT_METAL_HOME", "."), "scripts", "debugging_scripts", "tt-triage.py")
+    debug_script_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tools", "tt-triage.py")
 
     if not os.path.exists(debug_script_path):
         logger.warning(f"Debug script not found at {debug_script_path}. Skipping debug collection.")
@@ -1042,7 +1043,7 @@ def run_debug_script():
         extra_env = {
             "LD_LIBRARY_PATH": None,
         }
-        debug_result = run_process_and_get_result(f"python {debug_script_path} --active_cores", extra_env)
+        debug_result = run_process_and_get_result(f"python {debug_script_path} --active-cores", extra_env)
 
         logger.info(f"Debug script status: {debug_result.returncode}")
         if debug_result.stdout:

@@ -7,7 +7,6 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/command_queue.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/distributed.hpp>
@@ -305,12 +304,13 @@ void matmul_multicore_reuse(
             };
 
             std::vector<uint32_t> writer_args = {
-                (std::uint32_t)dst_dram_buffer->address(),                                  // out_buffer_addr
-                (std::uint32_t)output_idx_x * per_core_N + output_idx_y * per_core_M * Nt,  // out_tensor_start_tile_id
-                (std::uint32_t)1,                                                           // out_tensor_stride_w
-                (std::uint32_t)Nt,                                                          // out_tensor_stride_h
-                (std::uint32_t)out_subblock_w,       // out_tensor_next_subblock_stride_w
-                (std::uint32_t)out_subblock_h * Nt,  // out_tensor_next_subblock_stride_h
+                (std::uint32_t)dst_dram_buffer->address(),  // out_buffer_addr
+                ((std::uint32_t)output_idx_x * per_core_N) +
+                    (output_idx_y * per_core_M * Nt),  // out_tensor_start_tile_id
+                (std::uint32_t)1,                      // out_tensor_stride_w
+                (std::uint32_t)Nt,                     // out_tensor_stride_h
+                (std::uint32_t)out_subblock_w,         // out_tensor_next_subblock_stride_w
+                (std::uint32_t)out_subblock_h * Nt,    // out_tensor_next_subblock_stride_h
 
                 (std::uint32_t)out_subblock_w,                     // out_subblock_w
                 (std::uint32_t)out_subblock_h,                     // out_subblock_h
@@ -334,7 +334,7 @@ void matmul_multicore_reuse(
     // Non-blocking uploads allow overlapping host setup with device transfers
     distributed::EnqueueWriteMeshBuffer(cq, src0_dram_buffer, a, false);
     distributed::EnqueueWriteMeshBuffer(cq, src1_dram_buffer, b, false);
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, false);
     // Blocking read from shard {0,0} waits for completion and populates 'output'
     distributed::EnqueueReadMeshBuffer(cq, output, dst_dram_buffer, true);

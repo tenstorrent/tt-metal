@@ -186,7 +186,7 @@ int main(int argc, char** argv) {
         tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
         uint32_t cb_src1_index = 1;
-        uint32_t cb_src1_addr = cb_src0_addr + cb_tiles * single_tile_size;
+        uint32_t cb_src1_addr = cb_src0_addr + (cb_tiles * single_tile_size);
         tt_metal::CircularBufferConfig cb_src1_config =
             tt_metal::CircularBufferConfig(cb_tiles * single_tile_size, {{cb_src1_index, tt::DataFormat::Float16_b}})
                 .set_page_size(cb_src1_index, single_tile_size);
@@ -240,8 +240,7 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         log_info(LogTest, "Num tests {}", num_tests);
         auto mesh_workload = tt_metal::distributed::MeshWorkload();
-        tt_metal::distributed::AddProgramToMeshWorkload(
-            mesh_workload, std::move(program), tt::tt_metal::distributed::MeshCoordinateRange{{0, 0}, {0, 0}});
+        mesh_workload.add_program(tt::tt_metal::distributed::MeshCoordinateRange{{0, 0}, {0, 0}}, std::move(program));
 
         for (uint32_t i = 0; i < num_tests; ++i) {
             auto t_begin = std::chrono::steady_clock::now();

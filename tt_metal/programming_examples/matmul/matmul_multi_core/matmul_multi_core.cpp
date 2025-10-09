@@ -7,7 +7,6 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/tilize_utils.hpp>
-#include <tt-metalium/command_queue.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -259,7 +258,7 @@ void matmul_multi_core(
     // returns, the output vector is fully populated).
     distributed::EnqueueWriteMeshBuffer(cq, src0_dram_buffer, a, false);
     distributed::EnqueueWriteMeshBuffer(cq, src1_dram_buffer, b, false);
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, false);
     // Blocking read waits for completion before returning and resizes 'output' as needed
     distributed::EnqueueReadMeshBuffer(cq, output, dst_dram_buffer, true);
