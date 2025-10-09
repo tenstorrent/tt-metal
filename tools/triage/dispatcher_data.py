@@ -22,10 +22,12 @@ from ttexalens.firmware import ELF
 from ttexalens.parse_elf import mem_access
 from ttexalens.context import Context
 from triage import TTTriageError, combined_field, collection_serializer, triage_field, hex_serializer
+from run_checks import run as get_run_checks
+from run_checks import RunChecks
 
 script_config = ScriptConfig(
     data_provider=True,
-    depends=["inspector_data", "elfs_cache"],
+    depends=["inspector_data", "elfs_cache", "run_checks"],
 )
 
 
@@ -51,7 +53,7 @@ class DispatcherCoreData:
 
 
 class DispatcherData:
-    def __init__(self, inspector_data: InspectorData, context: Context, elfs_cache: ElfsCache):
+    def __init__(self, inspector_data: InspectorData, context: Context, elfs_cache: ElfsCache, run_checks: RunChecks):
         self.inspector_data = inspector_data
         self.programs = inspector_data.getPrograms().programs
         if self.programs is None or len(self.programs) == 0:
@@ -67,9 +69,29 @@ class DispatcherData:
 
         # Get the firmware paths from Inspector RPC build environment instead of relative paths
         # This ensures correct firmware paths for all devices and build configs
+        # Prefill cache from no-arg RPC (ok if this fails - we'll fall back)
         try:
-            device_id = 0
-            self._build_env_cache[device_id] = inspector_data.getBuildEnv(deviceId=device_id).buildInfo
+            all_build_envs = inspector_data.getAllBuildEnvs().buildEnvs
+            for build_env in all_build_envs:
+                self._build_env_cache[build_env.deviceId] = build_env.buildInfo
+        except Exception as e:
+            pass
+
+        # Get the device ID from run_checks or inspector_data
+        try:
+            device_id = None
+            if run_checks and getattr(run_checks, "devices", None):
+                device_id = run_checks.devices[0]._id
+            if device_id is None:
+                in_use_devices = inspector_data.getDevicesInUse().deviceIds
+                if in_use_devices:
+                    device_id = in_use_devices[0]
+            if device_id is None:
+                raise TTTriageError("No device ID found")
+
+            if device_id not in self._build_env_cache:
+                self._build_env_cache[device_id] = inspector_data.getBuildEnv(deviceId=device_id).buildInfo
+            # Use build_env for initial firmware paths
             brisc_elf_path = os.path.join(self._build_env_cache[device_id].firmwarePath, "brisc", "brisc.elf")
             idle_erisc_elf_path = os.path.join(
                 self._build_env_cache[device_id].firmwarePath, "idle_erisc", "idle_erisc.elf"
@@ -344,7 +366,8 @@ class DispatcherData:
 def run(args, context: Context):
     inspector_data = get_inspector_data(args, context)
     elfs_cache = get_elfs_cache(args, context)
-    return DispatcherData(inspector_data, context, elfs_cache)
+    run_checks = get_run_checks(args, context)
+    return DispatcherData(inspector_data, context, elfs_cache, run_checks)
 
 
 if __name__ == "__main__":

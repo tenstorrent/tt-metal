@@ -75,6 +75,11 @@ struct BuildEnvData {
     fwCompileHash @2 :UInt64; # Hash of the firmware compilation settings
 }
 
+struct BuildEnvPerDevice {
+    deviceId @0 :UInt64;
+    buildInfo @1 :BuildEnvData;
+}
+
 interface Inspector {
     # Get programs currently alive
     getPrograms @0 () -> (programs :List(ProgramData));
@@ -96,4 +101,6 @@ interface Inspector {
     # This replaces the old approach of constructing relative paths,
     # providing correct firmware locations for each device
     getBuildEnv @5 (deviceId :UInt64) -> (buildInfo :BuildEnvData);
+
+    getAllBuildEnvs @6 () -> (buildEnvs :List(BuildEnvPerDevice));
 }
