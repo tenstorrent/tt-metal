@@ -4,11 +4,11 @@
 
 #pragma once
 
-#include "autograd/module_base.hpp"
 #include "autograd/tensor.hpp"
 #include "modules/dropout_module.hpp"
 #include "modules/layer_norm_module.hpp"
 #include "modules/linear_module.hpp"
+#include "modules/module_base.hpp"
 #include "modules/multi_head_attention.hpp"
 
 namespace ttml::modules {
@@ -21,7 +21,7 @@ struct BertBlockConfig {
     float layer_norm_eps{1e-12F};
 };
 
-class BertMLP : public autograd::ModuleBase {
+class BertMLP : public ModuleBase {
 private:
     std::shared_ptr<LinearLayer> m_dense;
     std::shared_ptr<LinearLayer> m_output;
@@ -33,7 +33,7 @@ public:
     [[nodiscard]] autograd::TensorPtr operator()(const autograd::TensorPtr& input) override;
 };
 
-class BertAttention : public autograd::ModuleBase {
+class BertAttention : public ModuleBase {
 private:
     std::shared_ptr<MultiHeadAttention> m_self_attention;
     std::shared_ptr<LinearLayer> m_output_dense;
@@ -46,7 +46,7 @@ public:
         const autograd::TensorPtr& input, const autograd::TensorPtr& attention_mask) override;
 };
 
-class BertBlock : public autograd::ModuleBase {
+class BertBlock : public ModuleBase {
 private:
     std::shared_ptr<BertAttention> m_attention;
     std::shared_ptr<LayerNormLayer> m_attention_norm;
