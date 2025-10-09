@@ -1235,14 +1235,16 @@ void DeviceProfiler::readRiscProfilerResults(
             // Just grab the device end index
             bufferEndIndex = control_buffer[riscEndIndex + kernel_profiler::DEVICE_BUFFER_END_INDEX_BR_ER];
         }
+
         tracy::RiscType riscType;
         if (rtoptions.get_profiler_trace_only() && CoreType == HalProgrammableCoreType::TENSIX) {
             riscType = tracy::RiscType::TENSIX_RISC_AGG;
         } else if (CoreType == HalProgrammableCoreType::TENSIX) {
-            riscType = static_cast<tracy::RiscType>(1 << riscEndIndex);
+            riscType = static_cast<tracy::RiscType>(riscEndIndex);
         } else {
             riscType = tracy::RiscType::ERISC;
         }
+
         if (bufferEndIndex > 0) {
             uint32_t bufferRiscShift = (riscEndIndex * PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC) + startIndex;
             if (data_source == ProfilerDataBufferSource::L1) {
@@ -1258,7 +1260,7 @@ void DeviceProfiler::readRiscProfilerResults(
                     device_id,
                     worker_core.x,
                     worker_core.y,
-                    enchantum::to_string(static_cast<tracy::RiscType>(1 << riscEndIndex)),
+                    enchantum::to_string(static_cast<tracy::RiscType>(riscEndIndex)),
                     bufferEndIndex);
                 TracyMessageC(warningMsg.c_str(), warningMsg.size(), tracy::Color::Tomato3);
                 log_warning(tt::LogMetal, "{}", warningMsg);
