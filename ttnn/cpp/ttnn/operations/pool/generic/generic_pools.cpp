@@ -29,7 +29,7 @@ namespace operations::pool {
 // dilation which is set to (1,1) for avg pool and count_include_pad and divisor_override which have no effect on
 // maxpool.
 
-static std::variant<Tensor, MaxPoolWithIndicesResult> pool2d_invoke(
+static std::vector<Tensor> pool2d_invoke(
     const Tensor& input_tensor,
     Pool2DType pool_type,
     uint32_t batch_size,
@@ -346,14 +346,14 @@ static std::variant<Tensor, MaxPoolWithIndicesResult> pool2d_invoke(
             output_tensors.size() == 2,
             "Expected two output tensors when return_indices is true, but got {}.",
             output_tensors.size());
-        return MaxPoolWithIndicesResult{std::move(output_tensors[0]), std::move(output_tensors[1])};
+        return output_tensors;
     } else {
         TT_FATAL(output_tensors.size() == 1, "Expected a single output tensor when return_indices is false.");
-        return std::move(output_tensors[0]);
+        return output_tensors;
     }
 }
 
-std::variant<Tensor, MaxPoolWithIndicesResult> MaxPool2DOp::invoke(
+std::vector<Tensor> MaxPool2DOp::invoke(
     const Tensor& input_tensor,
     uint32_t batch_size,
     uint32_t input_h,
@@ -439,7 +439,7 @@ Tensor AvgPool2DOp::invoke(
         output_layout);
 
     // Average pool always returns just the tensor, never indices
-    return std::get<Tensor>(result);
+    return result.at(0);
 }
 
 }  // namespace operations::pool

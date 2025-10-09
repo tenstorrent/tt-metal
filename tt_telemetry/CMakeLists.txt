@@ -13,7 +13,14 @@ CPMAddPackage(
 )
 
 # Fetch websocketpp using CPM
-CPMAddPackage(NAME websocketpp GITHUB_REPOSITORY zaphoyd/websocketpp GIT_TAG 0.8.2 DOWNLOAD_ONLY YES)
+CPMAddPackage(
+    NAME websocketpp
+    GITHUB_REPOSITORY zaphoyd/websocketpp
+    GIT_TAG 0.8.2
+    DOWNLOAD_ONLY YES
+    PATCHES
+        websocketpp_cpp_cleanup.patch
+)
 
 # Create interface library for websocketpp
 if(websocketpp_ADDED)

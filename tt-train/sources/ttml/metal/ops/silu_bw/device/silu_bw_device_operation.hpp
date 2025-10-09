@@ -13,10 +13,10 @@
 namespace ttml::metal::ops::silu_bw::device {
 
 struct SiLUBackwardDeviceOperation {
-    using operation_attributes_t = operation_attributes_t;
-    using tensor_args_t = tensor_args_t;
-    using spec_return_value_t = spec_return_value_t;
-    using tensor_return_value_t = tensor_return_value_t;
+    using operation_attributes_t = ttml::metal::ops::silu_bw::device::operation_attributes_t;
+    using tensor_args_t = ttml::metal::ops::silu_bw::device::tensor_args_t;
+    using spec_return_value_t = ttml::metal::ops::silu_bw::device::spec_return_value_t;
+    using tensor_return_value_t = ttml::metal::ops::silu_bw::device::tensor_return_value_t;
     using program_factory_t = std::variant<SiLUBackwardProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);

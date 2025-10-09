@@ -589,6 +589,7 @@ void ElfFile::Impl::XIPify() {
             }
 
             unsigned kind = PCREL;
+            // NOLINTBEGIN(bugprone-switch-missing-default-case)
             switch (type) {
                 case R_RISCV_LO12_I:
                 case R_RISCV_LO12_S: kind = ABS; [[fallthrough]];
@@ -637,20 +638,21 @@ void ElfFile::Impl::XIPify() {
                 } break;
 
                 case R_RISCV_JAL:
-                    if (is_from_text != is_to_text) {
-                        TT_THROW("{}: segment-crossing R_RISCV_JAL relocation found at {}", path_, reloc.r_offset);
-                    }
-                    break;
-
                 case R_RISCV_CALL:
                 case R_RISCV_CALL_PLT:
-                    TT_THROW("{}: R_RISCV_CALL_PLT relocation found at {}", path_, reloc.r_offset);
+                    if (is_from_text != is_to_text) {
+                        TT_THROW(
+                            "{}: segment-crossing R_RISCV_(JAL|CALL|CALL_PLT) relocation found at {}",
+                            path_,
+                            reloc.r_offset);
+                    }
                     break;
 
                 case R_RISCV_32_PCREL:
                     TT_THROW("{}: R_RISCV_32_PCREL relocation found at {}", path_, reloc.r_offset);
                     break;
             }
+            // NOLINTEND(bugprone-switch-missing-default-case)
         }
 
         // Combine hi/lo relocs

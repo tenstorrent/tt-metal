@@ -140,7 +140,7 @@ def test_linear_with_core_grid(
 @pytest.mark.parametrize("m_size", [32, 64])
 @pytest.mark.parametrize("k_size", [1024])
 @pytest.mark.parametrize("n_size", [1024])
-@pytest.mark.parametrize("activation", [None, "relu", "silu"])
+@pytest.mark.parametrize("activation", [None, "relu", "silu", "gelu", "relu6"])
 def test_wide_linear_with_argument_for_core_grid_set_to_device_grid(
     device, batch_size, m_size, k_size, n_size, activation
 ):
@@ -151,8 +151,12 @@ def test_wide_linear_with_argument_for_core_grid_set_to_device_grid(
     torch_output_tensor = torch_input_tensor_a @ torch_input_tensor_b
     if activation == "relu":
         torch_output_tensor = torch.relu(torch_output_tensor)
+    elif activation == "relu6":
+        torch_output_tensor = torch.nn.functional.relu6(torch_output_tensor)
     elif activation == "silu":
         torch_output_tensor = torch.nn.functional.silu(torch_output_tensor)
+    elif activation == "gelu":
+        torch_output_tensor = torch.nn.functional.gelu(torch_output_tensor)
 
     input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
     input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)

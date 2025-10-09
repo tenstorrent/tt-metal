@@ -57,6 +57,12 @@ def create_parser() -> argparse.ArgumentParser:
         type=int,
         help="Teacher-forcing prompt length in tokens (from reference file). Defaults to half+1 if omitted.",
     )
+    p.add_argument(
+        "--early_print_first_user",
+        action="store_true",
+        default=False,
+        help="Print generated tokens for the first user token as they are produced, instead of waiting until the end.",
+    )
     return p
 
 
@@ -110,6 +116,7 @@ def run_demo(
     token_accuracy: bool = False,
     reference_file: str | Path | None = None,
     tf_prompt_len: int | None = None,
+    early_print_first_user: bool = True,
 ) -> dict:
     """Programmatic entrypoint for the DeepSeek-V3 demo.
 
@@ -195,6 +202,7 @@ def run_demo(
             prompts,
             max_new_tokens=max_new_tokens,
             teacher_forcing=token_acc,
+            early_print_first_user=early_print_first_user,
         )
         result = {"tokens": generations[0], "text": None}
         if gen.tokenizer is not None:
@@ -228,15 +236,17 @@ def main() -> None:
         token_accuracy=bool(args.token_accuracy),
         reference_file=args.reference_file,
         tf_prompt_len=args.tf_prompt_len,
+        early_print_first_user=args.early_print_first_user,
     )
 
-    print("\n===== Generated =====\n")
-    if result.get("text") is not None:
-        print(result["text"])  # type: ignore
-    else:
-        print("[random-weights mode] token IDs:")
-        print(result["tokens"])  # type: ignore
-    print("\n=====================\n")
+    if not args.early_print_first_user:
+        print("\n===== Generated =====\n")
+        if result.get("text") is not None:
+            print(result["text"])  # type: ignore
+        else:
+            print("[random-weights mode] token IDs:")
+            print(result["tokens"])  # type: ignore
+        print("\n=====================\n")
 
 
 if __name__ == "__main__":

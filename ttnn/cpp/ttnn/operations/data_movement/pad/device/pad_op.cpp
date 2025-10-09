@@ -6,6 +6,8 @@
 #include "pad_op.hpp"
 #include "pad_program_factory.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/operations/full/device/full_device_operation.hpp"
+#include "ttnn/operations/creation.hpp"
 
 using namespace tt::tt_metal;
 namespace ttnn::operations::data_movement {
@@ -47,12 +49,14 @@ void Pad::validate_with_output_tensors(
         TT_FATAL((this->output_padded_shape[3] % TILE_WIDTH == 0), "Can only pad tilized tensor with full tiles");
         TT_FATAL(
             input_tensor.dtype() == DataType::FLOAT32 || input_tensor.dtype() == DataType::BFLOAT16 ||
-                input_tensor.dtype() == DataType::INT32 || input_tensor.dtype() == DataType::UINT32,
+                input_tensor.dtype() == DataType::INT32 || input_tensor.dtype() == DataType::UINT32 ||
+                input_tensor.dtype() == DataType::UINT16,
             "Cannot pad tilized tensor with specified format");
     } else if (input_tensor.layout() == Layout::ROW_MAJOR) {
         TT_FATAL(
             input_tensor.dtype() == DataType::FLOAT32 || input_tensor.dtype() == DataType::BFLOAT16 ||
-                input_tensor.dtype() == DataType::INT32 || input_tensor.dtype() == DataType::UINT32,
+                input_tensor.dtype() == DataType::INT32 || input_tensor.dtype() == DataType::UINT32 ||
+                input_tensor.dtype() == DataType::UINT16,
             "Cannot pad RM tensor with specified format");
     }
 
@@ -139,10 +143,15 @@ operation::ProgramWithCallbacks Pad::create_program(
             }
         }
     } else if (input_tensor.layout() == Layout::TILE) {
-        if (this->use_multicore) {
-            log_warning(
-                tt::LogType::LogOp, "TILE layout does not have multicore implementation yet. Falling back to 1 core.");
+        if (this->use_multicore && input_tensor.dtype() == DataType::BFLOAT16 &&
+            !(input_tensor.memory_config().buffer_type() == BufferType::L1)) {
+            return detail::pad_tile_multicore(
+                input_tensor, output_tensor, this->output_padded_shape, this->input_tensor_start, this->pad_value);
         }
+        log_warning(
+            tt::LogType::LogOp,
+            "Only bfloat16 and non-L1 tiled tensors are currently supported for multicore tiled pad. Falling back to 1 "
+            "core. #29295");
         return detail::pad_tile(
             input_tensor, output_tensor, this->output_padded_shape, this->input_tensor_start, this->pad_value);
     } else {

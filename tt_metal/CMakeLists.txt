@@ -31,6 +31,7 @@ add_custom_target(
 )
 
 # Globbing non-build files is acceptable for now because devs don't generate packages.
+# TODO: maybe a bad idea in the age of clang-tidy checks
 file(GLOB_RECURSE api api/*)
 target_sources(
     tt_metal

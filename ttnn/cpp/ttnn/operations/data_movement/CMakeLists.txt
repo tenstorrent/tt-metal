@@ -53,6 +53,7 @@ target_sources(
             tilize_with_val_padding/device/tilize_with_val_padding_op.hpp
             transpose/transpose.hpp
             untilize/untilize.hpp
+            untilize_with_unpadding/untilize_with_unpadding.hpp
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}

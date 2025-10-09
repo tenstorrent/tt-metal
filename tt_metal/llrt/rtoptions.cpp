@@ -37,7 +37,7 @@ constexpr auto TT_METAL_KERNEL_PATH_ENV_VAR = "TT_METAL_KERNEL_PATH";
 constexpr auto TT_METAL_CACHE_ENV_VAR = "TT_METAL_CACHE";
 // Used for demonstration purposes and will be removed in the future.
 // Env variable to override the core grid configuration
-static const char* TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE_ENV_VAR = "TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE";
+constexpr auto TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE_ENV_VAR = "TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE";
 // ============================================================================
 // ENVIRONMENT VARIABLE MAPPING TABLE
 // ============================================================================
@@ -175,11 +175,166 @@ RunTimeOptions::RunTimeOptions() {
 
     InitializeFromEnvVars();
     
+    null_kernels = (std::getenv("TT_METAL_NULL_KERNELS") != nullptr);
+
+    kernels_early_return = (std::getenv("TT_METAL_KERNELS_EARLY_RETURN") != nullptr);
+
+    this->clear_l1 = false;
+    const char* clear_l1_enabled_str = std::getenv("TT_METAL_CLEAR_L1");
+    if (clear_l1_enabled_str != nullptr && clear_l1_enabled_str[0] == '1') {
+        this->clear_l1 = true;
+    }
+
+    this->clear_dram = false;
+    const char* clear_dram_enabled_str = std::getenv("TT_METAL_CLEAR_DRAM");
+    if (clear_dram_enabled_str != nullptr && clear_dram_enabled_str[0] == '1') {
+        this->clear_dram = true;
+    }
+
+    const char* skip_eth_cores_with_retrain_str = std::getenv("TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN");
+    if (skip_eth_cores_with_retrain_str != nullptr) {
+        if (skip_eth_cores_with_retrain_str[0] == '0') {
+            skip_eth_cores_with_retrain = false;
+        }
+        if (skip_eth_cores_with_retrain_str[0] == '1') {
+            skip_eth_cores_with_retrain = true;
+        }
+    }
+
+    const char* riscv_debug_info_enabled_str = std::getenv("TT_METAL_RISCV_DEBUG_INFO");
+    bool enable_riscv_debug_info = get_inspector_enabled();
+    if (riscv_debug_info_enabled_str != nullptr) {
+        enable_riscv_debug_info = true;
+        if (strcmp(riscv_debug_info_enabled_str, "0") == 0) {
+            enable_riscv_debug_info = false;
+        }
+    }
+    set_riscv_debug_info_enabled(enable_riscv_debug_info);
+
+    const char* validate_kernel_binaries = std::getenv("TT_METAL_VALIDATE_PROGRAM_BINARIES");
+    set_validate_kernel_binaries(validate_kernel_binaries != nullptr && validate_kernel_binaries[0] == '1');
+
+    const char* num_cqs = getenv("TT_METAL_GTEST_NUM_HW_CQS");
+    if (num_cqs != nullptr) {
+        try {
+            set_num_hw_cqs(std::stoi(num_cqs));
+        } catch (const std::invalid_argument& ia) {
+            TT_THROW("Invalid TT_METAL_GTEST_NUM_HW_CQS: {}", num_cqs);
+        }
+    }
+
+    using_slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr;
+
+    const char* dispatch_data_collection_str = std::getenv("TT_METAL_DISPATCH_DATA_COLLECTION");
+    if (dispatch_data_collection_str != nullptr) {
+        enable_dispatch_data_collection = true;
+    }
+
+    if (getenv("TT_METAL_GTEST_ETH_DISPATCH")) {
+        this->dispatch_core_type = tt_metal::DispatchCoreType::ETH;
+    }
+
+    if (getenv("TT_METAL_SKIP_LOADING_FW")) {
+        this->skip_loading_fw = true;
+    }
+
+    if (getenv("TT_METAL_SKIP_DELETING_BUILT_CACHE")) {
+        this->skip_deleting_built_cache = true;
+    }
+
+    if (getenv("TT_METAL_ENABLE_HW_CACHE_INVALIDATION")) {
+        this->enable_hw_cache_invalidation = true;
+    }
+
+    // Parse RELIABILITY_MODE: "strict" or "relaxed"
+    if (const char* reliability_mode_str = getenv("RELIABILITY_MODE"); reliability_mode_str != nullptr) {
+        std::string mode(reliability_mode_str);
+        if (mode == "relaxed") {
+            reliability_mode = tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE;
+        } else if (mode == "strict") {
+            reliability_mode = tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
+        }
+    }
+
+    // Enable mock cluster if TT_METAL_MOCK is set to a descriptor path
+    // This is used for initializing UMD without any hardware using a mock cluster descriptor
+    if (const char* mock_path = std::getenv("TT_METAL_MOCK_CLUSTER_DESC_PATH")) {
+        this->mock_cluster_desc_path = std::string(mock_path);
+        this->runtime_target_device_ = tt::TargetDevice::Mock;
+    }
+
+    // Enable simulator if TT_METAL_SIMULATOR is set to a simulator path
+    // This must be set after the mock cluster path is set to have the correct TargetDevice
+    if (std::getenv("TT_METAL_SIMULATOR")) {
+        this->simulator_path = std::getenv("TT_METAL_SIMULATOR");
+        this->runtime_target_device_ = tt::TargetDevice::Simulator;
+    }
+
+    if (auto str = getenv("TT_METAL_ENABLE_ERISC_IRAM")) {
+        bool disabled = strcmp(str, "0") == 0;
+        this->erisc_iram_enabled = !disabled;
+        this->erisc_iram_enabled_env_var = !disabled;
+    }
+    this->fast_dispatch = (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr);
+
+    if (getenv("TT_METAL_DISABLE_RELAXED_MEM_ORDERING")) {
+        this->disable_relaxed_memory_ordering = true;
+    }
+
+    if (getenv("TT_METAL_ENABLE_GATHERING")) {
+        this->enable_gathering = true;
+    }
+
+    const char* arc_debug_enabled_str = std::getenv("TT_METAL_ARC_DEBUG_BUFFER_SIZE");
+    if (arc_debug_enabled_str != nullptr) {
+        sscanf(arc_debug_enabled_str, "%u", &arc_debug_buffer_size);
+    }
+
+    const char* disable_dma_ops_str = std::getenv("TT_METAL_DISABLE_DMA_OPS");
+    if (disable_dma_ops_str != nullptr) {
+        if (disable_dma_ops_str[0] == '1') {
+            this->disable_dma_ops = true;
+        }
+    }
+
+    if (getenv("TT_METAL_FABRIC_TELEMETRY")) {
+        enable_fabric_telemetry = true;
+    }
+
+    if (getenv("TT_METAL_FORCE_REINIT")) {
+        force_context_reinit = true;
+    }
+
+    if (getenv("TT_METAL_FABRIC_BLACKHOLE_TWO_ERISC")) {
+        this->enable_2_erisc_mode_with_fabric = true;
+    }
+
+    if (getenv("TT_METAL_MULTI_AERISC")) {
+        log_info(tt::LogMetal, "Enabling experimental multi-erisc mode");
+        this->enable_2_erisc_mode = true;
+    }
+
+    if (getenv("TT_METAL_LOG_KERNELS_COMPILE_COMMANDS")) {
+        this->log_kernels_compilation_commands = true;
+    }
+
+    if (getenv("TT_METAL_USE_MGD_2_0")) {
+        this->use_mesh_graph_descriptor_2_0 = true;
+    }
+
+    const char* timeout_duration_for_operations_value = std::getenv("TT_METAL_OPERATION_TIMEOUT_SECONDS");
+    float timeout_duration_for_operations =
+        timeout_duration_for_operations_value ? std::stof(timeout_duration_for_operations_value) : 0.f;
+    this->timeout_duration_for_operations = std::chrono::duration<float>(timeout_duration_for_operations);
+}
+
+void RunTimeOptions::set_root_dir(const std::string& root_dir) {
+    std::call_once(g_root_once, [&] { g_root_dir = root_dir; });
 }
 
 const std::string& RunTimeOptions::get_root_dir() const {
     if (!this->is_root_dir_specified()) {
-        TT_THROW("Env var {} is not set.", TT_METAL_HOME_ENV_VAR);
+        TT_THROW("Root Directory is unspecified.");
     }
 
     return root_dir;

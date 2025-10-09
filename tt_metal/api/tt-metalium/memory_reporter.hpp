@@ -14,7 +14,6 @@
 #include <vector>
 
 #include <tt-metalium/allocator.hpp>
-#include <tt-metalium/allocator_types.hpp>
 
 namespace tt {
 namespace tt_metal {
