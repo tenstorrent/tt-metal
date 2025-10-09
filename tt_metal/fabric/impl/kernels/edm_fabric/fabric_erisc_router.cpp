@@ -2479,6 +2479,7 @@ void kernel_main() {
     const auto downstream_edm_vc0_worker_registration_id = get_arg_val<uint32_t>(arg_idx++);
     const auto downstream_edm_vc0_worker_location_info_address = get_arg_val<uint32_t>(arg_idx++);
     // unused - to be deleted
+    [[maybe_unused]]
     const auto downstream_vc0_noc_interface_buffer_index_local_addr = 0;
 
     // downstream EDM semaphore location
@@ -2490,6 +2491,7 @@ void kernel_main() {
     const auto downstream_edm_vc1_worker_registration_id = get_arg_val<uint32_t>(arg_idx++);
     const auto downstream_edm_vc1_worker_location_info_address = get_arg_val<uint32_t>(arg_idx++);
     // unused now - to be deleted
+    [[maybe_unused]]
     const auto downstream_vc1_noc_interface_buffer_index_local_addr = 0;
 
     const auto my_sem_for_teardown_from_edm_0 = get_arg_val<uint32_t>(arg_idx++);
