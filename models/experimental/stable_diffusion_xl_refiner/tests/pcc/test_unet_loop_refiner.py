@@ -228,7 +228,7 @@ def run_refiner_unet_inference(ttnn_device, is_ci_env, prompts, num_inference_st
         "stabilityai/stable-diffusion-xl-refiner-1.0",
         torch_dtype=torch.float32,
         use_safetensors=True,
-        local_files_only=is_ci_env,
+        local_files_only=False,  # was: is_ci_env
     )
 
     tt_unet = TtUNet2DConditionModel(

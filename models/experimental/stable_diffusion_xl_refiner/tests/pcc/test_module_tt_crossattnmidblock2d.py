@@ -32,7 +32,7 @@ def test_crossattnmid_refiner(
         torch_dtype=torch.float32,
         use_safetensors=True,
         subfolder="unet",
-        local_files_only=is_ci_env,
+        local_files_only=False,  # was: is_ci_env
     )
     unet.eval()
     state_dict = unet.state_dict()
