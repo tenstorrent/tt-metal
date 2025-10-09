@@ -82,6 +82,11 @@
     _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                             \
         ckernel::sfpu::calculate_##OP<SfpuType::TYPE, APPROXIMATE>, DST_IDX, (int)VectorMode::MODE)
 
+// For ops without extra uint parameters with type and iteration
+#define SFPU_UNARY_NO_PARAM_KERNEL_WITH_TYPE_AND_ITERATIONS(OP, TYPE, MODE, APPROXIMATE, DST_IDX, ITERATIONS) \
+    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                             \
+        ckernel::sfpu::FN<SfpuType::TYPE, APPROXIMATE, ITERATIONS>, DST_IDX, (int)VectorMode::MODE)
+
 // For ops where compute takes extra args
 #define SFPU_UNARY_PARAMS_KERNEL_EXTRA_ARGS(FN, MODE, APPROXIMATE, DST_IDX, PARAM0, PARAM1) \
     _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                      \
