@@ -172,7 +172,9 @@ void kernel_main() {
             noc_async_read_barrier();
             cb_push_back(cb_external, num_blocks_first_stage * num_tiles_scaler);
 
+            // ---------------------------------------------------------------------------
             // Handle the two-stage reduce
+            // ---------------------------------------------------------------------------
             if constexpr (use_two_stage_reduce) {
                 // Wait for the signal to read in the combined results from
                 // the first stage (from cores in our core column) are ready
