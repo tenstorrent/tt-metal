@@ -413,6 +413,7 @@ def run_conv_with_split(
     input_layout=ttnn.ROW_MAJOR_LAYOUT,
     enable_weights_double_buffer=False,
     enable_act_double_buffer=False,
+    config_tensors_in_dram=False,
 ):
     if hasattr(padding, "__len__"):
         if len(padding) == 2:
@@ -482,6 +483,7 @@ def run_conv_with_split(
         shard_layout=shard_layout if not auto_shard else None,
         enable_act_double_buffer=enable_act_double_buffer,
         enable_weights_double_buffer=enable_weights_double_buffer,
+        config_tensors_in_dram=config_tensors_in_dram,
     )
     compute_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
@@ -4388,6 +4390,7 @@ def test_conv2d_panoptic(
         shard_layout=shard_layout,
         enable_act_double_buffer=True,
         enable_weights_double_buffer=True if shard_layout == BS else False,
+        config_tensors_in_dram=True,
 
     )
     signpost(header="conv2d_end.")
@@ -4484,6 +4487,7 @@ def test_conv_dram_panoptic(
         ),
         enable_act_double_buffer=True,
         enable_weights_double_buffer=True if shard_layout == BS else False,
+        config_tensors_in_dram=True,
     )
     signpost(header=f"dram_slice_conv_{slice_type}_{num_slices}_slices_end.")
 
@@ -4566,6 +4570,7 @@ def test_conv2d_ch_split_dram_panoptic(
             input_layout=ttnn.TILE_LAYOUT if output_dtype == ttnn.bfloat8_b else None,
             enable_act_double_buffer=act_db,
             enable_weights_double_buffer=w_db,
+            config_tensors_in_dram=True,
         )
     else:
         pytest.skip("Not a split conv test, skipping.")
