@@ -302,14 +302,16 @@ install(
         COMPONENT tar
 )
 
-# FIXME(17578): figure out what bits we actually need to ship and omit the rest
-install(
-    DIRECTORY
-        runtime/sfpi
-    DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/runtime
-    USE_SOURCE_PERMISSIONS
-    COMPONENT jit-build
-)
+if(NOT TT_USE_SYSTEM_SFPI)
+    # FIXME(17578): figure out what bits we actually need to ship and omit the rest
+    install(
+        DIRECTORY
+            runtime/sfpi
+        DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/runtime
+        USE_SOURCE_PERMISSIONS
+        COMPONENT jit-build
+    )
+endif()
 
 # Custom clean target for `built` folder for when new kernel changes are pulled
 add_custom_target(
