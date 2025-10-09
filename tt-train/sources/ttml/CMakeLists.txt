@@ -142,6 +142,8 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/adamw.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/optimizer_base.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/optimizer_base.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/remote_optimizer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/remote_optimizer.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/sgd.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/sgd.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/no_op.cpp
@@ -268,9 +270,9 @@ if(NOT TARGET TT::Metalium)
         "$ENV{TT_METAL_HOME}/tt_metal"
         "$ENV{TT_METAL_HOME}/tt_metal/third_party/umd"
         "$ENV{TT_METAL_HOME}/tt_metal/third_party/tracy/public"
-        "$ENV{TT_METAL_HOME}/tt_metal/hw/inc/wormhole"
-        "$ENV{TT_METAL_HOME}/tt_metal/hw/inc/wormhole/wormhole_b0_defines"
-        "$ENV{TT_METAL_HOME}/tt_metal/hw/inc/"
+        "$ENV{TT_METAL_HOME}/tt_metal/hw/inc/tt-1xx/wormhole"
+        "$ENV{TT_METAL_HOME}/tt_metal/hw/inc/tt-1xx/wormhole/wormhole_b0_defines"
+        "$ENV{TT_METAL_HOME}/tt_metal/hw/inc/tt-1xx/blackhole"
         "$ENV{TT_METAL_HOME}/tt_metal/api/"
         "$ENV{TT_METAL_HOME}/tt_metal/third_party/umd/device/api"
         "$ENV{TT_METAL_HOME}/tt_metal/hostdevcommon/api"
@@ -474,7 +476,7 @@ set(TTML_SRC_NANOBIND
 )
 nanobind_add_module(
     _ttml
-    STABLE_ABI NB_SHARED LTO
+    STABLE_ABI NB_STATIC
     ${TTML_SRC_NANOBIND}
 )
 target_link_libraries(
@@ -486,12 +488,6 @@ target_link_libraries(
         Python3::Python
         ttml
 )
-target_include_directories(_ttml PUBLIC ${CMAKE_SOURCE_DIR})
-target_include_directories(_ttml PUBLIC ${CMAKE_SOURCE_DIR}/ttnn)
-target_include_directories(_ttml PUBLIC ${CMAKE_SOURCE_DIR}/ttnn/api)
-target_include_directories(_ttml PUBLIC ${CMAKE_SOURCE_DIR}/tt_metal/api)
-target_include_directories(_ttml PUBLIC ${CMAKE_SOURCE_DIR}/tt_metal/third_party/umd/device/api)
-target_include_directories(_ttml PUBLIC ${CMAKE_SOURCE_DIR}/tt_stl)
 target_include_directories(_ttml PUBLIC ${PROJECT_SOURCE_DIR})
 install(
     TARGETS
