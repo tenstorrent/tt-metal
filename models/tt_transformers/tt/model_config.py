@@ -427,11 +427,19 @@ class ModelArgs:
     }
 
     LOCAL_HF_PARAMS = {
+        "Llama-3.1-8B-Instruct": "models/tt_transformers/model_params/Llama-3.1-8B-Instruct",
+        "Llama-3.1-70B-Instruct": "models/tt_transformers/model_params/Llama-3.1-70B-Instruct",
+        "Llama-3.2-1B-Instruct": "models/tt_transformers/model_params/Llama-3.2-1B-Instruct",
+        "Llama-3.2-3B-Instruct": "models/tt_transformers/model_params/Llama-3.2-3B-Instruct",
+        "Llama-3.2-11B-Instruct": "models/tt_transformers/model_params/Llama-3.2-11B-Vision-Instruct",
+        "Llama-3.2-11B-Vision-Instruct": "models/tt_transformers/model_params/Llama-3.2-11B-Vision-Instruct",
+        "Llama-3.2-90B-Instruct": "models/tt_transformers/model_params/Llama-3.2-90B-Vision-Instruct",
+        "Llama-3.2-90B-Vision-Instruct": "models/tt_transformers/model_params/Llama-3.2-90B-Vision-Instruct",
         "Mistral-7B-Instruct-v0.3": "models/tt_transformers/model_params/Mistral-7B-Instruct-v0.3",
-        # "Mistral-Small-3.1-24B-Instruct-2503": "models/tt_transformers/model_params/Mistral-Small-3.1-24B-Instruct-2503",
         "Qwen2.5-VL-3B-Instruct": "models/tt_transformers/model_params/Qwen2.5-VL-3B-Instruct",
         "Qwen2.5-VL-32B-Instruct": "models/tt_transformers/model_params/Qwen2.5-VL-32B-Instruct",
         "Qwen2.5-VL-72B-Instruct": "models/tt_transformers/model_params/Qwen2.5-VL-72B-Instruct",
+        # "Mistral-Small-3.1-24B-Instruct-2503": "models/tt_transformers/model_params/Mistral-Small-3.1-24B-Instruct-2503",
     }
 
     MAX_QKV_MM_SEQ_LEN = 2048
@@ -550,19 +558,8 @@ class ModelArgs:
             self._set_model_params(self.CKPT_DIR)
         else:  # With Dummy weights, set the params from the local copy inside the model folder. This is required for CI pipeline that doesn't mount the external folders.
             self.checkpoint_type = CheckpointType.Meta
-            if "3.2-1B" in self.CKPT_DIR:
-                local_params = "LLAMA3_2_1B_PARAMS"
-            elif "3.2-3B" in self.CKPT_DIR:
-                local_params = "LLAMA3_2_3B_PARAMS"
-            elif "3.1-8B" in self.CKPT_DIR:
-                local_params = "LLAMA3_1_8B_PARAMS"
-            elif "3.2-11B" in self.CKPT_DIR:
-                local_params = "LLAMA3_2_11B_PARAMS"
-            elif "3.1-70B" in self.CKPT_DIR:
-                local_params = "LLAMA3_1_70B_PARAMS"
-            elif "3.2-90B" in self.CKPT_DIR:
-                local_params = "LLAMA3_2_90B_PARAMS"
-            else:
+            local_params = self.__get_llama_local_params_name(self.CKPT_DIR)
+            if local_params is None:
                 raise ValueError(
                     f"No local params found for {self.CKPT_DIR}, dummy weights are not supported for this model"
                 )
@@ -1312,6 +1309,24 @@ class ModelArgs:
             )
             logger.info(f"LM head grid: {self.lm_head_core_grid}")
 
+    @staticmethod
+    def __get_llama_local_params_name(model_name):
+        if "3.2-1B" in model_name:
+            local_params = "LLAMA3_2_1B_PARAMS"
+        elif "3.2-3B" in model_name:
+            local_params = "LLAMA3_2_3B_PARAMS"
+        elif "3.1-8B" in model_name:
+            local_params = "LLAMA3_1_8B_PARAMS"
+        elif "3.2-11B" in model_name:
+            local_params = "LLAMA3_2_11B_PARAMS"
+        elif "3.1-70B" in model_name:
+            local_params = "LLAMA3_1_70B_PARAMS"
+        elif "3.2-90B" in model_name:
+            local_params = "LLAMA3_2_90B_PARAMS"
+        else:
+            local_params = None
+        return local_params
+
     def get_xqkv_prefill_mem_cfg(self, seq_len):
         return ttnn.create_sharded_memory_config(
             (((self.n_kv_heads // self.cluster_shape[1]) * seq_len // (8 * 8)), self.head_dim),
@@ -1553,13 +1568,34 @@ class ModelArgs:
         # Configurable MLP activation type
         self.mlp_activation_type = self._get_hidden_activation_type(text_config)
 
-        self._set_vision_params(config)
+        if "vision_config" in config:
+            self._set_vision_params(config["vision_config"])
+        else:
+            # Initialize vision params to defaults for non-vision models
+            self.vision_chunk_size = 0
+            self.image_size = 0
+            self.vision_max_num_chunks = 0
+            self.vision_num_cross_attention_layers = 0
+            self.vision_dim = 0
+            self.vision_image_size = 0
+            self.vision_rope_theta = 10000.0
+            self.image_token_index = 0
+            self.vision_mlp_ratio = 0
+            self.vision_hidden_dim = 0
+            self.vision_attn_n_heads = 0
+            self.vision_head_dim = 0
+            self.vision_n_layers = 0
+            self.vision_patch_size = 0
+            self.vision_in_channels = 0
+            self.vision_dropout = 0.0
+
         self.is_multimodal = "vision_config" in config or self.is_vision()
 
-        # Vision params (Meta-specific)
-        self.vision_chunk_size = config.get("vision_chunk_size", 896)
-        self.vision_max_num_chunks = config.get("vision_max_num_chunks", 4)
-        self.vision_num_cross_attention_layers = config.get("vision_num_cross_attention_layers", -1)
+        # Vision params (Meta-specific) - only set if not already set by vision_config
+        if "vision_config" not in config:
+            self.vision_chunk_size = config.get("vision_chunk_size", 0)
+            self.vision_max_num_chunks = config.get("vision_max_num_chunks", 0)
+            self.vision_num_cross_attention_layers = config.get("vision_num_cross_attention_layers", 0)
 
         # Vision constants
         self.vision_dim = 1280
@@ -1715,7 +1751,11 @@ class ModelArgs:
                     self.LOCAL_HF_PARAMS[self.model_name], trust_remote_code=self.trust_remote_code_hf
                 )
             else:
-                self.hf_config = AutoConfig.from_pretrained(self.CKPT_DIR, trust_remote_code=self.trust_remote_code_hf)
+                self.hf_config = AutoConfig.from_pretrained(
+                    self.CKPT_DIR,
+                    trust_remote_code=self.trust_remote_code_hf,
+                    local_files_only=os.getenv("CI") == "true",
+                )
 
             config = self.hf_config.to_dict()
 
@@ -1761,6 +1801,9 @@ class ModelArgs:
     def is_vision(self):
         return self.vision_chunk_size > 0
 
+    def is_llama_vision(self):
+        return ("llama" in self.CKPT_DIR.lower()) and ("vision" in self.CKPT_DIR.lower())
+
     def get_state_dict_prefix(self, module_name, layer_num, is_vision=False):
         if self.is_vision() and self.model_name.startswith("Mistral") and "Small-3.1-24B" not in self.model_name:
             text_prefix = self.state_dict_text_prefix
@@ -1805,18 +1848,36 @@ class ModelArgs:
     def get_model_config(self):
         return self.model_config
 
+    def get_hf_model_cls(self):
+        from transformers import AutoModelForCausalLM, AutoModelForImageTextToText, AutoModelForVision2Seq
+
+        if not self.is_multimodal:
+            return AutoModelForCausalLM
+
+        for model_cls in (AutoModelForVision2Seq, AutoModelForImageTextToText):
+            if type(self.hf_config) in model_cls._model_mapping:
+                return model_cls
+
+        raise ValueError(f"Unknown model for config {type(self.hf_config)}")
+
     # TODO Update function for large models: For 1 layer tests we only want to load 1 checkpoint file, instead of all.
     def load_state_dict(self):
         if self.dummy_weights:
             if self.checkpoint_type == CheckpointType.HuggingFace:
-                from transformers import AutoConfig, AutoModelForCausalLM
+                from transformers import AutoConfig
 
                 config = AutoConfig.from_pretrained(
                     self.LOCAL_HF_PARAMS[self.model_name], trust_remote_code=self.trust_remote_code_hf
                 )
-                config.num_layers = self.n_layers
-                config.num_hidden_layers = self.n_layers
-                model = AutoModelForCausalLM.from_config(config, trust_remote_code=self.trust_remote_code_hf)
+                if hasattr(config, "text_config"):
+                    config.text_config.num_layers = self.n_layers
+                    config.text_config.num_hidden_layers = self.n_layers
+                else:
+                    config.num_layers = self.n_layers
+                    config.num_hidden_layers = self.n_layers
+
+                model_cls = self.get_hf_model_cls()
+                model = model_cls.from_config(config, trust_remote_code=self.trust_remote_code_hf)
                 state_dict = model.state_dict()
             else:
                 reference_model = Transformer(self)
@@ -2361,23 +2422,27 @@ class ModelArgs:
             # Special case Qwen2.5-VL models until they are fully integrated into a HF release
             if "Qwen/Qwen2.5-VL" in self.model_name:
                 from transformers.models.qwen2_5_vl.configuration_qwen2_5_vl import Qwen2_5_VLConfig as AutoConfig
-                from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import (
-                    Qwen2_5_VLForConditionalGeneration as AutoModelForCausalLM,
-                )
             elif "Mistral-Small-3.1-24B-Instruct-2503" in self.model_name:
-                from transformers import Mistral3ForConditionalGeneration as AutoModelForCausalLM
+                pass
             else:
-                from transformers import AutoConfig, AutoModelForCausalLM
+                from transformers import AutoConfig
 
             # HF is much faster at loading from a checkpoint than generating from config
             # so use that by preference unless we don't have a checkpoint
             if self.dummy_weights and not load_checkpoint:
                 config = AutoConfig.from_pretrained(
-                    self.LOCAL_HF_PARAMS[self.model_name], trust_remote_code=self.trust_remote_code_hf
+                    self.LOCAL_HF_PARAMS[self.model_name],
+                    trust_remote_code=self.trust_remote_code_hf,
+                    local_files_only=os.getenv("CI") == "true",
                 )
-                config.num_layers = self.n_layers
-                config.num_hidden_layers = self.n_layers
-                model = AutoModelForCausalLM.from_config(config, trust_remote_code=self.trust_remote_code_hf)
+                if hasattr(config, "text_config"):
+                    config.text_config.num_layers = self.n_layers
+                    config.text_config.num_hidden_layers = self.n_layers
+                else:
+                    config.num_layers = self.n_layers
+                    config.num_hidden_layers = self.n_layers
+                model_cls = self.get_hf_model_cls()
+                model = model_cls.from_config(config, trust_remote_code=self.trust_remote_code_hf)
             else:
                 if "gemma-3" in self.model_name:
                     from transformers import Gemma3ForConditionalGeneration
@@ -2385,17 +2450,22 @@ class ModelArgs:
                     model = Gemma3ForConditionalGeneration.from_pretrained(self.CKPT_DIR, device_map="auto")
                     model = model
                 else:
+                    model_cls = self.get_hf_model_cls()
                     if self.cache_hf_flag and self.cached_hf_model is None:
-                        model = AutoModelForCausalLM.from_pretrained(
-                            self.CKPT_DIR, trust_remote_code=self.trust_remote_code_hf
+                        model = model_cls.from_pretrained(
+                            self.CKPT_DIR,
+                            local_files_only=os.getenv("CI") == "true",
+                            trust_remote_code=self.trust_remote_code_hf,
                         )
                         self.cached_hf_model = model
                     elif self.cache_hf_flag and self.cached_hf_model is not None:
                         model = self.cached_hf_model
                     else:
                         # No caching - load fresh each time
-                        model = AutoModelForCausalLM.from_pretrained(
-                            self.CKPT_DIR, trust_remote_code=self.trust_remote_code_hf
+                        model = model_cls.from_pretrained(
+                            self.CKPT_DIR,
+                            local_files_only=os.getenv("CI") == "true",
+                            trust_remote_code=self.trust_remote_code_hf,
                         )
                 # HACK: Assume that we want the language model layers only
                 if hasattr(model, "language_model"):
@@ -2481,7 +2551,6 @@ class ModelArgs:
 
     def reference_vision_model(self):
         model = self.reference_vision_transformer(wrap=False)
-        layer = model.vision_tower.vision_model
         if "Mistral-Small-3.1-24B-Instruct-2503" in self.model_name:
             # Mistral-Small-3.1-24B-Instruct-2503 has a different structure
             layer = model.vision_tower

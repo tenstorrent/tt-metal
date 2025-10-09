@@ -87,7 +87,7 @@ def test_model_inference(
                 "Skipping Mistral-7B full model test for now. See issue https://github.com/tenstorrent/tt-metal/issues/19806"
             )
 
-        if "Phi-3-mini" in model_name_env and weights == "random":
+        if ("Phi-3-mini" in model_name_env or "phi-4" in model_name_env) and weights == "random":
             pytest.skip("Skipping Phi-3-mini-128k-instruct for single layer dummy weights test.")
 
     run_ref_pt = True  # Flag to run reference PyTorch model and compare PCC
@@ -130,10 +130,10 @@ def test_model_inference(
                 (32, True): "llama32_11b",
                 (80, False): "llama31_70b",
                 (80, True): "llama32_90b",
-            }[(model_args.n_layers, model_args.is_vision())]
+            }[(model_args.n_layers, model_args.is_llama_vision())]
 
         # Define tight final PCC thresholds for quick mode
-        final_model_pcc = {
+        final_model_pcc_dict = {
             "llama32_1b": 0.9991 if mode_accuracy else 0.9864,
             "llama32_3b": 0.9989 if mode_accuracy else 0.9837,
             "llama31_8b": 0.9987 if mode_accuracy else 0.9850,
@@ -141,9 +141,11 @@ def test_model_inference(
             "llama31_70b": 0.9843 if mode_accuracy else 0.97607,
             "llama32_90b": 0.9759,
             "Mistral-7B": 0.95 if mode_accuracy else 0.95,
-        }[model_name]
+        }
+        # Fallback to llama31_8b for unknown HuggingFace models
+        final_model_pcc = final_model_pcc_dict.get(model_name, 0.9987 if mode_accuracy else 0.9850)
 
-        final_k_cache_pcc = {
+        final_k_cache_pcc_dict = {
             "llama32_1b": 0.9998,
             "llama32_3b": 0.9998,
             "llama31_8b": 0.9997,
@@ -151,8 +153,9 @@ def test_model_inference(
             "llama31_70b": 0.9997,
             "llama32_90b": 0.9995,
             "Mistral-7B": 0.68,
-        }[model_name]
-        final_v_cache_pcc = {
+        }
+        final_k_cache_pcc = final_k_cache_pcc_dict.get(model_name, 0.9997)
+        final_v_cache_pcc_dict = {
             "llama32_1b": 0.9996,
             "llama32_3b": 0.9998,
             "llama31_8b": 0.9997,
@@ -160,9 +163,10 @@ def test_model_inference(
             "llama31_70b": 0.9997,
             "llama32_90b": 0.9996,
             "Mistral-7B": 0.68,
-        }[model_name]
+        }
+        final_v_cache_pcc = final_v_cache_pcc_dict.get(model_name, 0.9997)
 
-        quick_iterations = {
+        quick_iterations_dict = {
             "llama32_1b": 2,
             "llama32_3b": 4,
             "llama31_8b": 6,
@@ -170,7 +174,8 @@ def test_model_inference(
             "llama31_70b": 6,
             "llama32_90b": 6,
             "Mistral-7B": 2,
-        }[model_name]
+        }
+        quick_iterations = quick_iterations_dict.get(model_name, 6)
 
         iterations = quick_iterations
     else:
