@@ -21,6 +21,7 @@ def create_tt_model(
     state_dict=None,
     num_layers=None,
     mesh_config=None,
+    create_kv_cache=True,
 ):
     """
     GPT-OSS version of create_tt_model that matches tt_transformers interface
@@ -32,7 +33,7 @@ def create_tt_model(
 
     # Use provided mesh_config or create optimal MeshConfig for the mesh shape
     if mesh_config is None:
-        mesh_config = MeshConfig(mesh_device.shape, tp=mesh_device.shape[1])
+        mesh_config = MeshConfig(mesh_device.shape, tp=mesh_device.shape[1], ep=mesh_device.shape[0])
 
     # Create GPT-OSS ModelArgs
     gpt_oss_model_args = ModelArgs(
@@ -54,17 +55,17 @@ def create_tt_model(
         mesh_device=mesh_device,
         dtype=dtype,
         state_dict=state_dict,
-        weight_cache_path=gpt_oss_model_args.weight_cache_path(dtype),
+        weight_cache_path=str(gpt_oss_model_args.weight_cache_path(dtype)),
         paged_attention_config=paged_attention_config,
         mesh_config=mesh_config,  # Pass explicit MeshConfig
+        create_kv_cache=create_kv_cache,
     )
 
     # Extract tt_kv_cache like tt_transformers does
-    # For GPT-OSS, layer_past points to the actual KV cache tensors [k_cache, v_cache]
-    # KV cache is needed regardless of paged attention for proper generation
     tt_kv_cache = []
-    for layer in model.layers:
-        # GPT-OSS uses self_attn instead of attention
-        tt_kv_cache.append(layer.self_attn.layer_past)
+    if create_kv_cache:
+        for layer in model.layers:
+            # GPT-OSS uses self_attn instead of attention
+            tt_kv_cache.append(layer.self_attn.layer_past)
 
     return gpt_oss_model_args, model, tt_kv_cache, state_dict

@@ -39,6 +39,7 @@ class Model:
         tensor_cache_path=None,
         paged_attention_config=None,
         mesh_config=None,
+        create_kv_cache=True,
     ):
         """
         Initialize GPT-OSS model
@@ -84,6 +85,7 @@ class Model:
                 tensor_cache_path=get_cache_file_name(tensor_cache_path, f"model.layers.{layer_idx}"),
                 paged_attention_config=paged_attention_config,
                 mesh_config=self.mesh_config,
+                create_kv_cache=create_kv_cache,
             )
             for layer_idx in range(hf_config.num_hidden_layers)
         ]
@@ -120,6 +122,7 @@ class Model:
         attention_class=None,
         rope_setup_class=None,
         mesh_config=None,
+        create_kv_cache=True,
     ):
         """Constructor compatible with tt_transformers.Transformer interface"""
         # Create a dummy CCL manager for GPT-OSS
@@ -138,6 +141,7 @@ class Model:
             tensor_cache_path=weight_cache_path,
             paged_attention_config=paged_attention_config,
             mesh_config=mesh_config,
+            create_kv_cache=create_kv_cache,
         )
 
         # Add tt_transformers compatible attributes

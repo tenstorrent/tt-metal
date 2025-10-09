@@ -170,7 +170,7 @@ class ModelArgs:
             cache_path = cache_dir / f"tensor_cache_{dtype_str}_{self.mesh_device.shape}"
 
         cache_path.mkdir(parents=True, exist_ok=True)
-        return str(cache_path)
+        return cache_path
 
     def get_model_config(self):
         """Return model configuration dict"""

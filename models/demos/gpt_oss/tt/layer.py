@@ -22,6 +22,7 @@ class DecoderLayer:
         tensor_cache_path=None,
         paged_attention_config=None,
         mesh_config=None,
+        create_kv_cache=True,
     ):
         self.input_layernorm = RMSNorm(
             mesh_device,
@@ -58,6 +59,7 @@ class DecoderLayer:
             tensor_cache_path=get_cache_file_name(tensor_cache_path, "self_attn"),
             paged_attention_config=paged_attention_config,
             mesh_config=mesh_config,
+            create_kv_cache=create_kv_cache,
         )
         self.mesh_device = mesh_device
 

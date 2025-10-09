@@ -24,6 +24,7 @@ class Attention:
         tensor_cache_path=None,
         paged_attention_config=None,
         mesh_config=None,
+        create_kv_cache=True,
     ):
         self.layer_idx = layer_idx
         self.use_sliding_window = self.layer_idx % 2 == 0
@@ -166,38 +167,9 @@ class Attention:
         # Store paged attention config for later use in operations
         self.paged_attention_config = paged_attention_config
 
-        if paged_attention_config:
-            cache_shape = [
-                paged_attention_config.max_num_blocks,
-                self.num_kv_heads,
-                paged_attention_config.block_size,
-                self.head_dim,
-            ]
-        else:
-            cache_shape = [1, self.num_kv_heads, MAX_SEQ_LEN, self.head_dim]
-        k_cache = ttnn.as_tensor(
-            torch.zeros(cache_shape),
-            device=mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat8_b,
-            mesh_mapper=self.mesh_config.sequence_parallel(mesh_device),
-            cache_file_name=get_cache_file_name(tensor_cache_path, f"k_cache_{cache_shape}"),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        v_cache = ttnn.as_tensor(
-            torch.zeros(cache_shape),
-            device=mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat8_b,
-            mesh_mapper=self.mesh_config.sequence_parallel(mesh_device),
-            cache_file_name=get_cache_file_name(tensor_cache_path, f"v_cache_{cache_shape}"),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        self.kv_cache = [k_cache, v_cache]
-
-        # Set layer_past to reference the actual KV cache for tt_transformers compatibility
-        self.layer_past = self.kv_cache
-
+        # The cache shape will be different for paged vs non-paged attention
+        if create_kv_cache:
+            self.init_kv_cache(mesh_device, tensor_cache_path)
         grid_size = mesh_device.compute_with_storage_grid_size()
         # Fix: k/v tensors should be [1, num_local_kv_heads, 1, head_dim] for decode, not [1, 1, num_local_kv_heads, head_dim]
         kv_shape = (1, self.num_local_kv_heads, 1, self.head_dim)
@@ -226,6 +198,43 @@ class Attention:
             fp32_dest_acc_en=False,
             packer_l1_acc=False,
         )
+
+    def init_kv_cache(self, mesh_device, tensor_cache_path):
+        """Initialize KV cache for both paged and non-paged attention (like tt_transformers)"""
+        if self.paged_attention_config:
+            # Paged attention cache shape: [max_num_blocks, num_kv_heads, block_size, head_dim]
+            cache_shape = [
+                self.paged_attention_config.max_num_blocks,
+                self.num_kv_heads,
+                self.paged_attention_config.block_size,
+                self.head_dim,
+            ]
+        else:
+            # Standard cache shape: [batch_size, num_kv_heads, max_seq_len, head_dim]
+            cache_shape = [1, self.num_kv_heads, MAX_SEQ_LEN, self.head_dim]
+
+        k_cache = ttnn.as_tensor(
+            torch.zeros(cache_shape),
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat8_b,
+            mesh_mapper=self.mesh_config.sequence_parallel(mesh_device),
+            cache_file_name=get_cache_file_name(tensor_cache_path, f"k_cache_{cache_shape}"),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        v_cache = ttnn.as_tensor(
+            torch.zeros(cache_shape),
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat8_b,
+            mesh_mapper=self.mesh_config.sequence_parallel(mesh_device),
+            cache_file_name=get_cache_file_name(tensor_cache_path, f"v_cache_{cache_shape}"),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        self.kv_cache = [k_cache, v_cache]
+
+        # Set layer_past to reference the actual KV cache for tt_transformers compatibility
+        self.layer_past = self.kv_cache
 
     def __call__(self, x: ttnn.Tensor, mask, rope_mats, position_idx=None, page_table=None, kv_cache=None):
         batch_size, seq_len, hidden_size = x.shape
