@@ -48,27 +48,27 @@ if(TT_USE_SYSTEM_SFPI)
 else()
     # download a toolchain
     set(SFPI_TXZ_MD5_NAME "SFPI_${SFPI_arch}_${SFPI_dist}_txz_md5")
-    if(NOT DEFINED ${SFPI_TXZ_MD5_NAME})
+    if(DEFINED ${SFPI_TXZ_MD5_NAME})
+        include(FetchContent)
+        FetchContent_Declare(
+            sfpi
+            URL
+                "${SFPI_url}/${SFPI_version}/sfpi_${SFPI_version}_${SFPI_arch}_${SFPI_dist}.txz"
+            URL_HASH "MD5=${${SFPI_TXZ_MD5_NAME}}"
+            SOURCE_DIR
+            "${SFPI_ROOT}"
+        )
+        FetchContent_MakeAvailable(sfpi)
+    else()
         # FIXME:This is where we'd clone sfpi and build it locally
         # something like (untested meta-code)
-        # git clone -b ${SFPI_version} -depth 1 ${SFPI_repo} ${LOCAL_PATH}/sfpi
+        # git clone -b ${SFPI_version} -depth 1 ${SFPI_repo} ${LOCAL_PATH}
         # cd ${LOCAL_PATH}
         # scripts/build.sh --test-tt
         # tar -C build cf - sfpi | tar -C ${SFPI_ROOT} xf -
         # add some caching so we don't do this every time!
         message(FATAL_ERROR "SFPI tarball for ${SFPI_arch} ${SFPI_dist} is not available")
     endif()
-
-    include(FetchContent)
-    FetchContent_Declare(
-        sfpi
-        URL
-            "${SFPI_url}/${SFPI_version}/sfpi_${SFPI_version}_${SFPI_arch}_${SFPI_dist}.txz"
-        URL_HASH "MD5=${${SFPI_TXZ_MD5_NAME}}"
-        SOURCE_DIR
-        "${SFPI_ROOT}"
-    )
-    FetchContent_MakeAvailable(sfpi)
 
     # Check each executable is loadable, as the user might not have installed the dependencies
     # \tlibcsfml-window.so.2.2 => not found
