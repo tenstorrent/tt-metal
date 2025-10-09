@@ -3,7 +3,7 @@ This is the FeedForward submodule for vision block in Gemma-3-4b-it
 We have reused the TtLlamaImageFeedForward with few changes in CoreGrid and program_config configurations
 """
 
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -118,7 +118,7 @@ class TtGemmaImageFeedForward(LightweightModule):
                 dim=1,
                 multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
                 num_links=1,
-                topology=ttnn.Topology.Linear,
+                topology=ttnn.Topology.Ring,
                 barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
                 chunks_per_sync=10,
                 num_workers_per_link=2,

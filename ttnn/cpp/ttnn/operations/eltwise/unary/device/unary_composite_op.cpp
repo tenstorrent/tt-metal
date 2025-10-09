@@ -26,20 +26,6 @@
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 namespace ttnn::operations::unary {
 
-// cbrt(a) = pow(a,1/3) or (cbrt(a))**3 = a.
-//         = exp[ (1/3)*log[a] ]
-Tensor _cbrt(const Tensor& input_tensor, const std::optional<MemoryConfig>& output_mem_config) {
-    constexpr float scale = (float)(1.0 / 3.0);
-    Tensor t_ln_input = ttnn::log(
-        ttnn::abs(input_tensor, output_mem_config), true, output_mem_config);  // negative log is not useful here
-    Tensor t1 = ttnn::multiply(t_ln_input, scale, std::nullopt, output_mem_config);
-    t_ln_input.deallocate();
-    Tensor t2 = ttnn::exp(t1, false, output_mem_config);
-    t1.deallocate();
-    Tensor t3 = ttnn::multiply(t2, ttnn::sign(input_tensor, output_mem_config), std::nullopt, output_mem_config);
-    return t3;
-}
-
 // TODO: In future will uplift the op once the floor and tan has supported.
 // digamma support for the range of (1, inf)
 Tensor _digamma(const Tensor& input_a, const std::optional<MemoryConfig>& output_mem_config) {
@@ -544,7 +530,7 @@ Tensor _logit(const Tensor& input_a, float eps, const std::optional<MemoryConfig
         ttnn::lt(input_a, eps, std::nullopt, output_mem_config),
         eps,
         ttnn::where(ttnn::gt(input_a, t1m_eps, std::nullopt, output_mem_config), t1m_eps, input_a));
-    Tensor linput_m1 = ttnn::rsub(logit_input, 1.0, std::nullopt, output_mem_config);
+    Tensor linput_m1 = ttnn::rsub(logit_input, 1.0f, std::nullopt, output_mem_config);
     Tensor log_input =
         ttnn::multiply(logit_input, ttnn::reciprocal(linput_m1, output_mem_config), std::nullopt, output_mem_config);
     linput_m1.deallocate();
@@ -574,15 +560,6 @@ Tensor _logit(const Tensor& input_a, float eps, const std::optional<MemoryConfig
 // // tanhshrink(x) = x - tanh(x)
 Tensor _logical_not_(const Tensor& x, const std::optional<MemoryConfig>& output_mem_config) {
     return ttnn::logical_not(x, output_mem_config, x);
-}
-
-// rpow: y = k**(a) = exp( a**log(k) )
-Tensor _rpow(const Tensor& a, float k, const std::optional<MemoryConfig>& output_mem_config) {
-    TT_ASSERT(k > 0.0, "rpow cannot be calcualted for non-positive numbers");
-    float log_k = logf(k);
-
-    Tensor result = ttnn::multiply(a, log_k);
-    return ttnn::exp(result, false);
 }
 
 using HWFunctionT = std::function<Tensor(const Tensor& y, const std::optional<MemoryConfig>&)>;

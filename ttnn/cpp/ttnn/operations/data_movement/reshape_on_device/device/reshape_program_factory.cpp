@@ -20,7 +20,7 @@ operation::ProgramWithCallbacks reshape_tile_single_core(const Tensor& a, Tensor
     CoreRange core({0, 0}, {0, 0});
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
-    uint32_t single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
+    uint32_t single_tile_size = tt::tile_size(cb_data_format);
 
     tt::tt_metal::Buffer* src0_buffer = a.buffer();
 

@@ -18,7 +18,7 @@
 #include <type_traits>
 #include <utility>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "buffer.hpp"
 #include "buffer_types.hpp"
 #include "device.hpp"
@@ -71,7 +71,7 @@ void for_each_local(MeshDevice* mesh_device, const Container& container, Func&& 
 }
 // NOLINTEND(cppcoreguidelines-missing-std-forward)
 
-MeshCoordinate get_local_start_coord(MeshDevice* mesh_device, const MeshCoordinateRange& range) {
+[[maybe_unused]] MeshCoordinate get_local_start_coord(MeshDevice* mesh_device, const MeshCoordinateRange& range) {
     for (const auto& coord : range) {
         if (mesh_device->is_local(coord)) {
             return coord;
@@ -978,7 +978,7 @@ void FDMeshCommandQueue::capture_program_trace_on_subgrid(
         program_cmd_seq, sysmem_manager_for_trace, id_, dispatch_core_type, stall_first, stall_before_program);
     auto mesh_trace_md = MeshTraceStagingMetadata{
         sub_grid,
-        sub_grid.start_coord(),
+        local_start_coord,
         sysmem_manager_offset,
         sysmem_manager_for_trace.get_issue_queue_write_ptr(id_) - sysmem_manager_offset};
     ordered_mesh_trace_md_.push_back(mesh_trace_md);

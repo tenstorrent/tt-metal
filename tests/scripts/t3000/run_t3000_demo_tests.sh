@@ -245,7 +245,7 @@ run_t3000_mixtral_tests() {
   # pytest -n auto models/demos/t3000/mixtral8x7b/demo/demo_with_prefill.py --timeout=720 ; fail+=$?
   mixtral8x7=/mnt/MLPerf/huggingface/hub/models--mistralai--Mixtral-8x7B-v0.1/snapshots/fc7ac94680e38d7348cfa806e51218e6273104b0
 
-  CI=true HF_MODEL=$mixtral8x7 pytest -n auto models/tt_transformers/demo/simple_text_demo.py -k "not performance-ci-stress-1" --timeout=3600 ; fail+=$?
+  CI=true HF_MODEL=$mixtral8x7 pytest models/tt_transformers/demo/simple_text_demo.py -k "not performance-ci-stress-1" --timeout=3600 ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -264,7 +264,7 @@ run_t3000_resnet50_tests() {
   echo "LOG_METAL: Running run_t3000_resnet50_tests"
 
   # resnet50 8 chip demo test - 100 token generation with general weights (env flags set inside the test)
-  pytest -n auto models/demos/t3000/resnet50/demo/demo.py --timeout=720 ; fail+=$?
+  pytest -n auto models/demos/ttnn_resnet/tests/test_demo.py --timeout=720 ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)

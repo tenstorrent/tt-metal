@@ -42,8 +42,8 @@ def run_all_gather_impl(
     num_buffers_per_channel=None,
     allowed_pcc=1,
     skip_check=False,
-    all_gather_function=ttnn.experimental.all_gather_async,
     num_l1_banks=64,
+    all_gather_function=ttnn.experimental.all_gather_async,
 ):
     torch.manual_seed(0)
 
@@ -96,17 +96,32 @@ def run_all_gather_impl(
 
     ### Create persistent output buffers
     logger.info("Creating persistent buffers")
-    persistent_output_buffers = [
-        ttnn.from_torch(
-            torch.zeros(ag_output_shape),
-            device=mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=ag_input_dtype,
-            memory_config=mem_config_ag,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        )
-        for _ in range(num_iters)
-    ]
+    if use_persistent_buffers:
+        if enable_trace:
+            persistent_output_buffers = [
+                ttnn.from_torch(
+                    torch.zeros(ag_output_shape),
+                    device=mesh_device,
+                    layout=ttnn.TILE_LAYOUT,
+                    dtype=ag_input_dtype,
+                    memory_config=mem_config_ag,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                )
+            ]
+        else:
+            persistent_output_buffers = [
+                ttnn.from_torch(
+                    torch.zeros(ag_output_shape),
+                    device=mesh_device,
+                    layout=ttnn.TILE_LAYOUT,
+                    dtype=ag_input_dtype,
+                    memory_config=mem_config_ag,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                )
+                for _ in range(num_iters)
+            ]
+    else:
+        persistent_output_buffers = []
 
     logger.info("Done creating persistent buffers")
 
@@ -593,6 +608,11 @@ def test_all_gather_async_sharded_to_sharded(
             ttnn.BufferType.L1,
         ),
     ],
+    ids=[
+        "i2s_shape0",
+        "i2s_shape1",
+        "i2s_shape2",
+    ],
 )
 @pytest.mark.parametrize(
     "enable_trace,num_iters",
@@ -687,6 +707,11 @@ def test_all_gather_async_sharded_to_interleaved(
             ttnn.BufferType.L1,
         ),
     ],
+    ids=[
+        "i2s_shape0",
+        "i2s_shape1",
+        "i2s_shape2",
+    ],
 )
 @pytest.mark.parametrize(
     "enable_trace,num_iters",
@@ -742,4 +767,74 @@ def test_all_gather_async_interleaved_to_sharded(
         all_gather_topology=all_gather_topology,
         enable_trace=enable_trace,
         num_iters=num_iters,
+    )
+
+
+@skip_for_blackhole("Requires wormhole_b0 to run")
+@pytest.mark.parametrize("num_links", [1], ids=["1link"])
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+@pytest.mark.parametrize(
+    "ag_output_shape, dim, layout, ag_input_dtype",
+    [
+        # Gather on dim 0
+        ([1, 1, 8, 4096], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+    ],
+    ids=[
+        "multiprocess",
+    ],
+)
+@pytest.mark.parametrize(
+    "mem_config_input, mem_config_ag",
+    [
+        (
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+        )
+    ],
+)
+@pytest.mark.parametrize(
+    "enable_trace, num_iters",
+    [
+        (False, 3),
+    ],
+    ids=["check"],
+)
+@pytest.mark.parametrize(
+    "device_params, all_gather_topology",
+    [
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
+    ],
+    indirect=["device_params"],
+    ids=["fabric_linear"],
+)
+def test_all_gather_async_2x4(
+    mesh_device,
+    ag_output_shape,
+    dim,
+    num_links,
+    ag_input_dtype,
+    layout,
+    mem_config_input,
+    mem_config_ag,
+    enable_trace,
+    all_gather_topology,
+    num_iters,
+):
+    submesh_device = mesh_device.create_submesh(ttnn.MeshShape((1, 4)))
+    run_all_gather_impl(
+        submesh_device,
+        submesh_device.get_num_devices(),
+        ag_output_shape,
+        dim,
+        num_links,
+        ag_input_dtype,
+        layout,
+        mem_config_input,
+        mem_config_ag,
+        all_gather_topology=all_gather_topology,
+        enable_trace=enable_trace,
+        num_iters=num_iters,
+        use_barrier=True,
+        use_persistent_buffers=False,
+        cluster_axis=1,
     )

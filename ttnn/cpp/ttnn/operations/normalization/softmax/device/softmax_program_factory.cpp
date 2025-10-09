@@ -9,7 +9,6 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 #include <utility>
@@ -143,7 +142,7 @@ SoftmaxProgramFactoryGeneralWSmall::cached_program_t SoftmaxProgramFactoryGenera
     const auto core_y_offset = core_range.start_coord.y;
 
     for (uint32_t i = 0, tile_offset = 0; i < num_cores; i++) {
-        CoreCoord core = {i / core_h + core_x_offset, i % core_h + core_y_offset};
+        CoreCoord core = {(i / core_h) + core_x_offset, (i % core_h) + core_y_offset};
         uint32_t num_tiles_per_core;
         if (core_group_1.contains(core)) {
             num_tiles_per_core = num_tiles_per_core_group_1;
@@ -277,7 +276,7 @@ SoftmaxProgramFactoryGeneralWLarge::cached_program_t SoftmaxProgramFactoryGenera
     const auto core_y_offset = core_range.start_coord.y;
 
     for (uint32_t i = 0, tile_offset = 0; i < num_cores; i++) {
-        CoreCoord core = {i / core_h + core_x_offset, i % core_h + core_y_offset};
+        CoreCoord core = {(i / core_h) + core_x_offset, (i % core_h) + core_y_offset};
         uint32_t num_tiles_per_core;
         if (core_group_1.contains(core)) {
             num_tiles_per_core = num_tiles_per_core_group_1;
@@ -412,7 +411,7 @@ SoftmaxProgramFactoryGeneralHSmall::cached_program_t SoftmaxProgramFactoryGenera
     const auto core_y_offset = core_range.start_coord.y;
 
     for (uint32_t i = 0, tile_offset = 0; i < num_cores; i++) {
-        const CoreCoord core = {i / core_h + core_x_offset, i % core_h + core_y_offset};
+        const CoreCoord core = {(i / core_h) + core_x_offset, (i % core_h) + core_y_offset};
         uint32_t num_tiles_per_core;
         if (core_group_1.contains(core)) {
             num_tiles_per_core = num_tiles_per_core_group_1;
@@ -548,7 +547,7 @@ SoftmaxProgramFactoryGeneralHLarge::cached_program_t SoftmaxProgramFactoryGenera
     const auto core_y_offset = core_range.start_coord.y;
 
     for (uint32_t i = 0, tile_offset = 0; i < num_cores; i++) {
-        CoreCoord core = {i / core_h + core_x_offset, i % core_h + core_y_offset};
+        CoreCoord core = {(i / core_h) + core_x_offset, (i % core_h) + core_y_offset};
         uint32_t num_tiles_per_core;
         if (core_group_1.contains(core)) {
             num_tiles_per_core = num_tiles_per_core_group_1;
@@ -689,7 +688,7 @@ SoftmaxProgramFactoryGeneralCLarge::cached_program_t SoftmaxProgramFactoryGenera
     const auto core_y_offset = core_range.start_coord.y;
 
     for (uint32_t i = 0, tile_offset = 0; i < num_cores; i++) {
-        CoreCoord core = {i / core_h + core_x_offset, i % core_h + core_y_offset};
+        CoreCoord core = {(i / core_h) + core_x_offset, (i % core_h) + core_y_offset};
         uint32_t num_tiles_per_core;
         if (core_group_1.contains(core)) {
             num_tiles_per_core = num_tiles_per_core_group_1;
@@ -754,24 +753,24 @@ SoftmaxProgramFactoryAttentionOptimized::cached_program_t SoftmaxProgramFactoryA
 
     const tt::DataFormat in0_cb_data_format =
         tt::tt_metal::datatype_to_dataformat_converter(tensor_args.input_tensor.dtype());
-    const uint32_t in0_tile_size = tt::tt_metal::detail::TileSize(in0_cb_data_format);
+    const uint32_t in0_tile_size = tt::tile_size(in0_cb_data_format);
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), attributes.compute_kernel_config);
 
     constexpr tt::DataFormat scalar_cb_data_format = tt::DataFormat::Float16_b;
-    const uint32_t scalar_tile_size = tt::tt_metal::detail::TileSize(scalar_cb_data_format);
+    const uint32_t scalar_tile_size = tt::tile_size(scalar_cb_data_format);
 
     const tt::DataFormat out0_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
-    const uint32_t out0_tile_size = tt::tt_metal::detail::TileSize(out0_cb_data_format);
+    const uint32_t out0_tile_size = tt::tile_size(out0_cb_data_format);
 
     const tt::DataFormat mask_cb_data_format =
         tensor_args.mask.has_value() ? tt::tt_metal::datatype_to_dataformat_converter(tensor_args.mask.value().dtype())
                                      : tt::DataFormat::Float16_b;
-    const uint32_t mask_tile_size = tt::tt_metal::detail::TileSize(mask_cb_data_format);
+    const uint32_t mask_tile_size = tt::tile_size(mask_cb_data_format);
 
     const tt::DataFormat im_cb_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
-    const uint32_t im_tile_size = tt::tt_metal::detail::TileSize(im_cb_data_format);
+    const uint32_t im_tile_size = tt::tile_size(im_cb_data_format);
 
     uint32_t block_size =
         fp32_dest_acc_en ? tt::tt_metal::find_max_divisor(Wt, 4) : tt::tt_metal::find_max_divisor(Wt, 8);
@@ -1014,7 +1013,7 @@ SoftmaxProgramFactoryAttentionOptimized::cached_program_t SoftmaxProgramFactoryA
         uint32_t mask_curr_ht = curr_ht % mask_Ht;            // the start offset for causal mask
         uint32_t mask_offset = curr_row / Ht * mask_Ht * Wt;  // causal mask batch offset
         uint32_t mask_id = attributes.is_causal_mask
-                               ? (mask_curr_ht * Wt + mask_offset)
+                               ? ((mask_curr_ht * Wt) + mask_offset)
                                : (curr_row / Ht * Wt);  // causal mask start offset + causal mask batch offset
 
         if (attributes.is_causal_mask) {
@@ -1231,7 +1230,7 @@ void SoftmaxProgramFactoryAttentionOptimized::override_runtime_arguments(
         uint32_t mask_curr_ht = curr_ht % Wt;            // the start offset for causal mask
         uint32_t mask_offset = curr_row / Ht * Wt * Wt;  // causal mask batch offset
         uint32_t mask_id = attributes.is_causal_mask
-                               ? (mask_curr_ht * Wt + mask_offset)
+                               ? ((mask_curr_ht * Wt) + mask_offset)
                                : (curr_row / Ht * Wt);  // causal mask start offset + causal mask batch offset
 
         reader_kernel_args[0] = src_buffer_address;
@@ -1325,12 +1324,12 @@ SoftmaxShardedProgramFactoryAttentionOptimized::cached_program_t SoftmaxShardedP
     uint32_t num_subblocks_w = program_config.block_w / program_config.subblock_w;
 
     // single tile sizes
-    uint32_t im_tile_size = tt::tt_metal::detail::TileSize(im_cb_data_format);
-    uint32_t in0_tile_size = tt::tt_metal::detail::TileSize(in0_cb_data_format);
-    uint32_t out0_tile_size = tt::tt_metal::detail::TileSize(out0_cb_data_format);
-    uint32_t mask_tile_size = tt::tt_metal::detail::TileSize(mask_cb_data_format);
-    uint32_t scale_tile_size = tt::tt_metal::detail::TileSize(scale_cb_data_format);
-    uint32_t scalar_tile_size = tt::tt_metal::detail::TileSize(scalar_cb_data_format);
+    uint32_t im_tile_size = tt::tile_size(im_cb_data_format);
+    uint32_t in0_tile_size = tt::tile_size(in0_cb_data_format);
+    uint32_t out0_tile_size = tt::tile_size(out0_cb_data_format);
+    uint32_t mask_tile_size = tt::tile_size(mask_cb_data_format);
+    uint32_t scale_tile_size = tt::tile_size(scale_cb_data_format);
+    uint32_t scalar_tile_size = tt::tile_size(scalar_cb_data_format);
     // in out buffer
     auto src0_buffer = tensor_args.input_tensor.buffer();
     auto out0_buffer = output_tensor.buffer();

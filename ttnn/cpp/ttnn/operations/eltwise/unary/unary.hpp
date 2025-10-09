@@ -30,15 +30,6 @@ struct ExecuteUnaryWithFastAndApproximateMode {
 };
 
 template <UnaryOpType unary_op_type>
-struct ExecuteUnaryWithFastAndApproximateModeTrue {
-    static Tensor invoke(
-        const Tensor& input_tensor,
-        bool parameter = true,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
-};
-
-template <UnaryOpType unary_op_type>
 struct ExecuteUnaryWithVectorAndFastAndApproximateMode {
     static Tensor invoke(
         const Tensor& input_tensor,
@@ -318,6 +309,15 @@ struct Clamp {
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
 
+struct Rsub {
+    template <typename T>
+    static Tensor invoke(
+        const Tensor& input_tensor,
+        T param,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+};
+
 }  // namespace operations::unary
 
 // NOLINTBEGIN(bugprone-macro-parentheses)
@@ -330,12 +330,6 @@ struct Clamp {
     constexpr auto operation_name = ttnn::register_operation<                                   \
         "ttnn::" #operation_name,                                                               \
         ttnn::operations::unary::ExecuteUnaryWithFastAndApproximateMode<                        \
-            ttnn::operations::unary::UnaryOpType::operation_type>>();
-
-#define REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE_TRUE(operation_name, operation_type) \
-    constexpr auto operation_name = ttnn::register_operation<                                        \
-        "ttnn::" #operation_name,                                                                    \
-        ttnn::operations::unary::ExecuteUnaryWithFastAndApproximateModeTrue<                         \
             ttnn::operations::unary::UnaryOpType::operation_type>>();
 
 #define REGISTER_UNARY_OPERATION_WITH_VECTOR_AND_FAST_AND_APPROXIMATE_MODE(operation_name, operation_type) \
@@ -417,18 +411,17 @@ REGISTER_UNARY_OPERATION(frac, FRAC);
 REGISTER_UNARY_OPERATION(hardsigmoid, HARDSIGMOID);
 REGISTER_UNARY_OPERATION(hardswish, HARDSWISH);
 REGISTER_UNARY_OPERATION(softsign, SOFTSIGN);
+REGISTER_UNARY_OPERATION(cbrt, CBRT);
 
 // Unaries with fast_and_approximate_mode
 REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(exp, EXP);
 REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(erf, ERF);
 REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(erfc, ERFC);
 REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(gelu, GELU);
-
-// Unaries with fast_and_approximate_mode default true
-REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE_TRUE(log, LOG);
-REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE_TRUE(log10, LOG10);
-REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE_TRUE(log2, LOG2);
-REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE_TRUE(log1p, LOG1P);
+REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(log, LOG);
+REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(log10, LOG10);
+REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(log2, LOG2);
+REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(log1p, LOG1P);
 
 // Unaries with vector mode and fast and approximate mode
 REGISTER_UNARY_OPERATION_WITH_VECTOR_AND_FAST_AND_APPROXIMATE_MODE(sigmoid, SIGMOID);
@@ -446,6 +439,7 @@ REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(eq_unary, UNARY_EQ);
 REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(ge_unary, UNARY_GE);
 REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(le_unary, UNARY_LE);
 REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(celu, CELU);
+REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(rpow, RPOW);
 
 // Unaries with two float parameter
 REGISTER_UNARY_OPERATION_WITH_TWO_FLOAT_PARAMETER(threshold, THRESHOLD);
@@ -481,7 +475,7 @@ constexpr auto sigmoid_accurate =
     ttnn::register_operation<"ttnn::sigmoid_accurate", ttnn::operations::unary::Sigmoid_accurate>();
 constexpr auto log_sigmoid = ttnn::register_operation<"ttnn::log_sigmoid", ttnn::operations::unary::LogSigmoid>();
 constexpr auto unary_chain = ttnn::register_operation<"ttnn::unary_chain", ttnn::operations::unary::Unary_chain>();
-
+constexpr auto rsub_sfpu = ttnn::register_operation<"ttnn::rsub_sfpu", ttnn::operations::unary::Rsub>();
 constexpr auto add_sfpu = ttnn::register_operation<
     "ttnn::add_sfpu",
     ttnn::operations::unary::SymmetricBinop<ttnn::operations::unary::UnaryOpType::ADD_UNARY_SFPU>>();

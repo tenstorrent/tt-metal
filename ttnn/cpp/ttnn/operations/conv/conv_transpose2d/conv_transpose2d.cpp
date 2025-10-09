@@ -19,7 +19,6 @@ namespace ttnn {
 namespace operations::conv {
 
 using namespace tt;
-using sliding_window::ParallelConfig;
 using sliding_window::SlidingWindowConfig;
 
 namespace conv_transpose2d {
@@ -68,18 +67,18 @@ Result conv_transpose2d(
     // The Conv2d u_op is then called with stride = 1, padding = 0.
     // SlidingWindowConfig has a is_transpose flag that is set to true to indicate that the Conv2d u_op & Halo u_op is
     // being called for ConvTranspose2d.
-    uint32_t output_height =
-        (input_height - 1) * stride[0] - 2 * padding[0] + dilation[0] * (kernel_size[0] - 1) + output_padding[0] + 1;
-    uint32_t output_width =
-        (input_width - 1) * stride[1] - 2 * padding[1] + dilation[1] * (kernel_size[1] - 1) + output_padding[1] + 1;
+    uint32_t output_height = ((input_height - 1) * stride[0]) - (2 * padding[0]) +
+                             (dilation[0] * (kernel_size[0] - 1)) + output_padding[0] + 1;
+    uint32_t output_width = ((input_width - 1) * stride[1]) - (2 * padding[1]) + (dilation[1] * (kernel_size[1] - 1)) +
+                            output_padding[1] + 1;
 
     // Dimensions of Input to Conv u_op
-    uint32_t full_input_height = output_height + dilation[0] * (kernel_size[0] - 1);
-    uint32_t full_input_width = output_width + dilation[1] * (kernel_size[1] - 1);
+    uint32_t full_input_height = output_height + (dilation[0] * (kernel_size[0] - 1));
+    uint32_t full_input_width = output_width + (dilation[1] * (kernel_size[1] - 1));
 
     // Size of input after adding interleaved 0s.
-    uint32_t strided_input_height = (input_height - 1) * stride[0] + 1;
-    uint32_t strided_input_width = (input_width - 1) * stride[1] + 1;
+    uint32_t strided_input_height = ((input_height - 1) * stride[0]) + 1;
+    uint32_t strided_input_width = ((input_width - 1) * stride[1]) + 1;
 
     uint32_t input_pad_top = (full_input_height - strided_input_height) / 2;
     uint32_t input_pad_bottom = full_input_height - strided_input_height - input_pad_top;
@@ -275,7 +274,7 @@ Result conv_transpose2d(
         return matmul_output;
     }
     // call conv micro op
-    auto conv_output = optimized_conv_new(
+    auto conv_output = ttnn::operations::conv::conv2d::conv2d(
         halo_output,
         weight_tensor_on_device,
         bias_tensor_on_device,

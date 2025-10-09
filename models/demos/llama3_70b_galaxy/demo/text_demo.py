@@ -780,7 +780,9 @@ def test_demo_text(
                 v_cache = ttnn.mul(v_cache, 0, output_tensor=v_cache)
 
         input_tokens_prefill_pt = torch.stack(input_tokens_prefill_pt).view(batch_size, -1)
-
+        device_sampling_params = SamplingParams(
+            temperature=sampling_params["temperature"], top_k=32, top_p=sampling_params["top_p"]
+        )
         if batch_idx == 0:
             logger.info("Starting prefill warmup...")
             profiler.start(f"compile_prefill", iteration=batch_idx)
@@ -793,6 +795,7 @@ def test_demo_text(
                     prompt_lens=decoding_pos,
                     enable_trace=prefill_enable_trace,
                     tt_out_logits_all_users=tt_out_logits_all_users,
+                    sampling_params=device_sampling_params,
                 )
             except Exception as e:
                 logger.error(f"Error during prefill warmup: {str(e)}")
@@ -815,6 +818,7 @@ def test_demo_text(
                 prompt_lens=decoding_pos,
                 enable_trace=prefill_enable_trace,
                 tt_out_logits_all_users=tt_out_logits_all_users,
+                sampling_params=device_sampling_params,
             )
             if prefill_profile:
                 signpost("stop")
@@ -862,10 +866,6 @@ def test_demo_text(
 
         # Keeps track when a user reaches EoD token
         user_done = [False] * batch_size
-
-        device_sampling_params = SamplingParams(
-            temperature=sampling_params["temperature"], top_k=32, top_p=sampling_params["top_p"]
-        )
 
         # Initial positions
         current_pos = torch.tensor([decoding_pos[b] for b in range(batch_size)])
@@ -922,6 +922,7 @@ def test_demo_text(
                     page_table=page_table,
                     kv_cache=tt_kv_cache,
                     read_from_device=True,
+                    async_read=True,
                     sampling_params=device_sampling_params,
                     reset_inputs=iteration == 0,
                     tt_out_logits_saved=tt_out_logits_saved,

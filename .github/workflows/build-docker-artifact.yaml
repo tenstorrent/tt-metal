@@ -98,7 +98,7 @@ jobs:
             tt_metal/python_env/requirements-dev.txt \
             tt_metal/sfpi-version.sh \
             scripts/ttexalens_ref.txt \
-            scripts/debugging_scripts/requirements.txt \
+            tools/triage/requirements.txt \
             | sha1sum | cut -d' ' -f1)
           echo "ci-build-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.CI_BUILD_IMAGE_NAME }}:${HASH}" >> $GITHUB_OUTPUT
           echo "ci-test-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.CI_TEST_IMAGE_NAME }}:${HASH}" >> $GITHUB_OUTPUT

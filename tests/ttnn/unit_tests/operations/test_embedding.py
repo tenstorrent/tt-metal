@@ -58,7 +58,6 @@ def test_embedding(
     assert_with_pcc(torch_output_tensor, output_tensor)
 
 
-@skip_for_blackhole("TODO: Fix on BH #26230")
 @pytest.mark.parametrize("batch_size", [55, 100, 200])
 @pytest.mark.parametrize("sentence_size", [1, 10, 100])
 @pytest.mark.parametrize("hidden_embedding_dim", [1, 128])  # Bert_Num_Cols_768, Llama_Num_Cols

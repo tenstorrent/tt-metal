@@ -112,7 +112,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceTraceFixture, TensixEnqueueOneProgramTrace) {
     distributed::MeshWorkload workload;
     Program simple_program =
         create_simple_unary_program(*input->get_device_buffer(zero_coord_), *output->get_device_buffer(zero_coord_));
-    distributed::AddProgramToMeshWorkload(workload, std::move(simple_program), device_range_);
+    workload.add_program(device_range_, std::move(simple_program));
 
     vector<uint32_t> input_data(input->get_device_buffer(zero_coord_)->size() / sizeof(uint32_t), 0);
     for (uint32_t i = 0; i < input_data.size(); i++) {
@@ -136,16 +136,16 @@ TEST_F(UnitMeshMultiCQSingleDeviceTraceFixture, TensixEnqueueOneProgramTrace) {
 
     auto tid = distributed::BeginTraceCapture(this->device_.get(), mesh_command_queue.id());
     distributed::EnqueueMeshWorkload(mesh_command_queue, workload, false);
-    distributed::EndTraceCapture(this->device_.get(), mesh_command_queue.id(), tid);
+    this->device_->end_mesh_trace(mesh_command_queue.id(), tid);
 
-    distributed::ReplayTrace(this->device_.get(), mesh_command_queue.id(), tid, true);
+    this->device_->replay_mesh_trace(mesh_command_queue.id(), tid, true);
     distributed::ReadShard(data_movement_queue, trace_output_data, output, distributed::MeshCoordinate{0, 0}, true);
     // distributed::EnqueueReadMeshBuffer(data_movement_queue, trace_output_data, output, true);
     EXPECT_TRUE(eager_output_data == trace_output_data);
 
     // Done
     distributed::Finish(mesh_command_queue);
-    distributed::ReleaseTrace(this->device_.get(), tid);  //?
+    this->device_->release_mesh_trace(tid);  //?
 }
 
 TEST_F(UnitMeshMultiCQSingleDeviceTraceFixture, TensixEnqueueOneProgramTraceLoops) {
@@ -163,7 +163,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceTraceFixture, TensixEnqueueOneProgramTraceLoop
     distributed::MeshWorkload workload;
     Program simple_program =
         create_simple_unary_program(*input->get_device_buffer(zero_coord_), *output->get_device_buffer(zero_coord_));
-    distributed::AddProgramToMeshWorkload(workload, std::move(simple_program), device_range_);
+    workload.add_program(device_range_, std::move(simple_program));
 
     vector<uint32_t> input_data(input->get_device_buffer(zero_coord_)->size() / sizeof(uint32_t), 0);
     for (uint32_t i = 0; i < input_data.size(); i++) {
@@ -191,11 +191,11 @@ TEST_F(UnitMeshMultiCQSingleDeviceTraceFixture, TensixEnqueueOneProgramTraceLoop
         if (not trace_captured) {
             trace_id = distributed::BeginTraceCapture(this->device_.get(), mesh_command_queue.id());
             distributed::EnqueueMeshWorkload(mesh_command_queue, workload, false);
-            distributed::EndTraceCapture(this->device_.get(), mesh_command_queue.id(), trace_id);
+            this->device_->end_mesh_trace(mesh_command_queue.id(), trace_id);
             trace_captured = true;
         }
 
-        distributed::ReplayTrace(this->device_.get(), mesh_command_queue.id(), trace_id, false);
+        this->device_->replay_mesh_trace(mesh_command_queue.id(), trace_id, false);
         distributed::ReadShard(data_movement_queue, trace_outputs[i], output, distributed::MeshCoordinate{0, 0}, true);
 
         // Expect same output across all loops
@@ -204,7 +204,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceTraceFixture, TensixEnqueueOneProgramTraceLoop
 
     // Done
     distributed::Finish(mesh_command_queue);
-    distributed::ReleaseTrace(this->device_.get(), trace_id);
+    this->device_->release_mesh_trace(trace_id);
 }
 
 TEST_F(UnitMeshMultiCQSingleDeviceTraceFixture, TensixEnqueueOneProgramTraceBenchmark) {
@@ -227,7 +227,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceTraceFixture, TensixEnqueueOneProgramTraceBenc
     distributed::MeshWorkload workload;
     Program simple_program =
         create_simple_unary_program(*input->get_device_buffer(zero_coord_), *output->get_device_buffer(zero_coord_));
-    distributed::AddProgramToMeshWorkload(workload, std::move(simple_program), device_range_);
+    workload.add_program(device_range_, std::move(simple_program));
 
     vector<uint32_t> input_data(input->get_device_buffer(zero_coord_)->size() / sizeof(uint32_t), 0);
     for (uint32_t i = 0; i < input_data.size(); i++) {
@@ -275,13 +275,13 @@ TEST_F(UnitMeshMultiCQSingleDeviceTraceFixture, TensixEnqueueOneProgramTraceBenc
     // Capture trace on a trace queue
     auto tid = distributed::BeginTraceCapture(this->device_.get(), mesh_command_queue.id());
     distributed::EnqueueMeshWorkload(mesh_command_queue, workload, false);
-    distributed::EndTraceCapture(this->device_.get(), mesh_command_queue.id(), tid);
+    this->device_->end_mesh_trace(mesh_command_queue.id(), tid);
 
     // Trace mode execution
     for (auto i = 0; i < num_loops; i++) {
         tt::ScopedTimer timer("Trace loop " + std::to_string(i));
         distributed::EnqueueWriteMeshBuffer(mesh_command_queue, input, input_data, kNonBlocking);
-        distributed::ReplayTrace(this->device_.get(), mesh_command_queue.id(), tid, kNonBlocking);
+        this->device_->replay_mesh_trace(mesh_command_queue.id(), tid, kNonBlocking);
         distributed::ReadShard(
             mesh_command_queue, trace_outputs[i], output, distributed::MeshCoordinate{0, 0}, kNonBlocking);
     }
@@ -291,7 +291,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceTraceFixture, TensixEnqueueOneProgramTraceBenc
     for (auto i = 0; i < num_loops; i++) {
         EXPECT_TRUE(trace_outputs[i] == trace_outputs[0]);
     }
-    distributed::ReleaseTrace(this->device_.get(), tid);
+    this->device_->release_mesh_trace(tid);
 }
 
 TEST_F(UnitMeshCQTraceFixture, TensixInstantiateTraceSanity) {
@@ -313,12 +313,12 @@ TEST_F(UnitMeshCQTraceFixture, TensixInstantiateTraceSanity) {
     distributed::MeshWorkload workload;
     Program simple_program =
         create_simple_unary_program(*input->get_device_buffer(zero_coord_), *output->get_device_buffer(zero_coord_));
-    distributed::AddProgramToMeshWorkload(workload, std::move(simple_program), device_range_);
+    workload.add_program(device_range_, std::move(simple_program));
 
     distributed::EnqueueMeshWorkload(mesh_command_queue, workload, true);
     auto tid = distributed::BeginTraceCapture(mesh_device.get(), mesh_command_queue.id());
     distributed::EnqueueMeshWorkload(mesh_command_queue, workload, kNonBlocking);
-    distributed::EndTraceCapture(mesh_device.get(), mesh_command_queue.id(), tid);
+    mesh_device->end_mesh_trace(mesh_command_queue.id(), tid);
 
     // Instantiate a trace on a device bound command queue
     auto trace_inst = mesh_device->get_mesh_trace(tid);
@@ -335,7 +335,7 @@ TEST_F(UnitMeshCQTraceFixture, TensixInstantiateTraceSanity) {
     EXPECT_EQ(data_fd, data_bd);
 
     log_trace(LogTest, "Trace buffer content: {}", data_fd);
-    distributed::ReleaseTrace(mesh_device.get(), tid);
+    mesh_device->release_mesh_trace(tid);
 }
 
 TEST_F(UnitMeshCQTraceFixture, TensixEnqueueProgramTraceCapture) {
@@ -352,7 +352,7 @@ TEST_F(UnitMeshCQTraceFixture, TensixEnqueueProgramTraceCapture) {
     distributed::MeshWorkload workload;
     Program simple_program =
         create_simple_unary_program(*input->get_device_buffer(zero_coord_), *output->get_device_buffer(zero_coord_));
-    distributed::AddProgramToMeshWorkload(workload, std::move(simple_program), device_range_);
+    workload.add_program(device_range_, std::move(simple_program));
 
     vector<uint32_t> input_data(input->get_device_buffer(zero_coord_)->size() / sizeof(uint32_t), 0);
     for (uint32_t i = 0; i < input_data.size(); i++) {
@@ -372,7 +372,7 @@ TEST_F(UnitMeshCQTraceFixture, TensixEnqueueProgramTraceCapture) {
 
     auto tid = distributed::BeginTraceCapture(mesh_device.get(), mesh_command_queue.id());
     distributed::EnqueueMeshWorkload(mesh_command_queue, workload, false);
-    distributed::EndTraceCapture(mesh_device.get(), mesh_command_queue.id(), tid);
+    mesh_device->end_mesh_trace(mesh_command_queue.id(), tid);
 
     // Create and Enqueue a Program with a live trace to ensure that a warning is generated
     auto input_temp = distributed::MeshBuffer::create(replicated_config, device_config, mesh_device.get());
@@ -380,18 +380,18 @@ TEST_F(UnitMeshCQTraceFixture, TensixEnqueueProgramTraceCapture) {
     distributed::MeshWorkload temp_workload;
     Program simple_program_temp = create_simple_unary_program(
         *input_temp->get_device_buffer(zero_coord_), *output_temp->get_device_buffer(zero_coord_));
-    distributed::AddProgramToMeshWorkload(temp_workload, std::move(simple_program_temp), device_range_);
+    temp_workload.add_program(device_range_, std::move(simple_program_temp));
     distributed::EnqueueMeshWorkload(mesh_command_queue, temp_workload, true);
 
     // Run trace that can clobber the temporary buffers created above
     distributed::EnqueueMeshWorkload(mesh_command_queue, workload, false);
-    distributed::ReplayTrace(mesh_device.get(), mesh_command_queue.id(), tid, true);
+    mesh_device->replay_mesh_trace(mesh_command_queue.id(), tid, true);
     distributed::ReadShard(mesh_command_queue, trace_output_data, output, distributed::MeshCoordinate{0, 0}, true);
     EXPECT_TRUE(eager_output_data == trace_output_data);
 
     // Done
     distributed::Finish(mesh_command_queue);
-    distributed::ReleaseTrace(mesh_device.get(), tid);
+    mesh_device->release_mesh_trace(tid);
 }
 
 TEST_F(UnitMeshCQTraceFixture, TensixEnqueueProgramDeviceCapture) {
@@ -421,7 +421,7 @@ TEST_F(UnitMeshCQTraceFixture, TensixEnqueueProgramDeviceCapture) {
     if (has_eager) {
         Program simple_program = create_simple_unary_program(
             *input->get_device_buffer(zero_coord_), *output->get_device_buffer(zero_coord_));
-        distributed::AddProgramToMeshWorkload(workload, std::move(simple_program), device_range_);
+        workload.add_program(device_range_, std::move(simple_program));
 
         distributed::EnqueueWriteMeshBuffer(mesh_command_queue, input, input_data, true);
         distributed::EnqueueMeshWorkload(mesh_command_queue, workload, true);
@@ -438,10 +438,10 @@ TEST_F(UnitMeshCQTraceFixture, TensixEnqueueProgramDeviceCapture) {
             // Program must be cached first
             tid = distributed::BeginTraceCapture(mesh_device.get(), mesh_command_queue.id());
             distributed::EnqueueMeshWorkload(mesh_command_queue, workload, false);
-            distributed::EndTraceCapture(mesh_device.get(), mesh_command_queue.id(), tid);
+            mesh_device->end_mesh_trace(mesh_command_queue.id(), tid);
             has_trace = true;
         }
-        distributed::ReplayTrace(mesh_device.get(), mesh_command_queue.id(), tid, true);
+        mesh_device->replay_mesh_trace(mesh_command_queue.id(), tid, true);
 
         distributed::ReadShard(mesh_command_queue, trace_output_data, output, distributed::MeshCoordinate{0, 0}, true);
         if (has_eager) {
@@ -451,7 +451,7 @@ TEST_F(UnitMeshCQTraceFixture, TensixEnqueueProgramDeviceCapture) {
 
     // Done
     distributed::Finish(mesh_command_queue);
-    distributed::ReleaseTrace(mesh_device.get(), tid);
+    mesh_device->release_mesh_trace(tid);
 }
 
 TEST_F(UnitMeshCQTraceFixture, TensixEnqueueTwoProgramTrace) {
@@ -474,8 +474,8 @@ TEST_F(UnitMeshCQTraceFixture, TensixEnqueueTwoProgramTrace) {
     Program op1 =
         create_simple_unary_program(*interm->get_device_buffer(zero_coord_), *output->get_device_buffer(zero_coord_));
 
-    distributed::AddProgramToMeshWorkload(workload0, std::move(op0), device_range_);
-    distributed::AddProgramToMeshWorkload(workload1, std::move(op1), device_range_);
+    workload0.add_program(device_range_, std::move(op0));
+    workload1.add_program(device_range_, std::move(op1));
 
     vector<uint32_t> input_data(input->get_device_buffer(zero_coord_)->size() / sizeof(uint32_t), 0);
     for (uint32_t i = 0; i < input_data.size(); i++) {
@@ -526,18 +526,18 @@ TEST_F(UnitMeshCQTraceFixture, TensixEnqueueTwoProgramTrace) {
     auto tid = distributed::BeginTraceCapture(mesh_device.get(), mesh_command_queue.id());
     distributed::EnqueueMeshWorkload(mesh_command_queue, workload0, kNonBlocking);
     distributed::EnqueueMeshWorkload(mesh_command_queue, workload1, kNonBlocking);
-    distributed::EndTraceCapture(mesh_device.get(), mesh_command_queue.id(), tid);
+    mesh_device->end_mesh_trace(mesh_command_queue.id(), tid);
 
     // Trace mode execution
     for (auto i = 0; i < num_loops; i++) {
         ScopedTimer timer("Trace loop " + std::to_string(i));
         distributed::EnqueueWriteMeshBuffer(mesh_command_queue, input, input_data, kNonBlocking);
-        distributed::ReplayTrace(mesh_device.get(), mesh_command_queue.id(), tid, kNonBlocking);
+        mesh_device->replay_mesh_trace(mesh_command_queue.id(), tid, kNonBlocking);
         distributed::ReadShard(
             mesh_command_queue, trace_outputs[i], output, distributed::MeshCoordinate{0, 0}, kNonBlocking);
     }
     distributed::Finish(mesh_command_queue);
-    distributed::ReleaseTrace(mesh_device.get(), tid);
+    mesh_device->release_mesh_trace(tid);
 
     // Expect same output across all loops
     for (auto i = 0; i < num_loops; i++) {
@@ -581,7 +581,7 @@ TEST_F(UnitMeshCQTraceFixture, TensixEnqueueMultiProgramTraceBenchmark) {
                 *interm_buffers[i - 1]->get_device_buffer(zero_coord_),
                 *interm_buffers[i]->get_device_buffer(zero_coord_));
         }
-        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range_);
+        workload.add_program(device_range_, std::move(program));
         workloads.push_back(std::move(workload));
     }
 
@@ -620,18 +620,18 @@ TEST_F(UnitMeshCQTraceFixture, TensixEnqueueMultiProgramTraceBenchmark) {
     for (uint32_t i = 0; i < num_programs; i++) {
         distributed::EnqueueMeshWorkload(mesh_command_queue, workloads[i], kNonBlocking);
     }
-    distributed::EndTraceCapture(mesh_device.get(), mesh_command_queue.id(), tid);
+    mesh_device->end_mesh_trace(mesh_command_queue.id(), tid);
 
     // Trace mode execution
     for (auto i = 0; i < num_loops; i++) {
         ScopedTimer timer("Trace loop " + std::to_string(i));
         distributed::EnqueueWriteMeshBuffer(mesh_command_queue, input, input_data, kNonBlocking);
-        distributed::ReplayTrace(mesh_device.get(), mesh_command_queue.id(), tid, kNonBlocking);
+        mesh_device->replay_mesh_trace(mesh_command_queue.id(), tid, kNonBlocking);
         distributed::ReadShard(
             mesh_command_queue, trace_outputs[i], output, distributed::MeshCoordinate{0, 0}, kNonBlocking);
     }
     distributed::Finish(mesh_command_queue);
-    distributed::ReleaseTrace(mesh_device.get(), tid);
+    mesh_device->release_mesh_trace(tid);
 }
 
 }  // end namespace basic_tests
@@ -645,14 +645,14 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixTestSimpleProgramsTrace) {
         }
         Program program = CreateProgram();
         this->create_kernel(program, CoreType::WORKER, true);
-        distributed::AddProgramToMeshWorkload(this->workloads[i], std::move(program), device_range_);
+        this->workloads[i].add_program(device_range_, std::move(program));
         distributed::EnqueueMeshWorkload(mesh_command_queue, this->workloads[i], false);
     }
 
     const distributed::MeshTraceId trace_id = this->trace_programs();
 
     distributed::Finish(mesh_command_queue);
-    distributed::ReleaseTrace(this->device_.get(), trace_id);
+    this->device_->release_mesh_trace(trace_id);
 }
 
 TEST_F(UnitMeshRandomProgramTraceFixture, ActiveEthTestSimpleProgramsTrace) {
@@ -669,14 +669,14 @@ TEST_F(UnitMeshRandomProgramTraceFixture, ActiveEthTestSimpleProgramsTrace) {
         }
         Program program = CreateProgram();
         this->create_kernel(program, CoreType::ETH, true);
-        distributed::AddProgramToMeshWorkload(this->workloads[i], std::move(program), device_range_);
+        this->workloads[i].add_program(device_range_, std::move(program));
         distributed::EnqueueMeshWorkload(mesh_command_queue, this->workloads[i], false);
     }
 
     const distributed::MeshTraceId trace_id = this->trace_programs();
 
     distributed::Finish(mesh_command_queue);
-    distributed::ReleaseTrace(this->device_.get(), trace_id);
+    this->device_->release_mesh_trace(trace_id);
 }
 
 TEST_F(UnitMeshRandomProgramTraceFixture, TensixActiveEthTestSimpleProgramsTrace) {
@@ -702,14 +702,14 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixActiveEthTestSimpleProgramsTrace
             this->create_kernel(program, CoreType::WORKER, true);
         }
 
-        distributed::AddProgramToMeshWorkload(this->workloads[i], std::move(program), device_range_);
+        this->workloads[i].add_program(device_range_, std::move(program));
         distributed::EnqueueMeshWorkload(mesh_command_queue, this->workloads[i], false);
     }
 
     const distributed::MeshTraceId trace_id = this->trace_programs();
 
     distributed::Finish(mesh_command_queue);
-    distributed::ReleaseTrace(this->device_.get(), trace_id);
+    this->device_->release_mesh_trace(trace_id);
 }
 
 TEST_F(UnitMeshRandomProgramTraceFixture, NIGHTLY_TensixTestProgramsTrace) {
@@ -721,14 +721,14 @@ TEST_F(UnitMeshRandomProgramTraceFixture, NIGHTLY_TensixTestProgramsTrace) {
         }
         Program program = CreateProgram();
         this->create_kernel(program, CoreType::WORKER);
-        distributed::AddProgramToMeshWorkload(this->workloads[i], std::move(program), device_range_);
+        this->workloads[i].add_program(device_range_, std::move(program));
         distributed::EnqueueMeshWorkload(mesh_command_queue, this->workloads[i], false);
     }
 
     const distributed::MeshTraceId trace_id = this->trace_programs();
 
     distributed::Finish(mesh_command_queue);
-    distributed::ReleaseTrace(this->device_.get(), trace_id);
+    this->device_->release_mesh_trace(trace_id);
 }
 
 TEST_F(UnitMeshRandomProgramTraceFixture, ActiveEthTestProgramsTrace) {
@@ -750,14 +750,14 @@ TEST_F(UnitMeshRandomProgramTraceFixture, ActiveEthTestProgramsTrace) {
         kernel_properties.max_kernel_size_bytes = MAX_KERNEL_SIZE_BYTES / 2;
         kernel_properties.max_num_rt_args = MAX_NUM_RUNTIME_ARGS / 4;
         this->create_kernel(program, CoreType::ETH, false, kernel_properties);
-        distributed::AddProgramToMeshWorkload(this->workloads[i], std::move(program), device_range_);
+        this->workloads[i].add_program(device_range_, std::move(program));
         distributed::EnqueueMeshWorkload(mesh_command_queue, this->workloads[i], false);
     }
 
     const distributed::MeshTraceId trace_id = this->trace_programs();
 
     distributed::Finish(mesh_command_queue);
-    distributed::ReleaseTrace(this->device_.get(), trace_id);
+    this->device_->release_mesh_trace(trace_id);
 }
 
 TEST_F(UnitMeshRandomProgramTraceFixture, TensixActiveEthTestProgramsTrace) {
@@ -792,14 +792,14 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixActiveEthTestProgramsTrace) {
         }
         program.set_runtime_id(i);
 
-        distributed::AddProgramToMeshWorkload(this->workloads[i], std::move(program), device_range_);
+        this->workloads[i].add_program(device_range_, std::move(program));
         distributed::EnqueueMeshWorkload(mesh_command_queue, this->workloads[i], false);
     }
 
     const distributed::MeshTraceId trace_id = this->trace_programs();
 
     distributed::Finish(mesh_command_queue);
-    distributed::ReleaseTrace(this->device_.get(), trace_id);
+    this->device_->release_mesh_trace(trace_id);
 }
 
 TEST_F(UnitMeshRandomProgramTraceFixture, NIGHTLY_TensixTestAlternatingLargeAndSmallProgramsTrace) {
@@ -819,14 +819,14 @@ TEST_F(UnitMeshRandomProgramTraceFixture, NIGHTLY_TensixTestAlternatingLargeAndS
         }
 
         this->create_kernel(program, CoreType::WORKER, false, kernel_properties);
-        distributed::AddProgramToMeshWorkload(this->workloads[i], std::move(program), device_range_);
+        this->workloads[i].add_program(device_range_, std::move(program));
         distributed::EnqueueMeshWorkload(mesh_command_queue, this->workloads[i], false);
     }
 
     const distributed::MeshTraceId trace_id = this->trace_programs();
 
     distributed::Finish(mesh_command_queue);
-    distributed::ReleaseTrace(this->device_.get(), trace_id);
+    this->device_->release_mesh_trace(trace_id);
 }
 
 TEST_F(UnitMeshRandomProgramTraceFixture, NIGHTLY_TensixTestLargeProgramFollowedBySmallProgramsTrace) {
@@ -846,14 +846,14 @@ TEST_F(UnitMeshRandomProgramTraceFixture, NIGHTLY_TensixTestLargeProgramFollowed
         }
 
         this->create_kernel(program, CoreType::WORKER, false, kernel_properties);
-        distributed::AddProgramToMeshWorkload(this->workloads[i], std::move(program), device_range_);
+        this->workloads[i].add_program(device_range_, std::move(program));
         distributed::EnqueueMeshWorkload(mesh_command_queue, this->workloads[i], false);
     }
 
     const distributed::MeshTraceId trace_id = this->trace_programs();
 
     distributed::Finish(mesh_command_queue);
-    distributed::ReleaseTrace(this->device_.get(), trace_id);
+    this->device_->release_mesh_trace(trace_id);
 }
 
 TEST_F(UnitMeshRandomProgramTraceFixture, TensixTestLargeProgramInBetweenFiveSmallProgramsTrace) {
@@ -873,14 +873,14 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixTestLargeProgramInBetweenFiveSma
         }
 
         this->create_kernel(program, CoreType::WORKER, false, kernel_properties);
-        distributed::AddProgramToMeshWorkload(this->workloads[i], std::move(program), device_range_);
+        this->workloads[i].add_program(device_range_, std::move(program));
         distributed::EnqueueMeshWorkload(mesh_command_queue, this->workloads[i], false);
     }
 
     const distributed::MeshTraceId trace_id = this->trace_programs();
 
     distributed::Finish(mesh_command_queue);
-    distributed::ReleaseTrace(this->device_.get(), trace_id);
+    this->device_->release_mesh_trace(trace_id);
 }
 
 TEST_F(UnitMeshRandomProgramTraceFixture, TensixTestProgramsTraceAndNoTrace) {
@@ -895,7 +895,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixTestProgramsTraceAndNoTrace) {
         }
         Program program = CreateProgram();
         this->create_kernel(program, CoreType::WORKER);
-        distributed::AddProgramToMeshWorkload(this->workloads[i], std::move(program), device_range_);
+        this->workloads[i].add_program(device_range_, std::move(program));
         tt::tt_metal::distributed::MeshWorkload& workload = this->workloads[i];
         const bool use_trace = (rand() % 2) == 0;
         if (use_trace) {
@@ -903,7 +903,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixTestProgramsTraceAndNoTrace) {
             const distributed::MeshTraceId trace_id =
                 distributed::BeginTraceCapture(this->device_.get(), mesh_command_queue.id());
             distributed::EnqueueMeshWorkload(mesh_command_queue, workload, false);
-            distributed::EndTraceCapture(this->device_.get(), mesh_command_queue.id(), trace_id);
+            this->device_->end_mesh_trace(mesh_command_queue.id(), trace_id);
             trace_ids.push_back(trace_id);
             program_ids_to_trace_ids.emplace(workload.get_programs()[device_range_].impl().get_id(), trace_id);
         }
@@ -915,14 +915,14 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixTestProgramsTraceAndNoTrace) {
         const bool use_trace = program_ids_to_trace_ids.contains(program_id);
         if (use_trace) {
             const distributed::MeshTraceId trace_id = program_ids_to_trace_ids[program_id];
-            distributed::ReplayTrace(this->device_.get(), mesh_command_queue.id(), trace_id, false);
+            this->device_->replay_mesh_trace(mesh_command_queue.id(), trace_id, false);
         }
         distributed::EnqueueMeshWorkload(mesh_command_queue, workload, false);
     }
 
     distributed::Finish(mesh_command_queue);
     for (const distributed::MeshTraceId trace_id : trace_ids) {
-        distributed::ReleaseTrace(this->device_.get(), trace_id);
+        this->device_->release_mesh_trace(trace_id);
     }
 }
 
@@ -948,7 +948,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, ActiveEthTestProgramsTraceAndNoTrace) 
         kernel_properties.max_kernel_size_bytes = MAX_KERNEL_SIZE_BYTES / 2;
         kernel_properties.max_num_rt_args = MAX_NUM_RUNTIME_ARGS / 4;
         this->create_kernel(program, CoreType::ETH, false, kernel_properties);
-        distributed::AddProgramToMeshWorkload(this->workloads[i], std::move(program), device_range_);
+        this->workloads[i].add_program(device_range_, std::move(program));
         tt::tt_metal::distributed::MeshWorkload& workload = this->workloads[i];
 
         const bool use_trace = (rand() % 2) == 0;
@@ -958,7 +958,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, ActiveEthTestProgramsTraceAndNoTrace) 
             const distributed::MeshTraceId trace_id =
                 distributed::BeginTraceCapture(this->device_.get(), mesh_command_queue.id());
             distributed::EnqueueMeshWorkload(mesh_command_queue, workload, false);
-            distributed::EndTraceCapture(this->device_.get(), mesh_command_queue.id(), trace_id);
+            this->device_->end_mesh_trace(mesh_command_queue.id(), trace_id);
             trace_ids.push_back(trace_id);
             program_ids_to_trace_ids.emplace(workload.get_programs()[device_range_].impl().get_id(), trace_id);
         }
@@ -970,14 +970,14 @@ TEST_F(UnitMeshRandomProgramTraceFixture, ActiveEthTestProgramsTraceAndNoTrace) 
         const bool use_trace = program_ids_to_trace_ids.contains(program_id);
         if (use_trace) {
             const distributed::MeshTraceId trace_id = program_ids_to_trace_ids[program_id];
-            distributed::ReplayTrace(this->device_.get(), mesh_command_queue.id(), trace_id, false);
+            this->device_->replay_mesh_trace(mesh_command_queue.id(), trace_id, false);
         }
         distributed::EnqueueMeshWorkload(mesh_command_queue, workload, false);
     }
 
     distributed::Finish(mesh_command_queue);
     for (const distributed::MeshTraceId trace_id : trace_ids) {
-        distributed::ReleaseTrace(this->device_.get(), trace_id);
+        this->device_->release_mesh_trace(trace_id);
     }
 }
 
@@ -1015,7 +1015,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixActiveEthTestProgramsTraceAndNoT
             this->create_kernel(program, CoreType::WORKER, false, kernel_properties);
         }
 
-        distributed::AddProgramToMeshWorkload(this->workloads[i], std::move(program), device_range_);
+        this->workloads[i].add_program(device_range_, std::move(program));
         tt::tt_metal::distributed::MeshWorkload& workload = this->workloads[i];
 
         const bool use_trace = (rand() % 2) == 0;
@@ -1025,7 +1025,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixActiveEthTestProgramsTraceAndNoT
             const distributed::MeshTraceId trace_id =
                 distributed::BeginTraceCapture(this->device_.get(), mesh_command_queue.id());
             distributed::EnqueueMeshWorkload(mesh_command_queue, workload, false);
-            distributed::EndTraceCapture(this->device_.get(), mesh_command_queue.id(), trace_id);
+            this->device_->end_mesh_trace(mesh_command_queue.id(), trace_id);
             trace_ids.push_back(trace_id);
             program_ids_to_trace_ids.emplace(workload.get_programs()[device_range_].impl().get_id(), trace_id);
         }
@@ -1037,14 +1037,14 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixActiveEthTestProgramsTraceAndNoT
         const bool use_trace = program_ids_to_trace_ids.contains(program_id);
         if (use_trace) {
             const distributed::MeshTraceId trace_id = program_ids_to_trace_ids[program_id];
-            distributed::ReplayTrace(this->device_.get(), mesh_command_queue.id(), trace_id, false);
+            this->device_->replay_mesh_trace(mesh_command_queue.id(), trace_id, false);
         }
         distributed::EnqueueMeshWorkload(mesh_command_queue, workload, false);
     }
 
     distributed::Finish(mesh_command_queue);
     for (const distributed::MeshTraceId trace_id : trace_ids) {
-        distributed::ReleaseTrace(this->device_.get(), trace_id);
+        this->device_->release_mesh_trace(trace_id);
     }
 }
 
