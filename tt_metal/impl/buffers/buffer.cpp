@@ -21,6 +21,8 @@
 #include <string_view>
 #include <utility>
 
+#include "impl/buffers/buffer_page_mapping.hpp"
+
 #include "fmt/base.h"
 #include "lightmetal/host_api_capture_helpers.hpp"
 #include <tt_stl/strong_type.hpp>
