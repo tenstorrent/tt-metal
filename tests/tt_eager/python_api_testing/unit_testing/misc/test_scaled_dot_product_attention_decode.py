@@ -864,7 +864,7 @@ def run_test_sdpa_decode_paged_attention(
 
         assert out_pass
 
-        max_start_idx += 71 if max_start_idx < 4096 else 3001
+        max_start_idx += 31 if max_start_idx < 4096 else 3001
 
         if not causal:
             # only run one iteration for non-causal
@@ -1114,29 +1114,29 @@ def run_test_sdpa_decode_paged_attention_single_iter(
     ],
 )
 @pytest.mark.parametrize(
-    "b, nh, nkv, s, d, grid_size, cur_pos_tensor",
+    "b, nh, nkv, s, d, grid_size, cur_pos_tensor, sliding_window",
     (
-        # [32, 8, 1, 32768, 128, (8, 6), True],  # Llama2-70B
-        # [4, 32, 8, 4096, 128, (8, 8), True],  # llama 3.1 8b
-        # [4, 16, 4, 32768, 128, (8, 8), True],
-        # [32, 32, 8, 4096, 128, (8, 8), True],  # llama 3.1 8b
-        [8, 16, 4, 4096, 128, (8, 2), True],  # llama 3.1 8b N300
-        [1, 8, 1, 128 * 1024, 128, (8, 4), True],  # llama 3.1 8b N300
-        [1, 32, 8, 32 * 1024, 128, (8, 1), True],  # llama3.1 8b (performance-batch-1 settings)
-        [1, 4, 2, 1024 * 16, 128, (8, 8), True],  # gemma-3-27b on T3K
-        # [32, 32, 8, 1024, 128, (8, 8), True],  # llama 3.1 8b (performance-batch-32 settings) -- Issue 21534: Breaking blackhole post commit tests
-        # [1, 8, 1, 32768, 128, (8, 1), True],  # Llama2-70B
-        # [16, 8, 1, 32768, 128, (8, 6), False, False],  # Llama2-70B
-        # [8, 8, 1, 32768, 128, (8, 6), True, False],  # Llama2-70B
-        # [4, 8, 1, 32768, 128, (8, 6), True, False],  # Llama2-70B
-        # [32, 8, 1, 32768, 128, (8, 8), True, True],  # Mixtral8x7b
+        # [32, 8, 1, 32768, 128, (8, 6), True, None],  # Llama2-70B
+        # [4, 32, 8, 4096, 128, (8, 8), True, None],  # llama 3.1 8b
+        # [4, 16, 4, 32768, 128, (8, 8), True, None],
+        # [32, 32, 8, 4096, 128, (8, 8), True, None],  # llama 3.1 8b
+        [8, 16, 4, 4096, 128, (8, 2), True, None],  # llama 3.1 8b N300
+        [1, 8, 1, 128 * 1024, 128, (8, 4), True, None],  # llama 3.1 8b N300
+        [1, 32, 8, 32 * 1024, 128, (8, 1), True, None],  # llama3.1 8b (performance-batch-1 settings)
+        [1, 4, 2, 1024 * 128, 128, (8, 8), True, 1024],  # gemma-3-27b on T3K
+        [1, 8, 1, 1024 * 128, 128, (8, 8), True, 128],  # GPT-OSS
+        # [32, 32, 8, 1024, 128, (8, 8), True, None],  # llama 3.1 8b (performance-batch-32 settings) -- Issue 21534: Breaking blackhole post commit tests
+        # [1, 8, 1, 32768, 128, (8, 1), True, None],  # Llama2-70B
+        # [16, 8, 1, 32768, 128, (8, 6), False, False, None],  # Llama2-70B
+        # [8, 8, 1, 32768, 128, (8, 6), True, False, None],  # Llama2-70B
+        # [4, 8, 1, 32768, 128, (8, 6), True, False, None],  # Llama2-70B
+        # [32, 8, 1, 32768, 128, (8, 8), True, True, None],  # Mixtral8x7b
     ),
-    ids=["llama3.1-a", "llama3.1-b", "llama3.1-c", "gemma-3-27b"],
+    ids=["llama3.1-a", "llama3.1-b", "llama3.1-c", "gemma-3-27b", "GPT-OSS"],
 )
 @pytest.mark.parametrize("block_size", (32, 64, 128), ids=["paged_32", "paged_64", "paged_128"])
-@pytest.mark.parametrize("sliding_window", (None, 1024), ids=["default", "sliding_window"])
 def test_sdpa_decode_paged_attention(
-    device, b, nh, nkv, s, d, kv_dtype, grid_size, q_dtype, cur_pos_tensor, block_size, sliding_window, reset_seeds
+    device, b, nh, nkv, s, d, kv_dtype, grid_size, q_dtype, cur_pos_tensor, sliding_window, block_size, reset_seeds
 ):
     if s == 128 * 1024 and block_size != 64:
         # 128k sequence, block_size 64 tests the sizing of the page table CB
