@@ -65,28 +65,25 @@ jobs:
             commits=$(git log ${latest_tag}..HEAD --oneline --pretty=format:"%s")
           fi
 
-          echo "Commit messages to analyze:"
-          echo "$commits"
-
           # Check for version bump indicators
           has_major=false
           has_minor=false
           has_patch=false
 
           # Check for MAJOR version indicators
-          if echo "$commits" | grep -i -E "(MAJOR)"; then
+          if echo "$commits" | grep "(MAJOR)"; then
             has_major=true
             echo "Found MAJOR version indicators"
           fi
 
           # Check for MINOR version indicators
-          if echo "$commits" | grep -i -E "(MINOR)"; then
+          if echo "$commits" | grep "(MINOR)"; then
             has_minor=true
             echo "Found MINOR version indicators"
           fi
 
           # Check for PATCH version indicators
-          if echo "$commits" | grep -i -E "(PATCH)"; then
+          if echo "$commits" | grep "(PATCH)"; then
             has_patch=true
             echo "Found PATCH version indicators"
           fi
