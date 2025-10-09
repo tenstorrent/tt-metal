@@ -7,6 +7,7 @@
 #include <enchantum/enchantum.hpp>
 #include <numeric>
 #include <string>
+#include <string_view>
 
 #include "blackhole/bh_hal.hpp"
 #include "dev_mem_map.h"
@@ -96,9 +97,10 @@ public:
         // Common includes for all core types
         includes.push_back("tt_metal/hw/ckernels/blackhole/metal/common");
         includes.push_back("tt_metal/hw/ckernels/blackhole/metal/llk_io");
-        includes.push_back("tt_metal/hw/inc/blackhole");
-        includes.push_back("tt_metal/hw/inc/blackhole/blackhole_defines");
-        includes.push_back("tt_metal/hw/inc/blackhole/noc");
+        includes.push_back("tt_metal/hw/inc/tt-1xx");
+        includes.push_back("tt_metal/hw/inc/tt-1xx/blackhole");
+        includes.push_back("tt_metal/hw/inc/tt-1xx/blackhole/blackhole_defines");
+        includes.push_back("tt_metal/hw/inc/tt-1xx/blackhole/noc");
         includes.push_back("tt_metal/third_party/tt_llk/tt_llk_blackhole/common/inc");
         includes.push_back("tt_metal/third_party/tt_llk/tt_llk_blackhole/llk_lib");
 
@@ -138,26 +140,25 @@ public:
         auto srcs = HalJitBuildQueryBase::srcs(params);
         if (params.core_type == HalProgrammableCoreType::ACTIVE_ETH) {
             switch (params.processor_id) {
-            case 0:
-                if (params.is_fw) {
-                    srcs.push_back("tt_metal/hw/firmware/src/tt-1xx/active_erisc.cc");
-                    if (blackhole::is_2_erisc_mode()) {
-                        // not tmu-crt0
-                        srcs.push_back("tt_metal/hw/firmware/src/tt-1xx/active_erisc-crt0.cc");
+                case 0:
+                    if (params.is_fw) {
+                        srcs.push_back("tt_metal/hw/firmware/src/tt-1xx/active_erisc.cc");
+                        if (blackhole::is_2_erisc_mode()) {
+                            // not tmu-crt0
+                            srcs.push_back("tt_metal/hw/firmware/src/tt-1xx/active_erisc-crt0.cc");
+                        }
+                    } else {
+                        srcs.push_back("tt_metal/hw/firmware/src/tt-1xx/active_erisck.cc");
                     }
-                } else {
-                    srcs.push_back("tt_metal/hw/firmware/src/tt-1xx/active_erisck.cc");
-                }
-                break;
-            case 1:
-                if (params.is_fw) {
-                    srcs.push_back("tt_metal/hw/firmware/src/tt-1xx/subordinate_erisc.cc");
-                } else {
-                    srcs.push_back("tt_metal/hw/firmware/src/tt-1xx/active_erisck.cc");
-                }
-                break;
-            default:
-                TT_THROW("Unkown processor id {}", params.processor_id);
+                    break;
+                case 1:
+                    if (params.is_fw) {
+                        srcs.push_back("tt_metal/hw/firmware/src/tt-1xx/subordinate_erisc.cc");
+                    } else {
+                        srcs.push_back("tt_metal/hw/firmware/src/tt-1xx/active_erisck.cc");
+                    }
+                    break;
+                default: TT_THROW("Unkown processor id {}", params.processor_id);
             }
         }
         return srcs;
@@ -173,49 +174,34 @@ public:
     }
 
     std::string linker_script(const Params& params) const override {
+        const std::string_view fork = params.is_fw ? "firmware" : "kernel";
+        const std::string_view path = "runtime/hw/toolchain/blackhole";
         switch (params.core_type) {
             case HalProgrammableCoreType::TENSIX:
                 switch (params.processor_class) {
-                    case HalProcessorClassType::DM: {
-                        return fmt::format(
-                            "runtime/hw/toolchain/blackhole/{}_{}risc.ld",
-                            params.is_fw ? "firmware" : "kernel",
-                            params.processor_id == 0 ? "b" : "nc");
-                    }
+                    case HalProcessorClassType::DM:
+                        return fmt::format("{}/{}_{}risc.ld", path, fork, params.processor_id == 0 ? "b" : "nc");
                     case HalProcessorClassType::COMPUTE:
-                        return fmt::format(
-                            "runtime/hw/toolchain/blackhole/{}_trisc{}.ld",
-                            params.is_fw ? "firmware" : "kernel",
-                            params.processor_id);
+                        return fmt::format("{}/{}_trisc{}.ld", path, fork, params.processor_id);
                 }
                 break;
             case HalProgrammableCoreType::ACTIVE_ETH:
-                switch (params.processor_id) {
-                    case 0:
-                        if (blackhole::is_2_erisc_mode()) {
-                            return params.is_fw ? "runtime/hw/toolchain/blackhole/firmware_main_aerisc.ld"
-                                                : "runtime/hw/toolchain/blackhole/kernel_main_aerisc.ld";
-                        } else {
-                            return params.is_fw ? "runtime/hw/toolchain/blackhole/firmware_aerisc.ld"
-                                                : "runtime/hw/toolchain/blackhole/kernel_aerisc.ld";
-                        }
-                    case 1:
-                        return params.is_fw ? "runtime/hw/toolchain/blackhole/firmware_subordinate_aerisc.ld"
-                                            : "runtime/hw/toolchain/blackhole/kernel_subordinate_aerisc.ld";
+                if (params.processor_id < 2) {
+                    return fmt::format(
+                        "{}/{}_{}aerisc.ld",
+                        path,
+                        fork,
+                        params.processor_id            ? "subordinate_"
+                        : blackhole::is_2_erisc_mode() ? "main_"
+                        : "");
                 }
+                break;
             case HalProgrammableCoreType::IDLE_ETH:
-                switch (params.processor_id) {
-                    case 0:
-                        return params.is_fw ? "runtime/hw/toolchain/blackhole/firmware_ierisc.ld"
-                                            : "runtime/hw/toolchain/blackhole/kernel_ierisc.ld";
-                    case 1:
-                        return params.is_fw ? "runtime/hw/toolchain/blackhole/firmware_subordinate_ierisc.ld"
-                                            : "runtime/hw/toolchain/blackhole/kernel_subordinate_ierisc.ld";
+                if (params.processor_id < 2) {
+                    return fmt::format("{}/{}_{}ierisc.ld", path, fork, params.processor_id ? "subordinate_" : "");
                 }
-            default:
-                TT_THROW(
-                    "Unsupported programmable core type {} to query linker script",
-                    enchantum::to_string(params.core_type));
+                break;
+            default: break;
         }
         TT_THROW(
             "Invalid processor id {} of processor class {} in programmable core type {}",
