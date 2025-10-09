@@ -45,7 +45,66 @@ class AttentionConfig:
         return self.num_heads * self.head_dim
 
 
-def forward_qkv_fused(x, *, mod_spec, hw_config, tensor_cache):
+def generate_hardware_config_source(name: str, kernel_config, indent: str = "") -> list:
+    """Generate hardware-specific configuration setup"""
+    lines = [
+        "# Hardware-specific configuration",
+        f"{name} = ttnn.WormholeComputeKernelConfig(",
+        f"  math_fidelity=ttnn.MathFidelity.{'HiFi4' if kernel_config.fp32_accumulation else 'HiFi2'},",
+        f"  fp32_dest_acc_en={kernel_config.fp32_accumulation},",
+        "   packer_l1_acc=True",
+        ")",
+        "",
+    ]
+    lines = [f"{indent}{line}" for line in lines]
+
+    return lines
+
+
+def generate_memory_config_source(name: str, mem_config, indent: str = ""):
+    lines = [
+        "# Memory configuration",
+        f"{name} = ttnn.MemoryConfig(",
+        f"  memory_layout={mem_config.memory_layout},",
+        f"  buffer_type={mem_config.buffer_type}",
+        ")",
+        "",
+    ]
+    lines = [f"{indent}{line}" for line in lines]
+
+    return lines
+
+
+def generate_hardware_config(hw_config):
+    # Hardware-specific configuration
+    # todo)) read generate_config.md for a better way to generate this
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4 if hw_config.fp32_accumulation else ttnn.MathFidelity.HiFi2,
+        fp32_dest_acc_en=hw_config.fp32_accumulation,
+        packer_l1_acc=True,
+    )
+
+    # Memory configuration based on shard strategy
+    if hw_config.shard_strategy == "block":
+        memory_config = ttnn.MemoryConfig(
+            memory_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            buffer_type=ttnn.BufferType.L1,
+        )
+    elif hw_config.shard_strategy == "height":
+        memory_config = ttnn.MemoryConfig(
+            memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            buffer_type=ttnn.BufferType.L1,
+        )
+    else:
+        memory_config = ttnn.MemoryConfig(
+            memory_layout=ttnn.TensorMemoryLayout.INTERLEAVED,
+            buffer_type=ttnn.BufferType.DRAM,
+        )
+
+    return compute_kernel_config, memory_config
+
+
+def forward_qkv_fused(x, mod_spec, hw_config, tensor_cache):
     qkv = ttnn.linear(
         x,
         tensor_cache.qkv_linear.weight,
@@ -74,7 +133,7 @@ def forward_qkv_fused(x, *, mod_spec, hw_config, tensor_cache):
     return query_states, key_states, value_states
 
 
-def forward_qkv_unfused(x, *, mod_spec, hw_config, tensor_cache):
+def forward_qkv_unfused(x, mod_spec, hw_config, tensor_cache):
     query_states = ttnn.linear(
         x,
         tensor_cache.q_linear.weight,
@@ -117,32 +176,31 @@ def forward_qkv_unfused(x, *, mod_spec, hw_config, tensor_cache):
     return query_states, key_states, value_states
 
 
-def generate_optimized_source(func_name: str, args: list, func_def: ast.FunctionDef) -> str:
+def generate_optimized_source(func_name: str, args: list, func_def: ast.FunctionDef, indent: str = "") -> str:
     """Generate complete optimized source code"""
 
     # Extract function body
     body_lines = ast.unparse(func_def).split("\n")[1:]  # Skip def line
-    body = "\n".join(body_lines)
 
     # Add the forward method with original function body
+    local_indent = "   "
     source_lines = [
-        [
-            f'    def {func_name}({", ".join(args)}):',
-            f'        """Generated from introspected function"""',
-        ]
+        f'def {func_name}({", ".join(args)}):',
+        f'{local_indent}"""Generated from introspected function"""',
     ]
 
     # Indent and add function body
-    for line in body.split("\n"):
-        if line.strip():
-            source_lines.append(f"        {line}")
+    for line in body_lines:
+        if striped_line := line.strip():
+            source_lines.append(f"{local_indent}{striped_line}")
         else:
             source_lines.append("")
 
-    return "\n".join(source_lines)
+    source_lines = [f"{indent}{line}" for line in source_lines]
+    return source_lines
 
 
-def function_to_source(func: Callable, class_name: str = "GeneratedClass") -> str:
+def function_to_source(func: Callable, class_name: str = "GeneratedClass", indent: str = "") -> str:
     """
     Convert a function to optimized source code by:
     1. Extracting the original source
@@ -165,9 +223,9 @@ def function_to_source(func: Callable, class_name: str = "GeneratedClass") -> st
     # ttnn_ops = find_ttnn_operations(func_def)
 
     # Generate optimized source with full context
-    source = generate_optimized_source(func_name, args, func_def, ttnn_ops, class_name)
+    source_lines = generate_optimized_source(func_name, args, func_def, indent)
 
-    return source
+    return source_lines
 
 
 class TTTv2AttentionCodeGen:
@@ -208,93 +266,69 @@ class TTTv2AttentionCodeGen:
         )
 
         # Build function source code
-        lines = [
-            "def forward(self, hidden_states, attention_mask=None, position_ids=None):",
-            '    """',
-            f"    Optimized attention forward for {self.hw_config.device_name}",
-            f"    Hidden size: {self.attn_config.hidden_size}",
-            f"    Num heads: {self.attn_config.num_heads}",
-            f'    Implementation: {"flash" if use_flash else "standard"}',
-            '    """',
-            "    import ttnn",
-            "    import torch",
-            "",
-        ]
-
-        # Add shape extraction
-        lines.extend(
-            [
-                "    batch_size, seq_len, _ = hidden_states.shape",
-                "",
-            ]
-        )
+        lines = []
 
         # Configure memory and compute based on hardware
+        # a, b = generate_hardware_config(self.hw_config) # todo)) we could parse from this?
         lines.extend(self._generate_hardware_config())
 
         # Generate Q, K, V projections
         lines.extend(self._generate_qkv_projections())
 
-        # Generate attention computation
-        if use_flash:
-            lines.extend(self._generate_flash_attention())
-        else:
-            lines.extend(self._generate_standard_attention())
+        # Add rotary embeddings if configured
+        # if self.attn_config.use_rotary_embeddings:
+        #     # todo)) replace this with a function call but this is here to show configurable code generation
+        #     lines.extend(
+        #         [
+        #             "    # Apply rotary position embeddings",
+        #             "    if position_ids is not None:",
+        #             "        query_states, key_states = ttnn.apply_rotary_embeddings(",
+        #             "            query_states, key_states, self.rotary_emb, position_ids",
+        #             "        )",
+        #             "",
+        #         ]
+        #     )
 
-        # Output projection
-        lines.extend(self._generate_output_projection())
+        # # Generate attention computation
+        # if use_flash:
+        #     lines.extend(self._generate_flash_attention())
+        # else:
+        #     lines.extend(self._generate_standard_attention())
+
+        # # Output projection
+        # lines.extend(self._generate_output_projection())
 
         return "\n".join(lines)
 
     def _generate_hardware_config(self) -> list:
         """Generate hardware-specific configuration setup"""
-        lines = [
-            "    # Hardware-specific configuration",
-            "    compute_kernel_config = ttnn.WormholeComputeKernelConfig(",
-            f"        math_fidelity=ttnn.MathFidelity.{'HiFi4' if self.hw_config.fp32_accumulation else 'HiFi2'},",
-            f"        fp32_dest_acc_en={self.hw_config.fp32_accumulation},",
-            "        packer_l1_acc=True",
-            "    )",
-            "",
-        ]
+        lines = generate_hardware_config_source("compute_kernel_config", self.hw_config)
 
         # Memory configuration based on shard strategy
+        # Memory configuration based on shard strategy
         if self.hw_config.shard_strategy == "block":
-            lines.extend(
-                [
-                    "    memory_config = ttnn.MemoryConfig(",
-                    "        memory_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,",
-                    "        buffer_type=ttnn.BufferType.L1",
-                    "    )",
-                ]
-            )
+            memory_layout = "ttnn.TensorMemoryLayout.BLOCK_SHARDED"
+            buffer_type = "ttnn.BufferType.L1"
         elif self.hw_config.shard_strategy == "height":
-            lines.extend(
-                [
-                    "    memory_config = ttnn.MemoryConfig(",
-                    "        memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,",
-                    "        buffer_type=ttnn.BufferType.L1",
-                    "    )",
-                ]
-            )
+            memory_layout = "ttnn.TensorMemoryLayout.HEIGHT_SHARDED"
+            buffer_type = "ttnn.BufferType.L1"
         else:
-            lines.extend(
-                [
-                    "    memory_config = ttnn.MemoryConfig(",
-                    "        memory_layout=ttnn.TensorMemoryLayout.INTERLEAVED,",
-                    "        buffer_type=ttnn.BufferType.DRAM",
-                    "    )",
-                ]
-            )
+            memory_layout = "ttnn.TensorMemoryLayout.INTERLEAVED"
+            buffer_type = "ttnn.BufferType.DRAM"
 
-        lines.append("")
+        self.hw_config.memory_layout = memory_layout
+        self.hw_config.buffer_type = buffer_type
+        lines.extend(generate_memory_config_source("memory_config", self.hw_config))
+
         return lines
 
-    def _generate_qkv_projections(self) -> list:
+    def _generate_qkv_projections(self, indent: str = "") -> list:
         """Generate Q, K, V projection code"""
+
+        # todo)) handle indentation in a elegant way
         lines = [
-            "    # Q, K, V projections",
-            "    # Optimized for head dimension and memory layout",
+            "# Q, K, V projections",
+            "# Optimized for head dimension and memory layout",
         ]
 
         # Determine if we can fuse QKV projection
@@ -302,70 +336,13 @@ class TTTv2AttentionCodeGen:
             self.attn_config.head_dim % 32 == 0
             and self.hw_config.l1_memory_size > self.attn_config.total_dim * 3 * 2048
         )
-
         if can_fuse:
-            lines.extend(
-                [
-                    "    qkv = ttnn.linear(",
-                    "        hidden_states,",
-                    "        self.qkv_weight,",
-                    "        bias=self.qkv_bias if hasattr(self, 'qkv_bias') else None,",
-                    "        compute_kernel_config=compute_kernel_config,",
-                    "        memory_config=memory_config,",
-                    "        dtype=ttnn.bfloat16",
-                    "    )",
-                    "",
-                    f"    # Reshape to separate Q, K, V: [batch, seq, 3, num_heads, head_dim]",
-                    f"    qkv = ttnn.reshape(qkv, [batch_size, seq_len, 3, {self.attn_config.num_heads}, {self.attn_config.head_dim}])",
-                    "    query_states = qkv[:, :, 0, :, :]",
-                    "    key_states = qkv[:, :, 1, :, :]",
-                    "    value_states = qkv[:, :, 2, :, :]",
-                ]
-            )
+            lines.extend(function_to_source(forward_qkv_fused))
         else:
-            # Separate projections
-            lines.extend(
-                [
-                    "    query_states = ttnn.linear(",
-                    "        hidden_states, self.q_weight, bias=self.q_bias,",
-                    "        compute_kernel_config=compute_kernel_config,",
-                    "        memory_config=memory_config,",
-                    "        dtype=ttnn.bfloat16",
-                    "    )",
-                    "    key_states = ttnn.linear(",
-                    "        hidden_states, self.k_weight, bias=self.k_bias,",
-                    "        compute_kernel_config=compute_kernel_config,",
-                    "        memory_config=memory_config,",
-                    "        dtype=ttnn.bfloat16",
-                    "    )",
-                    "    value_states = ttnn.linear(",
-                    "        hidden_states, self.v_weight, bias=self.v_bias,",
-                    "        compute_kernel_config=compute_kernel_config,",
-                    "        memory_config=memory_config,",
-                    "        dtype=ttnn.bfloat16",
-                    "    )",
-                    "",
-                    "    # Reshape to [batch, seq, num_heads, head_dim]",
-                    f"    query_states = ttnn.reshape(query_states, [batch_size, seq_len, {self.attn_config.num_heads}, {self.attn_config.head_dim}])",
-                    f"    key_states = ttnn.reshape(key_states, [batch_size, seq_len, {self.attn_config.num_heads}, {self.attn_config.head_dim}])",
-                    f"    value_states = ttnn.reshape(value_states, [batch_size, seq_len, {self.attn_config.num_heads}, {self.attn_config.head_dim}])",
-                ]
-            )
+            lines.extend(function_to_source(forward_qkv_unfused))
 
+        lines = [f"{indent}{line}" for line in lines]
         lines.append("")
-
-        # Add rotary embeddings if configured
-        if self.attn_config.use_rotary_embeddings:
-            lines.extend(
-                [
-                    "    # Apply rotary position embeddings",
-                    "    if position_ids is not None:",
-                    "        query_states, key_states = ttnn.apply_rotary_embeddings(",
-                    "            query_states, key_states, self.rotary_emb, position_ids",
-                    "        )",
-                    "",
-                ]
-            )
 
         return lines
 
@@ -380,7 +357,7 @@ class TTTv2AttentionCodeGen:
             "        value_states,",
             "        is_causal=True,",
             "        attention_mask=attention_mask,",
-            f"        dropout_p={self.attn_config.dropout if self.training else 0.0},",
+            f"        dropout_p={self.attn_config.dropout},",
             "        compute_kernel_config=compute_kernel_config,",
             "        memory_config=memory_config",
             "    )",
@@ -627,7 +604,7 @@ def Attention(
     """
 
     # Create code generator
-    codegen = TTTv2AttentionCodeGen(attn_config, hw_config)
+    codegen = TTTv2AttentionCodeGen(hw_config, attn_config)
 
     # Generate source code
     if gen_format == "class":
@@ -647,13 +624,8 @@ def Attention(
             f.write(source_code)
 
     # Compile the source into a class
-    namespace = {
-        "nn": type("nn", (), {"Module": object}),  # Mock for demo
-        "torch": type("torch", (), {}),
-        "ttnn": type("ttnn", (), {}),
-    }
-
-    exec(source_code, namespace)
+    namespace = {}
+    exec(source_code, {"ttnn": ttnn}, namespace)
 
     # Find the generated class
     module_class = None
@@ -673,7 +645,7 @@ if __name__ == "__main__":
     hw_config = HardwareConfig(
         device_name="wormhole_b0",
         grid_size=(8, 7),
-        l1_memory_size=1024 * 1024,  # 1MB
+        l1_memory_size=1024 * 1024 * 30,  # 30MB
         supports_flash_attention=True,
         fp32_accumulation=True,
         max_seq_len=2048,

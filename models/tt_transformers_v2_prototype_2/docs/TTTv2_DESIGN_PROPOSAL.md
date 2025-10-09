@@ -798,6 +798,7 @@ Key Design Decisions:
 [forward function](codegen/TTTv2_BIDIRECTIONAL_CODE_GENERATION.py) at line 348 can be a free function that can be used to generate the source code for the class. It is currently used to generate the source code for the class. This free function is like a template! Future TTNN ops could be hidden behind a free function as well that serves as a template for the source code generation, which gives us a chance to adjust the APIs and have room for working around TTNN limitations.
 
 This approach could be combined with the metaclass approach to generate the source code for the class. Or we could make it simpler by specializing a compile_function for each specialized forward function. Such compile_function could generate the specialized forward function that contains concretized configurations based on the tensor shape and hardware configurations
+- look at this file models/tt_transformers_v2_prototype_2/example_attention_codegen.py for example code
 
 I have an idea: there is that env var that will skip execution of all kernels! So, we could have a compile time option to skip execution of all kernels even today!!!
 - `TT_METAL_NULL_KERNELS`
