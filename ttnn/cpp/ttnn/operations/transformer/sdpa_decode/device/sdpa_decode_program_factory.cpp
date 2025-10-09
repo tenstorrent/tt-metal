@@ -184,6 +184,9 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     uint32_t num_cores_per_head = std::max((uint32_t)1, num_cores_per_batch / num_kv_heads);
     uint32_t num_heads_per_core = std::max((uint32_t)1, (uint32_t)std::ceil((float)num_kv_heads / num_cores_per_batch));
     uint32_t num_reducer_cores = num_kv_heads * B / num_heads_per_core;
+    TT_FATAL(num_cores_per_head > 0, "num_cores_per_head must be > 0");
+    TT_FATAL(
+        num_cores_per_batch % num_cores_per_head == 0, "num_cores_per_batch must be divisible by num_cores_per_head");
     uint32_t num_output_cores = B;
     uint32_t num_active_cores = num_cores_per_head * num_kv_heads * B / num_heads_per_core;
     //// recalculate num_cores_per_batch based on num_active_cores
@@ -673,6 +676,8 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
 
     log_debug(tt::LogOp, "output_core_physical_xs: {}", output_core_physical_xs);
     log_debug(tt::LogOp, "output_core_physical_ys: {}", output_core_physical_ys);
+    TT_FATAL(output_core_physical_xs.size() == num_output_cores, "Output core list size mismatch (xs)");
+    TT_FATAL(output_core_physical_ys.size() == num_output_cores, "Output core list size mismatch (ys)");
 
     // Common Compile time Args
     auto reducer_semaphore_id = tt_metal::CreateSemaphore(program, core_grid, 0);

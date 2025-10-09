@@ -94,6 +94,8 @@ void kernel_main() {
     arg_idx += num_output_cores;
     tt_l1_ptr uint32_t* all_output_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx++));
 
+    ASSERT(num_cores_per_head > 0);
+    ASSERT(num_cores_per_batch % num_cores_per_head == 0);
     uint32_t reduce_core_index = (cur_batch * num_cores_per_batch) / num_cores_per_head + cur_head_group;
     uint32_t reduce_core_noc_x = all_reducer_noc_x[reduce_core_index];
     uint32_t reduce_core_noc_y = all_reducer_noc_y[reduce_core_index];

@@ -22,8 +22,10 @@
 #include "compute_common.hpp"
 #include "compute_kernel_api/pack_untilize.h"
 #include "compute_kernel_api/untilize.h"
-
+#include "debug/dprint.h"
 constexpr uint32_t MAX_PACK_UNTILIZE_WIDTH = 8;
+
+auto sr = SliceRange{.h0 = 0, .h1 = 8, .hs = 4, .w0 = 0, .w1 = 32, .ws = 4};
 
 namespace NAMESPACE {
 
@@ -110,6 +112,12 @@ void MAIN {
     // Idle core
     // get_arg_val<uint32_t>(0) can go from 0-63 for the core_num; for active cores 65 is out of range so 65 indicates
     // an idle_core
+    DPRINT << "cur batch : " << cur_batch << ENDL();
+    if (do_reduce) {
+        DPRINT << "This IS a reducer core" << ENDL();
+    } else {
+        DPRINT << "This IS NOT a reducer core" << ENDL();
+    }
     if (get_arg_val<uint32_t>(0) == 65) {
         return;
     }
@@ -147,15 +155,21 @@ void MAIN {
     if (k_chunk_start == k_chunk_end) {
         return;  // early exit because no computes needs to be done
     }
+    DPRINT << "k num chunks : " << k_num_chunks << ENDL();
+    DPRINT << "k_chunk_start : " << k_chunk_start << ENDL();
+    DPRINT << "k_chunk_end : " << k_chunk_end << ENDL();
 
     // Get number of worker cores to wait for
     uint32_t num_cores_to_wait = num_cores_per_head - 1;
     if (num_cores_per_head > k_num_chunks) {
         num_cores_to_wait = k_num_chunks - 1;
     }
+    DPRINT << "num_cores_to_wait : " << num_cores_to_wait << ENDL();
+    DPRINT << "num_cores_per_head : " << num_cores_per_head << ENDL();
 
     // We tilize input Q if it is in ROW MAJOR layout
     if constexpr (tilize_q) {
+        DPRINT << "we are tilizing q " << ENDL();
         compute_kernel_hw_startup(cb_q_rm, cb_q_in);
         tilize_init(cb_q_rm, q_chunk_tiles, cb_q_in);
         cb_wait_front(cb_q_rm, q_chunk_tiles);
@@ -169,7 +183,27 @@ void MAIN {
         mm_init(cb_q_in, cb_k_in, cb_qk_im);
     }
     cb_wait_front(cb_q_in, q_chunk_tiles);
+    for (uint8_t r = 0; r < 32; ++r) {
+        SliceRange sr1 = SliceRange{
+            .h0 = static_cast<uint8_t>(r), .h1 = static_cast<uint8_t>(r + 1), .hs = 1, .w0 = 0, .w1 = 32, .ws = 1};
+        DPRINT_DATA0({
+            DPRINT << (uint)r << " --READ--cb_q_in-- "
+                   << TileSlice(cb_q_in, 0, sr1, TSLICE_INPUT_CB, TSLICE_RD_PTR, true, false) << ENDL();
+        });
+        DPRINT_UNPACK(
+            { DPRINT << (uint)r << " --READ--cb_q_in-- " << TileSlice(cb_q_in, 0, sr1, true, false) << ENDL(); });
+        DPRINT_PACK(
+            { DPRINT << (uint)r << " --READ--cb_q_in-- " << TileSlice(cb_q_in, 0, sr1, true, false) << ENDL(); });
+    }
 
+    // cb_wait_front(cb_v_in, vDHt * Sk_chunk_t_dynamic);
+    // for (uint8_t r = 0; r < 32; ++r) {
+    //     SliceRange sr1 = SliceRange{.h0 = static_cast<uint8_t>(r), .h1 = static_cast<uint8_t>(r + 1), .hs = 1, .w0 =
+    //     0, .w1 = 32, .ws = 1}; DPRINT_DATA0({ DPRINT << (uint)r << " --READ--cb_v_in-- " << TileSlice(cb_v_in, 0,
+    //     sr1, TSLICE_INPUT_CB, TSLICE_RD_PTR, true, false) << ENDL(); }); DPRINT_UNPACK({ DPRINT << (uint)r << "
+    //     --READ--cb_v_in-- " << TileSlice(cb_v_in, 0, sr1, true, false) << ENDL(); }); DPRINT_PACK({ DPRINT << (uint)r
+    //     << " --READ--cb_v_in-- " << TileSlice(cb_v_in, 0, sr1, true, false) << ENDL(); });
+    // }
     // Define dynamic matmul configs
 #ifdef DYNAMIC_CHUNK_SIZE
     const uint32_t qk_subblock_h_dynamic = 1;
@@ -203,6 +237,7 @@ void MAIN {
     uint32_t cb_cur_sum = cb_sum_1;
     uint32_t cb_prev_sum = cb_sum_2;
 
+    DPRINT << "num heads per core: " << num_heads_per_core << ENDL();
     // Loop through all heads assigned to core
     for (uint32_t cur_head_work = 0; cur_head_work < num_heads_per_core; ++cur_head_work) {
 
@@ -274,6 +309,27 @@ void MAIN {
                 bool add_mask_fusion = false;
 #endif
 
+                cb_wait_front(cb_k_in, Sk_chunk_t_dynamic * DHt);
+                for (uint8_t r = 0; r < 32; ++r) {
+                    SliceRange sr1 = SliceRange{
+                        .h0 = static_cast<uint8_t>(r),
+                        .h1 = static_cast<uint8_t>(r + 1),
+                        .hs = 1,
+                        .w0 = 0,
+                        .w1 = 32,
+                        .ws = 1};
+                    DPRINT_DATA0({
+                        DPRINT << (uint)r << " --READ--cb_k_in-- "
+                               << TileSlice(cb_k_in, 0, sr1, TSLICE_INPUT_CB, TSLICE_RD_PTR, true, false) << ENDL();
+                    });
+                    DPRINT_UNPACK({
+                        DPRINT << (uint)r << " --READ--cb_k_in-- " << TileSlice(cb_k_in, 0, sr1, true, false) << ENDL();
+                    });
+                    DPRINT_PACK({
+                        DPRINT << (uint)r << " --READ--cb_k_in-- " << TileSlice(cb_k_in, 0, sr1, true, false) << ENDL();
+                    });
+                }
+
                 /* QK = Q_CHUNK @ K_CHUNK */
                 cb_matmul_blocks(
                     cb_q_in,
@@ -292,6 +348,15 @@ void MAIN {
                     add_mask_fusion,
                     cb_mask_in,
                     cb_zero_in);
+                // cb_wait_front(cb_qk_im, Sq_chunk_t * Sk_chunk_t_dynamic);
+                // for (uint8_t r = 0; r < 32; ++r) {
+                //     SliceRange sr1 = SliceRange{.h0 = static_cast<uint8_t>(r), .h1 = static_cast<uint8_t>(r + 1), .hs
+                //     = 1, .w0 = 0, .w1 = 32, .ws = 1}; DPRINT_DATA0({ DPRINT << (uint)r << " --READ--cb_qk_im-- " <<
+                //     TileSlice(cb_qk_im, 0, sr1, TSLICE_INPUT_CB, TSLICE_RD_PTR, true, false) << ENDL(); });
+                //     DPRINT_UNPACK({ DPRINT << (uint)r << " --READ--cb_qk_im-- " << TileSlice(cb_qk_im, 0, sr1, true,
+                //     false) << ENDL(); }); DPRINT_PACK({ DPRINT << (uint)r << " --READ--cb_qk_im-- " <<
+                //     TileSlice(cb_qk_im, 0, sr1, true, false) << ENDL(); });
+                // }
 
                 /* QK += MASK */
                 if (!add_mask_fusion) {
@@ -327,6 +392,7 @@ void MAIN {
                  * else:
                  *  cur_max = max(qk, dim=-1)
                  */
+                DPRINT << "Computing the max reduction on cb_cur_max ..." << ENDL();
                 reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_qk_im, cb_identity_scale_in, Sq_chunk_t, vector_mode>(
                     cb_cur_max, cb_prev_max, Sk_chunk_t_dynamic, k_chunk > k_chunk_start);
 
@@ -344,8 +410,23 @@ void MAIN {
                     scale_fp32,
                     vector_mode,
                     cb_identity_scale_in>(cb_cur_max, cb_cur_sum, Sk_chunk_t_dynamic);
-                cb_wait_front(cb_qk_im, qk_chunk_tiles_dynamic);
 
+                cb_wait_front(cb_qk_im, qk_chunk_tiles_dynamic);
+                // for (uint8_t r = 0; r < 32; ++r) {
+                //     SliceRange sr1 = SliceRange{.h0 = static_cast<uint8_t>(r), .h1 = static_cast<uint8_t>(r + 1), .hs
+                //     = 1, .w0 = 0, .w1 = 32, .ws = 1};
+                //     // On data movement RISCs, tiles can be printed from either the CB read or write pointers. Also
+                //     need to specify whether
+                //     // the CB is input or output.
+                //     DPRINT_DATA0({ DPRINT << (uint)r << " --READ--after exp cb_qk_im-- " << TileSlice(cb_qk_im, 0,
+                //     sr1, TSLICE_INPUT_CB, TSLICE_RD_PTR, true, false) << ENDL(); });
+                //     // Unpacker RISC only has rd_ptr and only input CBs, so no extra args
+                //     DPRINT_UNPACK({ DPRINT << (uint)r << " --READ--after exp cb_qk_im-- " << TileSlice(cb_qk_im, 0,
+                //     sr1, true, false) << ENDL(); });
+                //     // Packer RISC only has wr_ptr
+                //     DPRINT_PACK({ DPRINT << (uint)r << " --READ--after exp cb_qk_im-- " << TileSlice(cb_qk_im, 0,
+                //     sr1, true, false) << ENDL(); });
+                // }
                 // Reconfig register DF
                 reconfig_data_format(cb_qk_im, cb_identity_scale_in);
                 pack_reconfig_data_format(cb_cur_sum);
@@ -357,6 +438,16 @@ void MAIN {
                 /* OUT_IM = QK @ V_CHUNK */
                 reconfig_data_format(cb_qk_im, cb_v_in);  // DEBUG
                 pack_reconfig_data_format(cb_out_im);
+                // cb_wait_front(cb_v_in, Sq_chunk_t * vDHt);
+                // for (uint8_t r = 0; r < 32; ++r) {
+                //     SliceRange sr1 = SliceRange{.h0 = static_cast<uint8_t>(r), .h1 = static_cast<uint8_t>(r + 1), .hs
+                //     = 1, .w0 = 0, .w1 = 32, .ws = 1}; DPRINT_DATA0({ DPRINT << (uint)r << " --READ--cb_v_in-- " <<
+                //     TileSlice(cb_v_in, 0, sr1, TSLICE_INPUT_CB, TSLICE_RD_PTR, true, false) << ENDL(); });
+                //     DPRINT_UNPACK({ DPRINT << (uint)r << " --READ--cb_v_in-- " << TileSlice(cb_v_in, 0, sr1, true,
+                //     false) << ENDL(); }); DPRINT_PACK({ DPRINT << (uint)r << " --READ--cb_v_in-- " <<
+                //     TileSlice(cb_v_in, 0, sr1, true, false) << ENDL(); });
+                // }
+
                 cb_matmul_blocks(
                     cb_qk_im,
                     cb_v_in,
@@ -374,6 +465,16 @@ void MAIN {
                     false,
                     cb_mask_in,
                     cb_zero_in);
+                // cb_wait_front(cb_out_mm, Sq_chunk_t * vDHt);
+                // for (uint8_t r = 0; r < 32; ++r) {
+                //     SliceRange sr1 = SliceRange{.h0 = static_cast<uint8_t>(r), .h1 = static_cast<uint8_t>(r + 1), .hs
+                //     = 1, .w0 = 0, .w1 = 32, .ws = 1}; DPRINT_DATA0({ DPRINT << (uint)r << " --READ--cb_out_mm-- " <<
+                //     TileSlice(cb_out_mm, 0, sr1, TSLICE_INPUT_CB, TSLICE_RD_PTR, true, false) << ENDL(); });
+                //     DPRINT_UNPACK({ DPRINT << (uint)r << " --READ--cb_out_mm-- " << TileSlice(cb_out_mm, 0, sr1,
+                //     true, false) << ENDL(); }); DPRINT_PACK({ DPRINT << (uint)r << " --READ--cb_out_mm-- " <<
+                //     TileSlice(cb_out_mm, 0, sr1, true, false) << ENDL(); });
+                // }
+                // Debug: print one tile from OUT intermediate (after QKV matmul)
 
                 // Reconfig register DF
                 reconfig_data_format_srca(cb_out_im);
@@ -418,6 +519,22 @@ void MAIN {
                     pack_reconfig_data_format(cb_prev_max);
 
                     // PREV_MAX <- CUR_MAX
+                    // cb_wait_front(cb_cur_max, Sq_chunk_t);
+                    // for (uint8_t r = 0; r < 32; ++r) {
+                    //     SliceRange sr1 = SliceRange{.h0 = static_cast<uint8_t>(r), .h1 = static_cast<uint8_t>(r + 1),
+                    //     .hs = 1, .w0 = 0, .w1 = 32, .ws = 1};
+                    //     // On data movement RISCs, tiles can be printed from either the CB read or write pointers.
+                    //     Also need to specify whether
+                    //     // the CB is input or output.
+                    //     DPRINT_DATA0({ DPRINT << (uint)r << " --READ--cb_cur_max-- " << TileSlice(cb_cur_max, 0, sr1,
+                    //     TSLICE_INPUT_CB, TSLICE_RD_PTR, true, false) << ENDL(); });
+                    //     // Unpacker RISC only has rd_ptr and only input CBs, so no extra args
+                    //     DPRINT_UNPACK({ DPRINT << (uint)r << " --READ--cb_cur_max-- " << TileSlice(cb_cur_max, 0,
+                    //     sr1, true, false) << ENDL(); });
+                    //     // Packer RISC only has wr_ptr
+                    //     DPRINT_PACK({ DPRINT << (uint)r << " --READ--cb_cur_max-- " << TileSlice(cb_cur_max, 0, sr1,
+                    //     true, false) << ENDL(); });
+                    // }
                     move_block<true>(cb_cur_max, cb_prev_max, Sq_chunk_t);
 
                     // PREV_SUM <- CUR_SUM
@@ -486,7 +603,40 @@ void MAIN {
             cb_push_back(cb_cur_sum, Sq_chunk_t);
             reconfig_data_format(cb_cur_sum, cb_cur_sum);
             pack_reconfig_data_format(cb_cur_sum);
+            // cb_wait_front(cb_prev_sum, Sq_chunk_t);
+            // for (uint8_t r = 0; r < 32; ++r) {
+            //     SliceRange sr1 = SliceRange{.h0 = static_cast<uint8_t>(r), .h1 = static_cast<uint8_t>(r + 1), .hs =
+            //     1, .w0 = 0, .w1 = 32, .ws = 1};
+            //     // On data movement RISCs, tiles can be printed from either the CB read or write pointers. Also need
+            //     to specify whether
+            //     // the CB is input or output.
+            //     DPRINT_DATA0({ DPRINT << (uint)r << " --READ--cb_prev_sum-- " << TileSlice(cb_prev_sum, 0, sr1,
+            //     TSLICE_INPUT_CB, TSLICE_RD_PTR, true, false) << ENDL(); });
+            //     // Unpacker RISC only has rd_ptr and only input CBs, so no extra args
+            //     DPRINT_UNPACK({ DPRINT << (uint)r << " --READ--cb_prev_sum-- " << TileSlice(cb_prev_sum, 0, sr1,
+            //     true, false) << ENDL(); });
+            //     // Packer RISC only has wr_ptr
+            //     DPRINT_PACK({ DPRINT << (uint)r << " --READ--cb_prev_sum-- " << TileSlice(cb_prev_sum, 0, sr1, true,
+            //     false) << ENDL(); });
+            // }
+
             recip_block_inplace<vector_mode>(cb_cur_sum, Sq_chunk_t);
+            // cb_wait_front(cb_cur_sum, Sq_chunk_t);
+            // for (uint8_t r = 0; r < 32; ++r) {
+            //     SliceRange sr1 = SliceRange{.h0 = static_cast<uint8_t>(r), .h1 = static_cast<uint8_t>(r + 1), .hs =
+            //     1, .w0 = 0, .w1 = 32, .ws = 1};
+            //     // On data movement RISCs, tiles can be printed from either the CB read or write pointers. Also need
+            //     to specify whether
+            //     // the CB is input or output.
+            //     DPRINT_DATA0({ DPRINT << (uint)r << " --READ--cb_cur_sum-- " << TileSlice(cb_cur_sum, 0, sr1,
+            //     TSLICE_INPUT_CB, TSLICE_RD_PTR, true, false) << ENDL(); });
+            //     // Unpacker RISC only has rd_ptr and only input CBs, so no extra args
+            //     DPRINT_UNPACK({ DPRINT << (uint)r << " --READ--cb_cur_sum-- " << TileSlice(cb_cur_sum, 0, sr1, true,
+            //     false) << ENDL(); });
+            //     // Packer RISC only has wr_ptr
+            //     DPRINT_PACK({ DPRINT << (uint)r << " --READ--cb_cur_sum-- " << TileSlice(cb_cur_sum, 0, sr1, true,
+            //     false) << ENDL(); });
+            // }
 
             /* OUT_ACC *= CUR_SUM */
             reconfig_data_format(cb_out_accumulate_im, cb_cur_sum);
@@ -494,7 +644,22 @@ void MAIN {
 
             mul_block_bcast_cols_inplace(cb_out_accumulate_im, cb_cur_sum, Sq_chunk_t, vDHt);
             pack_reconfig_data_format(cb_out_final);
-
+            // cb_wait_front(cb_out_accumulate_im, Sq_chunk_t);
+            // for (uint8_t r = 0; r < 32; ++r) {
+            //     SliceRange sr1 = SliceRange{.h0 = static_cast<uint8_t>(r), .h1 = static_cast<uint8_t>(r + 1), .hs =
+            //     1, .w0 = 0, .w1 = 32, .ws = 1};
+            //     // On data movement RISCs, tiles can be printed from either the CB read or write pointers. Also need
+            //     to specify whether
+            //     // the CB is input or output.
+            //     DPRINT_DATA0({ DPRINT << (uint)r << " --READ--cb_acc_im-- " << TileSlice(cb_out_accumulate_im, 0,
+            //     sr1, TSLICE_INPUT_CB, TSLICE_RD_PTR, true, false) << ENDL(); });
+            //     // Unpacker RISC only has rd_ptr and only input CBs, so no extra args
+            //     DPRINT_UNPACK({ DPRINT << (uint)r << " --READ--cb_acc_im-- " << TileSlice(cb_out_accumulate_im, 0,
+            //     sr1, true, false) << ENDL(); });
+            //     // Packer RISC only has wr_ptr
+            //     DPRINT_PACK({ DPRINT << (uint)r << " --READ--cb_acc_im-- " << TileSlice(cb_out_accumulate_im, 0, sr1,
+            //     true, false) << ENDL(); });
+            // }
             // Untilize output to ROW MAJOR if input Q was also ROW MAJOR
             if constexpr (untilize_output) {
                 // Conditionally use pack_untilize or untilize

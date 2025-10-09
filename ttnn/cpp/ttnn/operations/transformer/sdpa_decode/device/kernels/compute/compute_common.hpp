@@ -15,6 +15,7 @@
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/reduce.h"
+#include "debug/dprint.h"
 
 /******************************************************************************
  *                                                                             *
@@ -94,6 +95,18 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, uint32_t cols, bool do_eltwise_
         pack_tile(reduce_dst_idx, out_cb);
         release_dst();
     }
+    // for (uint8_t r = 0; r < 32; ++r) {
+    //     SliceRange sr1 = SliceRange{.h0 = static_cast<uint8_t>(r), .h1 = static_cast<uint8_t>(r + 1), .hs = 1, .w0 =
+    //     0, .w1 = 32, .ws = 1};
+    //     // On data movement RISCs, tiles can be printed from either the CB read or write pointers. Also need to
+    //     specify whether
+    //     // the CB is input or output.
+    //     DPRINT_DATA0({ DPRINT << (uint)r << " --READ-- reduce out_cb-- " << TileSlice(out_cb, 0, sr1,
+    //     TSLICE_OUTPUT_CB, TSLICE_RD_PTR, true, false) << ENDL(); });
+    //     // Unpacker RISC only has rd_ptr and only input CBs, so no extra args
+    //     DPRINT_PACK({ DPRINT << (uint)r << " --READ-- reduce out_cb-- " << TileSlice(out_cb, 0, sr1, true, false) <<
+    //     ENDL(); });
+    // }
     cb_push_back(out_cb, rows);
     reduce_uninit();
 }

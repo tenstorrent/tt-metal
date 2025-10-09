@@ -106,6 +106,7 @@ void kernel_main() {
     arg_idx += num_output_cores;
     tt_l1_ptr uint32_t* all_output_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx++));
 
+    ASSERT(cur_batch < num_output_cores);
     uint32_t output_core_noc_x = all_output_noc_x[cur_batch];
     uint32_t output_core_noc_y = all_output_noc_y[cur_batch];
 
@@ -135,6 +136,7 @@ void kernel_main() {
     constexpr uint32_t barrier_threshold = get_barrier_read_threshold<q_tile_bytes, num_cores>();
     uint32_t barrier_count = 0;
 
+    DPRINT << "barrier_threshold : " << barrier_threshold << ENDL();
     // First, read Q entirely, it could be interleaved or sharded
     uint32_t q_batch_offset = cur_batch * q_chunk_tiles;
 
