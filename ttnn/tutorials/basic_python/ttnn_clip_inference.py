@@ -516,11 +516,17 @@ def main():
             # logit_scale is learned during training to control the sharpness of the distribution
             logit_scale = math.exp(self.logit_scale)
 
+            print(f"image_features: {image_features.shape}")
+            print(f"text_features: {text_features.shape}")
+
             # Compute similarity matrix: scaled dot product of normalized features
             # Result: [batch_image, embed] @ [embed, batch_text] = [batch_image, batch_text]
             logits_per_image = ttnn.matmul(logit_scale * image_features, text_features, transpose_b=True)
             # Transpose for text-to-image direction
             logits_per_text = ttnn.transpose(logits_per_image, 0, 1)
+
+            print(f"logits_per_image: {logits_per_image.shape}")
+            print(f"logits_per_text: {logits_per_text.shape}")
 
             return logits_per_image, logits_per_text
 
