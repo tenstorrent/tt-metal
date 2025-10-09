@@ -286,10 +286,15 @@ def run_all_to_all_impl(
 @pytest.mark.parametrize(
     "num_links, logical_shape, in_dim, out_dim, layout",
     [
+        (1, [6, 8, 640, 256], 2, 1, ttnn.TILE_LAYOUT),  # padding test 0
+        (1, [6, 8, 384, 128], 1, 2, ttnn.TILE_LAYOUT),  # padding test 1
+        (1, [1, 64, 128, 256], 2, 1, ttnn.TILE_LAYOUT),  # padding test 2
+        (1, [1, 128, 128, 512], 1, 2, ttnn.TILE_LAYOUT),  # padding test 3
+        (1, [1, 32, 128, 576], 2, 1, ttnn.TILE_LAYOUT),  # padding test 4
         (1, [1, 1, 44544, 3072 * 3], 2, 3, ttnn.TILE_LAYOUT),  # Pre-attn all-to-all
         (1, [1, 1, 44544, 3072], 3, 2, ttnn.TILE_LAYOUT),  # Post-attn all-to-all
     ],
-    ids=["pre-attn", "post-attn"],
+    ids=["padded0", "padded1", "padded2", "padded3", "padded4", "pre-attn", "post-attn"],
 )
 @pytest.mark.parametrize(
     "input_dtype",
