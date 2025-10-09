@@ -7,15 +7,81 @@
 #include "dataflow_api.h"
 #include <tt-metalium/constants.hpp>
 
+void fill_zeros_async(uint32_t write_addr, uint32_t tile_bytes) {
+    volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(write_addr);
+    uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
+    // Fill tile with zeros
+    uint32_t bytes_left = tile_bytes;
+    for (;;) {
+        uint32_t read_size = bytes_left > MEM_ZEROS_SIZE ? MEM_ZEROS_SIZE : bytes_left;
+        noc_async_read(zeros_noc_addr, write_addr, read_size);
+        write_addr += read_size;
+        bytes_left -= read_size;
+        if (bytes_left == 0) {
+            break;
+        }
+    }
+}
+
 struct TensorShape2D {
-    uint32_t d0;
-    uint32_t d1;
+    uint32_t logical_d0;
+    uint32_t logical_d1;
+    uint32_t padded_d0;
+    uint32_t padded_d1;
     // Constructor to initialize with 2D shape
-    TensorShape2D(uint32_t _d0, uint32_t _d1) : d0(_d0), d1(_d1) {}
+    TensorShape2D(uint32_t _d0, uint32_t _d1, uint32_t _padded_d0, uint32_t _padded_d1) :
+        logical_d0(_d0), logical_d1(_d1), padded_d0(_padded_d0), padded_d1(_padded_d1) {
+        ASSERT(_d0 > 0);
+        ASSERT(_d1 > 0);
+        ASSERT(_d0 <= _padded_d0);
+        ASSERT(_d1 <= _padded_d1);
+    }
 };
 
+/**
+ * Read a block of in0 from a potentially padded tensor.
+ * Since this is for matmul, no need to read when M >= logical_M
+ * Otherwise, if K >= logical_K, fill with zeros.
+ */
 template <typename TensorAccessorType>
-void read_block_sync(
+void read_in0_block_sync(
+    const TensorAccessorType& tensor_accessor,
+    const TensorShape2D& shape,
+    uint32_t write_ptr,
+    uint32_t tile_size_bytes,
+    uint32_t d0_start,
+    uint32_t d0_end,
+    uint32_t d1_start,
+    uint32_t d1_end) {
+    ASSERT(d0_start >= 0);
+    ASSERT(d0_end < shape.padded_d0);
+    ASSERT(d1_start >= 0);
+    ASSERT(d1_end < shape.padded_d1);
+
+    for (uint32_t i = d0_start; i < d0_end; i++) {
+        if (i >= shape.logical_d0) {
+            break;
+        }
+        for (uint32_t j = d1_start; j < d1_end; j++) {
+            if (j < shape.logical_d1) {
+                uint32_t tile_id = i * shape.logical_d1 + j;
+                noc_async_read_tile(tile_id, tensor_accessor, write_ptr);
+            } else {
+                fill_zeros_async(write_ptr, tile_size_bytes);
+            }
+            write_ptr += tile_size_bytes;
+        }
+    }
+    noc_async_read_barrier();
+}
+
+/**
+ * Read a block of in1 from a potentially padded tensor.
+ * Since this is for matmul, no need to read when N >= logical_N
+ * Otherwise, if K >= logical_K, fill with zeros.
+ */
+template <typename TensorAccessorType>
+void read_in1_block_sync(
     const TensorAccessorType& tensor_accessor,
     const TensorShape2D& shape,
     uint32_t write_ptr,
@@ -26,14 +92,26 @@ void read_block_sync(
     uint32_t d1_end) {
     for (uint32_t i = d0_start; i < d0_end; i++) {
         for (uint32_t j = d1_start; j < d1_end; j++) {
-            uint32_t tile_id = i * shape.d1 + j;
-            noc_async_read_tile(tile_id, tensor_accessor, write_ptr);
+            if (j >= shape.logical_d1) {
+                write_ptr += tile_size_bytes;
+                continue;
+            }
+            if (i < shape.logical_d0) {
+                uint32_t tile_id = i * shape.logical_d1 + j;
+                noc_async_read_tile(tile_id, tensor_accessor, write_ptr);
+            } else {
+                fill_zeros_async(write_ptr, tile_size_bytes);
+            }
             write_ptr += tile_size_bytes;
         }
     }
     noc_async_read_barrier();
 }
 
+/**
+ * Write a block of output to a potentially padded tensor.
+ * Skip writing when M >= logical_M or N >= logical_N
+ */
 template <typename TensorAccessorType>
 void write_block_sync(
     const TensorAccessorType& tensor_accessor,
@@ -45,8 +123,15 @@ void write_block_sync(
     uint32_t d1_start,
     uint32_t d1_end) {
     for (uint32_t i = d0_start; i < d0_end; i++) {
+        if (i >= shape.logical_d0) {
+            break;
+        }
         for (uint32_t j = d1_start; j < d1_end; j++) {
-            uint32_t tile_id = i * shape.d1 + j;
+            if (j >= shape.logical_d1) {
+                read_ptr += tile_size_bytes;
+                continue;
+            }
+            uint32_t tile_id = i * shape.logical_d1 + j;
             noc_async_write_tile(tile_id, tensor_accessor, read_ptr);
             read_ptr += tile_size_bytes;
         }
@@ -72,11 +157,16 @@ void write_block_sync_granular(
     for (uint32_t i = d0_start; i < d0_end; i++) {
         cb_wait_front(cb_id_out, block_col_tiles);
 #ifndef SKIP_OUT
-        uint32_t out_read_ptr = get_read_ptr(cb_id_out);
-        for (uint32_t j = d1_start; j < d1_end; j++) {
-            uint32_t tile_id = i * shape.d1 + j;
-            noc_async_write_tile(tile_id, tensor_accessor, out_read_ptr);
-            out_read_ptr += tile_size_bytes;
+        if (i < shape.logical_d0) {
+            uint32_t out_read_ptr = get_read_ptr(cb_id_out);
+            for (uint32_t j = d1_start; j < d1_end; j++) {
+                if (j >= shape.logical_d1) {
+                    break;
+                }
+                uint32_t tile_id = i * shape.logical_d1 + j;
+                noc_async_write_tile(tile_id, tensor_accessor, out_read_ptr);
+                out_read_ptr += tile_size_bytes;
+            }
         }
 #endif
         cb_pop_front(cb_id_out, block_col_tiles);
