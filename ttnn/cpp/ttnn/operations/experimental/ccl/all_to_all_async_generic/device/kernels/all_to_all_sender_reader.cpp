@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
 #include "debug/dprint.h"
 #include "debug/dprint_pages.h"
 #include "debug/dprint_tile.h"
