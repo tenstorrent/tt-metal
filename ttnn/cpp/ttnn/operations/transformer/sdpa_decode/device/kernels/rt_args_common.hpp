@@ -5,7 +5,6 @@
 #include <tt-metalium/constants.hpp>
 #include <optional>
 #include <tuple>
-#include "debug/dprint.h"
 
 inline uint32_t nearest_n(uint32_t x, uint32_t n) { return ((x + n - 1) / n) * n; }
 
@@ -66,7 +65,6 @@ inline std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t> ge
     uint32_t pst_value = valid_seq_len / tt::constants::TILE_HEIGHT;
     uint32_t window_start_chunk = window_start / k_chunk_size;
     uint32_t num_chunks_value = valid_seq_len / k_chunk_size;
-    // uint32_t active_chunks = total_chunks - window_start_chunk;
 
     uint32_t k_chunk_start = window_start_chunk;
     uint32_t k_chunk_end = window_start_chunk;

@@ -354,7 +354,6 @@ void generate_sliding_window_mask(uint32_t k_num_chunks, uint32_t Sk_chunk_t, ui
     uint32_t q_write_ptr_base = get_read_ptr(cb_mask_in);
     constexpr uint32_t tile_bytes = get_tile_size(cb_mask_in);
 
-    // window_start_in_tile << ENDL();
     for (uint32_t i = 0; i < Sk_chunk_t; ++i) {
         if (i < window_start_in_chunk_t) {
             // Tile is completely before sliding window - fill with -inf
