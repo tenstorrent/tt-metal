@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from pathlib import Path
-from typing import cast
 
 import torch
 from transformers.configuration_utils import PretrainedConfig
@@ -19,7 +18,7 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     TypecastConfig,
 )
 from models.demos.deepseek_v3.utils.config_helpers import (
-    MAX_BATCH_SIZE,
+    USERS_PER_ROW,
     even_int_div,
     find_largest_divisor,
     shard_and_save,
@@ -32,7 +31,7 @@ from models.demos.deepseek_v3.utils.run_config import (
 )
 
 
-class Embedding(AbstractModule):
+class Embedding1D(AbstractModule):
     """Embedding module with 1D tensor parallelism from TTT code.
     Uses DRAM-sharded weights split 1D across all wormholes"""
 
@@ -48,7 +47,7 @@ class Embedding(AbstractModule):
         assert (
             len(state_dicts) == 1 and state_dicts[0] is not None
         ), f"Embedding expects exactly one non-padding state dict, got {len(state_dicts)}"
-        (state_dict,) = cast(tuple[dict[str, torch.Tensor]], state_dicts)
+        (state_dict,) = state_dicts
 
         # Get the embedding weight from the state dict (in the full model: model.embed_tokens.weight)
         torch_weight = state_dict["weight"]
@@ -76,7 +75,7 @@ class Embedding(AbstractModule):
                     ),
                     shard_dims=(2, 1),
                     mesh_device=mesh_device,
-                    remove_dims=(True, True),
+                    remove_dims=True,
                     dtype=ttnn.bfloat16,
                     layout=ttnn.TILE_LAYOUT,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -93,7 +92,9 @@ class Embedding(AbstractModule):
             Dict containing operator configurations for prefill mode
         """
 
-        return cls._embedding_config(hf_config, mesh_device, ttnn.DRAM_MEMORY_CONFIG)
+        return cls._embedding_config(
+            hf_config, mesh_device, ttnn.DRAM_MEMORY_CONFIG, ttnn.bfloat16
+        )  # RMSNorm does not support float32 in prefill
 
     @classmethod
     def decode_model_config(cls, hf_config: PretrainedConfig, mesh_device: ttnn.MeshDevice) -> ModelDecodeConfig:
@@ -110,7 +111,7 @@ class Embedding(AbstractModule):
         num_sharding_cores = find_largest_divisor(num_width_shard_tiles, mesh_device.core_grid.num_cores)
         memory_config = ttnn.create_sharded_memory_config(
             shape=(
-                MAX_BATCH_SIZE,
+                USERS_PER_ROW,
                 num_width_shard_tiles * ttnn.TILE_SIZE,
             ),
             core_grid=ttnn.num_cores_to_corerangeset(
@@ -121,11 +122,15 @@ class Embedding(AbstractModule):
             use_height_and_width_as_shard_shape=True,
         )
 
-        return cls._embedding_config(hf_config, mesh_device, memory_config)
+        return cls._embedding_config(hf_config, mesh_device, memory_config, ttnn.float32)
 
     @classmethod
     def _embedding_config(
-        cls, hf_config: PretrainedConfig, mesh_device: ttnn.MeshDevice, memory_config: ttnn.MemoryConfig
+        cls,
+        hf_config: PretrainedConfig,
+        mesh_device: ttnn.MeshDevice,
+        memory_config: ttnn.MemoryConfig,
+        output_dtype: ttnn.DataType,
     ) -> dict[str, OpConfigBase]:
         """Config for the Embedding module."""
         assert (
@@ -138,7 +143,7 @@ class Embedding(AbstractModule):
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 layout=ttnn.TILE_LAYOUT,
             ),
-            "typecast": TypecastConfig(dtype=ttnn.float32),
+            "typecast": TypecastConfig(dtype=output_dtype),
             "all_gather": AllGatherAsyncConfig(
                 mesh_device=MeshDeviceStub(mesh_device.shape),
                 cluster_axis=0,
@@ -162,21 +167,14 @@ class Embedding(AbstractModule):
 
     @classmethod
     def forward_prefill(cls, x, cfg):
-        assert len(x.shape) == 3, "Ids tensor must be 3D: [1, 1, batch]"
-        assert (
-            x.shape[-1] % ttnn.TILE_SIZE == 0
-        ), "Batch dimension must be divisible by TILE_SIZE for decode"  # TODO: remove this restriction once all gather async supports subtile gathering
-
-        embeddings = ttnn.embedding(x, **cfg["embedding"])
-        embeddings = ttnn.unsqueeze(embeddings, 0)
-
-        embeddings_ag = ttnn.experimental.all_gather_async(embeddings, **cfg["all_gather"])
-        ttnn.deallocate(embeddings)
-
-        return embeddings_ag
+        return cls._forward(x, cfg)
 
     @classmethod
     def forward_decode(cls, x, cfg):
+        return cls._forward(x, cfg)
+
+    @classmethod
+    def _forward(cls, x, cfg):
         assert len(x.shape) == 3, "Ids tensor must be 3D: [1, 1, batch]"
 
         # TODO: remove this padding once all gather async supports subtile gathering

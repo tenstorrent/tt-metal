@@ -127,10 +127,9 @@ def _merge_run_config(model_state_config_item: Any, weight_config_item: Any, _: 
     if isinstance(
         model_state_config_item, FromWeightConfig
     ):  # TODO: bring regular tensor saving back once Issue #26763 is resolved
-        assert isinstance(
-            weight_config_item, SavedWeight
-        ), "Expected a SavedWeight in the weight config for a FromWeightConfig in the model state config"
-        return load_weight(weight_config_item, model_state_config_item.mesh_device)
+        if isinstance(weight_config_item, SavedWeight):
+            return load_weight(weight_config_item, model_state_config_item.mesh_device)
+        return None
 
     if weight_config_item is None:
         assert not isinstance(
@@ -139,7 +138,7 @@ def _merge_run_config(model_state_config_item: Any, weight_config_item: Any, _: 
         return model_state_config_item
 
     raise ValueError(
-        f"Unsupported model and weight config items to merge: {model_state_config_item} and {weight_config_item}"
+        f"Unsupported model and weight config items to merge: {model_state_config_item} and {weight_config_item}. Try recalculating cached weights."
     )
 
 
@@ -221,7 +220,7 @@ def _convert_run_config_to_pretty_print(run_config_item: Any, indent: int = 0) -
             return "{}"
 
         lines = ["{"]
-        for k, v in run_config_item.items():
+        for k, v in sorted(run_config_item.items(), key=lambda item: item[0]):
             value_str = _convert_run_config_to_pretty_print(v, indent + 1)
             lines.append(f"{next_indent_str}{k!r}: {value_str},")
         lines.append(f"{indent_str}}}")
