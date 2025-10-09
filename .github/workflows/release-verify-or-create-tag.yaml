@@ -36,6 +36,11 @@ jobs:
         with:
           fetch-depth: ${{ inputs.fetch_depth }}
           fetch-tags: true
+      - name: Debug - Show all tags
+        run: |
+          echo "All tags in repository:"
+          git tag --sort=-version:refname
+          echo "Total tag count: $(git tag | wc -l)"
       - uses: paulhatch/semantic-version@v5.4.0
         id: get-next-semantic-base-version
         with:
