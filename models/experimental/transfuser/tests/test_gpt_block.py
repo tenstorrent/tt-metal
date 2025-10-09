@@ -68,7 +68,7 @@ def test_gpt_block(device, n_embed, n_head, block_exp, attn_pdrop, resid_pdrop, 
         custom_preprocessor=create_gpt_block_preprocessor(device, weight_dtype),
         device=device,
     )
-    tt_layer = TTGptBlock(device, parameters, n_head, dtype=weight_dtype, memory_config=ttnn.L1_MEMORY_CONFIG)
+    tt_layer = TTGptBlock(device, parameters, n_embed, n_head, dtype=weight_dtype, memory_config=ttnn.L1_MEMORY_CONFIG)
     tt_input = ttnn.from_torch(
         x, device=device, layout=ttnn.TILE_LAYOUT, dtype=input_dtype, memory_config=ttnn.L1_MEMORY_CONFIG
     )

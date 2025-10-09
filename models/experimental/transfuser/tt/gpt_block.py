@@ -54,6 +54,7 @@ class TTGptBlock(LightweightModule):
         self,
         device,
         parameters,
+        n_embed,
         n_head,
         dtype=ttnn.bfloat16,
         memory_config=ttnn.L1_MEMORY_CONFIG,
@@ -61,6 +62,7 @@ class TTGptBlock(LightweightModule):
     ):
         self.parameters = parameters
         self.device = device
+        self.n_embed = n_embed
         self.n_head = n_head
         self.dtype = ttnn.bfloat16
         self.memory_config = memory_config
@@ -68,6 +70,7 @@ class TTGptBlock(LightweightModule):
         self.attn = TTSelfAttention(
             device,
             parameters["attn"],
+            n_embed,
             n_head,
             dtype=dtype,
             memory_config=memory_config,

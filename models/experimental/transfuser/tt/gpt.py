@@ -120,6 +120,7 @@ class TTGpt(LightweightModule):
                 TTGptBlock(
                     device,
                     parameters[f"blocks_{i}"],
+                    n_embd,
                     n_head,
                     dtype=dtype,
                     memory_config=memory_config,

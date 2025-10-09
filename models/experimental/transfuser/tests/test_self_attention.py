@@ -26,27 +26,47 @@ def create_self_attn_preprocessor(device, weight_dtype=ttnn.bfloat16):
             and hasattr(torch_model, "query")
             and hasattr(torch_model, "value")
             and hasattr(torch_model, "proj")
-        ):  # MLP model
-            parameters["key"] = {}
-            parameters["query"] = {}
-            parameters["value"] = {}
-            parameters["proj"] = {}
+        ):
+            n_head = torch_model.n_head
+            n_embed = torch_model.query.weight.shape[-1]
+            head_size = n_embed // n_head
+            padded_head_size = ((head_size + 31) // 32) * 32
+            padded_embed_dim = padded_head_size * n_head
 
-            # Preprocess key layer parameters
-            parameters["key"]["weight"] = preprocess_linear_weight(torch_model.key.weight, dtype=weight_dtype)
-            parameters["key"]["bias"] = preprocess_linear_bias(torch_model.key.bias, dtype=weight_dtype)
+            def pad_linear_layer(linear_layer, target_out_features):
+                """Pads a linear layer’s weight and bias to the target out_features dimension."""
+                weight = linear_layer.weight
+                bias = linear_layer.bias
 
-            # Preprocess query layer parameters
-            parameters["query"]["weight"] = preprocess_linear_weight(torch_model.query.weight, dtype=weight_dtype)
-            parameters["query"]["bias"] = preprocess_linear_bias(torch_model.query.bias, dtype=weight_dtype)
+                out_features, in_features = weight.shape
+                pad_size = target_out_features - out_features
+                if pad_size > 0:
+                    # Pad along output dimension
+                    weight = torch.cat([weight, torch.zeros(pad_size, in_features)], dim=0)
+                    bias = torch.cat([bias, torch.zeros(pad_size)], dim=0)
+                return weight, bias
 
-            # Preprocess value layer parameters
-            parameters["value"]["weight"] = preprocess_linear_weight(torch_model.value.weight, dtype=weight_dtype)
-            parameters["value"]["bias"] = preprocess_linear_bias(torch_model.value.bias, dtype=weight_dtype)
+            # ---- Pad each Q, K, V ----
+            q_weight, q_bias = pad_linear_layer(torch_model.query, padded_embed_dim)
+            k_weight, k_bias = pad_linear_layer(torch_model.key, padded_embed_dim)
+            v_weight, v_bias = pad_linear_layer(torch_model.value, padded_embed_dim)
 
-            # Preprocess proj layer parameters
-            parameters["proj"]["weight"] = preprocess_linear_weight(torch_model.proj.weight, dtype=weight_dtype)
-            parameters["proj"]["bias"] = preprocess_linear_bias(torch_model.proj.bias, dtype=weight_dtype)
+            # ---- Fuse QKV ----
+            qkv_weight = torch.cat([q_weight, k_weight, v_weight], dim=0)
+            qkv_bias = torch.cat([q_bias, k_bias, v_bias], dim=0)
+
+            print(f"QKV weight shape: {qkv_weight.shape}, bias shape: {qkv_bias.shape}")
+
+            parameters["query_key_value"] = {
+                "weight": preprocess_linear_weight(qkv_weight, dtype=weight_dtype),
+                "bias": preprocess_linear_bias(qkv_bias, dtype=weight_dtype),
+            }
+
+            # ---- Proj Layer ----
+            parameters["proj"] = {
+                "weight": preprocess_linear_weight(torch_model.proj.weight, dtype=weight_dtype),
+                "bias": preprocess_linear_bias(torch_model.proj.bias, dtype=weight_dtype),
+            }
 
         return parameters
 
@@ -55,6 +75,7 @@ def create_self_attn_preprocessor(device, weight_dtype=ttnn.bfloat16):
 
 @pytest.mark.parametrize(
     "n_embed, n_head, attn_pdrop, resid_pdrop, input_shape",
+    # ((128, 4, 0.1, 0.1, (1, 174, 128)),),  # case where weight padding is not required , higher pcc
     ((72, 4, 0.1, 0.1, (1, 174, 72)),),  # GPT-SelfAttention 1
 )
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
@@ -75,7 +96,9 @@ def test_self_attn(device, n_embed, n_head, attn_pdrop, resid_pdrop, input_shape
         custom_preprocessor=create_self_attn_preprocessor(device, weight_dtype),
         device=device,
     )
-    tt_layer = TTSelfAttention(device, parameters, n_head, dtype=weight_dtype, memory_config=ttnn.L1_MEMORY_CONFIG)
+    tt_layer = TTSelfAttention(
+        device, parameters, n_embed, n_head, dtype=weight_dtype, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
     tt_input = ttnn.from_torch(
         x, device=device, layout=ttnn.TILE_LAYOUT, dtype=input_dtype, memory_config=ttnn.L1_MEMORY_CONFIG
     )
