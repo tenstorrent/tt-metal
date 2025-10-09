@@ -11,6 +11,7 @@ Author: Joseph Chu
   - [2.2 MeshDevice Management](#22-meshdevice-management)
     - [2.2.1 MeshDevice Initialization/Close](#221-meshdevice-initializationclose)
     - [2.2.2 MeshDevice Visualization](#222-meshdevice-visualization)
+  - [2.3 Controlling Device Visibility](#23-controlling-device-visibility)
 - [3. Distributing Tensor to MeshDevice](#3-distributing-tensor-to-meshdevice)
   - [3.1 Distribution Strategies](#31-distribution-strategies)
   - [3.2 Programming Example: Sharding](#32-programming-example-sharding)
@@ -138,6 +139,31 @@ ttnn.visualize_mesh_device(mesh_device)
 ```
 
 ##
+
+### 2.3 Controlling Device Visibility
+
+In multi-device systems, the set of *PCIe*-visible devices can be narrowed using the `TT_VISIBLE_DEVICES` environment variable.
+
+Set `TT_VISIBLE_DEVICES` to a comma-separated list of device IDs (matching `/dev/tenstorrent/<id>`) to restrict which devices are visible to your process. If unset, all devices are visible; if set, only the listed devices are available. This is useful for:
+
+- Partitioning devices to run independent jobs so that they do not collide.
+- Prototyping a smaller mesh inside a larger topology (for example, emulating an N300 within a T3000).
+- Emulating a multi-host configuration by simultaneously launching multiple processes working on independent parts of the available system mesh.
+
+#### Usage Examples
+
+1. Expose a single PCIe device. For N300, this exposes both the PCIe and the remote / ethernet-connected device.
+```bash
+TT_VISIBLE_DEVICES="0" python your_script.py
+```
+
+2. Expose two PCIe devices. On a T3000, using `TT_VISIBLE_DEVICES="0,1"` exposes two PCIe devices and their associated remote / ethernet-connected device. If PCIe device {0,1} is connected, then this effectively exposes a 2x2 mesh.
+```bash
+TT_VISIBLE_DEVICES="0,1" ./your_cpp_program
+```
+
+
+For more examples, please see `tests/tt_metal/distributed/multiprocess/run_visible_devices_mp_tests.sh`.
 
 ## 3. Distributing Tensor to MeshDevice
 
