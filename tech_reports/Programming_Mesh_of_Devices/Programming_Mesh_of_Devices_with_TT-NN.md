@@ -142,7 +142,7 @@ ttnn.visualize_mesh_device(mesh_device)
 
 ### 2.3 Controlling Device Visibility
 
-In multi-device systems the set of *PCIe*-visible devices can be narrowed using the `TT_VISIBLE_DEVICES` environment variable.
+In multi-device systems, the set of *PCIe*-visible devices can be narrowed using the `TT_VISIBLE_DEVICES` environment variable.
 
 Set `TT_VISIBLE_DEVICES` to a comma-separated list of device IDs (matching `/dev/tenstorrent/<id>`) to restrict which devices are visible to your process. If unset, all devices are visible; if set, only the listed devices are available. This is useful for:
 
