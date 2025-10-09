@@ -64,6 +64,15 @@ struct GenericOpDeviceOperation {
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const std::vector<Tensor>& io_tensors, const operation_attributes_t& operation_attributes);
 
+    static tt::stl::hash::hash_t compute_program_hash(
+        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+        if (operation_attributes.program_hash) {
+            return *operation_attributes.program_hash;
+        } else {
+            return tt::stl::hash::hash_objects_with_default_seed(
+                tt::stl::hash::type_hash<GenericOpDeviceOperation>, operation_attributes, tensor_args);
+        }
+    }
     // static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };  // struct GenericOpDeviceOperation
 
