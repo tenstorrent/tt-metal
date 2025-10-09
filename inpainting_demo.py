@@ -19,7 +19,7 @@ mask_image = load_image(mask_url).resize((1024, 1024))
 prompt = "a tiger sitting on a park bench"
 generator = torch.Generator(device="cpu").manual_seed(0)
 
-print("Pipe is: ", pipe)
+# print("Pipe is: ", pipe)
 
 image = pipe(
     prompt=prompt,

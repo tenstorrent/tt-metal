@@ -305,7 +305,8 @@ class TtSDXLPipeline(LightweightModule):
 
         logger.info("Generating input tensors...")
         profiler.start("prepare_latents")
-        self.__prepare_timesteps()
+
+        self._prepare_timesteps()
 
         num_channels_latents = self.torch_pipeline.unet.config.in_channels
         height = width = 1024
@@ -417,6 +418,26 @@ class TtSDXLPipeline(LightweightModule):
             use_cfg_parallel=self.pipeline_config.use_cfg_parallel,
         )
         return imgs
+
+    def _prepare_timesteps(self):
+        # Helper method for timestep preparation.
+
+        print("torch pipeline scheduler is: ", self.torch_pipeline.scheduler)
+
+        self.ttnn_timesteps, self.pipeline_config.num_inference_steps = retrieve_timesteps(
+            self.torch_pipeline.scheduler, self.pipeline_config.num_inference_steps, self.cpu_device, None, None
+        )
+
+        # print("Timesteps before prepare_timesteps: ", self.ttnn_timesteps)
+        # print("Num inference steps before prepare_timesteps: ", self.pipeline_config.num_inference_steps)
+
+        # def get_timesteps(scheduler, num_inference_steps, strength, denoising_start=None):
+        # self.ttnn_timesteps, self.pipeline_config.num_inference_steps = get_timesteps(
+        #     self.torch_pipeline.scheduler, self.pipeline_config.num_inference_steps, 1.0, None
+        # )
+
+        print("Timesteps after prepare_timesteps: ", self.ttnn_timesteps)
+        print("Num inference steps after prepare_timesteps: ", self.pipeline_config.num_inference_steps)
 
     def __load_tt_components(self, pipeline_config):
         # Method for instantiating TT components based on the torch pipeline.
@@ -555,13 +576,6 @@ class TtSDXLPipeline(LightweightModule):
         ttnn.synchronize_device(self.ttnn_device)
         profiler.end("create_user_tensors")
         return tt_latents, tt_prompt_embeds, tt_add_text_embeds
-
-    def __prepare_timesteps(self):
-        # Helper method for timestep preparation.
-
-        self.ttnn_timesteps, self.pipeline_config.num_inference_steps = retrieve_timesteps(
-            self.torch_pipeline.scheduler, self.pipeline_config.num_inference_steps, self.cpu_device, None, None
-        )
 
     def __trace_image_processing(self):
         # Helper method for image processing trace capture.

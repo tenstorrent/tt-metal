@@ -7,6 +7,7 @@ import pytest
 import ttnn
 import torch
 from diffusers import DiffusionPipeline
+from diffusers.utils import load_image
 from loguru import logger
 from transformers import CLIPTextModelWithProjection, CLIPTextModel
 from models.experimental.stable_diffusion_xl_base.tests.test_common import (
@@ -18,8 +19,10 @@ import os
 from models.common.utility_functions import profiler
 from conftest import is_galaxy
 
-from models.experimental.stable_diffusion_xl_base.tt.tt_sdxl_inpainting_pipeline import TtSDXLInpaintingPipeline
-from models.experimental.stable_diffusion_xl_base.tt.tt_sdxl_pipeline import TtSDXLPipelineConfig
+from models.experimental.stable_diffusion_xl_base.tt.tt_sdxl_inpainting_pipeline import (
+    TtSDXLInpaintingPipeline,
+    TtSDXLInpaintingPipelineConfig,
+)
 
 MAX_SEQUENCE_LENGTH = 77
 TEXT_ENCODER_2_PROJECTION_DIM = 1280
@@ -38,6 +41,7 @@ def run_demo_inference(
     evaluation_range,
     capture_trace,
     guidance_scale,
+    strength,
     use_cfg_parallel,
     fixed_seed_for_batch,
 ):
@@ -59,6 +63,7 @@ def run_demo_inference(
     # 1. Load components
     profiler.start("diffusion_pipeline_from_pretrained")
     pipeline = DiffusionPipeline.from_pretrained(
+        # should be "diffusers/stable-diffusion-xl-1.0-inpainting-0.1" for inpainting
         "stabilityai/stable-diffusion-xl-base-1.0",
         torch_dtype=torch.float32,
         use_safetensors=True,
@@ -74,12 +79,13 @@ def run_demo_inference(
     tt_sdxl = TtSDXLInpaintingPipeline(
         ttnn_device=ttnn_device,
         torch_pipeline=pipeline,
-        pipeline_config=TtSDXLPipelineConfig(
+        pipeline_config=TtSDXLInpaintingPipelineConfig(
             capture_trace=capture_trace,
             vae_on_device=vae_on_device,
             encoders_on_device=encoders_on_device,
             num_inference_steps=num_inference_steps,
             guidance_scale=guidance_scale,
+            strength=strength,
             is_galaxy=is_galaxy(),
             use_cfg_parallel=use_cfg_parallel,
         ),
@@ -87,6 +93,12 @@ def run_demo_inference(
 
     if encoders_on_device:
         tt_sdxl.compile_text_encoding()
+
+    img_url = "https://raw.githubusercontent.com/CompVis/latent-diffusion/main/data/inpainting_examples/overture-creations-5sI6fQgYIuo.png"
+    mask_url = "https://raw.githubusercontent.com/CompVis/latent-diffusion/main/data/inpainting_examples/overture-creations-5sI6fQgYIuo_mask.png"
+
+    image = load_image(img_url).resize((1024, 1024))
+    mask_image = load_image(mask_url).resize((1024, 1024))
 
     tt_latents, tt_prompt_embeds, tt_add_text_embeds = tt_sdxl.generate_input_tensors(
         all_prompt_embeds_torch=torch.randn(batch_size, 2, MAX_SEQUENCE_LENGTH, CONCATENATED_TEXT_EMBEDINGS_SIZE),
@@ -125,6 +137,10 @@ def run_demo_inference(
             torch_add_text_embeds,
         ) = tt_sdxl.encode_prompts(prompts_batch, negative_prompts_batch)
 
+        # This is a hack to get things working, but essentially:
+        # We start with num_inference_steps == 20 say, generate_input_tensors() will reduce this to 19, and it will
+        # persist until the next image generation call, so we need to set it back to the original value
+        tt_sdxl.set_num_inference_steps(num_inference_steps)
         tt_latents, tt_prompt_embeds, tt_add_text_embeds = tt_sdxl.generate_input_tensors(
             all_prompt_embeds_torch,
             torch_add_text_embeds,
@@ -177,6 +193,10 @@ def prepare_device(mesh_device, use_cfg_parallel):
         mesh_device.reshape(ttnn.MeshShape(2, mesh_device.get_num_devices() // 2))
 
 
+# Note: need to add denoising_start to the pipeline config
+# Currently assert that it is None
+
+
 # Note: The 'fabric_config' parameter is only required when running with cfg_parallel enabled,
 # as the all_gather_async operation used in this mode depends on fabric being set.
 @pytest.mark.parametrize(
@@ -215,11 +235,15 @@ def prepare_device(mesh_device, use_cfg_parallel):
 )
 @pytest.mark.parametrize(
     "num_inference_steps",
-    ((50),),
+    ((20),),
 )
 @pytest.mark.parametrize(
     "guidance_scale",
     ((5.0),),
+)
+@pytest.mark.parametrize(
+    "strength",
+    ((0.99),),
 )
 @pytest.mark.parametrize(
     "vae_on_device",
@@ -257,6 +281,7 @@ def test_demo(
     capture_trace,
     evaluation_range,
     guidance_scale,
+    strength,
     use_cfg_parallel,
     fixed_seed_for_batch,
 ):
@@ -272,6 +297,7 @@ def test_demo(
         evaluation_range,
         capture_trace,
         guidance_scale,
+        strength,
         use_cfg_parallel,
         fixed_seed_for_batch,
     )

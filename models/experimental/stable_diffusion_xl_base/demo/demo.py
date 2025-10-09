@@ -123,6 +123,10 @@ def run_demo_inference(
             torch_add_text_embeds,
         ) = tt_sdxl.encode_prompts(prompts_batch, negative_prompts_batch)
 
+        # This is a hack to get things working, but essentially:
+        # We start with num_inference_steps == 20 say, generate_input_tensors() will reduce this to 19, and it will
+        # persist until the next image generation call, so we need to set it back to the original value
+        tt_sdxl.set_num_inference_steps(num_inference_steps)
         tt_latents, tt_prompt_embeds, tt_add_text_embeds = tt_sdxl.generate_input_tensors(
             all_prompt_embeds_torch,
             torch_add_text_embeds,
@@ -213,7 +217,7 @@ def prepare_device(mesh_device, use_cfg_parallel):
 )
 @pytest.mark.parametrize(
     "num_inference_steps",
-    ((50),),
+    ((20),),
 )
 @pytest.mark.parametrize(
     "guidance_scale",
