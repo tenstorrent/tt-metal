@@ -5,50 +5,6 @@
 /*
  * main.cpp
  * tt-telemetry main server app.
- *
- * MPI Run Instructions
- * --------------------
- * 1. Create a hosts.txt on e.g. metal-wh-13 containing:
- *
- *  metal-wh-13 slots=1
- *  metal-wh-14 slots=1
- *
- * 2. We will need a shell script that uses the MPI rank to determine which command line arguments
- *    to pass. We want to run one machine as aggregator and the rest as collectors. Here is an
- *    example script:
- *
- *      #!/bin/bash
- *
- *      #
- *      # Run using:
- *      #
- *      # mpirun -x TT_METAL_HOME -hostfile hosts.txt ./run_telemetry.sh
- *      #
- *
- *      # Get MPI rank
- *      RANK=${OMPI_COMM_WORLD_RANK:-0}
- *
- *      # Common arguments
- *      COMMON_ARGS="--fsd=/home/btrzynadlowski/factory_system_descriptor_16_n300_lb.textproto"
- *
- *      if [ $RANK -eq 0 ]; then
- *          # Master node (rank 0) - Aggregator mode
- *          echo "Starting as AGGREGATOR on rank $RANK"
- *          exec /home/btrzynadlowski/tt-metal/build/tt_telemetry/tt_telemetry_server \
- *              $COMMON_ARGS \
- *              --aggregate-from=ws://metal-wh-14:8081
- *      else
- *          # Worker nodes (rank > 0) - Collector mode
- *          echo "Starting as COLLECTOR on rank $RANK"
- *          exec /home/btrzynadlowski/tt-metal/build/tt_telemetry/tt_telemetry_server \
- *              $COMMON_ARGS
- *      fi
- *
- * 2. Make sure binaries and the script are in the same place on both machines.
- *
- * 3. Use mpirun:
- *
- *      mpirun -x TT_METAL_HOME -hostfile hosts.txt /home/btrzynadlowski/tt-metal/run_telemetry.sh
  */
 
 #include <algorithm>
