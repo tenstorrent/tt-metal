@@ -55,7 +55,7 @@ TEST_F(TopologyMapperTest, T3kMeshGraphTest) {
 TEST_F(TopologyMapperTest, T3kBigMeshTest) {
     const std::filesystem::path t3k_big_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_dual_host_mesh_graph_descriptor.yaml";
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_dual_host_mesh_graph_descriptor.textproto";
 
     auto mesh_graph = MeshGraph(t3k_big_mesh_graph_desc_path.string());
 
@@ -78,6 +78,31 @@ TEST_F(TopologyMapperTest, T3kBigMeshTest) {
         local_mesh_binding.mesh_ids = {MeshId{0}};
         local_mesh_binding.host_rank = MeshHostRankId{1};
     }
+
+    auto topology_mapper = TopologyMapper(mesh_graph, physical_system_descriptor, local_mesh_binding);
+}
+
+TEST_F(TopologyMapperTest, T3kMultiMeshTest) {
+    const std::filesystem::path t3k_multimesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_2x2_1x2_1x1_mesh_graph_descriptor.textproto";
+
+    auto mesh_graph = MeshGraph(t3k_multimesh_graph_desc_path.string());
+
+    // Create PhysicalSystemDescriptor with proper parameters from MetalContext
+    auto distributed_context = tt::tt_metal::MetalContext::instance().get_distributed_context_ptr();
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    constexpr bool run_discovery = true;
+
+    auto physical_system_descriptor = tt::tt_metal::PhysicalSystemDescriptor(
+        cluster.get_driver(), distributed_context, &hal, rtoptions, run_discovery);
+
+    // Create a local mesh binding for testing
+    LocalMeshBinding local_mesh_binding;
+    local_mesh_binding.mesh_ids = {MeshId{0}, MeshId{1}, MeshId{2}};
+    local_mesh_binding.host_rank = MeshHostRankId{0};
 
     auto topology_mapper = TopologyMapper(mesh_graph, physical_system_descriptor, local_mesh_binding);
 }

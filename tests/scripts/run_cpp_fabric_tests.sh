@@ -80,8 +80,9 @@ tt-run --mock-cluster-rank-binding tests/tt_metal/tt_fabric/custom_mock_cluster_
 tt-run --mock-cluster-rank-binding tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/t3k_2x4_big_mesh_cluster_desc_mapping.yaml --rank-binding tests/tt_metal/distributed/config/2x4_multiprocess_rank_bindings.yaml --mpi-args "--mca btl self,tcp --mca btl_tcp_if_include eth0 --tag-output --allow-run-as-root" ./build/test/tt_metal/tt_fabric/fabric_unit_tests  --gtest_filter="MultiHost.TestBigMesh2x4Fabric2DSanity"
 
 # Topology Mapper tests
-TT_METAL_SLOW_DISPATCH_MODE=1 gdb --args ./build_Debug/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=TopologyMapperTest.T3kMeshGraphTest
+TT_METAL_MOCK_CLUSTER_DESC_PATH=tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/t3k_cluster_desc.yaml TT_METAL_SLOW_DISPATCH_MODE=1 ./build_Debug/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=TopologyMapperTest.T3kMeshGraphTest
 tt-run --mock-cluster-rank-binding tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/t3k_2x4_big_mesh_cluster_desc_mapping.yaml --rank-binding tests/tt_metal/distributed/config/2x4_multiprocess_rank_bindings.yaml --mpi-args "--mca btl self,tcp --mca btl_tcp_if_include eth0 --tag-output" ./build/test/tt_metal/tt_fabric/fabric_unit_tests  --gtest_filter="TopologyMapperTest.T3kBigMeshTest"
+TT_METAL_MOCK_CLUSTER_DESC_PATH=tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/t3k_cluster_desc.yaml TT_METAL_SLOW_DISPATCH_MODE=1 ./build_Debug/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=TopologyMapperTest.T3kMultiMeshTest
 
 #############################################
 # FABRIC SANITY TESTS                       #

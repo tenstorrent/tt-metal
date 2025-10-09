@@ -76,7 +76,7 @@ private:
      * based on the mesh IDs and fabric chip IDs from the mesh_container, mapping them
      * to the ASIC IDs of the physical descriptor.
      */
-    std::unordered_map<MeshId, HostRank> build_host_mesh_mappings();
+    std::unordered_map<MeshId, MeshContainer<HostName>> build_host_mesh_mappings();
 
     /**
      * @brief Discover hosts using DFS
@@ -89,9 +89,29 @@ private:
     bool discover_hosts_dfs(
         const MeshId mesh_id,
         const HostName& hostname,
-        std::unordered_map<MeshId, HostRank>& mesh_id_to_host_rank,
+        std::unordered_map<MeshId, MeshContainer<HostName>>& mesh_id_to_host_rank,
         std::unordered_set<HostName>& visited_hosts,
         std::unordered_set<MeshId>& visited_meshes);
+
+    /**
+     * @brief Build the mapping between host names and corner ASIC IDs
+     *
+     * This method iterates through all hosts in the physical system descriptor and creates mappings
+     * based on the host names and corner ASIC IDs from the physical descriptor, mapping them
+     * to the host names and corner ASIC IDs.
+     */
+    std::unordered_map<std::string, std::vector<tt::tt_metal::AsicID>> build_corner_mappings() const;
+
+    /**
+     * @brief Build the mapping between mesh IDs and corner ASIC IDs
+     *
+     * This method iterates through all meshes in the mesh graph and creates mappings
+     * based on the mesh IDs and fabric chip IDs from the mesh_container, mapping them
+     * to the ASIC IDs of the physical descriptor.
+     */
+    std::unordered_map<MeshId, MeshContainer<tt::tt_metal::AsicID>> build_mesh_corners_mappings(
+        std::unordered_map<std::string, std::vector<tt::tt_metal::AsicID>>& host_corners,
+        std::unordered_map<MeshId, MeshContainer<HostName>>& mesh_id_to_host_name) const;
 
     const MeshGraph& mesh_graph_;
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor_;
