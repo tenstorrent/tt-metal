@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -25,7 +25,7 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     SavedWeight,
 )
 from models.demos.deepseek_v3.utils.config_helpers import (
-    MAX_BATCH_SIZE,
+    USERS_PER_ROW,
     dequantize,
     even_int_div,
     get_mesh_coords,
@@ -45,20 +45,10 @@ from models.demos.deepseek_v3.utils.run_config import (
 from models.tt_transformers.tt.common import PagedAttentionConfig
 
 
-class MLA(AbstractModule):
+class MLA1D(AbstractModule):
     """
-    Multi-Latent Attention Module for 1D tensor parallelism.
+    Pipeline-Parallel Multi-Latent Attention Module for 1D tensor parallelism.
     """
-
-    HF_TTNN_MAPPING = {
-        "q_a_proj": "wq_a",
-        "q_b_proj": "wq_b",
-        "kv_a_proj_with_mqa": "wkv_a",
-        "kv_b_proj": "wkv_b",
-        "o_proj": "wo",
-        "q_a_layernorm": "q_norm",
-        "kv_a_layernorm": "kv_norm",
-    }
 
     @classmethod
     def convert_weights(
@@ -68,18 +58,6 @@ class MLA(AbstractModule):
         output_path: Path,
         mesh_device: ttnn.Device,
     ) -> WeightConfig:
-        """Convert PyTorch weights to TTNN format for 1D tensor parallelism.
-
-        Args:
-            hf_config: HuggingFace model configuration object
-            state_dicts: Tuple of state dictionaries containing model weights
-            output_path: Path to save converted weights
-            mesh_device: TTNN mesh device
-        Returns:
-            Dict mapping operation names to their TTNN weight file paths
-        """
-        assert cls.is_device_supported(mesh_device)
-
         num_shards = mesh_device.shape[0]
         weight_block_height, weight_block_width = hf_config.quantization_config["weight_block_size"]
 
@@ -106,7 +84,7 @@ class MLA(AbstractModule):
         # Regular non-split weights
         linear_weight_configs = {  # TODO: add dequant
             ttnn_name: {
-                "input_tensor_b": cls._convert_metaweight(
+                "input_tensor_b": cls._convert_weight(
                     output_path / f"{ttnn_name}.input_tensor_b",
                     dequantize(
                         get_state_dicts(state_dicts, f"{hf_name}.weight", shape, dtype=torch.float8_e4m3fn),
@@ -146,19 +124,19 @@ class MLA(AbstractModule):
             **norm_weight_configs,
             **linear_weight_configs,
             "wkv_b1": {
-                "input_tensor_b": cls._convert_metaweight(
+                "input_tensor_b": cls._convert_weight(
                     output_path / "wkv_b1.input_tensor_b", torch_weights_k, (0, -3), mesh_device
                 ),
             },
             "wkv_b2": {
-                "input_tensor_b": cls._convert_metaweight(
+                "input_tensor_b": cls._convert_weight(
                     output_path / "wkv_b2.input_tensor_b", torch_weights_v, (0, -3), mesh_device
                 ),
             },
         }
 
     @classmethod
-    def _convert_metaweight(
+    def _convert_weight(
         cls,
         path: Path,
         torch_metaweight: torch.Tensor,
@@ -174,19 +152,6 @@ class MLA(AbstractModule):
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-
-    @classmethod
-    def is_device_supported(cls, mesh_device: ttnn.Device) -> bool:
-        """
-        We only support 1D tensor parallelism, with TP=8
-
-        Args:
-            mesh_device: The mesh device to check.
-
-        Returns:
-            True if the device is supported, False otherwise.
-        """
-        return tuple(mesh_device.shape)[1] == 8
 
     @classmethod
     def prefill_model_config(
@@ -438,8 +403,7 @@ class MLA(AbstractModule):
         )
 
         # Resharding for q_rope
-        # TODO: Should be dynamic based on batch size?
-        q_rope_shape = (1, MAX_BATCH_SIZE, num_heads_local, qk_rope_head_dim)
+        q_rope_shape = (1, USERS_PER_ROW, num_heads_local, qk_rope_head_dim)
         q_rope_shard_height = nearest_y(q_rope_shape[2], ttnn.TILE_SIZE)
         q_rope_shard_width = q_rope_shape[3]
         q_rope_num_cores = q_rope_shape[1]
@@ -458,9 +422,8 @@ class MLA(AbstractModule):
         )
 
         # Resharding for kv_rope
-        # TODO: Should be dynamic based on batch size?
         # TODO: Split batch when adding DP
-        kv_rope_shape = (1, MAX_BATCH_SIZE, 1, qk_rope_head_dim)
+        kv_rope_shape = (1, USERS_PER_ROW, 1, qk_rope_head_dim)
         kv_rope_shard_height = nearest_y(kv_rope_shape[2], ttnn.TILE_SIZE)
         kv_rope_shard_width = kv_rope_shape[3]
         kv_rope_num_cores = kv_rope_shape[1]
@@ -479,7 +442,7 @@ class MLA(AbstractModule):
         )
 
         # Resharding for kvpe
-        kvpe_shape = (1, even_int_div(MAX_BATCH_SIZE, mesh_shape[1]), 1, kv_lora_rank + qk_rope_head_dim)
+        kvpe_shape = (1, even_int_div(USERS_PER_ROW, mesh_shape[1]), 1, kv_lora_rank + qk_rope_head_dim)
         kvpe_shard_height = nearest_y(kvpe_shape[2], ttnn.TILE_SIZE)
         kvpe_shard_width = kvpe_shape[3]
         kvpe_num_cores = kvpe_shape[1]
@@ -513,9 +476,9 @@ class MLA(AbstractModule):
         )
 
         q_num_cores = num_cores
-        q_num_cores = min(even_int_div(MAX_BATCH_SIZE, mesh_shape[1]) * num_heads, q_num_cores)
+        q_num_cores = min(even_int_div(USERS_PER_ROW, mesh_shape[1]) * num_heads, q_num_cores)
         block_height = nearest_y(
-            (even_int_div(MAX_BATCH_SIZE, mesh_shape[1]) * num_heads) // q_num_cores, ttnn.TILE_SIZE
+            (even_int_div(USERS_PER_ROW, mesh_shape[1]) * num_heads) // q_num_cores, ttnn.TILE_SIZE
         )
         block_width = kv_lora_rank + qk_rope_head_dim
 
@@ -682,7 +645,7 @@ class MLA(AbstractModule):
 
     @classmethod
     def get_valid_paged_config(
-        cls, max_seq_len: int, batch_size: int, dp_factor: int, block_size: int = ttnn.TILE_SIZE
+        cls, max_seq_len: int, batch_size_per_row: int, dp_factor: int, block_size: int = ttnn.TILE_SIZE
     ) -> PagedAttentionConfig:
         """Get a valid paged attention configuration for MLA.
 
@@ -691,7 +654,7 @@ class MLA(AbstractModule):
 
         Args:
             max_seq_len: Maximum sequence length
-            batch_size: Batch size for the model
+            batch_size_per_row: Batch size per row of the model
             block_size: Block size for paged attention (default is TILE_SIZE)
 
         Returns:
@@ -702,7 +665,7 @@ class MLA(AbstractModule):
             block_size % ttnn.TILE_SIZE == 0
         ), f"block_size {block_size} must be a multiple of TILE_SIZE {ttnn.TILE_SIZE}."
 
-        batch_per_shard = even_int_div(batch_size, dp_factor)
+        batch_per_shard = even_int_div(batch_size_per_row, dp_factor)
         max_num_blocks = even_int_div(
             max_seq_len * batch_per_shard, block_size
         )  # Such that each user will have max_seq_len available
@@ -718,7 +681,7 @@ class MLA(AbstractModule):
         paged_config: PagedAttentionConfig,
         mesh_device: ttnn.MeshDevice,
         page_table: torch.Tensor | None = None,
-        batch_size: int = MAX_BATCH_SIZE,
+        batch_size: int = USERS_PER_ROW,
     ) -> ttnn.Tensor:
         """Helper function to allocate the page table for MLA on device.
 
@@ -736,8 +699,6 @@ class MLA(AbstractModule):
         Returns:
             Device-allocated version of the page table representing the page table
         """  # TODO: update docs
-        assert cls.is_device_supported(mesh_device), f"Mesh device shape {mesh_device.shape} must be supported by MLA."
-
         if page_table is None:
             max_num_blocks = paged_config.max_num_blocks
             _, dp_factor = mesh_device.shape
@@ -745,7 +706,6 @@ class MLA(AbstractModule):
 
             page_table = torch.randperm(max_num_blocks, dtype=torch.int32)  # Randperm not necessary, but more rigorous
             page_table = page_table.reshape(batch_per_shard, even_int_div(max_num_blocks, batch_per_shard))
-
         assert page_table.numel() == paged_config.max_num_blocks
 
         return ttnn.from_torch(
@@ -776,15 +736,6 @@ class MLA(AbstractModule):
         )
         if caches is None:
             caches = (torch.zeros(cache_shape),) * mesh_device.shape[0]
-
-        tt_cache = ttnn.as_tensor(
-            torch.concatenate(tuple(caches)),
-            dtype=ttnn.bfloat8_b,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, 0),
-        )
 
         # CCL states setup (Must be in order of execution)
         get_rs_params = lambda axis: {
@@ -818,17 +769,32 @@ class MLA(AbstractModule):
         return {
             MESH_DEVICE_STATE_DICT_KEY: mesh_device,
             "mesh_shape": mesh_device.shape,
-            "kvpe_cache": tt_cache,
+            "kvpe_cache": cls._convert_cache(tuple(caches), mesh_device),
             **ccl_states_prefill,
             **ccl_states_decode,
         }
+
+    @classmethod
+    def _convert_cache(
+        cls,
+        caches: tuple[torch.Tensor, ...],
+        mesh_device: ttnn.MeshDevice,
+    ) -> ttnn.Tensor:
+        return ttnn.as_tensor(
+            torch.concatenate(caches),
+            dtype=ttnn.bfloat8_b,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, 0),
+        )
 
     @classmethod
     def forward_decode(
         cls,
         x: ttnn.Tensor,
         position_idxs: ttnn.Tensor,
-        row_idx: int,
+        row_idx: int | None,
         cfg: RunDecodeConfig,
         rope_tensors: dict,
         page_table: ttnn.Tensor,
@@ -1011,7 +977,7 @@ class MLA(AbstractModule):
         cls,
         x: ttnn.Tensor,
         batch_idx: int,
-        row_idx: int,
+        row_idx: int | None,
         cfg: RunPrefillConfig,
         rope_tensors: dict,
         page_table: ttnn.Tensor,

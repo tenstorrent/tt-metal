@@ -18,7 +18,7 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     RMSNormPostAllGatherConfig,
     RMSNormPreAllGatherConfig,
 )
-from models.demos.deepseek_v3.utils.config_helpers import MAX_BATCH_SIZE, even_int_div, get_state_dicts, shard_and_save
+from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, even_int_div, get_state_dicts, shard_and_save
 from models.demos.deepseek_v3.utils.run_config import (
     MESH_DEVICE_STATE_DICT_KEY,
     ModelDecodeConfig,
@@ -93,7 +93,7 @@ class DistributedRMSNorm(RMSNormBase):
         shard_core_grid = ttnn.CoreGrid(x=4, y=7)
         memory_config = ttnn.create_sharded_memory_config(
             shape=(
-                MAX_BATCH_SIZE,
+                USERS_PER_ROW,
                 ttnn.core.roundup(
                     even_int_div(hf_config.hidden_size, shard_core_grid.num_cores * mesh_device.shape[1]),
                     ttnn.TILE_SIZE,
