@@ -12,8 +12,6 @@
 using namespace tt;
 using namespace tt::tt_metal;
 
-uint32_t runtime_host_id = 0;
-
 void RunCustomCycle(const std::shared_ptr<distributed::MeshDevice>& mesh_device, int fastDispatch) {
     CoreCoord compute_with_storage_size = mesh_device->compute_with_storage_grid_size();
     CoreCoord start_core = {0, 0};
@@ -24,7 +22,6 @@ void RunCustomCycle(const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
     tt_metal::Program program = tt_metal::CreateProgram();
-    program.set_runtime_id(runtime_host_id++);
 
     tt_metal::CreateKernel(
         program,
@@ -65,12 +62,12 @@ int main() {
         std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
 
         // Run 1
-        RunCustomCycle(mesh_device, 10);
+        RunCustomCycle(mesh_device, PROFILER_OP_SUPPORT_COUNT);
         ReadMeshDeviceProfilerResults(*mesh_device);
 
         // // Run 2
-        // RunCustomCycle(mesh_device, PROFILER_OP_SUPPORT_COUNT);
-        // ReadMeshDeviceProfilerResults(*mesh_device);
+        RunCustomCycle(mesh_device, PROFILER_OP_SUPPORT_COUNT);
+        ReadMeshDeviceProfilerResults(*mesh_device);
 
         pass &= mesh_device->close();
 
