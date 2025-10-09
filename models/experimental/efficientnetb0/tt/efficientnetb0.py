@@ -475,7 +475,7 @@ class Efficientnetb0:
 
         x = self._conv_head(x)
 
-        x = x * ttnn.sigmoid_accurate(x)
+        x = x * ttnn.sigmoid_accurate(x, True)
 
         x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
         x = ttnn.global_avg_pool2d(x)
