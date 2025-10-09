@@ -65,7 +65,7 @@ int main() {
         RunCustomCycle(mesh_device, PROFILER_OP_SUPPORT_COUNT);
         ReadMeshDeviceProfilerResults(*mesh_device);
 
-        // // Run 2
+        // Run 2
         RunCustomCycle(mesh_device, PROFILER_OP_SUPPORT_COUNT);
         ReadMeshDeviceProfilerResults(*mesh_device);
 
