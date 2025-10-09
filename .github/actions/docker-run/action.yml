@@ -112,6 +112,7 @@ runs:
           -e GITHUB_REF_NAME=${{ github.ref_name }}
           -e GITHUB_RUN_ID=${{ github.run_id }}
           -e GITHUB_TRIGGERING_ACTOR=${{ github.github_triggering_actor }}
+          -e CI_CD_JOB_ID=${{ job.check_run_id }}  
           -e RUNNER_NAME=${{ runner.name }}
           ${{ (inputs.forward_civ2_proxy_env_vars && format('-e HTTP_PROXY={0}', env.CIV2_HTTP_PROXY)) || '' }}
           ${{ (inputs.forward_civ2_proxy_env_vars && format('-e http_proxy={0}', env.CIV2_http_proxy)) || '' }}
