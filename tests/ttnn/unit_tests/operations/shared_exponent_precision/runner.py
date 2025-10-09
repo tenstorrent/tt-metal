@@ -225,7 +225,14 @@ def run_experiments() -> dict:
     results = {}
 
     # Configuration
-    operations = [OperationType.SUM_KEY, OperationType.MEAN_KEY]  # , "max", "softmax", "matmul", "matmul_tt"]
+    operations = [
+        OperationType.SUM_KEY,
+        OperationType.MEAN_KEY,
+        OperationType.MAX_KEY,
+        OperationType.SOFTMAX_KEY,
+        OperationType.MATMUL_KEY,
+        OperationType.MATMUL_TT_KEY,
+    ]
     axes = [0, 1]  # Test both row-wise and column-wise operations
 
     # Test 1: Single tile (32x32)
@@ -234,16 +241,16 @@ def run_experiments() -> dict:
     results[ShapeType.SINGLE_TILE_KEY] = _run_shape_experiments(single_tile_shape, operations, axes, device)
 
     # Test 2: Multiple tiles (16x16 tiles of 32x32 each = 512x512)
-    # logger.info("=== Running multi-tile experiments ===")
-    # multi_tile_shape = (512, 512)
-    # results[ShapeType.MULTI_TILE_KEY] = _run_shape_experiments(multi_tile_shape, operations, axes, device)
+    logger.info("=== Running multi-tile experiments ===")
+    multi_tile_shape = (512, 512)
+    results[ShapeType.MULTI_TILE_KEY] = _run_shape_experiments(multi_tile_shape, operations, axes, device)
 
     # Test 3: Rectangular shapes (to test non-square behavior)
-    # logger.info("=== Running rectangular experiments ===")
-    # rect_shapes = [(32, 128), (128, 32), (64, 256)]
-    # results[ShapeType.RECTANGULAR_KEY] = {}
-    # for shape in rect_shapes:
-    #     results[ShapeType.RECTANGULAR_KEY][str(shape)] = _run_shape_experiments(shape, operations, axes, device)
+    logger.info("=== Running rectangular experiments ===")
+    rect_shapes = [(32, 128), (128, 32), (64, 256)]
+    for shape in rect_shapes:
+        key = ShapeType.RECTANGULAR_KEY + "-" + str(shape)
+        results[key] = _run_shape_experiments(shape, operations, axes, device)
 
     ttnn.close_device(device)
 

@@ -36,6 +36,7 @@ class ShapeType:
 class OperationType:
     MATMUL_KEY = "matmul"
     MATMUL_TT_KEY = "matmul_tt"
+    SOFTMAX_KEY = "softmax"
     ADD_KEY = "add"
     SUB_KEY = "sub"
     MUL_KEY = "mul"

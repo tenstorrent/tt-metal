@@ -7,14 +7,7 @@ import numpy as np
 from pathlib import Path
 import json
 
-from constants import Filepaths, ResultKeys, ShapeType, OperationType, MatmulTTConfig
-
-
-#
-# Plot charts
-#
-def plot_charts(results: dict) -> None:
-    pass
+from constants import Filepaths, ResultKeys, OperationType, MatmulTTConfig
 
 
 #
@@ -166,7 +159,21 @@ def _format_pattern_impact_report(pattern_analysis: dict) -> str:
 
 
 def _create_pattern_summary_table(pattern_summary: dict) -> str:
-    """Create a comprehensive summary table for all patterns."""
+    """
+    Create a comprehensive markdown summary table for all pattern performance metrics.
+
+    Generates a markdown table showing key precision metrics (PCC, absolute errors, ULP values)
+    for each pattern, sorted by average PCC for consistent ordering.
+
+    Args:
+        pattern_summary: Dictionary containing pattern statistics with keys as pattern names
+                        and values as dictionaries containing metrics like 'avg_pcc', 'min_pcc',
+                        'num_tests', 'avg_max_abs_error', etc.
+
+    Returns:
+        str: Formatted markdown table string with pattern comparison metrics.
+             Returns "No pattern data available." if input is empty.
+    """
     if not pattern_summary:
         return "No pattern data available."
 
@@ -205,7 +212,22 @@ def _create_pattern_summary_table(pattern_summary: dict) -> str:
 
 
 def _create_pattern_ranking_table(pattern_ranking: list, metric_key: str) -> str:
-    """Create a ranking table for patterns by a specific metric."""
+    """
+    Create a markdown ranking table for patterns sorted by a specific metric.
+
+    Generates a top-10 ranking table showing patterns ordered by performance
+    on a specific precision metric (e.g., PCC, absolute error, ULP).
+
+    Args:
+        pattern_ranking: List of (pattern_name, stats_dict) tuples, pre-sorted
+                        by the target metric in desired order (best to worst or worst to best)
+        metric_key: String key for the metric to display values for (e.g., 'avg_pcc',
+                   'avg_max_abs_error', 'avg_ulp_max')
+
+    Returns:
+        str: Formatted markdown table with rank, pattern name, metric value, and test count.
+             Returns "No ranking data available." if input list is empty.
+    """
     if not pattern_ranking:
         return "No ranking data available."
 
@@ -229,7 +251,23 @@ def _create_pattern_ranking_table(pattern_ranking: list, metric_key: str) -> str
 
 
 def _create_operations_breakdown_table(pattern_summary):
-    """Create a table showing operation distribution for each pattern."""
+    """
+    Create a markdown table showing operation distribution across patterns.
+
+    Generates a table that breaks down how many times each operation type
+    was tested for each pattern, providing insight into test coverage
+    and pattern-operation combinations.
+
+    Args:
+        pattern_summary: Dictionary containing pattern statistics where each pattern
+                        has an 'operations_breakdown' key with operation counts and
+                        'num_tests' for total test count per pattern
+
+    Returns:
+        str: Formatted markdown table showing patterns vs operations with test counts.
+             Uses '-' for operations not tested with a given pattern.
+             Returns "No pattern data available." if input is empty.
+    """
     if not pattern_summary:
         return "No pattern data available."
 
@@ -290,15 +328,27 @@ def pattern_impact_analysis(results: dict, output_dir: str = Filepaths.RESULTS_D
 #
 def _find_worst_cases(results: dict, top_n: int = 10, metrics_to_track=None):
     """
-    Find the worst performing cases across all metrics.
+    Find the worst performing test cases across specified precision metrics.
+
+    Analyzes all operation results to identify the cases with the worst precision
+    according to various metrics. For PCC, lower values are worse; for error metrics,
+    higher values are worse.
 
     Args:
-        results: Nested dictionary with structure [shape_type][pattern][distribution][operation][...]
-        top_n: Number of worst cases to return for each metric
-        metrics_to_track: List of metrics to track (default: ["pcc", "max_abs_error", "ulp_max", "mean_abs_error", "max_rel_error"])
+        results: Nested dictionary with precision test results structured as:
+                [shape_type][pattern][distribution][operation][metrics or axis/config]
+                Contains all test cases with their precision metrics
+        top_n: Number of worst cases to return for each tracked metric (default: 10)
+        metrics_to_track: List of metric keys to analyze. If None, defaults to:
+                         ["pcc", "max_abs_error", "ulp_max", "mean_abs_error", "max_rel_error"].
+                         Each key should correspond to ResultKeys constants.
 
     Returns:
-        Dictionary with worst cases for each metric
+        dict: Dictionary mapping each metric name to a list of worst cases, where each
+              case is a dict with keys:
+              - 'value': The metric value that makes it a worst case
+              - 'case': Dict with test case info (shape_type, pattern, distribution, operation, params)
+              - 'full_metrics': Complete metrics dict for context
     """
     if metrics_to_track is None:
         metrics_to_track = [
@@ -339,10 +389,24 @@ def _flatten_results(results: dict):
     """
     Flatten the nested results dictionary into a list of (case_info, metrics) tuples.
 
-    Handles three operation types:
-    1. matmul: direct metrics
-    2. matmul_tt: [tile_w][transpose] -> metrics
-    3. others: [axis] -> metrics
+    Converts the hierarchical test results structure into a flat list for easier analysis.
+    Handles different operation types with their specific parameter structures.
+
+    Args:
+        results: Nested dictionary with structure:
+                [shape_type][pattern][distribution][operation][...metrics or parameters...]
+
+    Returns:
+        list: List of (case_info, metrics) tuples where:
+              - case_info: Dict with keys 'shape_type', 'pattern', 'distribution',
+                          'operation', and 'params' (containing operation-specific parameters)
+              - metrics: Dict containing precision metrics for this test case
+
+    Note:
+        Handles three operation types:
+        1. matmul: Direct metrics at operation level
+        2. matmul_tt: Nested structure [tile_w][transpose] -> metrics
+        3. others: Structure [axis] -> metrics
     """
     flattened = []
 
@@ -406,14 +470,22 @@ def _flatten_results(results: dict):
 
 def _format_worst_cases_report(worst_cases: dict, top_n: int = 5):
     """
-    Format worst cases into a readable report.
+    Format worst cases analysis into a detailed markdown report.
+
+    Creates a comprehensive report showing the worst performing test cases
+    for each precision metric, with detailed case information and context metrics.
 
     Args:
-        worst_cases: Dictionary returned by _find_worst_cases
-        top_n: Number of cases to show per metric
+        worst_cases: Dictionary returned by _find_worst_cases containing metric names
+                    as keys and lists of worst case data as values. Each case contains
+                    'value', 'case' (test info), and 'full_metrics' (all precision data)
+        top_n: Number of worst cases to include in detailed report per metric (default: 5)
 
     Returns:
-        Formatted string report
+        str: Formatted markdown report string with sections for each metric showing:
+             - Case ranking and problematic values
+             - Test case details (shape, pattern, distribution, operation, parameters)
+             - Related metrics for context
     """
     report_lines = ["# Worst Cases Analysis\n"]
 
@@ -578,7 +650,20 @@ def save_results_to_json(all_results: dict, output_directory: str = Filepaths.RE
 
 
 def _create_matmul_table(results: dict, headers: list) -> str:
-    """Create markdown table for matmul operations."""
+    """
+    Create a markdown table for matmul operation results.
+
+    Formats matmul operation precision metrics into a markdown table with
+    predefined columns for operation name and various precision metrics.
+
+    Args:
+        results: List of (operation_name, result_dict) tuples where result_dict
+                contains precision metrics like PCC, absolute errors, ULP values, etc.
+        headers: List of column headers for the markdown table
+
+    Returns:
+        str: Formatted markdown table with operation results
+    """
 
     table_lines = ["| " + " | ".join(headers) + " |", "|" + "|".join(["---"] * len(headers)) + "|"]
 
@@ -601,7 +686,21 @@ def _create_matmul_table(results: dict, headers: list) -> str:
 
 
 def _create_matmul_tt_table(results: dict, headers: list) -> str:
-    """Create markdown table for matmul_tt operations."""
+    """
+    Create a markdown table for matmul_tt operation results.
+
+    Formats matmul_tt operation precision metrics into a markdown table including
+    operation-specific parameters like tile_w and transpose settings.
+
+    Args:
+        results: List of (operation_name, tile_w, transpose, result_dict) tuples
+                where result_dict contains precision metrics
+        headers: List of column headers for the markdown table including operation,
+                tile_w, transpose columns plus precision metrics
+
+    Returns:
+        str: Formatted markdown table with matmul_tt operation results and parameters
+    """
 
     table_lines = ["| " + " | ".join(headers) + " |", "|" + "|".join(["---"] * len(headers)) + "|"]
 
@@ -626,7 +725,21 @@ def _create_matmul_tt_table(results: dict, headers: list) -> str:
 
 
 def _create_other_ops_table(results: dict, headers: list) -> str:
-    """Create markdown table for other operations (with axis)."""
+    """
+    Create a markdown table for other operations (non-matmul operations with axis parameter).
+
+    Formats precision metrics for operations that use an axis parameter (like reductions,
+    concatenations, etc.) into a markdown table format.
+
+    Args:
+        results: List of (operation_name, axis, result_dict) tuples where result_dict
+                contains precision metrics and axis is the operation parameter
+        headers: List of column headers for the markdown table including operation,
+                axis columns plus precision metrics
+
+    Returns:
+        str: Formatted markdown table with operation results and axis parameters
+    """
 
     table_lines = ["| " + " | ".join(headers) + " |", "|" + "|".join(["---"] * len(headers)) + "|"]
 
@@ -651,13 +764,22 @@ def _create_other_ops_table(results: dict, headers: list) -> str:
 
 def _dict_to_markdown(results_dict):
     """
-    Convert a nested dictionary of operation results to a markdown document.
+    Convert a nested dictionary of operation results to a comprehensive markdown document.
+
+    Transforms the hierarchical test results into a well-structured markdown report
+    organized by shape types, patterns, and distributions, with separate tables
+    for different operation types.
 
     Args:
-        results_dict: Dictionary with structure [shape_type][pattern][distribution][operation][...]
+        results_dict: Nested dictionary with precision test results structured as:
+                     [shape_type][pattern][distribution][operation][metrics/parameters]
+                     Contains all test results organized hierarchically
 
     Returns:
-        str: Formatted markdown document
+        str: Complete formatted markdown document with:
+             - Hierarchical sections for shape types, patterns, distributions
+             - Separate tables for matmul, matmul_tt, and other operations
+             - Formatted precision metrics (PCC, errors, ULP values, allclose results)
     """
     headers = [
         "Operation",
@@ -722,6 +844,26 @@ def _dict_to_markdown(results_dict):
 
 
 def generate_results_doc(all_results: dict, output_directory: str = Filepaths.RESULTS_DIRECTORY) -> None:
+    """
+    Generate and save a comprehensive markdown documentation of all test results.
+
+    Creates a complete markdown report from the nested results dictionary and saves it
+    to a file for easy review and sharing of precision analysis results.
+
+    Args:
+        all_results: Complete nested dictionary containing all precision test results
+                    with structure [shape_type][pattern][distribution][operation][metrics]
+        output_directory: Directory path where the markdown report will be saved
+                         (default: Filepaths.RESULTS_DIRECTORY)
+
+    Returns:
+        None
+
+    Side Effects:
+        - Creates output directory if it doesn't exist
+        - Writes markdown report to file specified by Filepaths.RAW_RESULTS_MARKDOWN_FILENAME
+        - Logs the file path where report was saved
+    """
     markdown_content = _dict_to_markdown(all_results)
 
     # Create output directory
