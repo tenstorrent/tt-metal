@@ -262,8 +262,12 @@ operation::ProgramWithCallbacks GroupNorm::create_program(
                 uint32_t batch = a.padded_shape()[0];
                 uint32_t W = a.padded_shape()[3];
                 uint32_t num_virtual_cols = std::min<uint32_t>(grid_size.x, this->num_groups);
-                while ((W / num_virtual_cols) % TILE_WIDTH != 0 || (this->num_groups % num_virtual_cols) != 0) {
+                while (num_virtual_cols > 0 &&
+                       ((W / num_virtual_cols) % TILE_WIDTH != 0 || (this->num_groups % num_virtual_cols) != 0)) {
                     num_virtual_cols -= 1;
+                }
+                if (num_virtual_cols == 0) {
+                    TT_THROW("Core Grid resulted in virtual cores x = 0, Please try another core grid");
                 }
                 uint32_t num_actual_rows = grid_size.y;
                 uint32_t num_virtual_rows = (grid_size.x / num_virtual_cols) * num_actual_rows;
