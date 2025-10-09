@@ -146,6 +146,21 @@ class TtTransfuserBackbone:
             dtype=ttnn.bfloat16,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
+        self.transformer3 = TTGpt(
+            device=self.device,
+            parameters=parameters["transformer3"],
+            n_head=config.n_head,
+            n_layer=config.n_layer,
+            use_velocity=config.use_velocity,
+            img_vert_anchors=config.img_vert_anchors,
+            img_horz_anchors=config.img_horz_anchors,
+            lidar_vert_anchors=config.lidar_vert_anchors,
+            lidar_horz_anchors=config.lidar_horz_anchors,
+            seq_len=config.seq_len,
+            n_embd=576,  # layer3 output channels
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
 
     # def _make_layer(
     #     self,
@@ -513,10 +528,8 @@ class TtTransfuserBackbone:
         image_h = image_features.shape[1]
         image_w = image_features.shape[2]
         image_c = image_features.shape[3]
-        print(f"{self.config.img_vert_anchors, self.config.img_horz_anchors=}")
-        print(f"{image_features.shape,lidar_features.shape=}")
         image_features_flat = ttnn.reshape(image_features, (1, 1, image_features.shape[0] * image_h * image_w, image_c))
-        image_embd_layer2 = ttnn.adaptive_avg_pool2d(
+        image_embd_layer3 = ttnn.adaptive_avg_pool2d(
             input_tensor=image_features_flat,
             batch_size=image_features.shape[0],
             input_h=image_h,
@@ -529,7 +542,7 @@ class TtTransfuserBackbone:
         lidar_w = lidar_features.shape[2]
         lidar_c = lidar_features.shape[3]
         lidar_features_flat = ttnn.reshape(lidar_features, (1, 1, lidar_features.shape[0] * lidar_h * lidar_w, lidar_c))
-        lidar_embd_layer2 = ttnn.adaptive_avg_pool2d(
+        lidar_embd_layer3 = ttnn.adaptive_avg_pool2d(
             input_tensor=lidar_features_flat,
             batch_size=lidar_features.shape[0],
             input_h=lidar_h,
@@ -537,4 +550,40 @@ class TtTransfuserBackbone:
             channels=lidar_c,
             output_size=[self.config.lidar_vert_anchors, self.config.lidar_horz_anchors],
         )
-        return image_embd_layer2, lidar_embd_layer2
+
+        logger.info(f"layer3 transformer")
+
+        image_embd_layer3 = ttnn.to_memory_config(image_embd_layer3, ttnn.DRAM_MEMORY_CONFIG)
+        image_embd_layer3 = ttnn.to_layout(image_embd_layer3, ttnn.TILE_LAYOUT)
+
+        lidar_embd_layer3 = ttnn.to_memory_config(lidar_embd_layer3, ttnn.DRAM_MEMORY_CONFIG)
+        lidar_embd_layer3 = ttnn.to_layout(lidar_embd_layer3, ttnn.TILE_LAYOUT)
+
+        image_features_layer3, lidar_features_layer3 = self.transformer3(
+            image_embd_layer3, lidar_embd_layer3, velocity, 576
+        )
+        image_features_layer3 = ttnn.permute(image_features_layer3, (0, 2, 3, 1))
+        lidar_features_layer3 = ttnn.permute(lidar_features_layer3, (0, 2, 3, 1))
+
+        logger.info(f"Layer3 image and lidar interpolation- bilinear")
+        logger.info(f"bilinear_image")
+        image_features_layer3 = ttnn.to_layout(image_features_layer3, ttnn.ROW_MAJOR_LAYOUT)
+        image_features_layer3 = ttnn.to_memory_config(image_features_layer3, ttnn.DRAM_MEMORY_CONFIG)
+        image_features_layer3 = ttnn.upsample(
+            image_features_layer3, scale_factor=(2, 2), mode="bilinear", memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        image_features_layer3 = ttnn.to_layout(image_features_layer3, ttnn.TILE_LAYOUT)
+
+        logger.info(f"bilinear_lidar")
+        lidar_features_layer3 = ttnn.to_layout(lidar_features_layer3, ttnn.ROW_MAJOR_LAYOUT)
+        lidar_features_layer3 = ttnn.to_memory_config(lidar_features_layer3, ttnn.DRAM_MEMORY_CONFIG)
+        lidar_features_layer3 = ttnn.upsample(
+            lidar_features_layer3, scale_factor=(2, 2), mode="bilinear", memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        lidar_features_layer3 = ttnn.to_layout(lidar_features_layer3, ttnn.TILE_LAYOUT)
+
+        logger.info("layer3 Image and lidar - add")
+        image_features = ttnn.add(image_features, image_features_layer3)
+        lidar_features = ttnn.add(lidar_features, lidar_features_layer3)
+
+        return image_features, lidar_features

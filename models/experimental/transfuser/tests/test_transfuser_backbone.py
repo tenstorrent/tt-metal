@@ -79,6 +79,12 @@ class TransfuserBackboneInfra:
             device=device,
         )
         parameters["transformer2"] = gpt2_parameters
+        gpt3_parameters = preprocess_model_parameters(
+            initialize_model=lambda: torch_model.transformer3,
+            custom_preprocessor=create_gpt_preprocessor(device, n_layer, ttnn.bfloat16),
+            device=device,
+        )
+        parameters["transformer3"] = gpt3_parameters
 
         # Prepare golden inputs/outputs
         self.torch_image_input = torch.randn(self.img_input_shape)
