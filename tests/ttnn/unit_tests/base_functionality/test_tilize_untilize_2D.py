@@ -23,7 +23,10 @@ def random_torch_tensor(dtype, shape):
     return torch.rand(shape).bfloat16().float()
 
 
-@pytest.mark.parametrize("in_dtype", [ttnn.bfloat16, ttnn.float32, ttnn.int32])
+dtypes = [ttnn.bfloat16, ttnn.float32, ttnn.int32, ttnn.uint16]
+
+
+@pytest.mark.parametrize("in_dtype", dtypes)
 @pytest.mark.parametrize("use_multicore", [False, True])
 @pytest.mark.parametrize("use_pack_untilize", [False, True])
 @pytest.mark.parametrize("H", [32, 512])
@@ -45,7 +48,7 @@ def test_untilize_2D(device, in_dtype, use_multicore, use_pack_untilize, H, W):
     assert passing
 
 
-@pytest.mark.parametrize("in_dtype", [ttnn.bfloat16, ttnn.float32, ttnn.int32])
+@pytest.mark.parametrize("in_dtype", dtypes)
 @pytest.mark.parametrize("use_multicore", [False, True])
 @pytest.mark.parametrize("H", [128, 2048])
 @pytest.mark.parametrize("W", [32, 1056])
@@ -64,7 +67,7 @@ def test_tilize_2D(device, in_dtype, use_multicore, H, W):
     assert passing
 
 
-@pytest.mark.parametrize("in_dtype", [ttnn.bfloat16, ttnn.float32, ttnn.int32])
+@pytest.mark.parametrize("in_dtype", dtypes)
 @pytest.mark.parametrize("use_multicore", [False, True])
 # Fails on int32 if use_pack_untilize is False AND dtype is uint32/int32
 @pytest.mark.parametrize("use_pack_untilize", [False, True])
@@ -89,7 +92,7 @@ def test_untilize_with_unpadding_2D(device, in_dtype, use_multicore, use_pack_un
     assert passing
 
 
-@pytest.mark.parametrize("in_dtype", [ttnn.bfloat16, ttnn.float32, ttnn.int32])
+@pytest.mark.parametrize("in_dtype", dtypes)
 @pytest.mark.parametrize("use_multicore", [False, True])
 @pytest.mark.parametrize("pad_value", [2, 1.3])
 @pytest.mark.parametrize("H", [32, 43])
@@ -109,7 +112,7 @@ def test_tilize_with_val_padding_2D(device, in_dtype, use_multicore, H, W, pad_v
     assert passing
 
 
-@pytest.mark.parametrize("in_dtype", [ttnn.bfloat16, ttnn.float32, ttnn.int32])
+@pytest.mark.parametrize("in_dtype", dtypes)
 @pytest.mark.parametrize("use_multicore", [False, True])
 @pytest.mark.parametrize("H", [128, 98])
 @pytest.mark.parametrize("W", [78, 1024])
