@@ -104,7 +104,7 @@ void kernel_main() {
             auto val = get_value<src_cb_addr_data_format>(reinterpret_cast<void*>(&raw_val));
             compare_values<src_cb_addr_data_format>(val, idx, max_val, max_idx);
             cb_pop_front(w2r_cb_idx, 1);
-        }else{  
+        } else {  
             cb_reserve_back(w2r_cb_idx, 1);
             const uint32_t w2r_cb_addr = get_write_ptr(w2r_cb_idx);
             volatile tt_l1_ptr uint32_t* idx_val = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(w2r_cb_addr);
