@@ -361,7 +361,7 @@ void MeshGraph::initialize_from_mgd(const MeshGraphDescriptor& mgd) {
         }
         // South, start from SW corner
         chan_id = 0;
-        for (std::uint32_t chip_id = (mesh_shape[0] * mesh_shape[1] - mesh_shape[1]); chip_id < (mesh_shape[0] * mesh_shape[1]); chip_id++) {
+        for (std::uint32_t chip_id = ((mesh_shape[0] * mesh_shape[1]) - mesh_shape[1]); chip_id < (mesh_shape[0] * mesh_shape[1]); chip_id++) {
             for (std::uint32_t i = 0; i < chip_spec_.num_eth_ports_per_direction; i++) {
                 mesh_edge_ports_to_chip_id_[*mesh_id][{RoutingDirection::S, chan_id++}] = chip_id;
             }
