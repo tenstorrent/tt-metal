@@ -152,7 +152,7 @@ ninja install # Installs to build directory by default, required for Python envi
 
 #### Step 3. Virtual Environment Setup
 
-- (Optional) Specify existing python envirionment:
+- (Optional) Specify existing python environment:
 ```bash
 export PYTHON_ENV_DIR=<path_to_your_env_directory>
 ```
