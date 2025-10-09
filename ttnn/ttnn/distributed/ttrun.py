@@ -105,11 +105,22 @@ def get_rank_environment(binding: RankBinding, config: TTRunConfig) -> Dict[str,
     Returns:
         Dictionary of environment variables for this rank
     """
+    # Handle TT_METAL_CACHE with rank-specific suffix to ensure multi-process safety.
+    if "TT_METAL_CACHE" in os.environ:
+        user_cache_path = os.environ["TT_METAL_CACHE"]
+        cache_path = f"{user_cache_path}_{os.uname().nodename}_rank{binding.rank}"
+        logger.warning(
+            f"{TT_RUN_PREFIX} User-provided TT_METAL_CACHE '{user_cache_path}' "
+            f"modified to '{cache_path}' for rank {binding.rank} to ensure multi-process safety"
+        )
+    else:
+        # Use default pattern when TT_METAL_CACHE is not set
+        cache_path = DEFAULT_CACHE_DIR_PATTERN.format(
+            home=str(Path.home()), hostname=os.uname().nodename, rank=binding.rank
+        )
+
     env = {
-        "TT_METAL_CACHE": os.environ.get(
-            "TT_METAL_CACHE",
-            DEFAULT_CACHE_DIR_PATTERN.format(home=str(Path.home()), hostname=os.uname().nodename, rank=binding.rank),
-        ),  # Need to explicitly configure this because kernel cache is not multi-process safe (#21089)
+        "TT_METAL_CACHE": cache_path,
         "TT_MESH_ID": str(binding.mesh_id),
         "TT_MESH_GRAPH_DESC_PATH": config.mesh_graph_desc_path,
         "TT_METAL_HOME": os.environ.get("TT_METAL_HOME", str(Path.home())),
