@@ -23,7 +23,6 @@ FabricChannelAllocator::FabricChannelAllocator(
             const auto& region1 = memory_regions_[i];
             const auto& region2 = memory_regions_[j];
 
-            // Check for overlap: regions overlap if one starts before the other ends
             bool overlap = (region1.start_address < region2.get_end_address()) &&
                            (region2.start_address < region1.get_end_address());
             TT_FATAL(!overlap, "Memory regions {} and {} overlap", i, j);
