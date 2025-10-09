@@ -104,7 +104,7 @@ class Generator:
         if (
             batch == 32
             and len(set(prefill_seq_lens)) == 1
-            and batch_seq_len * batch < 128 * 1024
+            and prefill_seq_lens[0] * batch < 128 * 1024
             and tt_out_logits_all_users is None
             and not return_logits
         ):
