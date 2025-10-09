@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include "dataflow_api.h"
+#include "debug/dprint.h"
 #include "fabric/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
@@ -52,6 +53,16 @@ void kernel_main() {
     auto conn_N = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(idx);
     auto conn_S = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(idx);
 
+    // First-hop start node IDs per leg (must match host order W,E,N,S).
+    const uint16_t dst_dev_W = static_cast<uint16_t>(get_arg_val<uint32_t>(idx++));
+    const uint16_t dst_mesh_W = static_cast<uint16_t>(get_arg_val<uint32_t>(idx++));
+    const uint16_t dst_dev_E = static_cast<uint16_t>(get_arg_val<uint32_t>(idx++));
+    const uint16_t dst_mesh_E = static_cast<uint16_t>(get_arg_val<uint32_t>(idx++));
+    const uint16_t dst_dev_N = static_cast<uint16_t>(get_arg_val<uint32_t>(idx++));
+    const uint16_t dst_mesh_N = static_cast<uint16_t>(get_arg_val<uint32_t>(idx++));
+    const uint16_t dst_dev_S = static_cast<uint16_t>(get_arg_val<uint32_t>(idx++));
+    const uint16_t dst_mesh_S = static_cast<uint16_t>(get_arg_val<uint32_t>(idx++));
+
     // Hops + leg mask
     const uint16_t e_hops = static_cast<uint16_t>(get_arg_val<uint32_t>(idx++));
     const uint16_t w_hops = static_cast<uint16_t>(get_arg_val<uint32_t>(idx++));
@@ -63,6 +74,13 @@ void kernel_main() {
     volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr_E = PacketHeaderPool::allocate_header();
     volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr_N = PacketHeaderPool::allocate_header();
     volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr_S = PacketHeaderPool::allocate_header();
+
+    // Clear headers so fabric_set_mcast_route writes into a clean slate
+    zero_l1_buf(reinterpret_cast<uint32_t*>(const_cast<PACKET_HEADER_TYPE*>(hdr_W)), sizeof(PACKET_HEADER_TYPE));
+    zero_l1_buf(reinterpret_cast<uint32_t*>(const_cast<PACKET_HEADER_TYPE*>(hdr_E)), sizeof(PACKET_HEADER_TYPE));
+    zero_l1_buf(reinterpret_cast<uint32_t*>(const_cast<PACKET_HEADER_TYPE*>(hdr_N)), sizeof(PACKET_HEADER_TYPE));
+    zero_l1_buf(reinterpret_cast<uint32_t*>(const_cast<PACKET_HEADER_TYPE*>(hdr_S)), sizeof(PACKET_HEADER_TYPE));
+
     auto mh_W = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(hdr_W);
     auto mh_E = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(hdr_E);
     auto mh_N = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(hdr_N);
@@ -74,16 +92,16 @@ void kernel_main() {
     const bool use_S = (s_hops > 0) && (leg_mask & 8u);
 
     if (use_W) {
-        conn_W.open();
+        conn_W.open<true>();
     }
     if (use_E) {
-        conn_E.open();
+        conn_E.open<true>();
     }
     if (use_N) {
-        conn_N.open();
+        conn_N.open<true>();
     }
     if (use_S) {
-        conn_S.open();
+        conn_S.open<true>();
     }
 
     const auto dst_acc = TensorAccessor(ta_args, /*bank_base=*/dst_base, /*page_size=*/PAGE_SIZE);
@@ -91,15 +109,15 @@ void kernel_main() {
     for (uint32_t i = 0; i < TOTAL_PAGES; ++i) {
         cb_wait_front(CB_ID, 1);
         const uint32_t src_l1_addr = get_read_ptr(CB_ID);
-        uint64_t dest_noc_addr = dst_acc.get_noc_addr(i, 0, 0);
+        uint64_t dest_noc_addr = dst_acc.get_noc_addr(i, rx_noc_x, rx_noc_y);
 
         // NORTH trunk (fan-out E/W on each north row)
         if (use_N) {
             conn_N.wait_for_empty_write_slot();
             fabric_set_mcast_route(
                 reinterpret_cast<volatile tt_l1_ptr LowLatencyMeshPacketHeader*>(mh_N),
-                0,
-                0,
+                dst_dev_N,
+                dst_mesh_N,
                 e_hops,
                 w_hops,
                 n_hops,
@@ -113,8 +131,8 @@ void kernel_main() {
             conn_S.wait_for_empty_write_slot();
             fabric_set_mcast_route(
                 reinterpret_cast<volatile tt_l1_ptr LowLatencyMeshPacketHeader*>(mh_S),
-                0,
-                0,
+                dst_dev_S,
+                dst_mesh_S,
                 e_hops,
                 w_hops,
                 0,
@@ -127,7 +145,13 @@ void kernel_main() {
         if (use_W) {
             conn_W.wait_for_empty_write_slot();
             fabric_set_mcast_route(
-                reinterpret_cast<volatile tt_l1_ptr LowLatencyMeshPacketHeader*>(mh_W), 0, 0, 0, w_hops, 0, 0);
+                reinterpret_cast<volatile tt_l1_ptr LowLatencyMeshPacketHeader*>(mh_W),
+                dst_dev_W,
+                dst_mesh_W,
+                0,
+                w_hops,
+                0,
+                0);
             hdr_W->to_noc_unicast_write(NocUnicastCommandHeader{dest_noc_addr}, PAGE_SIZE);
             conn_W.send_payload_without_header_non_blocking_from_address(src_l1_addr, PAGE_SIZE);
             conn_W.send_payload_blocking_from_address((uint32_t)hdr_W, sizeof(PACKET_HEADER_TYPE));
@@ -136,7 +160,13 @@ void kernel_main() {
         if (use_E) {
             conn_E.wait_for_empty_write_slot();
             fabric_set_mcast_route(
-                reinterpret_cast<volatile tt_l1_ptr LowLatencyMeshPacketHeader*>(mh_E), 0, 0, e_hops, 0, 0, 0);
+                reinterpret_cast<volatile tt_l1_ptr LowLatencyMeshPacketHeader*>(mh_E),
+                dst_dev_E,
+                dst_mesh_E,
+                e_hops,
+                0,
+                0,
+                0);
             hdr_E->to_noc_unicast_write(NocUnicastCommandHeader{dest_noc_addr}, PAGE_SIZE);
             conn_E.send_payload_without_header_non_blocking_from_address(src_l1_addr, PAGE_SIZE);
             conn_E.send_payload_blocking_from_address((uint32_t)hdr_E, sizeof(PACKET_HEADER_TYPE));
@@ -145,7 +175,7 @@ void kernel_main() {
         cb_pop_front(CB_ID, 1);
     }
 
-    noc_async_writes_flushed();
+    noc_async_write_barrier();
 
     // === Single multicast completion to identical mailboxes on all destination chips ===
     ASSERT(sem_l1_addr != 0);
@@ -158,7 +188,13 @@ void kernel_main() {
     if (use_N) {
         conn_N.wait_for_empty_write_slot();
         fabric_set_mcast_route(
-            reinterpret_cast<volatile tt_l1_ptr LowLatencyMeshPacketHeader*>(mh_N), 0, 0, e_hops, w_hops, n_hops, 0);
+            reinterpret_cast<volatile tt_l1_ptr LowLatencyMeshPacketHeader*>(mh_N),
+            dst_dev_N,
+            dst_mesh_N,
+            e_hops,
+            w_hops,
+            n_hops,
+            0);
         hdr_N->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader(sem_noc, 1, 32));
         bool last = mark_last();
         if (last) {
@@ -170,7 +206,13 @@ void kernel_main() {
     if (use_S) {
         conn_S.wait_for_empty_write_slot();
         fabric_set_mcast_route(
-            reinterpret_cast<volatile tt_l1_ptr LowLatencyMeshPacketHeader*>(mh_S), 0, 0, e_hops, w_hops, 0, s_hops);
+            reinterpret_cast<volatile tt_l1_ptr LowLatencyMeshPacketHeader*>(mh_S),
+            dst_dev_S,
+            dst_mesh_S,
+            e_hops,
+            w_hops,
+            0,
+            s_hops);
         hdr_S->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader(sem_noc, 1, 32));
         bool last = mark_last();
         if (last) {
@@ -182,7 +224,13 @@ void kernel_main() {
     if (use_W) {
         conn_W.wait_for_empty_write_slot();
         fabric_set_mcast_route(
-            reinterpret_cast<volatile tt_l1_ptr LowLatencyMeshPacketHeader*>(mh_W), 0, 0, 0, w_hops, 0, 0);
+            reinterpret_cast<volatile tt_l1_ptr LowLatencyMeshPacketHeader*>(mh_W),
+            dst_dev_W,
+            dst_mesh_W,
+            0,
+            w_hops,
+            0,
+            0);
         hdr_W->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader(sem_noc, 1, 32));
         bool last = mark_last();
         if (last) {
@@ -194,7 +242,13 @@ void kernel_main() {
     if (use_E) {
         conn_E.wait_for_empty_write_slot();
         fabric_set_mcast_route(
-            reinterpret_cast<volatile tt_l1_ptr LowLatencyMeshPacketHeader*>(mh_E), 0, 0, e_hops, 0, 0, 0);
+            reinterpret_cast<volatile tt_l1_ptr LowLatencyMeshPacketHeader*>(mh_E),
+            dst_dev_E,
+            dst_mesh_E,
+            e_hops,
+            0,
+            0,
+            0);
         hdr_E->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader(sem_noc, 1, 32));
         bool last = mark_last();
         if (last) {

@@ -5,6 +5,7 @@
 #include <cstdint>
 #include "dataflow_api.h"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
+#include "debug/dprint.h"
 
 // Receiver-side completion wait.
 // Runs on the destination device and blocks until the receiver's global
@@ -22,6 +23,8 @@ void kernel_main() {
     size_t idx = 0;
     const uint32_t sem_addr = get_arg_val<uint32_t>(idx++);
     const uint32_t expected_value = get_arg_val<uint32_t>(idx++);
+
+    DPRINT << "TEST " << ENDL();
 
     volatile tt_l1_ptr uint32_t* sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr);
 

@@ -5,6 +5,7 @@
 #include "dataflow_api.h"
 #include "accessor/tensor_accessor.h"
 #include "accessor/tensor_accessor_args.h"
+#include "debug/dprint.h"
 
 //
 // Reader (sender-side) kernel — batched DRAM→L1 copies into CB.
@@ -35,6 +36,8 @@ void kernel_main() {
 
     // Process pages in groups of 4; CB capacity will be sized larger on the host.
     constexpr uint32_t GROUP_PAGES = 4;
+
+    DPRINT << "TEST " << ENDL();
 
     const uint32_t src_base = get_arg_val<uint32_t>(0);
     const auto src_acc = TensorAccessor(ta_args, /*bank_base=*/src_base, /*page_size=*/PAGE_SIZE);
