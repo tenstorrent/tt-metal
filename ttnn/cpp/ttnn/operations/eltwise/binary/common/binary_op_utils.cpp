@@ -250,8 +250,13 @@ std::map<std::string, std::string> get_defines_fp32(
             op_name = "power_binary_tile";
             break;
         case BinaryOpType::DIV:
-            new_defines.insert({"BINOP_INIT", fmt::format("div_binary_tile_init();")});
-            op_name = "div_binary_tile";
+            if (input_a_dtype == DataType::INT32 && input_b_dtype == DataType::INT32) {
+                new_defines.insert({"DIV_INT32_INIT", fmt::format("div_int32_tile_init();")});
+                op_name = "div_int32_tile";
+            } else {
+                new_defines.insert({"BINOP_INIT", fmt::format("div_binary_tile_init();")});
+                op_name = "div_binary_tile";
+            }
             break;
         case BinaryOpType::BITWISE_AND:
             if (input_a_dtype == DataType::UINT16 && input_b_dtype == DataType::UINT16) {
