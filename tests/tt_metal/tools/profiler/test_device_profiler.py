@@ -281,6 +281,11 @@ def verify_trace_markers(devicesData, num_non_trace_ops, num_trace_ops, num_repe
                             trace_ids_to_counts[trace_id] = set()
                         trace_ids_to_counts[trace_id].add(int(marker_data["trace_id_count"]))
 
+                # The ops that are being traced may not run on every core on the device. If we detect a core
+                # that only runs the first two non-trace ops, we skip it
+                if len(non_trace_ops) == 2 and len(trace_ops_to_trace_ids) == 0:
+                    continue
+
                 assert (
                     len(non_trace_ops) <= num_non_trace_ops
                 ), f"Wrong number of non-trace ops for device {device}, core {core}, risc {risc} - expected at most {num_non_trace_ops}, read {len(non_trace_ops)}"
