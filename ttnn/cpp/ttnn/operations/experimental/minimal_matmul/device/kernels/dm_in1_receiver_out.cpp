@@ -10,15 +10,19 @@
 #include "debug/dprint_pages.h"
 
 void kernel_main() {
-    constexpr uint32_t K_tiles = get_compile_time_arg_val(0);
-    constexpr uint32_t N_tiles = get_compile_time_arg_val(1);
-    constexpr uint32_t M_block_tiles = get_compile_time_arg_val(2);
-    constexpr uint32_t K_block_tiles = get_compile_time_arg_val(3);
-    constexpr uint32_t N_block_tiles = get_compile_time_arg_val(4);
-    constexpr uint32_t input_tile_size = get_compile_time_arg_val(5);
-    uint32_t in1_mcast_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(6));
-    uint32_t in1_mcast_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(7));
-    constexpr uint32_t is_output_writer = get_compile_time_arg_val(8);
+    constexpr uint32_t M_tiles = get_compile_time_arg_val(0);
+    constexpr uint32_t padded_M_tiles = get_compile_time_arg_val(1);
+    constexpr uint32_t K_tiles = get_compile_time_arg_val(2);
+    constexpr uint32_t padded_K_tiles = get_compile_time_arg_val(3);
+    constexpr uint32_t N_tiles = get_compile_time_arg_val(4);
+    constexpr uint32_t padded_N_tiles = get_compile_time_arg_val(5);
+    constexpr uint32_t M_block_tiles = get_compile_time_arg_val(6);
+    constexpr uint32_t K_block_tiles = get_compile_time_arg_val(7);
+    constexpr uint32_t N_block_tiles = get_compile_time_arg_val(8);
+    constexpr uint32_t input_tile_size = get_compile_time_arg_val(9);
+    uint32_t in1_mcast_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(10));
+    uint32_t in1_mcast_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(11));
+    constexpr uint32_t is_output_writer = get_compile_time_arg_val(12);
 
     // Load input/output addresses and range parameters
     uint32_t argidx = 0;
@@ -32,12 +36,12 @@ void kernel_main() {
     const uint32_t defer_write_k_block = get_arg_val<uint32_t>(argidx++);
 
     // Tensor accessor for output tensor
-    constexpr auto out_args = TensorAccessorArgs<9>();
+    constexpr auto out_args = TensorAccessorArgs<13>();
     const auto out_reader = TensorAccessor(out_args, out_addr, input_tile_size);
 
-    const TensorShape2D out_shape(0 /*M_tiles, unused yet!*/, N_tiles);
+    const TensorShape2D out_shape(M_tiles, N_tiles, padded_M_tiles, padded_N_tiles);
 
-    constexpr uint32_t K_num_blocks = K_tiles / K_block_tiles;
+    constexpr uint32_t K_num_blocks = padded_K_tiles / K_block_tiles;
     constexpr uint32_t in1_block_num_tiles = K_block_tiles * N_block_tiles;
     constexpr uint32_t out_block_num_tiles = M_block_tiles * N_block_tiles;
 
