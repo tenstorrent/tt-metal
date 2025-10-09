@@ -53,10 +53,31 @@ public:
 
     void load_from_safetensors(const std::filesystem::path& model_path) override;
 
+    // BaseTransformer interface - required override
+    // This version assumes input_ids in x and optional attention_mask in mask
     [[nodiscard]] autograd::TensorPtr operator()(
+        const autograd::TensorPtr& x, const autograd::TensorPtr& mask) override;
+
+    // BERT-specific interface with all three inputs
+    // This is the primary implementation with full BERT functionality
+    [[nodiscard]] autograd::TensorPtr forward(
         const autograd::TensorPtr& input_ids,
         const autograd::TensorPtr& attention_mask = nullptr,
         const autograd::TensorPtr& token_type_ids = nullptr);
+
+    // Convenience method for backward compatibility
+    [[nodiscard]] autograd::TensorPtr operator()(
+        const autograd::TensorPtr& input_ids,
+        const autograd::TensorPtr& attention_mask,
+        const autograd::TensorPtr& token_type_ids);
+
+    // Public accessors for testing and introspection
+    [[nodiscard]] const BertConfig& get_config() const {
+        return m_config;
+    }
+    [[nodiscard]] bool is_pooler_enabled() const {
+        return m_pooler != nullptr;
+    }
 
 private:
     [[nodiscard]] autograd::TensorPtr get_embeddings(
