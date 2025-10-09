@@ -24,7 +24,6 @@ struct MemoryRegion {
     size_t size;
 
     MemoryRegion(size_t start, size_t size) : start_address(start), size(size) {
-        // TT_FATAL will be available when this is used
     }
 
     size_t get_size() const { return size; }
