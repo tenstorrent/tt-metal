@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.profiler import Profiler
 from helpers.test_config import ProfilerBuild, run_test

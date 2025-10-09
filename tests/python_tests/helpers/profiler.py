@@ -10,9 +10,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Optional
 
-from ttexalens.tt_exalens_lib import read_words_from_device
-
 from helpers.chip_architecture import get_chip_architecture
+from ttexalens.tt_exalens_lib import read_words_from_device
 
 
 @dataclass
