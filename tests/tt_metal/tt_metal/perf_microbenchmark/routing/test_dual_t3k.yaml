@@ -18,3 +18,150 @@ Tests:
     patterns:
       - type: all_to_all
         iterations: 25
+
+  # ======================================================================================
+  # Test 2: NOC Send Types Test - Based on regular T3K testing patterns
+  # ======================================================================================
+  - name: TestNocSendTypes
+    fabric_setup:
+      topology: Mesh
+      routing_type: Dynamic
+    parametrization_params:
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+    defaults:
+      ftype: unicast
+      size: 1024
+      num_packets: 100
+    patterns:
+      - type: all_to_all
+        iterations: 1
+
+  # ======================================================================================
+  # Test 3: Packet Size Variations - Based on regular T3K testing patterns
+  # ======================================================================================
+  - name: TestPacketSizes
+    fabric_setup:
+      topology: Mesh
+      routing_type: Dynamic
+    parametrization_params:
+      size: [512, 1024, 2048, 4096]
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      num_packets: 50
+    patterns:
+      - type: all_to_all
+        iterations: 1
+
+  # ======================================================================================
+  # Test 4: Multicast Traffic Patterns - Based on regular T3K testing patterns
+  # ======================================================================================
+  - name: AllToAllMulticast
+    fabric_setup:
+      topology: Mesh
+      routing_type: Dynamic
+    defaults:
+      ftype: mcast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 50
+    patterns:
+      - type: all_to_all
+        iterations: 1
+
+  # ======================================================================================
+  # Test 5: Random Pairing Extended - Based on regular T3K testing patterns
+  # ======================================================================================
+  - name: UnicastRandomPairingExtended
+    fabric_setup:
+      topology: Mesh
+      routing_type: Dynamic
+    parametrization_params:
+      size: [1024, 2048]
+      num_packets: [10, 25]
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+    patterns:
+      - type: full_device_random_pairing
+        iterations: 3
+
+  # ======================================================================================
+  # Test 6: Inter-Mesh Cross Traffic - Full Dual T3K topology (2x4 each mesh)
+  # ======================================================================================
+  - name: InterMeshCrossTraffic
+    fabric_setup:
+      topology: Mesh
+      routing_type: Dynamic
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 2048
+      num_packets: 25
+    senders:
+      # Mesh 0 devices sending to Mesh 1 - Row 0
+      - device: [0, [0, 0]]
+        patterns:
+          - destination:
+              device: [1, [0, 0]]
+          - destination:
+              device: [1, [1, 3]]
+      - device: [0, [0, 1]]
+        patterns:
+          - destination:
+              device: [1, [0, 1]]
+          - destination:
+              device: [1, [1, 2]]
+      - device: [0, [0, 2]]
+        patterns:
+          - destination:
+              device: [1, [0, 2]]
+          - destination:
+              device: [1, [1, 1]]
+      - device: [0, [0, 3]]
+        patterns:
+          - destination:
+              device: [1, [0, 3]]
+          - destination:
+              device: [1, [1, 0]]
+      # Mesh 0 devices sending to Mesh 1 - Row 1
+      - device: [0, [1, 0]]
+        patterns:
+          - destination:
+              device: [1, [1, 0]]
+          - destination:
+              device: [1, [0, 3]]
+      - device: [0, [1, 1]]
+        patterns:
+          - destination:
+              device: [1, [1, 1]]
+          - destination:
+              device: [1, [0, 2]]
+      - device: [0, [1, 2]]
+        patterns:
+          - destination:
+              device: [1, [1, 2]]
+          - destination:
+              device: [1, [0, 1]]
+      - device: [0, [1, 3]]
+        patterns:
+          - destination:
+              device: [1, [1, 3]]
+          - destination:
+              device: [1, [0, 0]]
+
+  # ======================================================================================
+  # Test 7: Full All-to-All Cross-Mesh Traffic - Comprehensive dual T3K test
+  # ======================================================================================
+  - name: FullCrossMeshAllToAll
+    fabric_setup:
+      topology: Mesh
+      routing_type: Dynamic
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 10
+    patterns:
+      - type: all_to_all
+        iterations: 1
