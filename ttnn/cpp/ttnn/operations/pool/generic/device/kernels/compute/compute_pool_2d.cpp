@@ -185,7 +185,8 @@ void MAIN {
                     tilize_block_no_pack(curr_in_cb_id, topk_output_tiles, data_dst_idx, topk_cb_tile_idx);
                     tilize_uninit_with_dt_no_pack(curr_in_cb_id, curr_in_idx_cb_id);
 
-                    max_reduce_with_indices<window_size_hw>(data_dst_idx, index_dst_idx);
+                    constexpr uint32_t max_mpwi_kernel_size = 9;
+                    max_reduce_with_indices<max_mpwi_kernel_size>(data_dst_idx, index_dst_idx);
 
                     cb_pop_front(curr_in_idx_cb_id, 1);
                 } else {
