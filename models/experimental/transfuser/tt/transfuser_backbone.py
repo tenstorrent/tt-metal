@@ -502,15 +502,39 @@ class TtTransfuserBackbone:
         lidar_features = ttnn.add(lidar_features, lidar_features_layer2)
 
         logger.info(f"image_encoder_layer3")
-        # image_out = ttnn.reshape(image_out, (1, 80, 352, 32))
-        # image_out = ttnn.reshape(image_out, image_shape)
-        # Process layer1 blocks
         for block in self.image_layer3:
             image_features = block(image_features, device)
 
         logger.info(f"lidar_encoder_layer3")
-        # lidar_out = ttnn.reshape(lidar_out, lidar_shape)
-        # lidar_out = ttnn.reshape(lidar_out, (1, 128, 128, 32))
         for block in self.lidar_layer3:
             lidar_features = block(lidar_features, device)
-        return image_features, lidar_features
+
+        logger.info(f"img3_avgpool")
+        image_h = image_features.shape[1]
+        image_w = image_features.shape[2]
+        image_c = image_features.shape[3]
+        print(f"{self.config.img_vert_anchors, self.config.img_horz_anchors=}")
+        print(f"{image_features.shape,lidar_features.shape=}")
+        image_features_flat = ttnn.reshape(image_features, (1, 1, image_features.shape[0] * image_h * image_w, image_c))
+        image_embd_layer2 = ttnn.adaptive_avg_pool2d(
+            input_tensor=image_features_flat,
+            batch_size=image_features.shape[0],
+            input_h=image_h,
+            input_w=image_w,
+            channels=image_c,
+            output_size=[self.config.img_vert_anchors, self.config.img_horz_anchors],
+        )
+        logger.info(f"lidar3_avgpool")
+        lidar_h = lidar_features.shape[1]
+        lidar_w = lidar_features.shape[2]
+        lidar_c = lidar_features.shape[3]
+        lidar_features_flat = ttnn.reshape(lidar_features, (1, 1, lidar_features.shape[0] * lidar_h * lidar_w, lidar_c))
+        lidar_embd_layer2 = ttnn.adaptive_avg_pool2d(
+            input_tensor=lidar_features_flat,
+            batch_size=lidar_features.shape[0],
+            input_h=lidar_h,
+            input_w=lidar_w,
+            channels=lidar_c,
+            output_size=[self.config.lidar_vert_anchors, self.config.lidar_horz_anchors],
+        )
+        return image_embd_layer2, lidar_embd_layer2
