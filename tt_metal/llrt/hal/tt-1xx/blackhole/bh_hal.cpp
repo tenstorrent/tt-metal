@@ -170,6 +170,10 @@ public:
               params.processor_class == HalProcessorClassType::COMPUTE)) {
             cflags += "-fno-tree-loop-distribute-patterns ";  // don't use memcpy for cpy loops
         }
+        if (params.core_type == HalProgrammableCoreType::ACTIVE_ETH && blackhole::is_2_erisc_mode()) {
+            // Cannot use the gp as it's used by the base firmware
+            cflags += "-mno-relax ";
+        }
         return cflags;
     }
 
