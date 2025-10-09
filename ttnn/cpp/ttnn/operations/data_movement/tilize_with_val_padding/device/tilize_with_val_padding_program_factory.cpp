@@ -31,8 +31,8 @@ uint32_t get_packed_value(const Tensor tensor, const ttnn::PadValue pad_value) {
                 } else {
                     TT_FATAL(
                         tensor.dtype() == DataType::FLOAT32 or tensor.dtype() == DataType::UINT32 or
-                            tensor.dtype() == DataType::INT32,
-                        "only supporting bfloat16, float32, and uint32/int32");
+                            tensor.dtype() == DataType::INT32 or tensor.dtype() == DataType::UINT16,
+                        "only supporting bfloat16, float32, and uint32/int32/uint16");
                     return (uint32_t)((pad_value));
                 }
             } else if constexpr (std::is_same_v<T, uint32_t>) {
@@ -42,8 +42,8 @@ uint32_t get_packed_value(const Tensor tensor, const ttnn::PadValue pad_value) {
                 } else {
                     TT_FATAL(
                         tensor.dtype() == DataType::FLOAT32 or tensor.dtype() == DataType::INT32 or
-                            tensor.dtype() == DataType::UINT32,
-                        "only supporting bfloat16, float32, and int32/uint32");
+                            tensor.dtype() == DataType::UINT32 or tensor.dtype() == DataType::UINT16,
+                        "only supporting bfloat16, float32, and int32/uint32/uint16");
                     return ((pad_value));
                 }
             } else {
