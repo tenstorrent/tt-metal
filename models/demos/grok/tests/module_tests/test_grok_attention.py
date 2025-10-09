@@ -150,7 +150,7 @@ def test_grok_attention_inference(
 
     for i in range(generation_length):
         # Grok attention block typically sees tensors with mean 0 and std 0.03 - 0.05 in layer 1
-        pt_attention_input = torch.randn(batch_size, seq_len, model_args.dim, dtype=torch.float32) * 50 + 100
+        pt_attention_input = torch.randn(batch_size, seq_len, model_args.dim, dtype=torch.float32) * 15
 
         tt_attention_input = pt_attention_input.clone()
 
@@ -180,6 +180,7 @@ def test_grok_attention_inference(
         reference_output = reference_model(pt_attention_input, current_pos[0], freqs_cis_i, mask=None)
 
         passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc)
+        # breakpoint()
 
         logger.info(comp_allclose(reference_output, tt_output_torch))
         logger.info(f"PCC: {pcc_message}")
@@ -210,41 +211,28 @@ def test_grok_attention_inference(
                 reference_model.cache_v.clone().permute(0, 2, 1, 3),  # [batch_size, n_kv_heads, seq, head_dim]
             ]
             # TT hardware execution -------------------------------------------------------------
-            if paged_attention:
-                tt_layer_present = [
-                    (
-                        ttnn.to_torch(
-                            cache,
-                            mesh_composer=ttnn.ConcatMesh2dToTensor(
-                                mesh_device,
-                                dims=(1, 3) if model_args.num_devices == 32 else (0, 1),
-                                mesh_shape=model_args.cluster_shape,
-                            ),
-                        )[reverse_permutation][:, : model_args.n_kv_heads, :, : model_args.head_dim]
-                        .reshape(
-                            batch_size,
-                            paged_attention_config.max_num_blocks // batch_size,
-                            model_args.n_kv_heads,
-                            paged_attention_config.block_size,
-                            model_args.head_dim,
-                        )
-                        .transpose(1, 2)
-                        .reshape(batch_size, model_args.n_kv_heads, -1, model_args.head_dim)[:batch_size, ...]
-                    )
-                    for cache in tt_model.layer_past
-                ]
-            else:
-                tt_layer_present = [
+            tt_layer_present = [
+                (
                     ttnn.to_torch(
                         cache,
                         mesh_composer=ttnn.ConcatMesh2dToTensor(
                             mesh_device,
-                            dims=(1, 0) if model_args.num_devices == 32 else (0, 1),
+                            dims=(1, 3) if model_args.num_devices == 32 else (0, 1),
                             mesh_shape=model_args.cluster_shape,
                         ),
-                    )[:batch_size, :, :, :]
-                    for cache in tt_model.layer_past
-                ]
+                    )[reverse_permutation][:, : model_args.n_kv_heads, :, : model_args.head_dim]
+                    .reshape(
+                        batch_size,
+                        paged_attention_config.max_num_blocks // batch_size,
+                        model_args.n_kv_heads,
+                        paged_attention_config.block_size,
+                        model_args.head_dim,
+                    )
+                    .transpose(1, 2)
+                    .reshape(batch_size, model_args.n_kv_heads, -1, model_args.head_dim)[:batch_size, ...]
+                )
+                for cache in tt_model.layer_past
+            ]
             for label, cache_pt, cache_tt in zip(["K", "V"], pytorch_layer_present, tt_layer_present):
                 cache_length_to_check = min(model_args.max_seq_len, generation_start_pos + i + 1)
                 cache_pt = cache_pt[:, :, generation_start_pos:cache_length_to_check, :]

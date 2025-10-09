@@ -221,7 +221,7 @@ def test_grok_decoder_inference(
         freqs_cis_i = freqs_cis[current_pos[0], :].unsqueeze(0)
 
         reference_output = reference_model(pt_decoder_input, current_pos[0], freqs_cis_i, mask=None)
-        breakpoint()
+        # breakpoint()
 
         passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc)
 

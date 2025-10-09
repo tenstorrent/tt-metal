@@ -178,10 +178,8 @@ void softcap_inplace(uint32_t in_cb, uint32_t num_tiles) {
     // constexpr uint32_t softcapping_recip_fp32 = __builtin_bit_cast(uint32_t, 1.0f / softcapping);
 
     // softcapping is always 30.0, so 1/30.0 ≈ 0.033333...
-    constexpr uint32_t softcapping_recip_fp32 = __builtin_bit_cast(uint32_t, 1.0f / 30.0f);
-
-    constexpr float head_scaling = __builtin_bit_cast(float, head_scaling_fp32);
-    constexpr uint32_t head_scaling_recip_fp32 = __builtin_bit_cast(uint32_t, 1.0f / head_scaling);
+    // constexpr uint32_t softcapping_recip_fp32 = __builtin_bit_cast(uint32_t, 1.0f / 30.0f);
+    // constexpr uint32_t head_scaling = __builtin_bit_cast(uint32_t, head_scaling_fp32);
 
     copy_tile_init(in_cb);
     reconfig_data_format_srca(in_cb);
@@ -194,11 +192,11 @@ void softcap_inplace(uint32_t in_cb, uint32_t num_tiles) {
 
         // in / sqrt(head_dim)
         binop_with_scalar_tile_init();
-        mul_unary_tile(0, head_scaling_recip_fp32);
+        mul_unary_tile(0, head_scaling_fp32);
 
         // in / softcapping_fp32
-        binop_with_scalar_tile_init();
-        mul_unary_tile(0, softcapping_recip_fp32);
+        // binop_with_scalar_tile_init();
+        // mul_unary_tile(0, softcapping_recip_fp32);
 
         // tanh(in / softcapping_fp32)
         tanh_tile_init();
