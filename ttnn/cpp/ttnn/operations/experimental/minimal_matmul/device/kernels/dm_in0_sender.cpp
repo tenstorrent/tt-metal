@@ -40,9 +40,6 @@ void kernel_main() {
     const uint32_t N_end_block = get_arg_val<uint32_t>(argidx++);
     const uint32_t defer_write_k_block = get_arg_val<uint32_t>(argidx++);
 
-    DPRINT << "in0send: M_blocks: [" << M_start_block << ", " << M_end_block << "], N_blocks: [" << N_start_block
-           << ", " << N_end_block << "]" << ENDL();
-
     // Tensor accessor for input tensor
     constexpr auto in0_args = TensorAccessorArgs<15>();
     const auto in0_reader = TensorAccessor(in0_args, in0_addr, input_tile_size);
@@ -98,17 +95,18 @@ void kernel_main() {
             for (uint32_t k_block_iter = 0; k_block_iter < K_num_blocks; k_block_iter++) {
                 if (defer_write && k_block_iter == defer_write_k_block) {
                     if constexpr (is_output_writer) {
-                        DPRINT << "in0send: writing (M,N) = (" << m_block << ", " << n_block << ")" << ENDL();
-                        write_block_sync_granular(
+                        cb_wait_front(cb_id_out, out_block_num_tiles);
+                        uint32_t out_read_ptr = get_read_ptr(cb_id_out);
+                        write_block_sync(
                             out_reader,
                             out_shape,
-                            cb_id_out,
-                            N_block_tiles,
+                            out_read_ptr,
                             input_tile_size,
                             defer_write_m_block * M_block_tiles,
                             (defer_write_m_block + 1) * M_block_tiles,
                             defer_write_n_block * N_block_tiles,
                             (defer_write_n_block + 1) * N_block_tiles);
+                        cb_pop_front(cb_id_out, out_block_num_tiles);
                     }
                 }
 
@@ -134,13 +132,9 @@ void kernel_main() {
                         (k_block + 1) * K_block_tiles);
                 } else {
                     // Get from previous device
-                    DPRINT << "in0send: wait on (M,K) = (" << m_block << ", " << k_block << ") from previous device"
-                           << ENDL();
                     noc_semaphore_set(in0_receiver_semaphore_addr_ptr, INVALID);
                     noc_semaphore_inc(in0_sender_semaphore_noc_addr, 1);
                     noc_semaphore_wait(in0_receiver_semaphore_addr_ptr, VALID);
-                    DPRINT << "in0send: wait done on (M,K) = (" << m_block << ", " << k_block
-                           << ") from previous device" << ENDL();
                 }
 #endif
                 // Critical to performance for sender to push data to compute before mcasting
@@ -148,9 +142,6 @@ void kernel_main() {
                 cb_push_back(cb_id_in0, in0_block_num_tiles);
 #ifndef SKIP_IN0
                 if (!is_sink_core) {
-                    DPRINT << "in0send: forwarding (M,K) = (" << m_block << ", " << k_block << ") to next device"
-                           << ENDL();
-
                     noc_semaphore_wait(in0_sender_semaphore_addr_ptr, 1);
                     noc_semaphore_set(in0_sender_semaphore_addr_ptr, 0);
 
@@ -159,8 +150,6 @@ void kernel_main() {
                     noc_async_write(in0_start_address, in0_unicast_data_addr, in0_block_num_tiles * input_tile_size);
 
                     noc_semaphore_set_remote(in0_valid_semaphore_addr, in0_receiver_semaphore_noc_addr);
-                    DPRINT << "in0send: forwarding done on (M,K) = (" << m_block << ", " << k_block
-                           << ") to next device" << ENDL();
                 }
 
 #endif
@@ -176,10 +165,10 @@ void kernel_main() {
              * of the next output block.
              */
             defer_write = !((m_block == M_end_block) && (n_block_iter == (N_num_blocks - 1)));
+            defer_write = defer_write && !is_injector_core;
 
             if (!defer_write) {
                 if constexpr (is_output_writer) {
-                    DPRINT << "in0send: writing (M,N) = (" << m_block << ", " << n_block << ")" << ENDL();
                     write_block_sync_granular(
                         out_reader,
                         out_shape,

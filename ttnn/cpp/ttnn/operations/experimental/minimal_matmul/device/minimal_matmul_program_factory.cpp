@@ -397,7 +397,7 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
 
         // Defer write to K block with same coordinate as core
         // The writer receiver cores always have core.x > 0
-        uint32_t defer_write_k_block = core.x * k_blocks_per_core;
+        uint32_t defer_write_k_block = core.y * k_blocks_per_core;
         defer_write_k_block = std::min(defer_write_k_block, K_blocks - 1);
 
         bool is_in0_sink = core.x == in0_core_order.at(grid_size.x - 1).x;
@@ -443,7 +443,7 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
                 M_end_block,
                 N_start_block,
                 N_end_block,
-                // defer_write_k_block,
+                defer_write_k_block,
             };
             SetRuntimeArgs(program, in0_receiver_kernels_id, core, in0_receiver_args);
         }
@@ -479,7 +479,7 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
                 M_end_block,
                 N_start_block,
                 N_end_block,
-                // defer_write_k_block,
+                defer_write_k_block,
             };
             SetRuntimeArgs(program, in1_receiver_kernels_id, core, in1_receiver_args);
         }
