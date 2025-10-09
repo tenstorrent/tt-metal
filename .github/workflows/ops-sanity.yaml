@@ -101,7 +101,6 @@ jobs:
         run: |
           ls $(pwd)/tests/
           echo ${{ matrix.test-group.cmd }}
-          ${{ matrix.test-group.cmd }}
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
