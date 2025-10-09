@@ -14,16 +14,21 @@
 #include "debug/dprint.h"
 #include "debug/dprint_pages.h"
 
-void copy_block(uint32_t in_cb, uint32_t out_cb, uint32_t num_tiles) {
+void copy_block(uint32_t in_cb, uint32_t out_cb, uint32_t M_block_tiles, uint32_t N_block_tiles) {
     copy_tile_to_dst_init_short(in_cb);
     reconfig_data_format_srca(in_cb);
     pack_reconfig_data_format(out_cb);
 
-    for (uint32_t i = 0; i < num_tiles; i++) {
-        acquire_dst();
-        copy_tile(in_cb, i, 0 /*dst*/);
-        pack_tile<true>(0, out_cb, i);
-        release_dst();
+    uint32_t tile_id = 0;
+    for (uint32_t m = 0; m < M_block_tiles; m++) {
+        for (uint32_t n = 0; n < N_block_tiles; n++) {
+            acquire_dst();
+            copy_tile(in_cb, tile_id, 0 /*dst*/);
+            pack_tile(0, out_cb);
+            release_dst();
+            tile_id++;
+        }
+        cb_push_back(out_cb, N_block_tiles);
     }
 }
 
@@ -182,8 +187,7 @@ void MAIN {
             PACK((llk_pack_reconfig_l1_acc(0)));
             cb_wait_front(intermediate_cb, out_block_num_tiles);
             cb_reserve_back(out_cb, out_block_num_tiles);
-            copy_block(intermediate_cb, out_cb, out_block_num_tiles);
-            cb_push_back(out_cb, out_block_num_tiles);
+            copy_block(intermediate_cb, out_cb, M_block_tiles, N_block_tiles);
             cb_pop_front(intermediate_cb, out_block_num_tiles);
         }
     }

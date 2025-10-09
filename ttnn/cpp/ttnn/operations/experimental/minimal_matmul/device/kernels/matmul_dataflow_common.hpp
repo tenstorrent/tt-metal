@@ -53,3 +53,33 @@ void write_block_sync(
     }
     noc_async_writes_flushed();
 }
+
+/**
+ * This write method is more granular, waiting on a row of output tiles
+ * in the output CB before writing those out, rather than waiting on the entire block.
+ */
+template <typename TensorAccessorType>
+void write_block_sync_granular(
+    const TensorAccessorType& tensor_accessor,
+    const TensorShape2D& shape,
+    uint32_t cb_id_out,
+    uint32_t block_col_tiles,
+    uint32_t tile_size_bytes,
+    uint32_t d0_start,
+    uint32_t d0_end,
+    uint32_t d1_start,
+    uint32_t d1_end) {
+    for (uint32_t i = d0_start; i < d0_end; i++) {
+        cb_wait_front(cb_id_out, block_col_tiles);
+#ifndef SKIP_OUT
+        uint32_t out_read_ptr = get_read_ptr(cb_id_out);
+        for (uint32_t j = d1_start; j < d1_end; j++) {
+            uint32_t tile_id = i * shape.d1 + j;
+            noc_async_write_tile(tile_id, tensor_accessor, out_read_ptr);
+            out_read_ptr += tile_size_bytes;
+        }
+#endif
+        cb_pop_front(cb_id_out, block_col_tiles);
+    }
+    noc_async_writes_flushed();
+}
