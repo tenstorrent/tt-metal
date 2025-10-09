@@ -44,8 +44,6 @@
 
 #include <tracy/Tracy.hpp>
 
-#include <ttnn/tensor/tensor_conversion.hpp>
-
 using namespace tt::tt_metal;
 
 namespace ttnn::tensor {
