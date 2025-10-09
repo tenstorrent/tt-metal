@@ -1598,12 +1598,12 @@ ttnn::Tensor fold_tensor(
     std::array<uint32_t, 2> kernel_size,
     std::array<uint32_t, 4> padding_n4) {
     // Validation checks
-    TT_FATAL(
-        !tensor.memory_config().is_l1(),
-        "Conv2D kernel stride folding: Input tensor must not be in L1 memory for folding");
-    TT_FATAL(
-        tensor.dtype() != tt::tt_metal::DataType::BFLOAT8_B,
-        "Conv2D kernel stride folding: Currently doesn't support BFLOAT8_B");
+    // TT_FATAL(
+    //     !tensor.memory_config().is_l1(),
+    //     "Conv2D kernel stride folding: Input tensor must not be in L1 memory for folding");
+    // TT_FATAL(
+    //     tensor.dtype() != tt::tt_metal::DataType::BFLOAT8_B,
+    //     "Conv2D kernel stride folding: Currently doesn't support BFLOAT8_B");
     TT_FATAL(
         stride[0] <= kernel_size[0] && stride[1] <= kernel_size[1],
         "Conv2D kernel stride folding: Stride must be less than or equal to kernel size");

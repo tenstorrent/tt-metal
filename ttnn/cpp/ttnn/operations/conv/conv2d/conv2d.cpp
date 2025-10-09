@@ -74,12 +74,22 @@ ResultWithOptions conv2d(
     uint32_t groups,
     const std::optional<const DataType>& dtype,
     const std::optional<const ttnn::Tensor>& bias_tensor,
-    const std::optional<const Conv2dConfig>& conv_config_,
+    const std::optional<const Conv2dConfig>& conv_config,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     const std::optional<const MemoryConfig>& memory_config_,
     const std::optional<const Conv2dSliceConfig>& dram_slice_config_,
     bool return_output_dim,
     bool return_weights_and_bias) {
+    Conv2dConfig conv_config_ = conv_config.value_or(Conv2dConfig());
+    if ((input_tensor.memory_config().is_dram() ||
+         (input_tensor.memory_config().is_l1() && input_tensor.memory_config().is_sharded() &&
+          (input_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED))) &&
+        (kernel_size[0] == stride[0] && kernel_size[1] == stride[1]) &&
+        (input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16) && (dilation[0] == 1 && dilation[1] == 1)) {
+        std::cout << "enabling kernel stride folding for conv2d_L1" << std::endl;
+        conv_config_.enable_kernel_stride_folding = true;
+    }
+
     if (dram_slice_config_.has_value()) {
         if (dram_slice_config_.value().slice_type == Conv2dSliceConfig::SliceType::L1_FULL) {
             return result_to_result_with_options(
