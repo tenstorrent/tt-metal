@@ -5,8 +5,6 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 #include <vector>
-#include "debug/dprint.h"
-
 /******************************************************************************
  *                                                                             *
  *                   Common Functions for Dataflow Kernels                     *
@@ -291,7 +289,6 @@ void generate_mask(uint32_t k_num_chunks, uint32_t Sk_chunk_t, uint32_t cur_pos)
     uint32_t q_write_ptr_base = get_read_ptr(cb_mask_in);
     constexpr uint32_t tile_bytes = get_tile_size(cb_mask_in);
 
-    // DPRINT << "cur_pos_in_chunk_t: " << cur_pos_in_chunk_t << " cur_pos_in_tile: " << cur_pos_in_tile << ENDL();
     for (uint32_t i = 0; i < Sk_chunk_t; ++i) {
         if (i < cur_pos_in_chunk_t) {
             // fill with zero
@@ -357,11 +354,9 @@ void generate_sliding_window_mask(uint32_t k_num_chunks, uint32_t Sk_chunk_t, ui
     uint32_t q_write_ptr_base = get_read_ptr(cb_mask_in);
     constexpr uint32_t tile_bytes = get_tile_size(cb_mask_in);
 
-    // DPRINT << "window_start_in_chunk_t: " << window_start_in_chunk_t << " window_start_in_tile: " <<
     // window_start_in_tile << ENDL();
     for (uint32_t i = 0; i < Sk_chunk_t; ++i) {
         if (i < window_start_in_chunk_t) {
-            // DPRINT << "i < window_start_in_chunk_t: " << i << ENDL();
             // Tile is completely before sliding window - fill with -inf
             if (i == 0) {
                 fill_tile<tile_bytes>(cb_mask_in, i, NEG_INF);
@@ -369,19 +364,14 @@ void generate_sliding_window_mask(uint32_t k_num_chunks, uint32_t Sk_chunk_t, ui
                 copy_tile<tile_bytes>(noc_read_addr_base, q_write_ptr_base, 0, i);
             }
         } else if (i == window_start_in_chunk_t) {
-            // DPRINT << "i == window_start_in_chunk_t: " << i << ENDL();
             // Tile contains sliding window start - partial mask at beginning
             fill_tile_partial_sliding_window<tile_bytes>(cb_mask_in, i, window_start_in_tile, NEG_INF);
         } else {
-            // DPRINT << "i > window_start_in_chunk_t: " << i << ENDL();
             // Tile is within sliding window - fill with zeros (allow)
             if (i == window_start_in_chunk_t + 1) {
                 fill_tile<tile_bytes>(cb_mask_in, i, 0);
             } else {
                 // Copy from the first allowed tile
-                // uint32_t zero_tile_idx =
-                //     (window_start_in_tile == 0) ? window_start_in_chunk_t : window_start_in_chunk_t;
-                // copy_tile<tile_bytes>(noc_read_addr_base, q_write_ptr_base, zero_tile_idx, i);
                 copy_tile<tile_bytes>(
                     noc_read_addr_base,
                     q_write_ptr_base,
@@ -401,14 +391,6 @@ void generate_sliding_window_mask(uint32_t k_num_chunks, uint32_t Sk_chunk_t, ui
             }
         }
     }
-    // for (int32_t r = 0; r < 32; ++r) {
-    //     SliceRange sr = SliceRange{.h0 = uint8_t(r), .h1 = uint8_t(r+1), .hs = 1, .w0 = 0, .w1 = 32, .ws = 1};
-    //     // On data movement RISCs, tiles can be printed from either the CB read or write pointers. Also need to
-    //     specify whether
-    //     // the CB is input or output.
-    //     DPRINT_DATA1({ DPRINT << (uint)r << " --READ--sw mask gen-- " << TileSlice(cb_mask_in, 0, sr,
-    //     TSLICE_OUTPUT_CB, TSLICE_WR_PTR, true, true) << ENDL(); });
-    // }
 
     cb_push_back(cb_mask_in, total_read_tiles);
 }
