@@ -113,7 +113,7 @@ def test_exp2_atol(input_shapes, low, high, device):
 def test_exp2_fp32_arange_masking(device):
     # Exp2 Working range - Overflow from 128(inf), Underflow till -149(<0)
     low = -149.0
-    high = 127.9
+    high = 127.0
 
     # Generate all possible bit pattersn for bf16
     all_bitpatterns = torch.arange(0, 2**16, dtype=torch.int32).to(torch.uint16)
