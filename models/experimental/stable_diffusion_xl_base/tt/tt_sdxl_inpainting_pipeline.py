@@ -19,7 +19,12 @@ class TtSDXLInpaintingPipeline(TtSDXLPipeline):
     def _prepare_timesteps(self):
         super()._prepare_timesteps()
 
-        print("Calling get_timesteps from derived class")
         self.ttnn_timesteps, self.pipeline_config.num_inference_steps = get_timesteps(
             self.torch_pipeline.scheduler, self.pipeline_config.num_inference_steps, self.pipeline_config.strength, None
         )
+
+        if self.pipeline_config.num_inference_steps < 1:
+            raise ValueError(
+                f"After adjusting the num_inference_steps by strength parameter: {self.pipeline_config.strength}, the number of pipeline"
+                f"steps is {self.pipeline_config.num_inference_steps} which is < 1 and not appropriate for this pipeline."
+            )
