@@ -608,6 +608,11 @@ def test_all_gather_async_sharded_to_sharded(
             ttnn.BufferType.L1,
         ),
     ],
+    ids=[
+        "i2s_shape0",
+        "i2s_shape1",
+        "i2s_shape2",
+    ],
 )
 @pytest.mark.parametrize(
     "enable_trace,num_iters",
@@ -702,6 +707,11 @@ def test_all_gather_async_sharded_to_interleaved(
             ttnn.BufferType.L1,
         ),
     ],
+    ids=[
+        "i2s_shape0",
+        "i2s_shape1",
+        "i2s_shape2",
+    ],
 )
 @pytest.mark.parametrize(
     "enable_trace,num_iters",
@@ -770,7 +780,7 @@ def test_all_gather_async_interleaved_to_sharded(
         ([1, 1, 8, 4096], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
     ],
     ids=[
-        "tt_training_test_one",
+        "multiprocess",
     ],
 )
 @pytest.mark.parametrize(
