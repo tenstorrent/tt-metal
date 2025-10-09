@@ -4,6 +4,7 @@
 
 #include <stdint.h>
 #include "dataflow_api.h"
+#include "matmul_dataflow_common.hpp"
 
 #include "debug/dprint.h"
 
@@ -37,6 +38,9 @@ void kernel_main() {
     const auto in0_reader = TensorAccessor(in0_args, in0_addr, input_tile_size);
     constexpr auto out_args = TensorAccessorArgs<in0_args.next_compile_time_args_offset()>();
     const auto out_reader = TensorAccessor(out_args, out_addr, input_tile_size);
+
+    const TensorShape2D in0_shape(0 /*M_tiles, unused yet!*/, K_tiles);
+    const TensorShape2D out_shape(0 /*M_tiles, unused yet!*/, N_tiles);
 
     constexpr uint32_t K_num_blocks = K_tiles / K_block_tiles;
     constexpr uint32_t in0_block_num_tiles = M_block_tiles * K_block_tiles;
@@ -88,19 +92,16 @@ void kernel_main() {
                 cb_reserve_back(cb_id_in0, in0_block_num_tiles);
 
 #ifndef SKIP_IN0
-                uint32_t in0_write_ptr = get_write_ptr(cb_id_in0);
-                uint32_t in0_start_address = in0_write_ptr;
-
-                for (uint32_t m = 0; m < M_block_tiles; m++) {
-                    uint32_t m_id = m_block * M_block_tiles + m;
-                    for (uint32_t k = 0; k < K_block_tiles; k++) {
-                        uint32_t k_id = k_block * K_block_tiles + k;
-                        uint32_t tile_id = m_id * K_tiles + k_id;
-                        noc_async_read_tile(tile_id, in0_reader, in0_write_ptr);
-                        in0_write_ptr += input_tile_size;
-                    }
-                }
-                noc_async_read_barrier();
+                uint32_t in0_start_address = get_write_ptr(cb_id_in0);
+                read_block_sync(
+                    in0_reader,
+                    in0_shape,
+                    in0_start_address,
+                    input_tile_size,
+                    m_block * M_block_tiles,
+                    (m_block + 1) * M_block_tiles,
+                    k_block * K_block_tiles,
+                    (k_block + 1) * K_block_tiles);
 #endif
                 // Critical to performance for sender to push data to compute before mcasting
                 // This frees sender to start next read earlier
@@ -132,16 +133,15 @@ void kernel_main() {
                 cb_wait_front(cb_id_out, out_block_num_tiles);
 #ifndef SKIP_OUT
                 uint32_t out_read_ptr = get_read_ptr(cb_id_out);
-                for (uint32_t m = 0; m < M_block_tiles; m++) {
-                    uint32_t m_id = m_block * M_block_tiles + m;
-                    for (uint32_t n = 0; n < N_block_tiles; n++) {
-                        uint32_t n_id = n_block * N_block_tiles + n;
-                        uint32_t tile_id = m_id * N_tiles + n_id;
-                        noc_async_write_tile(tile_id, out_reader, out_read_ptr);
-                        out_read_ptr += input_tile_size;
-                    }
-                }
-                noc_async_writes_flushed();
+                write_block_sync(
+                    out_reader,
+                    out_shape,
+                    out_read_ptr,
+                    input_tile_size,
+                    m_block * M_block_tiles,
+                    (m_block + 1) * M_block_tiles,
+                    n_block * N_block_tiles,
+                    (n_block + 1) * N_block_tiles);
 #endif
                 cb_pop_front(cb_id_out, out_block_num_tiles);
             }

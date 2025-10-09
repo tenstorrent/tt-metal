@@ -4,6 +4,7 @@
 
 #include <stdint.h>
 #include "dataflow_api.h"
+#include "matmul_dataflow_common.hpp"
 
 #include "debug/dprint.h"
 #include "debug/dprint_pages.h"
@@ -33,6 +34,8 @@ void kernel_main() {
     // Tensor accessor for output tensor
     constexpr auto out_args = TensorAccessorArgs<9>();
     const auto out_reader = TensorAccessor(out_args, out_addr, input_tile_size);
+
+    const TensorShape2D out_shape(0 /*M_tiles, unused yet!*/, N_tiles);
 
     constexpr uint32_t K_num_blocks = K_tiles / K_block_tiles;
     constexpr uint32_t in1_block_num_tiles = K_block_tiles * N_block_tiles;
@@ -66,16 +69,15 @@ void kernel_main() {
                         cb_wait_front(cb_id_out, out_block_num_tiles);
 #ifndef SKIP_OUT
                         uint32_t out_read_ptr = get_read_ptr(cb_id_out);
-                        for (uint32_t m = 0; m < M_block_tiles; m++) {
-                            uint32_t m_id = defer_write_m_block * M_block_tiles + m;
-                            for (uint32_t n = 0; n < N_block_tiles; n++) {
-                                uint32_t n_id = defer_write_n_block * N_block_tiles + n;
-                                uint32_t tile_id = m_id * N_tiles + n_id;
-                                noc_async_write_tile(tile_id, out_reader, out_read_ptr);
-                                out_read_ptr += input_tile_size;
-                            }
-                        }
-                        noc_async_writes_flushed();
+                        write_block_sync(
+                            out_reader,
+                            out_shape,
+                            out_read_ptr,
+                            input_tile_size,
+                            defer_write_m_block * M_block_tiles,
+                            (defer_write_m_block + 1) * M_block_tiles,
+                            defer_write_n_block * N_block_tiles,
+                            (defer_write_n_block + 1) * N_block_tiles);
 #endif
                         cb_pop_front(cb_id_out, out_block_num_tiles);
                     }
@@ -115,16 +117,15 @@ void kernel_main() {
                     cb_wait_front(cb_id_out, out_block_num_tiles);
 #ifndef SKIP_OUT
                     uint32_t out_read_ptr = get_read_ptr(cb_id_out);
-                    for (uint32_t m = 0; m < M_block_tiles; m++) {
-                        uint32_t m_id = m_block * M_block_tiles + m;
-                        for (uint32_t n = 0; n < N_block_tiles; n++) {
-                            uint32_t n_id = n_block * N_block_tiles + n;
-                            uint32_t tile_id = m_id * N_tiles + n_id;
-                            noc_async_write_tile(tile_id, out_reader, out_read_ptr);
-                            out_read_ptr += input_tile_size;
-                        }
-                    }
-                    noc_async_writes_flushed();
+                    write_block_sync(
+                        out_reader,
+                        out_shape,
+                        out_read_ptr,
+                        input_tile_size,
+                        m_block * M_block_tiles,
+                        (m_block + 1) * M_block_tiles,
+                        n_block * N_block_tiles,
+                        (n_block + 1) * N_block_tiles);
 #endif
                     cb_pop_front(cb_id_out, out_block_num_tiles);
                 }
