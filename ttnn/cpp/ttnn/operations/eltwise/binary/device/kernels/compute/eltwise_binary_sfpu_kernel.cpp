@@ -16,6 +16,7 @@
 #include "compute_kernel_api/sub_int_sfpu.h"
 #include "compute_kernel_api/mul_int_sfpu.h"
 #include "compute_kernel_api/mul_int32_sfpu.h"
+#include "compute_kernel_api/div_int32_sfpu.h"
 #include "compute_kernel_api/binary_max_min.h"
 #include "compute_kernel_api/xlogy.h"
 #include "compute_kernel_api/gcd.h"
@@ -129,6 +130,9 @@ void MAIN {
 #endif
 #ifdef MUL_INT32_INIT
             MUL_INT32_INIT
+#endif
+#ifdef DIV_INT32_INIT
+            DIV_INT32_INIT
 #endif
 #ifdef LT_INT32_INIT
             LT_INT32_INIT

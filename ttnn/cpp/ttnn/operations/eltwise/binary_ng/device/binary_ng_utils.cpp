@@ -372,7 +372,12 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
             } else {
                 return {"mul_binary_tile_init();", "mul_binary_tile"};
             }
-        case DIV: return {"div_binary_tile_init();", "div_binary_tile"};
+        case DIV:
+            if (dtype == DataType::INT32) {
+                return {"div_int32_tile_init();", "div_int32_tile"};
+            } else {
+                return {"div_binary_tile_init();", "div_binary_tile"};
+            }
         case POWER: return {"power_binary_tile_init();", "power_binary_tile"};
         case RSUB:
             if (dtype == DataType::INT32) {

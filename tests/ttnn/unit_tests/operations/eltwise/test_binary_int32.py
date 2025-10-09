@@ -6,6 +6,11 @@ import torch
 import pytest
 import ttnn
 
+import matplotlib.pyplot as plt
+import numpy as np
+from tests.ttnn.utils_for_testing import assert_with_ulp
+from models.common.utility_functions import comp_ulp, ulp
+
 
 @pytest.mark.parametrize(
     "input_shapes",
@@ -649,3 +654,202 @@ def test_comp_ops_edge_cases(ttnn_op, device):
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert torch.equal(output_tensor, torch_output_tensor)
+
+
+def test_recip_edge_cases(device):
+    torch_input_tensor_a = torch.tensor([0, 1, 0, 0, 3, 7, 3])
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a,
+        dtype=ttnn.int32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    torch_input_tensor_b = torch.tensor([0, 0, 1, 2, 2, 3, 7])
+    input_tensor_b = ttnn.from_torch(
+        torch_input_tensor_b,
+        dtype=ttnn.int32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    golden_function = ttnn.get_golden_function(ttnn.div)
+    torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, device=device)
+
+    output_tensor = ttnn.div(input_tensor_a, input_tensor_b)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    print(torch_output_tensor)
+    print(output_tensor)
+
+    assert torch.equal(output_tensor, torch_output_tensor)
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    [
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([1, 3, 320, 384])),
+    ],
+)
+@pytest.mark.parametrize(
+    "low_a, high_a, low_b, high_b",
+    [
+        (1, 100, 50, 150),
+        (1000, 10000, 100, 1000),
+        (10000, 1000000, 1000000, 100000000),
+        (100000000, 2147483647, 100000050, 2147483647),
+    ],
+)
+@pytest.mark.parametrize("use_legacy", [True, False])
+def test_div(input_shapes, low_a, high_a, low_b, high_b, use_legacy, device):
+    num_elements = max(int(torch.prod(torch.tensor(input_shapes)).item()), 1)
+    torch_input_tensor_a = torch.linspace(high_a, low_a, num_elements, dtype=torch.int32)
+    torch_input_tensor_b = torch.linspace(high_b, low_b, num_elements, dtype=torch.int32)
+
+    torch_input_tensor_a = torch_input_tensor_a[:num_elements].reshape(input_shapes)
+    torch_input_tensor_b = torch_input_tensor_b[:num_elements].reshape(input_shapes)
+
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a,
+        dtype=ttnn.float32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    input_tensor_b = ttnn.from_torch(
+        torch_input_tensor_b,
+        dtype=ttnn.float32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    torch_output_tensor = torch.div(torch_input_tensor_a, torch_input_tensor_b)
+
+    output_tensor = ttnn.div(input_tensor_a, input_tensor_b)
+    output_tensor = ttnn.to_torch(output_tensor)
+    print(output_tensor)
+    print(torch_output_tensor)
+    assert torch.allclose(torch_output_tensor, output_tensor, atol=1e-10, rtol=1e-5)
+
+
+def plot_error_subplots(results, ylabel, title_prefix, filename_prefix, color="purple"):
+    """
+    Plot a grid of subplots where each plot corresponds to a different input range.
+
+    Args:
+        results: List of tuples (x_vals, error_vals, range_label)
+        ylabel: Label for the y-axis (e.g., 'ULP Error', 'Absolute Error')
+        title_prefix: Prefix for subplot titles
+        filename_prefix: Prefix for the output file name
+        color: Line color for plots
+    """
+    num_subplots = len(results)
+    cols = 2
+    rows = (num_subplots + 1) // cols
+
+    fig, axs = plt.subplots(rows, cols, figsize=(14, 4 * rows))
+    axs = axs.flatten()
+
+    for i, (x_vals, error_vals, label) in enumerate(results):
+        ax = axs[i]
+        ax.plot(x_vals, error_vals, color=color)
+        ax.set_title(f"{title_prefix}: {label}")
+        ax.set_xlabel("Input (float32)")
+        ax.set_ylabel(ylabel)
+        ax.grid(True)
+
+    # Hide unused subplots
+    for j in range(i + 1, len(axs)):
+        fig.delaxes(axs[j])
+
+    plt.tight_layout()
+    plt.savefig(f"{filename_prefix}_subplots.png", dpi=300)
+    plt.show()
+
+
+ulp_results = []
+abs_results = []
+rel_results = []
+
+
+@pytest.mark.parametrize(
+    "low, high",
+    [
+        (1, 100),
+        (100, 1000),
+        (1000, 10000),
+        (10000, 1000000),
+        (1000000, 100000000),  # 1M-99M
+        (100000000, 2147483647),  # 100M-INT32_MAX
+        # (-100, -1),
+        # (-1000, -100),
+        # (-10000, -1000),
+        # (-1000000, -10000),
+        # (-100000000, -1000000), # 1M-99M
+        # (-2147483648, -100000000), # 100M-INT32_MAX
+    ],
+)
+def test_recip_int32(low, high, device):
+    torch_input_tensor = torch.linspace(low, high, 1000, dtype=torch.int32)
+
+    torch_output_tensor = torch.reciprocal(torch_input_tensor)
+
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.float32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    output_tensor = ttnn.reciprocal(input_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    abs_error = torch.abs(torch_output_tensor - output_tensor)
+    rel_error = abs_error / torch.abs(torch_output_tensor)
+    x_vals = torch_input_tensor.flatten().to(torch.float32).cpu().numpy()
+    abs_err = abs_error.flatten().cpu().numpy()
+    rel_err = rel_error.flatten().cpu().numpy()
+
+    golden = torch_output_tensor.clone()
+    calculated = output_tensor.clone()
+
+    mask_finite = torch.isfinite(golden) & torch.isfinite(calculated)
+    golden[~mask_finite] = 0
+    calculated[~mask_finite] = 0
+
+    ulp_value = ulp(golden.type(calculated.dtype))
+    ulp_error = torch.abs(calculated - golden) / ulp_value
+
+    # === Flatten tensors for plotting ===
+    x_vals = torch_input_tensor.flatten().to(torch.float32).cpu().numpy()
+    ulp_err = ulp_error.flatten().cpu().numpy()
+
+    ulp_results.append((x_vals, ulp_err, f"{low}-{high}"))
+    abs_results.append((x_vals, abs_err, f"{low}-{high}"))
+    rel_results.append((x_vals, rel_err, f"{low}-{high}"))
+
+    plot_error_subplots(
+        ulp_results, ylabel="ULP Error", title_prefix="ULP Error", filename_prefix="reciprocal_ulp", color="purple"
+    )
+    plot_error_subplots(
+        abs_results,
+        ylabel="Absolute Error",
+        title_prefix="Absolute Error",
+        filename_prefix="reciprocal_abs",
+        color="orange",
+    )
+    plot_error_subplots(
+        rel_results,
+        ylabel="Relative Error",
+        title_prefix="Relative Error",
+        filename_prefix="reciprocal_rel",
+        color="blue",
+    )
+
+    assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= 0.9999
+    assert_with_ulp(output_tensor, torch_output_tensor, ulp_threshold=1.0)
