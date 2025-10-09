@@ -189,9 +189,9 @@ For more examples, please see `tests/tt_metal/distributed/multiprocess/run_visib
 **Core Abstraction: Rank Bindings**
 
 The central concept in `tt-run` is the **rank binding**, which maps each MPI rank to:
-- A mesh identifier (`mesh_id`) — which logical mesh this rank belongs to
-- A mesh host rank (`mesh_host_rank`) — position within a multi-host mesh (for SPMD Big-Mesh)
-- Environment overrides — global and rank-specific environment variables
+- A mesh identifier (`mesh_id`) - which logical mesh this rank belongs to
+- A mesh host rank (`mesh_host_rank`) - position within a multi-host mesh (for SPMD Big-Mesh)
+- Environment overrides - global and rank-specific environment variables
 
 **Mesh Graph Descriptors (MGD 2.0)**
 
