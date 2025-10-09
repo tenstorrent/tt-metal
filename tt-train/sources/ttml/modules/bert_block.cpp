@@ -34,25 +34,15 @@ autograd::TensorPtr BertMLP::operator()(const autograd::TensorPtr& input) {
 
 BertAttention::BertAttention(uint32_t embedding_dim, uint32_t num_heads, float dropout_prob) {
     m_self_attention = std::make_shared<MultiHeadAttention>(embedding_dim, num_heads, dropout_prob);
-    m_output_dense = std::make_shared<LinearLayer>(embedding_dim, embedding_dim);
-    m_output_dropout = std::make_shared<DropoutLayer>(dropout_prob);
 
     create_name("bert_attention");
     register_module(m_self_attention, "self_attention");
-    register_module(m_output_dense, "output_dense");
-    register_module(m_output_dropout, "output_dropout");
 }
 
 autograd::TensorPtr BertAttention::operator()(
     const autograd::TensorPtr& input, const autograd::TensorPtr& attention_mask) {
-    // Self-attention (bidirectional - no causal masking)
-    auto attention_output = (*m_self_attention)(input, attention_mask);
-
-    // Output projection
-    attention_output = (*m_output_dense)(attention_output);
-    attention_output = (*m_output_dropout)(attention_output);
-
-    return attention_output;
+    // MultiHeadAttention handles: QKV projection, attention, output projection, and dropout
+    return (*m_self_attention)(input, attention_mask);
 }
 
 BertBlock::BertBlock(const BertBlockConfig& config) {
