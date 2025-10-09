@@ -176,6 +176,7 @@ void setup_reader_defines(
         auto [predicate_sharded, value_true_sharded, value_false_sharded] =
             get_tensor_sharding_status(predicate_tensor, std::nullopt, value_false_tensor);
         add_sharding_defines(reader_defines, predicate_sharded, value_true_sharded, value_false_sharded);
+
         // For TST the two tensors are predicate and false_tensors and are SRC_A and SRC_B respectively
         add_broadcast_defines(reader_defines, pred_is_bcast, false_is_bcast, true_is_bcast);
     }
@@ -548,7 +549,6 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
 
     // Number of tiles to store per input CB (double buffer)
     constexpr uint32_t num_tiles_per_cb = 2;
-
     // Input buffers - Create predicate CB (always c_0)
     auto [predicate_tensor_cb, predicate_tensor_cb_handle] = create_cb(
         tt::CBIndex::c_0,
