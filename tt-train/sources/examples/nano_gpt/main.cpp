@@ -21,6 +21,7 @@
 #include "models/distributed/gpt2.hpp"
 #include "models/distributed/llama.hpp"
 #include "models/distributed/pipeline_parallel_llama.hpp"
+#include "models/distributed/qwen.hpp"
 #include "models/gpt2.hpp"
 #include "models/llama.hpp"
 #include "models/qwen.hpp"
