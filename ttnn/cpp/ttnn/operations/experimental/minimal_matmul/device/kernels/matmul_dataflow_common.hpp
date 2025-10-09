@@ -122,6 +122,7 @@ void write_block_sync(
     uint32_t d0_end,
     uint32_t d1_start,
     uint32_t d1_end) {
+#ifndef SKIP_OUT
     for (uint32_t i = d0_start; i < d0_end; i++) {
         if (i >= shape.logical_d0) {
             break;
@@ -137,6 +138,7 @@ void write_block_sync(
         }
     }
     noc_async_writes_flushed();
+#endif
 }
 
 /**
