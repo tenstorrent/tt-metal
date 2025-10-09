@@ -43,12 +43,6 @@ jobs:
           echo "Total tag count: $(git tag | wc -l)"
       - uses: paulhatch/semantic-version@v5.4.0
         id: get-next-semantic-base-version
-        with:
-          tag_prefix: "v"
-          branch: stable
-          debug: true
-          version_format: "${major}.${minor}.${patch}"
-          bump_each_commit: ${{ inputs.bump_each_commit }}
 
       - name: Get tag version
         id: get-tag-version
