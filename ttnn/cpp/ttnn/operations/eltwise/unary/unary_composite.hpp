@@ -100,6 +100,13 @@ struct ExecuteRdiv {
         std::optional<Tensor> optional_output_tensor = std::nullopt);
 };
 
+struct ExecuteLogit {
+    static Tensor invoke(
+        const Tensor& input_tensor,
+        std::optional<float> eps = std::nullopt,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+};
+
 }  // namespace unary
 }  // namespace operations
 
@@ -185,9 +192,7 @@ constexpr auto swiglu = ttnn::register_operation<
 constexpr auto logical_not_ = ttnn::register_operation<
     "ttnn::logical_not_",
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::LOGICAL_NOT_>>();
-constexpr auto logit = ttnn::register_operation<
-    "ttnn::logit",
-    operations::unary::ExecuteUnaryCompositeOpWithFloat<operations::unary::UnaryCompositeOpType::LOGIT>>();
+constexpr auto logit = ttnn::register_operation<"ttnn::logit", operations::unary::ExecuteLogit>();
 constexpr auto tril = ttnn::register_operation<
     "ttnn::tril",
     operations::unary::ExecuteUnaryCompositeOpWithInt<operations::unary::UnaryCompositeOpType::TRIL>>();

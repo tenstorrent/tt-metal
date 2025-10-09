@@ -437,22 +437,19 @@ def run_unary_test_with_float_remainder(device, h, w, scalar, ttnn_function, pcc
     assert_with_pcc(torch_output_tensor, output_tensor, pcc)
 
 
-@pytest.mark.parametrize("scalar", [1, 2])
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_logit(device, h, w, scalar):
-    torch.manual_seed(0)
-
+@pytest.mark.parametrize("scalar", [0.1, 0.4, 0.7, 0.9])
+@pytest.mark.parametrize("h", [32])
+@pytest.mark.parametrize("w", [32])
+@pytest.mark.parametrize("torch_dtype,ttnn_dtype", [(torch.bfloat16, ttnn.bfloat16)])
+def test_logit(device, h, w, scalar, torch_dtype, ttnn_dtype):
     torch_input_tensor_a = torch.rand((h, w), dtype=torch.bfloat16)
-
     golden_function = ttnn.get_golden_function(ttnn.logit)
-    torch_output_tensor = golden_function(torch_input_tensor_a, eps=scalar, device=device)
-
-    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
+    torch_output_tensor = golden_function(torch_input_tensor_a, eps=scalar)
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
     output_tensor = ttnn.logit(input_tensor_a, eps=scalar)
     output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
+    assert_allclose(output_tensor, torch_output_tensor, rtol=1e-05, atol=0.032)
 
 
 @pytest.mark.parametrize("scalar", [0, 1.0, 2])
