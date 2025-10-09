@@ -667,6 +667,14 @@ Result conv2d_L1(
                 "Activation double buffering is currently not supported when activation reuse optimization is enabled, "
                 "disabling double buffering.");
         }
+
+        if (conv_config.enable_weights_double_buffer) {
+            conv_config.enable_weights_double_buffer = false;
+            log_warning(
+                tt::LogOp,
+                "Weights are already fully buffered when activation reuse optimization is enabled, disabling weights "
+                "double buffering.");
+        }
     }
     auto [output_height, output_width] =
         calculate_output_image_size({input_height, input_width}, kernel_size, stride, padding_n4, dilation);
