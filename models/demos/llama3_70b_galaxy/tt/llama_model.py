@@ -553,7 +553,18 @@ class TtTransformer(LightweightModule):
             kv_cache=kv_cache,
         )
         if return_logits:
-            return tt_logits[0]
+            tt_logits = self.tt_ccl.line_all_gather(
+                tt_logits[0],
+                dim=3,
+                num_links=3,
+                cluster_axis=0,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                buffer_key="SAMPLING",
+            )
+
+            tt_logits = ttnn.untilize(tt_logits, use_multicore=True, sub_core_grids=self.args.sub_core_grids)
+
+            return tt_logits
 
         # sampling
         tt_toks = self.tt_sampling(tt_logits[0], tt_out_tok=x)
