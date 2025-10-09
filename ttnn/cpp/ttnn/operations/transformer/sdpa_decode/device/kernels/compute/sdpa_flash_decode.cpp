@@ -298,7 +298,7 @@ void MAIN {
                 /* Logit soft-capping with eltwise scaling + tanh */
                 // Workaround: first apply scaling by sqrt(head_dim) before tanh and replace head_dim scaling fused with
                 // exp with softcap scalar
-                // softcap_inplace<>(cb_qk_im, qk_chunk_tiles_dynamic);
+                // softcap_inplace<scale_fp32>(cb_qk_im, qk_chunk_tiles_dynamic);
 
                 /* QK += MASK */
                 if (!add_mask_fusion) {
@@ -345,9 +345,17 @@ void MAIN {
                 /**
                  * sub_exp performs `QK = exp((QK - cur_max) * scale)`
                  */
+                // sub_exp_block_bcast_cols_inplace_reduce<
+                //     cb_qk_im,
+                //     Sq_chunk_t,
+                //     scale_fp32,
+                //     vector_mode,
+                //     cb_identity_scale_in>(cb_cur_max, cb_cur_sum, Sk_chunk_t_dynamic);
+                // cb_wait_front(cb_qk_im, qk_chunk_tiles_dynamic);
                 sub_exp_block_bcast_cols_inplace_reduce<
                     cb_qk_im,
                     Sq_chunk_t,
+                    // __builtin_bit_cast(uint32_t, 30.0f),
                     scale_fp32,
                     vector_mode,
                     cb_identity_scale_in>(cb_cur_max, cb_cur_sum, Sk_chunk_t_dynamic);

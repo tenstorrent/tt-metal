@@ -171,10 +171,12 @@ class Decoder(LightweightModule):
         attn_out = self.attention.forward(hidden_states, current_pos, rot_mats, page_table=page_table)
 
         # Post-attn norm
+        # attn_out = ttnn.typecast(attn_out, ttnn.bfloat16)
         attn_out = self.post_attn_norm(attn_out, mode="decode")
 
         # Residual connection
         hidden_states = ttnn.add(residual, attn_out)
+        hidden_states = ttnn.typecast(hidden_states, ttnn.bfloat16)
         residual_memory_config = hidden_states.memory_config()
 
         # Pre-MoE norm
@@ -195,7 +197,7 @@ class Decoder(LightweightModule):
         moe_out = ttnn.div(moe_out, math.sqrt(2))
 
         # Post-MoE norm
-        # moe_out = ttnn.typecast(moe_out, ttnn.bfloat16)
+        moe_out = ttnn.typecast(moe_out, ttnn.bfloat16)
         moe_out = self.post_moe_norm(moe_out, mode="decode")
 
         hidden_states = ttnn.add(residual, moe_out)

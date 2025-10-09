@@ -71,7 +71,7 @@ def test_grok_attention_inference(
     seq_len = 1
 
     generation_start_pos = 0
-    generation_length = 10
+    generation_length = 100
     all_tests_pass = True
 
     # Setup RoPE transformation matrices
@@ -150,7 +150,7 @@ def test_grok_attention_inference(
 
     for i in range(generation_length):
         # Grok attention block typically sees tensors with mean 0 and std 0.03 - 0.05 in layer 1
-        pt_attention_input = torch.randn(batch_size, seq_len, model_args.dim, dtype=torch.float32) + 10
+        pt_attention_input = torch.randn(batch_size, seq_len, model_args.dim, dtype=torch.float32) * 50 + 100
 
         tt_attention_input = pt_attention_input.clone()
 

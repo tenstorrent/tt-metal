@@ -9,6 +9,7 @@
 
 #include "compute_kernel_api.h"
 #include "compute_kernel_api/eltwise_binary.h"
+#include "compute_kernel_api/eltwise_unary/binop_with_scalar.h"
 #include "compute_kernel_api/eltwise_unary/exp.h"
 #include "compute_kernel_api/eltwise_unary/recip.h"
 #include "compute_kernel_api/bcast.h"
@@ -167,14 +168,17 @@ void sub_exp_block_bcast_cols_inplace_reduce(uint32_t in1_cb, uint32_t reduce_cb
 }
 
 /* Tanh logit soft-capping with pre-scaling workaround */
-/*
-template <uint32_t softcapping_fp32, uint32_t head_scaling_fp32>
+// template <uint32_t softcapping_fp32, uint32_t head_scaling_fp32>
+template <uint32_t head_scaling_fp32>
 void softcap_inplace(uint32_t in_cb, uint32_t num_tiles) {
     // Precondition: in_cb has num_tiles produced
     // Postcondition: in_cb has num_tiles produced
 
-    constexpr float softcapping = __builtin_bit_cast(float, softcapping_fp32);
-    constexpr uint32_t softcapping_recip_fp32 = __builtin_bit_cast(uint32_t, 1.0f / softcapping);
+    // constexpr float softcapping = __builtin_bit_cast(float, softcapping_fp32);
+    // constexpr uint32_t softcapping_recip_fp32 = __builtin_bit_cast(uint32_t, 1.0f / softcapping);
+
+    // softcapping is always 30.0, so 1/30.0 ≈ 0.033333...
+    constexpr uint32_t softcapping_recip_fp32 = __builtin_bit_cast(uint32_t, 1.0f / 30.0f);
 
     constexpr float head_scaling = __builtin_bit_cast(float, head_scaling_fp32);
     constexpr uint32_t head_scaling_recip_fp32 = __builtin_bit_cast(uint32_t, 1.0f / head_scaling);
@@ -214,7 +218,7 @@ void softcap_inplace(uint32_t in_cb, uint32_t num_tiles) {
     cb_pop_front(in_cb, num_tiles);
     cb_reserve_back(in_cb, num_tiles);
     cb_push_back(in_cb, num_tiles);
-} */
+}
 
 /**
  * in0_cb *= in1_cb
