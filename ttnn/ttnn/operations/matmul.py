@@ -19,6 +19,7 @@ MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig = (
 
 def _get_golden_activation_function(activation):
     import torch
+    import math
 
     golden_activations_map = {
         ttnn.UnaryOpType.RELU: torch.nn.functional.relu,
