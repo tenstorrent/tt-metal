@@ -34,111 +34,116 @@ enum class EnvVarID {
     // ========================================
     // PATH CONFIGURATION
     // ========================================
-    TT_METAL_HOME,                              // Root directory of TT-Metal installation
-    TT_METAL_CACHE,                             // Cache directory for compiled kernels
-    TT_METAL_KERNEL_PATH,                       // Path to kernel source files
-    TT_METAL_SIMULATOR,                         // Path to simulator executable
-    TT_METAL_MOCK_CLUSTER_DESC_PATH,            // Mock cluster descriptor path
-    TT_METAL_VISIBLE_DEVICES,                   // Comma-separated list of visible device IDs
-    ARCH_NAME,                                  // Architecture name (simulation mode)
-    TT_MESH_GRAPH_DESC_PATH,                    // Custom fabric mesh graph descriptor
-    TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE,    // Core grid override (deprecated)
-    
+    TT_METAL_HOME,                            // Root directory of TT-Metal installation
+    TT_METAL_CACHE,                           // Cache directory for compiled kernels
+    TT_METAL_KERNEL_PATH,                     // Path to kernel source files
+    TT_METAL_SIMULATOR,                       // Path to simulator executable
+    TT_METAL_MOCK_CLUSTER_DESC_PATH,          // Mock cluster descriptor path
+    TT_METAL_VISIBLE_DEVICES,                 // Comma-separated list of visible device IDs
+    ARCH_NAME,                                // Architecture name (simulation mode)
+    TT_MESH_GRAPH_DESC_PATH,                  // Custom fabric mesh graph descriptor
+    TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE,  // Core grid override (deprecated)
+
     // ========================================
     // KERNEL EXECUTION CONTROL
     // ========================================
-    TT_METAL_NULL_KERNELS,                      // Skip kernel execution (testing)
-    TT_METAL_KERNELS_EARLY_RETURN,              // Kernels return early
-    
+    TT_METAL_NULL_KERNELS,          // Skip kernel execution (testing)
+    TT_METAL_KERNELS_EARLY_RETURN,  // Kernels return early
+
     // ========================================
     // MEMORY INITIALIZATION
     // ========================================
-    TT_METAL_CLEAR_L1,                          // Clear L1 memory on device init
-    TT_METAL_CLEAR_DRAM,                        // Clear DRAM on device init
-    
+    TT_METAL_CLEAR_L1,    // Clear L1 memory on device init
+    TT_METAL_CLEAR_DRAM,  // Clear DRAM on device init
+
     // ========================================
     // DEBUG & TESTING
     // ========================================
-    TT_METAL_WATCHER_TEST_MODE,                 // Enable watcher test mode
-    TT_METAL_KERNEL_MAP,                        // Enable kernel build mapping
-    TT_METAL_DISPATCH_DATA_COLLECTION,          // Enable dispatch debug data collection
-    TT_METAL_GTEST_ETH_DISPATCH,                // Use Ethernet cores for dispatch in tests
-    TT_METAL_SKIP_LOADING_FW,                   // Skip firmware loading
-    TT_METAL_SKIP_DELETING_BUILT_CACHE,         // Skip cache deletion on cleanup
-    
+    TT_METAL_WATCHER_TEST_MODE,          // Enable watcher test mode
+    TT_METAL_KERNEL_MAP,                 // Enable kernel build mapping
+    TT_METAL_DISPATCH_DATA_COLLECTION,   // Enable dispatch debug data collection
+    TT_METAL_GTEST_ETH_DISPATCH,         // Use Ethernet cores for dispatch in tests
+    TT_METAL_SKIP_LOADING_FW,            // Skip firmware loading
+    TT_METAL_SKIP_DELETING_BUILT_CACHE,  // Skip cache deletion on cleanup
+
     // ========================================
     // HARDWARE CONFIGURATION
     // ========================================
-    TT_METAL_ENABLE_HW_CACHE_INVALIDATION,      // Enable HW cache invalidation
-    TT_METAL_DISABLE_RELAXED_MEM_ORDERING,      // Disable relaxed memory ordering
-    TT_METAL_ENABLE_GATHERING,                  // Enable instruction gathering
-    TT_METAL_FABRIC_TELEMETRY,                  // Enable fabric telemetry
-    TT_METAL_FORCE_REINIT,                      // Force context reinitialization
-    TT_METAL_FABRIC_BLACKHOLE_TWO_ERISC,        // Enable 2-ERISC mode with fabric
-    TT_METAL_LOG_KERNELS_COMPILE_COMMANDS,      // Log kernel compilation commands
-    TT_METAL_SLOW_DISPATCH_MODE,                // Use slow dispatch mode
-    TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN,       // Skip Ethernet cores during retrain
-    TT_METAL_VALIDATE_PROGRAM_BINARIES,         // Validate kernel binary integrity
-    TT_METAL_DISABLE_DMA_OPS,                   // Disable DMA operations
-    TT_METAL_ENABLE_ERISC_IRAM,                 // Enable ERISC IRAM (inverted logic)
-    
+    TT_METAL_ENABLE_HW_CACHE_INVALIDATION,  // Enable HW cache invalidation
+    TT_METAL_DISABLE_RELAXED_MEM_ORDERING,  // Disable relaxed memory ordering
+    TT_METAL_ENABLE_GATHERING,              // Enable instruction gathering
+    TT_METAL_FABRIC_TELEMETRY,              // Enable fabric telemetry
+    TT_METAL_FORCE_REINIT,                  // Force context reinitialization
+    TT_METAL_FABRIC_BLACKHOLE_TWO_ERISC,    // Enable 2-ERISC mode with fabric
+    TT_METAL_LOG_KERNELS_COMPILE_COMMANDS,  // Log kernel compilation commands
+    TT_METAL_SLOW_DISPATCH_MODE,            // Use slow dispatch mode
+    TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN,   // Skip Ethernet cores during retrain
+    TT_METAL_VALIDATE_PROGRAM_BINARIES,     // Validate kernel binary integrity
+    TT_METAL_DISABLE_DMA_OPS,               // Disable DMA operations
+    TT_METAL_ENABLE_ERISC_IRAM,             // Enable ERISC IRAM (inverted logic)
+    RELIABILITY_MODE,                       // Fabric reliability mode (strict/relaxed)
+    TT_METAL_MULTI_AERISC,                  // Enable experimental multi-erisc mode
+    TT_METAL_USE_MGD_2_0,                   // Use mesh graph descriptor 2.0
+
     // ========================================
     // PROFILING & PERFORMANCE
     // ========================================
-    TT_METAL_DEVICE_PROFILER,                   // Enable device profiling
-    TT_METAL_DEVICE_PROFILER_DISPATCH,          // Enable dispatch core profiling
-    TT_METAL_PROFILER_SYNC,                     // Enable synchronous profiling
-    TT_METAL_DEVICE_PROFILER_NOC_EVENTS,        // Enable NoC events profiling
-    TT_METAL_DEVICE_PROFILER_NOC_EVENTS_RPT_PATH, // NoC events report path
-    TT_METAL_MEM_PROFILER,                      // Enable memory/buffer profiling
-    TT_METAL_TRACE_PROFILER,                    // Enable trace profiling
-    TT_METAL_PROFILER_MID_RUN_DUMP,             // Force mid-run profiler dumps
-    TT_METAL_TRACY_MID_RUN_PUSH,                // Force Tracy mid-run pushes
-    TT_METAL_GTEST_NUM_HW_CQS,                  // Number of HW command queues in tests
-    TT_METAL_ARC_DEBUG_BUFFER_SIZE,             // ARC processor debug buffer size
-    TT_METAL_OPERATION_TIMEOUT_SECONDS,         // Operation timeout duration
-    
+    TT_METAL_DEVICE_PROFILER,                      // Enable device profiling
+    TT_METAL_DEVICE_PROFILER_DISPATCH,             // Enable dispatch core profiling
+    TT_METAL_PROFILER_SYNC,                        // Enable synchronous profiling
+    TT_METAL_DEVICE_PROFILER_NOC_EVENTS,           // Enable NoC events profiling
+    TT_METAL_DEVICE_PROFILER_NOC_EVENTS_RPT_PATH,  // NoC events report path
+    TT_METAL_MEM_PROFILER,                         // Enable memory/buffer profiling
+    TT_METAL_TRACE_PROFILER,                       // Enable trace profiling
+    TT_METAL_PROFILER_MID_RUN_DUMP,                // Force mid-run profiler dumps
+    TT_METAL_TRACY_MID_RUN_PUSH,                   // Force Tracy mid-run pushes
+    TT_METAL_GTEST_NUM_HW_CQS,                     // Number of HW command queues in tests
+    TT_METAL_ARC_DEBUG_BUFFER_SIZE,                // ARC processor debug buffer size
+    TT_METAL_OPERATION_TIMEOUT_SECONDS,            // Operation timeout duration
+
     // ========================================
     // WATCHER SYSTEM
     // ========================================
-    TT_METAL_WATCHER,                           // Enable watcher system
-    TT_METAL_WATCHER_DUMP_ALL,                  // Dump all watcher data
-    TT_METAL_WATCHER_APPEND,                    // Append mode for watcher output
-    TT_METAL_WATCHER_NOINLINE,                  // Disable watcher function inlining
-    TT_METAL_WATCHER_PHYS_COORDS,               // Use physical coordinates in watcher
-    TT_METAL_WATCHER_TEXT_START,                // Include text start info in watcher
-    TT_METAL_WATCHER_SKIP_LOGGING,              // Disable watcher logging
-    TT_METAL_WATCHER_DISABLE_ASSERT,            // Disable watcher assert feature
-    TT_METAL_WATCHER_DISABLE_PAUSE,             // Disable watcher pause feature
-    TT_METAL_WATCHER_DISABLE_RING_BUFFER,       // Disable watcher ring buffer
-    TT_METAL_WATCHER_DISABLE_STACK_USAGE,       // Disable watcher stack usage tracking
-    TT_METAL_WATCHER_DISABLE_SANITIZE_NOC,      // Disable watcher NoC sanitization
-    TT_METAL_WATCHER_DISABLE_SANITIZE_READ_ONLY_L1,   // Disable read-only L1 sanitization
-    TT_METAL_WATCHER_DISABLE_SANITIZE_WRITE_ONLY_L1,  // Disable write-only L1 sanitization
-    TT_METAL_WATCHER_DISABLE_WAYPOINT,          // Disable watcher waypoint feature
-    TT_METAL_WATCHER_DISABLE_DISPATCH,          // Disable watcher dispatch feature
-    TT_METAL_WATCHER_ENABLE_NOC_SANITIZE_LINKED_TRANSACTION, // Enable NoC linked transaction sanitization
-    
+    TT_METAL_WATCHER,                                         // Enable watcher system
+    TT_METAL_WATCHER_DUMP_ALL,                                // Dump all watcher data
+    TT_METAL_WATCHER_APPEND,                                  // Append mode for watcher output
+    TT_METAL_WATCHER_NOINLINE,                                // Disable watcher function inlining
+    TT_METAL_WATCHER_PHYS_COORDS,                             // Use physical coordinates in watcher
+    TT_METAL_WATCHER_TEXT_START,                              // Include text start info in watcher
+    TT_METAL_WATCHER_SKIP_LOGGING,                            // Disable watcher logging
+    TT_METAL_WATCHER_DISABLE_ASSERT,                          // Disable watcher assert feature
+    TT_METAL_WATCHER_DISABLE_PAUSE,                           // Disable watcher pause feature
+    TT_METAL_WATCHER_DISABLE_RING_BUFFER,                     // Disable watcher ring buffer
+    TT_METAL_WATCHER_DISABLE_STACK_USAGE,                     // Disable watcher stack usage tracking
+    TT_METAL_WATCHER_DISABLE_SANITIZE_NOC,                    // Disable watcher NoC sanitization
+    TT_METAL_WATCHER_DISABLE_SANITIZE_READ_ONLY_L1,           // Disable read-only L1 sanitization
+    TT_METAL_WATCHER_DISABLE_SANITIZE_WRITE_ONLY_L1,          // Disable write-only L1 sanitization
+    TT_METAL_WATCHER_DISABLE_WAYPOINT,                        // Disable watcher waypoint feature
+    TT_METAL_WATCHER_DISABLE_DISPATCH,                        // Disable watcher dispatch feature
+    TT_METAL_WATCHER_ENABLE_NOC_SANITIZE_LINKED_TRANSACTION,  // Enable NoC linked transaction sanitization
+
     // ========================================
     // INSPECTOR SYSTEM
     // ========================================
-    TT_METAL_INSPECTOR,                         // Enable/disable inspector
-    TT_METAL_INSPECTOR_LOG_PATH,                // Inspector log output path
+    TT_METAL_INSPECTOR,                              // Enable/disable inspector
+    TT_METAL_INSPECTOR_LOG_PATH,                     // Inspector log output path
     TT_METAL_INSPECTOR_INITIALIZATION_IS_IMPORTANT,  // Track initialization closely
     TT_METAL_INSPECTOR_WARN_ON_WRITE_EXCEPTIONS,     // Warn on write exceptions
-    TT_METAL_RISCV_DEBUG_INFO,                  // Enable RISC-V debug info
-    
+    TT_METAL_RISCV_DEBUG_INFO,                       // Enable RISC-V debug info
+    TT_METAL_INSPECTOR_RPC_SERVER_ADDRESS,           // Inspector RPC server address (host:port)
+    TT_METAL_INSPECTOR_RPC,                          // Enable/disable inspector RPC server
+
     // ========================================
     // DEBUG PRINTING (DPRINT)
     // ========================================
-    TT_METAL_DPRINT_CORES,                      // Worker cores for debug printing
-    TT_METAL_DPRINT_ETH_CORES,                  // Ethernet cores for debug printing
-    TT_METAL_DPRINT_CHIPS,                      // Chip IDs for debug printing
-    TT_METAL_DPRINT_RISCVS,                     // RISC-V processors for debug printing
-    TT_METAL_DPRINT_FILE,                       // Debug print output file
-    TT_METAL_DPRINT_ONE_FILE_PER_RISC,          // Separate file per RISC-V processor
-    TT_METAL_DPRINT_PREPEND_DEVICE_CORE_RISC,   // Prepend device/core/RISC info
-    
+    TT_METAL_DPRINT_CORES,                     // Worker cores for debug printing
+    TT_METAL_DPRINT_ETH_CORES,                 // Ethernet cores for debug printing
+    TT_METAL_DPRINT_CHIPS,                     // Chip IDs for debug printing
+    TT_METAL_DPRINT_RISCVS,                    // RISC-V processors for debug printing
+    TT_METAL_DPRINT_FILE,                      // Debug print output file
+    TT_METAL_DPRINT_ONE_FILE_PER_RISC,         // Separate file per RISC-V processor
+    TT_METAL_DPRINT_PREPEND_DEVICE_CORE_RISC,  // Prepend device/core/RISC info
+
     COUNT  // Total number of environment variables
 };
 
@@ -304,15 +309,14 @@ class RunTimeOptions {
     // (#25048) TODO: Once all of init is moved to MetalContext, investigate removing this option.
     bool force_context_reinit = false;
 
-
     bool force_reinit = false;
-    
+
     // Comma-separated list of device IDs to make visible to the runtime
     std::string visible_devices = "";
-    
-    // Sets the architecture name (only necessary during simulation)  
+
+    // Sets the architecture name (only necessary during simulation)
     std::string arch_name = "";
-    
+
     // Forces Tracy profiler pushes during execution for real-time profiling
     bool tracy_mid_run_push = false;
     // feature flag to enable 2-erisc mode with fabric on Blackhole, until it is enabled by default
@@ -385,7 +389,7 @@ public:
     void set_watcher_text_start(bool text_start) { watcher_settings.text_start = text_start; }
     bool get_watcher_skip_logging() const { return watcher_settings.skip_logging; }
     void set_watcher_skip_logging(bool skip_logging) { watcher_settings.skip_logging = skip_logging; }
-    // 
+    //
     bool get_inspector_rpc_server_enabled() const { return inspector_settings.rpc_server_enabled; }
     const std::string& get_inspector_rpc_server_host() const { return inspector_settings.rpc_server_host; }
     uint16_t get_inspector_rpc_server_port() const { return inspector_settings.rpc_server_port; }
@@ -416,8 +420,8 @@ public:
     }
     bool get_inspector_warn_on_write_exceptions() const { return inspector_settings.warn_on_write_exceptions; }
     void set_inspector_warn_on_write_exceptions(bool warn) { inspector_settings.warn_on_write_exceptions = warn; }
-    std::string get_inspector_rpc_server_address() const { 
-        return inspector_settings.rpc_server_host + ":" + std::to_string(inspector_settings.rpc_server_port); 
+    std::string get_inspector_rpc_server_address() const {
+        return inspector_settings.rpc_server_host + ":" + std::to_string(inspector_settings.rpc_server_port);
     }
     void set_inspector_rpc_server_enabled(bool enabled) { inspector_settings.rpc_server_enabled = enabled; }
     // Info from DPrint environment variables, setters included so that user can
@@ -558,7 +562,7 @@ public:
     std::string get_visible_devices() const { return visible_devices; }
     std::string get_arch_name() const { return arch_name; }
     bool get_tracy_mid_run_push() const { return tracy_mid_run_push; }
-    
+
     bool get_skip_loading_fw() const { return skip_loading_fw; }
     bool get_skip_reset_cores_on_init() const { return skip_reset_cores_on_init; }
 
@@ -666,7 +670,7 @@ private:
     void ParseFeaturePrependDeviceCoreRisc(RunTimeDebugFeatures feature, const std::string& env_var);
     // New table-driven environment variable handling
     void HandleEnvVar(EnvVarID id, const char* value);  // Handle single environment variable
-    void InitializeFromEnvVars();  // Initialize all environment variables from table
+    void InitializeFromEnvVars();                       // Initialize all environment variables from table
     // Helper function to parse watcher-specific environment variables.
     void ParseWatcherEnv();
 
