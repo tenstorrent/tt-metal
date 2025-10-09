@@ -604,18 +604,54 @@ private:
         }
 
         try {
-            // Check if this is likely inter-mesh traffic by comparing global vs local nodes
-            // Use control plane API for cycle detection
-            // It automatically filters inter-mesh traffic and handles all the complexity
-            log_info(tt::LogTest, "Running cycle detection for test '{}'", config.name);
-            bool has_cycles = tt::tt_fabric::fabric_tests::detect_cycles(pairs, *fixture_, config.name);
+            // Check if we're in a multihost environment using TT_MESH_ID and TT_MESH_HOST_RANK
+            // In single-host scenarios (TT_MESH_ID not set), always run cycle detection
+            // In multi-host scenarios (TT_MESH_ID set), only run on host rank 0 to avoid redundant computation
+            bool should_run_cycle_detection = true;
 
-            if (has_cycles) {
-                log_warning(tt::LogTest, "Cycles detected in test '{}'", config.name);
-                // Optionally throw or handle the cycle detection result
-                // TT_THROW("Cycles detected in routing for test {}", config.name);
+            const char* mesh_id_str = std::getenv("TT_MESH_ID");
+            if (mesh_id_str != nullptr) {
+                // Multi-host environment: only run on host rank 0
+                const char* host_rank_str = std::getenv("TT_MESH_HOST_RANK");
+                int host_rank = (host_rank_str != nullptr) ? std::stoi(host_rank_str) : 0;
+                should_run_cycle_detection = (host_rank == 0);
+
+                if (should_run_cycle_detection) {
+                    log_info(
+                        tt::LogTest,
+                        "Multi-host detected (mesh_id={}, host_rank={}): Running cycle detection on host rank 0 for "
+                        "test '{}'",
+                        mesh_id_str,
+                        host_rank,
+                        config.name);
+                } else {
+                    log_debug(
+                        tt::LogTest,
+                        "Multi-host detected (mesh_id={}, host_rank={}): Skipping cycle detection on non-zero rank for "
+                        "test '{}'",
+                        mesh_id_str,
+                        host_rank,
+                        config.name);
+                }
             } else {
-                log_info(tt::LogTest, "No cycles detected in test '{}'", config.name);
+                // Single-host environment: always run
+                log_debug(tt::LogTest, "Single-host environment: Running cycle detection for test '{}'", config.name);
+            }
+
+            if (should_run_cycle_detection) {
+                // Check if this is likely inter-mesh traffic by comparing global vs local nodes
+                // Use control plane API for cycle detection
+                // It automatically filters inter-mesh traffic and handles all the complexity
+                log_info(tt::LogTest, "Running cycle detection for test '{}'", config.name);
+                bool has_cycles = tt::tt_fabric::fabric_tests::detect_cycles(pairs, *fixture_, config.name);
+
+                if (has_cycles) {
+                    log_warning(tt::LogTest, "Cycles detected in test '{}'", config.name);
+                    // Optionally throw or handle the cycle detection result
+                    // TT_THROW("Cycles detected in routing for test {}", config.name);
+                } else {
+                    log_info(tt::LogTest, "No cycles detected in test '{}'", config.name);
+                }
             }
 
         } catch (const std::exception& e) {
