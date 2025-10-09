@@ -94,6 +94,7 @@ bool is_parametrized_type(T val) {
         case UnaryOpType::THRESHOLD:
         case UnaryOpType::CLAMP_TSS:
         case UnaryOpType::SELU:
+        case UnaryOpType::LOGIT:
         case UnaryOpType::RPOW: return true;
         default: return false;
     }
@@ -105,5 +106,28 @@ void update_macro_defines(UnaryOpType op_type, std::map<std::string, std::string
 std::string get_compute_kernel_path(
     UnaryOpType op_type, const std::string& compute_root, std::optional<DataType> input_dtype = std::nullopt);
 
-uint32_t pack_scalar_runtime_arg(const EltwiseUnaryWithParam& op, size_t index, DataType dtype);
+template <typename T>
+uint32_t pack_scalar_runtime_arg_impl(const T& param, DataType dtype) {
+    if ((dtype == DataType::UINT32 || dtype == DataType::INT32) && std::same_as<T, float>) {
+        return std::bit_cast<uint32_t>(static_cast<int32_t>(param));
+    }
+    if constexpr (std::same_as<T, uint32_t>) {
+        return param;
+    } else {
+        return std::bit_cast<uint32_t>(param);
+    }
+}
+
+inline uint32_t pack_scalar_runtime_arg(const EltwiseUnaryWithParam& op, size_t index, DataType dtype) {
+    return std::visit(
+        [index, dtype](const auto& variant) -> uint32_t {
+            if constexpr (requires { variant.get_param_if(index); }) {
+                if (auto param = variant.get_param_if(index)) {
+                    return pack_scalar_runtime_arg_impl(*param, dtype);
+                }
+            }
+            TT_THROW("Unsupported parameter type for index {}", index);
+        },
+        op.base);
+}
 }  // namespace ttnn::operations::unary::utils
