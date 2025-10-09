@@ -112,28 +112,17 @@ AnalysisResults parse_duration(
     return analysis_results;
 }
 
-AnalysisResults generateAnalysisForDeviceMarkers(
-    const AnalysisConfig& analysis_config,
-    const std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& device_markers) {
-    TT_ASSERT(std::is_sorted(
-        device_markers.begin(), device_markers.end(), [](const auto& a, const auto& b) { return a.get() < b.get(); }));
-    TT_FATAL(analysis_config.dimension == AnalysisDimension::OP, "Analysis config dimension must be across ops");
-
-    switch (analysis_config.type) {
-        case AnalysisType::OP_FIRST_TO_LAST_MARKER: return parse_duration(analysis_config, device_markers);
-        default: TT_THROW("Invalid analysis type");
-    }
-}
-
 std::map<OpId, OpsPerfResults::SingleOpPerfResults::OpMetaData> getMetaDataForOps(
     const std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& markers) {
+    ZoneScoped;
+
     std::map<OpId, OpsPerfResults::SingleOpPerfResults::OpMetaData> op_id_to_meta_data;
 
     std::unordered_map<OpId, std::unordered_set<CoreCoord>, OpIdHasher> fw_cores_per_op_id;
     for (const auto& marker_ref : markers) {
         const tracy::TTDeviceMarker& marker = marker_ref.get();
-        if (op_id_to_meta_data.find({marker.runtime_host_id, marker.trace_id, marker.trace_id_counter}) ==
-            op_id_to_meta_data.end()) {
+        const OpId op_id = {marker.runtime_host_id, marker.trace_id, marker.trace_id_counter};
+        if (op_id_to_meta_data.find(op_id) == op_id_to_meta_data.end()) {
             const Cluster& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
             const tt_ClusterDescriptor* cluster_desc = cluster.get_cluster_desc();
             const ARCH device_arch = cluster_desc->get_arch(marker.chip_id);
@@ -146,7 +135,7 @@ std::map<OpId, OpsPerfResults::SingleOpPerfResults::OpMetaData> getMetaDataForOp
                 tt::get_compute_grid_size(marker.chip_id, num_hw_cqs, dispatch_core_config);
             const uint32_t num_available_worker_cores = compute_grid_size.x * compute_grid_size.y;
 
-            op_id_to_meta_data[{marker.runtime_host_id, marker.trace_id, marker.trace_id_counter}] = {
+            op_id_to_meta_data[op_id] = {
                 .device_id = marker.chip_id,
                 .device_arch = device_arch,
                 .op_name = marker.op_name,
@@ -173,6 +162,19 @@ std::map<OpId, OpsPerfResults::SingleOpPerfResults::OpMetaData> getMetaDataForOp
     }
 
     return op_id_to_meta_data;
+}
+
+AnalysisResults generateAnalysisForDeviceMarkers(
+    const AnalysisConfig& analysis_config,
+    const std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& device_markers) {
+    TT_ASSERT(std::is_sorted(
+        device_markers.begin(), device_markers.end(), [](const auto& a, const auto& b) { return a.get() < b.get(); }));
+    TT_FATAL(analysis_config.dimension == AnalysisDimension::OP, "Analysis config dimension must be across ops");
+
+    switch (analysis_config.type) {
+        case AnalysisType::OP_FIRST_TO_LAST_MARKER: return parse_duration(analysis_config, device_markers);
+        default: TT_THROW("Invalid analysis type");
+    }
 }
 
 OpsPerfResults generatePerfResultsForOps(
