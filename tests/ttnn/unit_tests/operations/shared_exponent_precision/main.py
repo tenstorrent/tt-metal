@@ -1,11 +1,17 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
 from loguru import logger
 
 from runner import run_experiments
-from postprocessing import analyze_results
+from postprocessing import (
+    save_results_to_json,
+    generate_results_doc,
+    worst_cases_analysis,
+    pattern_impact_analysis,
+    plot_charts,
+)
 
 
 def main():
@@ -15,18 +21,26 @@ def main():
     logger.info("=== Starting bfloat8_b precision experiments ===")
     all_results = run_experiments()
 
-    # Analyze results
-    logger.info("=== Analyzing results ===")
-    analysis = analyze_results(all_results)
+    # Save all_results to JSON
+    logger.info("=== Saving results to JSON ===")
+    save_results_to_json(all_results)
 
-    # Save results
-    # save_results(all_results, analysis)
+    # Generate results document
+    logger.info("=== Generating results document ===")
+    generate_results_doc(all_results)
 
-    # # Generate report
-    # generate_report(analysis)
+    # Find worst cases
+    logger.info("=== Analyze worst cases ===")
+    worst_cases_analysis(all_results)
 
-    return all_results, analysis
+    # Analyze pattern impact
+    logger.info("=== Analyze pattern impact ===")
+    pattern_impact_analysis(all_results)
+
+    # Add visualization
+    logger.info("=== Plotting charts ===")
+    plot_charts(all_results)
 
 
 if __name__ == "__main__":
-    results, analysis = main()
+    main()

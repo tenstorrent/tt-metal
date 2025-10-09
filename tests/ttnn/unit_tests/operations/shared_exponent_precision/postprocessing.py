@@ -4,117 +4,66 @@
 
 from loguru import logger
 import numpy as np
+from pathlib import Path
+import json
+
+from constants import Filepaths, ResultKeys, ShapeType, OperationType, MatmulTTConfig
 
 
-def _analyze_operation_sensitivity(results):
-    """Analyze which operations are most sensitive to precision loss"""
-    operation_stats = {}
-
-    # Collect metrics by operation
-    for shape_type, shape_results in results.items():
-        if isinstance(shape_results, dict):
-            for pattern, pattern_results in shape_results.items():
-                if isinstance(pattern_results, dict):
-                    for dist, dist_results in pattern_results.items():
-                        if isinstance(dist_results, dict):
-                            for op_key, metrics in dist_results.items():
-                                # Extract operation name
-                                if "_axis" in op_key:
-                                    op_name, axis_info = op_key.split("_axis")
-                                    axis = int(axis_info)
-                                else:
-                                    op_name = op_key
-                                    axis = None
-
-                                # Initialize stats structure
-                                if op_name not in operation_stats:
-                                    operation_stats[op_name] = {
-                                        "all_metrics": [],
-                                        "by_axis": {0: [], 1: [], None: []},
-                                        "by_shape_type": {},
-                                    }
-
-                                # Store metrics
-                                metric_summary = {
-                                    "pcc": metrics.get("pcc", 1.0),
-                                    "max_abs_error": metrics.get("max_abs_error", 0),
-                                    "ulp_max": metrics.get("ulp_max", 0),
-                                    "shape_type": shape_type,
-                                    "pattern": pattern,
-                                    "distribution": dist,
-                                    "axis": axis,
-                                }
-
-                                operation_stats[op_name]["all_metrics"].append(metric_summary)
-                                operation_stats[op_name]["by_axis"][axis].append(metric_summary)
-
-                                if shape_type not in operation_stats[op_name]["by_shape_type"]:
-                                    operation_stats[op_name]["by_shape_type"][shape_type] = []
-                                operation_stats[op_name]["by_shape_type"][shape_type].append(metric_summary)
-
-    # Compute summary statistics
-    operation_summary = {}
-    for op_name, stats in operation_stats.items():
-        all_pcc = [m["pcc"] for m in stats["all_metrics"]]
-        all_errors = [m["max_abs_error"] for m in stats["all_metrics"]]
-        all_ulp = [m["ulp_max"] for m in stats["all_metrics"]]
-
-        operation_summary[op_name] = {
-            "overall": {
-                "avg_pcc": np.mean(all_pcc),
-                "min_pcc": np.min(all_pcc),
-                "std_pcc": np.std(all_pcc),
-                "avg_error": np.mean(all_errors),
-                "max_error": np.max(all_errors),
-                "avg_ulp": np.mean(all_ulp),
-                "max_ulp": np.max(all_ulp),
-                "num_tests": len(stats["all_metrics"]),
-            },
-            "axis_comparison": {},
-        }
-
-        # Analyze by axis
-        for axis in [0, 1]:
-            if stats["by_axis"][axis]:
-                axis_pcc = [m["pcc"] for m in stats["by_axis"][axis]]
-                operation_summary[op_name]["axis_comparison"][f"axis_{axis}"] = {
-                    "avg_pcc": np.mean(axis_pcc),
-                    "min_pcc": np.min(axis_pcc),
-                }
-
-    # Rank operations by sensitivity
-    operation_ranking = sorted(operation_summary.items(), key=lambda x: x[1]["overall"]["avg_pcc"])
-
-    return {
-        "operation_summary": operation_summary,
-        "operation_ranking": operation_ranking,
-        "most_sensitive_operation": operation_ranking[0] if operation_ranking else None,
-        "axis_effects": {
-            op: summary["axis_comparison"] for op, summary in operation_summary.items() if summary["axis_comparison"]
-        },
-    }
+#
+# Plot charts
+#
+def plot_charts(results: dict) -> None:
+    pass
 
 
-def _analyze_pattern_impact(results):
-    """Analyze how different patterns affect precision"""
+#
+# Pattern impact analysis
+#
+def _analyze_pattern_impact(results: dict) -> dict:
+    """
+    Analyze how different patterns affect precision across all operations.
+
+    Args:
+        results: Nested dictionary with structure [shape_type][pattern][distribution][operation][...]
+
+    Returns:
+        Dictionary with pattern analysis results
+    """
     pattern_stats = {}
 
-    # Collect all metrics by pattern
-    for shape_type, shape_results in results.items():
-        if isinstance(shape_results, dict):
-            for pattern, pattern_results in shape_results.items():
-                if pattern not in pattern_stats:
-                    pattern_stats[pattern] = {"pcc_values": [], "max_abs_errors": [], "ulp_max_values": [], "count": 0}
+    # Flatten and collect metrics by pattern
+    flattened_results = _flatten_results(results)
 
-                # Collect metrics from all distributions and operations
-                if isinstance(pattern_results, dict):
-                    for dist, dist_results in pattern_results.items():
-                        if isinstance(dist_results, dict):
-                            for op, metrics in dist_results.items():
-                                pattern_stats[pattern]["pcc_values"].append(metrics.get("pcc", 1.0))
-                                pattern_stats[pattern]["max_abs_errors"].append(metrics.get("max_abs_error", 0))
-                                pattern_stats[pattern]["ulp_max_values"].append(metrics.get("ulp_max", 0))
-                                pattern_stats[pattern]["count"] += 1
+    for case_info, metrics in flattened_results:
+        pattern = case_info["pattern"]
+
+        if pattern not in pattern_stats:
+            pattern_stats[pattern] = {
+                "pcc_values": [],
+                "max_abs_errors": [],
+                "mean_abs_errors": [],
+                "ulp_max_values": [],
+                "ulp_mean_values": [],
+                "max_rel_errors": [],
+                "operations": {},
+                "count": 0,
+            }
+
+        # Collect metrics
+        pattern_stats[pattern]["pcc_values"].append(metrics.get(ResultKeys.PCC_KEY, 1.0))
+        pattern_stats[pattern]["max_abs_errors"].append(metrics.get(ResultKeys.MAX_ABS_ERROR_KEY, 0))
+        pattern_stats[pattern]["mean_abs_errors"].append(metrics.get(ResultKeys.MEAN_ABS_ERROR_KEY, 0))
+        pattern_stats[pattern]["ulp_max_values"].append(metrics.get(ResultKeys.ULP_MAX_KEY, 0))
+        pattern_stats[pattern]["ulp_mean_values"].append(metrics.get(ResultKeys.ULP_MEAN_KEY, 0))
+        pattern_stats[pattern]["max_rel_errors"].append(metrics.get(ResultKeys.MAX_REL_ERROR_KEY, 0))
+        pattern_stats[pattern]["count"] += 1
+
+        # Track operations per pattern
+        operation = case_info["operation"]
+        if operation not in pattern_stats[pattern]["operations"]:
+            pattern_stats[pattern]["operations"][operation] = 0
+        pattern_stats[pattern]["operations"][operation] += 1
 
     # Calculate statistics for each pattern
     pattern_summary = {}
@@ -126,245 +75,661 @@ def _analyze_pattern_impact(results):
                 "std_pcc": np.std(stats["pcc_values"]),
                 "avg_max_abs_error": np.mean(stats["max_abs_errors"]),
                 "max_max_abs_error": np.max(stats["max_abs_errors"]),
+                "std_max_abs_error": np.std(stats["max_abs_errors"]),
+                "avg_mean_abs_error": np.mean(stats["mean_abs_errors"]),
                 "avg_ulp_max": np.mean(stats["ulp_max_values"]),
                 "max_ulp_max": np.max(stats["ulp_max_values"]),
+                "avg_ulp_mean": np.mean(stats["ulp_mean_values"]),
+                "avg_max_rel_error": np.mean(stats["max_rel_errors"]),
+                "max_max_rel_error": np.max(stats["max_rel_errors"]),
                 "num_tests": stats["count"],
+                "operations_breakdown": stats["operations"],
             }
 
-    # Rank patterns by impact (worst first)
-    pattern_ranking = sorted(pattern_summary.items(), key=lambda x: x[1]["avg_pcc"])  # Lower PCC is worse
+    # Rank patterns by different metrics
+    pattern_ranking_by_pcc = sorted(pattern_summary.items(), key=lambda x: x[1]["avg_pcc"])  # Lower PCC is worse
+    pattern_ranking_by_abs_error = sorted(
+        pattern_summary.items(), key=lambda x: x[1]["avg_max_abs_error"], reverse=True
+    )  # Higher error is worse
+    pattern_ranking_by_ulp = sorted(
+        pattern_summary.items(), key=lambda x: x[1]["avg_ulp_max"], reverse=True
+    )  # Higher ULP is worse
 
     return {
         "pattern_summary": pattern_summary,
-        "pattern_ranking": pattern_ranking,
-        "worst_pattern": pattern_ranking[0] if pattern_ranking else None,
+        "pattern_ranking_by_pcc": pattern_ranking_by_pcc,
+        "pattern_ranking_by_abs_error": pattern_ranking_by_abs_error,
+        "pattern_ranking_by_ulp": pattern_ranking_by_ulp,
+        "worst_pattern_by_pcc": pattern_ranking_by_pcc[0] if pattern_ranking_by_pcc else None,
     }
 
 
-def _find_worst_cases(results, top_n=10):
-    """Find the worst performing cases across all metrics"""
+def _format_pattern_impact_report(pattern_analysis: dict) -> str:
+    """
+    Format pattern impact analysis into a markdown report.
 
-    worst_cases = {"pcc": [], "max_abs_error": [], "ulp_max": []}
+    Args:
+        pattern_analysis: Dictionary returned by analyze_pattern_impact
+
+    Returns:
+        Formatted markdown string
+    """
+    report_lines = ["# Pattern Impact Analysis\n"]
+
+    # Overview section
+    report_lines.append("## Overview\n")
+    report_lines.append("This report analyzes how different patterns affect precision metrics across all operations.\n")
+
+    # Summary statistics table
+    report_lines.append("## Pattern Performance Summary\n")
+    report_lines.append(_create_pattern_summary_table(pattern_analysis["pattern_summary"]))
+
+    # Rankings
+    report_lines.append("\n## Pattern Rankings\n")
+
+    # Worst by PCC
+    report_lines.append("\n### Ranked by Average PCC (Lower is Worse)\n")
+    report_lines.append(_create_pattern_ranking_table(pattern_analysis["pattern_ranking_by_pcc"], "avg_pcc"))
+
+    # Worst by absolute error
+    report_lines.append("\n### Ranked by Average Max Absolute Error (Higher is Worse)\n")
+    report_lines.append(
+        _create_pattern_ranking_table(pattern_analysis["pattern_ranking_by_abs_error"], "avg_max_abs_error")
+    )
+
+    # Worst by ULP
+    report_lines.append("\n### Ranked by Average Max ULP (Higher is Worse)\n")
+    report_lines.append(_create_pattern_ranking_table(pattern_analysis["pattern_ranking_by_ulp"], "avg_ulp_max"))
+
+    # Operations breakdown
+    report_lines.append("\n## Operations Breakdown by Pattern\n")
+    report_lines.append(_create_operations_breakdown_table(pattern_analysis["pattern_summary"]))
+
+    # Worst pattern details
+    if pattern_analysis["worst_pattern_by_pcc"]:
+        worst_pattern, worst_stats = pattern_analysis["worst_pattern_by_pcc"]
+        report_lines.append(f"\n## Worst Pattern Details: {worst_pattern}\n")
+        report_lines.append("### Metrics Summary\n")
+        for metric, value in worst_stats.items():
+            if metric != "operations_breakdown":
+                if isinstance(value, float):
+                    if value < 1:
+                        report_lines.append(f"- **{metric.replace('_', ' ').title()}**: {value:.6f}")
+                    elif value < 100:
+                        report_lines.append(f"- **{metric.replace('_', ' ').title()}**: {value:.2f}")
+                    else:
+                        report_lines.append(f"- **{metric.replace('_', ' ').title()}**: {value:,.0f}")
+                else:
+                    report_lines.append(f"- **{metric.replace('_', ' ').title()}**: {value}")
+
+    return "\n".join(report_lines)
+
+
+def _create_pattern_summary_table(pattern_summary: dict) -> str:
+    """Create a comprehensive summary table for all patterns."""
+    if not pattern_summary:
+        return "No pattern data available."
+
+    headers = [
+        "Pattern",
+        "Tests",
+        "Avg PCC",
+        "Min PCC",
+        "Std PCC",
+        "Avg Max Abs Err",
+        "Max Max Abs Err",
+        "Avg ULP Max",
+        "Max ULP Max",
+    ]
+
+    table_lines = ["| " + " | ".join(headers) + " |", "|" + "|".join(["---"] * len(headers)) + "|"]
+
+    # Sort by average PCC for consistent ordering
+    sorted_patterns = sorted(pattern_summary.items(), key=lambda x: x[1]["avg_pcc"])
+
+    for pattern, stats in sorted_patterns:
+        row = [
+            pattern,
+            str(stats["num_tests"]),
+            f"{stats['avg_pcc']:.6f}",
+            f"{stats['min_pcc']:.6f}",
+            f"{stats['std_pcc']:.6f}",
+            f"{stats['avg_max_abs_error']:.2f}",
+            f"{stats['max_max_abs_error']:.2f}",
+            f"{stats['avg_ulp_max']:,.0f}",
+            f"{stats['max_ulp_max']:,.0f}",
+        ]
+        table_lines.append("| " + " | ".join(row) + " |")
+
+    return "\n".join(table_lines)
+
+
+def _create_pattern_ranking_table(pattern_ranking: list, metric_key: str) -> str:
+    """Create a ranking table for patterns by a specific metric."""
+    if not pattern_ranking:
+        return "No ranking data available."
+
+    headers = ["Rank", "Pattern", "Value", "Tests"]
+
+    table_lines = ["| " + " | ".join(headers) + " |", "|" + "|".join(["---"] * len(headers)) + "|"]
+
+    for rank, (pattern, stats) in enumerate(pattern_ranking[:10], 1):  # Top 10
+        value = stats[metric_key]
+        if value < 1:
+            value_str = f"{value:.6f}"
+        elif value < 100:
+            value_str = f"{value:.2f}"
+        else:
+            value_str = f"{value:,.0f}"
+
+        row = [str(rank), pattern, value_str, str(stats["num_tests"])]
+        table_lines.append("| " + " | ".join(row) + " |")
+
+    return "\n".join(table_lines)
+
+
+def _create_operations_breakdown_table(pattern_summary):
+    """Create a table showing operation distribution for each pattern."""
+    if not pattern_summary:
+        return "No pattern data available."
+
+    # Get all unique operations
+    all_operations = set()
+    for stats in pattern_summary.values():
+        all_operations.update(stats["operations_breakdown"].keys())
+
+    operations = sorted(list(all_operations))
+    headers = ["Pattern", "Total Tests"] + operations
+
+    table_lines = ["| " + " | ".join(headers) + " |", "|" + "|".join(["---"] * len(headers)) + "|"]
+
+    # Sort by total tests for better readability
+    sorted_patterns = sorted(pattern_summary.items(), key=lambda x: x[1]["num_tests"], reverse=True)
+
+    for pattern, stats in sorted_patterns:
+        row = [pattern, str(stats["num_tests"])]
+        for op in operations:
+            count = stats["operations_breakdown"].get(op, 0)
+            row.append(str(count) if count > 0 else "-")
+        table_lines.append("| " + " | ".join(row) + " |")
+
+    return "\n".join(table_lines)
+
+
+def pattern_impact_analysis(results: dict, output_dir: str = Filepaths.RESULTS_DIRECTORY) -> dict:
+    """
+    Analyze pattern impact and save the analysis to a markdown file.
+
+    Args:
+        results: Nested dictionary with operation results
+        output_file: Path to output markdown file
+
+    Returns:
+        Pattern analysis dictionary
+    """
+    # Create directory
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
+
+    # Perform pattern analysis
+    pattern_analysis = _analyze_pattern_impact(results)
+
+    # Generate markdown report
+    markdown_content = _format_pattern_impact_report(pattern_analysis)
+
+    # Save to file
+    output_file = Path(output_dir) / Path(Filepaths.PATTERN_IMPACT_ANALYSIS_FILENAME)
+    with open(output_file, "w", encoding="utf-8") as f:
+        f.write(markdown_content)
+
+    logger.info(f"Pattern impact analysis saved to {output_file}")
+    return pattern_analysis
+
+
+#
+# Worst cases analysis
+#
+def _find_worst_cases(results: dict, top_n: int = 10, metrics_to_track=None):
+    """
+    Find the worst performing cases across all metrics.
+
+    Args:
+        results: Nested dictionary with structure [shape_type][pattern][distribution][operation][...]
+        top_n: Number of worst cases to return for each metric
+        metrics_to_track: List of metrics to track (default: ["pcc", "max_abs_error", "ulp_max", "mean_abs_error", "max_rel_error"])
+
+    Returns:
+        Dictionary with worst cases for each metric
+    """
+    if metrics_to_track is None:
+        metrics_to_track = [
+            ResultKeys.PCC_KEY,
+            ResultKeys.MAX_ABS_ERROR_KEY,
+            ResultKeys.ULP_MAX_KEY,
+            ResultKeys.MEAN_ABS_ERROR_KEY,
+            ResultKeys.MAX_REL_ERROR_KEY,
+        ]
+
+    # Initialize worst cases tracker
+    worst_cases = {metric: [] for metric in metrics_to_track}
 
     # Flatten results for analysis
-    for shape_type, shape_results in results.items():
-        if isinstance(shape_results, dict):
-            for pattern, pattern_results in shape_results.items():
-                if isinstance(pattern_results, dict):
-                    for dist, dist_results in pattern_results.items():
-                        if isinstance(dist_results, dict):
-                            for op, metrics in dist_results.items():
-                                case_info = {
-                                    "shape_type": shape_type,
-                                    "pattern": pattern,
-                                    "distribution": dist,
-                                    "operation": op,
-                                    "metrics": metrics,
-                                }
+    flattened_results = _flatten_results(results)
 
-                                # Track worst cases
-                                worst_cases["pcc"].append((metrics.get("pcc", 1.0), case_info))
-                                worst_cases["max_abs_error"].append((metrics.get("max_abs_error", 0), case_info))
-                                worst_cases["ulp_max"].append((metrics.get("ulp_max", 0), case_info))
+    # Collect all cases with their metrics
+    for case_info, metrics in flattened_results:
+        for metric_name in metrics_to_track:
+            if metric_name in metrics:
+                worst_cases[metric_name].append(
+                    {"value": metrics[metric_name], "case": case_info, "full_metrics": metrics}
+                )
 
-    # Sort and keep top N worst
-    for metric in worst_cases:
-        if metric == "pcc":
-            worst_cases[metric] = sorted(worst_cases[metric], key=lambda x: x[0])[:top_n]
+    # Sort and keep top N worst for each metric
+    for metric_name in worst_cases:
+        if metric_name == ResultKeys.PCC_KEY:
+            # For PCC, lower is worse
+            worst_cases[metric_name] = sorted(worst_cases[metric_name], key=lambda x: x["value"])[:top_n]
         else:
-            worst_cases[metric] = sorted(worst_cases[metric], key=lambda x: x[0], reverse=True)[:top_n]
+            # For error metrics, higher is worse
+            worst_cases[metric_name] = sorted(worst_cases[metric_name], key=lambda x: x["value"], reverse=True)[:top_n]
 
     return worst_cases
 
 
-def analyze_operation_sensitivity(results):
-    """Analyze which operations are most sensitive to precision loss"""
-    operation_stats = {}
+def _flatten_results(results: dict):
+    """
+    Flatten the nested results dictionary into a list of (case_info, metrics) tuples.
 
-    # Collect metrics by operation
-    for shape_type, shape_results in results.items():
-        if isinstance(shape_results, dict):
-            for pattern, pattern_results in shape_results.items():
-                if isinstance(pattern_results, dict):
-                    for dist, dist_results in pattern_results.items():
-                        if isinstance(dist_results, dict):
-                            for op_key, metrics in dist_results.items():
-                                # Extract operation name
-                                if "_axis" in op_key:
-                                    op_name, axis_info = op_key.split("_axis")
-                                    axis = int(axis_info)
-                                else:
-                                    op_name = op_key
-                                    axis = None
+    Handles three operation types:
+    1. matmul: direct metrics
+    2. matmul_tt: [tile_w][transpose] -> metrics
+    3. others: [axis] -> metrics
+    """
+    flattened = []
 
-                                # Initialize stats structure
-                                if op_name not in operation_stats:
-                                    operation_stats[op_name] = {
-                                        "all_metrics": [],
-                                        "by_axis": {0: [], 1: [], None: []},
-                                        "by_shape_type": {},
-                                    }
+    for shape_type, shape_data in results.items():
+        if not isinstance(shape_data, dict):
+            continue
 
-                                # Store metrics
-                                metric_summary = {
-                                    "pcc": metrics.get("pcc", 1.0),
-                                    "max_abs_error": metrics.get("max_abs_error", 0),
-                                    "ulp_max": metrics.get("ulp_max", 0),
+        for pattern, pattern_data in shape_data.items():
+            if not isinstance(pattern_data, dict):
+                continue
+
+            for distribution, dist_data in pattern_data.items():
+                if not isinstance(dist_data, dict):
+                    continue
+
+                for operation, op_data in dist_data.items():
+                    if operation == OperationType.MATMUL_KEY:
+                        # Direct metrics for matmul
+                        case_info = {
+                            "shape_type": shape_type,
+                            "pattern": pattern,
+                            "distribution": distribution,
+                            "operation": operation,
+                            "params": {},
+                        }
+                        flattened.append((case_info, op_data))
+
+                    elif operation == OperationType.MATMUL_TT_KEY:
+                        # Handle matmul_tt structure: [tile_w][transpose] -> metrics
+                        for tile_w, tile_data in op_data.items():
+                            if isinstance(tile_data, dict):
+                                for transpose, metrics in tile_data.items():
+                                    if isinstance(metrics, dict) and "pcc" in metrics:
+                                        case_info = {
+                                            "shape_type": shape_type,
+                                            "pattern": pattern,
+                                            "distribution": distribution,
+                                            "operation": operation,
+                                            "params": {
+                                                MatmulTTConfig.TILE_W_KEY: tile_w,
+                                                MatmulTTConfig.TRANSPOSE_KEY: transpose,
+                                            },
+                                        }
+                                        flattened.append((case_info, metrics))
+
+                    else:
+                        # Handle other operations with axis
+                        for axis, metrics in op_data.items():
+                            if isinstance(metrics, dict) and "pcc" in metrics:
+                                case_info = {
                                     "shape_type": shape_type,
                                     "pattern": pattern,
-                                    "distribution": dist,
-                                    "axis": axis,
+                                    "distribution": distribution,
+                                    "operation": operation,
+                                    "params": {"axis": axis},
                                 }
+                                flattened.append((case_info, metrics))
 
-                                operation_stats[op_name]["all_metrics"].append(metric_summary)
-                                operation_stats[op_name]["by_axis"][axis].append(metric_summary)
+    return flattened
 
-                                if shape_type not in operation_stats[op_name]["by_shape_type"]:
-                                    operation_stats[op_name]["by_shape_type"][shape_type] = []
-                                operation_stats[op_name]["by_shape_type"][shape_type].append(metric_summary)
 
-    # Compute summary statistics
-    operation_summary = {}
-    for op_name, stats in operation_stats.items():
-        all_pcc = [m["pcc"] for m in stats["all_metrics"]]
-        all_errors = [m["max_abs_error"] for m in stats["all_metrics"]]
-        all_ulp = [m["ulp_max"] for m in stats["all_metrics"]]
+def _format_worst_cases_report(worst_cases: dict, top_n: int = 5):
+    """
+    Format worst cases into a readable report.
 
-        operation_summary[op_name] = {
-            "overall": {
-                "avg_pcc": np.mean(all_pcc),
-                "min_pcc": np.min(all_pcc),
-                "std_pcc": np.std(all_pcc),
-                "avg_error": np.mean(all_errors),
-                "max_error": np.max(all_errors),
-                "avg_ulp": np.mean(all_ulp),
-                "max_ulp": np.max(all_ulp),
-                "num_tests": len(stats["all_metrics"]),
-            },
-            "axis_comparison": {},
-        }
+    Args:
+        worst_cases: Dictionary returned by _find_worst_cases
+        top_n: Number of cases to show per metric
 
-        # Analyze by axis
-        for axis in [0, 1]:
-            if stats["by_axis"][axis]:
-                axis_pcc = [m["pcc"] for m in stats["by_axis"][axis]]
-                operation_summary[op_name]["axis_comparison"][f"axis_{axis}"] = {
-                    "avg_pcc": np.mean(axis_pcc),
-                    "min_pcc": np.min(axis_pcc),
-                }
+    Returns:
+        Formatted string report
+    """
+    report_lines = ["# Worst Cases Analysis\n"]
 
-    # Rank operations by sensitivity
-    operation_ranking = sorted(operation_summary.items(), key=lambda x: x[1]["overall"]["avg_pcc"])
-
-    return {
-        "operation_summary": operation_summary,
-        "operation_ranking": operation_ranking,
-        "most_sensitive_operation": operation_ranking[0] if operation_ranking else None,
-        "axis_effects": {
-            op: summary["axis_comparison"] for op, summary in operation_summary.items() if summary["axis_comparison"]
-        },
+    metric_descriptions = {
+        ResultKeys.PCC_KEY: "Lowest PCC (Pearson Correlation Coefficient)",
+        ResultKeys.MAX_ABS_ERROR: "Highest Maximum Absolute Error",
+        ResultKeys.MEAN_ABS_ERROR: "Highest Mean Absolute Error",
+        ResultKeys.MAX_REL_ERROR: "Highest Maximum Relative Error",
+        ResultKeys.ULP_MAX: "Highest Maximum ULP Error",
     }
 
+    for metric_name, cases in worst_cases.items():
+        if not cases:
+            continue
 
-def _analyze_shape_effects(results):
-    """Analyze how different shapes affect precision"""
-    shape_stats = {}
+        report_lines.append(f"\n## {metric_descriptions.get(metric_name, metric_name)}\n")
 
-    # Process each shape type
-    for shape_type, shape_results in results.items():
-        shape_metrics = []
+        for i, case_data in enumerate(cases[:top_n], 1):
+            case = case_data["case"]
+            value = case_data["value"]
+            metrics = case_data["full_metrics"]
 
-        if isinstance(shape_results, dict):
-            # For multi_tile and single_tile
-            if shape_type in ["single_tile", "multi_tile"]:
-                for pattern, pattern_results in shape_results.items():
-                    if isinstance(pattern_results, dict):
-                        for dist, dist_results in pattern_results.items():
-                            if isinstance(dist_results, dict):
-                                for op, metrics in dist_results.items():
-                                    shape_metrics.append(
-                                        {
-                                            "pcc": metrics.get("pcc", 1.0),
-                                            "max_abs_error": metrics.get("max_abs_error", 0),
-                                            "ulp_max": metrics.get("ulp_max", 0),
-                                        }
-                                    )
+            report_lines.append(f"\n### Case {i}")
+            report_lines.append(f"- **Value**: {value:.6f}" if value < 100 else f"- **Value**: {value:,.0f}")
+            report_lines.append(f"- **Shape Type**: {case['shape_type']}")
+            report_lines.append(f"- **Pattern**: {case['pattern']}")
+            report_lines.append(f"- **Distribution**: {case['distribution']}")
+            report_lines.append(f"- **Operation**: {case['operation']}")
 
-            # For rectangular shapes
-            elif shape_type == "rectangular":
-                for specific_shape, specific_results in shape_results.items():
-                    if isinstance(specific_results, dict):
-                        for pattern, pattern_results in specific_results.items():
-                            if isinstance(pattern_results, dict):
-                                for dist, dist_results in pattern_results.items():
-                                    if isinstance(dist_results, dict):
-                                        for op, metrics in dist_results.items():
-                                            shape_metrics.append(
-                                                {
-                                                    "pcc": metrics.get("pcc", 1.0),
-                                                    "max_abs_error": metrics.get("max_abs_error", 0),
-                                                    "ulp_max": metrics.get("ulp_max", 0),
-                                                    "specific_shape": specific_shape,
-                                                }
-                                            )
+            # Add operation-specific parameters
+            if case["params"]:
+                for param_name, param_value in case["params"].items():
+                    report_lines.append(f"- **{param_name.replace('_', ' ').title()}**: {param_value}")
 
-        if shape_metrics:
-            pcc_values = [m["pcc"] for m in shape_metrics]
-            error_values = [m["max_abs_error"] for m in shape_metrics]
-            ulp_values = [m["ulp_max"] for m in shape_metrics]
+            # Add other relevant metrics for context
+            report_lines.append("\n**Other Metrics:**")
+            for key, val in metrics.items():
+                if key not in ["ulp_percentiles", "input_stats"] and key != metric_name:
+                    if isinstance(val, bool):
+                        report_lines.append(f"- {key}: {'True' if val else 'False'}")
+                    elif isinstance(val, (int, float)):
+                        if val < 100:
+                            report_lines.append(f"- {key}: {val:.6f}")
+                        else:
+                            report_lines.append(f"- {key}: {val:,.0f}")
 
-            shape_stats[shape_type] = {
-                "avg_pcc": np.mean(pcc_values),
-                "min_pcc": np.min(pcc_values),
-                "std_pcc": np.std(pcc_values),
-                "avg_error": np.mean(error_values),
-                "max_error": np.max(error_values),
-                "avg_ulp": np.mean(ulp_values),
-                "max_ulp": np.max(ulp_values),
-                "num_tests": len(shape_metrics),
-                "percentiles": {
-                    "pcc_10th": np.percentile(pcc_values, 10),
-                    "pcc_90th": np.percentile(pcc_values, 90),
-                    "error_90th": np.percentile(error_values, 90),
-                    "error_99th": np.percentile(error_values, 99),
-                },
-            }
+    return "\n".join(report_lines)
 
-    # Compare single vs multi tile
-    comparison = {}
-    if "single_tile" in shape_stats and "multi_tile" in shape_stats:
-        comparison["tile_scaling"] = {
-            "pcc_degradation": shape_stats["single_tile"]["avg_pcc"] - shape_stats["multi_tile"]["avg_pcc"],
-            "error_increase_ratio": shape_stats["multi_tile"]["avg_error"]
-            / (shape_stats["single_tile"]["avg_error"] + 1e-10),
-            "ulp_increase_ratio": shape_stats["multi_tile"]["avg_ulp"]
-            / (shape_stats["single_tile"]["avg_ulp"] + 1e-10),
-        }
 
-    # Analyze rectangular shapes
-    if "rectangular" in shape_stats:
-        # Extract specific rectangular shape stats if available
-        rect_analysis = {
-            "aspect_ratio_effects": "Analysis of how aspect ratio affects precision"
-            # Add more detailed analysis here based on specific shapes
-        }
-        comparison["rectangular_effects"] = rect_analysis
+def _create_worst_cases_summary_table(worst_cases: dict, metric="pcc", top_n=10) -> str:
+    """
+    Create a summary table for a specific metric's worst cases.
 
-    return {
-        "shape_summary": shape_stats,
-        "shape_comparison": comparison,
+    Args:
+        worst_cases: Dictionary returned by _find_worst_cases
+        metric: Metric to create table for
+        top_n: Number of rows to include
+
+    Returns:
+        Markdown table string
+    """
+    if metric not in worst_cases or not worst_cases[metric]:
+        return f"No data available for {metric}"
+
+    headers = ["Rank", "Value", "Shape Type", "Pattern", "Distribution", "Operation", "Parameters"]
+    table_lines = ["| " + " | ".join(headers) + " |", "|" + "|".join(["---"] * len(headers)) + "|"]
+
+    for i, case_data in enumerate(worst_cases[metric][:top_n], 1):
+        case = case_data["case"]
+        value = case_data["value"]
+
+        # Format parameters
+        params_str = ", ".join([f"{k}={v}" for k, v in case["params"].items()]) if case["params"] else "-"
+
+        # Format value based on metric type
+        if metric == "pcc" or "rel" in metric:
+            value_str = f"{value:.6f}"
+        elif value < 100:
+            value_str = f"{value:.2f}"
+        else:
+            value_str = f"{value:,.0f}"
+
+        row = [
+            str(i),
+            value_str,
+            case["shape_type"],
+            case["pattern"],
+            case["distribution"],
+            case["operation"],
+            params_str,
+        ]
+        table_lines.append("| " + " | ".join(row) + " |")
+
+    return "\n".join(table_lines)
+
+
+def worst_cases_analysis(
+    results, output_dir=Filepaths.RESULTS_DIRECTORY, top_n_analysis=10, top_n_per_metric=0, metrics_to_track=None
+) -> dict:
+    """
+    Find worst cases and save complete analysis to markdown file.
+
+    Args:
+        results: Nested dictionary with operation results
+        output_file: Path to output markdown file
+        top_n_analysis: Number of worst cases to find for analysis
+        top_n_per_metric: Number of cases to show in detailed report per metric
+        metrics_to_track: List of metrics to track
+    """
+    # Create output directory
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
+    output_file = Path(output_dir) / Path(Filepaths.WORST_CASES_ANALYSIS_FILENAME)
+
+    # Find worst cases
+    worst_cases = _find_worst_cases(results, top_n=top_n_analysis, metrics_to_track=metrics_to_track)
+
+    # Build complete markdown content
+    markdown_content = []
+
+    # Add detailed worst cases report
+    if top_n_per_metric > 0:
+        markdown_content.append(_format_worst_cases_report(worst_cases, top_n=top_n_per_metric))
+
+    # Add summary tables for each metric
+    markdown_content.append("\n\n# Summary Tables\n")
+
+    metric_descriptions = {
+        ResultKeys.PCC_KEY: "PCC (Pearson Correlation Coefficient) - Worst Cases",
+        ResultKeys.MAX_ABS_ERROR_KEY: "Maximum Absolute Error - Worst Cases",
+        ResultKeys.MEAN_ABS_ERROR_KEY: "Mean Absolute Error - Worst Cases",
+        ResultKeys.MAX_REL_ERROR_KEY: "Maximum Relative Error - Worst Cases",
+        ResultKeys.ULP_MAX_KEY: "Maximum ULP Error - Worst Cases",
     }
 
+    for metric in worst_cases.keys():
+        if worst_cases[metric]:  # Only add table if there are cases
+            markdown_content.append(f"\n## {metric_descriptions.get(metric, metric)}\n")
+            markdown_content.append(_create_worst_cases_summary_table(worst_cases, metric=metric, top_n=top_n_analysis))
 
-# Main module function
-def analyze_results(results: dict) -> dict:
-    """Comprehensive analysis of all results"""
+    # Write to file
+    with open(output_file, "w", encoding="utf-8") as f:
+        f.write("\n".join(markdown_content))
 
-    analysis = {
-        "worst_cases": _find_worst_cases(results),
-        "pattern_impact": _analyze_pattern_impact(results),
-        "operation_sensitivity": _analyze_operation_sensitivity(results),
-        "shape_effects": _analyze_shape_effects(results),
-    }
-    print(analysis)
-    return analysis
+    logger.info(f"Worst cases analysis saved to {output_file}")
+    return worst_cases
+
+
+#
+# All case report
+#
+def save_results_to_json(all_results: dict, output_directory: str = Filepaths.RESULTS_DIRECTORY) -> None:
+    """Save the raw results to a JSON file for further analysis if needed"""
+    # Create output directory
+    Path(output_directory).mkdir(parents=True, exist_ok=True)
+
+    # Save file
+    file_path = Path(output_directory) / Path(Filepaths.RAW_RESULTS_JSON_FILENAME)
+    with open(file_path, "w") as f:
+        json.dump(all_results, f, indent=2)
+
+    logger.info(f"Raw results saved to {file_path}")
+
+
+def _create_matmul_table(results: dict, headers: list) -> str:
+    """Create markdown table for matmul operations."""
+
+    table_lines = ["| " + " | ".join(headers) + " |", "|" + "|".join(["---"] * len(headers)) + "|"]
+
+    for operation, result in results:
+        row = [
+            operation,
+            f"{result[ResultKeys.PCC_KEY]:.6f}",
+            f"{result[ResultKeys.MAX_ABS_ERROR_KEY]:.2f}",
+            f"{result[ResultKeys.MEAN_ABS_ERROR_KEY]:.2f}",
+            f"{result[ResultKeys.MAX_REL_ERROR_KEY]:.6f}",
+            f"{result[ResultKeys.MEAN_REL_ERROR_KEY]:.6f}",
+            f"{result[ResultKeys.ULP_MEAN_KEY]:.2f}",
+            f"{result[ResultKeys.ULP_MAX_KEY]:.0f}",
+            "True" if result[ResultKeys.ALLCLOSE_1E_2_KEY] else "False",
+            "True" if result[ResultKeys.ALLCLOSE_1E_3_KEY] else "False",
+        ]
+        table_lines.append("| " + " | ".join(row) + " |")
+
+    return "\n".join(table_lines)
+
+
+def _create_matmul_tt_table(results: dict, headers: list) -> str:
+    """Create markdown table for matmul_tt operations."""
+
+    table_lines = ["| " + " | ".join(headers) + " |", "|" + "|".join(["---"] * len(headers)) + "|"]
+
+    for operation, tile_w, transpose, result in results:
+        row = [
+            operation,
+            str(tile_w),
+            str(transpose),
+            f"{result[ResultKeys.PCC_KEY]:.6f}",
+            f"{result[ResultKeys.MAX_ABS_ERROR_KEY]:.2f}",
+            f"{result[ResultKeys.MEAN_ABS_ERROR_KEY]:.2f}",
+            f"{result[ResultKeys.MAX_REL_ERROR_KEY]:.6f}",
+            f"{result[ResultKeys.MEAN_REL_ERROR_KEY]:.6f}",
+            f"{result[ResultKeys.ULP_MEAN_KEY]:.2f}",
+            f"{result[ResultKeys.ULP_MAX_KEY]:.0f}",
+            "True" if result[ResultKeys.ALLCLOSE_1E_2_KEY] else "False",
+            "True" if result[ResultKeys.ALLCLOSE_1E_3_KEY] else "False",
+        ]
+        table_lines.append("| " + " | ".join(row) + " |")
+
+    return "\n".join(table_lines)
+
+
+def _create_other_ops_table(results: dict, headers: list) -> str:
+    """Create markdown table for other operations (with axis)."""
+
+    table_lines = ["| " + " | ".join(headers) + " |", "|" + "|".join(["---"] * len(headers)) + "|"]
+
+    for operation, axis, result in results:
+        row = [
+            operation,
+            str(axis),
+            f"{result[ResultKeys.PCC_KEY]:.6f}",
+            f"{result[ResultKeys.MAX_ABS_ERROR_KEY]:.2f}",
+            f"{result[ResultKeys.MEAN_ABS_ERROR_KEY]:.2f}",
+            f"{result[ResultKeys.MAX_REL_ERROR_KEY]:.6f}",
+            f"{result[ResultKeys.MEAN_REL_ERROR_KEY]:.6f}",
+            f"{result[ResultKeys.ULP_MEAN_KEY]:.2f}",
+            f"{result[ResultKeys.ULP_MAX_KEY]:.0f}",
+            "True" if result[ResultKeys.ALLCLOSE_1E_2_KEY] else "False",
+            "True" if result[ResultKeys.ALLCLOSE_1E_3_KEY] else "False",
+        ]
+        table_lines.append("| " + " | ".join(row) + " |")
+
+    return "\n".join(table_lines)
+
+
+def _dict_to_markdown(results_dict):
+    """
+    Convert a nested dictionary of operation results to a markdown document.
+
+    Args:
+        results_dict: Dictionary with structure [shape_type][pattern][distribution][operation][...]
+
+    Returns:
+        str: Formatted markdown document
+    """
+    headers = [
+        "Operation",
+        "Axis",
+        "PCC",
+        "Max Abs Error",
+        "Mean Abs Error",
+        "Max Rel Error",
+        "Mean Rel Error",
+        "ULP Mean",
+        "ULP Max",
+        "Allclose 1e-2",
+        "Allclose 1e-3",
+    ]
+
+    markdown_lines = ["# Operation Results Report\n"]
+
+    # Iterate through shape types (main sections)
+    for shape_type, shape_data in results_dict.items():
+        markdown_lines.append(f"\n## ========== Shape type: {shape_type} ==========\n")
+
+        # Iterate through patterns (subsections)
+        for pattern, pattern_data in shape_data.items():
+            markdown_lines.append(f"\n### ======= Pattern: {pattern} ======= \n")
+
+            # Iterate through distributions (sub-subsections)
+            for distribution, distribution_data in pattern_data.items():
+                markdown_lines.append(f"\n#### ===== Distribution: {distribution} =====\n")
+
+                # Group results by operation type
+                matmul_results = []
+                matmul_tt_results = []
+                other_results = []
+
+                for operation, operation_data in distribution_data.items():
+                    if operation == OperationType.MATMUL_KEY:
+                        matmul_results.append((operation, operation_data))
+                    elif operation == OperationType.MATMUL_TT_KEY:
+                        # Process matmul_tt nested structure
+                        for tile_w, tile_data in operation_data.items():
+                            for transpose, result in tile_data.items():
+                                matmul_tt_results.append((operation, tile_w, transpose, result))
+                    else:
+                        # Process other operations with axis
+                        for axis, result in operation_data.items():
+                            other_results.append((operation, axis, result))
+
+                # Generate tables for each operation type
+                if matmul_results:
+                    markdown_lines.append("\n##### MatMul Operations\n")
+                    markdown_lines.append(_create_matmul_table(matmul_results, headers))
+
+                if matmul_tt_results:
+                    markdown_lines.append("\n##### MatMul TT Operations\n")
+                    markdown_lines.append(_create_matmul_tt_table(matmul_tt_results, headers))
+
+                if other_results:
+                    markdown_lines.append("\n##### Other Operations\n")
+                    markdown_lines.append(_create_other_ops_table(other_results, headers))
+
+    return "\n".join(markdown_lines)
+
+
+def generate_results_doc(all_results: dict, output_directory: str = Filepaths.RESULTS_DIRECTORY) -> None:
+    markdown_content = _dict_to_markdown(all_results)
+
+    # Create output directory
+    Path(output_directory).mkdir(parents=True, exist_ok=True)
+
+    # Save results
+    file_path = Path(output_directory) / Path(Filepaths.RAW_RESULTS_MARKDOWN_FILENAME)
+    with open(file_path, "w", encoding="utf-8") as f:
+        f.write(markdown_content)
+
+    logger.info(f"Report saved to {file_path}")
