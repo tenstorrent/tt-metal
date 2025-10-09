@@ -114,7 +114,7 @@ class MobilenetV3TestInfra:
         return True, msg
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 12288}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size,input_channels,height,width",
     [

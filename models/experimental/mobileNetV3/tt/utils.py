@@ -38,7 +38,7 @@ class Conv:
         math_approx_mode=False,
         input_channels_alignment=32,
         reshard_if_not_optimal=False,
-        slice_config=None,
+        slice_config=ttnn.Conv2dL1FullSliceConfig,
         dtype=None,
         weights_dtype=None,
         math_fidelity=None,
