@@ -1847,7 +1847,7 @@ def test_cbrt_arange(device):
     assert_with_ulp(golden, result, 2, allow_nonfinite=True)
 
 
-@pytest.mark.parametrize("ttnn_op", [ttnn.isinf, ttnn.isnan, ttnn.isposinf, ttnn.isneginf])
+@pytest.mark.parametrize("ttnn_op", [ttnn.isinf, ttnn.isnan, ttnn.isposinf, ttnn.isneginf, ttnn.isfinite])
 @pytest.mark.parametrize(
     "torch_dtype, ttnn_dtype",
     [
@@ -1858,7 +1858,8 @@ def test_cbrt_arange(device):
 )
 def test_inf_nan_check(ttnn_op, torch_dtype, ttnn_dtype, device):
     in_data = torch.tensor(
-        [float("-inf"), float("inf"), float("nan"), 5.0, -5.0, 0.0, -0.0, 1e38, 1e-45], dtype=torch_dtype
+        [float("-inf"), float("inf"), float("nan"), 5.0, -5.0, 0.0, -0.0, 1e38, 1e-45, 3.4e38, -3.4e38],
+        dtype=torch_dtype,
     )
     input_tensor = ttnn.from_torch(in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
 

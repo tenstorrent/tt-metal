@@ -80,7 +80,7 @@ int main(int argc, char** argv) {
 
     // Initialize CSV file for bandwidth results if any of the configs have benchmark mode set
     if (benchmark_mode) {
-        test_context.initialize_csv_file();
+        test_context.initialize_bandwidth_results_csv_file();
     }
 
     cmdline_parser.apply_overrides(raw_test_configs);
@@ -205,6 +205,11 @@ int main(int argc, char** argv) {
     test_context.close_devices();
 
     tt::tt_metal::MetalContext::instance().rtoptions().set_enable_fabric_telemetry(false);
+
+    // Bandwidth summary is generated after all tests have run, to collect multi-run statistics
+    if (benchmark_mode) {
+        test_context.generate_bandwidth_summary();
+    }
 
     // Setup Bandwidth CSV files for CI to upload
     if (benchmark_mode) {

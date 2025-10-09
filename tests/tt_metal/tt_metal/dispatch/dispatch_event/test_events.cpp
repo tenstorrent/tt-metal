@@ -76,7 +76,8 @@ TEST_F(UnitMeshCQEventFixture, TestEventsDataMovementWrittenToCompletionQueueInO
         uint32_t event;
         if (data_movement_mode == DataMovementMode::WRITE) {
             for (size_t i = 0; i < num_buffers; i++) {
-                uint32_t host_addr = last_read_address + i * completion_queue_page_size + completion_queue_event_offset;
+                uint32_t host_addr =
+                    last_read_address + (i * completion_queue_page_size) + completion_queue_event_offset;
                 tt::tt_metal::MetalContext::instance().get_cluster().read_sysmem(
                     &event, 4, host_addr, mmio_device_id, channel);
                 EXPECT_EQ(event, ++expected_event_id);  // Event ids start at 1
@@ -85,7 +86,7 @@ TEST_F(UnitMeshCQEventFixture, TestEventsDataMovementWrittenToCompletionQueueInO
             for (size_t i = 0; i < num_buffers; i++) {
                 // Extra entry in the completion queue is from the buffer read data.
                 uint32_t host_addr =
-                    completion_queue_base + (2 * i + 1) * completion_queue_page_size + completion_queue_event_offset;
+                    completion_queue_base + ((2 * i + 1) * completion_queue_page_size) + completion_queue_event_offset;
                 tt::tt_metal::MetalContext::instance().get_cluster().read_sysmem(
                     &event, 4, host_addr, mmio_device_id, channel);
                 EXPECT_EQ(event, ++expected_event_id);  // Event ids start at 1
@@ -105,7 +106,7 @@ TEST_F(UnitMeshCQEventFixture, TestEventsEnqueueRecordEventIssueQueueWrap) {
     auto start = std::chrono::system_clock::now();
 
     for (size_t i = 0; i < num_events; i++) {
-        auto event = distributed::EnqueueRecordEventToHost(cq);
+        auto event = cq.enqueue_record_event_to_host();
         EXPECT_EQ(event.id(), cmds_issued_per_cq + 1);  // Event ids start at 1
         EXPECT_EQ(event.mesh_cq_id(), cq.id());
         cmds_issued_per_cq++;
@@ -129,8 +130,8 @@ TEST_F(UnitMeshCQEventFixture, TestEventsEnqueueRecordEventAndSynchronize) {
 
     // A bunch of events recorded, occasionally will sync from host.
     for (size_t i = 0; i < num_events; i++) {
-        auto event = sync_events.emplace_back(
-            std::make_shared<distributed::MeshEvent>(distributed::EnqueueRecordEventToHost(cq)));
+        auto event =
+            sync_events.emplace_back(std::make_shared<distributed::MeshEvent>(cq.enqueue_record_event_to_host()));
         // Host synchronize every N number of events.
         if (i > 0 && ((i % num_events_between_sync) == 0)) {
             distributed::EventSynchronize(*event);
@@ -159,8 +160,8 @@ TEST_F(UnitMeshCQEventFixture, TestEventsQueueWaitForEventBasic) {
 
     // A bunch of events recorded, occasionally will sync from device.
     for (size_t i = 0; i < num_events; i++) {
-        auto event = sync_events.emplace_back(
-            std::make_shared<distributed::MeshEvent>(distributed::EnqueueRecordEventToHost(cq)));
+        auto event =
+            sync_events.emplace_back(std::make_shared<distributed::MeshEvent>(cq.enqueue_record_event_to_host()));
 
         // Device synchronize every N number of events.
         if (i > 0 && ((i % num_events_between_sync) == 0)) {
@@ -192,8 +193,8 @@ TEST_F(UnitMeshCQEventFixture, TestEventsEventsQueryBasic) {
 
     // Record many events, occasionally query from host, but cannot guarantee completion status.
     for (size_t i = 0; i < num_events; i++) {
-        auto event = sync_events.emplace_back(
-            std::make_shared<distributed::MeshEvent>(distributed::EnqueueRecordEventToHost(cq)));
+        auto event =
+            sync_events.emplace_back(std::make_shared<distributed::MeshEvent>(cq.enqueue_record_event_to_host()));
 
         if (i > 0 && ((i % num_events_between_query) == 0)) {
             [[maybe_unused]] auto status = distributed::EventQuery(*event);
@@ -218,7 +219,7 @@ TEST_F(UnitMeshCQEventFixture, TestEventsEventsQueryBasic) {
         mesh_device.get(),
         cq.id(),
         distributed::MeshCoordinateRange(distributed::MeshCoordinate(0, 0), distributed::MeshCoordinate(0, 0)));
-    distributed::EnqueueRecordEvent(cq);
+    cq.enqueue_record_event();
     event_status = distributed::EventQuery(*future_event);
     EXPECT_EQ(event_status, false);
 
@@ -248,7 +249,7 @@ TEST_F(UnitMeshCQEventFixture, TestEventsMixedWriteBufferRecordWaitSynchronize) 
         tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device->id());
     for (size_t i = 0; i < num_buffers; i++) {
         log_debug(tt::LogTest, "i: {} - Going to record event, write, wait, synchronize.", i);
-        auto event = std::make_shared<distributed::MeshEvent>(distributed::EnqueueRecordEventToHost(cq));
+        auto event = std::make_shared<distributed::MeshEvent>(cq.enqueue_record_event_to_host());
         EXPECT_EQ(event->mesh_cq_id(), cq.id());
         EXPECT_EQ(event->id(), events_issued_per_cq + 1);  // Event ids start at 1
 
@@ -269,7 +270,7 @@ TEST_F(UnitMeshCQEventFixture, TestEventsMixedWriteBufferRecordWaitSynchronize) 
     // Read completion queue and ensure we see expected event IDs
     uint32_t event_id;
     for (size_t i = 0; i < num_buffers * num_events_per_cq; i++) {
-        uint32_t host_addr = completion_queue_base + i * completion_queue_page_size + completion_queue_event_offset;
+        uint32_t host_addr = completion_queue_base + (i * completion_queue_page_size) + completion_queue_event_offset;
         tt::tt_metal::MetalContext::instance().get_cluster().read_sysmem(
             &event_id, 4, host_addr, mmio_device_id, channel);
         EXPECT_EQ(event_id, ++expected_event_id);
