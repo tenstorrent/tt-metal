@@ -85,31 +85,43 @@ void py_module(nb::module_& m, nb::module_& m_modules) {
 
     {
         auto py_gpt2_module = static_cast<nb::module_>(m.attr("gpt2"));
-        py_gpt2_module.def("create_gpt2_model", [](const models::gpt2::TransformerConfig& config) {
-            return models::gpt2::create(config);
-        });
+        py_gpt2_module.def(
+            "create_gpt2_model",
+            [](const models::gpt2::TransformerConfig& config) { return models::gpt2::create(config); },
+            "Create GPT2 model");
 
         auto py_gpt2_transformer_config_experimental =
             static_cast<nb::class_<models::gpt2::TransformerConfig::Experimental>>(
                 py_gpt2_module.attr("GPT2TransformerConfigExperimental"));
         py_gpt2_transformer_config_experimental.def(nb::init<>());
         py_gpt2_transformer_config_experimental.def_rw(
-            "use_composite_layernorm", &models::gpt2::TransformerConfig::Experimental::use_composite_layernorm);
+            "use_composite_layernorm",
+            &models::gpt2::TransformerConfig::Experimental::use_composite_layernorm,
+            "Use composite layernorm");
 
         auto py_gpt2_transformer_config =
             static_cast<nb::class_<models::gpt2::TransformerConfig>>(py_gpt2_module.attr("GPT2TransformerConfig"));
         py_gpt2_transformer_config.def(nb::init<>());
-        py_gpt2_transformer_config.def_rw("num_heads", &models::gpt2::TransformerConfig::num_heads);
-        py_gpt2_transformer_config.def_rw("embedding_dim", &models::gpt2::TransformerConfig::embedding_dim);
-        py_gpt2_transformer_config.def_rw("dropout_prob", &models::gpt2::TransformerConfig::dropout_prob);
-        py_gpt2_transformer_config.def_rw("num_blocks", &models::gpt2::TransformerConfig::num_blocks);
-        py_gpt2_transformer_config.def_rw("vocab_size", &models::gpt2::TransformerConfig::vocab_size);
-        py_gpt2_transformer_config.def_rw("max_sequence_length", &models::gpt2::TransformerConfig::max_sequence_length);
-        py_gpt2_transformer_config.def_rw("runner_type", &models::gpt2::TransformerConfig::runner_type);
-        py_gpt2_transformer_config.def_rw("weight_tying", &models::gpt2::TransformerConfig::weight_tying);
+        py_gpt2_transformer_config.def_rw("num_heads", &models::gpt2::TransformerConfig::num_heads, "Number of heads");
         py_gpt2_transformer_config.def_rw(
-            "positional_embedding_type", &models::gpt2::TransformerConfig::positional_embedding_type);
-        py_gpt2_transformer_config.def_rw("experimental", &models::gpt2::TransformerConfig::experimental);
+            "embedding_dim", &models::gpt2::TransformerConfig::embedding_dim, "Embedding dimensions");
+        py_gpt2_transformer_config.def_rw(
+            "dropout_prob", &models::gpt2::TransformerConfig::dropout_prob, "Dropout probability");
+        py_gpt2_transformer_config.def_rw(
+            "num_blocks", &models::gpt2::TransformerConfig::num_blocks, "Number of blocks");
+        py_gpt2_transformer_config.def_rw(
+            "vocab_size", &models::gpt2::TransformerConfig::vocab_size, "Vocabulary size");
+        py_gpt2_transformer_config.def_rw(
+            "max_sequence_length", &models::gpt2::TransformerConfig::max_sequence_length, "Max sequence length");
+        py_gpt2_transformer_config.def_rw("runner_type", &models::gpt2::TransformerConfig::runner_type, "Runner type");
+        py_gpt2_transformer_config.def_rw(
+            "weight_tying", &models::gpt2::TransformerConfig::weight_tying, "Weight tying");
+        py_gpt2_transformer_config.def_rw(
+            "positional_embedding_type",
+            &models::gpt2::TransformerConfig::positional_embedding_type,
+            "Positional embedding type");
+        py_gpt2_transformer_config.def_rw(
+            "experimental", &models::gpt2::TransformerConfig::experimental, "Experimental config options");
 
         auto py_gpt2 = static_cast<nb::class_<models::gpt2::Transformer, models::BaseTransformer>>(
             py_gpt2_module.attr("GPT2Transformer"));
@@ -118,21 +130,26 @@ void py_module(nb::module_& m, nb::module_& m_modules) {
 
     {
         auto py_linear_regression_module = static_cast<nb::module_>(m.attr("linear_regression"));
-        py_linear_regression_module.def("create_linear_regression_model", &models::linear_regression::create);
+        py_linear_regression_module.def(
+            "create_linear_regression_model", &models::linear_regression::create, "Create linear regression model");
     }
 
     {
         // Distributed creators
         auto py_distributed = static_cast<nb::module_>(m.attr("distributed"));
         auto py_distributed_gpt2 = py_distributed.def_submodule("gpt2");
-        py_distributed_gpt2.def("create_gpt2_model", [](const models::gpt2::TransformerConfig& config) {
-            return ttml::models::distributed::gpt2::create(config);
-        });
+        py_distributed_gpt2.def(
+            "create_gpt2_model",
+            [](const models::gpt2::TransformerConfig& config) {
+                return ttml::models::distributed::gpt2::create(config);
+            },
+            "Create GPT2 model");
 
         auto py_distributed_llama = py_distributed.def_submodule("llama");
-        py_distributed_llama.def("create_llama_model", [](const models::llama::LlamaConfig& config) {
-            return ttml::models::distributed::llama::create(config);
-        });
+        py_distributed_llama.def(
+            "create_llama_model",
+            [](const models::llama::LlamaConfig& config) { return ttml::models::distributed::llama::create(config); },
+            "Create Llama model");
     }
 
     {
@@ -140,21 +157,25 @@ void py_module(nb::module_& m, nb::module_& m_modules) {
 
         auto py_llama_config = static_cast<nb::class_<models::llama::LlamaConfig>>(py_llama_module.attr("LlamaConfig"));
         py_llama_config.def(nb::init<>());
-        py_llama_config.def_rw("num_heads", &models::llama::LlamaConfig::num_heads);
-        py_llama_config.def_rw("num_groups", &models::llama::LlamaConfig::num_groups);
-        py_llama_config.def_rw("embedding_dim", &models::llama::LlamaConfig::embedding_dim);
-        py_llama_config.def_rw("intermediate_dim", &models::llama::LlamaConfig::intermediate_dim);
-        py_llama_config.def_rw("dropout_prob", &models::llama::LlamaConfig::dropout_prob);
-        py_llama_config.def_rw("theta", &models::llama::LlamaConfig::theta);
-        py_llama_config.def_rw("num_blocks", &models::llama::LlamaConfig::num_blocks);
-        py_llama_config.def_rw("vocab_size", &models::llama::LlamaConfig::vocab_size);
-        py_llama_config.def_rw("max_sequence_length", &models::llama::LlamaConfig::max_sequence_length);
-        py_llama_config.def_rw("runner_type", &models::llama::LlamaConfig::runner_type);
-        py_llama_config.def_rw("weight_tying", &models::llama::LlamaConfig::weight_tying);
-        py_llama_config.def_rw("scaling_factor", &models::llama::LlamaConfig::scaling_factor);
-        py_llama_config.def_rw("high_freq_factor", &models::llama::LlamaConfig::high_freq_factor);
-        py_llama_config.def_rw("low_freq_factor", &models::llama::LlamaConfig::low_freq_factor);
-        py_llama_config.def_rw("original_context_length", &models::llama::LlamaConfig::original_context_length);
+        py_llama_config.def_rw("num_heads", &models::llama::LlamaConfig::num_heads, "Number of heads");
+        py_llama_config.def_rw("num_groups", &models::llama::LlamaConfig::num_groups, "Number of groups");
+        py_llama_config.def_rw("embedding_dim", &models::llama::LlamaConfig::embedding_dim, "Embedding dimensions");
+        py_llama_config.def_rw(
+            "intermediate_dim", &models::llama::LlamaConfig::intermediate_dim, "Intermediate dimensions");
+        py_llama_config.def_rw("dropout_prob", &models::llama::LlamaConfig::dropout_prob, "Dropout probability");
+        py_llama_config.def_rw("theta", &models::llama::LlamaConfig::theta, "Theta");
+        py_llama_config.def_rw("num_blocks", &models::llama::LlamaConfig::num_blocks, "Number of blocks");
+        py_llama_config.def_rw("vocab_size", &models::llama::LlamaConfig::vocab_size, "Vocabulary size");
+        py_llama_config.def_rw(
+            "max_sequence_length", &models::llama::LlamaConfig::max_sequence_length, "Max sequence length");
+        py_llama_config.def_rw("runner_type", &models::llama::LlamaConfig::runner_type, "Runner type");
+        py_llama_config.def_rw("weight_tying", &models::llama::LlamaConfig::weight_tying, "Weight tying");
+        py_llama_config.def_rw("scaling_factor", &models::llama::LlamaConfig::scaling_factor, "Scaling factor");
+        py_llama_config.def_rw(
+            "high_freq_factor", &models::llama::LlamaConfig::high_freq_factor, "High frequency factor");
+        py_llama_config.def_rw("low_freq_factor", &models::llama::LlamaConfig::low_freq_factor, "Low frequency factor");
+        py_llama_config.def_rw(
+            "original_context_length", &models::llama::LlamaConfig::original_context_length, "Original context length");
 
         auto py_llama = static_cast<nb::class_<models::llama::Llama>>(py_llama_module.attr("Llama"));
         py_llama.def(nb::init<models::llama::LlamaConfig>());
@@ -176,7 +197,11 @@ void py_module(nb::module_& m, nb::module_& m_modules) {
                     .input_features = input_features,
                     .hidden_features = hidden_features,
                     .output_features = output_features};
-            });
+            },
+            nb::arg("input_features"),
+            nb::arg("hidden_features"),
+            nb::arg("output_features"),
+            "Create multilayer perceptron parameters");
         py_mlp_params.def_rw("input_features", &ttml::modules::MultiLayerPerceptronParameters::input_features);
         py_mlp_params.def_rw("hidden_features", &ttml::modules::MultiLayerPerceptronParameters::hidden_features);
         py_mlp_params.def_rw("output_features", &ttml::modules::MultiLayerPerceptronParameters::output_features);
