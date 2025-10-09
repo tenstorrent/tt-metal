@@ -67,7 +67,6 @@ private:
     std::array<std::optional<size_t>, builder_config::num_receiver_channels> downstream_edm_vcs_worker_location_info_address = {};
 };
 
-// TODO: add transient vs persistent variants
 /*
  * Static-sized channel connection writer adapter to represent a connection to a static-sized
  * downstream sender(outbound) channel.
