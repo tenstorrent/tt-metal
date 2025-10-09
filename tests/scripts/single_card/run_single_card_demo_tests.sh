@@ -65,8 +65,8 @@ run_gemma3_perf() {
   echo "LOG_METAL: Gemma3 4B perf tests completed (text and vision)"
 }
 
-run_phi4_perf() {
-  HF_MODEL=microsoft/phi-4 pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-token-matching"
+run_phi4_func() {
+  HF_MODEL=microsoft/phi-4 pytest models/tt_transformers/demo/simple_text_demo.py -k "accuracy and ci-token-matching"
   echo "LOG_METAL: Phi4 perf tests completed (text only)"
 }
 

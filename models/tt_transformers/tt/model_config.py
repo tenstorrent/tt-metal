@@ -106,10 +106,16 @@ class ModelOptimizations:
                 base_model_name.startswith("Llama-3")
                 or base_model_name.startswith("Mistral-7B")
                 or base_model_name.startswith("Phi-3-mini")
+                or base_model_name.startswith("phi-4")
             ):
-                logger.info(
-                    f"Llama 3, Mistral 7B and Phi3-mini models test insensitive to attention precision, using BFP8 attention and kv-cache with FP16 MLP accumulation even in accuracy mode"
-                )
+                if model_name.startswith("phi-4"):
+                    logger.info(
+                        f"Model {model_name} is running out of DRAM memory for weight fetching under standard accuracy settings, using BFP8 for WQKV"
+                    )
+                else:
+                    logger.info(
+                        f"Llama 3, Mistral 7B and Phi3-mini models test insensitive to attention precision, using BFP8 attention and kv-cache with FP16 MLP accumulation even in accuracy mode"
+                    )
                 settings = {
                     "TensorPrecision": {
                         TensorGroup.WQKV: PrecisionSetting.BFP8,
