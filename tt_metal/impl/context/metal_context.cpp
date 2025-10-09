@@ -987,7 +987,7 @@ void MetalContext::initialize_firmware(
             const bool is_active_eth = !is_idle_eth;
             tt::umd::RiscType reset_val = tt::umd::RiscType::ALL_TENSIX;
             if (is_active_eth) {
-                // On idle eth, don't assert ERISC0, which is running base firmware.
+                // On active eth, don't assert ERISC0, which is running base firmware.
                 reset_val &= ~tt::umd::RiscType::ERISC0;
             }
             if (is_idle_eth or !hal_->get_eth_fw_is_cooperative()) {
