@@ -683,9 +683,11 @@ jobs:
           regular_modules = [m for m in modules if m not in suite_split_modules.keys()]
 
           # Use smaller batch size for comprehensive runs (Wed/Sat schedule or manual comprehensive dispatch)
+          # Also use smaller batch size when performance measurement is enabled to avoid timeouts
           # Use larger batch size for nightly runs (Mon/Tue/Thu/Fri schedule or manual nightly dispatch)
-          if "${{ github.event.schedule }}" == "0 4 * * 3" or "${{ github.event.schedule }}" == "0 5 * * 6" or "${{ github.event.inputs.sweep_name }}" == "ALL SWEEPS (Comprehensive)":
-              BATCH_SIZE = 3  # Smaller batches for comprehensive runs (must stay under 256 total batches due to GitHub Actions limit)
+          perf_flags_enabled = "${{ github.event.inputs.measure_perf }}" == "true" or "${{ github.event.inputs.measure_device_perf }}" == "true" or "${{ github.event.inputs.measure_perf_with_cache }}" == "true"
+          if "${{ github.event.schedule }}" == "0 4 * * 3" or "${{ github.event.schedule }}" == "0 5 * * 6" or "${{ github.event.inputs.sweep_name }}" == "ALL SWEEPS (Comprehensive)" or perf_flags_enabled:
+              BATCH_SIZE = 3  # Smaller batches for comprehensive runs or when performance measurement is enabled (must stay under 256 total batches due to GitHub Actions limit)
           else:
               BATCH_SIZE = 10  # Larger batches for nightly runs
 
