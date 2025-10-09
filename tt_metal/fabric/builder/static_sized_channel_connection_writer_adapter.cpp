@@ -98,7 +98,7 @@ void StaticSizedChannelConnectionWriterAdapter::emit_ct_args(std::vector<uint32_
 
     for (size_t i = 0; i < num_fwd_paths; i++) {
         if (this->downstream_edms_connected_by_vc_set.find(i) != this->downstream_edms_connected_by_vc_set.end()) {
-            TT_FATAL(this->downstream_sender_channels_num_buffers[i] !=0, "Downstream sender channels num buffers must be greater than 0 for vc_idx: {}", i);
+            TT_FATAL(this->downstream_sender_channels_num_buffers[i] != 0, "Downstream sender channels num buffers must be greater than 0 for vc_idx: {}", i);
         }
     }
 }
