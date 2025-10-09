@@ -102,12 +102,47 @@ def prepare_gpt_oss_generator_args(
 
 @run_for_wormhole_b0()
 @pytest.mark.parametrize(
-    "mesh_shape",
-    [(1, 8), (4, 8)],
+    "mesh_shape, data_parallel, batch_size, repeat_batches, max_seq_len, max_generated_tokens, instruct, page_params, sampling_params",
+    [
+        (  # LoudBox (1×8) - Single device, low latency
+            (1, 8),  # mesh_shape
+            1,  # data_parallel
+            1,  # batch_size
+            1,  # repeat_batches
+            1024,  # max_seq_len
+            200,  # max_generated_tokens
+            True,  # instruct (set to False for base model, True for instruct model)
+            {"page_block_size": 64, "page_max_num_blocks_per_dp": 1024 // 64},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (greedy decoding)
+        ),
+        (  # Galaxy (4×8) - Multi-device mesh, higher throughput
+            (4, 8),  # mesh_shape
+            1,  # data_parallel
+            1,  # batch_size
+            1,  # repeat_batches
+            1024,  # max_seq_len
+            200,  # max_generated_tokens
+            True,  # instruct
+            {"page_block_size": 64, "page_max_num_blocks_per_dp": 1024 // 64},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params
+        ),
+    ],
     ids=["mesh_1x8", "mesh_4x8"],
 )
 @parametrize_mesh_with_fabric()
-def test_gpt_oss_demo(mesh_device, device_params, mesh_shape):
+def test_gpt_oss_demo(
+    mesh_device,
+    device_params,
+    mesh_shape,
+    data_parallel,
+    batch_size,
+    repeat_batches,
+    max_seq_len,
+    max_generated_tokens,
+    instruct,
+    page_params,
+    sampling_params,
+):
     """GPT-OSS demo using full tt_transformers generation pipeline"""
     mesh_device = mesh_device.create_submesh(ttnn.MeshShape(mesh_shape))
 
@@ -120,31 +155,14 @@ def test_gpt_oss_demo(mesh_device, device_params, mesh_shape):
 
     # Configuration matching tt_transformers defaults
     num_devices = mesh_device.get_num_devices()
-
-    # Data parallel configuration (can be adjusted for testing)
-    data_parallel = 1  # Set to > 1 to test data parallel (e.g., 2, 4, 8)
-    batch_size = 1  # Batch size per data parallel group
-    repeat_batches = 1  # Number of consecutive batches to run
-    paged_attention = True
+    paged_attention = True  # Always use paged attention for GPT-OSS
     global_batch_size = batch_size * data_parallel  # Total batch across all devices
 
     # Validate data parallel configuration (like tt-transformers)
     if data_parallel > num_devices or num_devices % data_parallel != 0:
         raise ValueError(f"Invalid number of DP groups: {data_parallel}, for {num_devices} devices")
-    max_seq_len = 1024
-    max_generated_tokens = 200  # Reasonable limit for testing
-    instruct = True
-    enable_trace = False if mesh_config.ep > 1 else True  # ep> 1 currently has a fallback
 
-    page_params = {
-        "page_block_size": 64,
-        "page_max_num_blocks_per_dp": max_seq_len // 64,  # Total blocks available per data parallel unit
-    }
-
-    sampling_params = {
-        "temperature": 0,  # Greedy decoding for deterministic results
-        "top_p": 0.08,
-    }
+    enable_trace = False if mesh_config.ep > 1 else True  # ep > 1 currently has a fallback
 
     logger.info(f"Running GPT-OSS demo with tt_transformers generation pipeline")
 
@@ -222,6 +240,9 @@ def test_gpt_oss_demo(mesh_device, device_params, mesh_shape):
 
         # Clear KV caches for repeat batches (like tt-transformers)
         if batch_idx != 0:
+            # Fix for ND hangs with multiple repeat batches
+            generator.prev_page_table = None
+
             for i in range(len(model)):
                 for layer in model[i].layers:
                     k_cache, v_cache = layer.self_attn.layer_past

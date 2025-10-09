@@ -137,10 +137,10 @@ run_tg_gpt_oss_tests() {
   fail=0
 
   echo "LOG_METAL: Running run_tg_gpt_oss_tests"
-
-  gpt_oss=("/mnt/MLPerf/tt_dnn-models/gpt-oss/GPT-OSS-20B/" "/mnt/MLPerf/tt_dnn-models/gpt-oss/GPT-OSS-120B/")
+  pip install -r models/demos/gpt_oss/requirements.txt
+  gpt_oss=("/mnt/MLPerf/tt_dnn-models/tt/GPT-OSS-20B/" "/mnt/MLPerf/tt_dnn-models/tt/GPT-OSS-120B/")
   for gpt_oss_dir in "${gpt_oss[@]}"; do
-    GPT_OSS_DIR=$gpt_oss_dir pytest -n auto models/demos/gpt_oss/demo/simple_text_demo.py --timeout 1000; fail+=$?
+    HF_MODEL=$gpt_oss_dir pytest -n auto models/demos/gpt_oss/demo/text_demo.py --timeout 1000; fail+=$?
   done
 
   if [[ $fail -ne 0 ]]; then

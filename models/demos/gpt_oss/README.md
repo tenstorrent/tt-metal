@@ -1,29 +1,40 @@
-# GPT-OSS: batch=1 inference
+# GPT-OSS: Mixture of Experts Language Model
 
-Inference for GPT-OSS models on Tenstorrent Wormhole devices LoudBox and Galaxy.
-This model is under active development.
-Currently we have only support prefill upto sequence length 128 and batch=1.
+Inference implementation for GPT-OSS models on Tenstorrent Wormhole accelerators.
+
+**Model Source**: [GPT-OSS on HuggingFace](https://huggingface.co/gpt-oss) (custom MoE architecture)
+
+**Target Hardware**:
+- **LoudBox**: Single Wormhole device (1×8 configuration)
+- **Galaxy**: Multi-device Wormhole mesh (4×8 configuration)
+
+**Current Status**: This model is under active development.
+- ✅ Supported: Prefill up to sequence length 128, batch size 1
+- 🚧 In Progress: Extended sequence lengths, larger batch sizes
 
 ## Quick Start
 
 ```bash
-# Set model path
-export GPT_DIR="/mnt/MLPerf/tt_dnn-models/tt/GPT-OSS-20B"
+# Bump up transformers version
+pip install -r models/demos/gpt_oss/requirements.txt
 
-# Run demo
+# Set model path using HF_MODEL environment variable
+export HF_MODEL="/mnt/MLPerf/tt_dnn-models/tt/GPT-OSS-20B"
+
+# Run text generation demo on Galaxy (4×8 mesh)
 cd tt-metal/models/demos/gpt_oss/demo
-pytest simple_text_demo.py -k "4x8"
+pytest text_demo.py -k "4x8"
 ```
 
 ## Configuration
 
 ### Model Selection
 ```bash
-# GPT-OSS-20B (faster)
-export GPT_DIR="/mnt/MLPerf/tt_dnn-models/tt/GPT-OSS-20B"
+# GPT-OSS-20B (faster, recommended for development)
+export HF_MODEL="/mnt/MLPerf/tt_dnn-models/tt/GPT-OSS-20B"
 
-# GPT-OSS-120B (higher quality)
-export GPT_DIR="/mnt/MLPerf/tt_dnn-models/tt/GPT-OSS-120B"
+# GPT-OSS-120B (higher quality, requires more memory)
+export HF_MODEL="/mnt/MLPerf/tt_dnn-models/tt/GPT-OSS-120B"
 ```
 
 ## Testing

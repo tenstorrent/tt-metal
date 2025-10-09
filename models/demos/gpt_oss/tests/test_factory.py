@@ -54,7 +54,6 @@ class TestFactory:
             "config": config,
             # "state_dict": state_dict,
             "dtype": dtype,
-            "gpt_dir": model_args.model_path,
             "tensor_cache_path": model_args.weight_cache_path(dtype),
         }
 

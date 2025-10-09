@@ -40,14 +40,14 @@ class ModelArgs:
         self.optimizations = optimizations
         self.cache_hf = cache_hf
 
-        # GPT-OSS specific paths - use single GPT_DIR environment variable
-        # Default paths for available models
+        # GPT-OSS specific paths - use HF_MODEL environment variable (tt_transformers standard)
+        # Default paths are internal CI paths for automated testing
         default_models = [
-            "/mnt/MLPerf/tt_dnn-models/tt/GPT-OSS-20B",
-            "/mnt/MLPerf/tt_dnn-models/tt/GPT-OSS-120B",
+            "/mnt/MLPerf/tt_dnn-models/tt/GPT-OSS-20B",  # Internal CI path
+            "/mnt/MLPerf/tt_dnn-models/tt/GPT-OSS-120B",  # Internal CI path
         ]
 
-        # Use first available model as default, or GPT_DIR environment variable override
+        # Use first available model as default, or HF_MODEL environment variable override
         default_path = None
         for model_path in default_models:
             if os.path.exists(model_path):
@@ -57,10 +57,10 @@ class ModelArgs:
         if default_path is None:
             default_path = default_models[-1]  # Fallback to first in list
 
-        # Use single GPT_DIR environment variable for all paths
-        gpt_dir = os.getenv("GPT_DIR", default_path)
-        self.model_path = gpt_dir
-        self.weights_path = gpt_dir
+        # Use HF_MODEL environment variable (consistent with tt_transformers)
+        dir = os.getenv("HF_MODEL", default_path)
+        self.model_path = dir
+        self.weights_path = dir
 
         logger.info(f"Using GPT-OSS model from: {self.model_path}")
 

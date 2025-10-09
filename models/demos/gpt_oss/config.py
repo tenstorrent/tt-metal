@@ -1,6 +1,10 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
+"""
+This module defines the MeshConfig class which manages parallelization strategies
+across a mesh of devices for the GPT-OSS MoE model.
+"""
 
 import ttnn
 
@@ -13,7 +17,7 @@ class MeshConfig:
         Args:
             mesh_shape: (rows, cols) - any mesh size
             tp: Tensor parallel size (must specify - no defaults)
-            ep: Expert parallel size (default: 1)
+            ep: Expert parallel size (default: 4)
             tp_axis: Which mesh axis is TP (0=rows, 1=cols, default: 1)
         """
 

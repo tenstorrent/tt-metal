@@ -7,7 +7,7 @@ import ttnn
 from models.common.utility_functions import nearest_y
 from models.demos.gpt_oss.config import MeshConfig
 from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
-from models.experimental.stable_diffusion_35_large.tt.substate import substate
+from models.demos.gpt_oss.utils.substate import substate
 
 from ..tt.sdpa import sdpa as tt_sdpa
 from ..utils.general_utils import MAX_SEQ_LEN
