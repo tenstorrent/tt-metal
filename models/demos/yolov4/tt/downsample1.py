@@ -71,27 +71,27 @@ class Down1:
 
     def __call__(self, input_tensor):
         output_tensor = self.conv1(input_tensor)
-        output_tensor = ttnn.mish(output_tensor)
+        output_tensor = ttnn.hardmish(output_tensor)
 
         output_tensor_split = self.conv2(output_tensor)
         ttnn.deallocate(output_tensor)
-        output_tensor_split = ttnn.mish(output_tensor_split)
+        output_tensor_split = ttnn.hardmish(output_tensor_split)
 
         output_tensor_left = self.conv3(output_tensor_split)
-        output_tensor_left = ttnn.mish(output_tensor_left)
+        output_tensor_left = ttnn.hardmish(output_tensor_left)
 
         output_tensor_split_2 = self.conv4(output_tensor_split)
         ttnn.deallocate(output_tensor_split)
-        output_tensor_split_2 = ttnn.mish(output_tensor_split_2)
+        output_tensor_split_2 = ttnn.hardmish(output_tensor_split_2)
         output_tensor = self.conv5(output_tensor_split_2)
-        output_tensor = ttnn.mish(output_tensor)
+        output_tensor = ttnn.hardmish(output_tensor)
         output_tensor = self.conv6(output_tensor)
-        output_tensor = ttnn.mish(output_tensor)
+        output_tensor = ttnn.hardmish(output_tensor)
         output_tensor = output_tensor_split_2 + output_tensor
 
         ttnn.deallocate(output_tensor_split_2)
         output_tensor = self.conv7(output_tensor)
-        output_tensor = ttnn.mish(output_tensor)
+        output_tensor = ttnn.hardmish(output_tensor)
 
         output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
         output_tensor_left = ttnn.to_layout(output_tensor_left, layout=ttnn.ROW_MAJOR_LAYOUT)
@@ -115,5 +115,5 @@ class Down1:
         ttnn.deallocate(output_tensor_left)
 
         output_tensor = self.conv8(output_tensor)
-        output_tensor = ttnn.mish(output_tensor)
+        output_tensor = ttnn.hardmish(output_tensor)
         return output_tensor

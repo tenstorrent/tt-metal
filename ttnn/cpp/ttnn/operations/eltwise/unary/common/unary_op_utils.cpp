@@ -780,6 +780,7 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
             op_init_and_name = {"softsign_tile_init();", fmt::format("softsign_tile({});", idst)};
             break;
         case UnaryOpType::MISH: op_init_and_name = {}; break;
+        case UnaryOpType::HARDMISH: op_init_and_name = {}; break;
         case UnaryOpType::IDENTITY: op_init_and_name = {}; break;
         case UnaryOpType::TANHSHRINK: op_init_and_name = {}; break;
         case UnaryOpType::HARDSWISH: op_init_and_name = {}; break;
@@ -996,6 +997,7 @@ std::string get_compute_kernel_path(
             } else {
                 return fmt::format("{}/{}", compute_root, "tanhshrink_kernel.cpp");
             }
+        case UnaryOpType::HARDMISH: return fmt::format("{}/{}", compute_root, "hardmish_kernel.cpp");
         case UnaryOpType::IDENTITY: return fmt::format("{}/{}", compute_root, "eltwise_identity_kernel.cpp");
         case UnaryOpType::WHERE_TSS: return fmt::format("{}/{}", compute_root, "where_tss_kernel.cpp");
         case UnaryOpType::HARDSHRINK:
