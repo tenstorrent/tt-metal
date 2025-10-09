@@ -54,9 +54,9 @@ void read_in0_block_sync(
     uint32_t d1_start,
     uint32_t d1_end) {
     ASSERT(d0_start >= 0);
-    ASSERT(d0_end < shape.padded_d0);
+    ASSERT(d0_end <= shape.padded_d0);
     ASSERT(d1_start >= 0);
-    ASSERT(d1_end < shape.padded_d1);
+    ASSERT(d1_end <= shape.padded_d1);
 
     for (uint32_t i = d0_start; i < d0_end; i++) {
         if (i >= shape.logical_d0) {
