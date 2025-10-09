@@ -1,0 +1,124 @@
+diff --git a/tt_metal/distributed/mesh_buffer.cpp b/tt_metal/distributed/mesh_buffer.cpp
+index 9a5628bbbb..6c11a367f0 100644
+--- a/tt_metal/distributed/mesh_buffer.cpp
++++ b/tt_metal/distributed/mesh_buffer.cpp
+@@ -152,6 +152,21 @@ MeshBuffer::~MeshBuffer() { deallocate(); }
+ void MeshBuffer::deallocate() {
+     auto mesh_device = mesh_device_.lock();
+     if (mesh_device) {
++        // Mark all buffers as deallocated for tracking BEFORE destroying them
++        // This ensures tracking happens while device is still valid
++        // But we don't change the actual deallocation order/timing
++        for (auto& [coord, buffer_wrapper] : buffers_) {
++            if (buffer_wrapper.is_local() && buffer_wrapper.value()) {
++                buffer_wrapper.value()->mark_as_deallocated();
++            }
++        }
++
++        // Also mark backing buffer if we own it
++        if (std::holds_alternative<OwnedBufferState>(state_)) {
++            auto& owned_state = std::get<OwnedBufferState>(state_);
++            owned_state.backing_buffer->mark_as_deallocated();
++        }
++
+         state_ = DeallocatedState{};
+         return;
+     }
+diff --git a/tt_metal/impl/buffers/buffer.cpp b/tt_metal/impl/buffers/buffer.cpp
+index 60acbf43fc..a39d18de49 100644
+--- a/tt_metal/impl/buffers/buffer.cpp
++++ b/tt_metal/impl/buffers/buffer.cpp
+@@ -335,6 +335,13 @@ std::shared_ptr<Buffer> Buffer::create(
+     buffer->address_ = address;
+     buffer->allocation_status_ = AllocationStatus::ALLOCATED;
+
++    // Track pre-allocated buffer (doesn't go through allocate_impl)
++    // We DO track allocation for pre-allocated buffers because:
++    // - In MeshDevice, each device needs to show memory usage for its buffers
++    // - The server tracks by (device_id, buffer_id), so each device is separate
++    // - We'll only skip deallocation tracking for owns_data_=false (see mark_as_deallocated)
++    GraphTracker::instance().track_allocate(buffer.get());
++
+     LIGHT_METAL_TRACE_FUNCTION_CALL(
+         CaptureBufferCreate,
+         buffer,
+@@ -416,9 +423,32 @@ void Buffer::deallocate() {
+     this->deallocate_impl();
+ }
+
+-void Buffer::mark_as_deallocated() { allocation_status_ = AllocationStatus::DEALLOCATED; }
++void Buffer::mark_as_deallocated() {
++    // GUARD: Prevent double-free - if already deallocated, do nothing
++    if (allocation_status_ == AllocationStatus::DEALLOCATED) {
++        // Already deallocated - this prevents sending duplicate FREE messages
++        // to the allocation tracking server, which would cause "unknown buffer" warnings
++        return;
++    }
++
++    // Track deallocation for ALL buffers (including aliases)
++    // The server uses (device_id, buffer_id) as key, so each device tracks separately
++    // This ensures proper balance: every ALLOC message gets a corresponding FREE message
++    if (allocation_status_ == AllocationStatus::ALLOCATED) {
++        GraphTracker::instance().track_deallocate(this);
++    }
++    allocation_status_ = AllocationStatus::DEALLOCATED;
++}
+
+ void Buffer::deallocate_impl() {
++    // WORKAROUND: Make deallocate idempotent to handle excessive deallocation bug
++    // This prevents sending multiple FREE messages for buffers that are reused
++    // at the same address. Root cause is in TT-Metal buffer lifecycle management.
++    if (allocation_status_ == AllocationStatus::DEALLOCATED) {
++        // Already deallocated - silently return to avoid "unknown buffer" warnings
++        return;
++    }
++
+     if (allocation_status_ != AllocationStatus::ALLOCATED) {
+         return;
+     }
+diff --git a/tt_metal/impl/program/program.cpp b/tt_metal/impl/program/program.cpp
+index 7efd207a86..f53d7b45a8 100644
+--- a/tt_metal/impl/program/program.cpp
++++ b/tt_metal/impl/program/program.cpp
+@@ -881,10 +881,25 @@ void detail::ProgramImpl::allocate_circular_buffers(const IDevice* device) {
+             circular_buffer->globally_allocated(),
+             device);
+         circular_buffer->set_locally_allocated_address(computed_addr);
++
++        // Store the device pointer for later deallocation tracking
++        this->cb_device_ = device;
+     }
+     this->local_circular_buffer_allocation_needed_ = false;
+ }
+
++void detail::ProgramImpl::deallocate_circular_buffers() {
++    // Track circular buffer deallocations
++    // The actual memory deallocation is handled by the allocator when the device is cleaned up
++    // But we need to notify the tracking system
++    if (cb_device_ != nullptr) {
++        // Report CB deallocation for this device
++        // This will trigger AllocationClient to report deallocations
++        tt::tt_metal::GraphTracker::instance().track_deallocate_cb(cb_device_);
++        cb_device_ = nullptr;
++    }
++}
++
+ void detail::ProgramImpl::validate_circular_buffer_region(const IDevice* device) {
+     // ZoneScoped;
+
+@@ -1530,7 +1545,15 @@ Program::Program(Program&& other) noexcept = default;
+
+ Program& Program::operator=(Program&& other) noexcept = default;
+
+-Program::~Program() noexcept = default;
++Program::~Program() noexcept {
++    // NOTE: Intentionally NOT calling release_buffers() here
++    // Calling it causes Programs to be destroyed earlier, which changes memory layout
++    // and triggers circular buffer address collisions in subsequent program compilations
++    // The buffers will be released when ProgramImpl is destroyed anyway
++    if (internal_) {
++        internal_->deallocate_circular_buffers();
++    }
++}
+
+ ProgramId detail::ProgramImpl::get_id() const { return this->id; }

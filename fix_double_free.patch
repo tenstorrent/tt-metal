@@ -1,0 +1,25 @@
+diff --git a/tt_metal/impl/buffers/buffer.cpp b/tt_metal/impl/buffers/buffer.cpp
+index 1234567..abcdefg 100644
+--- a/tt_metal/impl/buffers/buffer.cpp
++++ b/tt_metal/impl/buffers/buffer.cpp
+@@ -421,10 +421,17 @@ void Buffer::deallocate() {
+ }
+
+ void Buffer::mark_as_deallocated() {
+-    // Track deallocation for ALL buffers, including pre-allocated ones (owns_data_ = false)
+-    // This ensures we track deallocations on all devices in a mesh
+-    // Each device's buffer is tracked separately by {device_id, buffer_id} in the server
++    // GUARD: Prevent double-free
++    if (allocation_status_ == AllocationStatus::DEALLOCATED) {
++        // Already deallocated - this is a double-free attempt
++        return;
++    }
++
++    // Track deallocation ONLY if currently allocated
++    // This prevents sending multiple FREE messages for the same buffer
+     if (allocation_status_ == AllocationStatus::ALLOCATED) {
+         GraphTracker::instance().track_deallocate(this);
+     }
++
+     allocation_status_ = AllocationStatus::DEALLOCATED;
+ }

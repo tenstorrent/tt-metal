@@ -158,7 +158,7 @@ check_and_build_tt_metal() {
         ./build_metal.sh
         ./create_venv.sh
         source python_env/bin/activate
-        pip install -r models/demos/t3000/llama2_70b/reference/llama/requirements.txt
+        pip install -r models/demos/t3000/llama3_70b/reference/llama/requirements.txt
     else
         echo "🔔 tt-metal Python environment already exists. Skipping build."
         source python_env/bin/activate
@@ -207,7 +207,7 @@ setup_weights() {
         source python_env/bin/activate
         cp "${LLAMA_WEIGHTS_DIR}/tokenizer.model" "${WEIGHTS_DIR}/tokenizer.model"
         cp "${LLAMA_WEIGHTS_DIR}/params.json" "${WEIGHTS_DIR}/params.json"
-        python models/demos/t3000/llama2_70b/scripts/repack_weights.py "${LLAMA_WEIGHTS_DIR}" "${WEIGHTS_DIR}" 5
+        python models/demos/t3000/llama3_70b/scripts/repack_weights.py "${LLAMA_WEIGHTS_DIR}" "${WEIGHTS_DIR}" 5
     else
         cp -rf "${LLAMA_WEIGHTS_DIR}" "${WEIGHTS_DIR}"
     fi

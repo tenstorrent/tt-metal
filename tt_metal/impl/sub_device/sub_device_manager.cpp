@@ -75,17 +75,28 @@ SubDeviceManager::SubDeviceManager(
 }
 
 SubDeviceManager::~SubDeviceManager() {
-    for (const auto& allocator : sub_device_allocators_) {
+    std::cout << "🗑️  SubDeviceManager destructor: cleaning up " << sub_device_allocators_.size() << " allocators"
+              << std::endl;
+    for (size_t i = 0; i < sub_device_allocators_.size(); i++) {
+        const auto& allocator = sub_device_allocators_[i];
         if (allocator) {
+            size_t num_buffers = allocator->get_num_allocated_buffers();
+            std::cout << "   Allocator " << i << ": " << num_buffers << " buffers in allocated_buffers_ set"
+                      << std::endl;
+
             // Deallocate all buffers at the bank level first
             // This frees the memory without accessing individual Buffer objects
+            std::cout << "   Calling deallocate_buffers() for allocator " << i << "..." << std::endl;
             allocator->deallocate_buffers();
 
             // Now clear the allocator's tracking structures and bank managers
             // This ensures allocated_buffers_ set is cleared to prevent dangling pointers
+            std::cout << "   Calling clear() for allocator " << i << "..." << std::endl;
             allocator->clear();
+            std::cout << "   ✓ Allocator " << i << " cleanup complete" << std::endl;
         }
     }
+    std::cout << "✓  SubDeviceManager destructor complete" << std::endl;
 }
 
 SubDeviceManagerId SubDeviceManager::id() const { return id_; }
@@ -313,6 +324,9 @@ void SubDeviceManager::populate_sub_allocators() {
         // L1BankingAllocator creates 1 bank per DRAM core and splits up L1 such that there are power 2 num L1 banks
         // This is the only allocator scheme supported because kernel APIs assume num L1 banks are power of 2
         sub_device_allocators_[i] = std::make_unique<L1BankingAllocator>(config);
+
+        // Set device ID for allocation tracking
+        sub_device_allocators_[i]->set_device_id(device_->id());
     }
 }
 

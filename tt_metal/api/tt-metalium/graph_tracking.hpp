@@ -175,6 +175,9 @@ public:
 
     void clear_hook();
 
+    // Print L1 memory usage summary (for debugging)
+    static void print_l1_summary();
+
 private:
     GraphTracker() = default;
     ~GraphTracker() = default;
@@ -185,5 +188,13 @@ private:
 
     std::mutex hooked_buffers_mutex;
     std::unordered_set<const Buffer*> hooked_buffers;
+
+    // Track circular buffer allocations for proper deallocation
+    struct CBAllocation {
+        uint64_t addr;
+        uint64_t size;
+    };
+    std::mutex cb_mutex;
+    std::unordered_map<const IDevice*, std::vector<CBAllocation>> device_cb_allocations;
 };
 }  // namespace tt::tt_metal

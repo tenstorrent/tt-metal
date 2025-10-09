@@ -329,7 +329,7 @@ PerformanceMeasurement::BenchmarkResult run_ttmetal_benchmark(
 
     // Warmup runs
     for (int warmup = 0; warmup < config.num_warmup_runs; ++warmup) {
-        auto mesh_workload = CreateMeshWorkload();
+        auto mesh_workload = MeshWorkload();
         uint32_t device_id = 0;
         for (uint32_t row = 0; row < mesh_device->num_rows(); ++row) {
             for (uint32_t col = 0; col < mesh_device->num_cols(); ++col) {
@@ -339,7 +339,7 @@ PerformanceMeasurement::BenchmarkResult run_ttmetal_benchmark(
                 } else {
                     program = CreateMultiCoreMandelbrotProgram(output_buffer, tile_size_bytes, num_tiles, config, device_id, cores_per_device);
                 }
-                AddProgramToMeshWorkload(mesh_workload, std::move(program), MeshCoordinateRange({row, col}, {row, col}));
+                mesh_workload.add_program(MeshCoordinateRange({row, col}, {row, col}), std::move(program));
                 device_id++;
             }
         }
@@ -351,7 +351,7 @@ PerformanceMeasurement::BenchmarkResult run_ttmetal_benchmark(
     // Benchmark runs
     std::vector<double> execution_times;
     for (int run = 0; run < config.num_benchmark_runs; ++run) {
-        auto mesh_workload = CreateMeshWorkload();
+        auto mesh_workload = MeshWorkload();
         uint32_t device_id = 0;
         for (uint32_t row = 0; row < mesh_device->num_rows(); ++row) {
             for (uint32_t col = 0; col < mesh_device->num_cols(); ++col) {
@@ -361,7 +361,7 @@ PerformanceMeasurement::BenchmarkResult run_ttmetal_benchmark(
                 } else {
                     program = CreateMultiCoreMandelbrotProgram(output_buffer, tile_size_bytes, num_tiles, config, device_id, cores_per_device);
                 }
-                AddProgramToMeshWorkload(mesh_workload, std::move(program), MeshCoordinateRange({row, col}, {row, col}));
+                mesh_workload.add_program(MeshCoordinateRange({row, col}, {row, col}), std::move(program));
                 device_id++;
             }
         }

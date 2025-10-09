@@ -9,6 +9,7 @@
 #include <mesh_event.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/graph_tracking.hpp>
+#include "tt_metal/impl/program/program_impl.hpp"
 #include <utility>
 
 namespace tt::tt_metal::distributed {
@@ -75,6 +76,22 @@ void SDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     for (auto& [coord_range, program] : mesh_workload.get_programs()) {
         for (const auto& coord : coord_range) {
             auto device = mesh_device_->get_device(coord);
+
+            // Track CB allocations per-device for distributed workloads
+            // CBs are allocated once during compilation, but we need to track them
+            // for each device when the program runs
+            for (const auto& circular_buffer : program.impl().circular_buffers()) {
+                if (circular_buffer->globally_allocated()) {
+                    continue;
+                }
+                uint64_t addr = circular_buffer->address();
+                uint64_t size = circular_buffer->size();
+
+                // Report CB allocation to tracking (each device gets its own tracking entry)
+                tt::tt_metal::GraphTracker::instance().track_allocate_cb(
+                    circular_buffer->core_ranges(), addr, size, circular_buffer->globally_allocated(), device);
+            }
+
             tt_metal::detail::LaunchProgram(device, program, false);
         }
     }

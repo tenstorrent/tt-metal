@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
+from time import sleep
 from ttnn.distributed import visualize_system_mesh, visualize_mesh_device, visualize_tensor
 
 
@@ -31,11 +32,15 @@ def main() -> int:
     # Show how the tensor is distributed across the mesh
     visualize_tensor(x)
 
+    sleep(10)
+
     y = ttnn.experimental.nlp_concat_heads_boltz(x)
+
+    sleep(10)
 
     _ = y  # prevent optimization
 
-    ttnn.close_device(device)
+    ttnn.close_mesh_device(device)
     return 0
 
 

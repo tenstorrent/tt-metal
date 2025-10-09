@@ -782,6 +782,20 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
     program.impl().allocate_circular_buffers(device);
     program.impl().validate_circular_buffer_region(device);
 
+    // Track CB allocations per-device for distributed workloads
+    // CBs are physically written to L1 on each device at this point
+    // Track them here to show L1 usage on all devices, not just device 0
+    for (const auto& circular_buffer : program.impl().circular_buffers()) {
+        if (!circular_buffer->globally_allocated()) {
+            tt::tt_metal::GraphTracker::instance().track_allocate_cb(
+                circular_buffer->core_ranges(),
+                circular_buffer->address(),
+                circular_buffer->size(),
+                circular_buffer->globally_allocated(),
+                device);
+        }
+    }
+
     std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = program.impl().logical_cores();
     const auto& hal = MetalContext::instance().hal();
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {

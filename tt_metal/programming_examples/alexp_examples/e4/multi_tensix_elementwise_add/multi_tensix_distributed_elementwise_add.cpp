@@ -296,9 +296,9 @@ int main(int argc, char** argv) {
 
     auto program = CreateMultiTensixEltwiseAddProgram(a, b, c, tile_size_bytes, num_tiles, rep_num_tiles, tensix_cores_per_device, mesh_device);
 
-    auto mesh_workload = CreateMeshWorkload();
+    auto mesh_workload = MeshWorkload();
     auto device_range = MeshCoordinateRange(mesh_device->shape());
-    AddProgramToMeshWorkload(mesh_workload, std::move(program), device_range);
+    mesh_workload.add_program(device_range, std::move(program));
 
     std::cout << "\n=== Executing Multi-Tensix Workload ===" << std::endl;
     EnqueueMeshWorkload(cq, mesh_workload, false);

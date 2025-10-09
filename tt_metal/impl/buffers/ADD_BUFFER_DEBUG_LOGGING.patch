@@ -1,0 +1,161 @@
+--- a/tt_metal/impl/buffers/buffer.cpp
++++ b/tt_metal/impl/buffers/buffer.cpp
+@@ -7,6 +7,10 @@
+ #include "tt_metal/impl/buffers/buffer.hpp"
+ #include "tt_metal/impl/device/device.hpp"
++#include <execinfo.h>
++#include <cxxabi.h>
++#include <fstream>
++#include <sstream>
++#include <iomanip>
+
+ namespace tt::tt_metal {
+
++// Helper to capture and format stack trace
++static std::string get_call_stack(int skip_frames = 2, int max_frames = 10) {
++    void* callstack[32];
++    int frames = backtrace(callstack, 32);
++    char** symbols = backtrace_symbols(callstack, frames);
++
++    std::stringstream ss;
++    int shown = 0;
++    for (int i = skip_frames; i < frames && shown < max_frames; i++) {
++        // Try to demangle C++ names
++        char* mangled = nullptr;
++        char* offset_begin = nullptr;
++        char* offset_end = nullptr;
++
++        for (char* p = symbols[i]; *p; ++p) {
++            if (*p == '(') mangled = p;
++            else if (*p == '+') offset_begin = p;
++            else if (*p == ')') { offset_end = p; break; }
++        }
++
++        if (mangled && offset_begin && offset_end && mangled < offset_begin) {
++            *mangled++ = '\0';
++            *offset_begin++ = '\0';
++            *offset_end = '\0';
++
++            int status;
++            char* demangled = abi::__cxa_demangle(mangled, nullptr, nullptr, &status);
++
++            if (status == 0 && demangled) {
++                ss << "    " << symbols[i] << ": " << demangled << "\n";
++                free(demangled);
++            } else {
++                ss << "    " << symbols[i] << ": " << mangled << "\n";
++            }
++        } else {
++            ss << "    " << symbols[i] << "\n";
++        }
++        shown++;
++    }
++
++    free(symbols);
++    return ss.str();
++}
++
++// Check if buffer debug logging is enabled
++static bool is_buffer_debug_enabled() {
++    static bool checked = false;
++    static bool enabled = false;
++    if (!checked) {
++        const char* env = std::getenv("TT_BUFFER_DEBUG_LOG");
++        enabled = (env && std::string(env) == "1");
++        checked = true;
++    }
++    return enabled;
++}
++
+ void Buffer::allocate_impl() {
+     if (GraphTracker::instance().hook_allocate(this)) {
+         address_ = 0;
+@@ -33,6 +90,30 @@ void Buffer::allocate_impl() {
+     // Important! Graph tracker must called after the allocation status is updated.
+     allocation_status_ = AllocationStatus::ALLOCATED;
+
++    // DEBUG: Detailed buffer allocation logging with call stack
++    if (is_buffer_debug_enabled()) {
++        std::ofstream log("/tmp/tt_buffer_debug.log", std::ios::app);
++        auto now = std::chrono::system_clock::now();
++        auto time = std::chrono::system_clock::to_time_t(now);
++
++        log << "═══════════════════════════════════════════════════════════\n";
++        log << "BUFFER ALLOCATED\n";
++        log << "Time: " << std::put_time(std::localtime(&time), "%H:%M:%S") << "\n";
++        log << "Device: " << device_->id() << "\n";
++        log << "Address: 0x" << std::hex << address_ << std::dec << " (" << address_ << ")\n";
++        log << "Size: " << size_ << " bytes (" << (size_ / 1024.0) << " KB)\n";
++        log << "Type: " << (buffer_type_ == BufferType::DRAM ? "DRAM" :
++                           buffer_type_ == BufferType::L1 ? "L1" :
++                           buffer_type_ == BufferType::L1_SMALL ? "L1_SMALL" : "OTHER") << "\n";
++        log << "Buffer*: " << this << "\n";
++        log << "Owns Data: " << (owns_data_ ? "yes" : "no") << "\n";
++        log << "Hooked: " << (hooked_allocation_ ? "yes" : "no") << "\n";
++        log << "Call Stack:\n";
++        log << get_call_stack(3, 8);  // Skip 3 frames, show 8
++        log << "\n";
++        log.flush();
++    }
++
+     GraphTracker::instance().track_allocate(this);
+ }
+
+@@ -55,6 +136,28 @@ void Buffer::deallocate_impl() {
+
+     if (device_->is_initialized() && size_ != 0) {
+         // address_ is only modified from this thread, no sync required
++
++        // DEBUG: Detailed buffer deallocation logging with call stack
++        if (is_buffer_debug_enabled()) {
++            std::ofstream log("/tmp/tt_buffer_debug.log", std::ios::app);
++            auto now = std::chrono::system_clock::now();
++            auto time = std::chrono::system_clock::to_time_t(now);
++
++            log << "═══════════════════════════════════════════════════════════\n";
++            log << "BUFFER DEALLOCATED\n";
++            log << "Time: " << std::put_time(std::localtime(&time), "%H:%M:%S") << "\n";
++            log << "Device: " << device_->id() << "\n";
++            log << "Address: 0x" << std::hex << address_ << std::dec << " (" << address_ << ")\n";
++            log << "Size: " << size_ << " bytes (" << (size_ / 1024.0) << " KB)\n";
++            log << "Type: " << (buffer_type_ == BufferType::DRAM ? "DRAM" :
++                               buffer_type_ == BufferType::L1 ? "L1" :
++                               buffer_type_ == BufferType::L1_SMALL ? "L1_SMALL" : "OTHER") << "\n";
++            log << "Buffer*: " << this << "\n";
++            log << "Call Stack:\n";
++            log << get_call_stack(3, 8);
++            log << "\n";
++            log.flush();
++        }
+
+         GraphTracker::instance().track_deallocate(this);
+         if (!GraphTracker::instance().hook_deallocate(this) && !hooked_allocation_) {
+@@ -75,6 +178,27 @@ void Buffer::deallocate_impl() {
+
+ Buffer::~Buffer() {
+     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
++
++    // DEBUG: Log destructor calls to find leaks
++    if (is_buffer_debug_enabled() && allocation_status_ == AllocationStatus::ALLOCATED) {
++        std::ofstream log("/tmp/tt_buffer_debug.log", std::ios::app);
++        auto now = std::chrono::system_clock::now();
++        auto time = std::chrono::system_clock::to_time_t(now);
++
++        log << "═══════════════════════════════════════════════════════════\n";
++        log << "BUFFER DESTRUCTOR (still ALLOCATED - will deallocate)\n";
++        log << "Time: " << std::put_time(std::localtime(&time), "%H:%M:%S") << "\n";
++        log << "Device: " << device_->id() << "\n";
++        log << "Address: 0x" << std::hex << address_ << std::dec << " (" << address_ << ")\n";
++        log << "Size: " << size_ << " bytes (" << (size_ / 1024.0) << " KB)\n";
++        log << "Type: " << (buffer_type_ == BufferType::DRAM ? "DRAM" :
++                           buffer_type_ == BufferType::L1 ? "L1" :
++                           buffer_type_ == BufferType::L1_SMALL ? "L1_SMALL" : "OTHER") << "\n";
++        log << "Buffer*: " << this << "\n";
++        log << "Call Stack:\n";
++        log << get_call_stack(2, 8);
++        log << "\n";
++        log.flush();
++    }
+     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureBufferDelete, *this);
+     if (this->allocation_status_ != AllocationStatus::DEALLOCATED) {
+         this->deallocate();

@@ -303,14 +303,14 @@ int main(int argc, char** argv) {
 
         // Create and execute mesh workload
         double workload_creation_time = perf.measure_execution_time("workload_creation", [&]() {
-            auto mesh_workload = CreateMeshWorkload();
+            auto mesh_workload = MeshWorkload();
 
             // Create programs for each device in the mesh
             uint32_t device_id = 0;
             for (uint32_t row = 0; row < mesh_device->num_rows(); ++row) {
                 for (uint32_t col = 0; col < mesh_device->num_cols(); ++col) {
                     auto program = CreateMultiCoreMandelbrotProgram(output_buffer, tile_size_bytes, num_tiles, config, device_id);
-                    AddProgramToMeshWorkload(mesh_workload, std::move(program), MeshCoordinateRange({row, col}, {row, col}));
+                    mesh_workload.add_program(MeshCoordinateRange({row, col}, {row, col}), std::move(program));
                     device_id++;
                 }
             }
@@ -318,12 +318,12 @@ int main(int argc, char** argv) {
         perf.add_timing(benchmark, "workload_creation", workload_creation_time);
 
         // Execute the workload
-        auto mesh_workload = CreateMeshWorkload();
+        auto mesh_workload = MeshWorkload();
         uint32_t device_id = 0;
         for (uint32_t row = 0; row < mesh_device->num_rows(); ++row) {
             for (uint32_t col = 0; col < mesh_device->num_cols(); ++col) {
                 auto program = CreateMultiCoreMandelbrotProgram(output_buffer, tile_size_bytes, num_tiles, config, device_id);
-                AddProgramToMeshWorkload(mesh_workload, std::move(program), MeshCoordinateRange({row, col}, {row, col}));
+                mesh_workload.add_program(MeshCoordinateRange({row, col}, {row, col}), std::move(program));
                 device_id++;
             }
         }

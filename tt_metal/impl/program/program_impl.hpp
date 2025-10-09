@@ -218,6 +218,7 @@ public:
     void invalidate_circular_buffer_allocation();
     // Always used in conjuction with validate_circular_buffer_region and compile
     void allocate_circular_buffers(const IDevice* device);
+    void deallocate_circular_buffers();
     bool is_finalized() const;
     void set_finalized();
     void allocate_kernel_bin_buf_on_device(IDevice* device);
@@ -349,6 +350,8 @@ private:
     std::unordered_map<CoreCoord, std::bitset<NUM_CIRCULAR_BUFFERS>> per_core_cb_indices_;
     std::unordered_map<CoreCoord, std::bitset<NUM_CIRCULAR_BUFFERS>> per_core_local_cb_indices_;
     std::unordered_map<CoreCoord, std::bitset<NUM_CIRCULAR_BUFFERS>> per_core_remote_cb_indices_;
+    // Store device pointer for circular buffer deallocation tracking
+    const IDevice* cb_device_ = nullptr;
     std::unordered_map<ChipId, ProgramBinaryStatus> binaries_on_device_;
     // Used to generate circular buffer addresses. There is one CircularBufferAllocator per unique CoreRange
     std::vector<CircularBufferAllocator> cb_allocators_;

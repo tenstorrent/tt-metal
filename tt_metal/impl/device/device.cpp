@@ -159,10 +159,13 @@ void Device::initialize_default_sub_device_state(
         CoreRangeSet(CoreRange({0, 0}, {compute_grid_size.x - 1, compute_grid_size.y - 1})),
         CoreRangeSet(std::move(active_eth_core_ranges))})};
 
-    sub_device_manager_tracker_ = std::make_unique<SubDeviceManagerTracker>(
-        this,
-        this->initialize_allocator(l1_small_size, trace_region_size, worker_l1_unreserved_start, l1_bank_remap),
-        sub_devices);
+    auto allocator =
+        this->initialize_allocator(l1_small_size, trace_region_size, worker_l1_unreserved_start, l1_bank_remap);
+
+    // Set device ID for allocation tracking
+    allocator->set_device_id(this->id_);
+
+    sub_device_manager_tracker_ = std::make_unique<SubDeviceManagerTracker>(this, std::move(allocator), sub_devices);
 }
 
 std::unique_ptr<Allocator> Device::initialize_allocator(
@@ -469,7 +472,12 @@ bool Device::close() {
     this->disable_and_clear_program_cache();
     this->set_program_cache_misses_allowed(true);
 
+    std::cout << "🔍 [Device " << this->id_ << "] About to reset sub_device_manager_tracker_" << std::endl;
+    std::cout << "   This should trigger allocator cleanup..." << std::endl;
+
     sub_device_manager_tracker_.reset(nullptr);
+
+    std::cout << "✓  [Device " << this->id_ << "] sub_device_manager_tracker_ reset complete" << std::endl;
 
     this->compute_cores_.clear();
     this->storage_only_cores_.clear();
@@ -478,6 +486,8 @@ bool Device::close() {
     this->command_queues_.clear();
     this->sysmem_manager_.reset();
     this->initialized_ = false;
+
+    std::cout << "✓  [Device " << this->id_ << "] Device close complete" << std::endl;
 
     return true;
 }

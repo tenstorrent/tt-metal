@@ -255,10 +255,10 @@ int main(int argc, char** argv) {
 
     auto program = CreateEltwiseAddProgram(a, b, c, tile_size_bytes, num_tiles, rep_num_tiles, tiles_per_shard, mesh_device);
 
-    auto mesh_workload = CreateMeshWorkload();
+    auto mesh_workload = MeshWorkload();
     auto device_range = MeshCoordinateRange(mesh_device->shape());
 
-    AddProgramToMeshWorkload(mesh_workload, std::move(program), device_range);
+    mesh_workload.add_program(device_range, std::move(program));
     EnqueueMeshWorkload(cq, mesh_workload, false /* blocking */);
 
     std::vector<float> result_data(total_float_values, 0);

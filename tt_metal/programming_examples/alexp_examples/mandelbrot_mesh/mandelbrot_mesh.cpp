@@ -213,7 +213,7 @@ int main() {
         config.max_iterations = 100;
 
         // Calculate buffer requirements
-        auto tile_size_bytes = tt::tt_metal::detail::TileSize(tt::DataFormat::Float16_b);
+        auto tile_size_bytes = tt::tile_size(tt::DataFormat::Float16_b);
         auto elements_per_tile = tt::constants::TILE_WIDTH * tt::constants::TILE_HEIGHT;
         auto total_elements = config.width * config.height;
         auto num_tiles = (total_elements + elements_per_tile - 1) / elements_per_tile;
@@ -243,7 +243,7 @@ int main() {
         auto output_buffer = MeshBuffer::create(distributed_buffer_config, local_buffer_config, mesh_device.get());
 
         // Create mesh workload and execute on all devices
-        auto mesh_workload = CreateMeshWorkload();
+        auto mesh_workload = MeshWorkload();
         auto device_range = MeshCoordinateRange(mesh_device->shape());
 
         // Create programs for each device in the mesh
@@ -251,7 +251,7 @@ int main() {
         for (uint32_t row = 0; row < mesh_device->num_rows(); ++row) {
             for (uint32_t col = 0; col < mesh_device->num_cols(); ++col) {
                 auto program = CreateMandelbrotProgram(output_buffer, tile_size_bytes, num_tiles, config, device_id);
-                AddProgramToMeshWorkload(mesh_workload, std::move(program), MeshCoordinateRange({row, col}, {row, col}));
+                mesh_workload.add_program(MeshCoordinateRange({row, col}, {row, col}), std::move(program));
                 device_id++;
             }
         }

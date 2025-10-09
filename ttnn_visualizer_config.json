@@ -1,0 +1,9 @@
+{
+  "enable_fast_runtime_mode": false,
+  "enable_logging": true,
+  "report_name": "simple_text_demo_performance_batch1",
+  "enable_graph_report": true,
+  "enable_detailed_buffer_report": true,
+  "enable_detailed_tensor_report": false,
+  "enable_comparison_mode": false
+}

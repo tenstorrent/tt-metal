@@ -232,7 +232,12 @@ detail::ProgramImpl::ProgramImpl() :
     Inspector::program_created(this);
 }
 
-detail::ProgramImpl::~ProgramImpl() noexcept { Inspector::program_destroyed(this); }
+detail::ProgramImpl::~ProgramImpl() noexcept {
+    // Deallocate circular buffers before program destruction
+    // This ensures circular buffer deallocations are tracked properly
+    deallocate_circular_buffers();
+    Inspector::program_destroyed(this);
+}
 
 Program::Program() : internal_(std::make_shared<detail::ProgramImpl>()) {
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
@@ -844,6 +849,9 @@ void detail::ProgramImpl::allocate_circular_buffers(const IDevice* device) {
         return;
     }
 
+    // Store device for later deallocation tracking
+    this->cb_device_ = device;
+
     uint64_t base_cb_address = device->allocator()->get_base_allocator_addr(HalMemType::L1);
     for (const auto& circular_buffer : this->circular_buffers_) {
         if (circular_buffer->globally_allocated()) {
@@ -883,6 +891,16 @@ void detail::ProgramImpl::allocate_circular_buffers(const IDevice* device) {
         circular_buffer->set_locally_allocated_address(computed_addr);
     }
     this->local_circular_buffer_allocation_needed_ = false;
+}
+
+void detail::ProgramImpl::deallocate_circular_buffers() {
+    // ZoneScoped;
+    // Deallocate all circular buffers for this program
+    // This notifies the GraphTracker to report deallocations to the allocation server
+    if (this->cb_device_ != nullptr && !this->circular_buffers_.empty()) {
+        tt::tt_metal::GraphTracker::instance().track_deallocate_cb(this->cb_device_);
+        this->cb_device_ = nullptr;  // Clear device pointer after deallocation
+    }
 }
 
 void detail::ProgramImpl::validate_circular_buffer_region(const IDevice* device) {
