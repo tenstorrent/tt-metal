@@ -35,7 +35,7 @@ run_tg_tests() {
 
   elif [[ "$1" == "resnet50" ]]; then
     echo "LOG_METAL: running resnet50 run_tg_frequent_tests"
-    pytest -n auto models/demos/tg/resnet50/tests/test_resnet50_performant.py ; fail+=$?
+    pytest -n auto models/demos/ttnn_resnet/tests/test_resnet50_performant.py ; fail+=$?
 
   elif [[ "$1" == "unit" ]]; then
     echo "LOG_METAL: running unit/distributed run_tg_frequent_tests"

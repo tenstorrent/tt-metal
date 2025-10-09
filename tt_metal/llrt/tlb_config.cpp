@@ -165,7 +165,10 @@ void configure_static_tlbs(
         uint64_t peer_dram_offset = dram_channel_0_peer2peer_region_start;
         for (uint32_t tlb_id = dynamic_tlb_base_index; tlb_id < dynamic_tlb_base_index + dynamic_tlb_count; tlb_id++) {
             device_driver.configure_tlb(
-                mmio_device_id, CoreCoord(dram_channel_0_x, dram_channel_0_y), tlb_id, peer_dram_offset);
+                mmio_device_id,
+                tt::umd::CoreCoord(dram_channel_0_x, dram_channel_0_y, CoreType::DRAM, CoordSystem::NOC0),
+                tlb_id,
+                peer_dram_offset);
             // Align address space of 16MB TLB to 16MB boundary
             peer_dram_offset += dynamic_tlb_16m_size;
         }
@@ -173,7 +176,8 @@ void configure_static_tlbs(
         // Setup static 4GB tlbs for DRAM cores
         uint32_t dram_addr = 0;
         for (std::uint32_t dram_channel = 0; dram_channel < blackhole::NUM_DRAM_CHANNELS; dram_channel++) {
-            tt_xy_pair dram_core = blackhole::ddr_to_noc0(dram_channel);
+            tt::umd::CoreCoord dram_core =
+                tt::umd::CoreCoord(blackhole::ddr_to_noc0(dram_channel), CoreType::DRAM, CoordSystem::NOC0);
             auto tlb_index = tt::umd::blackhole::TLB_COUNT_2M + dram_channel;
             device_driver.configure_tlb(mmio_device_id, dram_core, tlb_index, dram_addr, TLB_DATA::Posted);
         }
