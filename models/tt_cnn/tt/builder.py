@@ -474,15 +474,15 @@ def to_compute_config(configuration: Conv2dConfiguration, device: ttnn.Device):
     )
 
 
-def to_slice_config(configuration: Conv2dConfiguration):
-    if configuration.slice_strategy is None:
+def to_slice_config(slice_strategy: Optional[SliceStrategy]):
+    if slice_strategy is None:
         return None
     # Channel slicing uses the predefined Conv2dL1FullSliceConfig
-    if isinstance(configuration.slice_strategy, ChannelSliceStrategyConfiguration):
+    if isinstance(slice_strategy, ChannelSliceStrategyConfiguration):
         return ttnn.Conv2dL1FullSliceConfig
     return ttnn.Conv2dSliceConfig(
-        slice_type=configuration.slice_strategy.get_slice_type(),
-        num_slices=configuration.slice_strategy.get_num_slices(),
+        slice_type=slice_strategy.get_slice_type(),
+        num_slices=slice_strategy.get_num_slices(),
     )
 
 
@@ -495,7 +495,7 @@ class TtConv2d:
         self.configuration = configuration
         self.conv2d_config = to_conv2d_config(configuration)
         self.compute_config = to_compute_config(configuration, device)
-        self.slice_config = to_slice_config(configuration)
+        self.slice_config = to_slice_config(configuration.slice_strategy)
 
         self.device = device
 
