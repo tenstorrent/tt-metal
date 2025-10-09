@@ -417,11 +417,6 @@ def run_test_sdpa_decode_single_iter(
 
     q_chunk_size = padded_num_heads if override_q_chunk_size is None else override_q_chunk_size
     k_chunk_size = get_chunk_size(max_start_idx + 1, s) if override_k_chunk_size is None else override_k_chunk_size
-    logger.info(f"Using k_chunk_size: {k_chunk_size}")
-    logger.info(f"Using compute_with_storage_grid_size: {grid_size}")
-    logger.info(f"Using sub_core_grids: {compute_sub_core_grids}")
-    logger.info(f"Using q_chunk_size: {q_chunk_size}")
-    logger.info(f"Using exp_approx_mode: False")
 
     program_config = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=grid_size,
@@ -1141,7 +1136,7 @@ def run_test_sdpa_decode_paged_attention_single_iter(
 @pytest.mark.parametrize("block_size", (32, 64, 128), ids=["paged_32", "paged_64", "paged_128"])
 @pytest.mark.parametrize("sliding_window", (None, 1024), ids=["default", "sliding_window"])
 def test_sdpa_decode_paged_attention(
-    device, b, nh, nkv, s, d, kv_dtype, grid_size, q_dtype, cur_pos_tensor, block_size, sliding_window
+    device, b, nh, nkv, s, d, kv_dtype, grid_size, q_dtype, cur_pos_tensor, block_size, sliding_window, reset_seeds
 ):
     if s == 128 * 1024 and block_size != 64:
         # 128k sequence, block_size 64 tests the sizing of the page table CB
@@ -1578,14 +1573,13 @@ def test_sdpa_decode_ndpcc(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype):
     "b, nh, nkv, s, d, grid_size, sliding_window",
     [
         # Test different sliding window sizes
-        [1, 4, 2, 4096, 128, (8, 8), 1024],
-        # [1, 4, 2, 1024 * 16, 128, (8, 8), 1024],  # Gemma test
-        # [1, 1, 1, 1024, 128, (8, 1), 128],  # Micro test
-        # [4, 8, 1, 1024, 128, (8, 4), 64],    # Small window
-        # [4, 8, 1, 1024, 128, (8, 4), 128],   # Medium window
-        # [4, 8, 1, 1024, 128, (8, 4), 256],   # Large window
-        # [8, 16, 4, 2048, 128, (8, 8), 128],  # Multi-head with window
-        # [1, 8, 1, 4096, 128, (8, 4), 512],   # Long sequence with window
+        [1, 4, 2, 1024 * 16, 128, (8, 8), 1024],  # Gemma test
+        [1, 8, 1, 1024 * 16, 128, (8, 8), 128],  # GPT-OSS test
+        [4, 8, 1, 1024, 128, (8, 4), 64],  # Small window
+        [4, 8, 1, 1024, 128, (8, 4), 128],  # Medium window
+        [4, 8, 1, 1024, 128, (8, 4), 256],  # Large window
+        [8, 16, 4, 2048, 128, (8, 8), 128],  # Multi-head with window
+        [1, 8, 1, 4096, 128, (8, 4), 512],  # Long sequence with window
     ],
 )
 @pytest.mark.parametrize("cur_pos_tensor", [False, True])
@@ -1606,12 +1600,11 @@ def test_sdpa_decode_sliding_window(
 
     # Test different positions to ensure sliding window works correctly
     test_positions = [
-        # sliding_window * 2,  # Window fully slides
-        # sliding_window // 2 + 1,  # Window partially filled
-        # sliding_window - 1,  # Window almost full
-        # s // 2 + 1,  # Middle of sequence
-        # s - 10,  # Near end of sequence
-        2272,
+        sliding_window * 2,  # Window fully slides
+        sliding_window // 2,  # Window partially filled
+        sliding_window - 1,  # Window almost full
+        s // 2,  # Middle of sequence
+        s - 10,  # Near end of sequence
     ]
 
     for cur_pos in test_positions:
@@ -1634,7 +1627,6 @@ def test_sdpa_decode_sliding_window(
             cur_pos_tensor=cur_pos_tensor,
             sharded_in=False,
             sharded_out=False,
-            # start_indices=[cur_pos] * b,
-            start_indices=[cur_pos + i for i in range(b)],
+            start_indices=[cur_pos + i for i in range(b)],  # test a batch with different start positions
             sliding_window=sliding_window,
         )
