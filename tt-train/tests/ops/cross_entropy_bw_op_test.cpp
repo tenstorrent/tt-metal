@@ -361,9 +361,6 @@ TEST_F(CrossEntropyBackwardTest, CrossEntropyForwardBackward_ReduceMeanVsNone) {
     auto result_mean_xtensor = core::to_xtensor(result_mean->get_value());
 
     // print all shapes
-    std::cout << "Result_none_shape: " << result_none->get_shape() << std::endl;
-    std::cout << "Result_mean_shape: " << result_mean->get_shape() << std::endl;
-    std::cout << "Result_none_with_mean_after_shape: " << result_none_with_mean_after->get_shape() << std::endl;
 
     assert((result_none_after_mean_xtensor.shape() == result_mean_xtensor.shape()));
     EXPECT_TRUE(xt::allclose(result_none_after_mean_xtensor, result_mean_xtensor, 3e-2F, 1e-2F));
