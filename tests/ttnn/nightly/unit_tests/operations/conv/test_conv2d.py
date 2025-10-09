@@ -413,6 +413,7 @@ def run_conv_with_split(
     input_layout=ttnn.ROW_MAJOR_LAYOUT,
     enable_weights_double_buffer=False,
     enable_act_double_buffer=False,
+    config_tensors_in_dram=False,
 ):
     if hasattr(padding, "__len__"):
         if len(padding) == 2:
@@ -482,6 +483,7 @@ def run_conv_with_split(
         shard_layout=shard_layout if not auto_shard else None,
         enable_act_double_buffer=enable_act_double_buffer,
         enable_weights_double_buffer=enable_weights_double_buffer,
+        config_tensors_in_dram=config_tensors_in_dram,
     )
     compute_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
@@ -3848,20 +3850,24 @@ def test_segformer_channel_padding(device, enable_act_double_buffer):
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize(
-    "input_channels, output_channels, input_height, input_width, kernel_height, kernel_width, stride_height, stride_width",
+    "input_channels, output_channels, input_height, input_width, kernel_height, kernel_width, stride_height, stride_width, padding",
     [
-        (3, 32, 224, 224, 16, 16, 16, 16),
-        (3, 32, 224, 224, 32, 32, 32, 32),
-        (3, 32, 224, 224, 16, 16, 2, 2),
-        (3, 32, 224, 224, 7, 7, 2, 2),
-        (3, 32, 224, 224, 6, 6, 2, 2),
-        (3, 32, 1280, 1280, 6, 6, 2, 2),
-        (3, 32, 512, 672, 16, 16, 16, 16),
-        (3, 32, 512, 672, 32, 32, 32, 32),
-        (320, 32, 224, 224, 16, 16, 16, 16),
-        (320, 32, 224, 224, 32, 32, 32, 32),
-        (320, 32, 512, 672, 16, 16, 16, 16),
-        (320, 32, 512, 672, 32, 32, 32, 32),
+        (3, 32, 224, 224, 16, 16, 16, 16, (0, 0)),
+        (3, 32, 224, 224, 32, 32, 32, 32, (0, 0)),
+        (3, 32, 224, 224, 16, 16, 2, 2, (0, 0)),
+        (3, 32, 224, 224, 7, 7, 2, 2, (0, 0)),
+        (3, 32, 224, 224, 6, 6, 2, 2, (0, 0)),
+        (3, 32, 1280, 1280, 6, 6, 2, 2, (0, 0)),
+        (3, 32, 512, 672, 16, 16, 16, 16, (0, 0)),
+        (3, 32, 512, 672, 32, 32, 32, 32, (0, 0)),
+        (320, 32, 224, 224, 16, 16, 16, 16, (0, 0)),
+        (320, 32, 224, 224, 32, 32, 32, 32, (0, 0)),
+        (320, 32, 512, 672, 16, 16, 16, 16, (0, 0)),
+        (320, 32, 512, 672, 32, 32, 32, 32, (0, 0)),
+
+        (3, 32, 208, 208, 16, 16, 16, 16, (8, 8)),
+        (3, 32, 192, 192, 32, 32, 32, 32, (16, 16)),
+        (320, 32, 208, 208, 16, 16, 16, 16, (8, 8)),
     ]
 )
 @pytest.mark.parametrize("input_layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
@@ -3878,9 +3884,12 @@ def test_conv2d_with_fold(
     kernel_width,
     stride_height,
     stride_width,
+    padding,
     input_layout,
     has_bias,
 ):
+    if padding != (0, 0) and input_layout == ttnn.TILE_LAYOUT:
+        pytest.skip("ttnn::pad with tile layout does not support front padding yet")
     run_conv(
         device=device,
         torch_tensor_map=torch_tensor_map,
@@ -3897,7 +3906,7 @@ def test_conv2d_with_fold(
         filter_width=kernel_width,
         stride_h=stride_height,
         stride_w=stride_width,
-        padding=(0, 0),
+        padding=padding,
         config_override=None,
         input_layout=input_layout,
         has_bias=has_bias,
@@ -4381,6 +4390,7 @@ def test_conv2d_panoptic(
         shard_layout=shard_layout,
         enable_act_double_buffer=True,
         enable_weights_double_buffer=True if shard_layout == BS else False,
+        config_tensors_in_dram=True,
 
     )
     signpost(header="conv2d_end.")
@@ -4477,6 +4487,7 @@ def test_conv_dram_panoptic(
         ),
         enable_act_double_buffer=True,
         enable_weights_double_buffer=True if shard_layout == BS else False,
+        config_tensors_in_dram=True,
     )
     signpost(header=f"dram_slice_conv_{slice_type}_{num_slices}_slices_end.")
 
@@ -4559,6 +4570,7 @@ def test_conv2d_ch_split_dram_panoptic(
             input_layout=ttnn.TILE_LAYOUT if output_dtype == ttnn.bfloat8_b else None,
             enable_act_double_buffer=act_db,
             enable_weights_double_buffer=w_db,
+            config_tensors_in_dram=True,
         )
     else:
         pytest.skip("Not a split conv test, skipping.")
