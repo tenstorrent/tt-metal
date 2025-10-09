@@ -396,7 +396,14 @@ def create_json_with_github_benchmark_environment(github_partial_benchmark_data_
     github_pipeline_link = f"https://github.com/{git_repo_name}/actions/runs/{github_pipeline_id}"
 
     logger.info("Fetching GitHub job ID from environment (CI_CD_JOB_ID)...")
-    github_job_id = os.environ.get("CI_CD_JOB_ID", "unknown")
+    github_job_id_str = os.environ.get("CI_CD_JOB_ID", "0")
+
+    try:
+        github_job_id = int(github_job_id_str)
+    except ValueError:
+        logger.warning(f"Could not convert CI_CD_JOB_ID='{github_job_id_str}' to int, defaulting to 0")
+        github_job_id = 0
+
     logger.info(f"GitHub job ID resolved to: {github_job_id}")
 
     assert "GITHUB_TRIGGERING_ACTOR" in os.environ
