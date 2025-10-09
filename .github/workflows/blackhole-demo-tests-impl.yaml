@@ -20,6 +20,9 @@ on:
         required: false
         type: boolean
         default: false
+      iteration:
+        required: true
+        type: string
 
 jobs:
   single-card-demo-tests:
@@ -27,12 +30,12 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          {
-            name: "whisper performance",
-            arch: blackhole,
-            cmd: pytest models/demos/whisper/demo/demo.py --input-path="models/demos/whisper/demo/dataset/conditional_generation" -k "conditional_generation",
-            owner_id: U05RWH3QUPM # Salar Hosseini
-          },
+          # {
+          #   name: "whisper performance",
+          #   arch: blackhole,
+          #   cmd: pytest models/demos/whisper/demo/demo.py --input-path="models/demos/whisper/demo/dataset/conditional_generation" -k "conditional_generation",
+          #   owner_id: U05RWH3QUPM # Salar Hosseini
+          # },
           {
             name: "llama3-8b performance",
             arch: blackhole,
@@ -47,9 +50,8 @@ jobs:
             owner_id: U06ECNVR0EN # Evan Smal
           }
         ]
-    name: ${{ matrix.test-group.name }}
+    name: ${{ matrix.test-group.name }} iteration ${{ inputs.iteration }}
     runs-on:
-      - "in-service"
       - "${{ inputs.runner-label }}"
       - "pipeline-perf"
     container:
