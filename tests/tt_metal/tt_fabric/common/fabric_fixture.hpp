@@ -287,12 +287,19 @@ void FabricUnicastCommon(
     BaseFabricFixture* fixture,
     NocSendType noc_send_type,
     const std::vector<std::tuple<RoutingDirection, uint32_t /*num_hops*/>>& dir_configs,
+    FabricApiType api_type = FabricApiType::Linear,
     bool with_state = false);
 
 void FabricMulticastCommon(
     BaseFabricFixture* fixture,
     NocSendType noc_send_type,
     const std::vector<std::tuple<RoutingDirection, uint32_t /*start_distance*/, uint32_t /*range*/>>& dir_configs,
+    bool with_state = false);
+
+void Fabric2DMulticastCommon(
+    BaseFabricFixture* fixture,
+    NocSendType noc_send_type,
+    const std::vector<std::vector<std::tuple<RoutingDirection, uint32_t, uint32_t>>>& connection_configs,
     bool with_state = false);
 
 void RunEDMConnectionStressTest(

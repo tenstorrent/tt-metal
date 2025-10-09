@@ -4,7 +4,7 @@
 
 """Factory for creating transformer models from configuration."""
 import ttml
-from ttml.common.config import DeviceConfig, TransformerConfig
+from ttml.common.config import DeviceConfig, TransformerConfig, MultiHostConfig
 from ttml.common.utils import round_up_to_tile
 
 
@@ -49,6 +49,7 @@ class TransformerModelFactory:
             yaml_config: Dictionary containing configuration
         """
         self.device_config = DeviceConfig(yaml_config)
+        self.multihost_config = MultiHostConfig(yaml_config)
         training_config = yaml_config.get("training_config", {})
         self.model_type = training_config.get("model_type", "gpt2")
         self.transformer_config = TransformerConfig(training_config.get("transformer_config", {}))
@@ -126,6 +127,17 @@ class TransformerModelFactory:
                 lcfg.low_freq_factor = self.transformer_config.low_freq_factor
             if self.transformer_config.original_context_length:
                 lcfg.original_context_length = self.transformer_config.original_context_length
+
+        # Pipeline-parallel config (optional, under multihost_config)
+        mh = self.multihost_config
+        if mh.pipeline_parallel_config:
+            # Build PP config object
+            pp = ttml.models.distributed.pipeline_parallel.llama.PipelineParallelConfig()
+            pp.num_blocks = mh.pipeline_parallel_config.num_blocks
+            pp.blocks_per_rank = mh.pipeline_parallel_config.blocks_per_rank
+            return ttml.models.distributed.pipeline_parallel.llama.create_llama_model(
+                lcfg, pp, self.device_config.enable_tp
+            )
 
         if self.device_config.enable_tp:
             return ttml.models.distributed.llama.create_llama_model(lcfg)

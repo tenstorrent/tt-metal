@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import itertools
 import json
 import os
 from copy import deepcopy
@@ -18,8 +19,9 @@ from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutpu
 import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3.scripts.generate_test_inputs_outputs import __file__ as REFERENCE_IO_SCRIPT_NAME
+from models.demos.deepseek_v3.tt.rope import RotarySetup
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
-from models.demos.deepseek_v3.utils.config_helpers import MAX_BATCH_SIZE, dequantize, even_int_div, get_weight_config
+from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, dequantize, even_int_div, get_weight_config
 from models.tt_transformers.tt.common import PagedAttentionConfig
 
 
@@ -176,7 +178,7 @@ def torch_cache_from_paged(
 
 def paged_cache_from_torch(
     torch_cache: torch.Tensor,
-    dp_factor: int,
+    mesh_shape: tuple[int, int],
     paged_config: PagedAttentionConfig,
     user_id: int | None,
     mapping: torch.Tensor | None = None,
@@ -187,6 +189,7 @@ def paged_cache_from_torch(
     Args:
         torch_cache (torch.Tensor): The input cache tensor of shape (batch_size, num_heads, seq_len, dim).
         dp_factor (int): The number of data parallel devices.
+        batch_size (int): The total batch size.
         paged_config (PagedAttentionConfig): Configuration for the paged cache.
         user_id (int | None): Optional user index. If provided, the cache is placed at the corresponding batch index.
         mapping (torch.Tensor | None, optional): Optional mapping tensor for block assignment. If None, a random permutation is generated.
@@ -201,11 +204,13 @@ def paged_cache_from_torch(
     """
     if user_id is not None:
         torch_cache_line = torch_cache
-        torch_cache = torch.zeros((MAX_BATCH_SIZE, *torch_cache_line.shape[1:]), dtype=torch_cache_line.dtype)
+        torch_cache = torch.zeros(
+            (mesh_shape[0] * USERS_PER_ROW, *torch_cache_line.shape[1:]), dtype=torch_cache_line.dtype
+        )
         torch_cache[user_id : user_id + 1] = torch_cache_line
 
     batch_size, num_heads, seq_len, dim = torch_cache.shape
-    batches_per_device = even_int_div(batch_size, dp_factor)
+    batches_per_device = even_int_div(batch_size, mesh_shape[0] * mesh_shape[1])
     blocks_per_batch = even_int_div(paged_config.max_num_blocks, batches_per_device)
     assert num_heads == 1, "Expected the kvpe cache to have only one head"
 
@@ -217,19 +222,19 @@ def paged_cache_from_torch(
     torch_cache = torch.nn.functional.pad(torch_cache, (0, 0, 0, paged_config.block_size * blocks_per_batch - seq_len))
 
     torch_cache = torch_cache.reshape(
-        dp_factor, batches_per_device, num_heads, blocks_per_batch, paged_config.block_size, dim
+        mesh_shape[0] * mesh_shape[1], batches_per_device, num_heads, blocks_per_batch, paged_config.block_size, dim
     )
     torch_cache = torch_cache.transpose(
         2, 3
     )  # (num_devices, batches_per_device, blocks_per_batch, num_heads, block_size, dim)
 
     paged_cache = torch.empty(
-        (dp_factor, batches_per_device * blocks_per_batch, num_heads, paged_config.block_size, dim),
+        (mesh_shape[0] * mesh_shape[1], batches_per_device * blocks_per_batch, num_heads, paged_config.block_size, dim),
         dtype=torch_cache.dtype,
     )
     paged_cache[:, mapping] = torch_cache
     paged_cache = paged_cache.reshape(
-        dp_factor * batches_per_device * blocks_per_batch, num_heads, paged_config.block_size, dim
+        mesh_shape[0] * mesh_shape[1] * batches_per_device * blocks_per_batch, num_heads, paged_config.block_size, dim
     )
 
     return paged_cache, mapping
@@ -237,7 +242,7 @@ def paged_cache_from_torch(
 
 def paged_caches_from_torch(
     torch_caches: tuple[torch.Tensor, ...],
-    dp_factor: int,
+    mesh_shape: tuple[int, int],
     paged_config: PagedAttentionConfig,
     user_id: int | None,
     mappings: tuple[torch.Tensor, ...] | None = None,
@@ -251,7 +256,7 @@ def paged_caches_from_torch(
         mappings = (None,) * len(torch_caches)
     paged_caches, mappings = zip(
         *(
-            paged_cache_from_torch(torch_cache, dp_factor, paged_config, user_id, mapping)
+            paged_cache_from_torch(torch_cache, mesh_shape, paged_config, user_id, mapping)
             for mapping, torch_cache in zip(mappings, torch_caches, strict=True)
         )
     )
@@ -446,22 +451,18 @@ def run_module_forward(ModuleClass: type[AbstractModule], mode: Literal["prefill
 def assert_hidden_dim_pcc(
     tt_output_torch: torch.Tensor, reference_output: torch.Tensor, pcc_required: float = 0.98
 ) -> float:
+    tt_output_torch = tt_output_torch.cpu().float()
     assert (
-        tt_output_torch.ndim == reference_output.ndim == 4
-    ), f"Both model and reference outputs must be 4D tensors; got {tt_output_torch.ndim}D and {reference_output.ndim}D instead"
-    assert (
-        tt_output_torch.shape[0] == reference_output.shape[0]
-    ), f"Model and reference output shape mismatch on dim 0 ({tt_output_torch.shape[0]} != {reference_output.shape[0]})"
-    assert (
-        tt_output_torch.shape[1] == reference_output.shape[1]
-    ), f"Model and reference output shape mismatch on dim 1 ({tt_output_torch.shape[1]} != {reference_output.shape[1]})"
-    assert (
-        tt_output_torch.shape[3] == reference_output.shape[3]
-    ), f"Model and reference output shape mismatch on dim 3 ({tt_output_torch.shape[3]} != {reference_output.shape[3]})"
+        all(
+            d1 == d2
+            for d1, d2 in itertools.zip_longest(tt_output_torch.shape[:-2], reference_output.shape[:-2], fillvalue=1)
+        )
+        and tt_output_torch.shape[-1] == reference_output.shape[-1]
+    ), f"Model and reference output shape must match on all dimensions except for the second to last one (module leading singleton dimensions); got {tt_output_torch.shape=} and {reference_output.shape=} "
 
-    seq_len = min(tt_output_torch.shape[2], reference_output.shape[2])
-    tt_output_torch = tt_output_torch[:, :, :seq_len, :]
-    reference_output = reference_output[:, :, :seq_len, :]
+    seq_len_or_batch_size = min(tt_output_torch.shape[-2], reference_output.shape[-2])
+    tt_output_torch = tt_output_torch[..., :seq_len_or_batch_size, :]
+    reference_output = reference_output[..., :seq_len_or_batch_size, :]
 
     passing, pcc = comp_pcc(tt_output_torch, reference_output, pcc_required)
     logger.info(f"PCC: {pcc}")
@@ -482,3 +483,20 @@ def get_test_weight_config(
     return get_weight_config(
         ModuleClass, hf_config, state_dicts, per_test_weight_cache_path, mesh_device, force_recalculate
     )
+
+
+def get_rope_tensors(
+    hf_config: PretrainedConfig,
+    batch_size_per_row: int,
+    seq_len: int,
+    position_ids: torch.Tensor | None,
+    mesh_device: ttnn.MeshDevice,
+) -> dict[str, ttnn.Tensor]:
+    rope_setup = RotarySetup(
+        device=mesh_device,
+        batch_size_per_row=batch_size_per_row,
+        hf_config=hf_config,
+    )
+    if position_ids is None:
+        return rope_setup.get_rot_mats_table(seq_len)
+    return rope_setup.get_rot_mats(position_ids)

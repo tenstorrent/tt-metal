@@ -62,6 +62,7 @@ target_sources(
         test_graph_query_op_runtime.cpp
         test_launch_operation.cpp # TODO: Fix data race (TSan) then shift-left
         test_matmul_benchmark.cpp
+        test_rsub_int.cpp
         test_sub_int.cpp
 )
 target_include_directories(unit_tests_ttnn_basic PRIVATE ${PROJECT_SOURCE_DIR}/tests)

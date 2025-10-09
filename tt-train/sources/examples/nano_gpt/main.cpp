@@ -8,7 +8,6 @@
 #include <cstdint>
 #include <wandbcpp.hpp>
 
-#include "3tier/remote_optimizer.hpp"
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
 #include "core/clip_grad_norm.hpp"
@@ -28,6 +27,7 @@
 #include "ops/losses.hpp"
 #include "optimizers/adamw.hpp"
 #include "optimizers/no_op.hpp"
+#include "optimizers/remote_optimizer.hpp"
 #include "tokenizers/bpe_tokenizer.hpp"
 #include "tokenizers/char_tokenizer.hpp"
 #include "ttnn_fixed/distributed/tt_metal.hpp"
@@ -819,8 +819,8 @@ int main(int argc, char **argv) {
 
     auto select_optimizer = [&model, &adamw_params, &config]() -> std::unique_ptr<ttml::optimizers::OptimizerBase> {
         if (is_three_tier_training(config)) {
-            return std::make_unique<RemoteOptimizer>(
-                get_model_parameters(model), config.num_mh_workers, config.socket_type);
+            return std::make_unique<ttml::optimizers::RemoteOptimizer>(
+                get_model_parameters(model), config.num_mh_workers);
         } else if (config.use_no_op) {
             return std::make_unique<ttml::optimizers::NoOp>(get_model_parameters(model));
         } else if (config.use_moreh_adamw) {
@@ -834,7 +834,7 @@ int main(int argc, char **argv) {
     auto scheduler = schedule_func(optimizer.get(), config.max_steps);
 
     if (is_three_tier_training(config)) {
-        auto *optimizer_ptr = dynamic_cast<RemoteOptimizer *>(optimizer.get());
+        auto *optimizer_ptr = dynamic_cast<ttml::optimizers::RemoteOptimizer *>(optimizer.get());
         if (!optimizer_ptr) {
             throw std::runtime_error("Optimizer is not RemoteOptimizer");
         }

@@ -13,6 +13,22 @@ from ...parallel.config import vae_all_gather, VAEParallelConfig, ParallelFactor
 from time import time
 from loguru import logger
 
+vae_shapes = [
+    # [1, 128, 128, 512],
+    # [1, 256, 256, 512],
+    # [1, 512, 512, 512],
+    # [1, 512, 512, 256],
+    # [1, 1024, 1024, 256],
+    # [1, 1024, 1024, 128],
+    # more optimal reahaped versions
+    [1, 1, 128 * 128, 512],
+    [1, 1, 256 * 256, 512],
+    [1, 1, 512 * 512, 512],
+    [1, 1, 512 * 512, 256],
+    [1, 1, 1024 * 1024, 256],
+    [1, 1, 1024 * 1024, 128],
+]
+
 
 # adapted from https://github.com/huggingface/diffusers/blob/v0.31.0/src/diffusers/models/autoencoders/vae.py
 class VaeDecoder(torch.nn.Module):

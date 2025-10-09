@@ -73,6 +73,21 @@ CPMAddPackage(
         protobuf_noreturn.patch
 )
 
+# Setting visibility to hidden to avoid symbol conflicts with other protobuf libraries when tt-metal package is used
+set_target_properties(
+    libprotobuf
+    PROPERTIES
+        CXX_VISIBILITY_PRESET
+            "hidden"
+        VISIBILITY_INLINES_HIDDEN
+            TRUE
+)
+
+# Setting link and compile flags to avoid symbol conflicts with other protobuf libraries when tt-metal package is used.
+# Ensures that tt-metal package only uses its own protobuf library and not the one from the system.
+target_link_options(libprotobuf PRIVATE -Wl,-Bsymbolic)
+target_compile_options(libprotobuf PRIVATE -fno-semantic-interposition)
+
 ############################################################################################################################
 # yaml-cpp
 ############################################################################################################################

@@ -16,6 +16,7 @@ from models.experimental.panoptic_deeplab.tt.model_preprocessing import (
 )
 from models.experimental.panoptic_deeplab.tt.tt_model import TtPanopticDeepLab
 from models.experimental.panoptic_deeplab.reference.pytorch_model import PytorchPanopticDeepLab
+from models.experimental.panoptic_deeplab.tt.model_configs import ModelOptimisations
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.experimental.panoptic_deeplab.tt.common import (
     PDL_L1_SMALL_SIZE,
@@ -80,7 +81,13 @@ def test_panoptic_deeplab(device, model_location_generator):
         fused_parameters = fuse_conv_bn_parameters(ttnn_parameters, eps=1e-5)
         logger.info("Conv+BatchNorm fusion completed successfully")
 
-        # Create TTNN model with fused parameters
+        # Create centralized configuration
+        model_configs = ModelOptimisations(
+            conv_act_dtype=ttnn.bfloat8_b,
+            conv_w_dtype=ttnn.bfloat8_b,
+        )
+
+        # Create TTNN model with fused parameters and centralized configuration
         ttnn_model = TtPanopticDeepLab(
             device=device,
             parameters=fused_parameters,
@@ -92,6 +99,7 @@ def test_panoptic_deeplab(device, model_location_generator):
             ins_embed_head_channels=ins_embed_head_channels,
             norm="",
             train_size=train_size,
+            model_configs=model_configs,
         )
     except FileNotFoundError:
         pytest.fail("model_final_bd324a.pkl file not found. Please place the weights file in the weights folder.")
@@ -107,11 +115,11 @@ def test_panoptic_deeplab(device, model_location_generator):
     ttnn_center_torch = ttnn.to_torch(ttnn_center).permute(0, 3, 1, 2)
     ttnn_offset_torch = ttnn.to_torch(ttnn_offset).permute(0, 3, 1, 2)
 
-    sem_passed, sem_msg = assert_with_pcc(pytorch_semantic, ttnn_semantic_torch, pcc=0.96)
+    sem_passed, sem_msg = assert_with_pcc(pytorch_semantic, ttnn_semantic_torch, pcc=0.99)
     logger.info(f"Semantic PCC: {sem_msg}")
     assert sem_passed, f"Semantic segmentation PCC failed: {sem_msg}"
 
-    center_passed, center_msg = assert_with_pcc(pytorch_center, ttnn_center_torch, pcc=0.94)
+    center_passed, center_msg = assert_with_pcc(pytorch_center, ttnn_center_torch, pcc=0.99)
     logger.info(f"Center PCC: {center_msg}")
     assert center_passed, f"Center heatmap PCC failed: {center_msg}"
 

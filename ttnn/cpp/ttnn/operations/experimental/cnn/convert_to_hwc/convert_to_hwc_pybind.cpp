@@ -23,10 +23,14 @@ void bind_convert_to_hwc(py::module& module) {
     The input tensor is expected to be in row-major layout and width-sharded in L1 or DRAM.
     The output is a row-major height-sharded tensor.
 
+    When C is not a multiple of the device alignment requirement, the output shard width is automatically padded up
+    to the next multiple of the alignment requirement to satisfy alignment constraints.
+
     Args:
         input (ttnn.Tensor): Input tensor in CHW format, width-sharded in L1 or DRAM.
         memory_config (Optional[ttnn.MemoryConfig]): Output memory configuration.
                                                      Required only for DRAM inputs. If omitted for L1 inputs, the output memory_config is automatically inferred.
+                                                     The output shard width will be rounded up to the next multiple of the alignment requirement for proper memory alignment.
         dtype (Optional[ttnn.DataType]): Output data type (defaults to input dtype)
 
     Returns:

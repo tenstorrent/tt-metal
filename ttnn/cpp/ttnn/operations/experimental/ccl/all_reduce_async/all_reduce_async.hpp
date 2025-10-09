@@ -11,7 +11,7 @@
 
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include "ttnn/global_semaphore.hpp"
-#include "ttnn/operations/experimental/ccl/common.hpp"
+#include "ttnn/operations/experimental/ccl/composite_common.hpp"
 
 namespace ttnn {
 namespace operations {

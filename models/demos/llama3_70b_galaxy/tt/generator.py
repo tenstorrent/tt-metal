@@ -104,7 +104,7 @@ class Generator:
         if (
             batch == 32
             and len(set(prefill_seq_lens)) == 1
-            and batch_seq_len * batch < 128 * 1024
+            and prefill_seq_lens[0] * batch < 128 * 1024
             and tt_out_logits_all_users is None
             and not return_logits
         ):
@@ -283,15 +283,6 @@ class Generator:
         logger.info("Done Compiling Model")
 
         device_inputs = copy_host_to_device(host_inputs, mesh_device=self.mesh_device)
-        transformed_inputs = self.model.transform_prefill_inputs_device(*device_inputs)
-        tt_out_trace = self.model.ttnn_prefill_forward(
-            *transformed_inputs, kv_cache=kv_cache, get_last_token=last_token_idx, batch_size=batch_size
-        )
-
-        device_inputs = copy_host_to_device(host_inputs, mesh_device=self.mesh_device)
-        transformed_inputs = self.model.transform_prefill_inputs_device(*device_inputs)
-
-        device_inputs = copy_host_to_device(host_inputs, mesh_device=self.mesh_device)
         trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
         transformed_inputs = self.model.transform_prefill_inputs_device(*device_inputs)
         tt_out_trace = self.model.ttnn_prefill_forward(
@@ -334,6 +325,7 @@ class Generator:
         kv_cache=None,
         enable_trace=True,
         read_from_device=True,
+        async_read=False,
         sampling_params: SamplingParams = None,  # Should be None if not greedy decoding / sampling on device.
         reset_inputs=False,
         tt_out_logits_saved=None,
@@ -381,8 +373,12 @@ class Generator:
             tt_tok = self._decode_forward_no_trace_text(**decode_kwargs, return_logits=return_logits)
 
         if read_from_device:
-            tt_tok, read_event = self.read_decode_output(tt_tok, tokens.shape[0])
-            return tt_tok, read_event
+            tt_out = self.read_decode_output(tt_tok, async_read=async_read)
+            if async_read:
+                tt_tok, read_event = tt_out
+                return tt_tok, read_event
+            else:
+                return self.process_decode_output_host(tt_out, is_tokens=(not return_logits))
 
         return tt_tok
 
@@ -527,9 +523,7 @@ class Generator:
             current_pos,
             page_table=page_table,
         )
-        if return_logits:
-            # prevent race condition
-            ttnn.synchronize_device(self.mesh_device)
+
         return trace_tok_rm
 
     def read_decode_output(self, tt_out, async_read=True):
@@ -542,19 +536,15 @@ class Generator:
     def process_decode_output_host(self, tt_out, is_tokens=True):
         if isinstance(tt_out, tuple):
             tt_out = tt_out[0]
+        tt_out = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0])
         # Check if tensor is distributed across mesh devices (vocab_size // 8 indicates sharding)
         # If so, convert from distributed TT tensor to consolidated torch tensor
         if tt_out.shape[-1] >= self.model.vocab_size // 8:
-            # Convert from TT tensor format using mesh composition to concatenate
-            # across devices in an 8x4 mesh layout (dims 3,1 specify concatenation axes)
-            out = ttnn.to_torch(
-                tt_out, mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(3, 1), mesh_shape=(8, 4))
-            )
-            # Extract the first sequence, first batch element, all tokens up to vocab_size
-            # and add back the sequence dimension that was removed
-            return out[0, 0, :, : self.model.vocab_size].unsqueeze(1)
+            ttnn.synchronize_device(self.mesh_device)
+            return tt_out[0, 0, :, : self.model.vocab_size].unsqueeze(1)
+
         # If not sharded (it is a sampled token), convert directly from device tensor to torch tensor
-        return ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0])[0, 0, 0, :]
+        return tt_out[0, 0, 0, :]
 
     def chat_completion(
         self,

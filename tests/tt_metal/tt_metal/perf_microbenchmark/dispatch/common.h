@@ -107,7 +107,7 @@ public:
     bool core_and_bank_present(CoreCoord core, uint32_t bank);
 };
 
-DeviceData::DeviceData(
+inline DeviceData::DeviceData(
     IDevice* device,
     CoreRange workers,
     uint32_t l1_data_addr,
@@ -184,7 +184,7 @@ DeviceData::DeviceData(
 }
 
 // Populate interleaved DRAM with data for later readback.  Can we extended to L1 if needed.
-void DeviceData::prepopulate_dram(IDevice* device, uint32_t size_words) {
+inline void DeviceData::prepopulate_dram(IDevice* device, uint32_t size_words) {
     uint32_t num_dram_banks = device->allocator()->get_num_banks(BufferType::DRAM);
 
     for (int bank_id = 0; bank_id < num_dram_banks; bank_id++) {
@@ -222,7 +222,7 @@ void DeviceData::prepopulate_dram(IDevice* device, uint32_t size_words) {
     }
 }
 
-bool DeviceData::core_and_bank_present(CoreCoord core, uint32_t bank) {
+inline bool DeviceData::core_and_bank_present(CoreCoord core, uint32_t bank) {
     if (this->all_data.find(core) != this->all_data.end()) {
         std::unordered_map<uint32_t, one_core_data_t>& core_data = this->all_data.find(core)->second;
         if (core_data.find(bank) != core_data.end()) {
@@ -232,7 +232,7 @@ bool DeviceData::core_and_bank_present(CoreCoord core, uint32_t bank) {
     return false;
 }
 
-void DeviceData::push_one(CoreCoord core, int bank, uint32_t datum) {
+inline void DeviceData::push_one(CoreCoord core, int bank, uint32_t datum) {
     if (core_and_bank_present(core, bank)) {
         this->amt_written++;
         this->all_data[core][bank].data.push_back(datum);
@@ -240,7 +240,7 @@ void DeviceData::push_one(CoreCoord core, int bank, uint32_t datum) {
     }
 }
 
-void DeviceData::push_one(CoreCoord core, uint32_t datum) {
+inline void DeviceData::push_one(CoreCoord core, uint32_t datum) {
     if (core_and_bank_present(core, 0)) {
         this->amt_written++;
         this->all_data[core][0].data.push_back(datum);
@@ -248,7 +248,7 @@ void DeviceData::push_one(CoreCoord core, uint32_t datum) {
     }
 }
 
-void DeviceData::push_range(const CoreRange& cores, uint32_t datum, bool is_mcast) {
+inline void DeviceData::push_range(const CoreRange& cores, uint32_t datum, bool is_mcast) {
     bool counted = false;
     for (auto y = cores.start_coord.y; y <= cores.end_coord.y; y++) {
         for (auto x = cores.start_coord.x; x <= cores.end_coord.x; x++) {
@@ -271,7 +271,7 @@ inline uint32_t padded_size(uint32_t size, uint32_t alignment) {
     return (size + alignment - 1) / alignment * alignment;
 }
 
-void DeviceData::pad(CoreCoord core, int bank, uint32_t alignment) {
+inline void DeviceData::pad(CoreCoord core, int bank, uint32_t alignment) {
     if (core_and_bank_present(core, bank)) {
         uint32_t padded = padded_size(this->all_data[core][bank].data.size(), alignment / sizeof(uint32_t));
         this->all_data[core][bank].data.resize(padded);
@@ -281,7 +281,7 @@ void DeviceData::pad(CoreCoord core, int bank, uint32_t alignment) {
 
 // Some tests write to the same address across multiple cores
 // This takes cores that match core_type and pads any that are "behind" with invalid data
-void DeviceData::relevel(CoreType core_type) {
+inline void DeviceData::relevel(CoreType core_type) {
     size_t max = 0;
     for (auto& [coord, bank_device_data] : this->all_data) {
         for (auto& [bank, one_core_data] : bank_device_data) {
@@ -300,7 +300,7 @@ void DeviceData::relevel(CoreType core_type) {
     }
 }
 
-void DeviceData::relevel(CoreRange range) {
+inline void DeviceData::relevel(CoreRange range) {
     size_t max = 0;
 
     constexpr uint32_t bank = 0;
@@ -323,7 +323,7 @@ void DeviceData::relevel(CoreRange range) {
 }
 
 // Result expected results
-void DeviceData::reset() {
+inline void DeviceData::reset() {
     this->amt_written = 0;
     for (auto& [coord, bank_device_data] : this->all_data) {
         for (auto& [bank, one_core_data] : bank_device_data) {
@@ -336,18 +336,18 @@ void DeviceData::reset() {
     }
 }
 
-uint32_t DeviceData::get_base_result_addr(CoreType core_type) {
+inline uint32_t DeviceData::get_base_result_addr(CoreType core_type) {
     return this->base_result_data_addr[static_cast<int>(core_type)];
 }
 
-uint32_t DeviceData::get_result_data_addr(CoreCoord core, int bank_id) {
+inline uint32_t DeviceData::get_result_data_addr(CoreCoord core, int bank_id) {
     uint32_t base_addr = this->base_result_data_addr[static_cast<int>(this->all_data[core][bank_id].core_type)];
     return base_addr + (this->all_data[core][bank_id].data.size() * sizeof(uint32_t));
 }
 
-uint32_t DeviceData::size_at(CoreCoord core, int bank_id) { return this->all_data[core][bank_id].data.size(); }
+inline uint32_t DeviceData::size_at(CoreCoord core, int bank_id) { return this->all_data[core][bank_id].data.size(); }
 
-uint32_t DeviceData::at(CoreCoord core, int bank_id, uint32_t offset) {
+inline uint32_t DeviceData::at(CoreCoord core, int bank_id, uint32_t offset) {
     return this->all_data[core][bank_id].data[offset];
 }
 
@@ -440,7 +440,8 @@ inline bool DeviceData::validate_one_core(
     return fail_count;
 }
 
-bool DeviceData::validate_host(std::unordered_set<CoreCoord>& validated_cores, const one_core_data_t& host_data) {
+inline bool DeviceData::validate_host(
+    std::unordered_set<CoreCoord>& validated_cores, const one_core_data_t& host_data) {
     uint32_t size_bytes = host_data.data.size() * sizeof(uint32_t);
     log_info(tt::LogTest, "Validating {} bytes from hugepage", size_bytes);
 
@@ -478,7 +479,7 @@ bool DeviceData::validate_host(std::unordered_set<CoreCoord>& validated_cores, c
     return failed;
 }
 
-bool DeviceData::validate(IDevice* device) {
+inline bool DeviceData::validate(IDevice* device) {
     bool failed = false;
     std::unordered_set<CoreCoord> validated_cores;
 
@@ -505,7 +506,7 @@ bool DeviceData::validate(IDevice* device) {
     return !failed;
 }
 
-void DeviceData::overflow_check(IDevice* device) {
+inline void DeviceData::overflow_check(IDevice* device) {
     for (const auto& [core, bank_device_data] : this->all_data) {
         for (auto& [bank, one_core_data] : bank_device_data) {
             if (one_core_data.core_type == CoreType::WORKER) {

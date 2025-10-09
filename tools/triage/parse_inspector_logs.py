@@ -407,15 +407,17 @@ def get_devices_in_use(programs: list[ProgramData]) -> set[int]:
 
 
 def get_log_directory(log_directory: str | None = None) -> str:
-    if log_directory is None:
-        log_directory = os.environ.get("TT_METAL_INSPECTOR_LOG_PATH", "")
-        if log_directory:
-            return log_directory
-        log_directory = os.environ.get("TT_METAL_HOME", "")
-        if not log_directory:
-            raise ValueError("TT_METAL_HOME environment variable is not set")
-        log_directory = os.path.join(log_directory, "generated", "inspector")
-    return log_directory
+    if log_directory:
+        return log_directory
+    elif "TT_METAL_INSPECTOR_LOG_PATH" in os.environ:
+        return os.environ.get("TT_METAL_INSPECTOR_LOG_PATH")
+    elif "TT_METAL_HOME" in os.environ:
+        return os.path.join(os.environ.get("TT_METAL_HOME"), "generated", "inspector")
+    else:
+        import tempfile
+
+        return os.path.join(tempfile.gettempdir(), "tt-metal", "inspector")
+    assert False, "unreachable"
 
 
 class InspectorLogsData:
