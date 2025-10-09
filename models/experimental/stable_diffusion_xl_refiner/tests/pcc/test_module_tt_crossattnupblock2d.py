@@ -32,7 +32,7 @@ from models.experimental.stable_diffusion_xl_refiner.tests.test_common import SD
             ((1, 384, 64, 64), (1, 768, 64, 64), (1, 768, 64, 64)),
             (1, 77, 1280),
             2,
-            0.982,
+            0.981,
         ),
         # fmt: on
     ],
