@@ -111,6 +111,13 @@ jobs:
         run: |
           latest_tag="${{ steps.get-latest-semver.outputs.latest_semver }}"
           bump_type="${{ steps.analyze-commits.outputs.bump_type }}"
+          tag_type="${{ inputs.tag-type }}"
+
+          if [ "$tag_type" = "dev" ]; then
+            echo "Dev tag type - ignoring version bump, using latest version"
+            echo "new_version=$latest_tag" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
 
           if [ "$bump_type" = "none" ]; then
             echo "No version bump needed - no relevant commit indicators found"
