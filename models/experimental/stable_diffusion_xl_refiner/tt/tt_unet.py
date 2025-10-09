@@ -150,6 +150,7 @@ class TtUNet2DConditionModel(LightweightModule):
 
         # 3. down blocks
         down_block_res_samples = (hidden_states,)
+        ttnn.ReadDeviceProfiler(self.device)
         for i, down_block in enumerate(self.down_blocks):
             if i == 0 or i == 3:
                 hidden_states, [C, H, W], res_samples = down_block.forward(hidden_states, [B, C, H, W], temb)
@@ -158,9 +159,11 @@ class TtUNet2DConditionModel(LightweightModule):
                     hidden_states, [B, C, H, W], temb, encoder_hidden_states
                 )
             down_block_res_samples += res_samples
+        ttnn.ReadDeviceProfiler(self.device)
 
         # 4. mid block
         hidden_states, [C, H, W] = self.mid_block.forward(hidden_states, [B, C, H, W], temb, encoder_hidden_states)
+        ttnn.ReadDeviceProfiler(self.device)
 
         # 5. up blocks
         for i, up_block in enumerate(self.up_blocks):
@@ -172,6 +175,7 @@ class TtUNet2DConditionModel(LightweightModule):
                 hidden_states, [C, H, W] = up_block.forward(
                     hidden_states, [B, C, H, W], res_samples, temb, encoder_hidden_states
                 )
+        ttnn.ReadDeviceProfiler(self.device)
 
         # 6. final norm and conv
         hidden_states = self.norm.forward(hidden_states, B, C, H, W)
