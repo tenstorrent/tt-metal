@@ -32,8 +32,6 @@ class Decoder(LightweightModule):
         self.dtype = dtype
         self.model_config = args.get_model_config()
 
-        print(f"Loading weights for layer {layer_num}")
-
         self.attention = Attention(
             mesh_device=mesh_device,
             tt_ccl=tt_ccl,

@@ -314,6 +314,7 @@ class TtModelArgs:
         model_config = {}
 
         # Basic memory and layout configs
+        model_config["EMB_WEIGHTS_MEMCFG"] = ttnn.DRAM_MEMORY_CONFIG
         model_config["DECODE_RESIDUAL_MEMCFG"] = ttnn.L1_MEMORY_CONFIG
         model_config["ATTN_W_LAYOUT_TILE"] = ttnn.TILE_LAYOUT
 
@@ -600,7 +601,7 @@ class TtModelArgs:
         state_dict = {}
 
         # --- embeddings / head / final norm ---
-        state_dict["model.embed_tokens.weight"] = load_file(
+        state_dict["tok_embeddings.weight"] = load_file(
             os.path.join(weights_path, "pytorch_model-00000-TP-common.safetensors")
         )["model.embed_tokens.weight"]
         state_dict["model.lm_head.weight"] = load_file(
@@ -690,6 +691,14 @@ class TtModelArgs:
         return state_dict
 
     def load_experts_weights_to_state_dict(self, state_dict, weights_path="/localdev/ricozhu/grok_2_weights/"):
+        # if os.path.exists(f"{weights_path}/experts"):
+        #     for file in os.listdir(f"{weights_path}/experts"):
+        #         logger.info(f"Loading experts weights to state dict for {file}...")
+        #         state_dict[file.replace(".pt", "")] = torch.load(f"{weights_path}/experts/{file}")
+        #     return state_dict
+
+        # os.makedirs(f"{weights_path}/experts", exist_ok=True)
+
         # --- experts (3 matrices, 8 shards each) ---
         for proj, base, pname in [
             ("w1", "pytorch_model-00006-TP-00", "block_sparse_moe.experts"),
@@ -722,6 +731,7 @@ class TtModelArgs:
             for expert_idx in range(8):
                 for layer_idx, chunk in enumerate(full[expert_idx]):
                     state_dict[f"model.layers.{layer_idx}.block_sparse_moe.experts.{expert_idx}.{proj}.weight"] = chunk
+                    # torch.save(chunk, f"{weights_path}/experts/model.layers.{layer_idx}.block_sparse_moe.experts.{expert_idx}.{proj}.weight.pt")
 
             logger.info(f"Finished loading experts weights to state dict for block_sparse_moe.experts.{proj}...")
 
