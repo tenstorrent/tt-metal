@@ -164,7 +164,7 @@ source python_env/bin/activate
 
 Note: If `PYTHON_ENV_DIR` is not set, the script creates a new virtual environment in `./python_env`
 
-**IMPORTANT NOTE**: The `create_venv.sh` script in turn `pip install -e .` which installs the `ttnn` package in editable mode. If you are using an existing environment, ensure that you make `ttnn` available in that environment as an editable install.
+**Note:** The `create_venv.sh` script runs `pip install -e .` (from the project root) to install the `ttnn` package in editable mode. If you are using an existing Python environment, make sure to install `ttnn` in editable mode there as well.
 
 - Continue to [You Are All Set!](#you-are-all-set)
 
