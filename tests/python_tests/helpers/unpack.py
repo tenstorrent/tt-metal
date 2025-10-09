@@ -6,7 +6,6 @@
 import struct
 
 import torch
-
 from helpers.format_arg_mapping import format_dict
 from helpers.format_config import DataFormat
 

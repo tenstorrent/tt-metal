@@ -4,22 +4,14 @@
 
 import pytest
 import torch
-
 from helpers.device import (
     collect_results,
     wait_for_tensix_operations_finished,
     write_stimuli_to_l1,
 )
-from helpers.format_arg_mapping import (
-    DestAccumulation,
-    MathOperation,
-    format_dict,
-)
+from helpers.format_arg_mapping import DestAccumulation, MathOperation, format_dict
 from helpers.format_config import DataFormat
-from helpers.param_config import (
-    input_output_formats,
-    parametrize,
-)
+from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import run_test
 

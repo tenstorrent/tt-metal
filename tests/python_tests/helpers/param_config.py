@@ -5,7 +5,6 @@ from itertools import product
 from typing import List, Optional, Tuple, TypedDict
 
 import pytest
-
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.log_utils import add_to_format_log
 

@@ -7,6 +7,7 @@ import time
 from enum import Enum, IntEnum
 from pathlib import Path
 
+from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.debug_tensix import TensixDebug
 from ttexalens.tt_exalens_lib import (
@@ -18,12 +19,7 @@ from ttexalens.tt_exalens_lib import (
     write_words_to_device,
 )
 
-from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
-
-from .format_arg_mapping import (
-    DestAccumulation,
-    Mailbox,
-)
+from .format_arg_mapping import DestAccumulation, Mailbox
 from .format_config import DataFormat, FormatConfig
 from .pack import (
     pack_bfp8_b,

@@ -3,12 +3,8 @@
 
 import pytest
 import torch
-
 from conftest import skip_for_blackhole
-from helpers.device import (
-    collect_results,
-    write_stimuli_to_l1,
-)
+from helpers.device import collect_results, write_stimuli_to_l1
 from helpers.format_arg_mapping import (
     DestAccumulation,
     MathFidelity,
@@ -16,10 +12,7 @@ from helpers.format_arg_mapping import (
     format_dict,
 )
 from helpers.format_config import DataFormat
-from helpers.param_config import (
-    input_output_formats,
-    parametrize,
-)
+from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import run_test
 from helpers.tilize_untilize import tilize

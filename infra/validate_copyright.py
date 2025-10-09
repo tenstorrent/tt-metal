@@ -7,11 +7,16 @@
 Custom copyright validation script for Tenstorrent.
 
 This script validates that copyright headers in source files follow the expected format:
-- SPDX-FileCopyrightText: © YEAR Tenstorrent AI ULC
+- SPDX-FileCopyrightText: © YEAR Copyright Holder
 - SPDX-License-Identifier: Apache-2.0
 
+Simple logic:
+- Files with no copyright → Adds Tenstorrent AI ULC copyright
+- Files with existing copyright → Allows any copyright holder (individual contributors or Tenstorrent)
+- Individual contributors are responsible for adding their own copyright if they want it
+
 The script is designed to complement the Espressif check-copyright tool by validating
-company name consistency in SPDX copyright headers.
+SPDX copyright headers while allowing individual contributors to maintain their copyright.
 """
 
 import argparse
@@ -149,11 +154,9 @@ class CopyrightValidator:
                         f"found '{license_part}'"
                     )
 
-        # Check if we have at least one Tenstorrent copyright
-        if copyright_lines and not has_tenstorrent_copyright:
-            errors.append(
-                f"Missing required Tenstorrent copyright. Expected '{self.EXPECTED_COMPANY}'"
-            )
+        # If copyright exists, don't enforce Tenstorrent copyright
+        # Individual contributors can use their own copyright
+        # Only files without any copyright will get Tenstorrent copyright added
 
         return copyright_lines, license_line, errors
 
@@ -211,8 +214,9 @@ class CopyrightValidator:
                         f"Line {i+1}: Fixed 'Tenstorrent Inc.' → '{new_company}'"
                     )
 
-        # Add missing copyright header if needed
+        # Add missing copyright header if needed (only if no copyright exists at all)
         if not copyright_lines:
+            # Add Tenstorrent copyright for files with no copyright
             header_lines = self._generate_copyright_header(comment_style)
             # Insert at the beginning or after existing comment block
             insert_pos = self._find_header_insert_position(fixed_lines, comment_style)
@@ -220,19 +224,6 @@ class CopyrightValidator:
                 fixed_lines.insert(insert_pos + j, header_line)
             fixes_applied.append("Added missing SPDX-FileCopyrightText header")
             fixes_applied.append("Added missing SPDX-License-Identifier header")
-        # Add missing Tenstorrent copyright if other copyrights exist but no Tenstorrent
-        elif copyright_lines and any(
-            "Missing required Tenstorrent copyright" in error for error in errors
-        ):
-            tenstorrent_line = self._generate_tenstorrent_copyright_line(comment_style)
-            # Insert after existing copyright lines
-            insert_pos = self._find_tenstorrent_copyright_insert_position(
-                fixed_lines, comment_style
-            )
-            fixed_lines.insert(insert_pos, tenstorrent_line)
-            fixes_applied.append(
-                f"Added missing Tenstorrent copyright: '{self.EXPECTED_COMPANY}'"
-            )
 
         # Add missing license header if needed (if copyright exists but license doesn't)
         elif license_line is None:
@@ -425,6 +416,9 @@ class CopyrightValidator:
 
         copyright_lines, license_line, errors = self.find_copyright_lines(lines)
         fixes_applied = []
+
+        # Simple logic: if copyright exists, don't enforce Tenstorrent copyright
+        # Individual contributors are responsible for adding their own copyright if they want it
 
         # Apply fixes if requested
         if fix_errors and all_lines is not None:

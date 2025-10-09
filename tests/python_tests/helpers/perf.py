@@ -12,7 +12,6 @@ from typing import List
 
 import plotly.graph_objects as go
 import pytest
-
 from helpers.device import (
     BootMode,
     reset_mailboxes,
