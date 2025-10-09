@@ -39,6 +39,7 @@ void kernel_main() {
     const uint32_t M_end_block = get_arg_val<uint32_t>(argidx++);
     const uint32_t N_start_block = get_arg_val<uint32_t>(argidx++);
     const uint32_t N_end_block = get_arg_val<uint32_t>(argidx++);
+    const uint32_t defer_write_k_block = get_arg_val<uint32_t>(argidx++);
 
     // Tensor accessor for input tensor
     constexpr auto in1_args = TensorAccessorArgs<15>();
@@ -78,16 +79,35 @@ void kernel_main() {
     bool k_forward = true;
     bool n_forward = true;
     bool reuse_block = false;
+
+    uint32_t defer_write_m_block = 0;
+    uint32_t defer_write_n_block = 0;
+    bool defer_write = false;
+
     for (uint32_t m_block = M_start_block; m_block <= M_end_block; m_block++) {
         for (uint32_t n_block_iter = 0; n_block_iter < N_num_blocks; n_block_iter++) {
             uint32_t n_block = n_forward ? N_start_block + n_block_iter : N_end_block - n_block_iter;
             for (uint32_t k_block_iter = 0; k_block_iter < K_num_blocks; k_block_iter++) {
-                uint32_t k_block = k_forward ? k_block_iter : (K_num_blocks - 1) - k_block_iter;
+                if (defer_write && k_block_iter == defer_write_k_block) {
+                    if constexpr (is_output_writer) {
+                        write_block_sync_granular(
+                            out_reader,
+                            out_shape,
+                            cb_id_out,
+                            N_block_tiles,
+                            input_tile_size,
+                            defer_write_m_block * M_block_tiles,
+                            (defer_write_m_block + 1) * M_block_tiles,
+                            defer_write_n_block * N_block_tiles,
+                            (defer_write_n_block + 1) * N_block_tiles);
+                    }
+                }
 
                 if (reuse_block && k_block_iter == 0) {
                     reuse_block = false;
                     continue;
                 }
+                uint32_t k_block = k_forward ? k_block_iter : (K_num_blocks - 1) - k_block_iter;
                 cb_reserve_back(cb_id_in1, in1_block_num_tiles);
 
 #ifndef SKIP_IN1
@@ -128,17 +148,27 @@ void kernel_main() {
             k_forward = !k_forward;
             // We have an output block to write out
 
-            if constexpr (is_output_writer) {
-                write_block_sync_granular(
-                    out_reader,
-                    out_shape,
-                    cb_id_out,
-                    N_block_tiles,
-                    input_tile_size,
-                    m_block * M_block_tiles,
-                    (m_block + 1) * M_block_tiles,
-                    n_block * N_block_tiles,
-                    (n_block + 1) * N_block_tiles);
+            defer_write_m_block = m_block;
+            defer_write_n_block = n_block;
+            /**
+             * If this isn't the last output block, defer writing until the defer_k_write_block iteration
+             * of the next output block.
+             */
+            defer_write = !((m_block == M_end_block) && (n_block_iter == (N_num_blocks - 1)));
+
+            if (!defer_write) {
+                if constexpr (is_output_writer) {
+                    write_block_sync_granular(
+                        out_reader,
+                        out_shape,
+                        cb_id_out,
+                        N_block_tiles,
+                        input_tile_size,
+                        m_block * M_block_tiles,
+                        (m_block + 1) * M_block_tiles,
+                        n_block * N_block_tiles,
+                        (n_block + 1) * N_block_tiles);
+                }
             }
         }
         n_forward = !n_forward;
