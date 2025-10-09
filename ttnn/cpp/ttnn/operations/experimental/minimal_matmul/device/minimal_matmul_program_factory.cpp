@@ -98,6 +98,7 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
 
     uint32_t M_blocks = M_tiles / M_block_tiles;
     uint32_t N_blocks = N_tiles / N_block_tiles;
+    uint32_t K_blocks = K_tiles / K_block_tiles;
 
     uint32_t M_blocks_per_core = M_blocks / in0_parallel_axis_cores;
     uint32_t N_blocks_per_core = N_blocks / in1_parallel_axis_cores;
@@ -129,26 +130,22 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
     auto in1_mcast_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
     auto in1_mcast_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
 
-    // Create circular buffers for vol2col, weights, bias and matmul intermediates
-    // uint32_t next_cb_index = tt::CBIndex::c_0;
     uint32_t in0_cb_id = tt::CBIndex::c_0;
     tt::tt_metal::create_cb(in0_cb_id, program, core_grid, input_tile_size, in0_cb_num_tiles, data_format);
 
     uint32_t in1_cb_id = tt::CBIndex::c_1;
     tt::tt_metal::create_cb(in1_cb_id, program, core_grid, input_tile_size, in1_cb_num_tiles, data_format);
 
-    uint32_t in0_dm_out_cb_id = tt::CBIndex::c_2;
-    uint32_t in1_dm_out_cb_id = tt::CBIndex::c_3;
-    tt::tt_metal::create_cb(
-        {in0_dm_out_cb_id, in1_dm_out_cb_id}, program, core_grid, input_tile_size, out_cb_num_tiles, data_format);
+    uint32_t out_cb_id = tt::CBIndex::c_2;
+    tt::tt_metal::create_cb(out_cb_id, program, core_grid, input_tile_size, out_cb_num_tiles, data_format);
 
-    uint32_t intermediate_cb_id = tt::CBIndex::c_4;
+    uint32_t intermediate_cb_id = tt::CBIndex::c_3;
     tt::tt_metal::create_cb(
         intermediate_cb_id, program, core_grid, intermediate_tile_size, interm_cb_num_tiles, intermediate_data_format);
 
     log_info(tt::LogOp, "in0_cb_id: {}", in0_cb_id);
     log_info(tt::LogOp, "in1_cb_id: {}", in1_cb_id);
-    // log_info(tt::LogOp, "out_cb_id: {}", out_cb_id);
+    log_info(tt::LogOp, "out_cb_id: {}", out_cb_id);
     log_info(tt::LogOp, "intermediate_cb_id: {}", intermediate_cb_id);
     log_info(tt::LogOp, "M_tiles: {}", M_tiles);
     log_info(tt::LogOp, "K_tiles: {}", K_tiles);
@@ -300,6 +297,16 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
             .math_approx_mode = math_approx_mode,
             .compile_args = compute_compile_time_args});
 
+    /**
+     * The receiver writer cores defer their writes in order to reduce NOC congestion.
+     * Further, the amount of K_blocks they defer by depends on their core coordinate.
+     * If we have core_grid.x cores, we'd want to evenly stride the K_blocks they defer by.
+     * For first pass, it's easy enough to use core_grid.x
+     */
+
+    uint32_t k_blocks_per_core =
+        tt::div_up(K_blocks, (transpose_core_grid ? in1_parallel_axis_cores : in0_parallel_axis_cores));
+
     auto cores = corerange_to_cores(core_grid, num_cores, true);
 
     for (uint32_t core_id = 0; core_id < num_cores; ++core_id) {
@@ -341,6 +348,11 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
         uint32_t N_start_block = N_blocks_per_core * in1_idx;
         uint32_t N_end_block = N_blocks_per_core * (in1_idx + 1) - 1;
 
+        // Defer write to K block with same coordinate as core
+        // The writer receiver cores always have core.x > 0
+        uint32_t defer_write_k_block = core.x * k_blocks_per_core;
+        defer_write_k_block = std::min(defer_write_k_block, K_blocks - 1);
+
         if (in1_idx == 0) {
             // in0 sender
             std::vector<uint32_t> in0_sender_args = {
@@ -366,6 +378,7 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
                 M_end_block,
                 N_start_block,
                 N_end_block,
+                defer_write_k_block,
             };
             SetRuntimeArgs(program, in0_receiver_kernels_id, core, in0_receiver_args);
         }
@@ -395,6 +408,7 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
                 M_end_block,
                 N_start_block,
                 N_end_block,
+                defer_write_k_block,
             };
             SetRuntimeArgs(program, in1_receiver_kernels_id, core, in1_receiver_args);
         }

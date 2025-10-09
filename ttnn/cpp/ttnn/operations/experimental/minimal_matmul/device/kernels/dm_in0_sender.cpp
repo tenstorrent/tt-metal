@@ -43,7 +43,7 @@ void kernel_main() {
     constexpr uint32_t out_block_num_tiles = M_block_tiles * N_block_tiles;
 
     constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
-    constexpr uint32_t cb_id_in0_dm_out = tt::CBIndex::c_2;
+    constexpr uint32_t cb_id_out = tt::CBIndex::c_2;
 
     volatile tt_l1_ptr uint32_t* in0_mcast_receiver_semaphore_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in0_mcast_receiver_semaphore_addr);
@@ -60,9 +60,6 @@ void kernel_main() {
 
     const uint64_t in0_multicast_data_noc = get_noc_multicast_addr(
         in0_mcast_dest_noc_start_x, in0_mcast_dest_noc_start_y, in0_mcast_dest_noc_end_x, in0_mcast_dest_noc_end_y, 0);
-
-    DPRINT << "in0send: M_start_block: " << M_start_block << ", M_end_block: " << M_end_block
-           << ", N_start_block: " << N_start_block << ", N_end_block: " << N_end_block << ENDL();
 
     /**
      * This is a Serpentine (Boustrophedon) output block ordering.
@@ -88,8 +85,6 @@ void kernel_main() {
                     continue;
                 }
                 uint32_t k_block = k_forward ? k_block_iter : (K_num_blocks - 1) - k_block_iter;
-                DPRINT << "in0send: read in0 on m_block: " << m_block << ", n_block: " << n_block
-                       << ", k_block: " << k_block << ENDL();
                 cb_reserve_back(cb_id_in0, in0_block_num_tiles);
 
 #ifndef SKIP_IN0
@@ -101,7 +96,6 @@ void kernel_main() {
                     for (uint32_t k = 0; k < K_block_tiles; k++) {
                         uint32_t k_id = k_block * K_block_tiles + k;
                         uint32_t tile_id = m_id * K_tiles + k_id;
-                        // DPRINT << "read in0 tile " << tile_id << ENDL();
                         noc_async_read_tile(tile_id, in0_reader, in0_write_ptr);
                         in0_write_ptr += input_tile_size;
                     }
@@ -113,51 +107,44 @@ void kernel_main() {
                 cb_push_back(cb_id_in0, in0_block_num_tiles);
 #ifndef SKIP_IN0
 
-                // DPRINT << "in0 sender wait for all clear" << ENDL();
                 noc_semaphore_wait(in0_mcast_sender_semaphore_addr_ptr, in0_mcast_num_dests);
                 noc_semaphore_set(in0_mcast_sender_semaphore_addr_ptr, 0);
 
                 uint64_t in0_multicast_data_addr = in0_multicast_data_noc | in0_start_address;
 
-                // DPRINT << "in0 sender before send" << ENDL();
                 noc_async_write_multicast(
                     in0_start_address,
                     in0_multicast_data_addr,
                     in0_block_num_tiles * input_tile_size,
                     in0_mcast_num_dests,
                     true);
-                // DPRINT << "in0 sender after send" << ENDL();
 
                 noc_semaphore_set_multicast(
                     in0_mcast_receiver_semaphore_addr, in0_mcast_receiver_semaphore_noc_addr, in0_mcast_num_dests);
-                DPRINT << "in0 sender after send data arrived" << ENDL();
+
 #endif
             }
             k_forward = !k_forward;
             // We get reuse on in0 when striding N block
             reuse_block = true;
 
-            cb_wait_front(cb_id_in0_dm_out, out_block_num_tiles);
-
-#ifndef SKIP_OUT
             if constexpr (is_output_writer) {
-                uint32_t out_read_ptr = get_read_ptr(cb_id_in0_dm_out);
-                // safe_print_bf16_tile(out_read_ptr);
-                DPRINT << "in0send: write out on m_block: " << m_block << ", n_block: " << n_block << ENDL();
+                cb_wait_front(cb_id_out, out_block_num_tiles);
+#ifndef SKIP_OUT
+                uint32_t out_read_ptr = get_read_ptr(cb_id_out);
                 for (uint32_t m = 0; m < M_block_tiles; m++) {
                     uint32_t m_id = m_block * M_block_tiles + m;
                     for (uint32_t n = 0; n < N_block_tiles; n++) {
                         uint32_t n_id = n_block * N_block_tiles + n;
                         uint32_t tile_id = m_id * N_tiles + n_id;
-                        // DPRINT << "write out tile " << tile_id << ENDL();
                         noc_async_write_tile(tile_id, out_reader, out_read_ptr);
                         out_read_ptr += input_tile_size;
                     }
                 }
                 noc_async_writes_flushed();
-            }
 #endif
-            cb_pop_front(cb_id_in0_dm_out, out_block_num_tiles);
+                cb_pop_front(cb_id_out, out_block_num_tiles);
+            }
         }
         n_forward = !n_forward;
     }
