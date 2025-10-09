@@ -196,7 +196,16 @@ autograd::TensorPtr Bert::process_attention_mask(const autograd::TensorPtr& atte
     return autograd::create_tensor(expanded_mask);
 }
 
-autograd::TensorPtr Bert::operator()(
+// BaseTransformer interface implementation - required for polymorphism
+autograd::TensorPtr Bert::operator()(const autograd::TensorPtr& x, const autograd::TensorPtr& mask) {
+    // This satisfies the BaseTransformer virtual function requirement
+    // Assumes x contains input_ids and mask is attention_mask
+    // No token_type_ids in this interface - uses default behavior (all zeros)
+    return forward(x, mask, nullptr);
+}
+
+// Primary BERT implementation with full functionality
+autograd::TensorPtr Bert::forward(
     const autograd::TensorPtr& input_ids,
     const autograd::TensorPtr& attention_mask,
     const autograd::TensorPtr& token_type_ids) {
@@ -222,13 +231,12 @@ autograd::TensorPtr Bert::operator()(
         // Extract [CLS] token representation (first token in sequence)
         auto hidden_shape = hidden_states->get_shape();
         auto batch_size = hidden_shape[0];
-        auto num_heads = hidden_shape[1];
         auto embedding_dim = hidden_shape[3];
 
         // Slice to get only the [CLS] token: [batch, 1, 1, embedding_dim]
-        // Based on ttnn_fixed/distributed/ttnn_ops.cpp usage pattern
+        // Note: hidden_shape[1] is 1 (channel dimension), not num_heads
         ttnn::SmallVector<uint32_t> start_indices = {0, 0, 0, 0};
-        ttnn::SmallVector<uint32_t> end_indices = {batch_size, num_heads, 1, embedding_dim};
+        ttnn::SmallVector<uint32_t> end_indices = {batch_size, 1, 1, embedding_dim};
         ttnn::SmallVector<uint32_t> stride = {1, 1, 1, 1};
 
         auto cls_token = ttnn::slice(hidden_states->get_value(), start_indices, end_indices, stride);
@@ -243,6 +251,14 @@ autograd::TensorPtr Bert::operator()(
     }
 
     return hidden_states;
+}
+
+// Convenience operator() for backward compatibility
+autograd::TensorPtr Bert::operator()(
+    const autograd::TensorPtr& input_ids,
+    const autograd::TensorPtr& attention_mask,
+    const autograd::TensorPtr& token_type_ids) {
+    return forward(input_ids, attention_mask, token_type_ids);
 }
 
 void Bert::load_from_safetensors(const std::filesystem::path& model_path) {
@@ -328,7 +344,8 @@ void load_model_from_safetensors(const std::filesystem::path& path, serializatio
             else if (info.name == "bert.pooler.dense.weight") {
                 if (parameters.find("bert/pooler/weight") != parameters.end()) {
                     auto param = get_parameter("bert/pooler/weight");
-                    // Note: HuggingFace stores as [out_features, in_features], we need [1, 1, out_features, in_features]
+                    // Note: HuggingFace stores as [out_features, in_features], we need [1, 1, out_features,
+                    // in_features]
                     param->set_value(core::from_vector(
                         float_vec, param->get_value().logical_shape(), param->get_value().device()));
                     fmt::print("  Loaded pooler dense weight\n");
@@ -358,74 +375,71 @@ void load_model_from_safetensors(const std::filesystem::path& path, serializatio
                 if (layer_suffix == "attention.self.query.weight" ||
                     layer_suffix == "attention.self.key.weight" ||
                     layer_suffix == "attention.self.value.weight") {
-                    // Note: We'll need to handle QKV combination in a separate pass
+                    // TODO: We'll need to handle QKV combination in a separate pass
                     // For now, store them temporarily
                     fmt::print("  Skipping separate Q/K/V weight for layer {} (needs combination)\n", layer_idx);
                 }
                 // Attention output
                 else if (layer_suffix == "attention.output.dense.weight") {
-                    auto param_name = fmt::format("bert/bert_block_{}/attention/out_linear/weight", layer_idx);
+                    auto param_name =
+                        fmt::format("bert/bert_block_{}/attention/self_attention/out_linear/weight", layer_idx);
                     auto param = get_parameter(param_name);
-                    param->set_value(core::from_vector(
-                        float_vec, param->get_value().logical_shape(), param->get_value().device()));
-                }
-                else if (layer_suffix == "attention.output.dense.bias") {
-                    auto param_name = fmt::format("bert/bert_block_{}/attention/out_linear/bias", layer_idx);
+                    param->set_value(
+                        core::from_vector(float_vec, param->get_value().logical_shape(), param->get_value().device()));
+                } else if (layer_suffix == "attention.output.dense.bias") {
+                    auto param_name =
+                        fmt::format("bert/bert_block_{}/attention/self_attention/out_linear/bias", layer_idx);
                     auto param = get_parameter(param_name);
-                    param->set_value(core::from_vector(
-                        float_vec, param->get_value().logical_shape(), param->get_value().device()));
+                    param->set_value(
+                        core::from_vector(float_vec, param->get_value().logical_shape(), param->get_value().device()));
                 }
                 // Attention LayerNorm
                 else if (layer_suffix == "attention.output.LayerNorm.weight") {
                     auto param_name = fmt::format("bert/bert_block_{}/attention_norm/gamma", layer_idx);
                     auto param = get_parameter(param_name);
-                    param->set_value(core::from_vector(
-                        float_vec, param->get_value().logical_shape(), param->get_value().device()));
-                }
-                else if (layer_suffix == "attention.output.LayerNorm.bias") {
+                    param->set_value(
+                        core::from_vector(float_vec, param->get_value().logical_shape(), param->get_value().device()));
+                } else if (layer_suffix == "attention.output.LayerNorm.bias") {
                     auto param_name = fmt::format("bert/bert_block_{}/attention_norm/beta", layer_idx);
                     auto param = get_parameter(param_name);
-                    param->set_value(core::from_vector(
-                        float_vec, param->get_value().logical_shape(), param->get_value().device()));
+                    param->set_value(
+                        core::from_vector(float_vec, param->get_value().logical_shape(), param->get_value().device()));
                 }
                 // MLP intermediate (up projection)
                 else if (layer_suffix == "intermediate.dense.weight") {
                     auto param_name = fmt::format("bert/bert_block_{}/mlp/dense/weight", layer_idx);
                     auto param = get_parameter(param_name);
-                    param->set_value(core::from_vector(
-                        float_vec, param->get_value().logical_shape(), param->get_value().device()));
-                }
-                else if (layer_suffix == "intermediate.dense.bias") {
+                    param->set_value(
+                        core::from_vector(float_vec, param->get_value().logical_shape(), param->get_value().device()));
+                } else if (layer_suffix == "intermediate.dense.bias") {
                     auto param_name = fmt::format("bert/bert_block_{}/mlp/dense/bias", layer_idx);
                     auto param = get_parameter(param_name);
-                    param->set_value(core::from_vector(
-                        float_vec, param->get_value().logical_shape(), param->get_value().device()));
+                    param->set_value(
+                        core::from_vector(float_vec, param->get_value().logical_shape(), param->get_value().device()));
                 }
                 // MLP output (down projection)
                 else if (layer_suffix == "output.dense.weight") {
                     auto param_name = fmt::format("bert/bert_block_{}/mlp/output/weight", layer_idx);
                     auto param = get_parameter(param_name);
-                    param->set_value(core::from_vector(
-                        float_vec, param->get_value().logical_shape(), param->get_value().device()));
-                }
-                else if (layer_suffix == "output.dense.bias") {
+                    param->set_value(
+                        core::from_vector(float_vec, param->get_value().logical_shape(), param->get_value().device()));
+                } else if (layer_suffix == "output.dense.bias") {
                     auto param_name = fmt::format("bert/bert_block_{}/mlp/output/bias", layer_idx);
                     auto param = get_parameter(param_name);
-                    param->set_value(core::from_vector(
-                        float_vec, param->get_value().logical_shape(), param->get_value().device()));
+                    param->set_value(
+                        core::from_vector(float_vec, param->get_value().logical_shape(), param->get_value().device()));
                 }
                 // Output LayerNorm
                 else if (layer_suffix == "output.LayerNorm.weight") {
                     auto param_name = fmt::format("bert/bert_block_{}/mlp_norm/gamma", layer_idx);
                     auto param = get_parameter(param_name);
-                    param->set_value(core::from_vector(
-                        float_vec, param->get_value().logical_shape(), param->get_value().device()));
-                }
-                else if (layer_suffix == "output.LayerNorm.bias") {
+                    param->set_value(
+                        core::from_vector(float_vec, param->get_value().logical_shape(), param->get_value().device()));
+                } else if (layer_suffix == "output.LayerNorm.bias") {
                     auto param_name = fmt::format("bert/bert_block_{}/mlp_norm/beta", layer_idx);
                     auto param = get_parameter(param_name);
-                    param->set_value(core::from_vector(
-                        float_vec, param->get_value().logical_shape(), param->get_value().device()));
+                    param->set_value(
+                        core::from_vector(float_vec, param->get_value().logical_shape(), param->get_value().device()));
                 }
             }
 
