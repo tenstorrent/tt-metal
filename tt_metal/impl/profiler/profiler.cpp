@@ -1716,6 +1716,8 @@ void generateAnalysesForDeviceMarkers(
     const std::filesystem::path& report_path,
     ThreadPool& thread_pool) {
 #if defined(TRACY_ENABLE)
+    ZoneScoped;
+
     const std::filesystem::path analysis_configs_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tools/tracy/cpp_device_analyses.json";
@@ -1755,12 +1757,12 @@ void DeviceProfiler::dumpDeviceResults(bool is_mid_run_dump) {
     std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>> device_markers_vec =
         getSortedDeviceMarkersVector(this->device_markers_per_core_risc_map, *this->thread_pool);
 
-    this->thread_pool->enqueue([this]() { writeDeviceResultsToFiles(); });
-
     if (!is_mid_run_dump && tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_cpp_post_process()) {
         generateAnalysesForDeviceMarkers(
             device_markers_vec, this->device_logs_output_dir / PROFILER_OPS_PERF_REPORT_NAME, *this->thread_pool);
     }
+
+    this->thread_pool->enqueue([this]() { writeDeviceResultsToFiles(); });
 
     pushTracyDeviceResults(device_markers_vec);
 
@@ -1911,6 +1913,8 @@ bool isSyncInfoNewer(const SyncInfo& old_info, const SyncInfo& new_info) {
 
 void DeviceProfiler::writeDeviceResultsToFiles() const {
 #if defined(TRACY_ENABLE)
+    ZoneScoped;
+
     std::scoped_lock lock(tt::tt_metal::MetalContext::instance().profiler_state_manager()->log_file_write_mutex);
 
     const std::filesystem::path log_path = device_logs_output_dir / DEVICE_SIDE_LOG;
