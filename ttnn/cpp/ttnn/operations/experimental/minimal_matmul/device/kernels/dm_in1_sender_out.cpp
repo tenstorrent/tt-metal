@@ -70,11 +70,6 @@ void kernel_main() {
     const uint64_t in1_receiver_semaphore_noc_addr =
         get_noc_addr(in1_dest_noc_x, in1_dest_noc_y, in1_receiver_semaphore_addr);
 
-    // DPRINT << "in1send: M_blocks: [" << M_start_block << ", " << M_end_block << "], N_blocks: [" << N_start_block <<
-    // ", " << N_end_block << "]" << ENDL(); DPRINT << "in1send: M_start_block: " << M_start_block << ", M_end_block: "
-    // << M_end_block
-    //        << ", N_start_block: " << N_start_block << ", N_end_block: " << N_end_block << ENDL();
-
     const uint32_t N_num_blocks = N_end_block - N_start_block + 1;
     bool k_forward = true;
     bool n_forward = true;
@@ -90,16 +85,18 @@ void kernel_main() {
             for (uint32_t k_block_iter = 0; k_block_iter < K_num_blocks; k_block_iter++) {
                 if (defer_write && k_block_iter == defer_write_k_block) {
                     if constexpr (is_output_writer) {
-                        write_block_sync_granular(
+                        cb_wait_front(cb_id_out, out_block_num_tiles);
+                        uint32_t out_read_ptr = get_read_ptr(cb_id_out);
+                        write_block_sync(
                             out_reader,
                             out_shape,
-                            cb_id_out,
-                            N_block_tiles,
+                            out_read_ptr,
                             input_tile_size,
                             defer_write_m_block * M_block_tiles,
                             (defer_write_m_block + 1) * M_block_tiles,
                             defer_write_n_block * N_block_tiles,
                             (defer_write_n_block + 1) * N_block_tiles);
+                        cb_pop_front(cb_id_out, out_block_num_tiles);
                     }
                 }
 
@@ -155,6 +152,7 @@ void kernel_main() {
              * of the next output block.
              */
             defer_write = !((m_block == M_end_block) && (n_block_iter == (N_num_blocks - 1)));
+            defer_write = defer_write && !is_injector_core;
 
             if (!defer_write) {
                 if constexpr (is_output_writer) {
