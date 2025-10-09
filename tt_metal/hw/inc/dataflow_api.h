@@ -2360,8 +2360,15 @@ void reset_noc_trid_barrier_counter(uint32_t id_mask = NOC_CLEAR_OUTSTANDING_REQ
 namespace experimental {
 
 template <typename T>
-struct noc_traits_t;
+struct noc_traits_t {
+    static_assert(sizeof(T) == 0, "NoC transactions are not supported for this type");
+};
 
+/**
+ * @brief Noc class that provides a high-level interface for asynchronous read and write operations.
+ *
+ * It abstracts the details of source and destination address calculations.
+ */
 class Noc {
 private:
     template <typename T>
@@ -2383,11 +2390,51 @@ public:
 
     uint8_t get_noc_id() const { return noc_id_; }
 
+    /** @brief Initiates an asynchronous read for a single packet.
+     *
+     * Refer to \a async_read for more details.
+     *
+     * @param src Source object (e.g., TensorAccessor)
+     * @param dst Destination object (e.g., local L1 memory)
+     * @param size_bytes Size of the data transfer in bytes
+     * @param src_args Additional arguments for source address calculation
+     * @param dst_args Additional arguments for destination address calculation
+     * @param read_req_vc Virtual channel to use for the read request (default: NOC_UNICAST_WRITE_VC)
+     * @tparam enable_noc_tracing Enable NoC tracing for debugging (default: true)
+     */
+    template <bool enable_noc_tracing = true, typename Src, typename Dst>
+    void async_read_one_packet(
+        const Src& src,
+        const Dst& dst,
+        uint32_t size_bytes,
+        const src_args_t<Src>& src_args,
+        const dst_args_t<Dst>& dst_args,
+        uint32_t read_req_vc = NOC_UNICAST_WRITE_VC) const {
+        noc_async_read_one_packet<enable_noc_tracing>(
+            get_src_ptr(src, src_args), get_dst_ptr(dst, dst_args), size_bytes, noc_id_, read_req_vc);
+    }
+
+    /**
+     * @brief Initiates an asynchronous read from a specified source.
+     *
+     * The destination is in L1 memory on the Tensix core executing this function call.
+     *
+     * @see async_read_barrier.
+     *
+     * @param src Source object (e.g., TensorAccessor)
+     * @param dst Destination object (e.g., local L1 memory)
+     * @param size_bytes Size of the data transfer in bytes
+     * @param src_args Additional arguments for source address calculation
+     * @param dst_args Additional arguments for destination address calculation
+     * @param read_req_vc Virtual channel to use for the read request (default: NOC_UNICAST_WRITE_VC)
+     * @tparam max_page_size Maximum page size for the transfer (default: NOC_MAX_BURST_SIZE + 1)
+     * @tparam enable_noc_tracing Enable NoC tracing for debugging (default: true)
+     */
     template <
-        typename Src,
-        typename Dst,
         uint32_t max_page_size = NOC_MAX_BURST_SIZE + 1,
-        bool enable_noc_tracing = true>
+        bool enable_noc_tracing = true,
+        typename Src,
+        typename Dst>
     void async_read(
         const Src& src,
         const Dst& dst,
@@ -2395,16 +2442,136 @@ public:
         const src_args_t<Src>& src_args,
         const dst_args_t<Dst>& dst_args,
         uint32_t read_req_vc = NOC_UNICAST_WRITE_VC) const {
-        uint64_t src_noc_addr{get_src_ptr(src, src_args)};
-        uint32_t dst_local_l1_addr{get_dst_ptr(dst, dst_args)};
-        noc_async_read<max_page_size, enable_noc_tracing>(src_noc_addr, dst_local_l1_addr, size_bytes, noc_id_, read_req_vc);
+        noc_async_read<max_page_size, enable_noc_tracing>(
+            get_src_ptr(src, src_args), get_dst_ptr(dst, dst_args), size_bytes, noc_id_, read_req_vc);
     }
 
+    /** @brief Sets the stateful registers for an asynchronous read for a single packet.
+     *
+     * Refer to \a noc_async_read_set_state for more details
+     *
+     * @param src Source object (e.g., TensorAccessor)
+     * @param size_bytes Size of the data transfer in bytes
+     * @param src_args Additional arguments for source address calculation
+     */
+    template <typename Src, typename Dst>
+    void async_read_one_packet_set_state(const Src& src, uint32_t size_bytes, const src_args_t<Src>& src_args) const {
+        noc_async_read_one_packet_set_state(get_src_ptr(src, src_args), size_bytes, noc_id_);
+    }
+
+    /** @brief Initiates an asynchronous read for a single packet with state preservation.
+     *
+     * Refer to \a noc_async_read_with_state for more details
+     *
+     * @param src Source object (e.g., TensorAccessor)
+     * @param dst Destination object (e.g., local L1 memory)
+     * @param src_args Additional arguments for source address calculation
+     * @param dst_args Additional arguments for destination address calculation
+     * @tparam inc_num_issued Whether issued read counter should increment (default: true)
+     */
+    template <bool inc_num_issued = true, typename Src, typename Dst>
+    void async_read_one_packet_with_state(
+        const Src& src, const Dst& dst, const src_args_t<Src>& src_args, const dst_args_t<Dst>& dst_args) const {
+        noc_async_read_one_packet_with_state<inc_num_issued>(
+            get_src_ptr(src, src_args), get_dst_ptr(dst, dst_args), noc_id_);
+    }
+
+    /** @brief Sets the stateful registers for an asynchronous read.
+     *
+     * This function is used to set up the state for \a async_read_set_state, which will issue the actual
+     * read request.
+     *
+     * @note \a async_read can be used instead if the state preservation is not needed.
+     *
+     * @see async_read_barrier
+     *
+     * @param src Source object (e.g., TensorAccessor)
+     * @param src_args Additional arguments for source address calculation
+     */
+    template <typename Src>
+    void async_read_set_state(const Src& src, const src_args_t<Src>& src_args) const {
+        noc_async_read_set_state(get_src_ptr(src, src_args), noc_id_);
+    }
+
+    /** @brief Initiates an asynchronous read with state preservation.
+     *
+     * This function is used to issue the actual read request after the state has been set up.
+     *
+     * @note This function must be preceded by a call to \a async_read_set_state.
+     * @note \a async_read can be used instead if the state preservation is not needed.
+     *
+     * @see async_read_barrier
+     *
+     * @param src Source object (e.g., TensorAccessor)
+     * @param dst Destination object (e.g., local L1 memory)
+     * @param size_bytes Size of the data transfer in bytes
+     * @param src_args Additional arguments for source address calculation
+     * @param dst_args Additional arguments for destination address calculation
+     * @tparam inc_num_issued Whether issued read counter should increment (default: true)
+     */
+    template <bool inc_num_issued = true, typename Src, typename Dst>
+    void async_read_with_state(
+        const Src& src,
+        const Dst& dst,
+        uint32_t size_bytes,
+        const src_args_t<Src>& src_args,
+        const dst_args_t<Dst>& dst_args) const {
+        noc_async_read_with_state<inc_num_issued>(
+            get_src_ptr(src, src_args), get_dst_ptr(dst, dst_args), size_bytes, noc_id_);
+    }
+
+    /** @brief Increments the internal counter of issued reads.
+     *
+     * This is used to manually increment the counter.
+     *
+     * @param num_issued_reads_inc Number of issued reads to increment the counter by
+     */
+    void async_read_inc_num_issued(uint32_t num_issued_reads_inc) const {
+        noc_async_read_inc_num_issued(num_issued_reads_inc, noc_id_);
+    }
+
+    /** @brief Initiates an asynchronous write for a single packet.
+     *
+     * Refer to \a async_write for more details.
+     *
+     * @param src Source object (e.g., local L1 memory)
+     * @param dst Destination object (e.g., TensorAccessor)
+     * @param size_bytes Size of the data transfer in bytes
+     * @param src_args Additional arguments for source address calculation
+     * @param dst_args Additional arguments for destination address calculation
+     * @param vc Virtual channel to use for the write transaction (default: NOC_UNICAST_WRITE_VC)
+     * @tparam enable_noc_tracing Enable NoC tracing for debugging (default: true)
+     * @tparam posted Whether the call is posted (i.e. needs to be acked) (default: false)
+     */
+    template <bool enable_noc_tracing = true, bool posted = false, typename Src, typename Dst>
+    void async_write_one_packet(
+        const Src& src,
+        const Dst& dst,
+        uint32_t size_bytes,
+        const src_args_t<Src>& src_args,
+        const dst_args_t<Dst>& dst_args,
+        uint32_t vc = NOC_UNICAST_WRITE_VC) const {
+        noc_async_write_one_packet<enable_noc_tracing, posted>(
+            get_src_ptr(src, src_args), get_dst_ptr(dst, dst_args), size_bytes, noc_id_, vc);
+    }
+
+    /** @brief Initiates an asynchronous write.
+     *
+     * @see async_write.
+     *
+     * @param src Source object (e.g., local L1 memory)
+     * @param dst Destination object (e.g., TensorAccessor)
+     * @param size_bytes Size of the data transfer in bytes
+     * @param src_args Additional arguments for source address calculation
+     * @param dst_args Additional arguments for destination address calculation
+     * @param vc Virtual channel to use for the write transaction (default: NOC_UNICAST_WRITE_VC)
+     * @tparam enable_noc_tracing Enable NoC tracing for debugging (default: true)
+     */
     template <
-        typename Src,
-        typename Dst,
         uint32_t max_page_size = NOC_MAX_BURST_SIZE + 1,
-        bool enable_noc_tracing = true>
+        bool enable_noc_tracing = true,
+        typename Src,
+        typename Dst>
     void async_write(
         const Src& src,
         const Dst& dst,
@@ -2412,14 +2579,106 @@ public:
         const src_args_t<Src>& src_args,
         const dst_args_t<Dst>& dst_args,
         uint32_t vc = NOC_UNICAST_WRITE_VC) const {
-        uint32_t src_local_l1_addr{get_src_ptr(src, src_args)};
-        uint64_t dst_noc_addr{get_dst_ptr(dst, dst_args)};
-        noc_async_write<max_page_size, enable_noc_tracing>(src_local_l1_addr, dst_noc_addr, size_bytes, noc_id_, vc);
+        uint32_t src_local_l1_addr{};
+        noc_async_write<max_page_size, enable_noc_tracing>(
+            get_src_ptr(src, src_args), get_dst_ptr(dst, dst_args), size_bytes, noc_id_, vc);
     }
 
+    /** @brief Initiates an asynchronous write for a single packet and sets its state.
+     *
+     * This function is used to set up the state for \a async_write_one_packet_set_state, which will issue the actual
+     * write request.
+     *
+     * @note \a async_write can be used instead if the state preservation is not needed.
+     *
+     * @see async_write_barrier
+     *
+     * @param dst Destination object (e.g., TensorAccessor)
+     * @param size_bytes Size of the data transfer in bytes
+     * @param dst_args Additional arguments for destination address calculation
+     * @param vc Virtual channel to use for the write transaction (default: NOC_UNICAST_WRITE_VC)
+     * @tparam posted Whether the call is posted (i.e. needs to be acked) (default: false)
+     */
+    template <bool posted = false, typename Dst>
+    void async_write_one_packet_set_state(
+        const Dst& dst, uint32_t size_bytes, const dst_args_t<Dst>& dst_args, uint8_t vc = NOC_UNICAST_WRITE_VC) const {
+        noc_async_write_one_packet_set_state<posted>(get_dst_ptr(dst, dst_args), size_bytes, noc_id_, vc);
+    }
+
+    /** @brief Initiates an asynchronous write for a single packet.
+     *
+     * This function is used to issue the actual write request after the state has been set up.
+     *
+     * @note This function must be preceded by a call to \a async_write_one_packet_set_state.
+     * @note \a async_write can be used instead if the state preservation is not needed.
+     *
+     * @see async_write_barrier
+     *
+     * @param src Source object (e.g., local L1 memory)
+     * @param dst Destination object (e.g., TensorAccessor)
+     * @param size_bytes Size of the data transfer in bytes
+     * @param src_args Additional arguments for source address calculation
+     * @param dst_args Additional arguments for destination address calculation
+     * @tparam posted Whether the call is posted (i.e. needs to be acked) (default: false)
+     */
+    template <bool posted = false, typename Src, typename Dst>
+    void async_write_one_packet_with_state(
+        const Src& src,
+        const Dst& dst,
+        uint32_t size_bytes,
+        const src_args_t<Src>& src_args,
+        const dst_args_t<Dst>& dst_args) const {
+        noc_async_write_one_packet_with_state<posted>(
+            get_src_ptr(src, src_args), get_dst_ptr(dst, dst_args), size_bytes, noc_id_);
+    }
+
+    /** @brief Initiates a read barrier for synchronization.
+     *
+     * This blocking call waits for all the outstanding enqueued read transactions
+     * issued on the current Tensix core to complete.
+     * After returning from this call there will be no outstanding read transactions for this noc for the current core.
+     */
     void async_read_barrier() const { noc_async_read_barrier(noc_id_); }
 
+    /** @brief Initiates a write barrier for synchronization.
+     *
+     * This blocking call waits for all the outstanding enqueued write transactions
+     * issued on the current Tensix core to complete.
+     * After returning from this call there will be no outstanding write transactions for this noc for the current core.
+     */
     void async_write_barrier() const { noc_async_write_barrier(noc_id_); }
+
+    /** @brief Waits for all outstanding write transactions to be flushed.
+     *
+     * This blocking call waits for all the outstanding enqueued write transactions
+     * issued on the current Tensix core to depart, but will not wait for them to complete.
+     */
+    void async_writes_flushed() const { noc_async_writes_flushed(noc_id_); }
+
+    /** @brief Waits for all outstanding posted write transactions to be flushed.
+     *
+     * This blocking call waits for all the outstanding enqueued posted write transactions
+     * issued on the current Tensix core to depart, but will not wait for them to complete.
+     */
+    void async_posted_writes_flushed() const { noc_async_posted_writes_flushed(noc_id_); }
+
+    /** @brief Initiates an atomic barrier for synchronization.
+     *
+     * This blocking call waits for all the outstanding enqueued atomic transactions
+     * issued on the current Tensix core to complete.
+     * After returning from this call there will be no outstanding atomic transactions for this noc for the current
+     * core.
+     */
+    void async_atomic_barrier() const { noc_async_atomic_barrier(noc_id_); }
+
+    /** @brief Initiates a full barrier for synchronization.
+     *
+     * This blocking call waits for all the outstanding read, write and atomic noc transactions
+     * issued on the current Tensix core to complete.
+     * After returning from this call there will be no outstanding transactions for this noc for the current
+     * core.
+     */
+    void async_full_barrier() const { noc_async_full_barrier(noc_id_); }
 
 private:
     uint8_t noc_id_;
