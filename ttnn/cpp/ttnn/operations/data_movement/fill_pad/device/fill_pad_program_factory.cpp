@@ -8,6 +8,7 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
 
 #include "fill_pad_program_factory.hpp"
@@ -17,13 +18,6 @@ bool is_power_of_two_at_least_32(uint32_t value) { return value >= 32 && (value 
 using namespace tt;
 
 namespace ttnn::operations::data_movement::detail {
-
-// based off pack_two_bfloat16_into_uint32
-uint32_t pack_two_uint16_into_uint32(std::pair<uint16_t, uint16_t> two_uint16s) {
-    // first -> lower 16
-    // second -> upper 16
-    return (uint32_t)two_uint16s.first | ((uint32_t)two_uint16s.second << 16);
-}
 
 tt::tt_metal::operation::ProgramWithCallbacks fill_pad_multi_core(const Tensor& input_tensor, float fill_value) {
     tt::tt_metal::IDevice* device = input_tensor.device();

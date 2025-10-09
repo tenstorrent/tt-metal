@@ -88,7 +88,7 @@ public:
 #else
 #if defined(GALAXY_CLUSTER)
             tt::tt_fabric::fabric_set_route(
-                (tt::tt_fabric::LowLatencyMeshPacketHeader*)packet_header_addr,
+                (tt::tt_fabric::HybridMeshPacketHeader*)packet_header_addr,
                 (eth_chan_directions)router_direction,
                 0,  // branch forward
                 0,  // start hop
@@ -96,7 +96,7 @@ public:
                 true);
 #else
             tt::tt_fabric::fabric_set_unicast_route(
-                (tt::tt_fabric::LowLatencyMeshPacketHeader*)packet_header_addr, to_dev_id, to_mesh_id);
+                (tt::tt_fabric::HybridMeshPacketHeader*)packet_header_addr, to_dev_id, to_mesh_id);
 #endif
 #endif
         } else {
