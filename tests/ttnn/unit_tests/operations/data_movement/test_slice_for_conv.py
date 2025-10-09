@@ -255,6 +255,7 @@ def test_slice_write_block_sharded(device, dims, slice_dim, slice_size, core_x, 
         [[2, 8, 8, 32], 2, 4],
         [[2, 8, 16, 2], 2, 8],
         [[2, 981, 39, 63], 63, 41],
+        [[1, 1024, 1024, 128], 37, 64],
     ],
 )
 @pytest.mark.parametrize("slice_dim", [1, 2])

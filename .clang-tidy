@@ -16,9 +16,9 @@ Checks: >
   -bugprone-exception-escape,
   -bugprone-forwarding-reference-overload,
   -bugprone-implicit-widening-of-multiplication-result,
+  -bugprone-integer-division,
   -bugprone-narrowing-conversions,
   -bugprone-sizeof-expression,
-  -bugprone-switch-missing-default-case,
   -bugprone-unchecked-optional-access,
   -bugprone-unhandled-self-assignment,
   -bugprone-unused-local-non-trivial-variable,
@@ -47,7 +47,6 @@ Checks: >
   -cppcoreguidelines-avoid-do-while,
   -cppcoreguidelines-avoid-magic-numbers,
   -cppcoreguidelines-avoid-non-const-global-variables,
-  -cppcoreguidelines-c-copy-assignment-signature,
   -cppcoreguidelines-init-variables,
   -cppcoreguidelines-macro-to-enum,
   -cppcoreguidelines-macro-usage,
@@ -116,15 +115,11 @@ Checks: >
   -llvmlibc-inline-function-decl,
   -llvmlibc-restrict-system-libc-headers,
   -misc-const-correctness,
-  -misc-definitions-in-headers,
   -misc-header-include-cycle,
   -misc-include-cleaner,
   -misc-no-recursion,
   -misc-non-private-member-variables-in-classes,
-  -misc-unconventional-assign-operator,
-  -misc-uniqueptr-reset-release,
   -misc-unused-parameters,
-  -misc-unused-using-decls,
   -misc-use-anonymous-namespace,
   -misc-use-internal-linkage,
   -modernize-avoid-bind,
@@ -158,7 +153,6 @@ Checks: >
   -portability-simd-intrinsics,
   -portability-template-virtual-member-function,
   -readability-avoid-nested-conditional-operator,
-  -readability-avoid-return-with-void-value,
   -readability-avoid-unconditional-preprocessor-if,
   -readability-braces-around-statements,
   -readability-container-contains,
@@ -166,7 +160,6 @@ Checks: >
   -readability-convert-member-functions-to-static,
   -readability-else-after-return,
   -readability-enum-initial-value,
-  -readability-function-cognitive-complexity,
   -readability-function-size,
   -readability-identifier-length,
   -readability-implicit-bool-conversion,
@@ -175,12 +168,10 @@ Checks: >
   -readability-magic-numbers,
   -readability-make-member-function-const,
   -readability-math-missing-parentheses,
-  -readability-math-missing-parentheses,
   -readability-named-parameter,
   -readability-non-const-parameter,
   -readability-qualified-auto,
   -readability-redundant-casting,
-  -readability-redundant-control-flow,
   -readability-redundant-member-init,
   -readability-redundant-string-cstr,
   -readability-redundant-string-init,
@@ -194,6 +185,8 @@ Checks: >
 CheckOptions:
   - key: readability-function-cognitive-complexity.IgnoreMacros
     value: true
+  - key: readability-function-cognitive-complexity.Threshold
+    value: 339
   - key: portability-simd-intrinsics.Suggest
     value: true
   # May enable later; for now activate the check with a lighter touch

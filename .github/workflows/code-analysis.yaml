@@ -12,7 +12,7 @@ on:
       version:
         required: false
         type: string
-        default: "22.04"
+        default: "24.04"
       architecture:
         required: false
         type: string
@@ -26,7 +26,7 @@ on:
       version:
         required: false
         type: string
-        default: "22.04"
+        default: "24.04"
       architecture:
         required: false
         type: string
@@ -59,7 +59,7 @@ jobs:
     secrets: inherit
     with:
       distro: ${{ inputs.distro || 'ubuntu' }}
-      version: ${{ inputs.version || '22.04' }}
+      version: ${{ inputs.version || '24.04' }}
       architecture: ${{ inputs.architecture || 'amd64' }}
 
   clang-tidy:

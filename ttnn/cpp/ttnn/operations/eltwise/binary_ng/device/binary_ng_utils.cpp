@@ -166,8 +166,20 @@ OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>, std
                 binary_op = SfpuBinaryOp::GT;
             }
             break;
-        case BinaryOpType::GE: postprocess = unary::UnaryOpType::GEZ; break;
-        case BinaryOpType::LE: postprocess = unary::UnaryOpType::LEZ; break;
+        case BinaryOpType::GE:
+            if (dtype != DataType::INT32) {
+                postprocess = unary::UnaryOpType::GEZ;
+            } else {
+                binary_op = SfpuBinaryOp::GE;
+            }
+            break;
+        case BinaryOpType::LE:
+            if (dtype != DataType::INT32) {
+                postprocess = unary::UnaryOpType::LEZ;
+            } else {
+                binary_op = SfpuBinaryOp::LE;
+            }
+            break;
         case BinaryOpType::EQ: postprocess = unary::UnaryOpType::EQZ; break;
         case BinaryOpType::NE: postprocess = unary::UnaryOpType::NEZ; break;
         // (a-b)**2
@@ -431,6 +443,8 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
         case XLOGY: return {"xlogy_binary_tile_init();", "xlogy_binary_tile"};
         case LT: return {"lt_int32_tile_init();", "lt_int32_tile"};
         case GT: return {"gt_int32_tile_init();", "gt_int32_tile"};
+        case GE: return {"ge_int32_tile_init();", "ge_int32_tile"};
+        case LE: return {"le_int32_tile_init();", "le_int32_tile"};
         default: TT_THROW("Unsupported sfpu binary op {}", sfpu_binary_op);
     }
 }

@@ -56,7 +56,7 @@ from tests.ttnn.unit_tests.operations.ccl.test_all_to_all_dispatch_t3000 import 
 @pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
 @pytest.mark.parametrize("output_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
 @pytest.mark.parametrize("num_links", [1])
-@pytest.mark.parametrize("topology", [None])
+@pytest.mark.parametrize("topology", [ttnn.Topology.Linear])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 def test_all_to_all_combine_trace(
     bh_1d_mesh_device,
@@ -78,12 +78,12 @@ def test_all_to_all_combine_trace(
     output_memory_config,
 ):
     validate_test(num_devices, topology, bh_1d_mesh_device.shape, cluster_axis)
-    devices = mesh_shape[0] * mesh_shape[1]
-    batch = batches_per_device * devices
-    experts = experts_per_device * devices
+    batch = batches_per_device * num_devices
+    experts = experts_per_device * num_devices
+    submesh_device = bh_1d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
 
     trace_all_to_all_combine(
-        bh_1d_mesh_device,
+        submesh_device,
         mesh_shape,
         cluster_axis,
         batch,
@@ -105,7 +105,7 @@ def test_all_to_all_combine_trace(
 
 @skip_for_wormhole_b0("This test is for blackhole")
 @pytest.mark.parametrize(
-    "device_params, mesh_shape, num_devices, axis, num_links, test_skew",
+    "device_params, axis, num_links, test_skew,topology",
     [
         # FABRIC_1D LINE
         pytest.param(
@@ -114,11 +114,10 @@ def test_all_to_all_combine_trace(
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
                 "trace_region_size": 500000,
             },
-            (4, 1),
-            4,
             0,
             1,
             False,
+            ttnn.Topology.Linear,
             id="fabric_1d_line_axis_0",
         ),
         # FABRIC_1D_RING
@@ -128,16 +127,16 @@ def test_all_to_all_combine_trace(
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
                 "trace_region_size": 500000,
             },
-            (4, 1),
-            4,
             0,
             1,
             False,
+            ttnn.Topology.Ring,
             id="fabric_1d_ring_axis_0",
         ),
     ],
     indirect=["device_params"],
 )
+@pytest.mark.parametrize("num_devices, mesh_shape", [(4, (4, 1)), (8, (8, 1))])
 @pytest.mark.parametrize("batches_per_device", [8])
 @pytest.mark.parametrize("experts_per_device", [8])
 @pytest.mark.parametrize("select_experts_k", [8])
@@ -148,7 +147,6 @@ def test_all_to_all_combine_trace(
 @pytest.mark.parametrize("num_iters", [2])
 @pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG], ids=["dram", "l1"])
 @pytest.mark.parametrize("output_memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG], ids=["dram", "l1"])
-@pytest.mark.parametrize("topology", [None])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 def test_all_to_all_combine_no_trace(
     bh_1d_mesh_device,
@@ -176,9 +174,10 @@ def test_all_to_all_combine_no_trace(
     experts = experts_per_device * devices
 
     bh_1d_mesh_device.disable_and_clear_program_cache()
+    submesh_device = bh_1d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
 
     run_all_to_all_combine_test(
-        bh_1d_mesh_device,
+        submesh_device,
         mesh_shape,
         axis,
         batch,

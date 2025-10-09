@@ -20,6 +20,7 @@ dtypes = [
     (torch.bfloat16, ttnn.bfloat8_b),
     (torch.int32, ttnn.int32),
     (torch.int32, ttnn.uint32),
+    (torch.int16, ttnn.uint16),
 ]
 shapes = [(1,), (2,), (2, 3), (4, 16, 3, 1), (4, 3, 1, 2, 2)]
 repeat_shapes = [
@@ -61,6 +62,9 @@ def test_repeat(device, layout, dtype, shape, repeat_shape):
     if layout == ttnn.ROW_MAJOR_LAYOUT and ttnn_dtype == ttnn.bfloat8_b:
         pytest.skip("Illegal config")
 
+    if layout == ttnn.TILE_LAYOUT and ttnn_dtype == ttnn.uint16:
+        pytest.skip("UINT16 tensors cannot be tilized - only bfloat16/float32/int32/uint32 supported")
+
     mul = lambda x, y: x * y
     torch_input_tensor = torch.arange(0, reduce(mul, shape, 1), dtype=torch_dtype).reshape(shape)
 
@@ -73,7 +77,14 @@ def test_repeat(device, layout, dtype, shape, repeat_shape):
         output.shape == torch_result.shape
     ), f"Output shape {output.shape} does not match torch shape {torch_result.shape}"
 
-    assert_with_pcc(torch_result, output, 0.9999)
+    # Convert unsigned PyTorch dtypes to int32 for PCC check since comp_pcc doesn't support uint dtypes
+    pcc_torch_result = torch_result
+    pcc_output = output
+    if torch_dtype == torch.uint16:
+        pcc_torch_result = torch_result.to(torch.int32)
+        pcc_output = output.to(torch.int32)
+
+    assert_with_pcc(pcc_torch_result, pcc_output, 0.9999)
 
 
 @pytest.mark.parametrize("layout", layouts)

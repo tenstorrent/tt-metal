@@ -369,7 +369,7 @@ SortProgramFactoryCrossCoreDataExchange::cached_program_t SortProgramFactoryCros
             CoreRange({0, 0}, {compute_with_storage_grid_size.x - 1, compute_with_storage_grid_size.y - 1}));
     } else if (all_core_utilization_count == total_number_of_cores_virtual) {
         const uint32_t core_grid_calculated_rows_number =
-            all_core_utilization_count / compute_with_storage_grid_size.x - 1;
+            (all_core_utilization_count / compute_with_storage_grid_size.x) - 1;
         const uint32_t core_grid_calculated_columns_number =
             all_core_utilization_count % compute_with_storage_grid_size.x;
         // All virtual cores used
