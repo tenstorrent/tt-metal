@@ -36,6 +36,7 @@ jobs:
         with:
           fetch-depth: ${{ inputs.fetch_depth }}
           fetch-tags: true
+          ref: stable
       - name: Debug - Show all tags
         run: |
           echo "All tags in repository:"
