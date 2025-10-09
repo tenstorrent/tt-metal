@@ -37,6 +37,13 @@ std::vector<ttnn::Tensor> ExecuteLlamaReduceScatterMatmul::invoke(
     const auto& mesh_view = mesh_device.get_view();
     const uint32_t ring_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
     TT_FATAL(ring_devices > 1, "reduce_scatter async op will only work for ring_devices > 1, but has {}", ring_devices);
+
+    ttnn::ccl::Topology ccl_topology = topology;
+    if (ring_devices == 2 && topology == ttnn::ccl::Topology::Ring) {
+        log_warning(tt::LogOp, "Using Linear topology for ReduceScatter with 2 devices instead of Ring.");
+        ccl_topology = ttnn::ccl::Topology::Linear;
+    }
+
     return ttnn::prim::llama_rs_matmul(
         input_tensor,
         weight_tensor,
@@ -60,7 +67,7 @@ std::vector<ttnn::Tensor> ExecuteLlamaReduceScatterMatmul::invoke(
         activation,
         output_tile,
         optional_output_tensor,
-        topology,
+        ccl_topology,
         use_noc1_only,
         second_weight_tensor);
 }

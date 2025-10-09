@@ -239,7 +239,8 @@ Tensor all_gather_command_processor_async_impl(
     }
 
     ttnn::ccl::Topology ccl_topology = topology;
-    if (num_devices == 2) {
+    if (num_devices == 2 && topology == ttnn::ccl::Topology::Ring) {
+        log_warning(tt::LogOp, "Using Linear topology for AllGather with 2 devices instead of Ring.");
         ccl_topology = ttnn::ccl::Topology::Linear;
     }
 

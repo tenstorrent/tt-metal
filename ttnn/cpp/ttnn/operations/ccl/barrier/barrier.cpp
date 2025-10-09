@@ -19,12 +19,22 @@ std::vector<ttnn::Tensor> BarrierOperation::invoke(
     const std::vector<ttnn::Tensor>& input_tensors,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     ttnn::ccl::Topology topology) {
+
+    std::vector<IDevice*> devices = ttnn::ccl::get_active_physical_devices(input_tensors);
+    uint32_t num_devices = devices.size();
+
+    ttnn::ccl::Topology ccl_topology = topology;
+    if (num_devices == 2 && topology == ttnn::ccl::Topology::Ring) {
+        log_warning(tt::LogOp, "Using Linear topology for Barrier with 2 devices instead of Ring.");
+        ccl_topology = ttnn::ccl::Topology::Linear;
+    }
+
     return barrier_function(
         input_tensors,
         Barrier{
             memory_config.value_or(input_tensors[0].memory_config()),
-            topology,
-            ttnn::ccl::get_active_physical_devices(input_tensors)});
+            ccl_topology,
+            devices});
 }
 
 }  // namespace ttnn::operations::ccl

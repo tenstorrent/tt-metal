@@ -287,9 +287,10 @@ Tensor all_gather_async_impl(
     uint32_t num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor, std::nullopt);
 
     TT_FATAL(num_devices > 1, "all_gather_async op will only work for num_devices > 1, but has {}", num_devices);
-    ttnn::ccl::Topology ccl_topology = topology;
 
-    if (num_devices == 2) {
+    ttnn::ccl::Topology ccl_topology = topology;
+    if (num_devices == 2 && topology == ttnn::ccl::Topology::Ring) {
+        log_warning(tt::LogOp, "Using Linear topology for AllGather with 2 devices instead of Ring.");
         ccl_topology = ttnn::ccl::Topology::Linear;
     }
 
@@ -343,11 +344,13 @@ Tensor all_gather_async_impl(
     uint32_t num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
 
     TT_FATAL(num_devices > 1, "all_gather_async op will only work for num_devices > 1, but has {}", num_devices);
-    ttnn::ccl::Topology ccl_topology = topology;
 
-    if (num_devices == 2) {
+    ttnn::ccl::Topology ccl_topology = topology;
+    if (num_devices == 2 && topology == ttnn::ccl::Topology::Ring) {
+        log_warning(tt::LogOp, "Using Linear topology for AllGather with 2 devices instead of Ring.");
         ccl_topology = ttnn::ccl::Topology::Linear;
     }
+
     log_debug(tt::LogOp, "DEBUG: creating line_fabric with num devices: {}, num links: {}", num_devices, num_links);
     log_debug(tt::LogOp, "DEBUG: line_fabric is created");
 
@@ -414,13 +417,19 @@ Tensor all_gather_async_impl(
 
     std::vector<std::optional<Tensor>> optional_output_tensors = {persistent_output_tensor};
 
+    ttnn::ccl::Topology ccl_topology = topology;
+    if (num_devices == 2 && topology == ttnn::ccl::Topology::Ring) {
+        log_warning(tt::LogOp, "Using Linear topology for AllGather with 2 devices instead of Ring.");
+        ccl_topology = ttnn::ccl::Topology::Linear;
+    }
+
     return tt::tt_metal::operation::run(
                ttnn::AllGatherAsync{
                    gather_dim,
                    num_preferred_links.has_value() ? num_preferred_links.value() : 1,
                    num_devices,
                    memory_config.value_or(input_tensor.memory_config()),
-                   topology,
+                   ccl_topology,
                    multi_device_global_semaphore,
                    sub_device_id,
                    cluster_axis,
