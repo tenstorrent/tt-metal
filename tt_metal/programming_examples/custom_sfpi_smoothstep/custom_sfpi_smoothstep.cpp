@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -135,7 +135,7 @@ int main(int argc, char** argv) {
         distributed::MeshWorkload workload;
         distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
         // Add the program to the workload for the mesh.
-        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+        workload.add_program(device_range, std::move(program));
         // Enqueue the workload for execution on the mesh (non-blocking) and wait for completion before reading back.
         distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
         distributed::Finish(cq);

@@ -171,8 +171,13 @@ struct Conv2dSliceConfig {
     // cores is minimized in width slicing, reducing the size of the Halo output. If the Height & Width dimensions are
     // similar, then use Width slicing. Use Height slicing if the Height dimension is significantly larger than the
     // Width dimension.
-    enum class SliceType : bool { HEIGHT, WIDTH };
-    SliceType slice_type = SliceType::WIDTH;
+    enum class SliceType : uint8_t {
+        DRAM_HEIGHT,
+        DRAM_WIDTH,
+        L1_FULL  // This option can be used to force conv2d with a DRAM Input to move it to L1, and output will be in
+                 // L1.
+    };
+    SliceType slice_type = SliceType::DRAM_WIDTH;
 
     // Number of slices that the output tensor should be divided into.
     uint32_t num_slices = 0;

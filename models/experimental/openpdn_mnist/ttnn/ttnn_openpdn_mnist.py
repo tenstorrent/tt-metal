@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -83,6 +83,7 @@ class OpenPDNMnistConv2D:
             stride=self.stride,
             padding=self.padding,
             conv_config=self.conv_config,
+            slice_config=ttnn.Conv2dL1FullSliceConfig,
             groups=self.groups,
             compute_config=self.compute_config,
             return_output_dim=True,

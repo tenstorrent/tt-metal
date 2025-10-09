@@ -5,7 +5,7 @@ We have made the linears (Q,K,V) to be executed separately and added bias suppor
 configuration changes.
 """
 
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -373,7 +373,7 @@ class TtGemmaImageAttention(LightweightModule):
                 dim=3,
                 multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
                 num_links=1,
-                topology=ttnn.Topology.Linear,
+                topology=ttnn.Topology.Ring,
                 barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
                 chunks_per_sync=10,
                 num_workers_per_link=2,

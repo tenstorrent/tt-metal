@@ -5,7 +5,7 @@
 
 #include "ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
 
@@ -40,7 +40,7 @@ std::vector<std::pair<size_t, size_t>> compute_evenly_split_sizes(size_t size, s
 
     auto compute_slice_offset = [num_larger_slices_total, larger_slice_size, smaller_slice_size](int64_t slice_index) {
         int64_t num_larger_slices = std::min(slice_index, num_larger_slices_total);
-        return num_larger_slices * larger_slice_size + (slice_index - num_larger_slices) * smaller_slice_size;
+        return (num_larger_slices * larger_slice_size) + ((slice_index - num_larger_slices) * smaller_slice_size);
     };
 
     auto compute_slice_size_and_offset = [compute_slice_dim_size,

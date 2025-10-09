@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,16 +9,17 @@
 #include "autograd/auto_context.hpp"
 #include "common.hpp"
 #include "core/distributed/distributed.hpp"
+#include "core/distributed/socket_manager.hpp"
 #include "datasets/utils.hpp"
 #include "models/distributed/gpt2.hpp"
 #include "models/gpt2.hpp"
 #include "optimizers/adamw.hpp"
-#include "socket_manager.hpp"
 #include "tokenizers/bpe_tokenizer.hpp"
 #include "tokenizers/char_tokenizer.hpp"
 #include "ttnn_fixed/distributed/tt_metal.hpp"
 
 using SortedParameters = std::map<std::string, ttml::autograd::TensorPtr>;
+using SocketManager = ttml::core::distributed::SocketManager;
 
 void send_weights_to_aggregator(
     SocketManager &socket_manager,
@@ -46,7 +47,7 @@ void receive_gradients_from_aggregator(
         }
 
         auto tensor = ttnn::empty_like(tensor_ptr->get_value());
-        socket_manager.recv(tensor, ctx, aggregator_rank);
+        tensor = socket_manager.recv(tensor, ctx, aggregator_rank);
         tensor_ptr->set_grad(tensor);
     }
 }
@@ -78,7 +79,8 @@ int main(int argc, char **argv) {
     }
 
     three_tier_arch::initialize_device(device_config.mesh_shape, device_config.device_ids);
-    auto socket_manager = SocketManager(config.socket_type);
+    ttml::autograd::ctx().initialize_socket_manager(config.socket_type);
+    auto &socket_manager = ttml::autograd::ctx().get_socket_manager();
 
     auto [steps_per_dataset, vocab_size] = three_tier_arch::get_steps_per_dataset_and_vocab_size(config);
     fmt::println(
@@ -105,7 +107,7 @@ int main(int argc, char **argv) {
         config.transformer_config);
 
     auto model = std::visit(
-        [&device_config](auto &&arg) -> std::shared_ptr<ttml::autograd::ModuleBase> {
+        [&device_config](auto &&arg) -> std::shared_ptr<ttml::modules::ModuleBase> {
             if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, ttml::models::llama::LlamaConfig>) {
                 if (device_config.enable_tp) {
                     return ttml::models::distributed::llama::create(arg);
