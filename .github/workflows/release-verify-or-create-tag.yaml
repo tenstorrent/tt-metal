@@ -46,6 +46,7 @@ jobs:
         with:
           tag_prefix: "v"
           branch: stable
+          use_branches: true
           version_format: "v${major}.${minor}.${patch}"
           bump_each_commit: ${{ inputs.bump_each_commit }}
 
