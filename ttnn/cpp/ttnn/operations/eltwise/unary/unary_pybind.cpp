@@ -1817,6 +1817,59 @@ void bind_unary_composite_float_with_default(
 }
 
 template <typename unary_operation_t>
+void bind_unary_logit(py::module& module, const unary_operation_t& operation, const std::string& info_doc = "") {
+    auto doc = fmt::format(
+        R"doc(
+        Performs {0} function on :attr:`input_tensor`, :attr:`eps`.
+
+        Args:
+            input_tensor (ttnn.Tensor): the input tensor.
+
+        Keyword args:
+            eps (float, optional): The epsilon for input clamp bound. Defaults to `None`.
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+
+        Returns:
+            ttnn.Tensor: the output tensor.
+
+        Note:
+            Supported dtypes, layouts, and ranks:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+                 - Ranks
+               * - FLOAT32, BFLOAT16, BFLOAT8_B
+                 - TILE
+                 - 2, 3, 4
+
+
+        Example:
+            >>> tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+            >>> output = {1}(tensor, eps = None)
+        )doc",
+        operation.base_name(),
+        operation.python_fully_qualified_name(),
+        info_doc);
+
+    bind_registered_operation(
+        module,
+        operation,
+        doc,
+        ttnn::pybind_overload_t{
+            [](const unary_operation_t& self,
+               const ttnn::Tensor& input_tensor,
+               std::optional<float> eps,
+               const std::optional<MemoryConfig>& memory_config) { return self(input_tensor, eps, memory_config); },
+            py::arg("input_tensor"),
+            py::kw_only(),
+            py::arg("eps") = std::nullopt,
+            py::arg("memory_config") = std::nullopt});
+}
+
+template <typename unary_operation_t>
 void bind_unary_composite_rpow(
     py::module& module,
     const unary_operation_t& operation,
@@ -2469,7 +2522,7 @@ void py_module(py::module& module) {
     bind_unary_composite_float_with_default(
         module, ttnn::softshrink, "lambd", "lambd value", 0.5f, R"doc(FLOAT32, BFLOAT16, BFLOAT8_B)doc");
 
-    bind_unary_composite_float_with_default(module, ttnn::logit, "eps", "eps", 0.0f, R"doc(BFLOAT16)doc");
+    bind_unary_logit(module, ttnn::logit);
 
     bind_unary_rdiv(
         module,

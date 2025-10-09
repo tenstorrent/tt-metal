@@ -120,6 +120,7 @@ enum class UnaryOpType {
     RPOW,
     CBRT,
     LOGSIGMOID,
+    LOGIT,
 };
 
 enum class VecMode {
