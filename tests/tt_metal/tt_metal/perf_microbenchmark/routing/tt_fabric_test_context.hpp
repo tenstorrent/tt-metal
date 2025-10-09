@@ -157,9 +157,6 @@ public:
         device_local_sync_cores_.clear();
         this->allocator_->reset();
 
-        // Reset memory maps for next test run
-        sender_memory_map_.reset();
-
         reset_local_variables();
     }
 
@@ -316,6 +313,8 @@ public:
                     .target_address = dest.target_address,
                     .atomic_inc_address = dest.atomic_inc_address,
                     .link_id = sender.link_id,
+                    .sender_credit_info = pattern.sender_credit_info,
+                    .credit_return_batch_size = pattern.credit_return_batch_size,
                 };
 
                 if (dest.device.has_value()) {
@@ -573,50 +572,6 @@ private:
     // - B ≥ 1: Batch size must be at least 1 credit
     // - B ≤ I: Initial credits must cover at least one batch (else deadlock)
     // - I ≤ N: Initial credits cannot exceed buffer capacity (else overflow)
-    //
-    // OPERATIONAL MODES:
-    // - Pipelined: B < I < N (e.g., B=N/3, I=2N/3) - continuous flow, low latency
-    // - Wrap-around sync: B = I = N - fill/drain buffer, minimal credit overhead
-    //
-    static std::pair<uint32_t, uint32_t> calculate_credit_config(
-        uint32_t receiver_buffer_size_bytes, uint32_t packet_size_bytes) {
-        // Calculate how many packets can fit in the receiver's buffer
-        uint32_t max_packets_in_buffer = receiver_buffer_size_bytes / packet_size_bytes;
-
-        // Ensure minimum buffer size for flow control to make sense
-        if (max_packets_in_buffer < 3) {
-            log_warning(
-                tt::LogTest,
-                "Buffer only holds {} packets - flow control may not work correctly. Consider increasing buffer size.",
-                max_packets_in_buffer);
-            return {1u, 1u};
-        }
-
-        // Calculate batch size (1/3 of buffer for balanced pipelined operation)
-        uint32_t batch_size = std::max(1u, max_packets_in_buffer / 3);
-
-        // Initial credits = 2/3 of buffer for pipelined mode
-        // This maintains: batch_size ≤ initial_credits ≤ buffer_capacity
-        uint32_t initial_credits = max_packets_in_buffer - batch_size;
-
-        // Validate constraints: 1 ≤ B ≤ I ≤ N
-        TT_FATAL(
-            batch_size >= 1 && batch_size <= initial_credits && initial_credits <= max_packets_in_buffer,
-            "Credit config violates safety constraints: B={}, I={}, N={} (requires 1 ≤ B ≤ I ≤ N)",
-            batch_size,
-            initial_credits,
-            max_packets_in_buffer);
-
-        log_debug(
-            tt::LogTest,
-            "Credit config: buffer={} packets, initial_credits={}, batch_size={}",
-            max_packets_in_buffer,
-            initial_credits,
-            batch_size);
-
-        return {initial_credits, batch_size};
-    }
-
     void reset_local_variables() {
         benchmark_mode_ = false;
         global_sync_ = false;
@@ -702,31 +657,31 @@ private:
             .link_id = traffic_config.link_id};  // Derive from sender's link_id
 
         if (traffic_config.parameters.enable_flow_control) {
-            // Calculate credit configuration based on receiver's payload buffer capacity
-            // This prevents sender from overrunning receiver's buffer without handshake
-            const uint32_t packet_size_bytes = traffic_config.parameters.payload_size_bytes;
-            const auto [initial_credits, credit_return_batch_size] =
-                calculate_credit_config(payload_buffer_size, packet_size_bytes);
+            TT_FATAL(
+                traffic_config.sender_credit_info.has_value(),
+                "Sender credit info not allocated for sender {} with flow control enabled",
+                traffic_config.src_node_id);
 
-            // Allocate credit chunk for mcast: one semaphore per receiver
-            const uint32_t num_receivers = static_cast<uint32_t>(dst_node_ids.size());
-            uint32_t credit_chunk_base = sender_memory_map_.allocate_credit_chunk(num_receivers);
+            sender_config.sender_credit_info = traffic_config.sender_credit_info.value();
 
-            // Sender gets the chunk base address, receiver count, and initial credits
-            sender_config.sender_credit_info = SenderCreditInfo{
-                .expected_receiver_count = num_receivers,
-                .credit_reception_address_base = credit_chunk_base,
-                .initial_credits = initial_credits};
+            TT_FATAL(
+                traffic_config.credit_return_batch_size.has_value(),
+                "Credit batch size not calculated for sender {} with flow control enabled",
+                traffic_config.src_node_id);
+            uint32_t credit_return_batch_size = traffic_config.credit_return_batch_size.value();
 
-            // Base receiver credit info (will be customized per receiver device in loop below)
             receiver_config.receiver_credit_info = ReceiverCreditInfo{
-                .receiver_node_id = FabricNodeId(MeshId{0}, 0),  // Will be set per receiver
+                .receiver_node_id = FabricNodeId(MeshId{0}, 0),
                 .sender_node_id = traffic_config.src_node_id,
                 .sender_logical_core = src_logical_core,
                 .sender_noc_encoding = fixture_->get_worker_noc_encoding(src_logical_core),
-                .credit_return_address = 0,  // Will be set per receiver using chunk base + offset
+                .credit_return_address = 0,
                 .credit_return_batch_size = credit_return_batch_size,
-                .hops = std::nullopt};  // Will be set per receiver
+                .hops = std::nullopt};
+        } else {
+            // If flow control is disabled, ensure sender_credit_info is not set
+            sender_config.sender_credit_info = std::nullopt;
+            receiver_config.receiver_credit_info = std::nullopt;
         }
 
         if (fixture_->is_local_fabric_node_id(src_node_id)) {
@@ -735,44 +690,36 @@ private:
             src_test_device.add_sender_traffic_config(src_logical_core, std::move(sender_config));
         }
 
-        // Assign per-receiver credit addresses (for mcast support)
+        // CRITICAL: receiver_idx must be global across ALL receivers (local + remote)
         uint32_t receiver_idx = 0;
         for (const auto& dst_node_id : dst_node_ids) {
+            uint32_t credit_return_address = 0;  // Default to 0 if flow control is disabled
+            if (traffic_config.parameters.enable_flow_control && sender_config.sender_credit_info.has_value()) {
+                uint32_t credit_chunk_base = sender_config.sender_credit_info->credit_reception_address_base;
+                credit_return_address = CommonMemoryMap::get_receiver_credit_address(credit_chunk_base, receiver_idx);
+            }
+
             if (fixture_->is_local_fabric_node_id(dst_node_id)) {
                 const auto& dst_coord = this->fixture_->get_device_coord(dst_node_id);
-                log_debug(tt::LogTest, "Creating receiver on dst_node_id={}, dst_coord={}", dst_node_id, dst_coord);
-
-                // Create a copy of receiver config for this specific receiver device
                 TestTrafficReceiverConfig per_receiver_config = receiver_config;
 
-                // Update receiver credit info for this specific receiver device (if flow control enabled)
                 if (traffic_config.parameters.enable_flow_control &&
                     per_receiver_config.receiver_credit_info.has_value()) {
-                    // Set the receiver's own node_id (needed for credit packet source)
                     per_receiver_config.receiver_credit_info->receiver_node_id = dst_node_id;
-
-                    // Assign unique credit return address for this receiver within the chunk
-                    uint32_t credit_chunk_base = sender_config.sender_credit_info->credit_reception_address_base;
-                    per_receiver_config.receiver_credit_info->credit_return_address =
-                        CommonMemoryMap::get_receiver_credit_address(credit_chunk_base, receiver_idx);
+                    per_receiver_config.receiver_credit_info->credit_return_address = credit_return_address;
 
                     std::optional<std::unordered_map<RoutingDirection, uint32_t>> reverse_hops = std::nullopt;
-
-                    // Calculate reverse hops from this receiver device back to the sender
-                    if (dst_node_id != src_node_id) {
-                        // For inter-chip traffic, calculate reverse hops from this receiver back to sender
-                        if (!fixture_->is_dynamic_routing_enabled()) {
-                            reverse_hops = fixture_->get_hops_to_chip(dst_node_id, src_node_id);
-                        }
+                    if (dst_node_id != src_node_id && !fixture_->is_dynamic_routing_enabled()) {
+                        reverse_hops = fixture_->get_hops_to_chip(dst_node_id, src_node_id);
                     }
-
-                    // Update the receiver credit info with device-specific reverse hops
                     per_receiver_config.receiver_credit_info->hops = reverse_hops;
                 }
 
                 this->test_devices_.at(dst_coord).add_receiver_traffic_config(dst_logical_core, per_receiver_config);
-                receiver_idx++;  // Increment receiver index for next address assignment
             }
+
+            // CRITICAL: Increment for EVERY receiver (local + remote)
+            receiver_idx++;
         }
     }
 

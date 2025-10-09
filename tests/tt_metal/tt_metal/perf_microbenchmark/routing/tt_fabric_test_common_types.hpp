@@ -67,6 +67,13 @@ struct DestinationConfig {
     std::optional<uint32_t> atomic_inc_address;
 };
 
+// Credit flow structures for bidirectional sender-receiver communication
+struct SenderCreditInfo {
+    uint32_t expected_receiver_count;        // How many receivers to wait for
+    uint32_t credit_reception_address_base;  // Base L1 address for credit chunk (mcast support)
+    uint32_t initial_credits;                // Initial credit capacity (based on receiver buffer size)
+};
+
 struct TrafficPatternConfig {
     std::optional<ChipSendType> ftype;
     std::optional<NocSendType> ntype;
@@ -76,6 +83,10 @@ struct TrafficPatternConfig {
     std::optional<uint16_t> atomic_inc_val;
     std::optional<uint16_t> atomic_inc_wrap;
     std::optional<uint32_t> mcast_start_hops;
+
+    // Credit info (allocated by GlobalAllocator in PASS 2 for ALL patterns with flow control)
+    std::optional<SenderCreditInfo> sender_credit_info;  // For sender
+    std::optional<uint32_t> credit_return_batch_size;    // For receivers
 };
 
 struct SenderConfig {

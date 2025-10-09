@@ -561,8 +561,6 @@ TestDevice::TestDevice(
     receiver_memory_map_(receiver_memory_map) {
     program_handle_ = tt::tt_metal::CreateProgram();
     fabric_node_id_ = device_info_provider_->get_fabric_node_id(coord);
-
-    // TODO: init routers
 }
 
 tt::tt_metal::Program& TestDevice::get_program_handle() { return this->program_handle_; }

@@ -186,6 +186,20 @@ public:
     };
     MuxReservation mux_reservation_;
 
+    // Credit allocation for senders on this device
+    std::optional<DynamicMemoryRegion> credit_allocator_;
+
+    // Initialize credit allocator (lazy)
+    void initialize_credit_allocator(const SenderMemoryMap& sender_memory_map);
+
+    // Allocate credit chunk from this device's L1 credit region
+    // Returns the base address of the allocated chunk
+    // Throws if allocation would exceed region bounds
+    uint32_t allocate_credit_chunk(uint32_t num_receivers, const SenderMemoryMap& sender_memory_map);
+
+    // Reset credit allocator
+    void reset_credit_allocator();
+
 private:
     void reserve_core_internal(const CoreCoord& core, CoreType core_type);
     CoreCoord find_next_available_core(CorePool& pool);
@@ -312,6 +326,50 @@ inline void TestDeviceResources::refill_pool(CorePool& pool) {
     std::sort(pool.active_pool.begin(), pool.active_pool.end());
 }
 
+inline void TestDeviceResources::initialize_credit_allocator(const SenderMemoryMap& sender_memory_map) {
+    if (!credit_allocator_.has_value()) {
+        credit_allocator_.emplace(
+            sender_memory_map.common.credit_addresses.start,
+            sender_memory_map.common.credit_addresses.size,
+            CommonMemoryMap::CREDIT_ADDRESS_STRIDE);
+
+        log_debug(
+            tt::LogTest,
+            "Initialized credit allocator for device {}: start={:#x}, size={}, stride={}",
+            node_id_,
+            sender_memory_map.common.credit_addresses.start,
+            sender_memory_map.common.credit_addresses.size,
+            CommonMemoryMap::CREDIT_ADDRESS_STRIDE);
+    }
+}
+
+inline uint32_t TestDeviceResources::allocate_credit_chunk(
+    uint32_t num_receivers, const SenderMemoryMap& sender_memory_map) {
+    // Lazy initialization
+    if (!credit_allocator_.has_value()) {
+        initialize_credit_allocator(sender_memory_map);
+    }
+
+    // Allocate from the per-device allocator
+    uint32_t chunk_base = credit_allocator_->allocate_chunk(num_receivers);
+
+    log_debug(
+        tt::LogTest,
+        "Device {} allocated credit chunk: base={:#x}, num_receivers={}",
+        node_id_,
+        chunk_base,
+        num_receivers);
+
+    return chunk_base;
+}
+
+inline void TestDeviceResources::reset_credit_allocator() {
+    if (credit_allocator_.has_value()) {
+        credit_allocator_->reset();
+        log_debug(tt::LogTest, "Reset credit allocator for device {}", node_id_);
+    }
+}
+
 inline CoreCoord TestDeviceResources::find_next_available_sync_core(CorePool& pool) {
     size_t current_pool_idx = pool.next_pool_idx;
     const CoreCoord& core = pool.active_pool[current_pool_idx];
@@ -424,6 +482,26 @@ inline const std::unordered_map<tt::tt_fabric::RoutingDirection, CoreCoord>& Tes
     const {
     TT_FATAL(mux_reservation_.is_enabled, "Mux cores not reserved on device {}", node_id_);
     return mux_reservation_.reserved_cores;
+}
+
+// ======================================================================================
+// Credit Allocation Helpers
+// ======================================================================================
+
+/**
+ * Calculate credit configuration (100% initial, 20% batch)
+ * Simple policy: Give sender full buffer capacity, receiver returns in 20% batches
+ * @param buffer_capacity_bytes Receiver buffer size
+ * @param packet_size_bytes Size of each packet
+ * @return Pair of (initial_credits, batch_size)
+ */
+inline static std::pair<uint32_t, uint32_t> calculate_credit_config(
+    uint32_t buffer_capacity_bytes, uint32_t packet_size_bytes) {
+    uint32_t buffer_capacity_packets = buffer_capacity_bytes / packet_size_bytes;
+    uint32_t initial_credits = buffer_capacity_packets;
+    uint32_t batch_size = std::max(1u, buffer_capacity_packets / 5);
+
+    return {initial_credits, batch_size};
 }
 
 // ======================================================================================
@@ -685,6 +763,29 @@ inline void GlobalAllocator::allocate_resources(TestConfig& test_config) {
                         core_resources.reserve_atomic_counter(dest.atomic_inc_address.value());
                     }
                 }
+
+                // NEW: Allocate credit addresses for sender (if flow control enabled)
+                if (enable_flow_control_) {
+                    uint32_t num_receivers = static_cast<uint32_t>(dst_node_ids.size());
+
+                    // Allocate credit chunk from sender device's L1
+                    auto& sender_device_resources = get_or_create_device_resources(sender.device);
+                    uint32_t credit_chunk_base =
+                        sender_device_resources.allocate_credit_chunk(num_receivers, sender_memory_map_);
+
+                    // Calculate credit configuration using simple policy
+                    uint32_t buffer_capacity_bytes = policies_.default_payload_chunk_size;
+                    uint32_t packet_size_bytes = pattern.size.value();
+                    auto [initial_credits, batch_size] =
+                        calculate_credit_config(buffer_capacity_bytes, packet_size_bytes);
+
+                    // Populate sender credit info directly in pattern
+                    pattern.sender_credit_info = SenderCreditInfo{
+                        .expected_receiver_count = num_receivers,
+                        .credit_reception_address_base = credit_chunk_base,
+                        .initial_credits = initial_credits};
+                    pattern.credit_return_batch_size = batch_size;
+                }
             } else if (dest.device.has_value()) {  // process dest devices directly
                 auto& device_resources = get_or_create_device_resources(dest.device.value());
 
@@ -723,12 +824,38 @@ inline void GlobalAllocator::allocate_resources(TestConfig& test_config) {
                 if (allocate_atomic_inc_address) {
                     dest.atomic_inc_address = core_resources.allocate_atomic_counter();
                 }
+
+                // NEW: Allocate credits for sender (if flow control enabled)
+                if (enable_flow_control_) {
+                    uint32_t num_receivers = 1;  // Direct-device = single receiver
+
+                    // Allocate from sender device (same as hops-based path!)
+                    auto& sender_device_resources = get_or_create_device_resources(sender.device);
+                    uint32_t credit_chunk_base =
+                        sender_device_resources.allocate_credit_chunk(num_receivers, sender_memory_map_);
+
+                    uint32_t buffer_capacity_bytes = policies_.default_payload_chunk_size;
+                    uint32_t packet_size_bytes = pattern.size.value();
+                    auto [initial_credits, batch_size] =
+                        calculate_credit_config(buffer_capacity_bytes, packet_size_bytes);
+
+                    pattern.sender_credit_info = SenderCreditInfo{
+                        .expected_receiver_count = num_receivers,
+                        .credit_reception_address_base = credit_chunk_base,
+                        .initial_credits = initial_credits};
+                    pattern.credit_return_batch_size = batch_size;
+                }
             }
         }
     }
 }
 
 inline void GlobalAllocator::reset() {
+    // Reset credit allocators before clearing device resources
+    for (auto& [node_id, device_resources_ptr] : all_device_resources_) {
+        device_resources_ptr->reset_credit_allocator();
+    }
+
     all_device_resources_.clear();
     worker_grid_size_ = std::nullopt;
     enable_flow_control_ = false;

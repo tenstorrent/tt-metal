@@ -493,6 +493,10 @@ private:
             resolved_pattern.destination = resolve_destination_config(parsed_pattern.destination.value());
         }
 
+        // Credit info fields (will be populated by GlobalAllocator during resource allocation)
+        resolved_pattern.sender_credit_info = std::nullopt;
+        resolved_pattern.credit_return_batch_size = std::nullopt;
+
         return resolved_pattern;
     }
 

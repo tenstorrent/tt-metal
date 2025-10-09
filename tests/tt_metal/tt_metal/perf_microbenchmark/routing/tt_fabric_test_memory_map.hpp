@@ -23,6 +23,47 @@ struct BaseMemoryRegion {
 };
 
 /**
+ * Dynamic memory region for mutable per-device allocations (e.g., credits)
+ * Manages allocation state and provides chunk allocation with bounds checking
+ */
+struct DynamicMemoryRegion {
+    uint32_t start;
+    uint32_t size;
+    uint32_t stride;
+    mutable uint32_t current;
+
+    DynamicMemoryRegion(uint32_t start_, uint32_t size_, uint32_t stride_) :
+        start(start_), size(size_), stride(stride_), current(start_) {}
+
+    uint32_t end() const { return start + size; }
+
+    // Allocate a chunk for num_elements (e.g., num_receivers)
+    // Returns the base address of the allocated chunk
+    uint32_t allocate_chunk(uint32_t num_elements) const {
+        uint32_t chunk_size = num_elements * stride;
+        TT_FATAL(
+            current + chunk_size <= end(),
+            "Credit chunk allocation exceeds region bounds: "
+            "need {} bytes ({} receivers × {} stride) at address {} but region ends at {}",
+            chunk_size,
+            num_elements,
+            stride,
+            current,
+            end());
+        uint32_t chunk_base = current;
+        current += chunk_size;
+        return chunk_base;
+    }
+
+    // Get individual element address from chunk base
+    uint32_t get_element_address(uint32_t chunk_base, uint32_t element_idx) const {
+        return chunk_base + (element_idx * stride);
+    }
+
+    void reset() const { current = start; }
+};
+
+/**
  * Common memory layout shared by both senders and receivers
  */
 struct CommonMemoryMap {
@@ -45,9 +86,6 @@ struct CommonMemoryMap {
     // Explicit end address tracking (no assumptions about region order)
     uint32_t end_address;
 
-    // Credit address allocation state
-    mutable uint32_t current_credit_address;
-
     // Default constructor
     CommonMemoryMap() :
         result_buffer(0, 0),
@@ -56,8 +94,7 @@ struct CommonMemoryMap {
         mux_local_addresses(0, 0),
         credit_addresses(0, 0),
         mux_termination_sync(0, 0),
-        end_address(0),
-        current_credit_address(0) {}
+        end_address(0) {}
 
     // Boundary-validated constructor - takes base address and highest usable address
     CommonMemoryMap(uint32_t base_address, uint32_t highest_usable_address) {
@@ -99,9 +136,6 @@ struct CommonMemoryMap {
         uint32_t mux_termination_sync_base = current_addr;
         current_addr += MUX_TERMINATION_SYNC_SIZE;
         mux_termination_sync = BaseMemoryRegion(mux_termination_sync_base, MUX_TERMINATION_SYNC_SIZE);
-
-        // Initialize credit address allocation state
-        current_credit_address = credit_addresses_base;
 
         // Explicitly track end address
         end_address = current_addr;
@@ -151,32 +185,13 @@ struct CommonMemoryMap {
     uint32_t get_mux_termination_sync_address() const { return mux_termination_sync.start; }
     uint32_t get_mux_termination_sync_size() const { return mux_termination_sync.size; }
 
-    // Each sender allocates a chunk to accommodate all receivers (e.g., mcast patterns)
-    uint32_t allocate_credit_chunk(uint32_t num_receivers) const {
-        uint32_t chunk_size = num_receivers * CREDIT_ADDRESS_STRIDE;
-
-        TT_FATAL(
-            current_credit_address + chunk_size <= credit_addresses.end(),
-            "Credit chunk allocation exceeds available space: need {} bytes at {} but limit is {}",
-            chunk_size,
-            current_credit_address,
-            credit_addresses.end());
-
-        uint32_t chunk_base = current_credit_address;
-        current_credit_address += chunk_size;
-
-        return chunk_base;
-    }
-
     // Helper to compute individual receiver credit address from chunk
+    // Used by both per-device allocators and TestContext when assigning receiver addresses
     static uint32_t get_receiver_credit_address(uint32_t chunk_base, uint32_t receiver_idx) {
         return chunk_base + (receiver_idx * CREDIT_ADDRESS_STRIDE);
     }
 
     static constexpr uint32_t CREDIT_ADDRESS_STRIDE = 16;  // 16-byte alignment per receiver
-
-    // Reset credit address allocation for next test run
-    void reset_credit_allocation() const { current_credit_address = credit_addresses.start; }
 };
 
 /**
@@ -283,12 +298,6 @@ struct SenderMemoryMap {
 
     uint32_t get_mux_termination_sync_address() const { return common.get_mux_termination_sync_address(); }
     uint32_t get_mux_termination_sync_size() const { return common.get_mux_termination_sync_size(); }
-
-    // Credit address allocation methods
-    uint32_t allocate_credit_chunk(uint32_t num_receivers) const { return common.allocate_credit_chunk(num_receivers); }
-
-    // Reset method for test cleanup
-    void reset() const { common.reset_credit_allocation(); }
 };
 
 /**

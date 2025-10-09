@@ -8,6 +8,7 @@
 #include <vector>
 
 #include <tt-metalium/mesh_graph.hpp>
+#include "tt_fabric_test_common_types.hpp"  // For SenderCreditInfo
 
 namespace tt::tt_fabric {
 namespace fabric_tests {
@@ -260,16 +261,17 @@ struct TestTrafficConfig {
     std::optional<uint32_t> target_address;
     std::optional<uint32_t> atomic_inc_address;
     uint32_t link_id;  // Link ID for multi-link tests
+
+    // Credit info (copied from pattern if populated by allocator)
+    std::optional<SenderCreditInfo> sender_credit_info;
+    std::optional<uint32_t> credit_return_batch_size;
+
     // TODO: add later
     // mode - BW, latency etc
 };
 
 // Credit flow structures for bidirectional sender-receiver communication
-struct SenderCreditInfo {
-    uint32_t expected_receiver_count;        // How many receivers to wait for
-    uint32_t credit_reception_address_base;  // Base L1 address for credit chunk (mcast support)
-    uint32_t initial_credits;                // Initial credit capacity (based on receiver buffer size)
-};
+// (SenderCreditInfo moved to tt_fabric_test_common_types.hpp)
 
 struct ReceiverCreditInfo {
     FabricNodeId receiver_node_id;   // Receiver's own node (credit packet source)
