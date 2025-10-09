@@ -2454,7 +2454,7 @@ public:
      * @param size_bytes Size of the data transfer in bytes
      * @param src_args Additional arguments for source address calculation
      */
-    template <typename Src, typename Dst>
+    template <typename Src>
     void async_read_one_packet_set_state(const Src& src, uint32_t size_bytes, const src_args_t<Src>& src_args) const {
         noc_async_read_one_packet_set_state(get_src_ptr(src, src_args), size_bytes, noc_id_);
     }
@@ -2579,7 +2579,6 @@ public:
         const src_args_t<Src>& src_args,
         const dst_args_t<Dst>& dst_args,
         uint32_t vc = NOC_UNICAST_WRITE_VC) const {
-        uint32_t src_local_l1_addr{};
         noc_async_write<max_page_size, enable_noc_tracing>(
             get_src_ptr(src, src_args), get_dst_ptr(dst, dst_args), size_bytes, noc_id_, vc);
     }
