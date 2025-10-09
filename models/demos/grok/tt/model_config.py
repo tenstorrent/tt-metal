@@ -120,10 +120,7 @@ class TtModelArgs:
                     )
                 lm_head_num_rows = 8
         self.lm_head_core_grid = ttnn.CoreGrid(y=lm_head_num_rows, x=lm_head_cores_per_row)
-        # 128256 comes from original llama 3 vocab size. 128256 / 4 was experimentally the maximum columns that worked per device.
-        # The LM head for that was on 48 cores, so we know 128256 / 4 / 48 = 668 columns per core is close to the L1 limit.
-        # FIXME: Update blackhole figure to be per-core as well.
-        self.max_columns_per_device_lm_head = (self.vocab_size // 8 // 48 + 1) * self.lm_head_core_grid.num_cores
+        self.max_columns_per_device_lm_head = self.vocab_size // 8
 
     def prepare_residual_tensor_decode(self, x, input_mem_cfg, force_replicated=False, on_host=False):
         """
@@ -283,6 +280,33 @@ class TtModelArgs:
             block_h=self.tile_padded_batch_rows // self.tile_size,
             block_w=block_w,
             inplace=False,
+        )
+
+    def create_dram_sharded_mem_config(self, k, n):
+        """Create DRAM-sharded memory config for width-sharded tensors"""
+        dram_cores = self.mesh_device.dram_grid_size().x  # WH has 12 dram cores, P150 has 8, P100 has 7
+        assert self.mesh_device.dram_grid_size().y == 1, "Current dram sharding assumes y dim is 1"
+        padded_size = math.ceil(n / (self.tile_size * dram_cores)) * (self.tile_size * dram_cores)
+        self.dram_weight_grid = ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 0),
+                    ttnn.CoreCoord(self.mesh_device.dram_grid_size().x - 1, self.mesh_device.dram_grid_size().y - 1),
+                )
+            }
+        )
+        shard_spec = ttnn.ShardSpec(
+            self.dram_weight_grid, (k, padded_size // dram_cores), ttnn.ShardOrientation.ROW_MAJOR
+        )
+        return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, shard_spec)
+
+    def dram_matmul_config(self, m: int, k: int, n: int, num_cores=None, fused_activation=None):
+        # in0_block_w must evenly divide k and be no larger than tile_size * num_cores
+        return ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+            in0_block_w=self.find_largest_divisor(k // (self.tile_size * num_cores)),
+            per_core_M=math.ceil(m / self.tile_size),
+            per_core_N=math.ceil(n / (self.tile_size * num_cores)),
+            fused_activation=fused_activation,
         )
 
     def get_model_config(self):
@@ -579,7 +603,7 @@ class TtModelArgs:
         state_dict["model.embed_tokens.weight"] = load_file(
             os.path.join(weights_path, "pytorch_model-00000-TP-common.safetensors")
         )["model.embed_tokens.weight"]
-        state_dict["lm_head.weight"] = load_file(
+        state_dict["model.lm_head.weight"] = load_file(
             os.path.join(weights_path, "pytorch_model-00001-TP-common.safetensors")
         )["lm_head.weight"]
         state_dict["model.norm.weight"] = load_file(

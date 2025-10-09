@@ -93,6 +93,7 @@ class Decoder(LightweightModule):
                         f"model.layers.{layer_num}.pre_attn_norm.weight"
                     ]
                 },
+                # weight_cache_path=weight_cache_path,
                 weight_dtype=ttnn.bfloat16,
                 weight_key=f"model.layers.{layer_num}.pre_attn_norm",
                 is_distributed=True,
@@ -112,6 +113,7 @@ class Decoder(LightweightModule):
                         f"model.layers.{layer_num}.post_attn_norm.weight"
                     ]
                 },
+                # weight_cache_path=weight_cache_path,
                 weight_dtype=ttnn.bfloat16,
                 weight_key=f"model.layers.{layer_num}.post_attn_norm",
                 is_distributed=True,
@@ -131,6 +133,7 @@ class Decoder(LightweightModule):
                         f"model.layers.{layer_num}.pre_moe_norm.weight"
                     ]
                 },
+                # weight_cache_path=weight_cache_path,
                 weight_dtype=ttnn.bfloat16,
                 weight_key=f"model.layers.{layer_num}.pre_moe_norm",
                 is_distributed=True,
@@ -150,6 +153,7 @@ class Decoder(LightweightModule):
                         f"model.layers.{layer_num}.post_moe_norm.weight"
                     ]
                 },
+                # weight_cache_path=weight_cache_path,
                 weight_dtype=ttnn.bfloat16,
                 weight_key=f"model.layers.{layer_num}.post_moe_norm",
                 is_distributed=True,

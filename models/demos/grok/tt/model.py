@@ -1,3 +1,5 @@
+from tqdm import tqdm
+
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
@@ -47,7 +49,7 @@ class Transformer(LightweightModule):
                 paged_attention_config=paged_attention_config,
                 deallocate_torch=True,
             )
-            for layer_idx in range(self.args.num_hidden_layers)
+            for layer_idx in tqdm(range(self.args.num_hidden_layers))
         ]
         self.norm = DistributedNorm(
             RMSNorm(
@@ -55,6 +57,7 @@ class Transformer(LightweightModule):
                 dim=self.args.dim,
                 eps=1e-5,
                 state_dict={f"model.norm.weight": state_dict[f"model.norm.weight"]},
+                # weight_cache_path=weight_cache_path,
                 weight_dtype=ttnn.bfloat16,
                 weight_key=f"model.norm",
                 is_distributed=True,
