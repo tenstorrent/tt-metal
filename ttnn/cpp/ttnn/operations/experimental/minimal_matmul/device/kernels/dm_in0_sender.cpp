@@ -130,20 +130,16 @@ void kernel_main() {
             reuse_block = true;
 
             if constexpr (is_output_writer) {
-                cb_wait_front(cb_id_out, out_block_num_tiles);
-#ifndef SKIP_OUT
-                uint32_t out_read_ptr = get_read_ptr(cb_id_out);
-                write_block_sync(
+                write_block_sync_granular(
                     out_reader,
                     out_shape,
-                    out_read_ptr,
+                    cb_id_out,
+                    N_block_tiles,
                     input_tile_size,
                     m_block * M_block_tiles,
                     (m_block + 1) * M_block_tiles,
                     n_block * N_block_tiles,
                     (n_block + 1) * N_block_tiles);
-#endif
-                cb_pop_front(cb_id_out, out_block_num_tiles);
             }
         }
         n_forward = !n_forward;
