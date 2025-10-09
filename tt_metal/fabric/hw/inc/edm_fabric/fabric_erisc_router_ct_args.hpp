@@ -190,7 +190,6 @@ constexpr size_t remote_sender_3_channel_address = get_compile_time_arg_val(STAT
 constexpr size_t remote_sender_4_channel_address = get_compile_time_arg_val(STATIC_CHANNEL_ADDRS_ARG_IDX_BASE + 13);
 
 constexpr size_t NUM_DOWNSTREAM_CHANNELS = NUM_FORWARDING_PATHS;
-// constexpr size_t DOWNSTREAM_SENDER_NUM_BUFFERS_IDX = REMOTE_RECEIVER_NUM_BUFFERS_IDX + NUM_RECEIVER_CHANNELS;
 constexpr size_t DOWNSTREAM_SENDER_NUM_BUFFERS_IDX = STATIC_CHANNEL_ADDRS_ARG_IDX_BASE + 14;
 constexpr std::array<size_t, NUM_DOWNSTREAM_CHANNELS> DOWNSTREAM_SENDER_NUM_BUFFERS_ARRAY =
     fill_array_with_next_n_args<size_t, DOWNSTREAM_SENDER_NUM_BUFFERS_IDX, NUM_DOWNSTREAM_CHANNELS>();
