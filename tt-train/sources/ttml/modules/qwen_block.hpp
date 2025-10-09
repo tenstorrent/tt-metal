@@ -13,7 +13,7 @@
 
 namespace ttml::modules {
 
-class QwenMLP : public autograd::ModuleBase {
+class QwenMLP : public modules::ModuleBase {
 private:
     std::shared_ptr<LinearLayer> m_gate_proj;
     std::shared_ptr<LinearLayer> m_up_proj;
@@ -26,7 +26,7 @@ public:
     autograd::TensorPtr operator()(const autograd::TensorPtr& input);
 };
 
-class QwenBlock : public autograd::ModuleBase {
+class QwenBlock : public modules::ModuleBase {
 private:
     std::shared_ptr<QwenMLP> m_mlp;
     std::shared_ptr<RMSNormLayer> m_input_layernorm;
