@@ -40,10 +40,6 @@ void matmul_blocks(
     const uint32_t subblock_h,
     const uint32_t subblock_w,
     const bool accumulate_intermediate) {
-    // precondition: in0_cb has M*K produced
-    // preconditino: in1_cb has K*N produced
-    // postcondition: in0_cb is full, in1_cb is empty
-    // postcondition: out_cb has M*N produced
     mm_block_init_short(
         in0_cb, in1_cb, false /*transpose*/, subblock_w /*ct_dim*/, subblock_h /*rt_dim*/, K_block_tiles /*kt_dim*/);
 
@@ -119,9 +115,8 @@ void MAIN {
 
     constexpr uint32_t in0_cb = tt::CBIndex::c_0;
     constexpr uint32_t in1_cb = tt::CBIndex::c_1;
-    constexpr uint32_t in0_dm_out_cb = tt::CBIndex::c_2;
-    constexpr uint32_t in1_dm_out_cb = tt::CBIndex::c_3;
-    constexpr uint32_t intermediate_cb = tt::CBIndex::c_4;
+    constexpr uint32_t out_cb = tt::CBIndex::c_2;
+    constexpr uint32_t intermediate_cb = tt::CBIndex::c_3;
 
     mm_init(in0_cb, in1_cb, intermediate_cb);
 
@@ -134,10 +129,6 @@ void MAIN {
     constexpr uint32_t M_num_subblocks = M_block_tiles / subblock_h;
     constexpr uint32_t N_num_subblocks = N_block_tiles / subblock_w;
 
-    UNPACK(
-        DPRINT << "compute: M_start_block: " << M_start_block << ", M_end_block: " << M_end_block
-               << ", N_start_block: " << N_start_block << ", N_end_block: " << N_end_block << ENDL());
-
     bool reuse_in0_block = false;
     bool reuse_in1_block = false;
     for (uint32_t m_block = M_start_block; m_block <= M_end_block; m_block++) {
@@ -147,11 +138,7 @@ void MAIN {
             for (uint32_t k_block = 0; k_block < K_num_blocks; k_block++) {
                 cb_wait_front(in0_cb, in0_block_num_tiles);
                 cb_wait_front(in1_cb, in1_block_num_tiles);
-                // safe_print_full_tile(in0_cb);
-                // safe_print_full_tile(in1_cb);
-                UNPACK(
-                    DPRINT << "compute: matmul on m_block: " << m_block << ", n_block: " << n_block
-                           << ", k_block: " << k_block << ENDL());
+
                 matmul_blocks(
                     in0_cb,
                     in1_cb,
@@ -196,12 +183,9 @@ void MAIN {
 
             cb_push_back(intermediate_cb, out_block_num_tiles);
             cb_wait_front(intermediate_cb, out_block_num_tiles);
-            // safe_print_full_tile(intermediate_cb);
-            cb_reserve_back(in0_dm_out_cb, out_block_num_tiles);
-            cb_reserve_back(in1_dm_out_cb, out_block_num_tiles);
-            copy_block(intermediate_cb, in0_dm_out_cb, out_block_num_tiles);
-            cb_push_back(in0_dm_out_cb, out_block_num_tiles);
-            cb_push_back(in1_dm_out_cb, out_block_num_tiles);
+            cb_reserve_back(out_cb, out_block_num_tiles);
+            copy_block(intermediate_cb, out_cb, out_block_num_tiles);
+            cb_push_back(out_cb, out_block_num_tiles);
             cb_pop_front(intermediate_cb, out_block_num_tiles);
         }
     }
