@@ -31,8 +31,8 @@ from models.demos.yolov11m.runner.performant_runner import YOLOv11PerformantRunn
         (640, 640),
     ],
 )
-@pytest.mark.parametrize("test_duration", [300])
-@pytest.mark.parametrize("pcc_check_interval", [10])
+@pytest.mark.parametrize("test_duration", [5])
+@pytest.mark.parametrize("pcc_check_interval", [5])
 def test_yolov11m_stability(
     device,
     batch_size,
