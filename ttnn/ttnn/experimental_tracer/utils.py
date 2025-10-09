@@ -55,7 +55,7 @@ def get_tensors_from_shape_dtype_minmax(shape, dtype, min_max):
         if high == low:
             high = low + 1
         t = torch.randint(low, high, shape, dtype=dtype)
-    return t
+    return t.to("cuda" if torch.cuda.is_available() else "cpu")
 
 
 def get_tensors_from_input_spec(input_specs):
@@ -71,12 +71,12 @@ class LazyParams:
         self.meta_path = meta_path
         self.data_path = data_path
         self.data = None
-        self.fake = fake
+        self.fake = fake and data_path is None
         self.empty = empty
-        if not fake:
+        if not self.fake:
             assert self.data_path is not None, "data_path must be provided when fake=False"
             with open(self.data_path, "rb") as f:
-                self.data = torch.load(f)
+                self.data = torch.load(f, map_location="cuda" if torch.cuda.is_available() else "cpu")
         else:
             # load const meta json and fake the data
             with open(self.meta_path, "r") as f:
