@@ -228,6 +228,7 @@ Result conv2d_DRAM(
         in_channels,
         kernel_size,
         stride,
+        dilation,
         padding_n4,
         mm_conv,
         conv_config);
@@ -658,6 +659,7 @@ Result conv2d_L1(
         in_channels,
         kernel_size,
         stride,
+        dilation,
         padding_n4,
         mm_conv,
         conv_config);

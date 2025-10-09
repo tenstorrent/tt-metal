@@ -452,6 +452,10 @@ Tensor FoldOperation::invoke(
                 ttnn::pad(processed_tensor, padded_shape, tt::tt_metal::Array4D({0, 0, 0, pad_c_front}), 0);
         }
 
+        // If processed tensor is tiled, convert to row-major.
+        if (processed_tensor.layout() == Layout::TILE) {
+            processed_tensor = ttnn::to_layout(processed_tensor, Layout::ROW_MAJOR);
+        }
         // Reshard if needed for optimal fold computation
         processed_tensor = reshard_if_needed(processed_tensor, stride_h, stride_w);
 
