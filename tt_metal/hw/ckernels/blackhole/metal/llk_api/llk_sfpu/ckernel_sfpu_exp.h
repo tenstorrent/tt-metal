@@ -6,6 +6,7 @@
 
 #include "ckernel.h"
 #include "sfpu/ckernel_sfpu_exp.h"
+#include "sfpu/ckernel_sfpu_polyval.h"
 #include "ckernel_sfpu_conversions.h"
 #include "sfpi.h"
 
@@ -13,9 +14,6 @@ namespace ckernel {
 namespace sfpu {
 
 sfpi_inline sfpi::vFloat sfpu_exp(sfpi::vFloat val) { return _sfpu_exp_(val); }
-
-#define POLYVAL7(coef6, coef5, coef4, coef3, coef2, coef1, coef0, t4) \
-    (t4 * (t4 * (t4 * (t4 * (t4 * (coef6 * t4 + coef5) + coef4) + coef3) + coef2) + coef1) + coef0)
 
 /*
  * Both _float_to_int32_ and _float_to_int32_positive_ use branch to handle special cases
@@ -111,7 +109,7 @@ sfpi_inline sfpi::vFloat _sfpu_exp_61f_(sfpi::vFloat val) {
         // factor = 0x00b8aa3b (computed through log(e))
         // bias = 0x3f800000
         sfpi::vInt z = sfpu::_float_to_int32_(val * sfpi::vFloat(0x00b8aa3b) + sfpi::vFloat(0x3f800000));
-        sfpi::vInt zii = exexp(sfpi::reinterpret<sfpi::vFloat>(z));         // Extract exponent
+        sfpi::vInt zii = sfpi::exexp(sfpi::reinterpret<sfpi::vFloat>(z));   // Extract exponent
         sfpi::vInt zif = sfpi::exman9(sfpi::reinterpret<sfpi::vFloat>(z));  // Extract mantissa
 
         // Normalize mantissa field into a fractional value in [0,1)
@@ -123,15 +121,8 @@ sfpi_inline sfpi::vFloat _sfpu_exp_61f_(sfpi::vFloat val) {
         // mantissa fields (using bit manipulation techniques - BMT) for exactness. In exp_61f, all coefficients are
         // floating-point values derived from the Chebyshev polynomial approach, making the implementation simpler and
         // purely mathematical without integer-based operations.
-        sfpi::vFloat poly = POLYVAL7(
-            sfpi::vFloat(0.0002170391f),
-            sfpi::vFloat(0.001243946f),
-            sfpi::vFloat(0.0096788315f),
-            sfpi::vFloat(0.055483369f),
-            sfpi::vFloat(0.24022982f),
-            sfpi::vFloat(0.69314699f),
-            sfpi::vFloat(1.0000000018f),
-            frac);
+        sfpi::vFloat poly = POLYVAL7<sfpi::vFloat>(
+            0.0002170391f, 0.001243946f, 0.0096788315f, 0.055483369f, 0.24022982f, 0.69314699f, 1.0000000018f, frac);
 
         // Restore exponent
         zii = sfpi::reinterpret<sfpi::vInt>(sfpi::setexp(poly, 127U + zii));
@@ -142,13 +133,19 @@ sfpi_inline sfpi::vFloat _sfpu_exp_61f_(sfpi::vFloat val) {
     return y;
 }
 
-template <bool is_fp32_dest_acc_en = false>
-sfpi_inline sfpi::vFloat _sfpu_exp_improved_(sfpi::vFloat val) {
-    if constexpr (is_fp32_dest_acc_en) {
-        return _sfpu_exp_61f_(val);
-    } else {
-        return _sfpu_exp_21f_<is_fp32_dest_acc_en>(val);
-    }
+template <bool is_fp32_dest_acc_en>
+sfpi_inline sfpi::vFloat _sfpu_exp_improved_(sfpi::vFloat val);
+
+// is_fp32_dest_acc_en == false
+template <>
+sfpi_inline sfpi::vFloat _sfpu_exp_improved_<false>(sfpi::vFloat val) {
+    return _sfpu_exp_21f_<false>(val);
+}
+
+// is_fp32_dest_acc_en == true
+template <>
+sfpi_inline sfpi::vFloat _sfpu_exp_improved_<true>(sfpi::vFloat val) {
+    return _sfpu_exp_61f_(val);
 }
 
 template <
