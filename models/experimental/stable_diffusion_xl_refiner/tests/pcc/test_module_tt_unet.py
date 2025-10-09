@@ -142,7 +142,7 @@ def run_unet_model(
     ttnn.deallocate(ttnn_added_cond_kwargs["text_embeds"])
     ttnn.deallocate(ttnn_added_cond_kwargs["time_ids"])
 
-    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, 0.992)  # 0.993
+    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, 0.993)
     logger.info(f"PCC is: {pcc_message}")
 
     del unet

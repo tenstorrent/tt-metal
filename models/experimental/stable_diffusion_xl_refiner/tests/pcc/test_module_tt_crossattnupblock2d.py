@@ -23,7 +23,7 @@ from models.experimental.stable_diffusion_xl_refiner.tests.test_common import SD
             ((1, 768, 32, 32), (1, 1536, 32, 32), (1, 1536, 32, 32)),
             (1, 77, 1280),
             1,
-            0.991,  # 0.998
+            0.998,
         ),
         # fmt: off
         (
@@ -32,7 +32,7 @@ from models.experimental.stable_diffusion_xl_refiner.tests.test_common import SD
             ((1, 384, 64, 64), (1, 768, 64, 64), (1, 768, 64, 64)),
             (1, 77, 1280),
             2,
-            0.987, #failed 0.983
+            0.983,
         ),
         # fmt: on
     ],

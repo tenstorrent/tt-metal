@@ -16,7 +16,7 @@ from models.experimental.stable_diffusion_xl_refiner.tests.test_common import SD
 
 @pytest.mark.parametrize(
     "input_shape, temb_shape, encoder_shape, pcc",
-    [((1, 1536, 16, 16), (1, 1536), (1, 77, 1280), 0.991)],  # 0.993
+    [((1, 1536, 16, 16), (1, 1536), (1, 77, 1280), 0.993)],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_REFINER_L1_SMALL_SIZE}], indirect=True)
 def test_crossattnmid_refiner(
