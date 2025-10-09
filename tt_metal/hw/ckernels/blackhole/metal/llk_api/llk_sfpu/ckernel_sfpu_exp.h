@@ -111,7 +111,7 @@ sfpi_inline sfpi::vFloat _sfpu_exp_61f_(sfpi::vFloat val) {
         // factor = 0x00b8aa3b (computed through log(e))
         // bias = 0x3f800000
         sfpi::vInt z = sfpu::_float_to_int32_(val * sfpi::vFloat(0x00b8aa3b) + sfpi::vFloat(0x3f800000));
-        sfpi::vInt zii = exexp(sfpi::reinterpret<sfpi::vFloat>(z));         // Extract exponent
+        sfpi::vInt zii = sfpi::exexp(sfpi::reinterpret<sfpi::vFloat>(z));   // Extract exponent
         sfpi::vInt zif = sfpi::exman9(sfpi::reinterpret<sfpi::vFloat>(z));  // Extract mantissa
 
         // Normalize mantissa field into a fractional value in [0,1)
@@ -142,13 +142,19 @@ sfpi_inline sfpi::vFloat _sfpu_exp_61f_(sfpi::vFloat val) {
     return y;
 }
 
-template <bool is_fp32_dest_acc_en = false>
-sfpi_inline sfpi::vFloat _sfpu_exp_improved_(sfpi::vFloat val) {
-    if constexpr (is_fp32_dest_acc_en) {
-        return _sfpu_exp_61f_(val);
-    } else {
-        return _sfpu_exp_21f_<is_fp32_dest_acc_en>(val);
-    }
+template <bool is_fp32_dest_acc_en>
+sfpi_inline sfpi::vFloat _sfpu_exp_improved_(sfpi::vFloat val);
+
+// is_fp32_dest_acc_en == false
+template <>
+sfpi_inline sfpi::vFloat _sfpu_exp_improved_<false>(sfpi::vFloat val) {
+    return _sfpu_exp_21f_<false>(val);
+}
+
+// is_fp32_dest_acc_en == true
+template <>
+sfpi_inline sfpi::vFloat _sfpu_exp_improved_<true>(sfpi::vFloat val) {
+    return _sfpu_exp_61f_(val);
 }
 
 template <
