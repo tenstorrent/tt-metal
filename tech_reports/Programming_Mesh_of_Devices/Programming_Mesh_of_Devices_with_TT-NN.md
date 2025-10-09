@@ -157,7 +157,7 @@ Set `TT_VISIBLE_DEVICES` to a comma-separated list of device IDs (matching `/dev
 TT_VISIBLE_DEVICES="0" python your_script.py
 ```
 
-2. Expose two PCIe devices. On a T3000, using `TT_VISIBLE_DEVICES="0,1"` exposes two PCIe devices and its associated remote / ethernet-connected device. If PCIe device {0,1} is connected, then this effectively exposes a 2x2 mesh.
+2. Expose two PCIe devices. On a T3000, using `TT_VISIBLE_DEVICES="0,1"` exposes two PCIe devices and their associated remote / ethernet-connected device. If PCIe device {0,1} is connected, then this effectively exposes a 2x2 mesh.
 ```bash
 TT_VISIBLE_DEVICES="0,1" ./your_cpp_program
 ```
