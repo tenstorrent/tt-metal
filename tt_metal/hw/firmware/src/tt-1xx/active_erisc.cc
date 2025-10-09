@@ -112,6 +112,8 @@ inline void initialize_local_memory() {
 extern "C" __attribute__((naked, used)) void resume_from_reset() {
     __asm__ volatile(
         // Restore contents of local memory from L1
+	    ".option push\n"
+        ".option norelax\n"
         "li   t0, " STRINGIFY(MEM_ERISC_L1_TEMP_STORAGE) "\n\t" // src
         "li   t1, " STRINGIFY(MEM_LOCAL_BASE) "\n\t"   // dst
         "li   t2, 2048\n\t"
@@ -137,6 +139,8 @@ extern "C" __attribute__((naked, used)) void resume_from_reset() {
         "lw  s9, 10 * 4( sp )\n"
         "lw  s10, 11 * 4( sp )\n"
         "lw  s11, 12 * 4( sp )\n"
+        "lw gp, 13 * 4( sp )\n"
+        ".option pop\n"
         "addi sp, sp, (16 * 4)\n"
         "ret\n"
     );
@@ -162,6 +166,7 @@ extern "C" __attribute__((naked)) void enter_reset(void) {
         "sw s9, 10 * 4( sp )\n"
         "sw s10, 11 * 4( sp )\n"
         "sw s11, 12 * 4( sp )\n"
+        "sw gp, 13 * 4( sp )\n"
 
         // Copy contents of local memory to L1, because local memory is cleared on reset. There is a register that in
         // theory can be set to prevent resetting the core from clearing L1, but the hardware doesn't support it.
