@@ -11,7 +11,7 @@ from models.experimental.detr3d.tests.pcc.test_ttnn_shared_mlp import (
     custom_preprocessor_whole_model as custom_preprocessor_shared_mlp,
 )
 from ttnn.model_preprocessing import preprocess_model_parameters
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import comp_pcc
 
 
 @pytest.mark.parametrize(
@@ -51,7 +51,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
         ),
     ],
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 79104}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_pointnet_samodule_votes(
     mlp,
     npoint,
@@ -110,7 +110,7 @@ def test_pointnet_samodule_votes(
     else:
         inds = None
 
-    torch_output = torch_model(xyz=xyz, features=features, inds=inds)
+    ref_out = torch_model(xyz=xyz, features=features, inds=inds)
 
     parameters = preprocess_model_parameters(
         initialize_model=lambda: torch_model.mlp_module,
@@ -154,19 +154,13 @@ def test_pointnet_samodule_votes(
             device=device,
         )
 
-    ttnn_output = ttnn_model(xyz=ttnn_xyz, features=ttnn_features, inds=ttnn_inds)
-    ttnn_torch_out = []
-    for tt_out, torch_out in zip(ttnn_output, torch_output):
-        ttnn_torch_out.append(
-            ttnn.to_torch(
-                tt_out,
-            )
-        )
-        ttnn_torch_out[-1] = torch.reshape(ttnn_torch_out[-1], torch_out.shape)
+    tt_output = ttnn_model(xyz=ttnn_xyz, features=ttnn_features, inds=ttnn_inds)
 
-    pcc_pass, pcc_message = assert_with_pcc(torch_output[0], ttnn_torch_out[0], 0.999)
-    print(f"{pcc_message=}")
-    pcc_pass, pcc_message = assert_with_pcc(torch_output[1], ttnn_torch_out[1], 0.999)
-    print(f"{pcc_message=}")
-    pcc_pass, pcc_message = assert_with_pcc(torch_output[2], ttnn_torch_out[2], 0.999)
-    print(f"{pcc_message=}")
+    ttnn_torch_out = []
+    for tt_out, torch_out in zip(tt_output, ref_out):
+        if not isinstance(tt_out, torch.Tensor):
+            tt_out = ttnn.to_torch(tt_out)
+            tt_out = torch.reshape(tt_out, torch_out.shape)
+        ttnn_torch_out.append(tt_out)
+        pcc_pass, pcc_message = comp_pcc(torch_out, tt_out, 0.99)
+        print(f"{pcc_message=}")

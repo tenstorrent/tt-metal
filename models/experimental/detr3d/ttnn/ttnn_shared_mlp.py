@@ -37,16 +37,8 @@ class TtnnSharedMLP:
 
     def __call__(self, features):
         shape = features.shape
-        print(f"{features.shape=}")
-        print(f"{shape=}")
         conv1, shape = self.conv1(features, shape)
-        print(f"{conv1.shape=}")
-        print(f"{shape=}")
         conv2, shape = self.conv2(conv1, shape)
-        print(f"{conv2.shape=}")
-        print(f"{shape=}")
         conv3, shape = self.conv3(conv2, shape)
-        print(f"{conv3.shape=}")
-        print(f"{shape=}")
         conv3 = ttnn.reshape(conv3, shape)
         return conv3

@@ -322,9 +322,12 @@ class TTTransformerEncoderLayer(LightweightModule):
         nhead=4,
         dim_feedforward=128,
         dropout=0.0,
+        dropout_attn=None,
+        activation="relu",
         normalize_before=True,
+        norm_name="ln",
         use_ffn=True,
-        model_config=None,
+        ffn_use_bias=True,
         parameters=None,
     ):
         super().__init__()
@@ -334,7 +337,6 @@ class TTTransformerEncoderLayer(LightweightModule):
         self.dim_feedforward = dim_feedforward
         self.normalize_before = normalize_before
         self.use_ffn = use_ffn
-        self.model_config = model_config or {}
 
         self.self_attn = TTNNMultiheadAttention(d_model, nhead, device)
 
