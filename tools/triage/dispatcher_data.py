@@ -34,6 +34,7 @@ class DispatcherCoreData:
     launch_msg_rd_ptr: int = triage_field("RD PTR")
     kernel_config_base: int = triage_field("Base", hex_serializer)
     kernel_text_offset: int = triage_field("Offset", hex_serializer)
+    kernel_config_host_assigned_id: int = triage_field("Kernel Config Host ID")
     watcher_kernel_id: int = combined_field("kernel_name", "Kernel ID:Name", collection_serializer(":"))
     watcher_previous_kernel_id: int = combined_field(
         "previous_kernel_name", "Previous Kernel ID:Name", collection_serializer(":")
@@ -180,6 +181,7 @@ class DispatcherData:
         go_message_index = -1
         go_data = -1
         preload = False
+        host_assigned_id = -1
         waypoint = ""
         try:
             # Indexed with enum ProgrammableCoreType - tt_metal/hw/inc/*/core_config.h
@@ -250,6 +252,16 @@ class DispatcherData:
         except:
             pass
 
+        try:
+            # Get host_assigned_id from kernel_config
+            host_assigned_id = mem_access(
+                fw_elf,
+                f"mailboxes->launch[{launch_msg_rd_ptr}].kernel_config.host_assigned_id",
+                loc_mem_reader,
+            )[0][0]
+        except:
+            pass
+
         if proc_name.lower() == "erisc" or proc_name.lower() == "erisc0":
             firmware_path = self._a_kernel_path + "../../../firmware/idle_erisc/idle_erisc.elf"
         elif proc_name.lower() == "erisc1":
@@ -285,6 +297,7 @@ class DispatcherData:
             launch_msg_rd_ptr=launch_msg_rd_ptr,
             kernel_config_base=kernel_config_base,
             kernel_text_offset=kernel_text_offset,
+            kernel_config_host_assigned_id=host_assigned_id,
             watcher_kernel_id=watcher_kernel_id,
             watcher_previous_kernel_id=watcher_previous_kernel_id,
             subdevice=go_message_index,
