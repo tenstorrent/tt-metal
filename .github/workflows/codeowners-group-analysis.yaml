@@ -1312,9 +1312,6 @@ jobs:
 
           # Output for next steps
           {
-            echo "pr-title<<EOF"
-            printf '%s\n' "$PR_TITLE"
-            echo "EOF"
             echo "pr-author-login<<EOF"
             echo "$PR_AUTHOR_LOGIN"
             echo "EOF"
@@ -1569,11 +1566,17 @@ jobs:
           PING_OWNERS="${{ steps.generate-comment.outputs.ping-owners }}"
           SEND_SLACK="${{ steps.generate-comment.outputs.send-slack }}"
           SELECTED_OWNERS="${{ steps.select-owners.outputs.selected-owners }}"
-          PR_TITLE="${{ steps.setup-notifications.outputs.pr-title }}"
           PR_AUTHOR_LOGIN="${{ steps.setup-notifications.outputs.pr-author-login }}"
           PR_AUTHOR_NAME="${{ steps.setup-notifications.outputs.pr-author-name }}"
           AUTHOR_NOTES="${{ steps.generate-comment.outputs.author-notes }}"
           PR_NUMBER="${{ steps.generate-comment.outputs.pr-number }}"
+
+          # Fetch PR title safely to avoid shell injection
+          PR_API="https://api.github.com/repos/${{ github.repository }}/pulls/$PR_NUMBER"
+          PR_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+                         -H "Accept: application/vnd.github.v3+json" \
+                         "$PR_API")
+          PR_TITLE=$(echo "$PR_DATA" | jq -r '.title')
 
           # Use #tt-metal-pr-review-requests Slack channel
           SLACK_CHANNEL="C09HT5VSXRB"
@@ -1673,11 +1676,17 @@ jobs:
           SEND_SLACK="${{ steps.generate-comment.outputs.send-slack }}"
           SELECTED_OWNERS="${{ steps.select-owners.outputs.selected-owners }}"
           SELECTED_SLACK_GROUPS="${{ steps.select-owners.outputs.selected-slack-groups }}"
-          PR_TITLE="${{ steps.setup-notifications.outputs.pr-title }}"
           PR_AUTHOR_LOGIN="${{ steps.setup-notifications.outputs.pr-author-login }}"
           PR_AUTHOR_NAME="${{ steps.setup-notifications.outputs.pr-author-name }}"
           AUTHOR_NOTES="${{ steps.generate-comment.outputs.author-notes }}"
           PR_NUMBER="${{ steps.generate-comment.outputs.pr-number }}"
+
+          # Fetch PR title safely to avoid shell injection
+          PR_API="https://api.github.com/repos/${{ github.repository }}/pulls/$PR_NUMBER"
+          PR_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+                         -H "Accept: application/vnd.github.v3+json" \
+                         "$PR_API")
+          PR_TITLE=$(echo "$PR_DATA" | jq -r '.title')
 
           # Use #tt-metal-pr-review-requests Slack channel
           SLACK_CHANNEL="C09HT5VSXRB"
