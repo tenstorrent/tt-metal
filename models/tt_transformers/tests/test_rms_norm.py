@@ -8,7 +8,8 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.rmsnorm import RMSNorm as RMSNorm
+from models.common.layernorm import LayerNorm
+from models.common.rmsnorm import RMSNorm
 from models.common.utility_functions import comp_allclose, comp_pcc
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
@@ -54,7 +55,8 @@ def test_rms_norm_inference(
 
     # Create the inner RMSNormxw
     tt_ccl = TT_CCL(mesh_device)
-    tt_inner_norm = RMSNorm(
+    norm_class = LayerNorm if model_args.layernorm else RMSNorm
+    tt_inner_norm = norm_class(
         device=mesh_device,
         dim=model_args.dim,
         state_dict=state_dict,

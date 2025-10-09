@@ -6,6 +6,7 @@ import torch
 from tqdm import tqdm
 
 import ttnn
+from models.common.layernorm import LayerNorm
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
 from models.tt_transformers.tt.ccl import TT_CCL
@@ -98,8 +99,10 @@ class Transformer(LightweightModule):
             )
             for i in tqdm(range(self.n_layers))
         ]
+
+        norm_class = LayerNorm if self.args.layernorm else RMSNorm
         self.norm = DistributedNorm(
-            RMSNorm(
+            norm_class(
                 device=mesh_device,
                 dim=args.dim,
                 eps=args.norm_eps,
@@ -114,7 +117,6 @@ class Transformer(LightweightModule):
                 sharded_output_config=self.model_config["LM_HEAD_INPUT_MEMCFG"],
                 ccl_topology=self.args.ccl_topology(),
                 tt_ccl=self.tt_ccl,
-                base_model_name=args.base_model_name,
             ),
             args,
             self.tt_ccl,

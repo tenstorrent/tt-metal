@@ -488,6 +488,7 @@ class ModelArgs:
 
         self.rms_norm_add_unit_offset = False
         self.embed_scale = None
+        self.layernorm = False
 
         assert not os.getenv(
             "FAKE_DEVICE"
@@ -2588,10 +2589,11 @@ class ModelArgs:
             return RMSNorm(self.dim, self.norm_eps)
         else:
             model = self.reference_transformer(wrap=False)
-            if hasattr(model.model, "norm"):
-                layer = model.model.norm
-            else:
+            if hasattr(model.model, "final_layernorm"):
                 layer = model.model.final_layernorm
+                self.layernorm = True
+            else:
+                layer = model.model.norm
             layer._load_state_dict = layer.load_state_dict
             layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
             return layer

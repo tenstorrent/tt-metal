@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 import ttnn
+from models.common.layernorm import LayerNorm
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
 from models.tt_transformers.tt.attention import Attention as DefaultAttention
@@ -96,8 +97,9 @@ class TransformerBlock(LightweightModule):
                 model_config=self.model_config,
             )
 
+        norm_class = LayerNorm if self.args.layernorm else RMSNorm
         self.attention_norm = DistributedNorm(
-            RMSNorm(
+            norm_class(
                 device=mesh_device,
                 dim=args.dim,
                 eps=args.norm_eps,
