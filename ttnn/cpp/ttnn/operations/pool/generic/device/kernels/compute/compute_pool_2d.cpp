@@ -20,12 +20,76 @@
 #include "debug/dprint_tensix.h"
 #endif
 
+#define ALWI inline __attribute__((always_inline))
+
 #define FACE_HEIGHT 16
 #define FACE_WIDTH 16
 #define TILE_HEIGHT 32
 #define TILE_WIDTH 32
 
 namespace NAMESPACE {
+
+template <uint32_t topk_output_tiles, uint32_t data_dst_idx, uint32_t index_dst_idx, uint32_t topk_cb_tile_idx>
+ALWI void tilize_dest_function(uint32_t curr_in_cb_id, uint32_t curr_in_idx_cb_id) {
+    tilize_init_short_with_dt_no_pack(curr_in_cb_id, curr_in_idx_cb_id, topk_output_tiles);
+    tilize_block_no_pack(curr_in_idx_cb_id, topk_output_tiles, index_dst_idx, topk_cb_tile_idx);
+    tilize_uninit_with_dt_no_pack(curr_in_idx_cb_id, curr_in_cb_id);
+    tilize_init_short_with_dt_no_pack(curr_in_idx_cb_id, curr_in_cb_id, topk_output_tiles);
+    tilize_block_no_pack(curr_in_cb_id, topk_output_tiles, data_dst_idx, topk_cb_tile_idx);
+    tilize_uninit_with_dt_no_pack(curr_in_cb_id, curr_in_idx_cb_id);
+}
+
+template <
+    uint32_t topk_output_tiles,
+    uint32_t data_dst_idx,
+    uint32_t index_dst_idx,
+    uint32_t topk_cb_tile_idx,
+    uint32_t tile_tmp_cb_id,
+    uint32_t tile_idx_tmp_cb_id,
+    uint32_t out_cb_id,
+    uint32_t num_out_sticks,
+    bool pack_untilize_reinit>
+ALWI void tilize_copy_function(uint32_t curr_in_cb_id, uint32_t curr_in_idx_cb_id, uint32_t output_faces) {
+    tensix_sync();
+    unary_op_init_common(curr_in_cb_id, tile_tmp_cb_id);
+    tensix_sync();
+    tilize_init(curr_in_cb_id, topk_output_tiles, tile_tmp_cb_id);
+
+    cb_reserve_back(tile_tmp_cb_id, topk_output_tiles);
+
+    tilize_block(curr_in_cb_id, topk_output_tiles, tile_tmp_cb_id, topk_cb_tile_idx, topk_cb_tile_idx);
+
+    cb_push_back(tile_tmp_cb_id, topk_output_tiles);
+    cb_wait_front(tile_tmp_cb_id, topk_output_tiles);
+    cb_reserve_back(tile_idx_tmp_cb_id, topk_output_tiles);
+
+    tilize_uninit_with_dt(curr_in_cb_id, curr_in_idx_cb_id, tile_idx_tmp_cb_id);
+    tilize_init_short_with_dt(curr_in_cb_id, curr_in_idx_cb_id, topk_output_tiles, tile_idx_tmp_cb_id);
+    tilize_block(curr_in_idx_cb_id, topk_output_tiles, tile_idx_tmp_cb_id, topk_cb_tile_idx, topk_cb_tile_idx);
+
+    cb_push_back(tile_idx_tmp_cb_id, topk_output_tiles);
+    cb_wait_front(tile_idx_tmp_cb_id, topk_output_tiles);
+
+    tilize_uninit(curr_in_idx_cb_id, tile_idx_tmp_cb_id);
+
+    copy_tile_init(tile_tmp_cb_id);
+    if constexpr (pack_untilize_reinit) {
+// note pack_untilize_dest_init must be called immediately after copy_tile_init see issue
+// https://github.com/tenstorrent/tt-metal/issues/#27314
+#ifdef ARCH_BLACKHOLE
+        // Needed for setting swizzle_32b:
+        MATH((llk_math_hw_configure_disaggregated<true, true>(0, 0)));
+#endif
+        PACK((llk_pack_untilize_init<topk_output_tiles, topk_output_tiles, false, false, TILE_C_DIM>(
+            out_cb_id, num_out_sticks, output_faces)));
+        PACK((llk_init_packer_dest_offset_registers<true, false>()));
+    }
+    copy_tile(tile_tmp_cb_id, 0, data_dst_idx);
+    copy_tile(tile_idx_tmp_cb_id, 0, index_dst_idx);
+
+    cb_pop_front(tile_tmp_cb_id, topk_output_tiles);
+    cb_pop_front(tile_idx_tmp_cb_id, topk_output_tiles);
+}
 
 void MAIN {
     // NOTE: here it is assumed that in_ntiles_hw == 1. General cases not handled yet. When ntiles_hw > 1 the large
@@ -186,69 +250,20 @@ void MAIN {
                 if constexpr (return_indices) {
                     cb_wait_front(curr_in_idx_cb_id, 1);
 
-                    auto tilize_dest = [&]() __attribute__((always_inline)) {
-                        tilize_init_short_with_dt_no_pack(curr_in_cb_id, curr_in_idx_cb_id, topk_output_tiles);
-                        tilize_block_no_pack(curr_in_idx_cb_id, topk_output_tiles, index_dst_idx, topk_cb_tile_idx);
-                        tilize_uninit_with_dt_no_pack(curr_in_idx_cb_id, curr_in_cb_id);
-                        tilize_init_short_with_dt_no_pack(curr_in_idx_cb_id, curr_in_cb_id, topk_output_tiles);
-                        tilize_block_no_pack(curr_in_cb_id, topk_output_tiles, data_dst_idx, topk_cb_tile_idx);
-                        tilize_uninit_with_dt_no_pack(curr_in_cb_id, curr_in_idx_cb_id);
-                    };
-
-                    auto tilize_copy = [&]() __attribute__((always_inline)) {
-                        tensix_sync();
-                        unary_op_init_common(curr_in_cb_id, tile_tmp_cb_id);
-                        tensix_sync();
-                        tilize_init(curr_in_cb_id, topk_output_tiles, tile_tmp_cb_id);
-
-                        cb_reserve_back(tile_tmp_cb_id, topk_output_tiles);
-
-                        tilize_block(
-                            curr_in_cb_id, topk_output_tiles, tile_tmp_cb_id, topk_cb_tile_idx, topk_cb_tile_idx);
-
-                        cb_push_back(tile_tmp_cb_id, topk_output_tiles);
-                        cb_wait_front(tile_tmp_cb_id, topk_output_tiles);
-                        cb_reserve_back(tile_idx_tmp_cb_id, topk_output_tiles);
-
-                        tilize_uninit_with_dt(curr_in_cb_id, curr_in_idx_cb_id, tile_idx_tmp_cb_id);
-                        tilize_init_short_with_dt(
-                            curr_in_cb_id, curr_in_idx_cb_id, topk_output_tiles, tile_idx_tmp_cb_id);
-                        tilize_block(
-                            curr_in_idx_cb_id,
-                            topk_output_tiles,
-                            tile_idx_tmp_cb_id,
-                            topk_cb_tile_idx,
-                            topk_cb_tile_idx);
-
-                        cb_push_back(tile_idx_tmp_cb_id, topk_output_tiles);
-                        cb_wait_front(tile_idx_tmp_cb_id, topk_output_tiles);
-
-                        tilize_uninit(curr_in_idx_cb_id, tile_idx_tmp_cb_id);
-
-                        copy_tile_init(tile_tmp_cb_id);
-                        if constexpr (pack_untilize_reinit) {
-// note pack_untilize_dest_init must be called immediately after copy_tile_init see issue
-// https://github.com/tenstorrent/tt-metal/issues/#27314
-#ifdef ARCH_BLACKHOLE
-                            // Needed for setting swizzle_32b:
-                            MATH((llk_math_hw_configure_disaggregated<true, true>(0, 0)));
-#endif
-                            PACK(
-                                (llk_pack_untilize_init<topk_output_tiles, topk_output_tiles, false, false, TILE_C_DIM>(
-                                    out_cb_id, num_out_sticks, output_faces)));
-                            PACK((llk_init_packer_dest_offset_registers<true, false>()));
-                        }
-                        copy_tile(tile_tmp_cb_id, 0, data_dst_idx);
-                        copy_tile(tile_idx_tmp_cb_id, 0, index_dst_idx);
-
-                        cb_pop_front(tile_tmp_cb_id, topk_output_tiles);
-                        cb_pop_front(tile_idx_tmp_cb_id, topk_output_tiles);
-                    };
-
                     if constexpr (use_tilize_dest) {
-                        tilize_dest();
+                        tilize_dest_function<topk_output_tiles, data_dst_idx, index_dst_idx, topk_cb_tile_idx>(
+                            curr_in_cb_id, curr_in_idx_cb_id);
                     } else {
-                        tilize_copy();
+                        tilize_copy_function<
+                            topk_output_tiles,
+                            data_dst_idx,
+                            index_dst_idx,
+                            topk_cb_tile_idx,
+                            tile_tmp_cb_id,
+                            tile_idx_tmp_cb_id,
+                            out_cb_id,
+                            num_out_sticks,
+                            pack_untilize_reinit>(curr_in_cb_id, curr_in_idx_cb_id, output_faces);
                     }
 
                     max_reduce_with_indices<window_size_hw>(data_dst_idx, index_dst_idx);
