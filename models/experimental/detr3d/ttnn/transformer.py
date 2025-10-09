@@ -469,7 +469,7 @@ class TTTransformerDecoder(LightweightModule):
         # Create multiple decoder layers
         self.layers = []
         for i in range(num_layers):
-            layer_params = parameters[f"layers.{i}"] if parameters else None
+            layer_params = parameters.layers[i] if parameters else None
             layer = TTTransformerDecoderLayer(
                 device=device,
                 d_model=decoder_layer_config["d_model"],
