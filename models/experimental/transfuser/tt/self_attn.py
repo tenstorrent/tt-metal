@@ -7,12 +7,21 @@ from models.common.lightweightmodule import LightweightModule
 
 
 class TTSelfAttention(LightweightModule):
-    def __init__(self, device, parameters, n_head, dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG):
+    def __init__(
+        self,
+        device,
+        parameters,
+        n_head,
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+        compute_kernel_config=None,
+    ):
         self.parameters = parameters
         self.device = device
         self.n_head = n_head
         self.dtype = ttnn.bfloat16
         self.memory_config = memory_config
+        self.compute_kernel_config = compute_kernel_config
 
     def forward(self, x):
         B, T, C = x.shape
@@ -29,9 +38,7 @@ class TTSelfAttention(LightweightModule):
             x,
             self.parameters["key"]["weight"],
             bias=self.parameters["key"]["bias"],
-            compute_kernel_config=ttnn.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.LoFi,
-            ),
+            compute_kernel_config=self.compute_kernel_config,
             memory_config=self.memory_config,
             core_grid=ttnn.CoreGrid(x=8, y=8),
             dtype=self.dtype,
@@ -55,9 +62,7 @@ class TTSelfAttention(LightweightModule):
         att = ttnn.matmul(
             query,
             key,
-            compute_kernel_config=ttnn.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.LoFi,
-            ),
+            compute_kernel_config=self.compute_kernel_config,
             memory_config=self.memory_config,
             core_grid=ttnn.CoreGrid(y=8, x=8),
             dtype=self.dtype,
@@ -72,9 +77,7 @@ class TTSelfAttention(LightweightModule):
         y = ttnn.matmul(
             att,
             value,
-            compute_kernel_config=ttnn.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.LoFi,
-            ),
+            compute_kernel_config=self.compute_kernel_config,
             memory_config=self.memory_config,
             core_grid=ttnn.CoreGrid(y=8, x=8),
             dtype=self.dtype,
@@ -90,9 +93,7 @@ class TTSelfAttention(LightweightModule):
             y,
             self.parameters["proj"]["weight"],
             bias=self.parameters["proj"]["bias"],
-            compute_kernel_config=ttnn.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.LoFi,
-            ),
+            compute_kernel_config=self.compute_kernel_config,
             memory_config=self.memory_config,
             core_grid=ttnn.CoreGrid(y=8, x=8),
             dtype=self.dtype,

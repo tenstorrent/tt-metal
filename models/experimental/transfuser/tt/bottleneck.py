@@ -37,6 +37,9 @@ class TTRegNetBottleneck:
             enable_weights_double_buffer=True,
             dtype=ttnn.bfloat16,
             is_reshape=False,
+            fp32_dest_acc_en=model_config.get("fp32_dest_acc_en", True),
+            packer_l1_acc=model_config.get("packer_l1_acc", True),
+            math_approx_mode=model_config.get("math_approx_mode", False),
         )
 
         # conv2: 3x3 grouped convolution
@@ -58,6 +61,9 @@ class TTRegNetBottleneck:
             enable_weights_double_buffer=True,
             dtype=ttnn.bfloat16,
             is_reshape=False,
+            fp32_dest_acc_en=model_config.get("fp32_dest_acc_en", True),
+            packer_l1_acc=model_config.get("packer_l1_acc", True),
+            math_approx_mode=model_config.get("math_approx_mode", False),
         )
 
         # SE Module
@@ -76,6 +82,9 @@ class TTRegNetBottleneck:
             enable_act_double_buffer=True,
             enable_weights_double_buffer=True,
             dtype=ttnn.bfloat16,
+            fp32_dest_acc_en=model_config.get("fp32_dest_acc_en", True),
+            packer_l1_acc=model_config.get("packer_l1_acc", True),
+            math_approx_mode=model_config.get("math_approx_mode", False),
         )
 
         self.se_fc2 = TTConv2D(
@@ -93,6 +102,9 @@ class TTRegNetBottleneck:
             enable_act_double_buffer=True,
             enable_weights_double_buffer=True,
             dtype=ttnn.bfloat16,
+            fp32_dest_acc_en=model_config.get("fp32_dest_acc_en", True),
+            packer_l1_acc=model_config.get("packer_l1_acc", True),
+            math_approx_mode=model_config.get("math_approx_mode", False),
         )
 
         # conv3: 1x1 convolution (no activation)
@@ -111,6 +123,9 @@ class TTRegNetBottleneck:
             enable_act_double_buffer=True,
             enable_weights_double_buffer=True,
             dtype=ttnn.bfloat16,
+            fp32_dest_acc_en=model_config.get("fp32_dest_acc_en", True),
+            packer_l1_acc=model_config.get("packer_l1_acc", True),
+            math_approx_mode=model_config.get("math_approx_mode", False),
         )
 
         # Downsample layer if needed
@@ -130,6 +145,9 @@ class TTRegNetBottleneck:
                 enable_act_double_buffer=True,
                 enable_weights_double_buffer=True,
                 dtype=ttnn.bfloat16,
+                fp32_dest_acc_en=model_config.get("fp32_dest_acc_en", True),
+                packer_l1_acc=model_config.get("packer_l1_acc", True),
+                math_approx_mode=model_config.get("math_approx_mode", False),
             )
         else:
             self.downsample_layer = None

@@ -143,12 +143,14 @@ class StageInfra:
         return image_pcc_passed, f"Image: {image_pcc_message}"
 
 
-# Default model config
+# High accuracy model config
 model_config = {
-    # "MATH_FIDELITY": ttnn.MathFidelity.HiFi4,
-    "MATH_FIDELITY": ttnn.MathFidelity.LoFi,
+    "MATH_FIDELITY": ttnn.MathFidelity.HiFi4,
     "WEIGHTS_DTYPE": ttnn.bfloat16,
     "ACTIVATIONS_DTYPE": ttnn.bfloat16,
+    "fp32_dest_acc_en": True,
+    "packer_l1_acc": True,
+    "math_approx_mode": False,
 }
 
 

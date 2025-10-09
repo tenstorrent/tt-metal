@@ -98,6 +98,7 @@ class TTGpt(LightweightModule):
         dropout_prob=0.0,
         dtype=ttnn.bfloat16,
         memory_config=ttnn.L1_MEMORY_CONFIG,
+        compute_kernel_config=None,
     ):
         self.dropout_prob = dropout_prob
         self.dropout_seed = 42
@@ -107,6 +108,7 @@ class TTGpt(LightweightModule):
         self.n_layer = n_layer
         self.use_velocity = use_velocity
         self.pos_emb = parameters["pos_emb"]
+        self.compute_kernel_config = compute_kernel_config
 
         if self.use_velocity:
             # Store velocity embedding weights and bias as TTNN tensors
@@ -116,7 +118,14 @@ class TTGpt(LightweightModule):
         self.tt_blocks = []
         for i in range(n_layer):
             self.tt_blocks.append(
-                TTGptBlock(device, parameters[f"blocks_{i}"], n_head, dtype=dtype, memory_config=memory_config)
+                TTGptBlock(
+                    device,
+                    parameters[f"blocks_{i}"],
+                    n_head,
+                    dtype=dtype,
+                    memory_config=memory_config,
+                    compute_kernel_config=compute_kernel_config,
+                )
             )
         self.dtype = dtype
         self.memory_config = memory_config
@@ -147,6 +156,7 @@ class TTGpt(LightweightModule):
                 velocity,
                 self.vel_emb_weight,
                 bias=self.vel_emb_bias,
+                compute_kernel_config=self.compute_kernel_config,
                 memory_config=self.memory_config,
                 dtype=self.dtype,
             )

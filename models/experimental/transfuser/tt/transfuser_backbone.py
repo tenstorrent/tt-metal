@@ -36,6 +36,9 @@ class TtTransfuserBackbone:
             enable_act_double_buffer=True,
             enable_weights_double_buffer=True,
             dtype=ttnn.bfloat16,
+            fp32_dest_acc_en=model_config.get("fp32_dest_acc_en", True),
+            packer_l1_acc=model_config.get("packer_l1_acc", True),
+            math_approx_mode=model_config.get("math_approx_mode", False),
         )
         self.lidar_conv1 = TTConv2D(
             kernel_size=3,
@@ -52,6 +55,9 @@ class TtTransfuserBackbone:
             enable_act_double_buffer=True,
             enable_weights_double_buffer=True,
             dtype=ttnn.bfloat16,
+            fp32_dest_acc_en=model_config.get("fp32_dest_acc_en", True),
+            packer_l1_acc=model_config.get("packer_l1_acc", True),
+            math_approx_mode=model_config.get("math_approx_mode", False),
         )
         # Layer1 for both encoders
         self.image_layer1 = self._make_layer(
@@ -116,6 +122,14 @@ class TtTransfuserBackbone:
             stage_name="layer3",
         )
 
+        # High accuracy compute kernel config
+        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+
         self.transformer1 = TTGpt(
             device=self.device,
             parameters=parameters["transformer1"],
@@ -130,6 +144,7 @@ class TtTransfuserBackbone:
             n_embd=72,  # layer1 output channels
             dtype=ttnn.bfloat16,
             memory_config=ttnn.L1_MEMORY_CONFIG,
+            compute_kernel_config=compute_kernel_config,
         )
         self.transformer2 = TTGpt(
             device=self.device,
@@ -145,6 +160,7 @@ class TtTransfuserBackbone:
             n_embd=216,  # layer2 output channels
             dtype=ttnn.bfloat16,
             memory_config=ttnn.L1_MEMORY_CONFIG,
+            compute_kernel_config=compute_kernel_config,
         )
         self.transformer3 = TTGpt(
             device=self.device,

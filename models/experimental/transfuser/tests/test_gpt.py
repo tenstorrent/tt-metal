@@ -253,6 +253,14 @@ def test_gpt(
         device=device,
     )
 
+    # High accuracy compute kernel config
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+
     tt_layer = TTGpt(
         device,
         parameters,
@@ -267,6 +275,7 @@ def test_gpt(
         n_embd=n_embed,
         dtype=weight_dtype,
         memory_config=ttnn.L1_MEMORY_CONFIG,
+        compute_kernel_config=compute_kernel_config,
     )
 
     img_h, img_w = img_input_shape[2], img_input_shape[3]
