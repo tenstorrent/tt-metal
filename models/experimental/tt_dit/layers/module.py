@@ -243,7 +243,7 @@ class Parameter:
     def __init__(
         self,
         *,
-        shape: Iterable[int],
+        total_shape: Iterable[int],
         device: ttnn.MeshDevice,
         layout: ttnn.Layout = ttnn.Layout.TILE,
         dtype: ttnn.DataType = ttnn.bfloat16,
@@ -251,7 +251,7 @@ class Parameter:
         mesh_mapping: Mapping[int, int] | None = None,
         on_host: bool = False,
     ) -> None:
-        self.shape = tuple(shape)
+        self.total_shape = tuple(total_shape)
         self.device = device
         self.layout = layout
         self.dtype = dtype
@@ -260,7 +260,7 @@ class Parameter:
         self.on_host = on_host
         self._data = None
 
-        local_shape = list(self.shape)
+        local_shape = list(self.total_shape)
         for k, v in self.mesh_mapping.items():
             if k is not None:
                 local_shape[v] //= self.device.shape[k]
@@ -268,8 +268,8 @@ class Parameter:
 
     def load_torch_tensor(self, torch_tensor: torch.Tensor, /) -> None:
         shape = tuple(torch_tensor.shape)
-        if shape != self.shape:
-            msg = f"expected tensor shape {self.shape}, got {shape}"
+        if shape != self.total_shape:
+            msg = f"expected tensor shape {self.total_shape}, got {shape}"
             raise ParameterLoadingError(msg)
 
         self.data = tensor.from_torch(

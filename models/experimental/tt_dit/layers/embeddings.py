@@ -293,7 +293,7 @@ class PatchEmbed(Module):
 
         seq_len = self.patch_count_y * self.patch_count_x + sequence_padding[0] + sequence_padding[1]
         self.pos_embed = Parameter(
-            shape=[1, seq_len, embed_dim],
+            total_shape=[1, seq_len, embed_dim],
             device=mesh_device,
             mesh_mapping={sp_mesh_axis: 1, tp_mesh_axis: 2},
         )

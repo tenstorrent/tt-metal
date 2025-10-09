@@ -17,8 +17,8 @@ class TinyLinear(Module):
     def __init__(self, in_dim: int, out_dim: int, *, bias: bool, device: ttnn.MeshDevice) -> None:
         super().__init__()
 
-        self.weight = Parameter(shape=[in_dim, out_dim], device=device)
-        self.bias = Parameter(shape=[out_dim], device=device) if bias else None
+        self.weight = Parameter(total_shape=[in_dim, out_dim], device=device)
+        self.bias = Parameter(total_shape=[out_dim], device=device) if bias else None
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         return ttnn.linear(x, self.weight.data, bias=self.bias.data if self.bias is not None else None)
