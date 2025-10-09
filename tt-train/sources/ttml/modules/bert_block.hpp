@@ -36,8 +36,6 @@ public:
 class BertAttention : public ModuleBase {
 private:
     std::shared_ptr<MultiHeadAttention> m_self_attention;
-    std::shared_ptr<LinearLayer> m_output_dense;
-    std::shared_ptr<DropoutLayer> m_output_dropout;
 
 public:
     BertAttention(uint32_t embedding_dim, uint32_t num_heads, float dropout_prob);
