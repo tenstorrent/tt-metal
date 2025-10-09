@@ -22,23 +22,25 @@ enum class AnalysisType { OP_FIRST_TO_LAST_MARKER };
 
 enum class AnalysisDimension { OP };
 
-using AnalysisRisc = tracy::RiscType;
-constexpr AnalysisRisc AnalysisRiscAny = AnalysisRisc::BRISC | AnalysisRisc::NCRISC | AnalysisRisc::TRISC_0 |
-                                         AnalysisRisc::TRISC_1 | AnalysisRisc::TRISC_2 | AnalysisRisc::ERISC;
+using AnalysisRiscTypes = std::unordered_set<tracy::RiscType>;
+inline const AnalysisRiscTypes AnalysisRiscTypesAny = {
+    tracy::RiscType::BRISC,
+    tracy::RiscType::NCRISC,
+    tracy::RiscType::TRISC_0,
+    tracy::RiscType::TRISC_1,
+    tracy::RiscType::TRISC_2,
+    tracy::RiscType::ERISC,
+    tracy::RiscType::TENSIX_RISC_AGG};
 
-using AnalysisMarkerType = tracy::TTDeviceMarkerType;
-constexpr AnalysisMarkerType AnalysisMarkerTypeAny = AnalysisMarkerType::ZONE_START | AnalysisMarkerType::ZONE_END |
-                                                     AnalysisMarkerType::ZONE_TOTAL | AnalysisMarkerType::TS_DATA |
-                                                     AnalysisMarkerType::TS_EVENT;
+using AnalysisMarkerTypes = std::unordered_set<tracy::TTDeviceMarkerType>;
+inline const AnalysisMarkerTypes AnalysisMarkerTypesAny = {
+    tracy::TTDeviceMarkerType::ZONE_START,
+    tracy::TTDeviceMarkerType::ZONE_END,
+    tracy::TTDeviceMarkerType::ZONE_TOTAL,
+    tracy::TTDeviceMarkerType::TS_DATA,
+    tracy::TTDeviceMarkerType::TS_EVENT};
 
 using AnalysisMarkerNameKeywords = std::unordered_set<tracy::MarkerDetails::MarkerNameKeyword>;
-
-struct AnalysisResultsConfig {
-    std::string analysis_name{};
-    bool display_start_and_end_timestamps = false;
-    std::optional<std::string> start_timestamp_header = std::nullopt;
-    std::optional<std::string> end_timestamp_header = std::nullopt;
-};
 
 struct OpId {
     uint64_t runtime_id;
@@ -68,6 +70,13 @@ struct OpIdHasher {
     }
 };
 
+struct AnalysisResultsConfig {
+    std::string analysis_name{};
+    bool display_start_and_end_timestamps = false;
+    std::optional<std::string> start_timestamp_header = std::nullopt;
+    std::optional<std::string> end_timestamp_header = std::nullopt;
+};
+
 struct AnalysisResults {
     struct SingleResult {
         tracy::TTDeviceMarker start_marker;
@@ -94,23 +103,20 @@ struct AnalysisResults {
 
     AnalysisResultsConfig results_config;
     std::unordered_map<OpId, SingleResult, OpIdHasher> results_per_op_id;
+};
 
-    // virtual ~AnalysisResults() = default;
+struct AnalysisStartEndConfig {
+    AnalysisRiscTypes risc_types = AnalysisRiscTypesAny;
+    AnalysisMarkerTypes marker_types = AnalysisMarkerTypesAny;
+    AnalysisMarkerNameKeywords marker_name_keywords = {};
+};
 
-    // virtual std::string getStringifiedResultsForRuntimeId(uint64_t runtime_id) const = 0;
-
-    // std::string getStringifiedHeaders() const {
-    //     std::string headers;
-    //     if (results_config.display_start_and_end_timestamps) {
-    //         TT_FATAL(results_config.start_timestamp_header.has_value(), "Start timestamp header is not set");
-    //         TT_FATAL(results_config.end_timestamp_header.has_value(), "End timestamp header is not set");
-    //         headers +=
-    //             results_config.start_timestamp_header.value() + "," + results_config.end_timestamp_header.value() +
-    //             ",";
-    //     }
-    //     headers += results_config.analysis_name;
-    //     return headers;
-    // }
+struct AnalysisConfig {
+    AnalysisType type = AnalysisType::OP_FIRST_TO_LAST_MARKER;
+    AnalysisDimension dimension = AnalysisDimension::OP;
+    AnalysisResultsConfig results_config{};
+    AnalysisStartEndConfig start_config{};
+    AnalysisStartEndConfig end_config{};
 };
 
 struct OpsPerfResults {
@@ -129,24 +135,6 @@ struct OpsPerfResults {
     std::vector<AnalysisResultsConfig> analysis_results_configs;
     std::map<OpId, SingleOpPerfResults> op_id_to_perf_results;
 };
-
-struct AnalysisStartEndConfig {
-    AnalysisRisc risc = AnalysisRiscAny;
-    AnalysisMarkerType marker_type = AnalysisMarkerTypeAny;
-    AnalysisMarkerNameKeywords marker_name_keywords{};
-};
-
-struct AnalysisConfig {
-    AnalysisType type = AnalysisType::OP_FIRST_TO_LAST_MARKER;
-    AnalysisDimension dimension = AnalysisDimension::OP;
-    AnalysisResultsConfig results_config{};
-    AnalysisStartEndConfig start_config{};
-    AnalysisStartEndConfig end_config{};
-};
-
-// AnalysisResults generateAnalysisForDeviceMarkers(
-//     const AnalysisConfig& analysis_config,
-//     const std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& device_markers);
 
 OpsPerfResults generatePerfResultsForOps(
     const std::vector<AnalysisConfig>& analysis_configs,
