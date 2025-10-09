@@ -19,12 +19,10 @@ import ttml
 from ttml.common.config import get_config, TransformerConfig, TrainingConfig
 from ttml.common.model_factory import TransformerModelFactory
 from ttml.common.utils import set_seed, round_up_to_tile, create_optimizer
-from ttml.common.data import get_batch, build_causal_mask
-from ttml.common.trainer import train
+from ttml.common.data import build_causal_mask
 
 # Configuration
 CONFIG = "training_shakespeare_gpt2s.yaml"
-BATCH_SIZE = 4
 
 
 class GradientAccumulator:
@@ -61,7 +59,15 @@ class GradientAccumulator:
         return (self.m_total_loss / float(self.m_total_samples)) if self.m_total_samples > 0 else 0.0
 
 
-def get_batch_generator(data, batch_size, max_sequence_length, tokenizer):
+def build_logits_mask(vocab_size: int, padded_vocab_size: int) -> ttml.autograd.Tensor:
+    logits_mask = np.zeros((1, 1, 1, padded_vocab_size), dtype=np.float32)
+    logits_mask[:, :, :, vocab_size:] = 1e4
+    return ttml.autograd.Tensor.from_numpy(
+        logits_mask, ttml.Layout.TILE, ttml.autograd.DataType.BFLOAT16
+    )  # [1,1,1,T], bfloat16"
+
+
+def get_batch_generator(data, batch_size, max_sequence_length, padded_vocab_size, tokenizer):
     """Custom data generator for GSM8K dataset."""
 
     def get_batch(data, batch_size=32):
@@ -71,78 +77,129 @@ def get_batch_generator(data, batch_size, max_sequence_length, tokenizer):
             X = data[curr_idx : min(curr_idx + batch_size, len(data))]["question"]
             Y = data[curr_idx : min(curr_idx + batch_size, len(data))]["answer"]
 
-            data_np = np.empty((batch_size, max_sequence_length), dtype=np.uint32)
+            # Batch tokenize questions and answers
+            x_tokens_batch = tokenizer(X, return_tensors="np", add_special_tokens=False)["input_ids"]
+            y_tokens_batch = tokenizer(Y, return_tensors="np", add_special_tokens=False)["input_ids"]
+
+            data_np = np.full((batch_size, max_sequence_length), tokenizer.eos_token_id, dtype=np.uint32)
             mask_lens = []
 
-            for i, (x_str, y_str) in enumerate(zip(X, Y)):
-                # Tokenize question and answer separately
-                x_tokens = tokenizer(x_str, return_tensors="np")["input_ids"].flatten()
-                y_tokens = tokenizer(y_str, return_tensors="np")["input_ids"].flatten()
+            for i in range(batch_size):
+                x_tokens = x_tokens_batch[i]
+                y_tokens = y_tokens_batch[i]
 
                 # Concatenate question + answer
-                data_point = np.concatenate([x_tokens, y_tokens])
-                mask_lens.append(len(x_tokens))  # Length of question (to mask in loss)
+                combined_length = len(x_tokens) + len(y_tokens)
+                if combined_length > max_sequence_length:
+                    # Truncate if too long, prioritizing keeping the answer
+                    available_space = max_sequence_length - len(y_tokens)
+                    if available_space > 0:
+                        x_tokens = x_tokens[:available_space]
+                        data_np[i, : len(x_tokens)] = x_tokens
+                        data_np[i, len(x_tokens) : len(x_tokens) + len(y_tokens)] = y_tokens
+                    else:
+                        # If answer is too long, just use the answer
+                        data_np[i, :max_sequence_length] = y_tokens[:max_sequence_length]
+                        x_tokens = []
+                else:
+                    # Normal case: concatenate question + answer
+                    data_np[i, : len(x_tokens)] = x_tokens
+                    data_np[i, len(x_tokens) : len(x_tokens) + len(y_tokens)] = y_tokens
 
-                # Pad or truncate to max_sequence_length
-                if len(data_point) > max_sequence_length:
-                    data_point = data_point[:max_sequence_length]
-                    # Adjust mask_len if question was truncated
-                    if mask_lens[-1] > max_sequence_length:
-                        mask_lens[-1] = max_sequence_length
-                elif len(data_point) < max_sequence_length:
-                    data_point = np.pad(
-                        data_point, (0, max_sequence_length - len(data_point)), constant_values=tokenizer.eos_token_id
-                    )
-
-                data_np[i] = data_point.astype(np.uint32)
+                mask_lens.append(len(x_tokens))
 
             # Shape: [batch_size, 1, 1, max_sequence_length]
-            data_np = np.expand_dims(data_np, axis=(1, 2))
-            X = ttml.autograd.Tensor.from_numpy(data_np, ttml.Layout.ROW_MAJOR, ttml.autograd.DataType.UINT32)
+            X_np = np.expand_dims(data_np, axis=(1, 2))
+
+            y_np = np.roll(X_np, -1, axis=-1)  # Shift left by 1
+            y_np[:, :, :, -1] = tokenizer.eos_token_id  # Last token target
+            y_np = y_np.squeeze(axis=(1, 2))  # Shape: [batch, seq_len]
+
+            logits_mask_np = np.ones((batch_size, 1, max_sequence_length, padded_vocab_size), dtype=np.float32)
+
+            for i, mask_len in enumerate(mask_lens):
+                # Mask out the question tokens (first mask_len tokens)
+                logits_mask_np[i, :, : mask_len - 1, :] = 0.0
+                # Also mask padding tokens
+                pad_positions = X_np[i, 0, 0, :] == tokenizer.eos_token_id
+                logits_mask_np[i, :, pad_positions, :] = 0.0
+
+            logits_add_mask_np = np.zeros_like(logits_mask_np, dtype=np.float32)
+
+            # Find positions where mask is 0 (question tokens)
+            mask_positions = logits_mask_np[:, 0, :, 0] == 0.0  # Shape: [batch_size, max_sequence_length]
+
+            # Use advanced indexing to set the corresponding target token positions to 1e3
+            batch_indices, seq_indices = np.where(mask_positions)
+            target_tokens = y_np[batch_indices, seq_indices]
+            logits_add_mask_np[batch_indices, 0, seq_indices, target_tokens] = 1e3
+
+            logits_add_mask = ttml.autograd.Tensor.from_numpy(
+                logits_add_mask_np, ttml.Layout.TILE, ttml.autograd.DataType.BFLOAT16
+            )
+
+            logits_mask = ttml.autograd.Tensor.from_numpy(
+                logits_mask_np, ttml.Layout.TILE, ttml.autograd.DataType.BFLOAT16
+            )
+
+            X = ttml.autograd.Tensor.from_numpy(X_np, ttml.Layout.ROW_MAJOR, ttml.autograd.DataType.UINT32)
+            y = ttml.autograd.Tensor.from_numpy(y_np, ttml.Layout.ROW_MAJOR, ttml.autograd.DataType.UINT32)
 
             curr_idx += batch_size
-            yield (X, np.array(mask_lens))
+            yield (X, y, logits_mask, logits_add_mask)
 
     return get_batch(data, batch_size)
 
 
-def generate_text(model, tokenizer, question, max_sequence_length, causal_mask, max_gen_tokens=100):
+def generate_text(
+    model, tokenizer, question, max_sequence_length, causal_mask, temperature, logits_mask_tensor, max_gen_tokens=100
+):
     """Generate text given a question."""
     model.eval()
     ttml.autograd.AutoContext.get_instance().set_gradient_mode(ttml.autograd.GradMode.DISABLED)
 
     # Tokenize and prepare input
-    test_tokens = tokenizer(
+    prompt_tokens = tokenizer(
         question, return_tensors="np", truncation=True, padding="max_length", max_length=max_sequence_length
     )["input_ids"].flatten()
-    test_input_np = np.expand_dims(np.expand_dims(test_tokens.astype(np.uint32), axis=(0, 1)), axis=0)
+
+    prompt_tokens = prompt_tokens.tolist()
 
     # Generate tokens autoregressively
     generated_tokens = []
-    input_seq = test_input_np.copy()
+    padded_prompt_tokens = np.zeros((1, 1, 1, max_sequence_length), dtype=np.uint32)
+    start_idx = 0
 
     for _ in range(max_gen_tokens):
-        input_tensor = ttml.autograd.Tensor.from_numpy(input_seq, ttml.Layout.ROW_MAJOR, ttml.autograd.DataType.UINT32)
-        logits = model(input_tensor, causal_mask)
-        next_token_logits = logits.to_numpy()[0, 0, len(generated_tokens) + test_tokens.shape[0] - 1]
-        next_token = np.argmax(next_token_logits)  # Greedy decoding
+        if len(prompt_tokens) > max_sequence_length:
+            start_idx = len(prompt_tokens) - max_sequence_length
 
-        if next_token == tokenizer.eos_token_id:
-            break
+        padded_prompt_tokens[0, 0, 0, : len(prompt_tokens)] = prompt_tokens[start_idx:]
+        padded_prompt_tensor = ttml.autograd.Tensor.from_numpy(
+            padded_prompt_tokens, ttml.Layout.ROW_MAJOR, ttml.autograd.DataType.UINT32
+        )  # [1,1,1, max_seq_len], uint32
+
+        logits = model(padded_prompt_tensor, causal_mask)  # out=[1,1,seq_len, vocab_size], bf16
+
+        next_token_tensor = ttml.ops.sample.sample_op(
+            logits, temperature, np.random.randint(low=1e7), logits_mask_tensor
+        )  # out=[1,1,seq_len,1], uint32
+
+        next_token_idx = max_sequence_length - 1 if len(prompt_tokens) > max_sequence_length else len(prompt_tokens) - 1
+        next_token = next_token_tensor.to_numpy().flatten()[next_token_idx]
 
         generated_tokens.append(next_token)
-
-        # Append the new token to the input sequence
-        if len(generated_tokens) + test_tokens.shape[0] < max_sequence_length:
-            input_seq[0, 0, 0, len(generated_tokens) + test_tokens.shape[0] - 1] = next_token
-        else:
-            break
+        print(f"{tokenizer.decode([next_token])}", end="", flush=True)
+        prompt_tokens.append(next_token)
 
     ttml.autograd.AutoContext.get_instance().set_gradient_mode(ttml.autograd.GradMode.ENABLED)
 
-    # Decode generated tokens
-    generated_text = tokenizer.decode(generated_tokens, skip_special_tokens=True)
-    return generated_text
+
+def adjust_logits(logits, binary_mask, add_mask):
+    masked_logits = binary_mask * logits
+    masked_logits = masked_logits + add_mask
+
+    return masked_logits
 
 
 def main():
@@ -177,10 +234,6 @@ def main():
     training_data = datasets.load_dataset("gsm8k", "main", split="train")
     testing_data = datasets.load_dataset("gsm8k", "main", split="test")
 
-    # Split test data
-    val_data = testing_data.select(range(400))
-    testing_data = testing_data.select(range(400, len(testing_data)))
-
     # Setup training
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
@@ -191,21 +244,28 @@ def main():
 
     causal_mask = ttml.autograd.Tensor.from_numpy(causal_mask, ttml.Layout.ROW_MAJOR, ttml.autograd.DataType.BFLOAT16)
 
+    logits_mask_tensor = build_logits_mask(orig_vocab_size, padded_vocab_size)
+
     loss_fn = ttml.ops.loss.cross_entropy_loss
     reduce = ttml.ops.ReduceType.MEAN
 
     # Training setup
+
+    batch_size = training_config.batch_size
+
     tt_model.train()
-    data_steps = (len(training_data) // BATCH_SIZE) + 1
+    data_steps = (len(training_data) // batch_size) + 1
     train_losses = []
     val_losses = []
 
-    train_batch_generator = get_batch_generator(training_data, BATCH_SIZE, max_sequence_length, tokenizer)
-    val_batch_generator = get_batch_generator(val_data, 4, max_sequence_length, tokenizer)
+    train_batch_generator = get_batch_generator(
+        training_data, batch_size, max_sequence_length, padded_vocab_size, tokenizer
+    )
+    val_batch_generator = get_batch_generator(testing_data, 4, max_sequence_length, padded_vocab_size, tokenizer)
 
     accum = GradientAccumulator(training_config.gradient_accumulation_steps)
     print("Gradient Accumulation Steps:", training_config.gradient_accumulation_steps)
-    tokens_per_batch = BATCH_SIZE * max_sequence_length
+    tokens_per_batch = batch_size * max_sequence_length
     optim_steps_done = 0
 
     print(f"Starting training for {data_steps} steps...")
@@ -215,39 +275,16 @@ def main():
         if accum.should_zero_grad():
             optim.zero_grad()
 
-        X, mask_lens = next(train_batch_generator)
+        X, y, logits_mask, logits_add_mask = next(train_batch_generator)
 
         # Forward pass: input is the concatenated sequence
         logits = tt_model(X, causal_mask)  # Shape: [batch, 1, seq_len, vocab_size]
 
-        # Create targets: shift input by 1 position (standard causal LM)
-        X_np = X.to_numpy()  # Shape: [batch, 1, 1, seq_len]
-        targets_np = np.roll(X_np, -1, axis=-1)  # Shift left by 1
-        targets_np[:, :, :, -1] = tokenizer.eos_token_id  # Last token target
-        targets_np = targets_np.squeeze(axis=(1, 2))  # Shape: [batch, seq_len]
-
-        targets = ttml.autograd.Tensor.from_numpy(targets_np, ttml.Layout.ROW_MAJOR, ttml.autograd.DataType.UINT32)
-
-        # Create mask to zero out logits corresponding to question tokens
-        logits_np = logits.to_numpy()  # Shape: [batch, 1, seq_len, vocab_size]
-        logits_mask_np = np.ones_like(logits_np, dtype=np.float32)
-
-        for i, mask_len in enumerate(mask_lens):
-            # Mask out the question tokens (first mask_len tokens)
-            logits_mask_np[i, :, :mask_len, :] = 0.0
-            # Also mask padding tokens
-            pad_positions = X_np[i, 0, 0, :] == tokenizer.eos_token_id
-            logits_mask_np[i, :, pad_positions, :] = 0.0
-
-        logits_mask = ttml.autograd.Tensor.from_numpy(
-            logits_mask_np, ttml.Layout.ROW_MAJOR, ttml.autograd.DataType.BFLOAT16
-        )
-
         # Apply mask to logits (zero out question token logits)
-        masked_logits = logits * logits_mask
+        masked_logits = adjust_logits(logits, logits_mask, logits_add_mask)
 
         # Compute cross-entropy loss on masked logits
-        loss = loss_fn(masked_logits, targets, reduce)
+        loss = loss_fn(masked_logits, y, reduce)
 
         scaled_loss = accum.scale(loss)
         scaled_loss.backward(False)
@@ -266,43 +303,37 @@ def main():
         postfix = {"train_loss": f"{train_loss:.4f}", "avg_loss": f"{avg_loss:.4f}"}
         bar.set_postfix(postfix, refresh=False)
 
-        # Validation every 100 steps
-        if step % 100 == 0:
+        # Validation every eval_every steps
+        if step % training_config.eval_every == 0:
             ttml.autograd.AutoContext.get_instance().set_gradient_mode(ttml.autograd.GradMode.DISABLED)
             tt_model.eval()
 
-            val_X, val_mask_lens = next(val_batch_generator)
+            val_X, val_y, val_logits_mask, val_logits_add_mask = next(val_batch_generator)
             val_logits = tt_model(val_X, causal_mask)
 
-            # Same target and masking logic for validation
-            val_X_np = val_X.to_numpy()
-            val_targets_np = np.roll(val_X_np, -1, axis=-1)
-            val_targets_np[:, :, :, -1] = tokenizer.eos_token_id
-            val_targets_np = val_targets_np.squeeze(axis=(1, 2))
-
-            val_targets = ttml.autograd.Tensor.from_numpy(
-                val_targets_np, ttml.Layout.ROW_MAJOR, ttml.autograd.DataType.UINT32
-            )
-
-            # Create logits mask for validation
-            val_logits_np = val_logits.to_numpy()
-            val_logits_mask_np = np.ones_like(val_logits_np, dtype=np.float32)
-
-            for i, mask_len in enumerate(val_mask_lens):
-                val_logits_mask_np[i, :, :mask_len, :] = 0.0
-                pad_positions = val_X_np[i, 0, 0, :] == tokenizer.eos_token_id
-                val_logits_mask_np[i, :, pad_positions, :] = 0.0
-
-            val_logits_mask = ttml.autograd.Tensor.from_numpy(
-                val_logits_mask_np, ttml.Layout.ROW_MAJOR, ttml.autograd.DataType.BFLOAT16
-            )
-
             # Apply mask to validation logits
-            val_masked_logits = val_logits * val_logits_mask
+            val_masked_logits = adjust_logits(val_logits, val_logits_mask, val_logits_add_mask)
 
             # Compute validation loss
-            val_loss = loss_fn(val_masked_logits, val_targets, reduce)
+            val_loss = loss_fn(val_masked_logits, val_y, reduce)
             val_losses.append(val_loss.to_numpy().item())
+
+            print("Validation check")
+            print("====================================")
+            print(f"Question: {testing_data[-1]['question']}")
+            print("====================================")
+
+            generate_text(
+                tt_model,
+                tokenizer,
+                testing_data[-1]["question"],
+                max_sequence_length,
+                causal_mask,
+                0.7,
+                logits_mask_tensor,
+            )
+
+            print("\n====================================")
 
             ttml.autograd.AutoContext.get_instance().set_gradient_mode(ttml.autograd.GradMode.ENABLED)
             tt_model.train()
@@ -313,7 +344,7 @@ def main():
     print("Plotting training curves...")
     fig, axs = plt.subplots(1, 1, figsize=(10, 5))
     axs.plot(train_losses, color="blue", label="Train Loss")
-    axs.plot(np.arange(0, len(val_losses)) * 100, val_losses, color="orange", label="Val Loss")
+    axs.plot(np.arange(0, len(val_losses)) * training_config.eval_every, val_losses, color="orange", label="Val Loss")
     axs.set_title("Training Loss")
     axs.set_xlabel("Steps")
     axs.set_ylabel("Loss")
