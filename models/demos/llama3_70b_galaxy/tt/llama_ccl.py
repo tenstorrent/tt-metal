@@ -102,7 +102,7 @@ class TT_CCL:
             self.rs_create_heads_buffers = self.get_decode_rs_create_heads_buffers()
         if mode == "prefill":
             # For some prefill seqlens we always allocate CCL buffers. Otherwise they will require barrier syncing
-            self.support_seqlens = [8192, 4096, 2048, 1024, 128]
+            self.support_seqlens = [4096, 2048, 1024, 128]
             if allocate_prefill_buffers:
                 self.persistent_buffers = (
                     self.get_ring_prefill_reduce_scatter_buffers()
@@ -244,6 +244,15 @@ class TT_CCL:
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
         persistent_buffers["SAMPLING_INDICES"] = tt_buffer
+        tt_buffer = ttnn.from_torch(
+            torch.zeros((1, 1, 32, 128 * 1024)),
+            device=self.mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat8_b,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+        persistent_buffers["SAMPLING"] = tt_buffer
 
         # Binary Mult + Silu
         tt_buffer = ttnn.from_torch(
