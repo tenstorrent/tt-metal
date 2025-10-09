@@ -41,8 +41,15 @@ jobs:
           echo "All tags in repository:"
           git tag --sort=-version:refname
           echo "Total tag count: $(git tag | wc -l)"
+          echo "Reachable tags from HEAD:"
+          git tag --merged HEAD --sort=-version:refname | sed -n '1,30p'
+          echo "Closest reachable semver tag:"
+          git describe --tags --abbrev=0 --match 'v[0-9]*.[0-9]*.[0-9]*' || true
       - uses: paulhatch/semantic-version@v5.4.0
         id: get-next-semantic-base-version
+        with:
+          tag_prefix: "v"
+          debug: true
 
       - name: Get tag version
         id: get-tag-version
