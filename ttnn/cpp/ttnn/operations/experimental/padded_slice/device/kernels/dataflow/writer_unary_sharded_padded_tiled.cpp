@@ -18,6 +18,7 @@ uint32_t round_down(uint32_t value, uint32_t multiple) {
     return value;
 }
 
+#define DEBUG
 void kernel_main() {
     const uint32_t total_num_tiles = get_arg_val<uint32_t>(0);
     const uint32_t num_tiles_per_read = get_arg_val<uint32_t>(1);
@@ -27,8 +28,10 @@ void kernel_main() {
     constexpr uint32_t cb_untilized_id = get_compile_time_arg_val(0);
     constexpr uint32_t cb_out_id = get_compile_time_arg_val(1);
     constexpr uint32_t cb_padding_id = get_compile_time_arg_val(2);
-    constexpr uint32_t num_dims = get_compile_time_arg_val(3);
-    constexpr uint32_t output_elem_size = get_compile_time_arg_val(4);
+    constexpr uint32_t is_non_aligned = get_compile_time_arg_val(3);
+    constexpr uint32_t num_dims = get_compile_time_arg_val(4);
+    constexpr uint32_t output_elem_size = get_compile_time_arg_val(5);
+    constexpr uint32_t output_row_size_bytes = get_compile_time_arg_val(6);
 
     const uint32_t output_coord_addr = get_arg_addr(4);
     const uint32_t output_start_in_input_addr = get_arg_addr(4 + num_dims);
@@ -74,8 +77,8 @@ void kernel_main() {
     DPRINT << "untilized CB ID: " << cb_untilized_id << " Out CB ID: " << cb_out_id << ENDL();
     DPRINT << "pad_addr : " << pad_addr << ", pad_noc_addr : " << pad_noc_addr
            << ", padded_channels_ntiles: " << padded_channels_ntiles << ENDL();
+    DPRINT << "Unaligned " << is_non_aligned << ENDL();
 #endif
-
     const uint32_t output_end_width_in_input = output_end[1] + output_start_in_input[1];
     uint32_t row_count = 0;
     while (tiles_read < total_num_tiles && rows_remaining > 0) {
@@ -95,6 +98,7 @@ void kernel_main() {
                << ", Width Tile Start in Input: " << width_tile_start_in_input
                << ", Read Start Offset: " << read_start_offset << ", Read Rows Size: " << read_rows_size << "Remaining "
                << rows_remaining << ENDL();
+        DPRINT << "output row size bytes " << output_row_size_bytes << ENDL();
         DPRINT << "Output Coord: " << output_coord[0] << ", " << output_coord[1] << ", " << output_coord[2] << ", "
                << output_coord[3] << ENDL();
         DPRINT << "Write Addr Offset " << write_addr - base_write_addr << ENDL();
@@ -102,8 +106,18 @@ void kernel_main() {
         cb_wait_front(cb_untilized_id, num_tiles_per_read);
         uint64_t noc_read_addr = get_noc_addr(get_read_ptr(cb_untilized_id));
         noc_read_addr += read_start_offset * block_row_size;
-
-        noc_async_read(noc_read_addr, write_addr, read_rows_size * block_row_size);
+        if (is_non_aligned) {
+            uint64_t current_noc_read_addr = noc_read_addr;
+            uint32_t current_write_addr = write_addr;
+            for (uint32_t row = 0; row < read_rows_size; row++) {
+                noc_async_read(current_noc_read_addr, current_write_addr, output_row_size_bytes);
+                noc_async_read_barrier();
+                current_noc_read_addr += block_row_size;
+                current_write_addr += output_row_size_bytes;
+            }
+        } else {
+            noc_async_read(noc_read_addr, write_addr, read_rows_size * block_row_size);
+        }
         uint32_t pad_write_addr =
             write_addr + (num_tiles_per_read - padded_channels_ntiles) * tt::constants::TILE_WIDTH * output_elem_size;
         if (padded_channels_ntiles > 0) {
@@ -117,7 +131,7 @@ void kernel_main() {
         }
         noc_async_read_barrier();
 
-        write_addr += read_rows_size * block_row_size;
+        write_addr += read_rows_size * output_row_size_bytes;
         cb_pop_front(cb_untilized_id, num_tiles_per_read);
         tiles_read += num_tiles_per_read;
 

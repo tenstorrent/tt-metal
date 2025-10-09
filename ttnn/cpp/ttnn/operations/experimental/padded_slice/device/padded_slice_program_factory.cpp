@@ -118,11 +118,11 @@ get_padded_slice_runtime_args_rm_sharded_output(
     auto dst_buffer_alignment = output_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
                                     ? hal::get_dram_alignment()
                                     : hal::get_l1_alignment();
-    auto alignment = std::max(src_buffer_alignment, dst_buffer_alignment);
+    // auto alignment = std::max(src_buffer_alignment, dst_buffer_alignment);
     uint32_t begins_bytes = output_tensor_start[-1] * input_tensor.element_size();
     uint32_t misalignment = begins_bytes % src_buffer_alignment;
 
-    uint32_t output_row_size_bytes_offset = tt::round_up(output_row_size_bytes, alignment);
+    uint32_t output_row_size_bytes_offset = tt::round_up(output_row_size_bytes, dst_buffer_alignment);
     uint32_t start_addr = input_tensor.buffer()->address();
     std::vector<uint32_t> common_reader_kernel_args = {
         start_addr + begins_bytes - misalignment,  // read from nearest aligned address
@@ -245,8 +245,9 @@ static operation::ProgramWithCallbacks padded_slice_rm_multi_core(
         dst_buffer->buffer_type() == tt::tt_metal::BufferType::L1,
         "Output buffer should be L1 for padded_slice operation with tiled inputs");
 
-    uint32_t src0_cb_index = 0;
+    uint32_t output_cb_index = 0;
     uint32_t temp_pad_cb_index = 1;
+    uint32_t non_aligned_temp_cb_index = 2;
     uint32_t max_read_size = 4096;
 
     auto src_buffer_alignment = a.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
@@ -255,35 +256,54 @@ static operation::ProgramWithCallbacks padded_slice_rm_multi_core(
     auto dst_buffer_alignment = output.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
                                     ? ::hal::get_dram_alignment()
                                     : ::hal::get_l1_alignment();
+
+    TT_FATAL(
+        output_row_size_bytes % dst_buffer_alignment == 0,
+        "Output row size {} must be aligned to the destination buffer {} alignment {}",
+        output_row_size_bytes,
+        output.buffer()->buffer_type(),
+        dst_buffer_alignment);
     auto alignment = std::max(src_buffer_alignment, dst_buffer_alignment);
 
-    // if begins is not aligned then we need to pad the cb size, so that we can read from the nearest aligned address
-    uint32_t begins_bytes = output_tensor_start[-1] * a.element_size();
-    uint32_t misalignment = begins_bytes % src_buffer_alignment;
-
-    if (misalignment != 0) {
-        alignment *= 2;
+    auto is_non_aligned = false;
+    if (output_row_size_bytes % alignment) {
+        is_non_aligned = true;
     }
 
-    CBHandle cb_src0;
     uint32_t num_output_sticks_per_core = output_shard_spec.shape[0];
-    tt::tt_metal::CircularBufferConfig cb_src0_config =
-        tt::tt_metal::CircularBufferConfig(
-            num_output_sticks_per_core * output_row_size_bytes, {{src0_cb_index, cb_data_format}})
-            .set_page_size(src0_cb_index, output_row_size_bytes)
-            .set_globally_allocated_address(*output.buffer());
-    cb_src0 = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src0_config);
+
+    auto cb_output_tuple = tt::tt_metal::create_cb(
+        output_cb_index,
+        program,
+        total_cores,
+        output_row_size_bytes,
+        num_output_sticks_per_core,
+        cb_data_format,
+        output.buffer());
+
+    CBHandle cb_output = std::get<1>(cb_output_tuple);
     if (output_row_size_bytes > input_row_size_bytes) {
         pad_output_row = true;
         tt::tt_metal::CircularBufferConfig cb_temp_pad_config =
             tt::tt_metal::CircularBufferConfig(1 * output_row_size_bytes, {{temp_pad_cb_index, cb_data_format}})
                 .set_page_size(temp_pad_cb_index, output_row_size_bytes);
         tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_temp_pad_config);
+    } else {
+        non_aligned_temp_cb_index = temp_pad_cb_index;  // Use the unused temp pad index so that CBs are continous.
+    }
+    if (is_non_aligned) {
+        tt::tt_metal::create_cb(
+            non_aligned_temp_cb_index,
+            program,
+            total_cores,
+            a.logical_shape()[-1] * a.element_size(),
+            2,
+            cb_data_format);
     }
 
-    std::vector<uint32_t> writer_compile_time_args_vec = {(std::uint32_t)src0_cb_index};
+    std::vector<uint32_t> writer_compile_time_args_vec = {(std::uint32_t)output_cb_index};
 
-    std::vector<uint32_t> reader_compile_time_args_vec = {misalignment};
+    std::vector<uint32_t> reader_compile_time_args_vec = {(uint32_t)is_non_aligned, non_aligned_temp_cb_index};
     tt::tt_metal::TensorAccessorArgs(src0_buffer).append_to(reader_compile_time_args_vec);
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -328,7 +348,7 @@ static operation::ProgramWithCallbacks padded_slice_rm_multi_core(
                                            compute_with_storage_grid_size,
                                            max_read_size,
                                            iter_cores,
-                                           cb_src0](
+                                           cb_output](
                                               const void* operation,
                                               Program& program,
                                               const std::vector<Tensor>& input_tensors,
@@ -337,7 +357,7 @@ static operation::ProgramWithCallbacks padded_slice_rm_multi_core(
         const auto& src_tensor = input_tensors.at(0);
         auto dst_tensor = output_tensors.at(0);
         TT_FATAL(dst_tensor.is_sharded(), "Output tensor must be sharded");
-        UpdateDynamicCircularBufferAddress(program, cb_src0, *dst_tensor.buffer());
+        UpdateDynamicCircularBufferAddress(program, cb_output, *dst_tensor.buffer());
 
         auto all_runtime_args = get_padded_slice_runtime_args_rm_sharded_output(
             src_tensor, dst_tensor, output_tensor_start, actual_output_shape, iter_cores, max_read_size);
@@ -680,20 +700,22 @@ static operation::ProgramWithCallbacks padded_slice_tile_multi_core(
 
     uint32_t max_read_size = 4096;
 
-    auto src_buffer_alignment = a.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
-                                    ? ::hal::get_dram_alignment()
-                                    : ::hal::get_l1_alignment();
     auto dst_buffer_alignment = output.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
                                     ? ::hal::get_dram_alignment()
                                     : ::hal::get_l1_alignment();
-    auto alignment = std::max(src_buffer_alignment, dst_buffer_alignment);
-
-    // if begins is not aligned then we need to pad the cb size, so that we can read from the nearest aligned address
-    uint32_t begins_bytes = output_tensor_start[-1] * a.element_size();
-    uint32_t misalignment = begins_bytes % src_buffer_alignment;
-
-    if (misalignment != 0) {
-        alignment *= 2;
+    TT_FATAL(
+        output_row_size_bytes % dst_buffer_alignment == 0,
+        "Output row size {} must be aligned to the destination buffer {} alignment {}",
+        output_row_size_bytes,
+        output.buffer()->buffer_type(),
+        dst_buffer_alignment);
+    // Input is tiled, and so channels would always be aligned to TILE_WIDTH.
+    // So the non aligned copy is needed if the output alignment is less than TILE_WIDTH * element_size.
+    auto alignment = TILE_WIDTH * output.element_size();
+    auto is_non_aligned = false;
+    if (output_row_size_bytes % alignment) {
+        is_non_aligned = true;
+        TT_FATAL(num_cores_channels == 1, "Non aligned copy is only supported for Height Sharded outputs.");
     }
 
     tt::tt_metal::create_cb(
@@ -739,6 +761,7 @@ static operation::ProgramWithCallbacks padded_slice_tile_multi_core(
         "num_tiles_height_per_core: {}, num_tiles_per_channel: {}",
         num_tiles_height_per_core,
         num_tiles_per_channel);
+
     std::vector<uint32_t> compute_args = {
         cb_input_index,         // src0_cb_index
         cb_untilized_index,     // untilized_cb_index
@@ -756,8 +779,10 @@ static operation::ProgramWithCallbacks padded_slice_tile_multi_core(
         cb_untilized_index,
         cb_output_index,
         cb_padding_index,
+        (std::uint32_t)is_non_aligned,
         input_padded_shape.rank() /* == 4*/,
-        output.element_size()};
+        output.element_size(),
+        output_row_size_bytes};
 
     std::vector<uint32_t> reader_compile_time_args_vec = {};
     tt::tt_metal::TensorAccessorArgs(src0_buffer).append_to(reader_compile_time_args_vec);
