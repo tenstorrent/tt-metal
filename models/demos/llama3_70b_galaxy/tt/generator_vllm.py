@@ -10,6 +10,8 @@ from models.demos.llama3_70b_galaxy.tt.llama_model import TtTransformer
 from models.demos.llama3_70b_galaxy.tt.model_config import LlamaOptimizations, TtModelArgs
 from models.tt_transformers.tt.generator import create_submeshes
 
+import vllm.envs as envs
+
 
 def allocate_vllm_kv_cache(kv_cache_shape, dtype, num_layers, model: TtTransformer, tt_cache_path):
     submesh_devices = [model.mesh_device]
@@ -49,7 +51,22 @@ def initialize_vllm_text_transformer(
     dtype=ttnn.bfloat8_b,
     optimizations=LlamaOptimizations.performance,
 ):
-    submesh_devices = create_submeshes(mesh_device, tt_data_parallel)
+    if envs.VLLM_USE_V1:
+        dp_attention_factor = mesh_device.shape[1]
+        num_submeshes = tt_data_parallel // dp_attention_factor
+        max_batch_size_full = max_batch_size * dp_attention_factor
+    else:
+        num_submeshes = tt_data_parallel
+        max_batch_size_full = max_batch_size
+    from loguru import logger
+
+    logger.info(f"num_submeshes: {num_submeshes}")
+    # logger.info(f"dp_attention_factor: {dp_attention_factor}")
+    logger.info(f"tt_data_parallel: {tt_data_parallel}")
+    # logger.info(f"mesh_device.shape: {mesh_device.shape}")
+    logger.info(f"max_batch_size: {max_batch_size}")
+    logger.info(f"max_batch_size * dp_attention_factor: {max_batch_size_full}")
+    submesh_devices = create_submeshes(mesh_device, num_submeshes)
     # Load model args, weights
     model_args = []
     for submesh in submesh_devices:
@@ -58,7 +75,7 @@ def initialize_vllm_text_transformer(
             instruct=(
                 "Instruct" in hf_config._name_or_path or "DeepSeek-R1-Distill-Llama-70B" in hf_config._name_or_path
             ),
-            max_batch_size=max_batch_size // tt_data_parallel,
+            max_batch_size=max_batch_size_full,
             optimizations=optimizations,
             max_seq_len=max_seq_len,
         )
