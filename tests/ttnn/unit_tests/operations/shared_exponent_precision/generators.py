@@ -8,7 +8,25 @@ import torch
 
 # helper functions
 def fa_rand(shape) -> torch.Tensor:
-    """Original fa_rand function"""
+    """
+    Generate tensor with mixed Gaussian distribution for testing numerical precision.
+
+    Creates a tensor that combines a standard normal distribution with sparse high-variance
+    outliers. This pattern is useful for testing how operations handle data with both
+    typical values and occasional extreme outliers.
+
+    Args:
+        shape: Tuple specifying the desired tensor dimensions
+
+    Returns:
+        torch.Tensor: Tensor with shape `shape` containing:
+                     - Base values from N(0,1) normal distribution
+                     - Sparse outliers (0.1% probability) from N(0,10) distribution
+
+    Note:
+        This is the original fa_rand implementation with fixed parameters.
+        For configurable parameters, use fa_rand_custom instead.
+    """
     normal_1 = torch.randn(shape)
     normal_2 = torch.randn(shape) * 10
     bernoulli = torch.bernoulli(torch.full(shape, 0.001))
@@ -16,7 +34,28 @@ def fa_rand(shape) -> torch.Tensor:
 
 
 def fa_rand_custom(shape, base_std=1.0, outlier_std=10.0, outlier_prob=0.001) -> torch.Tensor:
-    """Modified fa_rand with controllable parameters"""
+    """
+    Generate tensor with customizable mixed Gaussian distribution for precision testing.
+
+    Creates a tensor combining a base normal distribution with configurable sparse outliers.
+    This allows fine-tuning the distribution characteristics to test specific precision
+    scenarios and shared exponent behavior.
+
+    Args:
+        shape: Tuple specifying the desired tensor dimensions
+        base_std: Standard deviation for the base normal distribution (default: 1.0)
+        outlier_std: Standard deviation for the outlier normal distribution (default: 10.0)
+        outlier_prob: Probability of each element being an outlier (default: 0.001, i.e., 0.1%)
+
+    Returns:
+        torch.Tensor: Tensor with mixed distribution where:
+                     - Most values come from N(0, base_std²)
+                     - Sparse outliers come from N(0, outlier_std²) with probability outlier_prob
+
+    Example:
+        # Create aggressive outlier pattern for testing
+        tensor = fa_rand_custom((32, 32), base_std=1.0, outlier_std=100.0, outlier_prob=0.01)
+    """
     normal_base = torch.randn(shape) * base_std
     normal_outlier = torch.randn(shape) * outlier_std
     bernoulli = torch.bernoulli(torch.full(shape, outlier_prob))
@@ -24,7 +63,27 @@ def fa_rand_custom(shape, base_std=1.0, outlier_std=10.0, outlier_prob=0.001) ->
 
 
 def add_outliers(tensor: torch.Tensor, outlier_prob=0.001, outlier_scale=100) -> torch.Tensor:
-    """Add outliers to existing tensor"""
+    """
+    Add random outliers to an existing tensor for precision testing.
+
+    Modifies an input tensor by adding sparse random outliers with specified probability
+    and magnitude. This is useful for testing how operations handle mixed-magnitude data
+    and shared exponent precision behavior.
+
+    Args:
+        tensor: Input tensor to which outliers will be added
+        outlier_prob: Probability of each element becoming an outlier (default: 0.001)
+        outlier_scale: Scale factor for the outlier values (default: 100)
+
+    Returns:
+        torch.Tensor: Modified tensor with added outliers in bfloat16 format.
+                     Original values are preserved where no outliers are added.
+
+    Note:
+        - Outliers are additive (original_value + outlier)
+        - Uses bfloat16 precision to match typical TT-Metal operation requirements
+        - Random outlier positions are determined by Bernoulli sampling
+    """
     mask = torch.bernoulli(torch.full(tensor.shape, outlier_prob)).bfloat16()
     outliers = torch.randn(tensor.shape) * outlier_scale
     return tensor + mask * outliers.bfloat16()
@@ -32,7 +91,46 @@ def add_outliers(tensor: torch.Tensor, outlier_prob=0.001, outlier_scale=100) ->
 
 # Main module functions
 def generate_distributions(shape) -> dict:
-    """Generate different distribution types"""
+    """
+    Generate comprehensive set of tensor distributions for precision testing.
+
+    Creates various statistical distributions designed to test different aspects
+    of numerical precision, shared exponent behavior, and operation robustness.
+    Each distribution targets specific precision characteristics.
+
+    Args:
+        shape: Tuple specifying tensor dimensions (height, width)
+
+    Returns:
+        dict: Dictionary mapping distribution names to torch.Tensor objects.
+              Includes the following distribution categories:
+
+              Basic Normal Distributions:
+              - 'normal_0_1': Standard normal N(0,1)
+              - 'normal_skewed_mean': Normal with shifted mean N(5,1)
+
+              High Variance Distributions:
+              - 'normal_high_var_10': High variance N(0,10²)
+              - 'normal_high_var_100': Very high variance N(0,100²)
+
+              Outlier Distributions:
+              - 'normal_with_outliers': N(0,1) with sparse large outliers
+
+              Combined Distributions:
+              - 'skewed_high_var_10': N(10,10²) - shifted mean + high variance
+              - 'skewed_high_var_100': N(10,100²) - shifted mean + very high variance
+
+              Negative Versions:
+              - '*_negative': Negated versions of all above distributions
+
+              Mixed Gaussian (fa_rand variations):
+              - 'fa_rand_default': Standard mixed Gaussian with 0.1% outliers
+              - 'fa_rand_aggressive': Aggressive mixed Gaussian with 1% large outliers
+
+    Note:
+        All distributions are designed to stress-test shared exponent precision
+        and identify potential accuracy issues in TT-Metal operations.
+    """
     distributions = {}
 
     # Normal 0-1

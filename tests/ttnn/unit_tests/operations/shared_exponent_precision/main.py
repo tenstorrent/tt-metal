@@ -10,7 +10,6 @@ from postprocessing import (
     generate_results_doc,
     worst_cases_analysis,
     pattern_impact_analysis,
-    plot_charts,
 )
 
 
@@ -36,10 +35,6 @@ def main():
     # Analyze pattern impact
     logger.info("=== Analyze pattern impact ===")
     pattern_impact_analysis(all_results)
-
-    # Add visualization
-    logger.info("=== Plotting charts ===")
-    plot_charts(all_results)
 
 
 if __name__ == "__main__":
