@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-def _preload_if_editable():
+def _preload_from_tt_metal_home_if_editable():
     def is_editable_install(package_name):
         import importlib.metadata
         import json
@@ -29,20 +29,24 @@ def _preload_if_editable():
             pass
         return False
 
-    if is_editable_install(__name__):
+    def preload_dev_tt_metal_libraries():
         import os
 
-        tt_metal_home = os.getenv("TT_METAL_HOME") or f'{os.getenv("HOME")/tt-metal}'
+        tt_metal_home = os.getenv("TT_METAL_HOME") or os.path.join(
+            os.getenv("HOME"), "tt-metal"
+        )
 
         import ctypes
 
         for filename in ["libtt_metal.so", "_ttnncpp.so", "_ttnn.so"]:
-            file = f"{tt_metal_home}/build/lib/{filename}"
-            try:
-                ctypes.cdll.LoadLibrary(file)
-            except:
-                pass
+            file = os.path.join(tt_metal_home, "build", "lib", filename)
+            ctypes.cdll.LoadLibrary(file)
+
+    """Check if this module is editable, which indicates a dev environment"""
+    if is_editable_install(__name__):
+        """Expect a dev build dir, load libraries from there to avoid mixing dev and installed environments"""
+        preload_dev_tt_metal_libraries()
 
 
-_preload_if_editable()
+_preload_from_tt_metal_home_if_editable()
 from ._ttml import *
