@@ -649,7 +649,7 @@ def save_results_to_json(all_results: dict, output_directory: str = Filepaths.RE
     logger.info(f"Raw results saved to {file_path}")
 
 
-def _create_matmul_table(results: dict, headers: list) -> str:
+def _create_matmul_table(results: dict) -> str:
     """
     Create a markdown table for matmul operation results.
 
@@ -659,12 +659,22 @@ def _create_matmul_table(results: dict, headers: list) -> str:
     Args:
         results: List of (operation_name, result_dict) tuples where result_dict
                 contains precision metrics like PCC, absolute errors, ULP values, etc.
-        headers: List of column headers for the markdown table
 
     Returns:
         str: Formatted markdown table with operation results
     """
-
+    headers = [
+        "Operation",
+        "PCC",
+        "Max Abs Error",
+        "Mean Abs Error",
+        "Max Rel Error",
+        "Mean Rel Error",
+        "ULP Mean",
+        "ULP Max",
+        "Allclose 1e-2",
+        "Allclose 1e-3",
+    ]
     table_lines = ["| " + " | ".join(headers) + " |", "|" + "|".join(["---"] * len(headers)) + "|"]
 
     for operation, result in results:
@@ -685,7 +695,7 @@ def _create_matmul_table(results: dict, headers: list) -> str:
     return "\n".join(table_lines)
 
 
-def _create_matmul_tt_table(results: dict, headers: list) -> str:
+def _create_matmul_tt_table(results: dict) -> str:
     """
     Create a markdown table for matmul_tt operation results.
 
@@ -695,13 +705,24 @@ def _create_matmul_tt_table(results: dict, headers: list) -> str:
     Args:
         results: List of (operation_name, tile_w, transpose, result_dict) tuples
                 where result_dict contains precision metrics
-        headers: List of column headers for the markdown table including operation,
-                tile_w, transpose columns plus precision metrics
 
     Returns:
         str: Formatted markdown table with matmul_tt operation results and parameters
     """
-
+    headers = [
+        "Operation",
+        "Tile W",
+        "Transpose",
+        "PCC",
+        "Max Abs Error",
+        "Mean Abs Error",
+        "Max Rel Error",
+        "Mean Rel Error",
+        "ULP Mean",
+        "ULP Max",
+        "Allclose 1e-2",
+        "Allclose 1e-3",
+    ]
     table_lines = ["| " + " | ".join(headers) + " |", "|" + "|".join(["---"] * len(headers)) + "|"]
 
     for operation, tile_w, transpose, result in results:
@@ -724,7 +745,7 @@ def _create_matmul_tt_table(results: dict, headers: list) -> str:
     return "\n".join(table_lines)
 
 
-def _create_other_ops_table(results: dict, headers: list) -> str:
+def _create_other_ops_table(results: dict) -> str:
     """
     Create a markdown table for other operations (non-matmul operations with axis parameter).
 
@@ -740,6 +761,19 @@ def _create_other_ops_table(results: dict, headers: list) -> str:
     Returns:
         str: Formatted markdown table with operation results and axis parameters
     """
+    headers = [
+        "Operation",
+        "Axis",
+        "PCC",
+        "Max Abs Error",
+        "Mean Abs Error",
+        "Max Rel Error",
+        "Mean Rel Error",
+        "ULP Mean",
+        "ULP Max",
+        "Allclose 1e-2",
+        "Allclose 1e-3",
+    ]
 
     table_lines = ["| " + " | ".join(headers) + " |", "|" + "|".join(["---"] * len(headers)) + "|"]
 
@@ -781,20 +815,6 @@ def _dict_to_markdown(results_dict):
              - Separate tables for matmul, matmul_tt, and other operations
              - Formatted precision metrics (PCC, errors, ULP values, allclose results)
     """
-    headers = [
-        "Operation",
-        "Axis",
-        "PCC",
-        "Max Abs Error",
-        "Mean Abs Error",
-        "Max Rel Error",
-        "Mean Rel Error",
-        "ULP Mean",
-        "ULP Max",
-        "Allclose 1e-2",
-        "Allclose 1e-3",
-    ]
-
     markdown_lines = ["# Operation Results Report\n"]
 
     # Iterate through shape types (main sections)
@@ -830,15 +850,15 @@ def _dict_to_markdown(results_dict):
                 # Generate tables for each operation type
                 if matmul_results:
                     markdown_lines.append("\n##### MatMul Operations\n")
-                    markdown_lines.append(_create_matmul_table(matmul_results, headers))
+                    markdown_lines.append(_create_matmul_table(matmul_results))
 
                 if matmul_tt_results:
                     markdown_lines.append("\n##### MatMul TT Operations\n")
-                    markdown_lines.append(_create_matmul_tt_table(matmul_tt_results, headers))
+                    markdown_lines.append(_create_matmul_tt_table(matmul_tt_results))
 
                 if other_results:
                     markdown_lines.append("\n##### Other Operations\n")
-                    markdown_lines.append(_create_other_ops_table(other_results, headers))
+                    markdown_lines.append(_create_other_ops_table(other_results))
 
     return "\n".join(markdown_lines)
 

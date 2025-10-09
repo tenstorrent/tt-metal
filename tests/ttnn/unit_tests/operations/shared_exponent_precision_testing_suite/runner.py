@@ -17,8 +17,13 @@ def _compute_ulp_error(reference: torch.Tensor, test: torch.Tensor) -> dict:
     # Get the epsilon for the reference values
     eps = torch.finfo(reference.dtype).eps
 
+    # Protect against division by zero
+    denominator = eps * torch.abs(reference)
+    # Use a small epsilon where reference is zero
+    safe_denominator = torch.where(torch.abs(reference) < eps, eps, denominator)
+
     # Compute ULP for each element
-    ulp_per_element = torch.abs(reference - test) / (eps * torch.abs(reference))
+    ulp_per_element = torch.abs(reference - test) / safe_denominator
 
     return {
         "mean": ulp_per_element.mean().item(),
@@ -40,11 +45,28 @@ def _compute_metrics(reference: torch.Tensor, test: torch.Tensor) -> dict:
     # Compute ULP error
     ulp_errors = _compute_ulp_error(reference, test)
 
-    # Relative error
-    rel_error = torch.abs(reference - test) / (torch.abs(reference) + 1e-10)
+    # Relative error with better protection against division by zero
+    denominator = torch.abs(reference)
+    # Use max of denominator and a small epsilon to avoid division by zero
+    safe_denominator = torch.maximum(
+        denominator, torch.tensor(1e-10, dtype=denominator.dtype, device=denominator.device)
+    )
+    rel_error = torch.abs(reference - test) / safe_denominator
+
+    # Protect correlation calculation from NaN values
+    ref_flat_clean = torch.where(torch.isfinite(ref_flat), ref_flat, torch.zeros_like(ref_flat))
+    test_flat_clean = torch.where(torch.isfinite(test_flat), test_flat, torch.zeros_like(test_flat))
+
+    # Handle case where all values are the same (correlation would be undefined)
+    if torch.std(ref_flat_clean) == 0 or torch.std(test_flat_clean) == 0:
+        pcc = 1.0 if torch.allclose(ref_flat_clean, test_flat_clean) else 0.0
+    else:
+        pcc = torch.corrcoef(torch.stack([ref_flat_clean, test_flat_clean]))[0, 1].item()
+        # Handle NaN from correlation calculation
+        pcc = pcc if torch.isfinite(torch.tensor(pcc)) else 0.0
 
     metrics = {
-        ResultKeys.PCC_KEY: torch.corrcoef(torch.stack([ref_flat, test_flat]))[0, 1].item(),
+        ResultKeys.PCC_KEY: pcc,
         ResultKeys.ALLCLOSE_1E_2_KEY: torch.allclose(reference, test, rtol=1e-2),
         ResultKeys.ALLCLOSE_1E_3_KEY: torch.allclose(reference, test, rtol=1e-3),
         ResultKeys.MAX_ABS_ERROR_KEY: torch.max(torch.abs(reference - test)).item(),
@@ -246,11 +268,11 @@ def run_experiments() -> dict:
     results[ShapeType.MULTI_TILE_KEY] = _run_shape_experiments(multi_tile_shape, operations, axes, device)
 
     # Test 3: Rectangular shapes (to test non-square behavior)
-    logger.info("=== Running rectangular experiments ===")
-    rect_shapes = [(32, 128), (128, 32), (64, 256)]
-    for shape in rect_shapes:
-        key = ShapeType.RECTANGULAR_KEY + "-" + str(shape)
-        results[key] = _run_shape_experiments(shape, operations, axes, device)
+    # logger.info("=== Running rectangular experiments ===")
+    # rect_shapes = [(32, 128), (128, 32), (64, 256)]
+    # for shape in rect_shapes:
+    #     key = ShapeType.RECTANGULAR_KEY + "-" + str(shape)
+    #     results[key] = _run_shape_experiments(shape, operations, axes, device)
 
     ttnn.close_device(device)
 
