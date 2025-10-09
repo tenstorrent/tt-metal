@@ -87,8 +87,7 @@ jobs:
     steps:
       - name: Mark repository as safe directory # not sure why this is needed
         run: |
-          git config --global --add safe.directory /__w/tt-metal/tt-metal
-          git config --global --add safe.directory /__w/tt-metal/tt-metal/models/demos/t3000/llama2_70b/reference/llama
+          git config --global --add safe.directory *
       - name: Checkout the repository
         uses: actions/checkout@v4
         with:
