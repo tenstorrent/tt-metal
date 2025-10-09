@@ -696,6 +696,7 @@ jobs:
               fi
 
               echo "Processing group: $pattern"
+              echo "Group data: $group_data"
 
               # Parse TEAMS= and INDIVIDUALS= sections
               teams_section=""
@@ -703,10 +704,12 @@ jobs:
 
               if echo "$group_data" | grep -q "TEAMS="; then
                 teams_section=$(echo "$group_data" | grep -oE 'TEAMS=[^|]*' | cut -d'=' -f2)
+                echo "Teams section: $teams_section"
               fi
 
               if echo "$group_data" | grep -q "INDIVIDUALS="; then
-                individuals_section=$(echo "$group_data" | grep -oE 'INDIVIDUALS=.*' | cut -d'=' -f2 | cut -d'|' -f1)
+                individuals_section=$(echo "$group_data" | sed 's/.*INDIVIDUALS=//' | sed 's/|TEAMS=.*//')
+                echo "Individuals section: $individuals_section"
               fi
 
               # Collect all members (teams + individuals) for this group
@@ -1347,7 +1350,7 @@ jobs:
               fi
 
               if echo "$group_data" | grep -q "INDIVIDUALS="; then
-                individuals_section=$(echo "$group_data" | grep -oE 'INDIVIDUALS=.*' | cut -d'=' -f2 | cut -d'|' -f1)
+                individuals_section=$(echo "$group_data" | sed 's/.*INDIVIDUALS=//' | sed 's/|TEAMS=.*//')
               fi
 
               # Check if this combined group has any approval
