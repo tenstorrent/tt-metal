@@ -83,7 +83,7 @@ def run_unet_model(
         "stabilityai/stable-diffusion-xl-refiner-1.0" if not is_ci_v2_env else model_location,
         torch_dtype=torch.float32,
         use_safetensors=True,
-        local_files_only=False,  # was: is_ci_env or is_ci_v2_env
+        local_files_only=is_ci_env or is_ci_v2_env,
         subfolder="unet" if not is_ci_v2_env else None,
     )
     unet.eval()
