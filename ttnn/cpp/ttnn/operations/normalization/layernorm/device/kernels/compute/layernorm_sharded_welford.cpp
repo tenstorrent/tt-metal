@@ -13,6 +13,7 @@
 #include "compute_kernel_api/layernorm.h"
 #include "compute_kernel_api/transpose_wh.h"
 #include "compute_kernel_api/welford.h"
+#include "compute_kernel_api/eltwise_binary.h"
 #include "ttnn/operations/normalization/kernel_util/compute/combine_welford.h"
 
 /**
