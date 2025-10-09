@@ -341,4 +341,9 @@ void kernel_main() {
         }
     }
     noc_async_write_barrier();
+    if constexpr (batchB > 0) {
+        cb_push_back(cb_id_sparsity, 1);
+        cb_wait_front(cb_id_sparsity, 1);
+        cb_pop_front(cb_id_sparsity, 1);
+    }
 }
