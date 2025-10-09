@@ -2507,6 +2507,7 @@ class ModelArgs:
                 if self.cache_hf_flag and self.cached_hf_model is None:
                     model = model_cls.from_pretrained(
                         self.CKPT_DIR,
+                        torch_dtype="auto",
                         local_files_only=os.getenv("CI") == "true",
                         trust_remote_code=self.trust_remote_code_hf,
                     )
@@ -2517,6 +2518,7 @@ class ModelArgs:
                     # No caching - load fresh each time
                     model = model_cls.from_pretrained(
                         self.CKPT_DIR,
+                        torch_dtype="auto",
                         trust_remote_code=self.trust_remote_code_hf,
                         local_files_only=os.getenv("CI") == "true",
                     )
