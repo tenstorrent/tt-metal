@@ -14,6 +14,15 @@
 
 namespace tt::tt_fabric {
 
+/**
+ * Static-sized channels allocator implementation.
+ * The `FabricStaticSizedChannelsAllocator` allocates memory for statically sized sender(outbound)
+ * and receiver (inbound) fabric router channels. The entire set of channels do not need to be 
+ * contiguous in memory with each other. However, each individual channel must be contiguous in
+ * memory.
+ *
+ * Each channel is a sequence of 1 or more buffer slots (i.e. packet slots)
+ */
 class FabricStaticSizedChannelsAllocator : public FabricChannelAllocator {
 public:
     FabricStaticSizedChannelsAllocator(
@@ -56,6 +65,9 @@ public:
     size_t get_receiver_channel_base_address(size_t channel_id) const;
 
 private:
+    /*
+     * Helper function that decides the number of buffer slots for each channel.
+    */
     void configure_buffer_slots_helper(
         tt::tt_fabric::Topology topology,
         const tt::tt_fabric::FabricEriscDatamoverOptions& options,

@@ -14,12 +14,15 @@ namespace tt::tt_fabric {
 
 /**
  * Base interface class for fabric channel allocators.
- * Responsible for creating L1 memory allocations for fabric routers.
+ * Responsible for creating L1 memory allocations for fabric router sender and receiver channels.
+ * Invoked per router bank so for routers parallelized across multiple cores, multiple of these will be invoked.
  */
 class FabricChannelAllocator {
 public:
     /**
      * Constructor that takes a list of memory regions (start, end address pairs).
+     * @param topology Fabric topology
+     * @param options Fabric erisc datamover options
      * @param memory_regions Vector of memory regions available for allocation
      */
     explicit FabricChannelAllocator(
@@ -66,21 +69,30 @@ protected:
 
 /**
  * Elastic channels allocator implementation.
- * Dynamically allocates channels based on available memory and demand.
+ * The `ElasticChannelsAllocator` allocates chunks of memory in a memory pool for elastic channels.
+ * The memory pool does not need to be contiguous, but each individual chunk within the pool must be
+ * contiguous.
+ * Each chunk is a sequence of 1 or more buffer slots (i.e. packet slots)
  */
 class ElasticChannelsAllocator : public FabricChannelAllocator {
 public:
     /**
      * Constructor for elastic channels allocator.
+     * @param topology Fabric topology
+     * @param options Fabric erisc datamover options
      * @param memory_regions Available memory regions
-     * @param buffer_size_bytes Size of each buffer in bytes
-     * @param min_buffers_per_channel Minimum buffers per channel
-     * @param max_buffers_per_channel Maximum buffers per channel
+     * @param buffer_slot_size_bytes Size of each buffer slot in bytes, including the packet header
+     * @param min_buffers_per_chunk Minimum buffer slots per chunk
+     * @param max_buffers_per_chunk Maximum buffer slots per chunk
      */
     ElasticChannelsAllocator(
         tt::tt_fabric::Topology topology,
         const tt::tt_fabric::FabricEriscDatamoverOptions& options,
-        const std::vector<MemoryRegion>& memory_regions);
+        const std::vector<MemoryRegion>& memory_regions,
+        size_t buffer_slot_size_bytes,
+        size_t min_buffers_per_chunk,
+        size_t max_buffers_per_chunk
+        );
 
     void emit_ct_args(std::vector<uint32_t>& ct_args, size_t num_fwd_paths, size_t num_used_sender_channels, size_t num_used_receiver_channels) const override;
 };

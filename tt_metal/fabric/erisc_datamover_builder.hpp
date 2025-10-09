@@ -311,7 +311,6 @@ struct FabricEriscDatamoverConfig {
 
     // Channel Allocations
     std::size_t max_l1_loading_size = 0;
-    //          start, size_bytes
     std::vector<MemoryRegion> available_buffer_memory_regions = {};
 
     FabricEriscDatamoverConfig(
@@ -416,6 +415,10 @@ void append_worker_to_fabric_edm_sender_rt_args(
     std::vector<uint32_t>& args_out);
 size_t log_worker_to_fabric_edm_sender_rt_args(const std::vector<uint32_t>& args, size_t starting_arg_idx = 0);
 
+/*
+ * The `FabricEriscDatamoverBuilder` is a general class that is used to build fabric router erisc kernels.
+ * It is instantiated per fabric (erisc) router. It works closely with the `FabricEriscDatamoverConfig` class.
+ */
 class FabricEriscDatamoverBuilder {
 public:
     static constexpr size_t default_firmware_context_switch_interval = 10000;
@@ -514,13 +517,8 @@ public:
     size_t handshake_address = 0;
     size_t channel_buffer_size = 0;
 
-    // std::array<
-        std::shared_ptr<tt::tt_fabric::ChannelConnectionWriterAdapter>//,
-        // builder_config::num_downstream_edms>
-        receiver_channel_to_downstream_adapter = {};
+    std::shared_ptr<tt::tt_fabric::ChannelConnectionWriterAdapter> receiver_channel_to_downstream_adapter = {};
     std::array<std::shared_ptr<tt::tt_fabric::FabricChannelAllocator>, FabricEriscDatamoverConfig::max_downstream_edms> downstream_allocators = {};
-    // std::array<std::unique_ptr<tt::tt_fabric::ChannelConnectionWriterAdapter>, builder_config::num_receiver_channels>
-    // to_downstream_adapters = {};
 
     std::array<size_t, builder_config::num_receiver_channels> receiver_channels_num_buffers = {};
     std::array<size_t, builder_config::num_receiver_channels> remote_receiver_channels_num_buffers = {};
@@ -546,15 +544,6 @@ public:
     std::array<size_t, builder_config::num_sender_channels> sender_channels_connection_semaphore_id = {};
     std::array<size_t, builder_config::num_sender_channels> sender_channels_buffer_index_semaphore_id = {};
 
-    // Universal to all types -- moved to ChannelConnectionWriterAdapter
-    // std::array<std::optional<size_t>, FabricEriscDatamoverConfig::max_downstream_edms> downstream_edm_vcs_noc_x = {};
-    // std::array<std::optional<size_t>, FabricEriscDatamoverConfig::max_downstream_edms> downstream_edm_vcs_noc_y = {};
-    // std::array<std::optional<size_t>, FabricEriscDatamoverConfig::max_downstream_edms>
-    //     downstream_edm_vcs_buffer_base_address = {};
-    // std::array<std::optional<size_t>, FabricEriscDatamoverConfig::max_downstream_edms>
-    //     downstream_edm_vcs_worker_registration_address = {};
-    // std::array<std::optional<size_t>, FabricEriscDatamoverConfig::max_downstream_edms>
-    //     downstream_edm_vcs_worker_location_info_address = {};
     std::array<size_t, builder_config::num_sender_channels> downstream_vcs_sender_channel_buffer_index_semaphore_id =
         {};
 
