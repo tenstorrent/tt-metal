@@ -1,0 +1,52 @@
+{
+    "configurations": [
+        {
+            "name": "Linux",
+            "includePath": [
+                "${workspaceFolder}/**",
+                "${workspaceFolder}/tt_metal/api",
+                "${workspaceFolder}/tt_metal/api/tt-metalium",
+                "${workspaceFolder}/build/api",
+                "${workspaceFolder}/build/tt_metal/api",
+                "${workspaceFolder}/build/tt_metal/api/tt-metalium",
+                "${workspaceFolder}/tt_metal/third_party/umd/include",
+                "${workspaceFolder}/tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/include",
+                "${workspaceFolder}/tt_metal/third_party/tt_llk/tt_llk_blackhole/include",
+                "${workspaceFolder}/tt_metal/fabric/hw/inc",
+                "${workspaceFolder}/tt_metal/lite_fabric/hw/inc",
+                "${workspaceFolder}/tt_metal/include",
+                "${workspaceFolder}/tt_metal/impl/dispatch/kernels",
+                "${workspaceFolder}/tt_stl/tt_stl",
+                "${workspaceFolder}/third_party/**",
+                "${workspaceFolder}/.cpmcache/**/include",
+                "/usr/include",
+                "/usr/local/include",
+                "/usr/include/c++/12",
+                "/usr/include/x86_64-linux-gnu/c++/12"
+            ],
+            "defines": [
+                "TT_ENABLE_LIGHT_METAL_TRACE=0",
+                "SPDLOG_ACTIVE_LEVEL=SPDLOG_LEVEL_TRACE",
+                "TT_METAL_ENABLE_LOGGING=1",
+                "DEBUG",
+                "FLATBUFFERS_LOCALE_INDEPENDENT=1"
+            ],
+            "compilerPath": "/usr/bin/clang++-17",
+            "cStandard": "c17",
+            "cppStandard": "c++20",
+            "intelliSenseMode": "linux-clang-x64",
+            "compileCommands": "${workspaceFolder}/build/compile_commands.json",
+            "configurationProvider": "ms-vscode.cmake-tools",
+            "browse": {
+                "path": [
+                    "${workspaceFolder}",
+                    "${workspaceFolder}/build",
+                    "${workspaceFolder}/.cpmcache"
+                ],
+                "limitSymbolsToIncludedHeaders": true,
+                "databaseFilename": "${workspaceFolder}/.vscode/browse.vc.db"
+            }
+        }
+    ],
+    "version": 4
+}

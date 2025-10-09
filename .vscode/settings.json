@@ -1,0 +1,40 @@
+{
+    "C_Cpp.default.configurationProvider": "ms-vscode.cmake-tools",
+    "C_Cpp.default.compileCommands": "${workspaceFolder}/build/compile_commands.json",
+    "C_Cpp.default.cStandard": "c17",
+    "C_Cpp.default.cppStandard": "c++20",
+    "C_Cpp.default.compilerPath": "/usr/bin/clang++-17",
+    "C_Cpp.default.intelliSenseMode": "linux-clang-x64",
+    "C_Cpp.errorSquiggles": "enabled",
+    "C_Cpp.autocomplete": "default",
+    "C_Cpp.suggestSnippets": true,
+    "C_Cpp.enhancedColorization": "enabled",
+    "C_Cpp.intelliSenseEngine": "default",
+    "C_Cpp.workspaceParsingPriority": "highest",
+    "C_Cpp.files.exclude": {
+        "**/build*/**": true,
+        "**/.cpmcache/**": true,
+        "**/third_party/**": false
+    },
+    "C_Cpp.clang_format_style": "file",
+    "cmake.configureOnOpen": true,
+    "cmake.buildDirectory": "${workspaceFolder}/build",
+    "cmake.generator": "Ninja",
+    "cmake.configureArgs": [
+        "-DCMAKE_BUILD_TYPE=Debug",
+        "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON"
+    ],
+    "files.associations": {
+        "*.hpp": "cpp",
+        "*.h": "cpp",
+        "*.cpp": "cpp",
+        "*.cc": "cpp",
+        "*.cxx": "cpp",
+        "*.c++": "cpp",
+        "*.cu": "cuda",
+        "*.cuh": "cuda",
+        "*.yaml": "yaml",
+        "*.yml": "yaml",
+        "*.fbs": "flatbuffers"
+    }
+}

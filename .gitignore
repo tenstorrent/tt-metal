@@ -1,7 +1,7 @@
 .cache
 .clangd
 .devcontainer/
-.vscode
+.vscode/*.db*
 .idea
 runtime
 *.log
