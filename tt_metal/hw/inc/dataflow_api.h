@@ -26,6 +26,7 @@
 #include "dev_msgs.h"
 #include "accessor/tensor_accessor.h"
 #include "tools/profiler/kernel_profiler.hpp"
+#include "debug/ring_buffer.h"
 
 // clang-format off
 /**
@@ -721,7 +722,8 @@ FORCE_INLINE void noc_async_write_one_packet(
     std::uint64_t dst_noc_addr,
     std::uint32_t size,
     uint8_t noc = noc_index,
-    uint32_t vc = NOC_UNICAST_WRITE_VC) {
+    uint32_t vc = NOC_UNICAST_WRITE_VC,
+    bool posted = false) {
     if constexpr (enable_noc_tracing) {
         RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_, dst_noc_addr, size, vc);
     }
@@ -741,7 +743,8 @@ FORCE_INLINE void noc_async_write_one_packet(
         false /* mcast */,
         false /* linked */,
         1 /* num_dests */,
-        true /* multicast_path_reserve */);
+        true /* multicast_path_reserve */,
+        posted);
 }
 
 // clang-format off
@@ -945,16 +948,43 @@ FORCE_INLINE void noc_async_write_one_packet_set_state(
 // clang-format on
 template <bool posted = false>
 FORCE_INLINE void noc_async_write_one_packet_with_state(
-    uint32_t src_local_l1_addr, uint32_t dst_local_l1_addr, uint8_t noc = noc_index) {
+    uint32_t src_local_l1_addr, uint64_t dst_local_l1_addr, uint8_t noc = noc_index, uint32_t len_bytes_override = 0) {
+    
+    WATCHER_RING_BUFFER_PUSH(997);
+    uint32_t reg1 = NOC_STATUS_READ_REG(noc, NIU_MST_POSTED_WR_REQ_SENT);
+    WATCHER_RING_BUFFER_PUSH(reg1);
     RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_WITH_STATE, 0ull, 0, -1);
+    WATCHER_RING_BUFFER_PUSH(990);
+    uint32_t reg2 = NOC_STATUS_READ_REG(noc, NIU_MST_POSTED_WR_REQ_SENT);
+    WATCHER_RING_BUFFER_PUSH(reg2);
+    //if (reg1 != reg2) {
+    //    WATCHER_RING_BUFFER_PUSH(0);
+    //    WATCHER_RING_BUFFER_PUSH(NOC_CMD_BUF_READ_REG(noc_index, write_cmd_buf, NOC_CTRL));
+    //    WATCHER_RING_BUFFER_PUSH(NOC_CMD_BUF_READ_REG(noc_index, write_cmd_buf, NOC_RET_ADDR_LO));
+    //    WATCHER_RING_BUFFER_PUSH(NOC_CMD_BUF_READ_REG(noc_index, write_cmd_buf, NOC_RET_ADDR_COORDINATE));
+    //    WATCHER_RING_BUFFER_PUSH(NOC_CMD_BUF_READ_REG(noc_index, write_cmd_buf, NOC_AT_LEN_BE));
+    //
+    //}
 
     // In order to sanitize, need to grab full noc addr + xfer size from state.
     DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_WITH_ADDR_AND_SIZE_STATE(noc, dst_local_l1_addr, src_local_l1_addr);
 
     WAYPOINT("NWPW");
     ncrisc_noc_write_with_state<noc_mode, posted, true /* update_counter */, true /* one_packet */>(
-        noc, write_cmd_buf, src_local_l1_addr, dst_local_l1_addr);
+        noc, write_cmd_buf, src_local_l1_addr, dst_local_l1_addr, len_bytes_override);
     WAYPOINT("NWPD");
+
+   #pragma GCC unroll 200
+    for (int i = 0; i < 200; i++) {
+        asm("nop");
+    }
+
+
+    uint32_t reg3 = NOC_STATUS_READ_REG(noc, NIU_MST_POSTED_WR_REQ_SENT);
+    if (reg3 != reg2) {
+        WATCHER_RING_BUFFER_PUSH(991);
+        WATCHER_RING_BUFFER_PUSH(reg3);
+    }
 }
 
 // clang-format off
@@ -1633,7 +1663,11 @@ void noc_async_posted_writes_flushed(uint8_t noc = noc_index) {
             invalidate_l1_cache();
         } while (!ncrisc_dynamic_noc_posted_writes_sent(noc));
     } else {
-        while (!ncrisc_noc_posted_writes_sent(noc));
+        //WATCHER_RING_BUFFER_PUSH(999);
+        //WATCHER_RING_BUFFER_PUSH(NOC_STATUS_READ_REG(noc, NIU_MST_POSTED_WR_REQ_SENT));
+        while (!ncrisc_noc_posted_writes_sent(noc)) {
+            // push to watcher ring buffer here
+        }
     }
     invalidate_l1_cache();
     WAYPOINT("NPWD");

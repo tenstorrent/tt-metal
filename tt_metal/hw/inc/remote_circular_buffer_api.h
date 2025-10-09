@@ -226,7 +226,7 @@ FORCE_INLINE void remote_cb_wait_front(uint32_t cb_id, uint32_t num_pages) {
         pages_acked = *pages_acked_ptr;
         pages_sent = *pages_sent_ptr;
         num_pages_recv = pages_sent - pages_acked;
-    } while (num_pages_recv < num_pages_wait);
+    } while (false);
     WAYPOINT("RCWD");
 }
 
@@ -338,6 +338,7 @@ FORCE_INLINE void remote_cb_push_back_and_write_pages(
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(remote_cb.aligned_pages_sent_ptr);
     volatile tt_l1_ptr uint32_t* remote_noc_xy_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(remote_cb.receiver_noc_xy_ptr);
+    DPRINT << coalesced_num_pages_per_row << ", " << num_rows << ", " << num_receivers << ENDL();
     for (uint32_t i = 0; i < num_receivers; ++i) {
         uint32_t src_addr = local_cb_addr + next_receiver_start_addr_offset;
         dest_addr = fifo_wr_ptr;
@@ -348,12 +349,15 @@ FORCE_INLINE void remote_cb_push_back_and_write_pages(
 
         noc_async_write_one_packet_set_state<posted>(dest_noc_addr, coalesced_page_size, noc);
 
+        DPRINT << coalesced_page_size << "--------------" << ENDL();
+
         for (uint32_t h = 0; h < num_rows; ++h) {
             uint32_t prev_src_addr = src_addr;
             for (uint32_t w = 0; w < coalesced_num_pages_per_row; ++w) {
                 dest_noc_addr = get_noc_addr_helper(remote_noc_xy, dest_addr);
 
-                noc_async_write_one_packet_with_state<posted>(src_addr, dest_noc_addr, noc);
+                noc_async_write_one_packet_with_state<posted>(src_addr, dest_noc_addr, noc, coalesced_page_size);
+                //noc_async_write_one_packet(src_addr, dest_noc_addr, coalesced_page_size, noc, NOC_UNICAST_WRITE_VC, true);
 
                 src_addr += coalesced_page_size;
                 dest_addr += coalesced_page_size;

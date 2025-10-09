@@ -9,6 +9,7 @@
 #include "remote_circular_buffer_api.h"
 #include "debug/dprint.h"
 #include "debug/dprint_tile.h"
+#include "debug/dprint.h"
 
 enum class CORE_TYPE : uint8_t { IDLE_CORE = 0, WORKER_CORE = 1, HOP_CORE = 2 };
 
@@ -124,73 +125,25 @@ void kernel_main() {
     }
 
     for (uint32_t b = 0; b < batch; ++b) {
-        cb_reserve_back(sync_cb2, 1);
 #ifdef ENABLE_GLOBAL_CB
-        experimental::remote_cb_wait_front(remote_cb_id, num_blocks);
+        experimental::remote_cb_wait_front(remote_cb_id, num_blocks); // cb for in1
 #endif
 
-        cb_push_back(sync_cb2, 1);
 
-        if constexpr (in1_is_dram_interleaved) {
-            for (uint32_t block = 0; block < num_blocks; ++block) {
-                uint32_t block_idx = (ring_idx + block) % num_blocks;
 
-                cb_reserve_back(cb_id_in1, in1_block_num_tiles);
-                read_block_from_dram(
-                    cb_id_in1,
-                    s1,
-                    in1_tensor_width_in_tiles,
-                    ring_idx,
-                    block_idx,
-                    in1_block_width_in_tiles,
-                    in1_block_height_in_tiles,
-                    in1_single_tile_size_bytes);
-                cb_push_back(cb_id_in1, in1_block_num_tiles);
-            }
-        } else if constexpr (in1_is_dram_sharded) {  // when in1 is sharded in DRAM, each core reads from its own bank,
-                                                     // two cores on the same row share one bank.
-            for (uint32_t block = 0; block < num_blocks; ++block) {
-                uint32_t block_idx = (ring_idx + block) % num_blocks;
-                l1_read_addr_in1 = block_idx * in1_dram_shard_block_size_bytes + dram_read_offset_bytes;
-                // Operand 1
-                cb_reserve_back(cb_id_in1, in1_block_num_tiles);
-                l1_write_addr_in1 = get_write_ptr(cb_id_in1);
-
-                for (uint32_t h = 0; h < in1_block_height_in_tiles; ++h) {
-                    uint32_t curr_l1_read_addr_in1 = l1_read_addr_in1;
-                    for (uint32_t w = 0; w < in1_block_width_num_pages; ++w) {
-                        uint32_t curr_page_size =
-                            w == in1_block_width_num_pages - 1 ? in1_block_page_size_last : in1_block_page_size;
-                        in1_base_addr = noc_async_read_tile_dram_sharded_set_state<true>(
-                            in1_tensor_addr, curr_page_size, dram_bank_id, vc);
-                        noc_async_read_tile_dram_sharded_with_state(
-                            in1_base_addr, curr_l1_read_addr_in1, l1_write_addr_in1);
-                        curr_l1_read_addr_in1 += curr_page_size;
-                        l1_write_addr_in1 += curr_page_size;
-                    }
-                    l1_read_addr_in1 += in1_shard_width_offset_bytes;
-                }
-
-                noc_async_read_barrier();
-                cb_push_back(cb_id_in1, in1_block_num_tiles);
-            }
-        }
+        DPRINT << "there" << ENDL();
 
 #ifdef ENABLE_GLOBAL_CB
-        cb_wait_front(sync_cb, 1);
         experimental::remote_cb_pop_front(remote_cb_id, num_blocks);
-        cb_pop_front(sync_cb, 1);
 #endif
-        // Signal Here
-        if constexpr (needs_signaler) {
-            if (b == 0) {
-                do_signaling(rt_args_idx);
-            }
-        }
     }
+
+    
 
 #ifdef ENABLE_GLOBAL_CB
     experimental::update_remote_cb_config_in_l1(remote_cb_id);
     noc_async_atomic_barrier();
 #endif
+
+    WATCHER_RING_BUFFER_PUSH(1);
 }

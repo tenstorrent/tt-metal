@@ -7,6 +7,7 @@
 #include "dataflow_api.h"
 #include "remote_circular_buffer_api.h"
 #include "debug/dprint.h"
+#include "debug/ring_buffer.h"
 
 uint32_t increment_arg_idx(uint32_t& arg_idx, uint32_t num_args = 1) {
     uint32_t old_arg_idx = arg_idx;
@@ -37,6 +38,7 @@ void kernel_main() {
         (uint32_t*)(get_arg_addr(increment_arg_idx(rt_args_idx, num_tensors)));  // Kt / num_blocks = in_block_h;
 
     uint32_t noc = noc_index;
+    int count = 0;
     for (uint32_t layer = 0; layer < num_layers; layer++) {
         for (uint32_t t = 0; t < num_tensors; t++) {
             uint32_t curr_coalesced_page_size = coalesced_page_sizes[t];
@@ -55,6 +57,11 @@ void kernel_main() {
                     experimental::remote_cb_reserve_back(remote_cb_id, 1);
 
                     uint32_t local_cb_addr = get_read_ptr(local_cb_id);
+
+                    //WATCHER_RING_BUFFER_PUSH(995);
+                    //WATCHER_RING_BUFFER_PUSH(noc_posted_writes_num_issued[noc]);
+                    //WATCHER_RING_BUFFER_PUSH(count);
+                    count++;
                     experimental::remote_cb_push_back_and_write_pages<skip_ptr_update>(
                         remote_cb_id,
                         local_cb_addr,
