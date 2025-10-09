@@ -1165,7 +1165,7 @@ inline MatmulProgramConfig get_program_config(
         matmul->user_fused_activation,
         matmul->user_run_batched,
         matmul->output_dtype.value_or(input_tensor_a.dtype()));
-    log_warning(tt::LogOp, "Auto generated program config: {}", config);
+    log_debug(tt::LogOp, "Auto generated program config: {}", config);
 
     // Sanity checks for matmul program configs
     std::visit(
