@@ -17,7 +17,7 @@ namespace tt::tt_fabric {
 /**
  * Static-sized channels allocator implementation.
  * The `FabricStaticSizedChannelsAllocator` allocates memory for statically sized sender(outbound)
- * and receiver (inbound) fabric router channels. The entire set of channels do not need to be 
+ * and receiver (inbound) fabric router channels. The entire set of channels do not need to be
  * contiguous in memory with each other. However, each individual channel must be contiguous in
  * memory.
  *

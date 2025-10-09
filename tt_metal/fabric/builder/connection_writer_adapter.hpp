@@ -29,9 +29,9 @@ struct SenderWorkerAdapterSpec {
 /*
  * Base class for channel connection writer adapters.
  * These adapters are used during the fabric build phase and hold information about the connection between
- * a producer (i.e. receiver/inbound channel) and its consumer. The adapter is from the producer's 
+ * a producer (i.e. receiver/inbound channel) and its consumer. The adapter is from the producer's
  * perspective; the adapter itself does not perform and write functions.
- * 
+ *
  * General metadata about the connection is held in the adapter:
  *  - how many downstream routers there are and what their Noc coordinates are
  *  - connection address information
@@ -39,8 +39,8 @@ struct SenderWorkerAdapterSpec {
  *    - where to signal the consumer core to establish a connection
  *    - etc
  *
- * There is an abstract base class because depending on how the channels are instantiated 
- * (static-sized vs elastic), the adapter will have different implementations and relevant 
+ * There is an abstract base class because depending on how the channels are instantiated
+ * (static-sized vs elastic), the adapter will have different implementations and relevant
  * information. For example, credit schemes and addresses are different for each type of channel.
  */
 class ChannelConnectionWriterAdapter {
@@ -69,7 +69,7 @@ private:
 
 // TODO: add transient vs persistent variants
 /*
- * Static-sized channel connection writer adapter to represent a connection to a static-sized 
+ * Static-sized channel connection writer adapter to represent a connection to a static-sized
  * downstream sender(outbound) channel.
  */
 class StaticSizedChannelConnectionWriterAdapter final : public ChannelConnectionWriterAdapter {
