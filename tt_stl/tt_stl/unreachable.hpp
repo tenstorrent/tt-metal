@@ -22,8 +22,6 @@ using std::unreachable;
 
 #else
 
-// Choose a helpful debug behavior and an optimizing release behavior.
-// Define TTSL_UNREACHABLE_DEBUG_ABORT to force abort in all builds if desired.
 [[noreturn]] inline void unreachable() noexcept {
 #if defined(__GNUC__) || defined(__clang__)
     __builtin_unreachable();
