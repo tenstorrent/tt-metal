@@ -31,9 +31,6 @@ def test_upsample2d_refiner(
     pcc,
     is_ci_env,
 ):
-    if is_ci_env:
-        pytest.skip("Skipping test in CI environment")
-
     unet = UNet2DConditionModel.from_pretrained(
         "stabilityai/stable-diffusion-xl-refiner-1.0",
         torch_dtype=torch.float32,
