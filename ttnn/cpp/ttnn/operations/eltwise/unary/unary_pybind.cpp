@@ -1078,7 +1078,7 @@ void bind_sigmoid_accurate(py::module& module, const unary_operation_t& operatio
 
         Args:
             input_tensor (ttnn.Tensor): the input tensor.
-            approximate_mode (bool, optional): whether to use approximate mode for exponential calculation. Defaults to `True`.
+            approximate_mode (bool, optional): Enables accurate version of exponential operation. Defaults to `False`.
 
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
@@ -1104,6 +1104,9 @@ void bind_sigmoid_accurate(py::module& module, const unary_operation_t& operatio
         Example:
             >>> tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
             >>> output = {1}(tensor)
+
+            >>> tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+            >>> output = {1}(tensor, False)
         )doc",
         ttnn::sigmoid_accurate.base_name(),
         ttnn::sigmoid_accurate.python_fully_qualified_name());
@@ -1121,7 +1124,7 @@ void bind_sigmoid_accurate(py::module& module, const unary_operation_t& operatio
                 return self(input_tensor, approximate_mode, memory_config, output_tensor);
             },
             py::arg("input_tensor"),
-            py::arg("approximate_mode") = true,
+            py::arg("approximate_mode") = false,
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt});
