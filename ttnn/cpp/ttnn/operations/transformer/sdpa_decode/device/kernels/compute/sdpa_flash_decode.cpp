@@ -22,6 +22,7 @@
 #include "compute_common.hpp"
 #include "compute_kernel_api/pack_untilize.h"
 #include "compute_kernel_api/untilize.h"
+
 constexpr uint32_t MAX_PACK_UNTILIZE_WIDTH = 8;
 
 namespace NAMESPACE {
@@ -315,13 +316,6 @@ void MAIN {
                     if constexpr (is_causal) {
                         // For decode, we only apply mask at the last chunk for causal mode
                         if (k_chunk == k_chunk_end - 1 && apply_mask_at_last_chunk) {
-                            // for (int32_t r = 0; r < 32; ++r) {
-                            //     SliceRange sr = SliceRange{.h0 = uint8_t(r), .h1 = uint8_t(r+1), .hs = 1, .w0 = 0,
-                            //     .w1 = 32, .ws = 1};
-                            //     // Unpacker RISC only has rd_ptr and only input CBs, so no extra args
-                            //     DPRINT_UNPACK({ DPRINT << (uint)r << " --READ--causal-- " << TileSlice(cb_mask_in, 4,
-                            //     sr, true, true) << ENDL(); });
-                            // }
                             reconfig_data_format(cb_qk_im, cb_mask_in);
                             add_block_inplace<false>(cb_qk_im, cb_mask_in, qk_chunk_tiles_dynamic);
                         }
@@ -333,16 +327,7 @@ void MAIN {
                     }
 
                     // Apply sliding window mask to the first chunk (only on the core that processes it)
-                    // DPRINT << "k_chunk: " << k_chunk << " window_start_chunk: " << window_start_chunk << "
-                    // window_start_unaligned: " << window_start_unaligned << ENDL();
                     if (k_chunk == window_start_chunk && window_start_unaligned > 0) {
-                        // for (int32_t r = 0; r < 32; ++r) {
-                        //     SliceRange sr = SliceRange{.h0 = uint8_t(r), .h1 = uint8_t(r+1), .hs = 1, .w0 = 0, .w1 =
-                        //     32, .ws = 1};
-                        //     // Unpacker RISC only has rd_ptr and only input CBs, so no extra args
-                        //     DPRINT_UNPACK({ DPRINT << (uint)r << " --READ--cin1-- " <<
-                        //     TileSlice(cb_sliding_window_mask_in, 4, sr, true, true) << ENDL(); });
-                        // }
                         reconfig_data_format(cb_qk_im, cb_sliding_window_mask_in);
                         add_block_inplace<false>(cb_qk_im, cb_sliding_window_mask_in, qk_chunk_tiles_dynamic);
                     }
@@ -413,9 +398,11 @@ void MAIN {
                     false,
                     cb_mask_in,
                     cb_zero_in);
+
                 // Reconfig register DF
                 reconfig_data_format_srca(cb_out_im);
                 cb_pop_front(cb_qk_im, qk_chunk_tiles_dynamic);
+
                 /* OUT_ACC += OUT_IM */
                 if (k_chunk == k_chunk_start) {
                     cb_out_mm = cb_out_im;
