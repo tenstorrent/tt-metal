@@ -3,21 +3,10 @@
 mesh_descriptors {
   name: "M0"
   arch: WORMHOLE_B0
-  device_topology { dims: [ 1, 1 ] }
-  host_topology   { dims: [ 1, 1] }
-  channels {
-    count: 4
-    policy: STRICT
-  }
-}
-
-mesh_descriptors {
-  name: "M1"
-  arch: WORMHOLE_B0
-  device_topology { dims: [ 4, 8 ] }
+  device_topology { dims: [ 1, 8 ] }
   host_topology   { dims: [ 1, 1 ] }
   channels {
-    count: 4
+    count: 2
     policy: STRICT
   }
 }
@@ -27,33 +16,39 @@ mesh_descriptors {
 graph_descriptors {
   name: "G0"
   type: "FABRIC"
+  # Instances: mesh ids 0,1,2,3,4 (all 1x8)
   instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
   instances { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
   instances { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
   instances { mesh { mesh_descriptor: "M0" mesh_id: 3 } }
-  instances { mesh { mesh_descriptor: "M1" mesh_id: 4 } }
-  connections {
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
-    nodes { mesh { mesh_descriptor: "M1" mesh_id: 4 } }
-    channels { count: 2 policy: STRICT }
-  }
-  connections {
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
-    nodes { mesh { mesh_descriptor: "M1" mesh_id: 4 } }
-    channels { count: 2 policy: STRICT }
-  }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 4 } }
+
+  # Star topology: M2 connects to all other meshes
+  # M2 <-> M0
   connections {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
-    nodes { mesh { mesh_descriptor: "M1" mesh_id: 4 } }
-    channels { count: 2 policy: STRICT }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    channels { count: 2 }
   }
+  # M2 <-> M1
   connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+    channels { count: 2 }
+  }
+  # M2 <-> M3
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 3 } }
-    nodes { mesh { mesh_descriptor: "M1" mesh_id: 4 } }
-    channels { count: 2 policy: STRICT }
+    channels { count: 2 }
+  }
+  # M2 <-> M4
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 4 } }
+    channels { count: 2 }
   }
 }
-
 
 # --- Instantiation ----------------------------------------------------------
 top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
