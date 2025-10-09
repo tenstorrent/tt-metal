@@ -444,7 +444,7 @@ void kernel_main() {
     }  // for (uint32_t k = 0; k < outer_dim_units; ++k)
 
     if constexpr (reduce_all) {
-        if constexpr (!is_reader){
+        if constexpr (!is_reader) {
             cb_reserve_back(w2r_cb_idx, 1);
             const uint32_t w2r_cb_addr = get_write_ptr(w2r_cb_idx);
             volatile tt_l1_ptr uint32_t* idx_val = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(w2r_cb_addr);
