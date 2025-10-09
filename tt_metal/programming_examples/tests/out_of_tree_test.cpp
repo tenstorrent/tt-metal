@@ -23,7 +23,7 @@ void MAIN {
 )";
 
 int main() {
-    // Emulate we are executing and using kerrnels outside of TT_METAL_HOME
+    // Emulate we are executing and using kernels outside of TT_METAL_HOME
     chdir("/tmp");
 
     constexpr int device_id = 0;
