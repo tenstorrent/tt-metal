@@ -13,6 +13,10 @@ struct SegmentMapData {
     value_type input_page_offset;
     value_type output_page_offset;
     value_type num_elements;
+    bool operator==(const SegmentMapData& other) const {
+        return input_page_index == other.input_page_index && input_page_offset == other.input_page_offset &&
+               output_page_offset == other.output_page_offset && num_elements == other.num_elements;
+    }
 
     static constexpr uint32_t size = 4;
 };
