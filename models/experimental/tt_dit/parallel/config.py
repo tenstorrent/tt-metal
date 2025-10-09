@@ -26,20 +26,34 @@ class VAEParallelConfig(NamedTuple):
     tensor_parallel: ParallelFactor
 
 
+class VaeHWParallelConfig(NamedTuple):
+    height_parallel: ParallelFactor
+    width_parallel: ParallelFactor
+
+
+class MochiVAEParallelConfig(NamedTuple):
+    time_parallel: ParallelFactor
+    h_parallel: ParallelFactor
+    w_parallel: ParallelFactor
+
+
 class OldParallelConfig(NamedTuple):
     mesh_shape: tuple[int, int]
     factor: int
     mesh_axis: int
 
 
-def vae_all_gather(ccl_manager, x: ttnn.Tensor, cluster_axis: int = 1, dim: int = 3) -> ttnn.Tensor:
+def vae_all_gather(
+    ccl_manager, x: ttnn.Tensor, cluster_axis: int = 1, dim: int = 3, reshape: bool = True
+) -> ttnn.Tensor:
     global_semaphores = ccl_manager.get_ag_ping_pong_semaphore(cluster_axis)
     barrier_semaphore = ccl_manager.get_barrier_semaphore(cluster_axis)
 
-    # reshape to b,1,h*w,c. This was tested to be faster. Need to verify overhead. TODO: Cleanup
-    b, h, w, c = x.shape
-    if h != 1:  # Check if its already in desired shape. E.g group norm already reshaped to 1,1,h*w,c
-        x = x.reshape(b, 1, h * w, c)
+    if reshape:
+        # reshape to b,1,h*w,c. This was tested to be faster. Need to verify overhead. TODO: Cleanup
+        b, h, w, c = x.shape
+        if h != 1:  # Check if its already in desired shape. E.g group norm already reshaped to 1,1,h*w,c
+            x = x.reshape(b, 1, h * w, c)
 
     if x.layout != ttnn.TILE_LAYOUT:
         x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)  # All gather requires tile layout
@@ -63,7 +77,62 @@ def vae_all_gather(ccl_manager, x: ttnn.Tensor, cluster_axis: int = 1, dim: int 
         num_buffers_per_channel=4,
     )
     # ttnn.synchronize_device(x.device())
-    # reshape back to original expected shape
-    if h != 1:
-        x_g = x_g.reshape(b, h, w, -1)
+
+    if reshape:
+        # reshape back to original expected shape
+        if h != 1:
+            x_g = x_g.reshape(b, h, w, -1)
     return x_g
+
+
+def vae_neighbor_pad(
+    ccl_manager,
+    x: ttnn.Tensor,
+    cluster_axis: int = 1,
+    dim: int = 0,
+    padding_left: int = 0,
+    padding_right: int = 0,
+    padding_mode: str = "replicate",
+    secondary_cluster_axis=None,
+    secondary_mesh_shape=None,
+) -> ttnn.Tensor:
+    global_semaphore = ccl_manager.get_np_ping_pong_semaphore(cluster_axis)
+    barrier_semaphore = ccl_manager.get_barrier_semaphore(cluster_axis)
+
+    x_pad = ttnn.experimental.neighbor_pad_async(
+        x,
+        dim=dim,
+        padding_left=padding_left,
+        padding_right=padding_right,
+        padding_mode=padding_mode,
+        cluster_axis=cluster_axis,
+        final_semaphore=global_semaphore,
+        barrier_semaphore=barrier_semaphore,
+        num_links=ccl_manager.num_links,
+        topology=ttnn.Topology.Linear,
+        secondary_cluster_axis=secondary_cluster_axis,
+        secondary_mesh_shape=secondary_mesh_shape,
+    )
+
+    return x_pad
+
+
+def vae_slice_reshard(
+    ccl_manager, x: ttnn.Tensor, cluster_axis: int = 1, dim: int = 0, output_shape: int = 88, output_offset: int = 0
+) -> ttnn.Tensor:
+    global_semaphore = ccl_manager.get_sr_ping_pong_semaphore(cluster_axis)
+    barrier_semaphore = ccl_manager.get_barrier_semaphore(cluster_axis)
+
+    x_sr = ttnn.experimental.slice_reshard_async(
+        x,
+        dim=dim,
+        output_dim_shape=output_shape,
+        output_dim_offset=output_offset,
+        cluster_axis=cluster_axis,
+        final_semaphore=global_semaphore,
+        barrier_semaphore=barrier_semaphore,
+        num_links=ccl_manager.num_links,
+        topology=ttnn.Topology.Linear,
+    )
+
+    return x_sr

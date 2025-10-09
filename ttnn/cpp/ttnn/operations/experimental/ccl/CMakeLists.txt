@@ -19,9 +19,10 @@ target_sources(
         BASE_DIRS ${FixmeOpAPIDir}
         FILES
             all_broadcast_async/device/all_broadcast_async_op.hpp
+            all_reduce_async/all_reduce_async.hpp
             all_gather_async/all_gather_async.hpp
             all_gather_async/device/all_gather_async_op.hpp
-            common.hpp
+            composite_common.hpp
             reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op.hpp
             reduce_scatter_minimal_async/reduce_scatter_minimal_async.hpp
         FILE_SET kernels
@@ -35,7 +36,7 @@ target_sources(
             send_recv_async/recv_async/device/kernels/receiver_reader.cpp
     PRIVATE
         llama_common.cpp
-        common.cpp
+        composite_common.cpp
         ring_attention_all_gather_async/ring_attention_all_gather_async.cpp
         ring_attention_all_gather_async/device/ring_attention_all_gather_async_op.cpp
         ring_attention_all_gather_async/device/ring_attention_all_gather_async_program.cpp

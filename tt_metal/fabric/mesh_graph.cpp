@@ -193,7 +193,7 @@ std::unordered_map<chip_id_t, RouterEdge> MeshGraph::get_valid_connections(
           std::pair{S, RoutingDirection::S},
           std::pair{W, RoutingDirection::W}}) {
         if (mesh_coord_range.contains(coord)) {
-            chip_id_t fabric_chip_id = coord[0] * mesh_shape[1] + coord[1];
+            chip_id_t fabric_chip_id = (coord[0] * mesh_shape[1]) + coord[1];
             valid_connections.insert(
                 {fabric_chip_id,
                  RouterEdge{
@@ -339,7 +339,8 @@ void MeshGraph::initialize_from_mgd(const MeshGraphDescriptor& mgd) {
                 std::make_pair(*mesh_id, mesh_host_ranks_values.back()),
                 MeshCoordinateRange(
                     MeshCoordinate(host_coord[0] * board_ns_size, host_coord[1] * board_ew_size),
-                    MeshCoordinate((host_coord[0] + 1) * board_ns_size - 1, (host_coord[1] + 1) * board_ew_size - 1)));
+                    MeshCoordinate(
+                        ((host_coord[0] + 1) * board_ns_size) - 1, ((host_coord[1] + 1) * board_ew_size) - 1)));
         }
 
         // Populate mesh_host_ranks_
@@ -525,7 +526,8 @@ void MeshGraph::initialize_from_yaml(const std::string& mesh_graph_desc_file_pat
                 std::make_pair(*mesh_id, mesh_host_ranks_values.back()),
                 MeshCoordinateRange(
                     MeshCoordinate(host_coord[0] * board_ns_size, host_coord[1] * board_ew_size),
-                    MeshCoordinate((host_coord[0] + 1) * board_ns_size - 1, (host_coord[1] + 1) * board_ew_size - 1)));
+                    MeshCoordinate(
+                        ((host_coord[0] + 1) * board_ns_size) - 1, ((host_coord[1] + 1) * board_ew_size) - 1)));
         }
 
         this->mesh_host_ranks_[*mesh_id] =
@@ -536,7 +538,7 @@ void MeshGraph::initialize_from_yaml(const std::string& mesh_graph_desc_file_pat
         this->intra_mesh_connectivity_[*mesh_id].resize(mesh_size);
         for (const auto& src_mesh_coord : mesh_coord_range) {
             // Get the chip id for the current mesh coordinate
-            chip_id_t src_chip_id = src_mesh_coord[0] * mesh_shape[1] + src_mesh_coord[1];
+            chip_id_t src_chip_id = (src_mesh_coord[0] * mesh_shape[1]) + src_mesh_coord[1];
             // Get the valid connections for the current chip
             this->intra_mesh_connectivity_[*mesh_id][src_chip_id] =
                 this->get_valid_connections(src_mesh_coord, mesh_coord_range, board_name_to_fabric_type[mesh_board]);
@@ -748,7 +750,7 @@ MeshCoordinate MeshGraph::chip_to_coordinate(MeshId mesh_id, chip_id_t chip_id) 
 
 chip_id_t MeshGraph::coordinate_to_chip(MeshId mesh_id, MeshCoordinate coordinate) const {
     const auto& mesh_shape = mesh_to_chip_ids_.at(mesh_id).shape();
-    return coordinate[0] * mesh_shape[1] + coordinate[1];
+    return (coordinate[0] * mesh_shape[1]) + coordinate[1];
 }
 
 std::optional<MeshHostRankId> MeshGraph::get_host_rank_for_chip(MeshId mesh_id, chip_id_t chip_id) const {

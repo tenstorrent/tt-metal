@@ -33,7 +33,7 @@ void append_sharded_args(
         TensorAccessorArgs::MAX_NUM_DIMENSIONS);
 
     size_t n_args =
-        add_rank + add_num_banks + rank * add_tensor_shape + rank * add_shard_shape + n_banks * add_bank_coords;
+        add_rank + add_num_banks + (rank * add_tensor_shape) + (rank * add_shard_shape) + (n_banks * add_bank_coords);
     if (!is_runtime) {
         n_args += 1;  // +1 for the args_config config
     }

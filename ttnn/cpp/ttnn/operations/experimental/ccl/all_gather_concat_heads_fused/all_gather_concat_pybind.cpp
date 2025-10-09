@@ -87,7 +87,7 @@ void py_bind_all_gather_concat(pybind11::module& module) {
             num_links (int, optional): Number of links to use for the all-gather operation. Defaults to `1`.
             num_heads (int): Number of heads for NLP concat heads
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `input tensor memory config`.
-            topology (ttnn.Topology, optional): The topology configuration to run the operation in. Valid options are Ring and Linear. Defaults to `ttnn.Topology.Ring`.
+            topology (ttnn.Topology, optional): The topology configuration to run the operation in. Valid options are Ring and Linear. Defaults to `ttnn.Topology.Linear`.
         Returns:
             ttnn.Tensor: the output tensor.
         )doc");
