@@ -53,7 +53,7 @@ class Conv:
         # Check for small spatial dimensions that might cause issues
         is_small_spatial = input_height < 32 or input_width < 32
 
-        input_tensor = ttnn.to_memory_config(input_tensor, memory_config=ttnn.L1_MEMORY_CONFIG)
+        input_tensor = ttnn.to_memory_config(input_tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         # input_tensor = ttnn.to_memory_config(input_tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         # if input_tensor.shape[3] == 1024 or input_tensor.shape[3] == 384:
         #     input_tensor = ttnn.to_memory_config(input_tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -62,13 +62,13 @@ class Conv:
 
         # check input is in interleaved format
         if hasattr(input_tensor, "memory_config") and input_tensor.memory_config().is_sharded():
-            # input_tensor = ttnn.sharded_to_interleaved(input_tensor, ttnn.DRAM_MEMORY_CONFIG)
-            input_tensor = ttnn.sharded_to_interleaved(input_tensor, ttnn.L1_MEMORY_CONFIG)
+            input_tensor = ttnn.sharded_to_interleaved(input_tensor, ttnn.DRAM_MEMORY_CONFIG)
+            # input_tensor = ttnn.sharded_to_interleaved(input_tensor, ttnn.L1_MEMORY_CONFIG)
 
         # check weights are also properly formatted
         if hasattr(self.weights, "memory_config") and self.weights.memory_config().is_sharded():
-            self.weights = ttnn.sharded_to_interleaved(self.weights, ttnn.L1_MEMORY_CONFIG)
-            # self.weights = ttnn.sharded_to_interleaved(self.weights, ttnn.DRAM_MEMORY_CONFIG)
+            # self.weights = ttnn.sharded_to_interleaved(self.weights, ttnn.L1_MEMORY_CONFIG)
+            self.weights = ttnn.sharded_to_interleaved(self.weights, ttnn.DRAM_MEMORY_CONFIG)
 
         compute_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
@@ -260,11 +260,27 @@ class Conv_with_split:
 
     def __call__(self, device, input_tensor):
         batch, height, width, channel = input_tensor.shape
-        original_input = input_tensor
-        input_tensor = ttnn.to_torch(input_tensor)
-        self.weights = ttnn.to_torch(self.weights)
+
+        # Convert input to torch if needed
+        if not isinstance(input_tensor, torch.Tensor):
+            input_tensor = ttnn.to_torch(input_tensor)
+
+        # Convert weights to torch if needed
+        if isinstance(self.weights, torch.Tensor):
+            # Already torch tensor, use as-is
+            weights_torch = self.weights
+        else:
+            # Convert from ttnn
+            weights_torch = ttnn.to_torch(self.weights)
+
+        # Convert bias to torch if needed
+        if isinstance(self.bias, torch.Tensor):
+            bias_torch = self.bias
+        else:
+            bias_torch = ttnn.to_torch(self.bias)
+
         split_input_tensors = torch.split(input_tensor, self.split_input_channels, 3)
-        split_weight_tensors = torch.split(self.weights, self.split_input_channels, 1)
+        split_weight_tensors = torch.split(weights_torch, self.split_input_channels, 1)
 
         weights_dtype = ttnn.float32
 
@@ -280,8 +296,13 @@ class Conv_with_split:
             tt_weight_tensor = ttnn.from_torch(
                 split_weight_tensors[i], weights_dtype if weights_dtype != ttnn.bfloat8_b else ttnn.float32
             )
+
             if i == 0:
-                tt_bias_tensor = self.bias
+                # Use bias only on first split
+                if isinstance(bias_torch, torch.Tensor):
+                    tt_bias_tensor = ttnn.from_torch(bias_torch, ttnn.bfloat16)
+                else:
+                    tt_bias_tensor = bias_torch
 
             tt_input_tensor = ttnn.from_torch(split_input_tensors[i], ttnn.bfloat16)
 
@@ -304,6 +325,7 @@ class Conv_with_split:
                 return_output_dim=True,
                 return_weights_and_bias=False,
             )
+
             tt_conv_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
             torch_conv_output_tensor = ttnn.to_torch(tt_conv_output_tensor)
 
@@ -312,20 +334,17 @@ class Conv_with_split:
             else:
                 torch_output_tensor = torch.add(torch_output_tensor, torch_conv_output_tensor)
 
+        # Shape handling
         if len(torch_output_tensor.shape) == 2:
-            # Reshape to 4D if it got flattened
             torch_output_tensor = torch_output_tensor.reshape(batch, out_height, out_width, self.output_channels)
         elif torch_output_tensor.shape[1] == 1 and torch_output_tensor.shape[2] != out_width:
-            # Shape is corrupted [batch, 1, h*w, channels]
             torch_output_tensor = torch_output_tensor.reshape(batch, out_height, out_width, self.output_channels)
 
         output_tensor = ttnn.from_torch(torch_output_tensor, dtype=ttnn.bfloat16, device=device)
-        # output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
+
         if output_tensor.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
             output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
 
-        # output_tensor = ttnn.reshape(output_tensor, (batch, out_height, out_width, output_tensor.shape[3]))
-        # output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.TILE_LAYOUT)
         if output_tensor.shape[1] != out_height or output_tensor.shape[2] != out_width:
             output_tensor = ttnn.reshape(output_tensor, (batch, out_height, out_width, self.output_channels))
 
@@ -335,7 +354,6 @@ class Conv_with_split:
 
         output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.TILE_LAYOUT)
 
-        # Apply activation if specified
         if self.activation == "relu":
             output_tensor = ttnn.relu(output_tensor)
 

@@ -11,6 +11,7 @@ from models.experimental.functional_petr.tt.ttnn_cp_fpn import ttnn_CPFPN
 from models.experimental.functional_petr.tt.ttnn_grid_mask import ttnn_GridMask
 
 from models.experimental.functional_petr.reference.utils import bbox3d2result
+from loguru import logger
 
 
 class ttnn_PETR:
@@ -47,6 +48,54 @@ class ttnn_PETR:
         self.use_grid_mask = use_grid_mask
         self.device = device
 
+    # def extract_img_feat(self, img, img_metas):
+    #     """Extract features of images."""
+    #     if isinstance(img, list):
+    #         img = torch.stack(img, dim=0)
+
+    #     B = img.shape[0]
+    #     if img is not None:
+    #         # input_shape = img.shape[-2:]
+    #         input_shape = tuple((img.shape[-2], img.shape[-1]))
+
+    #         # update real input shape of each single img
+    #         for img_meta in img_metas:
+    #             img_meta.update(input_shape=input_shape)
+    #         if len(img.shape) == 5:
+    #             B, N, C, H, W = img.shape[0], img.shape[1], img.shape[2], img.shape[3], img.shape[4]
+
+    #             if B == 1 and N != 1:
+    #                 img = ttnn.reshape(img, (N, C, H, W))
+    #             else:
+    #                 # This is not invoked in our run
+    #                 B, N, C, H, W = img.shape[0], img.shape[1], img.shape[2], img.shape[3], img.shape[4]
+    #                 img = ttnn.reshape(img, (B * N, C, H, W))
+    #         if self.use_grid_mask:
+    #             img = self.grid_mask(img)
+
+    #         img_nhwc = ttnn.permute(img, (0, 2, 3, 1))
+
+    #         print(f"[BACKBONE INPUT] Shape: {img_nhwc.shape} (should be [6, 320, 800, 3])")
+
+    #         img_feats = self.img_backbone(
+    #             device=self.device, x=ttnn.permute(img, (0, 2, 3, 1))
+    #         )  # permute is done to change the input from NCHW to NHWC
+    #         if isinstance(img_feats, dict):
+    #             # This is not invoked in our run
+    #             img_feats = list(img_feats.values())
+    #     else:
+    #         return None
+    #     if self.with_img_neck:
+    #         img_feats = self.img_neck(device=self.device, inputs=img_feats)
+
+    #     # for i in range(len(img_feats)): #converting img_neck output from NHWC to NCHW
+    #     #     img_feats[i]=ttnn.permute(img_feats[i],(0,3,1,2))
+    #     img_feats_reshaped = []
+    #     for img_feat in img_feats:
+    #         img_feat = ttnn.permute(img_feat, (0, 3, 1, 2))  # converting img_neck output from NHWC to NCHW
+    #         BN, C, H, W = img_feat.shape[0], img_feat.shape[1], img_feat.shape[2], img_feat.shape[3]
+    #         img_feats_reshaped.append(ttnn.reshape(img_feat, (B, int(BN / B), C, H, W)))
+    #     return img_feats_reshaped
     def extract_img_feat(self, img, img_metas):
         """Extract features of images."""
         if isinstance(img, list):
@@ -54,39 +103,65 @@ class ttnn_PETR:
 
         B = img.shape[0]
         if img is not None:
-            # input_shape = img.shape[-2:]
             input_shape = tuple((img.shape[-2], img.shape[-1]))
 
-            # update real input shape of each single img
             for img_meta in img_metas:
                 img_meta.update(input_shape=input_shape)
+
             if len(img.shape) == 5:
-                if img.shape[0] == 1 and img.shape[1] != 1:
-                    img = ttnn.reshape(img, (img.shape[1], img.shape[2], img.shape[3], img.shape[4]))
-                else:
-                    # This is not invoked in our run
-                    B, N, C, H, W = img.shape[0], img.shape[1], img.shape[2], img.shape[3], img.shape[4]
-                    img = ttnn.reshape(img, (B * N, C, H, W))
+                B, N, C, H, W = img.shape[0], img.shape[1], img.shape[2], img.shape[3], img.shape[4]
+                # [1, 6, 3, 320, 800]
+                img = ttnn.reshape(img, (B * N, C, H, W))
+                # [6, 3, 320, 800]
+
             if self.use_grid_mask:
                 img = self.grid_mask(img)
-            img_feats = self.img_backbone(
-                device=self.device, x=ttnn.permute(img, (0, 2, 3, 1))
-            )  # permute is done to change the input from NCHW to NHWC
-            if isinstance(img_feats, dict):
-                # This is not invoked in our run
-                img_feats = list(img_feats.values())
+
+            # Process each camera separately to avoid L1 memory issues
+            img_feats_list = []
+            num_cameras = img.shape[0]  # 6
+
+            logger.info(f"Processing {num_cameras} cameras separately to avoid memory issues")
+
+            for cam_idx in range(num_cameras):
+                # Extract single camera image: [3, 320, 800]
+                single_img = img[cam_idx : cam_idx + 1]  # Keep batch dim: [1, 3, 320, 800]
+
+                # Convert to NHWC: [1, 320, 800, 3]
+                single_img_nhwc = ttnn.permute(single_img, (0, 2, 3, 1))
+
+                # Process through backbone
+                single_feats = self.img_backbone(device=self.device, x=single_img_nhwc)
+
+                img_feats_list.append(single_feats)
+
+            # Combine features from all cameras
+            # img_feats_list is a list of length 6, each containing [stage4_feat, stage5_feat]
+            # We need to stack them: [6 x [1, H, W, C]] → [6, H, W, C]
+
+            img_feats = []
+            num_stages = len(img_feats_list[0])  # Should be 2 (stage4, stage5)
+
+            for stage_idx in range(num_stages):
+                # Collect this stage's features from all cameras
+                stage_feats = [img_feats_list[cam][stage_idx] for cam in range(num_cameras)]
+                # Stack: list of [1, H, W, C] → [6, H, W, C]
+                stacked_feat = ttnn.concat(stage_feats, dim=0)
+                img_feats.append(stacked_feat)
+
         else:
             return None
+
         if self.with_img_neck:
             img_feats = self.img_neck(device=self.device, inputs=img_feats)
 
-        # for i in range(len(img_feats)): #converting img_neck output from NHWC to NCHW
-        #     img_feats[i]=ttnn.permute(img_feats[i],(0,3,1,2))
         img_feats_reshaped = []
         for img_feat in img_feats:
-            img_feat = ttnn.permute(img_feat, (0, 3, 1, 2))  # converting img_neck output from NHWC to NCHW
+            img_feat = ttnn.permute(img_feat, (0, 3, 1, 2))  # NHWC → NCHW
             BN, C, H, W = img_feat.shape[0], img_feat.shape[1], img_feat.shape[2], img_feat.shape[3]
+            # Reshape [6, C, H, W] → [1, 6, C, H, W]
             img_feats_reshaped.append(ttnn.reshape(img_feat, (B, int(BN / B), C, H, W)))
+
         return img_feats_reshaped
 
     def extract_feat(self, img, img_metas):
@@ -145,7 +220,12 @@ class ttnn_PETR:
         Returns:
             batch_input_metas (list[dict]): Meta info with lidar2img added
         """
-        # print("img.shape", img.shape)
+        if isinstance(img, list):
+            img = img[0]
+        else:
+            img = img
+
+        print("img.shape ttnn", img.shape)
 
         for meta in batch_input_metas:
             lidar2img_rts = []
@@ -158,11 +238,14 @@ class ttnn_PETR:
                 lidar2img_rt = viewpad @ lidar2cam_rt
                 lidar2img_rts.append(lidar2img_rt)
             meta["lidar2img"] = lidar2img_rts
-            print("meta[img_shape]", meta["img_shape"])
+            print("meta[img_shape] beofre ", meta["img_shape"])
             # If meta["img_shape"] is a list of tuples and you only need the first tuple:
             img_shape = meta["img_shape"][0] if isinstance(meta["img_shape"], list) else meta["img_shape"]
             # meta["img_shape"] = img_shape
-            meta["img_shape"] = img_shape * img.shape[1]
+            # meta["img_shape"] = img_shape * img.shape[1]
+            num_cameras = len(meta["cam2img"])  # Should be 6
+            meta["img_shape"] = [img_shape for _ in range(num_cameras)]
+            print("meta[img_shape] after ", meta["img_shape"])
             print("meta[img_shape]", meta["img_shape"])
             print("img_shape::", img_shape)
             print("img.shape::", img[0].shape)
