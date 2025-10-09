@@ -129,6 +129,26 @@ class TtTransfuserBackbone:
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
+        # Layer4 for both encoders
+        self.image_layer4 = self._make_layer(
+            parameters=parameters.image_encoder.features.layer4,
+            planes=1512,
+            blocks=1,
+            stride=2,
+            groups=63,  # conv2
+            model_config=model_config,
+            stage_name="layer4",
+        )
+
+        self.lidar_layer4 = self._make_layer(
+            parameters=parameters.lidar_encoder._model.layer4,
+            planes=1512,
+            blocks=1,
+            stride=2,
+            groups=63,
+            model_config=model_config,
+            stage_name="layer4",
+        )
 
         self.transformer1 = TTGpt(
             device=self.device,
@@ -601,5 +621,13 @@ class TtTransfuserBackbone:
         logger.info("layer3 Image and lidar - add")
         image_features = ttnn.add(image_features, image_features_layer3)
         lidar_features = ttnn.add(lidar_features, lidar_features_layer3)
+
+        logger.info(f"image_encoder_layer4")
+        for block in self.image_layer4:
+            image_features = block(image_features, device)
+
+        logger.info(f"lidar_encoder_layer4")
+        for block in self.lidar_layer4:
+            lidar_features = block(lidar_features, device)
 
         return image_features, lidar_features
