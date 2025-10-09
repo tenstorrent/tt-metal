@@ -400,8 +400,8 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
         uint32_t defer_write_k_block = core.x * k_blocks_per_core;
         defer_write_k_block = std::min(defer_write_k_block, K_blocks - 1);
 
-        bool is_in0_sink = core.x == grid_size.x - 1;
-        bool is_in1_sink = core.y == grid_size.y - 1;
+        bool is_in0_sink = core.x == in0_core_order.at(grid_size.x - 1).x;
+        bool is_in1_sink = core.y == in1_core_order.at(grid_size.y - 1).y;
 
         log_info(
             tt::LogOp,
