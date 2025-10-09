@@ -426,6 +426,7 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
                 M_end_block,
                 N_start_block,
                 N_end_block,
+                defer_write_k_block,
             };
             SetRuntimeArgs(program, in0_sender_kernels_id, core, in0_sender_args);
         } else {
@@ -461,6 +462,7 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
                 M_end_block,
                 N_start_block,
                 N_end_block,
+                defer_write_k_block,
             };
             SetRuntimeArgs(program, in1_sender_kernels_id, core, in1_sender_args);
         } else {

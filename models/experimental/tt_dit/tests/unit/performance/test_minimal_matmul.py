@@ -32,7 +32,7 @@ def run_test_linear(device, M, K, N, M_block_size, K_block_size, N_block_size, s
         packer_l1_acc=True,
     )
 
-    core_grid = ttnn.CoreCoord(2, 2)
+    core_grid = ttnn.CoreCoord(8, 8)
 
     # This is the optimal single-core config for 4096x4096x4096
     matmul_config = ttnn.MinimalMatmulConfig(
@@ -57,11 +57,11 @@ def run_test_linear(device, M, K, N, M_block_size, K_block_size, N_block_size, s
 
 @pytest.mark.parametrize(
     "M, K, N",
-    [(128, 128, 128)],
+    [(4096, 4096, 4096)],
 )
 @pytest.mark.parametrize(
     "M_block_size, K_block_size, N_block_size, subblock_h, subblock_w",
-    [(1, 1, 1, 1, 1)],
+    [(8, 8, 8, 2, 2)],
 )
 def test_linear(device, M, K, N, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w):
     check_result = run_test_linear(device, M, K, N, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w)
