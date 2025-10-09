@@ -166,7 +166,7 @@ def test_grok_model_inference(
             all_outputs.append(prompts[0][i : i + 1])
         else:
             tt_decode_input = ttnn.from_torch(
-                next_token.repeat(1, 1, 1, batch_size),
+                next_token.reshape(1, 1, 1, batch_size),
                 device=mesh_device,
                 dtype=ttnn.uint32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
