@@ -219,7 +219,212 @@ std::vector<SegmentMapData> reshape_map_output_page(
     return flat_map_data;
 }
 
-Tensor compute_reshape_mapping_host_tensor(
+// Pattern template: describes a stride run structure
+struct PatternTemplate {
+    int32_t input_offset_stride;
+    int32_t output_offset_stride;
+    uint32_t num_elements;
+
+    bool operator==(const PatternTemplate& other) const {
+        return input_offset_stride == other.input_offset_stride && output_offset_stride == other.output_offset_stride &&
+               num_elements == other.num_elements;
+    }
+    bool operator<(const PatternTemplate& other) const {
+        if (input_offset_stride != other.input_offset_stride) {
+            return input_offset_stride < other.input_offset_stride;
+        }
+        if (output_offset_stride != other.output_offset_stride) {
+            return output_offset_stride < other.output_offset_stride;
+        }
+        return num_elements < other.num_elements;
+    }
+};
+
+// Instance of a pattern template for a specific output page
+struct PagePatternInstance {
+    uint32_t output_page_index;
+    uint32_t input_page_index;
+    uint32_t input_offset_start;
+    uint32_t output_offset_start;
+    uint32_t run_length;
+    uint32_t pattern_template_index;  // Index into shared pattern table
+
+    bool operator==(const PagePatternInstance& other) const {
+        return output_page_index == other.output_page_index && input_page_index == other.input_page_index &&
+               input_offset_start == other.input_offset_start && output_offset_start == other.output_offset_start &&
+               run_length == other.run_length && pattern_template_index == other.pattern_template_index;
+    }
+};
+
+struct PagePatternRun {
+    uint32_t output_page_index_start;
+    uint32_t output_page_index_end;  // inclusive
+    uint32_t input_page_index_start;
+    uint32_t input_offset_start;
+    uint32_t output_offset_start;
+    uint32_t run_length;
+    uint32_t pattern_template_index;
+    int32_t input_page_index_stride;  // stride between input_page_index for each output page
+    int32_t input_offset_stride;      // stride between input_offset_start for each output page
+    int32_t output_offset_stride;     // stride between output_offset_start for each output page
+};
+
+// Global compressed mapping: shared templates, per-page instances, and irregulars
+struct GlobalCompressedReshapeMap {
+    std::vector<PatternTemplate> pattern_templates;
+    std::vector<PagePatternInstance> page_pattern_instances;
+    std::vector<PagePatternRun> page_pattern_runs;
+    std::vector<SegmentMapData> irregular_segments;
+};
+
+// Detects the longest stride run starting at 'start'
+size_t detect_stride_run(
+    const std::vector<SegmentMapData>& segs,
+    size_t start,
+    PatternTemplate& tmpl,
+    PagePatternInstance& instance,
+    uint32_t output_page_index) {
+    if (segs[start].num_elements == 0) {
+        return 0;
+    }
+    auto& base = segs[start];
+    size_t len = 1;
+    int32_t input_stride = 0, output_stride = 0;
+    if (start + 1 < segs.size() && segs[start + 1].num_elements == base.num_elements &&
+        segs[start + 1].input_page_index == base.input_page_index) {
+        input_stride =
+            static_cast<int32_t>(segs[start + 1].input_page_offset) - static_cast<int32_t>(base.input_page_offset);
+        output_stride =
+            static_cast<int32_t>(segs[start + 1].output_page_offset) - static_cast<int32_t>(base.output_page_offset);
+        len = 2;
+        for (size_t i = start + 2; i < segs.size(); ++i) {
+            if (segs[i].num_elements == 0) {
+                break;
+            }
+            if (segs[i].input_page_index != base.input_page_index || segs[i].num_elements != base.num_elements) {
+                break;
+            }
+            int32_t curr_input_stride =
+                static_cast<int32_t>(segs[i].input_page_offset) - static_cast<int32_t>(segs[i - 1].input_page_offset);
+            int32_t curr_output_stride =
+                static_cast<int32_t>(segs[i].output_page_offset) - static_cast<int32_t>(segs[i - 1].output_page_offset);
+            if (curr_input_stride != input_stride || curr_output_stride != output_stride) {
+                break;
+            }
+            len++;
+        }
+        tmpl = {input_stride, output_stride, base.num_elements};
+        instance = {
+            output_page_index,
+            base.input_page_index,
+            base.input_page_offset,
+            base.output_page_offset,
+            static_cast<uint32_t>(len),
+            0};  // pattern_template_index to be filled later
+        return len;
+    }
+    return 0;
+}
+
+std::vector<PagePatternRun> compress_page_pattern_instances(const std::vector<PagePatternInstance>& instances) {
+    std::vector<PagePatternRun> runs;
+    if (instances.empty()) {
+        return runs;
+    }
+
+    size_t i = 0;
+    while (i < instances.size()) {
+        size_t j = i + 1;
+        // Try to find a run
+        int32_t input_page_index_stride = 0, input_offset_stride = 0, output_offset_stride = 0;
+        if (j < instances.size()) {
+            input_page_index_stride = static_cast<int32_t>(instances[j].input_page_index) -
+                                      static_cast<int32_t>(instances[i].input_page_index);
+            input_offset_stride = static_cast<int32_t>(instances[j].input_offset_start) -
+                                  static_cast<int32_t>(instances[i].input_offset_start);
+            output_offset_stride = static_cast<int32_t>(instances[j].output_offset_start) -
+                                   static_cast<int32_t>(instances[i].output_offset_start);
+        }
+        while (j < instances.size() && instances[j].pattern_template_index == instances[i].pattern_template_index &&
+               (instances[j].output_page_index - instances[j - 1].output_page_index == 1) &&
+               (instances[j].input_page_index - instances[j - 1].input_page_index == input_page_index_stride) &&
+               (instances[j].input_offset_start - instances[j - 1].input_offset_start == input_offset_stride) &&
+               (instances[j].output_offset_start - instances[j - 1].output_offset_start == output_offset_stride) &&
+               (instances[j].run_length == instances[i].run_length)) {
+            ++j;
+        }
+        runs.push_back(PagePatternRun{
+            instances[i].output_page_index,
+            instances[j - 1].output_page_index,
+            instances[i].input_page_index,
+            instances[i].input_offset_start,
+            instances[i].output_offset_start,
+            instances[i].run_length,
+            instances[i].pattern_template_index,
+            input_page_index_stride,
+            input_offset_stride,
+            output_offset_stride});
+        i = j;
+    }
+    return runs;
+}
+
+GlobalCompressedReshapeMap compress_mapping_global(const std::vector<std::vector<SegmentMapData>>& mapping_vector) {
+    std::vector<PatternTemplate> pattern_templates;
+    std::vector<PagePatternInstance> page_pattern_instances;
+    std::map<PatternTemplate, uint32_t> template_to_index;
+
+    for (uint32_t output_page_idx = 0; output_page_idx < mapping_vector.size(); ++output_page_idx) {
+        const auto& segments = mapping_vector[output_page_idx];
+        size_t i = 0;
+        while (i < segments.size()) {
+            PatternTemplate tmpl;
+            PagePatternInstance instance;
+            size_t run_len = detect_stride_run(segments, i, tmpl, instance, output_page_idx);
+            if (run_len >= 2) {
+                uint32_t tmpl_idx;
+                auto it = template_to_index.find(tmpl);
+                if (it == template_to_index.end()) {
+                    tmpl_idx = pattern_templates.size();
+                    pattern_templates.push_back(tmpl);
+                    template_to_index[tmpl] = tmpl_idx;
+                } else {
+                    tmpl_idx = it->second;
+                }
+                instance.pattern_template_index = tmpl_idx;
+                page_pattern_instances.push_back(instance);
+                i += run_len;
+                continue;
+            }
+            // Treat irregular segment as a run of length 1 with its own template
+            const auto& irr = segments[i];
+            PatternTemplate irr_tmpl = {0, 0, irr.num_elements};  // stride 0, size = num_elements
+            uint32_t irr_tmpl_idx;
+            auto it = template_to_index.find(irr_tmpl);
+            if (it == template_to_index.end()) {
+                irr_tmpl_idx = pattern_templates.size();
+                pattern_templates.push_back(irr_tmpl);
+                template_to_index[irr_tmpl] = irr_tmpl_idx;
+            } else {
+                irr_tmpl_idx = it->second;
+            }
+            PagePatternInstance irr_instance = {
+                output_page_idx, irr.input_page_index, irr.input_page_offset, irr.output_page_offset, 1, irr_tmpl_idx};
+            page_pattern_instances.push_back(irr_instance);
+            ++i;
+        }
+    }
+
+    // Compress page pattern instances into runs
+    std::vector<PagePatternRun> page_pattern_runs = compress_page_pattern_instances(page_pattern_instances);
+
+    // No need for a separate irregular_segments vector anymore
+    return {pattern_templates, page_pattern_instances, page_pattern_runs, {}};
+}
+
+inline uint32_t pack4(uint8_t a, uint8_t b, uint8_t c, uint8_t d) { return (a << 24) | (b << 16) | (c << 8) | d; }
+
+std::tuple<Tensor, GlobalCompressedReshapeMap> compute_reshape_mapping_host_tensor(
     const uint32_t num_input_pages,
     const uint32_t num_output_pages,
     const Shape& input_shape,
@@ -234,6 +439,98 @@ Tensor compute_reshape_mapping_host_tensor(
     for (uint32_t output_page_idx = 0; output_page_idx < num_output_pages; ++output_page_idx) {
         mapping_vector.emplace_back(reshape_map_output_page(
             output_page_idx, input_shape, output_shape, tile_dims_input, tile_dims_output, tile_shape, face_shape));
+    }
+    printf("initial mapping\n");
+    for (uint32_t output_page_idx = 0; output_page_idx < num_output_pages; ++output_page_idx) {
+        printf("Output Page %u:\n", output_page_idx);
+        for (const auto& seg : mapping_vector[output_page_idx]) {
+            printf(
+                "  Segment: InputPage %u, InOffset %u, OutOffset %u, NumElem %u\n",
+                seg.input_page_index,
+                seg.input_page_offset,
+                seg.output_page_offset,
+                seg.num_elements);
+        }
+    }
+
+    printf("general compressed mapping\n");
+    auto compressed_map = compress_mapping_global(mapping_vector);
+    printf("Check here\n");
+    for (const auto& run : compressed_map.page_pattern_runs) {
+        printf(
+            "Run: out_page_start=%u, out_page_end=%u, run_length=%u, tmpl_idx=%u\n",
+            run.output_page_index_start,
+            run.output_page_index_end,
+            run.run_length,
+            run.pattern_template_index);
+    }
+
+    std::vector<uint32_t> rt_args;
+    for (const auto& run : compressed_map.page_pattern_runs) {
+        // Example: pack output_page_index_start, output_page_index_end, input_page_index_start, pattern_template_index
+        rt_args.push_back(pack4(
+            run.output_page_index_start & 0xFF,
+            run.output_page_index_end & 0xFF,
+            run.input_page_index_start & 0xFF,
+            run.pattern_template_index & 0xFF));
+
+        // Pack input_offset_start, output_offset_start, run_length, input_page_index_stride
+        rt_args.push_back(pack4(
+            run.input_offset_start & 0xFF,
+            run.output_offset_start & 0xFF,
+            run.run_length & 0xFF,
+            run.input_page_index_stride & 0xFF));
+
+        // Pack input_offset_stride, output_offset_stride, (pad with zeros)
+        rt_args.push_back(pack4(run.input_offset_stride & 0xFF, run.output_offset_stride & 0xFF, 0, 0));
+    }
+    printf("len of rt_args (page pattern runs): %zu\n", rt_args.size());
+
+    printf("Pattern Templates (%zu):\n", compressed_map.pattern_templates.size());
+    for (size_t i = 0; i < compressed_map.pattern_templates.size(); ++i) {
+        const auto& pt = compressed_map.pattern_templates[i];
+        printf(
+            "  Template %zu: InOffsetStride %d, OutOffsetStride %d, NumElem %u\n",
+            i,
+            pt.input_offset_stride,
+            pt.output_offset_stride,
+            pt.num_elements);
+    }
+    printf("Page Pattern Instances (%zu):\n", compressed_map.page_pattern_instances.size());
+    for (const auto& pi : compressed_map.page_pattern_instances) {
+        printf(
+            "  Instance: OutPage %u, InPage %u, InOffsetStart %u, OutOffsetStart %u, RunLen %u, TemplateIdx %u\n",
+            pi.output_page_index,
+            pi.input_page_index,
+            pi.input_offset_start,
+            pi.output_offset_start,
+            pi.run_length,
+            pi.pattern_template_index);
+    }
+    printf("Page Pattern Runs (%zu):\n", compressed_map.page_pattern_runs.size());
+    for (const auto& pr : compressed_map.page_pattern_runs) {
+        printf(
+            "  Run: OutPageStart %u, OutPageEnd %u, InPageStart %u, InOffsetStart %u, OutOffsetStart %u, RunLen %u, "
+            "TemplateIdx %u, InPageStride %d, InOffsetStride %d, OutOffsetStride %d\n",
+            pr.output_page_index_start,
+            pr.output_page_index_end,
+            pr.input_page_index_start,
+            pr.input_offset_start,
+            pr.output_offset_start,
+            pr.run_length,
+            pr.pattern_template_index,
+            pr.input_page_index_stride,
+            pr.input_offset_stride,
+            pr.output_offset_stride);
+    }
+    printf("Irregular Segments (%zu):\n", compressed_map.irregular_segments.size());
+    for (const auto& seg : compressed_map.irregular_segments) {
+        printf(
+            "  Segment: InputPage %u, InOffset %u, OutOffset %u, NumElem %u\n",
+            seg.input_page_index,
+            seg.input_page_offset,
+            seg.output_page_offset,
+            seg.num_elements);
     }
 
     // flatten again
@@ -262,7 +559,7 @@ Tensor compute_reshape_mapping_host_tensor(
         ttnn::ROW_MAJOR_LAYOUT,
         MemoryConfig());
 
-    return Tensor::from_vector(flat_mapping_vector, TensorSpec(mapping_shape, mapping_layout));
+    return {Tensor::from_vector(flat_mapping_vector, TensorSpec(mapping_shape, mapping_layout)), compressed_map};
 }
 }  // namespace detail
 
@@ -310,9 +607,9 @@ tt::tt_metal::operation::ProgramWithCallbacks reshape_tiled_program_factory(
     const uint32_t num_input_pages = tt::div_up(input_tensor.physical_volume(), tile_shape[0] * tile_shape[1]);
     const uint32_t num_output_pages = tt::div_up(output_tensor.physical_volume(), tile_shape[0] * tile_shape[1]);
 
-    Tensor mapping_tensor = detail::compute_reshape_mapping_host_tensor(
-                                num_input_pages, num_output_pages, input_shape, output_shape, tile_shape, face_shape)
-                                .to_device(device);
+    auto [mapping_tensor_0, compressed_map] = detail::compute_reshape_mapping_host_tensor(
+        num_input_pages, num_output_pages, input_shape, output_shape, tile_shape, face_shape);
+    auto mapping_tensor = mapping_tensor_0.to_device(device);
 
     tt::tt_metal::Buffer* mapping_buffer = mapping_tensor.buffer();
     const auto grid = device->compute_with_storage_grid_size();
@@ -392,6 +689,7 @@ tt::tt_metal::operation::ProgramWithCallbacks reshape_tiled_program_factory(
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
     uint32_t page_idx_start = 0, page_idx_end = 0;
     std::vector<CoreCoord> utilized_cores;
+    /*
     for (auto c : corerange_to_cores(all_cores, std::nullopt)) {
         uint32_t increment = 0;
         if (core_group_1.contains(c)) {
@@ -409,6 +707,79 @@ tt::tt_metal::operation::ProgramWithCallbacks reshape_tiled_program_factory(
 
         const std::vector<uint32_t> writer_runtime_args = {output_buffer->address(), page_idx_start, page_idx_end};
 
+        tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, c, writer_runtime_args);
+
+        page_idx_start += increment;
+        utilized_cores.push_back(c);
+    }
+    */
+
+    for (auto c : corerange_to_cores(all_cores, std::nullopt)) {
+        uint32_t increment = 0;
+        if (core_group_1.contains(c)) {
+            increment = num_tiles_per_core_group_1;
+        } else if (core_group_2.contains(c)) {
+            increment = num_tiles_per_core_group_2;
+        } else {
+            continue;
+        }
+        page_idx_end += increment;
+
+        // Build per-core rt_args from compressed_map.page_pattern_runs
+        std::vector<uint32_t> core_rt_args;
+
+        // Pack pattern templates
+        for (const auto& tmpl : compressed_map.pattern_templates) {
+            core_rt_args.push_back(tmpl.input_offset_stride);
+            core_rt_args.push_back(tmpl.output_offset_stride);
+            core_rt_args.push_back(tmpl.num_elements);
+        }
+
+        // Pack runs
+        size_t num_runs = 0;
+        printf("size of compressed_map.page_pattern_runs: %zu\n", compressed_map.page_pattern_runs.size());
+        for (const auto& run : compressed_map.page_pattern_runs) {
+            if (run.output_page_index_end < page_idx_start || run.output_page_index_start >= page_idx_end) {
+                continue;
+            }
+            uint32_t start = std::max(run.output_page_index_start, page_idx_start);
+            uint32_t end = std::min(run.output_page_index_end, page_idx_end - 1);
+
+            core_rt_args.push_back(detail::pack4(
+                start & 0xFF, end & 0xFF, run.input_page_index_start & 0xFF, run.pattern_template_index & 0xFF));
+            core_rt_args.push_back(run.input_offset_start);   // 32 bits
+            core_rt_args.push_back(run.output_offset_start);  // 32 bits
+            core_rt_args.push_back(detail::pack4(
+                run.run_length & 0xFF,
+                run.input_page_index_stride & 0xFF,
+                run.input_offset_stride & 0xFF,
+                run.output_offset_stride & 0xFF));
+            ++num_runs;
+        }
+
+        // Build final RT args vector
+        std::vector<uint32_t> reader_runtime_args;
+        reader_runtime_args.push_back(compressed_map.pattern_templates.size());  // num_templates
+        reader_runtime_args.push_back(num_runs);                                 // num_runs
+        reader_runtime_args.push_back(input_buffer->address());                  // buffer_addr
+        for (auto k : core_rt_args) {
+            reader_runtime_args.push_back(k);
+        }
+        tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, c, reader_runtime_args);
+
+        std::vector<uint32_t> writer_runtime_args;
+        writer_runtime_args.push_back(compressed_map.pattern_templates.size());
+        writer_runtime_args.push_back(num_runs);
+        writer_runtime_args.push_back(output_buffer->address());
+        for (auto k : core_rt_args) {
+            writer_runtime_args.push_back(k);
+        }
+
+        printf("writer rt_args (core %zu,%zu): ", c.x, c.y);
+        for (auto k : writer_runtime_args) {
+            printf("%u ", k);
+        }
+        printf("\n");
         tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, c, writer_runtime_args);
 
         page_idx_start += increment;
@@ -438,14 +809,14 @@ tt::tt_metal::operation::ProgramWithCallbacks reshape_tiled_program_factory(
                 const uint32_t num_output_pages =
                     tt::div_up(output_tensor.physical_volume(), tile_shape[0] * tile_shape[1]);
 
-                mapping_tensor = detail::compute_reshape_mapping_host_tensor(
-                                     num_input_pages,
-                                     num_output_pages,
-                                     input_tensor.logical_shape(),
-                                     output_tensor.logical_shape(),
-                                     tile_shape,
-                                     face_shape)
-                                     .to_device(input_tensor.device());
+                auto mapping_tuple = detail::compute_reshape_mapping_host_tensor(
+                    num_input_pages,
+                    num_output_pages,
+                    input_tensor.logical_shape(),
+                    output_tensor.logical_shape(),
+                    tile_shape,
+                    face_shape);
+                mapping_tensor = std::get<0>(mapping_tuple).to_device(input_tensor.device());
             }
 
             const auto input_buffer_addr = input_tensor.buffer()->address();
@@ -453,13 +824,13 @@ tt::tt_metal::operation::ProgramWithCallbacks reshape_tiled_program_factory(
 
             for (const auto& core : utilized_cores) {
                 auto& reader_runtime_args_core = GetRuntimeArgs(program, reader_kernel_id, core);
-                reader_runtime_args_core.at(0) = input_buffer_addr;
+                reader_runtime_args_core.at(1) = input_buffer_addr;
                 if (op.recreate_mapping_tensor) {
-                    reader_runtime_args_core.at(1) = mapping_tensor.buffer()->address();
+                    reader_runtime_args_core.at(2) = mapping_tensor.buffer()->address();
                 }
 
                 auto& writer_runtime_args_core = GetRuntimeArgs(program, writer_kernel_id, core);
-                writer_runtime_args_core.at(0) = output_buffer_addr;
+                writer_runtime_args_core.at(2) = output_buffer_addr;
             }
         };
 
