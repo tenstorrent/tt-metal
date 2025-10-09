@@ -39,7 +39,6 @@ void kernel_main() {
     constexpr uint32_t in0_block_num_tiles = M_block_tiles * K_block_tiles;
 
     constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
-    constexpr uint32_t cb_id_in0_done = tt::CBIndex::c_4;
 
     volatile tt_l1_ptr uint32_t* in0_valid_semaphore_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in0_valid_semaphore_addr);
@@ -101,8 +100,6 @@ void kernel_main() {
                     noc_semaphore_set_remote(in0_valid_semaphore_addr, in0_receiver_semaphore_noc_addr);
                 }
 #endif
-                cb_reserve_back(cb_id_in0_done, 1);
-                cb_push_back(cb_id_in0_done, 1);
             }
         }
     }

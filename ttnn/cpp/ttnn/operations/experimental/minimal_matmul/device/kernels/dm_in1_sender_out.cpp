@@ -45,7 +45,6 @@ void kernel_main() {
 
     constexpr uint32_t cb_id_in1 = tt::CBIndex::c_1;
     constexpr uint32_t cb_id_out = tt::CBIndex::c_2;
-    constexpr uint32_t cb_id_in1_done = tt::CBIndex::c_5;
 
     volatile tt_l1_ptr uint32_t* in1_valid_semaphore_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in1_valid_semaphore_addr);
@@ -107,8 +106,6 @@ void kernel_main() {
                     noc_semaphore_set_remote(in1_valid_semaphore_addr, in1_receiver_semaphore_noc_addr);
                 }
 #endif
-                cb_reserve_back(cb_id_in1_done, 1);
-                cb_push_back(cb_id_in1_done, 1);
             }
             // We have an output block to write out
             cb_wait_front(cb_id_out, out_block_num_tiles);
