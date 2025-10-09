@@ -321,7 +321,7 @@ TEST_F(CrossEntropyBackwardTest, NIGHTLY_CrossEntropyBackward_Huge_Backward) {
 TEST_F(CrossEntropyBackwardTest, CrossEntropyForwardBackward_ReduceMeanVsNone) {
     using namespace ttml;
 
-    const uint32_t N = 1U, C = 1U, H = 91U, W = 187U;
+    const uint32_t N = 5U, C = 1U, H = 91U, W = 187U;
     const auto shape = ttnn::SmallVector<uint32_t>{N, C, H, W};
 
     std::random_device rd;
@@ -359,8 +359,6 @@ TEST_F(CrossEntropyBackwardTest, CrossEntropyForwardBackward_ReduceMeanVsNone) {
 
     auto result_none_after_mean_xtensor = core::to_xtensor(result_none_with_mean_after->get_value());
     auto result_mean_xtensor = core::to_xtensor(result_mean->get_value());
-
-    // print all shapes
 
     assert((result_none_after_mean_xtensor.shape() == result_mean_xtensor.shape()));
     EXPECT_TRUE(xt::allclose(result_none_after_mean_xtensor, result_mean_xtensor, 3e-2F, 1e-2F));
