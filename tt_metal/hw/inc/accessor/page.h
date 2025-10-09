@@ -9,7 +9,7 @@
 namespace tensor_accessor {
 
 /**
- * @brief Represents a page in a tensor with its NOC address and identifiers.
+ * @brief Represents  a page in a tensor with its NOC address and identifiers.
  */
 class Page {
 public:
