@@ -3,13 +3,14 @@
 
 from abc import abstractmethod
 from pathlib import Path
+from typing import Iterable
 
 import torch
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
 from models.demos.deepseek_v3.tt.ccl import CCL
-from models.demos.deepseek_v3.tt.decoder_block.decoder_block_base import DecoderBlockBase
+from models.demos.deepseek_v3.tt.decoder_block.decoder_block_1d_base import DecoderBlock1DBase
 from models.demos.deepseek_v3.tt.mlp.shared_expert import SharedExpert
 from models.demos.deepseek_v3.tt.moe import MoE
 from models.demos.deepseek_v3.utils.config_dataclass import AllGatherAsyncConfig
@@ -24,7 +25,7 @@ from models.demos.deepseek_v3.utils.run_config import (
 )
 
 
-class MoEDecoderBlock(DecoderBlockBase):
+class MoEDecoderBlock1D(DecoderBlock1DBase):
     @classmethod
     @abstractmethod
     def convert_mlp_weights(
@@ -57,17 +58,10 @@ class MoEDecoderBlock(DecoderBlockBase):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
-        is_padding_layer: tuple[bool, ...] | None = None,
     ) -> ModelPrefillConfig:
-        assert mesh_device.shape[0] == len(
-            is_padding_layer
-        ), "Number of mesh device rows must match the number of padding or non-padding layers"
         return {
             "shared_expert": SharedExpert.prefill_model_config(hf_config, mesh_device),
-            "moe": [
-                None if is_padding else MoE.prefill_model_config(hf_config, mesh_device)
-                for is_padding in is_padding_layer
-            ],
+            "moe": [MoE.prefill_model_config(hf_config, mesh_device)],
             "apply_dp": {
                 "mesh_shape": tuple(mesh_device.shape),
                 "dim": -2,
@@ -89,17 +83,10 @@ class MoEDecoderBlock(DecoderBlockBase):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
-        is_padding_layer: tuple[bool, ...] | None = None,
     ) -> ModelDecodeConfig:
-        assert mesh_device.shape[0] == len(
-            is_padding_layer
-        ), "Number of mesh device rows must match the number of padding or non-padding layers"
         return {
             "shared_expert": SharedExpert.decode_model_config(hf_config, mesh_device),
-            "moe": [
-                None if is_padding else MoE.decode_model_config(hf_config, mesh_device)
-                for is_padding in is_padding_layer
-            ],
+            "moe": [MoE.decode_model_config(hf_config, mesh_device)],
             "apply_dp": {
                 "mesh_shape": tuple(mesh_device.shape),
                 "dim": -2,
@@ -123,7 +110,7 @@ class MoEDecoderBlock(DecoderBlockBase):
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
         ccl: CCL,
-        is_padding_layer: tuple[bool, ...] | None = None,
+        is_padding_layer: Iterable[bool],
     ) -> ModelState:
         return {
             "moe": [
@@ -210,13 +197,9 @@ class MoEDecoderBlock(DecoderBlockBase):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
-        is_padding_layer: tuple[bool, ...] | None = None,
     ) -> ModelState:
         return {
-            "moe": [
-                None if is_padding else MoE.create_shared_state(hf_config, mesh_device)
-                for is_padding in is_padding_layer
-            ],
+            "moe": [MoE.create_shared_state(hf_config, mesh_device)],
             "shared_expert": {},
         }
 
