@@ -145,4 +145,45 @@ std::vector<::EthChannelIdentifier> deserialize_eth_chan_identifiers_from_bytes(
     return exit_nodes;
 }
 
+std::vector<uint8_t> serialize_reset_pairs_to_bytes(const std::vector<::ResetPair>& reset_pairs) {
+    ResetPairList proto_list;
+
+    for (const auto& reset_pair : reset_pairs) {
+        auto* proto_reset_pair = proto_list.add_reset_pairs();
+        proto_reset_pair->set_src_rank(reset_pair.src_rank);
+        proto_reset_pair->set_dst_rank(reset_pair.dst_rank);
+    }
+
+    // Serialize to bytes
+    size_t size = proto_list.ByteSizeLong();
+    std::vector<uint8_t> result(size);
+
+    if (!proto_list.SerializeToArray(result.data(), size)) {
+        throw std::runtime_error("Failed to serialize ResetPairList to protobuf binary format");
+    }
+
+    return result;
+}
+
+std::vector<::ResetPair> deserialize_reset_pairs_from_bytes(const std::vector<uint8_t>& data) {
+    ResetPairList proto_list;
+
+    if (!proto_list.ParseFromArray(data.data(), data.size())) {
+        throw std::runtime_error("Failed to parse ResetPairList from protobuf binary format");
+    }
+
+    std::vector<::ResetPair> reset_pairs;
+    reset_pairs.reserve(proto_list.reset_pairs_size());
+
+    for (const auto& proto_reset_pair : proto_list.reset_pairs()) {
+        ::ResetPair reset_pair;
+        reset_pair.src_rank = proto_reset_pair.src_rank();
+        reset_pair.dst_rank = proto_reset_pair.dst_rank();
+
+        reset_pairs.push_back(std::move(reset_pair));
+    }
+
+    return reset_pairs;
+}
+
 }  // namespace tt::scaleout::validation
