@@ -37,27 +37,118 @@ jobs:
           fetch-depth: ${{ inputs.fetch_depth }}
           fetch-tags: true
           ref: stable
-      - name: Debug - Show all tags
+
+      - name: Get latest semver tag
+        id: get-latest-semver
         run: |
-          echo "All tags in repository:"
-          git tag --sort=-version:refname
-          echo "Total tag count: $(git tag | wc -l)"
-          echo "Reachable tags from HEAD:"
-          git tag --merged HEAD --sort=-version:refname | sed -n '1,30p'
-          echo "Closest reachable semver tag:"
-          git describe --tags --abbrev=0 --match 'v[0-9]*.[0-9]*.[0-9]*' || true
-      - uses: paulhatch/semantic-version@v5.4.0
-        id: get-next-semantic-base-version
-        with:
-          tag_prefix: "v"
-          branch: stable
-          version_format: "v${major}.${minor}.${patch}"
-          bump_each_commit: ${{ inputs.bump_each_commit }}
+          # Get all tags matching exact semver format v{number}.{number}.{number} excluding any with dashes
+          latest_semver=$(git tag -l | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | grep -v '-' | sort -V | tail -1)
+          if [ -z "$latest_semver" ]; then
+            echo "No semver tags found, using v0.0.0"
+            latest_semver="v0.0.0"
+          fi
+          echo "Latest semver tag: $latest_semver"
+          echo "latest_semver=$latest_semver" >> "$GITHUB_OUTPUT"
+
+      - name: Analyze commits for version bump
+        id: analyze-commits
+        run: |
+          latest_tag="${{ steps.get-latest-semver.outputs.latest_semver }}"
+          echo "Analyzing commits since $latest_tag"
+
+          # Get commit messages since the latest tag
+          if [ "$latest_tag" = "v0.0.0" ]; then
+            # If no previous tag, analyze all commits
+            commits=$(git log --oneline --pretty=format:"%s")
+          else
+            # Get commits since the latest tag
+            commits=$(git log ${latest_tag}..HEAD --oneline --pretty=format:"%s")
+          fi
+
+          echo "Commit messages to analyze:"
+          echo "$commits"
+
+          # Check for version bump indicators
+          has_major=false
+          has_minor=false
+          has_patch=false
+
+          # Check for MAJOR version indicators
+          if echo "$commits" | grep -i -E "(MAJOR|BREAKING CHANGE|feat!:|fix!:)" > /dev/null; then
+            has_major=true
+            echo "Found MAJOR version indicators"
+          fi
+
+          # Check for MINOR version indicators
+          if echo "$commits" | grep -i -E "(MINOR|feat:|feature:)" > /dev/null; then
+            has_minor=true
+            echo "Found MINOR version indicators"
+          fi
+
+          # Check for PATCH version indicators
+          if echo "$commits" | grep -i -E "(PATCH|fix:|bugfix:|hotfix:)" > /dev/null; then
+            has_patch=true
+            echo "Found PATCH version indicators"
+          fi
+
+          # Determine bump type (priority: MAJOR > MINOR > PATCH)
+          if [ "$has_major" = true ]; then
+            bump_type="major"
+          elif [ "$has_minor" = true ]; then
+            bump_type="minor"
+          elif [ "$has_patch" = true ]; then
+            bump_type="patch"
+          else
+            # No version bump indicators found
+            bump_type="none"
+          fi
+
+          echo "Determined bump type: $bump_type"
+          echo "bump_type=$bump_type" >> "$GITHUB_OUTPUT"
+
+      - name: Calculate new version
+        id: calculate-version
+        run: |
+          latest_tag="${{ steps.get-latest-semver.outputs.latest_semver }}"
+          bump_type="${{ steps.analyze-commits.outputs.bump_type }}"
+
+          if [ "$bump_type" = "none" ]; then
+            echo "No version bump needed - no relevant commit indicators found"
+            echo "new_version=$latest_tag" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Extract version numbers (remove 'v' prefix)
+          version_no_v=${latest_tag#v}
+          IFS='.' read -r major minor patch <<< "$version_no_v"
+
+          echo "Current version: $major.$minor.$patch"
+          echo "Bump type: $bump_type"
+
+          # Calculate new version based on bump type
+          case $bump_type in
+            "major")
+              major=$((major + 1))
+              minor=0
+              patch=0
+              ;;
+            "minor")
+              minor=$((minor + 1))
+              patch=0
+              ;;
+            "patch")
+              patch=$((patch + 1))
+              ;;
+          esac
+
+          new_version="v$major.$minor.$patch"
+          echo "New calculated version: $new_version"
+          echo "new_version=$new_version" >> "$GITHUB_OUTPUT"
 
       - name: Get tag version
         id: get-tag-version
         run: |
-            baseVersion=${{ steps.get-next-semantic-base-version.outputs.version }}
+            baseVersion=${{ steps.calculate-version.outputs.new_version }}
             tagType="${{ inputs.tag-type }}"
             if [ "$tagType" = "rc" ]; then
               currentNumberRCs=$(git tag | grep "$baseVersion"-rc | wc -l)
