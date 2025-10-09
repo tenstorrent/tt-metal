@@ -89,6 +89,7 @@ jobs:
         timeout-minutes: 15
         env:
           ARCH_NAME: ${{ matrix.test-group.arch }}
+          CI_CD_JOB_ID: ${{ github.job }}
         run: python3 /work/.github/scripts/data_analysis/create_benchmark_with_environment_json.py
 
       - name: Upload benchmark data

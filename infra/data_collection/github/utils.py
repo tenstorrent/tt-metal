@@ -395,8 +395,9 @@ def create_json_with_github_benchmark_environment(github_partial_benchmark_data_
 
     github_pipeline_link = f"https://github.com/{git_repo_name}/actions/runs/{github_pipeline_id}"
 
-    logger.warning("Hardcoded null for github_job_id")
-    github_job_id = None
+    logger.info("Fetching GitHub job ID from environment (CI_CD_JOB_ID)...")
+    github_job_id = os.environ.get("CI_CD_JOB_ID", "unknown")
+    logger.info(f"GitHub job ID resolved to: {github_job_id}")
 
     assert "GITHUB_TRIGGERING_ACTOR" in os.environ
     user_name = os.environ["GITHUB_TRIGGERING_ACTOR"]
