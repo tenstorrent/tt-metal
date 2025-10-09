@@ -1313,7 +1313,7 @@ jobs:
           # Output for next steps
           {
             echo "pr-title<<EOF"
-            echo "$PR_TITLE"
+            printf '%s\n' "$PR_TITLE"
             echo "EOF"
             echo "pr-author-login<<EOF"
             echo "$PR_AUTHOR_LOGIN"
