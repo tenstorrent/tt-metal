@@ -106,10 +106,16 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
     auto in1_sender_cores = CoreRange(core_0_0, core_endx_0);
     auto in1_receiver_cores = CoreRange(core_0_1, core_endx_endy);
 
-    auto in0_mcast_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
-    auto in0_mcast_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
-    auto in1_mcast_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
-    auto in1_mcast_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
+    // auto in0_mcast_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
+    // auto in0_mcast_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
+    // auto in1_mcast_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
+    // auto in1_mcast_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
+    auto in0_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
+    auto in0_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
+    auto in0_valid_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, VALID);
+    auto in1_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
+    auto in1_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
+    auto in1_valid_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, VALID);
 
     uint32_t in0_cb_id = tt::CBIndex::c_0;
     tt::tt_metal::create_cb(in0_cb_id, program, core_grid, input_tile_size, in0_cb_num_tiles, data_format);
@@ -182,14 +188,14 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
     uint32_t weight_addr = weight_tensor.buffer()->address();
     uint32_t out_addr = output_tensor.buffer()->address();
 
-    bool in0_is_output_writer = true;
-    bool in1_is_output_writer = false;
-
     /**
      * Create kernels
      */
-    auto in0_mcast_num_dests = grid_size.x - 1;
-    auto in1_mcast_num_dests = grid_size.y - 1;
+    // auto in0_mcast_num_dests = grid_size.x - 1;
+    // auto in1_mcast_num_dests = grid_size.y - 1;
+
+    bool in0_is_output_writer = true;
+    bool in1_is_output_writer = false;
 
     std::vector<uint32_t> in0_sender_compile_time_args = {
         M_tiles,
@@ -202,10 +208,12 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
         K_block_tiles,
         N_block_tiles,
         input_tile_size,
-        in0_mcast_sender_semaphore_id,
-        in0_mcast_receiver_semaphore_id,
-        in0_mcast_num_dests,
-        in0_is_output_writer};
+        in0_sender_semaphore_id,
+        in0_receiver_semaphore_id,
+        in0_valid_semaphore_id,
+        in0_is_output_writer,
+        true  // is_injector_core
+    };
     tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer()).append_to(in0_sender_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(in0_sender_compile_time_args);
     auto in0_sender_kernels_id = CreateKernel(
@@ -226,13 +234,17 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
         K_block_tiles,
         N_block_tiles,
         input_tile_size,
-        in0_mcast_sender_semaphore_id,
-        in0_mcast_receiver_semaphore_id,
-        in0_is_output_writer};
+        in0_sender_semaphore_id,
+        in0_receiver_semaphore_id,
+        in0_valid_semaphore_id,
+        in0_is_output_writer,
+        false  // is_injector_core
+    };
+    tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer()).append_to(in0_receiver_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(in0_receiver_compile_time_args);
     auto in0_receiver_kernels_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in0_receiver.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in0_sender.cpp",
         in0_receiver_cores,
         tt::tt_metal::DataMovementConfig{
             .processor = in0_risc, .noc = in0_noc, .compile_args = in0_receiver_compile_time_args, .defines = defines});
@@ -248,10 +260,12 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
         K_block_tiles,
         N_block_tiles,
         input_tile_size,
-        in1_mcast_sender_semaphore_id,
-        in1_mcast_receiver_semaphore_id,
-        in1_mcast_num_dests,
-        in1_is_output_writer};
+        in1_sender_semaphore_id,
+        in1_receiver_semaphore_id,
+        in1_valid_semaphore_id,
+        in1_is_output_writer,
+        true  // is_injector_core
+    };
     tt::tt_metal::TensorAccessorArgs(*weight_tensor.buffer()).append_to(in1_sender_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(in1_sender_compile_time_args);
     auto in1_sender_kernels_id = CreateKernel(
@@ -272,13 +286,17 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
         K_block_tiles,
         N_block_tiles,
         input_tile_size,
-        in1_mcast_sender_semaphore_id,
-        in1_mcast_receiver_semaphore_id,
-        in1_is_output_writer};
+        in1_sender_semaphore_id,
+        in1_receiver_semaphore_id,
+        in1_valid_semaphore_id,
+        in1_is_output_writer,
+        false  // is_injector_core
+    };
+    tt::tt_metal::TensorAccessorArgs(*weight_tensor.buffer()).append_to(in1_receiver_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(in1_receiver_compile_time_args);
     auto in1_receiver_kernels_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in1_receiver_out.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in1_sender_out.cpp",
         in1_receiver_cores,
         tt::tt_metal::DataMovementConfig{
             .processor = in1_risc, .noc = in1_noc, .compile_args = in1_receiver_compile_time_args, .defines = defines});
@@ -309,37 +327,57 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
 
     for (uint32_t core_id = 0; core_id < num_cores; ++core_id) {
         CoreCoord core = cores.at(core_id);
-
-        CoreCoord left_core = {(std::size_t)0, (std::size_t)core.y};
-        CoreCoord left_core_plus_one = {(std::size_t)1, (std::size_t)core.y};
-        CoreCoord right_core = {(std::size_t)grid_size.x - 1, (std::size_t)core.y};
-        CoreCoord top_core = {(std::size_t)core.x, (std::size_t)0};
-        CoreCoord top_core_plus_one = {(std::size_t)core.x, (std::size_t)1};
-        CoreCoord bottom_core = {(std::size_t)core.x, (std::size_t)grid_size.y - 1};
-
-        auto left_core_physical = device->worker_core_from_logical_core(left_core);
-        auto left_core_plus_one_physical = device->worker_core_from_logical_core(left_core_plus_one);
-        auto right_core_physical = device->worker_core_from_logical_core(right_core);
-        auto top_core_physical = device->worker_core_from_logical_core(top_core);
-        auto top_core_plus_one_physical = device->worker_core_from_logical_core(top_core_plus_one);
-        auto bottom_core_physical = device->worker_core_from_logical_core(bottom_core);
         uint32_t in0_idx = core.y;
         uint32_t in1_idx = core.x;
 
-        auto in0_mcast_sender = left_core_physical;
-        auto in1_mcast_sender = top_core_physical;
+        CoreCoord left_core = {(std::size_t)0, (std::size_t)core.y};
+        CoreCoord top_core = {(std::size_t)core.x, (std::size_t)0};
 
-        auto in0_mcast_start = left_core_plus_one_physical;
-        auto in0_mcast_end = right_core_physical;
-        if (in0_noc == tt::tt_metal::NOC::NOC_1) {
-            std::swap(in0_mcast_start, in0_mcast_end);
+        std::vector<CoreCoord> in0_core_order;
+        in0_core_order.push_back(left_core);
+        uint32_t in0_core_order_index = 0;
+        for (uint32_t in0_worker_idx = 1; in0_worker_idx < grid_size.x; in0_worker_idx++) {
+            CoreCoord in0_worker_core = {(std::size_t)0, (std::size_t)core.y};
+            if (in0_noc == tt::tt_metal::NOC::NOC_1) {
+                in0_worker_core.x = grid_size.x - in0_worker_idx;
+            } else {
+                in0_worker_core.x = in0_worker_idx;
+            }
+            if (in0_worker_core.x == core.x) {
+                in0_core_order_index = in0_worker_idx;
+            }
+            in0_core_order.push_back(in0_worker_core);
         }
+        std::vector<CoreCoord> in1_core_order;
+        in1_core_order.push_back(top_core);
+        uint32_t in1_core_order_index = 0;
+        for (uint32_t in1_worker_idx = 1; in1_worker_idx < grid_size.y; in1_worker_idx++) {
+            CoreCoord in1_worker_core = {(std::size_t)core.x, (std::size_t)0};
+            if (in1_noc == tt::tt_metal::NOC::NOC_0) {
+                in1_worker_core.y = in1_worker_idx;
+            } else {
+                in1_worker_core.y = grid_size.y - in1_worker_idx;
+            }
+            if (in1_worker_core.y == core.y) {
+                in1_core_order_index = in1_worker_idx;
+            }
+            in1_core_order.push_back(in1_worker_core);
+        }
+        auto in0_prev_core = in0_core_order.at((std::size_t)std::max((int32_t)in0_core_order_index - 1, 0));
+        auto in0_next_core =
+            in0_core_order.at((std::size_t)std::min((size_t)in0_core_order_index + 1, grid_size.x - 1));
+        auto in1_prev_core = in1_core_order.at((std::size_t)std::max((int32_t)in1_core_order_index - 1, 0));
+        auto in1_next_core =
+            in1_core_order.at((std::size_t)std::min((size_t)in1_core_order_index + 1, grid_size.y - 1));
 
-        auto in1_mcast_start = top_core_plus_one_physical;
-        auto in1_mcast_end = bottom_core_physical;
-        if (in1_noc == tt::tt_metal::NOC::NOC_1) {
-            std::swap(in1_mcast_start, in1_mcast_end);
-        }
+        auto in0_prev_core_physical = device->worker_core_from_logical_core(in0_prev_core);
+        ;
+        auto in0_next_core_physical = device->worker_core_from_logical_core(in0_next_core);
+        ;
+        auto in1_prev_core_physical = device->worker_core_from_logical_core(in1_prev_core);
+        ;
+        auto in1_next_core_physical = device->worker_core_from_logical_core(in1_next_core);
+        ;
 
         // uint32_t M_start_block = std::min(M_blocks_per_core * in0_idx, M_blocks - 1);
         // uint32_t M_end_block = std::min(M_blocks_per_core * (in0_idx + 1) - 1, M_blocks - 1);
@@ -362,15 +400,28 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
         uint32_t defer_write_k_block = core.x * k_blocks_per_core;
         defer_write_k_block = std::min(defer_write_k_block, K_blocks - 1);
 
+        bool is_in0_sink = core.x == grid_size.x - 1;
+        bool is_in1_sink = core.y == grid_size.y - 1;
+
+        log_info(
+            tt::LogOp,
+            "core: {}, in0_idx: {}, in1_idx: {}, is_in0_sink: {}, is_in1_sink: {}",
+            core,
+            in0_idx,
+            in1_idx,
+            is_in0_sink,
+            is_in1_sink);
+
         if (in1_idx == 0) {
             // in0 sender
             std::vector<uint32_t> in0_sender_args = {
                 input_addr,
                 out_addr,
-                (std::uint32_t)in0_mcast_start.x,  // in0_mcast_dest_noc_start_x
-                (std::uint32_t)in0_mcast_start.y,  // in0_mcast_dest_noc_start_y
-                (std::uint32_t)in0_mcast_end.x,    // in0_mcast_dest_noc_end_x
-                (std::uint32_t)in0_mcast_end.y,    // in0_mcast_dest_noc_end_y
+                is_in0_sink,
+                (std::uint32_t)in0_next_core_physical.x,  // in0_dest_noc_x
+                (std::uint32_t)in0_next_core_physical.y,  // in0_dest_noc_y
+                (std::uint32_t)in0_prev_core_physical.x,  // in0_sender_noc_x
+                (std::uint32_t)in0_prev_core_physical.y,  // in0_sender_noc_y
                 M_start_block,
                 M_end_block,
                 N_start_block,
@@ -380,14 +431,18 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
         } else {
             // in0 receiver
             std::vector<uint32_t> in0_receiver_args = {
+                input_addr,
                 out_addr,
-                (std::uint32_t)in0_mcast_sender.x,  // in0_mcast_sender_noc_x
-                (std::uint32_t)in0_mcast_sender.y,  // in0_mcast_sender_noc_y
+                is_in0_sink,
+                (std::uint32_t)in0_next_core_physical.x,  // in0_dest_noc_x
+                (std::uint32_t)in0_next_core_physical.y,  // in0_dest_noc_y
+                (std::uint32_t)in0_prev_core_physical.x,  // in0_sender_noc_x
+                (std::uint32_t)in0_prev_core_physical.y,  // in0_sender_noc_y
                 M_start_block,
                 M_end_block,
                 N_start_block,
                 N_end_block,
-                defer_write_k_block,
+                // defer_write_k_block,
             };
             SetRuntimeArgs(program, in0_receiver_kernels_id, core, in0_receiver_args);
         }
@@ -397,10 +452,11 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
             std::vector<uint32_t> in1_sender_args = {
                 weight_addr,
                 out_addr,
-                (std::uint32_t)in1_mcast_start.x,  // in1_mcast_dest_noc_start_x
-                (std::uint32_t)in1_mcast_start.y,  // in1_mcast_dest_noc_start_y
-                (std::uint32_t)in1_mcast_end.x,    // in1_mcast_dest_noc_end_x
-                (std::uint32_t)in1_mcast_end.y,    // in1_mcast_dest_noc_end_y
+                is_in1_sink,
+                (std::uint32_t)in1_next_core_physical.x,  // in1_dest_noc_x
+                (std::uint32_t)in1_next_core_physical.y,  // in1_dest_noc_y
+                (std::uint32_t)in1_prev_core_physical.x,  // in1_sender_noc_x
+                (std::uint32_t)in1_prev_core_physical.y,  // in1_sender_noc_y
                 M_start_block,
                 M_end_block,
                 N_start_block,
@@ -410,14 +466,18 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
         } else {
             // in1 receiver
             std::vector<uint32_t> in1_receiver_args = {
+                weight_addr,
                 out_addr,
-                (std::uint32_t)in1_mcast_sender.x,  // in1_mcast_sender_noc_x
-                (std::uint32_t)in1_mcast_sender.y,  // in1_mcast_sender_noc_y
+                is_in1_sink,
+                (std::uint32_t)in1_next_core_physical.x,  // in1_dest_noc_x
+                (std::uint32_t)in1_next_core_physical.y,  // in1_dest_noc_y
+                (std::uint32_t)in1_prev_core_physical.x,  // in1_sender_noc_x
+                (std::uint32_t)in1_prev_core_physical.y,  // in1_sender_noc_y
                 M_start_block,
                 M_end_block,
                 N_start_block,
                 N_end_block,
-                defer_write_k_block,
+                // defer_write_k_block,
             };
             SetRuntimeArgs(program, in1_receiver_kernels_id, core, in1_receiver_args);
         }
