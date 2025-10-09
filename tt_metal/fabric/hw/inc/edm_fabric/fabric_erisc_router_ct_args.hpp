@@ -147,7 +147,6 @@ constexpr uint32_t remote_vc1_sender_channel =
 constexpr size_t remote_worker_sender_channel =
     conditional_get_compile_time_arg<skip_src_ch_id_update, REMOTE_CHANNEL_INFO_START_IDX + 1>();
 
-    // ct_args.push_back(0xabcd1234);
 constexpr size_t ANOTHER_SPECIAL_TAG = 0xabcd1234;
 constexpr size_t ANOTHER_SPECIAL_TAG_IDX = REMOTE_CHANNEL_INFO_START_IDX + (skip_src_ch_id_update ? 2 : 0);
 static_assert(
