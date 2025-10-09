@@ -69,6 +69,37 @@ def test_linear(device, M, K, N, M_block_size, K_block_size, N_block_size, subbl
     assert check_result["relative_rmse"] < 0.02
 
 
+@pytest.mark.parametrize("M", [32, 96, 320, 4096])
+@pytest.mark.parametrize("K", [32, 96, 320, 4096])
+@pytest.mark.parametrize("N", [32, 96, 320, 4096])
+@pytest.mark.parametrize(
+    "M_block_size, K_block_size, N_block_size, subblock_h, subblock_w",
+    [(8, 8, 8, 2, 2)],
+)
+def test_linear_padded_sweep(device, M, K, N, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w):
+    check_result = run_test_linear(device, M, K, N, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w)
+    assert check_result["pcc"] > 0.999_500
+    assert check_result["relative_rmse"] < 0.02
+
+
+@pytest.mark.parametrize(
+    "M, K, N",
+    [
+        (9472, 5120, 1280),
+        (9472, 5120, 3456),
+        (9472, 3456, 5120),
+    ],
+)
+@pytest.mark.parametrize(
+    "M_block_size, K_block_size, N_block_size, subblock_h, subblock_w",
+    [(8, 8, 8, 2, 2)],
+)
+def test_linear_padded_wan_shapes(device, M, K, N, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w):
+    check_result = run_test_linear(device, M, K, N, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w)
+    assert check_result["pcc"] > 0.999_500
+    assert check_result["relative_rmse"] < 0.02
+
+
 @pytest.mark.parametrize(
     "M, K, N",
     [(4096, 4096, 4096)],
@@ -183,6 +214,9 @@ def test_linear_sweep_subblocks(device):
         (4096, 4096, 2048),
         (4096, 4096, 1024),
         (4096, 4096, 512),
+        (9472, 5120, 1280),
+        (9472, 5120, 3456),
+        (9472, 3456, 5120),
     ],
 )
 def test_linear_sweep_blocks(device, M, K, N):
@@ -210,13 +244,10 @@ def test_linear_sweep_blocks(device, M, K, N):
 
     core_grid = ttnn.CoreCoord(8, 8)
     subblocks = [(2, 2)]
-    M_tiles_per_core = M // 32 // core_grid.y
-    N_tiles_per_core = N // 32 // core_grid.x
-    import math
 
-    m_block_sizes = [2**i for i in range(1, min(int(math.log2(M_tiles_per_core)), 8) + 1)]
-    n_block_sizes = [2**i for i in range(1, min(int(math.log2(N_tiles_per_core)), 8) + 1)]
-    k_block_sizes = [4, 8]
+    m_block_sizes = [2, 4, 8, 16]
+    n_block_sizes = [2, 4, 8, 16]
+    k_block_sizes = [4, 8, 16]
 
     from itertools import product
 

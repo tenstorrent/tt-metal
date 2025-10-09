@@ -91,7 +91,7 @@ void safe_print_full_tile(uint32_t cb_id) {
 
 namespace NAMESPACE {
 void MAIN {
-    constexpr uint32_t K_tiles = get_compile_time_arg_val(0);
+    constexpr uint32_t K_num_blocks = get_compile_time_arg_val(0);
     constexpr uint32_t M_block_tiles = get_compile_time_arg_val(1);
     constexpr uint32_t K_block_tiles = get_compile_time_arg_val(2);
     constexpr uint32_t N_block_tiles = get_compile_time_arg_val(3);
@@ -110,8 +110,6 @@ void MAIN {
     constexpr uint32_t intermediate_cb = tt::CBIndex::c_3;
 
     mm_init(in0_cb, in1_cb, intermediate_cb);
-
-    constexpr uint32_t K_num_blocks = K_tiles / K_block_tiles;
 
     constexpr uint32_t in0_block_num_tiles = M_block_tiles * K_block_tiles;
     constexpr uint32_t in1_block_num_tiles = K_block_tiles * N_block_tiles;
