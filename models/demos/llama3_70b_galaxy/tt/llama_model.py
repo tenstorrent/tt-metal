@@ -438,7 +438,7 @@ class TtTransformer(LightweightModule):
             tt_logits = self.lm_head(x, None, mode="prefill")
 
             # Gather the output across all devices and untilize the tensor (for argmax)
-            tt_logits = self.tt_ccl.line_all_gather(
+            tt_logits_tilized = self.tt_ccl.line_all_gather(
                 tt_logits[0],
                 dim=3,
                 num_links=3,
@@ -447,7 +447,7 @@ class TtTransformer(LightweightModule):
                 buffer_key="SAMPLING",
             )
 
-            tt_logits = ttnn.untilize(tt_logits, use_multicore=True)
+            tt_logits = ttnn.untilize(tt_logits_tilized, use_multicore=True)
 
             tt_logits = ttnn.reshape(
                 tt_logits,
@@ -465,7 +465,7 @@ class TtTransformer(LightweightModule):
             # make sure tt_out_logits_saved is mutable
             logits_saved = ttnn.to_torch(ttnn.get_device_tensors(tt_logits)[0]).float()[0, 0, :, :]
             tt_out_logits_saved.copy_(logits_saved)
-
+        tt_logits.deallocate(True)
         return toks_list if isinstance(last_token_idx, list) else toks
 
     def process_output_decode(self, tt_out):
