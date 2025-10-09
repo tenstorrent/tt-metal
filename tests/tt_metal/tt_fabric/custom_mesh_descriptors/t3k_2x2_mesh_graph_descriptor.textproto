@@ -25,13 +25,11 @@ graph_descriptors {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 device_id: 1 } }
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 device_id: 0 } }
     channels { count: 2 }
-    routing_direction : [ E, W ]
   }
   connections {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 device_id: 3 } }
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 device_id: 2 } }
     channels { count: 2 }
-    routing_direction : [ E, W ]
   }
 }
 
