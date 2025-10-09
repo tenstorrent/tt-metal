@@ -38,20 +38,8 @@ void matmul_blocks(
     const uint32_t M_num_subblocks,
     const uint32_t N_num_subblocks,
     const uint32_t subblock_h,
-    const uint32_t subblock_w,
-    const bool accumulate_intermediate) {
-    mm_block_init_short(
-        in0_cb, in1_cb, false /*transpose*/, subblock_w /*ct_dim*/, subblock_h /*rt_dim*/, K_block_tiles /*kt_dim*/);
-
+    const uint32_t subblock_w) {
     uint32_t in0_index_offset = 0;
-
-    reconfig_data_format(in1_cb, in0_cb);
-    pack_reconfig_data_format(out_cb);
-    if (accumulate_intermediate) {
-        PACK((llk_pack_reconfig_l1_acc(1)));
-    } else {
-        PACK((llk_pack_reconfig_l1_acc(0)));
-    }
 
     for (uint32_t M_subblock = 0; M_subblock < M_num_subblocks; ++M_subblock) {
         uint32_t in1_index_offset = 0;
@@ -88,8 +76,6 @@ void matmul_blocks(
         }
         in0_index_offset += subblock_h * K_block_tiles;
     }
-
-    PACK((llk_pack_reconfig_l1_acc(0)));
 }
 
 void safe_print_full_tile(uint32_t cb_id) {
@@ -133,6 +119,15 @@ void MAIN {
     bool reuse_in1_block = false;
     for (uint32_t m_block = M_start_block; m_block <= M_end_block; m_block++) {
         for (uint32_t n_block = N_start_block; n_block <= N_end_block; n_block++) {
+            mm_block_init_short(
+                in0_cb,
+                in1_cb,
+                false /*transpose*/,
+                subblock_w /*ct_dim*/,
+                subblock_h /*rt_dim*/,
+                K_block_tiles /*kt_dim*/);
+            reconfig_data_format(in1_cb, in0_cb);
+            pack_reconfig_data_format(intermediate_cb);
             // Accumulation buffer
             cb_reserve_back(intermediate_cb, out_block_num_tiles);
             for (uint32_t k_block = 0; k_block < K_num_blocks; k_block++) {
@@ -149,8 +144,7 @@ void MAIN {
                     M_num_subblocks,
                     N_num_subblocks,
                     subblock_h,
-                    subblock_w,
-                    k_block > 0);
+                    subblock_w);
 
                 if (k_block == K_num_blocks - 1) {
                     /**
@@ -174,6 +168,9 @@ void MAIN {
                 }
                 reuse_in0_block = false;
                 reuse_in1_block = false;
+                if (k_block == 0) {
+                    PACK((llk_pack_reconfig_l1_acc(1)));
+                }
             }
             /**
              * Depending on the direction we're striding, either in0 or in1 DM will write the output.
@@ -182,6 +179,7 @@ void MAIN {
              */
 
             cb_push_back(intermediate_cb, out_block_num_tiles);
+            PACK((llk_pack_reconfig_l1_acc(0)));
             cb_wait_front(intermediate_cb, out_block_num_tiles);
             cb_reserve_back(out_cb, out_block_num_tiles);
             copy_block(intermediate_cb, out_cb, out_block_num_tiles);
