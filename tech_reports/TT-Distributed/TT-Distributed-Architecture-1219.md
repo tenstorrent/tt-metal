@@ -1630,13 +1630,13 @@ The functions listed below allow a MeshTrace to be captured, binarized and run/r
 // Maps to BeginTraceCapture
 void MeshDevice::begin_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id);
 
-// Maps to EndTraceCapture
+
 void MeshDevice::end_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id);
 
-// Maps to ReplayTrace
+
 void MeshDevice::replay_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id, bool blocking);
 
-// Maps to ReleaseTrace
+
 void MeshDevice::release_mesh_trace(const MeshTraceId& trace_id);
 
 // Get the underlying MeshTrace metadata corresponding to an ID.

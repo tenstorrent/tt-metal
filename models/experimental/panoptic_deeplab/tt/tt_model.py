@@ -58,6 +58,10 @@ class TtPanopticDeepLab:
         norm: str = "SyncBN",  # Synchronized Batch Normalization
         # Training configuration
         train_size: Optional[Tuple[int, int]] = None,
+        # Model configurations
+        model_configs=None,
+        # Data type configuration for ResNet layers
+        resnet_layer_dtypes: Optional[Dict[str, ttnn.DataType]] = None,
     ):
         """
         Initialize the Panoptic-DeepLab model with unified parameter loading.
@@ -87,7 +91,14 @@ class TtPanopticDeepLab:
         logger.debug("Initializing ResNet backbone with preprocessed parameters")
         # Handle both dict and object parameter formats
         backbone_params = parameters["backbone"] if isinstance(parameters, dict) else parameters.backbone
-        self.backbone = TtResNet(parameters=backbone_params, device=device, dtype=ttnn.bfloat16)
+
+        # Use resnet_layer_dtypes if provided, otherwise default to bfloat8_b for all layers
+        backbone_dtype = resnet_layer_dtypes if resnet_layer_dtypes is not None else ttnn.bfloat8_b
+
+        self.backbone = TtResNet(
+            parameters=backbone_params, device=device, dtype=backbone_dtype, model_configs=model_configs
+        )
+
         logger.debug("ResNet backbone initialization complete")
 
         # Define feature map specifications based on ResNet output
@@ -108,6 +119,7 @@ class TtPanopticDeepLab:
             decoder_channels=decoder_channels,
             common_stride=common_stride,
             train_size=train_size,
+            model_configs=model_configs,
         )
         logger.debug("Semantic segmentation head initialization complete")
 
@@ -125,6 +137,7 @@ class TtPanopticDeepLab:
             common_stride=common_stride,
             norm=norm,
             train_size=train_size,
+            model_configs=model_configs,
         )
         logger.debug("Instance embedding head initialization complete")
         logger.debug("TtPanopticDeepLab model initialization complete")
@@ -278,3 +291,80 @@ class TtPanopticDeepLab:
             "input_shape": {k: (v.channels, v.stride) for k, v in self.input_shape.items()},
             "train_size": self.train_size,
         }
+
+
+def create_resnet_dtype_config(config_name: str = "all_bfloat16") -> Dict[str, ttnn.DataType]:
+    """
+    Create predefined dtype configurations for ResNet layers.
+
+    Args:
+        config_name: Name of the configuration to use
+
+    Available configurations:
+        - "all_bfloat16": All layers use bfloat16 (highest accuracy)
+        - "all_bfloat8": All layers use bfloat8_b (fastest inference)
+        - "mixed_early_bf16": Early layers (stem, res2, res3) use bfloat16, later layers use bfloat8_b
+        - "mixed_late_bf16": Early layers use bfloat8_b, later layers (res4, res5) use bfloat16
+        - "stem_only_bf16": Only stem uses bfloat16, all residual layers use bfloat8_b
+        - "res5_only_bf16": Only res5 uses bfloat16, others use bfloat8_b
+
+    Returns:
+        Dictionary mapping layer names to data types
+    """
+    configs = {
+        "all_bfloat16": {
+            "stem": ttnn.bfloat16,
+            "res2": ttnn.bfloat16,
+            "res3": ttnn.bfloat16,
+            "res4": ttnn.bfloat16,
+            "res5": ttnn.bfloat16,
+        },
+        "all_bfloat8": {
+            "stem": ttnn.bfloat8_b,
+            "res2": ttnn.bfloat8_b,
+            "res3": ttnn.bfloat8_b,
+            "res4": ttnn.bfloat8_b,
+            "res5": ttnn.bfloat8_b,
+        },
+        "mixed_early_bf16": {
+            "stem": ttnn.bfloat16,
+            "res2": ttnn.bfloat16,
+            "res3": ttnn.bfloat16,
+            "res4": ttnn.bfloat8_b,
+            "res5": ttnn.bfloat8_b,
+        },
+        "mixed_late_bf16": {
+            "stem": ttnn.bfloat8_b,
+            "res2": ttnn.bfloat8_b,
+            "res3": ttnn.bfloat8_b,
+            "res4": ttnn.bfloat16,
+            "res5": ttnn.bfloat16,
+        },
+        "stem_only_bf16": {
+            "stem": ttnn.bfloat16,
+            "res2": ttnn.bfloat8_b,
+            "res3": ttnn.bfloat8_b,
+            "res4": ttnn.bfloat8_b,
+            "res5": ttnn.bfloat8_b,
+        },
+        "res4_only_bf16": {
+            "stem": ttnn.bfloat8_b,
+            "res2": ttnn.bfloat8_b,
+            "res3": ttnn.bfloat8_b,
+            "res4": ttnn.bfloat16,
+            "res5": ttnn.bfloat8_b,
+        },
+        "res5_only_bf16": {
+            "stem": ttnn.bfloat8_b,
+            "res2": ttnn.bfloat8_b,
+            "res3": ttnn.bfloat8_b,
+            "res4": ttnn.bfloat8_b,
+            "res5": ttnn.bfloat16,
+        },
+    }
+
+    if config_name not in configs:
+        available = ", ".join(configs.keys())
+        raise ValueError(f"Unknown config '{config_name}'. Available: {available}")
+
+    return configs[config_name]

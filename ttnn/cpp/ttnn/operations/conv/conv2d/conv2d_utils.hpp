@@ -217,6 +217,7 @@ struct KernelStrideFoldingResult {
     uint32_t in_channels;
     std::array<uint32_t, 2> stride;
     std::array<uint32_t, 2> kernel_size;
+    std::array<uint32_t, 4> padding_n4;
     bool mm_conv;
 };
 

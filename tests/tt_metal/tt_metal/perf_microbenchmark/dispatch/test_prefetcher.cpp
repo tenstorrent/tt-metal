@@ -192,7 +192,8 @@ void init(int argc, char** argv) {
         test_args::get_command_option_uint32(input_args, "-hp", DEFAULT_HUGEPAGE_ISSUE_BUFFER_SIZE);
     prefetch_q_entries_g = test_args::get_command_option_uint32(input_args, "-hq", DEFAULT_PREFETCH_Q_ENTRIES);
     cmddat_q_size_g = test_args::get_command_option_uint32(input_args, "-cs", DEFAULT_CMDDAT_Q_SIZE);
-    max_prefetch_command_size_g = cmddat_q_size_g / 2;  // note: half this for best perf
+    max_prefetch_command_size_g =
+        cmddat_q_size_g / 2 - (CQ_PREFETCH_CMD_BARE_MIN_SIZE - 1);  // note: half this for best perf
     scratch_db_size_g = test_args::get_command_option_uint32(input_args, "-ss", DEFAULT_SCRATCH_DB_SIZE);
     use_coherent_data_g = test_args::has_command_option(input_args, "-c");
     readback_every_iteration_g = !test_args::has_command_option(input_args, "-rb");
@@ -377,9 +378,10 @@ void add_prefetcher_cmd_to_hostq(
     uint32_t new_size = (cmds.size() - prior_end) * sizeof(uint32_t);
     TT_FATAL(
         new_size <= max_prefetch_command_size_g,
-        "Generated prefetcher command {} exceeds max command size {}",
+        "Generated prefetcher command {} exceeds max command size {} (padding size {} B)",
         new_size,
-        max_prefetch_command_size_g);
+        max_prefetch_command_size_g,
+        pad_size_bytes);
     TT_FATAL((new_size >> DispatchSettings::PREFETCH_Q_LOG_MINSIZE) < 0xFFFF, "HostQ command too large to represent");
     sizes.push_back(new_size >> DispatchSettings::PREFETCH_Q_LOG_MINSIZE);
 }
@@ -957,6 +959,7 @@ void gen_rnd_inline_cmd(
             // packed unicast write
             gen_rnd_dispatcher_packed_write_cmd(device, dispatch_cmds, device_data);
             break;
+        default: TT_THROW("Invalid which_cmd {} in gen_rnd_inline_cmd", which_cmd);
     }
 
     add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE, dispatch_cmds);
@@ -1189,6 +1192,7 @@ void gen_rnd_test(
                     gen_rnd_debug_cmd(prefetch_cmds, cmd_sizes, device_data);
                 }
                 break;
+            default: gen_rnd_test(device, prefetch_cmds, cmd_sizes, device_data); break;
         }
     }
 }

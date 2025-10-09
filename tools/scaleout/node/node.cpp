@@ -193,8 +193,8 @@ public:
     }
 };
 
-// P150 QB Global Node class
-class P150QBGlobalNode {
+// P150 QB AE Node class
+class P150QBAENode {
 public:
     static tt::scaleout_tools::cabling_generator::proto::NodeDescriptor create() {
         tt::scaleout_tools::cabling_generator::proto::NodeDescriptor node;
@@ -218,12 +218,12 @@ public:
     }
 };
 
-// P300 QB America Node class
-class P300QBAmericaNode {
+// P300 QB GE Node class
+class P300QBGENode {
 public:
     static tt::scaleout_tools::cabling_generator::proto::NodeDescriptor create() {
         tt::scaleout_tools::cabling_generator::proto::NodeDescriptor node;
-        node.set_motherboard("SIENAD8-2L2T");
+        node.set_motherboard("B850M-C");
 
         // Add boards
         add_boards(&node, "P300", 1, 2);
@@ -348,8 +348,8 @@ tt::scaleout_tools::cabling_generator::proto::NodeDescriptor create_node_descrip
         case NodeType::WH_GALAXY_X_TORUS: return WHGalaxyXTorusNode::create();
         case NodeType::WH_GALAXY_Y_TORUS: return WHGalaxyYTorusNode::create();
         case NodeType::WH_GALAXY_XY_TORUS: return WHGalaxyXYTorusNode::create();
-        case NodeType::P150_QB_GLOBAL: return P150QBGlobalNode::create();
-        case NodeType::P300_QB_AMERICA: return P300QBAmericaNode::create();
+        case NodeType::P150_QB_AE: return P150QBAENode::create();
+        case NodeType::P300_QB_GE: return P300QBGENode::create();
         case NodeType::BH_GALAXY: return BHGalaxyNode::create();
         case NodeType::BH_GALAXY_X_TORUS: return BHGalaxyXTorusNode::create();
         case NodeType::BH_GALAXY_Y_TORUS: return BHGalaxyYTorusNode::create();

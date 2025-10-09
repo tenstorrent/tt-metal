@@ -7,9 +7,12 @@ import ttnn
 import torch
 
 from tests.ttnn.utils_for_testing import assert_equal
+from tests.ttnn.unit_tests.operations.test_utils import round_up
+
+CHANNEL_TEST_CASES = [1, 3, 8, 12, 15, 32]
 
 
-@pytest.mark.parametrize("C", [8, 16])
+@pytest.mark.parametrize("C", CHANNEL_TEST_CASES)
 @pytest.mark.parametrize("provide_memory_config", [True, False])
 @pytest.mark.parametrize(
     "HW, core_grid, padded_sharded_dim",
@@ -62,7 +65,7 @@ def test_convert_to_hwc(device, C, HW, core_grid, padded_sharded_dim, provide_me
     )
 
     if provide_memory_config:
-        output_shard_shape = (padded_sharded_dim, C)
+        output_shard_shape = (padded_sharded_dim, round_up(C, 8))
         output_shard_spec = ttnn.ShardSpec(core_grid, output_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
         output_mem_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, output_shard_spec
@@ -73,11 +76,13 @@ def test_convert_to_hwc(device, C, HW, core_grid, padded_sharded_dim, provide_me
 
     actual = ttnn.to_torch(actual)
 
-    passed, message = assert_equal(expected, actual)
+    passed, message = assert_equal(
+        expected, actual[:, :, :, : expected.shape[-1]]
+    )  # slice off padding that is applied when C % 8 != 0
     assert passed, message
 
 
-@pytest.mark.parametrize("C", [8, 16])
+@pytest.mark.parametrize("C", CHANNEL_TEST_CASES)
 @pytest.mark.parametrize(
     "HW, input_core_grid, output_core_grid, input_padded_sharded_dim, output_padded_sharded_dim",
     (
@@ -151,7 +156,7 @@ def test_convert_to_hwc_dram(
     input_shard_spec = ttnn.ShardSpec(input_core_grid, input_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
     input_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, input_shard_spec)
 
-    output_shard_shape = (output_padded_sharded_dim, C)
+    output_shard_shape = (output_padded_sharded_dim, round_up(C, 8))
     output_shard_spec = ttnn.ShardSpec(output_core_grid, output_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
     output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, output_shard_spec)
 
@@ -162,12 +167,14 @@ def test_convert_to_hwc_dram(
     actual = ttnn.experimental.convert_to_hwc(input_tensor, memory_config=output_mem_config, dtype=ttnn.bfloat16)
     actual = ttnn.to_torch(actual)
 
-    passed, message = assert_equal(expected, actual)
+    passed, message = assert_equal(
+        expected, actual[:, :, :, : expected.shape[-1]]
+    )  # slice off padding that is applied when C % 8 != 0
     assert passed, message
 
 
 def test_convert_to_hwc_dram_input_without_memory_config_should_fail(device):
-    C = 8
+    C = 4
     HW = 32
     core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
     padded_sharded_dim = 32
@@ -177,7 +184,6 @@ def test_convert_to_hwc_dram_input_without_memory_config_should_fail(device):
     input_shard_shape = (C, padded_sharded_dim)
     input_shard_spec = ttnn.ShardSpec(core_grid, input_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
     input_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, input_shard_spec)
-
     input_tensor = ttnn.Tensor(
         input_tensor, ttnn.bfloat16, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, mem_config=input_mem_config
     )
@@ -186,3 +192,11 @@ def test_convert_to_hwc_dram_input_without_memory_config_should_fail(device):
         RuntimeError, match="When input tensor is in DRAM, output memory_config must be explicitly specified"
     ):
         ttnn.experimental.convert_to_hwc(input_tensor, dtype=ttnn.bfloat16)
+
+    # Create an output shard that is not padded up to nearest aligned width
+    output_shard_shape = (padded_sharded_dim, C)
+    output_shard_spec = ttnn.ShardSpec(core_grid, output_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, output_shard_spec)
+
+    with pytest.raises(RuntimeError):
+        ttnn.experimental.convert_to_hwc(input_tensor, dtype=ttnn.bfloat16, memory_config=output_mem_config)

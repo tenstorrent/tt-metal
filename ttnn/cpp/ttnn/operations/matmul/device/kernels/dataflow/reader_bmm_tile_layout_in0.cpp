@@ -33,7 +33,7 @@ void kernel_main() {
     constexpr auto in0_args = TensorAccessorArgs<1>();
 
     constexpr uint32_t cb_id_in0 = 0;
-
+    constexpr uint32_t one_tile = 1;
 #ifdef IN0_SHARDED
     const uint32_t in0_num_tiles = batch * num_blocks * in0_block_h * in0_block_w;
     cb_reserve_back(cb_id_in0, in0_num_tiles);
@@ -52,13 +52,28 @@ void kernel_main() {
         for (uint32_t block = 0; block < num_blocks; ++block) {
             cb_reserve_back(cb_id_in0, in0_block_num_tiles);
 
+#ifdef INTERMEDIATE_CB_READ
+            constexpr uint32_t in0_intermediate_cb_index = tt::CBIndex::c_8;
+            cb_reserve_back(in0_intermediate_cb_index, one_tile);
+            uint32_t l1_write_addr_helper = get_write_ptr(in0_intermediate_cb_index);
+#endif  // INTERMEDIATE_CB_READ
+
             l1_write_addr_in0 = get_write_ptr(cb_id_in0);
 
             uint32_t in0_tensor_row_start_tile_id = in0_tensor_current_block_start_tile_id;
             for (uint32_t h = 0; h < in0_block_h; ++h) {
                 uint32_t in0_tensor_tile_id = in0_tensor_row_start_tile_id;
                 for (uint32_t w = 0; w < in0_block_w; ++w) {
+#ifndef INTERMEDIATE_CB_READ
                     noc_async_read_tile(in0_tensor_tile_id, s0, l1_write_addr_in0);
+#else
+                    noc_async_read_tile(in0_tensor_tile_id, s0, l1_write_addr_helper);
+                    noc_async_read_barrier();
+                    memcpy(
+                        /*dst=*/reinterpret_cast<void*>(l1_write_addr_in0),
+                        /*src=*/reinterpret_cast<const void*>(l1_write_addr_helper),
+                        /*size=*/in0_single_tile_size_bytes);
+#endif  // INTERMEDIATE_CB_READ
 
                     // Zero out padded regions for the very last tile
                     if constexpr (last_ktile_w > 0) {
@@ -79,8 +94,15 @@ void kernel_main() {
             noc_async_read_barrier();
 
             cb_push_back(cb_id_in0, in0_block_num_tiles);
+
+#ifdef INTERMEDIATE_CB_READ
+            // Clean up helper CB
+            cb_push_back(in0_intermediate_cb_index, one_tile);
+            cb_wait_front(in0_intermediate_cb_index, one_tile);
+            cb_pop_front(in0_intermediate_cb_index, one_tile);
+#endif  // INTERMEDIATE_CB_READ
         }
         in0_tensor_start_tile_id += MtKt;
     }
-#endif
+#endif  // IN0_SHARDED
 }

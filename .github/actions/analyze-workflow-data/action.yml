@@ -28,6 +28,19 @@ inputs:
     description: 'Number of days to look back for workflow data'
     required: false
     default: '15'
+  alert-all:
+    description: 'If true, generate a Slack-ready alert message listing all currently failing workflows with owner mentions.'
+    required: false
+    default: 'false'
+  annotations-index-path:
+    description: 'Path to JSON mapping run_id -> annotations directory (optional)'
+    required: false
+  commits-path:
+    description: 'Path to JSON array of commits on main (optional)'
+    required: false
+  logs-index-path:
+    description: 'Path to JSON mapping run_id -> extracted logs dir (optional)'
+    required: false
 
 outputs:
   failed_workflows:
@@ -36,6 +49,8 @@ outputs:
     description: 'The generated workflow report in markdown format, containing workflow statistics and failure details'
   regressed_workflows:
     description: 'JSON array of objects {name, run_id, run_url, created_at} for workflows that regressed (success -> fail)'
+  alert_all_message:
+    description: 'Slack-ready alert message listing all currently failing workflows with owner mentions (set when alert-all=true)'
 
 runs:
   using: 'node20'

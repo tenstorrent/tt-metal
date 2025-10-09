@@ -300,7 +300,7 @@ MemoryBlockTable Allocator::get_memory_block_table(const BufferType& buffer_type
     }
 }
 
-void Allocator::dump_memory_blocks(const BufferType& buffer_type, std::ofstream& out) const {
+void Allocator::dump_memory_blocks(const BufferType& buffer_type, std::ostream& out) const {
     std::lock_guard<std::mutex> lock(mutex_);
     switch (buffer_type) {
         case BufferType::DRAM: dram_manager_->dump_blocks(out); break;

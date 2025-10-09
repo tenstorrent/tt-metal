@@ -546,7 +546,7 @@ Statistics BankManager::get_statistics(BankManager::AllocatorDependencies::Alloc
     return alloc ? alloc->get_statistics() : Statistics();
 }
 
-void BankManager::dump_blocks(std::ofstream& out, BankManager::AllocatorDependencies::AllocatorID allocator_id) const {
+void BankManager::dump_blocks(std::ostream& out, BankManager::AllocatorDependencies::AllocatorID allocator_id) const {
     const auto* alloc = this->get_allocator_from_id(allocator_id);
     if (alloc) {
         alloc->dump_blocks(out);

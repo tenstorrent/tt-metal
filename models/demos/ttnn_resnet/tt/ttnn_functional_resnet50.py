@@ -638,9 +638,7 @@ class resnet50:
             self.fold_stride_h,
             self.fold_stride_w,
             use_transpose_as_fold=True,
-            pad_c=self.fold_pad_c,
-            pad_h=self.fold_pad_h,
-            pad_w=self.fold_pad_w,
+            padding=[self.fold_pad_h, self.fold_pad_h, self.fold_pad_w, self.fold_pad_w, 0, self.fold_pad_c],
             grid_size=self.fold_compute_grid_size,
             override_memory_config=self.override_fold_mem_config,
         )
