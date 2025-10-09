@@ -74,19 +74,19 @@ jobs:
           has_patch=false
 
           # Check for MAJOR version indicators
-          if echo "$commits" | grep -i -E "(MAJOR|BREAKING CHANGE|feat!:|fix!:)" > /dev/null; then
+          if echo "$commits" | grep -i -E "(MAJOR)" > /dev/null; then
             has_major=true
             echo "Found MAJOR version indicators"
           fi
 
           # Check for MINOR version indicators
-          if echo "$commits" | grep -i -E "(MINOR|feat:|feature:)" > /dev/null; then
+          if echo "$commits" | grep -i -E "(MINOR)" > /dev/null; then
             has_minor=true
             echo "Found MINOR version indicators"
           fi
 
           # Check for PATCH version indicators
-          if echo "$commits" | grep -i -E "(PATCH|fix:|bugfix:|hotfix:)" > /dev/null; then
+          if echo "$commits" | grep -i -E "(PATCH)" > /dev/null; then
             has_patch=true
             echo "Found PATCH version indicators"
           fi
