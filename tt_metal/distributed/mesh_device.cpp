@@ -588,6 +588,37 @@ void MeshDevice::reshape(const MeshShape& new_shape) {
     view_ = std::move(new_view);
 }
 
+void MeshDevice::rotate() {
+    TT_FATAL(shape().dims() == 2, "MeshDevice::rotate() is only supported for 2D meshes");
+
+    // Rotate by swapping dimensions: rows become cols, cols become rows
+    const auto& current_shape = view_->shape();
+    MeshShape new_shape({current_shape[1], current_shape[0]});
+
+    std::vector<MaybeRemote<IDevice*>> new_device_order;
+    std::vector<tt::tt_fabric::FabricNodeId> new_fabric_node_ids;
+
+    new_device_order.reserve(new_shape.mesh_size());
+    new_fabric_node_ids.reserve(new_shape.mesh_size());
+
+    // Iterate through the new shape and map from transposed coordinates in the old view, following row-major ordering.
+    for (int i = 0; i < new_shape[0]; i++) {
+        for (int j = 0; j < new_shape[1]; j++) {
+            const auto old_coord = MeshCoordinate(j, i);
+
+            if (view_->is_local(old_coord)) {
+                new_device_order.push_back(MaybeRemote<IDevice*>::local(view_->get_device(old_coord)));
+            } else {
+                new_device_order.push_back(MaybeRemote<IDevice*>::remote());
+            }
+            new_fabric_node_ids.push_back(view_->get_fabric_node_id(old_coord));
+        }
+    }
+
+    auto new_view = std::make_unique<MeshDeviceView>(new_shape, new_device_order, new_fabric_node_ids);
+    view_ = std::move(new_view);
+}
+
 bool MeshDevice::close() {
     ZoneScoped;
     log_trace(tt::LogMetal, "Closing mesh device {}", this->id());

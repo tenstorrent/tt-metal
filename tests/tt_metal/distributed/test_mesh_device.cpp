@@ -163,5 +163,66 @@ TEST_F(MeshDeviceTest, CheckFabricNodeIds) {
     }
 }
 
+TEST_F(MeshDevice2x4Test, Rotate) {
+    // Original 2x4 mesh with fabric node IDs in row-major order
+    EXPECT_EQ(mesh_device_->shape(), MeshShape(2, 4));
+    EXPECT_EQ(mesh_device_->get_fabric_node_id(MeshCoordinate(0, 0)).chip_id, 0);
+    EXPECT_EQ(mesh_device_->get_fabric_node_id(MeshCoordinate(0, 1)).chip_id, 1);
+    EXPECT_EQ(mesh_device_->get_fabric_node_id(MeshCoordinate(0, 2)).chip_id, 2);
+    EXPECT_EQ(mesh_device_->get_fabric_node_id(MeshCoordinate(0, 3)).chip_id, 3);
+    EXPECT_EQ(mesh_device_->get_fabric_node_id(MeshCoordinate(1, 0)).chip_id, 4);
+    EXPECT_EQ(mesh_device_->get_fabric_node_id(MeshCoordinate(1, 1)).chip_id, 5);
+    EXPECT_EQ(mesh_device_->get_fabric_node_id(MeshCoordinate(1, 2)).chip_id, 6);
+    EXPECT_EQ(mesh_device_->get_fabric_node_id(MeshCoordinate(1, 3)).chip_id, 7);
+
+    // First rotation: 2x4 -> 4x2 (90 degrees clockwise)
+    mesh_device_->rotate();
+    EXPECT_EQ(mesh_device_->shape(), MeshShape(4, 2));
+    EXPECT_EQ(mesh_device_->get_fabric_node_id(MeshCoordinate(0, 0)).chip_id, 0);
+    EXPECT_EQ(mesh_device_->get_fabric_node_id(MeshCoordinate(0, 1)).chip_id, 4);
+    EXPECT_EQ(mesh_device_->get_fabric_node_id(MeshCoordinate(1, 0)).chip_id, 1);
+    EXPECT_EQ(mesh_device_->get_fabric_node_id(MeshCoordinate(1, 1)).chip_id, 5);
+    EXPECT_EQ(mesh_device_->get_fabric_node_id(MeshCoordinate(2, 0)).chip_id, 2);
+    EXPECT_EQ(mesh_device_->get_fabric_node_id(MeshCoordinate(2, 1)).chip_id, 6);
+    EXPECT_EQ(mesh_device_->get_fabric_node_id(MeshCoordinate(3, 0)).chip_id, 3);
+    EXPECT_EQ(mesh_device_->get_fabric_node_id(MeshCoordinate(3, 1)).chip_id, 7);
+
+    // Second rotation: 4x2 -> 2x4 (180 degrees total)
+    mesh_device_->rotate();
+    EXPECT_EQ(mesh_device_->shape(), MeshShape(2, 4));
+    EXPECT_EQ(mesh_device_->get_fabric_node_id(MeshCoordinate(0, 0)).chip_id, 0);
+    EXPECT_EQ(mesh_device_->get_fabric_node_id(MeshCoordinate(0, 1)).chip_id, 1);
+    EXPECT_EQ(mesh_device_->get_fabric_node_id(MeshCoordinate(0, 2)).chip_id, 2);
+    EXPECT_EQ(mesh_device_->get_fabric_node_id(MeshCoordinate(0, 3)).chip_id, 3);
+    EXPECT_EQ(mesh_device_->get_fabric_node_id(MeshCoordinate(1, 0)).chip_id, 4);
+    EXPECT_EQ(mesh_device_->get_fabric_node_id(MeshCoordinate(1, 1)).chip_id, 5);
+    EXPECT_EQ(mesh_device_->get_fabric_node_id(MeshCoordinate(1, 2)).chip_id, 6);
+    EXPECT_EQ(mesh_device_->get_fabric_node_id(MeshCoordinate(1, 3)).chip_id, 7);
+
+    // Third rotation: 2x4 -> 4x2 (270 degrees total)
+    mesh_device_->rotate();
+    EXPECT_EQ(mesh_device_->shape(), MeshShape(4, 2));
+    EXPECT_EQ(mesh_device_->get_fabric_node_id(MeshCoordinate(0, 0)).chip_id, 0);
+    EXPECT_EQ(mesh_device_->get_fabric_node_id(MeshCoordinate(0, 1)).chip_id, 4);
+    EXPECT_EQ(mesh_device_->get_fabric_node_id(MeshCoordinate(1, 0)).chip_id, 1);
+    EXPECT_EQ(mesh_device_->get_fabric_node_id(MeshCoordinate(1, 1)).chip_id, 5);
+    EXPECT_EQ(mesh_device_->get_fabric_node_id(MeshCoordinate(2, 0)).chip_id, 2);
+    EXPECT_EQ(mesh_device_->get_fabric_node_id(MeshCoordinate(2, 1)).chip_id, 6);
+    EXPECT_EQ(mesh_device_->get_fabric_node_id(MeshCoordinate(3, 0)).chip_id, 3);
+    EXPECT_EQ(mesh_device_->get_fabric_node_id(MeshCoordinate(3, 1)).chip_id, 7);
+
+    // Fourth rotation: 4x2 -> 2x4 (360 degrees - back to original)
+    mesh_device_->rotate();
+    EXPECT_EQ(mesh_device_->shape(), MeshShape(2, 4));
+    EXPECT_EQ(mesh_device_->get_fabric_node_id(MeshCoordinate(0, 0)).chip_id, 0);
+    EXPECT_EQ(mesh_device_->get_fabric_node_id(MeshCoordinate(0, 1)).chip_id, 1);
+    EXPECT_EQ(mesh_device_->get_fabric_node_id(MeshCoordinate(0, 2)).chip_id, 2);
+    EXPECT_EQ(mesh_device_->get_fabric_node_id(MeshCoordinate(0, 3)).chip_id, 3);
+    EXPECT_EQ(mesh_device_->get_fabric_node_id(MeshCoordinate(1, 0)).chip_id, 4);
+    EXPECT_EQ(mesh_device_->get_fabric_node_id(MeshCoordinate(1, 1)).chip_id, 5);
+    EXPECT_EQ(mesh_device_->get_fabric_node_id(MeshCoordinate(1, 2)).chip_id, 6);
+    EXPECT_EQ(mesh_device_->get_fabric_node_id(MeshCoordinate(1, 3)).chip_id, 7);
+}
+
 }  // namespace
 }  // namespace tt::tt_metal::distributed
