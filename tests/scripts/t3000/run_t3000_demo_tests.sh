@@ -171,7 +171,7 @@ run_t3000_llama3_vision_tests() {
   n300=N300
   t3k=T3K
 
-  for mesh_device in "$n300" "$t3k"; do  # Issue #28247 Running this demo on a N300 mesh causes a CI ND hang
+  for mesh_device in "$n300" "$t3k"; do
     MESH_DEVICE=$mesh_device HF_MODEL=$llama11b TT_CACHE_PATH=$tt_cache_llama11b \
     pytest -n auto models/tt_transformers/demo/simple_vision_demo.py -k "not batch1-notrace" --timeout 900; fail+=$?
     echo "LOG_METAL: Llama3 vision tests for $mesh_device completed"

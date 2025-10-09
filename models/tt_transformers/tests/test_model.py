@@ -489,7 +489,7 @@ def test_model_inference(
                         if does_pass:
                             logger.info(f"KV Cache Passed!")
                         else:
-                            logger.warning(f"KV Cache Failed! PCC value {pcc_message} is lower than {pcc}")
+                            logger.warning(f"KV Cache Failed! PCC value is lower than {pcc}")
                             all_tests_pass = False
 
         if not dummy_weights:
