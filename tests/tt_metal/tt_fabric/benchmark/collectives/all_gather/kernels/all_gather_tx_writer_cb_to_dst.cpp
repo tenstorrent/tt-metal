@@ -104,16 +104,42 @@ void kernel_main() {
         conn_S.open<true>();
     }
 
+    // --- One-shot config dump ---
+    DPRINT << "writer:init pages=" << TOTAL_PAGES << " page=" << PAGE_SIZE << " rx=(" << rx_noc_x << "," << rx_noc_y
+           << ")"
+           << " legs[W,E,N,S]=" << (int)use_W << "," << (int)use_E << "," << (int)use_N << "," << (int)use_S
+           << " hops E/W/N/S=" << e_hops << "/" << w_hops << "/" << n_hops << "/" << s_hops << ENDL();
+    if (use_W) {
+        DPRINT << "writer:W start (mesh,dev)=(" << (int)dst_mesh_W << "," << (int)dst_dev_W << ")" << ENDL();
+    }
+    if (use_E) {
+        DPRINT << "writer:E start (mesh,dev)=(" << (int)dst_mesh_E << "," << (int)dst_dev_E << ")" << ENDL();
+    }
+    if (use_N) {
+        DPRINT << "writer:N start (mesh,dev)=(" << (int)dst_mesh_N << "," << (int)dst_dev_N << ")" << ENDL();
+    }
+    if (use_S) {
+        DPRINT << "writer:S start (mesh,dev)=(" << (int)dst_mesh_S << "," << (int)dst_dev_S << ")" << ENDL();
+    }
+
+    auto should_log = [&](uint32_t i) -> bool { return (i == 0) || (i + 1 == TOTAL_PAGES) || ((i & 31u) == 0); };
+
     const auto dst_acc = TensorAccessor(ta_args, /*bank_base=*/dst_base, /*page_size=*/PAGE_SIZE);
 
     for (uint32_t i = 0; i < TOTAL_PAGES; ++i) {
         cb_wait_front(CB_ID, 1);
         const uint32_t src_l1_addr = get_read_ptr(CB_ID);
         uint64_t dest_noc_addr = dst_acc.get_noc_addr(i, rx_noc_x, rx_noc_y);
+        if (should_log(i)) {
+            DPRINT << "writer:page " << i << " src_l1=" << src_l1_addr << ENDL();
+        }
 
         // NORTH trunk (fan-out E/W on each north row)
         if (use_N) {
             conn_N.wait_for_empty_write_slot();
+            if (should_log(i)) {
+                DPRINT << "writer:N route&send page " << i << ENDL();
+            }
             fabric_set_mcast_route(
                 reinterpret_cast<volatile tt_l1_ptr LowLatencyMeshPacketHeader*>(mh_N),
                 dst_dev_N,
@@ -129,6 +155,9 @@ void kernel_main() {
         // SOUTH trunk
         if (use_S) {
             conn_S.wait_for_empty_write_slot();
+            if (should_log(i)) {
+                DPRINT << "writer:S route&send page " << i << ENDL();
+            }
             fabric_set_mcast_route(
                 reinterpret_cast<volatile tt_l1_ptr LowLatencyMeshPacketHeader*>(mh_S),
                 dst_dev_S,
@@ -144,6 +173,9 @@ void kernel_main() {
         // WEST branch on source row
         if (use_W) {
             conn_W.wait_for_empty_write_slot();
+            if (should_log(i)) {
+                DPRINT << "writer:W route&send page " << i << ENDL();
+            }
             fabric_set_mcast_route(
                 reinterpret_cast<volatile tt_l1_ptr LowLatencyMeshPacketHeader*>(mh_W),
                 dst_dev_W,
@@ -159,6 +191,9 @@ void kernel_main() {
         // EAST branch on source row
         if (use_E) {
             conn_E.wait_for_empty_write_slot();
+            if (should_log(i)) {
+                DPRINT << "writer:E route&send page " << i << ENDL();
+            }
             fabric_set_mcast_route(
                 reinterpret_cast<volatile tt_l1_ptr LowLatencyMeshPacketHeader*>(mh_E),
                 dst_dev_E,
@@ -175,7 +210,9 @@ void kernel_main() {
         cb_pop_front(CB_ID, 1);
     }
 
+    DPRINT << "writer:payload loop done; flushing async writes" << ENDL();
     noc_async_write_barrier();
+    DPRINT << "writer:payloads flushed; sending completion atomics" << ENDL();
 
     // === Single multicast completion to identical mailboxes on all destination chips ===
     ASSERT(sem_l1_addr != 0);
@@ -187,6 +224,7 @@ void kernel_main() {
 
     if (use_N) {
         conn_N.wait_for_empty_write_slot();
+        DPRINT << "writer:N atomic_inc" << ENDL();
         fabric_set_mcast_route(
             reinterpret_cast<volatile tt_l1_ptr LowLatencyMeshPacketHeader*>(mh_N),
             dst_dev_N,
@@ -205,6 +243,7 @@ void kernel_main() {
     }
     if (use_S) {
         conn_S.wait_for_empty_write_slot();
+        DPRINT << "writer:S atomic_inc" << ENDL();
         fabric_set_mcast_route(
             reinterpret_cast<volatile tt_l1_ptr LowLatencyMeshPacketHeader*>(mh_S),
             dst_dev_S,
@@ -223,6 +262,7 @@ void kernel_main() {
     }
     if (use_W) {
         conn_W.wait_for_empty_write_slot();
+        DPRINT << "writer:W atomic_inc" << ENDL();
         fabric_set_mcast_route(
             reinterpret_cast<volatile tt_l1_ptr LowLatencyMeshPacketHeader*>(mh_W),
             dst_dev_W,
@@ -241,6 +281,7 @@ void kernel_main() {
     }
     if (use_E) {
         conn_E.wait_for_empty_write_slot();
+        DPRINT << "writer:E atomic_inc" << ENDL();
         fabric_set_mcast_route(
             reinterpret_cast<volatile tt_l1_ptr LowLatencyMeshPacketHeader*>(mh_E),
             dst_dev_E,
@@ -270,4 +311,5 @@ void kernel_main() {
     if (use_S) {
         conn_S.close();
     }
+    DPRINT << "writer:done" << ENDL();
 }

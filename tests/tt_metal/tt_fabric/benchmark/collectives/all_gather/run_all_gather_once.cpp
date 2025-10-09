@@ -115,6 +115,7 @@ PerfPoint run_all_gather_once(HelpersFixture* fixture, const PerfParams& p) {
     }
 
     tt::tt_metal::CoreCoord rx_xy = dst_dev->worker_core_from_logical_core(p.receiver_core);
+    tt::tt_metal::CoreCoord tx_xy = src_dev->worker_core_from_logical_core(p.sender_core);
 
     // --- IO buffers & initialization ---
     namespace Dist = tt::tt_metal::distributed;
@@ -403,7 +404,8 @@ Notes:
     std::cerr << "[host] mesh=" << shape[0] << "x" << shape[1] << " src_phys=" << src_phys << " dst_phys=" << dst_phys
               << " src_coord=(" << src_coord[0] << "," << src_coord[1] << ")"
               << " dst_coord=(" << dst_coord[0] << "," << dst_coord[1] << ")"
-              << " rx_xy=(" << (int)rx_xy.x << "," << (int)rx_xy.y << ")\n";
+              << " rx_xy=(" << (int)rx_xy.x << "," << (int)rx_xy.y << ")"
+              << " tx_xy=(" << (int)tx_xy.x << "," << (int)tx_xy.y << ")\n";
 
     auto src_fid = tt::tt_fabric::FabricNodeId{tt::tt_fabric::MeshId{p.mesh_id}, src_phys};
     std::optional<tt::tt_fabric::FabricNodeId> dstW, dstE, dstN, dstS;
