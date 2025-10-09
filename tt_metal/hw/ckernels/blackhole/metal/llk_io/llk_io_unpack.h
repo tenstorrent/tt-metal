@@ -11,6 +11,8 @@
 #include "stream_io_map.h"
 #include "tools/profiler/kernel_profiler.hpp"
 
+#define USE_ZONE_COUNTER 1
+
 using namespace ckernel;
 
 // Wait for N tiles available in the incoming stream

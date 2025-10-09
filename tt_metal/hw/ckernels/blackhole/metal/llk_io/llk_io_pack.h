@@ -12,6 +12,8 @@
 #include "stream_io_map.h"
 #include "tools/profiler/kernel_profiler.hpp"
 
+#define USE_ZONE_COUNTER 1
+
 using namespace ckernel;
 
 // Blocking call to wait for free space needed to pack N tiles

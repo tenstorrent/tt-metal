@@ -25,6 +25,8 @@
 #include "accessor/tensor_accessor.h"
 #include "tools/profiler/kernel_profiler.hpp"
 
+#define USE_ZONE_COUNTER 1
+
 // clang-format off
 /**
  * Returns the absolute logical X coordinate value that this kernel is running on. The absolute coordinate
@@ -370,12 +372,12 @@ void cb_reserve_back(int32_t operand, int32_t num_pages) {
     uint32_t pages_received = get_cb_tiles_received_ptr(operand)[0];
 
     int32_t free_space_pages;
-#ifdef USE_ZONE_COUNTER
+#if defined(USE_ZONE_COUNTER) && (!defined(DISPATCH_KERNEL))
     std::uint32_t counter = zone.get_counter();
 #endif
     WAYPOINT("CRBW");
     do {
-#ifdef USE_ZONE_COUNTER
+#if defined(USE_ZONE_COUNTER) && (!defined(DISPATCH_KERNEL))
         counter++;
 #endif
         // uint16_t's here because Tensix updates the val at tiles_acked_ptr as uint16 in llk_pop_tiles
@@ -387,7 +389,7 @@ void cb_reserve_back(int32_t operand, int32_t num_pages) {
         free_space_pages = (int32_t)free_space_pages_wrap;
     } while (free_space_pages < num_pages);
     WAYPOINT("CRBD");
-#ifdef USE_ZONE_COUNTER
+#if defined(USE_ZONE_COUNTER) && (!defined(DISPATCH_KERNEL))
     zone.set_counter(--counter);
 #endif
 }
@@ -459,18 +461,18 @@ void cb_wait_front(int32_t operand, int32_t num_pages) {
 
     uint16_t pages_received;
 
-#ifdef USE_ZONE_COUNTER
+#if defined(USE_ZONE_COUNTER) && (!defined(DISPATCH_KERNEL))
     std::uint32_t counter = zone.get_counter();
 #endif
     WAYPOINT("CWFW");
     do {
-#ifdef USE_ZONE_COUNTER
+#if defined(USE_ZONE_COUNTER) && (!defined(DISPATCH_KERNEL))
         counter++;
 #endif
         pages_received = ((uint16_t)reg_read(pages_received_ptr)) - pages_acked;
     } while (pages_received < num_pages);
     WAYPOINT("CWFD");
-#ifdef USE_ZONE_COUNTER
+#if defined(USE_ZONE_COUNTER) && (!defined(DISPATCH_KERNEL))
     zone.set_counter(--counter);
 #endif
 }

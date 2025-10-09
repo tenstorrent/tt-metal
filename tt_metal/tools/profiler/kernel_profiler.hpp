@@ -19,6 +19,8 @@
 
 #include "dev_msgs.h"
 
+#define USE_ZONE_COUNTER 1
+
 #define DO_PRAGMA(x) _Pragma(#x)
 
 #define Stringize(L) #L
