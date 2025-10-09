@@ -108,3 +108,33 @@ def test_exp2_atol(input_shapes, low, high, device):
     tt_result = ttnn.exp2(tt_in)
     result = ttnn.to_torch(tt_result)
     assert_allclose(tt_result, golden, rtol=1e-2, atol=1e-3)
+
+
+def test_exp2_fp32_arange_masking(device):
+    # Exp2 Working range - Overflow from 128(inf), Underflow till -149(<0)
+    low = -149.0
+    high = 127.9
+
+    # Generate all possible bit pattersn for bf16
+    all_bitpatterns = torch.arange(0, 2**16, dtype=torch.int32).to(torch.uint16)
+    input_tensor = all_bitpatterns.view(torch.bfloat16)
+    input_tensor_f32 = input_tensor.to(torch.float32)
+
+    # masking to working range
+    mask = (input_tensor_f32 >= low) & (input_tensor_f32 <= high)
+    input_tensor_f32 = input_tensor_f32[mask]
+
+    tt_in = ttnn.from_torch(
+        input_tensor_f32,
+        dtype=ttnn.float32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    golden_function = ttnn.get_golden_function(ttnn.exp2)
+    golden = golden_function(input_tensor_f32, device=device)
+
+    tt_result = ttnn.exp2(tt_in)
+    result = ttnn.to_torch(tt_result)
+    assert_with_ulp(golden, result, 1)
