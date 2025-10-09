@@ -14,7 +14,6 @@ from models.experimental.detr3d.reference.detr3d_model import (
 from tests.ttnn.utils_for_testing import comp_pcc
 from models.experimental.detr3d.ttnn.transformer import TTTransformerEncoderLayer
 
-from ttnn.model_preprocessing import preprocess_model_parameters
 from models.experimental.detr3d.ttnn.encoder import TtMaskedTransformerEncoder, EncoderArgs
 from ttnn.model_preprocessing import preprocess_model_parameters
 from models.experimental.detr3d.ttnn.custom_preprocessing import create_custom_mesh_preprocessor
