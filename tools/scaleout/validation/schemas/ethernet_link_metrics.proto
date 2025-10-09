@@ -40,3 +40,12 @@ message EthernetLinkMetricsList {
 message EthChannelIdentifierList {
     repeated EthChannelIdentifier exit_nodes = 1;
 }
+
+message ResetPair {
+    uint32 src_rank = 1;
+    uint32 dst_rank = 2;
+}
+
+message ResetPairList {
+    repeated ResetPair reset_pairs = 1;
+}
