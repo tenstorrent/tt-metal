@@ -32,40 +32,108 @@ set(IRAM_OPTIONS
     ENABLE_IRAM # With IRAM
 )
 
-# Get the appropriate SFPI tarball
-file(STRINGS "../sfpi-version.sh" SFPI)
-set(SFPI_arch "${CMAKE_HOST_SYSTEM_PROCESSOR}")
-foreach(tuple ${SFPI})
-    string(STRIP ${tuple} pair)
-    string(REPLACE "=" ";" pair ${pair})
-    list(LENGTH pair count)
-    if(count EQUAL 2)
-        list(GET pair 0 key)
-        list(GET pair 1 value)
-        if(key STREQUAL "sfpi_version")
-            set(SFPI_VERSION "${value}")
-        elseif(key STREQUAL "sfpi_url")
-            set(SFPI_URL "${value}")
-        elseif(key STREQUAL "sfpi_${SFPI_arch}_txz_md5")
-            set(SFPI_TXZ_MD5 "${value}")
-        endif()
+# determine sfpi version information
+set(SFPI_ROOT "${PROJECT_SOURCE_DIR}/runtime/sfpi")
+file(MAKE_DIRECTORY ${SFPI_ROOT})
+execute_process(
+    COMMAND
+        ${CMAKE_CURRENT_SOURCE_DIR}/../sfpi-version.sh CMAKE txz
+    OUTPUT_FILE ${SFPI_ROOT}/sfpi-version.cmake
+    COMMAND_ERROR_IS_FATAL ANY
+)
+include(${SFPI_ROOT}/sfpi-version.cmake)
+if(TT_USE_SYSTEM_SFPI)
+    # we'll use the system's version
+    set(SFPI_ROOT "/opt/tenstorrent/sfpi")
+else()
+    # download a toolchain
+    if("${SFPI_md5}" STREQUAL "")
+        # FIXME:This is where we'd clone sfpi and build it locally
+        # something like (untested meta-code)
+        # git clone -b ${SFPI_version} -depth 1 ${SFPI_repo} ${LOCAL_PATH}
+        # cd ${LOCAL_PATH}
+        # scripts/build.sh --test-tt
+        # tar -C build cf - sfpi | tar -C ${SFPI_ROOT} xf -
+        # add some caching so we don't do this every time!
+        # you'll have to install a bunch of packages for this to work
+        # Perhaps, sfpi-version.sh should be augmented to do all that,
+        # seems like the right place.
+        # if NOT EXISTS $LOCATION/sfpi.tgz
+        # sfpi-version.sh BUILD $LOCATION > sfpi-build.log
+        # endif
+        # tar xzf $LOCATION/sfpi.tgz -c ${SFPI_ROOT}/..
+        message(FATAL_ERROR "SFPI tarball for ${SFPI_arch} ${SFPI_dist} is not available")
+    else()
+        include(FetchContent)
+        FetchContent_Declare(
+            sfpi
+            URL
+                "${SFPI_url}/${SFPI_filename}"
+            URL_HASH "MD5=${SFPI_md5}"
+            SOURCE_DIR
+            "${SFPI_ROOT}"
+        )
+        FetchContent_MakeAvailable(sfpi)
     endif()
-endforeach()
-
-if(NOT DEFINED SFPI_TXZ_MD5)
-    message(FATAL_ERROR "SFPI tarball for ${SFPI_arch} is not available")
 endif()
 
-include(FetchContent)
-FetchContent_Declare(
-    sfpi
-    URL
-        "${SFPI_URL}/v${SFPI_VERSION}/sfpi_${SFPI_VERSION}_${SFPI_arch}.txz"
-    URL_HASH "MD5=${SFPI_TXZ_MD5}"
-    SOURCE_DIR
-    "${PROJECT_SOURCE_DIR}/runtime/sfpi"
+set(GPP_CMD "${SFPI_ROOT}/compiler/bin/riscv-tt-elf-g++")
+if(NOT EXISTS "${GPP_CMD}")
+    message(FATAL_ERROR "GPP_CMD path '${GPP_CMD}' does not exist. Please check your configuration.")
+endif()
+
+execute_process(
+    COMMAND
+        ${GPP_CMD} --version
+    COMMAND
+        head -1
+    COMMAND
+        cut "-d " -f2,3
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    OUTPUT_VARIABLE GPP_VERSION
 )
-FetchContent_MakeAvailable(sfpi)
+message(STATUS "Using SFPI compiler: ${GPP_CMD} ${GPP_VERSION}")
+# check this is the version we want (the system version might be wrong)
+string(REGEX REPLACE "^\\([^:]*:([^)]*)\\) .*$" "\\1" GPP_VERSION ${GPP_VERSION})
+if(NOT ${GPP_VERSION} STREQUAL ${SFPI_version})
+    message(FATAL_ERROR "SFPI compiler version ${GPP_VERSION} does not match required SFPI version ${SFPI_version}")
+endif()
+
+if(NOT TT_USE_SYSTEM_SFPI)
+    # Check each executable is loadable, as the user might not have installed the dependencies
+    # \tlibcsfml-window.so.2.2 => not found
+    # undefined symbol: blob\t(./a.out)
+    file(
+        GLOB SFPI_BINARIES
+        "${SFPI_ROOT}/compiler/bin/*"
+        "${SFPI_ROOT}/compiler/libexec/gcc/*"
+    )
+    execute_process(
+        COMMAND
+            echo ${SFPI_BINARIES}
+        COMMAND
+            sed "s/;/ /g"
+        COMMAND
+            xargs file
+        COMMAND
+            sed -e "/ELF ..-bit .SB executable,/{s/:.*//;p}" -e d
+        COMMAND
+            xargs ldd -d
+        COMMAND
+            sed -e "/=> not found/p" -e "/undefined symbol/{s/\t(.*)$//;p}" -e d
+        COMMAND
+            sort -u
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        OUTPUT_VARIABLE SFPI_UNMET
+    )
+    if(NOT "${SFPI_UNMET}" STREQUAL "")
+        message(NOTICE "Unsatisfied dependencies:\n${SFPI_UNMET}")
+        message(
+            FATAL_ERROR
+            "SFPI has unsatisfied dependencies. Either\n* set TT_USE_SYSTEM_SFPI and run install_dependencies.sh --install-sfpi, or\n* install the missing packages, or\n* (expert level) build your own sfpi and point sfpi-version.sh at it"
+        )
+    endif()
+endif()
 
 foreach(ARCH IN LISTS ARCHS)
     if(ARCH STREQUAL "quasar")
@@ -141,26 +209,6 @@ foreach(ARCH IN LISTS ARCHS)
         endforeach()
     endforeach()
 endforeach()
-
-if(TT_USE_SYSTEM_SFPI)
-    set(GPP_CMD "/opt/tenstorrent/sfpi/compiler/bin/riscv-tt-elf-g++")
-else()
-    set(GPP_CMD "${PROJECT_SOURCE_DIR}/runtime/sfpi/compiler/bin/riscv-tt-elf-g++")
-endif()
-
-if(NOT EXISTS "${GPP_CMD}")
-    message(FATAL_ERROR "GPP_CMD path '${GPP_CMD}' does not exist. Please check your configuration.")
-endif()
-
-execute_process(
-    COMMAND
-        ${GPP_CMD} --version
-    COMMAND
-        head -1
-    OUTPUT_STRIP_TRAILING_WHITESPACE
-    OUTPUT_VARIABLE GPP_VERSION
-)
-message(STATUS "Using SFPI compiler: ${GPP_CMD}, ${GPP_VERSION}")
 
 set(GPP_DEFINES -DTENSIX_FIRMWARE)
 

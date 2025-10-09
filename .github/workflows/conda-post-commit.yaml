@@ -135,11 +135,10 @@ jobs:
           source /opt/conda/etc/profile.d/conda.sh
           conda activate metalium_env
           wget -O /tmp/sfpi-version.sh https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/tt_metal/sfpi-version.sh
-          sfpi_arch_os=$(uname -m)_$(uname -s)
-          source /tmp/sfpi-version.sh
-          wget ${sfpi_url}/${sfpi_version}/sfpi-${sfpi_arch_os}.rpm
-          dnf -y install ./sfpi-${sfpi_arch_os}.rpm
-          rm -f sfpi-${sfpi_arch_os}.rpm /tmp/sfpi-version.sh
+          eval $(/tmp/sfpi-version.sh SHELL rpm)
+          wget $sfpi_url/$sfpi_filename
+          dnf -y install ./$sfpi_filename
+          rm -f $sfpi_filename /tmp/sfpi-version.sh
           export LD_LIBRARY_PATH=$CONDA_PREFIX/lib
           ${{ matrix.test-group.cmd }}
 
