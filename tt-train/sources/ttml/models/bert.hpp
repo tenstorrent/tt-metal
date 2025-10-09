@@ -6,7 +6,6 @@
 
 #include <yaml-cpp/yaml.h>
 
-#include "autograd/module_base.hpp"
 #include "autograd/tensor.hpp"
 #include "models/base_transformer.hpp"
 #include "models/common/transformer_common.hpp"
@@ -15,6 +14,7 @@
 #include "modules/embedding_module.hpp"
 #include "modules/layer_norm_module.hpp"
 #include "modules/linear_module.hpp"
+#include "modules/module_base.hpp"
 #include "modules/positional_embeddings.hpp"
 
 namespace ttml::models::bert {
