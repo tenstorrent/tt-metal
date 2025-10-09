@@ -36,3 +36,7 @@ message EthernetLinkMetrics {
 message EthernetLinkMetricsList {
     repeated EthernetLinkMetrics link_metrics = 1;
 }
+
+message EthChannelIdentifierList {
+    repeated EthChannelIdentifier exit_nodes = 1;
+}
