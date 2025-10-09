@@ -154,6 +154,12 @@ class PETR(nn.Module):
         Returns:
             batch_input_metas (list[dict]): Meta info with lidar2img added
         """
+        if isinstance(img, list):
+            img = img[0]
+        else:
+            img = img
+
+        print("img.shapetorch reference", img.shape)
         print("img.shapetorch", img.shape)
         for meta in batch_input_metas:
             lidar2img_rts = []

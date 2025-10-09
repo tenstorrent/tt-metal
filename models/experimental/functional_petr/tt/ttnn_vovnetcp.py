@@ -458,8 +458,8 @@ class ttnn_VoVNetCP:
         outputs = []
 
         # Input is NHWC, convert to NCHW for processing
+        x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
         print(f"[STEM] Initial input (NHWC): shape={x.shape}")
-
         # Stem conv 1: stride=2, padding=1
         x = self.stem_conv1(device, x)
         print(

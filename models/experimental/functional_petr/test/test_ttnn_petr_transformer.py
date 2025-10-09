@@ -5,7 +5,7 @@
 
 import pytest
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc
 from models.experimental.functional_petr.reference import petr_transformer
 from models.experimental.functional_petr.tt.model_preprocessing import (
     create_petr_transformer_input_tensors,
@@ -37,7 +37,11 @@ def test_petr_transformer(device, reset_seeds):
     ttnn_output, ttnn_memory = ttnn_model(device, ttnn_x, ttnn_mask, ttnn_query_embed, ttnn_pos_embed)
 
     ttnn_memory = ttnn_memory.reshape(torch_memory.shape)
+    passed, msg = check_with_pcc(torch_memory, ttnn_memory, pcc=0.99)
+    print(f"Memory PCC: {msg}")
     assert_with_pcc(torch_memory, ttnn_memory, 0.99)
     ttnn_output = ttnn.to_torch(ttnn_output)
     ttnn_output = ttnn_output.reshape(torch_output.shape)
+    passed, msg = check_with_pcc(torch_output, ttnn_output, pcc=0.99)
+    print(f"Output PCC: {msg}")
     assert_with_pcc(torch_output, ttnn_output, 0.99)
