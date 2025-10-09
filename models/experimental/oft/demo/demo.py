@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
 import os
 import torch
 import ttnn
@@ -25,31 +29,24 @@ from models.experimental.oft.tests.common import (
     W_PADDED,
     Y_OFFSET,
     load_checkpoint,
+    visualize_tensor_distributions,
 )
 from models.experimental.oft.tt.model_preprocessing import create_OFT_model_parameters, create_decoder_model_parameters
-from models.experimental.oft.tt.utils import visualize_tensor_distributions
 from models.experimental.oft.tt.tt_oftnet import TTOftNet
 from models.experimental.oft.tt.tt_encoder import TTObjectEncoder
 from models.experimental.oft.tt.tt_resnet import TTBasicBlock
 from tests.ttnn.utils_for_testing import check_with_pcc
+from tests.ttnn.unit_tests.test_bh_20_cores_sharding import skip_if_not_blackhole_20_cores
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 14 * 1024}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16 * 1024}], indirect=True)
 @pytest.mark.parametrize(
     "input_image_path, calib_path",
     [
-        # (
-        #     os.path.abspath(os.path.join(os.path.dirname(__file__), "../resources/000022.jpg")),
-        #     os.path.abspath(os.path.join(os.path.dirname(__file__), "../resources/000022.txt")),
-        # ),
         (
             os.path.abspath(os.path.join(os.path.dirname(__file__), "../resources/000013.jpg")),
             os.path.abspath(os.path.join(os.path.dirname(__file__), "../resources/000013.txt")),
         ),
-        # (
-        #     os.path.abspath(os.path.join(os.path.dirname(__file__), "../resources/000009.jpg")),
-        #     os.path.abspath(os.path.join(os.path.dirname(__file__), "../resources/000009.txt")),
-        # )
     ],
 )
 @pytest.mark.parametrize(
@@ -60,11 +57,9 @@ from tests.ttnn.utils_for_testing import check_with_pcc
     ],
     # fmt: on
 )
-@pytest.mark.parametrize("checkpoints_path", [r"/localdev/njovanovic/checkpoint-0600.pth"])
 @torch.no_grad()
 def test_demo_inference(
     device,
-    checkpoints_path,
     input_image_path,
     calib_path,
     model_dtype,
@@ -76,7 +71,10 @@ def test_demo_inference(
     pcc_positions_oft,
     pcc_dimensions_oft,
     pcc_angles_oft,
+    model_location_generator,
 ):
+    skip_if_not_blackhole_20_cores(device)
+    device.disable_and_clear_program_cache()  # test hangs without this line on P150
     assert use_host_decoder == False, "Only use_host_decoder=False is supported for now"
     # Create output directory for saving visualizations
     output_dir = os.path.join(os.path.dirname(__file__), "outputs")
@@ -105,7 +103,7 @@ def test_demo_inference(
         dtype=model_dtype,
     )
 
-    ref_model = load_checkpoint(checkpoints_path, ref_model)
+    ref_model = load_checkpoint(ref_model, model_location_generator)
     parameters = create_OFT_model_parameters(ref_model, (input_tensor, calib, grid), device=device)
 
     # 3 Create reference encoder
@@ -183,7 +181,6 @@ def test_demo_inference(
         device, tt_scores, tt_pos_offsets, tt_dim_offsets, tt_ang_offsets, tt_grid_
     )
     tt_objects = tt_encoder.create_objects(*tt_outs)
-
     # ========================================================
     # Compare results
 

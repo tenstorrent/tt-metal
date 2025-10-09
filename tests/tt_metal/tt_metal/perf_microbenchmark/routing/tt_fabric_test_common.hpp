@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,6 +10,8 @@
 #include <algorithm>
 #include <optional>
 #include <random>
+#include <string>
+#include <cstdlib>
 
 #include <tt-metalium/mesh_graph.hpp>
 #include <tt-metalium/device.hpp>
@@ -22,6 +24,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/system_mesh.hpp>
+#include "tt_align.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
 
 #include "tt_metal/fabric/fabric_context.hpp"
@@ -29,6 +32,7 @@
 #include "tt_fabric_test_interfaces.hpp"
 #include "tt_fabric_test_common_types.hpp"
 #include "tt_metal/distributed/fd_mesh_command_queue.hpp"
+#include "tt_metal/impl/dispatch/hardware_command_queue.hpp"
 
 using MeshDevice = tt::tt_metal::distributed::MeshDevice;
 using MeshCoordinate = tt::tt_metal::distributed::MeshCoordinate;
@@ -103,8 +107,18 @@ public:
         const auto& topology = fabric_setup.topology;
         const auto& routing_type = fabric_setup.routing_type.value();
         const auto& fabric_tensix_config = fabric_setup.fabric_tensix_config.value();
-        const auto reliability_mode = fabric_setup.fabric_reliability_mode.value_or(
-            tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+
+        // Fabric Reliability Mode
+        // Default to STRICT; if runtime option (from rtoptions) is set, it takes precedence over
+        // fabric_setup.fabric_reliability_mode
+        tt::tt_fabric::FabricReliabilityMode reliability_mode =
+            tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
+        auto reliability_mode_override = tt::tt_metal::MetalContext::instance().rtoptions().get_reliability_mode();
+        if (reliability_mode_override.has_value()) {
+            reliability_mode = reliability_mode_override.value();
+        } else if (fabric_setup.fabric_reliability_mode.has_value()) {
+            reliability_mode = fabric_setup.fabric_reliability_mode.value();
+        }
 
         FabricConfig new_fabric_config;
         if (topology == Topology::Torus) {
@@ -133,6 +147,7 @@ public:
                 log_info(tt::LogTest, "Closing devices and switching to new fabric config: {}", new_fabric_config);
                 close_devices();
             }
+            log_info(tt::LogTest, "Opening devices with fabric reliability mode: {}", reliability_mode);
             open_devices_internal(new_fabric_config, fabric_tensix_config, reliability_mode);
 
             topology_ = topology;
@@ -149,7 +164,7 @@ public:
 
     void enqueue_program(const MeshCoordinate& mesh_coord, tt::tt_metal::Program program) {
         MeshCoordinateRange device(mesh_coord, mesh_coord);
-        tt::tt_metal::distributed::AddProgramToMeshWorkload(*mesh_workload_, std::move(program), device);
+        mesh_workload_->add_program(device, std::move(program));
     }
 
     void run_programs() {
@@ -371,20 +386,36 @@ public:
         return results;
     }
 
-    std::unordered_map<CoreCoord, std::vector<uint32_t>> read_buffer_from_ethernet_cores(
+    // When blocking is enabled, results_out must be pre-allocated for each core
+    void read_buffer_from_ethernet_cores(
         const MeshCoordinate& device_coord,
         const std::vector<CoreCoord>& cores,
         uint32_t address,
-        uint32_t size_bytes) const {
-        std::unordered_map<CoreCoord, std::vector<uint32_t>> results;
+        uint32_t size_bytes,
+        bool blocking,
+        std::unordered_map<CoreCoord, std::vector<uint32_t>>& results_out) const {
         auto device = mesh_device_->get_device(device_coord);
-        auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+        auto num_elements = tt::align(size_bytes, sizeof(uint32_t));
         for (const auto& logical_core : cores) {
             auto virtual_core = device->ethernet_core_from_logical_core(logical_core);
-            std::vector<uint32_t> core_data = cluster.read_core(device->id(), virtual_core, address, size_bytes);
-            results.emplace(logical_core, core_data);
+            if (!blocking) {
+                TT_FATAL(results_out.contains(logical_core), "read_buffer_from_ethernet_cores was called in non-blocking mode without pre-allocating the results_out container. Non-blocking mode requires preallocating the results entries for each core.");
+                results_out.at(logical_core).resize(num_elements, 0);
+            } else {
+                results_out[logical_core] = std::vector<uint32_t>(num_elements, 0);
+            }
+            dynamic_cast<tt::tt_metal::distributed::FDMeshCommandQueue&>(mesh_device_->mesh_command_queue())
+                    .enqueue_read_shard_from_core(
+                        tt::tt_metal::distributed::DeviceMemoryAddress{device_coord, virtual_core, address},
+                        results_out.at(logical_core).data(),
+                        size_bytes,
+                        blocking);
+
         }
-        return results;
+    }
+
+    void barrier_reads() {
+        mesh_device_->mesh_command_queue().finish();
     }
 
     void write_buffer_to_ethernet_cores(
@@ -393,11 +424,17 @@ public:
         uint32_t address,
         const std::vector<uint8_t>& data) const {
         auto device = mesh_device_->get_device(device_coord);
-        auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
         for (const auto& logical_core : cores) {
             auto virtual_core = device->ethernet_core_from_logical_core(logical_core);
-            cluster.write_core(data.data(), data.size(), tt_cxy_pair(device->id(), virtual_core), address);
+
+            dynamic_cast<tt::tt_metal::distributed::FDMeshCommandQueue&>(mesh_device_->mesh_command_queue())
+                    .enqueue_write_shard_to_core(
+                        tt::tt_metal::distributed::DeviceMemoryAddress{device_coord, virtual_core, address},
+                        data.data(),
+                        data.size(),
+                        false);
         }
+        mesh_device_->mesh_command_queue().finish();
     }
 
 
@@ -747,7 +784,7 @@ public:
 
         auto num_forward_hops = 0;
         auto num_backward_hops = 0;
-        uint32_t full_hop_count = 2 * (mesh_shape_[NS_DIM] - 1 + mesh_shape_[EW_DIM] - 1) - 1;
+        uint32_t full_hop_count = (2 * (mesh_shape_[NS_DIM] - 1 + mesh_shape_[EW_DIM] - 1)) - 1;
 
         if (pattern_type == HighLevelTrafficPattern::FullRing) {
             num_forward_hops = full_hop_count;
@@ -961,7 +998,7 @@ public:
         const auto& neighbors = control_plane_ptr_->get_chip_neighbors(src_node_id, direction);
         TT_FATAL(neighbors.size() == 1, "Expected only neighbor mesh for {} in direction: {}", src_node_id, direction);
         TT_FATAL(
-            neighbors.begin()->second.size() >= 1,
+            !neighbors.begin()->second.empty(),
             "Expected at least 1 neighbor chip for {} in direction: {}",
             src_node_id,
             direction);

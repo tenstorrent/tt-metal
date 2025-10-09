@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
 import torch
 import ttnn
 
@@ -76,7 +80,6 @@ class TTObjectEncoder:
         dimensions = self._decode_dimensions(device, dim_offsets)
         angles = self._decode_angles(device, ang_offsets)
         peaks_torch, max_inds, scores, smoothed, mp = self._decode_heatmaps(device, heatmaps)
-
         # fallback to torch
         classids = torch.nonzero(peaks_torch)[:, 0]
 
@@ -150,11 +153,7 @@ class TTObjectEncoder:
         heatmaps_4d = ttnn.permute(heatmaps_4d, (0, 2, 3, 1))  # NHWC for conv/maxpool
 
         smoothed, out_h, out_w = self.nms_conv(device, heatmaps_4d)
-        # TODO(mbezulj) there is a bug with mpwi that it doesn't handle properly padded&sharded tensors;
-        # going to torch and back as a workaround, until a proper fix is implemented.
         torch_smoothed = ttnn.to_torch(smoothed, dtype=torch.float32)
-        ttnn.deallocate(smoothed)
-        smoothed = ttnn.from_torch(torch_smoothed, ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
         mp, indices = ttnn.max_pool2d(
             input_tensor=smoothed,
@@ -166,7 +165,7 @@ class TTObjectEncoder:
             stride=[1, 1],
             padding=[1, 1],
             dilation=[1, 1],
-            applied_shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            applied_shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED if not smoothed.is_sharded() else None,
             ceil_mode=False,
             in_place_halo=False,
             deallocate_input=False,

@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
 import ttnn
 import torch
 import math
@@ -186,10 +190,10 @@ class Conv:
         self.deallocate = deallocate
         self.activation = activation
         self.is_sliced = is_sliced
-        self.slice_config = None
+        self.slice_config = ttnn.Conv2dL1FullSliceConfig
         if is_sliced:
             self.slice_config = ttnn.Conv2dSliceConfig(
-                slice_type=ttnn.Conv2dSliceHeight,
+                slice_type=ttnn.Conv2dDRAMSliceHeight,
                 num_slices=2,
             )
 

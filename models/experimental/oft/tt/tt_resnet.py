@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
 import ttnn
 from models.experimental.oft.tt.common import Conv, GroupNorm, GroupNormDRAM
 
@@ -57,10 +61,7 @@ class TTBasicBlock:
         # logger.debug(f"SSHARDING {gn_shard=}")
         out = self.bn1(device, out, out_h, out_w, shard=gn_shard, num_splits=num_splits)
         logger.debug(f"BN1 output shape: {out.shape}")
-        # if not self.is_sliced:
-        out1 = ttnn.relu(out)
-        ttnn.deallocate(out)  # added for tracy pass
-        out = ttnn.move(out1)  # added for tracy pass
+        ttnn.relu(out, output_tensor=out)
 
         out, out_h, out_w = self.conv2(device, out)
         logger.debug(f"Conv2 output shape: {out.shape}")
@@ -208,7 +209,7 @@ class TTResNetFeatures:
             batch_size=cv2.shape[0],
             input_h=out_h,  # conv1.shape[1],
             input_w=out_w,  # conv1.shape[2],
-            channels=cv1.shape[3],
+            channels=cv2.shape[3],
             kernel_size=[3, 3],
             stride=[2, 2],
             padding=[1, 1],

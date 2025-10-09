@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
 import ttnn
 
 from models.experimental.oft.tt.common import Conv
@@ -119,7 +123,7 @@ class TTOftNet:
         self.FeedForward_fallback = fallback_feedforward
         self.Lateral_fallback = fallback_lateral
         assert not (
-            (host_fallback_model == None) and (fallback_oft or fallback_feedforward or fallback_lateral)
+            (host_fallback_model is None) and (fallback_oft or fallback_feedforward or fallback_lateral)
         ), "If host_fallback_model is None, all fallbacks must be False"
 
     def forward_normalization(self, device, input_tensor):

@@ -8,7 +8,6 @@
 #include <data_format.hpp>
 #include <stdint.h>
 #include <tt_backend_api_types.hpp>
-#include <utils.hpp>
 #include <cstddef>
 #include <filesystem>
 #include <functional>
@@ -20,14 +19,14 @@
 #include <utility>
 #include <vector>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "build.hpp"
 #include "hlk_desc.hpp"
 #include "jit_build_options.hpp"
 #include "jit_build_settings.hpp"
-#include "kernel.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include "impl/context/metal_context.hpp"
+#include "impl/kernels/kernel_impl.hpp"
 
 enum class UnpackToDestMode : uint8_t;
 
@@ -37,26 +36,36 @@ using namespace std;
 
 namespace tt::tt_metal {
 
-static void gen_kernel_cpp(const string& src, const string& dst_name, const vector<string>& prolog) {
+namespace {
+
+void gen_kernel_cpp(const string& src, const string& dst_name, const vector<string>& prolog) {
     std::ofstream out(dst_name);
     for (const string& s : prolog) out << s;
     out << src;
 }
 
-static void gen_kernel_cpp(const string& src, const string& dst_name) {
+void gen_kernel_cpp(const string& src, const string& dst_name) {
     vector<string> empty_prolog;
     gen_kernel_cpp(src, dst_name, empty_prolog);
 }
 
-static string get_kernel_source_to_include(const KernelSource& kernel_src) {
+string get_kernel_source_to_include(const KernelSource& kernel_src, const std::string& root_dir) {
     switch (kernel_src.source_type_) {
-        case KernelSource::FILE_PATH: return "#include \"" + fs::absolute(kernel_src.path_).string() + "\"\n";
+        case KernelSource::FILE_PATH: {
+            std::filesystem::path p(kernel_src.path_);
+            if (!p.is_absolute()) {
+                p = std::filesystem::path(root_dir) / p;
+            }
+            return "#include \"" + fs::absolute(p).string() + "\"\n";
+        }
         case KernelSource::SOURCE_CODE: return kernel_src.source_;
         default: {
             TT_THROW("Unsupported kernel source type!");
         }
     }
 }
+
+}  // namespace
 
 void jit_build_genfiles_kernel_include(
     const JitBuildEnv& env, const JitBuildSettings& settings, const KernelSource& kernel_src) {
@@ -66,7 +75,7 @@ void jit_build_genfiles_kernel_include(
     string out_dir = env.get_out_kernel_root_path() + settings.get_full_kernel_name() + "/";
     string kernel_header = out_dir + "kernel_includes.hpp";
 
-    const string& kernel_src_to_include = get_kernel_source_to_include(kernel_src);
+    const string& kernel_src_to_include = get_kernel_source_to_include(kernel_src, env.get_root_path());
 
     gen_kernel_cpp(kernel_src_to_include, kernel_header);
 }
@@ -87,7 +96,7 @@ void jit_build_genfiles_triscs_src(
     string pack_cpp = pack_base + ".cpp";
     string pack_llk_args_h = pack_base + "_llk_args.h";
 
-    const string& kernel_src_to_include = get_kernel_source_to_include(kernel_src);
+    const string& kernel_src_to_include = get_kernel_source_to_include(kernel_src, env.get_root_path());
 
     vector<string> unpack_prolog;
     unpack_prolog.push_back("#define TRISC_UNPACK\n");
@@ -118,8 +127,9 @@ void jit_build_genfiles_triscs_src(
     });
 }
 
+namespace {
 
-static std::string data_format_vec_to_string(const vector<DataFormat>& formats) {
+std::string data_format_vec_to_string(const vector<DataFormat>& formats) {
     std::string formats_string = "";
     for (int i = 0; i < formats.size(); i++) {
         formats_string += to_string((int)formats[i]) + ",";
@@ -127,7 +137,7 @@ static std::string data_format_vec_to_string(const vector<DataFormat>& formats) 
     return formats_string;
 }
 
-static std::string create_formats_array_string(
+std::string create_formats_array_string(
     const std::string& array_type, const std::string& array_name, int array_size, const std::string& array_data) {
     stringstream str_stream;
 
@@ -138,9 +148,11 @@ static std::string create_formats_array_string(
     return str_stream.str();
 }
 
-static std::pair<std::vector<DataFormat>, std::vector<DataFormat>>
-generate_unpack_data_formats(tt_hlk_desc& desc, DataFormat unpack_conditional_dst_format, bool fp32_dest_acc_en, std::vector<UnpackToDestMode> unpack_to_dest_mode) {
-
+std::pair<std::vector<DataFormat>, std::vector<DataFormat>> generate_unpack_data_formats(
+    tt_hlk_desc& desc,
+    DataFormat unpack_conditional_dst_format,
+    bool fp32_dest_acc_en,
+    std::vector<UnpackToDestMode> unpack_to_dest_mode) {
     vector<DataFormat> src_formats = tt::get_unpack_src_formats(desc.buf_dataformat_arr);
 
     vector<DataFormat> dst_formats = tt::get_unpack_dst_formats(
@@ -152,7 +164,7 @@ generate_unpack_data_formats(tt_hlk_desc& desc, DataFormat unpack_conditional_ds
     return std::make_pair(src_formats, dst_formats);
 }
 
-static void emit_unpack_data_formats(
+void emit_unpack_data_formats(
     const std::string& unpack_data_format_descs,
     const std::vector<DataFormat>& src_formats_all_cbs,
     const std::vector<DataFormat>& dst_formats_all_cbs) {
@@ -173,8 +185,12 @@ static void emit_unpack_data_formats(
     file_stream.close();
 }
 
-static std::pair<std::vector<DataFormat>, std::vector<DataFormat>> generate_pack_data_formats(
-    tt_hlk_desc& desc, DataFormat unpack_conditional_dst_format, bool fp32_dest_acc_en, bool bfp8_pack_precise, const tt::ARCH arch) {
+std::pair<std::vector<DataFormat>, std::vector<DataFormat>> generate_pack_data_formats(
+    tt_hlk_desc& desc,
+    DataFormat unpack_conditional_dst_format,
+    bool fp32_dest_acc_en,
+    bool bfp8_pack_precise,
+    const tt::ARCH arch) {
     vector<DataFormat> src_formats = tt::get_pack_src_formats(
         desc.buf_dataformat_arr,
         unpack_conditional_dst_format,
@@ -192,7 +208,7 @@ static std::pair<std::vector<DataFormat>, std::vector<DataFormat>> generate_pack
     return std::make_pair(src_formats, dst_formats);
 }
 
-static void emit_pack_data_formats(
+void emit_pack_data_formats(
     const std::string& pack_data_format_descs,
     const std::vector<DataFormat>& src_formats_all_cbs,
     const std::vector<DataFormat>& dst_formats_all_cbs) {
@@ -218,7 +234,7 @@ static void emit_pack_data_formats(
     file_stream.close();
 }
 
-static void equalize_data_format_vectors(std::vector<DataFormat>& v1, std::vector<DataFormat>& v2) {
+void equalize_data_format_vectors(std::vector<DataFormat>& v1, std::vector<DataFormat>& v2) {
     // Check that the vectors have the same size
     if (v1.size() != v2.size()) {
         throw std::invalid_argument("vectors have different sizes");
@@ -247,7 +263,7 @@ static void equalize_data_format_vectors(std::vector<DataFormat>& v1, std::vecto
     }
 }
 
-static void generate_data_format_descriptors(JitBuildOptions& options, const tt::ARCH arch) {
+void generate_data_format_descriptors(JitBuildOptions& options, const tt::ARCH arch) {
     string out_file_name_base = "chlkc_";
     string out_file_name_suffix = "_data_format.h";
     string unpack_data_format_descs = options.path + out_file_name_base + "unpack" + out_file_name_suffix;
@@ -287,7 +303,7 @@ static void generate_data_format_descriptors(JitBuildOptions& options, const tt:
     emit_pack_data_formats(pack_data_format_descs, pack_src_formats_all_cbs, pack_dst_formats_all_cbs);
 }
 
-static std::string array_to_string(const uint32_t arr[]) {
+std::string array_to_string(const uint32_t arr[]) {
     std::string formats_string = "";
     for (int i = 0; i < NUM_CIRCULAR_BUFFERS; i++) {
         formats_string += to_string((int)arr[i]) + ",";
@@ -295,7 +311,7 @@ static std::string array_to_string(const uint32_t arr[]) {
     return formats_string;
 }
 
-static void emit_unpack_tile_dims(const std::string& unpack_tile_dims_descs, tt_hlk_desc& desc) {
+void emit_unpack_tile_dims(const std::string& unpack_tile_dims_descs, tt_hlk_desc& desc) {
     ofstream file_stream;
     file_stream.open(unpack_tile_dims_descs);
     file_stream << "#pragma once\n\n";
@@ -309,7 +325,7 @@ static void emit_unpack_tile_dims(const std::string& unpack_tile_dims_descs, tt_
     file_stream.close();
 }
 
-static void emit_pack_tile_dims(const std::string& pack_tile_dims_descs, tt_hlk_desc& desc) {
+void emit_pack_tile_dims(const std::string& pack_tile_dims_descs, tt_hlk_desc& desc) {
     ofstream file_stream;
     file_stream.open(pack_tile_dims_descs);
     file_stream << "#pragma once\n\n";
@@ -323,7 +339,7 @@ static void emit_pack_tile_dims(const std::string& pack_tile_dims_descs, tt_hlk_
     file_stream.close();
 }
 
-static void generate_tile_dims_descriptors(JitBuildOptions& options, const tt::ARCH /*arch*/) {
+void generate_tile_dims_descriptors(JitBuildOptions& options, const tt::ARCH /*arch*/) {
     string out_file_name_base = "chlkc_";
     string out_file_name_suffix = "_tile_dims.h";
     string unpack_tile_dims_descs = options.path + out_file_name_base + "unpack" + out_file_name_suffix;
@@ -336,7 +352,7 @@ static void generate_tile_dims_descriptors(JitBuildOptions& options, const tt::A
     emit_pack_tile_dims(pack_tile_dims_descs, desc);
 }
 
-static void generate_dst_accum_mode_descriptor(JitBuildOptions& options) {
+void generate_dst_accum_mode_descriptor(JitBuildOptions& options) {
     string dst_accum_format_descriptor = options.path + "chlkc_dst_accum_mode.h";
 
     ofstream file_stream;
@@ -352,7 +368,7 @@ static void generate_dst_accum_mode_descriptor(JitBuildOptions& options) {
     file_stream.close();
 }
 
-static void generate_dst_sync_mode_descriptor(JitBuildOptions& options) {
+void generate_dst_sync_mode_descriptor(JitBuildOptions& options) {
     string dst_sync_mode_descriptor = options.path + "chlkc_dst_sync_mode.h";
 
     ofstream file_stream;
@@ -368,7 +384,7 @@ static void generate_dst_sync_mode_descriptor(JitBuildOptions& options) {
     file_stream.close();
 }
 
-static void generate_math_fidelity_descriptor(JitBuildOptions& options) {
+void generate_math_fidelity_descriptor(JitBuildOptions& options) {
     string math_fidelity_descriptor = options.path + "chlkc_math_fidelity.h";
     // assuming all cores within a op have the same desc
     tt_hlk_desc& desc = options.hlk_desc;
@@ -380,7 +396,7 @@ static void generate_math_fidelity_descriptor(JitBuildOptions& options) {
     file_stream.close();
 }
 
-static void generate_math_approx_mode_descriptor(JitBuildOptions& options) {
+void generate_math_approx_mode_descriptor(JitBuildOptions& options) {
     string approx_descriptor = options.path + "chlkc_math_approx_mode.h";
 
     // assuming all cores within a op have the same desc
@@ -392,6 +408,8 @@ static void generate_math_approx_mode_descriptor(JitBuildOptions& options) {
     file_stream << "constexpr bool APPROX = " << std::boolalpha << desc.get_hlk_math_approx_mode() << ";" << endl;
     file_stream.close();
 }
+
+}  // namespace
 
 // clang-format off
 void jit_build_genfiles_descriptors(const JitBuildEnv& env, JitBuildOptions& options) {

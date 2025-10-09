@@ -11,7 +11,6 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <algorithm>
@@ -25,7 +24,7 @@ namespace ttnn::operations::data_movement {
 
 std::vector<CoreRange> get_multicast_regions(
     const IDevice* device, const CoreRangeSet& all_cores, const CoreCoord& logical_controller) {
-    TT_ASSERT(0 < all_cores.ranges().size() and all_cores.ranges().size() <= 2);
+    TT_ASSERT(!all_cores.ranges().empty() and all_cores.ranges().size() <= 2);
     CoreCoord logical_zero = {0, 0};
     TT_ASSERT(logical_controller == logical_zero);
 
@@ -84,7 +83,7 @@ operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor& input
 
     const auto num_l1_banks = compute_with_storage_grid_size.x * compute_with_storage_grid_size.y;
 
-    uint32_t size_per_l1_bank = tt::tt_metal::detail::SizeBytesPerBank(
+    uint32_t size_per_l1_bank = tt::tt_metal::detail::calculate_bank_size_spread(
         output.buffer()->size(), output.buffer()->page_size(), num_l1_banks, hal::get_l1_alignment());
 
     // CB is being used as temp L1 buffer to copy src data into before writing to dst

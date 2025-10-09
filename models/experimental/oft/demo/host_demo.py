@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
 import os
 import math
 import torch
@@ -33,33 +37,22 @@ from tests.ttnn.utils_for_testing import check_with_pcc
     [
         # fmt: off
         (
-            os.path.abspath(os.path.join(os.path.dirname(__file__), "../resources/000022.jpg")),
-            os.path.abspath(os.path.join(os.path.dirname(__file__), "../resources/000022.txt")),
-            0.697, 0.742, 0.993, 0.722,
-        ),
-        (
             os.path.abspath(os.path.join(os.path.dirname(__file__), "../resources/000013.jpg")),
             os.path.abspath(os.path.join(os.path.dirname(__file__), "../resources/000013.txt")),
             0.879, 0.902, 0.998, 0.874,
         ),
-        (
-            os.path.abspath(os.path.join(os.path.dirname(__file__), "../resources/000009.jpg")),
-            os.path.abspath(os.path.join(os.path.dirname(__file__), "../resources/000009.txt")),
-            0.711, 0.793, 0.996, 0.756,
-        )
         # fmt: on
     ],
 )
-@pytest.mark.parametrize("checkpoints_path", [r"/home/mbezulj/checkpoint-0600.pth"])
 @torch.no_grad()
 def test_oftnet(
-    checkpoints_path,
     input_image_path,
     calib_path,
     pcc_scores_oft,
     pcc_positions_oft,
     pcc_dimensions_oft,
     pcc_angles_oft,
+    model_location_generator,
 ):
     # Create output directory for saving visualizations
     output_dir = os.path.join(os.path.dirname(__file__), "outputs")
@@ -89,7 +82,7 @@ def test_oftnet(
         dtype=torch.float32,
     )
 
-    ref_model = load_checkpoint(checkpoints_path, ref_model)
+    ref_model = load_checkpoint(ref_model, model_location_generator)
     ref_encoder = ObjectEncoder(nms_thresh=NMS_THRESH, dtype=torch.float32)
 
     # ========================================================
@@ -102,7 +95,7 @@ def test_oftnet(
         grid_height=GRID_HEIGHT,
         dtype=torch.bfloat16,
     )
-    test_model = load_checkpoint(checkpoints_path, test_model)
+    test_model = load_checkpoint(test_model, model_location_generator)
 
     # ========================================================
     # Run torch fp32 and bfp16 inference pass

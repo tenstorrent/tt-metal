@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -376,7 +376,7 @@ struct NocUnicastScatterWriteFields {
 
 template <typename T>
 void setup_2d_unicast_route(uint32_t packet_header_address, const ChipUnicastFields2D& unicast_fields) {
-    // Template constraint: T must be MeshPacketHeader or LowLatencyMeshPacketHeader
+    // Template constraint: T must be MeshPacketHeader or HybridMeshPacketHeader
     fabric_set_unicast_route(
         (T*)packet_header_address,
         unicast_fields.src_device_id,
@@ -387,7 +387,7 @@ void setup_2d_unicast_route(uint32_t packet_header_address, const ChipUnicastFie
 
 template <typename T>
 void setup_2d_mcast_route(uint32_t packet_header_address, const ChipMulticastFields2D& mcast_fields) {
-    // Template constraint: T must be MeshPacketHeader or LowLatencyMeshPacketHeader
+    // Template constraint: T must be MeshPacketHeader or HybridMeshPacketHeader
     fabric_set_mcast_route(
         (T*)packet_header_address,
         mcast_fields.dst_device_id,
@@ -423,7 +423,7 @@ struct ChipSendTypeHandler<ChipSendType::CHIP_UNICAST, false, USE_DYNAMIC_ROUTIN
         volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header,
         WorkerToFabricEdmSender* fabric_connection_handle) {
         const auto unicast_fields = ChipUnicastFields1D::build_from_args(arg_idx);
-        packet_header->to_chip_unicast(static_cast<uint8_t>(unicast_fields.num_hops));
+        fabric_set_unicast_route<false>((LowLatencyPacketHeader*)packet_header, unicast_fields.num_hops);
     }
 };
 
@@ -439,7 +439,10 @@ struct ChipSendTypeHandler<ChipSendType::CHIP_UNICAST, true, USE_DYNAMIC_ROUTING
         if constexpr (USE_DYNAMIC_ROUTING) {
             setup_2d_unicast_route<MeshPacketHeader>(packet_header_address, unicast_fields);
         } else {
-            fabric_set_unicast_route(unicast_fields.dst_device_id, (LowLatencyMeshPacketHeader*)packet_header_address);
+            fabric_set_unicast_route(
+                (HybridMeshPacketHeader*)packet_header_address,
+                unicast_fields.dst_device_id,
+                unicast_fields.dst_mesh_id);
         }
     }
 };
@@ -470,7 +473,7 @@ struct ChipSendTypeHandler<ChipSendType::CHIP_MULTICAST, true, USE_DYNAMIC_ROUTI
         if constexpr (USE_DYNAMIC_ROUTING) {
             setup_2d_mcast_route<MeshPacketHeader>(packet_header_address, mcast_fields);
         } else {
-            setup_2d_mcast_route<LowLatencyMeshPacketHeader>(packet_header_address, mcast_fields);
+            setup_2d_mcast_route<HybridMeshPacketHeader>(packet_header_address, mcast_fields);
         }
     }
 };

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 #include <math.h>
@@ -6,7 +6,6 @@
 #include <variant>
 
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
@@ -164,7 +163,7 @@ tt::tt_metal::operation::ProgramWithCallbacks rm_repeater(
     uint32_t number_of_higher_pages = input_log_shape[0];
     uint32_t number_of_lower_pages = input_log_shape[2];
     uint32_t number_of_rep_dim_pages = input_log_shape[1];
-    uint32_t cb_size_bytes = READ_ALIGNMENT * 2 + page_size_bytes;
+    uint32_t cb_size_bytes = (READ_ALIGNMENT * 2) + page_size_bytes;
     uint32_t src0_cb_index = 0;
     uint32_t src1_cb_index = 1;
 

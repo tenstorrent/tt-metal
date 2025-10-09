@@ -35,7 +35,7 @@ models/experimental/oft/
 
 **Input Requirements:**
 Both demos require:
-- Pre-trained checkpoint file (e.g., `/home/mbezulj/checkpoint-0600.pth`)
+- env variable CHECKPOINTS_PATH with pre-trained checkpoint file (e.g., `export CHECKPOINTS_PATH="/home/mbezulj/checkpoint-0600.pth"`)
 - Input images in JPG format (located in `resources/`)
 - Corresponding calibration files in TXT format (camera intrinsic parameters)
 

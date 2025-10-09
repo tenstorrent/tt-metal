@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
 import torch
 import ttnn
 import pytest
@@ -14,10 +18,11 @@ from models.experimental.oft.reference.utils import get_abs_and_relative_error
 
 from tests.ttnn.utils_for_testing import check_with_pcc
 from models.experimental.oft.tt.model_preprocessing import create_OFT_model_parameters
+from tests.ttnn.unit_tests.test_bh_20_cores_sharding import skip_if_not_blackhole_20_cores
 from loguru import logger
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 12 * 1024}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 14 * 1024}], indirect=True)
 @pytest.mark.parametrize(
     "input_image_path, calib_path",
     [
@@ -44,10 +49,8 @@ from loguru import logger
         "fp32_use_host_oft",
     ],
 )
-@pytest.mark.parametrize("checkpoints_path", [r"/localdev/njovanovic/checkpoint-0600.pth"])
 def test_oftnet(
     device,
-    checkpoints_path,
     input_image_path,
     calib_path,
     model_dtype,
@@ -56,7 +59,9 @@ def test_oftnet(
     pcc_positions_oft,
     pcc_dimensions_oft,
     pcc_angles_oft,
+    model_location_generator,
 ):
+    skip_if_not_blackhole_20_cores(device)
     torch.manual_seed(42)
 
     # OFT configuration based on real model parameters
@@ -74,7 +79,7 @@ def test_oftnet(
         dtype=model_dtype,
     )
 
-    ref_model = load_checkpoint(checkpoints_path, ref_model)
+    ref_model = load_checkpoint(ref_model, model_location_generator)
     parameters = create_OFT_model_parameters(ref_model, (input_tensor, calib, grid), device=device)
 
     tt_input = input_tensor.permute((0, 2, 3, 1))

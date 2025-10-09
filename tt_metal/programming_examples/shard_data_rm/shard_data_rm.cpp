@@ -4,13 +4,13 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/command_queue.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/tt_align.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -28,8 +28,10 @@ int main() {
 
     // Select device 0 and create a command queue and program object for kernel/buffer management.
     int device_id = 0;
-    IDevice* device = CreateDevice(device_id);   // Acquire handle to hardware device
-    CommandQueue& cq = device->command_queue();  // Command queue for dispatching operations
+    std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
+    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+    distributed::MeshWorkload workload;
+    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
     Program program = CreateProgram();           // Encapsulates kernels and buffers
 
     const char* dprint_env = std::getenv("TT_METAL_DPRINT_CORES");
@@ -87,18 +89,17 @@ int main() {
 
     // Note: Since bfloat16 is 2 bytes and uint32_t is 4 bytes, each page contains 2 bfloat16 values.
     // The division by data_size ensures correct mapping of values to pages.
-    uint32_t padded_offset_bytes = align(input_unit_size, device->allocator()->get_alignment(BufferType::DRAM));
+    uint32_t padded_offset_bytes = align(input_unit_size, mesh_device->allocator()->get_alignment(BufferType::DRAM));
 
     // configure and create interleaved DRAM buffer to insert source data into
     uint32_t src_buffer_size = num_values * data_size;
-    tt_metal::InterleavedBufferConfig input_dram_config{
-        .device = device,
-        .size = src_buffer_size,
-        .page_size = input_unit_size,
-        .buffer_type = tt_metal::BufferType::DRAM};
-    std::shared_ptr<tt::tt_metal::Buffer> src_buffer = CreateBuffer(input_dram_config);
+    distributed::DeviceLocalBufferConfig input_dram_config{
+        .page_size = input_unit_size, .buffer_type = tt_metal::BufferType::DRAM};
+    distributed::ReplicatedBufferConfig buffer_config{.size = src_buffer_size};
+    std::shared_ptr<distributed::MeshBuffer> src_buffer =
+        distributed::MeshBuffer::create(buffer_config, input_dram_config, mesh_device.get());
     const uint32_t src_addr = src_buffer->address();
-    EnqueueWriteBuffer(cq, src_buffer, src_vec.data(), false);
+    distributed::EnqueueWriteMeshBuffer(cq, src_buffer, src_vec, false);
 
     // configure and create circular buffers with the same address on each of the designated cores
     // Create a circular buffer on each core to hold its shard of data
@@ -138,7 +139,8 @@ int main() {
     fmt::print("\n");
 
     // start/finish program and close device
-    EnqueueProgram(cq, program, false);
+    workload.add_program(device_range, std::move(program));
+    distributed::EnqueueMeshWorkload(cq, workload, false);
     // Kernel prints to console. No need to print the output here.
     //
     // You should see the following output in the console:
@@ -146,7 +148,7 @@ int main() {
     // 0:(x=0,y=1):BR: Core (0,1): 10 12 14 16
     // 0:(x=0,y=2):BR: Core (0,2): 18 20 22 24
     // 0:(x=0,y=3):BR: Core (0,3): 26 28 30 32
-    Finish(cq);
-    CloseDevice(device);
+    distributed::Finish(cq);
+    mesh_device->close();
     fmt::print("Program finished successfully.\n");
 }

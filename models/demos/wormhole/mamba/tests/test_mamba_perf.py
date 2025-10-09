@@ -7,7 +7,7 @@ import torch
 from loguru import logger
 from tracy.process_model_log import get_samples_per_s
 
-from models.common.utility_functions import disable_persistent_kernel_cache, profiler, skip_for_grayskull
+from models.common.utility_functions import disable_persistent_kernel_cache, profiler
 from models.demos.wormhole.mamba.reference.prefill_decode_model import Mamba
 from models.demos.wormhole.mamba.tt import model_config
 from models.demos.wormhole.mamba.tt.mamba_model import MambaTT
@@ -31,8 +31,8 @@ MARGIN = 0.05
 @pytest.mark.parametrize(
     "model_version, mode, batch_size, sequence_length, iterations, expected_compile_time, expected_inference_time",
     (
-        ("state-spaces/mamba-2.8b", ModelMode.DECODE, 32, 1, 8, 18.0, 0.110),
-        ("state-spaces/mamba-2.8b", ModelMode.PREFILL, 1, 128, 8, 30.0, 0.520),
+        ("state-spaces/mamba-2.8b", ModelMode.DECODE, 32, 1, 8, 18.0, 0.120),
+        ("state-spaces/mamba-2.8b", ModelMode.PREFILL, 1, 128, 8, 30.0, 0.385),
     ),
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
@@ -132,12 +132,11 @@ def test_mamba_perf_e2e(
         )
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.timeout(600)
 @pytest.mark.models_device_performance_bare_metal
 @pytest.mark.parametrize(
     "batch, expected_layer_duration_ms",
-    ((32, 1.630),),
+    ((32, 1.596),),
 )
 def test_mamba_perf_device(batch, expected_layer_duration_ms):
     subdir = "ttnn_mamba"

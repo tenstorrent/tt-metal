@@ -1,8 +1,12 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
 import ttnn
 import torch
 import torch.nn.functional as F
-import math
 from loguru import logger
+import math
 
 try:
     from tracy import signpost
@@ -138,8 +142,6 @@ def calculate_initialization_parameters(
             for t in btm_left_bc_slices
         ]
 
-    print(top_left_bc_tt[0].shape, btm_right_bc_tt[0].shape, top_right_bc_tt[0].shape, btm_left_bc_tt[0].shape)
-
     top_left_bc_tt = [
         ttnn.reshape(t, [batch_size, 1, grid_h // num_slices, grid_w * t.shape[-1]]) for t in top_left_bc_tt
     ]
@@ -163,21 +165,10 @@ def calculate_initialization_parameters(
         area_tt,
         [batch, height, depth, width],
     )
+    # return area_tt
 
 
 class OFT:
-    """
-    Orthographic Feature Transform (OFT) class with refactored configuration management.
-
-    This class separates configuration parameters into:
-    1. Sharding configurations for slicing operations (setup in _setup_sharding_configs)
-    2. Linear layer configurations (setup in _setup_linear_configs)
-    3. Dynamic configurations calculated per forward pass (_calculate_dynamic_configs)
-
-    All linear layer parameters (matmul config, output memory config, compute config)
-    are now calculated outside the forward function for better performance and clarity.
-    """
-
     def __init__(
         self,
         device,
@@ -199,6 +190,8 @@ class OFT:
         self.use_precomputed_grid = use_precomputed_grid
         self.features_shape_hw = features_shape_hw
         self.device = device
+
+        self.input_dtype = ttnn.bfloat16
 
         self.num_slices = num_slices
 
@@ -237,11 +230,10 @@ class OFT:
             "in_channels": self.in_channels,
             "out_channels": self.linear_weight.shape[1],
             "nhw": (GRID_SAMPLE_NHW + PAD_AMOUNT) // self.num_slices,
-            "height_sharding": False,
+            "height_sharding": True,
         }
 
         self._setup_sharding_configs()
-        self._setup_linear_configs()
         self.linear_layer = Linear(self.linear_weight, self.linear_bias, linear_pt)
 
     def _setup_sharding_configs(self):
@@ -368,7 +360,7 @@ class OFT:
         if features.get_layout() == ttnn.ROW_MAJOR_LAYOUT:
             features = ttnn.to_layout(features, ttnn.TILE_LAYOUT)
 
-        if self.integral_image_quantization_strategy == None:
+        if self.integral_image_quantization_strategy is None:
             integral_image = ttnn_integral_image_channel_last(features)
         elif self.integral_image_quantization_strategy == "to_uint32":
             features = ttnn.mul(features, self.prescaler, dtype=ttnn.bfloat16)
@@ -395,7 +387,6 @@ class OFT:
         n, h, w, in_ch = [1, 1, GRID_SAMPLE_NHW + PAD_AMOUNT, self.in_channels]  # features.shape
 
         # Get output channels from linear weight
-        print(f"Linear weight shape: {self.linear_weight.shape}")
         out_ch = self.linear_weight.shape[1]
 
         # Calculate dynamic configurations based on tensor dimensions
@@ -432,6 +423,8 @@ class OFT:
                 memory_config=grid_sample_memory_config,
             )
             vox_feats_slice = ttnn.to_layout(vox_feats_slice, ttnn.TILE_LAYOUT)
+            logger.debug(f"Grid sample output slice {i} shape: {self.bbox_corners[0][i].shape}")
+            logger.debug(f"Voxel features slice {i} initial shape: {vox_feats_slice.shape}")
 
             # Top right corner slice
             top_right_slice = ttnn.grid_sample(
@@ -474,8 +467,6 @@ class OFT:
             logger.debug(f"Voxel features slice {i} shape: {vox_feats_slice.shape}")
             logger.debug(f"Area slice {i} shape: {self.area[i].shape}")
             area_slice = self.create_sharded_tensor(self.area[i])
-            print(area_slice.shape)
-            print(vox_feats_slice.shape)
             ttnn.mul_(vox_feats_slice, area_slice)
             ttnn.deallocate(area_slice)
 

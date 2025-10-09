@@ -9,7 +9,6 @@
 #include <cmath>
 
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
@@ -100,7 +99,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(
     uint32_t input_nblocks_per_core = tt::div_up(remapped_input_shard_shape_for_output_grid, TILE_HEIGHT);
     uint32_t input_npages = ntiles_per_block * input_nblocks_per_core;
 
-    uint32_t in_page_size = tt::tt_metal::detail::TileSize(in_df);
+    uint32_t in_page_size = tt::tile_size(in_df);
     if (skip_untilize) {
         uint32_t in_nbytes = datum_size(in_df);
         in_page_size = input_shard_shape[1] * in_nbytes;
@@ -108,7 +107,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(
     }
 
     const uint32_t out_stick_nbytes = output_shard_shape[1] * out_nbytes;
-    const uint32_t out_tile_size = tt::tt_metal::detail::TileSize(out_df);
+    const uint32_t out_tile_size = tt::tile_size(out_df);
 
     CBIndices cb_indices = CBIndices();
 
@@ -176,14 +175,6 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(
             SetRuntimeArgs(program, untilize_kernel_id, cores[core_id], {number_of_blocks_per_core[core_id]});
         }
     }
-
-    log_debug(
-        tt::LogOp,
-        "\n\n Halo Config Tensors: Padding: \n\t {} \n\t {} \nGather \n\t {} \n\t {}",
-        padding_config0,
-        padding_config1,
-        gather_config0,
-        gather_config1);
 
     TT_ASSERT(padding_config0.dtype() == DataType::UINT16);
     TT_ASSERT(padding_config1.dtype() == DataType::UINT16);
@@ -427,8 +418,8 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core(
 
     uint32_t out_stick_nbytes = output_shard_shape[1] * out_nbytes;
 
-    uint32_t in_page_size = tt::tt_metal::detail::TileSize(in_df);
-    uint32_t out_tile_size = tt::tt_metal::detail::TileSize(out_df);
+    uint32_t in_page_size = tt::tile_size(in_df);
+    uint32_t out_tile_size = tt::tile_size(out_df);
 
     const bool skip_untilize = input_tensor.layout() == Layout::ROW_MAJOR;
     bool wide_tensor = ntiles_per_block > MAX_PACK_UNTILIZE_WIDTH;
@@ -587,7 +578,7 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core(
     uint32_t rectangular_x = is_block_sharded ? all_cores.ranges()[0].end_coord.x + 1 : num_cores_x;
     uint32_t rectangular_y =
         is_block_sharded ? all_cores.ranges()[0].end_coord.y + 1
-                         : (num_noop_cores ? num_active_cores / num_cores_x + 1 : num_active_cores / num_cores_x);
+                         : (num_noop_cores ? (num_active_cores / num_cores_x) + 1 : num_active_cores / num_cores_x);
     std::set<CoreRange> rectangular_cores_set;
     if (is_block_sharded) {
         rectangular_cores_set.insert(all_cores.ranges()[0]);
@@ -595,7 +586,8 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core(
         rectangular_cores_set.insert(CoreRange(CoreCoord(0, 0), CoreCoord(rectangular_x - 1, rectangular_y - 1)));
     }
     CoreRangeSet rectangular_cores(rectangular_cores_set);
-    CoreCoord noc_BR = is_block_sharded ? last_active_coord : core_id_to_noc_coords(rectangular_x * rectangular_y - 1);
+    CoreCoord noc_BR =
+        is_block_sharded ? last_active_coord : core_id_to_noc_coords((rectangular_x * rectangular_y) - 1);
 
     // create semaphore
     uint32_t semaphore_id = tt::tt_metal::CreateSemaphore(program, rectangular_cores, 0);

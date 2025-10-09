@@ -9,7 +9,6 @@
 #include <utility>
 #include <vector>
 
-#include <tt-metalium/allocator_types.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include "tt_metal/impl/allocator/algorithms/free_list_opt.hpp"
 
@@ -428,4 +427,50 @@ TEST(FreeListOptTest, AllocatedAddresses) {
     allocator.reset_size();
     auto after_reset = allocator.allocated_addresses();
     ASSERT_EQ(after_reset, after_top);
+}
+
+TEST(FreeListOptTest, AddressesAPIWithNonzeroOffset) {
+    // Test APIs that expose addresses as inputs/outputs correctly expose absolute addresses with offset added
+    const size_t offset = 2_KiB;
+    const size_t alloc_size = 1_GiB;
+    auto allocator = tt::tt_metal::allocator::FreeListOpt(alloc_size, offset, 1_KiB, 1_KiB);
+
+    auto available_addresses = allocator.available_addresses(1_KiB);
+    ASSERT_EQ(available_addresses.size(), 1);
+    ASSERT_EQ(available_addresses[0].first, offset);
+    ASSERT_EQ(available_addresses[0].second, alloc_size + offset);
+
+    // Allocate a block with allocate_at_address
+    // The way offsets are used is essentially to manually block off some lower region of address space
+    // So we convert absolute addresses to local allocator address by subtracting the offset
+    // This means, in practice, we should only be allocating above the offset; otherwise UB
+    auto a = allocator.allocate_at_address(offset, 3_KiB);
+    // This assert is not that interesting; it will always return input absolute address
+    ASSERT_THAT(a, ::testing::Optional(offset));
+
+    auto allocated_addresses = allocator.allocated_addresses();
+    ASSERT_EQ(allocated_addresses.size(), 1);
+    ASSERT_EQ(allocated_addresses[0].first, offset);
+    ASSERT_EQ(allocated_addresses[0].second, 3_KiB + offset);
+
+    available_addresses = allocator.available_addresses(1_KiB);
+    ASSERT_EQ(available_addresses.size(), 1);
+    ASSERT_EQ(available_addresses[0].first, 3_KiB + offset);
+    ASSERT_EQ(available_addresses[0].second, alloc_size + offset);
+
+    // Allocate another block above using allocate
+    auto b = allocator.allocate(2_KiB, /*bottom_up=*/false);
+    ASSERT_THAT(b, ::testing::Optional(alloc_size - 2_KiB + offset));
+
+    allocated_addresses = allocator.allocated_addresses();
+    ASSERT_EQ(allocated_addresses.size(), 2);
+    ASSERT_EQ(allocated_addresses[0].first, offset);
+    ASSERT_EQ(allocated_addresses[0].second, 3_KiB + offset);
+    ASSERT_EQ(allocated_addresses[1].first, alloc_size - 2_KiB + offset);
+    ASSERT_EQ(allocated_addresses[1].second, alloc_size + offset);
+
+    available_addresses = allocator.available_addresses(1_KiB);
+    ASSERT_EQ(available_addresses.size(), 1);
+    ASSERT_EQ(available_addresses[0].first, 3_KiB + offset);
+    ASSERT_EQ(available_addresses[0].second, alloc_size - 2_KiB + offset);
 }

@@ -7,7 +7,7 @@ import pytest
 import math
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import is_blackhole
+from models.common.utility_functions import is_blackhole
 from tests.ttnn.nightly.unit_tests.operations.pool.test_maxpool2d import HS, BS, WS
 
 
@@ -171,14 +171,14 @@ def run_avg_pool2d(
     # 1x256x56x56 tensor with divisor_override=5 and 5x5 kernel resulting in rtol=0.015 for that element
     torch.manual_seed(1e3)
     torch_input = randomize_tensor(tensor_map, input_shape)
-    ttnn_input_shape = (1, 1, in_n * in_h * in_w, in_c)
     torch_input_permuted = torch.permute(torch_input, (0, 2, 3, 1))  # N, H, W, C
-    torch_input_reshaped = torch_input_permuted.reshape(ttnn_input_shape)  # NHW, C
     if in_dtype == ttnn.bfloat8_b:
+        ttnn_input_shape = (1, 1, in_n * in_h * in_w, in_c)
+        torch_input_reshaped = torch_input_permuted.reshape(ttnn_input_shape)  # NHW, C
         ttnn_input = ttnn.from_torch(torch_input_reshaped, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
     else:
         ttnn_input = ttnn.from_torch(
-            torch_input_reshaped, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+            torch_input_permuted, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
         )
 
     # run ttnn avg_pool2d

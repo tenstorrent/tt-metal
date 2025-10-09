@@ -1,10 +1,10 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-#include "autograd/module_base.hpp"
 #include "autograd/tensor.hpp"
+#include "modules/module_base.hpp"
 
 namespace ttml::modules {
 
@@ -28,7 +28,7 @@ struct LoRALayerConfig {
     bool is_bias_trainable = false;
 };
 
-class LoRALinearLayer : public autograd::ModuleBase {
+class LoRALinearLayer : public ModuleBase {
 private:
     autograd::TensorPtr m_weight;
     autograd::TensorPtr m_bias;
@@ -36,7 +36,7 @@ private:
     autograd::TensorPtr m_lora_a;
     autograd::TensorPtr m_lora_b;
 
-    std::shared_ptr<autograd::ModuleBase> m_dropout;
+    std::shared_ptr<ModuleBase> m_dropout;
 
     float m_scale = 1.0F;
 

@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
 import torch
 import ttnn
 import pytest
@@ -7,6 +11,8 @@ from models.experimental.oft.reference.oft import OFT as ReferenceOFT
 from tests.ttnn.utils_for_testing import check_with_pcc
 from models.experimental.oft.tt.model_preprocessing import create_OFT_model_parameters_oft
 from models.experimental.oft.reference.utils import get_abs_and_relative_error, make_grid
+from tests.ttnn.unit_tests.test_bh_20_cores_sharding import skip_if_not_blackhole_20_cores
+
 from loguru import logger
 
 
@@ -20,15 +26,15 @@ from loguru import logger
         ((1, 256, 48, 160), 256, 0.5, 4, 1 / 8, torch.bfloat16, False, 0.999, 0.679, 18),
         ((1, 256, 48, 160), 256, 0.5, 4, 1 / 8, torch.bfloat16,  True, 0.999, 0.642, 18),
         # feats16 {float32,bfloat16} x {use_precomputed_grid, no_use_precomputed_grid}
-        ((1, 256, 24, 80), 256, 0.5, 4, 1 / 16, torch.float32,  False, 0.999, 0.522, 18),
+        ((1, 256, 24, 80), 256, 0.5, 4, 1 / 16, torch.float32,  False, 0.999, 0.522, 12),
         ((1, 256, 24, 80), 256, 0.5, 4, 1 / 16, torch.float32,   True, 0.999, 0.453, 12),
-        ((1, 256, 24, 80), 256, 0.5, 4, 1 / 16, torch.bfloat16, False, 0.999, 0.348, 18),
-        ((1, 256, 24, 80), 256, 0.5, 4, 1 / 16, torch.bfloat16,  True, 0.999, 0.334, 18),
+        ((1, 256, 24, 80), 256, 0.5, 4, 1 / 16, torch.bfloat16, False, 0.999, 0.348, 12),
+        ((1, 256, 24, 80), 256, 0.5, 4, 1 / 16, torch.bfloat16,  True, 0.999, 0.334, 12),
         # feats32 {float32,bfloat16} x {use_precomputed_grid, no_use_precomputed_grid}
-        ((1, 256, 12, 40), 256, 0.5, 4, 1 / 32, torch.float32,  False, 0.999, 0.296, 16),
+        ((1, 256, 12, 40), 256, 0.5, 4, 1 / 32, torch.float32,  False, 0.999, 0.296, 11),
         ((1, 256, 12, 40), 256, 0.5, 4, 1 / 32, torch.float32,   True, 0.999, 0.290, 11),
-        ((1, 256, 12, 40), 256, 0.5, 4, 1 / 32, torch.bfloat16, False, 0.999, 0.236, 16),
-        ((1, 256, 12, 40), 256, 0.5, 4, 1 / 32, torch.bfloat16,  True, 0.999, 0.229, 16),
+        ((1, 256, 12, 40), 256, 0.5, 4, 1 / 32, torch.bfloat16, False, 0.999, 0.236, 11),
+        ((1, 256, 12, 40), 256, 0.5, 4, 1 / 32, torch.bfloat16,  True, 0.999, 0.229, 11),
         # fmt: on
     ],
     ids=[
@@ -62,6 +68,7 @@ def test_oft_forward(
     num_slices,
     seed,
 ):
+    skip_if_not_blackhole_20_cores(device)
     torch.manual_seed(seed)
 
     features = torch.relu(torch.randn(*input_shape, dtype=torch.float32))

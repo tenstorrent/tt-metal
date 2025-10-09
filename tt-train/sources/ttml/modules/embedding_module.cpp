@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -13,6 +13,8 @@
 #include "ops/embedding_op.hpp"
 
 namespace ttml::modules {
+
+using namespace tt::constants;
 
 void Embedding::initialize_tensors(uint32_t num_embeddings, uint32_t embedding_dim) {
     m_weight = autograd::create_tensor();

@@ -18,7 +18,7 @@ from tests.sweep_framework.sweep_utils.sharding_utils import (
 )
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
-from models.utility_functions import torch_random
+from models.common.utility_functions import torch_random
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 120
@@ -103,7 +103,7 @@ def run(
             scalar = torch.tensor(1, dtype=torch.bfloat16).uniform_(-100, 100).item()
 
     golden_function = ttnn.get_golden_function(ttnn.fmod)
-    torch_output_tensor = golden_function(torch_input_tensor_a, scalar)
+    torch_output_tensor = golden_function(torch_input_tensor_a, scalar, device=device)
 
     sharded_config = ttnn.create_sharded_memory_config_(
         shape=input_shape,

@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-#include <optional>
 #include <array>
 
 #include <algorithm>
@@ -16,12 +15,9 @@
 
 #include <tt-metalium/work_split.hpp>
 
-using std::pair;
 using CoreCoord = tt_xy_pair;
 
-using namespace tt::constants;
-
-std::vector<uint32_t> get_prime_factors(uint32_t n) {
+inline std::vector<uint32_t> get_prime_factors(uint32_t n) {
     uint32_t i = 2;
 
     std::vector<uint32_t> prime_factors;
@@ -40,8 +36,8 @@ std::vector<uint32_t> get_prime_factors(uint32_t n) {
     return prime_factors;
 }
 
-std::vector<uint32_t> get_possible_products(const std::vector<uint32_t>& factors) {
-    if (factors.size() == 0) {
+inline std::vector<uint32_t> get_possible_products(const std::vector<uint32_t>& factors) {
+    if (factors.empty()) {
         return {1};
     }
 
@@ -68,7 +64,7 @@ std::vector<uint32_t> get_possible_products(const std::vector<uint32_t>& factors
     return products;
 }
 
-uint32_t get_maximum_block_dim(int32_t block_dim, int32_t in0_block_w) {
+inline uint32_t get_maximum_block_dim(int32_t block_dim, int32_t in0_block_w) {
     int32_t other_dim = (400 - 2 * in0_block_w * block_dim) / (2 * in0_block_w + block_dim);
     if (other_dim > 0) {
         return other_dim;
@@ -119,7 +115,7 @@ constexpr std::array<std::tuple<uint32_t, uint32_t>, 20> SUBBLOCK_HW_CHOICES = {
     {5, 1}, {1, 5}, {2, 2}, {4, 1}, {1, 4}, {3, 1}, {1, 3}, {2, 1}, {1, 2}, {1, 1},
 }};
 
-std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> get_large_matmul_params(
+inline std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> get_large_matmul_params(
     uint32_t Mt, uint32_t Nt, uint32_t num_cores_y, uint32_t num_cores_x, uint32_t in0_block_w) {
     auto Nt_fac = get_prime_factors(Nt);
     auto Mt_fac = get_prime_factors(Mt);
@@ -225,7 +221,7 @@ std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> get_large_matmul_params(
     return {0, 0, 0, 0};
 }
 
-CoreCoord get_core_range(
+inline CoreCoord get_core_range(
     uint32_t num_blocks_rows, uint32_t num_blocks_cols, uint32_t max_num_rows, uint32_t max_num_cols) {
     CoreCoord core_range(0, 0);
     if (!(num_blocks_rows == 1 && num_blocks_cols == 1) && num_blocks_rows <= max_num_rows &&

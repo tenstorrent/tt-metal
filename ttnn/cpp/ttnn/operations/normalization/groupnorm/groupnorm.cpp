@@ -104,7 +104,7 @@ ttnn::Tensor ExecuteGroupNorm::invoke(
             .out_data_format = DataType::BFLOAT16,
             .inplace = inplace.value_or(false),
             .output_layout = output_layout.value_or(input_tensor.layout())};
-        return operation::run(
+        return tt::tt_metal::operation::run(
                    GroupNorm{
                        .eps = epsilon,
                        .num_groups = static_cast<uint32_t>(num_groups),
@@ -123,7 +123,7 @@ ttnn::Tensor ExecuteGroupNorm::invoke(
             .inplace = inplace.value_or(false),
             .output_layout = output_layout.value_or(input_tensor.layout()),
             .num_out_blocks = num_out_blocks.value_or(1)};
-        return operation::run(
+        return tt::tt_metal::operation::run(
                    GroupNorm{
                        .eps = epsilon,
                        .num_groups = static_cast<uint32_t>(num_groups),

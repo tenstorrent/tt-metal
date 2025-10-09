@@ -203,7 +203,7 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   galaxy-apc-fast-tests:
-    if: false
+    if: ${{ github.event.pull_request.head.repo.fork == false }}
     needs: build-artifact
     secrets: inherit
     strategy:

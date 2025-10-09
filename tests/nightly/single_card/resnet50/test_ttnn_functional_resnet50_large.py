@@ -16,13 +16,12 @@ from ttnn.model_preprocessing import (
 )
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import (
+from models.common.utility_functions import (
     enable_memory_reports,
-    skip_for_grayskull,
     is_wormhole_b0,
 )
 
-from models.demos.ttnn_resnet.tests.resnet50_test_infra import load_resnet50_model
+from models.demos.ttnn_resnet.tests.common.resnet50_test_infra import load_resnet50_model
 from models.demos.ttnn_resnet.tt.ttnn_functional_resnet50_large import resnet50
 
 
@@ -265,7 +264,6 @@ def create_test_infra(device, batch_size, act_dtype, weight_dtype, math_fidelity
 
 
 @pytest.mark.timeout(600)
-@skip_for_grayskull("Only works for Wormhole")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, act_dtype, weight_dtype, math_fidelity",
