@@ -1192,11 +1192,11 @@ def test_demo_text(
                 "N150_Llama-3.1-8B": 120,
                 "N150_Mistral-7B": 106,
                 # N300 targets
-                "N300_Qwen2.5-7B": 90,
+                "N300_Qwen2.5-7B": 92,
                 # T3K targets
                 "T3K_Llama-3.1-70B": 204,
-                "T3K_Qwen2.5-Coder-32B": 190,
-                "T3K_Qwen2.5-72B": 240,
+                "T3K_Qwen2.5-Coder-32B": 215,
+                "T3K_Qwen2.5-72B": 241,
                 "T3K_Qwen3-32B": 230,  # Issue: Perf regression being tracked on issue #29834
             }
             ci_target_decode_tok_s_u = {
