@@ -323,6 +323,13 @@ def main(
             filename: "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/6u_dual_host_cluster_desc_rank_1.yaml"
 
     See examples/ttrun/ for example configuration files.
+
+    \b
+    Documentation:
+        For comprehensive usage guide, design patterns (SPMD Big-Mesh and Multi-Mesh),
+        and integration with MGD 2.0, see:
+        tech_reports/Programming_Mesh_of_Devices/Programming_Mesh_of_Devices_with_TT-NN.md
+        Section 2.4: Distributed Process Launch with tt-run
     """
     program = ctx.args
     try:

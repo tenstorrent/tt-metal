@@ -41,20 +41,22 @@ get_ordered_ethernet_connections_to_remote_devices(const std::unique_ptr<tt::umd
 
 bool is_ethernet_endpoint_up(
     const std::unique_ptr<tt::umd::Cluster>& cluster,
-    const EthernetEndpoint& endpoint,
+    chip_id_t chip_id,
+    uint32_t channel,
     uint32_t link_up_addr,
     bool force_refresh_link_status) {
-    uint32_t link_up_value = 0;
-    tt::umd::CoreCoord ethernet_core = tt::umd::CoreCoord(
-        endpoint.ethernet_core.x, endpoint.ethernet_core.y, tt::umd::CoreType::ETH, tt::umd::CoordSystem::LOGICAL);
-    cluster->read_from_device(&link_up_value, endpoint.chip.id, ethernet_core, link_up_addr, sizeof(uint32_t));
+    const tt_SocDescriptor& soc_desc = cluster->get_soc_descriptor(chip_id);
+    tt::umd::CoreCoord ethernet_core = soc_desc.get_eth_core_for_channel(channel, tt::umd::CoordSystem::LOGICAL);
 
-    if (cluster->get_tt_device(endpoint.chip.id)->get_arch() == tt::ARCH::WORMHOLE_B0) {
+    uint32_t link_up_value = 0;
+    cluster->read_from_device(&link_up_value, chip_id, ethernet_core, link_up_addr, sizeof(uint32_t));
+
+    if (cluster->get_tt_device(chip_id)->get_arch() == tt::ARCH::WORMHOLE_B0) {
         return link_up_value == 6;  // see eth_fw_api.h
-    } else if (cluster->get_tt_device(endpoint.chip.id)->get_arch() == tt::ARCH::BLACKHOLE) {
+    } else if (cluster->get_tt_device(chip_id)->get_arch() == tt::ARCH::BLACKHOLE) {
         return link_up_value == 1;
     }
 
-    TT_ASSERT(false, "Unsupported architecture for chip {}", endpoint.chip);
+    TT_ASSERT(false, "Unsupported architecture for chip {}", chip_id);
     return false;
 }

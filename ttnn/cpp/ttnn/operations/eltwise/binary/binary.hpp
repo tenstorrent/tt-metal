@@ -161,6 +161,15 @@ struct BinaryOperationSubalpha {
         const std::optional<Tensor>& output = std::nullopt);
 };
 
+template <BinaryOpType binary_op_type>
+struct BinaryOperationHypot {
+    static Tensor invoke(
+        const Tensor& input_tensor_a,
+        const Tensor& input_tensor_b,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+};
+
 }  // namespace operations::binary
 
 constexpr auto add =
@@ -271,6 +280,9 @@ constexpr auto logical_right_shift = ttnn::register_operation<
     operations::binary::BinaryOperation<operations::binary::BinaryOpType::LOGICAL_RIGHT_SHIFT>>();
 constexpr auto xlogy = ttnn::
     register_operation<"ttnn::xlogy", operations::binary::BinaryOperation<operations::binary::BinaryOpType::XLOGY>>();
+constexpr auto hypot = ttnn::register_operation<
+    "ttnn::hypot",
+    operations::binary::BinaryOperationHypot<operations::binary::BinaryOpType::HYPOT>>();
 
 template <typename InputBType>
 ttnn::Tensor operator+(const ttnn::Tensor& lhs, InputBType rhs) {
