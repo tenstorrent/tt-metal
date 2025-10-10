@@ -1,9 +1,14 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
 # SPDX-License-Identifier: Apache-2.0
+
+"""
+General utilities for the GPT-OSS demo.
+"""
 
 import torch
 
-MAX_SEQ_LEN = 4 * 1024
+MAX_SEQ_LEN = 4 * 1024  # TODO: extend this to 128k
 
 
 def get_cache_file_name(tensor_cache_path, name):

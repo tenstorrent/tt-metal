@@ -188,7 +188,7 @@ def test_full_model_accuracy(mesh_device, device_params, reset_seeds):
         tokenizer = setup["model_args"].tokenizer
 
         # Use the same setup as simple_text_demo
-        from models.demos.gpt_oss.demo.simple_text_demo import prepare_gpt_oss_generator_args
+        from models.demos.gpt_oss.demo.text_demo import prepare_gpt_oss_generator_args
 
         # Use the same parameters as the demo
         num_devices = setup["mesh_device"].get_num_devices()
@@ -291,13 +291,13 @@ def test_full_model_accuracy(mesh_device, device_params, reset_seeds):
         tokenizer = setup["model_args"].tokenizer
 
         # Use the same setup as simple_text_demo
-        from models.demos.gpt_oss.demo.simple_text_demo import prepare_gpt_oss_generator_args
+        from models.demos.gpt_oss.demo.text_demo import prepare_gpt_oss_generator_args
 
         # Use the same parameters as the demo
         num_devices = setup["mesh_device"].get_num_devices()
         data_parallel = 1
         global_batch_size = 1
-        max_seq_len = 1024
+        max_seq_len = 1024  # TODO: extend this to 128k
         paged_attention = False
         page_params = {"page_block_size": 64, "page_max_num_blocks_per_dp": 16}
 

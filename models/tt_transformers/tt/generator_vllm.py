@@ -609,7 +609,7 @@ class GptOssForCausalLM(Generator):
 
     @property
     def cache_path(self):
-        return Path(self.model_args[0].weight_cache_path(ttnn.bfloat8_b))
+        return self.model_args[0].weight_cache_path(ttnn.bfloat8_b)
 
     def prefill_forward(self, *args, **kwargs):
         return super().prefill_forward_text(*args, **kwargs)

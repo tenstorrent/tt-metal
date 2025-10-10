@@ -331,7 +331,7 @@ def test_gpt_oss_demo(
             # Save output token
             for user in range(global_batch_size):
                 user_tok = out_tok[user].item()
-                if user_tok not in tokenizer.stop_tokens and user_done[user] == False:
+                if user_tok != tokenizer.eos_token_id and user_done[user] == False:
                     all_outputs[user].append(user_tok)
                 else:
                     user_done[user] = True

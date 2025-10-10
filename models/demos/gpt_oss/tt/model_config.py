@@ -67,13 +67,7 @@ class ModelArgs:
         if self.dummy_weights:
             # Skip loading HF config for testing - use default values
             logger.info("Using dummy weights mode - skipping HuggingFace config loading")
-            # Default GPT-OSS config values for testing
-            self.hf_config = None
-            self.vocab_size = 201088  # GPT-OSS vocab size
-            self.n_layers = 32  # Default layer count
-            self.head_dim = 64  # hidden_size // num_attention_heads = 2048 // 32
-            self.rope_theta = 10000.0
-            self.rope_scaling = None
+
         else:
             # Load HF config to get model parameters
             self.hf_config = AutoConfig.from_pretrained(self.model_path, trust_remote_code=True)
@@ -85,7 +79,7 @@ class ModelArgs:
             self.rope_scaling = None  # Keep simple like original GPT-OSS
 
         # Add missing attributes that Generator expects
-        self.max_prefill_chunk_size = 2048  # Standard chunk size for prefill
+        self.max_prefill_chunk_size = 128 * 1024
         self.model_name = "GPT-OSS-120B" if "GPT-OSS-120B" in self.model_path else "GPT-OSS-20B"  # Model identifier
         self.max_context_len = max_seq_len  # Context length for tt_transformers compatibility
 
@@ -97,19 +91,6 @@ class ModelArgs:
             # Load tokenizer
             self.tokenizer = AutoTokenizer.from_pretrained(self.weights_path, trust_remote_code=True)
             self.processor = None  # GPT-OSS doesn't use vision processor
-
-            # Add meta-compatible stop token list to the HF tokenizer (like tt_transformers does)
-            if not "stop_tokens" in self.tokenizer.__dict__:
-                self.tokenizer.stop_tokens = [self.tokenizer.eos_token_id]
-                # Add common stop tokens for GPT-OSS
-                if hasattr(self.tokenizer, "encode"):
-                    try:
-                        # Try to add <|eot_id|> if it exists (common in instruction models)
-                        eot_tokens = self.tokenizer.encode("<|eot_id|>", add_special_tokens=False)
-                        if eot_tokens:
-                            self.tokenizer.stop_tokens.extend(eot_tokens)
-                    except:
-                        pass  # Not all tokenizers have <|eot_id|>
 
     def encode_prompt(self, prompt_text, instruct=True, system_prompt_text=None):
         """

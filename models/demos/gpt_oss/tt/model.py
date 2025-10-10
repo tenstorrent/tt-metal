@@ -106,8 +106,16 @@ class Model:
         )
 
         # Initialize attention masks and rope embeddings storage for decode
-        self.device_decode_sliding_mask = get_decode_mask(0, self.hf_config.sliding_window)
-        self._current_rope_mats = None
+        sliding_mask = get_decode_mask(0, self.hf_config.sliding_window)
+        sliding_mask = sliding_mask.repeat(
+            1, self.mesh_config.shard_size(self.hf_config.num_attention_heads), 1, 1
+        ).transpose(1, 2)
+
+        tt_sliding_mask = ttnn.from_torch(
+            sliding_mask, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=self.mesh_device
+        )
+        self.device_decode_sliding_mask = {"full_attention": None, "sliding_attention": tt_sliding_mask}
+        self._current_rope_mats = self._create_rope_embeddings(0, self.mesh_device)
 
     @classmethod
     def create_transformer_compatible(
@@ -175,7 +183,7 @@ class Model:
         hidden_states = ttnn.matmul(hidden_states, self.lm_head_weight)
         return hidden_states
 
-    def _create_rope_embeddings(self, seq_len_or_pos):
+    def _create_rope_embeddings(self, seq_len_or_pos, device):
         """Create rope embeddings for sequence length or specific position"""
         if isinstance(seq_len_or_pos, int) and seq_len_or_pos > 1:
             # Sequence mode - create for full sequence
@@ -188,12 +196,8 @@ class Model:
         rope_temp_tensor = torch.randn(1)
         cos, sin = self.rope_embeddings(rope_temp_tensor, position_ids)
 
-        tt_cos = ttnn.from_torch(
-            cos.unsqueeze(-2), device=self.mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
-        )
-        tt_sin = ttnn.from_torch(
-            sin.unsqueeze(-2), device=self.mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
-        )
+        tt_cos = ttnn.from_torch(cos.unsqueeze(-2), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+        tt_sin = ttnn.from_torch(sin.unsqueeze(-2), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
 
         return (self.apply_rope, tt_cos, tt_sin)
 
@@ -257,7 +261,7 @@ class Model:
         if rot_mats_global is not None:
             rope_mats = rot_mats_global
         else:
-            rope_mats = self._create_rope_embeddings(seq_len)
+            rope_mats = self._create_rope_embeddings(seq_len, self.mesh_device)
 
         # Create attention masks
         mask = torch.triu(torch.full((1, 1, seq_len, seq_len), -float("inf")), diagonal=1)
@@ -352,7 +356,9 @@ class Model:
     def update_attention_masks(self, current_pos):
         """Update sliding window attention mask and RoPE position for decode mode"""
         # Update RoPE for the new position
-        self._current_rope_mats = self._create_rope_embeddings(current_pos)
+        updated_current_rope_mats = self._create_rope_embeddings(current_pos, None)
+        ttnn.copy_host_to_device_tensor(updated_current_rope_mats[1], self._current_rope_mats[1])
+        ttnn.copy_host_to_device_tensor(updated_current_rope_mats[2], self._current_rope_mats[2])
 
         pos_idx = current_pos.item() if hasattr(current_pos, "item") else current_pos
         sliding_mask = get_decode_mask(pos_idx, self.hf_config.sliding_window)
@@ -360,11 +366,8 @@ class Model:
             1, self.mesh_config.shard_size(self.hf_config.num_attention_heads), 1, 1
         ).transpose(1, 2)
 
-        tt_sliding_mask = ttnn.from_torch(
-            sliding_mask, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=self.mesh_device
-        )
-        attention_masks = {"full_attention": None, "sliding_attention": tt_sliding_mask}
-        self.device_decode_sliding_mask = attention_masks
+        tt_sliding_mask = ttnn.from_torch(sliding_mask, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=None)
+        ttnn.copy_host_to_device_tensor(tt_sliding_mask, self.device_decode_sliding_mask["sliding_attention"])
 
     def prepare_inputs_prefill(self, tokens, start_pos=0, page_table=None, chunk_page_table=None):
         """Prepare inputs for prefill mode"""
@@ -381,7 +384,7 @@ class Model:
 
         # Prepare rotation matrices
         seq_len = tokens_embd.shape[-2] if len(tokens_embd.shape) == 4 else tokens_embd.shape[-2]
-        rope_mats = self._create_rope_embeddings(seq_len)
+        rope_mats = self._create_rope_embeddings(seq_len, self.mesh_device)
         rot_mats_global = rope_mats
         rot_mats_local = None
 

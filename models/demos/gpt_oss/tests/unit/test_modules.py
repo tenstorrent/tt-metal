@@ -221,7 +221,7 @@ def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, re
         layer_idx=0,
         ccl_manager=setup["ccl_manager"],
         dtype=setup["dtype"],
-        tensor_cache_path=setup["tensor_cache_path"] + "module_tests",
+        tensor_cache_path=setup["tensor_cache_path"] / "module_tests",
         mesh_config=setup["mesh_config"],
     )
 

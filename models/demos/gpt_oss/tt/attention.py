@@ -392,7 +392,9 @@ class Attention:
         # Clean tensor parallel communication (with performance padding)
         if self.mesh_config.tp > 1:
             tt_out = ttnn.unsqueeze(tt_out, 0)
-            tt_out = self.mesh_config.allreduce(tt_out, self.ccl_manager, pad_size=192, axis=self.mesh_config.tp_axis)
+            tt_out = self.mesh_config.allreduce(
+                tt_out, self.ccl_manager, pad_size=192 if self.mesh_config.tp == 8 else 0, axis=self.mesh_config.tp_axis
+            )
             tt_out = ttnn.reshape(tt_out, (batch_size, seq_len, self.hidden_size))
 
         return tt_out

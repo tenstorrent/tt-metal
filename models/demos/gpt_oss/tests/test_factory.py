@@ -16,8 +16,6 @@ from ..tt.model_config import ModelArgs
 
 
 class TestFactory:
-    """One factory to rule them all - zero duplication testing"""
-
     # Common test configurations
     MESH_SHAPES = {"4x8": (4, 8), "1x8": (1, 8), "4x4": (4, 4), "2x4": (2, 4), "1x1": (1, 1)}
 

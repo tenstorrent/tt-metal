@@ -104,9 +104,8 @@ class Experts:
             cache_file_name=get_cache_file_name(tensor_cache_path, f"down_proj_bias"),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-
-        self.alpha = 1.702
-        self.limit = 7.0
+        self.alpha = 1.702  # from https://github.com/huggingface/transformers/blob/b4067472aee9b566237091dbcd3659dd2ce92004/src/transformers/models/gpt_oss/modular_gpt_oss.py#L77
+        self.limit = hf_config.swiglu_limit
 
         tokens_per_ep = self.num_experts // self.mesh_config.ep
         sparsity = torch.zeros(1, 1, self.mesh_config.ep, self.num_experts)
@@ -124,7 +123,7 @@ class Experts:
 
     def __call__(self, hidden_states, routing_weights):
         batch_size = hidden_states.shape[0]
-        assert batch_size == 1, "batch_size must be 1"
+        assert batch_size == 1, "batch_size must be 1, we only support batch size 1 for now"
         seq_len = hidden_states.shape[1]
         hidden_states_4D = ttnn.unsqueeze_to_4D(hidden_states)
         if seq_len > 1:
@@ -240,7 +239,10 @@ class Experts:
 
         # TP communication
         next_states = self.mesh_config.allreduce(
-            next_states, self.ccl_manager, pad_size=192, axis=self.mesh_config.tp_axis
+            next_states,
+            self.ccl_manager,
+            pad_size=192 if self.mesh_config.tp == 8 else 0,
+            axis=self.mesh_config.tp_axis,
         )
         next_states = ttnn.reshape(next_states, (batch_size, seq_len, self.hidden_size))
         return next_states
