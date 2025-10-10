@@ -115,8 +115,24 @@ def test_accuracy_sdxl(
     )
 
     logger.info(f"Start inference from prompt index: {start_from} to {start_from + num_prompts}")
+    data = {
+        "model": "sdxl",
+        "metadata": {
+            "model_name": "sdxl",
+            "device": get_device_name(),
+            "device_vae": vae_on_device,
+            "capture_trace": capture_trace,
+            "encoders_on_device": encoders_on_device,
+            "use_cfg_parallel": use_cfg_parallel,
+            "num_inference_steps": num_inference_steps,
+            "start_from": start_from,
+            "num_prompts": num_prompts,
+            "negative_prompt": negative_prompt,
+            "guidance_scale": guidance_scale,
+        },
+        "benchmarks_summary": [{"model": "sdxl", "device": get_device_name()}],
+    }
 
-    error_detected = False
     try:
         images = test_demo(
             validate_fabric_compatibility,
@@ -133,34 +149,11 @@ def test_accuracy_sdxl(
             use_cfg_parallel=use_cfg_parallel,
             fixed_seed_for_batch=True,
         )
-    except Exception as error_msg:
-        error_msg = str(error_msg)
-        error_detected = True
-
-    data = {
-        "model": "sdxl",
-        "metadata": {
-            "model_name": "sdxl",
-            "device": get_device_name(),
-            "device_vae": vae_on_device,
-            "capture_trace": capture_trace,
-            "encoders_on_device": encoders_on_device,
-            "use_cfg_parallel": use_cfg_parallel,
-            "num_inference_steps": num_inference_steps,
-            "start_from": start_from,
-            "num_prompts": num_prompts,
-            "negative_prompt": negative_prompt,
-            "guidance_scale": guidance_scale,
-        },
-        "benchmarks_summary": [
-            {"model": "sdxl", "device": get_device_name(), "stability_check": 3 if error_detected else 2}
-        ],
-    }
-
-    if error_detected:
+    except Exception as e:
+        data["benchmarks_summary"][0]["stability_check"] = 3
         save_json_results(data, capture_trace, vae_on_device, encoders_on_device, use_cfg_parallel, num_inference_steps)
         logger.warning(f"Error detected during inference")
-        raise RuntimeError(error_msg)
+        raise
 
     clip = CLIPEncoder()
 
@@ -189,6 +182,7 @@ def test_accuracy_sdxl(
         for key in ["functional", "complete", "target"]:
             targets["perf"][key] /= 2
 
+    data["benchmarks_summary"][0]["stability_check"] = 2
     data["benchmarks_summary"][0].update(
         {
             "avg_gen_time": avg_gen_end_to_end,
