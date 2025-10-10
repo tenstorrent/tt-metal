@@ -273,7 +273,6 @@ def test_transformer_encoder_layer_inference(
         d_model,
         nhead,
         dim_feedforward,
-        dropout=0.0,
         normalize_before=normalize_before,
         # activation = 'relu'
     ).eval()
@@ -360,7 +359,6 @@ class Args:
         self.dec_dim = 256
         self.dec_nhead = 4
         self.dec_ffn_dim = 256
-        self.dec_dropout = 0.0
         self.dec_nlayers = 8
 
 

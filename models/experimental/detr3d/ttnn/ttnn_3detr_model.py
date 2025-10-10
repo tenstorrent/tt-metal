@@ -19,14 +19,13 @@ from models.experimental.detr3d.ttnn.transformer import (
     TTTransformerEncoderLayer,
     TTTransformerDecoder,
 )
-from models.experimental.detr3d.ttnn.encoder import TtMaskedTransformerEncoder, EncoderArgs
+from models.experimental.detr3d.ttnn.encoder import TtMaskedTransformerEncoder, EncoderLayerArgs
 from models.experimental.detr3d.ttnn.ttnn_generic_mlp import TttnnGenericMLP
 from models.experimental.detr3d.reference.detr3d_model import PositionEmbeddingCoordsSine
 
 
 def build_ttnn_preencoder(args):
     mlp_dims = [3 * int(args.use_color), 64, 128, args.enc_dim]
-    # print("pre encoder is PointnetSAModuleVotes")
     preencoder = TtnnPointnetSAModuleVotes(
         radius=0.2,
         nsample=64,
@@ -57,15 +56,14 @@ def build_ttnn_encoder(args):
         masking_radius = [math.pow(x, 2) for x in [0.4, 0.8, 1.2]]
         encoder = TtMaskedTransformerEncoder(
             encoder_layer=encoder_layer,
-            num_layers=3,
+            num_layers=args.enc_nlayers,
             interim_downsampling=interim_downsampling,
             masking_radius=masking_radius,
             device=args.device,
-            encoder_args=EncoderArgs(
+            encoder_args=EncoderLayerArgs(
                 d_model=args.enc_dim,
                 nhead=args.enc_nhead,
                 dim_feedforward=args.enc_ffn_dim,
-                dropout=args.enc_dropout,
                 activation=args.enc_activation,
             ),
             parameters=args.parameters.encoder,
@@ -82,7 +80,6 @@ def build_ttnn_decoder(args):
             "d_model": args.dec_dim,
             "nhead": args.dec_nhead,
             "dim_feedforward": args.dec_ffn_dim,
-            "dropout": args.dec_dropout,
             "normalize_before": True,  # Match the reference implementation
         },
         num_layers=args.dec_nlayers,
@@ -103,7 +100,6 @@ def build_ttnn_3detr(args, dataset_config):
         dataset_config,
         encoder_dim=args.enc_dim,
         decoder_dim=args.dec_dim,
-        mlp_dropout=args.mlp_dropout,
         num_queries=args.nqueries,
         torch_module=args.modules,
         parameters=args.parameters,
@@ -142,7 +138,6 @@ class TTModel3DETR(LightweightModule):
         encoder_dim=256,
         decoder_dim=256,
         position_embedding="fourier",
-        mlp_dropout=0.3,
         num_queries=256,
         torch_module=None,
         parameters=None,
@@ -154,10 +149,6 @@ class TTModel3DETR(LightweightModule):
         self.torch_module = torch_module
         self.parameters = parameters
         self.device = device
-        if hasattr(self.encoder, "masking_radius"):
-            hidden_dims = [encoder_dim]
-        else:
-            hidden_dims = [encoder_dim, encoder_dim]
         self.encoder_to_decoder_projection = TttnnGenericMLP(
             torch_module.encoder_to_decoder_projection,
             parameters.encoder_to_decoder_projection,
@@ -170,13 +161,13 @@ class TTModel3DETR(LightweightModule):
             device,
         )
         self.decoder = decoder
-        self.build_mlp_heads(dataset_config, decoder_dim, mlp_dropout)
+        self.build_mlp_heads()
 
         self.num_queries = num_queries
         self.box_processor = BoxProcessor(dataset_config)
         self.furthest_point_sample = FurthestPointSampling()
 
-    def build_mlp_heads(self, dataset_config, decoder_dim, mlp_dropout):
+    def build_mlp_heads(self):
         self.mlp_heads = {
             "sem_cls_head": TttnnGenericMLP(
                 self.torch_module.mlp_heads.sem_cls_head,
@@ -219,9 +210,11 @@ class TTModel3DETR(LightweightModule):
         pos_embed = self.pos_embedding(query_xyz, input_range=point_cloud_dims)
         pos_embed = ttnn.from_torch(pos_embed, device=self.device, dtype=ttnn.bfloat16)
         pos_embed = ttnn.permute(pos_embed, (0, 2, 1))
+        B, N, C = pos_embed.shape
         pos_embed = ttnn.unsqueeze(pos_embed, 0)
         query_embed = self.query_projection(pos_embed)
         query_embed = ttnn.squeeze(query_embed, 0)
+        query_embed = ttnn.reshape(query_embed, (B, N, query_embed.shape[-1]))
         query_embed = ttnn.permute(query_embed, (0, 2, 1))
         return query_xyz, query_embed
 
@@ -234,25 +227,18 @@ class TTModel3DETR(LightweightModule):
 
     def run_encoder(self, point_clouds):
         xyz, features = self._break_up_pc(point_clouds)
-        pre_enc_xyz, pre_enc_features, pre_enc_inds = self.pre_encoder(xyz, features)
+        pre_enc_xyz, pre_enc_features, _ = self.pre_encoder(xyz, features)
         # xyz: batch x npoints x 3
         # features: batch x channel x npoints
         # inds: batch x npoints
 
-        # nn.MultiHeadAttention in encoder expects npoints x batch x channel features
+        # MultiHeadAttention in encoder expects npoints x batch x channel features
         pre_enc_features = ttnn.permute(pre_enc_features, (2, 0, 1))
 
         # xyz points are in batch x npointx channel order
-        enc_xyz, enc_features, enc_inds = self.encoder(pre_enc_features, xyz=pre_enc_xyz)
-        # TODO: Cleanup enc_ids dont seem to be used
-        # if enc_inds is None:
-        #     # encoder does not perform any downsampling
-        #     enc_inds = pre_enc_inds
-        # else:
-        #     # use gather here to ensure that it works for both FPS and random sampling
-        #     enc_inds = ttnn.gather(pre_enc_inds, 1, enc_inds)
-        #     # enc_inds = torch.gather(pre_enc_inds, 1, enc_inds.type(torch.int64))
-        return enc_xyz, enc_features, enc_inds
+        enc_xyz, enc_features, _ = self.encoder(pre_enc_features, xyz=pre_enc_xyz)
+
+        return enc_xyz, enc_features, _
 
     def get_box_predictions(self, query_xyz, point_cloud_dims, box_features):
         """
@@ -264,60 +250,37 @@ class TTModel3DETR(LightweightModule):
             box_features: num_layers x num_queries x batch x channel
         """
         # box_features change to (num_layers x batch) x channel x num_queries
-        box_features = ttnn.permute(box_features, (0, 2, 3, 1))
-        num_layers, batch, channel, num_queries = (
-            box_features.shape[0],
-            box_features.shape[1],
-            box_features.shape[2],
-            box_features.shape[3],
-        )
-        box_features = ttnn.reshape(box_features, (num_layers * batch, channel, num_queries))
 
-        box_features = ttnn.permute(box_features, (0, 2, 1))
-        box_features = ttnn.unsqueeze(box_features, 0)
+        box_features = ttnn.permute(box_features, (0, 2, 1, 3))
         box_features = ttnn.to_memory_config(box_features, ttnn.DRAM_MEMORY_CONFIG)
+
+        num_layers, batch, num_queries, channel = box_features.shape
 
         # mlp head outputs are (num_layers x batch) x noutput x nqueries, so transpose last two dims
         cls_logits = self.mlp_heads["sem_cls_head"](box_features)
-        cls_logits = ttnn.squeeze(cls_logits, 0)
-        cls_logits = ttnn.permute(cls_logits, (0, 2, 1))
-        cls_logits = ttnn.transpose(cls_logits, 1, 2)
-        cls_logits = ttnn.to_torch(cls_logits)
-
         center_offset = self.mlp_heads["center_head"](box_features)
-        center_offset = ttnn.squeeze(center_offset, 0)
-        center_offset = ttnn.permute(center_offset, (0, 2, 1))
         center_offset = ttnn.sigmoid(center_offset)
-        center_offset = ttnn.transpose(center_offset, 1, 2)
         center_offset = center_offset - 0.5
-        center_offset = ttnn.to_torch(center_offset)
-
         size_normalized = self.mlp_heads["size_head"](box_features)
-        size_normalized = ttnn.squeeze(size_normalized, 0)
-        size_normalized = ttnn.permute(size_normalized, (0, 2, 1))
         size_normalized = ttnn.sigmoid(size_normalized)
-        size_normalized = ttnn.transpose(size_normalized, 1, 2)
-        size_normalized = ttnn.to_torch(size_normalized)
-
         angle_logits = self.mlp_heads["angle_cls_head"](box_features)
-        angle_logits = ttnn.squeeze(angle_logits, 0)
-        angle_logits = ttnn.permute(angle_logits, (0, 2, 1))
-        angle_logits = ttnn.transpose(angle_logits, 1, 2)
-        angle_logits = ttnn.to_torch(angle_logits)
-
         angle_residual_normalized = self.mlp_heads["angle_residual_head"](box_features)
-        angle_residual_normalized = ttnn.squeeze(angle_residual_normalized, 0)
-        angle_residual_normalized = ttnn.permute(angle_residual_normalized, (0, 2, 1))
-        angle_residual_normalized = ttnn.transpose(angle_residual_normalized, 1, 2)
-        angle_residual_normalized = ttnn.to_torch(angle_residual_normalized)
 
-        # reshape outputs to num_layers x batch x nqueries x noutput
-        cls_logits = cls_logits.reshape(num_layers, batch, num_queries, -1)
-        center_offset = center_offset.reshape(num_layers, batch, num_queries, -1)
-        size_normalized = size_normalized.reshape(num_layers, batch, num_queries, -1)
-        angle_logits = angle_logits.reshape(num_layers, batch, num_queries, -1)
-        angle_residual_normalized = angle_residual_normalized.reshape(num_layers, batch, num_queries, -1)
+        cls_logits = ttnn.reshape(cls_logits, (num_layers, batch, num_queries, cls_logits.shape[-1]))
+        center_offset = ttnn.reshape(center_offset, (num_layers, batch, num_queries, center_offset.shape[-1]))
+        size_normalized = ttnn.reshape(size_normalized, (num_layers, batch, num_queries, size_normalized.shape[-1]))
+        angle_logits = ttnn.reshape(angle_logits, (num_layers, batch, num_queries, angle_logits.shape[-1]))
+        angle_residual_normalized = ttnn.reshape(
+            angle_residual_normalized, (num_layers, batch, num_queries, angle_residual_normalized.shape[-1])
+        )
         angle_residual = angle_residual_normalized * (np.pi / angle_residual_normalized.shape[-1])
+
+        cls_logits = ttnn.to_torch(cls_logits)
+        center_offset = ttnn.to_torch(center_offset)
+        size_normalized = ttnn.to_torch(size_normalized)
+        angle_logits = ttnn.to_torch(angle_logits)
+        angle_residual_normalized = ttnn.to_torch(angle_residual_normalized)
+        angle_residual = ttnn.to_torch(angle_residual)
 
         outputs = []
         for l in range(num_layers):
@@ -368,36 +331,36 @@ class TTModel3DETR(LightweightModule):
     def forward(self, inputs, encoder_only=False):
         point_clouds = inputs["point_clouds"]
 
-        enc_xyz, enc_features, enc_inds = self.run_encoder(point_clouds)
+        torch_enc_xyz, enc_features, _ = self.run_encoder(point_clouds)
         enc_features = ttnn.permute(enc_features, (1, 0, 2))
+        B, N, C = enc_features.shape
         enc_features = ttnn.unsqueeze(enc_features, 0)
         enc_features = self.encoder_to_decoder_projection(enc_features)
         enc_features = ttnn.squeeze(enc_features, 0)
+        enc_features = ttnn.reshape(enc_features, (B, N, enc_features.shape[-1]))
         enc_features = ttnn.permute(enc_features, (1, 0, 2))
         # encoder features: npoints x batch x channel
         # encoder xyz: npoints x batch x 3
 
         if encoder_only:
             # return: batch x npoints x channels
-            return enc_xyz, ttnn.transpose(enc_features, 0, 1)
+            return torch_enc_xyz, ttnn.transpose(enc_features, 0, 1)
 
-        point_cloud_dims = [
+        torch_point_cloud_dims = [
             inputs["point_cloud_dims_min"],
             inputs["point_cloud_dims_max"],
         ]
-        query_xyz, query_embed = self.get_query_embeddings(enc_xyz, point_cloud_dims)
+        torch_query_xyz, query_embed = self.get_query_embeddings(torch_enc_xyz, torch_point_cloud_dims)
         # query_embed: batch x channel x npoint
-        enc_pos = self.pos_embedding(enc_xyz, input_range=point_cloud_dims)
+        torch_enc_pos = self.pos_embedding(torch_enc_xyz, input_range=torch_point_cloud_dims)
 
         # decoder expects: npoints x batch x channel
-        enc_pos = ttnn.from_torch(enc_pos, device=self.device, dtype=ttnn.bfloat16)
-        enc_pos = ttnn.permute(enc_pos, (2, 0, 1))
-        enc_pos = ttnn.permute(enc_pos, (1, 0, 2))
-        query_embed = ttnn.permute(query_embed, (2, 0, 1))
-        query_embed = ttnn.permute(query_embed, (1, 0, 2))
+        enc_pos = ttnn.from_torch(torch_enc_pos, device=self.device, dtype=ttnn.bfloat16)
+        enc_pos = ttnn.permute(enc_pos, (0, 2, 1))
+        query_embed = ttnn.permute(query_embed, (0, 2, 1))
         enc_features = ttnn.permute(enc_features, (1, 0, 2))
         tgt = ttnn.zeros_like(query_embed, dtype=ttnn.bfloat16)
         box_features = self.decoder(tgt, enc_features, query_pos=query_embed, pos=enc_pos)[0]
         box_features = ttnn.permute(box_features, (0, 2, 1, 3))
-        box_predictions = self.get_box_predictions(query_xyz, point_cloud_dims, box_features)
+        box_predictions = self.get_box_predictions(torch_query_xyz, torch_point_cloud_dims, box_features)
         return box_predictions

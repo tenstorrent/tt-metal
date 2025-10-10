@@ -1,61 +1,10 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
 import ttnn
 import math
 from models.common.lightweightmodule import LightweightModule
-
-
-# class TTNNMultiheadAttention:
-#     def __init__(self, d_model, nhead, device):
-#         self.d_model = d_model
-#         self.nhead = nhead
-#         self.head_dim = d_model // nhead
-#         self.device = device
-
-#         # These will be set from PyTorch weights
-#         self.q_weight = None
-#         self.k_weight = None
-#         self.v_weight = None
-#         self.q_bias = None
-#         self.k_bias = None
-#         self.v_bias = None
-#         self.out_weight = None
-#         self.out_bias = None
-
-#     def __call__(self, query, key, value, attn_mask=None):
-#         batch_size, seq_len, hidden_size = query.shape
-
-#         # Linear projection for Q, K, V using fused weights
-#         q = ttnn.linear(query, self.q_weight, bias=self.q_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-#         k = ttnn.linear(key, self.k_weight, bias=self.k_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-#         v = ttnn.linear(value, self.v_weight, bias=self.v_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-#         import pdb; pdb.set_trace()
-#         qkv = ttnn.concat([q, k, v], dim=2)
-
-#         # Split and reshape for multi-head attention
-#         q, k, v = ttnn.transformer.split_query_key_value_and_split_heads(
-#             qkv,
-#             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-#             num_heads=self.nhead,
-#             transpose_key=False,
-#         )
-
-#         # Use SDPA instead of manual attention computation
-#         context = ttnn.transformer.scaled_dot_product_attention(
-#             q,
-#             k,
-#             v,
-#             is_causal=False,  # Set to False if you don't want causal masking
-#             scale=1.0 / math.sqrt(self.head_dim),
-#             attn_mask=attn_mask,
-#             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-#         )
-
-#         # Concatenate heads
-#         context = ttnn.transformer.concatenate_heads(context, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
-#         # Output projection
-#         output = ttnn.linear(context, self.out_weight, bias=self.out_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
-#         return output
 
 
 class TTNNMultiheadAttention:
@@ -124,9 +73,7 @@ class TTTransformerDecoderLayer(LightweightModule):
         d_model,
         nhead=4,
         dim_feedforward=256,
-        dropout=0.0,
         normalize_before=True,
-        model_config=None,
         parameters=None,
     ):
         super().__init__()
@@ -135,7 +82,6 @@ class TTTransformerDecoderLayer(LightweightModule):
         self.nhead = nhead
         self.dim_feedforward = dim_feedforward
         self.normalize_before = normalize_before
-        self.model_config = model_config or {}
 
         self.self_attn = TTNNMultiheadAttention(d_model, nhead, device)
         self.multihead_attn = TTNNMultiheadAttention(d_model, nhead, device)
@@ -321,8 +267,6 @@ class TTTransformerEncoderLayer(LightweightModule):
         d_model,
         nhead=4,
         dim_feedforward=128,
-        dropout=0.0,
-        dropout_attn=None,
         activation="relu",
         normalize_before=True,
         norm_name="ln",
@@ -475,7 +419,6 @@ class TTTransformerDecoder(LightweightModule):
                 d_model=decoder_layer_config["d_model"],
                 nhead=decoder_layer_config["nhead"],
                 dim_feedforward=decoder_layer_config["dim_feedforward"],
-                dropout=decoder_layer_config.get("dropout", 0.0),
                 normalize_before=decoder_layer_config.get("normalize_before", True),
                 parameters=layer_params,
             )
@@ -562,7 +505,6 @@ def build_ttnn_decoder(args, device, parameters):
         "d_model": args.dec_dim,
         "nhead": args.dec_nhead,
         "dim_feedforward": args.dec_ffn_dim,
-        "dropout": args.dec_dropout,
         "normalize_before": True,  # Match the reference implementation
     }
 
