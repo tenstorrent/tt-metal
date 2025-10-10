@@ -141,8 +141,8 @@ void kernel_main() {
                 input_tile_id_start = actual_slice_idx * slice_Ht * slice_Wt + batch_offset;
                 intermediate_tile_id_start = actual_slice_idx * slice_Ht * slice_Wt;
             } else if constexpr (dim == 1) {
-                input_tile_id_start = actual_slice_idx * input_channel_num_pages * slice_C + batch_offset;
-                intermediate_tile_id_start = actual_slice_idx * input_channel_num_pages * slice_C;
+                input_tile_id_start = actual_slice_idx * slice_C * slice_Ht * slice_Wt + batch_offset;
+                intermediate_tile_id_start = actual_slice_idx * slice_C * slice_Ht * slice_Wt;
             } else {
                 ASSERT(false);
             }

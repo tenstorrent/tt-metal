@@ -1159,7 +1159,9 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
                     input_channel_num_pages,
                     output_channel_num_pages,
                     slice_C,
-                };
+                    slice_Ht,
+                    slice_Wt,
+                    dim};
                 if (input_is_sharded) {
                     shard_builder::extend_sharding_compile_time_args(input_tensor, sender_reader_compile_args);
                 } else {
@@ -1230,7 +1232,9 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
                     input_channel_num_pages,
                     output_channel_num_pages,
                     slice_C,
-                };
+                    slice_Ht,
+                    slice_Wt,
+                    dim};
                 append_fabric_mux_connection_ct_args(
                     worker == 0,
                     mux_virtual_core,
