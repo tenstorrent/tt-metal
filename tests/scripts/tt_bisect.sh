@@ -125,45 +125,77 @@ while [[ "$found" == "false" ]]; do
   echo "::endgroup::"
 
   echo "::group::Testing $rev"
-  timeout_rc=1
-  max_retries=$retries
-  attempt=1
   output_file="bisect_test_output.log"
-  while [ $attempt -le $max_retries ]; do
-    echo "Attempt $attempt on $(git rev-parse HEAD)"
+  nd_runs=4
+  success_count=0
+  failure_count=0
+  skip_count=0
+  run_idx=1
+  while [ $run_idx -le $nd_runs ]; do
+    echo "Attempt $run_idx/$nd_runs on $(git rev-parse HEAD)"
     echo "Run: $test"
+    tt-smi -r
+    # Always run the test; classify the outcome after each run
     if timeout -k 10s "$timeout_duration_iteration" bash -lc "$test" 2>&1 | tee "$output_file"; then
-      timeout_rc=0
-      echo "--- Logs (attempt $attempt) ---"
-      sed -n '1,200p' "$output_file" || true
-      echo "------------------------------"
-      break
+      # Exit code 0; check if test indicates it was skipped in the output
+      if grep -qiE "(^|[^a-zA-Z])(SKIP|SKIPPED)([^a-zA-Z]|$)" "$output_file"; then
+        echo "Attempt $run_idx: detected skip (exit 0 with 'SKIP' in output)"
+        skip_count=$((skip_count+1))
+      else
+        echo "Attempt $run_idx: success"
+        success_count=$((success_count+1))
+      fi
     else
-      timeout_rc=$?
-      echo "Test failed (code $timeout_rc), retrying…"
-      echo "--- Logs (attempt $attempt) ---"
-      sed -n '1,200p' "$output_file" || true
-      echo "------------------------------"
-      attempt=$((attempt+1))
+      rc=$?
+      if [ $rc -eq 124 ] || [ $rc -eq 137 ] || [ $rc -eq 143 ]; then
+        echo "Attempt $run_idx: timeout/kill (rc=$rc) -> counting as skipped"
+        skip_count=$((skip_count+1))
+      else
+        echo "Attempt $run_idx: failure (rc=$rc)"
+        failure_count=$((failure_count+1))
+      fi
     fi
+
+    echo "--- Logs (attempt $run_idx) ---"
+    sed -n '1,200p' "$output_file" || true
+    echo "------------------------------"
+    run_idx=$((run_idx+1))
   done
-  echo "Final exit code: $timeout_rc"
+
+  evaluated=$((success_count + failure_count))
+  if [ $evaluated -gt 0 ]; then
+    passrate=$(awk -v s=$success_count -v e=$evaluated 'BEGIN { printf "%.2f", (s*100.0)/e }')
+  else
+    passrate="NA"
+  fi
+
+  # External TSV logging
+  nd_log_file="bisect_nd_results.tsv"
+  if [ ! -f "$nd_log_file" ]; then
+    echo -e "timestamp\tcommit_sha\trev_short\tsuccesses\tfailures\tskips\tevaluated\tpassrate_percent" > "$nd_log_file"
+  fi
+  echo -e "$(date -Iseconds)\t$(git rev-parse HEAD)\t$rev\t$success_count\t$failure_count\t$skip_count\t$evaluated\t$passrate" >> "$nd_log_file"
+
+  echo "ND summary for $rev: successes=$success_count failures=$failure_count skips=$skip_count evaluated=$evaluated passrate=$passrate%"
   echo "::endgroup::"
 
-  if [ $timeout_rc -eq 0 ]; then
-    out="$(git bisect good || true)"
-  elif [ $timeout_rc -eq 124 ] || [ $timeout_rc -eq 137 ] || [ $timeout_rc -eq 143 ]; then
-    echo "Timeout/kill detected; skipping this commit"
+  if [ $failure_count -ge 1 ]; then
+    out="$(git bisect bad || true)"
+  elif [ $evaluated -eq 0 ]; then
+    echo "All attempts were skipped; skipping this commit"
     git bisect skip
     continue
   else
-    out="$(git bisect bad || true)"
+    out="$(git bisect good || true)"
   fi
 
   first_line="$(printf '%s\n' "$out" | head -n1)"
   case "$first_line" in
     *"is the first bad commit"*)
+      bad_sha="$(git rev-parse HEAD)"
       echo "FOUND IT: $first_line"
+      echo "Commit: $bad_sha"
+      echo "Title : $(git log -1 --pretty=%s "$bad_sha")"
       found=true
       ;;
     *"There are only 'skip'ped commits left to test."*)
