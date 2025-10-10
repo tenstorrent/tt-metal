@@ -36,34 +36,19 @@ def strip_trailing_number(s: str) -> str:
 )
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("nr_forward_iterations", [2])
-@pytest.mark.parametrize("nr_e2e_iterations", [1])
 def test_perf_gemma_vision(mesh_device, batch_size, nr_forward_iterations, nr_e2e_iterations):
     profiler = BenchmarkProfiler()
     key_model_forward = "model_forward"
 
     logger.info("Started profiling")
-    for cur_e2e_iteration in range(nr_e2e_iterations):
-        if cur_e2e_iteration == 0:
-            nr_forward_iterations_actual = nr_forward_iterations
-        else:
-            nr_forward_iterations_actual = 1
-
-        profiler.start("total_run", iteration=cur_e2e_iteration)
-        run_model(
-            mesh_device=mesh_device,
-            batch_size=batch_size,
-            profiler=profiler,
-            cur_e2e_iteration=cur_e2e_iteration,
-            nr_forward_iterations=nr_forward_iterations_actual,
-            key_model_forward=key_model_forward,
-        )
-        profiler.end("total_run", iteration=cur_e2e_iteration)
-
-    measurements = dict()
-    keys_without_inference_with_nr = set(
-        [k for _, k in profiler.start_times.keys() if not k.startswith(key_model_forward)]
+    profiler.start("total_run")
+    run_model(
+        mesh_device=mesh_device,
+        batch_size=batch_size,
+        profiler=profiler,
+        nr_forward_iterations=nr_forward_iterations,
     )
-    keys_without_inference = set(strip_trailing_number(k) for k in keys_without_inference_with_nr)
+    profiler.end("total_run")
 
     for key in keys_without_inference:
         measurements[key] = [profiler.get_duration(key, i) for i in range(nr_e2e_iterations)]
@@ -114,7 +99,7 @@ def helper_write_to_json(device_type, measurements, output_filename=None):
         json.dump(data, f, indent=4)
 
 
-def run_model(mesh_device, batch_size, profiler, cur_e2e_iteration, nr_forward_iterations, key_model_forward):
+def run_model(mesh_device, batch_size, profiler, cur_e2e_iteration, nr_forward_iterations):
     dtype = ttnn.bfloat16
     model_args = ModelArgs(mesh_device)
     profiler.start("weight_loading", cur_e2e_iteration)
@@ -126,7 +111,7 @@ def run_model(mesh_device, batch_size, profiler, cur_e2e_iteration, nr_forward_i
 
     input_tensor = torch.rand((batch_size, in_channels, image_size, image_size))
 
-    profiler.start("weight_transfer_to_device_and_model_initialization", cur_e2e_iteration)
+    profiler.start("weight_transfer_to_device_and_model_initialization")
     model = TtGemmaTransformerVision(
         mesh_device,
         tt_ccl=TT_CCL(mesh_device),
@@ -138,32 +123,27 @@ def run_model(mesh_device, batch_size, profiler, cur_e2e_iteration, nr_forward_i
     )
     profiler.end("weight_transfer_to_device_and_model_initialization", cur_e2e_iteration)
 
-    for cur_forward_iteration in range(nr_forward_iterations):
-        if cur_forward_iteration == 0:
-            str_for_profiler = key_model_forward + "_compile"
-            index_for_profiler = cur_e2e_iteration
-        else:
-            str_for_profiler = (
-                key_model_forward + "_inference"
-            )  # i-1 instead of i because we want to be able to iterate from 0 so its more clean
-            index_for_profiler = cur_forward_iteration - 1
+    ttnn.synchronize_device(mesh_device)
+    profiler.start("model_forward_compile")
+    test_output = model(input_tensor)
+    ttnn.synchronize_device(mesh_device)
+    profiler.end("model_forward_compile")
 
+    for cur_inference_iteration in range(nr_forward_iterations):
         ttnn.synchronize_device(mesh_device)
-        profiler.start(str_for_profiler, index_for_profiler)
-
+        profiler.start("model_forward_inference", cur_inference_iteration)
         test_output = model(input_tensor)
-
         ttnn.synchronize_device(mesh_device)
-        profiler.end(str_for_profiler, index_for_profiler)
+        profiler.end("model_forward_inference", cur_inference_iteration)
 
-    profiler.start("postprocessing_and_transfer", cur_e2e_iteration)
+    profiler.start("postprocessing_and_transfer")
     out = ttnn.from_device(test_output)
 
     tt_output_torch = ttnn.to_torch(
         out,
         mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0),
     )[0, :, :, :]
-    profiler.end("postprocessing_and_transfer", cur_e2e_iteration)
+    profiler.end("postprocessing_and_transfer")
 
     return tt_output_torch
 
