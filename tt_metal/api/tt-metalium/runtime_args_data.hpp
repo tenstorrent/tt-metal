@@ -12,7 +12,7 @@
 #include <string>
 #include <utility>
 
-#include <tt-metalium/assert.hpp>
+#include <ttsl/assert.hpp>
 
 namespace tt::tt_metal {
 // RuntimeArgsData provides an indirection to the runtime args
