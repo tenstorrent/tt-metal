@@ -41,7 +41,7 @@ int main() {
     env_var = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
     if (env_var == nullptr) {
         std::cerr << "ERROR: This test can only be run in slow dispatch mode. Please set Environment Variable "
-                     "TT_METAL_SLOW_DISPATCH_MOE"
+                     "TT_METAL_SLOW_DISPATCH_MODE"
                   << std::endl;
         std::cerr << "ERROR: using export TT_METAL_SLOW_DISPATCH_MODE=1" << std::endl;
         return 1;
