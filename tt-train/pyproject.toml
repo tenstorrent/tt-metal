@@ -11,10 +11,7 @@ build-backend = "scikit_build_core.build"
 minimum-version = "0.4"
 build-dir = "build/{wheel_tag}"
 wheel.py-api = "cp312"
-
-[tool.setuptools]
-py-modules = ["ttml"]
-packages = ["ttml"]
+wheel.packages = ["sources/ttml"]
 
 [project]
 name = "ttml"
