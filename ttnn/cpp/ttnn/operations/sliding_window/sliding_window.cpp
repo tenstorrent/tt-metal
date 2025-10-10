@@ -3,6 +3,7 @@
 
 #include "sliding_window.hpp"
 #include <cstdint>
+#include <tt-logger/tt-logger.hpp>
 #include <vector>
 #include <tt_stl/assert.hpp>
 
@@ -395,6 +396,25 @@ uint32_t generate_max_out_nsticks_per_core(const std::vector<ShardBoundary>& sha
         max_out_nsticks_per_core = std::max(max_out_nsticks_per_core, in_end - in_start + 1);
     }
     return max_out_nsticks_per_core;
+}
+
+uint32_t calculate_precise_halo_output_elems(
+    const SlidingWindowConfig& config, const std::array<uint32_t, 2>& shard_shape) {
+    log_info(tt::LogOp, "Calculating precise halo for config: {}", config.to_string());
+    // Generate metadata for precise calculation
+    auto op_trace_metadata = generate_op_trace_metadata(config);
+    auto shard_boundaries = generate_shard_boundaries(config, op_trace_metadata);
+
+    // Get precise max sticks per core
+    uint32_t max_out_nsticks_per_core = generate_max_out_nsticks_per_core(shard_boundaries);
+
+    // Return total elements: max_sticks * stick_width
+    log_info(
+        tt::LogOp,
+        "Precise max_out_nsticks_per_core = {}, shard_shape[1]: {}",
+        max_out_nsticks_per_core,
+        shard_shape[1]);
+    return max_out_nsticks_per_core * shard_shape[1];
 }
 
 struct GatherHeader {

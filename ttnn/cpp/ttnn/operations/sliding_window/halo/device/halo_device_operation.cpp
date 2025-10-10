@@ -51,7 +51,9 @@ std::vector<TensorSpec> HaloDeviceOperation::compute_output_specs(const std::vec
 
     log_debug(
         tt::LogOp, "output_shape: [{} {} {} {}]", output_shape[0], output_shape[1], output_shape[2], output_shape[3]);
-    log_debug(tt::LogOp, "max_out_nsticks_per_core: {}", max_out_nsticks_per_core_);
+    log_info(tt::LogOp, "max_out_nsticks_per_core: {}", max_out_nsticks_per_core_);
+    log_info(
+        tt::LogOp, "size : {}", in_nsticks_per_core_ * input_tensors.at(0).memory_config().shard_spec()->shape[1] * 2);
     log_debug(tt::LogOp, "num_cores_nhw: {}", config_.num_cores_nhw);
 
     const auto& input_tensor = input_tensors.at(0);
@@ -88,6 +90,7 @@ std::vector<TensorSpec> HaloDeviceOperation::compute_output_specs(const std::vec
     std::array<uint32_t, 2> shard_shape = {
         tt::div_up(output_shape[0] * output_shape[2], config_.num_cores_nhw),
         input_tensor.memory_config().shard_spec()->shape[1]};
+    log_info(tt::LogOp, "real size: {}", shard_shape[0] * shard_shape[1] * 2);
 
     auto out_mem_config = output_memory_config_.with_shard_spec(ShardSpec{
         output_memory_config_.shard_spec()->grid, shard_shape, output_memory_config_.shard_spec()->orientation});
@@ -274,7 +277,7 @@ Tensor halo_op(
     // NOTE: for HEIGHT_SHARDED, ncores_nhw == ncores
     //       for BLOCK_SHARDED, ncores_nhw is just the ncores along height dim (last tensor dim is split along
     //       width)
-
+    log_info(tt::LogOp, "Sliding window config: {}", config.to_string());
     auto sliding_window_hash = config.get_hash();
     if (!HaloDeviceOperation::sliding_window_max_out_nsticks_per_core.contains(sliding_window_hash)) {
         auto op_trace_metadata = sliding_window::generate_op_trace_metadata(config);
