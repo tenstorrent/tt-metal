@@ -591,6 +591,8 @@ struct LowLatencyMeshRoutingFields {
 #define HYBRID_MESH_MAX_ROUTE_BUFFER_SIZE 19
 
 struct HybridMeshPacketHeader : PacketHeaderBase<HybridMeshPacketHeader> {
+    LowLatencyMeshRoutingFields routing_fields;
+    uint8_t route_buffer[HYBRID_MESH_MAX_ROUTE_BUFFER_SIZE];
     union {
         struct {
             uint16_t dst_start_chip_id;  // TODO: 8 bits
@@ -605,8 +607,6 @@ struct HybridMeshPacketHeader : PacketHeaderBase<HybridMeshPacketHeader> {
         uint64_t mcast_params_16;  // Used for efficiently writing to the mcast_params array
     };
     uint8_t is_mcast_active;  // TODO: -> can be 1 bit in routing fields
-    LowLatencyMeshRoutingFields routing_fields;
-    uint8_t route_buffer[HYBRID_MESH_MAX_ROUTE_BUFFER_SIZE];
 
     void to_chip_unicast_impl(uint8_t distance_in_hops) {}
     void to_chip_multicast_impl(const MulticastRoutingCommandHeader& chip_multicast_command_header) {}
