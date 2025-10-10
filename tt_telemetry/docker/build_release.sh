@@ -2,5 +2,18 @@
 
 set -e
 
-# Build release-telemetry image (pulls from GitHub, doesn't need TT_METAL_HOME)
+# Check if TT_METAL_HOME is set
+if [ -z "$TT_METAL_HOME" ]; then
+    echo "Error: TT_METAL_HOME environment variable is not set"
+    exit 1
+fi
+
+# Check if TT_METAL_HOME directory exists
+if [ ! -d "$TT_METAL_HOME" ]; then
+    echo "Error: TT_METAL_HOME directory does not exist: $TT_METAL_HOME"
+    exit 1
+fi
+
+
+# Build release-telemetry image (pulls from GitHub, uses TT_METAL_HOME only to locate Dockerfile)
 docker build --target release-telemetry -t ghcr.io/btrzynadlowski-tt/tt-telemetry-release:latest -f $TT_METAL_HOME/tt_telemetry/docker/Dockerfile .
