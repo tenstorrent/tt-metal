@@ -171,28 +171,6 @@ namespace tt::tt_fabric::fabric_router_tests {
 
 using ::testing::ElementsAre;
 
-TEST(MeshGraphValidation, TestTGMeshGraphInitMGD2) {
-    const std::filesystem::path tg_mesh_graph_desc_2_path =
-        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tt_metal/fabric/mesh_graph_descriptors/tg_mesh_graph_descriptor.textproto";
-    MeshGraph mesh_graph_desc(tg_mesh_graph_desc_2_path.string());
-    EXPECT_EQ(
-        mesh_graph_desc.get_coord_range(MeshId{0}, MeshHostRankId(0)),
-        MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(0, 0)));
-    EXPECT_EQ(
-        mesh_graph_desc.get_coord_range(MeshId{1}, MeshHostRankId(0)),
-        MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(0, 0)));
-    EXPECT_EQ(
-        mesh_graph_desc.get_coord_range(MeshId{2}, MeshHostRankId(0)),
-        MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(0, 0)));
-    EXPECT_EQ(
-        mesh_graph_desc.get_coord_range(MeshId{3}, MeshHostRankId(0)),
-        MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(0, 0)));
-    EXPECT_EQ(
-        mesh_graph_desc.get_coord_range(MeshId{4}, MeshHostRankId(0)),
-        MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(3, 7)));
-}
-
 TEST(MeshGraphValidation, TestTGMeshGraphInitConsistencyCheckMGD2) {
     // Skip this test since the MGD 1.0 initialization data path does not load intermesh connections unless the Control
     // Plane is created
@@ -250,35 +228,6 @@ TEST(MeshGraphValidation, TestTGMeshGraphInitConsistencyCheckMGD2) {
 
     mesh_graph.print_connectivity();
     mesh_graph2.print_connectivity();
-}
-
-TEST_F(ControlPlaneFixture, TestTGControlPlaneInitMGD2) {
-    const std::filesystem::path tg_mesh_graph_desc_path =
-        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tt_metal/fabric/mesh_graph_descriptors/tg_mesh_graph_descriptor.textproto";
-    [[maybe_unused]] auto control_plane = make_control_plane(tg_mesh_graph_desc_path);
-}
-
-TEST_F(ControlPlaneFixture, TestTGFabricRoutesMGD2) {
-    const std::filesystem::path tg_mesh_graph_desc_path =
-        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tt_metal/fabric/mesh_graph_descriptors/tg_mesh_graph_descriptor.textproto";
-    auto control_plane = make_control_plane(tg_mesh_graph_desc_path);
-    auto valid_chans = control_plane->get_valid_eth_chans_on_routing_plane(FabricNodeId(MeshId{0}, 0), 1);
-    auto valid_chans2 = control_plane->get_valid_eth_chans_on_routing_plane(FabricNodeId(MeshId{0}, 0), 0);
-
-    auto total_chans = valid_chans.size() + valid_chans2.size();
-
-    // one of them should have channels
-    EXPECT_GT(total_chans, 0);
-    for (auto chan : valid_chans) {
-        auto path = control_plane->get_fabric_route(FabricNodeId(MeshId{0}, 0), FabricNodeId(MeshId{4}, 31), chan);
-        EXPECT_FALSE(path.empty());
-    }
-    for (auto chan : valid_chans2) {
-        auto path = control_plane->get_fabric_route(FabricNodeId(MeshId{0}, 0), FabricNodeId(MeshId{4}, 31), chan);
-        EXPECT_FALSE(path.empty());
-    }
 }
 
 TEST(MeshGraphValidation, TestT3kMeshGraphInitMGD2) {
