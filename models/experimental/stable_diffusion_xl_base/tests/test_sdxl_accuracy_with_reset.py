@@ -10,7 +10,10 @@ from PIL import Image
 
 from loguru import logger
 from models.experimental.stable_diffusion_xl_base.utils.fid_score import calculate_fid_score
-from models.experimental.stable_diffusion_xl_base.tests.test_sdxl_accuracy import sdxl_get_prompts, check_clip_scores
+from models.experimental.stable_diffusion_xl_base.utils.accuracy_helper import (
+    sdxl_get_prompts,
+    check_clip_scores,
+)
 from models.experimental.stable_diffusion_xl_base.utils.clip_encoder import CLIPEncoder
 from models.experimental.stable_diffusion_xl_base.tests.test_sdxl_accuracy import OUT_ROOT, RESULTS_FILE_NAME
 
