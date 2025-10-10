@@ -444,14 +444,8 @@ void kernel_main() {
     }  // for (uint32_t k = 0; k < outer_dim_units; ++k)
 
     if constexpr (reduce_all) {
-        if constexpr (!is_reader){
-            cb_reserve_back(w2r_cb_idx, 1);
-            const uint32_t w2r_cb_addr = get_write_ptr(w2r_cb_idx);
-            volatile tt_l1_ptr uint32_t* idx_val = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(w2r_cb_addr);
-            idx_val[0] = max_idx;
-            idx_val[1] = max_val; 
-            cb_push_back(w2r_cb_idx, 1);
-        } else {
+        constexpr bool need_w2r_sync = (outer_dim_units + 1) / 2 < outer_dim_units;
+        if constexpr (is_reader && need_w2r_sync) {
             cb_wait_front(w2r_cb_idx, 1);
             const uint32_t w2r_cb_addr = get_read_ptr(w2r_cb_idx);
             volatile tt_l1_ptr uint32_t* idx_val = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(w2r_cb_addr);
@@ -460,8 +454,20 @@ void kernel_main() {
             auto val = get_value<src_cb_addr_data_format>(reinterpret_cast<void*>(&raw_val));
             compare_values<src_cb_addr_data_format>(val, idx, max_val, max_idx);
             cb_pop_front(w2r_cb_idx, 1);  
+        }
+        else if constexpr (!is_reader && need_w2r_sync) {
+            cb_reserve_back(w2r_cb_idx, 1);
+            const uint32_t w2r_cb_addr = get_write_ptr(w2r_cb_idx);
+            volatile tt_l1_ptr uint32_t* idx_val = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(w2r_cb_addr);
+            idx_val[0] = max_idx;
+            idx_val[1] = max_val; 
+            cb_push_back(w2r_cb_idx, 1);
+        }
+        else {
+            // nothing to do
+        }
 
-
+        if constexpr (is_reader) {
             red_idxs[0] = max_idx;
             red_vals[0] = max_val;
 

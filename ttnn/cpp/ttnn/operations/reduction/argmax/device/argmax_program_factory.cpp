@@ -114,6 +114,9 @@ operation::ProgramWithCallbacks argmax_single_core(
     // Last dimension in output i.e. the dim left after reduction
     const auto output_last_dim = reduce_all or keepdim or (rank < 2) ? 1 : input_shape[rank - 2];
 
+    const auto inner_dim_units = output_last_dim;
+    const auto outer_dim_units = input.logical_volume() / inner_dim_units / red_dim_units;
+
     // Create input CB to read reduction dim worth of data at once
     const uint32_t src_cb_idx = tt::CBIndex::c_0;
     const uint32_t src_page_size = round_up_to_mul32(red_dim_units * input_unit_size);
@@ -125,17 +128,19 @@ operation::ProgramWithCallbacks argmax_single_core(
     // Create output CB based on the output shape's last dimension
     const uint32_t dst_cb_idx = tt::CBIndex::c_1;
     const uint32_t dst_page_size = round_up_to_mul32(output_last_dim * output_unit_size);
-    const tt::tt_metal::CircularBufferConfig dst_db_config =
+    const tt::tt_metal::CircularBufferConfig dst_cb_config =
         tt::tt_metal::CircularBufferConfig(2 * dst_page_size, {{dst_cb_idx, output_cb_data_format}})
             .set_page_size(dst_cb_idx, dst_page_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, dst_db_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, dst_cb_config);
 
     const uint32_t w2r_cb_idx = tt::CBIndex::c_2;
-    const auto w2r_page_size = round_up_to_mul32(output_unit_size * 2) ; 
-    const auto w2r_db_config =
-        tt::tt_metal::CircularBufferConfig(w2r_page_size, {{w2r_cb_idx, output_cb_data_format}})
-            .set_page_size(w2r_cb_idx, w2r_page_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, w2r_db_config);
+    if ((outer_dim_units + 1) / 2 < outer_dim_units) {
+        const auto w2r_page_size = round_up_to_mul32(output_unit_size * 2) ; 
+        const auto w2r_cb_config =
+            tt::tt_metal::CircularBufferConfig(w2r_page_size, {{w2r_cb_idx, output_cb_data_format}})
+                .set_page_size(w2r_cb_idx, w2r_page_size);
+        tt::tt_metal::CreateCircularBuffer(program, all_cores, w2r_cb_config);
+    }
 
     const auto src_buffer = input.buffer();
     const auto dst_buffer = output.buffer();
@@ -306,6 +311,9 @@ operation::ProgramWithCallbacks argmax_multi_core(
     // Last dimension in output i.e. the dim left after reduction
     const auto output_last_dim = reduce_all or keepdim or (rank < 2) ? 1 : input_shape[rank - 2];
 
+    const auto inner_dim_units = output_last_dim;
+    const auto outer_dim_units = input.logical_volume() / inner_dim_units / red_dim_units;
+
     const tt::tt_metal::IDevice* device = output.device();
 
     const auto src_buffer = input.buffer();
@@ -349,9 +357,9 @@ operation::ProgramWithCallbacks argmax_multi_core(
 
     // Create output CB based on the output shape's last dimension
     const uint32_t dst_cb_idx = tt::CBIndex::c_1;
-    const auto dst_db_config = tt::tt_metal::CircularBufferConfig(2 * dst_page_size, {{dst_cb_idx, output_cb_data_format}})
+    const auto dst_cb_config = tt::tt_metal::CircularBufferConfig(2 * dst_page_size, {{dst_cb_idx, output_cb_data_format}})
                                    .set_page_size(dst_cb_idx, dst_page_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, dst_db_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, dst_cb_config);
 
     // Create intermediate CB for indices based on number of cores and output shape's last dimension
     const uint32_t red_idxs_cb_idx = tt::CBIndex::c_2;
@@ -369,16 +377,15 @@ operation::ProgramWithCallbacks argmax_multi_core(
             .set_page_size(red_vals_cb_idx, red_vals_page_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, red_vals_cb_config);
 
-    // Create final output CB to write final results (only used by reduce core)
+    // Create w2r CB to sync
     const uint32_t w2r_cb_idx = tt::CBIndex::c_4;
-    const auto w2r_page_size = round_up_to_mul32(output_unit_size * 2) ;    // need 2 *  output_unit_size 
-    const auto w2r_db_config =
-        tt::tt_metal::CircularBufferConfig(w2r_page_size, {{w2r_cb_idx, output_cb_data_format}})
-            .set_page_size(w2r_cb_idx, w2r_page_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, w2r_db_config);
-
-    const auto inner_dim_units = output_last_dim;
-    const auto outer_dim_units = input.logical_volume() / inner_dim_units / red_dim_units;
+    if ((outer_dim_units + 1) / 2 < outer_dim_units) {
+        const auto w2r_page_size = round_up_to_mul32(output_unit_size * 2) ;    // need 2 *  output_unit_size 
+        const auto w2r_cb_config =
+            tt::tt_metal::CircularBufferConfig(w2r_page_size, {{w2r_cb_idx, output_cb_data_format}})
+                .set_page_size(w2r_cb_idx, w2r_page_size);
+        tt::tt_metal::CreateCircularBuffer(program, all_cores, w2r_cb_config);
+    }
 
     // Get physical coordinates of the reduce core that collates the intermediate outputs
     const uint32_t reduce_core_id = 0;  // We can do perf optimization by tuning this in the future
@@ -427,7 +434,6 @@ operation::ProgramWithCallbacks argmax_multi_core(
 
     // Common compile time args for all cores
     // Refer to the kernel code for explanation of the args
-    bool is_reader = true;  
     std::vector<uint32_t> reader_compile_args = {
         src_cb_idx,
         dst_cb_idx,
@@ -459,9 +465,8 @@ operation::ProgramWithCallbacks argmax_multi_core(
         start_sem_idx,
         done_sem_idx,
         w2r_cb_idx,
-        is_reader,  // is_reader
+        true,  // is_reader
     };
-
 
     tt::tt_metal::TensorAccessorArgs(src_buffer).append_to(reader_compile_args);
     tt::tt_metal::TensorAccessorArgs(dst_buffer).append_to(reader_compile_args);

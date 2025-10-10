@@ -51,11 +51,11 @@ void kernel_main() {
     const auto s_dst = TensorAccessor(s_dst_args, dst_base_addr, dst_page_size);
 
     // CB in L1 memory for storing input
-    uint32_t src_cb_addr = get_write_ptr(src_cb_idx) + (src_page_size * (is_reader ? 0 : 1));
+    const uint32_t src_cb_addr = get_write_ptr(src_cb_idx) + (src_page_size * (is_reader ? 0 : 1));
     constexpr DataFormat src_cb_addr_data_format = get_dataformat(src_cb_idx);
 
     // CB in L1 memory for storing output
-    uint32_t dst_cb_addr = get_write_ptr(dst_cb_idx) + (dst_page_size * (is_reader ? 0 : 1));
+    const uint32_t dst_cb_addr = get_write_ptr(dst_cb_idx) + (dst_page_size * (is_reader ? 0 : 1));
     volatile tt_l1_ptr uint32_t* out_idxs = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst_cb_addr);
 
     uint32_t max_idx = 0;
@@ -95,7 +95,8 @@ void kernel_main() {
     }
 
     if constexpr (reduce_all) {
-        if constexpr (is_reader){
+        constexpr bool need_w2r_sync = (outer_dim_units + 1) / 2 < outer_dim_units;
+        if constexpr (is_reader && need_w2r_sync) {
             cb_wait_front(w2r_cb_idx, 1);
             const uint32_t w2r_cb_addr = get_read_ptr(w2r_cb_idx);
             volatile tt_l1_ptr uint32_t* idx_val = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(w2r_cb_addr);
@@ -104,7 +105,7 @@ void kernel_main() {
             auto val = get_value<src_cb_addr_data_format>(reinterpret_cast<void*>(&raw_val));
             compare_values<src_cb_addr_data_format>(val, idx, max_val, max_idx);
             cb_pop_front(w2r_cb_idx, 1);
-        }else{  
+        }else if constexpr (!is_reader && need_w2r_sync) {  
             cb_reserve_back(w2r_cb_idx, 1);
             const uint32_t w2r_cb_addr = get_write_ptr(w2r_cb_idx);
             volatile tt_l1_ptr uint32_t* idx_val = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(w2r_cb_addr);
@@ -112,6 +113,9 @@ void kernel_main() {
             idx_val[0] = max_idx;
             idx_val[1] = max_val; 
             cb_push_back(w2r_cb_idx, 1);
+        }
+        else {
+            // nothing to do
         }
 
         out_idxs[0] = max_idx;
