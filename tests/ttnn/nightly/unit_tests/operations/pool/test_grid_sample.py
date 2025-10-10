@@ -11,6 +11,47 @@ import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
+def validate_grid_sample_output(
+    expected_output, actual_output, use_precomputed_grid=False, grid_dtype=ttnn.bfloat16, pcc_threshold=0.99
+):
+    """
+    Validate grid sample output using both PCC and allclose checks.
+
+    Args:
+        expected_output: Expected PyTorch tensor output
+        actual_output: Actual TTNN tensor output (converted to torch)
+        use_precomputed_grid: Whether precomputed grid was used
+        grid_dtype: Grid data type used (ttnn.bfloat16 or ttnn.float32)
+        pcc_threshold: PCC threshold for validation (default 0.99)
+
+    Returns:
+        tuple: (pcc_passed, allclose_passed, pcc_message)
+
+    Raises:
+        AssertionError: If either PCC or allclose validation fails
+    """
+    # PCC check
+    pcc_passed, pcc_message = assert_with_pcc(expected_output, actual_output, pcc=pcc_threshold)
+    logger.info(pcc_message)
+
+    # Determine allclose tolerances based on grid type and precomputed grid usage
+    if use_precomputed_grid:
+        atol, rtol = 1.0, 1e-1  # Precomputed grid has slightly lower accuracy
+    else:
+        if grid_dtype == ttnn.float32:
+            atol, rtol = 0.02, 1e-2
+        else:  # bfloat16
+            atol, rtol = 1.0, 1e-1
+
+    allclose_passed = torch.allclose(expected_output, actual_output, atol=atol, rtol=rtol)
+
+    # Assertions
+    assert pcc_passed, f"Test failed with PCC below threshold ({pcc_threshold})"
+    assert allclose_passed, f"Test failed allclose comparison (atol={atol}, rtol={rtol})"
+
+    return pcc_passed, allclose_passed, pcc_message
+
+
 # Constants
 L1_ALIGNMENT_BYTES = 16
 BFLOAT16_BYTES_PER_ELEMENT = 2
@@ -305,14 +346,9 @@ def test_grid_sample_near_uniform_grid(device, input_shape, grid_shape, use_prec
 
     ttnn_output_torch = ttnn.to_torch(ttnn_output)
 
-    pcc_passed, pcc_message = assert_with_pcc(torch_output_nhwc, ttnn_output_torch, pcc=0.99)
-    logger.info(pcc_message)
-
-    atol, rtol = 1.0, 1e-1
-    allclose_passed = torch.allclose(torch_output_nhwc, ttnn_output_torch, atol=atol, rtol=rtol)
-
-    assert pcc_passed, f"Test failed with PCC below threshold"
-    assert allclose_passed, f"Test failed allclose comparison (atol={atol}, rtol={rtol})"
+    validate_grid_sample_output(
+        torch_output_nhwc, ttnn_output_torch, use_precomputed_grid=use_precomputed_grid, grid_dtype=ttnn.bfloat16
+    )
 
 
 @pytest.mark.parametrize("use_precomputed_grid", [True, False])
@@ -369,22 +405,9 @@ def test_grid_sample_batch_output_channels_flag(
         torch_output_nhwc, batch_size, grid_h, grid_w, channels, grid_batching_factor, batch_output_channels
     )
 
-    pcc_passed, pcc_message = assert_with_pcc(torch_expected_nhwc, ttnn_output_torch, pcc=0.99)
-    logger.info(pcc_message)
-
-    # Test allclose with tolerances based on grid type and precomputed grid usage
-    if use_precomputed_grid:
-        atol, rtol = 1.0, 1e-1  # Precomputed grid has slightly lower accuracy
-    else:
-        if grid_dtype == ttnn.float32:
-            atol, rtol = 0.02, 1e-2
-        else:  # bfloat16
-            atol, rtol = 1.0, 1e-1
-
-    allclose_passed = torch.allclose(torch_expected_nhwc, ttnn_output_torch, atol=atol, rtol=rtol)
-
-    assert pcc_passed, f"Test failed with PCC below threshold"
-    assert allclose_passed, f"Test failed allclose comparison (atol={atol}, rtol={rtol})"
+    validate_grid_sample_output(
+        torch_expected_nhwc, ttnn_output_torch, use_precomputed_grid=use_precomputed_grid, grid_dtype=grid_dtype
+    )
 
 
 @pytest.mark.parametrize("use_precomputed_grid", [True, False])
@@ -439,22 +462,9 @@ def test_grid_sample_sharded(device, input_shape, grid_shape, use_precomputed_gr
     ttnn_output = ttnn.grid_sample(ttnn_input, ttnn_grid_device, use_precomputed_grid=use_precomputed_grid)
     ttnn_output_torch = ttnn.to_torch(ttnn_output)
 
-    pcc_passed, pcc_message = assert_with_pcc(torch_output_nhwc, ttnn_output_torch, pcc=0.99)
-    logger.info(pcc_message)
-
-    # Test allclose with tolerances based on grid type and precomputed grid usage
-    if use_precomputed_grid:
-        atol, rtol = 1.0, 1e-1  # Precomputed grid has slightly lower accuracy
-    else:
-        if grid_dtype == ttnn.float32:
-            atol, rtol = 0.02, 1e-2
-        else:  # bfloat16
-            atol, rtol = 1.0, 1e-1
-
-    allclose_passed = torch.allclose(torch_output_nhwc, ttnn_output_torch, atol=atol, rtol=rtol)
-
-    assert pcc_passed, f"Test failed with PCC below threshold"
-    assert allclose_passed, f"Test failed allclose comparison (atol={atol}, rtol={rtol})"
+    validate_grid_sample_output(
+        torch_output_nhwc, ttnn_output_torch, use_precomputed_grid=use_precomputed_grid, grid_dtype=grid_dtype
+    )
 
 
 @pytest.mark.parametrize("use_precomputed_grid", [True, False])
@@ -524,19 +534,7 @@ def test_grid_sample_sharded_batched(
     expected_shape, torch_expected_nhwc = prepare_grid_batching_expected_output(
         torch_output_nhwc, batch_size, grid_h, grid_w, channels, grid_batching_factor, batch_output_channels
     )
-    pcc_passed, pcc_message = assert_with_pcc(torch_expected_nhwc, ttnn_output_torch, pcc=0.99)
-    logger.info(pcc_message)
 
-    # Test allclose with tolerances based on grid type and precomputed grid usage
-    if use_precomputed_grid:
-        atol, rtol = 1.0, 1e-1  # Precomputed grid has slightly lower accuracy
-    else:
-        if grid_dtype == ttnn.float32:
-            atol, rtol = 0.02, 1e-2
-        else:  # bfloat16
-            atol, rtol = 1.0, 1e-1
-
-    allclose_passed = torch.allclose(torch_expected_nhwc, ttnn_output_torch, atol=atol, rtol=rtol)
-
-    assert pcc_passed, f"Test failed with PCC below threshold"
-    assert allclose_passed, f"Test failed allclose comparison (atol={atol}, rtol={rtol})"
+    validate_grid_sample_output(
+        torch_expected_nhwc, ttnn_output_torch, use_precomputed_grid=use_precomputed_grid, grid_dtype=grid_dtype
+    )
