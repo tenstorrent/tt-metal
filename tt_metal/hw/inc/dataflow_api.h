@@ -2096,11 +2096,10 @@ void noc_async_read_tile_dram_sharded_set_trid(uint32_t trid = 0, uint8_t noc = 
 // clang-format on
 FORCE_INLINE
 void noc_async_write_set_trid(uint32_t trid = 0, uint8_t noc = noc_index) {
-    // TODO: Uncomment these with proper parameters
-    // RECORD_NOC_EVENT(NocEventType::WRITE_SET_TRID);
-    // WAYPOINT("NSTW");
+    RECORD_NOC_EVENT(NocEventType::WRITE_SET_TRID);
+    WAYPOINT("NWSW");
     ncrisc_noc_set_transaction_id(noc, write_cmd_buf, trid);
-    // WAYPOINT("NSTD");
+    WAYPOINT("NWSD");
 }
 
 // clang-format off
@@ -2313,14 +2312,13 @@ void noc_async_write_barrier_with_trid(uint32_t trid, uint8_t noc = noc_index) {
 // clang-format on
 FORCE_INLINE
 void noc_async_write_flushed_with_trid(uint32_t trid, uint8_t noc = noc_index) {
-    // TODO: Uncomment these with proper parameters
-    // RECORD_NOC_EVENT(NocEventType::WRITE_FLUSH_WITH_TRID);
-    // WAYPOINT("NFTW");
+    RECORD_NOC_EVENT(NocEventType::WRITE_FLUSH_WITH_TRID);
+    WAYPOINT("NFTW");
     while (!ncrisc_noc_nonposted_write_with_transaction_id_sent(noc, trid)) {
         continue;
     }
     invalidate_l1_cache();
-    // WAYPOINT("NFTD");
+    WAYPOINT("NFTD");
 }
 
 // clang-format off
