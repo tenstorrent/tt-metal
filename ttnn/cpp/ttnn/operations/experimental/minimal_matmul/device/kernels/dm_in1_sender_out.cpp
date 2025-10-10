@@ -151,22 +151,18 @@ void kernel_main() {
 #endif
             }
 #ifdef FUSE_BIAS
-            if constexpr (is_output_writer) {
-                cb_reserve_back(cb_id_in2, out_block_num_tiles);
+            if constexpr (!is_output_writer) {
+                cb_reserve_back(cb_id_in2, N_block_tiles);
 
                 uint32_t l1_write_addr_in2 = get_write_ptr(cb_id_in2);
-                for (uint32_t m_tile_id = m_block * M_block_tiles; m_tile_id < (m_block + 1) * M_block_tiles;
-                     m_tile_id++) {
-                    for (uint32_t n_tile_id = n_block * N_block_tiles; n_tile_id < (n_block + 1) * N_block_tiles;
-                         n_tile_id++) {
-                        uint32_t bias_tile_id = m_tile_id * padded_N_tiles + n_tile_id;
-                        noc_async_read_tile(bias_tile_id, in2_reader, l1_write_addr_in2);
-                        l1_write_addr_in2 += input_tile_size;
-                    }
+                for (uint32_t n_tile_id = n_block * N_block_tiles; n_tile_id < (n_block + 1) * N_block_tiles;
+                     n_tile_id++) {
+                    noc_async_read_tile(n_tile_id, in2_reader, l1_write_addr_in2);
+                    l1_write_addr_in2 += input_tile_size;
                 }
                 noc_async_read_barrier();
 
-                cb_push_back(cb_id_in2, out_block_num_tiles);
+                cb_push_back(cb_id_in2, N_block_tiles);
             }
 #endif
 
