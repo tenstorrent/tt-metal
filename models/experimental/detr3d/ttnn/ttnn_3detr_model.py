@@ -217,7 +217,12 @@ class TTModel3DETR(LightweightModule):
         # query_xyz = gather_operation(xyz_flipped, query_inds.int())
         # query_xyz = query_xyz.transpose(1, 2)
         pos_embed = self.pos_embedding(query_xyz, input_range=point_cloud_dims)
+        pos_embed = ttnn.from_torch(pos_embed, device=self.device, dtype=ttnn.bfloat16)
+        pos_embed = ttnn.permute(pos_embed, (0, 2, 1))
+        pos_embed = ttnn.unsqueeze(pos_embed, 0)
         query_embed = self.query_projection(pos_embed)
+        query_embed = ttnn.squeeze(query_embed, 0)
+        query_embed = ttnn.permute(query_embed, (0, 2, 1))
         return query_xyz, query_embed
 
     def _break_up_pc(self, pc):
@@ -259,21 +264,52 @@ class TTModel3DETR(LightweightModule):
             box_features: num_layers x num_queries x batch x channel
         """
         # box_features change to (num_layers x batch) x channel x num_queries
-        box_features = box_features.permute(0, 2, 3, 1)
+        box_features = ttnn.permute(box_features, (0, 2, 3, 1))
         num_layers, batch, channel, num_queries = (
             box_features.shape[0],
             box_features.shape[1],
             box_features.shape[2],
             box_features.shape[3],
         )
-        box_features = box_features.reshape(num_layers * batch, channel, num_queries)
+        box_features = ttnn.reshape(box_features, (num_layers * batch, channel, num_queries))
+
+        box_features = ttnn.permute(box_features, (0, 2, 1))
+        box_features = ttnn.unsqueeze(box_features, 0)
+        box_features = ttnn.to_memory_config(box_features, ttnn.DRAM_MEMORY_CONFIG)
 
         # mlp head outputs are (num_layers x batch) x noutput x nqueries, so transpose last two dims
-        cls_logits = self.mlp_heads["sem_cls_head"](box_features).transpose(1, 2)
-        center_offset = self.mlp_heads["center_head"](box_features).sigmoid().transpose(1, 2) - 0.5
-        size_normalized = self.mlp_heads["size_head"](box_features).sigmoid().transpose(1, 2)
-        angle_logits = self.mlp_heads["angle_cls_head"](box_features).transpose(1, 2)
-        angle_residual_normalized = self.mlp_heads["angle_residual_head"](box_features).transpose(1, 2)
+        cls_logits = self.mlp_heads["sem_cls_head"](box_features)
+        cls_logits = ttnn.squeeze(cls_logits, 0)
+        cls_logits = ttnn.permute(cls_logits, (0, 2, 1))
+        cls_logits = ttnn.transpose(cls_logits, 1, 2)
+        cls_logits = ttnn.to_torch(cls_logits)
+
+        center_offset = self.mlp_heads["center_head"](box_features)
+        center_offset = ttnn.squeeze(center_offset, 0)
+        center_offset = ttnn.permute(center_offset, (0, 2, 1))
+        center_offset = ttnn.sigmoid(center_offset)
+        center_offset = ttnn.transpose(center_offset, 1, 2)
+        center_offset = center_offset - 0.5
+        center_offset = ttnn.to_torch(center_offset)
+
+        size_normalized = self.mlp_heads["size_head"](box_features)
+        size_normalized = ttnn.squeeze(size_normalized, 0)
+        size_normalized = ttnn.permute(size_normalized, (0, 2, 1))
+        size_normalized = ttnn.sigmoid(size_normalized)
+        size_normalized = ttnn.transpose(size_normalized, 1, 2)
+        size_normalized = ttnn.to_torch(size_normalized)
+
+        angle_logits = self.mlp_heads["angle_cls_head"](box_features)
+        angle_logits = ttnn.squeeze(angle_logits, 0)
+        angle_logits = ttnn.permute(angle_logits, (0, 2, 1))
+        angle_logits = ttnn.transpose(angle_logits, 1, 2)
+        angle_logits = ttnn.to_torch(angle_logits)
+
+        angle_residual_normalized = self.mlp_heads["angle_residual_head"](box_features)
+        angle_residual_normalized = ttnn.squeeze(angle_residual_normalized, 0)
+        angle_residual_normalized = ttnn.permute(angle_residual_normalized, (0, 2, 1))
+        angle_residual_normalized = ttnn.transpose(angle_residual_normalized, 1, 2)
+        angle_residual_normalized = ttnn.to_torch(angle_residual_normalized)
 
         # reshape outputs to num_layers x batch x nqueries x noutput
         cls_logits = cls_logits.reshape(num_layers, batch, num_queries, -1)
@@ -354,9 +390,14 @@ class TTModel3DETR(LightweightModule):
         enc_pos = self.pos_embedding(enc_xyz, input_range=point_cloud_dims)
 
         # decoder expects: npoints x batch x channel
-        enc_pos = enc_pos.permute(2, 0, 1)
-        query_embed = query_embed.permute(2, 0, 1)
-        tgt = torch.zeros_like(query_embed)
+        enc_pos = ttnn.from_torch(enc_pos, device=self.device, dtype=ttnn.bfloat16)
+        enc_pos = ttnn.permute(enc_pos, (2, 0, 1))
+        enc_pos = ttnn.permute(enc_pos, (1, 0, 2))
+        query_embed = ttnn.permute(query_embed, (2, 0, 1))
+        query_embed = ttnn.permute(query_embed, (1, 0, 2))
+        enc_features = ttnn.permute(enc_features, (1, 0, 2))
+        tgt = ttnn.zeros_like(query_embed, dtype=ttnn.bfloat16)
         box_features = self.decoder(tgt, enc_features, query_pos=query_embed, pos=enc_pos)[0]
+        box_features = ttnn.permute(box_features, (0, 2, 1, 3))
         box_predictions = self.get_box_predictions(query_xyz, point_cloud_dims, box_features)
         return box_predictions
