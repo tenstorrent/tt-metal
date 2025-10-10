@@ -229,10 +229,10 @@ def create_tt_model(
             {
                 # CONFIRMED: top_p non-uniform / large value is the problem
                 "temperature": list(np.full(32, 0.1)),
-                # "top_p": list(np.full(32, 0.9)),
+                "top_p": list(np.full(32, 1.0)),
                 # "top_k": list(np.full(32, 32)),
                 # "temperature": list(np.linspace(0.0, 1.0, 32)),
-                "top_p": list(np.linspace(0.08, 0.99, 32)),
+                # "top_p": list(np.linspace(0.08, 0.99, 32)),
                 "top_k": list(np.linspace(1, 32, 32).astype(int)),
             },  # sampling_params (non-uniform)
             False,  # stop_at_eos
@@ -621,7 +621,7 @@ def test_demo_text(
         stop_at_eos = request.config.getoption("--stop_at_eos")
     print_outputs = request.config.getoption("--print_outputs") or print_outputs
 
-    enable_trace = True  # Use tracing for better perf
+    enable_trace = False  # Use tracing for better perf
     prefill_enable_trace = True
     print_to_file = False  # Enable this flag to print the output of all users to a file
     instruct = num_layers == 80 and instruct  # if using instruct weights it must be full model
@@ -981,6 +981,9 @@ def test_demo_text(
             if iteration > 0:
                 ttnn.event_synchronize(read_events.pop(0)[0])
                 tt_out_tok = generator.process_decode_output_host(tt_out_toks.pop(0))
+                for idx, t in enumerate(tt_out_tok):
+                    if not isinstance(t.item(), int) or t < 0:
+                        print(f"(Invalid token, iteration, user #): ({t}, {iteration}, {idx})")
 
                 out_tok = tt_out_tok if not teacher_forcing else ref_tokens[max_encoded_prompt_len + iteration + 1]
 
@@ -1089,10 +1092,6 @@ def test_demo_text(
                 profiler.start(f"log_saving_file", iteration=batch_idx)
                 logger.info("Finished decoding, printing the final outputs...\n")
                 for i, (output, prompt) in enumerate(zip(all_outputs, input_prompts)):
-                    for t in output:
-                        if not isinstance(t, int) or t < 0:
-                            print(f"Invalid token: {t}")
-                    text = tokenizer.decode(output)
                     prompt_including_assistant_tags = tokenizer.decode(
                         model_args.encode_prompt(prompt, instruct=instruct)
                     )
