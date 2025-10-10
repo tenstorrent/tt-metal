@@ -24,6 +24,7 @@ def run_test_linear(
     subblock_h,
     subblock_w,
     use_bias=False,
+    activation=None,
     math_fidelity=ttnn.MathFidelity.HiFi2,
     fp32_acc=True,
     dtype=ttnn.bfloat16,
@@ -44,10 +45,19 @@ def run_test_linear(
     if use_bias:
         tt_bias = ttnn.from_torch(bias_input, dtype=dtype, device=device, layout=ttnn.TILE_LAYOUT)
 
+    activation_fn = None
+    if activation == "gelu":
+        activation_fn = (ttnn.UnaryOpType.GELU, False)
+    else:
+        assert activation is None, f"Unsupported activation: {activation}"
+
     with torch.no_grad():
         torch_output = torch_input @ weight_input
         if use_bias:
             torch_output = torch_output + bias_input
+
+        if activation == "gelu":
+            torch_output = torch.nn.functional.gelu(torch_output)
 
     compute_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
@@ -72,6 +82,7 @@ def run_test_linear(
         input_tensor=tt_input,
         weight_tensor=tt_weight,
         bias_tensor=tt_bias if use_bias else None,
+        fused_activation=activation_fn,
         compute_kernel_config=compute_config,
         config=matmul_config,
     )
@@ -85,12 +96,24 @@ def run_test_linear(
     [(4096, 4096, 4096)],
 )
 @pytest.mark.parametrize(
-    "M_block_size, K_block_size, N_block_size, subblock_h, subblock_w, use_bias",
-    [(8, 8, 8, 2, 2, True)],
+    "M_block_size, K_block_size, N_block_size, subblock_h, subblock_w, use_bias, activation",
+    [(8, 8, 8, 2, 2, False, None)],
 )
-def test_linear(device, M, K, N, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w, use_bias):
+def test_linear(
+    device, M, K, N, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w, use_bias, activation
+):
     check_result = run_test_linear(
-        device, M, K, N, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w, use_bias
+        device,
+        M,
+        K,
+        N,
+        M_block_size,
+        K_block_size,
+        N_block_size,
+        subblock_h,
+        subblock_w,
+        use_bias=use_bias,
+        activation=activation,
     )
     assert check_result["pcc"] > 0.999_500
     assert check_result["relative_rmse"] < 0.02
@@ -133,10 +156,10 @@ def test_linear_dtype_compute_config(
         N_block_size,
         subblock_h,
         subblock_w,
-        use_bias,
-        math_fidelity,
-        fp32_acc,
-        dtype,
+        use_bias=use_bias,
+        math_fidelity=math_fidelity,
+        fp32_acc=fp32_acc,
+        dtype=dtype,
     )
 
     PCC_THRESHOLD = 0.999_500

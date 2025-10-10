@@ -17,6 +17,7 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
     const Tensor& input_tensor,
     const Tensor& weight_tensor,
     const std::optional<const Tensor>& bias_tensor,
+    const std::optional<unary::UnaryWithParam>& fused_activation,
     const MinimalMatmulConfig& config,
     const Tensor& output_tensor,
     const DeviceComputeKernelConfig& compute_kernel_config) {
@@ -43,6 +44,16 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
     auto intermediate_tile_size = tt::tile_size(intermediate_data_format);
 
     bool use_bias = bias_tensor.has_value();
+
+    std::map<std::string, std::string> compute_activation_defines;
+    if (fused_activation.has_value()) {
+        compute_activation_defines = ttnn::operations::unary::utils::get_defines(
+            fused_activation.value().op_type,
+            fused_activation.value().params,
+            "ACTIVATION",
+            "fused_act_dst_id",
+            output_tensor.dtype());
+    }
     /**
      * A: M_tiles x K_tiles
      * A subdivided into M_block x K_block tiles
@@ -350,6 +361,8 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
     std::vector<uint32_t> compute_compile_time_args = {
         K_blocks, M_block_tiles, K_block_tiles, N_block_tiles, subblock_h, subblock_w};
 
+    auto compute_defines = defines;
+    compute_defines.merge(compute_activation_defines);
     auto compute_kernels_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/compute.cpp",
@@ -359,7 +372,7 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .math_approx_mode = math_approx_mode,
             .compile_args = compute_compile_time_args,
-            .defines = defines});
+            .defines = compute_defines});
 
     /**
      * The receiver writer cores defer their writes in order to reduce NOC congestion.
