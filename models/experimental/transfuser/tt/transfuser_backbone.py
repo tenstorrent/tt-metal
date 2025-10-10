@@ -674,7 +674,6 @@ class TtTransfuserBackbone:
             output_size=[self.config.lidar_vert_anchors, self.config.lidar_horz_anchors],
         )
 
-        return image_embd_layer4, lidar_embd_layer4
         logger.info(f"layer4 transformer")
 
         image_embd_layer4 = ttnn.to_memory_config(image_embd_layer4, ttnn.DRAM_MEMORY_CONFIG)
@@ -686,6 +685,7 @@ class TtTransfuserBackbone:
         image_features_layer4, lidar_features_layer4 = self.transformer4(
             image_embd_layer4, lidar_embd_layer4, velocity, 1512
         )
+        return image_features_layer4, lidar_features_layer4
         image_features_layer4 = ttnn.permute(image_features_layer4, (0, 2, 3, 1))
         lidar_features_layer4 = ttnn.permute(lidar_features_layer4, (0, 2, 3, 1))
 

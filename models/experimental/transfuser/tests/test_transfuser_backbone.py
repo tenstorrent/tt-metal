@@ -33,7 +33,7 @@ class TransfuserBackboneInfra:
         model_config,
     ):
         super().__init__()
-        self._init_seeds()
+        # self._init_seeds()
         self.device = device
         self.n_layer = n_layer
         self.image_arch = image_architecture
@@ -184,23 +184,23 @@ class TransfuserBackboneInfra:
         ttnn.deallocate(self.output_image_tensor)
         ttnn.deallocate(self.output_lidar_tensor)
 
-        # Reshape + permute image output back to NCHW
-        expected_image_shape = self.torch_image_output.shape
-        print(f"{tt_image_tensor_torch.shape,tt_lidar_tensor_torch.shape, expected_image_shape=}")
-        tt_image_tensor_torch = torch.reshape(
-            tt_image_tensor_torch,
-            (expected_image_shape[0], expected_image_shape[2], expected_image_shape[3], expected_image_shape[1]),
-        )
-        tt_image_tensor_torch = torch.permute(tt_image_tensor_torch, (0, 3, 1, 2))
+        # # Reshape + permute image output back to NCHW
+        # expected_image_shape = self.torch_image_output.shape
+        # print(f"{tt_image_tensor_torch.shape,tt_lidar_tensor_torch.shape, expected_image_shape=}")
+        # tt_image_tensor_torch = torch.reshape(
+        #     tt_image_tensor_torch,
+        #     (expected_image_shape[0], expected_image_shape[2], expected_image_shape[3], expected_image_shape[1]),
+        # )
+        # tt_image_tensor_torch = torch.permute(tt_image_tensor_torch, (0, 3, 1, 2))
 
-        # Reshape + permute lidar output back to NCHW
-        expected_lidar_shape = self.torch_lidar_output.shape
-        print(f"{tt_image_tensor_torch.shape,tt_lidar_tensor_torch.shape, expected_lidar_shape=}")
-        tt_lidar_tensor_torch = torch.reshape(
-            tt_lidar_tensor_torch,
-            (expected_lidar_shape[0], expected_lidar_shape[2], expected_lidar_shape[3], expected_lidar_shape[1]),
-        )
-        tt_lidar_tensor_torch = torch.permute(tt_lidar_tensor_torch, (0, 3, 1, 2))
+        # # Reshape + permute lidar output back to NCHW
+        # expected_lidar_shape = self.torch_lidar_output.shape
+        # print(f"{tt_image_tensor_torch.shape,tt_lidar_tensor_torch.shape, expected_lidar_shape=}")
+        # tt_lidar_tensor_torch = torch.reshape(
+        #     tt_lidar_tensor_torch,
+        #     (expected_lidar_shape[0], expected_lidar_shape[2], expected_lidar_shape[3], expected_lidar_shape[1]),
+        # )
+        # tt_lidar_tensor_torch = torch.permute(tt_lidar_tensor_torch, (0, 3, 1, 2))
 
         # PCC validation for both outputs
         image_pcc_passed, image_pcc_message = check_with_pcc(self.torch_image_output, tt_image_tensor_torch, pcc=0.95)

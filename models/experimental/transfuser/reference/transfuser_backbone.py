@@ -370,8 +370,8 @@ class TransfuserBackbone(nn.Module):
         image_embd_layer4 = self.avgpool_img(image_features)
         lidar_embd_layer4 = self.avgpool_lidar(lidar_features)
 
-        return image_embd_layer4, lidar_embd_layer4
         image_features_layer4, lidar_features_layer4 = self.transformer4(image_embd_layer4, lidar_embd_layer4, velocity)
+        return image_features_layer4, lidar_features_layer4
         image_features_layer4 = F.interpolate(
             image_features_layer4,
             size=(image_features.shape[2], image_features.shape[3]),
