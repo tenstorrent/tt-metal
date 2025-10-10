@@ -624,6 +624,7 @@ chip_id_t MeshDevice::build_id() const { return reference_device()->id(); }
 
 bool MeshDevice::is_parent_mesh() const { return parent_mesh_ == nullptr; }
 
+const std::shared_ptr<MeshDevice>& MeshDevice::get_parent_mesh() const { return parent_mesh_; }
 std::vector<std::shared_ptr<MeshDevice>> MeshDevice::get_submeshes() const {
     std::vector<std::shared_ptr<MeshDevice>> result;
     result.reserve(submeshes_.size());
