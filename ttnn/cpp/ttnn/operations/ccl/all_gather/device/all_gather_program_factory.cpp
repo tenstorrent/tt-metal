@@ -111,7 +111,7 @@ AllGatherDeviceOperation::AllGatherProgram::create_at(
         mesh_coordinate,
         forward_coordinate,
         backward_coordinate,
-        tensor_return_value.at(0),
+        tensor_return_value,
         operation_attributes.dim,
         operation_attributes.num_links,
         target_ring_size,
@@ -119,7 +119,7 @@ AllGatherDeviceOperation::AllGatherProgram::create_at(
         operation_attributes.topology,
         multidevice_semaphores,
         barrier_semaphore,
-        false,  // using_persistent_buffers - false since we don't have optional output tensor in this version
+        false,  // using_persistent_buffers - false since we always barrier in this version
         operation_attributes.subdevice_id,
         no_fuse,       // never fusing with this
         std::nullopt,  // use chunks per sync decision making tree

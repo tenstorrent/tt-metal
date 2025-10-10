@@ -32,7 +32,6 @@ void py_bind_all_gather(py::module& module) {
                 output_tensor (ttnn.Tensor, optional): Preallocated output tensor.
                 memory_config (ttnn.MemoryConfig, optional): Output memory configuration.
                 subdevice_id (ttnn.SubDeviceId, optional): Subdevice id for worker cores.
-                queue_id (int, optional): Command queue id. Defaults to 0.
 
            Returns:
                ttnn.Tensor: The gathered tensor.)doc";

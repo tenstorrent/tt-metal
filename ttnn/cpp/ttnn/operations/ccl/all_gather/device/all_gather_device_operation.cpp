@@ -56,13 +56,19 @@ void AllGatherDeviceOperation::validate_on_program_cache_miss(
             input_tensor.memory_config().buffer_type() == BufferType::L1, "We don't support input DRAM block sharding");
     }
 
-    if (tensor_args.optional_output_tensor) {
+    validate_on_program_cache_hit(operation_attributes, tensor_args);
+}
+
+void AllGatherDeviceOperation::validate_on_program_cache_hit(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    if (tensor_args.optional_output_tensor.has_value()) {
         auto output_tensor = tensor_args.optional_output_tensor.value();
+        auto output_spec = compute_output_specs(operation_attributes, tensor_args);
         TT_FATAL(
-            output_tensor.shape() == output_specs.logical_shape(),
+            output_tensor.logical_shape() == output_spec.logical_shape(),
             "Output tensor shape {} does not match computed output spec shape {}",
-            output_tensor.shape(),
-            output_specs.at(0).logical_shape());
+            output_tensor.logical_shape(),
+            output_spec.logical_shape());
         auto optional_output_tensor_spec = output_tensor.tensor_spec();
         // everything but memory config must match
         TT_FATAL(
@@ -76,10 +82,10 @@ void AllGatherDeviceOperation::validate_on_program_cache_miss(
             optional_output_tensor_spec.layout(),
             output_spec.layout());
         TT_FATAL(
-            optional_output_tensor_spec.dtype() == output_spec.dtype(),
-            "Output tensor dtype {} does not match computed output spec dtype {}",
-            optional_output_tensor_spec.dtype(),
-            output_spec.dtype());
+            optional_output_tensor_spec.data_type() == output_spec.data_type(),
+            "Output tensor data_type {} does not match computed output spec data_type {}",
+            optional_output_tensor_spec.data_type(),
+            output_spec.data_type());
         TT_FATAL(
             optional_output_tensor_spec.physical_shape() == output_spec.physical_shape(),
             "Output tensor physical shape {} does not match computed output spec physical shape {}",
@@ -90,18 +96,6 @@ void AllGatherDeviceOperation::validate_on_program_cache_miss(
             "Output tensor tile {} does not match computed output spec tile {}",
             optional_output_tensor_spec.tile(),
             output_spec.tile());
-    }
-}
-
-void AllGatherDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    if (tensor_args.optional_output_tensor.has_value()) {
-        auto output_specs = compute_output_specs(operation_attributes, tensor_args);
-        TT_FATAL(
-            tensor_args.optional_output_tensor.value().tensor_spec() == output_specs.at(0),
-            "Output tensor spec {} does not match computed output spec {}",
-            tensor_args.optional_output_tensor.value().tensor_spec(),
-            output_specs.at(0));
     }
 }
 

@@ -37,7 +37,7 @@ struct AllGatherDeviceOperation {
         std::optional<Tensor> optional_output_tensor;
     };
 
-    using spec_return_value_t = std::vector<ttnn::TensorSpec>;
+    using spec_return_value_t = ttnn::TensorSpec;
     using tensor_return_value_t = ttnn::Tensor;
 
     struct AllGatherProgram {
