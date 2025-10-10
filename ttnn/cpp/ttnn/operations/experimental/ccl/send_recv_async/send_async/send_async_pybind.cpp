@@ -24,11 +24,13 @@ void bind_send_async(pybind11::module& module, const ccl_operation_t& operation,
         ttnn::pybind_overload_t{
             [](const ccl_operation_t& self,
                const ttnn::Tensor& input_tensor,
-               const tt::tt_metal::distributed::MeshSocket& mesh_socket) -> std::vector<ttnn::Tensor> {
-                return self(input_tensor, mesh_socket);
+               const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
+               const tt::tt_metal::distributed::SocketConfig& socket_config) -> std::vector<ttnn::Tensor> {
+                return self(input_tensor, mesh_device, socket_config);
             },
             py::arg("input_tensor"),
-            py::arg("mesh_socket")});
+            py::arg("mesh_device"),
+            py::arg("socket_config")});
 }
 
 }  // namespace
