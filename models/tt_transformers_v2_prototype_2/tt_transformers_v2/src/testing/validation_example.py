@@ -9,7 +9,7 @@ against reference PyTorch implementations with automatic metrics collection.
 import os
 
 import torch
-from ds_r1_qwen import enable_validation, get_validation_registry, validate_against
+from tt_transformers_v2.src.testing import enable_validation, get_validation_registry, validate_against
 
 import ttnn
 
@@ -26,7 +26,7 @@ def torch_rms_norm(x, weight, eps=1e-6):
 
 
 class ValidatedRMSNorm:
-    """RMS Normalization - ultra-clean pattern with auto_convert_outputs"""
+    """RMS Normalization - ultra-clean pattern: NO conversions needed!"""
 
     def __init__(self, weight: torch.Tensor, eps: float, device):
         self.eps = eps
@@ -37,17 +37,21 @@ class ValidatedRMSNorm:
         self.device = device
 
     def _reference_impl(self, x):
-        """Reference implementation with same signature as __call__"""
-        # Convert TTNN to torch and compute reference
+        """Reference implementation - returns TTNN just like __call__"""
+        # Convert TTNN to torch for reference computation
         x_torch = ttnn.to_torch(x).squeeze(0)
-        result = torch_rms_norm(x_torch, self.weight_torch, self.eps)
+        result_torch = torch_rms_norm(x_torch, self.weight_torch, self.eps)
         # Convert back to TTNN to match __call__ output type
-        return ttnn.from_torch(result.unsqueeze(0), device=self.device, dtype=x.dtype, layout=ttnn.TILE_LAYOUT)
+        return ttnn.from_torch(
+            result_torch.unsqueeze(0), device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+        )
 
     @validate_against(
         reference_fn=lambda self, x: self._reference_impl(x),
-        match_signature=True,  # Reference has same signature as __call__!
-        auto_convert_outputs=True,  # Auto-convert TTNN -> torch, no output_map_impl needed!
+        match_signature=True,  # Same signature ✓
+        # Both return TTNN, metrics computed on TTNN tensors directly ✓
+        # NO output_map_impl needed! ✓
+        # NO auto_convert_outputs needed! ✓
         tolerances={
             "max_abs_error": 1e-2,
             "mean_abs_error": 1e-3,
