@@ -214,9 +214,25 @@ jobs:
           exit 1
       - name: Enable Performance mode
         if: ${{ matrix.test-group.runner-label == 'N300' && matrix.test-group.performance && !matrix.test-group.civ2-compatible }}
-        run: sudo cpupower frequency-set -g performance
-      # - uses: ./.github/actions/ensure-active-weka-mount
-      #   if: ${{ !matrix.test-group.civ2-compatible }}
+        run: |
+          # Set performance governor for all CPU cores
+          for cpu in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
+            if [ -f "$cpu" ]; then
+              cpu_num=$(echo "$cpu" | grep -o 'cpu[0-9]*' | grep -o '[0-9]*')
+              echo "Setting performance governor for CPU $cpu_num"
+              sudo cpufreq-set -c "$cpu_num" -g performance
+            fi
+          done
+      - name: Check Weka mount
+        if: ${{ !matrix.test-group.civ2-compatible }}
+        run: |
+          if [ -d "/mnt/MLPerf" ] && mountpoint -q /mnt/MLPerf; then
+            echo "✓ Weka is mounted at /mnt/MLPerf"
+            ls -al /mnt/MLPerf/bit_error_tests
+          else
+            echo "✗ Weka is not mounted at /mnt/MLPerf"
+            exit 1
+          fi
       - name: Run demo regression tests
         timeout-minutes: 60
         shell: bash
@@ -248,4 +264,12 @@ jobs:
           prefix: "test_reports_"
       - name: Disable Performance mode
         if: ${{ matrix.test-group.runner-label == 'N300' && matrix.test-group.performance && !matrix.test-group.civ2-compatible }}
-        run: sudo cpupower frequency-set -g ondemand
+        run: |
+          # Set ondemand governor for all CPU cores
+          for cpu in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
+            if [ -f "$cpu" ]; then
+              cpu_num=$(echo "$cpu" | grep -o 'cpu[0-9]*' | grep -o '[0-9]*')
+              echo "Setting ondemand governor for CPU $cpu_num"
+              sudo cpufreq-set -c "$cpu_num" -g ondemand
+            fi
+          done
