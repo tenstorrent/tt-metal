@@ -29,17 +29,23 @@ if [[ -r /etc/os-release ]] ; then
 fi
 sfpi_arch=$(uname -m)
 
-# download root location
-sfpi_repo=https://github.com/tenstorrent/sfpi
-sfpi_url=$sfpi_repo/releases/download
-
 # define release
-sfpi_version=7.3.0-naming-30304
-sfpi_x86_64_linux_deb_md5=fd4feae9df6e6ddfea12e77534ff6b3a
-sfpi_x86_64_linux_rpm_md5=96a613cd8cdb01a2ac3cf55c63ee56c7
-sfpi_x86_64_linux_txz_md5=7bbbc772debaaf34f5801e429ded6a0b
+sfpi_version=7.3.0-ext-29186
+sfpi_x86_64_linux_deb_md5=23c4547bf95fb2f4e148fb1da0e433a2
+sfpi_x86_64_linux_rpm_md5=7112d6ed4885ddf4eaa40521de96b479
+sfpi_x86_64_linux_txz_md5=4eff7968d9c2851793197a38b44178df
 
-case "${1-}" in
+sfpi_repo=https://github.com/tenstorrent/sfpi
+sfpi_filename=sfpi_${sfpi_version}_${sfpi_arch}_${sfpi_dist}
+
+if ! [[ -z ${1-} ]] ; then
+    # querier of sfpi-version
+    sfpi_filename+=".$1"
+    sfpi_url=$sfpi_repo/releases/download/$sfpi_version
+    sfpi_md5=$(eval echo "\${sfpi_${sfpi_arch}_${sfpi_dist}_${1}_md5:-}")
+fi
+
+case "${2-}" in
     CMAKE)
 	# emit as cmake script
 	for var in $(set -o posix ; set | grep '^sfpi_')
