@@ -126,21 +126,6 @@ class AllGatherAsyncConfig(OpConfigBase):
 
 
 @dataclass
-class ReduceScatterAsyncConfig(OpConfigBase):
-    """Common parameters for a ttnn.experimental.reduce_scatter_async op"""
-
-    mesh_device: ConfigDevice | None = None
-    cluster_axis: int | None = None
-    dim: int | None = None
-    from_remote_multi_device_global_semaphore: object | None = None
-    to_remote_multi_device_global_semaphore: object | None = None
-    math_op: ttnn.ReduceType | None = None
-    num_links: int | None = None
-    memory_config: ttnn.MemoryConfig | None = None
-    topology: ttnn.Topology | None = None
-
-
-@dataclass
 class ReduceScatterAsyncMinimalConfig(OpConfigBase):
     """Common parameters for a ttnn.experimental.reduce_scatter_minimal_async op"""
 
