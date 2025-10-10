@@ -549,7 +549,10 @@ class TTTransformerDecoder(LightweightModule):
 
         if self.return_intermediate:
             # TTNN doesn't support torch.stack directly, return list for now
+            intermediate = [ttnn.reshape(t, (1, *t.shape)) for t in intermediate]
+            intermediate = ttnn.concat(intermediate, dim=0, memory_config=ttnn.L1_MEMORY_CONFIG)
             return intermediate, attns if return_attn_weights else None
+
         return output, attns if return_attn_weights else None
 
 

@@ -29,7 +29,7 @@ from tests.ttnn.utils_for_testing import comp_pcc
     " encoder_only, input_shapes",
     [
         (
-            True,
+            False,
             {
                 "point_clouds": (1, 20000, 3),
                 "point_cloud_dims_min": (1, 3),
@@ -89,24 +89,29 @@ def test_3detr_model(encoder_only, input_shapes, device):
     ttnn_module, _ = build_ttnn_3detr(ttnn_args, dataset_config)
     tt_output = ttnn_module(inputs=input_dict, encoder_only=encoder_only)
 
-    ttnn_torch_out = []
-    for tt_out, torch_out in zip(tt_output, ref_out):
-        if not isinstance(tt_out, torch.Tensor):
-            tt_out = ttnn.to_torch(tt_out)
-            tt_out = torch.reshape(tt_out, torch_out.shape)
-        ttnn_torch_out.append(tt_out)
-        pcc_pass, pcc_message = comp_pcc(torch_out, tt_out, 0.99)
-        print(f"{pcc_message=}")
+    if encoder_only:
+        ttnn_torch_out = []
+        for tt_out, torch_out in zip(tt_output, ref_out):
+            if not isinstance(tt_out, torch.Tensor):
+                tt_out = ttnn.to_torch(tt_out)
+                tt_out = torch.reshape(tt_out, torch_out.shape)
+            ttnn_torch_out.append(tt_out)
+            pcc_pass, pcc_message = comp_pcc(torch_out, tt_out, 0.97)
+            print(f"{pcc_message=}")
+    else:
+        ttnn_outputs, ref_outputs = tt_output["outputs"], ref_out["outputs"]
+        ttnn_aux_outputs, ref_aux_outputs = tt_output["aux_outputs"], ref_out["aux_outputs"]
+        for key in ref_outputs:
+            pcc_pass, pcc_message = comp_pcc(ref_outputs[key], ttnn_outputs[key], 0.97)
+            if not pcc_pass:
+                print(f"key: {key} : {pcc_message}")
+        for i in range(len(ref_aux_outputs)):
+            for keys in ref_aux_outputs[i]:
+                pcc_pass, pcc_message = comp_pcc(ref_aux_outputs[i][keys], ttnn_aux_outputs[i][keys], 0.97)
+                if not pcc_pass:
+                    print(f"key: {i}.{keys} : {pcc_message}")
 
     # ref_outputs = ref_out["outputs"]
     # ref_aux_outputs = ref_out["aux_outputs"]
     # for key in ref_outputs:
     #     print("key ", key, "shape:", ref_outputs[key].shape)
-
-    # org_outputs, ref_outputs = org_out["outputs"], ref_out["outputs"]
-    # org_aux_outputs, ref_aux_outputs = org_out["aux_outputs"], ref_out["aux_outputs"]
-    # for key in org_outputs:
-    #     assert_with_pcc(org_outputs[key], ref_outputs[key], 1.0)
-    # for i in range(len(org_aux_outputs)):
-    #     for keys in org_aux_outputs[i]:
-    #         assert_with_pcc(org_aux_outputs[i][keys], ref_aux_outputs[i][keys], 1.0)

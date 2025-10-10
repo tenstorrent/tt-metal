@@ -17,7 +17,7 @@ class TtnnConv1D:
         fp32_accum=False,
         packer_l1_acc=False,
         activation=None,
-        deallocate_activation=True,
+        deallocate_activation=False,
         math_fidelity=ttnn.MathFidelity.LoFi,
     ):
         self.conv = conv
