@@ -5,6 +5,7 @@
 import torch
 import ttnn
 import pytest
+import torch.nn as nn
 from models.experimental.oft.reference.resnet import BasicBlock
 from models.experimental.oft.tt.tt_resnet import TTBasicBlock
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -14,37 +15,37 @@ from models.experimental.oft.tt.model_preprocessing import create_OFT_model_para
 from tests.ttnn.unit_tests.test_bh_20_cores_sharding import skip_if_not_blackhole_20_cores
 from loguru import logger
 
+from models.experimental.oft.tt.model_configs import ModelOptimizations
+
 
 @pytest.mark.parametrize(
     "n, in_ch, out_ch, h, w, stride, sharding, is_sliced",
     [(1, 256, 256, 159, 159, 1, "HS", True)],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 8 * 1024}], indirect=True)
-def test_tt_topdownblock_with_8_basicblocks(device, n, in_ch, out_ch, h, w, stride, sharding, is_sliced):
+def test_tt_topdown_network(device, n, in_ch, out_ch, h, w, stride, sharding, is_sliced):
     skip_if_not_blackhole_20_cores(device)
     device.disable_and_clear_program_cache()  # test hangs without this line on P150
     torch.manual_seed(42)
+
     input_tensor = torch.randn(n, in_ch, h, w)
-    # Create 8 BasicBlock modules from oft
-    blocks = []
-    params_list = []
-    for i in range(8):
-        block = BasicBlock(inplanes=in_ch, planes=out_ch, stride=stride)
-        blocks.append(block)
-        params = create_OFT_model_parameters_resnet(block, input_tensor, device)
-        params_list.append(params)
-    # Reference output using PyTorch blocks sequentially
-    out_ref = input_tensor
-    for block in blocks:
-        out_ref = block(out_ref)
-    # Create 8 TTBasicBlock modules
+
+    # Create a sequence of 8 BasicBlocks to simulate a topdown network
+    torch_model = nn.Sequential(*[BasicBlock(inplanes=in_ch, planes=out_ch) for _ in range(8)])
+    state_dict = create_OFT_model_parameters_resnet(torch_model, input_tensor, device)
+
+    # Get reference output
+    out_ref = torch_model(input_tensor)
+
+    # Apply model optimizations
+    model_opt = ModelOptimizations()
+    model_opt.apply(state_dict.layer_args, "topdown")
+
     tt_blocks = [
         TTBasicBlock(
             device,
-            params_list[i],
-            params_list[i].conv_args,
-            inplanes=in_ch,
-            planes=out_ch,
+            state_dict[i],
+            state_dict.layer_args[i],
             stride=stride,
             is_sliced=is_sliced,
         )

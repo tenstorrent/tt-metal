@@ -5,7 +5,7 @@
 import ttnn
 import torch
 import torch.nn as nn
-from ttnn.model_preprocessing import preprocess_model_parameters, infer_ttnn_module_args
+from ttnn.model_preprocessing import preprocess_model_parameters, infer_ttnn_module_args, make_parameter_dict
 
 from models.experimental.oft.reference.oftnet import OftNet
 
@@ -47,9 +47,11 @@ def create_OFT_model_parameters_resnet(model, input_tensor: torch.Tensor, device
         custom_preprocessor=custom_preprocessor,
         device=None,
     )
-    parameters.conv_args = {}
-    parameters.conv_args = infer_ttnn_module_args(model=model, run_model=lambda model: model(input_tensor), device=None)
-    parameters["model_args"] = model
+    parameters.layer_args = make_parameter_dict({})
+    parameters.layer_args = infer_ttnn_module_args(
+        model=model, run_model=lambda model: model(input_tensor), device=None
+    )
+    parameters.model = model
 
     return parameters
 

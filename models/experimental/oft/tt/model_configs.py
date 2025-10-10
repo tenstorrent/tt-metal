@@ -2,10 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import inspect
 import ttnn
 
 
-class ModelOptimisations:
+class ModelOptimizations:
     def __init__(
         self,
         conv_act_dtype=ttnn.bfloat16,
@@ -30,7 +31,7 @@ class ModelOptimisations:
         )
 
         # COMPUTE KERNEL CONFIGURATION
-        self.compute_configs["DEFAULT_CONV_COMPUTE_CONFIG"] = ttnn.BlackholeComputeKernelConfig(
+        self.compute_configs["DEFAULT_CONV_COMPUTE_CONFIG"] = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,  # Should be LoFi on N1
             math_approx_mode=False,
             fp32_dest_acc_en=True,
@@ -38,10 +39,10 @@ class ModelOptimisations:
         )
 
         # MM COMPUTE KERNEL CONFIGURATION
-        self.compute_configs["DEFAULT_MM_COMPUTE_CONFIG"] = ttnn.BlackholeComputeKernelConfig(
+        self.compute_configs["DEFAULT_MM_COMPUTE_CONFIG"] = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,  # Should be LoFi on N1
             math_approx_mode=False,
-            fp32_dest_acc_en=False,
+            fp32_dest_acc_en=True,
             packer_l1_acc=False,
         )
 
@@ -137,8 +138,8 @@ class ModelOptimisations:
         if conv_path == "head":
             return self.conv_configs["DEFAULT"]
 
-        # Default fallback
-        return self.conv_configs["DEFAULT"]
+        # not a conv
+        return None
 
     def get_matmul_config(self, path):
         if path is None:
@@ -152,13 +153,77 @@ class ModelOptimisations:
         if path == "oft32.conv3d":
             return self.compute_configs["DEFAULT_MM_COMPUTE_CONFIG"]
 
-        # Default fallback
-        return self.compute_configs["DEFAULT_MM_COMPUTE_CONFIG"]
+        # not a matmul
+        return None
 
-    def get_conv_compute_config(self, module_path):
-        # Return default compute config for all convolution paths
+    def get_compute_config(self, module_path):
+        # Return default compute config for all paths
         return self.compute_configs["DEFAULT_CONV_COMPUTE_CONFIG"]
 
-    def get_mm_compute_config(self, module_path):
-        # Return default compute config for all matmul/linear paths
-        return self.compute_configs["DEFAULT_MM_COMPUTE_CONFIG"]
+    def apply(self, layer_args, model_prefix=None):
+        """Apply optimizations to the provided layer_args dictionary in place"""
+
+        def walk_layer_args(layer_args, prefix=""):
+            """Recursively walk through state dictionary and identify dictionaries containing leaf nodes"""
+            all_conv_layers = {}
+            all_mm_layers = {}
+
+            for key, value in layer_args.items():
+                current_path = f"{prefix}.{key}" if prefix else key
+
+                if isinstance(value, dict):
+                    # Check if this dictionary contains any non-dict values (leaf nodes))
+                    has_leaf_nodes = any(not isinstance(v, dict) for v in value.values())
+
+                    if has_leaf_nodes:
+                        # Check if any of the leaf nodes are conv layers
+                        if self._is_conv_layer(current_path):
+                            all_conv_layers[current_path] = value
+                        elif self._is_mm_layer(current_path):
+                            all_mm_layers[current_path] = value
+
+                    # Continue recursion for all dictionaries
+                    conv_layers_rec, mm_layers_rec = walk_layer_args(value, current_path)
+                    all_conv_layers.update(conv_layers_rec)
+                    all_mm_layers.update(mm_layers_rec)
+
+            return all_conv_layers, all_mm_layers
+
+        # Walk through the state dictionary
+        conv_layers, matmul_layers = walk_layer_args(layer_args, prefix=model_prefix)
+        # No need to remove duplicates as dictionaries automatically handle unique keys
+
+        # Print convolution settings for each layer
+        print("=" * 80)
+        print("CONVOLUTION LAYER SETTINGS")
+        print("=" * 80)
+
+        for path, args in conv_layers.items():
+            print(f"\nLayer: {path}")
+
+            # Get the convolution configuration for this layer
+            conv_config = self.get_conv_config(path)
+            assert conv_config is not None, f"Conv config not found for layer {path}"
+
+            for name, value in inspect.getmembers(conv_config):
+                if not name.startswith("__") and not inspect.ismethod(value):
+                    args[f"{name}"] = value
+
+            compute_config = self.get_compute_config(path)
+            assert compute_config is not None, f"Compute config not found for layer {path}"
+
+            for name, value in inspect.getmembers(compute_config):
+                if not name.startswith("__") and not inspect.ismethod(value):
+                    args[f"{name}"] = value
+
+    def _is_conv_layer(self, path):
+        """Check if a parameter path belongs to a convolution layer"""
+        if self.get_conv_config(path) is not None:
+            return True
+        return False
+
+    def _is_mm_layer(self, path):
+        """Check if a parameter path belongs to a matmul layer"""
+        if self.get_matmul_config(path) is not None:
+            return True
+        return False

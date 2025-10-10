@@ -21,36 +21,65 @@ except ModuleNotFoundError:
 class TTBasicBlock:
     expansion = 1
 
-    def __init__(self, device, parameters, conv_pt, inplanes, planes, stride=1, scale=1, is_sliced=False):
+    def __init__(self, device, state_dict, layer_args, stride=1, scale=1, is_sliced=False):
         self.is_sliced = is_sliced
-        logger.debug(f"TTBasicBlock: {inplanes=}, {planes=}, {stride=}, {is_sliced=}")
+        # logger.debug(f"TTBasicBlock: {inplanes=}, {planes=}, {stride=}, {is_sliced=}")
         self.conv1 = Conv(
-            parameters.conv1, conv_pt.conv1, stride=stride, output_layout=ttnn.ROW_MAJOR_LAYOUT, is_sliced=is_sliced
+            state_dict.conv1, layer_args.conv1, stride=stride, output_layout=ttnn.ROW_MAJOR_LAYOUT, is_sliced=is_sliced
         )
         if not is_sliced:
-            self.bn1 = GroupNorm(parameters.bn1, num_groups=16, channels=planes, eps=1e-5, dtype=ttnn.bfloat16)
+            self.bn1 = GroupNorm(
+                state_dict.bn1,
+                num_groups=layer_args.bn1.num_groups,
+                channels=layer_args.bn1.cha,
+                eps=layer_args.bn1.eps,
+                dtype=ttnn.bfloat16,
+            )
         else:
-            self.bn1 = GroupNormDRAM(parameters.bn1, num_groups=16, channels=planes, eps=1e-5, dtype=ttnn.bfloat16)
-        self.conv2 = Conv(parameters.conv2, conv_pt.conv2, output_layout=ttnn.ROW_MAJOR_LAYOUT, is_sliced=is_sliced)
+            self.bn1 = GroupNormDRAM(
+                state_dict.bn1,
+                num_groups=layer_args.bn1.num_groups,
+                channels=layer_args.bn1.num_channels,
+                eps=layer_args.bn1.eps,
+                dtype=ttnn.bfloat16,
+            )
+        self.conv2 = Conv(state_dict.conv2, layer_args.conv2, output_layout=ttnn.ROW_MAJOR_LAYOUT, is_sliced=is_sliced)
         if not is_sliced:
-            self.bn2 = GroupNorm(parameters.bn2, num_groups=16, channels=planes, eps=1e-5, dtype=ttnn.bfloat16)
+            self.bn2 = GroupNorm(
+                state_dict.bn2,
+                num_groups=layer_args.bn2.num_groups,
+                channels=layer_args.bn2.num_channels,
+                eps=layer_args.bn2.eps,
+                dtype=ttnn.bfloat16,
+            )
         else:
-            self.bn2 = GroupNormDRAM(parameters.bn2, num_groups=16, channels=planes, eps=1e-5, dtype=ttnn.bfloat16)
-        self.downsample = None
-        if not is_sliced:
-            if stride != 1 or inplanes != planes:
-                self.downsample = True
-                self.downsample_conv = Conv(
-                    parameters.downsample[0],
-                    conv_pt.downsample[0],
-                    stride=stride,
-                    padding=0,
-                    output_layout=ttnn.ROW_MAJOR_LAYOUT,
-                    is_sliced=is_sliced,
-                )
-                self.downsample_bn = GroupNorm(
-                    parameters.downsample[1], num_groups=16, channels=planes, eps=1e-5, dtype=ttnn.bfloat8_b
-                )
+            self.bn2 = GroupNormDRAM(
+                state_dict.bn2,
+                num_groups=layer_args.bn2.num_groups,
+                channels=layer_args.bn2.num_channels,
+                eps=layer_args.bn2.eps,
+                dtype=ttnn.bfloat16,
+            )
+
+        if "downsample" in state_dict.keys():
+            self.downsample = True
+            self.downsample_conv = Conv(
+                state_dict.downsample[0],
+                layer_args.downsample[0],
+                stride=layer_args.downsample[0].stride,
+                padding=0,
+                output_layout=ttnn.ROW_MAJOR_LAYOUT,
+                is_sliced=is_sliced,
+            )
+            self.downsample_bn = GroupNorm(
+                state_dict.downsample_bn,
+                num_groups=layer_args.downsample_bn.num_groups,
+                channels=layer_args.downsample_bn.num_channels,
+                eps=layer_args.downsample_bn.eps,
+                dtype=ttnn.bfloat8_b,
+            )
+        else:
+            self.downsample = None
 
     def forward(self, device, x, gn_shard="HS", num_splits=1):
         if use_signpost:
