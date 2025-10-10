@@ -73,8 +73,5 @@ def test_ttnn_generic_mlp(
     ttnn_out = ttnn_model(ttnn_x)
     print("outputs are", ttnn_out.shape, torch_out.shape)
     ttnn_out = ttnn.to_torch(ttnn_out)
-    if ttnn_out.shape[-1] == 12:
-        ttnn_out = ttnn_out.reshape(1, 8, 128, 12).permute(0, 1, 3, 2).squeeze(0)
-    else:
-        ttnn_out = ttnn_out.squeeze(dim=0).permute(0, 2, 1)
+    ttnn_out = ttnn_out.squeeze(dim=0).permute(0, 2, 1)
     print(f"{assert_with_pcc(torch_out, ttnn_out, 0.999)}")

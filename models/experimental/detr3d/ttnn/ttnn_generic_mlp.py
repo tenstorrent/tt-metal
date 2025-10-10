@@ -33,9 +33,6 @@ class TttnnGenericMLP:
         print("parameters is", parameters)
         self.tt_layers = []
         for i, layer in enumerate(module.layers):
-            # if isinstance(layer, torch.nn.Conv1d):
-            #     conv1d_layer = TtnnConv1D(layer, parameters.layers[f"{i}"], device, activation=activation)
-            #     self.tt_layers.append(conv1d_layer)
             if isinstance(layer, torch.nn.Conv1d):
                 conv1d_layer = TtnnConv1D(layer, parameters.layers[i], device)
                 self.tt_layers.append(conv1d_layer)
