@@ -438,9 +438,9 @@ class ModelArgs:
                 self.CACHE_PATH = os.path.join(LLAMA_DIR, self.device_name)
             self.model_name = os.path.basename(LLAMA_DIR.strip("/"))  # May be overridden by config
         elif HF_MODEL:
-            self.CKPT_DIR = os.getenv("HF_MODEL")
+            self.CKPT_DIR = HF_MODEL
+            self.TOKENIZER_PATH = HF_MODEL
 
-            self.TOKENIZER_PATH = self.CKPT_DIR
             if not self.CACHE_PATH:
                 self.CACHE_PATH = os.path.join("model_cache", HF_MODEL, self.device_name)
             else:  # For HF models, always append the device name (e.g. N150/N300/T3K/TG) to the cache path
