@@ -227,10 +227,12 @@ def create_tt_model(
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
             {
-                # "temperature": list(np.full(32, 0.6)),
+                # CONFIRMED: top_p non-uniform / large value is the problem
+                "temperature": list(np.full(32, 0.1)),
                 # "top_p": list(np.full(32, 0.9)),
-                "temperature": list(np.linspace(0.0, 1.0, 32)),
-                "top_p": list(np.linspace(0.08, 1.0, 32)),
+                # "top_k": list(np.full(32, 32)),
+                # "temperature": list(np.linspace(0.0, 1.0, 32)),
+                "top_p": list(np.linspace(0.08, 0.99, 32)),
                 "top_k": list(np.linspace(1, 32, 32).astype(int)),
             },  # sampling_params (non-uniform)
             False,  # stop_at_eos
