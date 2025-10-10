@@ -31,28 +31,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        test-group:
-          - name: LLMBox Demo tests
-            runner-label: BH-LLMBox
-            extra-tag: pipeline-perf
-            num_devices: 4
-          - name: DeskBox Demo tests
-            runner-label: BH-DeskBox
-            extra-tag: pipeline-perf
-            num_devices: 2
-          - name: LoudBox Demo tests
-            runner-label: BH-LoudBox
-            extra-tag: pipeline-perf
-            num_devices: 8
-          - name: P300 Demo tests
-            runner-label: P300-viommu
-            extra-tag: pipeline-yyz2-lfc
-            num_devices: 2
+        iteration: ["0"]
+        # iteration: ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19", "20", "21", "22", "23", "24", "25", "26", "27", "28", "29", "30", "31", "32", "33", "34", "35", "36", "37", "38", "39", "40", "41", "42", "43", "44", "45", "46", "47", "48", "49"]
     with:
-      runner-label: ${{ matrix.test-group.runner-label }}
+      runner-label: P300-viommu
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      extra-tag: ${{ matrix.test-group.extra-tag }}
-      num_devices: ${{ matrix.test-group.num_devices }}
+      extra-tag: pipeline-yyz2-lfc
+      num_devices: 2
       regenerate-ttnn-cache: ${{ inputs.regenerate-ttnn-cache || false  }}
+      iteration: ${{ matrix.iteration }}
