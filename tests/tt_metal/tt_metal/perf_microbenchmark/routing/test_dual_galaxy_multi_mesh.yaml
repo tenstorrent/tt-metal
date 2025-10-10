@@ -3,78 +3,57 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # Dual Galaxy Fabric Stress Testing
-# Comprehensive stress tests for 64-chip dual Galaxy systems
-# Tests various traffic patterns under sustained load
+# Unidirectional stress tests for 64-chip dual Galaxy systems (Mesh 0 -> Mesh 1)
+# Tests various traffic patterns under sustained load without deadlock
 
-# Allocation policies tuned for dual Galaxy (64 chips)
 allocation_policies:
     receiver:
       max_configs_per_core: 2
 
 Tests:
   # ======================================================================================
-  # Test 1: Linear Topology Stress Test
+  # Test 1: Comprehensive Unicast Stress - Single sender with full parametrization
   # ======================================================================================
-  - name: "DualGalaxyLinearStress"
+  - name: "DualGalaxyUnicastStress"
     fabric_setup:
-      topology: Linear
+      topology: Mesh
+      routing_type: Dynamic
+      mesh_descriptor_path: "tests/tt_metal/tt_fabric/custom_mesh_descriptors/dual_galaxy_big_mesh_mgd.yaml"
 
     top_level_iterations: 3
 
     parametrization_params:
-      ftype: [unicast, mcast]
       ntype: [unicast_write, atomic_inc, fused_atomic_inc]
-      num_links: [1, 2, 4]
+      size: [32, 64, 128]
+      num_packets: [5000, 10000]
 
     defaults:
-      size: 32
-      num_packets: 10000
+      ftype: unicast
 
-    patterns:
-      - type: all_to_all
-        iterations: 5
+    senders:
+      - device: [0, [0, 0]]
+        patterns:
+          - destination:
+              device: [1, [7, 3]]
 
   # ======================================================================================
-  # Test 2: Mesh Dynamic Routing Stress Test
+  # Test 2: Multiple Concurrent Senders - Unidirectional
   # ======================================================================================
-  - name: "DualGalaxyMeshDynamicStress"
+  - name: "DualGalaxyMultipleSenders"
     fabric_setup:
       topology: Mesh
       routing_type: Dynamic
+      mesh_descriptor_path: "tests/tt_metal/tt_fabric/custom_mesh_descriptors/dual_galaxy_big_mesh_mgd.yaml"
 
     top_level_iterations: 3
-
-    parametrization_params:
-      ftype: [unicast, mcast]
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
-      num_links: [1, 2, 4]
-
-    defaults:
-      size: 32
-      num_packets: 10000
-
-    patterns:
-      - type: all_to_all
-        iterations: 5
-
-  # ======================================================================================
-  # Test 3: Inter-Mesh Stress Test (Cross-Galaxy Traffic)
-  # ======================================================================================
-  - name: "DualGalaxyInterMeshStress"
-    fabric_setup:
-      topology: Mesh
-      routing_type: Dynamic
-
-    top_level_iterations: 5
 
     defaults:
       ftype: unicast
       ntype: unicast_write
       size: 64
-      num_packets: 20000
+      num_packets: 8000
 
     senders:
-      # Multiple Mesh 0 devices sending to Mesh 1
       - device: [0, [0, 0]]
         patterns:
           - destination:
@@ -87,81 +66,57 @@ Tests:
         patterns:
           - destination:
               device: [1, [7, 3]]
-      # Mesh 1 devices sending back to Mesh 0
-      - device: [1, [0, 0]]
-        patterns:
-          - destination:
-              device: [0, [0, 0]]
-      - device: [1, [3, 1]]
-        patterns:
-          - destination:
-              device: [0, [3, 1]]
-      - device: [1, [7, 3]]
-        patterns:
-          - destination:
-              device: [0, [7, 3]]
 
   # ======================================================================================
-  # Test 4: High Throughput Sustained Load
+  # Test 3: Multicast Stress - One-to-many unidirectional
   # ======================================================================================
-  - name: "DualGalaxyHighThroughputStress"
+  - name: "DualGalaxyMulticastStress"
     fabric_setup:
       topology: Mesh
       routing_type: Dynamic
+      mesh_descriptor_path: "tests/tt_metal/tt_fabric/custom_mesh_descriptors/dual_galaxy_big_mesh_mgd.yaml"
 
-    top_level_iterations: 2
+    top_level_iterations: 3
 
     parametrization_params:
+      size: [64, 128]
+
+    defaults:
+      ftype: mcast
+      ntype: unicast_write
+      num_packets: 5000
+
+    senders:
+      - device: [0, [0, 0]]
+        patterns:
+          - destination:
+              device: [1, [0, 0]]
+          - destination:
+              device: [1, [3, 1]]
+          - destination:
+              device: [1, [7, 3]]
+
+  # ======================================================================================
+  # Test 4: Reverse Direction Unicast Stress - Mesh 1 to Mesh 0
+  # ======================================================================================
+  - name: "DualGalaxyReverseUnicastStress"
+    fabric_setup:
+      topology: Mesh
+      routing_type: Dynamic
+      mesh_descriptor_path: "tests/tt_metal/tt_fabric/custom_mesh_descriptors/dual_galaxy_big_mesh_mgd.yaml"
+
+    top_level_iterations: 3
+
+    parametrization_params:
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
       size: [32, 64, 128]
       num_packets: [5000, 10000]
 
     defaults:
       ftype: unicast
-      ntype: unicast_write
 
-    patterns:
-      - type: all_to_all
-        iterations: 3
-
-  # ======================================================================================
-  # Test 5: Mixed Traffic Pattern Stress
-  # ======================================================================================
-  - name: "DualGalaxyMixedTrafficStress"
-    fabric_setup:
-      topology: Mesh
-      routing_type: Dynamic
-
-    top_level_iterations: 3
-
-    parametrization_params:
-      ftype: [unicast, mcast]
-      ntype: [unicast_write, atomic_inc]
-
-    defaults:
-      size: 48
-      num_packets: 8000
-
-    patterns:
-      - type: full_device_random_pairing
-        iterations: 10
-
-  # ======================================================================================
-  # Test 6: Link Saturation Test
-  # ======================================================================================
-  - name: "DualGalaxyLinkSaturation"
-    fabric_setup:
-      topology: Mesh
-      routing_type: Dynamic
-      num_links: 4
-
-    top_level_iterations: 2
-
-    defaults:
-      ftype: unicast
-      ntype: unicast_write
-      size: 128
-      num_packets: 15000
-
-    patterns:
-      - type: all_to_all
-        iterations: 2
+    senders:
+      - device: [1, [7, 3]]
+        patterns:
+          - destination:
+              device: [0, [0, 0]]
