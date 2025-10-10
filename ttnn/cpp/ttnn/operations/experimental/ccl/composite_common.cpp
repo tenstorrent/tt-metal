@@ -236,9 +236,9 @@ bool use_composite_all_gather(
     }
 
     // Use composite if tiled and padded on the gather dim
-    bool is_tiled_and_padded_on_gather_dim =
-        input_tensor.layout() == ttnn::Layout::TILE && ((gather_dim == 2 && input_shape[2] % tile_height != 0) ||
-                                                        (gather_dim == 3 && input_shape[3] % tile_width != 0));
+    bool is_tiled_and_padded_on_gather_dim = input_tensor.layout() == ttnn::Layout::TILE &&
+                                             ((gather_dim == rank - 2 && input_shape[-2] % tile_height != 0) ||
+                                              (gather_dim == rank - 1 && input_shape[-1] % tile_width != 0));
     return is_tiled_and_padded_on_gather_dim;
 }
 

@@ -330,6 +330,13 @@ OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>, std
                 TT_THROW("Unsupported binary op for FPU {}", binary_op_type);
             }
             break;
+        // sqrt(a^2 + b^2)
+        case BinaryOpType::HYPOT:
+            process_lhs = unary::UnaryOpType::SQUARE;
+            process_rhs = unary::UnaryOpType::SQUARE;
+            binary_op = EnumT::ADD;
+            postprocess = unary::UnaryOpType::SQRT;
+            break;
         default: TT_THROW("Unsupported binary op {}", binary_op_type);
     }
 }
