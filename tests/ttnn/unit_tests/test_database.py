@@ -238,9 +238,9 @@ def test_error_details_saved(device):
 
             # Calculate dimensions for a square tensor with this many elements
             # Ensure dimensions are multiples of 32 for TILE_LAYOUT compatibility
-            side_length = int((elements_needed ** 0.5))
+            side_length = int((elements_needed**0.5))
             side_length = ((side_length + 31) // 32) * 32  # Round up to nearest multiple of 32
-            
+
             # Try to create a tensor that should definitely exceed memory limits
             huge_tensor = ttnn.from_torch(
                 torch.rand((side_length, side_length), dtype=torch.bfloat16),
