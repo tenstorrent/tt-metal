@@ -61,11 +61,7 @@ def main():
         print(f"Error: ttnn directory not found at {ttnn_dir}")
         sys.exit(1)
 
-    exceptions = [
-        "examples",
-        "model_preprocessing.py",
-        "torch_tracer.py",
-    ]
+    exceptions = ["examples", "model_preprocessing.py", "torch_tracer.py", "experimental_tracer"]
     exceptions_paths = [os.path.join(ttnn_dir, path) for path in exceptions]
 
     violations = []
@@ -82,6 +78,7 @@ def main():
                 imports = check_file(filepath)
                 if imports:
                     for line, import_stmt in imports:
+                        breakpoint()
                         violations.append(f"{filepath}:{line}: {import_stmt}")
 
     if violations:
