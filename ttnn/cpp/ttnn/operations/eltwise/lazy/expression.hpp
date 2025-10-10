@@ -62,29 +62,29 @@ public:
 
     // getters for ExpressionView
 
-    std::optional<Tensor> tensor() const
+    [[nodiscard]] std::optional<Tensor> tensor() const
         requires std::same_as<BasicExpressionView, ExpressionView>;
-    std::optional<FunctionView> function() const noexcept
+    [[nodiscard]] std::optional<FunctionView> function() const noexcept
         requires std::same_as<BasicExpressionView, ExpressionView>;
-    Value value() const
+    [[nodiscard]] Value value() const
         requires std::same_as<BasicExpressionView, ExpressionView>;
 
     // getters for FunctionView
 
-    Operation operation() const noexcept
+    [[nodiscard]] Operation operation() const noexcept
         requires std::same_as<BasicExpressionView, FunctionView>;
-    Arguments<ExpressionView> arguments() const noexcept
+    [[nodiscard]] Arguments<ExpressionView> arguments() const noexcept
         requires std::same_as<BasicExpressionView, FunctionView>;
-    ParamsView params() const noexcept
+    [[nodiscard]] ParamsView params() const noexcept
         requires std::same_as<BasicExpressionView, FunctionView>;
 
     // getters for both
 
-    DataType dtype() const noexcept;
-    const Shape& logical_shape() const noexcept;
-    tt::CBIndex index() const noexcept;
-    std::size_t inputs() const noexcept;
-    std::size_t circular_buffers() const noexcept;
+    [[nodiscard]] DataType dtype() const noexcept;
+    [[nodiscard]] const Shape& logical_shape() const noexcept;
+    [[nodiscard]] tt::CBIndex index() const noexcept;
+    [[nodiscard]] std::size_t inputs() const noexcept;
+    [[nodiscard]] std::size_t circular_buffers() const noexcept;
 };
 
 // traverses in post-order
@@ -127,17 +127,17 @@ class BasicExpression {
 
 public:
     // Function must not be constructible from Tensor
-    static std::optional<BasicExpression> from(const Tensor& tensor)
+    [[nodiscard]] static std::optional<BasicExpression> from(const Tensor& tensor)
         requires std::same_as<BasicExpression, Expression>;
 
-    static std::optional<BasicExpression> from(Unary operation, ExpressionView first, Params params)
+    [[nodiscard]] static std::optional<BasicExpression> from(Unary operation, ExpressionView first, Params params)
         requires std::same_as<BasicExpression, Function>;
 
-    static std::optional<BasicExpression> from(
+    [[nodiscard]] static std::optional<BasicExpression> from(
         Binary operation, ExpressionView first, ExpressionView second, Params params)
         requires std::same_as<BasicExpression, Function>;
 
-    static std::optional<BasicExpression> from(
+    [[nodiscard]] static std::optional<BasicExpression> from(
         Ternary operation, ExpressionView first, ExpressionView second, ExpressionView third, Params params)
         requires std::same_as<BasicExpression, Function>;
 
@@ -152,29 +152,29 @@ public:
 
     // getters for Expression
 
-    std::optional<Tensor> tensor() const
+    [[nodiscard]] std::optional<Tensor> tensor() const
         requires std::same_as<BasicExpression, Expression>;
-    std::optional<FunctionView> function() const noexcept
+    [[nodiscard]] std::optional<FunctionView> function() const noexcept
         requires std::same_as<BasicExpression, Expression>;
-    Value value() const
+    [[nodiscard]] Value value() const
         requires std::same_as<BasicExpression, Expression>;
 
     // getters for Function
 
-    Operation operation() const noexcept
+    [[nodiscard]] Operation operation() const noexcept
         requires std::same_as<BasicExpression, Function>;
-    Arguments<ExpressionView> arguments() const noexcept
+    [[nodiscard]] Arguments<ExpressionView> arguments() const noexcept
         requires std::same_as<BasicExpression, Function>;
-    ParamsView params() const noexcept
+    [[nodiscard]] ParamsView params() const noexcept
         requires std::same_as<BasicExpression, Function>;
 
     // getters for both
 
-    DataType dtype() const noexcept;
-    const Shape& logical_shape() const noexcept;
-    tt::CBIndex index() const noexcept;
-    std::size_t inputs() const noexcept;
-    std::size_t circular_buffers() const noexcept;
+    [[nodiscard]] DataType dtype() const noexcept;
+    [[nodiscard]] const Shape& logical_shape() const noexcept;
+    [[nodiscard]] tt::CBIndex index() const noexcept;
+    [[nodiscard]] std::size_t inputs() const noexcept;
+    [[nodiscard]] std::size_t circular_buffers() const noexcept;
 };
 
 std::optional<Expression> defer(const Tensor& tensor);

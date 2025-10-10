@@ -7,11 +7,11 @@
 
 namespace views {
 
-template <size_t... Is, typename... Compute>
-constexpr auto transform(Compute... compute) {
+template <size_t... Is, typename Compute>
+constexpr auto transform(Compute compute) {
     return [=](auto... args) {
         constexpr uint32_t array[]{args...};
-        (..., compute(ct<array[Is]>...));
+        compute(ct<array[Is]>...);
     };
 }
 
