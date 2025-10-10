@@ -136,16 +136,7 @@ class MLA2D(MLA1D):
                 ccl,
                 None if cache is None else cache.reshape(mesh_device.shape[0], -1, *cache.shape[1:]),
             ),
-            "seq_ag_prefill": {
-                "multi_device_global_semaphore": ccl.get_gather_sem(axis=0),
-                "barrier_semaphore": ccl.get_barrier_sem(axis=0),
-                "num_links": ccl.get_max_links(axis=0),
-            },
-            "seq_rs_prefill": {
-                "multi_device_global_semaphore": ccl.get_reduce_scatter_sem(axis=0),
-                "barrier_semaphore": ccl.get_barrier_sem(axis=0),
-                "num_links": ccl.get_max_links(axis=0),
-            },
+            "ccl": ccl,
         }
 
     @classmethod
@@ -202,7 +193,9 @@ class MLA2D(MLA1D):
 
         scale = 1 / cfg["mla1d"]["mesh_shape"][0]
 
-        x_next = ttnn.experimental.all_gather_async(x, **cfg["seq_ag_prefill"])
+        ccl = cfg["ccl"]
+
+        x_next = ttnn.experimental.all_gather_async(x, **ccl.populate_all_gather_runtime_args(cfg["seq_ag_prefill"]))
         x_out = super().forward_prefill(
             x_next,
             batch_idx=batch_idx % USERS_PER_ROW,
@@ -213,5 +206,10 @@ class MLA2D(MLA1D):
         )
         ttnn.deallocate(x_next)
 
-        x_rs = ttnn.experimental.reduce_scatter_minimal_async(x_out, **cfg["seq_rs_prefill"]) * scale
+        x_rs = (
+            ttnn.experimental.reduce_scatter_minimal_async(
+                x_out, **ccl.populate_reduce_scatter_runtime_args(cfg["seq_rs_prefill"])
+            )
+            * scale
+        )
         return x_rs

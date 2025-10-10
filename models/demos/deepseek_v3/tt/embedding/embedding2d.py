@@ -43,22 +43,18 @@ class Embedding2D(Embedding1D):
         """Create the state for the embedding module."""
         return {
             MESH_DEVICE_STATE_DICT_KEY: mesh_device,
-            "all_gather": {
-                "multi_device_global_semaphore": ccl.get_gather_sem(0),
-                "barrier_semaphore": ccl.get_barrier_sem(0),
-                "num_links": ccl.get_max_links(0),
-            },
-            "reduce_scatter": {
-                "multi_device_global_semaphore": ccl.get_reduce_scatter_sem(0),
-                "barrier_semaphore": ccl.get_barrier_sem(0),
-                "num_links": ccl.get_max_links(0),
-            },
+            "ccl": ccl,
         }
 
     @classmethod
     def _forward(cls, x, cfg):
         scale = cfg["reduce_scatter_scale"]
         x = super()._forward(x, cfg)
-        x = ttnn.experimental.reduce_scatter_minimal_async(x, **cfg["reduce_scatter"])
+
+        ccl = cfg["ccl"]
+
+        x = ttnn.experimental.reduce_scatter_minimal_async(
+            x, **ccl.populate_reduce_scatter_runtime_args(cfg["reduce_scatter"])
+        )
         x = x * scale
         return x
