@@ -26,12 +26,37 @@
 #define FABRIC_2D_DYNAMIC 0
 #endif
 
+#if !defined(TELEMETRY_BUFFER_BASE_ADDRESS)
+#define TELEMETRY_BUFFER_BASE_ADDRESS 0
+#endif
+
+template <uint32_t MAX_PACKET_SIZE>
+class CQRelayTelemetry {
+private:
+    // Count how many times various packets were forwarded
+    volatile uint32_t packetSizes[MAX_PACKET_SIZE]{};
+
+public:
+    CQRelayTelemetry() {
+        for (uint32_t i = 0; i < MAX_PACKET_SIZE; i++) {
+            packetSizes[i] = 0;
+        }
+    }
+
+    void update(uint32_t packet_size) {
+        if (packet_size < MAX_PACKET_SIZE) {
+            packetSizes[packet_size]++;
+        }
+    }
+};
+
 template <uint32_t mux_num_buffers_per_channel, uint32_t mux_channel_buffer_size_bytes, uint32_t header_rb>
 class CQRelayClient {
 private:
     constexpr static ProgrammableCoreType fd_core_type = static_cast<ProgrammableCoreType>(FD_CORE_TYPE);
 
     tt::tt_fabric::WorkerToFabricMuxSender<mux_num_buffers_per_channel> edm;
+    CQRelayTelemetry<mux_channel_buffer_size_bytes>* telemetry_ptr;
 
 public:
     CQRelayClient() = default;
@@ -60,6 +85,9 @@ public:
         uint8_t downstream_cmd_buf>
     FORCE_INLINE void init(uint64_t downstream_noc_addr) {
         WAYPOINT("FMCW");
+
+        telemetry_ptr = new (TELEMETRY_BUFFER_BASE_ADDRESS) CQRelayTelemetry<mux_channel_buffer_size_bytes>();
+
 #if defined(FABRIC_RELAY)
         edm.template init<fd_core_type>(
             true /*connected_to_persistent_fabric*/,
@@ -145,6 +173,7 @@ public:
         tt::tt_fabric::fabric_atomic_inc<mux_num_buffers_per_channel>(edm, packet_header);
 #else
         cq_noc_inline_dw_write_with_state<CQ_NOC_INLINE_nDVB>(dst, val, 0xF, noc_idx);
+        telemetry_ptr->update(sizeof(uint32_t));
         if constexpr (count) {
             noc_nonposted_writes_num_issued[noc_idx]++;
             noc_nonposted_writes_acked[noc_idx]++;
@@ -172,7 +201,7 @@ public:
         }
 
         packet_header->to_noc_unicast_write(tt::tt_fabric::NocUnicastCommandHeader{dst_ptr}, length);
-
+        telemetry_ptr->update(length);
         tt::tt_fabric::fabric_async_write<mux_num_buffers_per_channel>(edm, packet_header, data_ptr, length);
 #else
         if constexpr (wait) {
@@ -246,7 +275,7 @@ public:
 
             tt::tt_fabric::fabric_async_write<mux_num_buffers_per_channel>(
                 edm, packet_header, data_ptr, k_FabricMaxBurstSize);
-
+            telemetry_ptr->update(k_FabricMaxBurstSize);
             dst_ptr += k_FabricMaxBurstSize;
             data_ptr += k_FabricMaxBurstSize;
             length -= k_FabricMaxBurstSize;
@@ -259,8 +288,9 @@ public:
                 n,
                 std::numeric_limits<uint16_t>::max()},
             length);
-
+        telemetry_ptr->update(length);
         tt::tt_fabric::fabric_async_write<mux_num_buffers_per_channel>(edm, packet_header, data_ptr, length);
+        telemetry_ptr->update(length);
 #else
         write_any_len<downstream_noc_idx, wait, downstream_cmd_buf>(data_ptr, dst_ptr, length);
         release_pages<downstream_noc_idx, downstream_noc_xy, downstream_sem_id>(n);
