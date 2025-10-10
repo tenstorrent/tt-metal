@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -25,7 +25,7 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     SavedWeight,
 )
 from models.demos.deepseek_v3.utils.config_helpers import (
-    MAX_BATCH_SIZE,
+    USERS_PER_ROW,
     dequantize,
     even_int_div,
     get_mesh_coords,
@@ -45,20 +45,10 @@ from models.demos.deepseek_v3.utils.run_config import (
 from models.tt_transformers.tt.common import PagedAttentionConfig
 
 
-class MLA(AbstractModule):
+class MLA1D(AbstractModule):
     """
-    Multi-Latent Attention Module for 1D tensor parallelism.
+    Pipeline-Parallel Multi-Latent Attention Module for 1D tensor parallelism.
     """
-
-    HF_TTNN_MAPPING = {
-        "q_a_proj": "wq_a",
-        "q_b_proj": "wq_b",
-        "kv_a_proj_with_mqa": "wkv_a",
-        "kv_b_proj": "wkv_b",
-        "o_proj": "wo",
-        "q_a_layernorm": "q_norm",
-        "kv_a_layernorm": "kv_norm",
-    }
 
     @classmethod
     def convert_weights(
@@ -68,18 +58,6 @@ class MLA(AbstractModule):
         output_path: Path,
         mesh_device: ttnn.Device,
     ) -> WeightConfig:
-        """Convert PyTorch weights to TTNN format for 1D tensor parallelism.
-
-        Args:
-            hf_config: HuggingFace model configuration object
-            state_dicts: Tuple of state dictionaries containing model weights
-            output_path: Path to save converted weights
-            mesh_device: TTNN mesh device
-        Returns:
-            Dict mapping operation names to their TTNN weight file paths
-        """
-        assert cls.is_device_supported(mesh_device)
-
         num_shards = mesh_device.shape[0]
         weight_block_height, weight_block_width = hf_config.quantization_config["weight_block_size"]
 
@@ -106,7 +84,7 @@ class MLA(AbstractModule):
         # Regular non-split weights
         linear_weight_configs = {  # TODO: add dequant
             ttnn_name: {
-                "input_tensor_b": cls._convert_metaweight(
+                "input_tensor_b": cls._convert_weight(
                     output_path / f"{ttnn_name}.input_tensor_b",
                     dequantize(
                         get_state_dicts(state_dicts, f"{hf_name}.weight", shape, dtype=torch.float8_e4m3fn),
@@ -146,19 +124,19 @@ class MLA(AbstractModule):
             **norm_weight_configs,
             **linear_weight_configs,
             "wkv_b1": {
-                "input_tensor_b": cls._convert_metaweight(
+                "input_tensor_b": cls._convert_weight(
                     output_path / "wkv_b1.input_tensor_b", torch_weights_k, (0, -3), mesh_device
                 ),
             },
             "wkv_b2": {
-                "input_tensor_b": cls._convert_metaweight(
+                "input_tensor_b": cls._convert_weight(
                     output_path / "wkv_b2.input_tensor_b", torch_weights_v, (0, -3), mesh_device
                 ),
             },
         }
 
     @classmethod
-    def _convert_metaweight(
+    def _convert_weight(
         cls,
         path: Path,
         torch_metaweight: torch.Tensor,
@@ -174,19 +152,6 @@ class MLA(AbstractModule):
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-
-    @classmethod
-    def is_device_supported(cls, mesh_device: ttnn.Device) -> bool:
-        """
-        We only support 1D tensor parallelism, with TP=8
-
-        Args:
-            mesh_device: The mesh device to check.
-
-        Returns:
-            True if the device is supported, False otherwise.
-        """
-        return tuple(mesh_device.shape)[1] == 8
 
     @classmethod
     def prefill_model_config(
@@ -438,8 +403,7 @@ class MLA(AbstractModule):
         )
 
         # Resharding for q_rope
-        # TODO: Should be dynamic based on batch size?
-        q_rope_shape = (1, MAX_BATCH_SIZE, num_heads_local, qk_rope_head_dim)
+        q_rope_shape = (1, USERS_PER_ROW, num_heads_local, qk_rope_head_dim)
         q_rope_shard_height = nearest_y(q_rope_shape[2], ttnn.TILE_SIZE)
         q_rope_shard_width = q_rope_shape[3]
         q_rope_num_cores = q_rope_shape[1]
@@ -458,9 +422,8 @@ class MLA(AbstractModule):
         )
 
         # Resharding for kv_rope
-        # TODO: Should be dynamic based on batch size?
         # TODO: Split batch when adding DP
-        kv_rope_shape = (1, MAX_BATCH_SIZE, 1, qk_rope_head_dim)
+        kv_rope_shape = (1, USERS_PER_ROW, 1, qk_rope_head_dim)
         kv_rope_shard_height = nearest_y(kv_rope_shape[2], ttnn.TILE_SIZE)
         kv_rope_shard_width = kv_rope_shape[3]
         kv_rope_num_cores = kv_rope_shape[1]
@@ -479,7 +442,7 @@ class MLA(AbstractModule):
         )
 
         # Resharding for kvpe
-        kvpe_shape = (1, even_int_div(MAX_BATCH_SIZE, mesh_shape[1]), 1, kv_lora_rank + qk_rope_head_dim)
+        kvpe_shape = (1, even_int_div(USERS_PER_ROW, mesh_shape[1]), 1, kv_lora_rank + qk_rope_head_dim)
         kvpe_shard_height = nearest_y(kvpe_shape[2], ttnn.TILE_SIZE)
         kvpe_shard_width = kvpe_shape[3]
         kvpe_num_cores = kvpe_shape[1]
@@ -513,9 +476,9 @@ class MLA(AbstractModule):
         )
 
         q_num_cores = num_cores
-        q_num_cores = min(even_int_div(MAX_BATCH_SIZE, mesh_shape[1]) * num_heads, q_num_cores)
+        q_num_cores = min(even_int_div(USERS_PER_ROW, mesh_shape[1]) * num_heads, q_num_cores)
         block_height = nearest_y(
-            (even_int_div(MAX_BATCH_SIZE, mesh_shape[1]) * num_heads) // q_num_cores, ttnn.TILE_SIZE
+            (even_int_div(USERS_PER_ROW, mesh_shape[1]) * num_heads) // q_num_cores, ttnn.TILE_SIZE
         )
         block_width = kv_lora_rank + qk_rope_head_dim
 
@@ -682,7 +645,7 @@ class MLA(AbstractModule):
 
     @classmethod
     def get_valid_paged_config(
-        cls, max_seq_len: int, batch_size: int, dp_factor: int, block_size: int = ttnn.TILE_SIZE
+        cls, max_seq_len: int, batch_size_per_row: int, dp_factor: int, block_size: int = ttnn.TILE_SIZE
     ) -> PagedAttentionConfig:
         """Get a valid paged attention configuration for MLA.
 
@@ -691,7 +654,7 @@ class MLA(AbstractModule):
 
         Args:
             max_seq_len: Maximum sequence length
-            batch_size: Batch size for the model
+            batch_size_per_row: Batch size per row of the model
             block_size: Block size for paged attention (default is TILE_SIZE)
 
         Returns:
@@ -702,7 +665,7 @@ class MLA(AbstractModule):
             block_size % ttnn.TILE_SIZE == 0
         ), f"block_size {block_size} must be a multiple of TILE_SIZE {ttnn.TILE_SIZE}."
 
-        batch_per_shard = even_int_div(batch_size, dp_factor)
+        batch_per_shard = even_int_div(batch_size_per_row, dp_factor)
         max_num_blocks = even_int_div(
             max_seq_len * batch_per_shard, block_size
         )  # Such that each user will have max_seq_len available
@@ -718,7 +681,7 @@ class MLA(AbstractModule):
         paged_config: PagedAttentionConfig,
         mesh_device: ttnn.MeshDevice,
         page_table: torch.Tensor | None = None,
-        batch_size: int = MAX_BATCH_SIZE,
+        batch_size: int = USERS_PER_ROW,
     ) -> ttnn.Tensor:
         """Helper function to allocate the page table for MLA on device.
 
@@ -736,8 +699,6 @@ class MLA(AbstractModule):
         Returns:
             Device-allocated version of the page table representing the page table
         """  # TODO: update docs
-        assert cls.is_device_supported(mesh_device), f"Mesh device shape {mesh_device.shape} must be supported by MLA."
-
         if page_table is None:
             max_num_blocks = paged_config.max_num_blocks
             _, dp_factor = mesh_device.shape
@@ -745,7 +706,6 @@ class MLA(AbstractModule):
 
             page_table = torch.randperm(max_num_blocks, dtype=torch.int32)  # Randperm not necessary, but more rigorous
             page_table = page_table.reshape(batch_per_shard, even_int_div(max_num_blocks, batch_per_shard))
-
         assert page_table.numel() == paged_config.max_num_blocks
 
         return ttnn.from_torch(
@@ -786,49 +746,35 @@ class MLA(AbstractModule):
             mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, 0),
         )
 
-        # CCL states setup (Must be in order of execution)
-        get_rs_params = lambda axis: {
-            "multi_device_global_semaphore": ccl.get_reduce_scatter_sem(axis=axis),
-            "barrier_semaphore": ccl.get_barrier_sem(axis=axis),
-            "num_links": ccl.get_max_links(axis=axis),
-        }
-        get_ag_params = lambda axis: {
-            "multi_device_global_semaphore": ccl.get_gather_sem(axis=axis),
-            "barrier_semaphore": ccl.get_barrier_sem(axis=axis),
-            "num_links": ccl.get_max_links(axis=axis),
-        }
-        ccl_states_prefill = {
-            "wq_a_rs_prefill": get_rs_params(1),
-            "wq_a_ag_prefill": get_ag_params(1),
-            "wkv_a_ag_prefill": get_ag_params(1),
-            "wo_ag_prefill": get_ag_params(1),
-        }
-        ccl_states_decode = {
-            "wq_a_rs_decode": get_rs_params(1),
-            "wq_a_ag_decode": get_ag_params(1),
-            "wq_a2a_ag_decode": get_ag_params(1),
-            "wq_a2a_rs_decode": get_rs_params(1),
-            "wkv_a_ag_decode": get_ag_params(1),
-            "wkv_a_rs_decode": get_rs_params(1),
-            "flash_mla_ag_decode": get_ag_params(1),
-            "flash_mla_rs_decode": get_rs_params(1),
-            "wo_ag_decode": get_ag_params(1),
-        }
-
+        # Store CCL object for runtime semaphore initialization
         return {
             MESH_DEVICE_STATE_DICT_KEY: mesh_device,
             "mesh_shape": mesh_device.shape,
-            "kvpe_cache": tt_cache,
-            **ccl_states_prefill,
-            **ccl_states_decode,
+            "kvpe_cache": cls._convert_cache(tuple(caches), mesh_device),
+            "ccl": ccl,
         }
+
+    @classmethod
+    def _convert_cache(
+        cls,
+        caches: tuple[torch.Tensor, ...],
+        mesh_device: ttnn.MeshDevice,
+    ) -> ttnn.Tensor:
+        return ttnn.as_tensor(
+            torch.concatenate(caches),
+            dtype=ttnn.bfloat8_b,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, 0),
+        )
 
     @classmethod
     def forward_decode(
         cls,
         x: ttnn.Tensor,
         position_idxs: ttnn.Tensor,
-        row_idx: int,
+        row_idx: int | None,
         cfg: RunDecodeConfig,
         rope_tensors: dict,
         page_table: ttnn.Tensor,
@@ -856,14 +802,17 @@ class MLA(AbstractModule):
         v_head_dim = cfg["v_head_dim"]
 
         kvpe_cache = cfg["kvpe_cache"]
+        ccl = cfg["ccl"]
 
         bsz = x.shape[2]
         scale = 1.0 / mla_tp_factor
 
         # wq_a and wq_b
         tt_q = ttnn.linear(x, **cfg["wq_a"])
-        tt_q = ttnn.experimental.reduce_scatter_minimal_async(tt_q, **cfg["wq_a_rs_decode"])
-        tt_q = ttnn.experimental.all_gather_async(tt_q, **cfg["wq_a_ag_decode"])
+        tt_q = ttnn.experimental.reduce_scatter_minimal_async(
+            tt_q, **ccl.populate_reduce_scatter_runtime_args(cfg["wq_a_rs_decode"])
+        )
+        tt_q = ttnn.experimental.all_gather_async(tt_q, **ccl.populate_all_gather_runtime_args(cfg["wq_a_ag_decode"]))
 
         tt_q = RMSNorm.forward_decode(tt_q, cfg["q_norm"])
         tt_q = ttnn.linear(tt_q, **cfg["wq_b"])
@@ -904,10 +853,12 @@ class MLA(AbstractModule):
         # Using the following algorithm: 1. AG on in_dim, 2. Scale by number of devices, 3. RS on out_dim
         tt_q = ttnn.permute(tt_q, (0, 2, 1, 3))  # [1, num_heads_local, bsz_local, kv_lora_rank + qk_rope_head_dim]
         tt_q = ttnn.experimental.all_gather_async(
-            tt_q, **cfg["wq_a2a_ag_decode"]
+            tt_q, **ccl.populate_all_gather_runtime_args(cfg["wq_a2a_ag_decode"])
         )  # [1, num_heads, bsz_local, kv_lora_rank + qk_rope_head_dim]
         tt_q = ttnn.permute(tt_q, (0, 2, 1, 3))  # [1, bsz_local, num_heads, kv_lora_rank + qk_rope_head_dim]
-        tt_q = ttnn.experimental.reduce_scatter_minimal_async(tt_q, **cfg["wq_a2a_rs_decode"])
+        tt_q = ttnn.experimental.reduce_scatter_minimal_async(
+            tt_q, **ccl.populate_reduce_scatter_runtime_args(cfg["wq_a2a_rs_decode"])
+        )
         tt_q = tt_q * scale  # Scale the input tensor
 
         # KVPE Stuff
@@ -915,7 +866,7 @@ class MLA(AbstractModule):
 
         # AG + Reduce b/c sub-tile RS not supported
         tt_kv = ttnn.experimental.all_gather_async(
-            tt_kv, **cfg["wkv_a_ag_decode"]
+            tt_kv, **ccl.populate_all_gather_runtime_args(cfg["wkv_a_ag_decode"])
         )  # [1, num_devices, bsz, kv_lora_rank + qk_rope_head_dim]
         tt_kv = ttnn.experimental.fast_reduce_nc(
             tt_kv, **cfg["wkv_a_r_decode"]
@@ -948,7 +899,9 @@ class MLA(AbstractModule):
         # FIXME: Reduce-Scatter here!! (tt_kvpe)
         tt_kvpe = ttnn.pad(tt_kvpe, [(0, 0), (0, ttnn.TILE_SIZE - 1), (0, 0), (0, 0)], 0)
         tt_kvpe = ttnn.permute(tt_kvpe, (0, 2, 1, 3))  # [1, bsz, ttnn.TILE_SIZE, kv_lora_rank + qk_rope_head_dim]
-        tt_kvpe = ttnn.experimental.reduce_scatter_minimal_async(tt_kvpe, **cfg["wkv_a_rs_decode"])
+        tt_kvpe = ttnn.experimental.reduce_scatter_minimal_async(
+            tt_kvpe, **ccl.populate_reduce_scatter_runtime_args(cfg["wkv_a_rs_decode"])
+        )
         tt_kvpe = tt_kvpe[:, :, :1, :]  # [1, bsz_local, 1, kv_lora_rank + qk_rope_head_dim]
         tt_kvpe = tt_kvpe * scale  # Scale the input tensor
 
@@ -980,11 +933,11 @@ class MLA(AbstractModule):
         # FIXME: All-to-All here!! (attn_out)
         # TODO: add deallocation of intermediate tensors
         attn_out = ttnn.experimental.all_gather_async(
-            attn_out, **cfg["flash_mla_ag_decode"]
+            attn_out, **ccl.populate_all_gather_runtime_args(cfg["flash_mla_ag_decode"])
         )  # [1, bsz, num_heads, kv_lora_rank]
         attn_out = ttnn.permute(attn_out, (0, 2, 1, 3))  # [1, num_heads, bsz, kv_lora_rank]
         attn_out = ttnn.experimental.reduce_scatter_minimal_async(
-            attn_out, **cfg["flash_mla_rs_decode"]
+            attn_out, **ccl.populate_reduce_scatter_runtime_args(cfg["flash_mla_rs_decode"])
         )  # [1, num_heads_local, bsz, kv_lora_rank]
         attn_out = ttnn.permute(attn_out, (0, 2, 1, 3))  # [1, bsz, num_heads_local, kv_lora_rank]
         attn_out = attn_out * scale  # Scale the output tensor
@@ -994,7 +947,9 @@ class MLA(AbstractModule):
         v_out = ttnn.linear(attn_out, **cfg["wkv_b2"])  # [1, num_heads_local, bsz, v_head_dim]
 
         # wo
-        v_out = ttnn.experimental.all_gather_async(v_out, **cfg["wo_ag_decode"])  # [1, num_heads, bsz, v_head_dim]
+        v_out = ttnn.experimental.all_gather_async(
+            v_out, **ccl.populate_all_gather_runtime_args(cfg["wo_ag_decode"])
+        )  # [1, num_heads, bsz, v_head_dim]
         v_out = ttnn.permute(v_out, (0, 2, 1, 3))  # [1, bsz, num_heads, v_head_dim]
 
         # Bug: https://github.com/tenstorrent/tt-metal/issues/29932
@@ -1011,7 +966,7 @@ class MLA(AbstractModule):
         cls,
         x: ttnn.Tensor,
         batch_idx: int,
-        row_idx: int,
+        row_idx: int | None,
         cfg: RunPrefillConfig,
         rope_tensors: dict,
         page_table: ttnn.Tensor,
@@ -1041,14 +996,17 @@ class MLA(AbstractModule):
         v_head_dim = cfg["v_head_dim"]
 
         kvpe_cache = cfg["kvpe_cache"]
+        ccl = cfg["ccl"]
 
         seq_len = x.shape[2]
 
         # wq_a and wq_b
         tt_q = ttnn.linear(x, **cfg["wq_a"])
 
-        tt_q = ttnn.experimental.reduce_scatter_minimal_async(tt_q, **cfg["wq_a_rs_prefill"])
-        tt_q = ttnn.experimental.all_gather_async(tt_q, **cfg["wq_a_ag_prefill"])
+        tt_q = ttnn.experimental.reduce_scatter_minimal_async(
+            tt_q, **ccl.populate_reduce_scatter_runtime_args(cfg["wq_a_rs_prefill"])
+        )
+        tt_q = ttnn.experimental.all_gather_async(tt_q, **ccl.populate_all_gather_runtime_args(cfg["wq_a_ag_prefill"]))
 
         # Bug: https://github.com/tenstorrent/tt-metal/issues/29935
         ttnn.synchronize_device(cfg["mesh_device"])
@@ -1081,7 +1039,7 @@ class MLA(AbstractModule):
         tt_kv = ttnn.linear(x, **cfg["wkv_a"])
 
         tt_kv = ttnn.experimental.all_gather_async(
-            tt_kv, **cfg["wkv_a_ag_prefill"]
+            tt_kv, **ccl.populate_all_gather_runtime_args(cfg["wkv_a_ag_prefill"])
         )  # [1, 1, seq_len / num_devices, kv_lora_rank + qk_rope_head_dim]
         tt_kv = ttnn.experimental.fast_reduce_nc(
             tt_kv, **cfg["wkv_a_r_prefill"]
@@ -1131,7 +1089,9 @@ class MLA(AbstractModule):
 
         # wkv_b2
         v_out = ttnn.linear(attn_out, **cfg["wkv_b2"])  # [1, num_heads_local, seq_len, v_head_dim]
-        v_out = ttnn.experimental.all_gather_async(v_out, **cfg["wo_ag_prefill"])  # [1, num_heads, seq_len, v_head_dim]
+        v_out = ttnn.experimental.all_gather_async(
+            v_out, **ccl.populate_all_gather_runtime_args(cfg["wo_ag_prefill"])
+        )  # [1, num_heads, seq_len, v_head_dim]
 
         # wo
         v_out = ttnn.permute(v_out, (0, 2, 1, 3))  # [1, seq_len, num_heads, v_head_dim]

@@ -149,29 +149,6 @@ void MAIN {
                         in_cb_id_0, in_scalar_cb_id_0, tiles_to_reduce, num_faces_in_input_tile, face_r_dim, 1)));
                 }
             }
-            if constexpr (is_output_tiled) {
-                if (last_c_block) {
-#ifdef ARCH_BLACKHOLE
-                    pack_untilize_dest_init<partial_iter_output_tiles>(
-                        pre_tilize_cb_id, num_out_sticks, num_faces_in_output_tile);
-#else
-                    PACK((llk_pack_untilize_init<
-                          partial_iter_output_tiles,
-                          partial_iter_output_tiles,
-                          false,
-                          false,
-                          TILE_C_DIM>(pre_tilize_cb_id, 1, num_faces_in_output_tile)));
-#endif
-                } else if (first_c_block) {
-#ifdef ARCH_BLACKHOLE
-                    pack_untilize_dest_init<max_tiles_per_iter>(
-                        pre_tilize_cb_id, num_out_sticks, num_faces_in_output_tile);
-#else
-                    PACK((llk_pack_untilize_init<max_tiles_per_iter, max_tiles_per_iter, false, false, TILE_C_DIM>(
-                        pre_tilize_cb_id, 1, num_faces_in_output_tile)));
-#endif
-                }
-            }
             tile_regs_acquire();
             for (uint32_t chunk = 0; chunk < interm_reduction_chunks; chunk++) {
                 cb_wait_front(curr_in_cb_id, 1);
@@ -239,9 +216,15 @@ void MAIN {
                             tensix_sync();
                         }
 
+                        tilize_stick_counter = 0;
                         // init math for reduction again since FPU gets reprogrammed by tilize
                         MATH((llk_math_reduce_init<REDUCE_OP, REDUCE_DIM, DST_ACCUM_MODE, MATH_FIDELITY>()));
-                        tilize_stick_counter = 0;
+#ifdef ARCH_BLACKHOLE
+                        // need this on BH to set swizzle bit before pack untilize dest
+                        MATH((llk_math_hw_configure_disaggregated<true, true>(0, 0)));
+#endif
+                        PACK((llk_pack_untilize_init<max_tiles_per_iter, max_tiles_per_iter, false, false, TILE_C_DIM>(
+                            pre_tilize_cb_id, 1, num_faces_in_output_tile)));
                     }
                 } else {
                     // ROW_MAJOR output: pack directly to output CB
