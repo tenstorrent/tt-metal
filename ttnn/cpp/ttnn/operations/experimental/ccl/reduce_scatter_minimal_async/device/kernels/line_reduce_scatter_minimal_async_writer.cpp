@@ -69,10 +69,6 @@ constexpr uint32_t intermediate_num_pages = batch_num_pages * num_batches;
 constexpr uint32_t intermediate_full_offset = is_forward ? 0 : intermediate_num_pages;
 
 void kernel_main() {
-    if (num_targets_in_direction == 0) {
-        return;
-    }
-
     ///////////////////////////////////////////////////
     // ARGS
     ///////////////////////////////////////////////////
@@ -187,8 +183,10 @@ void kernel_main() {
     auto pkt_scatter_hdr = PacketHeaderPool::allocate_header();
     auto pkt_unicast_hdr = PacketHeaderPool::allocate_header();
     auto pkt_hdr_seminc = PacketHeaderPool::allocate_header();
-    ccl_routing_utils::fabric_set_line_unicast_route(pkt_scatter_hdr, unicast_route_info);
-    ccl_routing_utils::fabric_set_line_unicast_route(pkt_unicast_hdr, unicast_route_info);
+    if (unicast_route_info.distance_in_hops > 0) {
+        ccl_routing_utils::fabric_set_line_unicast_route(pkt_scatter_hdr, unicast_route_info);
+        ccl_routing_utils::fabric_set_line_unicast_route(pkt_unicast_hdr, unicast_route_info);
+    }
 
     uint32_t slice_Wt = input_tensor_Wt / ring_size;
 
@@ -197,7 +195,7 @@ void kernel_main() {
     }
 
     if (use_barrier_sem) {
-        if (num_targets_in_direction) {
+        if (num_targets_in_direction && multicast_route_info.start_distance_in_hops > 0) {
             ccl_routing_utils::fabric_set_line_multicast_route(pkt_hdr_seminc, multicast_route_info);
             fabric_multicast_noc_unicast_atomic_inc_set_state<
                 UnicastAtomicIncUpdateMask::Wrap | UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
@@ -227,6 +225,7 @@ void kernel_main() {
                 tt::tt_fabric::NocUnicastAtomicIncCommandHeader{opposite_direction_barrier_sem_noc_addr_in_pkt, 0, 0});
         }
 
+        // ALWAYS participate in barrier synchronization, even when num_targets_in_direction == 0
         noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), ring_size - 1);
         noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 0);
     }
@@ -235,27 +234,32 @@ void kernel_main() {
     uint64_t out_ready_sem_noc_addr_in_pkt =
         safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem, 0);
 
-    fabric_unicast_noc_scatter_write_set_state<
-        UnicastScatterWriteUpdateMask::ChunkSizes | UnicastScatterWriteUpdateMask::PayloadSize>(
-        pkt_scatter_hdr,
-        static_cast<uint8_t>(unicast_route_info.distance_in_hops),
-        NocUnicastScatterCommandHeader{
-            {0, 0},  // ignore
-            static_cast<uint16_t>(page_size)},
-        page_size * 2);
+    if (unicast_route_info.distance_in_hops > 0) {
+        fabric_unicast_noc_scatter_write_set_state<
+            UnicastScatterWriteUpdateMask::ChunkSizes | UnicastScatterWriteUpdateMask::PayloadSize>(
+            pkt_scatter_hdr,
+            static_cast<uint8_t>(unicast_route_info.distance_in_hops),
+            NocUnicastScatterCommandHeader{
+                {0, 0},  // ignore
+                static_cast<uint16_t>(page_size)},
+            page_size * 2);
 
-    fabric_unicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::PayloadSize>(
-        pkt_unicast_hdr, static_cast<uint8_t>(unicast_route_info.distance_in_hops), nullptr, intermediate_page_size);
+        fabric_unicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::PayloadSize>(
+            pkt_unicast_hdr,
+            static_cast<uint8_t>(unicast_route_info.distance_in_hops),
+            nullptr,
+            intermediate_page_size);
 
-    fabric_unicast_noc_unicast_atomic_inc_set_state<
-        UnicastAtomicIncUpdateMask::Wrap | UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
-        pkt_hdr_seminc,
-        static_cast<uint8_t>(unicast_route_info.distance_in_hops),
-        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-            0,                         // ignore
-            static_cast<uint16_t>(1),  // increment 1
-            static_cast<uint16_t>(0xFFFF)});
-    ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_seminc, unicast_route_info);
+        fabric_unicast_noc_unicast_atomic_inc_set_state<
+            UnicastAtomicIncUpdateMask::Wrap | UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
+            pkt_hdr_seminc,
+            static_cast<uint8_t>(unicast_route_info.distance_in_hops),
+            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+                0,                         // ignore
+                static_cast<uint16_t>(1),  // increment 1
+                static_cast<uint16_t>(0xFFFF)});
+        ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_seminc, unicast_route_info);
+    }
 
     uint32_t chunk_count = 0;
     for (uint32_t b = 0; b < num_batches; b++) {
@@ -296,7 +300,7 @@ void kernel_main() {
                     }
 
                     uint32_t payload_size;
-                    if (num_pages_to_write == 1) {
+                    if (num_pages_to_write == 1 && unicast_route_info.distance_in_hops > 0) {
                         fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
                             mux_connection_handle,
                             pkt_unicast_hdr,
@@ -314,11 +318,13 @@ void kernel_main() {
 
                         auto noc_address1 = tt::tt_fabric::linear::addrgen_detail::get_noc_address(
                             intermediate_addrgen, second_tile_id, 0);
-                        fabric_unicast_noc_scatter_write_with_state<UnicastScatterWriteUpdateMask::DstAddrs>(
-                            mux_connection_handle,
-                            pkt_scatter_hdr,
-                            l1_read_addr,
-                            NocUnicastScatterCommandHeader{{noc_address0, noc_address1}, 0});
+                        if (unicast_route_info.distance_in_hops > 0) {
+                            fabric_unicast_noc_scatter_write_with_state<UnicastScatterWriteUpdateMask::DstAddrs>(
+                                mux_connection_handle,
+                                pkt_scatter_hdr,
+                                l1_read_addr,
+                                NocUnicastScatterCommandHeader{{noc_address0, noc_address1}, 0});
+                        }
                         l1_read_addr += page_size * 2;
                     } else {
                         ASSERT(false);
@@ -329,7 +335,7 @@ void kernel_main() {
                 cb_pop_front(cb_output_id, tile_granularity);
 
                 chunk_count++;
-                if (chunk_count % chunks_per_sync == 0) {
+                if (chunk_count % chunks_per_sync == 0 && unicast_route_info.distance_in_hops > 0) {
                     // 2. unicast output ready semaphore
                     fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
                         mux_connection_handle,
@@ -339,7 +345,7 @@ void kernel_main() {
                         });
                 }
             }
-            if (chunk_count % chunks_per_sync != 0) {
+            if (chunk_count % chunks_per_sync != 0 && unicast_route_info.distance_in_hops > 0) {
                 // 2. unicast output ready semaphore
                 fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
                     mux_connection_handle,

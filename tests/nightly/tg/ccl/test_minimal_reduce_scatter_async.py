@@ -6,7 +6,7 @@ import pytest
 import ttnn
 from tests.nightly.t3000.ccl.test_minimal_reduce_scatter_async import run_reduce_scatter_impl
 from models.common.utility_functions import skip_for_blackhole, skip_for_wormhole_b0
-from models.common.utility_functions import comp_pcc
+from models.common.utility_functions import comp_allclose
 
 
 @skip_for_blackhole("This test is for wormhole")
@@ -281,7 +281,7 @@ def test_reduce_scatter_all_gather_async(mesh_device, cluster_axis):
     logger.info(f"mesh shape: {mesh_device.shape}")
 
     # Create random input tensor
-    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+    torch_input = torch.ones(shape, dtype=torch.bfloat16)
 
     # Create DRAM interleaved tensor replicated on entire mesh
     tt_input = ttnn.from_torch(
@@ -342,6 +342,10 @@ def test_reduce_scatter_all_gather_async(mesh_device, cluster_axis):
     logger.info(f"Done applying all_gather_async")
 
     # Convert output to torch
-    torch_output = ttnn.to_torch(
-        tt_output, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, -1), mesh_shape=mesh_device.shape)
-    )
+    torch_output = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
+
+    # shape should be [8, 1, 32, 1536]
+    assert torch_output.shape == (32, 1, 32, 1536)
+    # input was all ones, after reduce scatter along cluster_axis = 1 which has 8 devices, the output should be all 8
+    eq, output = comp_allclose(torch_output, torch.ones(shape) * 8)
+    assert eq, f"Reduce scatter async failed: {output}"
