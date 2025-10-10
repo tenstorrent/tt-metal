@@ -2478,7 +2478,6 @@ void kernel_main() {
 
     const auto downstream_edm_vc0_worker_registration_id = get_arg_val<uint32_t>(arg_idx++);
     const auto downstream_edm_vc0_worker_location_info_address = get_arg_val<uint32_t>(arg_idx++);
-    const auto downstream_vc0_noc_interface_buffer_index_local_addr = get_arg_val<uint32_t>(arg_idx++);
 
     // downstream EDM semaphore location
     const auto has_downstream_edm_vc1_buffer_connection = get_arg_val<uint32_t>(arg_idx++);
@@ -2488,7 +2487,6 @@ void kernel_main() {
 
     const auto downstream_edm_vc1_worker_registration_id = get_arg_val<uint32_t>(arg_idx++);
     const auto downstream_edm_vc1_worker_location_info_address = get_arg_val<uint32_t>(arg_idx++);
-    const auto downstream_vc1_noc_interface_buffer_index_local_addr = get_arg_val<uint32_t>(arg_idx++);
 
     const auto my_sem_for_teardown_from_edm_0 = get_arg_val<uint32_t>(arg_idx++);
     const auto my_sem_for_teardown_from_edm_1 = get_arg_val<uint32_t>(arg_idx++);
@@ -2680,8 +2678,6 @@ void kernel_main() {
                         // Router that a Worker adapter is connected to writes its read counter to this address. The
                         // worker uses this to calculate free slots in the router's sender channel.
                     reinterpret_cast<volatile uint32_t* const>(teardown_sem_address),
-                    downstream_vc0_noc_interface_buffer_index_local_addr,  // keep common, since its a scratch noc read
-                                                                           // dest.
                     // Since we are the same direction, we're always going to send to the same stream
                     // reg for each downstream router because we are allocating sender channels by
                     // producer direction.
@@ -2737,7 +2733,6 @@ void kernel_main() {
                     // Router that a Worker adapter is connected to writes its read counter to this address. The
                     // worker uses this to calculate free slots in the router's sender channel.
                 reinterpret_cast<volatile uint32_t* const>(teardown_sem_address),
-                downstream_vc1_noc_interface_buffer_index_local_addr,
 
                 // remote (downstream) sender channel credits stream ID
                 downstream_sender_channel_credit_stream_id,

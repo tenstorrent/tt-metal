@@ -74,7 +74,6 @@ struct RouterStaticSizedChannelWriterAdapter {
             from_remote_buffer_free_slots_ptr,  // For worker to locally track downstream EDM's read counter. Only used
                                                 // by Worker. Downstream EDM increments over noc when a slot is freed.
         volatile uint32_t* const worker_teardown_addr,
-        uint32_t local_buffer_index_addr,
         uint32_t sender_channel_credits_stream_id,  // To update the downstream EDM's free slots. Sending worker or edm
                                                     // decrements over noc.
         StreamId
@@ -127,7 +126,6 @@ struct RouterStaticSizedChannelWriterAdapter {
         size_t edm_buffer_index_id,
         volatile uint32_t* const from_remote_buffer_free_slots_ptr,
         volatile uint32_t* const worker_teardown_addr,
-        uint32_t local_buffer_index_addr,
         uint32_t sender_channel_credits_stream_id,
         StreamId worker_credits_stream_id,
         uint8_t data_noc_cmd_buf = write_reg_cmd_buf,
@@ -144,7 +142,6 @@ struct RouterStaticSizedChannelWriterAdapter {
             edm_buffer_index_id,
             from_remote_buffer_free_slots_ptr,
             worker_teardown_addr,
-            local_buffer_index_addr,
             sender_channel_credits_stream_id,
             worker_credits_stream_id,
             data_noc_cmd_buf,
