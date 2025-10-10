@@ -568,39 +568,9 @@ class ExcelProcessor:
         if self.is_folder_mode and len(self.csv_files) > 1:
             print(f"   • Combined Excel with {len(self.csv_files)} separate sheets")
 
-        # Display FPS summary sorted by FPS (fastest first)
-        if fps_results:
-            fps_results.sort(key=lambda x: x["FPS"], reverse=True)
-
-            if self.is_folder_mode and len(fps_results) > 1:
-                print(f"\n🏆 MODEL PERFORMANCE RANKING (by FPS):")
-            else:
-                print(f"\n📈 PERFORMANCE RESULTS:")
-            print("-" * 80)
-            print(f"{'Rank':<4} {'Model/Sheet':<25} {'FPS':<8} {'Duration (ms)':<15} {'Ops':<5}")
-            print("-" * 80)
-
-            for rank, result in enumerate(fps_results, 1):
-                model_name = result["Model"][:23] + "..." if len(result["Model"]) > 23 else result["Model"]
-                print(
-                    f"{rank:<4} {model_name:<25} {result['FPS']:<8.2f} {result['Total_Duration_ms']:<15.2f} {result['Operations']:<5}"
-                )
-
-            if len(fps_results) > 1:
-                print(f"\n📊 PERFORMANCE INSIGHTS:")
-                print(f"🥇 Fastest Model: {fps_results[0]['Model']} ({fps_results[0]['FPS']:.2f} FPS)")
-                print(f"🐌 Slowest Model: {fps_results[-1]['Model']} ({fps_results[-1]['FPS']:.2f} FPS)")
-                print(f"⚡ Speed Difference: {fps_results[0]['FPS']/fps_results[-1]['FPS']:.1f}x faster")
-
-                # Calculate overall statistics
-                total_ops = sum(r["Operations"] for r in fps_results)
-                avg_fps = sum(r["FPS"] for r in fps_results) / len(fps_results)
-                print(f"📊 Total Operations: {total_ops:,}")
-                print(f"📊 Average FPS: {avg_fps:.2f}")
-
-            print(f"\n🎯 All data processed and formatted successfully!")
-            if self.is_folder_mode:
-                print(f"💡 Each CSV file is now a separate sheet in the Excel workbook.")
+        print(f"\n🎯 All data processed and formatted successfully!")
+        if self.is_folder_mode:
+            print(f"💡 Each CSV file is now a separate sheet in the Excel workbook.")
 
     def process(self):
         """Main processing method"""
