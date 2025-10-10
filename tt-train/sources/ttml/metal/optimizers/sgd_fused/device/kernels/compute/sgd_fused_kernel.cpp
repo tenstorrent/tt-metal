@@ -30,7 +30,6 @@ constexpr auto cb_output_idx = tt::CBIndex::c_16;
 
 constexpr uint32_t num_tiles_per_core = get_compile_time_arg_val(0);
 constexpr uint32_t block_size = get_compile_time_arg_val(1);
-constexpr bool nesterov = get_compile_time_arg_val(2) != 0;
 
 inline void pack_and_push_two_cbs(uint32_t cb_output_1, uint32_t cb_output_2, uint32_t block_size) {
     cb_reserve_back(cb_output_1, block_size);
@@ -138,20 +137,18 @@ void MAIN {
             copy_tile_init(cb_momentum_out_idx);
             const uint32_t update_register = block_idx;
             copy_tile(cb_momentum_out_idx, /* tile_idx */ block_idx, /* register_idx */ update_register);
-            // Nesterov
-            if constexpr (nesterov == true) {
-                // m_t * momentum
-                binop_with_scalar_tile_init();
-                mul_unary_tile(update_register, momentum);
+#if USE_NESTEROV
+            // m_t * momentum
+            binop_with_scalar_tile_init();
+            mul_unary_tile(update_register, momentum);
 
-                copy_tile_init(cb_grad_wd_idx);
-                const uint32_t grad_register = block_size + block_idx;
-                copy_tile(cb_grad_wd_idx, /* tile_idx */ block_idx, /* register_idx */ grad_register);
-                // g_t + m_t{t} * momentum
-                add_binary_tile_init();
-                add_binary_tile(grad_register, update_register, update_register);
-            }
-
+            copy_tile_init(cb_grad_wd_idx);
+            const uint32_t grad_register = block_size + block_idx;
+            copy_tile(cb_grad_wd_idx, /* tile_idx */ block_idx, /* register_idx */ grad_register);
+            // g_t + m_t{t} * momentum
+            add_binary_tile_init();
+            add_binary_tile(grad_register, update_register, update_register);
+#endif
             // u_t <- learning_rate * (g_t + m_t * momentum) with nesterov OR
             // u_t <- learning_rate * m_t otherwise
             binop_with_scalar_tile_init();
