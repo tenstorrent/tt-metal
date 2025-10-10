@@ -40,6 +40,30 @@ class ExcelProcessor:
         self.csv_files = []
         self.is_folder_mode = False
 
+    def _clean_sheet_name(self, name):
+        """Clean sheet name for Excel compatibility"""
+        # Remove invalid Excel sheet name characters
+        invalid_chars = ["[", "]", ":", "*", "?", "/", "\\"]
+        for char in invalid_chars:
+            name = name.replace(char, "")
+
+        # Limit to 31 characters (Excel limit)
+        return name[:31] if len(name) > 31 else name
+
+    def _ensure_unique_sheet_name(self, sheet_name, existing_sheets):
+        """Ensure sheet name is unique by appending counter if needed"""
+        original_name = sheet_name
+        counter = 1
+        existing_names = [s["name"] for s in existing_sheets]
+
+        while sheet_name in existing_names:
+            # Keep room for counter suffix
+            base_name = original_name[:28] if len(original_name) > 28 else original_name
+            sheet_name = f"{base_name}_{counter}"
+            counter += 1
+
+        return sheet_name
+
     def detect_input_type(self):
         """Detect if input is a file or folder and prepare CSV file list"""
         if self.input_path.is_dir():
@@ -310,47 +334,16 @@ class ExcelProcessor:
                         failed_files.append((csv_file.name, "No valid data"))
                         continue
 
-                    # Create sheet name from CSV filename with subdirectory info if needed
-                    if self.is_folder_mode:
-                        # Get relative path from input directory
-                        relative_path = csv_file.relative_to(self.input_path)
-                        # Use parent directory + filename for uniqueness
-                        if relative_path.parent != Path("."):
-                            sheet_name = f"{relative_path.parent.name}_{csv_file.stem}"
-                        else:
-                            sheet_name = csv_file.stem
-                    else:
-                        sheet_name = csv_file.stem
+                    # Create clean sheet name from CSV filename
+                    sheet_name = self._clean_sheet_name(csv_file.stem)
 
-                    # Ensure sheet name is valid for Excel (max 31 chars, no special chars)
-                    sheet_name = (
-                        sheet_name.replace("[", "")
-                        .replace("]", "")
-                        .replace(":", "")
-                        .replace("*", "")
-                        .replace("?", "")
-                        .replace("/", "")
-                        .replace("\\", "")
-                    )
-                    if len(sheet_name) > 31:
-                        sheet_name = sheet_name[:31]
+                    # Ensure unique sheet name
+                    sheet_name = self._ensure_unique_sheet_name(sheet_name, successful_sheets)
 
-                    # Ensure sheet name is unique
-                    original_name = sheet_name
-                    counter = 1
-                    while sheet_name in [s["name"] for s in successful_sheets]:
-                        sheet_name = f"{original_name[:28]}_{counter}"
-                        counter += 1
-
-                    # Write to Excel sheet with error handling
-                    try:
-                        df.to_excel(writer, sheet_name=sheet_name, index=False)
-                        successful_sheets.append({"name": sheet_name, "file": csv_file.name, "rows": len(df)})
-                        print(f"      ✅ Created sheet: '{sheet_name}' with {len(df)} rows")
-                    except Exception as e:
-                        print(f"      ❌ Error writing to Excel sheet: {e}")
-                        failed_files.append((csv_file.name, f"Excel write error: {e}"))
-                        continue
+                    # Write to Excel sheet
+                    df.to_excel(writer, sheet_name=sheet_name, index=False)
+                    successful_sheets.append({"name": sheet_name, "file": csv_file.name, "rows": len(df)})
+                    print(f"      ✅ Created sheet: '{sheet_name}' with {len(df)} rows")
 
                 except Exception as e:
                     print(f"      ❌ Error processing {csv_file.name}: {type(e).__name__}: {e}")

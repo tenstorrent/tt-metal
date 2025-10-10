@@ -11,30 +11,6 @@ from pathlib import Path
 import matplotlib.colors as mcolors
 
 
-def clean_model_name(model_name):
-    """Remove dates and clean up model names"""
-    cleaned = re.sub(r"_\d{4}_\d{2}_\d{2}_\d{2}_\d{2}_\d{2}", "", model_name)
-    cleaned = re.sub(r"_\d{4}_\d{2}_\d{2}", "", cleaned)
-    cleaned = cleaned.replace("_2025_10_04_", "_")
-    cleaned = cleaned.replace("_2025_10_04", "")
-
-    # Handle specific model name cleanups
-    if "ViT" in cleaned:
-        cleaned = "ViT_base_224x224"
-    elif "Yolov12x" in cleaned:
-        cleaned = "Yolov12x_640x640"
-    elif "Yolov4_base_640x640" in cleaned:
-        cleaned = "Yolov4_base_640x640"
-    elif "YOLOV10X" in cleaned or "Yolov10" in cleaned:
-        cleaned = "Yolov10_x_640x640"
-    elif "SENTENCE_BERT" in cleaned:
-        cleaned = "Sentence-BERT_base_seql384_b8"
-    elif "VANILLA_UNET" in cleaned:
-        cleaned = "UNet_Vanilla_480x640"
-
-    return cleaned
-
-
 def get_operation_name(op_code):
     """Extract the actual operation name from OP CODE"""
     op_str = str(op_code).strip()
@@ -181,8 +157,8 @@ def create_integrated_visualization(input_file, output_file=None):
         if df.empty:
             continue
 
-        # Clean model name
-        clean_name = clean_model_name(sheet_name)
+        # Use sheet name directly without cleaning
+        clean_name = sheet_name
 
         # Clean the dataframe
         df_clean = df.dropna(subset=["OP CODE"])
@@ -304,7 +280,7 @@ def create_integrated_visualization(input_file, output_file=None):
                     f"{percentage:.1f}%",
                     ha="center",
                     va="center",
-                    fontsize=8,
+                    fontsize=12,
                     color="black",
                     fontweight="bold",
                 )
@@ -318,7 +294,7 @@ def create_integrated_visualization(input_file, output_file=None):
             f"{non_conv_matmul_percentage:.1f}%",
             ha="left",
             va="center",
-            fontsize=9,
+            fontsize=12,
             fontweight="bold",
             color="black",
             bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.9, edgecolor="black", linewidth=0.5),
@@ -329,7 +305,7 @@ def create_integrated_visualization(input_file, output_file=None):
         102,
         len(stacked_df) + 0.3,
         "Non Conv +\nMatmult %",
-        fontsize=9,
+        fontsize=12,
         fontweight="bold",
         ha="center",
         va="center",
@@ -371,7 +347,7 @@ def create_integrated_visualization(input_file, output_file=None):
     # Style the pie chart
     for i, (autotext, label_text) in enumerate(zip(autotexts, pie_labels)):
         autotext.set_color("black")
-        autotext.set_fontsize(11)
+        autotext.set_fontsize(14)
         autotext.set_fontweight("bold")
 
         # Custom positioning for specific percentage labels
