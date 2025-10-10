@@ -23,10 +23,13 @@ from models.experimental.stable_diffusion_xl_base.utils.clip_fid_ranges import (
     targets,
 )
 from models.experimental.stable_diffusion_xl_base.utils.accuracy_helper import (
-    sdxl_get_prompts, check_clip_scores, save_json_results
-) 
+    sdxl_get_prompts,
+    check_clip_scores,
+    save_json_results,
+)
 
 test_demo.__test__ = False
+
 
 @pytest.mark.parametrize(
     "device_params, use_cfg_parallel",
@@ -150,19 +153,14 @@ def test_accuracy_sdxl(
             "guidance_scale": guidance_scale,
         },
         "benchmarks_summary": [
-            {
-                "model": "sdxl",
-                "device": get_device_name(),
-                "stability_check": 3 if error_detected else 2
-            }
+            {"model": "sdxl", "device": get_device_name(), "stability_check": 3 if error_detected else 2}
         ],
     }
-    
+
     if error_detected:
         save_json_results(data, capture_trace, vae_on_device, encoders_on_device, use_cfg_parallel, num_inference_steps)
         logger.warning(f"Error detected during inference")
         raise RuntimeError(error_msg)
-    
 
     clip = CLIPEncoder()
 
@@ -186,58 +184,62 @@ def test_accuracy_sdxl(
     print(f"Average CLIP Score: {average_clip_score}")
     print(f"Standard Deviation of CLIP Scores: {deviation_clip_score}")
 
+    if use_cfg_parallel:
+        for key in ["functional", "complete", "target"]:
+            targets["perf"][key] /= 2
+
     avg_gen_end_to_end = profiler.get("end_to_end_generation")
     data["benchmarks_summary"][0].update(
         {
             "target_checks": {
-                    "functional": {
-                        "avg_gen_time": targets["perf"]["functional"],
-                        "avg_gen_time_check": 2 if targets["perf"]["functional"] >= avg_gen_end_to_end else 3,
-                    },
-                    "complete": {
-                        "avg_gen_time": targets["perf"]["complete"],
-                        "avg_gen_time_check": 2 if targets["perf"]["complete"] >= avg_gen_end_to_end else 3,
-                    },
-                    "target": {
-                        "avg_gen_time": targets["perf"]["target"],
-                        "avg_gen_time_check": 2 if targets["perf"]["target"] >= avg_gen_end_to_end else 3,
-                    },
+                "functional": {
+                    "avg_gen_time": targets["perf"]["functional"],
+                    "avg_gen_time_check": 2 if targets["perf"]["functional"] >= avg_gen_end_to_end else 3,
                 },
-                "average_denoising_time": profiler.get("denoising_loop"),
-                "average_vae_time": profiler.get("vae_decode"),
-                "min_gen_time": min(profiler.times["end_to_end_generation"]),
-                "max_gen_time": max(profiler.times["end_to_end_generation"]),
-                "average_encoding_time": profiler.get("encode_prompts"),
+                "complete": {
+                    "avg_gen_time": targets["perf"]["complete"],
+                    "avg_gen_time_check": 2 if targets["perf"]["complete"] >= avg_gen_end_to_end else 3,
+                },
+                "target": {
+                    "avg_gen_time": targets["perf"]["target"],
+                    "avg_gen_time_check": 2 if targets["perf"]["target"] >= avg_gen_end_to_end else 3,
+                },
+            },
+            "average_denoising_time": profiler.get("denoising_loop"),
+            "average_vae_time": profiler.get("vae_decode"),
+            "min_gen_time": min(profiler.times["end_to_end_generation"]),
+            "max_gen_time": max(profiler.times["end_to_end_generation"]),
+            "average_encoding_time": profiler.get("encode_prompts"),
         }
     )
     data["evals"] = [
-            {
-                "model": "sdxl",
-                "device": get_device_name(),
-                "average_clip": average_clip_score,
-                "deviation_clip": deviation_clip_score,
-                "approx_clip_accuracy_check": accuracy_check_clip(average_clip_score, num_prompts, mode="approx"),
-                "average_clip_accuracy_check": accuracy_check_clip(average_clip_score, num_prompts, mode="valid"),
-                "delta_clip": get_appr_delta_metric(average_clip_score, num_prompts, score_type="clip"),
-                "fid_score": fid_score,
-                "approx_fid_accuracy_check": accuracy_check_fid(fid_score, num_prompts, mode="approx"),
-                "fid_score_accuracy_check": accuracy_check_fid(fid_score, num_prompts, mode="valid"),
-                "delta_fid": get_appr_delta_metric(fid_score, num_prompts, score_type="fid"),
-                "accuracy_check_approx": min(
-                    accuracy_check_fid(fid_score, num_prompts, mode="approx"),
-                    accuracy_check_clip(average_clip_score, num_prompts, mode="approx"),
-                ),
-                "accuracy_check_delta": min(
-                    accuracy_check_fid(fid_score, num_prompts, mode="delta"),
-                    accuracy_check_clip(average_clip_score, num_prompts, mode="delta"),
-                ),
-                "accuracy_check_valid": min(
-                    accuracy_check_fid(fid_score, num_prompts, mode="valid"),
-                    accuracy_check_clip(average_clip_score, num_prompts, mode="valid"),
-                ),
-            }
-        ]
+        {
+            "model": "sdxl",
+            "device": get_device_name(),
+            "average_clip": average_clip_score,
+            "deviation_clip": deviation_clip_score,
+            "approx_clip_accuracy_check": accuracy_check_clip(average_clip_score, num_prompts, mode="approx"),
+            "average_clip_accuracy_check": accuracy_check_clip(average_clip_score, num_prompts, mode="valid"),
+            "delta_clip": get_appr_delta_metric(average_clip_score, num_prompts, score_type="clip"),
+            "fid_score": fid_score,
+            "approx_fid_accuracy_check": accuracy_check_fid(fid_score, num_prompts, mode="approx"),
+            "fid_score_accuracy_check": accuracy_check_fid(fid_score, num_prompts, mode="valid"),
+            "delta_fid": get_appr_delta_metric(fid_score, num_prompts, score_type="fid"),
+            "accuracy_check_approx": min(
+                accuracy_check_fid(fid_score, num_prompts, mode="approx"),
+                accuracy_check_clip(average_clip_score, num_prompts, mode="approx"),
+            ),
+            "accuracy_check_delta": min(
+                accuracy_check_fid(fid_score, num_prompts, mode="delta"),
+                accuracy_check_clip(average_clip_score, num_prompts, mode="delta"),
+            ),
+            "accuracy_check_valid": min(
+                accuracy_check_fid(fid_score, num_prompts, mode="valid"),
+                accuracy_check_clip(average_clip_score, num_prompts, mode="valid"),
+            ),
+        }
+    ]
 
     save_json_results(data, capture_trace, vae_on_device, encoders_on_device, use_cfg_parallel, num_inference_steps)
-    
+
     check_clip_scores(start_from, num_prompts, prompts, clip_scores)
