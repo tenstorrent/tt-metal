@@ -9,7 +9,6 @@
 #include <enchantum/enchantum.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
-#include <vector>
 
 #include "metal/ops/common/program_utils.hpp"
 #include "sgd_fused_device_operation_types.hpp"
@@ -43,10 +42,11 @@ constexpr uint32_t kMomentumBufferOutAddrIdx = 1U;
 constexpr auto kParamCbIndex = tt::CBIndex::c_0;
 constexpr auto kGradCbIndex = tt::CBIndex::c_1;
 constexpr auto kMomentumInCbIndex = tt::CBIndex::c_2;
-constexpr auto kMomentumOutCbIndex = tt::CBIndex::c_3;
-constexpr auto kMomentumToDramCbIndex = tt::CBIndex::c_4;
+constexpr auto kGradWdCbIndex = tt::CBIndex::c_3;
+constexpr auto kMomentumOutCbIndex = tt::CBIndex::c_4;
+constexpr auto kMomentumToDramCbIndex = tt::CBIndex::c_5;
 
-constexpr auto kUpdateCbIndex = tt::CBIndex::c_5;
+constexpr auto kUpdateCbIndex = tt::CBIndex::c_6;
 
 constexpr auto kOutputCbIndex = tt::CBIndex::c_16;
 
@@ -171,6 +171,7 @@ SGDFusedProgramFactory::cached_program_t SGDFusedProgramFactory::create(
     tt::DataFormat grad_data_format = datatype_to_dataformat_converter(grad.dtype());
 
     uint32_t bfloat16_single_tile_size_bytes = tt::tile_size(tt::DataFormat::Float16_b);
+    // uint32_t float32_single_tile_size_bytes = tt::tile_size(tt::DataFormat::Float32);
 
     auto padded_tensor_shape = param.padded_shape();
     auto padded_tensor_volume = param.physical_volume();
@@ -208,6 +209,10 @@ SGDFusedProgramFactory::cached_program_t SGDFusedProgramFactory::create(
     [[maybe_unused]] auto cb_mom_in = create_circular_buffer(
         program, all_cores, kMomentumInCbIndex, grad_data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
 
+    [[maybe_unused]] auto cb_grad_wd = create_circular_buffer(
+        program, all_cores, kGradWdCbIndex, grad_data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
+
+    // TODO: change to float32
     [[maybe_unused]] auto cb_mom_out = create_circular_buffer(
         program, all_cores, kMomentumOutCbIndex, grad_data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
 
