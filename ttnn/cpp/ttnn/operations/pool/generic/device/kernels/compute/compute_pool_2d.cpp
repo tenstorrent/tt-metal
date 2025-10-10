@@ -185,6 +185,11 @@ void MAIN {
                     tilize_block_no_pack(curr_in_cb_id, topk_output_tiles, data_dst_idx, topk_cb_tile_idx);
                     tilize_uninit_with_dt_no_pack(curr_in_cb_id, curr_in_idx_cb_id);
 
+                    // the max_reduce_with_indices LLK function only supports kernel_size=9, pending
+                    // https://github.com/tenstorrent/tt-metal/issues/28141 but, since for return_indices the in_cb is
+                    // oversized (equal to 1 tile), and since this CB is filled with padding values in the beginning of
+                    // the data movement kernel, it is possible to still use max_reduce_with_indices with kernel sizes
+                    // smaller than 9 as the excess sticks are just filled with padding values
                     constexpr uint32_t max_mpwi_kernel_size = 9;
                     max_reduce_with_indices<max_mpwi_kernel_size>(data_dst_idx, index_dst_idx);
 
