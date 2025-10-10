@@ -95,6 +95,11 @@ void kernel_main() {
     uint32_t termination_master_noc_y = get_arg_val<uint32_t>(arg_idx++);
     uint32_t num_mux_clients = get_arg_val<uint32_t>(arg_idx++);
 
+    if (barrier_multicast_route_info.range_hops == 0 && barrier_multicast_route_info.start_distance_in_hops == 0 &&
+        unicast_route_info.distance_in_hops == 0) {
+        return;
+    }
+
 #ifdef OUTPUT_IS_SHARDED
     using tensor_shard_info = ShardedInfo<
         get_compile_time_arg_val(sharded_args_start_idx),   // Memory layout
