@@ -16,6 +16,10 @@ on:
         required: false
         type: boolean
         default: false
+      timeout:
+        required: false
+        type: number
+        default: 20
 
 jobs:
   t3000-unit-tests:
