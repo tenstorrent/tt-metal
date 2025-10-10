@@ -1196,7 +1196,7 @@ def test_demo_text(
                 # T3K targets
                 "T3K_Llama-3.1-70B": 204,
                 "T3K_Qwen2.5-Coder-32B": (215, 1.27),  # (value, high_tolerance_ratio)
-                "T3K_Qwen2.5-72B": 241,
+                "T3K_Qwen2.5-72B": (250, 1.24),
                 "T3K_Qwen3-32B": 230,  # Issue: Perf regression being tracked on issue #29834
             }
             ci_target_decode_tok_s_u = {
