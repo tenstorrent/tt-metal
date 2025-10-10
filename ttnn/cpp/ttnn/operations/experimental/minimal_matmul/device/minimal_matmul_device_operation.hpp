@@ -12,6 +12,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 
 namespace ttnn::operations::experimental::minimal_matmul {
 
@@ -54,6 +55,7 @@ struct MinimalMatmulConfig {
 
 struct MinimalMatmulOp {
     MinimalMatmulConfig config;
+    std::optional<unary::UnaryWithParam> fused_activation;
     tt::tt_metal::MemoryConfig output_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;
 

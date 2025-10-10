@@ -46,7 +46,13 @@ tt::tt_metal::operation::ProgramWithCallbacks MinimalMatmulOp::create_program(
     const auto& bias_tensor = optional_input_tensors.at(0);
     const auto& output_tensor = output_tensors.at(0);
     return detail::minimal_matmul_factory(
-        act_tensor, weight_tensor, bias_tensor, this->config, output_tensor, compute_kernel_config);
+        act_tensor,
+        weight_tensor,
+        bias_tensor,
+        this->fused_activation,
+        this->config,
+        output_tensor,
+        compute_kernel_config);
 }
 
 }  // namespace ttnn::operations::experimental::minimal_matmul
