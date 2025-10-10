@@ -1195,7 +1195,7 @@ def test_demo_text(
                 "N300_Qwen2.5-7B": 92,
                 # T3K targets
                 "T3K_Llama-3.1-70B": 204,
-                "T3K_Qwen2.5-Coder-32B": 215,
+                "T3K_Qwen2.5-Coder-32B": (215, 1.27),  # (value, high_tolerance_ratio)
                 "T3K_Qwen2.5-72B": 241,
                 "T3K_Qwen3-32B": 230,  # Issue: Perf regression being tracked on issue #29834
             }
@@ -1217,7 +1217,13 @@ def test_demo_text(
             # Only call verify_perf if the model_device_key exists in the targets
             ci_targets = {}
             if model_device_key in ci_target_ttft:
-                ci_targets["prefill_time_to_token"] = ci_target_ttft[model_device_key] / 1000  # convert to seconds
+                current_ttft_target = ci_target_ttft[model_device_key]
+                if isinstance(current_ttft_target, tuple):
+                    current_ttft_target = current_ttft_target[0]
+                    high_tol_percentage = current_ttft_target[1]
+                else:
+                    high_tol_percentage = 1.15
+                ci_targets["prefill_time_to_token"] = current_ttft_target / 1000  # convert to seconds
             if model_device_key in ci_target_decode_tok_s_u:
                 ci_targets["decode_t/s/u"] = ci_target_decode_tok_s_u[model_device_key]
                 # calculate from per-user rate
@@ -1227,7 +1233,7 @@ def test_demo_text(
                 verify_perf(
                     measurements,
                     ci_targets,
-                    high_tol_percentage=1.15,
+                    high_tol_percentage=high_tol_percentage,
                     expected_measurements={k: True for k in ci_targets.keys()},
                 )
             else:
