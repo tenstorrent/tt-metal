@@ -36,9 +36,8 @@ def strip_trailing_number(s: str) -> str:
 )
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("nr_forward_iterations", [2])
-def test_perf_gemma_vision(mesh_device, batch_size, nr_forward_iterations, nr_e2e_iterations):
+def test_perf_gemma_vision(mesh_device, batch_size, nr_forward_iterations):
     profiler = BenchmarkProfiler()
-    key_model_forward = "model_forward"
 
     logger.info("Started profiling")
     profiler.start("total_run")
@@ -49,38 +48,31 @@ def test_perf_gemma_vision(mesh_device, batch_size, nr_forward_iterations, nr_e2
         nr_forward_iterations=nr_forward_iterations,
     )
     profiler.end("total_run")
-
-    for key in keys_without_inference:
-        measurements[key] = [profiler.get_duration(key, i) for i in range(nr_e2e_iterations)]
-
-    measurements[key_model_forward + "_inference"] = [
-        profiler.get_duration(key_model_forward + "_inference", i) for i in range(nr_forward_iterations - 1)
-    ]
     logger.info("Ended profiling")
 
-    measurements_summarised = (
-        dict()
-    )  # a mean, median, or similar function of all the measurements done for that one specific metric
+    inference_measurements = [profiler.get_duration("model_forward_inference", i) for i in range(nr_forward_iterations)]
+    inference_mean = sum(inference_measurements) / len(inference_measurements)
 
-    for key, val in measurements.items():
-        mean = sum(val) / len(val)
-        measurements_summarised[key] = mean
+    measurement_keys = {k for _, k in profiler.start_times.keys()}
+
+    measurements = dict()
+    for k in measurement_keys:
+        measurements[k] = profiler.get_duration(k) if k != "model_forward_inference" else inference_mean
 
     if SAVE_NEW_PERF_TARGETS:
-        helper_write_to_json(determine_device_name(mesh_device), measurements_summarised)
+        helper_write_to_json(determine_device_name(mesh_device), measurements["model_forward_inference"])
 
     targets = load_targets(
         TARGETS_JSON_FILENAME,
         device_type=determine_device_name(mesh_device),
     )
 
-    for key in measurements_summarised:
-        logger.info(f"measurement {key}: {measurements_summarised[key]}")
+    for key in measurements:
+        logger.info(f"measurement {key}: {measurements[key]}")
 
     upper_threshold = targets["model_forward_inference"] * (1 + THRESHOLD_PERCENT / 100)
     lower_threshold = targets["model_forward_inference"] * (1 - THRESHOLD_PERCENT / 100)
-    measured_value = measurements_summarised[key]
-    assert lower_threshold < measured_value < upper_threshold
+    assert lower_threshold < inference_mean < upper_threshold
 
 
 def helper_write_to_json(device_type, measurements, output_filename=None):
@@ -99,12 +91,12 @@ def helper_write_to_json(device_type, measurements, output_filename=None):
         json.dump(data, f, indent=4)
 
 
-def run_model(mesh_device, batch_size, profiler, cur_e2e_iteration, nr_forward_iterations):
+def run_model(mesh_device, batch_size, profiler, nr_forward_iterations):
     dtype = ttnn.bfloat16
     model_args = ModelArgs(mesh_device)
-    profiler.start("weight_loading", cur_e2e_iteration)
+    profiler.start("weight_loading")
     state_dict = model_args.load_state_dict()
-    profiler.end("weight_loading", cur_e2e_iteration)
+    profiler.end("weight_loading")
 
     image_size = model_args.vision_chunk_size
     in_channels = model_args.vision_in_channels
@@ -121,7 +113,7 @@ def run_model(mesh_device, batch_size, profiler, cur_e2e_iteration, nr_forward_i
         configuration=model_args,
         return_intermediate=False,
     )
-    profiler.end("weight_transfer_to_device_and_model_initialization", cur_e2e_iteration)
+    profiler.end("weight_transfer_to_device_and_model_initialization")
 
     ttnn.synchronize_device(mesh_device)
     profiler.start("model_forward_compile")
