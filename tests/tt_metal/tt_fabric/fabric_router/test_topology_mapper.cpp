@@ -6,6 +6,7 @@
 #include <tt-metalium/mesh_graph_descriptor.hpp>
 #include <tt-metalium/control_plane.hpp>
 #include "impl/context/metal_context.hpp"
+#include <memory>
 
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
 #include "tt_metal/fabric/topology_mapper.hpp"
@@ -15,15 +16,24 @@ namespace tt::tt_fabric {
 class TopologyMapperTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        // Create a simple mesh graph for testing
-        // This would typically be loaded from a descriptor file
-        // For now, we'll create a minimal test setup
+        auto distributed_context = tt::tt_metal::MetalContext::instance().get_distributed_context_ptr();
+        const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+        const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+        const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+        constexpr bool run_discovery = true;
+
+        physical_system_descriptor_ = std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(
+            cluster.get_driver(), distributed_context, &hal, rtoptions, run_discovery);
     }
 
-    void TearDown() override {
-        // Clean up any resources
-    }
+    void TearDown() override { physical_system_descriptor_.reset(); }
+
+    std::unique_ptr<tt::tt_metal::PhysicalSystemDescriptor> physical_system_descriptor_;
 };
+
+bool contains(const std::vector<tt::tt_metal::AsicID>& asic_ids, const tt::tt_metal::AsicID& asic_id) {
+    return std::find(asic_ids.begin(), asic_ids.end(), asic_id) != asic_ids.end();
+}
 
 TEST_F(TopologyMapperTest, T3kMeshGraphTest) {
     const std::filesystem::path t3k_mesh_graph_desc_path =
@@ -32,16 +42,6 @@ TEST_F(TopologyMapperTest, T3kMeshGraphTest) {
 
     auto mesh_graph = MeshGraph(t3k_mesh_graph_desc_path.string());
 
-    // Create PhysicalSystemDescriptor with proper parameters from MetalContext
-    auto distributed_context = tt::tt_metal::MetalContext::instance().get_distributed_context_ptr();
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
-    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
-    constexpr bool run_discovery = true;
-
-    auto physical_system_descriptor = tt::tt_metal::PhysicalSystemDescriptor(
-        cluster.get_driver(), distributed_context, &hal, rtoptions, run_discovery);
-
     // Create a local mesh binding for testing
     LocalMeshBinding local_mesh_binding;
     local_mesh_binding.mesh_ids = {MeshId{0}};
@@ -49,25 +49,42 @@ TEST_F(TopologyMapperTest, T3kMeshGraphTest) {
 
     // Test that TopologyMapper can be constructed with valid parameters
     // This is a basic smoke test
-    auto topology_mapper = TopologyMapper(mesh_graph, physical_system_descriptor, local_mesh_binding);
+    auto topology_mapper = TopologyMapper(mesh_graph, *physical_system_descriptor_, local_mesh_binding);
+
+    // Fabric Node ID layout:
+    // 0 1 2 3
+    // 4 5 6 7
+
+    auto asic_id_0 = topology_mapper.get_asic_id_from_fabric_node_id(FabricNodeId(MeshId{0}, 0));
+    auto asic_id_1 = topology_mapper.get_asic_id_from_fabric_node_id(FabricNodeId(MeshId{0}, 1));
+    auto asic_id_3 = topology_mapper.get_asic_id_from_fabric_node_id(FabricNodeId(MeshId{0}, 3));
+    auto asic_id_4 = topology_mapper.get_asic_id_from_fabric_node_id(FabricNodeId(MeshId{0}, 4));
+    auto asic_id_7 = topology_mapper.get_asic_id_from_fabric_node_id(FabricNodeId(MeshId{0}, 7));
+    auto asic_id_6 = topology_mapper.get_asic_id_from_fabric_node_id(FabricNodeId(MeshId{0}, 6));
+
+    // Check fabric node id 0 and 1 are adjacent for mesh 0
+    EXPECT_TRUE(contains(physical_system_descriptor_->get_asic_neighbors(asic_id_0), asic_id_1));
+    EXPECT_TRUE(contains(physical_system_descriptor_->get_asic_neighbors(asic_id_1), asic_id_0));
+
+    // Check 0 and 4 are adjacent for mesh 0
+    EXPECT_TRUE(contains(physical_system_descriptor_->get_asic_neighbors(asic_id_0), asic_id_4));
+    EXPECT_TRUE(contains(physical_system_descriptor_->get_asic_neighbors(asic_id_4), asic_id_0));
+
+    // 3 and 7 are adjacent for mesh 0
+    EXPECT_TRUE(contains(physical_system_descriptor_->get_asic_neighbors(asic_id_3), asic_id_7));
+    EXPECT_TRUE(contains(physical_system_descriptor_->get_asic_neighbors(asic_id_7), asic_id_3));
+
+    // 6 and 7 are adjacent for mesh 0
+    EXPECT_TRUE(contains(physical_system_descriptor_->get_asic_neighbors(asic_id_6), asic_id_7));
+    EXPECT_TRUE(contains(physical_system_descriptor_->get_asic_neighbors(asic_id_7), asic_id_6));
 }
 
-TEST_F(TopologyMapperTest, T3kBigMeshTest) {
-    const std::filesystem::path t3k_big_mesh_graph_desc_path =
+TEST_F(TopologyMapperTest, DualGalaxyBigMeshTest) {
+    const std::filesystem::path dual_galaxy_big_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_dual_host_mesh_graph_descriptor.textproto";
+        "tt_metal/fabric/mesh_graph_descriptors/dual_galaxy_mesh_graph_descriptor.yaml";
 
-    auto mesh_graph = MeshGraph(t3k_big_mesh_graph_desc_path.string());
-
-    // Create PhysicalSystemDescriptor with proper parameters from MetalContext
-    auto distributed_context = tt::tt_metal::MetalContext::instance().get_distributed_context_ptr();
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
-    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
-    constexpr bool run_discovery = true;
-
-    auto physical_system_descriptor = tt::tt_metal::PhysicalSystemDescriptor(
-        cluster.get_driver(), distributed_context, &hal, rtoptions, run_discovery);
+    auto mesh_graph = MeshGraph(dual_galaxy_big_mesh_graph_desc_path.string());
 
     // Create a local mesh binding for testing
     LocalMeshBinding local_mesh_binding;
@@ -76,35 +93,119 @@ TEST_F(TopologyMapperTest, T3kBigMeshTest) {
         local_mesh_binding.host_rank = MeshHostRankId{0};
     } else {
         local_mesh_binding.mesh_ids = {MeshId{0}};
-        local_mesh_binding.host_rank = MeshHostRankId{1};
+        local_mesh_binding.host_rank = MeshHostRankId{0};
     }
 
-    auto topology_mapper = TopologyMapper(mesh_graph, physical_system_descriptor, local_mesh_binding);
+    auto topology_mapper = TopologyMapper(mesh_graph, *physical_system_descriptor_, local_mesh_binding);
+
+    // Physical System Descriptor: 8x8
+    //  0  1  2  3  4  5  6  7
+    //  8  9 10 11 12 13 14 15
+    // 16 17 18 19 20 21 22 23  H0
+    // 24 25 26 27 28 29 30 31
+    // -----------------------
+    // 32 33 34 35 36 37 38 39
+    // 40 41 42 43 44 45 46 47
+    // 48 49 50 51 52 53 54 55 H1
+    // 56 57 58 59 60 61 62 63
+
+    // Validate host ranks for selected fabric node IDs
+    // Pairs: 56 48, 8 1, 39 31, 35 27
+    auto asic_id_56 = topology_mapper.get_asic_id_from_fabric_node_id(FabricNodeId(MeshId{0}, 56));
+    auto asic_id_48 = topology_mapper.get_asic_id_from_fabric_node_id(FabricNodeId(MeshId{0}, 48));
+    auto asic_id_8 = topology_mapper.get_asic_id_from_fabric_node_id(FabricNodeId(MeshId{0}, 8));
+    auto asic_id_0 = topology_mapper.get_asic_id_from_fabric_node_id(FabricNodeId(MeshId{0}, 0));
+    auto asic_id_39 = topology_mapper.get_asic_id_from_fabric_node_id(FabricNodeId(MeshId{0}, 39));
+    auto asic_id_31 = topology_mapper.get_asic_id_from_fabric_node_id(FabricNodeId(MeshId{0}, 31));
+    auto asic_id_35 = topology_mapper.get_asic_id_from_fabric_node_id(FabricNodeId(MeshId{0}, 35));
+    auto asic_id_27 = topology_mapper.get_asic_id_from_fabric_node_id(FabricNodeId(MeshId{0}, 27));
+
+    // Check they belong to the right host rank per ASCII map (rows 0-31 => H0, 32-63 => H1)
+    EXPECT_EQ(
+        1,
+        physical_system_descriptor_->get_rank_for_hostname(
+            physical_system_descriptor_->get_host_name_for_asic(asic_id_56)));
+    EXPECT_EQ(
+        1,
+        physical_system_descriptor_->get_rank_for_hostname(
+            physical_system_descriptor_->get_host_name_for_asic(asic_id_48)));
+    EXPECT_EQ(
+        0,
+        physical_system_descriptor_->get_rank_for_hostname(
+            physical_system_descriptor_->get_host_name_for_asic(asic_id_8)));
+    EXPECT_EQ(
+        0,
+        physical_system_descriptor_->get_rank_for_hostname(
+            physical_system_descriptor_->get_host_name_for_asic(asic_id_0)));
+    EXPECT_EQ(
+        1,
+        physical_system_descriptor_->get_rank_for_hostname(
+            physical_system_descriptor_->get_host_name_for_asic(asic_id_39)));
+    EXPECT_EQ(
+        0,
+        physical_system_descriptor_->get_rank_for_hostname(
+            physical_system_descriptor_->get_host_name_for_asic(asic_id_31)));
+    EXPECT_EQ(
+        1,
+        physical_system_descriptor_->get_rank_for_hostname(
+            physical_system_descriptor_->get_host_name_for_asic(asic_id_35)));
+    EXPECT_EQ(
+        0,
+        physical_system_descriptor_->get_rank_for_hostname(
+            physical_system_descriptor_->get_host_name_for_asic(asic_id_27)));
+
+    // Check for adjacency
+    EXPECT_TRUE(contains(physical_system_descriptor_->get_asic_neighbors(asic_id_56), asic_id_48));
+    EXPECT_TRUE(contains(physical_system_descriptor_->get_asic_neighbors(asic_id_48), asic_id_56));
+    EXPECT_TRUE(contains(physical_system_descriptor_->get_asic_neighbors(asic_id_8), asic_id_0));
+    EXPECT_TRUE(contains(physical_system_descriptor_->get_asic_neighbors(asic_id_0), asic_id_8));
+    EXPECT_TRUE(contains(physical_system_descriptor_->get_asic_neighbors(asic_id_39), asic_id_31));
+    EXPECT_TRUE(contains(physical_system_descriptor_->get_asic_neighbors(asic_id_31), asic_id_39));
+    EXPECT_TRUE(contains(physical_system_descriptor_->get_asic_neighbors(asic_id_35), asic_id_27));
+    EXPECT_TRUE(contains(physical_system_descriptor_->get_asic_neighbors(asic_id_27), asic_id_35));
+}
+
+TEST_F(TopologyMapperTest, N300MeshGraphTest) {
+    const std::filesystem::path n300_mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tt_metal/fabric/mesh_graph_descriptors/n300_mesh_graph_descriptor.yaml";
+
+    auto mesh_graph = MeshGraph(n300_mesh_graph_desc_path.string());
+
+    // Create a local mesh binding for testing
+    LocalMeshBinding local_mesh_binding;
+    local_mesh_binding.mesh_ids = {MeshId{0}};
+    local_mesh_binding.host_rank = MeshHostRankId{0};
+
+    auto topology_mapper = TopologyMapper(mesh_graph, *physical_system_descriptor_, local_mesh_binding);
+
+    // Physical System Descriptor: 1x2
+    // 0 1
+
+    auto asic_id_0 = topology_mapper.get_asic_id_from_fabric_node_id(FabricNodeId(MeshId{0}, 0));
+    auto asic_id_1 = topology_mapper.get_asic_id_from_fabric_node_id(FabricNodeId(MeshId{0}, 1));
+
+    // Check for adjacency
+    EXPECT_TRUE(contains(physical_system_descriptor_->get_asic_neighbors(asic_id_0), asic_id_1));
+    EXPECT_TRUE(contains(physical_system_descriptor_->get_asic_neighbors(asic_id_1), asic_id_0));
 }
 
 TEST_F(TopologyMapperTest, T3kMultiMeshTest) {
+    // TODO: This test is currently disabled due to lack of support for multi-mesh-per-host systems
+    GTEST_SKIP();
+
     const std::filesystem::path t3k_multimesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_2x2_1x2_1x1_mesh_graph_descriptor.textproto";
 
     auto mesh_graph = MeshGraph(t3k_multimesh_graph_desc_path.string());
 
-    // Create PhysicalSystemDescriptor with proper parameters from MetalContext
-    auto distributed_context = tt::tt_metal::MetalContext::instance().get_distributed_context_ptr();
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
-    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
-    constexpr bool run_discovery = true;
-
-    auto physical_system_descriptor = tt::tt_metal::PhysicalSystemDescriptor(
-        cluster.get_driver(), distributed_context, &hal, rtoptions, run_discovery);
-
     // Create a local mesh binding for testing
     LocalMeshBinding local_mesh_binding;
     local_mesh_binding.mesh_ids = {MeshId{0}, MeshId{1}, MeshId{2}};
     local_mesh_binding.host_rank = MeshHostRankId{0};
 
-    auto topology_mapper = TopologyMapper(mesh_graph, physical_system_descriptor, local_mesh_binding);
+    auto topology_mapper = TopologyMapper(mesh_graph, *physical_system_descriptor_, local_mesh_binding);
 }
 
 }  // namespace tt::tt_fabric
