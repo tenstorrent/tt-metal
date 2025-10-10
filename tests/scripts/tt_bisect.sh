@@ -18,7 +18,7 @@ test=""
 good_commit=""
 bad_commit=""
 tracy_enabled=0
-retries=1
+retries=3
 
 while getopts ":f:g:b:t:pr:" opt; do
   case "$opt" in
