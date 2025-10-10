@@ -28,7 +28,7 @@ void py_bind_all_gather(py::module& module) {
 
             Keyword Args:
                 cluster_axis (int, optional): The cluster axis to gather across. Defaults to `None`.
-                topology (ttnn.Topology, optional): Fabric topology. Defaults to `ttnn.Topology.Linear`.
+                topology (ttnn.Topology, optional): Fabric topology. Defaults to `None`.
                 output_tensor (ttnn.Tensor, optional): Preallocated output tensor.
                 memory_config (ttnn.MemoryConfig, optional): Output memory configuration.
                 subdevice_id (ttnn.SubDeviceId, optional): Subdevice id for worker cores.
