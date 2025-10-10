@@ -1,5 +1,6 @@
 .cache
 .clangd
+.cursor
 .devcontainer/
 .vscode
 .idea
