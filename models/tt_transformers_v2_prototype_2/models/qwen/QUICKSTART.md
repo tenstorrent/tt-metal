@@ -1,18 +1,45 @@
 # Validation Decorator - Quick Start
 
-- QUICKSTART.md - 2-minute crash course, copy-paste examples
-- README_VALIDATION.md - Overview, architecture, integration guide
-- VALIDATION_DECORATOR.md - Complete API reference (23 examples)
-- HOW_TO_ADD_VALIDATION.md - Step-by-step for existing code
-- validation_example.py - Working examples (RMSNorm, matmul, attention)
-- test_validation_decorator.py - 11 unit tests
-- ds_r1_qwen.py - Model implementation with decorator system
+**Files:**
+- `QUICKSTART.md` - 2-minute crash course (you are here)
+- `MATCH_SIGNATURE_GUIDE.md` - Clean wrapper pattern guide ⭐ NEW!
+- `README_VALIDATION.md` - Overview, architecture, integration guide
+- `VALIDATION_DECORATOR.md` - Complete API reference (23 examples)
+- `HOW_TO_ADD_VALIDATION.md` - Step-by-step for existing code
+- `validation_example.py` - Working examples (RMSNorm, matmul, attention)
+- `test_validation_decorator.py` - 11 unit tests
+- `ds_r1_qwen.py` - Model implementation with decorator system
 
-## 30-Second Example
+## 30-Second Example (New match_signature Pattern) ⭐
 
 ```python
 from ds_r1_qwen import validate_against, get_validation_registry
 
+class MyLayer:
+    def _reference_impl(self, x):
+        """Reference with same signature as __call__"""
+        x_torch = ttnn.to_torch(x).squeeze(0)
+        return torch.matmul(x_torch, self.weight_torch)
+
+    @validate_against(
+        reference_fn=lambda self, x: self._reference_impl(x),
+        match_signature=True,  # No complex input_map needed!
+        output_map_impl=lambda x: ttnn.to_torch(x).squeeze(0),
+        tolerances={'max_abs_error': 1e-3}
+    )
+    def __call__(self, x):
+        return ttnn.matmul(x, self.weight)
+
+# Use it
+result = layer(x)
+
+# Get report
+get_validation_registry().print_report()
+```
+
+## Old Pattern (Still Works)
+
+```python
 @validate_against(
     reference_fn=torch.nn.functional.layer_norm,
     input_map=lambda args, kwargs: ((ttnn.to_torch(args[0]).squeeze(),), kwargs),
@@ -21,12 +48,6 @@ from ds_r1_qwen import validate_against, get_validation_registry
 )
 def my_function(x):
     return ttnn.layer_norm(x)
-
-# Use it
-result = my_function(x)
-
-# Get report
-get_validation_registry().print_report()
 ```
 
 ## Core Concept
@@ -39,8 +60,54 @@ Your TTNN Code → @validate_against → Auto-compares with reference → Collec
 
 1. **`reference_fn`** - What to compare against (e.g., `torch.matmul`)
 2. **`input_map`** - How to convert your inputs: `(args, kwargs) -> (ref_args, ref_kwargs)`
+   - **OR** `match_signature=True` - Reference has same signature, no mapping needed! ⭐
 3. **`output_map_impl`** - How to convert your output: `(ttnn_output) -> comparable_output`
 4. **`tolerances`** - Pass/fail thresholds: `{'max_abs_error': 1e-3}`
+
+## Two Patterns: Choose Your Style
+
+### Pattern 1: match_signature (Cleaner for Methods) ⭐
+
+```python
+class MyLayer:
+    def _reference_impl(self, x):
+        """Same signature as __call__"""
+        return torch_operation(ttnn.to_torch(x).squeeze(0), self.weight_torch)
+
+    @validate_against(
+        reference_fn=lambda self, x: self._reference_impl(x),
+        match_signature=True,  # Magic!
+        output_map_impl=lambda x: ttnn.to_torch(x).squeeze(0),
+        tolerances={'max_abs_error': 1e-2}
+    )
+    def __call__(self, x):
+        return ttnn_operation(x, self.weight)
+```
+
+✅ No complex lambdas
+✅ Easy to debug
+✅ Self-documenting
+
+### Pattern 2: input_map (Good for Library Functions)
+
+```python
+@validate_against(
+    reference_fn=torch.matmul,  # Library function
+    input_map=lambda args, kwargs: (
+        (ttnn.to_torch(args[0]).squeeze(0), ttnn.to_torch(args[1]).squeeze(0)),
+        {}
+    ),
+    output_map_impl=lambda x: ttnn.to_torch(x).squeeze(0),
+    tolerances={'max_abs_error': 1e-2}
+)
+def ttnn_matmul(a, b):
+    return ttnn.matmul(a, b)
+```
+
+✅ Works with existing library functions
+✅ No wrapper needed
+
+**See `MATCH_SIGNATURE_GUIDE.md` for detailed comparison!**
 
 ## Common Pattern: Method Validation
 

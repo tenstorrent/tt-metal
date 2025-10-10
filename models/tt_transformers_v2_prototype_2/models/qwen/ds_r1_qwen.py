@@ -107,6 +107,8 @@ def validate_against(
     tolerances: Optional[Dict[str, float]] = None,
     performance_metrics: bool = True,
     enabled: bool = True,
+    match_signature: bool = False,
+    auto_convert_outputs: bool = False,
 ):
     """
     Decorator to validate a function against a reference implementation.
@@ -128,12 +130,39 @@ def validate_against(
                     Validation fails if any metric exceeds its tolerance
         performance_metrics: Whether to collect execution time metrics
         enabled: Whether validation is enabled (can disable globally via registry)
+        match_signature: If True, reference_fn has the same signature as the decorated
+                        function and will be called with identical args/kwargs.
+                        This allows using wrapper functions without complex input_map.
+        auto_convert_outputs: If True, automatically converts TTNN tensors to torch tensors
+                             for comparison. Applies to both impl and ref outputs.
+                             Useful with match_signature when both return TTNN.
 
-    Example:
+    Examples:
+        # Pattern 1: Wrapper with same signature + auto_convert (cleanest!)
+        @validate_against(
+            reference_fn=lambda self, x: self._reference_impl(x),
+            match_signature=True,
+            auto_convert_outputs=True,  # No output_map_impl needed!
+            tolerances={'max_abs_error': 1e-3}
+        )
+        def __call__(self, x):
+            return ttnn.matmul(x, self.weight)  # Returns TTNN
+
+        # Pattern 2: Wrapper with same signature (explicit mapping)
+        @validate_against(
+            reference_fn=lambda self, x: self._reference_impl(x),
+            match_signature=True,
+            output_map_impl=lambda x: ttnn.to_torch(x).squeeze(0),
+            tolerances={'max_abs_error': 1e-3}
+        )
+        def __call__(self, x):
+            return self.forward(x)
+
+        # Pattern 3: Different signature with mappings
         @validate_against(
             reference_fn=torch.nn.functional.rms_norm,
             input_map=lambda args, kwargs: (
-                (ttnn.to_torch(args[1]).squeeze(),),  # Convert TTNN to torch
+                (ttnn.to_torch(args[1]).squeeze(),),
                 {'eps': args[0].eps}
             ),
             output_map_impl=lambda x: ttnn.to_torch(x).squeeze(),
@@ -174,9 +203,14 @@ def validate_against(
             impl_time = time.perf_counter() - start_time
 
             # Map inputs for reference function
-            if input_map:
+            if match_signature:
+                # Reference function has same signature, call with same args/kwargs
+                ref_args, ref_kwargs = args, kwargs
+            elif input_map:
+                # Use custom input mapping
                 ref_args, ref_kwargs = input_map(args, kwargs)
             else:
+                # Pass through as-is
                 ref_args, ref_kwargs = args, kwargs
 
             # Execute reference
@@ -197,8 +231,26 @@ def validate_against(
 
             # Map outputs for comparison
             try:
-                impl_comparable = output_map_impl(impl_output) if output_map_impl else impl_output
-                ref_comparable = output_map_ref(ref_output) if output_map_ref else ref_output
+                if auto_convert_outputs:
+                    # Auto-convert TTNN tensors to torch for comparison
+                    def auto_convert(x):
+                        """Auto-convert TTNN to torch, handling common cases"""
+                        # Check if it's a TTNN tensor (has to_torch method or is from ttnn module)
+                        if hasattr(x, "__module__") and x.__module__ and "ttnn" in x.__module__:
+                            # It's a TTNN tensor, convert to torch
+                            converted = ttnn.to_torch(x)
+                            # Remove batch dimensions commonly used in TTNN
+                            while converted.dim() > 0 and converted.shape[0] == 1:
+                                converted = converted.squeeze(0)
+                            return converted
+                        return x
+
+                    impl_comparable = auto_convert(impl_output)
+                    ref_comparable = auto_convert(ref_output)
+                else:
+                    # Use explicit mapping functions
+                    impl_comparable = output_map_impl(impl_output) if output_map_impl else impl_output
+                    ref_comparable = output_map_ref(ref_output) if output_map_ref else ref_output
             except Exception as e:
                 result = ValidationResult(
                     function_name=f"{func.__module__}.{func.__qualname__}",

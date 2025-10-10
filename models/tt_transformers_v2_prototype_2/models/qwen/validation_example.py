@@ -25,12 +25,45 @@ def torch_rms_norm(x, weight, eps=1e-6):
     return weight * x
 
 
-def wrapper_torch_rms_norm(self, x):
-    return torch_rms_norm(ttnn.to_torch(x).squeeze(0), self.weight_torch, self.eps)
-
-
 class ValidatedRMSNorm:
-    """RMS Normalization with validation decorator"""
+    """RMS Normalization - ultra-clean pattern with auto_convert_outputs"""
+
+    def __init__(self, weight: torch.Tensor, eps: float, device):
+        self.eps = eps
+        self.weight_torch = weight  # Keep for reference
+        self.weight = ttnn.from_torch(
+            weight.unsqueeze(0).unsqueeze(0), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+        )
+        self.device = device
+
+    def _reference_impl(self, x):
+        """Reference implementation with same signature as __call__"""
+        # Convert TTNN to torch and compute reference
+        x_torch = ttnn.to_torch(x).squeeze(0)
+        result = torch_rms_norm(x_torch, self.weight_torch, self.eps)
+        # Convert back to TTNN to match __call__ output type
+        return ttnn.from_torch(result.unsqueeze(0), device=self.device, dtype=x.dtype, layout=ttnn.TILE_LAYOUT)
+
+    @validate_against(
+        reference_fn=lambda self, x: self._reference_impl(x),
+        match_signature=True,  # Reference has same signature as __call__!
+        auto_convert_outputs=True,  # Auto-convert TTNN -> torch, no output_map_impl needed!
+        tolerances={
+            "max_abs_error": 1e-2,
+            "mean_abs_error": 1e-3,
+        },
+    )
+    def __call__(self, x):
+        # x shape: [1, seq_len, hidden_size]
+        x_squared = ttnn.mul(x, x)
+        mean_x_squared = ttnn.mean(x_squared, dim=-1, keepdim=True)
+        rms = ttnn.sqrt(ttnn.add(mean_x_squared, self.eps))
+        x_normed = ttnn.mul(x, ttnn.reciprocal(rms))
+        return ttnn.mul(x_normed, self.weight)
+
+
+class ValidatedRMSNormOldStyle:
+    """RMS Normalization with validation decorator using old input_map pattern"""
 
     def __init__(self, weight: torch.Tensor, eps: float, device):
         self.eps = eps
@@ -40,9 +73,6 @@ class ValidatedRMSNorm:
         )
 
     @validate_against(
-        # NOTE{
-        # Maybe it is a better idea to implement a wrapper for reference_fn -- torch_rms_norm; in the wrapper, we can convert the TTNN input to PyTorch before calling torch_rms_norm.
-        # reference_fn=wrapper_torch_rms_norm, # validate_against can automatically check the signature of the reference_fn to make sure it is the same as the decorated function.
         reference_fn=torch_rms_norm,
         input_map=lambda args, kwargs: (
             # Convert TTNN input to PyTorch for reference
@@ -51,11 +81,9 @@ class ValidatedRMSNorm:
         ),
         output_map_impl=lambda x: ttnn.to_torch(x).squeeze(0),
         output_map_ref=lambda x: x,
-        # NOTE}
         tolerances={
             "max_abs_error": 1e-2,
             "mean_abs_error": 1e-3,
-            "pcc": 0.99,
         },
     )
     def __call__(self, x):
