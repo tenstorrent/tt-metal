@@ -43,6 +43,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include "tt_metal/fabric/fabric_context.hpp"
+#include "tt_metal/test_utils/env_vars.hpp"
 
 namespace tt::tt_fabric {
 namespace fabric_router_tests {
@@ -374,6 +375,9 @@ std::vector<std::tuple<uint32_t, uint32_t, uint32_t, uint32_t>> GenerateAllValid
 }
 
 TEST_F(Fabric2DFixture, TestUnicastRaw) {
+    // Test failing with watcher enabled, github issue #29612
+    SKIP_FOR_WATCHER();
+
     for (uint32_t i = 0; i < 10; i++) {
         RunTestUnicastRaw(this);
     }
