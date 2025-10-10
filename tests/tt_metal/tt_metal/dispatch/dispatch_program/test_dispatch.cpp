@@ -19,6 +19,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/device.hpp>
+#include "command_queue_fixture.hpp"
 #include "mesh_dispatch_fixture.hpp"
 #include <distributed.hpp>
 #include <tt-metalium/hal_types.hpp>
@@ -26,6 +27,7 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt_stl/span.hpp>
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
@@ -146,6 +148,88 @@ static void test_sems_across_core_types(
             fixture->RunProgram(mesh_device, workload);
         }
     }
+}
+
+TEST_F(UnitMeshCQTraceFixture, TensixConsecutiveWritesAcrossBanksSameAddress) {
+    CreateDevices(2048);
+    auto mesh_device = devices_[0];
+    auto device = mesh_device->get_devices()[0];
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+
+    CoreCoord worker{0, 0};
+
+    // Small buffer; writes target fixed bank-mapped addresses inside kernels
+    const uint32_t write_size_bytes = 8192;
+    tt::tt_metal::distributed::DeviceLocalBufferConfig dl_cfg{
+        .page_size = write_size_bytes,
+        .buffer_type = tt_metal::BufferType::DRAM};
+    tt::tt_metal::distributed::ReplicatedBufferConfig rep_cfg{.size = 2 * write_size_bytes};
+    auto dram_mb = tt::tt_metal::distributed::MeshBuffer::create(rep_cfg, dl_cfg, mesh_device.get());
+
+    // Choose two different banks if possible
+    const uint32_t bank0 = 0;
+    const uint32_t bank1 = 1;
+
+    const uint32_t l1_unreserved_base = mesh_device->allocator()->get_base_allocator_addr(HalMemType::L1);
+
+    // Build two separate workloads, each with a single program
+    distributed::MeshWorkload workload1;
+    {
+        Program program1;
+        std::vector<uint32_t> compile_args1;
+        {
+            compile_args1.push_back(bank0);
+            compile_args1.push_back(l1_unreserved_base);
+            compile_args1.push_back(1024);
+            compile_args1.push_back(write_size_bytes);
+            compile_args1.push_back(0);
+            tt::tt_metal::TensorAccessorArgs ta(*dram_mb);
+            ta.append_to(compile_args1);
+        }
+        CreateKernel(
+            program1,
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/noc_write_many.cpp",
+            worker,
+            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default,
+                               .compile_args = compile_args1});
+        workload1.add_program(device_range, std::move(program1));
+    }
+    distributed::MeshWorkload workload2;
+    {
+        Program program2;
+        std::vector<uint32_t> compile_args2;
+        {
+            compile_args2.push_back(bank1);
+            compile_args2.push_back(l1_unreserved_base);
+            compile_args2.push_back(write_size_bytes);
+            compile_args2.push_back(0);
+            tt::tt_metal::TensorAccessorArgs ta(*dram_mb);
+            ta.append_to(compile_args2);
+        }
+        CreateKernel(
+            program2,
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/noc_write_once.cpp",
+            worker,
+            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default,
+                               .compile_args = compile_args2});
+        workload2.add_program(device_range, std::move(program2));
+    }
+
+    // Eager execution once for both programs
+    log_info(tt::LogTest, "Running first program (many writes) on device {}", device->id());
+    this->RunProgram(mesh_device, workload1);
+    this->RunProgram(mesh_device, workload2);
+
+    // Capture and replay trace of running both programs in sequence
+    auto& mesh_cq = mesh_device->mesh_command_queue();
+    const auto tid = distributed::BeginTraceCapture(mesh_device.get(), mesh_cq.id());
+    distributed::EnqueueMeshWorkload(mesh_cq, workload1, false);
+    distributed::EnqueueMeshWorkload(mesh_cq, workload2, false);
+    mesh_device->end_mesh_trace(mesh_cq.id(), tid);
+    mesh_device->replay_mesh_trace(mesh_cq.id(), tid, false);
+    distributed::Finish(mesh_cq);
+    mesh_device->release_mesh_trace(tid);
 }
 
 TEST_F(MeshDispatchFixture, EthTestBlank) {
