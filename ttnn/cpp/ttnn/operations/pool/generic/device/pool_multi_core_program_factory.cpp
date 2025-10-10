@@ -411,7 +411,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
 
         uint32_t tile_elems = tt::constants::TILE_WIDTH * tt::constants::TILE_HEIGHT;
         tile_tmp_cb_id = next_cb_index++;
-        tt::tt_metal::create_cb(tile_tmp_cb_id, program, all_cores, params.nbytes * tile_elems, 1, params.index_format);
+        tt::tt_metal::create_cb(tile_tmp_cb_id, program, all_cores, params.nbytes * tile_elems, 1, params.data_format);
         log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", tile_tmp_cb_id, params.nbytes * tile_elems, 1);
         tile_idx_tmp_cb_id = next_cb_index++;
         tt::tt_metal::create_cb(
@@ -575,7 +575,9 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         dilation_h,                     // 34
         dilation_w,                     // 35
         (uint32_t)return_indices,       // 36
-        (uint32_t)zero_pages};          // 37
+        (uint32_t)zero_pages,           // 37
+        out_cb_id,                      // 38
+        out_idx_cb_id};                 // 39
     std::vector<uint32_t> reader1_ct_args = reader0_ct_args;
     reader1_ct_args[8] = 1;  // split reader id for reader1
 

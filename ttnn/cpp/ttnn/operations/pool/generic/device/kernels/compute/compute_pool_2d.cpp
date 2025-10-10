@@ -12,7 +12,7 @@
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
 
-#define DEBUG_PRINT 0
+#define DEBUG_PRINT 1
 
 #if DEBUG_PRINT == 1
 #include "debug/dprint.h"
@@ -97,12 +97,7 @@ void MAIN {
         pack_untilize_dest_init<max_tiles_per_iter>(tilize_untilize_cb, num_out_sticks, num_faces_in_output_tile);
     } else {
         unary_op_init_common(in_cb_id_0, in_cb_id_0);
-        tilize_init_no_pack(in_cb_id_0, topk_output_tiles);
-        if constexpr (!pack_untilize_reinit) {
-            const uint32_t output_faces =
-                last_tile_is_partial ? num_faces_in_last_output_tile : num_faces_in_output_tile;
-            pack_untilize_dest_init<topk_output_tiles>(out_cb_id, num_out_sticks, output_faces);
-        }
+        // tilize_init(in_cb_id_0, topk_output_tiles, in_cb_id_0);
 
         // this can be done here because we do not use the SFPU for anything else so it does not get reprogrammed
         // if you use the sfpu for other operations, you need to call this to reprogram the sfpu
@@ -140,7 +135,7 @@ void MAIN {
                 (last_tile_is_partial && last_c_block)
                     ? (number_of_tiles - 1) * num_faces_in_output_tile + num_faces_in_last_output_tile
                     : number_of_tiles * num_faces_in_output_tile;
-            if constexpr (!is_output_tiled) {
+            if constexpr (!is_output_tiled && !return_indices) {
                 cb_reserve_back(out_cb_id, output_faces);
             }
             if constexpr (tilize_reconfig || is_output_tiled) {
@@ -155,12 +150,19 @@ void MAIN {
                 if constexpr (return_indices) {
                     cb_wait_front(curr_in_idx_cb_id, 1);
 
-                    tilize_init_short_with_dt_no_pack(curr_in_cb_id, curr_in_idx_cb_id, topk_output_tiles);
-                    tilize_block_no_pack(curr_in_idx_cb_id, topk_output_tiles, index_dst_idx, topk_cb_tile_idx);
-                    tilize_uninit_with_dt_no_pack(curr_in_idx_cb_id, curr_in_cb_id);
-                    tilize_init_short_with_dt_no_pack(curr_in_idx_cb_id, curr_in_cb_id, topk_output_tiles);
-                    tilize_block_no_pack(curr_in_cb_id, topk_output_tiles, data_dst_idx, topk_cb_tile_idx);
-                    tilize_uninit_with_dt_no_pack(curr_in_cb_id, curr_in_idx_cb_id);
+                    // UNPACK(tt::compute::common::print_full_tile(curr_in_cb_id));
+
+                    copy_tile_to_dst_init_short(curr_in_cb_id);
+                    reconfig_data_format_srca(curr_in_cb_id);
+                    pack_reconfig_data_format(curr_in_cb_id);
+                    copy_tile(curr_in_cb_id, topk_cb_tile_idx, data_dst_idx);
+
+                    copy_tile_to_dst_init_short(curr_in_idx_cb_id);
+                    reconfig_data_format_srca(curr_in_idx_cb_id);
+                    pack_reconfig_data_format(curr_in_idx_cb_id);
+                    copy_tile(curr_in_idx_cb_id, topk_cb_tile_idx, index_dst_idx);
+
+                    dprint_tensix_dest_reg(2);
 
                     max_reduce_with_indices<window_size_hw>(data_dst_idx, index_dst_idx);
 
@@ -238,28 +240,18 @@ void MAIN {
                     tile_regs_release();
                 }
             } else {
-                if constexpr (pack_untilize_reinit) {
-                    tensix_sync();
-                    pack_untilize_dest_init<topk_output_tiles>(out_cb_id, num_out_sticks, output_faces);
-                    tensix_sync();
-                }
+                cb_wait_front(tile_tmp_cb_id, 1);
+                pack_reconfig_data_format(tile_tmp_cb_id);
+                pack_tile<true>(data_dst_idx, tile_tmp_cb_id, topk_cb_tile_idx);
+                // PACK(tt::compute::common::print_full_tile(tile_tmp_cb_id));
+                cb_pop_front(tile_tmp_cb_id, 1);
 
-                pack_reconfig_data_format(out_cb_id);
-                pack_untilize_dest<topk_output_tiles, topk_output_tiles, false, false, TILE_C_DIM, data_dst_idx>(
-                    out_cb_id, 1, 0, num_out_sticks, output_faces);
-                pack_reconfig_data_format(out_idx_cb_id);
-                pack_untilize_dest<topk_output_tiles, topk_output_tiles, false, false, TILE_C_DIM, index_dst_idx>(
-                    out_idx_cb_id, 1, 0, num_out_sticks, output_faces);
+                cb_wait_front(tile_idx_tmp_cb_id, 1);
+                pack_reconfig_data_format(tile_idx_tmp_cb_id);
+                pack_tile<true>(index_dst_idx, tile_idx_tmp_cb_id, topk_cb_tile_idx);
+                // PACK(tt::compute::common::print_full_tile(tile_idx_tmp_cb_id));
+                cb_pop_front(tile_idx_tmp_cb_id, 1);
 
-                if constexpr (pack_untilize_reinit) {
-                    tensix_sync();
-                    pack_untilize_uninit(out_cb_id);
-                    tensix_sync();
-                }
-                cb_push_back(out_cb_id, output_faces);
-                if constexpr (return_indices) {
-                    cb_push_back(out_idx_cb_id, output_faces);
-                }
                 tile_regs_release();
             }
         }
