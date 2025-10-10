@@ -52,12 +52,39 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
     uint32_t K_tiles = K / tt::constants::TILE_WIDTH;
     uint32_t N_tiles = N / tt::constants::TILE_WIDTH;
 
-    auto in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
-    auto in0_risc = tt::tt_metal::DataMovementProcessor::RISCV_1;
-    auto in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
-    auto in1_risc = tt::tt_metal::DataMovementProcessor::RISCV_0;
-    uint32_t in0_parallel_axis_cores = grid_size.y;
-    uint32_t in1_parallel_axis_cores = grid_size.x;
+    /**
+     * We see that for non-square outputs, N > M is significantly faster than M > N.
+     * This is because the in0 DM kernel is responsible for reading in0 and writing output.
+     * When M > N, the in0 DM kernel has more data to read on top of its responsibility to write output.
+     *
+     * An optimization is to have the DM kernel with less data to read handle writes, and transpose the core_grid
+     * to keep NOC usage consistent.
+     *
+     * The smaller input read and mcast is always across a row of cores (x, y): (0, core_y) -> (grid_size.x-1, core_y)
+     * The larger input read and mcast is always across a column of cores (x, y): (core_x, 0) -> (core_x. grid_size.y-1)
+     *
+     * Output is always written by DM reading the smaller input.
+     *
+     * Small input + output DM always runs on RISCV_1, NOC_1
+     * Large input DM always runs on RISCV_0, NOC_0
+     */
+
+    auto small_input_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
+    auto small_input_risc = tt::tt_metal::DataMovementProcessor::RISCV_1;
+    auto large_input_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
+    auto large_input_risc = tt::tt_metal::DataMovementProcessor::RISCV_0;
+
+    // Transpose core grid if the output is wide (M > N)
+    // If transpose core grid, we parallelize M on cores_x and N on cores_y and swap the NOCs and RISCVs
+    bool transpose_core_grid = M > N;
+
+    auto in0_noc = transpose_core_grid ? large_input_noc : small_input_noc;
+    auto in0_risc = transpose_core_grid ? large_input_risc : small_input_risc;
+    uint32_t in0_parallel_axis_cores = transpose_core_grid ? grid_size.x : grid_size.y;
+
+    auto in1_noc = transpose_core_grid ? small_input_noc : large_input_noc;
+    auto in1_risc = transpose_core_grid ? small_input_risc : large_input_risc;
+    uint32_t in1_parallel_axis_cores = transpose_core_grid ? grid_size.y : grid_size.x;
 
     /**
      * TODO: Pick optimal subblock sizes, hardcoded to 2x4 or 1x4 or 2x2
@@ -101,10 +128,10 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
     auto core_0_endy = CoreCoord{0, grid_size.y - 1};
     auto core_endx_endy = CoreCoord{grid_size.x - 1, grid_size.y - 1};
 
-    auto in0_sender_cores = CoreRange(core_0_0, core_0_endy);
-    auto in0_receiver_cores = CoreRange(core_1_0, core_endx_endy);
-    auto in1_sender_cores = CoreRange(core_0_0, core_endx_0);
-    auto in1_receiver_cores = CoreRange(core_0_1, core_endx_endy);
+    auto in0_sender_cores = CoreRange(core_0_0, transpose_core_grid ? core_endx_0 : core_0_endy);
+    auto in0_receiver_cores = CoreRange(transpose_core_grid ? core_0_1 : core_1_0, core_endx_endy);
+    auto in1_sender_cores = CoreRange(core_0_0, transpose_core_grid ? core_0_endy : core_endx_0);
+    auto in1_receiver_cores = CoreRange(transpose_core_grid ? core_1_0 : core_0_1, core_endx_endy);
 
     // auto in0_mcast_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
     // auto in0_mcast_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
@@ -194,8 +221,8 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
     // auto in0_mcast_num_dests = grid_size.x - 1;
     // auto in1_mcast_num_dests = grid_size.y - 1;
 
-    bool in0_is_output_writer = true;
-    bool in1_is_output_writer = false;
+    bool in0_is_output_writer = !transpose_core_grid;
+    bool in1_is_output_writer = transpose_core_grid;
 
     std::vector<uint32_t> in0_sender_compile_time_args = {
         M_tiles,
@@ -320,55 +347,57 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
      * If we have core_grid.x cores, we'd want to evenly stride the K_blocks they defer by.
      * For first pass, it's easy enough to use core_grid.x
      */
-
-    uint32_t k_blocks_per_core = tt::div_up(K_blocks, in0_parallel_axis_cores);
+    uint32_t k_blocks_per_core =
+        tt::div_up(K_blocks, (transpose_core_grid ? in1_parallel_axis_cores : in0_parallel_axis_cores));
 
     auto cores = corerange_to_cores(core_grid, num_cores, true);
 
     for (uint32_t core_id = 0; core_id < num_cores; ++core_id) {
         CoreCoord core = cores.at(core_id);
-        uint32_t in0_idx = core.y;
-        uint32_t in1_idx = core.x;
+        uint32_t in0_idx = transpose_core_grid ? core.x : core.y;
+        uint32_t in1_idx = transpose_core_grid ? core.y : core.x;
 
         CoreCoord left_core = {(std::size_t)0, (std::size_t)core.y};
         CoreCoord top_core = {(std::size_t)core.x, (std::size_t)0};
 
         std::vector<CoreCoord> in0_core_order;
-        in0_core_order.push_back(left_core);
+        in0_core_order.push_back(transpose_core_grid ? top_core : left_core);
         uint32_t in0_core_order_index = 0;
-        for (uint32_t in0_worker_idx = 1; in0_worker_idx < grid_size.x; in0_worker_idx++) {
-            CoreCoord in0_worker_core = {(std::size_t)0, (std::size_t)core.y};
+        for (uint32_t in0_worker_idx = 1; in0_worker_idx < in1_parallel_axis_cores; in0_worker_idx++) {
+            CoreCoord in0_worker_core = core;
+            size_t& in0_coord_to_modify = transpose_core_grid ? in0_worker_core.y : in0_worker_core.x;
             if (in0_noc == tt::tt_metal::NOC::NOC_1) {
-                in0_worker_core.x = grid_size.x - in0_worker_idx;
+                in0_coord_to_modify = in1_parallel_axis_cores - in0_worker_idx;
             } else {
-                in0_worker_core.x = in0_worker_idx;
+                in0_coord_to_modify = in0_worker_idx;
             }
-            if (in0_worker_core.x == core.x) {
+            if (in0_coord_to_modify == (transpose_core_grid ? core.y : core.x)) {
                 in0_core_order_index = in0_worker_idx;
             }
             in0_core_order.push_back(in0_worker_core);
         }
         std::vector<CoreCoord> in1_core_order;
-        in1_core_order.push_back(top_core);
+        in1_core_order.push_back(transpose_core_grid ? left_core : top_core);
         uint32_t in1_core_order_index = 0;
-        for (uint32_t in1_worker_idx = 1; in1_worker_idx < grid_size.y; in1_worker_idx++) {
-            CoreCoord in1_worker_core = {(std::size_t)core.x, (std::size_t)0};
+        for (uint32_t in1_worker_idx = 1; in1_worker_idx < in0_parallel_axis_cores; in1_worker_idx++) {
+            CoreCoord in1_worker_core = core;
+            size_t& in1_coord_to_modify = transpose_core_grid ? in1_worker_core.x : in1_worker_core.y;
             if (in1_noc == tt::tt_metal::NOC::NOC_0) {
-                in1_worker_core.y = in1_worker_idx;
+                in1_coord_to_modify = in1_worker_idx;
             } else {
-                in1_worker_core.y = grid_size.y - in1_worker_idx;
+                in1_coord_to_modify = in0_parallel_axis_cores - in1_worker_idx;
             }
-            if (in1_worker_core.y == core.y) {
+            if (in1_coord_to_modify == (transpose_core_grid ? core.x : core.y)) {
                 in1_core_order_index = in1_worker_idx;
             }
             in1_core_order.push_back(in1_worker_core);
         }
         auto in0_prev_core = in0_core_order.at((std::size_t)std::max((int32_t)in0_core_order_index - 1, 0));
-        auto in0_next_core =
-            in0_core_order.at((std::size_t)std::min((size_t)in0_core_order_index + 1, grid_size.x - 1));
+        auto in0_next_core = in0_core_order.at(
+            (std::size_t)std::min((size_t)in0_core_order_index + 1, (size_t)in1_parallel_axis_cores - 1));
         auto in1_prev_core = in1_core_order.at((std::size_t)std::max((int32_t)in1_core_order_index - 1, 0));
-        auto in1_next_core =
-            in1_core_order.at((std::size_t)std::min((size_t)in1_core_order_index + 1, grid_size.y - 1));
+        auto in1_next_core = in1_core_order.at(
+            (std::size_t)std::min((size_t)in1_core_order_index + 1, (size_t)in0_parallel_axis_cores - 1));
 
         auto in0_prev_core_physical = device->worker_core_from_logical_core(in0_prev_core);
         ;
@@ -400,8 +429,8 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
         uint32_t defer_write_k_block = core.y * k_blocks_per_core;
         defer_write_k_block = std::min(defer_write_k_block, K_blocks - 1);
 
-        bool is_in0_sink = core.x == in0_core_order.at(grid_size.x - 1).x;
-        bool is_in1_sink = core.y == in1_core_order.at(grid_size.y - 1).y;
+        bool is_in0_sink = core == in0_core_order.at(in1_parallel_axis_cores - 1);
+        bool is_in1_sink = core == in1_core_order.at(in0_parallel_axis_cores - 1);
 
         log_info(
             tt::LogOp,
@@ -499,7 +528,8 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
          in0_sender_kernels_id,
          in0_receiver_kernels_id,
          in1_sender_kernels_id,
-         in1_receiver_kernels_id](
+         in1_receiver_kernels_id,
+         transpose_core_grid](
             const void* operation,
             tt::tt_metal::Program& program,
             const std::vector<Tensor>& input_tensors,
@@ -516,8 +546,8 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
 
             for (uint32_t i = 0; i < num_cores; ++i) {
                 CoreCoord core = cores.at(i);
-                uint32_t in0_idx = core.y;
-                uint32_t in1_idx = core.x;
+                uint32_t in0_idx = transpose_core_grid ? core.x : core.y;
+                uint32_t in1_idx = transpose_core_grid ? core.y : core.x;
                 if (in1_idx == 0) {
                     auto& in0_sender_args = in0_sender_runtime_args[core.x][core.y];
                     in0_sender_args[0] = input_addr;
