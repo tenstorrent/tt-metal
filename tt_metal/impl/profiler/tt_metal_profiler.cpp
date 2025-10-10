@@ -264,7 +264,7 @@ void syncDeviceHost(IDevice* device, CoreCoord logical_core, bool doHeader) {
                                        frequencyFit * tracyToSecRatio);
     // disable linting here; slicing is __intended__
     // NOLINTBEGIN
-    profiler_state_manager->device_profiler_map.at(device_id).device_core_sync_info.insert_or_assign(
+    profiler_state_manager->device_profiler_map.at(device_id).device_core_sync_info.emplace(
         CoreCoord(phys_core), SyncInfo(host_timestamp, device_timestamp, frequencyFit));
     // NOLINTEND
 }
@@ -536,13 +536,13 @@ void syncAllDevices(chip_id_t host_connected_device) {
 
             uint64_t shift = ((double)(senderSum - (freqScale * (double)receiverSum)) / accumulateSampleCount) +
                              (senderBase - freqScale * receiverBase);
-            deviceDeviceSyncInfo.insert_or_assign(sender.first, (std::unordered_map<chip_id_t, std::pair<double, int64_t>>){});
+            deviceDeviceSyncInfo.emplace(sender.first, (std::unordered_map<chip_id_t, std::pair<double, int64_t>>){});
             deviceDeviceSyncInfo.at(sender.first)
-                .insert_or_assign(receiver.first, (std::pair<double, int64_t>){freqScale, shift});
+                .emplace(receiver.first, (std::pair<double, int64_t>){freqScale, shift});
 
-            deviceDeviceSyncInfo.insert_or_assign(receiver.first, (std::unordered_map<chip_id_t, std::pair<double, int64_t>>){});
+            deviceDeviceSyncInfo.emplace(receiver.first, (std::unordered_map<chip_id_t, std::pair<double, int64_t>>){});
             deviceDeviceSyncInfo.at(receiver.first)
-                .insert_or_assign(sender.first, (std::pair<double, int64_t>){1.0 / freqScale, -1 * shift});
+                .emplace(sender.first, (std::pair<double, int64_t>){1.0 / freqScale, -1 * shift});
         }
     }
 
