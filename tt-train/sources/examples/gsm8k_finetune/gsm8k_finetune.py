@@ -8,10 +8,12 @@ import os
 import sys
 import datasets
 import numpy as np
-from transformers import AutoTokenizer
+import torch
+from transformers import AutoTokenizer, AutoModelForCausalLM
 from huggingface_hub import hf_hub_download
 from matplotlib import pyplot as plt
 from tqdm import tqdm
+import debugpy
 
 # Add TT-Metal path
 sys.path.append(f"{os.environ['TT_METAL_HOME']}/tt-train/sources/ttml")
@@ -22,7 +24,9 @@ from ttml.common.utils import set_seed, round_up_to_tile, create_optimizer
 from ttml.common.data import build_causal_mask
 
 # Configuration
-CONFIG = "training_shakespeare_gpt2s.yaml"
+CONFIG = "training_shakespeare_tinyllama.yaml"
+
+debugpy.listen(5678)
 
 
 class GradientAccumulator:
@@ -112,7 +116,7 @@ def get_batch_generator(data, batch_size, max_sequence_length, padded_vocab_size
             X_np = np.expand_dims(data_np, axis=(1, 2))
 
             y_np = np.roll(X_np, -1, axis=-1)  # Shift left by 1
-            y_np[:, :, :, -1] = tokenizer.eos_token_id  # Last token target
+            y_np[:, :, :, -1] = tokenizer.eos_token_id
             y_np = y_np.squeeze(axis=(1, 2))  # Shape: [batch, seq_len]
 
             logits_mask_np = np.ones((batch_size, 1, max_sequence_length, padded_vocab_size), dtype=np.float32)
@@ -123,6 +127,11 @@ def get_batch_generator(data, batch_size, max_sequence_length, padded_vocab_size
                 # Also mask padding tokens
                 pad_positions = X_np[i, 0, 0, :] == tokenizer.eos_token_id
                 logits_mask_np[i, :, pad_positions, :] = 0.0
+
+            scaler_np = logits_mask_np[..., 0].sum(axis=-1, keepdims=True)  # Shape: [batch_size, 1, 1]
+            scaler_np = max_sequence_length / scaler_np
+            scaler_np = np.expand_dims(scaler_np, axis=-1)
+            scaler_np = np.repeat(scaler_np, max_sequence_length, axis=2)
 
             logits_add_mask_np = np.zeros_like(logits_mask_np, dtype=np.float32)
 
@@ -142,11 +151,13 @@ def get_batch_generator(data, batch_size, max_sequence_length, padded_vocab_size
                 logits_mask_np, ttml.Layout.TILE, ttml.autograd.DataType.BFLOAT16
             )
 
+            scaler = ttml.autograd.Tensor.from_numpy(scaler_np, ttml.Layout.TILE, ttml.autograd.DataType.BFLOAT16)
+
             X = ttml.autograd.Tensor.from_numpy(X_np, ttml.Layout.ROW_MAJOR, ttml.autograd.DataType.UINT32)
             y = ttml.autograd.Tensor.from_numpy(y_np, ttml.Layout.ROW_MAJOR, ttml.autograd.DataType.UINT32)
 
             curr_idx += batch_size
-            yield (X, y, logits_mask, logits_add_mask)
+            yield (X, y, logits_mask, logits_add_mask, scaler)
 
     return get_batch(data, batch_size)
 
@@ -182,7 +193,7 @@ def generate_text(
         logits = model(padded_prompt_tensor, causal_mask)  # out=[1,1,seq_len, vocab_size], bf16
 
         next_token_tensor = ttml.ops.sample.sample_op(
-            logits, temperature, np.random.randint(low=1e7), logits_mask_tensor
+            logits, 0.0, np.random.randint(low=1e7), logits_mask_tensor
         )  # out=[1,1,seq_len,1], uint32
 
         next_token_idx = max_sequence_length - 1 if len(prompt_tokens) > max_sequence_length else len(prompt_tokens) - 1
@@ -195,6 +206,74 @@ def generate_text(
     ttml.autograd.AutoContext.get_instance().set_gradient_mode(ttml.autograd.GradMode.ENABLED)
 
 
+def generate_text_tinyllama(tokenizer, question, max_gen_tokens=100, temperature=0.7):
+    """Generate text using HuggingFace TinyLlama for comparison."""
+    # Load TinyLlama model with BF16 precision
+    tinyllama_model = AutoModelForCausalLM.from_pretrained(
+        "TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T", torch_dtype=torch.bfloat16
+    )
+    tinyllama_model.eval()
+
+    # Tokenize input
+    inputs = tokenizer(question, return_tensors="pt")
+    input_ids = inputs["input_ids"]
+
+    # Generate text
+    print(f"\nTinyLlama Generation for: {question}")
+    print("=" * 50)
+    print(question, end="", flush=True)
+
+    with torch.no_grad():
+        generated_ids = tinyllama_model.generate(
+            input_ids,
+            max_new_tokens=max_gen_tokens,
+            do_sample=False,
+            temperature=0,
+            pad_token_id=tokenizer.eos_token_id,
+            eos_token_id=tokenizer.eos_token_id,
+        )
+
+    # Decode only the generated part (excluding input)
+    generated_text = tokenizer.decode(generated_ids[0][input_ids.shape[1] :], skip_special_tokens=True)
+    print(generated_text)
+    print("=" * 50)
+
+    return generated_text
+
+
+def generate_text_gpt2(tokenizer, question, max_gen_tokens=100, temperature=0.7):
+    """Generate text using HuggingFace GPT-2 for comparison."""
+    # Load GPT-2 model with BF16 precision
+    gpt2_model = AutoModelForCausalLM.from_pretrained("gpt2", torch_dtype=torch.bfloat16)
+    gpt2_model.eval()
+
+    # Tokenize input
+    inputs = tokenizer(question, return_tensors="pt")
+    input_ids = inputs["input_ids"]
+
+    # Generate text
+    print(f"\nGPT-2 Generation for: {question}")
+    print("=" * 50)
+    print(question, end="", flush=True)
+
+    with torch.no_grad():
+        generated_ids = gpt2_model.generate(
+            input_ids,
+            max_new_tokens=max_gen_tokens,
+            do_sample=False,
+            temperature=0,
+            pad_token_id=tokenizer.eos_token_id,
+            eos_token_id=tokenizer.eos_token_id,
+        )
+
+    # Decode only the generated part (excluding input)
+    generated_text = tokenizer.decode(generated_ids[0][input_ids.shape[1] :], skip_special_tokens=True)
+    print(generated_text)
+    print("=" * 50)
+
+    return generated_text
+
+
 def adjust_logits(logits, binary_mask, add_mask):
     masked_logits = binary_mask * logits
     masked_logits = masked_logits + add_mask
@@ -204,12 +283,14 @@ def adjust_logits(logits, binary_mask, add_mask):
 
 def main():
     print("Loading tokenizer and config...")
-    tokenizer = AutoTokenizer.from_pretrained("gpt2")
+    tokenizer = AutoTokenizer.from_pretrained("TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T")
     yaml_config = get_config(CONFIG)
 
     # Download safetensors
     print("Downloading safetensors...")
-    safetensors_path = hf_hub_download(repo_id="gpt2", filename="model.safetensors")
+    safetensors_path = hf_hub_download(
+        repo_id="TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T", filename="model.safetensors"
+    )
     safetensors_path = safetensors_path.replace("model.safetensors", "")
     print(f"Safetensors path: {safetensors_path}")
 
@@ -247,7 +328,7 @@ def main():
     logits_mask_tensor = build_logits_mask(orig_vocab_size, padded_vocab_size)
 
     loss_fn = ttml.ops.loss.cross_entropy_loss
-    reduce = ttml.ops.ReduceType.MEAN
+    reduce = ttml.ops.ReduceType.NONE
 
     # Training setup
 
@@ -275,7 +356,7 @@ def main():
         if accum.should_zero_grad():
             optim.zero_grad()
 
-        X, y, logits_mask, logits_add_mask = next(train_batch_generator)
+        X, y, logits_mask, logits_add_mask, loss_scaler = next(train_batch_generator)
 
         # Forward pass: input is the concatenated sequence
         logits = tt_model(X, causal_mask)  # Shape: [batch, 1, seq_len, vocab_size]
@@ -284,7 +365,10 @@ def main():
         masked_logits = adjust_logits(logits, logits_mask, logits_add_mask)
 
         # Compute cross-entropy loss on masked logits
-        loss = loss_fn(masked_logits, y, reduce)
+        unscaled_loss = loss_fn(masked_logits, y, reduce)
+
+        loss = unscaled_loss * loss_scaler  # Scale loss based on non-masked tokens
+        loss = ttml.ops.unary.mean(loss)
 
         scaled_loss = accum.scale(loss)
         scaled_loss.backward(False)
@@ -292,6 +376,9 @@ def main():
 
         train_loss = float(loss.to_numpy())
         accum.update(train_loss, tokens_per_batch)
+
+        if step == 1:
+            print(f"First loss: {train_loss:.4f}")
 
         if accum.should_step():
             optim.step()
@@ -308,7 +395,7 @@ def main():
             ttml.autograd.AutoContext.get_instance().set_gradient_mode(ttml.autograd.GradMode.DISABLED)
             tt_model.eval()
 
-            val_X, val_y, val_logits_mask, val_logits_add_mask = next(val_batch_generator)
+            val_X, val_y, val_logits_mask, val_logits_add_mask, val_loss_scaler = next(val_batch_generator)
             val_logits = tt_model(val_X, causal_mask)
 
             # Apply mask to validation logits
@@ -316,6 +403,8 @@ def main():
 
             # Compute validation loss
             val_loss = loss_fn(val_masked_logits, val_y, reduce)
+            val_loss = val_loss * val_loss_scaler
+            val_loss = ttml.ops.unary.mean(val_loss)
             val_losses.append(val_loss.to_numpy().item())
 
             print("Validation check")
@@ -352,15 +441,30 @@ def main():
     plt.savefig("training_curves.png")
     plt.show()
 
-    # Test generation
-    print("\nTesting text generation...")
-    test_question = testing_data[0]["question"]
-    print("Test question:", test_question)
+    # # Test generation
+    # print("\nTesting text generation...")
+    # test_question = testing_data[0]["question"]
+    # print("Test question:", test_question)
 
-    generated_answer = generate_text(tt_model, tokenizer, test_question, max_sequence_length, causal_mask)
-    print("Generated answer:", generated_answer)
+    # # Generate with GPT-2 for comparison
+    # print("\n" + "="*60)
+    # print("COMPARISON: GPT-2 (HuggingFace) Generation")
+    # print("="*60)
+    # gpt2_answer = generate_text_gpt2(tokenizer, test_question, max_gen_tokens=100, temperature=0.0)
 
-    print("Expected answer:", testing_data[0]["answer"])
+    # print(gpt2_answer)
+
+    # # Generate with fine-tuned TT-Metal model
+    # print("\n" + "="*60)
+    # print("FINE-TUNED: TT-Metal Model Generation")
+    # print("="*60)
+    # print(test_question, end="", flush=True)
+    # generate_text(tt_model, tokenizer, test_question, max_sequence_length, causal_mask, 0.0, logits_mask_tensor, 100)
+
+    # print("\n" + "="*60)
+    # print("EXPECTED ANSWER:")
+    # print("="*60)
+    # print(testing_data[0]["answer"])
 
 
 if __name__ == "__main__":
