@@ -1147,7 +1147,8 @@ static std::pair<uint32_t, Conv2dConfig> calculate_conv_dram_slice_L1_usage(
     auto compute_l1_usage_for_slice = [&](uint32_t input_slice_height,
                                           uint32_t input_slice_width,
                                           uint32_t output_slice_height,
-                                          uint32_t output_slice_width) {
+                                          uint32_t output_slice_width,
+                                          const std::array<uint32_t, 4>& slice_padding) {
         log_trace(
             tt::LogOp,
             "Conv2D DRAM Auto Slice Max Input Size : {}x{}, Max Output Size : {}x{}",
@@ -1263,7 +1264,7 @@ static std::pair<uint32_t, Conv2dConfig> calculate_conv_dram_slice_L1_usage(
         slice_halo_config.input_hw = {input_slice_height, input_slice_width};
         slice_halo_config.window_hw = {params.kernel_size[0], params.kernel_size[1]};
         slice_halo_config.stride_hw = {params.stride[0], params.stride[1]};
-        slice_halo_config.padding = params.padding_n4;
+        slice_halo_config.padding = slice_padding;
         slice_halo_config.dilation_hw = {params.dilation[0], params.dilation[1]};
         slice_halo_config.num_cores_nhw = get_num_cores_nhw_from_parallel_config(parallel_config);
         slice_halo_config.core_range_set = sliced_input_tensor_memory_config.shard_spec().value().grid;
@@ -1347,8 +1348,8 @@ static std::pair<uint32_t, Conv2dConfig> calculate_conv_dram_slice_L1_usage(
                 continue;
             }
         }
-        uint32_t input_slice_width = (input_slice_width_end - input_slice_width_start) + pad_left + pad_right;
-        uint32_t input_slice_height = (input_slice_height_end - input_slice_height_start) + pad_top + pad_bottom;
+        uint32_t input_slice_width = (input_slice_width_end - input_slice_width_start);
+        uint32_t input_slice_height = (input_slice_height_end - input_slice_height_start);
         uint32_t output_slice_width = output_slice_width_end - output_slice_width_start;
         uint32_t output_slice_height = output_slice_height_end - output_slice_height_start;
         if (output_slice_width % width_rounding_value != 0) {
@@ -1379,8 +1380,13 @@ static std::pair<uint32_t, Conv2dConfig> calculate_conv_dram_slice_L1_usage(
             input_slice_height_end,
             input_slice_width_end);
 
-        auto [this_slice_l1_usage, this_slice_input_size, this_slice_approx_max_halo_size] =
-            compute_l1_usage_for_slice(input_slice_height, input_slice_width, output_slice_height, output_slice_width);
+        std::array<uint32_t, 4> slice_padding = {
+            static_cast<uint32_t>(pad_top),
+            static_cast<uint32_t>(pad_bottom),
+            static_cast<uint32_t>(pad_left),
+            static_cast<uint32_t>(pad_right)};
+        auto [this_slice_l1_usage, this_slice_input_size, this_slice_approx_max_halo_size] = compute_l1_usage_for_slice(
+            input_slice_height, input_slice_width, output_slice_height, output_slice_width, slice_padding);
 
         output_slice_dim_start += output_slice_size;
         slice_index++;

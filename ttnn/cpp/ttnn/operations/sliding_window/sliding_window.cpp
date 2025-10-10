@@ -1321,15 +1321,17 @@ uint32_t align_buffer(uint32_t size) {
 };
 
 std::string SlidingWindowConfig::to_string() const {
-    return std::to_string(batch_size) + "_" + std::to_string(channels) + "_" + std::to_string(std::get<0>(input_hw)) +
-           "_" + std::to_string(std::get<1>(input_hw)) + "_" + std::to_string(std::get<0>(window_hw)) + "_" +
-           std::to_string(std::get<1>(window_hw)) + "_" + std::to_string(std::get<0>(stride_hw)) + "_" +
-           std::to_string(std::get<1>(stride_hw)) + "_" + std::to_string(padding[0]) + "_" +
-           std::to_string(padding[1]) + "_" + std::to_string(padding[2]) + "_" + std::to_string(padding[3]) + "_" +
-           std::to_string(std::get<0>(output_pad_hw)) + "_" + std::to_string(std::get<1>(output_pad_hw)) + "_" +
-           std::to_string(std::get<0>(dilation_hw)) + "_" + std::to_string(std::get<1>(dilation_hw)) + "_" +
-           std::to_string(num_cores_nhw) + "_" + std::to_string(num_cores_c) + "_" + core_range_set.str() +
-           (snap_to_tile ? "_snap_to_tile" : "") + (is_bilinear ? "_bilinear" : "") +
+    return "batch=" + std::to_string(batch_size) + "_ch=" + std::to_string(channels) +
+           "_in_h=" + std::to_string(std::get<0>(input_hw)) + "_in_w=" + std::to_string(std::get<1>(input_hw)) +
+           "_win_h=" + std::to_string(std::get<0>(window_hw)) + "_win_w=" + std::to_string(std::get<1>(window_hw)) +
+           "_stride_h=" + std::to_string(std::get<0>(stride_hw)) +
+           "_stride_w=" + std::to_string(std::get<1>(stride_hw)) + "_pad_t=" + std::to_string(padding[0]) +
+           "_pad_b=" + std::to_string(padding[1]) + "_pad_l=" + std::to_string(padding[2]) +
+           "_pad_r=" + std::to_string(padding[3]) + "_out_pad_h=" + std::to_string(std::get<0>(output_pad_hw)) +
+           "_out_pad_w=" + std::to_string(std::get<1>(output_pad_hw)) +
+           "_dil_h=" + std::to_string(std::get<0>(dilation_hw)) + "_dil_w=" + std::to_string(std::get<1>(dilation_hw)) +
+           "_cores_nhw=" + std::to_string(num_cores_nhw) + "_cores_c=" + std::to_string(num_cores_c) +
+           "_grid=" + core_range_set.str() + (snap_to_tile ? "_snap_to_tile" : "") + (is_bilinear ? "_bilinear" : "") +
            (is_transpose ? "_transpose" : "") + (ceil_mode ? "_ceil_mode" : "") + (is_avg_pool ? "_avg_pool" : "");
 }
 
