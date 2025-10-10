@@ -435,6 +435,7 @@ std::string function_name(DataType dtype, Unary operation) {
         case RSUB: return "rsub_unary";
         case MUL: return "mul_unary";
         case DIV: return "div_unary";
+        case RECIP: return "recip";
         case NEGATIVE: return i32_function_name(dtype, "negative");
         case EXP: return "exp";
         case POWER: return "power";
@@ -444,7 +445,7 @@ std::string function_name(DataType dtype, Unary operation) {
         case LEZ: return i32_function_name(dtype, "lez");
         case LTZ: return i32_function_name(dtype, "ltz");
         case NEZ: return i32_u16_u32_function_name(dtype, "nez");
-        case LOGICAL_NOT: return i32_u16_u32_function_name(dtype, "logical_not_unary");
+        case LOGICAL_NOT: return i32_u16_u32_function_name(dtype, "logical_not");
     }
 }
 
@@ -454,6 +455,8 @@ std::string function_name(DataType dtype, Binary operation) {
         case ADD: return "add";
         case SUB: return "sub";
         case MUL: return "mul";
+        case DIV: return "div";
+        case POWER: return "power_binary";
     }
 }
 
@@ -464,17 +467,12 @@ std::string function_name(DataType dtype, Ternary operation) {
     }
 }
 
-// TODO consider handling copy on kernel-side to simplify host-side logic
 void format_to_kernel_string(
     std::back_insert_iterator<std::string> out, DataType dtype, Unary operation, ParamsView params, int& rt_arg_index) {
     switch (params.size()) {
-        case 0: fmt::format_to(out, "copy<0>(0,0),{}(0),pack<1>(0)", function_name(dtype, operation)); return;
+        case 0: fmt::format_to(out, "{}()", function_name(dtype, operation)); return;
         case 1:
-            fmt::format_to(
-                out,
-                "copy<0>(0,0),{}(0,get_arg_val<uint32_t>({})),pack<1>(0)",
-                function_name(dtype, operation),
-                rt_arg_index++);
+            fmt::format_to(out, "{}(get_arg_val<uint32_t>({}))", function_name(dtype, operation), rt_arg_index++);
             return;
         default:
             TT_THROW(
@@ -492,7 +490,7 @@ void format_to_kernel_string(
     ParamsView params,
     int& rt_arg_index) {
     switch (params.size()) {
-        case 0: fmt::format_to(out, "{}<0,1>(0,0,0),pack<2>(0)", function_name(dtype, operation)); return;
+        case 0: fmt::format_to(out, "{}()", function_name(dtype, operation)); return;
         default:
             TT_THROW(
                 "unexpected params size {} for binary {} {}",
@@ -509,12 +507,7 @@ void format_to_kernel_string(
     ParamsView params,
     int& rt_arg_index) {
     switch (params.size()) {
-        case 0:
-            fmt::format_to(
-                out,
-                "copy<0>(0,0),copy<1>(0,n_tiles),copy<2>(0,n_tiles*2),{}(0,n_tiles,n_tiles*2,0),pack<3>(0)",
-                function_name(dtype, operation));
-            return;
+        case 0: fmt::format_to(out, "{}()", function_name(dtype, operation)); return;
         default:
             TT_THROW(
                 "unexpected params size {} for ternary {} {}",
