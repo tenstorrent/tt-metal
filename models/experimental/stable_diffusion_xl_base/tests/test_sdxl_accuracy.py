@@ -145,6 +145,7 @@ def test_accuracy_sdxl(
             "device_vae": vae_on_device,
             "capture_trace": capture_trace,
             "encoders_on_device": encoders_on_device,
+            "use_cfg_parallel": use_cfg_parallel,
             "num_inference_steps": num_inference_steps,
             "start_from": start_from,
             "num_prompts": num_prompts,
