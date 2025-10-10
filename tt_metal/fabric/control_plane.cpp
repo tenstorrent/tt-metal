@@ -1576,58 +1576,71 @@ bool ControlPlane::detect_inter_mesh_cycles(
         flow_dependency_graph[i] = {};  // Initialize all flows
     }
 
-    // Check each pair of flows for shared node-level directed edges
-    for (size_t flow_a = 0; flow_a < flow_paths.size(); ++flow_a) {
-        for (size_t flow_b = flow_a + 1; flow_b < flow_paths.size(); ++flow_b) {
-            const auto& path_a = flow_paths[flow_a];
-            const auto& path_b = flow_paths[flow_b];
+    // Build an index: edge -> flows that use it (much faster than O(n²) comparison)
+    std::unordered_map<NodeDirectedEdge, std::vector<size_t>, NodeDirectedEdgeHash> edge_to_flows;
 
-            // Check if these flows share any node-level directed edges (node A -> node B)
-            std::vector<NodeDirectedEdge> shared_edges;
-            for (size_t i = 0; i + 1 < path_a.size(); ++i) {
-                // Skip same-node channel switches
-                if (path_a[i].node == path_a[i + 1].node) {
+    for (size_t flow_idx = 0; flow_idx < flow_paths.size(); ++flow_idx) {
+        const auto& path = flow_paths[flow_idx];
+        for (size_t i = 0; i + 1 < path.size(); ++i) {
+            // Skip same-node channel switches
+            if (path[i].node == path[i + 1].node) {
+                continue;
+            }
+            NodeDirectedEdge edge{path[i].node, path[i + 1].node};
+            edge_to_flows[edge].push_back(flow_idx);
+        }
+    }
+
+    // Check flows that share edges for circular dependencies
+    struct PairHash {
+        std::size_t operator()(const std::pair<size_t, size_t>& p) const {
+            return std::hash<size_t>{}(p.first) ^ (std::hash<size_t>{}(p.second) << 1);
+        }
+    };
+    std::unordered_set<std::pair<size_t, size_t>, PairHash> checked_pairs;
+
+    for (const auto& [edge, flows_using_edge] : edge_to_flows) {
+        // Only check if multiple flows use this edge
+        if (flows_using_edge.size() < 2) {
+            continue;
+        }
+
+        // Check each pair of flows that share this edge
+        for (size_t i = 0; i < flows_using_edge.size(); ++i) {
+            for (size_t j = i + 1; j < flows_using_edge.size(); ++j) {
+                size_t flow_a = flows_using_edge[i];
+                size_t flow_b = flows_using_edge[j];
+
+                // Skip if we already checked this pair (they might share multiple edges)
+                auto pair_key = std::make_pair(std::min(flow_a, flow_b), std::max(flow_a, flow_b));
+                if (checked_pairs.find(pair_key) != checked_pairs.end()) {
                     continue;
                 }
-                NodeDirectedEdge edge_a{path_a[i].node, path_a[i + 1].node};
+                checked_pairs.insert(pair_key);
 
-                for (size_t j = 0; j + 1 < path_b.size(); ++j) {
-                    // Skip same-node channel switches
-                    if (path_b[j].node == path_b[j + 1].node) {
-                        continue;
-                    }
-                    NodeDirectedEdge edge_b{path_b[j].node, path_b[j + 1].node};
+                const auto& path_a = flow_paths[flow_a];
+                const auto& path_b = flow_paths[flow_b];
 
-                    if (edge_a == edge_b) {
-                        // Flows share a node-level directed edge - they compete for this link resource
-                        shared_edges.push_back(edge_a);
-                    }
-                }
-            }
-
-            if (!shared_edges.empty()) {
                 // Check if these flows form a circular dependency pattern
                 // A real circular dependency requires that flows traverse each other's destinations
-                // Fan-out patterns (same source, different destinations) should NOT create cycles
-
                 bool b_blocks_a = false;
                 bool a_blocks_b = false;
 
-                // Get destination nodes for each flow (source doesn't matter for circular dependencies)
+                // Get destination nodes for each flow
                 FabricNodeId dst_a = path_a.back().node;
                 FabricNodeId dst_b = path_b.back().node;
 
                 // Check if flow_b's DESTINATION appears in flow_a's path (excluding flow_a's own destination)
-                for (size_t i = 0; i + 1 < path_a.size(); ++i) {  // Exclude last element (dst_a)
-                    if (path_a[i].node == dst_b) {
+                for (size_t k = 0; k + 1 < path_a.size(); ++k) {
+                    if (path_a[k].node == dst_b) {
                         b_blocks_a = true;
                         break;
                     }
                 }
 
                 // Check if flow_a's DESTINATION appears in flow_b's path (excluding flow_b's own destination)
-                for (size_t i = 0; i + 1 < path_b.size(); ++i) {  // Exclude last element (dst_b)
-                    if (path_b[i].node == dst_a) {
+                for (size_t k = 0; k + 1 < path_b.size(); ++k) {
+                    if (path_b[k].node == dst_a) {
                         a_blocks_b = true;
                         break;
                     }
@@ -1784,35 +1797,152 @@ bool ControlPlane::detect_inter_mesh_cycles(
             continue;
         }
 
-        // Extract all unique nodes involved in this cycle of flows
-        std::unordered_set<FabricNodeId> nodes_in_cycle_set;
+        // Build a directed graph from all edges in the cyclic flows
+        std::unordered_map<FabricNodeId, std::vector<FabricNodeId>> edge_graph;
         std::unordered_set<uint32_t> meshes_in_cycle;
 
+        // Collect all directed edges from flows in the cycle
         for (size_t flow_idx : flow_cycle) {
             const auto& flow = flow_paths[flow_idx];
-            for (const auto& edge : flow) {
-                nodes_in_cycle_set.insert(edge.node);
-                meshes_in_cycle.insert(*edge.node.mesh_id);
+
+            for (size_t i = 0; i + 1 < flow.size(); ++i) {
+                FabricNodeId from_node = flow[i].node;
+                FabricNodeId to_node = flow[i + 1].node;
+
+                // Skip self-edges (same-node channel switches)
+                if (from_node == to_node) {
+                    continue;
+                }
+
+                meshes_in_cycle.insert(*from_node.mesh_id);
+                meshes_in_cycle.insert(*to_node.mesh_id);
+
+                // Add edge to graph (avoid duplicates)
+                auto& neighbors = edge_graph[from_node];
+                if (std::find(neighbors.begin(), neighbors.end(), to_node) == neighbors.end()) {
+                    neighbors.push_back(to_node);
+                }
             }
         }
 
-        // Convert set to vector for output
-        std::vector<FabricNodeId> node_cycle(nodes_in_cycle_set.begin(), nodes_in_cycle_set.end());
+        // Find an actual routing cycle in this edge graph using DFS
+        std::vector<FabricNodeId> routing_cycle;
+        std::unordered_set<FabricNodeId> visited;
+        std::unordered_set<FabricNodeId> rec_stack;
 
-        if (!node_cycle.empty()) {
-            // Only report cycles that span multiple meshes (intra-mesh uses dimension-ordered routing)
-            if (meshes_in_cycle.size() >= 2) {
-                node_cycles.push_back(node_cycle);
-                log_info(
-                    tt::LogFabric,
-                    "  Cycle {}: {} flows, {} nodes across {} meshes",
-                    cycle_idx + 1,
-                    flow_cycle.size(),
-                    node_cycle.size(),
-                    meshes_in_cycle.size());
+        std::function<bool(const FabricNodeId&, std::vector<FabricNodeId>&)> find_cycle_dfs;
+        find_cycle_dfs = [&](const FabricNodeId& node, std::vector<FabricNodeId>& path) -> bool {
+            if (rec_stack.find(node) != rec_stack.end()) {
+                // Found a cycle - extract it
+                auto cycle_start = std::find(path.begin(), path.end(), node);
+                if (cycle_start != path.end()) {
+                    routing_cycle.assign(cycle_start, path.end());
+                    routing_cycle.push_back(node);  // Complete the cycle
+                    return true;
+                }
             }
+
+            if (visited.find(node) != visited.end()) {
+                return false;
+            }
+
+            visited.insert(node);
+            rec_stack.insert(node);
+            path.push_back(node);
+
+            auto it = edge_graph.find(node);
+            if (it != edge_graph.end()) {
+                for (const auto& neighbor : it->second) {
+                    if (find_cycle_dfs(neighbor, path)) {
+                        return true;
+                    }
+                }
+            }
+
+            path.pop_back();
+            rec_stack.erase(node);
+            return false;
+        };
+
+        // Try to find a cycle starting from any node in the graph
+        for (const auto& [start_node, _] : edge_graph) {
+            std::vector<FabricNodeId> path;
+            if (find_cycle_dfs(start_node, path)) {
+                break;
+            }
+        }
+
+        if (!routing_cycle.empty() && meshes_in_cycle.size() >= 2) {
+            node_cycles.push_back(routing_cycle);
+            log_info(
+                tt::LogFabric,
+                "  Cycle {}: {} flows, {} nodes across {} meshes",
+                cycle_idx + 1,
+                flow_cycle.size(),
+                routing_cycle.size() - 1,  // Don't count the duplicate at the end
+                meshes_in_cycle.size());
         }
     }
+
+    // Deduplicate cycles: remove exact duplicates and rotations of the same cycle
+    auto normalize_cycle = [](const std::vector<FabricNodeId>& cycle) -> std::vector<FabricNodeId> {
+        if (cycle.size() <= 1) {
+            return cycle;
+        }
+
+        // Remove the duplicate last node for normalization
+        std::vector<FabricNodeId> cycle_no_dup(cycle.begin(), cycle.end() - 1);
+
+        // Find the lexicographically smallest node
+        auto min_it = std::min_element(
+            cycle_no_dup.begin(), cycle_no_dup.end(), [](const FabricNodeId& a, const FabricNodeId& b) {
+                if (*a.mesh_id != *b.mesh_id) {
+                    return *a.mesh_id < *b.mesh_id;
+                }
+                return a.chip_id < b.chip_id;
+            });
+
+        // Rotate to start from the smallest node
+        std::vector<FabricNodeId> normalized;
+        normalized.reserve(cycle.size());
+        normalized.insert(normalized.end(), min_it, cycle_no_dup.end());
+        normalized.insert(normalized.end(), cycle_no_dup.begin(), min_it);
+        normalized.push_back(normalized[0]);  // Add duplicate at end
+
+        return normalized;
+    };
+
+    auto cycle_to_string = [](const std::vector<FabricNodeId>& cycle) -> std::string {
+        std::stringstream ss;
+        for (size_t i = 0; i < cycle.size(); ++i) {
+            if (i > 0) {
+                ss << ",";
+            }
+            ss << "M" << *cycle[i].mesh_id << ":C" << cycle[i].chip_id;
+        }
+        return ss.str();
+    };
+
+    std::unordered_set<std::string> seen_cycles;
+    std::vector<std::vector<FabricNodeId>> unique_node_cycles;
+
+    for (const auto& cycle : node_cycles) {
+        auto normalized = normalize_cycle(cycle);
+        std::string cycle_str = cycle_to_string(normalized);
+
+        if (seen_cycles.find(cycle_str) == seen_cycles.end()) {
+            seen_cycles.insert(cycle_str);
+            unique_node_cycles.push_back(cycle);
+        }
+    }
+
+    log_info(
+        tt::LogFabric,
+        "After deduplicating rotations and duplicates: {} unique cycles (from {} total)",
+        unique_node_cycles.size(),
+        node_cycles.size());
+
+    node_cycles = std::move(unique_node_cycles);
 
     bool has_cycles = !node_cycles.empty();
 

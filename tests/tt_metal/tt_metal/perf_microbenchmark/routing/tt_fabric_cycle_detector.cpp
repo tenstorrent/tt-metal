@@ -37,27 +37,23 @@ void dump_cycles_to_yaml(
         const auto& cycle = cycles[i];
 
         // Calculate cycle statistics
+        // Note: The cycle now has the first node repeated at the end to show completion
         std::set<uint32_t> unique_meshes;
         std::set<uint32_t> unique_chips;
         size_t mesh_transitions = 0;
-        size_t cycle_start_idx = cycle.size() - 1;
 
-        for (size_t j = 0; j < cycle.size(); ++j) {
+        for (size_t j = 0; j < cycle.size() - 1; ++j) {  // Don't count the duplicate end node in stats
             unique_meshes.insert(*cycle[j].mesh_id);
             unique_chips.insert(cycle[j].chip_id);
 
             if (j < cycle.size() - 1 && cycle[j].mesh_id != cycle[j + 1].mesh_id) {
                 mesh_transitions++;
             }
-
-            // Find where the last node appears earlier (actual cycle point)
-            if (j < cycle.size() - 1 && cycle[j] == cycle[cycle.size() - 1]) {
-                cycle_start_idx = j;
-            }
         }
 
-        size_t cycle_length = cycle.size() - cycle_start_idx;
-        bool is_bidirectional = (cycle_length == 3);  // A->B->A pattern
+        // Cycle length is the actual number of unique nodes in the cycle
+        size_t cycle_length = cycle.size() - 1;       // Subtract 1 because last node is a duplicate
+        bool is_bidirectional = (cycle_length == 2);  // A->B->A pattern (2 unique nodes)
 
         fout << "  - cycle_" << i << ":\n";
         fout << "      # ===== SUMMARY =====\n";
@@ -112,13 +108,14 @@ void dump_cycles_to_yaml(
             }
 
             // Mark the cycle start point
-            if (j == cycle_start_idx && j < cycle.size() - 1) {
+            if (j == 0) {
                 annotations.push_back("⟲ CYCLE START");
             }
 
             // Mark the cycle endpoint (where path loops back)
+            // The last node is a duplicate of the first node to show cycle completion
             if (j == cycle.size() - 1) {
-                annotations.push_back("⟲ CYCLE BACK TO node_" + std::to_string(cycle_start_idx));
+                annotations.push_back("⟲ CYCLE COMPLETES (same as node_0)");
             }
 
             // Print annotations

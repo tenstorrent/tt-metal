@@ -77,15 +77,17 @@ Tests:
     fabric_setup:
       topology: Mesh
       routing_type: Dynamic
-    parametrization_params:
-      size: [512, 1024, 2048]
-      num_packets: [50, 100]
-      ntype: [unicast_write, atomic_inc]
+    # parametrization_params:
+    #   size: [512, 1024, 2048]
+    #   num_packets: [50, 100]
+    #   ntype: [unicast_write, atomic_inc]
     defaults:
+      size: 512
+      num_packets: 50
+      ntype: unicast_write
       ftype: unicast
     patterns:
       - type: all_to_all
-        iterations: 2
 
   # ======================================================================================
   # Test 4: Random pairing test

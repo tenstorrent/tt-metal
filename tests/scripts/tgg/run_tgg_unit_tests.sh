@@ -17,7 +17,7 @@ run_tgg_multiprocess_tests() {
 
   # Test dual 4x4 meshes on Galaxy (8x4 system split into two 4x4 meshes)
   # This requires a 32-device Galaxy system
-  tt-run --mpi-args "--allow-run-as-root --tag-output" --rank-binding tests/tt_metal/distributed/config/galaxy_4x4_multiprocess_rank_bindings.yaml ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric \--test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_galaxy_4x4.yaml
+  tt-run --mpi-args "--allow-run-as-root --tag-output" --rank-binding tests/tt_metal/distributed/config/galaxy_4x4_multiprocess_rank_bindings.yaml ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_4x4_cycles.yaml
 }
 
 run_tgg_cycle_detection_test() {

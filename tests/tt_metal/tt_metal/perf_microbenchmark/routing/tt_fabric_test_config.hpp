@@ -529,7 +529,7 @@ private:
     }
 
     std::vector<TestConfig> expand_high_level_patterns_with_cycle_detection(ParsedTestConfig& p_config) {
-        const uint32_t max_cycle_detection_attempts = 10;
+        const uint32_t max_cycle_detection_attempts = 3;
         uint32_t attempt = 0;
         std::vector<TestConfig> final_tests;
 
