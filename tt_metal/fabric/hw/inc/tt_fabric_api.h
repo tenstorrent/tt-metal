@@ -167,10 +167,6 @@ bool fabric_set_unicast_route(
     packet_header->mcast_params_16 = 0;
     packet_header->is_mcast_active = 0;
     auto* routing_info = reinterpret_cast<tt_l1_ptr intra_mesh_routing_path_t<2, true>*>(ROUTING_PATH_BASE_2D);
-#if defined(COMPILE_FOR_ERISC)
-    // ACTIVE_ETH doesn't have information yet
-    static_assert(dst_mesh_id < MAX_NUM_MESHES, "ACTIVE_ETH doesn't support inter-mesh routing");
-#endif
     auto* routing_table = reinterpret_cast<tt_l1_ptr tensix_routing_l1_info_t*>(ROUTING_TABLE_BASE);
     if (dst_mesh_id < MAX_NUM_MESHES && routing_table->my_mesh_id != dst_mesh_id) {
         tt_l1_ptr exit_node_table_t* exit_node_table =

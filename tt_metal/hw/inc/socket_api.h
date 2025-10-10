@@ -26,7 +26,8 @@ constexpr bool always_false = false;
 
 template <typename SocketT>
 void fabric_set_unicast_route(volatile tt_l1_ptr PACKET_HEADER_TYPE* fabric_header_addr, const SocketT& socket) {
-#if defined(FABRIC_2D)
+// TODO: use appropriate definition after validation
+#if defined(FABRIC_2D_TMP)
     if constexpr (std::is_same_v<SocketT, sender_downstream_encoding>) {
         fabric_set_unicast_route(fabric_header_addr, socket.downstream_chip_id, socket.downstream_mesh_id);
     } else if constexpr (std::is_same_v<SocketT, SocketReceiverInterface>) {
