@@ -37,6 +37,11 @@ void AllGatherMatmulAsync::validate_with_output_tensors(
     auto& input_tensor = input_tensors[0];
     auto& weight_tensor = input_tensors[1];
 
+    TT_FATAL(
+        std::all_of(
+            input_tensors.begin(), input_tensors.end(), [](const auto& t) { return t.logical_shape().rank() == 4; }),
+        "AllGatherMatmulAsync requires input tensors to be of rank 4");
+
     if (output_tensors[0].has_value()) {
         auto& all_gather_output_tensor = output_tensors.at(0).value();
         // All Gather validate
