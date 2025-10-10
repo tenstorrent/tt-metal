@@ -114,13 +114,14 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
     uint32_t in0_block_num_tiles = M_block_tiles * K_block_tiles;
     uint32_t in1_block_num_tiles = K_block_tiles * N_block_tiles;
     uint32_t out_block_num_tiles = M_block_tiles * N_block_tiles;
+    uint32_t in2_block_num_tiles = N_block_tiles;
 
     const uint32_t double_buffer_factor = 2;
     uint32_t in0_cb_num_tiles = in0_block_num_tiles * double_buffer_factor;
     uint32_t in1_cb_num_tiles = in1_block_num_tiles * double_buffer_factor;
     uint32_t out_cb_num_tiles = out_block_num_tiles * double_buffer_factor;
     uint32_t interm_cb_num_tiles = out_block_num_tiles;  // not double buffered
-    uint32_t in2_cb_num_tiles = out_cb_num_tiles;
+    uint32_t in2_cb_num_tiles = in2_block_num_tiles;     // not double buffered
 
     auto core_0_0 = CoreCoord{0, 0};
     auto core_0_1 = CoreCoord{0, 1};
@@ -134,10 +135,6 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
     auto in1_sender_cores = CoreRange(core_0_0, transpose_core_grid ? core_0_endy : core_endx_0);
     auto in1_receiver_cores = CoreRange(transpose_core_grid ? core_1_0 : core_0_1, core_endx_endy);
 
-    // auto in0_mcast_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
-    // auto in0_mcast_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
-    // auto in1_mcast_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
-    // auto in1_mcast_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
     auto in0_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
     auto in0_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
     auto in0_valid_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, VALID);
@@ -158,8 +155,10 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
     tt::tt_metal::create_cb(
         intermediate_cb_id, program, core_grid, intermediate_tile_size, interm_cb_num_tiles, intermediate_data_format);
 
-    uint32_t in2_cb_id = tt::CBIndex::c_4;
-    tt::tt_metal::create_cb(in2_cb_id, program, core_grid, input_tile_size, in2_cb_num_tiles, data_format);
+    if (use_bias) {
+        uint32_t in2_cb_id = tt::CBIndex::c_4;
+        tt::tt_metal::create_cb(in2_cb_id, program, core_grid, input_tile_size, in2_cb_num_tiles, data_format);
+    }
 
     log_info(tt::LogOp, "in0_cb_id: {}", in0_cb_id);
     log_info(tt::LogOp, "in1_cb_id: {}", in1_cb_id);
