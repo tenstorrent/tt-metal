@@ -34,7 +34,16 @@ from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs
 
 
 def allocate_vllm_kv_cache(kv_cache_shape, dtype, num_layers, dp_model: List[Transformer], tt_cache_path):
+    """kv_cache_shape contains (max_num_blocks, num_kv_heads, block_size, head_size)"""
+
     submesh_devices = [model.mesh_device for model in dp_model]
+
+    # Assume KV heads are tensor parallel by min(number of devices, number of KV heads)
+    num_devices = submesh_devices[0].get_num_devices()
+    total_kv_heads = kv_cache_shape[1]
+    kv_heads_per_device = total_kv_heads // min(num_devices, total_kv_heads)
+    kv_cache_shape = (kv_cache_shape[0], kv_heads_per_device, kv_cache_shape[2], kv_cache_shape[3])
+
     kv_cache = []
     for mesh_idx, submesh in enumerate(submesh_devices):
         cache_kv = torch.zeros(kv_cache_shape, dtype=dtype)
@@ -44,8 +53,6 @@ def allocate_vllm_kv_cache(kv_cache_shape, dtype, num_layers, dp_model: List[Tra
                 ttnn.as_tensor(
                     lp,
                     device=submesh,
-                    # TODO: this could be ShardTensorToMesh, removing the need for vLLM to know about TP for num_kv_heads.
-                    # Could affect other calculations which use TTCacheEngine.num_kv_heads, though.
                     mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
                     layout=ttnn.TILE_LAYOUT,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
