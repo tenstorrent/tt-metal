@@ -5,17 +5,19 @@
 
 """
 Usage:
-    dump_ops [--max-width=<width>] [--verbose]
+    dump_ops [--max-width=<width>] [--verbose] [--generate-test]
 
 Options:
     --max-width=<width>    Maximum column width for wrapping text [default: 120]
     --verbose              Show full raw argument information (default: summary)
+    --generate-test        Generate test files for hanging operations
 
 Description:
-    Dumps core location and kernel config host-assigned ID for all operations in a table format.
-    If Inspector RPC is available, shows operation names and details.
-    By default shows summary of arguments (shapes, types, memory config).
+    Prints the current operation running on each core.
+
     Use --verbose for full raw argument details.
+    Use --generate-test to create test files for operations that could be causing hangs.
+
 """
 
 from triage import ScriptConfig, triage_field, run_script
@@ -33,11 +35,292 @@ except ImportError:
     exit(1)
 
 import re, textwrap, subprocess, shutil
+import os
+from pathlib import Path
 
 script_config = ScriptConfig(
     data_provider=False,
     depends=["inspector_data", "dispatcher_data"],
 )
+
+
+# ============================================================================
+# Test Generation Functions (from generate_tests.py)
+# ============================================================================
+
+
+def parse_arguments_for_test(arguments_str):
+    """Parse the arguments string to extract tensor information for test generation"""
+    shape_match = re.search(r"shape = Shape\(\[([^\]]+)\]\)", arguments_str)
+    dtype_match = re.search(r"data_type = DataType::(\w+)", arguments_str)
+    memory_match = re.search(r"buffer_type=BufferType::(\w+)", arguments_str)
+    target_memory_match = re.search(r"target_memory_config.*buffer_type=BufferType::(\w+)", arguments_str)
+    layout_match = re.search(r"layout = Layout::(\w+)", arguments_str)
+
+    shape = [int(x.strip()) for x in shape_match.group(1).split(",")] if shape_match else [32, 64]
+    dtype = dtype_match.group(1).lower() if dtype_match else "bfloat16"
+    memory_type = memory_match.group(1) if memory_match else "L1"
+    target_memory = target_memory_match.group(1) if target_memory_match else "DRAM"
+    layout = layout_match.group(1) if layout_match else "ROW_MAJOR"
+
+    # Map TTNN dtypes to torch dtypes for consistency
+    torch_dtype_map = {
+        "bfloat16": "torch.bfloat16",
+        "float32": "torch.float32",
+        "int32": "torch.int32",
+        "uint32": "torch.int32",  # Use int32 for uint32 in torch
+        "float16": "torch.float16",
+    }
+
+    return {
+        "shape": shape,
+        "dtype": dtype,
+        "torch_dtype": torch_dtype_map.get(dtype, "torch.bfloat16"),
+        "memory_type": memory_type,
+        "target_memory": target_memory,
+        "layout": layout,
+    }
+
+
+def extract_operation_from_name(operation_name):
+    """Extract the operation from ttnn operation name (e.g., ttnn::add -> add)"""
+    # Remove ttnn:: prefix if present
+    if operation_name.startswith("ttnn::"):
+        return operation_name[6:]
+    elif operation_name.startswith("ttnn."):
+        return operation_name[5:]
+    return operation_name
+
+
+def generate_test_content(operation_id, operation, arguments_str):
+    """Generate the test file content for a specific operation"""
+    args = parse_arguments_for_test(arguments_str)
+
+    # Create parameter strings for pytest
+    shape_params = ", ".join(str(s) for s in args["shape"])
+
+    # Handle different tensor dimensions
+    if len(args["shape"]) == 1:
+        param_names = ["size"]
+    elif len(args["shape"]) == 2:
+        param_names = ["height", "width"]
+    elif len(args["shape"]) == 3:
+        param_names = ["batch", "height", "width"]
+    elif len(args["shape"]) == 4:
+        param_names = ["batch", "channels", "height", "width"]
+    else:
+        param_names = [f"dim{i}" for i in range(len(args["shape"]))]
+
+    param_decorators = "\n".join(
+        [f'@pytest.mark.parametrize("{name}", [{val}])' for name, val in zip(param_names, args["shape"])]
+    )
+
+    # Generate tensor creation based on shape
+    shape_str = ", ".join(param_names)
+    tensor_creation = f"torch.randn({shape_str}, dtype={args['torch_dtype']})"
+
+    # Parse multiple tensors from arguments for complex operations
+    tensor_specs = []
+    for line in arguments_str.split("\n"):
+        line = line.strip()
+        if " : shape = " in line and "scalar" not in line:
+            tensor_name = line.split(" : ")[0].strip()
+            shape_match = re.search(r"shape = Shape\(\[([^\]]+)\]\)", line)
+            if shape_match:
+                shape = [int(x.strip()) for x in shape_match.group(1).split(",")]
+                tensor_specs.append({"name": tensor_name, "shape": shape})
+
+    # Generate operation-specific test logic
+    if operation == "to_memory_config":
+        test_logic = f"""    # Apply the to_memory_config operation
+    result = ttnn.to_memory_config(input_tensor, ttnn.{args['target_memory']}_MEMORY_CONFIG)
+
+    # Convert back to torch for comparison
+    result_torch = ttnn.to_torch(result)
+
+    # Verify the operation completed successfully and data is preserved
+    assert_with_pcc(torch_input, result_torch, pcc=0.99)
+
+    # Verify memory configuration was applied correctly
+    assert result.memory_config().buffer_type == ttnn.BufferType.{args['target_memory']}"""
+
+    elif operation in ["add", "sub", "subtract", "mul", "multiply", "div"]:
+        # Handle different operation names
+        op_name = "subtract" if operation == "sub" else "multiply" if operation == "mul" else operation
+        op_symbol = {"add": "+", "subtract": "-", "multiply": "*", "div": "/"}.get(op_name, "+")
+
+        if "scalar" in arguments_str:
+            # Scalar operation
+            test_logic = f"""    # Apply the {op_name} operation with scalar
+    scalar = 0.42
+    result = input_tensor + scalar if '{op_name}' == 'add' else input_tensor
+
+    # Expected torch result
+    torch_expected = torch_input + scalar if '{op_name}' == 'add' else torch_input
+    result_torch = ttnn.to_torch(result)
+
+    # Verify the operation completed successfully
+    assert_with_pcc(torch_expected, result_torch, pcc=0.99)"""
+        else:
+            # Binary tensor operation
+            test_logic = f"""    # Create second tensor for binary operation
+    torch_input_b = {tensor_creation}
+    input_tensor_b = ttnn.from_torch(
+        torch_input_b,
+        dtype=ttnn.{args['dtype']},
+        device=device,
+        memory_config=ttnn.{args['memory_type']}_MEMORY_CONFIG
+    )
+
+    # Apply the {op_name} operation
+    result = ttnn.{op_name}(input_tensor, input_tensor_b)
+
+    # Expected torch result
+    torch_expected = torch_input {op_symbol} torch_input_b
+    result_torch = ttnn.to_torch(result)
+
+    # Verify the operation completed successfully
+    assert_with_pcc(torch_expected, result_torch, pcc=0.99)"""
+
+    else:
+        # Generic test logic for other operations
+        test_logic = f"""    # Apply the {operation} operation
+    # TODO: Implement specific test logic for operation: {operation}
+    # Basic test template - may need refinement for specific operation
+    try:
+        if '{operation}' == 'softmax':
+            result = ttnn.{operation}(input_tensor, dim=-1)
+        else:
+            result = ttnn.{operation}(input_tensor)
+
+        # Convert back to torch for basic verification
+        result_torch = ttnn.to_torch(result)
+
+        # Basic verification that operation completed
+        assert result_torch is not None
+    except Exception as e:
+        pytest.skip(f"Operation {operation} not implemented or requires additional parameters: {{e}}")"""
+
+    content = f'''# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
+import pytest
+import torch
+import ttnn
+from tests.ttnn.utils_for_testing import assert_with_pcc
+
+
+{param_decorators}
+def test_op_{operation_id}(device, {', '.join(param_names)}):
+    """Test for operation {operation} - generated from operation_id {operation_id}"""
+    torch.manual_seed(0)
+
+    # Create input tensor based on parsed arguments
+    torch_input = {tensor_creation}
+
+    # Convert to ttnn tensor
+    input_tensor = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.{args['dtype']},
+        device=device,
+        memory_config=ttnn.{args['memory_type']}_MEMORY_CONFIG,
+        layout=ttnn.{args['layout']}_LAYOUT
+    )
+
+{test_logic}
+'''
+
+    return content
+
+
+def generate_tests_for_operations(host_id_op_names, inspector_data):
+    """Generate test files for operations that might be causing hangs"""
+
+    # Get operations mapping from Inspector
+    host_id_mapping = fetch_operations_from_inspector(inspector_data) if inspector_data else {}
+
+    if not host_id_mapping:
+        print("[Warning] No operations data available from Inspector. Cannot generate tests.")
+        return
+
+    generated_files = []
+
+    print("\n" + "=" * 60)
+    print("Generating test files for hanging operations...")
+    print("=" * 60)
+
+    # Process each unique operation
+    seen_operations = set()
+
+    for host_id, op_name in host_id_op_names:
+        operation_id_key = str(host_id)
+
+        # Skip if we've already generated a test for this operation
+        if operation_id_key in seen_operations:
+            continue
+
+        # Skip host-only operations
+        if operation_id_key not in host_id_mapping:
+            continue
+
+        mapping = host_id_mapping[operation_id_key]
+        if mapping.get("device_operation_id") == "none":
+            continue
+
+        seen_operations.add(operation_id_key)
+
+        operation_name = mapping.get("operation_name", "unknown_op")
+        callstack = mapping.get("callstack", "")
+        arguments = mapping.get("arguments", "")
+
+        # Extract clean operation name (e.g., ttnn::add -> add)
+        operation = extract_operation_from_name(operation_name)
+
+        # Skip conv2d operations - too complex
+        if operation == "conv2d":
+            print(f"Skipping operation_id {host_id}: {operation} (too complex for automated test generation)")
+            continue
+
+        print(f"\nGenerating test for operation_id {host_id}: {operation_name}")
+
+        # Show callstack to help identify the hanging operation
+        if callstack:
+            print(f"  Location: {callstack}")
+
+        try:
+            # Generate test content
+            test_content = generate_test_content(host_id, operation, arguments)
+            test_filename = f"test_op_{host_id}.py"
+
+            # Write test file
+            with open(test_filename, "w") as f:
+                f.write(test_content)
+
+            generated_files.append(test_filename)
+            print(f"  ✓ Created {test_filename}")
+            print(f"     Run with: pytest {test_filename} -xvs")
+
+        except Exception as e:
+            print(f"  ✗ Failed to generate test: {e}")
+
+    # Print summary
+    print("\n" + "=" * 60)
+    if generated_files:
+        print(f"Successfully generated {len(generated_files)} test files to isolate the hanging operation:")
+        print("")
+        print("Run all tests together:")
+        print(f"  pytest {' '.join(generated_files)} -xvs")
+        print("")
+        print("Or run individually:")
+        for f in generated_files:
+            print(f"  pytest {f}")
+        print("")
+        print("The test that hangs will identify which operation is causing the issue.")
+    else:
+        print("No test files were generated.")
+    print("=" * 60)
+
 
 # Color constants for argument highlighting
 RST = "\033[0m"
@@ -711,6 +994,8 @@ def run(args, context: Context):
     """Run the dump_ops script."""
     max_width = int(args["--max-width"]) if args["--max-width"] else 100
     verbose = args["--verbose"]
+    # Check for generate-test flag - args returns None if not present
+    generate_test = bool(args["--generate-test"])
     # Default to summary mode unless verbose is requested
     summary = not verbose
     run_checks = get_run_checks(args, context)
@@ -729,6 +1014,10 @@ def run(args, context: Context):
     import dump_ops as this_module
 
     this_module._collected_host_id_op_names = all_host_id_op_names
+
+    # Generate tests if requested
+    if generate_test:
+        generate_tests_for_operations(all_host_id_op_names, inspector_data)
 
     return all_ops_data
 

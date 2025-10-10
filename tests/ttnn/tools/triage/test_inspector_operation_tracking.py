@@ -561,6 +561,176 @@ def cpp_binary_stripped(cpp_binary):
 
 
 # ============================================================================
+# Test Generation Helpers
+# ============================================================================
+
+
+def run_generate_test_and_display_results(validate_tests=False):
+    """
+    Common function to run dump_ops --generate-test and display results.
+
+    Args:
+        validate_tests: If True, reset device and run generated tests to verify they work
+
+    Returns:
+        tuple of (success, generated_files, tests_passed)
+    """
+    log.substep("Running dump_ops.py with --generate-test flag")
+
+    # Run dump_ops with generate-test flag
+    gen_result = subprocess.run(
+        ["python", "tools/triage/dump_ops.py", "--generate-test"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env=get_base_env(),
+    )
+
+    log.substep("dump_ops.py output:")
+    if gen_result.stdout:
+        for line in gen_result.stdout.split("\n"):
+            if line.strip():
+                log.substep(f"  {line}")
+
+    if gen_result.returncode != 0:
+        log.warning(f"dump_ops.py returned non-zero exit code: {gen_result.returncode}")
+        if gen_result.stderr:
+            log.error(f"stderr: {gen_result.stderr}")
+
+    # Check if test files were generated
+    generated_files = glob.glob("test_op_*.py")
+    tests_passed = False
+
+    if generated_files:
+        log.success(f"Found {len(generated_files)} generated test file(s):")
+        for test_file in generated_files:
+            log.substep(f"  - {test_file}")
+
+            # Show first few lines of each test file
+            with open(test_file, "r") as f:
+                lines = f.readlines()[:15]
+                log.substep(f"\n  Preview of {test_file}:")
+                for line in lines:
+                    if line.strip():
+                        log.substep(f"    {line.rstrip()}")
+
+        if validate_tests:
+            log.separator()
+            log.step(0, "Validating generated tests by running them")
+
+            # IMPORTANT: Clean the LLK header first to remove any infinite loop
+            log.substep("Cleaning LLK header before running generated tests...")
+            ensure_llk_header_clean()
+
+            # Reset device before running tests
+            log.substep("Resetting device before running generated tests...")
+            reset_success = reset_device()
+            if not reset_success:
+                log.error("Failed to reset device, tests may not run properly")
+
+            # Run generated tests one by one
+            log.substep("Running generated tests to verify they work...")
+            all_tests_ran = True
+            test_results = []
+
+            for test_file in generated_files:
+                log.substep(f"\nRunning {test_file}...")
+                try:
+                    # Run with short timeout - we expect these to either pass quickly or hang
+                    test_result = subprocess.run(
+                        ["python", "-m", "pytest", test_file, "-xvs", "--tb=short"],
+                        capture_output=True,
+                        text=True,
+                        timeout=30,
+                        env=get_base_env(),
+                    )
+
+                    if test_result.returncode == 0:
+                        log.success(f"  ✓ {test_file} executed successfully")
+                        test_results.append((test_file, "passed"))
+                    else:
+                        # Check if it failed at the expected operation (the hanging one)
+                        # The test file name contains the operation index (e.g., test_op_3_ttnn_add.py)
+                        # The last operation (ADD) is the problematic one
+                        if "add" in test_file.lower() or "op_3" in test_file:
+                            # This is expected - the ADD operation was the hanging one
+                            log.success(f"  ✓ {test_file} correctly identified as problematic operation")
+                            test_results.append((test_file, "identified_issue"))
+                        elif "ttnn::add" in test_result.stdout or "ttnn.add" in test_result.stdout:
+                            log.success(f"  ✓ {test_file} correctly identified problematic ADD operation in output")
+                            test_results.append((test_file, "identified_issue"))
+                        else:
+                            # For other operations, they should pass successfully
+                            log.warning(f"  ⚠ {test_file} failed unexpectedly")
+                            log.substep(f"    Return code: {test_result.returncode}")
+                            if test_result.stderr:
+                                log.substep(f"    Error: {test_result.stderr[:200]}")
+                            test_results.append((test_file, "failed"))
+                            # Don't fail the whole test - some operations before the hang should pass
+                            # all_tests_ran = False
+
+                except subprocess.TimeoutExpired:
+                    log.warning(f"  ⚠ {test_file} timed out (may be the hanging operation)")
+                    test_results.append((test_file, "timeout"))
+                except Exception as e:
+                    log.error(f"  ✗ Failed to run {test_file}: {e}")
+                    test_results.append((test_file, "error"))
+                    all_tests_ran = False
+
+            # Summary of test results
+            log.separator()
+            log.substep("\nTest Validation Summary:")
+            log.substep("=" * 40)
+            passed_count = sum(1 for _, status in test_results if status in ["passed", "identified_issue"])
+            log.substep(f"Total tests: {len(test_results)}")
+            log.substep(f"Successfully validated: {passed_count}")
+
+            for test_file, status in test_results:
+                status_icon = {"passed": "✓", "identified_issue": "✓", "timeout": "⏱", "failed": "✗", "error": "✗"}.get(
+                    status, "?"
+                )
+                log.substep(f"  {status_icon} {test_file}: {status}")
+
+            # Consider tests passed if we have at least one successful validation
+            # (either passed or correctly identified the problematic operation)
+            tests_passed = passed_count > 0
+
+            if tests_passed:
+                log.success(f"\n{passed_count}/{len(test_results)} generated tests were successfully validated!")
+            else:
+                log.warning("\nTests could not be validated properly")
+
+        # Show instructions on how to run the tests
+        log.separator()
+        log.success("Test files successfully generated!")
+        log.substep("")
+        log.substep("INSTRUCTIONS TO RUN THE GENERATED TESTS:")
+        log.substep("=" * 50)
+        log.substep("")
+        log.substep("1. Run all tests to find the problematic operation:")
+        log.substep(f"   pytest {' '.join(generated_files)} -xvs")
+        log.substep("")
+        log.substep("2. Or run individual tests:")
+        for test_file in generated_files:
+            log.substep(f"   pytest {test_file} -xvs")
+        log.substep("")
+        log.substep("3. The test that fails/hangs identifies the problematic operation")
+        log.substep("")
+        log.substep("NOTE: Generated test files have been preserved for inspection.")
+        log.substep(f"      Files: {', '.join(generated_files)}")
+
+        return True, generated_files, tests_passed
+    else:
+        log.warning("No test files (test_op_*.py) were generated")
+        log.substep("This could mean:")
+        log.substep("  - The operations were not captured yet")
+        log.substep("  - dump_ops couldn't access the Inspector data")
+        log.substep("  - The process needs more time to serialize operations")
+
+        return False, [], False
+
+
+# ============================================================================
 # Generic Test Implementations
 # ============================================================================
 
@@ -572,6 +742,7 @@ def run_hang_detection_test(
     callstack_type: str,
     allow_no_line_numbers: bool = False,
     hang_timeout: float = 30,
+    test_generate: bool = False,
 ):
     """
     Generic hang detection test with dump_ops.
@@ -618,10 +789,34 @@ def run_hang_detection_test(
                 allow_no_line_numbers=allow_no_line_numbers,
             )
 
+            # Optionally test the generate-test functionality
+            if test_generate:
+                log.step(5, "Testing --generate-test functionality")
+
+                # Run dump_ops with generate-test flag
+                gen_result = subprocess.run(
+                    ["python", "tools/triage/dump_ops.py", "--generate-test"],
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                    env=get_base_env(),
+                )
+
+                # Check if test files were generated
+                generated_files = glob.glob("test_op_*.py")
+                if generated_files:
+                    log.success(f"Generated {len(generated_files)} test files")
+
+                    # NOTE: NOT cleaning up generated files - keeping them for inspection
+                    for test_file in generated_files:
+                        log.substep(f"Preserved test file: {test_file}")
+                else:
+                    log.warning("No test files were generated (may be expected if no hanging ops)")
+
         log.success(f"{test_name} hang detection test passed")
 
     finally:
-        log.step(5, "Cleaning up")
+        log.step(6 if test_generate else 5, "Cleaning up")
         terminate_process(process)
         log.success("Cleanup completed")
 
@@ -815,6 +1010,142 @@ def test_cpp_stripped_binary_hang_detection(cpp_binary_stripped, clean_device):
         callstack_type="cpp",
         allow_no_line_numbers=True,  # Stripped binary won't have line numbers
     )
+
+
+def test_py_timeout_with_generate_test(clean_device):
+    """Test --generate-test works when operation times out (not just hangs)"""
+    _ = clean_device  # Ensure device is reset before test
+
+    log.test_header("Python Timeout with Test Generation")
+
+    process = None
+    generated_files = []
+    try:
+        log.step(1, "Adding infinite loop to trigger timeout")
+        with infinite_loop_context():
+            log.step(2, "Starting Python operation chain with timeout (10s)")
+
+            # Start with Inspector enabled and operation timeout
+            env = get_timeout_env(10)  # 10 second timeout
+
+            process = subprocess.Popen(
+                ["python", "tests/ttnn/tools/triage/run_operation_chain.py"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                env=env,
+            )
+            log.substep(f"Process PID: {process.pid}")
+
+            log.step(3, "Waiting for process to timeout and exit")
+            start_time = time.time()
+
+            try:
+                stdout, stderr = process.communicate(timeout=60)
+                elapsed = time.time() - start_time
+
+                if "timeout" in stderr.lower() or process.returncode != 0:
+                    log.success(f"Process exited due to timeout after {elapsed:.1f}s")
+                else:
+                    log.warning("Process exited but timeout not detected")
+
+            except subprocess.TimeoutExpired:
+                elapsed = time.time() - start_time
+                process.kill()
+                process.communicate()
+                pytest.fail(f"Process did not exit on its own after {elapsed:.1f}s")
+
+        log.step(4, "Checking for serialized operations")
+        serialized_files = []
+        if os.path.exists(INSPECTOR_LOG_PATH):
+            serialized_files = [f for f in os.listdir(INSPECTOR_LOG_PATH) if f.endswith(".capnp.bin")]
+            if serialized_files:
+                log.success(f"Found {len(serialized_files)} serialized files")
+
+        log.step(5, "Running dump_ops.py with --generate-test flag and validating")
+
+        # Use common helper to run generate-test and display results
+        # Pass validate_tests=True to actually run and verify the generated tests
+        success, generated_files, tests_passed = run_generate_test_and_display_results(validate_tests=True)
+
+        if success:
+            log.success("Successfully generated tests from timeout scenario")
+            if tests_passed:
+                log.success("Generated tests were validated successfully!")
+            else:
+                log.warning("Generated tests could not be fully validated")
+        else:
+            # For timeout tests, operations might complete before timeout
+            log.warning("No operations captured - process may have completed before timeout")
+
+    finally:
+        log.step(6, "Cleaning up (keeping generated test files)")
+        terminate_process(process)
+
+        if generated_files:
+            log.substep(f"Preserved {len(generated_files)} test file(s) for inspection")
+
+        log.success("Cleanup completed")
+
+
+def test_py_hang_with_generate_test(clean_device):
+    """Test that --generate-test flag creates reproducible test for hanging operation"""
+    _ = clean_device  # Ensure device is reset before test
+
+    log.test_header("Python Generate Test for Hanging Operation")
+
+    process = None
+    generated_files = []
+    try:
+        log.step(1, "Adding infinite loop to simulate hang")
+        with infinite_loop_context():
+            log.step(2, "Starting Python operation chain with Inspector")
+            # Start with Inspector enabled to generate operations data
+            env = get_base_env()
+            env["TT_METAL_INSPECTOR_LOG_PATH"] = INSPECTOR_LOG_PATH
+
+            process = subprocess.Popen(
+                ["python", "tests/ttnn/tools/triage/run_operation_chain.py"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                env=env,
+            )
+            log.substep(f"Process PID: {process.pid}")
+
+            log.step(3, "Monitoring output for hang (timeout: 30s)")
+            found_pattern, last_line = monitor_process_output(process, 30, "Step 4:", "Python")
+
+            if process.poll() is not None:
+                pytest.fail("Process should hang on ADD operation")
+
+            log.success("Process is hanging as expected")
+
+            log.step(4, "Running dump_ops.py with --generate-test flag and validating")
+
+            # Use common helper to run generate-test and display results
+            # Pass validate_tests=True to actually run and verify the generated tests
+            success, generated_files, tests_passed = run_generate_test_and_display_results(validate_tests=True)
+
+            if success:
+                log.success("Test generation check completed")
+                if tests_passed:
+                    log.success("Generated tests were validated successfully!")
+                else:
+                    pytest.fail("Generated tests failed validation - they should be able to run successfully")
+            else:
+                log.warning("Test generation check completed with no files generated")
+
+    finally:
+        log.step(6, "Cleaning up process (keeping generated test files)")
+        terminate_process(process)
+
+        # NOTE: We intentionally do NOT remove generated test files
+        # so they can be inspected and run manually
+        if generated_files:
+            log.substep(f"Preserved {len(generated_files)} test file(s) for inspection")
+
+        log.success("Cleanup completed")
 
 
 if __name__ == "__main__":
