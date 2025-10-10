@@ -1568,7 +1568,8 @@ bool process_cmd(
     return done;
 }
 
-static uint32_t relay_pages_to_remote(
+/* Relay linear bytes to dispatch_hd or dispatch_d via prefetch_d */
+static uint32_t relay_linear_to_downstream(
     uint32_t& downstream_data_ptr, uint32_t& scratch_write_addr, uint32_t& amt_to_write) {
     uint32_t page_residual_space = downstream_cb_page_size - (downstream_data_ptr & (downstream_cb_page_size - 1));
     // Following is fine if downstream cb block is bigger than scratch and there are at least a couple of them
@@ -1582,14 +1583,30 @@ static uint32_t relay_pages_to_remote(
     } else if (downstream_data_ptr + amt_to_write > downstream_cb_end) {  // wrap
         uint32_t last_chunk_size = downstream_cb_end - downstream_data_ptr;
         noc_addr = get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr);
+#if 0
         relay_client.write_any_len<my_noc_index, true, NCRISC_WR_CMD_BUF>(
             scratch_write_addr, noc_addr, last_chunk_size);
+#else
+#if defined(FABRIC_RELAY)
+        noc_async_write(scratch_write_addr, noc_addr, last_chunk_size);
+#else
+        cq_noc_async_write_with_state_any_len<true, true>(scratch_write_addr, noc_addr, last_chunk_size);
+#endif
+#endif
         downstream_data_ptr = downstream_cb_base;
         scratch_write_addr += last_chunk_size;
         amt_to_write -= last_chunk_size;
     }
     noc_addr = get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr);
+#if 0
     relay_client.write_any_len<my_noc_index, true, NCRISC_WR_CMD_BUF>(scratch_write_addr, noc_addr, amt_to_write);
+#else
+#if defined(FABRIC_RELAY)
+    noc_async_write(scratch_write_addr, noc_addr, amt_to_write);
+#else
+    cq_noc_async_write_with_state_any_len<true, true>(scratch_write_addr, noc_addr, amt_to_write);
+#endif
+#endif
     downstream_data_ptr += amt_to_write;
     return npages;
 }
@@ -1607,6 +1624,7 @@ uint32_t process_relay_linear_h_cmd(uint32_t cmd_ptr, uint32_t& downstream_data_
     }
     uint64_t wlength = cmd->relay_linear_h.length;
     uint32_t scratch_read_addr = scratch_db_top[0];
+    constexpr uint32_t start_offset = is_d_variant ? 0 : sizeof(CQPrefetchHToPrefetchDHeader);
     if constexpr (not is_d_variant) {
         // kernel_h must relay user data from pinned buffer to downstream (kernel_d's cmddatq)
         volatile tt_l1_ptr CQPrefetchHToPrefetchDHeader* dptr =
@@ -1623,7 +1641,6 @@ uint32_t process_relay_linear_h_cmd(uint32_t cmd_ptr, uint32_t& downstream_data_
     // << read_addr << ", nocxy:0x" << noc_xy_addr << DEC() << ENDL();
 
     // First step - read into DB0
-    constexpr uint32_t start_offset = is_d_variant ? 0 : sizeof(CQPrefetchHToPrefetchDHeader);
     uint32_t amt_to_read =
         (scratch_db_half_size - start_offset > wlength) ? wlength : scratch_db_half_size - start_offset;
     noc_read_64bit_any_len<true>(noc_xy_addr, read_addr, scratch_read_addr, amt_to_read);
@@ -1642,7 +1659,6 @@ uint32_t process_relay_linear_h_cmd(uint32_t cmd_ptr, uint32_t& downstream_data_
         wlength -= read_length;
         while (read_length != 0) {
             // This ensures that writes from prior iteration are done
-            // TODO(pgk); we can do better on WH w/ tagging
             noc_async_writes_flushed();
 
             db_toggle ^= 1;
@@ -1655,7 +1671,9 @@ uint32_t process_relay_linear_h_cmd(uint32_t cmd_ptr, uint32_t& downstream_data_
             read_addr += amt_to_read;
 
             // Third step - write from DB
-            uint32_t npages = relay_pages_to_remote(downstream_data_ptr, scratch_write_addr, amt_to_write);
+            uint32_t npages =
+            //write_pages_to_dispatcher<0, false>(downstream_data_ptr, scratch_write_addr, amt_to_write);
+            relay_linear_to_downstream(downstream_data_ptr, scratch_write_addr, amt_to_write);
             cb_release_pages<my_noc_index, downstream_noc_xy, downstream_cb_sem_id>(npages);
             read_length -= amt_to_read;
 
@@ -1667,13 +1685,12 @@ uint32_t process_relay_linear_h_cmd(uint32_t cmd_ptr, uint32_t& downstream_data_
     // Third step - write from DB
     scratch_write_addr = scratch_db_top[db_toggle];
     uint32_t amt_to_write = amt_to_read;
-    uint32_t npages = relay_pages_to_remote(downstream_data_ptr, scratch_write_addr, amt_to_write);
+    uint32_t npages = relay_linear_to_downstream(downstream_data_ptr, scratch_write_addr, amt_to_write);
+    cb_release_pages<my_noc_index, downstream_noc_xy, downstream_cb_sem_id>(npages+1);
 
     downstream_data_ptr = round_up_pow2(downstream_data_ptr, downstream_cb_page_size);
-    cb_release_pages<my_noc_index, downstream_noc_xy, downstream_cb_sem_id>(npages);
-    noc_async_writes_flushed();
 
-    return CQ_PREFETCH_CMD_BARE_MIN_SIZE + start_offset;
+    return CQ_PREFETCH_CMD_BARE_MIN_SIZE;
 }
 
 // This function is only valid when called on the H variant
