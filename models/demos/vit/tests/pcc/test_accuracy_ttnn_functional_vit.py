@@ -18,8 +18,8 @@ from models.common.utility_functions import (
     is_wormhole_b0,
 )
 from models.demos.vit.common import load_torch_model
+from models.demos.vit.tests.vit_helper_funcs import get_batch, get_data_loader
 from models.demos.vit.tt import ttnn_functional_vit
-from models.demos.wormhole.vit.demo.vit_helper_funcs import get_batch, get_data_loader
 
 
 def get_expected_times(functional_vit):

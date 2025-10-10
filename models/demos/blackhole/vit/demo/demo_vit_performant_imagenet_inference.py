@@ -10,14 +10,14 @@ from tqdm import tqdm
 from transformers import AutoImageProcessor, ViTConfig
 
 import ttnn
-from models.common.utility_functions import profiler, run_for_wormhole_b0
+from models.common.utility_functions import profiler, run_for_blackhole
 from models.demos.vit.tests.vit_helper_funcs import get_batch, get_data_loader
 from models.demos.vit.tests.vit_performant_imagenet import VitTrace2CQ
 
 NUM_VALIDATION_IMAGES_IMAGENET = 49920
 
 
-@run_for_wormhole_b0()
+@run_for_blackhole()
 @pytest.mark.parametrize(
     "device_params", [{"l1_small_size": 32768, "num_command_queues": 2, "trace_region_size": 1700000}], indirect=True
 )
@@ -122,7 +122,7 @@ def test_run_vit_trace_2cqs_inference(
     logger.info(f"ttnn_{model_version}_batch_size{batch_size} compile time: {compile_time}")
 
 
-@run_for_wormhole_b0()
+@run_for_blackhole()
 @pytest.mark.parametrize(
     "device_params", [{"l1_small_size": 24576, "trace_region_size": 1700000, "num_command_queues": 2}], indirect=True
 )

@@ -1,10 +1,10 @@
 # ViT
 
 ## Platforms:
-    Wormhole (n150, n300)
+    Blackhole (p150)
 
 ## Introduction
-This demo shows how Vision Transformer Base patch16-224 runs on Wormhole devices.
+This demo shows how Vision Transformer Base patch16-224 runs on Blackhole devices.
 
 The Vision Transformer (ViT) model was proposed in "An Image is Worth 16x16 Words, Transformers for Image Recognition at Scale".
 It’s the first paper that successfully trains a Transformer encoder on ImageNet, attaining very good results compared to familiar convolutional architectures.
@@ -27,7 +27,7 @@ pytest --disable-warnings tests/nightly/single_card/vit/test_ttnn_optimized_shar
 To run the demo for ViT model, follow these instructions:
 -  For overall runtime inference (end-2-end), use the following command to run the demo:
 ```sh
-pytest --disable-warnings models/demos/wormhole/vit/tests/test_demo_vit_ttnn_inference_perf_e2e_2cq_trace.py
+pytest --disable-warnings models/demos/blackhole/vit/tests/test_demo_vit_ttnn_inference_perf_e2e_2cq_trace.py
 ```
 
 -  For inference device OPs analysis, use the following command to run the demo:
@@ -35,24 +35,24 @@ pytest --disable-warnings models/demos/wormhole/vit/tests/test_demo_vit_ttnn_inf
 # Need to enable the profiler by building with ./build_metal.sh -p
 
 # To manually inspect ops
-./tools/tracy/profile_this.py -n vit -c "pytest --disable-warnings models/demos/wormhole/vit/tests/test_vit_device_perf.py::test_vit_device_ops"
+./tools/tracy/profile_this.py -n vit -c "pytest --disable-warnings models/demos/blackhole/vit/tests/test_vit_device_perf.py::test_vit_device_ops"
 
 # For an automated device perf report(samples/s)
-pytest models/demos/wormhole/vit/tests/test_vit_device_perf.py::test_vit_perf_device
+pytest models/demos/blackhole/vit/tests/test_vit_device_perf.py::test_vit_perf_device
 ```
 
 ## Testing
 - Use the following command to run the demo and to test inference accuracy for Imagenet-21K:
 ```sh
-pytest --disable-warnings models/demos/wormhole/vit/demo/demo_vit_performant_imagenet_inference.py::test_run_vit_trace_2cqs_inference
+pytest --disable-warnings models/demos/blackhole/vit/demo/demo_vit_performant_imagenet_inference.py::test_run_vit_trace_2cqs_inference
 ```
 
 ## Details
-- Entry point for the model is `vit` in `models/demos/wormhole/vit/tt/ttnn_optimized_sharded_vit_wh.py`
+- Entry point for the model is `vit` in `models/demos/blackhole/vit/tt/ttnn_optimized_sharded_vit_bh.py`
 - Batch Size: 8
 - Sequence size: 224
 - Dataset Used: `ImageNet-21k dataset`.
 
 ### Results
-- Model runtime (host end-2-end) is `~1370` FPS
+- Model runtime (host end-2-end) is `~2460` FPS
 - The Imagenet-21K inference accuracy is `80%`
