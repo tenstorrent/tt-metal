@@ -6,6 +6,7 @@ import pytest
 import ttnn
 from tests.nightly.t3000.ccl.test_minimal_reduce_scatter_async import run_reduce_scatter_impl
 from models.common.utility_functions import skip_for_blackhole, skip_for_wormhole_b0
+from models.common.utility_functions import comp_pcc
 
 
 @skip_for_blackhole("This test is for wormhole")
@@ -254,3 +255,93 @@ def test_reduce_scatter_async_quad_host_mesh(
         cluster_axis=cluster_axis,
     )
     ttnn.ReadDeviceProfiler(submesh_device)
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+        }
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
+@pytest.mark.parametrize("cluster_axis", [1])
+def test_reduce_scatter_all_gather_async(mesh_device, cluster_axis):
+    """
+    Test reduce_scatter_minimal_async followed by all_gather_async.
+    Starting with a DRAM interleaved tensor of shape [1, 1, 32, 1536] replicated on entire mesh.
+    """
+    import torch
+    from loguru import logger
+
+    # Input shape: [1, 1, 32, 1536]
+    shape = [1, 1, 32, 1536]
+    logger.info(f"mesh shape: {mesh_device.shape}")
+
+    # Create random input tensor
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+
+    # Create DRAM interleaved tensor replicated on entire mesh
+    tt_input = ttnn.from_torch(
+        torch_input,
+        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        layout=ttnn.TILE_LAYOUT,
+    )
+
+    grid = mesh_device.compute_with_storage_grid_size()
+    num_cores = grid.x * grid.y
+    core_range_set = ttnn.num_cores_to_corerangeset(num_cores, grid, row_wise=True)
+
+    # Create global semaphores for reduce_scatter
+    rs_multi_device_semaphores = [ttnn.create_global_semaphore(mesh_device, core_range_set, 0) for _ in range(3)]
+
+    rs_barrier_semaphore = ttnn.create_global_semaphore(mesh_device, core_range_set, 0)
+
+    # Create global semaphores for all_gather
+    ag_multi_device_semaphores = [ttnn.create_global_semaphore(mesh_device, core_range_set, 0) for _ in range(2)]
+
+    # Use same barrier semaphore as reduce_scatter
+    ag_barrier_semaphore = ttnn.create_global_semaphore(mesh_device, core_range_set, 0)
+    ttnn.synchronize_device(mesh_device)
+
+    # Configure reduce_scatter_minimal_async
+    rs_config = {
+        "dim": 3,
+        "multi_device_global_semaphore": rs_multi_device_semaphores,
+        "num_links": 1,
+        "barrier_semaphore": rs_barrier_semaphore,
+        "memory_config": ttnn.DRAM_MEMORY_CONFIG,
+        "topology": ttnn.Topology.Linear,
+        "cluster_axis": cluster_axis,
+    }
+
+    # Configure all_gather_async
+    ag_config = {
+        "dim": 3,
+        "cluster_axis": cluster_axis,
+        "mesh_device": mesh_device,
+        "topology": ttnn.Topology.Linear,
+        "multi_device_global_semaphore": ag_multi_device_semaphores,
+        "num_links": 1,
+        "memory_config": ttnn.DRAM_MEMORY_CONFIG,
+        "barrier_semaphore": ag_barrier_semaphore,
+    }
+
+    # Apply reduce_scatter
+    logger.info(f"Applying reduce_scatter_minimal_async")
+    tt_output_rs = ttnn.experimental.reduce_scatter_minimal_async(tt_input, **rs_config)
+
+    # Apply all_gather
+    logger.info(f"Applying all_gather_async")
+    tt_output = ttnn.experimental.all_gather_async(tt_output_rs, **ag_config)
+    logger.info(f"Done applying all_gather_async")
+
+    # Convert output to torch
+    torch_output = ttnn.to_torch(
+        tt_output, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, -1), mesh_shape=mesh_device.shape)
+    )
