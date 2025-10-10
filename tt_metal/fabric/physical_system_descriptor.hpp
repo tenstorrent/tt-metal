@@ -12,6 +12,7 @@
 #include <vector>
 
 #include <umd/device/types/cluster_descriptor_types.hpp>
+#include <umd/device/cluster_descriptor.hpp>
 #include <tt_stl/strong_type.hpp>
 #include <tt_stl/reflection.hpp>
 
@@ -143,22 +144,30 @@ struct PhysicalConnectivityGraph {
 class PhysicalSystemDescriptor {
 public:
     PhysicalSystemDescriptor(
-        const std::unique_ptr<tt::umd::Cluster>& cluster,
         const std::shared_ptr<distributed::multihost::DistributedContext>& distributed_context,
         const Hal* hal,
         const tt::llrt::RunTimeOptions& rtoptions,
+        const std::unique_ptr<tt::umd::Cluster>& cluster = nullptr,
         bool run_discovery = true);
     PhysicalSystemDescriptor(
-        const std::unique_ptr<tt::umd::Cluster>& cluster,
         const std::shared_ptr<distributed::multihost::DistributedContext>& distributed_context,
         const Hal* hal,
         bool using_mock_cluster_descriptor,
-        bool run_discovery);
+        const std::unique_ptr<tt::umd::Cluster>& cluster = nullptr,
+        bool run_discovery = true);
     // Constructor generating a PhysicalSystemDescriptor based on a protobuf
     // descriptor (can be used entirely offline).
     PhysicalSystemDescriptor(const std::string& mock_proto_desc_path);
 
     ~PhysicalSystemDescriptor();
+
+    // Move constructor (move assignment not possible due to const reference member)
+    PhysicalSystemDescriptor(PhysicalSystemDescriptor&&) = default;
+
+    // Delete copy constructor, copy assignment, and move assignment operators
+    PhysicalSystemDescriptor(const PhysicalSystemDescriptor&) = delete;
+    PhysicalSystemDescriptor& operator=(const PhysicalSystemDescriptor&) = delete;
+    PhysicalSystemDescriptor& operator=(PhysicalSystemDescriptor&&) = delete;
 
     void run_discovery(bool run_global_discovery = true);
     // ASIC Topology Query APIs
@@ -218,7 +227,13 @@ private:
     void resolve_hostname_uniqueness();
     void validate_graphs();
 
+    // Helper to get the cluster to use (either the reference or our owned one)
+    const std::unique_ptr<tt::umd::Cluster>& get_cluster() const;
+
     const std::unique_ptr<tt::umd::Cluster>& cluster_;
+    std::unique_ptr<tt::umd::Cluster> owned_cluster_ = nullptr;  // Used when cluster_ is null
+    std::unique_ptr<ClusterDescriptor> cluster_desc_ = nullptr;
+
     std::shared_ptr<distributed::multihost::DistributedContext> distributed_context_;
     const Hal* hal_;
     const bool using_mock_cluster_desc_;
