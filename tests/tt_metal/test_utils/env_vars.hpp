@@ -56,4 +56,19 @@ inline std::string get_umd_arch_name() {
 
 }
 
+inline bool is_watcher_enabled() {
+    constexpr auto TT_METAL_WATCHER_ENV_VAR = "TT_METAL_WATCHER";
+
+    auto watcher_env_ptr = std::getenv(TT_METAL_WATCHER_ENV_VAR);
+    return watcher_env_ptr != nullptr && std::string(watcher_env_ptr) == "1";
+}
+
+// Macro to skip tests when watcher is enabled
+#define SKIP_FOR_WATCHER() \
+    do { \
+        if (tt::test_utils::is_watcher_enabled()) { \
+            GTEST_SKIP() << "Test is not passing with watcher enabled"; \
+        } \
+    } while(0)
+
 }  // namespace tt::test_utils
