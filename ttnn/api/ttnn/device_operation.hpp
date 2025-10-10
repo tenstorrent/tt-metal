@@ -361,6 +361,7 @@ get_output_placements_and_shape(
     const typename device_operation_t::tensor_args_t& tensor_args, const Tensor& first_tensor) {
     auto initial_shape = first_tensor.tensor_topology().distribution_shape();
     auto result_strides = tt::stl::SmallVector<uint32_t>(initial_shape.cbegin(), initial_shape.cend());
+    tt::tt_metal::distributed::MeshShape result_shape;
     auto result_placements = first_tensor.tensor_topology().placements();
     std::unordered_set<int> shard_dims;
     tt::stl::reflection::visit_object_of_type<Tensor>(
@@ -377,7 +378,7 @@ get_output_placements_and_shape(
                     result_strides.push_back(tensor_distribution_shape[j]);
                 }
             }
-            const auto result_shape = tt::tt_metal::distributed::MeshShape(result_strides);
+            result_shape = tt::tt_metal::distributed::MeshShape(result_strides);
 
             const auto& tensor_placements = tensor.tensor_topology().placements();
             for (int i = 0; i < tensor_placements.size(); i++) {
