@@ -337,28 +337,26 @@ install_sfpi() {
         echo "[ERROR] Unknown packaging system. SFPI installation requires either dpkg or rpm."
         exit 1
     fi
-    source $version_file
-    local sfpi_pkg_md5=$(eval echo "\$sfpi_${sfpi_arch}_${sfpi_dist}_${pkg}_md5")
-    if [ -z $(eval echo "$sfpi_${pkg}_md5") ] ; then
-	echo "[ERROR] SFPI $sfpi_version $pkg package for ${sfpi_arch} $sfpi_dist is not available" >&2
+    eval local $($version_file SHELL $pkg)
+    if [[ -z $sfpi_md5 ] ; then
+	echo "[ERROR] SFPI $sfpi_version $pkg package for $sfpi_arch $sfpi_dist is not available" >&2
 	exit 1
     fi
     local TEMP_DIR=$(mktemp -d)
-    local filename="sfpi_${sfpi_version}_${sfpi_arch}_${sfpi_dist}.${pkg}"
-    wget -P $TEMP_DIR "$sfpi_url/$sfpi_version/$filename"
-    if [ $(md5sum -b "${TEMP_DIR}/$filename" | cut -d' ' -f1) \
-	     != "$sfpi_pkg_md5" ] ; then
-	echo "[ERROR] SFPI $filename md5 mismatch" >&2
+    wget -P $TEMP_DIR "$sfpi_url/$sfpi_filename"
+    if [ $(md5sum -b "${TEMP_DIR}/$sfpi_filename" | cut -d' ' -f1) \
+	     != "$sfpi_md5" ] ; then
+	echo "[ERROR] SFPI $sfpi_filename md5 mismatch" >&2
 	rm -rf $TEMP_DIR
 	exit 1
     fi
     # we must select exactly this version
     case "$pkg" in
 	deb)
-	    apt-get install -y --allow-downgrades $TEMP_DIR/$filename
+	    apt-get install -y --allow-downgrades $TEMP_DIR/$sfpi_filename
 	    ;;
 	rpm)
-	    rpm --upgrade --force $TEMP_DIR/$filename
+	    rpm --upgrade --force $TEMP_DIR/$sfpi_filename
 	    ;;
     esac
     rm -rf $TEMP_DIR

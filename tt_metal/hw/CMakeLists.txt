@@ -37,7 +37,7 @@ set(SFPI_ROOT "${PROJECT_SOURCE_DIR}/runtime/sfpi")
 file(MAKE_DIRECTORY ${SFPI_ROOT})
 execute_process(
     COMMAND
-        ${CMAKE_CURRENT_SOURCE_DIR}/../sfpi-version.sh txz CMAKE
+        ${CMAKE_CURRENT_SOURCE_DIR}/../sfpi-version.sh CMAKE txz
     OUTPUT_FILE ${SFPI_ROOT}/sfpi-version.cmake
     COMMAND_ERROR_IS_FATAL ANY
 )
@@ -55,6 +55,7 @@ else()
         # scripts/build.sh --test-tt
         # tar -C build cf - sfpi | tar -C ${SFPI_ROOT} xf -
         # add some caching so we don't do this every time!
+        # you'll have to install a bunch of packages for this to work
         message(FATAL_ERROR "SFPI tarball for ${SFPI_arch} ${SFPI_dist} is not available")
     else()
         include(FetchContent)
@@ -96,10 +97,10 @@ else()
         ERROR_QUIET
     )
     if(NOT "${SFPI_UNMET}" STREQUAL "")
-        message(NOTICE "Unmet dependencies:\n${SFPI_UNMET}")
+        message(NOTICE "Unsatified dependencies:\n${SFPI_UNMET}")
         message(
             FATAL_ERROR
-            "SFPI has unmet dependencies. Set TT_USE_SYSTEM_SFPI or build your own sfpi and point sfpi-version.sh at it"
+            "SFPI has unsatisfied dependencies. Either\n* set TT_USE_SYSTEM_SFPI and run install_dependencies.sh --install-sfpi, or\n* install the missing packages, or\n* (expert level) build your own sfpi and point sfpi-version.sh at it"
         )
     endif()
 endif()

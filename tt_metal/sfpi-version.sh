@@ -4,55 +4,79 @@
 # This is the source of truth as to how we determine arch and distro names.
 # Canonical location is in tenstorrent/tt-sfpi project's script directory.
 
-# source $FILE -- generate sfpi variables for use by shell
-# $FILE CMAKE -- emit cmake script to set variables
+# eval local $($FILE SHELL $pkgext) -- generate sfpi variables for shell consumer
+# $FILE CMAKE $pkgext -- emit cmake script to set variables
+# eval $($FILE RELEASE $version) -- generate sfpi variables for release
 # $FILE *.md5 -- emit variable initializations from md5 file(s)
 
-case "${1-}" in
-    *.md5)
-	# convert md5 files into release variables
-	sed 's/^\([0-9a-f]*\) \*sfpi_\([-.0-9a-zA-Z]*\)_\([a-z0-9_A-Z]*\)\.\([a-z]*\)$/sfpi_version=\2'"\n"'sfpi_\3_\4_md5=\1/' "$@" \
-	    | sort -u
-	exit 0
-	;;
-esac
+# define release, update this bit for new release
+sfp_version=7.3.0-naming-30304
+sfpi_x86_64_linux_deb_md5=4b2963e582bdf554894d31d75ffaad92
+sfpi_x86_64_linux_rpm_md5=777fce0a26815235de84c53d5bab7954
+sfpi_x86_64_linux_txz_md5=65c604a723cd1552765ffd4b6d41f22b
+
+if [[ ${#1} = 0 ]] ; then
+    cat >&2 <<EOF
+Usage:
+$0 *.md5	- generate release information
+$0 RELEASE \$VER - generate release names
+$0 SHELL \$PKG	- shell use for PKG
+$0 CMAKE \$PKG	- CMAKE use for PKG
+EOF
+    exit 1
+fi
+
+if [[ ${1-} =~ '.md5'$ ]] ; then
+   # convert md5 files into release variables
+   (for file in "$@"
+    do
+	tmp="${file##*/sfpi_}"
+	echo ${tmp%%_*}
+    done) | sort -u
+   sed 's/^\([0-9a-f]*\) \*sfpi_[^_]*_\([^.]*\)\.\(.*\)$/sfpi_\2_\3_md5=\1/' "$@"
+   exit 0
+fi
+
+if [[ ${1-} = RELEASE ]] ; then
+    # releaser of sfpi-version
+    sfpi_version=$2
+fi
 
 # define host system
 sfpi_dist=unknown
 if [[ -r /etc/os-release ]] ; then
-    # some distros are sufficiently similar for common handling
-    sfpi_dist=$(eval $(grep '^ID=' /etc/os-release) ; \
-		case "$ID" in \
-		    debian|ubuntu|redhat|centos|rhel|almalinux) ID=linux ;; \
-		esac ; \
-		echo "$ID")
+    source /etc/os-release
+
+    case "${ID-}" in \
+	"") ;;
+	debian|ubuntu|redhat|centos|rhel|almalinux)
+	    # some distros are sufficiently similar for common handling
+	    sfpi_dist=linux ;;
+	*)
+	    sfpi_dist=$ID ;;
+    esac
 fi
 sfpi_arch=$(uname -m)
 
-# define release
-sfpi_version=7.3.0-ext-29186
-sfpi_x86_64_linux_deb_md5=23c4547bf95fb2f4e148fb1da0e433a2
-sfpi_x86_64_linux_rpm_md5=7112d6ed4885ddf4eaa40521de96b479
-sfpi_x86_64_linux_txz_md5=4eff7968d9c2851793197a38b44178df
-
+# define download location & name
 sfpi_repo=https://github.com/tenstorrent/sfpi
+sfpi_url=$sfpi_repo/releases/download/$sfpi_version
 sfpi_filename=sfpi_${sfpi_version}_${sfpi_arch}_${sfpi_dist}
 
-if ! [[ -z ${1-} ]] ; then
+if [[ ${1-} != RELEASE ]] ; then
     # querier of sfpi-version
-    sfpi_filename+=".$1"
-    sfpi_url=$sfpi_repo/releases/download/$sfpi_version
+    sfpi_filename+=".$2"
     sfpi_md5=$(eval echo "\${sfpi_${sfpi_arch}_${sfpi_dist}_${1}_md5:-}")
 fi
 
-case "${2-}" in
-    CMAKE)
-	# emit as cmake script
-	for var in $(set -o posix ; set | grep '^sfpi_')
-	do
-	    # relies on no inserted quoting for meta-characters
-	    name=${var%%=*}
-	    echo "set(SFPI${name#sfpi} \"${var#*=}\")"
-	done
-	;;
-esac
+# now emit definitions
+for var in $(set -o posix ; set | grep '^sfpi_')
+do
+    # relies on no inserted quoting for meta-characters
+    name=${var%%=*}
+    if [[ ${1-} = CMAKE ]] ; then
+	echo "set(SFPI${name#sfpi} \"${var#*=}\")"
+    else
+	echo "${name}=${var#*=}"
+    fi
+done
