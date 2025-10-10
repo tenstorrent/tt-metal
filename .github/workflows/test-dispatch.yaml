@@ -99,7 +99,7 @@ jobs:
         with:
           name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       - name: Run regression in loop in docker
-        uses: ./.github/actions/docker-run
+        uses: tenstorrent/tt-metal/.github/actions/docker-run@main
         with:
           docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
