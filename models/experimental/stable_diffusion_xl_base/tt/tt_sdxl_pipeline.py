@@ -6,7 +6,7 @@ import os
 import torch
 from dataclasses import dataclass
 
-from diffusers import StableDiffusionXLPipeline
+from diffusers import StableDiffusionXLPipeline, StableDiffusionXLInpaintPipeline
 from loguru import logger
 import ttnn
 
@@ -49,9 +49,12 @@ class TtSDXLPipeline(LightweightModule):
     def __init__(self, ttnn_device, torch_pipeline, pipeline_config: TtSDXLPipelineConfig):
         super().__init__()
 
-        assert isinstance(
-            torch_pipeline, StableDiffusionXLPipeline
-        ), "torch_pipeline must be an instance of StableDiffusionXLPipeline"
+        if not isinstance(torch_pipeline, StableDiffusionXLPipeline) and not isinstance(
+            torch_pipeline, StableDiffusionXLInpaintPipeline
+        ):
+            assert (
+                False
+            ), "torch_pipeline must be an instance of StableDiffusionXLPipeline or StableDiffusionXLInpaintPipeline"
         assert isinstance(torch_pipeline.text_encoder, CLIPTextModel), "pipeline.text_encoder is not a CLIPTextModel"
         assert isinstance(
             torch_pipeline.text_encoder_2, CLIPTextModelWithProjection

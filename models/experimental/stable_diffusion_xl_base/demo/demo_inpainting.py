@@ -63,8 +63,8 @@ def run_demo_inference(
     # 1. Load components
     profiler.start("diffusion_pipeline_from_pretrained")
     pipeline = DiffusionPipeline.from_pretrained(
-        # should be "diffusers/stable-diffusion-xl-1.0-inpainting-0.1" for inpainting
-        "stabilityai/stable-diffusion-xl-base-1.0",
+        "diffusers/stable-diffusion-xl-1.0-inpainting-0.1",  # for inpainting
+        # "stabilityai/stable-diffusion-xl-base-1.0",
         torch_dtype=torch.float32,
         use_safetensors=True,
     )
@@ -74,6 +74,8 @@ def run_demo_inference(
     assert isinstance(
         pipeline.text_encoder_2, CLIPTextModelWithProjection
     ), "pipeline.text_encoder_2 is not a CLIPTextModelWithProjection"
+
+    # First make a demo to run with a lot of prompts and one mask and one image
 
     print("Using inpainting pipeline :)")
     tt_sdxl = TtSDXLInpaintingPipeline(
@@ -97,8 +99,23 @@ def run_demo_inference(
     img_url = "https://raw.githubusercontent.com/CompVis/latent-diffusion/main/data/inpainting_examples/overture-creations-5sI6fQgYIuo.png"
     mask_url = "https://raw.githubusercontent.com/CompVis/latent-diffusion/main/data/inpainting_examples/overture-creations-5sI6fQgYIuo_mask.png"
 
-    image = load_image(img_url).resize((1024, 1024))
-    mask_image = load_image(mask_url).resize((1024, 1024))
+    height = width = 1024
+    image = load_image(img_url).resize((height, width))
+    mask_image = load_image(mask_url).resize((height, width))
+
+    init_image = tt_sdxl.torch_pipeline.image_processor.preprocess(
+        image, height=height, width=width, crops_coords=None, resize_mode="default"
+    )
+    init_image = init_image.to(dtype=torch.float32)
+
+    mask = tt_sdxl.torch_pipeline.mask_processor.preprocess(
+        mask_image, height=height, width=width, crops_coords=None, resize_mode="default"
+    )
+
+    # This is used in the inpainting pipeline, if the following arguments are provided:
+    # - masked_image_latents == None
+    # - init_image.shape[1] != 4 (in tested cases, it is 3 (RGB))
+    masked_image = init_image * (mask < 0.5)
 
     tt_latents, tt_prompt_embeds, tt_add_text_embeds = tt_sdxl.generate_input_tensors(
         all_prompt_embeds_torch=torch.randn(batch_size, 2, MAX_SEQUENCE_LENGTH, CONCATENATED_TEXT_EMBEDINGS_SIZE),

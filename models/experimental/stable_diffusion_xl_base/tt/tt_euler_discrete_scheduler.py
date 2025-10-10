@@ -398,3 +398,23 @@ class TtEulerDiscreteScheduler(LightweightModule):
 
         # Note: We return None for pred_original_sample since it is never used
         return (prev_sample, None)
+
+    def add_noise(
+        self,
+        original_samples: ttnn._ttnn.tensor.Tensor,
+        noise: ttnn._ttnn.tensor.Tensor,
+        timesteps: ttnn._ttnn.tensor.Tensor,
+        begin_or_step_index: int,  # In case of inpainting, use self.begin_index, and in case of img2img, use self.step_index
+    ) -> ttnn._ttnn.tensor.Tensor:
+        step_index = begin_or_step_index
+
+        # this is working
+        # sigma = self.sigmas[step_indices].flatten()
+        sigma = self.tt_sigmas[step_index]
+        while len(sigma.shape) < len(original_samples.shape):
+            sigma = ttnn.unsqueeze(sigma, dim=-1)
+
+        # temp workaround
+        sigma = ttnn.to_device(sigma, self.device)
+        noisy_samples = original_samples + noise * sigma
+        return noisy_samples
