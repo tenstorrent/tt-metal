@@ -1,0 +1,3 @@
+[
+    { "name": "ttnn_examples", "cmd": "./tests/scripts/run_ttnn_examples.sh", "owner_id": "U08DEGUJY3H" }
+]
