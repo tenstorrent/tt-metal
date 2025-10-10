@@ -1219,8 +1219,8 @@ def test_demo_text(
             if model_device_key in ci_target_ttft:
                 current_ttft_target = ci_target_ttft[model_device_key]
                 if isinstance(current_ttft_target, tuple):
-                    current_ttft_target = current_ttft_target[0]
                     high_tol_percentage = current_ttft_target[1]
+                    current_ttft_target = current_ttft_target[0]
                 else:
                     high_tol_percentage = 1.15
                 ci_targets["prefill_time_to_token"] = current_ttft_target / 1000  # convert to seconds
