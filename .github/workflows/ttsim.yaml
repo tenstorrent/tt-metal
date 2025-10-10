@@ -18,7 +18,7 @@ on:
       ttsim-ref:
         required: false
         type: string
-        default: "d20e792d7b2ae18de3743d4df35d72a9259c65db"
+        default: "8d6a0c997c4ba585c519c27f304b976b243d4bd9"
 
 jobs:
   ttsim-integration:
