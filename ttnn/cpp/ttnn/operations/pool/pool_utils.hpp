@@ -11,6 +11,7 @@
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/types.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 namespace ttnn::operations::pool {
 
@@ -133,6 +134,8 @@ uint32_t calculate_L1_usage(
 // they are sensical to avoid problems in sliding window config, halo and other setup procedures
 void validate_input_params(
     const Tensor& input_tensor,
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
+    Pool2DType pool_type,
     uint32_t batch_size,
     uint32_t input_h,
     uint32_t input_w,
