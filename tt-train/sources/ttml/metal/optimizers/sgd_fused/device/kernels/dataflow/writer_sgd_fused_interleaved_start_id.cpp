@@ -7,8 +7,8 @@
 #include "dataflow_api.h"
 #include "hostdevcommon/kernel_structs.h"
 
-constexpr auto cb_momentum_out_idx = tt::CBIndex::c_3;
-constexpr auto cb_momentum_to_dram_idx = tt::CBIndex::c_4;
+constexpr auto cb_momentum_out_idx = tt::CBIndex::c_4;
+constexpr auto cb_momentum_to_dram_idx = tt::CBIndex::c_5;
 
 constexpr auto cb_param_out_idx = tt::CBIndex::c_16;
 
