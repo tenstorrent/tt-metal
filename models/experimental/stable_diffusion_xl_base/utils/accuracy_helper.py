@@ -69,7 +69,7 @@ def save_json_results(data, capture_trace, vae_on_device, encoders_on_device, us
     new_file_name = (
         f"sdxl_test_results_{trace_flag}_{vae_flag}_{encoders_flag}_{use_cfg_parallel}_{num_inference_steps}.json"
     )
-    
+
     with open(f"{OUT_ROOT}/{new_file_name}", "w") as f:
         json.dump(data, f, indent=4)
     logger.info(f"Test results saved to {OUT_ROOT}/{new_file_name}")
