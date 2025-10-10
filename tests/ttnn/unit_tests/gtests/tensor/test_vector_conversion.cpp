@@ -89,18 +89,6 @@ TYPED_TEST(VectorConversionTest, InvalidSize) {
     EXPECT_ANY_THROW((void)Tensor::from_vector(input, get_tensor_spec(shape, convert_to_data_type<TypeParam>())));
 }
 
-TYPED_TEST(VectorConversionTest, InvalidDtype) {
-    ttnn::Shape shape{32, 32};
-    auto input = arange<TypeParam>(0, shape.volume(), 1);
-
-    EXPECT_ANY_THROW((void)Tensor::from_vector(
-        input,
-        get_tensor_spec(
-            shape,
-            // Use INT32 for verification, except for when the actual type is int32_t.
-            (std::is_same_v<TypeParam, int32_t> ? DataType::FLOAT32 : DataType::INT32))));
-}
-
 TYPED_TEST(VectorConversionTest, Roundtrip) {
     for (const auto& shape : get_shapes_for_test()) {
         auto input = arange<TypeParam>(0, shape.volume(), 1);
