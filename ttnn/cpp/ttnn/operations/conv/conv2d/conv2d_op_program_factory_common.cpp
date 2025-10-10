@@ -188,11 +188,13 @@ std::vector<CBInfo> get_cb_info(
             (is_1d_depthwise_conv ? block_config.act_block_h_ntiles : block_config.act_block_w_ntiles);
         if (sharding_scheme == TensorMemoryLayout::HEIGHT_SHARDED) {
             // If activation reuse is enabled, we already have full inner dim
-            const bool enable_fully_buffered_weights = num_blocks_act_h > 1 && !conv_config.enable_activation_reuse;
-            if (enable_fully_buffered_weights) {
-                weight_block_num_tiles *= kernel_size[0];
-            } else if (conv_config.enable_weights_double_buffer) {
-                weight_block_num_tiles *= 2;
+            if (!conv_config.enable_activation_reuse) {
+                const bool enable_fully_buffered_weights = num_blocks_act_h > 1;
+                if (enable_fully_buffered_weights) {
+                    weight_block_num_tiles *= kernel_size[0];
+                } else if (conv_config.enable_weights_double_buffer) {
+                    weight_block_num_tiles *= 2;
+                }
             }
         } else if (conv_config.enable_weights_double_buffer) {
             weight_block_num_tiles *= 2;
