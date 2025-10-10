@@ -33,14 +33,14 @@ int main() {
     env_var = std::getenv("TT_METAL_SIMULATOR");
     if (env_var == nullptr) {
         std::cerr
-            << "ERROR: This test can only be run using a simulator. Please set Enviroment Variable TT_METAL_SIMULATOR"
+            << "ERROR: This test can only be run using a simulator. Please set Environment Variable TT_METAL_SIMULATOR"
             << std::endl;
         std::cerr << "ERROR: with a valid simulator path" << std::endl;
         return 1;
     }
     env_var = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
     if (env_var == nullptr) {
-        std::cerr << "ERROR: This test can only be run in slow dispatch mode. Please set Enviroment Variable "
+        std::cerr << "ERROR: This test can only be run in slow dispatch mode. Please set Environment Variable "
                      "TT_METAL_SLOW_DISPATCH_MOE"
                   << std::endl;
         std::cerr << "ERROR: using export TT_METAL_SLOW_DISPATCH_MODE=1" << std::endl;
