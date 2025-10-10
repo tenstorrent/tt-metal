@@ -64,6 +64,7 @@ void kernel_main() {
 
     constexpr uint32_t face_width = 16;
     constexpr uint32_t face_height = 16;
+    constexpr uint32_t face_size = face_width * face_height;
 
     // This assumes the reduction is along the 'W' dimension
     src_element_type max_values[tile_height] = {default_val};
@@ -103,14 +104,14 @@ void kernel_main() {
             }
 
             // Iterate over the faces of the tile
-            for (uint32_t k = 0; k < 4; k++) {
+            for (uint32_t face_id = 0; face_id < 4; face_id++) {
                 // Full face dimensions - updated when face intersects the boundary with padding
                 uint32_t rows_to_process = face_width;
                 uint32_t cols_to_process = face_height;
 
-                // Checks to avoid processing the padding
-                const bool is_right_face = (k == 1 || k == 3);
-                const bool is_bottom_face = (k == 2 || k == 3);
+                // Adjust rows/cols to process to avoid processing the padding
+                const bool is_right_face = (face_id == 1 || face_id == 3);
+                const bool is_bottom_face = (face_id == 2 || face_id == 3);
                 if (i == (input_height - 1)) {
                     if (is_bottom_face) {
                         if (skip_bottom_face) {
@@ -142,21 +143,21 @@ void kernel_main() {
                 }
 
                 // Get an offset to the face
-                uint32_t face_offset = k * face_width * face_height;
+                uint32_t face_offset = face_id * face_size;
                 volatile tt_l1_ptr decltype(get_default_value<src_data_format>())* face_ptr = src_ptr + face_offset;
 
                 // Go over the rows of the face. Update the maximum values in each row.
-                for (uint32_t m = 0; m < rows_to_process; m++) {
-                    // Row index in the tile
-                    const uint32_t row_index = (k < 2) ? m : m + face_height;
+                for (uint32_t row = 0; row < rows_to_process; row++) {
+                    // Row index in the tile.
+                    const uint32_t row_index = (face_id < 2) ? row : row + face_height;
 
                     src_element_type curr_max = max_values[row_index];
                     uint32_t curr_arg_max = arg_max[row_index];
 
-                    // Go over elements in the current row, current face
-                    for (uint32_t n = 0; n < cols_to_process; n++) {
+                    // Go over elements in the current row, current face.
+                    for (uint32_t col = 0; col < cols_to_process; col++) {
                         // Index within the face
-                        uint32_t index = m * face_width + n;
+                        uint32_t index = row * face_width + col;
 
                         src_element_type value = face_ptr[index];
 
@@ -168,8 +169,8 @@ void kernel_main() {
                         }
 
                         if (new_max) {
-                            const bool is_left_side_face = (k == 0 || k == 2);
-                            const uint32_t new_arg_max = j * tile_width + (is_left_side_face ? 0 : face_width) + n;
+                            const bool is_left_side_face = (face_id == 0 || face_id == 2);
+                            const uint32_t new_arg_max = j * tile_width + (is_left_side_face ? 0 : face_width) + col;
                             curr_max = value;
                             curr_arg_max = new_arg_max;
                         }
@@ -181,7 +182,7 @@ void kernel_main() {
         }
 
         // Write-out one tile of argmax data into the output tensor.
-        // Only one column (keepdim == true) or one row (keepdim == false) holds the actual data; the reset is padding.
+        // Only one column (keepdim == true) or one row (keepdim == false) holds the actual data; the rest is padding.
         uint32_t units_to_write = tile_height;
         const uint32_t boundary_tile_units = height_rem;
 
@@ -203,13 +204,13 @@ void kernel_main() {
             if (keepdim) {
                 // Write to the left-most column of the tile.
                 face_id = (idx < face_height) ? 0 : 2;
-                row_f = (face_id == 0) ? idx : idx - 16;
+                row_f = (face_id == 0) ? idx : idx - face_height;
                 col_f = 0;
             } else {
                 // Write to the top row of the tile.
                 face_id = (idx < face_width) ? 0 : 1;
                 row_f = 0;
-                col_f = (face_id == 0) ? idx : idx - 16;
+                col_f = (face_id == 0) ? idx : idx - face_width;
             }
 
             // Face is a row-major chunk of memory.
@@ -217,9 +218,9 @@ void kernel_main() {
 
             // First, obtain the start offset of the face,
             // within the tile.
-            const uint32_t tile_offset = face_id * (face_width * face_height);
+            const uint32_t tile_offset = face_id * face_size;
 
-            // Find element offset within the (row-major) 16x16 face.
+            // Find element offset within the (row-major) face.
             uint32_t face_offset = 0;
             if (keepdim) {
                 // Each element is stored in the first column of

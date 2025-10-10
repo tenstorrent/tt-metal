@@ -129,8 +129,7 @@ operation::ProgramWithCallbacks ArgMax::create_program(
     if (this->use_multicore) {
         return detail::argmax_multi_core(
             input_tensor, output_tensor, normalized_dim, this->keepdim, this->sub_core_grids);
-    } else {
-        return detail::argmax_single_core(input_tensor, output_tensor, normalized_dim, this->keepdim);
     }
+    return detail::argmax_single_core(input_tensor, output_tensor, normalized_dim, this->keepdim);
 }
 }  // namespace ttnn::operations::reduction
