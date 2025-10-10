@@ -18,7 +18,15 @@ namespace tt::tt_metal {
 
 // Message protocol matching allocation_server_poc.cpp
 struct __attribute__((packed)) AllocMessage {
-    enum Type : uint8_t { ALLOC = 1, FREE = 2, QUERY = 3, RESPONSE = 4 };
+    enum Type : uint8_t {
+        ALLOC = 1,
+        FREE = 2,
+        QUERY = 3,
+        RESPONSE = 4,
+        DUMP_REMAINING = 5,
+        DEVICE_INFO_QUERY = 6,
+        DEVICE_INFO_RESPONSE = 7
+    };
 
     Type type;            // 1 byte
     uint8_t pad1[3];      // 3 bytes padding
@@ -30,11 +38,22 @@ struct __attribute__((packed)) AllocMessage {
     uint64_t buffer_id;   // 8 bytes
     uint64_t timestamp;   // 8 bytes
 
-    // Response fields (unused by client)
+    // Response fields (unused by client for alloc/free)
     uint64_t dram_allocated;
     uint64_t l1_allocated;
     uint64_t l1_small_allocated;
     uint64_t trace_allocated;
+
+    // Device info fields (unused by client for alloc/free, used by server for device queries)
+    uint64_t total_dram_size;
+    uint64_t total_l1_size;
+    uint32_t arch_type;  // 0=Invalid, 1=Grayskull, 2=Wormhole_B0, 3=Blackhole, 4=Quasar
+    uint32_t num_dram_channels;
+    uint32_t dram_size_per_channel;
+    uint32_t l1_size_per_core;
+    uint32_t is_available;
+    uint32_t num_devices;
+    // Total: 112 bytes
 };
 
 AllocationClient::AllocationClient() : socket_fd_(-1), enabled_(false), connected_(false) {

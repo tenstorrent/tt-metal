@@ -21,13 +21,24 @@
 #include <cstring>
 #include <algorithm>
 
+// TT-Metal includes for device detection
+#include <tt-metalium/host_api.hpp>
+
 #define TT_ALLOC_SERVER_SOCKET "/tmp/tt_allocation_server.sock"
 #define MAX_DEVICES 8
 
 // Message protocol - MUST match Python struct format exactly!
 // Use __attribute__((packed)) to avoid padding issues
 struct __attribute__((packed)) AllocMessage {
-    enum Type : uint8_t { ALLOC = 1, FREE = 2, QUERY = 3, RESPONSE = 4, DUMP_REMAINING = 5 };
+    enum Type : uint8_t {
+        ALLOC = 1,
+        FREE = 2,
+        QUERY = 3,
+        RESPONSE = 4,
+        DUMP_REMAINING = 5,
+        DEVICE_INFO_QUERY = 6,
+        DEVICE_INFO_RESPONSE = 7
+    };
 
     Type type;            // 1 byte
     uint8_t pad1[3];      // 3 bytes padding (explicit)
@@ -44,7 +55,17 @@ struct __attribute__((packed)) AllocMessage {
     uint64_t l1_allocated;
     uint64_t l1_small_allocated;
     uint64_t trace_allocated;
-    // Total: 1+3+4+8+1+3+4+8+8+32 = 72 bytes
+
+    // Device info fields (for DEVICE_INFO_RESPONSE)
+    uint64_t total_dram_size;
+    uint64_t total_l1_size;
+    uint32_t arch_type;  // 0=Invalid, 1=Grayskull, 2=Wormhole_B0, 3=Blackhole, 4=Quasar
+    uint32_t num_dram_channels;
+    uint32_t dram_size_per_channel;
+    uint32_t l1_size_per_core;
+    uint32_t is_available;  // 1 if device exists and is available, 0 otherwise
+    uint32_t num_devices;   // Total number of visible devices (only in response to query for device -1)
+    // Total: 1+3+4+8+1+3+4+8+8+32+8+8+4+4+4+4+4+4 = 112 bytes
 };
 
 class AllocationServer {
@@ -67,6 +88,18 @@ private:
         std::atomic<uint64_t> num_buffers{0};
     };
 
+    struct DeviceInfo {
+        bool is_available{false};
+        uint32_t arch_type{0};  // 0=Invalid, 1=Grayskull, 2=Wormhole_B0, 3=Blackhole, 4=Quasar
+        uint32_t num_dram_channels{0};
+        uint32_t dram_size_per_channel{0};
+        uint32_t l1_size_per_core{0};
+        uint64_t total_dram_size{0};
+        uint64_t total_l1_size{0};
+        uint32_t grid_x{0};
+        uint32_t grid_y{0};
+    };
+
     // Composite key for buffer tracking: {device_id, buffer_id}
     // Each device has its own address space, so addresses can overlap!
     struct BufferKey {
@@ -87,10 +120,96 @@ private:
     std::mutex registry_mutex_;
     std::unordered_map<BufferKey, BufferInfo, BufferKeyHash> allocations_;
     std::array<DeviceStats, MAX_DEVICES> device_stats_;
+    std::array<DeviceInfo, MAX_DEVICES> device_info_;
+    uint32_t num_available_devices_{0};
 
     int server_socket_;
     std::atomic<bool> running_{true};
     std::thread cleanup_thread_;
+
+    const char* arch_to_string(tt::ARCH arch) {
+        switch (arch) {
+            case tt::ARCH::GRAYSKULL: return "Grayskull";
+            case tt::ARCH::WORMHOLE_B0: return "Wormhole_B0";
+            case tt::ARCH::BLACKHOLE: return "Blackhole";
+            case tt::ARCH::QUASAR: return "Quasar";
+            default: return "Unknown";
+        }
+    }
+
+    void detect_devices() {
+        // Use TT-Metal APIs directly for accurate device detection
+        std::cout << "🔍 Device detection (using TT-Metal APIs):" << std::endl;
+
+        try {
+            // Get actual number of PCIe devices
+            size_t num_pcie_devices = tt::tt_metal::GetNumPCIeDevices();
+
+            if (num_pcie_devices == 0) {
+                std::cout << "   No PCIe devices detected" << std::endl;
+                std::cout << "   Server will track allocations anyway" << std::endl;
+                return;
+            }
+
+            if (num_pcie_devices > MAX_DEVICES) {
+                std::cout << "   Warning: Found " << num_pcie_devices << " devices, limiting to " << MAX_DEVICES
+                          << std::endl;
+                num_pcie_devices = MAX_DEVICES;
+            }
+
+            num_available_devices_ = num_pcie_devices;
+
+            // Query each device for detailed information
+            // Note: CreateDeviceMinimal devices should not be manually closed
+            // They are managed by the device pool and will clean up automatically
+            for (size_t i = 0; i < num_pcie_devices; ++i) {
+                try {
+                    // Create minimal device (lightweight, doesn't fully initialize)
+                    // This only initializes enough to query basic device info
+                    auto device = tt::tt_metal::CreateDeviceMinimal(i);
+
+                    tt::ARCH arch = device->arch();
+                    int num_dram_channels = device->num_dram_channels();
+                    uint32_t dram_size_per_channel = device->dram_size_per_channel();
+                    uint32_t l1_size_per_core = device->l1_size_per_core();
+                    auto grid = device->grid_size();
+
+                    uint64_t total_dram = (uint64_t)num_dram_channels * dram_size_per_channel;
+                    uint64_t total_l1 = (uint64_t)l1_size_per_core * grid.x * grid.y;
+
+                    // Store device info
+                    device_info_[i].is_available = true;
+                    device_info_[i].arch_type = static_cast<uint32_t>(arch);
+                    device_info_[i].num_dram_channels = num_dram_channels;
+                    device_info_[i].dram_size_per_channel = dram_size_per_channel;
+                    device_info_[i].l1_size_per_core = l1_size_per_core;
+                    device_info_[i].total_dram_size = total_dram;
+                    device_info_[i].total_l1_size = total_l1;
+                    device_info_[i].grid_x = grid.x;
+                    device_info_[i].grid_y = grid.y;
+
+                    std::cout << "   Device " << i << ": " << arch_to_string(arch) << " ("
+                              << (total_dram / (1024 * 1024 * 1024)) << "GB DRAM, " << (total_l1 / (1024 * 1024))
+                              << "MB L1)" << std::endl;
+
+                    // Note: Do NOT call CloseDevice on minimal devices!
+                    // They are managed internally and closing them causes segfaults.
+
+                } catch (const std::exception& e) {
+                    std::cerr << "   Warning: Could not query device " << i << ": " << e.what() << std::endl;
+                    // Set some default values for this device
+                    device_info_[i].is_available = false;
+                }
+            }
+
+            std::cout << "   Total: " << num_available_devices_ << " PCIe device(s) detected" << std::endl;
+
+        } catch (const std::exception& e) {
+            std::cerr << "   Error during device detection: " << e.what() << std::endl;
+            std::cout << "   Server will track allocations without device info" << std::endl;
+            num_available_devices_ = 0;
+        }
+    }
 
 public:
     AllocationServer() {
@@ -113,6 +232,9 @@ public:
         if (listen(server_socket_, 128) < 0) {
             throw std::runtime_error("Failed to listen on socket");
         }
+
+        // Detect available devices
+        detect_devices();
 
         std::cout << "🚀 Allocation Server started" << std::endl;
         std::cout << "   Listening on: " << TT_ALLOC_SERVER_SOCKET << std::endl;
@@ -232,6 +354,31 @@ public:
             response.l1_allocated = stats.l1_allocated.load();
             response.l1_small_allocated = stats.l1_small_allocated.load();
             response.trace_allocated = stats.trace_allocated.load();
+        }
+
+        send(client_socket, &response, sizeof(response), 0);
+    }
+
+    void handle_device_info_query(int client_socket, const AllocMessage& msg) {
+        AllocMessage response;
+        memset(&response, 0, sizeof(response));
+        response.type = AllocMessage::DEVICE_INFO_RESPONSE;
+        response.device_id = msg.device_id;
+
+        // Special case: device_id -1 means query for number of available devices
+        if (msg.device_id == -1) {
+            response.num_devices = num_available_devices_;
+            response.is_available = (num_available_devices_ > 0) ? 1 : 0;
+        } else if (msg.device_id >= 0 && msg.device_id < MAX_DEVICES) {
+            // Return info for specific device
+            auto& info = device_info_[msg.device_id];
+            response.is_available = info.is_available ? 1 : 0;
+            response.arch_type = info.arch_type;
+            response.num_dram_channels = info.num_dram_channels;
+            response.dram_size_per_channel = info.dram_size_per_channel;
+            response.l1_size_per_core = info.l1_size_per_core;
+            response.total_dram_size = info.total_dram_size;
+            response.total_l1_size = info.total_l1_size;
         }
 
         send(client_socket, &response, sizeof(response), 0);
@@ -368,6 +515,7 @@ public:
                 case AllocMessage::ALLOC: handle_allocation(msg); break;
                 case AllocMessage::FREE: handle_deallocation(msg); break;
                 case AllocMessage::QUERY: handle_query(client_socket, msg); break;
+                case AllocMessage::DEVICE_INFO_QUERY: handle_device_info_query(client_socket, msg); break;
                 case AllocMessage::DUMP_REMAINING:
                     std::cout << "📋 Received DUMP_REMAINING request..." << std::endl;
                     std::cout.flush();

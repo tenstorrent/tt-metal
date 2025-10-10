@@ -24,6 +24,7 @@ show_help() {
     echo "  -b, --build-type build_type      Set the build type. Default is Release. Other options are Debug, RelWithDebInfo, ASan and TSan."
     echo "  -t, --enable-time-trace          Enable build time trace (clang only)."
     echo "  -p, --enable-profiler            Enable Tracy profiler."
+    echo "  -g, --generator generator        Set the build system generator. Default is Ninja. Other options are Make or 'Unix Makefiles' (case-insensitive)."
     echo "  --install-prefix                 Where to install build artifacts."
     echo "  --build-dir                      Build directory."
     echo "  --build-tests                    Build All Testcases."
@@ -71,6 +72,7 @@ build_verbose="OFF"
 enable_time_trace="OFF"
 build_type="Release"
 enable_profiler="OFF"
+generator="Ninja"
 build_dir=""
 build_tests="OFF"
 build_ttnn_tests="OFF"
@@ -104,7 +106,7 @@ enable_fake_kernels_target="OFF"
 
 declare -a cmake_args
 
-OPTIONS=h,e,c,v,t,a,m,s,u,b:,p
+OPTIONS=h,e,c,v,t,a,m,s,u,b:,p,g:
 LONGOPTIONS="
 help
 build-all
@@ -114,6 +116,7 @@ build-verbose
 enable-time-trace
 build-type:
 enable-profiler
+generator:
 install-prefix:
 build-dir:
 build-tests
@@ -179,6 +182,8 @@ while true; do
             build_type="$2";shift;;
         -p|--enable-profiler)
             enable_profiler="ON";;
+        -g|--generator)
+            generator="$2";shift;;
         --install-prefix)
             install_prefix="$2";shift;;
         --build-tests)
@@ -250,6 +255,21 @@ if [[ ! " ${VALID_BUILD_TYPES[@]} " =~ " ${build_type} " ]]; then
     exit 1
 fi
 
+# Validate the generator
+VALID_GENERATORS=("Unix Makefiles" "Ninja" "Make" "ninja" "make")
+if [[ ! " ${VALID_GENERATORS[@]} " =~ " ${generator} " ]]; then
+    echo "ERROR: Invalid generator '$generator'. Allowed values are 'Unix Makefiles' (or 'Make'/'make'), 'Ninja'/'ninja'."
+    show_help
+    exit 1
+fi
+
+# Normalize generator names to proper CMake format
+if [ "$generator" = "Make" ] || [ "$generator" = "make" ]; then
+    generator="Unix Makefiles"
+elif [ "$generator" = "ninja" ]; then
+    generator="Ninja"
+fi
+
 # If build-dir is not specified
 # Use build_type and enable_profiler setting to choose a default path
 if [ "$build_dir" = "" ]; then
@@ -275,6 +295,7 @@ echo "INFO: Export compile commands: $export_compile_commands"
 echo "INFO: Enable ccache: $enable_ccache"
 echo "INFO: Build verbose: $build_verbose"
 echo "INFO: Build type: $build_type"
+echo "INFO: Generator: $generator"
 echo "INFO: Enable time trace: $enable_time_trace"
 echo "INFO: Enable Coverage: $enable_coverage"
 echo "INFO: Build directory: $build_dir"
@@ -288,7 +309,7 @@ echo "INFO: With python bindings: $with_python_bindings"
 
 # Prepare cmake arguments
 cmake_args+=("-B" "$build_dir")
-# cmake_args+=("-G" "Ninja")
+cmake_args+=("-G" "$generator")
 cmake_args+=("-DCMAKE_BUILD_TYPE=$build_type")
 cmake_args+=("-DCMAKE_INSTALL_PREFIX=$cmake_install_prefix")
 

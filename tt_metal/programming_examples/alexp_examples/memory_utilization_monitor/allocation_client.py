@@ -23,6 +23,9 @@ class MessageType(IntEnum):
     FREE = 2
     QUERY = 3
     RESPONSE = 4
+    DUMP_REMAINING = 5
+    DEVICE_INFO_QUERY = 6
+    DEVICE_INFO_RESPONSE = 7
 
 
 class BufferType(IntEnum):
@@ -49,9 +52,9 @@ class AllocationClient:
 
     # Message format: Type(u8), device_id(i32), size(u64), buffer_type(u8),
     #                 process_id(i32), buffer_id(u64), timestamp(u64),
-    #                 [response fields: 4x u64]
-    # Total: 1 + 3(pad) + 4 + 8 + 1 + 3(pad) + 4 + 8 + 8 + 32 = 72 bytes
-    MESSAGE_FORMAT = "=BxxxiQBxxxiQQQQQQ"  # Little-endian
+    #                 [response fields: 4x u64 + device info fields: 2x u64 + 6x u32]
+    # Total: 1 + 3(pad) + 4 + 8 + 1 + 3(pad) + 4 + 8 + 8 + 32 + 16 + 24 = 112 bytes
+    MESSAGE_FORMAT = "=BxxxiQBxxxiQQQQQQQQIIIIII"  # Little-endian
 
     def __init__(self):
         """Connect to allocation server"""
@@ -102,6 +105,14 @@ class AllocationClient:
             0,
             0,
             0,  # response fields (unused)
+            0,
+            0,  # device info: total_dram_size, total_l1_size
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,  # device info: arch_type, num_dram_channels, dram_size_per_channel, l1_size_per_core, is_available, num_devices
         )
 
         self.sock.send(msg)
@@ -127,6 +138,14 @@ class AllocationClient:
             0,
             0,
             0,  # response fields (unused)
+            0,
+            0,  # device info fields (unused)
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,  # device info fields (unused)
         )
 
         self.sock.send(msg)
@@ -155,6 +174,14 @@ class AllocationClient:
             0,
             0,
             0,  # response fields (will be filled)
+            0,
+            0,  # device info fields (will be filled)
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,  # device info fields (will be filled)
         )
 
         self.sock.send(msg)
@@ -169,6 +196,100 @@ class AllocationClient:
             "l1_allocated": data[8],
             "l1_small_allocated": data[9],
             "trace_allocated": data[10],
+        }
+
+    def get_num_devices(self) -> int:
+        """
+        Query the number of available devices.
+
+        Returns:
+            Number of devices detected by the server
+        """
+        msg = struct.pack(
+            self.MESSAGE_FORMAT,
+            MessageType.DEVICE_INFO_QUERY,  # type
+            -1,  # device_id = -1 means query for device count
+            0,
+            0,
+            0,
+            0,
+            0,  # unused fields
+            0,
+            0,
+            0,
+            0,  # response fields
+            0,
+            0,  # device info fields (will be filled)
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,  # device info fields (will be filled)
+        )
+
+        self.sock.send(msg)
+
+        # Receive response
+        response = self.sock.recv(struct.calcsize(self.MESSAGE_FORMAT))
+        data = struct.unpack(self.MESSAGE_FORMAT, response)
+
+        # num_devices is at index 17 (last field)
+        return data[17]
+
+    def query_device_info(self, device_id: int) -> dict:
+        """
+        Query detailed device information.
+
+        Args:
+            device_id: Device ID to query (or -1 for device count)
+
+        Returns:
+            dict with device capabilities: arch_type, total_dram_size, total_l1_size,
+            num_dram_channels, dram_size_per_channel, l1_size_per_core, is_available
+        """
+        msg = struct.pack(
+            self.MESSAGE_FORMAT,
+            MessageType.DEVICE_INFO_QUERY,  # type
+            device_id,  # device_id
+            0,
+            0,
+            0,
+            0,
+            0,  # unused fields
+            0,
+            0,
+            0,
+            0,  # response fields
+            0,
+            0,  # device info fields (will be filled)
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,  # device info fields (will be filled)
+        )
+
+        self.sock.send(msg)
+
+        # Receive response
+        response = self.sock.recv(struct.calcsize(self.MESSAGE_FORMAT))
+        data = struct.unpack(self.MESSAGE_FORMAT, response)
+
+        arch_names = {0: "Invalid", 1: "Grayskull", 2: "Wormhole_B0", 3: "Blackhole", 4: "Quasar"}
+
+        return {
+            "device_id": data[1],
+            "is_available": bool(data[16]),
+            "arch_type": data[12],
+            "arch_name": arch_names.get(data[12], "Unknown"),
+            "total_dram_size": data[11],
+            "total_l1_size": data[10],  # Note: indices shifted for Q vs I
+            "num_dram_channels": data[13],
+            "dram_size_per_channel": data[14],
+            "l1_size_per_core": data[15],
+            "num_devices": data[17],
         }
 
 

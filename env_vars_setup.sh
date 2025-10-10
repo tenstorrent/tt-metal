@@ -1,8 +1,8 @@
 
 #!/bin/bash
-source /opt/venv/bin/activate
 export TT_METAL_HOME=$(pwd)
-export TT_METAL_INSTALL_DIR=/opt/tt-metal/
+source $(pwd)/python_env/bin/activate
+export TT_METAL_INSTALL_DIR=$(pwd)/build/install
 export PYTHONPATH=$TT_METAL_HOME:$PYTHONPATH
 export TT_METAL_LIB_PATH=$TT_METAL_INSTALL_DIR/lib
 export LD_LIBRARY_PATH=$TT_METAL_LIB_PATH:$LD_LIBRARY_PATH
