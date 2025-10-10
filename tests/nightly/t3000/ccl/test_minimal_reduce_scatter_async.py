@@ -45,10 +45,6 @@ def run_reduce_scatter_impl(
 
     tile = (32, 32)
 
-    # Set the default config
-    if mem_config_intermediate is None:
-        mem_config_intermediate = mem_config_rs
-
     ##### Fabric setup #####
     compute_grid_size = mesh_device.compute_with_storage_grid_size()
     ccl_sub_device_crs = ttnn.CoreRangeSet(
@@ -79,17 +75,18 @@ def run_reduce_scatter_impl(
     if rs_topology == ttnn.Topology.Linear:
         # Line RS requires double-sized input for forward/backward
         intermediate_shape.insert(0, 2)
-    persistent_intermediate_buffers = [
-        ttnn.from_torch(
-            torch.zeros(intermediate_shape),
-            device=mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=rs_input_dtype,
-            memory_config=mem_config_intermediate,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        )
-        for _ in range(num_iters)
-    ]
+    if use_persistent_buffers:
+        persistent_intermediate_buffers = [
+            ttnn.from_torch(
+                torch.zeros(intermediate_shape),
+                device=mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=rs_input_dtype,
+                memory_config=mem_config_intermediate,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            )
+            for _ in range(num_iters)
+        ]
     rs_output_shape = rs_input_shape[:]
     rs_output_shape[dim] //= num_devices
     if use_persistent_buffers:
@@ -952,4 +949,81 @@ def test_reduce_scatter_async_2x4(
         use_barrier=use_barrier,
         use_persistent_buffers=use_persistent_buffers,
         cluster_axis=cluster_axis,
+    )
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("input_shard_grid", [(7, 8)])
+@pytest.mark.parametrize("input_shard_shape", [(32, 128)])
+@pytest.mark.parametrize("output_shard_grid", [(4, 4)])
+@pytest.mark.parametrize("output_shard_shape", [(32, 128)])
+@pytest.mark.parametrize("input_mem_layout", [ttnn.TensorMemoryLayout.WIDTH_SHARDED])
+@pytest.mark.parametrize("output_mem_layout", [ttnn.TensorMemoryLayout.WIDTH_SHARDED])
+@pytest.mark.parametrize("buffer_type", [ttnn.BufferType.L1])
+@pytest.mark.parametrize("rs_input_shape", [[1, 1, 32, 7168]])
+@pytest.mark.parametrize("dim", [3])
+@pytest.mark.parametrize("num_links", [1])
+@pytest.mark.parametrize("rs_input_dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("cluster_axis", [1])
+def test_reduce_scatter_minimal_async_linear_sharded(
+    mesh_device,
+    input_shard_grid,
+    input_shard_shape,
+    output_shard_grid,
+    output_shard_shape,
+    input_mem_layout,
+    output_mem_layout,
+    buffer_type,
+    rs_input_shape,
+    dim,
+    num_links,
+    rs_input_dtype,
+    layout,
+    cluster_axis,
+):
+    num_devices = tuple(mesh_device.shape)[cluster_axis]
+
+    input_core_grid = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(input_shard_grid[0] - 1, input_shard_grid[1] - 1))}
+    )
+    input_shard_spec = ttnn.ShardSpec(
+        input_core_grid,
+        input_shard_shape,
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    output_core_grid = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(output_shard_grid[0] - 1, output_shard_grid[1] - 1))}
+    )
+    output_shard_spec = ttnn.ShardSpec(
+        output_core_grid,
+        output_shard_shape,
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+
+    mem_config_input = ttnn.MemoryConfig(input_mem_layout, buffer_type=buffer_type, shard_spec=input_shard_spec)
+    mem_config_rs = ttnn.MemoryConfig(output_mem_layout, buffer_type=buffer_type, shard_spec=output_shard_spec)
+
+    run_reduce_scatter_impl(
+        mesh_device,
+        num_devices,
+        rs_input_shape,
+        dim,
+        num_links,
+        rs_input_dtype,
+        layout,
+        mem_config_input,
+        mem_config_rs,
+        rs_topology=ttnn.Topology.Linear,  # <- Behavior we are testing occurs with linear topology
+        num_iters=1,
+        enable_trace=False,
+        ones_tensor=False,
+        cluster_axis=1,
+        use_barrier=False,
+        use_persistent_buffers=False,
+        chunks_per_sync=None,
+        num_workers_per_link=None,
+        num_buffers_per_channel=None,
+        verify_output=True,
     )

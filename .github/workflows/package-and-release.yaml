@@ -41,29 +41,41 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - name: Set default release-type for cron job
+        id: set-release-type
+        run: |
+          if [[ "${{ github.event_name }}" == "schedule" ]]; then
+            echo "Cron job detected, setting default release-type to 'dev'"
+            echo "RELEASE_TYPE=dev" >> "$GITHUB_ENV"
+            echo "Using release-type: dev"
+          else
+            echo "RELEASE_TYPE=${{ inputs.release-type }}" >> "$GITHUB_ENV"
+            echo "Using release-type: ${{ inputs.release-type }}"
+          fi
       - name: Get is-release-candidate and tag-type
         id: get-is-release-candidate-and-tag-type
         run: |
-          if [[ "${{ inputs.release-type }}" != "" && "${{ inputs.release-type }}" != "null" ]]; then
-            if [[ "${{ inputs.release-type }}" != "dev" && "${{ inputs.release-type }}" != "rc" && "${{ inputs.release-type }}" != "prod" ]]; then
-              echo "Invalid release-type input: ${{ inputs.release-type }}. Must be one of 'dev', 'rc', or 'prod'."
+          if [[ "$RELEASE_TYPE" != "" && "$RELEASE_TYPE" != "null" ]]; then
+            if [[ "$RELEASE_TYPE" != "dev" && "$RELEASE_TYPE" != "rc" && "$RELEASE_TYPE" != "prod" ]]; then
+              echo "Invalid release-type: $RELEASE_TYPE. Must be one of 'dev', 'rc', or 'prod'."
               exit 1
             fi
-            echo "Using provided release-type: ${{ inputs.release-type }}"
-            if [[ "${{ inputs.release-type }}" == "prod" ]]; then
+            echo "Processing release-type: $RELEASE_TYPE"
+            if [[ "$RELEASE_TYPE" == "prod" ]]; then
               echo "is-release-candidate=false" >> "$GITHUB_OUTPUT"
               echo "tag-type=" >> "$GITHUB_OUTPUT"
-            elif [[ "${{ inputs.release-type }}" == "rc" ]]; then
+            elif [[ "$RELEASE_TYPE" == "rc" ]]; then
               echo "is-release-candidate=true" >> "$GITHUB_OUTPUT"
               echo "tag-type=rc" >> "$GITHUB_OUTPUT"
             else
               echo "is-release-candidate=true" >> "$GITHUB_OUTPUT"
               echo "tag-type=dev" >> "$GITHUB_OUTPUT"
             fi
-            exit 0
+          else
+            echo "ERROR: RELEASE_TYPE is empty or null - this should not happen!"
+            echo "This indicates a problem with the 'Set default release-type for cron job' step."
+            exit 1
           fi
-          echo "Invalid release-type input: ${{ inputs.release-type }}. Must be one of 'dev', 'rc', or 'prod'."
-          exit 1
 
       - name: Get should-create-release
         id: get-should-create-release

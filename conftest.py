@@ -236,7 +236,14 @@ def model_location_generator(is_ci_v2_env):
     directory structure
     """
 
-    def model_location_generator_(model_version, model_subdir="", download_if_ci_v2=False, ci_v2_timeout_in_s=300):
+    def model_location_generator_(
+        model_version,
+        model_subdir="",
+        download_if_ci_v2=False,
+        ci_v2_timeout_in_s=300,
+        endpoint_prefix="http://large-file-cache.large-file-cache.svc.cluster.local//mldata/model_checkpoints/pytorch/huggingface",
+        download_dir_suffix="model_weights",
+    ):
         model_folder = Path("tt_dnn-models") / model_subdir
         internal_weka_path = Path("/mnt/MLPerf") / model_folder / model_version
         has_internal_weka = internal_weka_path.exists()
@@ -251,7 +258,10 @@ def model_location_generator(is_ci_v2_env):
                 not model_subdir
             ), f"model_subdir is set to {model_subdir}, but we don't support further levels of directories in the large file cache in CIv2"
             civ2_download_path = CIv2ModelDownloadUtils_.download_from_ci_v2_cache(
-                model_version, download_dir_suffix="model_weights", timeout_in_s=ci_v2_timeout_in_s
+                model_version,
+                download_dir_suffix=download_dir_suffix,
+                timeout_in_s=ci_v2_timeout_in_s,
+                endpoint_prefix=endpoint_prefix,
             )
             logger.info(f"For model location, using CIv2 large file cache: {civ2_download_path}")
             return civ2_download_path
@@ -406,25 +416,25 @@ def mesh_device(request, silicon_arch_name, device_params):
     """
     import ttnn
 
-    device_ids = ttnn.get_device_ids()
+    request.node.pci_ids = ttnn.get_pcie_device_ids()
 
     try:
         param = request.param
     except (ValueError, AttributeError):
-        param = len(device_ids)  # Default to using all available devices
+        # Get number of devices from the system mesh descriptor.
+        param = ttnn._ttnn.multi_device.SystemMeshDescriptor().shape().mesh_size()
 
     if isinstance(param, tuple):
         grid_dims = param
         assert len(grid_dims) == 2, "Device mesh grid shape should have exactly two elements."
         num_devices_requested = grid_dims[0] * grid_dims[1]
-        if not ttnn.using_distributed_env() and num_devices_requested > len(device_ids):
+        if not ttnn.using_distributed_env() and num_devices_requested > ttnn.get_num_devices():
             pytest.skip("Requested more devices than available. Test not applicable for machine")
         mesh_shape = ttnn.MeshShape(*grid_dims)
     else:
-        num_devices_requested = min(param, len(device_ids))
-        mesh_shape = ttnn.MeshShape(1, num_devices_requested)
-
-    request.node.pci_ids = [ttnn.GetPCIeDeviceID(i) for i in device_ids[:num_devices_requested]]
+        if not ttnn.using_distributed_env() and param > ttnn.get_num_devices():
+            pytest.skip("Requested more devices than available. Test not applicable for machine")
+        mesh_shape = ttnn.MeshShape(1, param)
 
     updated_device_params = get_updated_device_params(device_params)
     fabric_config = updated_device_params.pop("fabric_config", None)

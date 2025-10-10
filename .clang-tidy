@@ -115,7 +115,6 @@ Checks: >
   -llvmlibc-inline-function-decl,
   -llvmlibc-restrict-system-libc-headers,
   -misc-const-correctness,
-  -misc-definitions-in-headers,
   -misc-header-include-cycle,
   -misc-include-cleaner,
   -misc-no-recursion,

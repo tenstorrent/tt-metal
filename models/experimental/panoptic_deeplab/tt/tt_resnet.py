@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
+from typing import Union
 from loguru import logger
 
 from models.experimental.panoptic_deeplab.tt.tt_stem import TtStem
@@ -19,13 +20,20 @@ class TtResNet(LightweightModule):
     - res3: 4 blocks, first has stride=2
     - res4: 6 blocks, first has stride=2
     - res5: 3 blocks, dilated convolutions (2, 4, 8)
+
+    Args:
+        parameters: Model parameters
+        device: TTNN device
+        dtype: Either a single DataType to apply to all layers, or a dict mapping
+               layer names ("stem", "res2", "res3", "res4", "res5") to DataTypes
+               for per-layer precision control.
     """
 
     def __init__(
         self,
         parameters,
         device: ttnn.MeshDevice,
-        dtype: ttnn.DataType = ttnn.bfloat16,
+        dtype: Union[ttnn.DataType, dict[str, ttnn.DataType]] = ttnn.bfloat8_b,
         model_configs=None,
     ):
         super().__init__()
@@ -34,14 +42,39 @@ class TtResNet(LightweightModule):
 
         logger.debug("Initializing TtResNet")
 
-        # Initialize stem
-        self.stem = TtStem(parameters=parameters["stem"], device=device, dtype=dtype, model_configs=model_configs)
+        # Handle dtype parameter - if it's a dict, use it as layer_dtypes, otherwise apply to all layers
+        if isinstance(dtype, dict):
+            layer_dtypes = dtype
+        else:
+            layer_dtypes = {
+                "stem": dtype,
+                "res2": dtype,
+                "res3": dtype,
+                "res4": dtype,
+                "res5": dtype,
+            }
 
-        # Initialize residual layers
-        self.res2 = self._build_res_layer("res2", parameters["res2"], device, dtype, 3, stride=1)
-        self.res3 = self._build_res_layer("res3", parameters["res3"], device, dtype, 4, stride=2)
-        self.res4 = self._build_res_layer("res4", parameters["res4"], device, dtype, 6, stride=2)
-        self.res5 = self._build_res_layer("res5", parameters["res5"], device, dtype, 3, dilations=[2, 4, 8])
+        # Initialize stem
+        stem_dtype = layer_dtypes.get("stem", dtype)
+        self.stem = TtStem(parameters=parameters["stem"], device=device, dtype=stem_dtype, model_configs=model_configs)
+        logger.debug(f"Stem initialized with dtype: {stem_dtype}")
+
+        # Initialize residual layers with per-layer dtypes
+        res2_dtype = layer_dtypes.get("res2", dtype)
+        self.res2 = self._build_res_layer("res2", parameters["res2"], device, res2_dtype, 3, stride=1)
+        logger.debug(f"Res2 initialized with dtype: {res2_dtype}")
+
+        res3_dtype = layer_dtypes.get("res3", dtype)
+        self.res3 = self._build_res_layer("res3", parameters["res3"], device, res3_dtype, 4, stride=2)
+        logger.debug(f"Res3 initialized with dtype: {res3_dtype}")
+
+        res4_dtype = layer_dtypes.get("res4", dtype)
+        self.res4 = self._build_res_layer("res4", parameters["res4"], device, res4_dtype, 6, stride=2)
+        logger.debug(f"Res4 initialized with dtype: {res4_dtype}")
+
+        res5_dtype = layer_dtypes.get("res5", dtype)
+        self.res5 = self._build_res_layer("res5", parameters["res5"], device, res5_dtype, 3, dilations=[2, 4, 8])
+        logger.debug(f"Res5 initialized with dtype: {res5_dtype}")
 
         logger.debug("TtResNet initialization complete")
 
@@ -95,7 +128,7 @@ class TtResNet(LightweightModule):
 
         return outputs
 
-    def _forward_res_layer(self, x: ttnn.Tensor, layer: []) -> ttnn.Tensor:
+    def _forward_res_layer(self, x: ttnn.Tensor, layer: list[TtBottleneck]) -> ttnn.Tensor:
         """Forward pass through a residual layer"""
         for block in layer:
             x = block(x)

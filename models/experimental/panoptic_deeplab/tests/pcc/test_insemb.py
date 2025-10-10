@@ -114,11 +114,11 @@ def test_ttnn_insemb(device, model_location_generator):
     ttnn_center_out_tt, ttnn_offset_out_tt, _, _ = ttnn_model.instance_head(ttnn_features)
 
     ttnn_center_out_torch = ttnn.to_torch(ttnn_center_out_tt).permute(0, 3, 1, 2)
-    passed_center, msg_center = assert_with_pcc(torch_center_out, ttnn_center_out_torch, pcc=0.95)
+    passed_center, msg_center = assert_with_pcc(torch_center_out, ttnn_center_out_torch, pcc=0.98)
     logger.info(f"Center PCC: {msg_center}")
     assert passed_center, f"Center PCC test failed: {msg_center}"
 
     ttnn_offset_out_torch = ttnn.to_torch(ttnn_offset_out_tt).permute(0, 3, 1, 2)
-    passed_offset, msg_offset = assert_with_pcc(torch_offset_out, ttnn_offset_out_torch, pcc=0.90)
+    passed_offset, msg_offset = assert_with_pcc(torch_offset_out, ttnn_offset_out_torch, pcc=0.96)
     logger.info(f"Offset PCC: {msg_offset}")
     assert passed_offset, f"Offset PCC test failed: {msg_offset}"

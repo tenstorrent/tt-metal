@@ -222,6 +222,7 @@ void append_routing_plane_connection_manager_rt_args(
     tt::tt_metal::KernelHandle& kernel_id,
     const CoreCoord& worker_core,
     std::vector<uint32_t>& worker_args,
+    FabricApiType api_type,
     CoreType core_type) {
     // 1) append tag (like direction) and fabric connection info for each route
     TT_FATAL(
@@ -277,9 +278,14 @@ void append_routing_plane_connection_manager_rt_args(
             src_fabric_node_id, dst_node, link_idx, worker_program, worker_core, worker_args, core_type);
     }
 
+    auto kernel = worker_program.impl().get_kernel(kernel_id);
+    switch (api_type) {
+        case FabricApiType::Linear: kernel->add_defines({{"API_TYPE_Linear", "1"}}); break;
+        case FabricApiType::Mesh: kernel->add_defines({{"API_TYPE_Mesh", "1"}}); break;
+        default: TT_FATAL(false, "Unsupported FabricApiType: {}", static_cast<int>(api_type));
+    }
     // 2) Append additional info for 2D Mesh
     if (fabric_context.is_2D_routing_enabled()) {
-        auto kernel = worker_program.impl().get_kernel(kernel_id);
         kernel->add_defines({{"FABRIC_2D", "1"}});
         if (fabric_context.is_dynamic_routing_enabled()) {
             kernel->add_defines({{"FABRIC_2D_DYNAMIC", "1"}});

@@ -8,8 +8,8 @@ import ttnn
 class ModelOptimisations:
     def __init__(
         self,
-        conv_act_dtype=ttnn.bfloat16,
-        conv_w_dtype=ttnn.bfloat16,
+        conv_act_dtype=ttnn.bfloat8_b,
+        conv_w_dtype=ttnn.bfloat8_b,
     ):
         self.conv_configs = {}
         self.conv_output_dtype = conv_act_dtype
@@ -32,8 +32,8 @@ class ModelOptimisations:
         # COMPUTE KERNEL CONFIGURATION (used by all convolutions)
         self.compute_configs["CONV_COMPUTE_CONFIG"] = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.LoFi,
-            math_approx_mode=True,
-            fp32_dest_acc_en=False,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
             packer_l1_acc=False,
         )
 
