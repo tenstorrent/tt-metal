@@ -247,7 +247,6 @@ def model_location_generator(is_ci_v2_env):
             assert (
                 not has_internal_weka
             ), "For some reason, we see a file existing at the expected MLPerf location: {internal_weka_path} on CIv2. Please use the opportunity to clean up your model and get rid of MLPerf if you're moving to CIv2"
-
             assert (
                 not model_subdir
             ), f"model_subdir is set to {model_subdir}, but we don't support further levels of directories in the large file cache in CIv2"
