@@ -469,18 +469,8 @@ void MetalContext::set_fabric_config(
     tt_fabric::FabricReliabilityMode reliability_mode,
     std::optional<uint8_t> num_routing_planes,
     tt_fabric::FabricTensixConfig fabric_tensix_config) {
-    tt_fabric::FabricConfig fabric_config__ = fabric_config;
-    if (fabric_config__ == tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC) {
-        fabric_config__ = tt_fabric::FabricConfig::FABRIC_2D;
-    } else if (fabric_config__ == tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_X) {
-        fabric_config__ = tt_fabric::FabricConfig::FABRIC_2D_TORUS_X;
-    } else if (fabric_config__ == tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_Y) {
-        fabric_config__ = tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y;
-    } else if (fabric_config__ == tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_XY) {
-        fabric_config__ = tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY;
-    }
-    if (is_2d_fabric_config(fabric_config__) && !cluster_->is_ubb_galaxy()) {
-        const auto fabric_type = get_fabric_type(fabric_config__);
+    if (is_2d_fabric_config(fabric_config) && !cluster_->is_ubb_galaxy()) {
+        const auto fabric_type = get_fabric_type(fabric_config);
         if (fabric_type == tt::tt_fabric::FabricType::TORUS_X || fabric_type == tt::tt_fabric::FabricType::TORUS_Y ||
             fabric_type == tt::tt_fabric::FabricType::TORUS_XY) {
             TT_THROW("2D fabric with torus topology is only supported on GALAXY clusters.");
@@ -492,15 +482,15 @@ void MetalContext::set_fabric_config(
     force_reinit_ = true;
 
     if (this->fabric_config_ == tt_fabric::FabricConfig::DISABLED ||
-        fabric_config__ == tt_fabric::FabricConfig::DISABLED) {
-        this->fabric_config_ = fabric_config__;
+        fabric_config == tt_fabric::FabricConfig::DISABLED) {
+        this->fabric_config_ = fabric_config;
         this->fabric_reliability_mode_ = reliability_mode;
     } else {
         TT_FATAL(
-            this->fabric_config_ == fabric_config__,
+            this->fabric_config_ == fabric_config,
             "Tried to override previous value of fabric config: {}, with: {}",
             this->fabric_config_,
-            fabric_config__);
+            fabric_config);
     }
 
     if (this->fabric_config_ == tt_fabric::FabricConfig::DISABLED) {

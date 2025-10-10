@@ -34,7 +34,7 @@ Tests:
   - name: UnicastAlltoAll
     fabric_setup:
       topology: Mesh
-      routing_type: Dynamic
+      routing_type: LowLatency
     parametrization_params:
       size: [512, 1024, 2048, 4096]
       num_packets: [50, 100]

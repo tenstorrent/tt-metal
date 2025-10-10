@@ -29,7 +29,6 @@ FABRIC_CONFIGS = [
     ttnn.FabricConfig.FABRIC_1D,
     ttnn.FabricConfig.FABRIC_1D_RING,
     ttnn.FabricConfig.FABRIC_2D,
-    ttnn.FabricConfig.FABRIC_2D_DYNAMIC,
 ]
 
 LEAD_MODEL_SHARD_SPECS = [

@@ -23,9 +23,8 @@ tt_l1_ptr uint32_t* const test_results = reinterpret_cast<tt_l1_ptr uint32_t*>(t
 uint32_t target_address = get_compile_time_arg_val(2);
 constexpr bool use_dram_dst = get_compile_time_arg_val(3);
 constexpr bool is_2d_fabric = get_compile_time_arg_val(4);
-constexpr bool use_dynamic_routing = get_compile_time_arg_val(5);
-constexpr bool is_chip_multicast = get_compile_time_arg_val(6);
-constexpr bool additional_dir = get_compile_time_arg_val(7);
+constexpr bool is_chip_multicast = get_compile_time_arg_val(5);
+constexpr bool additional_dir = get_compile_time_arg_val(6);
 
 inline void setup_header_routing_1d(
     volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header, uint32_t start_distance, uint32_t range) {
@@ -69,9 +68,6 @@ inline void setup_header_routing_2d(
     uint32_t dst_mesh_id,
     uint32_t ew_dim) {
     if constexpr (is_chip_multicast) {
-        static_assert(
-            !(is_2d_fabric && is_chip_multicast &&
-              use_dynamic_routing));  // dynamic routing not supported for 2D multicast in this test
         set_mcast_header(packet_header, direction, range);
     } else {
         fabric_set_unicast_route((HybridMeshPacketHeader*)packet_header, dst_dev_id, dst_mesh_id);
