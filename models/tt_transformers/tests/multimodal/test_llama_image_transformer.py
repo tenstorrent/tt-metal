@@ -23,7 +23,7 @@ from models.tt_transformers.tt.multimodal.llama_vision_encoder import mask_tile_
 )
 @pytest.mark.parametrize(
     "is_global",
-    [(False)],
+    (True, False),
 )
 @pytest.mark.parametrize(
     "mesh_device",
@@ -39,7 +39,6 @@ def test_image_transformer_inference(batch, num_chunks, mesh_device, is_global):
     pcc_required = 0.75
     model_args = ModelArgs(mesh_device)
     dtype = ttnn.bfloat16
-
     state_dict = model_args.load_state_dict()
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
@@ -63,7 +62,7 @@ def test_image_transformer_inference(batch, num_chunks, mesh_device, is_global):
 
     from transformers import MllamaForConditionalGeneration
 
-    weights_path = "/home/ubuntu/.cache/huggingface/hub/models--meta-llama--Llama-3.2-11B-Vision-Instruct/snapshots/9eb2daaa8597bf192a8b0e73f848f3a102794df5"
+    weights_path = os.getenv("HF_MODEL")
     # the next two lines are memoery intensive and create big overhead
     # model = MllamaForConditionalGeneration(config).to(torch.bfloat16)
     # model.model.vision_model.load_state_dict(partial_state_dict, strict=False)
@@ -75,15 +74,13 @@ def test_image_transformer_inference(batch, num_chunks, mesh_device, is_global):
     callable_reference = reference_model.transformer if not is_global else reference_model.global_transformer
     all_tests_pass = True
 
-    names = [n for n in partial_state_dict.keys() if n.startswith("transformer.resblocks")]
-    reduced_state_dict = {k: partial_state_dict[k] for k in names if k in partial_state_dict}
     # The next weight assingment increases pcc similarity metric
     for id_b, block in enumerate(callable_reference.layers):
         callable_reference.layers[id_b].self_attn.q_proj.weight = torch.nn.Parameter(
-            reduced_state_dict["transformer.resblocks.{}.attn.wq.weight".format(id_b)]
+            partial_state_dict["transformer.resblocks.{}.attn.wq.weight".format(id_b)]
         )
         callable_reference.layers[id_b].self_attn.k_proj.weight = torch.nn.Parameter(
-            reduced_state_dict["transformer.resblocks.{}.attn.wk.weight".format(id_b)]
+            partial_state_dict["transformer.resblocks.{}.attn.wk.weight".format(id_b)]
         )
 
     tt_ccl = TT_CCL(mesh_device)
