@@ -119,25 +119,20 @@ void kernel_main() {
 
     uint32_t runs_base = tmpl_base + num_templates * 3;
     uint32_t previous_input_page_idx = std::numeric_limits<uint32_t>::max();
+    bool first = true;
     for (uint32_t run_idx = 0; run_idx < num_runs; ++run_idx) {
-        uint32_t packed1 = get_arg_val<uint32_t>(runs_base + run_idx * 4 + 0);
-        uint32_t input_offset_start = get_arg_val<uint32_t>(runs_base + run_idx * 4 + 1);
-        uint32_t output_offset_start = get_arg_val<uint32_t>(runs_base + run_idx * 4 + 2);
-        uint32_t packed2 = get_arg_val<uint32_t>(runs_base + run_idx * 4 + 3);
+        uint32_t out_page_start = get_arg_val<uint32_t>(runs_base + run_idx * 10 + 0);
+        uint32_t out_page_end = get_arg_val<uint32_t>(runs_base + run_idx * 10 + 1);
+        uint32_t in_page_start = get_arg_val<uint32_t>(runs_base + run_idx * 10 + 2);
+        uint32_t pattern_template_index = get_arg_val<uint32_t>(runs_base + run_idx * 10 + 3);
+        uint32_t in_offset_start = get_arg_val<uint32_t>(runs_base + run_idx * 10 + 4);
+        uint32_t out_offset_start = get_arg_val<uint32_t>(runs_base + run_idx * 10 + 5);
+        uint32_t run_length = get_arg_val<uint32_t>(runs_base + run_idx * 10 + 6);
+        int32_t in_page_stride = get_arg_val<uint32_t>(runs_base + run_idx * 10 + 7);
+        int32_t in_offset_stride = get_arg_val<uint32_t>(runs_base + run_idx * 10 + 8);
+        int32_t out_offset_stride = get_arg_val<uint32_t>(runs_base + run_idx * 10 + 9);
 
-        uint8_t out_page_start = (packed1 >> 24) & 0xFF;
-        uint8_t out_page_end = (packed1 >> 16) & 0xFF;
-        uint8_t in_page_start = (packed1 >> 8) & 0xFF;
-        uint8_t template_idx = packed1 & 0xFF;
-
-        uint32_t in_offset_start = input_offset_start;
-        uint32_t out_offset_start = output_offset_start;
-        uint8_t run_length = (packed2 >> 24) & 0xFF;
-        int8_t in_page_stride = (packed2 >> 16) & 0xFF;
-        int8_t in_offset_stride = (packed2 >> 8) & 0xFF;
-        int8_t out_offset_stride = packed2 & 0xFF;
-
-        const auto& tmpl = templates[template_idx];
+        const auto& tmpl = templates[pattern_template_index];
 
         for (uint32_t out_page_idx = out_page_start; out_page_idx <= out_page_end; ++out_page_idx) {
             uint32_t input_page_idx = in_page_start + (out_page_idx - out_page_start) * in_page_stride;
@@ -148,34 +143,42 @@ void kernel_main() {
             for (uint32_t seg = 0; seg < run_length; ++seg) {
                 uint32_t seg_input_offset = input_offset + seg * tmpl.input_offset_stride;
 
+                DPRINT << "NUM ELEMENTS: " << tmpl.num_elements << "\n";
+                if (tmpl.num_elements == 0) {
+                    continue;  // Skip segments with zero elements
+                }
                 DPRINT << "run_idx=" << run_idx << " out_page_idx=" << out_page_idx << " seg=" << seg << "\n";
                 DPRINT << "input_page_idx=" << input_page_idx << " seg_input_offset=" << seg_input_offset << "\n";
 
-                if (input_page_idx != previous_input_page_idx) {
-                    cb_reserve_back(input_cb_id, 1);
-                    DPRINT << "after cb_reserve_back\n";
-                    const uint32_t input_write_addr = get_read_ptr(input_cb_id);
-                    DPRINT << "after get_read_ptr\n";
-                    const uint64_t input_page_noc_addr = get_noc_addr(input_page_idx, input_addr_gen);
-                    // const uint64_t input_page_noc_addr = input_buffer_addr + seg_input_offset * element_sz_bytes;
-                    DPRINT << "input_page_noc_addr=" << input_page_noc_addr << " input_write_addr=" << input_write_addr
-                           << "\n";
-                    enhanced_noc_async_read<Tile_Size_Bytes, true>(
-                        input_page_noc_addr, input_write_addr, Tile_Size_Bytes);
-                    DPRINT << "after enhanced_noc_async_read\n";
-                    noc_async_read_barrier();
-                    DPRINT << "print the data we jjust read\n";
-                    volatile tt_l1_ptr uint16_t* dst_noc2 =
-                        reinterpret_cast<volatile tt_l1_ptr uint16_t*>(input_write_addr);
-                    for (uint16_t value = 0; value < Tile_Size_Bytes / 2; value++) {
-                        DPRINT << "value at " << (uint16_t)value << " is: " << BF16((uint16_t)dst_noc2[value])
-                               << ENDL();
+                if (first) {
+                    first = false;
+                } else {
+                    // this segment is also in a tile we've already loaded
+                    if (input_page_idx == previous_input_page_idx) {
+                        continue;
                     }
-                    DPRINT << "\n";
-                    DPRINT << "after noc_async_read_barrier\n";
-                    cb_push_back(input_cb_id, 1);
-                    previous_input_page_idx = input_page_idx;
                 }
+                cb_reserve_back(input_cb_id, 1);
+                DPRINT << "after cb_reserve_back\n";
+                const uint32_t input_write_addr = get_read_ptr(input_cb_id);
+                DPRINT << "after get_read_ptr\n";
+                const uint64_t input_page_noc_addr = get_noc_addr(input_page_idx, input_addr_gen);
+                // const uint64_t input_page_noc_addr = input_buffer_addr + seg_input_offset * element_sz_bytes;
+                DPRINT << "input_page_noc_addr=" << input_page_noc_addr << " input_write_addr=" << input_write_addr
+                       << "\n";
+                enhanced_noc_async_read<Tile_Size_Bytes, true>(input_page_noc_addr, input_write_addr, Tile_Size_Bytes);
+                DPRINT << "after enhanced_noc_async_read\n";
+                noc_async_read_barrier();
+                DPRINT << "print the data we jjust read\n";
+                volatile tt_l1_ptr uint16_t* dst_noc2 =
+                    reinterpret_cast<volatile tt_l1_ptr uint16_t*>(input_write_addr);
+                for (uint16_t value = 0; value < Tile_Size_Bytes / 2; value++) {
+                    DPRINT << "value at " << (uint16_t)value << " is: " << BF16((uint16_t)dst_noc2[value]) << ENDL();
+                }
+                DPRINT << "\n";
+                DPRINT << "after noc_async_read_barrier\n";
+                cb_push_back(input_cb_id, 1);
+                previous_input_page_idx = input_page_idx;
             }
             DPRINT << "after seg loop\n";
         }
