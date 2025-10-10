@@ -29,10 +29,9 @@
 #include <tt_stl/reflection.hpp>
 #include <tt_stl/optional_reference.hpp>
 #include "ttnn/tensor/memory_config/memory_config.hpp"
-#include "ttnn/tensor/experimental/node.hpp"
 #include "ttnn/tensor/layout/layout.hpp"
 #include "types.hpp"
-
+#include "ttnn/experimental/jit/to_organize.hpp"
 namespace tt {
 
 namespace tt_metal {
@@ -266,13 +265,13 @@ public:
     // ======================================================================================
     //                                      Lazy evaluation
     // ======================================================================================
-    experimental::NodeId producer_node() const { return producer_node_; }
-    void set_producer_node(experimental::NodeId node_id) { producer_node_ = node_id; }
+    ttnn::experimental::jit::NodeId producer_node() const { return producer_node_; }
+    void set_producer_node(ttnn::experimental::jit::NodeId node_id) { producer_node_ = node_id; }
 
 private:
     void init(Storage storage, TensorSpec tensor_spec, TensorTopology tensor_topology);
     void deallocate_impl(bool force);
-    experimental::NodeId producer_node_;
+    ttnn::experimental::jit::NodeId producer_node_;
 };
 
 Tensor create_device_tensor(const TensorSpec& tensor_spec, IDevice* device);

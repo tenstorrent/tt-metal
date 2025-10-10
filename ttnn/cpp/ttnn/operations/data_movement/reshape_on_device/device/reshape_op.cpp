@@ -14,6 +14,36 @@ using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement {
 
+ttnn::Tensor ReshapeDeviceOperation::invoke(std::vector<Tensor> input_tensors) {
+    // // No-op (Will do a tensor copy)
+    // if (((input_tensor.layout() == Layout::TILE or input_tensor.layout() == Layout::ROW_MAJOR) &&
+    //      padded_output_shape[3] == input_tensor.padded_shape()[3])) {
+    //     // Don't need to do a check here to see the H and W both divisible by 32
+    //     // since handled within the tensor reshape method
+    //     return ttnn::experimental::view(input_tensor, logical_output_shape, padded_output_shape);
+    // }
+    // if (input_tensor.padded_shape() == padded_output_shape) {
+    //     return ttnn::operations::experimental::auto_format::AutoFormat::move_tensor_to_mem_config(
+    //         input_tensor, output_mem_config);
+    // }
+    // uint32_t ROW_MAJOR_WIDTH = 8;
+    // if (input_tensor.layout() == Layout::ROW_MAJOR &&
+    //     (input_tensor.padded_shape()[3] % ROW_MAJOR_WIDTH != 0 || padded_output_shape[3] % ROW_MAJOR_WIDTH != 0) &&
+    //     ((padded_output_shape.volume() / padded_output_shape[-1]) % TILE_HEIGHT != 0 ||
+    //      padded_output_shape[-1] % TILE_WIDTH != 0 || input_tensor.padded_shape()[-1] % TILE_WIDTH != 0 ||
+    //      (input_tensor.physical_volume() / input_tensor.padded_shape()[-1]) % TILE_HEIGHT != 0)) {
+    //     TT_FATAL(input_tensor.dtype() == DataType::BFLOAT16, "Error");
+
+    //     return detail::manual_insertion(
+    //         (tt::tt_metal::Tensor)input_tensor,
+    //         logical_output_shape,
+    //         padded_output_shape,
+    //         input_tensor.device(),
+    //         output_mem_config);
+    // }
+    return tt::tt_metal::operation::run(*this, input_tensors).at(0);
+}
+
 void ReshapeDeviceOperation::validate(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to reshape need to be on device!");

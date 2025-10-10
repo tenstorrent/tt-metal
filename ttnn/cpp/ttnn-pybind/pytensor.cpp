@@ -28,6 +28,7 @@
 #include "ttnn-pybind/small_vector_caster.hpp"  // NOLINT - for pybind11 SmallVector binding support.
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/core.hpp"
+#include "ttnn/experimental/jit/to_organize.hpp"
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/operations/core/core.hpp"
@@ -41,9 +42,9 @@
 #include <tt-metalium/host_buffer.hpp>
 #include <tt_stl/overloaded.hpp>
 #include <tt_stl/span.hpp>
-
+#include "ttnn/experimental/jit/context.hpp"
 #include <tracy/Tracy.hpp>
-
+#pragma optimize("", off)
 using namespace tt::tt_metal;
 
 namespace ttnn::tensor {
@@ -326,6 +327,15 @@ Tensor convert_python_tensor_to_tt_tensor(
     auto preprocessed_py_tensor = parse_py_tensor(py_tensor, optional_data_type);
     const auto shape = ttnn::Shape(py::cast<ttnn::SmallVector<uint32_t>>(py_tensor.attr("shape")));
 
+    // Get the producer node from the Python tensor
+    std::optional<ttnn::experimental::jit::NodeId> producer_node = std::nullopt;
+    if (py::hasattr(py_tensor, "producer_node")) {
+        auto producer_node_obj = py_tensor.attr("producer_node")();
+        if (!producer_node_obj.is_none()) {
+            producer_node = py::cast<ttnn::experimental::jit::NodeId>(producer_node_obj);
+        }
+    }
+
     TT_FATAL(
         preprocessed_py_tensor.num_elements == shape.volume(),
         "Number of elements from python tensor {} must match volume of shape {}!",
@@ -364,6 +374,12 @@ Tensor convert_python_tensor_to_tt_tensor(
         mesh_mapper);
 
     output = tt::tt_metal::set_tensor_id(output);
+
+    // Set the producer node if it was found
+    if (producer_node.has_value()) {
+        output.set_producer_node(producer_node.value());
+    }
+
     GraphTracker::instance().track_function_end(output);
     return output;
 }
@@ -1391,6 +1407,13 @@ void pytensor_module(py::module& m_tensor) {
 
         )doc")
         .def(
+            "producer_node", [](const Tensor& self) { return self.producer_node(); }, R"doc(
+            Get the producer node of the tensor.
+            .. code-block:: python
+
+                producer_node = tt_tensor.producer_node()
+        )doc")
+        .def(
             "storage_type", [](const Tensor& self) { return self.storage_type(); }, R"doc(
             Check if the tensor is on host
 
@@ -1446,6 +1469,10 @@ void pytensor_module(py::module& m_tensor) {
             "to_torch",
             [](const Tensor& self, const ttnn::distributed::MeshToTensor* mesh_composer) -> py::object {
                 using namespace CMAKE_UNIQUE_NAMESPACE;
+
+                if (self.producer_node() != 0) {
+                    ttnn::experimental::jit::Context::instance().execute_node(self.producer_node());
+                }
 
                 auto buffer = mesh_composer ? convert_to_row_major_host_buffer(self, *mesh_composer)
                                             : convert_to_row_major_host_buffer(self, /*padded_output=*/false);

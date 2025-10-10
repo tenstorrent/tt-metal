@@ -76,6 +76,8 @@ target_sources(
         core/graph/graph_argument_serializer.cpp
         core/graph/graph_processor.cpp
         core/graph/graph_trace_utils.cpp
+        core/experimental/jit/node.cpp
+        core/experimental/jit/context.cpp
         core/old_infra_device_operation.cpp
         core/reports.cpp
         core/run_operation.cpp
@@ -98,8 +100,6 @@ target_sources(
         core/tensor/types.cpp
         core/tensor/unit_mesh/unit_mesh_utils.cpp
         core/tensor/xtensor/partition.cpp
-        core/tensor/experimental/node.cpp
-        core/tensor/experimental/context.cpp
 )
 target_include_directories(
     ttnn_core

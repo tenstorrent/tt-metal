@@ -1,0 +1,43 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+#include <vector>
+#include <tt_stl/assert.hpp>
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/experimental/jit/to_organize.hpp"
+#include "ttnn/experimental/jit/IDeviceOperation.hpp"
+
+namespace ttnn::experimental::jit {
+
+class Node {
+public:
+    Node() = delete;
+
+    Node(
+        NodeId id,
+        const std::vector<Tensor>& inputs,
+        const std::string&& operation_name,
+        std::shared_ptr<IDeviceOperation>&& Args);
+
+    NodeId id() const;
+
+    std::string_view operation_name() const;
+
+    const std::vector<Tensor>& inputs() const;
+    const std::vector<NodeId>& output_nodes() const;
+
+    void add_output_node(NodeId node_id);
+
+    void execute();
+
+private:
+    NodeId id_;
+    std::string operation_name_;
+    std::vector<Tensor> inputs_;
+    std::vector<NodeId> output_nodes_;
+    std::shared_ptr<IDeviceOperation> Args;
+};
+
+}  // namespace ttnn::experimental::jit
