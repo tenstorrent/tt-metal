@@ -50,6 +50,7 @@ template <
     uint32_t num_out_sticks,
     bool pack_untilize_reinit>
 ALWI void tilize_copy_function(uint32_t curr_in_cb_id, uint32_t curr_in_idx_cb_id, uint32_t output_faces) {
+    // tensix syncs are necessary here until https://github.com/tenstorrent/tt-metal/issues/30399 is resolved
     tensix_sync();
     unary_op_init_common(curr_in_cb_id, tile_tmp_cb_id);
     tensix_sync();
@@ -76,6 +77,9 @@ ALWI void tilize_copy_function(uint32_t curr_in_cb_id, uint32_t curr_in_idx_cb_i
     if constexpr (pack_untilize_reinit) {
 // note pack_untilize_dest_init must be called immediately after copy_tile_init see issue
 // https://github.com/tenstorrent/tt-metal/issues/#27314
+// also note we don't actually call pack_untilize_dest_init here, but instead call all it
+// contents without the llk_pack_untilize_hw_configure_disaggregated call so that
+// we can avoid tensix_syncs
 #ifdef ARCH_BLACKHOLE
         // Needed for setting swizzle_32b:
         MATH((llk_math_hw_configure_disaggregated<true, true>(0, 0)));
