@@ -453,14 +453,14 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
         bool is_in0_sink = core == in0_core_order.at(in1_parallel_axis_cores - 1);
         bool is_in1_sink = core == in1_core_order.at(in0_parallel_axis_cores - 1);
 
-        log_info(
-            tt::LogOp,
-            "core: {}, in0_idx: {}, in1_idx: {}, is_in0_sink: {}, is_in1_sink: {}",
-            core,
-            in0_idx,
-            in1_idx,
-            is_in0_sink,
-            is_in1_sink);
+        // log_info(
+        //     tt::LogOp,
+        //     "core: {}, in0_idx: {}, in1_idx: {}, is_in0_sink: {}, is_in1_sink: {}",
+        //     core,
+        //     in0_idx,
+        //     in1_idx,
+        //     is_in0_sink,
+        //     is_in1_sink);
 
         if (in1_idx == 0) {
             // in0 sender
