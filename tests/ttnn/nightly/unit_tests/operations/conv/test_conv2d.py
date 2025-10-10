@@ -3381,7 +3381,7 @@ def test_conv2d_sdxl(
     ),
 )
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 4 * 16384}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 38000}], indirect=True)
 def test_conv2d_sdxl_refiner(
     device,
     torch_tensor_map,
