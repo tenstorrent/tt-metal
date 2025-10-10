@@ -218,10 +218,11 @@ bool is_native_L1_sharding(
     // tensor scalar
     if (!b.has_value() && a.memory_config().is_sharded()) {
         return !is_uneven(a);
+        // return true;
     }
 
     // a and b identical shape, no broadcast on any dimension
-    if (b.has_value() && a.logical_shape() == b->logical_shape()) {
+    if (b.has_value() && (a.logical_shape() == b->logical_shape())) {
         if (is_uneven(a) || is_uneven(*b) || is_uneven(c)) {
             return false;
         }
@@ -355,7 +356,7 @@ void set_or_update_runtime_arguments(
             c_num_tiles = num_tiles_per_core_group_2;
         } else {
             handle_args(program, reader_kernel_id, core, std::array<uint32_t, 21>{0});
-            handle_args(program, writer_kernel_id, core, std::array<uint32_t, 10>{0});
+            handle_args(program, writer_kernel_id, core, std::array<uint32_t, 11>{0});
             handle_args(program, compute_kernel_id, core, std::array<uint32_t, 4>{0});
             continue;
         }
@@ -368,12 +369,20 @@ void set_or_update_runtime_arguments(
             c_current_shard_width = c_shard_shape[1];           // actual
             auto a_shard_shape = a_shard_shape_generator(core);
             a_num_tiles = a_shard_shape[0] * a_shard_shape[1];  // actual
-            if (is_native_L1_sharding(tensor_args, c, operation_attributes)) {
+            if (is_native_L1_sharding(tensor_args, c, operation_attributes) || !b.has_value()) {
                 c_start_id =
                     (i / num_shards_per_width) * (c_shard_height * cWt) + (i % num_shards_per_width) * c_shard_width;
+                //} //else {
+                // For non-native L1 sharding (e.g., uneven), also use column-aware addressing for width/block sharding
+                // auto memory_layout = get_memory_layout(a, b, c);
+                // if (memory_layout == TensorMemoryLayout::WIDTH_SHARDED ||
+                //     memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
+                //     c_start_id = (i / num_shards_per_width) * (c_shard_height * cWt) +
+                //                  (i % num_shards_per_width) * c_shard_width;
             } else {
                 c_start_id = start_tile_id;
             }
+            //}
         } else {
             c_start_id = start_tile_id;
         }
@@ -395,7 +404,7 @@ void set_or_update_runtime_arguments(
                 b_num_tiles = b_shard_shape[0] * b_shard_shape[1];  // actual
             }
             std::array writer_runtime_args = {
-                c.buffer()->address(), c_start_id, c_num_tiles, c_current_shard_width, cD, cN, cC, cHt, cWt, cND};
+                c.buffer()->address(), c_start_id, c_num_tiles, c_current_shard_width, cD, cN, cC, cHt, cWt, cND, 0u};
             handle_args(program, writer_kernel_id, core, writer_runtime_args);
 
             auto [freq, counter] =
@@ -419,12 +428,7 @@ void set_or_update_runtime_arguments(
                 cC,
                 cHt,
                 cWt,
-                cND,
-                0u,
-                0u,
-                0u,
-                0u,
-                0u};
+                cND};
             handle_args(program, writer_kernel_id, core, writer_runtime_args);
 
             std::array compute_runtime_args = {c_num_tiles, 0u, 0u, quantization_zero_point};
