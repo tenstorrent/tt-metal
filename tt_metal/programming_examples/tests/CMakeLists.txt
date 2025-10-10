@@ -16,4 +16,8 @@ target_link_libraries(
         protobuf::libprotobuf
 )
 
+add_executable(out_of_tree_test)
+target_sources(out_of_tree_test PRIVATE out_of_tree_test.cpp)
+target_link_libraries(out_of_tree_test PUBLIC TT::Metalium)
+
 # Any other integration tests should be added here
