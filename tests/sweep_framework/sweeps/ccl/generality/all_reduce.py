@@ -67,6 +67,24 @@ def _model_shape_iterator(model_shapes, batch_params):
 
 LEAD_MODEL_SHARD_SPECS = [
     get_serializable_shard_specs(
+        input_shape=(32, 128),
+        input_cores=(4, 4),
+        input_strategy="w",
+        output_shape=None,
+        output_cores=(4, 4),
+        output_strategy="w",
+        valid_tensor_shapes=[[1, 1, 32, 4096]],
+    ),
+    get_serializable_shard_specs(
+        input_shape=(32, 256),
+        input_cores=(4, 4),
+        input_strategy="w",
+        output_shape=None,
+        output_cores=(4, 4),
+        output_strategy="w",
+        valid_tensor_shapes=[[1, 1, 32, 2048]],
+    ),
+    get_serializable_shard_specs(
         input_shape=(32, 64),
         input_cores=(4, 6),
         input_strategy="w",
@@ -124,6 +142,8 @@ parameters = {
         "fabric_config": FABRIC_CONFIGS,
         "num_links": [1],
         "input_shape": [
+            [1, 1, 32, 2048],  # Llama Galaxy. cluster_axis: 0
+            [1, 1, 32, 4096],  # Llama 8x2. cluster_axis: 0
             [1, 1, 32, 1280],  # Qwen3 Galaxy. cluster_axis: 0
             [1, 1, 32, 2560],  # Qwen3 2x8. Cluster axis 0
         ],
@@ -157,6 +177,13 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     mesh_shape, cluster_axis = test_vector["mesh_shape"], test_vector["cluster_axis"]
     if cluster_axis and mesh_shape[cluster_axis] == 1:
         return True, "Unit cluster axis"
+
+    if (
+        cluster_axis is not None
+        and test_vector["topology"] == ttnn.Topology.Ring
+        and test_vector["mesh_shape"][cluster_axis] == 2
+    ):
+        return True, "Ring config requires more than two devices"
 
     if (
         test_vector["topology"] == ttnn.Topology.Ring
