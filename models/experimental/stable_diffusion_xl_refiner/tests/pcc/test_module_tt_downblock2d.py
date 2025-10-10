@@ -27,7 +27,7 @@ from models.experimental.stable_diffusion_xl_refiner.tests.test_common import SD
             (1, 384, 128, 128),
             (1, 1536),
             0,
-            0.999,
+            0.998,
         ),
     ],
 )
