@@ -1,17 +1,52 @@
-#include "context.hpp"
-
+#include "ttnn/experimental/jit/context.hpp"
+#include "ttnn/experimental/jit/node.hpp"
 #include <algorithm>
 #include <stdexcept>
 
 #include <spdlog/spdlog.h>
-
+#pragma optimize("", off)
 namespace {
 constexpr size_t INITIAL_NODES_CAPACITY = 1024;
 }
 
+namespace ttnn::experimental::jit {
 Context::Context() {
     nodes_.reserve(INITIAL_NODES_CAPACITY);
     id_to_index_.reserve(INITIAL_NODES_CAPACITY);
+}
+
+NodeId Context::create_node(
+    const std::vector<Tensor>& inputs, const std::string&& operation_name, std::shared_ptr<IDeviceOperation>&& args) {
+    NodeId id = next_id_++;
+
+    size_t index = nodes_.size();
+    nodes_.emplace_back(
+        id,
+        inputs,
+        std::forward<const std::string&&>(operation_name),
+        std::forward<std::shared_ptr<IDeviceOperation>&&>(args));
+    id_to_index_[id] = index;
+
+    // Update connectivity for input nodes
+    for (const auto& input : inputs) {
+        if (input.producer_node() != 0) {
+            if (Node* producer = get_node(input.producer_node())) {
+                producer->add_output_node(id);
+            }
+        }
+    }
+
+    return id;
+}
+
+std::vector<const Node*> Context::find_nodes(const std::string& operation_name) const {
+    std::vector<const Node*> result;
+    for (const auto& node : nodes_) {
+        if (node.operation_name() == operation_name) {
+            result.push_back(&node);
+        }
+    }
+    return result;
 }
 
 Node* Context::get_node(NodeId id) {
@@ -29,6 +64,16 @@ const std::vector<Node>& Context::get_all_nodes() const { return nodes_; }
 
 std::vector<Node>& Context::get_all_nodes() { return nodes_; }
 
+void Context::execute_node(NodeId id) {
+    std::vector<NodeId> nodes = topological_sort({id});
+    for (auto node_id : nodes) {
+        auto node = get_node(node_id);
+        if (node != nullptr) {
+            node->execute();
+        }
+    }
+}
+
 // Build dependency graph from output tensors
 std::unordered_set<NodeId> Context::get_dependencies(const std::vector<Tensor>& outputs) const {
     std::unordered_set<NodeId> deps;
@@ -36,7 +81,7 @@ std::unordered_set<NodeId> Context::get_dependencies(const std::vector<Tensor>& 
 
     // Start from output tensors
     for (const auto& tensor : outputs) {
-        if (!tensor.is_constant() && tensor.producer_node() != 0) {
+        if (tensor.producer_node() != 0) {
             to_visit.push_back(tensor.producer_node());
         }
     }
@@ -53,7 +98,7 @@ std::unordered_set<NodeId> Context::get_dependencies(const std::vector<Tensor>& 
 
         if (const Node* node = get_node(current)) {
             for (const auto& input : node->inputs()) {
-                if (!input.is_constant() && input.producer_node() != 0) {
+                if (input.producer_node() != 0) {
                     to_visit.push_back(input.producer_node());
                 }
             }
@@ -63,7 +108,6 @@ std::unordered_set<NodeId> Context::get_dependencies(const std::vector<Tensor>& 
     return deps;
 }
 
-// Topological sort for execution
 std::vector<NodeId> Context::topological_sort(const std::unordered_set<NodeId>& node_set) const {
     std::vector<NodeId> result;
     std::unordered_set<NodeId> visited;
@@ -81,7 +125,7 @@ std::vector<NodeId> Context::topological_sort(const std::unordered_set<NodeId>& 
 
         if (const Node* node = get_node(id)) {
             for (const auto& input : node->inputs()) {
-                if (!input.is_constant() && input.producer_node() != 0) {
+                if (input.producer_node() != 0) {
                     visit(input.producer_node());
                 }
             }
@@ -109,21 +153,8 @@ void Context::clear() {
     next_id_ = 1;
 }
 
-void Context::print_stats() const {
-    std::unordered_map<OpTypeId, size_t> counts;
-    for (const auto& node : nodes_) {
-        counts[node.type_id()]++;
-    }
-
-    spdlog::info("Graph statistics:");
-    spdlog::info("  Total nodes: {}", nodes_.size());
-    spdlog::info("  Operation counts:");
-    for (const auto& [type_id, count] : counts) {
-        spdlog::info("    Type {}: {} nodes", type_id, count);
-    }
-}
-
 Context& Context::instance() {
     static Context ctx;
     return ctx;
 }
+}  // namespace ttnn::experimental::jit
