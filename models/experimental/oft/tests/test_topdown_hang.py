@@ -23,6 +23,20 @@ try:
 except ModuleNotFoundError:
     use_signpost = False
 
+# helper funcction for easier enabling/disabling synchronization after each op
+SYNC_DEVICE_GLOBAL = False
+
+
+def enable_sync_device(enable):
+    global SYNC_DEVICE_GLOBAL
+    SYNC_DEVICE_GLOBAL = enable
+
+
+def synchronize_device(device, op_name):
+    if SYNC_DEVICE_GLOBAL:
+        ttnn.synchronize_device(device)
+        logger.debug(f"Synchronizing device after {op_name}")
+
 
 # torch reference basic block
 class BasicBlock(nn.Module):
@@ -161,7 +175,6 @@ class Conv:
         if self.act_block_h is not None:
             conv_config.act_block_h_override = self.act_block_h
 
-        # ttnn_helper_block = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT) #TODO BoJa
         [output_tensor, [out_h, out_w], [self.weights, self.bias]] = ttnn.conv2d(
             input_tensor=input_tensor,
             weight_tensor=self.weights,
@@ -219,7 +232,7 @@ class GroupNormDRAM:
             _nearest_32_per_core(unpadded_shape[2], grid_x),
             _nearest_32_per_core(unpadded_shape[3], grid_y),
         ]
-        # input_tensor_tilized2 = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT) #if you enable this it will pass without hang
+        # input_tensor_tilized2 = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT) #if you enable this line it will pass without hang
         input_tensor_tilized = ttnn.tilize_with_val_padding(
             input_tensor, output_tensor_shape=out_shape, pad_value=0, use_multicore=True
         )
@@ -246,8 +259,6 @@ class GroupNormDRAM:
             num_out_blocks=num_splits,
             epsilon=1e-5,
         )
-
-        # ttnn.synchronize_device(device)
         return output_tensor
 
 
@@ -271,21 +282,26 @@ class TTBasicBlock:
         if use_signpost:
             signpost(header="TTBasicBlock forward started")
         out, out_h, out_w = self.conv1(device, x)
+        synchronize_device(device, "conv1")
         logger.debug(f"FORWARD X Input shape: {x.shape}, dtype: {x.dtype}, layout: {x.layout}")
-        # logger.debug(f"SSHARDING {gn_shard=}")
+
         out = self.bn1(device, out, out_h, out_w, shard=gn_shard, num_splits=num_splits)
         logger.debug(f"BN1 output shape: {out.shape}")
+        synchronize_device(device, "bn1")
         ttnn.relu(out, output_tensor=out)
+        synchronize_device(device, "relu1")
 
         out, out_h, out_w = self.conv2(device, out)
-        out = ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT)
+        synchronize_device(device, "conv2")
         logger.debug(f"Conv2 output shape: {out.shape}")
         out = self.bn2(device, out, out_h, out_w, shard=gn_shard, num_splits=num_splits)
+        synchronize_device(device, "bn2")
         logger.debug(f"BN2 output shape: {out.shape}")
 
         out += x
+        synchronize_device(device, "add")
         out = ttnn.relu(out)
-        out = ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT)
+        synchronize_device(device, "relu2")
         if use_signpost:
             signpost(header="TTBasicBlock forward finished")
         return out
@@ -299,6 +315,7 @@ class TTBasicBlock:
 def test_tt_topdownblock_with_8_basicblocks(device, n, in_ch, out_ch, h, w, stride, sharding, is_sliced):
     skip_if_not_blackhole_20_cores(device)
     # device.disable_and_clear_program_cache()  # test hangs without this line
+    enable_sync_device(False)  # True -> if you want to enable synchronization after each op
     torch.manual_seed(42)
     input_tensor = torch.randn(n, in_ch, h, w)
     # Create 2 BasicBlock modules from oft
