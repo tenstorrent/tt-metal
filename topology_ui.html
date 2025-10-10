@@ -1,0 +1,533 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Interactive Topology Viewer</title>
+    <script src="https://cdn.plot.ly/plotly-2.26.0.min.js"></script>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            display: flex;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        #main-container {
+            display: flex;
+            width: 100%;
+            height: 100%;
+        }
+
+        #visualization {
+            flex: 1;
+            background: #f5f5f5;
+            position: relative;
+        }
+
+        #sidebar {
+            width: 350px;
+            background: #2c3e50;
+            color: white;
+            padding: 20px;
+            overflow-y: auto;
+            box-shadow: -2px 0 10px rgba(0,0,0,0.3);
+        }
+
+        #sidebar h2 {
+            margin-top: 0;
+            border-bottom: 2px solid #3498db;
+            padding-bottom: 10px;
+        }
+
+        #sidebar h3 {
+            margin-top: 20px;
+            color: #3498db;
+            font-size: 16px;
+        }
+
+        .info-section {
+            background: #34495e;
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 15px;
+        }
+
+        .info-row {
+            display: flex;
+            justify-content: space-between;
+            margin: 8px 0;
+            padding: 5px;
+            background: rgba(255,255,255,0.05);
+            border-radius: 3px;
+        }
+
+        .info-label {
+            font-weight: bold;
+            color: #3498db;
+        }
+
+        .info-value {
+            color: #ecf0f1;
+        }
+
+        #view-selector {
+            margin-bottom: 20px;
+        }
+
+        .view-btn {
+            background: #3498db;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            margin: 5px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background 0.3s;
+        }
+
+        .view-btn:hover {
+            background: #2980b9;
+        }
+
+        .view-btn.active {
+            background: #27ae60;
+        }
+
+        #filter-section {
+            margin-bottom: 20px;
+        }
+
+        .filter-group {
+            margin: 10px 0;
+        }
+
+        .filter-label {
+            display: block;
+            margin-bottom: 5px;
+            color: #3498db;
+            font-size: 14px;
+        }
+
+        .filter-checkbox {
+            margin-right: 8px;
+        }
+
+        #stats {
+            background: #34495e;
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 15px;
+        }
+
+        .stat-item {
+            margin: 8px 0;
+            font-size: 14px;
+        }
+
+        .stat-value {
+            color: #3498db;
+            font-weight: bold;
+            font-size: 18px;
+        }
+
+        #selection-info {
+            min-height: 200px;
+        }
+
+        .no-selection {
+            color: #95a5a6;
+            font-style: italic;
+            text-align: center;
+            padding: 40px 20px;
+        }
+
+        .chip-badge {
+            display: inline-block;
+            background: #3498db;
+            padding: 3px 8px;
+            border-radius: 3px;
+            margin: 2px;
+            font-size: 12px;
+        }
+
+        .connection-badge {
+            display: inline-block;
+            background: #e74c3c;
+            padding: 3px 8px;
+            border-radius: 3px;
+            margin: 2px;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <div id="main-container">
+        <div id="visualization">
+            <div id="plot-3d"></div>
+            <div id="plot-2d"></div>
+        </div>
+
+        <div id="sidebar">
+            <h2>🎛️ Topology Control Panel</h2>
+
+            <div id="view-selector">
+                <h3>View Mode</h3>
+                <button class="view-btn active" onclick="switchView('3d')">3D Rack View</button>
+                <button class="view-btn" onclick="switchView('2d')">2D Schematic</button>
+            </div>
+
+            <div id="stats">
+                <h3>📊 System Stats</h3>
+                <div class="stat-item">Chips: <span class="stat-value">8</span></div>
+                <div class="stat-item">Boards: <span class="stat-value">4</span></div>
+                <div class="stat-item">Connections: <span class="stat-value">20</span></div>
+            </div>
+
+            <div id="filter-section">
+                <h3>🔍 Filters</h3>
+                <div class="filter-group">
+                    <label class="filter-label">
+                        <input type="checkbox" class="filter-checkbox" id="show-chips" checked onchange="updateView()">
+                        Show Chips
+                    </label>
+                    <label class="filter-label">
+                        <input type="checkbox" class="filter-checkbox" id="show-connections" checked onchange="updateView()">
+                        Show Connections
+                    </label>
+                    <label class="filter-label">
+                        <input type="checkbox" class="filter-checkbox" id="show-labels" checked onchange="updateView()">
+                        Show Labels
+                    </label>
+                </div>
+            </div>
+
+            <div id="selection-info">
+                <h3>📌 Selected Element</h3>
+                <div class="no-selection">Click on a chip or connection to see details</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Data from Python
+        const chipsData = [{"id": 0, "arch": "wormhole_b0", "shelf": 0, "rack_x": 0, "rack_y": 0, "adapter": 0, "board": 72058990195056798, "board_type": "n300"}, {"id": 1, "arch": "wormhole_b0", "shelf": 0, "rack_x": 0, "rack_y": 0, "adapter": 0, "board": 72058990195056823, "board_type": "n300"}, {"id": 2, "arch": "wormhole_b0", "shelf": 0, "rack_x": 0, "rack_y": 0, "adapter": 0, "board": 72058990195056857, "board_type": "n300"}, {"id": 3, "arch": "wormhole_b0", "shelf": 0, "rack_x": 0, "rack_y": 0, "adapter": 0, "board": 72058990195056867, "board_type": "n300"}, {"id": 4, "arch": "wormhole_b0", "shelf": 0, "rack_x": 0, "rack_y": 0, "adapter": 0, "board": 72058990195056798, "board_type": "n300"}, {"id": 5, "arch": "wormhole_b0", "shelf": 0, "rack_x": 0, "rack_y": 0, "adapter": 0, "board": 72058990195056823, "board_type": "n300"}, {"id": 6, "arch": "wormhole_b0", "shelf": 0, "rack_x": 0, "rack_y": 0, "adapter": 0, "board": 72058990195056857, "board_type": "n300"}, {"id": 7, "arch": "wormhole_b0", "shelf": 0, "rack_x": 0, "rack_y": 0, "adapter": 0, "board": 72058990195056867, "board_type": "n300"}];
+        const connectionsData = [{"id": 0, "src_chip": 0, "src_chan": 0, "dst_chip": 3, "dst_chan": 0, "src_board": 72058990195056798, "dst_board": 72058990195056867, "same_board": false}, {"id": 1, "src_chip": 0, "src_chan": 1, "dst_chip": 3, "dst_chan": 1, "src_board": 72058990195056798, "dst_board": 72058990195056867, "same_board": false}, {"id": 2, "src_chip": 0, "src_chan": 8, "dst_chip": 4, "dst_chan": 0, "src_board": 72058990195056798, "dst_board": 72058990195056798, "same_board": true}, {"id": 3, "src_chip": 0, "src_chan": 9, "dst_chip": 4, "dst_chan": 1, "src_board": 72058990195056798, "dst_board": 72058990195056798, "same_board": true}, {"id": 4, "src_chip": 0, "src_chan": 14, "dst_chip": 1, "dst_chan": 14, "src_board": 72058990195056798, "dst_board": 72058990195056823, "same_board": false}, {"id": 5, "src_chip": 0, "src_chan": 15, "dst_chip": 1, "dst_chan": 15, "src_board": 72058990195056798, "dst_board": 72058990195056823, "same_board": false}, {"id": 6, "src_chip": 1, "src_chan": 6, "dst_chip": 2, "dst_chan": 6, "src_board": 72058990195056823, "dst_board": 72058990195056857, "same_board": false}, {"id": 7, "src_chip": 1, "src_chan": 7, "dst_chip": 2, "dst_chan": 7, "src_board": 72058990195056823, "dst_board": 72058990195056857, "same_board": false}, {"id": 8, "src_chip": 1, "src_chan": 8, "dst_chip": 5, "dst_chan": 0, "src_board": 72058990195056823, "dst_board": 72058990195056823, "same_board": true}, {"id": 9, "src_chip": 1, "src_chan": 9, "dst_chip": 5, "dst_chan": 1, "src_board": 72058990195056823, "dst_board": 72058990195056823, "same_board": true}, {"id": 10, "src_chip": 2, "src_chan": 8, "dst_chip": 6, "dst_chan": 0, "src_board": 72058990195056857, "dst_board": 72058990195056857, "same_board": true}, {"id": 11, "src_chip": 2, "src_chan": 9, "dst_chip": 6, "dst_chan": 1, "src_board": 72058990195056857, "dst_board": 72058990195056857, "same_board": true}, {"id": 12, "src_chip": 2, "src_chan": 14, "dst_chip": 3, "dst_chan": 14, "src_board": 72058990195056857, "dst_board": 72058990195056867, "same_board": false}, {"id": 13, "src_chip": 2, "src_chan": 15, "dst_chip": 3, "dst_chan": 15, "src_board": 72058990195056857, "dst_board": 72058990195056867, "same_board": false}, {"id": 14, "src_chip": 3, "src_chan": 8, "dst_chip": 7, "dst_chan": 0, "src_board": 72058990195056867, "dst_board": 72058990195056867, "same_board": true}, {"id": 15, "src_chip": 3, "src_chan": 9, "dst_chip": 7, "dst_chan": 1, "src_board": 72058990195056867, "dst_board": 72058990195056867, "same_board": true}, {"id": 16, "src_chip": 4, "src_chan": 6, "dst_chip": 5, "dst_chan": 6, "src_board": 72058990195056798, "dst_board": 72058990195056823, "same_board": false}, {"id": 17, "src_chip": 4, "src_chan": 7, "dst_chip": 5, "dst_chan": 7, "src_board": 72058990195056798, "dst_board": 72058990195056823, "same_board": false}, {"id": 18, "src_chip": 6, "src_chan": 6, "dst_chip": 7, "dst_chan": 6, "src_board": 72058990195056857, "dst_board": 72058990195056867, "same_board": false}, {"id": 19, "src_chip": 6, "src_chan": 7, "dst_chip": 7, "dst_chan": 7, "src_board": 72058990195056857, "dst_board": 72058990195056867, "same_board": false}];
+
+        let currentView = '3d';
+        let selectedElement = null;
+
+        // Create 3D visualization
+        function create3DView() {
+            const chips = [];
+            const chipX = [], chipY = [], chipZ = [], chipText = [], chipHover = [], chipCustomData = [];
+
+            chipsData.forEach(chip => {
+                chipX.push(chip.rack_x);
+                chipY.push(chip.rack_y);
+                chipZ.push(chip.shelf);
+                chipText.push(chip.id.toString());
+                chipHover.push(
+                    `<b>Chip ${chip.id}</b><br>` +
+                    `Arch: ${chip.arch}<br>` +
+                    `Board: ${chip.board_type}<br>` +
+                    `Shelf: ${chip.shelf}, Rack: (${chip.rack_x}, ${chip.rack_y})`
+                );
+                chipCustomData.push({
+                    type: 'chip',
+                    ...chip
+                });
+            });
+
+            const chipTrace = {
+                type: 'scatter3d',
+                x: chipX,
+                y: chipY,
+                z: chipZ,
+                mode: 'markers+text',
+                marker: {
+                    size: 20,
+                    color: 'rgb(52, 152, 219)',
+                    line: { color: 'white', width: 3 },
+                    symbol: 'square'
+                },
+                text: chipText,
+                textposition: 'middle center',
+                textfont: { size: 12, color: 'white', family: 'Arial Black' },
+                hovertext: chipHover,
+                hoverinfo: 'text',
+                name: 'Chips',
+                customdata: chipCustomData
+            };
+
+            // Create connection lines
+            const connectionTraces = [];
+            connectionsData.forEach(conn => {
+                const srcChip = chipsData.find(c => c.id === conn.src_chip);
+                const dstChip = chipsData.find(c => c.id === conn.dst_chip);
+
+                if (srcChip && dstChip) {
+                    const color = conn.same_board ? 'rgba(52, 152, 219, 0.6)' : 'rgba(149, 165, 166, 0.6)';
+                    const width = conn.same_board ? 4 : 3;
+
+                    connectionTraces.push({
+                        type: 'scatter3d',
+                        x: [srcChip.rack_x, dstChip.rack_x],
+                        y: [srcChip.rack_y, dstChip.rack_y],
+                        z: [srcChip.shelf, dstChip.shelf],
+                        mode: 'lines',
+                        line: { color: color, width: width },
+                        hovertext: `<b>Connection ${conn.id}</b><br>` +
+                                  `Chip ${conn.src_chip}[ch${conn.src_chan}] ↔ ` +
+                                  `Chip ${conn.dst_chip}[ch${conn.dst_chan}]<br>` +
+                                  `Type: ${conn.same_board ? 'Intra-board' : 'Inter-board'}`,
+                        hoverinfo: 'text',
+                        showlegend: false,
+                        customdata: [{ type: 'connection', ...conn }]
+                    });
+                }
+            });
+
+            const layout = {
+                title: '<b>3D Physical Rack Layout</b><br><sub>Click elements to select</sub>',
+                scene: {
+                    xaxis: { title: 'Rack X' },
+                    yaxis: { title: 'Rack Y' },
+                    zaxis: { title: 'Shelf' },
+                    camera: {
+                        eye: { x: 1.5, y: 1.5, z: 1.2 }
+                    }
+                },
+                hovermode: 'closest',
+                showlegend: false,
+                margin: { l: 0, r: 0, b: 0, t: 50 }
+            };
+
+            const config = {
+                responsive: true,
+                displayModeBar: true,
+                displaylogo: false
+            };
+
+            Plotly.newPlot('plot-3d', [chipTrace, ...connectionTraces], layout, config);
+
+            // Add click event handler
+            document.getElementById('plot-3d').on('plotly_click', function(data) {
+                if (data.points && data.points.length > 0) {
+                    const point = data.points[0];
+                    if (point.customdata) {
+                        selectElement(point.customdata);
+                    }
+                }
+            });
+        }
+
+        // Create 2D schematic view
+        function create2DView() {
+            // Create 2D schematic based on logical layout
+            const chipX = [], chipY = [], chipText = [], chipHover = [], chipCustomData = [];
+
+            // Arrange chips in grid based on ID
+            chipsData.forEach((chip, idx) => {
+                const cols = Math.ceil(Math.sqrt(chipsData.length));
+                const row = Math.floor(idx / cols);
+                const col = idx % cols;
+
+                chipX.push(col * 3);
+                chipY.push(-row * 3);
+                chipText.push(chip.id.toString());
+                chipHover.push(
+                    `<b>Chip ${chip.id}</b><br>` +
+                    `Arch: ${chip.arch}<br>` +
+                    `Board: ${chip.board_type}`
+                );
+                chipCustomData.push({
+                    type: 'chip',
+                    ...chip
+                });
+            });
+
+            const chipTrace = {
+                type: 'scatter',
+                x: chipX,
+                y: chipY,
+                mode: 'markers+text',
+                marker: {
+                    size: 40,
+                    color: 'rgb(52, 152, 219)',
+                    line: { color: 'white', width: 3 }
+                },
+                text: chipText,
+                textposition: 'middle center',
+                textfont: { size: 14, color: 'white', family: 'Arial Black' },
+                hovertext: chipHover,
+                hoverinfo: 'text',
+                name: 'Chips',
+                customdata: chipCustomData
+            };
+
+            const layout = {
+                title: '<b>2D Schematic View</b><br><sub>Click elements to select</sub>',
+                xaxis: { visible: false },
+                yaxis: { visible: false },
+                hovermode: 'closest',
+                showlegend: false,
+                margin: { l: 20, r: 20, b: 20, t: 50 }
+            };
+
+            const config = {
+                responsive: true,
+                displayModeBar: true,
+                displaylogo: false
+            };
+
+            Plotly.newPlot('plot-2d', [chipTrace], layout, config);
+
+            document.getElementById('plot-2d').on('plotly_click', function(data) {
+                if (data.points && data.points.length > 0) {
+                    const point = data.points[0];
+                    if (point.customdata) {
+                        selectElement(point.customdata);
+                    }
+                }
+            });
+        }
+
+        // Handle element selection
+        function selectElement(element) {
+            selectedElement = element;
+            updateSelectionInfo();
+        }
+
+        // Update selection info panel
+        function updateSelectionInfo() {
+            const infoDiv = document.getElementById('selection-info');
+
+            if (!selectedElement) {
+                infoDiv.innerHTML = '<h3>📌 Selected Element</h3><div class="no-selection">Click on a chip or connection to see details</div>';
+                return;
+            }
+
+            let html = '<h3>📌 Selected Element</h3><div class="info-section">';
+
+            if (selectedElement.type === 'chip') {
+                html += `
+                    <div class="info-row">
+                        <span class="info-label">Type:</span>
+                        <span class="info-value"><span class="chip-badge">CHIP</span></span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">Chip ID:</span>
+                        <span class="info-value">${selectedElement.id}</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">Architecture:</span>
+                        <span class="info-value">${selectedElement.arch}</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">Board Type:</span>
+                        <span class="info-value">${selectedElement.board_type}</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">Board ID:</span>
+                        <span class="info-value">${selectedElement.board}</span>
+                    </div>
+                    <h3>📍 Physical Location</h3>
+                    <div class="info-row">
+                        <span class="info-label">Shelf:</span>
+                        <span class="info-value">${selectedElement.shelf}</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">Rack X:</span>
+                        <span class="info-value">${selectedElement.rack_x}</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">Rack Y:</span>
+                        <span class="info-value">${selectedElement.rack_y}</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">Adapter:</span>
+                        <span class="info-value">${selectedElement.adapter}</span>
+                    </div>
+                `;
+            } else if (selectedElement.type === 'connection') {
+                html += `
+                    <div class="info-row">
+                        <span class="info-label">Type:</span>
+                        <span class="info-value"><span class="connection-badge">CONNECTION</span></span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">Connection ID:</span>
+                        <span class="info-value">${selectedElement.id}</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">Source:</span>
+                        <span class="info-value">Chip ${selectedElement.src_chip} [ch${selectedElement.src_chan}]</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">Destination:</span>
+                        <span class="info-value">Chip ${selectedElement.dst_chip} [ch${selectedElement.dst_chan}]</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">Scope:</span>
+                        <span class="info-value">${selectedElement.same_board ? 'Intra-board' : 'Inter-board'}</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">Source Board:</span>
+                        <span class="info-value">${selectedElement.src_board}</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">Dest Board:</span>
+                        <span class="info-value">${selectedElement.dst_board}</span>
+                    </div>
+                `;
+            }
+
+            html += '</div>';
+            infoDiv.innerHTML = html;
+        }
+
+        // Switch between views
+        function switchView(view) {
+            currentView = view;
+
+            // Update button states
+            document.querySelectorAll('.view-btn').forEach(btn => {
+                btn.classList.remove('active');
+            });
+            event.target.classList.add('active');
+
+            // Show/hide plots
+            if (view === '3d') {
+                document.getElementById('plot-3d').style.display = 'block';
+                document.getElementById('plot-2d').style.display = 'none';
+            } else {
+                document.getElementById('plot-3d').style.display = 'none';
+                document.getElementById('plot-2d').style.display = 'block';
+            }
+        }
+
+        // Update view based on filters
+        function updateView() {
+            // Implement filter logic here
+            console.log('Updating view with filters');
+        }
+
+        // Initialize
+        window.onload = function() {
+            create3DView();
+            create2DView();
+            document.getElementById('plot-2d').style.display = 'none';
+        };
+
+        // Handle window resize
+        window.onresize = function() {
+            Plotly.Plots.resize('plot-3d');
+            Plotly.Plots.resize('plot-2d');
+        };
+    </script>
+</body>
+</html>
