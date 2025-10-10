@@ -271,13 +271,6 @@ void Hal::initialize_bh() {
 
     this->relocate_func_ = [](uint64_t addr, uint64_t local_init_addr, bool has_shared_local_mem) {
         if ((addr & MEM_LOCAL_BASE) == MEM_LOCAL_BASE) {
-            // Move addresses in the local memory range to l1 (copied by kernel)
-            // For firmware with base fw, __ldm_data is already offset by base fw.
-            // So we need to undo that offset here to get the correct relocation address
-            // for copying by the kernel to local memory.
-            if (has_shared_local_mem) {
-                addr -= MEM_ERISC_BASE_FW_LOCAL_SIZE;
-            }
             return (addr & ~MEM_LOCAL_BASE) + local_init_addr;
         }
 

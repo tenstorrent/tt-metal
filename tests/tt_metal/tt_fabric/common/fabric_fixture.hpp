@@ -12,6 +12,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <hostdevcommon/common_values.hpp>
+#include "hal_types.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "impl/context/metal_context.hpp"
@@ -159,11 +160,11 @@ private:
 
 protected:
     static void SetUpTestSuite() {
-        if (tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy() ||
-            tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster()) {
-            should_skip_ = true;
-            return;
-        }
+        // if (tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy() ||
+        //     tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster() ||
+        //     tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(tt_metal::HalProgrammableCoreType::ACTIVE_ETH)
+        //     > 1) { should_skip_ = true; return;
+        // }
         BaseFabricFixture::DoSetUpTestSuite(
             tt::tt_fabric::FabricConfig::FABRIC_1D, std::nullopt, tt::tt_fabric::FabricTensixConfig::MUX);
     }
@@ -173,9 +174,16 @@ protected:
         }
     }
     void SetUp() override {
-        if (should_skip_) {
-            GTEST_SKIP() << "Fabric1DTensixFixture tests are not supported on Galaxy systems";
-        }
+        // if (should_skip_) {
+        //     if
+        //     (tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(tt_metal::HalProgrammableCoreType::ACTIVE_ETH)
+        //     > 1) {
+        //         GTEST_SKIP() << "Fabric MUX tests skipped due to hang during init at fabric_erisc_router.cpp
+        //         wait_for_notification()";
+        //     } else {
+        //         GTEST_SKIP() << "Fabric1DTensixFixture tests are not supported on Galaxy systems";
+        //     }
+        // }
         BaseFabricFixture::SetUp();
     }
 };
