@@ -6,6 +6,7 @@
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
+#include "tt_metal/test_utils/env_vars.hpp"
 #include "dm_common.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_coord.hpp>
@@ -302,6 +303,9 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementCoreBidirectionalDirectedIdea
 }
 
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementCoreBidirectionalDirectedIdealDifferentKernels) {
+    // Test failing with watcher enabled, github issue #29229
+    SKIP_FOR_WATCHER();
+
     GTEST_SKIP() << "Skipping test";  // Timeout issue (#36428)
 
     // Test ID (Arbitrary)
