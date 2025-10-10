@@ -180,6 +180,7 @@ def run_avg_pool2d(
         ttnn_input = ttnn.from_torch(
             torch_input_permuted, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
         )
+
     # run ttnn avg_pool2d
     ttnn_output = ttnn.avg_pool2d(
         input_tensor=ttnn_input,
