@@ -115,14 +115,16 @@ class BasicExpression {
     explicit BasicExpression(const Tensor& tensor)
         requires std::same_as<BasicExpression, Expression>;
 
-    explicit BasicExpression(Unary operation, ExpressionView first, Params&& params)
+    explicit BasicExpression(Unary operation, ExpressionView first)
         requires std::same_as<BasicExpression, Function>;
 
-    explicit BasicExpression(Binary operation, ExpressionView first, ExpressionView second, Params&& params)
+    explicit BasicExpression(UnaryWithParam operation, ExpressionView first, Param second)
         requires std::same_as<BasicExpression, Function>;
 
-    explicit BasicExpression(
-        Ternary operation, ExpressionView first, ExpressionView second, ExpressionView third, Params&& params)
+    explicit BasicExpression(Binary operation, ExpressionView first, ExpressionView second)
+        requires std::same_as<BasicExpression, Function>;
+
+    explicit BasicExpression(Ternary operation, ExpressionView first, ExpressionView second, ExpressionView third)
         requires std::same_as<BasicExpression, Function>;
 
 public:
@@ -130,15 +132,19 @@ public:
     [[nodiscard]] static std::optional<BasicExpression> from(const Tensor& tensor)
         requires std::same_as<BasicExpression, Expression>;
 
-    [[nodiscard]] static std::optional<BasicExpression> from(Unary operation, ExpressionView first, Params params)
+    [[nodiscard]] static std::optional<BasicExpression> from(Unary operation, ExpressionView first)
         requires std::same_as<BasicExpression, Function>;
 
     [[nodiscard]] static std::optional<BasicExpression> from(
-        Binary operation, ExpressionView first, ExpressionView second, Params params)
+        UnaryWithParam operation, ExpressionView first, Param second)
         requires std::same_as<BasicExpression, Function>;
 
     [[nodiscard]] static std::optional<BasicExpression> from(
-        Ternary operation, ExpressionView first, ExpressionView second, ExpressionView third, Params params)
+        Binary operation, ExpressionView first, ExpressionView second)
+        requires std::same_as<BasicExpression, Function>;
+
+    [[nodiscard]] static std::optional<BasicExpression> from(
+        Ternary operation, ExpressionView first, ExpressionView second, ExpressionView third)
         requires std::same_as<BasicExpression, Function>;
 
     BasicExpression(const BasicExpression&) = default;
@@ -179,12 +185,13 @@ public:
 
 std::optional<Expression> defer(const Tensor& tensor);
 
-std::optional<Function> defer(Unary unary, ExpressionView first, Params params);
+std::optional<Function> defer(Unary unary, ExpressionView first);
 
-std::optional<Function> defer(Binary binary, ExpressionView first, ExpressionView second, Params params);
+std::optional<Function> defer(UnaryWithParam unary, ExpressionView first, Param second);
 
-std::optional<Function> defer(
-    Ternary ternary, ExpressionView first, ExpressionView second, ExpressionView third, Params params);
+std::optional<Function> defer(Binary binary, ExpressionView first, ExpressionView second);
+
+std::optional<Function> defer(Ternary ternary, ExpressionView first, ExpressionView second, ExpressionView third);
 
 std::string to_compute_kernel_string(FunctionView expression);
 
