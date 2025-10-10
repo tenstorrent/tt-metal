@@ -25,6 +25,10 @@ on:
         default: false
         required: false
         type: boolean
+      timeout:
+        required: false
+        type: number
+        default: 10
 
 jobs:
   galaxy-apc-fast-tests:
