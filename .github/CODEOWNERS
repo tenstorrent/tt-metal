@@ -338,7 +338,7 @@ dockerfile/upstream_test_images/ @tenstorrent/metalium-developers-infra @tenstor
 tt-train/** @dmakoviichuk-tt @rfurko-tt @ayerofieiev-tt @tenstorrent/metalium-codeowners-large-changes
 
 # tt-telemetry
-tt_telemetry/** @btrzynadlowski-tt @tt-asaigal @kluongTT @tenstorrent/metalium-codeowners-large-changes
+tt_telemetry/** @btrzynadlowski-tt @tt-asaigal @kluongTT @cfjchu @tt-aho @omilyutin-tt @SeanNijjar @aliuTT @Riddy21 @agupta-tt @tenstorrent/metalium-codeowners-large-changes
 
 # .clang-tidy files - Metalium infra team owns all clang-tidy configuration files
 **/.clang-tidy @tenstorrent/metalium-developers-infra @tenstorrent/metalium-codeowners-large-changes
