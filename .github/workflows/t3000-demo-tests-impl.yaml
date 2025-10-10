@@ -94,14 +94,6 @@ jobs:
               sudo cpufreq-set -c "$cpu_num" -g performance
             fi
           done
-      - name: Verify Performance mode is enabled
-        run: |
-          echo "Current CPU governor settings:"
-          cat /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor
-          echo "CPU frequency info:"
-          cpufreq-info --governors
-          echo "Current frequencies:"
-          cat /proc/cpuinfo | grep "cpu MHz" | head -10
       - name: Run demo regression tests
         timeout-minutes: ${{ matrix.test-group.timeout }}
         shell: bash
