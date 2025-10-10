@@ -479,7 +479,7 @@ def assert_hidden_dim_pcc(
 ) -> float:
     """
     Asserts that PCC between the two tensors is above the required threshold.
-    If necessary, trims the second to last dimension (sequence length or batch size) 
+    If necessary, trims the second to last dimension (sequence length or batch size)
     of one of the tensors to match the second one. Returns the computed PCC.
     """
     tt_output_torch = tt_output_torch.cpu().float()

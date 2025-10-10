@@ -606,7 +606,7 @@ def shard_and_save(
         - `tensor`: The tensor to shard and save.
         - `shard_dims`: A tuple of two dimensions to shard the tensor along. Use `None` to replicate along that dimension.
         - `mesh_device`: The mesh device to shard the tensor onto. Necessary if using the device implementation.
-        - `remove_dims`: A tuple of two booleans indicating whether to remove the sharded dimensions after sharding. 
+        - `remove_dims`: A tuple of two booleans indicating whether to remove the sharded dimensions after sharding.
                          If a single boolean is provided, it is applied to both dimensions.
                          Has to be false if the corresponding dimension is not sharded.
                          Requires the sharded dimension to be the same size as the mesh dimension if true.

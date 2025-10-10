@@ -72,7 +72,7 @@ def apply_with_names(
     thread_pool_executor: concurrent.futures.ThreadPoolExecutor | None = None,
 ):
     """
-    Applies the given function to all parameters and buffers of the module, 
+    Applies the given function to all parameters and buffers of the module,
     passing the full pytorch path as the first argument.
     """
     named_params = list(module.named_parameters()) + list(module.named_buffers())
@@ -90,9 +90,10 @@ def apply_with_names(
 
 def load_weight_from_weights_dict(weights_dict: dict[str, torch.Tensor]) -> Callable[[str, torch.Tensor], torch.Tensor]:
     """
-    Returns a function that loads the weight with the specified path from `weights_dict` into the given tensor, 
+    Returns a function that loads the weight with the specified path from `weights_dict` into the given tensor,
     dequantizing it if necessary.
     """
+
     @torch.no_grad()
     def load_weight(name: str, tensor: torch.Tensor) -> torch.Tensor:
         print(f"Loading weight: {name}" + " " * 50, end="\r")
@@ -116,6 +117,7 @@ def unload_weight_from_weights_dict(
     """
     Returns the function that frees the weight memory for a weight with the specified path if it exists in `weights_dict`.
     """
+
     @torch.no_grad()
     def unload_weight(name: str, tensor: torch.Tensor) -> torch.Tensor:
         if name not in weights_dict:
@@ -136,7 +138,7 @@ def add_dynamic_weight_loading_hooks(
     """
     Adds hooks to dynamically load and unload weights for the given lazy modules during the forward pass.
     The lazy modules should be the names of the classes to lazily load weights for.
-    If a class is not in the lazy modules list, the function will recursively add hooks to its children, 
+    If a class is not in the lazy modules list, the function will recursively add hooks to its children,
     loading the weights for that specific class beforehand if necessary.
     """
     is_lazy = any(module.__class__.__name__ == lazy_module for lazy_module in lazy_modules)
@@ -169,6 +171,7 @@ def add_gc_hooks(
     model_name: str = "",
 ):
     """Adds hooks to call garbage collection after the forward pass of the given lazy modules."""
+
     def collect():
         gc.collect(0)
 
