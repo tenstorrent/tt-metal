@@ -52,6 +52,7 @@ def test_demo(
 
     # comment 1
     # comment 2
+    # comment 3
 
     if is_ci_env:
         if not expected_greedy_output_path and not expected_perf_metrics and not len(user_input) == 1:
