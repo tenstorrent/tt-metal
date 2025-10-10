@@ -19,6 +19,7 @@ set(SOURCES
     ttnn_fixed/reduce_ops_test.cpp
     ttnn_fixed/dropout_op_test.cpp
     ttnn_fixed/slice_op_test.cpp
+    ttnn_fixed/nlp_create_qkv_heads_head_dim_bug_test.cpp
     autograd/autograd_tensor.cpp
     autograd/autograd_test.cpp
     autograd/module_base_parameters_test.cpp
