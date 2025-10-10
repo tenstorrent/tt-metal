@@ -81,6 +81,7 @@ class WeightConfigEncoder(json.JSONEncoder):
 
 
 def try_decode_saved_weight(obj: dict[str, Any]) -> Any:
+    """Try to decode a SavedWeight from a dictionary. If the dictionary does not represent a SavedWeight, return it unchanged."""
     path_str = obj.get("path", None)
     if not isinstance(path_str, str):
         return obj
@@ -580,7 +581,7 @@ def sub_state_dict(state_dict: dict[str, torch.Tensor], prefix: str):
 def sub_state_dicts(
     state_dicts: Sequence[dict[str, torch.Tensor] | None], prefix: str
 ) -> tuple[dict[str, torch.Tensor] | None, ...]:
-    """Get a subset of the state dict with a given prefix."""
+    """Get a subset of each of the state dicts with a given prefix."""
     return tuple(None if d is None else sub_state_dict(d, prefix) for d in state_dicts)
 
 
@@ -599,7 +600,23 @@ def shard_and_save(
     memory_config: ttnn.MemoryConfig | None = None,
     _torch_impl: bool = False,
 ) -> SavedWeight:
-    """Shard a tensor and save it to a file."""
+    """Shard a tensor and save it to a file.
+    Parameters:
+        - `path`: Path to save the sharded tensor to.
+        - `tensor`: The tensor to shard and save.
+        - `shard_dims`: A tuple of two dimensions to shard the tensor along. Use `None` to replicate along that dimension.
+        - `mesh_device`: The mesh device to shard the tensor onto. Necessary if using the device implementation.
+        - `remove_dims`: A tuple of two booleans indicating whether to remove the sharded dimensions after sharding. 
+                         If a single boolean is provided, it is applied to both dimensions.
+                         Has to be false if the corresponding dimension is not sharded.
+                         Requires the sharded dimension to be the same size as the mesh dimension if true.
+        - `dtype`: The data type to save the tensor as. If `None`, the tensor's dtype is inferred.
+        - `layout`: The layout to save the tensor as. If `None`, defaults to row-major layout.
+        - `memory_config`: The memory configuration to save the tensor with. If `None`, defaults to DRAM-interleaved.
+        - `_torch_impl`: If true, use the PyTorch implementation of sharding. NOTE: This implementation is slower but potentially more stable.
+    Returns:
+        - A `SavedWeight` object containing the path and memory configuration of the saved tensor.
+    """
     assert all(isinstance(shard_dim, (int, NoneType)) for shard_dim in shard_dims)
     assert isinstance(remove_dims, bool) or all(isinstance(remove_dim, bool) for remove_dim in remove_dims)
     assert len(shard_dims) == 2, "shard_dims must be exactly 2 dimensions (can repeat)"
@@ -682,6 +699,7 @@ def _shard_device_impl(
     layout: ttnn.Layout | None,
     memory_config: ttnn.MemoryConfig | None,
 ) -> SavedWeight:
+    """Device-based implementation of `shard_and_save`."""
     assert layout in {
         None,
         ttnn.ROW_MAJOR_LAYOUT,
@@ -759,6 +777,7 @@ def _shard_torch_impl(
     layout: ttnn.Layout | None = None,
     memory_config: ttnn.MemoryConfig | None = None,
 ) -> SavedWeight:
+    """Host-based implementation of `shard_and_save`."""
     if (
         shard_dims[0] == shard_dims[1]
     ):  # This is a lil hacky case for when we want to shard a single dim over all devices
@@ -828,6 +847,7 @@ def get_weight_config(
     mesh_device: ttnn.Device,
     force_recalculate: bool,
 ):
+    """Convert the weight config for a given model or use cache if it exists."""
     weight_cache_path = weight_cache_path / f"{hf_config.num_hidden_layers}_layers"
     config_path = weight_cache_path / "config.json"
     weight_path = weight_cache_path / "weights"

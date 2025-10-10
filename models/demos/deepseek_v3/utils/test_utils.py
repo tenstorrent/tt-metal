@@ -26,6 +26,7 @@ from models.tt_transformers.tt.common import PagedAttentionConfig
 
 
 def load_state_dict(model_path: Path, module_path: str):
+    """Load the deepseek state dict from the given path, for a specific module path."""
     if module_path:
         module_path += "."  # So that the later matches include the separating dot
 
@@ -46,6 +47,7 @@ def load_state_dict(model_path: Path, module_path: str):
 
 
 def get_quant_scale(tensor: torch.Tensor, block_shape: Sequence[int]) -> torch.Tensor:
+    """Calculate the quantization scale for a given tensor and block shape."""
     assert tensor.ndim == len(block_shape), "Weight tensors must have the same dimensionality as the block shape"
     padded_tensor = torch.nn.functional.pad(
         tensor.float(),
@@ -74,6 +76,7 @@ def get_quant_scale(tensor: torch.Tensor, block_shape: Sequence[int]) -> torch.T
 
 
 def dequantize_state_dict(state_dict, hf_config, dtype=torch.bfloat16):
+    """Dequantizes the weights in the state_dict using the provided hf_config. Weights without corresponding scale tensors are left unchanged."""
     dequantized_state_dict = {}
 
     for name, tensor in state_dict.items():
@@ -264,6 +267,7 @@ def paged_caches_from_torch(
 
 
 def transformers_cache_from_torch(torch_caches: tuple[torch.Tensor, ...]) -> DynamicCache:
+    """Converts a tuple of torch caches to a transformers DynamicCache for Deepseek. Leaves the value caches empty, since Deepseek shares the key and value caches."""
     return DynamicCache.from_legacy_cache(
         tuple(
             (torch_cache, torch.empty((*torch_cache.shape[:-1], 0), dtype=torch_cache.dtype))
@@ -273,15 +277,18 @@ def transformers_cache_from_torch(torch_caches: tuple[torch.Tensor, ...]) -> Dyn
 
 
 def torch_cache_from_transformers(cache: DynamicCache) -> tuple[torch.Tensor, ...]:
+    """Converts a transformers DynamicCache for Deepseek to a tuple of torch caches. Ignores the value caches, since Deepseek shares the key and value caches."""
     torch_cache, _ = zip(*cache.to_legacy_cache())
     return torch_cache
 
 
 def torch_cache_from_transformers_single_layer(cache: DynamicCache, layer_idx: int) -> torch.Tensor:
+    """Extracts the Deepseek cache tensor for a single layer from a transformers DynamicCache. Ignores the value cache, since Deepseek shares the key and value caches."""
     return cache[layer_idx][0]
 
 
 def transformers_cache_single_layer_from_torch(torch_cache: torch.Tensor, layer_idx: int) -> DynamicCache:
+    """Converts a single Deepseek cache tensor to a transformers DynamicCache for a single layer. Initializes the caches for the other layers to be empty."""
     return transformers_cache_from_torch(
         (torch.empty((*torch_cache.shape[:-1], 0), dtype=torch_cache.dtype),) * layer_idx + (torch_cache,)
     )
@@ -296,6 +303,19 @@ def run_reference_with_attention(
     mode: str,
     zeroed_cache: bool,
 ) -> tuple[torch.Tensor, DynamicCache, DynamicCache]:
+    """Runs a reference model with attention arguments.
+    Parameters:
+        `reference_model`: The reference model instance to run.
+        `activation`: The input activation tensor of shape (batch_size, seq_len, dim).
+        `position_ids_or_seq_lens`: In prefill mode, a tensor of shape (1,) containing the sequence length.
+            In decode mode, a tensor of shape (batch_size,) containing the position ids.
+        `layer_idx`: If not None, only runs the specified layer of the model (setting the kv cache appropriately).
+        `hf_config`: The Huggingface model configuration.
+        `mode`: Either "prefill" or "decode".
+        `zeroed_cache`: If True, initializes the kv cache to zeros in decode mode. Otherwise, initializes it randomly.
+    Returns:
+        A tuple of (model output, input cache, output cache).
+    """
     (batch_size,) = position_ids_or_seq_lens.shape
     dim = hf_config.kv_lora_rank + hf_config.qk_rope_head_dim
     num_layers = hf_config.num_hidden_layers
@@ -364,10 +384,15 @@ def run_reference_with_attention(
 def load_reference_io_tensors_for_module(
     mode: Literal["prefill", "decode"],
     module: str,
-    seq_len: int,
+    batch_size_or_seq_len: int,
     num_expand_rows: int,
     concat_dim: int = 1,
 ) -> tuple[torch.Tensor, torch.Tensor]:
+    """Loads and prepares the reference input and output tensors for the specified module and mode.
+    If in decode mode, the inputs and outputs collected for a specified module are concatenated along
+    the specified `concat_dim` dimension, to create a larger batch size. If needed the second dimension
+    is zero-padded or trimmed to match `batch_size_or_seq_len`. Finally, the tensors are expanded along
+    an extra leading dimension to then be sharded across multiple mesh rows."""
     assert mode in ["prefill", "decode"], f"Unsupported mode: {mode}"
 
     reference_io = load_reference_io(mode, module)
@@ -387,12 +412,13 @@ def load_reference_io_tensors_for_module(
         reference_output = torch.concat(reference_outputs, dim=concat_dim)
     torch_input.unsqueeze_(0)
     reference_output.unsqueeze_(0)
-    return pad_or_trim_seq_len(torch_input, mode, seq_len).expand(
+    return pad_or_trim_seq_len(torch_input, mode, batch_size_or_seq_len).expand(
         num_expand_rows, *(-1 for _ in range(torch_input.ndim - 1))
     ), reference_output.expand(num_expand_rows, *(-1 for _ in range(reference_output.ndim - 1)))
 
 
 def load_reference_io(mode: Literal["prefill", "decode"], module_range: str):
+    """Loads the saved reference IO data for the given mode and module range. Uses the DEEPSEEK_V3_CACHE environment variable to locate the cache directory."""
     path = (
         Path(os.getenv("DEEPSEEK_V3_CACHE", "/proj_sw/user_dev/deepseek-v3-cache"))
         / f"test_io_cache/{mode}.{module_range}.pt"
@@ -451,6 +477,11 @@ def run_module_forward(ModuleClass: type[AbstractModule], mode: Literal["prefill
 def assert_hidden_dim_pcc(
     tt_output_torch: torch.Tensor, reference_output: torch.Tensor, pcc_required: float = 0.98
 ) -> float:
+    """
+    Asserts that PCC between the two tensors is above the required threshold.
+    If necessary, trims the second to last dimension (sequence length or batch size) 
+    of one of the tensors to match the second one. Returns the computed PCC.
+    """
     tt_output_torch = tt_output_torch.cpu().float()
     assert (
         all(
@@ -492,6 +523,7 @@ def get_rope_tensors(
     position_ids: torch.Tensor | None,
     mesh_device: ttnn.MeshDevice,
 ) -> dict[str, ttnn.Tensor]:
+    """Wrapper around RotarySetup for the purposes of testing to get the RoPE tensors dict."""
     rope_setup = RotarySetup(
         device=mesh_device,
         batch_size_per_row=batch_size_per_row,
