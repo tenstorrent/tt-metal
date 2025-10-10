@@ -48,8 +48,11 @@ def _compute_metrics(reference: torch.Tensor, test: torch.Tensor) -> dict:
     # Relative error with better protection against division by zero
     denominator = torch.abs(reference)
     # Use max of denominator and a small epsilon to avoid division by zero
+    # Use 1e-10 as minimum denominator to avoid division by zero while being much smaller
+    # than typical floating point values, ensuring numerical stability without masking real errors
+    min_denominator = 1e-10
     safe_denominator = torch.maximum(
-        denominator, torch.tensor(1e-10, dtype=denominator.dtype, device=denominator.device)
+        denominator, torch.tensor(min_denominator, dtype=denominator.dtype, device=denominator.device)
     )
     rel_error = torch.abs(reference - test) / safe_denominator
 
@@ -268,11 +271,11 @@ def run_experiments() -> dict:
     results[ShapeType.MULTI_TILE_KEY] = _run_shape_experiments(multi_tile_shape, operations, axes, device)
 
     # Test 3: Rectangular shapes (to test non-square behavior)
-    # logger.info("=== Running rectangular experiments ===")
-    # rect_shapes = [(32, 128), (128, 32), (64, 256)]
-    # for shape in rect_shapes:
-    #     key = ShapeType.RECTANGULAR_KEY + "-" + str(shape)
-    #     results[key] = _run_shape_experiments(shape, operations, axes, device)
+    logger.info("=== Running rectangular experiments ===")
+    rect_shapes = [(32, 128), (128, 32), (64, 256)]
+    for shape in rect_shapes:
+        key = ShapeType.RECTANGULAR_KEY + "-" + str(shape)
+        results[key] = _run_shape_experiments(shape, operations, axes, device)
 
     ttnn.close_device(device)
 
