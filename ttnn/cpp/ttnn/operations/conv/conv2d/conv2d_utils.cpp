@@ -849,6 +849,7 @@ Conv2dConfig determine_conv_config_for_auto_shard(
     tt::tt_metal::DataType output_datatype,
     std::optional<const MemoryConfig> input_memory_config,
     const std::array<uint32_t, 2>& kernel_size,
+    const std::array<uint32_t, 2>& stride,
     const std::array<uint32_t, 2>& dilation,
     const std::array<uint32_t, 4>& padding,
     uint32_t groups,
@@ -897,9 +898,9 @@ Conv2dConfig determine_conv_config_for_auto_shard(
         // Set act_block_h_override to min value to be conservative with L1 memory usage;
         // When activation reuse is enabled, the activation CB usage is constant regardless of the act_block_h_override
         // and the bigger the act block height the better the reuse since we apply optimization within single act block
-        if (conv_config.act_block_h_override == 0 && !conv_config.enable_activation_reuse) {
-            conv_config.act_block_h_override = tt::constants::TILE_HEIGHT;
-        }
+        // if (conv_config.act_block_h_override == 0 && !conv_config.enable_activation_reuse) {
+        //     conv_config.act_block_h_override = tt::constants::TILE_HEIGHT;
+        // }
 
         const uint32_t input_channels_alignment =
             get_input_channels_alignment(shard_layout, input_layout, false, is_mm_conv, std::nullopt);
@@ -985,8 +986,21 @@ Conv2dConfig determine_conv_config_for_auto_shard(
             conv_config.act_block_h_override));
 
         auto halo_input_shard_shape = halo_input_memory_config.shard_spec().value().shape;
-        uint32_t approx_input_size_per_core = estimate_halo_output_elems(
-            halo_input_shard_shape, batch_size, input_height, input_width, kernel_size, dilation, padding);
+
+        // Create SlidingWindowConfig for precise halo calculation
+        SlidingWindowConfig halo_config;
+        halo_config.batch_size = batch_size;
+        halo_config.input_hw = {input_height, input_width};
+        halo_config.window_hw = {kernel_size[0], kernel_size[1]};
+        halo_config.stride_hw = {stride[0], stride[1]};
+        halo_config.padding = padding;
+        halo_config.dilation_hw = {dilation[0], dilation[1]};
+        halo_config.num_cores_nhw = get_num_cores_nhw_from_parallel_config(input_parallel_config);
+        halo_config.core_range_set = halo_input_memory_config.shard_spec().value().grid;
+        halo_config.snap_to_tile = true;
+
+        uint32_t precise_input_size_per_core =
+            sliding_window::calculate_precise_halo_output_elems(halo_config, halo_input_shard_shape);
 
         log_trace(
             tt::LogOp,
@@ -995,8 +1009,8 @@ Conv2dConfig determine_conv_config_for_auto_shard(
             halo_input_memory_config,
             l1_usage.tensor_allocation_size,
             l1_usage.CB_allocation_size,
-            approx_input_size_per_core);
-        l1_usage.tensor_allocation_size += approx_input_size_per_core * input_datum_size;
+            precise_input_size_per_core);
+        l1_usage.tensor_allocation_size += precise_input_size_per_core * input_datum_size;
 
         return core_count_and_size{
             .core_count = std::max(input_parallel_config.grid.num_cores(), output_parallel_config.grid.num_cores()),
@@ -1075,45 +1089,6 @@ std::tuple<Conv2dParallelizationConfig, Conv2dBlockConfig, MemoryConfig> get_con
     return {opt_conv_op_parallel_config, opt_conv_op_block_config, conv_out_memory_config};
 }
 
-uint32_t estimate_halo_output_elems(
-    std::array<uint32_t, 2> halo_input_shard_shape,
-    uint32_t batch_size,
-    uint32_t input_height,
-    uint32_t input_width,
-    std::array<uint32_t, 2> kernel_size,
-    std::array<uint32_t, 2> dilation,
-    std::array<uint32_t, 4> padding) {
-    // When the shard begins in the middle of the tensor's width, we have two partial rows. This increases the number of
-    // rows of the shard. This causes halo to bring in extra rows of unused data. When batch_boundary_multiplier > 1, we
-    // can take the exact size.
-    float shard_height = batch_size > 1 ? halo_input_shard_shape[0] / input_width
-                                        : tt::div_up(halo_input_shard_shape[0], (float)input_width);
-
-    uint32_t shard_batches = shard_height / input_height;
-    // Halo adds the overlap region of the input tensor that is needed for the convolution.
-    //  As width is the faster changing dimension, we typically have the entire width in every shard.
-    //  For each shard, it's the additional height from adjacent shards that is needed to cover the kernel size and
-    //  dilation.
-
-    // At the boundary between two batches, the additional height is needed another time. If a single shard contains
-    // more than one batch, then the additional height is needed for each batch in the shard.
-    uint32_t batch_boundary_multiplier = (batch_size > 1) ? (shard_batches + 2) : 1;
-
-    uint32_t approx_max_halo_num_sticks =
-        (shard_height + (dilation[0] * kernel_size[0] - 1) * batch_boundary_multiplier) *
-        (input_width + padding[2] + padding[3]);
-
-    uint32_t approx_max_halo_size = approx_max_halo_num_sticks * halo_input_shard_shape[1];
-    log_trace(
-        tt::LogOp,
-        "Halo Max Size Approximation, Shard Shape: {}, Shard Height: {}, Batch Multiplier: {}, Max Num Sticks : {}",
-        halo_input_shard_shape,
-        shard_height,
-        batch_boundary_multiplier,
-        approx_max_halo_num_sticks);
-    return approx_max_halo_size;
-};
-
 // Decide whether to slice along height or width based on input dimensions and output layout
 // We ideally want to slice along the width dimension as it results in smaller halo size
 // However, in case of very tall and narrow inputs, slicing along height is preferred to avoid
@@ -1169,7 +1144,8 @@ static std::pair<uint32_t, Conv2dConfig> calculate_conv_dram_slice_L1_usage(
                                           uint32_t input_slice_width,
                                           uint32_t output_slice_height,
                                           uint32_t output_slice_width,
-                                          uint32_t num_slices) {
+                                          uint32_t num_slices,
+                                          const std::array<uint32_t, 4>& slice_padding) {
         log_trace(
             tt::LogOp,
             "Conv2D DRAM Auto Slice Max Input Size : {}x{}, Max Output Size : {}x{}",
@@ -1198,8 +1174,9 @@ static std::pair<uint32_t, Conv2dConfig> calculate_conv_dram_slice_L1_usage(
                 params.output_datatype,
                 DRAM_MEMORY_CONFIG,
                 params.kernel_size,
+                params.stride,
                 params.dilation,
-                {0, 0, 0, 0},
+                params.padding_n4,
                 params.groups,
                 params.enable_bias,
                 params.compute_kernel_config);
@@ -1274,24 +1251,30 @@ static std::pair<uint32_t, Conv2dConfig> calculate_conv_dram_slice_L1_usage(
 
         uint32_t input_size = shard_shape[0] * shard_shape[1] * input_datum_size;
 
-        uint32_t approx_max_halo_bytes = estimate_halo_output_elems(
-                                             shard_shape,
-                                             params.batch_size,
-                                             input_slice_height,
-                                             input_slice_width,
-                                             params.kernel_size,
-                                             params.dilation,
-                                             params.padding_n4) *
-                                         input_datum_size;
-        log_trace(
+        // Create SlidingWindowConfig for precise halo calculation
+        SlidingWindowConfig slice_halo_config;
+        slice_halo_config.batch_size = params.batch_size;
+        slice_halo_config.input_hw = {input_slice_height, input_slice_width};
+        slice_halo_config.window_hw = {params.kernel_size[0], params.kernel_size[1]};
+        slice_halo_config.stride_hw = {params.stride[0], params.stride[1]};
+        slice_halo_config.padding = slice_padding;
+        slice_halo_config.dilation_hw = {params.dilation[0], params.dilation[1]};
+        slice_halo_config.num_cores_nhw = get_num_cores_nhw_from_parallel_config(parallel_config);
+        slice_halo_config.core_range_set = sliced_input_tensor_memory_config.shard_spec().value().grid;
+        slice_halo_config.snap_to_tile = true;
+
+        uint32_t precise_max_halo_bytes =
+            sliding_window::calculate_precise_halo_output_elems(slice_halo_config, shard_shape) * input_datum_size;
+
+        log_info(
             tt::LogOp,
-            "Conv DRAM Auto slicing: num_slices = {}, input_shard_shape = {}, approx_max_halo_bytes = {}, conv size = "
+            "Conv DRAM Auto slicing: num_slices = {}, input_shard_shape = {}, precise_max_halo_bytes = {}, conv size = "
             "{}",
             dram_slice_config.num_slices,
             sliced_input_tensor_memory_config.shard_spec().value(),
-            approx_max_halo_bytes,
+            precise_max_halo_bytes,
             l1_usage);
-        return std::make_tuple(l1_usage, input_size, approx_max_halo_bytes);
+        return std::make_tuple(l1_usage, input_size, precise_max_halo_bytes);
     };
 
     const uint32_t min_output_slice_size =
@@ -1358,8 +1341,8 @@ static std::pair<uint32_t, Conv2dConfig> calculate_conv_dram_slice_L1_usage(
                 continue;
             }
         }
-        uint32_t input_slice_width = (input_slice_width_end - input_slice_width_start) + pad_left + pad_right;
-        uint32_t input_slice_height = (input_slice_height_end - input_slice_height_start) + pad_top + pad_bottom;
+        uint32_t input_slice_width = (input_slice_width_end - input_slice_width_start);
+        uint32_t input_slice_height = (input_slice_height_end - input_slice_height_start);
         uint32_t output_slice_width = output_slice_width_end - output_slice_width_start;
         uint32_t output_slice_height = output_slice_height_end - output_slice_height_start;
         if (output_slice_width % width_rounding_value != 0) {
@@ -1390,12 +1373,18 @@ static std::pair<uint32_t, Conv2dConfig> calculate_conv_dram_slice_L1_usage(
             input_slice_height_end,
             input_slice_width_end);
 
+        std::array<uint32_t, 4> slice_padding = {
+            static_cast<uint32_t>(pad_top),
+            static_cast<uint32_t>(pad_bottom),
+            static_cast<uint32_t>(pad_left),
+            static_cast<uint32_t>(pad_right)};
         auto [this_slice_l1_usage, this_slice_input_size, this_slice_approx_max_halo_size] = compute_l1_usage_for_slice(
             input_slice_height,
             input_slice_width,
             output_slice_height,
             output_slice_width,
-            dram_slice_config.num_slices);
+            dram_slice_config.num_slices,
+            slice_padding);
 
         output_slice_dim_start += output_slice_size;
         slice_index++;

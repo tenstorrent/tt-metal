@@ -122,6 +122,9 @@ std::vector<PixelMetadata> generate_tensor_metadata(
 
 uint32_t generate_max_out_nsticks_per_core(const std::vector<ShardBoundary>& shard_boundaries);
 
+uint32_t calculate_precise_halo_output_elems(
+    const SlidingWindowConfig& config, const std::array<uint32_t, 2>& shard_shape);
+
 std::tuple<std::vector<std::vector<std::vector<uint16_t>>>, int> generate_inplace_halo_kernel_config_tensors(
     const std::vector<PixelMetadata>& tensor_metadata,
     const std::vector<ShardBoundary>& shard_boundaries,
