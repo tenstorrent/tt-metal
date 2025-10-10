@@ -531,12 +531,12 @@ def create_integrated_visualization(input_file, output_file=None):
     # Determine output filename
     if output_file is None:
         input_path = Path(input_file)
-        output_file = f"integrated_operations_analysis_{input_path.stem}.png"
+        output_file = f"model_performance_analysis.png"
 
     plt.savefig(output_file, dpi=300, bbox_inches="tight")
     plt.close()
 
-    print(f"🎉 Successfully created integrated visualization: {output_file}")
+    print(f"🎉 Successfully created model performance visualization: {output_file}")
     print(f"📊 Processed {len(model_data)} models with {len(all_categories)} operation categories")
 
 

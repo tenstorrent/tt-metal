@@ -14,7 +14,7 @@ Usage:
                 - A single .csv or .xlsx file
                 - A folder containing .csv files (searches recursively in subdirectories)
                   Creates combined Excel with tabs for each CSV found
-                  Note: Automatically ignores profile_log_device.csv files
+                  Note: Automatically ignores profile_log_device.csv and per_core_op_to_op_times*.csv files
     output_directory: Optional, defaults to current directory
 """
 
@@ -50,18 +50,31 @@ class ExcelProcessor:
             csv_pattern = str(self.input_path / "**" / "*.csv")
             all_csv_files = [Path(f) for f in glob.glob(csv_pattern, recursive=True)]
 
-            # Filter out profile_log_device.csv files
-            self.csv_files = [f for f in all_csv_files if f.name != "profile_log_device.csv"]
+            # Filter out profile_log_device.csv and per_core_op_to_op_times*.csv files
+            self.csv_files = [
+                f
+                for f in all_csv_files
+                if f.name != "profile_log_device.csv" and not f.name.startswith("per_core_op_to_op_times")
+            ]
 
             # Report filtering if any files were excluded
             excluded_count = len(all_csv_files) - len(self.csv_files)
             if excluded_count > 0:
-                print(f"📋 Filtered out {excluded_count} profile_log_device.csv file(s)")
+                excluded_types = []
+                profile_log_count = len([f for f in all_csv_files if f.name == "profile_log_device.csv"])
+                per_core_count = len([f for f in all_csv_files if f.name.startswith("per_core_op_to_op_times")])
+
+                if profile_log_count > 0:
+                    excluded_types.append(f"{profile_log_count} profile_log_device.csv file(s)")
+                if per_core_count > 0:
+                    excluded_types.append(f"{per_core_count} per_core_op_to_op_times*.csv file(s)")
+
+                print(f"📋 Filtered out {excluded_count} files: {', '.join(excluded_types)}")
 
             if not self.csv_files:
                 if excluded_count > 0:
                     raise ValueError(
-                        f"No processable CSV files found in folder (excluding {excluded_count} profile_log_device.csv files): {self.input_path}"
+                        f"No processable CSV files found in folder (excluding {excluded_count} system files): {self.input_path}"
                     )
                 else:
                     raise ValueError(f"No CSV files found in folder (including subfolders): {self.input_path}")
@@ -93,12 +106,28 @@ class ExcelProcessor:
         print(f"📄 Processing CSV file: {csv_file}")
 
         try:
-            # Read CSV
-            df = pd.read_csv(csv_file)
+            # Read CSV with better error handling
+            try:
+                df = pd.read_csv(csv_file)
+            except pd.errors.EmptyDataError:
+                print(f"      ❌ Error: CSV file is empty: {csv_file}")
+                return None
+            except pd.errors.ParserError as e:
+                print(f"      ❌ Error: Failed to parse CSV file {csv_file}: {e}")
+                return None
+            except UnicodeDecodeError as e:
+                print(f"      ❌ Error: Encoding issue in CSV file {csv_file}: {e}")
+                try:
+                    # Try with different encoding
+                    df = pd.read_csv(csv_file, encoding="latin-1")
+                    print(f"      ✅ Successfully read with latin-1 encoding")
+                except Exception as e2:
+                    print(f"      ❌ Error: Failed with alternative encoding: {e2}")
+                    return None
 
             # Check if DataFrame is empty
             if df.empty:
-                print(f"      ⚠️  Warning: CSV file is empty: {csv_file}")
+                print(f"      ⚠️  Warning: CSV file contains no data: {csv_file}")
                 return None
 
             print(f"      📊 Raw data: {len(df)} rows, {len(df.columns)} columns")
@@ -111,6 +140,7 @@ class ExcelProcessor:
             if missing_cols:
                 print(f"      ⚠️  Warning: Missing required columns {missing_cols} in {csv_file}")
                 print(f"      📋 Available columns: {list(df.columns)}")
+
                 # Try to find similar columns
                 if "OP CODE" not in df.columns:
                     # Look for similar column names
@@ -120,6 +150,28 @@ class ExcelProcessor:
                         df.rename(columns={op_cols[0]: "OP CODE"}, inplace=True)
                     else:
                         print(f"      ❌ Cannot process file - no OP CODE column found")
+                        return None
+
+                # Check for CORE COUNT alternatives
+                if "CORE COUNT" not in df.columns:
+                    core_cols = [col for col in df.columns if "CORE" in col.upper() and "COUNT" in col.upper()]
+                    if core_cols:
+                        print(f"      💡 Found similar CORE COUNT column: {core_cols[0]}")
+                        df.rename(columns={core_cols[0]: "CORE COUNT"}, inplace=True)
+                    else:
+                        print(f"      ❌ Cannot process file - no CORE COUNT column found")
+                        return None
+
+                # Check for DURATION alternatives
+                if "DEVICE KERNEL DURATION [ns]" not in df.columns:
+                    duration_cols = [col for col in df.columns if "DURATION" in col.upper() and "ns" in col.lower()]
+                    if not duration_cols:
+                        duration_cols = [col for col in df.columns if "DURATION" in col.upper()]
+                    if duration_cols:
+                        print(f"      💡 Found similar DURATION column: {duration_cols[0]}")
+                        df.rename(columns={duration_cols[0]: "DEVICE KERNEL DURATION [ns]"}, inplace=True)
+                    else:
+                        print(f"      ❌ Cannot process file - no DURATION column found")
                         return None
 
                 # Check again after renaming
@@ -160,10 +212,15 @@ class ExcelProcessor:
             print(f"      📊 Processing {len(available_cols)} available columns")
             df = df[available_cols]
 
-            # Find first non-nan row in CORE COUNT
-            first_index = df["CORE COUNT"].first_valid_index()
-            if first_index is not None:
-                df = df.iloc[first_index:]
+            # Find first non-nan row in CORE COUNT with error handling
+            try:
+                first_index = df["CORE COUNT"].first_valid_index()
+                if first_index is not None:
+                    df = df.iloc[first_index:]
+                else:
+                    print(f"      ⚠️  Warning: No valid CORE COUNT data found")
+            except Exception as e:
+                print(f"      ⚠️  Warning: Error processing CORE COUNT column: {e}")
 
             # Check if DataFrame is empty after filtering
             if df.empty:
@@ -178,23 +235,39 @@ class ExcelProcessor:
             df.rename(columns=lambda x: x.replace("INPUT_", "IN_"), inplace=True)
             df.rename(columns=lambda x: x.replace("OUTPUT_", "OUT_"), inplace=True)
 
-            # Clean up OP CODE values
-            df = df.replace("InterleavedToShardedDeviceOperation", "I2S", regex=True)
-            df = df.replace("ShardedToInterleavedDeviceOperation", "S2I", regex=True)
-            df = df.replace("DeviceOperation", "", regex=True)
-            df = df.replace("DEV_0_", "", regex=True)
+            # Clean up OP CODE values with error handling
+            try:
+                df = df.replace("InterleavedToShardedDeviceOperation", "I2S", regex=True)
+                df = df.replace("ShardedToInterleavedDeviceOperation", "S2I", regex=True)
+                df = df.replace("DeviceOperation", "", regex=True)
+                df = df.replace("DEV_0_", "", regex=True)
+            except Exception as e:
+                print(f"      ⚠️  Warning: Error cleaning OP CODE values: {e}")
 
-            # Convert data types
-            df = df.convert_dtypes()
+            # Convert data types with error handling
+            try:
+                df = df.convert_dtypes()
+            except Exception as e:
+                print(f"      ⚠️  Warning: Error converting data types: {e}")
 
-            # Calculate total duration before formatting
-            total_duration = df["DEVICE KERNEL DURATION [ns]"].sum()
-            print(f"      📈 Total duration: {total_duration:,} ns ({len(df)} operations)")
+            # Calculate total duration before formatting with error handling
+            try:
+                total_duration = df["DEVICE KERNEL DURATION [ns]"].sum()
+                print(f"      📈 Total duration: {total_duration:,} ns ({len(df)} operations)")
+            except Exception as e:
+                print(f"      ⚠️  Warning: Error calculating total duration: {e}")
+                print(f"      📈 Processed {len(df)} operations")
 
             return df
 
+        except FileNotFoundError:
+            print(f"      ❌ Error: File not found: {csv_file}")
+            return None
+        except PermissionError:
+            print(f"      ❌ Error: Permission denied accessing file: {csv_file}")
+            return None
         except Exception as e:
-            print(f"      ❌ Error processing CSV file {csv_file}: {e}")
+            print(f"      ❌ Error: Unexpected error processing CSV file {csv_file}: {type(e).__name__}: {e}")
             return None
 
     def process_csv_to_excel(self):
@@ -234,7 +307,7 @@ class ExcelProcessor:
                     # Skip if DataFrame is None or empty
                     if df is None or df.empty:
                         print(f"      ⚠️  Skipping - no valid data")
-                        failed_files.append(csv_file.name)
+                        failed_files.append((csv_file.name, "No valid data"))
                         continue
 
                     # Create sheet name from CSV filename with subdirectory info if needed
@@ -269,14 +342,19 @@ class ExcelProcessor:
                         sheet_name = f"{original_name[:28]}_{counter}"
                         counter += 1
 
-                    # Write to Excel sheet
-                    df.to_excel(writer, sheet_name=sheet_name, index=False)
-                    successful_sheets.append({"name": sheet_name, "file": csv_file.name, "rows": len(df)})
-                    print(f"      ✅ Created sheet: '{sheet_name}' with {len(df)} rows")
+                    # Write to Excel sheet with error handling
+                    try:
+                        df.to_excel(writer, sheet_name=sheet_name, index=False)
+                        successful_sheets.append({"name": sheet_name, "file": csv_file.name, "rows": len(df)})
+                        print(f"      ✅ Created sheet: '{sheet_name}' with {len(df)} rows")
+                    except Exception as e:
+                        print(f"      ❌ Error writing to Excel sheet: {e}")
+                        failed_files.append((csv_file.name, f"Excel write error: {e}"))
+                        continue
 
                 except Exception as e:
-                    print(f"      ❌ Error processing {csv_file.name}: {e}")
-                    failed_files.append(csv_file.name)
+                    print(f"      ❌ Error processing {csv_file.name}: {type(e).__name__}: {e}")
+                    failed_files.append((csv_file.name, f"Processing error: {e}"))
                     continue
 
         # Check if any sheets were created successfully
@@ -291,8 +369,12 @@ class ExcelProcessor:
 
         if failed_files:
             print(f"   ⚠️  Failed files: {len(failed_files)}")
-            for failed_file in failed_files:
-                print(f"      - {failed_file}")
+            for failed_file, error_reason in failed_files:
+                print(f"      - {failed_file}: {error_reason}")
+
+        print(
+            f"   📊 Success rate: {len(successful_sheets)}/{len(self.csv_files)} ({len(successful_sheets)/len(self.csv_files)*100:.1f}%)"
+        )
 
         return self.excel_file
 
@@ -374,48 +456,57 @@ class ExcelProcessor:
 
                     # Process data rows (starting from row 2)
                     for row_idx in range(2, max_row + 1):
-                        original_cell = ws[f"{duration_col_letter}{row_idx}"]
-                        new_cell = ws[f"{new_col_letter}{row_idx}"]
+                        try:
+                            original_cell = ws[f"{duration_col_letter}{row_idx}"]
+                            new_cell = ws[f"{new_col_letter}{row_idx}"]
 
-                        if original_cell.value is not None:
-                            try:
-                                # Convert to number (remove commas if present)
-                                if isinstance(original_cell.value, str):
-                                    # Remove commas and convert to int
-                                    numeric_value = int(original_cell.value.replace(",", ""))
-                                else:
-                                    numeric_value = int(original_cell.value)
+                            if original_cell.value is not None:
+                                try:
+                                    # Convert to number (remove commas if present)
+                                    if isinstance(original_cell.value, str):
+                                        # Remove commas and convert to int
+                                        numeric_value = int(original_cell.value.replace(",", ""))
+                                    else:
+                                        numeric_value = int(original_cell.value)
 
-                                new_cell.value = numeric_value
-                                new_cell.style = comma_style
-                                data_rows += 1
+                                    new_cell.value = numeric_value
+                                    new_cell.style = comma_style
+                                    data_rows += 1
 
-                            except (ValueError, AttributeError):
-                                # If conversion fails, copy as-is
-                                new_cell.value = original_cell.value
+                                except (ValueError, AttributeError, TypeError) as e:
+                                    # If conversion fails, copy as-is
+                                    new_cell.value = original_cell.value
+                                    print(f"      ⚠️  Warning: Could not convert value in row {row_idx}: {e}")
+                        except Exception as e:
+                            print(f"      ⚠️  Warning: Error processing row {row_idx}: {e}")
+                            continue
 
                     if data_rows > 0:
-                        # Apply Data Bar conditional formatting
-                        # Define the range for data bars (excluding header)
-                        data_range = f"{new_col_letter}2:{new_col_letter}{max_row}"
+                        try:
+                            # Apply Data Bar conditional formatting
+                            # Define the range for data bars (excluding header)
+                            data_range = f"{new_col_letter}2:{new_col_letter}{max_row}"
 
-                        # Create data bar rule with blue gradient
-                        data_bar_rule = DataBarRule(
-                            start_type="min",
-                            start_value=None,
-                            end_type="max",
-                            end_value=None,
-                            color="5B9BD5",  # Blue color
-                            showValue=True,
-                            minLength=None,
-                            maxLength=None,
-                        )
+                            # Create data bar rule with blue gradient
+                            data_bar_rule = DataBarRule(
+                                start_type="min",
+                                start_value=None,
+                                end_type="max",
+                                end_value=None,
+                                color="5B9BD5",  # Blue color
+                                showValue=True,
+                                minLength=None,
+                                maxLength=None,
+                            )
 
-                        # Apply the rule to the range
-                        ws.conditional_formatting.add(data_range, data_bar_rule)
+                            # Apply the rule to the range
+                            ws.conditional_formatting.add(data_range, data_bar_rule)
 
-                        print(f"      ✅ Added formatted column (Column D) with {data_rows} data bars")
-                        processed_sheets += 1
+                            print(f"      ✅ Added formatted column (Column D) with {data_rows} data bars")
+                            processed_sheets += 1
+                        except Exception as e:
+                            print(f"      ⚠️  Warning: Could not add data bars: {e}")
+                            processed_sheets += 1
                     else:
                         print(f"      ⚠️  No data rows found")
                 else:
@@ -423,7 +514,7 @@ class ExcelProcessor:
                     processed_sheets += 1
 
             except Exception as e:
-                print(f"      ❌ Error processing sheet: {e}")
+                print(f"      ❌ Error processing sheet '{sheet_name}': {type(e).__name__}: {e}")
                 continue
 
         # Save the modified workbook
