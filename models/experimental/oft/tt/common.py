@@ -7,16 +7,22 @@ import torch
 import math
 from loguru import logger
 
+from models.common.lightweightmodule import LightweightModule
+
 
 def _nearest_32_per_core(x, core):
     return math.ceil(x / core / 32) * 32 * core
 
 
+def _nearest_k(x, k):
+    return math.ceil(x / k) * k
+
+
 def _nearest_32(x):
-    return math.ceil(x / 32) * 32
+    return _nearest_k(x, 32)
 
 
-class Conv:
+class Conv(LightweightModule):
     def __init__(
         self,
         parameters,
@@ -26,7 +32,7 @@ class Conv:
         padding=1,
         act_block_h=32,
         reshard=False,
-        deallocate=False,
+        deallocate_activation=False,
         height_sharding=None,
         activation=None,
         width_sharding=False,
@@ -93,7 +99,7 @@ class Conv:
         else:
             self.shard_layout = None
 
-        self.deallocate = deallocate
+        self.deallocate_activation = deallocate_activation
         self.activation = activation
         self.is_sliced = is_sliced
         self.slice_config = ttnn.Conv2dL1FullSliceConfig
@@ -110,7 +116,9 @@ class Conv:
         conv_config = ttnn.Conv2dConfig(
             weights_dtype=self.weights_dtype,
             shard_layout=self.shard_layout,
-            deallocate_activation=self.deallocate,
+            deallocate_activation=self.deallocate_activation
+            if input_tensor.memory_config().buffer_type == ttnn.BufferType.L1
+            else False,
             activation=self.activation,
             # reshard_if_not_optimal=True,
             output_layout=self.output_layout,
@@ -151,51 +159,65 @@ class Conv:
         return output_tensor, out_h, out_w
 
 
-class GroupNorm:
-    def __init__(self, parameters, num_groups, channels, eps=1e-5, dtype=ttnn.bfloat16, is_sliced=False):
+class GroupNorm(LightweightModule):
+    def __init__(self, device, parameters, arguments, dtype=ttnn.bfloat16, sharding="HS"):
+        self.device = device
         self.weight = parameters.weight
         self.bias = parameters.bias
-        self.num_groups = num_groups
-        self.channels = channels
-        self.eps = eps
+        self.num_groups = arguments.num_groups
+        self.channels = arguments.num_channels
+        self.eps = arguments.eps
+        self.height = arguments.input_height
+        self.width = arguments.input_width
         self.dtype = dtype
-        self.is_sliced = is_sliced
-        self.num_splited_groups = num_groups
-        self.num_splited_channels = channels
+        self.sharding = sharding
 
-    def __call__(self, device, input_tensor, H, W, shard="HS", num_splits=1):
         compute_grid = device.compute_with_storage_grid_size()
-        grid_size = ttnn.CoreGrid(y=compute_grid.y, x=compute_grid.x)
-        grid_y = grid_size.y
-        grid_x = grid_size.x
-        logger.debug(f"{grid_x=}, {grid_y=}, {shard=}, {num_splits=} {self.is_sliced=}")
+        self.grid_size = ttnn.CoreGrid(y=compute_grid.y, x=compute_grid.x)
+        # self.grid_size = ttnn.CoreGrid(y=4, x=4)
+
+        # to check: col/row shard orientation plays into how we interpret grid x/y
+        self.grid_y = self.grid_size.y
+        self.grid_x = self.grid_size.x
+
         # spliting tensor into multiple splits for very large tensors
 
-        if shard == "HS":
-            grid_x *= grid_y
-            grid_y = 1
+        if self.sharding == "HS":
+            self.grid_x *= self.grid_y
+            self.grid_y = 1
 
         # Generate input mask
-        input_mask_tensor = ttnn.create_group_norm_input_mask(self.channels, self.num_groups, grid_y)
-        input_mask_tensor = ttnn.from_torch(
+        input_mask_tensor = ttnn.create_group_norm_input_mask(self.channels, self.num_groups, self.grid_y)
+        self.input_mask_tensor = ttnn.from_torch(
             input_mask_tensor,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        # Generate gamma/beta tensors
-        gamma = ttnn.create_group_norm_weight_bias_rm(self.weight, self.channels, grid_y)
-        beta = ttnn.create_group_norm_weight_bias_rm(self.bias, self.channels, grid_y)
+        input_negative_mask_tensor = ttnn.create_group_norm_input_negative_mask(
+            self.channels, self.num_groups, self.grid_y
+        )
+        self.input_negative_mask_tensor = ttnn.from_torch(
+            input_negative_mask_tensor,
+            dtype=ttnn.DataType.BFLOAT8_B,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
 
-        gamma_t = ttnn.from_torch(
+        # Generate gamma/beta tensors
+        gamma = ttnn.create_group_norm_weight_bias_rm(self.weight, self.channels, self.grid_y)
+        beta = ttnn.create_group_norm_weight_bias_rm(self.bias, self.channels, self.grid_y)
+
+        self.gamma_t = ttnn.from_torch(
             gamma,
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        beta_t = ttnn.from_torch(
+        self.beta_t = ttnn.from_torch(
             beta,
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -203,41 +225,84 @@ class GroupNorm:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         # Generate shard config
-        grid_coord = ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1)
-        shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
-        if shard == "HS":
+        if self.sharding == "HS":
             # logger.debug(f"Shard height: {H}, width: {W}, grid_size: {grid_size}")
-            shard_shape = (H * W) // grid_size.x // grid_size.y, self.channels
-            # logger.debug(f"Shard shape: {shard_shape}")
-            shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
-            sharded_mem_config = ttnn.MemoryConfig(
-                ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
+            # shard_shape = math.ceil(self.height * self.width / self.grid_size.x / self.grid_size.y / 32) * 32, self.channels
+            # # logger.debug(f"Shard shape: {shard_shape}")
+            # shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+            # sharded_mem_config = ttnn.MemoryConfig(
+            #     ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
+            # )
+            self.padded_nhw = _nearest_k(self.width * self.height, 32 * self.grid_size.x * self.grid_size.y)
+            # self.padded_nhw = _nearest_32(self.width * self.height)
+            sharded_mem_config = ttnn.create_sharded_memory_config_(
+                shape=(1, 1, self.padded_nhw, self.channels),
+                core_grid=self.grid_size,
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                tile_layout=True,
             )
-        elif shard == "BS":
-            shard_shape = (H * W) // grid_size.x, self.channels // grid_size.y
+            logger.warning(f"{sharded_mem_config=}")
+        elif self.sharding == "BS":
+            grid_coord = ttnn.CoreCoord(self.grid_size.x - 1, self.grid_size.y - 1)
+            shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
+            shard_shape = (self.height * self.width) // self.grid_size.x, self.channels // self.grid_size.y
             shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.COL_MAJOR)
             sharded_mem_config = ttnn.MemoryConfig(
                 ttnn.types.TensorMemoryLayout.BLOCK_SHARDED, ttnn.types.BufferType.L1, shard_spec
             )
+        self.sharded_mem_config = sharded_mem_config
+
+    def __call__(self, input_tensor):
         # logger.debug(
         #     f"input tensor shape: {input_tensor.shape}, layout: {input_tensor.layout} memory config: {input_tensor.memory_config}"
         # )
-        input_tensor = ttnn.to_memory_config(input_tensor, memory_config=sharded_mem_config)
+
+        # logger.warning(f"1️⃣{input_tensor.memory_config()=}, {input_tensor.shape=}, {input_tensor.padded_shape=} {input_tensor.layout=}")
+        # input_tensor = ttnn.to_layout(input_tensor, layout=ttnn.TILE_LAYOUT)
+        # logger.warning(f"2️⃣ {input_tensor.memory_config()=}, {input_tensor.shape=}, {input_tensor.padded_shape=} {input_tensor.layout=}")
+        # if (input_tensor.padded_shape[-2] == 25312):
+        # input_tensor = ttnn.pad(input_tensor, [(0, 0), (0, 0), (0, 288), (0, 0)], 0)
+        # figure out how to not pad logical shape
+        # input_tensor = ttnn.reshape(input_tensor,
+        #                             input_tensor.shape,
+        #                             ttnn.Shape([1, 1, self.padded_nhw, input_tensor.shape[3]]))
+        logger.warning(
+            f"3️⃣ {input_tensor.memory_config()=}, {input_tensor.shape=}, {input_tensor.padded_shape=} {input_tensor.layout=}"
+        )
+        input_tensor = ttnn.to_memory_config(input_tensor, memory_config=self.sharded_mem_config)
+        logger.warning(
+            f"4️⃣ {input_tensor.memory_config()=}, {input_tensor.shape=}, {input_tensor.padded_shape=} {input_tensor.layout=}"
+        )
         tt_output_tensor = ttnn.group_norm(
             input_tensor,
             num_groups=self.num_groups,
-            input_mask=input_mask_tensor,
-            weight=gamma_t,
-            bias=beta_t,
-            memory_config=sharded_mem_config,
-            core_grid=grid_size,
-            epsilon=1e-5,
-            # inplace=False,
+            input_mask=self.input_mask_tensor,
+            # negative_mask=self.input_negative_mask_tensor,
+            weight=self.gamma_t,
+            bias=self.beta_t,
+            memory_config=self.sharded_mem_config,
+            core_grid=self.grid_size,
+            epsilon=self.eps,
+            inplace=False,
         )
+        logger.warning(
+            f"5️⃣ {tt_output_tensor.memory_config()=}, {tt_output_tensor.shape=}, {tt_output_tensor.padded_shape=} {tt_output_tensor.layout=}"
+        )
+
+        # tt_output_tensor = ttnn.unpad(tt_output_tensor, [(0, 0), (0, 0), (0, 288), (0, 0)])
+        # tt_output_tensor.unpad(
+        #     (0, 0, 0, 0),
+        #     (
+        #         1,
+        #         1,
+        #         25281,
+        #         256,
+        #     ))
         return tt_output_tensor
 
 
-class GroupNormDRAM:
+class GroupNormDRAM(LightweightModule):
     def __init__(self, parameters, num_groups, channels, eps=1e-5, dtype=ttnn.bfloat16, is_sliced=False):
         self.weight = parameters.weight
         self.bias = parameters.bias
@@ -298,7 +363,7 @@ class GroupNormDRAM:
         return output_tensor
 
 
-class GroupNorm_fallback:
+class GroupNorm_fallback(LightweightModule):
     def __init__(self, parameters, num_groups, channels, eps, dtype, is_sliced=False):
         import torch.nn as nn
 
@@ -313,7 +378,7 @@ class GroupNorm_fallback:
         return tt_output
 
 
-class Conv_fallback:
+class Conv_fallback(LightweightModule):
     def __init__(
         self,
         parameters,

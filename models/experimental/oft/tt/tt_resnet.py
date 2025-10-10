@@ -10,6 +10,8 @@ from models.experimental.oft.tt.common import Conv, GroupNorm, GroupNormDRAM
 # from models.experimental.oft.tt.common import GroupNorm_fallback as GroupNormDRAM
 from loguru import logger
 
+from models.common.lightweightmodule import LightweightModule
+
 try:
     from tracy import signpost
 
@@ -18,66 +20,82 @@ except ModuleNotFoundError:
     use_signpost = False
 
 
-class TTBasicBlock:
+class TTBasicBlock(LightweightModule):
     expansion = 1
 
-    def __init__(self, device, parameters, conv_pt, inplanes, planes, stride=1, scale=1, is_sliced=False):
-        self.is_sliced = is_sliced
-        logger.debug(f"TTBasicBlock: {inplanes=}, {planes=}, {stride=}, {is_sliced=}")
+    def __init__(
+        self, device, parameters, arguments, inplanes, planes, stride=1, scale=1, slice_conv=False, slice_gn=False
+    ):
+        self.slice_conv = slice_conv
+        self.slice_gn = slice_gn
+
+        logger.debug(f"TTBasicBlock: {inplanes=}, {planes=}, {stride=}, {slice_conv=} {slice_gn=}")
         self.conv1 = Conv(
-            parameters.conv1, conv_pt.conv1, stride=stride, output_layout=ttnn.ROW_MAJOR_LAYOUT, is_sliced=is_sliced
+            parameters.conv1,
+            arguments.conv1,
+            stride=stride,
+            output_layout=ttnn.ROW_MAJOR_LAYOUT,
+            is_sliced=slice_conv,
+            deallocate_activation=True,
         )
-        if not is_sliced:
-            self.bn1 = GroupNorm(parameters.bn1, num_groups=16, channels=planes, eps=1e-5, dtype=ttnn.bfloat16)
+        if not slice_gn:
+            self.bn1 = GroupNorm(device, parameters.bn1, arguments.bn1)
         else:
             self.bn1 = GroupNormDRAM(parameters.bn1, num_groups=16, channels=planes, eps=1e-5, dtype=ttnn.bfloat16)
-        self.conv2 = Conv(parameters.conv2, conv_pt.conv2, output_layout=ttnn.ROW_MAJOR_LAYOUT, is_sliced=is_sliced)
-        if not is_sliced:
-            self.bn2 = GroupNorm(parameters.bn2, num_groups=16, channels=planes, eps=1e-5, dtype=ttnn.bfloat16)
+        self.conv2 = Conv(
+            parameters.conv2,
+            arguments.conv2,
+            output_layout=ttnn.ROW_MAJOR_LAYOUT,
+            is_sliced=slice_conv,
+            deallocate_activation=True,
+        )
+        if not slice_gn:
+            self.bn2 = GroupNorm(device, parameters.bn2, arguments.bn2)
         else:
             self.bn2 = GroupNormDRAM(parameters.bn2, num_groups=16, channels=planes, eps=1e-5, dtype=ttnn.bfloat16)
         self.downsample = None
-        if not is_sliced:
+        if not slice_conv:  # this looks worng
             if stride != 1 or inplanes != planes:
                 self.downsample = True
                 self.downsample_conv = Conv(
                     parameters.downsample[0],
-                    conv_pt.downsample[0],
+                    arguments.downsample[0],
                     stride=stride,
                     padding=0,
                     output_layout=ttnn.ROW_MAJOR_LAYOUT,
-                    is_sliced=is_sliced,
+                    is_sliced=slice_conv,
+                    deallocate_activation=True,
                 )
-                self.downsample_bn = GroupNorm(
-                    parameters.downsample[1], num_groups=16, channels=planes, eps=1e-5, dtype=ttnn.bfloat8_b
-                )
+                self.downsample_bn = GroupNorm(device, parameters.downsample[1], arguments.downsample[1])
 
     def forward(self, device, x, gn_shard="HS", num_splits=1):
+        x_dram = ttnn.to_memory_config(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         if use_signpost:
             signpost(header="TTBasicBlock forward started")
         out, out_h, out_w = self.conv1(device, x)
         logger.debug(f"FORWARD X Input shape: {x.shape}, dtype: {x.dtype}, layout: {x.layout}")
         out = ttnn.move(out)
         # logger.debug(f"SSHARDING {gn_shard=}")
-        out = self.bn1(device, out, out_h, out_w, shard=gn_shard, num_splits=num_splits)
+        out = self.bn1(out)
         logger.debug(f"BN1 output shape: {out.shape}")
         ttnn.relu(out, output_tensor=out)
 
         out, out_h, out_w = self.conv2(device, out)
         logger.debug(f"Conv2 output shape: {out.shape}")
         out = ttnn.move(out)
-        out = self.bn2(device, out, out_h, out_w, shard=gn_shard, num_splits=num_splits)
+        out = self.bn2(out)
         logger.debug(f"BN2 output shape: {out.shape}")
 
         if self.downsample is not None:
             x, out_h_ds, out_w_ds = self.downsample_conv(device, x)
-            x = self.downsample_bn(device, x, out_h_ds, out_w_ds, shard=gn_shard)
+            x = self.downsample_bn(x)
         else:
             logger.debug(f"reshape x shape: {x.shape} self.downsample: {self.downsample}")
             # x = ttnn.reshape(x, (1, 1, x.shape[0] * x.shape[1] * x.shape[2], x.shape[3]))
 
         if gn_shard == "HS":
-            out += x
+            x_dram = ttnn.to_memory_config(x_dram, memory_config=out.memory_config())
+            out += x_dram
         else:
             block_sharded_config = ttnn.create_sharded_memory_config(
                 shape=[out.shape[2] // 5 // 3, out.shape[3]],  # e.g., [12, 128] for 8 cores
@@ -87,7 +105,7 @@ class TTBasicBlock:
                 use_height_and_width_as_shard_shape=True,
             )
             out = ttnn.to_memory_config(out, block_sharded_config)
-            x = ttnn.to_memory_config(x, block_sharded_config)
+            x_dram = ttnn.to_memory_config(x_dram, block_sharded_config)
             out = ttnn.add(out, x, memory_config=block_sharded_config)
 
         out = ttnn.relu(out)
