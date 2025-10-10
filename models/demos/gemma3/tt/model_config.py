@@ -437,7 +437,6 @@ class ModelArgs:
             if not self.CACHE_PATH:
                 self.CACHE_PATH = os.path.join(LLAMA_DIR, self.device_name)
             self.model_name = os.path.basename(LLAMA_DIR.strip("/"))  # May be overridden by config
-            assert False  # stojko temp - this should not be called FOR NOW
         elif HF_MODEL:
             self.CKPT_DIR = os.getenv("HF_MODEL")
 
@@ -477,7 +476,6 @@ class ModelArgs:
 
         self.instruct = instruct
         # If the weights file contain the keyword `instruct` also set self.instruct to true
-        # stojko - TODO confirm this works for new paths over CI
         if any(keyword in self.CKPT_DIR.lower() for keyword in ("instruct", "it")):
             self.instruct = True
 

@@ -24,7 +24,10 @@ from ttnn import ConcatMeshToTensor
     ],
     indirect=True,
 )
-def test_conv2d_inference(mesh_device, reset_seeds, model_location_generator):
+def test_conv2d_inference(
+    mesh_device,
+    reset_seeds,
+):
     pcc_required = 0.9999
     dtype = ttnn.bfloat16
 
