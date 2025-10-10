@@ -4,7 +4,7 @@
 
 [Wan2.2-T2V-A14B](https://huggingface.co/Wan-AI/Wan2.2-T2V-A14B-Diffusers) is a leading text-to-video generative model.
 
-This mdoel is implemented in the TT-DiT library to enable inference on Wormhole LoudBox and Galaxy systems.
+This model is implemented in the TT-DiT library to enable inference on Wormhole LoudBox and Galaxy systems.
 
 ## Upcoming Features
 - optimized performance on Wormhole systems
