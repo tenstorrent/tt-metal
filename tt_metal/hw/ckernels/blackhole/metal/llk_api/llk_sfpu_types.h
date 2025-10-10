@@ -128,5 +128,7 @@ enum SfpuType {
     celu,
     max_pool_with_indices,
     selu,
-    hardmish
+    rpow,
+    cbrt,  // cube root
+    hardmish,
 };
