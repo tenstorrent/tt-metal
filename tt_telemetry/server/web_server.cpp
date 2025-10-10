@@ -211,7 +211,7 @@ public:
                 } else {
                     res.status = 404;
                     res.set_content(
-                        "<html><body><h1>Telemetry Server Running</h1><p>404: File not found</p></body></html>",
+                        "<html><body><h1>Telemetry Server Running</h1><p>404: File not found. Make sure TT_METAL_HOME points to the tt-metal repository.</p></body></html>",
                         "text/html");
                 }
             }
