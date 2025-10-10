@@ -357,45 +357,47 @@ template <DeviceOperationConcept device_operation_t>
 std::pair<
     tt::stl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement>,
     tt::tt_metal::distributed::MeshShape>
-get_final_placements_and_shape(
+get_output_placements_and_shape(
     const typename device_operation_t::tensor_args_t& tensor_args, const Tensor& first_tensor) {
-    auto result_shape = first_tensor.tensor_topology().distribution_shape();
+    auto initial_shape = first_tensor.tensor_topology().distribution_shape();
+    auto result_strides = tt::stl::SmallVector<uint32_t>(initial_shape.cbegin(), initial_shape.cend());
     auto result_placements = first_tensor.tensor_topology().placements();
     std::unordered_set<int> shard_dims;
     tt::stl::reflection::visit_object_of_type<Tensor>(
         [&](const Tensor& tensor) {
+            // Augment output tensor distribution shape with the max strides and max distribution rankof all input
+            // tensors
             const auto& tensor_distribution_shape = tensor.tensor_topology().distribution_shape();
-            tt::stl::SmallVector<uint32_t> new_shape;
-
-            size_t i = 0;
-            for (; i < std::min(result_shape.dims(), tensor_distribution_shape.dims()); i++) {
-                new_shape.push_back(std::max(result_shape[i], tensor_distribution_shape[i]));
+            int i = 0;
+            for (; i < std::min(result_strides.size(), tensor_distribution_shape.dims()); i++) {
+                result_strides[i] = std::max(result_strides[i], tensor_distribution_shape[i]);
             }
             if (i < tensor_distribution_shape.dims()) {
-                for (size_t j = i; j < tensor_distribution_shape.dims(); j++) {
-                    new_shape.push_back(tensor_distribution_shape[j]);
-                }
-            } else if (i < result_shape.dims()) {
-                for (size_t j = i; j < result_shape.dims(); j++) {
-                    new_shape.push_back(result_shape[j]);
+                for (int j = i; j < tensor_distribution_shape.dims(); j++) {
+                    result_strides.push_back(tensor_distribution_shape[j]);
                 }
             }
-            result_shape = tt::tt_metal::distributed::MeshShape(new_shape);
+            const auto result_shape = tt::tt_metal::distributed::MeshShape(result_strides);
 
             const auto& tensor_placements = tensor.tensor_topology().placements();
-            i = 0;
-            for (; i < tensor_placements.size(); i++) {
+            for (int i = 0; i < tensor_placements.size(); i++) {
+                // Augmented dim placements initially assumed to be Replicate
                 tt::tt_metal::distributed::MeshMapperConfig::Placement output_placement =
                     i < result_placements.size() ? result_placements[i]
                                                  : tt::tt_metal::distributed::MeshMapperConfig::Replicate{};
                 if (std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Shard>(tensor_placements[i])) {
                     auto new_shard_placement =
                         std::get<tt::tt_metal::distributed::MeshMapperConfig::Shard>(tensor_placements[i]);
+
+                    // Only shard if the dimension is not already sharded
                     if (!shard_dims.contains(new_shard_placement.dim)) {
                         if (std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Shard>(
                                 output_placement)) {
                             auto existing_shard_placement =
                                 std::get<tt::tt_metal::distributed::MeshMapperConfig::Shard>(output_placement);
+
+                            // If a different tensor dim is sharded across this distribution dim, keep the earliest-seen
+                            // shard dimension.
                             if (new_shard_placement.dim != existing_shard_placement.dim) {
                                 log_warning(
                                     tt::LogOp,
@@ -406,8 +408,6 @@ get_final_placements_and_shape(
                                     new_shard_placement.dim,
                                     i);
                             }
-
-                            // Keep the earliest-seen shard dimension.
                             continue;
                         }
                         shard_dims.insert(new_shard_placement.dim);
@@ -439,13 +439,13 @@ typename device_operation_t::tensor_return_value_t launch_on_device(
 
     auto first_tensor = tt::stl::reflection::get_first_object_of_type<Tensor>(tensor_args);
     auto mesh_device = first_tensor.device();
-    auto [final_placements, final_shape] =
-        detail::get_final_placements_and_shape<device_operation_t>(tensor_args, first_tensor);
+    auto [output_topology_placements, output_topology_shape] =
+        detail::get_output_placements_and_shape<device_operation_t>(tensor_args, first_tensor);
 
     tensor_return_value = tt::stl::reflection::transform_object_of_type<Tensor>(
-        [&final_placements, &final_shape](const Tensor& output_tensor) {
+        [&output_topology_placements, &output_topology_shape](const Tensor& output_tensor) {
             auto topology = tt::tt_metal::TensorTopology(
-                final_shape, final_placements, output_tensor.tensor_topology().mesh_coords());
+                output_topology_shape, output_topology_placements, output_tensor.tensor_topology().mesh_coords());
             return output_tensor.with_tensor_topology(topology);
         },
         tensor_return_value);
