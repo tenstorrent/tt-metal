@@ -69,6 +69,10 @@ constexpr uint32_t intermediate_num_pages = batch_num_pages * num_batches;
 constexpr uint32_t intermediate_full_offset = is_forward ? 0 : intermediate_num_pages;
 
 void kernel_main() {
+    if (num_targets_in_direction == 0) {
+        return;
+    }
+
     ///////////////////////////////////////////////////
     // ARGS
     ///////////////////////////////////////////////////
@@ -103,45 +107,57 @@ void kernel_main() {
     constexpr uint32_t ct_idx =
         31 + ccl_routing_utils::num_line_unicast_args + ccl_routing_utils::num_line_multicast_args;
 
+#ifdef INTERMEDIATE_IS_SHARDED
+    constexpr uint32_t ct_offset = 7;
+
+    using intermediate_tensor_shard_info = ShardedInfo<
+        get_compile_time_arg_val(ct_idx),       // Memory layout
+        get_compile_time_arg_val(ct_idx + 1),   // The number of sharding cores
+        get_compile_time_arg_val(ct_idx + 2),   // The page size we offset each write to
+        get_compile_time_arg_val(ct_idx + 3),   // The number of pages in each sharding row not including padding pages
+        get_compile_time_arg_val(ct_idx + 4),   // This defines times when contiguous pages can't be calculated
+        get_compile_time_arg_val(ct_idx + 5),   // pages_per_shard_x
+        get_compile_time_arg_val(ct_idx + 6)>;  // pages_per_shard_y
+
+    const auto [intermediate_mapping_table, intermediate_rt_increment] =
+        experimental::shard_addr_gen_utils::get_shard_map<intermediate_tensor_shard_info>(get_arg_addr(arg_idx));
+    experimental::ShardedAddrGen<intermediate_tensor_shard_info> intermediate_addrgen = {
+        .bank_base_address = intermediate_address, .shard_array = intermediate_mapping_table};
+
+    arg_idx += intermediate_rt_increment;
+
+#else
     constexpr auto intermediate_tensor_args = TensorAccessorArgs<ct_idx>();
     constexpr uint32_t ct_offset = intermediate_tensor_args.num_compile_time_args();
     auto intermediate_addrgen = TensorAccessor(intermediate_tensor_args, intermediate_address, intermediate_page_size);
+#endif
 
+#ifdef OUTPUT_IS_SHARDED
+    using output_tensor_shard_info = ShardedInfo<
+        get_compile_time_arg_val(ct_idx + ct_offset),       // Memory layout
+        get_compile_time_arg_val(ct_idx + ct_offset + 1),   // The number of sharding cores
+        get_compile_time_arg_val(ct_idx + ct_offset + 2),   // The page size we offset each write to
+        get_compile_time_arg_val(ct_idx + ct_offset + 3),   // The number of pages in each sharding row not including
+                                                            // padding pages
+        get_compile_time_arg_val(ct_idx + ct_offset + 4),   // This defines times when contiguous pages can't be
+                                                            // calculated
+        get_compile_time_arg_val(ct_idx + ct_offset + 5),   // pages_per_shard_x
+        get_compile_time_arg_val(ct_idx + ct_offset + 6)>;  // pages_per_shard_y
+
+    const auto [output_mapping_table, output_rt_increment] =
+        experimental::shard_addr_gen_utils::get_shard_map<output_tensor_shard_info>(get_arg_addr(arg_idx));
+    experimental::ShardedAddrGen<output_tensor_shard_info> output_addrgen = {
+        .bank_base_address = output_address, .shard_array = output_mapping_table};
+
+    arg_idx += output_rt_increment;
+#else
     constexpr auto output_tensor_args = TensorAccessorArgs<ct_idx + ct_offset>();
     auto output_addrgen = TensorAccessor(output_tensor_args, output_address, intermediate_page_size);
+#endif
 
     tt::tt_fabric::WorkerToFabricMuxSender<fabric_mux_num_buffers_per_channel>* mux_connection_handle;
     tt::tt_fabric::WorkerToFabricMuxSender<fabric_mux_num_buffers_per_channel> mux_connection;
     if (mux_connection_valid) {
-        // DPRINT all arguments into build_connection_to_fabric_endpoint
-        // upcast the arguments to uint32_t
-        DPRINT << "fabric_mux_num_buffers_per_channel: " << static_cast<uint32_t>(fabric_mux_num_buffers_per_channel)
-               << ENDL();
-        DPRINT << "fabric_mux_x: " << static_cast<uint32_t>(fabric_mux_x) << ENDL();
-        DPRINT << "fabric_mux_y: " << static_cast<uint32_t>(fabric_mux_y) << ENDL();
-        DPRINT << "fabric_mux_channel_id: " << static_cast<uint32_t>(fabric_mux_channel_id) << ENDL();
-        DPRINT << "fabric_mux_num_buffers_per_channel: " << static_cast<uint32_t>(fabric_mux_num_buffers_per_channel)
-               << ENDL();
-        DPRINT << "fabric_mux_channel_buffer_size_bytes: "
-               << static_cast<uint32_t>(fabric_mux_channel_buffer_size_bytes) << ENDL();
-        DPRINT << "fabric_mux_channel_base_address: " << static_cast<uint32_t>(fabric_mux_channel_base_address)
-               << ENDL();
-        DPRINT << "fabric_mux_connection_info_address: " << static_cast<uint32_t>(fabric_mux_connection_info_address)
-               << ENDL();
-        DPRINT << "fabric_mux_connection_handshake_address: "
-               << static_cast<uint32_t>(fabric_mux_connection_handshake_address) << ENDL();
-        DPRINT << "fabric_mux_flow_control_address: " << static_cast<uint32_t>(fabric_mux_flow_control_address)
-               << ENDL();
-        DPRINT << "fabric_mux_buffer_index_address: " << static_cast<uint32_t>(fabric_mux_buffer_index_address)
-               << ENDL();
-        DPRINT << "local_flow_control_address: " << static_cast<uint32_t>(local_flow_control_address) << ENDL();
-        DPRINT << "local_teardown_address: " << static_cast<uint32_t>(local_teardown_address) << ENDL();
-        DPRINT << "local_buffer_index_address: " << static_cast<uint32_t>(local_buffer_index_address) << ENDL();
-        DPRINT << "termination_master_noc_x: " << static_cast<uint32_t>(termination_master_noc_x) << ENDL();
-        DPRINT << "termination_master_noc_y: " << static_cast<uint32_t>(termination_master_noc_y) << ENDL();
-        DPRINT << "num_mux_clients: " << static_cast<uint32_t>(num_mux_clients) << ENDL();
-        DPRINT << "mux_connection_valid: " << static_cast<uint32_t>(mux_connection_valid) << ENDL();
-        DPRINT << ENDL();
         mux_connection = tt::tt_fabric::build_connection_to_fabric_endpoint<fabric_mux_num_buffers_per_channel>(
             fabric_mux_x,
             fabric_mux_y,
@@ -171,40 +187,6 @@ void kernel_main() {
     auto pkt_scatter_hdr = PacketHeaderPool::allocate_header();
     auto pkt_unicast_hdr = PacketHeaderPool::allocate_header();
     auto pkt_hdr_seminc = PacketHeaderPool::allocate_header();
-
-    /**
-    struct line_unicast_route_info_t {
-    uint16_t dst_mesh_id;
-    union {
-        uint16_t dst_chip_id;
-        uint16_t distance_in_hops;
-    };
-    }; */
-
-    // Print function for line_unicast_route_info_t
-    // DPRINT << "My Chip ID: " << my_chip_id << ENDL();
-    // auto print_line_unicast_route_info = [](const ccl_routing_utils::line_unicast_route_info_t& route_info) {
-    //     DPRINT << "line_unicast_route_info_t { dst_mesh_id: " << (uint32_t)route_info.dst_mesh_id
-    //            << ", dst_chip_id/distance_in_hops: " << (uint32_t)route_info.dst_chip_id << " }" << ENDL();
-    // };
-
-    // Print function for line_multicast_route_info_t
-    // auto print_line_multicast_route_info = [](const ccl_routing_utils::line_multicast_route_info_t& route_info) {
-    //     DPRINT << "src_chip_id: " << my_chip_id
-    //            <<" line_multicast_route_info_t { dst_mesh_id/start_distance_in_hops: " <<
-    //            (uint32_t)route_info.dst_mesh_id
-    //            << ", dst_chip_id/range_hops: " << (uint32_t)route_info.dst_chip_id
-    //            << ", e_num_hops: " << (uint32_t)route_info.e_num_hops
-    //            << ", w_num_hops: " << (uint32_t)route_info.w_num_hops
-    //            << ", n_num_hops: " << (uint32_t)route_info.n_num_hops
-    //            << ", s_num_hops: " << (uint32_t)route_info.s_num_hops << " }" << ENDL() << ENDL();
-    // };
-
-    // // print_line_unicast_route_info(unicast_route_info);
-    // if (num_targets_in_direction) {
-    //     print_line_multicast_route_info(multicast_route_info);
-    // }
-
     ccl_routing_utils::fabric_set_line_unicast_route(pkt_scatter_hdr, unicast_route_info);
     ccl_routing_utils::fabric_set_line_unicast_route(pkt_unicast_hdr, unicast_route_info);
 
