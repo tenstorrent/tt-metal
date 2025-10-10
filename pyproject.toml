@@ -53,11 +53,11 @@ line-length = 120
 
 [tool.scikit-build.cmake]
 version = ">=3.24"
-build-type = "Release"
+build-type = {env="CIBW_BUILD_TYPE", default="Release"}
 
 [tool.scikit-build.cmake.define]
 ENABLE_TRACY = {env="CIBW_ENABLE_TRACY", default="OFF"}
-CMAKE_BUILD_TYPE = "Release"
+CMAKE_BUILD_TYPE = {env="CIBW_BUILD_TYPE", default="Release"}
 BUILD_SHARED_LIBS = "ON"
 TT_INSTALL = "ON"
 TT_UNITY_BUILDS = "ON"
