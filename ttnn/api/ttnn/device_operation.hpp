@@ -392,6 +392,7 @@ get_output_placements_and_shape(
 
                     // Only shard if the dimension is not already sharded
                     if (!shard_dims.contains(new_shard_placement.dim)) {
+                        shard_dims.insert(new_shard_placement.dim);
                         if (std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Shard>(
                                 output_placement)) {
                             auto existing_shard_placement =
@@ -404,14 +405,13 @@ get_output_placements_and_shape(
                                     tt::LogOp,
                                     "Output tensor cannot shard different tensor dimensions across the same "
                                     "distribution "
-                                    "dimension: tensor dims {} and {} across distribution dim {}",
+                                    "dimension: tensor dims {} (kept) and {} (ignored) across distribution dim {}",
                                     existing_shard_placement.dim,
                                     new_shard_placement.dim,
                                     i);
                             }
                             continue;
                         }
-                        shard_dims.insert(new_shard_placement.dim);
                         output_placement = new_shard_placement;
                     } else {
                         log_warning(
