@@ -346,6 +346,7 @@ std::vector<PagePatternRun> compress_page_pattern_instances(const std::vector<Pa
                                    static_cast<int32_t>(instances[i].output_offset_start);
         }
         while (j < instances.size() && instances[j].pattern_template_index == instances[i].pattern_template_index &&
+               (instances[j].output_page_index == instances[i].output_page_index) &&
                (instances[j].output_page_index - instances[j - 1].output_page_index == 1) &&
                (instances[j].input_page_index - instances[j - 1].input_page_index == input_page_index_stride) &&
                (instances[j].input_offset_start - instances[j - 1].input_offset_start == input_offset_stride) &&
@@ -455,15 +456,6 @@ std::tuple<Tensor, GlobalCompressedReshapeMap> compute_reshape_mapping_host_tens
 
     printf("general compressed mapping\n");
     auto compressed_map = compress_mapping_global(mapping_vector);
-    printf("Check here\n");
-    for (const auto& run : compressed_map.page_pattern_runs) {
-        printf(
-            "Run: out_page_start=%u, out_page_end=%u, run_length=%u, tmpl_idx=%u\n",
-            run.output_page_index_start,
-            run.output_page_index_end,
-            run.run_length,
-            run.pattern_template_index);
-    }
 
     std::vector<uint32_t> rt_args;
     for (const auto& run : compressed_map.page_pattern_runs) {
@@ -745,15 +737,16 @@ tt::tt_metal::operation::ProgramWithCallbacks reshape_tiled_program_factory(
             uint32_t start = std::max(run.output_page_index_start, page_idx_start);
             uint32_t end = std::min(run.output_page_index_end, page_idx_end - 1);
 
-            core_rt_args.push_back(detail::pack4(
-                start & 0xFF, end & 0xFF, run.input_page_index_start & 0xFF, run.pattern_template_index & 0xFF));
-            core_rt_args.push_back(run.input_offset_start);   // 32 bits
-            core_rt_args.push_back(run.output_offset_start);  // 32 bits
-            core_rt_args.push_back(detail::pack4(
-                run.run_length & 0xFF,
-                run.input_page_index_stride & 0xFF,
-                run.input_offset_stride & 0xFF,
-                run.output_offset_stride & 0xFF));
+            core_rt_args.push_back(start);                        // output_page_index_start (32 bits)
+            core_rt_args.push_back(end);                          // output_page_index_end   (32 bits)
+            core_rt_args.push_back(run.input_page_index_start);   // input_page_index_start  (32 bits)
+            core_rt_args.push_back(run.pattern_template_index);   // pattern_template_index  (32 bits)
+            core_rt_args.push_back(run.input_offset_start);       // input_offset_start      (32 bits)
+            core_rt_args.push_back(run.output_offset_start);      // output_offset_start     (32 bits)
+            core_rt_args.push_back(run.run_length);               // run_length              (32 bits)
+            core_rt_args.push_back(run.input_page_index_stride);  // input_page_index_stride (32 bits)
+            core_rt_args.push_back(run.input_offset_stride);      // input_offset_stride     (32 bits)
+            core_rt_args.push_back(run.output_offset_stride);     // output_offset_stride    (32 bits)
             ++num_runs;
         }
 
@@ -775,11 +768,10 @@ tt::tt_metal::operation::ProgramWithCallbacks reshape_tiled_program_factory(
             writer_runtime_args.push_back(k);
         }
 
-        printf("writer rt_args (core %zu,%zu): ", c.x, c.y);
-        for (auto k : writer_runtime_args) {
+        printf("core_rt_args for core %zu %zu : \n", c.x, c.y);
+        for (auto k : core_rt_args) {
             printf("%u ", k);
         }
-        printf("\n");
         tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, c, writer_runtime_args);
 
         page_idx_start += increment;
@@ -824,10 +816,10 @@ tt::tt_metal::operation::ProgramWithCallbacks reshape_tiled_program_factory(
 
             for (const auto& core : utilized_cores) {
                 auto& reader_runtime_args_core = GetRuntimeArgs(program, reader_kernel_id, core);
-                reader_runtime_args_core.at(1) = input_buffer_addr;
-                if (op.recreate_mapping_tensor) {
-                    reader_runtime_args_core.at(2) = mapping_tensor.buffer()->address();
-                }
+                reader_runtime_args_core.at(2) = input_buffer_addr;
+                // if (op.recreate_mapping_tensor) {
+                //     reader_runtime_args_core.at(2) = mapping_tensor.buffer()->address();
+                // }
 
                 auto& writer_runtime_args_core = GetRuntimeArgs(program, writer_kernel_id, core);
                 writer_runtime_args_core.at(2) = output_buffer_addr;
