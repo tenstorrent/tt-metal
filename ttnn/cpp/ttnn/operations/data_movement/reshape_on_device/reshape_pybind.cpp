@@ -50,8 +50,8 @@ void py_bind_reshape(pybind11::module& module) {
             auto output_specs = args_ptr->compute_output_specs(inputs);
 
             // Create output tensor with the computed specs and same storage/topology
-            // for now... ??
             auto output_tensor = Tensor(input_tensor.storage(), output_specs[0], input_tensor.tensor_topology());
+            output_tensor = tt::tt_metal::set_tensor_id(output_tensor);
             output_tensor.set_producer_node(node_id);
 
             return output_tensor;

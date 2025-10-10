@@ -327,15 +327,6 @@ Tensor convert_python_tensor_to_tt_tensor(
     auto preprocessed_py_tensor = parse_py_tensor(py_tensor, optional_data_type);
     const auto shape = ttnn::Shape(py::cast<ttnn::SmallVector<uint32_t>>(py_tensor.attr("shape")));
 
-    // Get the producer node from the Python tensor
-    std::optional<ttnn::experimental::jit::NodeId> producer_node = std::nullopt;
-    if (py::hasattr(py_tensor, "producer_node")) {
-        auto producer_node_obj = py_tensor.attr("producer_node")();
-        if (!producer_node_obj.is_none()) {
-            producer_node = py::cast<ttnn::experimental::jit::NodeId>(producer_node_obj);
-        }
-    }
-
     TT_FATAL(
         preprocessed_py_tensor.num_elements == shape.volume(),
         "Number of elements from python tensor {} must match volume of shape {}!",
@@ -374,11 +365,6 @@ Tensor convert_python_tensor_to_tt_tensor(
         mesh_mapper);
 
     output = tt::tt_metal::set_tensor_id(output);
-
-    // Set the producer node if it was found
-    if (producer_node.has_value()) {
-        output.set_producer_node(producer_node.value());
-    }
 
     GraphTracker::instance().track_function_end(output);
     return output;
