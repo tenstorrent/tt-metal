@@ -413,6 +413,7 @@ def run_conv_with_split(
     input_layout=ttnn.ROW_MAJOR_LAYOUT,
     enable_weights_double_buffer=False,
     enable_act_double_buffer=False,
+    config_tensors_in_dram=False,
 ):
     if hasattr(padding, "__len__"):
         if len(padding) == 2:
@@ -482,6 +483,7 @@ def run_conv_with_split(
         shard_layout=shard_layout if not auto_shard else None,
         enable_act_double_buffer=enable_act_double_buffer,
         enable_weights_double_buffer=enable_weights_double_buffer,
+        config_tensors_in_dram=config_tensors_in_dram,
     )
     compute_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
@@ -3848,20 +3850,25 @@ def test_segformer_channel_padding(device, enable_act_double_buffer):
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize(
-    "input_channels, output_channels, input_height, input_width, kernel_height, kernel_width, stride_height, stride_width",
+    "input_channels, output_channels, input_height, input_width, kernel_height, kernel_width, stride_height, stride_width, padding",
     [
-        (3, 32, 224, 224, 16, 16, 16, 16),
-        (3, 32, 224, 224, 32, 32, 32, 32),
-        (3, 32, 224, 224, 16, 16, 2, 2),
-        (3, 32, 224, 224, 7, 7, 2, 2),
-        (3, 32, 224, 224, 6, 6, 2, 2),
-        (3, 32, 1280, 1280, 6, 6, 2, 2),
-        (3, 32, 512, 672, 16, 16, 16, 16),
-        (3, 32, 512, 672, 32, 32, 32, 32),
-        (320, 32, 224, 224, 16, 16, 16, 16),
-        (320, 32, 224, 224, 32, 32, 32, 32),
-        (320, 32, 512, 672, 16, 16, 16, 16),
-        (320, 32, 512, 672, 32, 32, 32, 32),
+        (3, 32, 224, 224, 16, 16, 16, 16, (0, 0)),
+        (3, 32, 224, 224, 32, 32, 32, 32, (0, 0)),
+        (3, 32, 224, 224, 16, 16, 2, 2, (0, 0)),
+        (3, 32, 224, 224, 7, 7, 2, 2, (0, 0)),
+        (3, 32, 224, 224, 6, 6, 2, 2, (0, 0)),
+        (3, 32, 1024, 1024, 7, 7, 3, 3, (1, 1)),
+        (3, 32, 1280, 1280, 6, 6, 2, 2, (0, 0)),
+        (3, 32, 512, 672, 16, 16, 16, 16, (0, 0)),
+        (3, 32, 512, 672, 32, 32, 32, 32, (0, 0)),
+        (320, 32, 224, 224, 16, 16, 16, 16, (0, 0)),
+        (320, 32, 224, 224, 32, 32, 32, 32, (0, 0)),
+        (320, 32, 512, 672, 16, 16, 16, 16, (0, 0)),
+        (320, 32, 512, 672, 32, 32, 32, 32, (0, 0)),
+
+        (3, 32, 208, 208, 16, 16, 16, 16, (8, 8)),
+        (3, 32, 192, 192, 32, 32, 32, 32, (16, 16)),
+        (320, 32, 208, 208, 16, 16, 16, 16, (8, 8)),
     ]
 )
 @pytest.mark.parametrize("input_layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
@@ -3878,9 +3885,12 @@ def test_conv2d_with_fold(
     kernel_width,
     stride_height,
     stride_width,
+    padding,
     input_layout,
     has_bias,
 ):
+    if padding != (0, 0) and input_layout == ttnn.TILE_LAYOUT:
+        pytest.skip("ttnn::pad with tile layout does not support front padding yet")
     run_conv(
         device=device,
         torch_tensor_map=torch_tensor_map,
@@ -3897,7 +3907,7 @@ def test_conv2d_with_fold(
         filter_width=kernel_width,
         stride_h=stride_height,
         stride_w=stride_width,
-        padding=(0, 0),
+        padding=padding,
         config_override=None,
         input_layout=input_layout,
         has_bias=has_bias,
@@ -4381,6 +4391,7 @@ def test_conv2d_panoptic(
         shard_layout=shard_layout,
         enable_act_double_buffer=True,
         enable_weights_double_buffer=True if shard_layout == BS else False,
+        config_tensors_in_dram=True,
 
     )
     signpost(header="conv2d_end.")
@@ -4477,6 +4488,7 @@ def test_conv_dram_panoptic(
         ),
         enable_act_double_buffer=True,
         enable_weights_double_buffer=True if shard_layout == BS else False,
+        config_tensors_in_dram=True,
     )
     signpost(header=f"dram_slice_conv_{slice_type}_{num_slices}_slices_end.")
 
@@ -4559,6 +4571,7 @@ def test_conv2d_ch_split_dram_panoptic(
             input_layout=ttnn.TILE_LAYOUT if output_dtype == ttnn.bfloat8_b else None,
             enable_act_double_buffer=act_db,
             enable_weights_double_buffer=w_db,
+            config_tensors_in_dram=True,
         )
     else:
         pytest.skip("Not a split conv test, skipping.")
@@ -5093,16 +5106,21 @@ def test_conv2d_1kX1k(
         slice_config=slice_config,
     )
 
-# CB pointer update regression test
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
-    "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, shard_layout, config_override",
+    "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, shard_layout, config_override, core_range_set, shard_shape, enable_weights_double_buffer",
     (
-        # ResNet50 first conv parameters - batch_size=32, input_shape={32; 115; 115; 16}
-        (32, 64, 16, 115, 115, 4, 4, 1, 1, 0, 0, HS, {"act_block_h": 49 * 32}),
+        # CB pointer update regression test
+        (32, 64, 16, 115, 115, 4, 4, 1, 1, 0, 0, HS, {"act_block_h": 49 * 32},
+         [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(12, 8)), ttnn.CoreRange(ttnn.CoreCoord(0, 9), ttnn.CoreCoord(10, 9))],
+         (3328, 16), False),
+        # Weights double buffer regression test
+        (32, 64, 64, 56, 56, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 5 * 32},
+         [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(12, 8)), ttnn.CoreRange(ttnn.CoreCoord(0, 9), ttnn.CoreCoord(8, 9))],
+         (800, 64), True),
     ),
 )
-def test_resnet50_first_conv_p150(
+def test_resnet50_conv_p150(
     device,
     torch_tensor_map,
     batch_size,
@@ -5118,21 +5136,19 @@ def test_resnet50_first_conv_p150(
     pad_w,
     shard_layout,
     config_override,
+    core_range_set,
+    shard_shape,
+    enable_weights_double_buffer,
 ):
     # Test runs on Blackhole P150
     if (device.compute_with_storage_grid_size().x, device.compute_with_storage_grid_size().y) != (13, 10):
         pytest.skip("Test is only supported on Blackhole P150")
 
-    input_core_range_set = ttnn.CoreRangeSet(
-        {
-            ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(12, 8)),
-            ttnn.CoreRange(ttnn.CoreCoord(0, 9), ttnn.CoreCoord(10, 9)),
-        }
-    )
+    input_core_range_set = ttnn.CoreRangeSet(set(core_range_set))
     memory_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ttnn.BufferType.L1,
-        ttnn.ShardSpec(input_core_range_set, (3328, 16), ttnn.ShardOrientation.ROW_MAJOR)
+        ttnn.ShardSpec(input_core_range_set, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
     )
 
     run_conv(
@@ -5157,10 +5173,11 @@ def test_resnet50_first_conv_p150(
         output_layout=ttnn.TILE_LAYOUT,
         deallocate_activation=True,
         enable_act_double_buffer=False,
-        enable_weights_double_buffer=False,
+        enable_weights_double_buffer=enable_weights_double_buffer,
         activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
         input_dtype=ttnn.bfloat16,
         sharded_cfg=memory_config,
+        packer_l1_acc=True,
         enable_activation_reuse=True,
     )
 
