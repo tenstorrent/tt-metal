@@ -3189,6 +3189,19 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
     CoreRange in0_mcast_receiver_cores_bounding_box = all_cores_with_work.bounding_box();
     uint32_t in0_mcast_receiver_num_cores = in0_mcast_receiver_cores_bounding_box.size();  // always mcast to full grid
 
+    // There should not be any cores without work in the receiver grid. If a grid is
+    // not rectangular, then there will be some cores without work in the receiver grid.
+    // For example, if there are 12 blocks of work, it should be put into a 3x4 grid.
+    // If its laid out in row major with 8 cores in first row and 4 cores in second row,
+    // then there will be 4 cores without work in the receiver grid, causing a hang.
+    // We check for this below and error out.
+    TT_FATAL(
+        num_cores_with_work == in0_mcast_receiver_num_cores,
+        "num_cores_with_work ({}) must be equal to in0_mcast_receiver_num_cores ({}), please adjust the core grid to "
+        "make it rectangular.",
+        num_cores_with_work,
+        in0_mcast_receiver_num_cores);
+
     CoreRangeSet in0_mcast_cores_with_work_and_in_receiver_grid;
     CoreRangeSet in0_mcast_cores_without_work_and_in_receiver_grid;
     CoreRangeSet in0_mcast_cores_without_work_and_not_in_receiver_grid;
