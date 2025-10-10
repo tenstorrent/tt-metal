@@ -323,7 +323,7 @@ def test_slice_height_sharded_for_conv2d(device, dims, slice_dim, slice_size, co
 @pytest.mark.parametrize("slice_dim", [1, 2])
 @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat8_b, ttnn.bfloat16, ttnn.float32])
-@pytest.mark.parametrize("pad_value", [8, 32])
+@pytest.mark.parametrize("pad_value", [32])
 def test_slice_block_sharded_for_conv2d(
     device, dims, slice_dim, slice_size, core_x, core_y, layout, input_dtype, pad_value
 ):

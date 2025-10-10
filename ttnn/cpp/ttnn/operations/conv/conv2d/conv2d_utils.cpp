@@ -78,7 +78,16 @@ uint32_t get_input_channels_alignment(
     BufferType input_tensor_buffer_type,
     bool is_mm_conv,
     const std::optional<MemoryConfig>& input_memory_config) {
-    if (!is_mm_conv && input_tensor_memory_layout != TensorMemoryLayout::WIDTH_SHARDED &&
+    if (input_tensor_buffer_type == BufferType::DRAM) {
+        if (input_tensor_memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
+            // Height Sharded padded_slice now supports L1 alignment.
+            return tt::tt_metal::hal::get_l1_alignment() / 2;
+        }
+        // DRAM accesses needs 32 byte alignment, which corresponds to 16 elements for bfloat16 data type.
+        // This is due to a limitation of padded slice, which needs to be removed. #28689
+        return tt::tt_metal::hal::get_dram_alignment() / 2;
+    } else if (
+        !is_mm_conv && input_tensor_memory_layout != TensorMemoryLayout::WIDTH_SHARDED &&
         input_tensor_layout == Layout::ROW_MAJOR) {
         if (input_memory_config.has_value() && input_memory_config->is_sharded()) {
             const uint32_t shard_width = input_memory_config->shard_spec()->shape[1];
@@ -91,10 +100,6 @@ uint32_t get_input_channels_alignment(
             } else {
                 return tt::constants::TILE_WIDTH;
             }
-        } else if (input_tensor_buffer_type == BufferType::DRAM) {
-            // DRAM accesses needs 32 byte alignment, which corresponds to 16 elements for bfloat16 data type.
-            // This is due to a limitation of padded slice, which needs to be removed. #28689
-            return tt::tt_metal::hal::get_dram_alignment() / 2;
         } else {
             // The minimum valid value for input channels alignment is 8.
             // This requirement comes from the L1 alignment, which is 16 bytes.
@@ -505,6 +510,12 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig> determine_input_memory_config(
     std::optional<uint32_t> act_block_h_override) {
     const uint32_t input_channels_alignment = get_input_channels_alignment(
         shard_layout, input_tensor_layout, input_tensor_buffer_type, is_mm_conv, std::nullopt);
+    log_info(
+        tt::LogOp,
+        "Input channels alignment: {}, Shard Layout {} , Buffer Type {}",
+        input_channels_alignment,
+        shard_layout,
+        input_tensor_buffer_type);
     ParallelConfig parallel_config;
     if (input_tensor_parallel_config.has_value()) {
         parallel_config = input_tensor_parallel_config.value();
