@@ -300,11 +300,11 @@ jobs:
       - name: 'Tar files'
         if: ${{ inputs.publish-artifact }}
         run: |
-          ARTIFACT_PATHS="ttnn/ttnn/*.so build/lib ttnn/ttnn/*.so build/programming_examples build/test build/tools runtime"
+          ARTIFACT_PATHS="ttnn/ttnn/*.so build/lib ttnn/ttnn/*.so build/programming_examples build/test build/tools runtime/hw"
           if [[ "${{ inputs.skip-tt-train }}" != "true" ]]; then
             ARTIFACT_PATHS="$ARTIFACT_PATHS build/tt-train data"
           fi
-          tar -cvhf /work/ttm_any.tar $ARTIFACT_PATHS
+          tar --zstd -cvhf /work/ttm_any.tar.zst $ARTIFACT_PATHS
 
       - name: Set build artifact name
         id: set_build_artifact_name
@@ -324,8 +324,9 @@ jobs:
         timeout-minutes: 10
         with:
           name: ${{ env.build_artifact_name }}
-          path: /work/ttm_any.tar
+          path: /work/ttm_any.tar.zst
           if-no-files-found: error
+          compression-level: 0
 
   build-wheel:
     if: ${{ inputs.build-wheel }}
