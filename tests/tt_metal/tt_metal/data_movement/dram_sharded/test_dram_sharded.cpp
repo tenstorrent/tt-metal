@@ -29,7 +29,7 @@ struct DramShardedConfig {
     CoreRangeSet cores = CoreRangeSet();
 };
 
-/// @brief Does Interleaved buffer --> Reader --> L1 --> Writer --> Interleaved buffer
+/// @brief Reads from Sharded DRAM to L1 using stateful API
 /// @param mesh_device - MeshDevice to run the test on
 /// @param test_config - Configuration of the test -- see struct
 /// @return
@@ -42,19 +42,24 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const DramSh
 
     // Shape tensor_pages_shape = {2, 2};
     // Shape shard_pages_shape = {1, 1};
+    CoreRange dram_core_range({0, 0}, {5, 0});
     BufferDistributionSpec shard_spec = BufferDistributionSpec(
-        Shape{2, 2},  // tensor shape in pages
-        Shape{1, 1},  // shard shape in pages
-        corerange_to_cores(test_config.cores));
+        // Shape{1, test_config.num_pages},  // tensor shape in pages
+        Shape{1, 24},  // tensor shape in pages
+        Shape{1, 4},   // shard shape in pages
+        corerange_to_cores(dram_core_range));
 
-    uint32_t single_tile_size = tt::tile_size(test_config.l1_data_format);
+    // uint32_t single_tile_size = tt::tile_size(test_config.l1_data_format);
+    uint32_t single_tile_size = test_config.page_size_bytes;
     distributed::DeviceLocalBufferConfig per_device_buffer_config{
         .page_size = single_tile_size,
         .buffer_type = BufferType::DRAM,
         .sharding_args = BufferShardingArgs(shard_spec),
-        .bottom_up = true};  // idk what bottom up does
+        .bottom_up = std::nullopt};  // idk what bottom up does
     // const size_t total_size_bytes = test_config.num_pages * test_config.page_size_bytes;
-    Shape2D global_shape = {64, 64};
+    // Shape2D global_shape = {32, 32 * test_config.num_pages};
+    Shape2D global_shape = {32, 32 * 24};
+    // Shape2D shard_shape = {32, 32};
     const size_t total_size_bytes = global_shape.height() * global_shape.width() * sizeof(bfloat16);
     distributed::ShardedBufferConfig sharded_buffer_config{
         .global_size = total_size_bytes,
@@ -176,14 +181,14 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const DramSh
 /* ========== INTERLEAVED DRAM TESTS ========== */
 
 /* ========== Directed Ideal Test Case; Test id = 65 ========== */
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMShardedRead) {
+TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMShardedReadBaseCase) {
     auto mesh_device = get_mesh_device();
     // Physical Constraints
     // auto [flit_size_bytes, max_transmittable_bytes, max_transmittable_flits] =
     //     tt::tt_metal::unit_tests::dm::compute_physical_constraints(mesh_device);
     // Parameters
-    uint32_t page_size_bytes = 64 * 64 * 2;
-    uint32_t num_pages = 1;
+    uint32_t page_size_bytes = tt::tile_size(DataFormat::Float16_b);
+    uint32_t num_pages = 24;
     uint32_t num_of_transactions = 1;
 
     // Cores
@@ -201,6 +206,38 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMShardedRead) {
 
     // Run
     EXPECT_TRUE(run_dm(mesh_device, test_config));
+}
+
+/* ========== Directed Ideal Test Case; Test id = 65 ========== */
+TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMShardedReadTileNumbers) {
+    auto mesh_device = get_mesh_device();
+    // Physical Constraints
+    // auto [flit_size_bytes, max_transmittable_bytes, max_transmittable_flits] =
+    //     tt::tt_metal::unit_tests::dm::compute_physical_constraints(mesh_device);
+    // Parameters
+    uint32_t page_size_bytes = tt::tile_size(DataFormat::Float16_b);
+    uint32_t max_num_pages = 32;
+    uint32_t max_transactions = 256;
+
+    // Cores
+    CoreRange core_range({0, 0}, {0, 0});
+    CoreRangeSet core_range_set({core_range});
+
+    for (uint32_t num_of_transactions = 1; num_of_transactions <= max_transactions; num_of_transactions *= 4) {
+        for (uint32_t num_pages = 1; num_pages <= max_num_pages; num_pages *= 2) {
+            // Test config
+            unit_tests::dm::dram_sharded::DramShardedConfig test_config = {
+                .test_id = 1001,
+                .num_of_transactions = num_of_transactions,
+                .num_pages = num_pages,
+                .page_size_bytes = page_size_bytes,
+                .l1_data_format = DataFormat::Float16_b,
+                .cores = core_range_set};
+
+            // Run
+            EXPECT_TRUE(run_dm(mesh_device, test_config));
+        }
+    }
 }
 
 }  // namespace tt::tt_metal

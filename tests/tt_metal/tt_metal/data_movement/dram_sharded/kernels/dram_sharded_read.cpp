@@ -10,16 +10,6 @@
 #include "debug/dprint.h"
 #include "debug/dprint_pages.h"
 
-template <uint32_t num_of_transactions, uint32_t num_pages, uint32_t page_size_bytes, typename AddrGen>
-FORCE_INLINE void noc_read_helper(const uint32_t l1_write_addr, const AddrGen& s) {
-    for (uint32_t i = 0; i < num_of_transactions; i++) {
-        for (uint32_t p = 0; p < num_pages; p++) {
-            noc_async_read_page(p, s, l1_write_addr + p * page_size_bytes);
-        }
-    }
-    noc_async_read_barrier();
-}
-
 // DRAM to L1 read
 void kernel_main() {
     uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -31,35 +21,52 @@ void kernel_main() {
     constexpr uint32_t test_id = get_compile_time_arg_val(3);
 
     constexpr uint32_t transaction_size_bytes = page_size_bytes;
-    DeviceTimestampedData("Number of transactions", num_of_transactions * num_pages);
-    DeviceTimestampedData("Transaction size in bytes", transaction_size_bytes);
+    DeviceTimestampedData("Number of transactions", num_of_transactions);
+    DeviceTimestampedData("Transaction size in bytes", num_pages * transaction_size_bytes);
     DeviceTimestampedData("Test id", test_id);
 
     uint32_t offset = 0;
-    uint32_t tile_size_bytes = 32 * 32 * 2;
+    uint32_t tile_size_bytes = page_size_bytes;
 
-    uint32_t total_size_bytes = 64 * 64 * 2;
-    uint64_t src_noc_addr = get_noc_addr_from_bank_id<true>(0, src_addr);  // bank 0, offset 0, noc 0 (default)
-    noc_async_read_set_state(src_noc_addr);
+    uint32_t total_size_bytes = page_size_bytes * num_pages;
+    // uint64_t src_noc_addr = get_noc_addr_from_bank_id<true>(0, src_addr);  // bank 0, offset 0, noc 0 (default)
+    // noc_async_read_set_state(src_noc_addr);
     // uint32_t dram_addr = noc_async_read_tile_dram_sharded_set_state<false>(src_addr, tile_size_bytes, 0);
-
     {
         DeviceZoneScopedN("RISCV0");
         // do i ever need to iterate over bank ids? one set state per bank id?
         // run kernel multiple times with different bank ids?
 
-        for (uint32_t bank_id = 0; bank_id < 4; bank_id++) {
+        /*
+        for (uint32_t i = 0; i < num_of_transactions; i++) {
+            for (uint32_t j = 0; j < num_pages; j++) {
+                noc_async_read_with_state(src_addr + j * tile_size_bytes, l1_addr + j * tile_size_bytes,
+        tile_size_bytes);
+            }
+        }
+        noc_async_read_barrier();
+        */
+
+        for (uint32_t bank_id = 0; bank_id < 6; bank_id++) {
             // how does local l1 src and dst addr work here? and how about size
-            noc_async_read_with_state(src_addr, l1_addr, tile_size_bytes);
-            // noc_async_read_tile_dram_sharded_with_state(dram_addr, offset, l1_addr);
-            // DPRINT << bank_id << " " << src_noc_addr << " " << src_addr << " " << l1_addr << ENDL();
-            DPRINT << bank_id << " " << src_noc_addr << " " << offset << " " << l1_addr << ENDL();
-            // tt::data_movement::common::print_bf16_pages(l1_addr, 32 * 32, 1);
-            src_addr += tile_size_bytes;
-            offset += tile_size_bytes;
-            l1_addr += tile_size_bytes;
+            uint64_t src_noc_addr =
+                get_noc_addr_from_bank_id<true>(bank_id, src_addr);  // bank 0, offset 0, noc 0 (default)
+            noc_async_read_set_state(src_noc_addr);
+            for (uint32_t i = 0; i < 4; i++) {
+                noc_async_read_with_state(
+                    src_addr + i * tile_size_bytes, l1_addr + i * tile_size_bytes, tile_size_bytes);
+            }
+            // noc_async_read_with_state(src_addr, l1_addr, tile_size_bytes * 4);
+            //  noc_async_read_tile_dram_sharded_with_state(dram_addr, offset, l1_addr);
+            //  DPRINT << bank_id << " " << src_noc_addr << " " << src_addr << " " << l1_addr << ENDL();
+            //  DPRINT << bank_id << " " << src_noc_addr << " " << offset << " " << l1_addr << ENDL();
+            //  tt::data_movement::common::print_bf16_pages(l1_addr, 32 * 32, 1);
+            //  src_addr += tile_size_bytes * 4;
+            //  offset += tile_size_bytes;
+            l1_addr += tile_size_bytes * 4;
             noc_async_read_barrier();
         }
+
         /*
         uint64_t src_noc_addr = get_noc_addr_from_bank_id<true>(0, src_addr); // bank 0, offset 0, noc 0 (default)
         noc_async_read_set_state(src_noc_addr);
