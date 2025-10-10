@@ -522,7 +522,6 @@ private:
         ASSERT(
             chip_multicast_command_header.start_distance_in_hops > 0 &&
             distance_in_hops <= LowLatencyRoutingFields::MAX_NUM_ENCODINGS);
-        ASSERT(distance_in_hops > 0);
 #endif
         return (LowLatencyRoutingFields::FWD_ONLY_FIELD &
                 ((1 << (distance_in_hops - 1) * LowLatencyRoutingFields::FIELD_WIDTH) - 1)) |

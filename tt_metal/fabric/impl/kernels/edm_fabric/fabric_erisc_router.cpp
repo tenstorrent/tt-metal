@@ -822,7 +822,6 @@ FORCE_INLINE void receiver_forward_packet(
                 execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
                 break;
             default: {
-                DPRINT << "Invalid routing field: " << routing << ENDL();
                 ASSERT(false);
             }
         }
