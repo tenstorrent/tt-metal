@@ -254,7 +254,6 @@ def run_experiments() -> dict:
         OperationType.SUM_KEY,
         OperationType.MEAN_KEY,
         OperationType.MAX_KEY,
-        OperationType.SOFTMAX_KEY,
         OperationType.MATMUL_KEY,
         OperationType.MATMUL_TT_KEY,
     ]
