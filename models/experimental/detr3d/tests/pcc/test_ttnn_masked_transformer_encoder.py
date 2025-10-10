@@ -14,7 +14,7 @@ from models.experimental.detr3d.reference.detr3d_model import (
 from tests.ttnn.utils_for_testing import comp_pcc
 from models.experimental.detr3d.ttnn.transformer import TTTransformerEncoderLayer
 
-from models.experimental.detr3d.ttnn.encoder import TtMaskedTransformerEncoder, EncoderArgs
+from models.experimental.detr3d.ttnn.encoder import TtMaskedTransformerEncoder, EncoderLayerArgs
 from ttnn.model_preprocessing import preprocess_model_parameters
 from models.experimental.detr3d.ttnn.custom_preprocessing import create_custom_mesh_preprocessor
 from models.experimental.detr3d.ttnn.ttnn_pointnet_samodule_votes import TtnnPointnetSAModuleVotes
@@ -174,11 +174,10 @@ def test_masked_transformer_encoder(
         num_layers,
         masking_radius,
         tt_interim_downsampling,
-        encoder_args=EncoderArgs(
+        encoder_args=EncoderLayerArgs(
             d_model=d_model,
             nhead=nhead,
             dim_feedforward=dim_feedforward,
-            dropout=dropout,
             normalize_before=normalize_before,
             use_ffn=use_ffn,
         ),

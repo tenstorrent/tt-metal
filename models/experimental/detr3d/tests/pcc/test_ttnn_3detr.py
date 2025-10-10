@@ -29,6 +29,7 @@ from tests.ttnn.utils_for_testing import comp_pcc
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_3detr_model(encoder_only, input_shapes, device):
+    torch.manual_seed(42)
     mesh_device = device
     args = Detr3dArgs()
     dataset_config = SunrgbdDatasetConfig()
@@ -38,7 +39,7 @@ def test_3detr_model(encoder_only, input_shapes, device):
     ref_module, _ = build_3detr(args, dataset_config)
     ref_module.eval()
     checkpoint = torch.load("models/experimental/detr3d/sunrgbd_masked_ep720.pth", map_location="cpu")["model"]
-    ref_module.load_state_dict(checkpoint)
+    ref_module.load_state_dict(checkpoint, strict=True)
     ref_out = ref_module(inputs=input_dict, encoder_only=encoder_only)
 
     ref_module_parameters = preprocess_model_parameters(
@@ -56,17 +57,12 @@ def test_3detr_model(encoder_only, input_shapes, device):
         enc_nlayers = 3
         enc_dim = 256
         enc_ffn_dim = 128
-        enc_dropout = 0.1
         enc_nhead = 4
-        enc_pos_embed = None
         enc_activation = "relu"
         dec_nlayers = 8
         dec_dim = 256
         dec_ffn_dim = 256
-        dec_dropout = 0.1
         dec_nhead = 4
-        mlp_dropout = 0.3
-        nsemcls = -1
         preenc_npoints = 2048
         nqueries = 128
         use_color = False

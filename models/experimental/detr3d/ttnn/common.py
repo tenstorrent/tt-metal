@@ -73,10 +73,10 @@ class TtnnConv1D:
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         # print(f"{out_length=}")
-        tt_output_tensor_on_device = ttnn.reshape(
-            tt_output_tensor_on_device,
-            (1, out_length, tt_output_tensor_on_device.shape[-2] // out_length, tt_output_tensor_on_device.shape[-1]),
-        )
+        # tt_output_tensor_on_device = ttnn.reshape(
+        #     tt_output_tensor_on_device,
+        #     (1, out_length, tt_output_tensor_on_device.shape[-2] // out_length, tt_output_tensor_on_device.shape[-1]),
+        # )
         # print(f"{tt_output_tensor_on_device.shape=}")
         return tt_output_tensor_on_device
 

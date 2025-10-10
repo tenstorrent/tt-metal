@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
 import ttnn
 import torch
 from typing import Optional
@@ -6,12 +10,10 @@ from dataclasses import dataclass, asdict
 
 
 @dataclass
-class EncoderArgs:
+class EncoderLayerArgs:
     d_model: int = None
     nhead: int = 4
     dim_feedforward: int = 128
-    dropout: float = 0.0
-    dropout_attn: float = None
     activation: str = "relu"
     normalize_before: bool = True
     norm_name: str = "ln"
@@ -28,7 +30,7 @@ class TtMaskedTransformerEncoder(LightweightModule):
         interim_downsampling,
         norm=None,
         device=None,
-        encoder_args=EncoderArgs(),
+        encoder_args=EncoderLayerArgs(),
         parameters=None,
     ):
         self.layers = []
@@ -49,26 +51,6 @@ class TtMaskedTransformerEncoder(LightweightModule):
         self.device = device
 
         assert len(masking_radius) == num_layers
-
-    # def compute_mask(self, xyz, radius, dist=None):
-    #     if dist is None or dist.shape[1] != xyz.shape[1]:
-    #         # Convert to ttnn tensor if needed
-    #         if not isinstance(xyz, ttnn.Tensor):
-    #             xyz = ttnn.from_torch(xyz, device=self.device)
-
-    #         # Compute pairwise distances using ttnn operations
-    #         # ttnn doesn't have cdist, so we implement it manually
-    #         # ||x - y||^2 = ||x||^2 + ||y||^2 - 2<x,y>
-    #         xyz_norm_sq = ttnn.sum(ttnn.mul(xyz, xyz), dim=-1, keepdim=True)
-    #         xyz_norm_sq_t = ttnn.transpose(xyz_norm_sq, -2, -1)
-    #         xyz = ttnn.to_layout(xyz, ttnn.TILE_LAYOUT)
-    #         dot_product = ttnn.matmul(xyz, ttnn.transpose(xyz, -2, -1))
-    #         dist = xyz_norm_sq + xyz_norm_sq_t - 2 * dot_product
-    #         dist = ttnn.sqrt(dist)
-
-    #     # Create mask where distances >= radius
-    #     mask = ttnn.ge(dist, radius)
-    #     return mask, dist
 
     def compute_mask(self, xyz, radius, dist=None):
         with torch.no_grad():
@@ -116,21 +98,14 @@ class TtMaskedTransformerEncoder(LightweightModule):
             attn_mask = None
             if self.masking_radius[idx] > 0:
                 attn_mask, xyz_dist = self.compute_mask(xyz, self.masking_radius[idx], xyz_dist)
-
-                # Expand mask for multi-head attention
-                # bsz, n, n = attn_mask.shape
-                # nhead = layer.nhead
-                attn_mask = ttnn.unsqueeze(attn_mask, 1)  # (bsz, 1, n, n)
-                # attn_mask = ttnn.repeat(attn_mask, (1, nhead, 1, 1))  # (bsz, nhead, n, n)
-                # attn_mask = ttnn.reshape(attn_mask, (bsz * nhead, n, n))
-                # attn_mask = ttnn.reshape(attn_mask, (bsz, n, n))
+                attn_mask = ttnn.unsqueeze(attn_mask, 1)
 
             output = ttnn.permute(output, (1, 0, 2))
             output = layer(output, src_mask=attn_mask, src_key_padding_mask=src_key_padding_mask, pos=pos)
             output = ttnn.permute(output, (1, 0, 2))
 
             if idx == 0 and self.interim_downsampling:
-                output = ttnn.permute(output, (1, 2, 0))  # 2048, 1, 256 -> 1, 256, 2048
+                output = ttnn.permute(output, (1, 2, 0))
                 xyz, output, xyz_inds = self.interim_downsampling(xyz, output)
                 output = ttnn.permute(output, (2, 0, 1))
 
