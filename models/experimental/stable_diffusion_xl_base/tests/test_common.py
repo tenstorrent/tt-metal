@@ -557,7 +557,9 @@ def run_tt_image_gen(
                     ttnn.deallocate(noise_pred)
                     noise_pred = noise_pred_out
                     noise_pred = noise_pred[..., :4]
-                    noise_pred_uncond, noise_pred_text = ttnn.unsqueeze(noise_pred[0], 0), ttnn.unsqueeze(noise_pred[1], 0)
+                    noise_pred_uncond, noise_pred_text = ttnn.unsqueeze(noise_pred[0], 0), ttnn.unsqueeze(
+                        noise_pred[1], 0
+                    )
                 else:
                     noise_pred_uncond, noise_pred_text = unet_outputs
 
@@ -566,7 +568,9 @@ def run_tt_image_gen(
                 noise_pred_text = ttnn.mul_(noise_pred_text, guidance_scale)
                 noise_pred = ttnn.add_(noise_pred_uncond, noise_pred_text)
 
-                tt_latents = tt_scheduler.step(noise_pred, None, tt_latents, **tt_extra_step_kwargs, return_dict=False)[0]
+                tt_latents = tt_scheduler.step(noise_pred, None, tt_latents, **tt_extra_step_kwargs, return_dict=False)[
+                    0
+                ]
 
                 ttnn.deallocate(noise_pred_uncond)
                 ttnn.deallocate(noise_pred_text)
