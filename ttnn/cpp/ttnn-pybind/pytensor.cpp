@@ -575,14 +575,12 @@ Tensor convert_python_tensor_to_tt_tensor(
     const auto shape = ttnn::Shape(py::cast<ttnn::SmallVector<uint32_t>>(py_tensor.attr("shape")));
 
     Tensor output = create_device_tensor_from_host_data(
-        TensorSpec(
-            shape,
-            TensorLayout(
-                get_target_type(optional_data_type, py_tensor),
-                PageConfig(
-                    optional_layout.value_or(data_type_requires_tile ? Layout::TILE : Layout::ROW_MAJOR),
-                    optional_tile),
-                memory_config)),
+        shape,
+        TensorLayout(
+            get_target_type(optional_data_type, py_tensor),
+            PageConfig(
+                optional_layout.value_or(data_type_requires_tile ? Layout::TILE : Layout::ROW_MAJOR), optional_tile),
+            memory_config),
         get_py_tensor_type_info(py_tensor),
         [&](const DataType& dtype) -> HostBuffer {
             py::object tensor = py::reinterpret_borrow<pybind11::object>(py_tensor);

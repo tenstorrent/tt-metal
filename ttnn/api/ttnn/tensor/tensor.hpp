@@ -339,7 +339,8 @@ enum class host_buffer_data_type {
 };
 
 Tensor create_device_tensor_from_host_data(
-    const TensorSpec& tensor_spec,
+    const ttnn::Shape& tensor_shape,
+    const TensorLayout& tensor_layout,
     const host_buffer_data_type& host_data_type,
     std::function<HostBuffer(DataType)> get_host_data,
     tt::tt_metal::distributed::MeshDevice* device,
