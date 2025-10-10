@@ -23,7 +23,7 @@ cd ttnn/ttnn/ops_visualizer/
 pip install -r requirements.txt --user
 
 # 3. Generate profiling data (Level 1)
-cd ../ops_profiler/
+cd ../ops_visualizer/
 ./generate_model_perf_sheets.sh
 
 # 4. Create combined Excel (Level 2)
@@ -46,7 +46,7 @@ python model_ops_visualizer.py reports_combined_complete.xlsx
 ### Level 2: Excel Processing 📊
 **Script**: `create_combined_excel.py`
 - Combines CSV files into formatted Excel workbook
-- Adds data bars, FPS calculations, and performance rankings
+- Adds data bars and FPS calculations for each model
 - Filters out system files automatically
 - Handles different CSV formats gracefully
 
@@ -96,6 +96,7 @@ UNET, VGG19, ViT, Mobilenet, Sentence-BERT, ResNet, YOLOv4-v12 variants, Segform
 ## 📦 Requirements
 
 **Python Packages**: pandas, openpyxl, matplotlib, seaborn, numpy, xlsxwriter, Pillow
+
 **System**: Ubuntu 22.04, Python 3.7+, 4GB+ RAM, 1GB+ storage
 
 ---
