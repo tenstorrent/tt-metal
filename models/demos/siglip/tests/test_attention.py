@@ -37,10 +37,8 @@ from models.demos.siglip.tt.attention import siglip_attention_ttnn
     indirect=True,
 )
 @pytest.mark.parametrize("attention_func", [siglip_attention, siglip_attention_ttnn])
-def test_attention(mesh_device, attention_func, model_location_generator):
-    config = AutoConfig.from_pretrained(
-        model_location_generator(model_version=os.getenv("HF_MODEL"), download_if_ci_v2=True)
-    )
+def test_attention(mesh_device, attention_func):
+    config = AutoConfig.from_pretrained(os.getenv("HF_MODEL"))
 
     assert hasattr(
         config, "vision_config"
