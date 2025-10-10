@@ -31,11 +31,10 @@ void MAIN {
     View::compute_tiles(
         n_tiles,
         // c_1 * value -> c_2
-        with_cb_ids</*0*/ c_1, /*1*/ c_2>(
-            copy<0 /*c_1*/>(0, 0), mul_unary(0, get_arg_val<uint32_t>(1)), pack<1 /*c_2*/>(0)),
+        with_cb_ids<c_1, c_2>(mul_unary(get_arg_val<uint32_t>(1))),
         // c_2 * c_3 -> c_2
-        with_cb_ids</*0*/ c_2, /*1*/ c_3, /*2*/ c_2>(mul<0 /*c_2*/, 1 /*c_3*/>(0, 0, 0), pack<2 /*c_2*/>(0)),
+        with_cb_ids<c_2, c_3, c_2>(mul()),
         // c_0 + c_2 -> c_4
-        with_cb_ids</*0*/ c_0, /*1*/ c_2, /*2*/ c_4>(add<0 /*c_0*/, 1 /*c_2*/>(0, 0, 0), pack<2 /*c_4*/>(0)));
+        with_cb_ids<c_0, c_2, c_4>(add()));
 }
 }  // namespace NAMESPACE
