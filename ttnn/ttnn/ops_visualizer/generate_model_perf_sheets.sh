@@ -244,7 +244,7 @@ fi
 
 # Sentence-BERT base (SeqL=384) (b=8)
 TOTAL=$((TOTAL + 1))
-if run_model_test "Sentence-BERT" "base_seql384_b8" "python -m tracy -p -r -v -m pytest --disable-warnings $TT_METAL_HOME/models/demos/sentence_bert/tests/pcc/test_ttnn_sentencebert_model.py::test_ttnn_sentence_bert_model -v"; then
+if run_model_test "Sentence-BERT" "base_seql384_b8" "python -m tracy -p -r -v -m pytest $TT_METAL_HOME/models/demos/sentence_bert/tests/pcc/test_ttnn_sentencebert_model.py::test_ttnn_sentence_bert_model -v"; then
     PASSED=$((PASSED + 1))
 else
     FAILED=$((FAILED + 1))
@@ -340,7 +340,7 @@ fi
 
 # Yolov10 x 640x640
 TOTAL=$((TOTAL + 1))
-if run_model_test "Yolov10" "x_640x640" "python -m tracy -p -r -v -m pytest --disable-warnings $TT_METAL_HOME/models/demos/yolov10x/tests/pcc/test_ttnn_yolov10x.py::test_yolov10x -v"; then
+if run_model_test "Yolov10" "x_640x640" "python -m tracy -p -r -v -m pytest $TT_METAL_HOME/models/demos/yolov10x/tests/pcc/test_ttnn_yolov10x.py::test_yolov10x -v"; then
     PASSED=$((PASSED + 1))
 else
     FAILED=$((FAILED + 1))
@@ -390,7 +390,7 @@ echo -e "${YELLOW}Starting experimental models...${NC}" | tee -a "$LOG_FILE"
 
 # Swin s 512x512 (experimental)
 TOTAL=$((TOTAL + 1))
-if run_model_test "Swin" "s_512x512" "python -m tracy -p -r -v -m pytest $TT_METAL_HOME/pytest models/experimental/swin_s/tests/pcc/test_ttnn_swin_transformer.py::test_swin_s_transformer -v"; then
+if run_model_test "Swin" "s_512x512" "python -m tracy -p -r -v -m pytest $TT_METAL_HOME/models/experimental/swin_s/tests/pcc/test_ttnn_swin_transformer.py::test_swin_s_transformer -v"; then
     PASSED=$((PASSED + 1))
 else
     FAILED=$((FAILED + 1))
