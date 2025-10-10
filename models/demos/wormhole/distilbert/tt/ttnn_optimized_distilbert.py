@@ -128,7 +128,7 @@ def ffn(configs, hidden_state, device, base_address, parameters, num_cores_x=12,
         bias=parameters.lin1.bias,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         dtype=ttnn.bfloat16,
-        activation="gelu",
+        activation="gelu_approx",
         core_grid=ttnn.CoreGrid(y=device.core_grid.y, x=device.core_grid.x),
     )
 
