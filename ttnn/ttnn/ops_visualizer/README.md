@@ -23,11 +23,11 @@ cd ttnn/ttnn/ops_visualizer/
 pip install -r requirements.txt --user
 
 # 3. Generate profiling data (Level 1)
-cd ../ops_visualizer/
-./generate_model_perf_sheets.sh
+cd $TT_METAL_HOME
+./ttnn/ttnn/ops_visualizer/generate_model_perf_sheets.sh
 
 # 4. Create combined Excel (Level 2)
-cd ../ops_visualizer/
+cd ttnn/ttnn/ops_visualizer/
 python create_combined_excel.py $TT_METAL_HOME/generated/profiler/reports
 
 # 5. Generate visualizations (Level 3)
@@ -37,21 +37,21 @@ python model_ops_visualizer.py reports_combined_complete.xlsx
 ## 🔄 Three-Level Process
 
 ### Level 1: Profile Generation 🔬
-**Script**: `generate_model_perf_sheets.sh`
+**Script**: `generate_model_perf_sheets.sh` (run from `$TT_METAL_HOME`)
 - Runs pytest with tracy profiling for 20+ models
 - Generates timestamped CSV files in `$TT_METAL_HOME/generated/profiler/reports/`
 - Handles failures gracefully, continues with remaining models
 - Can be safely interrupted with Ctrl+C
 
 ### Level 2: Excel Processing 📊
-**Script**: `create_combined_excel.py`
+**Script**: `create_combined_excel.py` (run from `ttnn/ttnn/ops_visualizer/`)
 - Combines CSV files into formatted Excel workbook
 - Adds data bars and FPS calculations for each model
 - Filters out system files automatically
 - Handles different CSV formats gracefully
 
 ### Level 3: Visualization 📈
-**Script**: `model_ops_visualizer.py`
+**Script**: `model_ops_visualizer.py` (run from `ttnn/ttnn/ops_visualizer/`)
 - Creates professional charts and graphs
 - Generates `model_performance_analysis.png`
 - Includes performance comparisons, operation distributions, and summary tables
