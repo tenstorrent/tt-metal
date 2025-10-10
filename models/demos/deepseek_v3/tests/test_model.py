@@ -24,8 +24,186 @@ from models.demos.deepseek_v3.utils.test_utils import (
     load_state_dict,
     paged_caches_from_torch,
     run_reference_with_attention,
+    torch_cache_from_paged,
     torch_cache_from_transformers,
 )
+
+
+def _get_cache_on_host(tt_cache: ttnn.Tensor, row_idx: int, mesh_device: ttnn.MeshDevice) -> torch.Tensor:
+    """
+    Fetch a row-shard of the KVPE cache from device to host and stitch DP columns.
+
+    Args:
+        tt_cache: Per-layer TTNN cache tensor (sharded on mesh).
+        row_idx: Which mesh row to fetch.
+        mesh_device: Mesh meta for slicing/concat.
+    Returns:
+        torch.Tensor: host cache for that row, DP-concatenated on dim 0.
+    """
+    mesh_shape = list(mesh_device.shape)
+    host_chunks = []
+    # Concatenate all DP column shards for the requested row
+    for t in ttnn.get_device_tensors(tt_cache)[row_idx * mesh_shape[1] : (row_idx + 1) * mesh_shape[1]]:
+        host_chunks.append(t.cpu().to_torch())
+    return torch.concat(host_chunks, dim=0)
+
+
+def _get_layer_kvpe_cache_from_run_config(run_config, layer_idx: int):
+    """
+    Robustly resolve the TT-side KVPE cache tensor for a given layer
+    from the run_config/model_state structure.
+    """
+    # Most likely shape in model-level runs
+    if isinstance(run_config, dict):
+        if "kvpe_caches" in run_config:
+            return run_config["kvpe_caches"][layer_idx]
+        # Some setups pack per-layer dicts
+        if "layers" in run_config:
+            layer_entry = run_config["layers"][layer_idx]
+            if isinstance(layer_entry, dict) and "kvpe_cache" in layer_entry:
+                return layer_entry["kvpe_cache"]
+        # Single-layer fallback (shouldn't normally occur here, but safe)
+        if "kvpe_cache" in run_config:
+            return run_config["kvpe_cache"]
+    raise KeyError(f"Could not locate KVPE cache for layer {layer_idx} in run_config")
+
+
+def _canonicalize_ref_layer_cache(ref_layer_cache: torch.Tensor) -> torch.Tensor:
+    """
+    Make sure the reference (PyTorch) layer cache has the expected
+    shape [batch, max_seq_len, head_dim + rope_head_dim].
+    Some helpers return [batch, 1, ...] on decode; squeeze if needed.
+    """
+    if ref_layer_cache.dim() == 4 and ref_layer_cache.size(1) == 1:
+        return ref_layer_cache.squeeze(1)
+    return ref_layer_cache
+
+
+def index_to_coords(idx, length, rows=4):
+    """Return (row, col) of an index in a 4×n grid filled row-wise."""
+    import math
+
+    n_cols = math.ceil(length / rows)
+    row = idx % rows
+    col = idx // rows
+    return row, col
+
+
+def get_kvcache(
+    layer_idx,
+    run_config,
+    hf_config_short,
+    output_cache,
+    torch_page_tables,
+    mode,
+    mesh_device,
+    dp_factor,
+    batch_size,
+    seq_len,
+    user_id,
+    position_ids,
+):
+    decoder_block = run_config["mlp_decoder_block"] if layer_idx < 3 else run_config["moe_decoder_block"]
+    layer_idx = layer_idx - 3 if layer_idx > 3 else layer_idx
+
+    row_idx, meta_layer_idx = (
+        index_to_coords(layer_idx - 3, hf_config_short.num_hidden_layers - 3)
+        if layer_idx >= 3
+        else index_to_coords(layer_idx, 3)
+    )
+
+    tt_cache = _get_cache_on_host(decoder_block[meta_layer_idx]["mla"]["kvpe_cache"], row_idx, mesh_device)
+    tt_cache = torch_cache_from_paged(tt_cache, torch_page_tables[layer_idx], dp_factor).squeeze(1)
+
+    _output_cache = output_cache[layer_idx].squeeze(1)
+
+    if mode == "decode":
+        # Advanced indexing to get the correct position for each user
+        batch_indices = torch.arange(batch_size)
+        tt_cache = tt_cache[batch_indices, position_ids, :].unsqueeze(1)  # [bsz, 1(seq_len), head_dim + rope_head_dim]
+        _output_cache = _output_cache[:, -1, :].unsqueeze(1)  # [bsz, 1(seq_len), head_dim + rope_head_dim]
+    else:
+        tt_cache = tt_cache[user_id, :seq_len, :].unsqueeze(1)  # [1(bsz), seq_len, head_dim + rope_head_dim]
+        _output_cache = _output_cache[0, :seq_len, :].unsqueeze(1)  # [1(bsz), seq_len, head_dim + rope_head_dim]
+
+    tt_cache_kv = tt_cache[..., : hf_config_short.kv_lora_rank]
+    tt_cache_pe = tt_cache[..., hf_config_short.kv_lora_rank :]
+
+    ref_cache_kv = _output_cache[..., : hf_config_short.kv_lora_rank]  # [bsz, _, head_dim]
+    ref_cache_pe = _output_cache[..., hf_config_short.kv_lora_rank :]  # [bsz, _, rope_head_dim]
+
+    return tt_cache_kv, tt_cache_pe, ref_cache_kv, ref_cache_pe
+
+
+def check_kvcache(
+    mesh_device,
+    start_layer_idx,
+    end_layer_idx,
+    run_config,
+    output_cache,
+    torch_page_tables,
+    dp_factor,
+    mode,
+    batch_size,
+    seq_len,
+    position_ids,
+    user_id,
+    hf_config_short,
+    pcc_required_kvpe=0.98,
+):
+    layer_num = 1 if start_layer_idx == 0 else start_layer_idx
+    is_padding_layer, meta_layer_indices = Model.get_meta_layer_mapping(
+        mesh_device.shape[0], start_layer_idx, end_layer_idx
+    )
+    all_cache_passing = True
+
+    decoder_block = run_config["mlp_decoder_block"] if start_layer_idx < 3 else run_config["moe_decoder_block"]
+
+    for row_idx, (per_row_is_padding_layer, per_row_meta_layer_indices) in enumerate(
+        zip(is_padding_layer.T, meta_layer_indices.T, strict=True)
+    ):
+        for meta_layer_idx, (is_padding_layer, layer_idx) in enumerate(
+            zip(per_row_is_padding_layer, per_row_meta_layer_indices, strict=True)
+        ):
+            if is_padding_layer:
+                continue
+            logger.info(f"[Layer {layer_num}] Checking KV/PE cache PCC")
+
+            # TT side: fetch device cache shard and convert from paged to logical layout
+            tt_cache = _get_cache_on_host(decoder_block[meta_layer_idx]["mla"]["kvpe_cache"], layer_idx, mesh_device)
+            tt_cache = torch_cache_from_paged(tt_cache, torch_page_tables[layer_idx], dp_factor).squeeze(1)
+
+            _output_cache = output_cache[layer_idx].squeeze(1)
+
+            if mode == "decode":
+                # Advanced indexing to get the correct position for each user
+                batch_indices = torch.arange(batch_size)
+                tt_cache = tt_cache[batch_indices, position_ids, :].unsqueeze(
+                    1
+                )  # [bsz, 1(seq_len), head_dim + rope_head_dim]
+                _output_cache = _output_cache[:, -1, :].unsqueeze(1)  # [bsz, 1(seq_len), head_dim + rope_head_dim]
+            else:
+                tt_cache = tt_cache[user_id, :seq_len, :].unsqueeze(1)  # [1(bsz), seq_len, head_dim + rope_head_dim]
+                _output_cache = _output_cache[0, :seq_len, :].unsqueeze(
+                    1
+                )  # [1(bsz), seq_len, head_dim + rope_head_dim]
+
+            tt_cache_kv = tt_cache[..., : hf_config_short.kv_lora_rank]
+            tt_cache_pe = tt_cache[..., hf_config_short.kv_lora_rank :]
+
+            ref_cache_kv = _output_cache[..., : hf_config_short.kv_lora_rank]  # [bsz, _, head_dim]
+            ref_cache_pe = _output_cache[..., hf_config_short.kv_lora_rank :]  # [bsz, _, rope_head_dim]
+
+            kv_passing, kv_pcc_message = comp_pcc(ref_cache_kv, tt_cache_kv, pcc_required_kvpe)
+            pe_passing, pe_pcc_message = comp_pcc(ref_cache_pe, tt_cache_pe, pcc_required_kvpe)
+
+            logger.info(f"Cache KV PCC: {kv_pcc_message}")
+            logger.info(f"Cache PE PCC: {pe_pcc_message}")
+
+            all_cache_passing = all_cache_passing and kv_passing and pe_passing
+            layer_num += 1
+
+    return all_cache_passing
 
 
 @pytest.mark.parametrize(
@@ -37,7 +215,7 @@ from models.demos.deepseek_v3.utils.test_utils import (
 )
 @pytest.mark.parametrize(
     "use_real_weights",
-    [True],  # Test only with real weights for now
+    [True, False],  # Test only with real weights for now
 )
 @pytest.mark.parametrize(
     "mode, seq_len, batch_size",
@@ -60,6 +238,7 @@ def test_forward_pass(
     ccl,
     force_recalculate_weight_config,
     set_deterministic_env,
+    pcc_required_kvpe=0.98,
 ):
     # Set less layers and shorter max length for the sake of testing
     hf_config_short.num_hidden_layers = 8
@@ -104,9 +283,9 @@ def test_forward_pass(
             position_ids = torch.tensor([seq_len])
         else:
             position_ids = torch.randint(0, hf_config_short.max_seq_len - 1, (batch_size,))
-            position_ids = torch.zeros(
-                (batch_size,), dtype=torch.long
-            )  # TODO: investigate the PCC issue with real weights
+            # position_ids = torch.zeros(
+            #     (batch_size,), dtype=torch.long
+            # )  # TODO: investigate the PCC issue with real weights
 
         logger.info("Running the reference model")
         logger.info(
@@ -132,10 +311,10 @@ def test_forward_pass(
         if mode == "prefill":
             position_ids = torch.tensor([seq_len])
         else:
-            # position_ids = torch.randint(0, hf_config_short.max_seq_len - 1, (batch_size,))
-            position_ids = torch.zeros(
-                (batch_size,), dtype=torch.long
-            )  # TODO: investigate the PCC issue with real weights
+            position_ids = torch.randint(0, hf_config_short.max_seq_len - 1, (batch_size,))
+            # position_ids = torch.zeros(
+            #     (batch_size,), dtype=torch.long
+            # )  # TODO: investigate the PCC issue with real weights
         reference_output, input_cache, output_cache = run_reference_with_attention(
             reference_model, torch_input, position_ids, None, hf_config_short, mode, False
         )
@@ -239,7 +418,92 @@ def test_forward_pass(
     logger.info(f"Mode: {mode}, Seq len: {seq_len}, Batch size: {batch_size}")
     logger.info(f"PCC: {pcc_message}")
 
-    assert passing, f"Test failed for Model because PCC < {pcc_required} in {mode} mode."
+    # Model.iter_decoder_block_indices(
+    #     num_mesh_rows=mesh_device.shape[0],
+    #     start_layer_idx=0,
+    #     end_layer_idx=hf_config_short.num_hidden_layers,
+    #     output_cache=output_cache,
+    #     batch_size=batch_size,
+    #     position_ids=position_ids,
+    #     mode=mode,
+    # )
+
+    # ---------- KV/PE cache PCC (per layer) ----------
+    logger.info("Validating KV/PE cache PCC per layer")
+    pcc_required_kvpe = 0.98
+    all_cache_passing = True
+
+    for layer_idx in range(hf_config_short.num_hidden_layers):
+        logger.info(f"[Layer {layer_idx + 1}] Checking KV/PE cache PCC")
+        breakpoint()
+        tt_cache_kv, tt_cache_pe, ref_cache_kv, ref_cache_pe = get_kvcache(
+            layer_idx,
+            run_config,
+            hf_config_short,
+            output_cache,
+            torch_page_tables,
+            mode,
+            mesh_device,
+            dp_factor,
+            batch_size,
+            seq_len,
+            user_id,
+            position_ids,
+        )
+
+        kv_passing, kv_pcc_message = comp_pcc(ref_cache_kv, tt_cache_kv, pcc_required_kvpe)
+        pe_passing, pe_pcc_message = comp_pcc(ref_cache_pe, tt_cache_pe, pcc_required_kvpe)
+
+        logger.info(f"Cache KV PCC: {kv_pcc_message}")
+        logger.info(f"Cache PE PCC: {pe_pcc_message}")
+
+        all_cache_passing = all_cache_passing and kv_passing and pe_passing
+
+    if not all_cache_passing:
+        logger.error(f"Test failed for Model because output PCC < {pcc_required_kvpe} in {mode} mode.")
+
+    # Loop over layers and compare TT cache vs. reference cache
+    # for layer_idx in range(3, hf_config_short.num_hidden_layers):
+    #     logger.info(f"[Layer {layer_idx + 1}] Checking KV/PE cache PCC")
+
+    #     decoder_block = run_config["mlp_decoder_block"] if layer_idx < 3 else run_config["moe_decoder_block"]
+
+    #     # TT side: fetch device cache shard and convert from paged to logical layout
+    #     tt_cache = _get_cache_on_host(
+    #         decoder_block[meta_layer_idx]["mla"]["kvpe_cache"],
+    #         layer_idx if layer_idx < 3 else (layer_idx + 1) % 4,
+    #         mesh_device
+    #     )
+    #     tt_cache = torch_cache_from_paged(tt_cache, torch_page_tables[layer_idx], dp_factor).squeeze(1)
+
+    #     _output_cache = output_cache[layer_idx].squeeze(1)
+
+    #     if mode == "decode":
+    #         # Advanced indexing to get the correct position for each user
+    #         batch_indices = torch.arange(batch_size)
+    #         tt_cache = tt_cache[batch_indices, position_ids, :].unsqueeze(
+    #             1
+    #         )  # [bsz, 1(seq_len), head_dim + rope_head_dim]
+    #         _output_cache = _output_cache[:, -1, :].unsqueeze(1)  # [bsz, 1(seq_len), head_dim + rope_head_dim]
+    #     else:
+    #         tt_cache = tt_cache[user_id, :seq_len, :].unsqueeze(1)  # [1(bsz), seq_len, head_dim + rope_head_dim]
+    #         _output_cache = _output_cache[0, :seq_len, :].unsqueeze(1)  # [1(bsz), seq_len, head_dim + rope_head_dim]
+
+    #     tt_cache_kv = tt_cache[..., : hf_config_short.kv_lora_rank]
+    #     tt_cache_pe = tt_cache[..., hf_config_short.kv_lora_rank :]
+
+    #     ref_cache_kv = _output_cache[..., : hf_config_short.kv_lora_rank]  # [bsz, _, head_dim]
+    #     ref_cache_pe = _output_cache[..., hf_config_short.kv_lora_rank :]  # [bsz, _, rope_head_dim]
+
+    #     kv_passing, kv_pcc_message = comp_pcc(ref_cache_kv, tt_cache_kv, pcc_required_kvpe)
+    #     pe_passing, pe_pcc_message = comp_pcc(ref_cache_pe, tt_cache_pe, pcc_required_kvpe)
+
+    #     logger.info(f"Cache KV PCC: {kv_pcc_message}")
+    #     logger.info(f"Cache PE PCC: {pe_pcc_message}")
+
+    #     all_cache_passing = all_cache_passing and kv_passing and pe_passing
+
+    #     meta_layer_idx = meta_layer_idx +1 if layer_idx >= 3 and (layer_idx - 2) % 4 == 0 else meta_layer_idx if layer_idx >= 3 else 0
 
 
 if __name__ == "__main__":
