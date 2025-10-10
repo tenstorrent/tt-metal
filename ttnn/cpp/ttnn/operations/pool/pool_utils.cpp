@@ -205,7 +205,15 @@ uint32_t calculate_L1_usage(
     }
 
     FactoryParameters params = get_factory_parameters(
-        num_shards_c, input.dtype(), output_dtype, kernel_h, kernel_w, in_channels, pool_type, return_indices, output_layout);
+        num_shards_c,
+        input.dtype(),
+        output_dtype,
+        kernel_h,
+        kernel_w,
+        in_channels,
+        pool_type,
+        return_indices,
+        output_layout);
 
     bool one_scalar_per_core = is_pool_op_one_scalar_per_core(
         pool_type, ceil_mode, ceil_pad_h, ceil_pad_w, count_include_pad, pad_h, pad_w, divisor_override);
@@ -393,6 +401,8 @@ std::optional<ParallelConfig> determine_pool_config_for_auto_shard(
 // they are sensical to avoid problems in sliding window config, halo and other setup procedures
 void validate_input_params(
     const Tensor& input_tensor,
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
+    Pool2DType pool_type,
     uint32_t batch_size,
     uint32_t input_h,
     uint32_t input_w,
@@ -495,6 +505,25 @@ void validate_input_params(
         effective_kernel_w,
         padded_input_h,
         padded_input_w);
+
+    // Validate fp32_dest_acc_en setting for average pooling with large kernels
+    if (compute_kernel_config.has_value() && pool_type == Pool2DType::AVG_POOL2D) {
+        // Calculate if this is a large kernel (same logic as in determine_pool_config)
+        uint32_t kernel_size_hw = kernel_size[0] * kernel_size[1];
+        const bool last_tile_is_partial = channels % tt::constants::TILE_WIDTH != 0 &&
+                                          channels % tt::constants::TILE_WIDTH <= tt::constants::FACE_WIDTH;
+        const uint32_t max_rows_for_reduction =
+            !last_tile_is_partial ? tt::constants::TILE_HEIGHT : tt::constants::TILE_HEIGHT / 2;
+        const bool is_large_kernel = kernel_size_hw > max_rows_for_reduction;
+
+        if (is_large_kernel) {
+            bool fp32_dest_acc_en = get_fp32_dest_acc_en(compute_kernel_config);
+            TT_FATAL(
+                fp32_dest_acc_en == true,
+                "Pool2D: For average pooling where kernel is large, fp32_dest_acc_en must be true, but got {}",
+                fp32_dest_acc_en);
+        }
+    }
 }
 
 }  // namespace ttnn::operations::pool
