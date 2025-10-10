@@ -1198,12 +1198,12 @@ private:
         // Output directory already set in initialize_bandwidth_results_csv_file()
         std::filesystem::path output_path =
             std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) / output_dir;
-        std::filesystem::path summary_csv_file_path = output_path / summary_oss.str();
+        csv_summary_file_path_ = output_path / summary_oss.str();
 
         // Create detailed CSV file with header
-        std::ofstream summary_csv_stream(summary_csv_file_path, std::ios::out | std::ios::trunc);  // Truncate file
+        std::ofstream summary_csv_stream(csv_summary_file_path_, std::ios::out | std::ios::trunc);  // Truncate file
         if (!summary_csv_stream.is_open()) {
-            log_error(tt::LogTest, "Failed to create summary CSV file: {}", summary_csv_file_path.string());
+            log_error(tt::LogTest, "Failed to create summary CSV file: {}", csv_summary_file_path_.string());
             return;
         }
 
@@ -1215,7 +1215,7 @@ private:
         }
         summary_csv_stream << ",tolerance_percent";
         summary_csv_stream << "\n";
-        log_info(tt::LogTest, "Initialized summary CSV file: {}", summary_csv_file_path.string());
+        log_info(tt::LogTest, "Initialized summary CSV file: {}", csv_summary_file_path_.string());
 
         // Write data rows
         for (const auto& result : bandwidth_results_summary_) {
@@ -1246,7 +1246,7 @@ private:
             summary_csv_stream << "\n";
         }
         summary_csv_stream.close();
-        log_info(tt::LogTest, "Bandwidth summary results appended to CSV file: {}", summary_csv_file_path.string());
+        log_info(tt::LogTest, "Bandwidth summary results appended to CSV file: {}", csv_summary_file_path_.string());
     }
 
     std::string get_golden_csv_filename() {

@@ -38,7 +38,6 @@
 #include "dispatch/dispatch_settings.hpp"
 #include "device/device_impl.hpp"
 #include "hal_types.hpp"
-#include "hal.hpp"
 #include "kernel_types.hpp"
 #include "lightmetal/host_api_capture_helpers.hpp"
 #include "lightmetal/lightmetal_capture.hpp"
@@ -934,6 +933,9 @@ std::string SerializeClusterDescriptor() {
     std::filesystem::path path = tt::umd::Cluster::create_cluster_descriptor()->serialize_to_file();
     return path.string();
 }
+
+// This function is used to set a default root directory for the tt_metal library.
+void SetRootDir(const std::string& root_dir) { tt::llrt::RunTimeOptions::set_root_dir(root_dir); }
 
 IDevice* CreateDevice(
     chip_id_t device_id,

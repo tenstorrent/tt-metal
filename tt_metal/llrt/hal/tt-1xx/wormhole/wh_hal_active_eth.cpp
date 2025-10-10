@@ -67,6 +67,10 @@ HalCoreInfoType create_active_eth_mem_map(bool is_base_routing_fw_enabled) {
         MEM_SYSENG_BOOT_RESULTS_BASE + offsetof(boot_results_t, link_status);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_ROUTER_CONFIG)] =
         eth_l1_mem::address_map::FABRIC_ROUTER_CONFIG_BASE;
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_ROUTING_PATH_1D)] =
+        eth_l1_mem::address_map::AERISC_FABRIC_ROUTING_PATH_BASE_1D;
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_ROUTING_PATH_2D)] =
+        eth_l1_mem::address_map::AERISC_FABRIC_ROUTING_PATH_BASE_2D;
 
     std::vector<uint32_t> mem_map_sizes;
     mem_map_sizes.resize(static_cast<std::size_t>(HalL1MemAddrType::COUNT), 0);
@@ -97,6 +101,10 @@ HalCoreInfoType create_active_eth_mem_map(bool is_base_routing_fw_enabled) {
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::RETRAIN_FORCE)] = sizeof(uint32_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_ROUTER_CONFIG)] =
         eth_l1_mem::address_map::FABRIC_ROUTER_CONFIG_SIZE;
+    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_ROUTING_PATH_1D)] =
+        eth_l1_mem::address_map::FABRIC_ROUTING_PATH_SIZE_1D;
+    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_ROUTING_PATH_2D)] =
+        eth_l1_mem::address_map::FABRIC_ROUTING_PATH_SIZE_2D;
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::LINK_UP)] = sizeof(uint32_t);
     // Base FW api not supported on WH
     std::vector<uint32_t> fw_mailbox_addr(static_cast<std::size_t>(FWMailboxMsg::COUNT), 0);
