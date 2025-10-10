@@ -362,7 +362,7 @@ class CMakeBuild(build_ext):
             source_dir / "runtime", self.build_lib + "/ttnn/runtime", runtime_patterns, runtime_exclude_files
         )
         copy_tree_with_patterns(source_dir / "ttnn", self.build_lib + "/ttnn", ttnn_patterns)
-        copy_tree_with_patterns(source_dir / "ttnn/cpp", self.build_lib + "/ttnn/cpp", ttnn_cpp_patterns)
+        copy_tree_with_patterns(source_dir / "ttnn/cpp", self.build_lib + "/ttnn/ttnn/cpp", ttnn_cpp_patterns)
         copy_tree_with_patterns(source_dir / "tt_metal", self.build_lib + "/ttnn/tt_metal", tt_metal_patterns)
 
         # Move built final built _ttnn SO into appropriate location in ttnn Python tree in wheel

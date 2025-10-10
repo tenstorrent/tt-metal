@@ -256,17 +256,12 @@ MetalContext& MetalContext::instance() {
 MetalContext::MetalContext() {
     // If a custom fabric mesh graph descriptor is specified as an RT Option, use it by default
     // to initialize the control plane.
-    std::unique_ptr<tt_ClusterDescriptor> cluster_desc;
     if (rtoptions_.is_custom_fabric_mesh_graph_desc_path_specified()) {
         custom_mesh_graph_desc_path_ = rtoptions_.get_custom_fabric_mesh_graph_desc_path();
     }
 
-    if (rtoptions_.get_mock_enabled()) {
-        cluster_desc = tt::umd::tt_ClusterDescriptor::create_from_yaml(rtoptions_.get_mock_cluster_desc_path());
-    }
-
-    bool is_base_routing_fw_enabled = Cluster::is_base_routing_fw_enabled(
-        Cluster::get_cluster_type_from_cluster_desc(rtoptions_, cluster_desc.get()));
+    bool is_base_routing_fw_enabled =
+        Cluster::is_base_routing_fw_enabled(Cluster::get_cluster_type_from_cluster_desc(rtoptions_));
     hal_ = std::make_unique<Hal>(get_platform_architecture(rtoptions_), is_base_routing_fw_enabled);
     rtoptions_.ParseAllFeatureEnv(*hal_);
     cluster_ = std::make_unique<Cluster>(rtoptions_, *hal_);
@@ -590,9 +585,16 @@ void MetalContext::initialize_control_plane() {
     auto cluster_type = cluster_->get_cluster_type();
     std::filesystem::path mesh_graph_desc_path =
         tt::tt_fabric::MeshGraph::get_mesh_graph_descriptor_path_for_cluster_type(
-            cluster_type, std::filesystem::path(rtoptions_.get_root_dir()), true);
+            cluster_type, std::filesystem::path(rtoptions_.get_root_dir()), rtoptions_.get_use_mesh_graph_descriptor_2_0());
 
-    std::string suffix = ".textproto";
+    std::string suffix;
+    if (rtoptions_.get_use_mesh_graph_descriptor_2_0()) {
+        suffix = ".textproto";
+        log_debug(tt::LogDistributed, "Using MGD 2.0 mesh graph descriptor.");
+    } else {
+        suffix = ".yaml";
+        log_debug(tt::LogDistributed, "Using MGD 1.0 mesh graph descriptor.");
+    }
 
     // If the cluster is a GALAXY and the fabric type is TORUS_XY, override the mesh graph descriptor path
     if (cluster_->is_ubb_galaxy()) {

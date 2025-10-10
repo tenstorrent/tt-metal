@@ -55,7 +55,6 @@ class MochiTransformerBlock:
             "norm_elementwise_affine": False,
             "bias": False,
             "mesh_device": mesh_device,
-            "init": init,
         }
 
         self.norm1_linear = ColParallelLinear(
@@ -64,7 +63,6 @@ class MochiTransformerBlock:
             bias=True,
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-            init=init,
             fsdp_mesh_axis=fsdp_mesh_axis,
             ccl_manager=ccl_manager,
         )
@@ -77,7 +75,6 @@ class MochiTransformerBlock:
                 bias=True,
                 mesh_device=mesh_device,
                 mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-                init=init,
                 fsdp_mesh_axis=fsdp_mesh_axis,
                 ccl_manager=ccl_manager,
             )
@@ -88,7 +85,6 @@ class MochiTransformerBlock:
                 bias=True,
                 mesh_device=mesh_device,
                 mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-                init=init,
                 fsdp_mesh_axis=fsdp_mesh_axis,
                 ccl_manager=ccl_manager,
             )
@@ -126,7 +122,6 @@ class MochiTransformerBlock:
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             ccl_manager=ccl_manager,
-            init=init,
             fsdp_mesh_axis=fsdp_mesh_axis,
         )
 
@@ -140,7 +135,6 @@ class MochiTransformerBlock:
                 mesh_device=mesh_device,
                 mesh_axis=parallel_config.tensor_parallel.mesh_axis,
                 ccl_manager=ccl_manager,
-                init=init,
                 fsdp_mesh_axis=fsdp_mesh_axis,
             )
 
@@ -376,7 +370,7 @@ class MochiTransformerBlock:
         # ModulatedRMSNorm
         spatial_attn_mod_1BND = self.norm2_norm(
             spatial_attn_1BND, compute_kernel_config=self.rms_compute_kernel_config
-        ) * ttnn.tanh(gate_msa_11BD, accuracy=True)
+        ) * ttnn.tanh(gate_msa_11BD, fast_and_approximate_mode=False)
 
         # Residual
         spatial_1BND = spatial_1BND + spatial_attn_mod_1BND
@@ -408,7 +402,7 @@ class MochiTransformerBlock:
 
         spatial_ff_mod_1BND = self.norm4_norm(
             spatial_ff_1BND, compute_kernel_config=self.rms_compute_kernel_config
-        ) * ttnn.tanh(gate_mlp_11BD, accuracy=True)
+        ) * ttnn.tanh(gate_mlp_11BD, fast_and_approximate_mode=False)
 
         # Residual
         spatial_1BND = spatial_1BND + spatial_ff_mod_1BND
@@ -417,7 +411,7 @@ class MochiTransformerBlock:
             # Norm attention output (MochiRMSNormZero)
             prompt_attn_mod_1BLP = self.norm2_context_norm(
                 prompt_attn_1BLP, compute_kernel_config=self.rms_compute_kernel_config
-            ) * ttnn.tanh(prompt_gate_msa_11BD, accuracy=True)
+            ) * ttnn.tanh(prompt_gate_msa_11BD, fast_and_approximate_mode=False)
 
             # Residual
             prompt_1BLP = prompt_1BLP + prompt_attn_mod_1BLP
@@ -450,7 +444,7 @@ class MochiTransformerBlock:
 
             prompt_ff_mod_1BLP = self.norm4_context_norm(
                 prompt_ff_1BLP, compute_kernel_config=self.rms_compute_kernel_config
-            ) * ttnn.tanh(prompt_gate_mlp_11BD, accuracy=True)
+            ) * ttnn.tanh(prompt_gate_mlp_11BD, fast_and_approximate_mode=False)
 
             # Residual
             prompt_1BLP = prompt_1BLP + prompt_ff_mod_1BLP
@@ -495,7 +489,6 @@ class MochiTransformer3DModel:
             in_channels=in_channels,
             embed_dim=inner_dim,
             mesh_device=mesh_device,
-            init=init,
         )
 
         # NOTE: Torch fallback until we support MochiCombinedTimestepCaptionEmbedding
@@ -534,7 +527,6 @@ class MochiTransformer3DModel:
             bias=False,
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-            init=init,
         )
 
         # self.norm_out_norm = LayerNorm(
@@ -554,7 +546,6 @@ class MochiTransformer3DModel:
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             mesh_device=mesh_device,
             ccl_manager=ccl_manager,
-            init=False,
         )
 
         self.norm_out_linear = Linear(
@@ -562,14 +553,12 @@ class MochiTransformer3DModel:
             out_features=inner_dim * 2,
             bias=True,
             mesh_device=mesh_device,
-            init=init,
         )
         self.proj_out = Linear(
             in_features=inner_dim,
             out_features=patch_size * patch_size * self.out_channels,
             bias=True,
             mesh_device=mesh_device,
-            init=init,
         )
 
         self.hifi4_compute_kernel_config = ttnn.init_device_compute_kernel_config(
