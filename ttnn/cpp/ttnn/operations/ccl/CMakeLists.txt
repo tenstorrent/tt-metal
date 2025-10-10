@@ -16,6 +16,8 @@ file(
     common/kernels/*
     kernel_common/*
     kernels/*
+    all_to_all_combine/device/kernels/*
+    all_to_all_dispatch/device/kernels/*
 )
 target_sources(
     ttnn_op_ccl

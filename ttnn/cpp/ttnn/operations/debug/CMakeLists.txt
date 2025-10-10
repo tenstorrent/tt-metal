@@ -4,7 +4,7 @@ add_library(TTNN::Ops::Debug ALIAS ttnn_op_debug)
 target_precompile_headers(ttnn_op_debug REUSE_FROM TT::CommonPCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_debug)
 
-file(GLOB_RECURSE kernels kernels/*)
+file(GLOB_RECURSE kernels device/kernels/*)
 
 target_sources(
     ttnn_op_debug

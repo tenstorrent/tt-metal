@@ -4,8 +4,20 @@ add_library(TTNN::Ops::Pool ALIAS ttnn_op_pool)
 target_precompile_headers(ttnn_op_pool REUSE_FROM TT::CommonPCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_pool)
 
+# Globbing non-build files is acceptable for now because devs don't generate packages.
+file(
+    GLOB_RECURSE kernels
+    grid_sample/device/kernels/*
+    upsample/device/kernels/*
+)
+
 target_sources(
     ttnn_op_pool
+    PUBLIC
+        FILE_SET kernels
+        TYPE HEADERS
+        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
+        FILES ${kernels}
     PRIVATE
         generic/device/pool_multi_core_program_factory.cpp
         generic/device/pool_op.cpp
@@ -29,6 +41,15 @@ target_link_libraries(
     PRIVATE
         TT::Metalium
         TTNN::Core
+)
+
+install(
+    TARGETS
+        ttnn_op_pool
+    FILE_SET
+    kernels
+        DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/pool
+        COMPONENT ttnn-runtime
 )
 
 install(TARGETS ttnn_op_pool LIBRARY COMPONENT tar)
