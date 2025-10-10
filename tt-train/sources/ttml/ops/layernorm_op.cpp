@@ -65,9 +65,11 @@ autograd::TensorPtr layernorm(
             /* memory_config */ std::nullopt,
             /* compute_kernel_config */ std::nullopt);
 
+        autograd::ctx().get_profiler().read_results(&autograd::ctx().get_device(), "updating grad vars started", 1);
         tensor->add_grad(res[0].value());
         gamma->add_grad(res[1].value());
         beta->add_grad(res[2].value());
+        autograd::ctx().get_profiler().read_results(&autograd::ctx().get_device(), "updating grad vars completed", 1);
     };
 
     auto links = autograd::get_links(tensor);
