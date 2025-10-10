@@ -10,7 +10,7 @@
 # $FILE *.md5 -- emit variable initializations from md5 file(s)
 
 # define release, update this bit for new release
-sfp_version=7.3.0-naming-30304
+sfpi_version=7.3.0-naming-30304
 sfpi_x86_64_linux_deb_md5=4b2963e582bdf554894d31d75ffaad92
 sfpi_x86_64_linux_rpm_md5=777fce0a26815235de84c53d5bab7954
 sfpi_x86_64_linux_txz_md5=65c604a723cd1552765ffd4b6d41f22b
@@ -31,7 +31,7 @@ if [[ ${1-} =~ '.md5'$ ]] ; then
    (for file in "$@"
     do
 	tmp="${file##*/sfpi_}"
-	echo ${tmp%%_*}
+	echo sfpi_version=${tmp%%_*}
     done) | sort -u
    sed 's/^\([0-9a-f]*\) \*sfpi_[^_]*_\([^.]*\)\.\(.*\)$/sfpi_\2_\3_md5=\1/' "$@"
    exit 0
@@ -66,7 +66,7 @@ sfpi_filename=sfpi_${sfpi_version}_${sfpi_arch}_${sfpi_dist}
 if [[ ${1-} != RELEASE ]] ; then
     # querier of sfpi-version
     sfpi_filename+=".$2"
-    sfpi_md5=$(eval echo "\${sfpi_${sfpi_arch}_${sfpi_dist}_${1}_md5:-}")
+    sfpi_md5=$(eval echo "\${sfpi_${sfpi_arch}_${sfpi_dist}_${2}_md5-}")
 fi
 
 # now emit definitions
