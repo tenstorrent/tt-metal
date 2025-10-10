@@ -180,7 +180,10 @@ def run_avg_pool2d(
         ttnn_input = ttnn.from_torch(
             torch_input_permuted, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
         )
-
+    # Create LoFi compute kernel config with math approximation
+    lofi_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi2, math_approx_mode=True, fp32_dest_acc_en=False, packer_l1_acc=False
+    )
     # run ttnn avg_pool2d
     ttnn_output = ttnn.avg_pool2d(
         input_tensor=ttnn_input,
@@ -195,6 +198,7 @@ def run_avg_pool2d(
         divisor_override=divisor_override,
         count_include_pad=count_include_pad,
         memory_config=None,
+        compute_kernel_config=lofi_config,
         applied_shard_scheme=shard_scheme,
         dtype=out_dtype,
         output_layout=output_layout,
