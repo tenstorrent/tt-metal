@@ -42,7 +42,7 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
     auto intermediate_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     auto intermediate_tile_size = tt::tile_size(intermediate_data_format);
 
-    // bool use_bias = bias_tensor.has_value();
+    bool use_bias = bias_tensor.has_value();
     /**
      * A: M_tiles x K_tiles
      * A subdivided into M_block x K_block tiles
@@ -120,6 +120,7 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
     uint32_t in1_cb_num_tiles = in1_block_num_tiles * double_buffer_factor;
     uint32_t out_cb_num_tiles = out_block_num_tiles * double_buffer_factor;
     uint32_t interm_cb_num_tiles = out_block_num_tiles;  // not double buffered
+    uint32_t in2_cb_num_tiles = out_cb_num_tiles;
 
     auto core_0_0 = CoreCoord{0, 0};
     auto core_0_1 = CoreCoord{0, 1};
@@ -156,6 +157,9 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
     uint32_t intermediate_cb_id = tt::CBIndex::c_3;
     tt::tt_metal::create_cb(
         intermediate_cb_id, program, core_grid, intermediate_tile_size, interm_cb_num_tiles, intermediate_data_format);
+
+    uint32_t in2_cb_id = tt::CBIndex::c_4;
+    tt::tt_metal::create_cb(in2_cb_id, program, core_grid, input_tile_size, in2_cb_num_tiles, data_format);
 
     log_info(tt::LogOp, "in0_cb_id: {}", in0_cb_id);
     log_info(tt::LogOp, "in1_cb_id: {}", in1_cb_id);
@@ -210,9 +214,13 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
         defines["SKIP_OUT"] = "1";
         log_warning(tt::LogOp, "Skipping out data movement! PCC will be wrong!");
     }
+    if (use_bias) {
+        defines["FUSE_BIAS"] = "1";
+    }
 
     uint32_t input_addr = input_tensor.buffer()->address();
     uint32_t weight_addr = weight_tensor.buffer()->address();
+    uint32_t bias_addr = use_bias ? bias_tensor.value().buffer()->address() : 0;
     uint32_t out_addr = output_tensor.buffer()->address();
 
     /**
@@ -243,6 +251,9 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
     };
     tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer()).append_to(in0_sender_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(in0_sender_compile_time_args);
+    if (use_bias) {
+        tt::tt_metal::TensorAccessorArgs(*bias_tensor.value().buffer()).append_to(in0_sender_compile_time_args);
+    }
     auto in0_sender_kernels_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in0_sender.cpp",
@@ -269,6 +280,9 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
     };
     tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer()).append_to(in0_receiver_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(in0_receiver_compile_time_args);
+    if (use_bias) {
+        tt::tt_metal::TensorAccessorArgs(*bias_tensor.value().buffer()).append_to(in0_receiver_compile_time_args);
+    }
     auto in0_receiver_kernels_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in0_sender.cpp",
@@ -295,6 +309,9 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
     };
     tt::tt_metal::TensorAccessorArgs(*weight_tensor.buffer()).append_to(in1_sender_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(in1_sender_compile_time_args);
+    if (use_bias) {
+        tt::tt_metal::TensorAccessorArgs(*bias_tensor.value().buffer()).append_to(in1_sender_compile_time_args);
+    }
     auto in1_sender_kernels_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in1_sender_out.cpp",
@@ -321,6 +338,9 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
     };
     tt::tt_metal::TensorAccessorArgs(*weight_tensor.buffer()).append_to(in1_receiver_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(in1_receiver_compile_time_args);
+    if (use_bias) {
+        tt::tt_metal::TensorAccessorArgs(*bias_tensor.value().buffer()).append_to(in1_receiver_compile_time_args);
+    }
     auto in1_receiver_kernels_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in1_sender_out.cpp",
@@ -339,7 +359,8 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
             .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .math_approx_mode = math_approx_mode,
-            .compile_args = compute_compile_time_args});
+            .compile_args = compute_compile_time_args,
+            .defines = defines});
 
     /**
      * The receiver writer cores defer their writes in order to reduce NOC congestion.
@@ -446,6 +467,7 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
             std::vector<uint32_t> in0_sender_args = {
                 input_addr,
                 out_addr,
+                bias_addr,
                 is_in0_sink,
                 (std::uint32_t)in0_next_core_physical.x,  // in0_dest_noc_x
                 (std::uint32_t)in0_next_core_physical.y,  // in0_dest_noc_y
@@ -463,6 +485,7 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
             std::vector<uint32_t> in0_receiver_args = {
                 input_addr,
                 out_addr,
+                bias_addr,
                 is_in0_sink,
                 (std::uint32_t)in0_next_core_physical.x,  // in0_dest_noc_x
                 (std::uint32_t)in0_next_core_physical.y,  // in0_dest_noc_y
@@ -482,6 +505,7 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
             std::vector<uint32_t> in1_sender_args = {
                 weight_addr,
                 out_addr,
+                bias_addr,
                 is_in1_sink,
                 (std::uint32_t)in1_next_core_physical.x,  // in1_dest_noc_x
                 (std::uint32_t)in1_next_core_physical.y,  // in1_dest_noc_y
@@ -499,6 +523,7 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
             std::vector<uint32_t> in1_receiver_args = {
                 weight_addr,
                 out_addr,
+                bias_addr,
                 is_in1_sink,
                 (std::uint32_t)in1_next_core_physical.x,  // in1_dest_noc_x
                 (std::uint32_t)in1_next_core_physical.y,  // in1_dest_noc_y

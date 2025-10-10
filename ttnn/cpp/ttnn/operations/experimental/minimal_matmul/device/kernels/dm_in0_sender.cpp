@@ -29,6 +29,7 @@ void kernel_main() {
     uint32_t argidx = 0;
     const uint32_t in0_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t out_addr = get_arg_val<uint32_t>(argidx++);
+    const uint32_t in2_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t is_sink_core = get_arg_val<uint32_t>(argidx++);
     const uint32_t in0_dest_noc_x = get_arg_val<uint32_t>(argidx++);
     const uint32_t in0_dest_noc_y = get_arg_val<uint32_t>(argidx++);
@@ -45,6 +46,10 @@ void kernel_main() {
     const auto in0_reader = TensorAccessor(in0_args, in0_addr, input_tile_size);
     constexpr auto out_args = TensorAccessorArgs<in0_args.next_compile_time_args_offset()>();
     const auto out_reader = TensorAccessor(out_args, out_addr, input_tile_size);
+#ifdef FUSE_BIAS
+    constexpr auto in2_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
+    const auto in2_reader = TensorAccessor(in2_args, in2_addr, input_tile_size);
+#endif
 
     const TensorShape2D in0_shape(M_tiles, K_tiles, padded_M_tiles, padded_K_tiles);
     const TensorShape2D out_shape(M_tiles, N_tiles, padded_M_tiles, padded_N_tiles);
@@ -55,6 +60,9 @@ void kernel_main() {
 
     constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
     constexpr uint32_t cb_id_out = tt::CBIndex::c_2;
+#ifdef FUSE_BIAS
+    constexpr uint32_t cb_id_in2 = tt::CBIndex::c_4;
+#endif
 
     volatile tt_l1_ptr uint32_t* in0_valid_semaphore_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in0_valid_semaphore_addr);
@@ -154,6 +162,29 @@ void kernel_main() {
 
 #endif
             }
+#ifdef FUSE_BIAS
+            if constexpr (is_output_writer) {
+                DPRINT << "D0 output writer " << ENDL();
+
+                cb_reserve_back(cb_id_in2, out_block_num_tiles);
+
+                uint32_t l1_write_addr_in2 = get_write_ptr(cb_id_in2);
+                for (uint32_t m_tile_id = m_block * M_block_tiles; m_tile_id < (m_block + 1) * M_block_tiles;
+                     m_tile_id++) {
+                    for (uint32_t n_tile_id = n_block * N_block_tiles; n_tile_id < (n_block + 1) * N_block_tiles;
+                         n_tile_id++) {
+                        uint32_t bias_tile_id = m_tile_id * padded_N_tiles + n_tile_id;
+                        noc_async_read_tile(bias_tile_id, in2_reader, l1_write_addr_in2);
+                        l1_write_addr_in2 += input_tile_size;
+                    }
+                }
+                noc_async_read_barrier();
+
+                cb_push_back(cb_id_in2, out_block_num_tiles);
+                DPRINT << "D0 after output writer push " << ENDL();
+            }
+#endif
+
             k_forward = !k_forward;
             // We get reuse on in0 when striding N block
             reuse_block = true;
