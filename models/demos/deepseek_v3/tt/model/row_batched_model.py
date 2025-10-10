@@ -222,7 +222,10 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
 
         x = ttnn.to_memory_config(x, **cfg["norm_reshard"])
         x = DistributedRMSNorm.forward_decode(x, cfg["norm"])
-        x = ttnn.experimental.all_gather_async(x, **cfg["lm_head"]["all_gather"])
+
+        ccl = cfg["lm_head"]["ccl"]
+
+        x = ttnn.experimental.all_gather_async(x, **ccl.populate_all_gather_runtime_args(cfg["lm_head"]["all_gather"]))
         x = ttnn.to_memory_config(x, cfg["lm_head"]["input_memory_config"])
         x = LMHead.forward_decode(x, cfg["lm_head"])
         return x
@@ -251,6 +254,9 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
             x = BlockClass.forward_prefill(x, user_id, block_cfg, rope_tensors, page_table)
 
         x = DistributedRMSNorm.forward_prefill(x, cfg["norm"])  # no resharding needed for prefill
-        x = ttnn.experimental.all_gather_async(x, **cfg["lm_head"]["all_gather"])
+
+        ccl = cfg["lm_head"]["ccl"]
+
+        x = ttnn.experimental.all_gather_async(x, **ccl.populate_all_gather_runtime_args(cfg["lm_head"]["all_gather"]))
         x = LMHead.forward_prefill(x, cfg["lm_head"])
         return x

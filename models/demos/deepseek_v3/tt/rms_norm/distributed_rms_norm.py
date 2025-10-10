@@ -158,10 +158,7 @@ class DistributedRMSNorm(RMSNormBase):
         """
         return {
             MESH_DEVICE_STATE_DICT_KEY: mesh_device,
-            "all_gather": {
-                "multi_device_global_semaphore": ccl.get_gather_sem(1),
-                "barrier_semaphore": ccl.get_barrier_sem(1),
-            },
+            "ccl": ccl,
         }
 
     @classmethod
@@ -181,7 +178,10 @@ class DistributedRMSNorm(RMSNormBase):
         tt_stats = ttnn.rms_norm_pre_all_gather(x, program_config=program_config, **cfg["rms_norm_pre_all_gather"])
 
         # AllGather stats
-        tt_gathered_stats = ttnn.experimental.all_gather_async(tt_stats, **cfg["all_gather"])
+        ccl = cfg["ccl"]
+        tt_gathered_stats = ttnn.experimental.all_gather_async(
+            tt_stats, **ccl.populate_all_gather_runtime_args(cfg["all_gather"])
+        )
         ttnn.deallocate(tt_stats)
 
         # Run distributed rmsnorm part 2
