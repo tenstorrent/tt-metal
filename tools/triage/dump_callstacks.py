@@ -18,6 +18,7 @@ Description:
 """
 
 from dataclasses import dataclass
+
 from triage import ScriptConfig, TTTriageError, log_check, recurse_field, triage_field, hex_serializer, run_script
 from dispatcher_data import run as get_dispatcher_data, DispatcherData, DispatcherCoreData
 from elfs_cache import run as get_elfs_cache, ElfsCache
@@ -27,7 +28,7 @@ from ttexalens.context import Context
 from ttexalens.gdb.gdb_server import GdbServer, ServerSocket
 from ttexalens.hardware.risc_debug import CallstackEntry, ParsedElfFile
 from ttexalens.tt_exalens_lib import top_callstack, callstack
-from utils import BLUE, GREEN, ORANGE, RST
+from utils import BLUE, GREEN, ORANGE, RED, RST
 
 import re
 import socket
@@ -136,9 +137,16 @@ def extract_callstack_from_gdb_output(
     return cs
 
 
+# Class for storing callstack and message that should be displayed together
+@dataclass
+class KernelCallstackWithMessage:
+    callstack: list[CallstackEntry]
+    message: str | None
+
+
 def get_gdb_callstack(
     location: OnChipCoordinate, risc_name: str, dispatcher_core_data: DispatcherCoreData, port: int, process_ids: dict
-) -> list[CallstackEntry]:
+) -> KernelCallstackWithMessage:
     # Start GDB client
     gdb_client = subprocess.Popen(
         ["tt-exalens", "--gdb"],
@@ -167,7 +175,10 @@ def get_gdb_callstack(
         gdb_client.stdin.write(gdb_script)
         gdb_client.stdin.flush()
 
-    return extract_callstack_from_gdb_output(gdb_client.communicate()[0], start_callstack_label, end_callstack_label)
+    callstack = extract_callstack_from_gdb_output(
+        gdb_client.communicate()[0], start_callstack_label, end_callstack_label
+    )
+    return KernelCallstackWithMessage(callstack=callstack, message=None)
 
 
 def get_callstack(
@@ -176,7 +187,7 @@ def get_callstack(
     dispatcher_core_data: DispatcherCoreData,
     elfs_cache: ElfsCache,
     full_callstack: bool,
-) -> list[CallstackEntry]:
+) -> KernelCallstackWithMessage:
     context = location._device._context
     elfs: list[ParsedElfFile] = [elfs_cache[dispatcher_core_data.firmware_path]]
     offsets: list[int | None] = [None]
@@ -186,17 +197,38 @@ def get_callstack(
     try:
         if not full_callstack:
             pc = location._device.get_block(location).get_risc_debug(risc_name).get_pc()
-            return top_callstack(pc, elfs, offsets, context)
+            try:
+                callstack = top_callstack(pc, elfs, offsets, context)
+                error_message = "PC was not in range of any provided ELF files" if len(callstack) == 0 else None
+                return KernelCallstackWithMessage(callstack=callstack, message=error_message)
+            except Exception as e:
+                return KernelCallstackWithMessage(callstack=[], message=str(e))
         else:
-            return callstack(location, elfs, offsets, risc_name)
-    except:
-        return []
+            try:
+                return KernelCallstackWithMessage(callstack=callstack(location, elfs, offsets, risc_name), message=None)
+            except Exception as e:
+                try:
+                    # If full callstack failed, we default to top callstack
+                    pc = location._device.get_block(location).get_risc_debug(risc_name).get_pc()
+                    error_message = str(e) + " - defaulting to top callstack"
+                    callstack = top_callstack(pc, elfs, offsets, context)
+                    error_message = (
+                        "\n".join([error_message, "PC was not in range of any provided ELF files"])
+                        if len(callstack) == 0
+                        else error_message
+                    )
+                    return KernelCallstackWithMessage(callstack=callstack, message=error_message)
+                except Exception as e:
+                    # If top callstack failed too, print both error messages
+                    return KernelCallstackWithMessage(callstack=[], message="\n".join([error_message, str(e)]))
+    except Exception as e:
+        return KernelCallstackWithMessage(callstack=[], message=str(e))
 
 
-def format_callstack(callstack: list[CallstackEntry]) -> str:
+def _format_callstack(callstack: list[CallstackEntry]) -> list[str]:
     """Return string representation of the callstack."""
     frame_number_width = len(str(len(callstack) - 1))
-    result = [""]
+    result = []
     for i, frame in enumerate(callstack):
         line = f"  #{i:<{frame_number_width}} "
         if frame.pc is not None:
@@ -210,14 +242,27 @@ def format_callstack(callstack: list[CallstackEntry]) -> str:
                 if frame.column is not None:
                     line += f"{GREEN}:{frame.column}{RST}"
         result.append(line)
-    return "\n".join(result)
+    return result
+
+
+def format_callstack_with_message(callstack_with_message: KernelCallstackWithMessage) -> str:
+    """Return string representation of the callstack with optional error message. Adding empty line at the beginning for prettier look."""
+    empty_line = ""  # For prettier look
+    if callstack_with_message.message is not None:
+        return "\n".join(
+            [f"{RED}{callstack_with_message.message}{RST}"] + _format_callstack(callstack_with_message.callstack)
+        )
+    else:
+        return "\n".join([empty_line] + _format_callstack(callstack_with_message.callstack))
 
 
 @dataclass
 class DumpCallstacksData:
     dispatcher_core_data: DispatcherCoreData = recurse_field()
     pc: int | None = triage_field("PC", hex_serializer)
-    kernel_callstack: list[CallstackEntry] = triage_field("Kernel Callstack", format_callstack)
+    kernel_callstack_with_message: KernelCallstackWithMessage = triage_field(
+        "Kernel Callstack", format_callstack_with_message
+    )
 
 
 def dump_callstacks(
@@ -237,32 +282,66 @@ def dump_callstacks(
         dispatcher_core_data = dispatcher_data.get_core_data(location, risc_name)
         if active_cores and dispatcher_core_data.go_message != "GO":
             return result
+        risc_debug = location._device.get_block(location).get_risc_debug(risc_name)
+        if risc_debug.is_in_reset():
+            return DumpCallstacksData(
+                dispatcher_core_data=dispatcher_core_data,
+                pc=None,
+                kernel_callstack_with_message=KernelCallstackWithMessage(callstack=[], message="Core is in reset"),
+            )
         if gdb_callstack:
-            risc_debug = location._device.get_block(location).get_risc_debug(risc_name)
-            if risc_debug.is_in_reset():
-                return result
-
             if risc_name == "ncrisc":
-                # Cannot attach to NCRISC process due to lack of debug hardware so we return empty struct
-                callstack = [CallstackEntry()]
+                # Cannot attach to NCRISC process due to lack of debug hardware so we are defaulting to top callstack
+                error_message = (
+                    "Cannot attach to NCRISC process due to lack of debug hardware - defaulting to top callstack"
+                )
+                # Default to top callstack
+                callstack_with_message = get_callstack(
+                    location, risc_name, dispatcher_core_data, elfs_cache, full_callstack=False
+                )
+                # If top callstack failed too, print both error messages
+                callstack_with_message.message = (
+                    error_message
+                    if callstack_with_message.message is None
+                    else "\n".join([error_message, callstack_with_message.message])
+                )
             else:
                 assert gdb_server is not None and process_ids is not None
-                callstack = get_gdb_callstack(
+                callstack_with_message = get_gdb_callstack(
                     location, risc_name, dispatcher_core_data, gdb_server.server.port, process_ids
                 )
+                # If GDB failed to get callstack, we default to top callstack
+                if len(callstack_with_message.callstack) == 0:
+                    error_message = "Failed to get callstack from GDB. Look for error message above the table."
+                    callstack_with_message = get_callstack(
+                        location, risc_name, dispatcher_core_data, elfs_cache, full_callstack=False
+                    )
+                    # If top callstack failed too, print both error messages
+                    callstack_with_message.message = (
+                        error_message
+                        if callstack_with_message.message is None
+                        else "\n".join([error_message, callstack_with_message.message])
+                    )
+
             # If GDB has not recoreded PC we do that ourselves, this also provides PC for NCRISC case
-            if len(callstack) > 0 and callstack[0].pc is None:
+            if len(callstack_with_message.callstack) > 0 and callstack_with_message.callstack[0].pc is None:
                 try:
-                    callstack[0].pc = location._device.get_block(location).get_risc_debug(risc_name).get_pc()
+                    callstack_with_message.callstack[0].pc = (
+                        location._device.get_block(location).get_risc_debug(risc_name).get_pc()
+                    )
                 except:
                     pass
         else:
-            callstack = get_callstack(location, risc_name, dispatcher_core_data, elfs_cache, full_callstack)
+            callstack_with_message = get_callstack(
+                location, risc_name, dispatcher_core_data, elfs_cache, full_callstack
+            )
 
         result = DumpCallstacksData(
             dispatcher_core_data=dispatcher_core_data,
-            pc=callstack[0].pc if len(callstack) > 0 else None,
-            kernel_callstack=callstack,
+            pc=callstack_with_message.callstack[0].pc
+            if len(callstack_with_message.callstack) > 0
+            else location._device.get_block(location).get_risc_debug(risc_name).get_pc(),
+            kernel_callstack_with_message=callstack_with_message,
         )
 
     except Exception as e:
