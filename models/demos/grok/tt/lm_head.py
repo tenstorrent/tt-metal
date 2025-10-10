@@ -42,7 +42,7 @@ class LMHead(LightweightModule):
         split_sizes.append(size_per_device - sum(split_sizes))  # remaining columns
 
         # Split the output weights
-        torch_output_weights = state_dict[f"{state_dict_prefix}.weight"].permute(1, 0)
+        torch_output_weights = state_dict[f"{state_dict_prefix}.weight"].permute(1, 0) * 0.5
 
         self.output_weights = []
         cache_file_name = (

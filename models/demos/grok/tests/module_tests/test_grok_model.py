@@ -154,7 +154,7 @@ def test_grok_model_inference(
             ),
         )
 
-        if i in range(len(encoded_prompts[0])):
+        if i < len(encoded_prompts[0]):
             tt_decode_input = ttnn.from_torch(
                 encoded_prompts_tensor[:, i : i + 1].reshape(1, 1, 1, batch_size),
                 device=mesh_device,
@@ -163,7 +163,7 @@ def test_grok_model_inference(
                 mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, None), mesh_shape=model_args.cluster_shape),
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
-            all_outputs.append(prompts[0][i : i + 1])
+            all_outputs.append(tokenizer.decode(encoded_prompts_tensor[0, i : i + 1].tolist()))
         else:
             tt_decode_input = ttnn.from_torch(
                 next_token.reshape(1, 1, 1, batch_size),
@@ -173,6 +173,6 @@ def test_grok_model_inference(
                 mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, None), mesh_shape=model_args.cluster_shape),
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
-            all_outputs.append(next_token_text)
+            all_outputs.append(next_token_text[0])
 
         logger.info(f"Generated output: {all_outputs}")
