@@ -12,7 +12,7 @@ llama11b=/mnt/MLPerf/huggingface/hub/models--meta-llama--Llama-3.2-11B-Vision-In
 #/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-11B-Vision-Instruct/
 HF_MODEL=$llama11b pytest -n auto models/tt_transformers/tests/multimodal/test_llama_image_transformer.py  --timeout 420 || fail=1
 
-echo "LOG_METAL: Llama3 accuracy tests for $llama_dir completed"
+echo "LOG_METAL: Llama3 accuracy tests for $llama11b completed"
 if [[ $fail -ne 0 ]]; then
 exit 1
 fi
