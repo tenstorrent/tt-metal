@@ -18,7 +18,7 @@ except ModuleNotFoundError:
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
-@pytest.mark.parametrize("batch_size", [8])
+@pytest.mark.parametrize("batch_size", [10])
 def test_vit_device_ops(
     device,
     batch_size,
@@ -42,11 +42,11 @@ def test_vit_device_ops(
     ttnn.synchronize_device(device)
 
 
-@pytest.mark.parametrize("batch_size", [8])
+@pytest.mark.parametrize("batch_size", [10])
 @pytest.mark.parametrize(
     "expected_kernel_samples_per_sec",
     [
-        1509,
+        4034,
     ],
 )
 @pytest.mark.models_device_performance_bare_metal

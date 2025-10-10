@@ -41,7 +41,7 @@ def test_vit(device, model_location_generator):
     disable_persistent_kernel_cache()
 
     model_name = "google/vit-base-patch16-224"
-    batch_size = 8
+    batch_size = 10
     sequence_size = 224
 
     model = load_torch_model(model_location_generator, embedding=True)
@@ -104,7 +104,7 @@ def test_vit(device, model_location_generator):
             {
                 ttnn.CoreRange(
                     ttnn.CoreCoord(0, 0),
-                    ttnn.CoreCoord(7, 1),
+                    ttnn.CoreCoord(11, 1),
                 ),
             }
         )

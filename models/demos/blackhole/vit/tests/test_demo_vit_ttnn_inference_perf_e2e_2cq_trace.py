@@ -119,11 +119,11 @@ def run_trace_2cq_model(device, test_infra, num_warmup_iterations, num_measureme
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.models_performance_virtual_machine
 @pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 32768, "num_command_queues": 2, "trace_region_size": 1753088}], indirect=True
+    "device_params", [{"l1_small_size": 32768, "num_command_queues": 2, "trace_region_size": 2771968}], indirect=True
 )
-@pytest.mark.parametrize("batch_size", [8])
+@pytest.mark.parametrize("batch_size", [10])
 def test_vit(device, batch_size, is_single_card_n300):
-    expected_samples_per_sec = 2460
+    expected_samples_per_sec = 3500
     torch.manual_seed(0)
 
     profiler.clear()

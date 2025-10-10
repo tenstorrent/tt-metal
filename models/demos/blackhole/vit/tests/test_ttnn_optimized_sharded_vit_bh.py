@@ -11,13 +11,13 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
 from models.common.utility_functions import torch_random
+from models.demos.blackhole.vit.tt import ttnn_optimized_sharded_vit_bh as ttnn_optimized_sharded_vit
 from models.demos.vit.common import load_torch_model
-from models.demos.vit.tt import ttnn_optimized_sharded_vit_bh as ttnn_optimized_sharded_vit
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @pytest.mark.parametrize("model_name", ["google/vit-base-patch16-224"])
-@pytest.mark.parametrize("batch_size", [8])
+@pytest.mark.parametrize("batch_size", [10])
 @pytest.mark.parametrize("image_size", [224])
 @pytest.mark.parametrize("image_channels", [3])
 def test_vit_patch_embeddings(device, model_name, batch_size, image_size, image_channels, model_location_generator):
@@ -46,11 +46,11 @@ def test_vit_patch_embeddings(device, model_name, batch_size, image_size, image_
         {
             ttnn.CoreRange(
                 ttnn.CoreCoord(0, 0),
-                ttnn.CoreCoord(7, 1),
+                ttnn.CoreCoord(11, 1),
             ),
         }
     )
-    n_cores = 16
+    n_cores = 24
     shard_spec = ttnn.ShardSpec(shard_grid, [N * H * W // n_cores, C], ttnn.ShardOrientation.ROW_MAJOR)
 
     pixel_values = ttnn.from_torch(
@@ -75,7 +75,7 @@ def test_vit_patch_embeddings(device, model_name, batch_size, image_size, image_
 
 
 @pytest.mark.parametrize("model_name", ["google/vit-base-patch16-224"])
-@pytest.mark.parametrize("batch_size", [8])
+@pytest.mark.parametrize("batch_size", [10])
 @pytest.mark.parametrize("image_size", [224])
 @pytest.mark.parametrize("image_channels", [3])
 def test_vit_embeddings(device, model_name, batch_size, image_size, image_channels, model_location_generator):
@@ -124,11 +124,11 @@ def test_vit_embeddings(device, model_name, batch_size, image_size, image_channe
         {
             ttnn.CoreRange(
                 ttnn.CoreCoord(0, 0),
-                ttnn.CoreCoord(7, 1),
+                ttnn.CoreCoord(11, 1),
             ),
         }
     )
-    n_cores = 16
+    n_cores = 24
     shard_spec = ttnn.ShardSpec(shard_grid, [N * H * W // n_cores, C], ttnn.ShardOrientation.ROW_MAJOR)
 
     pixel_values = ttnn.from_torch(
@@ -155,7 +155,7 @@ def test_vit_embeddings(device, model_name, batch_size, image_size, image_channe
 
 
 @pytest.mark.parametrize("model_name", ["google/vit-base-patch16-224"])
-@pytest.mark.parametrize("batch_size", [8])
+@pytest.mark.parametrize("batch_size", [10])
 @pytest.mark.parametrize("sequence_size", [224])  # padded from 197 to 224
 def test_vit_attention(device, model_name, batch_size, sequence_size):
     torch.manual_seed(0)
@@ -185,7 +185,7 @@ def test_vit_attention(device, model_name, batch_size, sequence_size):
         hidden_states,
         memory_config=ttnn.create_sharded_memory_config(
             hidden_states.shape,
-            core_grid=config.core_grid_8x8,
+            core_grid=config.core_grid,  # Use dynamic blackhole core_grid
             strategy=ttnn.ShardStrategy.BLOCK,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
         ),
@@ -204,7 +204,7 @@ def test_vit_attention(device, model_name, batch_size, sequence_size):
 
 
 @pytest.mark.parametrize("model_name", ["google/vit-base-patch16-224"])
-@pytest.mark.parametrize("batch_size", [8])
+@pytest.mark.parametrize("batch_size", [10])
 @pytest.mark.parametrize("sequence_size", [224])  # padded from 197 to 224
 def test_vit_intermediate(device, model_name, batch_size, sequence_size):
     torch.manual_seed(0)
@@ -234,7 +234,7 @@ def test_vit_intermediate(device, model_name, batch_size, sequence_size):
 
 
 @pytest.mark.parametrize("model_name", ["google/vit-base-patch16-224"])
-@pytest.mark.parametrize("batch_size", [8])
+@pytest.mark.parametrize("batch_size", [10])
 @pytest.mark.parametrize("sequence_size", [224])  # padded from 197 to 224
 def test_vit_output(device, model_name, batch_size, sequence_size):
     torch.manual_seed(0)
@@ -259,7 +259,7 @@ def test_vit_output(device, model_name, batch_size, sequence_size):
         residual,
         memory_config=ttnn.create_sharded_memory_config(
             residual.shape,
-            core_grid=config.core_grid_8x8,
+            core_grid=config.core_grid,  # Use dynamic blackhole core_grid
             strategy=ttnn.ShardStrategy.BLOCK,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
         ),
@@ -279,7 +279,7 @@ def test_vit_output(device, model_name, batch_size, sequence_size):
 
 
 @pytest.mark.parametrize("model_name", ["google/vit-base-patch16-224"])
-@pytest.mark.parametrize("batch_size", [8])
+@pytest.mark.parametrize("batch_size", [10])
 @pytest.mark.parametrize("sequence_size", [224])  # padded from 197 to 224
 def test_vit_layer(device, model_name, batch_size, sequence_size, model_location_generator):
     torch.manual_seed(0)
@@ -309,7 +309,7 @@ def test_vit_layer(device, model_name, batch_size, sequence_size, model_location
         hidden_states,
         memory_config=ttnn.create_sharded_memory_config(
             hidden_states.shape,
-            core_grid=config.core_grid_8x8,
+            core_grid=config.core_grid,  # Use dynamic blackhole core_grid
             strategy=ttnn.ShardStrategy.BLOCK,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
         ),
@@ -328,8 +328,8 @@ def test_vit_layer(device, model_name, batch_size, sequence_size, model_location
 
 
 @pytest.mark.parametrize("model_name", ["google/vit-base-patch16-224"])
-@pytest.mark.parametrize("batch_size", [8])
-@pytest.mark.parametrize("sequence_size", [224])  ## padded from 197 to 224
+@pytest.mark.parametrize("batch_size", [10])
+@pytest.mark.parametrize("sequence_size", [224])  # padded from 197 to 224
 def test_vit_encoder(device, model_name, batch_size, sequence_size, model_location_generator):
     torch.manual_seed(0)
 
@@ -366,7 +366,7 @@ def test_vit_encoder(device, model_name, batch_size, sequence_size, model_locati
 
 
 @pytest.mark.parametrize("model_name", ["google/vit-base-patch16-224"])
-@pytest.mark.parametrize("batch_size", [8])
+@pytest.mark.parametrize("batch_size", [10])
 @pytest.mark.parametrize("image_size", [224])
 @pytest.mark.parametrize("image_channels", [3])
 @pytest.mark.parametrize("sequence_size", [224])
@@ -412,13 +412,13 @@ def test_vit(device, model_name, batch_size, image_size, image_channels, sequenc
     torch_pixel_values = torch_pixel_values.reshape(batch_size, img_h, img_w // patch_size, 4 * patch_size)
     N, H, W, C = torch_pixel_values.shape
 
-    if batch_size <= 8:
+    if batch_size <= 10:
         fold_core_x = batch_size - 1
         fold_core_y = 1
     else:
-        batch_size = 16
-        fold_core_x = 7
-        fold_core_y = 3
+        batch_size = 20  # Use multiple of 10 for optimal blackhole utilization
+        fold_core_x = 11  # Use full x-dimension (0-11 = 12 cores)
+        fold_core_y = 1  # Use 2 rows (0-1 = 2 rows) for 12x2=24 cores total
 
     shard_grid = ttnn.CoreRangeSet(
         {

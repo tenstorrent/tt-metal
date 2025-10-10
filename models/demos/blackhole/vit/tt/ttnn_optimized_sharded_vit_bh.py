@@ -12,21 +12,21 @@ import ttnn
 
 
 def update_model_config(config, batch_size):
-    wh_core_grid_y = 8
+    wh_core_grid_y = 10
 
-    # In case of < 6 cores per batch, we need to do move in attention to remove defragmentation
+    # In case of < 10 cores per batch, we need to do move in attention to remove defragmentation
     should_reallocate_in_attention = False
     if batch_size <= wh_core_grid_y:
         grid_y = batch_size
-        grid_x = 6  ## it can be 4 or 3, for higher core utilization but less latency
+        grid_x = 12  ## for blackhole: can be 6, 4, or 3 for less latency
     else:
-        grid_y = 8
+        grid_y = 10
         batch_per_y_core = batch_size // wh_core_grid_y
         batch_size = grid_y * batch_per_y_core
-        grid_x = 4
+        grid_x = 12  # Use full x-dimension for blackhole
         should_reallocate_in_attention = True
     core_grid = ttnn.CoreGrid(y=grid_y, x=grid_x)
-    core_grid_8x8 = ttnn.CoreGrid(y=8, x=8)
+    core_grid_10x12 = ttnn.CoreGrid(y=10, x=12)
 
     TILE_HEIGHT = 32
 
@@ -35,13 +35,17 @@ def update_model_config(config, batch_size):
     seqL_padded = (((seqL - 1) // TILE_HEIGHT) + 1) * TILE_HEIGHT  # 224
     seqL_t = seqL_padded // TILE_HEIGHT  # 224 / 32 = 7
     dim_t = config.hidden_size // TILE_HEIGHT  # 768 / 32 = 24
-    dim_t__x = dim_t // core_grid.x  # 4
-    dim_t__x_full_grid = dim_t // core_grid_8x8.x  # 3
+    dim_t__x = dim_t // core_grid.x  # 24/12=2 for 10x12 grid (batch_size=12), 24/batch_size for batch_size<10
+    dim_t__x_full_grid = dim_t // core_grid_10x12.x  # 24/12=2 for 10x12 grid
     head_num = config.num_attention_heads  # 12
-    head_seqL_t__x = (head_num * seqL_t) // core_grid.x  # 14
+    head_seqL_t__x = (
+        head_num * seqL_t
+    ) // core_grid.x  # (12*7)/12=7 for 10x12 grid (batch_size=12), (12*7)/batch_size for smaller
     head_size_t = dim_t // head_num  # 2
     # 1000 classes padded to 1152
-    class__x = (1152 // TILE_HEIGHT) // core_grid.x  #   3
+    class__x = (
+        1152 // TILE_HEIGHT
+    ) // core_grid.x  # (1152/32)/12=3 for 10x12 grid (batch_size=12), varies for smaller grids
     class_subb_w = class__x
     if class_subb_w > 8:  # max ratio of sub_block_w / sub_block_h = 8
         if class_subb_w % 3 == 0:
@@ -54,22 +58,22 @@ def update_model_config(config, batch_size):
     # sharding configs
     program_configs = {
         "layernorm_before_program_config": ttnn.LayerNormShardedMultiCoreProgramConfig(
-            compute_with_storage_grid_size=(core_grid_8x8.x, core_grid_8x8.y),
+            compute_with_storage_grid_size=(core_grid_10x12.x, core_grid_10x12.y),
             # shard_shape_is = [seqL_t, dim_t__x_full_grid], in tiles
-            subblock_w=dim_t__x_full_grid,  # 96 == 3 tiles,
+            subblock_w=dim_t__x_full_grid,  # 2 tiles for 10x12 grid
             block_h=seqL_t,  # 7,
-            block_w=dim_t__x_full_grid,  # 96 == 3 tiles,
+            block_w=dim_t__x_full_grid,  # 2 tiles for 10x12 grid
             inplace=False,
         ),
-        # shard_spec = [224, 96]
+        # shard_spec = [224, 64] for 10x12 grid (seqL_padded=224, dim_t__x_full_grid*32=2*32=64)
         "query_key_value_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=(core_grid_8x8.x, core_grid_8x8.y),
+            compute_with_storage_grid_size=(core_grid_10x12.x, core_grid_10x12.y),
             # shard_shape_is = [seqL_t, dim_t__x_full_grid], in tiles
-            in0_block_w=dim_t__x_full_grid,  # 3
+            in0_block_w=dim_t__x_full_grid,  # 2 for 10x12 grid
             out_subblock_h=1,
-            out_subblock_w=dim_t__x_full_grid,  # 3,
+            out_subblock_w=dim_t__x_full_grid,  # 2 for 10x12 grid
             per_core_M=seqL_t,  # 7,
-            per_core_N=3 * dim_t__x_full_grid,  # 9
+            per_core_N=3 * dim_t__x_full_grid,  # 3*2=6 for 10x12 grid
             transpose_mcast=False,
             fused_activation=None,
         ),
@@ -78,13 +82,13 @@ def update_model_config(config, batch_size):
             in0_block_w=head_size_t,  # 2,
             out_subblock_h=1,
             out_subblock_w=seqL_t,  # 7,
-            per_core_M=head_seqL_t__x,  ##int((head_num//) * seqL_t),  # 14,
+            per_core_M=head_seqL_t__x,  ##int((head_num//) * seqL_t),  # 7 for 10x12 grid (batch_size=12), varies for smaller
             per_core_N=seqL_t,  # 7,
         ),
         "softmax_program_config": ttnn.SoftmaxShardedMultiCoreProgramConfig(
             compute_with_storage_grid_size=(core_grid.x, core_grid.y),
             subblock_w=seqL_t,  # 7,
-            block_h=head_seqL_t__x,  # 14,
+            block_h=head_seqL_t__x,  # 7 for 10x12 grid (batch_size=12), varies for smaller
             block_w=seqL_t,  # 7,
         ),
         "attention_probabilities_by_value_matmul_program_config": ttnn.MatmulMultiCoreReuseProgramConfig(
@@ -92,57 +96,57 @@ def update_model_config(config, batch_size):
             in0_block_w=seqL_t,  # 7,
             out_subblock_h=1,
             out_subblock_w=head_size_t,  # 2,
-            per_core_M=head_seqL_t__x,  # 14,
+            per_core_M=head_seqL_t__x,  # 7 for 10x12 grid (batch_size=12), varies for smaller
             per_core_N=head_size_t,  # 2,
         ),
         "self_output_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=(core_grid_8x8.x, core_grid_8x8.y),
+            compute_with_storage_grid_size=(core_grid_10x12.x, core_grid_10x12.y),
             # shard_shape_is = [seqL_t, dim_t__x_full_grid], in tiles
-            in0_block_w=dim_t__x_full_grid,  # 3
+            in0_block_w=dim_t__x_full_grid,  # 2 for 10x12 grid
             out_subblock_h=1,
-            out_subblock_w=dim_t__x_full_grid,  # 3
+            out_subblock_w=dim_t__x_full_grid,  # 2 for 10x12 grid
             per_core_M=seqL_t,  # 7,
-            per_core_N=dim_t__x_full_grid,  # 3,
+            per_core_N=dim_t__x_full_grid,  # 2 for 10x12 grid
             transpose_mcast=False,
             fused_activation=None,
         ),
         "layernorm_after_output_program_config": ttnn.LayerNormShardedMultiCoreProgramConfig(
-            compute_with_storage_grid_size=(core_grid_8x8.x, core_grid_8x8.y),
+            compute_with_storage_grid_size=(core_grid_10x12.x, core_grid_10x12.y),
             # shard_shape_is = [seqL_t, dim_t__x_full_grid], in tiles
-            subblock_w=dim_t__x_full_grid,  # 96 == 3 tiles,
+            subblock_w=dim_t__x_full_grid,  # 2 tiles for 10x12 grid
             block_h=seqL_t,  # 7,
-            block_w=dim_t__x_full_grid,  # 96 == 3 tiles,
+            block_w=dim_t__x_full_grid,  # 2 tiles for 10x12 grid
             inplace=False,
         ),
         "ff1_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=(core_grid_8x8.x, core_grid_8x8.y),
+            compute_with_storage_grid_size=(core_grid_10x12.x, core_grid_10x12.y),
             # shard_shape_is = [seqL_t, dim_t__x_full_grid], in tiles
-            in0_block_w=dim_t__x_full_grid,  # 96 == 3 tiles,
+            in0_block_w=dim_t__x_full_grid,  # 2 tiles for 10x12 grid
             out_subblock_h=1,
-            out_subblock_w=(dim_t__x_full_grid * 4) // 2,  # 6,
+            out_subblock_w=(dim_t__x_full_grid * 4) // 2,  # (2 * 4) // 2 = 4 for 10x12 grid
             per_core_M=seqL_t,  # 7,
-            per_core_N=dim_t__x_full_grid * 4,  # 12,
+            per_core_N=dim_t__x_full_grid * 4,  # 2 * 4 = 8 for 10x12 grid
             transpose_mcast=False,
             fused_activation=(ttnn.UnaryOpType.GELU, True),
         ),
         "ff2_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=(core_grid_8x8.x, core_grid_8x8.y),
+            compute_with_storage_grid_size=(core_grid_10x12.x, core_grid_10x12.y),
             # shard shape is [seqL_t, dim_t__x_full_grid * 4], in tiles
-            in0_block_w=dim_t__x_full_grid * 4,  # 12
+            in0_block_w=dim_t__x_full_grid * 4,  # 2 * 4 = 8 for 10x12 grid
             out_subblock_h=1,
             out_subblock_w=dim_t__x_full_grid,
             per_core_M=seqL_t,  # 7,
-            per_core_N=dim_t__x_full_grid,  # 3
+            per_core_N=dim_t__x_full_grid,  # 2 for 10x12 grid
             transpose_mcast=False,
             fused_activation=None,
         ),
         "classifer_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(core_grid.x, core_grid.y),
-            in0_block_w=dim_t__x // 2,  # 1,
+            in0_block_w=dim_t__x // 2,  # 2 // 2 = 1 for 10x12 grid (batch_size=12), varies for smaller
             out_subblock_h=1,
             out_subblock_w=class_subb_w,
             per_core_M=seqL_t,  # 7,
-            per_core_N=class__x,  # 6,
+            per_core_N=class__x,  # 3 for 10x12 grid (batch_size=12), varies for smaller
             transpose_mcast=False,
             fused_activation=None,
         ),
@@ -163,7 +167,7 @@ def update_model_config(config, batch_size):
         dict(
             **(config.to_dict() | properties),
             core_grid=core_grid,
-            core_grid_8x8=core_grid_8x8,
+            core_grid_10x12=core_grid_10x12,
             should_reallocate_in_attention=should_reallocate_in_attention,
             program_configs=program_configs,
         )
@@ -246,15 +250,15 @@ def vit_attention(
         program_config=config.program_configs["query_key_value_matmul_program_config"],
     )
 
-    # reshard back to 48 cores
-    block_sharded_config_48_cores = ttnn.create_sharded_memory_config(
+    # reshard back to dynamic cores (12x12=144 for batch_size<=10, 10x12=120 for larger batches)
+    block_sharded_config_variable_cores = ttnn.create_sharded_memory_config(
         query_key_value.padded_shape,
-        core_grid=config.core_grid,  # 48
+        core_grid=config.core_grid,  # dynamic: 12x12 or 10x12 based on batch_size
         strategy=ttnn.ShardStrategy.BLOCK,
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
     )
 
-    query_key_value = ttnn.reshard(query_key_value, block_sharded_config_48_cores)
+    query_key_value = ttnn.reshard(query_key_value, block_sharded_config_variable_cores)
 
     (
         query,
@@ -306,18 +310,18 @@ def vit_attention(
         memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
     )
 
-    block_sharded_config_64_cores = ttnn.create_sharded_memory_config(
+    block_sharded_config_120_cores = ttnn.create_sharded_memory_config(
         context_layer.padded_shape,
-        core_grid=config.core_grid_8x8,  # 64 cores
+        core_grid=config.core_grid_10x12,  # 120 cores
         strategy=ttnn.ShardStrategy.BLOCK,
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
     )
 
-    # reshard back to 64 cores
+    # reshard back to 120 cores
     # cant use reshard as it's not working here, so use s2i followed by i2s
     # workaround for issue #22640, once fixed first call can be removed
     context_layer = ttnn.to_memory_config(context_layer, ttnn.DRAM_MEMORY_CONFIG)
-    context_layer = ttnn.to_memory_config(context_layer, block_sharded_config_64_cores)
+    context_layer = ttnn.to_memory_config(context_layer, block_sharded_config_120_cores)
 
     self_output = ttnn.linear(
         context_layer,
@@ -446,7 +450,7 @@ def vit_encoder(
         embeddings,
         memory_config=ttnn.create_sharded_memory_config(
             [emb_N, emb_S, emb_D],
-            core_grid=config.core_grid_8x8,
+            core_grid=config.core_grid_10x12,
             strategy=ttnn.ShardStrategy.BLOCK,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
         ),
@@ -490,15 +494,15 @@ def vit(
         program_config=config.program_configs["layernorm_before_program_config"],
     )
 
-    # reshard back to 48 cores as we are losing a bit of precision if this is 64 cores
-    block_sharded_config_48_cores = ttnn.create_sharded_memory_config(
+    # reshard back to dynamic cores as we are losing a bit of precision if this is 120 cores (10x12)
+    block_sharded_config_variable_cores = ttnn.create_sharded_memory_config(
         output.padded_shape,
-        core_grid=config.core_grid,  # 48
+        core_grid=config.core_grid,  # dynamic: batch_size x 12 or 10x12 based on batch_size
         strategy=ttnn.ShardStrategy.BLOCK,
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
     )
 
-    output = ttnn.reshard(output, block_sharded_config_48_cores)
+    output = ttnn.reshard(output, block_sharded_config_variable_cores)
 
     # Classifier
     classifier_output = ttnn.linear(
