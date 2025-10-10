@@ -109,7 +109,7 @@ class Module:
                 try:
                     parameter.load_torch_tensor(state_dict.pop(name))
                 except ParameterLoadingError as err:
-                    msg = f"while loading {module_key_prefix}{name}: {err}"
+                    msg = f"while loading '{module_key_prefix}{name}': {err}"
                     raise ParameterLoadingError(msg) from err
             else:
                 missing_keys.append(f"{module_key_prefix}{name}")
@@ -165,7 +165,7 @@ class Module:
             try:
                 parameter.load(path)
             except ParameterLoadingError as err:
-                msg = f"{err} while loading {path}"
+                msg = f"{err} while loading '{path}'"
                 raise ParameterLoadingError(msg) from err
 
     def to_cached_state_dict(self, path_prefix: str) -> dict[str, str]:
@@ -194,7 +194,7 @@ class Module:
             try:
                 parameter.load(path)
             except ParameterLoadingError as err:
-                msg = f"{err} while loading {path}"
+                msg = f"{err} while loading '{path}'"
                 raise ParameterLoadingError(msg) from err
 
     @abstractmethod
