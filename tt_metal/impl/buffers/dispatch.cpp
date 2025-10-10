@@ -68,7 +68,7 @@ struct BufferWriteDispatchParams {
 
     BufferWriteDispatchParams() = default;
     BufferWriteDispatchParams(uint32_t src_noc_xy, uint32_t src_addr_32B, bool src_pinned = false) :
-        pinned_src_noc_xy{src_noc_xy}, pinned_src_addr_lo{src_addr_32B}, use_pinned_transfer{src_pinned} {}
+        pinned_src_noc_xy{src_noc_xy | 8}, pinned_src_addr_lo{src_addr_32B}, use_pinned_transfer{src_pinned} {}
 
     void calculate_issue_wait() {
         this->issue_wait = this->total_pages_written == 0;  // only stall for the first write of the buffer
