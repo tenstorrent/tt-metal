@@ -236,6 +236,7 @@ SGDFusedProgramFactory::cached_program_t SGDFusedProgramFactory::create(
 
     std::map<std::string, std::string> defines;
     defines["USE_MOMENTUM"] = momentum_buffer_unwrapped != nullptr ? "1" : "0";
+    defines["USE_NESTEROV"] = nesterov ? "1" : "0";
 
     SGDFusedKernels kernels{};
     std::vector<uint32_t> reader_compile_time_args{block_size, Wt};
@@ -256,17 +257,13 @@ SGDFusedProgramFactory::cached_program_t SGDFusedProgramFactory::create(
     // Group 1 compile-time arguments
     std::vector<uint32_t> compute_group_1_args = {
         num_tiles_per_core_group_1,  // per_core_block_cnt
-        block_size,                  // per_core_block_size
-        static_cast<uint32_t>(nesterov)};
+        block_size};                 // per_core_block_size
 
     kernels.compute_group_1 = create_compute_kernel(
         program, core_group_1, compute_group_1_args, defines, kComputeKernelPath, /*fp32_dest_acc_en=*/false);
 
     if (!core_group_2.ranges().empty()) {
-        std::vector<uint32_t> compute_group_2_args = {
-            num_tiles_per_core_group_2,  // per_core_block_cnt
-            block_size,                  // per_core_block_size
-            static_cast<uint32_t>(nesterov)};
+        std::vector<uint32_t> compute_group_2_args = {num_tiles_per_core_group_2, block_size};
         kernels.compute_group_2 = create_compute_kernel(
             program, core_group_2, compute_group_2_args, defines, kComputeKernelPath, /*fp32_dest_acc_en=*/false);
     }
