@@ -157,7 +157,7 @@ std::optional<BasicExpression<T>> BasicExpression<T>::from(
         return std::nullopt;
     }
 
-    if (first.index() + second.index() + 2 >= tt::CBIndex::SIZE) {
+    if (first.cb_index() + second.cb_index() + 2 >= tt::CBIndex::SIZE) {
         return std::nullopt;
     }
 
@@ -179,7 +179,7 @@ std::optional<BasicExpression<T>> BasicExpression<T>::from(
         return std::nullopt;
     }
 
-    if (first.index() + second.index() + third.index() + 3 >= tt::CBIndex::SIZE) {
+    if (first.cb_index() + second.cb_index() + third.cb_index() + 3 >= tt::CBIndex::SIZE) {
         return std::nullopt;
     }
 
@@ -262,16 +262,39 @@ auto get_circular_buffers(std::span<const Node> nodes) noexcept {
     return result;
 }
 
+auto get_runtime_arguments(std::span<const Node> nodes) noexcept {
+    std::size_t runtime_arguments = 0;
+
+    for (const auto& node : nodes) {
+        if (auto function_ptr = std::get_if<FunctionNode>(&node)) {
+            runtime_arguments += function_ptr->params.size();
+        }
+    }
+
+    return runtime_arguments;
+}
+
 // computes the circular buffer index accounting for re-use between internal nodes
 template <typename T>
-tt::CBIndex BasicExpressionView<T>::index() const noexcept {
+tt::CBIndex BasicExpressionView<T>::cb_index() const noexcept {
     const auto result = get_circular_buffers(nodes);
     return tt::CBIndex(is_root ? result.output_id() : result.input_id());
 }
 
 template <typename T>
-tt::CBIndex BasicExpression<T>::index() const noexcept {
-    return ExpressionView(*this).index();
+tt::CBIndex BasicExpression<T>::cb_index() const noexcept {
+    return ExpressionView(*this).cb_index();
+}
+
+// computes runtime argument offset
+template <typename T>
+std::size_t BasicExpressionView<T>::rt_offset() const noexcept {
+    return get_runtime_arguments(nodes.first(nodes.size() - 1));
+}
+
+template <typename T>
+std::size_t BasicExpression<T>::rt_offset() const noexcept {
+    return ExpressionView(*this).rt_offset();
 }
 
 template <typename T>
@@ -408,7 +431,7 @@ static_assert(std::is_trivially_copyable_v<FunctionView>);
 
 // TODO use std::optional<std::string> return type and re-use for validation above
 
-std::string i32_u16_u32_function_name(DataType dtype, std::string operation) {
+std::string function_name_i32_u16_u32(DataType dtype, std::string operation) {
     using enum DataType;
     switch (dtype) {
         case INT32: return fmt::format("{}_int32", operation);
@@ -418,16 +441,7 @@ std::string i32_u16_u32_function_name(DataType dtype, std::string operation) {
     }
 }
 
-std::string i32_u16_function_name(DataType dtype, std::string operation) {
-    using enum DataType;
-    switch (dtype) {
-        case INT32: return fmt::format("{}_int32", operation);
-        case UINT16: return fmt::format("{}_uint16", operation);
-        default: return operation;
-    }
-}
-
-std::string i32_function_name(DataType dtype, std::string operation) {
+std::string function_name_i32(DataType dtype, std::string operation) {
     using enum DataType;
     switch (dtype) {
         case INT32: return fmt::format("{}_int32", operation);
@@ -435,7 +449,7 @@ std::string i32_function_name(DataType dtype, std::string operation) {
     }
 }
 
-std::string f32_i32_function_name(DataType dtype, std::string operation) {
+std::string function_name_f32_i32(DataType dtype, std::string operation) {
     using enum DataType;
     switch (dtype) {
         case FLOAT32: return fmt::format("{}_fp32", operation);
@@ -448,22 +462,22 @@ std::string function_name(DataType dtype, Unary operation) {
     using enum Unary;
     switch (operation) {
         case RECIP: return "recip";
-        case NEGATIVE: return i32_function_name(dtype, "negative");
+        case NEGATIVE: return function_name_i32(dtype, "negative");
         case EXP: return "exp";
-        case EQZ: return i32_u16_u32_function_name(dtype, "eqz");
-        case GEZ: return i32_function_name(dtype, "gez");
-        case GTZ: return i32_function_name(dtype, "gtz");
-        case LEZ: return i32_function_name(dtype, "lez");
-        case LTZ: return i32_function_name(dtype, "ltz");
-        case NEZ: return i32_u16_u32_function_name(dtype, "nez");
-        case LOGICAL_NOT: return i32_u16_u32_function_name(dtype, "logical_not");
+        case EQZ: return function_name_i32_u16_u32(dtype, "eqz");
+        case GEZ: return function_name_i32(dtype, "gez");
+        case GTZ: return function_name_i32(dtype, "gtz");
+        case LEZ: return function_name_i32(dtype, "lez");
+        case LTZ: return function_name_i32(dtype, "ltz");
+        case NEZ: return function_name_i32_u16_u32(dtype, "nez");
+        case LOGICAL_NOT: return function_name_i32_u16_u32(dtype, "logical_not");
     }
 }
 
 std::string function_name(DataType dtype, UnaryWithParam operation) {
     using enum UnaryWithParam;
     switch (operation) {
-        case ADD: return i32_function_name(dtype, "add_unary");
+        case ADD: return function_name_i32(dtype, "add_unary");
         case SUB: return "sub_unary";
         case RSUB: return "rsub_unary";
         case MUL: return "mul_unary";
@@ -478,7 +492,7 @@ std::string function_name(DataType dtype, Binary operation) {
         case ADD: return "add";
         case SUB: return "sub";
         case MUL: return "mul";
-        case DIV: return "div";
+        case DIV: return "div_binary";
         case POWER: return "power_binary";
     }
 }
@@ -486,30 +500,31 @@ std::string function_name(DataType dtype, Binary operation) {
 std::string function_name(DataType dtype, Ternary operation) {
     using enum Ternary;
     switch (operation) {
-        case WHERE: return f32_i32_function_name(dtype, "where");
+        case WHERE: return function_name_f32_i32(dtype, "where");
     }
 }
 
 void format_to_kernel_string(
-    std::back_insert_iterator<std::string> out, DataType dtype, Operation operation, int& rt_arg_index) {
+    std::back_insert_iterator<std::string> out, DataType dtype, Operation operation, std::size_t rt_offset) {
     return std::visit(
         ttsl::overloaded{
             [&](UnaryWithParam alternative) {
-                fmt::format_to(out, "{}(get_arg_val<uint32_t>({}))", function_name(dtype, alternative), rt_arg_index++);
+                fmt::format_to(out, "{}(get_arg_val<uint32_t>({}))", function_name(dtype, alternative), rt_offset);
             },
             [&](auto alternative) { fmt::format_to(out, "{}()", function_name(dtype, alternative)); }},
         operation);
 }
 
-void format_to_kernel_string(std::back_insert_iterator<std::string> out, FunctionView function, int& rt_arg_index) {
-    constexpr auto to_cb_id = [](ExpressionView expression) { return enchantum::to_string(expression.index()); };
+void format_to_kernel_string(std::back_insert_iterator<std::string> out, FunctionView function) {
+    constexpr auto to_cb_index = [](ExpressionView expression) { return enchantum::to_string(expression.cb_index()); };
 
     fmt::format_to(
         out,
         "with_cb_ids<{},{}>(",
-        fmt::join(function.arguments() | std::views::transform(to_cb_id), ","),
-        to_cb_id(function));
-    lazy::format_to_kernel_string(out, function.dtype(), function.operation(), rt_arg_index);
+        fmt::join(function.arguments() | std::views::transform(to_cb_index), ","),
+        to_cb_index(function));
+    // n_tiles precedes runtime arguments in expression tree
+    lazy::format_to_kernel_string(out, function.dtype(), function.operation(), function.rt_offset() + 1);
     *out++ = ')';
 }
 
@@ -531,8 +546,6 @@ std::optional<Function> defer(Ternary operation, ExpressionView first, Expressio
 
 std::string to_compute_kernel_string(FunctionView expression) {
     std::string result;
-    // n_tiles is index 0
-    int rt_arg_index = 1;
 
     lazy::traverse(
         ttsl::overloaded{
@@ -545,13 +558,13 @@ std::string to_compute_kernel_string(FunctionView expression) {
                     std::format_to(
                         std::back_inserter(result),
                         "View::init_tiles(init_sfpu<c_0,{}>());",
-                        enchantum::to_string(expression.index()));
+                        enchantum::to_string(expression.cb_index()));
                     result.append("View::compute_tiles<num_tiles_per_cycle>(n_tiles,");
                 } else {
                     result.push_back(',');
                 }
 
-                lazy::format_to_kernel_string(std::back_inserter(result), function, rt_arg_index);
+                lazy::format_to_kernel_string(std::back_inserter(result), function);
             }},
         expression);
 
@@ -562,6 +575,7 @@ std::string to_compute_kernel_string(FunctionView expression) {
 void format_to_debug_string(std::back_insert_iterator<std::string> out, ExpressionView expression);
 
 void format_to_debug_string(std::back_insert_iterator<std::string> out, FunctionView expression) {
+    constexpr auto to_lower = [](unsigned char ch) -> char { return std::tolower(ch); };
     constexpr auto arg_to_string = [](ExpressionView expression) {
         std::string result;
         lazy::format_to_debug_string(std::back_inserter(result), expression);
@@ -571,18 +585,14 @@ void format_to_debug_string(std::back_insert_iterator<std::string> out, Function
         constexpr auto visitor = [](auto value) { return std::to_string(value); };
         return std::visit(visitor, param);
     };
-    const auto type = std::visit(
-        ttsl::overloaded{
-            [](Unary) { return "Unary"; },
-            [](UnaryWithParam) { return "UnaryWithParam"; },
-            [](Binary) { return "Binary"; },
-            [](Ternary) { return "Ternary"; },
-        },
-        expression.operation());
-    const auto name = std::visit(enchantum::to_string, expression.operation());
+    const auto name = std::visit(enchantum::to_string, expression.operation()) | std::views::transform(to_lower);
     const auto args = expression.arguments() | std::views::transform(arg_to_string);
     const auto params = expression.params() | std::views::transform(param_to_string);
-    fmt::format_to(out, "defer({}.{}, {}, {})", type, name, fmt::join(args, ", "), fmt::join(params, ", "));
+    if (params.empty()) {
+        fmt::format_to(out, "{}({})", fmt::join(name, ""), fmt::join(args, ", "));
+    } else {
+        fmt::format_to(out, "{}({}, {})", fmt::join(name, ""), fmt::join(args, ", "), fmt::join(params, ", "));
+    }
 }
 
 void format_to_debug_string(std::back_insert_iterator<std::string> out, ExpressionView expression) {
@@ -590,7 +600,7 @@ void format_to_debug_string(std::back_insert_iterator<std::string> out, Expressi
         return lazy::format_to_debug_string(out, *function);
     }
 
-    fmt::format_to(out, "{}", enchantum::to_string(expression.index()));
+    fmt::format_to(out, "{}", enchantum::to_string(expression.cb_index()));
 }
 
 std::string to_debug_string(FunctionView expression) {

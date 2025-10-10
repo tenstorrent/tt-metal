@@ -82,7 +82,8 @@ public:
 
     [[nodiscard]] DataType dtype() const noexcept;
     [[nodiscard]] const Shape& logical_shape() const noexcept;
-    [[nodiscard]] tt::CBIndex index() const noexcept;
+    [[nodiscard]] tt::CBIndex cb_index() const noexcept;
+    [[nodiscard]] std::size_t rt_offset() const noexcept;
     [[nodiscard]] std::size_t inputs() const noexcept;
     [[nodiscard]] std::size_t circular_buffers() const noexcept;
 };
@@ -178,7 +179,8 @@ public:
 
     [[nodiscard]] DataType dtype() const noexcept;
     [[nodiscard]] const Shape& logical_shape() const noexcept;
-    [[nodiscard]] tt::CBIndex index() const noexcept;
+    [[nodiscard]] tt::CBIndex cb_index() const noexcept;
+    [[nodiscard]] std::size_t rt_offset() const noexcept;
     [[nodiscard]] std::size_t inputs() const noexcept;
     [[nodiscard]] std::size_t circular_buffers() const noexcept;
 };
