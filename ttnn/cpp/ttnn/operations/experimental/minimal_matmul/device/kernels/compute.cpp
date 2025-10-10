@@ -33,7 +33,7 @@ void copy_block(uint32_t in_cb, uint32_t out_cb, uint32_t M_block_tiles, uint32_
 }
 
 void add_bias_block(uint32_t in_cb, uint32_t bias_cb, uint32_t out_cb, uint32_t M_block_tiles, uint32_t N_block_tiles) {
-    add_tiles_init(in_cb, bias_cb);
+    add_bcast_rows_init_short(in_cb, bias_cb);
     reconfig_data_format(in_cb, bias_cb);
     pack_reconfig_data_format(out_cb);
 
@@ -41,7 +41,7 @@ void add_bias_block(uint32_t in_cb, uint32_t bias_cb, uint32_t out_cb, uint32_t 
     for (uint32_t m = 0; m < M_block_tiles; m++) {
         for (uint32_t n = 0; n < N_block_tiles; n++) {
             acquire_dst();
-            add_tiles(in_cb, bias_cb, tile_id, tile_id, 0 /*dst*/);
+            add_tiles_bcast<BroadcastType::ROW>(in_cb, bias_cb, tile_id, n, 0 /*dst*/);
             pack_tile(0, out_cb);
             release_dst();
             tile_id++;
@@ -209,9 +209,9 @@ void MAIN {
 #ifndef FUSE_BIAS
             copy_block(intermediate_cb, out_cb, M_block_tiles, N_block_tiles);
 #else
-            cb_wait_front(in2_cb, out_block_num_tiles);
+            cb_wait_front(in2_cb, N_block_tiles);
             add_bias_block(intermediate_cb, in2_cb, out_cb, M_block_tiles, N_block_tiles);
-            cb_pop_front(in2_cb, out_block_num_tiles);
+            cb_pop_front(in2_cb, N_block_tiles);
 #endif
             cb_pop_front(intermediate_cb, out_block_num_tiles);
         }
