@@ -32,8 +32,10 @@ run_tg_gpt_oss_tests() {
   pip install -r models/demos/gpt_oss/requirements.txt
 
   # GPT-OSS weights for 20B and 120B
-  gpt_oss=("/mnt/MLPerf/tt_dnn-models/tt/GPT-OSS-20B/","/mnt/MLPerf/tt_dnn-models/tt/GPT-OSS-120B/")
-  for gpt_oss_dir in "${gpt_oss[@]}"; do
+  gpt_oss_20b=/mnt/MLPerf/tt_dnn-models/tt/GPT-OSS-20B/
+  gpt_oss_120b=/mnt/MLPerf/tt_dnn-models/tt/GPT-OSS-120B/
+
+  for gpt_oss_dir in "$gpt_oss_20b" "$gpt_oss_120b"; do
     HF_MODEL=$gpt_oss_dir pytest -n auto models/demos/gpt_oss/tests/unit ; fail+=$?
   done
 
