@@ -12,6 +12,8 @@
 #include <string>
 #include <utility>
 
+#include <tt-metalium/assert.hpp>
+
 namespace tt::tt_metal {
 // RuntimeArgsData provides an indirection to the runtime args
 // Prior to generating the cq cmds for the device, this points into a vector within the kernel
