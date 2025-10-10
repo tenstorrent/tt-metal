@@ -30,6 +30,8 @@ public:
     ~MeshWorkload();
     MeshWorkload(MeshWorkload&& other) noexcept;
     MeshWorkload& operator=(MeshWorkload&& other) noexcept;
+    // Requirement: In a single MeshWorkload, device ranges for different programs must not share devices. Each device
+    // can belong to only one program.
     void add_program(const MeshCoordinateRange& device_range, Program&& program);
     std::unordered_map<MeshCoordinateRange, Program>& get_programs();
     const std::unordered_map<MeshCoordinateRange, Program>& get_programs() const;
