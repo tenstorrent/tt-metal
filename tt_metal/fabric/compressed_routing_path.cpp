@@ -10,7 +10,8 @@ namespace tt::tt_fabric {
 // 1D routing specialization
 template <>
 void intra_mesh_routing_path_t<1, false>::calculate_chip_to_all_routing_fields(
-    uint16_t src_chip_id, uint16_t num_chips, uint16_t ew_dim) {
+    uint16_t src_chip_id, tt_metal::distributed::MeshShape& mesh_shape, FabricType torus_type) {
+    uint16_t num_chips = mesh_shape[0] * mesh_shape[1];
     uint32_t* route_ptr = reinterpret_cast<uint32_t*>(&paths);
     route_ptr[0] = 0;
     for (uint16_t hops = 1; hops < num_chips; ++hops) {
@@ -22,14 +23,22 @@ void intra_mesh_routing_path_t<1, false>::calculate_chip_to_all_routing_fields(
 // 1D compressed routing specialization. No-op
 template <>
 void intra_mesh_routing_path_t<1, true>::calculate_chip_to_all_routing_fields(
-    uint16_t src_chip_id, uint16_t num_chips, uint16_t ew_dim) {
+    uint16_t src_chip_id, tt_metal::distributed::MeshShape& mesh_shape, FabricType torus_type) {
     // No-op
 }
 
 // 2D compressed routing specialization
 template <>
 void intra_mesh_routing_path_t<2, true>::calculate_chip_to_all_routing_fields(
-    uint16_t src_chip_id, uint16_t num_chips, uint16_t ew_dim) {
+    uint16_t src_chip_id, tt_metal::distributed::MeshShape& mesh_shape, FabricType torus_type) {
+    // Calculate NS dimension size (assuming rectangular grid)
+    uint16_t num_chips = mesh_shape[0] * mesh_shape[1];
+    uint8_t ew_dim = mesh_shape[1];
+    uint8_t ns_dim = mesh_shape[0];
+    // Axis-aware torus handling
+    const bool torus_y = (torus_type == FabricType::TORUS_Y || torus_type == FabricType::TORUS_XY);
+    const bool torus_x = (torus_type == FabricType::TORUS_X || torus_type == FabricType::TORUS_XY);
+
     for (uint16_t dst_chip_id = 0; dst_chip_id < num_chips; ++dst_chip_id) {
         if (src_chip_id == dst_chip_id) {
             // Self route - no movement needed
@@ -43,17 +52,46 @@ void intra_mesh_routing_path_t<2, true>::calculate_chip_to_all_routing_fields(
         uint16_t dst_col = dst_chip_id / ew_dim;
         uint16_t dst_row = dst_chip_id % ew_dim;
 
-        // Calculate hops needed in each dimension
-        uint8_t ns_hops = (dst_col != src_col) ? ((dst_col > src_col) ? (dst_col - src_col) : (src_col - dst_col)) : 0;
-        uint8_t ew_hops = (dst_row != src_row) ? ((dst_row > src_row) ? (dst_row - src_row) : (src_row - dst_row)) : 0;
+        uint8_t ns_hops, ew_hops;
+        uint8_t ns_direction, ew_direction;
 
-        // Encode directions
-        // ns_direction: 0=north, 1=south
-        // ew_direction: 0=west, 1=east
-        uint8_t ns_direction = (dst_col > src_col) ? 1 : 0;
-        uint8_t ew_direction = (dst_row > src_row) ? 1 : 0;
+        // North-South (Y axis, mesh_coord[0])
+        {
+            uint8_t ns_direct = (dst_col > src_col) ? (dst_col - src_col) : (src_col - dst_col);
+            if (torus_y && ns_direct != 0) {
+                uint8_t ns_wrap = ns_dim - ns_direct;
+                if (ns_direct < ns_wrap) {
+                    ns_hops = ns_direct;
+                    ns_direction = dst_col > src_col;  // 0=north, 1=south
+                } else {
+                    ns_hops = ns_wrap;
+                    ns_direction = src_col > dst_col;  // Reverse direction for wrap
+                }
+            } else {
+                ns_hops = ns_direct;
+                ns_direction = dst_col > src_col;  // 0=north, 1=south
+            }
+        }
+
+        // East-West (X axis, mesh_coord[1])
+        {
+            uint8_t ew_direct = (dst_row > src_row) ? (dst_row - src_row) : (src_row - dst_row);
+            if (torus_x && ew_direct != 0) {
+                uint8_t ew_wrap = ew_dim - ew_direct;
+                if (ew_direct < ew_wrap) {
+                    ew_hops = ew_direct;
+                    ew_direction = dst_row > src_row;  // 0=west, 1=east
+                } else {
+                    ew_hops = ew_wrap;
+                    ew_direction = src_row > dst_row;  // Reverse direction for wrap
+                }
+            } else {
+                ew_hops = ew_direct;
+                ew_direction = dst_row > src_row;  // 0=west, 1=east
+            }
+        }
+
         uint8_t turn_after_ns = ns_hops;  // XY routing: complete NS first, then EW
-
         paths[dst_chip_id].set(ns_hops, ew_hops, ns_direction, ew_direction, turn_after_ns);
     }
 }

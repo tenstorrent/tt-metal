@@ -67,6 +67,8 @@ public:
 
     std::pair<uint32_t, uint32_t> get_fabric_router_termination_address_and_signal() const;
 
+    FabricType get_torus_type() const;
+
 private:
     std::unordered_map<MeshId, bool> check_for_wrap_around_mesh() const;
     tt::tt_fabric::Topology get_topology() const;
