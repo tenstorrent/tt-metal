@@ -117,36 +117,42 @@ void kernel_main() {
     uint32_t runs_base = tmpl_base + num_templates * 3;
     uint32_t input_base_addr, previous_input_page_idx = std::numeric_limits<uint32_t>::max();
     DPRINT << "num of runs: " << num_runs << "\n";
+    bool first = true;
     for (uint32_t run_idx = 0; run_idx < num_runs; ++run_idx) {
-        uint32_t packed1 = get_arg_val<uint32_t>(runs_base + run_idx * 4 + 0);
-        uint32_t input_offset_start = get_arg_val<uint32_t>(runs_base + run_idx * 4 + 1);
-        uint32_t output_offset_start = get_arg_val<uint32_t>(runs_base + run_idx * 4 + 2);
-        uint32_t packed2 = get_arg_val<uint32_t>(runs_base + run_idx * 4 + 3);
+        uint32_t out_page_start = get_arg_val<uint32_t>(runs_base + run_idx * 10 + 0);
+        uint32_t out_page_end = get_arg_val<uint32_t>(runs_base + run_idx * 10 + 1);
+        uint32_t in_page_start = get_arg_val<uint32_t>(runs_base + run_idx * 10 + 2);
+        uint32_t pattern_template_index = get_arg_val<uint32_t>(runs_base + run_idx * 10 + 3);
+        uint32_t in_offset_start = get_arg_val<uint32_t>(runs_base + run_idx * 10 + 4);
+        uint32_t out_offset_start = get_arg_val<uint32_t>(runs_base + run_idx * 10 + 5);
+        uint32_t run_length = get_arg_val<uint32_t>(runs_base + run_idx * 10 + 6);
+        int32_t in_page_stride = get_arg_val<uint32_t>(runs_base + run_idx * 10 + 7);
+        int32_t in_offset_stride = get_arg_val<uint32_t>(runs_base + run_idx * 10 + 8);
+        int32_t out_offset_stride = get_arg_val<uint32_t>(runs_base + run_idx * 10 + 9);
 
-        uint8_t out_page_start = (packed1 >> 24) & 0xFF;
-        uint8_t out_page_end = (packed1 >> 16) & 0xFF;
-        uint8_t in_page_start = (packed1 >> 8) & 0xFF;
-        uint8_t template_idx = packed1 & 0xFF;
-
-        uint32_t in_offset_start = input_offset_start;
-        uint32_t out_offset_start = output_offset_start;
-        uint8_t run_length = (packed2 >> 24) & 0xFF;
-        int8_t in_page_stride = (packed2 >> 16) & 0xFF;
-        int8_t in_offset_stride = (packed2 >> 8) & 0xFF;
-        int8_t out_offset_stride = packed2 & 0xFF;
-
-        DPRINT << "in_offset_start=" << in_offset_start << " out_offset_start=" << out_offset_start << "\n";
-        const auto& tmpl = templates[template_idx];
+        const auto& tmpl = templates[pattern_template_index];
         // For each output page in the run
         for (uint32_t out_page_idx = out_page_start; out_page_idx <= out_page_end; ++out_page_idx) {
             uint32_t input_page_idx = in_page_start + (out_page_idx - out_page_start) * in_page_stride;
             uint32_t input_offset = in_offset_start + (out_page_idx - out_page_start) * in_offset_stride;
             uint32_t output_offset = out_offset_start + (out_page_idx - out_page_start) * out_offset_stride;
 
+            if (tmpl.num_elements == 0) {
+                continue;
+            }
+
             DPRINT << "run_idx=" << run_idx << " out_page_idx=" << out_page_idx << "\n";
             DPRINT << "input_page_idx=" << input_page_idx << " input_offset=" << input_offset
                    << " output_offset=" << output_offset << "\n";
-            if (input_page_idx != previous_input_page_idx) {
+            if (first) {
+                cb_wait_front(cb_id_input, 1);
+                input_base_addr = get_read_ptr(cb_id_input);
+                previous_input_page_idx = input_page_idx;
+                first = false;
+
+            } else if (input_page_idx != previous_input_page_idx) {
+                noc_async_write_barrier();
+                cb_pop_front(cb_id_input, 1);
                 cb_wait_front(cb_id_input, 1);
                 input_base_addr = get_read_ptr(cb_id_input);
                 previous_input_page_idx = input_page_idx;
@@ -154,6 +160,7 @@ void kernel_main() {
             for (uint32_t seg = 0; seg < run_length; ++seg) {
                 uint32_t seg_input_offset = input_offset + seg * tmpl.input_offset_stride;
                 uint32_t seg_output_offset = output_offset + seg * tmpl.output_offset_stride;
+
                 const uint32_t output_addr = working_write_addr + seg_output_offset * element_sz_bytes;
                 DPRINT << "seg=" << seg << " seg_input_offset=" << seg_input_offset
                        << " seg_output_offset=" << seg_output_offset << "\n";
@@ -169,8 +176,6 @@ void kernel_main() {
             const uint64_t output_noc_addr = get_noc_addr(out_page_idx, output_addrgen);
             enhanced_noc_async_write<Tile_size_bytes, true>(working_write_addr, output_noc_addr, Tile_size_bytes);
             noc_async_write_barrier();
-
-            cb_pop_front(cb_id_input, 1);
         }
         DPRINT << "after out_page loop\n";
     }
