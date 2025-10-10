@@ -49,6 +49,7 @@ Tensor aggregate(const std::vector<tt::tt_metal::Tensor>& tensors) {
     }
 
     // Create a new mesh tensor for parent mesh.
+    // TODO: #30348 - synchronize the state of parent mesh allocator with all of submeshes.
     const auto& reference_buffer = tensors[0].mesh_buffer();
     auto mesh_buffer = tt::tt_metal::distributed::MeshBuffer::create(
         reference_buffer->global_config(),

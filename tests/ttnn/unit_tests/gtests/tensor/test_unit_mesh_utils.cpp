@@ -19,12 +19,14 @@
 namespace ttnn::experimental::unit_mesh {
 namespace {
 
+using ::testing::HasSubstr;
 using ::testing::SizeIs;
+using ::testing::ThrowsMessage;
 using ::tt::tt_metal::distributed::MeshShape;
 
-using UnitMeshUtilsTest = ::tt::tt_metal::MeshDevice2x4Fixture;
+using UnitMeshUtils2x4Test = ::tt::tt_metal::MeshDevice2x4Fixture;
 
-TEST_F(UnitMeshUtilsTest, AggregateAndDisaggregate) {
+TEST_F(UnitMeshUtils2x4Test, AggregateAndDisaggregate) {
     auto unit_meshes = mesh_device_->create_submeshes(MeshShape(1, 1));
     ASSERT_THAT(unit_meshes, SizeIs(mesh_device_->shape().mesh_size()));
 
@@ -78,40 +80,102 @@ TEST_F(UnitMeshUtilsTest, AggregateAndDisaggregate) {
     }
 }
 
-TEST_F(UnitMeshUtilsTest, AggregateEmptyVector) {
+TEST_F(UnitMeshUtils2x4Test, AggregateEmptyVector) {
     std::vector<Tensor> empty_tensors;
-    EXPECT_ANY_THROW(aggregate(empty_tensors));
+    EXPECT_THAT(
+        ([&]() { aggregate(empty_tensors); }),
+        ThrowsMessage<std::runtime_error>(HasSubstr("Cannot aggregate empty tensor vector")));
 }
 
-TEST_F(UnitMeshUtilsTest, AggregateMismatchedTensorSpecs) {
+TEST_F(UnitMeshUtils2x4Test, AggregateNonUnitMeshes) {
+    auto non_unit_meshes = mesh_device_->create_submeshes(MeshShape(2, 2));
+    auto shape = ttnn::Shape(std::array<uint32_t, 2>{32, 32});
+    auto dtype = tt::tt_metal::DataType::BFLOAT16;
+    auto layout = tt::tt_metal::Layout::TILE;
+
+    std::vector<Tensor> tensors;
+    tensors.reserve(non_unit_meshes.size());
+    for (const auto& non_unit_mesh : non_unit_meshes) {
+        tensors.push_back(create_device_tensor(
+            tt::tt_metal::TensorSpec(
+                shape,
+                tt::tt_metal::TensorLayout(dtype, tt::tt_metal::PageConfig(layout), tt::tt_metal::MemoryConfig())),
+            non_unit_mesh.get()));
+    }
+
+    EXPECT_THAT(
+        ([&]() { aggregate(tensors); }), ThrowsMessage<std::runtime_error>(HasSubstr("Expected unit mesh (1x1)")));
+}
+
+TEST_F(UnitMeshUtils2x4Test, AggregateMismatchedTensorSpecs) {
     auto unit_meshes = mesh_device_->create_submeshes(MeshShape(1, 1));
-    ASSERT_GE(unit_meshes.size(), 2);
 
     auto shape1 = ttnn::Shape(std::array<uint32_t, 2>{32, 32});
     auto shape2 = ttnn::Shape(std::array<uint32_t, 2>{64, 64});
 
-    auto tensor1 = create_device_tensor(
+    std::vector<Tensor> tensors;
+    tensors.reserve(unit_meshes.size());
+    for (int i = 0; i < unit_meshes.size(); i++) {
+        if (i % 2 == 0) {
+            tensors.push_back(create_device_tensor(
+                tt::tt_metal::TensorSpec(
+                    shape1,
+                    tt::tt_metal::TensorLayout(
+                        tt::tt_metal::DataType::BFLOAT16,
+                        tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
+                        tt::tt_metal::MemoryConfig())),
+                unit_meshes[i].get()));
+        } else {
+            tensors.push_back(create_device_tensor(
+                tt::tt_metal::TensorSpec(
+                    shape2,
+                    tt::tt_metal::TensorLayout(
+                        tt::tt_metal::DataType::BFLOAT16,
+                        tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
+                        tt::tt_metal::MemoryConfig())),
+                unit_meshes[i].get()));
+        }
+    }
+
+    EXPECT_THAT(
+        ([&]() { aggregate(tensors); }),
+        ThrowsMessage<std::runtime_error>(HasSubstr("All tensors must have the same TensorSpec")));
+}
+
+TEST_F(UnitMeshUtils2x4Test, AggregateMismatchedAddresses) {
+    auto unit_meshes = mesh_device_->create_submeshes(MeshShape(1, 1));
+
+    auto shape = ttnn::Shape(std::array<uint32_t, 2>{64, 64});
+
+    // Make an additional allocation on the first unit mesh to make the addresses mismatch.
+    auto tensor = create_device_tensor(
         tt::tt_metal::TensorSpec(
-            shape1,
+            shape,
             tt::tt_metal::TensorLayout(
                 tt::tt_metal::DataType::BFLOAT16,
                 tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
                 tt::tt_metal::MemoryConfig())),
         unit_meshes[0].get());
-    auto tensor2 = create_device_tensor(
-        tt::tt_metal::TensorSpec(
-            shape2,
-            tt::tt_metal::TensorLayout(
-                tt::tt_metal::DataType::BFLOAT16,
-                tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
-                tt::tt_metal::MemoryConfig())),
-        unit_meshes[1].get());
 
-    std::vector<Tensor> tensors = {tensor1, tensor2};
-    EXPECT_ANY_THROW(aggregate(tensors));
+    std::vector<Tensor> tensors;
+    tensors.reserve(unit_meshes.size());
+    for (const auto& unit_mesh : unit_meshes) {
+        tensors.push_back(create_device_tensor(
+            tt::tt_metal::TensorSpec(
+                shape,
+                tt::tt_metal::TensorLayout(
+                    tt::tt_metal::DataType::BFLOAT16,
+                    tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
+                    tt::tt_metal::MemoryConfig())),
+            unit_mesh.get()));
+    }
+
+    EXPECT_THAT(
+        ([&]() { aggregate(tensors); }),
+        ThrowsMessage<std::runtime_error>(HasSubstr("All mesh buffers must be at the same address")));
 }
 
-TEST_F(UnitMeshUtilsTest, AggregateWrongNumberOfTensors) {
+TEST_F(UnitMeshUtils2x4Test, AggregateWrongNumberOfTensors) {
     auto unit_meshes = mesh_device_->create_submeshes(MeshShape(1, 1));
     ASSERT_GE(unit_meshes.size(), 2);
 
@@ -127,10 +191,12 @@ TEST_F(UnitMeshUtilsTest, AggregateWrongNumberOfTensors) {
         unit_meshes[0].get());
 
     std::vector<Tensor> tensors = {tensor};
-    EXPECT_ANY_THROW(aggregate(tensors));
+    EXPECT_THAT(
+        ([&]() { aggregate(tensors); }),
+        ThrowsMessage<std::runtime_error>(HasSubstr("Input tensors must span the entire parent mesh")));
 }
 
-TEST_F(UnitMeshUtilsTest, DisaggregateWithoutSubmeshes) {
+TEST_F(UnitMeshUtils2x4Test, DisaggregateWithoutSubmeshes) {
     // Create a tensor on the parent mesh directly (no submeshes created yet)
     auto shape = ttnn::Shape(std::array<uint32_t, 2>{32, 32});
 
@@ -144,7 +210,9 @@ TEST_F(UnitMeshUtilsTest, DisaggregateWithoutSubmeshes) {
         mesh_device_.get());
 
     // Should throw because no submeshes exist
-    EXPECT_ANY_THROW(disaggregate(tensor));
+    EXPECT_THAT(
+        ([&]() { disaggregate(tensor); }),
+        ThrowsMessage<std::runtime_error>(HasSubstr("Number of submeshes (0) must match mesh size")));
 }
 
 }  // namespace
