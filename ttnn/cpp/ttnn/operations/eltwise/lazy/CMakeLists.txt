@@ -10,9 +10,10 @@ target_sources(
         FILE_SET api
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
-        FILES expression.hpp node.hpp operation.hpp param.hpp
+        FILES expression.hpp lazy.hpp node.hpp operation.hpp overload.hpp param.hpp
     PRIVATE
         expression.cpp
+        lazy.cpp
 )
 
 target_include_directories(ttnn_op_eltwise_lazy PRIVATE ${FixmeOpIncDirs})

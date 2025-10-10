@@ -47,20 +47,13 @@ constexpr T&& convert(T&& value) noexcept {
     return std::forward<T>(value);
 }
 
-// Determines whether invoking Derived::operator() with converted arguments is noexcept
-template <typename Derived, typename... From>
-    requires std::invocable<const Derived&, decltype(lazy::convert(std::declval<From>()))...>
-inline constexpr bool is_nothrow_overload_v =
-    noexcept(std::declval<const Derived&>()(lazy::convert(std::declval<From>())...));
-
 template <typename Derived, typename From>
 struct Overload;
 
 template <typename Derived, template <typename...> typename List, typename... From>
 struct Overload<Derived, List<From...>> {
-    template <std::derived_from<Overload> D = Derived>
-    [[nodiscard]] auto operator()(From... from) const noexcept(is_nothrow_overload_v<D, From...>) -> decltype(auto) {
-        return static_cast<const D&>(*this)(lazy::convert(std::forward<From>(from))...);
+    [[nodiscard]] auto operator()(From... from) const -> decltype(auto) {
+        return static_cast<const Derived&>(*this)(lazy::convert(std::forward<From>(from))...);
     }
 };
 
