@@ -32,6 +32,24 @@ void copy_block(uint32_t in_cb, uint32_t out_cb, uint32_t M_block_tiles, uint32_
     }
 }
 
+void add_bias_block(uint32_t in_cb, uint32_t bias_cb, uint32_t out_cb, uint32_t M_block_tiles, uint32_t N_block_tiles) {
+    add_tiles_init(in_cb, bias_cb);
+    reconfig_data_format(in_cb, bias_cb);
+    pack_reconfig_data_format(out_cb);
+
+    uint32_t tile_id = 0;
+    for (uint32_t m = 0; m < M_block_tiles; m++) {
+        for (uint32_t n = 0; n < N_block_tiles; n++) {
+            acquire_dst();
+            add_tiles(in_cb, bias_cb, tile_id, tile_id, 0 /*dst*/);
+            pack_tile(0, out_cb);
+            release_dst();
+            tile_id++;
+        }
+        cb_push_back(out_cb, N_block_tiles);
+    }
+}
+
 // Slightly modified from compute_common.hpp
 void matmul_blocks(
     const uint32_t in0_cb,
@@ -108,6 +126,9 @@ void MAIN {
     constexpr uint32_t in1_cb = tt::CBIndex::c_1;
     constexpr uint32_t out_cb = tt::CBIndex::c_2;
     constexpr uint32_t intermediate_cb = tt::CBIndex::c_3;
+#ifdef FUSE_BIAS
+    constexpr uint32_t in2_cb = tt::CBIndex::c_4;
+#endif
 
     mm_init(in0_cb, in1_cb, intermediate_cb);
 
@@ -185,7 +206,13 @@ void MAIN {
             PACK((llk_pack_reconfig_l1_acc(0)));
             cb_wait_front(intermediate_cb, out_block_num_tiles);
             cb_reserve_back(out_cb, out_block_num_tiles);
+#ifndef FUSE_BIAS
             copy_block(intermediate_cb, out_cb, M_block_tiles, N_block_tiles);
+#else
+            cb_wait_front(in2_cb, out_block_num_tiles);
+            add_bias_block(intermediate_cb, in2_cb, out_cb, M_block_tiles, N_block_tiles);
+            cb_pop_front(in2_cb, out_block_num_tiles);
+#endif
             cb_pop_front(intermediate_cb, out_block_num_tiles);
         }
     }
