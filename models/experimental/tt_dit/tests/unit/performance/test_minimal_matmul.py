@@ -8,7 +8,7 @@ from ....utils.tensor import bf16_tensor
 from ....utils.check import assert_quality
 
 
-def run_test_linear(device, M, K, N, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w):
+def run_test_linear(device, M, K, N, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w, use_bias):
     logger.info(f"Running test_linear with M={M}, K={K}, N={N}")
     torch_dtype = torch.float32
 
@@ -16,13 +16,19 @@ def run_test_linear(device, M, K, N, M_block_size, K_block_size, N_block_size, s
     # weight_input = torch.full((K, N), 3.0, dtype=torch_dtype)
     torch_input = torch.randn((M, K), dtype=torch_dtype)
     weight_input = torch.randn((K, N), dtype=torch_dtype)
+    if use_bias:
+        bias_input = torch.randn((M, N), dtype=torch_dtype)
 
     # Prepare TT tensors
     tt_input = bf16_tensor(torch_input, device=device)
     tt_weight = bf16_tensor(weight_input, device=device)
+    if use_bias:
+        tt_bias = bf16_tensor(bias_input, device=device)
 
     with torch.no_grad():
         torch_output = torch_input @ weight_input
+        if use_bias:
+            torch_output = torch_output + bias_input
 
     compute_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
@@ -46,7 +52,7 @@ def run_test_linear(device, M, K, N, M_block_size, K_block_size, N_block_size, s
     tt_output = ttnn.experimental.minimal_matmul(
         input_tensor=tt_input,
         weight_tensor=tt_weight,
-        bias_tensor=None,
+        bias_tensor=tt_bias if use_bias else None,
         compute_kernel_config=compute_config,
         config=matmul_config,
     )
@@ -60,11 +66,13 @@ def run_test_linear(device, M, K, N, M_block_size, K_block_size, N_block_size, s
     [(4096, 4096, 4096)],
 )
 @pytest.mark.parametrize(
-    "M_block_size, K_block_size, N_block_size, subblock_h, subblock_w",
-    [(8, 8, 8, 2, 2)],
+    "M_block_size, K_block_size, N_block_size, subblock_h, subblock_w, use_bias",
+    [(8, 8, 8, 2, 2, True)],
 )
-def test_linear(device, M, K, N, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w):
-    check_result = run_test_linear(device, M, K, N, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w)
+def test_linear(device, M, K, N, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w, use_bias):
+    check_result = run_test_linear(
+        device, M, K, N, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w, use_bias
+    )
     assert check_result["pcc"] > 0.999_500
     assert check_result["relative_rmse"] < 0.02
 
