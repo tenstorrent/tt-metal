@@ -1,0 +1,30 @@
+# Dependencies for Excel Processor and Visualization Scripts
+# ========================================================
+#
+# For excel_processor_combined.py:
+# - Excel/CSV processing with opcodes extraction
+# - Data formatting and conditional formatting
+# - FPS calculations
+#
+# For create_integrated_visualization.py:
+# - Operations analysis visualization
+# - Stacked bar charts, pie charts, and tables
+# - Statistical plotting
+
+# Core data processing
+pandas>=1.5.0          # DataFrame operations, Excel/CSV reading and writing
+openpyxl>=3.0.0         # Excel file manipulation, formatting, conditional formatting
+xlsxwriter>=3.0.0       # Alternative Excel writer (backup/compatibility)
+
+# Visualization and plotting
+matplotlib>=3.5.0       # Core plotting library for charts and graphs
+seaborn>=0.11.0         # Statistical visualization and styling
+numpy>=1.21.0           # Numerical operations and array processing
+
+# Optional but recommended
+xlrd>=2.0.0             # Reading older Excel formats (.xls files)
+Pillow>=8.0.0           # Image processing for plot exports (PNG, JPEG)
+
+# Development and testing (optional)
+# pytest>=6.0.0         # For running tests
+# jupyter>=1.0.0        # For interactive development
