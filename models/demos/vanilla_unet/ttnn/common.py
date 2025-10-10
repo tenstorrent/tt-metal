@@ -22,6 +22,7 @@ class Conv:
         enable_weights_double_buffer=False,
         output_layout=ttnn.ROW_MAJOR_LAYOUT,
         reallocate_halo_output=False,
+        conv_args=None,
     ) -> None:
         self.weights = parameters["weight"]
         if parameters["bias"] is not None:
@@ -38,6 +39,11 @@ class Conv:
         self.activation = activation
         self.groups = 1
         self.dtype = dtype
+        self.batch_size = conv_args.batch_size
+        self.input_height = conv_args.input_height
+        self.input_width = conv_args.input_width
+        self.in_channels = conv_args.in_channels
+        self.out_channels = conv_args.out_channels
         self.shard_layout = (
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED if height_sharding else ttnn.TensorMemoryLayout.BLOCK_SHARDED
         )
@@ -74,15 +80,15 @@ class Conv:
             input_tensor=input_tensor,
             weight_tensor=self.weights,
             bias_tensor=self.bias,
-            in_channels=input_tensor.shape[3],
+            in_channels=self.in_channels,
             out_channels=self.out_channels,
             device=device,
             kernel_size=self.kernel_size,
             stride=(self.conv_params[0], self.conv_params[1]),
             padding=(self.conv_params[2], self.conv_params[3]),
-            batch_size=input_tensor.shape[0],
-            input_height=input_tensor.shape[1],
-            input_width=input_tensor.shape[2],
+            batch_size=self.batch_size,
+            input_height=self.input_height,
+            input_width=self.input_width,
             conv_config=conv_config,
             compute_config=compute_config,
             groups=self.groups,
@@ -91,11 +97,6 @@ class Conv:
             dtype=self.dtype,
             slice_config=ttnn.Conv2dL1FullSliceConfig,
         )
-
-        output_tensor = ttnn.reshape(
-            output_tensor, (input_tensor.shape[0], _out_height, _out_width, output_tensor.shape[3])
-        )
-
         del _out_height, _out_width
 
         return output_tensor
@@ -114,6 +115,7 @@ class ConvTranspose:
         dtype=ttnn.bfloat16,
         auto_shard=False,
         output_layout=ttnn.ROW_MAJOR_LAYOUT,
+        conv_args=None,
     ) -> None:
         self.weights = parameters["weight"]
         self.bias = parameters["bias"]
@@ -127,6 +129,11 @@ class ConvTranspose:
         self.groups = 1
         self.dtype = dtype
         self.output_layout = output_layout
+        self.batch_size = conv_args.batch_size
+        self.input_height = conv_args.input_height
+        self.input_width = conv_args.input_width
+        self.in_channels = conv_args.in_channels
+        self.out_channels = conv_args.out_channels
         self.shard_layout = (
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED if height_sharding else ttnn.TensorMemoryLayout.BLOCK_SHARDED
         )
@@ -160,9 +167,9 @@ class ConvTranspose:
             kernel_size=self.kernel_size,
             stride=(self.conv_params[0], self.conv_params[1]),
             padding=(self.conv_params[2], self.conv_params[3]),
-            batch_size=input_tensor.shape[0],
-            input_height=input_tensor.shape[1],
-            input_width=input_tensor.shape[2],
+            batch_size=self.batch_size,
+            input_height=self.input_height,
+            input_width=self.input_width,
             conv_config=conv_config,
             compute_config=compute_config,
             groups=self.groups,
@@ -172,10 +179,6 @@ class ConvTranspose:
             dilation=(1, 1),
             mirror_kernel=True,
             dtype=self.dtype,
-        )
-
-        output_tensor = ttnn.reshape(
-            output_tensor, (input_tensor.shape[0], _out_height, _out_width, output_tensor.shape[3])
         )
 
         del _out_height, _out_width

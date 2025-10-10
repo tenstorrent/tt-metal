@@ -5,7 +5,7 @@
 import pytest
 import torch
 from loguru import logger
-from ttnn.model_preprocessing import fold_batch_norm2d_into_conv2d, preprocess_model_parameters
+from ttnn.model_preprocessing import fold_batch_norm2d_into_conv2d, infer_ttnn_module_args, preprocess_model_parameters
 
 import ttnn
 from models.demos.vanilla_unet.common import VANILLA_UNET_L1_SMALL_SIZE, load_torch_model
@@ -71,7 +71,7 @@ def create_custom_preprocessor(device):
                     torch.reshape(getattr(model, f"upconv{i}").bias, (1, 1, 1, -1)), dtype=ttnn.bfloat16
                 )
 
-            for i in range(4, 1, -1):
+            for i in range(4, 0, -1):
                 parameters[f"decoder{i}"] = {}
                 parameters[f"decoder{i}"][0] = {}
                 conv_weight, conv_bias = fold_batch_norm2d_into_conv2d(
@@ -98,11 +98,6 @@ def create_custom_preprocessor(device):
                     torch.reshape(conv_bias, (1, 1, 1, -1)),
                     dtype=ttnn.bfloat16,
                 )
-
-            parameters[f"decoder1"] = {}
-            parameters[f"decoder1"][0] = {}
-            parameters[f"decoder1"][0]["weight"] = ttnn.from_torch(model.decoder1[0].weight, dtype=ttnn.bfloat16)
-            parameters[f"decoder1"][0]["bias"] = None
 
             bn_layer = model.decoder1[1]  # BatchNorm2d layer
             channel_size = bn_layer.num_features
@@ -181,8 +176,12 @@ def test_unet(device, reset_seeds, model_location_generator):
     parameters = preprocess_model_parameters(
         initialize_model=lambda: reference_model, custom_preprocessor=create_custom_preprocessor(device), device=None
     )
+    parameters.conv_args = {}
+    parameters.conv_args = infer_ttnn_module_args(
+        model=reference_model, run_model=lambda model: model(torch_input_tensor), device=None
+    )
 
-    ttnn_model = TtUnet(device=device, parameters=parameters, model=reference_model)
+    ttnn_model = TtUnet(device=device, parameters=parameters, model=reference_model, conv_args=parameters.conv_args)
 
     n, c, h, w = torch_input_tensor.shape
     if c == 3:
