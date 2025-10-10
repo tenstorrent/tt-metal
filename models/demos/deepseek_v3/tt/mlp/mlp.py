@@ -365,18 +365,10 @@ class MLP(AbstractModule):
         Returns:
             ModelState containing the state information for this module
         """
+        # Store CCL object for runtime semaphore initialization
         return {
             MESH_DEVICE_STATE_DICT_KEY: mesh_device,
-            "all_gather": {
-                "multi_device_global_semaphore": ccl.get_gather_sem(1),
-                "barrier_semaphore": ccl.get_barrier_sem(1),
-                "num_links": ccl.get_max_links(1),
-            },
-            "reduce_scatter_async": {
-                "multi_device_global_semaphore": ccl.get_reduce_scatter_sem(1),
-                "barrier_semaphore": ccl.get_barrier_sem(1),
-                "num_links": ccl.get_max_links(1),
-            },
+            "ccl": ccl,
         }
 
     @classmethod
@@ -440,8 +432,11 @@ class MLP(AbstractModule):
     def forward_prefill(cls, x: ttnn.Tensor, cfg: RunPrefillConfig) -> ttnn.Tensor:
         num_layers, _, seq_len, _ = x.shape
 
+        # CCL runtime initialization in execution order
+        ccl = cfg["ccl"]
+
         # All gather for efficient matmuls
-        x = ttnn.experimental.all_gather_async(x, **cfg["all_gather"])
+        x = ttnn.experimental.all_gather_async(x, **ccl.populate_all_gather_runtime_args(cfg["all_gather"]))
 
         # Chunk the input if needed
         if seq_len > cfg["max_rows"]:  # For large sequence lengths, process the input in chunks
@@ -475,7 +470,9 @@ class MLP(AbstractModule):
         ttnn.deallocate(activated)
 
         # Reduce-scatter across devices to sum partial results
-        output = ttnn.experimental.reduce_scatter_minimal_async(output, **cfg["reduce_scatter_async"])
+        output = ttnn.experimental.reduce_scatter_minimal_async(
+            output, **ccl.populate_reduce_scatter_runtime_args(cfg["reduce_scatter_async"])
+        )
 
         # De-chunk the output if the input was chunked
         _, num_chunks, _, output_dim = output.shape
@@ -487,8 +484,11 @@ class MLP(AbstractModule):
 
     @classmethod
     def forward_decode(cls, x: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor:
+        # CCL runtime initialization in execution order
+        ccl = cfg["ccl"]
+
         # All gather
-        x = ttnn.experimental.all_gather_async(x, **cfg["all_gather"])
+        x = ttnn.experimental.all_gather_async(x, **ccl.populate_all_gather_runtime_args(cfg["all_gather"]))
 
         # TODO: File issue on AG not being able to do this internally (Issue #26672)
         x = ttnn.to_memory_config(x, **cfg["all_gather_reshard"])
@@ -513,7 +513,9 @@ class MLP(AbstractModule):
         # Add reduce-scatter
         w2_out = ttnn.to_memory_config(w2_out, ttnn.DRAM_MEMORY_CONFIG)
         # TODO: File issue on RS not being able to run sharded memory config
-        output = ttnn.experimental.reduce_scatter_minimal_async(w2_out, **cfg["reduce_scatter_async"])
+        output = ttnn.experimental.reduce_scatter_minimal_async(
+            w2_out, **ccl.populate_reduce_scatter_runtime_args(cfg["reduce_scatter_async"])
+        )
         ttnn.deallocate(w2_out)
 
         assert output.memory_config() == cfg["output_memory_config"]
