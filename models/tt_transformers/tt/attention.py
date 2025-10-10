@@ -97,6 +97,7 @@ class Attention(LightweightModule):
         self.is_sliding = (
             configuration.layer_types[layer_num] == "sliding_attention" if configuration.layer_types else False
         )
+        self.sliding_window = configuration.sliding_window if self.is_sliding else None
 
         self.model_config = configuration.get_model_config()
         self.ccl_topology = configuration.ccl_topology()
@@ -381,9 +382,7 @@ class Attention(LightweightModule):
             for k_or_v in [cache_k, cache_v]
         ]
 
-    def forward_decode(
-        self, x: ttnn.Tensor, current_pos, rot_mats=None, page_table=None, kv_cache=None, attn_mask=None
-    ) -> ttnn.Tensor:
+    def forward_decode(self, x: ttnn.Tensor, current_pos, rot_mats=None, page_table=None, kv_cache=None) -> ttnn.Tensor:
         """
         x: (seq_len, 1, batch, dim)
         current_pos: (batch_size), current token position in the sequence for each user
@@ -507,9 +506,8 @@ class Attention(LightweightModule):
                 values,
                 cur_pos_tensor=current_pos,
                 page_table_tensor=page_table,
-                attn_mask=attn_mask,
-                is_causal=True if attn_mask is None else False,
                 scale=self.scale,
+                sliding_window=self.sliding_window,
                 program_config=self.model_config["SDPA_DECODE_PROGCFG"],
                 compute_kernel_config=self.sdpa_decode_compute_kernel_cfg,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -521,8 +519,7 @@ class Attention(LightweightModule):
                 values,
                 cur_pos_tensor=current_pos,
                 scale=self.scale,
-                is_causal=True if attn_mask is None else False,
-                attn_mask=attn_mask,
+                sliding_window=self.sliding_window,
                 program_config=self.model_config["SDPA_DECODE_PROGCFG"],
                 compute_kernel_config=self.sdpa_decode_compute_kernel_cfg,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,  # FIXME: why not L1 height sharded e.g. SCORES_BATCHED_MM_OUTPUT_MEMCFG?
@@ -931,9 +928,7 @@ class Attention(LightweightModule):
                 attn_mask=attn_mask,
             )
         else:
-            return self.forward_decode(
-                x, current_pos, rot_mats, page_table=page_table, kv_cache=kv_cache, attn_mask=attn_mask
-            )
+            return self.forward_decode(x, current_pos, rot_mats, page_table=page_table, kv_cache=kv_cache)
 
     def prefill_prepare_tensor_for_kv_cache(self, key_or_value_layer, user_id):
         tensor_copy = ttnn.clone(key_or_value_layer)

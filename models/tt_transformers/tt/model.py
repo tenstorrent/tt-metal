@@ -9,7 +9,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
 from models.tt_transformers.tt.ccl import TT_CCL
-from models.tt_transformers.tt.common import copy_host_to_device, get_decode_mask
+from models.tt_transformers.tt.common import copy_host_to_device
 from models.tt_transformers.tt.decoder import TransformerBlock
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
 from models.tt_transformers.tt.embedding import Embedding, ScaledEmbedding
@@ -30,7 +30,6 @@ class Transformer(LightweightModule):
         use_paged_kv_cache=False,
         attention_class=None,
         rope_setup_class=None,
-        attn_mask=None,
     ):
         super().__init__()
         self.args = args
@@ -128,31 +127,6 @@ class Transformer(LightweightModule):
             weight_cache_path=weight_cache_path,
             max_columns_per_device=self.args.max_columns_per_device_lm_head,
         )
-
-        if hasattr(self.args, "sliding_window") and self.args.sliding_window is not None:
-            # We are using sliding window attention in this model. We can create a custom attention mask to apply the sliding attention
-            # First we create the mask for all decode positions on host [bsz, n_heads_per_device, seq_len, seq_len]
-            self.decode_sliding_mask_mat = get_decode_mask(
-                self.args,
-                self.mesh_device,
-                paged_attention_config=paged_attention_config,
-            )
-            # Then we copy a slice for a single decode position for each user on to device [bsz, n_heads_per_device, 1, seq_len]
-            # We can update this tensor on host each iteration and copy to device to save storing the large square tensor on device
-            self.device_decode_sliding_mask = ttnn.as_tensor(
-                torch.concat(
-                    [self.decode_sliding_mask_mat[i, :, 0:1, :].unsqueeze(0) for i in range(self.args.max_batch_size)],
-                    axis=0,
-                ).transpose(1, 2),
-                dtype=ttnn.bfloat4_b,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.mesh_device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-            )
-        else:
-            self.decode_sliding_mask_mat = None
-            self.device_decode_sliding_mask = None
 
     def prepare_inputs_prefill(self, tokens, start_pos=0, page_table=None, chunk_page_table=None):
         """
@@ -374,24 +348,6 @@ class Transformer(LightweightModule):
         ttnn.plus_one(current_pos, skip_negative_entries=True)
         ttnn.plus_one(rot_mat_idxs)
 
-    def update_attention_masks(self, current_pos):
-        torch_mask = torch.concat(
-            [
-                self.decode_sliding_mask_mat[i, :, current_pos[i].item() : current_pos[i].item() + 1, :].unsqueeze(0)
-                for i in range(self.decode_sliding_mask_mat.shape[0])
-            ],
-            axis=0,
-        ).transpose(1, 2)
-        sliding_window_causal_mask = ttnn.as_tensor(
-            torch_mask,
-            dtype=ttnn.bfloat4_b,
-            layout=ttnn.TILE_LAYOUT,
-            device=None,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-        )
-        ttnn.copy_host_to_device_tensor(sliding_window_causal_mask, self.device_decode_sliding_mask)
-
     def ttnn_decode_forward(
         self,
         x,
@@ -416,7 +372,6 @@ class Transformer(LightweightModule):
             mode="decode",
             page_table=page_table,
             kv_cache=kv_cache,
-            sliding_attn_mask=self.device_decode_sliding_mask,
         )
 
         # Gather the output across all devices and untilize the tensor (for argmax)
