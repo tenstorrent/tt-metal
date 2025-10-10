@@ -1,17 +1,34 @@
 # TTTv2 Testing Utilities
-# Fluent API for building test suites
 
-# from .suite import TestSuite, TestCase
-# from .utils import (
-#     capture_inputs,
-#     compare_tensors,
-#     measure_performance,
-# )
+# Validation framework
+from .validation import (
+    validate_against,
+    get_validation_registry,
+    enable_validation,
+    clear_validation_results,
+    ValidationResult,
+    ValidationRegistry,
+)
+
+# Metrics
+from .metrics import (
+    _compute_max_abs_error,
+    _compute_mean_abs_error,
+    _compute_cosine_similarity,
+    DEFAULT_METRICS,
+)
 
 __all__ = [
-    # "TestSuite",
-    # "TestCase",
-    # "capture_inputs",
-    # "compare_tensors",
-    # "measure_performance",
+    # Validation framework
+    "validate_against",
+    "get_validation_registry",
+    "enable_validation",
+    "clear_validation_results",
+    "ValidationResult",
+    "ValidationRegistry",
+    # Metrics
+    "_compute_max_abs_error",
+    "_compute_mean_abs_error",
+    "_compute_cosine_similarity",
+    "DEFAULT_METRICS",
 ]

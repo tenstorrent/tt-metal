@@ -23,7 +23,11 @@ def mock_ttnn_to_torch(x):
 
 sys.modules["ttnn"] = type("MockModule", (), {"to_torch": mock_ttnn_to_torch})()
 
-from ds_r1_qwen import clear_validation_results, get_validation_registry, validate_against
+from tt_transformers_v2.src.testing.validation import (
+    clear_validation_results,
+    get_validation_registry,
+    validate_against,
+)
 
 
 def test_match_signature_method():
