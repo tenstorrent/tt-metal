@@ -48,6 +48,7 @@
 #include <umd/device/types/arch.hpp>
 
 #include <umd/device/types/core_coordinates.hpp>
+#include "tt_metal/test_utils/env_vars.hpp"
 
 namespace tt {
 namespace tt_metal {
@@ -1495,6 +1496,9 @@ TEST_F(UnitMeshMultiCQSingleDeviceBufferFixture, TestNon32BAlignedPageSizeForDra
 }
 
 TEST_F(UnitMeshMultiCQSingleDeviceBufferFixture, TestIssueMultipleReadWriteCommandsForOneBuffer) {
+    // Test failing with watcher enabled, github issue #29555
+    SKIP_FOR_WATCHER();
+
     auto mesh_device = this->device_;
     auto device = mesh_device->get_devices()[0];
     uint32_t page_size = 2048;
