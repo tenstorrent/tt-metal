@@ -332,7 +332,7 @@ fi
 
 # Yolov8-world s 640x640
 TOTAL=$((TOTAL + 1))
-if run_model_test "Yolov8-world" "s_640x640" "python -m tracy -p -r -v -m pytest $TT_METAL_HOME/models/demos/yolov8s_world/tests/pcc/test_ttnn_yolov8s_world.py::test_yolov8s_world -v"; then
+if run_model_test "Yolov8-world" "s_640x640" "python -m tracy -p -r -v -m pytest $TT_METAL_HOMEmodels/demos/yolov8s_world/tests/pcc/test_ttnn_yolov8s_world.py::test_yolo_model -v"; then
     PASSED=$((PASSED + 1))
 else
     FAILED=$((FAILED + 1))
@@ -356,7 +356,7 @@ fi
 
 # Ultrafast Lane Detection v2 320x800
 TOTAL=$((TOTAL + 1))
-if run_model_test "Ultrafast_Lane_Detection" "v2_320x800" "python -m tracy -p -r -v -m pytest $TT_METAL_HOME/models/demos/ufld_v2/tests/pcc/test_ttnn_ufld_v2.py::test_ufld_v2 -v"; then
+if run_model_test "Ultrafast_Lane_Detection" "v2_320x800" "python -m tracy -p -r -v -m pytest $TT_METAL_HOME/models/demos/ufld_v2/tests/pcc/test_ttnn_ufld_v2.py::test_ufld_v2_model -v"; then
     PASSED=$((PASSED + 1))
 else
     FAILED=$((FAILED + 1))
@@ -390,7 +390,7 @@ echo -e "${YELLOW}Starting experimental models...${NC}" | tee -a "$LOG_FILE"
 
 # Swin s 512x512 (experimental)
 TOTAL=$((TOTAL + 1))
-if run_model_test "Swin" "s_512x512" "python -m tracy -p -r -v -m pytest $TT_METAL_HOME/models/experimental/swin_s/tests/pcc/test_ttnn_swin_transformer.py::test_swin_transformer -v"; then
+if run_model_test "Swin" "s_512x512" "python -m tracy -p -r -v -m pytest $TT_METAL_HOME/pytest models/experimental/swin_s/tests/pcc/test_ttnn_swin_transformer.py::test_swin_s_transformer -v"; then
     PASSED=$((PASSED + 1))
 else
     FAILED=$((FAILED + 1))
@@ -407,7 +407,7 @@ fi
 
 # Swin_v2 s 512x512 (experimental)
 TOTAL=$((TOTAL + 1))
-if run_model_test "Swin_v2" "s_512x512" "python -m tracy -p -r -v -m pytest $TT_METAL_HOME/models/experimental/swin_v2/tests/pcc/test_ttnn_swin_v2_s.py::test_swin_v2_s -v"; then
+if run_model_test "Swin_v2" "s_512x512" "python -m tracy -p -r -v -m pytest $TT_METAL_HOME/models/experimental/swin_v2/tests/pcc/test_ttnn_swin_v2_s.py::test_swin_s_transformer -v"; then
     PASSED=$((PASSED + 1))
 else
     FAILED=$((FAILED + 1))
