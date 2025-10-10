@@ -17,7 +17,7 @@ struct ComputeView {
         return init(views::ct<CBIndices>...);
     }
 
-    template <uint32_t NumTilesPerCycle, typename... Compute>
+    template <uint32_t NumTilesPerCycle = 1, typename... Compute>
     __attribute__((always_inline)) static void compute_tiles(uint32_t tiles, Compute... compute) noexcept {
         for (; tiles >= NumTilesPerCycle; tiles -= NumTilesPerCycle) {
             (..., compute(views::ct<NumTilesPerCycle>, views::ct<CBIndices>...));
