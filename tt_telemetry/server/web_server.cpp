@@ -204,15 +204,21 @@ public:
                 }
             } else {
                 // If file not found, serve index.html for SPA routing
-                std::string index_content =
-                    read_file(join_paths(metal_home_, "tt_telemetry/frontend/static/index.html"));
+                std::string full_path = join_paths(metal_home_, "tt_telemetry/frontend/static/index.html");
+                std::string index_content = read_file(full_path);
                 if (!index_content.empty()) {
                     res.set_content(index_content, "text/html");
                 } else {
                     res.status = 404;
-                    res.set_content(
-                        "<html><body><h1>Telemetry Server Running</h1><p>404: File not found</p></body></html>",
-                        "text/html");
+                    std::string error_html = 
+                        "<html><body>"
+                        "<h1>Telemetry Server 404</h1>"
+                        "<p>404: Page not found: " + path + "</p>"
+                        "<p>Local path: " + full_path + "</p>"
+                        "<p>Metal home: " + metal_home_ + "</p>"
+                        "<p>Make sure Metal home (set via either TT_METAL_HOME or --metal-src-dir) points to the tt_metal repository and contains " + full_path + ".</p>"
+                        "</body></html>";
+                    res.set_content(error_html, "text/html");
                 }
             }
         });
