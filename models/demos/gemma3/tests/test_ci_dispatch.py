@@ -21,7 +21,8 @@ def test_ci_dispatch(hf_model_name, is_ci_env, is_ci_v2_env, model_location_gene
         if not is_ci_env and not is_ci_v2_env:
             pytest.skip("Skipping CI dispatch tests when running locally.")
     else:
-        is_ci_v2_env = True
+        is_ci_v2_env = False
+        is_ci_env = True
 
     model_weights_path = str(model_location_generator(hf_model_name, download_if_ci_v2=True, ci_v2_timeout_in_s=1800))
     os.environ["HF_MODEL"] = model_weights_path
@@ -29,10 +30,10 @@ def test_ci_dispatch(hf_model_name, is_ci_env, is_ci_v2_env, model_location_gene
 
     logger.info(f"Running fast dispatch tests for {model_weights_path}")
 
-    logger.info(f"Running fast dispatch tests for {model_weights_path}")
-
-    functional_tests = [
+    ci_v2_tests = [
         "models/demos/gemma3/tests/test_mmp.py",
+    ]
+    ci_v1_tests = [
         "models/demos/siglip/tests/test_attention.py",
         "models/demos/gemma3/tests/test_patch_embedding.py",
         "models/demos/gemma3/tests/test_vision_attention.py",
@@ -52,15 +53,11 @@ def test_ci_dispatch(hf_model_name, is_ci_env, is_ci_v2_env, model_location_gene
         "models/tt_transformers/tests/test_decoder.py",
         "models/tt_transformers/tests/test_decoder_prefill.py",
     ]
-    performance_tests = [
-        # TODO for mstojko - add your test here once its merged
-    ]
 
-    # at the time of writing this performance tests can't/shouldn't be run on CIV2, so this is why we have this hybrid approach
     if is_ci_v2_env:
-        tests = functional_tests
+        tests = ci_v2_tests
     else:
-        tests = performance_tests
+        tests = ci_v1_tests
 
     # Pass the exit code of pytest to proper keep track of failures during runtime
     exit_code = pytest.main(tests)
