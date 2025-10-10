@@ -1774,7 +1774,6 @@ class ModelArgs:
                 state_dict = {f"{state_dict_prefix}{k}": torch.randn_like(v) for k, v in state_dict.items()}
         elif self.checkpoint_type == CheckpointType.Meta:
             state_dict = load_meta_state_dict(self.CKPT_DIR, self.n_layers)
-            assert False  # stojko temp - i prefer if this is not called
         else:
             assert self.checkpoint_type == CheckpointType.HuggingFace
             if self.from_hf_url:
