@@ -16,6 +16,7 @@ enum class Unary {
     RSUB,
     MUL,
     DIV,
+    RECIP,
     NEGATIVE,
     EXP,
     POWER,
@@ -32,6 +33,8 @@ enum class Binary {
     ADD,
     SUB,
     MUL,
+    DIV,
+    POWER,
 };
 
 enum class Ternary {
