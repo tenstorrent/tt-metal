@@ -2,6 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+import random
+
 import pytest
 
 from models.common.utility_functions import is_wormhole_b0
@@ -46,9 +49,10 @@ def test_demo(
     mesh_device,
     is_ci_env,
 ):
-    # randint = random.randint(0, 1000000)
-    # if randint % 2 == 0:
-    #     assert False
+    # raise AssertionError("Injected deterministic failure")
+    fail_rate = float(os.environ.get("ND_FAIL_RATE", "0.95"))  # tune as needed
+    if random.random() < fail_rate:
+        raise AssertionError("Injected nondeterministic failure")
 
     # comment 1
     # comment 2
