@@ -61,8 +61,11 @@ class TrainingConfig:
         tc = yaml_config.get("training_config", {})
         self.batch_size = int(tc.get("batch_size", 64))
         self.steps = int(tc.get("max_steps", 1000))
+        self.epochs = int(tc.get("num_epochs", 1))
         self.eval_every = int(tc.get("eval_every", 200))
+        self.save_every = int(tc.get("model_save_interval", 500))
         self.gradient_accumulation_steps = int(tc.get("gradient_accumulation_steps", 1))
+        self.checkpoint_dir = tc.get("checkpoint_dir", "checkpoints")
 
         self.transformer_config = TransformerConfig(tc.get("transformer_config", {}))
         self.seq_len = int(self.transformer_config.max_sequence_length)

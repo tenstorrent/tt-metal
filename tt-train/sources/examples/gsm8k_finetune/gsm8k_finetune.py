@@ -7,13 +7,16 @@ Fine-tunes a GPT-2 model on the GSM8K math word problems dataset using TT-Metal.
 import os
 import sys
 import datasets
+from dataclasses import dataclass
 import numpy as np
 import torch
+from torch.utils.data import DataLoader
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from huggingface_hub import hf_hub_download
 from matplotlib import pyplot as plt
 from tqdm import tqdm
 import debugpy
+from typing import List, Tuple, Dict, Optional
 
 # Add TT-Metal path
 sys.path.append(f"{os.environ['TT_METAL_HOME']}/tt-train/sources/ttml")
@@ -23,10 +26,10 @@ from ttml.common.model_factory import TransformerModelFactory
 from ttml.common.utils import set_seed, round_up_to_tile, create_optimizer
 from ttml.common.data import build_causal_mask
 
+import tt_serialization  # noqa: F401
+
 # Configuration
 CONFIG = "training_shakespeare_tinyllama.yaml"
-
-debugpy.listen(5678)
 
 
 class GradientAccumulator:
@@ -63,6 +66,67 @@ class GradientAccumulator:
         return (self.m_total_loss / float(self.m_total_samples)) if self.m_total_samples > 0 else 0.0
 
 
+@dataclass
+class SchedulerConfig:
+    lr_max: float = 3e-4
+    min_lr: float = 0.0
+    warmup_steps: int = 2000
+    hold_steps: int = 0
+    total_steps: int = 150_000  # full micro-steps or optimizer steps; we apply on optimizer steps
+    # optional momentum warmup (beta1 ramp)
+    beta1_start: Optional[float] = None  # e.g., 0.85
+    beta1_end: Optional[float] = None  # e.g., 0.9
+    beta1_warmup_steps: int = 0
+
+
+class SpeedrunScheduler:
+    """Linear warmup -> optional hold -> linear decay; optional beta1 warmup."""
+
+    def __init__(self, cfg: SchedulerConfig):
+        self.cfg = cfg
+
+    def lr_at(self, step: int) -> float:
+        s = step
+        w = max(0, self.cfg.warmup_steps)
+        h = max(0, self.cfg.hold_steps)
+        T = max(1, self.cfg.total_steps)
+        peak = self.cfg.lr_max
+        min_lr = self.cfg.min_lr
+
+        if s <= w:
+            # linear warmup 0 -> lr_max
+            return peak * (s / max(1, w))
+        elif s <= w + h:
+            # hold at lr_max
+            return peak
+        else:
+            # linear decay from lr_max at (w+h) to min_lr at T
+            s2 = min(s, T)
+            frac = (s2 - (w + h)) / max(1, (T - (w + h)))
+            return peak + (min_lr - peak) * frac
+
+    def beta1_at(self, step: int) -> Optional[float]:
+        if self.cfg.beta1_start is None or self.cfg.beta1_end is None or self.cfg.beta1_warmup_steps <= 0:
+            return None
+        s = min(step, self.cfg.beta1_warmup_steps)
+        t = s / float(self.cfg.beta1_warmup_steps)
+        return (1.0 - t) * self.cfg.beta1_start + t * self.cfg.beta1_end
+
+
+class OptimParamSetter:
+    def __init__(self, optim):
+        self.optim = optim
+        self._warned_lr = False
+        self._warned_beta1 = False
+
+    def set_lr(self, lr: float):
+        ok = False
+        self.optim.set_lr(float(lr))
+
+    def set_beta1(self, beta1: float):
+        raise NotImplementedError("set_beta1 is not implemented in TTML AdamW optimizer.")
+
+
 def build_logits_mask(vocab_size: int, padded_vocab_size: int) -> ttml.autograd.Tensor:
     logits_mask = np.zeros((1, 1, 1, padded_vocab_size), dtype=np.float32)
     logits_mask[:, :, :, vocab_size:] = 1e4
@@ -71,15 +135,14 @@ def build_logits_mask(vocab_size: int, padded_vocab_size: int) -> ttml.autograd.
     )  # [1,1,1,T], bfloat16"
 
 
-def get_batch_generator(data, batch_size, max_sequence_length, padded_vocab_size, tokenizer):
+def get_batch_generator(dataloader, batch_size, max_sequence_length, padded_vocab_size, tokenizer):
     """Custom data generator for GSM8K dataset."""
 
-    def get_batch(data, batch_size=32):
-        curr_idx = 0
-
-        while curr_idx < len(data):
-            X = data[curr_idx : min(curr_idx + batch_size, len(data))]["question"]
-            Y = data[curr_idx : min(curr_idx + batch_size, len(data))]["answer"]
+    while True:
+        for batch in dataloader:
+            batch = next(iter(dataloader))
+            X = batch["question"]
+            Y = batch["answer"]
 
             # Batch tokenize questions and answers
             x_tokens_batch = tokenizer(X, return_tensors="np", add_special_tokens=False)["input_ids"]
@@ -115,9 +178,10 @@ def get_batch_generator(data, batch_size, max_sequence_length, padded_vocab_size
             # Shape: [batch_size, 1, 1, max_sequence_length]
             X_np = np.expand_dims(data_np, axis=(1, 2))
 
-            y_np = np.roll(X_np, -1, axis=-1)  # Shift left by 1
-            y_np[:, :, :, -1] = tokenizer.eos_token_id
-            y_np = y_np.squeeze(axis=(1, 2))  # Shape: [batch, seq_len]
+            y_np = np.full(
+                (batch_size, max_sequence_length), tokenizer.eos_token_id, dtype=np.uint32
+            )  # Shape: [batch, seq_len]
+            y_np[:, 0:-1] = X_np[:, 0, 0, 1:]  # Shift left by 1
 
             logits_mask_np = np.ones((batch_size, 1, max_sequence_length, padded_vocab_size), dtype=np.float32)
 
@@ -156,13 +220,10 @@ def get_batch_generator(data, batch_size, max_sequence_length, padded_vocab_size
             X = ttml.autograd.Tensor.from_numpy(X_np, ttml.Layout.ROW_MAJOR, ttml.autograd.DataType.UINT32)
             y = ttml.autograd.Tensor.from_numpy(y_np, ttml.Layout.ROW_MAJOR, ttml.autograd.DataType.UINT32)
 
-            curr_idx += batch_size
             yield (X, y, logits_mask, logits_add_mask, scaler)
 
-    return get_batch(data, batch_size)
 
-
-def generate_text(
+def generate_text_tt(
     model, tokenizer, question, max_sequence_length, causal_mask, temperature, logits_mask_tensor, max_gen_tokens=100
 ):
     """Generate text given a question."""
@@ -170,11 +231,7 @@ def generate_text(
     ttml.autograd.AutoContext.get_instance().set_gradient_mode(ttml.autograd.GradMode.DISABLED)
 
     # Tokenize and prepare input
-    prompt_tokens = tokenizer(
-        question, return_tensors="np", truncation=True, padding="max_length", max_length=max_sequence_length
-    )["input_ids"].flatten()
-
-    prompt_tokens = prompt_tokens.tolist()
+    prompt_tokens = tokenizer.encode(question)
 
     # Generate tokens autoregressively
     generated_tokens = []
@@ -200,7 +257,7 @@ def generate_text(
         next_token = next_token_tensor.to_numpy().flatten()[next_token_idx]
 
         generated_tokens.append(next_token)
-        print(f"{tokenizer.decode([next_token])}", end="", flush=True)
+        print(tokenizer.decode(next_token), end="", flush=True)
         prompt_tokens.append(next_token)
 
     ttml.autograd.AutoContext.get_instance().set_gradient_mode(ttml.autograd.GradMode.ENABLED)
@@ -241,39 +298,6 @@ def generate_text_tinyllama(tokenizer, question, max_gen_tokens=100, temperature
     return generated_text
 
 
-def generate_text_gpt2(tokenizer, question, max_gen_tokens=100, temperature=0.7):
-    """Generate text using HuggingFace GPT-2 for comparison."""
-    # Load GPT-2 model with BF16 precision
-    gpt2_model = AutoModelForCausalLM.from_pretrained("gpt2", torch_dtype=torch.bfloat16)
-    gpt2_model.eval()
-
-    # Tokenize input
-    inputs = tokenizer(question, return_tensors="pt")
-    input_ids = inputs["input_ids"]
-
-    # Generate text
-    print(f"\nGPT-2 Generation for: {question}")
-    print("=" * 50)
-    print(question, end="", flush=True)
-
-    with torch.no_grad():
-        generated_ids = gpt2_model.generate(
-            input_ids,
-            max_new_tokens=max_gen_tokens,
-            do_sample=False,
-            temperature=0,
-            pad_token_id=tokenizer.eos_token_id,
-            eos_token_id=tokenizer.eos_token_id,
-        )
-
-    # Decode only the generated part (excluding input)
-    generated_text = tokenizer.decode(generated_ids[0][input_ids.shape[1] :], skip_special_tokens=True)
-    print(generated_text)
-    print("=" * 50)
-
-    return generated_text
-
-
 def adjust_logits(logits, binary_mask, add_mask):
     masked_logits = binary_mask * logits
     masked_logits = masked_logits + add_mask
@@ -285,6 +309,9 @@ def main():
     print("Loading tokenizer and config...")
     tokenizer = AutoTokenizer.from_pretrained("TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T")
     yaml_config = get_config(CONFIG)
+
+    training_config = TrainingConfig(yaml_config)
+    batch_size = training_config.batch_size
 
     # Download safetensors
     print("Downloading safetensors...")
@@ -315,11 +342,22 @@ def main():
     training_data = datasets.load_dataset("gsm8k", "main", split="train")
     testing_data = datasets.load_dataset("gsm8k", "main", split="test")
 
+    training_dataloader = DataLoader(
+        training_data,
+        batch_size=batch_size,
+        shuffle=True,  # Shuffle the dataset for each epoch
+    )
+
+    testing_dataloader = DataLoader(
+        testing_data,
+        batch_size=6,
+        shuffle=True,  # Shuffle the dataset for each epoch
+    )
+
     # Setup training
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    training_config = TrainingConfig(yaml_config)
     optim = create_optimizer(tt_model, yaml_config)
     causal_mask = build_causal_mask(max_sequence_length)
 
@@ -332,29 +370,52 @@ def main():
 
     # Training setup
 
-    batch_size = training_config.batch_size
-
     tt_model.train()
     data_steps = (len(training_data) // batch_size) + 1
     train_losses = []
     val_losses = []
 
     train_batch_generator = get_batch_generator(
-        training_data, batch_size, max_sequence_length, padded_vocab_size, tokenizer
+        training_dataloader, batch_size, max_sequence_length, padded_vocab_size, tokenizer
     )
-    val_batch_generator = get_batch_generator(testing_data, 4, max_sequence_length, padded_vocab_size, tokenizer)
+    val_batch_generator = get_batch_generator(testing_dataloader, 6, max_sequence_length, padded_vocab_size, tokenizer)
 
     accum = GradientAccumulator(training_config.gradient_accumulation_steps)
     print("Gradient Accumulation Steps:", training_config.gradient_accumulation_steps)
     tokens_per_batch = batch_size * max_sequence_length
+    print("Tokens per micro-batch:", tokens_per_batch)
+    print("Tokens per accumulated batch:", tokens_per_batch * training_config.gradient_accumulation_steps)
     optim_steps_done = 0
 
-    print(f"Starting training for {data_steps} steps...")
+    total_optim_steps = max(1, training_config.steps // max(1, training_config.gradient_accumulation_steps))
+    sched = SpeedrunScheduler(
+        SchedulerConfig(
+            lr_max=1e-4,
+            min_lr=3e-5,
+            warmup_steps=250,
+            hold_steps=1000,
+            total_steps=total_optim_steps,
+            beta1_start=0.85,
+            beta1_end=0.9,
+            beta1_warmup_steps=3000,
+        )
+    )
+    setter = OptimParamSetter(optim)
+
+    print(f"Starting training for {training_config.epochs} epochs, max {training_config.steps} steps...")
     bar = tqdm(range(1, data_steps + 1))
 
+    total_steps = 0
+    last_val_loss = 0
+    accum_loss = 0
+
+    # ========== Training Loop ===========
     for step in bar:
         if accum.should_zero_grad():
             optim.zero_grad()
+
+            lr_now = sched.lr_at(optim_steps_done)
+            setter.set_lr(lr_now)
 
         X, y, logits_mask, logits_add_mask, loss_scaler = next(train_batch_generator)
 
@@ -375,6 +436,7 @@ def main():
         ttml.autograd.AutoContext.get_instance().reset_graph()
 
         train_loss = float(loss.to_numpy())
+        accum_loss += train_loss
         accum.update(train_loss, tokens_per_batch)
 
         if step == 1:
@@ -384,11 +446,17 @@ def main():
             optim.step()
             optim_steps_done += 1
 
-        train_losses.append(train_loss)
-        avg_loss = np.array(train_losses[max(0, step - 20) :]).mean()
+            train_losses.append(train_loss)
 
-        postfix = {"train_loss": f"{train_loss:.4f}", "avg_loss": f"{avg_loss:.4f}"}
-        bar.set_postfix(postfix, refresh=False)
+            accum_loss /= training_config.gradient_accumulation_steps
+
+            postfix = {"train_loss": f"{accum_loss:.4f}"}
+            if last_val_loss is not None:
+                postfix["val_loss"] = f"{last_val_loss:.4f}"
+            bar.set_postfix(postfix, refresh=False)
+
+            accum_loss = 0.0
+            total_steps += 1
 
         # Validation every eval_every steps
         if step % training_config.eval_every == 0:
@@ -406,13 +474,14 @@ def main():
             val_loss = val_loss * val_loss_scaler
             val_loss = ttml.ops.unary.mean(val_loss)
             val_losses.append(val_loss.to_numpy().item())
+            last_val_loss = val_loss.to_numpy().item()
 
             print("Validation check")
             print("====================================")
             print(f"Question: {testing_data[-1]['question']}")
             print("====================================")
 
-            generate_text(
+            generate_text_tt(
                 tt_model,
                 tokenizer,
                 testing_data[-1]["question"],
@@ -426,6 +495,15 @@ def main():
 
             ttml.autograd.AutoContext.get_instance().set_gradient_mode(ttml.autograd.GradMode.ENABLED)
             tt_model.train()
+
+        if training_config.save_every > 0 and (step % training_config.save_every == 0):
+            ckpt_path = tt_serialization._save_model_npz(
+                tt_model, training_config.checkpoint_dir, step=step, extra={"optim_steps_done": optim_steps_done}
+            )
+            print(f"[Checkpoint] Saved model to {ckpt_path}")
+
+        if total_steps >= training_config.steps:
+            break
 
     print("Training completed!")
 
@@ -441,30 +519,30 @@ def main():
     plt.savefig("training_curves.png")
     plt.show()
 
-    # # Test generation
-    # print("\nTesting text generation...")
-    # test_question = testing_data[0]["question"]
-    # print("Test question:", test_question)
+    # Test generation
+    print("\nTesting text generation...")
+    test_question = testing_data[-1]["question"]
+    print("Test question:", test_question)
 
-    # # Generate with GPT-2 for comparison
-    # print("\n" + "="*60)
-    # print("COMPARISON: GPT-2 (HuggingFace) Generation")
-    # print("="*60)
-    # gpt2_answer = generate_text_gpt2(tokenizer, test_question, max_gen_tokens=100, temperature=0.0)
+    # Generate with TinyLlama for comparison
+    print("\n" + "=" * 60)
+    print("COMPARISON: Tinyllama (HuggingFace) Generation")
+    print("=" * 60)
+    gpt2_answer = generate_text_tinyllama(tokenizer, test_question, max_gen_tokens=100, temperature=0.0)
 
-    # print(gpt2_answer)
+    print(gpt2_answer)
 
-    # # Generate with fine-tuned TT-Metal model
-    # print("\n" + "="*60)
-    # print("FINE-TUNED: TT-Metal Model Generation")
-    # print("="*60)
-    # print(test_question, end="", flush=True)
-    # generate_text(tt_model, tokenizer, test_question, max_sequence_length, causal_mask, 0.0, logits_mask_tensor, 100)
+    # Generate with fine-tuned TT-Metal model
+    print("\n" + "=" * 60)
+    print("FINE-TUNED: TT-Metal Model Generation")
+    print("=" * 60)
+    print(test_question, end="", flush=True)
+    generate_text_tt(tt_model, tokenizer, test_question, max_sequence_length, causal_mask, 0.0, logits_mask_tensor, 100)
 
-    # print("\n" + "="*60)
-    # print("EXPECTED ANSWER:")
-    # print("="*60)
-    # print(testing_data[0]["answer"])
+    print("\n" + "=" * 60)
+    print("EXPECTED ANSWER:")
+    print("=" * 60)
+    print(testing_data[-1]["answer"])
 
 
 if __name__ == "__main__":
