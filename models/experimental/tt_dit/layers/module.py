@@ -4,17 +4,18 @@
 
 from __future__ import annotations
 
-from abc import abstractmethod
+from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple, overload
 
 import ttnn
+from typing_extensions import deprecated
 
 from ..utils import tensor
 from ..utils.substate import pop_substate
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Iterator, Mapping, MutableSequence
+    from collections.abc import Iterable, Iterator, Mapping, MutableSequence, Sequence
     from typing import Any
 
     import torch
@@ -29,13 +30,12 @@ class ParameterLoadingError(Exception):
     pass
 
 
-class Module:
+class Module(ABC):
     def __init__(self) -> None:
         self._children = {}
         self._parameters = {}
 
-    # TODO: change "Any" to "Module" as soon as all modules are migrated
-    def named_children(self) -> Iterator[tuple[str, Any]]:
+    def named_children(self) -> Iterator[tuple[str, Module]]:
         yield from self._children.items()
 
     def named_parameters(self) -> Iterator[tuple[str, Parameter]]:
@@ -50,7 +50,7 @@ class Module:
         children = self.__dict__.get("_children")
         parameters = self.__dict__.get("_parameters")
 
-        if isinstance(value, Module) or hasattr(value, "load_state_dict"):
+        if isinstance(value, Module):
             if children is None:
                 msg = "cannot assign child module before Module.__init__() call"
                 raise AttributeError(msg)
@@ -77,7 +77,7 @@ class Module:
 
         super().__delattr__(name)
 
-    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
+    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:  # noqa: B027
         """Prepare Torch state dict before loading."""
 
     def _load_torch_state_dict_inner(
@@ -94,15 +94,12 @@ class Module:
         for name, child in self.named_children():
             child_state = pop_substate(state_dict, name)
 
-            if isinstance(child, Module):
-                child._load_torch_state_dict_inner(  # noqa: SLF001
-                    child_state,
-                    module_key_prefix=f"{module_key_prefix}{name}.",
-                    missing_keys=missing_keys,
-                    unexpected_keys=unexpected_keys,
-                )
-            else:  # legacy
-                child.load_state_dict(child_state)
+            child._load_torch_state_dict_inner(  # noqa: SLF001
+                child_state,
+                module_key_prefix=f"{module_key_prefix}{name}.",
+                missing_keys=missing_keys,
+                unexpected_keys=unexpected_keys,
+            )
 
         for name, parameter in self.named_parameters():
             if name in state_dict:
@@ -125,19 +122,17 @@ class Module:
             state_dict, module_key_prefix="", missing_keys=missing_keys, unexpected_keys=unexpected_keys
         )
 
-        error_msg = ""
-        if strict and missing_keys:
-            error_msg += "missing Torch state keys: " + ", ".join(missing_keys)
+        if strict and (missing_keys or unexpected_keys):
+            parts = []
+            if missing_keys:
+                parts.append("missing Torch state keys: " + ", ".join(missing_keys))
             if unexpected_keys:
-                error_msg += "; "
-        if strict and unexpected_keys:
-            error_msg += "unexpected Torch state keys: " + ", ".join(unexpected_keys) + "\n"
-        if error_msg:
-            raise ValueError(error_msg)
+                parts.append("unexpected Torch state keys: " + ", ".join(unexpected_keys))
+            raise ValueError("; ".join(parts))
 
         return IncompatibleKeys(missing_keys, unexpected_keys)
 
-    # deprecated
+    @deprecated("Use load_torch_state_dict instead")
     def load_state_dict(self, state_dict: Mapping[str, torch.Tensor]) -> None:
         self.load_torch_state_dict(state_dict)
 
@@ -243,28 +238,41 @@ class Parameter:
     def __init__(
         self,
         *,
-        total_shape: Iterable[int],
+        total_shape: Sequence[int],
         device: ttnn.MeshDevice,
         layout: ttnn.Layout = ttnn.Layout.TILE,
         dtype: ttnn.DataType = ttnn.bfloat16,
         memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapping: Mapping[int, int] | None = None,
+        mesh_axes: Sequence[int | None] | None = None,
         on_host: bool = False,
     ) -> None:
-        self.total_shape = tuple(total_shape)
+        total_shape = tuple(total_shape)
+        mesh_axes = tuple(mesh_axes) if mesh_axes is not None else (None,) * len(total_shape)
+
+        tensor.verify_tensor_mesh_axes(mesh_axes, tensor_rank=len(total_shape), mesh_rank=len(list(device.shape)))
+
+        local_shape = list(total_shape)
+        for tensor_dim, mesh_axis in enumerate(mesh_axes):
+            if mesh_axis is not None:
+                n = device.shape[mesh_axis]
+                if local_shape[tensor_dim] % n != 0:
+                    msg = (
+                        f"shape {total_shape} cannot be evenly distributed over mesh {device.shape} "
+                        f"along tensor dim {tensor_dim}"
+                    )
+                    raise ValueError(msg)
+                local_shape[tensor_dim] //= n
+        local_shape = tuple(local_shape)
+
+        self.total_shape = total_shape
+        self.local_shape = local_shape
         self.device = device
         self.layout = layout
         self.dtype = dtype
         self.memory_config = memory_config
-        self.mesh_mapping = dict(mesh_mapping) if mesh_mapping else {}
+        self.mesh_axes = mesh_axes
         self.on_host = on_host
         self._data = None
-
-        local_shape = list(self.total_shape)
-        for k, v in self.mesh_mapping.items():
-            if k is not None:
-                local_shape[v] //= self.device.shape[k]
-        self.local_shape = tuple(local_shape)
 
     def load_torch_tensor(self, torch_tensor: torch.Tensor, /) -> None:
         shape = tuple(torch_tensor.shape)
@@ -278,7 +286,7 @@ class Parameter:
             layout=self.layout,
             dtype=self.dtype,
             memory_config=self.memory_config,
-            mesh_mapping=self.mesh_mapping,
+            mesh_axes=self.mesh_axes,
             on_host=self.on_host,
         )
 
@@ -290,7 +298,9 @@ class Parameter:
 
     @property
     def data(self) -> ttnn.Tensor:
-        assert self._data is not None, "parameter has no data"
+        if self._data is None:
+            msg = "parameter has no data"
+            raise RuntimeError(msg)
         return self._data
 
     @data.setter

@@ -209,14 +209,14 @@ class MotifTransformer(Module):
         self.register_tokens = Parameter(
             total_shape=[1, self.padded_spatial_sequence_length, inner_dim],
             device=mesh_device,
-            mesh_mapping={sp_axis: 1, tp_axis: 2},
+            mesh_axes=[None, sp_axis, tp_axis],
         )
 
         self.register_tokens_mask = Parameter(
             total_shape=[1, self.padded_spatial_sequence_length, inner_dim],
             dtype=ttnn.bfloat4_b,
             device=mesh_device,
-            mesh_mapping={sp_axis: 1, tp_axis: 2},
+            mesh_axes=[None, sp_axis, tp_axis],
         )
 
         self.t_token_proj = ColParallelLinear(

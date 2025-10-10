@@ -12,11 +12,11 @@ from ...models.transformers.transformer_motif import MotifTransformer, convert_m
 from ...parallel.config import DiTParallelConfig, ParallelFactor
 from ...parallel.manager import CCLManager
 from ...reference.motif import configuration_motifimage, modeling_dit
-from ...utils import cache
+from ...utils import cache, tensor
 from ...utils.check import assert_quality
 from ...utils.padding import PaddingConfig
 from ...utils.substate import substate
-from ...utils.tensor import bf16_tensor, to_torch
+from ...utils.tensor import bf16_tensor
 
 
 @pytest.mark.parametrize(
@@ -203,7 +203,7 @@ def test_transformer_motif(
         timestep=tt_timestep,
     )
 
-    tt_output_torch = to_torch(tt_output, device=submesh_device, mesh_mapping={sp_axis: 1})
+    tt_output_torch = tensor.to_torch(tt_output, mesh_axes=[None, sp_axis, None])
     tt_output_torch = tt_model.unpatchify(
         tt_output_torch, height=height // vae_scale_factor, width=width // vae_scale_factor
     ).permute(0, 3, 1, 2)

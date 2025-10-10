@@ -338,7 +338,7 @@ class MotifPipeline:
                 )
 
                 tt_initial_latents = tensor.from_torch(
-                    latents, device=submesh_device, on_host=traced, mesh_mapping={sp_axis: 1}
+                    latents, device=submesh_device, on_host=traced, mesh_axes=[None, sp_axis, None]
                 )
 
                 if traced:
@@ -587,11 +587,11 @@ class MotifPipeline:
                 torch_noise_pred = uncond + cfg_scale * (cond - uncond)
 
                 noise_pred_list[0] = tensor.from_torch(
-                    torch_noise_pred, device=self._submesh_devices[0], mesh_mapping={sp_axis: 1}
+                    torch_noise_pred, device=self._submesh_devices[0], mesh_axes=[None, sp_axis, None]
                 )
 
                 noise_pred_list[1] = tensor.from_torch(
-                    torch_noise_pred, device=self._submesh_devices[1], mesh_mapping={sp_axis: 1}
+                    torch_noise_pred, device=self._submesh_devices[1], mesh_axes=[None, sp_axis, None]
                 )
 
         for submesh_id, submesh_device in enumerate(self._submesh_devices):

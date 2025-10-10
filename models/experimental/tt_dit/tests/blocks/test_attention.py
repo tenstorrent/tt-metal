@@ -12,9 +12,10 @@ from ...models.transformers.transformer_motif import convert_motif_attention_sta
 from ...parallel.config import DiTParallelConfig, ParallelFactor
 from ...parallel.manager import CCLManager
 from ...reference.motif.modeling_dit import JointAttn as MotifAttentionReference
+from ...utils import tensor
 from ...utils.check import assert_quality
 from ...utils.padding import PaddingConfig
-from ...utils.tensor import bf16_tensor, to_torch
+from ...utils.tensor import bf16_tensor
 
 
 @pytest.mark.parametrize(
@@ -154,11 +155,11 @@ def test_attention_flux(
         spatial_sequence_length=spatial_seq_len,
     )
 
-    tt_spatial_torch = to_torch(tt_spatial_out, device=mesh_device, mesh_mapping={sp_axis: 1, tp_axis: 2})
+    tt_spatial_torch = tensor.to_torch(tt_spatial_out, mesh_axes=[None, sp_axis, tp_axis])
     assert_quality(torch_spatial, tt_spatial_torch, pcc=0.995, relative_rmse=0.13)
 
     if torch_prompt is not None:
-        tt_prompt_torch = to_torch(tt_prompt_out, device=mesh_device, mesh_mapping={tp_axis: 2})
+        tt_prompt_torch = tensor.to_torch(tt_prompt_out, mesh_axes=[None, None, tp_axis])
         assert_quality(torch_prompt, tt_prompt_torch, pcc=0.995, relative_rmse=0.13)
 
 
@@ -292,10 +293,10 @@ def test_attention_motif(
         spatial_sequence_length=spatial_seq_len,
     )
 
-    tt_spatial_torch = to_torch(tt_spatial_out, device=mesh_device, mesh_mapping={sp_axis: 1, tp_axis: 2})
+    tt_spatial_torch = tensor.to_torch(tt_spatial_out, mesh_axes=[None, sp_axis, tp_axis])
     tt_spatial_torch = tt_spatial_torch[:, :spatial_seq_len]
     assert_quality(torch_spatial, tt_spatial_torch, pcc=0.996, relative_rmse=0.13)
 
     if not context_pre_only:
-        tt_prompt_torch = to_torch(tt_prompt_out, device=mesh_device, mesh_mapping={tp_axis: 2})
+        tt_prompt_torch = tensor.to_torch(tt_prompt_out, mesh_axes=[None, None, tp_axis])
         assert_quality(torch_prompt, tt_prompt_torch, pcc=0.996, relative_rmse=0.13)

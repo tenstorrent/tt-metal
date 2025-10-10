@@ -295,7 +295,7 @@ class PatchEmbed(Module):
         self.pos_embed = Parameter(
             total_shape=[1, seq_len, embed_dim],
             device=mesh_device,
-            mesh_mapping={sp_mesh_axis: 1, tp_mesh_axis: 2},
+            mesh_axes=[None, sp_mesh_axis, tp_mesh_axis],
         )
 
     def _cropped_pos_embed(self, x: torch.Tensor) -> torch.Tensor:
