@@ -233,8 +233,14 @@ void BuildEnvManager::build_firmware(chip_id_t device_id) {
     jit_build_subset(get_device_build_env(device_id).firmware_build_states, nullptr);
 }
 
-// Get device-specific firmware path for each device and build config
-const std::string& BuildEnvManager::get_out_firmware_root_path(chip_id_t device_id) {
-    return get_device_build_env(device_id).build_env.get_out_firmware_root_path();
+// Get build environment info for all devices
+std::vector<BuildEnvInfo> BuildEnvManager::get_all_build_envs_info() {
+    const std::lock_guard<std::mutex> lock(this->lock);
+    std::vector<BuildEnvInfo> build_env_info;
+    build_env_info.reserve(device_id_to_build_env_.size());
+    for (const auto& [device_id, build_env] : device_id_to_build_env_) {
+        build_env_info.emplace_back(device_id, build_env.build_key, build_env.build_env.get_out_firmware_root_path());
+    }
+    return build_env_info;
 }
 }  // namespace tt::tt_metal

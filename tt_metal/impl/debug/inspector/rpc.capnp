@@ -96,11 +96,9 @@ interface Inspector {
     # Search for a kernel
     getKernel @4 (watcherKernelId :Int32) -> (kernel :KernelData);
 
-    # Get build environment information for a specific device
+    # Get build environment information for all devices
     # Returns device-specific firmware paths and build configuration.
     # This replaces the old approach of constructing relative paths,
     # providing correct firmware locations for each device
-    getBuildEnv @5 (deviceId :UInt64) -> (buildInfo :BuildEnvData);
-
-    getAllBuildEnvs @6 () -> (buildEnvs :List(BuildEnvPerDevice));
+    getAllBuildEnvs @5 () -> (buildEnvs :List(BuildEnvPerDevice));
 }
