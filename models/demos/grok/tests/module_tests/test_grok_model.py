@@ -123,7 +123,7 @@ def test_grok_model_inference(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
-    all_outputs = []
+    all_outputs = [tokenizer.decode(encoded_prompts_tensor[0, 0:1].tolist())]
     for i in range(1, max_seq_len + 1):
         rot_mats = tt_model.rope_setup.get_rot_mats(current_pos)
 
@@ -138,8 +138,8 @@ def test_grok_model_inference(
 
         logits_host = tt_model.process_output_decode(logits, batch_size)
         next_token = torch.argmax(logits_host[:, -1], dim=-1)  # [batch_size] tensor
-        next_token_text = tokenizer.decode(next_token.tolist())
-        logger.info(f"Generated token {i}: text='{next_token_text[0]}'")
+        next_token_text = tokenizer.decode(next_token[0].tolist())
+        logger.info(f"Generated token {i}: text='{next_token_text}'")
 
         # Increment current_pos
         current_pos = torch.tensor([i for _ in range(batch_size)])
@@ -173,6 +173,6 @@ def test_grok_model_inference(
                 mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, None), mesh_shape=model_args.cluster_shape),
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
-            all_outputs.append(next_token_text[0])
+            all_outputs.append(next_token_text)
 
         logger.info(f"Generated output: {all_outputs}")

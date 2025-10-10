@@ -194,6 +194,7 @@ class Decoder(LightweightModule):
         # MoE
         moe_in = ttnn.to_memory_config(hidden_states, self.model_config["MOE_INPUT_MEMCFG"])
         moe_out = self.moe.forward(moe_in)
+        # moe_out = self.moe.forward_batch_1_tp_32(moe_in)
         moe_out = ttnn.to_memory_config(moe_out, residual_memory_config)
         moe_out = ttnn.add(moe_out, shared_mlp_out)
         moe_out = ttnn.div(moe_out, math.sqrt(2))
