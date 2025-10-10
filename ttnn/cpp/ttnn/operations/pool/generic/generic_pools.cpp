@@ -63,8 +63,6 @@ static std::vector<Tensor> pool2d_invoke(
         "BFLOAT8_B/BFLOAT4_B output data format is not supported with ROW_MAJOR layout");
     validate_input_params(
         input_tensor,
-        compute_kernel_config,
-        pool_type,
         batch_size,
         input_h,
         input_w,
