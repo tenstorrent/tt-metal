@@ -3,13 +3,14 @@
 
 from abc import abstractmethod
 from pathlib import Path
+from typing import Iterable
 
 import torch
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
 from models.demos.deepseek_v3.tt.ccl import CCL
-from models.demos.deepseek_v3.tt.decoder_block.decoder_block_base import DecoderBlockBase
+from models.demos.deepseek_v3.tt.decoder_block.decoder_block_1d_base import DecoderBlock1DBase
 from models.demos.deepseek_v3.tt.mlp.shared_expert import SharedExpert
 from models.demos.deepseek_v3.tt.moe import MoE
 from models.demos.deepseek_v3.utils.config_dataclass import AllGatherAsyncConfig
@@ -24,7 +25,7 @@ from models.demos.deepseek_v3.utils.run_config import (
 )
 
 
-class MoEDecoderBlock(DecoderBlockBase):
+class MoEDecoderBlock1D(DecoderBlock1DBase):
     @classmethod
     @abstractmethod
     def convert_mlp_weights(
@@ -57,17 +58,10 @@ class MoEDecoderBlock(DecoderBlockBase):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
-        is_padding_layer: tuple[bool, ...] | None = None,
     ) -> ModelPrefillConfig:
-        assert mesh_device.shape[0] == len(
-            is_padding_layer
-        ), "Number of mesh device rows must match the number of padding or non-padding layers"
         return {
             "shared_expert": SharedExpert.prefill_model_config(hf_config, mesh_device),
-            "moe": [
-                None if is_padding else MoE.prefill_model_config(hf_config, mesh_device)
-                for is_padding in is_padding_layer
-            ],
+            "moe": [MoE.prefill_model_config(hf_config, mesh_device)],
             "apply_dp": {
                 "mesh_shape": tuple(mesh_device.shape),
                 "dim": -2,
@@ -89,17 +83,10 @@ class MoEDecoderBlock(DecoderBlockBase):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
-        is_padding_layer: tuple[bool, ...] | None = None,
     ) -> ModelDecodeConfig:
-        assert mesh_device.shape[0] == len(
-            is_padding_layer
-        ), "Number of mesh device rows must match the number of padding or non-padding layers"
         return {
             "shared_expert": SharedExpert.decode_model_config(hf_config, mesh_device),
-            "moe": [
-                None if is_padding else MoE.decode_model_config(hf_config, mesh_device)
-                for is_padding in is_padding_layer
-            ],
+            "moe": [MoE.decode_model_config(hf_config, mesh_device)],
             "apply_dp": {
                 "mesh_shape": tuple(mesh_device.shape),
                 "dim": -2,
@@ -117,23 +104,19 @@ class MoEDecoderBlock(DecoderBlockBase):
         }
 
     @classmethod
-    @abstractmethod
     def create_mlp_state(
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
         ccl: CCL,
-        is_padding_layer: tuple[bool, ...] | None = None,
+        is_padding_layer: Iterable[bool],
     ) -> ModelState:
         return {
             "moe": [
                 None if is_padding else MoE.create_state(hf_config, mesh_device, ccl) for is_padding in is_padding_layer
             ],
             "shared_expert": SharedExpert.create_state(hf_config, mesh_device, ccl),
-            "revert_dp": {
-                "multi_device_global_semaphore": ccl.get_gather_sem(0),
-                "barrier_semaphore": ccl.get_barrier_sem(0),
-            },
+            "ccl": ccl,
         }
 
     @classmethod
@@ -198,10 +181,13 @@ class MoEDecoderBlock(DecoderBlockBase):
         return tt_out_tensor
 
     @classmethod
-    def revert_data_parallelism(cls, x: ttnn.Tensor, row_idx: int, **cfg) -> ttnn.Tensor:
+    def revert_data_parallelism(
+        cls, x: ttnn.Tensor, row_idx: int, cfg: RunDecodeConfig | RunPrefillConfig
+    ) -> ttnn.Tensor:
         """Revert data parallelism by gathering partitioned tensor back to original form."""
         # Gather tensor along specified dimension across mesh cluster axis
-        tt_out_tensor = ttnn.experimental.all_gather_async(x, **cfg)
+        ccl = cfg["ccl"]
+        tt_out_tensor = ttnn.experimental.all_gather_async(x, **ccl.populate_all_gather_runtime_args(cfg["revert_dp"]))
         return tt_out_tensor
 
     @classmethod
@@ -210,18 +196,13 @@ class MoEDecoderBlock(DecoderBlockBase):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
-        is_padding_layer: tuple[bool, ...] | None = None,
     ) -> ModelState:
         return {
-            "moe": [
-                None if is_padding else MoE.create_shared_state(hf_config, mesh_device)
-                for is_padding in is_padding_layer
-            ],
+            "moe": [MoE.create_shared_state(hf_config, mesh_device)],
             "shared_expert": {},
         }
 
     @classmethod
-    @abstractmethod
     def forward_mlp_prefill(cls, x: ttnn.Tensor, row_idx: int, cfg: RunPrefillConfig) -> ttnn.Tensor:
         num_tokens_to_route = x.shape[-3] * x.shape[-2]
         DP_FACTOR = cfg["moe"][row_idx]["num_dispatch_devices"]
@@ -233,7 +214,7 @@ class MoEDecoderBlock(DecoderBlockBase):
         mlp_out = MoE.forward_prefill(x_dp if apply_dp else x, cfg["moe"][row_idx])
         if apply_dp:
             ttnn.deallocate(x_dp)
-            mlp_out = cls.revert_data_parallelism(mlp_out, row_idx, **cfg["revert_dp"])
+            mlp_out = cls.revert_data_parallelism(mlp_out, row_idx, cfg)
         mlp_out += SharedExpert.forward_prefill(x, cfg["shared_expert"])
         return mlp_out
 
@@ -250,6 +231,6 @@ class MoEDecoderBlock(DecoderBlockBase):
         mlp_out = MoE.forward_decode(x_dp if apply_dp else x, cfg["moe"][row_idx])
         if apply_dp:
             ttnn.deallocate(x_dp)
-            mlp_out = cls.revert_data_parallelism(mlp_out, row_idx, **cfg["revert_dp"])
+            mlp_out = cls.revert_data_parallelism(mlp_out, row_idx, cfg)
         mlp_out += SharedExpert.forward_decode(x, cfg["shared_expert"])
         return mlp_out
