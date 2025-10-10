@@ -117,6 +117,8 @@ constexpr auto sub() {
 
 constexpr auto mul() { return _binary<&ckernel::mul_tiles_init, &ckernel::mul_tiles>(); }
 
+constexpr auto div_binary() { return _binary_sfpu<&ckernel::div_binary_tile_init, &ckernel::div_binary_tile>(); }
+
 constexpr auto power_binary() { return _binary_sfpu<&ckernel::power_binary_tile_init, &ckernel::power_binary_tile>(); }
 
 template <void (*Init)(void), void (*Compute)(uint32_t, uint32_t)>
