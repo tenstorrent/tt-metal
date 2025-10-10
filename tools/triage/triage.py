@@ -558,10 +558,8 @@ def _enforce_dependencies(args: ScriptArguments) -> None:
             raise TTTriageError(message)
 
 
-def _init_ttexalens(args: ScriptArguments | None = None) -> Context | None:
+def _init_ttexalens(args: ScriptArguments) -> Context:
     """Initialize the ttexalens context."""
-    if args is None:
-        return None
     if args["--remote-exalens"]:
         return init_ttexalens_remote(ip_address=args["--remote-server"], port=args["--remote-port"])
     return init_ttexalens(use_noc1=args["--initialize-with-noc1"])
@@ -631,7 +629,7 @@ class TTTriageError(Exception):
 
 def main():
     # Enumerate all scripts in application directory
-    application_path = os.path.dirname(__file__)
+    application_path = os.path.abspath(os.path.dirname(__file__))
     script_files = [f for f in os.listdir(application_path) if f.endswith(".py") and f != os.path.basename(__file__)]
 
     # To avoid multiple imports of this script, we add it to sys.modules
