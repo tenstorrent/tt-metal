@@ -244,10 +244,9 @@ def model_location_generator(is_ci_v2_env):
         download_from_ci_v2 = download_if_ci_v2 and is_ci_v2_env
 
         if download_from_ci_v2:
-            # mstojko - ## this has been temporarily been commented out. It should be put back before merging
-            # assert (
-            #     not has_internal_weka
-            # ), "For some reason, we see a file existing at the expected MLPerf location: {internal_weka_path} on CIv2. Please use the opportunity to clean up your model and get rid of MLPerf if you're moving to CIv2"
+            assert (
+                not has_internal_weka
+            ), "For some reason, we see a file existing at the expected MLPerf location: {internal_weka_path} on CIv2. Please use the opportunity to clean up your model and get rid of MLPerf if you're moving to CIv2"
 
             assert (
                 not model_subdir

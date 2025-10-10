@@ -303,7 +303,6 @@ jobs:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       - name: Run frequent reg tests scripts
         timeout-minutes: ${{ matrix.test-config.timeout || 30 }}
-        # tag - mstojko - add it here
         run: |
           if [[ "${{ matrix.test-config.model }}" == *"gemma-3"* ]]; then
             pytest tests/nightly/single_card/gemma3 -k ${{ matrix.test-config.model }}
