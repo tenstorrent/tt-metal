@@ -46,5 +46,5 @@ TT_MM_THROTTLE_PERF=5 pytest models/experimental/tt_dit/tests/models/wan2_2/test
 
 We currently need to set `TT_MM_THROTTLE_PERF=5` when running inference in order to avoid a certain set of hangs.
 While output videos look good, we have many items of work in progress to improve correctness.
-As of now, running on systems smaller than a 2x4 Wormhold mesh is not well supported. The model is large and requires 8-chips worth of memory to run.
+As of now, running on systems smaller than a 2x4 Wormhole mesh is not well supported. The model is large and requires 8-chips worth of memory to run.
 Performance optimization is in progress.
