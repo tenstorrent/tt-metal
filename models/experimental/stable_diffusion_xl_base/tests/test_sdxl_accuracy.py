@@ -183,11 +183,11 @@ def test_accuracy_sdxl(
     print(f"Average CLIP Score: {average_clip_score}")
     print(f"Standard Deviation of CLIP Scores: {deviation_clip_score}")
 
+    avg_gen_end_to_end = profiler.get("end_to_end_generation")
     if use_cfg_parallel:
         for key in ["functional", "complete", "target"]:
             targets["perf"][key] /= 2
 
-    avg_gen_end_to_end = profiler.get("end_to_end_generation")
     data["benchmarks_summary"][0].update(
         {
             "avg_gen_time": avg_gen_end_to_end,
