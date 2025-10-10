@@ -672,70 +672,19 @@ class TtTransfuserBackbone:
             input_w=lidar_w,
             channels=lidar_c,
             output_size=[self.config.lidar_vert_anchors, self.config.lidar_horz_anchors],
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
+
+        image_embd_layer4 = ttnn.sharded_to_interleaved(image_embd_layer4, memory_config=ttnn.L1_MEMORY_CONFIG)
+        lidar_embd_layer4 = ttnn.sharded_to_interleaved(lidar_embd_layer4, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         logger.info(f"layer4 transformer")
 
-        import torch
-
-        tt_image_tensor_torch = ttnn.to_torch(
-            image_embd_layer4,
-            device=device,
+        image_features_layer4, lidar_features_layer4 = self.transformer4(
+            image_embd_layer4, lidar_embd_layer4, velocity, 1512
         )
-
-        # Validate lidar output
-        tt_lidar_tensor_torch = ttnn.to_torch(
-            lidar_embd_layer4,
-            device=device,
-        )
-
-        # Deallocate output tensors
-        ttnn.deallocate(image_embd_layer4)
-        ttnn.deallocate(lidar_embd_layer4)
-
-        # Reshape + permute image output back to NCHW
-        expected_image_shape = (1, 1512, 5, 22)
-        tt_image_tensor_torch = torch.reshape(
-            tt_image_tensor_torch,
-            (expected_image_shape[0], expected_image_shape[2], expected_image_shape[3], expected_image_shape[1]),
-        )
-        tt_image_tensor_torch = torch.permute(tt_image_tensor_torch, (0, 3, 1, 2))
-
-        # Reshape + permute lidar output back to NCHW
-        expected_lidar_shape = (1, 1512, 8, 8)
-        tt_lidar_tensor_torch = torch.reshape(
-            tt_lidar_tensor_torch,
-            (expected_lidar_shape[0], expected_lidar_shape[2], expected_lidar_shape[3], expected_lidar_shape[1]),
-        )
-        tt_lidar_tensor_torch = torch.permute(tt_lidar_tensor_torch, (0, 3, 1, 2))
-
-        img_input_shape = tt_image_tensor_torch.shape
-        lidar_input_shape = tt_lidar_tensor_torch.shape
-        img_h, img_w = img_input_shape[2], img_input_shape[3]
-        image_input_tokens = tt_image_tensor_torch.permute(0, 2, 3, 1).reshape(1, 1, img_h * img_w, 1512)
-
-        # (1, 72, 8, 8) -> (1, 1, 64, 72)
-        lidar_h, lidar_w = lidar_input_shape[2], lidar_input_shape[3]
-        lidar_input_tokens = tt_lidar_tensor_torch.permute(0, 2, 3, 1).reshape(1, 1, lidar_h * lidar_w, 1512)
-
-        # import pdb; pdb.set_trace()
-        tt_image_input = ttnn.from_torch(
-            image_input_tokens,
-            device=device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
-        tt_lidar_input = ttnn.from_torch(
-            lidar_input_tokens,
-            device=device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
-
-        image_features_layer4, lidar_features_layer4 = self.transformer4(tt_image_input, tt_lidar_input, velocity, 1512)
         return image_features_layer4, lidar_features_layer4
+
         image_features_layer4 = ttnn.permute(image_features_layer4, (0, 2, 3, 1))
         lidar_features_layer4 = ttnn.permute(lidar_features_layer4, (0, 2, 3, 1))
 
