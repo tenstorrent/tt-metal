@@ -452,11 +452,8 @@ class TtTransfuserBackbone:
         )
         logger.info(f"Layer1 transformer")
 
-        image_embd_layer1 = ttnn.to_memory_config(image_embd_layer1, ttnn.DRAM_MEMORY_CONFIG)
-        image_embd_layer1 = ttnn.to_layout(image_embd_layer1, ttnn.TILE_LAYOUT)
-
-        lidar_embd_layer1 = ttnn.to_memory_config(lidar_embd_layer1, ttnn.DRAM_MEMORY_CONFIG)
-        lidar_embd_layer1 = ttnn.to_layout(lidar_embd_layer1, ttnn.TILE_LAYOUT)
+        image_embd_layer1 = ttnn.sharded_to_interleaved(image_embd_layer1, memory_config=ttnn.L1_MEMORY_CONFIG)
+        lidar_embd_layer1 = ttnn.sharded_to_interleaved(lidar_embd_layer1, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         image_features_layer1, lidar_features_layer1 = self.transformer1(
             image_embd_layer1, lidar_embd_layer1, velocity, 72
@@ -530,11 +527,8 @@ class TtTransfuserBackbone:
 
         logger.info(f"layer2 transformer")
 
-        image_embd_layer2 = ttnn.to_memory_config(image_embd_layer2, ttnn.DRAM_MEMORY_CONFIG)
-        image_embd_layer2 = ttnn.to_layout(image_embd_layer2, ttnn.TILE_LAYOUT)
-
-        lidar_embd_layer2 = ttnn.to_memory_config(lidar_embd_layer2, ttnn.DRAM_MEMORY_CONFIG)
-        lidar_embd_layer2 = ttnn.to_layout(lidar_embd_layer2, ttnn.TILE_LAYOUT)
+        image_embd_layer2 = ttnn.sharded_to_interleaved(image_embd_layer2, memory_config=ttnn.L1_MEMORY_CONFIG)
+        lidar_embd_layer2 = ttnn.sharded_to_interleaved(lidar_embd_layer2, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         image_features_layer2, lidar_features_layer2 = self.transformer2(
             image_embd_layer2, lidar_embd_layer2, velocity, 216
@@ -606,11 +600,8 @@ class TtTransfuserBackbone:
 
         logger.info(f"layer3 transformer")
 
-        image_embd_layer3 = ttnn.to_memory_config(image_embd_layer3, ttnn.DRAM_MEMORY_CONFIG)
-        image_embd_layer3 = ttnn.to_layout(image_embd_layer3, ttnn.TILE_LAYOUT)
-
-        lidar_embd_layer3 = ttnn.to_memory_config(lidar_embd_layer3, ttnn.DRAM_MEMORY_CONFIG)
-        lidar_embd_layer3 = ttnn.to_layout(lidar_embd_layer3, ttnn.TILE_LAYOUT)
+        image_embd_layer3 = ttnn.sharded_to_interleaved(image_embd_layer3, memory_config=ttnn.L1_MEMORY_CONFIG)
+        lidar_embd_layer3 = ttnn.sharded_to_interleaved(lidar_embd_layer3, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         image_features_layer3, lidar_features_layer3 = self.transformer3(
             image_embd_layer3, lidar_embd_layer3, velocity, 576
