@@ -62,7 +62,6 @@ class DispatcherData:
         self.use_rpc_kernel_find = True
         if len(self.kernels) == 0:
             raise TTTriageError("No kernels found in inspector data.")
-        self._a_kernel_path = next(iter(self.kernels.values())).path
         # Cache build_env per device to avoid multiple RPC calls
         # Each device needs to have its own build_env to get the correct firmware path
         self._build_env_cache = {}
@@ -74,28 +73,19 @@ class DispatcherData:
             all_build_envs = inspector_data.getAllBuildEnvs().buildEnvs
             for build_env in all_build_envs:
                 self._build_env_cache[build_env.deviceId] = build_env.buildInfo
-        except Exception as e:
+        except Exception:
             pass
 
         # Get the device ID from run_checks or inspector_data
         try:
-            device_id = None
-            if run_checks and getattr(run_checks, "devices", None):
-                device_id = run_checks.devices[0]._id
-            if device_id is None:
-                in_use_devices = inspector_data.getDevicesInUse().deviceIds
-                if in_use_devices:
-                    device_id = in_use_devices[0]
-            if device_id is None:
-                raise TTTriageError("No device ID found")
+            if not (run_checks and getattr(run_checks, "devices", None)):
+                raise TTTriageError("RunChecks.devices not available. Ensure run_checks is a dependency or pass --dev.")
+            device_id = run_checks.devices[0]._id
 
-            if device_id not in self._build_env_cache:
-                self._build_env_cache[device_id] = inspector_data.getBuildEnv(deviceId=device_id).buildInfo
+            build_env = self._build_env_cache[device_id]
             # Use build_env for initial firmware paths
-            brisc_elf_path = os.path.join(self._build_env_cache[device_id].firmwarePath, "brisc", "brisc.elf")
-            idle_erisc_elf_path = os.path.join(
-                self._build_env_cache[device_id].firmwarePath, "idle_erisc", "idle_erisc.elf"
-            )
+            brisc_elf_path = os.path.join(build_env.firmwarePath, "brisc", "brisc.elf")
+            idle_erisc_elf_path = os.path.join(build_env.firmwarePath, "idle_erisc", "idle_erisc.elf")
         except Exception as e:
             raise TTTriageError(
                 f"Failed to get firmware path from Inspector RPC: {e}\n"
@@ -175,7 +165,11 @@ class DispatcherData:
     def _get_build_env_for_device(self, device_id: int):
         """Get build_env for a specific device, with caching"""
         if device_id not in self._build_env_cache:
-            self._build_env_cache[device_id] = self.inspector_data.getBuildEnv(deviceId=device_id).buildInfo
+            raise TTTriageError(
+                "Failed to get firmware path from Inspector RPC. "
+                "Make sure Inspector RPC is available or serialized RPC data exists. "
+                "Set TT_METAL_INSPECTOR_RPC=1 when running your Metal application."
+            )
         return self._build_env_cache[device_id]
 
     def find_kernel(self, watcher_kernel_id):
@@ -207,10 +201,7 @@ class DispatcherData:
         # Get the build_env for the device to get the correct firmware path
         # Each device may have different firmware paths based on its build configuration
         device_id = location._device._id
-        try:
-            build_env = self._get_build_env_for_device(device_id)
-        except Exception as e:
-            raise TTTriageError(f"Cannot get firmware path for device {device_id}: {e}")
+        build_env = self._get_build_env_for_device(device_id)
         proc_name = risc_name.upper()
         proc_type = enum_values["ProcessorTypes"][proc_name]
 
@@ -355,11 +346,6 @@ class DispatcherData:
             preload=preload,
             waypoint=waypoint,
         )
-
-    @staticmethod
-    def get_firmware_elf_path(a_kernel_path: str, risc_name: str) -> str:
-        firmware_elf_path = a_kernel_path + f"../../../firmware/{risc_name.lower()}/{risc_name.lower()}.elf"
-        return os.path.realpath(firmware_elf_path)
 
 
 @triage_singleton

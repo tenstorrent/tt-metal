@@ -28,6 +28,13 @@ struct DeviceBuildEnv {
     std::vector<JitBuildState> kernel_build_states;
 };
 
+// A struct to hold device-specific build environment info (lightweight version of DeviceBuildEnv)
+struct BuildEnvInfo {
+    chip_id_t device_id;
+    uint32_t build_key;
+    std::string firmware_root_path;
+};
+
 // Singleton class to generate and hold build environments, build keys, and build states.
 class BuildEnvManager {
 public:
@@ -51,11 +58,13 @@ public:
         chip_id_t device_id, uint32_t programmable_core, uint32_t processor_class);
 
     void build_firmware(chip_id_t device_id);
-    const std::string& get_out_firmware_root_path(chip_id_t device_id);
 
     // Helper function to get the unique build id and number of states for a given programmable_core and
     // processor_class.
     BuildIndexAndTypeCount get_build_index_and_state_count(uint32_t programmable_core, uint32_t processor_class);
+
+    // Method to get the build environment info for all devices
+    std::vector<BuildEnvInfo> get_all_build_envs_info();
 
 private:
     BuildEnvManager();
