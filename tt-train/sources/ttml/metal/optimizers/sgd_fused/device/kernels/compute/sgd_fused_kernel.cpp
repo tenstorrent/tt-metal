@@ -99,37 +99,37 @@ void MAIN {
         cb_pop_front(cb_grad_idx, block_size);
 
         cb_wait_front(cb_grad_wd_idx, block_size);
-        if (!is_f32_zero_bits(momentum)) {
-            cb_wait_front(cb_momentum_in_idx, block_size);
-            tile_regs_acquire();
-            for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-                copy_tile_init(cb_momentum_in_idx);
-                const uint32_t momentum_register = block_size + block_idx;
-                copy_tile(cb_momentum_in_idx, /* tile_idx */ block_idx, /* register_idx */ momentum_register);
+#if USE_MOMENTUM
+        cb_wait_front(cb_momentum_in_idx, block_size);
+        tile_regs_acquire();
+        for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
+            copy_tile_init(cb_momentum_in_idx);
+            const uint32_t momentum_register = block_size + block_idx;
+            copy_tile(cb_momentum_in_idx, /* tile_idx */ block_idx, /* register_idx */ momentum_register);
 
-                // m_{t-1} * momentum
-                binop_with_scalar_tile_init();
-                mul_unary_tile(momentum_register, momentum);
+            // m_{t-1} * momentum
+            binop_with_scalar_tile_init();
+            mul_unary_tile(momentum_register, momentum);
 
-                copy_tile_init(cb_grad_wd_idx);
-                const uint32_t grad_wd_register = block_idx;
-                copy_tile(cb_grad_wd_idx, /* tile_idx */ block_idx, /* register_idx */ grad_wd_register);
-                // m_t <- g_t + m_{t-1} * momentum
-                add_binary_tile_init();
-                add_binary_tile(grad_wd_register, momentum_register, grad_wd_register);
-            }
-            tile_regs_commit();
-            pack_and_push_two_cbs(cb_momentum_out_idx, cb_momentum_to_dram_idx, block_size);
-            cb_pop_front(cb_momentum_in_idx, block_size);
-        } else {
-            tile_regs_acquire();
             copy_tile_init(cb_grad_wd_idx);
-            for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-                copy_tile(cb_grad_wd_idx, /* tile_idx */ block_idx, /* register_idx */ block_idx);
-            }
-            tile_regs_commit();
-            pack_and_push_block(cb_momentum_out_idx, block_size);
+            const uint32_t grad_wd_register = block_idx;
+            copy_tile(cb_grad_wd_idx, /* tile_idx */ block_idx, /* register_idx */ grad_wd_register);
+            // m_t <- g_t + m_{t-1} * momentum
+            add_binary_tile_init();
+            add_binary_tile(grad_wd_register, momentum_register, grad_wd_register);
         }
+        tile_regs_commit();
+        pack_and_push_two_cbs(cb_momentum_out_idx, cb_momentum_to_dram_idx, block_size);
+        cb_pop_front(cb_momentum_in_idx, block_size);
+#else
+        tile_regs_acquire();
+        copy_tile_init(cb_grad_wd_idx);
+        for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
+            copy_tile(cb_grad_wd_idx, /* tile_idx */ block_idx, /* register_idx */ block_idx);
+        }
+        tile_regs_commit();
+        pack_and_push_block(cb_momentum_out_idx, block_size);
+#endif
         // m_t in cb_momentum_out_idx
         // apply learning rate
         cb_wait_front(cb_momentum_out_idx, block_size);
