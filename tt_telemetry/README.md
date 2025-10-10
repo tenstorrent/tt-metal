@@ -19,7 +19,7 @@ This will often be exposed externally as e.g. 54168. Assuming you are on e.g. `a
 
 ## Collector Mode
 
-By default, tt_telemetry runs in collector mode, collecting telemetry on the local host and providing a socket server on port 8081 for an aggregator instance to connect to. This port can be changed with `--collector-port`. 
+By default, tt_telemetry runs in collector mode, collecting telemetry on the local host and providing a socket server on port 8081 for an aggregator instance to connect to. This port can be changed with `--collector-port`.
 
 ## Aggregator Mode
 
