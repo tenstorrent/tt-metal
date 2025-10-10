@@ -412,6 +412,12 @@ get_output_placements_and_shape(
                         }
                         shard_dims.insert(new_shard_placement.dim);
                         output_placement = new_shard_placement;
+                    } else {
+                        log_warning(
+                            tt::LogOp,
+                            "Duplicate tensor shard dimension {} across distribution dim {} replaced with Replicate",
+                            new_shard_placement.dim,
+                            i);
                     }
                 }
                 if (i >= result_placements.size()) {
