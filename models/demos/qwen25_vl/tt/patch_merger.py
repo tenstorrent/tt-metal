@@ -61,7 +61,11 @@ class PatchMerger(LightweightModule):
         x = self.norm(x)
 
         # Reshape to merge spatial dimensions
+        # bug in ttnn.reshape tilized causing hangs https://github.com/tenstorrent/tt-metal/issues/29932
+        # using workaround of converting to row major first
+        x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
         x = ttnn.reshape(x, (x.shape[0], x.shape[1], -1, self.mlp_size))
+        x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
 
         # First linear + GELU
         x = ttnn.linear(
