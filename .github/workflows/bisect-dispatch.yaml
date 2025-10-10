@@ -24,6 +24,7 @@ on:
           - config-t3000
           - config-tg
           - topology-6u
+          - config-t3000
         description: "Runner Type Label"
       good-commit:
         required: true
