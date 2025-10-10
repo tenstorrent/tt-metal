@@ -142,6 +142,8 @@ KernelHandle FDKernel::configure_kernel_variant(
     std::map<std::string, std::string> defines = {
         {"DISPATCH_KERNEL", "1"},
         {"FD_CORE_TYPE", std::to_string(programmable_core_type_index)},
+        // Unused
+        {"TELEMETRY_BUFFER_BASE_ADDRESS", std::to_string(0)},
     };
     if (force_watcher_no_inline) {
         defines.insert({"WATCHER_NOINLINE", std::to_string(force_watcher_no_inline)});
