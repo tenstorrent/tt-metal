@@ -289,14 +289,14 @@ def test_gpt(
         image_input_tokens,
         device=device,
         layout=ttnn.TILE_LAYOUT,
-        dtype=input_dtype,
+        dtype=ttnn.bfloat16,
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
     tt_lidar_input = ttnn.from_torch(
         lidar_input_tokens,
         device=device,
         layout=ttnn.TILE_LAYOUT,
-        dtype=input_dtype,
+        dtype=ttnn.bfloat16,
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
     tt_velocity_input = ttnn.from_torch(
