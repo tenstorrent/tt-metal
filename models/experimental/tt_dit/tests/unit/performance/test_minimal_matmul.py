@@ -13,7 +13,21 @@ from tracy.process_model_log import (
 )
 
 
-def run_test_linear(device, M, K, N, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w, use_bias):
+def run_test_linear(
+    device,
+    M,
+    K,
+    N,
+    M_block_size,
+    K_block_size,
+    N_block_size,
+    subblock_h,
+    subblock_w,
+    use_bias=False,
+    math_fidelity=ttnn.MathFidelity.HiFi2,
+    fp32_acc=True,
+    dtype=ttnn.bfloat16,
+):
     logger.info(f"Running test_linear with M={M}, K={K}, N={N}")
     torch_dtype = torch.float32
 
@@ -25,10 +39,10 @@ def run_test_linear(device, M, K, N, M_block_size, K_block_size, N_block_size, s
         bias_input = torch.randn((1, N), dtype=torch_dtype)
 
     # Prepare TT tensors
-    tt_input = bf16_tensor(torch_input, device=device)
-    tt_weight = bf16_tensor(weight_input, device=device)
+    tt_input = ttnn.from_torch(torch_input, dtype=dtype, device=device, layout=ttnn.TILE_LAYOUT)
+    tt_weight = ttnn.from_torch(weight_input, dtype=dtype, device=device, layout=ttnn.TILE_LAYOUT)
     if use_bias:
-        tt_bias = bf16_tensor(bias_input, device=device)
+        tt_bias = ttnn.from_torch(bias_input, dtype=dtype, device=device, layout=ttnn.TILE_LAYOUT)
 
     with torch.no_grad():
         torch_output = torch_input @ weight_input
@@ -37,9 +51,9 @@ def run_test_linear(device, M, K, N, M_block_size, K_block_size, N_block_size, s
 
     compute_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
-        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_fidelity=math_fidelity,
         math_approx_mode=False,
-        fp32_dest_acc_en=True,
+        fp32_dest_acc_en=fp32_acc,
         packer_l1_acc=True,
     )
 
@@ -80,6 +94,60 @@ def test_linear(device, M, K, N, M_block_size, K_block_size, N_block_size, subbl
     )
     assert check_result["pcc"] > 0.999_500
     assert check_result["relative_rmse"] < 0.02
+
+
+@pytest.mark.parametrize(
+    "M, K, N, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w",
+    [(512, 512, 512, 1, 1, 1, 1, 1)],
+)
+@pytest.mark.parametrize("use_bias", [True, False], ids=["with_bias", "without_bias"])
+@pytest.mark.parametrize(
+    "math_fidelity",
+    [ttnn.MathFidelity.LoFi, ttnn.MathFidelity.HiFi2, ttnn.MathFidelity.HiFi4],
+    ids=["LoFi", "HiFi2", "HiFi4"],
+)
+@pytest.mark.parametrize("fp32_acc", [True, False], ids=["fp32_acc", "fp16_acc"])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b], ids=["bf16", "bf8b", "bf4b"])
+def test_linear_dtype_compute_config(
+    device,
+    M,
+    K,
+    N,
+    M_block_size,
+    K_block_size,
+    N_block_size,
+    subblock_h,
+    subblock_w,
+    use_bias,
+    math_fidelity,
+    fp32_acc,
+    dtype,
+):
+    check_result = run_test_linear(
+        device,
+        M,
+        K,
+        N,
+        M_block_size,
+        K_block_size,
+        N_block_size,
+        subblock_h,
+        subblock_w,
+        use_bias,
+        math_fidelity,
+        fp32_acc,
+        dtype,
+    )
+
+    PCC_THRESHOLD = 0.999_500
+    RMSE_THRESHOLD = 0.02
+    if dtype in [ttnn.bfloat8_b, ttnn.bfloat16] and math_fidelity == ttnn.MathFidelity.LoFi:
+        RMSE_THRESHOLD = 0.03
+    if dtype == ttnn.bfloat4_b:
+        PCC_THRESHOLD = 0.97
+        RMSE_THRESHOLD = 0.26
+    assert check_result["pcc"] > PCC_THRESHOLD
+    assert check_result["relative_rmse"] < RMSE_THRESHOLD
 
 
 @pytest.mark.parametrize("M", [32, 96, 320, 4096])
@@ -322,13 +390,15 @@ TABLE_CONFIGS = [
     "M, K, N",
     TABLE_CONFIGS,
 )
-@pytest.mark.parametrize("fp32_acc", [True, False], ids=["fp32_acc", "fp16_acc"])
+@pytest.mark.parametrize("fp32_acc", [True, False], ids=["fp32_acc", "bf16_acc"])
 @pytest.mark.parametrize(
     "math_fidelity",
     [ttnn.MathFidelity.LoFi, ttnn.MathFidelity.HiFi2, ttnn.MathFidelity.HiFi4],
     ids=["LoFi", "HiFi2", "HiFi4"],
 )
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b], ids=["bf16", "bf8b", "bf4b"])
+@pytest.mark.parametrize(
+    "dtype", [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b], ids=["dtype_bf16", "dtype_bf8b", "dtype_bf4b"]
+)
 def test_perf_table_sweep(device, M, K, N, fp32_acc, math_fidelity, dtype):
     logger.info(f"Running test_linear with M={M}, K={K}, N={N}")
     torch_execution_dtype = torch.float32
@@ -353,7 +423,7 @@ def test_perf_table_sweep(device, M, K, N, fp32_acc, math_fidelity, dtype):
     )
 
     core_grid = ttnn.CoreCoord(8, 8)
-    subblocks = [(2, 2)]
+    subblocks = [(2, 2)] if fp32_acc else [(2, 4), (4, 2)]
 
     m_block_sizes = [2, 4, 8, 16]
     n_block_sizes = [2, 4, 8, 16]
@@ -364,6 +434,8 @@ def test_perf_table_sweep(device, M, K, N, fp32_acc, math_fidelity, dtype):
     for M_block_size, K_block_size, N_block_size, (subblock_h, subblock_w) in product(
         m_block_sizes, k_block_sizes, n_block_sizes, subblocks
     ):
+        if (M_block_size < subblock_h) or (N_block_size < subblock_w):
+            continue
         logger.info(
             f"Running minimal_matmul with M_block_size={M_block_size}, K_block_size={K_block_size}, N_block_size={N_block_size}, subblock_h={subblock_h}, subblock_w={subblock_w}"
         )
@@ -406,7 +478,20 @@ def perf_model(M, K, N, core_count, fidelity_div):
 @pytest.mark.parametrize(
     "fidelity, dtype, fp32_acc",
     [
-        ("HiFi2", "bf16", "fp32_acc"),
+        ("HiFi2", "dtype_bf16", "fp32_acc"),
+        ("HiFi2", "dtype_bf16", "bf16_acc"),
+        ("HiFi4", "dtype_bf16", "bf16_acc"),
+        ("HiFi2", "dtype_bf8b", "bf16_acc"),
+        ("LoFi", "dtype_bf8b", "bf16_acc"),
+        ("LoFi", "dtype_bf4b", "bf16_acc"),
+    ],
+    ids=[
+        "HiFi2_bf16_fp32_acc",
+        "HiFi2_bf16_bf16_acc",
+        "HiFi4_bf16_bf16_acc",
+        "HiFi2_bf8b_bf16_acc",
+        "LoFi_bf8b_bf16_acc",
+        "LoFi_bf4b_bf16_acc",
     ],
 )
 def test_create_perf_table(fidelity, dtype, fp32_acc):
