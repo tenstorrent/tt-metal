@@ -42,11 +42,13 @@ namespace tt_metal {
 namespace fs = std::filesystem;
 
 namespace {
-// Kernel path searching:
+// Kernel path resolve:
 //
-// If the path doesn't exist as a absolute/relative path, then it must be relative to
-// TT_METAL_HOME/TT_METAL_KERNEL_PATH.
-//
+// If the path is not an absolute path, then it must be resolved relative to:
+// 1. CWD
+// 2. TT_METAL_KERNEL_PATH
+// 3. TT_METAL_HOME / SetRootDir (API)
+// 4. System Kernel Directory
 fs::path resolve_path(const fs::path& given_file_name) {
     // Priority 0: Absolute path
     if (given_file_name.is_absolute()) {
