@@ -4,8 +4,9 @@
 
 #include "expression_pybind.hpp"
 #include "expression.hpp"
-#include "hostdevcommon/kernel_structs.h"
-#include "ttnn-pybind/export_enum.hpp"
+#include "lazy.hpp"
+#include <ttnn-pybind/export_enum.hpp>
+#include <tt_stl/type_name.hpp>
 
 #include <fmt/format.h>
 #include <pybind11/pybind11.h>
@@ -63,8 +64,48 @@ void bind_iterable(py::handle scope, const std::string& name) {
     }
 }
 
+template <typename... Args, typename Func, typename... Extra>
+auto def_overload(py::class_<Func>& cls, const Extra&... extra) {
+    if constexpr (requires { py::overload_cast<Args...>(&Func::operator(), py::const_); }) {
+        cls.def("__call__", py::overload_cast<Args...>(&Func::operator(), py::const_), extra...);
+    }
+}
+
+template <typename Func>
+void def_overloads(py::handle scope, Func functor, const std::string& name) {
+    std::string type_name{ttsl::short_type_name<Func>};
+    std::erase_if(type_name, [](unsigned char ch) -> bool { return not std::isalnum(ch); });
+
+    if (not py::hasattr(scope, type_name.c_str())) {
+        auto cls = py::class_<Func>(scope, type_name.c_str());
+
+        const auto def_unary = [&]<typename... First>(mp::mp_list<mp::mp_list<First>...>) {
+            (..., def_overload<First>(cls, py::arg("first")));
+        };
+        const auto def_binary = [&]<typename... First, typename... Second>(mp::mp_list<mp::mp_list<First, Second>...>) {
+            (..., def_overload<First, Second>(cls, py::arg("first"), py::arg("second")));
+        };
+        const auto def_ternary = [&]<typename... First, typename... Second, typename... Third>(
+                                     mp::mp_list<mp::mp_list<First, Second, Third>...>) {
+            (..., def_overload<First, Second, Third>(cls, py::arg("first"), py::arg("second"), py::arg("third")));
+        };
+
+        using Arg = mp::mp_apply<mp::mp_set_union, mp_convert_map>;
+        using TensorArg = mp::mp_list<ExpressionView, const Tensor&>;
+
+        def_unary(mp::mp_product<mp::mp_list, Arg>{});
+        def_binary(mp::mp_product<mp::mp_list, Arg, Arg>{});
+        // replace TensorArg with Arg below when UnaryWithParam2 or BinaryWithParam operations are added
+        // TensorArg binds 2*2*2=8 overloads, but Arg will bind 6*6*6=216 overloads
+        def_ternary(mp::mp_product<mp::mp_list, TensorArg, TensorArg, TensorArg>{});
+    }
+
+    scope.attr(name.c_str()) = py::cast(functor);
+}
+
 void py_module(py::module& module) {
     export_enum<Unary>(module);
+    export_enum<UnaryWithParam>(module);
     export_enum<Binary>(module);
     export_enum<Ternary>(module);
 
@@ -89,7 +130,8 @@ void py_module(py::module& module) {
         .def_property_readonly("value", &ExpressionView::value)
         .def_property_readonly("dtype", &ExpressionView::dtype)
         .def_property_readonly("shape", &ExpressionView::logical_shape)
-        .def_property_readonly("index", &ExpressionView::index)
+        .def_property_readonly("cb_index", &ExpressionView::cb_index)
+        .def_property_readonly("rt_offset", &ExpressionView::rt_offset)
         .def_property_readonly("inputs", &ExpressionView::inputs)
         .def_property_readonly("circular_buffers", &ExpressionView::circular_buffers);
 
@@ -100,14 +142,10 @@ void py_module(py::module& module) {
         .def_property_readonly("params", &FunctionView::params)
         .def_property_readonly("dtype", &FunctionView::dtype)
         .def_property_readonly("shape", &FunctionView::logical_shape)
-        .def_property_readonly("index", &FunctionView::index)
+        .def_property_readonly("cb_index", &FunctionView::cb_index)
+        .def_property_readonly("rt_offset", &FunctionView::rt_offset)
         .def_property_readonly("inputs", &FunctionView::inputs)
         .def_property_readonly("circular_buffers", &FunctionView::circular_buffers);
-
-    auto tensor_overload_of = py::overload_cast<const Tensor&>;
-    auto unary_overload_of = py::overload_cast<Unary, ExpressionView, Params>;
-    auto binary_overload_of = py::overload_cast<Binary, ExpressionView, ExpressionView, Params>;
-    auto ternary_overload_of = py::overload_cast<Ternary, ExpressionView, ExpressionView, ExpressionView, Params>;
 
     expression.def(py::init<const Expression&>())
         .def(py::init<const Function&>())
@@ -116,7 +154,8 @@ void py_module(py::module& module) {
         .def_property_readonly("value", &Expression::value)
         .def_property_readonly("dtype", &Expression::dtype)
         .def_property_readonly("shape", &Expression::logical_shape)
-        .def_property_readonly("index", &Expression::index)
+        .def_property_readonly("cb_index", &Expression::cb_index)
+        .def_property_readonly("rt_offset", &Expression::rt_offset)
         .def_property_readonly("inputs", &Expression::inputs)
         .def_property_readonly("circular_buffers", &Expression::circular_buffers);
 
@@ -126,7 +165,8 @@ void py_module(py::module& module) {
         .def_property_readonly("params", &Function::params)
         .def_property_readonly("dtype", &Function::dtype)
         .def_property_readonly("shape", &Function::logical_shape)
-        .def_property_readonly("index", &Function::index)
+        .def_property_readonly("cb_index", &Function::cb_index)
+        .def_property_readonly("rt_offset", &Function::rt_offset)
         .def_property_readonly("inputs", &Function::inputs)
         .def_property_readonly("circular_buffers", &Function::circular_buffers);
 
@@ -135,12 +175,32 @@ void py_module(py::module& module) {
     py::implicitly_convertible<Function, ExpressionView>();
     py::implicitly_convertible<FunctionView, ExpressionView>();
 
-    module.def("defer", tensor_overload_of(&defer))
-        .def("defer", unary_overload_of(&defer))
-        .def("defer", binary_overload_of(&defer))
-        .def("defer", ternary_overload_of(&defer))
-        .def("to_compute_kernel_string", &to_compute_kernel_string)
-        .def("to_debug_string", &to_debug_string);
+    module.def("to_compute_kernel_string", &to_compute_kernel_string).def("to_debug_string", &to_debug_string);
+
+    def_overloads(module, recip, "recip");
+    def_overloads(module, negative, "negative");
+    def_overloads(module, exp, "exp");
+    def_overloads(module, eqz, "eqz");
+    def_overloads(module, gez, "gez");
+    def_overloads(module, gtz, "gtz");
+    def_overloads(module, lez, "lez");
+    def_overloads(module, ltz, "ltz");
+    def_overloads(module, nez, "nez");
+    def_overloads(module, logical_not, "logical_not");
+    def_overloads(module, eq, "eq");
+    def_overloads(module, ge, "ge");
+    def_overloads(module, gt, "gt");
+    def_overloads(module, le, "le");
+    def_overloads(module, lt, "lt");
+    def_overloads(module, ne, "ne");
+    def_overloads(module, add, "add");
+    def_overloads(module, sub, "sub");
+    def_overloads(module, rsub, "rsub");
+    def_overloads(module, mul, "mul");
+    def_overloads(module, div, "div");
+    def_overloads(module, rdiv, "rdiv");
+    def_overloads(module, power, "power");
+    def_overloads(module, where, "where");
 }
 
 }  // namespace ttnn::operations::lazy
