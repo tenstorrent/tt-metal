@@ -4,7 +4,7 @@
 
 * still in development, so it might not work seamlessly
 * useful for hang debug
-* if your test hangs, kill the process and run `./tools/tt-triage.py` --verbosity=4 --dev=0 to get stack traces on all riscs on all cores (script is inside tt-metal repo)
+* if your test hangs, kill the process and run `./tools/tt-triage.py` --verbosity=4 --dev=0 to get stack traces on all RISCs on all cores (script is inside tt-metal repo)
 
 
 ## DPRINT
