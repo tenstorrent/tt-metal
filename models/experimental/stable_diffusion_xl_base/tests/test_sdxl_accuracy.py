@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-import ttnn
 from models.experimental.stable_diffusion_xl_base.demo.demo import test_demo
 from models.experimental.stable_diffusion_xl_base.utils.clip_encoder import CLIPEncoder
 from loguru import logger
@@ -133,7 +132,6 @@ def test_accuracy_sdxl(
             use_cfg_parallel=use_cfg_parallel,
             fixed_seed_for_batch=True,
         )
-        ttnn.synchronize_device(mesh_device)
     except Exception as error_msg:
         error_msg = str(error_msg)
         error_detected = True
