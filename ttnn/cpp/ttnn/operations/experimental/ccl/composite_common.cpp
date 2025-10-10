@@ -9,10 +9,7 @@
 namespace composite_common {
 
 bool use_composite_reduce_scatter(
-    const ttnn::Tensor& input_tensor,
-    ttnn::ccl::Topology topology,
-    const int32_t dim,
-    std::optional<uint32_t> cluster_axis) {
+    const ttnn::Tensor& input_tensor, const int32_t dim, std::optional<uint32_t> cluster_axis) {
     auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
     uint32_t tile_height = tile_shape[0];
     uint32_t tile_width = tile_shape[1];
@@ -21,11 +18,6 @@ bool use_composite_reduce_scatter(
     int32_t scatter_dim = (dim < 0) ? rank + dim : dim;
 
     uint32_t num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
-
-    // This is the same conditional topology update done inside the native op
-    if (num_devices == 2) {
-        topology = ttnn::ccl::Topology::Linear;
-    }
 
     // Must scatter evenly
     auto input_shape = input_tensor.logical_shape();
@@ -39,17 +31,8 @@ bool use_composite_reduce_scatter(
     }
 
     // Use composite if we don't support scattering on the provided dim
-    // with the provided topology
-    if (topology == ttnn::ccl::Topology::Linear) {
-        if (scatter_dim != 3) {
-            return true;
-        }
-    } else if (topology == ttnn::ccl::Topology::Ring) {
-        if (scatter_dim != 1 && scatter_dim != 2 && scatter_dim != 3) {
-            return true;
-        }
-    } else {
-        TT_FATAL(false, "reduce_scatter_minimal_async only supports linear or ring topology");
+    if (scatter_dim != 1 && scatter_dim != 2 && scatter_dim != 3) {
+        return true;
     }
 
     // Use composite if tiled and scattering on padded dim 2 or 3

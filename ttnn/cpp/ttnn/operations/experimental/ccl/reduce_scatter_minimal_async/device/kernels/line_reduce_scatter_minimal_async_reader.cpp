@@ -40,6 +40,9 @@ constexpr uint32_t start_tiles_to_read = get_compile_time_arg_val(20);
 constexpr uint32_t input_channel_num_pages = get_compile_time_arg_val(21);
 constexpr uint32_t output_channel_num_pages = get_compile_time_arg_val(22);
 constexpr uint32_t slice_C = get_compile_time_arg_val(23);
+constexpr uint32_t slice_Ht = get_compile_time_arg_val(24);
+constexpr uint32_t slice_Wt = get_compile_time_arg_val(25);
+constexpr uint32_t dim = get_compile_time_arg_val(26);
 
 void kernel_main() {
     ///////////////////////////////////////////////////
@@ -54,7 +57,7 @@ void kernel_main() {
     size_t out_ready_sem = get_arg_val<uint32_t>(arg_idx++);
     uint32_t fwd_bwd_sem_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
 
-    constexpr uint32_t ct_idx = 24;
+    constexpr uint32_t ct_idx = 27;
 
 #ifdef INPUT_IS_SHARDED
     constexpr uint32_t ct_offset_one = 7;
@@ -136,7 +139,6 @@ void kernel_main() {
         matmul_receiver = ReduceScatterOpReceiver(arg_idx);
     }
 
-    constexpr uint32_t slice_Wt = input_tensor_Wt / ring_size;
     constexpr uint32_t input_batch_num_pages = batch_slice_num_pages * ring_size;
     constexpr uint32_t intermediate_num_pages = input_batch_num_pages * input_tensor_B;
 
@@ -168,7 +170,17 @@ void kernel_main() {
         // and then signal the BWD reader to do its final reduction.
         for (uint32_t iter = 0; iter < num_targets_in_direction; ++iter) {
             chunk_count = 0;
-            uint32_t input_tile_id_start = slice_idx * slice_Wt + batch_offset;
+
+            uint32_t input_tile_id_start;
+            if constexpr (dim == 3) {
+                input_tile_id_start = slice_idx * slice_Wt + batch_offset;
+            } else if constexpr (dim == 2) {
+                input_tile_id_start = slice_idx * slice_Ht * slice_Wt + batch_offset;
+            } else if constexpr (dim == 1) {
+                input_tile_id_start = slice_idx * slice_C * slice_Ht * slice_Wt + batch_offset;
+            } else {
+                ASSERT(false);
+            }
             uint32_t intermediate_tile_id_start = input_tile_id_start + intermediate_full_offset;
 
             if constexpr (is_first_device_in_direction) {
@@ -245,8 +257,7 @@ void kernel_main() {
                         }
                         chunk_count++;
 
-                        // read the next intermediate slice out of the intermediate buffer, and put it in intermediate
-                        // CB
+                        // read the next intermediate slice out of intermediate buffer, and put it in intermediate CB
                         cb_reserve_back(cb_intermediate_id, tile_granularity);
                         l1_write_addr = get_write_ptr(cb_intermediate_id);
                         for (uint32_t j = 0; j < num_pages_to_read; ++j) {
@@ -284,7 +295,16 @@ void kernel_main() {
         if constexpr (do_final_reduction) {
             chunk_count = 0;
 
-            uint32_t input_tile_id_start = my_chip_id * slice_Wt + batch_offset;
+            uint32_t input_tile_id_start;
+            if constexpr (dim == 3) {
+                input_tile_id_start = my_chip_id * slice_Wt + batch_offset;
+            } else if constexpr (dim == 2) {
+                input_tile_id_start = my_chip_id * slice_Ht * slice_Wt + batch_offset;
+            } else if constexpr (dim == 1) {
+                input_tile_id_start = my_chip_id * slice_C * slice_Ht * slice_Wt + batch_offset;
+            } else {
+                ASSERT(false);
+            }
             uint32_t input_pages_read_in_row = start_pages_read_in_row;
             uint32_t input_row_offset = start_row_offset;
             uint32_t input_stride_Wt = input_tensor_Wt;

@@ -241,7 +241,7 @@ void kernel_main() {
                 } else if constexpr (dim == 2) {
                     intermediate_tile_id_start = actual_slice_idx * slice_Ht * slice_Wt;
                 } else if constexpr (dim == 1) {
-                    intermediate_tile_id_start = actual_slice_idx * input_channel_num_pages * slice_C;
+                    intermediate_tile_id_start = actual_slice_idx * slice_C * slice_Ht * slice_Wt;
                 } else {
                     ASSERT(false);
                 }
