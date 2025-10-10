@@ -31,10 +31,6 @@ const char* RunTimeDebugFeatureNames[RunTimeDebugFeatureCount] = {
 
 const char* RunTimeDebugClassNames[RunTimeDebugClassCount] = {"N/A", "worker", "dispatch", "all"};
 
-constexpr auto TT_METAL_HOME_ENV_VAR = "TT_METAL_HOME";
-constexpr auto TT_METAL_KERNEL_PATH_ENV_VAR = "TT_METAL_KERNEL_PATH";
-// Set this var to change the cache dir.
-constexpr auto TT_METAL_CACHE_ENV_VAR = "TT_METAL_CACHE";
 // Used for demonstration purposes and will be removed in the future.
 // Env variable to override the core grid configuration
 constexpr auto TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE_ENV_VAR = "TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE";
@@ -158,6 +154,15 @@ static const EnvVarEntry ENV_VAR_TABLE[] = {
     {"TT_METAL_DPRINT_ONE_FILE_PER_RISC", EnvVarID::TT_METAL_DPRINT_ONE_FILE_PER_RISC},
     {"TT_METAL_DPRINT_PREPEND_DEVICE_CORE_RISC", EnvVarID::TT_METAL_DPRINT_PREPEND_DEVICE_CORE_RISC},
 };
+// Helper function to normalize directory paths using std::filesystem
+static std::string normalize_path(const char* path, const std::string& subdir = "") {
+    std::filesystem::path p(path);
+    if (!subdir.empty()) {
+        p /= subdir;
+    }
+    p /= "";  // Ensures trailing slash
+    return p.string();
+}
 
 RunTimeOptions::RunTimeOptions() {
     this->system_kernel_dir = "/usr/share/tenstorrent/kernels/";
@@ -343,14 +348,14 @@ const std::string& RunTimeOptions::get_root_dir() const {
 
 const std::string& RunTimeOptions::get_cache_dir() const {
     if (!this->is_cache_dir_specified()) {
-        TT_THROW("Env var {} is not set.", TT_METAL_CACHE_ENV_VAR);
+        TT_THROW("Env var {} is not set.", "TT_METAL_CACHE_ENV_VAR");
     }
     return this->cache_dir_;
 }
 
 const std::string& RunTimeOptions::get_kernel_dir() const {
     if (!this->is_kernel_dir_specified()) {
-        TT_THROW("Env var {} is not set.", TT_METAL_KERNEL_PATH_ENV_VAR);
+        TT_THROW("Env var {} is not set.", "TT_METAL_KERNEL_PATH_ENV_VAR");
     }
 
     return this->kernel_dir;
@@ -383,8 +388,8 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: No default (must be set)
         // Usage: export TT_METAL_HOME=/path/to/tt-metal
         case EnvVarID::TT_METAL_HOME:
-            this->is_root_dir_env_var_set = true;
-            this->root_dir = std::string(value) + "/";
+            this->is_root_dir_set = true;
+            this->root_dir = normalize_path(value);
             break;
 
         // TT_METAL_CACHE
@@ -393,7 +398,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Usage: export TT_METAL_CACHE=/path/to/cache
         case EnvVarID::TT_METAL_CACHE:
             this->is_cache_dir_env_var_set = true;
-            this->cache_dir_ = std::string(value) + "/tt-metal-cache/";
+            this->cache_dir_ = normalize_path(value, "tt-metal-cache");
             break;
 
         // TT_METAL_KERNEL_PATH
@@ -402,7 +407,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Usage: export TT_METAL_KERNEL_PATH=/path/to/kernels
         case EnvVarID::TT_METAL_KERNEL_PATH:
             this->is_kernel_dir_env_var_set = true;
-            this->kernel_dir = std::string(value) + "/";
+            this->kernel_dir = normalize_path(value);
             break;
 
         // TT_METAL_SIMULATOR
@@ -971,12 +976,16 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Prepends device/core/RISC information to each debug print line. Set to '0' to disable.
         // Default: true (prepend enabled)
         // Usage: export TT_METAL_DPRINT_PREPEND_DEVICE_CORE_RISC=0
+        case EnvVarID::RELIABILITY_MODE:
+        case EnvVarID::TT_METAL_MULTI_AERISC:
+        case EnvVarID::TT_METAL_USE_MGD_2_0:
+        case EnvVarID::TT_METAL_INSPECTOR_RPC_SERVER_ADDRESS:
+        case EnvVarID::TT_METAL_INSPECTOR_RPC:
+        case EnvVarID::COUNT:
+            // These variables are not yet implemented or are just markers
+            break;
         case EnvVarID::TT_METAL_DPRINT_PREPEND_DEVICE_CORE_RISC:
             // Handled by ParseFeatureEnv() - this is for documentation
-            break;
-
-        default:
-            // Unknown environment variable ID - should not happen if table is correct
             break;
     }
 }
