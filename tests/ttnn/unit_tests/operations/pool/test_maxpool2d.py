@@ -5,6 +5,7 @@
 import ttnn
 import pytest
 from tests.ttnn.nightly.unit_tests.operations.pool.test_maxpool2d import run_max_pool
+from models.common.utility_functions import is_watcher_enabled
 
 parameters = {
     "height_shard_tests": {
@@ -92,6 +93,16 @@ def test_max_pool2d_height_shard(device, in_dtype, in_place, input_spec):
         dilation_w,
         ceil_mode,
     ) = input_spec
+
+    # Test failing with watcher enabled, github issue #29024
+    if (
+        is_watcher_enabled()
+        and in_place == False
+        and in_dtype == ttnn.bfloat16
+        and input_spec == [1, 1, 59, 59, 3, 5, 4, 2, 1, 1, 5, 4, True]
+    ):
+        pytest.skip("Test is not passing with watcher enabled")
+
     if kernel_h == 36 and in_place:
         pytest.skip("36x36 kernel in place runs out of memory")
 
