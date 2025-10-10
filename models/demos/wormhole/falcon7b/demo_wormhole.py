@@ -46,6 +46,12 @@ def test_demo(
     mesh_device,
     is_ci_env,
 ):
+    # randint = random.randint(0, 1000000)
+    # if randint % 2 == 0:
+    #     assert False
+
+    # comment 1
+
     if is_ci_env:
         if not expected_greedy_output_path and not expected_perf_metrics and not len(user_input) == 1:
             pytest.skip("Skipping test in CI since it provides redundant testing")
