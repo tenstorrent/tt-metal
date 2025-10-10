@@ -75,7 +75,6 @@ void validate_fabric_config_for_sockets(
     static const std::unordered_set<tt_fabric::FabricConfig> supported_fabrics = {
         tt_fabric::FabricConfig::FABRIC_1D,
         tt_fabric::FabricConfig::FABRIC_1D_RING,
-        tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC,
         tt_fabric::FabricConfig::FABRIC_2D,
         tt_fabric::FabricConfig::DISABLED  // Fabric can be disabled as long as socket endpoints are on the same
                                            // physical device

@@ -22,10 +22,6 @@
 #define FABRIC_2D 0
 #endif
 
-#if !defined(FABRIC_2D_DYNAMIC)
-#define FABRIC_2D_DYNAMIC 0
-#endif
-
 template <uint32_t mux_num_buffers_per_channel, uint32_t mux_channel_buffer_size_bytes, uint32_t header_rb>
 class CQRelayClient {
 private:

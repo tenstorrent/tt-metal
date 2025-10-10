@@ -48,14 +48,10 @@ tt::tt_fabric::Topology FabricContext::get_topology_from_config(tt::tt_fabric::F
     switch (fabric_config) {
         case tt::tt_fabric::FabricConfig::FABRIC_1D: return tt::tt_fabric::Topology::Linear;
         case tt::tt_fabric::FabricConfig::FABRIC_1D_RING: return tt::tt_fabric::Topology::Ring;
-        case tt::tt_fabric::FabricConfig::FABRIC_2D:
-        case tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC: return tt::tt_fabric::Topology::Mesh;
+        case tt::tt_fabric::FabricConfig::FABRIC_2D: return tt::tt_fabric::Topology::Mesh;
         case tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_X:
         case tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y:
-        case tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY:
-        case tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_X:
-        case tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_Y:
-        case tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_XY: return tt::tt_fabric::Topology::Torus;
+        case tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY: return tt::tt_fabric::Topology::Torus;
         case tt::tt_fabric::FabricConfig::DISABLED:
         case tt::tt_fabric::FabricConfig::CUSTOM:
             TT_THROW("Unsupported fabric config: {}", enchantum::to_string(fabric_config));
@@ -65,14 +61,6 @@ tt::tt_fabric::Topology FabricContext::get_topology_from_config(tt::tt_fabric::F
 
 bool FabricContext::is_2D_topology(tt::tt_fabric::Topology topology) {
     return topology == tt::tt_fabric::Topology::Mesh || topology == tt::tt_fabric::Topology::Torus;
-}
-
-bool FabricContext::is_dynamic_routing_config(tt::tt_fabric::FabricConfig fabric_config) {
-    return false;
-    // return fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC ||
-    //        fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_X ||
-    //        fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_Y ||
-    //        fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_XY;
 }
 
 size_t FabricContext::get_packet_header_size_bytes() const {
@@ -120,23 +108,12 @@ FabricContext::FabricContext(tt::tt_fabric::FabricConfig fabric_config) {
     TT_FATAL(
         fabric_config != tt::tt_fabric::FabricConfig::DISABLED,
         "Trying to initialize fabric context for disabled fabric config");
-
-    if (fabric_config == tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC) {
-        fabric_config = tt_fabric::FabricConfig::FABRIC_2D;
-    } else if (fabric_config == tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_X) {
-        fabric_config = tt_fabric::FabricConfig::FABRIC_2D_TORUS_X;
-    } else if (fabric_config == tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_Y) {
-        fabric_config = tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y;
-    } else if (fabric_config == tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_XY) {
-        fabric_config = tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY;
-    }
     this->fabric_config_ = fabric_config;
 
     this->wrap_around_mesh_ = this->check_for_wrap_around_mesh();
     this->topology_ = this->get_topology_from_config(fabric_config);
 
     this->is_2D_routing_enabled_ = this->is_2D_topology(this->topology_);
-    this->is_dynamic_routing_enabled_ = this->is_dynamic_routing_config(fabric_config);
 
     this->packet_header_size_bytes_ = this->get_packet_header_size_bytes();
     this->max_payload_size_bytes_ = this->get_max_payload_size_bytes();
@@ -203,8 +180,6 @@ bool FabricContext::is_wrap_around_mesh(MeshId mesh_id) const {
 tt::tt_fabric::Topology FabricContext::get_fabric_topology() const { return this->topology_; }
 
 bool FabricContext::is_2D_routing_enabled() const { return this->is_2D_routing_enabled_; }
-
-bool FabricContext::is_dynamic_routing_enabled() const { return this->is_dynamic_routing_enabled_; }
 
 bool FabricContext::need_deadlock_avoidance_support(eth_chan_directions direction) const {
     if (topology_ == Topology::Ring) {

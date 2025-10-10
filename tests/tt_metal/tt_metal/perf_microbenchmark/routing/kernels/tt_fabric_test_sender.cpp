@@ -9,18 +9,17 @@
 using namespace tt::tt_fabric::fabric_tests;
 
 constexpr uint8_t IS_2D_FABRIC = get_compile_time_arg_val(0);
-constexpr uint8_t USE_DYNAMIC_ROUTING = get_compile_time_arg_val(1);
-constexpr uint8_t NUM_FABRIC_CONNECTIONS = get_compile_time_arg_val(2);
-constexpr uint8_t NUM_TRAFFIC_CONFIGS = get_compile_time_arg_val(3);
-constexpr bool BENCHMARK_MODE = get_compile_time_arg_val(4);
-constexpr bool LINE_SYNC = get_compile_time_arg_val(5);
-constexpr uint8_t NUM_LOCAL_SYNC_CORES = get_compile_time_arg_val(6);
-constexpr uint32_t KERNEL_CONFIG_BUFFER_SIZE = get_compile_time_arg_val(7);
-constexpr bool HAS_MUX_CONNECTIONS = get_compile_time_arg_val(8);
-constexpr uint8_t NUM_MUXES_TO_TERMINATE = get_compile_time_arg_val(9);
+constexpr uint8_t NUM_FABRIC_CONNECTIONS = get_compile_time_arg_val(1);
+constexpr uint8_t NUM_TRAFFIC_CONFIGS = get_compile_time_arg_val(2);
+constexpr bool BENCHMARK_MODE = get_compile_time_arg_val(3);
+constexpr bool LINE_SYNC = get_compile_time_arg_val(4);
+constexpr uint8_t NUM_LOCAL_SYNC_CORES = get_compile_time_arg_val(5);
+constexpr uint32_t KERNEL_CONFIG_BUFFER_SIZE = get_compile_time_arg_val(6);
+constexpr bool HAS_MUX_CONNECTIONS = get_compile_time_arg_val(7);
+constexpr uint8_t NUM_MUXES_TO_TERMINATE = get_compile_time_arg_val(8);
 
 using SenderKernelConfigType =
-    SenderKernelConfig<NUM_TRAFFIC_CONFIGS, IS_2D_FABRIC, USE_DYNAMIC_ROUTING, LINE_SYNC, NUM_LOCAL_SYNC_CORES>;
+    SenderKernelConfig<NUM_TRAFFIC_CONFIGS, IS_2D_FABRIC, LINE_SYNC, NUM_LOCAL_SYNC_CORES>;
 
 // Static assertion to ensure this config fits within the allocated kernel config region
 static_assert(

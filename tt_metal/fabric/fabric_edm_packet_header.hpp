@@ -633,11 +633,7 @@ static_assert(
 #if (                                                                \
     ((ROUTING_MODE & (ROUTING_MODE_1D | ROUTING_MODE_LINE)) != 0) || \
     ((ROUTING_MODE & (ROUTING_MODE_1D | ROUTING_MODE_RING)) != 0))
-// Dynamic Routing with 1D Fabric is not supported
-#if ((ROUTING_MODE & ROUTING_MODE_DYNAMIC)) == ROUTING_MODE_DYNAMIC
-static_assert(false, "ROUTING_MODE_DYNAMIC is not supported yet");
-
-#elif ((ROUTING_MODE & ROUTING_MODE_LOW_LATENCY)) != 0
+#if ((ROUTING_MODE & ROUTING_MODE_LOW_LATENCY)) != 0
 #define PACKET_HEADER_TYPE tt::tt_fabric::LowLatencyPacketHeader
 #define ROUTING_FIELDS_TYPE tt::tt_fabric::LowLatencyRoutingFields
 
@@ -650,10 +646,6 @@ static_assert(false, "ROUTING_MODE_DYNAMIC is not supported yet");
     ((ROUTING_MODE & (ROUTING_MODE_2D | ROUTING_MODE_MESH)) != 0) || \
     ((ROUTING_MODE & (ROUTING_MODE_2D | ROUTING_MODE_TORUS)) != 0))
 #if (ROUTING_MODE & ROUTING_MODE_LOW_LATENCY) != 0
-#define PACKET_HEADER_TYPE tt::tt_fabric::HybridMeshPacketHeader
-#define ROUTING_FIELDS_TYPE tt::tt_fabric::LowLatencyMeshRoutingFields
-#elif ((ROUTING_MODE & ROUTING_MODE_DYNAMIC)) == ROUTING_MODE_DYNAMIC
-#define DYNAMIC_ROUTING_ENABLED 1
 #define PACKET_HEADER_TYPE tt::tt_fabric::HybridMeshPacketHeader
 #define ROUTING_FIELDS_TYPE tt::tt_fabric::LowLatencyMeshRoutingFields
 #else

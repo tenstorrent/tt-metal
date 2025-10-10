@@ -268,13 +268,6 @@ public:
         return tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context().is_2D_routing_enabled();
     }
 
-    bool is_dynamic_routing_enabled() const override {
-        return tt::tt_metal::MetalContext::instance()
-            .get_control_plane()
-            .get_fabric_context()
-            .is_dynamic_routing_enabled();
-    }
-
     /**
      * This function takes hop information and computes the actual destination nodes that would be visited during a ring
      * traversal multicast.

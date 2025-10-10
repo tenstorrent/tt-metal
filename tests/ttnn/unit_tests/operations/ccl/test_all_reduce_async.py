@@ -604,7 +604,7 @@ def test_line_all_reduce_on_TG_cols_post_commit(
 @pytest.mark.parametrize("replication_factor", [1])
 @pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
 @pytest.mark.parametrize("mesh_device", [pytest.param((1, 32), id="1x32_grid")], indirect=True)
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_2D_DYNAMIC}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}], indirect=True)
 def test_line_all_reduce_training(
     mesh_device,
     num_devices,

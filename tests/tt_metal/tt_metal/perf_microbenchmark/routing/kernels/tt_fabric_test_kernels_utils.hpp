@@ -402,18 +402,17 @@ void setup_2d_mcast_route(uint32_t packet_header_address, const ChipMulticastFie
  * Template-based dispatch system for chip send type handling.
  * Specialized for:
  * - 1D vs 2D fabric routing
- * - Dynamic vs static routing modes
  * - Unicast vs multicast transmission
  */
-template <ChipSendType chip_type, bool IS_2D_FABRIC, bool USE_DYNAMIC_ROUTING>
+template <ChipSendType chip_type, bool IS_2D_FABRIC>
 struct ChipSendTypeHandler {
     static void parse_and_setup(
         size_t& arg_idx, uint32_t packet_header_address, volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header);
 };
 
 // 1D Unicast specialization
-template <bool USE_DYNAMIC_ROUTING>
-struct ChipSendTypeHandler<ChipSendType::CHIP_UNICAST, false, USE_DYNAMIC_ROUTING> {
+template <>
+struct ChipSendTypeHandler<ChipSendType::CHIP_UNICAST, false> {
     static void parse_and_setup(
         size_t& arg_idx, uint32_t packet_header_address, volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header) {
         const auto unicast_fields = ChipUnicastFields1D::build_from_args(arg_idx);
@@ -422,8 +421,8 @@ struct ChipSendTypeHandler<ChipSendType::CHIP_UNICAST, false, USE_DYNAMIC_ROUTIN
 };
 
 // 2D Unicast specialization
-template <bool USE_DYNAMIC_ROUTING>
-struct ChipSendTypeHandler<ChipSendType::CHIP_UNICAST, true, USE_DYNAMIC_ROUTING> {
+template <>
+struct ChipSendTypeHandler<ChipSendType::CHIP_UNICAST, true> {
     static void parse_and_setup(
         size_t& arg_idx, uint32_t packet_header_address, volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header) {
         const auto unicast_fields = ChipUnicastFields2D::build_from_args(arg_idx);
@@ -433,8 +432,8 @@ struct ChipSendTypeHandler<ChipSendType::CHIP_UNICAST, true, USE_DYNAMIC_ROUTING
 };
 
 // 1D Multicast specialization
-template <bool USE_DYNAMIC_ROUTING>
-struct ChipSendTypeHandler<ChipSendType::CHIP_MULTICAST, false, USE_DYNAMIC_ROUTING> {
+template <>
+struct ChipSendTypeHandler<ChipSendType::CHIP_MULTICAST, false> {
     static void parse_and_setup(
         size_t& arg_idx, uint32_t packet_header_address, volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header) {
         const auto mcast_fields = ChipMulticastFields1D::build_from_args(arg_idx);
@@ -444,8 +443,8 @@ struct ChipSendTypeHandler<ChipSendType::CHIP_MULTICAST, false, USE_DYNAMIC_ROUT
 };
 
 // 2D Multicast specialization
-template <bool USE_DYNAMIC_ROUTING>
-struct ChipSendTypeHandler<ChipSendType::CHIP_MULTICAST, true, USE_DYNAMIC_ROUTING> {
+template <>
+struct ChipSendTypeHandler<ChipSendType::CHIP_MULTICAST, true> {
     static void parse_and_setup(
         size_t& arg_idx, uint32_t packet_header_address, volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header) {
         const auto mcast_fields = ChipMulticastFields2D::build_from_args(arg_idx);
@@ -719,10 +718,10 @@ struct LineSyncConfig {
         }
     }
 
-    template <bool IS_2D_FABRIC, bool USE_DYNAMIC_ROUTING>
+    template <bool IS_2D_FABRIC>
     void setup_packet_header(size_t& arg_idx, uint32_t packet_header_address) {
         // setup header fields. 2 rt args for 1D
-        ChipSendTypeHandler<ChipSendType::CHIP_MULTICAST, IS_2D_FABRIC, USE_DYNAMIC_ROUTING>::parse_and_setup(
+        ChipSendTypeHandler<ChipSendType::CHIP_MULTICAST, IS_2D_FABRIC>::parse_and_setup(
             arg_idx, packet_header_address, packet_header);
 
         // set up noc fields, 4 rt args
@@ -965,15 +964,15 @@ struct SenderKernelTrafficConfig {
         noc_ops_.update_header = nullptr;
     }
 
-    template <bool IS_2D_FABRIC, bool USE_DYNAMIC_ROUTING>
+    template <bool IS_2D_FABRIC>
     void parse_and_setup_chip_send_type(size_t& arg_idx, uint32_t packet_header_address) {
         ChipSendType chip_send_type = static_cast<ChipSendType>(get_local_arg_val<uint32_t>(arg_idx++));
 
         if (chip_send_type == ChipSendType::CHIP_UNICAST) {
-            ChipSendTypeHandler<ChipSendType::CHIP_UNICAST, IS_2D_FABRIC, USE_DYNAMIC_ROUTING>::parse_and_setup(
+            ChipSendTypeHandler<ChipSendType::CHIP_UNICAST, IS_2D_FABRIC>::parse_and_setup(
                 arg_idx, packet_header_address, packet_header);
         } else if (chip_send_type == ChipSendType::CHIP_MULTICAST) {
-            ChipSendTypeHandler<ChipSendType::CHIP_MULTICAST, IS_2D_FABRIC, USE_DYNAMIC_ROUTING>::parse_and_setup(
+            ChipSendTypeHandler<ChipSendType::CHIP_MULTICAST, IS_2D_FABRIC>::parse_and_setup(
                 arg_idx, packet_header_address, packet_header);
         } else {
             ASSERT(false);
@@ -1493,7 +1492,6 @@ private:
 template <
     uint8_t NUM_TRAFFIC_CONFIGS,
     bool IS_2D_FABRIC,
-    bool USE_DYNAMIC_ROUTING,
     bool LINE_SYNC,
     uint8_t NUM_LOCAL_SYNC_CORES>
 struct SenderKernelConfig {
@@ -1611,7 +1609,7 @@ private:
             // Initialize traffic config with connection array pointer and index
             new (config_ptr) TrafficConfigType(&connections, fabric_connection_idx, metadata, packet_header_address);
 
-            traffic_config_ptrs[i]->template parse_and_setup_chip_send_type<IS_2D_FABRIC, USE_DYNAMIC_ROUTING>(
+            traffic_config_ptrs[i]->template parse_and_setup_chip_send_type<IS_2D_FABRIC>(
                 local_args_idx, packet_header_address);
 
             traffic_config_ptrs[i]->parse_and_setup_noc_send_type(local_args_idx);
@@ -2128,11 +2126,7 @@ private:
 /* ********************
  * SyncKernelConfig   *
  **********************/
-template <
-    uint8_t NUM_SYNC_FABRIC_CONNECTIONS,
-    bool IS_2D_FABRIC,
-    bool USE_DYNAMIC_ROUTING,
-    uint8_t NUM_LOCAL_SYNC_CORES>
+template <uint8_t NUM_SYNC_FABRIC_CONNECTIONS, bool IS_2D_FABRIC, uint8_t NUM_LOCAL_SYNC_CORES>
 struct SyncKernelConfig {
     static SyncKernelConfig build_from_args(
         const CommonMemoryMap& common_map, size_t& rt_args_idx, size_t& local_args_idx) {
@@ -2206,8 +2200,7 @@ private:
                 LineSyncConfigType(&sync_connections, connection_idx, packet_header_address, line_sync_val);
 
             // setup packet header fields
-            line_sync_configs()[i].template setup_packet_header<IS_2D_FABRIC, USE_DYNAMIC_ROUTING>(
-                local_args_idx, packet_header_address);
+            line_sync_configs()[i].template setup_packet_header<IS_2D_FABRIC>(local_args_idx, packet_header_address);
         }
 
         // Initialize local sync config

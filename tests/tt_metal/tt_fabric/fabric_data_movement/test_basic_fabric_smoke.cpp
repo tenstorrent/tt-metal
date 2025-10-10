@@ -111,15 +111,12 @@ void RunTestUnicastSmoke(BaseFabricFixture* fixture) {
     uint32_t time_seed = std::chrono::system_clock::now().time_since_epoch().count();
     auto mesh_shape = control_plane.get_physical_mesh_shape(src_fabric_node_id.mesh_id);
 
-    const auto fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
-
     std::vector<uint32_t> compile_time_args = {
         worker_mem_map.test_results_address,
         worker_mem_map.test_results_size_bytes,
         worker_mem_map.target_address,
         0, /* use_dram_dst */
         topology == Topology::Mesh,
-        fabric_config == tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC,
         0, /* is_chip_multicast */
         0 /* additional_dir */};
 

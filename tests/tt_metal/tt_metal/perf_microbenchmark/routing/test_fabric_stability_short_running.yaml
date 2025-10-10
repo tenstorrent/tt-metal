@@ -82,7 +82,7 @@ Tests:
   - name: "MeshDynamicLooped"
     fabric_setup:
       topology: Mesh
-      routing_type: Dynamic
+      routing_type: LowLatency
 
     top_level_iterations: 10
 

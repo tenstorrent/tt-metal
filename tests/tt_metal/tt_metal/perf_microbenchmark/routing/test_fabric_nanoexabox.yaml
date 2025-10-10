@@ -72,7 +72,7 @@ Tests:
   - name: MultiMeshRandomPairing
     fabric_setup:
       topology: Mesh
-      routing_type: Dynamic
+      routing_type: LowLatency
     parametrization_params:
       size: [512, 1024, 2048]
       num_packets: [50, 100]
@@ -86,7 +86,7 @@ Tests:
   - name: MultiMeshSingleHopUnicast
     fabric_setup:
       topology: Mesh
-      routing_type: Dynamic
+      routing_type: LowLatency
     defaults:
       ftype: unicast
       ntype: unicast_write
@@ -118,7 +118,7 @@ Tests:
   - name: MultiMeshMultiHopUnicast
     fabric_setup:
       topology: Mesh
-      routing_type: Dynamic
+      routing_type: LowLatency
     parametrization_params:
       size: [256, 512, 1024, 2048]
       num_packets: [50, 100]
