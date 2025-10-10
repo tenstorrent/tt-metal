@@ -59,8 +59,17 @@ pip install -r requirements.txt --user
 ## ⚡ Quick Start
 
 ```bash
-# 1. Set up environment
+# 1. Build Metal and Setup Envoirment
+git clone -b sdawle/model_ops_visualizer https://github.com/tenstorrent/tt-metal.git
+cd tt-metal
+./build_metal.sh -p # (Build with profiler flag on, to generate perf sheets)
+./create_env.sh
+source python_env/bin/activate
 export TT_METAL_HOME=/path/to/your/tt-metal
+export PYTHONPATH=/path/to/your/tt-metal
+# BELOW TWO ENV VARIABLE ARE OPTIONAL FOR N300
+export ARCH_NAME=wormhole_b0
+export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml;
 
 # 2. Generate profiling data (Level 1)
 cd $TT_METAL_HOME/ttnn/ttnn/ops_profiler/
