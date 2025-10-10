@@ -479,7 +479,7 @@ void ControlPlane::init_control_plane(
     const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
     this->routing_table_generator_ = std::make_unique<RoutingTableGenerator>(mesh_graph_desc_file);
     this->physical_system_descriptor_ = std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(
-        driver, distributed_context, &tt::tt_metal::MetalContext::instance().hal(), rtoptions);
+        distributed_context, &tt::tt_metal::MetalContext::instance().hal(), rtoptions, driver);
     this->local_mesh_binding_ = this->initialize_local_mesh_binding();
 
     this->initialize_distributed_contexts();
