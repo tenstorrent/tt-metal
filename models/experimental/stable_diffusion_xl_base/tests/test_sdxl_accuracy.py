@@ -189,6 +189,7 @@ def test_accuracy_sdxl(
     avg_gen_end_to_end = profiler.get("end_to_end_generation")
     data["benchmarks_summary"][0].update(
         {
+            "avg_gen_time": avg_gen_end_to_end,
             "target_checks": {
                 "functional": {
                     "avg_gen_time": targets["perf"]["functional"],
