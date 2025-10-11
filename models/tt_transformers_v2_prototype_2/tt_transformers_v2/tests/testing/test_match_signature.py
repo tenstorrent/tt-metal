@@ -8,8 +8,9 @@ import torch
 
 from tt_transformers_v2.src.testing.validate_against import (
     clear_validation_results,
+    device_validate_against,
     get_validation_registry,
-    validate_against,
+    host_validate_against,
 )
 
 
@@ -26,9 +27,8 @@ def test_match_signature_method():
             """Reference with same signature as __call__"""
             return x * self.scale
 
-        @validate_against(
+        @device_validate_against(
             reference_fn=lambda self, x: self._reference_impl(x),
-            match_signature=True,  # Key feature!
             tolerances={"max_abs_error": 1e-6, "pcc": 0.99},  # PCC check
         )
         def __call__(self, x):
@@ -66,9 +66,8 @@ def test_match_signature_vs_input_map():
         def _reference(self, x):
             return x * self.scale
 
-        @validate_against(
+        @device_validate_against(
             reference_fn=lambda self, x: self._reference(x),
-            match_signature=True,
             tolerances={"max_abs_error": 1e-6},
         )
         def __call__(self, x):
@@ -79,9 +78,10 @@ def test_match_signature_vs_input_map():
         def __init__(self, scale):
             self.scale = scale
 
-        @validate_against(
+        @host_validate_against(
             reference_fn=lambda x, scale: x * scale,
-            input_map=lambda args, kwargs: ((args[1], args[0].scale), {}),
+            input_to_torch=lambda args, kwargs: ((args[1], args[0].scale), {}),
+            output_to_torch=lambda x: x,
             tolerances={"max_abs_error": 1e-6},
         )
         def __call__(self, x):
@@ -113,9 +113,8 @@ def test_match_signature_multi_args():
             """Reference with same signature"""
             return a * b + c
 
-        @validate_against(
+        @device_validate_against(
             reference_fn=lambda self, a, b, c: self._reference(a, b, c),
-            match_signature=True,
             tolerances={"max_abs_error": 1e-6},
         )
         def __call__(self, a, b, c):
@@ -143,9 +142,8 @@ def test_match_signature_with_kwargs():
         def _reference(self, x, scale=1.0, offset=0.0):
             return x * scale + offset
 
-        @validate_against(
+        @device_validate_against(
             reference_fn=lambda self, x, scale=1.0, offset=0.0: self._reference(x, scale, offset),
-            match_signature=True,
             tolerances={"max_abs_error": 1e-6},
         )
         def __call__(self, x, scale=1.0, offset=0.0):
@@ -172,9 +170,8 @@ def test_pcc_metric():
             # Add small noise to test PCC tolerance
             return x + torch.randn_like(x) * 0.01
 
-        @validate_against(
+        @device_validate_against(
             reference_fn=lambda self, x: self._reference(x),
-            match_signature=True,
             tolerances={"pcc": 0.95},  # Lower threshold due to noise
         )
         def __call__(self, x):

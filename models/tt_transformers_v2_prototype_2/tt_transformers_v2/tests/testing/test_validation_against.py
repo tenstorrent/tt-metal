@@ -11,7 +11,12 @@ import os
 import torch
 import ttnn
 
-from tt_transformers_v2.src.testing import enable_validation, get_validation_registry, validate_against
+from tt_transformers_v2.src.testing import (
+    device_validate_against,
+    enable_validation,
+    get_validation_registry,
+    host_validate_against,
+)
 
 # ============================================================================
 # Example 1: Validating RMSNorm against PyTorch reference
@@ -46,9 +51,8 @@ class ValidatedRMSNorm:
             result_torch.unsqueeze(0), device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
         )
 
-    @validate_against(
+    @device_validate_against(
         reference_fn=lambda self, x: self._reference_impl(x),
-        match_signature=True,
         tolerances={
             "max_abs_error": 1e-2,
             "mean_abs_error": 1e-3,
@@ -73,14 +77,14 @@ class ValidatedRMSNormOldStyle:
             weight.unsqueeze(0).unsqueeze(0), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
         )
 
-    @validate_against(
+    @host_validate_against(
         reference_fn=torch_rms_norm,
-        input_map=lambda args, kwargs: (
+        input_to_torch=lambda args, kwargs: (
             # Convert TTNN input to PyTorch for reference
             (ttnn.to_torch(args[1]).squeeze(0), args[0].weight_torch),
             {"eps": args[0].eps},
         ),
-        output_map=lambda x: ttnn.to_torch(x).squeeze(0),  # Convert impl ttnn → torch to match ref
+        output_to_torch=lambda x: ttnn.to_torch(x).squeeze(0),  # Convert impl ttnn → torch to match ref
         tolerances={
             "max_abs_error": 1e-2,
             "mean_abs_error": 1e-3,
@@ -100,10 +104,10 @@ class ValidatedRMSNormOldStyle:
 # ============================================================================
 
 
-@validate_against(
+@host_validate_against(
     reference_fn=torch.matmul,
-    input_map=lambda args, kwargs: ((ttnn.to_torch(args[0]).squeeze(0), ttnn.to_torch(args[1]).squeeze(0)), {}),
-    output_map=lambda x: ttnn.to_torch(x).squeeze(0),
+    input_to_torch=lambda args, kwargs: ((ttnn.to_torch(args[0]).squeeze(0), ttnn.to_torch(args[1]).squeeze(0)), {}),
+    output_to_torch=lambda x: ttnn.to_torch(x).squeeze(0),
     metrics={
         "max_abs_error": lambda impl, ref: (impl - ref).abs().max().item(),
         "relative_error": lambda impl, ref: ((impl - ref).abs() / (ref.abs() + 1e-8)).mean().item(),
@@ -130,9 +134,9 @@ def custom_attention_reference(q, k, v, scale):
     return torch.matmul(attn_weights, v)
 
 
-@validate_against(
+@host_validate_against(
     reference_fn=custom_attention_reference,
-    input_map=lambda args, kwargs: (
+    input_to_torch=lambda args, kwargs: (
         (
             ttnn.to_torch(args[0]).squeeze(0),
             ttnn.to_torch(args[1]).squeeze(0),
@@ -141,7 +145,7 @@ def custom_attention_reference(q, k, v, scale):
         ),
         {},
     ),
-    output_map=lambda x: ttnn.to_torch(x).squeeze(0),
+    output_to_torch=lambda x: ttnn.to_torch(x).squeeze(0),
     metrics={
         "max_abs_error": lambda impl, ref: (impl - ref).abs().max().item(),
         "mean_abs_error": lambda impl, ref: (impl - ref).abs().mean().item(),

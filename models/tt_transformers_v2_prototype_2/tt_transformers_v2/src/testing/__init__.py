@@ -14,14 +14,16 @@ from .validate_against import (
     ValidationRegistry,
     ValidationResult,
     clear_validation_results,
+    device_validate_against,
     enable_validation,
     get_validation_registry,
-    validate_against,
+    host_validate_against,
 )
 
 __all__ = [
     # Validation framework
-    "validate_against",
+    "device_validate_against",
+    "host_validate_against",
     "get_validation_registry",
     "enable_validation",
     "clear_validation_results",
