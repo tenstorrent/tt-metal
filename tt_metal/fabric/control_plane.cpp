@@ -49,6 +49,7 @@
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
 #include "tt_metal/fabric/serialization/port_descriptor_serialization.hpp"
 #include "tt_metal/fabric/serialization/intermesh_connections_serialization.hpp"
+#include "tt_metal/fabric/topology_mapper.hpp"
 
 namespace tt::tt_fabric {
 
@@ -481,6 +482,7 @@ void ControlPlane::init_control_plane(
     this->physical_system_descriptor_ = std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(
         driver, distributed_context, &tt::tt_metal::MetalContext::instance().hal(), rtoptions);
     this->local_mesh_binding_ = this->initialize_local_mesh_binding();
+    this->topology_mapper_ = std::make_unique<tt::tt_fabric::TopologyMapper>(*this->routing_table_generator_->mesh_graph, *this->physical_system_descriptor_, this->local_mesh_binding_);
 
     this->initialize_distributed_contexts();
 

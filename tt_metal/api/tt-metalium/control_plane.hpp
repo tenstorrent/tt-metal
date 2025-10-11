@@ -26,6 +26,9 @@ class PhysicalSystemDescriptor;
 }  // namespace tt::tt_metal
 
 namespace tt::tt_fabric {
+
+class TopologyMapper;
+
 // TODO: remove this once UMD provides API for UBB ID
  struct UbbId {
      std::uint32_t tray_id;
@@ -368,6 +371,7 @@ private:
 
     std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext> host_local_context_;
     std::unique_ptr<tt::tt_metal::PhysicalSystemDescriptor> physical_system_descriptor_;
+    std::unique_ptr<tt::tt_fabric::TopologyMapper> topology_mapper_;
 };
 
 }  // namespace tt::tt_fabric

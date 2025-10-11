@@ -292,6 +292,7 @@ void PhysicalSystemDescriptor::run_local_discovery() {
         }
     }
 
+    // Populate exit nodes for cross-host connections
     for (const auto& [local_chip_id, eth_link_info] : cross_host_eth_connections) {
         auto local_unique_id = AsicID{chip_unique_ids.at(local_chip_id)};
         // This ASIC has no local ethernet connections, but is connected to this host

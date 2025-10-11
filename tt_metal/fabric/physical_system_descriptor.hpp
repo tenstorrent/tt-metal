@@ -12,6 +12,7 @@
 #include <vector>
 
 #include <umd/device/types/cluster_descriptor_types.hpp>
+#include <tt-metalium/fabric_types.hpp>
 #include <tt_stl/strong_type.hpp>
 #include <tt_stl/reflection.hpp>
 
@@ -30,14 +31,6 @@ class DistributedContext;
 namespace tt::tt_metal {
 
 class Hal;
-
-using AsicID = tt::stl::StrongType<uint64_t, struct AsicIDTag>;
-using TrayID = tt::stl::StrongType<uint32_t, struct TrayIDTag>;
-using ASICLocation = tt::stl::StrongType<uint32_t, struct ASICLocationTag>;
-using RackID = tt::stl::StrongType<uint32_t, struct RackIDTag>;
-using UID = tt::stl::StrongType<uint32_t, struct UIDTag>;
-using HallID = tt::stl::StrongType<uint32_t, struct HallIDTag>;
-using AisleID = tt::stl::StrongType<uint32_t, struct AisleIDTag>;
 
 // Specify Physical ASIC Attributes
 struct ASICDescriptor {
@@ -183,6 +176,7 @@ public:
     std::string my_host_name() const;
     uint32_t get_rank_for_hostname(const std::string& host_name) const;
     bool is_cross_host_eth_link(AsicID asic_id, uint8_t chan_id) const;
+    std::vector<chip_id_t> get_adjacent_chips_from_ethernet_connections(chip_id_t chip_id) const;
 
     // Generic Getters
     const PhysicalConnectivityGraph& get_system_graph() const { return system_graph_; }
