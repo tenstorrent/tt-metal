@@ -56,24 +56,6 @@ ExitNodeConnection proto_to_exit_node_connection(const tt::fabric::proto::ExitNo
     return exit_conn;
 }
 
-// Convert EthernetMetrics to protobuf
-void ethernet_metrics_to_proto(const EthernetMetrics& metrics, tt::fabric::proto::EthernetMetrics* proto_metrics) {
-    proto_metrics->set_retrain_count(metrics.retrain_count);
-    proto_metrics->set_crc_error_count(metrics.crc_error_count);
-    proto_metrics->set_corrected_codeword_count(metrics.corrected_codeword_count);
-    proto_metrics->set_uncorrected_codeword_count(metrics.uncorrected_codeword_count);
-}
-
-// Convert protobuf to EthernetMetrics
-EthernetMetrics proto_to_ethernet_metrics(const tt::fabric::proto::EthernetMetrics& proto_metrics) {
-    EthernetMetrics metrics;
-    metrics.retrain_count = proto_metrics.retrain_count();
-    metrics.crc_error_count = proto_metrics.crc_error_count();
-    metrics.corrected_codeword_count = proto_metrics.corrected_codeword_count();
-    metrics.uncorrected_codeword_count = proto_metrics.uncorrected_codeword_count();
-    return metrics;
-}
-
 // Convert AsicTopology to protobuf
 void asic_topology_to_proto(const AsicTopology& topology, tt::fabric::proto::HostAsicConnectivity* host_asic_conn) {
     for (const auto& [asic_id, connections] : topology) {
@@ -210,18 +192,6 @@ void physical_system_descriptor_to_proto(
 
     // Set mock cluster flag
     proto_desc->set_mock_cluster(descriptor.is_using_mock_cluster());
-
-    // Convert ethernet metrics
-    for (const auto& [asic_id, channel_metrics] : descriptor.get_ethernet_metrics()) {
-        auto* proto_asic_metrics = proto_desc->add_ethernet_metrics();
-        proto_asic_metrics->set_asic_id(*asic_id);
-
-        for (const auto& [channel, metrics] : channel_metrics) {
-            auto* proto_channel_metrics = proto_asic_metrics->add_channel_metrics();
-            proto_channel_metrics->set_channel(channel);
-            ethernet_metrics_to_proto(metrics, proto_channel_metrics->mutable_metrics());
-        }
-    }
 }
 
 // Convert protobuf to PhysicalSystemDescriptor
@@ -284,20 +254,6 @@ std::unique_ptr<PhysicalSystemDescriptor> proto_to_physical_system_descriptor(
         }
 
         exit_node_connection_table[proto_table.host_name()] = std::move(exit_connections);
-    }
-
-    // Convert ethernet metrics
-    auto& ethernet_metrics = descriptor->get_ethernet_metrics();
-    for (const auto& proto_asic_metrics : proto_desc.ethernet_metrics()) {
-        AsicID asic_id{proto_asic_metrics.asic_id()};
-        std::unordered_map<uint8_t, EthernetMetrics> channel_metrics;
-
-        for (const auto& proto_channel_metrics : proto_asic_metrics.channel_metrics()) {
-            uint8_t channel = static_cast<uint8_t>(proto_channel_metrics.channel());
-            channel_metrics[channel] = proto_to_ethernet_metrics(proto_channel_metrics.metrics());
-        }
-
-        ethernet_metrics[asic_id] = std::move(channel_metrics);
     }
 
     return descriptor;

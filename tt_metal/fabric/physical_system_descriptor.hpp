@@ -31,6 +31,14 @@ namespace tt::tt_metal {
 
 class Hal;
 
+// Live Ethernet Link Metrics
+struct EthernetMetrics {
+    uint32_t retrain_count = 0;
+    uint32_t crc_error_count = 0;
+    uint64_t corrected_codeword_count = 0;
+    uint64_t uncorrected_codeword_count = 0;
+};
+
 using AsicID = tt::stl::StrongType<uint64_t, struct AsicIDTag>;
 using TrayID = tt::stl::StrongType<uint32_t, struct TrayIDTag>;
 using ASICLocation = tt::stl::StrongType<uint32_t, struct ASICLocationTag>;
@@ -38,6 +46,7 @@ using RackID = tt::stl::StrongType<uint32_t, struct RackIDTag>;
 using UID = tt::stl::StrongType<uint32_t, struct UIDTag>;
 using HallID = tt::stl::StrongType<uint32_t, struct HallIDTag>;
 using AisleID = tt::stl::StrongType<uint32_t, struct AisleIDTag>;
+using LocalEthernetMetrics = std::unordered_map<AsicID, std::unordered_map<uint8_t, EthernetMetrics>>;
 
 // Specify Physical ASIC Attributes
 struct ASICDescriptor {
@@ -46,14 +55,6 @@ struct ASICDescriptor {
     BoardType board_type = BoardType::UNKNOWN;
     AsicID unique_id;
     std::string host_name;
-};
-
-// Live Ethernet Link Metrics
-struct EthernetMetrics {
-    uint32_t retrain_count = 0;
-    uint32_t crc_error_count = 0;
-    uint64_t corrected_codeword_count = 0;
-    uint64_t uncorrected_codeword_count = 0;
 };
 
 // Specify an ethernet connection between two ASICs
@@ -191,27 +192,19 @@ public:
     const std::unordered_map<std::string, uint32_t>& get_host_to_rank_map() const { return host_to_rank_; }
     const ExitNodeConnectionTable& get_exit_node_connection_table() const { return exit_node_connection_table_; }
     bool is_using_mock_cluster() const { return using_mock_cluster_desc_; }
-    const std::unordered_map<AsicID, std::unordered_map<uint8_t, EthernetMetrics>>& get_ethernet_metrics() const {
-        return ethernet_metrics_;
-    }
+    LocalEthernetMetrics query_local_ethernet_metrics() const;
 
     PhysicalConnectivityGraph& get_system_graph() { return system_graph_; }
     std::unordered_map<AsicID, ASICDescriptor>& get_asic_descriptors() { return asic_descriptors_; }
     std::unordered_map<std::string, std::string>& get_host_mobo_name_map() { return host_to_mobo_name_; }
     std::unordered_map<std::string, uint32_t>& get_host_to_rank_map() { return host_to_rank_; }
     ExitNodeConnectionTable& get_exit_node_connection_table() { return exit_node_connection_table_; }
-    std::unordered_map<AsicID, std::unordered_map<uint8_t, EthernetMetrics>>& get_ethernet_metrics() {
-        return ethernet_metrics_;
-    }
 
     static const std::unique_ptr<tt::umd::Cluster> null_cluster;
 
     // Utility APIs to Print Physical System Descriptor
     void dump_to_yaml(const std::optional<std::string>& path_to_yaml = std::nullopt);
     void emit_to_text_proto(const std::optional<std::string>& path_to_text_proto = std::nullopt);
-
-    // API to generate Ethernet Metrics
-    void generate_local_ethernet_metrics();
 
 private:
     void run_local_discovery();
@@ -234,7 +227,6 @@ private:
     std::unordered_map<std::string, std::string> host_to_mobo_name_;
     std::unordered_map<std::string, uint32_t> host_to_rank_;
     ExitNodeConnectionTable exit_node_connection_table_;
-    std::unordered_map<AsicID, std::unordered_map<uint8_t, EthernetMetrics>> ethernet_metrics_;
     bool all_hostnames_unique_ = true;
 };
 
