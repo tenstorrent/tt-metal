@@ -158,7 +158,8 @@ std::vector<Tensor> all_broadcast_async_impl(
         tensor_topology_shape);
 
     ttnn::ccl::Topology ccl_topology = topology;
-    if (num_devices == 2) {
+    if (num_devices == 2 && topology == ttnn::ccl::Topology::Ring) {
+        log_warning(tt::LogOp, "Using Linear topology for AllBroadcast with 2 devices instead of Ring.");
         ccl_topology = ttnn::ccl::Topology::Linear;
     }
     log_debug(tt::LogOp, "DEBUG: creating line_fabric with num devices: {}, num links: {}", num_devices, num_links);

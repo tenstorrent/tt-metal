@@ -355,9 +355,10 @@ Tensor reduce_scatter_minimal_async_impl(
     uint32_t num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
     TT_FATAL(
         num_devices > 1, "reduce_scatter_minimal_async op will only work for num_devices > 1, but has {}", num_devices);
-    ttnn::ccl::Topology ccl_topology = topology;
 
-    if (num_devices == 2) {
+    ttnn::ccl::Topology ccl_topology = topology;
+    if (num_devices == 2 && topology == ttnn::ccl::Topology::Ring) {
+        log_warning(tt::LogOp, "Using Linear topology for ReduceScatter with 2 devices instead of Ring.");
         ccl_topology = ttnn::ccl::Topology::Linear;
     }
 
