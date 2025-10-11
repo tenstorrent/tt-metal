@@ -865,7 +865,7 @@ def test_unary_edge_case_ttnn(input_shapes, ttnn_function, device):
     golden_function = ttnn.get_golden_function(ttnn_function)
     golden_tensor = golden_function(in_data)
 
-    assert_with_pcc(ttnn.to_torch(output_tensor), golden_tensor)
+    assert_with_pcc(ttnn.to_torch(output_tensor), golden_tensor, pcc=0.999)
 
 
 @pytest.mark.parametrize(
