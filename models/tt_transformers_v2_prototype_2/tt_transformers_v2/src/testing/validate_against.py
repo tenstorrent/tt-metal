@@ -1,9 +1,11 @@
-#!/usr/bin/env python3
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
 """
 TTNN Validation Framework
 
 A decorator-based validation system for comparing TTNN implementations against
-reference implementations (typically PyTorch). Supports automatic input/output
+reference implementations (in PyTorch). Supports automatic input/output
 mapping, metric computation, and result collection.
 
 Key Features:
@@ -19,6 +21,104 @@ import time
 from dataclasses import dataclass, field
 from functools import wraps
 from typing import Any, Callable, Dict, List, Optional
+
+from .metrics import DEFAULT_METRICS, compute_cosine_similarity, compute_max_abs_error, compute_mean_abs_error
+
+# ============================================================================
+# Public API
+# ============================================================================
+#
+# Note: Metric functions (compute_max_abs_error, compute_mean_abs_error,
+# compute_cosine_similarity) are imported from metrics module and re-exported
+# here for convenience.
+
+__all__ = [
+    "device_validate_against",
+    "host_validate_against",
+    "get_validation_registry",
+    "enable_validation",
+    "clear_validation_results",
+    "ValidationResult",
+    "ValidationRegistry",
+    "compute_max_abs_error",
+    "compute_mean_abs_error",
+    "compute_cosine_similarity",
+    "DEFAULT_METRICS",
+]
+
+
+def get_validation_registry() -> "ValidationRegistry":
+    """Get the global validation registry"""
+    return _validation_registry
+
+
+def enable_validation(enabled: bool = True):
+    """Enable or disable validation globally"""
+    _validation_registry.enabled = enabled
+
+
+def clear_validation_results():
+    """Clear all validation results"""
+    _validation_registry.results.clear()
+
+
+# Convenience wrappers (public) — keep core impl private
+
+
+def device_validate_against(
+    reference_fn: Callable,
+    *,
+    metrics: Optional[Dict[str, Callable]] = None,
+    tolerances: Optional[Dict[str, float]] = None,
+    enabled: bool = True,
+):
+    """
+    Convenience wrapper for TTNN-on-device comparison.
+
+    - Assumes the reference function has the same signature as the implementation
+      and returns `ttnn.Tensor` (match_signature=True)
+    - No input/output mapping; metrics run on-device
+    """
+
+    return __validate_against(
+        reference_fn=reference_fn,
+        input_map=None,
+        output_map=None,
+        metrics=metrics,
+        tolerances=tolerances,
+        enabled=enabled,
+        match_signature=True,
+    )
+
+
+def host_validate_against(
+    reference_fn: Callable,
+    *,
+    input_to_torch: Callable,
+    output_to_torch: Callable,
+    metrics: Optional[Dict[str, Callable]] = None,
+    tolerances: Optional[Dict[str, float]] = None,
+    enabled: bool = True,
+):
+    """
+    Convenience wrapper for host/CPU comparison using torch.
+
+    - `input_to_torch(args, kwargs) -> (ref_args, ref_kwargs)` converts inputs for the
+      torch reference function
+    - `output_to_torch(output) -> torch.Tensor` converts impl's output to torch
+    - Reference function is expected to return `torch.Tensor`
+    """
+
+    return __validate_against(
+        reference_fn=reference_fn,
+        input_map=input_to_torch,
+        output_map=output_to_torch,
+        metrics=metrics,
+        tolerances=tolerances,
+        enabled=enabled,
+        match_signature=False,
+    )
+
 
 # ============================================================================
 # Data Structures
@@ -61,12 +161,12 @@ class ValidationRegistry:
             "passed": passed,
             "failed": failed,
             "pass_rate": passed / len(self.results) if self.results else 0.0,
-            "avg_speedup": sum(
-                r.execution_time_ref / r.execution_time_impl for r in self.results if r.execution_time_impl > 0
-            )
-            / len(self.results)
-            if self.results
-            else 0.0,
+            "avg_speedup": (
+                sum(r.execution_time_ref / r.execution_time_impl for r in self.results if r.execution_time_impl > 0)
+                / len(self.results)
+                if self.results
+                else 0.0
+            ),
         }
 
     def print_report(self):
@@ -105,15 +205,12 @@ class ValidationRegistry:
 _validation_registry = ValidationRegistry()
 
 
-# Import metric functions
-from .metrics import DEFAULT_METRICS, compute_cosine_similarity, compute_max_abs_error, compute_mean_abs_error
-
 # ============================================================================
 # Validation Decorator
 # ============================================================================
 
 
-def validate_against(
+def __validate_against(
     reference_fn: Callable,
     input_map: Optional[Callable] = None,
     output_map: Optional[Callable] = None,
@@ -288,42 +385,3 @@ def validate_against(
         return wrapper
 
     return decorator
-
-
-# ============================================================================
-# Public API
-# ============================================================================
-#
-# Note: Metric functions (_compute_max_abs_error, _compute_mean_abs_error,
-# _compute_cosine_similarity) are imported from metrics module and re-exported
-# here for convenience.
-
-
-def get_validation_registry() -> ValidationRegistry:
-    """Get the global validation registry"""
-    return _validation_registry
-
-
-def enable_validation(enabled: bool = True):
-    """Enable or disable validation globally"""
-    _validation_registry.enabled = enabled
-
-
-def clear_validation_results():
-    """Clear all validation results"""
-    _validation_registry.results.clear()
-
-
-# Re-export metric functions for backward compatibility
-__all__ = [
-    "validate_against",
-    "get_validation_registry",
-    "enable_validation",
-    "clear_validation_results",
-    "ValidationResult",
-    "ValidationRegistry",
-    "compute_max_abs_error",
-    "compute_mean_abs_error",
-    "compute_cosine_similarity",
-    "DEFAULT_METRICS",
-]
