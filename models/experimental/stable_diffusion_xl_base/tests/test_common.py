@@ -520,65 +520,73 @@ def run_tt_image_gen(
     profiler.start("image_gen")
     profiler.start("denoising_loop")
 
-    for i, _ in tqdm(enumerate(tt_timesteps), total=len(tt_timesteps)):
-        unet_outputs = []
-        if tid is None or capture_trace:
-            tid = ttnn.begin_trace_capture(ttnn_device, cq_id=0) if capture_trace else None
-            for unet_slice in range(tt_prompt_embeds.shape[0]):
-                latent_model_input = tt_latents
-                noise_pred, _ = run_tt_iteration(
-                    tt_unet,
-                    tt_scheduler,
-                    latent_model_input,
-                    input_shape,
-                    tt_prompt_embeds[unet_slice] if not use_cfg_parallel else tt_prompt_embeds,
-                    tt_time_ids if use_cfg_parallel else tt_time_ids[unet_slice],
-                    ttnn.unsqueeze(tt_text_embeds[unet_slice], dim=0) if not use_cfg_parallel else tt_text_embeds,
-                )
+    try:
+        for i, _ in tqdm(enumerate(tt_timesteps), total=len(tt_timesteps)):
+            unet_outputs = []
+            if tid is None or capture_trace:
+                tid = ttnn.begin_trace_capture(ttnn_device, cq_id=0) if capture_trace else None
+                for unet_slice in range(tt_prompt_embeds.shape[0]):
+                    latent_model_input = tt_latents
+                    noise_pred, _ = run_tt_iteration(
+                        tt_unet,
+                        tt_scheduler,
+                        latent_model_input,
+                        input_shape,
+                        tt_prompt_embeds[unet_slice] if not use_cfg_parallel else tt_prompt_embeds,
+                        tt_time_ids if use_cfg_parallel else tt_time_ids[unet_slice],
+                        ttnn.unsqueeze(tt_text_embeds[unet_slice], dim=0) if not use_cfg_parallel else tt_text_embeds,
+                    )
 
-                unet_outputs.append(noise_pred)
+                    unet_outputs.append(noise_pred)
 
-            if use_cfg_parallel:
-                noise_pred_interleaved = ttnn.to_memory_config(noise_pred, ttnn.L1_MEMORY_CONFIG)
-                ttnn.deallocate(noise_pred)
-                noise_pred = noise_pred_interleaved
-                noise_pred_out = ttnn.experimental.all_gather_async(
-                    noise_pred,
-                    dim=0,
-                    persistent_output_tensor=persistent_buffer,
-                    multi_device_global_semaphore=semaphores,
-                    num_links=1,
-                    cluster_axis=0,
-                    mesh_device=ttnn_device,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    topology=ttnn.Topology.Linear,
-                )
-                ttnn.deallocate(noise_pred)
-                noise_pred = noise_pred_out
-                noise_pred = noise_pred[..., :4]
-                noise_pred_uncond, noise_pred_text = ttnn.unsqueeze(noise_pred[0], 0), ttnn.unsqueeze(noise_pred[1], 0)
+                if use_cfg_parallel:
+                    noise_pred_interleaved = ttnn.to_memory_config(noise_pred, ttnn.L1_MEMORY_CONFIG)
+                    ttnn.deallocate(noise_pred)
+                    noise_pred = noise_pred_interleaved
+                    noise_pred_out = ttnn.experimental.all_gather_async(
+                        noise_pred,
+                        dim=0,
+                        persistent_output_tensor=persistent_buffer,
+                        multi_device_global_semaphore=semaphores,
+                        num_links=1,
+                        cluster_axis=0,
+                        mesh_device=ttnn_device,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        topology=ttnn.Topology.Linear,
+                    )
+                    ttnn.deallocate(noise_pred)
+                    noise_pred = noise_pred_out
+                    noise_pred = noise_pred[..., :4]
+                    noise_pred_uncond, noise_pred_text = ttnn.unsqueeze(noise_pred[0], 0), ttnn.unsqueeze(
+                        noise_pred[1], 0
+                    )
+                else:
+                    noise_pred_uncond, noise_pred_text = unet_outputs
+
+                # perform guidance
+                noise_pred_text = ttnn.sub_(noise_pred_text, noise_pred_uncond)
+                noise_pred_text = ttnn.mul_(noise_pred_text, guidance_scale)
+                noise_pred = ttnn.add_(noise_pred_uncond, noise_pred_text)
+
+                tt_latents = tt_scheduler.step(noise_pred, None, tt_latents, **tt_extra_step_kwargs, return_dict=False)[
+                    0
+                ]
+
+                ttnn.deallocate(noise_pred_uncond)
+                ttnn.deallocate(noise_pred_text)
+
+                if capture_trace:
+                    ttnn.end_trace_capture(ttnn_device, tid, cq_id=0)
             else:
-                noise_pred_uncond, noise_pred_text = unet_outputs
+                ttnn.execute_trace(ttnn_device, tid, cq_id=0, blocking=False)
 
-            # perform guidance
-            noise_pred_text = ttnn.sub_(noise_pred_text, noise_pred_uncond)
-            noise_pred_text = ttnn.mul_(noise_pred_text, guidance_scale)
-            noise_pred = ttnn.add_(noise_pred_uncond, noise_pred_text)
+            if i < (len(tt_timesteps) - 1):
+                tt_scheduler.inc_step_index()
 
-            tt_latents = tt_scheduler.step(noise_pred, None, tt_latents, **tt_extra_step_kwargs, return_dict=False)[0]
-
-            ttnn.deallocate(noise_pred_uncond)
-            ttnn.deallocate(noise_pred_text)
-
-            if capture_trace:
-                ttnn.end_trace_capture(ttnn_device, tid, cq_id=0)
-        else:
-            ttnn.execute_trace(ttnn_device, tid, cq_id=0, blocking=False)
-
-        if i < (len(tt_timesteps) - 1):
-            tt_scheduler.inc_step_index()
-
-    ttnn.synchronize_device(ttnn_device)
+        ttnn.synchronize_device(ttnn_device)
+    except Exception as e:
+        logger.warning("Error during denoising loop")
+        raise e
 
     # reset scheduler
     tt_scheduler.set_step_index(0)
@@ -588,23 +596,26 @@ def run_tt_image_gen(
     vae_on_device = isinstance(vae, TtAutoencoderKL)
 
     if vae_on_device:
-        profiler.start("vae_decode")
-        if tid_vae is None or capture_trace:
-            tid_vae = ttnn.begin_trace_capture(ttnn_device, cq_id=0) if capture_trace else None
-            tt_latents = ttnn.div(tt_latents, scaling_factor)
+        try:
+            profiler.start("vae_decode")
+            if tid_vae is None or capture_trace:
+                tid_vae = ttnn.begin_trace_capture(ttnn_device, cq_id=0) if capture_trace else None
+                tt_latents = ttnn.div(tt_latents, scaling_factor)
 
-            logger.info("Running TT VAE")
-            output_tensor, [C, H, W] = vae.decode(tt_latents, input_shape)
-            ttnn.deallocate(tt_latents)
+                logger.info("Running TT VAE")
+                output_tensor, [C, H, W] = vae.decode(tt_latents, input_shape)
+                ttnn.deallocate(tt_latents)
 
-            if capture_trace:
-                ttnn.end_trace_capture(ttnn_device, tid_vae, cq_id=0)
-            output_device = output_tensor
-            output_shape = [input_shape[0], C, H, W]
-        else:
-            ttnn.execute_trace(ttnn_device, tid_vae, cq_id=0, blocking=False)
-
-        ttnn.synchronize_device(ttnn_device)
+                if capture_trace:
+                    ttnn.end_trace_capture(ttnn_device, tid_vae, cq_id=0)
+                output_device = output_tensor
+                output_shape = [input_shape[0], C, H, W]
+            else:
+                ttnn.execute_trace(ttnn_device, tid_vae, cq_id=0, blocking=False)
+            ttnn.synchronize_device(ttnn_device)
+        except Exception as e:
+            logger.warning("Error during VAE decode")
+            raise e
         profiler.end("vae_decode")
 
         profiler.start("read_output_tensor")
