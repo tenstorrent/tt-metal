@@ -139,7 +139,7 @@ def test_model_inference(
                 (32, True): "llama32_11b",
                 (80, False): "llama31_70b",
                 (80, True): "llama32_90b",
-            }[(model_args.n_layers, model_args.is_vision())]
+            }[(model_args.n_layers, model_args.is_llama_vision())]
 
         # Define tight final PCC thresholds for quick mode
         final_model_pcc = {

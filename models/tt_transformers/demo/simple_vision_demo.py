@@ -5,14 +5,12 @@
 from pathlib import Path
 from typing import Optional
 
-import llama_models.llama3.reference_impl.generation as llama_reference_generation
-from llama_models.llama3.api.chat_format import ChatFormat
-from llama_models.llama3.api.datatypes import ImageMedia, UserMessage
-from llama_models.llama3.api.tokenizer import Tokenizer
 from loguru import logger
 from PIL import Image as PIL_Image
 from pkg_resources import resource_filename
+from transformers import AutoProcessor
 
+from models.common.llama_models import create_vision_mask, extract_images_from_messages, sample_top_p
 from models.tt_transformers.tt.generator import create_submeshes
 
 IMG_PATH = Path(resource_filename("llama_models", "scripts/resources/"))
@@ -34,7 +32,7 @@ def get_batch_sampler(temperature, top_p, tokenizer):
     def sample(logits):
         if temperature > 0:
             probs = torch.softmax(logits[:, -1] / temperature, dim=-1)
-            next_token = llama_reference_generation.sample_top_p(probs, top_p)
+            next_token = sample_top_p(probs, top_p)
         else:
             next_token = torch.argmax(logits[:, -1], dim=-1)
 
@@ -193,8 +191,7 @@ def test_multimodal_demo_text(
     profiler = BenchmarkProfiler()
     profiler.start("run")
 
-    ckpt_dir = os.environ["LLAMA_DIR"]
-    tokenizer_path = str(Path(ckpt_dir) / "tokenizer.model")
+    ckpt_dir = os.environ["HF_MODEL"]
 
     max_batch_size *= data_parallel  # input batch_size is interpreted as size per DP group
 
@@ -204,9 +201,9 @@ def test_multimodal_demo_text(
         max_batch_size=max_batch_size,
         max_seq_len=max_seq_len,
     )
-    generator = Generator(model, model_args, mesh_device)
-    tokenizer = Tokenizer(model_path=tokenizer_path)
-    formatter = ChatFormat(tokenizer)
+    processor = AutoProcessor.from_pretrained(ckpt_dir, local_files_only=is_ci_env)
+    tokenizer = processor.tokenizer
+    generator = Generator(model, model_args, mesh_device, processor=processor, tokenizer=tokenizer)
 
     xattn_caches = [model.setup_cache(model_args[i].max_batch_size) for i, model in enumerate(generator.model)]
 
@@ -224,10 +221,42 @@ def test_multimodal_demo_text(
 
     # Trace capture dialogs with random images
     trace_dialogs = [
-        [UserMessage(content=[ImageMedia(image=trace_img_560x560), "Describe this image."])],
-        [UserMessage(content=[ImageMedia(image=trace_img_1120x560), "What do you see in this image?"])],
-        [UserMessage(content=[ImageMedia(image=trace_img_560x1120), "What do you see in this image?"])],
-        [UserMessage(content=[ImageMedia(image=trace_img_1120x1120), "Analyze this image."])],
+        [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image", "image": trace_img_560x560},
+                    {"type": "text", "text": "Describe this image."},
+                ],
+            }
+        ],
+        [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image", "image": trace_img_1120x560},
+                    {"type": "text", "text": "What do you see in this image?"},
+                ],
+            }
+        ],
+        [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image", "image": trace_img_560x1120},
+                    {"type": "text", "text": "What do you see in this image?"},
+                ],
+            }
+        ],
+        [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image", "image": trace_img_1120x1120},
+                    {"type": "text", "text": "Analyze this image."},
+                ],
+            }
+        ],
     ]
 
     if len(trace_dialogs) < max_batch_size:
@@ -246,18 +275,63 @@ def test_multimodal_demo_text(
 
         # Regular testing dialogs with original images
         dialogs = [
-            [UserMessage(content=[ImageMedia(image=img), "Write a haiku for this image."])],
-            [UserMessage(content=[ImageMedia(image=img2), "What is for dinner?"])],
-            [UserMessage(content=[ImageMedia(image=ocr_image), "What is the full text of this image? Do OCR"])],
-            [UserMessage(content=[ImageMedia(image=clutter), "What objects are in this image?"])],
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image", "image": img},
+                        {"type": "text", "text": "Write a haiku for this image."},
+                    ],
+                }
+            ],
+            [
+                {
+                    "role": "user",
+                    "content": [{"type": "image", "image": img2}, {"type": "text", "text": "What is for dinner?"}],
+                }
+            ],
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image", "image": ocr_image},
+                        {"type": "text", "text": "What is the full text of this image? Do OCR"},
+                    ],
+                }
+            ],
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image", "image": clutter},
+                        {"type": "text", "text": "What objects are in this image?"},
+                    ],
+                }
+            ],
         ]
     else:
+        # for text_only_prompts system message could be added. Find "or not image_ns.has_images" in https://huggingface.co/meta-llama/Llama-3.2-11B-Vision-Instruct/blob/main/chat_template.json
         dialogs = [
-            # image understanding + text-only prompts
-            [UserMessage(content=["Write a haiku."])],
-            [UserMessage(content=["What is for dinner?"])],
-            [UserMessage(content=[ImageMedia(image=ocr_image), "What is the full text of this image? Do OCR"])],
-            [UserMessage(content=[ImageMedia(image=clutter), "What objects are in this image?"])],
+            [{"role": "user", "content": [{"type": "text", "text": "Write a haiku."}]}],
+            [{"role": "user", "content": [{"type": "text", "text": "What is for dinner?"}]}],
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image", "image": ocr_image},
+                        {"type": "text", "text": "What is the full text of this image? Do OCR"},
+                    ],
+                }
+            ],
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image", "image": clutter},
+                        {"type": "text", "text": "What objects are in this image?"},
+                    ],
+                }
+            ],
         ]
     if len(dialogs) < max_batch_size:
         dialogs *= max_batch_size // len(dialogs)
@@ -277,24 +351,30 @@ def test_multimodal_demo_text(
             batch_dialogs = current_dialogs[batch_idx * max_batch_size : (batch_idx + 1) * max_batch_size]
             for dialog in batch_dialogs:
                 for msg in dialog:
-                    logger.info(f"{msg.role.capitalize()}: {msg.content}\n")
-            batch_model_input = [
-                formatter.encode_dialog_prompt(dialog, tool_prompt_format=False) for dialog in batch_dialogs
+                    content = " ".join(
+                        str(value) for content in msg["content"] for key, value in content.items() if key != "type"
+                    )
+                    logger.info(f"{msg['role'].capitalize()}: {content}\n")
+            batch_inputs = [
+                processor.apply_chat_template(messages, add_generation_prompt=True, tokenize=True, return_dict=True)
+                for messages in batch_dialogs
             ]
 
             # Do initial prefill
-            vision_images = [
-                model_input.vision.images if model_input.vision else None for model_input in batch_model_input
+            # TBD: rewrite generator since images are processed twice (in processor and generator)
+            vision_images = [extract_images_from_messages(messages) or None for messages in batch_dialogs]
+            vision_mask = [
+                create_vision_mask(model_input["input_ids"][0], processor.image_token_id) or None
+                for model_input in batch_inputs
             ]
-            vision_mask = [model_input.vision.mask if model_input.vision else None for model_input in batch_model_input]
-            prompt_tokens = [model_input.tokens for model_input in batch_model_input]
+            prompt_tokens = [inputs["input_ids"][0] for inputs in batch_inputs]
             # Get max length of prompts in batch
             prefill_lens = torch.tensor([len(tokens) for tokens in prompt_tokens], dtype=torch.long)
             _num_prefill_tokens += prefill_lens.sum().item()
             total_lens = prefill_lens + max_gen_len
 
             # Create padded tokens tensor for batch
-            pad_id = tokenizer.pad_id
+            pad_id = tokenizer.pad_token_id
             bsz = len(prompt_tokens)
             tokens = torch.full((bsz, max(total_lens)), pad_id, dtype=torch.long)
 
@@ -381,12 +461,12 @@ def test_multimodal_demo_text(
                 )  # gen_idx is (num_tokens - 1) to avoid counting compile iter
 
             # Log full text output for each user in batch
-            vision_tokens = [tokenizer.special_tokens["<|image|>"], 128256]
+            vision_token = processor.image_token_id
 
             for user_id in range(max_batch_size):
                 # Remove <|image|> tokens since they break the tokenizer
                 tokens_out = [
-                    t if t not in vision_tokens else tokenizer.pad_id
+                    t if t != vision_token else tokenizer.pad_token_id
                     for t in tokens[user_id].tolist()[: position_id[user_id] + 2]
                 ]
                 text = tokenizer.decode(tokens_out)

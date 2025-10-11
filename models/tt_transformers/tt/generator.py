@@ -536,7 +536,9 @@ class Generator:
         empty_slots=None,
         **kwargs,
     ):
-        if self.model_args[0].checkpoint_type == CheckpointType.HuggingFace:
+        if (self.model_args[0].checkpoint_type == CheckpointType.HuggingFace) and (
+            not self.model_args[0].is_llama_vision()
+        ):
             logits = self.prefill_forward_text(
                 tokens,
                 page_table=page_table,
@@ -753,7 +755,9 @@ class Generator:
         enable_trace=True,
         read_from_device=True,
     ):
-        if self.model_args[0].checkpoint_type == CheckpointType.HuggingFace:
+        if (self.model_args[0].checkpoint_type == CheckpointType.HuggingFace) and (
+            not self.model_args[0].is_llama_vision()
+        ):
             return self.decode_forward_text(
                 tokens,
                 start_pos,
