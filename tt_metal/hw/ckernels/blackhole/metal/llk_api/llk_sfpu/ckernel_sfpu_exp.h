@@ -14,6 +14,9 @@ namespace sfpu {
 
 sfpi_inline sfpi::vFloat sfpu_exp(sfpi::vFloat val) { return _sfpu_exp_(val); }
 
+#define POLYVAL7(coef6, coef5, coef4, coef3, coef2, coef1, coef0, t4) \
+    (t4 * (t4 * (t4 * (t4 * (t4 * (coef6 * t4 + coef5) + coef4) + coef3) + coef2) + coef1) + coef0)
+
 /*
  * Both _float_to_int32_ and _float_to_int32_positive_ use branch to handle special cases
  * With exp21f function, some of these cases never happen (e.g. negative exponent, overflow)
@@ -55,7 +58,7 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_(sfpi::vFloat val) {
     vec_min_max(val, threshold_high);
 
     // The paper relies on the following formula (c.f. Section 2 and 3 of paper):
-    // z = (bias + x * factor * N_m; where:
+    // z = (bias + x * factor * N_m); where:
     // factor = 0x00b8aa3b (computed through log(e))
     // bias = 0x3f800000
     //
@@ -100,6 +103,60 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_(sfpi::vFloat val) {
     return y;
 }
 
+sfpi_inline sfpi::vFloat _sfpu_exp_61f_(sfpi::vFloat val) {
+    sfpi::vFloat y = sfpi::vConst0;
+    v_if(val > -87.3f) {
+        // The paper relies on the following formula (c.f. Section 2 and 3 of paper):
+        // z = (bias + x * factor * N_m; where:
+        // factor = 0x00b8aa3b (computed through log(e))
+        // bias = 0x3f800000
+        sfpi::vInt z = sfpu::_float_to_int32_(val * sfpi::vFloat(0x00b8aa3b) + sfpi::vFloat(0x3f800000));
+        sfpi::vInt zii = sfpi::exexp(sfpi::reinterpret<sfpi::vFloat>(z));   // Extract exponent
+        sfpi::vInt zif = sfpi::exman9(sfpi::reinterpret<sfpi::vFloat>(z));  // Extract mantissa
+
+        // Normalize mantissa field into a fractional value in [0,1)
+        sfpi::vFloat frac = sfpi::int32_to_float(zif, 0) * sfpi::vFloat(1.1920929e-7f);
+
+        // Evaluate degree-6 polynomial coefficients using Horner’s rule
+        // Note: Unlike exp_21f, in exp_61f all polynomial coefficients are floating-point values.
+        // In exp_21f, the paper mixes integer and float constants to perform bit-level manipulation of the exponent and
+        // mantissa fields (using bit manipulation techniques - BMT) for exactness. In exp_61f, all coefficients are
+        // floating-point values derived from the Chebyshev polynomial approach, making the implementation simpler and
+        // purely mathematical without integer-based operations.
+        sfpi::vFloat poly = POLYVAL7(
+            sfpi::vFloat(0.0002170391f),
+            sfpi::vFloat(0.001243946f),
+            sfpi::vFloat(0.0096788315f),
+            sfpi::vFloat(0.055483369f),
+            sfpi::vFloat(0.24022982f),
+            sfpi::vFloat(0.69314699f),
+            sfpi::vFloat(1.0000000018f),
+            frac);
+
+        // Restore exponent
+        zii = sfpi::reinterpret<sfpi::vInt>(sfpi::setexp(poly, 127U + zii));
+        y = sfpi::reinterpret<sfpi::vFloat>(zii);
+    }
+    v_endif;
+
+    return y;
+}
+
+template <bool is_fp32_dest_acc_en>
+sfpi_inline sfpi::vFloat _sfpu_exp_improved_(sfpi::vFloat val);
+
+// is_fp32_dest_acc_en == false
+template <>
+sfpi_inline sfpi::vFloat _sfpu_exp_improved_<false>(sfpi::vFloat val) {
+    return _sfpu_exp_21f_<false>(val);
+}
+
+// is_fp32_dest_acc_en == true
+template <>
+sfpi_inline sfpi::vFloat _sfpu_exp_improved_<true>(sfpi::vFloat val) {
+    return _sfpu_exp_61f_(val);
+}
+
 template <
     bool APPROXIMATION_MODE,
     bool FAST_APPROX,
@@ -117,7 +174,7 @@ void calculate_exponential(const uint exp_base_scale_factor = p_sfpu::kCONST_1_F
             if constexpr (SCALE_EN) {
                 val = val * sfpi::s2vFloat16b(exp_base_scale_factor);
             }
-            sfpi::vFloat result = _sfpu_exp_21f_<is_fp32_dest_acc_en>(val);
+            sfpi::vFloat result = _sfpu_exp_improved_<is_fp32_dest_acc_en>(val);
             sfpi::dst_reg[0] = result;
             sfpi::dst_reg++;
         }
