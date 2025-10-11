@@ -82,12 +82,12 @@ def device_validate_against(
 
     return __validate_against(
         reference_fn=reference_fn,
+        match_signature=True,
         input_map=None,
         output_map=None,
         metrics=metrics,
         tolerances=tolerances,
         enabled=enabled,
-        match_signature=True,
     )
 
 
@@ -111,12 +111,12 @@ def host_validate_against(
 
     return __validate_against(
         reference_fn=reference_fn,
+        match_signature=False,
         input_map=input_to_torch,
         output_map=output_to_torch,
         metrics=metrics,
         tolerances=tolerances,
         enabled=enabled,
-        match_signature=False,
     )
 
 
@@ -210,14 +210,23 @@ _validation_registry = ValidationRegistry()
 # ============================================================================
 
 
+# todo)){
+# - rename match_signature to validate_on_device = False
+# - add checks to device_validate_against to make sure the signatures match
+# - refactor metrics and tolerances to group them by metrics type
+#   - higher_is_better_metrics = {"pcc", "cosine_similarity"} --> clean up groupings
+# - what use does cosine_similarity have? can we remove it?
+# - work on ds_r1_qwen model validation using new decorator
+# }todo))
 def __validate_against(
     reference_fn: Callable,
+    *,
+    match_signature: bool = False,
     input_map: Optional[Callable] = None,
     output_map: Optional[Callable] = None,
     metrics: Optional[Dict[str, Callable]] = None,
     tolerances: Optional[Dict[str, float]] = None,
     enabled: bool = True,
-    match_signature: bool = False,
 ):
     """
     Decorator to validate a function against a reference implementation.
