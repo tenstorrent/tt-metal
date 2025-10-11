@@ -6,6 +6,7 @@ import torch
 from tqdm import tqdm
 
 import ttnn
+from models.common.layernorm import LayerNorm
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
 from models.tt_transformers.tt.ccl import TT_CCL
@@ -67,6 +68,7 @@ class Transformer(LightweightModule):
             max_seq_len=args.max_seq_len,
             rope_theta=args.rope_theta,
             rope_scaling=args.rope_scaling,
+            partial_rotary_factor=args.partial_rotary_factor,
         )
 
         if args.rope_theta_local:
@@ -76,6 +78,7 @@ class Transformer(LightweightModule):
                 args.head_dim,
                 args.max_seq_len,
                 args.rope_theta_local,
+                args.partial_rotary_factor,
             )
 
         self.trans_mats_dict = self.rope_setup.get_both_trans_mats()
@@ -96,8 +99,10 @@ class Transformer(LightweightModule):
             )
             for i in tqdm(range(self.n_layers))
         ]
+
+        norm_class = LayerNorm if self.args.layernorm else RMSNorm
         self.norm = DistributedNorm(
-            RMSNorm(
+            norm_class(
                 device=mesh_device,
                 dim=args.dim,
                 eps=args.norm_eps,
