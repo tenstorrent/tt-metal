@@ -68,19 +68,16 @@ class Flux1Pipeline:
         logger.info(f"Parallel config: {parallel_config}")
         logger.info(f"Original mesh shape: {mesh_device.shape}")
         logger.info(f"Creating submeshes with shape {submesh_shape}")
-        self._submesh_devices = self._mesh_device.create_submeshes(ttnn.MeshShape(*submesh_shape))
+        self._submesh_devices = [mesh_device]  # self._mesh_device.create_submeshes(ttnn.MeshShape(*submesh_shape))
 
-        self._ccl_managers = [
-            CCLManager(submesh_device, num_links=num_links, topology=topology)
-            for submesh_device in self._submesh_devices
-        ]
+        self._ccl_managers = [CCLManager(self._submesh_devices[0], num_links=num_links, topology=topology)]
 
         # Hacky submesh reshapes and assignment to parallelize encoders and VAE
         encoder_device = self._submesh_devices[0]
         self.original_submesh_shape = tuple(encoder_device.shape)
-        self.desired_encoder_submesh_shape = tuple(encoder_device.shape)
+        # self.desired_encoder_submesh_shape = tuple(encoder_device.shape)
 
-        if encoder_device.shape[1] != 4:
+        if False:  # encoder_device.shape[1] != 4:
             # If reshaping, vae_device must be on submesh 0. That means T5 can't fit, so disable it.
             vae_submesh_idx = 0
             if enable_t5_text_encoder and not use_torch_t5_text_encoder:
@@ -92,7 +89,7 @@ class Flux1Pipeline:
             cfg_shape = tuple(encoder_device.shape)
             assert cfg_shape[0] * cfg_shape[1] == 4, f"Cannot reshape {cfg_shape} to a 1x4 mesh"
             logger.info(f"Reshaping submesh device 0 from {cfg_shape} to (1, 4) for CLIP")
-            self.desired_encoder_submesh_shape = (1, 4)
+        # self.desired_encoder_submesh_shape = (1, 4)
         else:
             vae_submesh_idx = 0
         vae_device = self._submesh_devices[vae_submesh_idx]
@@ -103,7 +100,7 @@ class Flux1Pipeline:
         self.encoder_parallel_config = encoder_parallel_config
         self.encoder_device = encoder_device
 
-        vae_parallel_config = VAEParallelConfig(tensor_parallel=ParallelFactor(factor=4, mesh_axis=1))
+        vae_parallel_config = VAEParallelConfig(tensor_parallel=ParallelFactor(factor=8, mesh_axis=1))
         self.vae_parallel_config = vae_parallel_config
         self.vae_device = vae_device
         self.vae_submesh_idx = vae_submesh_idx
@@ -187,9 +184,9 @@ class Flux1Pipeline:
         self._vae_scale_factor = 2 ** len(self._block_out_channels)
         self._image_processor = VaeImageProcessor(vae_scale_factor=self._vae_scale_factor)
 
-        if self.desired_encoder_submesh_shape != self.original_submesh_shape:
-            # HACK: reshape submesh device 0 to 1D
-            self.encoder_device.reshape(ttnn.MeshShape(*self.desired_encoder_submesh_shape))
+        # if self.desired_encoder_submesh_shape != self.original_submesh_shape:
+        # HACK: reshape submesh device 0 to 1D
+        #    self.encoder_device.reshape(ttnn.MeshShape(*self.desired_encoder_submesh_shape))
 
         logger.info("creating TT-NN CLIP text encoder...")
 
@@ -270,10 +267,10 @@ class Flux1Pipeline:
             ccl_manager=self._ccl_managers[vae_submesh_idx],
         )
 
-        if self.desired_encoder_submesh_shape != self.original_submesh_shape:
-            # HACK: reshape submesh device 0 to 1D
-            # If reshaping, vae device is same as encoder device
-            self.encoder_device.reshape(ttnn.MeshShape(*self.original_submesh_shape))
+    # if self.desired_encoder_submesh_shape != self.original_submesh_shape:
+    # HACK: reshape submesh device 0 to 1D
+    # If reshaping, vae device is same as encoder device
+    #    self.encoder_device.reshape(ttnn.MeshShape(*self.original_submesh_shape))
 
     def __call__(
         self,
@@ -316,9 +313,9 @@ class Flux1Pipeline:
             logger.info("encoding prompts...")
 
             with timer.time_section("total_encoding") if timer else nullcontext():
-                if self.desired_encoder_submesh_shape != self.original_submesh_shape:
-                    # HACK: reshape submesh device 0 from 2D to 1D
-                    self.encoder_device.reshape(ttnn.MeshShape(*self.desired_encoder_submesh_shape))
+                # if self.desired_encoder_submesh_shape != self.original_submesh_shape:
+                # HACK: reshape submesh device 0 from 2D to 1D
+                #    self.encoder_device.reshape(ttnn.MeshShape(*self.desired_encoder_submesh_shape))
                 prompt_embeds, pooled_prompt_embeds = self._encode_prompts(
                     prompt_1=prompt_1,
                     prompt_2=prompt_2,
@@ -331,9 +328,9 @@ class Flux1Pipeline:
                     clip_skip=clip_skip,
                 )
                 _, prompt_sequence_length, _ = prompt_embeds.shape
-                if self.desired_encoder_submesh_shape != self.original_submesh_shape:
-                    # HACK: reshape submesh device 0 from 1D to 2D
-                    self.encoder_device.reshape(ttnn.MeshShape(*self.original_submesh_shape))
+            # if self.desired_encoder_submesh_shape != self.original_submesh_shape:
+            # HACK: reshape submesh device 0 from 1D to 2D
+            #    self.encoder_device.reshape(ttnn.MeshShape(*self.original_submesh_shape))
 
             logger.info("preparing timesteps...")
 
@@ -582,10 +579,10 @@ class Flux1Pipeline:
                 torch_latents = (torch_latents / self._latents_scaling) + self._latents_shift
                 torch_latents = _unpack_latents(torch_latents, height, width, self._vae_scale_factor)
 
-                if self.desired_encoder_submesh_shape != self.original_submesh_shape:
-                    # HACK: reshape submesh device 0 from 2D to 1D
-                    # If reshaping, vae device is same as encoder device
-                    self.encoder_device.reshape(ttnn.MeshShape(*self.desired_encoder_submesh_shape))
+                # if self.desired_encoder_submesh_shape != self.original_submesh_shape:
+                # HACK: reshape submesh device 0 from 2D to 1D
+                # If reshaping, vae device is same as encoder device
+                #    self.encoder_device.reshape(ttnn.MeshShape(*self.desired_encoder_submesh_shape))
 
                 tt_latents = ttnn.from_torch(
                     torch_latents.permute(0, 2, 3, 1),
@@ -597,10 +594,10 @@ class Flux1Pipeline:
                 tt_decoded_output = self._vae_decoder(tt_latents)
                 decoded_output = ttnn.to_torch(ttnn.get_device_tensors(tt_decoded_output)[0]).permute(0, 3, 1, 2)
 
-                if self.desired_encoder_submesh_shape != self.original_submesh_shape:
-                    # HACK: reshape submesh device 0 from 1D to 2D
-                    # If reshaping, vae device is same as encoder device
-                    self.encoder_device.reshape(ttnn.MeshShape(*self.original_submesh_shape))
+                # if self.desired_encoder_submesh_shape != self.original_submesh_shape:
+                # HACK: reshape submesh device 0 from 1D to 2D
+                # If reshaping, vae device is same as encoder device
+                #    self.encoder_device.reshape(ttnn.MeshShape(*self.original_submesh_shape))
 
                 image = self._image_processor.postprocess(decoded_output, output_type="pt")
                 assert isinstance(image, torch.Tensor)

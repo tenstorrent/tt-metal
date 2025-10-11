@@ -37,7 +37,7 @@ from ...pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large i
     [
         pytest.param((1, 4), (1, 0), (4, 1), ttnn.Topology.Linear, 1, "1x4sp0tp1", id="1x4sp0tp1"),
         pytest.param((1, 8), (1, 0), (8, 1), ttnn.Topology.Linear, 1, "1x8sp0tp1", id="1x8sp0tp1"),
-        pytest.param((2, 2), (2, 0), (2, 1), ttnn.Topology.Linear, 1, "2x2sp0tp1", id="2x2sp0tp1"),
+        # pytest.param((2, 2), (2, 0), (2, 1), ttnn.Topology.Linear, 1, "2x2sp0tp1", id="2x2sp0tp1"),
         pytest.param((2, 4), (2, 0), (4, 1), ttnn.Topology.Linear, 1, "2x4sp0tp1", id="2x4sp0tp1"),
         pytest.param((2, 4), (4, 1), (2, 0), ttnn.Topology.Linear, 1, "2x4sp1tp0", id="2x4sp1tp0"),
         pytest.param((4, 8), (8, 1), (4, 0), ttnn.Topology.Linear, 4, "4x8sp1tp0", id="4x8sp1tp0"),

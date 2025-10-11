@@ -10,6 +10,13 @@ from loguru import logger
 CACHE_DICT_FILE = "cache_dict.json"
 
 
+def config_id(parallel_config):
+    config_id = ""
+    for n, v in parallel_config._asdict().items():
+        config_id += f"{''.join([w[0].upper() for w in n.split('_')])}{v.factor}_{v.mesh_axis}_"
+    return config_id
+
+
 def cache_dir_is_set() -> bool:
     return "TT_DIT_CACHE_DIR" in os.environ
 
@@ -20,19 +27,8 @@ def get_cache_path(model_name, subfolder, parallel_config, mesh_shape, dtype="bf
 
     model_path = os.path.join(cache_dir, model_name)
     model_path = os.path.join(model_path, subfolder)
-    tp_factor, tp_mesh_axis = (
-        (parallel_config.tensor_parallel.factor, parallel_config.tensor_parallel.mesh_axis)
-        if hasattr(parallel_config, "tensor_parallel") and parallel_config.tensor_parallel is not None
-        else (-1, -1)
-    )
-    sp_factor, sp_mesh_axis = (
-        (parallel_config.sequence_parallel.factor, parallel_config.sequence_parallel.mesh_axis)
-        if hasattr(parallel_config, "sequence_parallel") and parallel_config.sequence_parallel is not None
-        else (-1, -1)
-    )
-    parallel_name = (
-        f"tp{tp_factor}_{tp_mesh_axis}_sp{sp_factor}_{sp_mesh_axis}_mesh_{mesh_shape[0]}x{mesh_shape[1]}_{dtype}"
-    )
+    parallel_name = f"{config_id(parallel_config)}mesh{mesh_shape[0]}x{mesh_shape[1]}_{dtype}"
+    # parallel_name =f"{config_id(parallel_config)}_{dtype}"
     cache_path = os.path.join(model_path, parallel_name) + os.sep
 
     return cache_path
