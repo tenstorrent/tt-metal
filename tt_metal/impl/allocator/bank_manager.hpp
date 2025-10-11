@@ -25,6 +25,7 @@ namespace tt {
 
 namespace tt_metal {
 enum class BufferType;
+struct UnifiedAllocatorState;  // Forward declaration
 namespace allocator {
 class Algorithm;
 }  // namespace allocator
@@ -124,6 +125,18 @@ public:
         bool bottom_up = true,
         AllocatorDependencies::AllocatorID allocator_id = AllocatorDependencies::AllocatorID{0});
     void reset_size(AllocatorDependencies::AllocatorID allocator_id = AllocatorDependencies::AllocatorID{0});
+
+    // Unified State Methods
+    UnifiedAllocatorState extract_state(
+        AllocatorDependencies::AllocatorID allocator_id = AllocatorDependencies::AllocatorID{0}) const;
+    UnifiedAllocatorState extract_merged_state() const;
+    void apply_unified_state(
+        const UnifiedAllocatorState& unified_state,
+        AllocatorDependencies::AllocatorID target_allocator_id = AllocatorDependencies::AllocatorID{0});
+    void reset_and_apply_unified_state(
+        const UnifiedAllocatorState& unified_state,
+        AllocatorDependencies::AllocatorID target_allocator_id = AllocatorDependencies::AllocatorID{0});
+    bool can_apply_unified_state(const UnifiedAllocatorState& unified_state) const;
 
 private:
     /*********************************

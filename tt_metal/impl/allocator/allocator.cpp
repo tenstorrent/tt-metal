@@ -386,6 +386,170 @@ Allocator::~Allocator() {
     allocated_buffers_.clear();
 }
 
+// ============================================================================
+// Unified State Methods
+// ============================================================================
+
+UnifiedAllocatorState Allocator::extract_state(const BufferType& buffer_type) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    const BankManager* manager = nullptr;
+    switch (buffer_type) {
+        case BufferType::DRAM: manager = dram_manager_.get(); break;
+        case BufferType::L1: manager = l1_manager_.get(); break;
+        case BufferType::L1_SMALL: manager = l1_small_manager_.get(); break;
+        case BufferType::TRACE: manager = trace_buffer_manager_.get(); break;
+        default: TT_THROW("Unsupported buffer type: {}", enchantum::to_string(buffer_type));
+    }
+
+    TT_ASSERT(manager != nullptr, "BankManager not initialized for buffer type {}", enchantum::to_string(buffer_type));
+
+    // Extract state using allocator ID 0 (default allocator ID)
+    return manager->extract_state(BankManager::AllocatorDependencies::AllocatorID{0});
+}
+
+CompleteUnifiedAllocatorState Allocator::extract_complete_state() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    CompleteUnifiedAllocatorState complete_state;
+
+    // Extract state for each buffer type
+    std::array<BufferType, 4> buffer_types = {
+        BufferType::DRAM, BufferType::L1, BufferType::L1_SMALL, BufferType::TRACE};
+
+    for (const auto& buffer_type : buffer_types) {
+        const BankManager* manager = nullptr;
+        switch (buffer_type) {
+            case BufferType::DRAM: manager = dram_manager_.get(); break;
+            case BufferType::L1: manager = l1_manager_.get(); break;
+            case BufferType::L1_SMALL: manager = l1_small_manager_.get(); break;
+            case BufferType::TRACE: manager = trace_buffer_manager_.get(); break;
+            default: continue;
+        }
+
+        if (manager) {
+            auto state = manager->extract_state(BankManager::AllocatorDependencies::AllocatorID{0});
+            complete_state.states_per_buffer_type[buffer_type] = std::move(state);
+        }
+    }
+
+    // Copy allocated buffer pointers
+    complete_state.all_allocated_buffers.reserve(allocated_buffers_.size());
+    complete_state.all_allocated_buffers.insert(
+        complete_state.all_allocated_buffers.end(), allocated_buffers_.begin(), allocated_buffers_.end());
+
+    return complete_state;
+}
+
+void Allocator::apply_unified_state(const UnifiedAllocatorState& unified_state, const BufferType& buffer_type) {
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    TT_FATAL(
+        buffer_type == unified_state.buffer_type,
+        "Buffer type mismatch: specified {}, but unified_state has {}",
+        enchantum::to_string(buffer_type),
+        enchantum::to_string(unified_state.buffer_type));
+
+    BankManager* manager = nullptr;
+    switch (buffer_type) {
+        case BufferType::DRAM: manager = dram_manager_.get(); break;
+        case BufferType::L1: manager = l1_manager_.get(); break;
+        case BufferType::L1_SMALL: manager = l1_small_manager_.get(); break;
+        case BufferType::TRACE: manager = trace_buffer_manager_.get(); break;
+        default: TT_THROW("Unsupported buffer type: {}", enchantum::to_string(buffer_type));
+    }
+
+    TT_FATAL(manager != nullptr, "BankManager not initialized for buffer type {}", enchantum::to_string(buffer_type));
+
+    // Apply state using allocator ID 0
+    manager->apply_unified_state(unified_state, BankManager::AllocatorDependencies::AllocatorID{0});
+}
+
+void Allocator::apply_complete_unified_state(const CompleteUnifiedAllocatorState& unified_state) {
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    // Apply state for each buffer type present in unified_state
+    for (const auto& [buffer_type, type_state] : unified_state.states_per_buffer_type) {
+        BankManager* manager = nullptr;
+        switch (buffer_type) {
+            case BufferType::DRAM: manager = dram_manager_.get(); break;
+            case BufferType::L1: manager = l1_manager_.get(); break;
+            case BufferType::L1_SMALL: manager = l1_small_manager_.get(); break;
+            case BufferType::TRACE: manager = trace_buffer_manager_.get(); break;
+            default: TT_THROW("Unsupported buffer type: {}", enchantum::to_string(buffer_type));
+        }
+
+        if (manager) {
+            manager->apply_unified_state(type_state, BankManager::AllocatorDependencies::AllocatorID{0});
+        }
+    }
+
+    // Note: We do NOT update allocated_buffers_ here because:
+    // 1. unified_state.all_allocated_buffers contains Buffer* from source allocators
+    // 2. Those pointers may not be valid in this allocator's context
+    // 3. The address allocations are applied, but Buffer* tracking remains separate
+}
+
+void Allocator::reset_and_apply_complete_unified_state(const CompleteUnifiedAllocatorState& unified_state) {
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    // Clear all buffer types
+    dram_manager_->deallocate_all();
+    l1_manager_->deallocate_all();
+    l1_small_manager_->deallocate_all();
+    trace_buffer_manager_->deallocate_all();
+    allocated_buffers_.clear();
+
+    // Apply unified state for each buffer type
+    for (const auto& [buffer_type, type_state] : unified_state.states_per_buffer_type) {
+        BankManager* manager = nullptr;
+        switch (buffer_type) {
+            case BufferType::DRAM: manager = dram_manager_.get(); break;
+            case BufferType::L1: manager = l1_manager_.get(); break;
+            case BufferType::L1_SMALL: manager = l1_small_manager_.get(); break;
+            case BufferType::TRACE: manager = trace_buffer_manager_.get(); break;
+            default: TT_THROW("Unsupported buffer type: {}", enchantum::to_string(buffer_type));
+        }
+
+        if (manager) {
+            manager->apply_unified_state(type_state, BankManager::AllocatorDependencies::AllocatorID{0});
+        }
+    }
+}
+
+bool Allocator::can_apply_unified_state(
+    const UnifiedAllocatorState& unified_state, const BufferType& buffer_type) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    if (buffer_type != unified_state.buffer_type) {
+        return false;
+    }
+
+    const BankManager* manager = nullptr;
+    switch (buffer_type) {
+        case BufferType::DRAM: manager = dram_manager_.get(); break;
+        case BufferType::L1: manager = l1_manager_.get(); break;
+        case BufferType::L1_SMALL: manager = l1_small_manager_.get(); break;
+        case BufferType::TRACE: manager = trace_buffer_manager_.get(); break;
+        default: return false;
+    }
+
+    return manager && manager->can_apply_unified_state(unified_state);
+}
+
+bool Allocator::can_apply_complete_unified_state(const CompleteUnifiedAllocatorState& unified_state) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    // Check each buffer type in the unified state
+    for (const auto& [buffer_type, type_state] : unified_state.states_per_buffer_type) {
+        if (!can_apply_unified_state(type_state, buffer_type)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 }  // namespace tt_metal
 
 }  // namespace tt

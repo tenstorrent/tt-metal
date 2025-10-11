@@ -44,6 +44,8 @@ class Buffer;
 // These are supplied from impl
 enum class BufferType;
 struct AllocatorConfig;
+struct UnifiedAllocatorState;
+struct CompleteUnifiedAllocatorState;
 
 // THREAD SAFETY: Allocator is thread safe.
 class Allocator {
@@ -108,6 +110,15 @@ public:
     void mark_allocations_safe();
 
     void clear();
+
+    // Unified State Methods
+    UnifiedAllocatorState extract_state(const BufferType& buffer_type) const;
+    CompleteUnifiedAllocatorState extract_complete_state() const;
+    void apply_unified_state(const UnifiedAllocatorState& unified_state, const BufferType& buffer_type);
+    void apply_complete_unified_state(const CompleteUnifiedAllocatorState& unified_state);
+    void reset_and_apply_complete_unified_state(const CompleteUnifiedAllocatorState& unified_state);
+    bool can_apply_unified_state(const UnifiedAllocatorState& unified_state, const BufferType& buffer_type) const;
+    bool can_apply_complete_unified_state(const CompleteUnifiedAllocatorState& unified_state) const;
 
 protected:
     // Initializers for mapping banks to DRAM channels / L1 banks

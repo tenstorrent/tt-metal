@@ -581,6 +581,146 @@ void BankManager::reset_size(BankManager::AllocatorDependencies::AllocatorID all
     }
 }
 
+// ============================================================================
+// Unified State Methods
+// ============================================================================
+
+UnifiedAllocatorState BankManager::extract_state(BankManager::AllocatorDependencies::AllocatorID allocator_id) const {
+    UnifiedAllocatorState state;
+
+    // Copy metadata
+    state.buffer_type = buffer_type_;
+    state.num_banks = num_banks();
+    state.bank_size = bank_size();
+    state.interleaved_address_limit = interleaved_address_limit_;
+    state.alignment_bytes = alignment_bytes_;
+    state.bank_id_to_bank_offset = bank_id_to_bank_offset_;
+
+    // Extract allocated regions from the allocator
+    const auto* alloc = get_allocator_from_id(allocator_id);
+    if (alloc) {
+        auto allocated_addresses = alloc->allocated_addresses();
+        state.allocated_regions.reserve(allocated_addresses.size());
+
+        for (const auto& [start, end] : allocated_addresses) {
+            if (end > start) {
+                state.allocated_regions.emplace_back(start, end);
+            }
+        }
+    }
+
+    // Normalize to sort and coalesce
+    state.normalize();
+
+    return state;
+}
+
+UnifiedAllocatorState BankManager::extract_merged_state() const {
+    UnifiedAllocatorState merged_state;
+    bool first = true;
+
+    // Merge states from all allocators
+    for (const auto& allocator_id : allocator_dependencies_.allocator_ids()) {
+        auto state = extract_state(allocator_id);
+
+        if (first) {
+            merged_state = std::move(state);
+            first = false;
+        } else {
+            merged_state.merge(state);
+        }
+    }
+
+    return merged_state;
+}
+
+void BankManager::apply_unified_state(
+    const UnifiedAllocatorState& unified_state, BankManager::AllocatorDependencies::AllocatorID target_allocator_id) {
+    // Validate compatibility
+    TT_FATAL(
+        buffer_type_ == unified_state.buffer_type,
+        "Buffer type mismatch: expected {}, got {}",
+        enchantum::to_string(buffer_type_),
+        enchantum::to_string(unified_state.buffer_type));
+
+    TT_FATAL(
+        num_banks() == unified_state.num_banks,
+        "Bank count mismatch: expected {}, got {}",
+        num_banks(),
+        unified_state.num_banks);
+
+    TT_FATAL(
+        bank_size() == unified_state.bank_size,
+        "Bank size mismatch: expected {}, got {}",
+        bank_size(),
+        unified_state.bank_size);
+
+    auto* alloc = get_allocator_from_id(target_allocator_id);
+    TT_FATAL(alloc, "Allocator not initialized for ID {}", target_allocator_id.get());
+
+    // Apply each allocated region
+    for (const auto& [start_addr, end_addr] : unified_state.allocated_regions) {
+        DeviceAddr size = end_addr - start_addr;
+
+        // Use allocate_at_address to mark this region as allocated
+        auto result = alloc->allocate_at_address(start_addr, size);
+        TT_FATAL(
+            result.has_value(),
+            "Failed to apply unified state: cannot allocate region [{}, {}) of size {} B at address {} in {} buffer "
+            "type. "
+            "Region may already be occupied or invalid.",
+            start_addr,
+            end_addr,
+            size,
+            start_addr,
+            enchantum::to_string(buffer_type_));
+
+        // Track the allocation
+        allocated_buffers_[target_allocator_id.get()].insert(start_addr);
+    }
+
+    // Invalidate caches for dependent allocators
+    invalidate_allocated_ranges_cache_for_dependent_allocators(target_allocator_id);
+}
+
+void BankManager::reset_and_apply_unified_state(
+    const UnifiedAllocatorState& unified_state, BankManager::AllocatorDependencies::AllocatorID target_allocator_id) {
+    auto* alloc = get_allocator_from_id(target_allocator_id);
+    TT_FATAL(alloc, "Allocator not initialized for ID {}", target_allocator_id.get());
+
+    // Clear current allocations
+    for (DeviceAddr addr : allocated_buffers_[target_allocator_id.get()]) {
+        alloc->deallocate(addr);
+    }
+    allocated_buffers_[target_allocator_id.get()].clear();
+    allocated_ranges_cache_[target_allocator_id.get()].reset();
+
+    // Apply unified state
+    apply_unified_state(unified_state, target_allocator_id);
+}
+
+bool BankManager::can_apply_unified_state(const UnifiedAllocatorState& unified_state) const {
+    // Check buffer type
+    if (buffer_type_ != unified_state.buffer_type) {
+        return false;
+    }
+
+    // Check bank configuration
+    if (num_banks() != unified_state.num_banks) {
+        return false;
+    }
+
+    if (bank_size() != unified_state.bank_size) {
+        return false;
+    }
+
+    if (alignment_bytes_ != unified_state.alignment_bytes) {
+        return false;
+    }
+
+    return true;
+}
+
 }  // namespace tt_metal
 
 }  // namespace tt
