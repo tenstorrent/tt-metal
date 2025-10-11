@@ -1,0 +1,36 @@
+name: "(DM) Multi-card Demo tests"
+
+on:
+  workflow_dispatch:
+  workflow_call:
+  push:
+    branches:
+      - mchiou/29851-new-data-movement-workflow
+
+jobs:
+  build-artifact:
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
+    secrets: inherit
+    with:
+      build-wheel: true
+      version: 22.04
+  data-movement-tests:
+    uses: ./.github/workflows/data-movement-impl.yaml
+    needs: build-artifact
+    secrets: inherit
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: [
+          { arch: wormhole_b0, runner-label: N150 },
+          { arch: wormhole_b0, runner-label: N300 },
+        ]
+    with:
+        arch: ${{ matrix.test-group.arch }}
+        runner-label: ${{ matrix.test-group.runner-label }}
+        docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+        build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+        wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+        gtest_filter: "*-*NIGHTLY_*"
