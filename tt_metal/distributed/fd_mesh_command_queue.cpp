@@ -548,10 +548,6 @@ void FDMeshCommandQueue::write_shard_to_device(
         sub_device_ids,
         use_pinned_transfer,
         pinned_memory);
-
-    if (use_pinned_transfer) {
-        pinned_memory->add_barrier_event(this->enqueue_record_event_to_host_nolock());
-    }
 }
 
 void FDMeshCommandQueue::read_shard_from_device(

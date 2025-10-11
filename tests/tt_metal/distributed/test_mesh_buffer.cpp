@@ -758,6 +758,8 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteShardsWithPinnedMemoryFullRange) {
     };
     mesh_device_->mesh_command_queue().enqueue_write_shards(mesh_buffer, {write_transfer}, /*blocking=*/true);
 
+    std::cout << "Sent write buffer" << std::endl;
+
     // Read back via hugepage
     // Prepare read destination buffer. Use aigned vector for ease of verification with src above.
     auto dst = vector_aligned<uint32_t>(bytes_per_device / sizeof(uint32_t), 0);
@@ -768,6 +770,8 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteShardsWithPinnedMemoryFullRange) {
         .region = BufferRegion(0, bytes_per_device),
     };
     mesh_device_->mesh_command_queue().enqueue_read_shards({read_transfer}, mesh_buffer, /*blocking=*/true);
+
+    std::cout << "Sent read buffer" << std::endl;
 
     EXPECT_EQ(*src, dst);
 }
