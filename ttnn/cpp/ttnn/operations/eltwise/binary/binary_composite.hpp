@@ -471,9 +471,6 @@ struct ExecuteLogicalLeftShift : ExecuteBitwiseLeftShift {
 }  // namespace binary
 }  // namespace operations
 
-constexpr auto hypot = ttnn::register_operation<
-    "ttnn::hypot",
-    operations::binary::ExecuteBinaryCompositeOps<operations::binary::BinaryCompositeOpType::HYPOT>>();
 constexpr auto minimum = ttnn::register_operation<"ttnn::minimum", operations::binary::ExecuteMinimum>();
 constexpr auto maximum = ttnn::register_operation<"ttnn::maximum", operations::binary::ExecuteMaximum>();
 constexpr auto atan2 = ttnn::register_operation<

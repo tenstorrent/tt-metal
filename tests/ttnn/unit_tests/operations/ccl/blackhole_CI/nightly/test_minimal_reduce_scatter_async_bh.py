@@ -257,7 +257,7 @@ def run_reduce_scatter_impl(
         # Composite-RS tests
         (4, [1, 1, 1, 8], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
         (4, [1, 1, 1, 16], 3, ttnn.TILE_LAYOUT, ttnn.bfloat8_b),
-        # (4, [1, 1, 32, 32], 3, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16), #Issue 27619
+        (4, [1, 1, 32, 32], 3, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16),
     ],
     ids=[
         "padded_dim_2_test_one",
@@ -270,7 +270,7 @@ def run_reduce_scatter_impl(
         "batch_1",
         "composite_rs_test_one",
         "composite_rs_test_two",
-        # "composite_rs_test_three",
+        "composite_rs_test_three",
     ],
 )
 @pytest.mark.parametrize(

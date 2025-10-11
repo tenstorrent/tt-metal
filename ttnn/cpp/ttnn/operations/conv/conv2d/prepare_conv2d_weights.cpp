@@ -29,7 +29,6 @@ namespace ttnn {
 namespace operations::conv {
 using namespace tt;
 using sliding_window::ParallelConfig;
-using sliding_window::SlidingWindowConfig;
 
 namespace conv2d {
 
@@ -818,8 +817,8 @@ static Tensor to_folded_weight_layout(const Tensor& conv_weight_tensor, std::arr
     // Get input data type
     auto dtype = conv_weight_tensor.dtype();
 
-    auto pad_h = kernel_h % stride[0];
-    auto pad_w = kernel_w % stride[1];
+    auto pad_h = (stride[0] - (kernel_h % stride[0])) % stride[0];
+    auto pad_w = (stride[1] - (kernel_w % stride[1])) % stride[1];
 
     auto padded_kernel_h = kernel_h + pad_h;
     auto padded_kernel_w = kernel_w + pad_w;

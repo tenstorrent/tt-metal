@@ -8,7 +8,7 @@
 
 namespace ttml::ops {
 
-enum ReduceType : uint8_t { MEAN = 0, SUM = 1 };
+enum ReduceType : uint8_t { NONE = 0, MEAN = 1, SUM = 2 };
 
 autograd::TensorPtr mse_loss(
     const autograd::TensorPtr& prediction, const autograd::TensorPtr& target, ReduceType reduce = ReduceType::MEAN);

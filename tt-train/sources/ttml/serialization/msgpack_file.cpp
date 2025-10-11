@@ -270,8 +270,7 @@ private:
             throw std::runtime_error(fmt::format("Key not found: {}", key));
         }
     }
-    template <>
-    bool get_value<ValueType>(std::string_view key, ValueType& value) const {
+    bool get_value(std::string_view key, ValueType& value) const {
         auto it = m_data.find(std::string(key));
         if (it != m_data.end()) {
             value = it->second;

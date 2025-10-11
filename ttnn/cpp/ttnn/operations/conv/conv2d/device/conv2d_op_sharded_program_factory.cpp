@@ -147,8 +147,7 @@ ActivationReuseConfig calculate_activation_reuse_params(
     }
 
     // Put all cores with non-meaningful work to the set
-    uint32_t start_idx =
-        all_input_cores.size() - config.num_cores_with_non_meaningful_work - (config.has_partial_core ? 1 : 0);
+    uint32_t start_idx = all_input_cores.size() - config.num_cores_with_non_meaningful_work;
     for (uint32_t i = start_idx; i < all_input_cores.size(); i++) {
         config.cores_with_non_meaningful_work.insert(all_input_cores[i]);
     }

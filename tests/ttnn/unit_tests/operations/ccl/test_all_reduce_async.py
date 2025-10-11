@@ -332,11 +332,12 @@ def run_all_reduce_with_mesh_tensor_along_row(
     layout,
     buffer_type: ttnn.BufferType,
     function_level_defaults,
+    memory_config=None,
     num_all_reduce_instances: int = 1,
     num_iters: int = 1,
     cluster_axis: int = 0,
 ):
-    mem_config = ttnn.MemoryConfig(buffer_type=buffer_type)
+    mem_config = memory_config or ttnn.MemoryConfig(buffer_type=buffer_type)
 
     ttnn.synchronize_device(mesh_device)
 
@@ -695,4 +696,65 @@ def test_all_reduce_sharded(
         memory_config,
         function_level_defaults,
         num_iters=num_iters,
+    )
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=["mesh_device"])
+@pytest.mark.parametrize("num_links", [1])
+@pytest.mark.parametrize("per_chip_output_shape", [([1, 1, 32, 1280])])
+@pytest.mark.parametrize("cluster_axis", [0])
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize(
+    "input_dtype",
+    [ttnn.bfloat16],
+)
+@pytest.mark.parametrize(
+    "memory_config",
+    [
+        ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 4))}),
+                [32, 64],
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
+        ),
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
+    ],
+)
+@pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}, {"fabric_config": ttnn.FabricConfig.FABRIC_2D_DYNAMIC}],
+    indirect=True,
+)
+def test_all_reduce_fabric_2d(
+    mesh_device,
+    per_chip_output_shape,
+    cluster_axis,
+    num_links,
+    math_op,
+    input_dtype,
+    layout,
+    memory_config,
+    function_level_defaults,
+):
+    num_devices = tuple(mesh_device.shape)[cluster_axis]
+
+    run_all_reduce_with_mesh_tensor_along_row(
+        mesh_device,
+        num_devices,
+        per_chip_output_shape,
+        num_links,
+        math_op,
+        input_dtype,
+        layout,
+        None,
+        function_level_defaults,
+        memory_config,
+        num_iters=1,
+        num_all_reduce_instances=1,
+        cluster_axis=cluster_axis,
     )

@@ -139,6 +139,14 @@ std::map<std::string, std::string> get_defines(
             op_binary_type = "EltwiseBinaryType::ELWADD";
             defines.merge(get_defines(UnaryOpType::LOG2, std::nullopt, "0", idst));
             break;
+        case BinaryOpType::HYPOT:
+            // Hypot: sqrt(a^2 + b^2)
+            defines.merge(get_defines(UnaryOpType::SQUARE, std::nullopt, "PRE_IN0_0", "0", input_dtype));
+            defines.merge(get_defines(UnaryOpType::SQUARE, std::nullopt, "PRE_IN1_0", "0", input_dtype));
+            op_name = "add_tiles";
+            op_binary_type = "EltwiseBinaryType::ELWADD";
+            defines.merge(get_defines(UnaryOpType::SQRT, std::nullopt, "0", idst, input_dtype));
+            break;
         default: TT_THROW("Undefined op type {}", op_type);
     }
 
@@ -451,6 +459,14 @@ std::map<std::string, std::string> get_defines_fp32(
         case BinaryOpType::XLOGY:
             new_defines.insert({"BINOP_INIT", fmt::format("xlogy_binary_tile_init();")});
             op_name = "xlogy_binary_tile";
+            break;
+        case BinaryOpType::HYPOT:
+            // Hypot: sqrt(a^2 + b^2)
+            new_defines.merge(get_defines(UnaryOpType::SQUARE, std::nullopt, "PRE_IN0_0", idst, input_a_dtype));
+            new_defines.merge(get_defines(UnaryOpType::SQUARE, std::nullopt, "PRE_IN1_0", idst, input_b_dtype));
+            new_defines.insert({"BINOP_INIT", fmt::format("add_binary_tile_init();")});
+            op_name = "add_binary_tile";
+            new_defines.merge(get_defines(UnaryOpType::SQRT, std::nullopt, "0", idst1, input_a_dtype));
             break;
         default:
             log_debug(tt::LogOp, "Undefined op type {}", op_type);

@@ -94,6 +94,9 @@ void kernel_main() {
         pkt_hdr_fwd->to_noc_unicast_write(NocUnicastCommandHeader{noc0_dest_addr_fwd}, packet_size);
 
         while (*connection_token_ptr != 1) {
+            // On Blackhole, we need to invalidate the cache to make sure the token is read
+            // from SRAM and we are not spinning on a stale value.
+            invalidate_l1_cache();
             noc_async_write(source_l1_buffer_address, noc0_dest_addr_fwd, packet_size);
         }
         *connection_token_ptr = 0;

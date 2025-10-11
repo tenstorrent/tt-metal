@@ -84,7 +84,7 @@ void configure_risc_settings(
     } else if (arch == tt::ARCH::BLACKHOLE) {
         if (num_riscv_cores == 1) {
             enable_handshake = true;
-            enable_context_switch = false;
+            enable_context_switch = tt::tt_metal::MetalContext::instance().rtoptions().get_enable_2_erisc_mode();
             enable_interrupts = false;
             is_sender_channel_serviced.fill(true);
             is_receiver_channel_serviced.fill(true);
@@ -93,7 +93,7 @@ void configure_risc_settings(
             if (risc_id == 0) {
                 // ERISC0: Handle sender channels only
                 enable_handshake = true;
-                enable_context_switch = false;
+                enable_context_switch = true;
                 enable_interrupts = false;
                 is_sender_channel_serviced.fill(true);
                 is_receiver_channel_serviced.fill(false);

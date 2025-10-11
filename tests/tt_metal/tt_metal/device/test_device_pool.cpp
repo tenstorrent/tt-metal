@@ -10,7 +10,6 @@
 #include <memory>
 #include <vector>
 
-#include <tt-metalium/allocator_types.hpp>
 #include <tt-metalium/device.hpp>
 #include "hostdevcommon/common_values.hpp"
 #include "impl/context/metal_context.hpp"

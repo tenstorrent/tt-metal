@@ -439,6 +439,8 @@ void py_module(py::module& module) {
         module,
         ::ttnn::matmul,
         R"doc(
+        ``ttnn.matmul(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, transpose_a: bool = False, transpose_b: bool = False, memory_config: Optional[ttnn.MemoryConfig] = None, dtype: Optional[ttnn.DataType] = None, program_config: Optional[ttnn.MatmulProgramConfig] = None, activation: Optional[str] = None, compute_kernel_config: Optional[ttnn.DeviceComputeKernelConfig] = None, core_grid: Optional[ttnn.CoreGrid] = None, output_tile: Optional[list[int]] = None, optional_output_tensor: Optional[ttnn.Tensor] = None, global_cb: Optional[ttnn.GlobalCircularBuffer] = None, sub_device_id: Optional[ttnn.SubDeviceId] = None) -> ttnn.Tensor``
+
         Returns the matrix product of two tensors.
 
         The input tensors need to be tiled and at least 1-dimensional.
@@ -490,6 +492,9 @@ void py_module(py::module& module) {
         - In order to leverage sharded matmul implementations we can shard both `input_tensor_a` and `input_tensor_b`. The sharding strategy used will be according
           to the sharding strategy on the respective tensor. A sharded 1D matmul can be either HEIGHT or WIDTH sharded, 2D matmuls can be BLOCK sharded.
 
+          - For 1D sharded matmul variants (width- or height-sharded inputs), if a sharded :attr:`memory_config` is
+            provided for the output, its memory layout and buffer type must match those of :attr:`input_tensor_a`.
+
           Note: the broadcasting logic only looks at the batch dimensions when determining if the inputs
           are broadcastable, and not the matrix dimensions. For example, if :attr:`input_tensor_a` is a
           (`j` x `1` x `n_size` x `m_size`) tensor and :attr:`input_tensor_b` is a (`k_size` x `m_size` x `p`)
@@ -519,9 +524,59 @@ void py_module(py::module& module) {
             output_tile (List of [int], optional): Specifies the output tile configuration. Defaults to `None`.
             optional_output_tensor (ttnn.Tensor, optional): User provided on-device output tensor where the result of matmul is to be written. Defaults to `None`.
 
-
         Returns:
             ttnn.Tensor: the output tensor.
+
+        Note:
+            The input tensors support the following data types and layouts:
+
+            .. list-table:: input_tensor_a
+                :header-rows: 1
+
+                * - dtype
+                  - layout
+                * - BFLOAT8_B, BFLOAT4_B, BFLOAT16, FLOAT32
+                  - TILE
+
+            .. list-table:: input_tensor_b
+                :header-rows: 1
+
+                * - dtype
+                  - layout
+                * - BFLOAT8_B, BFLOAT4_B, BFLOAT16, FLOAT32
+                  - TILE
+
+        Memory Support:
+            The supported memory configurations for the two input tensors are program config dependent, as described below:
+
+            .. list-table:: Supported Memory Configurations
+                :header-rows: 1
+
+                * - Config
+                  - Input A
+                  - Input B
+                * - MatmulMultiCoreReuseProgramConfig
+                  - Interleaved (L1/DRAM), Height Sharded (L1), or Block Sharded (L1)
+                  - Interleaved (L1/DRAM), Height Sharded (L1), or Block Sharded (L1)
+                * - MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig
+                  - Width Sharded (L1)
+                  - Width Sharded (DRAM)
+                * - MatmulMultiCoreReuseMultiCastProgramConfig
+                  - Interleaved (L1/DRAM), Block Sharded (L1)
+                  - Interleaved (L1/DRAM)
+                * - MatmulMultiCoreReuseMultiCastProgramConfig (only for row major orientation without transpose multicast)
+                  - Interleaved (L1/DRAM), Height Sharded (L1)
+                  - Interleaved (L1/DRAM), Width Sharded (L1)
+                * - MatmulMultiCoreReuseMultiCast1DProgramConfig (mcast_in0=False)
+                  - Interleaved (L1/DRAM), Width Sharded (L1)
+                  - Interleaved (L1/DRAM), Width Sharded (L1)
+                * - MatmulMultiCoreReuseMultiCast1DProgramConfig (mcast_in0=True)
+                  - Interleaved (L1/DRAM), Height Sharded (L1)
+                  - Interleaved (L1/DRAM)
+
+
+
+            When sharded output tensors are provided, they should match :attr:`input_tensor_a`'s buffer type and memory layout.
 
         Example:
             >>> # matrix x matrix - no batch dimensions
@@ -614,9 +669,38 @@ void py_module(py::module& module) {
         module,
         ::ttnn::linear,
         R"doc(
+        ``ttnn.linear(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, bias: Optional[ttnn.Tensor] = None, transpose_a: bool = False, transpose_b: bool = False, memory_config: Optional[ttnn.MemoryConfig] = None, dtype: Optional[ttnn.DataType] = None, program_config: Optional[ttnn.MatmulProgramConfig] = None, activation: Optional[str] = None, compute_kernel_config: Optional[ttnn.DeviceComputeKernelConfig] = None, core_grid: Optional[ttnn.CoreGrid] = None, output_tile: Optional[list[int]] = None, optional_output_tensor: Optional[ttnn.Tensor] = None, global_cb: Optional[ttnn.GlobalCircularBuffer] = None, sub_device_id: Optional[ttnn.SubDeviceId] = None) -> ttnn.Tensor``
+
         Returns the linear transformation of the inputs.
 
         The limitations and behaviours are the same as for matmul.
+
+        Note:
+            The tensors support the following data types and layouts:
+
+            .. list-table:: input_tensor_a
+                :header-rows: 1
+
+                * - dtype
+                  - layout
+                * - BFLOAT8_B, BFLOAT4_B, BFLOAT16, FLOAT32
+                  - TILE
+
+            .. list-table:: input_tensor_b
+                :header-rows: 1
+
+                * - dtype
+                  - layout
+                * - BFLOAT8_B, BFLOAT4_B, BFLOAT16, FLOAT32
+                  - TILE
+
+            .. list-table:: bias
+                :header-rows: 1
+
+                * - dtype
+                  - layout
+                * - BFLOAT8_B, BFLOAT4_B, BFLOAT16, FLOAT32
+                  - TILE
 
         Args:
             input_tensor_a (ttnn.Tensor): the first tensor to be multiplied. Needs to be on the device.
@@ -703,11 +787,32 @@ void py_module(py::module& module) {
         module,
         ::ttnn::matmul_batched_weights,
         R"doc(
+        ``ttnn.matmul_batched_weights(input_tensor_a: ttnn.Tensor, input_tensors_b: list[ttnn.Tensor], transpose_a: bool = False, transpose_b: bool = False, memory_config: Optional[ttnn.MemoryConfig] = None, dtype: Optional[ttnn.DataType] = None, program_config: Optional[ttnn.MatmulProgramConfig] = None, activation: Optional[str] = None, compute_kernel_config: Optional[ttnn.DeviceComputeKernelConfig] = None, core_grid: Optional[ttnn.CoreGrid] = None, output_tile: Optional[list[int]] = None, optional_output_tensor: Optional[ttnn.Tensor] = None, global_cb: Optional[ttnn.GlobalCircularBuffer] = None, sub_device_id: Optional[ttnn.SubDeviceId] = None) -> list[ttnn.Tensor]``
+
         performs matrix multiplication for a single input tensor a with multiple tensors b, return a vector of output tensors.
 
         Args:
             input_tensor_a (ttnn.Tensor): the first tensor to be multiplied. Needs to be on the device.
             input_tensors_b (ttnn.Tensor): the second tensor vector to be multiplied. Needs to be on the device.
+
+        Note:
+            The tensors support the following data types and layouts:
+
+            .. list-table:: input_tensor_a
+                :header-rows: 1
+
+                * - dtype
+                  - layout
+                * - BFLOAT8_B, BFLOAT4_B, BFLOAT16, FLOAT32
+                  - TILE
+
+            .. list-table:: input_tensors_b
+                :header-rows: 1
+
+                * - dtype
+                  - layout
+                * - BFLOAT8_B, BFLOAT4_B, BFLOAT16, FLOAT32
+                  - TILE
 
         Keyword Args:
             bias (ttnn.Tensor, optional): the bias tensor to be added. If specified, needs to be on the device. Defaults to `None`.
@@ -778,6 +883,8 @@ void py_module(py::module& module) {
         module,
         ::ttnn::addmm,
         R"doc(
+        ``ttnn.addmm(input_tensor: ttnn.Tensor, mat1_tensor: ttnn.Tensor, mat2_tensor: ttnn.Tensor, alpha: float = 1.0, beta: float = 1.0, memory_config: Optional[ttnn.MemoryConfig] = None, dtype: Optional[ttnn.DataType] = None, program_config: Optional[ttnn.MatmulProgramConfig] = None, compute_kernel_config: Optional[ttnn.DeviceComputeKernelConfig] = None, core_grid: Optional[ttnn.CoreGrid] = None, output_tile: Optional[list[int]] = None, optional_output_tensor: Optional[ttnn.Tensor] = None) -> ttnn.Tensor``
+
         Returns a matrix products of tensors mat1_tensor and mat2_tensor. Tensor input_tensor is added to the final result.
 
         - If mat1_tensor has shape (n, m) and mat2_tensor has shape (m, p), input_tensor needs to be of shape (n, p) and
@@ -793,6 +900,33 @@ void py_module(py::module& module) {
         - If beta is 0, then content of input_tensor is ignored.
 
         - Arguments beta and alpha should be real numbers;
+
+        Note:
+            The tensors support the following data types and layouts:
+
+            .. list-table:: input_tensor
+                :header-rows: 1
+
+                * - dtype
+                  - layout
+                * - BFLOAT8_B, BFLOAT4_B, BFLOAT16, FLOAT32
+                  - TILE
+
+            .. list-table:: mat1_tensor
+                :header-rows: 1
+
+                * - dtype
+                  - layout
+                * - BFLOAT8_B, BFLOAT4_B, BFLOAT16, FLOAT32
+                  - TILE
+
+            .. list-table:: mat2_tensor
+                :header-rows: 1
+
+                * - dtype
+                  - layout
+                * - BFLOAT8_B, BFLOAT4_B, BFLOAT16, FLOAT32
+                  - TILE
 
         Args:
             input_tensor (ttnn.Tensor): tensor to be added to result of matrix multiplication of mat1_tensor and mat2_tensor
@@ -862,6 +996,8 @@ void py_module(py::module& module) {
         module,
         ::ttnn::sparse_matmul,
         R"doc(
+        ``ttnn.sparse_matmul(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, sparsity: ttnn.Tensor, nnz: Optional[int] = None, is_input_a_sparse: bool = False, memory_config: Optional[ttnn.MemoryConfig] = None, dtype: Optional[ttnn.DataType] = None, program_config: Optional[ttnn.MatmulProgramConfig] = None, compute_kernel_config: Optional[ttnn.DeviceComputeKernelConfig] = None, core_grid: Optional[ttnn.CoreGrid] = None, output_tile: Optional[list[int]] = None, optional_output_tensor: Optional[ttnn.Tensor] = None, global_cb: Optional[ttnn.GlobalCircularBuffer] = None, sub_device_id: Optional[ttnn.SubDeviceId] = None) -> ttnn.Tensor``
+
         Performs sparse matrix multiplication on input tensors based on sparsity tensor that has scale factor for each token.
 
         Args:
@@ -882,6 +1018,35 @@ void py_module(py::module& module) {
         Returns:
             ttnn.Tensor: the output tensor with sparse results.
 
+        Note:
+            The tensors support the following data types and layouts:
+
+            .. list-table:: input_tensor_a
+                :header-rows: 1
+
+                * - dtype
+                  - layout
+                * - BFLOAT16
+                  - TILE
+
+            .. list-table:: input_tensor_b
+                :header-rows: 1
+
+                * - dtype
+                  - layout
+                * - BFLOAT4_B, BFLOAT8_B, BFLOAT16, FLOAT32
+                  - TILE
+
+            FLOAT32 is only supported if :attr:`nnz` is provided.
+
+            .. list-table:: sparsity
+                :header-rows: 1
+
+                * - dtype
+                  - layout
+                * - BFLOAT16
+                  - ROW_MAJOR
+
         Example:
             >>> # Sparse matmul for 64 batch, 128 sequence, 512 hidden dimensions, 8 experts
             >>> expert_weights = ttnn.ones([1, 8, 512, 512])
@@ -899,6 +1064,8 @@ void py_module(py::module& module) {
             >>> output = ttnn.sparse_matmul(expert_weights, tokens, sparsity=sparsity_bitmask, nnz=4)
             >>> print(output.shape)
             [64, 128, 8, 512]
+
+
         )doc",
         ttnn::pybind_overload_t{
             [](decltype(::ttnn::sparse_matmul)& self,

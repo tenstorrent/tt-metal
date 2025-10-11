@@ -22,15 +22,6 @@
 
 namespace ttnn::operations::binary {
 
-Tensor _hypot(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor a_sq = ttnn::square(input_a, output_mem_config);
-    Tensor b_sq = ttnn::square(input_b, output_mem_config);
-    Tensor c_sq = ttnn::add(a_sq, b_sq, std::nullopt, output_mem_config);
-    a_sq.deallocate();
-    b_sq.deallocate();
-    return ttnn::sqrt(c_sq, output_mem_config);
-}
-
 // nextafter
 Tensor _nextafter(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
     const float eps = tt::tt_metal::hal::get_eps();

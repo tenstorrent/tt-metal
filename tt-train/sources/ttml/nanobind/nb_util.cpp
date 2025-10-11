@@ -324,6 +324,7 @@ tt::tt_metal::Tensor make_metal_tensor(
 
             std::span<const NumpyType> numpy_data_span(
                 static_cast<const NumpyType*>(numpy_data.data()), numpy_data.size());
+
             if constexpr (!std::is_same_v<MetalType, NumpyType>) {
                 std::vector<MetalType> converted_data;
                 converted_data.assign(numpy_data_span.begin(), numpy_data_span.end());
@@ -383,6 +384,8 @@ tt::tt_metal::Tensor make_metal_tensor(
                 NB_THROW(nb::exception_type::type_error, UnsupportedMessages::INVALID);
                 break;
         }
+
+        NB_THROW(nb::exception_type::type_error, UnsupportedMessages::UNKNOWN);
     };
 
     switch (static_cast<nb::dlpack::dtype_code>(numpy_data_type.code)) {

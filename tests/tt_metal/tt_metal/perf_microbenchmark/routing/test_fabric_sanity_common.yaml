@@ -387,6 +387,7 @@ Tests:
         iterations: 10
 
   - name: "FabricMuxSimpleUnicastWriteLinear"
+    skip: [GALAXY, BLACKHOLE_GALAXY]
     fabric_setup:
       topology: Linear
       fabric_tensix_config: Mux
@@ -402,6 +403,7 @@ Tests:
               device: [0, 1]
 
   - name: "FabricMuxAllToAllUnicastMesh"
+    skip: [GALAXY, BLACKHOLE_GALAXY]
     fabric_setup:
       topology: Mesh
       fabric_tensix_config: Mux
@@ -416,6 +418,7 @@ Tests:
       - type: all_to_all
 
   - name: "FabricMuxAllToAllUnicastMeshDynamic"
+    skip: [GALAXY, BLACKHOLE_GALAXY]
     fabric_setup:
       topology: Mesh
       routing_type: Dynamic

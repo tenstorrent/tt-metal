@@ -210,6 +210,9 @@ public:
     void dump_to_yaml(const std::optional<std::string>& path_to_yaml = std::nullopt);
     void emit_to_text_proto(const std::optional<std::string>& path_to_text_proto = std::nullopt);
 
+    // API to generate Ethernet Metrics
+    void generate_local_ethernet_metrics();
+
 private:
     void run_local_discovery();
     void run_global_discovery();
@@ -217,7 +220,6 @@ private:
     void merge(PhysicalSystemDescriptor&& other);
     void exchange_metadata(bool issue_gather);
     void generate_cross_host_connections();
-    void generate_ethernet_metrics();
     uint32_t get_chip_id_for_asic(AsicID asic_id) const;
     void remove_unresolved_nodes();
     void resolve_hostname_uniqueness();

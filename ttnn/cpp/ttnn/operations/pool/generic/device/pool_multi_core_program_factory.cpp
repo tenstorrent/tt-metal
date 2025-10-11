@@ -421,6 +421,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
 
     const bool is_output_tiled = output_layout == Layout::TILE;
     const bool is_output_block_format = is_block_float(outputs[0].dtype());
+    const bool zero_pages = is_output_tiled && is_output_block_format;
 
     // Conditionally allocate temporary CB - only needed for TILED output
     uint32_t pre_tilize_cb_id = 32;  // default invalid CB ID
@@ -573,7 +574,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         stride_w,                       // 33
         dilation_h,                     // 34
         dilation_w,                     // 35
-        (uint32_t)return_indices};      // 36
+        (uint32_t)return_indices,       // 36
+        (uint32_t)zero_pages};          // 37
     std::vector<uint32_t> reader1_ct_args = reader0_ct_args;
     reader1_ct_args[8] = 1;  // split reader id for reader1
 

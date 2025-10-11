@@ -18,7 +18,6 @@
 namespace tt::tt_metal::distributed {
 namespace {
 
-using ::testing::IsEmpty;
 using ::testing::SizeIs;
 
 TEST(MeshDeviceViewTest, GetRingCoordinatesRingShapeEmpty) {

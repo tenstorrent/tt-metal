@@ -185,7 +185,7 @@ def get_timeout(test_module_name):
             if TIMEOUT_KEY in line:
                 try:
                     timeout = int(line.split("=")[-1].strip())
-                except:
+                except (ValueError, IndexError):
                     break
     return timeout
 
@@ -363,7 +363,13 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
     timeout = get_timeout(module_name)
     suite_pbar = pbar_manager.counter(total=len(test_vectors), desc=f"Suite: {suite_name}", leave=False)
     reset_util = tt_smi_util.ResetUtil(config.arch_name)
-    child_mode = not (config.dry_run and not config.vector_id and not config.main_proc_verbose)
+    # child_mode is True unless we are in a dry run, with no vector_id, and not in verbose mode.
+    # In other words, child_mode is False only if all of the following are True:
+    #   - config.dry_run is True
+    #   - config.vector_id is falsy (None or False)
+    #   - config.main_proc_verbose is False
+    dry_run_no_vector_no_verbose = config.dry_run and not config.vector_id and not config.main_proc_verbose
+    child_mode = not dry_run_no_vector_no_verbose
     timeout_before_rejoin = 5
 
     if child_mode:
@@ -382,6 +388,7 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
         # Capture the original test vector data BEFORE any modifications
         original_vector_data = test_vector.copy()
         result["start_time_ts"] = dt.datetime.now()
+        result["input_hash"] = vector_id
         validity = deserialize(test_vector["validity"]).split(".")[-1]
         if validity == VectorValidity.INVALID:
             invalid_vectors_count += 1
@@ -449,19 +456,41 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
                     result["exception"] = message
 
                     # Log device exceptions
-                    if "DEVICE EXCEPTION" in message:
+                    if "DEVICE EXCEPTION" in str(message):
                         logger.error(
                             f"DEVICE EXCEPTION: Device could not be initialized. The following assertion was thrown: {message}"
                         )
                         logger.info("Device error detected. The suite will be aborted after this test.")
 
                     # Set failure status based on error type
-                    if "Out of Memory: Not enough space to allocate" in message:
+                    if "Out of Memory: Not enough space to allocate" in str(message):
                         result["status"] = TestStatus.FAIL_L1_OUT_OF_MEM
-                    elif "Watcher" in message:
+                    elif "Watcher" in str(message):
                         result["status"] = TestStatus.FAIL_WATCHER
                     else:
                         result["status"] = TestStatus.FAIL_ASSERT_EXCEPTION
+
+                # Handle XFail suites - invert the logic for expected failures
+                if suite_name.lower().startswith("xfail"):
+                    if result["status"] == TestStatus.PASS:
+                        # Test passed but was expected to fail - this is unexpected
+                        result["status"] = TestStatus.XPASS
+                        logger.warning(
+                            f"UNEXPECTED PASS: Test in XFail suite '{suite_name}' passed unexpectedly: {vector_id}"
+                        )
+                    elif result["status"] in [
+                        TestStatus.FAIL_ASSERT_EXCEPTION,
+                        TestStatus.FAIL_L1_OUT_OF_MEM,
+                        TestStatus.FAIL_WATCHER,
+                        TestStatus.FAIL_UNSUPPORTED_DEVICE_PERF,
+                    ]:
+                        # Test failed as expected in XFail suite
+                        result["status"] = TestStatus.XFAIL
+                        logger.info(
+                            f"EXPECTED FAILURE: Test in XFail suite '{suite_name}' failed as expected: {vector_id}"
+                        )
+                    # Note: FAIL_CRASH_HANG is still treated as a real failure even in XFail suites
+                    # since crashes/hangs are infrastructure issues, not test logic failures
 
                 # Set performance metrics if available
                 result["e2e_perf"] = e2e_perf if (e2e_perf and config.measure_perf) else None
@@ -487,6 +516,10 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
 
                 # Check if we should skip remaining tests in the suite
                 if config.skip_on_timeout:
+                    # Add the timed-out test result before skipping
+                    results.append(result)
+                    suite_pbar.update()
+
                     # Skip all remaining tests in the suite
                     logger.info("Skipping remaining tests in suite due to timeout.")
                     for j in range(i + 1, len(test_vectors)):
@@ -523,7 +556,7 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
         results.append(result)
 
         # Abort the suite if a fatal device error was encountered
-        if "DEVICE EXCEPTION" in result.get("exception", ""):
+        if "DEVICE EXCEPTION" in str(result.get("exception", "")):
             logger.error("Aborting test suite due to fatal device error.")
             if p and p.is_alive():
                 p.terminate()

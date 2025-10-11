@@ -13,7 +13,7 @@
 #include <tt-metalium/allocator.hpp>
 
 namespace distribution_spec_tests {
-using tt::tt_metal::BufferDistributionSpec;
+using tt::tt_metal::BufferDistributionSpec;  // NOLINT(misc-unused-using-decls)
 constexpr uint32_t PADDING = tt::tt_metal::UncompressedBufferPageMapping::PADDING;
 
 struct BufferDistributionSpecInputs {
