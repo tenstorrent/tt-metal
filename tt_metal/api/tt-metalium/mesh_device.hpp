@@ -296,6 +296,7 @@ public:
     std::string to_string() const;
     bool is_parent_mesh() const;
 
+    const std::shared_ptr<MeshDevice>& get_parent_mesh() const;
     std::vector<std::shared_ptr<MeshDevice>> get_submeshes() const;
 
     std::shared_ptr<MeshDevice> create_submesh(

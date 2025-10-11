@@ -94,6 +94,7 @@ target_sources(
         core/tensor/tensor_spec.cpp
         core/tensor/tensor_utils.cpp
         core/tensor/types.cpp
+        core/tensor/unit_mesh/unit_mesh_utils.cpp
         core/tensor/xtensor/partition.cpp
 )
 target_include_directories(
