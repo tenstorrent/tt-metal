@@ -11,7 +11,12 @@ set_target_properties(
             FALSE
 )
 # Globbing non-build files is acceptable for now because devs don't generate packages.
-file(GLOB_RECURSE kernels sdpa_decode/device/kernels/*)
+file(
+    GLOB_RECURSE kernels
+    sdpa/device/kernels/*
+    sdpa_decode/device/kernels/*
+    sdpa_windowed/device/kernels/*
+)
 target_sources(
     ttnn_op_transformer
     PUBLIC

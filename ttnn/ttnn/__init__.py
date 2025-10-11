@@ -412,4 +412,4 @@ from ttnn._ttnn.operations.data_movement import TileReshapeMapMode
 
 if "TT_METAL_HOME" not in os.environ:
     this_dir = os.path.dirname(__file__)
-    SetRootDir(os.path.abspath(this_dir))
+    SetRootDir(os.path.join(os.path.abspath(this_dir), "tt-metalium"))
