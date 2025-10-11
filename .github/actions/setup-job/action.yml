@@ -48,7 +48,7 @@ runs:
     - name: 📂 Extract Build Files
       if: ${{ inputs.build-artifact-name != '' }}
       working-directory: ${{ inputs.path }}
-      run: tar --zstd  -xf ttm_any.tar.zst
+      run: tar -xf ttm_any.tar
       shell: bash
 
     - name: 🧪 Download Python Wheel
