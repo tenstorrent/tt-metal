@@ -100,6 +100,7 @@ def create_run_config(model_config, weight_config, *model_states):
 
 
 def _merge_model_config_state_items(model_config_item: Any, state_item: Any, mb_mesh_device: ttnn.Device | None) -> Any:
+    """Merges the model config-specific items with the model state items."""
     if state_item is None and isinstance(model_config_item, FromWeightConfig):
         return FromWeightConfig(
             mesh_device=_merge_model_config_state_items(model_config_item.mesh_device, state_item, mb_mesh_device)
@@ -124,6 +125,7 @@ def _merge_model_config_state_items(model_config_item: Any, state_item: Any, mb_
 
 
 def _merge_run_config(model_state_config_item: Any, weight_config_item: Any, _: ttnn.Device | None) -> Any:
+    """Merges the model and state merged config-specific items with the weight config items to create the final run config."""
     if isinstance(
         model_state_config_item, FromWeightConfig
     ):  # TODO: bring regular tensor saving back once Issue #26763 is resolved
@@ -143,6 +145,7 @@ def _merge_run_config(model_state_config_item: Any, weight_config_item: Any, _: 
 
 
 def _merge_model_states(cfg1: Any, cfg2: Any, _: ttnn.Device | None) -> Any:
+    """Merges two partial model states."""
     if cfg1 is None:
         return cfg2
     if cfg2 is None:
@@ -157,7 +160,13 @@ def _merge_config_containers(
     search_for_mesh_device: bool,
     mb_mesh_device: ttnn.MeshDevice | None = None,
 ) -> Any:
-    """Helper function to merge two configs, where the first one may partially consist of OpConfigs."""
+    """Helper function to merge two configs, where the first one may partially consist of OpConfigs.
+    Parameters:
+        - `cfg_a`: First config to merge. May contain OpConfigs.
+        - `cfg_b`: Second config to merge.
+        - `merge_config_specific_items`: Function to merge two non-container, non-OpConfig items.
+        - `search_for_mesh_device`: Whether to search for a mesh device in cfg_b (model state) to pass it down to OpConfigs in cfg_a.
+        - `mb_mesh_device`: Mesh device to pass down to OpConfigs in cfg_a, if already known."""
     if cfg_a is None and cfg_b is None:
         return None
 
