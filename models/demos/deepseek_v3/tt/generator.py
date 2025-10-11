@@ -58,8 +58,9 @@ class DeepseekGenerator:
 
     def __init__(
         self,
-        mesh_device: ttnn.MeshDevice,
-        model_path: str | Path,
+        hf_config: AutoConfig | None = None,
+        mesh_device: ttnn.MeshDevice | None = None,
+        model_path: str | Path | None = None,
         cache_dir: str | Path | None = None,
         batch_size: int = USERS_PER_ROW,
         tokenizer=None,
@@ -73,7 +74,9 @@ class DeepseekGenerator:
         self.batch_size = min(USERS_PER_ROW, batch_size)
 
         # Load HF config + tokenizer
-        self.hf_config = AutoConfig.from_pretrained(self.model_path, trust_remote_code=True)
+        self.hf_config = (
+            hf_config if hf_config is not None else AutoConfig.from_pretrained(self.model_path, trust_remote_code=True)
+        )
         # self._ensure_max_seq_len(self.hf_config)
         self.hf_config.max_seq_len = 4096  # TODO: Change this when needed?
         # Optional overrides for layer counts before building states
@@ -281,11 +284,11 @@ class DeepseekGenerator:
         )
         return rope_tensors, tt_positions
 
-    def _decode_step(self, tokens_step: torch.Tensor, positions: torch.Tensor) -> torch.Tensor:
+    def _decode_step(self, tokens: torch.Tensor, start_pos: torch.Tensor) -> torch.Tensor:
         """Run a single decode step and return logits on host as torch tensor [1, 1, B, V]."""
         # Prepare TT inputs
-        tt_tokens = self._tt_from_tokens_step(tokens_step)
-        rope_tensors, tt_positions = self._tt_from_positions(positions)
+        tt_tokens = self._tt_from_tokens_step(tokens)
+        rope_tensors, tt_positions = self._tt_from_positions(start_pos)
 
         # RowPipelinedModel forward
         logits_tt = RowPipelinedModel.forward_decode(
@@ -302,7 +305,9 @@ class DeepseekGenerator:
         ttnn.deallocate(tt_tokens)
         ttnn.deallocate(logits_tt)
 
-        return logits  # [1, 1, B, V]
+        return_value = logits.squeeze(0).squeeze(0)  # [1, 1, B, V]
+        logger.info(f"__decode_step return_value: {return_value.shape}")
+        return return_value
 
     def _prefill(self, tokens: torch.Tensor, user_id: int) -> torch.Tensor:
         """Run prefill for the full prompt sequence and return logits for the last position.
@@ -353,8 +358,11 @@ class DeepseekGenerator:
         # Free device tensors for this step
         ttnn.deallocate(tt_tokens)
         ttnn.deallocate(logits_tt)
-        last_logits = logits[0, 0, -1:, :]
-        return last_logits.squeeze(0)
+
+        # last_logits = logits[0, 0, -1:, :]
+        return_value = logits.squeeze(0).squeeze(0)
+        logger.info(f"__prefill return_value: {return_value.shape}")
+        return return_value
 
     def _sample_greedy(self, logits: torch.Tensor) -> torch.Tensor:
         # logits: [1, 1, B, V]
