@@ -18,7 +18,7 @@ namespace ttnn::operations::ccl {
 
 void py_bind_all_gather(py::module& module) {
     auto doc =
-        R"doc(all_gather(input_tensor: ttnn.Tensor, dim: int, cluster_axis: Optional[int] = None, topology: ttnn.Topology = ttnn.Topology.Linear, output_tensor: Optional[ttnn.Tensor] = None, memory_config: Optional[ttnn.MemoryConfig] = None, subdevice_id: Optional[ttnn.SubDeviceId] = None, queue_id: int = 0) -> ttnn.Tensor
+        R"doc(all_gather(input_tensor: ttnn.Tensor, dim: int, cluster_axis: Optional[int] = None, topology: ttnn.Topology = ttnn.Topology.Linear, output_tensor: Optional[ttnn.Tensor] = None, memory_config: Optional[ttnn.MemoryConfig] = None, subdevice_id: Optional[ttnn.SubDeviceId] = None) -> ttnn.Tensor
 
             All-gather operation across devices along a selected dimension and optional cluster axis.
 

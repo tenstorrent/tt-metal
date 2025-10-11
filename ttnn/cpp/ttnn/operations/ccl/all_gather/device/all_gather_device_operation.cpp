@@ -69,7 +69,7 @@ void AllGatherDeviceOperation::validate_on_program_cache_hit(
             "Output tensor shape {} does not match computed output spec shape {}",
             output_tensor.logical_shape(),
             output_spec.logical_shape());
-        auto optional_output_tensor_spec = output_tensor.tensor_spec();
+        const auto& optional_output_tensor_spec = output_tensor.tensor_spec();
         // everything but memory config must match
         TT_FATAL(
             optional_output_tensor_spec.page_config() == output_spec.page_config(),
