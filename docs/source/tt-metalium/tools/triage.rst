@@ -7,6 +7,7 @@ Overview
 tt-triage is a tool that provides insights into Metal execution. It is designed to be easily extensible.
 It consists of data provider scripts that gather data from various sources (such as Inspector, tt-exalens, etc.) and
 analysis scripts that process data supplied by the data provider scripts.
+Since most of the scripts use Inspector data, before using tt-triage, ensure that you have enabled Inspector in your Metal host runtime.
 
 Running
 -------

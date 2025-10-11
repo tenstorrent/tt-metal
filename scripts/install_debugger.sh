@@ -17,4 +17,4 @@ fi
 
 echo "Installing ttexalens at ref: $REF"
 python3 -m pip uninstall -y ttexalens >/dev/null 2>&1 || true
-python3 -m pip install "git+https://github.com/tenstorrent/tt-exalens.git@$REF"
+LD_LIBRARY_PATH= python3 -m pip install "git+https://github.com/tenstorrent/tt-exalens.git@$REF"
