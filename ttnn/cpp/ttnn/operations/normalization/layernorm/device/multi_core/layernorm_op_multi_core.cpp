@@ -14,6 +14,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 #include <optional>
+#include <bit>
 
 using uint32_t = std::uint32_t;
 using namespace tt::constants;
@@ -562,6 +563,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     uint32_t block_wt,
     bool legacy_reduction,
     bool legacy_rsqrt,
+    bool use_welford,
     DeviceComputeKernelConfig compute_kernel_config) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     bool rms_norm = norm_type == LayerNormType::RMSNORM;
@@ -745,12 +747,12 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     uint32_t x_CB_size = in0_block_tiles * single_tile_size;
     uint32_t xmm_CB_size = in0_block_tiles * single_tile_size;
     uint32_t ex_partial_CB_size = in0_block_tiles * single_tile_size / block_wt;
+    uint32_t ex_external_CB_size = tt::div_up(Kt, block_wt) * single_tile_size;
     if (is_pre_all_gather || is_post_all_gather) {
         ex_partial_CB_size = ex_partial_CB_size * pre_all_gather_stats_block_tiles;
     }
     uint32_t ex_CB_size = ex_partial_CB_size;
     uint32_t ex_global_CB_size = ex_partial_CB_size;
-    uint32_t ex_external_CB_size = tt::div_up(Kt, block_wt) * single_tile_size;
     uint32_t ex2pe_CB_size = num_rows_per_all_to_all_worker * single_tile_size;
     uint32_t stats_cb_size = 0;
     uint32_t stats_reduced_cb_size = 0;
@@ -802,6 +804,16 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     if (is_pre_all_gather) {
         ex_external_CB_size = ex_external_CB_size * pre_all_gather_stats_block_tiles;
     }
+
+    if (use_welford) {
+        // Welford calculates 1 mean tile and 1 var tile per height tile
+        // (for row major) or width tile (for col major)
+        ex_external_CB_size *= 2;
+        ex_partial_CB_size *= 2;
+        ex_CB_size *= 2;
+        ex_global_CB_size *= 2;
+    }
+
     uint32_t num_none_all_to_all_workers = num_blocks - num_cores_all_to_all;
     if (num_rows_per_all_to_all_worker_last == 0) {
         num_rows_per_all_to_all_worker_last = num_rows_per_all_to_all_worker;
@@ -997,10 +1009,6 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         reader_mcast_sender_defines["FUSE_BETA"] = "1";
         reader_mcast_receiver_defines["FUSE_BETA"] = "1";
     }
-    if (rms_norm) {
-        reader_mcast_sender_defines["RMSNORM"] = "1";
-        reader_mcast_receiver_defines["RMSNORM"] = "1";
-    }
     // reader compile time args
     std::vector<uint32_t> reader_mcast_sender_compile_time_args = {
         (std::uint32_t)reduce_receiver_semaphore_id,
@@ -1019,7 +1027,9 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         (std::uint32_t)use_two_stage_reduce,
         (std::uint32_t)num_blocks_first_stage,
         (std::uint32_t)num_blocks_second_stage,
-        (std::uint32_t)reduce_second_stage_semaphore_id};
+        (std::uint32_t)reduce_second_stage_semaphore_id,
+        (std::uint32_t)rms_norm,
+        (std::uint32_t)use_welford};
     std::vector<uint32_t> reader_mcast_receiver_all_to_all_compile_time_args = {
         (std::uint32_t)reduce_receiver_semaphore_id,
         (std::uint32_t)reduce_sender_semaphore_id,
@@ -1035,7 +1045,9 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         (std::uint32_t)use_two_stage_reduce,
         (std::uint32_t)num_blocks_first_stage,
         (std::uint32_t)num_blocks_second_stage,
-        (std::uint32_t)reduce_second_stage_semaphore_id};
+        (std::uint32_t)reduce_second_stage_semaphore_id,
+        (std::uint32_t)rms_norm,
+        (std::uint32_t)use_welford};
     std::vector<uint32_t> reader_mcast_receiver_compile_time_args = {
         (std::uint32_t)reduce_receiver_semaphore_id,
         (std::uint32_t)reduce_sender_semaphore_id,
@@ -1051,7 +1063,9 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         (std::uint32_t)0,
         (std::uint32_t)0,
         (std::uint32_t)0,
-        (std::uint32_t)reduce_second_stage_semaphore_id};
+        (std::uint32_t)reduce_second_stage_semaphore_id,
+        (std::uint32_t)rms_norm,
+        (std::uint32_t)use_welford};
 
     tt::tt_metal::NOC reader_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
     tt::tt_metal::NOC writer_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
@@ -1132,7 +1146,8 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         1,  // is_all_to_all_worker
         (std::uint32_t)gamma.has_value(),
         (std::uint32_t)beta.has_value(),
-        (std::uint32_t)block_wt};
+        (std::uint32_t)block_wt,
+        (std::uint32_t)use_welford};
     tt::tt_metal::TensorAccessorArgs(gamma ? gamma->buffer() : nullptr)
         .append_to(writer_mcast_sender_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(beta ? beta->buffer() : nullptr).append_to(writer_mcast_sender_compile_time_args);
@@ -1141,7 +1156,8 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         0,  // is_all_to_all_worker
         (std::uint32_t)gamma.has_value(),
         (std::uint32_t)beta.has_value(),
-        (std::uint32_t)block_wt};
+        (std::uint32_t)block_wt,
+        (std::uint32_t)use_welford};
     tt::tt_metal::TensorAccessorArgs(gamma ? gamma->buffer() : nullptr)
         .append_to(writer_mcast_receiver_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(beta ? beta->buffer() : nullptr)
@@ -1214,7 +1230,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     if (b) {
         compute_defines["FUSE_PRE_ADD"] = "1";
     }
-    if (rms_norm) {
+    if (rms_norm && !use_welford) {
         compute_defines["RMSNORM"] = "1";
     }
     // compute kernel compile time args
@@ -1249,6 +1265,26 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         float32_reduction,
         legacy_rsqrt,
         num_blocks_second_stage};
+
+    constexpr uint32_t tile_width = tt::constants::TILE_WIDTH;
+    uint32_t last_tile_W = K - ((K - tile_width) / tile_width) * tile_width;
+    union {
+        float f;
+        uint32_t u;
+    } e{};
+    e.f = eps;
+    if (use_welford) {
+        // For Welford combine
+        all_to_all_except_top_compute_compile_time_args.push_back(tile_width);
+        all_to_all_except_top_compute_compile_time_args.push_back(last_tile_W);
+        all_to_all_except_top_compute_compile_time_args.push_back(K);
+        all_to_all_except_top_compute_compile_time_args.push_back(e.u);
+        not_all_to_all_compute_compile_time_args.push_back(tile_width);
+        not_all_to_all_compute_compile_time_args.push_back(last_tile_W);
+        not_all_to_all_compute_compile_time_args.push_back(K);
+        not_all_to_all_compute_compile_time_args.push_back(e.u);
+    }
+
     // compute kernel
     std::string compute_kernel_file;
     if (is_pre_all_gather) {
@@ -1261,8 +1297,12 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
             "layernorm_sharded_post_allgather.cpp";
     } else {
         compute_kernel_file =
-            "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_sharded.cpp";
+            use_welford
+                ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/"
+                  "layernorm_sharded_welford.cpp"
+                : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_sharded.cpp";
     }
+
     KernelHandle compute_kernels_id = -1;
     auto compute_kernels_id_all_to_all = CreateKernel(
         program,
@@ -1320,17 +1360,13 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
             .set_page_size(in2_cb_index, bfloat16_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, in2_cb_config);
     // in4 scaler-c
-    uint32_t in4_cb_index = tt::CBIndex::c_4;
-    tt::tt_metal::CircularBufferConfig in4_cb_config =
-        tt::tt_metal::CircularBufferConfig(in2_CB_size, {{in4_cb_index, tt::DataFormat::Float16_b}})
-            .set_page_size(in4_cb_index, bfloat16_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, in4_cb_config);
-    // in3 eps
-    uint32_t in3_cb_index = tt::CBIndex::c_3;
-    tt::tt_metal::CircularBufferConfig in3_cb_config =
-        tt::tt_metal::CircularBufferConfig(in3_CB_size, {{in3_cb_index, tt::DataFormat::Float16_b}})
-            .set_page_size(in3_cb_index, bfloat16_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, in3_cb_config);
+    if (!use_welford) {
+        uint32_t in4_cb_index = tt::CBIndex::c_4;
+        tt::tt_metal::CircularBufferConfig in4_cb_config =
+            tt::tt_metal::CircularBufferConfig(in2_CB_size, {{in4_cb_index, tt::DataFormat::Float16_b}})
+                .set_page_size(in4_cb_index, bfloat16_tile_size);
+        tt::tt_metal::CreateCircularBuffer(program, all_cores, in4_cb_config);
+    }
     // gamma
     if (gamma.has_value()) {
         uint32_t in5_cb_index = tt::CBIndex::c_5;
@@ -1381,37 +1417,54 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
                 .set_page_size(ex_cb_external_index, single_tile_size);
         tt::tt_metal::CreateCircularBuffer(program, all_cores, ex_cb_external_config);
     }
-    // ex_partial2
-    uint32_t ex_cb_partial2_index = tt::CBIndex::c_11;
-    tt::tt_metal::CircularBufferConfig ex_cb_partial2_config =
-        tt::tt_metal::CircularBufferConfig(ex_partial_CB_size, {{ex_cb_partial2_index, cb_data_format}})
-            .set_page_size(ex_cb_partial2_index, single_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, ex_cb_partial2_config);
-    // ex2
-    uint32_t ex2_cb_index = tt::CBIndex::c_12;
-    tt::tt_metal::CircularBufferConfig ex2_cb_config =
-        tt::tt_metal::CircularBufferConfig(ex_CB_size, {{ex2_cb_index, cb_data_format}})
-            .set_page_size(ex2_cb_index, single_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, ex2_cb_config);
-    // ex_external2
-    uint32_t ex_cb_external2_index = tt::CBIndex::c_13;
-    tt::tt_metal::CircularBufferConfig ex_cb_external2_config =
-        tt::tt_metal::CircularBufferConfig(ex_external_CB_size, {{ex_cb_external2_index, cb_data_format}})
-            .set_page_size(ex_cb_external2_index, single_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, ex_cb_external2_config);
+    if (!use_welford) {
+        // in3 eps
+        uint32_t in3_cb_index = tt::CBIndex::c_3;
+        tt::tt_metal::CircularBufferConfig in3_cb_config =
+            tt::tt_metal::CircularBufferConfig(in3_CB_size, {{in3_cb_index, tt::DataFormat::Float16_b}})
+                .set_page_size(in3_cb_index, bfloat16_tile_size);
+        tt::tt_metal::CreateCircularBuffer(program, all_cores, in3_cb_config);
+        // ex_partial2
+        uint32_t ex_cb_partial2_index = tt::CBIndex::c_11;
+        tt::tt_metal::CircularBufferConfig ex_cb_partial2_config =
+            tt::tt_metal::CircularBufferConfig(ex_partial_CB_size, {{ex_cb_partial2_index, cb_data_format}})
+                .set_page_size(ex_cb_partial2_index, single_tile_size);
+        tt::tt_metal::CreateCircularBuffer(program, all_cores, ex_cb_partial2_config);
+        // ex2
+        uint32_t ex2_cb_index = tt::CBIndex::c_12;
+        tt::tt_metal::CircularBufferConfig ex2_cb_config =
+            tt::tt_metal::CircularBufferConfig(ex_CB_size, {{ex2_cb_index, cb_data_format}})
+                .set_page_size(ex2_cb_index, single_tile_size);
+        tt::tt_metal::CreateCircularBuffer(program, all_cores, ex2_cb_config);
+        // ex_external2
+        uint32_t ex_cb_external2_index = tt::CBIndex::c_13;
+        tt::tt_metal::CircularBufferConfig ex_cb_external2_config =
+            tt::tt_metal::CircularBufferConfig(ex_external_CB_size, {{ex_cb_external2_index, cb_data_format}})
+                .set_page_size(ex_cb_external2_index, single_tile_size);
+        tt::tt_metal::CreateCircularBuffer(program, all_cores, ex_cb_external2_config);
+        // ex2pe
+        uint32_t cb_ex2pe_index;
+        cb_ex2pe_index = tt::CBIndex::c_20;
+        tt::tt_metal::CircularBufferConfig ex2pe_cb_config =
+            tt::tt_metal::CircularBufferConfig(ex2pe_CB_size, {{cb_ex2pe_index, cb_data_format}})
+                .set_page_size(cb_ex2pe_index, single_tile_size);
+        tt::tt_metal::CreateCircularBuffer(program, all_cores, ex2pe_cb_config);
+    }
     // ex_global
     uint32_t ex_global_cb_index = tt::CBIndex::c_15;
     tt::tt_metal::CircularBufferConfig ex_global_cb_config =
         tt::tt_metal::CircularBufferConfig(ex_global_CB_size, {{ex_global_cb_index, cb_data_format}})
             .set_page_size(ex_global_cb_index, single_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, ex_global_cb_config);
-    // ex2pe
-    uint32_t cb_ex2pe_index;
-    cb_ex2pe_index = tt::CBIndex::c_20;
-    tt::tt_metal::CircularBufferConfig ex2pe_cb_config =
-        tt::tt_metal::CircularBufferConfig(ex2pe_CB_size, {{cb_ex2pe_index, cb_data_format}})
-            .set_page_size(cb_ex2pe_index, single_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, ex2pe_cb_config);
+    // Intermediate buffer to store transposed Welford results
+    // This is only needed as a workaround for a transpose_wh_dest() bug
+    if (use_welford) {
+        uint32_t cb_transpose_index = tt::CBIndex::c_22;
+        tt::tt_metal::CircularBufferConfig cb_transpose_config =
+            tt::tt_metal::CircularBufferConfig(ex_global_CB_size, {{cb_transpose_index, cb_data_format}})
+                .set_page_size(cb_transpose_index, single_tile_size);
+        tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_transpose_config);
+    }
 
     CBHandle cb_stats = 0;
     if (is_post_all_gather) {
@@ -1478,11 +1531,6 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     uint32_t packed_cinv_value_one = pack_two_bfloat16_into_uint32({bfloat_cinv_value_one, bfloat_cinv_value_one});
     auto bfloat_winv_value = bfloat16(winv);
     uint32_t packed_winv_value = pack_two_bfloat16_into_uint32({bfloat_winv_value, bfloat_winv_value});
-    union {
-        float f;
-        uint32_t u;
-    } e{};
-    e.f = eps;
 
     std::vector<uint32_t> in0_mcast_noc_x;
     std::vector<uint32_t> in0_mcast_noc_y;
