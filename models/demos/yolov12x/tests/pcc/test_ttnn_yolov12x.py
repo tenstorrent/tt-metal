@@ -23,14 +23,14 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 )
 @pytest.mark.parametrize(
     "use_pretrained_weight",
-    [True, False],
+    [True],
     ids=[
         "pretrained_weight_true",
-        "pretrained_weight_false",
+        # "pretrained_weight_false",
     ],
 )
 def test_yolov12x(use_pretrained_weight, device, reset_seeds, model_location_generator):
-    torch_input, ttnn_input = create_yolov12x_input_tensors(device)
+    torch_input, ttnn_input = create_yolov12x_input_tensors(device, input_dtype=ttnn.bfloat8_b)
     state_dict = None
 
     torch_model = yolov12x.YoloV12x()

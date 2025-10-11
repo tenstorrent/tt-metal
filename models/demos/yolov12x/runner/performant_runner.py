@@ -100,8 +100,15 @@ class YOLOv12xPerformantRunner:
         return self.runner_infra.output_tensor
 
     def _validate(self, input_tensor, result_output_tensor):
-        torch_output_tensor = self.runner_infra.torch_output_tensor
-        assert_with_pcc(torch_output_tensor, result_output_tensor, 0.99)
+        # Run the torch model with the new input for comparison
+        torch_output_tensor = self.runner_infra.torch_model(input_tensor)
+        # YOLOv12x model returns a tuple, so we need to extract the first element
+        if isinstance(torch_output_tensor, tuple):
+            torch_output_tensor = torch_output_tensor[0]
+
+        # Convert ttnn output to torch tensor for comparison
+        result_torch_tensor = ttnn.to_torch(result_output_tensor, mesh_composer=self.runner_infra.mesh_composer)
+        assert_with_pcc(torch_output_tensor, result_torch_tensor, 0.99)
 
     def run(self, torch_input_tensor=None, check_pcc=False):
         tt_inputs_host, _ = self.runner_infra._setup_l1_sharded_input(self.device, torch_input_tensor)
