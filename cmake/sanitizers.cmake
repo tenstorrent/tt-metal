@@ -6,8 +6,8 @@ if(isMultiConfig)
     if(NOT "TSan" IN_LIST CMAKE_CONFIGURATION_TYPES)
         list(APPEND CMAKE_CONFIGURATION_TYPES TSan)
     endif()
-    if(NOT "Coverage" IN_LIST CMAKE_CONFIGURATION_TYPES)
-        list(APPEND CMAKE_CONFIGURATION_TYPES Coverage)
+    if(NOT "ASanCoverage" IN_LIST CMAKE_CONFIGURATION_TYPES)
+        list(APPEND CMAKE_CONFIGURATION_TYPES ASanCoverage)
     endif()
 endif()
 
@@ -18,7 +18,7 @@ set_property(
         DEBUG_CONFIGURATIONS
             ASan
             TSan
-            Coverage
+            ASanCoverage
 )
 
 # ASan, LSan and UBSan do not conflict with each other and are each fast enough that we can combine them.
@@ -37,9 +37,9 @@ set(CMAKE_EXE_LINKER_FLAGS_TSAN "${CMAKE_EXE_LINKER_FLAGS_RELWITHDEBINFO} ${tsan
 set(CMAKE_SHARED_LINKER_FLAGS_TSAN "${CMAKE_SHARED_LINKER_FLAGS_RELWITHDEBINFO} ${tsan_flags}")
 set(CMAKE_MODULE_LINKER_FLAGS_TSAN "${CMAKE_MODULE_LINKER_FLAGS_RELWITHDEBINFO} ${tsan_flags}")
 
-# Coverage build type: ASan + LLVM coverage mapping (inherit ASan flags)
-set(CMAKE_C_FLAGS_COVERAGE "${CMAKE_C_FLAGS_ASAN} -fprofile-instr-generate -fcoverage-mapping")
-set(CMAKE_CXX_FLAGS_COVERAGE "${CMAKE_CXX_FLAGS_ASAN} -fprofile-instr-generate -fcoverage-mapping")
-set(CMAKE_EXE_LINKER_FLAGS_COVERAGE "${CMAKE_EXE_LINKER_FLAGS_ASAN} -fprofile-instr-generate")
-set(CMAKE_SHARED_LINKER_FLAGS_COVERAGE "${CMAKE_SHARED_LINKER_FLAGS_ASAN} -fprofile-instr-generate")
-set(CMAKE_MODULE_LINKER_FLAGS_COVERAGE "${CMAKE_MODULE_LINKER_FLAGS_ASAN} -fprofile-instr-generate")
+# ASanCoverage build type: ASan + LLVM coverage mapping (inherit ASan flags)
+set(CMAKE_C_FLAGS_ASANCOVERAGE "${CMAKE_C_FLAGS_ASAN} -fprofile-instr-generate -fcoverage-mapping")
+set(CMAKE_CXX_FLAGS_ASANCOVERAGE "${CMAKE_CXX_FLAGS_ASAN} -fprofile-instr-generate -fcoverage-mapping")
+set(CMAKE_EXE_LINKER_FLAGS_ASANCOVERAGE "${CMAKE_EXE_LINKER_FLAGS_ASAN} -fprofile-instr-generate")
+set(CMAKE_SHARED_LINKER_FLAGS_ASANCOVERAGE "${CMAKE_SHARED_LINKER_FLAGS_ASAN} -fprofile-instr-generate")
+set(CMAKE_MODULE_LINKER_FLAGS_ASANCOVERAGE "${CMAKE_MODULE_LINKER_FLAGS_ASAN} -fprofile-instr-generate")
