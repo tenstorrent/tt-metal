@@ -31,7 +31,10 @@ void Tilize::validate(const std::vector<Tensor>& input_tensors) const {
     TT_FATAL((stick_size % 2) == 0, "Stick size must be divisible by 2");
 
     if (input_tensor_a.memory_config().is_sharded()) {
-        TT_FATAL(input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED, "Error");
+        TT_FATAL(
+            input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
+            "Error, expected memory layout to be HEIGHT_SHARDED but got {}",
+            input_tensor_a.memory_config().memory_layout());
         TT_FATAL(this->output_mem_config.memory_layout() == input_tensor_a.memory_config().memory_layout(), "Error");
         TT_FATAL(this->use_multicore == true, "Error");
         TT_FATAL(input_tensor_a.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR, "Error");
