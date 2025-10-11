@@ -30,6 +30,7 @@ std::vector<uint8_t> serialize_link_metrics_to_bytes(const std::vector<::Etherne
         auto* proto_metrics = proto_link_status->mutable_ethernet_metrics();
         proto_metrics->set_retrain_count(link_metric.link_status.metrics.retrain_count);
         proto_metrics->set_crc_error_count(link_metric.link_status.metrics.crc_error_count);
+        proto_metrics->set_corrected_codeword_count(link_metric.link_status.metrics.corrected_codeword_count);
         proto_metrics->set_uncorrected_codeword_count(link_metric.link_status.metrics.uncorrected_codeword_count);
 
         // Serialize TrafficParams
@@ -80,6 +81,7 @@ std::vector<::EthernetLinkMetrics> deserialize_link_metrics_from_bytes(const std
         const auto& proto_metrics = proto_link_status.ethernet_metrics();
         link_metric.link_status.metrics.retrain_count = proto_metrics.retrain_count();
         link_metric.link_status.metrics.crc_error_count = proto_metrics.crc_error_count();
+        link_metric.link_status.metrics.corrected_codeword_count = proto_metrics.corrected_codeword_count();
         link_metric.link_status.metrics.uncorrected_codeword_count = proto_metrics.uncorrected_codeword_count();
 
         // Deserialize TrafficParams
