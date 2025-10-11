@@ -162,7 +162,7 @@ def import_tracy_op_logs(logFolder):
                             opData["metal_trace_id"] = traceIDs[deviceID]
                     opData["tracy_time"] = opDataTime
                     opsData.append(opData)
-                elif "TRACE" in opDataStr:
+                elif "TRACE" in opDataStr and not opDataStr.startswith("TT_METAL_TRACE_ENQUEUE_PROGRAM"):
                     IDs = opDataStr.split(":")[-1].strip().split(",")
                     assert len(IDs) == 2, (
                         "Wrong number of IDs is provided in trace message. "
