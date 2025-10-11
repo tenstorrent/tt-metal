@@ -5,6 +5,7 @@ from pathlib import Path
 from loguru import logger
 from datetime import datetime
 import hashlib
+import numpy as np
 import requests
 import json
 import torch
@@ -207,6 +208,33 @@ def create_tt_model(
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
             {"temperature": 0.0, "top_p": 0.08},  # sampling_params (argmax)
+            False,  # stop_at_eos
+            False,  # apc_test
+            False,  # pcc_check
+            False,  # prefill-only profile
+            80,  # num layers
+            False,  # print_outputs
+            True,  # is_cur_pos_sharded
+            True,  # is_page_table_sharded
+        ),
+        (  # Batch-32 with non-uniform sampling
+            "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            True,  # instruct mode
+            1,  # repeat_batches
+            128 * 1024,  # max_seq_len
+            32,  # batch_size
+            128,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
+            {
+                # CONFIRMED: top_p non-uniform / large value is the problem
+                "temperature": list(np.full(32, 0.1)),
+                "top_p": list(np.full(32, 1.0)),
+                # "top_k": list(np.full(32, 32)),
+                # "temperature": list(np.linspace(0.0, 1.0, 32)),
+                # "top_p": list(np.linspace(0.08, 0.99, 32)),
+                "top_k": list(np.linspace(1, 32, 32).astype(int)),
+            },  # sampling_params (non-uniform)
             False,  # stop_at_eos
             False,  # apc_test
             False,  # pcc_check
@@ -485,6 +513,7 @@ def create_tt_model(
     ],
     ids=[
         "batch-32",  # throughput
+        "batch-32-non-uniform-sampling",  # throughtput w/ non-uniform sampling
         "batch-1",  # latency
         "evals-1",  # Single user, 32 repeated batches, smaller prompts (<4K)
         "evals-32",  # 32 users, 32 repeated batches, smaller prompts (<4K)
@@ -592,7 +621,7 @@ def test_demo_text(
         stop_at_eos = request.config.getoption("--stop_at_eos")
     print_outputs = request.config.getoption("--print_outputs") or print_outputs
 
-    enable_trace = True  # Use tracing for better perf
+    enable_trace = False  # Use tracing for better perf
     prefill_enable_trace = True
     print_to_file = False  # Enable this flag to print the output of all users to a file
     instruct = num_layers == 80 and instruct  # if using instruct weights it must be full model
@@ -780,9 +809,10 @@ def test_demo_text(
                 v_cache = ttnn.mul(v_cache, 0, output_tensor=v_cache)
 
         input_tokens_prefill_pt = torch.stack(input_tokens_prefill_pt).view(batch_size, -1)
-        device_sampling_params = SamplingParams(
-            temperature=sampling_params["temperature"], top_k=32, top_p=sampling_params["top_p"]
-        )
+        temperature = sampling_params["temperature"]
+        top_k = sampling_params.get("top_k", 32)
+        top_p = sampling_params["top_p"]
+        device_sampling_params = SamplingParams(temperature=temperature, top_k=top_k, top_p=top_p)
         if batch_idx == 0:
             logger.info("Starting prefill warmup...")
             profiler.start(f"compile_prefill", iteration=batch_idx)
@@ -952,6 +982,9 @@ def test_demo_text(
             if iteration > 0:
                 ttnn.event_synchronize(read_events.pop(0)[0])
                 tt_out_tok = generator.process_decode_output_host(tt_out_toks.pop(0))
+                for idx, t in enumerate(tt_out_tok):
+                    if not isinstance(t.item(), int) or t < 0:
+                        print(f"(Invalid token, iteration, user #): ({t}, {iteration}, {idx})")
 
                 out_tok = tt_out_tok if not teacher_forcing else ref_tokens[max_encoded_prompt_len + iteration + 1]
 
@@ -1060,7 +1093,6 @@ def test_demo_text(
                 profiler.start(f"log_saving_file", iteration=batch_idx)
                 logger.info("Finished decoding, printing the final outputs...\n")
                 for i, (output, prompt) in enumerate(zip(all_outputs, input_prompts)):
-                    text = tokenizer.decode(output)
                     prompt_including_assistant_tags = tokenizer.decode(
                         model_args.encode_prompt(prompt, instruct=instruct)
                     )
