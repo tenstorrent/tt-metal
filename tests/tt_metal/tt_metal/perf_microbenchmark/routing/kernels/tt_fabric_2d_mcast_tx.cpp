@@ -10,9 +10,10 @@
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_traffic_gen.hpp"
 #include "fabric/fabric_edm_packet_header.hpp"
-#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/routing_plane_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 #include "tt_metal/tools/profiler/fabric_event_profiler.hpp"
+#include "tt_metal/fabric/hw/inc/mesh/api.h"
 
 // clang-format on
 
@@ -21,198 +22,93 @@ constexpr uint32_t test_results_size_bytes = get_compile_time_arg_val(1);
 tt_l1_ptr uint32_t* const test_results = reinterpret_cast<tt_l1_ptr uint32_t*>(test_results_addr_arg);
 
 constexpr uint32_t target_address = get_compile_time_arg_val(2);
-constexpr uint32_t mcast_mode = get_compile_time_arg_val(4);
-constexpr bool is_2d_fabric = get_compile_time_arg_val(5);
-constexpr bool use_dynamic_routing = get_compile_time_arg_val(6);
 
-inline void setup_connection_and_headers(
-    tt::tt_fabric::WorkerToFabricEdmSender& connection,
-    volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header,
-    uint64_t noc_dest_addr,
-    uint32_t packet_payload_size_bytes) {
-    // connect to edm
-    connection.open();
-    packet_header->to_noc_unicast_write(NocUnicastCommandHeader{noc_dest_addr}, packet_payload_size_bytes);
-}
+using namespace tt::tt_fabric;
+namespace mesh_exp = tt::tt_fabric::mesh::experimental;
+using mesh_exp::MeshMcastRange;
 
-inline void send_packet(
-    volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header,
-    uint64_t noc_dest_addr,
-    uint32_t source_l1_buffer_address,
-    uint32_t packet_payload_size_bytes,
-    uint32_t seed,
-    tt::tt_fabric::WorkerToFabricEdmSender& connection) {
-#ifndef BENCHMARK_MODE
-    packet_header->to_noc_unicast_write(NocUnicastCommandHeader{noc_dest_addr}, packet_payload_size_bytes);
-    // fill packet data for sanity testing
-    tt_l1_ptr uint32_t* start_addr = reinterpret_cast<tt_l1_ptr uint32_t*>(source_l1_buffer_address);
-    fill_packet_data(start_addr, packet_payload_size_bytes / 16, seed);
-    tt_l1_ptr uint32_t* last_word_addr =
-        reinterpret_cast<tt_l1_ptr uint32_t*>(source_l1_buffer_address + packet_payload_size_bytes - 4);
-#endif
-    connection.wait_for_empty_write_slot();
-    RECORD_FABRIC_HEADER(packet_header);
-    connection.send_payload_without_header_non_blocking_from_address(
-        source_l1_buffer_address, packet_payload_size_bytes);
-    connection.send_payload_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
-}
-
-void set_mcast_header(
-    volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header,
-    eth_chan_directions trunk_direction,
-    uint16_t trunk_hops,
-    uint16_t e_hops,
-    uint16_t w_hops) {
-    uint16_t n_hops = 0;
-    uint16_t s_hops = 0;
-
-    if (trunk_direction == eth_chan_directions::NORTH) {
-        n_hops = trunk_hops;
-    } else if (trunk_direction == eth_chan_directions::SOUTH) {
-        s_hops = trunk_hops;
-    } else {
-        n_hops = 0;
-        s_hops = 0;
+bool make_range(
+    MeshMcastRange& range, eth_chan_directions dir, uint16_t trunk_hops, uint16_t branch_east, uint16_t branch_west) {
+    if (trunk_hops == 0) {
+        return false;
     }
-
-    fabric_set_mcast_route((HybridMeshPacketHeader*)packet_header, 0, 0, e_hops, w_hops, n_hops, s_hops);
+    range = MeshMcastRange{0, 0, 0, 0};
+    switch (dir) {
+        case eth_chan_directions::NORTH:
+            range.n = static_cast<uint8_t>(trunk_hops);
+            range.e = static_cast<uint8_t>(branch_east);
+            range.w = static_cast<uint8_t>(branch_west);
+            break;
+        case eth_chan_directions::SOUTH:
+            range.s = static_cast<uint8_t>(trunk_hops);
+            range.e = static_cast<uint8_t>(branch_east);
+            range.w = static_cast<uint8_t>(branch_west);
+            break;
+        case eth_chan_directions::EAST: range.e = static_cast<uint8_t>(trunk_hops); break;
+        case eth_chan_directions::WEST: range.w = static_cast<uint8_t>(trunk_hops); break;
+        default: break;
+    }
+    return true;
 }
-
-inline void teardown_connection(tt::tt_fabric::WorkerToFabricEdmSender& connection) { connection.close(); }
 
 void kernel_main() {
-    using namespace tt::tt_fabric;
-
     size_t rt_args_idx = 0;
     uint32_t source_l1_buffer_address = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t packet_payload_size_bytes = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t num_packets = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t rx_noc_encoding = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t time_seed = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t ew_dim = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t my_dev_id = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t fwd_mesh_id = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t north_trunk_hops = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t north_trunk_branch_hops = get_arg_val<uint32_t>(rt_args_idx++);
-
-    tt::tt_fabric::WorkerToFabricEdmSender north_trunk_connection =
-        tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
-
     uint32_t south_trunk_hops = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t south_trunk_branch_hops = get_arg_val<uint32_t>(rt_args_idx++);
+    uint16_t east_hops = static_cast<uint16_t>(get_arg_val<uint32_t>(rt_args_idx++));
+    uint16_t west_hops = static_cast<uint16_t>(get_arg_val<uint32_t>(rt_args_idx++));
 
-    tt::tt_fabric::WorkerToFabricEdmSender south_trunk_connection =
-        tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
+    MeshMcastRange ranges[RoutingPlaneConnectionManager::MaxConnections];
+    uint32_t num_routes = 0;
 
-    uint32_t left_dev_id = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t right_dev_id = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t direct_hops = get_arg_val<uint32_t>(rt_args_idx++);
+    num_routes += make_range(
+        ranges[num_routes],
+        eth_chan_directions::NORTH,
+        north_trunk_hops,
+        static_cast<uint16_t>(north_trunk_branch_hops & 0xFFFF),
+        static_cast<uint16_t>(north_trunk_branch_hops >> 16));
+    num_routes += make_range(
+        ranges[num_routes],
+        eth_chan_directions::SOUTH,
+        south_trunk_hops,
+        static_cast<uint16_t>(south_trunk_branch_hops & 0xFFFF),
+        static_cast<uint16_t>(south_trunk_branch_hops >> 16));
+    num_routes += make_range(ranges[num_routes], eth_chan_directions::WEST, west_hops, 0, 0);
+    num_routes += make_range(ranges[num_routes], eth_chan_directions::EAST, east_hops, 0, 0);
 
-    uint16_t left_hops = direct_hops >> 16;
-    uint16_t right_hops = direct_hops & 0xFFFF;
+    ASSERT(num_routes > 0);
 
-    tt::tt_fabric::WorkerToFabricEdmSender left_connection =
-        tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
+    tt::tt_fabric::RoutingPlaneConnectionManager connection_manager;
+    mesh_exp::open_connections(connection_manager, num_routes, rt_args_idx);
 
-    tt::tt_fabric::WorkerToFabricEdmSender right_connection =
-        tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
-
-    volatile tt_l1_ptr PACKET_HEADER_TYPE* north_packet_header = PacketHeaderPool::allocate_header();
-    volatile tt_l1_ptr PACKET_HEADER_TYPE* south_packet_header = PacketHeaderPool::allocate_header();
-    volatile tt_l1_ptr PACKET_HEADER_TYPE* left_packet_header = PacketHeaderPool::allocate_header();
-    volatile tt_l1_ptr PACKET_HEADER_TYPE* right_packet_header = PacketHeaderPool::allocate_header();
-
+    uint8_t route_id = PacketHeaderPool::allocate_header_n(num_routes);
     uint64_t noc_dest_addr = get_noc_addr_helper(rx_noc_encoding, target_address);
-    zero_l1_buf((uint32_t*)north_packet_header, sizeof(PACKET_HEADER_TYPE));
-    zero_l1_buf((uint32_t*)south_packet_header, sizeof(PACKET_HEADER_TYPE));
-    zero_l1_buf((uint32_t*)left_packet_header, sizeof(PACKET_HEADER_TYPE));
-    zero_l1_buf((uint32_t*)right_packet_header, sizeof(PACKET_HEADER_TYPE));
-
-    if (left_hops > 0) {
-        // Direct left branch present
-        set_mcast_header(left_packet_header, eth_chan_directions::WEST, 0, 0, left_hops);
-        setup_connection_and_headers(left_connection, left_packet_header, noc_dest_addr, packet_payload_size_bytes);
-    }
-
-    if (right_hops > 0) {
-        // Direct right branch present
-        set_mcast_header(right_packet_header, eth_chan_directions::EAST, 0, right_hops, 0);
-        setup_connection_and_headers(right_connection, right_packet_header, noc_dest_addr, packet_payload_size_bytes);
-    }
-
-    if constexpr (mcast_mode & 0x1) {
-        // North trunk present
-        set_mcast_header(
-            north_packet_header,
-            eth_chan_directions::NORTH,
-            north_trunk_hops,
-            north_trunk_branch_hops & 0xFFFF,
-            north_trunk_branch_hops >> 16);
-        setup_connection_and_headers(
-            north_trunk_connection, north_packet_header, noc_dest_addr, packet_payload_size_bytes);
-    }
-    if constexpr (mcast_mode & 0x2) {
-        // South trunk present
-        set_mcast_header(
-            south_packet_header,
-            eth_chan_directions::SOUTH,
-            south_trunk_hops,
-            south_trunk_branch_hops & 0xFFFF,
-            south_trunk_branch_hops >> 16);
-        setup_connection_and_headers(
-            south_trunk_connection, south_packet_header, noc_dest_addr, packet_payload_size_bytes);
-    }
 
     zero_l1_buf(test_results, test_results_size_bytes);
     test_results[TT_FABRIC_STATUS_INDEX] = TT_FABRIC_STATUS_STARTED;
 
     uint64_t start_timestamp = get_timestamp();
 
-    // loop over for num packets
-    for (uint32_t i = 0; i < num_packets; i++) {
+    for (uint32_t i = 0; i < num_packets; ++i) {
 #ifndef BENCHMARK_MODE
         time_seed = prng_next(time_seed);
+        tt_l1_ptr uint32_t* start_addr = reinterpret_cast<tt_l1_ptr uint32_t*>(source_l1_buffer_address);
+        fill_packet_data(start_addr, packet_payload_size_bytes / 16, time_seed);
 #endif
-        if constexpr (mcast_mode & 0x1) {
-            // North Trunk Mcast
-            send_packet(
-                north_packet_header,
-                noc_dest_addr,
-                source_l1_buffer_address,
-                packet_payload_size_bytes,
-                time_seed,
-                north_trunk_connection);
-        }
-        if constexpr (mcast_mode & 0x2) {
-            // South Trunk Mcast
-            send_packet(
-                south_packet_header,
-                noc_dest_addr,
-                source_l1_buffer_address,
-                packet_payload_size_bytes,
-                time_seed,
-                south_trunk_connection);
-        }
-
-        if (left_hops > 0) {
-            send_packet(
-                left_packet_header,
-                noc_dest_addr,
-                source_l1_buffer_address,
-                packet_payload_size_bytes,
-                time_seed,
-                left_connection);
-        }
-
-        if (right_hops > 0) {
-            send_packet(
-                right_packet_header,
-                noc_dest_addr,
-                source_l1_buffer_address,
-                packet_payload_size_bytes,
-                time_seed,
-                right_connection);
-        }
+        mesh_exp::fabric_multicast_noc_unicast_write(
+            connection_manager,
+            route_id,
+            ranges,
+            source_l1_buffer_address,
+            packet_payload_size_bytes,
+            tt::tt_fabric::NocUnicastCommandHeader{noc_dest_addr});
 
 #ifndef BENCHMARK_MODE
         noc_dest_addr += packet_payload_size_bytes;
@@ -220,28 +116,15 @@ void kernel_main() {
     }
 
     uint64_t cycles_elapsed = get_timestamp() - start_timestamp;
-    if constexpr (mcast_mode & 0x1) {
-        teardown_connection(north_trunk_connection);
-    }
-    if constexpr (mcast_mode & 0x2) {
-        teardown_connection(south_trunk_connection);
-    }
 
-    if (left_hops > 0) {
-        teardown_connection(left_connection);
-    }
-    if (right_hops > 0) {
-        teardown_connection(right_connection);
-    }
-
+    mesh_exp::close_connections(connection_manager);
     noc_async_write_barrier();
 
     uint64_t bytes_sent = packet_payload_size_bytes * num_packets;
 
-    // write out results
     test_results[TT_FABRIC_STATUS_INDEX] = TT_FABRIC_STATUS_PASS;
-    test_results[TT_FABRIC_CYCLES_INDEX] = (uint32_t)cycles_elapsed;
-    test_results[TT_FABRIC_CYCLES_INDEX + 1] = cycles_elapsed >> 32;
-    test_results[TT_FABRIC_WORD_CNT_INDEX] = (uint32_t)bytes_sent;
-    test_results[TT_FABRIC_WORD_CNT_INDEX + 1] = bytes_sent >> 32;
+    test_results[TT_FABRIC_CYCLES_INDEX] = static_cast<uint32_t>(cycles_elapsed);
+    test_results[TT_FABRIC_CYCLES_INDEX + 1] = static_cast<uint32_t>(cycles_elapsed >> 32);
+    test_results[TT_FABRIC_WORD_CNT_INDEX] = static_cast<uint32_t>(bytes_sent);
+    test_results[TT_FABRIC_WORD_CNT_INDEX + 1] = static_cast<uint32_t>(bytes_sent >> 32);
 }

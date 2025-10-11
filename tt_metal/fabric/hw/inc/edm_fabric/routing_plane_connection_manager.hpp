@@ -17,7 +17,7 @@ namespace tt::tt_fabric {
 #if defined(FABRIC_2D)
 #define TT_FABRIC_MAX_ROUTING_PLANE_CONNECTIONS 4
 #else  // 1D
-#define TT_FABRIC_MAX_ROUTING_PLANE_CONNECTIONS 2
+#define TT_FABRIC_MAX_ROUTING_PLANE_CONNECTIONS 3
 // TODO: 3D, dragonfly and custom etc.
 #endif
 #endif
