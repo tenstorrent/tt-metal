@@ -128,6 +128,7 @@ def compute_cosine_similarity(impl, ref):
     try:
         if _is_ttnn_tensor(impl) and _is_ttnn_tensor(ref):
             # TTNN path - convert to torch for cosine similarity
+            # todo)) we want to avoid this conversion to torch; we want to stay on device; maybe we need to enable different sets of metrics for different device versus host
             impl_torch = ttnn.to_torch(impl).flatten()
             ref_torch = ttnn.to_torch(ref).flatten()
             return torch.nn.functional.cosine_similarity(impl_torch, ref_torch, dim=0).item()
@@ -141,6 +142,7 @@ def compute_cosine_similarity(impl, ref):
 
 
 # code stolen from tests/tt_eager/python_api_testing/sweep_tests/comparison_funcs.py
+# todo)) maybe it is a good idea to separate device pcc and host pcc? May want to consider this during metrics refactoring on validate_against.py
 def compute_pcc(impl, ref):
     """
     Compute Pearson Correlation Coefficient (PCC) between two tensors.
