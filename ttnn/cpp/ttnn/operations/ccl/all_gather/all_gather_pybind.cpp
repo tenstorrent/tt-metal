@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "reduce_scatter_pybind.hpp"
+#include "all_gather_pybind.hpp"
 
 #include <cstdint>
 #include <optional>
@@ -10,36 +10,36 @@
 #include <pybind11/pybind11.h>
 
 #include "ttnn-pybind/decorators.hpp"
-#include "reduce_scatter.hpp"
+#include "all_gather.hpp"
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/fabric_edm_types.hpp>
 
 namespace ttnn::operations::ccl {
 
-void py_bind_reduce_scatter(py::module& module) {
+void py_bind_all_gather(py::module& module) {
     auto doc =
-        R"doc(reduce_scatter(input_tensor: ttnn.Tensor, dim: int, cluster_axis: Optional[int] = None, topology: ttnn.Topology = ttnn.Topology.Linear, output_tensor: Optional[ttnn.Tensor] = None, memory_config: Optional[ttnn.MemoryConfig] = None, subdevice_id: Optional[ttnn.SubDeviceId] = None, queue_id: int = 0) -> ttnn.Tensor
+        R"doc(all_gather(input_tensor: ttnn.Tensor, dim: int, cluster_axis: Optional[int] = None, topology: ttnn.Topology = ttnn.Topology.Linear, output_tensor: Optional[ttnn.Tensor] = None, memory_config: Optional[ttnn.MemoryConfig] = None, subdevice_id: Optional[ttnn.SubDeviceId] = None) -> ttnn.Tensor
 
-            Reduce-scatter operation across devices along a selected dimension and optional cluster axis.
+            All-gather operation across devices along a selected dimension and optional cluster axis.
 
             Args:
-                input_tensor (ttnn.Tensor): Input tensor to be reduced and scattered.
-                dim (int): Dimension along which to reduce.
+                input_tensor (ttnn.Tensor): Input tensor to be gathered.
+                dim (int): Dimension along which to gather.
 
             Keyword Args:
-                cluster_axis (int, optional): The cluster axis to reduce across. Defaults to `None`.
+                cluster_axis (int, optional): The cluster axis to gather across. Defaults to `None`.
                 topology (ttnn.Topology, optional): Fabric topology. Defaults to `None`.
                 output_tensor (ttnn.Tensor, optional): Preallocated output tensor.
                 memory_config (ttnn.MemoryConfig, optional): Output memory configuration.
                 subdevice_id (ttnn.SubDeviceId, optional): Subdevice id for worker cores.
 
            Returns:
-               ttnn.Tensor: The reduced and scattered tensor.)doc";
+               ttnn.Tensor: The gathered tensor.)doc";
 
-    using OperationType = decltype(ttnn::reduce_scatter);
+    using OperationType = decltype(ttnn::all_gather);
     ttnn::bind_registered_operation(
         module,
-        ttnn::reduce_scatter,
+        ttnn::all_gather,
         doc,
         ttnn::pybind_overload_t{
             [](const OperationType& self,
