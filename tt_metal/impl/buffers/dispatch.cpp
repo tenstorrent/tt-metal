@@ -807,6 +807,7 @@ void write_to_device_buffer(
     bool& use_pinned_transfer,
     std::shared_ptr<tt_metal::PinnedMemory> pinned_memory) {
     SystemMemoryManager& sysmem_manager = buffer.device()->sysmem_manager();
+    auto& hal = tt::tt_metal::MetalContext::instance().hal();
 
     if (tt::tt_metal::GraphTracker::instance().hook_write_to_device(&buffer)) {
         return;
@@ -821,38 +822,52 @@ void write_to_device_buffer(
     const bool has_pinned_inputs = (src != nullptr && pinned_memory != nullptr);
     uint32_t pinned_src_noc_xy = 0;
     uint32_t pinned_src_addr_lo = 0;
-    // sharded buffer pin memory is currently unsupported
-    use_pinned_transfer = has_pinned_inputs && is_unpadded && !is_sharded(buffer.buffer_layout());
-    if (use_pinned_transfer) {
+    use_pinned_transfer = false;
+    if (has_pinned_inputs && is_unpadded && !is_sharded(buffer.buffer_layout())) {
         auto device_id = buffer.device()->id();
         const auto& cluster = MetalContext::instance().get_cluster();
         const chip_id_t mmio_device_id = cluster.get_associated_mmio_device(device_id);
         auto noc_addr_pair_opt = pinned_memory->get_noc_addr(device_id);
-        use_pinned_transfer = noc_addr_pair_opt.has_value() and noc_addr_pair_opt->device_id == mmio_device_id;
-        if (use_pinned_transfer) {
+        if (noc_addr_pair_opt.has_value() and noc_addr_pair_opt->device_id == mmio_device_id) {
             const uint64_t pinned_noc_base = noc_addr_pair_opt->addr;
             const uint8_t* pinned_host_base = static_cast<const uint8_t*>(pinned_memory->get_host_ptr());
             const uint8_t* src_ptr = static_cast<const uint8_t*>(src);
             const uint64_t pinned_size = pinned_memory->get_buffer_size();
             auto region = buffer.root_buffer_region();
-            TT_ASSERT(
-                (src_ptr >= pinned_host_base) and
-                    (pinned_host_base + pinned_size >= src_ptr + region.offset + region.size),
-                "Pinned memory region must contain source buffer region: pinned region start:{:#X} end:{:#X} src "
-                "start:{:#X} end:{:#X}",
-                (uintptr_t)pinned_host_base,
-                (uintptr_t)pinned_host_base + pinned_size,
-                (uintptr_t)src_ptr,
-                (uintptr_t)src_ptr + region.offset + region.size);
-            const uint64_t pcie_base = cluster.get_pcie_base_addr_from_device(mmio_device_id);
-            const uint64_t src_offset_base = static_cast<uintptr_t>(src_ptr - pinned_host_base);
-            const uint64_t src_noc_addr = pinned_noc_base + src_offset_base + region.offset;
-            pinned_src_addr_lo = static_cast<uint32_t>(src_noc_addr - pcie_base);
-            const auto& soc = cluster.get_soc_desc(mmio_device_id);
-            const auto& pcie_cores = soc.get_cores(CoreType::PCIE, tt::umd::CoordSystem::NOC0);
-            TT_FATAL(!pcie_cores.empty(), "No PCIE core found on MMIO device {}", mmio_device_id);
-            pinned_src_noc_xy =
-                MetalContext::instance().hal().noc_xy_encoding(pcie_cores.front().x, pcie_cores.front().y);
+            const uint8_t* src_region_start = src_ptr + region.offset;
+            const uint8_t* src_region_end = src_region_start + region.size;
+            if (reinterpret_cast<uintptr_t>(src_region_start) % hal.get_read_alignment(HalMemType::HOST) != 0) {
+                log_info(
+                    tt::LogMetal,
+                    "Pinned source memory start address {:#x} must be aligned {} B",
+                    reinterpret_cast<uintptr_t>(src_region_start),
+                    hal.get_read_alignment(HalMemType::HOST));
+            } else if ((src_ptr < pinned_host_base) or (pinned_host_base + pinned_size < src_region_end)) {
+                log_info(
+                    tt::LogMetal,
+                    "Pinned memory region must contain source buffer region: pinned region start:{:#X} end:{:#X} src "
+                    "start:{:#X} end:{:#X}",
+                    (uintptr_t)pinned_host_base,
+                    (uintptr_t)pinned_host_base + pinned_size,
+                    (uintptr_t)src_ptr,
+                    (uintptr_t)src_ptr + region.offset + region.size);
+            } else {
+                const uint64_t pcie_base = cluster.get_pcie_base_addr_from_device(mmio_device_id);
+                const uint64_t src_offset_base = static_cast<uintptr_t>(src_region_start - pinned_host_base);
+                const uint64_t src_noc_addr = pinned_noc_base + src_offset_base;
+                pinned_src_addr_lo = static_cast<uint32_t>(src_noc_addr - pcie_base);
+                const auto& soc = cluster.get_soc_desc(mmio_device_id);
+                const auto& pcie_cores = soc.get_cores(CoreType::PCIE, tt::umd::CoordSystem::NOC0);
+                TT_FATAL(!pcie_cores.empty(), "No PCIE core found on MMIO device {}", mmio_device_id);
+                pinned_src_noc_xy =
+                    MetalContext::instance().hal().noc_xy_encoding(pcie_cores.front().x, pcie_cores.front().y);
+                std::cout << "write_to_device_buffer: src addr:0x" << std::hex << (uintptr_t)src_ptr
+                          << ", pinned_size:0x" << pinned_size << ", pinned_host_base:0x" << (uintptr_t)pinned_host_base
+                          << ", src_offset_base:0x" << src_offset_base << ", pinned_noc_base:0x" << pinned_noc_base
+                          << ", pcie_base:0x" << pcie_base << ", pinned_src_addr_lo:0x" << pinned_src_addr_lo
+                          << ", noc_xy:0x" << pinned_src_noc_xy << std::dec << std::endl;
+                use_pinned_transfer = true;
+            }
         }
     }
     if (is_sharded(buffer.buffer_layout())) {

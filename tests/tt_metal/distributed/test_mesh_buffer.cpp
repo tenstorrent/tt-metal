@@ -739,7 +739,13 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteShardsWithPinnedMemoryFullRange) {
     auto coordinate_range_set = MeshCoordinateRangeSet(MeshCoordinateRange(coord, coord));
 
     // Prepare write source buffer and pin the entire destination range for the target shard
-    auto src = std::make_shared<vector_aligned<uint32_t>>(bytes_per_device / sizeof(uint32_t), 0);
+    auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    constexpr int device_read_align{32};
+    ASSERT_TRUE(device_read_align == hal.get_read_alignment(HalMemType::HOST))
+        << "Source vector alignment must be equal to PCIE read alignment: " << hal.get_read_alignment(HalMemType::HOST)
+        << std::endl;
+    auto src = std::make_shared<std::vector<uint32_t, tt::stl::aligned_allocator<uint32_t, device_read_align>>>(
+        bytes_per_device / sizeof(uint32_t), 0);
     std::iota(src->begin(), src->end(), 0);
     // Create HostBuffer on top of dst
     HostBuffer host_buffer(tt::stl::Span<uint32_t>(src->data(), bytes_per_device / sizeof(uint32_t)), MemoryPin(src));
@@ -762,7 +768,8 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteShardsWithPinnedMemoryFullRange) {
 
     // Read back via hugepage
     // Prepare read destination buffer. Use aigned vector for ease of verification with src above.
-    auto dst = vector_aligned<uint32_t>(bytes_per_device / sizeof(uint32_t), 0);
+    auto dst = std::vector<uint32_t, tt::stl::aligned_allocator<uint32_t, device_read_align>>(
+        bytes_per_device / sizeof(uint32_t), 0);
     auto read_transfer = distributed::MeshCommandQueue::ShardDataTransfer{
         .shard_coord = coord,
         .host_data = static_cast<void*>(dst.data()),
