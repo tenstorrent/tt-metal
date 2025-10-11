@@ -29,7 +29,7 @@ def test_match_signature_method():
         @validate_against(
             reference_fn=lambda self, x: self._reference_impl(x),
             match_signature=True,  # Key feature!
-            tolerances={"max_abs_error": 1e-6},
+            tolerances={"max_abs_error": 1e-6, "pcc": 0.99},  # PCC check
         )
         def __call__(self, x):
             # Implementation - same as reference
@@ -42,6 +42,13 @@ def test_match_signature_method():
     registry = get_validation_registry()
     assert len(registry.results) == 1
     assert registry.results[0].passed, "Validation should pass"
+
+    # Check that PCC is high (close to 1.0)
+    assert "pcc" in registry.results[0].metrics
+    assert (
+        registry.results[0].metrics["pcc"] >= 0.99
+    ), f"PCC should be >= 0.99, got {registry.results[0].metrics['pcc']}"
+
     print("  ✓ match_signature works with methods!")
     print(f"  Metrics: {registry.results[0].metrics}")
 
@@ -155,11 +162,45 @@ def test_match_signature_with_kwargs():
     print("  ✓ Kwargs work!")
 
 
+def test_pcc_metric():
+    """Test PCC metric specifically"""
+    print("\nTest 5: PCC metric validation")
+    clear_validation_results()
+
+    class LayerWithPCC:
+        def _reference(self, x):
+            # Add small noise to test PCC tolerance
+            return x + torch.randn_like(x) * 0.01
+
+        @validate_against(
+            reference_fn=lambda self, x: self._reference(x),
+            match_signature=True,
+            tolerances={"pcc": 0.95},  # Lower threshold due to noise
+        )
+        def __call__(self, x):
+            return x
+
+    torch.manual_seed(42)  # For reproducibility
+    layer = LayerWithPCC()
+    x = torch.randn(100)
+    result = layer(x)
+
+    registry = get_validation_registry()
+    assert len(registry.results) == 1
+
+    r = registry.results[0]
+    print(f"  PCC value: {r.metrics['pcc']:.4f}")
+    # PCC should be high but not perfect due to added noise
+    assert 0.90 < r.metrics["pcc"] < 1.0, f"PCC should be in range (0.90, 1.0), got {r.metrics['pcc']}"
+    print("  ✓ PCC metric works correctly!")
+
+
 if __name__ == "__main__":
     test_match_signature_method()
     test_match_signature_vs_input_map()
     test_match_signature_multi_args()
     test_match_signature_with_kwargs()
+    test_pcc_metric()
     print("\n" + "=" * 60)
     print("All tests passed! ✓")
     print("=" * 60)
