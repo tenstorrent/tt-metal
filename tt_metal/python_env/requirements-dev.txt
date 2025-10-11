@@ -5,7 +5,7 @@
 # Make it match pyproject.toml
 loguru==0.6.0
 
-tt-smi==3.0.30
+tt-smi==3.0.30; platform_machine == "x86_64"
 
 # For github workflow unit test failure annotations
 pytest-github-actions-annotate-failures==0.3.0
