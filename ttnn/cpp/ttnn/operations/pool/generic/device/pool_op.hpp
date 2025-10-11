@@ -13,6 +13,7 @@
 #include "ttnn/decorators.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/operations/pool/pool_utils.hpp"
 #include "ttnn/types.hpp"
@@ -27,6 +28,7 @@ struct Pool2D {
         DataType output_dtype_;
         Layout output_layout_;
         MemoryConfig memory_config_;
+        std::optional<DeviceComputeKernelConfig> compute_kernel_config_;
         bool count_include_pad_;
         std::optional<int32_t> divisor_override_;
         bool return_indices_;
@@ -85,6 +87,7 @@ struct Pool2D {
         DataType output_dtype,
         Layout output_layout,
         MemoryConfig memory_config,
+        const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
         bool count_include_pad,
         std::optional<int32_t> divisor_override,
         bool return_indices,
