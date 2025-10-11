@@ -52,7 +52,9 @@ class TransformerModelFactory:
         self.multihost_config = MultiHostConfig(yaml_config)
         training_config = yaml_config.get("training_config", {})
         self.model_type = training_config.get("model_type", "gpt2")
-        self.transformer_config = TransformerConfig(training_config.get("transformer_config", {}))
+        self.transformer_config = TransformerConfig(
+            training_config.get("transformer_config", {})
+        )
 
     def _create_gpt2(self):
         """Create GPT-2 model from configuration.
@@ -65,7 +67,9 @@ class TransformerModelFactory:
         gcfg.embedding_dim = self.transformer_config.embedding_dim
         gcfg.num_blocks = self.transformer_config.num_blocks
         vs = self.transformer_config.vocab_size
-        gcfg.vocab_size = adjust_vocab_size(vs, self.device_config.enable_tp, self.device_config.total_devices())
+        gcfg.vocab_size = adjust_vocab_size(
+            vs, self.device_config.enable_tp, self.device_config.total_devices()
+        )
         gcfg.max_sequence_length = self.transformer_config.max_sequence_length
         gcfg.dropout_prob = self.transformer_config.dropout_prob
         gcfg.runner_type = map_runner_type(self.transformer_config.runner_type)  # type: ignore[arg-type]
@@ -96,7 +100,9 @@ class TransformerModelFactory:
         lcfg.embedding_dim = self.transformer_config.embedding_dim
         lcfg.num_blocks = self.transformer_config.num_blocks
         vs = self.transformer_config.vocab_size
-        lcfg.vocab_size = adjust_vocab_size(vs, self.device_config.enable_tp, self.device_config.total_devices())
+        lcfg.vocab_size = adjust_vocab_size(
+            vs, self.device_config.enable_tp, self.device_config.total_devices()
+        )
         lcfg.max_sequence_length = self.transformer_config.max_sequence_length
         lcfg.dropout_prob = self.transformer_config.dropout_prob
 
@@ -126,13 +132,17 @@ class TransformerModelFactory:
             if self.transformer_config.low_freq_factor:
                 lcfg.low_freq_factor = self.transformer_config.low_freq_factor
             if self.transformer_config.original_context_length:
-                lcfg.original_context_length = self.transformer_config.original_context_length
+                lcfg.original_context_length = (
+                    self.transformer_config.original_context_length
+                )
 
         # Pipeline-parallel config (optional, under multihost_config)
         mh = self.multihost_config
         if mh.pipeline_parallel_config:
             # Build PP config object
-            pp = ttml.models.distributed.pipeline_parallel.llama.PipelineParallelConfig()
+            pp = (
+                ttml.models.distributed.pipeline_parallel.llama.PipelineParallelConfig()
+            )
             pp.num_blocks = mh.pipeline_parallel_config.num_blocks
             pp.blocks_per_rank = mh.pipeline_parallel_config.blocks_per_rank
             return ttml.models.distributed.pipeline_parallel.llama.create_llama_model(
