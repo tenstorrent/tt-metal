@@ -40,6 +40,9 @@ target_sources(
         builder/fabric_channel_allocator.cpp
         builder/fabric_static_sized_channels_allocator.cpp
         builder/static_sized_channel_connection_writer_adapter.cpp
+        builder/fabric_router_recipe.cpp
+        builder/channel_to_pool_mapping.cpp
+        builder/multi_pool_channel_allocator.cpp
         fabric.cpp
         fabric_init.cpp
         fabric_host_utils.cpp

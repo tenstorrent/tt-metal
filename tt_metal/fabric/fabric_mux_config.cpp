@@ -212,11 +212,10 @@ std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_compile_time_args() const 
         fabric_endpoint_channel_num_buffers_ = fabric_tensix_config.get_num_buffers_per_channel();
     } else {
         auto channel_allocator = fabric_router_config.channel_allocator.get();
-        TT_FATAL(
-            dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(channel_allocator) != nullptr,
-            "Only FabricStaticSizedChannelsAllocator is supported currently.");
         const auto static_channel_allocator =
             dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(channel_allocator);
+        TT_FATAL(
+            static_channel_allocator != nullptr, "Channel allocator must be a FabricStaticSizedChannelsAllocator.");
         fabric_endpoint_channel_num_buffers_ = static_channel_allocator->get_sender_channel_number_of_slots(0);
     }
     fabric_endpoint_status_address_ = fabric_router_config.edm_status_address;
@@ -230,11 +229,9 @@ std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_compile_time_args_for_rela
     const auto& fabric_router_config =
         tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context().get_fabric_router_config();
     auto channel_allocator = fabric_router_config.channel_allocator.get();
-    TT_FATAL(
-        dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(channel_allocator) != nullptr,
-        "Only FabricStaticSizedChannelsAllocator is supported currently.");
     const auto static_channel_allocator =
         dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(channel_allocator);
+    TT_FATAL(static_channel_allocator != nullptr, "Channel allocator must be a FabricStaticSizedChannelsAllocator.");
 
     // For relay mux, always use fabric router config
     fabric_endpoint_channel_num_buffers_ = static_channel_allocator->get_sender_channel_number_of_slots(0);

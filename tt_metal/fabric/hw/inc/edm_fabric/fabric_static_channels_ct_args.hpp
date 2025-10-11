@@ -20,17 +20,22 @@ struct CtArgConsumer {
 template<size_t CT_ARG_IDX_BASE>
 struct StaticChannelPool : public CtArgConsumer<StaticChannelPool<CT_ARG_IDX_BASE>> {
     static constexpr size_t base_address = get_compile_time_arg_val(CT_ARG_IDX_BASE);
+    static constexpr size_t num_slots = get_compile_time_arg_val(CT_ARG_IDX_BASE + 1);
 
-    static constexpr size_t GET_NUM_ARGS_CONSUMED() {
-        return 1;
-    }
+    // i.e. if this is sender 0, then we also store remote sender 0 address here
+    // They are not conceptually related, but to simplify migration, we keep them together
+    // for the time being.
+    static constexpr size_t remote_address = get_compile_time_arg_val(CT_ARG_IDX_BASE + 2);
+    static constexpr size_t remote_num_slots = get_compile_time_arg_val(CT_ARG_IDX_BASE + 3);
+
+    static constexpr size_t GET_NUM_ARGS_CONSUMED() { return 4; }
 };
 
 template <size_t CT_ARG_IDX_BASE>
 struct ElasticChannelPool : public CtArgConsumer<ElasticChannelPool<CT_ARG_IDX_BASE>> {
     static constexpr size_t num_chunks = get_compile_time_arg_val(CT_ARG_IDX_BASE);
     static constexpr size_t num_slots_per_chunk = get_compile_time_arg_val(CT_ARG_IDX_BASE + 1);
-    
+
     static constexpr size_t ARGS_PER_CHUNK = 1;
     static constexpr size_t CHUNKS_CT_ARGS_IDX_BASE = CT_ARG_IDX_BASE + 2;
 
@@ -48,25 +53,25 @@ struct PoolsBuilderImpl;
 template<size_t CT_ARG_IDX, size_t NumPools, typename PoolTypesArray, size_t CurrentIdx, size_t... RestIndices>
 struct PoolsBuilderImpl<CT_ARG_IDX, NumPools, PoolTypesArray, CurrentIdx, RestIndices...> {
     static constexpr size_t current_pool_type_val = PoolTypesArray::types[CurrentIdx];
-    static constexpr FabricChannelPoolType current_pool_type = 
+    static constexpr FabricChannelPoolType current_pool_type =
         static_cast<FabricChannelPoolType>(current_pool_type_val);
-    
+
     // Determine current pool type
     using CurrentPoolType = typename std::conditional<
         current_pool_type_val == static_cast<size_t>(FabricChannelPoolType::STATIC),
         StaticChannelPool<CT_ARG_IDX>,
         ElasticChannelPool<CT_ARG_IDX>
     >::type;
-    
+
     static constexpr size_t next_ct_arg_idx = CT_ARG_IDX + CurrentPoolType::GET_NUM_ARGS_CONSUMED();
-    
+
     using RestOfPools = typename PoolsBuilderImpl<next_ct_arg_idx, NumPools, PoolTypesArray, RestIndices...>::type;
-    
+
     using type = decltype(std::tuple_cat(
         std::declval<std::tuple<CurrentPoolType>>(),
         std::declval<RestOfPools>()
     ));
-    
+
     static constexpr size_t final_ct_arg_idx = RestOfPools::final_ct_arg_idx;
 };
 
@@ -110,29 +115,42 @@ struct PoolsBuilder<CT_ARG_IDX, NumPools, TypesBaseIdx, index_sequence<Indices..
     static constexpr size_t final_ct_arg_idx = Impl::final_ct_arg_idx;
 };
 
-template<size_t CT_ARG_IDX_BASE>
+template <size_t CT_ARG_IDX_BASE, size_t NumSenderChannels, size_t NumReceiverChannels>
 struct ChannelPoolCollection : public CtArgConsumer<ChannelPoolCollection<CT_ARG_IDX_BASE>> {
     static constexpr size_t num_channel_pools = get_compile_time_arg_val(CT_ARG_IDX_BASE);
     static constexpr size_t channel_pool_types_base_idx = CT_ARG_IDX_BASE + 1;
-    static constexpr size_t pools_data_base_idx = channel_pool_types_base_idx + num_channel_pools;
-    
-    static constexpr std::array<size_t, num_channel_pools> channel_pool_types = 
+
+    static constexpr std::array<size_t, num_channel_pools> channel_pool_types =
         fill_array_with_next_n_args<size_t, channel_pool_types_base_idx, num_channel_pools>();
-    
+
+    static constexpr std::array<size_t, NumSenderChannels> sender_channel_to_pool_index =
+        fill_array_with_next_n_args<size_t, pools_data_base_idx + num_channel_pools, NumSenderChannels>();
+    // static constexpr std::array<FabricChannelPoolType, NumSenderChannels> sender_channel_to_pool_type =
+    //     fill_array_with_next_n_args<FabricChannelPoolType, pools_data_base_idx + NumSenderChannels,
+    //     NumSenderChannels>();
+    static constexpr std::array<size_t, NumReceiverChannels> receiver_channel_to_pool_index =
+        fill_array_with_next_n_args<
+            size_t,
+            pools_data_base_idx + num_channel_pools + NumSenderChannels,
+            NumReceiverChannels>();
+    // static constexpr std::array<FabricChannelPoolType, NumReceiverChannels> receiver_channel_to_pool_type =
+    //     fill_array_with_next_n_args<FabricChannelPoolType, pools_data_base_idx + NumSenderChannels +
+    //     NumReceiverChannels, NumReceiverChannels>();
+    static constexpr size_t pools_data_base_idx =
+        pools_data_base_idx + num_channel_pools + NumSenderChannels + NumReceiverChannels;
+
     using PoolsTuple = typename PoolsBuilder<
-        pools_data_base_idx, 
-        num_channel_pools, 
-        channel_pool_types_base_idx, 
-        make_index_sequence<num_channel_pools>
-    >::type;
-    
+        pools_data_base_idx,
+        num_channel_pools,
+        channel_pool_types_base_idx,
+        make_index_sequence<num_channel_pools>>::type;
+
     static constexpr size_t GET_NUM_ARGS_CONSUMED() {
         return PoolsBuilder<
-            pools_data_base_idx, 
-            num_channel_pools, 
-            channel_pool_types_base_idx, 
-            make_index_sequence<num_channel_pools>
-        >::final_ct_arg_idx - CT_ARG_IDX_BASE;
+                   pools_data_base_idx,
+                   num_channel_pools,
+                   channel_pool_types_base_idx,
+                   make_index_sequence<num_channel_pools>>::final_ct_arg_idx -
+               CT_ARG_IDX_BASE;
     }
 };
-
