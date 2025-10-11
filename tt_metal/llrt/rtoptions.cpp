@@ -264,6 +264,10 @@ RunTimeOptions::RunTimeOptions() {
         enable_fabric_telemetry = true;
     }
 
+    if (getenv("TT_FABRIC_PROFILE_RX_CH_FWD")) {
+        fabric_profiling_settings.enable_rx_ch_fwd = true;
+    }
+
     if (getenv("TT_METAL_FORCE_REINIT")) {
         force_context_reinit = true;
     }
