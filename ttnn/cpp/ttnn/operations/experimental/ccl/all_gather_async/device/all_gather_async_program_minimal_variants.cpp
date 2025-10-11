@@ -131,29 +131,6 @@ void fabric_mux_connection_rt_args(
     worker_rt_args.push_back(num_workers_per_direction);
 }
 
-AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifacts(
-    tt::tt_metal::Program& program,
-    const Tensor& input_tensor,
-    const MeshCoordinate& sender_device_coord,
-    const std::optional<MeshCoordinate>& forward_coord,
-    const std::optional<MeshCoordinate>& backward_coord,
-    Tensor& output_tensor,
-    const uint32_t dim,
-    const uint32_t num_links,
-    const uint32_t ring_size,
-    const uint32_t ring_index,
-    ccl::Topology topology,
-    const std::vector<GlobalSemaphore>& semaphore,
-    const std::optional<GlobalSemaphore>& barrier_semaphore,
-    bool using_persistent_buffers,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-    std::optional<experimental::ccl::AllGatherFusedOpSignaler>& fused_op_signaler,
-    std::optional<uint32_t> chunks_per_sync,
-    std::optional<uint32_t> num_workers_per_direction_opt,
-    std::optional<uint32_t> num_buffers_per_channel,
-    const CoreCoord core_grid_offset,
-    const bool reverse_order);
-
 void all_gather_async_minimal_default_helper_override_runtime_arguments(
     tt::tt_metal::Program& program,
     const std::vector<tt::tt_metal::KernelHandle>& reader_kernel_ids,
@@ -180,7 +157,7 @@ void all_gather_async_minimal_default_helper_override_runtime_arguments(
                 auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_ids[core_idx]);
                 auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_ids[core_idx]);
 
-                auto out_ready_semaphore = semaphore.at(dir);
+                const auto& out_ready_semaphore = semaphore.at(dir);
 
                 // sender reader
                 auto& worker_reader_sender_runtime_args = reader_runtime_args[core.x][core.y];

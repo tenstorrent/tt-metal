@@ -157,7 +157,7 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
     std::optional<uint32_t> num_workers_per_direction_opt,
     std::optional<uint32_t> num_buffers_per_channel,
     CoreCoord core_grid_offset,
-    bool reverse_order = false);
+    bool reverse_order);
 
 // Runtime argument override function
 void all_gather_async_minimal_default_helper_override_runtime_arguments(
