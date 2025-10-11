@@ -983,6 +983,7 @@ def test_demo_text(
                 tt_out_tok = generator.process_decode_output_host(tt_out_toks.pop(0))
                 for idx, t in enumerate(tt_out_tok):
                     if not isinstance(t.item(), int) or t < 0:
+                        breakpoint()
                         print(f"(Invalid token, iteration, user #): ({t}, {iteration}, {idx})")
 
                 out_tok = tt_out_tok if not teacher_forcing else ref_tokens[max_encoded_prompt_len + iteration + 1]

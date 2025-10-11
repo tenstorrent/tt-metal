@@ -187,10 +187,11 @@ class TTSampling(LightweightModule):
         )
         ttnn.deallocate(topk_global_indices_interleaved)
 
+        breakpoint()
         # Sampling
         tt_out_tok = ttnn.sampling(
-            topk_values_gathered_bf16_interleaved,
-            topk_global_indices_interleaved_untilised,
+            topk_values_gathered_bf16_interleaved,  # shape 1,1,32,256
+            topk_global_indices_interleaved_untilised,  # 1,1,32,256
             k=self.k_tensor,
             p=self.p_tensor,
             temp=self.temp_tensor,

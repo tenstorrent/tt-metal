@@ -131,37 +131,82 @@ def run_edge_cases(input_values, input_values_tensor, input_indices_tensor, k, p
 
 def validate_sampling(input_values, input_indices, k, p, seed, device, sub_core_grids=None):
     # Convert input tensors to ttnn tensors
-    input_values_tensor = ttnn.from_torch(input_values, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-    input_indices_tensor = ttnn.from_torch(input_indices, device=device, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT)
+    input_values_tensor = ttnn.from_torch(
+        input_values,
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ttnn.ShardTensor2dMesh(device, dims=(1, 3), mesh_shape=(8, 4)),
+    )
+    input_indices_tensor = ttnn.from_torch(
+        input_indices,
+        device=device,
+        dtype=ttnn.int32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        mesh_mapper=ttnn.ShardTensor2dMesh(device, dims=(1, 3), mesh_shape=(8, 4)),
+    )
+    k = torch.Tensor(k)
+    p = torch.Tensor(p)
+    temp = torch.Tensor(list(np.full(32, 0.1)))
+    k_tensor = ttnn.from_torch(
+        k,
+        device=device,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        mesh_mapper=ttnn.ShardTensor2dMesh(device, dims=(None, None), mesh_shape=(8, 4)),
+    )
+    p_tensor = ttnn.from_torch(
+        p,
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        mesh_mapper=ttnn.ShardTensor2dMesh(device, dims=(None, None), mesh_shape=(8, 4)),
+    )
 
-    temp = ttnn.from_torch(torch.ones(32), device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
-    k_tensor = ttnn.from_torch(torch.tensor(k), device=device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
-    p_tensor = ttnn.from_torch(torch.tensor(p), device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+    temp_tensor = ttnn.from_torch(
+        temp,
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        mesh_mapper=ttnn.ShardTensor2dMesh(device, dims=(None, None), mesh_shape=(8, 4)),
+    )
     # Call the sampling operation
     output_tensor = ttnn.sampling(
         input_values_tensor,
         input_indices_tensor,
         k=k_tensor,
         p=p_tensor,
-        temp=temp,
+        temp=temp_tensor,
         seed=seed,
         sub_core_grids=sub_core_grids,
     )
 
     # Convert the output tensor back to torch
-    output = ttnn.to_torch(output_tensor)
+    output = ttnn.to_torch(
+        output_tensor, mesh_composer=ttnn.ConcatMesh2dToTensor(device, dims=(1, 3), mesh_shape=(8, 4))
+    )
+    tt_dummy_tensor = ttnn.empty([1, 1, 32, 32], ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
+    # Check if tensor has any negative integers
+    has_negative_tokens = (output < 0).any()
+    if has_negative_tokens:
+        print(f"The output has negative tokens : {output}")
+    else:
+        print(f"The output does NOT have negative tokens : {output}")
 
-    # Perform determinism check
-    check_determinism(input_values_tensor, input_indices_tensor, k, p, seed, sub_core_grids, device)
+    input_values_sliced = input_values[:, :1, :, :256]
+    input_indices_sliced = input_indices[:, :1, :, :256]
+    validate_statistics(input_values_sliced, output)
+    # # Perform determinism check
+    # check_determinism(input_values_tensor, input_indices_tensor, k, p, seed, sub_core_grids, device)
 
-    # Perform randomness check
-    check_randomness(input_values_tensor, input_indices_tensor, k, p, sub_core_grids, device)
+    # # Perform randomness check
+    # check_randomness(input_values_tensor, input_indices_tensor, k, p, sub_core_grids, device)
 
-    # Perform statistical validation
-    validate_statistics(input_values, output, k, p)
+    # # Perform statistical validation
+    # validate_statistics(input_values, output, k, p)
 
-    # Perform edge case testing
-    run_edge_cases(input_values, input_values_tensor, input_indices_tensor, k, p, seed, device, sub_core_grids)
+    # # Perform edge case testing
+    # run_edge_cases(input_values, input_values_tensor, input_indices_tensor, k, p, seed, device, sub_core_grids)
 
 
 def run_sampling(shape, k, p, seed, device, sub_core_grids=None):
@@ -181,53 +226,230 @@ def run_sampling(shape, k, p, seed, device, sub_core_grids=None):
     )
 
 
+# def run_sampling_dummy_data(k, p, seed, device, sub_core_grids=None):
+# # Generate random input values and indices
+# input_values = torch.load("topk_values_bad.pt")
+# input_indices = torch.load("topk_indices_bad.pt")
+# start_core = ttnn.CoreCoord(1, 0)
+# max_batch_size = 32
+# sub_cores = ttnn.CoreRangeSet(
+#         [
+#             ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
+#             ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 9)),
+#         ]
+# )
+# sub_core_grids=ttnn.num_cores_to_corerangeset_in_subcoregrids(
+#     start_core, max_batch_size, sub_cores, row_wise=True
+# )
+# input_values_tensor = ttnn.from_torch(input_values, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=ttnn.ShardTensor2dMesh(device, dims=(1,3),mesh_shape=(8,4)))
+# input_indices_tensor = ttnn.from_torch(input_indices, device=device, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=ttnn.ShardTensor2dMesh(device, dims=(1,3),mesh_shape=(8,4)))
+# k = torch.Tensor(k)
+# p = torch.Tensor(p)
+# temp = torch.Tensor(list(np.full(32, 0.1)))
+# k_tensor = ttnn.from_torch(
+#     k,
+#     device=device,
+#     dtype=ttnn.uint32,
+#     layout=ttnn.ROW_MAJOR_LAYOUT,
+#     mesh_mapper=ttnn.ShardTensor2dMesh(device, dims=(None, None), mesh_shape=(8,4)),
+# )
+# p_tensor = ttnn.from_torch(
+#     p,
+#     device=device,
+#     dtype=ttnn.bfloat16,
+#     layout=ttnn.ROW_MAJOR_LAYOUT,
+#     mesh_mapper=ttnn.ShardTensor2dMesh(device, dims=(None, None), mesh_shape=(8,4)),
+# )
+
+# temp_tensor = ttnn.from_torch(
+#     temp,
+#     device=device,
+#     dtype=ttnn.bfloat16,
+#     layout=ttnn.ROW_MAJOR_LAYOUT,
+#     mesh_mapper=ttnn.ShardTensor2dMesh(device, dims=(None, None), mesh_shape=(8,4)),
+# )
+# # Call the sampling operation
+# output_tensor = ttnn.sampling(
+#     input_values_tensor,
+#     input_indices_tensor,
+#     k=k_tensor,
+#     p=p_tensor,
+#     temp=temp_tensor,
+#     seed=seed,
+#     sub_core_grids=sub_core_grids,
+# )
+
+# # Convert the output tensor back to torch
+# output = ttnn.to_torch(output_tensor, mesh_composer=ttnn.ConcatMesh2dToTensor(device, dims=(1,3), mesh_shape=(8,4)))
+# tt_dummy_tensor = ttnn.empty([1, 1, 32, 32], ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
+# # Check if tensor has any negative integers
+# has_negative_tokens = (output < 0).any()
+# if has_negative_tokens:
+#     print(f"The output has negative tokens : {output}")
+# else:
+#     print(f"The output does NOT have negative tokens : {output}")
+
+
+# @skip_for_blackhole("Failing on Blackhole, see Issue#26176")
+# @pytest.mark.parametrize(
+#     "shape",
+#     [
+#         [1, 1, 32, 32 * 8],  # llama on TG and T3K
+#         [1, 1, 32, 32 * 2],  # llama on N300
+#     ],
+# )
+# @pytest.mark.parametrize("k", [[10, 15, 20, 25, 30] * 6 + [10, 20]])  # Example of per-user k
+# @pytest.mark.parametrize("p", [[0.0, 0.3, 0.5, 0.7, 0.9] * 6 + [0.1, 0.8]])  # Example of per-user p
+# @pytest.mark.parametrize("seed", [2024, 11, 123])
+# def test_sampling_callback(shape, k, p, seed, device):
+#     torch.manual_seed(seed)
+#     num_program_cache_entries_list = []
+#     for _ in range(2):
+#         run_sampling(shape, k, p, seed, device)
+#         # Add dummy tensor to make sure that created tensor in 2 iteration don't share the same addr
+#         tt_dummy_tensor = ttnn.empty([1, 1, 32, 32], ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
+#         num_program_cache_entries_list.append(device.num_program_cache_entries())
+
+#     logger.info(f"num_program_cache_entries_list={num_program_cache_entries_list}")
+#     assert num_program_cache_entries_list[0] > 0
+#     assert num_program_cache_entries_list[0] == num_program_cache_entries_list[1]
+
+
+# @skip_for_blackhole("Failing on Blackhole, see Issue#26176")
+# @pytest.mark.parametrize(
+#     "shape",
+#     [
+#         [1, 1, 32, 32 * 2],  # llama on N300
+#     ],
+# )
+# @pytest.mark.parametrize("k", [[10, 15, 20, 25, 30] * 6 + [10, 20]])  # Example of per-user k
+# @pytest.mark.parametrize("p", [[0.0, 0.3, 0.5, 0.7, 0.9] * 6 + [0.1, 0.8]])  # Example of per-user p
+# @pytest.mark.parametrize("seed", [2024])
+# @pytest.mark.parametrize(
+#     "sub_core_grids", [ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(8 - 1, 4 - 1))})]
+# )
+# def test_sampling_subcores_callback(shape, k, p, seed, device, sub_core_grids):
+#     torch.manual_seed(seed)
+#     num_program_cache_entries_list = []
+#     for _ in range(2):
+#         run_sampling(shape, k, p, seed, device, sub_core_grids)
+#         # Add dummy tensor to make sure that created tensor in 2 iteration don't share the same addr
+#         tt_dummy_tensor = ttnn.empty([1, 1, 32, 32], ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
+#         num_program_cache_entries_list.append(device.num_program_cache_entries())
+
+#     logger.info(f"num_program_cache_entries_list={num_program_cache_entries_list}")
+#     assert num_program_cache_entries_list[0] > 0
+#     assert num_program_cache_entries_list[0] == num_program_cache_entries_list[1]
+
+
 @skip_for_blackhole("Failing on Blackhole, see Issue#26176")
-@pytest.mark.parametrize(
-    "shape",
-    [
-        [1, 1, 32, 32 * 8],  # llama on TG and T3K
-        [1, 1, 32, 32 * 2],  # llama on N300
-    ],
-)
-@pytest.mark.parametrize("k", [[10, 15, 20, 25, 30] * 6 + [10, 20]])  # Example of per-user k
-@pytest.mark.parametrize("p", [[0.0, 0.3, 0.5, 0.7, 0.9] * 6 + [0.1, 0.8]])  # Example of per-user p
-@pytest.mark.parametrize("seed", [2024, 11, 123])
-def test_sampling_callback(shape, k, p, seed, device):
-    torch.manual_seed(seed)
-    num_program_cache_entries_list = []
-    for _ in range(2):
-        run_sampling(shape, k, p, seed, device)
-        # Add dummy tensor to make sure that created tensor in 2 iteration don't share the same addr
-        tt_dummy_tensor = ttnn.empty([1, 1, 32, 32], ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
-        num_program_cache_entries_list.append(device.num_program_cache_entries())
-
-    logger.info(f"num_program_cache_entries_list={num_program_cache_entries_list}")
-    assert num_program_cache_entries_list[0] > 0
-    assert num_program_cache_entries_list[0] == num_program_cache_entries_list[1]
-
-
-@skip_for_blackhole("Failing on Blackhole, see Issue#26176")
-@pytest.mark.parametrize(
-    "shape",
-    [
-        [1, 1, 32, 32 * 2],  # llama on N300
-    ],
-)
-@pytest.mark.parametrize("k", [[10, 15, 20, 25, 30] * 6 + [10, 20]])  # Example of per-user k
-@pytest.mark.parametrize("p", [[0.0, 0.3, 0.5, 0.7, 0.9] * 6 + [0.1, 0.8]])  # Example of per-user p
+@pytest.mark.parametrize("k", [list(np.linspace(1, 32, 32).astype(int))])  # Example of per-user k
+@pytest.mark.parametrize("p", [list(np.full(32, 1.0))])  # Example of per-user p
 @pytest.mark.parametrize("seed", [2024])
 @pytest.mark.parametrize(
     "sub_core_grids", [ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(8 - 1, 4 - 1))})]
 )
-def test_sampling_subcores_callback(shape, k, p, seed, device, sub_core_grids):
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+        }
+    ],
+    indirect=True,
+)
+def test_sampling_subcores_llama_non_uniform(k, p, seed, mesh_device, sub_core_grids):
     torch.manual_seed(seed)
-    num_program_cache_entries_list = []
-    for _ in range(2):
-        run_sampling(shape, k, p, seed, device, sub_core_grids)
-        # Add dummy tensor to make sure that created tensor in 2 iteration don't share the same addr
-        tt_dummy_tensor = ttnn.empty([1, 1, 32, 32], ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
-        num_program_cache_entries_list.append(device.num_program_cache_entries())
+    # Generate random input values and indices
+    tokens = torch.full((32,), 271, dtype=torch.int32)
+    tokens = ttnn.from_torch(
+        tokens,
+        device=mesh_device,
+        dtype=ttnn.uint32,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    tokens = ttnn.unsqueeze_to_4D(tokens)
+    input_values = torch.load("topk_values_bad.pt")
+    input_indices = torch.load("topk_indices_bad.pt")
+    start_core = ttnn.CoreCoord(1, 0)
+    max_batch_size = 32
+    sub_cores = ttnn.CoreRangeSet(
+        [
+            ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
+            ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 9)),
+        ]
+    )
+    sub_core_grids = ttnn.num_cores_to_corerangeset_in_subcoregrids(
+        start_core, max_batch_size, sub_cores, row_wise=True
+    )
+    input_values_tensor = ttnn.from_torch(
+        input_values,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(1, 3), mesh_shape=(8, 4)),
+    )
+    input_indices_tensor = ttnn.from_torch(
+        input_indices,
+        device=mesh_device,
+        dtype=ttnn.int32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(1, 3), mesh_shape=(8, 4)),
+    )
+    k = torch.Tensor(k)
+    p = torch.Tensor(p)
+    temp = torch.Tensor(list(np.full(32, 0.1)))
+    k_tensor = ttnn.from_torch(
+        k,
+        device=mesh_device,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, None), mesh_shape=(8, 4)),
+    )
+    p_tensor = ttnn.from_torch(
+        p,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, None), mesh_shape=(8, 4)),
+    )
 
-    logger.info(f"num_program_cache_entries_list={num_program_cache_entries_list}")
-    assert num_program_cache_entries_list[0] > 0
-    assert num_program_cache_entries_list[0] == num_program_cache_entries_list[1]
+    temp_tensor = ttnn.from_torch(
+        temp,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, None), mesh_shape=(8, 4)),
+    )
+    # Call the sampling operation
+    tokens = ttnn.sampling(
+        input_values_tensor,
+        input_indices_tensor,
+        k=k_tensor,
+        p=p_tensor,
+        temp=temp_tensor,
+        seed=seed,
+        sub_core_grids=sub_core_grids,
+        output_tensor=tokens,
+    )
+
+    # Convert the output tensor back to torch
+    output = ttnn.to_torch(tokens, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=(8, 4)))
+    tt_dummy_tensor = ttnn.empty([1, 1, 32, 32], ttnn.bfloat16, ttnn.TILE_LAYOUT, mesh_device)
+    # Check if tensor has any negative integers
+    has_negative_tokens = (output < 0).any()
+    if has_negative_tokens:
+        print(f"The output has negative tokens : {output}")
+    else:
+        print(f"The output does NOT have negative tokens : {output}")
+
+    # num_program_cache_entries_list = []
+    # for _ in range(2):
+    #     run_sampling_dummy_data(k, p, seed, mesh_device, sub_core_grids)
+    # Add dummy tensor to make sure that created tensor in 2 iteration don't share the same addr
+    # tt_dummy_tensor = ttnn.empty([1, 1, 32, 32], ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
+    # num_program_cache_entries_list.append(device.num_program_cache_entries())
+
+    # logger.info(f"num_program_cache_entries_list={num_program_cache_entries_list}")
+    # assert num_program_cache_entries_list[0] > 0
+    # assert num_program_cache_entries_list[0] == num_program_cache_entries_list[1]

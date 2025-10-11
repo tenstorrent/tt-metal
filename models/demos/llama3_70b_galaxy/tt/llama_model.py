@@ -347,6 +347,7 @@ class TtTransformer(LightweightModule):
         assert B == self.args.max_batch_size, f"Batch size must be equal to max_batch_size {self.args.max_batch_size}"
 
         # Necessary padding to be full tile sized when on device
+        breakpoint()
         tokens = torch.nn.functional.pad(tokens.view(-1), (0, 32 - len(tokens)), "constant", 0)
         tokens = ttnn.from_torch(
             tokens,
