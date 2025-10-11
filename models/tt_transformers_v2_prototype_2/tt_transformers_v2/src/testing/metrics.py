@@ -14,7 +14,6 @@ Key Features:
 """
 
 import torch
-
 import ttnn
 
 
@@ -45,8 +44,8 @@ def _compute_max_abs_error(impl, ref):
             abs_diff = ttnn.abs(diff)
             max_val = ttnn.max(abs_diff)
             return ttnn.to_torch(max_val).item()  # Convert only final scalar
-        elif torch.is_tensor(impl):
-            # PyTorch path
+        elif torch.is_tensor(impl) and torch.is_tensor(ref):
+            # PyTorch path - both must be torch tensors
             return (impl - ref).abs().max().item()
         else:
             return float("inf")
@@ -81,8 +80,8 @@ def _compute_mean_abs_error(impl, ref):
             abs_diff = ttnn.abs(diff)
             mean_val = ttnn.mean(abs_diff)
             return ttnn.to_torch(mean_val).item()
-        elif torch.is_tensor(impl):
-            # PyTorch path
+        elif torch.is_tensor(impl) and torch.is_tensor(ref):
+            # PyTorch path - both must be torch tensors
             return (impl - ref).abs().mean().item()
         else:
             return float("inf")
