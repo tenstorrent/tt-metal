@@ -106,7 +106,7 @@ class ValidatedRMSNormOldStyle:
 @validate_against(
     reference_fn=torch.matmul,
     input_map=lambda args, kwargs: ((ttnn.to_torch(args[0]).squeeze(0), ttnn.to_torch(args[1]).squeeze(0)), {}),
-    output_map_impl=lambda x: ttnn.to_torch(x).squeeze(0),
+    output_map=lambda x: ttnn.to_torch(x).squeeze(0),
     metrics={
         "max_abs_error": lambda impl, ref: (impl - ref).abs().max().item(),
         "relative_error": lambda impl, ref: ((impl - ref).abs() / (ref.abs() + 1e-8)).mean().item(),
@@ -144,7 +144,7 @@ def custom_attention_reference(q, k, v, scale):
         ),
         {},
     ),
-    output_map_impl=lambda x: ttnn.to_torch(x).squeeze(0),
+    output_map=lambda x: ttnn.to_torch(x).squeeze(0),
     metrics={
         "max_abs_error": lambda impl, ref: (impl - ref).abs().max().item(),
         "mean_abs_error": lambda impl, ref: (impl - ref).abs().mean().item(),
