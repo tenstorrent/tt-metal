@@ -15,6 +15,7 @@
 #include "tensix.h"
 #include "tensix_dev_map.h"
 #include "tensix_functions.h"
+#include "noc.h"
 
 class c_tensix_core {
 public:
@@ -199,7 +200,7 @@ public:
         bool posted,
         bool wr_blocking = false,
         bool rd_blocking = false,
-        uint16_t be = 0xffff);
+        uint32_t be = 0xffff);
     static void noc_atomic_increment(uint32_t noc_coordinate, uint64_t addr, uint32_t incr, uint32_t wrap, bool linked);
     // if blocking copy is requested, set num_blocking_cores to the number of receiving cores
     static void noc_multicast_copy(
@@ -427,7 +428,7 @@ inline void c_tensix_core::noc_copy(
     bool posted,
     bool wr_blocking,
     bool rd_blocking,
-    uint16_t be) {
+    uint32_t be) {
     FWASSERT("Write-Blocking behaviour is only supported when posted=false", wr_blocking == false || posted == false);
     FWASSERT("Byte-enable is only supported for a word copy", (be == 0xffff || size <= 16));
 
@@ -437,7 +438,7 @@ inline void c_tensix_core::noc_copy(
     if (be != 0xffff) {
         ::noc_copy_word_be(src_coordinate, src_addr, dst_coordinate, dst_addr, be, linked, posted, false, 0, 0);
     } else {
-        ::noc_copy(src_coordinate, src_addr, dst_coordinate, dst_addr, size, linked, posted, false, 0, 0, 0);
+        ::noc_copy(src_coordinate, src_addr, dst_coordinate, dst_addr, size, linked, posted, false, 0, 0);
     }
 
     // if blocking copy, wait until all the wacks have been received

@@ -77,7 +77,11 @@ uint32_t firmware_config_init(
 
 FORCE_INLINE
 void wait_for_go_message() {
+#ifdef ARCH_QUASAR
+    tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE + MEM_L1_UNCACHED_BASE);
+#else
     tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE);
+#endif
     uint32_t go_message_index = mailboxes->go_message_index;
 
     while (mailboxes->go_messages[go_message_index].signal != RUN_MSG_GO) {
