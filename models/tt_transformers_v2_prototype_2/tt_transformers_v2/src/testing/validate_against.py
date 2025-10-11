@@ -106,7 +106,7 @@ _validation_registry = ValidationRegistry()
 
 
 # Import metric functions
-from .metrics import DEFAULT_METRICS, _compute_cosine_similarity, _compute_max_abs_error, _compute_mean_abs_error
+from .metrics import DEFAULT_METRICS, compute_cosine_similarity, compute_max_abs_error, compute_mean_abs_error
 
 # ============================================================================
 # Validation Decorator
@@ -322,8 +322,8 @@ __all__ = [
     "clear_validation_results",
     "ValidationResult",
     "ValidationRegistry",
-    "_compute_max_abs_error",
-    "_compute_mean_abs_error",
-    "_compute_cosine_similarity",
+    "compute_max_abs_error",
+    "compute_mean_abs_error",
+    "compute_cosine_similarity",
     "DEFAULT_METRICS",
 ]

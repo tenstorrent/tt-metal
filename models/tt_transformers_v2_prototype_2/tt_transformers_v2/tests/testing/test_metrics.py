@@ -23,10 +23,11 @@ pytestmark = pytest.mark.skipif(not TTNN_AVAILABLE, reason="TTNN not available")
 
 # Import metric functions from the validation framework
 from tt_transformers_v2.src.testing import (
-    _compute_cosine_similarity,
-    _compute_max_abs_error,
-    _compute_mean_abs_error,
-    _compute_pcc,
+    comp_allclose,
+    compute_cosine_similarity,
+    compute_max_abs_error,
+    compute_mean_abs_error,
+    compute_pcc,
 )
 
 
@@ -162,9 +163,9 @@ def test_metrics_vs_pytorch(ttnn_device, name, tensor_a_fn, tensor_b_fn, max_spe
     ttnn_b = to_ttnn(torch_b, ttnn_device)
 
     # Compute with TTNN
-    max_error_ttnn = _compute_max_abs_error(ttnn_a, ttnn_b)
-    mean_error_ttnn = _compute_mean_abs_error(ttnn_a, ttnn_b)
-    cosine_ttnn = _compute_cosine_similarity(ttnn_a, ttnn_b)
+    max_error_ttnn = compute_max_abs_error(ttnn_a, ttnn_b)
+    mean_error_ttnn = compute_mean_abs_error(ttnn_a, ttnn_b)
+    cosine_ttnn = compute_cosine_similarity(ttnn_a, ttnn_b)
 
     # Default tolerance for TTNN vs PyTorch comparison (bf16 precision)
     default_tolerance = 0.02
@@ -237,8 +238,8 @@ def test_pcc_ttnn_native(ttnn_device):
     a_ttnn = to_ttnn(a_torch, ttnn_device)
     b_ttnn = to_ttnn(b_torch, ttnn_device)
 
-    pcc_ttnn = _compute_pcc(a_ttnn, b_ttnn)
-    pcc_torch = _compute_pcc(a_torch, b_torch)
+    pcc_ttnn = compute_pcc(a_ttnn, b_ttnn)
+    pcc_torch = compute_pcc(a_torch, b_torch)
 
     print(f"  Perfect correlation - TTNN: {pcc_ttnn:.6f}, PyTorch: {pcc_torch:.6f}")
     assert pcc_ttnn >= 0.999, f"Perfect correlation should be ~1.0, got {pcc_ttnn}"
@@ -252,8 +253,8 @@ def test_pcc_ttnn_native(ttnn_device):
     a_ttnn = to_ttnn(a_torch, ttnn_device)
     b_ttnn = to_ttnn(b_torch, ttnn_device)
 
-    pcc_ttnn = _compute_pcc(a_ttnn, b_ttnn)
-    pcc_torch = _compute_pcc(a_torch, b_torch)
+    pcc_ttnn = compute_pcc(a_ttnn, b_ttnn)
+    pcc_torch = compute_pcc(a_torch, b_torch)
 
     print(f"  High correlation - TTNN: {pcc_ttnn:.6f}, PyTorch: {pcc_torch:.6f}")
     assert pcc_ttnn >= 0.95, f"High correlation should be >= 0.95, got {pcc_ttnn}"
@@ -268,8 +269,8 @@ def test_pcc_ttnn_native(ttnn_device):
     a_ttnn = to_ttnn(a_torch, ttnn_device)
     b_ttnn = to_ttnn(b_torch, ttnn_device)
 
-    pcc_ttnn = _compute_pcc(a_ttnn, b_ttnn)
-    pcc_torch = _compute_pcc(a_torch, b_torch)
+    pcc_ttnn = compute_pcc(a_ttnn, b_ttnn)
+    pcc_torch = compute_pcc(a_torch, b_torch)
 
     print(f"  Negative correlation - TTNN: {pcc_ttnn:.6f}, PyTorch: {pcc_torch:.6f}")
     assert pcc_ttnn < -0.8, f"Negative correlation should be < -0.8, got {pcc_ttnn}"
@@ -283,8 +284,8 @@ def test_pcc_ttnn_native(ttnn_device):
     a_ttnn = to_ttnn(a_torch, ttnn_device)
     b_ttnn = to_ttnn(b_torch, ttnn_device)
 
-    pcc_ttnn = _compute_pcc(a_ttnn, b_ttnn)
-    pcc_torch = _compute_pcc(a_torch, b_torch)
+    pcc_ttnn = compute_pcc(a_ttnn, b_ttnn)
+    pcc_torch = compute_pcc(a_torch, b_torch)
 
     print(f"  Large tensor - TTNN: {pcc_ttnn:.6f}, PyTorch: {pcc_torch:.6f}")
     assert pcc_ttnn >= 0.90, f"Large tensor PCC should be >= 0.90, got {pcc_ttnn}"
@@ -299,8 +300,8 @@ def test_pcc_ttnn_native(ttnn_device):
     a_ttnn = to_ttnn(a_torch, ttnn_device)
     b_ttnn = to_ttnn(b_torch, ttnn_device)
 
-    pcc_ttnn = _compute_pcc(a_ttnn, b_ttnn)
-    pcc_torch = _compute_pcc(a_torch, b_torch)
+    pcc_ttnn = compute_pcc(a_ttnn, b_ttnn)
+    pcc_torch = compute_pcc(a_torch, b_torch)
 
     print(f"  Large noise (0.5x) - TTNN: {pcc_ttnn:.6f}, PyTorch: {pcc_torch:.6f}")
     assert pcc_ttnn < 0.99, f"Large noise should reduce PCC below 0.99, got {pcc_ttnn}"
@@ -316,8 +317,8 @@ def test_pcc_ttnn_native(ttnn_device):
     a_ttnn = to_ttnn(a_torch, ttnn_device)
     b_ttnn = to_ttnn(b_torch, ttnn_device)
 
-    pcc_ttnn = _compute_pcc(a_ttnn, b_ttnn)
-    pcc_torch = _compute_pcc(a_torch, b_torch)
+    pcc_ttnn = compute_pcc(a_ttnn, b_ttnn)
+    pcc_torch = compute_pcc(a_torch, b_torch)
 
     print(f"  Very large noise (2.0x) - TTNN: {pcc_ttnn:.6f}, PyTorch: {pcc_torch:.6f}")
     assert pcc_ttnn < 0.80, f"Very large noise should reduce PCC below 0.80, got {pcc_ttnn}"
@@ -342,8 +343,8 @@ def test_pcc_constant_tensors(ttnn_device):
     a_ttnn = to_ttnn(a_torch, ttnn_device)
     b_ttnn = to_ttnn(b_torch, ttnn_device)
 
-    pcc_ttnn = _compute_pcc(a_ttnn, b_ttnn)
-    pcc_torch = _compute_pcc(a_torch, b_torch)
+    pcc_ttnn = compute_pcc(a_ttnn, b_ttnn)
+    pcc_torch = compute_pcc(a_torch, b_torch)
 
     print(f"  Same constant (5.0) - TTNN: {pcc_ttnn:.6f}, PyTorch: {pcc_torch:.6f}")
     assert pcc_ttnn == 1.0, f"Same constant tensors should have PCC=1.0, got {pcc_ttnn}"
@@ -356,8 +357,8 @@ def test_pcc_constant_tensors(ttnn_device):
     a_ttnn = to_ttnn(a_torch, ttnn_device)
     b_ttnn = to_ttnn(b_torch, ttnn_device)
 
-    pcc_ttnn = _compute_pcc(a_ttnn, b_ttnn)
-    pcc_torch = _compute_pcc(a_torch, b_torch)
+    pcc_ttnn = compute_pcc(a_ttnn, b_ttnn)
+    pcc_torch = compute_pcc(a_torch, b_torch)
 
     print(f"  Different constants (5.0 vs 3.0) - TTNN: {pcc_ttnn:.6f}, PyTorch: {pcc_torch:.6f}")
     assert pcc_ttnn == 0.0, f"Different constant tensors should have PCC=0.0, got {pcc_ttnn}"
@@ -371,8 +372,8 @@ def test_pcc_constant_tensors(ttnn_device):
     a_ttnn = to_ttnn(a_torch, ttnn_device)
     b_ttnn = to_ttnn(b_torch, ttnn_device)
 
-    pcc_ttnn = _compute_pcc(a_ttnn, b_ttnn)
-    pcc_torch = _compute_pcc(a_torch, b_torch)
+    pcc_ttnn = compute_pcc(a_ttnn, b_ttnn)
+    pcc_torch = compute_pcc(a_torch, b_torch)
 
     print(f"  All zeros - TTNN: {pcc_ttnn:.6f}, PyTorch: {pcc_torch:.6f}")
     assert pcc_ttnn == 1.0, f"Zero tensors should have PCC=1.0, got {pcc_ttnn}"
@@ -398,15 +399,15 @@ def test_pcc_all_nan_and_mixed_nan(ttnn_device):
     a_num_t = to_ttnn(a_num, ttnn_device)
 
     # Both all-NaN -> 1.0
-    pcc_ttnn = _compute_pcc(a_nan_t, b_nan_t)
-    pcc_cpu = _compute_pcc(a_nan, b_nan)
+    pcc_ttnn = compute_pcc(a_nan_t, b_nan_t)
+    pcc_cpu = compute_pcc(a_nan, b_nan)
     print(f"  both NaN - TTNN: {pcc_ttnn}, CPU: {pcc_cpu}")
     assert pcc_ttnn == 1.0
     assert pcc_cpu == 1.0
 
     # Mixed NaN presence -> 0.0
-    pcc_ttnn = _compute_pcc(a_nan_t, a_num_t)
-    pcc_cpu = _compute_pcc(a_nan, a_num)
+    pcc_ttnn = compute_pcc(a_nan_t, a_num_t)
+    pcc_cpu = compute_pcc(a_nan, a_num)
     print(f"  mixed NaN - TTNN: {pcc_ttnn}, CPU: {pcc_cpu}")
     assert pcc_ttnn == 0.0
     assert pcc_cpu == 0.0
@@ -426,8 +427,8 @@ def test_pcc_zero_vs_nonzero(ttnn_device):
     a_zero_t = to_ttnn(a_zero, ttnn_device)
     b_nonzero_t = to_ttnn(b_nonzero, ttnn_device)
 
-    pcc_ttnn = _compute_pcc(a_zero_t, b_nonzero_t)
-    pcc_cpu = _compute_pcc(a_zero, b_nonzero)
+    pcc_ttnn = compute_pcc(a_zero_t, b_nonzero_t)
+    pcc_cpu = compute_pcc(a_zero, b_nonzero)
 
     print(f"  zero vs non-zero - TTNN: {pcc_ttnn}, CPU: {pcc_cpu}")
     assert pcc_ttnn == 0.0
@@ -454,10 +455,10 @@ def test_metrics_pytorch_only():
     torch_b = torch.tensor([[1.0, 2.0, 3.5], [4.0, 5.0, 6.0]], dtype=torch.float32)
 
     # Functions should fall back to PyTorch path
-    max_error = _compute_max_abs_error(torch_a, torch_b)
-    mean_error = _compute_mean_abs_error(torch_a, torch_b)
-    cosine = _compute_cosine_similarity(torch_a, torch_b)
-    pcc = _compute_pcc(torch_a, torch_b)
+    max_error = compute_max_abs_error(torch_a, torch_b)
+    mean_error = compute_mean_abs_error(torch_a, torch_b)
+    cosine = compute_cosine_similarity(torch_a, torch_b)
+    pcc = compute_pcc(torch_a, torch_b)
 
     # Verify results
     expected_max = 0.5
@@ -467,6 +468,86 @@ def test_metrics_pytorch_only():
     assert abs(mean_error - expected_mean) < 1e-6, f"Mean error mismatch"
     assert 0.0 <= cosine <= 1.0, f"Cosine should be in [0,1], got {cosine}"
     assert 0.99 <= pcc <= 1.0, f"PCC should be high (~1.0) for similar tensors, got {pcc}"
+
+
+def test_comp_allclose_pytorch_only():
+    """PyTorch-only tests for comp_allclose covering pass/fail and edge cases."""
+    # Exact equality
+    a = torch.tensor([1.0, 2.0, 3.0], dtype=torch.float32)
+    b = a.clone()
+    passed, msg = comp_allclose(a, b)
+    assert passed, f"Expected pass for exact equality. Got: {msg}"
+    assert "Max ATOL Delta" in msg and "Max RTOL Delta" in msg
+
+    # Within tolerance
+    a = torch.tensor([1.0, 2.0, 3.0], dtype=torch.float32)
+    b = torch.tensor([1.0 + 1e-7, 2.0 - 1e-7, 3.0], dtype=torch.float32)
+    passed, msg = comp_allclose(a, b)
+    assert passed, f"Expected pass within default tolerance. Got: {msg}"
+
+    # Outside tolerance
+    a = torch.tensor([1.0, 2.0, 3.0], dtype=torch.float32)
+    b = torch.tensor([1.0, 2.1, 3.0], dtype=torch.float32)
+    passed, msg = comp_allclose(a, b)
+    assert not passed and "Allclose check failed" in msg
+
+    # NaN equality (equal_nan=True semantics)
+    a = torch.tensor([float("nan"), 1.0, 2.0], dtype=torch.float32)
+    b = torch.tensor([float("nan"), 1.0, 2.0], dtype=torch.float32)
+    passed, _ = comp_allclose(a, b)
+    assert passed, "Both NaNs at same positions should pass"
+
+    # Inf same sign -> pass
+    a = torch.tensor([float("inf"), -float("inf"), 1.0])
+    b = torch.tensor([float("inf"), -float("inf"), 1.0])
+    passed, _ = comp_allclose(a, b)
+    assert passed, "Same sign infinities should pass"
+
+    # Inf different sign -> fail
+    a = torch.tensor([float("inf"), -float("inf"), 1.0])
+    b = torch.tensor([float("inf"), float("inf"), 1.0])
+    passed, msg = comp_allclose(a, b)
+    assert not passed and "Allclose check failed" in msg
+
+
+def test_comp_allclose_ttnn_native(ttnn_device):
+    """TTNN-native tests for comp_allclose using on-device ops."""
+
+    # Helper to TTNN
+    def tt(x):
+        return to_ttnn(x, ttnn_device)
+
+    # Exact equality
+    a_t = tt(torch.randn(2, 4, dtype=torch.bfloat16))
+    b_t = a_t
+    passed, msg = comp_allclose(a_t, b_t)
+    assert passed, f"TTNN equality should pass. Got: {msg}"
+
+    # Fail with tight tolerance
+    a = torch.tensor([[1.0, 2.0], [3.0, 4.0]], dtype=torch.bfloat16)
+    b = a + 0.5
+    passed, msg = comp_allclose(tt(a), tt(b), rtol=1e-6, atol=1e-6)
+    assert not passed and "Allclose check failed" in msg
+
+    # Pass with relaxed tolerance
+    passed, msg = comp_allclose(tt(a), tt(b), rtol=0.2, atol=0.6)
+    assert passed, f"Expected pass with relaxed tolerance. Got: {msg}"
+
+    # NaN equal
+    a = torch.tensor([float("nan"), 1.0], dtype=torch.float32)
+    b = torch.tensor([float("nan"), 1.0], dtype=torch.float32)
+    passed, _ = comp_allclose(tt(a), tt(b))
+    assert passed, "TTNN: Both NaNs at same positions should pass"
+
+    # Inf same sign pass, different sign fail
+    a = torch.tensor([float("inf"), -float("inf"), 2.0], dtype=torch.float32)
+    b = torch.tensor([float("inf"), -float("inf"), 2.0], dtype=torch.float32)
+    passed, _ = comp_allclose(tt(a), tt(b))
+    assert passed
+
+    b = torch.tensor([float("inf"), float("inf"), 2.0], dtype=torch.float32)
+    passed, msg = comp_allclose(tt(a), tt(b))
+    assert not passed and "Allclose check failed" in msg
 
 
 if __name__ == "__main__":

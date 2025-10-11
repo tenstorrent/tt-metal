@@ -17,8 +17,15 @@ import numpy as np
 import torch
 import ttnn
 
+assert hasattr(ttnn, "Tensor")
 
-def _compute_max_abs_error(impl, ref):
+
+def _is_ttnn_tensor(x):
+    """Safely detect TTNN tensors even if ttnn.Tensor is not defined in this environment."""
+    return isinstance(x, ttnn.Tensor)
+
+
+def compute_max_abs_error(impl, ref):
     """
     Compute maximum absolute error between two tensors.
 
@@ -39,7 +46,7 @@ def _compute_max_abs_error(impl, ref):
         0.10000002384185791
     """
     try:
-        if isinstance(impl, ttnn.Tensor) and isinstance(ref, ttnn.Tensor):
+        if _is_ttnn_tensor(impl) and _is_ttnn_tensor(ref):
             # TTNN path - stay on device
             diff = ttnn.subtract(impl, ref)
             abs_diff = ttnn.abs(diff)
@@ -54,7 +61,7 @@ def _compute_max_abs_error(impl, ref):
         return float("inf")
 
 
-def _compute_mean_abs_error(impl, ref):
+def compute_mean_abs_error(impl, ref):
     """
     Compute mean absolute error between two tensors.
 
@@ -75,7 +82,7 @@ def _compute_mean_abs_error(impl, ref):
         0.06666667014360428
     """
     try:
-        if isinstance(impl, ttnn.Tensor) and isinstance(ref, ttnn.Tensor):
+        if _is_ttnn_tensor(impl) and _is_ttnn_tensor(ref):
             # TTNN path - stay on device
             diff = ttnn.subtract(impl, ref)
             abs_diff = ttnn.abs(diff)
@@ -90,7 +97,7 @@ def _compute_mean_abs_error(impl, ref):
         return float("inf")
 
 
-def _compute_cosine_similarity(impl, ref):
+def compute_cosine_similarity(impl, ref):
     """
     Compute cosine similarity between two tensors.
 
@@ -119,7 +126,7 @@ def _compute_cosine_similarity(impl, ref):
         0.0
     """
     try:
-        if isinstance(impl, ttnn.Tensor) and isinstance(ref, ttnn.Tensor):
+        if _is_ttnn_tensor(impl) and _is_ttnn_tensor(ref):
             # TTNN path - convert to torch for cosine similarity
             impl_torch = ttnn.to_torch(impl).flatten()
             ref_torch = ttnn.to_torch(ref).flatten()
@@ -134,7 +141,7 @@ def _compute_cosine_similarity(impl, ref):
 
 
 # code stolen from tests/tt_eager/python_api_testing/sweep_tests/comparison_funcs.py
-def _compute_pcc(impl, ref):
+def compute_pcc(impl, ref):
     """
     Compute Pearson Correlation Coefficient (PCC) between two tensors.
 
@@ -173,7 +180,7 @@ def _compute_pcc(impl, ref):
     """
     try:
         # TTNN fast path - compute on device
-        if isinstance(impl, ttnn.Tensor) and isinstance(ref, ttnn.Tensor):
+        if _is_ttnn_tensor(impl) and _is_ttnn_tensor(ref):
             # Early edge-case handling to mirror CPU semantics
             # - All NaNs → 1.0; mixed NaNs → 0.0
             # - One tensor all zero and the other not → 0.0
@@ -322,18 +329,111 @@ def _compute_pcc(impl, ref):
 
 # Default metrics dictionary for easy import
 DEFAULT_METRICS = {
-    "max_abs_error": _compute_max_abs_error,
-    "mean_abs_error": _compute_mean_abs_error,
-    "pcc": _compute_pcc,
-    "cosine_similarity": _compute_cosine_similarity,
+    "max_abs_error": compute_max_abs_error,
+    "mean_abs_error": compute_mean_abs_error,
+    "pcc": compute_pcc,
+    "cosine_similarity": compute_cosine_similarity,
 }
 
 
+# Allclose comparison with detailed delta string
+def comp_allclose(impl, ref, rtol=1e-05, atol=1e-08):
+    """
+    Compare two tensors using an allclose criterion and return (passing, details).
+
+    Provides both a TTNN-native on-device implementation and a PyTorch fallback.
+    Mirrors semantics of torch.allclose(..., equal_nan=True) and reports the
+    maximum absolute and relative deltas similar to comparison_funcs.py.
+
+    Args:
+        impl: Implementation output (PyTorch or TTNN tensor)
+        ref: Reference output (PyTorch or TTNN tensor)
+        rtol (float): Relative tolerance
+        atol (float): Absolute tolerance
+
+    Returns:
+        tuple[bool, str]: (passing, "Max ATOL Delta: x, Max RTOL Delta: y[,...]")
+    """
+    try:
+        # TTNN-native path: compute deltas and allclose on device, then transfer final scalars
+        if _is_ttnn_tensor(impl) and _is_ttnn_tensor(ref):
+            # Compute deltas (device)
+            diff = ttnn.abs(ttnn.subtract(impl, ref))
+            cal_atol_t = ttnn.max(diff)
+            # For rtol delta, divide by abs(ref) (may produce inf for zeros; acceptable for reporting)
+            cal_rtol_t = ttnn.max(ttnn.divide(diff, ttnn.abs(ref)))
+
+            # equal_nan=True semantics and finite/infinite handling
+            isnan_impl = ttnn.isnan(impl)
+            isnan_ref = ttnn.isnan(ref)
+            both_nan = ttnn.logical_and(isnan_impl, isnan_ref)
+
+            isinf_impl = ttnn.isinf(impl)
+            isinf_ref = ttnn.isinf(ref)
+            same_sign_inf = ttnn.eq(ttnn.sign(impl), ttnn.sign(ref))
+            both_inf_same_sign = ttnn.logical_and(ttnn.logical_and(isinf_impl, isinf_ref), same_sign_inf)
+
+            # Finite elements where numeric closeness applies
+            any_nan = ttnn.logical_or(isnan_impl, isnan_ref)
+            any_inf = ttnn.logical_or(isinf_impl, isinf_ref)
+            finite_both = ttnn.logical_not(ttnn.logical_or(any_nan, any_inf))
+
+            # |impl - ref| <= atol + rtol * |ref|
+            bound = ttnn.add(ttnn.mul(ttnn.abs(ref), rtol), atol)
+            close_numeric = ttnn.le(diff, bound)
+            finite_and_close = ttnn.logical_and(finite_both, close_numeric)
+
+            ok_mask = ttnn.logical_or(ttnn.logical_or(both_nan, both_inf_same_sign), finite_and_close)
+            fail_mask = ttnn.logical_not(ok_mask)
+
+            # Reduce to scalar: any failure -> 1.0 else 0.0
+            fail_indicator = ttnn.where(fail_mask, 1.0, 0.0)
+            any_fail = ttnn.max(fail_indicator)
+            passing = ttnn.to_torch(any_fail).item() == 0.0
+
+            cal_atol = ttnn.to_torch(cal_atol_t).item()
+            cal_rtol = ttnn.to_torch(cal_rtol_t).item()
+            output_str = f"Max ATOL Delta: {cal_atol}, Max RTOL Delta: {cal_rtol}"
+            if not passing:
+                output_str += ", Allclose check failed"
+            return passing, output_str
+
+        # Fallback: compute with PyTorch (handles mixed inputs by converting TTNN -> torch)
+        impl_torch = ttnn.to_torch(impl) if _is_ttnn_tensor(impl) else impl
+        ref_torch = ttnn.to_torch(ref) if _is_ttnn_tensor(ref) else ref
+
+        if torch.is_tensor(impl_torch) and torch.is_tensor(ref_torch):
+            # Match dtype for fair comparison
+            if impl_torch.dtype != ref_torch.dtype:
+                ref_torch = ref_torch.to(impl_torch.dtype)
+
+            atol_delta = torch.max(torch.abs(impl_torch - ref_torch)).item()
+            # May produce inf where ref == 0; this mirrors comparison_funcs.py behavior
+            rtol_delta = torch.max(torch.abs(impl_torch - ref_torch) / torch.abs(ref_torch)).item()
+            passing = torch.allclose(impl_torch, ref_torch, rtol, atol, True)
+            output_str = f"Max ATOL Delta: {atol_delta}, Max RTOL Delta: {rtol_delta}"
+            if not passing:
+                output_str += ", Allclose check failed"
+            return passing, output_str
+
+        # Unsupported types
+        return False, "Unsupported input types for comp_allclose"
+    except Exception:
+        return False, "Error computing comp_allclose"
+
+
+# Back-compat alias names for underscore-prefixed APIs
+_compute_max_abs_error = compute_max_abs_error
+_compute_mean_abs_error = compute_mean_abs_error
+_compute_pcc = compute_pcc
+_compute_cosine_similarity = compute_cosine_similarity
+
 # Public API
 __all__ = [
-    "_compute_max_abs_error",
-    "_compute_mean_abs_error",
-    "_compute_pcc",
-    "_compute_cosine_similarity",
+    "compute_max_abs_error",
+    "compute_mean_abs_error",
+    "compute_pcc",
+    "compute_cosine_similarity",
+    "comp_allclose",
     "DEFAULT_METRICS",
 ]
