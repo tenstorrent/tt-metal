@@ -33,7 +33,7 @@ void TestContext::read_telemetry() {
     const size_t telemetry_buffer_size = sizeof(LowResolutionBandwidthTelemetryResult);
     
     // Read buffer data from all active ethernet cores
-    auto results = read_ethernet_cores_buffer(telemetry_addr, telemetry_buffer_size);
+    auto results = get_eth_readback().read_buffer(telemetry_addr, telemetry_buffer_size);
     
     // Process telemetry results
     auto& ctx = tt::tt_metal::MetalContext::instance();
@@ -109,7 +109,7 @@ void TestContext::clear_telemetry() {
     const auto telemetry_addr = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
     const size_t telemetry_buffer_size = sizeof(LowResolutionBandwidthTelemetryResult);
     
-    clear_ethernet_cores_buffer(telemetry_addr, telemetry_buffer_size);
+    get_eth_readback().clear_buffer(telemetry_addr, telemetry_buffer_size);
 }
 
 void TestContext::clear_code_profiling_buffers() {
@@ -126,86 +126,7 @@ void TestContext::clear_code_profiling_buffers() {
     uint32_t code_profiling_addr = get_code_profiling_buffer_addr();
     constexpr size_t code_profiling_buffer_size = get_max_code_profiling_timer_types() * sizeof(CodeProfilingTimerResult);
     
-    clear_ethernet_cores_buffer(code_profiling_addr, code_profiling_buffer_size);
-}
-
-void TestContext::clear_ethernet_cores_buffer(uint32_t address, size_t buffer_size) {
-    auto& ctx = tt::tt_metal::MetalContext::instance();
-    auto& cluster = ctx.get_cluster();
-    auto& control_plane = ctx.get_control_plane();
-
-    // Create zero vector for the buffer
-    std::vector<uint8_t> zero_vec(buffer_size, 0);
-    
-    for (const auto& [coord, test_device] : test_devices_) {
-        auto device_id = test_device.get_node_id();
-        auto physical_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(device_id);
-        auto active_eth_cores = control_plane.get_active_ethernet_cores(physical_chip_id);
-        for (const auto& eth_core : active_eth_cores) {
-            if (!cluster.is_ethernet_link_up(physical_chip_id, eth_core)) {
-                continue;
-            }
-
-            std::vector<CoreCoord> cores = {eth_core};
-            fixture_->write_buffer_to_ethernet_cores(coord, cores, address, zero_vec);
-        }
-    }
-}
-
-std::unordered_map<FabricNodeId, std::unordered_map<CoreCoord, std::vector<uint32_t>>>
-TestContext::read_ethernet_cores_buffer(uint32_t address, size_t buffer_size) {
-    auto& ctx = tt::tt_metal::MetalContext::instance();
-    auto& cluster = ctx.get_cluster();
-    auto& control_plane = ctx.get_control_plane();
-
-    std::unordered_map<FabricNodeId, std::unordered_map<CoreCoord, std::vector<uint32_t>>> results;
-    auto results_num_elements = tt::align(buffer_size, sizeof(uint32_t)) / sizeof(uint32_t);
-    
-    // Initialize results map
-    for (const auto& [coord, test_device] : test_devices_) {
-        auto device_id = test_device.get_node_id();
-        auto physical_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(device_id);
-        auto& soc_desc = cluster.get_soc_desc(physical_chip_id);
-        auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(physical_chip_id);
-        for (const auto& [direction, link_indices] : test_device.get_used_fabric_connections()) {
-            const auto& eth_cores =
-                control_plane.get_active_fabric_eth_channels_in_direction(fabric_node_id, direction);
-            for (const auto& link_index : link_indices) {
-                const tt::tt_fabric::chan_id_t eth_channel = eth_cores.at(link_index);
-                const CoreCoord& eth_core = soc_desc.get_eth_core_for_channel(eth_channel, CoordSystem::LOGICAL);
-                results[fabric_node_id][eth_core] = std::vector<uint32_t>(results_num_elements, 0);
-            }
-        }
-    }
-
-    // Read buffer data from all active ethernet cores
-    for (const auto& [coord, test_device] : test_devices_) {
-        auto device_id = test_device.get_node_id();
-        auto physical_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(device_id);
-        auto& soc_desc = cluster.get_soc_desc(physical_chip_id);
-        auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(physical_chip_id);
-
-        for (const auto& [direction, link_indices] : test_device.get_used_fabric_connections()) {
-            const auto& eth_cores =
-                control_plane.get_active_fabric_eth_channels_in_direction(fabric_node_id, direction);
-            for (const auto& link_index : link_indices) {
-                const tt::tt_fabric::chan_id_t eth_channel = eth_cores.at(link_index);
-                const CoreCoord& eth_core = soc_desc.get_eth_core_for_channel(eth_channel, CoordSystem::LOGICAL);
-
-                TT_FATAL(
-                    cluster.is_ethernet_link_up(physical_chip_id, eth_core),
-                    "Ethernet link is not up for {}",
-                    eth_core);
-
-                std::vector<CoreCoord> cores = {eth_core};
-                fixture_->read_buffer_from_ethernet_cores(
-                    coord, cores, address, buffer_size, false, results[fabric_node_id]);
-            }
-        }
-    }
-
-    fixture_->barrier_reads();
-    return results;
+    get_eth_readback().clear_buffer(code_profiling_addr, code_profiling_buffer_size);
 }
 
 void TestContext::read_code_profiling_results() {
@@ -223,7 +144,7 @@ void TestContext::read_code_profiling_results() {
     constexpr size_t code_profiling_buffer_size = get_max_code_profiling_timer_types() * sizeof(CodeProfilingTimerResult);
     
     // Read buffer data from all active ethernet cores
-    auto results = read_ethernet_cores_buffer(code_profiling_addr, code_profiling_buffer_size);
+    auto results = get_eth_readback().read_buffer(code_profiling_addr, code_profiling_buffer_size);
     
     // Process results for each enabled timer type
     std::vector<CodeProfilingTimerType> enabled_timers;
