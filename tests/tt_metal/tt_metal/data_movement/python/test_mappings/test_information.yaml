@@ -420,3 +420,6 @@ tests:
 
   318:
     name: "All from All Custom"
+
+  600:
+    name: "PCIe Read Bandwidth"
