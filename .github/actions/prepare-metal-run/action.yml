@@ -28,7 +28,7 @@ runs:
         name: TTMetal_build_any_profiler
     - name: Extract files
       shell: bash
-      run: tar --zstd -xvf ttm_any.tar.zst
+      run: tar -xvf ttm_any.tar
     - uses: ./.github/actions/install-python-deps
       with:
         python-version: ${{ inputs.python-version }}
