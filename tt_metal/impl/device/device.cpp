@@ -31,7 +31,7 @@
 
 #include "allocator.hpp"
 #include <tt_stl/assert.hpp>
-#include "command_queue.hpp"
+#include "dispatch/command_queue.hpp"
 #include "dispatch/command_queue_common.hpp"
 #include "common/core_assignment.hpp"
 #include "program/program_impl.hpp"
