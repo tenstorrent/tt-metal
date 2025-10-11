@@ -33,6 +33,7 @@ training_config:
         high_freq_factor: 4.0
         low_freq_factor: 1.0
         original_context_length: 8192
+
 # if you want to run as eval with weighgts from hugging face:
 # 1. Download weights from hugging face
 # 2. nano_gpt --safetensors /path/to/meta-llama/Llama3.2-1B/  -c configs/training_shakespeare_llama3.2_1B.yaml --eval 1

@@ -126,6 +126,11 @@ Llama::Llama(const LlamaConfig& config) : m_config(config) {
     fmt::print("    Weight tying: {}\n", config.weight_tying == WeightTyingType::Enabled ? "Enabled" : "Disabled");
     fmt::print("    Theta: {}\n", theta);
 
+    // Safely calculate vocab_size divisible by 32, avoiding potential overflow
+    if (vocab_size > UINT32_MAX - 31) {
+        throw std::logic_error(fmt::format(
+            "Vocab size {} is too large and would cause overflow when rounding to 32", vocab_size));
+    }
     uint32_t vocab_size_divisible_by_32 = (vocab_size + 31) / 32 * 32;
     if (max_sequence_length % 32 != 0) {
         throw std::logic_error(fmt::format(
@@ -139,12 +144,16 @@ Llama::Llama(const LlamaConfig& config) : m_config(config) {
             "embedding_dim={}",
             embedding_dim));
     }
-    auto last_fc = std::make_shared<ttml::modules::LinearLayer>(embedding_dim, vocab_size, /* bias */ false);
+    // Ensure consistent vocab size between embedding and output layers
+    auto last_fc = std::make_shared<ttml::modules::LinearLayer>(embedding_dim, vocab_size_divisible_by_32, /* bias */ false);
     if (config.weight_tying == WeightTyingType::Enabled) {
         tok_emb = std::make_shared<ttml::modules::Embedding>(last_fc->get_weight());
     } else {
         tok_emb = std::make_shared<ttml::modules::Embedding>(vocab_size_divisible_by_32, embedding_dim);
     }
+    
+    // Store the original vocab size for token validation
+    m_original_vocab_size = vocab_size;
 
     // Create RoPE scaling params if they are set
     ops::RopeScalingParams rope_scaling_params;
