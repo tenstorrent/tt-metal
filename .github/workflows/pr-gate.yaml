@@ -110,6 +110,7 @@ jobs:
           "N150-viommu",
         ]
     uses: ./.github/workflows/smoke.yaml
+    secrets: inherit
     with:
       docker-image: ${{ needs.asan-build.outputs.dev-docker-image }}
       package-artifact-name: ${{ needs.asan-build.outputs.packages-artifact-name }}
@@ -132,6 +133,7 @@ jobs:
           "N150-viommu",
         ]
     uses: ./.github/workflows/smoke.yaml
+    secrets: inherit
     with:
       docker-image: ${{ needs.asan-build.outputs.dev-docker-image }}
       package-artifact-name: ${{ needs.asan-build.outputs.packages-artifact-name }}
