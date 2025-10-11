@@ -1,7 +1,13 @@
-name: "(DM) Multi-card Demo tests"
+name: "(DM) Data Movement Test Suite"
 
 on:
   workflow_dispatch:
+    inputs:
+      microbenchmarks:
+        description: 'Run data movement microbenchmarks'
+        required: false
+        default: false
+        type: boolean
   workflow_call:
   push:
     branches:
@@ -16,8 +22,8 @@ jobs:
     with:
       build-wheel: true
       version: 22.04
-  data-movement-tests:
-    uses: ./.github/workflows/data-movement-impl.yaml
+  data-movement-unit-tests:
+    uses: ./.github/workflows/data-movement-unit-impl.yaml
     needs: build-artifact
     secrets: inherit
     strategy:
@@ -34,3 +40,12 @@ jobs:
         build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
         wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
         gtest_filter: "*-*NIGHTLY_*"
+  additional-workflow:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.run-additional-workflow == 'true' }}
+    uses: ./.github/workflows/metal-run-microbenchmarks-impl.yaml
+    needs: build-artifact
+    secrets: inherit
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
