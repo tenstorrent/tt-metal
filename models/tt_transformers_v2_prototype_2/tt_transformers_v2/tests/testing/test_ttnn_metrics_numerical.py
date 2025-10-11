@@ -22,7 +22,12 @@ except ImportError:
 pytestmark = pytest.mark.skipif(not TTNN_AVAILABLE, reason="TTNN not available")
 
 # Import metric functions from the validation framework
-from tt_transformers_v2.src.testing import _compute_cosine_similarity, _compute_max_abs_error, _compute_mean_abs_error
+from tt_transformers_v2.src.testing import (
+    _compute_cosine_similarity,
+    _compute_max_abs_error,
+    _compute_mean_abs_error,
+    _compute_pcc,
+)
 
 
 # Pytest fixtures
@@ -213,6 +218,114 @@ def test_metrics_vs_pytorch(ttnn_device, name, tensor_a_fn, tensor_b_fn, max_spe
         ), f"cosine_similarity TTNN vs PyTorch: {cosine_ttnn} vs {cosine_torch}"
 
 
+def test_pcc_ttnn_native(ttnn_device):
+    """
+    Test TTNN-native PCC computation with actual TTNN tensors on device.
+
+    Verifies that:
+    1. PCC computes correctly on-device using TTNN ops
+    2. Results match the robust CPU/numpy implementation
+    3. Handles various correlation patterns (perfect, high, negative)
+    """
+    print("\nTest: TTNN-native PCC computation")
+
+    # Test case 1: Perfect positive correlation
+    torch.manual_seed(42)
+    a_torch = torch.randn(32, 32).bfloat16()
+    b_torch = a_torch.clone()
+
+    a_ttnn = to_ttnn(a_torch, ttnn_device)
+    b_ttnn = to_ttnn(b_torch, ttnn_device)
+
+    pcc_ttnn = _compute_pcc(a_ttnn, b_ttnn)
+    pcc_torch = _compute_pcc(a_torch, b_torch)
+
+    print(f"  Perfect correlation - TTNN: {pcc_ttnn:.6f}, PyTorch: {pcc_torch:.6f}")
+    assert pcc_ttnn >= 0.999, f"Perfect correlation should be ~1.0, got {pcc_ttnn}"
+    assert abs(pcc_ttnn - pcc_torch) < 0.01, f"TTNN vs PyTorch mismatch: {pcc_ttnn} vs {pcc_torch}"
+
+    # Test case 2: High correlation with small noise
+    torch.manual_seed(42)
+    a_torch = torch.randn(32, 64).bfloat16()
+    b_torch = a_torch + torch.randn(32, 64).bfloat16() * 0.01
+
+    a_ttnn = to_ttnn(a_torch, ttnn_device)
+    b_ttnn = to_ttnn(b_torch, ttnn_device)
+
+    pcc_ttnn = _compute_pcc(a_ttnn, b_ttnn)
+    pcc_torch = _compute_pcc(a_torch, b_torch)
+
+    print(f"  High correlation - TTNN: {pcc_ttnn:.6f}, PyTorch: {pcc_torch:.6f}")
+    assert pcc_ttnn >= 0.95, f"High correlation should be >= 0.95, got {pcc_ttnn}"
+    # Allow more tolerance here due to bfloat16 and noise
+    assert abs(pcc_ttnn - pcc_torch) < 0.05, f"TTNN vs PyTorch mismatch: {pcc_ttnn} vs {pcc_torch}"
+
+    # Test case 3: Negative correlation
+    torch.manual_seed(42)
+    a_torch = torch.randn(32, 32).bfloat16()
+    b_torch = -a_torch + torch.randn(32, 32).bfloat16() * 0.1
+
+    a_ttnn = to_ttnn(a_torch, ttnn_device)
+    b_ttnn = to_ttnn(b_torch, ttnn_device)
+
+    pcc_ttnn = _compute_pcc(a_ttnn, b_ttnn)
+    pcc_torch = _compute_pcc(a_torch, b_torch)
+
+    print(f"  Negative correlation - TTNN: {pcc_ttnn:.6f}, PyTorch: {pcc_torch:.6f}")
+    assert pcc_ttnn < -0.8, f"Negative correlation should be < -0.8, got {pcc_ttnn}"
+    assert abs(pcc_ttnn - pcc_torch) < 0.1, f"TTNN vs PyTorch mismatch: {pcc_ttnn} vs {pcc_torch}"
+
+    # Test case 4: Larger tensor (128x256)
+    torch.manual_seed(42)
+    a_torch = torch.randn(128, 256).bfloat16()
+    b_torch = a_torch + torch.randn(128, 256).bfloat16() * 0.05
+
+    a_ttnn = to_ttnn(a_torch, ttnn_device)
+    b_ttnn = to_ttnn(b_torch, ttnn_device)
+
+    pcc_ttnn = _compute_pcc(a_ttnn, b_ttnn)
+    pcc_torch = _compute_pcc(a_torch, b_torch)
+
+    print(f"  Large tensor - TTNN: {pcc_ttnn:.6f}, PyTorch: {pcc_torch:.6f}")
+    assert pcc_ttnn >= 0.90, f"Large tensor PCC should be >= 0.90, got {pcc_ttnn}"
+    assert abs(pcc_ttnn - pcc_torch) < 0.1, f"TTNN vs PyTorch mismatch: {pcc_ttnn} vs {pcc_torch}"
+
+    # Test case 5: Large noise - should produce low PCC (< 1.0)
+    torch.manual_seed(42)
+    a_torch = torch.randn(32, 32).bfloat16()
+    # Add significant noise (50% of signal strength)
+    b_torch = a_torch + torch.randn(32, 32).bfloat16() * 0.5
+
+    a_ttnn = to_ttnn(a_torch, ttnn_device)
+    b_ttnn = to_ttnn(b_torch, ttnn_device)
+
+    pcc_ttnn = _compute_pcc(a_ttnn, b_ttnn)
+    pcc_torch = _compute_pcc(a_torch, b_torch)
+
+    print(f"  Large noise (0.5x) - TTNN: {pcc_ttnn:.6f}, PyTorch: {pcc_torch:.6f}")
+    assert pcc_ttnn < 0.99, f"Large noise should reduce PCC below 0.99, got {pcc_ttnn}"
+    assert pcc_ttnn > 0.50, f"PCC should still show some correlation (>0.50), got {pcc_ttnn}"
+    assert abs(pcc_ttnn - pcc_torch) < 0.1, f"TTNN vs PyTorch mismatch: {pcc_ttnn} vs {pcc_torch}"
+
+    # Test case 6: Very large noise - should produce very low PCC
+    torch.manual_seed(42)
+    a_torch = torch.randn(32, 32).bfloat16()
+    # Add massive noise (2x signal strength) - correlation should be weak
+    b_torch = a_torch + torch.randn(32, 32).bfloat16() * 2.0
+
+    a_ttnn = to_ttnn(a_torch, ttnn_device)
+    b_ttnn = to_ttnn(b_torch, ttnn_device)
+
+    pcc_ttnn = _compute_pcc(a_ttnn, b_ttnn)
+    pcc_torch = _compute_pcc(a_torch, b_torch)
+
+    print(f"  Very large noise (2.0x) - TTNN: {pcc_ttnn:.6f}, PyTorch: {pcc_torch:.6f}")
+    assert pcc_ttnn < 0.80, f"Very large noise should reduce PCC below 0.80, got {pcc_ttnn}"
+    assert abs(pcc_ttnn - pcc_torch) < 0.15, f"TTNN vs PyTorch mismatch: {pcc_ttnn} vs {pcc_torch}"
+
+    print("  ✓ TTNN-native PCC correctly detects varying correlation strengths!")
+
+
 # Sanity check: Test metrics with PyTorch tensors (no TTNN device needed)
 def test_metrics_pytorch_only():
     """
@@ -235,6 +348,7 @@ def test_metrics_pytorch_only():
     max_error = _compute_max_abs_error(torch_a, torch_b)
     mean_error = _compute_mean_abs_error(torch_a, torch_b)
     cosine = _compute_cosine_similarity(torch_a, torch_b)
+    pcc = _compute_pcc(torch_a, torch_b)
 
     # Verify results
     expected_max = 0.5
@@ -243,6 +357,7 @@ def test_metrics_pytorch_only():
     assert abs(max_error - expected_max) < 1e-6, f"Expected {expected_max}, got {max_error}"
     assert abs(mean_error - expected_mean) < 1e-6, f"Mean error mismatch"
     assert 0.0 <= cosine <= 1.0, f"Cosine should be in [0,1], got {cosine}"
+    assert 0.99 <= pcc <= 1.0, f"PCC should be high (~1.0) for similar tensors, got {pcc}"
 
 
 if __name__ == "__main__":

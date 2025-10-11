@@ -48,10 +48,7 @@ class ValidatedRMSNorm:
 
     @validate_against(
         reference_fn=lambda self, x: self._reference_impl(x),
-        match_signature=True,  # Same signature ✓
-        # Both return TTNN, metrics computed on TTNN tensors directly ✓
-        # NO output_map_impl needed! ✓
-        # NO auto_convert_outputs needed! ✓
+        match_signature=True,
         tolerances={
             "max_abs_error": 1e-2,
             "mean_abs_error": 1e-3,

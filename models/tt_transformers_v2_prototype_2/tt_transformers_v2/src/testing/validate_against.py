@@ -247,6 +247,9 @@ def validate_against(
             errors = []
             passed = True
 
+            # Metrics where higher is better (correlation-like metrics)
+            higher_is_better_metrics = {"pcc", "cosine_similarity"}
+
             for metric_name, metric_fn in metrics_to_use.items():
                 try:
                     value = metric_fn(impl_comparable, ref_comparable)
@@ -254,9 +257,17 @@ def validate_against(
 
                     # Check tolerance
                     if metric_name in tolerances:
-                        if value > tolerances[metric_name]:
-                            passed = False
-                            errors.append(f"{metric_name}={value:.6e} exceeds tolerance {tolerances[metric_name]:.6e}")
+                        threshold = tolerances[metric_name]
+                        if metric_name in higher_is_better_metrics:
+                            # For correlation metrics: value should be >= threshold
+                            if value < threshold:
+                                passed = False
+                                errors.append(f"{metric_name}={value:.6e} below threshold {threshold:.6e}")
+                        else:
+                            # For error metrics: value should be <= threshold
+                            if value > threshold:
+                                passed = False
+                                errors.append(f"{metric_name}={value:.6e} exceeds tolerance {threshold:.6e}")
                 except Exception as e:
                     errors.append(f"Metric {metric_name} failed: {str(e)}")
                     passed = False
