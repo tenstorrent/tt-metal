@@ -69,6 +69,10 @@ jobs:
           # Run a single test to warm up caches before the full test suite
           /usr/bin/${{ inputs.product }}-validation-smoke --gtest_filter="MeshDispatchFixture.TensixFailOnDuplicateKernelCreationDataflow" || true
 
+      - name: Clear coverage from warmup
+        run: |
+          rm -f /work/coverage/*.profraw || true
+
       - name: Run a test
         id: test
         timeout-minutes: 15
@@ -106,31 +110,15 @@ jobs:
             find /usr/lib -maxdepth 3 -type f \( -name 'libtt_metal.so' -o -name '_ttnn.so' -o -name '_ttnncpp.so' \) -print || true
             find /usr/lib/x86_64-linux-gnu -maxdepth 4 -type f \( -name 'libtt_metal.so' -o -name '_ttnn.so' -o -name '_ttnncpp.so' \) -print || true
             find /usr/local/lib -maxdepth 3 -type f \( -name 'libtt_metal.so' -o -name '_ttnn.so' -o -name '_ttnncpp.so' \) -print || true
-
-            shopt -s nullglob
             objects=(
-              /usr/libexec/tt-metalium/*.so
-              /usr/libexec/tt-metalium/*/*.so
               /usr/lib/libtt_metal.so
               /usr/lib/_ttnn.so
               /usr/lib/_ttnncpp.so
-              /usr/local/lib/libtt_metal.so
-              /usr/local/lib/_ttnn.so
-              /usr/local/lib/_ttnncpp.so
             )
-
-            echo "Including ${#objects[@]} shared objects in coverage (if any)."
-            if [ ${#objects[@]} -gt 0 ]; then
-              printf "[debug] Objects selected for coverage (first 50 shown):\n" && printf '  %s\n' "${objects[@]}" | head -n 50
-            fi
-            if [ ${#objects[@]} -gt 0 ]; then
-              llvm-cov-17 export -format=lcov \
-                -instr-profile=/work/coverage/coverage.profdata \
-                "${objects[@]}" > /work/coverage/coverage.info || {
-                  echo "llvm-cov export failed"; exit 1; }
-            else
-              : > /work/coverage/coverage.info
-            fi
+            llvm-cov-17 export -format=lcov \
+              -instr-profile=/work/coverage/coverage.profdata \
+              "${objects[@]}" > /work/coverage/coverage.info || {
+                echo "llvm-cov export failed"; exit 1; }
           else
             echo "coverage.profdata not found; creating empty LCOV file"
             : > /work/coverage/coverage.info
@@ -150,6 +138,8 @@ jobs:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
         with:
           files: /work/coverage/coverage.info
+          flags: ${{ inputs.product }}
+          name: smoke-${{ inputs.product }}
           fail_ci_if_error: true
           verbose: true
 
