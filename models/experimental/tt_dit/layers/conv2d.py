@@ -7,7 +7,7 @@ from ..parallel.config import vae_all_gather
 from ..utils.tensor import bf16_tensor_host
 
 
-# TODO: Add support for coll and row parallel conv2d
+# TODO: Add support for coll, row and Sequence parallel conv2d
 class Conv2d:
     """
     Conv2d with support for tensor parallelism. Data and Seqence Parallelism TBD.
