@@ -326,6 +326,115 @@ def test_pcc_ttnn_native(ttnn_device):
     print("  ✓ TTNN-native PCC correctly detects varying correlation strengths!")
 
 
+def test_pcc_constant_tensors(ttnn_device):
+    """
+    Test that TTNN-native PCC correctly handles constant tensors.
+
+    Constant tensors are an edge case where variance is zero. The implementation
+    should detect this and return 1.0 if both constants are equal, 0.0 otherwise.
+    """
+    print("\nTest: PCC with constant tensors")
+
+    # Test case 1: Same constant value
+    a_torch = torch.ones(32, 32).bfloat16() * 5.0
+    b_torch = torch.ones(32, 32).bfloat16() * 5.0
+
+    a_ttnn = to_ttnn(a_torch, ttnn_device)
+    b_ttnn = to_ttnn(b_torch, ttnn_device)
+
+    pcc_ttnn = _compute_pcc(a_ttnn, b_ttnn)
+    pcc_torch = _compute_pcc(a_torch, b_torch)
+
+    print(f"  Same constant (5.0) - TTNN: {pcc_ttnn:.6f}, PyTorch: {pcc_torch:.6f}")
+    assert pcc_ttnn == 1.0, f"Same constant tensors should have PCC=1.0, got {pcc_ttnn}"
+    assert pcc_torch == 1.0, f"PyTorch should also return 1.0, got {pcc_torch}"
+
+    # Test case 2: Different constant values
+    a_torch = torch.ones(32, 32).bfloat16() * 5.0
+    b_torch = torch.ones(32, 32).bfloat16() * 3.0
+
+    a_ttnn = to_ttnn(a_torch, ttnn_device)
+    b_ttnn = to_ttnn(b_torch, ttnn_device)
+
+    pcc_ttnn = _compute_pcc(a_ttnn, b_ttnn)
+    pcc_torch = _compute_pcc(a_torch, b_torch)
+
+    print(f"  Different constants (5.0 vs 3.0) - TTNN: {pcc_ttnn:.6f}, PyTorch: {pcc_torch:.6f}")
+    assert pcc_ttnn == 0.0, f"Different constant tensors should have PCC=0.0, got {pcc_ttnn}"
+    # PyTorch returns True/False which becomes 1.0/0.0
+    assert pcc_torch in [0.0, 1.0], f"PyTorch should return 0.0 or 1.0, got {pcc_torch}"
+
+    # Test case 3: All zeros
+    a_torch = torch.zeros(32, 32).bfloat16()
+    b_torch = torch.zeros(32, 32).bfloat16()
+
+    a_ttnn = to_ttnn(a_torch, ttnn_device)
+    b_ttnn = to_ttnn(b_torch, ttnn_device)
+
+    pcc_ttnn = _compute_pcc(a_ttnn, b_ttnn)
+    pcc_torch = _compute_pcc(a_torch, b_torch)
+
+    print(f"  All zeros - TTNN: {pcc_ttnn:.6f}, PyTorch: {pcc_torch:.6f}")
+    assert pcc_ttnn == 1.0, f"Zero tensors should have PCC=1.0, got {pcc_ttnn}"
+    assert pcc_torch == 1.0, f"PyTorch should also return 1.0, got {pcc_torch}"
+
+    print("  ✓ TTNN-native PCC correctly handles constant tensors!")
+
+
+def test_pcc_all_nan_and_mixed_nan(ttnn_device):
+    """
+    TTNN-native PCC should mirror CPU semantics for NaN cases:
+    - both all-NaN -> 1.0
+    - mixed NaN presence -> 0.0
+    """
+    print("\nTest: PCC NaN edge cases")
+
+    a_nan = torch.full((32, 32), float("nan"), dtype=torch.float32)
+    b_nan = torch.full((32, 32), float("nan"), dtype=torch.float32)
+    a_num = torch.zeros(32, 32, dtype=torch.float32)
+
+    a_nan_t = to_ttnn(a_nan, ttnn_device)
+    b_nan_t = to_ttnn(b_nan, ttnn_device)
+    a_num_t = to_ttnn(a_num, ttnn_device)
+
+    # Both all-NaN -> 1.0
+    pcc_ttnn = _compute_pcc(a_nan_t, b_nan_t)
+    pcc_cpu = _compute_pcc(a_nan, b_nan)
+    print(f"  both NaN - TTNN: {pcc_ttnn}, CPU: {pcc_cpu}")
+    assert pcc_ttnn == 1.0
+    assert pcc_cpu == 1.0
+
+    # Mixed NaN presence -> 0.0
+    pcc_ttnn = _compute_pcc(a_nan_t, a_num_t)
+    pcc_cpu = _compute_pcc(a_nan, a_num)
+    print(f"  mixed NaN - TTNN: {pcc_ttnn}, CPU: {pcc_cpu}")
+    assert pcc_ttnn == 0.0
+    assert pcc_cpu == 0.0
+
+    print("  ✓ TTNN-native PCC correctly handles NaN cases!")
+
+
+def test_pcc_zero_vs_nonzero(ttnn_device):
+    """
+    One tensor all-zero and the other non-zero -> PCC = 0.0 on both TTNN and CPU.
+    """
+    print("\nTest: PCC zero vs non-zero")
+
+    a_zero = torch.zeros(32, 32, dtype=torch.float32)
+    b_nonzero = torch.ones(32, 32, dtype=torch.float32)
+
+    a_zero_t = to_ttnn(a_zero, ttnn_device)
+    b_nonzero_t = to_ttnn(b_nonzero, ttnn_device)
+
+    pcc_ttnn = _compute_pcc(a_zero_t, b_nonzero_t)
+    pcc_cpu = _compute_pcc(a_zero, b_nonzero)
+
+    print(f"  zero vs non-zero - TTNN: {pcc_ttnn}, CPU: {pcc_cpu}")
+    assert pcc_ttnn == 0.0
+    assert pcc_cpu == 0.0
+    print("  ✓ TTNN-native PCC correctly handles zero vs non-zero!")
+
+
 # Sanity check: Test metrics with PyTorch tensors (no TTNN device needed)
 def test_metrics_pytorch_only():
     """
