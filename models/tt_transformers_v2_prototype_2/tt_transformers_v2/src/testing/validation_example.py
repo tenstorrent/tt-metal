@@ -9,9 +9,9 @@ against reference PyTorch implementations with automatic metrics collection.
 import os
 
 import torch
-from tt_transformers_v2.src.testing import enable_validation, get_validation_registry, validate_against
-
 import ttnn
+
+from tt_transformers_v2.src.testing import enable_validation, get_validation_registry, validate_against
 
 # ============================================================================
 # Example 1: Validating RMSNorm against PyTorch reference
@@ -83,8 +83,7 @@ class ValidatedRMSNormOldStyle:
             (ttnn.to_torch(args[1]).squeeze(0), args[0].weight_torch),
             {"eps": args[0].eps},
         ),
-        output_map_impl=lambda x: ttnn.to_torch(x).squeeze(0),
-        output_map_ref=lambda x: x,
+        output_map=lambda x: ttnn.to_torch(x).squeeze(0),  # Convert impl ttnn → torch to match ref
         tolerances={
             "max_abs_error": 1e-2,
             "mean_abs_error": 1e-3,
