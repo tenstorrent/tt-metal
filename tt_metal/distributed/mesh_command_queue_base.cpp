@@ -243,7 +243,9 @@ void MeshCommandQueueBase::enqueue_write_shards_nolock(
             shard_data_transfer.pinned_memory);
     };
 
+    bool has_pinned_memory = false;
     for (std::size_t shard_idx = 0; shard_idx < shard_data_transfers.size(); shard_idx++) {
+        has_pinned_memory = has_pinned_memory || shard_data_transfers[shard_idx].pinned_memory;
         auto shard_coord = shard_data_transfers[shard_idx].shard_coord;
         if (mesh_device_->is_local(shard_coord)) {
             dispatch_thread_pool_->enqueue(
@@ -255,6 +257,13 @@ void MeshCommandQueueBase::enqueue_write_shards_nolock(
 
     if (blocking) {
         this->finish_nolock();
+    } else if (has_pinned_memory) {
+        auto event = this->enqueue_record_event_to_host_nolock();
+        for (const auto& shard_data_transfer : shard_data_transfers) {
+            if (mesh_device_->is_local(shard_data_transfer.shard_coord)) {
+                shard_data_transfer.pinned_memory->add_barrier_event(event);
+            }
+        }
     }
 }
 
