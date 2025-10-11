@@ -60,7 +60,7 @@ constexpr line_multicast_route_info_t get_line_multicast_route_info_from_args() 
 template <typename packet_header_t>
 FORCE_INLINE void fabric_set_line_unicast_route(
     volatile tt_l1_ptr packet_header_t* fabric_header_addr, const line_unicast_route_info_t& route_info) {
-    if constexpr (std::is_same_v<packet_header_t, tt::tt_fabric::MeshPacketHeader>) {
+    if constexpr (std::is_same_v<packet_header_t, tt::tt_fabric::HybridMeshPacketHeader>) {
         fabric_set_unicast_route(
             fabric_header_addr,
             0,  // Ignored
@@ -83,7 +83,7 @@ FORCE_INLINE void fabric_set_line_unicast_route(
 template <typename packet_header_t>
 FORCE_INLINE void fabric_set_line_multicast_route(
     volatile tt_l1_ptr packet_header_t* fabric_header_addr, const line_multicast_route_info_t& route_info) {
-    if constexpr (std::is_same_v<packet_header_t, tt::tt_fabric::MeshPacketHeader>) {
+    if constexpr (std::is_same_v<packet_header_t, tt::tt_fabric::HybridMeshPacketHeader>) {
         fabric_set_mcast_route(
             fabric_header_addr,
             route_info.dst_chip_id,

@@ -89,7 +89,6 @@ struct SenderConfig {
 
 enum class RoutingType {
     LowLatency,
-    Dynamic,
 };
 
 enum class HighLevelTrafficPattern {

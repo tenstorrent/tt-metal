@@ -231,7 +231,6 @@ public:
                             .mcast_start_hops = sync_pattern.mcast_start_hops,
                             .seed = config.seed,
                             .is_2D_routing_enabled = fixture_->is_2D_routing_enabled(),
-                            .is_dynamic_routing_enabled = fixture_->is_dynamic_routing_enabled(),
                             .mesh_shape = this->fixture_->get_mesh_shape(),
                             .topology = this->fixture_->get_topology()};
 
@@ -315,7 +314,6 @@ public:
                     .mcast_start_hops = pattern.mcast_start_hops,
                     .seed = config.seed,
                     .is_2D_routing_enabled = fixture_->is_2D_routing_enabled(),
-                    .is_dynamic_routing_enabled = fixture_->is_dynamic_routing_enabled(),
                     .mesh_shape = this->fixture_->get_mesh_shape(),
                     .topology = this->fixture_->get_topology()};
 
@@ -612,9 +610,7 @@ private:
             dst_node_ids = traffic_config.dst_node_ids.value();
 
             // assign hops for 2d LL and 1D
-            if (!(fixture_->is_dynamic_routing_enabled())) {
-                hops = this->fixture_->get_hops_to_chip(src_node_id, dst_node_ids[0]);
-            }
+            hops = this->fixture_->get_hops_to_chip(src_node_id, dst_node_ids[0]);
         }
 
         // for 2d, we need to spcify the mcast start node id

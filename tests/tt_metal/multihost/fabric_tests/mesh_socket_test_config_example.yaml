@@ -14,7 +14,7 @@ physical_mesh:
 # Fabric configuration (required)
 fabric_config:
   topology: Mesh
-  routing_type: Dynamic
+  routing_type: LowLatency
 
 # Test definitions (required)
 tests:

@@ -75,6 +75,7 @@ inline bool intra_mesh_routing_path_t<2, true>::decode_route_to_buffer(
     }
 
     out_route_buffer[byte_index] = NOOP;
+    ASSERT(byte_index < HYBRID_MESH_MAX_ROUTE_BUFFER_SIZE);
 
     return true;
 }
