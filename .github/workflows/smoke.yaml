@@ -15,7 +15,7 @@ on:
       per-test-timeout:
         required: false
         type: string
-        default: 4.0 # TODO: Drop back to 3.5 when https://github.com/tenstorrent/github-ci-infra/issues/876 is resolved.
+        default: "4.0" # TODO: Drop back to 3.5 when https://github.com/tenstorrent/github-ci-infra/issues/876 is resolved.
       product:
         required: true
         type: string # tt-metalium or tt-nn
@@ -99,13 +99,33 @@ jobs:
         run: |
           set -euo pipefail
           if [ -f /work/coverage/coverage.profdata ]; then
-            llvm-cov-17 export -format=lcov \
-              -instr-profile=/work/coverage/coverage.profdata \
-              /usr/bin/${{ inputs.product }}-validation-smoke > /work/coverage/coverage.info || {
-                echo "llvm-cov export failed"; exit 1; }
+            # Collect likely instrumented shared libraries from our packages (simple, explicit globs)
+            shopt -s nullglob
+            objects=(
+              /usr/libexec/tt-metalium/*.so
+              /usr/libexec/tt-metalium/*/*.so
+            )
+
+            echo "Including ${#objects[@]} shared objects in coverage (if any)."
+            if [ ${#objects[@]} -gt 0 ]; then
+              llvm-cov-17 export -format=lcov \
+                -instr-profile=/work/coverage/coverage.profdata \
+                "${objects[@]}" > /work/coverage/coverage.info || {
+                  echo "llvm-cov export failed"; exit 1; }
+            else
+              : > /work/coverage/coverage.info
+            fi
           else
-            echo "coverage.profdata not found; skipping LCOV export"
+            echo "coverage.profdata not found; creating empty LCOV file"
+            : > /work/coverage/coverage.info
           fi
+
+      - name: Checkout repository for Codecov mapping
+        if: ${{ !cancelled() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false }}
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 1
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
