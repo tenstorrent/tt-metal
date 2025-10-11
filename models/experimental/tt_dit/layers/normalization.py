@@ -461,7 +461,7 @@ class GroupNorm:
 
     def __call__(self, x, num_out_blocks=-1):
         if x.shape[-1] < self.num_channels:
-            x = vae_all_gather(self.ccl_manager, x)
+            x = vae_all_gather(self.ccl_manager, x, self.mesh_axis)
         batch_size, height, width, channels = x.shape
         x = x.reshape([batch_size, 1, width * height, channels])
         x = ttnn.group_norm(

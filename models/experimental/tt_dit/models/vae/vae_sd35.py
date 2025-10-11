@@ -314,7 +314,7 @@ class Attention:
     # TODO: Standardize this usage
     def gather_if_sharded(self, x):
         if x.shape[3] < self.to_q.in_features:
-            x = vae_all_gather(self.ccl_manager, x)
+            x = vae_all_gather(self.ccl_manager, x, self.parallel_config.tensor_parallel.mesh_axis)
         return x
 
     def __call__(self, x):
