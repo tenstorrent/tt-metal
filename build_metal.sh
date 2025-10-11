@@ -48,7 +48,6 @@ show_help() {
     echo "  --ttnn-shared-sub-libs           Use shared libraries for ttnn."
     echo "  --toolchain-path                 Set path to CMake toolchain file."
     echo "  --configure-only                 Only configure the project, do not build."
-    echo "  --enable-coverage                Instrument the binaries for code coverage."
     echo "  --without-distributed            Disable distributed compute support (OpenMPI dependency). Enabled by default."
     echo "  --without-python-bindings        Disable Python bindings (ttnncpp will be available as standalone library, otherwise ttnn will include the cpp backend and the python bindings), Enabled by default"
     echo "  --enable-fake-kernels-target     Enable fake kernels target, to enable generation of compile_commands.json for the kernels to enable IDE support."
@@ -95,7 +94,6 @@ if [[ "$FLAVOR" == "ubuntu" && "$VERSION" == "20.04" ]]; then
 fi
 
 configure_only="OFF"
-enable_coverage="OFF"
 enable_distributed="ON"
 with_python_bindings="ON"
 enable_fake_kernels_target="OFF"
@@ -135,7 +133,6 @@ c-compiler-path:
 ttnn-shared-sub-libs
 toolchain-path:
 configure-only
-enable-coverage
 without-distributed
 without-python-bindings
 enable-fake-kernels-target
@@ -164,8 +161,6 @@ while true; do
             enable_ccache="ON";;
         -t|--enable-time-trace)
             enable_time_trace="ON";;
-        --enable-coverage)
-            enable_coverage="ON";;
         --without-distributed)
             enable_distributed="OFF";;
 	--build-dir)
@@ -270,7 +265,6 @@ echo "INFO: Export compile commands: $export_compile_commands"
 echo "INFO: Enable ccache: $enable_ccache"
 echo "INFO: Build type: $build_type"
 echo "INFO: Enable time trace: $enable_time_trace"
-echo "INFO: Enable Coverage: $enable_coverage"
 echo "INFO: Build directory: $build_dir"
 echo "INFO: Install Prefix: $cmake_install_prefix"
 echo "INFO: Build tests: $build_tests"
@@ -310,10 +304,6 @@ fi
 
 if [ "$enable_profiler" = "ON" ]; then
     cmake_args+=("-DENABLE_TRACY=ON")
-fi
-
-if [ "$enable_coverage" = "ON" ]; then
-    cmake_args+=("-DENABLE_COVERAGE=ON")
 fi
 
 if [ "$export_compile_commands" = "ON" ]; then
