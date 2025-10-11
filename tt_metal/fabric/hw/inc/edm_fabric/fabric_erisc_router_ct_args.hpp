@@ -147,7 +147,13 @@ constexpr uint32_t remote_vc1_sender_channel =
 constexpr size_t remote_worker_sender_channel =
     conditional_get_compile_time_arg<skip_src_ch_id_update, REMOTE_CHANNEL_INFO_START_IDX + 1>();
 
-constexpr size_t SENDER_NUM_BUFFERS_IDX = REMOTE_CHANNEL_INFO_START_IDX + (skip_src_ch_id_update ? 2 : 0);
+constexpr size_t ANOTHER_SPECIAL_TAG = 0xabcd1234;
+constexpr size_t ANOTHER_SPECIAL_TAG_IDX = REMOTE_CHANNEL_INFO_START_IDX + (skip_src_ch_id_update ? 2 : 0);
+static_assert(
+    get_compile_time_arg_val(ANOTHER_SPECIAL_TAG_IDX) == ANOTHER_SPECIAL_TAG,
+    "ANOTHER_SPECIAL_TAG not found. This implies some arguments were misaligned between host and device. Double check the CT args.");
+
+constexpr size_t SENDER_NUM_BUFFERS_IDX = ANOTHER_SPECIAL_TAG_IDX + 1;
 constexpr std::array<size_t, NUM_SENDER_CHANNELS> SENDER_NUM_BUFFERS_ARRAY =
     fill_array_with_next_n_args<size_t, SENDER_NUM_BUFFERS_IDX, NUM_SENDER_CHANNELS>();
 
@@ -160,42 +166,54 @@ constexpr size_t REMOTE_RECEIVER_NUM_BUFFERS_IDX = RECEIVER_NUM_BUFFERS_IDX + NU
 constexpr std::array<size_t, NUM_RECEIVER_CHANNELS> REMOTE_RECEIVER_NUM_BUFFERS_ARRAY =
     fill_array_with_next_n_args<size_t, REMOTE_RECEIVER_NUM_BUFFERS_IDX, NUM_RECEIVER_CHANNELS>();
 
+constexpr size_t STATIC_CHANNEL_ADDRS_ARG_IDX_BASE = REMOTE_RECEIVER_NUM_BUFFERS_IDX + NUM_RECEIVER_CHANNELS;
+constexpr size_t local_sender_0_channel_address = get_compile_time_arg_val(STATIC_CHANNEL_ADDRS_ARG_IDX_BASE);
+constexpr size_t local_sender_1_channel_address = get_compile_time_arg_val(STATIC_CHANNEL_ADDRS_ARG_IDX_BASE + 1);
+constexpr size_t local_sender_2_channel_address = get_compile_time_arg_val(STATIC_CHANNEL_ADDRS_ARG_IDX_BASE + 2);
+constexpr size_t local_sender_3_channel_address = get_compile_time_arg_val(STATIC_CHANNEL_ADDRS_ARG_IDX_BASE + 3);
+constexpr size_t local_sender_4_channel_address = get_compile_time_arg_val(STATIC_CHANNEL_ADDRS_ARG_IDX_BASE + 4);
+constexpr size_t local_receiver_0_channel_buffer_address =
+    get_compile_time_arg_val(STATIC_CHANNEL_ADDRS_ARG_IDX_BASE + 5);
+constexpr size_t remote_receiver_0_channel_buffer_address =
+    get_compile_time_arg_val(STATIC_CHANNEL_ADDRS_ARG_IDX_BASE + 6);
+constexpr size_t local_receiver_1_channel_buffer_address =
+    get_compile_time_arg_val(STATIC_CHANNEL_ADDRS_ARG_IDX_BASE + 7);
+constexpr size_t remote_receiver_1_channel_buffer_address =
+    get_compile_time_arg_val(STATIC_CHANNEL_ADDRS_ARG_IDX_BASE + 8);
+constexpr size_t remote_sender_0_channel_address = get_compile_time_arg_val(STATIC_CHANNEL_ADDRS_ARG_IDX_BASE + 9);
+constexpr size_t remote_sender_1_channel_address = get_compile_time_arg_val(STATIC_CHANNEL_ADDRS_ARG_IDX_BASE + 10);
+constexpr size_t remote_sender_2_channel_address = get_compile_time_arg_val(STATIC_CHANNEL_ADDRS_ARG_IDX_BASE + 11);
+constexpr size_t remote_sender_3_channel_address = get_compile_time_arg_val(STATIC_CHANNEL_ADDRS_ARG_IDX_BASE + 12);
+constexpr size_t remote_sender_4_channel_address = get_compile_time_arg_val(STATIC_CHANNEL_ADDRS_ARG_IDX_BASE + 13);
+
 constexpr size_t NUM_DOWNSTREAM_CHANNELS = NUM_FORWARDING_PATHS;
-constexpr size_t DOWNSTREAM_SENDER_NUM_BUFFERS_IDX = REMOTE_RECEIVER_NUM_BUFFERS_IDX + NUM_RECEIVER_CHANNELS;
+constexpr size_t DOWNSTREAM_SENDER_NUM_BUFFERS_IDX = STATIC_CHANNEL_ADDRS_ARG_IDX_BASE + 14;
 constexpr std::array<size_t, NUM_DOWNSTREAM_CHANNELS> DOWNSTREAM_SENDER_NUM_BUFFERS_ARRAY =
     fill_array_with_next_n_args<size_t, DOWNSTREAM_SENDER_NUM_BUFFERS_IDX, NUM_DOWNSTREAM_CHANNELS>();
 // TODO: remove DOWNSTREAM_SENDER_NUM_BUFFERS and use TMP on downstream sender channels.
 constexpr size_t DOWNSTREAM_SENDER_NUM_BUFFERS_VC0 = DOWNSTREAM_SENDER_NUM_BUFFERS_ARRAY[0];
 constexpr size_t DOWNSTREAM_SENDER_NUM_BUFFERS_VC1 = DOWNSTREAM_SENDER_NUM_BUFFERS_ARRAY[NUM_RECEIVER_CHANNELS - 1];
 
-constexpr size_t SKIP_CHANNEL_IDX = DOWNSTREAM_SENDER_NUM_BUFFERS_IDX + NUM_DOWNSTREAM_CHANNELS;
+constexpr size_t ANOTHER_SPECIAL_TAG_2 = 0xabaddad9;
+constexpr size_t ANOTHER_SPECIAL_TAG_2_IDX = DOWNSTREAM_SENDER_NUM_BUFFERS_IDX + NUM_DOWNSTREAM_CHANNELS;
+static_assert(
+    get_compile_time_arg_val(ANOTHER_SPECIAL_TAG_2_IDX) == ANOTHER_SPECIAL_TAG_2,
+    "ANOTHER_SPECIAL_TAG_2 not found. This implies some arguments were misaligned between host and device. Double check the CT args.");
+
+constexpr size_t SKIP_CHANNEL_IDX = ANOTHER_SPECIAL_TAG_2_IDX + 1;
 constexpr bool skip_receiver_channel_1_connection = get_compile_time_arg_val(SKIP_CHANNEL_IDX);
 constexpr bool skip_sender_channel_1_connection = get_compile_time_arg_val(SKIP_CHANNEL_IDX + 1);
 constexpr bool skip_sender_vc1_channel_connection = get_compile_time_arg_val(SKIP_CHANNEL_IDX + 2);
 
 constexpr size_t MAIN_CT_ARGS_IDX_1 = SKIP_CHANNEL_IDX + 3;
-constexpr size_t local_sender_0_channel_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1);
-constexpr size_t local_sender_channel_0_connection_info_addr = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1 + 1);
-constexpr size_t local_sender_1_channel_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1 + 2);
-constexpr size_t local_sender_channel_1_connection_info_addr = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1 + 3);
-constexpr size_t local_sender_2_channel_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1 + 4);
-constexpr size_t local_sender_channel_2_connection_info_addr = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1 + 5);
-constexpr size_t local_sender_3_channel_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1 + 6);
-constexpr size_t local_sender_channel_3_connection_info_addr = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1 + 7);
-constexpr size_t local_sender_4_channel_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1 + 8);
-constexpr size_t local_sender_channel_4_connection_info_addr = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1 + 9);
-constexpr size_t local_receiver_0_channel_buffer_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1 + 10);
-constexpr size_t remote_receiver_0_channel_buffer_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1 + 11);
-constexpr size_t local_receiver_1_channel_buffer_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1 + 12);
-constexpr size_t remote_receiver_1_channel_buffer_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1 + 13);
-constexpr size_t remote_sender_0_channel_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1 + 14);
-constexpr size_t remote_sender_1_channel_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1 + 15);
-constexpr size_t remote_sender_2_channel_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1 + 16);
-constexpr size_t remote_sender_3_channel_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1 + 17);
-constexpr size_t remote_sender_4_channel_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1 + 18);
+constexpr size_t local_sender_channel_0_connection_info_addr = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1 + 0);
+constexpr size_t local_sender_channel_1_connection_info_addr = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1 + 1);
+constexpr size_t local_sender_channel_2_connection_info_addr = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1 + 2);
+constexpr size_t local_sender_channel_3_connection_info_addr = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1 + 3);
+constexpr size_t local_sender_channel_4_connection_info_addr = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1 + 4);
 
 // TODO: CONVERT TO SEMAPHORE
-constexpr size_t MAIN_CT_ARGS_IDX_2 = MAIN_CT_ARGS_IDX_1 + 19;
+constexpr size_t MAIN_CT_ARGS_IDX_2 = MAIN_CT_ARGS_IDX_1 + 5;
 constexpr uint32_t termination_signal_addr = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_2);
 constexpr uint32_t edm_local_sync_ptr_addr =
     wait_for_host_signal ? get_compile_time_arg_val(MAIN_CT_ARGS_IDX_2 + 1) : 0;

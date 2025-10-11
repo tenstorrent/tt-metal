@@ -15,6 +15,7 @@
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "dispatch/kernel_config/relay_mux.hpp"
+#include "tt_metal/fabric/builder/fabric_static_sized_channels_allocator.hpp"
 #include "tt_align.hpp"
 #include <bit>
 #include <algorithm>
@@ -212,11 +213,11 @@ void FabricTensixDatamoverConfig::calculate_buffer_allocations() {
     switch (topology) {
         case tt::tt_fabric::Topology::Linear:
         case tt::tt_fabric::Topology::Ring:
-            num_channels_ = tt::tt_fabric::FabricEriscDatamoverConfig::num_sender_channels_1d_linear;
+            num_channels_ = tt::tt_fabric::builder_config::num_sender_channels_1d_linear;
             break;
         case tt::tt_fabric::Topology::Mesh:
         case tt::tt_fabric::Topology::Torus:
-            num_channels_ = tt::tt_fabric::FabricEriscDatamoverConfig::num_sender_channels_2d_mesh;
+            num_channels_ = tt::tt_fabric::builder_config::num_sender_channels_2d_mesh;
             break;
         default: TT_THROW("unknown fabric topology: {}", topology); break;
     }
@@ -484,7 +485,15 @@ std::vector<uint32_t> FabricTensixDatamoverBuilder::get_compile_time_args(tt::tt
         }
     }();
 
-    fabric_mux_config_->set_fabric_endpoint_channel_num_buffers(fabric_router_config.sender_channels_num_buffers[0]);
+    auto channel_allocator_base = fabric_router_config.channel_allocator.get();
+    TT_FATAL(
+        dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(channel_allocator_base) != nullptr,
+        "Channel allocator is not a FabricStaticSizedChannelsAllocator");
+    const auto channel_allocator =
+        dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(channel_allocator_base);
+    TT_FATAL(channel_allocator != nullptr, "Channel allocator is not a FabricStaticSizedChannelsAllocator");
+    fabric_mux_config_->set_fabric_endpoint_channel_num_buffers(
+        channel_allocator->get_sender_channel_number_of_slots(0));
     fabric_mux_config_->set_wait_for_fabric_endpoint_ready(true);
     fabric_mux_config_->set_fabric_endpoint_status_address(fabric_router_config.edm_status_address);
     auto ct_args = fabric_mux_config_->get_fabric_mux_compile_time_main_args(fabric_router_config);

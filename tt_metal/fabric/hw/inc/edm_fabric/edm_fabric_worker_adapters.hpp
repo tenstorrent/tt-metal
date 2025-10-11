@@ -679,7 +679,5 @@ private:
 
 using WorkerToFabricEdmSender = WorkerToFabricEdmSenderImpl<false, 0>;
 
-template <uint8_t EDM_SENDER_CHANNEL_NUM_BUFFERS>
-using EdmToEdmSender = WorkerToFabricEdmSenderImpl<true, EDM_SENDER_CHANNEL_NUM_BUFFERS>;
 
 }  // namespace tt::tt_fabric
