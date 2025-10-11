@@ -4,10 +4,11 @@
 # Metrics
 from .metrics import (
     DEFAULT_METRICS,
-    _compute_cosine_similarity,
-    _compute_max_abs_error,
-    _compute_mean_abs_error,
-    _compute_pcc,
+    comp_allclose,
+    compute_cosine_similarity,
+    compute_max_abs_error,
+    compute_mean_abs_error,
+    compute_pcc,
 )
 from .validate_against import (
     ValidationRegistry,
@@ -27,9 +28,10 @@ __all__ = [
     "ValidationResult",
     "ValidationRegistry",
     # Metrics
-    "_compute_max_abs_error",
-    "_compute_mean_abs_error",
-    "_compute_pcc",
-    "_compute_cosine_similarity",
+    "compute_max_abs_error",
+    "compute_mean_abs_error",
+    "compute_pcc",
+    "compute_cosine_similarity",
+    "comp_allclose",
     "DEFAULT_METRICS",
 ]
