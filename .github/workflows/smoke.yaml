@@ -32,6 +32,7 @@ jobs:
         ASAN_OPTIONS: "color=always"
         TSAN_OPTIONS: "color=always"
         UBSAN_OPTIONS: "color=always:print_stacktrace=1:halt_on_error=1"
+        LLVM_PROFILE_FILE: "/work/coverage/%p-%m.profraw"
       volumes:
         - /work
         - ${{ (!contains(inputs.runner, 'viommu') && '/dev/hugepages-1G:/dev/hugepages-1G') || '/no_hugepages' }}
@@ -51,6 +52,10 @@ jobs:
         run: |
           # Ideally only ${{ inputs.product }}-validation, but APT doesn't resolve dependencies from files on disk without being told about them.
           apt install -y ./pkgs/tt-metalium_*.deb ./pkgs/tt-metalium-jit_*.deb ./pkgs/${{ inputs.product }}_*.deb ./pkgs/${{ inputs.product }}-validation_*.deb
+
+      - name: Prepare coverage directory
+        run: |
+          mkdir -p /work/coverage
 
       - name: Warmup caches
         timeout-minutes: 2
@@ -76,6 +81,41 @@ jobs:
           TT_METAL_WATCHER_TEST_MODE: 1
         run: |
           /usr/bin/${{ inputs.product }}-validation-smoke
+
+      - name: Merge LLVM coverage
+        if: ${{ !cancelled() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob || true
+          files=(/work/coverage/*.profraw)
+          if [ ${#files[@]} -gt 0 ]; then
+            llvm-profdata-17 merge -sparse /work/coverage/*.profraw -o /work/coverage/coverage.profdata
+          else
+            echo "No .profraw files found; skipping merge"
+          fi
+
+      - name: Export LCOV (llvm-cov)
+        if: ${{ !cancelled() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false }}
+        run: |
+          set -euo pipefail
+          if [ -f /work/coverage/coverage.profdata ]; then
+            llvm-cov-17 export -format=lcov \
+              -instr-profile=/work/coverage/coverage.profdata \
+              /usr/bin/${{ inputs.product }}-validation-smoke > /work/coverage/coverage.info || {
+                echo "llvm-cov export failed"; exit 1; }
+          else
+            echo "coverage.profdata not found; skipping LCOV export"
+          fi
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        if: ${{ !cancelled() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false }}
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+        with:
+          files: /work/coverage/coverage.info
+          fail_ci_if_error: true
+          verbose: true
 
       - name: workaround
         if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false) }}
