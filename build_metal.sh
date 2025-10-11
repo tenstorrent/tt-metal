@@ -20,7 +20,7 @@ show_help() {
     echo "  -h, --help                       Show this help message."
     echo "  -e, --export-compile-commands    Enable CMAKE_EXPORT_COMPILE_COMMANDS."
     echo "  -c, --enable-ccache              Enable ccache for the build."
-    echo "  -b, --build-type build_type      Set the build type. Default is Release. Other options are Debug, RelWithDebInfo, ASan and TSan."
+    echo "  -b, --build-type build_type      Set the build type. Default is Release. Other options are Debug, RelWithDebInfo, ASan, TSan, Coverage."
     echo "  -t, --enable-time-trace          Enable build time trace (clang only)."
     echo "  -p, --enable-profiler            Enable Tracy profiler."
     echo "  --install-prefix                 Where to install build artifacts."
@@ -56,7 +56,7 @@ show_help() {
 
 clean() {
     echo "INFO: Removing build artifacts!"
-    rm -rf build_Release* build_Debug* build_RelWithDebInfo* build_ASan* build_TSan* build built .cpmcache
+    rm -rf build_Release* build_Debug* build_RelWithDebInfo* build_ASan* build_TSan* build_Coverage build built .cpmcache
     rm -rf ~/.cache/tt-metal-cache /tmp/tt-metal-cache
     if [[ ! -z $TT_METAL_CACHE ]]; then
         echo "User has TT_METAL_CACHE set, please make sure you delete it in order to delete all artifacts!"
@@ -238,9 +238,9 @@ if [[ $# -gt 0 ]]; then
 fi
 
 # Validate the build_type
-VALID_BUILD_TYPES=("Release" "Debug" "RelWithDebInfo" "ASan" "TSan")
+VALID_BUILD_TYPES=("Release" "Debug" "RelWithDebInfo" "ASan" "TSan" "Coverage")
 if [[ ! " ${VALID_BUILD_TYPES[@]} " =~ " ${build_type} " ]]; then
-    echo "ERROR: Invalid build type '$build_type'. Allowed values are Release, Debug, RelWithDebInfo, ASan, TSan."
+    echo "ERROR: Invalid build type '$build_type'. Allowed values are Release, Debug, RelWithDebInfo, ASan, TSan, Coverage."
     show_help
     exit 1
 fi
