@@ -10,7 +10,8 @@ message TrafficParams {
 message EthernetMetrics {
     uint32 retrain_count = 1;
     uint32 crc_error_count = 2;
-    uint32 uncorrected_codeword_count = 3;
+    uint64 corrected_codeword_count = 3;
+    uint64 uncorrected_codeword_count = 4;
 }
 
 message LinkStatus {

@@ -316,7 +316,6 @@ void PhysicalSystemDescriptor::run_local_discovery() {
                 .eth_conn = EthConnection(eth_chan, dst_chan, false)});
         }
     }
-    this->generate_local_ethernet_metrics();
     system_graph_.host_connectivity_graph[hostname] = {};
 }
 
@@ -353,10 +352,6 @@ void PhysicalSystemDescriptor::merge(PhysicalSystemDescriptor&& other) {
         exit_node_connection_table_[host_name] = std::move(exit_connections);
     }
 
-    for (auto&& [asic, metrics] : other.ethernet_metrics_) {
-        ethernet_metrics_[asic] = std::move(metrics);
-    }
-
     // Merging PhysicalSystemDescriptors using mock and real clusters is undefined and unsupported
     TT_FATAL(
         is_using_mock_cluster() == other.is_using_mock_cluster(),
@@ -366,22 +361,7 @@ void PhysicalSystemDescriptor::merge(PhysicalSystemDescriptor&& other) {
 void PhysicalSystemDescriptor::remove_unresolved_nodes() {
     for (auto& [host, asic_group] : system_graph_.asic_connectivity_graph) {
         for (auto& [src_asic, edges] : asic_group) {
-            auto edges_copy = edges;
-            auto num_erased_edges =
-                std::erase_if(edges, [&](const auto& pair) { return not asic_descriptors_.contains(pair.first); });
-            // Erase the metrics for the deleted edges
-            if (num_erased_edges > 0) {
-                // Build set of remaining edges for O(log n) lookup instead of O(n) std::find
-                std::set<typename std::decay_t<decltype(edges)>::value_type> remaining_edges(
-                    edges.begin(), edges.end());
-                for (const auto& edge : edges_copy) {
-                    if (not remaining_edges.contains(edge)) {
-                        for (const auto& eth_conn : edge.second) {
-                            ethernet_metrics_[src_asic].erase(eth_conn.src_chan);
-                        }
-                    }
-                }
-            }
+            std::erase_if(edges, [&](const auto& pair) { return not asic_descriptors_.contains(pair.first); });
         }
     }
 
@@ -798,9 +778,10 @@ std::pair<AsicID, uint8_t> PhysicalSystemDescriptor::get_connected_asic_and_chan
     return {AsicID{0}, 0};
 }
 
-void PhysicalSystemDescriptor::generate_local_ethernet_metrics() {
+LocalEthernetMetrics PhysicalSystemDescriptor::query_local_ethernet_metrics() const {
     const auto& local_asics = get_asics_connected_to_host(my_host_name());
     const auto& local_asic_graph = get_asic_topology(my_host_name());
+    std::unordered_map<AsicID, std::unordered_map<uint8_t, EthernetMetrics>> local_ethernet_metrics;
 
     auto retrain_count_addr = hal_->get_dev_addr(
         tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::RETRAIN_COUNT);
@@ -836,7 +817,7 @@ void PhysicalSystemDescriptor::generate_local_ethernet_metrics() {
                 cluster_->read_from_device(
                     &uncorr_val_lo, src_chip_id, translated_eth_core, uncorr_addr + 4, sizeof(uint32_t));
 
-                ethernet_metrics_[asic][src_eth_chan] = {
+                local_ethernet_metrics[asic][src_eth_chan] = {
                     .retrain_count = retrain_count_val,
                     .crc_error_count = crc_error_val,
                     .corrected_codeword_count =
@@ -846,6 +827,7 @@ void PhysicalSystemDescriptor::generate_local_ethernet_metrics() {
             }
         }
     }
+    return local_ethernet_metrics;
 }
 
 const HostTopology& PhysicalSystemDescriptor::get_host_topology() const {
