@@ -87,7 +87,6 @@ jobs:
           /usr/bin/${{ inputs.product }}-validation-smoke
 
       - name: Merge LLVM coverage
-        if: ${{ !cancelled() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false }}
         run: |
           set -euo pipefail
           shopt -s nullglob || true
@@ -99,7 +98,6 @@ jobs:
           fi
 
       - name: Export LCOV (llvm-cov)
-        if: ${{ !cancelled() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false }}
         run: |
           set -euo pipefail
           if [ -f /work/coverage/coverage.profdata ]; then
@@ -125,7 +123,6 @@ jobs:
           fi
 
       - name: Checkout repository for Codecov mapping
-        if: ${{ !cancelled() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false }}
         uses: actions/checkout@v4
         with:
           submodules: recursive
@@ -133,7 +130,10 @@ jobs:
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
-        if: ${{ !cancelled() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false }}
+        if: ${{ !cancelled() && (
+              (github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false && github.workflow == 'PR Gate')
+              || (github.event_name == 'push' && github.ref_name == 'main' && github.workflow == 'PR Gate')
+            ) }}
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
         with:
