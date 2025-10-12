@@ -84,6 +84,7 @@ jobs:
           # TT_METAL_WATCHER: 5 TODO(#25305): Re-enable watcher after the race condition is fixed.
           TT_METAL_WATCHER_TEST_MODE: 1
         run: |
+          ldd /usr/bin/${{ inputs.product }}-validation-smoke
           /usr/bin/${{ inputs.product }}-validation-smoke
 
       - name: Merge LLVM coverage
@@ -101,21 +102,15 @@ jobs:
         run: |
           set -euo pipefail
           if [ -f /work/coverage/coverage.profdata ]; then
-            # Collect likely instrumented shared libraries from our packages (simple, explicit globs)
-            echo "[debug] Scanning for shared libraries to include in coverage..."
-            # Basic locations
-            find /usr/libexec/tt-metalium -maxdepth 3 \( -name '*.so' -o -name '*.so.*' \) -print || true
-            find /usr/lib -maxdepth 3 -type f \( -name 'libtt_metal.so' -o -name '_ttnn.so' -o -name '_ttnncpp.so' \) -print || true
-            find /usr/lib/x86_64-linux-gnu -maxdepth 4 -type f \( -name 'libtt_metal.so' -o -name '_ttnn.so' -o -name '_ttnncpp.so' \) -print || true
-            find /usr/local/lib -maxdepth 3 -type f \( -name 'libtt_metal.so' -o -name '_ttnn.so' -o -name '_ttnncpp.so' \) -print || true
             objects=(
               /usr/lib/libtt_metal.so
               /usr/lib/_ttnn.so
               /usr/lib/_ttnncpp.so
             )
+            test_bin="/usr/bin/${{ inputs.product }}-validation-smoke"
             llvm-cov-17 export -format=lcov \
               -instr-profile=/work/coverage/coverage.profdata \
-              "${objects[@]}" > /work/coverage/coverage.info || {
+              "$test_bin" "${objects[@]}" > /work/coverage/coverage.info || {
                 echo "llvm-cov export failed"; exit 1; }
           else
             echo "coverage.profdata not found; creating empty LCOV file"
