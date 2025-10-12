@@ -157,18 +157,58 @@ PhysicalSystemDescriptor generate_physical_system_descriptor(const InputArgs& in
     }
 }
 
-void validate_connectivity(const InputArgs& input_args, PhysicalSystemDescriptor& physical_system_descriptor) {
+AsicTopology generate_missing_asic_topology(
+    std::set<PhysicalChannelConnection> missing_physical_connections,
+    PhysicalSystemDescriptor& physical_system_descriptor) {
+    AsicTopology asic_topology;
+    std::unordered_map<tt_metal::AsicID, std::set<tt_metal::AsicID>> visited;
+    std::unordered_map<tt_metal::AsicID, std::unordered_map<tt_metal::AsicID, uint32_t>> visited_idx;
+    for (const auto& connection : missing_physical_connections) {
+        auto src = connection.first;
+        auto dst = connection.second;
+        auto src_asic_id = physical_system_descriptor.get_asic_id(
+            src.hostname, tt_metal::TrayID(*src.tray_id), tt_metal::ASICLocation(src.asic_channel.asic_location));
+        auto dst_asic_id = physical_system_descriptor.get_asic_id(
+            dst.hostname, tt_metal::TrayID(*dst.tray_id), tt_metal::ASICLocation(dst.asic_channel.asic_location));
+        if (visited[src_asic_id].find(dst_asic_id) == visited[src_asic_id].end()) {
+            asic_topology[src_asic_id].push_back(
+                {dst_asic_id,
+                 {EthConnection(
+                     *src.asic_channel.channel_id, *dst.asic_channel.channel_id, src.hostname == dst.hostname)}});
+            visited[src_asic_id].insert(dst_asic_id);
+            visited_idx[src_asic_id][dst_asic_id] = asic_topology[src_asic_id].size() - 1;
+        } else {
+            asic_topology[src_asic_id][visited_idx[src_asic_id][dst_asic_id]].second.push_back(EthConnection(
+                *src.asic_channel.channel_id, *dst.asic_channel.channel_id, src.hostname == dst.hostname));
+        }
+        if (visited[dst_asic_id].find(src_asic_id) == visited[dst_asic_id].end()) {
+            asic_topology[dst_asic_id].push_back(
+                {src_asic_id,
+                 {EthConnection(
+                     *dst.asic_channel.channel_id, *src.asic_channel.channel_id, src.hostname == dst.hostname)}});
+            visited[dst_asic_id].insert(src_asic_id);
+            visited_idx[dst_asic_id][src_asic_id] = asic_topology[dst_asic_id].size() - 1;
+        } else {
+            asic_topology[dst_asic_id][visited_idx[dst_asic_id][src_asic_id]].second.push_back(EthConnection(
+                *dst.asic_channel.channel_id, *src.asic_channel.channel_id, src.hostname == dst.hostname));
+        }
+    }
+    return asic_topology;
+}
+
+AsicTopology validate_connectivity(const InputArgs& input_args, PhysicalSystemDescriptor& physical_system_descriptor) {
     if (!input_args.validate_connectivity) {
-        return;
+        return {};
     }
     // Set output path for the YAML file
     std::string gsd_yaml_path = input_args.output_path / "global_system_descriptor.yaml";
     // Dump the discovered system to YAML
     physical_system_descriptor.dump_to_yaml(gsd_yaml_path);
     log_output_rank0("Validating Factory System Descriptor (Golden Representation) against Global System Descriptor");
-    tt::scaleout_tools::validate_fsd_against_gsd(
+    auto missing_physical_connections = tt::scaleout_tools::validate_fsd_against_gsd(
         get_factory_system_descriptor_path(input_args), gsd_yaml_path, true, input_args.fail_on_warning);
     log_output_rank0("Factory System Descriptor (Golden Representation) Validation Complete");
+    return generate_missing_asic_topology(missing_physical_connections, physical_system_descriptor);
 }
 
 void print_usage_info() {
@@ -225,7 +265,7 @@ int main(int argc, char* argv[]) {
     auto physical_system_descriptor = generate_physical_system_descriptor(input_args);
 
     if (*distributed_context.rank() == 0) {
-        validate_connectivity(input_args, physical_system_descriptor);
+        auto missing_asic_topology = validate_connectivity(input_args, physical_system_descriptor);
     }
 
     eth_connections_healthy = generate_link_metrics(
