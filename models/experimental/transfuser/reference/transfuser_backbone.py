@@ -372,6 +372,7 @@ class TransfuserBackbone(nn.Module):
         )
         image_features = image_features + image_features_layer4
         lidar_features = lidar_features + lidar_features_layer4
+        return image_features, lidar_features
 
         # Downsamples channels to 512
         image_features = self.change_channel_conv_image(image_features)
