@@ -394,14 +394,11 @@ class TransfuserBackbone(nn.Module):
         image_features_grid = image_features  # For auxilliary information
 
         image_features = self.image_encoder.features.global_pool(image_features)
-        print("&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&")
-        print(f"{image_features.shape=}")
-        # image_features = torch.flatten(image_features, 1)
-        print(f"{image_features.shape=}")
+        image_features = torch.flatten(image_features, 1)
         lidar_features = self.lidar_encoder._model.global_pool(lidar_features)
-        # lidar_features = torch.flatten(lidar_features, 1)
+        lidar_features = torch.flatten(lidar_features, 1)
 
-        return image_features, lidar_features
+        # return image_features, lidar_features
         fused_features = image_features + lidar_features
-        # features = self.top_down(x4)
-        # return features, image_features_grid, fused_features
+        features = self.top_down(x4)
+        return features, image_features_grid, fused_features

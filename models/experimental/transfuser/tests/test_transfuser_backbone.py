@@ -97,8 +97,7 @@ class TransfuserBackboneInfra:
         self.torch_lidar_input = torch.randn(self.lidar_input_shape)
         self.torch_velocity_input = torch.randn(1, 1)
         with torch.no_grad():
-            self.torch_image_output, self.torch_lidar_output = torch_model(
-                # self.torch_output_tensor = torch_model(
+            self.torch_features, self.torch_image_grid, self.torch_fused = torch_model(
                 self.torch_image_input,
                 self.torch_lidar_input,
                 self.torch_velocity_input,
@@ -125,9 +124,7 @@ class TransfuserBackboneInfra:
         )
 
         self.input_image_tensor = ttnn.to_device(tt_image_input, device)
-        # self.input_image_tensor = ttnn.permute(self.input_image_tensor, (0, 2, 3, 1))
         self.input_lidar_tensor = ttnn.to_device(tt_lidar_input, device)
-        # self.input_lidar_tensor = ttnn.permute(self.input_lidar_tensor, (0, 2, 3, 1))
         self.input_velocity_tensor = ttnn.to_device(tt_velocity_input, device)
 
         # Build TTNN model
@@ -160,70 +157,82 @@ class TransfuserBackboneInfra:
         return None, None, None
 
     def run(self):
-        self.output_image_tensor, self.output_lidar_tensor = self.ttnn_model(
+        self.output_features, self.output_image_grid, self.output_fused = self.ttnn_model(
             self.input_image_tensor, self.input_lidar_tensor, self.input_velocity_tensor, self.device
         )
-        return self.output_image_tensor, self.output_lidar_tensor
+        return self.output_features, self.output_image_grid, self.output_fused
 
     def validate(self, model_config, output_tensor=None):
         # Validate image output
-        tt_image_tensor_torch = ttnn.to_torch(
-            self.output_image_tensor,
+        tt_features_torch = []
+        fpn_names = ["p2", "p3", "p4", "p5"]
+        for i, (feature, name) in enumerate(zip(self.output_features, fpn_names)):
+            tt_feat = ttnn.to_torch(
+                feature,
+                device=self.device,
+                mesh_composer=self.output_mesh_composer,
+            )
+
+            # Get expected shape from PyTorch reference
+            expected_shape = self.torch_features[i].shape  # [B, C, H, W] in NCHW
+            B, C, H, W = expected_shape
+
+            # Reshape from flat to NHWC: [B, H, W, C]
+            tt_feat = tt_feat.reshape(B, H, W, C)
+
+            # Permute NHWC -> NCHW
+            tt_feat = tt_feat.permute(0, 3, 1, 2)
+            tt_features_torch.append(tt_feat)
+
+        # Validate output_image_grid
+        tt_image_grid_torch = ttnn.to_torch(
+            self.output_image_grid,
             device=self.device,
             mesh_composer=self.output_mesh_composer,
         )
+        # Get expected shape and reshape
+        expected_grid_shape = self.torch_image_grid.shape  # [B, C, H, W]
+        B, C, H, W = expected_grid_shape
+        tt_image_grid_torch = tt_image_grid_torch.reshape(B, H, W, C)
+        tt_image_grid_torch = tt_image_grid_torch.permute(0, 3, 1, 2)
 
-        # Validate lidar output
-        tt_lidar_tensor_torch = ttnn.to_torch(
-            self.output_lidar_tensor,
+        # Validate output_fused_tensor
+        tt_fused_torch = ttnn.to_torch(
+            self.output_fused,
             device=self.device,
             mesh_composer=self.output_mesh_composer,
         )
 
         # Deallocate output tensors
-        ttnn.deallocate(self.output_image_tensor)
-        ttnn.deallocate(self.output_lidar_tensor)
+        for feature in self.output_features:
+            ttnn.deallocate(feature)
+        ttnn.deallocate(self.output_image_grid)
+        ttnn.deallocate(self.output_fused)
 
-        # Reshape + permute image output back to NCHW
-        expected_image_shape = self.torch_image_output.shape
-        print(f"{tt_image_tensor_torch.shape,tt_lidar_tensor_torch.shape, expected_image_shape=}")
-        tt_image_tensor_torch = torch.reshape(
-            tt_image_tensor_torch,
-            (expected_image_shape[0], expected_image_shape[2], expected_image_shape[3], expected_image_shape[1]),
-        )
-        tt_image_tensor_torch = torch.permute(tt_image_tensor_torch, (0, 3, 1, 2))
+        # Validate FPN features
+        fpn_pcc_results = []
+        for torch_feat, tt_feat, name in zip(self.torch_features, tt_features_torch, fpn_names):
+            pcc_passed, pcc_msg = check_with_pcc(torch_feat, tt_feat, pcc=0.95)
+            fpn_pcc_results.append((pcc_passed, pcc_msg))
+            logger.info(f"{name} PCC: {pcc_msg}")
 
-        # Reshape + permute lidar output back to NCHW
-        expected_lidar_shape = self.torch_lidar_output.shape
-        print(f"{tt_image_tensor_torch.shape,tt_lidar_tensor_torch.shape, expected_lidar_shape=}")
-        tt_lidar_tensor_torch = torch.reshape(
-            tt_lidar_tensor_torch,
-            (expected_lidar_shape[0], expected_lidar_shape[2], expected_lidar_shape[3], expected_lidar_shape[1]),
-        )
-        tt_lidar_tensor_torch = torch.permute(tt_lidar_tensor_torch, (0, 3, 1, 2))
+        # Validate image grid
+        grid_pcc_passed, grid_pcc_msg = check_with_pcc(self.torch_image_grid, tt_image_grid_torch, pcc=0.95)
+        logger.info(f"Image Grid PCC: {grid_pcc_msg}")
 
-        # PCC validation for both outputs
-        image_pcc_passed, image_pcc_message = check_with_pcc(self.torch_image_output, tt_image_tensor_torch, pcc=0.95)
-        lidar_pcc_passed, lidar_pcc_message = check_with_pcc(self.torch_lidar_output, tt_lidar_tensor_torch, pcc=0.90)
+        # Validate fused features
+        fused_pcc_passed, fused_pcc_msg = check_with_pcc(self.torch_fused, tt_fused_torch, pcc=0.95)
+        logger.info(f"Fused Features PCC: {fused_pcc_msg}")
 
-        logger.info(f"Image Output PCC: {image_pcc_message}")
-        logger.info(f"LiDAR Output PCC: {lidar_pcc_message}")
+        # All outputs must pass
+        all_fpn_passed = all(result[0] for result in fpn_pcc_results)
+        overall_passed = all_fpn_passed and grid_pcc_passed and fused_pcc_passed
 
-        # Both outputs must pass for overall validation to pass
-        overall_pcc_passed = image_pcc_passed and lidar_pcc_passed
-
-        assert overall_pcc_passed, logger.error(
-            f"PCC check failed - Image: {image_pcc_message}, LiDAR: {lidar_pcc_message}"
+        assert overall_passed, logger.error(
+            f"PCC check failed - FPN: {fpn_pcc_results}, Grid: {grid_pcc_msg}, Fused: {fused_pcc_msg}"
         )
 
-        logger.info(
-            f"act_dtype={model_config['ACTIVATIONS_DTYPE']}, "
-            f"weight_dtype={model_config['WEIGHTS_DTYPE']}, "
-            f"math_fidelity={model_config['MATH_FIDELITY']}, "
-            f"Image PCC={image_pcc_message}, LiDAR PCC={lidar_pcc_message}"
-        )
-
-        return overall_pcc_passed, f"Image: {image_pcc_message}, LiDAR: {lidar_pcc_message}"
+        return overall_passed, f"FPN: {fpn_pcc_results}, Grid: {grid_pcc_msg}, Fused: {fused_pcc_msg}"
 
 
 # High accuracy model config

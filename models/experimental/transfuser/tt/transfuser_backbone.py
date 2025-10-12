@@ -7,6 +7,7 @@ from typing import List
 from loguru import logger
 from models.experimental.transfuser.tt.bottleneck import TTRegNetBottleneck
 from models.experimental.transfuser.tt.gpt import TTGpt
+from models.experimental.transfuser.tt.topdown import TtTopDown
 
 
 class TtTransfuserBackbone:
@@ -236,6 +237,13 @@ class TtTransfuserBackbone:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 dtype=ttnn.bfloat16,
             )
+        self.top_down = TtTopDown(
+            device=device,
+            parameters=parameters,
+            perception_output_features=config.perception_output_features,
+            bev_features_channels=config.bev_features_chanels,
+            bev_upsample_factor=config.bev_upsample_factor,
+        )
 
     # def _make_layer(
     #     self,
@@ -738,16 +746,20 @@ class TtTransfuserBackbone:
         image_features = ttnn.global_avg_pool2d(image_features)
         lidar_features = ttnn.global_avg_pool2d(lidar_features)
 
-        # logger.info("Flatten")
-        # # Flatten
-        # # image_features = ttnn.reshape(image_features, (1, 1, 1, self.config.perception_output_features))
-        # # lidar_features = ttnn.reshape(lidar_features, (1, 1, 1, self.config.perception_output_features))
-        # image_features = ttnn.reshape(image_features, (1, self.config.perception_output_features))
-        # lidar_features = ttnn.reshape(lidar_features, (1, self.config.perception_output_features))
-        # logger.info("fused_features")
+        logger.info("Flatten")
+        # Flatten
+        # image_features = ttnn.reshape(image_features, (1, 1, 1, self.config.perception_output_features))
+        # lidar_features = ttnn.reshape(lidar_features, (1, 1, 1, self.config.perception_output_features))
+        image_features = ttnn.reshape(image_features, (1, self.config.perception_output_features))
+        lidar_features = ttnn.reshape(lidar_features, (1, self.config.perception_output_features))
+        logger.info("fused_features")
 
-        # print(f"{image_features.shape,lidar_features.shape=}")
-        # fused_features = ttnn.add(image_features, lidar_features)
-        # print(f"{fused_features.shape,image_features_grid.shape=}")
+        print(f"{image_features.shape,lidar_features.shape=}")
+        fused_features = ttnn.add(image_features, lidar_features)
+        print(f"{fused_features.shape,image_features_grid.shape=}")
 
-        return image_features, lidar_features
+        logger.info("FPN top-down")
+        p2, p3, p4, p5 = self.top_down(x4)
+        features = (p2, p3, p4, p5)
+
+        return features, image_features_grid, fused_features

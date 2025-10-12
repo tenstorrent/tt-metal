@@ -57,6 +57,17 @@ def _pack_weight_only(weight_tensor, *, mesh_mapper):
     return ttnn.from_torch(weight_tensor, dtype=TT_DTYPE, mesh_mapper=mesh_mapper)
 
 
+def _pack_conv_module(module, *, mesh_mapper):
+    """Pack a simple Conv module's weight/bias into TTNN with standard dtype/shape."""
+    w_t = preprocess_conv_weight(module.weight, mesh_mapper=mesh_mapper)
+    b_t = (
+        preprocess_conv_bias(module.bias, mesh_mapper=mesh_mapper)
+        if getattr(module, "bias", None) is not None
+        else None
+    )
+    return {"weight": w_t, "bias": b_t}
+
+
 def _handle_conv2d(parameters: dict, conv: Conv2d, *, mesh_mapper):
     """Generic handler for Conv2d with optional BN fused in."""
     if conv.norm is not None:
@@ -257,6 +268,18 @@ def custom_preprocessor(
                 mesh_mapper=mesh_mapper,
                 who="change_channel_conv_lidar",
             )
+        # ==== FPN top-down layers (P5->P4->P3) ====
+        if hasattr(model, "c5_conv"):
+            parameters["c5_conv"] = _pack_conv_module(model.c5_conv, mesh_mapper=mesh_mapper)
+
+        if hasattr(model, "up_conv5"):
+            parameters["up_conv5"] = _pack_conv_module(model.up_conv5, mesh_mapper=mesh_mapper)
+
+        if hasattr(model, "up_conv4"):
+            parameters["up_conv4"] = _pack_conv_module(model.up_conv4, mesh_mapper=mesh_mapper)
+
+        if hasattr(model, "up_conv3"):
+            parameters["up_conv3"] = _pack_conv_module(model.up_conv3, mesh_mapper=mesh_mapper)
 
         # ---- Process stages for both encoders ----
         for stage_name in ("layer1", "layer2", "layer3", "layer4"):
