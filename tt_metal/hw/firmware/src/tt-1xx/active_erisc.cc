@@ -169,7 +169,7 @@ extern "C" __attribute__((naked)) void enter_reset(void) {
         "sw gp, 13 * 4( sp )\n"
 
         // Copy contents of local memory to L1, because local memory is cleared on reset. There is a register that in
-        // theory can be set to prevent resetting the core from clearing L1, but the hardware doesn't support it.
+        // theory can be set to prevent resetting the core from clearing local memory, but the hardware doesn't support it.
         "li   t0, " STRINGIFY(MEM_LOCAL_BASE) "\n\t"   // src
         "li   t1, " STRINGIFY(MEM_ERISC_L1_TEMP_STORAGE) "\n\t"   // dst (256 KiB)
         "li   t2, 2048\n\t"         // 8 KiB / 4B = 2048 words
