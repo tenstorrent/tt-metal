@@ -292,8 +292,6 @@ class TransfuserBackbone(nn.Module):
         lidar_features = self.lidar_encoder._model.bn1(lidar_features)
         lidar_features = self.lidar_encoder._model.act1(lidar_features)
         lidar_features = self.lidar_encoder._model.maxpool(lidar_features)
-        # print(self.image_encoder.features.layer1)
-        # print(self.image_encoder.features.layer1)
         image_features = self.image_encoder.features.layer1(image_features)
         lidar_features = self.lidar_encoder._model.layer1(lidar_features)
 
@@ -338,9 +336,6 @@ class TransfuserBackbone(nn.Module):
         )
         image_features = image_features + image_features_layer2
         lidar_features = lidar_features + lidar_features_layer2
-        # print(f"{self.image_encoder.features.layer3=}")
-        # print("............................................")
-        # print(f"{self.lidar_encoder._model.layer3=}")
 
         image_features = self.image_encoder.features.layer3(image_features)
         lidar_features = self.lidar_encoder._model.layer3(lidar_features)
@@ -384,7 +379,6 @@ class TransfuserBackbone(nn.Module):
         )
         image_features = image_features + image_features_layer4
         lidar_features = lidar_features + lidar_features_layer4
-        # return image_features, lidar_features
 
         # Downsamples channels to 512
         image_features = self.change_channel_conv_image(image_features)
@@ -398,7 +392,6 @@ class TransfuserBackbone(nn.Module):
         lidar_features = self.lidar_encoder._model.global_pool(lidar_features)
         lidar_features = torch.flatten(lidar_features, 1)
 
-        # return image_features, lidar_features
         fused_features = image_features + lidar_features
         features = self.top_down(x4)
         return features, image_features_grid, fused_features

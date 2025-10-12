@@ -245,61 +245,6 @@ class TtTransfuserBackbone:
             bev_upsample_factor=config.bev_upsample_factor,
         )
 
-    # def _make_layer(
-    #     self,
-    #     parameters,
-    #     planes: int,
-    #     blocks: int,
-    #     stride: int,
-    #     groups: int = 1,
-    #     model_config=None,
-    #     stage_name=None,
-    # ) -> List[TTRegNetBottleneck]:
-    #     layers = []
-
-    #     # Determine shard layout based on stage name
-    #     if stage_name == "layer1":
-    #         shard_layout = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-    #     elif stage_name == "layer2":
-    #         shard_layout = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-    #     elif stage_name == "layer3":
-    #         shard_layout = ttnn.TensorMemoryLayout.WIDTH_SHARDED
-    #     elif stage_name == "layer4":
-    #         shard_layout = ttnn.TensorMemoryLayout.WIDTH_SHARDED
-    #     else:
-    #         # Default to HEIGHT_SHARDED for backward compatibility
-    #         shard_layout = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-
-    #     # First block (may have downsample)
-    #     downsample = stride != 1 or self.inplanes != planes
-    #     layers.append(
-    #         TTRegNetBottleneck(
-    #             parameters=parameters["b1"],
-    #             model_config=model_config,
-    #             stride=stride,
-    #             downsample=downsample,
-    #             groups=groups,
-    #             shard_layout=shard_layout,
-    #         )
-    #     )
-    #     self.inplanes = planes
-
-    #     # Remaining blocks
-    #     for block_num in range(1, blocks):
-    #         block_name = f"b{block_num + 1}"
-    #         layers.append(
-    #             TTRegNetBottleneck(
-    #                 parameters=parameters[block_name],
-    #                 model_config=model_config,
-    #                 stride=1,
-    #                 downsample=False,
-    #                 groups=groups,
-    #                 shard_layout=shard_layout,
-    #             )
-    #         )
-
-    #     return layers
-
     def _make_layer(
         self,
         parameters,
@@ -427,18 +372,12 @@ class TtTransfuserBackbone:
         logger.info(f"image_encoder_conv1")
         image_x = self.normalize_imagenet_ttnn(image_x)
         image_out, image_shape = self.conv1(device, image_x, image_x.shape)
-        # Reshape to spatial dimensions: 80 * 352 = 28160
-        # out = ttnn.reshape(out, (1, 80, 352, 32))
-        # out = ttnn.permute(out, (0, 3, 1, 2))
+
         logger.info(f"lidar_encoder_conv1")
         # Process lidar input
         lidar_out, lidar_shape = self.lidar_conv1(device, lidar_x, lidar_x.shape)
-        print("..........................................")
-        print(lidar_shape)
-        print(image_shape)
 
         logger.info(f"image_encoder_layer1")
-        # image_out = ttnn.reshape(image_out, (1, 80, 352, 32))
         image_out = ttnn.reshape(image_out, image_shape)
         # Process layer1 blocks
         for block in self.image_layer1:
@@ -446,16 +385,13 @@ class TtTransfuserBackbone:
 
         logger.info(f"lidar_encoder_layer1")
         lidar_out = ttnn.reshape(lidar_out, lidar_shape)
-        # lidar_out = ttnn.reshape(lidar_out, (1, 128, 128, 32))
         for block in self.lidar_layer1:
             lidar_out = block(lidar_out, device)
 
         logger.info(f"img_avgpool")
-
         image_h = image_out.shape[1]
         image_w = image_out.shape[2]
         image_c = image_out.shape[3]
-
         image_features_flat = ttnn.reshape(image_out, (1, 1, image_out.shape[0] * image_h * image_w, image_c))
         image_embd_layer1 = ttnn.adaptive_avg_pool2d(
             input_tensor=image_features_flat,
@@ -465,13 +401,12 @@ class TtTransfuserBackbone:
             channels=image_c,
             output_size=[self.config.img_vert_anchors, self.config.img_horz_anchors],
         )
+
         logger.info(f"lidar_avgpool")
         lidar_h = lidar_out.shape[1]
         lidar_w = lidar_out.shape[2]
         lidar_c = lidar_out.shape[3]
-
         lidar_features_flat = ttnn.reshape(lidar_out, (1, 1, lidar_out.shape[0] * lidar_h * lidar_w, lidar_c))
-
         lidar_embd_layer1 = ttnn.adaptive_avg_pool2d(
             input_tensor=lidar_features_flat,
             batch_size=lidar_out.shape[0],
@@ -480,8 +415,8 @@ class TtTransfuserBackbone:
             channels=lidar_c,
             output_size=[self.config.lidar_vert_anchors, self.config.lidar_horz_anchors],
         )
-        logger.info(f"Layer1 transformer")
 
+        logger.info(f"Layer1 transformer")
         image_embd_layer1 = ttnn.sharded_to_interleaved(image_embd_layer1, memory_config=ttnn.L1_MEMORY_CONFIG)
         lidar_embd_layer1 = ttnn.sharded_to_interleaved(lidar_embd_layer1, memory_config=ttnn.L1_MEMORY_CONFIG)
 
@@ -523,6 +458,7 @@ class TtTransfuserBackbone:
         logger.info(f"image_encoder_layer2")
         for block in self.image_layer2:
             image_features = block(image_features, device)
+
         logger.info(f"lidar_encoder_layer2")
         for block in self.lidar_layer2:
             lidar_features = block(lidar_features, device)
@@ -531,7 +467,6 @@ class TtTransfuserBackbone:
         image_h = image_features.shape[1]
         image_w = image_features.shape[2]
         image_c = image_features.shape[3]
-
         image_features_flat = ttnn.reshape(image_features, (1, 1, image_features.shape[0] * image_h * image_w, image_c))
         image_embd_layer2 = ttnn.adaptive_avg_pool2d(
             input_tensor=image_features_flat,
@@ -541,6 +476,7 @@ class TtTransfuserBackbone:
             channels=image_c,
             output_size=[self.config.img_vert_anchors, self.config.img_horz_anchors],
         )
+
         logger.info(f"lidar2_avgpool")
         lidar_h = lidar_features.shape[1]
         lidar_w = lidar_features.shape[2]
@@ -556,10 +492,8 @@ class TtTransfuserBackbone:
         )
 
         logger.info(f"layer2 transformer")
-
         image_embd_layer2 = ttnn.sharded_to_interleaved(image_embd_layer2, memory_config=ttnn.L1_MEMORY_CONFIG)
         lidar_embd_layer2 = ttnn.sharded_to_interleaved(lidar_embd_layer2, memory_config=ttnn.L1_MEMORY_CONFIG)
-
         image_features_layer2, lidar_features_layer2 = self.transformer2(
             image_embd_layer2, lidar_embd_layer2, velocity, 216
         )
@@ -614,6 +548,7 @@ class TtTransfuserBackbone:
             channels=image_c,
             output_size=[self.config.img_vert_anchors, self.config.img_horz_anchors],
         )
+
         logger.info(f"lidar3_avgpool")
         lidar_h = lidar_features.shape[1]
         lidar_w = lidar_features.shape[2]
@@ -629,7 +564,6 @@ class TtTransfuserBackbone:
         )
 
         logger.info(f"layer3 transformer")
-
         image_embd_layer3 = ttnn.sharded_to_interleaved(image_embd_layer3, memory_config=ttnn.L1_MEMORY_CONFIG)
         lidar_embd_layer3 = ttnn.sharded_to_interleaved(lidar_embd_layer3, memory_config=ttnn.L1_MEMORY_CONFIG)
 
@@ -681,6 +615,7 @@ class TtTransfuserBackbone:
             channels=image_c,
             output_size=[self.config.img_vert_anchors, self.config.img_horz_anchors],
         )
+
         logger.info(f"lidar4_avgpool")
         lidar_h = lidar_features.shape[1]
         lidar_w = lidar_features.shape[2]
@@ -695,16 +630,13 @@ class TtTransfuserBackbone:
             output_size=[self.config.lidar_vert_anchors, self.config.lidar_horz_anchors],
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-
         image_embd_layer4 = ttnn.sharded_to_interleaved(image_embd_layer4, memory_config=ttnn.L1_MEMORY_CONFIG)
         lidar_embd_layer4 = ttnn.sharded_to_interleaved(lidar_embd_layer4, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         logger.info(f"layer4 transformer")
-
         image_features_layer4, lidar_features_layer4 = self.transformer4(
             image_embd_layer4, lidar_embd_layer4, velocity, 1512
         )
-
         image_features_layer4 = ttnn.permute(image_features_layer4, (0, 2, 3, 1))
         lidar_features_layer4 = ttnn.permute(lidar_features_layer4, (0, 2, 3, 1))
 
@@ -735,11 +667,13 @@ class TtTransfuserBackbone:
 
         logger.info("Downsamples channels to 512")
         # Downsamples channels to 512
-        image_features, _ = self.change_channel_conv_image(device, image_features, image_features.shape)
-        lidar_features, _ = self.change_channel_conv_lidar(device, lidar_features, lidar_features.shape)
-
+        image_features, shape_ = self.change_channel_conv_image(device, image_features, image_features.shape)
+        lidar_features, shape_l = self.change_channel_conv_lidar(device, lidar_features, lidar_features.shape)
         x4 = lidar_features  # Save for FPN
         image_features_grid = image_features  # For auxiliary information
+        # Reshape before feeding to FPN
+        image_features_grid = ttnn.reshape(image_features_grid, shape_)
+        x4 = ttnn.reshape(x4, shape_l)
 
         logger.info("Global average pooling")
         # Global average pooling
@@ -748,15 +682,11 @@ class TtTransfuserBackbone:
 
         logger.info("Flatten")
         # Flatten
-        # image_features = ttnn.reshape(image_features, (1, 1, 1, self.config.perception_output_features))
-        # lidar_features = ttnn.reshape(lidar_features, (1, 1, 1, self.config.perception_output_features))
         image_features = ttnn.reshape(image_features, (1, self.config.perception_output_features))
         lidar_features = ttnn.reshape(lidar_features, (1, self.config.perception_output_features))
-        logger.info("fused_features")
 
-        print(f"{image_features.shape,lidar_features.shape=}")
+        logger.info("fused_features")
         fused_features = ttnn.add(image_features, lidar_features)
-        print(f"{fused_features.shape,image_features_grid.shape=}")
 
         logger.info("FPN top-down")
         p2, p3, p4, p5 = self.top_down(x4)

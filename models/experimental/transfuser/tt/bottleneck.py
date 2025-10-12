@@ -155,13 +155,10 @@ class TTRegNetBottleneck:
     def __call__(self, x, device):
         identity = x
         logger.info(f"conv1- 1x1 convolution")
-        logger.info(f"x.shape{x.shape =}")
         # conv1: 1x1 expansion
-        # import pdb; pdb.set_trace()
         out, shape_ = self.conv1(device, x, x.shape)
 
         logger.info(f"conv2- 3x3 grouped convolution")
-        logger.info(f"x.shape{out.shape,shape_ =}")
         # conv2: 3x3 grouped convolution
         out, shape_ = self.conv2(device, out, shape_)
 
@@ -170,8 +167,6 @@ class TTRegNetBottleneck:
         logger.info(f"reduce mean")
         # Global average pooling
         out = ttnn.reshape(out, shape_)
-        print("""""" """""" """""" "")
-        print(out.shape)
         se_out = ttnn.mean(out, dim=[1, 2], keepdim=True)
         shape_ = se_out.shape
 
@@ -181,33 +176,21 @@ class TTRegNetBottleneck:
         logger.info(f"SE fc2")
         se_out, shape_ = self.se_fc2(device, se_out, shape_)
         se_out = ttnn.sigmoid(se_out)
-        print("""""" """""" """""" "")
-        print(shape_)
-        print(se_out.shape)
-
         # Apply SE scaling
         out = ttnn.multiply(out, se_out)
         shape_ = out.shape
 
         # conv3: 1x1 projection
         out, shape_ = self.conv3(device, out, shape_)
-        logger.info(f"after conv 1x1{out.shape =}")
         out = ttnn.reshape(out, shape_)
-        logger.info(f"reshape shape{out.shape =}")
+
         # Handle downsample
         if self.downsample_layer is not None:
-            logger.info(f"downsample")
-            logger.info(f"identity shape{identity.shape =}")
-            logger.info(f" shape{shape_ =}")
             identity, _ = self.downsample_layer(device, identity, identity.shape)
             identity = ttnn.reshape(identity, shape_)
 
         logger.info(f"Add")
-        logger.info(f"Add in l shape{out.shape =}")
-        logger.info(f"Add in r shape{identity.shape =}")
         out = ttnn.add(out, identity)
-        logger.info(f"Add out shape{out.shape =}")
-        # out = ttnn.reshape(out, shape_)
-        out = ttnn.relu(out)  # Final ReLU activation
+        out = ttnn.relu(out)
 
         return out

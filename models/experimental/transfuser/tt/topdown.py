@@ -52,10 +52,8 @@ class TtTopDown:
     def __call__(self, x):
         # Input should be in NHWC format, flatten for conv2d
         batch_size, input_height, input_width, input_channels = x.shape
-
         # Flatten input for conv2d: (B, H, W, C) -> (1, 1, B*H*W, C)
         x_flat = ttnn.reshape(x, (1, 1, batch_size * input_height * input_width, input_channels))
-
         # Lateral conv: 512 -> 64 channels (c5_conv)
         p5_flat = ttnn.conv2d(
             input_tensor=x_flat,
@@ -72,7 +70,6 @@ class TtTopDown:
             padding=(0, 0),
         )
         p5_flat = ttnn.relu(p5_flat)
-
         # Reshape back to 4D for upsampling with explicit interleaved memory config
         p5 = ttnn.reshape(
             p5_flat,
@@ -83,15 +80,12 @@ class TtTopDown:
         # CRITICAL: Ensure ROW_MAJOR_LAYOUT before upsampling
         if p5.layout == ttnn.TILE_LAYOUT:
             p5 = ttnn.to_layout(p5, ttnn.ROW_MAJOR_LAYOUT)
-
         # First upsample stage
         p5_upsampled = ttnn.upsample(p5, (self.bev_upsample_factor, self.bev_upsample_factor), mode="bilinear")
         up_height = input_height * self.bev_upsample_factor
         up_width = input_width * self.bev_upsample_factor
-
         # Flatten for conv2d
         p5_up_flat = ttnn.reshape(p5_upsampled, (1, 1, batch_size * up_height * up_width, self.bev_features_channels))
-
         p4_flat = ttnn.conv2d(
             input_tensor=p5_up_flat,
             weight_tensor=self.up_conv5_weight,
@@ -119,15 +113,12 @@ class TtTopDown:
         # Ensure ROW_MAJOR_LAYOUT before upsampling
         if p4.layout == ttnn.TILE_LAYOUT:
             p4 = ttnn.to_layout(p4, ttnn.ROW_MAJOR_LAYOUT)
-
         # Second upsample stage
         p4_upsampled = ttnn.upsample(p4, (self.bev_upsample_factor, self.bev_upsample_factor), mode="bilinear")
         up_height2 = up_height * self.bev_upsample_factor
         up_width2 = up_width * self.bev_upsample_factor
-
         # Flatten for conv2d
         p4_up_flat = ttnn.reshape(p4_upsampled, (1, 1, batch_size * up_height2 * up_width2, self.bev_features_channels))
-
         p3_flat = ttnn.conv2d(
             input_tensor=p4_up_flat,
             weight_tensor=self.up_conv4_weight,
@@ -143,7 +134,6 @@ class TtTopDown:
             padding=(0, 0),
         )
         p3_flat = ttnn.relu(p3_flat)
-
         # Reshape back to 4D for upsampling with explicit interleaved memory config
         p3 = ttnn.reshape(
             p3_flat,
@@ -159,10 +149,8 @@ class TtTopDown:
         p3_upsampled = ttnn.upsample(p3, (self.bev_upsample_factor, self.bev_upsample_factor), mode="bilinear")
         up_height3 = up_height2 * self.bev_upsample_factor
         up_width3 = up_width2 * self.bev_upsample_factor
-
         # Flatten for conv2d
         p3_up_flat = ttnn.reshape(p3_upsampled, (1, 1, batch_size * up_height3 * up_width3, self.bev_features_channels))
-
         p2_flat = ttnn.conv2d(
             input_tensor=p3_up_flat,
             weight_tensor=self.up_conv3_weight,

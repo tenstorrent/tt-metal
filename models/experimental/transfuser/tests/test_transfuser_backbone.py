@@ -173,13 +173,6 @@ class TransfuserBackboneInfra:
                 mesh_composer=self.output_mesh_composer,
             )
 
-            # Get expected shape from PyTorch reference
-            expected_shape = self.torch_features[i].shape  # [B, C, H, W] in NCHW
-            B, C, H, W = expected_shape
-
-            # Reshape from flat to NHWC: [B, H, W, C]
-            tt_feat = tt_feat.reshape(B, H, W, C)
-
             # Permute NHWC -> NCHW
             tt_feat = tt_feat.permute(0, 3, 1, 2)
             tt_features_torch.append(tt_feat)
@@ -190,10 +183,6 @@ class TransfuserBackboneInfra:
             device=self.device,
             mesh_composer=self.output_mesh_composer,
         )
-        # Get expected shape and reshape
-        expected_grid_shape = self.torch_image_grid.shape  # [B, C, H, W]
-        B, C, H, W = expected_grid_shape
-        tt_image_grid_torch = tt_image_grid_torch.reshape(B, H, W, C)
         tt_image_grid_torch = tt_image_grid_torch.permute(0, 3, 1, 2)
 
         # Validate output_fused_tensor
