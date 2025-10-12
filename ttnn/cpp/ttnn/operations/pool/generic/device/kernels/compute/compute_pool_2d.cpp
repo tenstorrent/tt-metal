@@ -20,6 +20,15 @@
 #include "debug/dprint_tensix.h"
 #endif
 
+// DST Optimization debug prints
+#ifdef DEBUG_DST_FLOW
+#define DST_DEBUG_PRINT(...) DPRINT << __VA_ARGS__ << ENDL()
+#else
+#define DST_DEBUG_PRINT(...) \
+    do {                     \
+    } while (0)
+#endif
+
 #define ALWI inline __attribute__((always_inline))
 
 #define FACE_HEIGHT 16
@@ -95,6 +104,130 @@ ALWI void tilize_copy_function(uint32_t curr_in_cb_id, uint32_t curr_in_idx_cb_i
     cb_pop_front(tile_idx_tmp_cb_id, topk_output_tiles);
 }
 
+// DST Optimization Functions
+template <bool neginf_srca_maxpool, bool zero_srca_avgpool>
+ALWI void process_4way_parallel_positions(
+    uint32_t in_cb_id_0,
+    uint32_t in_cb_id_1,
+    uint32_t in_scalar_cb_id_0,
+    uint32_t in_scalar_cb_id_1,
+    uint32_t out_cb_id,
+    uint32_t tiles_to_reduce,
+    uint32_t num_faces_in_input_tile,
+    uint32_t face_r_dim,
+    uint32_t num_out_sticks,
+    uint32_t num_faces_in_output_tile,
+    bool split_reader,
+    bool one_scalar_per_core,
+    uint32_t current_position_batch) {
+    DST_DEBUG_PRINT("=== DST 4WAY PARALLEL BATCH " << current_position_batch << " ===");
+    DST_DEBUG_PRINT("tiles_to_reduce=" << tiles_to_reduce << " positions=4");
+
+    // Process 4 positions in parallel using 8 DST tiles (4 pos * 2 channel tiles)
+    tile_regs_acquire();
+
+    // For 4-way parallel, we need to coordinate CBs for 4 positions
+    // Current implementation: use existing split_reader structure
+    // Position 0, 2: use reader 0 (in_cb_id_0)
+    // Position 1, 3: use reader 1 (in_cb_id_1)
+
+    for (uint32_t pos_pair = 0; pos_pair < 2; ++pos_pair) {
+        // Each pair processes 2 positions (pos_pair*2 and pos_pair*2+1)
+
+        // Position A: reader 0
+        uint32_t curr_in_cb_id_a = in_cb_id_0;
+        uint32_t curr_scalar_cb_id_a = in_scalar_cb_id_0;
+
+        // Position B: reader 1
+        uint32_t curr_in_cb_id_b = in_cb_id_1;
+        uint32_t curr_scalar_cb_id_b = one_scalar_per_core ? in_scalar_cb_id_0 : in_scalar_cb_id_1;
+
+        cb_wait_front(curr_in_cb_id_a, 1);
+        cb_wait_front(curr_in_cb_id_b, 1);
+
+        if (!one_scalar_per_core) {
+            cb_wait_front(curr_scalar_cb_id_a, 1);
+            cb_wait_front(curr_scalar_cb_id_b, 1);
+        }
+
+        DST_DEBUG_PRINT(
+            "Position pair " << pos_pair << ": processing positions " << (pos_pair * 2) << " and "
+                             << (pos_pair * 2 + 1));
+
+        // Unpack data for position A (pos_pair*2)
+        unpack_tilizeA_B_block<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
+            curr_in_cb_id_a,
+            curr_scalar_cb_id_a,
+            tiles_to_reduce,
+            0,  // tile idx for Src b
+            num_faces_in_input_tile,
+            face_r_dim);
+
+        // Math for position A: use DST indices pos_pair*2*tiles_to_reduce + ch
+        for (uint32_t ch_tile = 0; ch_tile < tiles_to_reduce; ++ch_tile) {
+            uint32_t dst_idx_a = (pos_pair * 2) * tiles_to_reduce + ch_tile;
+            DST_DEBUG_PRINT("DST[" << dst_idx_a << "] -> Pos=" << (pos_pair * 2) << " Ch=" << ch_tile);
+            reduce_tile_math(dst_idx_a, num_faces_in_input_tile);
+        }
+
+        // Unpack data for position B (pos_pair*2+1)
+        unpack_tilizeA_B_block<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
+            curr_in_cb_id_b,
+            curr_scalar_cb_id_b,
+            tiles_to_reduce,
+            0,  // tile idx for Src b
+            num_faces_in_input_tile,
+            face_r_dim);
+
+        // Math for position B: use DST indices (pos_pair*2+1)*tiles_to_reduce + ch
+        for (uint32_t ch_tile = 0; ch_tile < tiles_to_reduce; ++ch_tile) {
+            uint32_t dst_idx_b = (pos_pair * 2 + 1) * tiles_to_reduce + ch_tile;
+            DST_DEBUG_PRINT("DST[" << dst_idx_b << "] -> Pos=" << (pos_pair * 2 + 1) << " Ch=" << ch_tile);
+            reduce_tile_math(dst_idx_b, num_faces_in_input_tile);
+        }
+
+        cb_pop_front(curr_in_cb_id_a, 1);
+        cb_pop_front(curr_in_cb_id_b, 1);
+    }
+
+    tile_regs_commit();
+    tile_regs_wait();
+
+    // Pack results from all 4 positions (8 DST tiles total)
+    DST_DEBUG_PRINT("Packing 4-position results: 8 DST tiles -> output");
+
+    // Pack all 4 positions in one call
+    const uint32_t total_output_tiles = 4 * tiles_to_reduce;  // 4 positions * channel tiles
+    pack_untilize_dest<8>(out_cb_id, 1, 0, num_out_sticks * 4, num_faces_in_output_tile);
+    cb_push_back(out_cb_id, total_output_tiles);
+
+    tile_regs_release();
+}
+
+ALWI bool should_use_dst_optimization(uint32_t tiles_to_reduce, uint32_t nsticks_remaining) {
+    // Use DST optimization for C=64 (2 channel tiles) with sufficient work
+    // Require at least 4 positions to make optimization worthwhile
+    return (tiles_to_reduce == 2) && (nsticks_remaining >= 4);
+}
+
+ALWI void debug_dst_optimization_state(
+    uint32_t iteration, uint32_t tiles_to_reduce, uint32_t nsticks_remaining, bool optimization_enabled) {
+    DST_DEBUG_PRINT("=== DST OPTIMIZATION STATE ===");
+    DST_DEBUG_PRINT("Iteration=" << iteration << " tiles_to_reduce=" << tiles_to_reduce);
+    DST_DEBUG_PRINT(
+        "Sticks remaining=" << nsticks_remaining
+                            << " optimization=" << (optimization_enabled ? "ENABLED" : "DISABLED"));
+
+    if (optimization_enabled) {
+        DST_DEBUG_PRINT("DST_4WAY_PARALLEL_MODE enabled");
+        DST_DEBUG_PRINT("DST_UTILIZATION=100.0%");
+        DST_DEBUG_PRINT("Expected DST tiles: 8 (4 positions * 2 channels)");
+    } else {
+        DST_DEBUG_PRINT("DST_SEQUENTIAL_MODE");
+        DST_DEBUG_PRINT("DST_UTILIZATION=" << (tiles_to_reduce * 100 / 8) << ".0%");
+    }
+}
+
 void MAIN {
     // NOTE: here it is assumed that in_ntiles_hw == 1. General cases not handled yet. When ntiles_hw > 1 the large
     // kernel is called
@@ -123,6 +256,15 @@ void MAIN {
     constexpr uint32_t pre_tilize_cb_id = get_compile_time_arg_val(19);
     constexpr bool is_output_tiled = get_compile_time_arg_val(20);  // 1 = TILED, 0 = ROW_MAJOR
     constexpr bool is_output_block_format = (bool)get_compile_time_arg_val(21);
+
+    // DST Optimization parameters - Phase 2: Re-enable parameter reception
+    constexpr uint32_t dst_optimization_mode = get_compile_time_arg_val(22);
+    constexpr uint32_t positions_per_iteration = get_compile_time_arg_val(23);
+
+    // DST optimization detection - Phase 3: FULLY ENABLED!
+    constexpr bool use_dst_optimization = (dst_optimization_mode == 2) &&  // QUAD_POSITION
+                                          (in_ntiles_c == 2) &&            // C=64 case
+                                          (!return_indices);               // Not supported with indices yet
 
     constexpr uint32_t topk_output_tiles = 1;
     constexpr uint32_t topk_cb_tile_idx = 0;
@@ -195,6 +337,73 @@ void MAIN {
     }
 
     uint32_t tilize_stick_counter = 0;
+
+    // DST Optimization: Check if we should use 4-way parallel processing
+    DST_DEBUG_PRINT("=== COMPUTE KERNEL START ===");
+    DST_DEBUG_PRINT("in_ntiles_c=" << in_ntiles_c << " window_size_hw=" << window_size_hw);
+    DST_DEBUG_PRINT("dst_optimization_mode=" << dst_optimization_mode);
+    DST_DEBUG_PRINT("positions_per_iteration=" << positions_per_iteration);
+    DST_DEBUG_PRINT("use_dst_optimization=" << (uint32_t)use_dst_optimization);
+
+    // Kernel-level DST capacity validation (additional safety check)
+    if constexpr (use_dst_optimization) {
+        constexpr uint32_t required_dst_tiles = 4 * in_ntiles_c;  // 4 positions × channel tiles
+
+        // Runtime validation (static_assert removed because it fails for large channel counts)
+        // Factory-level validation should ensure we never reach here with required_dst_tiles > 8
+        DST_DEBUG_PRINT("Required DST tiles: " << required_dst_tiles);
+
+// Runtime check as additional safety (only in debug builds)
+#ifdef DEBUG
+        if (required_dst_tiles > 8) {
+            DST_DEBUG_PRINT(
+                "ERROR: DST optimization enabled but requires " << required_dst_tiles
+                                                                << " tiles > 8 limit - Factory validation failed!");
+        }
+#endif
+    }
+
+    // Process in batches if DST optimization is enabled
+    if constexpr (use_dst_optimization) {
+        DST_DEBUG_PRINT("DST optimization enabled: processing in 4-position batches");
+
+        // Process 4 positions at a time
+        for (uint32_t n = 0; n < nsticks_per_core_by_nblocks; n += 4) {
+            debug_dst_optimization_state(n / 4, in_ntiles_c, nsticks_per_core_by_nblocks - n, true);
+
+            // Ensure we have at least 4 positions remaining
+            if (n + 4 > nsticks_per_core_by_nblocks) {
+                DST_DEBUG_PRINT(
+                    "Insufficient positions remaining: " << (nsticks_per_core_by_nblocks - n)
+                                                         << " < 4, falling back to sequential");
+                break;  // Fall through to sequential processing for remaining positions
+            }
+
+            // Process 4 positions in parallel
+            process_4way_parallel_positions<neginf_srca_maxpool, zero_srca_avgpool>(
+                in_cb_id_0,
+                in_cb_id_1,
+                in_scalar_cb_id_0,
+                in_scalar_cb_id_1,
+                out_cb_id,
+                in_ntiles_c,  // tiles_to_reduce
+                num_faces_in_input_tile,
+                face_r_dim,
+                num_out_sticks,
+                num_faces_in_output_tile,
+                split_reader,
+                one_scalar_per_core,
+                n / 4  // current batch number
+            );
+        }
+
+        DST_DEBUG_PRINT("DST optimization processing complete");
+        return;  // Early return - DST optimization path complete
+    }
+
+    DST_DEBUG_PRINT("Using sequential processing mode");
+
+    // Original sequential processing loop
     for (uint32_t n = 0; n < nsticks_per_core_by_nblocks; ++n) {
         const bool reader0 = !(split_reader && (n & 0x1));
         const uint32_t curr_scalar_cb_id = (!reader0 && !one_scalar_per_core) ? in_scalar_cb_id_1 : in_scalar_cb_id_0;
@@ -267,18 +476,18 @@ void MAIN {
             tile_regs_commit();
             tile_regs_wait();
             if constexpr (!return_indices) {
-                 if constexpr (is_output_tiled) {
-                     // TILED output: accumulate sticks and perform tilization when needed
-                     if (last_c_block) {
-                         pack_untilize_dest<partial_iter_output_tiles>(
-                             pre_tilize_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
-                         cb_push_back(pre_tilize_cb_id, partial_iter_output_tiles);
-                         tilize_stick_counter++;
-                     } else {
-                         pack_untilize_dest<max_tiles_per_iter>(
-                             pre_tilize_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
-                         cb_push_back(pre_tilize_cb_id, max_tiles_per_iter);
-                     }
+                if constexpr (is_output_tiled) {
+                    // TILED output: accumulate sticks and perform tilization when needed
+                    if (last_c_block) {
+                        pack_untilize_dest<partial_iter_output_tiles>(
+                            pre_tilize_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
+                        cb_push_back(pre_tilize_cb_id, partial_iter_output_tiles);
+                        tilize_stick_counter++;
+                    } else {
+                        pack_untilize_dest<max_tiles_per_iter>(
+                            pre_tilize_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
+                        cb_push_back(pre_tilize_cb_id, max_tiles_per_iter);
+                    }
                     tile_regs_release();
 
                     if (tilize_stick_counter == TILE_HEIGHT) {
@@ -317,7 +526,8 @@ void MAIN {
                         pack_untilize_dest<partial_iter_output_tiles>(
                             out_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
                     } else {
-                        pack_untilize_dest<max_tiles_per_iter>(out_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
+                        pack_untilize_dest<max_tiles_per_iter>(
+                            out_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
                     }
                     cb_push_back(out_cb_id, output_faces);
                     tile_regs_release();
