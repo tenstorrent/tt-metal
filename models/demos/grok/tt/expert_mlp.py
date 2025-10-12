@@ -194,7 +194,7 @@ class ExpertMLP(LightweightModule):
             w1_out = ttnn.linear(
                 x,
                 self.w1[:, selected_expert_idx, :, :],
-                dtype=ttnn.bfloat8_b,  # TG=True
+                dtype=ttnn.bfloat4_b,  # TG=True
                 core_grid=None,
                 compute_kernel_config=li_ff1_3_compute_kernel_cfg,
                 program_config=pc_1,
@@ -204,7 +204,7 @@ class ExpertMLP(LightweightModule):
             w3_out = ttnn.linear(
                 x,
                 self.w3[:, selected_expert_idx, :, :],
-                dtype=ttnn.bfloat8_b,
+                dtype=ttnn.bfloat4_b,
                 core_grid=None,
                 compute_kernel_config=li_ff1_3_compute_kernel_cfg,
                 program_config=pc_3,

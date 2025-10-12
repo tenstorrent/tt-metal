@@ -173,7 +173,6 @@ class Decoder(LightweightModule):
         attn_out = self.attention.forward(hidden_states, current_pos, rot_mats, page_table=page_table)
 
         # Post-attn norm
-        # attn_out = ttnn.typecast(attn_out, ttnn.bfloat16)
         attn_out = self.post_attn_norm(attn_out, mode="decode")
 
         # Residual connection
