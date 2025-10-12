@@ -13,12 +13,12 @@ namespace tt::tt_metal {
 namespace distributed {
 class MeshDevice;
 class MeshWorkloadImpl;
-}
+}  // namespace distributed
 
 namespace inspector {
 class Data;
 class RpcServer;  // NOLINT(cppcoreguidelines-virtual-class-destructor)
-}
+}  // namespace inspector
 
 class Inspector {
 public:
@@ -27,55 +27,37 @@ public:
     static std::unique_ptr<inspector::Data> initialize();
     static void serialize_rpc();
 
-    static void program_created(
-        const detail::ProgramImpl* program) noexcept;
-    static void program_destroyed(
-        const detail::ProgramImpl* program) noexcept;
+    static void program_created(const detail::ProgramImpl* program) noexcept;
+    static void program_destroyed(const detail::ProgramImpl* program) noexcept;
     static void program_set_binary_status(
-        const detail::ProgramImpl* program,
-        std::size_t device_id,
-        ProgramBinaryStatus status) noexcept;
+        const detail::ProgramImpl* program, std::size_t device_id, ProgramBinaryStatus status) noexcept;
     static void program_compile_started(
-        const detail::ProgramImpl* program,
-        const IDevice* device,
-        uint32_t build_key) noexcept;
+        const detail::ProgramImpl* program, const IDevice* device, uint32_t build_key) noexcept;
     static void program_compile_already_exists(
-        const detail::ProgramImpl* program,
-        const IDevice* device,
-        uint32_t build_key) noexcept;
+        const detail::ProgramImpl* program, const IDevice* device, uint32_t build_key) noexcept;
     static void program_kernel_compile_finished(
         const detail::ProgramImpl* program,
         const IDevice* device,
         const std::shared_ptr<Kernel>& kernel,
         const tt::tt_metal::JitBuildOptions& build_options) noexcept;
     static void program_compile_finished(
-        const detail::ProgramImpl* program,
-        const IDevice* device,
-        uint32_t build_key) noexcept;
+        const detail::ProgramImpl* program, const IDevice* device, uint32_t build_key) noexcept;
 
     static void mesh_device_created(
-        const distributed::MeshDevice* mesh_device,
-        std::optional<int> parent_mesh_id) noexcept;
-    static void mesh_device_destroyed(
-        const distributed::MeshDevice* mesh_device) noexcept;
-    static void mesh_device_initialized(
-        const distributed::MeshDevice* mesh_device) noexcept;
+        const distributed::MeshDevice* mesh_device, std::optional<int> parent_mesh_id) noexcept;
+    static void mesh_device_destroyed(const distributed::MeshDevice* mesh_device) noexcept;
+    static void mesh_device_initialized(const distributed::MeshDevice* mesh_device) noexcept;
 
-    static void mesh_workload_created(
-        const distributed::MeshWorkloadImpl* mesh_workload) noexcept;
-    static void mesh_workload_destroyed(
-        const distributed::MeshWorkloadImpl* mesh_workload) noexcept;
+    static void mesh_workload_created(const distributed::MeshWorkloadImpl* mesh_workload) noexcept;
+    static void mesh_workload_destroyed(const distributed::MeshWorkloadImpl* mesh_workload) noexcept;
     static void mesh_workload_add_program(
         const distributed::MeshWorkloadImpl* mesh_workload,
         const distributed::MeshCoordinateRange& device_range,
         std::size_t program_id) noexcept;
     static void mesh_workload_set_program_binary_status(
-        const distributed::MeshWorkloadImpl* mesh_workload,
-        std::size_t mesh_id,
-        ProgramBinaryStatus status) noexcept;
+        const distributed::MeshWorkloadImpl* mesh_workload, std::size_t mesh_id, ProgramBinaryStatus status) noexcept;
 
     static inspector::RpcServer& get_rpc_server();
-
 };
 
 }  // namespace tt::tt_metal
