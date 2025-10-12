@@ -674,7 +674,6 @@ class TtTransfuserBackbone:
         image_features_layer4, lidar_features_layer4 = self.transformer4(
             image_embd_layer4, lidar_embd_layer4, velocity, 1512
         )
-        return image_features_layer4, lidar_features_layer4
 
         image_features_layer4 = ttnn.permute(image_features_layer4, (0, 2, 3, 1))
         lidar_features_layer4 = ttnn.permute(lidar_features_layer4, (0, 2, 3, 1))
@@ -685,7 +684,7 @@ class TtTransfuserBackbone:
         image_features_layer4 = ttnn.to_memory_config(image_features_layer4, ttnn.DRAM_MEMORY_CONFIG)
         image_features_layer4 = ttnn.pad(image_features_layer4, padding=((0, 0), (0, 0), (0, 0), (0, 24)), value=0.0)
         image_features_layer4 = ttnn.upsample(
-            image_features_layer4, scale_factor=(2, 2), mode="bilinear", memory_config=ttnn.DRAM_MEMORY_CONFIG
+            image_features_layer4, scale_factor=(1, 1), mode="bilinear", memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
         image_features_layer4 = ttnn.slice(image_features_layer4, [0, 0, 0, 0], [1, 5, 22, 1512])
         image_features_layer4 = ttnn.to_layout(image_features_layer4, ttnn.TILE_LAYOUT)
@@ -695,7 +694,7 @@ class TtTransfuserBackbone:
         lidar_features_layer4 = ttnn.to_memory_config(lidar_features_layer4, ttnn.DRAM_MEMORY_CONFIG)
         lidar_features_layer4 = ttnn.pad(lidar_features_layer4, padding=((0, 0), (0, 0), (0, 0), (0, 24)), value=0.0)
         lidar_features_layer4 = ttnn.upsample(
-            lidar_features_layer4, scale_factor=(2, 2), mode="bilinear", memory_config=ttnn.DRAM_MEMORY_CONFIG
+            lidar_features_layer4, scale_factor=(1, 1), mode="bilinear", memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
         lidar_features_layer4 = ttnn.slice(lidar_features_layer4, [0, 0, 0, 0], [1, 8, 8, 1512])
         lidar_features_layer4 = ttnn.to_layout(lidar_features_layer4, ttnn.TILE_LAYOUT)
