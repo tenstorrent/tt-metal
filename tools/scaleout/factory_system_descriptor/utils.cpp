@@ -24,7 +24,7 @@
 
 namespace tt::scaleout_tools {
 
-void validate_fsd_against_gsd(
+std::set<PhysicalChannelConnection> validate_fsd_against_gsd(
     const std::string& fsd_filename,
     const std::string& gsd_filename,
     bool strict_validation,
@@ -495,6 +495,7 @@ void validate_fsd_against_gsd(
                       << " connections checked)" << std::endl;
         }
     }
+    return missing_in_gsd;
 }
 
 }  // namespace tt::scaleout_tools

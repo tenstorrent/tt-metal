@@ -169,7 +169,7 @@ public:
     ASICLocation get_asic_location(AsicID asic_id) const;
     std::vector<AsicID> get_asics_connected_to_host(const std::string& hostname) const;
     std::pair<AsicID, uint8_t> get_connected_asic_and_channel(AsicID asic_id, uint8_t chan_id) const;
-
+    AsicID get_asic_id(const std::string& hostname, TrayID tray_id, ASICLocation asic_location) const;
     // Host Topology Query APIs
     std::vector<std::string> get_host_neighbors(const std::string& hostname) const;
     std::vector<ExitNodeConnection> get_connecting_exit_nodes(

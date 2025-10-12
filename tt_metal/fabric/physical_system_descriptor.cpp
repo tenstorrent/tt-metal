@@ -778,6 +778,18 @@ std::pair<AsicID, uint8_t> PhysicalSystemDescriptor::get_connected_asic_and_chan
     return {AsicID{0}, 0};
 }
 
+AsicID PhysicalSystemDescriptor::get_asic_id(
+    const std::string& hostname, TrayID tray_id, ASICLocation asic_location) const {
+    for (const auto& [asic_id, asic_descriptor] : asic_descriptors_) {
+        if (asic_descriptor.host_name == hostname && asic_descriptor.tray_id == tray_id &&
+            asic_descriptor.asic_location == asic_location) {
+            return asic_id;
+        }
+    }
+    TT_THROW("No ASIC ID found at hostname {}, tray ID {}, and ASIC location {}", hostname, *tray_id, *asic_location);
+    return AsicID{0};
+}
+
 LocalEthernetMetrics PhysicalSystemDescriptor::query_local_ethernet_metrics() const {
     const auto& local_asics = get_asics_connected_to_host(my_host_name());
     const auto& local_asic_graph = get_asic_topology(my_host_name());

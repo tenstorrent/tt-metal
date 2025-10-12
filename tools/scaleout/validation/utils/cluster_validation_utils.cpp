@@ -12,6 +12,7 @@
 #include <random>
 #include <thread>
 
+#include <factory_system_descriptor/utils.hpp>
 #include "tests/tt_metal/test_utils/test_common.hpp"
 #include "tools/scaleout/validation/utils/ethernet_link_metrics_serialization.hpp"
 #include "tt_metal/impl/context/metal_context.hpp"
