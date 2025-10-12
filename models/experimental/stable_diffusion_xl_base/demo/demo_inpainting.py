@@ -70,6 +70,9 @@ def run_demo_inference(
     )
     profiler.end("diffusion_pipeline_from_pretrained")
 
+    torch_scheduler = pipeline.scheduler
+    torch_vae = pipeline.vae
+
     assert isinstance(pipeline.text_encoder, CLIPTextModel), "pipeline.text_encoder is not a CLIPTextModel"
     assert isinstance(
         pipeline.text_encoder_2, CLIPTextModelWithProjection
@@ -116,6 +119,9 @@ def run_demo_inference(
     # - masked_image_latents == None
     # - init_image.shape[1] != 4 (in tested cases, it is 3 (RGB))
     masked_image = init_image * (mask < 0.5)
+
+    # 1. prepare masked image latents
+    # 2. prepare mask latents
 
     tt_latents, tt_prompt_embeds, tt_add_text_embeds = tt_sdxl.generate_input_tensors(
         all_prompt_embeds_torch=torch.randn(batch_size, 2, MAX_SEQUENCE_LENGTH, CONCATENATED_TEXT_EMBEDINGS_SIZE),
@@ -288,7 +294,7 @@ def prepare_device(mesh_device, use_cfg_parallel):
 )
 def test_demo(
     validate_fabric_compatibility,
-    mesh_device,
+    device,
     is_ci_env,
     prompt,
     negative_prompt,
@@ -302,9 +308,11 @@ def test_demo(
     use_cfg_parallel,
     fixed_seed_for_batch,
 ):
-    prepare_device(mesh_device, use_cfg_parallel)
+    prepare_device(device, use_cfg_parallel)
+    assert vae_on_device == False, "Host VAE is supported for inpainting pipeline atm"
+    assert capture_trace == False, "Capture trace is not supported for inpainting pipeline atm"
     return run_demo_inference(
-        mesh_device,
+        device,
         is_ci_env,
         prompt,
         negative_prompt,

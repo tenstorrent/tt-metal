@@ -129,10 +129,11 @@ class TtSDXLPipeline(LightweightModule):
             dtype=ttnn.bfloat16,
         )
 
+        self.num_in_channels_unet = 4
         # Hardcoded input tensor parameters
 
         # Tensor shapes
-        B, C, H, W = 1, 4, 128, 128
+        B, C, H, W = 1, self.num_in_channels_unet, 128, 128
         self.tt_latents_shape = [B, C, H, W]
 
     def set_num_inference_steps(self, num_inference_steps: int):
@@ -471,7 +472,9 @@ class TtSDXLPipeline(LightweightModule):
 
         num_channels_latents = self.torch_pipeline.unet.config.in_channels
         height = width = 1024
-        assert num_channels_latents == 4, f"num_channels_latents is {num_channels_latents}, but it should be 4"
+        assert (
+            num_channels_latents == self.num_in_channels_unet
+        ), f"num_channels_latents is {num_channels_latents}, but it should be 4"
         assert start_latent_seed is None or isinstance(
             start_latent_seed, int
         ), "start_latent_seed must be an integer or None"

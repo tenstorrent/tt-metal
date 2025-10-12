@@ -466,6 +466,55 @@ def retrieve_timesteps(
     return timesteps, num_inference_steps
 
 
+def prepare_latents_inpainting(
+    torch_pipeline,
+    tt_pipeline,
+    batch_size,
+    num_channels_latents,
+    height,
+    width,
+    cpu_device,
+    dtype,
+    image=None,
+    tt_timestep=None,
+    is_strength_max=True,
+    add_noise=True,
+):
+    # 4, 5, 8
+    assert not is_strength_max, "Max strength is not supported for inpainting pipeline atm"
+    assert image is not None, "Image is not provided"
+    assert tt_timestep is not None, "Timestep is not provided"
+    assert image.shape[1] == 3, "Image is not 3 channels"
+    assert latents is None, "Latents should not be provided"
+    assert add_noise is True, "Add noise should be True"
+    assert batch_size == 1, "Batch size should be 1"
+    assert torch_pipeline.vae_scale_factor == 8, "Vae scale factor should be 8"
+
+    shape = (
+        batch_size,
+        num_channels_latents,
+        int(height) // torch_pipeline.vae_scale_factor,
+        int(width) // torch_pipeline.vae_scale_factor,
+    )
+
+    cpu_device = torch.device("cpu")
+    image = image.to(device=cpu_device, dtype=torch.float32)
+    image_latents = torch_pipeline.vae.encode(image)
+    image_latents = image_latents.repeat(batch_size // image_latents.shape[0], 1, 1, 1)
+    print(f"Path 4 in prepare latents")
+
+    noise = torch.randn(shape, generator=None, device=cpu_device, dtype=torch.float32)
+    # if strength is 1. then initialise the latents to noise, else initial to image + noise
+    # Need to convert:
+    # - image_latents to ttnn_tensor
+    # - noise to ttnn_tensor
+    latents = tt_pipeline.scheduler.add_noise(image_latents, noise, tt_timestep, tt_pipeline.scheduler.begin_index)
+    # convert back latents to torch_tensor
+    outputs = latents, noise
+
+    return outputs
+
+
 # Copied from sdxl inpaint/img2img pipelines
 def get_timesteps(scheduler, num_inference_steps, strength, denoising_start=None):
     assert denoising_start is None, "denoising_start is not supported in this version"
