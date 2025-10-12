@@ -46,6 +46,8 @@ class TtSDXLInpaintingPipeline(TtSDXLPipeline):
             self.torch_pipeline.scheduler, self.pipeline_config.num_inference_steps, self.pipeline_config.strength, None
         )
 
+        print("Num timesteps after prepare timesteps is: ", self.pipeline_config.num_inference_steps)
+
         if self.pipeline_config.num_inference_steps < 1:
             raise ValueError(
                 f"After adjusting the num_inference_steps by strength parameter: {self.pipeline_config.strength}, the number of pipeline"
@@ -56,7 +58,10 @@ class TtSDXLInpaintingPipeline(TtSDXLPipeline):
         self,
         all_prompt_embeds_torch,
         torch_add_text_embeds,
-        start_latent_seed=None,
+        torch_image,
+        torch_masked_image,
+        torch_mask,
+        start_latent_seed=None,  # need this to generate noise tensors, and in the future if we want to support strength_max == 1.0
         fixed_seed_for_batch=False,
     ):
         # Generate user input tensors for the TT model.
@@ -64,84 +69,90 @@ class TtSDXLInpaintingPipeline(TtSDXLPipeline):
         logger.info("Generating input tensors...")
         profiler.start("prepare_latents")
 
+        # This cuts number of inference steps relative by strength parameter
         self._prepare_timesteps()
 
-        num_channels_latents = self.vae.config.latent_channels
+        num_channels_image_latents = self.torch_pipeline.vae.config.latent_channels
         height = width = 1024
         assert (
-            num_channels_latents == self.num_in_channels_unet
-        ), f"num_channels_latents is {num_channels_latents}, but it should be 4"
+            num_channels_image_latents == self.num_channels_image_latents
+        ), f"num_channels_latents is {num_channels_image_latents}, but it should be {self.num_channels_image_latents}"
         assert start_latent_seed is None or isinstance(
             start_latent_seed, int
         ), "start_latent_seed must be an integer or None"
 
-        latents_list = []
+        img_latents_list = []
+        noise_list = []
         for index in range(self.batch_size):
             if start_latent_seed is not None:
                 torch.manual_seed(start_latent_seed if fixed_seed_for_batch else start_latent_seed + index)
-            # latents = self.torch_pipeline.prepare_latents(
-            #     1,
-            #     num_channels_latents,
-            #     height,
-            #     width,
-            #     all_prompt_embeds_torch.dtype,
-            #     self.cpu_device,
-            #     None,
-            #     None,
-            # )
-            torch_latents, torch_noise = prepare_latents_inpainting(
+            img_latents, noise = prepare_latents_inpainting(
                 self.torch_pipeline,
                 self,
                 1,
-                num_channels_latents,
+                num_channels_image_latents,
                 height,
                 width,
                 self.cpu_device,
                 all_prompt_embeds_torch.dtype,
+                torch_image,
+                False,  # Make this configurable
+                True,  # Make this configurable
+                None,  # passed in latents
             )
-            B, C, H, W = latents.shape  # 1, 4, 128, 128
-            latents = torch.permute(latents, (0, 2, 3, 1))  # [1, H, W, C]
-            latents = latents.reshape(B, 1, H * W, C)  # [1, 1, H*W, C]
-            latents_list.append(latents)
-        tt_latents = torch.cat(latents_list, dim=0)  # [batch_size, 1, H*W, C]
+            print("Done with generating latents, shape is: ", img_latents.shape)
+            print("Done with generating noise, shape is: ", noise.shape)
+            B, C, H, W = img_latents.shape  # 1, 4, 128, 128
+            img_latents = torch.permute(img_latents, (0, 2, 3, 1))  # [1, H, W, C]
+            img_latents = img_latents.reshape(B, 1, H * W, C)  # [1, 1, H*W, C]
+            img_latents_list.append(img_latents)
 
-        self.extra_step_kwargs = self.torch_pipeline.prepare_extra_step_kwargs(None, 0.0)
-        text_encoder_projection_dim = self.torch_pipeline.text_encoder_2.config.projection_dim
-        assert (
-            text_encoder_projection_dim == 1280
-        ), f"text_encoder_projection_dim is {text_encoder_projection_dim}, but it should be 1280"
+            B, C, H, W = noise.shape
+            noise = torch.permute(noise, (0, 2, 3, 1))  # [1, H, W, C]
+            noise = noise.reshape(B, 1, H * W, C)  # [1, 1, H*W, C]
+            noise_list.append(noise)
 
-        original_size = (height, width)
-        target_size = (height, width)
-        crops_coords_top_left = (0, 0)
-        add_time_ids = self.torch_pipeline._get_add_time_ids(
-            original_size,
-            crops_coords_top_left,
-            target_size,
-            dtype=all_prompt_embeds_torch.dtype,
-            text_encoder_projection_dim=text_encoder_projection_dim,
-        )
-        negative_add_time_ids = add_time_ids
-        torch_add_time_ids = torch.stack([negative_add_time_ids.squeeze(0), add_time_ids.squeeze(0)], dim=0)
+        tt_img_latents = torch.cat(img_latents_list, dim=0)  # [batch_size, 1, H*W, C]
+        tt_noise = torch.cat(noise_list, dim=0)  # [batch_size, 1, H*W, C]
 
-        tt_latents, tt_prompt_embeds, tt_add_text_embeds = self.__create_user_tensors(
-            latents=tt_latents,
-            all_prompt_embeds_torch=all_prompt_embeds_torch,
-            torch_add_text_embeds=torch_add_text_embeds,
-        )
+        # self.extra_step_kwargs = self.torch_pipeline.prepare_extra_step_kwargs(None, 0.0)
+        # text_encoder_projection_dim = self.torch_pipeline.text_encoder_2.config.projection_dim
+        # assert (
+        #     text_encoder_projection_dim == 1280
+        # ), f"text_encoder_projection_dim is {text_encoder_projection_dim}, but it should be 1280"
 
-        self.__allocate_device_tensors(
-            tt_latents=tt_latents,
-            tt_prompt_embeds=tt_prompt_embeds,
-            tt_text_embeds=tt_add_text_embeds,
-            tt_time_ids=torch_add_time_ids,
-        )
-        ttnn.synchronize_device(self.ttnn_device)
-        profiler.end("prepare_latents")
-        logger.info("Input tensors generated")
+        # original_size = (height, width)
+        # target_size = (height, width)
+        # crops_coords_top_left = (0, 0)
+        # add_time_ids = self.torch_pipeline._get_add_time_ids(
+        #     original_size,
+        #     crops_coords_top_left,
+        #     target_size,
+        #     dtype=all_prompt_embeds_torch.dtype,
+        #     text_encoder_projection_dim=text_encoder_projection_dim,
+        # )
+        # negative_add_time_ids = add_time_ids
+        # torch_add_time_ids = torch.stack([negative_add_time_ids.squeeze(0), add_time_ids.squeeze(0)], dim=0)
 
-        self.generated_input_tensors = True
-        return tt_latents, tt_prompt_embeds, tt_add_text_embeds
+        # tt_latents, tt_prompt_embeds, tt_add_text_embeds = self.__create_user_tensors(
+        #     latents=tt_latents,
+        #     all_prompt_embeds_torch=all_prompt_embeds_torch,
+        #     torch_add_text_embeds=torch_add_text_embeds,
+        # )
+
+        # self.__allocate_device_tensors(
+        #     tt_latents=tt_latents,
+        #     tt_prompt_embeds=tt_prompt_embeds,
+        #     tt_text_embeds=tt_add_text_embeds,
+        #     tt_time_ids=torch_add_time_ids,
+        # )
+        # ttnn.synchronize_device(self.ttnn_device)
+        # profiler.end("prepare_latents")
+        # logger.info("Input tensors generated")
+
+        # self.generated_input_tensors = True
+        # return tt_latents, tt_prompt_embeds, tt_add_text_embeds
+        return
 
     def compile_image_processing(self):
         # Compile/trace run for denoising loop and vae decoder.

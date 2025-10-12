@@ -593,17 +593,6 @@ class TtSDXLPipeline(LightweightModule):
             self.torch_pipeline.scheduler, self.pipeline_config.num_inference_steps, self.cpu_device, timesteps, sigmas
         )
 
-        # print("Timesteps before prepare_timesteps: ", self.ttnn_timesteps)
-        # print("Num inference steps before prepare_timesteps: ", self.pipeline_config.num_inference_steps)
-
-        # def get_timesteps(scheduler, num_inference_steps, strength, denoising_start=None):
-        # self.ttnn_timesteps, self.pipeline_config.num_inference_steps = get_timesteps(
-        #     self.torch_pipeline.scheduler, self.pipeline_config.num_inference_steps, 1.0, None
-        # )
-
-        print("Timesteps after prepare_timesteps: ", self.ttnn_timesteps)
-        print("Num inference steps after prepare_timesteps: ", self.pipeline_config.num_inference_steps)
-
     def __load_tt_components(self, pipeline_config):
         # Method for instantiating TT components based on the torch pipeline.
         # Included components are TtUNet2DConditionModel, TtAutoencoderKL, and TtEulerDiscreteScheduler.

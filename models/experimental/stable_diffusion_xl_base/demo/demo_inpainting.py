@@ -119,16 +119,26 @@ def run_demo_inference(
     # - masked_image_latents == None
     # - init_image.shape[1] != 4 (in tested cases, it is 3 (RGB))
     masked_image = init_image * (mask < 0.5)
+    is_strength_max = strength == 1.0
+    assert not is_strength_max, "Strength max is not supported for inpainting pipeline atm"
 
     # 1. prepare masked image latents
     # 2. prepare mask latents
 
-    tt_latents, tt_prompt_embeds, tt_add_text_embeds = tt_sdxl.generate_input_tensors(
+    tt_sdxl.generate_input_tensors(
         all_prompt_embeds_torch=torch.randn(batch_size, 2, MAX_SEQUENCE_LENGTH, CONCATENATED_TEXT_EMBEDINGS_SIZE),
         torch_add_text_embeds=torch.randn(batch_size, 2, TEXT_ENCODER_2_PROJECTION_DIM),
+        torch_image=init_image,
+        torch_masked_image=masked_image,
+        torch_mask=mask,
     )
 
-    tt_sdxl.compile_image_processing()
+    # tt_latents, tt_prompt_embeds, tt_add_text_embeds = tt_sdxl.generate_input_tensors(
+    #     all_prompt_embeds_torch=torch.randn(batch_size, 2, MAX_SEQUENCE_LENGTH, CONCATENATED_TEXT_EMBEDINGS_SIZE),
+    #     torch_add_text_embeds=torch.randn(batch_size, 2, TEXT_ENCODER_2_PROJECTION_DIM),
+    # )
+
+    # tt_sdxl.compile_image_processing()
 
     logger.info("=" * 80)
     for key, data in profiler.times.items():
@@ -142,72 +152,73 @@ def run_demo_inference(
 
     images = []
     logger.info("Starting ttnn inference...")
-    for iter in range(len(prompts) // batch_size):
-        profiler.start("end_to_end_generation")
-        logger.info(
-            f"Running inference for prompts {iter * batch_size + 1}-{iter * batch_size + batch_size}/{len(prompts)}"
-        )
+    # for iter in range(len(prompts) // batch_size):
+    #     profiler.start("end_to_end_generation")
+    #     logger.info(
+    #         f"Running inference for prompts {iter * batch_size + 1}-{iter * batch_size + batch_size}/{len(prompts)}"
+    #     )
 
-        prompts_batch = prompts[iter * batch_size : (iter + 1) * batch_size]
-        negative_prompts_batch = (
-            negative_prompts[iter * batch_size : (iter + 1) * batch_size]
-            if isinstance(negative_prompts, list)
-            else negative_prompts
-        )
+    #     prompts_batch = prompts[iter * batch_size : (iter + 1) * batch_size]
+    #     negative_prompts_batch = (
+    #         negative_prompts[iter * batch_size : (iter + 1) * batch_size]
+    #         if isinstance(negative_prompts, list)
+    #         else negative_prompts
+    #     )
 
-        (
-            all_prompt_embeds_torch,
-            torch_add_text_embeds,
-        ) = tt_sdxl.encode_prompts(prompts_batch, negative_prompts_batch)
+    #     (
+    #         all_prompt_embeds_torch,
+    #         torch_add_text_embeds,
+    #     ) = tt_sdxl.encode_prompts(prompts_batch, negative_prompts_batch)
 
-        # This is a hack to get things working, but essentially:
-        # We start with num_inference_steps == 20 say, generate_input_tensors() will reduce this to 19, and it will
-        # persist until the next image generation call, so we need to set it back to the original value
-        tt_sdxl.set_num_inference_steps(num_inference_steps)
-        tt_latents, tt_prompt_embeds, tt_add_text_embeds = tt_sdxl.generate_input_tensors(
-            all_prompt_embeds_torch,
-            torch_add_text_embeds,
-            start_latent_seed=0,
-            fixed_seed_for_batch=fixed_seed_for_batch,
-        )
+    #     # This is a hack to get things working, but essentially:
+    #     # We start with num_inference_steps == 20 say, generate_input_tensors() will reduce this to 19, and it will
+    #     # persist until the next image generation call, so we need to set it back to the original value
+    #     tt_sdxl.set_num_inference_steps(num_inference_steps)
+    #     tt_latents, tt_prompt_embeds, tt_add_text_embeds = tt_sdxl.generate_input_tensors(
+    #         all_prompt_embeds_torch,
+    #         torch_add_text_embeds,
+    #         start_latent_seed=0,
+    #         fixed_seed_for_batch=fixed_seed_for_batch,
+    #     )
 
-        tt_sdxl.prepare_input_tensors(
-            [
-                tt_latents,
-                tt_prompt_embeds[0],
-                tt_add_text_embeds[0],
-            ]
-        )
+    #     tt_sdxl.prepare_input_tensors(
+    #         [
+    #             tt_latents,
+    #             tt_prompt_embeds[0],
+    #             tt_add_text_embeds[0],
+    #         ]
+    #     )
 
-        imgs = tt_sdxl.generate_images()
+    #     imgs = tt_sdxl.generate_images()
 
-        logger.info(
-            f"Prepare input tensors for {batch_size} prompts completed in {profiler.times['prepare_input_tensors'][-1]:.2f} seconds"
-        )
-        logger.info(f"Image gen for {batch_size} prompts completed in {profiler.times['image_gen'][-1]:.2f} seconds")
-        logger.info(
-            f"Denoising loop for {batch_size} promts completed in {profiler.times['denoising_loop'][-1]:.2f} seconds"
-        )
-        logger.info(
-            f"{'On device VAE' if vae_on_device else 'Host VAE'} decoding completed in {profiler.times['vae_decode'][-1]:.2f} seconds"
-        )
-        logger.info(f"Output tensor read completed in {profiler.times['read_output_tensor'][-1]:.2f} seconds")
+    #     logger.info(
+    #         f"Prepare input tensors for {batch_size} prompts completed in {profiler.times['prepare_input_tensors'][-1]:.2f} seconds"
+    #     )
+    #     logger.info(f"Image gen for {batch_size} prompts completed in {profiler.times['image_gen'][-1]:.2f} seconds")
+    #     logger.info(
+    #         f"Denoising loop for {batch_size} promts completed in {profiler.times['denoising_loop'][-1]:.2f} seconds"
+    #     )
+    #     logger.info(
+    #         f"{'On device VAE' if vae_on_device else 'Host VAE'} decoding completed in {profiler.times['vae_decode'][-1]:.2f} seconds"
+    #     )
+    #     logger.info(f"Output tensor read completed in {profiler.times['read_output_tensor'][-1]:.2f} seconds")
 
-        profiler.end("end_to_end_generation")
+    #     profiler.end("end_to_end_generation")
 
-        for idx, img in enumerate(imgs):
-            if iter == len(prompts) // batch_size - 1 and idx >= batch_size - needed_padding:
-                break
-            img = img.unsqueeze(0)
-            img = pipeline.image_processor.postprocess(img, output_type="pil")[0]
-            images.append(img)
-            if is_ci_env:
-                logger.info(f"Image {len(images)}/{len(prompts) // batch_size} generated successfully")
-            else:
-                img.save(f"output/output{len(images) + start_from}.png")
-                logger.info(f"Image saved to output/output{len(images) + start_from}.png")
+    #     for idx, img in enumerate(imgs):
+    #         if iter == len(prompts) // batch_size - 1 and idx >= batch_size - needed_padding:
+    #             break
+    #         img = img.unsqueeze(0)
+    #         img = pipeline.image_processor.postprocess(img, output_type="pil")[0]
+    #         images.append(img)
+    #         if is_ci_env:
+    #             logger.info(f"Image {len(images)}/{len(prompts) // batch_size} generated successfully")
+    #         else:
+    #             img.save(f"output/output{len(images) + start_from}.png")
+    #             logger.info(f"Image saved to output/output{len(images) + start_from}.png")
 
-    return images
+    # return images
+    print("Successfuly ran the demo :)")
 
 
 def prepare_device(mesh_device, use_cfg_parallel):

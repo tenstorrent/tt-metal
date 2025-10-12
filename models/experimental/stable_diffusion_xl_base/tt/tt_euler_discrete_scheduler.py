@@ -403,7 +403,6 @@ class TtEulerDiscreteScheduler(LightweightModule):
         self,
         original_samples: ttnn._ttnn.tensor.Tensor,
         noise: ttnn._ttnn.tensor.Tensor,
-        timesteps: ttnn._ttnn.tensor.Tensor,
         begin_or_step_index: int,  # In case of inpainting, use self.begin_index, and in case of img2img, use self.step_index
     ) -> ttnn._ttnn.tensor.Tensor:
         step_index = begin_or_step_index
@@ -416,5 +415,8 @@ class TtEulerDiscreteScheduler(LightweightModule):
 
         # temp workaround
         sigma = ttnn.to_device(sigma, self.device)
+        print("Orignal samples shape is: ", original_samples.shape)
+        print("Noise shape is: ", noise.shape)
+        print("Sigma shape is: ", sigma.shape)
         noisy_samples = original_samples + noise * sigma
         return noisy_samples

@@ -108,7 +108,7 @@ def test_euler_discrete_scheduler(device, input_shape, num_inference_steps, is_c
 @pytest.mark.parametrize(
     "input_shape",
     [
-        (1, 1, 128 * 128, 4),
+        (1, 4, 128, 128),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
@@ -165,8 +165,7 @@ def test_euler_discrete_scheduler_add_noise(device, input_shape, num_inference_s
     latent_timestep = torch_timesteps[:1]
     torch_noisy_sample = scheduler.add_noise(torch_original_samples, torch_noise, latent_timestep)
 
-    tt_latent_timestep = ttnn.unsqueeze(ttnn_timesteps[:1][0], dim=0)
-    tt_noisy_sample = tt_scheduler.add_noise(tt_original_samples, tt_noise, tt_latent_timestep, begin_index)
+    tt_noisy_sample = tt_scheduler.add_noise(tt_original_samples, tt_noise, begin_index)
 
     tt_noisy_sample = ttnn.to_torch(tt_noisy_sample)
     assert_with_pcc(tt_noisy_sample, torch_noisy_sample, 0.999)
