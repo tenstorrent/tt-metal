@@ -66,7 +66,7 @@
 #include "tile.hpp"
 #include "tt_memory.h"
 #include "tt_metal/detail/kernel_cache.hpp"
-#include "tt_metal/impl/debug/inspector.hpp"
+#include "tt_metal/impl/debug/inspector/inspector.hpp"
 #include "tt_metal/impl/dispatch/data_collection.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/impl/program/dispatch.hpp"
