@@ -6,7 +6,8 @@ from dataclasses import dataclass
 from models.experimental.stable_diffusion_xl_base.tests.test_common import (
     get_timesteps,
     prepare_latents_inpainting,
-    run_tt_image_gen,
+    prepare_mask_latents_inpainting,
+    run_tt_image_gen_inpainting,
 )
 from models.experimental.stable_diffusion_xl_base.tt.tt_sdxl_pipeline import TtSDXLPipeline, TtSDXLPipelineConfig
 import torch
@@ -27,14 +28,8 @@ class TtSDXLInpaintingPipeline(TtSDXLPipeline):
 
         self.num_in_channels_unet = 9
         self.num_channels_image_latents = 4
-        self.num_channels_masked_image_latents = 4
-        self.num_channels_mask_latents = 1
-        B, C, H, W = 1, self.num_channels_image_latents, 128, 128
+        B, C, H, W = 1, self.num_in_channels_unet, 128, 128
         self.tt_latents_shape = [B, C, H, W]
-        B, C, H, W = 1, self.num_channels_masked_image_latents, 128, 128
-        self.tt_masked_image_latents_shape = [B, C, H, W]
-        B, C, H, W = 1, self.num_channels_mask_latents, 128, 128
-        self.tt_mask_latents_shape = [B, C, H, W]
 
         assert self.pipeline_config.strength != 1.0, "Max strength is not supported for inpainting pipeline atm"
         # to support it, we need to modify prepare_latents function
@@ -83,6 +78,8 @@ class TtSDXLInpaintingPipeline(TtSDXLPipeline):
 
         img_latents_list = []
         noise_list = []
+        mask_list = []
+        masked_image_latents_list = []
         for index in range(self.batch_size):
             if start_latent_seed is not None:
                 torch.manual_seed(start_latent_seed if fixed_seed_for_batch else start_latent_seed + index)
@@ -112,47 +109,89 @@ class TtSDXLInpaintingPipeline(TtSDXLPipeline):
             noise = noise.reshape(B, 1, H * W, C)  # [1, 1, H*W, C]
             noise_list.append(noise)
 
+            mask, masked_image_latents = prepare_mask_latents_inpainting(
+                self.torch_pipeline,
+                self,
+                torch_mask,
+                torch_masked_image,
+                1,
+                height,
+                width,
+                all_prompt_embeds_torch.dtype,
+                self.cpu_device,
+                None,
+            )
+
+            B, C, H, W = mask.shape
+            mask = torch.permute(mask, (0, 2, 3, 1))  # [1, H, W, C]
+            mask = mask.reshape(B, 1, H * W, C)  # [1, 1, H*W, C]
+            mask_list.append(mask)
+
+            B, C, H, W = masked_image_latents.shape
+            masked_image_latents = torch.permute(masked_image_latents, (0, 2, 3, 1))  # [1, H, W, C]
+            masked_image_latents = masked_image_latents.reshape(B, 1, H * W, C)  # [1, 1, H*W, C]
+            masked_image_latents_list.append(masked_image_latents)
+
         tt_img_latents = torch.cat(img_latents_list, dim=0)  # [batch_size, 1, H*W, C]
+        # might not need noise?
         tt_noise = torch.cat(noise_list, dim=0)  # [batch_size, 1, H*W, C]
+        tt_mask = torch.cat(mask_list, dim=0)  # [batch_size, 1, H*W, C]
+        tt_masked_image_latents = torch.cat(masked_image_latents_list, dim=0)  # [batch_size, 1, H*W, C]
 
-        # self.extra_step_kwargs = self.torch_pipeline.prepare_extra_step_kwargs(None, 0.0)
-        # text_encoder_projection_dim = self.torch_pipeline.text_encoder_2.config.projection_dim
-        # assert (
-        #     text_encoder_projection_dim == 1280
-        # ), f"text_encoder_projection_dim is {text_encoder_projection_dim}, but it should be 1280"
+        self.extra_step_kwargs = self.torch_pipeline.prepare_extra_step_kwargs(None, 0.0)
+        text_encoder_projection_dim = self.torch_pipeline.text_encoder_2.config.projection_dim
+        assert (
+            text_encoder_projection_dim == 1280
+        ), f"text_encoder_projection_dim is {text_encoder_projection_dim}, but it should be 1280"
 
-        # original_size = (height, width)
-        # target_size = (height, width)
-        # crops_coords_top_left = (0, 0)
-        # add_time_ids = self.torch_pipeline._get_add_time_ids(
-        #     original_size,
-        #     crops_coords_top_left,
-        #     target_size,
-        #     dtype=all_prompt_embeds_torch.dtype,
-        #     text_encoder_projection_dim=text_encoder_projection_dim,
-        # )
-        # negative_add_time_ids = add_time_ids
-        # torch_add_time_ids = torch.stack([negative_add_time_ids.squeeze(0), add_time_ids.squeeze(0)], dim=0)
+        original_size = (height, width)
+        target_size = (height, width)
+        crops_coords_top_left = (0, 0)
+        aesthetic_score = 6.0
+        negative_aesthetic_score = 2.5
 
-        # tt_latents, tt_prompt_embeds, tt_add_text_embeds = self.__create_user_tensors(
-        #     latents=tt_latents,
-        #     all_prompt_embeds_torch=all_prompt_embeds_torch,
-        #     torch_add_text_embeds=torch_add_text_embeds,
-        # )
+        add_time_ids, negative_add_time_ids = self.torch_pipeline._get_add_time_ids(
+            original_size,
+            crops_coords_top_left,
+            target_size,
+            aesthetic_score,
+            negative_aesthetic_score,
+            original_size,  # negative_original_size, assume the same as positive
+            crops_coords_top_left,  # negative_crops_coords_top_left, assume the same as positive
+            target_size,  # negative_target_size, assume the same as positive
+            dtype=all_prompt_embeds_torch.dtype,
+            text_encoder_projection_dim=text_encoder_projection_dim,
+        )
+        torch_add_time_ids = torch.stack([negative_add_time_ids.squeeze(0), add_time_ids.squeeze(0)], dim=0)
 
-        # self.__allocate_device_tensors(
-        #     tt_latents=tt_latents,
-        #     tt_prompt_embeds=tt_prompt_embeds,
-        #     tt_text_embeds=tt_add_text_embeds,
-        #     tt_time_ids=torch_add_time_ids,
-        # )
-        # ttnn.synchronize_device(self.ttnn_device)
-        # profiler.end("prepare_latents")
-        # logger.info("Input tensors generated")
+        (
+            tt_image_latents,
+            tt_masked_image_latents,
+            tt_mask,
+            tt_prompt_embeds,
+            tt_add_text_embeds,
+        ) = self.__create_user_tensors(
+            img_latents=tt_img_latents,
+            masked_image_latents=tt_masked_image_latents,
+            mask=tt_mask,
+            all_prompt_embeds_torch=all_prompt_embeds_torch,
+            torch_add_text_embeds=torch_add_text_embeds,
+        )
 
-        # self.generated_input_tensors = True
-        # return tt_latents, tt_prompt_embeds, tt_add_text_embeds
-        return
+        self.__allocate_device_tensors(
+            tt_image_latents=tt_image_latents,
+            tt_masked_image_latents=tt_masked_image_latents,
+            tt_mask=tt_mask,
+            tt_prompt_embeds=tt_prompt_embeds,
+            tt_text_embeds=tt_add_text_embeds,
+            tt_time_ids=torch_add_time_ids,
+        )
+        ttnn.synchronize_device(self.ttnn_device)
+        profiler.end("prepare_latents")
+        logger.info("Input tensors generated")
+
+        self.generated_input_tensors = True
+        return tt_image_latents, tt_masked_image_latents, tt_mask, tt_prompt_embeds, tt_add_text_embeds
 
     def compile_image_processing(self):
         # Compile/trace run for denoising loop and vae decoder.
@@ -162,11 +201,14 @@ class TtSDXLInpaintingPipeline(TtSDXLPipeline):
             profiler.start("warmup_run")
             logger.info("Performing warmup run on denoising, to make use of program caching in actual inference...")
 
-            _, _, _, self.output_shape, _ = run_tt_image_gen(
+            _, _, _, self.output_shape, _ = run_tt_image_gen_inpainting(
                 self.ttnn_device,
                 self.tt_unet,
                 self.tt_scheduler,
-                self.tt_latents_device,
+                # fix me
+                self.tt_image_latents_device,
+                self.tt_masked_image_latents_device,
+                self.tt_mask_device,
                 self.tt_prompt_embeds_device,
                 self.tt_time_ids_device,
                 self.tt_text_embeds_device,
@@ -174,7 +216,8 @@ class TtSDXLInpaintingPipeline(TtSDXLPipeline):
                 self.extra_step_kwargs,
                 self.guidance_scale,
                 self.scaling_factor,
-                self.tt_latents_shape,
+                # fix me
+                self.tt_latents_shape,  # should be renamd to something else, but keep for now
                 self.tt_vae if self.pipeline_config.vae_on_device else self.torch_pipeline.vae,
                 self.batch_size,
                 self.ag_persistent_buffer,
@@ -197,7 +240,13 @@ class TtSDXLInpaintingPipeline(TtSDXLPipeline):
 
         logger.info("Preparing input tensors for TT model...")
         profiler.start("prepare_input_tensors")
-        device_tensors = [self.tt_latents_device, self.tt_prompt_embeds_device, self.tt_text_embeds_device]
+        device_tensors = [
+            self.tt_image_latents_device,
+            self.tt_masked_image_latents_device,
+            self.tt_mask_device,
+            self.tt_prompt_embeds_device,
+            self.tt_text_embeds_device,
+        ]
 
         for host_tensor, device_tensor in zip(host_tensors, device_tensors):
             ttnn.copy_host_to_device_tensor(host_tensor, device_tensor)
@@ -211,11 +260,14 @@ class TtSDXLInpaintingPipeline(TtSDXLPipeline):
         assert self.generated_input_tensors, "Input tensors are not re/generated"
 
         logger.info("Generating images...")
-        imgs, self.tid, self.output_device, self.output_shape, self.tid_vae = run_tt_image_gen(
+        imgs, self.tid, self.output_device, self.output_shape, self.tid_vae = run_tt_image_gen_inpainting(
             self.ttnn_device,
             self.tt_unet,
             self.tt_scheduler,
-            self.tt_latents_device,
+            # fix me
+            self.tt_image_latents_device,
+            self.tt_masked_image_latents_device,
+            self.tt_mask_device,
             self.tt_prompt_embeds_device,
             self.tt_time_ids_device,
             self.tt_text_embeds_device,
@@ -223,7 +275,8 @@ class TtSDXLInpaintingPipeline(TtSDXLPipeline):
             self.extra_step_kwargs,
             self.guidance_scale,
             self.scaling_factor,
-            self.tt_latents_shape,
+            # fix me
+            self.tt_latents_shape,  # should be renamed to something else, but keep for now
             self.tt_vae if self.pipeline_config.vae_on_device else self.torch_pipeline.vae,
             self.batch_size,
             self.ag_persistent_buffer,
@@ -236,15 +289,33 @@ class TtSDXLInpaintingPipeline(TtSDXLPipeline):
         )
         return imgs
 
-    def __allocate_device_tensors(self, tt_latents, tt_prompt_embeds, tt_text_embeds, tt_time_ids):
+    def __allocate_device_tensors(
+        self, tt_image_latents, tt_masked_image_latents, tt_mask, tt_prompt_embeds, tt_text_embeds, tt_time_ids
+    ):
         # Allocation of device tensors for the input data.
         if not self.allocated_device_tensors:
             profiler.start("allocate_input_tensors")
 
-            self.tt_latents_device = ttnn.allocate_tensor_on_device(
-                tt_latents.shape,
-                tt_latents.dtype,
-                tt_latents.layout,
+            self.tt_image_latents_device = ttnn.allocate_tensor_on_device(
+                tt_image_latents.shape,
+                tt_image_latents.dtype,
+                tt_image_latents.layout,
+                self.ttnn_device,
+                ttnn.DRAM_MEMORY_CONFIG,
+            )
+
+            self.tt_masked_image_latents_device = ttnn.allocate_tensor_on_device(
+                tt_masked_image_latents.shape,
+                tt_masked_image_latents.dtype,
+                tt_masked_image_latents.layout,
+                self.ttnn_device,
+                ttnn.DRAM_MEMORY_CONFIG,
+            )
+
+            self.tt_mask_device = ttnn.allocate_tensor_on_device(
+                tt_mask.shape,
+                tt_mask.dtype,
+                tt_mask.layout,
                 self.ttnn_device,
                 ttnn.DRAM_MEMORY_CONFIG,
             )
@@ -290,12 +361,28 @@ class TtSDXLInpaintingPipeline(TtSDXLPipeline):
             for host_tensor, device_tensor in zip(tt_time_ids_host, self.tt_time_ids_device):
                 ttnn.copy_host_to_device_tensor(host_tensor, device_tensor)
 
-    def __create_user_tensors(self, latents, all_prompt_embeds_torch, torch_add_text_embeds):
+    def __create_user_tensors(
+        self, img_latents, masked_image_latents, mask, all_prompt_embeds_torch, torch_add_text_embeds
+    ):
         # Instantiation of user host input tensors for the TT model.
 
         profiler.start("create_user_tensors")
-        tt_latents = ttnn.from_torch(
-            latents,
+        tt_img_latents = ttnn.from_torch(
+            img_latents,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.ttnn_device, list(self.ttnn_device.shape), dims=(None, 0)),
+        )
+
+        tt_masked_image_latents = ttnn.from_torch(
+            masked_image_latents,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.ttnn_device, list(self.ttnn_device.shape), dims=(None, 0)),
+        )
+
+        tt_mask = ttnn.from_torch(
+            mask,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=ttnn.ShardTensor2dMesh(self.ttnn_device, list(self.ttnn_device.shape), dims=(None, 0)),
@@ -314,6 +401,7 @@ class TtSDXLInpaintingPipeline(TtSDXLPipeline):
             layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_mapper=ttnn.ShardTensor2dMesh(self.ttnn_device, list(self.ttnn_device.shape), dims=(1, 0)),
         )
+
         ttnn.synchronize_device(self.ttnn_device)
         profiler.end("create_user_tensors")
-        return tt_latents, tt_prompt_embeds, tt_add_text_embeds
+        return tt_img_latents, tt_masked_image_latents, tt_mask, tt_prompt_embeds, tt_add_text_embeds
