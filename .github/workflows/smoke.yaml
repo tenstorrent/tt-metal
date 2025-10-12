@@ -84,12 +84,10 @@ jobs:
           # TT_METAL_WATCHER: 5 TODO(#25305): Re-enable watcher after the race condition is fixed.
           TT_METAL_WATCHER_TEST_MODE: 1
         run: |
-          ldd /usr/bin/${{ inputs.product }}-validation-smoke
           /usr/bin/${{ inputs.product }}-validation-smoke
 
       - name: Merge LLVM coverage
         run: |
-          set -euo pipefail
           shopt -s nullglob || true
           files=(/work/coverage/*.profraw)
           if [ ${#files[@]} -gt 0 ]; then
@@ -100,11 +98,10 @@ jobs:
 
       - name: Export LCOV (llvm-cov)
         run: |
-          set -euo pipefail
           if [ -f /work/coverage/coverage.profdata ]; then
             objects=(
               /usr/lib/libtt_metal.so
-              /usr/lib/_ttnn.so
+              /usr/lib/libtt_stl.so
               /usr/lib/_ttnncpp.so
             )
             test_bin="/usr/bin/${{ inputs.product }}-validation-smoke"
