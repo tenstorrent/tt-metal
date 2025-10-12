@@ -1,3 +1,4 @@
+import warnings
 import torch
 import ttnn
 
@@ -77,24 +78,19 @@ def _extract_conv_bn(ds):
     """Return (conv, bn) from a downsample-like module, or (None, None) if Identity/None."""
     if ds is None:
         return None, None
-    # Identity → nothing to do
     if isinstance(ds, torch.nn.Identity):
         return None, None
-    # Custom modules exposing .conv/.bn
     if hasattr(ds, "conv") and hasattr(ds, "bn"):
         return ds.conv, ds.bn
-    # Torch Sequential(conv, bn)
     if isinstance(ds, torch.nn.Sequential):
         if len(ds) < 2:
             raise TypeError("Downsample Sequential must contain at least [conv, bn].")
         return ds[0], ds[1]
-    # Anything indexable (very defensive)
     if hasattr(ds, "__getitem__"):
         try:
             return ds[0], ds[1]
         except Exception as e:
             raise TypeError(f"Unsupported downsample module type: {type(ds)}") from e
-    # Unknown pattern
     raise TypeError(f"Unsupported downsample module type: {type(ds)}")
 
 
@@ -144,6 +140,61 @@ def _handle_stage(dst: dict, stage_module, stage_name: str, *, mesh_mapper):
 
 
 # =========================
+# Added: helpers to mirror your snippet API
+# =========================
+
+
+def preprocess_conv_weight(weight: torch.Tensor, *, dtype=TT_DTYPE, mesh_mapper=None):
+    return ttnn.from_torch(weight.contiguous(), dtype=dtype, mesh_mapper=mesh_mapper)
+
+
+def preprocess_conv_bias(bias: torch.Tensor, *, dtype=TT_DTYPE, mesh_mapper=None):
+    return ttnn.from_torch(bias.reshape(BIAS_SHAPE).contiguous(), dtype=dtype, mesh_mapper=mesh_mapper)
+
+
+# =========================
+# Channel-downsample to 512 (1×1) handlers
+# =========================
+
+
+def _handle_1x1_downsample_conv(conv_module, *, mesh_mapper, who: str):
+    """
+    Pack a 1x1 conv intended to downsample channels to 512.
+    - If a BN exists (common patterns: .bn, .norm), fold it.
+    - Warn (but still pack) if out_channels != 512.
+    """
+    # Try to find attached BN on common attributes
+    bn_module = None
+    if hasattr(conv_module, "bn"):
+        bn_module = conv_module.bn
+    elif hasattr(conv_module, "norm"):
+        bn_module = conv_module.norm
+
+    # Validate out channels
+    try:
+        out_ch = conv_module.out_channels
+        if out_ch != 512:
+            warnings.warn(f"[{who}] expected out_channels=512, got {out_ch}. Packing anyway.", RuntimeWarning)
+    except Exception:
+        pass
+
+    if bn_module is not None:
+        w_t, b_t = _fold_and_pack_conv(conv_module, bn_module, mesh_mapper=mesh_mapper)
+    else:
+        w_t = preprocess_conv_weight(conv_module.weight, dtype=TT_DTYPE, mesh_mapper=mesh_mapper)
+        if getattr(conv_module, "bias", None) is not None:
+            b_t = preprocess_conv_bias(conv_module.bias, dtype=TT_DTYPE, mesh_mapper=mesh_mapper)
+        else:
+            # synthesize zero bias if absent
+            device = conv_module.weight.device
+            dtype = conv_module.weight.dtype
+            zeros = torch.zeros(conv_module.out_channels, device=device, dtype=dtype)
+            b_t = preprocess_conv_bias(zeros, dtype=TT_DTYPE, mesh_mapper=mesh_mapper)
+
+    return {"weight": w_t, "bias": b_t}
+
+
+# =========================
 # Public API
 # =========================
 
@@ -161,6 +212,7 @@ def custom_preprocessor(
     DRY, refactored preprocessor:
     - Handles Conv2d (with inline BN folding)
     - TransfuserBackbone (conv1 for image & lidar, stages layer1..layer4 for both encoders)
+    - Channel downsampling 1x1 convs to 512 for image & lidar
     - Standalone Bottleneck
     - Stage (generic by stage name using STAGE_STRUCTURE)
     """
@@ -189,7 +241,24 @@ def custom_preprocessor(
                 w, b = _fold_and_pack_conv(lidar.conv1, lidar.bn1, mesh_mapper=mesh_mapper)
                 lid_conv1["weight"], lid_conv1["bias"] = w, b
 
-        # ---- Process stages for both encoders (now includes layer2) ----
+        # ==== Channel downsampling to 512 (1×1) ====
+        # Image path
+        if hasattr(model, "change_channel_conv_image"):
+            parameters["change_channel_conv_image"] = _handle_1x1_downsample_conv(
+                model.change_channel_conv_image,
+                mesh_mapper=mesh_mapper,
+                who="change_channel_conv_image",
+            )
+
+        # Lidar path
+        if hasattr(model, "change_channel_conv_lidar"):
+            parameters["change_channel_conv_lidar"] = _handle_1x1_downsample_conv(
+                model.change_channel_conv_lidar,
+                mesh_mapper=mesh_mapper,
+                who="change_channel_conv_lidar",
+            )
+
+        # ---- Process stages for both encoders ----
         for stage_name in ("layer1", "layer2", "layer3", "layer4"):
             # Image stages
             if hasattr(model, "image_encoder") and hasattr(model.image_encoder, "features"):

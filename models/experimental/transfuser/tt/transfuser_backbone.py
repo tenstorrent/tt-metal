@@ -215,6 +215,28 @@ class TtTransfuserBackbone:
             # compute_kernel_config=compute_kernel_config,
         )
 
+        if self.config.perception_output_features != 1512:
+            self.change_channel_conv_image = TTConv2D(
+                kernel_size=1,
+                stride=1,
+                padding=0,
+                parameters=parameters.change_channel_conv_image,
+                kernel_fidelity=model_config,
+                shard_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                dtype=ttnn.bfloat16,
+            )
+            self.change_channel_conv_lidar = TTConv2D(
+                kernel_size=1,
+                stride=1,
+                padding=0,
+                parameters=parameters.change_channel_conv_lidar,
+                kernel_fidelity=model_config,
+                shard_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                dtype=ttnn.bfloat16,
+            )
+
     # def _make_layer(
     #     self,
     #     parameters,
@@ -702,4 +724,30 @@ class TtTransfuserBackbone:
         logger.info("layer4 Image and lidar - add")
         image_features = ttnn.add(image_features, image_features_layer4)
         lidar_features = ttnn.add(lidar_features, lidar_features_layer4)
+
+        logger.info("Downsamples channels to 512")
+        # Downsamples channels to 512
+        image_features, _ = self.change_channel_conv_image(device, image_features, image_features.shape)
+        lidar_features, _ = self.change_channel_conv_lidar(device, lidar_features, lidar_features.shape)
+
+        x4 = lidar_features  # Save for FPN
+        image_features_grid = image_features  # For auxiliary information
+
+        logger.info("Global average pooling")
+        # Global average pooling
+        image_features = ttnn.global_avg_pool2d(image_features)
+        lidar_features = ttnn.global_avg_pool2d(lidar_features)
+
+        # logger.info("Flatten")
+        # # Flatten
+        # # image_features = ttnn.reshape(image_features, (1, 1, 1, self.config.perception_output_features))
+        # # lidar_features = ttnn.reshape(lidar_features, (1, 1, 1, self.config.perception_output_features))
+        # image_features = ttnn.reshape(image_features, (1, self.config.perception_output_features))
+        # lidar_features = ttnn.reshape(lidar_features, (1, self.config.perception_output_features))
+        # logger.info("fused_features")
+
+        # print(f"{image_features.shape,lidar_features.shape=}")
+        # fused_features = ttnn.add(image_features, lidar_features)
+        # print(f"{fused_features.shape,image_features_grid.shape=}")
+
         return image_features, lidar_features
