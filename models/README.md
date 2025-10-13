@@ -94,7 +94,7 @@
 | Model                                               | Batch | Hardware                                           | Sentence/sec | Target sentence/sec | Release |
 |-----------------------------------------------------|-------|----------------------------------------------------|---------|----------------|---------|
 | [BERT-Large](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/metal_BERT_large_11)   | 8     | [n150 (Wormhole)](https://tenstorrent.com/hardware/wormhole)  | 270     | 400            |         |
-| [Sentence-Bert (backbone: bert-base)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/sentence_bert)   | 8     | [n150 (Wormhole)](https://tenstorrent.com/hardware/wormhole)  | 233     | 360            |         |
+| [Sentence-Bert (backbone: bert-base)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/wormhole/sentence_bert)   | 8     | [n150 (Wormhole)](https://tenstorrent.com/hardware/wormhole)  | 233     | 360            |         |
 
 ## Model Demos
 
