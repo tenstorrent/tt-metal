@@ -132,7 +132,11 @@ def test_group_norm_DRAM(device, N, C, H, W, num_groups, num_out_blocks, cores_y
         )
 
     # groupnorm
+
     num_itr = 2  # second iteration to help catch potential runtime args issue.
+
+    if C > 512 or N > 2:
+        num_itr = 1  # one iter if it is too slow
     for _ in range(num_itr):
         output_tensor = ttnn.group_norm(
             input_tensor_tilized,

@@ -1,4 +1,4 @@
-name: "Galaxy unit tests"
+name: "(Galaxy) unit tests"
 
 on:
   workflow_dispatch:
