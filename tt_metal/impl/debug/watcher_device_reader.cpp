@@ -982,9 +982,12 @@ void WatcherDeviceReader::Core::DumpLaunchMessage() const {
     if (programmable_core_type_ == HalProgrammableCoreType::TENSIX) {
         fprintf(reader_.f, "smsg:");
         DumpRunState(subordinate_sync.dm1());
-        DumpRunState(subordinate_sync.trisc0());
-        DumpRunState(subordinate_sync.trisc1());
-        DumpRunState(subordinate_sync.trisc2());
+        if (tt::tt_metal::MetalContext::instance().get_cluster().arch() !=
+            ARCH::QUASAR) {  // TODO enable when we have triscs running
+            DumpRunState(subordinate_sync.trisc0());
+            DumpRunState(subordinate_sync.trisc1());
+            DumpRunState(subordinate_sync.trisc2());
+        }
         fprintf(reader_.f, " ");
     } else if (tt::tt_metal::MetalContext::instance().get_cluster().arch() == ARCH::BLACKHOLE) {
         fprintf(reader_.f, "smsg:");
