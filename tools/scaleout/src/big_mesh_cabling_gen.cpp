@@ -15,10 +15,10 @@
 #include "protobuf/node_config.pb.h"
 
 struct InputConfig {
-    int nodes_0;
-    int nodes_1;
-    bool torus_0;
-    bool torus_1;
+    int nodes_0{};
+    int nodes_1{};
+    bool torus_0{};
+    bool torus_1{};
     std::string galaxy_structure;
     std::string topology;
     std::string galaxy_type;
