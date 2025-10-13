@@ -43,6 +43,18 @@ ProgramDescriptor TilizeSingleCoreProgramFactory::create_descriptor(
 
     bool fp32_llk_acc = a.dtype() == DataType::FLOAT32 || a.dtype() == DataType::FP8_E4M3 ||
                         output.dtype() == DataType::FP8_E4M3 || output.dtype() == DataType::BFLOAT8_B;
+    fprintf(stderr, "!! SingleCoreTilize\n");
+    fprintf(
+        stderr,
+        "!! Input [%u %u] PhyVol %lu elemSz %u Output [%u %u] PhyVol %lu elemSz %u\n",
+        a.padded_shape()[0],
+        a.padded_shape()[1],
+        a.physical_volume(),
+        a.element_size(),
+        output.padded_shape()[0],
+        output.padded_shape()[1],
+        output.physical_volume(),
+        output.element_size());
 
     uint32_t num_tiles = a.physical_volume() / tile_hw;
 
@@ -71,6 +83,7 @@ ProgramDescriptor TilizeSingleCoreProgramFactory::create_descriptor(
             }
         }
     }
+    fprintf(stderr, "!! For output: nTiles %u nTiles/Row %u nTiles/Block %u\n", num_tiles, num_tiles_in_row, num_tiles_per_block);
 
     uint32_t block_width_size = num_tiles_per_block * tile_width * a.element_size();
     uint32_t num_full_blocks_in_row = num_tiles_in_row / num_tiles_per_block;

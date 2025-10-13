@@ -93,6 +93,18 @@ ProgramDescriptor TilizeMultiCoreBlockProgramFactory::create_descriptor(
 
     bool fp32_llk_acc = a.dtype() == DataType::FLOAT32 || a.dtype() == DataType::FP8_E4M3 ||
                         output.dtype() == DataType::FP8_E4M3 || output.dtype() == DataType::BFLOAT8_B;
+    fprintf(stderr, "!! MultiCoreBlockTilize\n");
+    fprintf(
+        stderr,
+        "!! Input [%u %u] PhyVol %lu elemSz %u Output [%u %u] PhyVol %lu elemSz %u\n",
+        a.padded_shape()[0],
+        a.padded_shape()[1],
+        a.physical_volume(),
+        a.element_size(),
+        output.padded_shape()[0],
+        output.padded_shape()[1],
+        output.physical_volume(),
+        output.element_size());
 
     IDevice* device = a.device();
     CoreCoord grid_size = device->compute_with_storage_grid_size();
@@ -105,6 +117,7 @@ ProgramDescriptor TilizeMultiCoreBlockProgramFactory::create_descriptor(
     uint32_t num_tiles_per_row = output.padded_shape()[-1] / tile_width;
 
     uint32_t num_blocks = (output.padded_shape()[-1] * output.padded_shape()[-2]) / tile_hw;
+    fprintf(stderr, "!! For output: nTiles/Row %u nTiles/Col %u nBlocks %u\n", num_tiles_per_row, num_tiles_per_col, num_blocks);
     uint32_t cb_block_size_limit = max_l1_size / (input_single_tile_size + output_single_tile_size);
 
     auto

@@ -65,6 +65,11 @@ Tensor rand(
     const std::optional<tt::tt_metal::distributed::MeshMapperConfig>& mesh_mapper) {
     TT_FATAL(dtype != DataType::UINT8, "[ttnn::rand] DataType::UINT8 is not supported.");
 
+    fprintf(stderr, "-- Rand::invoke: shape rank %zu volume %lu [ ", shape.rank(), shape.volume());
+    for (size_t i = 0; i < shape.rank(); i++) {
+        fprintf(stderr, "%u ", shape[i]);
+    }
+    fprintf(stderr, "]\n");
     ttnn::Shape device_shape = shape;
     ttsl::SmallVector<bool> mesh_dim_is_sharded;
     if (mesh_mapper.has_value()) {

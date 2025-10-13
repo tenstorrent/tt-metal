@@ -27,10 +27,23 @@ ProgramDescriptor TilizeMultiCoreShardedProgramFactory::create_descriptor(
     uint32_t output_single_tile_size = operation_attributes.tile.get_tile_size(output_cb_data_format);
     bool fp32_llk_acc = input.dtype() == DataType::FLOAT32 || input.dtype() == DataType::FP8_E4M3 ||
                         output.dtype() == DataType::FP8_E4M3 || output.dtype() == DataType::BFLOAT8_B;
+    fprintf(stderr, "!! MultiCoreShardedTilize\n");
+    fprintf(
+        stderr,
+        "!! Input [%u %u] PhyVol %lu elemSz %u Output [%u %u] PhyVol %lu elemSz %u\n",
+        input.padded_shape()[0],
+        input.padded_shape()[1],
+        input.physical_volume(),
+        input.element_size(),
+        output.padded_shape()[0],
+        output.padded_shape()[1],
+        output.physical_volume(),
+        output.element_size());
 
     auto shard_spec = input.shard_spec().value();
     uint32_t num_tiles_per_shard = shard_spec.shape[0] * shard_spec.shape[1] / tile_hw;
     uint32_t num_tiles_per_row = shard_spec.shape[1] / tile_width;
+    fprintf(stderr, "!! For output: nTiles/Row %u nTiles/Shard %u\n", num_tiles_per_row, num_tiles_per_shard);
     const CoreRangeSet& all_cores = shard_spec.grid;
 
     const bool output_is_interleaved = output.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED;
