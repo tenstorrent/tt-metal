@@ -518,10 +518,10 @@ class ModelArgs:
             self.TOKENIZER_PATH = HF_MODEL
 
             logger.info(f"Is CI v2 env: {is_ci_v2_env}")
-            if is_ci_v2_env and model_location_generator is not None:
-                self.CKPT_DIR = str(model_location_generator(HF_MODEL, download_if_ci_v2=True, ci_v2_timeout_in_s=3000))
-                self.TOKENIZER_PATH = self.CKPT_DIR
-                logger.info(f"CI v2 environment detected, using model location generator to get {self.CKPT_DIR}")
+            # if is_ci_v2_env and model_location_generator is not None:
+            #     self.CKPT_DIR = str(model_location_generator(HF_MODEL, download_if_ci_v2=True, ci_v2_timeout_in_s=3000))
+            #     self.TOKENIZER_PATH = self.CKPT_DIR
+            #     logger.info(f"CI v2 environment detected, using model location generator to get {self.CKPT_DIR}")
 
             if not self.CACHE_PATH:
                 self.CACHE_PATH = os.path.join("model_cache", HF_MODEL, self.device_name)

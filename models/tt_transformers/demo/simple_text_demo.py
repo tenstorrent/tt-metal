@@ -639,6 +639,9 @@ def test_demo_text(
     """
     test_id = request.node.callspec.id
     logger.info(f"Is CI v2 env: {is_ci_v2_env}")
+    os.environ["HF_MODEL"] = str(
+        model_location_generator(os.getenv("HF_MODEL"), download_if_ci_v2=True, ci_v2_timeout_in_s=3000)
+    )
     if is_ci_env:
         if not ci_only:
             pytest.skip("CI only runs the CI-only tests")
