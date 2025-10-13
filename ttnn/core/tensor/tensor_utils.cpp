@@ -98,6 +98,13 @@ bool is_cpu_tensor(const Tensor& tensor) { return tensor.storage_type() == Stora
 bool is_device_tensor(const Tensor& tensor) { return tensor.storage_type() == StorageType::DEVICE; }
 
 ShardDivisionSpec compute_shard_division_spec(const Shape2D& shape, const Shape2D& shard_shape) {
+    fprintf(
+        stderr,
+        "-- compute_shard_division_spec: shape [%zu %zu] shard_shape [%zu %zu]\n",
+        shape.height(),
+        shape.width(),
+        shard_shape.height(),
+        shard_shape.width());
     const auto num_shards_height = tt::div_up(shape.height(), shard_shape.height());
     const auto last_shard_height =
         shape.height() % shard_shape.height() > 0 ? shape.height() % shard_shape.height() : shard_shape.height();
