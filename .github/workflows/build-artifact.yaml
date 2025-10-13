@@ -304,7 +304,7 @@ jobs:
           if [[ "${{ inputs.skip-tt-train }}" != "true" ]]; then
             ARTIFACT_PATHS="$ARTIFACT_PATHS build/tt-train data"
           fi
-          tar -I 'zstd --adapt=min=9 -T0' -cvhf /work/ttn_any.tar.zst $ARTIFACT_PATHS
+          tar -I 'zstd --adapt=min=9 -T0' -cvhf /work/ttm_any.tar.zst $ARTIFACT_PATHS
 
       - name: Set build artifact name
         id: set_build_artifact_name
@@ -324,7 +324,7 @@ jobs:
         timeout-minutes: 10
         with:
           name: ${{ env.build_artifact_name }}
-          path: /work/ttn_any.tar.zst
+          path: /work/ttm_any.tar.zst
           if-no-files-found: error
           compression-level: 0
 
