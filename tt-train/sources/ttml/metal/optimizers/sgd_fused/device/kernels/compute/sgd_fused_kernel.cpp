@@ -36,9 +36,11 @@ inline void pack_and_push_two_cbs(uint32_t cb_output_1, uint32_t cb_output_2, ui
     cb_reserve_back(cb_output_2, block_size);
     tile_regs_wait();
     pack_reconfig_data_format(cb_output_1);
-    pack_reconfig_data_format(cb_output_2);
     for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
         pack_tile(block_idx, cb_output_1);
+    }
+    pack_reconfig_data_format(cb_output_2);
+    for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
         pack_tile(block_idx, cb_output_2);
     }
     tile_regs_release();
@@ -63,9 +65,7 @@ void MAIN {
     uint32_t one_minus_dampening = get_arg_val<uint32_t>(runtime_args_counter++);
     uint32_t weight_decay = get_arg_val<uint32_t>(runtime_args_counter++);
 
-    // TODO: remove one of them
     init_sfpu(cb_grad_idx, cb_grad_idx);
-    init_sfpu(cb_momentum_out_idx, cb_momentum_out_idx);
 
     for (uint32_t tile_idx = 0; tile_idx < num_tiles_per_core; tile_idx += block_size) {
         cb_wait_front(cb_grad_idx, block_size);
@@ -161,6 +161,7 @@ void MAIN {
 
         cb_wait_front(cb_update_idx, block_size);
         tile_regs_acquire();
+        reconfig_data_format(cb_param_in_idx, cb_update_idx);
         sub_tiles_init(cb_param_in_idx, cb_update_idx);
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
             sub_tiles(cb_param_in_idx, cb_update_idx, block_idx, block_idx, block_idx);
