@@ -267,7 +267,8 @@ def run_experiments() -> dict:
     # Test 2: Multiple tiles (16x16 tiles of 32x32 each = 512x512)
     logger.info("=== Running multi-tile experiments ===")
     multi_tile_shape = (512, 512)
-    results[ShapeType.MULTI_TILE_KEY] = _run_shape_experiments(multi_tile_shape, operations, axes, device)
+    key = ShapeType.MULTI_TILE_KEY + "-32x32_tiles"
+    results[key] = _run_shape_experiments(multi_tile_shape, operations, axes, device)
 
     # Test 3: Rectangular shapes (to test non-square behavior)
     logger.info("=== Running rectangular experiments ===")

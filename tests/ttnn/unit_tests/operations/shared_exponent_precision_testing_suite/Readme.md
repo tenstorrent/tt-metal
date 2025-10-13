@@ -35,7 +35,8 @@ shared_exponent_precision/
 
 The suite generates various statistical distributions to stress-test precision behavior:
 
-#### Basic Normal Distributions
+#### Basic Distributions
+- **`constant`**: All ones tensor - tests uniform magnitude behavior and shared exponent with identical values
 - **`normal_0_1`**: Standard normal N(0,1) - baseline distribution
 - **`normal_skewed_mean`**: Normal with shifted mean N(5,1) - tests mean offset effects
 - **`normal_high_var_10`**: High variance N(0,10²) - moderate spread testing
@@ -63,6 +64,27 @@ Creates systematic magnitude differences across columns (10⁻³ to 10³ range).
 # Column 0: 10^-3, Column 1: 10^-2.5, ..., Column n: 10^3
 ```
 **Purpose**: Tests column-wise shared exponent behavior with predictable magnitude progression.
+
+#### **Reverse Column Gradient Pattern** (`reverse_column_magnitude_gradient`)
+Creates systematic magnitude differences across columns in reverse order (10³ to 10⁻³ range).
+```python
+# Column 0: 10^3, Column 1: 10^2.5, ..., Column n: 10^-3
+```
+**Purpose**: Tests column-wise shared exponent behavior with reverse magnitude progression to identify directional sensitivity.
+
+#### **Row Gradient Pattern** (`row_magnitude_gradient`)
+Creates systematic magnitude differences across rows (10⁻³ to 10³ range).
+```python
+# Row 0: 10^-3, Row 1: 10^-2.5, ..., Row n: 10^3
+```
+**Purpose**: Tests row-wise shared exponent behavior with predictable magnitude progression along the vertical axis.
+
+#### **Reverse Row Gradient Pattern** (`reverse_row_magnitude_gradient`)
+Creates systematic magnitude differences across rows in reverse order (10³ to 10⁻³ range).
+```python
+# Row 0: 10^3, Row 1: 10^2.5, ..., Row n: 10^-3
+```
+**Purpose**: Tests row-wise shared exponent behavior with reverse magnitude progression to identify vertical directional sensitivity.
 
 #### **Row Uniform Pattern** (`row_uniform_column_varying`)
 Uniform values within rows, varying magnitudes across rows in cycles.
@@ -217,7 +239,8 @@ Modify the `pattern_generators` selection in `_run_shape_experiments()`:
 
 ```python
 # Test only specific patterns
-selected_patterns = ["column_gradient", "fa_rand_pattern"]
+selected_patterns = ["column_gradient", "reverse_column_magnitude_gradient",
+                     "row_gradient", "fa_rand_pattern"]
 pattern_generators = {k: v for k, v in generate_test_patterns(shape).items()
                      if k in selected_patterns}
 ```
