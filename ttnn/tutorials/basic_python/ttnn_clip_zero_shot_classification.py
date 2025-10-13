@@ -570,7 +570,7 @@ def main():
         logger.info("Loading pre-trained CLIP model...")
 
         model = CLIPModel.from_pretrained(
-            "openai/clip-vit-base-patch32", cache_dir="data-clip-zero-shot-classification/"
+            "openai/clip-vit-base-patch32", cache_dir="ttnn_clip_zero_shot_image_classification/"
         )
         state_dict = convert_model_to_ttnn(model.state_dict())
 
@@ -579,7 +579,7 @@ def main():
 
         # Download and preprocess test image
         logger.info("Downloading and preprocessing image...")
-        image_url = "https://media.githubusercontent.com/media/tenstorrent/tutorial-assets/nmaurice/clip-tutorial/media/clip_tutorial/CLIP.png"
+        image_url = "https://media.githubusercontent.com/media/tenstorrent/tutorial-assets/refs/heads/main/media/clip_tutorial/CLIP.png"
         image = download_image(image_url)
 
         # Preprocess image to model requirements (224x224, normalized with ImageNet statistics)
