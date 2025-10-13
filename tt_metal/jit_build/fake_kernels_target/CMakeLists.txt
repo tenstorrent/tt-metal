@@ -32,6 +32,12 @@ foreach(file ${ALL_TTNN_FILES})
     endif()
 endforeach()
 
+file(
+    GLOB_RECURSE TT_METAL_TEST_KERNELS
+    "${CMAKE_SOURCE_DIR}/tests/tt_metal/tt_metal/test_kernels/*.cpp"
+    "${CMAKE_SOURCE_DIR}/tests/tt_metal/tt_metal/test_kernels/*.cc"
+)
+
 list(
     APPEND
     ALL_KERNEL_FILES
@@ -39,6 +45,7 @@ list(
     ${TT_METAL_DISPATCH_KERNELS}
     ${TT_METAL_FABRIC_KERNELS}
     ${TTNN_OPERATION_KERNELS}
+    ${TT_METAL_TEST_KERNELS}
 )
 
 list(LENGTH ALL_KERNEL_FILES ALL_KERNEL_FILES_LEN)
