@@ -42,6 +42,10 @@ fi
 echo "Installing dev dependencies"
 python3 -m pip install -r $(pwd)/tt_metal/python_env/requirements-dev.txt
 
+echo "Installing debugging dependencies"
+. ./scripts/install_debugger.sh
+pip install -r ./tools/triage/requirements.txt
+
 echo "Installing tt-metal"
 pip install -e .
 
