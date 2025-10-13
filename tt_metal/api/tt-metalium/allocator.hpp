@@ -111,7 +111,10 @@ public:
     void clear();
 
     // AllocatorState Methods
+    // Extracts the current state of the allocator.
     AllocatorState extract_state() const;
+
+    // Overrides the current state with the given state, deallocating all of existing buffers.
     void override_state(const AllocatorState& state);
 
 protected:
