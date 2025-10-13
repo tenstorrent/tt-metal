@@ -26,9 +26,6 @@ foreach(PROTO_FILE ${PROTO_SCHEMAS})
     list(APPEND GENERATED_PROTO_SRCS ${PROTO_SRCS})
 endforeach()
 
-GENERATE_PROTO_PY_FILES(${CMAKE_CURRENT_SOURCE_DIR}/cabling_descriptor/schemas/node_config.proto OUTPUT_DIR ${CMAKE_CURRENT_BINARY_DIR})
-GENERATE_PROTO_PY_FILES(${CMAKE_CURRENT_SOURCE_DIR}/cabling_descriptor/schemas/cluster_config.proto OUTPUT_DIR ${CMAKE_CURRENT_BINARY_DIR})
-
 # TODO: Should refactor into an API directory
 target_sources(
     scaleout_tools
