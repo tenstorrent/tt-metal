@@ -997,7 +997,7 @@ def get_attrs_for_op(operation: Operation, node) -> Dict[str, Any]:
         if len(operation.args) > 4:
             attrs["dilation"] = operation.args[4]
     elif operation.function_call_name == "torch.ops.aten.cat":
-        attrs["dim"] = operation.args[1]
+        attrs["dim"] = operation.args[1] if len(operation.args) > 1 else 0
     elif operation.function_call_name == "torch.ops.aten.slice.Tensor":
         attrs["dim"] = operation.args[1]
         if len(operation.args) > 2:

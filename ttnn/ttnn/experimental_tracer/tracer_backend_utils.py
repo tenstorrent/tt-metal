@@ -62,6 +62,7 @@ class ConvAttrs(AttrsBase):
     dilation: List[int]
     groups: int
     transposed: bool = False
+    input_video_length: Optional[int] = None
     output_padding: Optional[List[int]] = None
 
 
@@ -231,6 +232,22 @@ class AtenConvolution(WrappedOperation):
                     dilation=[1, self.args[5][0]],
                     transposed=self.args[6],
                     output_padding=[0, self.args[7][0]] if self.args[7] is not None else None,
+                    groups=self.args[8],
+                )
+            elif len(input_shape) == 5:
+                self.attrs = ConvAttrs(
+                    input_video_length=input_shape[0],
+                    input_batch=input_shape[1],
+                    input_height=input_shape[3],
+                    input_width=input_shape[4],
+                    input_depth=input_shape[2],
+                    hidden_units=self.args[1].shape[0],
+                    kernel=[self.args[1].shape[2], self.args[1].shape[3]],
+                    stride=self.args[3],
+                    padding=self.args[4],
+                    dilation=self.args[5],
+                    transposed=self.args[6],
+                    output_padding=self.args[7],
                     groups=self.args[8],
                 )
             else:

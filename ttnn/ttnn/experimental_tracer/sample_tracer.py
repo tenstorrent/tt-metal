@@ -41,6 +41,7 @@ allowed_modes = [
     "swin_transformer_v2",
     "open_vla",
     "meta-llama/Llama-2-7b-hf",
+    "vjepa2-vitg-fpc64-256",
 ]
 
 allowed_dtypes = ["float32", "float64", "int32", "int64", "bfloat16"]
@@ -279,6 +280,11 @@ def main(args_dict):
 
         model_name = "meta-llama/Llama-2-7b-hf"
         torch_model = AutoModelForCausalLM.from_pretrained(model_name, device_map="auto")
+    elif args.model == "vjepa2-vitg-fpc64-256":
+        from transformers import AutoVideoProcessor, AutoModel
+
+        hf_repo = "facebook/vjepa2-vitg-fpc64-256"
+        torch_model = AutoModel.from_pretrained(hf_repo)
     if input_tensors is None:
         input_shapes = args.input_shape
         assert input_shapes is not None, "Input shapes must be provided."
