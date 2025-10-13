@@ -59,6 +59,11 @@ Tensor unary_impl(
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     TT_FATAL(!op_chain.empty(), "Op chain cannot be empty");
+    std::cout << "-- unary_impl: op chain ( ";
+    for (const auto& u : op_chain) {
+        std::cout << enchantum::to_string(u.type()) << ' ';
+    }
+    std::cout << "): begin" << std::endl;
     DataType input_dtype = input_tensor.dtype();
     // TYPECAST/BITCAST should always be the last operation in the chain when present; use its output dtype (param 1)
     DataType output_dtype = input_dtype;

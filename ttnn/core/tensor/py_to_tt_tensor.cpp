@@ -70,6 +70,9 @@ Tensor create_tt_tensor_from_host_data(
     bool preserve_nan_values,
     bool fast_approx) {
     using namespace tt::tt_metal;
+
+    fprintf(stderr, "-- create_tt_tensor_from_host_data: MORE DETAILES\n");
+
     auto create_tensor_from_host_buffer = [&]<typename T>() -> Tensor {
         TensorLayout dst_tensor_layout(dst_dtype, PageConfig(layout, optional_tile), memory_config);
         TensorLayout src_tensor_layout(src_dtype, PageConfig(ttnn::Layout::ROW_MAJOR), memory_config);
@@ -180,6 +183,7 @@ Tensor convert_python_tensor_to_tt_tensor(
     bool col_tilize,
     bool fast_approx) {
     ZoneScoped;
+    fprintf(stderr, "-- convert_python_tensor_to_tt_tensor: MORE DETAILES\n");
     if (dst_dtype == DataType::BFLOAT8_B || dst_dtype == DataType::BFLOAT4_B) {
         TT_FATAL(layout == Layout::TILE, "Layout must be Layout::TILE for bfloat8_b or bfloat4_b!");
     }
