@@ -363,9 +363,6 @@ Result conv2d_DRAM(
         ttnn::Tensor output_tensor;
         std::tie(output_tensor, std::ignore, std::ignore, weight_tensor_on_device, bias_tensor_on_device) = conv2d_L1(
             input_tensor_on_device,
-            // TODO: Add check to ensure that the shard_layout and memory_config are the same as the last slice to
-            // re-use the weights tensor.
-            // TODO: Add caching mechanism for multiple weights tensors, depending on the memory configs.
             weight_tensor,
             device,
             in_channels,
@@ -585,9 +582,6 @@ Result conv2d_DRAM(
         std::tie(sliced_output_tensor, std::ignore, std::ignore, weight_tensor_on_device, bias_tensor_on_device) =
             conv2d_L1(
                 sliced_input_tensor,
-                // TODO: Add check to ensure that the shard_layout and memory_config are the same as the last slice to
-                // re-use the weights tensor.
-                // TODO: Add caching mechanism for multiple weights tensors, depending on the memory configs.
                 first_run ? weight_tensor : weight_tensor_on_device,
                 device,
                 in_channels,

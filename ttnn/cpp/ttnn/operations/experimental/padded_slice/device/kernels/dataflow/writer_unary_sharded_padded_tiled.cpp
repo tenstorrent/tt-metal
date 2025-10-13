@@ -113,7 +113,6 @@ void kernel_main() {
                 current_noc_read_addr += block_row_size;
                 current_write_addr += output_row_size_bytes;
             }
-            noc_async_read_barrier();
         } else {
             noc_async_read(noc_read_addr, write_addr, read_rows_size * block_row_size);
         }
