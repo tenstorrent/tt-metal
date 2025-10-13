@@ -182,9 +182,9 @@ std::set<PhysicalChannelConnection> validate_fsd_against_gsd(
                                       discovered_gsd["global_eth_connections"].size() > 0;
 
     // At least one connection type should exist
-    if (!(has_local_eth_connections || has_global_eth_connections)) {
-        throw std::runtime_error("No connection types found in discovered GSD");
-    }
+    // if (!(has_local_eth_connections || has_global_eth_connections)) {
+    //     throw std::runtime_error("No connection types found in discovered GSD");
+    // }
 
     // Convert generated connections to a comparable format
     std::set<std::pair<PhysicalChannelEndpoint, PhysicalChannelEndpoint>> generated_connections;

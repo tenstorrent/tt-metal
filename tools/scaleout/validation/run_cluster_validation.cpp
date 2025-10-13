@@ -263,11 +263,11 @@ int main(int argc, char* argv[]) {
 
     // Create physical system descriptor and discover the system
     auto physical_system_descriptor = generate_physical_system_descriptor(input_args);
-    reset_ethernet_links(physical_system_descriptor, physical_system_descriptor.get_asic_topology(physical_system_descriptor.my_host_name()));
+
     if (*distributed_context.rank() == 0) {
         auto missing_asic_topology = validate_connectivity(input_args, physical_system_descriptor);
+        reset_ethernet_links(physical_system_descriptor, missing_asic_topology);
     }
-
     eth_connections_healthy = generate_link_metrics(
         physical_system_descriptor,
         input_args.num_iterations,
