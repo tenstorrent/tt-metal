@@ -251,7 +251,7 @@ def _format_callstack(callstack: list[CallstackEntry]) -> list[str]:
             except ValueError:
                 # Path is not relative to cwd, keep as is
                 display_path = frame.file
-            
+
             line += f"at {GREEN}{display_path}{RST}"
             if frame.line is not None:
                 line += f" {GREEN}{frame.line}{RST}"
@@ -273,6 +273,7 @@ def format_callstack_with_message(callstack_with_message: KernelCallstackWithMes
 @dataclass
 class DumpCallstacksData:
     """Callstack data showing essential fields: Kernel ID:Name, Go Message, Subdevice, Preload, Waypoint, PC, and Callstack."""
+
     kernel_id_name: str = triage_field("Kernel ID:Name")
     go_message: str = triage_field("Go Message")
     subdevice: int = triage_field("Subdevice")
@@ -287,6 +288,7 @@ class DumpCallstacksData:
 @dataclass
 class DumpCallstacksDataVerbose:
     """Verbose callstack data showing all dispatcher fields."""
+
     dispatcher_core_data: DispatcherCoreData = recurse_field()
     pc: int | None = triage_field("PC", hex_serializer)
     kernel_callstack_with_message: KernelCallstackWithMessage = triage_field(
