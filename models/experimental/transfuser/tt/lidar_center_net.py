@@ -88,7 +88,8 @@ class LidarCenterNet(nn.Module):
         # prediction heads
         # self.head = LidarCenterNetHead(channel, channel, 1, train_cfg=config).to(self.device)
         # Initialize TTNN model
-        tt_head = TTLidarCenterNetHead(
+
+        self.head = TTLidarCenterNetHead(
             device=device,
             parameters=parameters["head"],
             in_channel=channel,
@@ -220,11 +221,20 @@ class LidarCenterNet(nn.Module):
         )
         features, _, fused_features = self._model(tt_rgb, tt_lidar_bev, tt_ego_vel, self.device)
 
-        return features, fused_features
+        # Validate output_fused_tensor
+        tt_fused_torch = ttnn.to_torch(fused_features, device=self.device, dtype=torch.float32)
 
-        pred_wp, _, _, _, _ = self.forward_gru(fused_features, target_point)
+        pred_wp, _, _, _, _ = self.forward_gru(tt_fused_torch, target_point)
 
-        preds = self.head([features[0]])
+        # import  pdb; pdb.set_trace()
+        batch_size, feat_height, feat_width, in_channels = features[0].shape
+        preds = self.head.forward(
+            [features[0]],
+            batch_size=batch_size,
+            height=feat_height,
+            width=feat_width,
+        )
+        return preds
         results = self.head.get_bboxes(preds[0], preds[1], preds[2], preds[3], preds[4], preds[5], preds[6])
         bboxes, _ = results[0]
 

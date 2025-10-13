@@ -640,11 +640,11 @@ class LidarCenterNet(nn.Module):
 
         assert self.backbone == "transFuser", "Only Transfuser supported for LidarCenterNet."
         features, _, fused_features = self._model(rgb, lidar_bev, ego_vel)
-        return features, fused_features
 
         pred_wp, _, _, _, _ = self.forward_gru(fused_features, target_point)
 
         preds = self.head([features[0]])
+        return preds
         results = self.head.get_bboxes(preds[0], preds[1], preds[2], preds[3], preds[4], preds[5], preds[6])
         bboxes, _ = results[0]
 
