@@ -220,8 +220,7 @@ def create_tt_qwen_model(
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
             1,  # batch_size
-            # 128,  # max_generated_tokens
-            8192,
+            128,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)

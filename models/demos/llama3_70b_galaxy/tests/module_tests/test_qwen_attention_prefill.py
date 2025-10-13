@@ -44,7 +44,7 @@ from models.demos.llama3_70b_galaxy.tt.llama_ccl import TT_CCL
 )
 @pytest.mark.parametrize(
     "page_params",
-    [{"page_block_size": 64, "page_max_num_blocks": 4096}],
+    [{"page_block_size": 64, "page_max_num_blocks": 2048}],
 )
 @pytest.mark.parametrize(
     "max_seq_len",
