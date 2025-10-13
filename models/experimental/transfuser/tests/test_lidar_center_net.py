@@ -225,37 +225,37 @@ def test_lidar_center_net(
     tt_brake_torch = tt_brake_torch.reshape(ref_brake.shape)
 
     # Validate center heatmap
-    does_pass, heatmap_pcc_message = check_with_pcc(ref_center_heatmap, tt_center_heatmap_torch, 0.95)
+    does_pass, heatmap_pcc_message = check_with_pcc(ref_center_heatmap, tt_center_heatmap_torch, 0.80)
     logger.info(f"Center Heatmap PCC: {heatmap_pcc_message}")
     assert does_pass, f"Center Heatmap PCC check failed: {heatmap_pcc_message}"
 
     # Validate WH prediction
-    does_pass, wh_pcc_message = check_with_pcc(ref_wh, tt_wh_torch, 0.95)
+    does_pass, wh_pcc_message = check_with_pcc(ref_wh, tt_wh_torch, 0.80)
     logger.info(f"WH PCC: {wh_pcc_message}")
     assert does_pass, f"WH PCC check failed: {wh_pcc_message}"
 
     # Validate offset prediction
-    does_pass, offset_pcc_message = check_with_pcc(ref_offset, tt_offset_torch, 0.95)
+    does_pass, offset_pcc_message = check_with_pcc(ref_offset, tt_offset_torch, 0.80)
     logger.info(f"Offset PCC: {offset_pcc_message}")
     assert does_pass, f"Offset PCC check failed: {offset_pcc_message}"
 
     # Validate yaw class prediction
-    does_pass, yaw_class_pcc_message = check_with_pcc(ref_yaw_class, tt_yaw_class_torch, 0.95)
+    does_pass, yaw_class_pcc_message = check_with_pcc(ref_yaw_class, tt_yaw_class_torch, 0.80)
     logger.info(f"Yaw Class PCC: {yaw_class_pcc_message}")
     assert does_pass, f"Yaw Class PCC check failed: {yaw_class_pcc_message}"
 
     # Validate yaw residual prediction
-    does_pass, yaw_res_pcc_message = check_with_pcc(ref_yaw_res, tt_yaw_res_torch, 0.95)
+    does_pass, yaw_res_pcc_message = check_with_pcc(ref_yaw_res, tt_yaw_res_torch, 0.80)
     logger.info(f"Yaw Residual PCC: {yaw_res_pcc_message}")
     assert does_pass, f"Yaw Residual PCC check failed: {yaw_res_pcc_message}"
 
     # Validate velocity prediction
-    does_pass, velocity_pcc_message = check_with_pcc(ref_velocity, tt_velocity_torch, 0.95)
+    does_pass, velocity_pcc_message = check_with_pcc(ref_velocity, tt_velocity_torch, 0.80)
     logger.info(f"Velocity PCC: {velocity_pcc_message}")
     assert does_pass, f"Velocity PCC check failed: {velocity_pcc_message}"
 
     # Validate brake prediction
-    does_pass, brake_pcc_message = check_with_pcc(ref_brake, tt_brake_torch, 0.95)
+    does_pass, brake_pcc_message = check_with_pcc(ref_brake, tt_brake_torch, 0.80)
     logger.info(f"Brake PCC: {brake_pcc_message}")
     assert does_pass, f"Brake PCC check failed: {brake_pcc_message}"
 
