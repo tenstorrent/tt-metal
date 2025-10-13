@@ -174,6 +174,13 @@ Tensor Tensor::from_span(
     distributed::MeshDevice* device,
     std::optional<tt::tt_metal::QueueId> cq_id,
     T pad_value) {
+    fprintf(
+        stderr,
+        "-- Tensor::from_span: size %zu shape [%u %u] %s\n",
+        buffer.size(),
+        spec.logical_shape()[0],
+        spec.logical_shape()[1],
+        enchantum::to_string(spec.data_type()).data());
     auto host_tensor = HostTensor::from_span(buffer, spec, pad_value);
     auto res = Tensor(std::move(host_tensor));
     if (device) {
@@ -188,6 +195,7 @@ Tensor Tensor::from_borrowed_data(
     const tt::tt_metal::Shape& shape,
     tt::tt_metal::MemoryPin buffer_pin,
     const std::optional<Tile>& tile) {
+    fprintf(stderr, "-- Tensor::from_borrowed_data\n");
     auto host_tensor = HostTensor::from_borrowed_data(buffer, shape, std::move(buffer_pin), tile);
     return Tensor(std::move(host_tensor));
 }
@@ -199,6 +207,7 @@ Tensor Tensor::from_vector(
     distributed::MeshDevice* device,
     std::optional<tt::tt_metal::QueueId> cq_id,
     T pad_value) {
+    fprintf(stderr, "-- Tensor::from_vector -> HostTensor::from_vector\n");
     auto host_tensor = HostTensor::from_vector(std::move(buffer), spec, pad_value);
     auto res = Tensor(std::move(host_tensor));
     res = to_dtype(res, spec.data_type());
@@ -354,17 +363,23 @@ Tensor Tensor::pad(
     const tt::tt_metal::Shape& output_padded_shape,
     const tt::tt_metal::Shape& input_tensor_start,
     float pad_value) const {
+    fprintf(stderr, "-- Tensor::pad: calling tensor_pad()\n");
     return tt::tt_metal::pad(*this, output_padded_shape, input_tensor_start, pad_value);
 }
 
 Tensor Tensor::unpad(
     const tt::tt_metal::Shape& output_tensor_start, const tt::tt_metal::Shape& output_tensor_end) const {
+    fprintf(stderr, "-- Tensor::unpad: calling tensor_unpad()\n");
     return tt::tt_metal::unpad(*this, output_tensor_start, output_tensor_end);
 }
 
-Tensor Tensor::pad_to_tile(float pad_value) const { return tt::tt_metal::pad_to_tile(*this, pad_value); }
+Tensor Tensor::pad_to_tile(float pad_value) const {
+    fprintf(stderr, "-- Tensor::pad_to_tile: calling tensor_pad_to_tile()\n");
+    return tt::tt_metal::pad_to_tile(*this, pad_value);
+}
 
 Tensor Tensor::unpad_from_tile(const tt::tt_metal::Shape& output_tensor_shape) const {
+    fprintf(stderr, "-- Tensor::unpad_from_tile: calling tensor_unpad_from_tile()\n");
     return tt::tt_metal::unpad_from_tile(*this, output_tensor_shape);
 }
 

@@ -20,6 +20,13 @@ namespace tt::tt_metal::tensor_impl {
 
 std::shared_ptr<distributed::MeshBuffer> allocate_device_buffer(
     distributed::MeshDevice* mesh_device, const TensorSpec& tensor_spec) {
+    fprintf(
+        stderr,
+        "-- allocate_device_buffer: logical [%u %u] padded [%u %u]\n",
+        tensor_spec.logical_shape()[0],
+        tensor_spec.logical_shape()[1],
+        tensor_spec.padded_shape()[0],
+        tensor_spec.padded_shape()[1]);
     const auto& memory_config = tensor_spec.tensor_layout().get_memory_config();
 
     distributed::DeviceLocalBufferConfig device_local_buffer_config{
@@ -73,6 +80,13 @@ struct ShardDivisionSpec {
 };
 
 ShardDivisionSpec compute_shard_division_spec(const Shape2D& shape, const Shape2D& shard_shape) {
+    fprintf(
+        stderr,
+        "-- compute_shard_division_spec: shape [%zu %zu] shard_shape [%zu %zu]\n",
+        shape.height(),
+        shape.width(),
+        shard_shape.height(),
+        shard_shape.width());
     const auto num_shards_height = tt::div_up(shape.height(), shard_shape.height());
     const auto last_shard_height =
         shape.height() % shard_shape.height() > 0 ? shape.height() % shard_shape.height() : shard_shape.height();
@@ -89,6 +103,7 @@ std::array<Shape2D, 2> get_logical_and_physical_shard_shapes(const TensorSpec& t
     const auto& logical_shape = tensor_spec.logical_shape();
     const auto& padded_shape = tensor_spec.padded_shape();
 
+    fprintf(stderr, "-- get_logical_and_physical_shard_shapes: use the last 2 dims of the input shapes\n");
     Shape2D logical_shard_shape{logical_shape[-2], logical_shape[-1]};
     Shape2D physical_shard_shape = {padded_shape[-2], padded_shape[-1]};
     return {logical_shard_shape, physical_shard_shape};
@@ -105,6 +120,15 @@ std::vector<LogicalPhysicalMapping> compute_logical_to_physical_shards_mapping(
 
     const auto [num_shards_height, last_shard_height, num_shards_width, last_shard_width] =
         compute_shard_division_spec(logical_2d_shape, logical_shard_shape);
+    fprintf(
+        stderr,
+        "!! compute_logical_to_physical_shards_mapping: logicalStride %zu nShardsHeight %zu lastShardHeight %zu "
+        "nShardsWidth %zu lastShardWidth %zu\n",
+        logical_stride,
+        num_shards_height,
+        last_shard_height,
+        num_shards_width,
+        last_shard_width);
 
     std::vector<LogicalPhysicalMapping> logical_physical_mapping{};
     logical_physical_mapping.reserve(num_shards_height * num_shards_width);
@@ -137,21 +161,45 @@ std::vector<T> convert_to_row_major_physical_data(
     ttsl::Span<const T> logical_data, const TensorSpec& tensor_spec, T pad_value) {
     const auto& physical_shape = tensor_spec.physical_shape();
     const size_t physical_stride = physical_shape.width();
+    fprintf(stderr, "!! convert_to_row_major_physical_data: physicalStride %zu\n", physical_stride);
     auto [logical_shard_shape, physical_shard_shape] =
         CMAKE_UNIQUE_NAMESPACE::get_logical_and_physical_shard_shapes(tensor_spec);
 
     std::vector<T> row_major_physical_data(physical_shape.height() * physical_shape.width(), pad_value);
 
+    fprintf(
+        stderr,
+        "-- Logical2Physical shard 2D shapes: logical [%zu %zu] physical [%zu %zu] vol %zu at %p\n",
+        logical_shard_shape.height(),
+        logical_shard_shape.width(),
+        physical_shard_shape.height(),
+        physical_shard_shape.width(),
+        row_major_physical_data.size(),
+        row_major_physical_data.data());
+
     const auto logical_physical_mapping = CMAKE_UNIQUE_NAMESPACE::compute_logical_to_physical_shards_mapping(
         tensor_spec.logical_2d_shape(), logical_shard_shape, physical_shard_shape, physical_stride);
 
     for (const auto& [indices, cols] : logical_physical_mapping) {
+        fprintf(stderr, "-- Mapping: %lu cols & %zu indices\n", cols, indices.size());
         for (const auto& [logical_idx_start, physical_idx_start] : indices) {
+            fprintf(stderr, "---- idx_start logical-to-physical: %2lu -> %4lu\n", logical_idx_start, physical_idx_start);
             for (size_t col = 0; col < cols; col++) {
                 row_major_physical_data[physical_idx_start + col] = logical_data[logical_idx_start + col];
             }
         }
     }
+
+    if constexpr (std::is_same_v<T, float>) {
+        fprintf(stderr, "!! convert_to_row_major_physical_data: output row-major physical data\n");
+        for (size_t r = 0; r < physical_shape.height(); r++) {
+            for (size_t c = 0; c < physical_shape.width(); c++) {
+                fprintf(stderr, "%f ", row_major_physical_data[r * physical_shape.width() + c]);
+            }
+            fprintf(stderr, "\n");
+        }
+    }
+
     return row_major_physical_data;
 }
 
@@ -219,6 +267,17 @@ std::vector<T> encode_tensor_data(ttsl::Span<const T> logical_data, const Tensor
     const auto& logical_shape = tensor_spec.logical_shape();
     const auto& physical_shape = tensor_spec.physical_shape();
 
+    fprintf(
+        stderr,
+        "!! %s: logical data size %zu logical [%u %u] physical2D [%zu %zu] padValueSz %zu\n",
+        __PRETTY_FUNCTION__,
+        logical_data.size(),
+        logical_shape[0],
+        logical_shape[1],
+        physical_shape.height(),
+        physical_shape.width(),
+        sizeof(pad_value));
+
     TT_FATAL(
         logical_data.size() == logical_shape.volume(),
         "Logical data size {} should be same as volume indicated by logical shape {}",
@@ -245,7 +304,17 @@ std::vector<T> encode_tensor_data(ttsl::Span<const T> logical_data, const Tensor
         physical_shape);
 
     if (tensor_spec.layout() == Layout::TILE) {
-        return tensor_impl::to_tile_major_layout(physical_shape, tensor_spec.tile(), row_major_physical_data_span);
+        auto ret = tensor_impl::to_tile_major_layout(physical_shape, tensor_spec.tile(), row_major_physical_data_span);
+        if constexpr (std::is_same_v<T, float>) {
+            fprintf(stderr, "---- tilized host data %p\n", ret.data());
+            for (size_t r = 0; r < physical_shape.height(); r++) {
+                for (size_t c = 0; c < physical_shape.width(); c++) {
+                    fprintf(stderr, "%f ", ret[r * physical_shape.width() + c]);
+                }
+                fprintf(stderr, "\n");
+            }
+        }
+        return ret;
     }
     if (!row_major_physical_data.empty()) {
         // If conversion to physical data was performed, return the row major physical data to avoid extra copy.

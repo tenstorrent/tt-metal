@@ -31,7 +31,7 @@ TensorSpec RandDeviceOperation::compute_output_specs(
 
 RandDeviceOperation::tensor_return_value_t RandDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& /*tensor_args*/) {
-    return create_device_tensor(
+    auto output_tensor = create_device_tensor(
         ttnn::TensorSpec(
             operation_attributes.shape,
             tt::tt_metal::TensorLayout(
@@ -39,6 +39,17 @@ RandDeviceOperation::tensor_return_value_t RandDeviceOperation::create_output_te
                 tt::tt_metal::PageConfig(operation_attributes.layout),
                 operation_attributes.memory_config)),
         operation_attributes.device);
+    fprintf(stderr, "-- RandDeviceOperation: finished create_device_tensor()\n");
+    fprintf(
+        stderr,
+        "-- Pre-Alloc Tensor: logical [%u %u] padded [%u %u] logical vol %lu physical vol %lu\n",
+        output_tensor.logical_shape()[0],
+        output_tensor.logical_shape()[1],
+        output_tensor.padded_shape()[0],
+        output_tensor.padded_shape()[1],
+        output_tensor.logical_volume(),
+        output_tensor.physical_volume());
+    return output_tensor;
 }
 
 ttsl::hash::hash_t RandDeviceOperation::compute_program_hash(
@@ -63,6 +74,7 @@ ttnn::operations::rand::RandDeviceOperation::tensor_return_value_t uniform(
     float to,
     uint32_t seed,
     ttsl::SmallVector<bool> mesh_dim_is_sharded) {
+    fprintf(stderr, "-- RandDeviceOperation::invoke: shape [%u %u]\n", shape[0], shape[1]);
     using OperationType = ttnn::operations::rand::RandDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{

@@ -76,6 +76,7 @@ Tensor create_device_tensor(
         return TensorTopology{mesh_shape, placements, std::move(coordinates)};
     });
 
+    fprintf(stderr, "-- create_device_tensor: calling allocate_on_device()\n");
     output = Tensor(MeshTensor::allocate_on_device(*mesh_device, tensor_spec, topology));
     output = tt::tt_metal::set_tensor_id(output);
 
@@ -260,6 +261,9 @@ Tensor unpad_from_tile(const Tensor& input_tensor, const tt::tt_metal::Shape& ou
 // ======================================================================================
 
 Tensor view_device(const Tensor& input_tensor, const Shape& new_logical_shape, const Shape& new_padded_shape) {
+    input_tensor.print_info("-- Tensor view_device: ");
+    std::cerr << "-- Tensor view_device: converting to logical " << new_logical_shape
+              << " padded " << new_padded_shape << std::endl;
     // Just edit shape if shape has a 0 dimension
     if (input_tensor.logical_volume() == 0) {
         TT_FATAL(new_logical_shape.volume() == 0, "Tensor volume is 0, but shape's volume is not");

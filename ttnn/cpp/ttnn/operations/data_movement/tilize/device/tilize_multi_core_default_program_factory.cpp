@@ -29,10 +29,26 @@ TilizeMultiCoreDefaultProgramFactory::cached_program_t TilizeMultiCoreDefaultPro
     tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
     uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
     bool fp32_llk_acc = a.dtype() == DataType::FLOAT32;
+    fprintf(stderr, "!! MultiCoreInterleavedTilize\n");
+    fprintf(
+        stderr,
+        "!! Input [%u %u] PhyVol %lu elemSz %u Output [%u %u] PhyVol %lu elemSz %u\n",
+        a.padded_shape()[0],
+        a.padded_shape()[1],
+        a.physical_volume(),
+        a.element_size(),
+        output.padded_shape()[0],
+        output.padded_shape()[1],
+        output.physical_volume(),
+        output.element_size());
 
     Buffer* src0_buffer = a.buffer();
     Buffer* dst_buffer = output.buffer();
     TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
+    // fprintf(stderr, "!! Num tiles that densly store all input elements: %d\n", ntiles);
+    // fprintf(stderr, "!! Num tiles/block (enough to fit 1 input row in the block using only one row from each tile): %u\n", ntiles_per_block);
+    // fprintf(stderr, "!! Num blocks to store the input (use all rows of the block): %u\n", nblocks);
+    // fprintf(stderr, "!! Size of a single input row (w/ the bad name block_size_nbytes): %u\n", block_size_nbytes);
 
     auto logical_shape = a.logical_shape();
     uint32_t logical_width = logical_shape[-1];
@@ -47,6 +63,12 @@ TilizeMultiCoreDefaultProgramFactory::cached_program_t TilizeMultiCoreDefaultPro
 
     auto [ncores, all_cores, core_range, core_range_cliff, nblocks_per_core, nblocks_per_core_cliff] =
         ttnn::split_blocks_for_tilize(available_grid, nblocks);
+    fprintf(
+        stderr,
+        "!! WorkSplit: nCores %u nBlocks/Core %u nBlocks/CoreCliff %u\n",
+        ncores,
+        nblocks_per_core,
+        nblocks_per_core_cliff);
 
     create_cb(tt::CBIndex::c_0, program, all_cores, input_single_tile_size, ntiles_per_block, input_cb_data_format);
 
@@ -100,6 +122,11 @@ TilizeMultiCoreDefaultProgramFactory::cached_program_t TilizeMultiCoreDefaultPro
     }
 
     if (!core_range.ranges().empty()) {
+        fprintf(
+            stderr,
+            "!! Calling non-cliff version: nBlocks/Core %u nTiles/Block %u\n",
+            nblocks_per_core,
+            ntiles_per_block);
         CreateKernel(
             program,
             "ttnn/cpp/ttnn/kernel/compute/tilize.cpp",
@@ -111,6 +138,7 @@ TilizeMultiCoreDefaultProgramFactory::cached_program_t TilizeMultiCoreDefaultPro
             });
     }
     if (!core_range_cliff.empty()) {
+        fprintf(stderr, "!! Calling cliff version\n");
         CreateKernel(
             program,
             "ttnn/cpp/ttnn/kernel/compute/tilize.cpp",
@@ -128,6 +156,7 @@ TilizeMultiCoreDefaultProgramFactory::cached_program_t TilizeMultiCoreDefaultPro
     uint32_t ncores_full = ncores - has_cliff;
     uint32_t tile_start_id = 0;
     uint32_t page_start_id = 0;
+    fprintf(stderr, "!! nCoresFull %u TileStartId %u PageStartId %u\n", ncores_full, tile_start_id, page_start_id);
     const auto& cores = corerange_to_cores(available_grid);
     for (uint32_t i = 0; i < ncores_full; ++i) {
         const CoreCoord& core = cores[i];

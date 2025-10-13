@@ -408,10 +408,28 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     const auto a_data_format = datatype_to_dataformat_converter(a_dtype);
     const auto b_data_format = datatype_to_dataformat_converter(b_dtype);
     const auto c_data_format = datatype_to_dataformat_converter(c_dtype);
+    fprintf(
+        stderr,
+        "-- BinaryNgDeviceOperation::ProgramFactory::create: dtA %s dfA %s dtB %s dfB %s dtC %s dfC %s\n",
+        enchantum::to_string(a_dtype).data(),
+        enchantum::to_string(a_data_format).data(),
+        enchantum::to_string(b_dtype).data(),
+        enchantum::to_string(b_data_format).data(),
+        enchantum::to_string(c_dtype).data(),
+        enchantum::to_string(c_data_format).data());
 
     uint32_t a_single_tile_size = tt::tile_size(a_data_format);
     uint32_t b_single_tile_size = tt::tile_size(b_data_format);
     uint32_t c_single_tile_size = tt::tile_size(c_data_format);
+
+    fprintf(
+        stderr,
+        "---- Op %s b.has_value? %d tileSzA %u tileSzB %u tileSzC %u\n",
+        enchantum::to_string(operation_attributes.binary_op_type).data(),
+        b.has_value(),
+        a_single_tile_size,
+        b_single_tile_size,
+        c_single_tile_size);
 
     // we parallelize the computation across the output tiles
     const auto& all_device_cores = operation_attributes.worker_grid;
@@ -638,10 +656,24 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     }
 
     auto kernel_config = CMAKE_UNIQUE_NAMESPACE::BinaryNgKernelConfig(operation_attributes.subtile_broadcast_type);
+    fprintf(
+        stderr,
+        "---- BinaryNgKernelConfig: R[%s] C[%s] W[%s] Input Str %s\n",
+        enchantum::to_string(kernel_config.reader_kernel).data(),
+        enchantum::to_string(kernel_config.compute_kernel).data(),
+        enchantum::to_string(kernel_config.writer_kernel).data(),
+        kernel_config.bcast_input_str().c_str());
     // WRITER KERNEL
     auto writer_kernel = CMAKE_UNIQUE_NAMESPACE::KernelName::WriterScalar;
     auto compute_kernel = CMAKE_UNIQUE_NAMESPACE::KernelName::ComputeScalar;
     if (b.has_value()) {
+        fprintf(
+            stderr,
+            "---- Correcting Kernels b/c B is a Tensor not Scalar: C[%s -> %s] W[%s -> %s]\n",
+            enchantum::to_string(compute_kernel).data(),
+            enchantum::to_string(kernel_config.compute_kernel).data(),
+            enchantum::to_string(writer_kernel).data(),
+            enchantum::to_string(kernel_config.writer_kernel).data());
         writer_kernel = kernel_config.writer_kernel;
         compute_kernel = kernel_config.compute_kernel;
     }
@@ -678,6 +710,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     writer_desc.defines = {writer_defines.begin(), writer_defines.end()};
     writer_desc.config = WriterConfigDescriptor{};
     writer_desc.common_runtime_args = writer_common_runtime_args;
+    fprintf(stderr, "---- writer_desc created\n");
 
     // COMPUTE KERNEL
     bool fp32_dest_acc_en = c_data_format == tt::DataFormat::UInt32 || c_data_format == tt::DataFormat::Int32 ||
@@ -717,6 +750,14 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         }
     }
 
+    fprintf(
+        stderr,
+        "---- DST Unpack Modes: CB0 %s CB1 %s CB3 %s CB4 %s fp32DSTAcc? %d\n",
+        enchantum::to_string(unpack_to_dest_mode[src0_cb_index]).data(),
+        enchantum::to_string(unpack_to_dest_mode[src1_cb_index]).data(),
+        enchantum::to_string(unpack_to_dest_mode[src0interim_cb_index]).data(),
+        enchantum::to_string(unpack_to_dest_mode[src1interim_cb_index]).data(),
+        fp32_dest_acc_en);
     compute_kernel_defines["BCAST_INPUT"] = kernel_config.bcast_input_str();
 
     bool use_llk_bcast =
@@ -781,6 +822,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     }
     compute_kernel_defines["WHERE_TTS"] = (op_type == BinaryOpType::WHERE_TTS) ? "1" : "0";
     compute_kernel_defines["WHERE_TST"] = (op_type == BinaryOpType::WHERE_TST) ? "1" : "0";
+    fprintf(stderr, "---- compute_kernel_defines[%zu]\n", compute_kernel_defines.size());
 
     KernelDescriptor compute_desc;
     compute_desc.kernel_source = get_kernel_file_path(compute_kernel, is_sfpu_op, is_where_op);
@@ -811,6 +853,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     reader_desc.defines = {reader_defines.begin(), reader_defines.end()};
     reader_desc.config = ReaderConfigDescriptor{};
     reader_desc.common_runtime_args = reader_common_runtime_args;
+    fprintf(stderr, "---- reader_desc created\n");
 
     // === Inline per-core runtime arguments (previously set_or_update_runtime_arguments) ===
     {

@@ -29,6 +29,15 @@ bool is_uniform_write(const HostTensor& host_tensor, const distributed::MeshDevi
         return false;
     }
 
+    // const HostStorage hs(host_tensor);
+    // for (const auto& coord : hs.buffer().shard_coords()) {
+    //     fprintf(
+    //         stderr,
+    //         "-- to_device: shard %p size %zu\n",
+    //         hs.buffer().get_shard(coord)->view_bytes().data(),
+    //         hs.buffer().get_shard(coord)->view_bytes().size());
+    // }
+
     auto all_coords = distributed::MeshCoordinateRange(device_mesh_shape);
     return std::ranges::all_of(
         all_coords, [&](const auto& coord) { return host_buffer.shard_coords().contains(coord); });
@@ -318,6 +327,17 @@ HostTensor to_layout_impl(const HostTensor& tensor, Layout target_layout) {
     auto source_layout = tensor.layout();
     auto tile = tensor.tensor_spec().tile();
     auto physical_shape = tensor.tensor_spec().physical_shape();
+
+    fprintf(
+        stderr,
+        "-- tensor_impl::to_layout: %s -> %s logical shape [",
+        enchantum::to_string(source_layout).data(),
+        enchantum::to_string(target_layout).data());
+    for (size_t i = 0; i < tensor.logical_shape().size(); i++) {
+        fprintf(stderr, " %u", tensor.logical_shape()[i]);
+    }
+    fprintf(stderr, " ] physical2D shape [%zu %zu]\n", physical_shape.height(), physical_shape.width());
+
     auto convert =
         [tile, &physical_shape, source_layout, target_layout](const HostBuffer& input_host_buffer) -> std::vector<T> {
         const auto input_data = input_host_buffer.view_as<T>();
