@@ -9,6 +9,8 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/tensor/noc_traits.h"
 
+#include "api/debug/dprint.h"
+
 void kernel_main() {
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
     const uint32_t start_tile_id = get_arg_val<uint32_t>(1);
@@ -30,6 +32,7 @@ void kernel_main() {
 
     Noc noc;
     CircularBuffer cb_src(cb_id_src);
+    DPRINT << "+RdInterNoBc: nTilesSrc " << src_num_tiles << " nTilesDst " << dst_num_tiles << ENDL();
 
 #if SRC_SHARDED
     cb_src.reserve_back(src_num_tiles);

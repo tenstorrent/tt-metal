@@ -22,6 +22,7 @@
 #include "api/compute/isclose.h"
 #include "eltwise_utils_common.hpp"
 #include "eltwise_utils_sfpu.hpp"
+#include "api/debug/dprint.h"
 
 // Process n LHS tiles against a scalar tile at index 0 in cb_post_rhs
 FORCE_INLINE void process_sfpu_scalar_tiles(
@@ -86,9 +87,19 @@ void kernel_main() {
     constexpr auto cb_pre_rhs_id = tt::CBIndex::c_1;
     constexpr auto cb_out_id = tt::CBIndex::c_2;
 
-    constexpr auto cb_post_lhs_id = HAS_ACTIVATIONS(LHS) ? tt::CBIndex::c_3 : cb_pre_lhs_id;
+    constexpr auto cb_post_lhs = HAS_ACTIVATIONS(LHS) ? tt::CBIndex::c_3 : cb_pre_lhs;
+    constexpr auto cb_post_rhs = HAS_ACTIVATIONS(RHS) ? tt::CBIndex::c_4 : cb_pre_rhs;
 
     CircularBuffer cb_post_rhs(HAS_ACTIVATIONS(RHS) ? tt::CBIndex::c_4 : cb_pre_rhs_id);
+
+    UNPACK(
+        DPRINT << "+KSFPU: nTiles " << num_tiles
+               << " nTiles/cycle " << num_tiles_per_cycle
+               << " CB" << static_cast<int>(cb_post_lhs_id)
+               << "->dst0 CB" << static_cast<int>(cb_post_rhs.get_cb_id())
+               << "->dst1"
+               << ENDL();
+    );
 
     unary_op_init_common(cb_post_lhs_id, cb_out_id);
 #ifdef PACK_RELU

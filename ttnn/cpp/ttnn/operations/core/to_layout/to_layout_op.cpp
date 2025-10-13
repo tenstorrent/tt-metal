@@ -59,6 +59,20 @@ Tensor to_layout_impl(
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<CoreRangeSet>& sub_core_grids,
     const float pad_value) {
+    fprintf(
+        stderr,
+        "-- to_layout_impl: %s -> %s\n",
+        enchantum::to_string(tensor_arg.layout()).data(),
+        enchantum::to_string(layout).data());
+    fprintf(
+        stderr,
+        "-- Src Tensor: logical [%u %u] padded [%u %u] logical vol %lu physical vol %lu\n",
+        tensor_arg.logical_shape()[0],
+        tensor_arg.logical_shape()[1],
+        tensor_arg.padded_shape()[0],
+        tensor_arg.padded_shape()[1],
+        tensor_arg.logical_volume(),
+        tensor_arg.physical_volume());
     if (tensor_arg.layout() == layout) {
         if (dtype.has_value() and dtype.value() != tensor_arg.dtype()) {
             log_warning(
@@ -114,6 +128,7 @@ Tensor to_layout_impl(
             const bool is_scalar = tensor.padded_shape().size() == 0;
             SmallVector<uint32_t> new_padded_shape =
                 is_scalar ? SmallVector<uint32_t>{1, 1} : SmallVector<uint32_t>{1, tensor.padded_shape()[-1]};
+            fprintf(stderr, "-- to_layout_impl: calling the 1st view()\n");
             tensor = ttnn::experimental::view(tensor, tensor.logical_shape(), Shape(new_padded_shape));
         }
     }
