@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "tt_stl/assert.hpp"
 #include "ttnn/operations/eltwise/lazy/lazy.hpp"
 
 namespace ttnn::operations::lazy {
@@ -42,6 +43,11 @@ Function CompareFn::operator()(Param first, ExpressionView second) const {
 
 Function CompareFn::operator()(ExpressionView first, ExpressionView second) const {
     return lazy::defer(operation, sub(first, second)).value();
+}
+
+Function PowerFn::operator()(float first, ExpressionView second) const {
+    TT_FATAL(first > 0, "base {} must be positive for real-valued expression", first);
+    return exp(mul(std::logf(first), second));
 }
 
 }  // namespace ttnn::operations::lazy

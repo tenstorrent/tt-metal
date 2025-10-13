@@ -9,8 +9,8 @@ void kernel_main() {
     const auto start_id = get_arg_val<uint32_t>(1);
 
     constexpr auto num_tiles_per_cycle = get_compile_time_arg_val(0);
+    constexpr auto accessors = get_compile_time_arg_val(1);
 
-    // 3 circular buffers with bank base addresses starting at rt args offset 2
-    const auto view = views::MakeAccessorView<3, num_tiles_per_cycle>(2);
+    const auto view = views::AccessorView<accessors, 2, num_tiles_per_cycle>(2);
     view.read_tiles(n_tiles, start_id);
 }
