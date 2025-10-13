@@ -645,7 +645,6 @@ class LidarCenterNet(nn.Module):
         pred_wp, _, _, _, _ = self.forward_gru(fused_features, target_point)
 
         preds = self.head([features[0]])
-        return preds
         results = self.head.get_bboxes(preds[0], preds[1], preds[2], preds[3], preds[4], preds[5], preds[6])
         bboxes, _ = results[0]
 
@@ -658,4 +657,4 @@ class LidarCenterNet(nn.Module):
 
         self.i += 1
 
-        return pred_wp, rotated_bboxes
+        return preds, pred_wp, rotated_bboxes, results

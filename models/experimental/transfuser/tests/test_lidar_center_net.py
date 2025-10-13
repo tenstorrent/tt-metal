@@ -118,7 +118,9 @@ def test_lidar_center_net(
     ).eval()
 
     # pred_wp, rotated_bboxes = ref_layer.forward_ego(image, lidar_bev, target_point, target_point_image, velocity)
-    ref_outputs = ref_layer.forward_ego(image, lidar_bev, target_point, target_point_image, velocity)
+    ref_outputs, pred_wp, rotated_bboxes, results = ref_layer.forward_ego(
+        image, lidar_bev, target_point, target_point_image, velocity
+    )
 
     # Unpack list outputs (each contains one tensor since we have single scale)
     (
@@ -186,7 +188,7 @@ def test_lidar_center_net(
         backbone="transFuser",
     )
 
-    tt_outputs = tt_layer.forward_ego(image, lidar_bev, target_point, target_point_image, velocity)
+    tt_outputs, tt_pred_wp = tt_layer.forward_ego(image, lidar_bev, target_point, target_point_image, velocity)
 
     # Unpack list outputs
     (
@@ -259,7 +261,44 @@ def test_lidar_center_net(
     logger.info(f"Brake PCC: {brake_pcc_message}")
     assert does_pass, f"Brake PCC check failed: {brake_pcc_message}"
 
+    does_pass, pred_wp_pcc_message = check_with_pcc(pred_wp, tt_pred_wp, 0.80)
+    logger.info(f"pred wp PCC: {pred_wp_pcc_message}")
+    assert does_pass, f"pred wp PCC check failed: {pred_wp_pcc_message}"
+
+    # After the pred_wp PCC check, add bbox post-processing for TTNN outputs
+
+    # Convert TTNN outputs to torch for get_bboxes (it expects torch tensors)
+    tt_preds_torch = (
+        [tt_center_heatmap_torch],
+        [tt_wh_torch],
+        [tt_offset_torch],
+        [tt_yaw_class_torch],
+        [tt_yaw_res_torch],
+        [tt_velocity_torch],
+        [tt_brake_torch],
+    )
+
+    # Call get_bboxes on the reference head (reusing the same logic)
+    tt_results = ref_layer.head.get_bboxes(*tt_preds_torch)
+    does_pass, box_pcc_message = check_with_pcc(results, tt_results, 0.80)
+    logger.info(f"box PCC: {box_pcc_message}")
+    assert does_pass, f"box PCC check failed: {box_pcc_message}"
+    tt_bboxes, _ = tt_results[0]
+
+    # Filter by confidence threshold
+    tt_bboxes = tt_bboxes[tt_bboxes[:, -1] > config.bb_confidence_threshold]
+
+    # Convert to metric coordinates
+    tt_rotated_bboxes = []
+    for bbox in tt_bboxes.detach().cpu().numpy():
+        bbox_metric = ref_layer.get_bbox_local_metric(bbox)
+        tt_rotated_bboxes.append(bbox_metric)
+
+    # Compare bbox counts
+    logger.info(f"Reference bboxes count: {len(rotated_bboxes)}")
+    logger.info(f"TTNN bboxes count: {len(tt_rotated_bboxes)}")
+
     if does_pass:
-        logger.info("LidarCenterNetHead Passed!")
+        logger.info("LidarCenterNet Passed!")
     else:
-        logger.warning("LidarCenterNetHead Failed!")
+        logger.warning("LidarCenterNet Failed!")

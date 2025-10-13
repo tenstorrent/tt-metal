@@ -234,17 +234,4 @@ class LidarCenterNet(nn.Module):
             height=feat_height,
             width=feat_width,
         )
-        return preds
-        results = self.head.get_bboxes(preds[0], preds[1], preds[2], preds[3], preds[4], preds[5], preds[6])
-        bboxes, _ = results[0]
-
-        # filter bbox based on the confidence of the prediction
-        bboxes = bboxes[bboxes[:, -1] > self.config.bb_confidence_threshold]
-        rotated_bboxes = []
-        for bbox in bboxes.detach().cpu().numpy():
-            bbox = self.get_bbox_local_metric(bbox)
-            rotated_bboxes.append(bbox)
-
-        self.i += 1
-
-        return pred_wp, rotated_bboxes
+        return preds, pred_wp
