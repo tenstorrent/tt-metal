@@ -411,10 +411,6 @@ inline std::vector<uint32_t> TestTrafficSenderConfig::get_args(bool is_sync_conf
         } else {
             TT_FATAL(false, "Unsupported chip send type for 1D fabric");
         }
-
-        if (is_sync_config) {
-            log_info(tt::LogTest, "hops: {}, num_hops_1d: {}", *this->hops, num_hops_1d);
-        }
     }
 
     // push noc send type
