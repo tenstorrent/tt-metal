@@ -3,12 +3,18 @@
 
 #pragma once
 
+#include <array>
+#include <cstdint>
+#include <optional>
+#include <variant>
+#include <vector>
 #include "ttnn/core.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/decorators.hpp"
 
 namespace ttnn {
 namespace operations::pool {

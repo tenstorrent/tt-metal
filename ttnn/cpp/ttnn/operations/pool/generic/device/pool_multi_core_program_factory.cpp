@@ -642,8 +642,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     );
 
     auto compute_config = tt::tt_metal::ComputeConfig{
-        .math_fidelity = get_math_fidelity(std::make_optional(device_compute_kernel_config)),
-        .fp32_dest_acc_en = get_fp32_dest_acc_en(std::make_optional(device_compute_kernel_config)),
+        .math_fidelity = get_math_fidelity(device_compute_kernel_config),
+        .fp32_dest_acc_en = get_fp32_dest_acc_en(device_compute_kernel_config),
         .math_approx_mode = false,
         .compile_args = compute_ct_args,
         .defines = get_defines(pool_type)};
