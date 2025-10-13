@@ -219,7 +219,7 @@ int main(int argc, char** argv) {
         
         for (int j = 0; j < galaxy_nodes_1; j++) {
             sub_instance->mutable_child_mappings()->insert({"dim1_node" + std::to_string(j), tt::scaleout_tools::cabling_generator::proto::ChildMapping()});
-            sub_instance->mutable_child_mappings()->at("dim1_node" + std::to_string(j)).set_host_id(i * galaxy_nodes_1 + j);
+            sub_instance->mutable_child_mappings()->at("dim1_node" + std::to_string(j)).set_host_id((i * galaxy_nodes_1) + j);
         }
     }
 
