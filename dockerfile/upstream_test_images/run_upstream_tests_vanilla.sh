@@ -181,7 +181,7 @@ test_suite_wh_6u_metal_torus_xy_health_check_tests() {
 }
 
 test_suite_wh_6u_metal_qsfp_links_health_check_tests() {
-    echo "[upstream-tests] Checking QSFP links on WH 6U (Only works of XY (2D) Torus systems. Check https://github.com/tenstorrent/tt-metal/issues/30415 for updates)"
+    echo "[upstream-tests] Checking QSFP links on WH 6U (Only works on XY (2D) Torus systems. Check https://github.com/tenstorrent/tt-metal/issues/30415 for updates)"
     ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_deadlock_stability_6U_galaxy.yaml
 }
 
