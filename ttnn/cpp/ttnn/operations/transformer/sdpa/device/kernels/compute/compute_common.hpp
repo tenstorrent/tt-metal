@@ -173,7 +173,7 @@ void sub_exp_rows_transposed(uint32_t in1_cb, uint32_t reduce_cb) {
     // sub_bcast_rows_init_short(in0_cb, in1_cb);
     // init_bcast<ELWSUB, BroadcastType::ROW>(in0_cb, in1_cb, in0_cb);
     binary_op_init_common(in0_cb, in1_cb, in0_cb);
-    sub_bcast_row_tile_init(1);
+    sub_bcast_row_tile_init(SUB_EXP_GRANULARITY);
 
     exp_tile_init<true, true, scale_fp32>();
     cb_wait_front(in0_cb, rows * cols);
@@ -186,10 +186,10 @@ void sub_exp_rows_transposed(uint32_t in1_cb, uint32_t reduce_cb) {
     for (uint32_t i = 0; i < rows; ++i) {
         for (uint32_t u = 0; u < granularity; u++) {
             tile_regs_acquire();
+            sub_bcast_row_tile(in1_cb, in0_cb, i, in0_index, 0, SUB_EXP_GRANULARITY);
             for (uint32_t j = 0; j < dst_tiles; ++j) {
                 // sub_tiles_bcast_rows(in0_cb, in1_cb, in0_index, i, j);
                 // any_tiles_bcast<ELWSUB, BroadcastType::ROW>(in0_cb, in1_cb, in0_index, i, j);
-                sub_bcast_row_tile(in1_cb, in0_cb, i, in0_index, j, 1);
                 negative_tile(j);
                 exp_tile<true, true>(j);
                 in0_index++;
