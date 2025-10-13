@@ -75,6 +75,11 @@ class TimingCollector:
             total_time=self.timings.get("total", 0.0),
         )
 
+    def reset(self):
+        self.timings = {}
+        self.step_timings = {}
+        return self
+
 
 @dataclass
 class PipelineTrace:
@@ -484,7 +489,7 @@ class StableDiffusion3Pipeline:
         traced: bool = False,
         clip_skip: int | None = None,
     ) -> List[Image.Image]:
-        timer = self.timing_collector
+        timer = self.timing_collector.reset() if self.timing_collector else None
 
         with timer.time_section("total") if timer else nullcontext():
             start_time = time.time()

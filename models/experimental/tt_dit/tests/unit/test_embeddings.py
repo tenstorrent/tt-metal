@@ -6,7 +6,9 @@
 import pytest
 import torch
 import ttnn
-import math
+from diffusers.models.embeddings import (
+    CombinedTimestepGuidanceTextProjEmbeddings as TorchCombinedTimestepGuidanceTextProjEmbeddings,
+)
 
 from ...utils.tensor import bf16_tensor
 from ...utils.check import assert_quality
@@ -18,6 +20,7 @@ from ...layers.embeddings import (
     PatchEmbed,
     MochiPatchEmbed,
     WanPatchEmbed,
+    CombinedTimestepGuidanceTextProjEmbeddings,
 )
 from ....stable_diffusion_35_large.reference import SD3Transformer2DModel as TorchSD3Transformer2DModel
 from diffusers.models.transformers.transformer_mochi import MochiTransformer3DModel

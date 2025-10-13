@@ -9,9 +9,9 @@ import pytest
 import ttnn
 from loguru import logger
 
-from ...parallel.config import DiTParallelConfig, ParallelFactor
-from ...pipelines.flux1.pipeline_flux1 import Flux1Pipeline
-from ...pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large import (
+from ....parallel.config import DiTParallelConfig, ParallelFactor, EncoderParallelConfig, VAEParallelConfig
+from ....pipelines.flux1.pipeline_flux1 import Flux1Pipeline
+from ....pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large import (
     TimingCollector,
 )
 
@@ -33,13 +33,14 @@ from ...pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large i
     ],
 )
 @pytest.mark.parametrize(
-    ("mesh_device", "sp", "tp", "topology", "num_links", "mesh_test_id"),
+    ("mesh_device", "sp", "tp", "encoder_tp", "vae_tp", "topology", "num_links", "mesh_test_id"),
     [
-        pytest.param((1, 4), (1, 0), (4, 1), ttnn.Topology.Linear, 1, "1x4sp0tp1", id="1x4sp0tp1"),
-        pytest.param((2, 2), (2, 0), (2, 1), ttnn.Topology.Linear, 1, "2x2sp0tp1", id="2x2sp0tp1"),
-        pytest.param((2, 4), (2, 0), (4, 1), ttnn.Topology.Linear, 1, "2x4sp0tp1", id="2x4sp0tp1"),
-        pytest.param((2, 4), (4, 1), (2, 0), ttnn.Topology.Linear, 1, "2x4sp1tp0", id="2x4sp1tp0"),
-        pytest.param((4, 8), (8, 1), (4, 0), ttnn.Topology.Linear, 4, "4x8sp1tp0", id="4x8sp1tp0"),
+        pytest.param((1, 4), (1, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 1, "1x4sp0tp1", id="1x4sp0tp1"),
+        pytest.param((2, 4), (2, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 1, "2x4sp0tp1", id="2x4sp0tp1"),
+        # pytest.param((2, 4), (4, 1), (2, 0), (4, 1), (4, 1), ttnn.Topology.Linear, 1, "2x4sp1tp0", id="2x4sp1tp0"), #Encoder OOM
+        # pytest.param((1, 8), (1, 0), (8, 1), (1, 0), (8, 1), ttnn.Topology.Linear, 1, "1x8sp0tp1", id="1x8sp0tp1"), # Encoder OOM
+        pytest.param((4, 8), (4, 0), (8, 1), (4, 0), (4, 0), ttnn.Topology.Linear, 4, "4x8sp0tp1", id="4x8sp0tp1"),
+        pytest.param((4, 8), (8, 1), (4, 0), (4, 0), (4, 0), ttnn.Topology.Linear, 4, "4x8sp1tp0", id="4x8sp1tp0"),
     ],
     indirect=["mesh_device"],
 )
@@ -57,6 +58,13 @@ from ...pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large i
         pytest.param(False, id="not_traced"),
     ],
 )
+@pytest.mark.parametrize(
+    "use_cache",
+    [
+        pytest.param(True, id="yes_use_cache"),
+        pytest.param(False, id="no_use_cache"),
+    ],
+)
 def test_flux1_pipeline(
     *,
     mesh_device: ttnn.MeshDevice,
@@ -66,6 +74,8 @@ def test_flux1_pipeline(
     num_inference_steps: int,
     sp: tuple[int, int],
     tp: tuple[int, int],
+    encoder_tp: tuple[int, int],
+    vae_tp: tuple[int, int],
     topology: ttnn.Topology,
     num_links: int,
     no_prompt: bool,
@@ -75,34 +85,52 @@ def test_flux1_pipeline(
     model_location_generator,
     traced: bool,
     mesh_test_id: str,
+    use_cache: bool,
+    is_ci_env: bool,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # Setup CI environment
+    if is_ci_env:
+        if use_cache:
+            monkeypatch.setenv("TT_DIT_CACHE_DIR", "/tmp/TT_DIT_CACHE")
+        else:
+            pytest.skip("Skipping. No use cache is implicitly tested with the configured non persistent cache path.")
+        if traced:
+            pytest.skip("Skipping traced test in CI environment. Use Performance test for detailed timing analysis.")
+
     sp_factor, sp_axis = sp
     tp_factor, tp_axis = tp
-
-    if tp_factor < 4:
-        pytest.skip("triggers OOM during VAE pass")
 
     parallel_config = DiTParallelConfig(
         cfg_parallel=ParallelFactor(factor=1, mesh_axis=0),
         tensor_parallel=ParallelFactor(factor=tp_factor, mesh_axis=tp_axis),
         sequence_parallel=ParallelFactor(factor=sp_factor, mesh_axis=sp_axis),
     )
+    encoder_parallel_config = EncoderParallelConfig(
+        tensor_parallel=ParallelFactor(factor=encoder_tp[0], mesh_axis=encoder_tp[1])
+    )
+    vae_parallel_config = VAEParallelConfig(tensor_parallel=ParallelFactor(factor=vae_tp[0], mesh_axis=vae_tp[1]))
 
     logger.info(f"Mesh device shape: {mesh_device.shape}")
     logger.info(f"Parallel config: {parallel_config}")
+    logger.info(f"Encoder parallel config: {encoder_parallel_config}")
+    logger.info(f"VAE parallel config: {vae_parallel_config}")
     logger.info(f"T5 enabled: {enable_t5_text_encoder}")
 
     timing_collector = TimingCollector()
 
-    pipeline = Flux1Pipeline(
+    pipeline = Flux1Pipeline.create_pipeline(
         checkpoint_name=model_location_generator(f"black-forest-labs/FLUX.1-{model_variant}"),
         mesh_device=mesh_device,
+        dit_sp=sp,
+        dit_tp=tp,
+        encoder_tp=encoder_tp,
+        vae_tp=vae_tp,
         enable_t5_text_encoder=enable_t5_text_encoder,
         use_torch_t5_text_encoder=use_torch_t5_text_encoder,
         use_torch_clip_text_encoder=use_torch_clip_text_encoder,
-        parallel_config=parallel_config,
-        topology=topology,
         num_links=num_links,
+        topology=topology,
     )
 
     pipeline.timing_collector = timing_collector
@@ -132,18 +160,12 @@ def test_flux1_pipeline(
         filename_prefix += "_untraced"
 
     def run(*, prompt: str, number: int, seed: int) -> None:
-        images = pipeline(
-            width=width,
-            height=height,
-            prompt_1=[prompt],
-            prompt_2=[prompt],
-            num_inference_steps=num_inference_steps,
-            seed=seed,
-            traced=traced,
+        images = pipeline.run_single_prompt(
+            width=width, height=height, prompt=prompt, num_inference_steps=num_inference_steps, seed=seed, traced=traced
         )
 
         output_filename = f"{filename_prefix}_{number}.png"
-        images[0].save(output_filename)
+        images.save(output_filename)
         logger.info(f"Image saved as {output_filename}")
 
         timing_data = timing_collector.get_timing_data()
