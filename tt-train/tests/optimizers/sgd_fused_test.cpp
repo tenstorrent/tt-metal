@@ -299,8 +299,7 @@ static void cpu_sgd_step(
         // momentum update
         float m_t = (has_momentum && momentum_val != 0.0f) ? (g_t + momentum_val * m_prev) : g_t;
 
-        // TODO: correct Nesterov update after fixing it in SGDFused
-        float update = nesterov ? (g_orig + momentum_val * m_t) : m_t;
+        float update = nesterov ? (g_t + momentum_val * m_t) : m_t;
 
         float theta_new = theta - lr * update;
 
