@@ -843,7 +843,12 @@ Tensor create_typed_tt_tensor_from_host_data(
                                            tensor_spec.physical_shape() == tensor_spec.logical_2d_shape() &&
                                            tensor_spec.data_type() == convert_to_data_type<T>();
             pydata_borrowable) {
-            auto output = Tensor::from_borrowed_data(pydata_span, tensor_shape, host_data.pin(), tensor_spec.tile());
+            auto output = Tensor(
+                host_data,
+                tensor_shape,
+                tensor_layout.get_data_type(),
+                tensor_layout.get_layout(),
+                tensor_layout.get_tile());
             if (device != nullptr) {
                 output = output.to_device(device, tensor_spec.memory_config(), cq_id);
             }
