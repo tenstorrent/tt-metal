@@ -1124,9 +1124,9 @@ inline hash_t hash_object(const T& object) noexcept {
         constexpr auto num_attributes = reflection::detail::get_num_attributes<T>();
         hash_t hash = 0;
         const auto attribute_values = object.attribute_values();
-        [&object, &hash, &attribute_values]<size_t... Ns>(std::index_sequence<Ns...>) {
+        [&hash, &attribute_values]<size_t... Ns>(std::index_sequence<Ns...>) {
             (
-                [&object, &hash, &attribute_values] {
+                [&hash, &attribute_values] {
                     const auto& attribute = std::get<Ns>(attribute_values);
                     hash = hash_objects(hash, attribute);
                 }(),

@@ -364,6 +364,23 @@ CPMAddPackage(
 )
 
 if(capnproto_ADDED)
-    target_compile_options(kj-async PRIVATE -Wno-deprecated-this-capture)
-    target_compile_options(kj-http PRIVATE -Wno-deprecated-this-capture)
+    foreach(
+        _capnp_tgt
+        IN
+        ITEMS
+            kj-async
+            kj-http
+            kj
+            capnp
+            capnp-rpc
+    )
+        if(TARGET ${_capnp_tgt})
+            target_compile_options(
+                ${_capnp_tgt}
+                PRIVATE
+                    -Wno-deprecated-this-capture
+                    -Wno-unused-lambda-capture
+            )
+        endif()
+    endforeach()
 endif()
