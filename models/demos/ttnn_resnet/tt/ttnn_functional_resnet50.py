@@ -685,6 +685,8 @@ class resnet50:
         reshard = False
         height_shard = True
 
+        # if is_wormhole_b0():
+        #     x = ttnn.to_memory_config(x, ttnn.create_sharded_memory_config(x.shape, ttnn.CoreGrid(x=8, y=7), ttnn.ShardStrategy.HEIGHT))
         logger.debug(f"==== Running layer 2 module 1")
         x, x_height, x_width = self.layer2_module1(
             x,
