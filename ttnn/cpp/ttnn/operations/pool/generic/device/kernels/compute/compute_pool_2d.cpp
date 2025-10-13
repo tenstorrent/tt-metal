@@ -150,8 +150,6 @@ void MAIN {
                 if constexpr (return_indices) {
                     cb_wait_front(curr_in_idx_cb_id, 1);
 
-                    // UNPACK(tt::compute::common::print_full_tile(curr_in_cb_id));
-
                     copy_tile_to_dst_init_short(curr_in_cb_id);
                     reconfig_data_format_srca(curr_in_cb_id);
                     pack_reconfig_data_format(curr_in_cb_id);
@@ -161,8 +159,6 @@ void MAIN {
                     reconfig_data_format_srca(curr_in_idx_cb_id);
                     pack_reconfig_data_format(curr_in_idx_cb_id);
                     copy_tile(curr_in_idx_cb_id, topk_cb_tile_idx, index_dst_idx);
-
-                    dprint_tensix_dest_reg(2);
 
                     max_reduce_with_indices<window_size_hw>(data_dst_idx, index_dst_idx);
 
@@ -240,17 +236,15 @@ void MAIN {
                     tile_regs_release();
                 }
             } else {
-                cb_wait_front(tile_tmp_cb_id, 1);
+                cb_reserve_back(tile_tmp_cb_id, 1);
                 pack_reconfig_data_format(tile_tmp_cb_id);
                 pack_tile<true>(data_dst_idx, tile_tmp_cb_id, topk_cb_tile_idx);
-                // PACK(tt::compute::common::print_full_tile(tile_tmp_cb_id));
-                cb_pop_front(tile_tmp_cb_id, 1);
+                cb_push_back(tile_tmp_cb_id, 1);
 
-                cb_wait_front(tile_idx_tmp_cb_id, 1);
+                cb_reserve_back(tile_idx_tmp_cb_id, 1);
                 pack_reconfig_data_format(tile_idx_tmp_cb_id);
                 pack_tile<true>(index_dst_idx, tile_idx_tmp_cb_id, topk_cb_tile_idx);
-                // PACK(tt::compute::common::print_full_tile(tile_idx_tmp_cb_id));
-                cb_pop_front(tile_idx_tmp_cb_id, 1);
+                cb_push_back(tile_idx_tmp_cb_id, 1);
 
                 tile_regs_release();
             }

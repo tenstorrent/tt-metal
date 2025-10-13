@@ -235,21 +235,21 @@ ALWI void read_window_with_top_left_index(
                 uint32_t output_faces =
                     c_i == in_nblocks_c - 1 ? num_faces_in_last_output_tile : num_faces_in_output_tile;
 
-                cb_reserve_back(tile_tmp_cb_id, 1);
+                cb_wait_front(tile_tmp_cb_id, 1);
                 // tt::data_movement::common::print_bf16_pages(get_read_ptr(tile_tmp_cb_id), 32, 32);
                 noc_async_read_one_packet(
                     get_noc_addr(get_read_ptr(tile_tmp_cb_id)),
                     get_write_ptr(out_cb_id),
                     output_faces * FACE_WIDTH * BYTES_PER_ELEM);
-                cb_reserve_back(tile_idx_tmp_cb_id, 1);
+                cb_wait_front(tile_idx_tmp_cb_id, 1);
                 // tt::data_movement::common::print_u16_pages(get_read_ptr(tile_idx_tmp_cb_id), 32, 32);
                 noc_async_read_one_packet(
                     get_noc_addr(get_read_ptr(tile_idx_tmp_cb_id)),
                     get_write_ptr(out_idx_cb_id),
                     output_faces * FACE_WIDTH * BYTES_PER_ELEM);
                 noc_async_read_barrier();
-                cb_push_back(tile_tmp_cb_id, 1);
-                cb_push_back(tile_idx_tmp_cb_id, 1);
+                cb_pop_front(tile_tmp_cb_id, 1);
+                cb_pop_front(tile_idx_tmp_cb_id, 1);
 
                 cb_push_back(out_cb_id, output_faces);
                 if constexpr (return_indices) {
@@ -382,8 +382,7 @@ void kernel_main() {
         if constexpr (!is_avg_pool || !is_large_kernel || return_indices) {
             clear_out_tiles<in_cb_id, clear_value_cb_id>();
             if constexpr (return_indices) {
-                cb_push_back(tile_tmp_cb_id, 1);
-                cb_push_back(tile_idx_tmp_cb_id, 1);
+                ;
                 clear_out_tiles<in_idx_cb_id, clear_value_cb_id>();
             }
         }

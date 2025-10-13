@@ -11,12 +11,12 @@ import pytest
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=True)
 def test_max_pool2d_with_indices(device):
     in_n = 1
-    in_h = 3
-    in_w = 3
+    in_h = 159
+    in_w = 159
     in_c = 32
     kernel_size = [3, 3]
     stride = [1, 1]
-    padding = [0, 0]
+    padding = [1, 1]
     dilation = [1, 1]
     shard_scheme = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
     ceil_mode = False
@@ -52,13 +52,13 @@ def test_max_pool2d_with_indices(device):
     # torch_input = torch.randn(tensor_shape, dtype=torch.bfloat16)
 
     # Create tensor where each element equals its HW coordinate (h * in_w + w)
-    # torch_input = torch.randn(tensor_shape, dtype=torch.bfloat16)
-    torch_input = torch.zeros(tensor_shape, dtype=torch.bfloat16)
-    for n in range(in_n):
-        for c in range(in_c):
-            for h in range(in_h):
-                for w in range(in_w):
-                    torch_input[n, c, h, w] = h * in_w + w
+    torch_input = torch.randn(tensor_shape, dtype=torch.bfloat16)
+    # torch_input = torch.zeros(tensor_shape, dtype=torch.bfloat16)
+    # for n in range(in_n):
+    #     for c in range(in_c):
+    #         for h in range(in_h):
+    #             for w in range(in_w):
+    #                 torch_input[n, c, h, w] = h * in_w + w
 
     ttnn_input_shape = (1, 1, in_n * in_h * in_w, in_c)
     torch_input_permuted = torch.permute(torch_input, (0, 2, 3, 1))  # N, H, W, C
@@ -73,7 +73,7 @@ def test_max_pool2d_with_indices(device):
         buffer_type=ttnn.BufferType.L1,
         shard_spec=ttnn.ShardSpec(
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 3))}),
-            [1, 32],
+            [1280, 32],
             ttnn.ShardOrientation.ROW_MAJOR,
         ),
     )
