@@ -46,7 +46,7 @@ def create_slice_strategy(conv2d_slice_config):
 
     slice_type = conv2d_slice_config.slice_type
     if slice_type == ttnn.Conv2dL1Full:
-        return L1FullSliceStrategyConfiguration
+        return L1FullSliceStrategyConfiguration()
     if slice_type == ttnn.Conv2dDRAMSliceHeight:
         return HeightSliceStrategyConfiguration(conv2d_slice_config.num_slices)
     elif slice_type == ttnn.Conv2dDRAMSliceWidth:
@@ -121,6 +121,28 @@ class ModelOptimizations:
             config_tensors_in_dram=True,
         )
 
+        self.conv_configs["ABH_32"] = ttnn.Conv2dConfig(
+            weights_dtype=conv_w_dtype,
+            shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            deallocate_activation=False,
+            enable_act_double_buffer=False,
+            reshard_if_not_optimal=True,
+            act_block_w_div=1,
+            act_block_h_override=32,
+            config_tensors_in_dram=True,
+            output_layout=ttnn.TILE_LAYOUT,
+        )
+        self.conv_configs["ABH_32_DEALLOC"] = ttnn.Conv2dConfig(
+            weights_dtype=conv_w_dtype,
+            shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            deallocate_activation=True,
+            enable_act_double_buffer=False,
+            reshard_if_not_optimal=True,
+            act_block_w_div=1,
+            act_block_h_override=32,
+            config_tensors_in_dram=True,
+            output_layout=ttnn.TILE_LAYOUT,
+        )
         self.conv_configs["ABH_64"] = ttnn.Conv2dConfig(
             weights_dtype=conv_w_dtype,
             shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
@@ -175,133 +197,133 @@ class ModelOptimizations:
             )
         if conv_path == "frontend.layer1.0.conv1":
             return (
-                self.conv_configs["DEFAULT"],
+                self.conv_configs["ABH_32"],  # has residual in DRAM
                 self.conv_slice_configs["DEFAULT"],
                 self.compute_configs["DEFAULT_CONV_COMPUTE_CONFIG"],
                 self.conv_output_dtype,
             )
         if conv_path == "frontend.layer1.0.conv2":
             return (
-                self.conv_configs["DEFAULT"],
+                self.conv_configs["ABH_32_DEALLOC"],
                 self.conv_slice_configs["DEFAULT"],
                 self.compute_configs["DEFAULT_CONV_COMPUTE_CONFIG"],
                 self.conv_output_dtype,
             )
         if conv_path == "frontend.layer1.1.conv1":
             return (
-                self.conv_configs["DEFAULT"],
+                self.conv_configs["ABH_32"],  # has residual in DRAM
                 self.conv_slice_configs["DEFAULT"],
                 self.compute_configs["DEFAULT_CONV_COMPUTE_CONFIG"],
                 self.conv_output_dtype,
             )
         if conv_path == "frontend.layer1.1.conv2":
             return (
-                self.conv_configs["DEFAULT"],
+                self.conv_configs["ABH_32_DEALLOC"],
                 self.conv_slice_configs["DEFAULT"],
                 self.compute_configs["DEFAULT_CONV_COMPUTE_CONFIG"],
                 self.conv_output_dtype,
             )
         if conv_path == "frontend.layer2.0.conv1":
             return (
-                self.conv_configs["DEFAULT"],
+                self.conv_configs["ABH_32"],  # has residual in DRAM
                 self.conv_slice_configs["DEFAULT"],
                 self.compute_configs["DEFAULT_CONV_COMPUTE_CONFIG"],
                 self.conv_output_dtype,
             )
         if conv_path == "frontend.layer2.0.conv2":
             return (
-                self.conv_configs["DEFAULT"],
+                self.conv_configs["ABH_32_DEALLOC"],
                 self.conv_slice_configs["DEFAULT"],
                 self.compute_configs["DEFAULT_CONV_COMPUTE_CONFIG"],
                 self.conv_output_dtype,
             )
         if conv_path == "frontend.layer2.0.downsample.0":
             return (
-                self.conv_configs["DEFAULT"],
+                self.conv_configs["ABH_32_DEALLOC"],
                 self.conv_slice_configs["DEFAULT"],
                 self.compute_configs["DEFAULT_CONV_COMPUTE_CONFIG"],
                 self.conv_output_dtype,
             )
         if conv_path == "frontend.layer2.1.conv1":
             return (
-                self.conv_configs["DEFAULT"],
+                self.conv_configs["ABH_32"],  # has residual in DRAM
                 self.conv_slice_configs["DEFAULT"],
                 self.compute_configs["DEFAULT_CONV_COMPUTE_CONFIG"],
                 self.conv_output_dtype,
             )
         if conv_path == "frontend.layer2.1.conv2":
             return (
-                self.conv_configs["DEFAULT"],
+                self.conv_configs["ABH_32_DEALLOC"],
                 self.conv_slice_configs["DEFAULT"],
                 self.compute_configs["DEFAULT_CONV_COMPUTE_CONFIG"],
                 self.conv_output_dtype,
             )
         if conv_path == "frontend.layer3.0.conv1":
             return (
-                self.conv_configs["DEFAULT"],
+                self.conv_configs["ABH_32"],  # has residual in DRAM
                 self.conv_slice_configs["DEFAULT"],
                 self.compute_configs["DEFAULT_CONV_COMPUTE_CONFIG"],
                 self.conv_output_dtype,
             )
         if conv_path == "frontend.layer3.0.conv2":
             return (
-                self.conv_configs["DEFAULT"],
+                self.conv_configs["ABH_32_DEALLOC"],
                 self.conv_slice_configs["DEFAULT"],
                 self.compute_configs["DEFAULT_CONV_COMPUTE_CONFIG"],
                 self.conv_output_dtype,
             )
         if conv_path == "frontend.layer3.0.downsample.0":
             return (
-                self.conv_configs["DEFAULT"],
+                self.conv_configs["ABH_32_DEALLOC"],
                 self.conv_slice_configs["DEFAULT"],
                 self.compute_configs["DEFAULT_CONV_COMPUTE_CONFIG"],
                 self.conv_output_dtype,
             )
         if conv_path == "frontend.layer3.1.conv1":
             return (
-                self.conv_configs["DEFAULT"],
+                self.conv_configs["ABH_32"],  # has residual in DRAM
                 self.conv_slice_configs["DEFAULT"],
                 self.compute_configs["DEFAULT_CONV_COMPUTE_CONFIG"],
                 self.conv_output_dtype,
             )
         if conv_path == "frontend.layer3.1.conv2":
             return (
-                self.conv_configs["DEFAULT"],
+                self.conv_configs["ABH_32_DEALLOC"],
                 self.conv_slice_configs["DEFAULT"],
                 self.compute_configs["DEFAULT_CONV_COMPUTE_CONFIG"],
                 self.conv_output_dtype,
             )
         if conv_path == "frontend.layer4.0.conv1":
             return (
-                self.conv_configs["DEFAULT"],
+                self.conv_configs["ABH_32"],  # has residual in DRAM
                 self.conv_slice_configs["DEFAULT"],
                 self.compute_configs["DEFAULT_CONV_COMPUTE_CONFIG"],
                 self.conv_output_dtype,
             )
         if conv_path == "frontend.layer4.0.conv2":
             return (
-                self.conv_configs["DEFAULT"],
+                self.conv_configs["ABH_32_DEALLOC"],
                 self.conv_slice_configs["DEFAULT"],
                 self.compute_configs["DEFAULT_CONV_COMPUTE_CONFIG"],
                 self.conv_output_dtype,
             )
         if conv_path == "frontend.layer4.0.downsample.0":
             return (
-                self.conv_configs["DEFAULT"],
+                self.conv_configs["ABH_32_DEALLOC"],
                 self.conv_slice_configs["DEFAULT"],
                 self.compute_configs["DEFAULT_CONV_COMPUTE_CONFIG"],
                 self.conv_output_dtype,
             )
         if conv_path == "frontend.layer4.1.conv1":
             return (
-                self.conv_configs["DEFAULT"],
+                self.conv_configs["ABH_32"],  # has residual in DRAM
                 self.conv_slice_configs["DEFAULT"],
                 self.compute_configs["DEFAULT_CONV_COMPUTE_CONFIG"],
                 self.conv_output_dtype,
             )
         if conv_path == "frontend.layer4.1.conv2":
             return (
-                self.conv_configs["DEFAULT"],
+                self.conv_configs["ABH_32_DEALLOC"],
                 self.conv_slice_configs["DEFAULT"],
                 self.compute_configs["DEFAULT_CONV_COMPUTE_CONFIG"],
                 self.conv_output_dtype,

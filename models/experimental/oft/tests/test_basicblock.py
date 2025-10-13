@@ -7,6 +7,7 @@ import ttnn
 import pytest
 import torch.nn as nn
 from models.experimental.oft.reference.resnet import BasicBlock
+from models.experimental.oft.tt.model_configs import ModelOptimizations
 from models.experimental.oft.tt.tt_resnet import TTBasicBlock
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
@@ -14,8 +15,6 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.experimental.oft.tt.model_preprocessing import create_OFT_model_parameters_resnet
 from tests.ttnn.unit_tests.test_bh_20_cores_sharding import skip_if_not_blackhole_20_cores
 from loguru import logger
-
-from models.experimental.oft.tt.model_configs import ModelOptimizations
 
 
 @pytest.mark.parametrize(
@@ -46,7 +45,6 @@ def test_tt_topdown_network(device, n, in_ch, out_ch, h, w, stride, sharding, is
             device,
             state_dict[i],
             state_dict.layer_args[i],
-            stride=stride,
             is_sliced=is_sliced,
         )
         for i in range(8)
@@ -87,7 +85,7 @@ def test_tt_basicblock_single(device, n, in_ch, out_ch, h, w, stride, sharding, 
     model_opt = ModelOptimizations()
     model_opt.apply(state_dict, "topdown.0")  # to update path to real one
 
-    block = TTBasicBlock(device, state_dict, state_dict.layer_args, stride=stride, is_sliced=is_sliced)
+    block = TTBasicBlock(device, state_dict, state_dict.layer_args, is_sliced=is_sliced)
 
     n, c, h, w = input_tensor.shape
     x_for_ttnn = input_tensor.permute(0, 2, 3, 1).view(1, 1, n * h * w, c)
