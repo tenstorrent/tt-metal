@@ -75,6 +75,7 @@ target_sources(
         telemetry/telemetry_collector.cpp
         telemetry/metric.cpp
         server/web_server.cpp
+        server/prom_writer.cpp
         server/collection_endpoint.cpp
         server/collection_clients.cpp
         topology/topology.cpp

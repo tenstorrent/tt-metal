@@ -27,6 +27,7 @@
 #include <server/web_server.hpp>
 #include <server/collection_endpoint.hpp>
 #include <utils/hex.hpp>
+#include <server/prom_writer.hpp>
 
 /**************************************************************************************************
  Utility Functions
@@ -172,6 +173,12 @@ int main(int argc, char* argv[]) {
         "Comma-separated list of WebSocket endpoints to aggregate telemetry from (e.g., "
         "ws://server1:8081,ws://server2:8081). Enables aggregator mode, disabling the collection endpoint.",
         cxxopts::value<std::string>())(
+        "use-prom-writer",
+        "Enable Prometheus metrics writer to periodically write metrics to a file",
+        cxxopts::value<bool>()->default_value("false"))(
+        "prom-metrics-file",
+        "Path to the Prometheus metrics file (default: <metal-src-dir>/tt_telemetry/telemetry/metrics.prom)",
+        cxxopts::value<std::string>())(
         "metal-src-dir",
         "Metal source directory (optional, defaults to TT_METAL_HOME env var)",
         cxxopts::value<std::string>())("h,help", "Print usage")(
@@ -191,11 +198,37 @@ int main(int argc, char* argv[]) {
     bool print_link_health = result["print-link-health"].as<bool>();
     int port = result["port"].as<int>();
     int collector_port = result["collector-port"].as<int>();
+<<<<<<< HEAD
     std::string metal_src_dir = "";
     if (result.contains("metal-src-dir")) {
+=======
+
+    std::string metal_src_dir;
+    // Check if metal-src-dir was provided; else fallback to environment var
+    if (result.count("metal-src-dir")) {
+>>>>>>> 7a54feed67 (Add initial PromWriter implementation)
         metal_src_dir = result["metal-src-dir"].as<std::string>();
+    } else {
+        const char* env_metal_home = std::getenv("TT_METAL_HOME");
+        if (env_metal_home) {
+            metal_src_dir = env_metal_home;
+        } else {
+            std::cerr << "Error: metal-src-dir argument not provided and TT_METAL_HOME environment variable not set." << std::endl;
+            return 1;
+        }
     }
     bool telemetry_enabled = !result["disable-telemetry"].as<bool>();
+
+    std::string prom_metrics_file;
+    if (result.count("prom-metrics-file")) {
+        prom_metrics_file = result["prom-metrics-file"].as<std::string>();
+    } else if (!metal_src_dir.empty()) {
+        prom_metrics_file = metal_src_dir + "/tt_telemetry/telemetry/metrics.prom"; // TODO(kkfernandez): portable paths
+    } else {
+        prom_metrics_file = "metrics.prom";
+    }
+
+    bool use_prom_writer = result["use-prom-writer"].as<bool>();
 
     // Are we in collector (collect telemetry and export on collection endpoint) or aggregator
     // (connect to collectors and aggregate) mode?
@@ -243,6 +276,19 @@ int main(int argc, char* argv[]) {
         std::promise<bool> promise;  // create promise that immediately resolves to true
         promise.set_value(true);
         websocket_server = promise.get_future();
+    }
+
+    // Prometheus writer
+    if (use_prom_writer) {
+        log_info(tt::LogAlways, "Starting Prometheus metrics writer");
+        std::future<bool> prom_writer_future;
+        std::shared_ptr<TelemetrySubscriber> prom_writer_subscriber;
+        // TODO(kkfernandez): figure out a nice location
+        // TODO(kkfernandez): portable path construction
+        std::tie(prom_writer_future, prom_writer_subscriber) = run_prom_writer(prom_metrics_file);
+        subscribers.push_back(prom_writer_subscriber);
+    } else {
+        log_info(tt::LogAlways, "Omitting Prometheus metrics writer.");
     }
 
     // Telemetry collection
