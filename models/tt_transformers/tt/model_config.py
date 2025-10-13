@@ -463,8 +463,6 @@ class ModelArgs:
         max_seq_len=1024 * 128,
         optimizations=None,
         cache_hf=False,  # Set to False to reduce memory usage by not caching HF model
-        model_location_generator=None,
-        is_ci_v2_env=False,
     ):
         self.num_devices = mesh_device.get_num_devices() if mesh_device else 0
         self.mesh_device = mesh_device
@@ -516,13 +514,6 @@ class ModelArgs:
         elif HF_MODEL:
             self.CKPT_DIR = HF_MODEL
             self.TOKENIZER_PATH = HF_MODEL
-
-            logger.info(f"Is CI v2 env: {is_ci_v2_env}")
-            # if is_ci_v2_env and model_location_generator is not None:
-            #     self.CKPT_DIR = str(model_location_generator(HF_MODEL, download_if_ci_v2=True, ci_v2_timeout_in_s=3000))
-            #     self.TOKENIZER_PATH = self.CKPT_DIR
-            #     logger.info(f"CI v2 environment detected, using model location generator to get {self.CKPT_DIR}")
-
             if not self.CACHE_PATH:
                 self.CACHE_PATH = os.path.join("model_cache", HF_MODEL, self.device_name)
             else:  # For HF models, always append the device name (e.g. N150/N300/T3K/TG) to the cache path
@@ -2356,8 +2347,6 @@ class ModelArgs:
             try:
                 # Try to load tokenizer from the original model path
                 # If there is no Processor, it will return Tokenizer (useful for multimodal models)
-                # self.TOKENIZER_PATH = str(self.TOKENIZER_PATH)
-                logger.info(f"Tokenizer type: {type(self.TOKENIZER_PATH)}")
                 tokenizer = AutoTokenizer.from_pretrained(
                     self.TOKENIZER_PATH, local_files_only=os.getenv("CI") == "true"
                 )
