@@ -1040,10 +1040,12 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels(
                     if (reliability_mode == tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE) {
                         TT_FATAL(
                             connected_eth_cores.size() >= edge.connected_chip_ids.size(),
-                            "Expected {} eth links from physical chip {} to physical chip {}",
+                            "Expected {} eth links from physical chip {} to physical chip {}, total connected eth "
+                            "cores is {}",
                             edge.connected_chip_ids.size(),
                             physical_chip_id,
-                            physical_connected_chip_id);
+                            physical_connected_chip_id,
+                            connected_eth_cores.size());
                     }
 
                     for (const auto& eth_core : connected_eth_cores) {
