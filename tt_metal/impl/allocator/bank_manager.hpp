@@ -20,12 +20,12 @@
 #include "algorithms/allocator_algorithm.hpp"
 #include "core_coord.hpp"
 #include "hal_types.hpp"
+#include <tt-metalium/allocator_state.hpp>
 
 namespace tt {
 
 namespace tt_metal {
 enum class BufferType;
-struct UnifiedAllocatorState;  // Forward declaration
 namespace allocator {
 class Algorithm;
 }  // namespace allocator
@@ -126,17 +126,16 @@ public:
         AllocatorDependencies::AllocatorID allocator_id = AllocatorDependencies::AllocatorID{0});
     void reset_size(AllocatorDependencies::AllocatorID allocator_id = AllocatorDependencies::AllocatorID{0});
 
-    // Unified State Methods
-    UnifiedAllocatorState extract_state(
+    // AllocatorState Methods
+    AllocatorState::BufferTypeState extract_state(
         AllocatorDependencies::AllocatorID allocator_id = AllocatorDependencies::AllocatorID{0}) const;
-    UnifiedAllocatorState extract_merged_state() const;
-    void apply_unified_state(
-        const UnifiedAllocatorState& unified_state,
+    AllocatorState::BufferTypeState extract_merged_state() const;
+    void apply_state(
+        const AllocatorState::BufferTypeState& state,
         AllocatorDependencies::AllocatorID target_allocator_id = AllocatorDependencies::AllocatorID{0});
-    void reset_and_apply_unified_state(
-        const UnifiedAllocatorState& unified_state,
+    void override_state(
+        const AllocatorState::BufferTypeState& state,
         AllocatorDependencies::AllocatorID target_allocator_id = AllocatorDependencies::AllocatorID{0});
-    bool can_apply_unified_state(const UnifiedAllocatorState& unified_state) const;
 
 private:
     /*********************************
@@ -176,6 +175,9 @@ private:
     // Returns allocator for the given allocator ID; returns nullptr if allocator ID is invalid
     allocator::Algorithm* get_allocator_from_id(AllocatorDependencies::AllocatorID allocator_id);
     const allocator::Algorithm* get_allocator_from_id(AllocatorDependencies::AllocatorID allocator_id) const;
+
+    // Returns true if state can be applied
+    bool can_apply_state(const AllocatorState::BufferTypeState& state) const;
 
     // Invalidate caches stored on allocators that depend on the given allocator
     void invalidate_allocated_ranges_cache_for_dependent_allocators(AllocatorDependencies::AllocatorID allocator_id);

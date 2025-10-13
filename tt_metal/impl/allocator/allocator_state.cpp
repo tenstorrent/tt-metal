@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/unified_allocator_state.hpp>
+#include <tt-metalium/allocator_state.hpp>
 #include <tt-metalium/allocator.hpp>
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <enchantum/enchantum.hpp>
 
 #include <algorithm>
@@ -13,11 +13,7 @@
 namespace tt {
 namespace tt_metal {
 
-// ============================================================================
-// UnifiedAllocatorState Implementation
-// ============================================================================
-
-void UnifiedAllocatorState::merge(const UnifiedAllocatorState& other) {
+void AllocatorState::BufferTypeState::merge(const BufferTypeState& other) {
     // Validate compatibility before merging
     TT_FATAL(
         is_compatible_with(other),
@@ -46,7 +42,7 @@ void UnifiedAllocatorState::merge(const UnifiedAllocatorState& other) {
     normalize();
 }
 
-void UnifiedAllocatorState::normalize() {
+void AllocatorState::BufferTypeState::normalize() {
     if (allocated_regions.empty()) {
         return;
     }
@@ -110,7 +106,7 @@ void UnifiedAllocatorState::normalize() {
     region_source_allocator_ids.clear();
 }
 
-bool UnifiedAllocatorState::is_compatible_with(const UnifiedAllocatorState& other) const {
+bool AllocatorState::BufferTypeState::is_compatible_with(const BufferTypeState& other) const {
     // Check buffer type
     if (buffer_type != other.buffer_type) {
         return false;
@@ -148,7 +144,7 @@ bool UnifiedAllocatorState::is_compatible_with(const UnifiedAllocatorState& othe
     return true;
 }
 
-DeviceAddr UnifiedAllocatorState::total_allocated_size() const {
+DeviceAddr AllocatorState::BufferTypeState::total_allocated_size() const {
     DeviceAddr total = 0;
     for (const auto& [start, end] : allocated_regions) {
         total += (end - start);
@@ -156,146 +152,61 @@ DeviceAddr UnifiedAllocatorState::total_allocated_size() const {
     return total;
 }
 
-bool UnifiedAllocatorState::has_conflict(DeviceAddr start_addr, DeviceAddr end_addr) const {
-    // Check if [start_addr, end_addr) overlaps with any allocated region
-    for (const auto& [region_start, region_end] : allocated_regions) {
-        // Check for overlap: ranges overlap if start1 < end2 && start2 < end1
-        if (start_addr < region_end && region_start < end_addr) {
-            return true;
-        }
-    }
-    return false;
-}
-
-// ============================================================================
-// CompleteUnifiedAllocatorState Implementation
-// ============================================================================
-
-void CompleteUnifiedAllocatorState::merge(const CompleteUnifiedAllocatorState& other) {
+void AllocatorState::merge(const AllocatorState& other) {
     // Merge each buffer type
-    for (const auto& [buffer_type, other_state] : other.states_per_buffer_type) {
-        auto it = states_per_buffer_type.find(buffer_type);
-        if (it != states_per_buffer_type.end()) {
+    for (const auto& [buffer_type, other_state] : other.states_per_buffer_type_) {
+        auto it = states_per_buffer_type_.find(buffer_type);
+        if (it != states_per_buffer_type_.end()) {
             // Buffer type exists in both, merge states
             it->second.merge(other_state);
         } else {
             // Buffer type only in other, copy it
-            states_per_buffer_type[buffer_type] = other_state;
+            states_per_buffer_type_[buffer_type] = other_state;
         }
     }
 
     // Merge buffer pointers
-    all_allocated_buffers.insert(
-        all_allocated_buffers.end(), other.all_allocated_buffers.begin(), other.all_allocated_buffers.end());
+    all_allocated_buffers_.insert(
+        all_allocated_buffers_.end(), other.all_allocated_buffers_.begin(), other.all_allocated_buffers_.end());
 }
 
-DeviceAddr CompleteUnifiedAllocatorState::total_allocated_size() const {
+DeviceAddr AllocatorState::total_allocated_size() const {
     DeviceAddr total = 0;
-    for (const auto& [buffer_type, state] : states_per_buffer_type) {
+    for (const auto& [buffer_type, state] : states_per_buffer_type_) {
         total += state.total_allocated_size();
     }
     return total;
 }
 
-bool CompleteUnifiedAllocatorState::has_buffer_type(BufferType buffer_type) const {
-    return states_per_buffer_type.find(buffer_type) != states_per_buffer_type.end();
+bool AllocatorState::has_buffer_type(BufferType buffer_type) const {
+    return states_per_buffer_type_.find(buffer_type) != states_per_buffer_type_.end();
 }
 
-// ============================================================================
-// Global Helper Functions
-// ============================================================================
-
-CompleteUnifiedAllocatorState compute_unified_state(const std::vector<Allocator*>& allocators) {
-    CompleteUnifiedAllocatorState unified_state;
-
-    if (allocators.empty()) {
-        return unified_state;
+const std::vector<std::pair<DeviceAddr, DeviceAddr>>& AllocatorState::get_allocated_regions(
+    BufferType buffer_type) const {
+    static const std::vector<std::pair<DeviceAddr, DeviceAddr>> empty_vector;
+    auto it = states_per_buffer_type_.find(buffer_type);
+    if (it == states_per_buffer_type_.end()) {
+        return empty_vector;
     }
-
-    // Merge states for each buffer type
-    std::array<BufferType, 4> buffer_types = {
-        BufferType::DRAM, BufferType::L1, BufferType::L1_SMALL, BufferType::TRACE};
-
-    for (const auto& buffer_type : buffer_types) {
-        UnifiedAllocatorState type_state;
-        bool first = true;
-
-        for (Allocator* allocator : allocators) {
-            if (!allocator) {
-                continue;
-            }
-
-            try {
-                auto state = allocator->extract_state(buffer_type);
-                if (first) {
-                    type_state = std::move(state);
-                    first = false;
-                } else {
-                    type_state.merge(state);
-                }
-            } catch (...) {
-                // Skip allocators that don't have this buffer type or encounter errors
-                continue;
-            }
-        }
-
-        if (!first) {  // At least one allocator had this buffer type
-            unified_state.states_per_buffer_type[buffer_type] = std::move(type_state);
-        }
-    }
-
-    // Collect all buffer pointers
-    for (Allocator* allocator : allocators) {
-        if (!allocator) {
-            continue;
-        }
-
-        auto buffers = allocator->get_allocated_buffers();
-        unified_state.all_allocated_buffers.reserve(unified_state.all_allocated_buffers.size() + buffers.size());
-        unified_state.all_allocated_buffers.insert(
-            unified_state.all_allocated_buffers.end(), buffers.begin(), buffers.end());
-    }
-
-    return unified_state;
+    return it->second.allocated_regions;
 }
 
-UnifiedAllocatorState compute_unified_state(const std::vector<Allocator*>& allocators, const BufferType& buffer_type) {
-    UnifiedAllocatorState unified_state;
-    bool first = true;
-
-    for (Allocator* allocator : allocators) {
-        if (!allocator) {
-            continue;
-        }
-
-        try {
-            auto state = allocator->extract_state(buffer_type);
-            if (first) {
-                unified_state = std::move(state);
-                first = false;
-            } else {
-                unified_state.merge(state);
-            }
-        } catch (...) {
-            // Skip allocators that don't have this buffer type or encounter errors
-            continue;
-        }
+AllocatorState::BufferTypeState& AllocatorState::get_or_create_buffer_type_state(BufferType buffer_type) {
+    auto it = states_per_buffer_type_.find(buffer_type);
+    if (it == states_per_buffer_type_.end()) {
+        it = states_per_buffer_type_.emplace(buffer_type, BufferTypeState{}).first;
+        it->second.buffer_type = buffer_type;
     }
-
-    return unified_state;
+    return it->second;
 }
 
-UnifiedAllocatorState compute_unified_state(
-    const std::vector<const Allocator*>& allocators, const BufferType& buffer_type) {
-    // Convert const vector to non-const for reuse
-    // (extract_state is const, so this is safe)
-    std::vector<Allocator*> non_const_allocators;
-    non_const_allocators.reserve(allocators.size());
-    for (const Allocator* alloc : allocators) {
-        non_const_allocators.push_back(const_cast<Allocator*>(alloc));
+const AllocatorState::BufferTypeState* AllocatorState::get_buffer_type_state(BufferType buffer_type) const {
+    auto it = states_per_buffer_type_.find(buffer_type);
+    if (it == states_per_buffer_type_.end()) {
+        return nullptr;
     }
-
-    return compute_unified_state(non_const_allocators, buffer_type);
+    return &it->second;
 }
 
 }  // namespace tt_metal

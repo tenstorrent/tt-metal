@@ -8,6 +8,8 @@
 #include "ttnn/distributed/tensor_topology.hpp"
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/allocator_state.hpp>
+#include <tt-metalium/allocator.hpp>
 #include <tt_stl/assert.hpp>
 
 namespace ttnn::experimental::unit_mesh {
@@ -48,8 +50,19 @@ Tensor aggregate(const std::vector<tt::tt_metal::Tensor>& tensors) {
             tensors[i].mesh_buffer()->address() == reference_address, "All mesh buffers must be at the same address");
     }
 
+    // Synchronize the state of parent mesh allocator with all of submeshes.
+    auto* parent_allocator = parent_mesh->allocator().get();
+    TT_FATAL(parent_allocator != nullptr, "Parent mesh must have an allocator");
+    tt::tt_metal::AllocatorState parent_allocator_state;
+    for (const auto& submesh : parent_mesh->get_submeshes()) {
+        auto* submesh_allocator = submesh->allocator().get();
+        TT_FATAL(submesh_allocator != nullptr, "Submesh must have an allocator");
+        tt::tt_metal::AllocatorState submesh_allocator_state = submesh_allocator->extract_state();
+        parent_allocator_state.merge(submesh_allocator_state);
+    }
+    parent_allocator->override_state(parent_allocator_state);
+
     // Create a new mesh tensor for parent mesh.
-    // TODO: #30348 - synchronize the state of parent mesh allocator with all of submeshes.
     const auto& reference_buffer = tensors[0].mesh_buffer();
     auto mesh_buffer = tt::tt_metal::distributed::MeshBuffer::create(
         reference_buffer->global_config(),

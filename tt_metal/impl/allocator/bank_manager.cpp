@@ -6,6 +6,7 @@
 
 #include <enchantum/enchantum.hpp>
 #include <tt-metalium/allocator.hpp>
+#include <tt-metalium/allocator_state.hpp>
 #include <limits>
 #include <string_view>
 #include <utility>
@@ -582,11 +583,12 @@ void BankManager::reset_size(BankManager::AllocatorDependencies::AllocatorID all
 }
 
 // ============================================================================
-// Unified State Methods
+// Allocator State Methods
 // ============================================================================
 
-UnifiedAllocatorState BankManager::extract_state(BankManager::AllocatorDependencies::AllocatorID allocator_id) const {
-    UnifiedAllocatorState state;
+AllocatorState::BufferTypeState BankManager::extract_state(
+    BankManager::AllocatorDependencies::AllocatorID allocator_id) const {
+    AllocatorState::BufferTypeState state;
 
     // Copy metadata
     state.buffer_type = buffer_type_;
@@ -615,8 +617,8 @@ UnifiedAllocatorState BankManager::extract_state(BankManager::AllocatorDependenc
     return state;
 }
 
-UnifiedAllocatorState BankManager::extract_merged_state() const {
-    UnifiedAllocatorState merged_state;
+AllocatorState::BufferTypeState BankManager::extract_merged_state() const {
+    AllocatorState::BufferTypeState merged_state;
     bool first = true;
 
     // Merge states from all allocators
@@ -634,40 +636,32 @@ UnifiedAllocatorState BankManager::extract_merged_state() const {
     return merged_state;
 }
 
-void BankManager::apply_unified_state(
-    const UnifiedAllocatorState& unified_state, BankManager::AllocatorDependencies::AllocatorID target_allocator_id) {
+void BankManager::apply_state(
+    const AllocatorState::BufferTypeState& state, BankManager::AllocatorDependencies::AllocatorID target_allocator_id) {
     // Validate compatibility
     TT_FATAL(
-        buffer_type_ == unified_state.buffer_type,
-        "Buffer type mismatch: expected {}, got {}",
+        can_apply_state(state),
+        "Cannot apply state: incompatible configuration (buffer_type: expected {}, got {} | num_banks: expected {}, "
+        "got {} | bank_size: expected {}, got {})",
         enchantum::to_string(buffer_type_),
-        enchantum::to_string(unified_state.buffer_type));
-
-    TT_FATAL(
-        num_banks() == unified_state.num_banks,
-        "Bank count mismatch: expected {}, got {}",
+        enchantum::to_string(state.buffer_type),
         num_banks(),
-        unified_state.num_banks);
-
-    TT_FATAL(
-        bank_size() == unified_state.bank_size,
-        "Bank size mismatch: expected {}, got {}",
+        state.num_banks,
         bank_size(),
-        unified_state.bank_size);
+        state.bank_size);
 
     auto* alloc = get_allocator_from_id(target_allocator_id);
     TT_FATAL(alloc, "Allocator not initialized for ID {}", target_allocator_id.get());
 
     // Apply each allocated region
-    for (const auto& [start_addr, end_addr] : unified_state.allocated_regions) {
+    for (const auto& [start_addr, end_addr] : state.allocated_regions) {
         DeviceAddr size = end_addr - start_addr;
 
         // Use allocate_at_address to mark this region as allocated
         auto result = alloc->allocate_at_address(start_addr, size);
         TT_FATAL(
             result.has_value(),
-            "Failed to apply unified state: cannot allocate region [{}, {}) of size {} B at address {} in {} buffer "
-            "type. "
+            "Failed to apply state: cannot allocate region [{}, {}) of size {} B at address {} in {} buffer type. "
             "Region may already be occupied or invalid.",
             start_addr,
             end_addr,
@@ -683,8 +677,11 @@ void BankManager::apply_unified_state(
     invalidate_allocated_ranges_cache_for_dependent_allocators(target_allocator_id);
 }
 
-void BankManager::reset_and_apply_unified_state(
-    const UnifiedAllocatorState& unified_state, BankManager::AllocatorDependencies::AllocatorID target_allocator_id) {
+void BankManager::override_state(
+    const AllocatorState::BufferTypeState& state, BankManager::AllocatorDependencies::AllocatorID target_allocator_id) {
+    // Validate that state can be applied
+    TT_FATAL(can_apply_state(state), "Cannot apply state: incompatible configuration");
+
     auto* alloc = get_allocator_from_id(target_allocator_id);
     TT_FATAL(alloc, "Allocator not initialized for ID {}", target_allocator_id.get());
 
@@ -695,30 +692,15 @@ void BankManager::reset_and_apply_unified_state(
     allocated_buffers_[target_allocator_id.get()].clear();
     allocated_ranges_cache_[target_allocator_id.get()].reset();
 
-    // Apply unified state
-    apply_unified_state(unified_state, target_allocator_id);
+    // Apply state
+    apply_state(state, target_allocator_id);
 }
 
-bool BankManager::can_apply_unified_state(const UnifiedAllocatorState& unified_state) const {
-    // Check buffer type
-    if (buffer_type_ != unified_state.buffer_type) {
-        return false;
-    }
-
-    // Check bank configuration
-    if (num_banks() != unified_state.num_banks) {
-        return false;
-    }
-
-    if (bank_size() != unified_state.bank_size) {
-        return false;
-    }
-
-    if (alignment_bytes_ != unified_state.alignment_bytes) {
-        return false;
-    }
-
-    return true;
+bool BankManager::can_apply_state(const AllocatorState::BufferTypeState& state) const {
+    return buffer_type_ == state.buffer_type &&  //
+           num_banks() == state.num_banks &&     //
+           bank_size() == state.bank_size &&     //
+           alignment_bytes_ == state.alignment_bytes;
 }
 
 }  // namespace tt_metal
