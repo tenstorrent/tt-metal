@@ -28,7 +28,6 @@ struct ProgressMonitorConfig {
     bool enabled = false;
     uint32_t poll_interval_seconds = 2;    // How often to poll progress
     uint32_t hung_threshold_seconds = 30;  // When to warn about hung devices
-    bool verbose = false;                  // Show per-device progress vs summary
 };
 
 // Progress data for a single device
@@ -72,26 +71,15 @@ private:
     // Check for hung devices and display warnings
     void check_for_hung_devices(const std::unordered_map<tt::tt_fabric::FabricNodeId, DeviceProgress>& progress);
 
-    // Display progress (summary or verbose based on config)
+    // Display progress (single line summary)
     void display_progress(
         const std::unordered_map<tt::tt_fabric::FabricNodeId, DeviceProgress>& progress,
         std::chrono::duration<double> elapsed_since_last_poll);
-
-    // Display progress in summary format (single line)
-    void display_summary_progress(
-        const std::unordered_map<tt::tt_fabric::FabricNodeId, DeviceProgress>& progress,
-        std::chrono::duration<double> elapsed);
-
-    // Display progress in verbose format (per-device with bars)
-    void display_verbose_progress(
-        const std::unordered_map<tt::tt_fabric::FabricNodeId, DeviceProgress>& progress,
-        std::chrono::duration<double> elapsed);
 
     // Formatting helpers
     std::string format_count(uint64_t count) const;
     std::string format_throughput(double packets_per_second) const;
     std::string format_duration(double seconds) const;
-    std::string format_progress_bar(double percentage, uint32_t width) const;
 
     // Hung detection
     bool is_device_hung(tt::tt_fabric::FabricNodeId device_id, uint64_t current_packets);
@@ -113,9 +101,6 @@ private:
     // Hung detection state
     std::unordered_map<tt::tt_fabric::FabricNodeId, DeviceState> device_states_;
     std::chrono::seconds hung_threshold_;
-
-    // Display state (for verbose mode cursor management)
-    bool first_display_ = true;
 };
 
 }  // namespace tt::tt_fabric::fabric_tests

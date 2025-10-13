@@ -73,12 +73,11 @@ int main(int argc, char** argv) {
     test_context.init(fixture, allocation_policies);
 
     // Configure progress monitoring from cmdline flags
-    if (cmdline_parser.show_progress() || cmdline_parser.verbose_progress()) {
+    if (cmdline_parser.show_progress()) {
         ProgressMonitorConfig progress_config;
         progress_config.enabled = true;
         progress_config.poll_interval_seconds = cmdline_parser.get_progress_interval();
         progress_config.hung_threshold_seconds = cmdline_parser.get_hung_threshold();
-        progress_config.verbose = cmdline_parser.verbose_progress();
 
         test_context.enable_progress_monitoring(progress_config);
     }

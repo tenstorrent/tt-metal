@@ -50,9 +50,8 @@ void TestProgressMonitor::poll_until_complete() {
         }
     }
 
-    if (!first_display_) {
-        std::cout << std::endl;
-    }
+    // Always print newline after final progress update
+    std::cout << std::endl;
 }
 
 std::unordered_map<tt::tt_fabric::FabricNodeId, DeviceProgress> TestProgressMonitor::poll_devices() {
@@ -162,16 +161,6 @@ void TestProgressMonitor::check_for_hung_devices(
 void TestProgressMonitor::display_progress(
     const std::unordered_map<tt::tt_fabric::FabricNodeId, DeviceProgress>& progress,
     std::chrono::duration<double> elapsed) {
-    if (config_.verbose) {
-        display_verbose_progress(progress, elapsed);
-    } else {
-        display_summary_progress(progress, elapsed);
-    }
-}
-
-void TestProgressMonitor::display_summary_progress(
-    const std::unordered_map<tt::tt_fabric::FabricNodeId, DeviceProgress>& progress,
-    std::chrono::duration<double> elapsed) {
     uint64_t total_current = 0, total_target = 0;
     for (const auto& [_, prog] : progress) {
         total_current += prog.current_packets;
@@ -182,75 +171,29 @@ void TestProgressMonitor::display_summary_progress(
 
     std::stringstream ss;
     ss << "\rProgress: " << std::fixed << std::setprecision(1) << overall_pct << "% "
-       << "(" << format_count(total_current) << "/" << format_count(total_target) << ") | ";
+       << "(" << format_count(total_current) << "/" << format_count(total_target) << ")";
 
     // Throughput and ETA (based on delta since last poll)
-    if (elapsed.count() > 0 && total_current > last_total_packets_) {
+    // Skip first poll (last_total_packets_ == 0) and require at least 0.5s elapsed
+    if (elapsed.count() >= 0.5 && last_total_packets_ > 0 && total_current > last_total_packets_) {
         double throughput = (total_current - last_total_packets_) / elapsed.count();
-        ss << format_throughput(throughput);
+        ss << " | " << format_throughput(throughput);
 
         auto eta = estimate_eta(total_current, total_target, throughput);
         if (eta.has_value()) {
             ss << " | ETA: " << format_duration(*eta);
         }
+    }
 
+    // Always update last_total_packets for next iteration
+    if (total_current > 0) {
         last_total_packets_ = total_current;
     }
 
-    // Progress bar
-    ss << " " << format_progress_bar(overall_pct, 20);
+    // Pad with spaces to clear any leftover text from previous longer updates
+    ss << "          ";
 
     std::cout << ss.str() << std::flush;
-}
-
-void TestProgressMonitor::display_verbose_progress(
-    const std::unordered_map<tt::tt_fabric::FabricNodeId, DeviceProgress>& progress,
-    std::chrono::duration<double> elapsed) {
-    if (!first_display_) {
-        std::cout << "\033[" << (progress.size() + 2) << "A";  // Move up N+2 lines (devices + summary line)
-    }
-    first_display_ = false;
-
-    for (const auto& [device_id, prog] : progress) {
-        double pct = prog.total_packets > 0 ? 100.0 * prog.current_packets / prog.total_packets : 0.0;
-
-        std::cout << "Device " << std::setw(2) << device_id << ": " << format_progress_bar(pct, 40) << " " << std::fixed
-                  << std::setprecision(1) << pct << "% "
-                  << "(" << format_count(prog.current_packets) << "/" << format_count(prog.total_packets) << ")";
-
-        auto it = device_states_.find(device_id);
-        if (it != device_states_.end() && it->second.warned) {
-            std::cout << " ⚠️  HUNG";
-        }
-
-        std::cout << "\n";
-    }
-
-    // Overall summary line
-    uint64_t total_current = 0, total_target = 0;
-    for (const auto& [_, prog] : progress) {
-        total_current += prog.current_packets;
-        total_target += prog.total_packets;
-    }
-
-    double overall_pct = total_target > 0 ? 100.0 * total_current / total_target : 0.0;
-
-    std::cout << "Overall:   " << format_progress_bar(overall_pct, 40) << " " << std::fixed << std::setprecision(1)
-              << overall_pct << "% | ";
-
-    if (elapsed.count() > 0 && total_current > last_total_packets_) {
-        double throughput = (total_current - last_total_packets_) / elapsed.count();
-        std::cout << format_throughput(throughput) << " | ";
-
-        auto eta = estimate_eta(total_current, total_target, throughput);
-        if (eta.has_value()) {
-            std::cout << "ETA: " << format_duration(*eta);
-        }
-
-        last_total_packets_ = total_current;
-    }
-
-    std::cout << "   \n" << std::flush;
 }
 
 std::string TestProgressMonitor::format_count(uint64_t count) const {
@@ -286,26 +229,6 @@ std::string TestProgressMonitor::format_duration(double seconds) const {
     } else {
         return std::to_string(static_cast<uint32_t>(seconds)) + "s";
     }
-}
-
-std::string TestProgressMonitor::format_progress_bar(double percentage, uint32_t width) const {
-    uint32_t filled = static_cast<uint32_t>((percentage / 100.0) * width);
-    uint32_t empty = width - filled;
-
-    std::string bar = "[";
-    for (uint32_t i = 0; i < filled; ++i) {
-        bar += "=";
-    }
-    if (filled < width && percentage < 100.0) {
-        bar += ">";
-        empty--;
-    }
-    for (uint32_t i = 0; i < empty; ++i) {
-        bar += " ";
-    }
-    bar += "]";
-
-    return bar;
 }
 
 std::optional<double> TestProgressMonitor::estimate_eta(
