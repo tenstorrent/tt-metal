@@ -8,6 +8,7 @@
 #include "experimental/noc.h"
 #include "experimental/circular_buffer.h"
 #include "experimental/tensor.h"
+#include "api/debug/dprint.h"
 
 void kernel_main() {
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -30,6 +31,7 @@ void kernel_main() {
 
     experimental::Noc noc;
     experimental::CircularBuffer cb_src(cb_id_src);
+    DPRINT << "+RdInterNoBc: nTilesSrc " << src_num_tiles << " nTilesDst " << dst_num_tiles << ENDL();
 
 #if SRC_SHARDED
     cb_src.reserve_back(src_num_tiles);
