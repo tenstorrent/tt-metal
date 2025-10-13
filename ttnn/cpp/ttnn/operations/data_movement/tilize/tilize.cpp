@@ -46,17 +46,41 @@ ttnn::Tensor ExecuteTilize::invoke(
     uint32_t output_single_tile_size =
         output_dtype.has_value() ? tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(output_dtype.value()))
                                  : input_single_tile_size;
+    fprintf(
+        stderr,
+        "-- ExecuteTilize::invoke: tileSz of input %u tileSz of output %u\n",
+        input_single_tile_size,
+        output_single_tile_size);
+    fprintf(
+        stderr,
+        "-- ExecuteTilize::invoke: input tensor padded rank %zu vol %lu shape [%u %u]\n",
+        input_tensor.padded_shape().rank(),
+        input_tensor.padded_shape().volume(),
+        input_tensor.padded_shape()[0],
+        input_tensor.padded_shape()[1]);
 
     uint32_t input_tile_width = input_tensor.tensor_spec().tile().get_width();
     uint32_t input_tile_height = input_tensor.tensor_spec().tile().get_height();
 
     uint32_t num_tiles_per_row = input_tensor.padded_shape()[-1] / input_tile_width;
     uint32_t num_tiles_per_col = input_tensor.padded_shape()[-1] / input_tile_height;
+    fprintf(
+        stderr,
+        "-- ExecuteTilize::invoke: tileW %u tileH %u ntiles/col %u ntiles/row %u (for enough space only)\n",
+        input_tile_width,
+        input_tile_height,
+        num_tiles_per_col,
+        num_tiles_per_row);
 
     bool enough_space_width =
         is_enough_space(input_tensor, input_single_tile_size, output_single_tile_size, num_tiles_per_col);
     bool enough_space_height =
         is_enough_space(input_tensor, input_single_tile_size, output_single_tile_size, num_tiles_per_row);
+    fprintf(
+        stderr,
+        "-- ExecuteTilize::invoke: height enough space %d width enough space %d (unused?)\n",
+        enough_space_height,
+        enough_space_width);
 
     auto base_tilize = [=](const ttnn::Tensor& input_tensor) {
         return ttnn::prim::tilize(

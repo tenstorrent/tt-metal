@@ -27,10 +27,23 @@ TilizeMultiCoreShardedProgramFactory::cached_program_t TilizeMultiCoreShardedPro
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
     bool fp32_llk_acc = input.dtype() == DataType::FLOAT32;
+    fprintf(stderr, "!! MultiCoreShardedTilize\n");
+    fprintf(
+        stderr,
+        "!! Input [%u %u] PhyVol %lu elemSz %u Output [%u %u] PhyVol %lu elemSz %u\n",
+        input.padded_shape()[0],
+        input.padded_shape()[1],
+        input.physical_volume(),
+        input.element_size(),
+        output.padded_shape()[0],
+        output.padded_shape()[1],
+        output.physical_volume(),
+        output.element_size());
 
     auto shard_spec = input.shard_spec().value();
     uint32_t num_tiles_per_shard = shard_spec.shape[0] * shard_spec.shape[1] / TILE_HW;
     uint32_t num_tiles_per_row = shard_spec.shape[1] / TILE_WIDTH;
+    fprintf(stderr, "!! For output: nTiles/Row %u nTiles/Shard %u\n", num_tiles_per_row, num_tiles_per_shard);
     auto all_cores = shard_spec.grid;
 
     auto [src0_cb_index, cb_src0] = create_cb(

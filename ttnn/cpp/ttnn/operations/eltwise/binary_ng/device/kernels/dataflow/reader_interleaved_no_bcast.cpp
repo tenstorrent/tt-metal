@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/debug/dprint.h"
 
 void kernel_main() {
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -24,6 +25,8 @@ void kernel_main() {
     const uint32_t cND = get_arg_val<uint32_t>(14);  // collapsed dims > 5
 
     constexpr auto cb_id_src = tt::CBIndex::c_0;
+
+    DPRINT << "+RdInterNoBc: nTilesSrc " << src_num_tiles << " nTilesDst " << dst_num_tiles << ENDL();
 
 #if SRC_SHARDED
     cb_reserve_back(cb_id_src, src_num_tiles);
