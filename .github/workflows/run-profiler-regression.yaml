@@ -67,8 +67,8 @@ jobs:
       fail-fast: false
     runs-on: >-
       ${{
-        (inputs.runner-label == 'P150b' && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label))
-        || format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label)
+        (inputs.runner-label == 'P150b' && format('tt-ubuntu-2204-{0}-metal', inputs.runner-label))
+        || format('tt-ubuntu-2204-{0}-viommu-metal', inputs.runner-label)
       }}
     container:
       image: ${{ (inputs.docker-image && format('harbor.ci.tenstorrent.net/{0}', inputs.docker-image)) || 'docker-image-unresolved!' }}

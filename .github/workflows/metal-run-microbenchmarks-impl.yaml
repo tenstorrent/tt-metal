@@ -61,7 +61,7 @@ jobs:
             arch: blackhole,
             # No perf check for now, so let's run on something that won't block everybody
             # https://github.com/tenstorrent/tt-metal/pull/28148#issuecomment-3275595011
-            runs-on: "tt-ubuntu-2204-p150b-viommu-stable",
+            runs-on: "tt-ubuntu-2204-p150b-viommu-metal",
             name: "BH P150 PCIe Performance",
             cmd: build/tools/mem_bench --benchmark_filter="Device (Reading|Writing) Host"
           }, # Nigel Huang
