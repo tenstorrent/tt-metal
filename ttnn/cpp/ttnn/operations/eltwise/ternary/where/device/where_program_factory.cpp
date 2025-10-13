@@ -646,11 +646,6 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
         true_is_bcast,
         false_is_bcast);
 
-    // std::cout << "pred_is_bcast: " << pred_is_bcast << ", true_is_bcast: " << true_is_bcast << ", false_is_bcast: "
-    // << false_is_bcast << std::endl; log_info(tt::LogAlways, "variant: {}, broadcast_type: {}", variant,
-    // broadcast_type); std::cout << "reader_defines: "  << std::endl; for (const auto& [key, value] : reader_defines) {
-    //     std::cout << key << ": " << value << std::endl;
-    // }
     tt_metal::ReaderDataMovementConfig reader_config;
 
     if (variant == WhereVariant::TTS) {

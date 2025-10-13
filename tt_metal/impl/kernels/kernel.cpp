@@ -42,48 +42,60 @@ namespace tt_metal {
 namespace fs = std::filesystem;
 
 namespace {
-// Kernel path searching:
+// Kernel path resolve:
 //
-// If the path doesn't exist as a absolute/relative path, then it must be relative to
-// TT_METAL_HOME/TT_METAL_KERNEL_PATH.
-//
-std::vector<fs::path> source_search_paths(const fs::path& given_file_name) {
-    std::vector<fs::path> paths = {given_file_name};
+// If the path is not an absolute path, then it must be resolved relative to:
+// 1. CWD
+// 2. TT_METAL_KERNEL_PATH
+// 3. TT_METAL_HOME / SetRootDir (API)
+// 4. System Kernel Directory
+fs::path resolve_path(const fs::path& given_file_name) {
+    // Priority 0: Absolute path
+    if (given_file_name.is_absolute()) {
+        return given_file_name;
+    }
 
-    TT_ASSERT(
-        fs::exists(given_file_name) || (!fs::path(given_file_name).is_absolute()),
-        "Kernel source path {} must be relative to TT_METAL_HOME/TT_METAL_KERNEL_PATH or be an absolute path to a "
-        "valid file",
-        given_file_name);
+    // Priority 1: Current working directory
+    {
+        auto current_working_dir_search_path = fs::current_path() / given_file_name;
+        if (fs::exists(current_working_dir_search_path)) {
+            return current_working_dir_search_path;
+        }
+    }
 
     const auto& rtoptions = tt_metal::MetalContext::instance().rtoptions();
-    if (rtoptions.is_root_dir_specified()) {
-        auto root_dir_search_path = fs::path(rtoptions.get_root_dir()) / given_file_name;
-        paths.push_back(root_dir_search_path);
-    }
 
+    // Priority 2: Kernel directory
     if (rtoptions.is_kernel_dir_specified()) {
-        auto kernel_dir_search_path = fs::path(rtoptions.get_kernel_dir()) / given_file_name;
-        paths.push_back(kernel_dir_search_path);
+        auto kernel_dir_search_path = fs::absolute(fs::path(rtoptions.get_kernel_dir()) / given_file_name);
+        if (fs::exists(kernel_dir_search_path)) {
+            return kernel_dir_search_path;
+        }
     }
 
-    auto system_kernel_dir_search_path = fs::path(rtoptions.get_system_kernel_dir()) / given_file_name;
-    paths.push_back(system_kernel_dir_search_path);
+    // Priority 3: Root directory
+    if (rtoptions.is_root_dir_specified()) {
+        auto root_dir_search_path = fs::absolute(fs::path(rtoptions.get_root_dir()) / given_file_name);
+        if (fs::exists(root_dir_search_path)) {
+            return root_dir_search_path;
+        }
+    }
 
-    return paths;
+    // Priority 4: System kernel directory
+    auto system_kernel_dir_search_path = fs::absolute(fs::path(rtoptions.get_system_kernel_dir()) / given_file_name);
+    if (fs::exists(system_kernel_dir_search_path)) {
+        return system_kernel_dir_search_path;
+    }
+
+    // Not found
+    TT_THROW("Kernel file {} doesn't exist in any of the searched paths!", given_file_name);
 }
 }  // namespace
 
 KernelSource::KernelSource(const std::string& source, const SourceType& source_type) :
     source_(source), source_type_(source_type) {
     if (source_type == FILE_PATH) {
-        auto search_paths = source_search_paths(source);
-        auto itr = std::ranges::find_if(search_paths, [](const auto& path) { return fs::exists(path); });
-        if (itr == search_paths.end()) {
-            log_critical(LogMetal, "Kernel file searched in {}!", source, fmt::join(search_paths, ", "));
-            TT_THROW("Kernel file {} doesn't exist in any of the searched paths!", source);
-        }
-        path_ = *itr;
+        path_ = resolve_path(source);
     }
 };
 
