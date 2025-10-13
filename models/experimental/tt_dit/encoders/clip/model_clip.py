@@ -92,6 +92,7 @@ class CLIPEncoder:
         self.embeddings = TextEmbeddings(config, mesh_device)
         self.eos_token_id = eos_token_id
         self.encoder = CLIPStack(config, self.mesh_device, self.ccl_manager, self.parallel_config)
+        self.text_projection = None
 
     def load_state_dict(self, state_dict):
         self.embeddings.load_state_dict(substate(state_dict, "text_model.embeddings"))
@@ -107,10 +108,15 @@ class CLIPEncoder:
             self.text_projection = bf16_tensor(
                 state_dict["text_projection.weight"], device=self.mesh_device, layout=ttnn.TILE_LAYOUT
             )
+        else:
+            self.text_projection = None
 
     def __call__(
-        self, prompt_tokenized: ttnn.Tensor, mesh_device: ttnn.Device, with_projection: bool = True
+        self, prompt_tokenized: ttnn.Tensor, mesh_device: ttnn.Device, with_projection: bool | None = None
     ) -> ttnn.Tensor:
+        if with_projection is None:
+            with_projection = self.text_projection is not None
+
         hidden_states = self.embeddings(prompt_tokenized, mesh_device)
 
         causal_attention_mask = create_4d_causal_attention_mask(
