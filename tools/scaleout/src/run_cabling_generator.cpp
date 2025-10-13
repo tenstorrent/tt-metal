@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <gtest/gtest.h>
 #include <enchantum/enchantum.hpp>
 #include <fstream>
 #include <filesystem>
