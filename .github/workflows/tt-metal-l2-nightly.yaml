@@ -45,6 +45,11 @@ on:
         required: false
         type: boolean
         default: false
+      run_eltwise_tests:
+        description: 'Run TTNN nightly eltwise tests'
+        required: false
+        type: boolean
+        default: false
       run_APC_cpp_tests:
         description: 'Run APC C++ tests'
         required: false
@@ -95,6 +100,7 @@ jobs:
       run_train_tests: ${{ github.event_name == 'schedule' || inputs.run_train_tests }}
       run_sdpa_stress_tests: ${{ github.event_name == 'schedule' || inputs.run_sdpa_stress_tests }}
       run_ttnn-bos-tests: ${{ matrix.test-group.runner-label == 'P150b' && (github.event_name == 'schedule' || inputs.run_bos_tests) }}
+      run_eltwise_tests: ${{ github.event_name == 'schedule' || inputs.run_eltwise_tests }}
   didt-tests:
     if: ${{ github.event_name == 'schedule' || inputs.run_didt_tests }}
     needs: build-artifact
