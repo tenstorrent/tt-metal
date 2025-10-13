@@ -1406,10 +1406,10 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
                     compute_output_cb_index,
                     tile_granularity,
                     input_tensor_B,
+                    slice_C,
                     num_total_reduction_steps,
                     start_tiles_read,
                     start_tiles_to_read,
-                    slice_C,
                 };
                 auto reduce_kernel_id = tt::tt_metal::CreateKernel(
                     program,
