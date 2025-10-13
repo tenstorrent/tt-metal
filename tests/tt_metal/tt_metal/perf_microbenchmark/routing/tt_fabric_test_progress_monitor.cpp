@@ -19,30 +19,7 @@ namespace tt::tt_fabric::fabric_tests {
 TestProgressMonitor::TestProgressMonitor(::TestContext* ctx, const ProgressMonitorConfig& config) :
     ctx_(ctx), config_(config), hung_threshold_(config.hung_threshold_seconds) {}
 
-TestProgressMonitor::~TestProgressMonitor() { stop(); }
-
-void TestProgressMonitor::start() {
-    should_stop_ = false;
-    polling_thread_ = std::thread(&TestProgressMonitor::polling_loop, this);
-    log_info(
-        tt::LogTest,
-        "Progress monitoring started (poll interval: {}s, hung threshold: {}s)",
-        config_.poll_interval_seconds,
-        config_.hung_threshold_seconds);
-}
-
-void TestProgressMonitor::stop() {
-    if (polling_thread_.joinable()) {
-        should_stop_ = true;
-        polling_thread_.join();
-
-        if (!first_display_) {
-            std::cout << std::endl;
-        }
-
-        log_info(tt::LogTest, "Progress monitoring stopped");
-    }
-}
+TestProgressMonitor::~TestProgressMonitor() = default;
 
 void TestProgressMonitor::poll_until_complete() {
     start_time_ = std::chrono::steady_clock::now();
@@ -75,39 +52,6 @@ void TestProgressMonitor::poll_until_complete() {
 
     if (!first_display_) {
         std::cout << std::endl;
-    }
-}
-
-void TestProgressMonitor::polling_loop() {
-    start_time_ = std::chrono::steady_clock::now();
-    last_poll_time_ = start_time_;
-
-    {
-        auto now = std::chrono::steady_clock::now();
-        auto elapsed = std::chrono::duration<double>(0);
-
-        auto progress = poll_devices();
-        check_for_hung_devices(progress);
-        display_progress(progress, elapsed);
-
-        last_poll_time_ = now;
-    }
-
-    while (!should_stop_) {
-        std::this_thread::sleep_for(std::chrono::seconds(config_.poll_interval_seconds));
-
-        if (should_stop_) {
-            break;
-        }
-
-        auto now = std::chrono::steady_clock::now();
-        auto elapsed = std::chrono::duration_cast<std::chrono::duration<double>>(now - last_poll_time_);
-
-        auto progress = poll_devices();
-        check_for_hung_devices(progress);
-        display_progress(progress, elapsed);
-
-        last_poll_time_ = now;
     }
 }
 
@@ -188,6 +132,11 @@ bool TestProgressMonitor::is_device_hung(tt::tt_fabric::FabricNodeId device_id, 
 void TestProgressMonitor::check_for_hung_devices(
     const std::unordered_map<tt::tt_fabric::FabricNodeId, DeviceProgress>& progress) {
     for (const auto& [device_id, prog] : progress) {
+        // Skip devices that have already completed
+        if (prog.current_packets >= prog.total_packets) {
+            continue;
+        }
+
         if (is_device_hung(device_id, prog.current_packets)) {
             auto& state = device_states_[device_id];
 
@@ -198,10 +147,11 @@ void TestProgressMonitor::check_for_hung_devices(
 
                 log_warning(
                     tt::LogTest,
-                    "⚠️  Device {} may be HUNG: no progress for {} seconds (packets: {})",
+                    "⚠️  Device {} may be HUNG: no progress for {} seconds (packets: {}/{})",
                     device_id,
                     elapsed.count(),
-                    prog.current_packets);
+                    prog.current_packets,
+                    prog.total_packets);
 
                 state.warned = true;
             }

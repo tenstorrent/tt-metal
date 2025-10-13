@@ -4,13 +4,11 @@
 
 #pragma once
 
-#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <map>
 #include <optional>
 #include <string>
-#include <thread>
 #include <unordered_map>
 
 #include "tt_fabric_test_interfaces.hpp"
@@ -49,31 +47,22 @@ struct DeviceState {
     bool warned = false;
 };
 
-// Progress monitor - runs in separate thread during test execution
+// Progress monitor - polls devices and displays progress during test execution
 class TestProgressMonitor {
 public:
     TestProgressMonitor(::TestContext* ctx, const ProgressMonitorConfig& config);
     ~TestProgressMonitor();
 
-    // Disable copy/move (thread management)
+    // Disable copy/move
     TestProgressMonitor(const TestProgressMonitor&) = delete;
     TestProgressMonitor& operator=(const TestProgressMonitor&) = delete;
     TestProgressMonitor(TestProgressMonitor&&) = delete;
     TestProgressMonitor& operator=(TestProgressMonitor&&) = delete;
 
-    // Start monitoring (spawns polling thread)
-    void start();
-
-    // Stop monitoring (joins polling thread)
-    void stop();
-
-    // Poll until programs complete (runs in calling thread, no separate thread)
+    // Poll until programs complete (runs in calling thread)
     void poll_until_complete();
 
 private:
-    // Main polling loop (runs in separate thread)
-    void polling_loop();
-
     // Poll all devices and collect progress
     std::unordered_map<tt::tt_fabric::FabricNodeId, DeviceProgress> poll_devices();
 
@@ -113,10 +102,6 @@ private:
     // Context and configuration
     ::TestContext* ctx_;
     ProgressMonitorConfig config_;
-
-    // Thread management
-    std::thread polling_thread_;
-    std::atomic<bool> should_stop_{false};
 
     // Timing
     std::chrono::steady_clock::time_point start_time_;
