@@ -56,8 +56,6 @@ class DispatcherData:
     def __init__(self, inspector_data: InspectorData, context: Context, elfs_cache: ElfsCache, run_checks: RunChecks):
         self.inspector_data = inspector_data
         self.programs = inspector_data.getPrograms().programs
-        if self.programs is None or len(self.programs) == 0:
-            raise TTTriageError("No programs found in inspector data.")
         self.kernels = {kernel.watcherKernelId: kernel for program in self.programs for kernel in program.kernels}
         self.use_rpc_kernel_find = True
         if len(self.kernels) == 0:
