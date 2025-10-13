@@ -57,4 +57,6 @@ bool generate_link_metrics(
     uint32_t data_size,
     const std::filesystem::path& output_path);
 
+void reset_ethernet_links(
+    const PhysicalSystemDescriptor& physical_system_descriptor, const tt_metal::AsicTopology& asic_topology);
 }  // namespace tt::scaleout_tools
