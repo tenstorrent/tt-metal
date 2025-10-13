@@ -95,7 +95,6 @@ class TTOftNet:
             use_precomputed_grid=True,
             num_slices=11,
         )
-        ttnn.device.ReadDeviceProfiler(device)
         self.topdown = [
             block(
                 device,
@@ -105,6 +104,8 @@ class TTOftNet:
                 256,
                 stride=1,
                 is_sliced=True,
+                act_block_h=32,
+                height_sharding=True,
             )
             for i in range(topdown_layers)
         ]
@@ -480,6 +481,7 @@ class TTOftNet:
                 ortho,
             ) = self.forward_oft(device, lat8, lat16, lat32, calib, grid)
         # return (feats8, feats16, feats32, lat8, lat16, lat32, ortho8, ortho16, ortho32, ortho, calib_torch, grid_torch), ("feats8", "feats16", "feats32", "lat8", "lat16", "lat32", "ortho8", "ortho16", "ortho32", "ortho", "calib", "grid")
+        ttnn.device.ReadDeviceProfiler(device)
 
         # Apply topdown network
         td = self.forward_topdown_network(device, ortho)

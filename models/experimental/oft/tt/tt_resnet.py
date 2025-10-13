@@ -21,17 +21,42 @@ except ModuleNotFoundError:
 class TTBasicBlock:
     expansion = 1
 
-    def __init__(self, device, parameters, conv_pt, inplanes, planes, stride=1, scale=1, is_sliced=False):
+    def __init__(
+        self,
+        device,
+        parameters,
+        conv_pt,
+        inplanes,
+        planes,
+        stride=1,
+        scale=1,
+        is_sliced=False,
+        act_block_h=32,
+        height_sharding=False,
+    ):
         self.is_sliced = is_sliced
         logger.debug(f"TTBasicBlock: {inplanes=}, {planes=}, {stride=}, {is_sliced=}")
         self.conv1 = Conv(
-            parameters.conv1, conv_pt.conv1, stride=stride, output_layout=ttnn.ROW_MAJOR_LAYOUT, is_sliced=is_sliced
+            parameters.conv1,
+            conv_pt.conv1,
+            stride=stride,
+            output_layout=ttnn.ROW_MAJOR_LAYOUT,
+            is_sliced=is_sliced,
+            act_block_h=act_block_h,
+            height_sharding=height_sharding,
         )
         if not is_sliced:
             self.bn1 = GroupNorm(parameters.bn1, num_groups=16, channels=planes, eps=1e-5, dtype=ttnn.bfloat16)
         else:
             self.bn1 = GroupNormDRAM(parameters.bn1, num_groups=16, channels=planes, eps=1e-5, dtype=ttnn.bfloat16)
-        self.conv2 = Conv(parameters.conv2, conv_pt.conv2, output_layout=ttnn.ROW_MAJOR_LAYOUT, is_sliced=is_sliced)
+        self.conv2 = Conv(
+            parameters.conv2,
+            conv_pt.conv2,
+            output_layout=ttnn.ROW_MAJOR_LAYOUT,
+            is_sliced=is_sliced,
+            act_block_h=act_block_h,
+            height_sharding=height_sharding,
+        )
         if not is_sliced:
             self.bn2 = GroupNorm(parameters.bn2, num_groups=16, channels=planes, eps=1e-5, dtype=ttnn.bfloat16)
         else:
@@ -55,6 +80,8 @@ class TTBasicBlock:
     def forward(self, device, x, gn_shard="HS", num_splits=1):
         if use_signpost:
             signpost(header="TTBasicBlock forward started")
+        if x.layout != ttnn.ROW_MAJOR_LAYOUT and self.is_sliced:
+            x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
         out, out_h, out_w = self.conv1(device, x)
         logger.debug(f"FORWARD X Input shape: {x.shape}, dtype: {x.dtype}, layout: {x.layout}")
         out = ttnn.move(out)
@@ -62,7 +89,8 @@ class TTBasicBlock:
         out = self.bn1(device, out, out_h, out_w, shard=gn_shard, num_splits=num_splits)
         logger.debug(f"BN1 output shape: {out.shape}")
         ttnn.relu(out, output_tensor=out)
-
+        if out.layout != ttnn.ROW_MAJOR_LAYOUT and self.is_sliced:
+            out = ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT)
         out, out_h, out_w = self.conv2(device, out)
         logger.debug(f"Conv2 output shape: {out.shape}")
         out = ttnn.move(out)

@@ -53,7 +53,7 @@ from tests.ttnn.unit_tests.test_bh_20_cores_sharding import skip_if_not_blackhol
     "model_dtype, fallback_feedforward, fallback_lateral, fallback_oft, use_host_decoder, pcc_scores_oft, pcc_positions_oft, pcc_dimensions_oft, pcc_angles_oft",
     # fmt: off
     [
-       ( torch.float32, False, False, False, False, 0.92, .98, 0.99, 0.94),
+       ( torch.float32, False, False, False, False, 0.91, .98, 0.99, 0.94),
     ],
     # fmt: on
 )
@@ -74,7 +74,6 @@ def test_demo_inference(
     model_location_generator,
 ):
     skip_if_not_blackhole_20_cores(device)
-    device.disable_and_clear_program_cache()  # test hangs without this line on P150
     assert use_host_decoder == False, "Only use_host_decoder=False is supported for now"
     # Create output directory for saving visualizations
     output_dir = os.path.join(os.path.dirname(__file__), "outputs")

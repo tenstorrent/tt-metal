@@ -193,8 +193,8 @@ class Conv:
         self.slice_config = ttnn.Conv2dL1FullSliceConfig
         if is_sliced:
             self.slice_config = ttnn.Conv2dSliceConfig(
-                slice_type=ttnn.Conv2dDRAMSliceHeight,
-                num_slices=2,
+                slice_type=ttnn.Conv2dDRAMSliceWidth,
+                num_slices=4,
             )
 
     def __str__(self) -> str:
@@ -236,7 +236,7 @@ class Conv:
             compute_config=compute_config,
             return_output_dim=True,
             return_weights_and_bias=True,
-            slice_config=self.slice_config,
+            slice_config=None,
         )
         # logger.debug(f"Output tensor shape: {output_tensor.shape}, out_h: {out_h}, out_w: {out_w}")
         # logger.debug(
