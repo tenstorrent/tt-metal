@@ -117,9 +117,11 @@ TilizeDeviceOperation::program_factory_t TilizeDeviceOperation::select_program_f
         TT_FATAL(
             !operation_attributes.sub_core_grids.has_value(),
             "Sharded tilize does not support sub core grid specification");
+        fprintf(stderr, "-- TilizeDeviceOperation::select_program_factory: calling TilizeMultiCoreShardedProgramFactory()\n");
         return ttnn::prim::TilizeMultiCoreShardedProgramFactory{};
     }
     if (!operation_attributes.enough_space_height) {
+        fprintf(stderr, "-- TilizeDeviceOperation::select_program_factory: calling TilizeMultiCoreBlockProgramFactory()\n");
         return ttnn::prim::TilizeMultiCoreBlockProgramFactory{};
     }
     auto sub_core_grids = operation_attributes.sub_core_grids;
@@ -150,6 +152,7 @@ TilizeDeviceOperation::program_factory_t TilizeDeviceOperation::select_program_f
             return ttnn::prim::TilizeMultiCoreBlockProgramFactory{};
         }
     }
+    fprintf(stderr, "-- TilizeDeviceOperation::select_program_factory: calling TilizeMultiCoreInterleavedProgramFactory()\n");
     return ttnn::prim::TilizeMultiCoreInterleavedProgramFactory{};
 }
 

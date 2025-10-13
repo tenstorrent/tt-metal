@@ -191,31 +191,41 @@ CoreRangeSet get_worker_grid(
 }
 
 SubtileBroadcastType get_subtile_broadcast_type(uint32_t a_h, uint32_t a_w, uint32_t b_h, uint32_t b_w) {
+    fprintf(stderr, "-- get_subtile_broadcast_type: A [%u %u] B [%u %u] -> ", a_h, a_w, b_h, b_w);
     if (a_h == b_h && a_w == b_w) {
+        fprintf(stderr, "SubtileBroadcastType::NONE\n");
         return SubtileBroadcastType::NONE;
     }
     if (a_h == 1 && a_w == 1) {
+        fprintf(stderr, "SubtileBroadcastType::SCALAR_A\n");
         return SubtileBroadcastType::SCALAR_A;
     }
     if (b_h == 1 && b_w == 1) {
+        fprintf(stderr, "SubtileBroadcastType::SCALAR_B\n");
         return SubtileBroadcastType::SCALAR_B;
     }
     if (a_h == 1 /* && a_w != 1 */ && b_w == 1 /* && b_h != 1 */) {
+        fprintf(stderr, "SubtileBroadcastType::ROW_A_COL_B\n");
         return SubtileBroadcastType::ROW_A_COL_B;
     }
     if (a_w == 1 /* && a_h != 1 */ && b_h == 1 /* && b_w != 1 */) {
+        fprintf(stderr, "SubtileBroadcastType::ROW_B_COL_A\n");
         return SubtileBroadcastType::ROW_B_COL_A;
     }
     if (a_h == 1) {
+        fprintf(stderr, "SubtileBroadcastType::ROW_A\n");
         return SubtileBroadcastType::ROW_A;
     }
     if (a_w == 1) {
+        fprintf(stderr, "SubtileBroadcastType::COL_A\n");
         return SubtileBroadcastType::COL_A;
     }
     if (b_h == 1) {
+        fprintf(stderr, "SubtileBroadcastType::ROW_B\n");
         return SubtileBroadcastType::ROW_B;
     }
     if (b_w == 1) {
+        fprintf(stderr, "SubtileBroadcastType::COL_B\n");
         return SubtileBroadcastType::COL_B;
     }
 

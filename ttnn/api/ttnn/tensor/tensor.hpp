@@ -255,6 +255,17 @@ public:
     // TODO #32045: Remove this function since IDs are assigned in the constructor.
     static std::uint64_t next_tensor_id();
 
+    void print_info(const char* header) const {
+        std::cout << header << std::boolalpha << " dtype " << enchantum::to_string(dtype()) << " layout "
+                  << enchantum::to_string(layout()) << " logical rank " << logical_shape().rank()
+                  << " logical shape volume " << logical_shape().volume() << " padded rank " << padded_shape().rank()
+                  << " padded shape volume " << padded_shape().volume() << " logical volume " << logical_volume()
+                  << " physical volume " << physical_volume() << " scalar? " << is_scalar() << " memory_layout "
+                  << enchantum::to_string(memory_config().memory_layout()) << " buffer_type "
+                  << enchantum::to_string(memory_config().buffer_type()) << " sharded? " << memory_config().is_sharded()
+                  << " l1? " << memory_config().is_l1() << " dram? " << memory_config().is_dram() << std::endl;
+    }
+
 private:
     // Shorthand for checking if this Tensor is allocated on MeshDevice. If set, is never nullptr.
     // If not set, the tensor can either be on host or allocated on a single device.
