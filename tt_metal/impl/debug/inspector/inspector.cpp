@@ -27,9 +27,7 @@ inspector::Data* get_inspector_data() {
 }
 }  // namespace
 
-bool Inspector::is_enabled() {
-    return tt::tt_metal::MetalContext::instance().rtoptions().get_inspector_enabled();
-}
+bool Inspector::is_enabled() { return tt::tt_metal::MetalContext::instance().rtoptions().get_inspector_enabled(); }
 
 std::unique_ptr<inspector::Data> Inspector::initialize() {
     if (!is_enabled()) {
@@ -40,8 +38,7 @@ std::unique_ptr<inspector::Data> Inspector::initialize() {
         auto* data = new inspector::Data();
 
         return std::unique_ptr<inspector::Data>(data);
-    }
-    catch (const std::exception& e) {
+    } catch (const std::exception& e) {
         TT_INSPECTOR_LOG("Failed to initialize Inspector: {}", e.what());
         throw;
     }
@@ -54,14 +51,12 @@ void Inspector::serialize_rpc() {
     try {
         auto* data = get_inspector_data();
         data->serialize_rpc();
-    }
-    catch (const std::exception& e) {
+    } catch (const std::exception& e) {
         TT_INSPECTOR_LOG("Failed to serialize RPC: {}", e.what());
     }
 }
 
-void Inspector::program_created(
-    const detail::ProgramImpl* program) noexcept {
+void Inspector::program_created(const detail::ProgramImpl* program) noexcept {
     if (!is_enabled()) {
         return;
     }
@@ -69,17 +64,15 @@ void Inspector::program_created(
         auto* data = get_inspector_data();
         std::lock_guard<std::mutex> lock(data->programs_mutex);
         auto& program_data = data->programs_data[program->get_id()];
-        program_data.program=program->weak_from_this();
-        program_data.program_id=program->get_id();
+        program_data.program = program->weak_from_this();
+        program_data.program_id = program->get_id();
         data->logger.log_program_created(program_data);
-    }
-    catch (const std::exception& e) {
+    } catch (const std::exception& e) {
         TT_INSPECTOR_LOG("Failed to log program created: {}", e.what());
     }
 }
 
-void Inspector::program_destroyed(
-    const detail::ProgramImpl* program) noexcept {
+void Inspector::program_destroyed(const detail::ProgramImpl* program) noexcept {
     if (!is_enabled()) {
         return;
     }
@@ -92,16 +85,13 @@ void Inspector::program_destroyed(
             data->kernel_id_to_program_id.erase(kernel_id);
         }
         data->programs_data.erase(program->get_id());
-    }
-    catch (const std::exception& e) {
+    } catch (const std::exception& e) {
         TT_INSPECTOR_LOG("Failed to log program destroyed: {}", e.what());
     }
 }
 
 void Inspector::program_compile_started(
-    const detail::ProgramImpl* program,
-    const IDevice* device,
-    uint32_t build_key) noexcept {
+    const detail::ProgramImpl* program, const IDevice* device, uint32_t build_key) noexcept {
     if (!is_enabled()) {
         return;
     }
@@ -111,16 +101,13 @@ void Inspector::program_compile_started(
         auto& program_data = data->programs_data[program->get_id()];
         program_data.compile_started_timestamp = std::chrono::high_resolution_clock::now();
         data->logger.log_program_compile_started(program_data);
-    }
-    catch (const std::exception& e) {
+    } catch (const std::exception& e) {
         TT_INSPECTOR_LOG("Failed to log program destroyed: {}", e.what());
     }
 }
 
 void Inspector::program_compile_already_exists(
-    const detail::ProgramImpl* program,
-    const IDevice* device,
-    uint32_t build_key) noexcept {
+    const detail::ProgramImpl* program, const IDevice* device, uint32_t build_key) noexcept {
     if (!is_enabled()) {
         return;
     }
@@ -160,9 +147,7 @@ void Inspector::program_kernel_compile_finished(
 }
 
 void Inspector::program_compile_finished(
-    const detail::ProgramImpl* program,
-    const IDevice* device,
-    uint32_t build_key) noexcept {
+    const detail::ProgramImpl* program, const IDevice* device, uint32_t build_key) noexcept {
     if (!is_enabled()) {
         return;
     }
@@ -178,9 +163,7 @@ void Inspector::program_compile_finished(
 }
 
 void Inspector::program_set_binary_status(
-    const detail::ProgramImpl* program,
-    std::size_t device_id,
-    ProgramBinaryStatus status) noexcept {
+    const detail::ProgramImpl* program, std::size_t device_id, ProgramBinaryStatus status) noexcept {
     if (!is_enabled()) {
         return;
     }
@@ -190,15 +173,13 @@ void Inspector::program_set_binary_status(
         auto& program_data = data->programs_data[program->get_id()];
         program_data.binary_status_per_device[device_id] = status;
         data->logger.log_program_binary_status_change(program_data, device_id, status);
-    }
-    catch (const std::exception& e) {
+    } catch (const std::exception& e) {
         TT_INSPECTOR_LOG("Failed to log program binary status change: {}", e.what());
     }
 }
 
 void Inspector::mesh_device_created(
-    const distributed::MeshDevice* mesh_device,
-    std::optional<int> parent_mesh_id) noexcept {
+    const distributed::MeshDevice* mesh_device, std::optional<int> parent_mesh_id) noexcept {
     if (!is_enabled()) {
         return;
     }
@@ -215,8 +196,7 @@ void Inspector::mesh_device_created(
     }
 }
 
-void Inspector::mesh_device_destroyed(
-    const distributed::MeshDevice* mesh_device) noexcept {
+void Inspector::mesh_device_destroyed(const distributed::MeshDevice* mesh_device) noexcept {
     if (!is_enabled()) {
         return;
     }
@@ -231,8 +211,7 @@ void Inspector::mesh_device_destroyed(
     }
 }
 
-void Inspector::mesh_device_initialized(
-    const distributed::MeshDevice* mesh_device) noexcept {
+void Inspector::mesh_device_initialized(const distributed::MeshDevice* mesh_device) noexcept {
     if (!is_enabled()) {
         return;
     }
@@ -247,8 +226,7 @@ void Inspector::mesh_device_initialized(
     }
 }
 
-void Inspector::mesh_workload_created(
-    const distributed::MeshWorkloadImpl* mesh_workload) noexcept {
+void Inspector::mesh_workload_created(const distributed::MeshWorkloadImpl* mesh_workload) noexcept {
     if (!is_enabled()) {
         return;
     }
@@ -264,8 +242,7 @@ void Inspector::mesh_workload_created(
     }
 }
 
-void Inspector::mesh_workload_destroyed(
-    const distributed::MeshWorkloadImpl* mesh_workload) noexcept {
+void Inspector::mesh_workload_destroyed(const distributed::MeshWorkloadImpl* mesh_workload) noexcept {
     if (!is_enabled()) {
         return;
     }
@@ -298,9 +275,7 @@ void Inspector::mesh_workload_add_program(
 }
 
 void Inspector::mesh_workload_set_program_binary_status(
-    const distributed::MeshWorkloadImpl* mesh_workload,
-    std::size_t mesh_id,
-    ProgramBinaryStatus status) noexcept {
+    const distributed::MeshWorkloadImpl* mesh_workload, std::size_t mesh_id, ProgramBinaryStatus status) noexcept {
     if (!is_enabled()) {
         return;
     }
