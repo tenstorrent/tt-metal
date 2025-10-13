@@ -13,7 +13,7 @@ from models.demos.ttnn_resnet.tests.common.perf_device_resnet50 import run_perf_
 @pytest.mark.parametrize(
     "batch_size, test, expected_perf",
     [
-        [16, "True-16-act_dtype0-weight_dtype0-math_fidelity0-device_params0", 5943.0],
+        [16, "True-16-act_dtype0-weight_dtype0-math_fidelity0-device_params0", 6090.0],
     ],
 )
 def test_perf_device(batch_size, test, expected_perf):
