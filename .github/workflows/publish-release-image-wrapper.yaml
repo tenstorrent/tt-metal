@@ -17,7 +17,7 @@ jobs:
     secrets: inherit
     with:
       build-wheel: true
-      version: "24.04"
+      version: "22.04"
   create-image-tag-name:
     runs-on: ubuntu-latest
     outputs:
@@ -40,4 +40,4 @@ jobs:
       version: dev-${{ needs.create-image-tag-name.outputs.image-tag-name }}
       tag-latest: ${{ inputs.tag-latest }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      os: ubuntu-24.04
+      os: ubuntu-22.04
