@@ -297,10 +297,8 @@ static bool test_sdpa_reduce_c(
 
 int main(int argc, char** argv) {
     bool pass = true;
-
-    std::vector<std::string> input_args(argv, argv + argc);
-
-    int device_id = 0;
+    char env[] = "TT_METAL_SLOW_DISPATCH_MODE=1";
+    putenv(env);
     auto mesh_device = tt_metal::distributed::MeshDevice::create_unit_mesh(device_id);
 
     /**
