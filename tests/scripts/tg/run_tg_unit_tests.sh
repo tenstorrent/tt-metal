@@ -36,7 +36,7 @@ run_tg_gpt_oss_tests() {
   gpt_oss_120b=/mnt/MLPerf/tt_dnn-models/tt/GPT-OSS-120B/
 
   for gpt_oss_dir in "$gpt_oss_20b" "$gpt_oss_120b"; do
-    HF_MODEL=$gpt_oss_dir pytest -n auto models/demos/gpt_oss/tests/unit ; fail+=$?
+    HF_MODEL=$gpt_oss_dir pytest -n auto models/demos/gpt_oss/tests/unit --timeout 600; fail+=$?
   done
 
   # Record the end time
@@ -112,8 +112,8 @@ run_tg_tests() {
   # elif [[ "$1" == "llama3-70b" ]]; then
   #   run_tg_llama3.3-70b_tests
 
-  if [[ "$1" == "gpt-oss" ]]; then
-    run_tg_gpt_oss_tests
+  #if [[ "$1" == "gpt-oss" ]]; then
+  run_tg_gpt_oss_tests
 
   # elif [[ "$1" == "prefetcher" ]]; then
   #   run_tg_prefetcher_tests
@@ -124,10 +124,10 @@ run_tg_tests() {
   # elif [[ "$1" == "distributed-runtime" ]]; then
   #   ./build/test/tt_metal/distributed/distributed_unit_tests
 
-  else
-    echo "LOG_METAL: Unknown model type: $1"
-    return 1
-  fi
+  # else
+  #   echo "LOG_METAL: Unknown model type: $1"
+  #   return 1
+  # fi
 }
 
 main() {
