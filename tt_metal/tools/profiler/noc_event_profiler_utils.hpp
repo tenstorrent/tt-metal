@@ -80,7 +80,7 @@ inline void dumpClusterCoordinatesAsJson(const std::filesystem::path& filepath) 
     nlohmann::ordered_json cluster_json;
     cluster_json["physical_chip_to_eth_coord"] = nlohmann::ordered_json();
     for (auto& [chip_id, eth_core] : cluster.get_user_chip_ethernet_coordinates()) {
-        eth_coord_t eth_coord = eth_core;
+        EthCoord eth_coord = eth_core;
         auto& entry = cluster_json["physical_chip_to_eth_coord"][std::to_string(chip_id)];
         entry["rack"] = eth_coord.rack;
         entry["shelf"] = eth_coord.shelf;

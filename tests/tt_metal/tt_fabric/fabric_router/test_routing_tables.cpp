@@ -117,7 +117,7 @@ TEST_F(ControlPlaneFixture, TestT3kFabricRoutes) {
 
 class T3kCustomMeshGraphControlPlaneFixture
     : public ControlPlaneFixture,
-      public testing::WithParamInterface<std::tuple<std::string, std::vector<std::vector<eth_coord_t>>>> {};
+      public testing::WithParamInterface<std::tuple<std::string, std::vector<std::vector<EthCoord>>>> {};
 
 TEST_P(T3kCustomMeshGraphControlPlaneFixture, TestT3kMeshGraphInit) {
     auto [mesh_graph_desc_path, _] = GetParam();

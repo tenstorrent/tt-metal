@@ -96,7 +96,7 @@ bool find_device_with_neighbor_in_direction(
 }
 
 std::map<FabricNodeId, ChipId> get_physical_chip_mapping_from_eth_coords_mapping(
-    const std::vector<std::vector<eth_coord_t>>& mesh_graph_eth_coords) {
+    const std::vector<std::vector<EthCoord>>& mesh_graph_eth_coords) {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     std::map<FabricNodeId, ChipId> physical_chip_ids_mapping;
     for (std::uint32_t mesh_id = 0; mesh_id < mesh_graph_eth_coords.size(); mesh_id++) {

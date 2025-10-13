@@ -339,7 +339,7 @@ PhysicalMeshConfig YamlConfigParser::parse_physical_mesh_config(const YAML::Node
 
     PhysicalMeshConfig physical_mesh_config;
     physical_mesh_config.mesh_descriptor_path = parse_scalar<std::string>(physical_mesh_yaml["mesh_descriptor_path"]);
-    physical_mesh_config.eth_coord_mapping = parse_2d_array<eth_coord_t>(physical_mesh_yaml["eth_coord_mapping"]);
+    physical_mesh_config.eth_coord_mapping = parse_2d_array<EthCoord>(physical_mesh_yaml["eth_coord_mapping"]);
 
     return physical_mesh_config;
 }

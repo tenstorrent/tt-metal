@@ -234,7 +234,7 @@ private:
 
 class T3kCustomMeshGraphFabric2DDynamicFixture
     : public CustomMeshGraphFabric2DDynamicFixture,
-      public testing::WithParamInterface<std::tuple<std::string, std::vector<std::vector<eth_coord_t>>>> {
+      public testing::WithParamInterface<std::tuple<std::string, std::vector<std::vector<EthCoord>>>> {
     void SetUp() override {
         if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::tt_metal::ClusterType::T3K) {
             GTEST_SKIP();

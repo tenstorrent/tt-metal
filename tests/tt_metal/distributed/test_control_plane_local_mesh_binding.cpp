@@ -63,7 +63,7 @@ const std::string kDualHostMeshDesc =
 // This is a 2x4 mesh split between 2 hosts, where:
 // - Host 0 owns chips 0,1,4,5 (left half)
 // - Host 1 owns chips 2,3,6,7 (right half)
-const std::vector<std::vector<eth_coord_t>> kDualHostMeshEthCoords = {
+const std::vector<std::vector<EthCoord>> kDualHostMeshEthCoords = {
     // Mesh 0 - all 8 chips arranged as 2x4
     {
         {0, 0, 0, 0, 0},  // chip 0 at (0,0)

@@ -255,7 +255,7 @@ private:
     chan_id_t get_downstream_eth_chan_id(
         chan_id_t src_chan_id, const std::vector<chan_id_t>& candidate_target_chans) const;
 
-    ChipId get_physical_chip_id_from_eth_coord(const eth_coord_t& eth_coord) const;
+    ChipId get_physical_chip_id_from_eth_coord(const EthCoord& eth_coord) const;
 
     void load_physical_chip_mapping(
         const std::map<FabricNodeId, ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping);

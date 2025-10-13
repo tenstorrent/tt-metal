@@ -32,7 +32,7 @@ void InterMeshLineMcast(
     uint32_t receiver_rank = 1);
 
 std::map<FabricNodeId, ChipId> get_physical_chip_mapping_from_eth_coords_mapping(
-    const std::vector<std::vector<eth_coord_t>>& mesh_graph_eth_coords, uint32_t local_mesh_id);
+    const std::vector<std::vector<EthCoord>>& mesh_graph_eth_coords, uint32_t local_mesh_id);
 
 }  // namespace multihost_utils
 

@@ -351,9 +351,9 @@ inline std::vector<std::vector<T>> YamlConfigParser::parse_2d_array(const YAML::
         row_vector.reserve(row.size());
         for (const auto& entry : row) {
             // only deals with ethernet core case
-            if constexpr (std::is_same_v<T, eth_coord_t>) {
+            if constexpr (std::is_same_v<T, EthCoord>) {
                 TT_FATAL(entry.size() == 5, "Expected ethernet core coordinates to be a sequence of 5 elements");
-                row_vector.push_back(eth_coord_t{
+                row_vector.push_back(EthCoord{
                     parse_scalar<uint32_t>(entry[0]),
                     parse_scalar<uint32_t>(entry[1]),
                     parse_scalar<uint32_t>(entry[2]),
@@ -1585,7 +1585,7 @@ private:
         out << YAML::EndMap;
     }
 
-    static void to_yaml(YAML::Emitter& out, const std::vector<std::vector<eth_coord_t>>& mapping) {
+    static void to_yaml(YAML::Emitter& out, const std::vector<std::vector<EthCoord>>& mapping) {
         out << YAML::BeginSeq;
         for (const auto& row : mapping) {
             out << YAML::BeginSeq;

@@ -665,7 +665,7 @@ std::map<FabricNodeId, ChipId> ControlPlane::get_logical_chip_to_physical_chip_m
                     tt::tt_metal::MetalContext::instance().get_cluster().get_all_chip_ethernet_coordinates();
                 TT_FATAL(!chip_eth_coords.empty(), "No chip ethernet coordinates found in ethernet coordinates map");
 
-                // TODO: Support custom operator< for eth_coord_t to allow usage in std::set
+                // TODO: Support custom operator< for EthCoord to allow usage in std::set
                 const auto min_coord =
                     *std::min_element(chip_eth_coords.begin(), chip_eth_coords.end(), [](const auto& a, const auto& b) {
                         return a.second < b.second;

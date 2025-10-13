@@ -33,7 +33,7 @@ bool find_device_with_neighbor_in_direction(
     RoutingDirection direction);
 
 std::map<FabricNodeId, ChipId> get_physical_chip_mapping_from_eth_coords_mapping(
-    const std::vector<std::vector<eth_coord_t>>& mesh_graph_eth_coords);
+    const std::vector<std::vector<EthCoord>>& mesh_graph_eth_coords);
 
 }  // namespace fabric_router_tests
 }  // namespace tt::tt_fabric

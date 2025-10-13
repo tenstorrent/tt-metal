@@ -426,7 +426,7 @@ Cluster::~Cluster() {
     this->ethernet_sockets_.clear();
 }
 
-std::unordered_map<ChipId, eth_coord_t> Cluster::get_user_chip_ethernet_coordinates() const {
+std::unordered_map<ChipId, EthCoord> Cluster::get_user_chip_ethernet_coordinates() const {
     auto user_chip_ethernet_coordinates = this->cluster_desc_->get_chip_locations();
     if (this->is_galaxy_cluster()) {
         std::erase_if(user_chip_ethernet_coordinates, [this](const auto& entry) {
@@ -436,11 +436,11 @@ std::unordered_map<ChipId, eth_coord_t> Cluster::get_user_chip_ethernet_coordina
     return user_chip_ethernet_coordinates;
 }
 
-std::unordered_map<ChipId, eth_coord_t> Cluster::get_all_chip_ethernet_coordinates() const {
+std::unordered_map<ChipId, EthCoord> Cluster::get_all_chip_ethernet_coordinates() const {
     return this->cluster_desc_->get_chip_locations();
 }
 
-ChipId Cluster::get_physical_chip_id_from_eth_coord(const eth_coord_t& eth_coord) const {
+ChipId Cluster::get_physical_chip_id_from_eth_coord(const EthCoord& eth_coord) const {
     for (const auto& [physical_chip_id, coord] : this->get_all_chip_ethernet_coordinates()) {
         if (coord == eth_coord) {
             return physical_chip_id;

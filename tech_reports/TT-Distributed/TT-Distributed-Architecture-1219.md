@@ -2361,7 +2361,7 @@ BoardType tt_cluster::get_board_type(ChipId chip_id) const;
 bool tt_cluster::is_galaxy_cluster() const;
 
 // Get chip id to ethernet coord map
-unordered_map<ChipId, eth_coord_t> tt_cluster::get_user_chip_ethernet_coordinates() const;
+unordered_map<ChipId, EthCoord> tt_cluster::get_user_chip_ethernet_coordinates() const;
 
 // Get the number of devices in the Physical Cluster
 size_t tt_cluster::number_of_devices();
