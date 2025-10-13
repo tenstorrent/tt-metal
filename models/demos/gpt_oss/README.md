@@ -9,7 +9,7 @@ Inference implementation for GPT-OSS models on Tenstorrent Wormhole accelerators
 - **Galaxy**: Multi-device Wormhole mesh (4×8 configuration)
 
 **Current Status**: This model is under active development.
-- ✅ Supported: Prefill up to sequence length 128, batch size 1
+- ✅ Supported: Prefill up to sequence length 128, batch size 1, total sequence length 4096
 - 🚧 In Progress: Extended sequence lengths, larger batch sizes
 
 ## Quick Start

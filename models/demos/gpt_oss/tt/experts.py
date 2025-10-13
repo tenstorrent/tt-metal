@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
+import math
+
 import torch
 
 import ttnn
@@ -121,6 +123,37 @@ class Experts:
             ),
         )
 
+        self.sparse_matmul_program_config = (
+            lambda core_x, core_y, m, n: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                compute_with_storage_grid_size=ttnn.CoreCoord(core_x, core_y),
+                in0_block_w=1,
+                out_subblock_h=1,
+                out_subblock_w=1,
+                out_block_h=1,
+                out_block_w=1,
+                per_core_M=max(32, m) // 32,
+                per_core_N=int(math.ceil(n / 32)) // (core_x * core_y),
+                fuse_batch=False,
+                fused_activation=None,
+                mcast_in0=True,
+            )
+        )
+        self.batched_sparse_matmul_program_config = (
+            lambda core_x, core_y, m, n: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                compute_with_storage_grid_size=ttnn.CoreCoord(core_x, core_y),
+                in0_block_w=2,
+                out_subblock_h=1,
+                out_subblock_w=1,
+                out_block_h=1,
+                out_block_w=1,
+                per_core_M=max(32, m) // 32,
+                per_core_N=int(math.ceil(n / 32)) // (core_x * core_y),
+                fuse_batch=False,
+                fused_activation=None,
+                mcast_in0=True,
+            )
+        )
+
     def __call__(self, hidden_states, routing_weights):
         batch_size = hidden_states.shape[0]
         assert batch_size == 1, "batch_size must be 1, we only support batch size 1 for now"
@@ -170,6 +203,7 @@ class Experts:
             if seq_len > 1
             else self.num_experts_per_tok // self.mesh_config.ep
         )
+        program_config = self.sparse_matmul_program_config(3, 4, hidden_states_4D.shape[2], self.gate_proj.shape[3])
 
         gate = ttnn.sparse_matmul(
             hidden_states_4D,
@@ -178,6 +212,7 @@ class Experts:
             nnz=num_experts_per_tok,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             output_tile=output_tile,
+            program_config=program_config,
         )
 
         if seq_len > 1:
@@ -194,6 +229,7 @@ class Experts:
             nnz=num_experts_per_tok,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             output_tile=output_tile,
+            program_config=program_config,
         )
         if seq_len > 1:
             up = ttnn.transpose(up, 1, 3)
@@ -222,8 +258,8 @@ class Experts:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             output_tile=output_tile,
             is_input_a_sparse=True,
+            program_config=self.batched_sparse_matmul_program_config(5, 6, down_in0.shape[2], self.down_proj.shape[-1]),
         )
-
         next_states = (
             ttnn.reshape(down, (batch_size, self.num_experts, seq_len, self.hidden_size)) + self.down_proj_bias
         )
