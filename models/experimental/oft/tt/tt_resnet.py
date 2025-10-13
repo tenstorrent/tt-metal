@@ -4,6 +4,7 @@
 
 import ttnn
 from models.experimental.oft.tt.common import Conv, GroupNorm, GroupNormDRAM
+from models.tt_cnn.tt.builder import TtConv2d
 
 # from models.experimental.oft.tt.common import Conv
 # from models.experimental.oft.tt.common import GroupNorm_fallback as GroupNorm
@@ -24,9 +25,7 @@ class TTBasicBlock:
     def __init__(self, device, state_dict, layer_args, stride=1, scale=1, is_sliced=False):
         self.is_sliced = is_sliced
         # logger.debug(f"TTBasicBlock: {inplanes=}, {planes=}, {stride=}, {is_sliced=}")
-        self.conv1 = Conv(
-            state_dict.conv1, layer_args.conv1, stride=stride, output_layout=ttnn.ROW_MAJOR_LAYOUT, is_sliced=is_sliced
-        )
+        self.conv1 = TtConv2d(layer_args.conv1["optimized_configuration"], device)
         if not is_sliced:
             self.bn1 = GroupNorm(
                 state_dict.bn1,
@@ -43,7 +42,7 @@ class TTBasicBlock:
                 eps=layer_args.bn1.eps,
                 dtype=ttnn.bfloat16,
             )
-        self.conv2 = Conv(state_dict.conv2, layer_args.conv2, output_layout=ttnn.ROW_MAJOR_LAYOUT, is_sliced=is_sliced)
+        self.conv2 = TtConv2d(layer_args.conv2["optimized_configuration"], device)
         if not is_sliced:
             self.bn2 = GroupNorm(
                 state_dict.bn2,
@@ -84,23 +83,23 @@ class TTBasicBlock:
     def forward(self, device, x, gn_shard="HS", num_splits=1):
         if use_signpost:
             signpost(header="TTBasicBlock forward started")
-        out, out_h, out_w = self.conv1(device, x)
+        out = self.conv1(x)
         logger.debug(f"FORWARD X Input shape: {x.shape}, dtype: {x.dtype}, layout: {x.layout}")
         out = ttnn.move(out)
         # logger.debug(f"SSHARDING {gn_shard=}")
-        out = self.bn1(device, out, out_h, out_w, shard=gn_shard, num_splits=num_splits)
+        out = self.bn1(device, out, shard=gn_shard, num_splits=num_splits)
         logger.debug(f"BN1 output shape: {out.shape}")
         ttnn.relu(out, output_tensor=out)
 
-        out, out_h, out_w = self.conv2(device, out)
+        out = self.conv2(out)
         logger.debug(f"Conv2 output shape: {out.shape}")
         out = ttnn.move(out)
-        out = self.bn2(device, out, out_h, out_w, shard=gn_shard, num_splits=num_splits)
+        out = self.bn2(device, out, shard=gn_shard, num_splits=num_splits)
         logger.debug(f"BN2 output shape: {out.shape}")
 
         if self.downsample is not None:
-            x, out_h_ds, out_w_ds = self.downsample_conv(device, x)
-            x = self.downsample_bn(device, x, out_h_ds, out_w_ds, shard=gn_shard)
+            x = self.downsample_conv(device, x)
+            x = self.downsample_bn(device, x, shard=gn_shard)
         else:
             logger.debug(f"reshape x shape: {x.shape} self.downsample: {self.downsample}")
             # x = ttnn.reshape(x, (1, 1, x.shape[0] * x.shape[1] * x.shape[2], x.shape[3]))

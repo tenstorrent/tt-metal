@@ -249,7 +249,7 @@ class GroupNormDRAM:
         self.num_splited_groups = num_groups
         self.num_splited_channels = channels
 
-    def __call__(self, device, input_tensor, H, W, shard="HS", num_splits=1):
+    def __call__(self, device, input_tensor, shard="HS", num_splits=1):
         compute_grid = device.compute_with_storage_grid_size()
         grid_x, grid_y = compute_grid.x, compute_grid.y
         logger.debug(f"DRAM {grid_x=}, {grid_y=}, {shard=}, {num_splits=} {self.is_sliced=}")
@@ -260,17 +260,20 @@ class GroupNormDRAM:
         grid_size = ttnn.CoreGrid(y=grid_y, x=grid_x)
 
         # torch input tensor
-        unpadded_shape = input_tensor.shape
-        out_shape = [
-            unpadded_shape[0],
-            unpadded_shape[1],
-            _nearest_32_per_core(unpadded_shape[2], grid_x),
-            _nearest_32_per_core(unpadded_shape[3], grid_y),
-        ]
-        logger.debug(f"unpadded_shape: {unpadded_shape} out_shape: {out_shape}")
-        input_tensor_tilized = ttnn.tilize_with_val_padding(
-            input_tensor, output_tensor_shape=out_shape, pad_value=0, use_multicore=True
-        )
+        if input_tensor.layout != ttnn.TILE_LAYOUT:
+            unpadded_shape = input_tensor.shape
+            out_shape = [
+                unpadded_shape[0],
+                unpadded_shape[1],
+                _nearest_32_per_core(unpadded_shape[2], grid_x),
+                _nearest_32_per_core(unpadded_shape[3], grid_y),
+            ]
+            logger.debug(f"unpadded_shape: {unpadded_shape} out_shape: {out_shape}")
+            input_tensor_tilized = ttnn.tilize_with_val_padding(
+                input_tensor, output_tensor_shape=out_shape, pad_value=0, use_multicore=True
+            )
+        else:
+            input_tensor_tilized = input_tensor
         logger.debug(
             f"input_tensor_tilized shape: {input_tensor_tilized.shape} padded shape: {input_tensor_tilized.padded_shape}"
         )

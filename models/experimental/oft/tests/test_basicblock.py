@@ -39,7 +39,7 @@ def test_tt_topdown_network(device, n, in_ch, out_ch, h, w, stride, sharding, is
 
     # Apply model optimizations
     model_opt = ModelOptimizations()
-    model_opt.apply(state_dict.layer_args, "topdown")
+    model_opt.apply(state_dict, "topdown")
 
     tt_blocks = [
         TTBasicBlock(
