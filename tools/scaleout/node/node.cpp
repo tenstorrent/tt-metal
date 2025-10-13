@@ -59,9 +59,9 @@ protected:
         add_boards(&node, "N300", 1, 4);
 
         // Add QSFP connections
-        // auto* const qsfp_connections = get_port_connections(&node, "QSFP_DD");
-        // add_connection(qsfp_connections, 1, 1, 4, 1);
-        // add_connection(qsfp_connections, 2, 2, 3, 2);
+        auto* const qsfp_connections = get_port_connections(&node, "QSFP_DD");
+        add_connection(qsfp_connections, 1, 1, 4, 1);
+        add_connection(qsfp_connections, 2, 2, 3, 2);
 
         // Add WARP100 connections
         auto* const warp100_connections = get_port_connections(&node, "WARP100");
