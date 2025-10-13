@@ -9,6 +9,7 @@ import torch
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
+from tqdm.auto import tqdm
 from models.demos.deepseek_v3.tt.ccl import CCL
 from models.demos.deepseek_v3.tt.decoder_block.decoder_block_1d import DecoderBlock1D
 from models.demos.deepseek_v3.tt.decoder_block.moe_decoder_block_1d import MoEDecoderBlock1D
@@ -71,7 +72,9 @@ class RowPipelinedModel(SharedStateAddOn, AbstractModule):
                     output_path / f"mlp_decoder_block_{meta_layer_idx}",
                     mesh_device,
                 )
-                for meta_layer_idx, layer_indices in enumerate(mlp_meta_layer_indices)
+                for meta_layer_idx, layer_indices in enumerate(
+                    tqdm(mlp_meta_layer_indices, desc="Converting MLP layers", leave=False)
+                )
             ],
             "moe_decoder_block": [
                 MoEDecoderBlock1D.convert_weights(
@@ -80,7 +83,9 @@ class RowPipelinedModel(SharedStateAddOn, AbstractModule):
                     output_path / f"moe_decoder_block_{meta_layer_idx}",
                     mesh_device,
                 )
-                for meta_layer_idx, layer_indices in enumerate(moe_meta_layer_indices)
+                for meta_layer_idx, layer_indices in enumerate(
+                    tqdm(moe_meta_layer_indices, desc="Converting MoE layers", leave=False)
+                )
             ],
             "norm": DistributedRMSNorm.convert_weights(
                 hf_config,
