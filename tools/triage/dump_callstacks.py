@@ -234,7 +234,7 @@ def _format_callstack(callstack: list[CallstackEntry], color: bool = False) -> l
     frame_number_width = len(str(len(callstack) - 1))
     result = []
     cwd = Path.cwd()
-    
+
     # Set color codes based on color flag
     pc_color = BLUE if color else ""
     func_color = ORANGE if color else ""
@@ -268,23 +268,27 @@ def _format_callstack(callstack: list[CallstackEntry], color: bool = False) -> l
         result.append(line)
     return result
 
+
 def format_callstack_with_message(callstack_with_message: KernelCallstackWithMessage, color: bool = False) -> str:
     """Return string representation of the callstack with optional error message. Adding empty line at the beginning for prettier look."""
     empty_line = ""  # For prettier look
-    
+
     # Set color codes based on color flag
     error_color = RED if color else ""
     reset = RST if color else ""
-    
+
     if callstack_with_message.message is not None:
         return "\n".join(
-            [f"{error_color}{callstack_with_message.message}{reset}"] + _format_callstack(callstack_with_message.callstack, color)
+            [f"{error_color}{callstack_with_message.message}{reset}"]
+            + _format_callstack(callstack_with_message.callstack, color)
         )
     else:
         return "\n".join([empty_line] + _format_callstack(callstack_with_message.callstack, color))
 
+
 def _make_dump_callstacks_data_class(color: bool):
     """Factory function to create DumpCallstacksData class with color-aware serializer."""
+
     @dataclass
     class DumpCallstacksData:
         """Callstack data showing essential fields: Kernel ID:Name, Go Message, Subdevice, Preload, Waypoint, PC, and Callstack."""
@@ -298,11 +302,13 @@ def _make_dump_callstacks_data_class(color: bool):
         kernel_callstack_with_message: KernelCallstackWithMessage = triage_field(
             "Kernel Callstack", partial(format_callstack_with_message, color=color)
         )
+
     return DumpCallstacksData
 
 
 def _make_dump_callstacks_data_verbose_class(color: bool):
     """Factory function to create DumpCallstacksDataVerbose class with color-aware serializer."""
+
     @dataclass
     class DumpCallstacksDataVerbose:
         """Verbose callstack data showing all dispatcher fields."""
@@ -312,6 +318,7 @@ def _make_dump_callstacks_data_verbose_class(color: bool):
         kernel_callstack_with_message: KernelCallstackWithMessage = triage_field(
             "Kernel Callstack", partial(format_callstack_with_message, color=color)
         )
+
     return DumpCallstacksDataVerbose
 
 
@@ -330,7 +337,7 @@ def dump_callstacks(
     # Get the appropriate dataclass with color-aware serializer
     DumpCallstacksData = _make_dump_callstacks_data_class(color)
     DumpCallstacksDataVerbose = _make_dump_callstacks_data_verbose_class(color)
-    
+
     result = None
 
     try:
