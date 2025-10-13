@@ -96,9 +96,8 @@ static void test_print_link_health() {
 
     std::cout << "Internal Connections" << std::endl << "--------------------" << std::endl;
 
-    const std::
-        map<tt::ChipId, std::map<tt::umd::ethernet_channel_t, std::tuple<tt::ChipId, tt::umd::ethernet_channel_t>>>
-            ethernet_connections = get_ordered_ethernet_connections(cluster);
+    const std::map<tt::ChipId, std::map<tt::EthernetChannel, std::tuple<tt::ChipId, tt::EthernetChannel>>>
+        ethernet_connections = get_ordered_ethernet_connections(cluster);
 
     for (const auto& [chip_id, remote_chip_and_channel_by_channel] : ethernet_connections) {
         // This chip...
@@ -108,7 +107,7 @@ static void test_print_link_health() {
         for (const auto& [channel, remote_chip_and_channel] : remote_chip_and_channel_by_channel) {
             // Remote chip...
             tt::ChipId remote_chip_id;
-            tt::umd::ethernet_channel_t remote_channel;
+            tt::EthernetChannel remote_channel;
             std::tie(remote_chip_id, remote_channel) = remote_chip_and_channel;
 
             // Print
@@ -126,7 +125,7 @@ static void test_print_link_health() {
     // Remote off-cluster links
     std::cout << std::endl << "External Connections" << std::endl << "--------------------" << std::endl;
 
-    const std::map<tt::ChipId, std::map<tt::umd::ethernet_channel_t, std::tuple<uint64_t, tt::umd::ethernet_channel_t>>>
+    const std::map<tt::ChipId, std::map<tt::EthernetChannel, std::tuple<uint64_t, tt::EthernetChannel>>>
         remote_ethernet_connections = get_ordered_ethernet_connections_to_remote_devices(cluster);
 
     for (const auto& [chip_id, remote_chip_and_channel_by_channel] : remote_ethernet_connections) {
@@ -139,7 +138,7 @@ static void test_print_link_health() {
         for (const auto& [channel, remote_chip_and_channel] : remote_chip_and_channel_by_channel) {
             // Remote chip...
             uint64_t remote_chip_unique_id;
-            tt::umd::ethernet_channel_t remote_channel;
+            tt::EthernetChannel remote_channel;
             std::tie(remote_chip_unique_id, remote_channel) = remote_chip_and_channel;
 
             // Print

@@ -7,14 +7,12 @@
 #include <telemetry/ethernet/ethernet_helpers.hpp>
 
 template <typename ChipId>
-static std::map<tt::ChipId, std::map<tt::umd::ethernet_channel_t, std::tuple<ChipId, tt::umd::ethernet_channel_t>>>
+static std::map<tt::ChipId, std::map<tt::EthernetChannel, std::tuple<ChipId, tt::EthernetChannel>>>
 make_ordered_ethernet_connections(
     const std::unordered_map<
         tt::ChipId,
-        std::unordered_map<tt::umd::ethernet_channel_t, std::tuple<ChipId, tt::umd::ethernet_channel_t>>>&
-        unordered_connections) {
-    std::map<tt::ChipId, std::map<tt::umd::ethernet_channel_t, std::tuple<ChipId, tt::umd::ethernet_channel_t>>>
-        ordered_connections;
+        std::unordered_map<tt::EthernetChannel, std::tuple<ChipId, tt::EthernetChannel>>>& unordered_connections) {
+    std::map<tt::ChipId, std::map<tt::EthernetChannel, std::tuple<ChipId, tt::EthernetChannel>>> ordered_connections;
 
     for (const auto& [chip_id, channel_map] : unordered_connections) {
         for (const auto& [channel, connection_tuple] : channel_map) {
@@ -25,12 +23,12 @@ make_ordered_ethernet_connections(
     return ordered_connections;
 }
 
-std::map<tt::ChipId, std::map<tt::umd::ethernet_channel_t, std::tuple<tt::ChipId, tt::umd::ethernet_channel_t>>>
+std::map<tt::ChipId, std::map<tt::EthernetChannel, std::tuple<tt::ChipId, tt::EthernetChannel>>>
 get_ordered_ethernet_connections(const std::unique_ptr<tt::umd::Cluster>& cluster) {
     return make_ordered_ethernet_connections(cluster->get_cluster_description()->get_ethernet_connections());
 }
 
-std::map<tt::ChipId, std::map<tt::umd::ethernet_channel_t, std::tuple<uint64_t, tt::umd::ethernet_channel_t>>>
+std::map<tt::ChipId, std::map<tt::EthernetChannel, std::tuple<uint64_t, tt::EthernetChannel>>>
 get_ordered_ethernet_connections_to_remote_devices(const std::unique_ptr<tt::umd::Cluster>& cluster) {
     return make_ordered_ethernet_connections(
         cluster->get_cluster_description()->get_ethernet_connections_to_remote_devices());

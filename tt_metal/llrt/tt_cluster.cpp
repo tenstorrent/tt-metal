@@ -911,7 +911,7 @@ std::unordered_map<ChipId, std::vector<CoreCoord>> Cluster::get_ethernet_cores_g
 
             for (const auto &channel_pair :
                  this->cluster_desc_->get_directly_connected_ethernet_channels_between_chips(chip_id, other_chip_id)) {
-                ethernet_channel_t local_chip_chan = std::get<0>(channel_pair);
+                EthernetChannel local_chip_chan = std::get<0>(channel_pair);
                 active_ethernet_cores.emplace_back(
                     get_soc_desc(chip_id).get_eth_core_for_channel(local_chip_chan, CoordSystem::LOGICAL));
             }
@@ -1161,13 +1161,13 @@ std::vector<CoreCoord> Cluster::get_fabric_ethernet_routers_between_src_and_dest
 
 bool Cluster::is_ethernet_link_up(ChipId chip_id, const CoreCoord& logical_core) const {
     const auto& soc_desc = get_soc_desc(chip_id);
-    ethernet_channel_t eth_chan = soc_desc.logical_eth_core_to_chan_map.at(logical_core);
+    EthernetChannel eth_chan = soc_desc.logical_eth_core_to_chan_map.at(logical_core);
     return this->cluster_desc_->ethernet_core_has_active_ethernet_link(chip_id, eth_chan);
 }
 
 std::tuple<ChipId, CoreCoord> Cluster::get_connected_ethernet_core(std::tuple<ChipId, CoreCoord> eth_core) const {
     const auto &soc_desc = get_soc_desc(std::get<0>(eth_core));
-    ethernet_channel_t eth_chan = soc_desc.logical_eth_core_to_chan_map.at(std::get<1>(eth_core));
+    EthernetChannel eth_chan = soc_desc.logical_eth_core_to_chan_map.at(std::get<1>(eth_core));
     TT_FATAL(
         this->is_ethernet_link_up(std::get<0>(eth_core), std::get<1>(eth_core)),
         "Logical eth core {} is not an active eth core on chip {}.",
@@ -1193,7 +1193,7 @@ std::tuple<ChipId, CoreCoord> Cluster::get_connected_ethernet_core(std::tuple<Ch
 std::tuple<uint64_t, CoreCoord> Cluster::get_connected_ethernet_core_to_remote_mmio_device(
     std::tuple<ChipId, CoreCoord> eth_core) const {
     const auto& soc_desc = get_soc_desc(std::get<0>(eth_core));
-    ethernet_channel_t eth_chan = soc_desc.logical_eth_core_to_chan_map.at(std::get<1>(eth_core));
+    EthernetChannel eth_chan = soc_desc.logical_eth_core_to_chan_map.at(std::get<1>(eth_core));
     TT_FATAL(
         this->is_ethernet_link_up(std::get<0>(eth_core), std::get<1>(eth_core)),
         "Logical eth core {} is not an active eth core on chip {}.",

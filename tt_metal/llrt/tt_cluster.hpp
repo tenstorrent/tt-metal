@@ -260,13 +260,13 @@ public:
     void set_internal_routing_info_for_ethernet_cores(
         bool enable_internal_routing, const std::vector<ChipId>& target_mmio_devices = {}) const;
 
-    const std::unordered_map<ChipId, std::unordered_map<ethernet_channel_t, std::tuple<ChipId, ethernet_channel_t>>>&
+    const std::unordered_map<ChipId, std::unordered_map<EthernetChannel, std::tuple<ChipId, EthernetChannel>>>&
     get_ethernet_connections() const {
         return this->cluster_desc_->get_ethernet_connections();
     }
 
     // TODO: unify uint64_t with ChipUID
-    const std::unordered_map<ChipId, std::unordered_map<ethernet_channel_t, std::tuple<uint64_t, ethernet_channel_t>>>&
+    const std::unordered_map<ChipId, std::unordered_map<EthernetChannel, std::tuple<uint64_t, EthernetChannel>>>&
     get_ethernet_connections_to_remote_devices() const {
         return this->cluster_desc_->get_ethernet_connections_to_remote_devices();
     }
