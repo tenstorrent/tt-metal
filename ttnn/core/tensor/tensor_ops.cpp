@@ -154,6 +154,9 @@ Tensor tensor_unpad_from_tile(const Tensor& input_tensor, const tt::tt_metal::Sh
 //                                  .tensor_view()
 // ======================================================================================
 Tensor tensor_view(const Tensor& input_tensor, const Shape& new_logical_shape, const Shape& new_padded_shape) {
+    input_tensor.print_info("-- tensor_view: ");
+    std::cerr << "-- tensor_view: converting to logical " << new_logical_shape << " padded "
+              << new_padded_shape << std::endl;
     tt::tt_metal::GraphTracker::instance().track_function_start(
         "Tensor::reshape", input_tensor, new_logical_shape, new_padded_shape);
 
