@@ -13,7 +13,7 @@ Authors: TT-Metalium Scale-Out Team
 For questions and comments please use the [TT-Metalium Scale-Out Discord Server](https://discord.com/channels/863154240319258674/1321621251269328956)
 
 
-## Table of Contests
+## Table of Contents
 [1. Overview](#overview)
 
 [1.1. Operational Structure](#structure)
@@ -21,8 +21,6 @@ For questions and comments please use the [TT-Metalium Scale-Out Discord Server]
 [1.1.1. Data Plane](#dataplane)
 
 [1.1.2. Control Plane](#controlplane)
-
-[1.1.2.1. Fabric Node Status Queues](#statusqueue)
 
 [1.2. Some Additional Notes](#notes)
 
@@ -44,8 +42,6 @@ For questions and comments please use the [TT-Metalium Scale-Out Discord Server]
 
 [2.2.2. Routing Planes](#routing_planes)
 
-[2.2.3. Automatic Traffic Rerouting](#rerouting)
-
 [2.3. TT-transport (Layer 4)](#layer_4)
 
 [2.3.1. Dateline Virtual Channel](#dvc)
@@ -62,67 +58,37 @@ For questions and comments please use the [TT-Metalium Scale-Out Discord Server]
 
 [3.1.2. 2D Mesh Virtual Channel](#2dmvc)
 
-[4. Read/Write API Specification](#rw_api)
-
-[4.1. Asynchronous Write](#async_wr)
-
-[4.2. Asynchronous Multicast Write](#async_mcast_wr)
-
-[4.3. Asynchronous Write Barrier](#async_wr_barrier)
-
-[4.4. Asynchronous Read](#async_rd)
-
-[4.5. Asynchronous Read Barrier](#async_rd_barrier)
-
-[4.6. Asynchronous Atomic Increment](#async_atomic_inc)
-
-[4.7. Asynchronous Atomic Read and Increment](#async_atomic_rd_inc)
+[4. API Specification](#rw_api)
 
 [5. Sockets over TT-Fabric](#socket_api)
 
-[7. Deadlock Avoidance and Mitigation](#deadlocks)
+[6. Deadlock Avoidance and Mitigation](#deadlocks)
 
-[7.1. Dimension Ordered Routing](#dim_order_routing)
+[6.1. Dimension Ordered Routing](#dim_order_routing)
 
-[7.2. Edge Disjoint Routing](#disjoint_routing)
+[6.2. Dateline Virtual Channel](#fab_vcs)
 
-[7.3. Fabric Virtual Channels](#fab_vcs)
+[7. TT-Fabric Roadmap](#roadmap)
 
-[7.4. Limitations](#limits)
+[7.1. Fabric Node Status Mailbox](#statusqueue)
 
-[8. TT-Fabric Roadmap](#roadmap)
+[7.2. Time To Live (TTL)](#ttl)
 
-[8.1. Time To Live (TTL)](#ttl)
+[7.3. Timeout](#timeout)
 
-[8.2. Timeout](#timeout)
+[7.4. Reliability](#reliability)
 
-[8.3. Reliability](#reliability)
+[7.4.1. Automatic Traffic Rerouting](#rerouting)
 
-[8.3.1. Automatic Traffic Rerouting](#rerouting)
+[7.4.1.1. Ethernet Fallback Channels (EFC)](#efc)
 
-[8.4. TT-Fabric Model](#model)
+[7.5. TT-Fabric Model](#model)
 
-[8.4.1. Serialization and Visualization](#visualization)
+[7.5.1. Serialization and Visualization](#visualization)
 
-[8.4.2. Data Plane Simulator](#simulator)
+[7.5.2. Data Plane Simulator](#simulator)
 
-[8.4.3. Modelling External Disruptors and Buffer Limits](#disruptors)
-
-[9. System Specification](#system_spec)
-
-[9.1. System Components](#system_components)
-
-[9.2. TG](#tg)
-
-[9.3. Multi-Host TGG](#tgg)
-
-[9.4. Quanta 2 Galaxy System](#ubb_galaxy)
-
-[10. Resource Allocation](#resource_alloc)
-
-[10.1. Available Dispatch Cores](#available_cores)
-
-[10.2. Fast Dispatch and Fabric Kernel Resouces](#fd_and_fabric)
+[7.5.3. Modelling External Disruptors and Buffer Limits](#disruptors)
 
 # 1 Overview <a id="overview"></a>
 
@@ -901,13 +867,13 @@ We have implemented sockets as send and receive operatoins that use tt-fabric as
 TODO: Add more information on send/receive operations.
 
 
-# 7 Deadlock Avoidance and Mitigation <a id="deadlocks"></a>
+# 6 Deadlock Avoidance and Mitigation <a id="deadlocks"></a>
 
 Like any other network, **TT-Fabric** faces potential deadlock hazards. Conditions such as **circular dependencies**, **resource contention**, and **buffer exhaustion** can lead to routing deadlocks. TT-Fabric incorporates features to **minimize the likelihood of deadlocks**, and in the event of one, it can **detect**, **mitigate**, and **notify the Control Plane**.
 
 The following sections describe TT-Fabric’s features for **deadlock avoidance and mitigation**.
 
-## 7.1 Dimension Ordered Routing <a id="dim_order_routing"></a>
+## 6.1 Dimension Ordered Routing <a id="dim_order_routing"></a>
 
 Intra-mesh routing tables in TT-Fabric are configured using **dimension-ordered routing** to prevent cyclic dependency deadlocks.
 
@@ -942,21 +908,21 @@ TT-Fabric is not limited to one routing scheme. Since **routing tables are fully
 
 While dimension-ordered routing **prevents intra-mesh deadlocks**, **inter-mesh traffic** can still encounter cyclic dependencies. Senders distributed across multiple meshes can create cycles over **sparse exit nodes**, which may require additional deadlock mitigation strategies such as **hierarchical virtual channels** (to isolate intra-mesh and inter-mesh traffic through decidated virtual channels) and **switches**.
 
-## 7.3 Dateline Virtual Channel <a id="fab_vcs"></a>
+## 6.2 Dateline Virtual Channel <a id="fab_vcs"></a>
 
 As stated earlier, to avoid cyclic deadlocks on ring or torus topologies, TT-Fabric has an private dateline virtual channel. Packets crossing the dateline get switched to dateline virtual channel to avoid getting blocked by user worker traffic channel.
 
-# 8 TT-Fabric Roadmap <a id="roadmap"></a>
+# 7 TT-Fabric Roadmap <a id="roadmap"></a>
 
 The items below are on the TT-Fabric roadmap.
 
-## 8.1 Fabric Node Status Mailbox<a id="statusqueue"></a>
+## 7.1 Fabric Node Status Mailbox<a id="statusqueue"></a>
 
-The control plane sets up a mailbox in SRAM of each fabric router. Fabric routers push status and error messages for control plane and user visibility. The control plane retrieves messages from the queues and takes appropriate action.
+Each fabric router provides a mailbox region in its local SRAM, initialized by the control plane. Routers use this mailbox to post status updates, event notifications, and error messages for both control plane and user visibility. The control plane periodically retrieves and processes these messages to monitor network health and perform corrective actions when needed.
 
-All the messages received by control plane are also saved to disk to keep a log of fabric activity in case of malfunction. For a system comprising of thousands of chips, these logs help diagnose issues and root cause failures.
+All messages collected by the control plane are also archived to disk, creating a persistent log of fabric activity. In large-scale systems comprising thousands of chips, these logs are invaluable for diagnosing issues, tracing network behavior, and identifying root causes of failures.
 
-## 8.1 Time To Live (TTL) <a id="ttl"></a>
+## 7.2 Time To Live (TTL) <a id="ttl"></a>
 
 TT-Fabric may encounter packets that keep on circling the network and are not terminating. This can occur if the routing tables are misconfigured or corrupted. Such traffic can keep on living in the network forever and keep burning network resources. To avoid such patterns of traffic, TT-Fabric packets can have a TTL field. Data sender initializes TTL field to a conservative value that covers longest hop count any packet could encounter in TT-Fabric. At every network hop, fabric router decrements TTL by 1. Under normal conditions, a packet will reach its destination before TTL becomes 0 (expires). If for any reason a router sees a fabric packet with TTL parameter of 0, the packet is marked as expired, dropped, and drained from fabric. TT-Fabric also notifies Control Plane of the event.
 
@@ -982,7 +948,7 @@ With a TTL of 10 the packet hops are shown in the table below. As the packet loo
 | 7 | 1 |
 | 11 | 0  Fabric Router at Device 11 drops the packet with expired TTL |
 
-## 8.2 Timeout <a id="timeout"></a>
+## 7.3 Timeout <a id="timeout"></a>
 
 Timeouts serve as TT-Fabric’s **last line of defense** against routing deadlocks.
 Unlike the prevention and minimization schemes described in earlier sections, timeouts provide a **detection mechanism**.
@@ -1006,8 +972,8 @@ When a routing timeout occurs, the fabric router takes corrective action:
 
 3 is the minimum required response so that higher level software can respond to router's inability to forward traffic.
 
-## 8.3 Reliability <a id="reliability"></a>
-### 8.3.1 Automatic Traffic Rerouting <a id="rerouting"></a>
+## 7.4 Reliability <a id="reliability"></a>
+### 7.4.1 Automatic Traffic Rerouting <a id="rerouting"></a>
 
 TT-Fabric supports device meshes that can scale to hundreds of thousands of devices. At this scale, the likelihood of some Ethernet links failing becomes significant. An interconnect that lacks link redundancy or cannot work around broken links will experience frequent interruptions and increased system management overhead.
 
@@ -1017,7 +983,7 @@ User workloads can continue to reach their next checkpoint without network inter
 
 Users may choose to continue operating the system with a reduced number of Ethernet links, in which case the unavailable links are removed from the routing tables. Normal operation can resume once system maintenance has been completed.
 
-#### 8.3.1.1 Ethernet Fallback Channels (EFC)
+#### 7.4.1.1 Ethernet Fallback Channels (EFC) <a id="efc"></a>
 
 To enable redundancy, each fabric router maintains one or more Ethernet Fallback Channels (EFCs). The Control Plane assigns fallback channels and fallback routers whenever a router is put into reroute mode due to unreliable or failed Ethernet links. Each active virtual channel requires a dedicated fallback channel, ensuring reliable traffic rerouting and maintaining network continuity.
 
@@ -1025,11 +991,11 @@ The following diagram shows how traffic gets rerouted when Eth A link becomes in
 
 ![](images/image013.png)
 
-## 8.4 TT-Fabric Model <a id="model"></a>
+## 7.5 TT-Fabric Model <a id="model"></a>
 
 TT-Fabric Model is a software functional model of all components of the Fabric. The purpose of the Fabric Model is to fully simulate the ethernet traffic in the Fabric. It will provide a ground truth for the state of any configuration of the Fabric, to help with debug and rerouting decisions. The Fabric Model will include a new piece of software to emulate the physical data plane, but otherwise shares the software components of the TT-Control Plane and Fabric Router.
 
-### 8.4.1 Serialization and Visualization <a id="visualization"></a>
+### 7.5.1 Serialization and Visualization <a id="visualization"></a>
 
 TT-Fabric Model will serialize these components of the Fabric:
 
@@ -1042,7 +1008,7 @@ TT-Fabric Model will serialize these components of the Fabric:
 * Packet traffic across data plane
   + We should be able to download traffic serialization from software simulator to run on hardware, and vice versa.
 
-### 8.4.2 Data Plane Simulator <a id="simulator"></a>
+### 7.5.2 Data Plane Simulator <a id="simulator"></a>
 
 The data plane simulator will model all paths ethernet packets may take across the hardware, except for NOC activity between a device and the Fabric. Key components:
 
@@ -1053,325 +1019,6 @@ The data plane simulator will model all paths ethernet packets may take across t
 * Directed single threaded testing for buffer limits and rerouting
 * Random testing with multi-threading. One thread per device to simulate requests to the Fabric and one thread for external disruptors.
 
-### 8.4.3 Modelling External Disruptors and Buffer Limits <a id="disruptors"></a>
+### 7.5.3 Modelling External Disruptors and Buffer Limits <a id="disruptors"></a>
 
 TT-Fabric Model will have hooks to simulate failed links, to trigger and verify rerouting in the control plane. It will also have SW APIs to simulate back-pressured buffers and VCs, to detect possible deadlock scenarios.
-
-# 9 System Specification <a id="system_spec"></a>
-
-To configure and launch TT-Fabric on a physical system we need to specify the hardware components of the system in a hierarchy that is modular and scalable. System specification should be in a format that can be parsed by the Control Plane. The following sections describe our current approach which is to use a yaml to describe the topology of a physical machine. The system specification file contains all the necessary information to enable a user to build their AI workload offline. Before launching the workload, Control Plane validates the physical connectivity of the system to ascertain that it conforms to the system specification yaml file.
-
-## 9.1 System Components <a id="system_components"></a>
-
-To be able to describe the topology of a physical system, we need to identify the basic building blocks that are used to build an AI machine. This section lists the building blocks for a physical Tenstorrent machine.
-
-* **ChipSpec**: Single AI accelerator with ethernet capabilities. In a two-dimensional layout of chips, every chip can have one neighbor on each of its four sides. A chip connects to its neighbors through one or more unique ethernet ports. The four sides of a chip are identified as East, West, North and South.
-* **Board**: Physical board that holds individual chips in a two-dimensional layout. Chips on a board have uniform number of ethernet connections between all neighbors.
-* **Host**: An x86 host that provides Control Plane (PCIe) access to a Board.
-* **Mesh**: A two-dimensional layout of fully connected boards.
-
-Boards are fully connected when:
-
-* + All the edge chips on one board are connected to the same number of edge chips on neighboring board.
-  + The number of ethernet connections between two neighbor edge chips on two different boards is the same as number of ethernet connecters between neighbor chips on the same board.
-
-If the boards are not fully connected, then one mesh can only have one such board.
-
-A mesh is typically described as a Board and Host pair.
-
-To support the current generation of Tenstorrent Wormhole Galaxy boards, a mesh is allowed to have a board without a host directly connected to it.
-
-* **Graph**: A set of meshes that makes up the full system. Two neighboring meshes are not required to be fully connected. In addition, all the meshes are not required to be connected to each other. Traffic from a source mesh can traverse multiple other meshes before it reaches its destination mesh.
-
-## 9.2 TG <a id="tg"></a>
-
-![](images/image020.png)
-
-<table>
-  <tr>
-    <th colspan="2">TG</th>
-  </tr>
-  <tr>
-    <th>Chip</th>
-    <td>
-      Wormhole:<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Ethernet Ports:<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&bull; N:4<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&bull; E:4<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&bull; S:4<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&bull; W:4<br>
-    </td>
-  </tr>
-  <tr>
-    <th>Board</th>
-    <td>
-      Galaxy:<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Submodule: Wormhole<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Topology: 4x8 <br>
-      N150Gateway:<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Submodule: Wormhole<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Topology: 1x1 <br>
-    </td>
-  </tr>
-  <tr>
-    <th>
-      Mesh<br>
-      Notes: For a TG system, we only have CPU hosts connected to<br>
-      N150 gateway cards that are connected to the Galaxy via<br>
-      ethernet links. There is no direct PCI access to chips on the<br>
-      Galaxy board.<br>
-    </th>
-    <td>
-      0:<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Submodule: N150Gateway<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Topology: 1x1<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Host Mapping: [[&lthost0&gt]]<br>
-      1:<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Submodule: N150Gateway<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Topology: 1x1<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Host Mapping: [[&lthost0&gt]]<br>
-      2:<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Submodule: N150Gateway<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Topology: 1x1<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Host Mapping: [[&lthost0&gt]]<br>
-      3:<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Submodule: N150Gateway<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Topology: 1x1<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Host Mapping: [[&lthost0&gt]]<br>
-      4:<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Submodule: Galaxy<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Topology: 1x1<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Host Mapping: [[ ]]<br>
-    </td>
-  </tr>
-  <tr>
-    <th>Graph</th>
-    <td>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; {0, S0} <---> {4, N0}<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; {0, S1} <---> {4, N4}<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; {1, S0} <---> {4, N8}<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; {1, S1} <---> {4, N12}<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; {2, S0} <---> {4, N16}<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; {2, S1} <---> {4, N20}<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; {3, S0} <---> {4, N24}<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; {3, S1} <---> {4, N28}<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; {4, N0} <---> {0, S0}<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; {4, N4} <---> {0, S1}<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; {4, N8} <---> {1, S0}<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; {4, N12} <---> {1, S1}<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; {4, N16} <---> {2, S0}<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; {4, N20} <---> {2, S1}<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; {4, N24} <---> {3, S0}<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; {4, N28} <---> {3, S1}<br>
-    </td>
-  </tr>
-
-</table>
-
-
-## 9.3 Multi-Host TGG <a id="tgg"></a>
-
-![](images/image021.png)
-<table>
-  <tr>
-    <th colspan="2">TG</th>
-  </tr>
-  <tr>
-  <th>Chip</th>
-    <td>
-      Wormhole:<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Ethernet Ports:<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&bull; N:4<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&bull; E:4<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&bull; S:4<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&bull; W:4<br>
-    </td>
-  </tr>
-  <tr>
-    <th>Board</th>
-    <td>
-      Galaxy:<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Submodule: Wormhole<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Topology: 4x8 <br>
-      N150Gateway:<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Submodule: Wormhole<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Topology: 1x1 <br>
-    </td>
-  </tr>
-  <tr>
-    <th>
-      Mesh<br>
-      Notes: For a multi-host TGG system, we have two hosts that are <br>
-      connected to N150 gateway cards. The Galaxy boards are connected <br>
-      via long edge with external ethernet cables. There are only 2 <br>
-      links per chip-to-chip connection, which is not uniform with the <br>
-      chip-to-chip within the Galaxy board.
-      <br>
-    </th>
-    <td>
-      0:<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Submodule: N150Gateway<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Topology: 1x1<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Host Mapping: [[&lthost0&gt]]<br>
-      1:<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Submodule: N150Gateway<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Topology: 1x1<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Host Mapping: [[&lthost0&gt]]<br>
-      2:<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Submodule: N150Gateway<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Topology: 1x1<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Host Mapping: [[&lthost0&gt]]<br>
-      3:<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Submodule: N150Gateway<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Topology: 1x1<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Host Mapping: [[&lthost0&gt]]<br>
-      4:<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Submodule: N150Gateway<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Topology: 1x1<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Host Mapping: [[&lthost1&gt]]<br>
-      5:<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Submodule: N150Gateway<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Topology: 1x1<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Host Mapping: [[&lthost1&gt]]<br>
-      6:<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Submodule: N150Gateway<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Topology: 1x1<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Host Mapping: [[&lthost1&gt]]<br>
-      7:<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Submodule: N150Gateway<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Topology: 1x1<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Host Mapping: [[&lthost1&gt]]<br>
-      8:<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Submodule: Galaxy<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Topology: 1x1<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Host Mapping: [[ ]]<br>
-      9:<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Submodule: Galaxy<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Topology: 1x1<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Host Mapping: [[ ]]<br>
-    </td>
-  </tr>
-  <tr>
-    <th>Graph</th>
-    <td>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; {0, S0} <---> {8, N0}<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; {0, S1} <---> {8, N4}<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; {1, S0} <---> {8, N8}<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; {1, S1} <---> {8, N12}<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; {2, S0} <---> {8, N16}<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; {2, S1} <---> {8, N20}<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; {3, S0} <---> {8, N24}<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; {3, S1} <---> {8, N28}<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; {8, N0} <---> {0, S0}<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; {8, N4} <---> {0, S1}<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; {8, N8} <---> {1, S0}<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; {8, N12} <---> {1, S1}<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; {8, N16} <---> {2, S0}<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; {8, N20} <---> {2, S1}<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; {8, N24} <---> {3, S0}<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; {8, N28} <---> {3, S1}<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; {4, S0} <---> {8, N0}<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; {4, S1} <---> {8, N4}<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; {5, S0} <---> {8, N8}<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; {5, S1} <---> {8, N12}<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; {6, S0} <---> {8, N16}<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; {6, S1} <---> {8, N20}<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; {7, S0} <---> {8, N24}<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; {7, S1} <---> {8, N28}<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; {9, S0} <---> {4, N0}<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; {9, S4} <---> {4, N1}<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; {9, S8} <---> {5, N0}<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; {9, S12} <---> {5, N1}<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; {9, S16} <---> {6, N0}<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; {9, S20} <---> {6, N1}<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; {9, S24} <---> {7, N0}<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; {9, S28} <---> {7, N1}<br>
-    </td>
-  </tr>
-
-</table>
-
-## 9.4 Quanta 2 Galaxy System <a id="ubb_galaxy"></a>
-
-<table>
-  <tr>
-    <th colspan="2">TG</th>
-  </tr>
-  <tr>
-    <th>Chip</th>
-    <td>
-      Wormhole:<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Ethernet Ports:<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&bull; N:4<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&bull; E:4<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&bull; S:4<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&bull; W:4<br>
-    </td>
-  </tr>
-  <tr>
-    <th>Board</th>
-    <td>
-      Galaxy:<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Submodule: Wormhole<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Topology: 4x8 <br>
-    </td>
-  </tr>
-  <tr>
-    <th>
-      Mesh<br>
-      Notes: For a Quanta Galaxy box, Galaxy to Galaxy connections <br>
-      also have four edges, so we can represent two Galaxys as a 2x1 Mesh. <br>
-      We will also have one CPU host per Galaxy box.
-      <br>
-    </th>
-    <td>
-      0:<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Submodule: Galaxy<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Topology: 2x1<br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&bull; Host Mapping: [[ ]]<br>
-    </td>
-  </tr>
-  <tr>
-    <th>Graph</th>
-    <td>
-    </td>
-  </tr>
-
-</table>
-
-# 10 Resource Allocation <a id="resource_alloc"></a>
-This seciton estimates the hardware resources required to implement different TT-Fabric workers.
-
-## 10.1 Available Dispatch Cores <a id="available_cores"></a>
-
-| Idle Eth Core | Worker (ROW) | Worker (COL) | Idle Eth Core |
-| --- | --- | --- | --- |
-| N300 L Chip | (1x8) 8 | (8x1) 8 | 10 |
-| TG N150 Chip | (9x8) 72 | (9x8) 72 | 14 |
-| TG Galaxy Chip | (2x8) 16 | (1x10) 10 | 0 |
-| Quanta Galaxy Chip | (2x8) 16 | (1x10) 10 | 0 |
-| Blackhole Chip |  |  |  |
-| Galaxy Blackhole Chip |  |  |  |
-
-## 10.2 Fast Dispatch and Fabric Kernel Resouces <a id="fd_and_fabric"></a>
-
-![](images/image022.png)
-
-* 10 idle eth cores on L chip, 10 idle eth cores on R chip
-* Allows for 8x8 Tensix worker grid on both chips
-
-![](images/image023.png)
-
-* 10 idle eth cores on L chip, 10 idle eth cores on R chip
-* Allows for 8x8 Tensix worker grid on both chips
-* Lacking resources for a packetizer/socket startpoint on L chip
-
-![](images/image024.png)
-
-* 68 Tensix cores on N150 chip, 15 kernels on each of remote Galaxy chips
-* Allows for 8x8 Tensix worker grid on Galaxy chips
-
-![](images/image025.png)
-
-* 68 Tensix cores on N150 chip, 10 kernels on each of remote Galaxy chips
-* Allows for 10x7 Tensix worker grid on Galaxy chips
