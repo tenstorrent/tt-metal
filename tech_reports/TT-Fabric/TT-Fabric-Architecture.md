@@ -791,41 +791,51 @@ The following table lists the sender/receiver channel counts for different fabri
 TODO: Add a table here.
 
 
-# 4 Read/Write API Specification <a id="rw_api"></a>
+# 4 API Specification <a id="rw_api"></a>
+**TT-Fabric** provides the multi-chip communication infrastructure for distributed systems. It extends the on-chip **Network-on-Chip (NoC)** over Ethernet, enabling seamless and transparent communication between chips.
 
-TT-Fabric provides Remote Direct Memory Access (RDMA) support to Write and Read data from any device connected to the fabric.
+NoC operations are **packetized**, **transported** to the target chip, and **executed remotely**, following the same programming model as on-chip NoC communication. Kernels interact with this infrastructure through **Fabric APIs**, which allow data transfers and synchronization between chips as if they were part of a single unified fabric.
 
-The following sections describe supported APIs and their operation.
 
-## 4.1 Asynchronous Write <a id="async_wr"></a>
-```
-Point to API Header
-```
-Asynchronous write is used to write data to a remote receiver. Sender does not need to wait for all the data to be written to receiver. Data is guaranteed to be written ordered.
+## Fabric Node Model
 
-## 4.2 Asynchronous Atomic Increment <a id="async_atomic_inc"></a>
-```
-Point to API Header
-```
-Asynchronous atomic increment is used to atomically increment an address in a remote device.
+Each chip in the system functions as a **Fabric Node**, identified by a `FabricNodeId` composed of a `{MeshId, ChipId}` pair.  
 
-## 4.3 Asynchronous Write Atomic Increment <a id="async_wr"></a>
-```
-Point to API Header
-```
-Asynchronous write atomic increment is a fusion of the two individual APIs. It is more efficient as both operations are achieved with a single fabric packet.
-This command writes data to remote device and atomically increments the specified address in remote device.
+A destination address for any transaction includes:
+- The **FabricNodeId** (MeshId + ChipId)
+- The **NoC coordinates (X, Y)**
+- A **NoC offset**
 
-## 4.4 Asynchronous Multicast Write <a id="async_mcast_wr"></a>
-```
-Point to API Header
-```
-Multicast write is used to write to more than one remote receiver with the same data. Multicast starts at the origin device of the multicast grid. The extent of multicast is specified by the number of hops around the origin device. All devices within the specified depth are written with single async multicast write command.
+This addressing model enables precise targeting of destinations within and across chips, ensuring scalability and consistency across large systems.
 
-## 4.4 Scatter Write (a NOC command)
-```
-Point to API Header
-```
+
+## Fabric APIs and Topologies
+
+TT-Fabric provides a **consistent set of APIs** for inter-node communication, independent of the number of chips in the system.  
+
+Fabric packets define both **fabric-level** and **NoC-level** behaviors, enabling a flexible and scalable communication model across different interconnect topologies. The **device APIs** that expose these capabilities are topology-specific and can be found under:
+
+- `tt_metal/fabric/hw/inc/<topology>/api.h`
+
+**Examples:**
+- `tt_metal/fabric/hw/inc/linear/api.h`
+- `tt_metal/fabric/hw/inc/mesh/api.h`
+
+These APIs represent **logical topologies** — software abstractions of the underlying hardware fabric. While each topology may include its own optimizations, there is a high degree of **cross-compatibility** between them.  
+
+For example, **collective communication libraries (CCLs)** written using **1D (linear)** fabric APIs can be built and executed seamlessly on a **2D (mesh)** fabric topology without code changes.
+
+## Fabric and NoC Level Commands
+
+| **Layer**        | **Command**                          | **Description**                                                            |
+| ---------------- | ------------------------------------ | -------------------------------------------------------------------------- |
+| **Fabric Level** | **Unicast**                          | Sends a packet from one node to a specific target node across the fabric.  |
+|                  | **Multicast**                        | Sends a packet from one node to multiple destination nodes simultaneously. |
+| **NoC Level**    | **Unicast Write**                    | Performs a direct write operation to a target address on another chip.     |
+|                  | **Atomic Increment**                 | Atomically increments a memory location on a target node.                  |
+|                  | **Fused Unicast Write + Atomic Inc** | Combines a write and atomic increment into a single packet for efficiency. |
+|                  | **Inline Write**                     | Embeds small payloads directly within the packet for low-latency updates.  |
+|                  | **Scatter Write**                    | Writes data to multiple destinations based on a list of target addresses.  |
 
 # 5 Sockets over TT-Fabric <a id="socket_api"></a>
 
@@ -833,45 +843,46 @@ We have implemented sockets as send and receive operatoins that use tt-fabric as
 TODO: Add more information on send/receive operations.
 
 
-
 # 7 Deadlock Avoidance and Mitigation <a id="deadlocks"></a>
 
-Like any other network, TT-Fabric faces deadlock hazards. Circular dependencies, resource contention, buffer exhaustion are some of the conditions that can lead to deadlocks in the routing network. We are building features into TT-Fabric to minimize chances of hitting deadlocks. In the event of a deadlock, TT-Fabric should be able to detect it, try to mitigate the effects and notify the Control Plane.
+Like any other network, **TT-Fabric** faces potential deadlock hazards. Conditions such as **circular dependencies**, **resource contention**, and **buffer exhaustion** can lead to routing deadlocks. TT-Fabric incorporates features to **minimize the likelihood of deadlocks**, and in the event of one, it can **detect**, **mitigate**, and **notify the Control Plane**.
 
-The following sections describe the TT-Fabric features for deadlock avoidance and mitigation.
+The following sections describe TT-Fabric’s features for **deadlock avoidance and mitigation**.
 
 ## 7.1 Dimension Ordered Routing <a id="dim_order_routing"></a>
 
-Intra-mesh routing tables in TT-Fabric are setup with dimension ordered routing to avoid cyclic dependency deadlocks. 
+Intra-mesh routing tables in TT-Fabric are configured using **dimension-ordered routing** to prevent cyclic dependency deadlocks.
 
-Cyclic dependency deadlock happens when a set of nodes form a cyclic traffic pattern. Each node’s outgoing traffic is waiting on resources in the next hop to make progress. Since the traffic pattern is a cycle, all nodes end up waiting for the next hop’s resource and form a routing deadlock.
+### Cyclic Dependency Deadlock
 
-Dimension ordered routing prevents cyclic dependency deadlocks by routing traffic in a way that does not form traffic cycles. In the routing table examples presented earlier in the document, we use X then Y dimension ordered routing when building routing tables.
+A **cyclic dependency deadlock** occurs when a set of nodes forms a **cycle of traffic dependencies**. Each node’s outgoing traffic waits on resources in the next hop, and since the dependencies form a cycle, **all nodes end up waiting indefinitely**, resulting in a routing deadlock.
 
-The following diagram illustrates the cyclic dependency deadlock.
+The following diagram illustrates such a deadlock scenario:
 
-![](images/image017.png)
+![Cyclic Dependency Deadlock](images/image017.png)
+*Four devices (D1–D4) form a cyclic traffic pattern:*
+- D1 → D4  
+- D2 → D3  
+- D3 → D2  
+- D4 → D1  
 
-4 Devices are creating a cyclic traffic pattern as follows:
+Traffic originating from D1, D2, D3, and D4 is shown in yellow, blue, gray, and orange segments respectively. After the first hop, route segments turn **red**, indicating that packets **cannot turn in the desired direction** because the outgoing router’s buffer is **exhausted** with locally generated traffic. Each device’s traffic is **stuck waiting** for the next hop, creating a deadlock.
 
-* D1 sending to D4
-* D2 sending to D3
-* D4 sending to D1
-* D3 sending to D2
+### Dimension-Ordered Routing to Avoid Deadlocks
 
-Traffic originating from D1, D2, D3, D4 is shown by yellow, blue, gray and orange segments respectively. After making the first hop to the next neighbor, route segments turn red. That is because incoming packets cannot make the routing turn in the desired direction. Turn is not possible because the outgoing router’s buffer is exhausted serving locally generated traffic. Each device’s traffic gets stuck in the next hop waiting for the router buffer to become available. No packet is able to make progress, and the system is in a deadlock.
+**Dimension-ordered routing** prevents cyclic dependency deadlocks by enforcing a fixed routing order across dimensions. For example, packets are routed in the **X dimension first, then Y**, which breaks potential cycles in traffic patterns.
 
-Using dimension ordered routing where packets travel in X direction before turning in Y direction avoids this cyclic dependency deadlock as shown in the following diagram.
+The following diagram shows deadlock-free routing using dimension-ordered rules:
 
-![](images/image018.png)
+![Dimension-Ordered Routing Avoids Deadlock](images/image018.png)
+- Packets from D1 → D4 and D4 → D1 follow their original routes.  
+- Packets from D2 → D3 and D3 → D2 are rerouted in the **X direction first**, avoiding the cycle.  
 
-Packets from D1 to D4 and D4 to D1 follow original routes.
+TT-Fabric is not limited to one routing scheme. Since **routing tables are fully instantiated**, any reasonable routing policy can be mapped to fabric routers.
 
-Packet from D2 to D3 and D3 to D2 are routed in X direction first thus avoiding deadlock.
+### Notes on Inter-Mesh Traffic
 
-TT-Fabric is not limited to just one kind of routing bias. Since routing tables are fully instantiated, any reasonable routing scheme can be devised and mapped onto fabric router tables.
-
-Inter-mesh traffic is still prone to this kind of dealock as senders spread over different meshes can still create cyclic traffic patterns over sparse exit nodes between meshes.
+While dimension-ordered routing **prevents intra-mesh deadlocks**, **inter-mesh traffic** can still encounter cyclic dependencies. Senders distributed across multiple meshes can create cycles over **sparse exit nodes**, which may require additional deadlock mitigation strategies such as **hierarchical virtual channels** (to isolate intra-mesh and inter-mesh traffic through decidated virtual channels) and **switches**.
 
 ## 7.3 Dateline Virtual Channel <a id="fab_vcs"></a>
 
