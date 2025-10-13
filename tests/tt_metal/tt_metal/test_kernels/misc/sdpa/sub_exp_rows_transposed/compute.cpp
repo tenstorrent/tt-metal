@@ -15,6 +15,8 @@ void MAIN {
     constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(3);
     constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(4);
     constexpr uint32_t scale_fp32 = get_compile_time_arg_val(5);
+    constexpr bool use_pack_relu = get_compile_time_arg_val(6);
+    constexpr uint32_t threshold_fp32 = get_compile_time_arg_val(7);
 
     init_bcast<EltwiseBinaryType::ELWSUB, BroadcastType::ROW>(qk_im_cb, cur_max_cb, qk_im_cb);
 
@@ -22,7 +24,12 @@ void MAIN {
     cb_push_back(qk_im_cb, Sq_chunk_t * Sk_chunk_t);
     cb_push_back(cur_max_cb, Sq_chunk_t);
 
-    sub_exp_rows_transposed<qk_im_cb, Sq_chunk_t, Sk_chunk_t, scale_fp32>(cur_max_cb, cur_sum_cb);
+    if constexpr (use_pack_relu) {
+        sub_exp_rows_transposed_pack_relu<qk_im_cb, Sq_chunk_t, Sk_chunk_t, scale_fp32, threshold_fp32>(
+            cur_max_cb, cur_sum_cb);
+    } else {
+        sub_exp_rows_transposed<qk_im_cb, Sq_chunk_t, Sk_chunk_t, scale_fp32>(cur_max_cb, cur_sum_cb);
+    }
 
     // Wait for result
     cb_wait_front(qk_im_cb, Sq_chunk_t * Sk_chunk_t);

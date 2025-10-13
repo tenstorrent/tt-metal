@@ -17,6 +17,7 @@
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/reduce.h"
+#include "debug/dprint.h"
 #include "tools/profiler/kernel_profiler.hpp"
 
 template <uint32_t num_tiles>
@@ -188,8 +189,6 @@ void sub_exp_rows_transposed(uint32_t in1_cb, uint32_t reduce_cb) {
             tile_regs_acquire();
             sub_bcast_row_tile(in1_cb, in0_cb, i, in0_index, 0, SUB_EXP_GRANULARITY);
             for (uint32_t j = 0; j < dst_tiles; ++j) {
-                // sub_tiles_bcast_rows(in0_cb, in1_cb, in0_index, i, j);
-                // any_tiles_bcast<ELWSUB, BroadcastType::ROW>(in0_cb, in1_cb, in0_index, i, j);
                 negative_tile(j);
                 exp_tile<true, true>(j);
                 in0_index++;
@@ -218,6 +217,114 @@ void sub_exp_rows_transposed(uint32_t in1_cb, uint32_t reduce_cb) {
             PACK((llk_pack_reconfig_l1_acc(0)));
         }
     }
+    cb_pop_front(in0_cb, rows * cols);
+    cb_reserve_back(in0_cb, rows * cols);
+    cb_push_back(in0_cb, rows * cols);
+    cb_push_back(reduce_cb, rows);
+}
+
+template <uint32_t in0_cb, uint32_t rows, uint32_t cols, uint32_t scale_fp32, uint32_t threshold_fp32>
+void sub_exp_rows_transposed_pack_relu(uint32_t in1_cb, uint32_t reduce_cb) {
+    DeviceZoneScopedN("sub_exp_rows_transposed_pack_relu");
+    /**
+     * in0_cb: rows*cols tiles, where each tile is transposed
+     * in1_cb: rows tiles, where each tile contains one row
+     *
+     * first computes in0[i, j] - in1[i] for i = 0..rows, j = 0..cols where in1 row is broadcasted
+     * then computes exp(dst)
+     * then packs the result into in0_cb and packs with accumulation into reduce_cb
+     */
+
+    // binary_op_init_common(in0_cb, in1_cb, in0_cb);
+    sub_bcast_row_tile_init(SUB_EXP_GRANULARITY);
+
+    constexpr uint32_t negative_scale_fp32 = 0x80000000 | scale_fp32;
+    exp_tile_init<true, true, negative_scale_fp32>();
+
+    cb_wait_front(in0_cb, rows * cols);
+    cb_wait_front(in1_cb, rows);
+    cb_reserve_back(reduce_cb, rows);
+
+    constexpr uint32_t dst_tiles = SUB_EXP_GRANULARITY;
+    constexpr uint32_t granularity = cols >> LOG2_SUB_EXP_GRANULARITY;
+
+    /**
+     * SUB and PACK RELU to sanitize input to EXP
+     *
+     * Threshold must be passed as BF16. Since exp_tile fuses multiplication by `scale_fp32` into
+     * exp, I've calculated threshold as `threshold / scale_fp32`.
+     */
+    constexpr uint32_t threshold_bf16 = threshold_fp32 & 0xFFFF0000;
+    UNPACK(DPRINT << "threshold_bf16: " << threshold_bf16 << ENDL());
+    PACK(llk_pack_relu_config(threshold_bf16 | (uint32_t)ReluType::MAX_THRESHOLD_RELU));
+
+    uint32_t in0_index = 0;
+    uint32_t out_index = 0;
+    for (uint32_t i = 0; i < rows; ++i) {
+        for (uint32_t u = 0; u < granularity; u++) {
+            tile_regs_acquire();
+            sub_bcast_row_tile(in1_cb, in0_cb, i, in0_index, 0, SUB_EXP_GRANULARITY);
+            in0_index += dst_tiles;
+            tile_regs_commit();
+            tile_regs_wait();
+
+            for (uint32_t j = 0; j < dst_tiles; ++j) {
+                pack_tile<true>(j, in0_cb, out_index);
+                out_index++;
+            }
+            tile_regs_release();
+        }
+    }
+
+    // Need to synchronize unpacker and packer here
+    cb_pop_front(in0_cb, rows * cols);
+    copy_tile_to_dst_init_short(in0_cb);
+    cb_reserve_back(in0_cb, rows * cols);
+    cb_push_back(in0_cb, rows * cols);
+    cb_wait_front(in0_cb, rows * cols);
+
+    // Disable RELU
+    PACK(llk_pack_relu_config(ReluType::NO_RELU));
+
+    /**
+     * EXP on sanitized inputs
+     *
+     * In order to estimate performance, remove the SWAP macros from ckernel_sfpu_exp.h
+     */
+    in0_index = 0;
+    out_index = 0;
+    for (uint32_t i = 0; i < rows; ++i) {
+        for (uint32_t u = 0; u < granularity; u++) {
+            tile_regs_acquire();
+            for (uint32_t j = 0; j < dst_tiles; ++j) {
+                copy_tile(in0_cb, in0_index, j);
+                exp_tile<true, true>(j);
+                in0_index++;
+            }
+            tile_regs_commit();
+            PACK((llk_pack_reconfig_l1_acc(0)));
+            tile_regs_wait();
+
+            for (uint32_t j = 0; j < dst_tiles; ++j) {
+                pack_tile(j, in0_cb);
+            }
+            // While we have results in DST, take advantage of L1 accumulation
+            // to reduce row x cols tiles to rows x 1 tiles.
+            if (u > 0) {
+                // If on the same row, keep accumulating
+                PACK((llk_pack_reconfig_l1_acc(1)));
+            }
+            for (uint32_t j = 0; j < dst_tiles; ++j) {
+                pack_tile<true>(j, reduce_cb, i);
+                if (u == 0 && j == 0) {
+                    // If this was the first tile of a row, start accumulating
+                    PACK((llk_pack_reconfig_l1_acc(1)));
+                }
+            }
+            tile_regs_release();
+        }
+    }
+    PACK((llk_pack_reconfig_l1_acc(0)));
     cb_pop_front(in0_cb, rows * cols);
     cb_reserve_back(in0_cb, rows * cols);
     cb_push_back(in0_cb, rows * cols);

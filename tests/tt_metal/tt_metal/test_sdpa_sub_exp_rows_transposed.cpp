@@ -87,7 +87,12 @@ static float compare_mse(const std::vector<bfloat16>& result, const std::vector<
 }
 
 static bool test_sdpa_sub_exp_rows_transposed(
-    tt_metal::IDevice* device, uint32_t q_chunk_size, uint32_t k_chunk_size, uint32_t head_dim, bool fp32_dest_acc_en) {
+    tt_metal::IDevice* device,
+    uint32_t q_chunk_size,
+    uint32_t k_chunk_size,
+    uint32_t head_dim,
+    bool fp32_dest_acc_en,
+    bool use_pack_relu) {
     bool pass = true;
 
     auto slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
@@ -96,11 +101,12 @@ static bool test_sdpa_sub_exp_rows_transposed(
     log_info(
         LogTest,
         "Running sdpa_sub_exp_rows_transposed test with q_chunk_size: {}, k_chunk_size: {}, head_dim: {}, "
-        "fp32_dest_acc_en: {}",
+        "fp32_dest_acc_en: {}, use_pack_relu: {}",
         q_chunk_size,
         k_chunk_size,
         head_dim,
-        fp32_dest_acc_en);
+        fp32_dest_acc_en,
+        use_pack_relu);
 
     tt_metal::Program program = tt_metal::CreateProgram();
 
@@ -179,8 +185,23 @@ static bool test_sdpa_sub_exp_rows_transposed(
     } scale_union;
     scale_union.f = scale;
 
+    // If packer relu is used, the threshold is 88.5f / scale
+    float threshold = 88.5f / scale;
+    union {
+        float f;
+        uint32_t u;
+    } threshold_union;
+    threshold_union.f = threshold;
+
     std::vector<uint32_t> compute_kernel_args = {
-        cb_qk_im_id, cb_cur_max_id, cb_cur_sum_id, q_chunk_size, k_chunk_size, scale_union.u};
+        cb_qk_im_id,
+        cb_cur_max_id,
+        cb_cur_sum_id,
+        q_chunk_size,
+        k_chunk_size,
+        scale_union.u,
+        use_pack_relu,
+        threshold_union.u};
     std::map<std::string, std::string> compute_defines;
     compute_defines["SUB_EXP_GRANULARITY"] = std::to_string(sub_exp_granularity);
     compute_defines["LOG2_SUB_EXP_GRANULARITY"] = std::to_string(log2_sub_exp_granularity);
@@ -273,6 +294,8 @@ int main(int argc, char** argv) {
     int device_id = 0;
     tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
+    bool use_pack_relu = true;
+
     /**
      * Parameters to sweep over for correctness.
      */
@@ -296,16 +319,17 @@ int main(int argc, char** argv) {
                 for (uint32_t head_dim : head_dims) {
                     for (bool fp32_dest_acc_en : fp32_dest_acc_ens) {
                         bool this_passed = test_sdpa_sub_exp_rows_transposed(
-                            device, q_chunk_size, k_chunk_size, head_dim, fp32_dest_acc_en);
+                            device, q_chunk_size, k_chunk_size, head_dim, fp32_dest_acc_en, use_pack_relu);
                         if (!this_passed) {
                             log_error(
                                 LogTest,
                                 "Test Failed for q_chunk_size: {}, k_chunk_size: {}, head_dim: {}, fp32_dest_acc_en: "
-                                "{}",
+                                "{}, use_pack_relu: {}",
                                 q_chunk_size,
                                 k_chunk_size,
                                 head_dim,
-                                fp32_dest_acc_en);
+                                fp32_dest_acc_en,
+                                use_pack_relu);
                         }
                         pass &= this_passed;
                     }
