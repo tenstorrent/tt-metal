@@ -4,7 +4,6 @@
 
 import json
 import os
-import re
 
 import pytest
 import torch
@@ -22,10 +21,6 @@ SAVE_NEW_PERF_TARGETS = False
 TARGETS_JSON_FILENAME = (
     "models/demos/gemma3/tests/perf_targets/targets_test_perf_vision_cross_attention_transformer.json"
 )
-
-
-def strip_trailing_number(s: str) -> str:
-    return re.sub(r"\d+$", "", s)
 
 
 @pytest.mark.parametrize("device_params", [{"fabric_config": True, "l1_small_size": 24576}], indirect=True)
