@@ -7,6 +7,7 @@
 #include "llk_math_common_api.h"
 #include "llk_math_eltwise_unary_datacopy.h"
 #include "llk_math_fast_tilize.h"
+#include "api/debug/dprint.h"
 
 /*************************************************************************
  * LLK ELTWISE UNARY DATACOPY
@@ -21,6 +22,13 @@ inline void llk_math_eltwise_unary_datacopy(std::uint32_t dst_index, std::uint32
     LLK_ASSERT((dst_index < get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>()), "");
 
     const std::uint32_t operand_id = get_operand_id(operand);
+    DPRINT << "+A2Df: cpT " << static_cast<int>(type)
+           << " bcT " << static_cast<int>(src_b_bcast_type)
+           << " f32DstAcc " << static_cast<int>(is_fp32_dest_acc_en)
+           << " up2Dst " << static_cast<int>(unpack_to_dest)
+           << " sF " << static_cast<int>(unpack_src_format[operand_id])
+           << " dF " << static_cast<int>(unpack_dst_format[operand_id])
+           << ENDL();
     _llk_math_eltwise_unary_datacopy_<type, DST_SYNC_MODE, is_fp32_dest_acc_en, src_b_bcast_type, unpack_to_dest>(
         dst_index, unpack_src_format[operand_id], unpack_dst_format[operand_id]);
 }
@@ -57,6 +65,13 @@ inline void llk_math_eltwise_unary_datacopy_init(const std::uint32_t operand) {
     const std::uint32_t operand_id = get_operand_id(operand);
     const std::uint32_t num_faces = get_operand_num_faces(operand_id);
     const std::uint32_t dst_format = get_operand_dst_format(operand_id);
+    DPRINT << "+A2Di: cpT " << static_cast<int>(type)
+           << " bcT " << static_cast<int>(src_b_bcast_type)
+           << " f32DstAcc " << static_cast<int>(is_fp32_dest_acc_en)
+           << " iFpu " << static_cast<int>(is_int_fpu_en)
+           << " dF " << static_cast<int>(dst_format)
+           << " nf " << static_cast<int>(num_faces)
+           << ENDL();
     _llk_math_eltwise_unary_datacopy_init_<type, is_fp32_dest_acc_en, src_b_bcast_type, is_int_fpu_en>(
         num_faces, dst_format);
 }
