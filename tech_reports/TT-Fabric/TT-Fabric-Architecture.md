@@ -90,7 +90,7 @@ For questions and comments please use the [TT-Metalium Scale-Out Discord Server]
 
 [7.4. Limitations](#limits)
 
-[8. TT-Fabric Roadmap](#roadmap) 
+[8. TT-Fabric Roadmap](#roadmap)
 
 [8.1. Time To Live (TTL)](#ttl)
 
@@ -253,7 +253,7 @@ User workload on data plane encounters a temporary pause in activity. If TT-Fabr
 
 TT-Fabric allows a maximum scale out to 250,000 devices. Devices are connected in groups of meshes and we support upto 1024 meshes of 256 devices each.
 
-A mesh is a fully and uniformaly connected grid of chips. Uniform connectivity means that all devices in the mesh have the same number of ethernet connections to all of their neighbors. 
+A mesh is a fully and uniformaly connected grid of chips. Uniform connectivity means that all devices in the mesh have the same number of ethernet connections to all of their neighbors.
 
 Inter-Mesh connectivity is provided through subset of devices called exit nodes. A mesh may be connected to multiple neighboring meshes in which case there are exit nodes providing routes to different neighboring meshes.
 
@@ -288,9 +288,52 @@ L0 routing table example:
 
 ##### 2.2.1.1.1 L0 Routing Table Setup <a id="intramesh_setup"></a>
 
-The following figure shows a 4 mesh cluster. Each mesh has 9 devices. Each device shows which of its ethernet ports are connected to its neighbor.
+The following figure shows a 4 mesh cluster. Each mesh has 9 devices. Each device shows which of its nodes are connected to its neighbor.
 
-![](images/image009.png)
+```
+                   Mesh 0                                                 Mesh 1
+┌──────┬──────┬──────┬──────┬──────┬──────┐            ┌──────┬──────┬──────┬──────┬──────┬──────┐
+│      █      │      █      │      █      │            │      █      │      █      │      █      │
+│   0  N      │   1  N      │   2  N      │            │   0  N      │   1  N      │   2  N      │
+├█W         E█┼█W         E█┼█W         E█┤            ├█W         E█┼█W         E█┼█W         E█┤
+│      S      │      S      │      S      │            │      S      │      S      │      S      │
+│      █      │      █      │      █      │            │      █      │      █      │      █      │
+├──────┼──────┼──────┼──────┼──────┼──────┤            ├──────┼──────┼──────┼──────┼──────┼──────┤
+│      █      │      █      │      █      │            │      █      │      █      │      █      │
+│   3  N      │   4  N      │   5  N      │            │   3  N      │   4  N      │   5  N      │
+├█W         E█┼█W         E█┼█W         E█┼◀══════════▶┼█W         E█┼█W         E█┼█W         E█┤
+│      S      │      S      │      S      │            │      S      │      S      │      S      │
+│      █      │      █      │      █      │            │      █      │      █      │      █      │
+├──────┼──────┼──────┼──────┼──────┼──────┤            ├──────┼──────┼──────┼──────┼──────┼──────┤
+│      █      │      █      │      █      │            │      █      │      █      │      █      │
+│   6  N      │   7  N      │   8  N      │            │   6  N      │   7  N      │   8  N      │
+├█W         E█┼█W         E█┼█W         E█┤            ├█W         E█┼█W         E█┼█W         E█┤
+│      S      │      S      │      S      │            │      S      │      S      │      S      │
+│      █      │      █      │      █      │            │      █      │      █      │      █      │
+└──────┼──────┴──────┴──────┴──────┼──────┘            └──────┴──────┴──────┴──────┴──────┼──────┘
+       ▲                           ▲                                                      ▲
+       ║                           ║                                                      ║
+       ▼           Mesh 2          ▼                                      Mesh 3          ▼
+┌──────┼──────┬──────┬──────┬──────┼──────┐            ┌──────┬──────┬──────┬──────┬──────┼──────┐
+│      █      │      █      │      █      │            │      █      │      █      │      █      │
+│   0  N      │   1  N      │   2  N      │            │   0  N      │   1  N      │   2  N      │
+├█W         E█┼█W         E█┼█W         E█┤            ├█W         E█┼█W         E█┼█W         E█┤
+│      S      │      S      │      S      │            │      S      │      S      │      S      │
+│      █      │      █      │      █      │            │      █      │      █      │      █      │
+├──────┼──────┼──────┼──────┼──────┼──────┤            ├──────┼──────┼──────┼──────┼──────┼──────┤
+│      █      │      █      │      █      │            │      █      │      █      │      █      │
+│   3  N      │   4  N      │   5  N      │            │   3  N      │   4  N      │   5  N      │
+├█W         E█┼█W         E█┼█W         E█┤            ├█W         E█┼█W         E█┼█W         E█┤
+│      S      │      S      │      S      │            │      S      │      S      │      S      │
+│      █      │      █      │      █      │            │      █      │      █      │      █      │
+├──────┼──────┼──────┼──────┼──────┼──────┤            ├──────┼──────┼──────┼──────┼──────┼──────┤
+│      █      │      █      │      █      │            │      █      │      █      │      █      │
+│   6  N      │   7  N      │   8  N      │            │   6  N      │   7  N      │   8  N      │
+├█W         E█┼█W         E█┼█W         E█┼◀══════════▶┼█W         E█┼█W         E█┼█W         E█┤
+│      S      │      S      │      S      │            │      S      │      S      │      S      │
+│      █      │      █      │      █      │            │      █      │      █      │      █      │
+└──────┴──────┴──────┴──────┴──────┴──────┘            └──────┴──────┴──────┴──────┴──────┴──────┘
+```
 
 The intra-mesh routing table for devices on Mesh 0 is shown below. Each row labeled 0 to 8 in Source Device group is the L0 routing table for the respective device on Mesh 0. This routing table is set up with dimension ordered routing. Packets go X dimension first then Y.
 
@@ -329,13 +372,50 @@ L1 routing table example:
 
 ##### 2.2.1.2.1 L1 Routing Table Setup <a id="intermesh_setup"></a>
 
-For the same 4 Mesh cluster mentioned in previous section, L1 routing table for devices on each of the 4 meshes is shown in the following figure. Each row labeled 0 to 8 is L1 routing table for respective device in respective source mesh. Colored boxes identify the Exit nodes on each Mesh. To identify Mesh x Device x (Ethernet) Port x we can use a notation of MxDxPx.
+For the same 4 Mesh cluster mentioned in previous section, L1 routing table for devices on each of the 4 meshes is shown in the following table. Each row labeled 0 to 8 is L1 routing table for respective device in respective source mesh.
 
-From the 4-mesh topology presented earlier, we can see that M0D5 is an exit node and M0D5P2 is M0 to M1 ethernet link. Similarly, M1D3 is an exit node and M1D3P4 is M1 to M0 ethernet link. In the table below, these two ports are highlighted green to identify the route between M0 and M1. Any packet in M0 that has to be routed to M1 will be funneled towards M0D5. Similarly, any packet in M1 that has to be routed to M0 will be funneled towards M1D3.
+| Src Mesh | Node | Mesh0 | Mesh1 | Mesh2 | Mesh3 |
+| -------- | ---- | ----- | ----- | ----- | ----- |
+| 0        | 0    | -     | 5     | 6     | 5     |
+| 0        | 1    | -     | 5     | 6     | 5     |
+| 0        | 2    | -     | 5     | 8     | 5     |
+| 0        | 3    | -     | 5     | 6     | 5     |
+| 0        | 4    | -     | 5     | 6     | 5     |
+| 0        | 5    | -     | 5     | 8     | 5     |
+| 0        | 6    | -     | 5     | 6     | 5     |
+| 0        | 7    | -     | 5     | 6     | 5     |
+| 0        | 8    | -     | 5     | 8     | 5     |
+| 1        | 0    | 3     | -     | 3     | 8     |
+| 1        | 1    | 3     | -     | 3     | 8     |
+| 1        | 2    | 3     | -     | 3     | 8     |
+| 1        | 3    | 3     | -     | 3     | 8     |
+| 1        | 4    | 3     | -     | 3     | 8     |
+| 1        | 5    | 3     | -     | 3     | 8     |
+| 1        | 6    | 3     | -     | 3     | 8     |
+| 1        | 7    | 3     | -     | 3     | 8     |
+| 1        | 8    | 3     | -     | 3     | 8     |
+| 2        | 0    | 0     | 0     | -     | 8     |
+| 2        | 1    | 0     | 0     | -     | 8     |
+| 2        | 2    | 2     | 2     | -     | 8     |
+| 2        | 3    | 0     | 0     | -     | 8     |
+| 2        | 4    | 0     | 0     | -     | 8     |
+| 2        | 5    | 2     | 2     | -     | 8     |
+| 2        | 6    | 0     | 0     | -     | 8     |
+| 2        | 7    | 0     | 0     | -     | 8     |
+| 2        | 8    | 2     | 2     | -     | 8     |
+| 3        | 0    | 2     | 2     | 2     | -     |
+| 3        | 1    | 2     | 2     | 2     | -     |
+| 3        | 2    | 2     | 2     | 2     | -     |
+| 3        | 3    | 2     | 2     | 2     | -     |
+| 3        | 4    | 2     | 2     | 2     | -     |
+| 3        | 5    | 2     | 2     | 2     | -     |
+| 3        | 6    | 2     | 2     | 2     | -     |
+| 3        | 7    | 2     | 2     | 2     | -     |
+| 3        | 8    | 2     | 2     | 2     | -     |
 
-There is no direct route between M0, M3 or M1, M2. Traffic from M0 to M3 will traverse either M1 or M2 on its way to M3. Which intermediate meshes are traversed depends on how we program L2 routing tables in the fabric routers. Fabric routers do not have any built-in bias towards picking paths.
 
-![](images/image011.png)
+There is no direct route between M0, M3 or M1, M2. Traffic from M0 to M3 will traverse either M1 or M2 on its way to M3. Control plane uses directed acyclic graph routing to make sure there are no cycles when routing traffic between meshes that do not have direct connections.
+
 
 ### 2.2.2 Routing Planes <a id="routing_planes"></a>
 
@@ -683,7 +763,7 @@ current device. Packes in the receiver channel on each router can either be writ
 #### 3.1.1.2 Dataflow between two fabric routers over NOC <a id="nocflow"></a>
 The following diagram shows data flow between two fabric routers over NOC representing an intra-device fabric hop. Sender Channel 0 is used by local worker on a device to send data. Sender Channel 1 is used for pass through tarffic that is hopping through
 current device. Packes in the receiver channel on each router can either be written to local device or forwarded to next fabric router if meant for another device. In case of an mcast packet, data is both forwarded as well as consumed locally.
-The fabric router that a worker connects to depends on the target fabric node that the worker is sending data to. 
+The fabric router that a worker connects to depends on the target fabric node that the worker is sending data to.
 ```
                                                                           ┌──────────────────┐
                                                                           │   Local Worker   │
@@ -777,7 +857,7 @@ NoC operations are **packetized**, **transported** to the target chip, and **exe
 
 ## Fabric Node Model
 
-Each chip in the system functions as a **Fabric Node**, identified by a `FabricNodeId` composed of a `{MeshId, ChipId}` pair.  
+Each chip in the system functions as a **Fabric Node**, identified by a `FabricNodeId` composed of a `{MeshId, ChipId}` pair.
 
 A destination address for any transaction includes:
 - The **FabricNodeId** (MeshId + ChipId)
@@ -789,7 +869,7 @@ This addressing model enables precise targeting of destinations within and acros
 
 ## Fabric APIs and Topologies
 
-TT-Fabric provides a **consistent set of APIs** for inter-node communication, independent of the number of chips in the system.  
+TT-Fabric provides a **consistent set of APIs** for inter-node communication, independent of the number of chips in the system.
 
 Fabric packets define both **fabric-level** and **NoC-level** behaviors, enabling a flexible and scalable communication model across different interconnect topologies. The **device APIs** that expose these capabilities are topology-specific and can be found under:
 
@@ -799,7 +879,7 @@ Fabric packets define both **fabric-level** and **NoC-level** behaviors, enablin
 - `tt_metal/fabric/hw/inc/linear/api.h`
 - `tt_metal/fabric/hw/inc/mesh/api.h`
 
-These APIs represent **logical topologies** — software abstractions of the underlying hardware fabric. While each topology may include its own optimizations, there is a high degree of **cross-compatibility** between them.  
+These APIs represent **logical topologies** — software abstractions of the underlying hardware fabric. While each topology may include its own optimizations, there is a high degree of **cross-compatibility** between them.
 
 For example, **collective communication libraries (CCLs)** written using **1D (linear)** fabric APIs can be built and executed seamlessly on a **2D (mesh)** fabric topology without code changes.
 
@@ -839,10 +919,10 @@ The following diagram illustrates such a deadlock scenario:
 
 ![Cyclic Dependency Deadlock](images/image017.png)
 *Four devices (D1–D4) form a cyclic traffic pattern:*
-- D1 → D4  
-- D2 → D3  
-- D3 → D2  
-- D4 → D1  
+- D1 → D4
+- D2 → D3
+- D3 → D2
+- D4 → D1
 
 Traffic originating from D1, D2, D3, and D4 is shown in yellow, blue, gray, and orange segments respectively. After the first hop, route segments turn **red**, indicating that packets **cannot turn in the desired direction** because the outgoing router’s buffer is **exhausted** with locally generated traffic. Each device’s traffic is **stuck waiting** for the next hop, creating a deadlock.
 
@@ -853,8 +933,8 @@ Traffic originating from D1, D2, D3, and D4 is shown in yellow, blue, gray, and 
 The following diagram shows deadlock-free routing using dimension-ordered rules:
 
 ![Dimension-Ordered Routing Avoids Deadlock](images/image018.png)
-- Packets from D1 → D4 and D4 → D1 follow their original routes.  
-- Packets from D2 → D3 and D3 → D2 are rerouted in the **X direction first**, avoiding the cycle.  
+- Packets from D1 → D4 and D4 → D1 follow their original routes.
+- Packets from D2 → D3 and D3 → D2 are rerouted in the **X direction first**, avoiding the cycle.
 
 TT-Fabric is not limited to one routing scheme. Since **routing tables are fully instantiated**, any reasonable routing policy can be mapped to fabric routers.
 
@@ -904,23 +984,23 @@ With a TTL of 10 the packet hops are shown in the table below. As the packet loo
 
 ## 8.2 Timeout <a id="timeout"></a>
 
-Timeouts serve as TT-Fabric’s **last line of defense** against routing deadlocks.  
+Timeouts serve as TT-Fabric’s **last line of defense** against routing deadlocks.
 Unlike the prevention and minimization schemes described in earlier sections, timeouts provide a **detection mechanism**.
 
-If a routing deadlock slips through preventive measures, TT-Fabric will detect it via timeout monitoring.  
-Specifically, if a **packet head** cannot make progress through a fabric router within the configured timeout interval, it indicates a potential deadlock condition.  
+If a routing deadlock slips through preventive measures, TT-Fabric will detect it via timeout monitoring.
+Specifically, if a **packet head** cannot make progress through a fabric router within the configured timeout interval, it indicates a potential deadlock condition.
 Possible causes include:
 
-- Resource contention  
-- Erroneous routing  
-- Stalled endpoints  
-- Other unexpected failures  
+- Resource contention
+- Erroneous routing
+- Stalled endpoints
+- Other unexpected failures
 
 When a routing timeout occurs, the fabric router takes corrective action:
 
-1. Drops the affected packet  
-2. Drains buffered data from the fabric  
-3. Notifies the **Control Plane** of the event  
+1. Drops the affected packet
+2. Drains buffered data from the fabric
+3. Notifies the **Control Plane** of the event
 
 1 and 2 are optional actions as it may be desirable, when debugging, to inspect the packets in router buffers to rootcause the erroneous behavior.
 
