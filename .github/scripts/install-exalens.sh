@@ -5,7 +5,7 @@
 
 set -e
 
-EXALENS_VERSION="0.1.251006+dev.cbeb1c1-cp310-cp310-linux_x86_64"
+EXALENS_VERSION="0.1.251010+dev.f143d34-cp310-cp310-linux_x86_64"
 EXALENS_TAG="${EXALENS_VERSION%%+*}"
 EXALENS_WHEEL="ttexalens-${EXALENS_VERSION}.whl"
 
