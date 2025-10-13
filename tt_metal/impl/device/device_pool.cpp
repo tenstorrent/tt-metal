@@ -597,7 +597,18 @@ void DevicePool::add_devices_to_pool(const std::vector<chip_id_t>& device_ids) {
     if (tt_fabric::is_tt_fabric_config(fabric_config)) {
         for (int i = 0; i < tt::tt_metal::MetalContext::instance().get_cluster().number_of_devices(); i++) {
             // Fabric currently requires all devices to be active
-            TT_FATAL(_inst->is_device_active(i), "Fabric is being used but Device {} is not active", i);
+            TT_FATAL(
+                _inst->is_device_active(i),
+                "Fabric is being used but Device {} is not active. "
+                "This may indicate that the fabric was launched on a subset of the devices available in the system, "
+                "which is currently not supported. "
+                "To launch on a subset of devices, first create a MeshDevice of the full system size, then create "
+                "submeshes accordingly.\n"
+                "For example, on a 6u system (8x4), if you wanted to run a 2x4 workload you could do:\n"
+                "ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)\n"
+                "mesh_device = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(4, 8))\n"
+                "submeshes = mesh_device.create_submeshes(ttnn.MeshShape(2,8))",
+                i);
         }
     }
 

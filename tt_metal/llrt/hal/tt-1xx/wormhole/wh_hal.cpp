@@ -6,6 +6,7 @@
 #include <enchantum/enchantum.hpp>
 #include <numeric>
 #include <string>
+#include <string_view>
 
 #include "dev_mem_map.h"  // MEM_LOCAL_BASE
 #include "hal_types.hpp"
@@ -166,45 +167,30 @@ public:
 
     std::string linker_script(const Params& params) const override {
         const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+        const std::string_view path = "runtime/hw/toolchain/wormhole";
+        std::string_view fork = params.is_fw ? "firmware" : "kernel";
         switch (params.core_type) {
             case HalProgrammableCoreType::TENSIX:
                 switch (params.processor_class) {
-                    case HalProcessorClassType::DM: {
-                        return fmt::format(
-                            "runtime/hw/toolchain/wormhole/{}_{}risc.ld",
-                            params.is_fw ? "firmware" : "kernel",
-                            params.processor_id == 0 ? "b" : "nc");
-                    }
+                    case HalProcessorClassType::DM:
+                        return fmt::format("{}/{}_{}risc.ld", path, fork, params.processor_id == 0 ? "b" : "nc");
                     case HalProcessorClassType::COMPUTE:
-                        return fmt::format(
-                            "runtime/hw/toolchain/wormhole/{}_trisc{}.ld",
-                            params.is_fw ? "firmware" : "kernel",
-                            params.processor_id);
+                        return fmt::format("{}/{}_trisc{}.ld", path, fork, params.processor_id);
                 }
                 break;
             case HalProgrammableCoreType::ACTIVE_ETH:
                 if (params.is_fw) {
-                    return rtoptions.get_erisc_iram_enabled() ? "runtime/hw/toolchain/wormhole/erisc-b0-app_iram.ld"
-                                                              : "runtime/hw/toolchain/wormhole/erisc-b0-app.ld";
-                } else {
-                    return rtoptions.get_erisc_iram_enabled() ? "runtime/hw/toolchain/wormhole/erisc-b0-kernel_iram.ld"
-                                                              : "runtime/hw/toolchain/wormhole/erisc-b0-kernel.ld";
+                    // Firmware is named 'app' in this case.
+                    fork = "app";
                 }
-                break;
+                return fmt::format(
+                    "{}/erisc-b0-{}{}.ld", path, fork, rtoptions.get_erisc_iram_enabled() ? "_iram" : "");
             case HalProgrammableCoreType::IDLE_ETH:
-                switch (params.processor_id) {
-                    case 0:
-                        return params.is_fw ? "runtime/hw/toolchain/wormhole/firmware_ierisc.ld"
-                                            : "runtime/hw/toolchain/wormhole/kernel_ierisc.ld";
-                    case 1:
-                        return params.is_fw ? "runtime/hw/toolchain/wormhole/firmware_subordinate_ierisc.ld"
-                                            : "runtime/hw/toolchain/wormhole/kernel_subordinate_ierisc.ld";
-                    default: TT_THROW("Invalid processor id {}", params.processor_id);
+                if (params.processor_id < 2) {
+                    return fmt::format("{}/{}_{}ierisc.ld", path, fork, params.processor_id ? "subordinate_" : "");
                 }
                 break;
-            default:
-                TT_THROW(
-                    "Unsupported programmable core type {} to query lflags", enchantum::to_string(params.core_type));
+            default: break;
         }
         TT_THROW(
             "Invalid processor id {} of processor class {} in programmable core type {}",

@@ -23,6 +23,8 @@ on:
           - P150
           - config-t3000
           - config-tg
+          - topology-6u
+          - config-t3000
         description: "Runner Type Label"
       good-commit:
         required: true
@@ -37,7 +39,11 @@ on:
         required: true
         type: string
         description: "Timeout for one iteration (eg: 5m, 1h)"
-
+      retries:
+        required: false
+        type: string
+        default: "3"
+        description: "Number of retries (default 3)"
 run-name: "Bisect on ${{ inputs.runner-label }}"
 jobs:
   test-dispatch:
@@ -69,7 +75,7 @@ jobs:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
         - /home/ubuntu/.ccache-ci:/github/home/.ccache # HOME is hardcoded for no clear reason: https://github.com/actions/runner/issues/863
-        - /mnt/MLPerf/ccache:/mnt/MLPerf/ccache
+        - /mnt/MLPerf:/mnt/MLPerf:ro
       options: >
         --device /dev/tenstorrent
         --group-add 1457
@@ -94,7 +100,7 @@ jobs:
           echo "CCACHE_REMOTE_STORAGE: ${CCACHE_REMOTE_STORAGE}"
 
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@6b36ef848f5f66ba0ae6f883ff69b09692e48ce9
         timeout-minutes: 10
         with:
           fetch-depth: 0
@@ -106,4 +112,4 @@ jobs:
           GIT_COMMITTER_NAME: "GitHub Actions"
           GIT_COMMITTER_EMAIL: "actions@github.com"
         run: |
-          ./tests/scripts/tt_bisect.sh -t ${{ inputs.timeout }} -f "${{ inputs.command }}" -b ${{ inputs.bad-commit }} -g ${{ inputs.good-commit }} -p ${{ inputs.tracy }}
+          ./tests/scripts/tt_bisect.sh -t ${{ inputs.timeout }} -f "${{ inputs.command }}" -b ${{ inputs.bad-commit }} -g ${{ inputs.good-commit }} ${{ inputs.tracy == 'true' && '-p' || '' }} -r ${{ inputs.retries }}

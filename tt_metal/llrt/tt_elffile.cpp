@@ -638,14 +638,14 @@ void ElfFile::Impl::XIPify() {
                 } break;
 
                 case R_RISCV_JAL:
-                    if (is_from_text != is_to_text) {
-                        TT_THROW("{}: segment-crossing R_RISCV_JAL relocation found at {}", path_, reloc.r_offset);
-                    }
-                    break;
-
                 case R_RISCV_CALL:
                 case R_RISCV_CALL_PLT:
-                    TT_THROW("{}: R_RISCV_CALL_PLT relocation found at {}", path_, reloc.r_offset);
+                    if (is_from_text != is_to_text) {
+                        TT_THROW(
+                            "{}: segment-crossing R_RISCV_(JAL|CALL|CALL_PLT) relocation found at {}",
+                            path_,
+                            reloc.r_offset);
+                    }
                     break;
 
                 case R_RISCV_32_PCREL:
