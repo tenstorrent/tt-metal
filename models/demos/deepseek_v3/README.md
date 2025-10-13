@@ -93,8 +93,31 @@ The demo entrypoint `models/demos/deepseek_v3/demo/demo.py` supports:
 - `--token-accuracy`: Enable teacher‑forcing decode and report accuracy (requires full‑model mode + tokenizer).
 - `--reference-file PATH`: Path to `.pt/.refpt` reference file (see below).
 - `--tf-prompt-len N`: Override the teacher‑forcing prompt length in tokens (taken from the reference file). Defaults to half+1 if omitted.
+- `--early_print_first_user`: Stream generated tokens for the first prompt as they are produced instead of printing only at the end.
 
-When not using `--random-weights`, pass a prompt as the first argument or via the `prompt` parameter when calling programmatically.
+When not using `--random-weights`, provide at least one prompt as the first positional argument (or pass a list via the `prompts` parameter when calling programmatically). In `--random-weights` mode, prompts are optional—the demo will synthesize an empty placeholder if none are supplied.
+
+Example programmatic usage:
+
+```python
+from models.demos.deepseek_v3.demo.demo import run_demo
+
+# Full-model generation (prompt required)
+run_demo(["Write a haiku about hardware"], model_path="/abs/path/to/deepseek-v3")
+
+# Random-weights smoke test (prompt optional)
+run_demo(None, random_weights=True)
+```
+
+Example CLI invocation (replace the placeholder paths with your environment):
+
+```bash
+python models/demos/deepseek_v3/demo/demo.py \
+  --model-path /abs/path/to/deepseek-v3 \
+  --cache-dir /abs/path/to/cache \
+  --early_print_first_user \
+  "Write a haiku about autumnal days by the sea"
+```
 
 ### Teacher Forcing Accuracy Verification
 
