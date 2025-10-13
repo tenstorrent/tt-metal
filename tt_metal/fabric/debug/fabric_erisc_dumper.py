@@ -276,6 +276,10 @@ class ERISCDumper:
             print("No devices found!")
             return results
 
+        # Track whether buffer column headers have been printed
+        buffer_headers_printed = False
+        current_buffer_address = None
+
         for device in devices:
             device_id = device._id
             results[device_id] = {}
@@ -288,20 +292,9 @@ class ERISCDumper:
                 print(f"Device {device_id}: No ethernet cores found")
                 continue
 
-            # Create coordinate strings for display
-            coord_strs = []
-            for core_coord in eth_cores:
-                coord_info = core_coord.to("logical")
-                if isinstance(coord_info, tuple) and len(coord_info) >= 2:
-                    if isinstance(coord_info[0], tuple) and len(coord_info[0]) == 2:
-                        core_x, core_y = coord_info[0]
-                        # Determine status - simplified for display
-                        status = "[active,not_reset]"  # We already filtered, so this is accurate
-                        coord_strs.append(f"({core_x},{core_y}){status}")
+            for core_idx, core_coord in enumerate(eth_cores):
+                is_last_core = core_idx == len(eth_cores) - 1
 
-            print(f"Device {device_id}: Found {len(eth_cores)} accessible ethernet core(s): {coord_strs}")
-
-            for core_coord in eth_cores:
                 # Extract (x, y) coordinates for the key and display
                 coord_info = core_coord.to("logical")
                 if isinstance(coord_info, tuple) and len(coord_info) >= 2:
@@ -324,7 +317,24 @@ class ERISCDumper:
                         results[device_id][core_key][f"0x{address:08x}"] = slots
 
                         if slots is not None:
-                            self.print_buffer(device_id, core_x, core_y, address, slots, data_per_slot, use_decimal)
+                            # Check if we need to print a new buffer address header
+                            print_buffer_address = current_buffer_address != address
+                            if print_buffer_address:
+                                current_buffer_address = address
+
+                            self.print_buffer(
+                                device_id,
+                                core_x,
+                                core_y,
+                                address,
+                                slots,
+                                data_per_slot,
+                                use_decimal,
+                                buffer_headers_printed,
+                                print_buffer_address,
+                                is_last_core,
+                            )
+                            buffer_headers_printed = True  # Mark headers as printed after first buffer
                         else:
                             print(f"  Dev{device_id} Core({core_x},{core_y}): Buffer 0x{address:08x}: <read failed>")
                 else:
@@ -342,6 +352,10 @@ class ERISCDumper:
                         else:
                             core_label = f"Dev{device_id} Core({core_x},{core_y}):"
                             print(f"  {core_label:<17s} 0x{address:08x}: <read failed>")
+
+            # Print separator after each device (except for buffer mode which handles it separately)
+            if not buffer_mode and is_last_core:
+                print("-" * 80)
 
         return results
 
@@ -641,8 +655,12 @@ class ERISCDumper:
         header_line = " " * 19 + "  ".join(f"{h:>10s}" for h in headers)
         print(header_line)
 
-        # Print data rows
-        for device_id, device_data in results.items():
+        # Print data rows with device separators
+        device_ids = list(results.keys())
+        for dev_idx, device_id in enumerate(device_ids):
+            device_data = results[device_id]
+            is_last_device = dev_idx == len(device_ids) - 1
+
             for core_key, core_data in device_data.items():
                 # Parse core coordinates from core_key
                 core_x, core_y = parse_core_key(core_key)
@@ -665,6 +683,15 @@ class ERISCDumper:
 
                 row = f"{row_label:<19s}" + "  ".join(f"{v:>10s}" for v in values)
                 print(row)
+
+            # Print separator after each device (except the last one)
+            if not is_last_device:
+                # Calculate line width: label (19) + data columns (10 chars each) + separators (2 spaces each)
+                num_streams = len(group["stream_ids"])
+                # Format: "Label (19)" + "Value1 (10)" + "  " + "Value2 (10)" + "  " + ...
+                # = Label + (num_streams * 10) + ((num_streams - 1) * 2)
+                total_width = 19 + num_streams * 10 + (num_streams - 1) * 2
+                print("-" * total_width)
 
     def read_buffer(
         self, device, coord: OnChipCoordinate, address: int, num_elements: int, slot_size: int, data_per_slot: int
@@ -737,25 +764,38 @@ class ERISCDumper:
         slots: List[List[int]],
         data_per_slot: int,
         use_decimal: bool = False,
+        headers_printed: bool = False,
+        print_buffer_address: bool = True,
+        is_last_core: bool = False,
     ):
-        """Print buffer data in vertical format with slots as columns."""
+        """Print buffer data in matrix format with slots as columns."""
         if not slots or not slots[0]:
-            print(f"  Dev{device_id} Core({core_x},{core_y}): Buffer 0x{address:08x}: <no data>")
+            print(f"Dev{device_id} Core({core_x},{core_y}) @ 0x{address:08x}: <no data>")
             return
 
         num_slots = len(slots)
         words_per_slot = len(slots[0])
 
-        # Print header
-        header = f"  Dev{device_id} Core({core_x},{core_y}): Buffer 0x{address:08x}: {num_slots} slots, {data_per_slot} bytes/slot"
-        print(header)
+        # Print buffer address header only when it changes
+        if print_buffer_address:
+            print(f"\nBuffer @ 0x{address:08x}:")
 
-        # Print column headers
-        slot_headers = [f"Slot{i}" for i in range(num_slots)]
-        header_line = "       " + "    ".join(f"{h:>10s}" for h in slot_headers)
-        print(header_line)
+        # Use fixed width for device/core label to handle varying coordinate sizes
+        # Max label is like "Dev99 Core(99,99):" = 21 chars, use 22 for safety
+        fixed_label_width = 22
 
-        # Print each word row
+        # Print column headers (slot numbers) only once
+        if not headers_printed:
+            slot_headers = [f"Slot{i}" for i in range(num_slots)]
+            # Align headers: account for fixed label width + spacing + index "[0] "
+            header_indent = fixed_label_width + 4 + 4  # label + spacing + "[0] "
+            header_line = " " * header_indent + "    ".join(f"{h:>10s}" for h in slot_headers)
+            print(f"{header_line}")
+
+        # Create device/core label with fixed width
+        device_core_label = f"Dev{device_id} Core({core_x},{core_y}):"
+
+        # Print each word as a row
         for word_idx in range(words_per_slot):
             word_values = []
             for slot_idx in range(num_slots):
@@ -766,9 +806,21 @@ class ERISCDumper:
                     zero_value = "         0" if use_decimal else "0x00000000"
                     word_values.append(zero_value)
 
-            row_line = f"Word{word_idx}: " + "    ".join(f"{val:>10s}" for val in word_values)
-            print(row_line)
-        print()  # Extra line for spacing
+            data_line = f"[{word_idx}] " + "    ".join(f"{val:>10s}" for val in word_values)
+
+            if word_idx == 0:
+                # First row: print on same line as device/core label with fixed width
+                print(f"\n{device_core_label:<{fixed_label_width}}    {data_line}")
+            else:
+                # Subsequent rows: align with first row's data
+                print(f"{' ' * (fixed_label_width + 4)}{data_line}")
+
+        # Print separator line only after the last core of each device
+        if is_last_core:
+            # Calculate total width: label + spacing + index + data
+            data_width = 4 + num_slots * 10 + (num_slots - 1) * 4  # "[0] " + values + separators
+            total_width = fixed_label_width + 4 + data_width
+            print("-" * total_width)
 
     def _print_delta_summary(
         self,
@@ -969,9 +1021,19 @@ def main():
     )
     fabric_group.add_argument(
         "--stream-group",
-        choices=["sender_free_slots", "receiver_free_slots", "all_fabric_free_slots"],
+        choices=[
+            # Buffer free slots (flow control) - default
+            "sender_free_slots",
+            "receiver_free_slots",
+            "all_fabric_free_slots",
+            # Ack/completion streams (remote buffer status)
+            "sender_acks",
+            "sender_completions",
+            "receiver_pkts_sent",
+            "all_acks_and_completions",
+        ],
         default="all_fabric_free_slots",
-        help="Fabric stream group to dump (default: all_fabric_free_slots)",
+        help="Fabric stream group to dump (default: all_fabric_free_slots). Note: ack/completion streams show REMOTE buffer status - low/zero values are normal when idle",
     )
 
     args = parser.parse_args()
@@ -1141,6 +1203,9 @@ def main():
                 print(json.dumps(output_data, indent=2))
     else:
         # Single snapshot mode
+        if args.buffer_mode:
+            print(f"\n=== BUFFER CONTENTS ===")
+
         results = dumper.dump_values(
             addresses=addresses,
             filter_active=filter_active,

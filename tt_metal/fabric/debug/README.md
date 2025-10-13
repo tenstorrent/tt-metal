@@ -43,15 +43,36 @@ python3 tt_metal/fabric/debug/fabric_erisc_dumper.py --buffer-mode --addresses 0
 
 # Monitor only sender channels with changes-only output
 python3 tt_metal/fabric/debug/fabric_erisc_dumper.py --fabric-streams --stream-group sender_free_slots --poll --changes-only
+
+# Monitor packet acknowledgments for sender channels
+python3 tt_metal/fabric/debug/fabric_erisc_dumper.py --fabric-streams --stream-group sender_acks --poll --duration 10
+
+# Monitor packet completions with decimal output
+python3 tt_metal/fabric/debug/fabric_erisc_dumper.py --fabric-streams --stream-group sender_completions --decimal
+
+# Monitor all acks and completions over time
+python3 tt_metal/fabric/debug/fabric_erisc_dumper.py --fabric-streams --stream-group all_acks_and_completions --poll --duration 30 --csv --output acks_completions.csv
 ```
 
 ### Fabric Stream Register Modes
 
-The tool provides specialized fabric stream register modes for flow control debugging:
+The tool provides specialized fabric stream register modes for different aspects of fabric debugging:
 
+#### Flow Control Debugging (Buffer Free Slots)
 - **`sender_free_slots`**: Monitor sender channel buffer space (streams 17-21)
 - **`receiver_free_slots`**: Monitor receiver channel buffer space (streams 12-16)
-- **`all_fabric_free_slots`**: Complete view of all fabric flow control registers
+- **`all_fabric_free_slots`**: Complete view of all fabric flow control registers (DEFAULT)
+
+**Interpretation:** HIGH values = good (buffers have space for more packets)
+
+#### Acknowledgment and Completion Stream Monitoring (Remote Buffer Status)
+- **`sender_acks`**: Monitor ack stream remote buffer status (streams 2-6)
+- **`sender_completions`**: Monitor completion stream remote buffer status (streams 7-11)
+- **`receiver_pkts_sent`**: Monitor packet sent stream remote buffer status (streams 0-1)
+- **`all_acks_and_completions`**: Combined view of all ack/completion streams (streams 2-11)
+
+**Interpretation:** LOW/ZERO values = good (remote side consuming acks/completions immediately)
+These streams send credits/acks to remote routers. The BUF_SPACE_AVAILABLE register shows buffer space at the remote destination. Zero means the remote side is processing immediately (expected when idle or running smoothly). **Increasing values may indicate the remote side is NOT consuming acks/completions**
 
 Example matrix output:
 ```
@@ -175,6 +196,43 @@ Build Hash: 1a6f17ff97 (100 binaries, 100 unique configs, avg: 8.9 KB)
 3. **Focus on specific channels**: Use `--stream-group` to narrow down problematic channels
 4. **Export for analysis**: Use `--csv` output for offline analysis and visualization
 5. **Check for blockages**: Look for zero or very low values in free slot registers
+
+### Debugging Packet Acknowledgments and Completions
+
+For debugging packet flow and ack/completion stream health:
+
+**IMPORTANT:** These streams show REMOTE buffer status. The interpretation is **opposite** to flow control streams:
+- **Zero/low values = GOOD** (remote side consuming acks/completions immediately)
+- **Increasing values = PROBLEM** (remote side not consuming, potential stall)
+
+1. **Monitor acks**: Use `--stream-group sender_acks` to track ack stream health
+   - These streams send acks to remote routers
+   - Zero values = remote router is processing acks immediately (healthy)
+   - Increasing values = remote router NOT consuming acks (problem)
+
+2. **Monitor completions**: Use `--stream-group sender_completions` to track completion stream health
+   - These streams send completions to remote routers
+   - Zero values = remote router is processing completions immediately (healthy)
+   - Increasing values = remote router NOT consuming completions (problem)
+
+3. **Compare with flow control**: Run side-by-side with `all_fabric_free_slots` to correlate
+   - Ack/completion streams building up + low free slots = backpressure propagating
+   - Ack/completion streams building up + normal free slots = remote processing issue
+
+4. **Use polling mode**: Essential for detecting accumulation over time
+   ```bash
+   python3 tt_metal/fabric/debug/fabric_erisc_dumper.py --fabric-streams --stream-group all_acks_and_completions --poll --decimal --duration 30
+   ```
+
+5. **Multi-host setups**: Remember to use `--include-idle` to see all ethernet cores
+   ```bash
+   python3 tt_metal/fabric/debug/fabric_erisc_dumper.py --fabric-streams --stream-group sender_acks --include-idle --poll
+   ```
+
+6. **What to look for during active traffic**:
+   - Ack/completion values should stay at zero or very low
+   - If values start increasing and don't go back to zero, the remote side has a problem
+   - Sustained high values indicate remote side is stalled or not processing
 
 ### Performance Tips
 
