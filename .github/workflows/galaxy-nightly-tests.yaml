@@ -1,4 +1,4 @@
-name: "Galaxy nightly tests"
+name: "(Galaxy) nightly tests"
 
 on:
   workflow_dispatch:
