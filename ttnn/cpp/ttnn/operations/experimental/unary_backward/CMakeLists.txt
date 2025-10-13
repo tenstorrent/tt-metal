@@ -4,6 +4,13 @@ add_library(TTNN::Ops::Experimental::UnaryBackward ALIAS ttnn_op_experimental_un
 target_precompile_headers(ttnn_op_experimental_unary_backward REUSE_FROM TT::CommonPCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_unary_backward)
 
+set_target_properties(
+    ttnn_op_experimental_unary_backward
+    PROPERTIES
+        INTERFACE_HEADER_SETS_TO_VERIFY
+            api
+)
+
 file(GLOB_RECURSE kernels gelu_backward/device/kernels/*)
 
 target_sources(
