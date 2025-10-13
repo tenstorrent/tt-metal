@@ -46,10 +46,18 @@ class ChannelSliceStrategyConfiguration(SliceStrategyConfiguration):
             raise ValueError(f"Channel slicing requires num_slices > 1")
 
 
+# If slicing is None, DRAM is assumed; Need explicit Strategy for L1
+@dataclass
+class L1FullSliceStrategyConfiguration(SliceStrategyConfiguration):
+    def get_slice_type(self):
+        return ttnn.Conv2dL1Full
+
+
 SliceStrategy = Union[
     HeightSliceStrategyConfiguration,
     WidthSliceStrategyConfiguration,
     ChannelSliceStrategyConfiguration,
+    L1FullSliceStrategyConfiguration,
 ]
 
 
