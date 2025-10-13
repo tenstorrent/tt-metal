@@ -32,6 +32,7 @@
 #include "tt_metal/hw/inc/utils/utils.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_txq_setup.h"
 #include "hostdevcommon/fabric_common.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 
 #include <array>
 #include <cstddef>
@@ -776,26 +777,28 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
                     transaction_id);
             }
             break;
-        case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_EW:
-            if constexpr (my_direction == WEST) {
-                constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, EAST>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, vc1_has_different_downstream_dest, false>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    get_downstream_interface.template operator()<edm_index>(),
-                    transaction_id);
-            } else {
-                constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, WEST>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, vc1_has_different_downstream_dest, false>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    get_downstream_interface.template operator()<edm_index>(),
-                    transaction_id);
-            }
-            execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
-            break;
+        // case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_EW:
+        //     if constexpr (my_direction == WEST) {
+        //         constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, EAST>();
+        //         forward_payload_to_downstream_edm<enable_deadlock_avoidance, vc1_has_different_downstream_dest,
+        //         false>(
+        //             packet_start,
+        //             payload_size_bytes,
+        //             cached_routing_fields,
+        //             get_downstream_interface.template operator()<edm_index>(),
+        //             transaction_id);
+        //     } else {
+        //         constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, WEST>();
+        //         forward_payload_to_downstream_edm<enable_deadlock_avoidance, vc1_has_different_downstream_dest,
+        //         false>(
+        //             packet_start,
+        //             payload_size_bytes,
+        //             cached_routing_fields,
+        //             get_downstream_interface.template operator()<edm_index>(),
+        //             transaction_id);
+        //     }
+        //     execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
+        //     break;
         case LowLatencyMeshRoutingFields::FORWARD_NORTH:
             if constexpr (my_direction == NORTH) {
                 execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
@@ -822,431 +825,433 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
                     transaction_id);
             }
             break;
-        case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NS:
-            if constexpr (my_direction == SOUTH) {
-                constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, NORTH>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, vc1_has_different_downstream_dest, false>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    get_downstream_interface.template operator()<edm_index>(),
-                    transaction_id);
-            } else {
-                constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, SOUTH>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, vc1_has_different_downstream_dest, false>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    get_downstream_interface.template operator()<edm_index>(),
-                    transaction_id);
-            }
-            execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
-            break;
-        case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NSEW:
-            if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
-                cached_routing_fields.value++;
-            }
-            if constexpr (my_direction == SOUTH) {
-                constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, NORTH>();
-                forward_payload_to_downstream_edm<
-                    enable_deadlock_avoidance,
-                    vc1_has_different_downstream_dest,
-                    false,
-                    !UPDATE_PKT_HDR_ON_RX_CH>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    get_downstream_interface.template operator()<edm_index>(),
-                    transaction_id);
-            } else {
-                constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, SOUTH>();
-                forward_payload_to_downstream_edm<
-                    enable_deadlock_avoidance,
-                    vc1_has_different_downstream_dest,
-                    false,
-                    !UPDATE_PKT_HDR_ON_RX_CH>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    get_downstream_interface.template operator()<edm_index>(),
-                    transaction_id);
-            }
-            if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
-                cached_routing_fields.hop_index = cached_routing_fields.branch_east_offset;
-            }
-            {
-                constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, EAST>();
-                forward_payload_to_downstream_edm<
-                    enable_deadlock_avoidance,
-                    vc1_has_different_downstream_dest,
-                    false,
-                    !UPDATE_PKT_HDR_ON_RX_CH>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    get_downstream_interface.template operator()<edm_index>(),
-                    transaction_id);
-            }
-            if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
-                cached_routing_fields.hop_index = cached_routing_fields.branch_west_offset;
-            }
-            {
-                constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, WEST>();
-                forward_payload_to_downstream_edm<
-                    enable_deadlock_avoidance,
-                    vc1_has_different_downstream_dest,
-                    false,
-                    !UPDATE_PKT_HDR_ON_RX_CH>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    get_downstream_interface.template operator()<edm_index>(),
-                    transaction_id);
-            }
-            execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
-            break;
-        case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NSE:
-            if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
-                cached_routing_fields.value++;
-            }
-            if constexpr (my_direction == SOUTH) {
-                constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, NORTH>();
-                forward_payload_to_downstream_edm<
-                    enable_deadlock_avoidance,
-                    vc1_has_different_downstream_dest,
-                    false,
-                    !UPDATE_PKT_HDR_ON_RX_CH>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    get_downstream_interface.template operator()<edm_index>(),
-                    transaction_id);
-            } else {
-                constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, SOUTH>();
-                forward_payload_to_downstream_edm<
-                    enable_deadlock_avoidance,
-                    vc1_has_different_downstream_dest,
-                    false,
-                    !UPDATE_PKT_HDR_ON_RX_CH>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    get_downstream_interface.template operator()<edm_index>(),
-                    transaction_id);
-            }
-            if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
-                cached_routing_fields.hop_index = cached_routing_fields.branch_east_offset;
-            }
-            {
-                constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, EAST>();
-                forward_payload_to_downstream_edm<
-                    enable_deadlock_avoidance,
-                    vc1_has_different_downstream_dest,
-                    false,
-                    !UPDATE_PKT_HDR_ON_RX_CH>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    get_downstream_interface.template operator()<edm_index>(),
-                    transaction_id);
-            }
-            execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
-            break;
-        case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NSW:
-            if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
-                cached_routing_fields.value++;
-            }
-            if constexpr (my_direction == SOUTH) {
-                constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, NORTH>();
-                forward_payload_to_downstream_edm<
-                    enable_deadlock_avoidance,
-                    vc1_has_different_downstream_dest,
-                    false,
-                    !UPDATE_PKT_HDR_ON_RX_CH>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    get_downstream_interface.template operator()<edm_index>(),
-                    transaction_id);
-            } else {
-                constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, SOUTH>();
-                forward_payload_to_downstream_edm<
-                    enable_deadlock_avoidance,
-                    vc1_has_different_downstream_dest,
-                    false,
-                    !UPDATE_PKT_HDR_ON_RX_CH>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    get_downstream_interface.template operator()<edm_index>(),
-                    transaction_id);
-            }
-            if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
-                cached_routing_fields.hop_index = cached_routing_fields.branch_west_offset;
-            }
-            {
-                constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, WEST>();
-                forward_payload_to_downstream_edm<
-                    enable_deadlock_avoidance,
-                    vc1_has_different_downstream_dest,
-                    false,
-                    !UPDATE_PKT_HDR_ON_RX_CH>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    get_downstream_interface.template operator()<edm_index>(),
-                    transaction_id);
-            }
-            execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
-            break;
-        case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NEW:
-            if constexpr (my_direction == SOUTH) {
-                if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
-                    cached_routing_fields.value++;
-                }
-                constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, NORTH>();
-                forward_payload_to_downstream_edm<
-                    enable_deadlock_avoidance,
-                    vc1_has_different_downstream_dest,
-                    false,
-                    !UPDATE_PKT_HDR_ON_RX_CH>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    get_downstream_interface.template operator()<edm_index>(),
-                    transaction_id);
-            } else {
-                execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
-            }
-            if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
-                cached_routing_fields.hop_index = cached_routing_fields.branch_east_offset;
-            }
-            {
-                constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, EAST>();
-                forward_payload_to_downstream_edm<
-                    enable_deadlock_avoidance,
-                    vc1_has_different_downstream_dest,
-                    false,
-                    !UPDATE_PKT_HDR_ON_RX_CH>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    get_downstream_interface.template operator()<edm_index>(),
-                    transaction_id);
-            }
-            if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
-                cached_routing_fields.hop_index = cached_routing_fields.branch_west_offset;
-            }
-            {
-                constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, WEST>();
-                forward_payload_to_downstream_edm<
-                    enable_deadlock_avoidance,
-                    vc1_has_different_downstream_dest,
-                    false,
-                    !UPDATE_PKT_HDR_ON_RX_CH>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    get_downstream_interface.template operator()<edm_index>(),
-                    transaction_id);
-            }
-            break;
-        case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_SEW:
-            if constexpr (my_direction == NORTH) {
-                if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
-                    cached_routing_fields.value++;
-                }
-                constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, SOUTH>();
-                forward_payload_to_downstream_edm<
-                    enable_deadlock_avoidance,
-                    vc1_has_different_downstream_dest,
-                    false,
-                    !UPDATE_PKT_HDR_ON_RX_CH>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    get_downstream_interface.template operator()<edm_index>(),
-                    transaction_id);
-            } else {
-                execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
-            }
-            if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
-                cached_routing_fields.hop_index = cached_routing_fields.branch_east_offset;
-            }
-            {
-                constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, EAST>();
-                forward_payload_to_downstream_edm<
-                    enable_deadlock_avoidance,
-                    vc1_has_different_downstream_dest,
-                    false,
-                    !UPDATE_PKT_HDR_ON_RX_CH>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    get_downstream_interface.template operator()<edm_index>(),
-                    transaction_id);
-            }
-            if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
-                cached_routing_fields.hop_index = cached_routing_fields.branch_west_offset;
-            }
-            {
-                constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, WEST>();
-                forward_payload_to_downstream_edm<
-                    enable_deadlock_avoidance,
-                    vc1_has_different_downstream_dest,
-                    false,
-                    !UPDATE_PKT_HDR_ON_RX_CH>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    get_downstream_interface.template operator()<edm_index>(),
-                    transaction_id);
-            }
-            break;
-        case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NE:
-            if constexpr (my_direction == SOUTH) {
-                if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
-                    cached_routing_fields.value++;
-                }
-                constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, NORTH>();
-                forward_payload_to_downstream_edm<
-                    enable_deadlock_avoidance,
-                    vc1_has_different_downstream_dest,
-                    false,
-                    !UPDATE_PKT_HDR_ON_RX_CH>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    get_downstream_interface.template operator()<edm_index>(),
-                    transaction_id);
-            } else {
-                execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
-            }
-            if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
-                cached_routing_fields.hop_index = cached_routing_fields.branch_east_offset;
-            }
-            {
-                constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, EAST>();
-                forward_payload_to_downstream_edm<
-                    enable_deadlock_avoidance,
-                    vc1_has_different_downstream_dest,
-                    false,
-                    !UPDATE_PKT_HDR_ON_RX_CH>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    get_downstream_interface.template operator()<edm_index>(),
-                    transaction_id);
-            }
-            break;
-        case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NW:
-            if constexpr (my_direction == SOUTH) {
-                if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
-                    cached_routing_fields.value++;
-                }
-                constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, NORTH>();
-                forward_payload_to_downstream_edm<
-                    enable_deadlock_avoidance,
-                    vc1_has_different_downstream_dest,
-                    false,
-                    !UPDATE_PKT_HDR_ON_RX_CH>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    get_downstream_interface.template operator()<edm_index>(),
-                    transaction_id);
-            } else {
-                execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
-            }
-            if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
-                cached_routing_fields.hop_index = cached_routing_fields.branch_west_offset;
-            }
-            {
-                constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, WEST>();
-                forward_payload_to_downstream_edm<
-                    enable_deadlock_avoidance,
-                    vc1_has_different_downstream_dest,
-                    false,
-                    !UPDATE_PKT_HDR_ON_RX_CH>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    get_downstream_interface.template operator()<edm_index>(),
-                    transaction_id);
-            }
-            break;
-        case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_SE:
-            if constexpr (my_direction == NORTH) {
-                if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
-                    cached_routing_fields.value++;
-                }
-                constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, SOUTH>();
-                forward_payload_to_downstream_edm<
-                    enable_deadlock_avoidance,
-                    vc1_has_different_downstream_dest,
-                    false,
-                    !UPDATE_PKT_HDR_ON_RX_CH>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    get_downstream_interface.template operator()<edm_index>(),
-                    transaction_id);
-            } else {
-                execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
-            }
-            if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
-                cached_routing_fields.hop_index = cached_routing_fields.branch_east_offset;
-            }
-            {
-                constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, EAST>();
-                forward_payload_to_downstream_edm<
-                    enable_deadlock_avoidance,
-                    vc1_has_different_downstream_dest,
-                    false,
-                    !UPDATE_PKT_HDR_ON_RX_CH>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    get_downstream_interface.template operator()<edm_index>(),
-                    transaction_id);
-            }
-            break;
-        case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_SW:
-            if constexpr (my_direction == NORTH) {
-                if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
-                    cached_routing_fields.value++;
-                }
-                constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, SOUTH>();
-                forward_payload_to_downstream_edm<
-                    enable_deadlock_avoidance,
-                    vc1_has_different_downstream_dest,
-                    false,
-                    !UPDATE_PKT_HDR_ON_RX_CH>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    get_downstream_interface.template operator()<edm_index>(),
-                    transaction_id);
-            } else {
-                execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
-            }
-            if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
-                cached_routing_fields.hop_index = cached_routing_fields.branch_west_offset;
-            }
-            {
-                constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, WEST>();
-                forward_payload_to_downstream_edm<
-                    enable_deadlock_avoidance,
-                    vc1_has_different_downstream_dest,
-                    false,
-                    !UPDATE_PKT_HDR_ON_RX_CH>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    get_downstream_interface.template operator()<edm_index>(),
-                    transaction_id);
-            }
-            break;
+        // case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NS:
+        //     if constexpr (my_direction == SOUTH) {
+        //         constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, NORTH>();
+        //         forward_payload_to_downstream_edm<enable_deadlock_avoidance, vc1_has_different_downstream_dest,
+        //         false>(
+        //             packet_start,
+        //             payload_size_bytes,
+        //             cached_routing_fields,
+        //             get_downstream_interface.template operator()<edm_index>(),
+        //             transaction_id);
+        //     } else {
+        //         constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, SOUTH>();
+        //         forward_payload_to_downstream_edm<enable_deadlock_avoidance, vc1_has_different_downstream_dest,
+        //         false>(
+        //             packet_start,
+        //             payload_size_bytes,
+        //             cached_routing_fields,
+        //             get_downstream_interface.template operator()<edm_index>(),
+        //             transaction_id);
+        //     }
+        //     execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
+        //     break;
+        // case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NSEW:
+        //     if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
+        //         cached_routing_fields.value++;
+        //     }
+        //     if constexpr (my_direction == SOUTH) {
+        //         constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, NORTH>();
+        //         forward_payload_to_downstream_edm<
+        //             enable_deadlock_avoidance,
+        //             vc1_has_different_downstream_dest,
+        //             false,
+        //             !UPDATE_PKT_HDR_ON_RX_CH>(
+        //             packet_start,
+        //             payload_size_bytes,
+        //             cached_routing_fields,
+        //             get_downstream_interface.template operator()<edm_index>(),
+        //             transaction_id);
+        //     } else {
+        //         constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, SOUTH>();
+        //         forward_payload_to_downstream_edm<
+        //             enable_deadlock_avoidance,
+        //             vc1_has_different_downstream_dest,
+        //             false,
+        //             !UPDATE_PKT_HDR_ON_RX_CH>(
+        //             packet_start,
+        //             payload_size_bytes,
+        //             cached_routing_fields,
+        //             get_downstream_interface.template operator()<edm_index>(),
+        //             transaction_id);
+        //     }
+        //     if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
+        //         cached_routing_fields.hop_index = cached_routing_fields.branch_east_offset;
+        //     }
+        //     {
+        //         constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, EAST>();
+        //         forward_payload_to_downstream_edm<
+        //             enable_deadlock_avoidance,
+        //             vc1_has_different_downstream_dest,
+        //             false,
+        //             !UPDATE_PKT_HDR_ON_RX_CH>(
+        //             packet_start,
+        //             payload_size_bytes,
+        //             cached_routing_fields,
+        //             get_downstream_interface.template operator()<edm_index>(),
+        //             transaction_id);
+        //     }
+        //     if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
+        //         cached_routing_fields.hop_index = cached_routing_fields.branch_west_offset;
+        //     }
+        //     {
+        //         constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, WEST>();
+        //         forward_payload_to_downstream_edm<
+        //             enable_deadlock_avoidance,
+        //             vc1_has_different_downstream_dest,
+        //             false,
+        //             !UPDATE_PKT_HDR_ON_RX_CH>(
+        //             packet_start,
+        //             payload_size_bytes,
+        //             cached_routing_fields,
+        //             get_downstream_interface.template operator()<edm_index>(),
+        //             transaction_id);
+        //     }
+        //     execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
+        //     break;
+        // case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NSE:
+        //     if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
+        //         cached_routing_fields.value++;
+        //     }
+        //     if constexpr (my_direction == SOUTH) {
+        //         constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, NORTH>();
+        //         forward_payload_to_downstream_edm<
+        //             enable_deadlock_avoidance,
+        //             vc1_has_different_downstream_dest,
+        //             false,
+        //             !UPDATE_PKT_HDR_ON_RX_CH>(
+        //             packet_start,
+        //             payload_size_bytes,
+        //             cached_routing_fields,
+        //             get_downstream_interface.template operator()<edm_index>(),
+        //             transaction_id);
+        //     } else {
+        //         constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, SOUTH>();
+        //         forward_payload_to_downstream_edm<
+        //             enable_deadlock_avoidance,
+        //             vc1_has_different_downstream_dest,
+        //             false,
+        //             !UPDATE_PKT_HDR_ON_RX_CH>(
+        //             packet_start,
+        //             payload_size_bytes,
+        //             cached_routing_fields,
+        //             get_downstream_interface.template operator()<edm_index>(),
+        //             transaction_id);
+        //     }
+        //     if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
+        //         cached_routing_fields.hop_index = cached_routing_fields.branch_east_offset;
+        //     }
+        //     {
+        //         constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, EAST>();
+        //         forward_payload_to_downstream_edm<
+        //             enable_deadlock_avoidance,
+        //             vc1_has_different_downstream_dest,
+        //             false,
+        //             !UPDATE_PKT_HDR_ON_RX_CH>(
+        //             packet_start,
+        //             payload_size_bytes,
+        //             cached_routing_fields,
+        //             get_downstream_interface.template operator()<edm_index>(),
+        //             transaction_id);
+        //     }
+        //     execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
+        //     break;
+        // case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NSW:
+        //     if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
+        //         cached_routing_fields.value++;
+        //     }
+        //     if constexpr (my_direction == SOUTH) {
+        //         constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, NORTH>();
+        //         forward_payload_to_downstream_edm<
+        //             enable_deadlock_avoidance,
+        //             vc1_has_different_downstream_dest,
+        //             false,
+        //             !UPDATE_PKT_HDR_ON_RX_CH>(
+        //             packet_start,
+        //             payload_size_bytes,
+        //             cached_routing_fields,
+        //             get_downstream_interface.template operator()<edm_index>(),
+        //             transaction_id);
+        //     } else {
+        //         constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, SOUTH>();
+        //         forward_payload_to_downstream_edm<
+        //             enable_deadlock_avoidance,
+        //             vc1_has_different_downstream_dest,
+        //             false,
+        //             !UPDATE_PKT_HDR_ON_RX_CH>(
+        //             packet_start,
+        //             payload_size_bytes,
+        //             cached_routing_fields,
+        //             get_downstream_interface.template operator()<edm_index>(),
+        //             transaction_id);
+        //     }
+        //     if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
+        //         cached_routing_fields.hop_index = cached_routing_fields.branch_west_offset;
+        //     }
+        //     {
+        //         constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, WEST>();
+        //         forward_payload_to_downstream_edm<
+        //             enable_deadlock_avoidance,
+        //             vc1_has_different_downstream_dest,
+        //             false,
+        //             !UPDATE_PKT_HDR_ON_RX_CH>(
+        //             packet_start,
+        //             payload_size_bytes,
+        //             cached_routing_fields,
+        //             get_downstream_interface.template operator()<edm_index>(),
+        //             transaction_id);
+        //     }
+        //     execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
+        //     break;
+        // case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NEW:
+        //     if constexpr (my_direction == SOUTH) {
+        //         if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
+        //             cached_routing_fields.value++;
+        //         }
+        //         constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, NORTH>();
+        //         forward_payload_to_downstream_edm<
+        //             enable_deadlock_avoidance,
+        //             vc1_has_different_downstream_dest,
+        //             false,
+        //             !UPDATE_PKT_HDR_ON_RX_CH>(
+        //             packet_start,
+        //             payload_size_bytes,
+        //             cached_routing_fields,
+        //             get_downstream_interface.template operator()<edm_index>(),
+        //             transaction_id);
+        //     } else {
+        //         execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
+        //     }
+        //     if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
+        //         cached_routing_fields.hop_index = cached_routing_fields.branch_east_offset;
+        //     }
+        //     {
+        //         constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, EAST>();
+        //         forward_payload_to_downstream_edm<
+        //             enable_deadlock_avoidance,
+        //             vc1_has_different_downstream_dest,
+        //             false,
+        //             !UPDATE_PKT_HDR_ON_RX_CH>(
+        //             packet_start,
+        //             payload_size_bytes,
+        //             cached_routing_fields,
+        //             get_downstream_interface.template operator()<edm_index>(),
+        //             transaction_id);
+        //     }
+        //     if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
+        //         cached_routing_fields.hop_index = cached_routing_fields.branch_west_offset;
+        //     }
+        //     {
+        //         constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, WEST>();
+        //         forward_payload_to_downstream_edm<
+        //             enable_deadlock_avoidance,
+        //             vc1_has_different_downstream_dest,
+        //             false,
+        //             !UPDATE_PKT_HDR_ON_RX_CH>(
+        //             packet_start,
+        //             payload_size_bytes,
+        //             cached_routing_fields,
+        //             get_downstream_interface.template operator()<edm_index>(),
+        //             transaction_id);
+        //     }
+        //     break;
+        // case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_SEW:
+        //     if constexpr (my_direction == NORTH) {
+        //         if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
+        //             cached_routing_fields.value++;
+        //         }
+        //         constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, SOUTH>();
+        //         forward_payload_to_downstream_edm<
+        //             enable_deadlock_avoidance,
+        //             vc1_has_different_downstream_dest,
+        //             false,
+        //             !UPDATE_PKT_HDR_ON_RX_CH>(
+        //             packet_start,
+        //             payload_size_bytes,
+        //             cached_routing_fields,
+        //             get_downstream_interface.template operator()<edm_index>(),
+        //             transaction_id);
+        //     } else {
+        //         execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
+        //     }
+        //     if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
+        //         cached_routing_fields.hop_index = cached_routing_fields.branch_east_offset;
+        //     }
+        //     {
+        //         constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, EAST>();
+        //         forward_payload_to_downstream_edm<
+        //             enable_deadlock_avoidance,
+        //             vc1_has_different_downstream_dest,
+        //             false,
+        //             !UPDATE_PKT_HDR_ON_RX_CH>(
+        //             packet_start,
+        //             payload_size_bytes,
+        //             cached_routing_fields,
+        //             get_downstream_interface.template operator()<edm_index>(),
+        //             transaction_id);
+        //     }
+        //     if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
+        //         cached_routing_fields.hop_index = cached_routing_fields.branch_west_offset;
+        //     }
+        //     {
+        //         constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, WEST>();
+        //         forward_payload_to_downstream_edm<
+        //             enable_deadlock_avoidance,
+        //             vc1_has_different_downstream_dest,
+        //             false,
+        //             !UPDATE_PKT_HDR_ON_RX_CH>(
+        //             packet_start,
+        //             payload_size_bytes,
+        //             cached_routing_fields,
+        //             get_downstream_interface.template operator()<edm_index>(),
+        //             transaction_id);
+        //     }
+        //     break;
+        // case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NE:
+        //     if constexpr (my_direction == SOUTH) {
+        //         if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
+        //             cached_routing_fields.value++;
+        //         }
+        //         constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, NORTH>();
+        //         forward_payload_to_downstream_edm<
+        //             enable_deadlock_avoidance,
+        //             vc1_has_different_downstream_dest,
+        //             false,
+        //             !UPDATE_PKT_HDR_ON_RX_CH>(
+        //             packet_start,
+        //             payload_size_bytes,
+        //             cached_routing_fields,
+        //             get_downstream_interface.template operator()<edm_index>(),
+        //             transaction_id);
+        //     } else {
+        //         execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
+        //     }
+        //     if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
+        //         cached_routing_fields.hop_index = cached_routing_fields.branch_east_offset;
+        //     }
+        //     {
+        //         constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, EAST>();
+        //         forward_payload_to_downstream_edm<
+        //             enable_deadlock_avoidance,
+        //             vc1_has_different_downstream_dest,
+        //             false,
+        //             !UPDATE_PKT_HDR_ON_RX_CH>(
+        //             packet_start,
+        //             payload_size_bytes,
+        //             cached_routing_fields,
+        //             get_downstream_interface.template operator()<edm_index>(),
+        //             transaction_id);
+        //     }
+        //     break;
+        // case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NW:
+        //     if constexpr (my_direction == SOUTH) {
+        //         if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
+        //             cached_routing_fields.value++;
+        //         }
+        //         constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, NORTH>();
+        //         forward_payload_to_downstream_edm<
+        //             enable_deadlock_avoidance,
+        //             vc1_has_different_downstream_dest,
+        //             false,
+        //             !UPDATE_PKT_HDR_ON_RX_CH>(
+        //             packet_start,
+        //             payload_size_bytes,
+        //             cached_routing_fields,
+        //             get_downstream_interface.template operator()<edm_index>(),
+        //             transaction_id);
+        //     } else {
+        //         execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
+        //     }
+        //     if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
+        //         cached_routing_fields.hop_index = cached_routing_fields.branch_west_offset;
+        //     }
+        //     {
+        //         constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, WEST>();
+        //         forward_payload_to_downstream_edm<
+        //             enable_deadlock_avoidance,
+        //             vc1_has_different_downstream_dest,
+        //             false,
+        //             !UPDATE_PKT_HDR_ON_RX_CH>(
+        //             packet_start,
+        //             payload_size_bytes,
+        //             cached_routing_fields,
+        //             get_downstream_interface.template operator()<edm_index>(),
+        //             transaction_id);
+        //     }
+        //     break;
+        // case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_SE:
+        //     if constexpr (my_direction == NORTH) {
+        //         if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
+        //             cached_routing_fields.value++;
+        //         }
+        //         constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, SOUTH>();
+        //         forward_payload_to_downstream_edm<
+        //             enable_deadlock_avoidance,
+        //             vc1_has_different_downstream_dest,
+        //             false,
+        //             !UPDATE_PKT_HDR_ON_RX_CH>(
+        //             packet_start,
+        //             payload_size_bytes,
+        //             cached_routing_fields,
+        //             get_downstream_interface.template operator()<edm_index>(),
+        //             transaction_id);
+        //     } else {
+        //         execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
+        //     }
+        //     if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
+        //         cached_routing_fields.hop_index = cached_routing_fields.branch_east_offset;
+        //     }
+        //     {
+        //         constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, EAST>();
+        //         forward_payload_to_downstream_edm<
+        //             enable_deadlock_avoidance,
+        //             vc1_has_different_downstream_dest,
+        //             false,
+        //             !UPDATE_PKT_HDR_ON_RX_CH>(
+        //             packet_start,
+        //             payload_size_bytes,
+        //             cached_routing_fields,
+        //             get_downstream_interface.template operator()<edm_index>(),
+        //             transaction_id);
+        //     }
+        //     break;
+        // case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_SW:
+        //     if constexpr (my_direction == NORTH) {
+        //         if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
+        //             cached_routing_fields.value++;
+        //         }
+        //         constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, SOUTH>();
+        //         forward_payload_to_downstream_edm<
+        //             enable_deadlock_avoidance,
+        //             vc1_has_different_downstream_dest,
+        //             false,
+        //             !UPDATE_PKT_HDR_ON_RX_CH>(
+        //             packet_start,
+        //             payload_size_bytes,
+        //             cached_routing_fields,
+        //             get_downstream_interface.template operator()<edm_index>(),
+        //             transaction_id);
+        //     } else {
+        //         execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
+        //     }
+        //     if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
+        //         cached_routing_fields.hop_index = cached_routing_fields.branch_west_offset;
+        //     }
+        //     {
+        //         constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, WEST>();
+        //         forward_payload_to_downstream_edm<
+        //             enable_deadlock_avoidance,
+        //             vc1_has_different_downstream_dest,
+        //             false,
+        //             !UPDATE_PKT_HDR_ON_RX_CH>(
+        //             packet_start,
+        //             payload_size_bytes,
+        //             cached_routing_fields,
+        //             get_downstream_interface.template operator()<edm_index>(),
+        //             transaction_id);
+        //     }
+        //     break;
         default: __builtin_unreachable();
     }
 }
@@ -1308,6 +1313,17 @@ void run_sender_channel_step_impl(
         if constexpr (!UPDATE_PKT_HDR_ON_RX_CH) {
             update_packet_header_before_eth_send<sender_channel_index>(pkt_header);
         }
+        // const auto* routing_table =
+        //     reinterpret_cast<tt_l1_ptr tt::tt_fabric::tensix_routing_l1_info_t*>(ROUTING_TABLE_BASE);
+        // uint32_t packed_debug_value =
+        //     ((uint32_t)((pkt_header->routing_fields.hop_index & 0xFF) | 0b00010000) << 24) |
+        //     ((uint32_t)(pkt_header->route_buffer[pkt_header->routing_fields.hop_index] & 0xFF) << 16) |
+        //     ((uint32_t)(routing_table->my_mesh_id & 0xF) << 12) |
+        //     ((uint32_t)(pkt_header->dst_start_mesh_id & 0xF) << 8) |
+        //     ((uint32_t)(routing_table->my_device_id & 0xF) << 4) |
+        //     ((uint32_t)(pkt_header->dst_start_chip_id & 0xF));
+        // WATCHER_RING_BUFFER_PUSH(packed_debug_value);
+
         send_next_data<sender_channel_index, to_receiver_pkts_sent_id, SKIP_CONNECTION_LIVENESS_CHECK>(
             local_sender_channel,
             local_sender_channel_worker_interface,
@@ -1395,6 +1411,24 @@ FORCE_INLINE void run_sender_channel_step(
     }
 }
 
+uint8_t direction_to_fwd_cmd(eth_chan_directions dir) {
+    switch (dir) {
+        case eth_chan_directions::EAST: return LowLatencyMeshRoutingFields::FORWARD_EAST;
+        case eth_chan_directions::WEST: return LowLatencyMeshRoutingFields::FORWARD_WEST;
+        case eth_chan_directions::NORTH: return LowLatencyMeshRoutingFields::FORWARD_NORTH;
+        case eth_chan_directions::SOUTH: return LowLatencyMeshRoutingFields::FORWARD_SOUTH;
+        default: ASSERT(false); return LowLatencyMeshRoutingFields::NOOP;
+    }
+}
+
+uint32_t recompute_path(PACKET_HEADER_TYPE* packet_header, ROUTING_FIELDS_TYPE& cached_routing_fields) {
+    fabric_set_unicast_route<true, static_cast<eth_chan_directions>(my_direction)>(
+        packet_header, packet_header->dst_start_chip_id, packet_header->dst_start_mesh_id);
+    cached_routing_fields.hop_index = 0;
+    packet_header->routing_fields.hop_index = 0;
+    return (uint32_t)packet_header->route_buffer[0];
+}
+
 template <
     uint8_t receiver_channel,
     uint8_t to_receiver_pkts_sent_id,
@@ -1453,6 +1487,71 @@ void run_receiver_channel_step_impl(
 #if defined(FABRIC_2D)
             // need this ifdef since the packet header for 1D does not have router_buffer field in it.
             hop_cmd = packet_header->route_buffer[cached_routing_fields.hop_index];
+
+            const auto* routing_table =
+                reinterpret_cast<tt_l1_ptr tt::tt_fabric::tensix_routing_l1_info_t*>(ROUTING_TABLE_BASE);
+
+            // Pack 6 values into 32-bit: hop_index(8) | hop_cmd(8) | my_mesh_id(4) | my_chip_id(4) |
+            // dst_start_mesh_id(4) | dst_start_chip_id(4) uint32_t packed_debug_value =
+            //     ((uint32_t)(cached_routing_fields.hop_index & 0xFF) << 24) |
+            //     ((uint32_t)(hop_cmd & 0xFF) << 16) |
+            //     ((uint32_t)(routing_table->my_mesh_id & 0xF) << 12) |
+            //     ((uint32_t)(packet_header->dst_start_mesh_id & 0xF) << 8) |
+            //     ((uint32_t)(routing_table->my_device_id & 0xF) << 4) |
+            //     ((uint32_t)(packet_header->dst_start_chip_id & 0xF));
+            // WATCHER_RING_BUFFER_PUSH(packed_debug_value);
+
+            if (packet_header->dst_start_mesh_id != routing_table->my_mesh_id) {
+                // if (hop_cmd == LowLatencyMeshRoutingFields::NOOP) {
+                // uint32_t packed_debug_value =
+                //     ((uint32_t)(cached_routing_fields.hop_index & 0xFF) << 24) |
+                //     ((uint32_t)(hop_cmd & 0xFF) << 16) |
+                //     ((uint32_t)(routing_table->my_mesh_id & 0xF) << 12) |
+                //     ((uint32_t)(packet_header->dst_start_mesh_id & 0xF) << 8) |
+                //     ((uint32_t)(routing_table->my_device_id & 0xF) << 4) |
+                //     ((uint32_t)(packet_header->dst_start_chip_id & 0xF));
+                // WATCHER_RING_BUFFER_PUSH(packed_debug_value);
+                // }
+                eth_chan_directions next_direction =
+                    get_next_hop_router_direction(packet_header->dst_start_mesh_id, packet_header->dst_start_chip_id);
+                // Arrive at exit node. Convert from local drain to forward to next mesh
+                if constexpr (my_direction == EAST) {
+                    if (hop_cmd == LowLatencyMeshRoutingFields::FORWARD_EAST) {
+                        hop_cmd = direction_to_fwd_cmd(next_direction);
+                    } else if (hop_cmd == LowLatencyMeshRoutingFields::NOOP) {
+                        // hop_cmd = recompute_path(packet_header, cached_routing_fields);
+                    }
+                } else if constexpr (my_direction == WEST) {
+                    if (hop_cmd == LowLatencyMeshRoutingFields::FORWARD_WEST) {
+                        hop_cmd = direction_to_fwd_cmd(next_direction);
+                    } else if (hop_cmd == LowLatencyMeshRoutingFields::NOOP) {
+                        // hop_cmd = recompute_path(packet_header, cached_routing_fields);
+                    }
+                } else if constexpr (my_direction == NORTH) {
+                    if (hop_cmd == LowLatencyMeshRoutingFields::FORWARD_NORTH) {
+                        hop_cmd = direction_to_fwd_cmd(next_direction);
+                    } else if (hop_cmd == LowLatencyMeshRoutingFields::NOOP) {
+                        // hop_cmd = recompute_path(packet_header, cached_routing_fields);
+                    }
+                } else if constexpr (my_direction == SOUTH) {
+                    if (hop_cmd == LowLatencyMeshRoutingFields::FORWARD_SOUTH) {
+                        hop_cmd = direction_to_fwd_cmd(next_direction);
+                    } else if (hop_cmd == LowLatencyMeshRoutingFields::NOOP) {
+                        // hop_cmd = recompute_path(packet_header, cached_routing_fields);
+                    }
+                } else {
+                    ASSERT(false);
+                }
+            } else {
+                // Arrive at target mesh if NOOP.
+                if (hop_cmd == LowLatencyMeshRoutingFields::NOOP) {
+                    // uint32_t* dbg = reinterpret_cast<uint32_t*>(perf_telemetry_buffer_addr);
+                    // dbg[0] = 0xDEADBEEF;
+                    // hop_cmd = recompute_path();
+                    hop_cmd = recompute_path(packet_header, cached_routing_fields);
+                }
+            }
+
             can_send_to_all_local_chip_receivers = can_forward_packet_completely<receiver_channel>(
                 hop_cmd, downstream_edm_interfaces_vc0, downstream_edm_interface_vc1);
 #endif
@@ -1475,10 +1574,7 @@ void run_receiver_channel_step_impl(
                 receiver_buffer_index);
             if constexpr (is_2d_fabric) {
 #if defined(FABRIC_2D)
-                receiver_forward_packet<
-                    receiver_channel,
-                    DOWNSTREAM_SENDER_NUM_BUFFERS_VC0,
-                    DOWNSTREAM_SENDER_NUM_BUFFERS_VC1>(
+                receiver_forward_packet<receiver_channel>(
                     packet_header,
                     cached_routing_fields,
                     downstream_edm_interfaces_vc0,

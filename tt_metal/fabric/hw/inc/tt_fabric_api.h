@@ -21,7 +21,7 @@ namespace tt::tt_fabric {
 
 inline eth_chan_directions get_next_hop_router_direction(uint32_t dst_mesh_id, uint32_t dst_dev_id) {
     tt_l1_ptr tensix_routing_l1_info_t* routing_table =
-        reinterpret_cast<tt_l1_ptr tensix_routing_l1_info_t*>(MEM_TENSIX_ROUTING_TABLE_BASE);
+        reinterpret_cast<tt_l1_ptr tensix_routing_l1_info_t*>(ROUTING_TABLE_BASE);
     if (dst_mesh_id == routing_table->my_mesh_id) {
         return static_cast<eth_chan_directions>(
             routing_table->intra_mesh_routing_table.get_original_direction(dst_dev_id));
@@ -159,13 +159,16 @@ uint8_t get_router_direction(uint32_t eth_channel) {
 }
 
 // Overload: Fill route_buffer of HybridMeshPacketHeader and initialize hop_index/branch offsets for 2D.
+template <bool called_from_router = false, eth_chan_directions my_direction = eth_chan_directions::COUNT>
 bool fabric_set_unicast_route(
     volatile tt_l1_ptr HybridMeshPacketHeader* packet_header,
     uint16_t dst_dev_id,
     uint16_t dst_mesh_id = MAX_NUM_MESHES) {
-    packet_header->dst_start_node_id = ((uint32_t)dst_mesh_id << 16) | (uint32_t)dst_dev_id;
-    packet_header->mcast_params_16 = 0;
-    packet_header->is_mcast_active = 0;
+    if constexpr (!called_from_router) {
+        packet_header->dst_start_node_id = ((uint32_t)dst_mesh_id << 16) | (uint32_t)dst_dev_id;
+        packet_header->mcast_params_16 = 0;
+        packet_header->is_mcast_active = 0;
+    }
     auto* routing_info = reinterpret_cast<tt_l1_ptr intra_mesh_routing_path_t<2, true>*>(ROUTING_PATH_BASE_2D);
     auto* routing_table = reinterpret_cast<tt_l1_ptr tensix_routing_l1_info_t*>(ROUTING_TABLE_BASE);
     if (dst_mesh_id < MAX_NUM_MESHES && routing_table->my_mesh_id != dst_mesh_id) {
@@ -173,8 +176,65 @@ bool fabric_set_unicast_route(
             reinterpret_cast<tt_l1_ptr exit_node_table_t*>(EXIT_NODE_TABLE_BASE);
         dst_dev_id = exit_node_table->nodes[dst_mesh_id];
     }
-    bool ok = routing_info->decode_route_to_buffer(dst_dev_id, packet_header->route_buffer);
-
+    bool ok = false;
+    if constexpr (called_from_router) {
+        // eth_chan_directions next_direction = get_next_hop_router_direction(dst_mesh_id,
+        // packet_header->dst_start_chip_id);
+        eth_chan_directions next_direction = get_next_hop_router_direction(dst_mesh_id, dst_dev_id);
+        switch (next_direction) {
+            case eth_chan_directions::EAST:
+                packet_header->route_buffer[0] = LowLatencyMeshRoutingFields::FORWARD_EAST;
+                break;
+            case eth_chan_directions::WEST:
+                packet_header->route_buffer[0] = LowLatencyMeshRoutingFields::FORWARD_WEST;
+                break;
+            case eth_chan_directions::NORTH:
+                packet_header->route_buffer[0] = LowLatencyMeshRoutingFields::FORWARD_NORTH;
+                break;
+            case eth_chan_directions::SOUTH:
+                packet_header->route_buffer[0] = LowLatencyMeshRoutingFields::FORWARD_SOUTH;
+                break;
+            default: {
+                // if (routing_table->my_mesh_id == dst_mesh_id) {
+                switch (my_direction) {
+                    case eth_chan_directions::EAST:
+                        packet_header->route_buffer[0] = LowLatencyMeshRoutingFields::FORWARD_EAST;
+                        break;
+                    case eth_chan_directions::WEST:
+                        packet_header->route_buffer[0] = LowLatencyMeshRoutingFields::FORWARD_WEST;
+                        break;
+                    case eth_chan_directions::NORTH:
+                        packet_header->route_buffer[0] = LowLatencyMeshRoutingFields::FORWARD_NORTH;
+                        break;
+                    case eth_chan_directions::SOUTH:
+                        packet_header->route_buffer[0] = LowLatencyMeshRoutingFields::FORWARD_SOUTH;
+                        break;
+                    default: ASSERT(false);
+                }
+                // } else {
+                //     next_direction = get_next_hop_router_direction(dst_mesh_id, packet_header->dst_start_mesh_id);
+                //     switch (next_direction) {
+                //         case eth_chan_directions::EAST:
+                //             packet_header->route_buffer[0] = LowLatencyMeshRoutingFields::FORWARD_EAST;
+                //             break;
+                //         case eth_chan_directions::WEST:
+                //             packet_header->route_buffer[0] = LowLatencyMeshRoutingFields::FORWARD_WEST;
+                //             break;
+                //         case eth_chan_directions::NORTH:
+                //             packet_header->route_buffer[0] = LowLatencyMeshRoutingFields::FORWARD_NORTH;
+                //             break;
+                //         case eth_chan_directions::SOUTH:
+                //             packet_header->route_buffer[0] = LowLatencyMeshRoutingFields::FORWARD_SOUTH;
+                //             break;
+                //         default: ASSERT(false);
+                //     }
+                // }
+            } break;
+        }
+        ok = routing_info->decode_route_to_buffer(dst_dev_id, packet_header->route_buffer + 1);
+    } else {
+        ok = routing_info->decode_route_to_buffer(dst_dev_id, packet_header->route_buffer);
+    }
     packet_header->routing_fields.value = 0;
 
     const auto& compressed_route = routing_info->paths[dst_dev_id];

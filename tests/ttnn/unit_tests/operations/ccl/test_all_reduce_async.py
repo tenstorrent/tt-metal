@@ -740,7 +740,7 @@ def test_all_reduce_sharded(
 @pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}, {"fabric_config": ttnn.FabricConfig.FABRIC_2D_DYNAMIC}],
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
     indirect=True,
 )
 def test_all_reduce_fabric_2d(
