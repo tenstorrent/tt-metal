@@ -516,17 +516,11 @@ def main():
             # logit_scale is learned during training to control the sharpness of the distribution
             logit_scale = math.exp(self.logit_scale)
 
-            print(f"image_features: {image_features.shape}")
-            print(f"text_features: {text_features.shape}")
-
             # Compute similarity matrix: scaled dot product of normalized features
             # Result: [batch_image, embed] @ [embed, batch_text] = [batch_image, batch_text]
             logits_per_image = ttnn.matmul(logit_scale * image_features, text_features, transpose_b=True)
             # Transpose for text-to-image direction
             logits_per_text = ttnn.transpose(logits_per_image, 0, 1)
-
-            print(f"logits_per_image: {logits_per_image.shape}")
-            print(f"logits_per_text: {logits_per_text.shape}")
 
             return logits_per_image, logits_per_text
 
@@ -575,7 +569,7 @@ def main():
         # Load pre-trained CLIP model and convert weights to TT-NN format
         logger.info("Loading pre-trained CLIP model...")
 
-        model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
+        model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32", cache_dir="data/")
         state_dict = convert_model_to_ttnn(model.state_dict())
 
         # Initialize our TT-NN CLIP implementation
@@ -601,7 +595,7 @@ def main():
 
         # Tokenize text prompts using CLIP's tokenizer
         logger.info("Tokenizing text prompts...")
-        tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-base-patch32")
+        tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-base-patch32", cache_dir="data/")
         # padding="max_length" ensures all sequences are padded to context_length (77 tokens)
         # return_tensors="pt" returns PyTorch tensors
         tokenized_inputs = tokenizer(prompts, padding="max_length", max_length=clip.context_length, return_tensors="pt")
