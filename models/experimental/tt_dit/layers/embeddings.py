@@ -164,7 +164,7 @@ class PatchEmbed(Module):
         if "pos_embed" in state:
             state["pos_embed"] = self._cropped_pos_embed(state.pop("pos_embed"))
 
-    def forward(self, latent: ttnn.Tensor) -> ttnn.Tensor:
+    def forward(self, latent: ttnn.Tensor, *, already_unfolded: bool = False) -> ttnn.Tensor:
         """
         Forward pass: apply patch projection and add position embeddings.
 
@@ -179,7 +179,17 @@ class PatchEmbed(Module):
         batch_size, img_h, img_w, img_c = latent.shape
 
         # Apply unfolded conv2d projection
-        latent = self._unfold_conv2d(latent)
+        if already_unfolded:
+            latent = ttnn.linear(
+                latent,
+                self.proj_weight.data,
+                bias=self.proj_bias.data,
+                dtype=ttnn.bfloat16,
+                compute_kernel_config=self.compute_kernel_config,
+            )
+        else:
+            latent = self._unfold_conv2d(latent)
+
         return latent + self.pos_embed.data
 
     def _unfold_conv2d(self, x):
