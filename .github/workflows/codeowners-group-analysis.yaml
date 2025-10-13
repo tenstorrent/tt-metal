@@ -120,8 +120,17 @@ jobs:
                 echo "Command: direct ping"
 
                 # Extract GitHub usernames and optional author notes from /ping command
-                # Format: /ping @user1 @user2 "optional message"
-                PING_USERS=$(echo "$COMMENT_BODY" | grep -oE '@[a-zA-Z0-9_-]+' | tr '\n' ',' | sed 's/,$//')
+                # Format: /ping @user1 @team1/subteam "optional message"
+
+                # Extract the part before quotes for direct ping users only
+                PING_PART=$(echo "$COMMENT_BODY" | sed -n 's/^\/ping\s\+\([^"]*\).*/\1/p')
+                if [ -z "$PING_PART" ]; then
+                  # No quotes, use entire comment after /ping
+                  PING_PART=$(echo "$COMMENT_BODY" | sed 's/^\/ping\s\+//')
+                fi
+
+                # Extract mentions from ping part only (with proper team support)
+                PING_USERS=$(echo "$PING_PART" | grep -oE '@[a-zA-Z0-9_/-]+' | tr '\n' ',' | sed 's/,$//')
                 echo "direct-ping-users=$PING_USERS" >> $GITHUB_OUTPUT
                 echo "Found users to ping: $PING_USERS"
 
@@ -1129,34 +1138,48 @@ jobs:
             echo "⚠️  PR author not found in Slack: $PR_AUTHOR_FULL_NAME (@$PR_AUTHOR_LOGIN), using fallback"
           fi
 
-          # Process each user to ping
+          # Process each user/team to ping
           SLACK_USER_MENTIONS=""
           if [ -n "$DIRECT_PING_USERS" ]; then
             IFS=',' read -ra PING_ARRAY <<< "$DIRECT_PING_USERS"
-            for ping_user in "${PING_ARRAY[@]}"; do
-              if [ -n "$ping_user" ]; then
+            for ping_item in "${PING_ARRAY[@]}"; do
+              if [ -n "$ping_item" ]; then
                 # Remove @ prefix
-                clean_username=$(echo "$ping_user" | sed 's/^@//')
+                clean_item=$(echo "$ping_item" | sed 's/^@//')
 
-                # Get full name from GitHub API
-                USER_API="https://api.github.com/users/$clean_username"
-                USER_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.ORG_READ_GITHUB_TOKEN }}" \
-                               -H "Accept: application/vnd.github.v3+json" \
-                               "$USER_API" 2>/dev/null)
-                USER_NAME=$(echo "$USER_DATA" | jq -r '.name // empty' 2>/dev/null)
-                if [ -z "$USER_NAME" ] || [ "$USER_NAME" = "null" ]; then
-                  USER_NAME="$clean_username"
-                fi
-
-                # Find Slack user ID
-                SLACK_USER_ID=$(find_slack_user_id "$USER_NAME" "$clean_username")
-
-                if [ -n "$SLACK_USER_ID" ]; then
-                  SLACK_USER_MENTIONS="$SLACK_USER_MENTIONS <@$SLACK_USER_ID>"
-                  echo "✅ Found Slack user: $USER_NAME -> $SLACK_USER_ID"
+                # Check if this is a team (contains /) or individual user
+                if echo "$clean_item" | grep -q '/'; then
+                  # This is a team - try to map to Slack group
+                  SLACK_GROUP_ID=$(get_slack_group_id "$ping_item")
+                  if [ -n "$SLACK_GROUP_ID" ]; then
+                    SLACK_USER_MENTIONS="$SLACK_USER_MENTIONS <!subteam^$SLACK_GROUP_ID>"
+                    echo "✅ Found Slack group for team $ping_item: $SLACK_GROUP_ID"
+                  else
+                    SLACK_USER_MENTIONS="$SLACK_USER_MENTIONS $clean_item"
+                    echo "⚠️  No Slack group found for team: $ping_item, using team name fallback"
+                  fi
                 else
-                  SLACK_USER_MENTIONS="$SLACK_USER_MENTIONS $USER_NAME"
-                  echo "⚠️  Slack user not found for: $USER_NAME (@$clean_username), using full name fallback"
+                  # This is an individual user
+                  # Get full name from GitHub API
+                  USER_API="https://api.github.com/users/$clean_item"
+                  USER_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.ORG_READ_GITHUB_TOKEN }}" \
+                                 -H "Accept: application/vnd.github.v3+json" \
+                                 "$USER_API" 2>/dev/null)
+                  USER_NAME=$(echo "$USER_DATA" | jq -r '.name // empty' 2>/dev/null)
+                  if [ -z "$USER_NAME" ] || [ "$USER_NAME" = "null" ]; then
+                    USER_NAME="$clean_item"
+                  fi
+
+                  # Find Slack user ID
+                  SLACK_USER_ID=$(find_slack_user_id "$USER_NAME" "$clean_item")
+
+                  if [ -n "$SLACK_USER_ID" ]; then
+                    SLACK_USER_MENTIONS="$SLACK_USER_MENTIONS <@$SLACK_USER_ID>"
+                    echo "✅ Found Slack user: $USER_NAME -> $SLACK_USER_ID"
+                  else
+                    SLACK_USER_MENTIONS="$SLACK_USER_MENTIONS $USER_NAME"
+                    echo "⚠️  Slack user not found for: $USER_NAME (@$clean_item), using full name fallback"
+                  fi
                 fi
               fi
             done
