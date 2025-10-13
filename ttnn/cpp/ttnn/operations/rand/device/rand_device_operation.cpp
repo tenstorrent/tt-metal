@@ -60,9 +60,20 @@ std::tuple<RandDeviceOperation::operation_attributes_t, RandDeviceOperation::ten
     const float from,
     const float to,
     const uint32_t seed) {
+    fprintf(stderr, "-- RandDeviceOperation::invoke: shape [%u %u]\n", shape[0], shape[1]);
     auto output_tensor = create_device_tensor(
         ttnn::TensorSpec(shape, tt::tt_metal::TensorLayout(dtype, tt::tt_metal::PageConfig(layout), memory_config)),
         std::addressof(device));
+    fprintf(stderr, "-- RandDeviceOperation::invoke: finished create_device_tensor()\n");
+    fprintf(
+        stderr,
+        "-- Pre-Alloc Tensor: logical [%u %u] padded [%u %u] logical vol %lu physical vol %lu\n",
+        output_tensor.logical_shape()[0],
+        output_tensor.logical_shape()[1],
+        output_tensor.padded_shape()[0],
+        output_tensor.padded_shape()[1],
+        output_tensor.logical_volume(),
+        output_tensor.physical_volume());
 
     return {
         operation_attributes_t{shape, dtype, layout, memory_config, std::addressof(device), from, to, seed},

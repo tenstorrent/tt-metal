@@ -129,6 +129,7 @@ inline tile_info_t get_tile_info(
 // Specialization of TileSliceHostDev, with device-side implementation
 template <int MAX_BYTES = 32 * 2>
 struct TileSlice : TileSliceHostDev<MAX_BYTES> {
+    // Study this function!!
     static inline uint32_t get_data_index(tile_info_t& tile_info, uint32_t h, uint32_t w, bool untilize) {
         if (untilize) {
             uint32_t row_in_face = h % tile_info.face_dim_r;
