@@ -38,6 +38,7 @@ set(TT_METAL_TESTS_SRCS
     test_compile_program.cpp
     test_clean_init.cpp
     test_single_dm_l1_write.cpp
+    test_sdpa_sub_exp.cpp
 )
 
 foreach(TEST_SRC ${TT_METAL_TESTS_SRCS})
