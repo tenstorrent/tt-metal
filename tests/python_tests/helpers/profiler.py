@@ -136,7 +136,8 @@ class Profiler:
                         ]
                     )
 
-        output_path = Path("../build") / filename
+        llk_home = Path(os.environ.get("LLK_HOME"))
+        output_path = llk_home / "tests" / "build" / filename
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
         with output_path.open("w", newline="") as f:
@@ -175,18 +176,23 @@ class Profiler:
 
     @staticmethod
     def _get_meta(testname: str) -> dict[id, ProfilerFullMarker]:
-        CHIP_ARCH = get_chip_architecture()
-        LLK_HOME = os.environ.get("LLK_HOME")
-        if not LLK_HOME:
-            raise AssertionError("Environment variable LLK_HOME is not set")
+        chip_arch = get_chip_architecture()
+        llk_home = Path(os.environ.get("LLK_HOME"))
 
-        BUILD_DIR = Path(LLK_HOME) / "tests" / "build" / CHIP_ARCH.value
-        profiler = BUILD_DIR / "tests" / testname / "profiler"
+        profiler_dir = (
+            llk_home
+            / "tests"
+            / "build"
+            / chip_arch.value
+            / "tests"
+            / testname
+            / "profiler"
+        )
 
         files = [
-            profiler / "unpack.meta.bin",
-            profiler / "math.meta.bin",
-            profiler / "pack.meta.bin",
+            profiler_dir / "unpack.meta.bin",
+            profiler_dir / "math.meta.bin",
+            profiler_dir / "pack.meta.bin",
         ]
 
         meta = {}
