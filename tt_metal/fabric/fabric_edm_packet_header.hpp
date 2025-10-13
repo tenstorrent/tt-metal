@@ -101,6 +101,8 @@ struct NocUnicastInlineWriteCommandHeader {
     uint32_t value;
 };
 struct NocUnicastAtomicIncCommandHeader {
+    NocUnicastAtomicIncCommandHeader() : noc_address(0), wrap(0), val(0), flush(true) {}
+
     NocUnicastAtomicIncCommandHeader(uint64_t noc_address, uint16_t val, uint16_t wrap, bool flush = true) :
         noc_address(noc_address), wrap(wrap), val(val), flush(flush) {}
 
