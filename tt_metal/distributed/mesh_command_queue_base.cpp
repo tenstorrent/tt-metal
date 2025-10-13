@@ -262,6 +262,11 @@ void MeshCommandQueueBase::enqueue_write(
     for (const auto& host_buffer_coord : host_buffer.shard_coords()) {
         auto buf = host_buffer.get_shard(host_buffer_coord);
         if (buf.has_value()) {
+            fprintf(
+                stderr,
+                "-- MeshCommandQueueBase::enqueue_write: shard %p size %zu\n",
+                buf->view_bytes().data(),
+                buf->view_bytes().size());
             shard_data_transfers.push_back(
                 {.shard_coord = host_buffer_coord,
                  .host_data = buf->view_bytes().data(),

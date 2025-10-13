@@ -262,6 +262,17 @@ public:
             this->tensor_attributes->get_storage(), this->tensor_attributes->get_tensor_spec());
     }
 
+    void print_info(const char* header) const {
+        std::cout << header << std::boolalpha << " dtype " << enchantum::to_string(dtype()) << " layout "
+                  << enchantum::to_string(layout()) << " logical rank " << logical_shape().rank()
+                  << " logical shape volume " << logical_shape().volume() << " padded rank " << padded_shape().rank()
+                  << " padded shape volume " << padded_shape().volume() << " logical volume " << logical_volume()
+                  << " physical volume " << physical_volume() << " scalar? " << is_scalar() << " memory_layout "
+                  << enchantum::to_string(memory_config().memory_layout()) << " buffer_type "
+                  << enchantum::to_string(memory_config().buffer_type()) << " sharded? " << memory_config().is_sharded()
+                  << " l1? " << memory_config().is_l1() << " dram? " << memory_config().is_dram() << std::endl;
+    }
+
 private:
     void init(Storage storage, TensorSpec tensor_spec, TensorTopology tensor_topology);
     void deallocate_impl(bool force);

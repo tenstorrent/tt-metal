@@ -11,6 +11,7 @@
 #include <tt_stl/assert.hpp>
 #include "constants.hpp"
 #include <tt_stl/span.hpp>
+#include <enchantum/enchantum.hpp>
 
 std::ostream& operator<<(std::ostream& os, TensorLayoutType layout) {
     switch (layout) {
@@ -440,6 +441,13 @@ std::vector<T> convert_layout(
         return std::vector<T>();
     }
 
+    fprintf(
+        stderr,
+        "-- convert_layout: shape[%u x %u] %s -> %s\n",
+        shape[0],
+        shape[1],
+        enchantum::to_string(inL).data(),
+        enchantum::to_string(outL).data());
     switch (inL) {
         case TensorLayoutType::TILED_SWIZZLED:
             if (outL == TensorLayoutType::TILED_NFACES) {

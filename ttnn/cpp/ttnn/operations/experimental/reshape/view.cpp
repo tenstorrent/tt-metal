@@ -28,6 +28,9 @@ static MemoryConfig infer_output_memory_config(
 
 Tensor tensor_reshape(
     const Tensor& input_tensor, const ttnn::Shape& new_logical_shape, const ttnn::Shape& new_padded_shape) {
+    input_tensor.print_info("-- tensor_reshape(view): ");
+    std::cout << "-- tensor_reshape(view): converting to logical " << new_logical_shape << " padded "
+              << new_padded_shape << std::endl;
     tt::tt_metal::GraphTracker::instance().track_function_start(
         "Tensor::reshape", input_tensor, new_logical_shape, new_padded_shape);
 

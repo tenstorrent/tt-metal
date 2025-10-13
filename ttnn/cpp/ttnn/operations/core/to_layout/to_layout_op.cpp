@@ -43,6 +43,20 @@ Tensor to_layout_impl(
     const ttnn::Layout layout,
     const std::optional<ttnn::DataType>& dtype,
     const std::optional<ttnn::MemoryConfig>& memory_config) {
+    fprintf(
+        stderr,
+        "-- to_layout_impl: %s -> %s\n",
+        enchantum::to_string(tensor_arg.layout()).data(),
+        enchantum::to_string(layout).data());
+    fprintf(
+        stderr,
+        "-- Src Tensor: logical [%u %u] padded [%u %u] logical vol %lu physical vol %lu\n",
+        tensor_arg.logical_shape()[0],
+        tensor_arg.logical_shape()[1],
+        tensor_arg.padded_shape()[0],
+        tensor_arg.padded_shape()[1],
+        tensor_arg.logical_volume(),
+        tensor_arg.physical_volume());
     if (tensor_arg.layout() == layout) {
         if (dtype.has_value() and dtype.value() != tensor_arg.dtype()) {
             log_warning(
@@ -89,6 +103,7 @@ Tensor to_layout_impl(
             SmallVector<uint32_t> new_padded_shape(2, 1);
             new_padded_shape[1] = tensor.padded_shape()[-1];
             new_padded_shape[0] = tensor.padded_shape()[-2];
+            fprintf(stderr, "-- to_layout_impl: calling the 1st view()\n");
             tensor = ttnn::experimental::view(tensor, tensor.logical_shape(), Shape(new_padded_shape));
         }
     }
@@ -187,6 +202,7 @@ Tensor to_layout_impl(
             }
             tensor = tensor.pad(ttnn::Shape(padded_output_shape), ttnn::Shape(std::move(padded_input_start)), 0);
             tensor = tensor.to_layout(layout);
+            fprintf(stderr, "-- to_layout_impl: calling and returning from the 2nd view()\n");
             return ttnn::experimental::view(tensor, output_shape, padded_output_shape);
         } else {
             TT_THROW("ttnn::to_layout: Unsupported output layout: {}!", layout);

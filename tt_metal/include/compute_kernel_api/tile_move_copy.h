@@ -5,6 +5,7 @@
 #pragma once
 
 #include "compute_kernel_api/common_globals.h"
+#include "debug/dprint.h"
 
 #ifdef TRISC_MATH
 #include "llk_math_unary_datacopy_api.h"
@@ -27,6 +28,7 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void copy_tile_to_dst_init_short(uint32_t cbid, uint32_t transpose = 0) {
+    UNPACK(DPRINT << "+cpTileI: " << cbid << ENDL(););
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
         transpose, false /*transpose within 16x16 face*/, cbid)));
     MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(
@@ -50,6 +52,7 @@ ALWI void copy_tile_init(uint32_t cbid) { copy_tile_to_dst_init_short(cbid); }
  */
  // clang-format on
 ALWI void copy_tile_to_dst_init_short_with_dt(uint32_t old_cbid, uint32_t new_cbid, uint32_t transpose = 0) {
+    UNPACK(DPRINT << "+cpTileIDt: " << old_cbid << "->" << new_cbid << ENDL(););
     // This reconfig call checks if old operand has different data format to
     // new operand idx, otherwise no reconfig call occurs
     UNPACK((llk_unpack_reconfig_data_format_srca<DST_ACCUM_MODE>(old_cbid, new_cbid)));
@@ -79,6 +82,7 @@ ALWI void copy_tile_to_dst_init_short_with_dt(uint32_t old_cbid, uint32_t new_cb
  * */
 // clang-format on
 ALWI void copy_tile(uint32_t in_cb_id, uint32_t in_tile_index, uint32_t dst_tile_index) {
+    UNPACK(DPRINT << "+cpTile: " << in_cb_id << ':' << in_tile_index << "->" << dst_tile_index << ENDL());
     UNPACK((llk_unpack_A<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
         in_cb_id, in_tile_index)));
     MATH((llk_math_eltwise_unary_datacopy<A2D, DST_ACCUM_MODE, BroadcastType::NONE, UnpackToDestEn>(
