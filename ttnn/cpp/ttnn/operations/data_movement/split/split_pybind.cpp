@@ -8,66 +8,85 @@
 #include <pybind11/stl.h>
 
 #include "ttnn-pybind/decorators.hpp"
+#include "ttnn/operations/data_movement/split/device/split_op.hpp"
+#include "ttnn/experimental/jit/context.hpp"
+#include "ttnn/types.hpp"
 
 #include "split.hpp"
 
 namespace ttnn::operations::data_movement::detail {
 namespace py = pybind11;
 
-void bind_split(py::module& module) {
-    auto doc =
-        R"doc(
-            split(input_tensor: ttnn.Tensor, num_splits: int, dim: int, *, Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
+void py_bind_experimental_split(pybind11::module& module) {
+    module.def(
+        "experimental_split",
+        [](const ttnn::Tensor& input_tensor,
+           int num_splits,
+           int dim,
+           const std::optional<ttnn::MemoryConfig>& memory_config) -> std::vector<ttnn::Tensor> {
+            auto output_mem_config = memory_config.value_or(input_tensor.memory_config());
 
-            Returns a tensor that is in num_splits ways on dim.
+            // Create SplitDeviceOperation struct
+            SplitDeviceOperation split_op{num_splits, dim, output_mem_config};
 
-            Equivalent pytorch code:
+            // Use Context to add a node with the args
+            auto& context = ttnn::experimental::jit::Context::instance();
 
-            .. code-block:: python
+            // Create inputs vector for the node
+            std::vector<ttnn::Tensor> inputs = {input_tensor};
 
-                output_tensor = torch.split(input_tensor, 2, 1)
+            // Create shared_ptr to hold the args
+            auto args_ptr = std::make_shared<SplitDeviceOperation>(split_op);
 
-            Args:
-                * :attr:`input_tensor`: Input Tensor.
-                * :attr:`split_size` (Union[int, list[int]]): Single chunk size or list of chunk sizes. Output may be smaller if dim not evenly divisible.
-                * :attr:`dim2`: Dim to split. Defaults to 0.
+            // Add node to context
+            auto node_id = context.create_node(
+                inputs, "ttnn::split", std::static_pointer_cast<ttnn::experimental::jit::IDeviceOperation>(args_ptr));
 
-            Keyword Args:
-                * :attr:`memory_config`: Memory Config of the output tensor
-        )doc";
+            auto output_specs = args_ptr->compute_output_specs(inputs);
 
-    using OperationType = decltype(ttnn::split);
-    ttnn::bind_registered_operation(
-        module,
-        ttnn::split,
-        doc,
-        ttnn::pybind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const int64_t split_size,
-               const int64_t dim,
-               const std::optional<ttnn::MemoryConfig>& memory_config) {
-                return self(input_tensor, split_size, dim, memory_config);
-            },
-            py::arg("input_tensor"),
-            py::arg("split_size"),
-            py::arg("dim") = 0,
-            py::kw_only(),
-            py::arg("memory_config") = std::nullopt,
+            // Create output tensors for each split
+            std::vector<ttnn::Tensor> output_tensors;
+            for (const auto& spec : output_specs) {
+                auto output_tensor = Tensor(input_tensor.storage(), spec, input_tensor.tensor_topology());
+                output_tensor = tt::tt_metal::set_tensor_id(output_tensor);
+                output_tensor.set_producer_node(node_id);
+                output_tensors.push_back(output_tensor);
+            }
+
+            return output_tensors;
         },
-        ttnn::pybind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const ttnn::SmallVector<int64_t>& split_sizes,
-               const int64_t dim,
-               const std::optional<ttnn::MemoryConfig>& memory_config) {
-                return self(input_tensor, split_sizes, dim, memory_config);
-            },
-            py::arg("input_tensor"),
-            py::arg("split_size"),
-            py::arg("dim") = 0,
-            py::kw_only(),
-            py::arg("memory_config") = std::nullopt,
-        });
+        py::arg("input_tensor"),
+        py::arg("num_splits"),
+        py::arg("dim"),
+        py::kw_only(),
+        py::arg("memory_config") = std::nullopt,
+        R"doc(experimental_split(input_tensor: ttnn.Tensor, num_splits: int, dim: int, *, Optional[ttnn.MemoryConfig] = None) -> List[ttnn.Tensor]
+
+        Returns a list of split tensors from splitting the input tensor into num_splits parts along the specified dimension.
+        This is a JIT version that builds a computation graph without immediate execution.
+
+        Equivalent pytorch code:
+
+        .. code-block:: python
+            input_tensor = torch.rand(1, 1, 4, 8)
+            split_tensors = torch.split(input_tensor, 2, dim=3)
+            # Returns list of split tensors
+
+        Args:
+            * :attr:`input_tensor`: Input Tensor.
+            * :attr:`num_splits`: Number of splits to create.
+            * :attr:`dim`: Dimension along which to split.
+
+        Keyword Args:
+            * :attr:`memory_config`: Memory Config of the output tensor
+
+        Example:
+
+            >>> tensor = ttnn.from_torch(torch.rand(1, 1, 4, 8), dtype=ttnn.bfloat16, device=device)
+            >>> split_tensors = ttnn.experimental_split(tensor, 2, 3)
+            >>> print(f"Number of splits: {len(split_tensors)}")
+
+        )doc");
 }
+
 }  // namespace ttnn::operations::data_movement::detail
