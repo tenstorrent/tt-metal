@@ -12,7 +12,7 @@
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
 
-#define DEBUG_PRINT 0
+#define DEBUG_PRINT 1
 
 #if DEBUG_PRINT == 1
 #include "debug/dprint.h"
@@ -267,18 +267,19 @@ void MAIN {
             tile_regs_commit();
             tile_regs_wait();
             if constexpr (!return_indices) {
-                 if constexpr (is_output_tiled) {
-                     // TILED output: accumulate sticks and perform tilization when needed
-                     if (last_c_block) {
-                         pack_untilize_dest<partial_iter_output_tiles>(
-                             pre_tilize_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
-                         cb_push_back(pre_tilize_cb_id, partial_iter_output_tiles);
-                         tilize_stick_counter++;
-                     } else {
-                         pack_untilize_dest<max_tiles_per_iter>(
-                             pre_tilize_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
-                         cb_push_back(pre_tilize_cb_id, max_tiles_per_iter);
-                     }
+                if constexpr (is_output_tiled) {
+                    // TILED output: accumulate sticks and perform tilization when needed
+                    if (last_c_block) {
+                        DPRINT << "hello" << ENDL();
+                        pack_untilize_dest<partial_iter_output_tiles>(
+                            pre_tilize_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
+                        cb_push_back(pre_tilize_cb_id, partial_iter_output_tiles);
+                        tilize_stick_counter++;
+                    } else {
+                        pack_untilize_dest<max_tiles_per_iter>(
+                            pre_tilize_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
+                        cb_push_back(pre_tilize_cb_id, max_tiles_per_iter);
+                    }
                     tile_regs_release();
 
                     if (tilize_stick_counter == TILE_HEIGHT) {

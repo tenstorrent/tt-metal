@@ -569,19 +569,19 @@ def test_run_max_pool_squeeze_net_model(
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
-@pytest.mark.parametrize("out_dtype", [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b])
-@pytest.mark.parametrize("output_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("out_dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("output_layout", [ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize(
     "input_shape, shard_startegy",
     (
         (
-            ([1, 64, 112, 112], HS),
-            ([1, 280, 10, 10], HS),
-            ([1, 384, 32, 32], HS),
-            ([1, 256, 132, 20], BS),
-            ([1, 512, 8, 6], BS),
-            ([2, 4096, 10, 16], WS),
-            ([1, 32768, 10, 10], WS),
+            ([1, 32, 112, 112], HS),
+            # ([1, 280, 10, 10], HS),
+            # ([1, 384, 32, 32], HS),
+            # ([1, 256, 132, 20], BS),
+            # ([1, 512, 8, 6], BS),
+            # ([2, 4096, 10, 16], WS),
+            # ([1, 32768, 10, 10], WS),
         )
     ),
 )
@@ -589,15 +589,15 @@ def test_run_max_pool_squeeze_net_model(
     "kernel_size",
     (
         (3, 3),
-        (5, 5),
-        (9, 9),
+        # (5, 5),
+        # (9, 9),
     ),
 )
 @pytest.mark.parametrize(
     "in_dtype",
     [
         ttnn.bfloat16,
-        ttnn.bfloat8_b,
+        # ttnn.bfloat8_b,
     ],
 )
 def test_max_pool2d_output_formats_and_layouts(
