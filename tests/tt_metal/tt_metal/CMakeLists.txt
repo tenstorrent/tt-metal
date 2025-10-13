@@ -39,6 +39,7 @@ set(TT_METAL_TESTS_SRCS
     test_stress_noc_mcast.cpp
     test_transpose_hc.cpp
     test_untilize_eltwise_binary.cpp
+    test_sdpa_sub_exp.cpp
 )
 
 foreach(TEST_SRC ${TT_METAL_TESTS_SRCS})
