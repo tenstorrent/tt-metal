@@ -53,35 +53,37 @@ def test_perf_gemma_vision(mesh_device, batch_size, nr_forward_iterations):
     measurements = dict()
     for k in measurement_keys:
         measurements[k] = profiler.get_duration(k) if k != "model_forward_inference" else inference_mean
-        logger.info(f"measurement {key}: {measurements[key]}")
-
-    if SAVE_NEW_PERF_TARGETS:
-        helper_write_to_json(determine_device_name(mesh_device), measurements["model_forward_inference"])
+        logger.info(f"measurement {k}: {measurements[k]}")
 
     targets = load_targets(
         TARGETS_JSON_FILENAME,
         device_type=determine_device_name(mesh_device),
     )
 
+    if SAVE_NEW_PERF_TARGETS:
+        helper_write_to_json(
+            determine_device_name(mesh_device),
+            measurements["model_forward_inference"],
+            output_filename=TARGETS_JSON_FILENAME,
+        )
+
     upper_threshold = targets["model_forward_inference"] * (1 + THRESHOLD_PERCENT / 100)
     lower_threshold = targets["model_forward_inference"] * (1 - THRESHOLD_PERCENT / 100)
     assert lower_threshold < inference_mean < upper_threshold
 
 
-def helper_write_to_json(device_type, measurements, output_filename=None):
+def helper_write_to_json(device_type, measurements, output_filename):
     """
-    This function is used to help you to faster generate the .json where all the measurements are stored
+    This function reads the file /output_filename/ and updates it with the new measurements. For example if the file has measurements for N150 it will overwrite them with the new measurements.
     """
 
-    if output_filename is None:
-        output_filename = "tmp_measurements_" + device_type + ".json"
+    with open(output_filename, "r") as f:
+        file_dict = json.load(f)
 
-    # Wrap the measurements dict inside another dict keyed by device_type
-    data = {device_type: measurements}
+    file_dict[device_type] = {"model_forward_inference": measurements}
 
-    # Write JSON file with indentation for readability
     with open(output_filename, "w") as f:
-        json.dump(data, f, indent=4)
+        json.dump(file_dict, f, indent=4)
 
 
 def run_model(mesh_device, batch_size, profiler, nr_forward_iterations):
