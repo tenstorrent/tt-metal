@@ -9,7 +9,7 @@ set(LLRT_SRC
     tt_elffile.cpp
     tt_memory.cpp
     hal.cpp
-    utils.cpp
+    tunnels_from_mmio_device.cpp
 )
 
 add_library(llrt OBJECT ${LLRT_SRC})
@@ -21,9 +21,10 @@ target_link_libraries(
     llrt
     PUBLIC
         umd::device
-        Metalium::Metal::Hardware
+        TT::Metalium::HostDevCommon
     PRIVATE
         HAL::1xx
+        HAL::2xx
         Tracy::TracyClient
         nlohmann_json::nlohmann_json
         Reflect::Reflect

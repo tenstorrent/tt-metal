@@ -11,17 +11,25 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/tt_metal_profiler.hpp>
+#include <tt-metalium/distributed.hpp>
 #include "hostdevcommon/profiler_common.h"
 
 using namespace tt;
+using namespace tt::tt_metal;
 
-void RunFillUpAllBuffers(tt_metal::IDevice* device, int loop_count, bool fast_dispatch) {
-    CoreCoord compute_with_storage_size = device->compute_with_storage_grid_size();
+void RunFillUpAllBuffers(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, int loop_count, bool fast_dispatch) {
+    IDevice* device = mesh_device->get_devices()[0];
+
+    CoreCoord compute_with_storage_size = mesh_device->compute_with_storage_grid_size();
     CoreCoord start_core = {0, 0};
     CoreCoord end_core = {compute_with_storage_size.x - 1, compute_with_storage_size.y - 1};
     CoreRange all_cores(start_core, end_core);
     auto eth_cores = device->get_active_ethernet_cores(true);
 
+    // Mesh workload + device range span the mesh; program encapsulates kernels
+    distributed::MeshWorkload workload;
+    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
     tt_metal::Program program = tt_metal::CreateProgram();
 
     constexpr int loop_size = 200;
@@ -59,14 +67,16 @@ void RunFillUpAllBuffers(tt_metal::IDevice* device, int loop_count, bool fast_di
             tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_0, .defines = kernel_defines});
     }
 
+    workload.add_program(device_range, std::move(program));
     if (fast_dispatch) {
         for (int i = 0;
              i < PROFILER_OP_SUPPORT_COUNT * kernel_profiler::PROFILER_L1_GUARANTEED_MARKER_COUNT / loop_count;
              i++) {
-            EnqueueProgram(device->command_queue(), program, false);
+            // Enqueue the same mesh workload multiple times to generate profiler traffic
+            distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
         }
     } else {
-        tt_metal::detail::LaunchProgram(device, program);
+        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
     }
 }
 
@@ -78,16 +88,16 @@ int main() {
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
+        std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
 
         const auto USE_FAST_DISPATCH = std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr;
 
         constexpr int device_loop_count = 150;
 
-        RunFillUpAllBuffers(device, device_loop_count, USE_FAST_DISPATCH);
-        tt_metal::detail::ReadDeviceProfilerResults(device);
+        RunFillUpAllBuffers(mesh_device, device_loop_count, USE_FAST_DISPATCH);
+        ReadMeshDeviceProfilerResults(*mesh_device);
 
-        pass &= tt_metal::CloseDevice(device);
+        pass &= mesh_device->close();
 
     } catch (const std::exception& e) {
         pass = false;

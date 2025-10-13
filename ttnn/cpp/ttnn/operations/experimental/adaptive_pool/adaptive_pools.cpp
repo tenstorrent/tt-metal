@@ -11,7 +11,6 @@ namespace operations::experimental::adaptive_pool {
 
 // Reusing the generic pool2d functionality from the regular pool operations
 Tensor AdaptiveAvgPool2DOp::invoke(
-    QueueId queue_id,
     const Tensor& input_tensor,
     uint32_t batch_size,
     uint32_t input_h,
@@ -32,7 +31,6 @@ Tensor AdaptiveAvgPool2DOp::invoke(
     auto params = calculate_adaptive_pool_params(input_h, input_w, output_h, output_w);
 
     return ttnn::operations::pool::AvgPool2DOp::invoke(
-        queue_id,
         input_tensor,
         batch_size,
         input_h,
@@ -52,7 +50,6 @@ Tensor AdaptiveAvgPool2DOp::invoke(
 }
 
 Tensor AdaptiveMaxPool2DOp::invoke(
-    QueueId queue_id,
     const Tensor& input_tensor,
     uint32_t batch_size,
     uint32_t input_h,
@@ -73,7 +70,6 @@ Tensor AdaptiveMaxPool2DOp::invoke(
     auto params = calculate_adaptive_pool_params(input_h, input_w, output_h, output_w);
 
     auto result = ttnn::operations::pool::MaxPool2DOp::invoke(
-        queue_id,
         input_tensor,
         batch_size,
         input_h,
@@ -92,8 +88,8 @@ Tensor AdaptiveMaxPool2DOp::invoke(
         false /*return_indices*/);
 
     // Since return_indices=false, the result variant should always contain a Tensor
-    TT_FATAL(std::holds_alternative<Tensor>(result), "Expected Tensor result when return_indices is false");
-    return std::get<Tensor>(result);
+    TT_FATAL(result.size() == 1, "Expected Tensor result when return_indices is false");
+    return result.at(0);
 }
 
 }  // namespace operations::experimental::adaptive_pool

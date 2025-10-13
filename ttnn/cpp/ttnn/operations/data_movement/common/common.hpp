@@ -63,13 +63,13 @@ bool is_enough_space(
     uint32_t num_tiles_per_row);
 
 ttnn::Tensor pad_to_tile_vol(
-    QueueId queue_id,
-    const ttnn::Tensor& tensor,
-    float value,
-    bool use_multicore,
-    const std::optional<MemoryConfig>& memory_config);
+    const ttnn::Tensor& tensor, float value, bool use_multicore, const std::optional<MemoryConfig>& memory_config);
 
 uint32_t wrap_index(int index, int size);
+
+uint16_t float_to_uint16(float f);
+
+uint32_t pack_two_uint16_into_uint32(std::pair<uint16_t, uint16_t> two_uint16s);
 
 template <typename OpOutputType, typename... OpInputTypes>
 struct MassagedOperationParams {

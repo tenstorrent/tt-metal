@@ -24,20 +24,17 @@ ttnn::Tensor PerformView(
 
 struct ReshapeViewOperation {
     static ttnn::Tensor invoke(
-        QueueId queue_id,
         const ttnn::Tensor& input_tensor,
         const ttnn::Shape& logical_shape,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<PadValue>& pad_value = std::nullopt);
     static ttnn::Tensor invoke(
-        QueueId queue_id,
         const ttnn::Tensor& input_tensor,
         const ttnn::Shape& logical_shape,
         const ttnn::Shape& padded_shape,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<PadValue>& pad_value = std::nullopt);
     static ttnn::Tensor invoke(
-        QueueId queue_id,
         const ttnn::Tensor& input_tensor,
         tt::stl::Span<const int32_t> shape_vector,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,

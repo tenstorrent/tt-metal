@@ -14,15 +14,21 @@ __all__ = []
 def apply_activations(tensor, activations):
     import torch
 
-    string_to_function = {
-        "relu": torch.relu,
-        "gelu": torch.nn.functional.gelu,
-        "silu": torch.nn.functional.silu,
+    act_func_map = {
+        ttnn.UnaryOpType.RELU: torch.nn.functional.relu,
+        ttnn.UnaryOpType.SILU: torch.nn.functional.silu,
+        ttnn.UnaryOpType.MISH: torch.nn.functional.mish,
+        ttnn.UnaryOpType.SIGMOID: torch.nn.functional.sigmoid,
+        ttnn.UnaryOpType.TANH: torch.nn.functional.tanh,
+        ttnn.UnaryOpType.LOG: torch.log,
+        ttnn.UnaryOpType.SOFTPLUS: torch.nn.functional.softplus,
+        ttnn.UnaryOpType.GELU: torch.nn.functional.gelu,
+        ttnn.UnaryOpType.SQRT: torch.sqrt,
     }
 
     if activations is not None:
         for activation in activations:
-            activation_function = string_to_function[activation]
+            activation_function = act_func_map[activation.op_type]
             tensor = activation_function(tensor)
     return tensor
 

@@ -101,7 +101,7 @@ std::vector<ValueType> generate_normal_random_vector(
 template <typename ValueType>
 std::vector<ValueType> generate_random_vector_from_vector(
     std::vector<ValueType>& possible_values, const size_t numel, const uint32_t seed = 0) {
-    TT_FATAL(possible_values.size(), "possible_values.size()={} > 0", possible_values.size());
+    TT_FATAL(!possible_values.empty(), "possible_values.size()={} > 0", possible_values.size());
     std::mt19937 gen(seed);
     std::vector<ValueType> results(numel);
     std::uniform_int_distribution<unsigned int> dis(0, possible_values.size() - 1);

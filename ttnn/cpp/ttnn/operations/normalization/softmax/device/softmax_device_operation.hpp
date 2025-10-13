@@ -52,49 +52,44 @@ struct SoftmaxDeviceOperation {
         bool is_causal_mask = false,
         DeviceComputeKernelConfig compute_kernel_config = {},
         bool is_scale_causal_mask_hw_dims_softmax = false,
-        bool numeric_stable = false);
+        bool numeric_stable = true);
 };
 
 Tensor softmax(
-    QueueId queue_id,
     const Tensor& input_tensor,
     int8_t dim = -1,
     tt::tt_metal::MemoryConfig output_mem_config = {},
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-    bool numeric_stable = false);
+    bool numeric_stable = true);
 Tensor scale_mask_softmax(
-    QueueId queue_id,
     const Tensor& input_tensor,
     std::optional<float> scale = std::nullopt,
     const std::optional<const Tensor>& mask = std::nullopt,
     tt::tt_metal::MemoryConfig output_mem_config = {},
     bool is_causal_mask = false,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-    bool numeric_stable = false);
+    bool numeric_stable = true);
 Tensor softmax_in_place(
-    QueueId queue_id,
     Tensor& input_tensor,
     int8_t dim = -1,
     SoftmaxProgramConfig program_config = {},
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-    bool numeric_stable = false);
+    bool numeric_stable = true);
 Tensor scale_mask_softmax_in_place(
-    QueueId queue_id,
     Tensor& input_tensor,
     std::optional<float> scale = std::nullopt,
     const std::optional<const Tensor>& mask = std::nullopt,
     SoftmaxProgramConfig program_config = {},
     bool is_causal_mask = false,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-    bool numeric_stable = false);
+    bool numeric_stable = true);
 Tensor scale_causal_mask_hw_dims_softmax_in_place(
-    QueueId queue_id,
     Tensor& input_tensor,
     std::optional<float> scale = std::nullopt,
     const std::optional<const Tensor>& mask = std::nullopt,
     SoftmaxProgramConfig program_config = {},
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-    bool numeric_stable = false);
+    bool numeric_stable = true);
 }  // namespace softmax
 }  // namespace ttnn::operations::normalization
 

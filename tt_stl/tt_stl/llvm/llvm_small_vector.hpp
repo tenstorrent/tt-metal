@@ -1308,6 +1308,7 @@ using ValueTypeFromRangeType =
 /// Given a range of type R, iterate the entire range and return a
 /// SmallVector with elements of the vector.  This is useful, for example,
 /// when you want to iterate a range and then sort the results.
+// NOLINTBEGIN(cppcoreguidelines-missing-std-forward)
 template <unsigned Size, typename R>
 SmallVector<ValueTypeFromRangeType<R>, Size> to_vector(R&& Range) {
     return {std::begin(Range), std::end(Range)};
@@ -1326,6 +1327,7 @@ template <typename Out, typename R>
 SmallVector<Out> to_vector_of(R&& Range) {
     return {std::begin(Range), std::end(Range)};
 }
+// NOLINTEND(cppcoreguidelines-missing-std-forward)
 
 // Explicit instantiations
 extern template class llvm::SmallVectorBase<uint32_t>;

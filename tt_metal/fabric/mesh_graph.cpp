@@ -11,7 +11,7 @@
 #include <iomanip>
 #include <optional>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <llrt/tt_cluster.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
@@ -20,6 +20,11 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_graph_descriptor.hpp>
 #include <protobuf/mesh_graph_descriptor.pb.h>
+
+// Implementation of hash function for port_id_t
+std::size_t std::hash<tt::tt_fabric::port_id_t>::operator()(const tt::tt_fabric::port_id_t& p) const {
+    return tt::stl::hash::hash_objects_with_default_seed(p.first, p.second);
+}
 
 namespace tt::tt_fabric {
 FabricType operator|(FabricType lhs, FabricType rhs) {
@@ -30,7 +35,6 @@ FabricType operator&(FabricType lhs, FabricType rhs) {
     return static_cast<FabricType>(static_cast<uint32_t>(lhs) & static_cast<uint32_t>(rhs));
 }
 
-namespace {
 constexpr const char* MESH_GRAPH_DESCRIPTOR_DIR = "tt_metal/fabric/mesh_graph_descriptors";
 
 RoutingDirection routing_direction_to_port_direction(const proto::RoutingDirection& routing_direction) {
@@ -43,25 +47,6 @@ RoutingDirection routing_direction_to_port_direction(const proto::RoutingDirecti
         case proto::RoutingDirection::NONE: return RoutingDirection::NONE;
         default: TT_THROW("Invalid routing direction: {}", routing_direction);
     }
-}
-
-FabricType topology_to_fabric_type(const proto::TorusTopology& topology) {
-    const auto& dim_types = topology.dim_types();
-
-    TT_FATAL(dim_types.size() == 2, "Torus topology must have 2 dimensions");
-
-    if (dim_types[0] == proto::TorusTopology::RING && dim_types[1] == proto::TorusTopology::RING) {
-        return FabricType::TORUS_XY;
-    } else if (dim_types[0] == proto::TorusTopology::RING) {
-        return FabricType::TORUS_Y;
-    } else if (dim_types[1] == proto::TorusTopology::RING) {
-        return FabricType::TORUS_X;
-    } else if (dim_types[0] == proto::TorusTopology::LINE && dim_types[1] == proto::TorusTopology::LINE) {
-        return FabricType::MESH;
-    }
-
-    TT_THROW("Invalid torus topology");
-    return FabricType::MESH;
 }
 
 const tt::stl::Indestructible<std::unordered_map<tt::tt_metal::ClusterType, std::string_view>>&
@@ -84,6 +69,7 @@ const tt::stl::Indestructible<std::unordered_map<tt::tt_metal::ClusterType, std:
                  "p150_mesh_graph_descriptor.yaml"},  // TODO use quasar mesh
                 {tt::tt_metal::ClusterType::N300_2x2, "n300_2x2_mesh_graph_descriptor.yaml"},
                 {tt::tt_metal::ClusterType::P300, "p300_mesh_graph_descriptor.yaml"},
+                {tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, "single_bh_galaxy_mesh_graph_descriptor.yaml"},
             });
 
 const tt::stl::Indestructible<std::unordered_map<tt::tt_metal::ClusterType, std::string_view>>&
@@ -105,8 +91,8 @@ const tt::stl::Indestructible<std::unordered_map<tt::tt_metal::ClusterType, std:
                 {tt::tt_metal::ClusterType::SIMULATOR_QUASAR, "p150_mesh_graph_descriptor.textproto"},
                 {tt::tt_metal::ClusterType::N300_2x2, "n300_2x2_mesh_graph_descriptor.textproto"},
                 {tt::tt_metal::ClusterType::P300, "p300_mesh_graph_descriptor.textproto"},
+                {tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, "single_bh_galaxy_mesh_graph_descriptor.textproto"},
             });
-}  // namespace
 
 bool has_flag(FabricType flags, FabricType test) { return (flags & test) == test; }
 
@@ -207,7 +193,7 @@ std::unordered_map<chip_id_t, RouterEdge> MeshGraph::get_valid_connections(
           std::pair{S, RoutingDirection::S},
           std::pair{W, RoutingDirection::W}}) {
         if (mesh_coord_range.contains(coord)) {
-            chip_id_t fabric_chip_id = coord[0] * mesh_shape[1] + coord[1];
+            chip_id_t fabric_chip_id = (coord[0] * mesh_shape[1]) + coord[1];
             valid_connections.insert(
                 {fabric_chip_id,
                  RouterEdge{
@@ -222,6 +208,7 @@ std::unordered_map<chip_id_t, RouterEdge> MeshGraph::get_valid_connections(
 }
 
 void MeshGraph::initialize_from_mgd(const MeshGraphDescriptor& mgd) {
+    legacy_mode_ = false;
     static const std::unordered_map<const proto::Architecture, tt::ARCH> proto_arch_to_arch = {
         {proto::Architecture::WORMHOLE_B0, tt::ARCH::WORMHOLE_B0},
         {proto::Architecture::BLACKHOLE, tt::ARCH::BLACKHOLE},
@@ -294,29 +281,31 @@ void MeshGraph::initialize_from_mgd(const MeshGraphDescriptor& mgd) {
         const chip_id_t src_chip_id = src_instance.local_id;
         const chip_id_t dst_chip_id = dst_instance.local_id;
 
-        if (src_mesh_id != dst_mesh_id) {
-            // Intermesh Connection
-            auto& edge = this->inter_mesh_connectivity_[*src_mesh_id][src_chip_id];
-            auto [it, is_inserted] = edge.insert(
-                {dst_mesh_id,
-                 RouterEdge{
-                     .port_direction = routing_direction_to_port_direction(connection_data.routing_direction),
-                     .connected_chip_ids = {dst_chip_id},
-                     .weight = 0}});
-            if (!is_inserted) {
-                it->second.connected_chip_ids.push_back(dst_chip_id);
-            }
-        } else {
-            // Intramesh Connection
-            auto& edge = this->intra_mesh_connectivity_[*src_mesh_id][src_chip_id];
-            auto [it, is_inserted] = edge.insert(
-                {dst_chip_id,
-                 RouterEdge{
-                     .port_direction = routing_direction_to_port_direction(connection_data.routing_direction),
-                     .connected_chip_ids = {dst_chip_id},
-                     .weight = 0}});
-            if (!is_inserted) {
-                it->second.connected_chip_ids.push_back(dst_chip_id);
+        for (unsigned int i = 0; i < connection_data.count; i++) {
+            if (src_mesh_id != dst_mesh_id) {
+                // Intermesh Connection
+                auto& edge = this->inter_mesh_connectivity_[*src_mesh_id][src_chip_id];
+                auto [it, is_inserted] = edge.insert(
+                    {dst_mesh_id,
+                     RouterEdge{
+                         .port_direction = routing_direction_to_port_direction(connection_data.routing_direction),
+                         .connected_chip_ids = {dst_chip_id},
+                         .weight = 0}});
+                if (!is_inserted) {
+                    it->second.connected_chip_ids.push_back(dst_chip_id);
+                }
+            } else {
+                // Intramesh Connection
+                auto& edge = this->intra_mesh_connectivity_[*src_mesh_id][src_chip_id];
+                auto [it, is_inserted] = edge.insert(
+                    {dst_chip_id,
+                     RouterEdge{
+                         .port_direction = routing_direction_to_port_direction(connection_data.routing_direction),
+                         .connected_chip_ids = {dst_chip_id},
+                         .weight = 0}});
+                if (!is_inserted) {
+                    it->second.connected_chip_ids.push_back(dst_chip_id);
+                }
             }
         }
     }
@@ -365,7 +354,8 @@ void MeshGraph::initialize_from_mgd(const MeshGraphDescriptor& mgd) {
                 std::make_pair(*mesh_id, mesh_host_ranks_values.back()),
                 MeshCoordinateRange(
                     MeshCoordinate(host_coord[0] * board_ns_size, host_coord[1] * board_ew_size),
-                    MeshCoordinate((host_coord[0] + 1) * board_ns_size - 1, (host_coord[1] + 1) * board_ew_size - 1)));
+                    MeshCoordinate(
+                        ((host_coord[0] + 1) * board_ns_size) - 1, ((host_coord[1] + 1) * board_ew_size) - 1)));
         }
 
         // Populate mesh_host_ranks_
@@ -378,7 +368,33 @@ void MeshGraph::initialize_from_mgd(const MeshGraphDescriptor& mgd) {
     }
 }
 
+void MeshGraph::load_intermesh_connections(const AnnotatedIntermeshConnections& intermesh_connections) {
+    for (const auto& connection : intermesh_connections) {
+        auto src_mesh = std::get<0>(connection).first;
+        auto dst_mesh = std::get<1>(connection).first;
+        auto src_port = std::get<0>(connection).second;
+        auto dst_port = std::get<1>(connection).second;
+        auto src_port_dir = src_port.first;
+        auto src_chip = mesh_edge_ports_to_chip_id_[src_mesh].at(src_port);
+        auto dst_chip = mesh_edge_ports_to_chip_id_[dst_mesh].at(dst_port);
+
+        this->add_to_connectivity(MeshId{src_mesh}, src_chip, MeshId{dst_mesh}, dst_chip, src_port_dir);
+    }
+}
+
+const RequestedIntermeshConnections& MeshGraph::get_requested_intermesh_connections() const {
+    return requested_intermesh_connections_;
+}
+
+const RequestedIntermeshPorts& MeshGraph::get_requested_intermesh_ports() const { return requested_intermesh_ports_; }
+
+const std::vector<std::unordered_map<port_id_t, chip_id_t, hash_pair>>& MeshGraph::get_mesh_edge_ports_to_chip_id()
+    const {
+    return mesh_edge_ports_to_chip_id_;
+}
+
 void MeshGraph::initialize_from_yaml(const std::string& mesh_graph_desc_file_path) {
+    legacy_mode_ = true;
     std::ifstream fdesc(mesh_graph_desc_file_path);
     TT_FATAL(not fdesc.fail(), "Failed to open file: {}", mesh_graph_desc_file_path);
 
@@ -387,7 +403,9 @@ void MeshGraph::initialize_from_yaml(const std::string& mesh_graph_desc_file_pat
     TT_FATAL(yaml["ChipSpec"].IsMap(), "MeshGraph: Expecting yaml to define a ChipSpec as a Map");
     TT_FATAL(yaml["Board"].IsSequence(), "MeshGraph: Expecting yaml to define Board as a Sequence");
     TT_FATAL(yaml["Mesh"].IsSequence(), "MeshGraph: Expecting yaml to define Mesh as a Sequence");
-    TT_FATAL(yaml["Graph"].IsSequence(), "MeshGraph: Expecting yaml to define Graph as a Sequence");
+    TT_FATAL(
+        yaml["RelaxedGraph"].IsSequence() || yaml["Graph"].IsSequence(),
+        "MeshGraph: Expecting yaml to define RelaxedGraph or Graph as a Sequence");
 
     // Parse Chip
     const auto& chip = yaml["ChipSpec"];
@@ -428,7 +446,6 @@ void MeshGraph::initialize_from_yaml(const std::string& mesh_graph_desc_file_pat
         board_name_to_topology[board_name] = {col_size, row_size};
     }
     // Loop over Meshes, populate intra mesh
-    std::vector<std::unordered_map<port_id_t, chip_id_t, hash_pair>> mesh_edge_ports_to_chip_id;
     for (const auto& mesh : yaml["Mesh"]) {
         std::string mesh_board = mesh["board"].as<std::string>();
         MeshId mesh_id{mesh["id"].as<std::uint32_t>()};
@@ -440,7 +457,7 @@ void MeshGraph::initialize_from_yaml(const std::string& mesh_graph_desc_file_pat
             while (this->mesh_host_ranks_.size() <= *mesh_id) {
                 this->mesh_host_ranks_.emplace_back(MeshShape{1, 1}, MeshHostRankId{0});
             }
-            mesh_edge_ports_to_chip_id.resize(*mesh_id + 1);
+            mesh_edge_ports_to_chip_id_.resize(*mesh_id + 1);
         }
         TT_FATAL(
             board_name_to_topology.find(mesh_board) != board_name_to_topology.end(),
@@ -495,7 +512,8 @@ void MeshGraph::initialize_from_yaml(const std::string& mesh_graph_desc_file_pat
                 std::make_pair(*mesh_id, mesh_host_ranks_values.back()),
                 MeshCoordinateRange(
                     MeshCoordinate(host_coord[0] * board_ns_size, host_coord[1] * board_ew_size),
-                    MeshCoordinate((host_coord[0] + 1) * board_ns_size - 1, (host_coord[1] + 1) * board_ew_size - 1)));
+                    MeshCoordinate(
+                        ((host_coord[0] + 1) * board_ns_size) - 1, ((host_coord[1] + 1) * board_ew_size) - 1)));
         }
 
         this->mesh_host_ranks_[*mesh_id] =
@@ -506,7 +524,7 @@ void MeshGraph::initialize_from_yaml(const std::string& mesh_graph_desc_file_pat
         this->intra_mesh_connectivity_[*mesh_id].resize(mesh_size);
         for (const auto& src_mesh_coord : mesh_coord_range) {
             // Get the chip id for the current mesh coordinate
-            chip_id_t src_chip_id = src_mesh_coord[0] * mesh_shape[1] + src_mesh_coord[1];
+            chip_id_t src_chip_id = (src_mesh_coord[0] * mesh_shape[1]) + src_mesh_coord[1];
             // Get the valid connections for the current chip
             this->intra_mesh_connectivity_[*mesh_id][src_chip_id] =
                 this->get_valid_connections(src_mesh_coord, mesh_coord_range, board_name_to_fabric_type[mesh_board]);
@@ -545,47 +563,65 @@ void MeshGraph::initialize_from_yaml(const std::string& mesh_graph_desc_file_pat
         std::uint32_t chan_id = 0;
         for (std::uint32_t chip_id = 0; chip_id < mesh_ew_size; chip_id++) {
             for (std::uint32_t i = 0; i < chip_spec_.num_eth_ports_per_direction; i++) {
-                mesh_edge_ports_to_chip_id[*mesh_id][{RoutingDirection::N, chan_id++}] = chip_id;
+                mesh_edge_ports_to_chip_id_[*mesh_id][{RoutingDirection::N, chan_id++}] = chip_id;
             }
         }
         // South, start from SW corner
         chan_id = 0;
         for (std::uint32_t chip_id = (mesh_size - mesh_ew_size); chip_id < mesh_size; chip_id++) {
             for (std::uint32_t i = 0; i < chip_spec_.num_eth_ports_per_direction; i++) {
-                mesh_edge_ports_to_chip_id[*mesh_id][{RoutingDirection::S, chan_id++}] = chip_id;
+                mesh_edge_ports_to_chip_id_[*mesh_id][{RoutingDirection::S, chan_id++}] = chip_id;
             }
         }
         // East, start from NE corner
         chan_id = 0;
         for (std::uint32_t chip_id = (mesh_ew_size - 1); chip_id < mesh_size; chip_id += mesh_ew_size) {
             for (std::uint32_t i = 0; i < chip_spec_.num_eth_ports_per_direction; i++) {
-                mesh_edge_ports_to_chip_id[*mesh_id][{RoutingDirection::E, chan_id++}] = chip_id;
+                mesh_edge_ports_to_chip_id_[*mesh_id][{RoutingDirection::E, chan_id++}] = chip_id;
             }
         }
         // WEST, start from NW corner
         chan_id = 0;
         for (std::uint32_t chip_id = 0; chip_id < mesh_size; chip_id += mesh_ew_size) {
             for (std::uint32_t i = 0; i < chip_spec_.num_eth_ports_per_direction; i++) {
-                mesh_edge_ports_to_chip_id[*mesh_id][{RoutingDirection::W, chan_id++}] = chip_id;
+                mesh_edge_ports_to_chip_id_[*mesh_id][{RoutingDirection::W, chan_id++}] = chip_id;
             }
         }
     }
-    // Loop over Graph, populate inter mesh
-    auto convert_yaml_to_port_id = [](const YAML::Node& node) -> std::pair<MeshId, port_id_t> {
-        MeshId mesh_id{node[0].as<std::uint32_t>()};
-        std::string port_string = node[1].as<std::string>();
-        RoutingDirection port_direction =
-            enchantum::cast<RoutingDirection>(port_string.substr(0, 1), ttsl::ascii_caseless_comp).value();
-        std::uint32_t chan_id = static_cast<uint32_t>(std::stoul(port_string.substr(1, port_string.size() - 1)));
-        return {mesh_id, {port_direction, chan_id}};
-    };
-    for (const auto& mesh_connection : yaml["Graph"]) {
-        TT_FATAL(mesh_connection.size() == 2, "MeshGraph: Expecting 2 elements in each Graph connection");
-        const auto& [src_mesh_id, src_port_id] = convert_yaml_to_port_id(mesh_connection[0]);
-        const auto& [dst_mesh_id, dst_port_id] = convert_yaml_to_port_id(mesh_connection[1]);
-        const auto& src_chip_id = mesh_edge_ports_to_chip_id[*src_mesh_id].at(src_port_id);
-        const auto& dst_chip_id = mesh_edge_ports_to_chip_id[*dst_mesh_id].at(dst_port_id);
-        this->add_to_connectivity(src_mesh_id, src_chip_id, dst_mesh_id, dst_chip_id, src_port_id.first);
+    std::vector<std::tuple<std::pair<uint32_t, std::string>, std::pair<uint32_t, std::string>>> connections;
+
+    TT_FATAL(
+        !(yaml["RelaxedGraph"] && yaml["Graph"]),
+        "Mesh Graph Descriptor cannot specify both RelaxedGraph and Graph connections.");
+    if (yaml["RelaxedGraph"]) {
+        // Specify the number of active channels between meshes
+        for (const auto& connection : yaml["RelaxedGraph"]) {
+            auto src_mesh_str = connection[0].as<std::string>();
+            auto dst_mesh_str = connection[1].as<std::string>();
+            auto num_chans = connection[2].as<uint32_t>();
+            auto src_mesh = static_cast<uint32_t>(std::stoul(src_mesh_str.substr(1, src_mesh_str.size() - 1)));
+            auto dst_mesh = static_cast<uint32_t>(std::stoul(dst_mesh_str.substr(1, dst_mesh_str.size() - 1)));
+            requested_intermesh_connections_[src_mesh][dst_mesh] = num_chans;
+            requested_intermesh_connections_[dst_mesh][src_mesh] = num_chans;
+        }
+    } else {
+        // Specify the number of active channels between specific logical devices across meshes
+        TT_FATAL(yaml["Graph"], "Mesh Graph Descriptor must specify either RelaxedGraph or Graph connections.");
+        for (const auto& connection : yaml["Graph"]) {
+            auto src_mesh_str = connection[0][0].as<std::string>();
+            auto dst_mesh_str = connection[1][0].as<std::string>();
+            auto src_device_str = connection[0][1].as<std::string>();
+            auto dst_device_str = connection[1][1].as<std::string>();
+            auto num_chans = connection[2].as<uint32_t>();
+
+            auto src_mesh = static_cast<uint32_t>(std::stoul(src_mesh_str.substr(1, src_mesh_str.size() - 1)));
+            auto dst_mesh = static_cast<uint32_t>(std::stoul(dst_mesh_str.substr(1, dst_mesh_str.size() - 1)));
+            auto src_device = static_cast<uint32_t>(std::stoul(src_device_str.substr(1, src_device_str.size() - 1)));
+            auto dst_device = static_cast<uint32_t>(std::stoul(dst_device_str.substr(1, dst_device_str.size() - 1)));
+
+            requested_intermesh_ports_[src_mesh][dst_mesh].push_back({src_device, dst_device, num_chans});
+            requested_intermesh_ports_[dst_mesh][src_mesh].push_back({dst_device, src_device, num_chans});
+        }
     }
 }
 
@@ -701,7 +737,7 @@ MeshCoordinate MeshGraph::chip_to_coordinate(MeshId mesh_id, chip_id_t chip_id) 
 
 chip_id_t MeshGraph::coordinate_to_chip(MeshId mesh_id, MeshCoordinate coordinate) const {
     const auto& mesh_shape = mesh_to_chip_ids_.at(mesh_id).shape();
-    return coordinate[0] * mesh_shape[1] + coordinate[1];
+    return (coordinate[0] * mesh_shape[1]) + coordinate[1];
 }
 
 std::optional<MeshHostRankId> MeshGraph::get_host_rank_for_chip(MeshId mesh_id, chip_id_t chip_id) const {

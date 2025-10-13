@@ -7,10 +7,6 @@
 #include "compute_kernel_api/common_globals.h"
 #ifdef TRISC_MATH
 #include "llk_math_eltwise_unary_sfpu_activations.h"
-#define MAIN math_main()
-#define MATH(x) x
-#else
-#define MATH(x)
 #endif
 
 namespace ckernel {
@@ -73,7 +69,7 @@ ALWI void softsign_tile_init() { MATH((llk_math_eltwise_unary_sfpu_softsign_init
 */
 // clang-format on
 ALWI void celu_tile(uint32_t idst, uint32_t alpha, uint32_t alpha_recip) {
-    MATH((llk_math_eltwise_unary_sfpu_celu<APPROX, ckernel::ActivationType::Celu>(idst, alpha, alpha_recip)));
+    MATH((llk_math_eltwise_unary_sfpu_celu<APPROX, DST_ACCUM_MODE>(idst, alpha, alpha_recip)));
 }
 
 /**

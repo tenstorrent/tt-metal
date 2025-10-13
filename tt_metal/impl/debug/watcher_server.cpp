@@ -19,7 +19,7 @@
 #include <thread>
 #include <vector>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "core_coord.hpp"
 #include "debug/ring_buffer.h"
 #include "debug_helpers.hpp"
@@ -408,7 +408,7 @@ void WatcherServer::Impl::init_device(chip_id_t device_id) {
                         valid_logical_core = false;
                     }
                     if (valid_logical_core) {
-                        auto programmable_core_type = get_programmable_core_type(virtual_core, device_id);
+                        auto programmable_core_type = llrt::get_core_type(device_id, virtual_core);
                         // Create the mask based on the feature
                         uint32_t processor_mask =
                             rtoptions.get_feature_processors(delay_feature).get_processor_mask(programmable_core_type);
@@ -528,7 +528,7 @@ void WatcherServer::Impl::poll_watcher_data() {
         fprintf(logfile_, "-----\n");
         fprintf(logfile_, "Dump #%d at %.3lfs\n", dump_count_.load(), get_elapsed_secs());
 
-        if (device_id_to_reader_.size() == 0) {
+        if (device_id_to_reader_.empty()) {
             fprintf(logfile_, "No active devices\n");
         }
 

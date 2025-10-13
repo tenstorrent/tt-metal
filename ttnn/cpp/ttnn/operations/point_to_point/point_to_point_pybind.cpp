@@ -27,8 +27,8 @@ void py_bind_point_to_point(py::module& module) {
                 topology (ttnn.Topology): Fabric topology.
 
             Keyword Args:
-                queue_id (int, optional): command queue id. Defaults to `0`.
-                optional_output_tensoe (ttnn.Tensor,optional): Optional output tensor.
+                optional_output_tensor (ttnn.Tensor,optional): Optional output tensor.
+                optional_intermediate_tensor (ttnn.Tensor,optional): Optional intermediate tensor.
 
            Returns:
                ttnn.Tensor: the output tensor, with transferred shard on receiving device.
@@ -65,8 +65,14 @@ void py_bind_point_to_point(py::module& module) {
                const MeshCoordinate& sender_coord,
                const ccl::Topology topology,
                const std::optional<ttnn::Tensor>& optional_output_tensor,
-               QueueId queue_id) {
-                return self(queue_id, input_tensor, receiver_coord, sender_coord, topology, optional_output_tensor);
+               const std::optional<ttnn::Tensor>& optional_intermediate_tensor) {
+                return self(
+                    input_tensor,
+                    receiver_coord,
+                    sender_coord,
+                    topology,
+                    optional_output_tensor,
+                    optional_intermediate_tensor);
             },
             py::arg("input_tensor").noconvert(),
             py::arg("receiver_coord"),
@@ -74,7 +80,13 @@ void py_bind_point_to_point(py::module& module) {
             py::arg("topology"),
             py::kw_only(),
             py::arg("optional_output_tensor") = std::nullopt,
-            py::arg("queue_id") = DefaultQueueId,
-        });
+            py::arg("optional_intermediate_tensor") = std::nullopt});
+    module.def(
+        "p2p_compute_intermediate_tensor_spec",
+        p2p_compute_intermediate_tensor_spec,
+        py::arg("input_tensor"),
+        py::arg("receiver_coord"),
+        py::arg("sender_coord"),
+        py::arg("topology"));
 }
 }  // namespace ttnn::operations::point_to_point

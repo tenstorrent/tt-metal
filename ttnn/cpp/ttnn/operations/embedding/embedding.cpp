@@ -6,7 +6,6 @@
 
 #include <utility>
 #include "ttnn/operations/core/core.hpp"
-#include "ttnn/common/queue_id.hpp"
 #include "ttnn/operations/embedding/device/embedding_device_operation.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp"
@@ -14,7 +13,6 @@
 namespace ttnn::operations::embedding {
 
 ttnn::Tensor EmbeddingOperation::invoke(
-    QueueId queue_id,
     const Tensor& input_tensor_arg,
     const Tensor& weight_arg,
     const std::optional<int>& pad_token,
@@ -45,7 +43,8 @@ ttnn::Tensor EmbeddingOperation::invoke(
 
     // If layout is row major, OR if the input tensor is not a multiple of TILE_HEIGHT, then we cannot use tilized
     bool fused_tilized = false;
-    if (input_tensor.padded_shape()[-1] % TILE_HEIGHT == 0 && weight.padded_shape()[-1] % TILE_WIDTH == 0) {
+    if (input_tensor.padded_shape()[-1] % tt::constants::TILE_HEIGHT == 0 &&
+        weight.padded_shape()[-1] % tt::constants::TILE_WIDTH == 0) {
         if (layout.has_value()) {
             if (layout.value() == ttnn::TILE_LAYOUT) {
                 fused_tilized = true;

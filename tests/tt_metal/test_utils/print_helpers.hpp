@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-#include <tt-metalium/utils.hpp>
 
 namespace tt {
 namespace test_utils {

@@ -6,14 +6,6 @@ import ttnn
 from models.demos.yolov6l.tt.common import Yolov6l_Conv2D
 from models.demos.yolov6l.tt.ttnn_repblock import TtRepBlock
 
-try:
-    from tracy import signpost
-
-    use_signpost = True
-
-except ModuleNotFoundError:
-    use_signpost = False
-
 
 class TtBepC3:
     def __init__(
@@ -60,8 +52,6 @@ class TtBepC3:
         )
 
     def __call__(self, x):
-        if use_signpost:
-            signpost(header="TtBepC3 Start")
         conv1 = self.cv1(x)
         rep, _, _ = self.repblock(conv1)
         conv2 = self.cv2(x)
@@ -87,6 +77,4 @@ class TtBepC3:
         ttnn.deallocate(rep)
         ttnn.deallocate(conv2)
         conv3 = self.cv3(concat_output)
-        if use_signpost:
-            signpost(header="TtBepC3 End")
         return conv3

@@ -28,7 +28,7 @@
 #include <variant>
 #include <vector>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "buffer.hpp"
 #include "circular_buffer.hpp"
 #include "circular_buffer_constants.h"
@@ -40,7 +40,6 @@
 #include "dispatch/dispatch_settings.hpp"
 #include "dispatch_core_common.hpp"
 #include "hal_types.hpp"
-#include "kernel.hpp"
 #include "math.hpp"
 #include "mesh_device.hpp"
 #include "program_device_map.hpp"
@@ -314,7 +313,8 @@ uint32_t finalize_kernel_bins(
     uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
 
     uint32_t max_offset = 0;
-    uint32_t num_processors = hal.get_num_risc_processors(hal.get_programmable_core_type(programmable_core_type_index));
+    HalProgrammableCoreType programmable_core_type = hal.get_programmable_core_type(programmable_core_type_index);
+    uint32_t num_processors = hal.get_num_risc_processors(programmable_core_type);
     for (auto& kg : kernel_groups) {
         auto kernel_config = kg->launch_msg.view().kernel_config();
         uint32_t offset = base_offset;
@@ -323,52 +323,31 @@ uint32_t finalize_kernel_bins(
         std::ranges::fill(kg->kernel_text_offsets, 0);
         for (auto kernel_id : kg->kernel_ids) {
             const auto& kernel = kernels.at(kernel_id);
-            const auto& kernel_impl = KernelImpl::from(*kernel);
-            auto class_id = kernel->dispatch_class();
-            const std::vector<const ll_api::memory*>& binaries = kernel_impl.binaries(
+            const auto& binaries = KernelImpl::from(*kernel).binaries(
                 BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key);
-            // TODO: this is really ugly, save me future-HAL!
-            if (programmable_core_type_index == hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX)) {
-                const auto binary_packed_size = kernel_impl.get_binary_packed_size(device, 0);
-
-                if (class_id == DISPATCH_CLASS_TENSIX_COMPUTE) {
-                    constexpr uint32_t k_MaxMathProcessorsCount = 3;
-                    for (uint32_t proc_type_index = 0; proc_type_index < k_MaxMathProcessorsCount; proc_type_index++) {
-                        uint32_t binary_packed_size = kernel_impl.get_binary_packed_size(device, proc_type_index);
-                        kg->kernel_text_offsets[2 + proc_type_index] = offset;
-                        kernel_config.kernel_text_offset()[2 + proc_type_index] = offset;
-                        offset += binary_packed_size;
-                        offset = tt::align(offset, l1_alignment);
-                    }
-                } else {
-                    kg->kernel_text_offsets[class_id] = offset;
-                    kernel_config.kernel_text_offset()[class_id] = offset;
-                    offset += binary_packed_size;
-                    offset = tt::align(offset, l1_alignment);
-
-                    // Provide text size for copying to NCRISC IRAM
-                    if (class_id == DISPATCH_CLASS_TENSIX_DM1) {
-                        const auto binary_text_size = kernel_impl.get_binary_text_size(device, 0);
-                        TT_ASSERT(binary_text_size >> 4 <= std::numeric_limits<uint16_t>::max());
-                        kernel_config.ncrisc_kernel_size16() = (binary_text_size + 15) >> 4;
-                    }
-                }
-            } else {
-                // All other core types
-                const auto binary_packed_size = kernel_impl.get_binary_packed_size(device, 0);
-                if (hal.get_core_kernel_stored_in_config_buffer(
-                        hal.get_programmable_core_type(programmable_core_type_index))) {
-                    kg->kernel_text_offsets[class_id] = offset;
-                    kernel_config.kernel_text_offset()[class_id] = offset;
-                    offset += binary_packed_size;
+            uint32_t num_binaries = kernel->expected_num_binaries();
+            TT_ASSERT(kernel->get_kernel_programmable_core_type() == programmable_core_type);
+            for (uint32_t i = 0; i < num_binaries; i++) {
+                uint32_t kernel_text_offset = 0;
+                if (hal.get_core_kernel_stored_in_config_buffer(programmable_core_type)) {
+                    kernel_text_offset = offset;
+                    offset += binaries[i]->get_packed_size();
                     offset = tt::align(offset, l1_alignment);
                 } else {
-                    kg->kernel_text_offsets[class_id] = binaries[0]->get_text_addr();
-                    kernel_config.kernel_text_offset()[class_id] = binaries[0]->get_text_addr();
+                    kernel_text_offset = binaries[i]->get_text_addr();
                 }
+                uint32_t processor_index = hal.get_processor_index(
+                    programmable_core_type, kernel->get_kernel_processor_class(), kernel->get_kernel_processor_type(i));
+                kg->kernel_text_offsets[processor_index] = kernel_text_offset;
+                kernel_config.kernel_text_offset()[processor_index] = kernel_text_offset;
+                hal.set_iram_text_size(
+                    kg->launch_msg.view(),
+                    programmable_core_type,
+                    kernel->get_kernel_processor_class(),
+                    kernel->get_kernel_processor_type(i),
+                    binaries[i]->get_text_size());
             }
         }
-
         max_offset = std::max(offset, max_offset);
     }
     kernel_text_offset = base_offset;
@@ -662,7 +641,7 @@ BatchedTransfers assemble_runtime_args_commands(
             uint32_t max_runtime_args_len = common_size / sizeof(uint32_t);
             const auto& common_rt_args = kernel->common_runtime_args();
 
-            if (common_rt_args.size() > 0) {
+            if (!common_rt_args.empty()) {
                 if (!tt::tt_metal::MetalContext::instance().hal().get_supports_receiving_multicasts(
                         programmable_core_type_index)) {
                     uint32_t num_sub_cmds = kernel->logical_cores().size();
@@ -726,7 +705,6 @@ BatchedTransfers assemble_runtime_args_commands(
             continue;
         }
         CoreType core_type = hal.get_core_type(index);
-        uint32_t processor_classes = hal.get_processor_classes_count(index);
 
         // Unique RTAs - Unicast
         // Set by the user based on the kernel and core coord
@@ -789,7 +767,9 @@ BatchedTransfers assemble_runtime_args_commands(
         // On ETH use unicast
         if (!use_kernel_group_crta_multicast ||
             !tt::tt_metal::MetalContext::instance().hal().get_supports_receiving_multicasts(index)) {
-            for (int dispatch_class = 0; dispatch_class < processor_classes; dispatch_class++) {
+            // Note: it's wrong to use HAL processor classes here, because it only has DM/COMPUTE,
+            // whereas CRTA is separate for DM0/DM1/COMPUTE.
+            for (int dispatch_class = 0; dispatch_class < DISPATCH_CLASS_MAX; dispatch_class++) {
                 const uint32_t crta_offset = program.get_program_config(index).crta_offsets[dispatch_class];
                 uint32_t common_size = program.get_program_config(index).crta_sizes[dispatch_class];
                 if (common_size == 0) {
@@ -1051,8 +1031,8 @@ public:
                     }
                     for (const auto& buffer_index : cb->remote_buffer_indices()) {
                         const uint32_t base_index =
-                            remote_offset_index +
-                            (NUM_CIRCULAR_BUFFERS - 1 - buffer_index) * UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG;
+                            remote_offset_index + ((NUM_CIRCULAR_BUFFERS - 1 - buffer_index) *
+                                                   UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG);
                         cb_config_payload[base_index] = cb->config_address();
                         cb_config_payload[base_index + 1] = cb->page_size(buffer_index);
                         max_index = std::max(max_index, base_index + UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG);
@@ -1094,6 +1074,18 @@ public:
             MetalContext::instance().dispatch_mem_map(constants.dispatch_core_type).scratch_db_size() / 2;
         const uint32_t max_paged_length_per_sub_cmd =
             max_length_per_sub_cmd / HostMemDeviceCommand::PROGRAM_PAGE_SIZE * HostMemDeviceCommand::PROGRAM_PAGE_SIZE;
+
+        const uint32_t unicast_cmd_sequence_sizeB = [using_prefetcher_cache]() {
+            DeviceCommandCalculator calc;
+            constexpr bool flush_prefetch = false;
+            calc.add_dispatch_write_linear<flush_prefetch>(0);
+            if (not using_prefetcher_cache) {
+                calc.add_prefetch_relay_paged();
+            } else {
+                calc.add_prefetch_relay_ringbuffer(1);
+            }
+            return calc.write_offset_bytes();
+        }();
         for (const auto& [cores, num_mcast_dests, kg_transfer_info] : program_transfer_info.kernel_bins) {
             const auto [noc_encoding, write_linear] = std::visit(
                 ttsl::overloaded{
@@ -1107,9 +1099,9 @@ public:
                 cores);
             for (uint32_t kernel_idx = 0; kernel_idx < kg_transfer_info.dst_base_addrs.size(); kernel_idx++) {
                 if (write_linear) {
-                    kernel_bins_unicast_cmds.emplace_back(2 * hal.get_alignment(HalMemType::HOST));
+                    kernel_bins_unicast_cmds.emplace_back(unicast_cmd_sequence_sizeB);
+                    calculator.update_write_offset_bytes(unicast_cmd_sequence_sizeB);
                     constexpr bool flush_prefetch = false;
-                    calculator.add_dispatch_write_linear<flush_prefetch>(0);
 
                     // Set write offset if required
                     auto write_offset = DISPATCH_WRITE_OFFSET_ZERO;
@@ -1150,7 +1142,6 @@ public:
                             page_offset = kg_transfer_info.page_offsets[kernel_idx];
                         }
 
-                        calculator.add_prefetch_relay_paged();
                         kernel_bins_unicast_cmds.back().add_prefetch_relay_paged(
                             true,  // is_dram
                             page_offset,
@@ -1159,7 +1150,6 @@ public:
                             relayed_bytes / kernels_buffer->page_size(),
                             length_adjust);
                     } else {
-                        calculator.add_prefetch_relay_ringbuffer(1);
                         kernel_bins_unicast_cmds.back().add_prefetch_relay_ringbuffer(
                             1,
                             std::vector<CQPrefetchRelayRingbufferSubCmd>(
@@ -1337,7 +1327,7 @@ public:
                     batched_dispatch_subcmds.emplace_back();
                     batched_cmd_data.emplace_back();
                 }
-                if (batched_dispatch_subcmds.back().size() > 0) {
+                if (!batched_dispatch_subcmds.back().empty()) {
                     auto& last_transfer = batched_dispatch_subcmds.back().back();
                     if (last_transfer.noc_xy_addr != transfer_set.first.first) {
                         last_transfer.flags |= CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_FLAG_UNLINK;
@@ -1411,7 +1401,7 @@ public:
                 if (last_end != transfer.start) {
                     j++;
                 }
-                if (transfer.cbs.size() > 0) {
+                if (!transfer.cbs.empty()) {
                     program_command_sequence.circular_buffers_on_core_ranges.push_back(std::move(transfer.cbs));
                     program_command_sequence.cb_configs_payloads.push_back(
                         reinterpret_cast<uint32_t*>(data_collection_location[j]));
@@ -1557,7 +1547,7 @@ public:
         // Note: because of the assumption that all launch messages have the same layout, we can use
         // the dev_msgs factory for whatever core type.
         auto dev_msgs_factory = hal.get_dev_msgs_factory(HalProgrammableCoreType::TENSIX);
-        if (multicast_cmds.sub_cmds.size() > 0) {
+        if (!multicast_cmds.sub_cmds.empty()) {
             uint32_t curr_sub_cmd_idx = 0;
             for (const auto& [num_sub_cmds_in_cmd, multicast_launch_msg_payload_sizeB] : multicast_cmds.payload) {
                 uint32_t write_offset_bytes = device_command_sequence.write_offset_bytes();
@@ -1574,7 +1564,7 @@ public:
                 curr_sub_cmd_idx += num_sub_cmds_in_cmd;
                 program_command_sequence.launch_msg_write_packed_cmd_ptrs.push_back(
                     &((CQDispatchCmd*)((uint32_t*)device_command_sequence.data() +
-                                       (write_offset_bytes + sizeof(CQPrefetchCmd)) / sizeof(uint32_t)))
+                                       ((write_offset_bytes + sizeof(CQPrefetchCmd)) / sizeof(uint32_t))))
                          ->write_packed);
                 uint32_t curr_sub_cmd_data_offset_words =
                     (write_offset_bytes + (sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd)) +
@@ -1590,7 +1580,7 @@ public:
             }
         }
 
-        if (unicast_cmds.sub_cmds.size() > 0) {
+        if (!unicast_cmds.sub_cmds.empty()) {
             uint32_t curr_sub_cmd_idx = 0;
             for (const auto& [num_sub_cmds_in_cmd, unicast_launch_msg_payload_sizeB] : unicast_cmds.payload) {
                 uint32_t write_offset_bytes = device_command_sequence.write_offset_bytes();
@@ -1607,7 +1597,7 @@ public:
                 curr_sub_cmd_idx += num_sub_cmds_in_cmd;
                 program_command_sequence.unicast_launch_msg_write_packed_cmd_ptrs.push_back(
                     &((CQDispatchCmd*)((uint32_t*)device_command_sequence.data() +
-                                       (write_offset_bytes + sizeof(CQPrefetchCmd)) / sizeof(uint32_t)))
+                                       ((write_offset_bytes + sizeof(CQPrefetchCmd)) / sizeof(uint32_t))))
                          ->write_packed);
                 uint32_t curr_sub_cmd_data_offset_words =
                     (write_offset_bytes + (sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd)) +
@@ -1624,8 +1614,8 @@ public:
         }
     }
 
-    bool has_multicast_launch_cmds() const { return multicast_cmds.sub_cmds.size() > 0; }
-    bool has_unicast_launch_cmds() const { return unicast_cmds.sub_cmds.size() > 0; }
+    bool has_multicast_launch_cmds() const { return !multicast_cmds.sub_cmds.empty(); }
+    bool has_unicast_launch_cmds() const { return !unicast_cmds.sub_cmds.empty(); }
 
 private:
     template <typename T>
@@ -1712,7 +1702,7 @@ public:
             dispatcher_for_go_signal);
         program_command_sequence.mcast_go_signal_cmd_ptr =
             &((CQDispatchCmd*)((uint32_t*)device_command_sequence.data() +
-                               (write_offset_bytes + sizeof(CQPrefetchCmd)) / sizeof(uint32_t)))
+                               ((write_offset_bytes + sizeof(CQPrefetchCmd)) / sizeof(uint32_t))))
                  ->mcast;
     }
 };
@@ -1759,7 +1749,7 @@ void assemble_device_commands(
 
     // Assemble binary
     const auto& program_transfer_info = program.get_program_transfer_info();
-    if (program_transfer_info.kernel_bins.size()) {
+    if (!program_transfer_info.kernel_bins.empty()) {
         TT_FATAL(
             program.get_kernels_buffer(device).get(), "Expected Kernel Binary Buffer to be allocated for program.");
     }
@@ -1926,8 +1916,8 @@ void update_program_dispatch_commands(
     static constexpr uint32_t wait_count_offset = (sizeof(CQPrefetchCmd) + offsetof(CQDispatchCmd, wait.count));
     static constexpr uint32_t write_offsets_offset = (sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd));
     static constexpr uint32_t tensix_l1_write_offset_offset = write_offsets_offset + sizeof(uint32_t);
-    static constexpr uint32_t tensix_l1_binary_write_offset_offset = write_offsets_offset + sizeof(uint32_t) * 2;
-    static constexpr uint32_t eth_l1_write_offset_offset = write_offsets_offset + sizeof(uint32_t) * 3;
+    static constexpr uint32_t tensix_l1_binary_write_offset_offset = write_offsets_offset + (sizeof(uint32_t) * 2);
+    static constexpr uint32_t eth_l1_write_offset_offset = write_offsets_offset + (sizeof(uint32_t) * 3);
     static constexpr uint32_t program_host_id_offset =
         (sizeof(CQPrefetchCmd) + offsetof(CQDispatchCmd, set_write_offset.program_host_id));
     // Update Stall Command Sequence
@@ -1987,8 +1977,8 @@ void update_program_dispatch_commands(
                 cb_config_payload[base_index + 3] = cb->page_size(buffer_index);
             }
             for (const auto& buffer_index : cb->remote_buffer_indices()) {
-                const uint32_t base_index = remote_offset_index + (NUM_CIRCULAR_BUFFERS - 1 - buffer_index) *
-                                                                      UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG;
+                const uint32_t base_index = remote_offset_index + ((NUM_CIRCULAR_BUFFERS - 1 - buffer_index) *
+                                                                   UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG);
                 cb_config_payload[base_index] = cb->config_address();
                 cb_config_payload[base_index + 1] = cb->page_size(buffer_index);
             }
@@ -2046,16 +2036,16 @@ void update_program_dispatch_commands(
     // Update launch message addresses to reflect new launch_msg slot in ring buffer
     uint32_t multicast_cores_launch_msg_addr =
         hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::LAUNCH) +
-        multicast_cores_launch_message_wptr *
-            hal.get_dev_msgs_factory(HalProgrammableCoreType::TENSIX).size_of<dev_msgs::launch_msg_t>();
+        (multicast_cores_launch_message_wptr *
+         hal.get_dev_msgs_factory(HalProgrammableCoreType::TENSIX).size_of<dev_msgs::launch_msg_t>());
     for (auto launch_msg_cmd_ptr : cached_program_command_sequence.launch_msg_write_packed_cmd_ptrs) {
         launch_msg_cmd_ptr->addr = multicast_cores_launch_msg_addr;
     }
-    if (cached_program_command_sequence.unicast_launch_msg_write_packed_cmd_ptrs.size()) {
+    if (!cached_program_command_sequence.unicast_launch_msg_write_packed_cmd_ptrs.empty()) {
         uint32_t unicast_cores_launch_message_addr =
             hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::LAUNCH) +
-            unicast_cores_launch_message_wptr *
-                hal.get_dev_msgs_factory(HalProgrammableCoreType::ACTIVE_ETH).size_of<dev_msgs::launch_msg_t>();
+            (unicast_cores_launch_message_wptr *
+             hal.get_dev_msgs_factory(HalProgrammableCoreType::ACTIVE_ETH).size_of<dev_msgs::launch_msg_t>());
         for (auto launch_msg_cmd_ptr : cached_program_command_sequence.unicast_launch_msg_write_packed_cmd_ptrs) {
             launch_msg_cmd_ptr->addr = unicast_cores_launch_message_addr;
         }
@@ -2105,8 +2095,8 @@ void update_traced_program_dispatch_commands(
     static constexpr uint32_t wait_count_offset = (sizeof(CQPrefetchCmd) + offsetof(CQDispatchCmd, wait.count));
     static constexpr uint32_t write_offsets_offset = (sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd));
     static constexpr uint32_t tensix_l1_write_offset_offset = write_offsets_offset + sizeof(uint32_t);
-    static constexpr uint32_t tensix_l1_binary_write_offset_offset = write_offsets_offset + sizeof(uint32_t) * 2;
-    static constexpr uint32_t eth_l1_write_offset_offset = write_offsets_offset + sizeof(uint32_t) * 3;
+    static constexpr uint32_t tensix_l1_binary_write_offset_offset = write_offsets_offset + (sizeof(uint32_t) * 2);
+    static constexpr uint32_t eth_l1_write_offset_offset = write_offsets_offset + (sizeof(uint32_t) * 3);
     static constexpr uint32_t program_host_id_offset =
         (sizeof(CQPrefetchCmd) + offsetof(CQDispatchCmd, set_write_offset.program_host_id));
     // Update Stall Command Sequence
@@ -2226,16 +2216,16 @@ void update_traced_program_dispatch_commands(
     // Update launch message addresses to reflect new launch_msg slot in ring buffer
     uint32_t multicast_cores_launch_msg_addr =
         hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::LAUNCH) +
-        multicast_cores_launch_message_wptr *
-            hal.get_dev_msgs_factory(HalProgrammableCoreType::TENSIX).size_of<dev_msgs::launch_msg_t>();
+        (multicast_cores_launch_message_wptr *
+         hal.get_dev_msgs_factory(HalProgrammableCoreType::TENSIX).size_of<dev_msgs::launch_msg_t>());
     for (auto launch_msg_cmd_ptr : cached_program_command_sequence.launch_msg_write_packed_cmd_ptrs) {
         launch_msg_cmd_ptr->addr = multicast_cores_launch_msg_addr;
     }
-    if (cached_program_command_sequence.unicast_launch_msg_write_packed_cmd_ptrs.size()) {
+    if (!cached_program_command_sequence.unicast_launch_msg_write_packed_cmd_ptrs.empty()) {
         uint32_t unicast_cores_launch_message_addr =
             hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::LAUNCH) +
-            unicast_cores_launch_message_wptr *
-                hal.get_dev_msgs_factory(HalProgrammableCoreType::ACTIVE_ETH).size_of<dev_msgs::launch_msg_t>();
+            (unicast_cores_launch_message_wptr *
+             hal.get_dev_msgs_factory(HalProgrammableCoreType::ACTIVE_ETH).size_of<dev_msgs::launch_msg_t>());
         for (auto launch_msg_cmd_ptr : cached_program_command_sequence.unicast_launch_msg_write_packed_cmd_ptrs) {
             launch_msg_cmd_ptr->addr = unicast_cores_launch_message_addr;
         }
@@ -2397,8 +2387,8 @@ TraceNode create_trace_node(ProgramImpl& program, IDevice* device, bool use_pref
                 first_unused_index = std::max(first_unused_index, base_index + 4);
             }
             for (const auto& buffer_index : cb->remote_buffer_indices()) {
-                const uint32_t base_index = remote_offset_index + (NUM_CIRCULAR_BUFFERS - 1 - buffer_index) *
-                                                                      UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG;
+                const uint32_t base_index = remote_offset_index + ((NUM_CIRCULAR_BUFFERS - 1 - buffer_index) *
+                                                                   UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG);
                 cb_config_payload[base_index] = cb->config_address();
                 cb_config_payload[base_index + 1] = cb->page_size(buffer_index);
                 first_unused_index = std::max(first_unused_index, base_index + 2);
@@ -2663,7 +2653,7 @@ void set_core_go_message_mapping_on_device(
             data.emplace_back(&go_msg_offset, sizeof(uint32_t));
         }
     }
-    if (sub_cmds.size() > 0) {
+    if (!sub_cmds.empty()) {
         calculator.insert_write_packed_payloads<CQDispatchWritePackedMulticastSubCmd>(
             sub_cmds.size(), sizeof(uint32_t), max_prefetch_command_size, packed_write_max_unicast_sub_cmds, payload);
     }
@@ -2699,7 +2689,7 @@ void set_core_go_message_mapping_on_device(
     command_sequence.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0);
 
     // Write go index to all cores.
-    if (sub_cmds.size() > 0) {
+    if (!sub_cmds.empty()) {
         TT_ASSERT(
             MetalContext::instance().hal().get_dev_addr(
                 HalProgrammableCoreType::TENSIX, HalL1MemAddrType::GO_MSG_INDEX) %

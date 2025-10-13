@@ -9,8 +9,8 @@ import torch.nn.functional as F
 
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp
-from models.utility_functions import skip_for_wormhole_b0, is_grayskull
-from models.utility_functions import torch_random
+from models.common.utility_functions import skip_for_wormhole_b0, is_grayskull
+from models.common.utility_functions import torch_random
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
@@ -32,7 +32,9 @@ def test_large_softmax(device, batch_size, h, w, dim):
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
 
     input_tensor = ttnn.to_device(input_tensor, device)
-    output_tensor = ttnn.softmax(input_tensor, dim=dim)
+    # TODO: need to fix a hang, which occurs when numeric_stable is True
+    # See: issue #28509
+    output_tensor = ttnn.softmax(input_tensor, dim=dim, numeric_stable=False)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
     assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
@@ -412,7 +414,6 @@ def test_softmax_sd(device):
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
             [64, 256],
             ttnn.ShardOrientation.ROW_MAJOR,
-            ttnn.ShardMode.PHYSICAL,
         ),
     )
 
@@ -485,7 +486,16 @@ def test_softmax_accuracy(device, shape, fp32_acc_en, math_approx_mode, expected
     )
 
     ttnn_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, device=device)
-    ttnn_output = ttnn.softmax(ttnn_tensor, dim=-1, compute_kernel_config=compute_kernel_config)
+
+    numeric_stable = True
+    if math_approx_mode:
+        # TODO: fix accuracy issue when both math_approx_mode and numeric_stable are True
+        # See issue #28500
+        numeric_stable = False
+
+    ttnn_output = ttnn.softmax(
+        ttnn_tensor, dim=-1, compute_kernel_config=compute_kernel_config, numeric_stable=numeric_stable
+    )
 
     ttnn_output = ttnn.to_layout(ttnn_output, ttnn.ROW_MAJOR_LAYOUT)
     output_torch = ttnn_output.cpu().to_torch()

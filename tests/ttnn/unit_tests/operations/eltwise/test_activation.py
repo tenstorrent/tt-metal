@@ -5,8 +5,9 @@
 import pytest
 import torch
 import ttnn
+import numpy as np
 
-from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp, assert_allclose
 
 
 def run_activation_unary_test(device, h, w, ttnn_function, pcc=0.99):
@@ -65,6 +66,46 @@ def test_relu6(device, h, w):
 @pytest.mark.parametrize("w", [128])
 def test_gelu(device, h, w):
     run_activation_unary_test(device, h, w, ttnn.gelu)
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([1, 2, 64, 120])),
+        (torch.Size([1, 3, 320, 320])),
+    ),
+)
+@pytest.mark.parametrize(
+    "low, high, atol, rtol",
+    [
+        (-6, -3, 1e-2, 1e-2),  # Strong negative saturation region
+        (-3, 0, 1e-3, 1e-3),  # Negative transition region
+        (0, 3, 1e-2, 1e-2),  # Positive transition region
+        (3, 6, 1e-3, 1e-3),  # Positive saturation region
+    ],
+)
+def test_gelu_accurate_allclose(input_shapes, low, high, atol, rtol, device):
+    """Test GELU accuracy using allclose for different input regions matching analysis ranges"""
+    num_elements = torch.prod(torch.tensor(input_shapes)).item()
+    torch_input = torch.linspace(high, low, num_elements, dtype=torch.bfloat16)
+    torch_input = torch_input[:num_elements].reshape(input_shapes)
+
+    golden_function = ttnn.get_golden_function(ttnn.gelu)
+    golden = golden_function(torch_input, device=device)
+
+    tt_in = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    tt_result = ttnn.gelu(tt_in)
+    result = ttnn.to_torch(tt_result)
+    # Use allclose with range-specific tolerances
+    assert_allclose(result, golden, atol=atol, rtol=rtol)
 
 
 @pytest.mark.parametrize("h", [64])

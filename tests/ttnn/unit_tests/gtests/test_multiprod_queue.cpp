@@ -50,7 +50,7 @@ TEST_F(MultiProducerCommandQueueTest, Stress) {
     const TensorSpec tensor_spec(tensor_shape, tensor_layout);
 
     // Thread 0 uses cq_0, thread 1 uses cq_1
-    const ttnn::QueueId t0_io_cq = ttnn::DefaultQueueId;
+    const ttnn::QueueId t0_io_cq = ttnn::QueueId(0);
     const ttnn::QueueId t1_io_cq = ttnn::QueueId(1);
 
     std::vector<float> t0_host_data(tensor_shape.volume());
@@ -96,7 +96,7 @@ TEST_F(MultiProducerCommandQueueTest, EventSync) {
     const TensorLayout tensor_layout(DataType::UINT32, PageConfig(Layout::ROW_MAJOR), mem_cfg);
     const TensorSpec tensor_spec(tensor_shape, tensor_layout);
 
-    const ttnn::QueueId write_cq = ttnn::DefaultQueueId;
+    const ttnn::QueueId write_cq = ttnn::QueueId(0);
     const ttnn::QueueId read_cq = ttnn::QueueId(1);
 
     std::optional<tt::tt_metal::distributed::MeshEvent> write_event;

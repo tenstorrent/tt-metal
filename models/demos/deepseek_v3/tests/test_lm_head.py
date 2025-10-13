@@ -11,7 +11,7 @@ import torch.nn as nn
 from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3.tt.ccl_1d import CCL1D
+from models.demos.deepseek_v3.tt.ccl import CCL
 from models.demos.deepseek_v3.tt.lm_head import LMHead
 from models.demos.deepseek_v3.utils.config_helpers import sub_state_dict
 from models.demos.deepseek_v3.utils.run_config import create_run_config
@@ -56,9 +56,9 @@ def test_forward_pass(
     mode: str,
     seq_len: int,
     hf_config: Any,
-    tmp_path: Path,
     mesh_device: ttnn.Device,
-    ccl: CCL1D,
+    ccl: CCL,
+    tmp_path: Path,
     set_deterministic_env: Any,
 ):
     assert mesh_device.get_num_devices() == 32, "Mesh device must have 32 devices for this test."
@@ -72,7 +72,7 @@ def test_forward_pass(
     torch_input = pad_or_trim_seq_len(torch_input, mode, seq_len)
 
     # Setup: Convert weights and get weight_config
-    weight_config = LMHead.convert_weights(hf_config, [state_dict], tmp_path, mesh_device)
+    weight_config = LMHead.convert_weights(hf_config, (state_dict,), tmp_path, mesh_device)
     model_config = get_model_config(LMHead, mode, hf_config, mesh_device, 3)
     model_state = LMHead.create_state(hf_config, mesh_device, ccl)
     run_config = create_run_config(model_config, weight_config, model_state)

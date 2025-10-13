@@ -8,7 +8,6 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
@@ -71,13 +70,13 @@ operation::ProgramWithCallbacks pad_rm_reader_writer(
     TensorAccessorArgs(*pad_value_const_tensor.buffer()).append_to(reader_ct_args);
     const std::vector<uint32_t>& writer_ct_args = reader_ct_args;
 
-    bfloat16 bfloat_pad_value = bfloat16(pad_value);
-    bfloat16 bfloat_zero = bfloat16(0.0f);
     uint32_t packed_pad_value;
     if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32) {
         packed_pad_value = pad_value;
+    } else if (a.dtype() == DataType::UINT16) {
+        packed_pad_value = pack_two_uint16_into_uint32({0, float_to_uint16(pad_value)});
     } else {
-        packed_pad_value = pack_two_bfloat16_into_uint32({bfloat_zero, bfloat_pad_value});
+        packed_pad_value = pack_two_bfloat16_into_uint32({bfloat16(0.0f), bfloat16(pad_value)});
     }
 
     KernelHandle reader_kernel_id = CreateKernel(
@@ -191,7 +190,7 @@ operation::ProgramWithCallbacks pad_tile(
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
-    uint32_t single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
+    uint32_t single_tile_size = tt::tile_size(cb_data_format);
 
     log_debug(tt::LogOp, "pad_tile");
     log_debug(tt::LogOp, "cb_data_format: {}", cb_data_format);
@@ -214,12 +213,13 @@ operation::ProgramWithCallbacks pad_tile(
             .set_page_size(src1_cb_index, single_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
 
-    bfloat16 bfloat_pad_value = bfloat16(pad_value);
     uint32_t packed_pad_value;
     if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32) {
         packed_pad_value = pad_value;
+    } else if (a.dtype() == DataType::UINT16) {
+        packed_pad_value = pack_two_uint16_into_uint32({float_to_uint16(pad_value), float_to_uint16(pad_value)});
     } else {
-        packed_pad_value = pack_two_bfloat16_into_uint32({bfloat_pad_value, bfloat_pad_value});
+        packed_pad_value = pack_two_bfloat16_into_uint32({bfloat16(pad_value), bfloat16(pad_value)});
     }
 
     uint32_t num_unpadded_Xt = a.padded_shape()[3] / TILE_WIDTH;
@@ -340,6 +340,7 @@ split_across_cores(CoreCoord grid_size, uint32_t nbatch, uint32_t nchannel, uint
                     ncores_h = 8;
                     ntiles_per_core_h = 8;
                     break;
+                default: TT_THROW("Unsupported ntiles_h value {}", ntiles_h);
             }
             ncores_per_batch_h = ncores_h;
             break;
@@ -370,6 +371,7 @@ split_across_cores(CoreCoord grid_size, uint32_t nbatch, uint32_t nchannel, uint
                     ncores_h = ncores_per_batch_h * nbatch;
                     ntiles_per_core_h = 16;
                     break;
+                default: TT_THROW("Unsupported ntiles_h value {}", ntiles_h);
             }
             break;
 
@@ -420,6 +422,7 @@ split_across_cores(CoreCoord grid_size, uint32_t nbatch, uint32_t nchannel, uint
         case 4: ncores_w = 4; break;
         case 8:
         case 64: ncores_w = 8; break;
+        default: TT_THROW("Unsupported ntiles_w value {}", ntiles_w);
     }
     ncores = ncores_h * ncores_w;
     ntiles_per_core_w = ntiles_w / ncores_w;
@@ -517,13 +520,13 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core(
     TensorAccessorArgs(*pad_value_const_tensor.buffer()).append_to(reader_ct_args);
     std::vector<uint32_t> writer_ct_args = reader_ct_args;
 
-    bfloat16 bfloat_pad_value = bfloat16(pad_value);
-    bfloat16 bfloat_zero = bfloat16(0.0f);
     uint32_t packed_pad_value;
     if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32) {
         packed_pad_value = pad_value;
+    } else if (a.dtype() == DataType::UINT16) {
+        packed_pad_value = pack_two_uint16_into_uint32({0, float_to_uint16(pad_value)});
     } else {
-        packed_pad_value = pack_two_bfloat16_into_uint32({bfloat_zero, bfloat_pad_value});
+        packed_pad_value = pack_two_bfloat16_into_uint32({bfloat16(0.0f), bfloat16(pad_value)});
     }
 
     KernelHandle reader_kernel_id = CreateKernel(
@@ -589,7 +592,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core(
             start_dst_stick_wi = 0;
             int32_t rem_src_stick_size_nbytes = unpadded_row_size_nbytes;
             for (uint32_t i = 0; i < ncores_w; ++i) {
-                CoreCoord core = {i, b * ncores_per_batch_h + j};
+                CoreCoord core = {i, (b * ncores_per_batch_h) + j};
                 uint32_t curr_stick_size_nbytes = 0;
                 int32_t curr_stick_diff_nbytes = 0;
                 if (rem_src_stick_size_nbytes - dst_nbytes_per_core_w >= 0) {
@@ -844,12 +847,13 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core_v2(
     Buffer* dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
-    bfloat16 bfloat_pad_value = bfloat16(pad_value);
     uint32_t packed_pad_value;
     if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32) {
         packed_pad_value = pad_value;
+    } else if (a.dtype() == DataType::UINT16) {
+        packed_pad_value = pack_two_uint16_into_uint32({float_to_uint16(pad_value), float_to_uint16(pad_value)});
     } else {
-        packed_pad_value = pack_two_bfloat16_into_uint32({bfloat_pad_value, bfloat_pad_value});
+        packed_pad_value = pack_two_bfloat16_into_uint32({bfloat16(pad_value), bfloat16(pad_value)});
     }
 
     std::vector<uint32_t> reader_ct_args = {
@@ -1253,12 +1257,13 @@ operation::ProgramWithCallbacks pad_rm_sharded_height_only(
             .set_page_size(src1_cb_index, stick_size_padded);
     tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src1_config);
 
-    bfloat16 bfloat_pad_value = bfloat16(pad_value);
     uint32_t packed_pad_value;
     if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32) {
         packed_pad_value = pad_value;
+    } else if (a.dtype() == DataType::UINT16) {
+        packed_pad_value = pack_two_uint16_into_uint32({float_to_uint16(pad_value), float_to_uint16(pad_value)});
     } else {
-        packed_pad_value = pack_two_bfloat16_into_uint32({bfloat_pad_value, bfloat_pad_value});
+        packed_pad_value = pack_two_bfloat16_into_uint32({bfloat16(pad_value), bfloat16(pad_value)});
     }
 
     std::vector<uint32_t> reader_ct_args = {(std::uint32_t)stick_size_padded, (std::uint32_t)shard_height_padded};
@@ -1400,6 +1405,8 @@ operation::ProgramWithCallbacks pad_rm_sharded_width_only(
         padding_value_as_u32 = *reinterpret_cast<uint32_t*>(&bfloat_pad_value_bits);
     } else if (input_tensor.dtype() == tt::tt_metal::DataType::FLOAT32) {
         padding_value_as_u32 = *reinterpret_cast<uint32_t*>(&pad_value);
+    } else if (input_tensor.dtype() == tt::tt_metal::DataType::UINT16) {
+        padding_value_as_u32 = pack_two_uint16_into_uint32({0, float_to_uint16(pad_value)});
     } else if (
         input_tensor.dtype() == tt::tt_metal::DataType::INT32 ||
         input_tensor.dtype() == tt::tt_metal::DataType::UINT32) {
@@ -1462,6 +1469,245 @@ operation::ProgramWithCallbacks pad_rm_sharded_width_only(
         UpdateDynamicCircularBufferAddress(program, input_shard_cb, *input_buffer);
         UpdateDynamicCircularBufferAddress(program, output_shard_cb, *output_buffer);
     };
+    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
+}
+
+static inline int advance_tensor_index(std::vector<uint32_t>& idx, const ttnn::Shape& dims, uint32_t ndims) {
+    // increment least-significant dim first
+    for (int32_t d = ndims - 1; d >= 0; d--) {
+        uint32_t v = idx[d] + 1;
+        if (v < dims[d]) {
+            idx[d] = v;
+            return 1;
+        }
+        idx[d] = 0;  // wrap and carry
+    }
+    return 0;  // overflowed most-significant dim
+}
+
+operation::ProgramWithCallbacks pad_tile_multicore(
+    const Tensor& a,
+    Tensor& output,
+    const ttnn::Shape& output_padded_shape,
+    const ttnn::Shape& input_tensor_start,
+    const float pad_value) {
+    Program program{};
+
+    const auto& a_shape = a.logical_shape();
+    uint32_t num_pages = get_num_pages(output);
+
+    IDevice* device = a.device();
+
+    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    uint32_t num_cores_x = compute_with_storage_grid_size.x;
+    uint32_t num_cores_y = compute_with_storage_grid_size.y;
+    uint32_t num_cores_total = num_cores_x * num_cores_y;
+    CoreRange total_cores({0, 0}, {num_cores_x - 1, num_cores_y - 1});
+
+    auto [num_cores, all_cores, core_group_1, core_group_2, num_pages_per_core_group_1, num_pages_per_core_group_2] =
+        tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_pages);
+
+    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
+    uint32_t page_size = output.buffer()->page_size();
+    uint32_t multi_buffering_size = 2;
+    uint32_t input_cb_index = tt::CBIndex::c_0;
+    tt::tt_metal::CircularBufferConfig input_cb_config =
+        tt::tt_metal::CircularBufferConfig(page_size * multi_buffering_size, {{input_cb_index, cb_data_format}})
+            .set_page_size(input_cb_index, page_size);
+    tt::tt_metal::CreateCircularBuffer(program, total_cores, input_cb_config);
+
+    uint32_t output_cb_index = tt::CBIndex::c_1;
+    tt::tt_metal::CircularBufferConfig output_cb_config =
+        tt::tt_metal::CircularBufferConfig(page_size * multi_buffering_size, {{output_cb_index, cb_data_format}})
+            .set_page_size(output_cb_index, page_size);
+    tt::tt_metal::CreateCircularBuffer(program, total_cores, output_cb_config);
+
+    uint32_t pad_val_cb_index = tt::CBIndex::c_2;
+    tt::tt_metal::CircularBufferConfig pad_val_cb_config =
+        tt::tt_metal::CircularBufferConfig(page_size, {{pad_val_cb_index, cb_data_format}})
+            .set_page_size(pad_val_cb_index, page_size);
+    tt::tt_metal::CreateCircularBuffer(program, total_cores, pad_val_cb_config);
+
+    Buffer* input_buffer = a.buffer();
+    Buffer* output_buffer = output.buffer();
+    TT_ASSERT(output_buffer != nullptr, "Output buffer should be allocated on device!");
+
+    bfloat16 bfloat_pad_value = bfloat16(pad_value);
+    uint32_t packed_pad_value;
+    if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32) {
+        packed_pad_value = pad_value;
+    } else {
+        packed_pad_value = pack_two_bfloat16_into_uint32({bfloat_pad_value, bfloat_pad_value});
+    }
+
+    std::vector<uint32_t> reader_ct_args = {
+        (std::uint32_t)input_cb_index,
+        (std::uint32_t)page_size,
+        (std::uint32_t)output_padded_shape.rank(),
+    };
+    TensorAccessorArgs(*input_buffer).append_to(reader_ct_args);
+
+    std::vector<uint32_t> writer_ct_args = {
+        (std::uint32_t)input_cb_index,
+        (std::uint32_t)output_cb_index,
+        (std::uint32_t)pad_val_cb_index,
+        (std::uint32_t)page_size,
+        (std::uint32_t)output_padded_shape.rank(),
+        (std::uint32_t)packed_pad_value,
+        (std::uint32_t)output.element_size(),
+    };
+    TensorAccessorArgs(*output_buffer).append_to(writer_ct_args);
+
+    KernelHandle reader_kernel_id = CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/data_movement/pad/device/kernels/dataflow/reader_pad_tiled.cpp",
+        total_cores,
+        tt::tt_metal::ReaderDataMovementConfig(reader_ct_args));
+    KernelHandle writer_kernel_id = CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/data_movement/pad/device/kernels/dataflow/writer_pad_tiled.cpp",
+        total_cores,
+        tt::tt_metal::WriterDataMovementConfig(writer_ct_args));
+
+    /*
+    As an example, lets say we want to pad a [2, 1, 32, 32] tensor to [2, 3, 64, 64]
+    The input tensor exists as [2, 2, 1, 1] if we reduce by tile (page) size, and the output as [2, 3, 2, 2]
+    we increment through these shapes, and will write a total of 2 * 3 * 2 * 2 = 24 tiles, so we will utilize 24 cores
+    for each core, we calculate if we are within the "input region" of the output. this does a check of
+    if any element in the incremented input_id_per_dim is less than the output_id_per_dim, if so, we are outside
+    the input region, and we will write a padding tile, and we will not increment the input_id_per_dim for that tile.
+    if we are within the input region, we will write the tile from input to the output, and increment the
+    input_id_per_dim. This works because we increment the least-significant dim first, and the input region correctly
+    matches the output after the output wraps around. In this example:
+    Core 0: input_id_per_dim: [0,0,0,0] ; output_id_per_dim: [0,0,0,0], we copy the tile and increment both input and
+    output dims, next ->
+    Core 1: input_id_per_dim: [0,1,0,0] ; output_id_per_dim: [0,0,0,1], the last output dim is
+    greater than input, so we write the pad tile, and increment only output dim, next ->
+    Core 2: input_id_per_dim: [0,1,0,0] ; output_id_per_dim: [0,0,1,0], the second last output dim is greater than
+    input, so we write the pad tile, and increment only output dim, next ->
+    Core 3: input_id_per_dim: [0,1,0,0] ; output_id_per_dim: [0,0,1,1], the last 2 output dims is greater than input,
+    so we write the pad tile, and increment only output dim, next ->
+    Core 4: input_id_per_dim: [0,1,0,0] ; output_id_per_dim: [0,1,0,0], we copy the tile and increment, next ->
+    Core 5: input_id_per_dim: [1,0,0,0] ; output_id_per_dim: [0,1,0,1], Some output dims are greater
+    than input, so we write the pad tile, and increment only output dim. next ->
+    Core 6: input_id_per_dim: [1,0,0,0] ; output_id_per_dim: [0,1,1,0],
+    Core 7, 8, 9, 10, 11, we write pad tiles, incrementing only output dim each time, next ->
+    Core 12: input_id_per_dim: [1,0,0,0] ; output_id_per_dim: [1,0,0,0], we copy the tile and increment, next ->
+    Core 13: input_id_per_dim: [1,1,0,0] ; output_id_per_dim: [1,0,0,1], Core 13, 14, 15, we write pad tiles,
+    incrementing only output dim each time, next -> Core 16: input_id_per_dim: [1,1,0,0] ; output_id_per_dim: [1,1,0,0],
+    we copy the tile and increment, next ->
+    From now on, input_id_per_dim wraps around it's most significant dim, resulting in [0,0,0,0].
+    This means for every output_id_per_dim, an element will always be greater than
+    input_id_per_dim, so every core after core 16 will only write pad tiles, which is correct as we have filled all of
+    the input region, and will always be outside of it from now on.
+
+    As you can see, the input_id_per_dim only increments when we are within the input region of the output,
+    and the output_id_per_dim increments every time, this means that when the output wraps around, the input
+    will be correctly positioned for the next set of output tiles.
+    */
+
+    std::vector<uint32_t> input_id_per_dim, output_id_per_dim;  // input and output id_per_dims
+    // initialize id_per_dims to vectors of length num_dims filled with 0
+    input_id_per_dim.resize(a_shape.rank(), 0);
+    output_id_per_dim.resize(output_padded_shape.rank(), 0);
+    // instantiate the input and output tensor padded shapes
+    auto input_page_shape = a.padded_shape();
+    auto output_page_shape = output_padded_shape;
+    input_page_shape[-1] /= tt::constants::TILE_HEIGHT;
+    input_page_shape[-2] /= tt::constants::TILE_HEIGHT;
+    output_page_shape[-1] /= tt::constants::TILE_HEIGHT;
+    output_page_shape[-2] /= tt::constants::TILE_HEIGHT;
+    bool within_input_region;
+    uint32_t input_page_offset = 0;
+    uint32_t output_page_offset = 0;
+
+    std::vector<uint32_t> all_runtime_args;
+
+    for (uint32_t i = 0; i < num_cores_total; i++) {
+        CoreCoord core = {i / num_cores_y, i % num_cores_y};
+
+        uint32_t num_pages_per_core;
+        if (core_group_1.contains(core)) {
+            num_pages_per_core = num_pages_per_core_group_1;
+        } else if (core_group_2.contains(core)) {
+            num_pages_per_core = num_pages_per_core_group_2;
+        } else {
+            num_pages_per_core = 0;  // no-op
+            continue;
+        }
+
+        all_runtime_args = {
+            a.buffer()->address(),
+            num_pages_per_core,
+            input_page_offset,
+        };
+
+        // Every core should get the same input and output tile shapes
+        all_runtime_args.insert(all_runtime_args.end(), input_page_shape.cbegin(), input_page_shape.cend());
+        all_runtime_args.insert(all_runtime_args.end(), output_page_shape.cbegin(), output_page_shape.cend());
+
+        // As well as where the core should start writing in the output tensor
+        all_runtime_args.insert(all_runtime_args.end(), input_id_per_dim.begin(), input_id_per_dim.end());
+        all_runtime_args.insert(all_runtime_args.end(), output_id_per_dim.begin(), output_id_per_dim.end());
+
+        tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, all_runtime_args);
+        all_runtime_args[0] = output.buffer()->address();  // change input addr to output addr before setting writer
+                                                           // args
+        all_runtime_args[2] =
+            output_page_offset;  // change input page offset to output page offset before setting writer args
+        tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, all_runtime_args);
+
+        // We now need to increment the input and output id_per_dims by the number of pages this core is processing
+        // Similarly to in the kernel, we only increment the input id_per_dim if we are within the input region
+        for (uint32_t p = 0; p < num_pages_per_core; p++) {
+            within_input_region = true;
+            for (uint32_t d = 0; d < input_id_per_dim.size(); d++) {
+                if (input_id_per_dim[d] < output_id_per_dim[d]) {
+                    within_input_region = false;
+                    break;
+                }
+            }
+            if (within_input_region) {
+                advance_tensor_index(input_id_per_dim, input_page_shape, input_id_per_dim.size());
+                input_page_offset++;
+            }
+            advance_tensor_index(output_id_per_dim, output_page_shape, output_id_per_dim.size());
+            output_page_offset++;
+        }
+        // The input and output id_per_dim should now be set correctly for the next core
+    }
+
+    auto override_runtime_args_callback =
+        [reader_kernel_id, writer_kernel_id, compute_with_storage_grid_size, input_tensor_start](
+            const void* operation,
+            const Program& program,
+            const std::vector<Tensor>& input_tensors,
+            const std::vector<std::optional<const Tensor>>&,
+            const std::vector<Tensor>& output_tensors) {
+            auto src_buffer = input_tensors.at(0).buffer();
+            auto dst_buffer = output_tensors.at(0).buffer();
+
+            uint32_t num_cores_x = compute_with_storage_grid_size.x;
+            uint32_t num_cores_y = compute_with_storage_grid_size.y;
+            uint32_t num_cores_total = num_cores_x * num_cores_y;
+
+            for (uint32_t i = 0; i < num_cores_total; i++) {
+                CoreCoord core = {i / num_cores_y, i % num_cores_y};
+
+                // Update reader kernel runtime args
+                {
+                    auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+                    runtime_args[0] = src_buffer->address();
+                }
+
+                // Update writer kernel runtime args
+                {
+                    auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+                    runtime_args[0] = dst_buffer->address();
+                }
+            }
+        };
+
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
 }
 }  // namespace ttnn::operations::data_movement::detail

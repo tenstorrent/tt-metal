@@ -80,8 +80,8 @@ def standardize_hf_keys_multimodal(state_dict):
     return output
 
 
-def convert_hf_to_meta(state_dict, head_dim):
-    state_dict = split_hf_keys(state_dict)
+def convert_hf_to_meta(state_dict, head_dim, n_heads=None, n_kv_heads=None):
+    state_dict = split_hf_keys(state_dict, n_heads, n_kv_heads)
     state_dict = convert_hf_qkv_to_meta_format(state_dict, head_dim)
     state_dict = map_hf_to_meta_keys(state_dict)
     return state_dict
@@ -236,7 +236,7 @@ def load_sharded_checkpoints(checkpoints, n_layers):
     return checkpoint
 
 
-def split_hf_keys(loaded_weights):
+def split_hf_keys(loaded_weights, n_heads=None, n_kv_heads=None):
     converted_weights = {}
     for key, tensor in loaded_weights.items():
         if "qkv_proj" in key:
@@ -244,7 +244,20 @@ def split_hf_keys(loaded_weights):
             q_key = key.replace("qkv_proj", "q_proj")
             k_key = key.replace("qkv_proj", "k_proj")
             v_key = key.replace("qkv_proj", "v_proj")
-            q_tensor, k_tensor, v_tensor = torch.split(tensor, tensor.shape[0] // 3, dim=0)
+
+            # Handle GQA (Grouped Query Attention) case
+            if n_heads is not None and n_kv_heads is not None and n_heads != n_kv_heads:
+                # For GQA: Q has n_heads, K and V have n_kv_heads
+                head_dim = tensor.shape[0] // (n_heads + 2 * n_kv_heads)
+                q_size = n_heads * head_dim
+                kv_size = n_kv_heads * head_dim
+
+                q_tensor = tensor[:q_size]
+                k_tensor = tensor[q_size : q_size + kv_size]
+                v_tensor = tensor[q_size + kv_size : q_size + 2 * kv_size]
+            else:
+                # Default case: equal split for Q, K, V
+                q_tensor, k_tensor, v_tensor = torch.split(tensor, tensor.shape[0] // 3, dim=0)
             converted_weights[q_key] = q_tensor
             converted_weights[k_key] = k_tensor
             converted_weights[v_key] = v_tensor

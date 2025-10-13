@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -18,9 +18,8 @@ static constexpr std::uint32_t CLIENT_INTERFACE_SIZE = 3280;
 static constexpr std::uint32_t PACKET_WORD_SIZE_BYTES = 16;
 
 // Constants for fabric mesh configuration
-static constexpr std::uint32_t MAX_MESH_SIZE = 1024;
+static constexpr std::uint32_t MAX_MESH_SIZE = 256;
 static constexpr std::uint32_t MAX_NUM_MESHES = 1024;
-static_assert(MAX_MESH_SIZE == MAX_NUM_MESHES, "MAX_MESH_SIZE must be equal to MAX_NUM_MESHES");
 
 constexpr std::uint8_t USE_DYNAMIC_CREDIT_ADDR = 255;
 
@@ -39,8 +38,9 @@ enum eth_chan_directions : std::uint8_t {
     COUNT = 4,
 };
 
+template <size_t ArraySize>
 struct routing_table_t {
-    chan_id_t dest_entry[MAX_MESH_SIZE];
+    chan_id_t dest_entry[ArraySize];
 };
 
 struct port_direction_t {
@@ -48,16 +48,17 @@ struct port_direction_t {
 };
 
 struct fabric_router_l1_config_t {
-    routing_table_t intra_mesh_table;
-    routing_table_t inter_mesh_table;
+    routing_table_t<MAX_MESH_SIZE> intra_mesh_table;
+    routing_table_t<MAX_NUM_MESHES> inter_mesh_table;
     port_direction_t port_direction;
     std::uint16_t my_mesh_id;  // Do we need this if we tag routing tables with magic values for outbound eth channels
                                // and route to local NOC?
-    std::uint16_t my_device_id;
-    std::uint16_t east_dim;
-    std::uint16_t north_dim;
-    std::uint8_t padding[4];  // pad to 16-byte alignment.
+    std::uint8_t my_device_id;
+    std::uint8_t east_dim;
+    std::uint8_t north_dim;
+    std::uint8_t padding[7];  // pad to 16-byte alignment.
 } __attribute__((packed));
+static_assert(sizeof(fabric_router_l1_config_t) == 1296, "Fabric router config must be 1296 bytes");
 
 // 3 bit expression
 enum class compressed_routing_values : std::uint8_t {
@@ -81,7 +82,7 @@ struct __attribute__((packed)) compressed_routing_table_t {
 
     // 3 bits per entry, so 8 entries per 3 bytes (24 bits)
     // For 1024 entries: 1024 * 3 / 8 = 384 bytes
-    std::uint8_t packed_directions[ArraySize * BITS_PER_COMPRESSED_ENTRY / BITS_PER_BYTE];  // 384 bytes
+    std::uint8_t packed_directions[ArraySize * BITS_PER_COMPRESSED_ENTRY / BITS_PER_BYTE];
 
 #if !defined(KERNEL_BUILD) && !defined(FW_BUILD)
     // Host-side methods (declared here, implemented in compressed_routing_table.cpp):
@@ -117,8 +118,13 @@ struct __attribute__((packed)) compressed_route_2d_t {
 
 static_assert(sizeof(compressed_route_2d_t) == 2, "2D route must be 2 bytes");
 
+static const uint16_t MAX_CHIPS_LOWLAT_1D = 16;
+static const uint16_t MAX_CHIPS_LOWLAT_2D = 256;
+static const uint16_t SINGLE_ROUTE_SIZE_1D = 4;
+static const uint16_t SINGLE_ROUTE_SIZE_2D = 32;
+
 template <uint8_t dim, bool compressed>
-struct __attribute__((packed)) routing_path_t {
+struct __attribute__((packed)) intra_mesh_routing_path_t {
     static_assert(dim == 1 || dim == 2, "dim must be 1 or 2");
 
     // For 1D: Create LowLatencyPacketHeader pattern
@@ -136,11 +142,6 @@ struct __attribute__((packed)) routing_path_t {
     static const uint8_t WRITE_AND_FORWARD_WEST = 0b0010;
     static const uint8_t WRITE_AND_FORWARD_NORTH = 0b0100;
     static const uint8_t WRITE_AND_FORWARD_SOUTH = 0b1000;
-
-    static const uint16_t MAX_CHIPS_LOWLAT_1D = 16;
-    static const uint16_t MAX_CHIPS_LOWLAT_2D = 256;
-    static const uint16_t SINGLE_ROUTE_SIZE_1D = 4;
-    static const uint16_t SINGLE_ROUTE_SIZE_2D = 32;
 
     // Compressed routing uses much smaller encoding
     // 1D: 0 byte (num_hops passed from caller is the compressed info)
@@ -172,10 +173,15 @@ struct __attribute__((packed)) routing_path_t {
 #endif
 };
 // 16 chips * 4 bytes = 64
-static_assert(sizeof(routing_path_t<1, false>) == 64, "1D uncompressed routing path must be 64 bytes");
-static_assert(sizeof(routing_path_t<1, true>) == 0, "1D compressed routing path must be 0 bytes");
+static_assert(sizeof(intra_mesh_routing_path_t<1, false>) == 64, "1D uncompressed routing path must be 64 bytes");
+static_assert(sizeof(intra_mesh_routing_path_t<1, true>) == 0, "1D compressed routing path must be 0 bytes");
 // 256 chips * 2 bytes = 512
-static_assert(sizeof(routing_path_t<2, true>) == 512, "2D compressed routing path must be 512 bytes");
+static_assert(sizeof(intra_mesh_routing_path_t<2, true>) == 512, "2D compressed routing path must be 512 bytes");
+
+struct exit_node_table_t {
+    // Lookup table: nodes[mesh_id] returns the exit chip_id for that mesh
+    std::uint8_t nodes[MAX_NUM_MESHES];  // 1024 meshes * 1 byte = 1024 bytes
+};
 
 struct tensix_routing_l1_info_t {
     // TODO: https://github.com/tenstorrent/tt-metal/issues/28534
@@ -185,7 +191,7 @@ struct tensix_routing_l1_info_t {
     // NOTE: Compressed version has additional overhead (2x slower) to read values,
     //       but raw data is too huge (2048 bytes) to fit in L1 memory.
     //       Need to evaluate once actual workloads are available
-    compressed_routing_table_t<MAX_MESH_SIZE> intra_mesh_routing_table;   // 384 bytes
+    compressed_routing_table_t<MAX_MESH_SIZE> intra_mesh_routing_table;   // 96 bytes
     compressed_routing_table_t<MAX_NUM_MESHES> inter_mesh_routing_table;  // 384 bytes
     uint8_t padding[12];                                                  // pad to 16-byte alignment
 } __attribute__((packed));
@@ -226,6 +232,22 @@ struct tensix_fabric_connections_l1_info_t {
 }  // namespace tt::tt_fabric
 
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
+
+#if defined(COMPILE_FOR_ERISC)
+#define ROUTING_PATH_BASE_1D MEM_AERISC_FABRIC_ROUTING_PATH_BASE_1D
+#define ROUTING_PATH_BASE_2D MEM_AERISC_FABRIC_ROUTING_PATH_BASE_2D
+// DUMMY
+#define ROUTING_TABLE_BASE 0
+#elif defined(COMPILE_FOR_IDLE_ERISC)
+#define ROUTING_PATH_BASE_1D MEM_IERISC_FABRIC_ROUTING_PATH_BASE_1D
+#define ROUTING_PATH_BASE_2D MEM_IERISC_FABRIC_ROUTING_PATH_BASE_2D
+#define ROUTING_TABLE_BASE MEM_IERISC_ROUTING_TABLE_BASE
+#else
+#define ROUTING_PATH_BASE_1D MEM_TENSIX_ROUTING_PATH_BASE_1D
+#define ROUTING_PATH_BASE_2D MEM_TENSIX_ROUTING_PATH_BASE_2D
+#define ROUTING_TABLE_BASE MEM_TENSIX_ROUTING_TABLE_BASE
+#endif
+
 #include "fabric/hw/inc/fabric_routing_table_interface.h"
 #include "fabric/hw/inc/fabric_routing_path_interface.h"
 #endif

@@ -7,10 +7,10 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import divup, is_wormhole_b0
 from models.demos.yolov11m.common import load_torch_model
 from models.demos.yolov11m.tt import ttnn_yolov11
 from models.demos.yolov11m.tt.model_preprocessing import create_yolov11_model_parameters
-from models.utility_functions import divup, is_wormhole_b0
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 

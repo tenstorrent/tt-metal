@@ -11,7 +11,6 @@
 #include <tt-metalium/work_split.hpp>
 
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
@@ -36,11 +35,11 @@ BinaryDeviceOperation::ElementWiseMultiCore::cached_program_t BinaryDeviceOperat
     Program program{};
 
     tt::DataFormat src0_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
-    uint32_t src0_single_tile_size = tt_metal::detail::TileSize(src0_cb_data_format);
+    uint32_t src0_single_tile_size = tt::tile_size(src0_cb_data_format);
     tt::DataFormat src1_cb_data_format = tt_metal::datatype_to_dataformat_converter(b->dtype());
-    uint32_t src1_single_tile_size = tt_metal::detail::TileSize(src1_cb_data_format);
+    uint32_t src1_single_tile_size = tt::tile_size(src1_cb_data_format);
     tt::DataFormat dst_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
-    uint32_t dst_single_tile_size = tt_metal::detail::TileSize(dst_cb_data_format);
+    uint32_t dst_single_tile_size = tt::tile_size(dst_cb_data_format);
 
     tt::DataFormat interim_cb0_format = src0_cb_data_format;
     tt::DataFormat interim_cb1_format = src1_cb_data_format;
@@ -105,7 +104,7 @@ BinaryDeviceOperation::ElementWiseMultiCore::cached_program_t BinaryDeviceOperat
             op_type == BinaryOpType::LOGADDEXP2) {
             interim_cb0_format = tt::DataFormat::Float16_b;
         }
-        uint32_t interim0_single_tile_size = tt_metal::detail::TileSize(interim_cb0_format);
+        uint32_t interim0_single_tile_size = tt::tile_size(interim_cb0_format);
         tt_metal::CircularBufferConfig cb_interm_config =
             tt_metal::CircularBufferConfig(
                 max_block_size * interim0_single_tile_size, {{tt::CBIndex::c_3, interim_cb0_format}})
@@ -117,7 +116,7 @@ BinaryDeviceOperation::ElementWiseMultiCore::cached_program_t BinaryDeviceOperat
             op_type == BinaryOpType::LOGADDEXP2) {
             interim_cb1_format = tt::DataFormat::Float16_b;
         }
-        uint32_t interim1_single_tile_size = tt_metal::detail::TileSize(interim_cb1_format);
+        uint32_t interim1_single_tile_size = tt::tile_size(interim_cb1_format);
         tt_metal::CircularBufferConfig cb_interm2_config =
             tt_metal::CircularBufferConfig(
                 max_block_size * interim1_single_tile_size, {{tt::CBIndex::c_4, interim_cb1_format}})

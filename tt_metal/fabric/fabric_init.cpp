@@ -4,6 +4,7 @@
 
 #include "fabric.hpp"
 
+#include <umd/device/types/arch.hpp>
 #include <variant>
 
 #include "erisc_datamover_builder.hpp"
@@ -18,6 +19,7 @@
 #include "hostdevcommon/fabric_common.h"
 #include "impl/context/metal_context.hpp"
 #include "dispatch/kernel_config/relay_mux.hpp"
+#include <fmt/ranges.h>
 
 // hack for test_basic_fabric_apis.cpp
 // https://github.com/tenstorrent/tt-metal/issues/20000
@@ -199,7 +201,7 @@ void build_tt_fabric_program(
         auto tunnels_from_mmio =
             tt::tt_metal::MetalContext::instance().get_cluster().get_devices_controlled_by_mmio_device(mmio_device_id);
         // results are inclusive of the mmio_device_id so they will never be zero
-        TT_ASSERT(tunnels_from_mmio.size() > 0);
+        TT_ASSERT(!tunnels_from_mmio.empty());
         return (tunnels_from_mmio.size() - 1) > 0;
     }();
 
@@ -246,11 +248,13 @@ void build_tt_fabric_program(
         active_fabric_eth_channels.insert({direction, active_eth_chans});
         log_debug(
             tt::LogMetal,
-            "Building fabric router -> device (phys): {}, (logical): {}, direction: {}, active_eth_chans: {}",
+            "Building fabric router -> device (phys): {}, (logical): {}, direction: {}, active_eth_chans.size(): {}, "
+            "active_eth_chans: [{}]",
             device->id(),
             control_plane.get_fabric_node_id_from_physical_chip_id(device->id()).chip_id,
             direction,
-            active_eth_chans.size());
+            active_eth_chans.size(),
+            fmt::join(active_eth_chans, ", "));
     }
 
     if (active_fabric_eth_channels.empty()) {
@@ -316,6 +320,14 @@ void build_tt_fabric_program(
                 has_tensix_extension);
             edm_builders.insert({eth_chan, edm_builder});
 
+            if (tt::tt_metal::MetalContext::instance().get_cluster().arch() == tt::ARCH::BLACKHOLE &&
+                tt::tt_metal::MetalContext::instance().rtoptions().get_enable_2_erisc_mode()) {
+                // Enable updates at a fixed interval for link stability and link status updates
+                constexpr uint32_t k_BlackholeFabricRouterContextSwitchInterval = 32;
+                edm_builder.set_firmware_context_switch_interval(k_BlackholeFabricRouterContextSwitchInterval);
+                edm_builder.set_firmware_context_switch_type(FabricEriscDatamoverContextSwitchType::INTERVAL);
+            }
+
             if (fabric_tensix_extension_enabled) {
                 // Only create tensix builder if this channel is not used by dispatch
                 if (!dispatch_link) {
@@ -335,8 +347,7 @@ void build_tt_fabric_program(
     }
 
     const auto topology = fabric_context.get_fabric_topology();
-    const bool is_galaxy =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() == tt::tt_metal::ClusterType::GALAXY;
+    const bool is_galaxy = tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy();
 
     auto build_downstream_connections = [&](tt::tt_fabric::chan_id_t eth_chan_dir1,
                                             tt::tt_fabric::chan_id_t eth_chan_dir2) {
@@ -427,8 +438,6 @@ void build_tt_fabric_program(
         connect_downstream_builders(RoutingDirection::N, RoutingDirection::S);
         connect_downstream_builders(RoutingDirection::E, RoutingDirection::W);
     }
-
-    return;
 }
 
 std::unique_ptr<tt::tt_metal::Program> create_and_compile_tt_fabric_program(tt::tt_metal::IDevice* device) {
@@ -484,6 +493,12 @@ std::unique_ptr<tt::tt_metal::Program> create_and_compile_tt_fabric_program(tt::
             ct_args.push_back(num_local_fabric_routers);
             ct_args.push_back(router_channels_mask);
 
+            auto proc = static_cast<tt::tt_metal::DataMovementProcessor>(risc_id);
+            if (tt::tt_metal::MetalContext::instance().rtoptions().get_enable_2_erisc_mode()) {
+                // Force fabric to run on erisc1
+                proc = tt::tt_metal::DataMovementProcessor::RISCV_1;
+            }
+
             auto eth_logical_core = soc_desc.get_eth_core_for_channel(eth_chan, CoordSystem::LOGICAL);
             auto kernel = tt::tt_metal::CreateKernel(
                 *fabric_program_ptr,
@@ -491,7 +506,7 @@ std::unique_ptr<tt::tt_metal::Program> create_and_compile_tt_fabric_program(tt::
                 eth_logical_core,
                 tt::tt_metal::EthernetConfig{
                     .noc = edm_builder.config.risc_configs[risc_id].get_configured_noc(),
-                    .processor = static_cast<tt::tt_metal::DataMovementProcessor>(risc_id),
+                    .processor = proc,
                     .compile_args = ct_args,
                     .defines = defines,
                     .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});

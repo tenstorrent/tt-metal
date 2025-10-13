@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dataflow_api.h"
-#include "height_sharded_reader_common.hpp"
+#include "conv_reader_common.hpp"
 
 void kernel_main() {
     constexpr uint32_t dilation_h = get_compile_time_arg_val(0);
@@ -39,6 +39,7 @@ void kernel_main() {
     constexpr uint32_t output_image_width = get_compile_time_arg_val(34);
     constexpr uint32_t window_reuse_offset = get_compile_time_arg_val(35);
     constexpr bool need_to_push_remaining_tiles = get_compile_time_arg_val(36) == 1;
+    constexpr bool single_core_processes_multiple_batches = get_compile_time_arg_val(37) == 1;
 
     uint32_t remaining_tiles_to_push = get_arg_val<uint32_t>(0);
 #endif
@@ -79,6 +80,7 @@ void kernel_main() {
     for (uint32_t bh = 0; bh < act_num_blocks_h; bh++) {
 #ifdef ACTIVATION_REUSE
         uint32_t l1_write_addr_act = cb_start_addr;
+        get_local_cb_interface(cb_id_act).fifo_wr_ptr = l1_write_addr_act;
 #endif
         uint32_t reader_offset = act_l1_read_addr;
         for (uint32_t outer = 0; outer < window_outer; outer++) {
@@ -115,7 +117,8 @@ void kernel_main() {
                 readers_process_full_image_widths,
                 image_width_tiles,
                 output_image_width,
-                window_reuse_offset>(
+                window_reuse_offset,
+                single_core_processes_multiple_batches>(
                 packed_reader_indices_ptr, act_l1_read_addr, l1_write_addr_act, reader_idx, cb_start_addr);
 
 #endif

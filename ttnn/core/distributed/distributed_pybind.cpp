@@ -124,7 +124,9 @@ void py_module(py::module& module) {
         .def(
             "__getitem__", [](const MeshShape& ms, int index) { return ms[index]; }, py::arg("index"))
         .def("dims", &MeshShape::dims)
-        .def("mesh_size", &MeshShape::mesh_size);
+        .def("mesh_size", &MeshShape::mesh_size)
+        .def("__eq__", [](const MeshShape& lhs, const MeshShape& rhs) { return lhs == rhs; })
+        .def("__ne__", [](const MeshShape& lhs, const MeshShape& rhs) { return lhs != rhs; });
 
     static_cast<py::class_<MeshCoordinate>>(module.attr("MeshCoordinate"))
         .def(
@@ -466,10 +468,18 @@ void py_module(py::module& module) {
     auto py_placement_replicate =
         static_cast<py::class_<MeshMapperConfig::Replicate>>(module.attr("PlacementReplicate"));
     py_placement_replicate.def(py::init([]() { return MeshMapperConfig::Replicate{}; }))
-        .def("__repr__", [](const MeshMapperConfig::Replicate& replicate) {
-            std::ostringstream str;
-            str << replicate;
-            return str.str();
+        .def(
+            "__repr__",
+            [](const MeshMapperConfig::Replicate& replicate) {
+                std::ostringstream str;
+                str << replicate;
+                return str.str();
+            })
+        .def(
+            "__eq__",
+            [](const MeshMapperConfig::Replicate& lhs, const MeshMapperConfig::Replicate& rhs) { return true; })
+        .def("__ne__", [](const MeshMapperConfig::Replicate& lhs, const MeshMapperConfig::Replicate& rhs) {
+            return false;
         });
     auto py_mesh_mapper_config = static_cast<py::class_<MeshMapperConfig>>(module.attr("MeshMapperConfig"));
 
@@ -493,8 +503,8 @@ void py_module(py::module& module) {
                region. Otherwise, the tensor shards are distributed across mesh in row-major order.
            )doc")
         .def(
-            py::init([](std::optional<size_t> row_dim,
-                        std::optional<size_t> col_dim,
+            py::init([](std::optional<int> row_dim,
+                        std::optional<int> col_dim,
                         const std::optional<MeshShape>& mesh_shape_override) {
                 MeshMapperConfig config;
                 config.placements.push_back(
@@ -540,7 +550,7 @@ void py_module(py::module& module) {
                mesh_shape_override Optional[MeshShape]: If provided, overrides distribution shape of the mesh device.
            )doc")
         .def(
-            py::init([](size_t row_dim, size_t col_dim, const std::optional<MeshShape>& mesh_shape_override) {
+            py::init([](int row_dim, int col_dim, const std::optional<MeshShape>& mesh_shape_override) {
                 MeshComposerConfig config;
                 config.dims.push_back(row_dim);
                 config.dims.push_back(col_dim);

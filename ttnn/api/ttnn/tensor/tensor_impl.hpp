@@ -180,21 +180,24 @@ HostBuffer allocate_host_buffer(const TensorSpec& tensor_spec);
 // ======================================================================================
 
 template <typename T>
-Tensor to_host(const Tensor& tensor, bool blocking = true, QueueId cq_id = ttnn::DefaultQueueId);
+Tensor to_host(const Tensor& tensor, bool blocking = true, std::optional<QueueId> cq_id = std::nullopt);
 
 template <typename T>
 void copy_to_host(
-    const Tensor& device_tensor, Tensor& host_tensor, bool blocking = true, QueueId cq_id = ttnn::DefaultQueueId);
+    const Tensor& device_tensor,
+    Tensor& host_tensor,
+    bool blocking = true,
+    std::optional<QueueId> cq_id = std::nullopt);
 
 template <typename T>
 Tensor to_device(
     const Tensor& tensor,
     distributed::MeshDevice* mesh_device,
     ttsl::optional_reference<const MemoryConfig> memory_config = std::nullopt,
-    QueueId cq_id = ttnn::DefaultQueueId);
+    std::optional<QueueId> cq_id = std::nullopt);
 
 template <typename T>
-void copy_to_device(const Tensor& host_tensor, Tensor& device_tensor, QueueId cq_id = ttnn::DefaultQueueId);
+void copy_to_device(const Tensor& host_tensor, Tensor& device_tensor, std::optional<QueueId> cq_id = std::nullopt);
 
 // ======================================================================================
 //                                  .to_layout()
@@ -231,7 +234,19 @@ enum class TensorPrintProfile {
     Full,
 };
 
-extern TensorPrintProfile TTNN_TENSOR_PRINT_PROFILE;
+enum class SciMode {
+    Enable,
+    Disable,
+    Default,
+};
+
+struct PrintOptions {
+    TensorPrintProfile profile = TensorPrintProfile::Short;
+    SciMode sci_mode = SciMode::Default;
+    int precision = 4;
+};
+
+extern PrintOptions TTNN_PRINT_OPTIONS;
 
 template <typename T>
 std::string to_string(const Tensor& tensor);

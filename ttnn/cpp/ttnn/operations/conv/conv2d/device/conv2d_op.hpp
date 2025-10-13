@@ -171,17 +171,22 @@ struct Conv2dSliceConfig {
     // cores is minimized in width slicing, reducing the size of the Halo output. If the Height & Width dimensions are
     // similar, then use Width slicing. Use Height slicing if the Height dimension is significantly larger than the
     // Width dimension.
-    enum class SliceType : bool { HEIGHT, WIDTH };
-    SliceType slice_type = SliceType::WIDTH;
+    enum class SliceType : uint8_t {
+        DRAM_HEIGHT,
+        DRAM_WIDTH,
+        L1_FULL  // This option can be used to force conv2d with a DRAM Input to move it to L1, and output will be in
+                 // L1.
+    };
+    SliceType slice_type = SliceType::DRAM_WIDTH;
 
     // Number of slices that the output tensor should be divided into.
     uint32_t num_slices = 0;
 };
 
 // TODO: Accept parallelization
-enum class OptimizedConvOpParallelizationStrategy { MULTI_CORE, MULTI_CORE_REUSE, MULTI_CORE_REUSE_MCAST, SINGLE_CORE };
+enum class Conv2dOpParallelizationStrategy { MULTI_CORE, MULTI_CORE_REUSE, MULTI_CORE_REUSE_MCAST, SINGLE_CORE };
 
-struct OptimizedConvParallelizationConfig {
+struct Conv2dParallelizationConfig {
     CoreCoord grid_size;  // (x,y)
     uint32_t num_cores_nhw = 1;
     uint32_t num_cores_c_in = 1;
@@ -192,14 +197,14 @@ struct OptimizedConvParallelizationConfig {
     CoreCoord get_grid_size() const { return this->grid_size; }
 };
 
-struct OptimizedConvBlockConfig {
+struct Conv2dBlockConfig {
     uint32_t act_block_h_ntiles;
     uint32_t act_block_w_ntiles;
     uint32_t out_subblock_h_ntiles;
     uint32_t out_subblock_w_ntiles;
 };
 
-tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
+tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_width_sharded(
     tt::tt_metal::Program& program,
     const Tensor& a,
     const Tensor& b,
@@ -214,15 +219,15 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     bool untilize_out,
     bool has_bias,
     const std::optional<unary::UnaryWithParam>& fused_activation,
-    const OptimizedConvParallelizationConfig& parallelization_config,
-    const OptimizedConvBlockConfig& block_config,
+    const Conv2dParallelizationConfig& parallelization_config,
+    const Conv2dBlockConfig& block_config,
     Tensor& output,
     DeviceComputeKernelConfig compute_kernel_config,
     bool enable_act_double_buffer,
     bool enable_weights_double_buffer,
     bool config_tensors_in_dram);
 
-tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
+tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
     tt::tt_metal::Program& program,
     const Tensor& a,
     const Tensor& b,
@@ -237,8 +242,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     bool untilize_out,
     bool has_bias,
     const std::optional<unary::UnaryWithParam>& fused_activation,
-    const OptimizedConvParallelizationConfig& parallelization_config,
-    const OptimizedConvBlockConfig& block_config,
+    const Conv2dParallelizationConfig& parallelization_config,
+    const Conv2dBlockConfig& block_config,
     bool transpose_mcast,
     Tensor& output,
     DeviceComputeKernelConfig compute_kernel_config,
@@ -250,9 +255,9 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     std::optional<bool> force_split_reader);
 
 // new micro op
-struct OptimizedConvNew {
-    OptimizedConvParallelizationConfig parallelization_config;
-    OptimizedConvBlockConfig block_config;
+struct Conv2d {
+    Conv2dParallelizationConfig parallelization_config;
+    Conv2dBlockConfig block_config;
     const sliding_window::SlidingWindowConfig& sliding_window_config;
     const uint32_t output_channels;
     const uint32_t groups;
@@ -269,15 +274,15 @@ struct OptimizedConvNew {
     bool config_tensors_in_dram;
     uint32_t pre_op_l1_allocation_size_bytes{};
     std::optional<bool> force_split_reader = std::nullopt;
-    OptimizedConvNew(
+    Conv2d(
         const sliding_window::SlidingWindowConfig& sliding_window_config,
         uint32_t output_channels,
         uint32_t groups,
         bool untile_out,
         bool has_bias,
         std::optional<ttnn::operations::unary::UnaryWithParam> activation,
-        const OptimizedConvParallelizationConfig& p_config,
-        const OptimizedConvBlockConfig& b_config,
+        const Conv2dParallelizationConfig& p_config,
+        const Conv2dBlockConfig& b_config,
         tt::tt_metal::MemoryConfig memory_config,
         tt::tt_metal::DataType dtype,
         std::array<std::uint32_t, 4> input_tensor_shape,
@@ -358,7 +363,7 @@ struct OptimizedConvNew {
     }
 };
 
-Tensor optimized_conv_new(
+Tensor conv2d(
     const Tensor& a,
     const Tensor& b,
     std::optional<const Tensor> bias,
@@ -367,8 +372,8 @@ Tensor optimized_conv_new(
     uint32_t groups,
     bool untilize_out,
     const std::optional<ttnn::operations::unary::UnaryWithParam>& activation,
-    const OptimizedConvParallelizationConfig& parallelization_config,
-    const OptimizedConvBlockConfig& block_config,
+    const Conv2dParallelizationConfig& parallelization_config,
+    const Conv2dBlockConfig& block_config,
     const tt::tt_metal::MemoryConfig& memory_config,
     tt::tt_metal::DataType dtype,
     std::array<std::uint32_t, 4> input_tensor_shape,
@@ -395,8 +400,8 @@ struct conv_op_l1_usage {
 // L1 allocation is either for the output tensor or for Circular Buffers.
 conv_op_l1_usage calculate_L1_usage(
     const DeviceComputeKernelConfig& compute_kernel_config,
-    const OptimizedConvBlockConfig& block_config,
-    const OptimizedConvParallelizationConfig& pconfig,
+    const Conv2dBlockConfig& block_config,
+    const Conv2dParallelizationConfig& pconfig,
     const ttnn::Shape& weights_shape,
     const sliding_window::SlidingWindowConfig& sliding_window_config,
     std::array<uint32_t, 2> dilation,

@@ -4,7 +4,6 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include "ttnn/operations/cb_utils.hpp"
 #include "paged_cache_operation.hpp"
 #include <tt-metalium/work_split.hpp>
@@ -83,15 +82,15 @@ operation::ProgramWithCallbacks paged_tiled_fused_update_cache_multi_core(
     tt_metal::IDevice* device = input_tensor1.device();
 
     tt::DataFormat cache_cb_data_format = tt_metal::datatype_to_dataformat_converter(cache_tensor1.dtype());
-    uint32_t cache_single_tile_size = tt_metal::detail::TileSize(cache_cb_data_format);
+    uint32_t cache_single_tile_size = tt::tile_size(cache_cb_data_format);
 
     tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor1.dtype());
-    uint32_t input_single_tile_size = tt_metal::detail::TileSize(input_cb_data_format);
+    uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
 
     bool fp32_dest_acc_en = enable_fp32_dest_acc(device, compute_kernel_config);
 
     tt::DataFormat interm_cb_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
-    uint32_t interm_single_tile_size = tt_metal::detail::TileSize(interm_cb_data_format);
+    uint32_t interm_single_tile_size = tt::tile_size(interm_cb_data_format);
 
     const uint32_t B = input_tensor1.padded_shape()[1];
     const uint32_t num_heads = cache_tensor1.padded_shape()[1];
@@ -109,7 +108,7 @@ operation::ProgramWithCallbacks paged_tiled_fused_update_cache_multi_core(
         index_buffer_ptr = update_idxs_tensor.value().is_sharded() ? update_idxs_tensor.value().buffer() : nullptr;
         index_buffer_addr = use_index_tensor ? update_idxs_tensor.value().buffer()->address() : 0;
         index_data_format = tt_metal::datatype_to_dataformat_converter(update_idxs_tensor.value().dtype());
-        index_tensor_tile_size = tt_metal::detail::TileSize(index_data_format);
+        index_tensor_tile_size = tt::tile_size(index_data_format);
         index_is_dram = update_idxs_tensor.value().buffer()->buffer_type() == tt_metal::BufferType::DRAM;
         index_stick_size = update_idxs_tensor.value().buffer()->aligned_page_size();
     }
@@ -343,7 +342,7 @@ operation::ProgramWithCallbacks paged_tiled_fused_update_cache_multi_core(
 
         // Cache tile info
         const uint32_t cache_batch_tile_offset = i * cache_batch_num_tiles;
-        const uint32_t cache_start_id = cache_batch_tile_offset + (update_idx / TILE_HEIGHT) * Wt;
+        const uint32_t cache_start_id = cache_batch_tile_offset + ((update_idx / TILE_HEIGHT) * Wt);
         uint32_t tile_update_offset_B = update_idx % TILE_HEIGHT * Wbytes;
 
         // Calculate synchronization parameters
@@ -502,7 +501,7 @@ operation::ProgramWithCallbacks paged_tiled_fused_update_cache_multi_core(
                 const uint32_t update_idx = use_index_tensor ? 0 : update_idxs.at(i);
                 // Cache tile info
                 const uint32_t cache_batch_tile_offset = i * cache_batch_num_tiles;
-                const uint32_t cache_start_id = cache_batch_tile_offset + (update_idx / TILE_HEIGHT) * Wt;
+                const uint32_t cache_start_id = cache_batch_tile_offset + ((update_idx / TILE_HEIGHT) * Wt);
                 // Offset to write into untilized cache
                 uint32_t tile_update_offset_B = update_idx % TILE_HEIGHT * Wbytes;
 
@@ -568,15 +567,15 @@ operation::ProgramWithCallbacks paged_row_major_fused_update_cache_multi_core(
     tt_metal::IDevice* device = input_tensor1.device();
 
     const tt::DataFormat cache_cb_data_format = tt_metal::datatype_to_dataformat_converter(cache_tensor1.dtype());
-    const uint32_t cache_single_tile_size = tt_metal::detail::TileSize(cache_cb_data_format);
+    const uint32_t cache_single_tile_size = tt::tile_size(cache_cb_data_format);
 
     const tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor1.dtype());
-    const uint32_t input_single_tile_size = tt_metal::detail::TileSize(input_cb_data_format);
+    const uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
 
     const bool fp32_dest_acc_en = enable_fp32_dest_acc(device, compute_kernel_config);
 
     const tt::DataFormat interm_cb_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
-    const uint32_t interm_single_tile_size = tt_metal::detail::TileSize(interm_cb_data_format);
+    const uint32_t interm_single_tile_size = tt::tile_size(interm_cb_data_format);
 
     const uint32_t B = input_tensor1.padded_shape()[1];
     const uint32_t num_heads = cache_tensor1.padded_shape()[1];
@@ -594,7 +593,7 @@ operation::ProgramWithCallbacks paged_row_major_fused_update_cache_multi_core(
         index_buffer_ptr = update_idxs_tensor.value().is_sharded() ? update_idxs_tensor.value().buffer() : nullptr;
         index_buffer_addr = use_index_tensor ? update_idxs_tensor.value().buffer()->address() : 0;
         index_data_format = tt_metal::datatype_to_dataformat_converter(update_idxs_tensor.value().dtype());
-        index_tensor_tile_size = tt_metal::detail::TileSize(index_data_format);
+        index_tensor_tile_size = tt::tile_size(index_data_format);
         index_is_dram = update_idxs_tensor.value().buffer()->buffer_type() == tt_metal::BufferType::DRAM;
         index_stick_size = update_idxs_tensor.value().buffer()->aligned_page_size();
     }
@@ -833,7 +832,7 @@ operation::ProgramWithCallbacks paged_row_major_fused_update_cache_multi_core(
 
         // Cache tile info
         const uint32_t cache_batch_tile_offset = i * cache_batch_num_tiles;
-        const uint32_t cache_start_id = cache_batch_tile_offset + (update_idx / TILE_HEIGHT) * Wt;
+        const uint32_t cache_start_id = cache_batch_tile_offset + ((update_idx / TILE_HEIGHT) * Wt);
         const uint32_t tile_update_offset_B = update_idx % TILE_HEIGHT * Wbytes;
 
         // Calculate synchronization parameters
@@ -996,7 +995,7 @@ operation::ProgramWithCallbacks paged_row_major_fused_update_cache_multi_core(
                 const uint32_t update_idx = use_index_tensor ? 0 : update_idxs.at(i);
                 // Cache tile info
                 const uint32_t cache_batch_tile_offset = i * cache_batch_num_tiles;
-                const uint32_t cache_start_id = cache_batch_tile_offset + (update_idx / TILE_HEIGHT) * Wt;
+                const uint32_t cache_start_id = cache_batch_tile_offset + ((update_idx / TILE_HEIGHT) * Wt);
                 // Offset to write into untilized cache
                 const uint32_t tile_update_offset_B = update_idx % TILE_HEIGHT * Wbytes;
 

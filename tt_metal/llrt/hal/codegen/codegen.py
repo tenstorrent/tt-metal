@@ -159,7 +159,9 @@ class CodeGen:
             if re.fullmatch(r"(?:struct|union) {", line):
                 level += 1
                 continue
-            match = re.fullmatch(r"(?:volatile )?(?:struct | union )?([\w<>: ]+) +(\w+)(?:\[(\w+)\])? *(?:=.*)?;", line)
+            match = re.fullmatch(
+                r"(?:volatile )?(?:struct | union )?([\w<>: ]+) +(\w+)(?:\[([\w:]+)\])? *(?:=.*)?;", line
+            )
             if not match:
                 self.parse_error(line, "expect struct field definition")
             type_name = match.group(1)

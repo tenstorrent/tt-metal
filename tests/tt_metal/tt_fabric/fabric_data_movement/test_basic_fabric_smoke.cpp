@@ -100,7 +100,7 @@ void RunTestUnicastSmoke(BaseFabricFixture* fixture) {
 
     // Get available links between devices
     auto eth_chans = control_plane.get_forwarding_eth_chans_to_chip(src_fabric_node_id, dst_fabric_node_id);
-    if (eth_chans.size() == 0) {
+    if (eth_chans.empty()) {
         GTEST_SKIP() << "No fabric connection available between device 0 and device 1";
     }
     auto edm_port = *eth_chans.begin();

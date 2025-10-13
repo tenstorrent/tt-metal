@@ -1,11 +1,11 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
 
 from models.common.utility_functions import run_for_blackhole
-from models.demos.ttnn_resnet.tests.perf_device_resnet50 import run_perf_device
+from models.demos.ttnn_resnet.tests.common.perf_device_resnet50 import run_perf_device
 
 
 @run_for_blackhole()
@@ -13,8 +13,8 @@ from models.demos.ttnn_resnet.tests.perf_device_resnet50 import run_perf_device
 @pytest.mark.parametrize(
     "batch_size, test, expected_perf",
     [
-        [16, "act_dtype0-weight_dtype0-math_fidelity0-16-device_params0", 10193.0],
-        [32, "act_dtype0-weight_dtype0-math_fidelity0-32-device_params0", 12000.0],
+        [16, "True-act_dtype0-weight_dtype0-math_fidelity0-16-device_params0", 10003.0],
+        [32, "True-act_dtype0-weight_dtype0-math_fidelity0-32-device_params0", 13500.0],
     ],
 )
 def test_perf_device(batch_size, test, expected_perf):

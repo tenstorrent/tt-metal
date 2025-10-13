@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,12 +10,12 @@
 
 namespace tt::tt_fabric::core_placement {
 
-static void run_default_galaxy_optimizer(
+namespace {
+void run_default_galaxy_optimizer(
     const CorePlacementContext& ctx,
     tt::tt_fabric::FabricEriscDatamoverBuilder& edm_builder1,
     tt::tt_fabric::FabricEriscDatamoverBuilder& edm_builder2,
     size_t l) {
-
     if (!ctx.is_galaxy) return;
 
     constexpr uint32_t ring_noc_selection_link_threshold = 3;
@@ -70,6 +70,7 @@ static void run_default_galaxy_optimizer(
     }
 }
 
+}  // namespace
 
 void apply_core_placement_optimizations(
     const CorePlacementContext& ctx,

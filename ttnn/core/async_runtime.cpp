@@ -48,14 +48,14 @@ void event_synchronize(const tt::tt_metal::distributed::MeshEvent& event) {
 
 void wait_for_event(
     tt::tt_metal::distributed::MeshCommandQueue& cq, const tt::tt_metal::distributed::MeshEvent& event) {
-    tt::tt_metal::distributed::EnqueueWaitForEvent(cq, event);
+    cq.enqueue_wait_for_event(event);
 }
 
 tt::tt_metal::distributed::MeshEvent record_event(tt::tt_metal::distributed::MeshCommandQueue& cq) {
-    return tt::tt_metal::distributed::EnqueueRecordEvent(cq);
+    return cq.enqueue_record_event();
 }
 tt::tt_metal::distributed::MeshEvent record_event_to_host(tt::tt_metal::distributed::MeshCommandQueue& cq) {
-    return tt::tt_metal::distributed::EnqueueRecordEventToHost(cq);
+    return cq.enqueue_record_event_to_host();
 }
 
 }  // namespace ttnn

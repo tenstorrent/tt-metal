@@ -49,17 +49,17 @@ Since prefill and decode modes typically have very different performance charact
 
 ```python
 # Stage 1: Convert weights and get weight_config (saves to disk in standard format)
-weight_config = MLP1D.convert_weights(hf_config, [torch_state_dict_3, torch_state_dict_18, None, torch_state_dict_33], Path("weights/mlp"), mesh_device)
+weight_config = MLP.convert_weights(hf_config, [torch_state_dict_3, torch_state_dict_18, None, torch_state_dict_33], Path("weights/mlp"), mesh_device)
 
 # Stage 2: Generate operator configs (returns nested dicts with TTNN objects)
-model_config = MLP1D.prefill_model_config(hf_config, mesh_device) # Or decode_model_config(hf_config, mesh_device) for decode
+model_config = MLP.prefill_model_config(hf_config, mesh_device) # Or decode_model_config(hf_config, mesh_device) for decode
 
 # Stage 3: Generate the runtime state of the model
-model_state = MLP1D.create_state(hf_config, mesh_device)
+model_state = MLP.create_state(hf_config, mesh_device)
 
 # Stage 3: Runtime execution
-run_config = MLP1D.run_config(model_config, weight_config, model_state)
-output = MLP1D.forward_prefill(input_tensor, run_config) # or forward_decode(input_tensor, run_config)
+run_config = MLP.run_config(model_config, weight_config, model_state)
+output = MLP.forward_prefill(input_tensor, run_config) # or forward_decode(input_tensor, run_config)
 ```
 
 ## Module Requirements

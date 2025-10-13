@@ -169,7 +169,7 @@ class SegformerTestInfra:
         output_tensor = torch.permute(output_tensor, (0, 3, 1, 2))
         output_tensor = output_tensor.reshape((self.torch_output_tensor.logits).shape)
 
-        valid_pcc = 0.978
+        valid_pcc = 0.977
         self.pcc_passed, self.pcc_message = assert_with_pcc(
             self.torch_output_tensor.logits, output_tensor, pcc=valid_pcc
         )

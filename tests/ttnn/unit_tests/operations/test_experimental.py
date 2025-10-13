@@ -7,7 +7,7 @@ import pytest
 import torch
 
 import ttnn
-from models.utility_functions import (
+from models.common.utility_functions import (
     is_wormhole_b0,
     torch_random,
     is_wormhole_b0,

@@ -9,7 +9,6 @@
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/data_movement/reshape_view/reshape_common.hpp"
@@ -65,7 +64,6 @@ tt::tt_metal::operation::ProgramWithCallbacks rm_reshape_preparer_single_risk(
     while ((responsibility * source_page_size_bytes) % dest_page_size_bytes != 0) {
         responsibility++;
     }
-    const uint32_t write_jump = (responsibility * source_page_size_bytes) / dest_page_size_bytes;
     const uint32_t cb_size0 = source_read_size_bytes;
     const uint32_t cb_size1 = ((dest_page_size_bytes - 1) & MASK_64) + 80;
 
@@ -138,20 +136,23 @@ tt::tt_metal::operation::ProgramWithCallbacks rm_reshape_preparer_single_risk(
                 const uint32_t start_of_read = read_start_page;
                 uint32_t end_of_read = read_start_page + responsibility;
                 end_of_read = end_of_read < input_log_shape[-2] ? end_of_read : input_log_shape[-2];
+                uint32_t pages_for_this_core = end_of_read - start_of_read;
+                uint32_t write_jump = (pages_for_this_core * source_page_size_bytes) / dest_page_size_bytes;
 
                 if (can_use_dual_kernel) {
                     // Split work in half - determine split point and second write position
                     uint32_t mid_read, second_write_pos;
                     if (source_page_size_bytes >= dest_page_size_bytes) {
                         // Split by input pages
-                        uint32_t half_responsibility = responsibility / 2;
-                        mid_read = start_of_read + half_responsibility;
+                        uint32_t half_pages = pages_for_this_core / 2;
+                        mid_read = start_of_read + half_pages;
                         second_write_pos =
-                            write_start_page + (half_responsibility * source_page_size_bytes / dest_page_size_bytes);
+                            write_start_page + (half_pages * source_page_size_bytes / dest_page_size_bytes);
                     } else {
                         // Split by output pages
-                        uint32_t half_output_pages =
-                            ((responsibility * source_page_size_bytes) / dest_page_size_bytes) / 2;
+                        uint32_t total_bytes_for_core = pages_for_this_core * source_page_size_bytes;
+                        uint32_t total_output_pages_for_core = total_bytes_for_core / dest_page_size_bytes;
+                        uint32_t half_output_pages = total_output_pages_for_core / 2;
                         mid_read = start_of_read + (half_output_pages * dest_page_size_bytes / source_page_size_bytes);
                         second_write_pos = write_start_page + half_output_pages;
                     }

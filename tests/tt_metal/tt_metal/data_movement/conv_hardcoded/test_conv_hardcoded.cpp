@@ -59,7 +59,7 @@ bool run_dm(const std::shared_ptr<distributed::MeshDevice>& mesh_device, const C
 
     // Launch program using slow dispatch
     MetalContext::instance().get_cluster().l1_barrier(device->id());
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, true);
 
     return true;

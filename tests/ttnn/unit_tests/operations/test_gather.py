@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -6,8 +6,8 @@ import pytest
 import torch
 import ttnn
 import numpy as np
-from models.utility_functions import skip_for_blackhole
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from models.common.utility_functions import skip_for_blackhole
+from tests.ttnn.utils_for_testing import assert_allclose
 
 TILE_HEIGHT = 32
 
@@ -15,6 +15,7 @@ TILE_HEIGHT = 32
 @pytest.mark.parametrize(
     "input_shape, index_shape, dim",
     [
+        ([1, 4, 4, 2], [1, 4, 128, 2], 2),
         ([8, 8, 8, 8], [8, 8, 8, 8], -1),
         ([32, 64, 128], [32, 64, 128], -1),
         ([64, 128, 256], [64, 128, 128], -1),
@@ -48,7 +49,7 @@ def test_gather_general(input_shape, index_shape, dim, device):
     ttnn_gather = ttnn.gather(ttnn_input, dim, index=ttnn_index)
 
     assert ttnn_gather.shape == index.shape
-    assert_with_pcc(torch_gather, ttnn.to_torch(ttnn_gather))
+    assert_allclose(torch_gather, ttnn.to_torch(ttnn_gather))
 
 
 @pytest.mark.parametrize(
@@ -79,7 +80,7 @@ def test_gather_preallocated_output(input_shape, index_shape, dim, device):
 
     assert ttnn_output.shape == index.shape
 
-    assert_with_pcc(torch_gather, ttnn.to_torch(ttnn_output))
+    assert_allclose(torch_gather, ttnn.to_torch(ttnn_output))
 
 
 @pytest.mark.parametrize(
@@ -107,7 +108,7 @@ def test_gather_multicore_cases(input_shape, index_shape, dim, device):
     ttnn_gather = ttnn.gather(ttnn_input, dim, index=ttnn_index)
 
     assert ttnn_gather.shape == index.shape
-    assert_with_pcc(torch_gather, ttnn.to_torch(ttnn_gather))
+    assert_allclose(torch_gather, ttnn.to_torch(ttnn_gather))
 
 
 @pytest.mark.parametrize(
@@ -136,7 +137,7 @@ def test_gather_datatype_cases(
     ttnn_gather = ttnn.gather(ttnn_input, dim, index=ttnn_index)
 
     assert ttnn_gather.shape == index.shape
-    assert_with_pcc(torch_gather, ttnn.to_torch(ttnn_gather))
+    assert_allclose(torch_gather, ttnn.to_torch(ttnn_gather))
 
 
 @pytest.mark.parametrize(
@@ -169,7 +170,7 @@ def test_gather_long_tensor(input_shape, index_shape, dim, device):
     ttnn_gather = ttnn.gather(ttnn_input, dim, index=ttnn_index)
 
     assert ttnn_gather.shape == index.shape
-    assert_with_pcc(torch_gather, ttnn.to_torch(ttnn_gather))
+    assert_allclose(torch_gather, ttnn.to_torch(ttnn_gather))
 
 
 @pytest.mark.parametrize(
@@ -196,4 +197,4 @@ def test_gather_cache_run(input_shape, index_shape, dim, runs, device):
     for _ in range(runs):
         ttnn_gather = ttnn.gather(ttnn_input, dim, index=ttnn_index)
         assert ttnn_gather.shape == index.shape
-        assert_with_pcc(torch_gather, ttnn.to_torch(ttnn_gather))
+        assert_allclose(torch_gather, ttnn.to_torch(ttnn_gather))

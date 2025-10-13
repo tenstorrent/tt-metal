@@ -9,7 +9,7 @@ import transformers
 from transformers.cache_utils import EncoderDecoderCache
 
 from models.demos.grayskull.t5.reference import torch_functional_t5 as functional_t5
-from models.utility_functions import torch_random
+from models.common.utility_functions import torch_random
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 from tests.ttnn.utils_for_testing import assert_with_pcc

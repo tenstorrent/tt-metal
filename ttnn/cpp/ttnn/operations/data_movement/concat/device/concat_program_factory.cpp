@@ -20,7 +20,7 @@ using namespace tt::tt_metal;
 namespace {
 
 uint32_t find_greatest_common_page_size(std::vector<uint32_t>& stick_sizes, uint32_t alignment) {
-    TT_FATAL(stick_sizes.size() > 0, "Need at least one stick size to find page size");
+    TT_FATAL(!stick_sizes.empty(), "Need at least one stick size to find page size");
     uint32_t page_size = tt::align(stick_sizes[0], alignment);
     for (size_t idx = 1; idx < stick_sizes.size(); idx++) {
         const uint32_t padded_stick_size = tt::align(stick_sizes[idx], alignment);
@@ -127,13 +127,13 @@ tt_metal::operation::ProgramWithCallbacks s2s_tiled_concat_two_tensors_height_mu
         [&create_circular_buffer](
             uint32_t idx, const Tensor& input_tensor, uint32_t total_num_tiles) -> tt::tt_metal::CBHandle {
         const auto data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
-        const auto tile_size = tt::tt_metal::detail::TileSize(data_format);
+        const auto tile_size = tt::tile_size(data_format);
         return create_circular_buffer(idx, total_num_tiles, tile_size, data_format, input_tensor.buffer());
     };
 
     TT_FATAL(input_tensors.at(0).dtype() == input_tensors.at(1).dtype(), "Input tensor data types must match");
     const auto data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensors.at(0).dtype());
-    const auto tile_size = tt::tt_metal::detail::TileSize(data_format);
+    const auto tile_size = tt::tile_size(data_format);
 
     const uint32_t num_input_tensors = input_tensors.size();
     std::vector<CBHandle> cb_inputs(num_input_tensors);
@@ -152,7 +152,7 @@ tt_metal::operation::ProgramWithCallbacks s2s_tiled_concat_two_tensors_height_mu
     bool bf8 = input_tensors[0].dtype() == DataType::BFLOAT8_B;
     if (bf8) {
         cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(DataType::BFLOAT16);
-        cb_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
+        cb_tile_size = tt::tile_size(cb_data_format);
     }
 
     const auto in0_total_tiles_width = std::get<1>(num_tiles_for_each_input_shard[0]);
@@ -475,7 +475,7 @@ tt_metal::operation::ProgramWithCallbacks s2s_concat_multi_core(
         elements_per_page_width = page_size / element_size;
         elements_per_page_height = 1;
     } else {
-        page_size = tt_metal::detail::TileSize(cb_data_format);
+        page_size = tt::tile_size(cb_data_format);
         elements_per_page_width = TILE_WIDTH;
         elements_per_page_height = TILE_HEIGHT;
     }
@@ -531,7 +531,7 @@ tt_metal::operation::ProgramWithCallbacks s2s_concat_multi_core(
         runtime_args_0.push_back(0);
         runtime_args_1.push_back(input_num_pages_per_stick[input_id]);
         runtime_args_1.push_back(input_num_sticks[input_id] - input_num_sticks_per_risc);
-        runtime_args_1.push_back(input_write_offsets[input_id] + output_stride * input_num_sticks_per_risc);
+        runtime_args_1.push_back(input_write_offsets[input_id] + (output_stride * input_num_sticks_per_risc));
         runtime_args_1.push_back(page_size * input_num_pages_per_stick[input_id] * input_num_sticks_per_risc);
     }
 
@@ -738,7 +738,7 @@ tt_metal::operation::ProgramWithCallbacks concat_multi_core(
         single_page_size = tt::align(output.element_size() * output.padded_shape()[-1], common_align_len);
     } else {
         num_output_pages = output.physical_volume() / TILE_HW;
-        single_page_size = tt_metal::detail::TileSize(cb_data_format);
+        single_page_size = tt::tile_size(cb_data_format);
     }
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();

@@ -125,12 +125,16 @@ jobs:
             num_devices: 4
           - name: DeskBox Demo tests
             runner-label: BH-DeskBox
-            extra-tag: pipeline-functional
+            extra-tag: pipeline-perf
             num_devices: 2
-          # - name: RackBox Demo tests
-          #   runner-label: BH-RackBox
-          #   extra-tag: pipeline-functional
-          #   num_devices: 8
+          - name: LoudBox Demo tests
+            runner-label: BH-LoudBox
+            extra-tag: pipeline-perf
+            num_devices: 8
+          - name: P300 Demo tests
+            runner-label: P300-viommu
+            extra-tag: pipeline-yyz2-lfc
+            num_devices: 2
     with:
       runner-label: ${{ matrix.test-group.runner-label }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
@@ -145,7 +149,7 @@ jobs:
       - build-artifact
     uses: ./.github/workflows/publish-release-image.yaml
     secrets: inherit
-    if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/stable' || inputs.dry-run }}
+    if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/v') || inputs.dry-run }}
     with:
       os: ${{ inputs.distro || 'ubuntu' }}-${{ inputs.version || '22.04' }}
       version: ${{ inputs.tag-version }}
@@ -171,7 +175,7 @@ jobs:
     needs: build-artifact
     if: ${{ github.ref == 'refs/heads/main' || inputs.dry-run }}
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         timeout-minutes: 10
         with:
           name: ${{ needs.build-artifact.outputs.packages-artifact-name || 'packages artifact unresolved!' }}
@@ -219,7 +223,7 @@ jobs:
           pip install s3pypi
 
       - name: Download wheel artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         with:
           name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
           path: ./wheels
@@ -232,32 +236,3 @@ jobs:
             echo "Publishing wheel: $wheel"
             s3pypi upload "$wheel" --put-root-index --bucket ${{ secrets.PYPI_BUCKET }}
           done
-
-  publish-to-pypi:
-    name: >-
-      Publish Python 🐍 distribution 📦 to PyPI
-    needs:
-      - build-artifact
-      - single-card-demos
-      - t3000-demos
-      - t3000-model-perf
-      - galaxy-demos
-      - blackhole-single-card-demos
-      - blackhole-multi-card-demos
-
-    runs-on: ubuntu-latest
-    if: ${{ (github.ref == 'refs/heads/stable' || (startsWith(github.ref, 'refs/tags/') && contains(github.event.base_ref || '', 'refs/heads/stable'))) || inputs.dry-run }}
-    environment:
-      name: pypi
-      url: https://pypi.org/project/ttnn/
-    permissions:
-      id-token: write  # IMPORTANT: mandatory for trusted publishing
-    steps:
-    - name: Download all the dists
-      uses: actions/download-artifact@v4
-      with:
-        name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-        path: dist/
-    - name: Publish distribution 📦 to PyPI (skipped for dry run)
-      if: ${{ !inputs.dry-run }}
-      uses: pypa/gh-action-pypi-publish@release/v1

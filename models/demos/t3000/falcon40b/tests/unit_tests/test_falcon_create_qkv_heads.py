@@ -7,7 +7,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import skip_for_grayskull, torch2tt_tensor, tt2torch_tensor
+from models.common.utility_functions import torch2tt_tensor, tt2torch_tensor
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 
 
@@ -131,7 +131,6 @@ def run_test_FalconMLP_inference(
         assert all_pass, f"PCC value is lower than {pcc}"
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize("pcc", [(0.99)])
 def test_FalconMatmul_inference(
     pcc,

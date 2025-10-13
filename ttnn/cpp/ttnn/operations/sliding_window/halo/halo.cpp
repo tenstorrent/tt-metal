@@ -8,7 +8,6 @@
 #include "device/halo_device_operation.hpp"
 namespace ttnn::operations::sliding_window::halo {
 Tensor HaloOperation::invoke(
-    QueueId queue_id,
     const Tensor& input_tensor,
     const SlidingWindowConfig& config,
     uint32_t pad_val,
@@ -19,6 +18,14 @@ Tensor HaloOperation::invoke(
     bool in_place,
     bool config_tensors_in_dram) {
     return halo_op(
-        input_tensor, config, pad_val, remote_read, transpose_mcast, output_memory_config, is_out_tiled, in_place, config_tensors_in_dram);
+        input_tensor,
+        config,
+        pad_val,
+        remote_read,
+        transpose_mcast,
+        output_memory_config,
+        is_out_tiled,
+        in_place,
+        config_tensors_in_dram);
 }
 };  // namespace ttnn::operations::sliding_window::halo

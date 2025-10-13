@@ -16,7 +16,6 @@
 
 #include <tt-metalium/base_types.hpp>
 #include <tt-metalium/device_pool.hpp>
-#include <tt-metalium/kernel.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "ttnn/tensor/tensor.hpp"
@@ -212,6 +211,7 @@ static inline json get_kernels_json(chip_id_t device_id, const Program& program)
     if (tt::DevicePool::instance().is_device_active(device_id)) {
         device = tt::DevicePool::instance().get_active_device(device_id);
     }
+
     json kernelSizes;
     // TODO(HalProcessorClassType): all the combinations can be queried from HAL instead of hardcoded here, but
     // currently HAL does not correctly report the number of processors under DM.
@@ -227,35 +227,33 @@ static inline json get_kernels_json(chip_id_t device_id, const Program& program)
     kernelSizes["IDLE_ETH_DM_0_max_kernel_size"] = 0;
     kernelSizes["IDLE_ETH_DM_1_max_kernel_size"] = 0;
 
-    for (const auto& kernel : program.kernels()) {
-        auto core_type = kernel->get_kernel_programmable_core_type();
-        auto processor_class = kernel->get_kernel_processor_class();
-        auto num_binaries = kernel->expected_num_binaries();
+    for (const auto& kernel : detail::collect_kernel_meta(program, device)) {
         json kernelObj;
-        kernelObj["source"] = kernel->kernel_source().source_;
-        kernelObj["name"] = kernel->get_full_kernel_name();
+        kernelObj["source"] = kernel.source;
+        kernelObj["name"] = kernel.name;
+
+        auto processor_class = kernel.processor_class;
         if (processor_class == HalProcessorClassType::COMPUTE) {
-            MathFidelity mathFidelity = std::get<ComputeConfig>(kernel->config()).math_fidelity;
+            MathFidelity mathFidelity = kernel.math_fidelity.value();
             kernelObj["math_fidelity"] = enchantum::to_string(mathFidelity);
             computeKernels.push_back(std::move(kernelObj));
         } else {
             datamovementKernels.push_back(std::move(kernelObj));
         }
-        if (device != nullptr) {
-            auto core_type_name = enchantum::to_string(core_type);
-            auto processor_class_name = enchantum::to_string(processor_class);
-            for (int i = 0; i < num_binaries; i++) {
-                auto key = fmt::format(
-                    "{}_{}_{}_max_kernel_size",
-                    core_type_name,
-                    processor_class_name,
-                    kernel->get_kernel_processor_type(i));
-                if (kernelSizes.value(key, 0) < kernel->get_binary_packed_size(device, i)) {
-                    kernelSizes[key] = kernel->get_binary_packed_size(device, i);
-                }
+
+        auto core_type = kernel.programmable_core_type;
+        auto core_type_name = enchantum::to_string(core_type);
+        auto processor_class_name = enchantum::to_string(kernel.processor_class);
+
+        for (auto const& binary_meta : kernel.binary_meta) {
+            auto key = fmt::format(
+                "{}_{}_{}_max_kernel_size", core_type_name, processor_class_name, binary_meta.processor_type);
+            if (kernelSizes.value(key, 0) < binary_meta.packed_size) {
+                kernelSizes[key] = binary_meta.packed_size;
             }
         }
     }
+
     json ret;
     ret["compute_kernels"] = std::move(computeKernels);
     ret["datamovement_kernels"] = std::move(datamovementKernels);
@@ -474,8 +472,11 @@ inline std::string op_meta_data_serialized_json(
             cached_ops.at(device_id).emplace(program_hash, short_str);
         }
 
-        std::string ser = j.dump(4);
-        return fmt::format("{}{} ->\n{}`", short_str, operation_id, ser);
+        auto msg = fmt::format("{}{} ->\n{}`", short_str, operation_id, j.dump(4));
+        if (msg.size() >= std::numeric_limits<uint16_t>::max()) {
+            msg = fmt::format("{}{} ->\n{}`", short_str, operation_id, j.dump(-1));
+        }
+        return msg;
     } else {
         auto opname = program_hash_to_opname_.find_if_exists({device_id, program_hash});
         runtime_id_to_opname_.insert({device_id, program.get_runtime_id()}, std::move(opname));

@@ -10,7 +10,7 @@
 #include <filesystem>
 #include <tt-metalium/control_plane.hpp>
 #include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/multi_mesh_types.hpp>
+#include <tt-metalium/fabric_types.hpp>
 #include <impl/context/metal_context.hpp>
 #include "gmock/gmock.h"
 #include <fmt/format.h>
@@ -20,16 +20,12 @@
 namespace tt::tt_fabric {
 namespace {
 
-using ::testing::ElementsAre;
-using ::testing::Eq;
 using ::testing::HasSubstr;
-using ::testing::IsEmpty;
 using ::testing::ThrowsMessage;
 using ::tt::tt_metal::distributed::MeshCoordinate;
 using ::tt::tt_metal::distributed::MeshCoordinateRange;
 using ::tt::tt_metal::distributed::MeshShape;
 using ::tt::tt_metal::distributed::test::utils::ScopedEnvVar;
-using ::tt::tt_metal::distributed::test::utils::TemporaryFile;
 
 // RAII guard for managing mesh binding environment variables
 class ScopedMeshBinding {

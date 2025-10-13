@@ -51,6 +51,11 @@ public:
     // Return a list of all exit nodes, across all meshes that are connected to the requested
     // MeshID.
     const std::vector<FabricNodeId>& get_exit_nodes_routing_to_mesh(MeshId mesh_id) const;
+    // Return the single exit node (chip in src_mesh_id) for a given src chip and dst mesh
+    FabricNodeId get_exit_node_from_mesh_to_mesh(MeshId src_mesh_id, chip_id_t src_chip_id, MeshId dst_mesh_id) const;
+
+    // Load Inter-Mesh Connectivity into the Routing Table Generator
+    void load_intermesh_connections(const AnnotatedIntermeshConnections& intermesh_connections);
 
     std::unique_ptr<MeshGraph> mesh_graph;
 
@@ -62,6 +67,8 @@ private:
     RoutingTable intra_mesh_table_;
     RoutingTable inter_mesh_table_;
     std::unordered_map<MeshId, std::vector<FabricNodeId>> mesh_to_exit_nodes_;
+    // Direct lookup table: [src_mesh][src_chip][dst_mesh] -> exit chip_id in src_mesh
+    std::vector<std::vector<std::vector<chip_id_t>>> exit_node_lut_;
 
     std::vector<std::vector<std::vector<std::pair<chip_id_t, MeshId>>>> get_paths_to_all_meshes(
         MeshId src, const InterMeshConnectivity& inter_mesh_connectivity) const;

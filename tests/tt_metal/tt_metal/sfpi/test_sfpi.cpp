@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,7 +9,6 @@
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/kernel.hpp>
 #include <tt-metalium/kernel_types.hpp>
 
 #include <algorithm>
@@ -38,7 +37,7 @@ bool runTest(
     std::vector<uint32_t> compile_args{args_addr};
 
     auto program(tt::tt_metal::CreateProgram());
-    distributed::MeshWorkload workload = distributed::CreateMeshWorkload();
+    distributed::MeshWorkload workload;
     CreateKernel(
         program,
         path,
@@ -46,8 +45,7 @@ bool runTest(
         tt::tt_metal::ComputeConfig{
             .compile_args = compile_args,
         });
-    distributed::AddProgramToMeshWorkload(
-        workload, std::move(program), distributed::MeshCoordinateRange(mesh_device->shape()));
+    workload.add_program(distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
 
     distributed::Finish(mesh_device->mesh_command_queue());
@@ -61,7 +59,7 @@ bool runTest(
     auto pos = path.find_last_of('.');
     // NOLINTNEXTLINE(bugprone-inc-dec-in-conditions)
     while (--pos && path[pos] >= '0' && path[pos] <= '9') {
-        continue;
+        continue;  // NOLINT(readability-redundant-control-flow)
     }
     if (path[pos] == '-') {
         while (path[++pos] != '.') {
@@ -131,8 +129,6 @@ bool runTestsuite(const std::shared_ptr<distributed::MeshDevice>& mesh_device, c
     path.append(KernelDir);
     return runTests(mesh_device, coord, path, path.find_last_of('/') + 1);
 }
-
-using tt::tt_metal::UnitMeshCQSingleCardProgramFixture;
 
 TEST_F(UnitMeshCQFixture, TensixSFPI) {
     CoreCoord core{0, 0};

@@ -8,7 +8,7 @@ from diffusers import StableDiffusionPipeline
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
-from models.common.utility_functions import skip_for_grayskull, torch_random
+from models.common.utility_functions import torch_random
 from models.demos.wormhole.stable_diffusion.common import SD_L1_SMALL_SIZE
 from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
 from models.demos.wormhole.stable_diffusion.tests.parameterizations import (
@@ -30,7 +30,6 @@ def torch_to_ttnn(input, device, layout=ttnn.TILE_LAYOUT):
     return input
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize(
     "input_shape, shard_layout, shard_end_core, shard_shape, index",
     [

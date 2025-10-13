@@ -6,6 +6,7 @@
 #include "debug/dprint.h"
 
 void kernel_main() {
+    set_l1_data_cache<true>();
     uint32_t poll_addr = get_arg_val<uint32_t>(0);
     uint32_t expected_value = get_arg_val<uint32_t>(1);
     auto sem_addr = reinterpret_cast<volatile uint32_t*>(get_semaphore(get_arg_val<uint32_t>(2)));
@@ -22,4 +23,5 @@ void kernel_main() {
             invalidate_l1_cache();
         }
     }
+    set_l1_data_cache<false>();
 }

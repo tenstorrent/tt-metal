@@ -91,9 +91,6 @@ using namespace tt::tt_metal;
 
 namespace ttnn::ccl::reduce_scatter_detail {
 
-using ttnn::ccl::Shape4D;
-using ttnn::ccl::cmd::CclCommandTensor;
-
 enum fabric_lifetime_mode {
     // The fabric's lifetime exceed (before and after) the lifetime of the op
     // so the op should not in any way manage fabric lifetime
@@ -1066,7 +1063,7 @@ static void create_non_end_of_line_final_reducer_worker_commands(
         TensorSyncBundle{all_program_tensors.local_final_output_tensor, all_program_tensors.local_output_sync},
         worker_command_streams_out);
 
-    TT_FATAL(final_reducer_worker_cores.size() > 0, "Internal error. No final reducer cores were created");
+    TT_FATAL(!final_reducer_worker_cores.empty(), "Internal error. No final reducer cores were created");
 }
 
 static void populate_partial_reduce_worker_commands(
@@ -1780,9 +1777,8 @@ static void initialize_op_internal_tensor_syncs(
     WorkerCoreBundle const& worker_cores,
     GlobalSemaphore const& from_remote_sem,
     GlobalSemaphore const& to_remote_sem) {
-
     TT_FATAL(
-        worker_cores.partial_reducers_vec[LineDirection::BACKWARD].size() > 0,
+        !worker_cores.partial_reducers_vec[LineDirection::BACKWARD].empty(),
         "Internal error. Expected at least one partial reducer worker");
     std::array<std::vector<CoreCoord>, 2> partial_reducer_cores = {
         worker_cores.partial_reducers_vec[LineDirection::FORWARD],
@@ -1843,13 +1839,13 @@ static void initialize_op_internal_tensor_syncs(
 
     for (auto direction : {LineDirection::FORWARD, LineDirection::BACKWARD}) {
         TT_FATAL(
-            all_tensors.input_tensor_from_remote_sync[direction].targets.size() > 0,
+            !all_tensors.input_tensor_from_remote_sync[direction].targets.empty(),
             "Input tensor from remote sync must be populated");
         TT_FATAL(
-            all_tensors.input_tensor_from_remote_sync[direction].semaphore_ids.size() > 0,
+            !all_tensors.input_tensor_from_remote_sync[direction].semaphore_ids.empty(),
             "Input tensor from remote sync must be populated");
         TT_FATAL(
-            all_tensors.input_tensor_from_remote_sync[direction].completion_target_value_per_semaphore.size() > 0,
+            !all_tensors.input_tensor_from_remote_sync[direction].completion_target_value_per_semaphore.empty(),
             "Input tensor from remote sync must be populated");
         TT_FATAL(
             all_tensors.input_tensor_from_remote_sync[direction].completion_target_value_per_semaphore.size() ==
@@ -1862,13 +1858,13 @@ static void initialize_op_internal_tensor_syncs(
             "Remote output sync must be populated");
 
         TT_FATAL(
-            all_tensors.local_output_partial_sync[direction].targets.size() > 0,
+            !all_tensors.local_output_partial_sync[direction].targets.empty(),
             "Local output partial sync must be populated");
         TT_FATAL(
-            all_tensors.local_output_partial_sync[direction].semaphore_ids.size() > 0,
+            !all_tensors.local_output_partial_sync[direction].semaphore_ids.empty(),
             "Local output partial sync must be populated");
         TT_FATAL(
-            all_tensors.local_output_partial_sync[direction].completion_target_value_per_semaphore.size() > 0,
+            !all_tensors.local_output_partial_sync[direction].completion_target_value_per_semaphore.empty(),
             "Local output partial sync must be populated");
         TT_FATAL(
             all_tensors.local_output_partial_sync[direction].completion_target_value_per_semaphore.size() ==
@@ -1876,16 +1872,16 @@ static void initialize_op_internal_tensor_syncs(
             "Local output partial sync must be populated");
     }
     TT_FATAL(
-        all_tensors.remote_output_sync[LineDirection::FORWARD].targets.size() > 0 ||
-            all_tensors.remote_output_sync[LineDirection::BACKWARD].targets.size() > 0,
+        !all_tensors.remote_output_sync[LineDirection::FORWARD].targets.empty() ||
+            !all_tensors.remote_output_sync[LineDirection::BACKWARD].targets.empty(),
         "Remote output sync must be populated");
     TT_FATAL(
-        all_tensors.remote_output_sync[LineDirection::FORWARD].semaphore_ids.size() > 0 ||
-            all_tensors.remote_output_sync[LineDirection::BACKWARD].semaphore_ids.size() > 0,
+        !all_tensors.remote_output_sync[LineDirection::FORWARD].semaphore_ids.empty() ||
+            !all_tensors.remote_output_sync[LineDirection::BACKWARD].semaphore_ids.empty(),
         "Remote output sync must be populated");
     TT_FATAL(
-        all_tensors.remote_output_sync[LineDirection::FORWARD].completion_target_value_per_semaphore.size() > 0 ||
-            all_tensors.remote_output_sync[LineDirection::BACKWARD].completion_target_value_per_semaphore.size() > 0,
+        !all_tensors.remote_output_sync[LineDirection::FORWARD].completion_target_value_per_semaphore.empty() ||
+            !all_tensors.remote_output_sync[LineDirection::BACKWARD].completion_target_value_per_semaphore.empty(),
         "Remote output sync must be populated");
 }
 

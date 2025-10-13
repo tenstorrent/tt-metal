@@ -9,7 +9,7 @@ Although looking trivial, this example introduces essential concepts that are us
 
 We'll go through any new code section by section. This builds on top of
 previous examples. Note that we have this exact, full example program is located under
-``tt_metal/programming_examples/eltwise_binary``, so you can follow along.
+``tt_metal/programming_examples/metal_example_eltwise_binary``, so you can follow along.
 
 To build and execute, you may use the following commands. Note that we include
 the necessary environment variables here, but you may possibly need more
@@ -20,15 +20,15 @@ depending on the most up-to-date installation methods.
     export TT_METAL_HOME=</path/to/tt-metal>
     ./build_metal.sh --build-programming-examples
     # To run the example
-    ./build/programming_examples/eltwise_binary
+    ./build/programming_examples/metal_example_eltwise_binary
 
 Program setup
 -------------
 
 Initializing Metalium is almost the same as before. To recap, we need to
 
-1. Open a device (again we are using device 0)
-2. Obtain the command queue to issue down/uploads and program execution
+1. Create a mesh device (even single devices are treated as a 1x1 mesh)
+2. Obtain the mesh command queue to issue data down/uploads and program execution
 3. Create a program object to hold our kernels
 4. Define the core we are going to use (in this case, only one at {0, 0})
 5. Some basic constants for tile and total buffer sizes
@@ -36,30 +36,32 @@ Initializing Metalium is almost the same as before. To recap, we need to
 .. code-block:: cpp
 
     constexpr int device_id = 0;
-    IDevice* device = CreateDevice(device_id);
+    auto mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
 
-    CommandQueue& cq = device->command_queue();
+    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
 
     Program program = CreateProgram();
 
     constexpr CoreCoord core = {0, 0};
     constexpr uint32_t n_tiles = 64;
-    constexpr uint32_t elements_per_tile = TILE_WIDTH * TILE_HEIGHT;
+    constexpr uint32_t elements_per_tile = tt::constants::TILE_WIDTH * tt::constants::TILE_HEIGHT;
     constexpr uint32_t tile_size_bytes = sizeof(bfloat16) * elements_per_tile;
 
 This time, instead of 2 DRAM buffers to copy data out and back, we will create 3 buffers. 2 as data sources and 1 as the output. Page size is set to one tile. This is the most common setting for buffers in Metalium as the compute engines expect to operate on tiles of data.
 
 .. code-block:: cpp
 
-    InterleavedBufferConfig config{
-        .device = device,                       // The device to create the buffer on
-        .size = n_tiles * tile_size_bytes,      // The size of the buffer in bytes
-        .page_size = tile_size_bytes,           // The page size of the buffer in bytes. In this case, will be
-                                                // one tile per page.
+    distributed::DeviceLocalBufferConfig dram_config{
+        .page_size = tile_size_bytes,
         .buffer_type = BufferType::DRAM};       // This is a DRAM buffer.
-    auto src0_dram_buffer = CreateBuffer(config);
-    auto src1_dram_buffer = CreateBuffer(config);
-    auto dst_dram_buffer = CreateBuffer(config);
+
+    distributed::ReplicatedBufferConfig buffer_config{
+        .size = n_tiles * tile_size_bytes       // Total bytes per device (replicated across the mesh).
+    };
+
+    auto src0_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
+    auto src1_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
+    auto dst_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
 
 Data preparation and upload is the same as before. For this example, buffer 0 will be filled with random values, and buffer 1 will be filled with a constant of -1 just for demonstration purposes. The data is then uploaded to the device asynchronously like before.
 
@@ -74,8 +76,8 @@ Data preparation and upload is the same as before. For this example, buffer 0 wi
         val = bfloat16(distribution(rng));
     }
     // Upload the data from host to the device.
-    EnqueueWriteBuffer(cq, src0_dram_buffer, a_data, false);
-    EnqueueWriteBuffer(cq, src1_dram_buffer, b_data, false);
+    distributed::EnqueueWriteMeshBuffer(cq, src0_dram_buffer, a_data, false);
+    distributed::EnqueueWriteMeshBuffer(cq, src1_dram_buffer, b_data, false);
 
 Circular buffers
 ----------------
@@ -126,23 +128,23 @@ In the previous example (DRAM loopback), we used a single kernel to perform the 
 .. code-block:: cpp
 
     std::vector<uint32_t> reader_args;
-    TensorAccessorArgs(*src0_dram_buffer).append_to(reader_args);
-    TensorAccessorArgs(*src1_dram_buffer).append_to(reader_args);
+    TensorAccessorArgs(*src0_dram_buffer->get_backing_buffer()).append_to(reader_args);
+    TensorAccessorArgs(*src1_dram_buffer->get_backing_buffer()).append_to(reader_args);
     auto reader = CreateKernel(
         program,
-        "tt_metal/programming_examples/eltwise_binary/kernels/dataflow/read_tiles.cpp",
+        "eltwise_binary/kernels/dataflow/read_tiles.cpp",
         core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = reader_args});
     std::vector<uint32_t> writer_args;
-    TensorAccessorArgs(*dst_dram_buffer).append_to(writer_args);
+    TensorAccessorArgs(*dst_dram_buffer->get_backing_buffer()).append_to(writer_args);
     auto writer = CreateKernel(
         program,
-        "tt_metal/programming_examples/eltwise_binary/kernels/dataflow/write_tile.cpp",
+        "eltwise_binary/kernels/dataflow/write_tile.cpp",
         core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = writer_args});
     auto compute = CreateKernel(
         program,
-        "tt_metal/programming_examples/eltwise_binary/kernels/compute/tiles_add.cpp",
+        "eltwise_binary/kernels/compute/tiles_add.cpp",
         core,
         ComputeConfig{.math_fidelity = MathFidelity::HiFi4});
 
@@ -264,8 +266,11 @@ Then the host program sets the kernel arguments and launches the program. There 
     SetRuntimeArgs(program, writer, core, {dst_dram_buffer->address(), n_tiles});
     SetRuntimeArgs(program, compute, core, {n_tiles});
 
-    EnqueueProgram(cq, program, false);
-    Finish(cq);
+    distributed::MeshWorkload workload;
+    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
+    workload.add_program(device_range, std::move(program));
+    distributed::EnqueueMeshWorkload(cq, workload, false);
+    distributed::Finish(cq);
 
 Download the result and verify output
 -------------------------------------
@@ -275,7 +280,7 @@ Finally, we download the result and verify the output. Again we read the data in
 .. code-block:: cpp
 
     std::vector<bfloat16> result_vec;
-    EnqueueReadBuffer(cq, dst_dram_buffer, result_vec, /*blocking=*/true);
+    distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_dram_buffer, true);
 
     constexpr float eps = 1e-2f; // loose tolerance because of the nature of bfloat16
     TT_FATAL(result_vec.size() == a_data.size(), "Result vector size mismatch");
@@ -294,9 +299,9 @@ Validation and teardown
 
 .. code-block:: cpp
 
-   pass &= CloseDevice(device);
+   pass &= mesh_device->close();
 
-We now use ``CloseDevice`` to teardown our device. This releases resources associated with the device.
+We now use ``mesh_device->close()`` to teardown our mesh device. This releases resources associated with the device.
 
 Next we will explore the use of the vector engine (SFPU) to perform the same operation.
 :ref:`Eltwise sfpu example<Eltwise sfpu example>`.

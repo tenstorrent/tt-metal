@@ -250,7 +250,7 @@ def from_torch(
     device: Optional[ttnn.MeshDevice] = None,
     memory_config: Optional[ttnn.MemoryConfig] = None,
     mesh_mapper: Optional[ttnn.CppTensorToMesh | ttnn.ReplicateTensorToMeshWrapper] = None,
-    cq_id: Optional[int] = ttnn.DefaultQueueId,
+    cq_id: Optional[int] = None,
 ) -> ttnn.Tensor:
     """
     Converts the `torch.Tensor` tensor into a `ttnn.Tensor`. For bfloat8_b or bfloat4_b format, the function itself is called twice,
@@ -337,7 +337,7 @@ def to_torch(
     torch_rank: Optional[int] = None,
     mesh_composer: Optional[ttnn.CppMeshToTensor] = None,
     device: Optional[ttnn.MeshDevice] = None,
-    cq_id: Optional[int] = ttnn.DefaultQueueId,
+    cq_id: Optional[int] = None,
 ) -> "torch.Tensor":
     """
     Converts the `ttnn.Tensor` tensor into a `torch.Tensor`. It does not call to_layout for bfloat8_b or bfloat4_b as we now convert
@@ -367,7 +367,7 @@ def to_torch(
     import torch
 
     if ttnn.is_tensor_storage_on_device(tensor):
-        tensor = ttnn.from_device(tensor, cq_id=cq_id)
+        tensor = ttnn.from_device(tensor, queue_id=cq_id)
 
     tensor = tensor.to_torch(mesh_composer=mesh_composer)
 

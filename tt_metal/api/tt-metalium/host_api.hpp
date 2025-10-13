@@ -5,6 +5,7 @@
 #pragma once
 
 #include <initializer_list>
+#include <string>
 #include <variant>
 #include <vector>
 
@@ -18,7 +19,6 @@
 #include <tt-metalium/lightmetal_binary.hpp>
 #include <tt-metalium/profiler_types.hpp>
 #include <tt-metalium/profiler_optional_metadata.hpp>
-#include <tt-metalium/kernel.hpp>
 
 /** @file */
 
@@ -39,7 +39,6 @@ namespace tt {
 
 namespace tt_metal {
 
-class CommandQueue;
 struct TraceDescriptor;
 
 class Program;
@@ -53,6 +52,19 @@ class GlobalSemaphore;
 // ==================================================
 //                  HOST API: Device management
 // ==================================================
+
+// clang-format off
+/**
+ * Sets the root directory for TT Metal meta data files like kernel sources.
+ *
+ * Return value: void
+ *
+ * | Argument  | Description                                 | Type                | Valid range | Required |
+ * |-----------|---------------------------------------------|---------------------|-------------|----------|
+ * | root_dir  | Path to the root directory                  | const std::string & |             | No, will fallback to TT_METAL_HOME Environment Variable     |
+ */
+// clang-format on
+void SetRootDir(const std::string& root_dir);
 
 /**
  * Returns number of Tenstorrent devices that can be targeted
@@ -590,223 +602,6 @@ RuntimeArgsData& GetCommonRuntimeArgs(const Program& program, KernelHandle kerne
 
 // clang-format off
 /**
- * Reads a buffer from the device
- *
- * Return value: void
- *
- * | Argument       | Description                                                                       | Type                                | Valid Range                            | Required |
- * |----------------|-----------------------------------------------------------------------------------|-------------------------------------|----------------------------------------|----------|
- * | cq             | The command queue object which dispatches the command to the hardware             | CommandQueue &                      |                                        | Yes      |
- * | buffer         | The device buffer we are reading from                                             | Buffer & or std::shared_ptr<Buffer> |                                        | Yes      |
- * | dst            | The memory where the result will be stored                                        | void*                               |                                        | Yes      |
- * | blocking       | Whether or not this is a blocking operation                                       | bool                                | Only blocking mode supported currently | Yes      |
- */
-// clang-format on
-void EnqueueReadBuffer(
-    CommandQueue& cq,
-    const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer,
-    void* dst,
-    bool blocking);
-
-// clang-format off
-/**
- * Reads a buffer from the device
- *
- * Return value: void
- *
- * | Argument       | Description                                                                       | Type                                | Valid Range                            | Required |
- * |----------------|-----------------------------------------------------------------------------------|-------------------------------------|----------------------------------------|----------|
- * | cq             | The command queue object which dispatches the command to the hardware             | CommandQueue &                      |                                        | Yes      |
- * | buffer         | The device buffer we are reading from                                             | Buffer & or std::shared_ptr<Buffer> |                                        | Yes      |
- * | dst            | The vector where the results that are read will be stored                         | vector<DType> &                     |                                        | Yes      |
- * | blocking       | Whether or not this is a blocking operation                                       | bool                                | Only blocking mode supported currently | Yes      |
- */
-// clang-format on
-template <typename DType>
-void EnqueueReadBuffer(CommandQueue& cq, Buffer& buffer, std::vector<DType>& dst, bool blocking) {
-    dst.resize(buffer.page_size() * buffer.num_pages() / sizeof(DType));
-    EnqueueReadBuffer(cq, buffer, static_cast<void*>(dst.data()), blocking);
-}
-template <typename DType>
-void EnqueueReadBuffer(
-    CommandQueue& cq, const std::shared_ptr<Buffer>& buffer, std::vector<DType>& dst, bool blocking) {
-    EnqueueReadBuffer(cq, *buffer, dst, blocking);
-}
-
-// clang-format off
-/**
- * Reads a specified region of the buffer from the device
- *
- * Return value: void
- *
- * | Argument       | Description                                                                       | Type                                | Valid Range                        | Required |
- * |----------------|-----------------------------------------------------------------------------------|-------------------------------------|------------------------------------|----------|
- * | cq             | The command queue object which dispatches the command to the hardware             | CommandQueue &                      |                                    | Yes      |
- * | buffer         | The device buffer we are reading from                                             | Buffer & or std::shared_ptr<Buffer> |                                    | Yes      |
- * | dst            | The memory where the result will be stored                                        | void*                               |                                    | Yes      |
- * | region         | The region of the buffer that we are reading from                                 | const BufferRegion &                |                                    | Yes      |
- * | blocking       | Whether or not this is a blocking operation                                       | bool                                |                                    | Yes      |
- */
-// clang-format on
-void EnqueueReadSubBuffer(
-    CommandQueue& cq,
-    const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer,
-    void* dst,
-    const BufferRegion& region,
-    bool blocking);
-
-// clang-format off
-/**
- * Reads a specified region of the buffer from the device
- *
- * Return value: void
- *
- * | Argument       | Description                                                                       | Type                                | Valid Range                        | Required |
- * |----------------|-----------------------------------------------------------------------------------|-------------------------------------|------------------------------------|----------|
- * | cq             | The command queue object which dispatches the command to the hardware             | CommandQueue &                      |                                    | Yes      |
- * | buffer         | The device buffer we are reading from                                             | Buffer & or std::shared_ptr<Buffer> |                                    | Yes      |
- * | dst            | The vector where the results that are read will be stored                         | vector<DType> &                     |                                    | Yes      |
- * | region         | The region of the buffer that we are reading from                                 | const BufferRegion &                |                                    | Yes      |
- * | blocking       | Whether or not this is a blocking operation                                       | bool                                |                                    | Yes      |
- */
-// clang-format on
-template <typename DType>
-void EnqueueReadSubBuffer(
-    CommandQueue& cq, Buffer& buffer, std::vector<DType>& dst, const BufferRegion& region, bool blocking) {
-    dst.resize(region.size / sizeof(DType));
-    EnqueueReadSubBuffer(cq, buffer, static_cast<void*>(dst.data()), region, blocking);
-}
-template <typename DType>
-void EnqueueReadSubBuffer(
-    CommandQueue& cq,
-    const std::shared_ptr<Buffer>& buffer,
-    std::vector<DType>& dst,
-    const BufferRegion& region,
-    bool blocking) {
-    EnqueueReadSubBuffer(cq, *buffer, dst, region, blocking);
-}
-
-// clang-format off
-/**
- * Writes a buffer to the device
- *
- * Return value: void
- *
- * | Argument       | Description                                                                       | Type                                | Valid Range                        | Required |
- * |----------------|-----------------------------------------------------------------------------------|-------------------------------------|------------------------------------|----------|
- * | cq             | The command queue object which dispatches the command to the hardware             | CommandQueue &                      |                                    | Yes      |
- * | buffer         | The device buffer we are writing to                                               | Buffer & or std::shared_ptr<Buffer> |                                    | Yes      |
- * | src            | The vector we are writing to the device                                           | vector<DType> &                     |                                    | Yes      |
- * | blocking       | Whether or not this is a blocking operation                                       | bool                                |                                    | Yes      |
- */
-// clang-format on
-template <typename DType>
-void EnqueueWriteBuffer(
-    CommandQueue& cq,
-    const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer,
-    std::vector<DType>& src,
-    bool blocking) {
-    EnqueueWriteBuffer(cq, buffer, src.data(), blocking);
-}
-
-// clang-format off
-/**
- * Writes a buffer to the device
- *
- * Return value: void
- *
- * | Argument       | Description                                                                       | Type                                | Valid Range                        | Required |
- * |----------------|-----------------------------------------------------------------------------------|-------------------------------------|------------------------------------|----------|
- * | cq             | The command queue object which dispatches the command to the hardware             | CommandQueue &                      |                                    | Yes      |
- * | buffer         | The device buffer we are writing to                                               | Buffer & or std::shared_ptr<Buffer> |                                    | Yes      |
- * | src            | The memory we are writing to the device                                           | HostDataType                        |                                    | Yes      |
- * | blocking       | Whether or not this is a blocking operation                                       | bool                                |                                    | Yes      |
- */
-// clang-format on
-void EnqueueWriteBuffer(
-    CommandQueue& cq,
-    const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer,
-    HostDataType src,
-    bool blocking);
-
-// clang-format off
-/**
- * Writes a specified region of the buffer to the device
- *
- * Return value: void
- *
- * | Argument       | Description                                                                       | Type                                | Valid Range                        | Required |
- * |----------------|-----------------------------------------------------------------------------------|-------------------------------------|------------------------------------|----------|
- * | cq             | The command queue object which dispatches the command to the hardware             | CommandQueue &                      |                                    | Yes      |
- * | buffer         | The device buffer we are writing to                                               | Buffer & or std::shared_ptr<Buffer> |                                    | Yes      |
- * | src            | The memory we are writing to the device                                           | HostDataType                        |                                    | Yes      |
- * | region         | The region of the buffer that we are writing to                                   | const BufferRegion &                |                                    | Yes      |
- * | blocking       | Whether or not this is a blocking operation                                       | bool                                |                                    | Yes      |
- */
-// clang-format on
-void EnqueueWriteSubBuffer(
-    CommandQueue& cq,
-    const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer,
-    HostDataType src,
-    const BufferRegion& region,
-    bool blocking);
-
-// clang-format off
-/**
- * Writes a specified region of the buffer to the device
- *
- * Return value: void
- *
- * | Argument       | Description                                                                       | Type                                | Valid Range                        | Required |
- * |----------------|-----------------------------------------------------------------------------------|-------------------------------------|------------------------------------|----------|
- * | cq             | The command queue object which dispatches the command to the hardware             | CommandQueue &                      |                                    | Yes      |
- * | buffer         | The device buffer we are writing to                                               | Buffer & or std::shared_ptr<Buffer> |                                    | Yes      |
- * | src            | The memory we are writing to the device                                           | std::vector<DType>&                 |                                    | Yes      |
- * | region         | The region of the buffer that we are writing to the device                        | const BufferRegion &                |                                    | Yes      |
- * | blocking       | Whether or not this is a blocking operation                                       | bool                                |                                    | Yes      |
- */
-// clang-format on
-template <typename DType>
-void EnqueueWriteSubBuffer(
-    CommandQueue& cq,
-    const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer,
-    std::vector<DType>& src,
-    const BufferRegion& region,
-    bool blocking) {
-    EnqueueWriteSubBuffer(cq, buffer, src.data(), region, blocking);
-}
-
-// clang-format off
-/**
- * Writes a program to the device and launches it
- *
- * Return value: void
- *
- * | Argument     | Description                                                            | Type                               | Valid Range                        | Required |
- * |--------------|------------------------------------------------------------------------|------------------------------------|------------------------------------|----------|
- * | cq           | The command queue object which dispatches the command to the hardware  | CommandQueue &                     |                                    | Yes      |
- * | program      | The program that will be executed on the device that cq is bound to    | Program &                          |                                    | Yes      |
- * | blocking     | Whether or not this is a blocking operation                            | bool                               |                                    | Yes      |
- */
-// clang-format on
-void EnqueueProgram(CommandQueue& cq, Program& program, bool blocking);
-
-// clang-format off
-/**
- * Blocks until all previously dispatched commands on the device have completed
- *
- * Return value: void
- *
- * | Argument       | Description                                                                       | Type                          | Valid Range                        | Required |
- * |----------------|-----------------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
- * | cq             | The command queue object which dispatches the command to the hardware             | CommandQueue &                |                                    | Yes      |
- * | sub_device_ids | The sub-device ids to wait for completion on. If empty, waits for all sub-devices | tt::stl::Span<const uint32_t> |                                    | No       |
- */
-// clang-format on
-void Finish(CommandQueue& cq, tt::stl::Span<const SubDeviceId> sub_device_ids = {});
-
-// clang-format off
-/**
  * Begin Light Metal Binary capturing on host and all devices. This will trace host API calls and device (metal trace) workloads to a
  * binary blob returned to caller when tracing is finished, which can later be rerun directly from binary.
  * Note: This LightMetalBinary Trace/Replay feature is currently under active development and is not fully supported, use at own risk.
@@ -848,44 +643,6 @@ void ReadMeshDeviceProfilerResults(
 
 // clang-format off
 /**
- * Enqueues a command to record an Event on the device for a given CQ, and updates the Event object for the user.
- * Return value: void
- * | Argument       | Description                                                                       | Type                          | Valid Range                        | Required |
- * |----------------|-----------------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
- * | cq             | The command queue object which dispatches the command to the hardware             | CommandQueue &                |                                    | Yes      |
- * | event          | An event that will be populated by this function, and inserted in CQ              | std::shared_ptr<Event>        |                                    | Yes      |
- * | sub_device_ids | The sub-device ids to wait for completion on. If empty, waits for all sub-devices | tt::stl::Span<const uint32_t> |                                    | No       |
- */
-// clang-format on
-void EnqueueRecordEvent(
-    CommandQueue& cq, const std::shared_ptr<Event>& event, tt::stl::Span<const SubDeviceId> sub_device_ids = {});
-
-// clang-format off
-/**
- * Enqueues a command on the device for a given CQ (non-blocking). The command on device will block and wait for completion of the specified event (which may be in another CQ).
- * Return value: void
- * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
- * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
- * | cq           | The command queue object which dispatches the command to the hardware  | CommandQueue &                |                                    | Yes      |
- * |              | and waits for the event to complete.                                   |                               |                                    |          |
- * | event        | The event object that this CQ will wait on for completion.             | std::shared_ptr<Event>        |                                    | Yes      |
- */
-// clang-format on
-void EnqueueWaitForEvent(CommandQueue& cq, const std::shared_ptr<Event>& event);
-
-// clang-format off
-/**
- * Blocking function for host to synchronize (wait) on an event completion on device.
- * Return value: void
- * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
- * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
- * | event        | The event object that host will wait on for completion.                | std::shared_ptr<Event>        |                                    | Yes      |
- */
-// clang-format on
-void EventSynchronize(const std::shared_ptr<Event>& event);
-
-// clang-format off
-/**
  * Host will query an event for completion status on device.
  * Return value: bool.  True if event is completed, false otherwise.
  * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
@@ -897,21 +654,30 @@ bool EventQuery(const std::shared_ptr<Event>& event);
 
 // clang-format off
 /**
- * Synchronize the device with host by waiting for all operations to complete.
- * If cq_id is provided then only the operations associated with that cq_id are waited for,
- * otherwise operations for all command queues are waited on.
- *
+ * Push the current command queue id to the stack.
  * Return value: void
- *
- * | Argument       | Description                                                                       | Type                          | Valid Range                        | Required |
- * |----------------|-----------------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
- * | device         | The device to synchronize.                                                        | IDevice*                      |                                    | Yes      |
- * | cq_id          | The specific command queue id to synchronize  .                                   | uint8_t                       |                                    | No       |
- * | sub_device_ids | The sub-device ids to wait for completion on. If empty, waits for all sub-devices | tt::stl::Span<const uint32_t> |                                    | No       |
+ * | Argument     | Description                                                                       | Type                          | Valid Range                        | Required |
+ * |--------------|-----------------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
+ * | cq_id        | The command queue id to push.                                                     | uint8_t                       |                                    | Yes      |
  */
 // clang-format on
-void Synchronize(
-    IDevice* device, std::optional<uint8_t> cq_id = std::nullopt, tt::stl::Span<const SubDeviceId> sub_device_ids = {});
+void PushCurrentCommandQueueIdForThread(uint8_t cq_id);
+
+// clang-format off
+/**
+ * Pop the current command queue id from the stack.
+ * Return value: uint8_t
+ */
+// clang-format on
+uint8_t PopCurrentCommandQueueIdForThread();
+
+// clang-format off
+/**
+ * Get the current command queue id.
+ * Return value: uint8_t
+ */
+// clang-format on
+uint8_t GetCurrentCommandQueueIdForThread();
 
 }  // namespace tt_metal
 

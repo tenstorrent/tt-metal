@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,7 +10,6 @@
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/core_descriptor.hpp>
 #include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/allocator_types.hpp>
 #include <llrt/tt_cluster.hpp>
 #include <llrt/hal.hpp>
 #include <llrt/rtoptions.hpp>
@@ -19,6 +18,7 @@
 #include <impl/dispatch/dispatch_query_manager.hpp>
 #include <impl/debug/dprint_server.hpp>
 #include <impl/debug/watcher_server.hpp>
+#include <impl/allocator/allocator_types.hpp>
 
 #include <array>
 #include <umd/device/types/cluster_descriptor_types.hpp>
@@ -91,10 +91,16 @@ public:
     tt_fabric::FabricConfig get_fabric_config() const;
 
     distributed::multihost::DistributedContext& global_distributed_context();
+    std::shared_ptr<distributed::multihost::DistributedContext> get_distributed_context_ptr();
 
     // Fabric tensix configuration
     void set_fabric_tensix_config(tt_fabric::FabricTensixConfig fabric_tensix_config);
     tt_fabric::FabricTensixConfig get_fabric_tensix_config() const;
+
+    // This is used to track the current thread's command queue id stack
+    using CommandQueueIdStack = std::vector<uint8_t>;
+    CommandQueueIdStack& get_command_queue_id_stack_for_thread();
+    const CommandQueueIdStack& get_command_queue_id_stack_for_thread() const;
 
 private:
     friend class tt::stl::Indestructible<MetalContext>;
@@ -166,6 +172,11 @@ private:
     tt_fabric::FabricConfig fabric_config_ = tt_fabric::FabricConfig::DISABLED;
     tt_fabric::FabricTensixConfig fabric_tensix_config_ = tt_fabric::FabricTensixConfig::DISABLED;
     std::shared_ptr<distributed::multihost::DistributedContext> distributed_context_;
+
+    // We are using a thread_local to allow each thread to have its own command queue id stack.
+    // This not only allows consumers to set active command queue for a thread
+    // but to also easily push/pop ids to temporarily change the current cq id.
+    static thread_local CommandQueueIdStack command_queue_id_stack_for_thread_;
 
     // Strict system health mode requires (expects) all links/devices to be live. When enabled, it
     // is expected that any downed devices/links will result in some sort of error condition being

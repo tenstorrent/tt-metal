@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -13,7 +13,6 @@
 #include "tt-metalium/command_queue.hpp"
 #include "tt-metalium/core_coord.hpp"
 #include "tt-metalium/hal_types.hpp"     // HalProgrammableCoreType
-#include "tt-metalium/kernel.hpp"        // Kernel
 #include "tt-metalium/kernel_types.hpp"  // KernelHandle
 #include "tt-metalium/program.hpp"       // KernelGroup
 #include "program_device_map.hpp"        // ProgramTransferInfo
@@ -46,6 +45,8 @@ class JitBuildOptions;
 
 class HWCommandQueue;
 class EnqueueProgramCommand;
+
+class Kernel;
 
 namespace distributed {
 class MeshWorkload;
@@ -288,7 +289,8 @@ public:
 
     void generate_dispatch_commands(IDevice* device, bool use_prefetcher_cache);
 
-    std::vector<std::shared_ptr<Kernel>> kernels() const;
+    // Dispatches detail::collect_kernel_meta, device is nullable
+    std::vector<detail::KernelMeta> collect_kernel_meta(IDevice* device) const;
 
 private:
     CommandQueue* last_used_command_queue_for_testing = nullptr;

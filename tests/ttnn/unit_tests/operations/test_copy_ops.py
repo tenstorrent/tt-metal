@@ -9,8 +9,7 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import skip_for_grayskull
-from models.utility_functions import is_grayskull
+from models.common.utility_functions import is_grayskull
 
 
 def run_copy_test(N, C, H, W, layout, device):
@@ -29,7 +28,6 @@ def run_copy_test(N, C, H, W, layout, device):
     assert_with_pcc(ttnn.to_torch(input), ttnn.to_torch(input_b), 0.99)
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize(
     "N, C, H, W,",
     ((1, 1, 32, 64),),
@@ -53,7 +51,6 @@ def run_assign_test(N, C, H, W, memory_config, dtype, device):
     assert_with_pcc(ttnn.to_torch(input), ttnn.to_torch(tensor), 0.99)
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize(
     "dtype",
     (
@@ -95,7 +92,6 @@ def run_assign_test_opt_tensor(N, C, H, W, memory_config, dtype, device):
     assert_with_pcc(ttnn.to_torch(input), ttnn.to_torch(opt_tensor), 0.99)
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize(
     "dtype",
     (
@@ -132,7 +128,6 @@ def run_binary_assign_test(N, C, H, W, layout, device):
     assert_with_pcc(ttnn.to_torch(input), ttnn.to_torch(input_b), 0.99)
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize(
     "N, C, H, W,",
     ((1, 1, 32, 64),),

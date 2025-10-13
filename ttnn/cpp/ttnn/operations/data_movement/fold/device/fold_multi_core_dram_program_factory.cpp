@@ -10,7 +10,6 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 #include "ttnn/operation.hpp"
@@ -39,7 +38,7 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_tiled_interleaved(
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
-    uint32_t single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
+    uint32_t single_tile_size = tt::tile_size(cb_data_format);
 
     ttnn::Shape output_padded_shape = output.padded_shape();
     ttnn::Shape input_padded_shape = input_tensor.padded_shape();
@@ -160,7 +159,7 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_tiled_interleaved(
         });
 
     // Create cliff compute kernel if needed (for handling edge cases)
-    if (core_range_cliff.ranges().size() > 0) {
+    if (!core_range_cliff.ranges().empty()) {
         tt::tt_metal::CreateKernel(
             program,
             compute_kernel_name,
@@ -193,8 +192,8 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_tiled_interleaved(
         uint32_t curr_input_height_idx = block_start_id;
         uint32_t curr_output_height_idx = curr_input_height_idx / stride_h;
         uint32_t patch_height_offset = curr_input_height_idx % stride_h;
-        uint32_t output_offset = patch_size * curr_output_height_idx * output_width +
-                                 patch_height_offset * stride_w;  // Total output height * width
+        uint32_t output_offset = (patch_size * curr_output_height_idx * output_width) +
+                                 (patch_height_offset * stride_w);  // Total output height * width
         CoreCoord core = cores[i];
         if (!full_cores.contains(core)) {
             continue;
@@ -222,7 +221,8 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_tiled_interleaved(
         uint32_t curr_input_height_idx = block_start_id;
         uint32_t curr_output_height_idx = curr_input_height_idx / stride_h;
         uint32_t patch_height_offset = curr_input_height_idx % stride_h;
-        uint32_t output_offset = patch_size * curr_output_height_idx * output_width + patch_height_offset * stride_w;
+        uint32_t output_offset =
+            (patch_size * curr_output_height_idx * output_width) + (patch_height_offset * stride_w);
         CoreCoord core = CoreCoord{ncores_full % ncores_x, ncores_full / ncores_x};
         std::vector<uint32_t> reader_runtime_args = {
             src0_buffer->address(),

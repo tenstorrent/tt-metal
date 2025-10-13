@@ -18,6 +18,7 @@ set(SOURCES
     ttnn_fixed/matmuls_test.cpp
     ttnn_fixed/reduce_ops_test.cpp
     ttnn_fixed/dropout_op_test.cpp
+    ttnn_fixed/slice_op_test.cpp
     autograd/autograd_tensor.cpp
     autograd/autograd_test.cpp
     autograd/module_base_parameters_test.cpp
@@ -52,6 +53,7 @@ set(SOURCES
     ops/embedding_op_test.cpp
     ops/softmax_test.cpp
     ops/silu_op_test.cpp
+    ops/sdpa_fw_op_test.cpp
 )
 
 add_executable(ttml_tests ${SOURCES})

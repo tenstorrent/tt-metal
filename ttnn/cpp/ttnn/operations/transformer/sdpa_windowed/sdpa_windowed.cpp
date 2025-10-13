@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -13,7 +13,6 @@
 namespace ttnn::operations::transformer {
 
 ttnn::Tensor ExecuteWindowedScaledDotProductAttention::invoke(
-    QueueId queue_id,
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,
     const ttnn::Tensor& input_tensor_v,
@@ -33,30 +32,8 @@ ttnn::Tensor ExecuteWindowedScaledDotProductAttention::invoke(
                    .compute_kernel_config = kernel_config_val},
                {input_tensor_q, input_tensor_k, input_tensor_v, cu_window_seqlens},
                {},
-               {},
-               queue_id)
+               {})
         .at(0);
-}
-
-ttnn::Tensor ExecuteWindowedScaledDotProductAttention::invoke(
-    const ttnn::Tensor& input_tensor_q,
-    const ttnn::Tensor& input_tensor_k,
-    const ttnn::Tensor& input_tensor_v,
-    const ttnn::Tensor& cu_window_seqlens,
-    std::optional<float> scale,
-    const std::optional<MemoryConfig>& memory_config,
-    std::optional<SDPAProgramConfig> program_config,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
-    return invoke(
-        DefaultQueueId,
-        input_tensor_q,
-        input_tensor_k,
-        input_tensor_v,
-        cu_window_seqlens,
-        scale,
-        memory_config,
-        std::move(program_config),
-        compute_kernel_config);
 }
 
 }  // namespace ttnn::operations::transformer

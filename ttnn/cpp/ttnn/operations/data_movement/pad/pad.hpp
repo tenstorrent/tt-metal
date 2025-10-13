@@ -7,7 +7,6 @@
 #include "ttnn/tensor/types.hpp"
 #include <ranges>
 #include "ttnn/decorators.hpp"
-#include "ttnn/common/queue_id.hpp"
 
 namespace ttnn {
 namespace operations::data_movement {
@@ -21,7 +20,6 @@ struct ExecutePad {
     // This function signature is similar to pytorch's signature
     // Any rank tensor supported
     static ttnn::Tensor invoke(
-        QueueId queue_id,
         const ttnn::Tensor& input_tensor,
         const ttnn::SmallVector<PadSpecDim>& padding,
         float value,
@@ -29,7 +27,6 @@ struct ExecutePad {
         const std::optional<MemoryConfig>& memory_config_arg);
 
     static ttnn::Tensor invoke(
-        QueueId queue_id,
         const ttnn::Tensor& input_tensor,
         const ttnn::SmallVector<std::array<uint32_t, 2>>& padding,
         float value,
@@ -38,7 +35,6 @@ struct ExecutePad {
 
     // legacy API
     static ttnn::Tensor invoke(
-        QueueId queue_id,
         const ttnn::Tensor& input_tensor,
         const tt::tt_metal::Array4D& output_shape,
         const tt::tt_metal::Array4D& input_tensor_start,

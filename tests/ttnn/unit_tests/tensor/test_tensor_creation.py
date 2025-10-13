@@ -163,32 +163,6 @@ core_ranges = ttnn.num_cores_to_corerangeset(56, grid_size, True)
             ),
         ),
         (
-            (1, 48, 56, 32),
-            ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-                ttnn.BufferType.L1,
-                ttnn.ShardSpec(
-                    ttnn.num_cores_to_corerangeset(56, grid_size, True),
-                    [48, 32],
-                    ttnn.ShardOrientation.ROW_MAJOR,
-                    ttnn.ShardMode.LOGICAL,
-                ),
-            ),
-        ),
-        (
-            (1, 2, 10, 5),
-            ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-                ttnn.BufferType.L1,
-                ttnn.ShardSpec(
-                    ttnn.num_cores_to_corerangeset(3, grid_size, True),
-                    [20, 2],
-                    ttnn.ShardOrientation.ROW_MAJOR,
-                    ttnn.ShardMode.LOGICAL,
-                ),
-            ),
-        ),
-        (
             (1, 1, 5, 96),
             ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.WIDTH_SHARDED,
@@ -200,40 +174,10 @@ core_ranges = ttnn.num_cores_to_corerangeset(56, grid_size, True)
                 ),
             ),
         ),
-        (
-            (2, 3, 64, 96),
-            ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-                ttnn.BufferType.L1,
-                ttnn.ShardSpec(
-                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 5))}),
-                    [64, 64],
-                    ttnn.ShardOrientation.ROW_MAJOR,
-                    ttnn.ShardMode.LOGICAL,
-                ),
-            ),
-        ),
-        (
-            (1, 8, 36, 32),
-            ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-                ttnn.BufferType.L1,
-                ttnn.ShardSpec(
-                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 5))}),
-                    [48, 10],
-                    [64, 64],  # NOTE: This value is compatible with all PageConfigs in this sweep
-                    ttnn.ShardOrientation.ROW_MAJOR,
-                ),
-            ),
-        ),
     ],
     ids=[
         "interleaved",
-        "height_sharded",
         "width_sharded",
-        "width_sharded_uneven",
-        "block_sharded",
-        "block_sharded_with_custom_physical_shard_shape",
     ],
 )
 def test_tensor_creation_with_memory_config(shape, memory_config, tt_dtype, layout, tile, device):
@@ -242,11 +186,7 @@ def test_tensor_creation_with_memory_config(shape, memory_config, tt_dtype, layo
     if tt_dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b) and layout == ttnn.ROW_MAJOR_LAYOUT:
         pytest.skip("{} is only valid for ttnn.TILE_LAYOUT!".format(tt_dtype))
 
-    if (
-        memory_config.shard_spec is not None
-        and memory_config.shard_spec.mode == ttnn.ShardMode.PHYSICAL
-        and tile is not None
-    ):
+    if memory_config.shard_spec is not None and tile is not None:
         shard_shape = memory_config.shard_spec.shape
         if shard_shape[0] % tile.tile_shape[0] != 0 or shard_shape[1] % tile.tile_shape[1] != 0:
             pytest.skip(
@@ -483,3 +423,28 @@ def test_tensor_creation_from_buffer_with_unsupported_dtype(dtype, buffer, devic
         assert "Unreachable" in str(e)
     else:
         pytest.fail("Expected an exception, but got none")
+
+
+@pytest.mark.parametrize(
+    "dtype,buffer,shape",
+    [
+        (ttnn.float32, [1, 2, 3], [1, 1, 3]),
+        (ttnn.float32, [1, 2, 3, 4, 5, 6], [1, 2, 3]),  # 3 x 2
+        (ttnn.float32, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12], [2, 2, 3]),  # 2 x 3 x 2
+        (ttnn.float32, [1, 2, 3, 4], [1, 1, 1, 4]),  # 1 x 1 x 1 x4
+        (ttnn.float32, [1, 2, 3, 4], [1, 1, 4]),  # 1 x 1 x 4
+        (ttnn.float32, [1, 2, 3, 4], [1, 4]),  # 1 x 4
+        (ttnn.float32, [1, 2, 3, 4], [4]),  # 4
+        (ttnn.float32, [1, 2, 3, 4], [1, 1, 1, 1, 4]),  # 1 x 1 x 1 x 1 x 4 # 5d!
+        (ttnn.float32, [1, 2, 3, 4, 5, 6, 7, 8], [2, 1, 1, 1, 1, 4]),  # 2 x 1 x 1 x 1 x 4 # 6d!
+    ],
+)
+def test_tensor_creation_with_multiple_buffer_sizes(dtype, buffer, device, shape):
+    tt_tensor = ttnn.Tensor(
+        buffer,
+        shape,
+        dtype,
+        ttnn.Layout.TILE,
+        device,
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
+    )

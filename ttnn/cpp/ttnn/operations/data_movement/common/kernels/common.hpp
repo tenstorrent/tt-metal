@@ -65,6 +65,7 @@ FORCE_INLINE void tt_memmove(const uint32_t dst_l1_addr, const uint32_t src_l1_a
                     noc_async_read_barrier();
                 }
             } else {
+                invalidate_l1_cache();
                 memmove((void*)(dst_l1_addr), (void*)(src_l1_addr), (size_t)(bytes));
             }
         }
@@ -81,6 +82,7 @@ FORCE_INLINE void tt_memmove(const uint32_t dst_l1_addr, const uint32_t src_l1_a
                     noc_async_write_barrier();
                 }
             } else {
+                invalidate_l1_cache();
                 memmove((void*)(dst_l1_addr), (void*)(src_l1_addr), (size_t)(bytes));
             }
         }

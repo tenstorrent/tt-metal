@@ -51,6 +51,7 @@ target_sources(
     unit_tests_ttnn_basic
     PRIVATE
         test_add.cpp
+        test_add_int.cpp
         test_broadcast_to.cpp
         test_generic_op.cpp
         test_graph_add.cpp
@@ -61,6 +62,7 @@ target_sources(
         test_graph_query_op_runtime.cpp
         test_launch_operation.cpp # TODO: Fix data race (TSan) then shift-left
         test_matmul_benchmark.cpp
+        test_sub_int.cpp
 )
 target_include_directories(unit_tests_ttnn_basic PRIVATE ${PROJECT_SOURCE_DIR}/tests)
 target_link_libraries(
@@ -148,6 +150,8 @@ target_sources(
         accessor/test_tensor_accessor.cpp
         accessor/test_tensor_accessor_on_device.cpp
 )
+# needs access to "compile_time_args.h"
+target_link_libraries(unit_tests_ttnn_accessor PRIVATE Metalium::Metal::Hardware)
 setup_ttnn_test_target(unit_tests_ttnn_accessor)
 
 # unit_tests_ttnn_tensor

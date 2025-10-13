@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -13,13 +13,13 @@ constexpr uint32_t cb_gamma_idx = tt::CBIndex::c_3;
 constexpr uint32_t cb_rms_a_idx = tt::CBIndex::c_4;
 constexpr uint32_t cb_dL_out_idx = tt::CBIndex::c_5;
 constexpr uint32_t cb_mat_mul_reduce = tt::CBIndex::c_6;
+constexpr uint32_t cb_zero_idx = tt::CBIndex::c_7;
 // CBs with output data
-constexpr uint32_t cb_dL_da_idx = tt::CBIndex::c_7;
-constexpr uint32_t cb_dL_dgamma_components = tt::CBIndex::c_8;
+constexpr uint32_t cb_dL_da_idx = tt::CBIndex::c_8;
+constexpr uint32_t cb_dL_dgamma_components = tt::CBIndex::c_9;
 // CBs with intermediate computations
-constexpr uint32_t cb_recip_rms_a_bcasted_idx = tt::CBIndex::c_9;
-constexpr uint32_t cb_scale_idx = tt::CBIndex::c_10;
-constexpr uint32_t cb_scale_bcasted_idx = tt::CBIndex::c_11;
+constexpr uint32_t cb_recip_rms_a_bcasted_idx = tt::CBIndex::c_10;
+constexpr uint32_t cb_scale_idx = tt::CBIndex::c_11;
 
 constexpr uint32_t packed_scaler = get_compile_time_arg_val(0);
 constexpr uint32_t block_size = get_compile_time_arg_val(1);
@@ -68,6 +68,8 @@ void kernel_main() {
     generate_tile_with_packed_bfloat16_value(cb_scaler_idx, packed_scaler);
     // Generate tile for matmul row reduce.
     generate_matmul_row_reduce_tile(cb_mat_mul_reduce);
+    // Generate tile with zeros.
+    generate_tile_with_bfloat16_value(cb_zero_idx, zero);
 
     const uint32_t tile_bytes = get_tile_size(cb_input_idx);
     constexpr auto input_args = TensorAccessorArgs<4>();

@@ -10,15 +10,15 @@ from models.experimental.stable_diffusion_xl_base.vae.tt.tt_downblock2d import T
 from models.experimental.stable_diffusion_xl_base.tt.model_configs import ModelOptimisations
 from diffusers import AutoencoderKL
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import torch_random
+from models.common.utility_functions import torch_random
 from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 
 
 @pytest.mark.parametrize(
     "input_shape, block_id, pcc",
     [
-        ((1, 128, 1024, 1024), 0, 0.998),
-        ((1, 128, 512, 512), 1, 0.996),
+        ((1, 128, 1024, 1024), 0, 0.999),
+        ((1, 128, 512, 512), 1, 0.998),
         ((1, 256, 256, 256), 2, 0.999),
         ((1, 512, 128, 128), 3, 0.999),
     ],

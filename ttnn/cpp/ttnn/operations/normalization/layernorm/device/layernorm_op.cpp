@@ -176,7 +176,18 @@ void LayerNorm::validate(
     std::visit(
         [&](const auto& program_config) {
             using ProgramConfigType = std::decay_t<decltype(program_config)>;
-            if constexpr (std::is_same_v<ProgramConfigType, LayerNormShardedMultiCoreProgramConfig>) {
+            if constexpr (std::is_same_v<ProgramConfigType, LayerNormDefaultProgramConfig>) {
+                if (program_config.use_welford) {
+                    TT_FATAL(
+                        this->norm_type != LayerNormType::RMSNORM, "Welford's algorithm is not supported for RMSNorm");
+                    TT_FATAL(
+                        a.device()->arch() == tt::ARCH::WORMHOLE_B0,
+                        "Welford's algorithm for Layernorm is only supported on Wormhole");
+                }
+                if (this->norm_type == LayerNormType::RMSNORM) {
+                    TT_FATAL(!program_config.use_welford, "Welford's algorithm is not supported for RMSNorm");
+                }
+            } else if constexpr (std::is_same_v<ProgramConfigType, LayerNormShardedMultiCoreProgramConfig>) {
                 if (program_config.inplace) {
                     TT_FATAL(
                         this->output_mem_config.is_sharded(),
@@ -340,7 +351,7 @@ std::vector<TensorSpec> LayerNorm::compute_output_specs(const std::vector<Tensor
 
                 auto mem_config = this->output_mem_config;
                 if (!mem_config.shard_spec().has_value()) {
-                    mem_config = mem_config.with_shard_spec(input_tensor.shard_spec().value());
+                    mem_config = mem_config.with_shard_spec(input_tensor.shard_spec());
                 }
 
                 return {ttnn::TensorSpec(
@@ -430,6 +441,7 @@ operation::ProgramWithCallbacks LayerNorm::create_program(
                     this->eps,
                     program_config.legacy_reduction,
                     program_config.legacy_rsqrt,
+                    program_config.use_welford,
                     this->compute_kernel_config);
             } else {
                 TT_THROW("Unsupported program config");

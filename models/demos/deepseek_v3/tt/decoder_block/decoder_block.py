@@ -7,7 +7,7 @@ import torch
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
-from models.demos.deepseek_v3.tt.ccl_1d import CCL1D
+from models.demos.deepseek_v3.tt.ccl import CCL
 from models.demos.deepseek_v3.tt.decoder_block.decoder_block_base import DecoderBlockBase
 from models.demos.deepseek_v3.tt.mlp.non_expert import NonExpert
 from models.demos.deepseek_v3.utils.run_config import (
@@ -54,7 +54,7 @@ class DecoderBlock(DecoderBlockBase):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
-        ccl: CCL1D,
+        ccl: CCL,
         is_padding_layer: tuple[bool, ...] | None = None,
     ) -> ModelState:
         return NonExpert.create_state(hf_config, mesh_device, ccl)

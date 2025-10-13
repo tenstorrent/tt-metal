@@ -1,10 +1,10 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "host_runtime_commands.hpp"
 
-#include <assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <buffer.hpp>
 #include <event.hpp>
 #include <host_api.hpp>
@@ -188,146 +188,6 @@ void EnqueueTerminateCommand::process() {
     this->manager.issue_queue_push_back(cmd_sequence_sizeB, this->command_queue_id);
     this->manager.fetch_queue_reserve_back(this->command_queue_id);
     this->manager.fetch_queue_write(cmd_sequence_sizeB, this->command_queue_id);
-}
-
-void EnqueueWriteBuffer(
-    CommandQueue& cq,
-    const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer,
-    std::vector<uint32_t>& src,
-    bool blocking) {
-    // TODO(agrebenisan): Move to deprecated
-    EnqueueWriteBuffer(cq, buffer, src.data(), blocking);
-}
-
-void EnqueueReadBuffer(
-    CommandQueue& cq,
-    const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer,
-    void* dst,
-    bool blocking) {
-    LIGHT_METAL_TRACE_FUNCTION_ENTRY();
-    LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureEnqueueReadBuffer, cq, buffer, dst, blocking);
-    Buffer& buffer_obj = detail::GetBufferObject(buffer);
-    if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
-        return detail::ReadFromBuffer(buffer_obj, (uint8_t*)dst);
-    }
-    BufferRegion region(0, buffer_obj.size());
-    EnqueueReadSubBuffer(cq, buffer, dst, region, blocking);
-}
-
-void EnqueueReadSubBuffer(
-    CommandQueue& cq,
-    const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer,
-    void* dst,
-    const BufferRegion& region,
-    bool blocking) {
-    detail::DispatchStateCheck(true);
-    detail::ValidateBufferRegion(buffer, region);
-
-    cq.enqueue_read_buffer(buffer, dst, region, blocking);
-}
-
-void EnqueueWriteBuffer(
-    CommandQueue& cq,
-    const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer,
-    HostDataType src,
-    bool blocking) {
-    LIGHT_METAL_TRACE_FUNCTION_ENTRY();
-    LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureEnqueueWriteBuffer, cq, buffer, src, blocking);
-    Buffer& buffer_obj = detail::GetBufferObject(buffer);
-    if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
-        return detail::WriteToBuffer(
-            buffer_obj, tt::stl::Span<const uint8_t>((const uint8_t*)std::get<const void*>(src), buffer_obj.size()));
-    }
-    BufferRegion region(0, buffer_obj.size());
-    EnqueueWriteSubBuffer(cq, buffer, std::move(src), region, blocking);
-}
-
-void EnqueueWriteSubBuffer(
-    CommandQueue& cq,
-    const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer,
-    HostDataType src,
-    const BufferRegion& region,
-    bool blocking) {
-    detail::DispatchStateCheck(true);
-    detail::ValidateBufferRegion(buffer, region);
-
-    cq.enqueue_write_buffer(buffer, std::move(src), region, blocking);
-}
-
-void EnqueueProgram(CommandQueue& cq, Program& program, bool blocking) {
-    ZoneScoped;
-    LIGHT_METAL_TRACE_FUNCTION_ENTRY();
-    LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureEnqueueProgram, cq, program, blocking);
-    if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
-        return detail::LaunchProgram((IDevice*)&cq, program);
-    }
-    detail::DispatchStateCheck(true);
-
-    IDevice* device = cq.device();
-    detail::CompileProgram(device, program);
-    program.impl().allocate_circular_buffers(device);
-    program.impl().validate_circular_buffer_region(device);
-    cq.enqueue_program(program, blocking);
-    // Program relinquishes ownership of all global buffers its using, once its been enqueued. Avoid mem
-    // leaks on device.
-    program.impl().release_buffers();
-}
-
-void EnqueueRecordEvent(
-    CommandQueue& cq, const std::shared_ptr<Event>& event, tt::stl::Span<const SubDeviceId> sub_device_ids) {
-    if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
-        // Ignore record event in slow dispatch.
-        return;
-    }
-    detail::DispatchStateCheck(true);
-    cq.enqueue_record_event(event, sub_device_ids);
-}
-
-void EnqueueWaitForEvent(CommandQueue& cq, const std::shared_ptr<Event>& event) {
-    if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
-        // Slow dispatch conservatively flushes all work since there's no cq.
-        Synchronize(event->device);
-        return;
-    }
-    detail::DispatchStateCheck(true);
-    event->wait_until_ready();  // Block until event populated. Worker thread.
-    log_trace(
-        tt::LogMetal,
-        "EnqueueWaitForEvent() issued on Event(device_id: {} cq_id: {} event_id: {}) from device_id: {} cq_id: {}",
-        event->device->id(),
-        event->cq_id,
-        event->event_id,
-        cq.device()->id(),
-        cq.id());
-    cq.enqueue_wait_for_event(event);
-}
-
-void EventSynchronize(const std::shared_ptr<Event>& event) {
-    if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
-        // Slow dispatch conservatively flushes all work since there's no cq.
-        Synchronize(event->device);
-        return;
-    }
-    detail::DispatchStateCheck(true);
-    event->wait_until_ready();  // Block until event populated. Parent thread.
-    log_trace(
-        tt::LogMetal,
-        "Issuing host sync on Event(device_id: {} cq_id: {} event_id: {})",
-        event->device->id(),
-        event->cq_id,
-        event->event_id);
-
-    while (event->device->sysmem_manager().get_last_completed_event(event->cq_id) < event->event_id) {
-        if (tt::tt_metal::MetalContext::instance().rtoptions().get_test_mode_enabled() &&
-            MetalContext::instance().watcher_server()->killed_due_to_error()) {
-            TT_FATAL(
-                false,
-                "Command Queue could not complete EventSynchronize. See {} for details.",
-                MetalContext::instance().watcher_server()->log_file_name());
-            return;
-        }
-        std::this_thread::sleep_for(std::chrono::microseconds(5));
-    }
 }
 
 bool EventQuery(const std::shared_ptr<Event>& event) {

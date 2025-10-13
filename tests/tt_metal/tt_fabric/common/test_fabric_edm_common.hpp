@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,7 +10,6 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/global_semaphore.hpp>
-#include <tt-metalium/kernel.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "erisc_datamover_builder.hpp"
 #include "tt-metalium/kernel_types.hpp"
@@ -155,19 +154,17 @@ static void build_and_enqueue(
                 if (!enqueue_only) {
                     tt::tt_metal::detail::CompileProgram(devices[i]->get_devices()[0], *programs[i]);
                 }
-                MeshWorkload mesh_workload = tt::tt_metal::distributed::CreateMeshWorkload();
+                MeshWorkload mesh_workload;
                 MeshCoordinateRange device_range = MeshCoordinateRange({0, 0}, {0, 0});  // Single device range
-                tt::tt_metal::distributed::AddProgramToMeshWorkload(
-                    mesh_workload, std::move(*programs[i]), device_range);
+                mesh_workload.add_program(device_range, std::move(*programs[i]));
                 tt::tt_metal::distributed::EnqueueMeshWorkload(devices[i]->mesh_command_queue(), mesh_workload, false);
             } else {
                 if (!enqueue_only) {
                     tt::tt_metal::detail::CompileProgram(devices[i]->get_devices()[0], programs[i]);
                 }
-                MeshWorkload mesh_workload = tt::tt_metal::distributed::CreateMeshWorkload();
+                MeshWorkload mesh_workload;
                 MeshCoordinateRange device_range = MeshCoordinateRange({0, 0}, {0, 0});  // Single device range
-                tt::tt_metal::distributed::AddProgramToMeshWorkload(
-                    mesh_workload, std::move(programs[i]), device_range);
+                mesh_workload.add_program(device_range, std::move(programs[i]));
                 tt::tt_metal::distributed::EnqueueMeshWorkload(devices[i]->mesh_command_queue(), mesh_workload, false);
             }
         }));

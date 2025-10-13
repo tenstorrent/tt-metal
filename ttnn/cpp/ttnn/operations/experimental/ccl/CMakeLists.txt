@@ -7,13 +7,24 @@ TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_ccl)
 set_target_properties(
     ttnn_op_experimental_ccl
     PROPERTIES
-        VERIFY_INTERFACE_HEADER_SETS
-            FALSE
+        INTERFACE_HEADER_SETS_TO_VERIFY
+            api
 )
 
 target_sources(
     ttnn_op_experimental_ccl
     PUBLIC
+        FILE_SET api
+        TYPE HEADERS
+        BASE_DIRS ${FixmeOpAPIDir}
+        FILES
+            all_broadcast_async/device/all_broadcast_async_op.hpp
+            all_reduce_async/all_reduce_async.hpp
+            all_gather_async/all_gather_async.hpp
+            all_gather_async/device/all_gather_async_op.hpp
+            composite_common.hpp
+            reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op.hpp
+            reduce_scatter_minimal_async/reduce_scatter_minimal_async.hpp
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
@@ -25,7 +36,7 @@ target_sources(
             send_recv_async/recv_async/device/kernels/receiver_reader.cpp
     PRIVATE
         llama_common.cpp
-        common.cpp
+        composite_common.cpp
         ring_attention_all_gather_async/ring_attention_all_gather_async.cpp
         ring_attention_all_gather_async/device/ring_attention_all_gather_async_op.cpp
         ring_attention_all_gather_async/device/ring_attention_all_gather_async_program.cpp
@@ -78,21 +89,25 @@ target_sources(
         send_recv_async/recv_async/recv_async.cpp
         send_recv_async/recv_async/device/recv_async_op.cpp
         send_recv_async/recv_async/device/recv_async_program.cpp
+        neighbor_pad_async/neighbor_pad_async.cpp
+        neighbor_pad_async/device/neighbor_pad_async_op.cpp
+        neighbor_pad_async/device/neighbor_pad_async_program.cpp
+        slice_reshard_async/slice_reshard_async.cpp
+        slice_reshard_async/device/slice_reshard_async_op.cpp
+        slice_reshard_async/device/slice_reshard_async_program.cpp
 )
 
 target_include_directories(ttnn_op_experimental_ccl PRIVATE ${FixmeOpIncDirs})
-target_link_libraries(
-    ttnn_op_experimental_ccl
-    PRIVATE
-        TT::Metalium
-        TTNN::Core
-)
+target_link_libraries(ttnn_op_experimental_ccl PUBLIC TTNN::Core PRIVATE TT::Metalium)
 
 install(TARGETS ttnn_op_experimental_ccl LIBRARY COMPONENT tar)
 
 install(
     TARGETS
         ttnn_op_experimental_ccl
+    FILE_SET
+    api
+        COMPONENT ttnn-dev
     FILE_SET
     kernels
         DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/experimental/ccl

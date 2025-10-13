@@ -14,7 +14,6 @@
 #include <utility>
 #include <vector>
 
-#include "command_queue_interface.hpp"
 #include "env_lib.hpp"
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
@@ -84,8 +83,8 @@ public:
     void add_dispatch_write_linear(
         uint8_t num_mcast_dests,
         uint32_t noc_xy_addr,
-        uint32_t addr,
-        uint32_t data_sizeB,
+        DeviceAddr addr,
+        DeviceAddr data_sizeB,
         const void* data = nullptr,
         uint32_t write_offset_index = 0);
 
@@ -111,7 +110,8 @@ public:
         const void* data = nullptr);
 
     template <bool inline_data = false>
-    void add_dispatch_write_host(bool flush_prefetch, uint64_t data_sizeB, bool is_event, const void* data = nullptr);
+    void add_dispatch_write_host(
+        bool flush_prefetch, uint64_t data_sizeB, bool is_event, uint16_t pad1, const void* data = nullptr);
 
     void add_prefetch_exec_buf(uint32_t base_addr, uint32_t log_page_size, uint32_t pages);
 
@@ -132,6 +132,8 @@ public:
 
     void add_data(const void* data, uint32_t data_size_to_copyB, uint32_t cmd_write_offset_incrementB)
         __attribute((nonnull(2)));
+
+    void align_write_offset();
 
     template <typename PackedSubCmd>
     void add_dispatch_write_packed(
@@ -197,6 +199,10 @@ public:
         this->cmd_write_offsetB += size_to_writeB;
         return cmd;
     }
+
+    // This value is random, but stable for the lifetime of the program. It is used to pad the command for event
+    // commands, so we can check the value on the host side.
+    static uint32_t random_padding_value();
 
 private:
     static bool zero_init_enable;

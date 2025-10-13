@@ -7,7 +7,7 @@ import pytest
 import ttnn
 from loguru import logger
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal
-from models.utility_functions import nearest_y
+from models.common.utility_functions import nearest_y
 
 
 def get_random_devices(mesh_shape: list[int]) -> set[ttnn.MeshCoordinate]:

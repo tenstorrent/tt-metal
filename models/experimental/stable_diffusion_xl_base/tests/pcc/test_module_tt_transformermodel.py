@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 import gc
@@ -18,8 +18,7 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_
     "input_shape, encoder_shape, down_block_id, query_dim, num_attn_heads, out_dim, pcc",
     [
         ((1, 640, 64, 64), (1, 77, 2048), 1, 640, 10, 640, 0.998),
-        # TODO: Restore pcc after issue #28487 is resolved
-        ((1, 1280, 32, 32), (1, 77, 2048), 2, 1280, 20, 1280, 0.9958),
+        ((1, 1280, 32, 32), (1, 77, 2048), 2, 1280, 20, 1280, 0.996),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)

@@ -5,8 +5,8 @@
 import pytest
 from loguru import logger
 
-from models.utility_functions import tt2torch_tensor, comp_pcc
-from models.utility_functions import is_grayskull, skip_for_blackhole
+from models.common.utility_functions import tt2torch_tensor, comp_pcc
+from models.common.utility_functions import is_grayskull, skip_for_blackhole
 import torch
 import ttnn
 

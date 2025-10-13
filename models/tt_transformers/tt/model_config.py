@@ -416,6 +416,10 @@ class ModelArgs:
         # Decoder
         "DECODE_RESIDUAL",
         "OUTPUT_MM",
+        # MoE
+        "GATE_W_LAYOUT",
+        "GATE_WEIGHTS",
+        "GATE_MM_OUTPUT",
     )
 
     LOCAL_LLAMA_PARAMS = {
@@ -611,6 +615,8 @@ class ModelArgs:
         ) or (self.base_model_name in ["Qwen2.5-7B"] and self.device_name == "N300"):
             logger.info(f"Reducing prefill_len_cutoff to 512 for {self.model_name} on {self.device_name}")
             self.prefill_len_cutoff = 512
+        elif self.base_model_name in ["Mixtral-8x7B"] and self.device_name == "T3K":
+            self.prefill_len_cutoff = 512
 
         if callable(optimizations):
             self.optimizations = optimizations(self)
@@ -702,6 +708,15 @@ class ModelArgs:
                 fp32_dest_acc_en=True,
                 packer_l1_acc=False,
             )
+
+            # Configure data precision and math fidelity for tensors and kernels
+            self.model_config["COMPUTE_KERNEL_CONFIG_HIFI2"] = self.compute_kernel_config_hifi2
+            # Mixtral
+            self.model_config["MIXTRAL_PREFILL_MLP_COMPUTE_CONFIG"] = self.compute_kernel_config_lofi
+            self.model_config["MIXTRAL_GATE_MM_OUTPUT_KERNEL_CONFIG"] = self.compute_kernel_config_lofi
+            # end mixtral
+
+            self.model_config["DECODERS_OPTIMIZATIONS"] = self.optimizations
 
             # Create memory config for sharded tensors
             residual_grid = self.dram_shard_core_grid_for_k(self.dim // self.num_devices)
@@ -814,7 +829,23 @@ class ModelArgs:
                 grid_size=mlp2_grid(seq_len),
                 per_core_N=math.ceil(n_w2 / (self.tile_size * dram_shard_grid_width)) if mlp_w_dram_sharded else None,
             )
-
+            self.model_config["PREFILL_MIXTRAL_MLP_W1_PRG_CONFIG"] = lambda seq_len: self.matmul_config(
+                m=min(seq_len, self.prefill_len_cutoff),  # 512 if BH, 1024 if WH
+                k=self.dim // self.cluster_shape[0],
+                n=n_w1_w3,
+                grid_size=mlp1_3_grid(min(seq_len, self.prefill_len_cutoff)),
+                per_core_M=math.ceil(min(seq_len, self.prefill_len_cutoff) / self.tile_size / self.cluster_shape[1]),
+                per_core_N=math.ceil(n_w1_w3 / self.tile_size / self.cluster_shape[0]),
+                fused_activation=ttnn.UnaryOpType.SILU,
+            )
+            self.model_config["PREFILL_MIXTRAL_MLP_W3_PRG_CONFIG"] = lambda seq_len: self.matmul_config(
+                m=min(seq_len, self.prefill_len_cutoff),  # 512 if BH, 1024 if WH
+                k=self.dim // self.cluster_shape[0],
+                n=n_w1_w3,
+                grid_size=mlp1_3_grid(min(seq_len, self.prefill_len_cutoff)),
+                per_core_M=math.ceil(min(seq_len, self.prefill_len_cutoff) / self.tile_size / self.cluster_shape[1]),
+                per_core_N=math.ceil(n_w1_w3 / self.tile_size / self.cluster_shape[0]),
+            )
             # Attention output is not necessarily the same dimension as the self.dim, e.g. in Mistral
             k_dim = (
                 (self.n_heads * self.head_dim) // self.cluster_shape[0]
@@ -1461,6 +1492,7 @@ class ModelArgs:
         is_gemma3 = "gemma-3" in self.base_model_name.lower()
         if is_gemma3:
             self.rms_norm_add_unit_offset = True
+
             self.embed_scale = self.dim**0.5
 
     def _set_params_from_dict(self, config, is_hf=False):
@@ -1490,6 +1522,7 @@ class ModelArgs:
         self.vocab_size = text_config["vocab_size"]
         self.padded_vocab_size = 128 * 1024 if self.is_galaxy else None
         self.head_dim = text_config.get("head_dim", self.dim // self.n_heads) or self.dim // self.n_heads
+        self.num_experts_per_tok = text_config.get("num_experts_per_tok", 0)
         if is_hf:
             self.max_context_len = text_config.get("max_position_embeddings")
         else:
@@ -1747,7 +1780,7 @@ class ModelArgs:
     ffn_dim_multiplier={self.ffn_dim_multiplier},
     norm_eps={self.norm_eps},
     rope_theta={self.rope_theta},
-    rope_scaling_factor={self.rope_scaling.factor},
+    rope_scaling_factor={self.rope_scaling.factor if self.rope_scaling is not None else None},
     max_batch_size={self.max_batch_size},
     max_seq_len={self.max_seq_len},
     vision_chunk_size={self.vision_chunk_size},
@@ -1812,6 +1845,7 @@ class ModelArgs:
 
     # TODO Update function for large models: For 1 layer tests we only want to load 1 checkpoint file, instead of all.
     def load_state_dict(self):
+        # by default, the model is not a mixture-of-expert. This will be set to True if we find any `.experts.` in the keys
         if self.dummy_weights:
             if self.checkpoint_type == CheckpointType.HuggingFace:
                 from transformers import AutoConfig
@@ -1836,6 +1870,7 @@ class ModelArgs:
                 state_dict = {f"{state_dict_prefix}{k}": torch.randn_like(v) for k, v in state_dict.items()}
         elif self.checkpoint_type == CheckpointType.Meta:
             state_dict = load_meta_state_dict(self.CKPT_DIR, self.n_layers)
+            self.is_mixture_of_experts = any(["experts" in k for k in state_dict.keys()])
         else:
             assert self.checkpoint_type == CheckpointType.HuggingFace
             if self.from_hf_url:
@@ -1854,6 +1889,7 @@ class ModelArgs:
                 state_dict = model.state_dict()
             else:
                 state_dict = load_hf_state_dict(self.CKPT_DIR)
+            self.is_mixture_of_experts = any([".experts." in k for k in state_dict.keys()])
 
         if self.checkpoint_type == CheckpointType.HuggingFace:
             if self.is_multimodal:
@@ -1866,15 +1902,90 @@ class ModelArgs:
                 self.fuse_qkv = any(["qkv" in layer_name for layer_name in state_dict.keys()])
                 self.fuse_mlp = any(["gate_up" in layer_name for layer_name in state_dict.keys()])
                 state_dict = standardize_hf_keys(state_dict)
-                state_dict = convert_hf_to_meta(state_dict, self.head_dim)
+                state_dict = convert_hf_to_meta(state_dict, self.head_dim, self.n_heads, self.n_kv_heads)
 
         keys_dict = list(state_dict.keys())[:]
         remv = [f"layers.{i}." for i in list(range(self.n_layers, self.full_model_n_layers))]
         for k in keys_dict:
             if any([r in k for r in remv]):
                 state_dict.pop(k)
-
+        if getattr(self, "is_mixture_of_experts", False):
+            self.initialize_mixture_of_experts_configs()
+            self.moe = True
+            self.num_experts = max([int(item[-11]) + 1 for item in keys_dict if "block_sparse_moe.experts" in item])
         return state_dict
+
+    def initialize_mixture_of_experts_configs(self):
+        # Porting mixtral to llama
+        self.model_config["FF1_OUTPUT_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            in0_block_w=2,  # K = 4096 / TILE_WIDTH=32 / Grid_Size is based on compute_with_storage_grid_size
+            out_subblock_h=1,  # Must be divisible by per_core_M
+            out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
+            per_core_M=1,  # M / TILE_HEIGHT = 32 / 32
+            per_core_N=7,  # N / TILE_WIDTH / Grid_Size is based on compute_with_storage_grid_size, N = 4096 for num_device=8
+            fuse_batch=True,
+            fused_activation=ttnn.UnaryOpType.SILU,
+            mcast_in0=True,
+        )
+        self.model_config["FF3_OUTPUT_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            in0_block_w=2,  # K = 4096 / TILE_WIDTH=32 / Grid_Size is based on compute_with_storage_grid_size
+            out_subblock_h=1,  # Must be divisible by per_core_M
+            out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
+            per_core_M=1,  # M / TILE_HEIGHT = 32 / 32
+            per_core_N=7,  # N / TILE_WIDTH / Grid_Size is based on compute_with_storage_grid_size, N = 4096 for num_device=8
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=True,
+        )
+        self.model_config["FF2_OUTPUT_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            in0_block_w=7,  # K = 14336 / TILE_WIDTH=32 / Grid_Size is based on compute_with_storage_grid_size
+            out_subblock_h=1,  # Must be divisible by per_core_M
+            # Issue #8959: Increasing subblock to 2 results in hangs -> Potentially related to di/dt hangs.
+            out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
+            per_core_M=1,  # M / TILE_HEIGHT = 32 / 32
+            per_core_N=2,  # N / TILE_WIDTH / Grid_Size is based on compute_with_storage_grid_size, N = 4096 for num_device=8
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=True,
+        )
+        self.model_config["PREFILL_MLP_W1_PRG_CONFIG_128"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            in0_block_w=1,  # how much inner dim you take each time
+            out_subblock_h=1,  # Must be divisible by per_core_M
+            out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
+            per_core_M=1,  # 32, #16,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
+            per_core_N=56,  # N / TILE_WIDTH / Grid_Size
+            transpose_mcast=False,
+            fused_activation=ttnn.UnaryOpType.SILU,
+            fuse_batch=False,
+        )
+        self.model_config["PREFILL_MLP_W3_PRG_CONFIG_128"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            in0_block_w=1,  # how much inner dim you take each time
+            out_subblock_h=1,  # Must be divisible by per_core_M
+            out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
+            per_core_M=1,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
+            per_core_N=56,  # N / TILE_WIDTH / Grid_Size
+            transpose_mcast=False,
+            fused_activation=None,
+            fuse_batch=False,
+        )
+
+        self.model_config["PREFILL_MLP_W2_PRG_CONFIG_128"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            in0_block_w=1,  # how much inner dim you take each time
+            out_subblock_h=1,  # Must be divisible by per_core_M
+            out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
+            per_core_M=1,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
+            per_core_N=16,  # N / TILE_WIDTH / Grid_Size
+            transpose_mcast=False,
+            fused_activation=None,
+            fuse_batch=False,
+        )
+        # end Porting mixtral to llama
 
     def create_dram_sharded_mem_config(self, k, n):
         """Create DRAM-sharded memory config for width-sharded tensors"""
@@ -2040,7 +2151,7 @@ class ModelArgs:
                 return i
         return 1  # Fallback to 1 if no divisor found
 
-    def dram_matmul_config(self, m: int, k: int, n: int, num_cores=None):
+    def dram_matmul_config(self, m: int, k: int, n: int, num_cores=None, fused_activation=None):
         # in0_block_w must evenly divide k and be no larger than tile_size * num_cores
         if num_cores is None:
             # num_cores = self.dram_shard_core_grid_for_k(k).num_cores
@@ -2053,7 +2164,7 @@ class ModelArgs:
             in0_block_w=self.find_largest_divisor(k // (self.tile_size * num_cores)),
             per_core_M=math.ceil(m / self.tile_size),
             per_core_N=math.ceil(n / (self.tile_size * num_cores)),
-            fused_activation=None,
+            fused_activation=fused_activation,
         )
 
     def matmul_1d_config(
@@ -2470,7 +2581,9 @@ class ModelArgs:
         else:
             model = self.reference_transformer(wrap=False)
             layer = model.model.layers[0]
-            use_position_embeddings = layer.__class__.__name__ != "Phi3DecoderLayer"
+            use_position_embeddings = layer.__class__.__name__ != "Phi3DecoderLayer" or self.base_model_name in (
+                "phi-4",
+            )
             model_name_env = os.getenv("HF_MODEL")
             if hasattr(model.model, "rotary_emb_local"):
                 rotary_emb_local = model.model.rotary_emb_local

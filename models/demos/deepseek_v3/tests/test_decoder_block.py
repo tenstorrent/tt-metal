@@ -12,13 +12,14 @@ from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3Decod
 from models.demos.deepseek_v3.tt.decoder_block.decoder_block import DecoderBlock
 from models.demos.deepseek_v3.tt.decoder_block.decoder_block_base import DecoderBlockBase
 from models.demos.deepseek_v3.tt.decoder_block.moe_decoder_block import MoEDecoderBlock
-from models.demos.deepseek_v3.tt.mla_1d import MLA1D
+from models.demos.deepseek_v3.tt.mla import MLA
 from models.demos.deepseek_v3.tt.rope import RotarySetup
 from models.demos.deepseek_v3.utils.config_helpers import MAX_BATCH_SIZE
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import (
     add_inv_scale_to_state_dict,
     get_model_config,
+    get_test_weight_config,
     paged_cache_from_torch,
     run_reference_with_attention,
     torch_cache_from_transformers_single_layer,
@@ -38,15 +39,15 @@ from models.demos.deepseek_v3.utils.test_utils import (
         (DecoderBlock, None, 0),
         (MoEDecoderBlock, None, 3),
         # (DecoderBlock, "model.layers.0", None),
-        # (MoEDecoderBlock, "model.layers.3", None), # TODO: Uncomment once PCC is fixed for MoE
+        # (MoEDecoderBlock, "model.layers.3", None),
     ],
 )
 @pytest.mark.parametrize(
     "mode, seq_len, batch_size",
     [
         ("decode", 1, 32),
-        # ("prefill", 512), # TODO: Uncomment once MLA prefill works
-        # ("prefill", 2048),  # Test chunking # TODO: Uncomment once MLA prefill works
+        ("prefill", 128, 1),
+        # ("prefill", 2048, 1),  # Test chunking # TODO: Uncomment once MLA prefill works
     ],
 )
 def test_forward_pass(
@@ -58,9 +59,11 @@ def test_forward_pass(
     batch_size,
     hf_config_short,
     tmp_path,
+    cache_path,
     mesh_device,
     model_path,
     ccl,
+    force_recalculate_weight_config,
     set_deterministic_env,
 ):
     # CCL workaround (remove once persistent buffers are added)
@@ -95,6 +98,10 @@ def test_forward_pass(
         )
         input_cache = torch_cache_from_transformers_single_layer(input_cache, reference_layer_idx)
         output_cache = torch_cache_from_transformers_single_layer(output_cache, reference_layer_idx)
+
+        # Do not cache random weights
+        cache_path = tmp_path
+        force_recalculate_weight_config = True
     else:
         raise NotImplementedError("Loading reference IO is not implemented yet")
 
@@ -102,13 +109,18 @@ def test_forward_pass(
     logger.info("Setting up model configs")
     _, dp_factor = mesh_device.shape
     user_id = None if mode == "decode" else torch.randint(0, MAX_BATCH_SIZE, ()).item()
-    paged_config = MLA1D.get_valid_paged_config(hf_config_short.max_seq_len, MAX_BATCH_SIZE, dp_factor)
+    paged_config = MLA.get_valid_paged_config(hf_config_short.max_seq_len, MAX_BATCH_SIZE, dp_factor)
     paged_input_cache, torch_page_table = paged_cache_from_torch(input_cache, dp_factor, paged_config, user_id)
 
     # Set up model config
     is_padding_layer = [False] * mesh_device.shape[0]
-    weight_config = DecoderBlockClass.convert_weights(
-        hf_config_short, [state_dict] * mesh_device.shape[0], tmp_path, mesh_device
+    weight_config = get_test_weight_config(
+        DecoderBlockClass,
+        hf_config_short,
+        (state_dict,) * mesh_device.shape[0],
+        cache_path,
+        mesh_device,
+        force_recalculate_weight_config,
     )
     model_config = get_model_config(DecoderBlockClass, mode, hf_config_short, mesh_device, is_padding_layer)
     model_state = DecoderBlockClass.create_state(
@@ -142,7 +154,9 @@ def test_forward_pass(
         else None
     )
 
-    tt_page_table = MLA1D.create_page_table(torch_page_table, paged_config, mesh_device)
+    tt_page_table = MLA.create_page_table(
+        page_table=torch_page_table, paged_config=paged_config, mesh_device=mesh_device
+    )
 
     # RoPE setup
     rope_setup = RotarySetup(
@@ -162,7 +176,7 @@ def test_forward_pass(
         "trans_matrix": rot_mats[2],
     }
 
-    paged_config = MLA1D.get_valid_paged_config(hf_config_short.max_seq_len, MAX_BATCH_SIZE, mesh_device.shape[1])
+    paged_config = MLA.get_valid_paged_config(hf_config_short.max_seq_len, MAX_BATCH_SIZE, mesh_device.shape[1])
 
     # Forward pass
     logger.info("Running TTNN forward pass")
@@ -185,7 +199,7 @@ def test_forward_pass(
 
     # Check output PCC
     logger.info("Validating output")
-    pcc_required = 0.99
+    pcc_required = 0.9899
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
 
     logger.info(f"Mode: {mode}, Seq len: {seq_len}, Batch size: {batch_size}")
