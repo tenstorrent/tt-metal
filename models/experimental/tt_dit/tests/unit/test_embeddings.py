@@ -190,7 +190,6 @@ def test_timestep_embedding(
         in_channels=in_channels,
         time_embed_dim=time_embed_dim,
         mesh_device=mesh_device,
-        init=True,
     )
     tt_model.load_state_dict(torch_model.state_dict())
 
@@ -244,7 +243,6 @@ def test_pixart_alpha_text_projection(
         in_features=in_features,
         hidden_size=hidden_size,
         mesh_device=mesh_device,
-        init=True,
     )
     tt_model.load_state_dict(torch_model.state_dict())
 
@@ -298,7 +296,6 @@ def test_combined_timestep_text_proj_embeddings(
         embedding_dim=embedding_dim,
         pooled_projection_dim=pooled_projection_dim,
         mesh_device=mesh_device,
-        init=True,
     )
     tt_model.load_state_dict(torch_model.state_dict())
 
@@ -383,7 +380,6 @@ def test_patch_embed_sd35(
         mesh_device=mesh_device,
         tp_mesh_axis=tp_mesh_axis,
         sp_mesh_axis=sp_mesh_axis,
-        init=False,
     )
     tt_model.load_state_dict(torch_model.state_dict())
 
@@ -466,7 +462,6 @@ def test_patch_embed_mochi(
         in_channels=in_channels,
         embed_dim=embed_dim,
         mesh_device=mesh_device,
-        init=False,
     )
     tt_model.load_state_dict(torch_model.state_dict())
 
@@ -550,7 +545,6 @@ def test_wan_patch_embed(
         in_channels=in_channels,
         embed_dim=embed_dim,
         mesh_device=mesh_device,
-        init=False,
     )
     tt_model.load_state_dict(substate(torch_model.state_dict(), "proj"))
 
