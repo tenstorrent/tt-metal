@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 import torch
+from tqdm.auto import tqdm
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
@@ -56,7 +57,10 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
                     output_path / f"mlp_decoder_block_{layer_idx}",
                     mesh_device,
                 )
-                for layer_idx in range(hf_config.first_k_dense_replace)
+                for layer_idx in tqdm(
+                    range(hf_config.first_k_dense_replace),
+                    desc="Converting MLP layers",
+                )
             ],
             "moe_decoder_block": [
                 MoEDecoderBlock2D.convert_weights(
@@ -65,7 +69,10 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
                     output_path / f"moe_decoder_block_{layer_idx}",
                     mesh_device,
                 )
-                for layer_idx in range(hf_config.first_k_dense_replace, hf_config.num_hidden_layers)
+                for layer_idx in tqdm(
+                    range(hf_config.first_k_dense_replace, hf_config.num_hidden_layers),
+                    desc="Converting MoE layers",
+                )
             ],
             "norm": DistributedRMSNorm.convert_weights(
                 hf_config,
