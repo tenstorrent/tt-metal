@@ -110,10 +110,10 @@ void kernel_main() {
             uint32_t current_write_addr = write_addr;
             for (uint32_t row = 0; row < read_rows_size; row++) {
                 noc_async_read(current_noc_read_addr, current_write_addr, output_row_size_bytes);
-                noc_async_read_barrier();
                 current_noc_read_addr += block_row_size;
                 current_write_addr += output_row_size_bytes;
             }
+            noc_async_read_barrier();
         } else {
             noc_async_read(noc_read_addr, write_addr, read_rows_size * block_row_size);
         }
