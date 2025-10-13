@@ -14,11 +14,8 @@ class EncoderLayerArgs:
     d_model: int = None
     nhead: int = 4
     dim_feedforward: int = 128
-    activation: str = "relu"
     normalize_before: bool = True
-    norm_name: str = "ln"
     use_ffn: bool = True
-    ffn_use_bias: bool = True
 
 
 class TtMaskedTransformerEncoder(LightweightModule):
@@ -67,7 +64,6 @@ class TtMaskedTransformerEncoder(LightweightModule):
         self,
         src,
         mask: Optional[ttnn.Tensor] = None,
-        src_key_padding_mask: Optional[ttnn.Tensor] = None,
         pos: Optional[ttnn.Tensor] = None,
         xyz: Optional[ttnn.Tensor] = None,
         transpose_swap: Optional[bool] = False,
@@ -101,7 +97,7 @@ class TtMaskedTransformerEncoder(LightweightModule):
                 attn_mask = ttnn.unsqueeze(attn_mask, 1)
 
             output = ttnn.permute(output, (1, 0, 2))
-            output = layer(output, src_mask=attn_mask, src_key_padding_mask=src_key_padding_mask, pos=pos)
+            output = layer(output, src_mask=attn_mask, pos=pos)
             output = ttnn.permute(output, (1, 0, 2))
 
             if idx == 0 and self.interim_downsampling:

@@ -7,11 +7,9 @@ import pytest
 import ttnn
 from models.experimental.detr3d.reference.detr3d_model import PointnetSAModuleVotes
 from models.experimental.detr3d.ttnn.ttnn_pointnet_samodule_votes import TtnnPointnetSAModuleVotes
-from models.experimental.detr3d.tests.pcc.test_ttnn_shared_mlp import (
-    custom_preprocessor_whole_model as custom_preprocessor_shared_mlp,
-)
-from ttnn.model_preprocessing import preprocess_model_parameters
 from tests.ttnn.utils_for_testing import comp_pcc
+from ttnn.model_preprocessing import preprocess_model_parameters
+from models.experimental.detr3d.ttnn.custom_preprocessing import create_custom_mesh_preprocessor
 
 
 @pytest.mark.parametrize(
@@ -114,7 +112,7 @@ def test_pointnet_samodule_votes(
 
     parameters = preprocess_model_parameters(
         initialize_model=lambda: torch_model.mlp_module,
-        custom_preprocessor=custom_preprocessor_shared_mlp,
+        custom_preprocessor=create_custom_mesh_preprocessor(),
         device=device,
     )
 
@@ -123,10 +121,8 @@ def test_pointnet_samodule_votes(
         npoint,
         radius,
         nsample,
-        bn,
         use_xyz,
         pooling,
-        sigma,
         normalize_xyz,
         sample_uniformly,
         ret_unique_cnt,

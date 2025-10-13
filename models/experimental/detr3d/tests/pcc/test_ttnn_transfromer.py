@@ -15,9 +15,8 @@ from models.experimental.detr3d.reference.detr3d_model import (
 from models.experimental.detr3d.ttnn.transformer import (
     TTTransformerDecoderLayer,
     TTTransformerEncoderLayer,
-    build_ttnn_decoder,
+    TTTransformerDecoder,
 )
-
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from loguru import logger
@@ -274,7 +273,6 @@ def test_transformer_encoder_layer_inference(
         nhead,
         dim_feedforward,
         normalize_before=normalize_before,
-        # activation = 'relu'
     ).eval()
 
     # Create test inputs
@@ -296,7 +294,6 @@ def test_transformer_encoder_layer_inference(
         ref_output = reference_model(
             src_input,
             src_mask=attn_mask,
-            src_key_padding_mask=None,
             pos=pos,
         )
 
@@ -353,13 +350,15 @@ def test_transformer_encoder_layer_inference(
 
 
 class Args:
-    """Mock args class to match the build_decoder function"""
+    """Mock args class to match the build_ttnn_decoder function from ttnn_3detr_model.py"""
 
     def __init__(self):
         self.dec_dim = 256
         self.dec_nhead = 4
         self.dec_ffn_dim = 256
         self.dec_nlayers = 8
+        self.device = None  # Will be set in the test
+        self.parameters = {}
 
 
 @torch.no_grad()
@@ -369,6 +368,7 @@ def test_transformer_decoder_inference(device):
 
     dtype = ttnn.bfloat16
     args = Args()
+    args.device = device
 
     # Build reference decoder
     reference_model = build_decoder(args)
@@ -390,8 +390,18 @@ def test_transformer_decoder_inference(device):
         device=device,
     )
 
-    # Build TTNN decoder
-    tt_decoder = build_ttnn_decoder(args, device, parameters)
+    tt_decoder = TTTransformerDecoder(
+        device=args.device,
+        decoder_layer_config={
+            "d_model": args.dec_dim,
+            "nhead": args.dec_nhead,
+            "dim_feedforward": args.dec_ffn_dim,
+            "normalize_before": True,  # Match the reference implementation
+        },
+        num_layers=args.dec_nlayers,
+        return_intermediate=True,
+        parameters=parameters,
+    )
 
     # Convert inputs to TTNN tensors (convert to batch-first format)
     tt_tgt = ttnn.from_torch(
@@ -432,22 +442,12 @@ def test_transformer_decoder_inference(device):
         return_attn_weights=False,
     )
 
-    # Handle intermediate results - take the last one to match reference [0] indexing
-    if isinstance(tt_output, list):
-        tt_output = tt_output[-1]  # Take last intermediate result
-
     # Convert back to torch for comparison
     tt_output_torch = ttnn.to_torch(tt_output)
-    tt_output_torch = tt_output_torch.permute(1, 0, 2)  # Convert back to [seq_len, batch, d_model]
-
-    # Handle reference output format
-    if isinstance(ref_output, torch.Tensor):
-        # If ref_output is the stacked intermediate results, take the last one
-        if ref_output.dim() == 4:  # [num_layers, seq_len, batch, d_model]
-            ref_output = ref_output[-1]  # Take last layer output
+    tt_output_torch = tt_output_torch.permute(0, 2, 1, 3)  # Convert back to [seq_len, batch, d_model]
 
     # Compare outputs
-    passing, pcc_message = comp_pcc(ref_output, tt_output_torch, pcc=0.99)
+    passing, pcc_message = comp_pcc(ref_output, tt_output_torch, pcc=0.999)
 
     logger.info(f"Output PCC: {pcc_message}")
     logger.info(comp_allclose(ref_output, tt_output_torch))

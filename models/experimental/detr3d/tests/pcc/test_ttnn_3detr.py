@@ -15,21 +15,18 @@ from tests.ttnn.utils_for_testing import comp_pcc
 
 
 @pytest.mark.parametrize(
-    " encoder_only, input_shapes",
+    "input_shapes",
     [
-        (
-            False,
-            {
-                "point_clouds": (1, 20000, 3),
-                "point_cloud_dims_min": (1, 3),
-                "point_cloud_dims_max": (1, 3),
-            },
-        ),
+        {
+            "point_clouds": (1, 20000, 3),
+            "point_cloud_dims_min": (1, 3),
+            "point_cloud_dims_max": (1, 3),
+        },
     ],
 )
+@pytest.mark.parametrize("encoder_only", (False, True))
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_3detr_model(encoder_only, input_shapes, device):
-    torch.manual_seed(42)
     mesh_device = device
     args = Detr3dArgs()
     dataset_config = SunrgbdDatasetConfig()

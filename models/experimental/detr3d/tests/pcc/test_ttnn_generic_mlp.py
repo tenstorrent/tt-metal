@@ -22,7 +22,7 @@ from models.experimental.detr3d.ttnn.custom_preprocessing import create_custom_m
         (256, [256, 256], 12, "bn1d", "relu", True, False, True, False, False, None, None, (8, 256, 128)),
     ],
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 79104}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_ttnn_generic_mlp(
     input_dim,
     hidden_dims,
@@ -61,7 +61,6 @@ def test_ttnn_generic_mlp(
         custom_preprocessor=create_custom_mesh_preprocessor(None),
         device=device,
     )
-    print("param are", parameters)
     ttnn_model = TttnnGenericMLP(torch_model, parameters, device)
     ttnn_x = ttnn.from_torch(
         x.permute(0, 2, 1).unsqueeze(dim=0),
@@ -71,7 +70,8 @@ def test_ttnn_generic_mlp(
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
     ttnn_out = ttnn_model(ttnn_x)
-    print("outputs are", ttnn_out.shape, torch_out.shape)
     ttnn_out = ttnn.to_torch(ttnn_out)
-    ttnn_out = ttnn_out.squeeze(dim=0).permute(0, 2, 1)
-    print(f"{assert_with_pcc(torch_out, ttnn_out, 0.999)}")
+    ttnn_out = ttnn_out.squeeze(dim=0)
+    ttnn_out = torch.reshape(ttnn_out, (x_shape[-3], ttnn_out.shape[-2] // x_shape[-3], -1))
+    ttnn_out = ttnn_out.permute(0, 2, 1)
+    assert_with_pcc(torch_out, ttnn_out, 0.999)
