@@ -84,7 +84,7 @@ void kernel_main() {
     // ---------------------------------------------------------------------------
     // Set up constants for the kernel
     // ---------------------------------------------------------------------------
-    const uint32_t single_tile_size_bytes = get_tile_size(cb_ex_partial);
+    const uint32_t single_tile_size_bytes = get_tile_size(rms_norm ? cb_ex_partial2 : cb_ex_partial);
 
     // Compute the NOC addresses for remote cores that interact with this core
     df::RemoteNocAddrs<num_blocks> remote_noc_addrs{};
