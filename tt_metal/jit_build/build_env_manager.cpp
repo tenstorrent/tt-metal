@@ -130,8 +130,6 @@ uint32_t compute_build_key(chip_id_t device_id, uint8_t num_hw_cqs) {
         hash ^= uint32_hasher(harvested_core_count) << 4;
     }
 
-    hash ^= std::hash<std::string>{}(MetalContext::instance().rtoptions().get_compile_hash_string());
-
     // Convert the hash to a 32-bit value
     return static_cast<uint32_t>(hash);
 }
