@@ -4,10 +4,8 @@
 
 from typing import List
 
-import torch
-
 import ttnn
-from models.common.utility_functions import is_wormhole_b0
+from models.common.utility_functions import is_wormhole_b0, nearest_32
 
 hardcoded_matmul_config_linear = {
     1: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
@@ -58,13 +56,10 @@ hardcoded_matmul_config_linear = {
 
 
 def ResnetLinear(
-    in_features: int,
-    out_features: int,
     weight: ttnn.Tensor,
     bias: ttnn.Tensor,
     output_mem_config,
     model_config,
-    device,
     batch_size,
     compute_kernel_config,
 ):
@@ -451,13 +446,10 @@ class resnet50:
 
         self.avgpool = ttnn.global_avg_pool2d
         self.fc = ResnetLinear(
-            in_features=512 * resnet50Bottleneck.expansion,
-            out_features=1024,
             weight=ttnn.to_device(parameters.fc.weight, device),
             bias=ttnn.to_device(parameters.fc.bias, device),
             output_mem_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
             model_config=model_config,
-            device=self.device,
             batch_size=batch_size,
             compute_kernel_config=compute_kernel_config,
         )  # num_classes = 1000
@@ -917,98 +909,40 @@ class resnet50:
         print(f"=================================== layer: 4, module: 3")
         x, x_height, x_width = self.layer4_module3(x, device, batch_size, x_height, x_width)
 
-        unpadded_shape = x.shape
-        x = ttnn.untilize_with_unpadding(
-            x,
-            output_tensor_end=(
-                unpadded_shape[0] - 1,
-                unpadded_shape[1] - 1,
-                unpadded_shape[2] - 1,
-                unpadded_shape[3] - 1,
-            ),
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+        grid_size = (8, 8)
+        width_mem_config = ttnn.create_sharded_memory_config_(
+            [nearest_32(x.shape[2]), x.shape[3] // (grid_size[0] * grid_size[1])],
+            ttnn.CoreGrid(x=grid_size[0], y=grid_size[1]),
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.ShardOrientation.ROW_MAJOR,
+            tile_layout=True,
+            use_height_and_width_as_shard_shape=True,
         )
+        x = ttnn.to_memory_config(x, width_mem_config)
 
-        x = ttnn.reshape(
-            x,
-            (
-                self.batch_size,
-                x.shape[1],
-                x.shape[2] // self.batch_size,
-                x.shape[3],
-            ),
+        x = ttnn.avg_pool2d(
+            input_tensor=x,
+            batch_size=self.batch_size,
+            input_h=x_height,
+            input_w=x_width,
+            channels=x.shape[3],
+            kernel_size=[x_height, x_width],
+            stride=[1, 1],
+            padding=[0, 0, 0, 0],
+            output_layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat8_b,
         )
 
         grid_size = (8, 4)
-        shard_grid = ttnn.CoreRangeSet(
-            {
-                ttnn.CoreRange(
-                    ttnn.CoreCoord(0, 0),
-                    ttnn.CoreCoord(grid_size[0] - 1, grid_size[1] - 1),
-                )
-            }
+        width_mem_config = ttnn.create_sharded_memory_config_(
+            [nearest_32(x.shape[2]), x.shape[3] // (grid_size[0] * grid_size[1])],
+            ttnn.CoreGrid(x=grid_size[0], y=grid_size[1]),
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.ShardOrientation.ROW_MAJOR,
+            tile_layout=True,
+            use_height_and_width_as_shard_shape=True,
         )
-        shard_shape = [
-            x.volume() // x.padded_shape[-1],
-            x.padded_shape[-1] // (grid_size[0] * grid_size[1]),
-        ]
-        shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
-        width_sharded_mem_config = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec
-        )
-        x = ttnn.to_memory_config(x, width_sharded_mem_config)
-        unpadded_shape = x.padded_shape
-        padded_shape = [
-            unpadded_shape[0],
-            unpadded_shape[1],
-            _nearest_32(unpadded_shape[2]),
-            _nearest_32(unpadded_shape[3]),
-        ]
-        x = ttnn.tilize_with_val_padding(
-            x,
-            padded_shape,
-            0.0,
-            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
-            dtype=self.model_config["ACTIVATIONS_DTYPE"],
-        )
-
-        x = self.avgpool(x, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG)
-
-        unpadded_shape_end = [
-            x.padded_shape[0] - 1,
-            x.padded_shape[1] - 1,
-            1 - 1,
-            x.padded_shape[3] - 1,
-        ]
-        x = ttnn.untilize_with_unpadding(
-            x, output_tensor_end=unpadded_shape_end, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
-        )
-
-        x = ttnn.reshape(
-            x,
-            (
-                1,
-                x.padded_shape[1],
-                self.batch_size * x.padded_shape[2],
-                x.padded_shape[3],
-            ),
-        )
-
-        unpadded_shape = x.padded_shape
-        padded_shape = [
-            unpadded_shape[0],
-            unpadded_shape[1],
-            _nearest_32(unpadded_shape[2]),
-            _nearest_32(unpadded_shape[3]),
-        ]
-
-        x = ttnn.tilize_with_val_padding(
-            x,
-            padded_shape,
-            0.0,
-            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
-            dtype=self.model_config["ACTIVATIONS_DTYPE"],
-        )
+        x = ttnn.to_memory_config(x, width_mem_config)
 
         x = self.fc(x)
         desired_shape = list(x.shape)
