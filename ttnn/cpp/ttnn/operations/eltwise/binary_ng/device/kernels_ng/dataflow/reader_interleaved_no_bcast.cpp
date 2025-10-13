@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/debug/dprint.h"
 
 void kernel_main() {
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -31,6 +32,8 @@ void kernel_main() {
 
     constexpr auto cb_id_src = tt::CBIndex::c_0;
     constexpr auto cb_id_src_b = tt::CBIndex::c_1;
+
+    DPRINT << "+RdInterNoBc: nTilesSrc " << src_num_tiles << " nTilesDst " << dst_num_tiles << ENDL();
 
     constexpr auto src_args = TensorAccessorArgs<0, 0>();
     constexpr auto src_b_args =
@@ -134,4 +137,5 @@ void kernel_main() {
         tile_offset_b += next_nd_shift_b;
     }
 #endif
+    DPRINT << "+RdInterNoBc: nTilesRd " << num_tiles_read << ENDL();
 }

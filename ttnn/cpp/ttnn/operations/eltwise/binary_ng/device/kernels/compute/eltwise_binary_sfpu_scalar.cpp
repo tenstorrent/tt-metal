@@ -20,6 +20,7 @@
 #include "api/compute/binary_comp.h"
 #include "eltwise_utils_common.hpp"
 #include "eltwise_utils_sfpu.hpp"
+#include "api/debug/dprint.h"
 
 void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
@@ -32,6 +33,14 @@ void kernel_main() {
 
     constexpr auto cb_post_lhs = HAS_ACTIVATIONS(LHS) ? tt::CBIndex::c_3 : cb_pre_lhs;
     constexpr auto cb_post_rhs = HAS_ACTIVATIONS(RHS) ? tt::CBIndex::c_4 : cb_pre_rhs;
+    UNPACK(
+        DPRINT << "+KSFPU: nTiles " << num_tiles
+               << " nTiles/cycle " << num_tiles_per_cycle
+               << " CB" << static_cast<int>(cb_post_lhs)
+               << "->dst0 CB" << static_cast<int>(cb_post_rhs)
+               << "->dst1"
+               << ENDL();
+    );
 
     unary_op_init_common(cb_post_lhs, cb_out);
 #ifdef PACK_RELU

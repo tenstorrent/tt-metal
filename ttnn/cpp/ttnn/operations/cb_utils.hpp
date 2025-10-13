@@ -26,10 +26,46 @@ std::tuple<std::array<uint32_t, N>, CBHandle> create_cb(
     for (auto cb : cbs) {
         cb_config.set_page_size(cb, page_size);
     }
+    fprintf(
+        stderr,
+        "-- create_cb: DF %s pageSize %u nPages %u buffer %p totalSz %u globalAddr %u\n",
+        enchantum::to_string(data_format).data(),
+        page_size,
+        num_pages,
+        buffer,
+        cb_config.total_size(),
+        cb_config.globally_allocated_address().value_or(0));
 
     if (buffer != nullptr) {
         cb_config.set_globally_allocated_address(*buffer);
     }
+
+    std::cout << "---- tiles { ";
+    for (const auto& t : cb_config.tiles()) {
+        if (t.has_value()) {
+            std::cout << "* ";
+        }
+    }
+
+    std::cout << "} buf idx { ";
+    for (const auto& i : cb_config.buffer_indices()) {
+        std::cout << static_cast<int>(i) << ' ';
+    }
+
+    std::cout << "} data formats { ";
+    for (const auto& f : cb_config.data_formats()) {
+        if (f.has_value()) {
+            std::cout << enchantum::to_string(f.value()) << ' ';
+        }
+    }
+
+    std::cout << "} page sizes { ";
+    for (const auto& s : cb_config.page_sizes()) {
+        if (s.has_value()) {
+            std::cout << s.value() << ' ';
+        }
+    }
+    std::cout << "}" << std::endl;
 
     std::array<uint32_t, N> cbs_out{};
     std::copy(cbs, cbs + N, cbs_out.begin());

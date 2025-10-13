@@ -351,6 +351,9 @@ auto parse_external_operation(
 }
 
 HostBuffer convert_py_tensor_to_host_buffer(const nb::ndarray<nb::array_api>& py_tensor, DataType target_dtype) {
+
+    fprintf(stderr, "-- convert_py_tensor_to_host_buffer: MORE DETAILES\n");
+
     auto to_host_buffer_impl = []<typename T>(const nb::ndarray<nb::array_api>& contiguous_py_tensor) -> HostBuffer {
         // Important: `nb::object` copying and destruction must be done while holding GIL, which nanobind ensures for a
         // thread that calls the C++ APIs. We wrap `nb::object` in `MemoryPin` so that multi-threaded C++ code only

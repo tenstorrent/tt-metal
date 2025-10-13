@@ -73,6 +73,7 @@ Tensor create_device_tensor(const TensorSpec& tensor_spec, IDevice* device) {
 
     Tensor output;
     distributed::MeshDevice* mesh_device = dynamic_cast<distributed::MeshDevice*>(device);
+    fprintf(stderr, "-- create_device_tensor: calling allocate_tensor_on_device()\n");
     output = allocate_tensor_on_device(tensor_spec, mesh_device);
     output = tt::tt_metal::set_tensor_id(output);
 
@@ -246,6 +247,9 @@ Tensor unpad_from_tile(const Tensor& input_tensor, const tt::tt_metal::Shape& ou
 //                                  .tensor_view()
 // ======================================================================================
 Tensor view(const Tensor& input_tensor, const Shape& new_logical_shape, const Shape& new_padded_shape) {
+    input_tensor.print_info("-- Tensor view: ");
+    std::cerr << "-- Tensor view: converting to logical " << new_logical_shape << " padded "
+              << new_padded_shape << std::endl;
     tt::tt_metal::GraphTracker::instance().track_function_start(
         "Tensor::reshape", input_tensor, new_logical_shape, new_padded_shape);
 

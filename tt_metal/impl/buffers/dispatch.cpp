@@ -790,6 +790,24 @@ void write_interleaved_buffer_to_device(
     CoreType dispatch_core_type) {
     bool use_pinned_memory = dispatch_params.use_pinned_transfer;
 
+    fprintf(
+        stderr,
+        "-- write_interleaved_buffer_to_device: src %p pageSz %u copySz %u nPages %u pinned %d\n",
+        src,
+        dispatch_params.page_size_to_write,
+        dispatch_params.data_size_to_copy,
+        dispatch_params.total_pages_to_write,
+        use_pinned_memory);
+    for (uint32_t p = 0; p < dispatch_params.total_pages_to_write; p++) {
+        const uint32_t elems_per_page = dispatch_params.data_size_to_copy / sizeof(float);
+        fprintf(stderr, "---- Page %2u with %2u elems: [", p, elems_per_page);
+        for (uint32_t i = 0; i < elems_per_page; i++) {
+            const float* ptr = reinterpret_cast<const float*>(src);
+            fprintf(stderr, " %f", ptr[i + p * elems_per_page]);
+        }
+        fprintf(stderr, " ]\n");
+    }
+
     // data appended after CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WRITE_PAGED
     uint32_t byte_offset_in_cq = MetalContext::instance().hal().get_alignment(HalMemType::HOST);
 
@@ -867,7 +885,7 @@ void write_sharded_buffer_to_core(
                 continue;
             }
 
-            log_debug(tt::LogDispatch, "write_sharded_buffer_to_core for command queue {}", dispatch_params.cq_id);
+            log_debug(tt::LogDispatch, "write_sharded_buffer_to_core for command queue {}!?!?!?", dispatch_params.cq_id);
 
             dispatch_params.calculate_params_for_write_transaction(num_pages_available_in_cq);
             issue_buffer_dispatch_command_sequence(src, buffer, dispatch_params, sub_device_ids, dispatch_core_type);

@@ -80,6 +80,9 @@ Tensor create_tt_tensor_from_host_data(
     std::optional<ttnn::QueueId> cq_id,
     ttnn::distributed::MeshDevice* device) {
     using namespace tt::tt_metal;
+
+    fprintf(stderr, "-- create_tt_tensor_from_host_data: MORE DETAILES\n");
+
     auto create_tensor_from_host_buffer = [&]<typename T>() -> Tensor {
         const bool construct_on_device = can_construct_on_device(device, tensor_shape, optional_tile, memory_config);
         const bool exec_on_device = can_exec_ops_on_device(dst_dtype) && can_exec_ops_on_device(src_dtype);
@@ -208,6 +211,8 @@ Tensor convert_python_tensor_to_tt_tensor(
     const ttnn::distributed::TensorToMesh* mesh_mapper,
     std::optional<float> pad_value) {
     ZoneScoped;
+
+    fprintf(stderr, "-- convert_python_tensor_to_tt_tensor: MORE DETAILES\n");
 
     if (dst_dtype == DataType::BFLOAT8_B || dst_dtype == DataType::BFLOAT4_B) {
         TT_FATAL(layout == Layout::TILE, "Layout must be Layout::TILE for bfloat8_b or bfloat4_b!");

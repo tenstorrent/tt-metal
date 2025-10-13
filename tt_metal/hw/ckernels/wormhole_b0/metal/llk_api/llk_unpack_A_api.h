@@ -5,6 +5,7 @@
 #pragma once
 #include "llk_unpack_A.h"
 #include "llk_unpack_common_api.h"
+#include "api/debug/dprint.h"
 
 /*************************************************************************
  * LLK UNPACK A
@@ -41,6 +42,17 @@ inline void llk_unpack_A_init(
 
     const std::uint32_t operand_unpack_src_format = unpack_src_format[operand_id];
     const std::uint32_t operand_unpack_dst_format = unpack_dst_format[operand_id];
+    DPRINT << "+UAi: bcT " << static_cast<int>(BType)
+           << " a2d " << static_cast<int>(acc_to_dest)
+           << " rd " << static_cast<int>(binary_reuse_dest)
+           << " u2d " << static_cast<int>(unpack_to_dest)
+           << " T " << static_cast<int>(transpose_of_faces)
+           << " sF " << static_cast<int>(operand_unpack_src_format)
+           << " dF " << static_cast<int>(operand_unpack_dst_format)
+           << " Tf " << static_cast<int>(within_face_16x16_transpose)
+           << " fdim " << static_cast<int>(face_r_dim)
+           << " nf " << static_cast<int>(num_faces)
+           << ENDL();
     if (unpack_to_dest && is_32bit_input(operand_unpack_src_format, operand_unpack_dst_format)) {
         // TODO NC: Move to TRISC1 tt-metal#36411
         llk_unpack_dbg_feature_disable();
@@ -65,6 +77,15 @@ inline void llk_unpack_A(const std::uint32_t operand, const std::uint32_t tile_i
     std::uint32_t base_address = get_local_cb_interface(operand_id).fifo_rd_ptr - 1;
     std::uint32_t offset_address = get_local_cb_interface(operand_id).fifo_page_size * tile_index;
     std::uint32_t address = base_address + offset_address;
+    DPRINT << "+UAf: bcT " << static_cast<int>(BType)
+           << " a2d " << static_cast<int>(acc_to_dest)
+           << " rd " << static_cast<int>(binary_reuse_dest)
+           << " u2d " << static_cast<int>(unpack_to_dest)
+           << " T " << static_cast<int>(transpose_of_faces)
+           << " sF " << static_cast<int>(unpack_src_format[operand_id])
+           << " dF " << static_cast<int>(unpack_dst_format[operand_id])
+           << " 0x" << HEX() << base_address << "+" << offset_address
+           << ENDL();
 
     WAYPOINT("UPAW");
     _llk_unpack_A_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>(

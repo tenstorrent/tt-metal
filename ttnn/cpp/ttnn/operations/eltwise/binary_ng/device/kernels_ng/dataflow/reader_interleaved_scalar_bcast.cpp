@@ -6,6 +6,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/dataflow/fill_tile_utils.hpp"
+#include "api/debug/dprint.h"
 
 void kernel_main() {
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -29,6 +30,7 @@ void kernel_main() {
     const uint32_t n_stride_b = get_arg_val<uint32_t>(18);
     const uint32_t c_stride_b = get_arg_val<uint32_t>(19);
     const uint32_t src_num_tiles_b = get_arg_val<uint32_t>(20);
+    DPRINT << "+RdInterScalarBcast: nTilesSrc " << src_num_tiles << " nTilesDst " << dst_num_tiles << ENDL();
 
     constexpr auto cb_id_src = tt::CBIndex::c_0;
     constexpr auto cb_id_src_b = tt::CBIndex::c_1;
@@ -179,4 +181,5 @@ void kernel_main() {
         tile_offset_b += next_nd_shift_b;
 #endif
     }
+    DPRINT << "+RdInterScalarBcast: nTilesRead " << num_tiles_read << ENDL();
 }

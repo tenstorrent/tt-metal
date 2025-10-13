@@ -79,6 +79,7 @@ std::string BinaryNgKernelConfig::bcast_input_str() const {
 }
 
 std::string get_kernel_file_path(KernelName kernel_name, bool is_sfpu, bool is_where_op) {
+    fprintf(stderr, "-- get_kernel_file_path: is_sfpu? %d is_where? %d file://%s\n", is_sfpu, is_where_op, enchantum::to_string(kernel_name).data());
     constexpr std::string_view root = "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels";
     constexpr std::string_view root_ng = "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng";
     constexpr std::string_view dataflow = "{}/dataflow/{}";
@@ -509,6 +510,11 @@ void add_activation_defines(
 
 std::map<std::string, std::string> make_dataflow_defines(
     const DataType dtype, const std::optional<DataType> b_dtype_opt) {
+    fprintf(
+        stderr,
+        "-- make_dataflow_defines: dtype[%s] b_dtype_opt[%s]\n",
+        enchantum::to_string(dtype).data(),
+        enchantum::to_string(b_dtype_opt.value_or(DataType::INVALID)).data());
     std::map<std::string, std::string> defines;
     const auto b_dtype = b_dtype_opt.value_or(dtype);
     // to maintain backward compatibility, we need to support both dtype and b_dtype

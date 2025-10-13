@@ -23,6 +23,11 @@ Tensor Rand::invoke(
     uint32_t seed) {
     TT_FATAL(dtype != DataType::UINT8, "[ttnn::rand] DataType::UINT8 is not supported.");
 
+    fprintf(stderr, "-- Rand::invoke: shape rank %zu volume %lu [ ", shape.rank(), shape.volume());
+    for (size_t i = 0; i < shape.rank(); i++) {
+        fprintf(stderr, "%u ", shape[i]);
+    }
+    fprintf(stderr, "]\n");
     auto tensor = ttnn::prim::uniform(shape, DataType::FLOAT32, Layout::TILE, memory_config, device, from, to, seed);
     if (dtype != DataType::FLOAT32) {
         tensor = ttnn::typecast(tensor, dtype);

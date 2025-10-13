@@ -200,11 +200,12 @@ inline void dprint_tensix_dest_reg_row_uint16(uint32_t data_format, uint16_t row
 
 // Print the contents of tile with index tile_id within the destination register
 template <bool print_by_face = false>
-void dprint_tensix_dest_reg(int tile_id = 0) {
+void dprint_tensix_dest_reg(int tile_id = 0, const char* info = nullptr) {
     dbg_halt();
     MATH({
         // Determine the format of the data in the destination register
         uint32_t data_format_reg_field_value = READ_HW_CFG_0_REG_FIELD(ALU_FORMAT_SPEC_REG2_Dstacc);
+        const uint32_t raw_fmt = data_format_reg_field_value;
 
         if (READ_HW_CFG_0_REG_FIELD(ALU_ACC_CTRL_Fp32_enabled)) {
             data_format_reg_field_value = (uint32_t)DataFormat::Float32;
@@ -216,7 +217,9 @@ void dprint_tensix_dest_reg(int tile_id = 0) {
 
         // Print the contents
         DPRINT << FIXED() << SETW(WIDTH) << SETPRECISION(PRECISION);
-        DPRINT << "Tile ID = " << tile_id << ENDL();
+        DPRINT << "Tile " << tile_id << " fmt " << data_format_reg_field_value << " raw_fmt " << raw_fmt << ' ';
+        dprint_data_format(static_cast<uint8_t>(data_format_reg_field_value));
+        DPRINT << ((info == nullptr) ? "" : info) << ENDL();
 
         uint32_t row = tile_id * NUM_ROWS_PER_TILE;
         for (int face_id = 0; face_id < NUM_FACES_PER_TILE; ++face_id) {

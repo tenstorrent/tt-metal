@@ -28,6 +28,18 @@ TilizeMultiCoreBlockProgramFactory::cached_program_t TilizeMultiCoreBlockProgram
     uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
 
     bool fp32_llk_acc = a.dtype() == DataType::FLOAT32;
+    fprintf(stderr, "!! MultiCoreBlockTilize\n");
+    fprintf(
+        stderr,
+        "!! Input [%u %u] PhyVol %lu elemSz %u Output [%u %u] PhyVol %lu elemSz %u\n",
+        a.padded_shape()[0],
+        a.padded_shape()[1],
+        a.physical_volume(),
+        a.element_size(),
+        output.padded_shape()[0],
+        output.padded_shape()[1],
+        output.physical_volume(),
+        output.element_size());
 
     IDevice* device = a.device();
     CoreCoord grid_size = device->compute_with_storage_grid_size();
@@ -39,6 +51,7 @@ TilizeMultiCoreBlockProgramFactory::cached_program_t TilizeMultiCoreBlockProgram
     uint32_t num_tiles_per_row = output.padded_shape()[-1] / TILE_WIDTH;
 
     uint32_t num_blocks = (output.padded_shape()[-1] * output.padded_shape()[-2]) / (TILE_HEIGHT * TILE_WIDTH);
+    fprintf(stderr, "!! For output: nTiles/Row %u nTiles/Col %u nBlocks %u\n", num_tiles_per_row, num_tiles_per_col, num_blocks);
 
     auto
         [ncores,

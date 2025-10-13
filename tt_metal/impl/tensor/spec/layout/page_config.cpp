@@ -98,6 +98,7 @@ Alignment PageConfig::get_recommended_shard_shape_alignment(DataType dtype) cons
 TilePageConfig::TilePageConfig(const Tile& tile) : tile_(tile) {}
 
 Alignment TilePageConfig::create_default_alignment(DataType /*dtype*/, const MemoryConfig& /*memory_config*/) const {
+    fprintf(stderr, "-- create_default_alignment(TilePageConfig)\n");
     return Alignment({tile_.get_height(), tile_.get_width()});
 }
 
@@ -146,6 +147,7 @@ Alignment TilePageConfig::get_required_shard_shape_alignment() const {
 RowMajorPageConfig::RowMajorPageConfig(const Tile& tile) : tile_(tile) {}
 
 Alignment RowMajorPageConfig::create_default_alignment(DataType /*dtype*/, const MemoryConfig& memory_config) const {
+    fprintf(stderr, "-- create_default_alignment(RowMajorPageConfig)\n");
     if (memory_config.shard_spec().has_value()) {
         const auto& shard_spec = memory_config.shard_spec().value();
         return Alignment({shard_spec.shape[1]});
