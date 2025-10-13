@@ -24,6 +24,7 @@ on:
           - config-t3000
           - config-tg
           - topology-6u
+          - config-t3000
         description: "Runner Type Label"
       good-commit:
         required: true
@@ -99,7 +100,7 @@ jobs:
           echo "CCACHE_REMOTE_STORAGE: ${CCACHE_REMOTE_STORAGE}"
 
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@6b36ef848f5f66ba0ae6f883ff69b09692e48ce9
         timeout-minutes: 10
         with:
           fetch-depth: 0
