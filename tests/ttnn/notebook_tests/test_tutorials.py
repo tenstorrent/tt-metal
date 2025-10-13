@@ -28,7 +28,7 @@ LOCAL_BASE_DIRECTORY = "tutorials_data"
 TUTORIALS_DATA_PATHS = {
     "ttnn_simplecnn_inference": {LOCAL_SOURCE_PATH_KEY: "./data", EXTERNAL_SOURCE_PATH_KEY: "ttnn_simplecnn_inference"},
     "ttnn_clip_zero_shot_classification": {
-        LOCAL_SOURCE_PATH_KEY: "./data",
+        LOCAL_SOURCE_PATH_KEY: "./data-clip-zero-shot-classification/",
         EXTERNAL_SOURCE_PATH_KEY: "ttnn_clip_zero_shot_classification",
     }
     # NOTE: Add entries here for new tutorials that require external data
