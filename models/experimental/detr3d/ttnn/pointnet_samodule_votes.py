@@ -4,7 +4,7 @@
 
 import torch
 import ttnn
-from models.experimental.detr3d.ttnn.ttnn_shared_mlp import TtnnSharedMLP
+from models.experimental.detr3d.ttnn.shared_mlp import TtnnSharedMLP
 from models.experimental.detr3d.reference.model_utils import (
     QueryAndGroup,
     FurthestPointSampling,

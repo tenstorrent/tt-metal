@@ -14,13 +14,14 @@ from models.common.lightweightmodule import LightweightModule
 import torch
 
 import ttnn
-from models.experimental.detr3d.ttnn.ttnn_pointnet_samodule_votes import TtnnPointnetSAModuleVotes
-from models.experimental.detr3d.ttnn.transformer import (
+from models.experimental.detr3d.ttnn.pointnet_samodule_votes import TtnnPointnetSAModuleVotes
+from models.experimental.detr3d.ttnn.masked_transformer_encoder import (
     TTTransformerEncoderLayer,
-    TTTransformerDecoder,
+    TtMaskedTransformerEncoder,
+    EncoderLayerArgs,
 )
-from models.experimental.detr3d.ttnn.encoder import TtMaskedTransformerEncoder, EncoderLayerArgs
-from models.experimental.detr3d.ttnn.ttnn_generic_mlp import TttnnGenericMLP
+from models.experimental.detr3d.ttnn.transformer_decoder import TTTransformerDecoder
+from models.experimental.detr3d.ttnn.generic_mlp import TttnnGenericMLP
 from models.experimental.detr3d.reference.detr3d_model import PositionEmbeddingCoordsSine
 
 
