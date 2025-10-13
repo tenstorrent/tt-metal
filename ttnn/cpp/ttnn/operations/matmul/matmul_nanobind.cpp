@@ -136,7 +136,7 @@ void py_module(nb::module_& mod) {
             nb::arg("per_core_M").noconvert(),
             nb::arg("per_core_N").noconvert(),
             nb::arg("transpose_mcast").noconvert(),
-            nb::arg("fused_activation"),
+            nb::arg("fused_activation") = nb::none(),
             nb::arg("fuse_batch").noconvert() = true);
 
     matmul_multi_core_reuse_multicast_program_config.def_rw(
@@ -297,7 +297,7 @@ void py_module(nb::module_& mod) {
             nb::arg("per_core_M").noconvert(),
             nb::arg("per_core_N").noconvert(),
             nb::arg("fuse_batch").noconvert(),
-            nb::arg("fused_activation"),
+            nb::arg("fused_activation") = nb::none(),
             nb::arg("mcast_in0").noconvert(),
             nb::arg("gather_in0").noconvert() = false,
             nb::arg("hop_cores").noconvert() = CoreRangeSet(),
@@ -417,7 +417,7 @@ void py_module(nb::module_& mod) {
             nb::arg("in0_block_w").noconvert(),
             nb::arg("per_core_M").noconvert(),
             nb::arg("per_core_N").noconvert(),
-            nb::arg("fused_activation"))
+            nb::arg("fused_activation") = nb::none())
         .def_rw("in0_block_w", &MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig::in0_block_w, R"doc(
             Block width for both input tensors along the K dimension (shared inner dimension).
 

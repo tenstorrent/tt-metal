@@ -223,10 +223,26 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
             [](CoreCoord* t, std::tuple<std::size_t, std::size_t> core_coord) {
                 new (t) CoreCoord(std::get<0>(core_coord), std::get<1>(core_coord));
             })
+        .def(
+            "__init__",
+            [](CoreCoord* t, nb::detail::tuple<nb::int_, nb::int_> core_coord) {
+                new (t) CoreCoord(
+                    static_cast<std::size_t>(core_coord.get<0>()), static_cast<std::size_t>(core_coord.get<1>()));
+            })
+        //[](CoreCoord* t, nb::tuple core_coord) {
+        //    new (t) CoreCoord(
+        //        static_cast<std::size_t>(core_coord[0]), static_cast<std::size_t>(core_coord[1]));
+        //})
+        //.def("__init__",
+        //    [](CoreCoord* t, nb::slice core_coord) {
+        //        new (t) CoreCoord(static_cast<std::size_t>(core_coord.get<0>()),
+        //                          static_cast<std::size_t>(core_coord.get<1>()));
+        //    })
         .def("__repr__", [](const CoreCoord& self) -> std::string { return self.str(); })
         .def_ro("x", &CoreCoord::x)
         .def_ro("y", &CoreCoord::y);
     nb::implicitly_convertible<std::tuple<std::size_t, std::size_t>, CoreCoord>();
+    nb::implicitly_convertible<nb::detail::tuple<nb::int_, nb::int_>, CoreCoord>();
 
     auto py_tile = static_cast<nb::class_<Tile>>(m_tensor.attr("Tile"));
     py_tile
