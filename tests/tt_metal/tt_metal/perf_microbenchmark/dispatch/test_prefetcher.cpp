@@ -2011,7 +2011,7 @@ void configure_for_single_chip(
     TT_ASSERT(cmddat_q_size_g >= 2 * max_prefetch_command_size_g);
 
     // NOTE: this test hijacks hugepage
-    chip_id_t mmio_device_id =
+    ChipId mmio_device_id =
         tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device->id());
     uint16_t channel =
         tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device->id());

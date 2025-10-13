@@ -97,7 +97,7 @@ const char* get_riscv_name(HalProgrammableCoreType core_type, uint32_t processor
 }
 
 // Helper function to determine core type from virtual coord. TODO: Remove this once we fix code types.
-CoreType core_type_from_virtual_core(chip_id_t device_id, const CoreCoord& virtual_coord) {
+CoreType core_type_from_virtual_core(ChipId device_id, const CoreCoord& virtual_coord) {
     if (tt::tt_metal::MetalContext::instance().get_cluster().is_worker_core(virtual_coord, device_id)) {
         return CoreType::WORKER;
     } else if (tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_core(virtual_coord, device_id)) {
@@ -121,7 +121,7 @@ CoreType core_type_from_virtual_core(chip_id_t device_id, const CoreCoord& virtu
 }
 
 // Helper function to convert noc coord -> virtual coord. TODO: Remove this once we fix code types.
-CoreCoord virtual_noc_coordinate(chip_id_t device_id, uint8_t noc_index, CoreCoord coord) {
+CoreCoord virtual_noc_coordinate(ChipId device_id, uint8_t noc_index, CoreCoord coord) {
     if (tt::tt_metal::MetalContext::instance().get_cluster().arch() == tt::ARCH::BLACKHOLE) {
         return coord;
     }
@@ -143,12 +143,12 @@ CoreCoord virtual_noc_coordinate(chip_id_t device_id, uint8_t noc_index, CoreCoo
 
 // Helper function to get string rep of noc target.
 string get_noc_target_str(
-    chip_id_t device_id,
+    ChipId device_id,
     CoreCoord virtual_coord,
     HalProgrammableCoreType programmable_core_type,
     int noc,
     dev_msgs::debug_sanitize_noc_addr_msg_t::ConstView san) {
-    auto get_core_and_mem_type = [](chip_id_t device_id, CoreCoord& noc_coord, int noc) -> std::pair<string, string> {
+    auto get_core_and_mem_type = [](ChipId device_id, CoreCoord& noc_coord, int noc) -> std::pair<string, string> {
         // Get the virtual coord from the noc coord
         CoreCoord virtual_core = virtual_noc_coordinate(device_id, noc, noc_coord);
         CoreType core_type;
@@ -289,7 +289,7 @@ public:
     void Dump() const;
 };
 
-WatcherDeviceReader::WatcherDeviceReader(FILE* f, chip_id_t device_id, const std::vector<string>& kernel_names) :
+WatcherDeviceReader::WatcherDeviceReader(FILE* f, ChipId device_id, const std::vector<string>& kernel_names) :
     f(f), device_id(device_id), kernel_names(kernel_names) {
     // On init, read out eth link retraining register so that we can see if retraining has occurred. WH only for now.
     if (tt::tt_metal::MetalContext::instance().get_cluster().arch() == ARCH::WORMHOLE_B0 &&

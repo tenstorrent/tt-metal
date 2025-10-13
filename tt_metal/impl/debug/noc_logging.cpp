@@ -44,7 +44,7 @@ void PrintNocData(noc_data_t noc_data, const std::string& file_name) {
     outfile.close();
 }
 
-void DumpCoreNocData(chip_id_t device_id, const CoreDescriptor& logical_core, noc_data_t& noc_data) {
+void DumpCoreNocData(ChipId device_id, const CoreDescriptor& logical_core, noc_data_t& noc_data) {
     CoreCoord virtual_core =
         tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
             device_id, logical_core.coord, logical_core.type);
@@ -65,7 +65,7 @@ void DumpCoreNocData(chip_id_t device_id, const CoreDescriptor& logical_core, no
     }
 }
 
-void DumpDeviceNocData(chip_id_t device_id, noc_data_t& noc_data, noc_data_t& dispatch_noc_data) {
+void DumpDeviceNocData(ChipId device_id, noc_data_t& noc_data, noc_data_t& dispatch_noc_data) {
     // Need to treat dispatch cores and normal cores separately, so keep track of which cores are dispatch.
     CoreDescriptorSet dispatch_cores = GetDispatchCores(device_id);
 
@@ -80,14 +80,14 @@ void DumpDeviceNocData(chip_id_t device_id, noc_data_t& noc_data, noc_data_t& di
     }
 }
 
-void DumpNocData(const std::vector<chip_id_t>& devices) {
+void DumpNocData(const std::vector<ChipId>& devices) {
     // Skip if feature is not enabled
     if (!tt::tt_metal::MetalContext::instance().rtoptions().get_record_noc_transfers()) {
         return;
     }
 
     noc_data_t noc_data = {}, dispatch_noc_data = {};
-    for (chip_id_t device_id : devices) {
+    for (ChipId device_id : devices) {
         log_info(tt::LogMetal, "Dumping noc data for Device {}...", device_id);
         DumpDeviceNocData(device_id, noc_data, dispatch_noc_data);
     }
@@ -96,7 +96,7 @@ void DumpNocData(const std::vector<chip_id_t>& devices) {
     PrintNocData(dispatch_noc_data, "dispatch_noc_data.txt");
 }
 
-void ClearNocData(chip_id_t device_id) {
+void ClearNocData(ChipId device_id) {
     // Skip if feature is not enabled
     if (!tt::tt_metal::MetalContext::instance().rtoptions().get_record_noc_transfers()) {
         return;

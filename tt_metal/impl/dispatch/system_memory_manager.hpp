@@ -15,13 +15,13 @@
 #include <mutex>
 #include <vector>
 
-using chip_id_t = int;
+using ChipId = int;
 
 namespace tt::tt_metal {
 
 class SystemMemoryManager {
 public:
-    SystemMemoryManager(chip_id_t device_id, uint8_t num_hw_cqs);
+    SystemMemoryManager(ChipId device_id, uint8_t num_hw_cqs);
 
     uint32_t get_next_event(uint8_t cq_id);
 
@@ -59,7 +59,7 @@ public:
 
     uint32_t get_cq_size() const;
 
-    chip_id_t get_device_id() const;
+    ChipId get_device_id() const;
 
     std::vector<SystemMemoryCQInterface>& get_cq_interfaces();
 
@@ -85,7 +85,7 @@ public:
     void fetch_queue_write(uint32_t command_size_B, uint8_t cq_id, bool stall_prefetcher = false);
 
 private:
-    chip_id_t device_id = 0;
+    ChipId device_id = 0;
     uint8_t num_hw_cqs = 0;
     std::vector<uint32_t> completion_byte_addrs;
     char* cq_sysmem_start = nullptr;

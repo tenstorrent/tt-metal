@@ -184,8 +184,7 @@ operation::ProgramWithCallbacks ReduceScatterAsync::create_program_at(
         "identified for a valid Reduce-scatter configuration. The input mesh tensor or Reduce-scatter arguments may be "
         "incorrect");
 
-    auto find_device = [](const std::vector<IDevice*>& devices,
-                          std::optional<chip_id_t> id) -> std::optional<IDevice*> {
+    auto find_device = [](const std::vector<IDevice*>& devices, std::optional<ChipId> id) -> std::optional<IDevice*> {
         if (id == std::nullopt) {
             return std::nullopt;
         }

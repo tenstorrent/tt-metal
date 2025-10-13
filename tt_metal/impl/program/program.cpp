@@ -1574,7 +1574,7 @@ std::vector<std::reference_wrapper<const Semaphore>> detail::ProgramImpl::semaph
 bool detail::ProgramImpl::is_finalized() const { return this->finalized_; }
 void detail::ProgramImpl::set_finalized() { this->finalized_ = true; }
 
-void detail::ProgramImpl::set_program_binary_status(chip_id_t device_id, ProgramBinaryStatus status) {
+void detail::ProgramImpl::set_program_binary_status(ChipId device_id, ProgramBinaryStatus status) {
     Inspector::program_set_binary_status(this, device_id, status);
     this->binaries_on_device_[device_id] = status;
 }

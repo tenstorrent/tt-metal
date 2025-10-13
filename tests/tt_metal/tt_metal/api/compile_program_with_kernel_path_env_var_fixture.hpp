@@ -21,7 +21,7 @@ protected:
             GTEST_SKIP();
         }
 
-        const chip_id_t device_id = 0;
+        const ChipId device_id = 0;
         this->device_ = tt::tt_metal::CreateDevice(device_id);
         this->program_ = tt::tt_metal::CreateProgram();
     }

@@ -60,7 +60,7 @@ int main(int argc, char** argv) {
 
     bool pass = true;
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
-    vector<chip_id_t> ids;
+    vector<ChipId> ids;
     ids.reserve(num_devices);
     for (unsigned int id = 0; id < num_devices; id++) {
         ids.push_back(id);

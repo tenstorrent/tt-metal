@@ -42,7 +42,7 @@ inline std::string get_umd_arch_name() {
     }
 
     auto cluster_desc = tt::umd::Cluster::create_cluster_descriptor();
-    const std::unordered_set<chip_id_t> &device_ids = cluster_desc->get_all_chips();
+    const std::unordered_set<ChipId> &device_ids = cluster_desc->get_all_chips();
     tt::ARCH arch = cluster_desc->get_arch(*device_ids.begin());
     for (auto device_id : device_ids) {
         tt::ARCH detected_arch = cluster_desc->get_arch(device_id);

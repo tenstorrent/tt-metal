@@ -229,7 +229,7 @@ int main(int argc, char** argv) {
         uint32_t mcast_noc_addr_end_x = 0;
         uint32_t mcast_noc_addr_end_y = 0;
 
-        chip_id_t mmio_device_id =
+        ChipId mmio_device_id =
             tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
         uint16_t channel =
             tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_id);

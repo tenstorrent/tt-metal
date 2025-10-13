@@ -273,12 +273,12 @@ SenderReceiverConfig get_device_sender_receiver_config(
 
             config.receiver_device_id = is_last_chip_in_clockwise_direction
                                             ? std::nullopt
-                                            : std::optional<chip_id_t>(devices.at((i + 1) % num_devices)->id());
+                                            : std::optional<ChipId>(devices.at((i + 1) % num_devices)->id());
 
             config.sender_device_id =
                 is_last_chip_in_counter_clockwise_direction
                     ? std::nullopt
-                    : std::optional<chip_id_t>(devices.at((i + num_devices - 1) % num_devices)->id());
+                    : std::optional<ChipId>(devices.at((i + num_devices - 1) % num_devices)->id());
         }
     }
 
@@ -297,7 +297,7 @@ SenderReceiverConfig get_device_sender_receiver_config_in_ring(
         "CLL operation invoked with cluster_axis API on >2D mesh, which is currently unsupported");
     config.device_index = (cluster_axis == 0) ? mesh_coord[0] : mesh_coord[1];
 
-    auto get_chip_id = [&](std::size_t line_index) -> std::optional<chip_id_t> {
+    auto get_chip_id = [&](std::size_t line_index) -> std::optional<ChipId> {
         auto new_row = mesh_coord[0];
         auto new_col = mesh_coord[1];
         if (cluster_axis == 0) {

@@ -174,9 +174,9 @@ inline FabricNodeId resolve_device_identifier(const DeviceIdentifier& device_id,
             using T = std::decay_t<decltype(id)>;
             if constexpr (std::is_same_v<T, FabricNodeId>) {
                 return id;  // Already resolved
-            } else if constexpr (std::is_same_v<T, chip_id_t>) {
+            } else if constexpr (std::is_same_v<T, ChipId>) {
                 return provider.get_fabric_node_id(id);
-            } else if constexpr (std::is_same_v<T, std::pair<MeshId, chip_id_t>>) {
+            } else if constexpr (std::is_same_v<T, std::pair<MeshId, ChipId>>) {
                 return FabricNodeId{id.first, id.second};
             } else if constexpr (std::is_same_v<T, std::pair<MeshId, MeshCoordinate>>) {
                 return provider.get_fabric_node_id(id.first, id.second);

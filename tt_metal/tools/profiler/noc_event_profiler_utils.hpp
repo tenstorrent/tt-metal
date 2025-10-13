@@ -29,7 +29,7 @@ namespace tt_metal {
 class FabricRoutingLookup {
 public:
     // both of these are keyed by physical chip id!
-    using EthCoreToChannelMap = std::map<std::tuple<chip_id_t, CoreCoord>, tt::tt_fabric::chan_id_t>;
+    using EthCoreToChannelMap = std::map<std::tuple<ChipId, CoreCoord>, tt::tt_fabric::chan_id_t>;
 
     // Default constructor for cases where lookup is not built (e.g., non-1D fabric)
     FabricRoutingLookup() = default;
@@ -41,10 +41,10 @@ public:
 
         // get sorted list of all physical chip ids
         auto physical_chip_id_set = cluster.user_exposed_chip_ids();
-        std::vector<chip_id_t> physical_chip_ids(physical_chip_id_set.begin(), physical_chip_id_set.end());
+        std::vector<ChipId> physical_chip_ids(physical_chip_id_set.begin(), physical_chip_id_set.end());
         std::sort(physical_chip_ids.begin(), physical_chip_ids.end());
 
-        for (chip_id_t chip_id_src : physical_chip_ids) {
+        for (ChipId chip_id_src : physical_chip_ids) {
             if (device->is_mmio_capable() && (cluster.get_cluster_type() == tt::tt_metal::ClusterType::TG)) {
                 // skip lauching on gateways for TG
                 continue;
@@ -62,7 +62,7 @@ public:
 
     // lookup Eth Channel ID given a physical chip id and physical EDM router core coordinate
     std::optional<tt::tt_fabric::chan_id_t> getRouterEthCoreToChannelLookup(
-        chip_id_t phys_chip_id, CoreCoord& eth_router_phys_core_coord) const {
+        ChipId phys_chip_id, CoreCoord& eth_router_phys_core_coord) const {
         auto it = eth_core_to_channel_lookup_.find(std::make_tuple(phys_chip_id, eth_router_phys_core_coord));
         if (it != eth_core_to_channel_lookup_.end()) {
             return it->second;
@@ -132,7 +132,7 @@ inline void dumpRoutingInfo(const std::filesystem::path& filepath) {
                 }
 
                 for (int j = 0; j < eth_routing_planes_in_dir.size(); j++) {
-                    chip_id_t eth_channel = eth_routing_planes_in_dir[j];
+                    ChipId eth_channel = eth_routing_planes_in_dir[j];
                     device_routing_planes[j]["ethernet_channels"][enchantum::to_string(direction)] = eth_channel;
                 }
             }

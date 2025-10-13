@@ -46,12 +46,12 @@ class ControlPlaneFixture : public ::testing::Test {
 class BaseFabricFixture : public ::testing::Test {
 public:
     inline static tt::ARCH arch_;
-    inline static std::map<chip_id_t, std::shared_ptr<tt::tt_metal::distributed::MeshDevice>> devices_map_;
+    inline static std::map<ChipId, std::shared_ptr<tt::tt_metal::distributed::MeshDevice>> devices_map_;
     inline static std::vector<std::shared_ptr<tt::tt_metal::distributed::MeshDevice>> devices_;
     inline static bool slow_dispatch_;
 
     const std::vector<std::shared_ptr<tt::tt_metal::distributed::MeshDevice>>& get_devices() const { return devices_; }
-    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& get_device(chip_id_t id) const {
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& get_device(ChipId id) const {
         return devices_map_.at(id);
     }
 
@@ -89,7 +89,7 @@ public:
         // Set up all available devices
         arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         auto num_devices = tt::tt_metal::GetNumAvailableDevices();
-        std::vector<chip_id_t> ids;
+        std::vector<ChipId> ids;
         ids.reserve(num_devices);
         for (unsigned int id = 0; id < num_devices; id++) {
             ids.push_back(id);
@@ -217,7 +217,7 @@ public:
 
     void SetUp(
         const std::string& mesh_graph_desc_file,
-        const std::map<FabricNodeId, chip_id_t>& logical_mesh_chip_id_to_physical_chip_id_mapping) {
+        const std::map<FabricNodeId, ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping) {
         tt::tt_metal::MetalContext::instance().set_custom_fabric_topology(
             mesh_graph_desc_file, logical_mesh_chip_id_to_physical_chip_id_mapping);
         BaseFabricFixture::DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC);

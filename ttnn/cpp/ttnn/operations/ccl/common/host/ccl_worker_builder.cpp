@@ -791,7 +791,7 @@ tt::tt_metal::KernelHandle generate_multi_command_stream_kernel_ct_args(
     CoreRangeSet const& worker_core_range,
     tt::tt_metal::DataMovementConfig datamovement_kernel_config,
     const size_t num_command_streams,
-    std::optional<chip_id_t> my_chip_id) {
+    std::optional<ChipId> my_chip_id) {
     TT_FATAL(
         num_command_streams > 0 && num_command_streams <= 2,
         "Invalid number of command streams: {}. Must be 1 or 2",

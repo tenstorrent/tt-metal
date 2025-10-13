@@ -90,7 +90,7 @@ protected:
 
 class MultiCommandQueueT3KFixture : public TTNNFixtureBase {
 protected:
-    std::map<chip_id_t, std::shared_ptr<tt::tt_metal::distributed::MeshDevice>> devs;
+    std::map<ChipId, std::shared_ptr<tt::tt_metal::distributed::MeshDevice>> devs;
 
     void SetUp() override {
         if (!check_dispatch_mode()) {

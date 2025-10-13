@@ -77,9 +77,9 @@ const std::vector<std::vector<eth_coord_t>> kDualHostMeshEthCoords = {
     }};
 
 // Helper function to get chip mapping from eth coords
-std::map<FabricNodeId, chip_id_t> get_dual_host_chip_mapping() {
+std::map<FabricNodeId, ChipId> get_dual_host_chip_mapping() {
     const auto& cluster = ::tt::tt_metal::MetalContext::instance().get_cluster();
-    std::map<FabricNodeId, chip_id_t> physical_chip_ids_mapping;
+    std::map<FabricNodeId, ChipId> physical_chip_ids_mapping;
     for (std::uint32_t mesh_id = 0; mesh_id < kDualHostMeshEthCoords.size(); mesh_id++) {
         for (std::uint32_t chip_id = 0; chip_id < kDualHostMeshEthCoords[mesh_id].size(); chip_id++) {
             const auto& eth_coord = kDualHostMeshEthCoords[mesh_id][chip_id];

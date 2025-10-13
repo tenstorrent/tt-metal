@@ -24,8 +24,8 @@ namespace tt::tt_fabric::fabric_tests {
 // Device identifier that can be resolved later (used during parsing)
 using DeviceIdentifier = std::variant<
     FabricNodeId,                      // Already resolved
-    chip_id_t,                         // Physical chip ID
-    std::pair<MeshId, chip_id_t>,      // [mesh_id, chip_id]
+    ChipId,                            // Physical chip ID
+    std::pair<MeshId, ChipId>,         // [mesh_id, chip_id]
     std::pair<MeshId, MeshCoordinate>  // [mesh_id, [row, col]]
     >;
 
