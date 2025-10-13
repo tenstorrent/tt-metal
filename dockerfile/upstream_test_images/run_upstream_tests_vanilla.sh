@@ -32,9 +32,9 @@ test_suite_bh_umd_unit_tests() {
     # Add more tests to exclude if hw_topology is blackhole_p300
     # Issue: https://github.com/tenstorrent/tt-umd/issues/1412
     if [[ "$hw_topology" == "blackhole_p300" ]]; then
-        gtest_filter+=":-ApiClusterDescriptorTest.VerifyStandardTopology"
-        gtest_filter+=":-ApiClusterTest.OpenChipsByPciId"
-        gtest_filter+=":-ApiClusterTest.OpenClusterByLogicalID"
+        gtest_filter+=":ApiClusterDescriptorTest.VerifyStandardTopology"
+        gtest_filter+=":ApiClusterTest.OpenChipsByPciId"
+        gtest_filter+=":ApiClusterTest.OpenClusterByLogicalID"
     fi
     ./build/test/umd/api/api_tests --gtest_filter="$gtest_filter"
 }
@@ -243,12 +243,14 @@ test_suite_bh_multi_pcie_llama_demo_tests"
 
 hw_topology_test_suites["blackhole_loudbox"]="
 test_suite_bh_multi_pcie_metal_unit_tests
+test_suite_bh_pcie_didt_tests
 test_suite_bh_multi_pcie_llama_demo_tests"
 
 hw_topology_test_suites["blackhole_p300"]="
 test_suite_bh_umd_unit_tests
 test_suite_bh_single_pcie_metal_unit_tests
 test_suite_bh_multi_pcie_metal_unit_tests
+test_suite_bh_pcie_didt_tests
 test_suite_bh_multi_pcie_llama_demo_tests"
 
 

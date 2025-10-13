@@ -99,7 +99,7 @@ static void watcher_sanitize_host_noc(
     }
 }
 
-void watcher_sanitize_host_noc_read(
+inline void watcher_sanitize_host_noc_read(
     const metal_SocDescriptor& soc_d,
     const std::unordered_set<CoreCoord>& virtual_worker_cores,
     const std::unordered_set<CoreCoord>& virtual_eth_cores,
@@ -120,7 +120,7 @@ void watcher_sanitize_host_noc_read(
         lbytes);
 }
 
-void watcher_sanitize_host_noc_write(
+inline void watcher_sanitize_host_noc_write(
     const metal_SocDescriptor& soc_d,
     const std::unordered_set<CoreCoord>& virtual_worker_cores,
     const std::unordered_set<CoreCoord>& virtual_eth_cores,

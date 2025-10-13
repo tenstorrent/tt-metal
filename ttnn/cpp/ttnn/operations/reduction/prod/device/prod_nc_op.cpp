@@ -65,6 +65,7 @@ ttnn::Shape compute_output_shape(const ttnn::Shape& input_shape, const int64_t& 
     switch (dim) {
         case 0:
         case 1: output_shape[dim] = 1; break;
+        default: TT_THROW("Unsupported dim {} for prod nc op", dim);
     }
 
     return output_shape;

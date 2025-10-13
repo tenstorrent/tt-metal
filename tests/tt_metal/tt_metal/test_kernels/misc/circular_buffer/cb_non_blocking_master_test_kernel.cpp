@@ -20,8 +20,8 @@ void kernel_main() {
 
     size_t arg_idx = 0;
 
-    auto master_sem_addr = reinterpret_cast<volatile uint32_t*>(get_semaphore(get_arg_val<uint32_t>(arg_idx++)));
-    auto subordinate_sem_addr = reinterpret_cast<volatile uint32_t*>(get_semaphore(get_arg_val<uint32_t>(arg_idx++)));
+    experimental::Semaphore master_sem(get_arg_val<uint32_t>(arg_idx++));
+    experimental::Semaphore subordinate_sem(get_arg_val<uint32_t>(arg_idx++));
 
     std::array<uint32_t, n_cbs> output_buffer_addrs;
     for (size_t i = 0; i < n_cbs; i++) {
@@ -41,18 +41,16 @@ void kernel_main() {
                 cb.push_back(j);
             }
 
-            noc_semaphore_set(master_sem_addr, 1);
-            noc_semaphore_wait(subordinate_sem_addr, 1);
-            // noc_semaphore_set(subordinate_sem_addr, 0);
+            master_sem.up(1);
+            subordinate_sem.down(1);
             for (int32_t k = 0; k < n_pages; k++) {
                 bool result = cb.pages_reservable_at_back(k);
                 output_buffer[get_idx(j, k)] = static_cast<uint8_t>(result);
             }
 
             // Notify that reader can expect the appropriate number of pages to be available
-            noc_semaphore_set(master_sem_addr, 2);
-            noc_semaphore_wait(subordinate_sem_addr, 2);
-            noc_semaphore_set(subordinate_sem_addr, 0);
+            master_sem.up(1);
+            subordinate_sem.down(1);
 
             // snap back to alignment
             if (j > 0) {

@@ -64,7 +64,7 @@ run_t3000_resnet50_tests() {
 
   echo "LOG_METAL: Running run_t3000_resnet50_tests"
 
-  pytest models/demos/t3000/resnet50/tests/test_perf_e2e_resnet50.py -m "model_perf_t3000" ; fail+=$?
+  pytest models/demos/ttnn_resnet/tests/test_perf_e2e_resnet50.py -m "model_perf_t3000" ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)

@@ -30,6 +30,8 @@ jobs:
             runner-label: BH-DeskBox
           - name: LoudBox unit tests
             runner-label: BH-LoudBox
+          - name: P300 unit tests
+            runner-label: P300-viommu
         test-group:
           - name: fabric 1D unit tests
             cmd: |
@@ -86,7 +88,7 @@ jobs:
         GTEST_OUTPUT: xml:/work/generated/test_reports/
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
-        - /dev/hugepages-1G:/dev/hugepages-1G
+        - ${{ (!contains(inputs.runner-label, 'viommu') && '/dev/hugepages-1G:/dev/hugepages-1G') || '/no_hugepages' }}
       options: "--device /dev/tenstorrent"
     defaults:
       run:
@@ -94,7 +96,7 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@6b36ef848f5f66ba0ae6f883ff69b09692e48ce9
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}

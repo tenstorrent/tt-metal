@@ -226,7 +226,9 @@ class CMakeBuild(build_ext):
             ).exists(), "The precompiled option is selected via `TT_FROM_PRECOMPILED` \
             env var. Please place files into `build/lib` and `runtime` folders."
         else:
-            build_dir = source_dir / "build_Release"
+            # Determine desired build type for wheel builds (e.g., Release, Debug, RelWithDebInfo)
+            build_type = os.environ.get("CIBW_BUILD_TYPE", "Release")
+            build_dir = source_dir / f"build_{build_type}"
             # We indirectly set a wheel build for our CMake build by using BUILD_SHARED_LIBS. This does the following things:
             # - Bundles (most) of our libraries into a static library to deal with a potential singleton bug error with tt_cluster (to fix)
             build_script_args = ["--build-static-libs", "--release"]
@@ -238,8 +240,8 @@ class CMakeBuild(build_ext):
                     build_dir,
                     "-G",
                     "Ninja",
-                    "-DCMAKE_BUILD_TYPE=Release",
-                    "-DCMAKE_INSTALL_PREFIX=build_Release",
+                    f"-DCMAKE_BUILD_TYPE={build_type}",
+                    f"-DCMAKE_INSTALL_PREFIX=build_{build_type}",
                     "-DBUILD_SHARED_LIBS=ON",
                     "-DTT_INSTALL=ON",
                     "-DTT_UNITY_BUILDS=ON",
@@ -362,7 +364,7 @@ class CMakeBuild(build_ext):
             source_dir / "runtime", self.build_lib + "/ttnn/runtime", runtime_patterns, runtime_exclude_files
         )
         copy_tree_with_patterns(source_dir / "ttnn", self.build_lib + "/ttnn", ttnn_patterns)
-        copy_tree_with_patterns(source_dir / "ttnn/cpp", self.build_lib + "/ttnn/cpp", ttnn_cpp_patterns)
+        copy_tree_with_patterns(source_dir / "ttnn/cpp", self.build_lib + "/ttnn/ttnn/cpp", ttnn_cpp_patterns)
         copy_tree_with_patterns(source_dir / "tt_metal", self.build_lib + "/ttnn/tt_metal", tt_metal_patterns)
 
         # Move built final built _ttnn SO into appropriate location in ttnn Python tree in wheel

@@ -12,14 +12,16 @@ on:
       docker-image:
         required: true
         type: string
+      topology:
+        required: true
+        type: string
+      test-script:
+        required: true
+        type: string
       extra-tag:
         required: false
         type: string
         default: "in-service"
-      topology:
-        required: false
-        type: string
-        default: "config-t3000"
 
 jobs:
   profiler-tests:
@@ -54,7 +56,7 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@6b36ef848f5f66ba0ae6f883ff69b09692e48ce9
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
@@ -62,7 +64,7 @@ jobs:
       - name: Run profiler regression tests
         timeout-minutes: 30
         run: |
-          ./tests/scripts/run_profiler_regressions.sh
+          ${{ inputs.test-script }}
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
