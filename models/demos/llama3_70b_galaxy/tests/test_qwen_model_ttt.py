@@ -17,7 +17,6 @@ from models.demos.llama3_70b_galaxy.tt.sampling import TTSampling
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.tt_transformers.tests.test_utils import get_ref_model_dype
 from transformers import AutoTokenizer
-<<<<<<< HEAD
 from models.common.utility_functions import (
     comp_pcc,
     comp_allclose,
@@ -29,32 +28,13 @@ from models.common.utility_functions import (
     "weights, layers, iterations",
     [
         ("instruct", 64, 2048),
-=======
-from models.utility_functions import (
-    comp_pcc,
-    comp_allclose,
-)
-from models.utility_functions import skip_for_grayskull
-
-
-@torch.no_grad()
-@skip_for_grayskull("Requires wormhole_b0 to run")
-@pytest.mark.parametrize(
-    "weights, layers, iterations",
-    [
-        ("instruct", 64, 20),
->>>>>>> bc236880f1 (Resolved merge conflicts)
     ],
     ids=["quick"],
 )
 @pytest.mark.parametrize(
     "sampling_params",
     [
-<<<<<<< HEAD
         {"top_k": 1, "top_p": 0.00, "temperature": 0.0, "seed": 42},
-=======
-        {"top_k": 1, "top_p": 0.00, "temperature": 1.0, "seed": 42},
->>>>>>> bc236880f1 (Resolved merge conflicts)
         # {"top_k": 32, "top_p": 0.9, "temperature": 0.7, "seed": 42}
     ],
 )
@@ -71,11 +51,7 @@ from models.utility_functions import skip_for_grayskull
 )
 @pytest.mark.parametrize(
     "page_params",
-<<<<<<< HEAD
     [{"page_block_size": 64, "page_max_num_blocks": 2048}],
-=======
-    [{"page_block_size": 64, "page_max_num_blocks": 4096}],
->>>>>>> bc236880f1 (Resolved merge conflicts)
 )
 @pytest.mark.parametrize(
     "batch_size",
@@ -83,11 +59,7 @@ from models.utility_functions import skip_for_grayskull
 )
 @pytest.mark.parametrize(
     "max_seq_len",
-<<<<<<< HEAD
     (128 * 1024,),
-=======
-    (2048,),
->>>>>>> bc236880f1 (Resolved merge conflicts)
 )
 @pytest.mark.parametrize(
     "mesh_device",

@@ -635,10 +635,17 @@ class TT_CCL:
             ag_persistent_buffers_all[seqlen] = ag_persistent_buffers
 
         # Additional buffers for fixed lengths (1 Tile = 32)
-        buffers_fixed_length = {
-            "LM_HEAD": [(4, 1, 32, 16384)],
-            "SAMPLING": [(1, 1, 32, 128 * 1024)],
-        }
+        buffers_fixed_length = (
+            {
+                "LM_HEAD": [(4, 1, 32, 16384)],
+                "SAMPLING": [(1, 1, 32, 128 * 1024)],
+            }
+            if not self.use_qwen_mlp
+            else {
+                "LM_HEAD": [(4, 1, 32, 19456)],
+                "SAMPLING": [(1, 1, 32, 155648)],
+            }
+        )
         for key, shape in buffers_fixed_length.items():
             tt_buffer = ttnn.as_tensor(
                 torch.zeros(shape[0]),

@@ -19,24 +19,13 @@ from models.demos.llama3_70b_galaxy.tt.llama_model import TtTransformer
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.tt_transformers.tests.test_utils import get_ref_model_dype
 from transformers import AutoTokenizer
-<<<<<<< HEAD
 from models.common.utility_functions import (
     comp_pcc,
     comp_allclose,
-=======
-from models.utility_functions import (
-    comp_pcc,
-    comp_allclose,
-    skip_for_grayskull,
->>>>>>> bc236880f1 (Resolved merge conflicts)
 )
 
 
 @torch.no_grad()
-<<<<<<< HEAD
-=======
-@skip_for_grayskull("Requires wormhole_b0 to run")
->>>>>>> bc236880f1 (Resolved merge conflicts)
 @pytest.mark.timeout(900)
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
@@ -64,7 +53,6 @@ from models.utility_functions import (
 )
 @pytest.mark.parametrize(
     "seq_len",
-<<<<<<< HEAD
     (2048, 4096, 8192),
     ids=[
         # "128",
@@ -73,23 +61,11 @@ from models.utility_functions import (
         "8192",
         # "32k",
         # "64k",
-=======
-    (128, 2048, 4096, 8192),
-    ids=[
-        "128",
-        "2048",
-        "4096",
-        "8192",
->>>>>>> bc236880f1 (Resolved merge conflicts)
     ],
 )
 @pytest.mark.parametrize(
     "max_seq_len",
-<<<<<<< HEAD
     (131072,),
-=======
-    (190190,),
->>>>>>> bc236880f1 (Resolved merge conflicts)
     ids=[
         "max128k",
     ],
