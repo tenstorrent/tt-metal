@@ -66,10 +66,10 @@ inline std::string get_soc_description_file(
     return path;
 }
 
-std::unique_ptr<tt_ClusterDescriptor> get_mock_cluster_desc(const tt::llrt::RunTimeOptions& rtoptions) {
+std::unique_ptr<ClusterDescriptor> get_mock_cluster_desc(const tt::llrt::RunTimeOptions& rtoptions) {
     TT_FATAL(rtoptions.get_mock_enabled(), "Mock cluster descriptor not enabled");
-    std::unique_ptr<tt_ClusterDescriptor> mock_cluster_desc =
-        tt::umd::tt_ClusterDescriptor::create_from_yaml(rtoptions.get_mock_cluster_desc_path());
+    std::unique_ptr<ClusterDescriptor> mock_cluster_desc =
+        tt::umd::ClusterDescriptor::create_from_yaml(rtoptions.get_mock_cluster_desc_path());
     TT_FATAL(
         mock_cluster_desc != nullptr,
         "Failed to load mock cluster descriptor from {}",
@@ -81,7 +81,7 @@ std::unique_ptr<tt_ClusterDescriptor> get_mock_cluster_desc(const tt::llrt::RunT
 namespace tt {
 
 tt::tt_metal::ClusterType Cluster::get_cluster_type_from_cluster_desc(
-    const llrt::RunTimeOptions& rtoptions, const tt_ClusterDescriptor* cluster_desc) {
+    const llrt::RunTimeOptions& rtoptions, const ClusterDescriptor* cluster_desc) {
     if (rtoptions.get_simulator_enabled() && !rtoptions.get_mock_enabled()) {
         auto soc_desc =
             tt::umd::SimulationDevice::get_soc_descriptor_path_from_simulator_path(rtoptions.get_simulator_path());
@@ -96,7 +96,7 @@ tt::tt_metal::ClusterType Cluster::get_cluster_type_from_cluster_desc(
         return tt::tt_metal::ClusterType::INVALID;
     }
 
-    std::unique_ptr<tt_ClusterDescriptor> temp_cluster_desc = nullptr;
+    std::unique_ptr<ClusterDescriptor> temp_cluster_desc = nullptr;
     if (cluster_desc == nullptr) {
         temp_cluster_desc = rtoptions.get_mock_enabled() ? get_mock_cluster_desc(rtoptions)
                                                          : tt::umd::Cluster::create_cluster_descriptor();
@@ -359,7 +359,7 @@ void Cluster::open_driver(const bool &skip_driver_allocs) {
             .sdesc_path = sdesc_path,
         });
     } else if (this->target_type_ == TargetDevice::Simulator) {
-        std::unique_ptr<tt_ClusterDescriptor> mock_cluster_desc;
+        std::unique_ptr<ClusterDescriptor> mock_cluster_desc;
         if (rtoptions_.get_mock_enabled()) {
             mock_cluster_desc = get_mock_cluster_desc(rtoptions_);
             device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
@@ -379,7 +379,7 @@ void Cluster::open_driver(const bool &skip_driver_allocs) {
     } else if (this->target_type_ == TargetDevice::Mock) {
         // If a cluster descriptor was not provided via constructor, and mock is enabled via rtoptions,
         // load it from the YAML path and pass it into UMD for mock initialization.
-        std::unique_ptr<tt_ClusterDescriptor> mock_cluster_desc = get_mock_cluster_desc(rtoptions_);
+        std::unique_ptr<ClusterDescriptor> mock_cluster_desc = get_mock_cluster_desc(rtoptions_);
 
         device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
             .chip_type = tt::umd::ChipType::MOCK,

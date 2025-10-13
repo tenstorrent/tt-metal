@@ -64,7 +64,7 @@ class Cluster {
 public:
     // TODO: #21245: Remove these workaround APIs and instead refactor UMD component out of Cluster
     static tt::tt_metal::ClusterType get_cluster_type_from_cluster_desc(
-        const llrt::RunTimeOptions& rtoptions, const tt_ClusterDescriptor* cluster_desc = nullptr);
+        const llrt::RunTimeOptions& rtoptions, const ClusterDescriptor* cluster_desc = nullptr);
     static bool is_base_routing_fw_enabled(tt::tt_metal::ClusterType cluster_type);
     Cluster& operator=(const Cluster&) = delete;
     Cluster& operator=(Cluster&& other) noexcept = delete;
@@ -90,7 +90,7 @@ public:
 
     std::set<ChipId> all_pci_chip_ids() const { return this->driver_->get_target_mmio_device_ids(); }
 
-    tt_ClusterDescriptor* get_cluster_desc() const {
+    ClusterDescriptor* get_cluster_desc() const {
         TT_FATAL(this->cluster_desc_ != nullptr, "Cluster descriptor is not initialized.");
         return this->cluster_desc_;
     }
@@ -382,7 +382,7 @@ private:
     // Need to hold reference to cluster descriptor to detect total number of devices available in cluster
     // UMD static APIs `detect_available_device_ids` and `detect_number_of_chips` only returns number of MMIO mapped
     // devices
-    tt_ClusterDescriptor* cluster_desc_ = nullptr;
+    ClusterDescriptor* cluster_desc_ = nullptr;
 
     // There is an entry for every device that can be targeted (MMIO and remote)
     std::unordered_map<ChipId, metal_SocDescriptor> sdesc_per_chip_;

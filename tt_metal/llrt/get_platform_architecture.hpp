@@ -21,7 +21,7 @@ inline tt::ARCH get_physical_architecture() {
     static tt::ARCH current_arch = tt::ARCH::Invalid;
     static std::once_flag current_arch_once_flag;
     std::call_once(current_arch_once_flag, []() {
-        // Issue tt_umd#361: tt_ClusterDescriptor::create() won't work here.
+        // Issue tt_umd#361: ClusterDescriptor::create() won't work here.
         // This map holds PCI info for each mmio chip.
         auto devices_info = PCIDevice::enumerate_devices_info();
         if (!devices_info.empty()) {
@@ -78,7 +78,7 @@ inline tt::ARCH get_platform_architecture(const tt::llrt::RunTimeOptions& rtopti
     auto arch = tt::ARCH::Invalid;
     // If running in mock mode, derive architecture from provided cluster descriptor
     if (rtoptions.get_target_device() == tt::TargetDevice::Mock) {
-        auto cluster_desc = tt::umd::tt_ClusterDescriptor::create_from_yaml(rtoptions.get_mock_cluster_desc_path());
+        auto cluster_desc = tt::umd::ClusterDescriptor::create_from_yaml(rtoptions.get_mock_cluster_desc_path());
         if (cluster_desc && cluster_desc->get_number_of_chips() > 0) {
             auto chips = cluster_desc->get_all_chips();
             arch = cluster_desc->get_arch(*chips.begin());
