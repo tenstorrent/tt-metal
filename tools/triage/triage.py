@@ -5,7 +5,7 @@
 
 """
 Usage:
-    triage [--initialize-with-noc1] [--remote-exalens] [--remote-server=<remote-server>] [--remote-port=<remote-port>] [--verbosity=<verbosity>] [--run=<script>]... [--skip-version-check]
+    triage [--initialize-with-noc1] [--remote-exalens] [--remote-server=<remote-server>] [--remote-port=<remote-port>] [--verbosity=<verbosity>] [--run=<script>]... [--skip-version-check] [-v ...]
 
 Options:
     --remote-exalens                 Connect to remote exalens server.
@@ -15,6 +15,11 @@ Options:
     --verbosity=<verbosity>          Choose output verbosity. 1: ERROR, 2: WARN, 3: INFO, 4: VERBOSE, 5: DEBUG. [default: 3]
     --run=<script>                   Run specific script(s) by name. If not provided, all scripts will be run. [default: all]
     --skip-version-check             Do not enforce debugger version check. [default: False]
+    -v                               Increase verbosity level (can be repeated: -v, -vv, -vvv).
+                                     Controls which columns/fields are displayed:
+                                     Level 0 (default): Essential fields (Kernel ID:Name, Go Message, Subdevice, Preload, Waypoint, PC, Callstack)
+                                     Level 1 (-v): Include detailed dispatcher fields (Firmware/Kernel Path, Host Assigned ID, Kernel Offset, Previous Kernel)
+                                     Level 2 (-vv): Include internal debug fields (RD PTR, Base, Offset)
 
 Description:
     Diagnoses Tenstorrent AI hardware by performing comprehensive health checks on ARC processors, NOC connectivity, L1 memory, and RISC-V cores.
@@ -142,14 +147,14 @@ def collection_serializer(separator: str):
     return serializer
 
 
-def triage_field(serialized_name: str | None = None, serializer: Callable[[Any], str] | None = None):
+def triage_field(serialized_name: str | None = None, serializer: Callable[[Any], str] | None = None, verbose: int = 0):
     if serializer is None:
         serializer = default_serializer
-    return field(metadata={"recurse": False, "serialized_name": serialized_name, "serializer": serializer})
+    return field(metadata={"recurse": False, "serialized_name": serialized_name, "serializer": serializer, "verbose": verbose})
 
 
 def combined_field(
-    additional_fields: str | list[str] | None = None, serialized_name: str | None = None, serializer=None
+    additional_fields: str | list[str] | None = None, serialized_name: str | None = None, serializer=None, verbose: int = 0
 ):
     if additional_fields is None and serialized_name is None and serializer is None:
         return field(metadata={"recurse": False, "dont_serialize": True})
@@ -167,12 +172,32 @@ def combined_field(
             "additional_fields": additional_fields,
             "serialized_name": serialized_name,
             "serializer": serializer,
+            "verbose": verbose,
         }
     )
 
 
-def recurse_field():
-    return field(metadata={"recurse": True})
+def recurse_field(verbose: int = 0):
+    return field(metadata={"recurse": True, "verbose": verbose})
+
+
+# Module-level flag to control verbose field output
+# Level 0 (default): Essential fields for triage
+# Level 1 (-v): Include detailed fields
+# Level 2 (-vv): Include internal debug fields
+_verbose_level = 0
+
+
+def set_verbose_level(level: int):
+    """Set the global verbose level for field serialization."""
+    global _verbose_level
+    _verbose_level = level
+
+
+def get_verbose_level() -> int:
+    """Get the current verbose level for field serialization."""
+    global _verbose_level
+    return _verbose_level
 
 
 @dataclass
@@ -429,6 +454,9 @@ def serialize_result(script: TriageScript | None, result):
         def generate_header(header: list[str], obj, flds):
             for field in flds:
                 metadata = field.metadata
+                # Skip field if it requires higher verbosity level
+                if metadata.get("verbose", 0) > _verbose_level:
+                    continue
                 if "dont_serialize" in metadata and metadata["dont_serialize"]:
                     continue
                 elif "recurse" in metadata and metadata["recurse"]:
@@ -441,6 +469,9 @@ def serialize_result(script: TriageScript | None, result):
         def generate_row(row: list[str], obj, flds):
             for field in flds:
                 metadata = field.metadata
+                # Skip field if it requires higher verbosity level
+                if metadata.get("verbose", 0) > _verbose_level:
+                    continue
                 if "dont_serialize" in metadata and metadata["dont_serialize"]:
                     continue
                 elif "recurse" in metadata and metadata["recurse"]:

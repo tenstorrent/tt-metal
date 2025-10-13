@@ -5,22 +5,23 @@
 
 """
 Usage:
-    dump_callstacks [--full-callstack] [--gdb-callstack] [--show-details] [--color]
+    dump_callstacks [--full-callstack] [--gdb-callstack] [--all-cores]
 
 Options:
     --full-callstack   Dump full callstack with all frames. Defaults to dumping only the top frame.
     --gdb-callstack    Dump callstack using GDB client instead of built-in methods.
-    --show-details     Show verbose fields (RD PTR, Base, Offset, firmware/kernel paths).
-    --color            Enable colored output for callstacks. Disabled by default.
+    --all-cores        Show all cores including ones with Go Message = DONE. By default, DONE cores are filtered out.
 
 Description:
     Dumps callstacks for all devices in the system and for every supported risc processor.
-    By default shows: Kernel ID:Name, Go Message, Subdevice, Preload, Waypoint, PC, and Callstack.
-    Use --show-details to see all dispatcher data fields.
+    By default, filters out cores with DONE status and shows essential fields.
+    Use --all-cores to see all cores, and -v/-vv to show more columns.
+
+    Color output is automatically enabled when stdout is a TTY (terminal) and can be overridden
+    with TT_TRIAGE_COLOR environment variable (0=disable, 1=enable).
 """
 
 from dataclasses import dataclass
-from functools import partial
 
 from triage import ScriptConfig, TTTriageError, log_check, recurse_field, triage_field, hex_serializer, run_script
 from dispatcher_data import run as get_dispatcher_data, DispatcherData, DispatcherCoreData
@@ -31,7 +32,7 @@ from ttexalens.context import Context
 from ttexalens.gdb.gdb_server import GdbServer, ServerSocket
 from ttexalens.hardware.risc_debug import CallstackEntry, ParsedElfFile
 from ttexalens.tt_exalens_lib import top_callstack, callstack
-from utils import BLUE, GREEN, ORANGE, RED, RST
+from utils import BLUE, GREEN, ORANGE, RED, RST, should_use_color
 
 import re
 import socket
@@ -43,6 +44,9 @@ from pathlib import Path
 script_config = ScriptConfig(
     depends=["run_checks", "dispatcher_data", "elfs_cache"],
 )
+
+# Module-level flag to control color output in callstacks
+_color_enabled = False
 
 
 def get_process_ids(gdb_server: GdbServer):
@@ -269,57 +273,39 @@ def _format_callstack(callstack: list[CallstackEntry], color: bool = False) -> l
     return result
 
 
-def format_callstack_with_message(callstack_with_message: KernelCallstackWithMessage, color: bool = False) -> str:
+def format_callstack_with_message(callstack_with_message: KernelCallstackWithMessage) -> str:
     """Return string representation of the callstack with optional error message. Adding empty line at the beginning for prettier look."""
     empty_line = ""  # For prettier look
 
     # Set color codes based on color flag
-    error_color = RED if color else ""
-    reset = RST if color else ""
+    error_color = RED if _color_enabled else ""
+    reset = RST if _color_enabled else ""
 
     if callstack_with_message.message is not None:
         return "\n".join(
             [f"{error_color}{callstack_with_message.message}{reset}"]
-            + _format_callstack(callstack_with_message.callstack, color)
+            + _format_callstack(callstack_with_message.callstack, _color_enabled)
         )
     else:
-        return "\n".join([empty_line] + _format_callstack(callstack_with_message.callstack, color))
+        return "\n".join([empty_line] + _format_callstack(callstack_with_message.callstack, _color_enabled))
 
 
-def _make_dump_callstacks_data_class(color: bool):
-    """Factory function to create DumpCallstacksData class with color-aware serializer."""
+@dataclass
+class DumpCallstacksData:
+    """Callstack data with verbosity levels.
 
-    @dataclass
-    class DumpCallstacksData:
-        """Callstack data showing essential fields: Kernel ID:Name, Go Message, Subdevice, Preload, Waypoint, PC, and Callstack."""
+    Level 0: Essential fields (Kernel ID:Name, Go Message, Subdevice, Preload, Waypoint, PC, Callstack)
+    Level 1+: Includes all dispatcher core data fields
+    """
 
-        kernel_id_name: str = triage_field("Kernel ID:Name")
-        go_message: str = triage_field("Go Message")
-        subdevice: int = triage_field("Subdevice")
-        preload: bool = triage_field("Preload")
-        waypoint: str = triage_field("Waypoint")
-        pc: int | None = triage_field("PC", hex_serializer)
-        kernel_callstack_with_message: KernelCallstackWithMessage = triage_field(
-            "Kernel Callstack", partial(format_callstack_with_message, color=color)
-        )
+    # Recurse into dispatcher core data (fields have their own verbose levels)
+    dispatcher_core_data: DispatcherCoreData = recurse_field()
 
-    return DumpCallstacksData
-
-
-def _make_dump_callstacks_data_verbose_class(color: bool):
-    """Factory function to create DumpCallstacksDataVerbose class with color-aware serializer."""
-
-    @dataclass
-    class DumpCallstacksDataVerbose:
-        """Verbose callstack data showing all dispatcher fields."""
-
-        dispatcher_core_data: DispatcherCoreData = recurse_field()
-        pc: int | None = triage_field("PC", hex_serializer)
-        kernel_callstack_with_message: KernelCallstackWithMessage = triage_field(
-            "Kernel Callstack", partial(format_callstack_with_message, color=color)
-        )
-
-    return DumpCallstacksDataVerbose
+    # Always show PC and callstack
+    pc: int | None = triage_field("PC", hex_serializer)
+    kernel_callstack_with_message: KernelCallstackWithMessage = triage_field(
+        "Kernel Callstack", format_callstack_with_message
+    )
 
 
 def dump_callstacks(
@@ -331,21 +317,21 @@ def dump_callstacks(
     gdb_callstack: bool,
     gdb_server: GdbServer | None,
     process_ids: dict[OnChipCoordinate, dict[str, int]] | None,
-    show_details: bool = False,
-    color: bool = False,
-):
-    # Get the appropriate dataclass with color-aware serializer
-    DumpCallstacksData = _make_dump_callstacks_data_class(color)
-    DumpCallstacksDataVerbose = _make_dump_callstacks_data_verbose_class(color)
+    show_all_cores: bool = False,
+) -> DumpCallstacksData | None:
+    result: DumpCallstacksData | None = None
 
-    result = None
+    # Set color codes based on color flag
+    error_color = ORANGE if _color_enabled else ""
+    reset = RST if _color_enabled else ""
 
     try:
         dispatcher_core_data = dispatcher_data.get_core_data(location, risc_name)
 
-        # In default mode (not show_details), filter out DONE cores
-        if not show_details and dispatcher_core_data.go_message == "DONE":
+        # Skip DONE cores unless --all-cores is specified
+        if not show_all_cores and dispatcher_core_data.go_message == "DONE":
             return result
+
         risc_debug = location._device.get_block(location).get_risc_debug(risc_name)
         if risc_debug.is_in_reset():
             return DumpCallstacksData(
@@ -400,33 +386,19 @@ def dump_callstacks(
                 location, risc_name, dispatcher_core_data, elfs_cache, full_callstack
             )
 
-        if show_details:
-            result = DumpCallstacksDataVerbose(
-                dispatcher_core_data=dispatcher_core_data,
-                pc=callstack_with_message.callstack[0].pc
-                if len(callstack_with_message.callstack) > 0
-                else location._device.get_block(location).get_risc_debug(risc_name).get_pc(),
-                kernel_callstack_with_message=callstack_with_message,
-            )
-        else:
-            # Build kernel ID:Name string
-            kernel_id_name = f"{dispatcher_core_data.watcher_kernel_id}:{dispatcher_core_data.kernel_name or 'N/A'}"
-            result = DumpCallstacksData(
-                kernel_id_name=kernel_id_name,
-                go_message=dispatcher_core_data.go_message,
-                subdevice=dispatcher_core_data.subdevice,
-                preload=dispatcher_core_data.preload,
-                waypoint=dispatcher_core_data.waypoint,
-                pc=callstack_with_message.callstack[0].pc
-                if len(callstack_with_message.callstack) > 0
-                else location._device.get_block(location).get_risc_debug(risc_name).get_pc(),
-                kernel_callstack_with_message=callstack_with_message,
-            )
+        # Create result with dispatcher core data (verbose levels handled in serialization)
+        result = DumpCallstacksData(
+            dispatcher_core_data=dispatcher_core_data,
+            pc=callstack_with_message.callstack[0].pc
+            if len(callstack_with_message.callstack) > 0
+            else location._device.get_block(location).get_risc_debug(risc_name).get_pc(),
+            kernel_callstack_with_message=callstack_with_message,
+        )
 
     except Exception as e:
         log_check(
             False,
-            f"{ORANGE}Failed to dump callstacks for {risc_name} at {location} on device {location._device._id}: {e}{RST}",
+            f"{error_color}Failed to dump callstacks for {risc_name} at {location} on device {location._device._id}: {e}{reset}",
         )
         return result
 
@@ -467,10 +439,20 @@ def start_gdb_server(port: int, context: Context) -> GdbServer:
 
 
 def run(args, context: Context):
+    global _color_enabled
+    from triage import set_verbose_level
+
     full_callstack = args["--full-callstack"]
     gdb_callstack = args["--gdb-callstack"]
-    show_details = args["--show-details"]
-    color = args["--color"]
+    show_all_cores = args["--all-cores"]
+
+    # Set verbose level from -v count (controls which columns are displayed)
+    verbose_level = args["-v"]
+    set_verbose_level(verbose_level)
+
+    # Set color mode
+    _color_enabled = should_use_color()
+
     BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth"]
     elfs_cache = get_elfs_cache(args, context)
     run_checks = get_run_checks(args, context)
@@ -495,8 +477,7 @@ def run(args, context: Context):
             gdb_callstack,
             gdb_server,
             process_ids,
-            show_details,
-            color,
+            show_all_cores,
         ),
         block_filter=BLOCK_TYPES_TO_CHECK,
     )

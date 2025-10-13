@@ -2,6 +2,9 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+import sys
+
 # Colors for terminal output
 RST = "\033[0m"
 BLUE = "\033[34m"  # For good values
@@ -10,6 +13,26 @@ GREEN = "\033[32m"  # For instructions
 GREY = "\033[37m"  # For general information
 ORANGE = "\033[33m"  # For warnings
 VERBOSE_CLR = "\033[94m"  # For verbose output
+
+
+def should_use_color() -> bool:
+    """
+    Determine if color output should be enabled based on environment.
+
+    Returns:
+        bool: True if colors should be used, False otherwise.
+
+    Checks:
+        - TT_TRIAGE_COLOR environment variable (0 = disabled, other values = enabled)
+        - Whether stdout is connected to a TTY (terminal)
+    """
+    # Respect TT_TRIAGE_COLOR environment variable
+    color_env = os.environ.get("TT_TRIAGE_COLOR")
+    if color_env is not None:
+        return color_env != "0"
+
+    # Check if output is going to a terminal
+    return sys.stdout.isatty()
 
 
 # Tabulate format for displaying tables
