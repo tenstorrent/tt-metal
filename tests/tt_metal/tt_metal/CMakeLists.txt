@@ -41,6 +41,7 @@ set(TT_METAL_TESTS_SRCS
     test_untilize_eltwise_binary.cpp
     #test dma unaligned reads/writes
     test_unaligned_read_write_core.cpp
+    test_sdpa_sub_exp.cpp
 )
 
 foreach(TEST_SRC ${TT_METAL_TESTS_SRCS})
