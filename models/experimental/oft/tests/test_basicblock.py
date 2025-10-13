@@ -74,17 +74,20 @@ def test_tt_topdown_network(device, n, in_ch, out_ch, h, w, stride, sharding, is
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 8 * 1024}], indirect=True)
-def test_tt_basicblock(device, n, in_ch, out_ch, h, w, stride, sharding, is_sliced):
+def test_tt_basicblock_single(device, n, in_ch, out_ch, h, w, stride, sharding, is_sliced):
     skip_if_not_blackhole_20_cores(device)
     torch.manual_seed(42)
     input_tensor = torch.randn(n, in_ch, h, w)
     torch_model = BasicBlock(inplanes=in_ch, planes=out_ch, stride=stride)
 
     out = torch_model.forward(input_tensor)
-    params = create_OFT_model_parameters_resnet(torch_model, input_tensor, device)
-    block = TTBasicBlock(
-        device, params, params.conv_args, inplanes=in_ch, planes=out_ch, stride=stride, is_sliced=is_sliced
-    )
+    state_dict = create_OFT_model_parameters_resnet(torch_model, input_tensor, device)
+
+    # Apply model optimizations
+    model_opt = ModelOptimizations()
+    model_opt.apply(state_dict, "topdown.0")  # to update path to real one
+
+    block = TTBasicBlock(device, state_dict, state_dict.layer_args, stride=stride, is_sliced=is_sliced)
 
     n, c, h, w = input_tensor.shape
     x_for_ttnn = input_tensor.permute(0, 2, 3, 1).view(1, 1, n * h * w, c)
