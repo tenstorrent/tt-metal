@@ -498,6 +498,6 @@ jobs:
         if: ${{ failure() && github.event_name == 'schedule' }}
         with:
           slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: U052J2QDDKQ # Pavle Josipovic
+          owner: U07RNEH2NR4 # Wenbin Lyu
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
