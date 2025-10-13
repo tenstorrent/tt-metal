@@ -18,7 +18,6 @@ uint32_t round_down(uint32_t value, uint32_t multiple) {
     return value;
 }
 
-#define DEBUG
 void kernel_main() {
     const uint32_t total_num_tiles = get_arg_val<uint32_t>(0);
     const uint32_t num_tiles_per_read = get_arg_val<uint32_t>(1);

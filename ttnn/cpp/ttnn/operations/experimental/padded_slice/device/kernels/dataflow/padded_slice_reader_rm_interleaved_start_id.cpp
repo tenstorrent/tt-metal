@@ -34,7 +34,7 @@ void kernel_main() {
 
     uint32_t src_stick_id = start_id;
     uint32_t sticks_read = 0;
-#define DEBUG
+
 #ifdef DEBUG
     DPRINT << "src_addr: " << src_addr << ", padded_stick_size: " << padded_stick_size
            << ", unpadded_stick_size: " << unpadded_stick_size << ", stick_size_offset: " << stick_size_offset

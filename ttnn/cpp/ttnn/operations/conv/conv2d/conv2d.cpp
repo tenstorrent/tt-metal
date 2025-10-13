@@ -359,10 +359,34 @@ Result conv2d_DRAM(
             dram_slice_config.num_slices,
             output_sliced_dim);
     }
-
+    if (dram_slice_config.num_slices == 1) {
+        ttnn::Tensor output_tensor;
+        std::tie(output_tensor, std::ignore, std::ignore, weight_tensor_on_device, bias_tensor_on_device) = conv2d_L1(
+            input_tensor_on_device,
+            // TODO: Add check to ensure that the shard_layout and memory_config are the same as the last slice to
+            // re-use the weights tensor.
+            // TODO: Add caching mechanism for multiple weights tensors, depending on the memory configs.
+            weight_tensor,
+            device,
+            in_channels,
+            out_channels,
+            batch_size,
+            input_height,
+            input_width,
+            kernel_size,
+            stride,
+            padding_n4,
+            dilation,
+            groups,
+            output_dtype,
+            bias_tensor,
+            conv_config,
+            compute_config_,
+            DRAM_MEMORY_CONFIG);
+        return {output_tensor, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
+    }
     const auto unflattened_input_shape = ttnn::Shape{batch_size, input_height, input_width, in_channels};
     input_tensor_on_device = ttnn::reshape(input_tensor_on_device, unflattened_input_shape, unflattened_input_shape);
-
     TT_FATAL(input_tensor_on_device.memory_config().is_dram(), "Conv DRAM expects the input tensor to be in DRAM.");
     TT_FATAL(
         input_tensor_on_device.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
@@ -609,6 +633,7 @@ Result conv2d_DRAM(
         first_run = false;
         output_slice_dim_start += output_slice_size;
         slice_index++;
+        // return {dram_output_tensor, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
     }
 
     if (conv_config.deallocate_activation) {
@@ -845,9 +870,6 @@ Result conv2d_L1(
 
         if (bypass_halo) {
             if (input_tensor_post_tm.layout() == Layout::TILE) {
-                // Reshape is used as a workaround to an issue in to_layout mentioned here :
-                // https://github.com/tenstorrent/tt-metal/issues/16330
-                input_tensor_post_tm = ttnn::reshape(input_tensor_post_tm, input_tensor_post_tm.padded_shape());
                 input_tensor_post_tm = ttnn::to_layout(input_tensor_post_tm, Layout::ROW_MAJOR);
             }
         } else {

@@ -118,7 +118,7 @@ get_padded_slice_runtime_args_rm_sharded_output(
     auto dst_buffer_alignment = output_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
                                     ? hal::get_dram_alignment()
                                     : hal::get_l1_alignment();
-    // auto alignment = std::max(src_buffer_alignment, dst_buffer_alignment);
+
     uint32_t begins_bytes = output_tensor_start[-1] * input_tensor.element_size();
     uint32_t misalignment = begins_bytes % src_buffer_alignment;
 

@@ -397,7 +397,7 @@ Conv2dBlockConfig determine_per_core_conv_block_config(
             } else {
                 act_block_h_ntiles =
                     find_closest_largest_divisor(padded_output_height_ntiles_per_core, act_block_h_override_ntiles);
-                log_info(
+                log_warning(
                     tt::LogOp,
                     "act_block_h_override {} is not a valid override for padded_output_height_ntiles_per_core {}, "
                     "instead {} was selected as closest valid option!",
@@ -510,12 +510,6 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig> determine_input_memory_config(
     std::optional<uint32_t> act_block_h_override) {
     const uint32_t input_channels_alignment = get_input_channels_alignment(
         shard_layout, input_tensor_layout, input_tensor_buffer_type, is_mm_conv, std::nullopt);
-    log_info(
-        tt::LogOp,
-        "Input channels alignment: {}, Shard Layout {} , Buffer Type {}",
-        input_channels_alignment,
-        shard_layout,
-        input_tensor_buffer_type);
     ParallelConfig parallel_config;
     if (input_tensor_parallel_config.has_value()) {
         parallel_config = input_tensor_parallel_config.value();
@@ -1183,7 +1177,8 @@ static std::pair<uint32_t, Conv2dConfig> calculate_conv_dram_slice_L1_usage(
     auto compute_l1_usage_for_slice = [&](uint32_t input_slice_height,
                                           uint32_t input_slice_width,
                                           uint32_t output_slice_height,
-                                          uint32_t output_slice_width) {
+                                          uint32_t output_slice_width,
+                                          uint32_t num_slices) {
         log_trace(
             tt::LogOp,
             "Conv2D DRAM Auto Slice Max Input Size : {}x{}, Max Output Size : {}x{}",
@@ -1229,7 +1224,7 @@ static std::pair<uint32_t, Conv2dConfig> calculate_conv_dram_slice_L1_usage(
             params.mm_conv,
             device->compute_with_storage_grid_size(),
             params.input_layout,
-            BufferType::DRAM,
+            num_slices == 1 ? BufferType::L1 : BufferType::DRAM,
             std::nullopt,
             conv_config.act_block_h_override));
 
@@ -1267,7 +1262,7 @@ static std::pair<uint32_t, Conv2dConfig> calculate_conv_dram_slice_L1_usage(
         const uint32_t input_channels_alignment = get_input_channels_alignment(
             conv_config.shard_layout.value(),
             conv_config.output_layout,
-            BufferType::DRAM,
+            num_slices == 1 ? BufferType::L1 : BufferType::DRAM,
             params.mm_conv,
             std::nullopt);
         const uint32_t in_channels_padded = tt::round_up(
@@ -1408,8 +1403,12 @@ static std::pair<uint32_t, Conv2dConfig> calculate_conv_dram_slice_L1_usage(
             input_slice_height_end,
             input_slice_width_end);
 
-        auto [this_slice_l1_usage, this_slice_input_size, this_slice_approx_max_halo_size] =
-            compute_l1_usage_for_slice(input_slice_height, input_slice_width, output_slice_height, output_slice_width);
+        auto [this_slice_l1_usage, this_slice_input_size, this_slice_approx_max_halo_size] = compute_l1_usage_for_slice(
+            input_slice_height,
+            input_slice_width,
+            output_slice_height,
+            output_slice_width,
+            dram_slice_config.num_slices);
 
         output_slice_dim_start += output_slice_size;
         slice_index++;
