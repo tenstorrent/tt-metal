@@ -289,7 +289,7 @@ static operation::ProgramWithCallbacks padded_slice_rm_multi_core(
                 .set_page_size(temp_pad_cb_index, output_row_size_bytes);
         tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_temp_pad_config);
     } else {
-        non_aligned_temp_cb_index = temp_pad_cb_index;  // Use the unused temp pad index so that CBs are continous.
+        non_aligned_temp_cb_index = temp_pad_cb_index;  // Use the unused temp pad index so that CBs are continuous.
     }
     if (is_non_aligned) {
         tt::tt_metal::create_cb(
