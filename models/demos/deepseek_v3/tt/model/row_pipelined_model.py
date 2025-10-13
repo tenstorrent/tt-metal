@@ -73,7 +73,7 @@ class RowPipelinedModel(SharedStateAddOn, AbstractModule):
                     mesh_device,
                 )
                 for meta_layer_idx, layer_indices in enumerate(
-                    tqdm(mlp_meta_layer_indices, desc="Converting MLP layers", leave=False)
+                    tqdm(mlp_meta_layer_indices, desc="Converting MLP multi-layer blocks")
                 )
             ],
             "moe_decoder_block": [
@@ -84,7 +84,7 @@ class RowPipelinedModel(SharedStateAddOn, AbstractModule):
                     mesh_device,
                 )
                 for meta_layer_idx, layer_indices in enumerate(
-                    tqdm(moe_meta_layer_indices, desc="Converting MoE layers", leave=False)
+                    tqdm(moe_meta_layer_indices, desc="Converting MoE multi-layer blocks")
                 )
             ],
             "norm": DistributedRMSNorm.convert_weights(
