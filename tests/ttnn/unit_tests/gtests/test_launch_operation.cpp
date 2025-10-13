@@ -43,6 +43,7 @@ Tensor make_tensor_with_num_shards(int num_device_shards, MeshDevice* mesh_devic
         *mesh_device);
 }
 
+// Returns a dummy device tensor distributed according to the `mapper_config`.
 Tensor make_tensor_with_mapper_config(
     int num_device_shards, MeshDevice* mesh_device, distributed::MeshMapperConfig mapper_config) {
     auto mapper = distributed::create_mesh_mapper(*mesh_device, mapper_config);
@@ -318,23 +319,39 @@ TEST_F(LaunchOperation2x4Test, OutputTensorTopology) {
 }
 
 TEST_F(LaunchOperation2x4Test, OutputTensorTopologyAugmentedDistribution) {
-    auto input_tensor_1 = make_tensor_with_num_shards(8, mesh_device_.get());
+    auto config_1 = distributed::MeshMapperConfig{
+        .placements = {distributed::MeshMapperConfig::Shard{0}, distributed::MeshMapperConfig::Replicate{}},
+        .mesh_shape_override = MeshShape(2, 2),
+    };
+    auto input_tensor_1 = make_tensor_with_mapper_config(4, mesh_device_.get(), config_1);
     auto config_2 = distributed::MeshMapperConfig{
         .placements = {distributed::MeshMapperConfig::Replicate{}, distributed::MeshMapperConfig::Shard{0}},
-        .mesh_shape_override = MeshShape(2, 4),
+        .mesh_shape_override = MeshShape(1, 4),
     };
     auto input_tensor_2 = make_tensor_with_mapper_config(8, mesh_device_.get(), config_2);
+    auto config_3 = distributed::MeshMapperConfig{
+        .placements = {distributed::MeshMapperConfig::Shard{0}},
+        .mesh_shape_override = MeshShape(8),
+    };
+    auto input_tensor_3 = make_tensor_with_mapper_config(16, mesh_device_.get(), config_3);
+
     auto sum_1 = ttnn::add(input_tensor_1, input_tensor_2);
     auto sum_2 = ttnn::add(input_tensor_2, input_tensor_1);
+    auto sum_3 = ttnn::add(input_tensor_3, input_tensor_2);
 
-    EXPECT_EQ(sum_1.tensor_topology().distribution_shape(), MeshShape(8, 4));
+    EXPECT_EQ(sum_1.tensor_topology().distribution_shape(), MeshShape(2, 4));
     EXPECT_EQ(
         sum_1.tensor_topology().placements(),
         (tt::stl::SmallVector<distributed::MeshMapperConfig::Placement>{
             distributed::MeshMapperConfig::Shard{0}, distributed::MeshMapperConfig::Replicate{}}));
-    EXPECT_EQ(sum_2.tensor_topology().distribution_shape(), MeshShape(8, 4));
+    EXPECT_EQ(sum_2.tensor_topology().distribution_shape(), MeshShape(2, 4));
     EXPECT_EQ(
         sum_2.tensor_topology().placements(),
+        (tt::stl::SmallVector<distributed::MeshMapperConfig::Placement>{
+            distributed::MeshMapperConfig::Replicate{}, distributed::MeshMapperConfig::Shard{0}}));
+    EXPECT_EQ(sum_3.tensor_topology().distribution_shape(), MeshShape(1, 4));
+    EXPECT_EQ(
+        sum_3.tensor_topology().placements(),
         (tt::stl::SmallVector<distributed::MeshMapperConfig::Placement>{
             distributed::MeshMapperConfig::Replicate{}, distributed::MeshMapperConfig::Shard{0}}));
 }

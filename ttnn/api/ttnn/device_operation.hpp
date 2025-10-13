@@ -349,87 +349,95 @@ void launch_operation_with_adapter(
     }
 }
 
-// Default TensorTopology for output tensors will have the same distribution shape as the input tensor with the greatest
-// distribution rank (highest number of dimensions). The placement for each distribution dimension will be Shard if at
-// least one input tensor has a Shard placement for that dimension, otherwise it will be Replicate. Duplicate Shard
-// placements are disallowed, Replicate is used instead.
+// Default TensorTopology for output tensors is determined only by the input tensors with the highest distribution rank
+// (highest number of dimensions). The output tensor will have the same distribution rank as these input tensors, taking
+// the max strides of all input tensors. The placement for each distribution dimension will be Shard if at least one
+// input tensor has a Shard placement for that dimension, otherwise it will be Replicate. Duplicate Shard placements are
+// disallowed, Replicate is used instead. If two input tensors shard different tensor dimensions across the same
+// distribution dimension, the earlier-seen shard dimension is kept.
 template <DeviceOperationConcept device_operation_t>
 std::pair<
     tt::stl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement>,
     tt::tt_metal::distributed::MeshShape>
 get_output_placements_and_shape(
     const typename device_operation_t::tensor_args_t& tensor_args, const Tensor& first_tensor) {
-    auto initial_shape = first_tensor.tensor_topology().distribution_shape();
-    auto result_strides = tt::stl::SmallVector<uint32_t>(initial_shape.cbegin(), initial_shape.cend());
-    tt::tt_metal::distributed::MeshShape result_shape;
-    auto result_placements = first_tensor.tensor_topology().placements();
-    std::unordered_set<int> shard_dims;
+    size_t max_distribution_rank = 0;
     tt::stl::reflection::visit_object_of_type<Tensor>(
         [&](const Tensor& tensor) {
-            // Augment output tensor distribution shape with the max strides and max distribution rankof all input
-            // tensors
+            max_distribution_rank =
+                std::max(max_distribution_rank, tensor.tensor_topology().distribution_shape().dims());
+        },
+        tensor_args);
+
+    auto result_strides = tt::stl::SmallVector<uint32_t>(max_distribution_rank, 1);
+    auto result_placements = tt::stl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement>(
+        max_distribution_rank, tt::tt_metal::distributed::MeshMapperConfig::Replicate{});
+    std::unordered_set<int> shard_dims;
+    bool dim_mismatch = false;
+    tt::stl::reflection::visit_object_of_type<Tensor>(
+        [&](const Tensor& tensor) {
+            // Augment output tensor distribution shape with the max strides of all input tensors with the max
+            // distribution rank
             const auto& tensor_distribution_shape = tensor.tensor_topology().distribution_shape();
-            int i = 0;
-            for (; i < std::min(result_strides.size(), tensor_distribution_shape.dims()); i++) {
-                result_strides[i] = std::max(result_strides[i], tensor_distribution_shape[i]);
-            }
-            if (i < tensor_distribution_shape.dims()) {
-                for (int j = i; j < tensor_distribution_shape.dims(); j++) {
-                    result_strides.push_back(tensor_distribution_shape[j]);
+            if (tensor_distribution_shape.dims() == max_distribution_rank) {
+                for (int i = 0; i < std::min(result_strides.size(), tensor_distribution_shape.dims()); i++) {
+                    result_strides[i] = std::max(result_strides[i], tensor_distribution_shape[i]);
                 }
-            }
-            result_shape = tt::tt_metal::distributed::MeshShape(result_strides);
 
-            const auto& tensor_placements = tensor.tensor_topology().placements();
-            for (int i = 0; i < tensor_placements.size(); i++) {
-                // Augmented dim placements initially assumed to be Replicate
-                tt::tt_metal::distributed::MeshMapperConfig::Placement output_placement =
-                    i < result_placements.size() ? result_placements[i]
-                                                 : tt::tt_metal::distributed::MeshMapperConfig::Replicate{};
-                if (std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Shard>(tensor_placements[i])) {
-                    auto new_shard_placement =
-                        std::get<tt::tt_metal::distributed::MeshMapperConfig::Shard>(tensor_placements[i]);
+                const auto& tensor_placements = tensor.tensor_topology().placements();
+                for (int i = 0; i < tensor_placements.size(); i++) {
+                    tt::tt_metal::distributed::MeshMapperConfig::Placement output_placement = result_placements[i];
+                    if (std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Shard>(
+                            tensor_placements[i])) {
+                        auto new_shard_placement =
+                            std::get<tt::tt_metal::distributed::MeshMapperConfig::Shard>(tensor_placements[i]);
 
-                    // Only shard if the dimension is not already sharded
-                    if (!shard_dims.contains(new_shard_placement.dim)) {
-                        shard_dims.insert(new_shard_placement.dim);
-                        if (std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Shard>(
-                                output_placement)) {
-                            auto existing_shard_placement =
-                                std::get<tt::tt_metal::distributed::MeshMapperConfig::Shard>(output_placement);
+                        // Only shard if the tensor dimension is not already sharded
+                        if (!shard_dims.contains(new_shard_placement.dim)) {
+                            shard_dims.insert(new_shard_placement.dim);
+                            if (std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Shard>(
+                                    output_placement)) {
+                                auto existing_shard_placement =
+                                    std::get<tt::tt_metal::distributed::MeshMapperConfig::Shard>(output_placement);
 
-                            // If a different tensor dim is sharded across this distribution dim, keep the earliest-seen
-                            // shard dimension.
-                            if (new_shard_placement.dim != existing_shard_placement.dim) {
-                                log_warning(
-                                    tt::LogOp,
-                                    "Output tensor cannot shard different tensor dimensions across the same "
-                                    "distribution "
-                                    "dimension: tensor dims {} (kept) and {} (ignored) across distribution dim {}",
-                                    existing_shard_placement.dim,
-                                    new_shard_placement.dim,
-                                    i);
+                                // If a different tensor dim is sharded across this distribution dim, keep the
+                                // earliest-seen shard dimension.
+                                if (new_shard_placement.dim != existing_shard_placement.dim) {
+                                    log_warning(
+                                        tt::LogOp,
+                                        "Output tensor cannot shard different tensor dimensions across the same "
+                                        "distribution "
+                                        "dimension: tensor dims {} (kept) and {} (ignored) across distribution dim {}",
+                                        existing_shard_placement.dim,
+                                        new_shard_placement.dim,
+                                        i);
+                                }
+                                continue;
                             }
-                            continue;
+                            output_placement = new_shard_placement;
+                        } else {
+                            log_warning(
+                                tt::LogOp,
+                                "Duplicate tensor shard dimension {} across distribution dim {} replaced with "
+                                "Replicate",
+                                new_shard_placement.dim,
+                                i);
                         }
-                        output_placement = new_shard_placement;
-                    } else {
-                        log_warning(
-                            tt::LogOp,
-                            "Duplicate tensor shard dimension {} across distribution dim {} replaced with Replicate",
-                            new_shard_placement.dim,
-                            i);
                     }
-                }
-                if (i >= result_placements.size()) {
-                    result_placements.push_back(output_placement);
-                } else {
                     result_placements[i] = output_placement;
                 }
+            } else {
+                dim_mismatch = true;
             }
         },
         tensor_args);
-    return {result_placements, result_shape};
+    if (dim_mismatch) {
+        log_warning(
+            tt::LogOp,
+            "Input tensors have different distribution ranks, only imputing output tensor topology with tensors that "
+            "have the max distribution rank");
+    }
+    return {result_placements, tt::tt_metal::distributed::MeshShape(result_strides)};
 }
 
 template <DeviceOperationConcept device_operation_t>
