@@ -191,7 +191,7 @@ def test_timestep_embedding(
         time_embed_dim=time_embed_dim,
         mesh_device=mesh_device,
     )
-    tt_model.load_state_dict(torch_model.state_dict())
+    tt_model.load_torch_state_dict(torch_model.state_dict())
 
     # Create input tensors
     torch.manual_seed(0)
@@ -244,7 +244,7 @@ def test_pixart_alpha_text_projection(
         hidden_size=hidden_size,
         mesh_device=mesh_device,
     )
-    tt_model.load_state_dict(torch_model.state_dict())
+    tt_model.load_torch_state_dict(torch_model.state_dict())
 
     # Create input tensors
     torch.manual_seed(0)
@@ -297,7 +297,7 @@ def test_combined_timestep_text_proj_embeddings(
         pooled_projection_dim=pooled_projection_dim,
         mesh_device=mesh_device,
     )
-    tt_model.load_state_dict(torch_model.state_dict())
+    tt_model.load_torch_state_dict(torch_model.state_dict())
 
     # Create input tensors
     torch.manual_seed(0)
@@ -381,7 +381,7 @@ def test_patch_embed_sd35(
         tp_mesh_axis=tp_mesh_axis,
         sp_mesh_axis=sp_mesh_axis,
     )
-    tt_model.load_state_dict(torch_model.state_dict())
+    tt_model.load_torch_state_dict(torch_model.state_dict())
 
     # Create input tensors - NHWC format for TT model
     torch.manual_seed(0)
@@ -463,7 +463,7 @@ def test_patch_embed_mochi(
         embed_dim=embed_dim,
         mesh_device=mesh_device,
     )
-    tt_model.load_state_dict(torch_model.state_dict())
+    tt_model.load_torch_state_dict(torch_model.state_dict())
 
     # Create input tensors - NHWC format for TT model
     torch.manual_seed(0)
@@ -546,7 +546,7 @@ def test_wan_patch_embed(
         embed_dim=embed_dim,
         mesh_device=mesh_device,
     )
-    tt_model.load_state_dict(substate(torch_model.state_dict(), "proj"))
+    tt_model.load_torch_state_dict(substate(torch_model.state_dict(), "proj"))
 
     # Create input tensors
     torch.manual_seed(0)
