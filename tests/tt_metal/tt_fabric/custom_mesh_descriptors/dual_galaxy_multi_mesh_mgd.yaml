@@ -1,0 +1,42 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# Dual Galaxy Multi Mesh Graph Descriptor
+# Each Galaxy configured as its own 8x4 mesh
+# Mesh 0 and Mesh 1 connected via 8 ethernet links
+
+ChipSpec: {
+  arch: wormhole_b0,
+  ethernet_ports: {
+    N: 4,
+    E: 4,
+    S: 4,
+    W: 4,
+  }
+}
+
+Board: [
+  { name: Galaxy,
+    type: Mesh,
+    topology: [8, 4]}
+]
+
+Mesh: [
+{
+  id: 0,
+  board: Galaxy,
+  device_topology: [8, 4],
+  host_topology: [1, 1],
+},
+{
+  id: 1,
+  board: Galaxy,
+  device_topology: [8, 4],
+  host_topology: [1, 1],
+}
+]
+
+RelaxedGraph: [
+  [M0, M1, 8]
+]
