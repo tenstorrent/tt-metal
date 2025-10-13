@@ -14,6 +14,24 @@
 
 namespace ttnn::experimental::unit_mesh {
 
+namespace {
+
+void synchronize_parent_allocator_with_submeshes(tt::tt_metal::distributed::MeshDevice* parent_mesh) {
+    auto* parent_allocator = parent_mesh->allocator().get();
+    TT_FATAL(parent_allocator != nullptr, "Parent mesh must have an allocator");
+
+    tt::tt_metal::AllocatorState merged_state;
+    for (const auto& submesh : parent_mesh->get_submeshes()) {
+        auto* submesh_allocator = submesh->allocator().get();
+        TT_FATAL(submesh_allocator != nullptr, "Submesh must have an allocator");
+        merged_state.merge(submesh_allocator->extract_state());
+    }
+
+    parent_allocator->override_state(merged_state);
+}
+
+}  // namespace
+
 Tensor aggregate(const std::vector<tt::tt_metal::Tensor>& tensors) {
     TT_FATAL(!tensors.empty(), "Cannot aggregate empty tensor vector");
 
@@ -50,17 +68,7 @@ Tensor aggregate(const std::vector<tt::tt_metal::Tensor>& tensors) {
             tensors[i].mesh_buffer()->address() == reference_address, "All mesh buffers must be at the same address");
     }
 
-    // Synchronize the state of parent mesh allocator with all of submeshes.
-    auto* parent_allocator = parent_mesh->allocator().get();
-    TT_FATAL(parent_allocator != nullptr, "Parent mesh must have an allocator");
-    tt::tt_metal::AllocatorState parent_allocator_state;
-    for (const auto& submesh : parent_mesh->get_submeshes()) {
-        auto* submesh_allocator = submesh->allocator().get();
-        TT_FATAL(submesh_allocator != nullptr, "Submesh must have an allocator");
-        tt::tt_metal::AllocatorState submesh_allocator_state = submesh_allocator->extract_state();
-        parent_allocator_state.merge(submesh_allocator_state);
-    }
-    parent_allocator->override_state(parent_allocator_state);
+    synchronize_parent_allocator_with_submeshes(parent_mesh.get());
 
     // Create a new mesh tensor for parent mesh.
     const auto& reference_buffer = tensors[0].mesh_buffer();
