@@ -228,8 +228,8 @@ void MAIN {
             }
             tile_regs_commit();
             tile_regs_wait();
-            for (uint32_t i = 0; i < subblock_wt; i++) {
-                pack_tile(i, cb_in);
+            for (uint32_t sbi = 0; sbi < subblock_wt; sbi++) {
+                pack_tile(sbi, cb_in);
             }
             tile_regs_release();
             index_subblock_w_offset += subblock_wt;
@@ -357,14 +357,14 @@ void MAIN {
             }
             tile_regs_commit();
             tile_regs_wait();
-            for (uint32_t i = 0; i < subblock_wt; i++) {
-                pack_tile(i, cb_xmm);
+            for (uint32_t sbi = 0; sbi < subblock_wt; sbi++) {
+                pack_tile(sbi, cb_xmm);
             }
             tile_regs_release();
             index_subblock_w_offset += subblock_wt;
         }
         cb_pop_front(cb_in, block_wt);
-        // Don't pop global ex buffer until after the mul below
+        // Don't pop transpose buffer until after the mul below
     }
     cb_push_back(cb_xmm, num_tiles_per_block);
 #ifndef FUSE_PRE_ADD
@@ -395,8 +395,8 @@ void MAIN {
             }
             tile_regs_commit();
             tile_regs_wait();
-            for (uint32_t i = 0; i < subblock_wt; i++) {
-                pack_tile(i, cb_im);
+            for (uint32_t sbi = 0; sbi < subblock_wt; sbi++) {
+                pack_tile(sbi, cb_im);
             }
             tile_regs_release();
             index_subblock_w_offset += subblock_wt;
@@ -430,8 +430,8 @@ void MAIN {
                 }
                 tile_regs_commit();
                 tile_regs_wait();
-                for (uint32_t i = 0; i < subblock_wt; i++) {
-                    pack_tile(i, cb_outgamma);
+                for (uint32_t sbi = 0; sbi < subblock_wt; sbi++) {
+                    pack_tile(sbi, cb_outgamma);
                 }
                 tile_regs_release();
                 index_subblock_w_offset += subblock_wt;
@@ -463,8 +463,8 @@ void MAIN {
                 }
                 tile_regs_commit();
                 tile_regs_wait();
-                for (uint32_t i = 0; i < subblock_wt; i++) {
-                    pack_tile(i, cb_out);
+                for (uint32_t sbi = 0; sbi < subblock_wt; sbi++) {
+                    pack_tile(sbi, cb_out);
                 }
                 tile_regs_release();
                 index_subblock_w_offset += subblock_wt;
