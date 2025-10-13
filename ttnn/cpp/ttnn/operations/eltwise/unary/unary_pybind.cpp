@@ -1078,7 +1078,7 @@ void bind_sigmoid_accurate(py::module& module, const unary_operation_t& operatio
 
         Args:
             input_tensor (ttnn.Tensor): the input tensor.
-            approximate_mode (bool, optional): Enables accurate version of exponential operation. Defaults to `False`.
+            fast_and_approximate_mode (bool, optional): Enables accurate version of exponential operation. Defaults to `False`.
 
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
@@ -1118,13 +1118,13 @@ void bind_sigmoid_accurate(py::module& module, const unary_operation_t& operatio
         ttnn::pybind_overload_t{
             [](const unary_operation_t& self,
                const Tensor& input_tensor,
-               bool approximate_mode,
+               bool fast_and_approximate_mode,
                const std::optional<MemoryConfig>& memory_config,
                const std::optional<Tensor>& output_tensor) -> ttnn::Tensor {
-                return self(input_tensor, approximate_mode, memory_config, output_tensor);
+                return self(input_tensor, fast_and_approximate_mode, memory_config, output_tensor);
             },
             py::arg("input_tensor"),
-            py::arg("approximate_mode") = false,
+            py::arg("fast_and_approximate_mode") = false,
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt});
