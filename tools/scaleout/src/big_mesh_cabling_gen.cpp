@@ -21,10 +21,11 @@ struct InputConfig {
     bool torus_1;
     std::string galaxy_structure;
     std::string topology;
+    std::string galaxy_type;
 };
 
 void print_usage(const char* program_name) {
-    std::cerr << "Usage: " << program_name << " <galaxy_structure> <topology>" << std::endl;
+    std::cerr << "Usage: " << program_name << " <galaxy_structure> <topology> [galaxy_type]" << std::endl;
     std::cerr << "       " << program_name << " --help" << std::endl;
     std::cerr << std::endl;
     std::cerr << "Arguments:" << std::endl;
@@ -36,6 +37,8 @@ void print_usage(const char* program_name) {
     std::cerr << "                   '01' - torus in second dimension only" << std::endl;
     std::cerr << "                   '11' - torus in both dimensions" << std::endl;
     std::cerr << "                   '00' - no torus (mesh topology)" << std::endl;
+    std::cerr << "  galaxy_type:     (Optional) Galaxy type - 'WH_GALAXY' or 'BH_GALAXY'" << std::endl;
+    std::cerr << "                   Defaults to 'WH_GALAXY' if not specified" << std::endl;
 }
 
 InputConfig parse_arguments(int argc, char** argv) {
@@ -46,8 +49,8 @@ InputConfig parse_arguments(int argc, char** argv) {
     }
     
     // Validate argument count
-    if (argc != 3) {
-        std::cerr << "Error: Expected 2 arguments, got " << (argc - 1) << std::endl;
+    if (argc != 3 && argc != 4) {
+        std::cerr << "Error: Expected 2 or 3 arguments, got " << (argc - 1) << std::endl;
         print_usage(argv[0]);
         exit(1);
     }
@@ -55,6 +58,14 @@ InputConfig parse_arguments(int argc, char** argv) {
     InputConfig config;
     config.galaxy_structure = argv[1];
     config.topology = argv[2];
+    
+    // Set galaxy_type with default value if not provided
+    if (argc == 3) {
+        config.galaxy_type = "WH_GALAXY";
+        std::cout << "Note: Using default galaxy type 'WH_GALAXY' (not specified)" << std::endl;
+    } else {
+        config.galaxy_type = argv[3];
+    }
     
     // Parse galaxy structure "NxM"
     size_t x_pos = config.galaxy_structure.find('x');
@@ -99,6 +110,11 @@ InputConfig parse_arguments(int argc, char** argv) {
         throw std::invalid_argument("Invalid topology '" + config.topology + "'. Must be '10', '01', '11', or '00' (for mesh)");
     }
     
+    // Validate galaxy type
+    if (config.galaxy_type != "WH_GALAXY" && config.galaxy_type != "BH_GALAXY") {
+        throw std::invalid_argument("Invalid galaxy type '" + config.galaxy_type + "'. Must be 'WH_GALAXY' or 'BH_GALAXY'");
+    }
+    
     return config;
 }
 
@@ -136,7 +152,7 @@ int main(int argc, char** argv) {
         for (int i = 0; i < galaxy_nodes_1; i++) {
             auto* child = graph_template_instance.mutable_children()->Add();
             child->set_name("dim1_node" + std::to_string(i));
-            child->mutable_node_ref()->set_node_descriptor("WH_GALAXY");
+            child->mutable_node_ref()->set_node_descriptor(config.galaxy_type);
 
             if (i < galaxy_nodes_1 - 1 || config.torus_1) {
                 tt::scaleout_tools::cabling_generator::proto::Connection connection;

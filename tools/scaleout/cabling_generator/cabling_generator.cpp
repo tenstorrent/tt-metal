@@ -447,7 +447,7 @@ void CablingGenerator::emit_cabling_guide_csv(const std::string& output_path, bo
         {tt::ARCH::WORMHOLE_B0, "400G"}, {tt::ARCH::BLACKHOLE, "800G"}, {tt::ARCH::Invalid, "UNKNOWN"}};
 
     // Unknown for lengths unable to be calculated (longer than avaiable cables, cross-aisle/hall, etc.)
-
+    
     // Vector of (Host,Tray,Port) Connection Pairs
     std::vector<std::pair<std::tuple<HostId, TrayId, PortId>, std::tuple<HostId, TrayId, PortId>>> conn_list;
 
@@ -472,6 +472,19 @@ void CablingGenerator::emit_cabling_guide_csv(const std::string& output_path, bo
         const auto& host1 = deployment_hosts_[host_id1];
         const auto& host2 = deployment_hosts_[host_id2];
 
+        // Create node_type strings with "_DEFAULT" suffix removed if present
+        const std::string suffix = "_DEFAULT";
+        std::string host1_node_type = host1.node_type;
+        if (host1_node_type.size() >= suffix.size() && 
+            host1_node_type.compare(host1_node_type.size() - suffix.size(), suffix.size(), suffix) == 0) {
+            host1_node_type = host1_node_type.substr(0, host1_node_type.size() - suffix.size());
+        }
+        std::string host2_node_type = host2.node_type;
+        if (host2_node_type.size() >= suffix.size() && 
+            host2_node_type.compare(host2_node_type.size() - suffix.size(), suffix.size(), suffix) == 0) {
+            host2_node_type = host2_node_type.substr(0, host2_node_type.size() - suffix.size());
+        }
+
         // Get arch from node
         // Assume arch for start and end are the same
         // This is validated in create_port_connection
@@ -483,19 +496,19 @@ void CablingGenerator::emit_cabling_guide_csv(const std::string& output_path, bo
                         << host1.shelf_u << "," << tray_id1 << "," << port_id1 << ",";
 
             output_file << host1.hall << host1.aisle << std::setw(2) << host1.rack << "U" << std::setw(2)
-                        << host1.shelf_u << "-" << tray_id1 << "-" << port_id1 << "," << host1.node_type << ",";
+                        << host1.shelf_u << "-" << tray_id1 << "-" << port_id1 << "," << host1_node_type << ",";
 
             output_file << host2.hall << "," << host2.aisle << "," << std::setw(2) << host2.rack << ",U" << std::setw(2)
                         << host2.shelf_u << "," << tray_id2 << "," << port_id2 << ",";
             output_file << host2.hall << host2.aisle << std::setw(2) << host2.rack << "U" << std::setw(2)
-                        << host2.shelf_u << "-" << tray_id2 << "-" << port_id2 << "," << host2.node_type << ",";
+                        << host2.shelf_u << "-" << tray_id2 << "-" << port_id2 << "," << host2_node_type << ",";
 
             output_file << cable_length_str.at(cable_l) << ",";
             output_file << speed_str.at(arch) << "_" << ((cable_l == CableLength::UNKNOWN) ? "Optical" : "AEC")
                         << std::endl;
         } else {
-            output_file << host1.hostname << "," << tray_id1 << "," << port_id1 << "," << host1.node_type << ",";
-            output_file << host2.hostname << "," << tray_id2 << "," << port_id2 << "," << host2.node_type << std::endl;
+            output_file << host1.hostname << "," << tray_id1 << "," << port_id1 << "," << host1_node_type << ",";
+            output_file << host2.hostname << "," << tray_id2 << "," << port_id2 << "," << host2_node_type << std::endl;
         }
     }
 
