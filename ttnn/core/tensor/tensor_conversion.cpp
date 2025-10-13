@@ -15,7 +15,7 @@ namespace {
 // but in context of the conversion from python it is possible to use
 // the type ID and the set of expected types.
 DataType map_hostbuffer_type_to_datatype(const HostBuffer& buffer) {
-    const auto& type_info = *buffer.type_info();
+    const auto& type_info = buffer.type_info();
 
     if (type_info == typeid(bfloat16)) {
         return DataType::BFLOAT16;
@@ -30,7 +30,7 @@ DataType map_hostbuffer_type_to_datatype(const HostBuffer& buffer) {
     } else if (type_info == typeid(int32_t)) {
         return DataType::INT32;
     } else {
-        TT_THROW("Unsupported type in HostBuffer: {}", buffer.type_info()->name());
+        TT_THROW("Unsupported type in HostBuffer: {}", buffer.type_info().name());
     }
 }
 
@@ -62,7 +62,7 @@ Tensor create_typed_tt_tensor_from_host_data(
     const TensorLayout& tensor_layout,
     ttnn::distributed::MeshDevice* device,
     std::optional<ttnn::QueueId> cq_id,
-    float pad_value,
+    T pad_value,
     const ttnn::distributed::TensorToMesh* mesh_mapper) {
     TT_FATAL(
         !tensor_layout.get_memory_config().is_sharded() || tensor_layout.get_memory_config().shard_spec().has_value() ||
@@ -70,9 +70,9 @@ Tensor create_typed_tt_tensor_from_host_data(
         "Sharded tensors must have a shard spec when converting to tt tensors!");
 
     TT_FATAL(
-        *host_data.type_info() == typeid(T),
+        host_data.type_info() == typeid(T),
         "Mismatch between the host buffer data type and the target tensor data: host buffer is {} and the target is {}",
-        host_data.type_info()->name(),
+        host_data.type_info().name(),
         typeid(T).name());
 
     tt::stl::Span<T> pydata_span(
@@ -91,8 +91,7 @@ Tensor create_typed_tt_tensor_from_host_data(
             }
             return output;
         } else {
-            return Tensor::from_span(
-                tt::stl::make_const_span(pydata_span), tensor_spec, device, cq_id, static_cast<T>(pad_value));
+            return Tensor::from_span(tt::stl::make_const_span(pydata_span), tensor_spec, device, cq_id, pad_value);
         }
     } else {
         // Shard pydata across mesh and apply `tensor_layout` at each shard.
@@ -105,7 +104,7 @@ Tensor create_typed_tt_tensor_from_host_data(
             *mesh_mapper,
             device != nullptr ? std::make_optional(std::ref(*device)) : std::nullopt,
             cq_id,
-            static_cast<T>(pad_value));
+            pad_value);
     }
 }
 
@@ -423,7 +422,7 @@ std::optional<TensorPreparedConversion> prepare_tensor_conversion(
 }
 }  // namespace
 
-Tensor tt::tt_metal::create_device_tensor_from_host_data(
+Tensor tt::tt_metal::convert_python_tensor_to_tt_tensor(
     const ttnn::Shape& tensor_shape,
     const TensorLayout& tensor_layout,
     const host_buffer_data_type& host_data_type,
@@ -432,22 +431,35 @@ Tensor tt::tt_metal::create_device_tensor_from_host_data(
     std::optional<ttnn::QueueId> cq_id,
     float pad_value,
     const ttnn::distributed::TensorToMesh* mesh_mapper) {
+    ZoneScoped;
+
     auto strategy = prepare_tensor_conversion(host_data_type, tensor_layout, device != nullptr);
     Tensor output;
 
-    DataType on_device_conversion_target;
+    GraphTracker::instance().track_function_start(
+        "tt::tt_metal::detail::convert_python_tensor_to_tt_tensor",
+        tensor_layout.get_data_type(),
+        tensor_layout.get_layout(),
+        tensor_layout.get_tile(),
+        tensor_layout.get_memory_config(),
+        device,
+        cq_id,
+        pad_value,
+        mesh_mapper);
+
+    DataType host_dtype;
     if (strategy) {
-        on_device_conversion_target = strategy->host_convert_data_type;
+        host_dtype = strategy->host_convert_data_type;
     } else {
         if (tensor_layout.get_data_type() == DataType::BFLOAT4_B ||
             tensor_layout.get_data_type() == DataType::BFLOAT8_B) {
-            on_device_conversion_target = DataType::FLOAT32;
+            host_dtype = DataType::FLOAT32;
         } else {
-            on_device_conversion_target = tensor_layout.get_data_type();
+            host_dtype = tensor_layout.get_data_type();
         }
     }
 
-    HostBuffer host_data = get_host_data(on_device_conversion_target);
+    HostBuffer host_data = get_host_data(host_dtype);
 
     TT_FATAL(
         get_element_count(host_data) == tensor_shape.volume(),
@@ -469,5 +481,8 @@ Tensor tt::tt_metal::create_device_tensor_from_host_data(
         output = convert_host_buffer_to_tt_tensor_on_host(
             host_data, tensor_shape, tensor_layout, device, cq_id, pad_value, mesh_mapper);
     }
+
+    GraphTracker::instance().track_function_end(output);
+
     return output;
 }

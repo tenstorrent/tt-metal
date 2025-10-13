@@ -65,9 +65,9 @@ public:
     // Returns the memory pin of the host buffer.
     MemoryPin pin() const { return pin_; }
 
-    const std::type_info* type_info() const {
+    const std::type_info& type_info() const {
         TT_FATAL(type_info_ != nullptr, "Type info was not assigned for the host buffer");
-        return type_info_;
+        return *type_info_;
     }
 
 private:
@@ -100,13 +100,21 @@ HostBuffer::HostBuffer(tt::stl::Span<T> borrowed_data, MemoryPin pin) :
 
 template <typename T>
 tt::stl::Span<T> HostBuffer::view_as() & {
-    TT_FATAL(*type_info_ == typeid(T), "Requested type T does not match the underlying buffer type.");
+    TT_FATAL(
+        *type_info_ == typeid(T),
+        "Requested type T does not match the underlying buffer type. Host stores data of type '{}', but requested '{}'",
+        type_info_->name(),
+        typeid(T).name());
     return tt::stl::Span<T>(reinterpret_cast<T*>(view_.data()), view_.size() / sizeof(T));
 }
 
 template <typename T>
 tt::stl::Span<const T> HostBuffer::view_as() const& {
-    TT_FATAL(*type_info_ == typeid(T), "Requested type T does not match the underlying buffer type.");
+    TT_FATAL(
+        *type_info_ == typeid(T),
+        "Requested type T does not match the underlying buffer type. Host stores data of type '{}', but requested '{}'",
+        type_info_->name(),
+        typeid(T).name());
     return tt::stl::Span<const T>(reinterpret_cast<const T*>(view_.data()), view_.size() / sizeof(T));
 }
 

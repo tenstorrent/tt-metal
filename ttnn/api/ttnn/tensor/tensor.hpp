@@ -338,7 +338,7 @@ enum class host_buffer_data_type {
     BOOL
 };
 
-Tensor create_device_tensor_from_host_data(
+Tensor convert_python_tensor_to_tt_tensor(
     const ttnn::Shape& tensor_shape,
     const TensorLayout& tensor_layout,
     const host_buffer_data_type& host_data_type,

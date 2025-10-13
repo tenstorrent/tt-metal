@@ -555,26 +555,12 @@ Tensor convert_python_tensor_to_tt_tensor(
     std::optional<ttnn::QueueId> cq_id,
     float pad_value,
     const ttnn::distributed::TensorToMesh* mesh_mapper) {
-    ZoneScoped;
-
-    GraphTracker::instance().track_function_start(
-        "tt::tt_metal::detail::convert_python_tensor_to_tt_tensor",
-        py_tensor,
-        optional_data_type,
-        optional_layout,
-        optional_tile,
-        memory_config,
-        device,
-        cq_id,
-        pad_value,
-        mesh_mapper);
-
-    bool data_type_requires_tile = optional_data_type.has_value() && (optional_data_type == DataType::BFLOAT4_B ||
-                                                                      optional_data_type == DataType::BFLOAT8_B);
+    const bool data_type_requires_tile = optional_data_type.has_value() && (optional_data_type == DataType::BFLOAT4_B ||
+                                                                            optional_data_type == DataType::BFLOAT8_B);
 
     const auto shape = ttnn::Shape(py::cast<ttnn::SmallVector<uint32_t>>(py_tensor.attr("shape")));
 
-    Tensor output = create_device_tensor_from_host_data(
+    Tensor output = convert_python_tensor_to_tt_tensor(
         shape,
         TensorLayout(
             get_target_type(optional_data_type, py_tensor),
@@ -592,7 +578,6 @@ Tensor convert_python_tensor_to_tt_tensor(
         pad_value,
         mesh_mapper);
 
-    GraphTracker::instance().track_function_end(output);
     return output;
 }
 
