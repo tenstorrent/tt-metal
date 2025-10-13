@@ -75,7 +75,7 @@ uint32_t StaticSizedChannelConnectionWriterAdapter::encode_noc_ord_for_2d(
     uint32_t vc_idx,
     const std::function<uint32_t(CoreCoord)>& get_noc_ord) const {
     if (vc_idx == 1 || !is_2D_routing) {
-        if (downstream_edms_connected_by_vc[vc_idx].size() == 0) {
+        if (downstream_edms_connected_by_vc[vc_idx].empty()) {
             return 0; // no connection here
         }
         TT_FATAL(downstream_edms_connected_by_vc[vc_idx].size() == 1, "Downstream edms connected by vc should be 1 for vc1 or non-2D routing. vc_idx: {}, size: {}", vc_idx, downstream_edms_connected_by_vc[vc_idx].size());
