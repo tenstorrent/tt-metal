@@ -19,7 +19,7 @@
 
 #include "dev_msgs.h"
 
-#define USE_ZONE_COUNTER 1
+#include "test_cb.hpp"
 
 #define DO_PRAGMA(x) _Pragma(#x)
 

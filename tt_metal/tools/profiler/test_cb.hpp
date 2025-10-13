@@ -1,0 +1,1 @@
+#define USE_ZONE_COUNTER 1

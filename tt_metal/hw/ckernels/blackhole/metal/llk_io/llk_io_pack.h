@@ -12,7 +12,7 @@
 #include "stream_io_map.h"
 #include "tools/profiler/kernel_profiler.hpp"
 
-#define USE_ZONE_COUNTER 1
+#include "tools/profiler/test_cb.hpp"
 
 using namespace ckernel;
 

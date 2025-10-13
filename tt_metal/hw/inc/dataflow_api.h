@@ -25,7 +25,7 @@
 #include "accessor/tensor_accessor.h"
 #include "tools/profiler/kernel_profiler.hpp"
 
-#define USE_ZONE_COUNTER 1
+#include "tools/profiler/test_cb.hpp"
 
 // clang-format off
 /**
