@@ -19,15 +19,16 @@ from models.experimental.detr3d.ttnn.transformer_decoder import (
     TTTransformerDecoderLayer,
     TTTransformerDecoder,
 )
+from models.experimental.detr3d.common import load_torch_model_state
 
 
 @torch.no_grad()
 @skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
-    "batch_size, seq_len, d_model, nhead, normalize_before",
+    "batch_size, seq_len, d_model, nhead, normalize_before, weight_key_prefix",
     [
-        (1, 128, 256, 4, True),
-        (1, 128, 256, 4, False),
+        (1, 128, 256, 4, True, "decoder.layers.0"),  # 7 more repeated blocks can be tested
+        (1, 128, 256, 4, False, "decoder.layers.0"),
     ],
 )
 def test_transformer_decoder_layer_inference(
@@ -36,16 +37,20 @@ def test_transformer_decoder_layer_inference(
     d_model,
     nhead,
     normalize_before,
+    weight_key_prefix,
+    device,
 ):
     """Test TtTransformerDecoderLayer against PyTorch reference implementation"""
 
+    mesh_device = device
     dtype = ttnn.bfloat16
     dim_feedforward = 256
 
     # Initialize reference model
     reference_model = TransformerDecoderLayer(
         d_model, nhead, dim_feedforward, dropout=0.0, normalize_before=normalize_before
-    ).eval()
+    )
+    load_torch_model_state(reference_model, weight_key_prefix)
 
     # Create test inputs with consistent dimensions
     tgt_input = torch.randn(seq_len, batch_size, d_model, dtype=torch.float32)
@@ -67,7 +72,6 @@ def test_transformer_decoder_layer_inference(
             pos=pos,
             query_pos=query_pos,
         )
-    mesh_device = ttnn.open_device(device_id=0, l1_small_size=32768)
 
     parameters = preprocess_model_parameters(
         initialize_model=lambda: reference_model,
@@ -154,7 +158,7 @@ class Args:
 
 
 @torch.no_grad()
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_transformer_decoder_inference(device):
     """Test TTTransformerDecoder against PyTorch reference implementation"""
 
@@ -164,7 +168,7 @@ def test_transformer_decoder_inference(device):
 
     # Build reference decoder
     reference_model = build_decoder(args)
-    reference_model.eval()
+    load_torch_model_state(reference_model, "decoder")
 
     # Create test inputs with the specified shapes
     tgt = torch.randn(128, 1, 256, dtype=torch.float32)

@@ -5,13 +5,37 @@
 import torch
 import ttnn
 import pytest
-from models.experimental.detr3d.reference.detr3d_model import build_3detr
+
+from tests.ttnn.utils_for_testing import comp_pcc
 from ttnn.model_preprocessing import preprocess_model_parameters
 from models.experimental.detr3d.ttnn.custom_preprocessing import create_custom_mesh_preprocessor
+
 from models.experimental.detr3d.ttnn.tt_3detr import build_ttnn_3detr
+from models.experimental.detr3d.reference.detr3d_model import build_3detr
 from models.experimental.detr3d.reference.model_utils import SunrgbdDatasetConfig
 from models.experimental.detr3d.reference.model_config import Detr3dArgs
-from tests.ttnn.utils_for_testing import comp_pcc
+from models.experimental.detr3d.common import load_torch_model_state
+
+
+class Tt3DetrArgs:
+    def __init__(self):
+        self.modules = None
+        self.parameters = None
+        self.device = None
+        self.model_name = "3detr"
+        self.enc_type = "masked"
+        self.enc_nlayers = 3
+        self.enc_dim = 256
+        self.enc_ffn_dim = 128
+        self.enc_nhead = 4
+        self.enc_activation = "relu"
+        self.dec_nlayers = 8
+        self.dec_dim = 256
+        self.dec_ffn_dim = 256
+        self.dec_nhead = 4
+        self.preenc_npoints = 2048
+        self.nqueries = 128
+        self.use_color = False
 
 
 @pytest.mark.parametrize(
@@ -27,16 +51,13 @@ from tests.ttnn.utils_for_testing import comp_pcc
 @pytest.mark.parametrize("encoder_only", (False, True))
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_3detr_model(encoder_only, input_shapes, device):
-    mesh_device = device
     args = Detr3dArgs()
     dataset_config = SunrgbdDatasetConfig()
 
     input_dict = {key: torch.randn(shape) for key, shape in input_shapes.items()}
 
     ref_module, _ = build_3detr(args, dataset_config)
-    ref_module.eval()
-    checkpoint = torch.load("models/experimental/detr3d/sunrgbd_masked_ep720.pth", map_location="cpu")["model"]
-    ref_module.load_state_dict(checkpoint, strict=True)
+    load_torch_model_state(ref_module)
     ref_out = ref_module(inputs=input_dict, encoder_only=encoder_only)
 
     ref_module_parameters = preprocess_model_parameters(
@@ -45,26 +66,10 @@ def test_3detr_model(encoder_only, input_shapes, device):
         device=device,
     )
 
-    class Tt3DetrArgs:
-        modules = ref_module
-        parameters = ref_module_parameters
-        device = mesh_device
-        model_name = "3detr"
-        enc_type = "masked"
-        enc_nlayers = 3
-        enc_dim = 256
-        enc_ffn_dim = 128
-        enc_nhead = 4
-        enc_activation = "relu"
-        dec_nlayers = 8
-        dec_dim = 256
-        dec_ffn_dim = 256
-        dec_nhead = 4
-        preenc_npoints = 2048
-        nqueries = 128
-        use_color = False
-
     ttnn_args = Tt3DetrArgs()
+    ttnn_args.modules = ref_module
+    ttnn_args.parameters = ref_module_parameters
+    ttnn_args.device = device
 
     ttnn_module, _ = build_ttnn_3detr(ttnn_args, dataset_config)
     tt_output = ttnn_module(inputs=input_dict, encoder_only=encoder_only)
