@@ -69,7 +69,7 @@ jobs:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       - name: Enable Performance mode
-        uses: ./.github/actions/set-cpu-governor
+        uses: tenstorrent/tt-metal/.github/actions/set-cpu-governor@main
         with:
           governor: performance
       - name: Run model perf regression tests
@@ -110,7 +110,7 @@ jobs:
           prefix: "test_reports_"
       - name: Disable Performance mode
         if: always()
-        uses: ./.github/actions/set-cpu-governor
+        uses: tenstorrent/tt-metal/.github/actions/set-cpu-governor@main
         with:
           governor: ondemand
 
@@ -156,7 +156,7 @@ jobs:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       - name: Enable Performance mode
-        uses: ./.github/actions/set-cpu-governor
+        uses: tenstorrent/tt-metal/.github/actions/set-cpu-governor@main
         with:
           governor: performance
       - name: Run model perf regression tests
@@ -208,6 +208,6 @@ jobs:
           prefix: "test_reports_"
       - name: Disable Performance mode
         if: always()
-        uses: ./.github/actions/set-cpu-governor
+        uses: tenstorrent/tt-metal/.github/actions/set-cpu-governor@main
         with:
           governor: ondemand
