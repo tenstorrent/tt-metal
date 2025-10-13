@@ -1,0 +1,203 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# Dual Galaxy Fabric Stress Testing
+# Unidirectional stress tests for 64-chip dual Galaxy systems (Mesh 0 -> Mesh 1)
+# Tests various traffic patterns under sustained load without deadlock, since deadlock
+# is possible if we setup bidirectional traffic in a way it would form a cycle and we are running
+# only unidirectional traffic in the tests.
+
+allocation_policies:
+    receiver:
+      max_configs_per_core: 2
+
+Tests:
+  # ======================================================================================
+  # Test 1: Single sender, single receiver, unicast
+  # ======================================================================================
+  - name: "DualGalaxyUnicastSingleSenderSingleReceiver"
+    fabric_setup:
+      topology: Mesh
+      routing_type: Dynamic
+      mesh_descriptor_path: "tests/tt_metal/tt_fabric/custom_mesh_descriptors/dual_galaxy_big_mesh_mgd.yaml"
+
+    top_level_iterations: 3
+
+    parametrization_params:
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      size: [32, 64, 128]
+      num_packets: 100
+
+    defaults:
+      ftype: unicast
+
+    senders:
+      - device: [0, [0, 0]]
+        patterns:
+          - destination:
+              device: [1, [7, 3]]
+
+  # ======================================================================================
+  # Test 2: Single sender, single receiver, reverse direction unicast
+  # ======================================================================================
+  - name: "DualGalaxyUnicastSingleSenderSingleReceiverReverse"
+    fabric_setup:
+      topology: Mesh
+      routing_type: Dynamic
+      mesh_descriptor_path: "tests/tt_metal/tt_fabric/custom_mesh_descriptors/dual_galaxy_big_mesh_mgd.yaml"
+
+    top_level_iterations: 3
+
+    parametrization_params:
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      size: [32, 64, 128]
+      num_packets: 100
+
+    defaults:
+      ftype: unicast
+
+    senders:
+      - device: [1, [7, 3]]
+        patterns:
+          - destination:
+              device: [0, [0, 0]]
+
+  # ======================================================================================
+  # Test 3: Multiple Senders Unicast
+  # ======================================================================================
+  - name: "DualGalaxyUnicastMultipleSenders"
+    fabric_setup:
+      topology: Mesh
+      routing_type: Dynamic
+      mesh_descriptor_path: "tests/tt_metal/tt_fabric/custom_mesh_descriptors/dual_galaxy_big_mesh_mgd.yaml"
+
+    top_level_iterations: 3
+
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 64
+      num_packets: 100
+
+    senders:
+      - device: [0, [0, 0]]
+        patterns:
+          - destination:
+              device: [1, [0, 0]]
+      - device: [0, [3, 1]]
+        patterns:
+          - destination:
+              device: [1, [3, 1]]
+      - device: [0, [7, 3]]
+        patterns:
+          - destination:
+              device: [1, [7, 3]]
+
+  # ======================================================================================
+  # Test 4: Multicast Stress - One-to-many multicast
+  # ======================================================================================
+  - name: "DualGalaxyMulticast"
+    fabric_setup:
+      topology: Mesh
+      routing_type: Dynamic
+      mesh_descriptor_path: "tests/tt_metal/tt_fabric/custom_mesh_descriptors/dual_galaxy_big_mesh_mgd.yaml"
+
+    top_level_iterations: 3
+
+    parametrization_params:
+      size: [64, 128]
+
+    defaults:
+      ftype: mcast
+      ntype: unicast_write
+      num_packets: 100
+
+    senders:
+    #TODO: Add hop count probably
+      - device: [0, [0, 0]]
+        patterns:
+          - destination:
+              device: [1, [0, 0]]
+          - destination:
+              device: [1, [3, 1]]
+          - destination:
+              device: [1, [7, 3]]
+
+  # ======================================================================================
+  # Test 5: Simple Point-to-Point Unidirectional
+  # ======================================================================================
+  - name: UnidirectionalPointToPoint
+    fabric_setup:
+      topology: Mesh
+      routing_type: Dynamic
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 128
+      num_packets: 50
+    senders:
+      - device: [0, [0, 0]]
+        patterns:
+          - destination:
+              device: [1, [0, 0]]
+      - device: [0, [0, 3]]
+        patterns:
+          - destination:
+              device: [1, [0, 3]]
+      - device: [0, [7, 0]]
+        patterns:
+          - destination:
+              device: [1, [7, 0]]
+      - device: [0, [7, 3]]
+        patterns:
+          - destination:
+              device: [1, [7, 3]]
+      - device: [0, [3, 1]]
+        patterns:
+          - destination:
+              device: [1, [3, 1]]
+      - device: [0, [4, 2]]
+        patterns:
+          - destination:
+              device: [1, [4, 2]]
+      - device: [0, [1, 0]]
+        patterns:
+          - destination:
+              device: [1, [1, 0]]
+      - device: [0, [2, 1]]
+        patterns:
+          - destination:
+              device: [1, [2, 1]]
+      - device: [0, [3, 2]]
+        patterns:
+          - destination:
+              device: [1, [3, 2]]
+      - device: [0, [4, 3]]
+        patterns:
+          - destination:
+              device: [1, [4, 3]]
+      - device: [0, [5, 0]]
+        patterns:
+          - destination:
+              device: [1, [5, 0]]
+      - device: [0, [6, 1]]
+        patterns:
+          - destination:
+              device: [1, [6, 1]]
+      - device: [0, [1, 2]]
+        patterns:
+          - destination:
+              device: [1, [1, 2]]
+      - device: [0, [2, 3]]
+        patterns:
+          - destination:
+              device: [1, [2, 3]]
+      - device: [0, [5, 2]]
+        patterns:
+          - destination:
+              device: [1, [5, 2]]
+      - device: [0, [6, 3]]
+        patterns:
+          - destination:
+              device: [1, [6, 3]]
