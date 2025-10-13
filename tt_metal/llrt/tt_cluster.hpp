@@ -195,7 +195,7 @@ public:
     // Returns a writer object which holds a pointer to a static tlb
     // Allows for fast writes when targeting same device core by only doing the lookup once and avoiding repeated stack
     // traversals
-    tt::Writer get_static_tlb_writer(tt_cxy_pair target) const {
+    umd::Writer get_static_tlb_writer(tt_cxy_pair target) const {
         tt::umd::CoreCoord target_coord = get_soc_desc(target.chip).get_coord_at(target, CoordSystem::TRANSLATED);
         return driver_->get_static_tlb_writer(target.chip, target_coord);
     }
