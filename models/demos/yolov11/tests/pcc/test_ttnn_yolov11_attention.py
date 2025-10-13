@@ -15,7 +15,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 @pytest.mark.parametrize(
     "in_channel, out_channel, kernel, stride, padding, dilation, groups,fwd_input_shape",
     [
-        ([128, 128, 128], [256, 128, 128], [1, 1, 3], [1, 1, 1], [0, 0, 1], [1, 1, 1], [1, 1, 128], [1, 128, 7, 7]),
+        ([128, 128, 128], [256, 128, 128], [1, 1, 3], [1, 1, 1], [0, 0, 1], [1, 1, 1], [1, 1, 128], [1, 128, 20, 20]),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": YOLOV11_L1_SMALL_SIZE}], indirect=True)
