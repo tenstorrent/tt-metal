@@ -198,10 +198,10 @@ void physical_system_descriptor_to_proto(
 std::unique_ptr<PhysicalSystemDescriptor> proto_to_physical_system_descriptor(
     const tt::fabric::proto::PhysicalSystemDescriptor& proto_desc) {
     auto descriptor = std::make_unique<PhysicalSystemDescriptor>(
+        PhysicalSystemDescriptor::null_cluster,
         nullptr,
         nullptr,
         proto_desc.mock_cluster(),
-        nullptr,
         false);  // Don't run discovery
 
     // Convert system graph
@@ -303,7 +303,7 @@ PhysicalSystemDescriptor deserialize_physical_system_descriptor_from_bytes(const
         throw std::runtime_error("Failed to parse PhysicalSystemDescriptor from protobuf binary format");
     }
 
-    return std::move(*proto_to_physical_system_descriptor(proto_desc));
+    return *proto_to_physical_system_descriptor(proto_desc);
 }
 
 PhysicalSystemDescriptor deserialize_physical_system_descriptor_from_text_proto_file(
@@ -320,6 +320,6 @@ PhysicalSystemDescriptor deserialize_physical_system_descriptor_from_text_proto_
         throw std::runtime_error("Failed to parse PhysicalSystemDescriptor from text proto file: " + text_proto_file);
     }
 
-    return std::move(*proto_to_physical_system_descriptor(physical_system_descriptor));
+    return *proto_to_physical_system_descriptor(physical_system_descriptor);
 }
 }  // namespace tt::tt_metal
