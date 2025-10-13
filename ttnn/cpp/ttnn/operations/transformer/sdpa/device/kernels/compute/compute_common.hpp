@@ -18,7 +18,6 @@
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/reduce.h"
-<<<<<<< HEAD
 #include "compute_kernel_api/reduce_custom.h"
 
 ALWI void sdpa_reduce_copy_tile_to_dst_init_short(uint32_t cbid, uint32_t transpose = 0) {
@@ -33,9 +32,7 @@ ALWI void sdpa_reduce_copy_tile_to_dst_init_short(uint32_t cbid, uint32_t transp
           false   // tilize
           >(cbid)));
 }
-=======
 #include "tools/profiler/kernel_profiler.hpp"
->>>>>>> b4a5be9ec8 (Create performance unit tests and add kernel profile scopes)
 
 template <uint32_t num_tiles>
 void max_block_inplace(uint32_t in0, uint32_t in1) {
