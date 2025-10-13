@@ -301,7 +301,7 @@ def simple_size_params(two_stage):
 @skip_welford_blackhole("'use_welford'")
 def test_layer_norm_sharded_with_residual(device, use_welford, two_stage, tensor_type, dtype):
     if tensor_type == "random" or tensor_type == "random_normal":
-        pytest.skip("Low PCC, see <Ryan to create issue and add number here>")
+        pytest.skip("Low PCC, see #30455")
 
     h, w, num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt = simple_size_params(two_stage)
 
@@ -361,7 +361,7 @@ def test_layer_norm_sharded_with_weight_and_bias(device, use_welford, two_stage,
 @skip_welford_blackhole("'use_welford'")
 def test_layer_norm_sharded_with_weight_and_bias_and_residual(device, use_welford, two_stage, tensor_type, dtype):
     if tensor_type == "random" or tensor_type == "random_normal":
-        pytest.skip("Low PCC, see <Ryan to create issue and add number here>")
+        pytest.skip("Low PCC, see #30455")
 
     h, w, num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt = simple_size_params(two_stage)
 
