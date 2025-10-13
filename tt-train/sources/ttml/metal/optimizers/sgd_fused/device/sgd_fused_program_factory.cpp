@@ -171,7 +171,7 @@ SGDFusedProgramFactory::cached_program_t SGDFusedProgramFactory::create(
     tt::DataFormat grad_data_format = datatype_to_dataformat_converter(grad.dtype());
 
     uint32_t bfloat16_single_tile_size_bytes = tt::tile_size(tt::DataFormat::Float16_b);
-    // uint32_t float32_single_tile_size_bytes = tt::tile_size(tt::DataFormat::Float32);
+    uint32_t float32_single_tile_size_bytes = tt::tile_size(tt::DataFormat::Float32);
 
     auto padded_tensor_shape = param.padded_shape();
     auto padded_tensor_volume = param.physical_volume();
@@ -190,7 +190,7 @@ SGDFusedProgramFactory::cached_program_t SGDFusedProgramFactory::create(
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, total_tiles_to_process);
 
-    uint32_t block_size = std::min(4U, num_tiles_per_core_group_1);
+    uint32_t block_size = std::min(2U, num_tiles_per_core_group_1);
     // -------------------------------------------------------------------------
     // 2) Create and configure circular buffers
     // -------------------------------------------------------------------------
@@ -210,17 +210,16 @@ SGDFusedProgramFactory::cached_program_t SGDFusedProgramFactory::create(
         program, all_cores, kMomentumInCbIndex, grad_data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
 
     [[maybe_unused]] auto cb_grad_wd = create_circular_buffer(
-        program, all_cores, kGradWdCbIndex, grad_data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
+        program, all_cores, kGradWdCbIndex, grad_data_format, float32_single_tile_size_bytes, num_input_tiles);
 
-    // TODO: change to float32
     [[maybe_unused]] auto cb_mom_out = create_circular_buffer(
-        program, all_cores, kMomentumOutCbIndex, grad_data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
+        program, all_cores, kMomentumOutCbIndex, grad_data_format, float32_single_tile_size_bytes, num_input_tiles);
 
     [[maybe_unused]] auto cb_mom_to_dram = create_circular_buffer(
         program, all_cores, kMomentumToDramCbIndex, grad_data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
 
     [[maybe_unused]] auto cb_update = create_circular_buffer(
-        program, all_cores, kUpdateCbIndex, grad_data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
+        program, all_cores, kUpdateCbIndex, grad_data_format, float32_single_tile_size_bytes, num_input_tiles);
 
     [[maybe_unused]] auto cb_output = create_circular_buffer(
         program, all_cores, kOutputCbIndex, param_data_format, bfloat16_single_tile_size_bytes, num_output_tiles);
@@ -260,12 +259,12 @@ SGDFusedProgramFactory::cached_program_t SGDFusedProgramFactory::create(
         block_size};                 // per_core_block_size
 
     kernels.compute_group_1 = create_compute_kernel(
-        program, core_group_1, compute_group_1_args, defines, kComputeKernelPath, /*fp32_dest_acc_en=*/false);
+        program, core_group_1, compute_group_1_args, defines, kComputeKernelPath, /*fp32_dest_acc_en=*/true);
 
     if (!core_group_2.ranges().empty()) {
         std::vector<uint32_t> compute_group_2_args = {num_tiles_per_core_group_2, block_size};
         kernels.compute_group_2 = create_compute_kernel(
-            program, core_group_2, compute_group_2_args, defines, kComputeKernelPath, /*fp32_dest_acc_en=*/false);
+            program, core_group_2, compute_group_2_args, defines, kComputeKernelPath, /*fp32_dest_acc_en=*/true);
     }
 
     // -------------------------------------------------------------------------
