@@ -478,6 +478,8 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             std::string where_call;
             if (input_dtype == DataType::INT32) {
                 where_call = fmt::format("where_int32_tile({0}, {1}, {2}, {0});", idst, 1, 2);
+            } else if (input_dtype == DataType::UINT32) {
+                where_call = fmt::format("where_uint32_tile({0}, {1}, {2}, {0});", idst, 1, 2);
             } else if (input_dtype == DataType::FLOAT32) {
                 where_call = fmt::format("where_fp32_tile({0}, {1}, {2}, {0});", idst, 1, 2);
             } else {
@@ -1027,13 +1029,6 @@ std::string get_compute_kernel_path(
         case UnaryOpType::CBRT: return fmt::format("{}/{}", compute_root, "cbrt_kernel.cpp");
         default: return fmt::format("{}/{}", compute_root, "eltwise_sfpu.cpp");
     }
-}
-
-uint32_t pack_scalar_runtime_arg(float scalar, DataType dtype) {
-    if (dtype == DataType::INT32 || dtype == DataType::UINT32) {
-        return std::bit_cast<uint32_t>(static_cast<int32_t>(scalar));
-    }
-    return std::bit_cast<uint32_t>(scalar);
 }
 
 }  // namespace ttnn::operations::unary::utils

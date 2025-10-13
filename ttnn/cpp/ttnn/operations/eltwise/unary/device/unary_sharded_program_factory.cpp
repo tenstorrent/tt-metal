@@ -25,9 +25,12 @@ UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
 
     const auto& input = tensor_args.input;
     const auto& ops_chain = args.op_chain;
-    float value1 = 0.0f;
-    float value2 = 0.0f;
-
+    float value1_float = 0.0f;
+    float value2_float = 0.0f;
+    int32_t value1_int = 0;
+    int32_t value2_int = 0;
+    uint32_t packed_scalar1 = 0u;
+    uint32_t packed_scalar2 = 0u;
     tt::tt_metal::Program program = CreateProgram();
 
     auto shard_spec = input.shard_spec().value();
@@ -135,13 +138,33 @@ UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
 
     if (!ops_chain[0].empty()) {
         switch (ops_chain[0].type()) {
-            case UnaryOpType::HARDSHRINK: value1 = *ops_chain[0].get_param_if<float>(0); break;
+            case UnaryOpType::HARDSHRINK:
+                value1_float = *ops_chain[0].get_param_if<float>(0);
+                packed_scalar1 = std::bit_cast<uint32_t>(value1_float);
+                break;
             case UnaryOpType::WHERE_TSS:
-                value1 = *ops_chain[0].get_param_if<float>(0);
-                value2 = *ops_chain[0].get_param_if<float>(1);
                 if (input.dtype() == DataType::INT32) {
                     unary_defines["FILL_INT"] = "fill_tile_int";
+                    value1_int = *ops_chain[0].get_param_if<int32_t>(0);
+                    value2_int = *ops_chain[0].get_param_if<int32_t>(1);
+                    packed_scalar1 = std::bit_cast<uint32_t>(value1_int);
+                    packed_scalar2 = std::bit_cast<uint32_t>(value2_int);
+                } else if (input.dtype() == DataType::UINT32) {
+                    unary_defines["FILL_INT"] = "fill_tile_int";
+                    if (ops_chain[0].get_param_if<int32_t>(0) && ops_chain[0].get_param_if<int32_t>(1)) {
+                        value1_int = *ops_chain[0].get_param_if<int32_t>(0);
+                        value2_int = *ops_chain[0].get_param_if<int32_t>(1);
+                        packed_scalar1 = std::bit_cast<uint32_t>(value1_int);
+                        packed_scalar2 = std::bit_cast<uint32_t>(value2_int);
+                    } else {
+                        packed_scalar1 = *ops_chain[0].get_param_if<uint32_t>(0);
+                        packed_scalar2 = *ops_chain[0].get_param_if<uint32_t>(1);
+                    }
                 } else {
+                    value1_float = *ops_chain[0].get_param_if<float>(0);
+                    value2_float = *ops_chain[0].get_param_if<float>(1);
+                    packed_scalar1 = std::bit_cast<uint32_t>(value1_float);
+                    packed_scalar2 = std::bit_cast<uint32_t>(value2_float);
                     unary_defines["FILL_FLOAT"] = "fill_tile";
                 }
                 break;
@@ -160,8 +183,6 @@ UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
 
     auto path = utils::get_compute_kernel_path(ops_chain[0].type(), compute_root_sharded, input.dtype());
 
-    const auto packed_scalar1 = utils::pack_scalar_runtime_arg(value1, input.dtype());
-    const auto packed_scalar2 = utils::pack_scalar_runtime_arg(value2, input.dtype());
     auto eltwise_unary_kernel_group_1_id = tt::tt_metal::CreateKernel(
         program,
         path,
