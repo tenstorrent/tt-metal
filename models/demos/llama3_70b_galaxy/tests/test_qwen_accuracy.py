@@ -18,9 +18,17 @@ from models.demos.llama3_70b_galaxy.tt.sampling import TTSampling
 from models.tt_transformers.tt.model_config import ModelArgs
 from transformers import AutoTokenizer
 from tqdm import tqdm
+<<<<<<< HEAD
 
 
 @torch.no_grad()
+=======
+from models.utility_functions import skip_for_grayskull
+
+
+@torch.no_grad()
+@skip_for_grayskull("Requires wormhole_b0 to run")
+>>>>>>> bc236880f1 (Resolved merge conflicts)
 @pytest.mark.parametrize(
     "min_top1_acc, min_top5_acc",  # Max seqlen should be at least prefill_len + decode_len
     ((91, 99),),

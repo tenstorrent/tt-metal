@@ -107,7 +107,9 @@ class TtTransformer(LightweightModule):
                 weight_key="norm",
                 is_distributed=self.args.is_distributed_norm,
                 sharded_program_config=self.model_config["SHARDED_NORM_LM_HEAD_PRGM_CFG"],
-                sharded_output_config=self.model_config["LM_HEAD_INPUT_MEMCFG"],
+                sharded_output_config=self.model_config["LM_HEAD_INPUT_MEMCFG"]
+                if not args.qk_norm
+                else self.model_config["SHARDED_LM_HEAD_INPUT_RING_MEMCFG"],
             ),
             args,
             args.is_galaxy,
@@ -508,14 +510,14 @@ class TtTransformer(LightweightModule):
         get_last_token=-1,
         kv_cache=None,
         rot_mats=None,
-        batch_size=1,
     ):
         """
         This method will take device tensors and any other args to run forward.
         It returns ttnn device tensors.
         """
+        x_embd = self.embd(x)
         tt_logits = self.forward(
-            x,
+            x_embd,
             current_pos=None,
             rot_mats=rot_mats if rot_mats is not None else self.tt_rot_mats_prefill,
             user_id=user_id,
