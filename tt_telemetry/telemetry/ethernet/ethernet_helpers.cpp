@@ -45,7 +45,7 @@ bool is_ethernet_endpoint_up(
     uint32_t channel,
     uint32_t link_up_addr,
     bool force_refresh_link_status) {
-    const tt_SocDescriptor& soc_desc = cluster->get_soc_descriptor(chip_id);
+    const SocDescriptor& soc_desc = cluster->get_soc_descriptor(chip_id);
     tt::umd::CoreCoord ethernet_core = soc_desc.get_eth_core_for_channel(channel, tt::umd::CoordSystem::LOGICAL);
 
     uint32_t link_up_value = 0;

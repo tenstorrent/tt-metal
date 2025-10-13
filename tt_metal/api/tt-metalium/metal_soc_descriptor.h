@@ -17,11 +17,11 @@
 #include <umd/device/types/xy_pair.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 
-//! tt_SocDescriptor contains information regarding the SOC configuration targetted.
+//! SocDescriptor contains information regarding the SOC configuration targetted.
 /*!
     Should only contain relevant configuration for SOC
 */
-struct metal_SocDescriptor : public tt_SocDescriptor {
+struct metal_SocDescriptor : public SocDescriptor {
 public:
     std::vector<size_t> dram_view_channels;
     std::vector<std::vector<CoreCoord>>
@@ -34,7 +34,7 @@ public:
 
     std::map<CoreCoord, int> logical_eth_core_to_chan_map;
 
-    metal_SocDescriptor(const tt_SocDescriptor& other, const BoardType& board_type);
+    metal_SocDescriptor(const SocDescriptor& other, const BoardType& board_type);
     metal_SocDescriptor() = default;
 
     CoreCoord get_preferred_worker_core_for_dram_view(int dram_view, uint8_t noc) const;
