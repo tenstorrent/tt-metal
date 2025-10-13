@@ -273,6 +273,16 @@ HostTensor to_row_major_layout_impl(const HostTensor& tensor) {
     auto tile = tensor.tensor_spec().tile();
     auto physical_shape = tensor.tensor_spec().physical_shape();
 
+    fprintf(
+        stderr,
+        "-- tensor_impl::to_layout: %s -> %s logical shape [",
+        enchantum::to_string(source_layout).data(),
+        enchantum::to_string(target_layout).data());
+    for (size_t i = 0; i < tensor.logical_shape().size(); i++) {
+        fprintf(stderr, " %u", tensor.logical_shape()[i]);
+    }
+    fprintf(stderr, " ] physical2D shape [%zu %zu]\n", physical_shape.height(), physical_shape.width());
+
     auto transformed_buffer = tensor.buffer().transform(
         [&](const HostBuffer& buffer) {
             auto input_data = buffer.view_as<T>();

@@ -78,6 +78,15 @@ bool is_uniform_write(const HostTensor& host_tensor, const distributed::MeshDevi
         return false;
     }
 
+    // const HostStorage hs(host_tensor);
+    // for (const auto& coord : hs.buffer().shard_coords()) {
+    //     fprintf(
+    //         stderr,
+    //         "-- to_device: shard %p size %zu\n",
+    //         hs.buffer().get_shard(coord)->view_bytes().data(),
+    //         hs.buffer().get_shard(coord)->view_bytes().size());
+    // }
+
     auto all_coords = distributed::MeshCoordinateRange(device_mesh_shape);
     return std::ranges::all_of(
         all_coords, [&](const auto& coord) { return host_buffer.shard_coords().contains(coord); });

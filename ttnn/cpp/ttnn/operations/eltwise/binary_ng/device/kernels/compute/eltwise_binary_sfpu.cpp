@@ -27,6 +27,7 @@
 #include "api/compute/isclose.h"
 #include "eltwise_utils_common.hpp"
 #include "eltwise_utils_sfpu.hpp"
+#include "api/debug/dprint.h"
 
 ALWI void process_tile(
     tt::CBIndex cb_pre_lhs_id,
@@ -121,6 +122,14 @@ void kernel_main() {
 
     constexpr auto cb_post_lhs_id = HAS_ACTIVATIONS(LHS) ? tt::CBIndex::c_3 : cb_pre_lhs_id;
     constexpr auto cb_post_rhs_id = HAS_ACTIVATIONS(RHS) ? tt::CBIndex::c_4 : cb_pre_rhs_id;
+    UNPACK(
+        DPRINT << "+KSFPU: nTiles " << num_tiles
+               << " nTiles/cycle " << num_tiles_per_cycle
+               << " CB" << static_cast<int>(cb_post_lhs_id)
+               << "->dst0 CB" << static_cast<int>(cb_post_rhs_id)
+               << "->dst1"
+               << ENDL();
+    );
 
     unary_op_init_common(cb_post_lhs_id, cb_out_id);
 #ifdef PACK_RELU

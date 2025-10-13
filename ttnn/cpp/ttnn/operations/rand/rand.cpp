@@ -85,6 +85,11 @@ Tensor rand(
     const bool needs_typecast = dtype != DataType::FLOAT32 && dtype != DataType::BFLOAT16;
     const DataType generation_dtype = needs_typecast ? DataType::FLOAT32 : dtype;
 
+    fprintf(stderr, "-- Rand::invoke: shape rank %zu volume %lu [ ", shape.rank(), shape.volume());
+    for (size_t i = 0; i < shape.rank(); i++) {
+        fprintf(stderr, "%u ", shape[i]);
+    }
+    fprintf(stderr, "]\n");
     ttnn::Shape device_shape = shape;
     ttsl::SmallVector<bool> mesh_dim_is_sharded;
     std::optional<tt::tt_metal::TensorTopology> tensor_topology;

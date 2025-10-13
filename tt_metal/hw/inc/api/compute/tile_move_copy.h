@@ -8,6 +8,7 @@
 #include "api/compute/sentinel/compute_kernel_sentinel.h"
 #include "sanitizer/api.h"
 #include "llk_assert.h"
+#include "api/debug/dprint.h"
 
 #ifdef TRISC_MATH
 #include "llk_math_unary_datacopy_api.h"
@@ -38,6 +39,7 @@ ALWI void copy_tile_to_dst_init_short(
     LLK_SAN_FUNCTION();
 #ifndef ARCH_QUASAR
     state_configure(cbid, call_line);
+    UNPACK(DPRINT << "+cpTileI: " << cbid << ENDL(););
 #else
     LLK_ASSERT(transpose_within_16x16_face == false, "Transpose within face not supported on Quasar");
     LLK_ASSERT(transpose == 0, "Transpose not supported on Quasar");
@@ -76,6 +78,7 @@ ALWI void copy_tile_init(uint32_t cbid, uint32_t call_line = __builtin_LINE()) {
 #ifndef ARCH_QUASAR
 ALWI void copy_tile_to_dst_init_short_with_dt(uint32_t old_cbid, uint32_t new_cbid, uint32_t transpose = 0) {
     LLK_SAN_FUNCTION();
+    UNPACK(DPRINT << "+cpTileIDt: " << old_cbid << "->" << new_cbid << ENDL(););
     // This reconfig call checks if old operand has different data format to
     // new operand idx, otherwise no reconfig call occurs
     UNPACK((llk_unpack_reconfig_data_format_srca<DST_ACCUM_MODE, p_dim_stride_target::IGNORE>(old_cbid, new_cbid)));
@@ -109,6 +112,7 @@ ALWI void copy_tile(uint32_t in_cb_id, uint32_t in_tile_index, uint32_t dst_tile
 #ifndef ARCH_QUASAR
     LLK_SAN_FUNCTION();
 #endif
+    UNPACK(DPRINT << "+cpTile: " << in_cb_id << ':' << in_tile_index << "->" << dst_tile_index << ENDL());
     UNPACK((llk_unpack_A<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
         in_cb_id, in_tile_index)));
     MATH((llk_math_eltwise_unary_datacopy<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE, UnpackToDestEn>(

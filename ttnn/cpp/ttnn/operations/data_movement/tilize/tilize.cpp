@@ -53,13 +53,36 @@ ttnn::Tensor tilize(
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     uint32_t input_single_tile_size = tile.get_tile_size(input_cb_data_format);
     uint32_t output_single_tile_size =
+
+    fprintf(
+        stderr,
+        "-- ExecuteTilize::invoke: tileSz of input %u tileSz of output %u\n",
+        input_single_tile_size,
+        output_single_tile_size);
+    fprintf(
+        stderr,
+        "-- ExecuteTilize::invoke: input tensor padded rank %zu vol %lu shape [%u %u]\n",
+        input_tensor.padded_shape().rank(),
+        input_tensor.padded_shape().volume(),
+        input_tensor.padded_shape()[0],
+        input_tensor.padded_shape()[1]);
+
         output_dtype.has_value()
             ? tile.get_tile_size(tt::tt_metal::datatype_to_dataformat_converter(output_dtype.value()))
             : input_single_tile_size;
+
     uint32_t input_tile_width = tile.get_width();
     uint32_t input_tile_height = tile.get_height();
 
     uint32_t num_tiles_per_row = input_tensor.padded_shape()[-1] / input_tile_width;
+
+    fprintf(
+        stderr,
+        "-- ExecuteTilize::invoke: tileW %u tileH %u ntiles/col %u ntiles/row %u (for enough space only)\n",
+        input_tile_width,
+        input_tile_height,
+        num_tiles_per_col,
+        num_tiles_per_row);
 
     // Fold in the block factory's c_1 staging CB so routing does not pick "fits" when only c_0+c_16 fit.
     const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
@@ -73,6 +96,11 @@ ttnn::Tensor tilize(
         num_tiles_per_row,
         staging_bytes_per_tile,
         fixed_staging_bytes);
+    fprintf(
+        stderr,
+        "-- ExecuteTilize::invoke: height enough space %d width enough space %d (unused?)\n",
+        enough_space_height,
+        enough_space_width);
 
     auto base_tilize = [=](const ttnn::Tensor& input_tensor) {
         // Workaround for https://github.com/tenstorrent/tt-metal/issues/45331:

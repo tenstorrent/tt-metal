@@ -45,6 +45,7 @@ Alignment create_default_alignment_tile(const TilePageConfig& config, DataType, 
 }
 
 Alignment create_default_alignment_rm(const RowMajorPageConfig&, DataType, const MemoryConfig& memory_config) {
+    fprintf(stderr, "-- create_default_alignment_rm(RowMajorPageConfig)\n");
     if (memory_config.shard_spec().has_value()) {
         const auto& shard_spec = memory_config.shard_spec().value();
         return Alignment({shard_spec.shape[1]});

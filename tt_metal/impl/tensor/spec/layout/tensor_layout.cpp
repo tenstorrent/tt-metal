@@ -170,9 +170,20 @@ TensorLayoutImpl::TensorLayoutImpl(
 }
 
 void TensorLayoutImpl::initialize_alignment() {
+    fprintf(stderr, "-- TensorLayout::initialize_alignment: start w/ user alignment [");
+    for (size_t i = 0; i < alignment_.size(); i++) {
+        fprintf(stderr, " %u", alignment_[i]);
+    }
+    fprintf(stderr, " ]\n");
+
     auto default_alignment = create_default_alignment(page_config_, dtype_, memory_config_);
     if (alignment_.empty()) {
         alignment_ = default_alignment;
+        fprintf(stderr, "-- TensorLayout::initialize_alignment: using default alignment [");
+        for (size_t i = 0; i < alignment_.size(); i++) {
+            fprintf(stderr, " %u", alignment_[i]);
+        }
+        fprintf(stderr, " ]\n");
         return;
     }
 
@@ -185,6 +196,11 @@ void TensorLayoutImpl::initialize_alignment() {
         result[result_idx] = CMAKE_UNIQUE_NAMESPACE::round_up(result[result_idx], default_alignment[i]);
     }
     alignment_ = Alignment(std::move(result));
+    fprintf(stderr, "-- TensorLayout::initialize_alignment: merged alignments [");
+    for (size_t i = 0; i < alignment_.size(); i++) {
+        fprintf(stderr, " %u", alignment_[i]);
+    }
+    fprintf(stderr, " ]\n");
 }
 
 BufferShardingArgs TensorLayoutImpl::compute_buffer_sharding_args(const tt::tt_metal::Shape& shape) const {
@@ -255,10 +271,14 @@ BufferShardingArgs TensorLayoutImpl::compute_buffer_sharding_args(const tt::tt_m
 }
 
 size_t TensorLayoutImpl::compute_packed_buffer_size_bytes(const tt::tt_metal::Shape& shape) const {
+    fprintf(stderr, "-- TensorLayoutImpl::compute_packed_buffer_size_bytes: input shape [%u %u]\n", shape[0], shape[1]);
     const Shape2D physical_size = compute_physical_shape(shape);
+    fprintf(stderr, "---- physical_size_2D [%zu %zu] -> ", physical_size.height(), physical_size.width());
     const Shape2D page_shape = compute_page_shape(physical_size);
+    fprintf(stderr, "page_shape_2D [%zu %zu] -> ", page_shape.height(), page_shape.width());
     const auto width_remainder = physical_size.width() % page_shape.width();
     const auto height_remainder = physical_size.height() % page_shape.height();
+    fprintf(stderr, "remainders H %zu W %zu\n", height_remainder, width_remainder);
     TT_FATAL(
         (width_remainder == 0 && height_remainder == 0) || ((physical_size.width() * physical_size.height()) == 0),
         "Physical size {} must be multiple of page size {}",
@@ -271,6 +291,12 @@ size_t TensorLayoutImpl::compute_packed_buffer_size_bytes(const tt::tt_metal::Sh
     const size_t page_count = physical_area / page_area;
     const size_t page_size_bytes = compute_page_size_bytes(page_shape);
 
+    fprintf(
+        stderr,
+        "-- TensorLayout::compute_packed_buffer_size_bytes: return nPages %zu x pageSz %zu = %zu\n",
+        page_count,
+        page_size_bytes,
+        page_count * page_size_bytes);
     return page_count * page_size_bytes;
 }
 
@@ -327,6 +353,11 @@ Shape2D TensorLayoutImpl::get_physical_shard_shape() const {
 }
 
 Shape2D TensorLayoutImpl::compute_logical_2d_shape(const tt::tt_metal::Shape& shape) const {
+    fprintf(stderr, "!! TensorLayoutImpl::compute_logical_2d_shape: shape [");
+    for (size_t i = 0; i < shape.size(); i++) {
+        fprintf(stderr, " %u", shape[i]);
+    }
+    fprintf(stderr, " ]\n");
     if (shape.rank() < 2) {
         return Shape2D{1, shape[-1]};
     }
@@ -335,12 +366,23 @@ Shape2D TensorLayoutImpl::compute_logical_2d_shape(const tt::tt_metal::Shape& sh
     for (int i = -3; i >= -shape.rank(); --i) {
         height *= shape[i];
     }
+    fprintf(stderr, "!! TensorLayout::compute_logical_2d_shape: returns [%zu %zu]\n", height, width);
     return Shape2D{height, width};
 }
 
 Shape2D TensorLayoutImpl::compute_physical_shape(const tt::tt_metal::Shape& shape) const {
     const int rank = static_cast<int>(shape.rank());
     const int alignment_rank = static_cast<int>(alignment_.size());
+
+    fprintf(stderr, "!! TensorLayout::compute_physical_shape: shape [");
+    for (size_t i = 0; i < shape.size(); i++) {
+        fprintf(stderr, " %u", shape[i]);
+    }
+    fprintf(stderr, " ] alignments [");
+    for (size_t i = 0; i < alignment_.size(); i++) {
+        fprintf(stderr, " %u", alignment_[i]);
+    }
+    fprintf(stderr, " ]\n");
 
     size_t width = 1;
     size_t height = 1;
@@ -362,6 +404,7 @@ Shape2D TensorLayoutImpl::compute_physical_shape(const tt::tt_metal::Shape& shap
     }
 
     Shape2D size{height, width};
+    fprintf(stderr, "!! TensorLayout::compute_physical_shape: returns [%zu %zu]\n", height, width);
     return size;
 }
 
@@ -393,6 +436,15 @@ tt::tt_metal::Shape TensorLayoutImpl::compute_padded_shape(const tt::tt_metal::S
     int rank_index = static_cast<int>(shape.rank()) - 1;
     int alignment_index = static_cast<int>(alignment_.size()) - 1;
     int padded_shape_index = static_cast<int>(padded_shape.size() - 1);
+    fprintf(stderr, "!! TensorLayout::compute_padded_shape: shape [");
+    for (size_t i = 0; i < shape.size(); i++) {
+        fprintf(stderr, " %u", shape[i]);
+    }
+    fprintf(stderr, " ] alignments [");
+    for (size_t i = 0; i < alignment_.size(); i++) {
+        fprintf(stderr, " %u", alignment_[i]);
+    }
+    fprintf(stderr, " ]\n");
     size_t accum_alignment = 1;
 
     for (; alignment_index >= 0; rank_index--, alignment_index--, padded_shape_index--) {
@@ -418,11 +470,24 @@ tt::tt_metal::Shape TensorLayoutImpl::compute_padded_shape(const tt::tt_metal::S
         if (rank_index != static_cast<int>(shape.rank()) - 1) {
             accum_alignment *= padded_shape_value;
         }
+        fprintf(
+            stderr,
+            "---- shape_value %u alignment_value %u padded_shape_value %u accum_align %zu\n",
+            shape_value,
+            alignment_value,
+            padded_shape_value,
+            accum_alignment);
     }
     for (; rank_index >= 0; rank_index--, padded_shape_index--) {
         padded_shape[padded_shape_index] = shape[rank_index];
     }
-    return tt::tt_metal::Shape(std::move(padded_shape));
+    auto ret = tt::tt_metal::Shape(std::move(padded_shape));
+    fprintf(stderr, "!! TensorLayout::compute_padded_shape: returning shape [");
+    for (size_t i = 0; i < ret.size(); i++) {
+        fprintf(stderr, " %u", ret[i]);
+    }
+    fprintf(stderr, " ]\n");
+    return ret;
 }
 
 // ------------------------------------------------------------------------------------------------

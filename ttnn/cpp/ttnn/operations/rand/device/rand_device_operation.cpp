@@ -47,6 +47,16 @@ RandDeviceOperation::tensor_return_value_t RandDeviceOperation::create_output_te
         // rand has no input tensor from which the operation framework can infer a partial work set.
         output = Tensor(DeviceStorage(output.device_storage(), *operation_attributes.restricted_mesh_coords));
     }
+    fprintf(stderr, "-- RandDeviceOperation: finished create_device_tensor()\n");
+    fprintf(
+        stderr,
+        "-- Pre-Alloc Tensor: logical [%u %u] padded [%u %u] logical vol %lu physical vol %lu\n",
+        output.logical_shape()[0],
+        output.logical_shape()[1],
+        output.padded_shape()[0],
+        output.padded_shape()[1],
+        output.logical_volume(),
+        output.physical_volume());
     return output;
 }
 
@@ -64,6 +74,7 @@ ttnn::operations::rand::RandDeviceOperation::tensor_return_value_t uniform(
     uint32_t seed,
     ttsl::SmallVector<bool> mesh_dim_is_sharded,
     std::optional<tt::tt_metal::TensorTopology> tensor_topology) {
+    fprintf(stderr, "-- RandDeviceOperation::invoke: shape [%u %u]\n", shape[0], shape[1]);
     using OperationType = ttnn::operations::rand::RandDeviceOperation;
     std::optional<std::vector<ttnn::MeshCoordinate>> restricted_mesh_coords;
     if (tensor_topology.has_value() && tensor_topology->mesh_coords().size() < device.num_devices()) {
