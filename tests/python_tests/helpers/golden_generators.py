@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 import math
+from typing import Optional
 
 import torch
 from helpers.format_arg_mapping import (
@@ -12,7 +13,7 @@ from helpers.format_arg_mapping import (
     format_dict,
 )
 from helpers.format_config import DataFormat
-from helpers.tilize_untilize import tilize_block
+from helpers.tilize_untilize import tilize_block, untilize
 
 golden_registry = {}
 
@@ -658,11 +659,20 @@ class UnarySFPUGolden:
             MathOperation.Threshold: self._threshold,
             MathOperation.ReluMax: self._relu_max,
             MathOperation.ReluMin: self._relu_min,
+            MathOperation.ReduceColumn: self._reduce_columns,
         }
         self.data_format = None
         self.dest_acc = DestAccumulation.No
 
-    def __call__(self, operation, operand1, data_format, dest_acc, input_format):
+    def __call__(
+        self,
+        operation,
+        operand1,
+        data_format,
+        dest_acc,
+        input_format,
+        reduce_pool: Optional[ReducePool] = None,
+    ):
         self.data_format = data_format
         self.dest_acc = dest_acc
 
@@ -687,7 +697,12 @@ class UnarySFPUGolden:
                 operand1 = (operand1.view(torch.int32) & 0xFFFF0000).view(torch.float32)
 
         tensor = to_tensor(operand1, dst_format)
-        result = [self.ops[operation](x) for x in tensor.tolist()]
+
+        # Special handling for SumColumns which needs to process the entire tensor
+        if operation == MathOperation.ReduceColumn:
+            result = self.ops[operation](tensor, reduce_pool)
+        else:
+            result = [self.ops[operation](x) for x in tensor.tolist()]
 
         if self.data_format == DataFormat.Bfp8_b:
             check_bfp8_b(result)
@@ -874,6 +889,20 @@ class UnarySFPUGolden:
             else torch.tensor(x, dtype=format_dict[self.data_format])
         )
         return torch.max(input_tensor, torch.tensor(threshold)).item()
+
+    def _reduce_columns(self, x, reduce_pool: ReducePool):
+        input_tensor = untilize(x, self.data_format).flatten().view(32, 32)
+
+        # Sum along columns (dim=0) to get a 1x32 result
+        column_sums = torch.sum(input_tensor, dim=0)  # Shape: [32]
+
+        if reduce_pool == ReducePool.Average:
+            # Divide each column sum by 32 individually
+            column_averages = column_sums // 32  # Element-wise division by 32
+            return column_averages.tolist()
+
+        # Return only the column sums, not a full 1024-element tensor
+        return column_sums.tolist()
 
 
 @register_golden
