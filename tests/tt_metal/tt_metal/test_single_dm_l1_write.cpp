@@ -63,7 +63,7 @@ int main() {
     // Quasar currently supports only one Data Movement core.
     KernelHandle data_movement_kernel_0 = CreateKernel(
         program,
-        OVERRIDE_KERNEL_PREFIX "quasar_basic_tests/kernels/l1_write_kernel.cpp",
+        OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/simple_l1_write.cpp",
         core,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
