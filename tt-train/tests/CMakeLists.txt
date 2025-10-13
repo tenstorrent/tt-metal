@@ -65,6 +65,7 @@ set(SOURCES
 )
 
 add_executable(ttml_tests ${SOURCES})
+target_include_directories(ttml_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(
     ttml_tests
     GTest::gmock_main

@@ -6,6 +6,7 @@
 
 #include <core/ttnn_all_includes.hpp>
 #include <memory>
+#include <numeric>
 #include <umd/device/cluster.hpp>
 #include <vector>
 
@@ -14,7 +15,7 @@
 #include "core/device.hpp"
 #include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
-#include "tt_metal/test_utils/env_vars.hpp"
+#include "test_utils/env_utils.hpp"
 #include "ttnn_fixed/distributed/tt_metal.hpp"
 #include "ttnn_fixed/distributed/ttnn_ops.hpp"
 
