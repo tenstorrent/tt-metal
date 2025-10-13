@@ -789,7 +789,7 @@ void ring_reduce_scatter_minimal_async_helper_override_runtime_arguments(
                 worker_writer_sender_runtime_args[5] = semaphore.at(num_directions_per_link).address();
 
                 if (barrier_semaphore.has_value()) {
-                    worker_writer_sender_runtime_args[11] = barrier_semaphore.value().address();
+                    worker_writer_sender_runtime_args[7] = barrier_semaphore.value().address();
                 }
 
                 core_idx++;
@@ -1476,11 +1476,9 @@ void line_reduce_scatter_minimal_async_helper_override_runtime_arguments(
                 worker_writer_sender_runtime_args[0] = intermed.buffer()->address();
                 worker_writer_sender_runtime_args[1] = output.buffer()->address();
                 worker_writer_sender_runtime_args[4] = semaphore.at(0).address();
-                worker_writer_sender_runtime_args[5] = semaphore.at(1).address();
-                worker_writer_sender_runtime_args[6] = semaphore.at(2).address();
 
                 if (barrier_semaphore.has_value()) {
-                    worker_writer_sender_runtime_args[13] = barrier_semaphore.value().address();
+                    worker_writer_sender_runtime_args[9] = barrier_semaphore.value().address();
                 }
 
                 core_idx++;
