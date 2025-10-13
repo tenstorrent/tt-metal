@@ -109,15 +109,19 @@ operation::ProgramWithCallbacks Tilize::create_program(
     auto& output_tensor = output_tensors.at(0);
 
     if (input_tensor_a.memory_config().is_sharded()) {
+        fprintf(stderr, "-- Tilize::create_program: calling tilize_multi_core_sharded()\n");
         return detail::tilize_multi_core_sharded(input_tensor_a, output_tensor);
     }
     if (!this->enough_space_height) {
+        fprintf(stderr, "-- Tilize::create_program: calling tilize_multi_core_block()\n");
         return detail::tilize_multi_core_block(input_tensor_a, output_tensor);
     }
     if (!this->use_multicore) {
+        fprintf(stderr, "-- Tilize::create_program: calling tilize_single_core()\n");
         return detail::tilize_single_core(input_tensor_a, output_tensor);
     }
 
+    fprintf(stderr, "-- Tilize::create_program: calling tilize_multi_core_interleaved()\n");
     return detail::tilize_multi_core_interleaved(input_tensor_a, output_tensor);
 }
 

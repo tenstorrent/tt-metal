@@ -8,6 +8,7 @@
 #include "ckernel_globals.h"
 #include "ckernel_template.h"
 #include "cmath_common.h"
+#include "debug/dprint.h"
 #include "llk_defs.h"
 #include "llk_io.h"
 #include "llk_math_common.h"
@@ -63,12 +64,14 @@ inline void llk_math_debug_dump_seek(std::uint8_t offset) { _llk_math_debug_dump
 template <bool is_fp32_dest_acc_en, bool to_from_int8 = false>
 inline void llk_math_reconfig_data_format_srca(const std::uint32_t srca_new_operand) {
     std::uint32_t new_srca_operand_id = get_operand_id(srca_new_operand);
+    DPRINT << "+MRCFG: A " << static_cast<int>(unpack_dst_format[new_srca_operand_id]) << ENDL();
     _llk_math_reconfig_data_format_srca_<is_fp32_dest_acc_en, to_from_int8>(unpack_dst_format[new_srca_operand_id]);
 }
 
 template <bool is_fp32_dest_acc_en, bool to_from_int8 = false>
 inline void llk_math_reconfig_data_format_srcb(const std::uint32_t srcb_new_operand) {
     std::uint32_t new_srcb_operand_id = get_operand_id(srcb_new_operand);
+    DPRINT << "+MRCFG: B " << static_cast<int>(unpack_dst_format[new_srcb_operand_id]) << ENDL();
     _llk_math_reconfig_data_format_srcb_<is_fp32_dest_acc_en, to_from_int8>(unpack_dst_format[new_srcb_operand_id]);
 }
 
@@ -76,6 +79,11 @@ template <bool is_fp32_dest_acc_en, bool to_from_int8 = false>
 inline void llk_math_reconfig_data_format(const std::uint32_t srca_new_operand, const std::uint32_t srcb_new_operand) {
     std::uint32_t new_srca_operand_id = get_operand_id(srca_new_operand);
     std::uint32_t new_srcb_operand_id = get_operand_id(srcb_new_operand);
+    DPRINT << "+MRCFG: A "
+           << static_cast<int>(unpack_dst_format[new_srca_operand_id])
+           << " B "
+           << static_cast<int>(unpack_dst_format[new_srcb_operand_id])
+           << ENDL();
 
     _llk_math_reconfig_data_format_<is_fp32_dest_acc_en, to_from_int8>(
         unpack_dst_format[new_srca_operand_id], unpack_dst_format[new_srcb_operand_id]);
@@ -107,6 +115,11 @@ inline void llk_math_reconfig_data_format_srca(
     const std::uint32_t srca_old_operand, const std::uint32_t srca_new_operand) {
     std::uint32_t old_srca_operand_id = get_operand_id(srca_old_operand);
     std::uint32_t new_srca_operand_id = get_operand_id(srca_new_operand);
+    DPRINT << "+MRCFGA: "
+           << static_cast<int>(unpack_dst_format[old_srca_operand_id])
+           << "->"
+           << static_cast<int>(unpack_dst_format[new_srca_operand_id])
+           << ENDL();
 
     if ((unpack_dst_format[old_srca_operand_id] != unpack_dst_format[new_srca_operand_id])) {
         llk_math_reconfig_data_format_srca<is_fp32_dest_acc_en, to_from_int8>(srca_new_operand);
@@ -118,6 +131,11 @@ inline void llk_math_reconfig_data_format_srcb(
     const std::uint32_t srcb_old_operand, const std::uint32_t srcb_new_operand) {
     std::uint32_t old_srcb_operand_id = get_operand_id(srcb_old_operand);
     std::uint32_t new_srcb_operand_id = get_operand_id(srcb_new_operand);
+    DPRINT << "+MRCFGB: "
+           << static_cast<int>(unpack_dst_format[old_srcb_operand_id])
+           << "->"
+           << static_cast<int>(unpack_dst_format[new_srcb_operand_id])
+           << ENDL();
 
     if ((unpack_dst_format[old_srcb_operand_id] != unpack_dst_format[new_srcb_operand_id])) {
         llk_math_reconfig_data_format_srcb<is_fp32_dest_acc_en, to_from_int8>(srcb_new_operand);

@@ -427,20 +427,46 @@ operation::ProgramWithCallbacks tilize_multi_core_interleaved(const Tensor& a, T
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
     tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
     uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
+    fprintf(stderr, "!! MultiCoreTilizeInterleaved\n");
+    fprintf(
+        stderr,
+        "!! Input [%u %u] PhyVol %lu elemSz %u Output [%u %u] PhyVol %lu elemSz %u\n",
+        a.padded_shape()[0],
+        a.padded_shape()[1],
+        a.physical_volume(),
+        a.element_size(),
+        output.padded_shape()[0],
+        output.padded_shape()[1],
+        output.physical_volume(),
+        output.element_size());
 
     uint32_t num_tiles_per_row = output.padded_shape()[-1] / TILE_WIDTH;
 
     uint32_t num_tiles_per_col = output.padded_shape()[-2] / TILE_HEIGHT;
+    fprintf(stderr, "!! For output: nTiles/Row %u nTiles/Col %u\n", num_tiles_per_row, num_tiles_per_col);
 
     int32_t ntiles = a.physical_volume() / TILE_HW;
+    fprintf(stderr, "!! Num tiles that densly store all input elements: %d\n", ntiles);
     uint32_t ntiles_per_block = a.padded_shape()[-1] / TILE_WIDTH;
+    fprintf(
+        stderr,
+        "!! Num tiles/block (enough to fit 1 input row in the block using only one row from each tile): %u\n",
+        ntiles_per_block);
     uint32_t nblocks = std::ceil((float)ntiles / ntiles_per_block);
+    fprintf(stderr, "!! Num blocks to store the input (use all rows of the block): %u\n", nblocks);
     uint32_t block_size_nbytes = a.padded_shape()[-1] * a.element_size();
+    fprintf(stderr, "!! Size of a single input row (w/ the bad name block_size_nbytes): %u\n", block_size_nbytes);
 
     IDevice* device = a.device();
     auto grid_size = device->compute_with_storage_grid_size();
     auto [ncores, all_cores, core_range, core_range_cliff, nblocks_per_core, nblocks_per_core_cliff] =
         ttnn::split_blocks_for_tilize(grid_size, nblocks);
+    fprintf(
+        stderr,
+        "!! WorkSplit: nCores %u nBlocks/Core %u nBlocks/CoreCliff %u\n",
+        ncores,
+        nblocks_per_core,
+        nblocks_per_core_cliff);
 
     constexpr uint32_t threshold_row_block = 32;
     if (num_tiles_per_row > threshold_row_block) {
@@ -464,11 +490,13 @@ operation::ProgramWithCallbacks tilize_multi_core_interleaved(const Tensor& a, T
                  full_cores_per_col] =
                     ttnn::split_blocks_for_tilize_wh(grid_size, num_blocks_block, num_tiles_per_row, num_tiles_per_col);
             if (ncores < ncores_block) {
+                fprintf(stderr, "!! Taking MultiCoreTilizeBlock!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n");
                 return tilize_multi_core_block(a, output);
             }
         }
     }
 
+    // One tile per page, one CB stores the entire block, which stores the entire row of the input
     create_cb(tt::CBIndex::c_0, program, all_cores, input_single_tile_size, ntiles_per_block, input_cb_data_format);
 
     auto [output_cb_index, _] = create_cb(
@@ -505,6 +533,11 @@ operation::ProgramWithCallbacks tilize_multi_core_interleaved(const Tensor& a, T
     std::vector<uint32_t> compute_args_cliff = {nblocks_per_core_cliff, ntiles_per_block};
 
     if (!core_range.ranges().empty()) {
+        fprintf(
+            stderr,
+            "!! Calling non-cliff version: nBlocks/Core %u nTiles/Block %u\n",
+            nblocks_per_core,
+            ntiles_per_block);
         CreateKernel(
             program,
             "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/tilize.cpp",
@@ -512,6 +545,7 @@ operation::ProgramWithCallbacks tilize_multi_core_interleaved(const Tensor& a, T
             ComputeConfig{.compile_args = compute_args});
     }
     if (!core_range_cliff.empty()) {
+        fprintf(stderr, "!! Calling cliff version\n");
         CreateKernel(
             program,
             "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/tilize.cpp",
@@ -525,6 +559,7 @@ operation::ProgramWithCallbacks tilize_multi_core_interleaved(const Tensor& a, T
     uint32_t ncores_full = ncores - has_cliff;
     uint32_t tile_start_id = 0;
     uint32_t row_start_id = 0;
+    fprintf(stderr, "!! nCoresFull %u TileStartId %u RowStartId %u\n", ncores_full, tile_start_id, row_start_id);
     const auto& cores = grid_to_cores(ncores, grid_size.x, grid_size.y, true);
     for (uint32_t i = 0; i < ncores_full; ++i) {
         const CoreCoord& core = cores[i];

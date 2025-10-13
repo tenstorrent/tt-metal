@@ -97,6 +97,7 @@ Tensor create_typed_tt_tensor_from_py_data(
     // Shard pydata across mesh and apply `tensor_layout` at each shard.
     // Shapes of multi device shards will be derived automatically.
     if (mesh_mapper != nullptr) {
+        fprintf(stderr, "-- create_typed_tt_tensor_from_py_data: calling create_distributed_tensor()\n");
         return ttnn::distributed::create_distributed_tensor(
             pydata_span,
             py_data_shape,
@@ -114,6 +115,7 @@ Tensor create_typed_tt_tensor_from_py_data(
                                        tensor_spec.physical_shape() == tensor_spec.logical_2d_shape() &&
                                        tensor_spec.data_type() == convert_to_data_type<T>();
         pydata_borrowable) {
+        fprintf(stderr, "-- create_typed_tt_tensor_from_py_data: calling from_borrowed_data()\n");
         auto output =
             Tensor::from_borrowed_data(pydata_span, tensor_spec.logical_shape(), pydata_pin, tensor_spec.tile());
         if (device != nullptr) {
@@ -121,6 +123,7 @@ Tensor create_typed_tt_tensor_from_py_data(
         }
         return output;
     } else {
+        fprintf(stderr, "-- create_typed_tt_tensor_from_py_data: calling from_span()\n");
         return Tensor::from_span(
             tt::stl::make_const_span(pydata_span), tensor_spec, device, cq_id, static_cast<T>(pad_value));
     }
@@ -346,6 +349,16 @@ Tensor convert_python_tensor_to_tt_tensor(
             return optional_layout.value_or(Layout::ROW_MAJOR);
         }
     }();
+    fprintf(
+        stderr,
+        "-- convert_python_tensor_to_tt_tensor: elems %zu dt %s layout %s shape [",
+        preprocessed_py_tensor.num_elements,
+        enchantum::to_string(preprocessed_py_tensor.data_type).data(),
+        enchantum::to_string(layout).data());
+    for (size_t i = 0; i < shape.size(); i++) {
+        fprintf(stderr, " %u", shape[i]);
+    }
+    fprintf(stderr, " ]\n");
 
     // Important: `py::object` copying and destruction must be done while holding GIL, which pybind ensures for a thread
     // that calls the C++ APIs. We wrap `py::object` in `MemoryPin` so that multi-threaded C++ code only increments /
