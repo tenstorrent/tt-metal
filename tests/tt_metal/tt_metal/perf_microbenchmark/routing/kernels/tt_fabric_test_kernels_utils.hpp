@@ -1480,9 +1480,7 @@ struct SyncKernelConfig {
 
     void global_sync(uint8_t sync_iter) {
         connection_manager.open();
-        NocUnicastAtomicIncCommandHeader dummy{0, 0, false};
-        fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::None>(
-            connection_manager, sync_headers, dummy);
+        fabric_multicast_noc_unicast_atomic_inc_with_state(connection_manager, sync_headers);
         noc_semaphore_wait_min(line_sync_ptrs[0], line_sync_val * (sync_iter + 1));
         connection_manager.close();
     }
