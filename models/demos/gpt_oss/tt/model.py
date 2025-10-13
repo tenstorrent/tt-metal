@@ -100,7 +100,7 @@ class Model:
             substate(state_dict, "lm_head")["weight"].transpose(0, 1),
             device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat16,
+            dtype=ttnn.bfloat8_b,
             cache_file_name=get_cache_file_name(tensor_cache_path, "lm_head.weight"),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
@@ -112,7 +112,7 @@ class Model:
         ).transpose(1, 2)
 
         tt_sliding_mask = ttnn.from_torch(
-            sliding_mask, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=self.mesh_device
+            sliding_mask, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat4_b, device=self.mesh_device
         )
         self.device_decode_sliding_mask = {"full_attention": None, "sliding_attention": tt_sliding_mask}
         self._current_rope_mats = self._create_rope_embeddings(0, self.mesh_device)
@@ -272,7 +272,7 @@ class Model:
 
         tt_mask = ttnn.from_torch(mask, device=self.mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
         tt_sliding_mask = ttnn.from_torch(
-            sliding_mask, device=self.mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
+            sliding_mask, device=self.mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat4_b
         )
         attention_masks = {"full_attention": tt_mask, "sliding_attention": tt_sliding_mask}
 
@@ -366,7 +366,7 @@ class Model:
             1, self.mesh_config.shard_size(self.hf_config.num_attention_heads), 1, 1
         ).transpose(1, 2)
 
-        tt_sliding_mask = ttnn.from_torch(sliding_mask, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=None)
+        tt_sliding_mask = ttnn.from_torch(sliding_mask, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat4_b, device=None)
         ttnn.copy_host_to_device_tensor(tt_sliding_mask, self.device_decode_sliding_mask["sliding_attention"])
 
     def prepare_inputs_prefill(self, tokens, start_pos=0, page_table=None, chunk_page_table=None):
