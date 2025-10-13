@@ -278,13 +278,13 @@ Every hop moves the packet towards the destination device in local mesh.
 
 L0 routing table example:
 
-| **DeviceId** | **Local Port** |
+| **DeviceId** | **Source Route** |
 | --- | --- |
-| 0 | 0 |
-| 1 | 0 |
-| 2 | 1 |
+| 0 | Route to 0 |
+| 1 | Route to 1 |
+| 2 | Route to 2 |
 | ... |  |
-| 1023 | 8 |
+| 255 | Rotue to 255 |
 
 ##### 2.2.1.1.1 L0 Routing Table Setup <a id="intramesh_setup"></a>
 
@@ -292,42 +292,20 @@ The following figure shows a 4 mesh cluster. Each mesh has 9 devices. Each devic
 
 ![](images/image009.png)
 
-The L2 routing table for devices on Mesh 0 is shown below. Each row numbered 0 to 8 in Source Device group is the L0 routing table for the respective device on Mesh 0. This routing table is set up with dimension ordered routing. Packets go X dimension first then Y.
+The intra-mesh routing table for devices on Mesh 0 is shown below. Each row labeled 0 to 8 in Source Device group is the L0 routing table for the respective device on Mesh 0. This routing table is set up with dimension ordered routing. Packets go X dimension first then Y.
 
-![](images/image010.png)
+| Src\Dst | 0    | 1   | 2    | 3   | 4  | 5   | 6    | 7   | 8    |
+| ------- | ---- | --- | ---- | --- | -- | --- | ---- | --- | ---- |
+| 0       | -    | E   | EE   | S   | ES | EES | SS   | ESS | EESS |
+| 1       | W    | -   | E    | WS  | S  | ES  | WSS  | SS  | ESS  |
+| 2       | WW   | W   | -    | WWS | WS | S   | WWSS | WSS | SS   |
+| 3       | N    | EN  | EEN  | -   | E  | EE  | S    | ES  | EES  |
+| 4       | WN   | N   | EN   | W   | -  | E   | WS   | S   | ES   |
+| 5       | WWN  | WN  | N    | WW  | W  | -   | WWS  | WS  | S    |
+| 6       | NN   | ENN | EENN | N   | EN | EEN | -    | E   | EE   |
+| 7       | WNN  | NN  | ENN  | WN  | N  | EN  | W    | -   | E    |
+| 8       | WWNN | WNN | NN   | WWN | WN | N   | WW   | W   | -    |
 
-The following table shows how a packet sent by source Device 0 gets routed to destination Device 8 in Mesh 0.
-
-<table>
-  <tr>
-    <th colspan="3">Route from Device 0 to Device 8</th>
-  </tr>
-  <tr>
-    <th>Hop</th>
-    <th>Sender Device-Port</th>
-    <th>Receiver Device-Port</th>
-  </tr>
-  <tr>
-    <td align="center">1</td>
-    <td align="center">0-P2</td>
-    <td align="center">1-P4</td>
-  </tr>
-  <tr>
-    <td align="center">2</td>
-    <td align="center">1-P2</td>
-    <td align="center">2-P4</td>
-  </tr>
-  <tr>
-    <td align="center">3</td>
-    <td align="center">2-P1</td>
-    <td align="center">5-P3</td>
-  </tr>
-  <tr>
-    <td align="center">4</td>
-    <td align="center">5-P1</td>
-    <td align="center">8-P3</td>
-  </tr>
-</table>
 
 #### 2.2.1.2 L1 Routing (Inter-Mesh a.k.a Scale-out) <a id="intermesh"></a>
 
@@ -341,7 +319,7 @@ Depending on whether the packet has reached its destination mesh or not, every h
 
 L1 routing table example:
 
-| **MeshId** | **Local Port** |
+| **MeshId** | **Exit Node** |
 | --- | --- |
 | 0 | 4 |
 | 1 | 4 |
