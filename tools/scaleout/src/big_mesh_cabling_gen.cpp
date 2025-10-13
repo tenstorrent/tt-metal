@@ -144,7 +144,6 @@ int main(int argc, char** argv) {
     {
         auto& graph_template_instance = graph_templates_ptr->at(dim_1_graph_template_name);
     
-        graph_templates_ptr->insert({dim_1_graph_template_name, graph_template_instance});
 
         graph_template_instance.mutable_internal_connections()->insert({"QSFP_DD", tt::scaleout_tools::cabling_generator::proto::PortConnections()});
         auto& internal_connection = graph_template_instance.mutable_internal_connections()->at("QSFP_DD");
