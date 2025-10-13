@@ -45,7 +45,7 @@ def test_resnetfeatures_forward(device, input_image_path, input_shape, layers, e
 
     # Apply model optimizations
     model_opt = ModelOptimizations()
-    model_opt.apply(state_dict, "frontend")  # to update path to real one
+    model_opt.apply(state_dict, "frontend")
 
     ref_intermediates, feats8, feats16, feats32 = model.forward(torch_tensor)
 

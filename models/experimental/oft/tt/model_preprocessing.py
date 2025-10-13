@@ -63,8 +63,8 @@ def create_OFT_model_parameters_oft(model, input_tensors: tuple[torch.Tensor, to
         device=device,
     )
 
-    parameters.conv_args = {}
-    parameters.conv_args = infer_ttnn_module_args(
+    parameters.layer_args = make_parameter_dict({})
+    parameters.layer_args = infer_ttnn_module_args(
         model=model,
         run_model=lambda model: model(*input_tensors),
         device=None,
@@ -88,8 +88,8 @@ def create_OFT_model_parameters(model: OftNet, input_tensors: tuple[torch.Tensor
     parameters.oft32.conv3d.weight = ttnn.to_device(parameters.oft32.conv3d.weight, device=device)
     parameters.oft32.conv3d.bias = ttnn.to_device(parameters.oft32.conv3d.bias, device=device)
 
-    parameters.conv_args = {}
-    parameters.conv_args = infer_ttnn_module_args(
+    parameters.layer_args = make_parameter_dict({})
+    parameters.layer_args = infer_ttnn_module_args(
         model=model,
         run_model=lambda model: model(*input_tensors),
         device=None,
@@ -107,7 +107,8 @@ def create_decoder_model_parameters(model, input_tensors: torch.Tensor, device):
         device=None,
     )
 
-    parameters.conv_args = infer_ttnn_module_args(
+    parameters.layer_args = make_parameter_dict({})
+    parameters.layer_args = infer_ttnn_module_args(
         model=model, run_model=lambda model: model.decode(*input_tensors), device=None
     )
 

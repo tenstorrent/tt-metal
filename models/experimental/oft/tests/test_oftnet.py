@@ -8,6 +8,7 @@ import pytest
 import os
 import math
 from models.experimental.oft.reference.oftnet import OftNet
+from models.experimental.oft.tt.model_configs import ModelOptimizations
 from models.experimental.oft.tt.tt_oftnet import TTOftNet
 from models.experimental.oft.tt.tt_resnet import TTBasicBlock
 from models.experimental.oft.tests.common import GRID_RES, GRID_SIZE, GRID_HEIGHT, Y_OFFSET, H_PADDED, W_PADDED
@@ -80,7 +81,9 @@ def test_oftnet(
     )
 
     ref_model = load_checkpoint(ref_model, model_location_generator)
-    parameters = create_OFT_model_parameters(ref_model, (input_tensor, calib, grid), device=device)
+    state_dict = create_OFT_model_parameters(ref_model, (input_tensor, calib, grid), device=device)
+    model_opt = ModelOptimizations()
+    model_opt.apply(state_dict)
 
     tt_input = input_tensor.permute((0, 2, 3, 1))
     tt_input = ttnn.from_torch(tt_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
@@ -90,8 +93,8 @@ def test_oftnet(
     # with torch.inference_mode():
     tt_module = TTOftNet(
         device,
-        parameters,
-        parameters.conv_args,
+        state_dict,
+        state_dict.layer_args,
         TTBasicBlock,
         [2, 2, 2, 2],
         ref_model.mean,
