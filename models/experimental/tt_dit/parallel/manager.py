@@ -271,3 +271,32 @@ class CCLManager:
             "num_workers_per_link": 2,
             "num_buffers_per_channel": 2,
         }
+
+    def all_gather(self, x: ttnn.Tensor, /, *, dim: int, mesh_axis: int) -> ttnn.Tensor:
+        if self.mesh_device.shape[mesh_axis] == 1:
+            return x
+
+        # all_gather_async currently supports tensors of rank 4 only
+        rank = len(x.shape)
+        if rank < 4:
+            shape = [1] * (4 - rank) + list(x.shape)
+            x = ttnn.reshape(x, shape)
+            if dim >= 0:
+                dim += 4 - rank
+
+        x = ttnn.experimental.all_gather_async(
+            x,
+            persistent_output_buffer=self.get_ag_ping_pong_buffer(x.shape, dim, mesh_axis),
+            dim=dim,
+            multi_device_global_semaphore=self.get_ag_ping_pong_semaphore(mesh_axis),
+            num_links=self.num_links,
+            topology=self.topology,
+            cluster_axis=mesh_axis,
+            **self.get_ag_hyperparams(x.shape),
+        )
+
+        if rank < 4:
+            shape = list(x.shape)[4 - rank :]
+            x = ttnn.reshape(x, shape)
+
+        return x

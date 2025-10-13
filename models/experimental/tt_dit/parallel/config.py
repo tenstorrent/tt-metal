@@ -43,6 +43,20 @@ class OldParallelConfig(NamedTuple):
     mesh_axis: int
 
 
+def estimate_mesh_axis(x, dim, rank):
+    """
+    Estimate the mesh axis based on the shape of the input tensor and mesh device.
+    Warning: Very Fragile function. Use with extreme caution. Proper data annotation by the op is the ultimate solution.
+    Failure case: If device shape is a square, 0 then the dim to estimate must be sharded on axis 0, else the result will be incorrect.
+    """
+    if rank == x.device().shape[0] * x.shape[dim]:
+        return 0
+    elif rank == x.device().shape[1] * x.shape[dim]:
+        return 1
+    else:
+        return None
+
+
 def vae_all_gather(
     ccl_manager, x: ttnn.Tensor, cluster_axis: int = 1, dim: int = 3, reshape: bool = True
 ) -> ttnn.Tensor:

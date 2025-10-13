@@ -3,11 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from ..parallel.config import vae_all_gather
+from ..parallel.config import vae_all_gather, estimate_mesh_axis
 from ..utils.tensor import bf16_tensor_host
 
 
-# TODO: Add support for coll and row parallel conv2d
+# TODO: Add support for coll, row and Sequence parallel conv2d. SP would use a base of col or row parallel
 class Conv2d:
     """
     Conv2d with support for tensor parallelism. Data and Seqence Parallelism TBD.
@@ -24,6 +24,19 @@ class Conv2d:
     # slice_params[mesh_shape][tuple(height, width, in_channels, out_channels)] = num_slices
     slice_params = {
         (1, 4): {
+            (512, 512, 512, 64): 16,
+            (128, 128, 16, 512): 8,
+            (128, 128, 512, 512): 4,
+            (256, 256, 512, 512): 8,
+            (512, 512, 512, 512): 16,
+            (512, 512, 512, 256): 16,
+            (512, 512, 256, 256): 4,
+            (1024, 1024, 256, 256): 16,
+            (1024, 1024, 256, 128): 16,
+            (1024, 1024, 128, 128): 16,
+            (1024, 1024, 128, 3): 8,
+        },
+        (1, 8): {
             (512, 512, 512, 64): 16,
             (128, 128, 16, 512): 8,
             (128, 128, 512, 512): 4,
@@ -61,6 +74,19 @@ class Conv2d:
             (1024, 1024, 128, 128): 16,
             (1024, 1024, 128, 3): 8,
         },
+    }
+    slice_defaut = {
+        (512, 512, 512, 64): 16,
+        (128, 128, 16, 512): 8,
+        (128, 128, 512, 512): 4,
+        (256, 256, 512, 512): 8,
+        (512, 512, 512, 512): 16,
+        (512, 512, 512, 256): 16,
+        (512, 512, 256, 256): 4,
+        (1024, 1024, 256, 256): 16,
+        (1024, 1024, 256, 128): 16,
+        (1024, 1024, 128, 128): 16,
+        (1024, 1024, 128, 3): 8,
     }
 
     # TODO: Allow weight initilization?
@@ -142,6 +168,18 @@ class Conv2d:
             else None
         )
 
+    def estimate_input_mesh_axis(self, x):
+        """
+        Estimate the mesh axis based on the shape of the input tensor. Ans mesh device.
+        If device shape is a square, TP is assumed to be axis 0.
+        """
+        if self.in_channels == self.mesh_device.shape[0] * x.shape[3]:
+            return 0
+        elif self.in_channels == self.mesh_device.shape[1] * x.shape[3]:
+            return 1
+        else:
+            return None
+
     def is_sharded_tensor(self, x):
         """
         Check if the tensor is sharded.
@@ -156,11 +194,13 @@ class Conv2d:
         TODO: Add support for DP and SP
         """
         if self.is_sharded_tensor(x):
-            x = vae_all_gather(self.ccl_manager, x)
+            x = vae_all_gather(self.ccl_manager, x, estimate_mesh_axis(x, 3, self.in_channels))
 
         b, h, w, c = x.shape
         slice_config = ttnn.Conv2dSliceConfig(
-            num_slices=self.slice_params[tuple(self.mesh_device.shape)][(h, w, self.in_channels, self.out_channels)],
+            num_slices=self.slice_params.get(tuple(self.mesh_device.shape), self.slice_defaut)[
+                (h, w, self.in_channels, self.out_channels)
+            ],
             slice_type=ttnn.Conv2dDRAMSliceWidth,
         )
 
