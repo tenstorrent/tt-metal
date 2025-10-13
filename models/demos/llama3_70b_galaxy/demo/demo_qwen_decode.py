@@ -223,6 +223,7 @@ def run_qwen_demo(
         weight_cache_path=model_args.weight_cache_path(dtype),
         paged_attention_config=paged_attention_config,
         enable_prefetcher_performance_mode=enable_prefetcher_performance_mode,
+        decode_mode_only=True,
     )
     tt_embd = TtLlamaEmbedding(
         mesh_device=mesh_device,
