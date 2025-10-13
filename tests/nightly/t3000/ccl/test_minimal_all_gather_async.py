@@ -9,7 +9,7 @@ from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from tests.ttnn.unit_tests.operations.ccl.test_all_gather import is_unsupported_case
-from models.utility_functions import skip_for_blackhole
+from models.common.utility_functions import skip_for_blackhole
 
 from ttnn import ShardTensorToMesh, ConcatMeshToTensor
 from tracy import signpost
@@ -42,8 +42,8 @@ def run_all_gather_impl(
     num_buffers_per_channel=None,
     allowed_pcc=1,
     skip_check=False,
-    all_gather_function=ttnn.experimental.all_gather_async,
     num_l1_banks=64,
+    all_gather_function=ttnn.experimental.all_gather_async,
 ):
     torch.manual_seed(0)
 
@@ -96,17 +96,32 @@ def run_all_gather_impl(
 
     ### Create persistent output buffers
     logger.info("Creating persistent buffers")
-    persistent_output_buffers = [
-        ttnn.from_torch(
-            torch.zeros(ag_output_shape),
-            device=mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=ag_input_dtype,
-            memory_config=mem_config_ag,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        )
-        for _ in range(num_iters)
-    ]
+    if use_persistent_buffers:
+        if enable_trace:
+            persistent_output_buffers = [
+                ttnn.from_torch(
+                    torch.zeros(ag_output_shape),
+                    device=mesh_device,
+                    layout=ttnn.TILE_LAYOUT,
+                    dtype=ag_input_dtype,
+                    memory_config=mem_config_ag,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                )
+            ]
+        else:
+            persistent_output_buffers = [
+                ttnn.from_torch(
+                    torch.zeros(ag_output_shape),
+                    device=mesh_device,
+                    layout=ttnn.TILE_LAYOUT,
+                    dtype=ag_input_dtype,
+                    memory_config=mem_config_ag,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                )
+                for _ in range(num_iters)
+            ]
+    else:
+        persistent_output_buffers = []
 
     logger.info("Done creating persistent buffers")
 
@@ -593,6 +608,11 @@ def test_all_gather_async_sharded_to_sharded(
             ttnn.BufferType.L1,
         ),
     ],
+    ids=[
+        "i2s_shape0",
+        "i2s_shape1",
+        "i2s_shape2",
+    ],
 )
 @pytest.mark.parametrize(
     "enable_trace,num_iters",
@@ -687,6 +707,11 @@ def test_all_gather_async_sharded_to_interleaved(
             ttnn.BufferType.L1,
         ),
     ],
+    ids=[
+        "i2s_shape0",
+        "i2s_shape1",
+        "i2s_shape2",
+    ],
 )
 @pytest.mark.parametrize(
     "enable_trace,num_iters",
@@ -743,3 +768,143 @@ def test_all_gather_async_interleaved_to_sharded(
         enable_trace=enable_trace,
         num_iters=num_iters,
     )
+
+
+@skip_for_blackhole("Requires wormhole_b0 to run")
+@pytest.mark.parametrize("num_links", [1], ids=["1link"])
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+@pytest.mark.parametrize(
+    "ag_output_shape, dim, layout, ag_input_dtype",
+    [
+        # Gather on dim 0
+        ([1, 1, 8, 4096], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+    ],
+    ids=[
+        "multiprocess",
+    ],
+)
+@pytest.mark.parametrize(
+    "mem_config_input, mem_config_ag",
+    [
+        (
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+        )
+    ],
+)
+@pytest.mark.parametrize(
+    "enable_trace, num_iters",
+    [
+        (False, 3),
+    ],
+    ids=["check"],
+)
+@pytest.mark.parametrize(
+    "device_params, all_gather_topology",
+    [
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
+    ],
+    indirect=["device_params"],
+    ids=["fabric_linear"],
+)
+def test_all_gather_async_2x4(
+    mesh_device,
+    ag_output_shape,
+    dim,
+    num_links,
+    ag_input_dtype,
+    layout,
+    mem_config_input,
+    mem_config_ag,
+    enable_trace,
+    all_gather_topology,
+    num_iters,
+):
+    submesh_device = mesh_device.create_submesh(ttnn.MeshShape((1, 4)))
+    run_all_gather_impl(
+        submesh_device,
+        submesh_device.get_num_devices(),
+        ag_output_shape,
+        dim,
+        num_links,
+        ag_input_dtype,
+        layout,
+        mem_config_input,
+        mem_config_ag,
+        all_gather_topology=all_gather_topology,
+        enable_trace=enable_trace,
+        num_iters=num_iters,
+        use_barrier=True,
+        use_persistent_buffers=False,
+        cluster_axis=1,
+    )
+
+
+def _get_tensors(input_shape, mesh_shape, dim, cluster_axis, dtype, memory_config, layout, device):
+    num_devices = math.prod(mesh_shape)
+    replicate = mesh_shape[cluster_axis] if cluster_axis is not None else num_devices
+    torch_input = torch.cat([torch.rand(input_shape).bfloat16() for _ in range(replicate)], dim=dim)
+
+    shard_dims = (None, dim) if cluster_axis == 1 else (dim, None)
+    tt_input = ttnn.from_torch(
+        torch_input,
+        layout=layout,
+        memory_config=memory_config,
+        mesh_mapper=ttnn.ShardTensor2dMesh(device, dims=shard_dims, mesh_shape=mesh_shape),
+        device=device,
+    )
+
+    torch_reference = torch_input.repeat([num_devices] + [1] * (len(input_shape) - 1))
+
+    return tt_input, torch_reference
+
+
+MESH_SHAPE = (2, 4)
+LAYOUT = ttnn.TILE_LAYOUT
+
+NUM_ITERS = 2
+
+
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [MESH_SHAPE], indirect=True)
+@pytest.mark.parametrize("input_shape", [[2, 2, 32, 32], [5, 32, 32], [2, 2, 2, 32, 32], [2, 2, 2, 2, 32, 32]])
+@pytest.mark.parametrize("dtype", [torch.bfloat16])
+@pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG])
+@pytest.mark.parametrize("dim", [0, 1, 2, 3, 4, 5])
+@pytest.mark.parametrize("cluster_axis", [1])
+@pytest.mark.parametrize("topology", [ttnn.Topology.Linear])
+def test_nd(mesh_device, input_shape, dim, cluster_axis, dtype, memory_config, topology):
+    if dim >= len(input_shape):
+        pytest.skip("Invalid gather dim")
+
+    tt_input, torch_reference = _get_tensors(
+        input_shape,
+        tuple(mesh_device.shape),
+        dim,
+        cluster_axis,
+        dtype,
+        memory_config,
+        ttnn.TILE_LAYOUT,
+        mesh_device,
+    )
+
+    compute_grid_size = mesh_device.compute_with_storage_grid_size()
+    ccl_sub_device_crs = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
+    )
+    semaphores = [ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(2)]
+
+    for i in range(NUM_ITERS):
+        tt_out_tensor = ttnn.experimental.all_gather_async(
+            tt_input,
+            dim,
+            cluster_axis=cluster_axis,
+            mesh_device=mesh_device,
+            topology=topology,
+            multi_device_global_semaphore=semaphores,
+        )
+
+        tt_output_tensor = torch.cat([ttnn.to_torch(t) for t in ttnn.get_device_tensors(tt_out_tensor)])
+
+        eq, mess = comp_pcc(torch_reference, tt_output_tensor)
+        assert eq, mess

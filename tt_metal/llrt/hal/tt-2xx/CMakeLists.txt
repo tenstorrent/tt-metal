@@ -23,7 +23,7 @@ target_include_directories(
     BEFORE
     PRIVATE
         ${HAL_INCLUDE_DIRS}
-        ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/quasar
+        ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/tt-2xx/quasar
 )
 target_link_libraries(
     qa_hal

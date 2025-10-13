@@ -39,7 +39,7 @@ def gen_sharded_spec_unary(num_shapes, max_tensor_size_per_core=62 * 1024, layou
                 # X 8 Y 8 input_shape [1, 17792, 8] DataType.BFLOAT8_B Layout.TILE ShardStrategy.BLOCK ShardOrientation.COL_MAJOR tensor_hw_as_shard_shape True
 
                 if layout == "TILE_LAYOUT":
-                    # In shard mode ShardMode::PHYSICAL, physical shard shape {12, 13312} is not compatible with alignment Alignment([32, 32])!
+                    # Shard shape {12, 13312} is not compatible with alignment Alignment([32, 32])!
                     min_shard_size_x = 32
                     min_shard_size_y = 32
                 else:  # if layout == "ROW_MAJOR_LAYOUT":
@@ -82,7 +82,7 @@ def gen_sharded_spec_unary(num_shapes, max_tensor_size_per_core=62 * 1024, layou
                 # Shard Size must be multiple of input_tile_size
 
                 if layout == "TILE_LAYOUT":
-                    # In shard mode ShardMode::PHYSICAL, physical shard shape {12, 13312} is not compatible with alignment Alignment([32, 32])!
+                    # Shard shape {12, 13312} is not compatible with alignment Alignment([32, 32])!
                     min_shard_size_x = 32
                     min_shard_size_y = 32 * x * y
                 else:  # if layout == "ROW_MAJOR_LAYOUT":

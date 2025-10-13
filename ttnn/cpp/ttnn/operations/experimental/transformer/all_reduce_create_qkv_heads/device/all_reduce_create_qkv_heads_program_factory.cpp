@@ -44,7 +44,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(dtype);
 
-    const uint32_t single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
+    const uint32_t single_tile_size = tt::tile_size(cb_data_format);
     const uint32_t head_tiles = head_dim / tt::constants::TILE_WIDTH;
     const uint32_t head_size = head_tiles * single_tile_size;
 
@@ -71,7 +71,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
 
     tt::DataFormat cb_batch_offset_data_format =
         tt::tt_metal::datatype_to_dataformat_converter(batch_offset_tensor.dtype());
-    uint32_t single_batch_offset_tile_size = tt::tt_metal::detail::TileSize(cb_batch_offset_data_format);
+    uint32_t single_batch_offset_tile_size = tt::tile_size(cb_batch_offset_data_format);
     batch_offset_index_stick_size = batch_offset_tensor.buffer()->aligned_page_size();
 
     tt::tt_metal::CircularBufferConfig cb_batch_offset_config_reader =
@@ -284,7 +284,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
 
         // Num pages allocated based on number of input cores selected for this link
         uint32_t num_pages_allocated =
-            (end_core_idx - start_core_idx) * input_tensor_shard_num_pages - input_tensor_tile_offset;
+            ((end_core_idx - start_core_idx) * input_tensor_shard_num_pages) - input_tensor_tile_offset;
 
         // Update overflow
         num_pages_overflow = num_pages_allocated - num_pages_this_link;
@@ -416,7 +416,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
     // Now prepare rt args for the reader and writer kernels
 
     std::vector<uint32_t> reader_writer_runtime_args_template;
-    reader_writer_runtime_args_template.reserve(7 + 2 * q_num_cores + 2 * k_num_cores + 2 * v_num_cores);
+    reader_writer_runtime_args_template.reserve(7 + (2 * q_num_cores) + (2 * k_num_cores) + (2 * v_num_cores));
     reader_writer_runtime_args_template = {
         q_base_addr,
         k_base_addr,

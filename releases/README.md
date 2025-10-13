@@ -34,5 +34,6 @@ Visit the [Releases](https://github.com/tenstorrent/tt-metal/releases) section f
 
 ## Release Notes
 
+- [v0.63.0](https://github.com/tenstorrent/tt-metal/releases/tag/v0.63.0)
 - [v0.62.2](https://github.com/tenstorrent/tt-metal/releases/tag/v0.62.2)
 - [v0.60.1](https://github.com/tenstorrent/tt-metal/releases/tag/v0.60.1)

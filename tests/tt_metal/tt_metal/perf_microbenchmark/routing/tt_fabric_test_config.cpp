@@ -199,6 +199,16 @@ ParsedTestConfig YamlConfigParser::parse_test_config(const YAML::Node& test_yaml
         test_config.patterns = high_level_patterns;
     }
 
+    if (test_yaml["skip"]) {
+        const auto& skip_yaml = test_yaml["skip"];
+        TT_FATAL(skip_yaml.IsSequence(), "Expected 'skip' to be a sequence of platform strings.");
+        std::vector<std::string> skips;
+        for (const auto& s : skip_yaml) {
+            skips.push_back(parse_scalar<std::string>(s));
+        }
+        test_config.skip = std::move(skips);
+    }
+
     if (test_yaml["senders"]) {
         const auto& senders_yaml = test_yaml["senders"];
         TT_FATAL(senders_yaml.IsSequence(), "Expected senders to be a sequence");

@@ -2,6 +2,14 @@ syntax = "proto3";
 
 package tt.fabric.proto;
 
+// Live Ethernet Link Metrics
+message EthernetMetrics {
+    uint32 retrain_count = 1;
+    uint32 crc_error_count = 2;
+    uint64 corrected_codeword_count = 3;
+    uint64 uncorrected_codeword_count = 4;
+}
+
 // Ethernet connection between two ASICs
 message EthConnection {
     uint32 src_chan = 1;
@@ -90,6 +98,18 @@ message ExitNodeConnectionTable {
     repeated ExitNodeConnection exit_connections = 2;
 }
 
+// Map entry for ethernet metrics per channel
+message ChannelEthernetMetrics {
+    uint32 channel = 1;
+    EthernetMetrics metrics = 2;
+}
+
+// Map entry for ASIC ID to ethernet metrics
+message AsicEthernetMetrics {
+    uint64 asic_id = 1;
+    repeated ChannelEthernetMetrics channel_metrics = 2;
+}
+
 // Top-level Physical System Descriptor message
 message PhysicalSystemDescriptor {
     PhysicalConnectivityGraph system_graph = 1;
@@ -97,4 +117,6 @@ message PhysicalSystemDescriptor {
     repeated HostToMoboMap host_to_mobo_name = 3;
     repeated HostToRankMap host_to_rank = 4;
     repeated ExitNodeConnectionTable exit_node_connection_table = 5;
+    bool mock_cluster = 6;
+    repeated AsicEthernetMetrics ethernet_metrics = 7;
 }

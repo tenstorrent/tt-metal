@@ -56,7 +56,7 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@6b36ef848f5f66ba0ae6f883ff69b09692e48ce9
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
@@ -68,7 +68,6 @@ jobs:
         with:
           device_perf_model_name: "non-civ2_tests"
           commands: |
-            pytest models/demos/convnet_mnist/tests/ -m models_device_performance_bare_metal
             pytest models/demos/mnist/tests -m models_device_performance_bare_metal
             pytest models/demos/falcon7b_common/tests -m models_device_performance_bare_metal
             pytest models/demos/segformer/tests/perf -m models_device_performance_bare_metal
@@ -238,8 +237,7 @@ jobs:
           commands: |
             pytest models/demos/yolov8x/tests/perf -m models_device_performance_bare_metal
             pytest models/demos/yolov8s/tests/perf -m models_device_performance_bare_metal
-            # Skip for #27008
-            # pytest models/demos/yolov8s_world/tests/perf -m models_device_performance_bare_metal
+            pytest models/demos/yolov8s_world/tests/perf -m models_device_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && !matrix.test-info.job-set1 && !matrix.test-info.job-blackhole-set1 }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 

@@ -15,7 +15,7 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
-#include <tuple>                                                     // for get
+#include <tuple>  // for get
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -30,6 +30,7 @@
 #include "sanitize_noc_host.hpp"
 #include "tracy/Tracy.hpp"
 #include "tt_metal/llrt/tlb_config.hpp"
+#include "tunnels_from_mmio_device.hpp"
 #include <umd/device/cluster.hpp>
 #include <umd/device/cluster_descriptor.hpp>
 #include <umd/device/simulation/simulation_device.hpp>
@@ -45,32 +46,43 @@ static constexpr uint32_t HOST_MEM_CHANNELS_MASK = HOST_MEM_CHANNELS - 1;
 namespace {
 
 inline std::string get_soc_description_file(
-    const tt::ARCH& arch, tt::TargetDevice target_device, const std::string& root_dir) {
-    // Ability to skip this runtime opt, since trimmed SOC desc limits which DRAM channels are available.
-    std::string path = root_dir;
+    const tt::ARCH& arch, tt::TargetDevice target_device, const tt::llrt::RunTimeOptions& rtoptions) {
+    if (target_device == tt::TargetDevice::Simulator) {
+        return tt::umd::SimulationDevice::get_soc_descriptor_path_from_simulator_path(rtoptions.get_simulator_path());
+    }
+    std::string path = rtoptions.get_root_dir();
     if (path.back() != '/') {
         path.push_back('/');
     }
     path += "tt_metal/soc_descriptors/";
-    bool is_sim = target_device == tt::TargetDevice::Simulator;
     const char* file = nullptr;
     switch (arch) {
-        case tt::ARCH::WORMHOLE_B0: file = is_sim ? "wormhole_b0_versim.yaml" : "wormhole_b0_80_arch.yaml"; break;
-        case tt::ARCH::BLACKHOLE:
-            file = is_sim ? "blackhole_simulation_1x2_arch.yaml" : "blackhole_140_arch.yaml";
-            break;
-        case tt::ARCH::QUASAR: file = "quasar_simulation_1x3_arch.yaml"; break;
+        case tt::ARCH::WORMHOLE_B0: file = "wormhole_b0_80_arch.yaml"; break;
+        case tt::ARCH::BLACKHOLE: file = "blackhole_140_arch.yaml"; break;
+        case tt::ARCH::QUASAR:  // Quasar is currently only supported for simulation
         default: throw std::runtime_error("Unsupported device arch");
     }
     path += file;
     return path;
 }
+
+std::unique_ptr<tt_ClusterDescriptor> get_mock_cluster_desc(const tt::llrt::RunTimeOptions& rtoptions) {
+    TT_FATAL(rtoptions.get_mock_enabled(), "Mock cluster descriptor not enabled");
+    std::unique_ptr<tt_ClusterDescriptor> mock_cluster_desc =
+        tt::umd::tt_ClusterDescriptor::create_from_yaml(rtoptions.get_mock_cluster_desc_path());
+    TT_FATAL(
+        mock_cluster_desc != nullptr,
+        "Failed to load mock cluster descriptor from {}",
+        rtoptions.get_mock_cluster_desc_path());
+    return mock_cluster_desc;
+}
+
 }  // namespace
 namespace tt {
 
 tt::tt_metal::ClusterType Cluster::get_cluster_type_from_cluster_desc(
     const llrt::RunTimeOptions& rtoptions, const tt_ClusterDescriptor* cluster_desc) {
-    if (rtoptions.get_simulator_enabled()) {
+    if (rtoptions.get_simulator_enabled() && !rtoptions.get_mock_enabled()) {
         auto soc_desc =
             tt::umd::SimulationDevice::get_soc_descriptor_path_from_simulator_path(rtoptions.get_simulator_path());
         auto arch = tt::umd::SocDescriptor::get_arch_from_soc_descriptor_path(soc_desc);
@@ -83,9 +95,12 @@ tt::tt_metal::ClusterType Cluster::get_cluster_type_from_cluster_desc(
         }
         return tt::tt_metal::ClusterType::INVALID;
     }
+
+    std::unique_ptr<tt_ClusterDescriptor> temp_cluster_desc = nullptr;
     if (cluster_desc == nullptr) {
-        return Cluster::get_cluster_type_from_cluster_desc(
-            rtoptions, tt::umd::Cluster::create_cluster_descriptor().get());
+        temp_cluster_desc = rtoptions.get_mock_enabled() ? get_mock_cluster_desc(rtoptions)
+                                                         : tt::umd::Cluster::create_cluster_descriptor();
+        cluster_desc = temp_cluster_desc.get();
     }
     tt::tt_metal::ClusterType cluster_type = tt::tt_metal::ClusterType::INVALID;
     for (const auto& chip_id : cluster_desc->get_all_chips()) {
@@ -95,7 +110,7 @@ tt::tt_metal::ClusterType Cluster::get_cluster_type_from_cluster_desc(
         }
     }
     const auto num_chips = cluster_desc->get_all_chips().size();
-    TT_ASSERT(num_chips > 0, "No chips detected in the cluster");
+    TT_FATAL(num_chips > 0, "No chips detected in the cluster");
     const auto board_type = cluster_desc->get_board_type(*cluster_desc->get_all_chips().begin());
     bool all_same_board = true;
     for (const auto& chip_id : cluster_desc->get_all_chips()) {
@@ -200,7 +215,7 @@ Cluster::Cluster(llrt::RunTimeOptions& rtoptions, const tt_metal::Hal& hal) : rt
 
     this->initialize_ethernet_sockets();
 
-    this->set_tunnels_from_mmio_device();
+    this->tunnels_from_mmio_device = llrt::discover_tunnels_from_mmio_device(this->driver_);
 
     if (this->target_type_ != tt::TargetDevice::Mock){
         this->assert_risc_reset();
@@ -333,6 +348,7 @@ const std::unordered_map<CoreCoord, int32_t>& Cluster::get_virtual_routing_to_pr
 
 void Cluster::open_driver(const bool &skip_driver_allocs) {
     std::unique_ptr<tt::umd::Cluster> device_driver;
+    std::string sdesc_path = get_soc_description_file(this->arch_, this->target_type_, rtoptions_);
     if (this->target_type_ == TargetDevice::Silicon) {
         // This is the target/desired number of mem channels per arch/device.
         // Silicon driver will attempt to open this many hugepages as channels per mmio chip,
@@ -342,25 +358,34 @@ void Cluster::open_driver(const bool &skip_driver_allocs) {
         uint32_t num_host_mem_ch_per_mmio_device = std::min(HOST_MEM_CHANNELS, num_devices);
         device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
             .num_host_mem_ch_per_mmio_device = num_host_mem_ch_per_mmio_device,
-            .sdesc_path = get_soc_description_file(this->arch_, this->target_type_, rtoptions_.get_root_dir()),
+            .sdesc_path = sdesc_path,
         });
     } else if (this->target_type_ == TargetDevice::Simulator) {
-        device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
-            .chip_type = tt::umd::ChipType::SIMULATION,
-            .target_devices = {0},
-            .simulator_directory = rtoptions_.get_simulator_path(),
-        });
+        std::unique_ptr<tt_ClusterDescriptor> mock_cluster_desc;
+        if (rtoptions_.get_mock_enabled()) {
+            mock_cluster_desc = get_mock_cluster_desc(rtoptions_);
+            device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
+                .chip_type = tt::umd::ChipType::SIMULATION,
+                .sdesc_path = sdesc_path,
+                .target_devices = mock_cluster_desc->get_all_chips(),
+                .cluster_descriptor = mock_cluster_desc.get(),
+                .simulator_directory = rtoptions_.get_simulator_path(),
+            });
+        } else {
+            device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
+                .chip_type = tt::umd::ChipType::SIMULATION,
+                .target_devices = {0},
+                .simulator_directory = rtoptions_.get_simulator_path(),
+            });
+        }
     } else if (this->target_type_ == TargetDevice::Mock) {
         // If a cluster descriptor was not provided via constructor, and mock is enabled via rtoptions,
         // load it from the YAML path and pass it into UMD for mock initialization.
-        std::unique_ptr<tt_ClusterDescriptor> mock_cluster_desc;
-        if (rtoptions_.get_mock_enabled()) {
-            mock_cluster_desc = tt::umd::tt_ClusterDescriptor::create_from_yaml(rtoptions_.get_mock_cluster_desc_path());
-            TT_FATAL(mock_cluster_desc != nullptr, "Failed to load mock cluster descriptor from {}", rtoptions_.get_mock_cluster_desc_path());
-        }
+        std::unique_ptr<tt_ClusterDescriptor> mock_cluster_desc = get_mock_cluster_desc(rtoptions_);
+
         device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
             .chip_type = tt::umd::ChipType::MOCK,
-            .sdesc_path = get_soc_description_file(this->arch_, this->target_type_, rtoptions_.get_root_dir()),
+            .sdesc_path = sdesc_path,
             .cluster_descriptor = mock_cluster_desc.get(),
         });
     }
@@ -611,13 +636,7 @@ std::unordered_map<int, int> Cluster::get_worker_logical_to_virtual_y(chip_id_t 
 
 int Cluster::get_device_aiclk(const chip_id_t& chip_id) const { return this->driver_->get_chip(chip_id)->get_clock(); }
 
-uint16_t Cluster::get_bus_id(chip_id_t chip) const {
-    if (this->target_type_ == tt::TargetDevice::Mock) {
-        log_warning(tt::LogDevice, "get_bus_id is not supported for mock devices");
-        return 0;
-    }
-    return this->driver_->get_chip(chip)->get_tt_device()->get_pci_device()->get_device_info().pci_bus;
-}
+uint16_t Cluster::get_bus_id(chip_id_t chip) const { return this->cluster_desc_->get_bus_id(chip); }
 
 std::optional<int> Cluster::get_physical_slot(chip_id_t chip) const {
     if (this->target_type_ == tt::TargetDevice::Mock) {
@@ -627,16 +646,17 @@ std::optional<int> Cluster::get_physical_slot(chip_id_t chip) const {
     return this->driver_->get_chip(chip)->get_tt_device()->get_pci_device()->get_device_info().physical_slot;
 }
 
-void Cluster::deassert_risc_reset_at_core(const tt_cxy_pair& core, const TensixSoftResetOptions& soft_resets) const {
+void Cluster::deassert_risc_reset_at_core(
+    const tt_cxy_pair& core, const tt::umd::RiscType& soft_resets, bool staggered_start) const {
     const metal_SocDescriptor &soc_desc = this->get_soc_desc(core.chip);
     tt::umd::CoreCoord core_coord = soc_desc.get_coord_at(core, CoordSystem::TRANSLATED);
-    this->driver_->deassert_risc_reset_at_core(core.chip, core_coord, soft_resets);
+    this->driver_->deassert_risc_reset(core.chip, core_coord, soft_resets, staggered_start);
 }
 
-void Cluster::assert_risc_reset_at_core(const tt_cxy_pair& core, const TensixSoftResetOptions& soft_resets) const {
+void Cluster::assert_risc_reset_at_core(const tt_cxy_pair& core, const tt::umd::RiscType& soft_resets) const {
     const metal_SocDescriptor &soc_desc = this->get_soc_desc(core.chip);
     tt::umd::CoreCoord core_coord = soc_desc.get_coord_at(core, CoordSystem::TRANSLATED);
-    this->driver_->assert_risc_reset_at_core(core.chip, core_coord, soft_resets);
+    this->driver_->assert_risc_reset(core.chip, core_coord, soft_resets);
 }
 
 void Cluster::write_dram_vec(
@@ -877,6 +897,10 @@ uint64_t Cluster::get_pcie_base_addr_from_device(chip_id_t chip_id) const {
     return this->driver_->get_pcie_base_addr_from_device(chip_id);
 }
 
+const std::unordered_set<chip_id_t>& Cluster::get_devices_controlled_by_mmio_device(chip_id_t mmio_device_id) const {
+    return llrt::get_devices_controlled_by_mmio_device(driver_, mmio_device_id);
+}
+
 std::unordered_map<chip_id_t, std::vector<CoreCoord>> Cluster::get_ethernet_cores_grouped_by_connected_chips(
     chip_id_t chip_id) const {
     std::unordered_map<chip_id_t, std::vector<CoreCoord>> connected_chips;
@@ -901,97 +925,6 @@ std::unordered_map<chip_id_t, std::vector<CoreCoord>> Cluster::get_ethernet_core
         }
     }
     return connected_chips;
-}
-#define MAX_TUNNEL_DEPTH 4
-void Cluster::set_tunnels_from_mmio_device() {
-    for (const auto& mmio_chip_id : this->driver_->get_target_mmio_device_ids()) {
-        std::vector<std::vector<chip_id_t>> tunnels_from_mmio = {};
-        const auto &all_eth_connections = this->cluster_desc_->get_ethernet_connections();
-        TT_ASSERT(this->cluster_desc_->is_chip_mmio_capable(mmio_chip_id));
-
-        if (all_eth_connections.find(mmio_chip_id) == all_eth_connections.end()) {
-            this->tunnels_from_mmio_device.insert({mmio_chip_id, {}});
-            continue;
-        }
-
-        auto device_ids = get_devices_controlled_by_mmio_device(mmio_chip_id);
-        device_ids.erase(mmio_chip_id);
-
-        if (device_ids.empty()) {
-            this->tunnels_from_mmio_device.insert({mmio_chip_id, {}});
-            continue;
-        }
-
-        for (const auto &[eth_chan, connected_chip_chan] : all_eth_connections.at(mmio_chip_id)) {
-            const auto &other_chip_id = std::get<0>(connected_chip_chan);
-            if (device_ids.find(other_chip_id) != device_ids.end()) {
-                // mmio chip is connected to a remote chip in its mmio group.
-                // erase from the pool so multiple ethernet connections to same remote device do not
-                // pollute the counts.
-                device_ids.erase(other_chip_id);
-                std::vector<chip_id_t> first_stop = {other_chip_id};
-                auto it = std::find(tunnels_from_mmio.begin(), tunnels_from_mmio.end(), first_stop);
-                TT_ASSERT(
-                    it == tunnels_from_mmio.end(),
-                    "Duplicate first tunnel stop found when finding FD2 Tunnel devices.");
-                tunnels_from_mmio.push_back(first_stop);
-            }
-        }
-
-        log_debug(
-            tt::LogMetal,
-            "Found {} FD Tunnels originating from MMIO Device {}",
-            tunnels_from_mmio.size(),
-            mmio_chip_id);
-
-        device_ids = get_devices_controlled_by_mmio_device(mmio_chip_id);
-        device_ids.erase(mmio_chip_id);
-
-        for (auto &tunnel : tunnels_from_mmio) {
-            TT_ASSERT(tunnel.size() == 1, "Tunnel depth must be 1 when it has only 1 stop in it.");
-            device_ids.erase(tunnel[0]);
-        }
-
-        bool tunneled_device_hit;
-        while (!device_ids.empty()) {
-            tunneled_device_hit = false;
-            for (auto &dev_vec : tunnels_from_mmio) {
-                for (const auto &[eth_chan, connected_chip_chan] : all_eth_connections.at(dev_vec.back())) {
-                    const auto &other_chip_id = std::get<0>(connected_chip_chan);
-                    auto id_iter = device_ids.find(other_chip_id);
-                    if (id_iter != device_ids.end()) {
-                        device_ids.erase(id_iter);
-                        dev_vec.push_back(other_chip_id);
-                        tunneled_device_hit = true;
-                        break;
-                    }
-                }
-            }
-            TT_FATAL(
-                tunneled_device_hit || device_ids.empty(),
-                "Detected ethernet connections did not match expected device connectivity, try re-running "
-                "tt-topology.");
-        }
-
-        TT_ASSERT(!tunnels_from_mmio.empty(), "Must have at least 1 tunnel from MMIO Device.");
-        uint32_t tunnel_depth = tunnels_from_mmio[0].size();
-        log_debug(tt::LogMetal, "Each FD Tunnel is {} deep.", tunnel_depth);
-
-        for (auto &dev_vec : tunnels_from_mmio) {
-            TT_ASSERT(
-                dev_vec.size() == tunnel_depth,
-                "All tunnels from mmio device must have same depth. Found {}. Expected {}.",
-                dev_vec.size(),
-                tunnel_depth);
-            // Now that all remote chips have been added to respective tunnels,
-            // add mmio device at start of each of the tunnels.
-            if (dev_vec.size() > MAX_TUNNEL_DEPTH) {
-                dev_vec.resize(dev_vec.size() - (dev_vec.size() - MAX_TUNNEL_DEPTH));
-            }
-            dev_vec.insert(dev_vec.begin(), mmio_chip_id);
-        }
-        this->tunnels_from_mmio_device.insert({mmio_chip_id, tunnels_from_mmio});
-    }
 }
 
 // Ethernet cluster api

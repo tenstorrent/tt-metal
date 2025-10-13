@@ -1550,7 +1550,7 @@ class ModelArgs:
             self.multiple_of = text_config["multiple_of"]
             self.hidden_dim = calculate_hidden_dim(self.dim, self.ffn_dim_multiplier, self.multiple_of)
 
-        if "_name_or_path" in config:
+        if "_name_or_path" in config and config["_name_or_path"]:
             if is_hf:
                 normalized_path = os.path.normpath(config["_name_or_path"])
                 # For HF paths, they might end with `<model_name>/snapshots/<snapshot_id>/`
@@ -1902,7 +1902,7 @@ class ModelArgs:
                 self.fuse_qkv = any(["qkv" in layer_name for layer_name in state_dict.keys()])
                 self.fuse_mlp = any(["gate_up" in layer_name for layer_name in state_dict.keys()])
                 state_dict = standardize_hf_keys(state_dict)
-                state_dict = convert_hf_to_meta(state_dict, self.head_dim)
+                state_dict = convert_hf_to_meta(state_dict, self.head_dim, self.n_heads, self.n_kv_heads)
 
         keys_dict = list(state_dict.keys())[:]
         remv = [f"layers.{i}." for i in list(range(self.n_layers, self.full_model_n_layers))]
@@ -2581,7 +2581,9 @@ class ModelArgs:
         else:
             model = self.reference_transformer(wrap=False)
             layer = model.model.layers[0]
-            use_position_embeddings = layer.__class__.__name__ != "Phi3DecoderLayer"
+            use_position_embeddings = layer.__class__.__name__ != "Phi3DecoderLayer" or self.base_model_name in (
+                "phi-4",
+            )
             model_name_env = os.getenv("HF_MODEL")
             if hasattr(model.model, "rotary_emb_local"):
                 rotary_emb_local = model.model.rotary_emb_local

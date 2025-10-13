@@ -9,7 +9,7 @@
 #include <type_traits>
 #include <vector>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "shape_base.hpp"
 #include <tt_stl/span.hpp>
 

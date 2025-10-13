@@ -14,27 +14,18 @@ on:
         type: boolean
         default: false
         description: "Build with tracy enabled"
-      build-wheel:
-        required: true
-        type: boolean
-        default: false
-        description: "Build Python Wheel"
       runner-label:
         required: true
         type: choice
         options:
-          - E150
           - N150
           - N300
           - P150
           - config-t3000
           - config-tg
+          - topology-6u
+          - config-t3000
         description: "Runner Type Label"
-      extra-label:
-        required: true
-        type: string
-        default: "in-service"
-        description: "Secondary tag to filter runners"
       good-commit:
         required: true
         type: string
@@ -47,53 +38,78 @@ on:
       timeout:
         required: true
         type: string
-        description: "Timeout (eg: 5m, 1h)"
-      patch:
+        description: "Timeout for one iteration (eg: 5m, 1h)"
+      retries:
         required: false
         type: string
-        description: "Commit-ish to cherry-pick for each step"
-
+        default: "3"
+        description: "Number of retries (default 3)"
 run-name: "Bisect on ${{ inputs.runner-label }}"
 jobs:
-  build-artifact:
-    uses: ./.github/workflows/build-artifact.yaml
-    permissions:
-      packages: write
-    secrets: inherit
-    with:
-      tracy: ${{ inputs.tracy }}
-      build-wheel: ${{ inputs.build-wheel }}
   test-dispatch:
-    needs: build-artifact
     timeout-minutes: 1440
-    env:
-      ARCH_NAME: ${{ inputs.arch }}
-    runs-on:
-      - ${{ inputs.runner-label }}
-      - ${{ inputs.extra-label }}
+    runs-on: >-
+      ${{
+        fromJSON(format('["{0}", "in-service", "cloud-virtual-machine"]', inputs.runner-label))
+        || format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label)
+      }}
+    container:
+      image: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-dev-amd64:latest
+      env:
+        ARCH_NAME: ${{ inputs.arch }}
+        LOGURU_LEVEL: DEBUG
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        GTEST_OUTPUT: xml:/work/generated/test_reports/
+        TT_METAL_HOME: /work
+        PYTHONFAULTHANDLER: 1       # prints Python stack trace on segfault
+        PYTHONMALLOC: debug         # adds checks, helps catch memory issues
+        CCACHE_REMOTE_ONLY: "true"
+        CCACHE_TEMPDIR: /tmp/ccache
+        CARGO_HOME: /tmp/.cargo
+        TT_FROM_PRECOMPILED_DIR: /work
+        # TODO: Revisit the addition of these env vars https://github.com/tenstorrent/tt-metal/issues/20161
+        TRACY_NO_INVARIANT_CHECK: 1
+        TRACY_NO_ISA_EXTENSIONS: 1
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - /dev/hugepages-1G:/dev/hugepages-1G
+        - /home/ubuntu/.ccache-ci:/github/home/.ccache # HOME is hardcoded for no clear reason: https://github.com/actions/runner/issues/863
+        - /mnt/MLPerf:/mnt/MLPerf:ro
+      options: >
+        --device /dev/tenstorrent
+        --group-add 1457
+        --tmpfs /tmp
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
-      - name: ⬇️ Checkout
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          fetch-depth: 0
-      - name: Set up dyanmic env vars for build
+      - name: Check Redis credentials
+        # Failing internal jobs draws attention immediately so we can fix them and make them fast.
+        # Forks will never have secrets; don't fail the job for them, they'll just run slower
+        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
         run: |
-          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
-      - uses: actions/download-artifact@v4
+          if [ -z "${{ secrets.REDIS_PASSWORD }}" ]; then
+            echo "Redis password is missing. Did you forget 'secrets: inherit'?"
+            exit 1
+          fi
+          # Conditionally set this here so that it remains unset on forks, otherwise it resolves an invalid URL and the job fails
+          CCACHE_REMOTE_STORAGE="redis://${{ vars.REDIS_USER }}:${{ secrets.REDIS_PASSWORD }}@${{ vars.REDIS_HOST }}:${{ vars.REDIS_PORT }}|read-only=${{ vars.REDIS_IS_READONLY }}"
+          echo "CCACHE_REMOTE_STORAGE=${CCACHE_REMOTE_STORAGE}" >> $GITHUB_ENV
+          echo "CCACHE_REMOTE_STORAGE: ${CCACHE_REMOTE_STORAGE}"
+
+      - name: ⬇️  Setup Job
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@6b36ef848f5f66ba0ae6f883ff69b09692e48ce9
         timeout-minutes: 10
         with:
-          name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      - name: Extract files
-        run: tar -xvf ttm_any.tar
-      - uses: ./.github/actions/install-python-deps
+          fetch-depth: 0
+
+
       - name: Run Git Bisect
         shell: bash
         env:
           GIT_COMMITTER_NAME: "GitHub Actions"
           GIT_COMMITTER_EMAIL: "actions@github.com"
         run: |
-          source ${{ github.workspace }}/python_env/bin/activate
-          cd $TT_METAL_HOME
-          export PYTHONPATH=$TT_METAL_HOME
-          ./tests/scripts/tt_bisect.sh -t ${{ inputs.timeout }} -f "${{ inputs.command }}" -b ${{ inputs.bad-commit }} -g ${{ inputs.good-commit }} -p "${{ inputs.patch }}"
+          ./tests/scripts/tt_bisect.sh -t ${{ inputs.timeout }} -f "${{ inputs.command }}" -b ${{ inputs.bad-commit }} -g ${{ inputs.good-commit }} ${{ inputs.tracy == 'true' && '-p' || '' }} -r ${{ inputs.retries }}

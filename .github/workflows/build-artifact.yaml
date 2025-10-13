@@ -180,7 +180,6 @@ jobs:
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /home/ubuntu/.ccache-ci:/github/home/.ccache # HOME is hardcoded for no clear reason: https://github.com/actions/runner/issues/863
-        - /mnt/MLPerf/ccache:/mnt/MLPerf/ccache
       # Group 1457 is for the shared ccache drive
       # tmpfs is for efficiency
       options: >
@@ -402,6 +401,7 @@ jobs:
             CCACHE_TEMPDIR=/tmp/ccache
             CCACHE_REMOTE_STORAGE="${{ env.CCACHE_REMOTE_STORAGE }}"
             CIBW_ENABLE_TRACY="${{ env.ENABLE_TRACY_BUILD }}"
+            CIBW_BUILD_TYPE="${{ inputs.build-type }}"
           CIBW_BEFORE_BUILD: "mkdir -p /tmp/ccache && ccache -z && ccache -p"
           CIBW_BEFORE_TEST: ccache -s
           CIBW_TEST_COMMAND: ${{ env.CIBW_TEST_CMD }}

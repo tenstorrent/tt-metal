@@ -1,10 +1,9 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-#include <allocator_types.hpp>
 #include <buffer_types.hpp>
 #include <stdint.h>
 #include <fstream>
@@ -114,7 +113,7 @@ public:
         AllocatorDependencies::AllocatorID allocator_id = AllocatorDependencies::AllocatorID{0}) const;
 
     void dump_blocks(
-        std::ofstream& out,
+        std::ostream& out,
         AllocatorDependencies::AllocatorID allocator_id = AllocatorDependencies::AllocatorID{0}) const;
 
     MemoryBlockTable get_memory_block_table(

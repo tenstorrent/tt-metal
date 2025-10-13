@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -14,7 +14,7 @@
 #include <algorithm>
 #include <numeric>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
 
 #include "impl/context/metal_context.hpp"
@@ -29,6 +29,7 @@
 
 #include "tt_fabric_test_interfaces.hpp"
 #include "tt_fabric_test_common_types.hpp"
+#include <tt-metalium/hal.hpp>
 
 namespace tt::tt_fabric {
 namespace fabric_tests {
@@ -416,8 +417,23 @@ public:
 private:
     static constexpr uint32_t MIN_RING_TOPOLOGY_DEVICES = 4;
 
-    // Helper function to check if a test should be skipped based on topology and device count
+    // Helper function to check if a test should be skipped based on:
+    // 1. topology and device count
+    // 2. architecture or cluster type
     bool should_skip_test(const ParsedTestConfig& test_config) const {
+        // Skip if the test declares platforms to skip and this platform matches
+        if (test_config.skip.has_value()) {
+            // Determine current platform identifiers
+            auto arch_name = tt::tt_metal::hal::get_arch_name();
+            auto cluster_type = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type();
+            std::string cluster_name = std::string(enchantum::to_string(cluster_type));
+            for (const auto& token : test_config.skip.value()) {
+                if (token == arch_name || token == cluster_name) {
+                    log_info(LogTest, "Skipping test '{}' on architecture or platform '{}'", test_config.name, token);
+                    return true;
+                }
+            }
+        }
         if (test_config.fabric_setup.topology == Topology::Ring) {
             uint32_t num_devices = device_info_provider_.get_local_node_ids().size();
             if (num_devices < MIN_RING_TOPOLOGY_DEVICES) {
@@ -434,10 +450,11 @@ private:
     }
 
     // Convert ParsedTestConfig to TestConfig by resolving device identifiers
-    TestConfig resolve_test_config(const ParsedTestConfig& parsed_test) {
+    TestConfig resolve_test_config(const ParsedTestConfig& parsed_test, uint32_t iteration_number) {
         TestConfig resolved_test;
         resolved_test.name = parsed_test.name;
         resolved_test.parametrized_name = parsed_test.parametrized_name;
+        resolved_test.iteration_number = iteration_number;
         resolved_test.fabric_setup = parsed_test.fabric_setup;
         resolved_test.on_missing_param_policy = parsed_test.on_missing_param_policy;
         resolved_test.parametrization_params = parsed_test.parametrization_params;
@@ -522,6 +539,14 @@ private:
             for (const auto& p : p_config.patterns.value()) {
                 if (p.iterations.has_value()) {
                     max_iterations = std::max(max_iterations, p.iterations.value());
+                    // Edge Case: If both iterations and all_to_one are supplied, iterations will override the number of
+                    // iterations set by all_to_one
+                    if (p.type == "all_to_one") {
+                        log_warning(
+                            tt::LogTest,
+                            "'iterations' specified alongside 'all_to_one' test, `iterations` will be followed instead "
+                            "of auto-generating iterations based on number of devices");
+                    }
                 } else if (p.type == "all_to_one") {
                     // Dynamically calculate iterations for all_to_one patterns based on number of devices
                     uint32_t num_devices = static_cast<uint32_t>(device_info_provider_.get_global_node_ids().size());
@@ -596,7 +621,7 @@ private:
             split_all_unicast_or_multicast_patterns(iteration_test);
 
             // Convert to resolved TestConfig
-            TestConfig resolved_test = resolve_test_config(iteration_test);
+            TestConfig resolved_test = resolve_test_config(iteration_test, i);
 
             validate_test(resolved_test);
             expanded_tests.push_back(resolved_test);

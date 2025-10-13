@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -176,6 +176,7 @@ private:
 
 struct TestWorker {
 public:
+    virtual ~TestWorker() = default;
     TestWorker(CoreCoord logical_core, TestDevice* test_device_ptr, std::optional<std::string_view> kernel_src);
     void set_kernel_src(const std::string_view& kernel_src);
     void create_kernel(
@@ -198,6 +199,7 @@ protected:
 
 struct TestSender : TestWorker {
 public:
+    ~TestSender() override = default;
     TestSender(CoreCoord logical_core, TestDevice* test_device_ptr, std::optional<std::string_view> kernel_src);
     void add_config(TestTrafficSenderConfig config);
     bool validate_results(std::vector<uint32_t>& data) const override;

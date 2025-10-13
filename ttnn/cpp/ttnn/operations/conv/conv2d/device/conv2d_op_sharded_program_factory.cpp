@@ -4,7 +4,7 @@
 #include <umd/device/types/xy_pair.hpp>
 #include <cstdint>
 #include <string>
-#include "tt-metalium/assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "tt-metalium/circular_buffer_config.hpp"
 #include "tt-metalium/core_coord.hpp"
 #include "tt-metalium/kernel_types.hpp"
@@ -19,7 +19,6 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <utility>
@@ -47,9 +46,11 @@ struct ActivationReuseConfig {
     CoreCoord partial_work_core{0, 0};
     uint32_t partial_core_reader_tiles_to_push = 0;
     uint32_t partial_core_writer_remaining_tiles_to_push_to_push = 0;
+    bool single_core_processes_multiple_batches = false;
 };
 
 ActivationReuseConfig calculate_activation_reuse_params(
+    uint32_t output_image_height,
     uint32_t output_image_width,
     uint32_t filter_w,
     uint32_t filter_h,
@@ -65,7 +66,8 @@ ActivationReuseConfig calculate_activation_reuse_params(
     uint32_t padded_total_output_height_ntiles,
     const std::vector<CBInfo>& cb_info,
     bool enable_split_reader,
-    const CoreRangeSet& input_cores) {
+    const CoreRangeSet& input_cores,
+    uint32_t batch) {
     ActivationReuseConfig config;
 
     // Calculate compile time args needed for activation reuse feature
@@ -145,16 +147,22 @@ ActivationReuseConfig calculate_activation_reuse_params(
     }
 
     // Put all cores with non-meaningful work to the set
-    uint32_t start_idx =
-        all_input_cores.size() - config.num_cores_with_non_meaningful_work - (config.has_partial_core ? 1 : 0);
+    uint32_t start_idx = all_input_cores.size() - config.num_cores_with_non_meaningful_work;
     for (uint32_t i = start_idx; i < all_input_cores.size(); i++) {
         config.cores_with_non_meaningful_work.insert(all_input_cores[i]);
     }
 
+    // If we have cores processing data from more than 1 batch, we need to trigger a check inside the kernel
+    // to 'restart' the optimization and fill in the whole output image width
+    // before the reuse for the new batch starts
+    const uint32_t per_core_out_hw = single_core_height_ntiles * tt::constants::TILE_HEIGHT;
+    const uint32_t total_batch_out_hw = output_image_height * output_image_width;
+    config.single_core_processes_multiple_batches = (batch > 1) && (total_batch_out_hw % per_core_out_hw != 0);
+
     return config;
 }
 
-tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
+tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
     tt::tt_metal::Program& program,
     const Tensor& a,
     const Tensor& b,
@@ -169,8 +177,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     bool untilize_out,
     bool has_bias,
     const std::optional<unary::UnaryWithParam>& fused_activation,
-    const OptimizedConvParallelizationConfig& parallelization_config,
-    const OptimizedConvBlockConfig& block_config,
+    const Conv2dParallelizationConfig& parallelization_config,
+    const Conv2dBlockConfig& block_config,
     bool transpose_mcast,
     Tensor& output,
     DeviceComputeKernelConfig compute_kernel_config,
@@ -296,6 +304,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     const bool enable_split_reader =
         is_split_reader_supported(a.memory_config().memory_layout(), is_conv_1d_depthwise_conv, act_block_h_ntiles) &&
         force_split_reader.value_or(is_split_reader_viable(
+            a.memory_config().memory_layout(),
             act_block_h_ntiles,
             input_channels_padded,
             filter_w,
@@ -570,25 +579,35 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     const CoreCoord top_left_core_plus_one_physical = device->worker_core_from_logical_core(top_left_core_plus_one);
     const CoreCoord bottom_right_core_physical = device->worker_core_from_logical_core(bottom_right_core);
 
-    CoreRange mcast_sender_cores(top_left_core, top_left_core);  // If single core, this kernel doesn't do mcasting
+    CoreRangeSet mcast_sender_cores =
+        CoreRangeSet(CoreRange(top_left_core, top_left_core));  // If single core, this kernel doesn't do mcasting
     CoreRangeSet mcast_receiver_cores;
     uint32_t weights_mcast_sender_semaphore_id{};
     uint32_t weights_mcast_receiver_semaphore_id{};
     uint32_t act_mcast_sender_semaphore_id = 0;
     uint32_t act_mcast_receiver_semaphore_id = 0;
+
+    // Check if we should run BRISC kernels on cores that are not in the output grid ( when split reader is enabled and
+    // the output grid is smaller than the input grid)
+    const bool populate_skipped_work_cores =
+        enable_split_reader && block_sharded && input_cores.num_cores() > output_cores.num_cores();
+
     if (block_sharded) {
         const CoreCoord out_bottom_right_core = {(std::size_t)num_cores_x - 1, (std::size_t)num_cores_y - 1};
         // 2D mcast
         if (transpose_mcast) {
-            mcast_sender_cores = CoreRange(top_left_core, CoreCoord(0, num_cores_y - 1));
+            mcast_sender_cores = CoreRangeSet(CoreRange(top_left_core, CoreCoord(0, num_cores_y - 1)));
             if (!skip_weights_mcast) {
                 mcast_receiver_cores = CoreRange(CoreCoord(1, 0), out_bottom_right_core);
             }
         } else {
-            mcast_sender_cores = CoreRange(top_left_core, CoreCoord(num_cores_x - 1, 0));
+            mcast_sender_cores = CoreRangeSet(CoreRange(top_left_core, CoreCoord(num_cores_x - 1, 0)));
             if (!skip_weights_mcast) {
                 mcast_receiver_cores = CoreRange(CoreCoord(0, 1), out_bottom_right_core);
             }
+        }
+        if (populate_skipped_work_cores) {
+            mcast_sender_cores = input_cores.subtract(mcast_receiver_cores);
         }
         act_mcast_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
         act_mcast_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
@@ -620,7 +639,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     const bool needs_act_block_zero_out =
         act_block_w_extra_align_scalars % 16 != 0 && tt::tt_metal::is_block_float(output.dtype());
 
-    const uint32_t tilized_act_tile_size = tt::tt_metal::detail::TileSize(tilized_act_df);
+    const uint32_t tilized_act_tile_size = tt::tile_size(tilized_act_df);
 
     // Only enable packer l1 accumulation when there are in0_num_blocks_w > 2, otherwise
     // unnecessary overhead for reconfigs are added. Last iteration of l1 accumulation
@@ -720,6 +739,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     ActivationReuseConfig activation_reuse_config;
     if (enable_activation_reuse) {
         activation_reuse_config = calculate_activation_reuse_params(
+            output_image_height,
             output_image_width,
             filter_w,
             filter_h,
@@ -735,7 +755,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
             act_matrix_height_ntiles,
             cb_info,
             enable_split_reader,
-            input_cores);
+            input_cores,
+            batch);
     }
 
     std::vector<uint32_t> reader_compile_time_args = {
@@ -745,8 +766,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         (uint32_t)conv_act_c_read_bytes,
         (uint32_t)window_outer,
         (uint32_t)window_inner,
-        (uint32_t)(enable_split_reader ? act_block_num_tiles_split / conv_act_c_blocks
-                                       : act_block_num_tiles / conv_act_c_blocks),
+        (uint32_t)(enable_split_reader ? act_block_num_tiles_split : act_block_num_tiles),
         (uint32_t)filter_h,
         (uint32_t)filter_w,
         (uint32_t)conv_act_size_w + (pad_w),
@@ -795,7 +815,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
             activation_reuse_config.image_width_tiles,
             output_image_width,
             activation_reuse_config.reuse_window_offset,
-            static_cast<uint32_t>(activation_reuse_config.num_cores_with_non_meaningful_work > 0)};
+            static_cast<uint32_t>(activation_reuse_config.num_cores_with_non_meaningful_work > 0),
+            static_cast<uint32_t>(activation_reuse_config.single_core_processes_multiple_batches)};
 
         reader_compile_time_args.insert(
             reader_compile_time_args.end(), activation_reuse_args.begin(), activation_reuse_args.end());
@@ -872,35 +893,34 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         num_blocks_weight_w_per_core,
         out_conv_c_blocks};
 
-    if (height_sharded) {
-        if (enable_split_reader) {
-            std::vector<uint32_t> split_reader_args = {
-                (uint32_t)act_block_num_tiles_split_last / conv_act_c_blocks,
-                (uint32_t)conv_act_c_read_bytes,
-                (uint32_t)filter_w,                       // weight_size_w
-                (uint32_t)(conv_act_size_w + pad_w),      // conv_act_size_w_padded
-                (uint32_t)act_block_w_extra_align_bytes,  // only used for 1d systolic variant
-                (uint32_t)needs_act_block_zero_out,
-                (uint32_t)dilation_h,
-                (uint32_t)dilation_w,
-                (uint32_t)stride_w};
+    if (enable_split_reader) {
+        std::vector<uint32_t> split_reader_args = {
+            (uint32_t)act_block_num_tiles_split_last,
+            (uint32_t)conv_act_c_read_bytes,
+            (uint32_t)filter_w,                       // weight_size_w
+            (uint32_t)(conv_act_size_w + pad_w),      // conv_act_size_w_padded
+            (uint32_t)act_block_w_extra_align_bytes,  // only used for 1d systolic variant
+            (uint32_t)needs_act_block_zero_out,
+            (uint32_t)dilation_h,
+            (uint32_t)dilation_w,
+            (uint32_t)stride_w,
+            (uint32_t)filter_h};
 
-            if (enable_activation_reuse) {
-                std::vector<uint32_t> activation_reuse_args = {
-                    filter_h,
-                    activation_reuse_config.act_cb_num_tiles_split_last,
-                    act_block_w_ntiles,
-                    static_cast<uint32_t>(activation_reuse_config.readers_process_full_image_widths),
-                    activation_reuse_config.image_width_tiles,
-                    output_image_width,
-                    activation_reuse_config.reuse_window_offset,
-                    static_cast<uint32_t>(activation_reuse_config.num_cores_with_non_meaningful_work > 0)};
-                split_reader_args.insert(
-                    split_reader_args.end(), activation_reuse_args.begin(), activation_reuse_args.end());
-            }
-            writer_compile_time_args.insert(
-                writer_compile_time_args.end(), split_reader_args.begin(), split_reader_args.end());
+        if (enable_activation_reuse && height_sharded) {
+            std::vector<uint32_t> activation_reuse_args = {
+                activation_reuse_config.act_cb_num_tiles_split_last,
+                act_block_w_ntiles,
+                static_cast<uint32_t>(activation_reuse_config.readers_process_full_image_widths),
+                activation_reuse_config.image_width_tiles,
+                output_image_width,
+                activation_reuse_config.reuse_window_offset,
+                static_cast<uint32_t>(activation_reuse_config.num_cores_with_non_meaningful_work > 0),
+                static_cast<uint32_t>(activation_reuse_config.single_core_processes_multiple_batches)};
+            split_reader_args.insert(
+                split_reader_args.end(), activation_reuse_args.begin(), activation_reuse_args.end());
         }
+        writer_compile_time_args.insert(
+            writer_compile_time_args.end(), split_reader_args.begin(), split_reader_args.end());
     }
     tt::tt_metal::TensorAccessorArgs(b.buffer()).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(bias ? bias->buffer() : nullptr).append_to(writer_compile_time_args);
@@ -954,7 +974,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         }
     }
 
-    const tt::tt_metal::NOC writer_mcast_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(device->arch());
+    const tt::tt_metal::NOC writer_mcast_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
     const tt::tt_metal::NOC reader_noc =
         writer_mcast_noc == tt::tt_metal::NOC::NOC_0 ? tt::tt_metal::NOC::NOC_1 : tt::tt_metal::NOC::NOC_0;
 
@@ -1090,93 +1110,109 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
 
     // Setup writer mcast arguments
     // Setup sender args first
-    for (const CoreCoord& core : mcast_sender_cores) {
-        // Calculate weight slice indices
-        uint32_t weight_slice_i = (block_sharded && transpose_mcast || !block_sharded) ? core.y : core.x;
+    for (const CoreRange& core_range : mcast_sender_cores.ranges()) {
+        for (const CoreCoord& core : core_range) {
+            if (populate_skipped_work_cores && !output_cores.contains(core)) {
+                std::vector<uint32_t> args = std::vector<uint32_t>(14, 0);
+                args[12] =
+                    static_cast<uint32_t>(true);  // is_sender_core, is always true for cores that belong to input_cores
+                args[13] = static_cast<uint32_t>(true);  //  skip work
+                SetRuntimeArgs(program, writer_mcast_sender_id, core, args);
+                continue;
+            }
+            // Calculate weight slice indices
+            uint32_t weight_slice_i = (block_sharded && transpose_mcast || !block_sharded) ? core.y : core.x;
 
-        uint32_t out_start_tile_id_w = weight_slice_i * per_core_out_matrix_width_ntiles;
-        uint32_t bias_tile_offset = out_start_tile_id_w;
+            uint32_t out_start_tile_id_w = weight_slice_i * per_core_out_matrix_width_ntiles;
+            uint32_t bias_tile_offset = out_start_tile_id_w;
 
-        TT_FATAL(
-            bias_tile_offset < bias_ntiles || !has_bias,
-            "bias_tile_offset {} should be less than bias_ntiles {}",
-            bias_tile_offset,
-            bias_ntiles);
-        std::vector<uint32_t> sender_rt_args = {
-            weight_dram_addr, bias_dram_addr, out_start_tile_id_w, bias_tile_offset};
-        if (block_sharded) {
-            // 2D multicast setup
-            if (transpose_mcast) {
-                CoreCoord right_core = {(std::size_t)num_cores_x - 1, (std::size_t)core.y};
-                CoreCoord right_core_physical = device->worker_core_from_logical_core(right_core);
-                TT_FATAL(core.x == 0, "Expected core.x to be 0 for sender in 2D mcast setup");
+            TT_FATAL(
+                bias_tile_offset < bias_ntiles || !has_bias,
+                "bias_tile_offset {} should be less than bias_ntiles {}",
+                bias_tile_offset,
+                bias_ntiles);
+            std::vector<uint32_t> sender_rt_args = {
+                weight_dram_addr, bias_dram_addr, out_start_tile_id_w, bias_tile_offset};
+            if (block_sharded) {
+                const bool is_sender_core = input_cores.contains(core);
+                // 2D multicast setup
+                if (transpose_mcast) {
+                    CoreCoord right_core = {(std::size_t)num_cores_x - 1, (std::size_t)core.y};
+                    CoreCoord right_core_physical = device->worker_core_from_logical_core(right_core);
+                    TT_FATAL(core.x == 0, "Expected core.x to be 0 for sender in 2D mcast setup");
 
-                std::vector<uint32_t> mcast_coords = setup_mcast_args(
-                    writer_mcast_noc == tt::tt_metal::NOC::NOC_0,
-                    top_left_core_plus_one_physical.x,
-                    right_core_physical.y,
-                    bottom_right_core_physical.x,
-                    right_core_physical.y);
+                    std::vector<uint32_t> mcast_coords = setup_mcast_args(
+                        writer_mcast_noc == tt::tt_metal::NOC::NOC_0,
+                        top_left_core_plus_one_physical.x,
+                        right_core_physical.y,
+                        bottom_right_core_physical.x,
+                        right_core_physical.y);
 
-                sender_rt_args.insert(sender_rt_args.end(), mcast_coords.begin(), mcast_coords.end());
+                    sender_rt_args.insert(sender_rt_args.end(), mcast_coords.begin(), mcast_coords.end());
 
-                sender_rt_args.insert(
-                    sender_rt_args.end(),
-                    {num_cores_x - 1,
-                     num_cores_x - 1,  // mcast_num_dests, mcast_num_cores
-                     weights_mcast_sender_semaphore_id,
-                     weights_mcast_receiver_semaphore_id,
-                     output.buffer()->aligned_page_size()});
-                SetRuntimeArgs(program, writer_mcast_sender_id, core, sender_rt_args);
+                    sender_rt_args.insert(
+                        sender_rt_args.end(),
+                        {num_cores_x - 1,
+                         num_cores_x - 1,  // mcast_num_dests, mcast_num_cores
+                         weights_mcast_sender_semaphore_id,
+                         weights_mcast_receiver_semaphore_id,
+                         static_cast<uint32_t>(is_sender_core),
+                         static_cast<uint32_t>(false)});  // skip_work
+                    SetRuntimeArgs(program, writer_mcast_sender_id, core, sender_rt_args);
+                } else {
+                    CoreCoord top_core = {(std::size_t)core.x, 0};
+                    CoreCoord top_core_physical = device->worker_core_from_logical_core(top_core);
+                    TT_FATAL(core.y == 0, "Expected core.y to be 0 for sender in 2D mcast setup");
+                    std::vector<uint32_t> mcast_coords = setup_mcast_args(
+                        writer_mcast_noc == tt::tt_metal::NOC::NOC_0,
+                        top_core_physical.x,
+                        top_left_core_plus_one_physical.y,
+                        top_core_physical.x,
+                        bottom_right_core_physical.y);
+
+                    sender_rt_args.insert(sender_rt_args.end(), mcast_coords.begin(), mcast_coords.end());
+                    sender_rt_args.insert(
+                        sender_rt_args.end(),
+                        {
+                            num_cores_y - 1,
+                            num_cores_y - 1,  // mcast_num_dests, mcast_num_cores
+                            weights_mcast_sender_semaphore_id,
+                            weights_mcast_receiver_semaphore_id,
+                            static_cast<uint32_t>(is_sender_core),
+                            static_cast<uint32_t>(false)  // skip_work
+                        });
+                    SetRuntimeArgs(program, writer_mcast_sender_id, core, sender_rt_args);
+                }
             } else {
-                CoreCoord top_core = {(std::size_t)core.x, 0};
-                CoreCoord top_core_physical = device->worker_core_from_logical_core(top_core);
-                TT_FATAL(core.y == 0, "Expected core.y to be 0 for sender in 2D mcast setup");
+                // 1D multicast setup
                 std::vector<uint32_t> mcast_coords = setup_mcast_args(
                     writer_mcast_noc == tt::tt_metal::NOC::NOC_0,
-                    top_core_physical.x,
-                    top_left_core_plus_one_physical.y,
-                    top_core_physical.x,
+                    top_left_core_physical.x,
+                    top_left_core_physical.y,
+                    bottom_right_core_physical.x,
                     bottom_right_core_physical.y);
 
                 sender_rt_args.insert(sender_rt_args.end(), mcast_coords.begin(), mcast_coords.end());
                 sender_rt_args.insert(
                     sender_rt_args.end(),
-                    {num_cores_y - 1,
-                     num_cores_y - 1,  // mcast_num_dests, mcast_num_cores
+                    {total_active_num_cores - 1,
+                     total_num_cores - 1,  // mcast_num_dests, mcast_num_cores
                      weights_mcast_sender_semaphore_id,
                      weights_mcast_receiver_semaphore_id});
+                if (enable_split_reader && enable_activation_reuse) {
+                    uint32_t writer_remaining_tiles_to_push = 0;
+                    if (activation_reuse_config.has_partial_core && core == activation_reuse_config.partial_work_core) {
+                        writer_remaining_tiles_to_push =
+                            activation_reuse_config.partial_core_writer_remaining_tiles_to_push_to_push;
+                    } else if (
+                        activation_reuse_config.cores_with_non_meaningful_work.find(core) !=
+                        activation_reuse_config.cores_with_non_meaningful_work.end()) {
+                        writer_remaining_tiles_to_push = act_block_h_nsubblocks_split_last;
+                    }
+                    sender_rt_args.push_back(writer_remaining_tiles_to_push);
+                }
                 SetRuntimeArgs(program, writer_mcast_sender_id, core, sender_rt_args);
             }
-        } else {
-            // 1D multicast setup
-            std::vector<uint32_t> mcast_coords = setup_mcast_args(
-                writer_mcast_noc == tt::tt_metal::NOC::NOC_0,
-                top_left_core_physical.x,
-                top_left_core_physical.y,
-                bottom_right_core_physical.x,
-                bottom_right_core_physical.y);
-
-            sender_rt_args.insert(sender_rt_args.end(), mcast_coords.begin(), mcast_coords.end());
-            sender_rt_args.insert(
-                sender_rt_args.end(),
-                {total_active_num_cores - 1,
-                 total_num_cores - 1,  // mcast_num_dests, mcast_num_cores
-                 weights_mcast_sender_semaphore_id,
-                 weights_mcast_receiver_semaphore_id});
-            if (enable_split_reader && enable_activation_reuse) {
-                uint32_t writer_remaining_tiles_to_push = 0;
-                if (activation_reuse_config.has_partial_core && core == activation_reuse_config.partial_work_core) {
-                    writer_remaining_tiles_to_push =
-                        activation_reuse_config.partial_core_writer_remaining_tiles_to_push_to_push;
-                } else if (
-                    activation_reuse_config.cores_with_non_meaningful_work.find(core) !=
-                    activation_reuse_config.cores_with_non_meaningful_work.end()) {
-                    writer_remaining_tiles_to_push = act_block_h_nsubblocks_split_last;
-                }
-                sender_rt_args.push_back(writer_remaining_tiles_to_push);
-            }
-            SetRuntimeArgs(program, writer_mcast_sender_id, core, sender_rt_args);
         }
     }
 
@@ -1200,6 +1236,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
                     CoreCoord top_core_physical = device->worker_core_from_logical_core(top_core);
                     receiver_args = create_receiver_args(top_core_physical.x, top_left_core_physical.y);
                 }
+                const bool is_sender_core = input_cores.contains(core);
+                receiver_args.push_back(static_cast<uint32_t>(is_sender_core));
             } else {
                 bool is_no_op_core = !input_cores.contains(core);
                 receiver_args = std::vector<uint32_t>{
@@ -1238,8 +1276,11 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         }
     }
 
-    std::vector<CoreCoord> mcast_sender_cores_vec =
-        grid_to_cores(mcast_sender_cores.start_coord, mcast_sender_cores.end_coord, true);
+    std::vector<CoreCoord> mcast_sender_cores_vec;
+    for (const CoreRange& core_range : mcast_sender_cores.ranges()) {
+        std::vector<CoreCoord> core_range_vec = grid_to_cores(core_range.start_coord, core_range.end_coord, true);
+        mcast_sender_cores_vec.insert(mcast_sender_cores_vec.end(), core_range_vec.begin(), core_range_vec.end());
+    }
     // Capture conv_reader_indices_storage to cache this with the program
     auto override_runtime_arguments_callback =
         [mcast_sender_cores = mcast_sender_cores_vec,

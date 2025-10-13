@@ -511,7 +511,7 @@ class ttnn_yolov7:
         )
 
         self.conv23 = Conv(
-            [1, 80, 80, 256],
+            [1, 80, 80, 512],
             (1, 1, 1, 1, 0, 0, 1, 1),
             parameters["27"],
             height_sharding=False,
@@ -663,7 +663,7 @@ class ttnn_yolov7:
             height_sharding=False,
         )
         self.conv43 = Conv(
-            [1, 20, 20, 1024],
+            [1, 40, 40, 1024],
             (1, 1, 1, 1, 0, 0, 1, 1),
             parameters["54"],
             num_cores_nhw=56,

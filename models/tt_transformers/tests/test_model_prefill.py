@@ -9,14 +9,13 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import comp_pcc, skip_for_grayskull
+from models.common.utility_functions import comp_pcc
 from models.tt_transformers.tt.common import PagedAttentionConfig, create_tt_model
 from models.tt_transformers.tt.generator import Generator
 from models.tt_transformers.tt.model_config import CheckpointType, DecodersPrecision
 
 
 @torch.no_grad()
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.timeout(900)
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
@@ -127,6 +126,7 @@ def test_model_inference(
         model_args.base_model_name.startswith("Mistral-")
         or model_args.base_model_name.startswith("Qwen3-")
         or model_args.base_model_name.startswith("Phi-3-mini-")
+        or model_args.base_model_name.startswith("phi-4")
     ):
         # TODO: Per layer KV cache fetching is not implemented for all models
         # See issue https://github.com/tenstorrent/tt-metal/issues/19806"

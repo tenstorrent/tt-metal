@@ -155,7 +155,7 @@ MorehMeanOperation::MorehMeanHFactory::cached_program_t MorehMeanOperation::More
             reader_kernel_id,
             core,
             {input.buffer()->address(),
-             tile_offset / Wt * HtWt + tile_offset % Wt,
+             (tile_offset / Wt * HtWt) + (tile_offset % Wt),
              tile_offset % Wt,
              units_per_core,
              mask_h});

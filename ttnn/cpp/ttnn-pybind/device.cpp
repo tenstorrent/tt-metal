@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -259,6 +259,14 @@ void device_module(py::module& m_device) {
         Returns associated mmio device of give device id.
     )doc");
 
+    m_device.def("SetRootDir", &tt::tt_metal::SetRootDir, py::arg("root_dir"), R"doc(
+        Sets the root directory for TT Metal operations.
+        Args:
+            root_dir (str): Path to the root directory to set.
+        Example:
+            >>> ttnn.device.SetRootDir("/path/to/tt_metal_home")
+    )doc");
+
     m_device.def(
         "SetDefaultDevice",
         [](MeshDevice* device) { ttnn::operations::experimental::auto_format::AutoFormat::SetDefaultDevice(device); },
@@ -485,15 +493,6 @@ void device_module(py::module& m_device) {
             )doc";
     m_device.def(
         "synchronize_device",
-        [](IDevice* device, std::optional<QueueId> cq_id, const std::vector<SubDeviceId>& sub_device_ids) {
-            Synchronize(device, raw_optional(cq_id), sub_device_ids);
-        },
-        synchronize_device_doc.data(),
-        py::arg("device"),
-        py::arg("cq_id") = std::nullopt,
-        py::arg("sub_device_ids") = std::vector<SubDeviceId>());
-    m_device.def(
-        "synchronize_device",
         [](MeshDevice* device, std::optional<QueueId> cq_id, const std::vector<SubDeviceId>& sub_device_ids) {
             tt::tt_metal::distributed::Synchronize(device, raw_optional(cq_id), sub_device_ids);
         },
@@ -520,7 +519,7 @@ void device_module(py::module& m_device) {
 
     m_device.def(
         "get_arch_name",
-        &tt::tt_metal::detail::get_physical_architecture_name,
+        &tt::tt_metal::detail::get_platform_architecture_name,
         "Return the name of the architecture present.");
 
     m_device.attr("DEFAULT_L1_SMALL_SIZE") = py::int_(DEFAULT_L1_SMALL_SIZE);

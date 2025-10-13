@@ -1,10 +1,9 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-#include <command_queue_interface.hpp>
 #include <stdint.h>
 #include <sub_device_types.hpp>
 #include <tt-metalium/device.hpp>

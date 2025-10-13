@@ -10,13 +10,11 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_
 from tests.ttnn.unit_tests.operations.ccl.test_all_gather_TG_post_commit import (
     run_line_all_gather_on_TG_with_mesh_tensor_along_rows,
 )
-from models.utility_functions import skip_for_grayskull
 
 from ttnn import ShardTensor2dMesh, ConcatMesh2dToTensor
 
 
 # Enumerate the post-commit cases explicitly
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "num_devices, num_links",
     [(4, 3)],
@@ -97,7 +95,6 @@ def test_line_all_gather_sharded_on_TG_rows_post_commit(
 
 
 # Enumerate the post-commit cases explicitly
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "num_devices, num_links",
     [(8, 4), (8, 3), (8, 2)],
@@ -229,7 +226,6 @@ def test_line_all_gather_sharded_on_TG_cols_post_commit(
     )
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "num_devices, num_links, per_chip_output_shape, dim, layout",
     [

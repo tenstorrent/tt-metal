@@ -7,7 +7,7 @@ import pytest
 
 import ttnn
 from tests.ttnn.utils_for_testing import assert_allclose, assert_with_ulp
-from models.utility_functions import comp_allclose_and_pcc
+from models.common.utility_functions import comp_allclose_and_pcc
 
 
 def get_backward_tensors(output_grad_shape, input_grad_shape, device):

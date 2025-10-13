@@ -37,6 +37,7 @@ set(TT_METAL_TESTS_SRCS
     test_compile_sets_kernel_binaries.cpp
     test_compile_program.cpp
     test_clean_init.cpp
+    test_single_dm_l1_write.cpp
 )
 
 foreach(TEST_SRC ${TT_METAL_TESTS_SRCS})
@@ -84,6 +85,7 @@ add_custom_target(
         unit_tests_api
         unit_tests_data_movement
         unit_tests_debug_tools
+        unit_tests_inspector
         unit_tests_device
         unit_tests_dispatch
         unit_tests_eth

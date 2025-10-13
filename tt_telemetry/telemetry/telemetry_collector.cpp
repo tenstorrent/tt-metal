@@ -9,6 +9,7 @@
  * metrics received from remote instances are propagated via delta updates.
  */
 
+#include <functional>
 #include <future>
 #include <queue>
 #include <unistd.h>
@@ -18,12 +19,15 @@
 #include <tt-logger/tt-logger.hpp>
 #include <server/collection_clients.hpp>
 #include <utils/simple_concurrent_queue.hpp>
+#include <tt-metalium/distributed_context.hpp>
+#include <tt_metal/fabric/physical_system_descriptor.hpp>
+#include "protobuf/factory_system_descriptor.pb.h"
 
 #include <telemetry/telemetry_collector.hpp>
 #include <hal/hal.hpp>
 #include <telemetry/ethernet/ethernet_metrics.hpp>
 #include <telemetry/arc/arc_metrics.hpp>
-#include <telemetry/arc/arc_telemetry_reader.hpp>
+#include <topology/topology.hpp>
 
 static constexpr auto MONITOR_INTERVAL_SECONDS = std::chrono::seconds(5);
 
@@ -225,18 +229,27 @@ static void update_delta_snapshot_with_local_telemetry(std::shared_ptr<Telemetry
 static void telemetry_thread(
     bool telemetry_enabled,
     std::vector<std::shared_ptr<TelemetrySubscriber>> subscribers,
-    const std::vector<std::string>& aggregate_endpoints) {
+    const std::vector<std::string>& aggregate_endpoints,
+    const tt::llrt::RunTimeOptions& rtoptions,
+    tt::scaleout_tools::fsd::proto::FactorySystemDescriptor fsd) {
     try {
         std::unique_ptr<tt::umd::Cluster> cluster;
         std::unique_ptr<tt::tt_metal::Hal> hal;
+        std::unique_ptr<tt::tt_metal::PhysicalSystemDescriptor> psd;
+        std::unique_ptr<TopologyHelper> topology_translation;
 
         if (telemetry_enabled) {
             cluster = std::make_unique<tt::umd::Cluster>();
+            auto distributed_context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
             hal = create_hal(cluster);
-            log_info(tt::LogAlways, "Created cluster and HAL");
+            psd = std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(
+                cluster, distributed_context, hal.get(), rtoptions);
+            topology_translation = std::make_unique<TopologyHelper>(cluster, psd);
+            log_info(tt::LogAlways, "Created cluster, physical system descriptor, and HAL");
 
-            create_ethernet_metrics(bool_metrics_, uint_metrics_, double_metrics_, cluster, hal);
-            create_arc_metrics(bool_metrics_, uint_metrics_, double_metrics_, cluster, hal);
+            create_ethernet_metrics(
+                bool_metrics_, uint_metrics_, double_metrics_, cluster, fsd, topology_translation, hal);
+            create_arc_metrics(bool_metrics_, uint_metrics_, double_metrics_, cluster, topology_translation, hal);
             log_info(tt::LogAlways, "Initialized metrics");
         }
 
@@ -289,11 +302,20 @@ static void telemetry_thread(
 void run_telemetry_collector(
     bool telemetry_enabled,
     std::vector<std::shared_ptr<TelemetrySubscriber>> subscribers,
-    const std::vector<std::string>& aggregate_endpoints) {
+    const std::vector<std::string>& aggregate_endpoints,
+    const tt::llrt::RunTimeOptions& rtoptions,
+    tt::scaleout_tools::fsd::proto::FactorySystemDescriptor fsd) {
     // Prefill hostname
     gethostname(hostname_, sizeof(hostname_));
 
     // Run telemetry thread
-    auto t = std::async(std::launch::async, telemetry_thread, telemetry_enabled, subscribers, aggregate_endpoints);
+    auto t = std::async(
+        std::launch::async,
+        telemetry_thread,
+        telemetry_enabled,
+        subscribers,
+        aggregate_endpoints,
+        std::cref(rtoptions),
+        fsd);
     t.wait();
 }

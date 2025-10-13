@@ -7,7 +7,7 @@
 #include <tt-metalium/control_plane.hpp>
 #include <tt-metalium/fabric_edm_types.hpp>
 #include <tt-metalium/fabric_types.hpp>
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <enchantum/enchantum.hpp>
 #include "erisc_datamover_builder.hpp"
@@ -77,7 +77,7 @@ bool FabricContext::is_dynamic_routing_config(tt::tt_fabric::FabricConfig fabric
 size_t FabricContext::get_packet_header_size_bytes() const {
     if (this->is_2D_routing_enabled()) {
         return (this->is_dynamic_routing_enabled()) ? sizeof(tt::tt_fabric::MeshPacketHeader)
-                                                    : sizeof(tt::tt_fabric::LowLatencyMeshPacketHeader);
+                                                    : sizeof(tt::tt_fabric::HybridMeshPacketHeader);
     } else {
         return sizeof(tt::tt_fabric::PacketHeader);
     }
@@ -304,7 +304,7 @@ chan_id_t FabricContext::get_fabric_master_router_chan(chip_id_t chip_id) const 
 }
 
 std::vector<size_t> FabricContext::get_fabric_router_addresses_to_clear() const {
-    return {this->router_config_->edm_local_sync_address};
+    return {this->router_config_->edm_local_sync_address, this->router_config_->edm_local_tensix_sync_address};
 }
 
 std::pair<uint32_t, uint32_t> FabricContext::get_fabric_router_sync_address_and_status() const {

@@ -13,35 +13,26 @@
 
 #include <memory>
 #include <string>
+#include <functional>
+#include <optional>
 
 #include <llrt/hal.hpp>
+#include <umd/device/firmware/firmware_info_provider.hpp>
+#include <umd/device/cluster.hpp>
 
 #include <telemetry/metric.hpp>
-#include <telemetry/arc/arc_telemetry_reader.hpp>
+#include <tt_metal/fabric/physical_system_descriptor.hpp>
 
-
-class ARCTelemetryAvailableMetric : public BoolMetric {
-public:
-    // Constructor
-    ARCTelemetryAvailableMetric(std::shared_ptr<ARCTelemetryReader> reader);
-
-    const std::vector<std::string> telemetry_path() const override;
-    void update(
-        const std::unique_ptr<tt::umd::Cluster>& cluster,
-        std::chrono::steady_clock::time_point start_of_update_cycle) override;
-
-private:
-    std::shared_ptr<ARCTelemetryReader> reader_;
-};
+class TopologyHelper;
 
 class ARCUintMetric : public UIntMetric {
 public:
-    // Constructor for direct telemetry tag usage
+    // Constructor using FirmwareInfoProvider
     ARCUintMetric(
-        std::shared_ptr<ARCTelemetryReader> reader,
-        tt::umd::TelemetryTag tag,
+        tt::tt_metal::ASICDescriptor asic_descriptor,
+        tt::umd::FirmwareInfoProvider* firmware_provider,
         const std::string& metric_name,
-        uint32_t mask = 0xffffffff,
+        std::function<std::optional<uint32_t>()> getter_func,
         MetricUnit units = MetricUnit::UNITLESS);
 
     const std::vector<std::string> telemetry_path() const override;
@@ -50,29 +41,21 @@ public:
         std::chrono::steady_clock::time_point start_of_update_cycle) override;
 
 private:
-    std::shared_ptr<ARCTelemetryReader> reader_;
-    tt::umd::TelemetryTag tag_;
+    tt::tt_metal::ASICDescriptor asic_descriptor_;
+    tt::umd::FirmwareInfoProvider* firmware_provider_;
     std::string metric_name_;
-    uint32_t mask_;
+    std::function<std::optional<uint32_t>()> getter_func_;
 };
 
 class ARCDoubleMetric : public DoubleMetric {
 public:
-    // Enum to specify whether telemetry values are signed or unsigned
-    enum class Signedness {
-        UNSIGNED,
-        SIGNED
-    };
-
-    // Constructor for direct telemetry tag usage
+    // Constructor using FirmwareInfoProvider
     ARCDoubleMetric(
-        std::shared_ptr<ARCTelemetryReader> reader,
-        tt::umd::TelemetryTag tag,
+        tt::tt_metal::ASICDescriptor asic_descriptor,
+        tt::umd::FirmwareInfoProvider* firmware_provider,
         const std::string& metric_name,
-        uint32_t mask = 0xffffffff,
-        double scale_factor = 1.0,
-        MetricUnit units = MetricUnit::UNITLESS,
-        Signedness signedness = Signedness::UNSIGNED);
+        std::function<std::optional<double>()> getter_func,
+        MetricUnit units = MetricUnit::UNITLESS);
 
     const std::vector<std::string> telemetry_path() const override;
     void update(
@@ -80,12 +63,10 @@ public:
         std::chrono::steady_clock::time_point start_of_update_cycle) override;
 
 private:
-    std::shared_ptr<ARCTelemetryReader> reader_;
-    tt::umd::TelemetryTag tag_;
+    tt::tt_metal::ASICDescriptor asic_descriptor_;
+    tt::umd::FirmwareInfoProvider* firmware_provider_;
     std::string metric_name_;
-    uint32_t mask_;        // Mask to apply to raw telemetry value
-    double scale_factor_;  // Factor to scale raw telemetry value to double
-    Signedness signedness_;  // Whether the value is signed or unsigned
+    std::function<std::optional<double>()> getter_func_;
 };
 
 void create_arc_metrics(
@@ -93,4 +74,5 @@ void create_arc_metrics(
     std::vector<std::unique_ptr<UIntMetric>>& uint_metrics,
     std::vector<std::unique_ptr<DoubleMetric>>& double_metrics,
     const std::unique_ptr<tt::umd::Cluster>& cluster,
+    const std::unique_ptr<TopologyHelper>& topology_translation,
     const std::unique_ptr<tt::tt_metal::Hal>& hal);

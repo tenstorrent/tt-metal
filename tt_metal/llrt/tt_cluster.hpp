@@ -23,14 +23,13 @@
 #include <unordered_set>
 #include <vector>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "core_coord.hpp"
 #include <umd/device/cluster.hpp>
 #include <umd/device/driver_atomics.hpp>
 #include <umd/device/cluster_descriptor.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/tt_io.hpp>
-#include <umd/device/types/tensix_soft_reset_options.hpp>
 #include <umd/device/soc_descriptor.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
@@ -96,6 +95,11 @@ public:
         return this->cluster_desc_;
     }
 
+    const std::unique_ptr<tt::umd::Cluster>& get_driver() const {
+        TT_FATAL(driver_ != nullptr, "UMD driver is not initialized.");
+        return driver_;
+    }
+
     // TODO: UMD will eventually consolidate ethernet coordinates and unique ids, we can remove the ethernet coord
     // getter after that change is in
     const std::unordered_map<chip_id_t, uint64_t>& get_unique_chip_ids() const {
@@ -131,10 +135,9 @@ public:
 
     void deassert_risc_reset_at_core(
         const tt_cxy_pair& physical_chip_coord,
-        const TensixSoftResetOptions& soft_resets = TENSIX_DEASSERT_SOFT_RESET) const;
-    void assert_risc_reset_at_core(
-        const tt_cxy_pair& physical_chip_coord,
-        const TensixSoftResetOptions& soft_resets = TENSIX_ASSERT_SOFT_RESET) const;
+        const tt::umd::RiscType& soft_resets,
+        bool staggered_start = true) const;
+    void assert_risc_reset_at_core(const tt_cxy_pair& physical_chip_coord, const tt::umd::RiscType& soft_resets) const;
 
     void write_dram_vec(
         const void* mem_ptr, uint32_t sz_in_bytes, chip_id_t device_id, int dram_view, uint64_t addr) const;
@@ -282,13 +285,7 @@ public:
     }
 
     // Returns collection of devices that are controlled by the specified MMIO device inclusive of the MMIO device
-    const std::unordered_set<chip_id_t>& get_devices_controlled_by_mmio_device(chip_id_t mmio_device_id) const {
-        TT_ASSERT(
-            this->cluster_desc_->get_chips_grouped_by_closest_mmio().count(mmio_device_id),
-            "Expected device {} to be an MMIO device!",
-            mmio_device_id);
-        return this->cluster_desc_->get_chips_grouped_by_closest_mmio().at(mmio_device_id);
-    }
+    const std::unordered_set<chip_id_t>& get_devices_controlled_by_mmio_device(chip_id_t mmio_device_id) const;
 
     // Returns map of connected chip ids to active ethernet cores
     std::unordered_map<chip_id_t, std::vector<CoreCoord>> get_ethernet_cores_grouped_by_connected_chips(

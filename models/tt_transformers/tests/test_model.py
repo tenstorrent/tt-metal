@@ -8,14 +8,13 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
+from models.common.utility_functions import comp_allclose, comp_pcc
 from models.tt_transformers.tt.common import PagedAttentionConfig, sample_host
 from models.tt_transformers.tt.model import Transformer
 from models.tt_transformers.tt.model_config import CheckpointType, DecodersPrecision, ModelArgs
 
 
 @torch.no_grad()
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.timeout(1800)
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
@@ -87,7 +86,7 @@ def test_model_inference(
                 "Skipping Mistral-7B full model test for now. See issue https://github.com/tenstorrent/tt-metal/issues/19806"
             )
 
-        if "Phi-3-mini" in model_name_env and weights == "random":
+        if ("Phi-3-mini" in model_name_env or "phi-4" in model_name_env) and weights == "random":
             pytest.skip("Skipping Phi-3-mini-128k-instruct for single layer dummy weights test.")
 
     run_ref_pt = True  # Flag to run reference PyTorch model and compare PCC

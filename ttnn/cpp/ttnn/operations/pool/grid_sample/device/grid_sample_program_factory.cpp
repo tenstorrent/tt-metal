@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -13,7 +13,6 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/math.hpp>
 
 namespace ttnn::operations::grid_sample {
@@ -160,8 +159,7 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
             cb_idx++, program, all_cores, input_cb_page_size, BUFFERING_FACTOR, input_cb_data_format);
     }
 
-    const uint32_t scalar_cb_page_size =
-        is_sharded ? tt::tt_metal::detail::TileSize(input_cb_data_format) : tile_size(input_cb_data_format);
+    const uint32_t scalar_cb_page_size = tt::tile_size(input_cb_data_format);
     const auto [scalar_cb_index_0, scalar_cb_handle_0] = tt::tt_metal::create_cb(
         cb_idx++, program, all_cores, scalar_cb_page_size, BUFFERING_FACTOR, input_cb_data_format);
 

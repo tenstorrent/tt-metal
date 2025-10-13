@@ -32,6 +32,7 @@ class TtTransformer(LightweightModule):
         enable_prefetcher_performance_mode=False,
         mode="decode",
         allocate_prefill_buffers=True,
+        decode_mode_only=False,
     ):
         super().__init__()
         self.args = args
@@ -46,6 +47,7 @@ class TtTransformer(LightweightModule):
         state_dict_prefix = args.get_state_dict_prefix("", None)
         self.allocate_prefill_buffers = allocate_prefill_buffers
         self.paged_attention_config = paged_attention_config
+        self.decode_mode_only = decode_mode_only
 
         self.embd = TtLlamaEmbedding(
             mesh_device=mesh_device,
@@ -72,12 +74,9 @@ class TtTransformer(LightweightModule):
         self.mesh_sub_device_manager_id_decode = None
         self.mesh_sub_device_manager_id_prefill = None
 
-        if mode == "decode":
-            self.setup_decode()
-            self.is_decode_setup = True
-        else:
-            self.setup_prefill()
-            self.is_prefill_setup = True
+        # First initialization of decode CCLs and prefetcher
+        self.setup_decode()
+        self.is_decode_setup = True
 
         self.layers = [
             TtTransformerBlock(
@@ -125,6 +124,13 @@ class TtTransformer(LightweightModule):
             tt_ccl=self.tt_ccl,
             prefetcher_setup=self.prefetcher_setup,
         )
+        if not self.decode_mode_only:  # demo_decode.py uses decode mode only. In this case avoid initializing prefill
+            # First initialization of prefill CCLs and prefetcher. It needs to be after initialization of layers, norm and lm_head since those switch modes as well
+            # This initialization is required to avoid race condition due to all buffers and semaphores not being allocated at initialization
+            self.switch_mode("prefill")
+            self.setup_prefill()
+            self.is_prefill_setup = True
+
         if mode == "decode":
             self.tt_tensors = self.prefetcher_setup.get_input_tensors()
         self.tt_rot_mats_prefill = None
@@ -344,7 +350,9 @@ class TtTransformer(LightweightModule):
         """
         B = tokens.shape[0]
         # assert current_pos.shape[0] == B, "Batch size mismatch"
-        assert B == self.args.max_batch_size, f"Batch size must be equal to max_batch_size {self.args.max_batch_size}"
+        assert (
+            B == self.args.max_batch_size
+        ), f"Batch size {B} must be equal to max_batch_size {self.args.max_batch_size}"
 
         # Necessary padding to be full tile sized when on device
         tokens = torch.nn.functional.pad(tokens.view(-1), (0, 32 - len(tokens)), "constant", 0)
@@ -420,6 +428,7 @@ class TtTransformer(LightweightModule):
             x_split = ttnn.split(x, x.shape[-2] // batch_size, dim=2)
         else:
             x_split = [x]
+
         toks_list = []
         for i, x in enumerate(x_split):
             if isinstance(last_token_idx, list):
@@ -441,6 +450,7 @@ class TtTransformer(LightweightModule):
             )
 
             tt_logits = ttnn.untilize(tt_logits, use_multicore=True)
+
             tt_logits = ttnn.reshape(
                 tt_logits,
                 ttnn.Shape([1, 1, 1, tt_logits.shape[-1]]),
@@ -510,6 +520,7 @@ class TtTransformer(LightweightModule):
         kv_cache=None,
         tt_out_logits_saved=None,
         is_cur_pos_sharded=False,
+        return_logits=False,
     ):
         """
         This method will take device tensors and any other args to run forward.
@@ -525,6 +536,19 @@ class TtTransformer(LightweightModule):
             page_table=page_table,
             kv_cache=kv_cache,
         )
+        if return_logits:
+            tt_logits = self.tt_ccl.line_all_gather(
+                tt_logits[0],
+                dim=3,
+                num_links=3,
+                cluster_axis=0,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                buffer_key="SAMPLING",
+            )
+
+            tt_logits = ttnn.untilize(tt_logits, use_multicore=True, sub_core_grids=self.args.sub_core_grids)
+
+            return tt_logits
 
         # sampling
         tt_toks = self.tt_sampling(tt_logits[0], tt_out_tok=x)
@@ -547,6 +571,7 @@ class TtTransformer(LightweightModule):
             sub_core_grids=self.args.sub_core_grids
             if is_cur_pos_sharded
             else ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
+            skip_negative_entries=True,
         )
         ttnn.plus_one(
             rot_mat_idxs,

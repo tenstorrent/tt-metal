@@ -4,7 +4,7 @@
 
 import pytest
 from loguru import logger
-from models.utility_functions import is_wormhole_b0, skip_for_grayskull, is_blackhole
+from models.common.utility_functions import is_wormhole_b0, is_blackhole
 from models.demos.grayskull.functional_bloom.tt import ttnn_optimized_functional_bloom
 from models.demos.grayskull.functional_bloom.demo.demo_causal_lm import test_demo as demo_cg_json
 from models.demos.grayskull.functional_bloom.demo.demo_causal_lm import test_demo_hellaswag as demo_cg_hellaswag
@@ -22,7 +22,6 @@ from models.demos.grayskull.functional_bloom.demo.demo_qa import test_demo_squad
     ((ttnn_optimized_functional_bloom, 7),),
     ids=["batch_7"],
 )
-@skip_for_grayskull(reason_str="#10797: OOM")
 @pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 def test_demo_batch_7_cg(input_path, ttnn_model, model_location_generator, device, batch_size, reset_seeds):
     expected_answers = {
@@ -50,7 +49,6 @@ def test_demo_batch_7_cg(input_path, ttnn_model, model_location_generator, devic
     ids=["batch_7"],
 )
 @pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
-@skip_for_grayskull(reason_str="#10797: OOM")
 def test_demo_squadv2_batch_7_cg(model_location_generator, ttnn_model, device, batch_size, ref_accuracy, reset_seeds):
     loop_count = 2
     NUM_RUNS = 5
@@ -68,7 +66,6 @@ def test_demo_squadv2_batch_7_cg(model_location_generator, ttnn_model, device, b
     ((ttnn_optimized_functional_bloom, 7),),
     ids=["batch_7"],
 )
-@skip_for_grayskull(reason_str="#10797: OOM")
 @pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 def test_demo_batch_7_qa(input_path, ttnn_model, model_location_generator, device, reset_seeds, batch_size):
     expected_answers = {
@@ -96,7 +93,6 @@ def test_demo_batch_7_qa(input_path, ttnn_model, model_location_generator, devic
     ((ttnn_optimized_functional_bloom, 6, 3.72),),
     ids=["batch_6"],
 )
-@skip_for_grayskull(reason_str="#10797: OOM")
 @pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 def test_demo_squadv2_batch_6_qa(ttnn_model, device, reset_seeds, batch_size, f1):
     loop_count = 5

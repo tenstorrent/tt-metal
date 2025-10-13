@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 import gc
@@ -10,7 +10,7 @@ from models.experimental.stable_diffusion_xl_base.tt.model_configs import ModelO
 from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 from diffusers import AutoencoderKL
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import torch_random
+from models.common.utility_functions import torch_random
 
 from loguru import logger
 
@@ -69,4 +69,5 @@ def test_vae_decoder(device, input_shape, pcc, is_ci_env, reset_seeds):
     del vae
     gc.collect()
 
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc)
+    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, pcc)
+    logger.info(f"PCC is: {pcc_message}")

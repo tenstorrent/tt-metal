@@ -3,7 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from models.demos.yolov4.tt.common import Conv
+from models.demos.yolov4.common import create_conv2d_config
+from models.tt_cnn.tt.builder import TtConv2d
 
 
 def sharded_concat(input_tensors, num_cores=64, dim=3):  # expected input tensors to be in fp16, RM, same (h*w)
@@ -34,71 +35,62 @@ def sharded_concat(input_tensors, num_cores=64, dim=3):  # expected input tensor
 class Down1:
     def __init__(self, device, parameters, conv_args) -> None:
         self.parameters = parameters
-        self.conv1 = Conv(
-            device,
-            conv_args.c1,
-            parameters.c1,
+        self.conv1 = TtConv2d(
+            create_conv2d_config(conv_args.c1, parameters.c1.weight, parameters.c1.bias),
+            device=device,
         )
 
-        self.conv2 = Conv(
-            device,
-            conv_args.c2,
-            parameters.c2,
+        self.conv2 = TtConv2d(
+            create_conv2d_config(conv_args.c2, parameters.c2.weight, parameters.c2.bias),
+            device=device,
         )
-        self.conv3 = Conv(
-            device,
-            conv_args.c3,
-            parameters.c3,
+        self.conv3 = TtConv2d(
+            create_conv2d_config(conv_args.c3, parameters.c3.weight, parameters.c3.bias),
+            device=device,
         )
-        self.conv4 = Conv(
-            device,
-            conv_args.c4,
-            parameters.c4,
+        self.conv4 = TtConv2d(
+            create_conv2d_config(conv_args.c4, parameters.c4.weight, parameters.c4.bias),
+            device=device,
         )
-        self.conv5 = Conv(
-            device,
-            conv_args.c5,
-            parameters.c5,
+        self.conv5 = TtConv2d(
+            create_conv2d_config(conv_args.c5, parameters.c5.weight, parameters.c5.bias),
+            device=device,
         )
-        self.conv6 = Conv(
-            device,
-            conv_args.c6,
-            parameters.c6,
+        self.conv6 = TtConv2d(
+            create_conv2d_config(conv_args.c6, parameters.c6.weight, parameters.c6.bias),
+            device=device,
         )
-        self.conv7 = Conv(
-            device,
-            conv_args.c7,
-            parameters.c7,
+        self.conv7 = TtConv2d(
+            create_conv2d_config(conv_args.c7, parameters.c7.weight, parameters.c7.bias),
+            device=device,
         )
-        self.conv8 = Conv(
-            device,
-            conv_args.c8,
-            parameters.c8,
+        self.conv8 = TtConv2d(
+            create_conv2d_config(conv_args.c8, parameters.c8.weight, parameters.c8.bias),
+            device=device,
         )
-        self.convs = [self.conv1, self.conv2, self.conv3, self.conv4, self.conv5, self.conv6, self.conv7, self.conv8]
 
     def __call__(self, input_tensor):
-        output_tensor = self.conv1(input_tensor)[0]
+        output_tensor = self.conv1(input_tensor)
         output_tensor = ttnn.mish(output_tensor)
 
-        output_tensor_split = self.conv2(output_tensor)[0]
+        output_tensor_split = self.conv2(output_tensor)
         ttnn.deallocate(output_tensor)
         output_tensor_split = ttnn.mish(output_tensor_split)
 
-        output_tensor_left = self.conv3(output_tensor_split)[0]
+        output_tensor_left = self.conv3(output_tensor_split)
         output_tensor_left = ttnn.mish(output_tensor_left)
 
-        output_tensor_split_2 = self.conv4(output_tensor_split)[0]
+        output_tensor_split_2 = self.conv4(output_tensor_split)
         ttnn.deallocate(output_tensor_split)
         output_tensor_split_2 = ttnn.mish(output_tensor_split_2)
-        output_tensor = self.conv5(output_tensor_split_2)[0]
+        output_tensor = self.conv5(output_tensor_split_2)
         output_tensor = ttnn.mish(output_tensor)
-        output_tensor = self.conv6(output_tensor)[0]
+        output_tensor = self.conv6(output_tensor)
         output_tensor = ttnn.mish(output_tensor)
         output_tensor = output_tensor_split_2 + output_tensor
 
         ttnn.deallocate(output_tensor_split_2)
-        output_tensor = self.conv7(output_tensor)[0]
+        output_tensor = self.conv7(output_tensor)
         output_tensor = ttnn.mish(output_tensor)
 
         output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
@@ -122,15 +114,6 @@ class Down1:
 
         ttnn.deallocate(output_tensor_left)
 
-        output_tensor = self.conv8(output_tensor)[0]
+        output_tensor = self.conv8(output_tensor)
         output_tensor = ttnn.mish(output_tensor)
         return output_tensor
-
-    def __str__(self) -> str:
-        this_str = ""
-        index = 1
-        for conv in self.convs:
-            this_str += str(index) + " " + str(conv)
-            this_str += " \n"
-            index += 1
-        return this_str

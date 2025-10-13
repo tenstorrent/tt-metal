@@ -6,7 +6,7 @@
 #include <algorithm>
 #include <cmath>
 #include <string>
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 
 namespace ttnn {
 namespace operations::experimental::adaptive_pool {
@@ -151,8 +151,8 @@ AdaptivePoolingParams calculate_adaptive_pool_params(
 
     uint32_t padded_h = input_h + params.padding[0] + params.padding[1];
     uint32_t padded_w = input_w + params.padding[2] + params.padding[3];
-    uint32_t final_out_h = (padded_h - params.kernel_size[0]) / params.stride[0] + 1;
-    uint32_t final_out_w = (padded_w - params.kernel_size[1]) / params.stride[1] + 1;
+    uint32_t final_out_h = ((padded_h - params.kernel_size[0]) / params.stride[0]) + 1;
+    uint32_t final_out_w = ((padded_w - params.kernel_size[1]) / params.stride[1]) + 1;
 
     if (final_out_h != output_h || final_out_w != output_w) {
         params.kernel_size = {base_kernel_h, base_kernel_w};

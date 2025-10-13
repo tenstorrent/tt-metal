@@ -422,8 +422,8 @@ ProgramExecutor create_standard_executor(
     // Create mesh workloads
     mesh_workloads.resize(programs.size());
     for (auto i = 0; i < programs.size(); i++) {
-        AddProgramToMeshWorkload(
-            mesh_workloads[i], std::move(programs[i]), MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(0, 0)));
+        mesh_workloads[i].add_program(
+            MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(0, 0)), std::move(programs[i]));
     }
     std::function warmup_func{[&info, &mesh_cq, &mesh_workloads]() {
         for (int i = 0; i < info.warmup_iterations; i++) {
@@ -455,8 +455,8 @@ ProgramExecutor create_load_prefetcher_executor(
     // Create mesh workload
     mesh_workloads.resize(programs.size());
     for (auto i = 0; i < programs.size(); i++) {
-        AddProgramToMeshWorkload(
-            mesh_workloads[i], std::move(programs[i]), MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(0, 0)));
+        mesh_workloads[i].add_program(
+            MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(0, 0)), std::move(programs[i]));
     }
 
     std::function warmup_func{[&info, &mesh_cq, &mesh_workloads]() {
@@ -487,7 +487,7 @@ MeshTraceId setup_trace_if_enabled(
         const std::size_t cq_id = 0;
         tid = BeginTraceCapture(mesh_device.get(), cq_id);
         executor.execute_programs();
-        EndTraceCapture(mesh_device.get(), cq_id, tid);
+        mesh_device->end_mesh_trace(cq_id, tid);
         Finish(mesh_device->mesh_command_queue(cq_id));
     }
     return tid;
@@ -507,7 +507,7 @@ void run_benchmark_timing_loop(
     for ([[maybe_unused]] auto _ : state) {
         auto start = std::chrono::system_clock::now();
         if (info.use_trace) {
-            ReplayTrace(mesh_device.get(), cq_id, tid, false);
+            mesh_device->replay_mesh_trace(cq_id, tid, false);
         } else {
             execute_func();
         }

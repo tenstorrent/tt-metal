@@ -16,7 +16,7 @@ set(UNIT_TESTS_DATA_MOVEMENT_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/interleaved/test_interleaved.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/one_packet/test_one_packet.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/interleaved_to_sharded_hardcoded/test_interleaved_to_sharded_hardcoded.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/direct_write/test_direct_write.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/multi_interleaved/test_multi_interleaved.cpp
 )
 
 add_executable(unit_tests_data_movement ${UNIT_TESTS_DATA_MOVEMENT_SRC})

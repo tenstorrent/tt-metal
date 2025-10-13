@@ -11,7 +11,6 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 #include <optional>
@@ -24,12 +23,6 @@ namespace ttnn::operations::normalization {
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
-inline bool is_dram(const Tensor& input_tensor) {
-    return input_tensor.memory_config().buffer_type() == BufferType::DRAM;
-}
-inline bool is_dram(const std::optional<const Tensor>& input_tensor) {
-    return input_tensor.has_value() ? is_dram(input_tensor.value()) : true;
-}
 
 inline uint16_t bfloat16(float float_num) {
     uint32_t uint32_data;
@@ -135,12 +128,12 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     tt::DataFormat beta_cb_data_format = beta.has_value()
                                              ? tt::tt_metal::datatype_to_dataformat_converter(beta.value().dtype())
                                              : tt::DataFormat::Float16_b;
-    uint32_t in_single_tile_size = tt::tt_metal::detail::TileSize(in_data_format);
-    uint32_t single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
-    uint32_t out_single_tile_size = tt::tt_metal::detail::TileSize(out_data_format);
-    uint32_t bfloat16_tile_size = tt::tt_metal::detail::TileSize(tt::DataFormat::Float16_b);
-    uint32_t gamma_single_tile_size = tt::tt_metal::detail::TileSize(gamma_cb_data_format);
-    uint32_t beta_single_tile_size = tt::tt_metal::detail::TileSize(beta_cb_data_format);
+    uint32_t in_single_tile_size = tt::tile_size(in_data_format);
+    uint32_t single_tile_size = tt::tile_size(cb_data_format);
+    uint32_t out_single_tile_size = tt::tile_size(out_data_format);
+    uint32_t bfloat16_tile_size = tt::tile_size(tt::DataFormat::Float16_b);
+    uint32_t gamma_single_tile_size = tt::tile_size(gamma_cb_data_format);
+    uint32_t beta_single_tile_size = tt::tile_size(beta_cb_data_format);
 
     log_debug(tt::LogOp, "in_data_format: {}", in_data_format);
     log_debug(tt::LogOp, "out_data_format: {}", out_data_format);
@@ -155,7 +148,7 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     uint32_t inb_single_tile_size = 0;
     if (b) {
         inb_data_format = tt::tt_metal::datatype_to_dataformat_converter(b.value().dtype());
-        inb_single_tile_size = tt::tt_metal::detail::TileSize(inb_data_format);
+        inb_single_tile_size = tt::tile_size(inb_data_format);
     }
 
     auto a_addr = a.buffer()->address();
@@ -624,12 +617,12 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
                                              ? tt::tt_metal::datatype_to_dataformat_converter(beta.value().dtype())
                                              : tt::DataFormat::Float16_b;
     // tile sizes
-    uint32_t in_single_tile_size = tt::tt_metal::detail::TileSize(in_data_format);
-    uint32_t single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
-    uint32_t out_single_tile_size = tt::tt_metal::detail::TileSize(out_data_format);
-    uint32_t gamma_single_tile_size = tt::tt_metal::detail::TileSize(gamma_cb_data_format);
-    uint32_t beta_single_tile_size = tt::tt_metal::detail::TileSize(beta_cb_data_format);
-    uint32_t bfloat16_tile_size = tt::tt_metal::detail::TileSize(tt::DataFormat::Float16_b);
+    uint32_t in_single_tile_size = tt::tile_size(in_data_format);
+    uint32_t single_tile_size = tt::tile_size(cb_data_format);
+    uint32_t out_single_tile_size = tt::tile_size(out_data_format);
+    uint32_t gamma_single_tile_size = tt::tile_size(gamma_cb_data_format);
+    uint32_t beta_single_tile_size = tt::tile_size(beta_cb_data_format);
+    uint32_t bfloat16_tile_size = tt::tile_size(tt::DataFormat::Float16_b);
 
     log_debug(tt::LogOp, "in_data_format: {}", in_data_format);
     log_debug(tt::LogOp, "out_data_format: {}", out_data_format);
@@ -724,7 +717,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         }
     }
     uint32_t num_rows_per_all_to_all_worker_last =
-        block_ht - (block_ht / num_rows_per_all_to_all_worker) * num_rows_per_all_to_all_worker;
+        block_ht - ((block_ht / num_rows_per_all_to_all_worker) * num_rows_per_all_to_all_worker);
     uint32_t in0_block_tiles = block_wt * block_ht;
     // pre_all_gather_stats_block_tiles
     uint32_t pre_all_gather_stats_block_tiles = rms_norm ? 1 : 2;
@@ -1060,8 +1053,8 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         (std::uint32_t)0,
         (std::uint32_t)reduce_second_stage_semaphore_id};
 
-    tt::tt_metal::NOC reader_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(device->arch());
-    tt::tt_metal::NOC writer_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(device->arch());
+    tt::tt_metal::NOC reader_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
+    tt::tt_metal::NOC writer_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
 
     if (is_post_all_gather && !skip_write_back) {
         reader_noc = NOC::NOC_0;

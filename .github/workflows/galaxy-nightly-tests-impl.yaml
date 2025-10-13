@@ -27,7 +27,7 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          { name: "Galaxy CCL tests", arch: wormhole_b0, cmd: "pytest tests/nightly/tg/ccl", timeout: 120, owner_id: U05ACKAJTHS}, # Naif Tarafdar
+          #{ name: "Galaxy CCL tests", arch: wormhole_b0, cmd: "pytest tests/nightly/tg/ccl", timeout: 120, owner_id: U05ACKAJTHS}, # Naif Tarafdar #See issue #29578
           { name: "Galaxy Fabric unit tests", arch: wormhole_b0, cmd: build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="NightlyFabric*Fixture.*", timeout: 60, owner_id: U08UBDUKH6Z}, # Neel Nyamagoudar
           { name: "Galaxy Fabric 2D Torus Nightly Tests", arch: wormhole_b0, cmd: ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_2d_torus_nightly.yaml, timeout: 60, owner_id: U08UBDUKH6Z}, # Neel Nyamagoudar
           {
@@ -77,7 +77,7 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@6b36ef848f5f66ba0ae6f883ff69b09692e48ce9
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}

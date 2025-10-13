@@ -5,7 +5,7 @@
 
 import pytest
 import torch
-from models.utility_functions import tt2torch_tensor, torch2tt_tensor, skip_for_grayskull
+from models.common.utility_functions import tt2torch_tensor, torch2tt_tensor
 
 import ttnn
 
@@ -187,7 +187,6 @@ def run_layernorm_part_1(inp_shape, n_devices, is_rmsnorm, input_dtype, output_d
     assert all_passing
 
 
-@skip_for_grayskull("Requires wormhole")
 @pytest.mark.parametrize(
     "input_dtype",
     (ttnn.bfloat16, ttnn.bfloat8_b),
@@ -222,7 +221,6 @@ def test_layernorm_part_1_with_program_cache(inp_shape, n_devices, is_rmsnorm, i
     run_layernorm_part_1(inp_shape, n_devices, is_rmsnorm, input_dtype, output_dtype, device)
 
 
-@skip_for_grayskull("Requires wormhole")
 @pytest.mark.parametrize(
     "input_dtype",
     [ttnn.bfloat16],

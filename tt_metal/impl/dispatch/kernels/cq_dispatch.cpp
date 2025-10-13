@@ -477,8 +477,8 @@ void process_write_host_d(uint32_t& block_noc_writes_to_clear, uint32_t block_ne
 }
 
 void relay_write_h(uint32_t& block_noc_writes_to_clear, uint32_t block_next_start_addr[]) {
-    volatile tt_l1_ptr CQDispatchCmd* cmd = (volatile tt_l1_ptr CQDispatchCmd*)cmd_ptr;
-    uint32_t length = sizeof(CQDispatchCmd) + cmd->write_linear.length;
+    volatile tt_l1_ptr CQDispatchCmdLarge* cmd = (volatile tt_l1_ptr CQDispatchCmdLarge*)cmd_ptr;
+    uint64_t length = sizeof(CQDispatchCmdLarge) + cmd->write_linear.length;
     uint32_t data_ptr = cmd_ptr;
 
     relay_to_next_cb<split_dispatch_page_preamble_size>(
@@ -494,7 +494,7 @@ void process_exec_buf_end_d(uint32_t& block_noc_writes_to_clear, uint32_t block_
 // This means each noc_write frees up a page
 void process_write_linear(
     uint32_t num_mcast_dests, uint32_t& block_noc_writes_to_clear, uint32_t block_next_start_addr[]) {
-    volatile tt_l1_ptr CQDispatchCmd* cmd = (volatile tt_l1_ptr CQDispatchCmd*)cmd_ptr;
+    volatile tt_l1_ptr CQDispatchCmdLarge* cmd = (volatile tt_l1_ptr CQDispatchCmdLarge*)cmd_ptr;
     bool multicast = num_mcast_dests > 0;
     if (not multicast) {
         num_mcast_dests = 1;
@@ -502,13 +502,15 @@ void process_write_linear(
 
     uint32_t dst_noc = cmd->write_linear.noc_xy_addr;
     uint32_t write_offset_index = cmd->write_linear.write_offset_index;
-    uint32_t dst_addr = cmd->write_linear.addr + write_offset[write_offset_index];
-    uint32_t length = cmd->write_linear.length;
-    uint32_t data_ptr = cmd_ptr + sizeof(CQDispatchCmd);
+    uint64_t dst_addr = cmd->write_linear.addr + write_offset[write_offset_index];
+    uint64_t length = cmd->write_linear.length;
+    uint32_t data_ptr = cmd_ptr + sizeof(CQDispatchCmdLarge);
+    // DPRINT << "process_write_linear noc_xy:0x" << HEX() << dst_noc << ", write_offset:" << write_offset_index << ",
+    // dst_addr:0x" << dst_addr << ", length:0x" << length << ", data_ptr:0x" << data_ptr << DEC() << ENDL();
     if (multicast) {
-        cq_noc_async_write_init_state<CQ_NOC_sNdl, true>(0, get_noc_addr_helper(dst_noc, dst_addr));
+        cq_noc_async_wwrite_init_state<CQ_NOC_sNDl, true>(0, dst_noc, dst_addr);
     } else {
-        cq_noc_async_write_init_state<CQ_NOC_sNdl, false>(0, get_noc_addr_helper(dst_noc, dst_addr));
+        cq_noc_async_wwrite_init_state<CQ_NOC_sNDl, false>(0, dst_noc, dst_addr);
     }
 
     while (length != 0) {
@@ -563,7 +565,7 @@ void process_write_linear(
 }
 
 void process_write(uint32_t& block_noc_writes_to_clear, uint32_t block_next_start_addr[]) {
-    volatile tt_l1_ptr CQDispatchCmd* cmd = (volatile tt_l1_ptr CQDispatchCmd*)cmd_ptr;
+    volatile tt_l1_ptr CQDispatchCmdLarge* cmd = (volatile tt_l1_ptr CQDispatchCmdLarge*)cmd_ptr;
     uint32_t num_mcast_dests = cmd->write_linear.num_mcast_dests;
     process_write_linear(num_mcast_dests, block_noc_writes_to_clear, block_next_start_addr);
 }
@@ -1053,15 +1055,19 @@ void process_go_signal_mcast_cmd() {
             (uint32_t)&aligned_go_signal_storage[storage_offset], dst_noc_addr_multicast, sizeof(uint32_t));
         noc_nonposted_writes_acked[noc_index] += num_dests;
 
+        WAYPOINT("WCW");
         while (!stream_wrap_ge(
             NOC_STREAM_READ_REG(stream, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX), wait_count)) {
         }
+        WAYPOINT("WCD");
         cq_noc_async_write_with_state<CQ_NOC_sndl, CQ_NOC_wait>(0, 0, 0);
         noc_nonposted_writes_num_issued[noc_index] += 1;
     } else {
+        WAYPOINT("WCW");
         while (!stream_wrap_ge(
             NOC_STREAM_READ_REG(stream, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX), wait_count)) {
         }
+        WAYPOINT("WCD");
     }
 
     *aligned_go_signal_storage = go_signal_value;
@@ -1336,6 +1342,7 @@ static inline bool process_cmd_h(
 }
 
 void kernel_main() {
+    set_l1_data_cache<true>();
 #if defined(FABRIC_RELAY)
     DPRINT << "dispatch_" << is_h_variant << is_d_variant << ": start (fabric relay. 2d = " << (uint32_t)is_2d_fabric
            << ")" << ENDL();
@@ -1497,4 +1504,5 @@ void kernel_main() {
         relay_client.template teardown<upstream_noc_index, upstream_noc_xy, upstream_dispatch_cb_sem_id>();
     }
     // DPRINT << "dispatch_" << is_h_variant << is_d_variant << ": out" << ENDL();
+    set_l1_data_cache<false>();
 }

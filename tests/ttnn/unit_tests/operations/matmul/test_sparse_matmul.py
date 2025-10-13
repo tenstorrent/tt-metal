@@ -10,12 +10,12 @@ import random
 import torch
 import ttnn
 
-from models.utility_functions import skip_for_blackhole
+from models.common.utility_functions import skip_for_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @pytest.mark.parametrize("mkn", [(16, 128, 512)])
-@pytest.mark.parametrize("num_experts", [8])
+@pytest.mark.parametrize("num_experts", [8, 32])
 @pytest.mark.parametrize("num_tokens", [(1, 4)])
 @pytest.mark.parametrize("tile_h", [16])
 @pytest.mark.parametrize("tile_w", [32])

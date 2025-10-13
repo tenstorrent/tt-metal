@@ -63,11 +63,12 @@ jobs:
     name: TTNN tutorials ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: >-
       ${{
-        (github.event.pull_request.head.repo.fork == true || contains('P150b, N150', inputs.runner-label)) && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label)
-        || fromJSON(format('["{0}", "in-service"]', inputs.runner-label))
+        (inputs.runner-label == 'P100') && fromJSON(format('["in-service", "cloud-virtual-machine", "{0}"]', inputs.runner-label))
+        || (inputs.runner-label == 'P150b' && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label))
+        || format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label)
       }}
     container:
-      image: harbor.ci.tenstorrent.net/${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      image: ${{ ((inputs.runner-label != 'P100') && format('harbor.ci.tenstorrent.net/{0}', inputs.docker-image)) || inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         ARCH_NAME: ${{ inputs.arch }}
         LOGURU_LEVEL: INFO
@@ -75,14 +76,14 @@ jobs:
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
-      options: "--device /dev/tenstorrent"
+      options: "--device /dev/tenstorrent -e TT_GH_CI_INFRA"
     defaults:
       run:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@6b36ef848f5f66ba0ae6f883ff69b09692e48ce9
         timeout-minutes: 10
         with:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
@@ -104,7 +105,7 @@ jobs:
         timeout-minutes: ${{ inputs.timeout }}
         run: |
           cd /work  # Go back to root for test_tutorials.py
-          python3 -m pytest tests/ttnn/unit_tests/test_tutorials.py -v
+          python3 -m pytest tests/ttnn/notebook_tests/test_tutorials.py -v
 
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()

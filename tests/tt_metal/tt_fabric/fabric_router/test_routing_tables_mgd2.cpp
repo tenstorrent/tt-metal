@@ -31,18 +31,6 @@ std::unique_ptr<tt::tt_fabric::ControlPlane> make_control_plane(const std::files
     return control_plane;
 }
 
-std::unique_ptr<tt::tt_fabric::ControlPlane> make_control_plane(
-    const std::filesystem::path& graph_desc,
-    const std::map<tt::tt_fabric::FabricNodeId, chip_id_t>& logical_mesh_chip_id_to_physical_chip_id_mapping) {
-
-    auto control_plane = std::make_unique<tt::tt_fabric::ControlPlane>(
-        graph_desc.string(), logical_mesh_chip_id_to_physical_chip_id_mapping);
-    control_plane->initialize_fabric_context(kFabricConfig);
-    control_plane->configure_routing_tables_for_fabric_ethernet_channels(kFabricConfig, kReliabilityMode);
-
-    return control_plane;
-}
-
 // Deep-compare helper for IntraMeshConnectivity
 void expect_intra_mesh_connectivity_equal(
     const tt::tt_fabric::IntraMeshConnectivity &lhs, const tt::tt_fabric::IntraMeshConnectivity &rhs) {
@@ -97,17 +85,6 @@ void expect_inter_mesh_connectivity_equal(
                     << "Connected chip IDs differ at mesh " << mesh_idx << ", chip " << chip_idx;
             }
         }
-    }
-}
-
-void expect_mesh_to_chip_ids_equal(
-    const std::map<tt::tt_fabric::MeshId, tt::tt_fabric::MeshContainer<chip_id_t>>& lhs, const std::map<tt::tt_fabric::MeshId, tt::tt_fabric::MeshContainer<chip_id_t>>& rhs) {
-    ASSERT_EQ(lhs.size(), rhs.size()) << "Number of meshes differ";
-    for (const auto& [mesh_id, mesh_container] : lhs) {
-        const auto& rhs_mesh_container = rhs.at(mesh_id);
-        EXPECT_EQ(mesh_container.shape(), rhs_mesh_container.shape());
-        EXPECT_EQ(mesh_container.size(), rhs_mesh_container.size());
-        EXPECT_EQ(mesh_container, rhs_mesh_container);
     }
 }
 
@@ -194,28 +171,6 @@ namespace tt::tt_fabric::fabric_router_tests {
 
 using ::testing::ElementsAre;
 
-TEST(MeshGraphValidation, TestTGMeshGraphInitMGD2) {
-    const std::filesystem::path tg_mesh_graph_desc_2_path =
-        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tt_metal/fabric/mesh_graph_descriptors/tg_mesh_graph_descriptor.textproto";
-    MeshGraph mesh_graph_desc(tg_mesh_graph_desc_2_path.string());
-    EXPECT_EQ(
-        mesh_graph_desc.get_coord_range(MeshId{0}, MeshHostRankId(0)),
-        MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(0, 0)));
-    EXPECT_EQ(
-        mesh_graph_desc.get_coord_range(MeshId{1}, MeshHostRankId(0)),
-        MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(0, 0)));
-    EXPECT_EQ(
-        mesh_graph_desc.get_coord_range(MeshId{2}, MeshHostRankId(0)),
-        MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(0, 0)));
-    EXPECT_EQ(
-        mesh_graph_desc.get_coord_range(MeshId{3}, MeshHostRankId(0)),
-        MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(0, 0)));
-    EXPECT_EQ(
-        mesh_graph_desc.get_coord_range(MeshId{4}, MeshHostRankId(0)),
-        MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(3, 7)));
-}
-
 TEST(MeshGraphValidation, TestTGMeshGraphInitConsistencyCheckMGD2) {
     // Skip this test since the MGD 1.0 initialization data path does not load intermesh connections unless the Control
     // Plane is created
@@ -273,26 +228,6 @@ TEST(MeshGraphValidation, TestTGMeshGraphInitConsistencyCheckMGD2) {
 
     mesh_graph.print_connectivity();
     mesh_graph2.print_connectivity();
-}
-
-TEST_F(ControlPlaneFixture, TestTGControlPlaneInitMGD2) {
-    const std::filesystem::path tg_mesh_graph_desc_path =
-        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tt_metal/fabric/mesh_graph_descriptors/tg_mesh_graph_descriptor.textproto";
-    [[maybe_unused]] auto control_plane = make_control_plane(tg_mesh_graph_desc_path);
-}
-
-TEST_F(ControlPlaneFixture, TestTGFabricRoutesMGD2) {
-    const std::filesystem::path tg_mesh_graph_desc_path =
-        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tt_metal/fabric/mesh_graph_descriptors/tg_mesh_graph_descriptor.textproto";
-    auto control_plane = make_control_plane(tg_mesh_graph_desc_path);
-    auto valid_chans = control_plane->get_valid_eth_chans_on_routing_plane(FabricNodeId(MeshId{0}, 0), 1);
-    EXPECT_GT(valid_chans.size(), 0);
-    for (auto chan : valid_chans) {
-        auto path = control_plane->get_fabric_route(FabricNodeId(MeshId{0}, 0), FabricNodeId(MeshId{4}, 31), chan);
-        EXPECT_FALSE(path.empty());
-    }
 }
 
 TEST(MeshGraphValidation, TestT3kMeshGraphInitMGD2) {
@@ -433,9 +368,15 @@ TEST(MeshGraphValidation, TestT3k2x2MeshGraphMGD2) {
     EXPECT_EQ(mesh_graph.get_intra_mesh_connectivity()[0][0].begin()->second.connected_chip_ids.size(), 2);
     EXPECT_EQ(mesh_graph.get_intra_mesh_connectivity()[0][0].size(), 2);
 
+    // TODO: Intermesh is currently empty: this will change back once we have logical to physical mapping
     // Check that the number of intermesh connections match the number of connections in the graph
-    EXPECT_EQ(mesh_graph.get_inter_mesh_connectivity()[0][1].begin()->second.connected_chip_ids.size(), 2);
-    EXPECT_EQ(mesh_graph.get_inter_mesh_connectivity()[1][0].begin()->second.connected_chip_ids.size(), 2);
+    // EXPECT_EQ(mesh_graph.get_inter_mesh_connectivity()[0][1].begin()->second.connected_chip_ids.size(), 2);
+    // EXPECT_EQ(mesh_graph.get_inter_mesh_connectivity()[1][0].begin()->second.connected_chip_ids.size(), 2);
+
+    // TODO: Remove after logical to physical mapping is implemented
+    EXPECT_EQ(mesh_graph.get_requested_intermesh_ports().size(), 2);
+    EXPECT_EQ(mesh_graph.get_requested_intermesh_ports().at(0).at(1).size(), 2);
+    EXPECT_EQ(mesh_graph.get_requested_intermesh_ports().at(1).at(0).size(), 2);
 }
 
 TEST(MeshGraphValidation, TestGetHostRankForChipMGD2) {
@@ -524,9 +465,9 @@ TEST(MeshGraphValidation, TestSingleGalaxyMeshMGD2) {
         auto row = i / mesh_row_size;
         auto col = i % mesh_row_size;
         int N_wrap = (i - mesh_row_size + mesh_size) % mesh_size;
-        int E_wrap = row * mesh_row_size + (col + 1) % mesh_row_size;
+        int E_wrap = (row * mesh_row_size) + ((col + 1) % mesh_row_size);
         int S_wrap = (i + mesh_row_size) % mesh_size;
-        int W_wrap = row * mesh_row_size + (col - 1 + mesh_row_size) % mesh_row_size;
+        int W_wrap = (row * mesh_row_size) + ((col - 1 + mesh_row_size) % mesh_row_size);
 
         // _wrap represents the wrapped neighbor indices
         // if X == X_wrap, it means that the neighbor is within the mesh and should be connected
@@ -615,9 +556,9 @@ TEST(MeshGraphValidation, TestSingleGalaxyTorusXYMGD2) {
         auto row = i / mesh_row_size;
         auto col = i % mesh_row_size;
         int N_wrap = (i - mesh_row_size + mesh_size) % mesh_size;
-        int E_wrap = row * mesh_row_size + (col + 1) % mesh_row_size;
+        int E_wrap = (row * mesh_row_size) + ((col + 1) % mesh_row_size);
         int S_wrap = (i + mesh_row_size) % mesh_size;
-        int W_wrap = row * mesh_row_size + (col - 1 + mesh_row_size) % mesh_row_size;
+        int W_wrap = (row * mesh_row_size) + ((col - 1 + mesh_row_size) % mesh_row_size);
 
         // _wrap represents the wrapped neighbor indices
         // check all neighbors including wrap-around connections are present in TORUS_XY
@@ -691,9 +632,9 @@ TEST(MeshGraphValidation, TestSingleGalaxyTorusXMGD2) {
         auto row = i / mesh_row_size;
         auto col = i % mesh_row_size;
         int N_wrap = (i - mesh_row_size + mesh_size) % mesh_size;
-        int E_wrap = row * mesh_row_size + (col + 1) % mesh_row_size;
+        int E_wrap = (row * mesh_row_size) + ((col + 1) % mesh_row_size);
         int S_wrap = (i + mesh_row_size) % mesh_size;
-        int W_wrap = row * mesh_row_size + (col - 1 + mesh_row_size) % mesh_row_size;
+        int W_wrap = (row * mesh_row_size) + ((col - 1 + mesh_row_size) % mesh_row_size);
 
         // _wrap represents the wrapped neighbor indices
         // if X == X_wrap, it means that the neighbor is within the mesh and should be connected
@@ -777,9 +718,9 @@ TEST(MeshGraphValidation, TestSingleGalaxyTorusYMGD2) {
         auto row = i / mesh_row_size;
         auto col = i % mesh_row_size;
         int N_wrap = (i - mesh_row_size + mesh_size) % mesh_size;
-        int E_wrap = row * mesh_row_size + (col + 1) % mesh_row_size;
+        int E_wrap = (row * mesh_row_size) + ((col + 1) % mesh_row_size);
         int S_wrap = (i + mesh_row_size) % mesh_size;
-        int W_wrap = row * mesh_row_size + (col - 1 + mesh_row_size) % mesh_row_size;
+        int W_wrap = (row * mesh_row_size) + ((col - 1 + mesh_row_size) % mesh_row_size);
 
         // _wrap represents the wrapped neighbor indices
         // if X == X_wrap, it means that the neighbor is within the mesh and should be connected

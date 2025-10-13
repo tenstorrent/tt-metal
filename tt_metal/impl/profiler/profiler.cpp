@@ -22,7 +22,7 @@
 #include <filesystem>
 #include <iostream>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "dispatch/hardware_command_queue.hpp"
 #include "dispatch/kernels/cq_commands.hpp"
 #include "hal_types.hpp"
@@ -50,9 +50,11 @@ namespace tt {
 
 namespace tt_metal {
 
-static kernel_profiler::PacketTypes get_packet_type(uint32_t timer_id) {
+namespace {
+kernel_profiler::PacketTypes get_packet_type(uint32_t timer_id) {
     return static_cast<kernel_profiler::PacketTypes>((timer_id >> 16) & 0x7);
 }
+}  // namespace
 
 tracy::TTDeviceMarkerType get_marker_type_from_packet_type(kernel_profiler::PacketTypes packet_type) {
     switch (packet_type) {
@@ -206,6 +208,8 @@ std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>> getSortedDevice
     const std::map<CoreCoord, std::map<tracy::RiscType, std::set<tracy::TTDeviceMarker>>>&
         device_markers_per_core_risc_map,
     ThreadPool& thread_pool) {
+    ZoneScoped;
+
     uint32_t total_num_markers = 0;
     auto middle = device_markers_per_core_risc_map.begin();
     std::advance(middle, device_markers_per_core_risc_map.size() / 2);
@@ -1204,7 +1208,7 @@ void DeviceProfiler::readRiscProfilerResults(
             riscType = tracy::RiscType::ERISC;
         }
         if (bufferEndIndex > 0) {
-            uint32_t bufferRiscShift = riscEndIndex * PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC + startIndex;
+            uint32_t bufferRiscShift = (riscEndIndex * PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC) + startIndex;
             if (data_source == ProfilerDataBufferSource::L1) {
                 // Shift by L1 buffer size only
                 bufferRiscShift = riscEndIndex * kernel_profiler::PROFILER_L1_VECTOR_SIZE;
@@ -1804,6 +1808,8 @@ bool isSyncInfoNewer(const SyncInfo& old_info, const SyncInfo& new_info) {
 
 void DeviceProfiler::writeDeviceResultsToFiles() const {
 #if defined(TRACY_ENABLE)
+    ZoneScoped;
+
     std::scoped_lock lock(tt::tt_metal::MetalContext::instance().profiler_state_manager()->file_write_mutex);
 
     const std::filesystem::path log_path = output_dir / DEVICE_SIDE_LOG;
@@ -1818,6 +1824,8 @@ void DeviceProfiler::writeDeviceResultsToFiles() const {
 void DeviceProfiler::pushTracyDeviceResults(
     std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& device_markers_vec) {
 #if defined(TRACY_ENABLE)
+    ZoneScoped;
+
     // If this device is root, it may have new sync info updated with syncDeviceHost
     for (auto& [core, info] : device_core_sync_info) {
         if (isSyncInfoNewer(device_sync_info, info)) {

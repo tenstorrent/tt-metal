@@ -15,13 +15,6 @@ namespace ttnn::operations::binary_ng {
 
 enum class KernelName {
     ReaderNoBcast,
-    ReaderRowBcast,
-    ReaderColBcast,
-    ReaderScalarBcast,
-    WriterNoBcast,
-    WriterRowBcast,
-    WriterColBcast,
-    WriterScalarBcast,
     WriterScalar,
     ComputeNoBcast,
     ComputeBcast,
@@ -74,6 +67,9 @@ struct OpConfig {
         XLOGY,
         LT,
         GT,
+        GE,
+        LE,
+        HYPOT,
     };
 
     template <class EnumT>

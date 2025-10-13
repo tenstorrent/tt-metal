@@ -32,7 +32,6 @@ enum class AllGatherAsyncVersion {
 };
 
 struct AllGatherAsync {
-    std::vector<IDevice*> devices;
     const uint32_t dim;
     const uint32_t num_links;
     const uint32_t ring_size;
@@ -51,7 +50,6 @@ struct AllGatherAsync {
     bool reverse_order;
 
     AllGatherAsync(
-        std::vector<IDevice*> devices,
         uint32_t dim,
         uint32_t num_links,
         uint32_t ring_size,
@@ -68,7 +66,6 @@ struct AllGatherAsync {
         std::optional<uint32_t> num_workers_per_link,
         std::optional<uint32_t> num_buffers_per_channel,
         bool reverse_order = false) :
-        devices(std::move(devices)),
         dim(dim),
         num_links(num_links),
         ring_size(ring_size),
@@ -131,9 +128,9 @@ struct AllGatherAsync {
 // All Gather Variants
 tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default(
     const Tensor& input_tensor,
-    IDevice* target_device,
-    std::optional<IDevice*> forward_device,
-    std::optional<IDevice*> backward_device,
+    const MeshCoordinate& sender_device_coord,
+    const std::optional<MeshCoordinate>& forward_coord,
+    const std::optional<MeshCoordinate>& backward_coord,
     Tensor& output_tensor,
     uint32_t dim,
     uint32_t num_links,
@@ -148,12 +145,13 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default(
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel,
     bool reverse_order = false);
+
 tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_helper(
     tt::tt_metal::Program& program,
     const Tensor& input_tensor,
-    IDevice* target_device,
-    std::optional<IDevice*> forward_device,
-    std::optional<IDevice*> backward_device,
+    const MeshCoordinate& sender_device_coord,
+    const std::optional<MeshCoordinate>& forward_coord,
+    const std::optional<MeshCoordinate>& backward_coord,
     Tensor& output_tensor,
     uint32_t dim,
     uint32_t num_links,
@@ -172,9 +170,9 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
     bool reverse_order = false);
 tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
     const Tensor& input_tensor,
-    IDevice* target_device,
-    std::optional<IDevice*> forward_device,
-    std::optional<IDevice*> backward_device,
+    const MeshCoordinate& sender_device_coord,
+    const std::optional<MeshCoordinate>& forward_coord,
+    const std::optional<MeshCoordinate>& backward_coord,
     Tensor& output_tensor,
     uint32_t dim,
     uint32_t num_links,

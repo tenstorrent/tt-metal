@@ -6,12 +6,12 @@
 #include "ttnn/operations/math.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "slice_op.hpp"
+#include "slice_program_factory.hpp"
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
@@ -104,7 +104,7 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
         // issue more reads before calling barrier
         uint32_t num_sticks_per_core_read = 0, num_read_per_barrier = 0;
         if (num_sticks_per_core != 0) {
-            auto num_sticks_per_core_pad32 = num_sticks_per_core + (32 - num_sticks_per_core % 32) % 32;
+            auto num_sticks_per_core_pad32 = num_sticks_per_core + ((32 - num_sticks_per_core % 32) % 32);
             num_sticks_per_core_read = tt::tt_metal::merge_num_sticks_to_read(
                 num_sticks_per_core_pad32, unpadded_row_size_bytes_offset, max_read_size);
             num_read_per_barrier = num_sticks_per_core_pad32 / num_sticks_per_core_read;
@@ -176,7 +176,7 @@ std::tuple<uint32_t, uint32_t, uint32_t> compute_cb_size(
                                          : num_sticks_per_core_group_2;
     uint32_t num_sticks_per_core_read = 0, num_read_per_barrier = 0;
     if (num_input_pages != 0) {
-        auto num_sticks_per_core_pad32 = num_input_pages + (32 - num_input_pages % 32) % 32;
+        auto num_sticks_per_core_pad32 = num_input_pages + ((32 - num_input_pages % 32) % 32);
         num_sticks_per_core_read =
             tt::tt_metal::merge_num_sticks_to_read(num_sticks_per_core_pad32, cb_page_size, MAX_READ_SIZE);
         num_read_per_barrier = num_sticks_per_core_pad32 / num_sticks_per_core_read;
@@ -777,7 +777,7 @@ inline __attribute__((always_inline)) void set_slice_runtime_args_tile(
     };
 
     if constexpr (initialize_args) {
-        std::vector<uint32_t> reader_common_args(1 + num_dims * 2);
+        std::vector<uint32_t> reader_common_args(1 + (num_dims * 2));
         uint32_t* num_unpadded_tiles_per_dim = reader_common_args.data() + 1;
         uint32_t* num_padded_tiles_per_dim = num_unpadded_tiles_per_dim + num_dims;
         set_common_reader_args(reader_common_args.data(), num_unpadded_tiles_per_dim, num_padded_tiles_per_dim);
@@ -876,7 +876,7 @@ operation::ProgramWithCallbacks slice_tile_multi_core(
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
-    uint32_t single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
+    uint32_t single_tile_size = tt::tile_size(cb_data_format);
 
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = 2;
@@ -984,10 +984,10 @@ operation::ProgramWithCallbacks slice_multi_core(
     }
     switch (a.layout()) {
         case Layout::ROW_MAJOR:
-            return a.is_sharded() ? slice_rm_multi_core_sharded(a, output, output_tensor_start, output_tensor_end)
-                                  : (has_step ? slice_rm_strided_single_core_n_dims(
-                                                    a, output, output_tensor_start, output_tensor_end, step)
-                                              : slice_rm_multi_core(a, output, output_tensor_start, output_tensor_end));
+            return a.is_sharded()
+                       ? slice_rm_multi_core_sharded(a, output, output_tensor_start, output_tensor_end)
+                       : (has_step ? slice_rm_multi_core_stride(a, output, output_tensor_start, output_tensor_end, step)
+                                   : slice_rm_multi_core(a, output, output_tensor_start, output_tensor_end));
         case Layout::TILE: return slice_tile_multi_core(a, output, output_tensor_start, output_tensor_end);
         default: TT_ASSERT(false, "Unsupported Layout");
     }

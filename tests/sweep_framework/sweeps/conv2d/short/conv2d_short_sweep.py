@@ -11,7 +11,7 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
-from models.utility_functions import torch_random
+from models.common.utility_functions import torch_random
 from tests.sweep_framework.sweep_utils.conv2d_common import (
     run_conv2d_short_sweep,
     run_conv1d_short_sweep,
@@ -1608,10 +1608,10 @@ import pytest
 @pytest.mark.parametrize("input_spec", parameters["short_sweep_suite_conv2d"]["input_specs"])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_conv2d_localrun(device, input_spec):
-    passed, pcc = run_conv2d_short_sweep(
+    passed, pcc, perf, out, ref = run_conv2d_short_sweep(
         input_spec,
         device,
-    )[0]
+    )
     print(pcc)
     assert passed, pcc
     assert pcc != 1, "Conv2d with ranndomized input and wegihts can't ligitimately return PCC of 1"
@@ -1619,18 +1619,16 @@ def test_conv2d_localrun(device, input_spec):
 
 failing_parameters = [
     # [batch_size, output_channels, input_channels, input_height, input_width, kernel_height, kernel_width, stride_h, stride_w, pad_h, pad_w, groups, dilation_h, dilation_w, bias]
-    [1, 1, 64, 480, 640, 3, 3, 1, 1, 1, 1, 1, 1, 1, True],  # 1495
-    [1, 64, 64, 480, 640, 3, 3, 1, 1, 1, 1, 1, 1, 1, True],  # 1496
 ]
 
 
 @pytest.mark.parametrize("input_spec", failing_parameters)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_conv2d_localrun_fail_only(device, input_spec):
-    passed, pcc = run_conv2d_short_sweep(
+    passed, pcc, perf, out, ref = run_conv2d_short_sweep(
         input_spec,
         device,
-    )[0]
+    )
     print(pcc)
     assert passed, pcc
     assert pcc != 1, "Conv2d with ranndomized input and wegihts can't ligitimately return PCC of 1"

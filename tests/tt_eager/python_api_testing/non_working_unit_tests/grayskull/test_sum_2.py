@@ -11,7 +11,7 @@ import ttnn
 
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 from tests.tt_eager.python_api_testing.sweep_tests import tt_lib_ops, pytorch_ops
-from models.utility_functions import tt2torch_tensor
+from models.common.utility_functions import tt2torch_tensor
 from tests.tt_eager.python_api_testing.sweep_tests.common import set_slow_dispatch_mode
 
 
