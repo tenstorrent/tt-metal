@@ -441,13 +441,6 @@ tt::stl::hash::hash_t BinaryNgDeviceOperation::compute_program_hash(
         attributes, input_tensor_a.dtype(), input_tensor_a.memory_config());
 }
 
-bool BinaryNgDeviceOperation::skip_launch(
-    const operation_attributes_t& attributes,
-    const tensor_args_t& tensor_args,
-    const tensor_return_value_t& tensor_return_value) {
-    return tensor_return_value.logical_shape().volume() == 0;
-}
-
 std::tuple<BinaryNgDeviceOperation::operation_attributes_t, BinaryNgDeviceOperation::tensor_args_t>
 BinaryNgDeviceOperation::invoke(
     const Tensor& input_tensor_a,

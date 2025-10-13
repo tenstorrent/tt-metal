@@ -240,8 +240,6 @@ struct BinaryDeviceOperation {
         const tensor_args_t& tensor_args,
         tensor_return_value_t& tensor_return_value);
 
-    static bool skip_launch(const operation_attributes_t&, const tensor_args_t&, const tensor_return_value_t&);
-
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const Tensor& input_tensor_a_arg,
         const Tensor& input_tensor_b_arg,

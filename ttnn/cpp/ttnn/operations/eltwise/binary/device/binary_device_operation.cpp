@@ -378,13 +378,6 @@ BinaryDeviceOperation::create_op_performance_model(
     return result;
 }
 
-bool BinaryDeviceOperation::skip_launch(
-    const operation_attributes_t& attributes,
-    const tensor_args_t& tensor_args,
-    const tensor_return_value_t& tensor_return_value) {
-    return tensor_return_value.logical_shape().volume() == 0;
-}
-
 std::tuple<BinaryDeviceOperation::operation_attributes_t, BinaryDeviceOperation::tensor_args_t>
 BinaryDeviceOperation::invoke(
     const Tensor& input_tensor_a_arg,
