@@ -60,7 +60,7 @@ Tensor _isclose(
     Tensor is_close_rhs = input_b;
     Tensor mul_result = ttnn::multiply(ttnn::abs(value2, output_mem_config), rtol, std::nullopt, output_mem_config);
     is_close_rhs = ttnn::add(mul_result, atol, std::nullopt, output_mem_config);
-    mul_result.deallocate();
+    // mul_result.deallocate();
     Tensor result = ttnn::where(ttnn::le(is_close_lhs, is_close_rhs, std::nullopt, output_mem_config), 1.f, 0.f);
     return result;
 }
