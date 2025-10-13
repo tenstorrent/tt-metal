@@ -306,7 +306,8 @@ def test_distributed_layernorm(
         assert_quality(torch_output.squeeze(), tt_output[i].squeeze(), pcc=0.999_300)
 
 
-@pytest.mark.parametrize("mesh_device", [(1, 4)], indirect=True)
+# TODO: Cleanup redundant test with mesh_axis = None. Subset of filtered_mesh_axis = None.
+@pytest.mark.parametrize("mesh_device", [(1, 4), (1, 8)], ids=["1x4", "1x8"], indirect=True)
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 @pytest.mark.parametrize("group_count", [32])
 @pytest.mark.parametrize(
@@ -321,6 +322,7 @@ def test_distributed_layernorm(
         (1, 512, 512, 512),
         (1, 256, 512, 512),
         (1, 256, 1024, 1024),
+        (1, 128, 1024, 1024),
     ],
 )
 def test_group_norm(
@@ -333,7 +335,7 @@ def test_group_norm(
     torch_dtype = torch.bfloat16
     ttnn_dtype = ttnn.bfloat16
     torch.manual_seed(0)
-
+    ccl_manager = CCLManager(mesh_device=mesh_device, topology=ttnn.Topology.Linear)
     torch_model = torch.nn.GroupNorm(num_groups=group_count, num_channels=input_shape[1])
     torch.nn.init.normal_(torch_model.weight)
     torch.nn.init.normal_(torch_model.bias)
@@ -345,11 +347,26 @@ def test_group_norm(
         torch_ref=torch_model,
         mesh_device=mesh_device,
         mesh_axis=mesh_axis,
+        filter_mesh_axis=True,
         core_grid=ttnn.CoreGrid(x=8, y=8),
+        ccl_manager=ccl_manager,
     )
 
     with torch.no_grad():
         torch_output = torch_model(torch_input_tensor)
+
+    filtered_mesh_axis = GroupNorm.filter_mesh_axis(mesh_device, mesh_axis, input_shape[1], torch_model)
+    if mesh_axis is not None:
+        if input_shape[1] >= 32 * tuple(mesh_device.shape)[mesh_axis]:
+            assert (
+                filtered_mesh_axis == mesh_axis,
+                f"Filtered mesh axis ({filtered_mesh_axis}) should be equal to mesh axis ({mesh_axis}) if sharded input >= 32",
+            )
+        else:
+            assert (
+                filtered_mesh_axis is None,
+                f"Filtered mesh axis ({filtered_mesh_axis}) should be None if sharded input < 32",
+            )
 
     tt_input_tensor = ttnn.from_torch(
         torch_input_tensor.permute(0, 2, 3, 1),
@@ -362,8 +379,8 @@ def test_group_norm(
     tt_output = tt_model(tt_input_tensor)
 
     tt_torch = ttnn.to_torch(
-        tt_output if mesh_axis is not None else ttnn.get_device_tensors(tt_output)[0],
-        mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1) if mesh_axis is not None else None,
+        tt_output if filtered_mesh_axis is not None else ttnn.get_device_tensors(tt_output)[0],
+        mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1) if filtered_mesh_axis is not None else None,
     )
 
     tt_torch = tt_torch.permute(0, 3, 1, 2)
