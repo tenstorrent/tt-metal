@@ -110,13 +110,13 @@ static std::vector<Tensor> pool2d_invoke(
     bool bypass_to_reduce = is_global_pool(input_h, input_w, kernel_size, stride, padding_4d, count_include_pad);
 
     if (bypass_to_reduce) {
-        return ttnn::operations::reduction::pool(
+        return {ttnn::operations::reduction::pool(
             pool_type,
             input_tensor,
             int(input_shape.rank() - 2),
             memory_config,
             std::nullopt,
-            get_bf16_pool_scalar(pool_type, kernel_size.at(0), kernel_size.at(1), divisor_override));
+            get_bf16_pool_scalar(pool_type, kernel_size.at(0), kernel_size.at(1), divisor_override))};
     }
     sliding_window::ParallelConfig parallel_config;
     uint32_t num_cores_nhw = 0;
