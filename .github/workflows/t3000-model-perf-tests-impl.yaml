@@ -68,24 +68,10 @@ jobs:
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
-      - name: Install cpufrequtils
-        run: |
-          set -euxo pipefail
-          apt-get update
-          # Install cpufrequtils
-          apt-get install -y --no-install-recommends cpufrequtils
-          # Verify installation
-          command -v cpufreq-set
       - name: Enable Performance mode
-        run: |
-          # Set performance governor for all CPU cores
-          for cpu in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
-            if [ -f "$cpu" ]; then
-              cpu_num=$(echo "$cpu" | grep -o 'cpu[0-9]*' | grep -o '[0-9]*')
-              echo "Setting performance governor for CPU $cpu_num"
-              sudo cpufreq-set -c "$cpu_num" -g performance
-            fi
-          done
+        uses: ./.github/actions/set-cpu-governor
+        with:
+          governor: performance
       - name: Run model perf regression tests
         timeout-minutes: ${{ matrix.test-group.timeout }}
         shell: bash
@@ -124,15 +110,9 @@ jobs:
           prefix: "test_reports_"
       - name: Disable Performance mode
         if: always()
-        run: |
-          # Set ondemand governor for all CPU cores
-          for cpu in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
-            if [ -f "$cpu" ]; then
-              cpu_num=$(echo "$cpu" | grep -o 'cpu[0-9]*' | grep -o '[0-9]*')
-              echo "Setting ondemand governor for CPU $cpu_num"
-              sudo cpufreq-set -c "$cpu_num" -g ondemand
-            fi
-          done
+        uses: ./.github/actions/set-cpu-governor
+        with:
+          governor: ondemand
 
   t3000-model-perf-tests-profiler:
     if: false # Legacy CCL implementation disabled. Test skipped until replaced with newer CCL implementations. See issue see https://github.com/tenstorrent/tt-metal/issues/26649
@@ -175,24 +155,10 @@ jobs:
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
-      - name: Install cpufrequtils
-        run: |
-          set -euxo pipefail
-          apt-get update
-          # Install cpufrequtils
-          apt-get install -y --no-install-recommends cpufrequtils
-          # Verify installation
-          command -v cpufreq-set
       - name: Enable Performance mode
-        run: |
-          # Set performance governor for all CPU cores
-          for cpu in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
-            if [ -f "$cpu" ]; then
-              cpu_num=$(echo "$cpu" | grep -o 'cpu[0-9]*' | grep -o '[0-9]*')
-              echo "Setting performance governor for CPU $cpu_num"
-              sudo cpufreq-set -c "$cpu_num" -g performance
-            fi
-          done
+        uses: ./.github/actions/set-cpu-governor
+        with:
+          governor: performance
       - name: Run model perf regression tests
         shell: bash
         timeout-minutes: ${{ matrix.test-group.timeout }}
@@ -242,12 +208,6 @@ jobs:
           prefix: "test_reports_"
       - name: Disable Performance mode
         if: always()
-        run: |
-          # Set ondemand governor for all CPU cores
-          for cpu in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
-            if [ -f "$cpu" ]; then
-              cpu_num=$(echo "$cpu" | grep -o 'cpu[0-9]*' | grep -o '[0-9]*')
-              echo "Setting ondemand governor for CPU $cpu_num"
-              sudo cpufreq-set -c "$cpu_num" -g ondemand
-            fi
-          done
+        uses: ./.github/actions/set-cpu-governor
+        with:
+          governor: ondemand

@@ -212,25 +212,11 @@ jobs:
           echo "::error::test-group.performance: ${{ matrix.test-group.performance }}"
           echo "::error::test-group.civ2-compatible: ${{ matrix.test-group.civ2-compatible }}"
           exit 1
-      - name: Install cpufrequtils
-        run: |
-          set -euxo pipefail
-          apt-get update
-          # Install cpufrequtils
-          apt-get install -y --no-install-recommends cpufrequtils
-          # Verify installation
-          command -v cpufreq-set
       - name: Enable Performance mode
         if: ${{ matrix.test-group.runner-label == 'N300' && matrix.test-group.performance && !matrix.test-group.civ2-compatible }}
-        run: |
-          # Set performance governor for all CPU cores
-          for cpu in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
-            if [ -f "$cpu" ]; then
-              cpu_num=$(echo "$cpu" | grep -o 'cpu[0-9]*' | grep -o '[0-9]*')
-              echo "Setting performance governor for CPU $cpu_num"
-              sudo cpufreq-set -c "$cpu_num" -g performance
-            fi
-          done
+        uses: ./.github/actions/set-cpu-governor
+        with:
+          governor: performance
       - name: Check Weka mount
         if: ${{ !matrix.test-group.civ2-compatible }}
         run: |
@@ -272,13 +258,7 @@ jobs:
           path: generated/test_reports/
           prefix: "test_reports_"
       - name: Disable Performance mode
-        if: ${{ matrix.test-group.runner-label == 'N300' && matrix.test-group.performance && !matrix.test-group.civ2-compatible }}
-        run: |
-          # Set ondemand governor for all CPU cores
-          for cpu in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
-            if [ -f "$cpu" ]; then
-              cpu_num=$(echo "$cpu" | grep -o 'cpu[0-9]*' | grep -o '[0-9]*')
-              echo "Setting ondemand governor for CPU $cpu_num"
-              sudo cpufreq-set -c "$cpu_num" -g ondemand
-            fi
-          done
+        if: ${{ matrix.test-group.runner-label == 'N300' && matrix.test-group.performance && !matrix.test-group.civ2-compatible && always() }}
+        uses: ./.github/actions/set-cpu-governor
+        with:
+          governor: ondemand
