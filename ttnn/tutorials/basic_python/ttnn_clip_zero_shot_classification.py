@@ -335,7 +335,7 @@ def main():
             class_embedding = ttnn.reshape(self.class_embedding, (x.shape[0], 1, x.shape[-1]))
 
             # Step 6: Prepare tensors for concatenation
-            # Move to DRAM memory (larger but slower than L1) for concatenation operation
+            # Move to DRAM memory (slower but more capacity than L1) for concatenation operation
             # Note: Concatenation currently requires DRAM memory; future optimizations may use L1 sharded memory
             x = ttnn.to_memory_config(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
@@ -569,7 +569,9 @@ def main():
         # Load pre-trained CLIP model and convert weights to TT-NN format
         logger.info("Loading pre-trained CLIP model...")
 
-        model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32", cache_dir="data/")
+        model = CLIPModel.from_pretrained(
+            "openai/clip-vit-base-patch32", cache_dir="data-clip-zero-shot-classification/"
+        )
         state_dict = convert_model_to_ttnn(model.state_dict())
 
         # Initialize our TT-NN CLIP implementation
