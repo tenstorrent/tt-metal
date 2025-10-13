@@ -5,7 +5,7 @@
 import ttnn
 import torch
 import pytest
-from models.experimental.detr3d.ttnn.ttnn_shared_mlp import TtnnSharedMLP
+from models.experimental.detr3d.ttnn.shared_mlp import TtnnSharedMLP
 from ttnn.model_preprocessing import preprocess_model_parameters
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.experimental.detr3d.reference.detr3d_model import SharedMLP

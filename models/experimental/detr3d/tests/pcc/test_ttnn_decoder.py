@@ -2,58 +2,50 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttnn
-import torch
 import pytest
+import torch
+import ttnn
 
 from loguru import logger
-from ttnn.dot_access import make_dot_access_dict
+from models.common.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 from ttnn.model_preprocessing import preprocess_model_parameters
-from models.common.utility_functions import comp_allclose, comp_pcc
 from models.experimental.detr3d.ttnn.custom_preprocessing import create_custom_mesh_preprocessor
 
-from models.experimental.detr3d.reference.model_3detr import (
+from models.experimental.detr3d.reference.detr3d_model import (
     TransformerDecoderLayer,
     build_decoder,
 )
-from models.experimental.detr3d.ttnn.transformer_decoder import TtnnTransformerDecoderLayer
-from models.experimental.detr3d.common import load_torch_model_state
-from models.experimental.detr3d.reference.model_config import Detr3dArgs
-from models.experimental.detr3d.ttnn.model_3detr import build_ttnn_decoder
+from models.experimental.detr3d.ttnn.transformer_decoder import (
+    TTTransformerDecoderLayer,
+    TTTransformerDecoder,
+)
 
 
-class Tt3DetrArgs(Detr3dArgs):
-    def __init__(self):
-        self.parameters = None
-        self.device = None
-
-
+@torch.no_grad()
+@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
-    "batch_size, seq_len, d_model, nhead, normalize_before, weight_key_prefix",
+    "batch_size, seq_len, d_model, nhead, normalize_before",
     [
-        (1, 128, 256, 4, True, "decoder.layers.0"),  # 7 more repeated blocks can be tested
-        (1, 128, 256, 4, False, "decoder.layers.0"),
+        (1, 128, 256, 4, True),
+        (1, 128, 256, 4, False),
     ],
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_transformer_decoder_layer_inference(
     batch_size,
     seq_len,
     d_model,
     nhead,
     normalize_before,
-    weight_key_prefix,
-    device,
 ):
-    mesh_device = device
+    """Test TtTransformerDecoderLayer against PyTorch reference implementation"""
+
     dtype = ttnn.bfloat16
     dim_feedforward = 256
 
     # Initialize reference model
     reference_model = TransformerDecoderLayer(
         d_model, nhead, dim_feedforward, dropout=0.0, normalize_before=normalize_before
-    )
-    load_torch_model_state(reference_model, weight_key_prefix)
+    ).eval()
 
     # Create test inputs with consistent dimensions
     tgt_input = torch.randn(seq_len, batch_size, d_model, dtype=torch.float32)
@@ -75,6 +67,7 @@ def test_transformer_decoder_layer_inference(
             pos=pos,
             query_pos=query_pos,
         )
+    mesh_device = ttnn.open_device(device_id=0, l1_small_size=32768)
 
     parameters = preprocess_model_parameters(
         initialize_model=lambda: reference_model,
@@ -83,7 +76,7 @@ def test_transformer_decoder_layer_inference(
     )
 
     # Initialize TTNN model with preprocessed parameters
-    tt_model = TtnnTransformerDecoderLayer(
+    tt_model = TTTransformerDecoderLayer(
         mesh_device,
         d_model,
         nhead,
@@ -123,7 +116,7 @@ def test_transformer_decoder_layer_inference(
     )
 
     # Run TTNN model
-    tt_output = tt_model(tt_tgt, tt_memory, query_pos=tt_query_pos, pos=tt_pos)
+    tt_output, _ = tt_model(tt_tgt, tt_memory, query_pos=tt_query_pos, pos=tt_pos, return_attn_weights=False)
 
     if isinstance(ref_output, tuple):
         ref_output = ref_output[0]  # Get the tensor, ignore attention weights
@@ -148,26 +141,36 @@ def test_transformer_decoder_layer_inference(
     assert passing, f"PCC value is lower than 0.99. Check implementation! {pcc_message}"
 
 
-@pytest.mark.parametrize(
-    "tgt_shape, enc_features_shape",
-    [
-        ((128, 1, 256), (1024, 1, 256)),
-    ],
-)
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
-def test_transformer_decoder_inference(tgt_shape, enc_features_shape, device):
+class Args:
+    """Mock args class to match the build_ttnn_decoder function from ttnn_3detr_model.py"""
+
+    def __init__(self):
+        self.dec_dim = 256
+        self.dec_nhead = 4
+        self.dec_ffn_dim = 256
+        self.dec_nlayers = 8
+        self.device = None  # Will be set in the test
+        self.parameters = {}
+
+
+@torch.no_grad()
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+def test_transformer_decoder_inference(device):
+    """Test TTTransformerDecoder against PyTorch reference implementation"""
+
     dtype = ttnn.bfloat16
+    args = Args()
+    args.device = device
 
     # Build reference decoder
-    torch_args = Detr3dArgs()
-    reference_model = build_decoder(torch_args)
-    load_torch_model_state(reference_model, "decoder")
+    reference_model = build_decoder(args)
+    reference_model.eval()
 
     # Create test inputs with the specified shapes
-    tgt = torch.randn(tgt_shape, dtype=torch.float32)
-    enc_features = torch.randn(enc_features_shape, dtype=torch.float32)
-    query_embed = torch.randn(tgt_shape, dtype=torch.float32)
-    enc_pos = torch.randn(enc_features_shape, dtype=torch.float32)
+    tgt = torch.randn(128, 1, 256, dtype=torch.float32)
+    enc_features = torch.randn(1024, 1, 256, dtype=torch.float32)
+    query_embed = torch.randn(128, 1, 256, dtype=torch.float32)
+    enc_pos = torch.randn(1024, 1, 256, dtype=torch.float32)
 
     # Get reference output
     with torch.no_grad():
@@ -179,10 +182,18 @@ def test_transformer_decoder_inference(tgt_shape, enc_features_shape, device):
         device=device,
     )
 
-    tt_args = Tt3DetrArgs()
-    tt_args.device = device
-    tt_args.parameters = make_dot_access_dict({"decoder": parameters})
-    tt_decoder = build_ttnn_decoder(tt_args)
+    tt_decoder = TTTransformerDecoder(
+        device=args.device,
+        decoder_layer_config={
+            "d_model": args.dec_dim,
+            "nhead": args.dec_nhead,
+            "dim_feedforward": args.dec_ffn_dim,
+            "normalize_before": True,  # Match the reference implementation
+        },
+        num_layers=args.dec_nlayers,
+        return_intermediate=True,
+        parameters=parameters,
+    )
 
     # Convert inputs to TTNN tensors (convert to batch-first format)
     tt_tgt = ttnn.from_torch(
@@ -215,11 +226,12 @@ def test_transformer_decoder_inference(tgt_shape, enc_features_shape, device):
     )
 
     # Run TTNN decoder
-    tt_output = tt_decoder(
+    tt_output, _ = tt_decoder(
         tt_tgt,
         tt_enc_features,
         query_pos=tt_query_embed,
         pos=tt_enc_pos,
+        return_attn_weights=False,
     )
 
     # Convert back to torch for comparison
@@ -233,7 +245,7 @@ def test_transformer_decoder_inference(tgt_shape, enc_features_shape, device):
     logger.info(comp_allclose(ref_output, tt_output_torch))
     logger.info(f"Input shapes - tgt: {tgt.shape}, enc_features: {enc_features.shape}")
     logger.info(f"Query embed: {query_embed.shape}, enc_pos: {enc_pos.shape}")
-    logger.info(f"Num layers: {torch_args.dec_nlayers}, d_model: {torch_args.dec_dim}, nhead: {torch_args.dec_nhead}")
+    logger.info(f"Num layers: {args.dec_nlayers}, d_model: {args.dec_dim}, nhead: {args.dec_nhead}")
 
     if passing:
         logger.info("TransformerDecoder Test Passed!")

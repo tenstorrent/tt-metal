@@ -6,26 +6,69 @@ import ttnn
 import torch
 import pytest
 
+from models.common.utility_functions import comp_pcc
+from models.experimental.detr3d.ttnn.multihead_attention import TTNNMultiheadAttention
+
+from tests.ttnn.utils_for_testing import assert_with_pcc
 from loguru import logger
-from ttnn.model_preprocessing import preprocess_model_parameters
-from models.common.utility_functions import comp_pcc, comp_allclose
-
-from models.experimental.detr3d.common import load_torch_model_state
-from models.experimental.detr3d.ttnn.multihead_attention import TtnnMultiheadAttention
-from models.experimental.detr3d.ttnn.custom_preprocessing import create_custom_mesh_preprocessor
 
 
-@pytest.mark.parametrize(
-    "batch_size, seq_len, d_model, nhead",
-    [
-        (128, 1, 256, 4),
-    ],
-)
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize("batch_size", [128])
+@pytest.mark.parametrize("seq_len", [1])
+@pytest.mark.parametrize("d_model", [256])
+@pytest.mark.parametrize("nhead", [4])
 def test_multihead_attention(device, batch_size, seq_len, d_model, nhead, reset_seeds):
+    """Test TTNN MultiheadAttention against PyTorch reference implementation"""
+
     # Create PyTorch reference model
-    torch_mha = torch.nn.MultiheadAttention(embed_dim=d_model, num_heads=nhead, batch_first=False)
-    load_torch_model_state(torch_mha, "encoder.layers.0.self_attn")
+    torch_mha = torch.nn.MultiheadAttention(embed_dim=d_model, num_heads=nhead, batch_first=False).eval()
+
+    # Create TTNN model
+    ttnn_mha = TTNNMultiheadAttention(d_model, nhead, device)
+
+    # Extract and convert PyTorch weights to TTNN format
+    with torch.no_grad():
+        # Convert to TTNN tensors
+        ttnn_mha.q_weight = ttnn.from_torch(
+            torch_mha.in_proj_weight[:d_model].T,  # Transpose for linear layer
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+        )
+        ttnn_mha.k_weight = ttnn.from_torch(
+            torch_mha.in_proj_weight[d_model : 2 * d_model].T,  # Transpose for linear layer
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+        )
+        ttnn_mha.v_weight = ttnn.from_torch(
+            torch_mha.in_proj_weight[2 * d_model :].T,  # Transpose for linear layer
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+        )
+        ttnn_mha.q_bias = ttnn.from_torch(
+            torch_mha.in_proj_bias[:d_model].reshape(1, -1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+        )
+        ttnn_mha.k_bias = ttnn.from_torch(
+            torch_mha.in_proj_bias[d_model : 2 * d_model].reshape(1, -1),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+        )
+        ttnn_mha.v_bias = ttnn.from_torch(
+            torch_mha.in_proj_bias[2 * d_model :].reshape(1, -1),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+        )
+        ttnn_mha.out_weight = ttnn.from_torch(
+            torch_mha.out_proj.weight.T, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+        )
+        ttnn_mha.out_bias = ttnn.from_torch(
+            torch_mha.out_proj.bias.reshape(1, -1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+        )
 
     # Create test inputs
     torch_input = torch.randn(batch_size, seq_len, d_model, dtype=torch.float32)
@@ -33,15 +76,6 @@ def test_multihead_attention(device, batch_size, seq_len, d_model, nhead, reset_
     # PyTorch forward pass
     with torch.no_grad():
         torch_output, _ = torch_mha(torch_input, torch_input, torch_input)
-
-    parameters = preprocess_model_parameters(
-        initialize_model=lambda: torch_mha,
-        custom_preprocessor=create_custom_mesh_preprocessor(None),
-        device=device,
-    )
-
-    # Create TTNN model
-    ttnn_mha = TtnnMultiheadAttention(d_model, nhead, device, parameters=parameters)
 
     # TTNN forward pass
     ttnn_input = ttnn.from_torch(
@@ -52,16 +86,11 @@ def test_multihead_attention(device, batch_size, seq_len, d_model, nhead, reset_
     ttnn_output_torch = ttnn.to_torch(ttnn_output)
     ttnn_output_torch = torch.permute(ttnn_output_torch, (1, 0, 2))
 
-    # Compare outputs with PCC (Pearson Correlation Coefficient)
+    # Calculate and log PCC before assertion
     passing, pcc_message = comp_pcc(torch_output, ttnn_output_torch, 0.99)
-    logger.info(f"Output PCC: {pcc_message}")
-    logger.info(comp_allclose(torch_output, ttnn_output_torch))
-    logger.info(f"Output shape - PyTorch: {torch_output.shape}, TTNN: {ttnn_output_torch.shape}")
-    logger.info(f"Batch: {batch_size}, Seq: {seq_len}, D_model: {d_model}, Heads: {nhead}")
+    logger.info(f"PCC: {pcc_message}")
+    logger.info(f"PCC: {torch_output.shape}")
+    logger.info(f"PCC: {ttnn_output_torch.shape}")
 
-    if passing:
-        logger.info("MultiheadAttention Test Passed!")
-    else:
-        logger.warning("MultiheadAttention Test Failed!")
-
-    assert passing, f"PCC value is lower than 0.99. Check implementation! {pcc_message}"
+    # Compare outputs with PCC (Pearson Correlation Coefficient)
+    assert_with_pcc(torch_output, ttnn_output_torch, 0.99)

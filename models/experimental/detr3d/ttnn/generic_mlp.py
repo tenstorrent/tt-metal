@@ -3,64 +3,30 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from models.common.lightweightmodule import LightweightModule
-from models.experimental.detr3d.ttnn.utils import TtnnConv1D
+import torch
+from models.experimental.detr3d.ttnn.common import TtnnConv1D
 
 
-class TtnnGenericMLP(LightweightModule):
+class TttnnGenericMLP:
     def __init__(
         self,
-        parameters,
-        device,
-        activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
-        output_use_activation=False,
-        use_conv=True,
-        deallocate_activation=False,
+        module=None,
+        parameters=None,
+        device=None,
     ):
-        super().__init__()
-        assert use_conv, f"Currently only supports Conv1d"
-        self.deallocate_activation = deallocate_activation
+        self.device = device
+        self.parameters = parameters
+        self.module = module
+        self.tt_layers = []
+        for i, layer in enumerate(module.layers):
+            if isinstance(layer, torch.nn.Conv1d):
+                conv1d_layer = TtnnConv1D(layer, parameters.layers[i], device)
+                self.tt_layers.append(conv1d_layer)
+            elif isinstance(layer, torch.nn.ReLU):
+                relu_layer = ttnn.relu
+                self.tt_layers.append(relu_layer)
 
-        layer_args = list()
-        layer_params = list()
-        for idx in range(len(parameters.layers)):
-            if parameters.layers[idx]:
-                layer_args.append(parameters.conv_args.layers[str(idx)])
-                layer_params.append(parameters.layers[idx])
-
-        self.layers = list()
-        for conv_args, parameters in zip(layer_args[:-1], layer_params[:-1]):
-            self.layers.append(
-                TtnnConv1D(
-                    conv_args,
-                    parameters,
-                    device,
-                    activation=activation,
-                    return_dims=True,
-                    deallocate_activation=True,
-                    math_fidelity=ttnn.MathFidelity.HiFi2,
-                    shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-                )
-            )
-        self.layers.append(
-            TtnnConv1D(
-                layer_args[-1],
-                layer_params[-1],
-                device,
-                activation=activation if output_use_activation else None,
-                return_dims=True,
-                deallocate_activation=True,
-                math_fidelity=ttnn.MathFidelity.HiFi2,
-                shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-            )
-        )
-
-    def forward(self, input):
-        shape = input.shape
-        out = ttnn.clone(input)
-        if self.deallocate_activation:
-            ttnn.deallocate(input)
-        for layer in self.layers:
-            out, shape = layer(out, shape)
-        out = ttnn.reshape(out, shape)
-        return out
+    def __call__(self, x):
+        for layer in self.tt_layers:
+            x = layer(x)
+        return x
