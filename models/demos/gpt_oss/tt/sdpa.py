@@ -127,11 +127,11 @@ def sdpa(
 
     # Compute attention scores: Q @ K^T
     tt_qk = ttnn.matmul(tt_q, tt_k)  # (nkv, nh // nkv, num_tokens, kv_len)
-    tt_qk *= sm_scale  # Scale by 1/sqrt(head_dim)
+    tt_qk = ttnn.mul(tt_qk, sm_scale, output_tensor=tt_qk)  # Scale by 1/sqrt(head_dim)
 
     # Apply sliding window mask if provided
     if tt_mask is not None:
-        tt_qk += tt_mask  # Masked positions get -inf
+        tt_qk = ttnn.add(tt_qk, tt_mask, output_tensor=tt_qk)  # Masked positions get -inf
 
     # Add attention sink logits for stable long-context attention
     tt_sink = ttnn.reshape(tt_sink, [nkv, nh // nkv, 1, 1])  # (nkv, nh // nkv, 1, 1)
