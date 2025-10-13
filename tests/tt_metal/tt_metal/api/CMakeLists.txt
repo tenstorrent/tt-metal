@@ -49,6 +49,7 @@ target_sources(
         test_worker_config_buffer.cpp
         test_blockfloat_common.cpp
         test_duplicate_kernel.cpp
+        test_add_broadcast_single_tile.cpp
 )
 
 target_include_directories(
