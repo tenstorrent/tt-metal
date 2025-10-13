@@ -198,9 +198,9 @@ def get_callstack(
         if not full_callstack:
             pc = location._device.get_block(location).get_risc_debug(risc_name).get_pc()
             try:
-                callstack = top_callstack(pc, elfs, offsets, context)
-                error_message = "PC was not in range of any provided ELF files" if len(callstack) == 0 else None
-                return KernelCallstackWithMessage(callstack=callstack, message=error_message)
+                cs = top_callstack(pc, elfs, offsets, context)
+                error_message = "PC was not in range of any provided ELF files" if len(cs) == 0 else None
+                return KernelCallstackWithMessage(callstack=cs, message=error_message)
             except Exception as e:
                 return KernelCallstackWithMessage(callstack=[], message=str(e))
         else:
@@ -211,13 +211,13 @@ def get_callstack(
                     # If full callstack failed, we default to top callstack
                     pc = location._device.get_block(location).get_risc_debug(risc_name).get_pc()
                     error_message = str(e) + " - defaulting to top callstack"
-                    callstack = top_callstack(pc, elfs, offsets, context)
+                    cs = top_callstack(pc, elfs, offsets, context)
                     error_message = (
                         "\n".join([error_message, "PC was not in range of any provided ELF files"])
-                        if len(callstack) == 0
+                        if len(cs) == 0
                         else error_message
                     )
-                    return KernelCallstackWithMessage(callstack=callstack, message=error_message)
+                    return KernelCallstackWithMessage(callstack=cs, message=error_message)
                 except Exception as e:
                     # If top callstack failed too, print both error messages
                     return KernelCallstackWithMessage(callstack=[], message="\n".join([error_message, str(e)]))

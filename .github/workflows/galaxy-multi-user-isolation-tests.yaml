@@ -1,4 +1,4 @@
-name: Galaxy Multi-user Isolation Tests
+name: (Galaxy) Multi-user Isolation Tests
 on:
   workflow_dispatch:
     inputs:

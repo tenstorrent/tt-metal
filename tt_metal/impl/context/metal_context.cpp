@@ -16,7 +16,7 @@
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
 #include "tt_metal/impl/debug/dprint_server.hpp"
-#include "tt_metal/impl/debug/inspector.hpp"
+#include "tt_metal/impl/debug/inspector/inspector.hpp"
 #include "tt_metal/impl/debug/inspector/data.hpp"
 #include "tt_metal/impl/debug/noc_logging.hpp"
 #include "tt_metal/impl/debug/watcher_server.hpp"
@@ -1334,10 +1334,15 @@ void MetalContext::initialize_and_launch_firmware(chip_id_t device_id) {
             continue;
         }
 
-        tt::umd::RiscType reset_val = tt::umd::RiscType::BRISC;
-        if (multi_risc_active_eth_cores.contains(worker_core)) {
-            // bit 12 needs to be deasserted to run second erisc on BH
-            reset_val |= tt::umd::RiscType::ERISC1;
+        tt::umd::RiscType reset_val;
+        if (cluster_->arch() == ARCH::QUASAR) {
+            reset_val = tt::umd::RiscType::ALL_NEO_DMS;
+        } else {
+            reset_val = tt::umd::RiscType::BRISC;
+            if (multi_risc_active_eth_cores.contains(worker_core)) {
+                // bit 12 needs to be deasserted to run second erisc on BH
+                reset_val |= tt::umd::RiscType::ERISC1;
+            }
         }
         cluster_->deassert_risc_reset_at_core(tt_cxy_pair(device_id, worker_core), reset_val);
     }
