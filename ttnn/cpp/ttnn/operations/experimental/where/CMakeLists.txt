@@ -4,6 +4,13 @@ add_library(TTNN::Ops::Experimental::Where ALIAS ttnn_op_experimental_where)
 target_precompile_headers(ttnn_op_experimental_where REUSE_FROM TT::CommonPCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_where)
 
+set_target_properties(
+    ttnn_op_experimental_where
+    PROPERTIES
+        VERIFY_INTERFACE_HEADER_SETS
+            FALSE
+)
+
 file(GLOB_RECURSE kernels device/kernels/*)
 
 target_sources(

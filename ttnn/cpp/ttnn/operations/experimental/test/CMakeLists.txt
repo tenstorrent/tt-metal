@@ -3,6 +3,13 @@ add_library(TTNN::Ops::Experimental::Test ALIAS ttnn_op_experimental_test)
 
 target_precompile_headers(ttnn_op_experimental_test REUSE_FROM TT::CommonPCH)
 
+set_target_properties(
+    ttnn_op_experimental_test
+    PROPERTIES
+        VERIFY_INTERFACE_HEADER_SETS
+            FALSE
+)
+
 file(GLOB_RECURSE kernels hang_device/device/kernels/*)
 
 target_sources(

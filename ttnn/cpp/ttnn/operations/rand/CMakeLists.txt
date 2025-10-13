@@ -4,6 +4,14 @@ add_library(TTNN::Ops::Rand ALIAS ttnn_op_rand)
 target_precompile_headers(ttnn_op_rand REUSE_FROM TT::CommonPCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_rand)
 
+# Verify only the api FILE_SET
+set_target_properties(
+    ttnn_op_rand
+    PROPERTIES
+        INTERFACE_HEADER_SETS_TO_VERIFY
+            api
+)
+
 file(GLOB_RECURSE kernels device/kernels/*)
 
 target_sources(

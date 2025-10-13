@@ -4,6 +4,13 @@ add_library(TTNN::Ops::Pool ALIAS ttnn_op_pool)
 target_precompile_headers(ttnn_op_pool REUSE_FROM TT::CommonPCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_pool)
 
+set_target_properties(
+    ttnn_op_pool
+    PROPERTIES
+        VERIFY_INTERFACE_HEADER_SETS
+            FALSE
+)
+
 # Globbing non-build files is acceptable for now because devs don't generate packages.
 file(
     GLOB_RECURSE kernels

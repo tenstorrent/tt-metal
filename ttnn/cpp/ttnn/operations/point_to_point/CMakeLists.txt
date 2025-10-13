@@ -5,6 +5,13 @@ add_library(TTNN::Ops::PointToPoint ALIAS ttnn_op_point_to_point)
 
 target_precompile_headers(ttnn_op_point_to_point REUSE_FROM TT::CommonPCH)
 
+set_target_properties(
+    ttnn_op_point_to_point
+    PROPERTIES
+        VERIFY_INTERFACE_HEADER_SETS
+            FALSE
+)
+
 file(GLOB_RECURSE kernels device/kernels/*)
 target_sources(
     ttnn_op_point_to_point

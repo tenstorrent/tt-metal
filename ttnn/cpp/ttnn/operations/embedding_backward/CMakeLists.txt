@@ -4,6 +4,13 @@ add_library(TTNN::Ops::Embedding::Backward ALIAS ttnn_op_embedding_backward)
 target_precompile_headers(ttnn_op_embedding_backward REUSE_FROM TT::CommonPCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_embedding_backward)
 
+set_target_properties(
+    ttnn_op_embedding_backward
+    PROPERTIES
+        INTERFACE_HEADER_SETS_TO_VERIFY
+            api
+)
+
 file(GLOB_RECURSE kernels device/kernels/*)
 
 target_sources(
