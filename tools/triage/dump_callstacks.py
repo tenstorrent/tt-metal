@@ -5,12 +5,13 @@
 
 """
 Usage:
-    dump_callstacks [--full-callstack] [--gdb-callstack] [--show-details]
+    dump_callstacks [--full-callstack] [--gdb-callstack] [--show-details] [--color]
 
 Options:
     --full-callstack   Dump full callstack with all frames. Defaults to dumping only the top frame.
     --gdb-callstack    Dump callstack using GDB client instead of built-in methods.
     --show-details     Show verbose fields (RD PTR, Base, Offset, firmware/kernel paths).
+    --color            Enable colored output for callstacks. Disabled by default.
 
 Description:
     Dumps callstacks for all devices in the system and for every supported risc processor.
@@ -19,6 +20,7 @@ Description:
 """
 
 from dataclasses import dataclass
+from functools import partial
 
 from triage import ScriptConfig, TTTriageError, log_check, recurse_field, triage_field, hex_serializer, run_script
 from dispatcher_data import run as get_dispatcher_data, DispatcherData, DispatcherCoreData
@@ -227,18 +229,24 @@ def get_callstack(
         return KernelCallstackWithMessage(callstack=[], message=str(e))
 
 
-def _format_callstack(callstack: list[CallstackEntry]) -> list[str]:
+def _format_callstack(callstack: list[CallstackEntry], color: bool = False) -> list[str]:
     """Return string representation of the callstack."""
     frame_number_width = len(str(len(callstack) - 1))
     result = []
     cwd = Path.cwd()
+    
+    # Set color codes based on color flag
+    pc_color = BLUE if color else ""
+    func_color = ORANGE if color else ""
+    path_color = GREEN if color else ""
+    reset = RST if color else ""
 
     for i, frame in enumerate(callstack):
         line = f"  #{i:<{frame_number_width}} "
         if frame.pc is not None:
-            line += f"{BLUE}0x{frame.pc:08X}{RST} in "
+            line += f"{pc_color}0x{frame.pc:08X}{reset} in "
         if frame.function_name is not None:
-            line += f"{ORANGE}{frame.function_name}{RST} () "
+            line += f"{func_color}{frame.function_name}{reset} () "
         if frame.file is not None:
             # Convert absolute path to relative path with ./ prefix
             file_path = Path(frame.file)
@@ -252,48 +260,59 @@ def _format_callstack(callstack: list[CallstackEntry]) -> list[str]:
                 # Path is not relative to cwd, keep as is
                 display_path = frame.file
 
-            line += f"at {GREEN}{display_path}{RST}"
+            line += f"at {path_color}{display_path}{reset}"
             if frame.line is not None:
-                line += f" {GREEN}{frame.line}{RST}"
+                line += f" {path_color}{frame.line}{reset}"
                 if frame.column is not None:
-                    line += f"{GREEN}:{frame.column}{RST}"
+                    line += f"{path_color}:{frame.column}{reset}"
         result.append(line)
     return result
 
-def format_callstack_with_message(callstack_with_message: KernelCallstackWithMessage) -> str:
+def format_callstack_with_message(callstack_with_message: KernelCallstackWithMessage, color: bool = False) -> str:
     """Return string representation of the callstack with optional error message. Adding empty line at the beginning for prettier look."""
     empty_line = ""  # For prettier look
+    
+    # Set color codes based on color flag
+    error_color = RED if color else ""
+    reset = RST if color else ""
+    
     if callstack_with_message.message is not None:
         return "\n".join(
-            [f"{RED}{callstack_with_message.message}{RST}"] + _format_callstack(callstack_with_message.callstack)
+            [f"{error_color}{callstack_with_message.message}{reset}"] + _format_callstack(callstack_with_message.callstack, color)
         )
     else:
-        return "\n".join([empty_line] + _format_callstack(callstack_with_message.callstack))
+        return "\n".join([empty_line] + _format_callstack(callstack_with_message.callstack, color))
 
-@dataclass
-class DumpCallstacksData:
-    """Callstack data showing essential fields: Kernel ID:Name, Go Message, Subdevice, Preload, Waypoint, PC, and Callstack."""
+def _make_dump_callstacks_data_class(color: bool):
+    """Factory function to create DumpCallstacksData class with color-aware serializer."""
+    @dataclass
+    class DumpCallstacksData:
+        """Callstack data showing essential fields: Kernel ID:Name, Go Message, Subdevice, Preload, Waypoint, PC, and Callstack."""
 
-    kernel_id_name: str = triage_field("Kernel ID:Name")
-    go_message: str = triage_field("Go Message")
-    subdevice: int = triage_field("Subdevice")
-    preload: bool = triage_field("Preload")
-    waypoint: str = triage_field("Waypoint")
-    pc: int | None = triage_field("PC", hex_serializer)
-    kernel_callstack_with_message: KernelCallstackWithMessage = triage_field(
-        "Kernel Callstack", format_callstack_with_message
-    )
+        kernel_id_name: str = triage_field("Kernel ID:Name")
+        go_message: str = triage_field("Go Message")
+        subdevice: int = triage_field("Subdevice")
+        preload: bool = triage_field("Preload")
+        waypoint: str = triage_field("Waypoint")
+        pc: int | None = triage_field("PC", hex_serializer)
+        kernel_callstack_with_message: KernelCallstackWithMessage = triage_field(
+            "Kernel Callstack", partial(format_callstack_with_message, color=color)
+        )
+    return DumpCallstacksData
 
 
-@dataclass
-class DumpCallstacksDataVerbose:
-    """Verbose callstack data showing all dispatcher fields."""
+def _make_dump_callstacks_data_verbose_class(color: bool):
+    """Factory function to create DumpCallstacksDataVerbose class with color-aware serializer."""
+    @dataclass
+    class DumpCallstacksDataVerbose:
+        """Verbose callstack data showing all dispatcher fields."""
 
-    dispatcher_core_data: DispatcherCoreData = recurse_field()
-    pc: int | None = triage_field("PC", hex_serializer)
-    kernel_callstack_with_message: KernelCallstackWithMessage = triage_field(
-        "Kernel Callstack", format_callstack_with_message
-    )
+        dispatcher_core_data: DispatcherCoreData = recurse_field()
+        pc: int | None = triage_field("PC", hex_serializer)
+        kernel_callstack_with_message: KernelCallstackWithMessage = triage_field(
+            "Kernel Callstack", partial(format_callstack_with_message, color=color)
+        )
+    return DumpCallstacksDataVerbose
 
 
 def dump_callstacks(
@@ -306,8 +325,13 @@ def dump_callstacks(
     gdb_server: GdbServer | None,
     process_ids: dict[OnChipCoordinate, dict[str, int]] | None,
     show_details: bool = False,
-) -> DumpCallstacksData | DumpCallstacksDataVerbose | None:
-    result: DumpCallstacksData | DumpCallstacksDataVerbose | None = None
+    color: bool = False,
+):
+    # Get the appropriate dataclass with color-aware serializer
+    DumpCallstacksData = _make_dump_callstacks_data_class(color)
+    DumpCallstacksDataVerbose = _make_dump_callstacks_data_verbose_class(color)
+    
+    result = None
 
     try:
         dispatcher_core_data = dispatcher_data.get_core_data(location, risc_name)
@@ -439,6 +463,7 @@ def run(args, context: Context):
     full_callstack = args["--full-callstack"]
     gdb_callstack = args["--gdb-callstack"]
     show_details = args["--show-details"]
+    color = args["--color"]
     BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth"]
     elfs_cache = get_elfs_cache(args, context)
     run_checks = get_run_checks(args, context)
@@ -464,6 +489,7 @@ def run(args, context: Context):
             gdb_server,
             process_ids,
             show_details,
+            color,
         ),
         block_filter=BLOCK_TYPES_TO_CHECK,
     )
