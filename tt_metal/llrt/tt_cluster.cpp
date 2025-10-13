@@ -33,7 +33,7 @@
 #include "tunnels_from_mmio_device.hpp"
 #include <umd/device/cluster.hpp>
 #include <umd/device/cluster_descriptor.hpp>
-#include <umd/device/simulation/simulation_device.hpp>
+#include <umd/device/simulation/simulation_chip.hpp>
 #include <umd/device/types/arch.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <umd/device/types/cluster_types.hpp>

@@ -22,7 +22,7 @@
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/control_plane.hpp>
 #include <umd/device/types/core_coordinates.hpp>
-#include <umd/device/simulation/simulation_device.hpp>
+#include <umd/device/simulation/simulation_chip.hpp>
 #include <umd/device/types/arch.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <umd/device/types/xy_pair.hpp>
