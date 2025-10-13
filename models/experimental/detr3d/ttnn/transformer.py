@@ -146,8 +146,6 @@ class TTTransformerDecoderLayer(LightweightModule):
         memory,
         tgt_mask=None,
         memory_mask=None,
-        tgt_key_padding_mask=None,
-        memory_key_padding_mask=None,
         pos=None,
         query_pos=None,
         return_attn_weights=False,
@@ -158,8 +156,6 @@ class TTTransformerDecoderLayer(LightweightModule):
                 memory,
                 tgt_mask,
                 memory_mask,
-                tgt_key_padding_mask,
-                memory_key_padding_mask,
                 pos,
                 query_pos,
                 return_attn_weights,
@@ -170,8 +166,6 @@ class TTTransformerDecoderLayer(LightweightModule):
                 memory,
                 tgt_mask,
                 memory_mask,
-                tgt_key_padding_mask,
-                memory_key_padding_mask,
                 pos,
                 query_pos,
                 return_attn_weights,
@@ -183,8 +177,6 @@ class TTTransformerDecoderLayer(LightweightModule):
         memory,
         tgt_mask=None,
         memory_mask=None,
-        tgt_key_padding_mask=None,
-        memory_key_padding_mask=None,
         pos=None,
         query_pos=None,
         return_attn_weights=False,
@@ -224,8 +216,6 @@ class TTTransformerDecoderLayer(LightweightModule):
         memory,
         tgt_mask=None,
         memory_mask=None,
-        tgt_key_padding_mask=None,
-        memory_key_padding_mask=None,
         pos=None,
         query_pos=None,
         return_attn_weights=False,
@@ -267,11 +257,8 @@ class TTTransformerEncoderLayer(LightweightModule):
         d_model,
         nhead=4,
         dim_feedforward=128,
-        activation="relu",
         normalize_before=True,
-        norm_name="ln",
         use_ffn=True,
-        ffn_use_bias=True,
         parameters=None,
     ):
         super().__init__()
@@ -329,20 +316,18 @@ class TTTransformerEncoderLayer(LightweightModule):
         self,
         src,
         src_mask=None,
-        src_key_padding_mask=None,
         pos=None,
         return_attn_weights=False,
     ):
         if self.normalize_before:
-            return self.forward_pre(src, src_mask, src_key_padding_mask, pos, return_attn_weights)
+            return self.forward_pre(src, src_mask, pos, return_attn_weights)
         else:
-            return self.forward_post(src, src_mask, src_key_padding_mask, pos, return_attn_weights)
+            return self.forward_post(src, src_mask, pos, return_attn_weights)
 
     def forward_post(
         self,
         src,
         src_mask=None,
-        src_key_padding_mask=None,
         pos=None,
         return_attn_weights=False,
     ):
@@ -370,7 +355,6 @@ class TTTransformerEncoderLayer(LightweightModule):
         self,
         src,
         src_mask=None,
-        src_key_padding_mask=None,
         pos=None,
         return_attn_weights=False,
     ):
@@ -401,7 +385,7 @@ class TTTransformerDecoder(LightweightModule):
         device,
         decoder_layer_config,
         num_layers,
-        norm_fn_name="ln",
+        use_norm=True,
         return_intermediate=False,
         parameters=None,
     ):
@@ -426,7 +410,7 @@ class TTTransformerDecoder(LightweightModule):
 
         # Final layer norm
         self.norm = None
-        if norm_fn_name is not None:
+        if use_norm:
             self.norm_weights = parameters.get("norm", {}).get("weight") if parameters else None
             self.norm_bias = parameters.get("norm", {}).get("bias") if parameters else None
 
@@ -436,8 +420,6 @@ class TTTransformerDecoder(LightweightModule):
         memory,
         tgt_mask=None,
         memory_mask=None,
-        tgt_key_padding_mask=None,
-        memory_key_padding_mask=None,
         pos=None,
         query_pos=None,
         transpose_swap=False,
@@ -463,8 +445,6 @@ class TTTransformerDecoder(LightweightModule):
                 memory,
                 tgt_mask=tgt_mask,
                 memory_mask=memory_mask,
-                tgt_key_padding_mask=tgt_key_padding_mask,
-                memory_key_padding_mask=memory_key_padding_mask,
                 pos=pos,
                 query_pos=query_pos,
                 return_attn_weights=return_attn_weights,
@@ -497,22 +477,3 @@ class TTTransformerDecoder(LightweightModule):
             return intermediate, attns if return_attn_weights else None
 
         return output, attns if return_attn_weights else None
-
-
-def build_ttnn_decoder(args, device, parameters):
-    """TTNN decoder builder function"""
-    decoder_layer_config = {
-        "d_model": args.dec_dim,
-        "nhead": args.dec_nhead,
-        "dim_feedforward": args.dec_ffn_dim,
-        "normalize_before": True,  # Match the reference implementation
-    }
-
-    decoder = TTTransformerDecoder(
-        device=device,
-        decoder_layer_config=decoder_layer_config,
-        num_layers=args.dec_nlayers,
-        return_intermediate=True,
-        parameters=parameters,
-    )
-    return decoder

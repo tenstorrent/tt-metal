@@ -56,7 +56,7 @@ from models.experimental.detr3d.ttnn.ttnn_pointnet_samodule_votes import TtnnPoi
     ],
 )
 @pytest.mark.parametrize(
-    "num_layers,masking_radius,norm, weight_init_name,src_shape,mask,src_key_padding_mask,pos,xyz_shape,transpose_swap",
+    "num_layers,masking_radius,norm, weight_init_name,src_shape,mask,pos,xyz_shape,transpose_swap",
     [
         (
             3,
@@ -64,7 +64,6 @@ from models.experimental.detr3d.ttnn.ttnn_pointnet_samodule_votes import TtnnPoi
             None,
             "xavier_uniform",
             (2048, 1, 256),
-            None,
             None,
             None,
             (1, 2048, 3),
@@ -80,7 +79,6 @@ def test_masked_transformer_encoder(
     weight_init_name,
     src_shape,
     mask,
-    src_key_padding_mask,
     pos,
     xyz_shape,
     transpose_swap,
@@ -144,7 +142,7 @@ def test_masked_transformer_encoder(
     src = torch.randn(src_shape)
     xyz = torch.randn(xyz_shape)
     ref_module.eval()
-    ref_out = ref_module(src, mask, src_key_padding_mask, pos, xyz, transpose_swap)
+    ref_out = ref_module(src, mask, None, pos, xyz, transpose_swap)
 
     ref_module_parameters = preprocess_model_parameters(
         initialize_model=lambda: ref_module,
@@ -158,10 +156,8 @@ def test_masked_transformer_encoder(
         npoint=npoint,
         radius=radius,
         nsample=nsample,
-        bn=bn,
         use_xyz=use_xyz,
         pooling=pooling,
-        sigma=sigma,
         normalize_xyz=normalize_xyz,
         sample_uniformly=sample_uniformly,
         ret_unique_cnt=ret_unique_cnt,
@@ -199,7 +195,7 @@ def test_masked_transformer_encoder(
     #     dtype=ttnn.bfloat16,
     # )
 
-    tt_output = tt_module(tt_src, mask, src_key_padding_mask, pos, xyz, transpose_swap)
+    tt_output = tt_module(tt_src, mask, pos, xyz, transpose_swap)
     ttnn_torch_out = []
     for tt_out, torch_out in zip(tt_output, ref_out):
         if not isinstance(tt_out, torch.Tensor):

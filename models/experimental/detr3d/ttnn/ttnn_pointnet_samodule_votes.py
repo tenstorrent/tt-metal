@@ -224,10 +224,8 @@ class TtnnPointnetSAModuleVotes:
         npoint: int = None,
         radius: float = None,
         nsample: int = None,
-        bn: bool = True,
         use_xyz: bool = True,
         pooling: str = "max",
-        sigma: float = None,  # for RBF pooling
         normalize_xyz: bool = False,  # noramlize local XYZ with radius
         sample_uniformly: bool = False,
         ret_unique_cnt: bool = False,
@@ -243,9 +241,6 @@ class TtnnPointnetSAModuleVotes:
         self.pooling = pooling
         self.mlp_module = None
         self.use_xyz = use_xyz
-        self.sigma = sigma
-        if self.sigma is None:
-            self.sigma = self.radius / 2
         self.normalize_xyz = normalize_xyz
         self.ret_unique_cnt = ret_unique_cnt
         self.sample_uniformly = sample_uniformly

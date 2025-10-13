@@ -64,7 +64,6 @@ def build_ttnn_encoder(args):
                 d_model=args.enc_dim,
                 nhead=args.enc_nhead,
                 dim_feedforward=args.enc_ffn_dim,
-                activation=args.enc_activation,
             ),
             parameters=args.parameters.encoder,
         )
