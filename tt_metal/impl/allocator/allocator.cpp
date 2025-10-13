@@ -438,7 +438,7 @@ void Allocator::override_state(const AllocatorState& state) {
         }
 
         if (manager) {
-            manager->apply_state(type_state, BankManager::AllocatorDependencies::AllocatorID{0});
+            manager->override_state(type_state, BankManager::AllocatorDependencies::AllocatorID{0});
         }
     }
 }

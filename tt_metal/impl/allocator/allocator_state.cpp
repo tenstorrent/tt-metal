@@ -92,7 +92,8 @@ void AllocatorState::BufferTypeState::normalize() {
         auto& last = coalesced.back();
 
         // If current region overlaps or is adjacent to last, merge them
-        // Adjacent means curr.first == last.second (no gap between regions)
+        // Overlapping means curr.first < last.second, adjacent means curr.first == last.second (no gap between regions)
+        // The condition below handles both cases.
         if (curr.first <= last.second) {
             last.second = std::max(last.second, curr.second);
         } else {

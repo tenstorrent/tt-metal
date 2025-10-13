@@ -697,9 +697,10 @@ void BankManager::override_state(
 }
 
 bool BankManager::can_apply_state(const AllocatorState::BufferTypeState& state) const {
-    return buffer_type_ == state.buffer_type &&  //
-           num_banks() == state.num_banks &&     //
-           bank_size() == state.bank_size &&     //
+    return buffer_type_ == state.buffer_type &&                              //
+           interleaved_address_limit_ == state.interleaved_address_limit &&  //
+           num_banks() == state.num_banks &&                                 //
+           bank_size() == state.bank_size &&                                 //
            alignment_bytes_ == state.alignment_bytes;
 }
 

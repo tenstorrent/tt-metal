@@ -127,12 +127,18 @@ public:
     void reset_size(AllocatorDependencies::AllocatorID allocator_id = AllocatorDependencies::AllocatorID{0});
 
     // AllocatorState Methods
+    // Extracts the state of the given allocator.
     AllocatorState::BufferTypeState extract_state(
         AllocatorDependencies::AllocatorID allocator_id = AllocatorDependencies::AllocatorID{0}) const;
+    // Extracts the merged state from all dependent allocators.
     AllocatorState::BufferTypeState extract_merged_state() const;
+
+    // Applies the state of the given allocator without overriding the current state.
     void apply_state(
         const AllocatorState::BufferTypeState& state,
         AllocatorDependencies::AllocatorID target_allocator_id = AllocatorDependencies::AllocatorID{0});
+
+    // Overrides the current state with the given state.
     void override_state(
         const AllocatorState::BufferTypeState& state,
         AllocatorDependencies::AllocatorID target_allocator_id = AllocatorDependencies::AllocatorID{0});
@@ -176,7 +182,12 @@ private:
     allocator::Algorithm* get_allocator_from_id(AllocatorDependencies::AllocatorID allocator_id);
     const allocator::Algorithm* get_allocator_from_id(AllocatorDependencies::AllocatorID allocator_id) const;
 
-    // Returns true if state can be applied
+    // Returns true if the given state can be applied to the current state:
+    // - The buffer type must match
+    // - The interleaved address limit must match
+    // - The number of banks must match
+    // - The bank size must match
+    // - The alignment bytes must match
     bool can_apply_state(const AllocatorState::BufferTypeState& state) const;
 
     // Invalidate caches stored on allocators that depend on the given allocator
