@@ -45,7 +45,7 @@ Tensor make_tensor_with_num_shards(int num_device_shards, MeshDevice* mesh_devic
 
 // Returns a dummy device tensor distributed according to the `mapper_config`.
 Tensor make_tensor_with_mapper_config(
-    int num_device_shards, MeshDevice* mesh_device, distributed::MeshMapperConfig mapper_config) {
+    int num_device_shards, MeshDevice* mesh_device, const distributed::MeshMapperConfig& mapper_config) {
     auto mapper = distributed::create_mesh_mapper(*mesh_device, mapper_config);
     const auto global_shape = ttnn::Shape{num_device_shards, 1, 32, 32};
     auto buffer = std::make_shared<std::vector<float>>(global_shape.volume());
