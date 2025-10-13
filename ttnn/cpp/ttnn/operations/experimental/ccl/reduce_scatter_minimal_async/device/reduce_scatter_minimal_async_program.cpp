@@ -1094,9 +1094,9 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
         TT_FATAL(false, "reduce_scatter_minimal_async line implementation only supports scattering on dim 1, 2, or 3");
     }
 
-    const uint32_t input_tensor_num_pages = input_tensor.buffer()->num_pages();
-    const uint32_t batch_slice_num_pages = input_tensor_num_pages / ring_size / input_tensor_B;
-    const uint32_t input_batch_num_pages = input_tensor_num_pages / input_tensor_B;
+    const uint32_t input_num_pages = input_tensor.buffer()->num_pages();
+    const uint32_t batch_slice_num_pages = input_num_pages / ring_size / input_tensor_B;
+    const uint32_t input_batch_num_pages = input_num_pages / input_tensor_B;
     const uint32_t output_batch_num_pages = input_batch_num_pages / ring_size;
     const uint32_t input_channel_num_pages = input_batch_num_pages / input_tensor_C;
     const uint32_t output_channel_num_pages = output_batch_num_pages / slice_C;
@@ -1229,33 +1229,35 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
 
                 // Reader
                 std::vector<uint32_t> sender_reader_compile_args = {
-                    ring_index,              // my_chip_id
-                    input_cb_index,          // cb_input_id
-                    intermediate_cb_index,   // cb_intermediate_id
-                    reader_output_cb_index,  // cb_reader_output_id
-                    tile_granularity,        // packet_size_in_pages
-                    page_size,               // tensor0_page_size
-                    input_tensor_Wt,         // input_tensor_Wt
-                    batch_slice_num_pages,   // batch_slice_num_pages
-                    ring_size,               // ring_size
-                    input_tensor_B,          // num_batches
-                    fuse_op,                 // fused op
-                    is_forward,              // direction
-                    is_first_device_in_direction,
-                    num_targets_in_direction,
-                    do_final_reduction,
-                    sync_with_other_direction,
-                    chunks_per_sync_val,
-                    start_pages_read_in_row,
-                    start_row_offset,
-                    start_tiles_read,
-                    start_tiles_to_read,
-                    input_channel_num_pages,
-                    output_channel_num_pages,
-                    slice_C,
-                    slice_Ht,
-                    slice_Wt,
-                    dim};
+                    ring_index,                    // my_chip_id
+                    ring_size,                     // ring_size
+                    input_cb_index,                // cb_input_id
+                    intermediate_cb_index,         // cb_intermediate_id
+                    reader_output_cb_index,        // cb_reader_output_id
+                    tile_granularity,              // packet_size_in_pages
+                    page_size,                     // tensor0_page_size
+                    input_num_pages,               // input_num_pages
+                    input_batch_num_pages,         // input_batch_num_pages
+                    input_channel_num_pages,       // input_channel_num_pages
+                    output_batch_num_pages,        // output_batch_num_pages
+                    output_channel_num_pages,      // output_channel_num_pages
+                    input_tensor_B,                // input_tensor_B
+                    input_tensor_Wt,               // input_tensor_Wt
+                    slice_C,                       // slice_C
+                    slice_Ht,                      // slice_Ht
+                    slice_Wt,                      // slice_Wt
+                    fuse_op,                       // fuse_op
+                    is_forward,                    // is_forward
+                    is_first_device_in_direction,  // is_first_device_in_direction
+                    num_targets_in_direction,      // num_targets_in_direction
+                    do_final_reduction,            // do_final_reduction
+                    sync_with_other_direction,     // sync_with_other_direction
+                    chunks_per_sync_val,           // chunks_per_sync_val
+                    dim,                           // dim
+                    start_pages_read_in_row,       // start_pages_read_in_row
+                    start_row_offset,              // start_row_offset
+                    start_tiles_read,              // start_tiles_read
+                    start_tiles_to_read};          // start_tiles_to_read
                 if (input_is_sharded) {
                     shard_builder::extend_sharding_compile_time_args(input_tensor, sender_reader_compile_args);
                 } else {

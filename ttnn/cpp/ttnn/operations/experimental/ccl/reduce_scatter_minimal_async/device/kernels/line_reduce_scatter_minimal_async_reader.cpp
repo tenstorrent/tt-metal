@@ -17,32 +17,34 @@ using address_t = uint32_t;
 ///////////////////////////////////////////////////
 
 constexpr uint32_t my_chip_id = get_compile_time_arg_val(0);
-constexpr uint32_t cb_input_id = get_compile_time_arg_val(1);
-constexpr uint32_t cb_intermediate_id = get_compile_time_arg_val(2);
-constexpr uint32_t cb_reader_output_id = get_compile_time_arg_val(3);
-constexpr uint32_t tile_granularity = get_compile_time_arg_val(4);
-constexpr uint32_t page_size = get_compile_time_arg_val(5);
-constexpr uint32_t input_tensor_Wt = get_compile_time_arg_val(6);
-constexpr uint32_t batch_slice_num_pages = get_compile_time_arg_val(7);
-constexpr uint32_t ring_size = get_compile_time_arg_val(8);
-constexpr uint32_t input_tensor_B = get_compile_time_arg_val(9);
-constexpr uint32_t fuse_op = get_compile_time_arg_val(10);
-constexpr bool is_forward = get_compile_time_arg_val(11);
-constexpr bool is_first_device_in_direction = get_compile_time_arg_val(12);
-constexpr uint32_t num_targets_in_direction = get_compile_time_arg_val(13);
-constexpr bool do_final_reduction = get_compile_time_arg_val(14);
-constexpr bool sync_with_other_direction = get_compile_time_arg_val(15);
-constexpr uint32_t chunks_per_sync = get_compile_time_arg_val(16);
-constexpr uint32_t start_pages_read_in_row = get_compile_time_arg_val(17);
-constexpr uint32_t start_row_offset = get_compile_time_arg_val(18);
-constexpr uint32_t start_tiles_read = get_compile_time_arg_val(19);
-constexpr uint32_t start_tiles_to_read = get_compile_time_arg_val(20);
-constexpr uint32_t input_channel_num_pages = get_compile_time_arg_val(21);
-constexpr uint32_t output_channel_num_pages = get_compile_time_arg_val(22);
-constexpr uint32_t slice_C = get_compile_time_arg_val(23);
-constexpr uint32_t slice_Ht = get_compile_time_arg_val(24);
-constexpr uint32_t slice_Wt = get_compile_time_arg_val(25);
-constexpr uint32_t dim = get_compile_time_arg_val(26);
+constexpr uint32_t ring_size = get_compile_time_arg_val(1);
+constexpr uint32_t cb_input_id = get_compile_time_arg_val(2);
+constexpr uint32_t cb_intermediate_id = get_compile_time_arg_val(3);
+constexpr uint32_t cb_reader_output_id = get_compile_time_arg_val(4);
+constexpr uint32_t tile_granularity = get_compile_time_arg_val(5);
+constexpr uint32_t page_size = get_compile_time_arg_val(6);
+constexpr uint32_t input_num_pages = get_compile_time_arg_val(7);
+constexpr uint32_t input_batch_num_pages = get_compile_time_arg_val(8);
+constexpr uint32_t input_channel_num_pages = get_compile_time_arg_val(9);
+constexpr uint32_t output_batch_num_pages = get_compile_time_arg_val(10);
+constexpr uint32_t output_channel_num_pages = get_compile_time_arg_val(11);
+constexpr uint32_t input_tensor_B = get_compile_time_arg_val(12);
+constexpr uint32_t input_tensor_Wt = get_compile_time_arg_val(13);
+constexpr uint32_t slice_C = get_compile_time_arg_val(14);
+constexpr uint32_t slice_Ht = get_compile_time_arg_val(15);
+constexpr uint32_t slice_Wt = get_compile_time_arg_val(16);
+constexpr uint32_t fuse_op = get_compile_time_arg_val(17);
+constexpr bool is_forward = get_compile_time_arg_val(18);
+constexpr bool is_first_device_in_direction = get_compile_time_arg_val(19);
+constexpr uint32_t num_targets_in_direction = get_compile_time_arg_val(20);
+constexpr bool do_final_reduction = get_compile_time_arg_val(21);
+constexpr bool sync_with_other_direction = get_compile_time_arg_val(22);
+constexpr uint32_t chunks_per_sync = get_compile_time_arg_val(23);
+constexpr uint32_t dim = get_compile_time_arg_val(24);
+constexpr uint32_t start_pages_read_in_row = get_compile_time_arg_val(25);
+constexpr uint32_t start_row_offset = get_compile_time_arg_val(26);
+constexpr uint32_t start_tiles_read = get_compile_time_arg_val(27);
+constexpr uint32_t start_tiles_to_read = get_compile_time_arg_val(28);
 
 void kernel_main() {
     ///////////////////////////////////////////////////
@@ -57,7 +59,7 @@ void kernel_main() {
     size_t out_ready_sem = get_arg_val<uint32_t>(arg_idx++);
     uint32_t fwd_bwd_sem_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
 
-    constexpr uint32_t ct_idx = 27;
+    constexpr uint32_t ct_idx = 29;
 
 #ifdef INPUT_IS_SHARDED
     constexpr uint32_t ct_offset_one = 7;
@@ -139,16 +141,11 @@ void kernel_main() {
         matmul_receiver = ReduceScatterOpReceiver(arg_idx);
     }
 
-    constexpr uint32_t input_batch_num_pages = batch_slice_num_pages * ring_size;
-    constexpr uint32_t intermediate_num_pages = input_batch_num_pages * input_tensor_B;
-
-    constexpr uint32_t output_batch_num_pages = batch_slice_num_pages;
-
     /**
      * Intermediate buffer is double-sized (shape [2, *input_shape]) to accommodate forward and backward.
      * BWD indexes into second half of intermediate buffer.
      */
-    constexpr uint32_t intermediate_full_offset = is_forward ? 0 : intermediate_num_pages;
+    constexpr uint32_t intermediate_full_offset = is_forward ? 0 : input_num_pages;
 
     uint32_t chunk_count = 0;
     uint32_t fwd_sync_cnt = 0;
@@ -316,8 +313,7 @@ void kernel_main() {
 
             uint32_t output_tile_id_start = b * output_batch_num_pages;
             uint32_t output_pages_read_in_row = input_pages_read_in_row;
-            uint32_t output_row_offset =
-                input_row_offset / input_tensor_Wt * slice_Wt;  // TODO: (GR) extract out of kernel
+            uint32_t output_row_offset = input_row_offset / input_tensor_Wt * slice_Wt;
             uint32_t output_stride_Wt = slice_Wt;
 
             /**
