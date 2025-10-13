@@ -53,6 +53,7 @@ def test_perf_gemma_vision(mesh_device, batch_size, nr_forward_iterations):
     measurements = dict()
     for k in measurement_keys:
         measurements[k] = profiler.get_duration(k) if k != "model_forward_inference" else inference_mean
+        logger.info(f"measurement {key}: {measurements[key]}")
 
     if SAVE_NEW_PERF_TARGETS:
         helper_write_to_json(determine_device_name(mesh_device), measurements["model_forward_inference"])
@@ -61,9 +62,6 @@ def test_perf_gemma_vision(mesh_device, batch_size, nr_forward_iterations):
         TARGETS_JSON_FILENAME,
         device_type=determine_device_name(mesh_device),
     )
-
-    for key in measurements:
-        logger.info(f"measurement {key}: {measurements[key]}")
 
     upper_threshold = targets["model_forward_inference"] * (1 + THRESHOLD_PERCENT / 100)
     lower_threshold = targets["model_forward_inference"] * (1 - THRESHOLD_PERCENT / 100)
@@ -117,7 +115,6 @@ def run_model(mesh_device, batch_size, profiler, nr_forward_iterations):
     profiler.end("model_forward_compile")
 
     for cur_inference_iteration in range(nr_forward_iterations):
-        ttnn.synchronize_device(mesh_device)
         profiler.start("model_forward_inference", cur_inference_iteration)
         test_output = model(input_tensor)
         ttnn.synchronize_device(mesh_device)
