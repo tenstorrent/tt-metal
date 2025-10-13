@@ -6,6 +6,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/dataflow/fill_tile_utils.hpp"
+#include "api/debug/dprint.h"
 
 void kernel_main() {
     const uint32_t packed_scalar = get_arg_val<uint32_t>(0);
@@ -20,6 +21,7 @@ void kernel_main() {
     const uint32_t Wt = get_arg_val<uint32_t>(9);
     const uint32_t cND = get_arg_val<uint32_t>(10);  // collapsed dims > 5
     const uint32_t HtWt = Ht * Wt;
+    DPRINT << "+WrScalar: nTilesDst " << dst_num_tiles << ENDL();
 
     constexpr auto cb_id_src = tt::CBIndex::c_1;
     constexpr auto cb_id_dst = tt::CBIndex::c_2;
@@ -28,10 +30,12 @@ void kernel_main() {
     // we only need to fill a tile with the scalar value once
     cb_reserve_back(cb_id_src, onetile);
 #ifdef FILL_WITH_VALUE_FLOAT
+    DPRINT << "+WrScalar: calling FILL_WITH_VALUE_FLOAT" << ENDL();
     const auto float_ptr = reinterpret_cast<const float*>(&packed_scalar);
     FILL_WITH_VALUE_FLOAT(cb_id_src, *float_ptr);
 #endif
 #ifdef FILL_WITH_VALUE
+    DPRINT << "+WrScalar: calling FILL_WITH_VALUE" << ENDL();
     FILL_WITH_VALUE(cb_id_src, packed_scalar);
 #endif
     cb_push_back(cb_id_src, onetile);
