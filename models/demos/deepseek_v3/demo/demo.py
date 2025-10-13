@@ -251,7 +251,7 @@ def main() -> None:
 
     for i, gen_result in enumerate(results["generations"]):
         prompt_text = ""
-        if i < len(args.prompts):
+        if args.prompts is not None and i < len(args.prompts):
             prompt_text = args.prompts[i]
         elif args.random_weights:
             prompt_text = "[random-weights default prompt]"
