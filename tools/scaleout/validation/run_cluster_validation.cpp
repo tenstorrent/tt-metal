@@ -263,17 +263,7 @@ int main(int argc, char* argv[]) {
 
     // Create physical system descriptor and discover the system
     auto physical_system_descriptor = generate_physical_system_descriptor(input_args);
-    AsicTopology asic_topology;
-    for (const auto& [asic_id, asic_connections] :
-         physical_system_descriptor.get_asic_topology(physical_system_descriptor.my_host_name())) {
-        for (const auto& [dst_asic_id, eth_connections] : asic_connections) {
-            if (physical_system_descriptor.get_host_name_for_asic(dst_asic_id) ==
-                physical_system_descriptor.my_host_name()) {
-                asic_topology[asic_id].push_back({dst_asic_id, eth_connections});
-            }
-        }
-    }
-    reset_ethernet_links(physical_system_descriptor, asic_topology);
+    reset_ethernet_links(physical_system_descriptor, physical_system_descriptor.get_asic_topology(physical_system_descriptor.my_host_name()));
     if (*distributed_context.rank() == 0) {
         auto missing_asic_topology = validate_connectivity(input_args, physical_system_descriptor);
     }
