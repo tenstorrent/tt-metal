@@ -66,8 +66,8 @@ void ReshapeDeviceOperation::validate(const std::vector<Tensor>& input_tensors) 
     } else if (input_tensor_a.layout() == Layout::ROW_MAJOR) {
         uint32_t ROW_MAJOR_WIDTH = 8;
         TT_FATAL(
-            input_tensor_a.padded_shape()[3] % ROW_MAJOR_WIDTH == 0 && padded_output_shape[3] % ROW_MAJOR_WIDTH == 0,
-            "Operand/target width must be a multiple of 8");
+            input_tensor_a.padded_shape()[3] % ROW_MAJOR_WIDTH == 0, "Operand/target width must be a multiple of 8");
+        TT_FATAL(padded_output_shape[3] % ROW_MAJOR_WIDTH == 0, "Operand/target width must be a multiple of 8");
     } else {
         TT_THROW("Unsupported layout for reshape");
     }

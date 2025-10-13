@@ -18,8 +18,9 @@ Context::Context() {
 NodeId Context::create_node(
     const std::vector<Tensor>& inputs, const std::string&& operation_name, std::shared_ptr<IDeviceOperation>&& args) {
     NodeId id = next_id_++;
-
     size_t index = nodes_.size();
+
+    args->validate(inputs);
     nodes_.emplace_back(
         id,
         inputs,
