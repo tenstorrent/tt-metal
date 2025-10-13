@@ -364,20 +364,52 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
         mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
     const size_t mux_base_l1_address = l1_unreserved_base_address;
     for (uint32_t link = 0; link < num_links; link++) {
-        uint32_t batch_head_size = input_tensor_shape[0] * input_tensor_shape[1];
+        auto map_nd_to_4d = [&]() {
+            // Here we do a couple of tricks so that the kernels can handle ND tensors
+            // implicitly reshape lower dims so it is treated as 4D
+            uint32_t batch_head_size = std::accumulate(
+                input_tensor_shape.cbegin(), input_tensor_shape.cend() - 2, 1, std::multiplies<uint32_t>());
+            auto dim_normalization = static_cast<int32_t>(input_tensor_shape.rank()) - 4;
+            uint32_t normalized_dim = (dim < std::abs(dim_normalization)) ? dim : dim - dim_normalization;
+            // if the gather dim is 4D normalized to 0,2,3 we can proceed as if nothing has changed
+            // if not we have to roll up the lower dims from the gather dim up to 1 into C and gather on 1.
+            uint32_t c_includes_dim;
+            if (dim_normalization >= 1 && dim <= dim_normalization) {
+                // gather dim to rank-3 accumulated into C
+                c_includes_dim = dim;
+                normalized_dim = 1;
+            } else {
+                // C will be 4D normalized dim 1
+                c_includes_dim = 1 + dim_normalization;
+            }
+
+            uint32_t input_tensor_C = std::accumulate(
+                input_tensor_shape.view().rbegin() + 2,
+                input_tensor_shape.view().rend() - c_includes_dim,
+                1,
+                std::multiplies<uint32_t>());
+
+            uint32_t output_tensor_C = std::accumulate(
+                output_tensor_shape.view().rbegin() + 2,
+                output_tensor_shape.view().rend() - c_includes_dim,
+                1,
+                std::multiplies<uint32_t>());
+
+            return std::make_tuple(normalized_dim, batch_head_size, input_tensor_C, output_tensor_C);
+        };
+
+        const auto [normalized_dim, batch_head_size, input_tensor_C, output_tensor_C] = map_nd_to_4d();
 
         uint32_t single_batch_head_num_pages = input_tensor_num_pages / batch_head_size;
-        TT_FATAL(!(input_tensor_shape[3] % TILE_WIDTH), "Input tensor width must be a multiple of TILE_WIDTH");
-        TT_FATAL(!(output_tensor_shape[3] % TILE_WIDTH), "Output tensor width must be a multiple of TILE_WIDTH");
+        TT_FATAL(!(input_tensor_shape[-1] % TILE_WIDTH), "Input tensor width must be a multiple of TILE_WIDTH");
+        TT_FATAL(!(output_tensor_shape[-1] % TILE_WIDTH), "Output tensor width must be a multiple of TILE_WIDTH");
         uint32_t TILE_WIDTH = 32;
 
-        uint32_t input_tensor_Wt = input_tensor_shape[3] / TILE_WIDTH;
-        uint32_t input_tensor_Ht = input_tensor_shape[2] / TILE_WIDTH;
-        uint32_t input_tensor_C = input_tensor_shape[1];
+        uint32_t input_tensor_Wt = input_tensor_shape[-1] / TILE_WIDTH;
+        uint32_t input_tensor_Ht = input_tensor_shape[-2] / TILE_WIDTH;
 
-        uint32_t output_tensor_Wt = output_tensor_shape[3] / TILE_WIDTH;
-        uint32_t output_tensor_Ht = output_tensor_shape[2] / TILE_WIDTH;
-        uint32_t output_tensor_C = output_tensor_shape[1];
+        uint32_t output_tensor_Wt = output_tensor_shape[-1] / TILE_WIDTH;
+        uint32_t output_tensor_Ht = output_tensor_shape[-2] / TILE_WIDTH;
 
         for (uint32_t dir = 0; dir < num_directions_per_link; dir++) {
             // Fabrix mux kernel
@@ -495,7 +527,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
                     output_tensor_Wt,                                         // width in tiles of entire output
                     output_tensor_Ht,                                         // height in tiles of entire output
                     output_tensor_C,                                          // num output channels
-                    dim,                                                      // dim to gather on
+                    normalized_dim,                                           // dim to gather on
                     batch_head_size,                                          // product of the first two dims
                     input_tile_id_start,                                      //
                     input_tile_id_end,                                        //
@@ -591,7 +623,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
                     output_tensor_Wt,                                            // width in tiles of entire output
                     output_tensor_Ht,                                            // height in tiles of entire output
                     output_tensor_C,                                             // num output channels
-                    dim,                                                         // dim to gather on
+                    normalized_dim,                                              // dim to gather on
                     batch_head_size,                                             // product of the first two dims
                     input_tile_id_start,                                         //
                     input_tile_id_end,                                           //

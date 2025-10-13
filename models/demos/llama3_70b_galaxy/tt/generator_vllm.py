@@ -10,6 +10,8 @@ from models.demos.llama3_70b_galaxy.tt.llama_model import TtTransformer
 from models.demos.llama3_70b_galaxy.tt.model_config import LlamaOptimizations, TtModelArgs
 from models.tt_transformers.tt.generator import create_submeshes
 
+import vllm.envs as envs
+
 
 def allocate_vllm_kv_cache(kv_cache_shape, dtype, num_layers, model: TtTransformer, tt_cache_path):
     submesh_devices = [model.mesh_device]
@@ -49,6 +51,14 @@ def initialize_vllm_text_transformer(
     dtype=ttnn.bfloat8_b,
     optimizations=LlamaOptimizations.performance,
 ):
+    if envs.VLLM_USE_V1:
+        # tt_data_parallel is the total number of DP kv caches, so need to divide by the DP factor of attention.
+        dp_attention_factor = mesh_device.shape[1]
+        assert (
+            tt_data_parallel % dp_attention_factor == 0
+        ), f"Total DP ({tt_data_parallel}) must be divisible by dp_attention_factor ({dp_attention_factor})"
+        tt_data_parallel = tt_data_parallel // dp_attention_factor
+
     submesh_devices = create_submeshes(mesh_device, tt_data_parallel)
     # Load model args, weights
     model_args = []

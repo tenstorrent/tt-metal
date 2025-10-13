@@ -3189,6 +3189,19 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
     CoreRange in0_mcast_receiver_cores_bounding_box = all_cores_with_work.bounding_box();
     uint32_t in0_mcast_receiver_num_cores = in0_mcast_receiver_cores_bounding_box.size();  // always mcast to full grid
 
+    // There should not be any cores without work in the receiver grid. If a grid is
+    // not rectangular, then there will be some cores without work in the receiver grid.
+    // For example, if there are 12 blocks of work, it should be put into a 3x4 grid.
+    // If its laid out in row major with 8 cores in first row and 4 cores in second row,
+    // then there will be 4 cores without work in the receiver grid, causing a hang.
+    // We check for this below and error out.
+    TT_FATAL(
+        num_cores_with_work == in0_mcast_receiver_num_cores,
+        "num_cores_with_work ({}) must be equal to in0_mcast_receiver_num_cores ({}), please adjust the core grid to "
+        "make it rectangular.",
+        num_cores_with_work,
+        in0_mcast_receiver_num_cores);
+
     CoreRangeSet in0_mcast_cores_with_work_and_in_receiver_grid;
     CoreRangeSet in0_mcast_cores_without_work_and_in_receiver_grid;
     CoreRangeSet in0_mcast_cores_without_work_and_not_in_receiver_grid;
@@ -3249,10 +3262,10 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
         (std::uint32_t)Mt * Kt,  // MtKt
         (std::uint32_t)B_A,      // batchA
         // sparsity args
-        (std::uint32_t)B_B,                               // batchB
-        (std::uint32_t)B_B * (uint32_t)sizeof(uint32_t),  // sparsity_pagesize
-        (std::uint32_t)!is_input_a_sparse,                // bcast_A
-        (std::uint32_t)!nnz.has_value(),                  // get_batch_from_reader
+        (std::uint32_t)B_B,                                     // batchB
+        (std::uint32_t)sparsity.buffer()->aligned_page_size(),  // sparsity_pagesize
+        (std::uint32_t)!is_input_a_sparse,                      // bcast_A
+        (std::uint32_t)!nnz.has_value(),                        // get_batch_from_reader
         // fuse op args
         (std::uint32_t)false,  // fuse_op
     };
@@ -3284,8 +3297,8 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
         (std::uint32_t)B_A,      // batchA
         (std::uint32_t)true,     // bcast_B
         // sparsity args
-        (std::uint32_t)B_B,                               // batchB
-        (std::uint32_t)B_B * (uint32_t)sizeof(uint32_t),  // sparsity_pagesize
+        (std::uint32_t)B_B,                                     // batchB
+        (std::uint32_t)sparsity.buffer()->aligned_page_size(),  // sparsity_pagesize
 
         // WRITER
         // out tensor args
@@ -3509,12 +3522,14 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
     uint32_t sparsity_cb_index0 = tt::CBIndex::c_6;
     uint32_t sparsity_cb_index1 = tt::CBIndex::c_7;
 
-    uint32_t sparsity_cb_size = B_B * sizeof(uint32_t);
+    uint32_t sparsity_cb_size = sparsity.buffer()->aligned_page_size();
     tt_metal::CircularBufferConfig sparsity_cb_config0 =
-        tt_metal::CircularBufferConfig(sparsity_cb_size, {{sparsity_cb_index0, tt::DataFormat::Float32}})
+        tt_metal::CircularBufferConfig(
+            sparsity_cb_size, {{sparsity_cb_index0, tt::tt_metal::datatype_to_dataformat_converter(sparsity.dtype())}})
             .set_page_size(sparsity_cb_index0, sparsity_cb_size);
     tt_metal::CircularBufferConfig sparsity_cb_config1 =
-        tt_metal::CircularBufferConfig(sparsity_cb_size, {{sparsity_cb_index1, tt::DataFormat::Float32}})
+        tt_metal::CircularBufferConfig(
+            sparsity_cb_size, {{sparsity_cb_index1, tt::tt_metal::datatype_to_dataformat_converter(sparsity.dtype())}})
             .set_page_size(sparsity_cb_index1, sparsity_cb_size);
 
     tt_metal::CreateCircularBuffer(program, all_cores, sparsity_cb_config0);
