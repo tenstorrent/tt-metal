@@ -1077,7 +1077,7 @@ def run_test_sdpa_decode_paged_attention_with_page_table_tensor_with_saved_tenso
     reverse_permutation = torch.argsort(permutation).repeat(1)  # data_parallel = 1
     page_table = reverse_permutation.reshape(b, max_num_blocks // b // 1)  # 1024 // 32 // 1 = 32  #  (32, 32)
     # load page_table from file
-    page_table_from_file = torch.load(f"tensor_outputs/tensor_page_table_batch_{b}.pt")
+    page_table_from_file = torch.load(f"/proj_sw/user_dev/aling/sdpa-badoutput/tensor_page_table_batch_{b}.pt")
     # remove last dim half duplicates
     page_table_from_file = page_table_from_file[..., : page_table_from_file.shape[-1] // 2]
     assert page_table_from_file.shape == page_table.shape
@@ -1105,7 +1105,7 @@ def run_test_sdpa_decode_paged_attention_with_page_table_tensor_with_saved_tenso
     paged_k = fa_rand(max_num_blocks, nkv, block_size, d)
     paged_v = fa_rand(max_num_blocks, nkv, block_size, d)
 
-    q_heads_1BQD_from_file = torch.load(f"tensor_outputs/tensor_3_0_batch_{b}.pt")
+    q_heads_1BQD_from_file = torch.load(f"/proj_sw/user_dev/aling/sdpa-badoutput/tensor_3_0_batch_{b}.pt")
     # reshape from (1, b, nh // 2, d*2) to (1, b, nh, d)
     # chunk and cat to (1, b, nh, d)
     q_heads_1BQD_from_file = torch.cat(torch.chunk(q_heads_1BQD_from_file, 2, dim=-1), dim=2)
@@ -1116,12 +1116,16 @@ def run_test_sdpa_decode_paged_attention_with_page_table_tensor_with_saved_tenso
     paged_k_shuffled = paged_k[permutation]
     paged_v_shuffled = paged_v[permutation]
 
-    paged_k_shuffled_from_file = torch.load(f"tensor_outputs/tensor_keys_after_update_batch_{b}.pt")
+    paged_k_shuffled_from_file = torch.load(
+        f"/proj_sw/user_dev/aling/sdpa-badoutput/tensor_keys_after_update_batch_{b}.pt"
+    )
     paged_k_shuffled_from_file = torch.cat(torch.chunk(paged_k_shuffled_from_file, 2, dim=-1), dim=1)
     assert paged_k_shuffled_from_file.shape == paged_k_shuffled.shape
     paged_k_shuffled = paged_k_shuffled_from_file
 
-    paged_v_shuffled_from_file = torch.load(f"tensor_outputs/tensor_values_after_update_batch_{b}.pt")
+    paged_v_shuffled_from_file = torch.load(
+        f"/proj_sw/user_dev/aling/sdpa-badoutput/tensor_values_after_update_batch_{b}.pt"
+    )
     paged_v_shuffled_from_file = torch.cat(torch.chunk(paged_v_shuffled_from_file, 2, dim=-1), dim=1)
     assert paged_v_shuffled_from_file.shape == paged_v_shuffled.shape
     paged_v_shuffled = paged_v_shuffled_from_file
@@ -1251,14 +1255,14 @@ def run_test_sdpa_decode_paged_attention_with_page_table_tensor_with_saved_tenso
         [V_slice[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1
     )  # (b, nh, padded_seq_len, d)
 
+    # 6. Reshape Q for PyTorch SDPA: (1, b, nh, d) -> (b, nh, 1, d)
+    Q_slice = q_heads_1BQD.permute(1, 2, 0, 3)  # (b, nh, 1, d)
+
     # 5. Create attn_mask
-    attn_mask = torch.zeros((b, nh, 1, padded_seq_len), dtype=torch.float32)
+    attn_mask = torch.zeros((b, nh, 1, padded_seq_len), dtype=Q_slice.dtype)
 
     for i in range(b):
         attn_mask[i, :, :, max_start_idx + 1 :] = float("-inf")
-
-    # 6. Reshape Q for PyTorch SDPA: (1, b, nh, d) -> (b, nh, 1, d)
-    Q_slice = q_heads_1BQD.permute(1, 2, 0, 3)  # (b, nh, 1, d)
 
     # 7. Run PyTorch reference
     torch_ref = torch.nn.functional.scaled_dot_product_attention(
