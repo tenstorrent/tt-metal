@@ -47,7 +47,7 @@ def estimate_mesh_axis(x, dim, rank):
     """
     Estimate the mesh axis based on the shape of the input tensor and mesh device.
     Warning: Very Fragile function. Use with extreme caution. Proper data annotation by the op is the ultimate solution.
-    Failure case: If device shape is a square, 0 then the dim to estimate must be sharded on axis 0, else the result will be incorrect.
+    Failure case: If device shape is a square, then the dim to estimate must be sharded on axis 0, else the result will be incorrect.
     """
     if rank == x.device().shape[0] * x.shape[dim]:
         return 0
