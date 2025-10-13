@@ -65,9 +65,9 @@ FORCE_INLINE void wait_for_fabric_endpoint_ready(
 
     local_fabric_ep_status_ptr[0] = tt::tt_fabric::FabricEndpointStatus::TERMINATED;
     do {
-        invalidate_l1_cache();
         noc_async_read_one_packet(noc_addr, local_fabric_ep_status_address, 4);
         noc_async_read_barrier();
+        invalidate_l1_cache();
     } while (local_fabric_ep_status_ptr[0] != tt::tt_fabric::FabricEndpointStatus::READY_FOR_TRAFFIC);
 }
 
