@@ -54,5 +54,5 @@ pytest --disable-warnings models/demos/blackhole/vit/demo/demo_vit_performant_im
 - Dataset Used: `ImageNet-21k dataset`.
 
 ### Results
-- Model runtime (host end-2-end) is `~2460` FPS
+- Model runtime (host end-2-end) is `~3600` FPS
 - The Imagenet-21K inference accuracy is `80%`

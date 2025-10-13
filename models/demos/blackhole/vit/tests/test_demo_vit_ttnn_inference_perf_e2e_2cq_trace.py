@@ -122,8 +122,8 @@ def run_trace_2cq_model(device, test_infra, num_warmup_iterations, num_measureme
     "device_params", [{"l1_small_size": 32768, "num_command_queues": 2, "trace_region_size": 2771968}], indirect=True
 )
 @pytest.mark.parametrize("batch_size", [10])
-def test_vit(device, batch_size, is_single_card_n300):
-    expected_samples_per_sec = 3500
+def test_vit(device, batch_size):
+    expected_samples_per_sec = 3600
     torch.manual_seed(0)
 
     profiler.clear()
