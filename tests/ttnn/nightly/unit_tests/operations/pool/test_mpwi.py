@@ -13,7 +13,7 @@ def test_max_pool2d_with_indices(device):
     in_n = 1
     in_h = 159
     in_w = 159
-    in_c = 32
+    in_c = 1
     kernel_size = [3, 3]
     stride = [1, 1]
     padding = [1, 1]

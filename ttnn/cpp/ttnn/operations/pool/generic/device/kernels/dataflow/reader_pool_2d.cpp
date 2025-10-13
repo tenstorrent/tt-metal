@@ -119,14 +119,8 @@ ALWI void read_window_with_top_left_index(
     uint32_t max_write_inc = wide_reduction ? MAX_BYTES_PER_REDUCTION : in_nbytes_leftover;
     if constexpr (return_indices) {
         static_assert(MAX_TILES_PER_REDUCTION == 1, "MAX_TILES_PER_REDUCTION must be 1 for return indices");
+        max_write_inc = TILE_WIDTH * BYTES_PER_ELEM;
     }
-#ifdef ARCH_BLACKHOLE
-    if constexpr (return_indices) {
-        if (in_c <= FACE_WIDTH) {
-            max_write_inc = FACE_WIDTH * BYTES_PER_ELEM;
-        }
-    }
-#endif
     for (uint32_t c_i = 0; c_i < in_nblocks_c; c_i++) {
         uint32_t read_bytes = in_nbytes_c;
         if constexpr (wide_reduction) {
@@ -223,8 +217,6 @@ ALWI void read_window_with_top_left_index(
         if constexpr (!is_large_kernel) {
             noc_async_read_barrier();
 
-            // tt::data_movement::common::print_bf16_pages(get_read_ptr(in_cb_id), 32, 1);
-
             cb_push_back(in_cb_id, 1);
             if constexpr (return_indices) {
                 cb_push_back(in_idx_cb_id, 1);
@@ -236,13 +228,11 @@ ALWI void read_window_with_top_left_index(
                     c_i == in_nblocks_c - 1 ? num_faces_in_last_output_tile : num_faces_in_output_tile;
 
                 cb_wait_front(tile_tmp_cb_id, 1);
-                // tt::data_movement::common::print_bf16_pages(get_read_ptr(tile_tmp_cb_id), 32, 32);
                 noc_async_read_one_packet(
                     get_noc_addr(get_read_ptr(tile_tmp_cb_id)),
                     get_write_ptr(out_cb_id),
                     output_faces * FACE_WIDTH * BYTES_PER_ELEM);
                 cb_wait_front(tile_idx_tmp_cb_id, 1);
-                // tt::data_movement::common::print_u16_pages(get_read_ptr(tile_idx_tmp_cb_id), 32, 32);
                 noc_async_read_one_packet(
                     get_noc_addr(get_read_ptr(tile_idx_tmp_cb_id)),
                     get_write_ptr(out_idx_cb_id),
