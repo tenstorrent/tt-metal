@@ -38,8 +38,6 @@ private:
     std::unordered_map<int, inspector::MeshDeviceData> mesh_devices_data{};
     std::unordered_map<uint64_t, inspector::MeshWorkloadData> mesh_workloads_data{};
 
-    // fw_compile_hash needs to be atomic because it is set in MetalContext::initialize()
-    std::atomic<uint64_t> fw_compile_hash{};
     friend class tt::tt_metal::Inspector;
 };
 

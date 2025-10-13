@@ -109,8 +109,6 @@ void MetalContext::initialize(
 
     // Initialize inspector
     inspector_data_ = Inspector::initialize();
-    // Set fw_compile_hash for Inspector RPC build environment info
-    Inspector::set_build_env_fw_compile_hash(fw_compile_hash);
 
     // Initialize dispatch state
     dispatch_core_manager_ = std::make_unique<dispatch_core_manager>(dispatch_core_config, num_hw_cqs);
@@ -155,14 +153,7 @@ void MetalContext::initialize(
 
         // Create build env for this device, and build FW if it's not built already
         BuildEnvManager::get_instance().add_build_env(device_id, num_hw_cqs_);
-        // fw_build_key is a combination of build_key and fw_compile_hash
-        // If fw_compile_hash changes, the fw_build_key will change and FW will be rebuilt
-        // if it's not already in firmware_built_keys_
-        // Combine build_key and fw_compile_hash using XOR to create unique firmware build key
-        // Uses full 64-bit fw_compile_hash for proper change detection
-        uint64_t fw_build_key =
-            (static_cast<uint64_t>(BuildEnvManager::get_instance().get_device_build_env(device_id).build_key)) ^
-            fw_compile_hash;
+        uint32_t fw_build_key = BuildEnvManager::get_instance().get_device_build_env(device_id).build_key;
 
         if (!firmware_built_keys_.contains(fw_build_key)) {
             BuildEnvManager::get_instance().build_firmware(device_id);

@@ -222,7 +222,6 @@ void Data::rpc_get_all_build_envs(rpc::Inspector::GetAllBuildEnvsResults::Builde
     const auto& build_envs_info = BuildEnvManager::get_instance().get_all_build_envs_info();
     // Populate RPC response with build environment info for all devices
     auto result_build_envs = results.initBuildEnvs(build_envs_info.size());
-    const auto fw_compile_hash = this->fw_compile_hash.load(std::memory_order_acquire);
     size_t i = 0;
     for (const auto& build_env : build_envs_info) {
         auto item = result_build_envs[i++];
@@ -231,7 +230,6 @@ void Data::rpc_get_all_build_envs(rpc::Inspector::GetAllBuildEnvsResults::Builde
         auto build_info = item.initBuildInfo();
         build_info.setBuildKey(build_env.build_key);
         build_info.setFirmwarePath(build_env.firmware_root_path);
-        build_info.setFwCompileHash(fw_compile_hash);
     }
 }
 
