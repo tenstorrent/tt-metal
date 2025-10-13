@@ -113,7 +113,7 @@ def test_point_to_point(mesh_device, shape_coords, layout, dtype):
     "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 500000}], indirect=True
 )
 @pytest.mark.parametrize("mesh_device", [MESH_SHAPE], indirect=True)
-@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT], ids=["row_major", "tile"])
 @pytest.mark.parametrize("shape_coords", [((1, 1, 1, 16), ((0, 0), (0, 1)))])
 @pytest.mark.parametrize("dtype", [torch.bfloat16])
 def test_point_to_point_with_device_delay(mesh_device, shape_coords, layout, dtype):

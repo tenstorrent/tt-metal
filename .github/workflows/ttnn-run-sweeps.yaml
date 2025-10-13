@@ -512,6 +512,7 @@ on:
           - matmul.short.matmul_user_program_config_mcast_1d
           - matmul.short.matmul_user_program_config_mcast_2d
           - matmul.sparse.sparse_matmul
+          - matmul.sparse.batched_sparse_matmul
           - max_pool2d.full.max_pool2d_large_dims
           - max_pool2d.full.max_pool2d_params
           - max_pool2d.short.max_pool2d_short_sweep

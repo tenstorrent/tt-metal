@@ -23,6 +23,8 @@ on:
           - P150
           - config-t3000
           - config-tg
+          - topology-6u
+          - config-t3000
         description: "Runner Type Label"
       good-commit:
         required: true
@@ -73,7 +75,7 @@ jobs:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
         - /home/ubuntu/.ccache-ci:/github/home/.ccache # HOME is hardcoded for no clear reason: https://github.com/actions/runner/issues/863
-        - /mnt/MLPerf/ccache:/mnt/MLPerf/ccache
+        - /mnt/MLPerf:/mnt/MLPerf:ro
       options: >
         --device /dev/tenstorrent
         --group-add 1457
