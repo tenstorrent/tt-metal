@@ -63,7 +63,7 @@ ConnectorType get_connector_type(chip_id_t chip_id, CoreCoord eth_core, uint32_t
                     return ConnectorType::WARP;
                 } else if (chan == 0 || chan == 1 || chan == 6 || chan == 7) {
                     return ConnectorType::QSFP;
-                } else if ((chan == 8 || chan == 9) && board_type == tt::umd::BoardType::N300) {
+                } else if ((chan == 8 || chan == 9) && board_type == BoardType::N300) {
                     return ConnectorType::TRACE;
                 }
                 return ConnectorType::UNUSED;
@@ -77,13 +77,13 @@ ConnectorType get_connector_type(chip_id_t chip_id, CoreCoord eth_core, uint32_t
             }
         }
     } else if (arch == tt::ARCH::BLACKHOLE) {
-        if (board_type == tt::umd::BoardType::P150) {
+        if (board_type == BoardType::P150) {
             if (4 <= chan && chan <= 11) {
                 return ConnectorType::QSFP;
             } else {
                 return ConnectorType::UNUSED;
             }
-        } else if (board_type == tt::umd::BoardType::P300) {
+        } else if (board_type == BoardType::P300) {
             auto asic_loc = cluster.get_cluster_desc()->get_asic_location(chip_id);
             if (asic_loc == 1) {
                 // Left Chip
