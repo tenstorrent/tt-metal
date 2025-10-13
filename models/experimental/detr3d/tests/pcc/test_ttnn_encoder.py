@@ -23,6 +23,7 @@ from models.experimental.detr3d.ttnn.masked_transformer_encoder import (
     EncoderLayerArgs,
 )
 from models.experimental.detr3d.ttnn.pointnet_samodule_votes import TtnnPointnetSAModuleVotes
+from models.experimental.detr3d.common import load_torch_model_state
 
 
 def compute_mask(device, xyz, radius, dist=None):
@@ -40,11 +41,11 @@ def compute_mask(device, xyz, radius, dist=None):
 @torch.no_grad()
 @skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
-    "batch_size, seq_len, d_model, nhead, normalize_before",
+    "batch_size, seq_len, d_model, nhead, normalize_before, masking_radius, weight_key_prefix",
     [
-        (1, 2048, 256, 4, True),
-        (1, 1024, 256, 4, True),
-        (1, 128, 256, 4, False),
+        (1, 2048, 256, 4, True, 0.16000000000000003, "encoder.layers.0"),
+        (1, 1024, 256, 4, True, 0.6400000000000001, "encoder.layers.1"),
+        (1, 1024, 256, 4, True, 1.44, "encoder.layers.2"),
     ],
 )
 def test_transformer_encoder_layer_inference(
@@ -53,6 +54,8 @@ def test_transformer_encoder_layer_inference(
     d_model,
     nhead,
     normalize_before,
+    masking_radius,
+    weight_key_prefix,
     device,
 ):
     """Test TTTransformerEncoderLayer against PyTorch reference implementation"""
@@ -66,12 +69,13 @@ def test_transformer_encoder_layer_inference(
         d_model,
         nhead,
         normalize_before=normalize_before,
-    ).eval()
+    )
+    load_torch_model_state(reference_model, weight_key_prefix)
 
     # Create test inputs
     src_input = torch.randn(seq_len, batch_size, d_model, dtype=torch.float32)
     xyz = torch.randn(batch_size, seq_len, 3, dtype=torch.float32)
-    attn_mask, attn_mask_ttnn = compute_mask(mesh_device, xyz, 0.16000000000000003, None)
+    attn_mask, attn_mask_ttnn = compute_mask(mesh_device, xyz, masking_radius, None)
     # mask must be tiled to num_heads of the transformer
     bsz, n, n = attn_mask.shape
     attn_mask = attn_mask.unsqueeze(1)
@@ -261,9 +265,10 @@ def test_masked_transformer_encoder_inference(
         interim_downsampling,
         norm=None,
     )
+    load_torch_model_state(ref_module, "encoder")
+
     src = torch.randn(src_shape)
     xyz = torch.randn(xyz_shape)
-    ref_module.eval()
     ref_out = ref_module(src, mask, None, pos, xyz, transpose_swap)
 
     ref_module_parameters = preprocess_model_parameters(

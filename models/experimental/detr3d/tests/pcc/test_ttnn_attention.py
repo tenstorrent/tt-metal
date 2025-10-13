@@ -11,9 +11,10 @@ from models.experimental.detr3d.ttnn.multihead_attention import TTNNMultiheadAtt
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from loguru import logger
+from models.experimental.detr3d.common import load_torch_model_state
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 13684}], indirect=True)
 @pytest.mark.parametrize("batch_size", [128])
 @pytest.mark.parametrize("seq_len", [1])
 @pytest.mark.parametrize("d_model", [256])
@@ -22,7 +23,8 @@ def test_multihead_attention(device, batch_size, seq_len, d_model, nhead, reset_
     """Test TTNN MultiheadAttention against PyTorch reference implementation"""
 
     # Create PyTorch reference model
-    torch_mha = torch.nn.MultiheadAttention(embed_dim=d_model, num_heads=nhead, batch_first=False).eval()
+    torch_mha = torch.nn.MultiheadAttention(embed_dim=d_model, num_heads=nhead, batch_first=False)
+    load_torch_model_state(torch_mha, "encoder.layers.0.self_attn")
 
     # Create TTNN model
     ttnn_mha = TTNNMultiheadAttention(d_model, nhead, device)

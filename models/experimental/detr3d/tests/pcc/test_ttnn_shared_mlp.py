@@ -10,10 +10,11 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.experimental.detr3d.reference.detr3d_model import SharedMLP
 from models.experimental.detr3d.ttnn.custom_preprocessing import create_custom_mesh_preprocessor
+from models.experimental.detr3d.common import load_torch_model_state
 
 
 @pytest.mark.parametrize(
-    "mlp,bn,features_shape,weight_key_prefix",
+    "mlp, bn, features_shape, weight_key_prefix",
     [
         ([3, 64, 128, 256], True, (1, 3, 2048, 64), "pre_encoder.mlp_module"),  # mlp  # bn  # weight prefix
         (
@@ -27,26 +28,8 @@ from models.experimental.detr3d.ttnn.custom_preprocessing import create_custom_m
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_ttnn_shared_mlp(device, mlp, bn, features_shape, weight_key_prefix, reset_seeds):
     torch_model = SharedMLP(mlp, bn=bn).to(torch.bfloat16)
+    load_torch_model_state(torch_model, weight_key_prefix)
 
-    # Load actual model weights from checkpoint
-    weights_path = "models/experimental/detr3d/sunrgbd_masked_ep720.pth"
-    state_dict = torch.load(weights_path, map_location="cpu")["model"]
-
-    # Extract weights for the specific SharedMLP module
-    shared_mlp_state_dict = {k: v for k, v in state_dict.items() if k.startswith(weight_key_prefix)}
-
-    # Map the checkpoint keys to the SharedMLP model keys
-    new_state_dict = {}
-    model_keys = [name for name, parameter in torch_model.state_dict().items()]
-    checkpoint_values = [parameter for name, parameter in shared_mlp_state_dict.items()]
-
-    for i in range(len(model_keys)):
-        new_state_dict[model_keys[i]] = checkpoint_values[i]
-
-    # Load the mapped weights into the model
-    torch_model.load_state_dict(new_state_dict, strict=True)
-    print(f"Successfully loaded weights for {weight_key_prefix}")
-    torch_model.eval()
     features = torch.randn(features_shape, dtype=torch.bfloat16)
     ref_out = torch_model(features)
 

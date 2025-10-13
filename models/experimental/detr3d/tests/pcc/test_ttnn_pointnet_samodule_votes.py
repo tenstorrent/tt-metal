@@ -10,10 +10,11 @@ from models.experimental.detr3d.ttnn.pointnet_samodule_votes import TtnnPointnet
 from tests.ttnn.utils_for_testing import comp_pcc
 from ttnn.model_preprocessing import preprocess_model_parameters
 from models.experimental.detr3d.ttnn.custom_preprocessing import create_custom_mesh_preprocessor
+from models.experimental.detr3d.common import load_torch_model_state
 
 
 @pytest.mark.parametrize(
-    "mlp, npoint, radius, nsample, bn, use_xyz, pooling, sigma, normalize_xyz, sample_uniformly, ret_unique_cnt,xyz_shape,features_shape,inds_shape",
+    "mlp, npoint, radius, nsample, bn, use_xyz, pooling, sigma, normalize_xyz, sample_uniformly, ret_unique_cnt,xyz_shape,features_shape,inds_shape, weight_key_prefix",
     [
         (
             [0, 64, 128, 256],  # mlp
@@ -30,6 +31,7 @@ from models.experimental.detr3d.ttnn.custom_preprocessing import create_custom_m
             (1, 20000, 3),  # xyz
             None,  # features
             None,  # inds
+            "pre_encoder",
         ),
         (
             [256, 256, 256, 256],  # mlp
@@ -46,6 +48,7 @@ from models.experimental.detr3d.ttnn.custom_preprocessing import create_custom_m
             (1, 2048, 3),  # xyz
             (1, 256, 2048),  # features
             None,  # inds
+            "encoder.interim_downsampling",
         ),
     ],
 )
@@ -65,6 +68,7 @@ def test_pointnet_samodule_votes(
     xyz_shape,
     features_shape,
     inds_shape,
+    weight_key_prefix,
     device,
 ):
     torch_model = PointnetSAModuleVotes(
@@ -80,18 +84,7 @@ def test_pointnet_samodule_votes(
         sample_uniformly=sample_uniformly,
         ret_unique_cnt=ret_unique_cnt,
     ).to(torch.bfloat16)
-    # weights_path = "models/experimental/detr3d/sunrgbd_masked_ep720.pth"
-    # state_dict = torch.load(weights_path)["model"]
-
-    # pointnet_state_dict = {k: v for k, v in state_dict.items() if (k.startswith("pre_encoder"))}
-    # new_state_dict = {}
-    # keys = [name for name, parameter in torch_model.state_dict().items()]
-    # values = [parameter for name, parameter in pointnet_state_dict.items()]
-
-    # for i in range(len(keys)):
-    #     new_state_dict[keys[i]] = values[i]
-
-    torch_model.eval()
+    load_torch_model_state(torch_model, weight_key_prefix)
 
     if xyz_shape is not None:
         xyz = torch.randn(xyz_shape, dtype=torch.bfloat16)

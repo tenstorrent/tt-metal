@@ -10,16 +10,111 @@ from models.experimental.detr3d.reference.detr3d_model import GenericMLP
 from ttnn.model_preprocessing import preprocess_model_parameters
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.experimental.detr3d.ttnn.custom_preprocessing import create_custom_mesh_preprocessor
+from models.experimental.detr3d.common import load_torch_model_state
 
 
 @pytest.mark.parametrize(
     "input_dim,hidden_dims,output_dim,norm_fn_name,activation,use_conv,"
     "hidden_use_bias,output_use_bias,output_use_activation,output_use_norm,"
-    "weight_init_name,dropout,x_shape",
+    "weight_init_name,dropout,x_shape, weight_key_prefix",
     [
-        (256, [256], 256, "bn1d", "relu", True, False, False, True, True, None, None, (1, 256, 1024)),
-        (256, [256], 256, None, "relu", True, True, True, True, False, None, None, (1, 256, 128)),
-        (256, [256, 256], 12, "bn1d", "relu", True, False, True, False, False, None, None, (8, 256, 128)),
+        (
+            256,
+            [256],
+            256,
+            "bn1d",
+            "relu",
+            True,
+            False,
+            False,
+            True,
+            True,
+            None,
+            None,
+            (1, 256, 1024),
+            "encoder_to_decoder_projection",
+        ),
+        (256, [256], 256, None, "relu", True, True, True, True, False, None, None, (1, 256, 128), "query_projection"),
+        (
+            256,
+            [256, 256],
+            11,
+            "bn1d",
+            "relu",
+            True,
+            False,
+            True,
+            False,
+            False,
+            None,
+            0.0,
+            (8, 256, 128),
+            "mlp_heads.sem_cls_head",
+        ),
+        (
+            256,
+            [256, 256],
+            3,
+            "bn1d",
+            "relu",
+            True,
+            False,
+            True,
+            False,
+            False,
+            None,
+            0.0,
+            (8, 256, 128),
+            "mlp_heads.center_head",
+        ),
+        (
+            256,
+            [256, 256],
+            3,
+            "bn1d",
+            "relu",
+            True,
+            False,
+            True,
+            False,
+            False,
+            None,
+            0.0,
+            (8, 256, 128),
+            "mlp_heads.size_head",
+        ),
+        (
+            256,
+            [256, 256],
+            12,
+            "bn1d",
+            "relu",
+            True,
+            False,
+            True,
+            False,
+            False,
+            None,
+            0.0,
+            (8, 256, 128),
+            "mlp_heads.angle_cls_head",
+        ),
+        (
+            256,
+            [256, 256],
+            12,
+            "bn1d",
+            "relu",
+            True,
+            False,
+            True,
+            False,
+            False,
+            None,
+            0.0,
+            (8, 256, 128),
+            "mlp_heads.angle_residual_head",
+        ),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
@@ -37,6 +132,7 @@ def test_ttnn_generic_mlp(
     weight_init_name,
     dropout,
     x_shape,
+    weight_key_prefix,
     device,
 ):
     torch_model = GenericMLP(
@@ -53,7 +149,8 @@ def test_ttnn_generic_mlp(
         output_use_norm,
         weight_init_name,
     ).to(torch.bfloat16)
-    torch_model.eval()
+    load_torch_model_state(torch_model, weight_key_prefix)
+
     x = torch.randn(x_shape, dtype=torch.bfloat16)
     torch_out = torch_model(x)
     parameters = preprocess_model_parameters(
