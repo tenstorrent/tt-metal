@@ -14,6 +14,7 @@
 #include "llk_operands.h"
 #include "llk_param_structs.h"
 #include "llk_unpack_common.h"
+#include "debug/dprint.h"
 #include "debug/waypoint.h"
 
 /*************************************************************************
@@ -58,6 +59,8 @@ inline void llk_unpack_reconfig_data_format_srca(const std::uint32_t srca_new_op
     const std::uint32_t srca_operand_id = get_operand_id(srca_new_operand);
     const std::uint32_t num_faces = get_operand_num_faces(srca_operand_id);
     const std::uint32_t face_r_dim = get_operand_face_r_dim(srca_operand_id);
+    DPRINT << "+URCFGA: sF " << static_cast<int>(unpack_src_format[srca_operand_id])
+           << " dF " << static_cast<int>(unpack_dst_format[srca_operand_id]) << ENDL();
     _llk_unpack_reconfig_data_format_srca_impl_<is_fp32_dest_acc_en, to_from_int8>(
         unpack_src_format[srca_operand_id],
         unpack_dst_format[srca_operand_id],
@@ -69,6 +72,8 @@ inline void llk_unpack_reconfig_data_format_srcb(const std::uint32_t srcb_new_op
     std::uint32_t srcb_operand_id = get_operand_id(srcb_new_operand);
     const std::uint32_t num_faces = get_operand_num_faces(srcb_operand_id);
     const std::uint32_t face_r_dim = get_operand_face_r_dim(srcb_operand_id);
+    DPRINT << "+URCFGB: sF " << static_cast<int>(unpack_src_format[srcb_operand_id])
+           << " dF " << static_cast<int>(unpack_dst_format[srcb_operand_id]) << ENDL();
     _llk_unpack_reconfig_data_format_srcb_impl_<is_fp32_dest_acc_en, to_from_int8>(
         unpack_src_format[srcb_operand_id],
         unpack_dst_format[srcb_operand_id],
@@ -80,6 +85,8 @@ inline void llk_unpack_reconfig_data_format_srca(
     const std::uint32_t srca_old_operand, const std::uint32_t srca_new_operand) {
     std::uint32_t old_srca_operand_id = get_operand_id(srca_old_operand);
     std::uint32_t new_srca_operand_id = get_operand_id(srca_new_operand);
+    DPRINT << "+URCFGA: " << static_cast<int>(unpack_src_format[old_srca_operand_id])
+           << "->" << static_cast<int>(unpack_src_format[new_srca_operand_id]) << ENDL();
 
     if (should_reconfigure_cbs(srca_old_operand, srca_new_operand)) {
         llk_unpack_reconfig_data_format_srca<is_fp32_dest_acc_en, to_from_int8, is_tile_dim_reconfig_en>(
@@ -95,6 +102,8 @@ inline void llk_unpack_reconfig_data_format_srcb(
     const std::uint32_t srcb_old_operand, const std::uint32_t srcb_new_operand) {
     std::uint32_t old_srcb_operand_id = get_operand_id(srcb_old_operand);
     std::uint32_t new_srcb_operand_id = get_operand_id(srcb_new_operand);
+    DPRINT << "+URCFGB: " << static_cast<int>(unpack_src_format[old_srcb_operand_id])
+           << "->" << static_cast<int>(unpack_src_format[new_srcb_operand_id]) << ENDL();
 
     if (should_reconfigure_cbs(srcb_old_operand, srcb_new_operand)) {
         llk_unpack_reconfig_data_format_srcb<is_fp32_dest_acc_en, to_from_int8, is_tile_dim_reconfig_en>(

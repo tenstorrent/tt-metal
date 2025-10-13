@@ -115,12 +115,15 @@ operation::ProgramWithCallbacks Tilize::create_program(
     }
     if (input_tensor_a.memory_config().is_sharded()) {
         TT_FATAL(!this->sub_core_grids.has_value(), "Sharded tilize does not support sub core grid specification");
+        fprintf(stderr, "-- Tilize::create_program: calling tilize_multi_core_sharded()\n");
         return detail::tilize_multi_core_sharded(input_tensor_a, output_tensor);
     }
     if (!this->enough_space_height) {
+        fprintf(stderr, "-- Tilize::create_program: calling tilize_multi_core_block()\n");
         return detail::tilize_multi_core_block(input_tensor_a, output_tensor, this->sub_core_grids);
     }
 
+    fprintf(stderr, "-- Tilize::create_program: calling tilize_multi_core_interleaved()\n");
     return detail::tilize_multi_core_interleaved(input_tensor_a, output_tensor, this->sub_core_grids);
 }
 
