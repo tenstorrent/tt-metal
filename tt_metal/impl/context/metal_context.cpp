@@ -13,6 +13,7 @@
 #include "dispatch/dispatch_settings.hpp"
 #include "hal.hpp"
 #include "hal_types.hpp"
+#include "impl/debug/inspector/rpc_server_generated.hpp"
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
 #include "tt_metal/impl/debug/dprint_server.hpp"
