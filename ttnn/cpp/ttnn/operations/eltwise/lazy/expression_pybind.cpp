@@ -3,15 +3,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "expression_pybind.hpp"
-#include "expression.hpp"
 #include "lazy.hpp"
+
 #include <ttnn-pybind/export_enum.hpp>
 #include <tt_stl/type_name.hpp>
 
-#include <fmt/format.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
-#include <pybind11/stl_bind.h>
 
 PYBIND11_MAKE_OPAQUE(ttnn::operations::lazy::Arguments<ttnn::operations::lazy::ExpressionView>);
 
@@ -19,38 +17,37 @@ namespace ttnn::operations::lazy {
 
 template <typename T>
 void bind_iterable(py::handle scope, const std::string& name) {
-    auto binding =
-        py::class_<T>(scope, name.c_str())
-            .def(py::init<>())
-            .def(py::init<const T&>())
-            .def(
-                "__getitem__",
-                [](const T& iterable, std::ptrdiff_t i) {
-                    if (i < 0) {
-                        i += iterable.size();
-                        if (i < 0) {
-                            throw py::index_error();
-                        }
-                    }
-                    auto i_st = static_cast<std::size_t>(i);
-                    if (i_st >= iterable.size()) {
-                        throw py::index_error();
-                    }
-                    return iterable[i_st];
-                })
-            .def(
-                "__iter__",
-                [](const T& iterable) {
-                    return py::make_iterator<py::return_value_policy::copy>(iterable.begin(), iterable.end());
-                },
-                py::keep_alive<0, 1>())
-            .def("__bool__", [](const T& iterable) { return not iterable.empty(); })
-            .def("__len__", &T::size);
+    auto cls = py::class_<T>(scope, name.c_str())
+                   .def(py::init<>())
+                   .def(py::init<const T&>())
+                   .def(
+                       "__getitem__",
+                       [](const T& iterable, std::ptrdiff_t i) {
+                           if (i < 0) {
+                               i += iterable.size();
+                               if (i < 0) {
+                                   throw py::index_error();
+                               }
+                           }
+                           auto i_st = static_cast<std::size_t>(i);
+                           if (i_st >= iterable.size()) {
+                               throw py::index_error();
+                           }
+                           return iterable[i_st];
+                       })
+                   .def(
+                       "__iter__",
+                       [](const T& iterable) {
+                           return py::make_iterator<py::return_value_policy::copy>(iterable.begin(), iterable.end());
+                       },
+                       py::keep_alive<0, 1>())
+                   .def("__bool__", [](const T& iterable) { return not iterable.empty(); })
+                   .def("__len__", &T::size);
 
     using value_type = typename T::value_type;
 
     if constexpr (requires(T& iter, const value_type& val) { iter.push_back(val); }) {
-        binding.def(py::init([](const py::list& list) {
+        cls.def(py::init([](const py::list& list) {
             T result;
 
             for (const auto& item : list) {
@@ -71,36 +68,46 @@ auto def_overload(py::class_<Func>& cls, const Extra&... extra) {
     }
 }
 
+template <typename Func, typename Derived, typename... Args>
+void def_overloads(py::class_<Func>& cls, OverloadsFor<Derived, Args...>) {
+    using mp_pybind_map = mp::mp_list<
+        // also bind const Tensor& wherever ExpressionView is bound
+        mp::mp_list<ExpressionView, const Tensor&>
+        // additional binding map elements go here
+        >;
+
+    using mp_overloads = mp::mp_product<mp::mp_list, mp_find_from<Args, mp_pybind_map>...>;
+
+    mp::mp_for_each<mp_overloads>(ttsl::overloaded{
+        [&]<typename First>(mp::mp_list<First>) { def_overload<First>(cls, py::arg("first")); },
+        [&]<typename First, typename Second>(mp::mp_list<First, Second>) {
+            def_overload<First, Second>(cls, py::arg("first"), py::arg("second"));
+        },
+        [&]<typename First, typename Second, typename Third>(mp::mp_list<First, Second, Third>) {
+            def_overload<First, Second, Third>(cls, py::arg("first"), py::arg("second"), py::arg("third"));
+        },
+    });
+}
+
+template <typename Func, typename... Overloads>
+void def_overloads(py::class_<Func>& cls, ttsl::overloaded<Overloads...> functor) {
+    (..., def_overloads(cls, static_cast<Overloads>(functor)));
+}
+
 template <typename Func>
-void def_overloads(py::handle scope, Func functor, const std::string& name) {
-    std::string type_name{ttsl::short_type_name<Func>};
-    std::erase_if(type_name, [](unsigned char ch) -> bool { return not std::isalnum(ch); });
+void def_functor(py::handle scope, Func functor, const std::string& name) {
+    static_assert(
+        not ttsl::short_type_name<Func>.ends_with('>'),
+        "Func must be a non-template strong type like OverloadedBinaryFn, not a template specialization like "
+        "overloaded<...>");
+    const std::string type_name{ttsl::short_type_name<Func>};
 
     if (not py::hasattr(scope, type_name.c_str())) {
         auto cls = py::class_<Func>(scope, type_name.c_str());
-
-        const auto def_unary = [&]<typename... First>(mp::mp_list<mp::mp_list<First>...>) {
-            (..., def_overload<First>(cls, py::arg("first")));
-        };
-        const auto def_binary = [&]<typename... First, typename... Second>(mp::mp_list<mp::mp_list<First, Second>...>) {
-            (..., def_overload<First, Second>(cls, py::arg("first"), py::arg("second")));
-        };
-        const auto def_ternary = [&]<typename... First, typename... Second, typename... Third>(
-                                     mp::mp_list<mp::mp_list<First, Second, Third>...>) {
-            (..., def_overload<First, Second, Third>(cls, py::arg("first"), py::arg("second"), py::arg("third")));
-        };
-
-        using Arg = mp::mp_apply<mp::mp_set_union, mp_convert_map>;
-        using TensorArg = mp::mp_list<ExpressionView, const Tensor&>;
-
-        def_unary(mp::mp_product<mp::mp_list, Arg>{});
-        def_binary(mp::mp_product<mp::mp_list, Arg, Arg>{});
-        // replace TensorArg with Arg below when UnaryWithParam2 or BinaryWithParam operations are added
-        // TensorArg binds 2*2*2=8 overloads, but Arg will bind 6*6*6=216 overloads
-        def_ternary(mp::mp_product<mp::mp_list, TensorArg, TensorArg, TensorArg>{});
+        def_overloads(cls, functor);
     }
 
-    scope.attr(name.c_str()) = py::cast(functor);
+    scope.attr(name.c_str()) = functor;
 }
 
 void py_module(py::module& module) {
@@ -177,30 +184,30 @@ void py_module(py::module& module) {
 
     module.def("to_compute_kernel_string", &to_compute_kernel_string).def("to_debug_string", &to_debug_string);
 
-    def_overloads(module, recip, "recip");
-    def_overloads(module, negative, "negative");
-    def_overloads(module, exp, "exp");
-    def_overloads(module, eqz, "eqz");
-    def_overloads(module, gez, "gez");
-    def_overloads(module, gtz, "gtz");
-    def_overloads(module, lez, "lez");
-    def_overloads(module, ltz, "ltz");
-    def_overloads(module, nez, "nez");
-    def_overloads(module, logical_not, "logical_not");
-    def_overloads(module, eq, "eq");
-    def_overloads(module, ge, "ge");
-    def_overloads(module, gt, "gt");
-    def_overloads(module, le, "le");
-    def_overloads(module, lt, "lt");
-    def_overloads(module, ne, "ne");
-    def_overloads(module, add, "add");
-    def_overloads(module, sub, "sub");
-    def_overloads(module, rsub, "rsub");
-    def_overloads(module, mul, "mul");
-    def_overloads(module, div, "div");
-    def_overloads(module, rdiv, "rdiv");
-    def_overloads(module, power, "power");
-    def_overloads(module, where, "where");
+    def_functor(module, recip, "recip");
+    def_functor(module, negative, "negative");
+    def_functor(module, exp, "exp");
+    def_functor(module, eqz, "eqz");
+    def_functor(module, gez, "gez");
+    def_functor(module, gtz, "gtz");
+    def_functor(module, lez, "lez");
+    def_functor(module, ltz, "ltz");
+    def_functor(module, nez, "nez");
+    def_functor(module, logical_not, "logical_not");
+    def_functor(module, eq, "eq");
+    def_functor(module, ge, "ge");
+    def_functor(module, gt, "gt");
+    def_functor(module, le, "le");
+    def_functor(module, lt, "lt");
+    def_functor(module, ne, "ne");
+    def_functor(module, add, "add");
+    def_functor(module, sub, "sub");
+    def_functor(module, rsub, "rsub");
+    def_functor(module, mul, "mul");
+    def_functor(module, div, "div");
+    def_functor(module, rdiv, "rdiv");
+    def_functor(module, power, "power");
+    def_functor(module, where, "where");
 }
 
 }  // namespace ttnn::operations::lazy

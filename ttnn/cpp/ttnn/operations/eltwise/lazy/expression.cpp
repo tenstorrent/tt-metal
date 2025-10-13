@@ -568,7 +568,7 @@ std::string to_compute_kernel_string(FunctionView expression) {
             }},
         expression);
 
-    result.append(");");
+    result.append(")");
     return result;
 }
 

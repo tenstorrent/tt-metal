@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -20,21 +20,8 @@ void MAIN {
     // - num_tiles_per_cycle
     // - cb_indices for input and internal nodes in postfix order
     // - cb_index for output tensor
+    constexpr auto num_tiles_per_cycle = get_compile_time_arg_val(0);
 
-    // 5 circular buffers
-    using View = MakeComputeView<5>;
-
-    View::init_tiles(init_sfpu<c_0, c_4>());
-
-    // fused addcmul
-    // c_0 + ((c_1 * value) * c_3) -> c_4
-    View::compute_tiles(
-        n_tiles,
-        // c_1 * value -> c_2
-        with_cb_ids<c_1, c_2>(mul_unary(get_arg_val<uint32_t>(1))),
-        // c_2 * c_3 -> c_2
-        with_cb_ids<c_2, c_3, c_2>(mul()),
-        // c_0 + c_2 -> c_4
-        with_cb_ids<c_0, c_2, c_4>(add()));
+    COMPUTE_TILES();
 }
 }  // namespace NAMESPACE

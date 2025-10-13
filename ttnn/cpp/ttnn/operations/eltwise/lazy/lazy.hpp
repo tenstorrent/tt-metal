@@ -82,6 +82,20 @@ struct CompareFn : ttsl::overloaded<
     using OverloadsFor<CompareFn, ExpressionView, ExpressionView>::operator();
 };
 
+struct OverloadedBinaryFn : ttsl::overloaded<UnaryWithParamFn, RUnaryWithParamFn, BinaryFn> {};
+
+struct OverloadedRBinaryFn : ttsl::overloaded<UnaryWithParamFn, RUnaryWithParamFn, RBinaryFn> {};
+
+struct PowerFn : ttsl::overloaded<UnaryWithParamFn, BinaryFn, OverloadsFor<PowerFn, float, ExpressionView>> {
+    [[nodiscard]] Function operator()(float first, ExpressionView second) const;
+
+    using UnaryWithParamFn::operator();
+    using BinaryFn::operator();
+    using OverloadsFor<PowerFn, float, ExpressionView>::operator();
+};
+
+struct WhereFn : ttsl::overloaded<TernaryFn> {};
+
 inline constexpr UnaryFn recip{.operation = Unary::RECIP};
 inline constexpr UnaryFn negative{.operation = Unary::NEGATIVE};
 inline constexpr UnaryFn exp{.operation = Unary::EXP};
@@ -102,25 +116,25 @@ inline constexpr CompareFn le{.operation = Unary::LEZ};
 inline constexpr CompareFn lt{.operation = Unary::LTZ};
 inline constexpr CompareFn ne{.operation = Unary::NEZ};
 
-inline constexpr ttsl::overloaded add{
+inline constexpr OverloadedBinaryFn add{
     UnaryWithParamFn{.operation = UnaryWithParam::ADD},
     RUnaryWithParamFn{.operation = UnaryWithParam::ADD},
     BinaryFn{.operation = Binary::ADD},
 };
 
-inline constexpr ttsl::overloaded sub{
+inline constexpr OverloadedBinaryFn sub{
     UnaryWithParamFn{.operation = UnaryWithParam::SUB},
     RUnaryWithParamFn{.operation = UnaryWithParam::RSUB},
     BinaryFn{.operation = Binary::SUB},
 };
 
-inline constexpr ttsl::overloaded rsub{
+inline constexpr OverloadedRBinaryFn rsub{
     UnaryWithParamFn{.operation = UnaryWithParam::RSUB},
     RUnaryWithParamFn{.operation = UnaryWithParam::SUB},
     RBinaryFn{.operation = Binary::SUB},
 };
 
-inline constexpr ttsl::overloaded mul{
+inline constexpr OverloadedBinaryFn mul{
     UnaryWithParamFn{.operation = UnaryWithParam::MUL},
     RUnaryWithParamFn{.operation = UnaryWithParam::MUL},
     BinaryFn{.operation = Binary::MUL},
@@ -136,12 +150,12 @@ inline constexpr RDivFn rdiv{
     RBinaryFn{.operation = Binary::DIV},
 };
 
-inline constexpr ttsl::overloaded power{
+inline constexpr PowerFn power{
     UnaryWithParamFn{.operation = UnaryWithParam::POWER},
     BinaryFn{.operation = Binary::POWER},
 };
 
-inline constexpr ttsl::overloaded where{
+inline constexpr WhereFn where{
     TernaryFn{.operation = Ternary::WHERE},
 };
 
