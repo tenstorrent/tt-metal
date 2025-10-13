@@ -345,7 +345,7 @@ def run_sampling(shape, k, p, seed, device, sub_core_grids=None):
 @skip_for_blackhole("Failing on Blackhole, see Issue#26176")
 @pytest.mark.parametrize("k", [list(np.linspace(1, 32, 32).astype(int))])  # Example of per-user k
 @pytest.mark.parametrize("p", [list(np.full(32, 1.0))])  # Example of per-user p
-@pytest.mark.parametrize("seed", [2024])
+@pytest.mark.parametrize("seed", [0])
 @pytest.mark.parametrize(
     "sub_core_grids", [ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(8 - 1, 4 - 1))})]
 )
