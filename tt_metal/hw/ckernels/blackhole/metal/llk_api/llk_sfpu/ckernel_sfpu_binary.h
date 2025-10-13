@@ -7,6 +7,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_sfpu_conversions.h"
+#include "sfpu/ckernel_sfpu_polyval.h"
 #include "sfpi.h"
 
 using namespace sfpi;
@@ -98,16 +99,21 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_(sfpi::vFloat base, sfpi::vFloat pow
     sfpi::vInt zii = exexp(sfpi::reinterpret<sfpi::vFloat>(z));         // Note: z & 0x7f800000 in paper
     sfpi::vInt zif = sfpi::exman9(sfpi::reinterpret<sfpi::vFloat>(z));  // Note: z & 0x007fffff in paper
 
-    // Compute formula in Horner form
-    sfpi::vFloat d1 = sfpi::vFloat(0.40196114e-7);
-    sfpi::vFloat d2 = sfpi::int32_to_float(sfpi::vInt(0xf94ee7) + zif, 0);
-    sfpi::vFloat d3 = sfpi::int32_to_float(sfpi::vInt(0x560e) + zif, 0);
+    // 61f
+    //  Normalize mantissa field into a fractional value in [0,1)
+    sfpi::vFloat frac = sfpi::int32_to_float(zif, 0) * sfpi::vFloat(1.1920929e-7f);
 
-    d2 = d1 * d2;
-    zif = _float_to_int32_positive_(d2 * d3);
+    // Evaluate degree-6 polynomial coefficients using Horner’s rule
+    // Note: Unlike exp_21f, in exp_61f all polynomial coefficients are floating-point values.
+    // In exp_21f, the paper mixes integer and float constants to perform bit-level manipulation of the exponent and
+    // mantissa fields (using bit manipulation techniques - BMT) for exactness. In exp_61f, all coefficients are
+    // floating-point values derived from the Chebyshev polynomial approach, making the implementation simpler and
+    // purely mathematical without integer-based operations.
+    sfpi::vFloat poly = POLYVAL7<sfpi::vFloat>(
+        0.0002170391f, 0.001243946f, 0.0096788315f, 0.055483369f, 0.24022982f, 0.69314699f, 1.0000000018f, frac);
 
     // Restore exponent
-    zii = sfpi::reinterpret<sfpi::vInt>(sfpi::setexp(sfpi::reinterpret<sfpi::vFloat>(zif), 127U + zii));
+    zii = sfpi::reinterpret<sfpi::vInt>(sfpi::setexp(poly, 127U + zii));
 
     sfpi::vFloat y = sfpi::reinterpret<sfpi::vFloat>(zii);
 
