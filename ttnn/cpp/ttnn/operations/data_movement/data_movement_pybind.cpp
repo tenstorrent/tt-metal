@@ -65,7 +65,7 @@ void py_module(py::module& module) {
     detail::bind_permute(module);
     detail::bind_repeat_interleave(module);
     detail::bind_slice(module);
-    detail::bind_split(module);
+    detail::py_bind_experimental_split(module);
     detail::bind_tilize(module);
     detail::bind_tilize_with_val_padding(module);
     detail::bind_tilize_with_zero_padding(module);

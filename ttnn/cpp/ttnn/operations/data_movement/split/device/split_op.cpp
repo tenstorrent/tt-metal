@@ -13,6 +13,10 @@ using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement {
 
+ttnn::Tensor SplitDeviceOperation::invoke(std::vector<Tensor> input_tensors) {
+    return tt::tt_metal::operation::run(*this, input_tensors).at(0);
+}
+
 void SplitDeviceOperation::validate(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
 

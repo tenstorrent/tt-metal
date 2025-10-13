@@ -16,23 +16,25 @@ import math
 @pytest.mark.parametrize(
     "input_shape, target_shape",
     [
-        ((1, 1, 16, 32), (1, 4, 4, 32)),
+        ((1, 1, 128, 128), (1, 128, 2, 64)),
     ],
 )
 @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT])
 @pytest.mark.parametrize("dtype", [ttnn.float32])
 def test_reshape(input_shape, target_shape, layout, dtype, device):
     # Power of 2 reshape
-    N = 1
-    C = 1
-    H = 128
-    W = 128
+    N = input_shape[0]
+    C = input_shape[1]
+    H = input_shape[2]
+    W = input_shape[3]
     x = torch.rand(N * C * H * W).reshape(N, C, H, W).bfloat16().float()
     xtt = ttnn.Tensor(x, ttnn.bfloat16).to(device)
 
-    lazy_reshaped = ttnn._ttnn.operations.data_movement.experimental_reshape(xtt, 1, 128, 2, 64)
+    lazy_reshaped = ttnn._ttnn.operations.data_movement.experimental_reshape(
+        xtt, target_shape[0], target_shape[1], target_shape[2], target_shape[3]
+    )
     reshaped = lazy_reshaped.cpu().to_torch()
-    assert reshaped.shape == (1, 128, 2, 64)
+    assert reshaped.shape == target_shape
     assert lazy_reshaped.producer_node() is not None
     assert lazy_reshaped.producer_node() != 0
     assert lazy_reshaped.shape == reshaped.shape
