@@ -65,7 +65,7 @@ else()
 endif()
 # ttml projects
 
-# FIXME: Many lambda functions in ttnn capture variables and don't use them.
+# FIXME: Many lambda functions in tt-train capture variables and don't use them.
 add_compile_options("$<$<CXX_COMPILER_ID:Clang>:-Wno-unused-lambda-capture>")
 
 add_subdirectory(sources)
