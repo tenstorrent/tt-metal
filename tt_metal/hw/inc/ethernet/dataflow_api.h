@@ -158,7 +158,7 @@ void eth_send_bytes(
     uint32_t num_bytes_sent = 0;
     while (num_bytes_sent < num_bytes) {
         internal_::eth_send_packet(
-            0, ((num_bytes_sent + src_addr) >> 4), ((num_bytes_sent + dst_addr) >> 4), num_bytes_per_send_word_size);
+            0, num_bytes_sent + src_addr, num_bytes_sent + dst_addr, num_bytes_per_send_word_size);
         num_bytes_sent += num_bytes_per_send;
     }
     erisc_info->channels[0].bytes_sent += num_bytes;
