@@ -38,6 +38,7 @@
 #include "sfpu/ckernel_sfpu_negative.h"
 #include "sfpu/ckernel_sfpu_quant.h"
 #include "sfpu/ckernel_sfpu_recip.h"
+#include "sfpu/ckernel_sfpu_reduce.h"
 #include "sfpu/ckernel_sfpu_relu.h"
 #include "sfpu/ckernel_sfpu_reshuffle_rows.h"
 #include "sfpu/ckernel_sfpu_rounding_ops.h"
