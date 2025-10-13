@@ -115,6 +115,11 @@ std::vector<size_t> ttnn_shape_to_ndarray(const T& arr) {
     return shp;
 }
 
+// Where did thse go?
+//   create_typed_tt_tensor_from_py_data
+//   create_tt_tensor_from_py_data
+//   convert_python_tensor_to_tt_tensor
+
 // Preprocess the python tensor, optionally performing dtype conversion.
 // May need to create a handle and hold onto it here?
 struct PreprocessedPyTensor {
