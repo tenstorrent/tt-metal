@@ -131,9 +131,6 @@ public:
     }
 };
 
-template <size_t Accessors, uint32_t... CtArgs>
-using MakeAccessorView = AccessorView<Accessors, sizeof...(CtArgs), CtArgs...>;
-
 // empty base case
 template <size_t Offset, uint32_t DefaultNumTilesPerCycle>
 class AccessorView<0, Offset, DefaultNumTilesPerCycle> {
