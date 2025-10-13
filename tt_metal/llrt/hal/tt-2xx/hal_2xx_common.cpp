@@ -21,7 +21,9 @@ std::vector<std::string> HalJitBuildQueryBase::defines(const HalJitBuildQueryInt
     switch (params.core_type) {
         case HalProgrammableCoreType::TENSIX:
             switch (params.processor_class) {
-                case HalProcessorClassType::DM: break;
+                case HalProcessorClassType::DM:
+                    defines.push_back(fmt::format("COMPILE_FOR_DM={}", params.processor_id));
+                    break;
                 case HalProcessorClassType::COMPUTE: {
                     switch (params.processor_id) {
                         case 0:
