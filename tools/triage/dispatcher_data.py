@@ -34,6 +34,7 @@ class DispatcherCoreData:
     launch_msg_rd_ptr: int = triage_field("RD PTR")
     kernel_config_base: int = triage_field("Base", hex_serializer)
     kernel_text_offset: int = triage_field("Offset", hex_serializer)
+    host_assigned_id: int | None = triage_field("Host Assigned ID", hex_serializer)
     watcher_kernel_id: int = combined_field("kernel_name", "Kernel ID:Name", collection_serializer(":"))
     watcher_previous_kernel_id: int = combined_field(
         "previous_kernel_name", "Previous Kernel ID:Name", collection_serializer(":")
@@ -181,6 +182,7 @@ class DispatcherData:
         go_data = -1
         preload = False
         waypoint = ""
+        host_assigned_id = None
         try:
             # Indexed with enum ProgrammableCoreType - tt_metal/hw/inc/*/core_config.h
             kernel_config_base = mem_access(
@@ -245,6 +247,12 @@ class DispatcherData:
         except:
             pass
         try:
+            host_assigned_id = mem_access(
+                fw_elf, f"mailboxes->launch[{launch_msg_rd_ptr}].kernel_config.host_assigned_id", loc_mem_reader
+            )[0][0]
+        except:
+            pass
+        try:
             waypoint_int = mem_access(fw_elf, f"mailboxes->watcher.debug_waypoint[{proc_type}]", loc_mem_reader)[0][0]
             waypoint = waypoint_int.to_bytes(4, "little").rstrip(b"\x00").decode("utf-8", errors="replace")
         except:
@@ -279,6 +287,7 @@ class DispatcherData:
         return DispatcherCoreData(
             firmware_path=firmware_path,
             kernel_path=kernel_path,
+            host_assigned_id=host_assigned_id,
             previous_kernel_name=previous_kernel.name if previous_kernel else None,
             kernel_offset=kernel_offset,
             kernel_name=kernel.name if kernel else None,

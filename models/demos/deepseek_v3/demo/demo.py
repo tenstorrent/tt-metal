@@ -26,7 +26,10 @@ def create_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser("DeepSeek-V3 Demo on TT-NN")
     # Prompt is required for full-model mode, optional/ignored for --random-weights
     p.add_argument(
-        "prompt", type=str, nargs="?", help="Prompt text (required for full-model mode; ignored with --random-weights)"
+        "prompts",
+        type=str,
+        nargs="+",
+        help="Prompt text(s) (required for full-model mode; ignored with --random-weights). Can pass multiple prompts.",
     )
     p.add_argument(
         "--model-path",
@@ -106,7 +109,7 @@ def validate_model_path(model_path_str: str, require_safetensors: bool, require_
 
 
 def run_demo(
-    prompt: str | None = None,
+    prompts: list[str] | None = None,
     *,
     model_path: str | Path | None = None,
     max_new_tokens: int = 32,
@@ -185,32 +188,37 @@ def run_demo(
         )
         # Build the prompt list
         if random_weights:
-            prompts = [""]
+            prompt_list = [""]
         else:
             if token_acc is not None:
                 # Prepare prompt text from reference tokens to align with teacher forcing
-                prompts = [token_acc.prepare_ref_tokens(gen.tokenizer)]
-                # If not overridden, ensure we don’t decode past the available ground truth
+                prompt_list = [token_acc.prepare_ref_tokens(gen.tokenizer)]
+                # If not overridden, ensure we don't decode past the available ground truth
                 max_new_tokens = min(max_new_tokens, token_acc.num_gt_tokens())
             else:
-                if not prompt:
+                if not prompts:
                     raise SystemExit("A prompt is required unless --random-weights is used.")
-                prompts = [prompt]
+                prompt_list = prompts
 
-        # Single-prompt generation
+        # Multi-prompt generation
         generations = gen.generate(
-            prompts,
+            prompt_list,
             max_new_tokens=max_new_tokens,
             teacher_forcing=token_acc,
             early_print_first_user=early_print_first_user,
         )
-        result = {"tokens": generations[0], "text": None}
-        if gen.tokenizer is not None:
-            result["text"] = gen.tokenizer.decode(generations[0], skip_special_tokens=True)
-        if token_acc is not None:
-            acc = token_acc.compute_accuracy()
-            result.update({"accuracy_top1": acc.get("top1"), "accuracy_top5": acc.get("top5")})
-        return result
+        # Process all generations
+        results = []
+        for i, generation_tokens in enumerate(generations):
+            result = {"tokens": generation_tokens, "text": None}
+            if gen.tokenizer is not None:
+                result["text"] = gen.tokenizer.decode(generation_tokens, skip_special_tokens=True)
+            if token_acc is not None and i == 0:  # Only compute accuracy for first generation
+                acc = token_acc.compute_accuracy()
+                result.update({"accuracy_top1": acc.get("top1"), "accuracy_top5": acc.get("top5")})
+            results.append(result)
+
+        return {"generations": results}
     finally:
         # Clean up mesh device(s)
         for submesh in mesh_device.get_submeshes():
@@ -223,11 +231,11 @@ def run_demo(
 def main() -> None:
     args = create_parser().parse_args()
 
-    if not args.random_weights and not args.prompt:
+    if not args.random_weights and not args.prompts:
         raise SystemExit("A prompt is required unless --random-weights is used.")
 
-    result = run_demo(
-        args.prompt,
+    results = run_demo(
+        args.prompts,
         model_path=args.model_path,
         max_new_tokens=args.max_new_tokens,
         cache_dir=args.cache_dir,
@@ -239,14 +247,20 @@ def main() -> None:
         early_print_first_user=args.early_print_first_user,
     )
 
-    if not args.early_print_first_user:
-        print("\n===== Generated =====\n")
-        if result.get("text") is not None:
-            print(result["text"])  # type: ignore
+    print("\n===== Generated =====\n")
+
+    for i, gen_result in enumerate(results["generations"]):
+        print("-" * 30)
+        print(f"Prompt[{i+1}]: {args.prompts[i]}")
+        print(f"Generation[{i+1}]:")
+        if gen_result.get("text") is not None:
+            print(gen_result["text"])  # type: ignore
         else:
             print("[random-weights mode] token IDs:")
-            print(result["tokens"])  # type: ignore
-        print("\n=====================\n")
+            print(gen_result["tokens"])  # type: ignore
+        print("-" * 30)
+
+    print("=====================\n")
 
 
 if __name__ == "__main__":
