@@ -250,6 +250,22 @@ class Conv2dConfiguration:
     def __post_init__(self):
         self.validate_weights()
 
+    def __str__(self):
+        weight_shape = tuple(self.weight.shape) if hasattr(self.weight, "shape") else "N/A"
+        bias_shape = tuple(self.bias.shape) if self.bias is not None and hasattr(self.bias, "shape") else "None"
+
+        return (
+            f"Conv2dConfiguration(\n"
+            f"  input_shape: ({self.batch_size}, {self.input_height}, {self.input_width}, {self.in_channels})\n"
+            f"  kernel: {self.kernel_size}, stride: {self.stride}, padding: {self.padding}\n"
+            f"  groups: {self.groups}, dilation: {self.dilation}\n"
+            f"  weight_shape: {weight_shape}, bias_shape: {bias_shape}\n"
+            f"  dtypes: act={self.activation_dtype}, weights={self.weights_dtype}, out={self.output_dtype}\n"
+            f"  sharding: {self.sharding_strategy}\n"
+            f"  math_fidelity: {self.math_fidelity}\n"
+            f")"
+        )
+
 
 @dataclass(frozen=True)
 class MaxPool2dConfiguration:
@@ -392,6 +408,10 @@ class TtConv2d:
         }
 
     def __call__(self, x):
+        print(
+            f"running conv: shape={x.shape} - memory_config={x.memory_config()} - input H/W {self.configuration.input_height}, {self.configuration.input_width}"
+        )
+        print(f"{self.configuration}")
         x, [self.weight, self.bias] = ttnn.conv2d(
             input_tensor=x,
             weight_tensor=self.weight,
