@@ -125,35 +125,20 @@ def calculate_initialization_parameters(
         top_right_bc_tt = [prepare_grid_lambda(t, input_shape_nhwc) for t in top_right_bc_slices]
         btm_left_bc_tt = [prepare_grid_lambda(t, input_shape_nhwc) for t in btm_left_bc_slices]
     else:
-        top_left_bc_tt = [
-            ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-            for t in top_left_bc_slices
-        ]
-        btm_right_bc_tt = [
-            ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-            for t in btm_right_bc_slices
-        ]
-        top_right_bc_tt = [
-            ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-            for t in top_right_bc_slices
-        ]
-        btm_left_bc_tt = [
-            ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-            for t in btm_left_bc_slices
-        ]
+        prepare_corner_lambda = lambda t: ttnn.from_torch(
+            t, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+        )
 
-    top_left_bc_tt = [
-        ttnn.reshape(t, [batch_size, 1, grid_h // num_slices, grid_w * t.shape[-1]]) for t in top_left_bc_tt
-    ]
-    btm_right_bc_tt = [
-        ttnn.reshape(t, [batch_size, 1, grid_h // num_slices, grid_w * t.shape[-1]]) for t in btm_right_bc_tt
-    ]
-    top_right_bc_tt = [
-        ttnn.reshape(t, [batch_size, 1, grid_h // num_slices, grid_w * t.shape[-1]]) for t in top_right_bc_tt
-    ]
-    btm_left_bc_tt = [
-        ttnn.reshape(t, [batch_size, 1, grid_h // num_slices, grid_w * t.shape[-1]]) for t in btm_left_bc_tt
-    ]
+        top_left_bc_tt = [prepare_corner_lambda(t) for t in top_left_bc_slices]
+        btm_right_bc_tt = [prepare_corner_lambda(t) for t in btm_right_bc_slices]
+        top_right_bc_tt = [prepare_corner_lambda(t) for t in top_right_bc_slices]
+        btm_left_bc_tt = [prepare_corner_lambda(t) for t in btm_left_bc_slices]
+
+    reshape_corners_lambda = lambda t: ttnn.reshape(t, [batch_size, 1, grid_h // num_slices, grid_w * t.shape[-1]])
+    top_left_bc_tt = [reshape_corners_lambda(t) for t in top_left_bc_tt]
+    btm_right_bc_tt = [reshape_corners_lambda(t) for t in btm_right_bc_tt]
+    top_right_bc_tt = [reshape_corners_lambda(t) for t in top_right_bc_tt]
+    btm_left_bc_tt = [reshape_corners_lambda(t) for t in btm_left_bc_tt]
 
     visible_tt = ttnn.from_torch(visible_nhwc, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     area = torch.nn.functional.pad(area_nhwc * visible_nhwc, ((0, 0, 0, PAD_AMOUNT, 0, 0, 0, 0)), value=PAD_VALUE)
@@ -165,7 +150,6 @@ def calculate_initialization_parameters(
         area_tt,
         [batch, height, depth, width],
     )
-    # return area_tt
 
 
 class OFT:
@@ -238,7 +222,8 @@ class OFT:
 
     def _setup_sharding_configs(self):
         """Setup sharding configurations for slicing operations"""
-        self.core_grid = ttnn.CoreGrid(y=4, x=5)
+        compute_grid = self.device.compute_with_storage_grid_size()
+        self.core_grid = ttnn.CoreGrid(y=compute_grid.y, x=compute_grid.x)
         self.sharding_strategy = "height"
 
         # Sharding parameters for slicing
@@ -464,8 +449,6 @@ class OFT:
             ttnn.sub_(vox_feats_slice, btm_left_slice)
             ttnn.deallocate(btm_left_slice)
 
-            logger.debug(f"Voxel features slice {i} shape: {vox_feats_slice.shape}")
-            logger.debug(f"Area slice {i} shape: {self.area[i].shape}")
             area_slice = self.create_sharded_tensor(self.area[i])
             ttnn.mul_(vox_feats_slice, area_slice)
             ttnn.deallocate(area_slice)
@@ -478,7 +461,7 @@ class OFT:
             )
 
         integral_image = ttnn.to_memory_config(integral_image, ttnn.DRAM_MEMORY_CONFIG)
-        ortho_feats = ortho_feats[:, :, : w - 63, :]
+        ortho_feats = ortho_feats[:, :, : w - PAD_AMOUNT, :]
 
         if use_signpost:
             signpost(header="OFT block ended")
