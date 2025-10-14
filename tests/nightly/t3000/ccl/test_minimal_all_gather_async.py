@@ -44,7 +44,7 @@ def run_all_gather_impl(
     skip_check=False,
     num_l1_banks=64,
     all_gather_function=ttnn.experimental.all_gather_async,
-    use_new=False,
+    use_semaphore_free_all_gather_impl=False,
 ):
     torch.manual_seed(0)
 
@@ -153,7 +153,7 @@ def run_all_gather_impl(
     tt_all_gather_out_tensor_list = []
 
     def run_op(i):  # absolutely disgusting if-else condition because changing every call site is a humongous PITA
-        if use_new and all_gather_function == ttnn.experimental.all_gather_async:
+        if use_semaphore_free_all_gather_impl and all_gather_function == ttnn.experimental.all_gather_async:
             logger.info(f"Using new all-gather")
             tt_all_gather_out_tensor = ttnn.all_gather(
                 input_tensor_mesh_list[i],
@@ -264,34 +264,22 @@ def run_all_gather_impl(
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize("num_links", [1], ids=["1link"])
 @pytest.mark.parametrize(
-    "ag_output_shape, dim, layout, ag_input_dtype, use_new",
+    "ag_output_shape, dim, layout, ag_input_dtype",
     [
-        ([1, 1, 3072, 8192], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, True),
-        ([1, 1, 1024, 5120], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),
-        ([1, 1, 352, 5120], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, True),
-        ([8, 1, 512, 512], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),
-        ([1, 8, 512, 512], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, True),
-        ([1, 1, 1024, 1024], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),
-        ([1, 1, 512, 48], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, True),
-        ([1, 1, 48, 1024], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),
+        ([1, 1, 1024, 5120], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        ([8, 1, 512, 512], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        ([1, 1, 1024, 1024], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        ([1, 1, 48, 1024], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
         # Composite-AG tests
-        ([1, 1, 17, 64], 3, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, True),
-        ([1, 1, 1, 8], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),
-        ([1, 1, 64, 8], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, True),
-        ([1, 16, 32, 32], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),
+        ([1, 1, 1, 8], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        ([1, 16, 32, 32], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
     ],
     ids=[
-        "dit_shape",  # this one triggers the default chunks_per_sync
         "sd35_spatial",
-        "sd35_prompt",
         "gather_dim_0",
-        "gather_dim_1",
         "gather_dim_2",
-        "gather_dim_2_padded_dim_3",
         "gather_dim_3_padded_dim_2",
-        "composite_ag_test_one",
         "composite_ag_test_two",
-        "composite_ag_test_three",
         "composite_ag_test_four",
     ],
 )
@@ -344,7 +332,6 @@ def test_all_gather_async(
     use_persistent_buffers,
     all_gather_topology,
     num_iters,
-    use_new,
 ):
     run_all_gather_impl(
         mesh_device,
@@ -361,7 +348,86 @@ def test_all_gather_async(
         num_iters=num_iters,
         use_barrier=use_barrier,
         use_persistent_buffers=use_persistent_buffers,
-        use_new=use_new,
+        use_semaphore_free_all_gather_impl=False,
+    )
+
+
+@skip_for_blackhole("Requires wormhole_b0 to run")
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+@pytest.mark.parametrize("num_links", [1], ids=["1link"])
+@pytest.mark.parametrize(
+    "ag_output_shape, dim, layout, ag_input_dtype",
+    [
+        ([1, 1, 3072, 8192], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        ([1, 1, 352, 5120], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        ([1, 8, 512, 512], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        ([1, 1, 512, 48], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        # Composite-AG tests
+        ([1, 1, 17, 64], 3, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16),
+        ([1, 1, 64, 8], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+    ],
+    ids=[
+        "dit_shape",  # this one triggers the default chunks_per_sync
+        "sd35_prompt",
+        "gather_dim_1",
+        "gather_dim_2_padded_dim_3",
+        "composite_ag_test_one",
+        "composite_ag_test_three",
+    ],
+)
+@pytest.mark.parametrize(
+    "mem_config_input, mem_config_ag",
+    [
+        (
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+        )
+    ],
+)
+@pytest.mark.parametrize(
+    "enable_trace,num_iters",
+    [
+        (True, 10),
+        (False, 1),
+    ],
+    ids=["perf", "check"],
+)
+@pytest.mark.parametrize(
+    "device_params, all_gather_topology",
+    [
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Ring),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
+    ],
+    indirect=["device_params"],
+    ids=["fabric_ring", "fabric_linear"],
+)
+def test_ttnn_all_gather(
+    mesh_device,
+    ag_output_shape,
+    dim,
+    num_links,
+    ag_input_dtype,
+    layout,
+    mem_config_input,
+    mem_config_ag,
+    enable_trace,
+    all_gather_topology,
+    num_iters,
+):
+    run_all_gather_impl(
+        mesh_device,
+        mesh_device.get_num_devices(),
+        ag_output_shape,
+        dim,
+        num_links,
+        ag_input_dtype,
+        layout,
+        mem_config_input,
+        mem_config_ag,
+        all_gather_topology=all_gather_topology,
+        enable_trace=enable_trace,
+        num_iters=num_iters,
+        use_semaphore_free_all_gather_impl=True,
     )
 
 
@@ -369,7 +435,7 @@ def test_all_gather_async(
 @pytest.mark.parametrize("num_links", [1], ids=["1link"])
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize(
-    "ag_output_shape, dim, layout, ag_input_dtype, use_new",
+    "ag_output_shape, dim, layout, ag_input_dtype, use_semaphore_free_all_gather_impl",
     [
         # Gather on dim 0
         ([24, 3, 128, 96], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),
@@ -445,7 +511,7 @@ def test_all_gather_async_training_shapes(
     enable_trace,
     all_gather_topology,
     num_iters,
-    use_new,
+    use_semaphore_free_all_gather_impl,
 ):
     run_all_gather_impl(
         mesh_device,
@@ -462,7 +528,7 @@ def test_all_gather_async_training_shapes(
         num_iters=num_iters,
         use_barrier=True,
         use_persistent_buffers=False,
-        use_new=use_new,
+        use_semaphore_free_all_gather_impl=use_semaphore_free_all_gather_impl,
     )
 
 
@@ -475,7 +541,7 @@ def test_all_gather_async_training_shapes(
     ],
 )
 @pytest.mark.parametrize(
-    "ag_output_shape, dim, input_shard_shape, input_shard_grid, input_mem_layout, output_shard_shape, output_shard_grid, output_mem_layout, buffer_type, use_new",
+    "ag_output_shape, dim, input_shard_shape, input_shard_grid, input_mem_layout, output_shard_shape, output_shard_grid, output_mem_layout, buffer_type, use_semaphore_free_all_gather_impl",
     [
         (
             [1, 1, 32, 3072],
@@ -562,7 +628,7 @@ def test_all_gather_async_sharded_to_sharded(
     enable_trace,
     all_gather_topology,
     num_iters,
-    use_new,
+    use_semaphore_free_all_gather_impl,
 ):
     input_shard_spec = ttnn.ShardSpec(
         input_shard_grid,
@@ -591,7 +657,7 @@ def test_all_gather_async_sharded_to_sharded(
         all_gather_topology=all_gather_topology,
         enable_trace=enable_trace,
         num_iters=num_iters,
-        use_new=use_new,
+        use_semaphore_free_all_gather_impl=use_semaphore_free_all_gather_impl,
     )
 
 
@@ -604,7 +670,7 @@ def test_all_gather_async_sharded_to_sharded(
     ],
 )
 @pytest.mark.parametrize(
-    "ag_output_shape, dim, input_shard_shape, input_shard_grid, input_mem_layout, buffer_type, use_new",
+    "ag_output_shape, dim, input_shard_shape, input_shard_grid, input_mem_layout, buffer_type, use_semaphore_free_all_gather_impl",
     [
         (
             [1, 1, 32, 3072],
@@ -672,7 +738,7 @@ def test_all_gather_async_sharded_to_interleaved(
     enable_trace,
     all_gather_topology,
     num_iters,
-    use_new,
+    use_semaphore_free_all_gather_impl,
 ):
     input_shard_spec = ttnn.ShardSpec(
         input_shard_grid,
@@ -696,7 +762,7 @@ def test_all_gather_async_sharded_to_interleaved(
         all_gather_topology=all_gather_topology,
         enable_trace=enable_trace,
         num_iters=num_iters,
-        use_new=use_new,
+        use_semaphore_free_all_gather_impl=use_semaphore_free_all_gather_impl,
     )
 
 
@@ -708,7 +774,7 @@ def test_all_gather_async_sharded_to_interleaved(
     ],
 )
 @pytest.mark.parametrize(
-    "ag_output_shape, dim, output_shard_shape, output_shard_grid, output_mem_layout, buffer_type, use_new",
+    "ag_output_shape, dim, output_shard_shape, output_shard_grid, output_mem_layout, buffer_type, use_semaphore_free_all_gather_impl",
     [
         (
             [1, 1, 32, 3072],
@@ -776,7 +842,7 @@ def test_all_gather_async_interleaved_to_sharded(
     enable_trace,
     all_gather_topology,
     num_iters,
-    use_new,
+    use_semaphore_free_all_gather_impl,
 ):
     output_shard_spec = ttnn.ShardSpec(
         output_shard_grid,
@@ -800,7 +866,7 @@ def test_all_gather_async_interleaved_to_sharded(
         all_gather_topology=all_gather_topology,
         enable_trace=enable_trace,
         num_iters=num_iters,
-        use_new=use_new,
+        use_semaphore_free_all_gather_impl=use_semaphore_free_all_gather_impl,
     )
 
 
@@ -808,7 +874,7 @@ def test_all_gather_async_interleaved_to_sharded(
 @pytest.mark.parametrize("num_links", [1], ids=["1link"])
 @pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
 @pytest.mark.parametrize(
-    "ag_output_shape, dim, layout, ag_input_dtype, use_new",
+    "ag_output_shape, dim, layout, ag_input_dtype, use_semaphore_free_all_gather_impl",
     [
         # Gather on dim 0
         ([1, 1, 8, 4096], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, True),
@@ -853,7 +919,7 @@ def test_all_gather_async_2x4(
     enable_trace,
     all_gather_topology,
     num_iters,
-    use_new,
+    use_semaphore_free_all_gather_impl,
 ):
     submesh_device = mesh_device.create_submesh(ttnn.MeshShape((1, 4)))
     run_all_gather_impl(
@@ -872,7 +938,7 @@ def test_all_gather_async_2x4(
         use_barrier=True,
         use_persistent_buffers=False,
         cluster_axis=1,
-        use_new=use_new,
+        use_semaphore_free_all_gather_impl=use_semaphore_free_all_gather_impl,
     )
 
 
