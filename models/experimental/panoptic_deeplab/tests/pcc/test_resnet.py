@@ -73,6 +73,8 @@ def create_panoptic_models(device, weights_path):
         conv_act_dtype=ttnn.bfloat8_b,
         conv_w_dtype=ttnn.bfloat8_b,
     )
+    # Apply ResNet-specific configurations to match test_conv2d_panoptic
+    model_configs.setup_resnet_test_configs()
 
     # Create TTNN model with fused parameters and centralized configuration
     ttnn_model = TtPanopticDeepLab(

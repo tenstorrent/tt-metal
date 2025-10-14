@@ -10,6 +10,7 @@ from models.tt_cnn.tt.builder import (
     HeightSliceStrategyConfiguration,
     WidthSliceStrategyConfiguration,
     ChannelSliceStrategyConfiguration,
+    L1FullSliceStrategyConfiguration,
 )
 
 
@@ -30,7 +31,7 @@ class ModelOptimisations:
             "output_dtype": conv_act_dtype,
             "activation_dtype": conv_act_dtype,
             "sharding_strategy": AutoShardedStrategyConfiguration(),
-            "slice_strategy": None,
+            "slice_strategy": L1FullSliceStrategyConfiguration(),
             "math_fidelity": ttnn.MathFidelity.LoFi,
             "fp32_dest_acc_en": True,
             "packer_l1_acc": False,
@@ -38,6 +39,7 @@ class ModelOptimisations:
             "enable_act_double_buffer": False,
             "enable_weights_double_buffer": True,
             "reallocate_halo_output": True,
+            "activation": None,  # Disable fusion - separate ReLU gives better PCC
         }
 
         # Layer-specific overrides: map from conv_path to override dict
@@ -102,11 +104,105 @@ class ModelOptimisations:
         for conv_name in ["stem.conv1", "stem.conv2", "stem.conv3"]:
             self.register_layer_override(conv_name, slice_strategy=WidthSliceStrategyConfiguration(num_slices=4))
 
+        # RESNET BOTTLENECKS: Disable ReLU fusion for conv3 and shortcut layers (ReLU comes after residual add)
+        # ResNet50: res2 (3 blocks), res3 (4 blocks), res4 (6 blocks), res5 (3 blocks)
+        for stage, num_blocks in [("res2", 3), ("res3", 4), ("res4", 6), ("res5", 3)]:
+            for i in range(num_blocks):
+                self.register_layer_override(f"{stage}.{i}.conv3", activation=None)
+                # Only first block in each stage has a shortcut (downsample)
+                if i == 0:
+                    self.register_layer_override(f"{stage}.{i}.shortcut", activation=None)
+
         # RESNET BOTTLENECKS: Use width slicing for res3 shortcuts
         for i in range(4):  # res3 typically has 4 blocks
             self.register_layer_override(
                 f"res3.{i}.shortcut", slice_strategy=WidthSliceStrategyConfiguration(num_slices=2)
             )
+
+    def setup_resnet_test_configs(self):
+        """
+        Setup ResNet layer configurations to match test_conv2d.py panoptic tests.
+
+        This configures sharding strategies and act_block_h overrides for all ResNet
+        backbone layers to match the validated test configurations from test_conv2d_panoptic.
+        """
+        from models.tt_cnn.tt.builder import HeightShardedStrategyConfiguration, BlockShardedStrategyConfiguration
+
+        # === STEM ===
+        # stem.conv1: 3->64, 512x1024, 3x3, stride 2, HS, act_block_h=1312
+        self.register_layer_override(
+            "stem.conv1",
+            sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=1312),  # 41 tiles
+        )
+
+        # === RES2 STAGE ===
+        # res2.{0-2}.conv2: 64->64, 128x256, 3x3, stride 1, HS, act_block_h=128
+        for i in range(3):
+            self.register_layer_override(
+                f"res2.{i}.conv2",
+                sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=128),  # 4 tiles
+            )
+
+        # res2 1x1 convs: 128->64 (conv1), 64->256 (conv3), 128x256, use AutoSharded (matmul path)
+        # Don't explicitly override sharding_strategy - let it use default AutoSharded
+
+        # === RES3 STAGE ===
+        # res3.0.conv2: 128->128, 128x256->64x128, 3x3, stride 2, HS, act_block_h=256
+        self.register_layer_override(
+            "res3.0.conv2",
+            sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=256),  # 8 tiles
+        )
+
+        # res3.{1-3}.conv2: 128->128, 64x128, 3x3, stride 1, HS, act_block_h=0 (default)
+        for i in range(1, 4):
+            self.register_layer_override(
+                f"res3.{i}.conv2",
+                sharding_strategy=HeightShardedStrategyConfiguration(),
+            )
+
+        # === RES4 STAGE ===
+        # res4.0.conv2: 256->256, 64x128->32x64, 3x3, stride 2, HS, act_block_h=0
+        self.register_layer_override(
+            "res4.0.conv2",
+            sharding_strategy=HeightShardedStrategyConfiguration(),
+        )
+
+        # res4.{1-5}.conv2: 256->256, 32x64, 3x3, stride 1, HS, act_block_h=64
+        for i in range(1, 6):
+            self.register_layer_override(
+                f"res4.{i}.conv2",
+                sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=64),  # 2 tiles
+            )
+
+        # res4.0.shortcut: 512->1024, 64x128->32x64, 1x1, stride 2, BS, act_block_h=0
+        self.register_layer_override(
+            "res4.0.shortcut",
+            sharding_strategy=BlockShardedStrategyConfiguration(),
+        )
+
+        # === RES5 STAGE (with dilation) ===
+        # res5.0.conv2: 512->512, 32x64, 3x3, stride 1, dilation 2, BS, act_block_h=288
+        self.register_layer_override(
+            "res5.0.conv2",
+            sharding_strategy=BlockShardedStrategyConfiguration(),
+        )
+
+        # res5.{1-2}.conv2: 512->512, 32x64, 3x3, stride 1, dilation 2, BS, act_block_h=288
+        for i in range(1, 3):
+            self.register_layer_override(
+                f"res5.{i}.conv2",
+                sharding_strategy=BlockShardedStrategyConfiguration(),
+            )
+
+        # === 1x1 CONVOLUTIONS (matmul convs - use AutoSharded default) ===
+        # res4, res5, res3 1x1 convs: use default AutoSharded (matmul path)
+        # Don't explicitly override sharding_strategy - let it use default AutoSharded
+
+        # res3.0.shortcut: 256->512, 128x256->64x128, 1x1, stride 2, BS
+        self.register_layer_override(
+            "res3.0.shortcut",
+            sharding_strategy=BlockShardedStrategyConfiguration(),
+        )
 
     def setup_aspp_layer_overrides(self):
         """
@@ -204,6 +300,7 @@ class ModelOptimisations:
         This is a convenience method that calls all the individual setup methods.
         """
         self.setup_default_layer_overrides()
+        self.setup_resnet_test_configs()
         self.setup_aspp_layer_overrides()
         self.setup_decoder_layer_overrides()
         self.setup_head_layer_overrides()
