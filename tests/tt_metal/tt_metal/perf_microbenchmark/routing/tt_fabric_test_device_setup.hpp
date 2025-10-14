@@ -73,6 +73,26 @@ struct Connection {
 // forward declarations
 struct TestDevice;
 
+// LocalDeviceCoreAllocator: Simple utility to manage pristine cores for mux allocation
+// Takes ownership of pristine cores and pops them on-demand
+class LocalDeviceCoreAllocator {
+public:
+    explicit LocalDeviceCoreAllocator(std::vector<CoreCoord>&& available_cores) :
+        available_cores_(std::move(available_cores)) {}
+
+    std::optional<CoreCoord> allocate_core() {
+        if (available_cores_.empty()) {
+            return std::nullopt;
+        }
+        CoreCoord allocated = available_cores_.back();
+        available_cores_.pop_back();
+        return allocated;
+    }
+
+private:
+    std::vector<CoreCoord> available_cores_;
+};
+
 // FabricConnectionManager: Centralized connection tracking and management
 // Handles connection registration, mux detection, channel assignment, and argument generation
 // This is a standalone utility class that can be used independently of TestDevice
@@ -101,10 +121,10 @@ public:
         const CoreCoord& core, RoutingDirection direction, uint32_t link_idx, TestWorkerType worker_type);
 
     // Processing: Call once at start of create_kernels()
-    // mux_cores: map from direction to the assigned mux core (passed from TestDevice)
+    // local_alloc: allocator for on-demand mux core allocation
     // Creates mux configs for all connections that need mux
     void process(
-        const std::unordered_map<RoutingDirection, CoreCoord>& mux_cores,
+        LocalDeviceCoreAllocator& local_alloc,
         TestDevice* test_device_ptr,
         std::shared_ptr<IDeviceInfoProvider> device_info_provider);
 
@@ -275,7 +295,7 @@ public:
     void set_benchmark_mode(bool benchmark_mode) { benchmark_mode_ = benchmark_mode; }
     void set_global_sync(bool global_sync) { global_sync_ = global_sync; }
     void set_global_sync_val(uint32_t global_sync_val) { global_sync_val_ = global_sync_val; }
-    void set_mux_cores(const std::unordered_map<RoutingDirection, CoreCoord>& mux_cores) { mux_cores_ = mux_cores; }
+    void set_pristine_cores(std::vector<CoreCoord>&& cores) { pristine_cores_ = std::move(cores); }
     RoutingDirection get_forwarding_direction(const std::unordered_map<RoutingDirection, uint32_t>& hops) const;
     RoutingDirection get_forwarding_direction(const FabricNodeId& src_node_id, const FabricNodeId& dst_node_id) const;
     std::vector<uint32_t> get_forwarding_link_indices_in_direction(const RoutingDirection& direction) const;
@@ -361,8 +381,8 @@ private:
     uint32_t global_sync_val_ = 0;
     CoreCoord sync_core_coord_;
 
-    // Map from direction to mux core coordinate
-    std::unordered_map<tt::tt_fabric::RoutingDirection, CoreCoord> mux_cores_;
+    // Pristine cores for mux allocation (transferred from allocator)
+    std::vector<CoreCoord> pristine_cores_;
 
     bool use_unified_connection_manager_ = false;
 };

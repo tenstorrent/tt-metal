@@ -164,11 +164,6 @@ public:
     CoreCoord reserve_receiver_core(const std::optional<CoreCoord>& specified_core);
     CoreResources& get_or_create_core_resources(const CoreCoord& core, CoreType core_type);
 
-    // Mux support
-    void reserve_mux_cores();
-    const std::unordered_map<tt::tt_fabric::RoutingDirection, CoreCoord>& get_mux_cores() const;
-    bool has_mux_cores() const { return mux_reservation_.is_enabled; }
-
     const FabricNodeId node_id_;
     uint32_t l1_alignment_;
     uint32_t payload_chunk_size_;
@@ -179,15 +174,11 @@ public:
     std::unordered_map<CoreCoord, uint32_t> core_workload_;        // map core -> num_configs
     std::unordered_map<CoreCoord, CoreResources> core_resources_;  // map core -> its memory allocator
 
-    // Mux core reservation
-    struct MuxReservation {
-        std::unordered_map<tt::tt_fabric::RoutingDirection, CoreCoord> reserved_cores;
-        bool is_enabled = false;
-    };
-    MuxReservation mux_reservation_;
-
     // Credit allocation for senders on this device
     std::optional<DynamicMemoryRegion> credit_allocator_;
+
+    // Collect remaining pristine cores from all pools (for mux allocation)
+    std::vector<CoreCoord> collect_remaining_pristine_cores() const;
 
     // Initialize credit allocator (lazy)
     void initialize_credit_allocator(const SenderMemoryMap& sender_memory_map);
@@ -370,6 +361,40 @@ inline void TestDeviceResources::reset_credit_allocator() {
     }
 }
 
+inline std::vector<CoreCoord> TestDeviceResources::collect_remaining_pristine_cores() const {
+    std::vector<CoreCoord> remaining_cores;
+
+    // Collect from pristine_cores_ (if not yet moved to pools)
+    remaining_cores.insert(remaining_cores.end(), pristine_cores_.begin(), pristine_cores_.end());
+
+    // Collect from sender pool (cores that haven't been allocated yet)
+    const CorePool& sender_pool = core_pools_[SENDER_TYPE_IDX];
+    if (sender_pool.initialized) {
+        for (const auto& core : sender_pool.active_pool) {
+            auto it = core_workload_.find(core);
+            if (it == core_workload_.end()) {
+                // Core is in pool but has never been allocated
+                remaining_cores.push_back(core);
+            }
+        }
+    }
+
+    // Collect from receiver pool (cores that haven't been allocated yet)
+    const CorePool& receiver_pool = core_pools_[RECEIVER_TYPE_IDX];
+    if (receiver_pool.initialized) {
+        for (const auto& core : receiver_pool.active_pool) {
+            auto it = core_workload_.find(core);
+            if (it == core_workload_.end()) {
+                // Core is in pool but has never been allocated
+                remaining_cores.push_back(core);
+            }
+        }
+    }
+
+    // Pools are mutually exclusive, no duplicates possible
+    return remaining_cores;
+}
+
 inline CoreCoord TestDeviceResources::find_next_available_sync_core(CorePool& pool) {
     size_t current_pool_idx = pool.next_pool_idx;
     const CoreCoord& core = pool.active_pool[current_pool_idx];
@@ -455,35 +480,6 @@ inline void TestDeviceResources::reserve_core_internal(const CoreCoord& core, Co
     get_or_create_core_resources(core, core_type);
 }
 
-inline void TestDeviceResources::reserve_mux_cores() {
-    if (mux_reservation_.is_enabled) {
-        return;  // Already reserved
-    }
-
-    // Reserve 4 cores for mux (N, E, S, W directions)
-    TT_FATAL(
-        pristine_cores_.size() >= 4, "Not enough pristine cores available for mux reservation on device {}", node_id_);
-
-    constexpr tt::tt_fabric::RoutingDirection directions[] = {
-        tt::tt_fabric::RoutingDirection::N,
-        tt::tt_fabric::RoutingDirection::E,
-        tt::tt_fabric::RoutingDirection::S,
-        tt::tt_fabric::RoutingDirection::W};
-
-    for (auto direction : directions) {
-        mux_reservation_.reserved_cores[direction] = pristine_cores_.back();
-        pristine_cores_.pop_back();
-    }
-
-    mux_reservation_.is_enabled = true;
-}
-
-inline const std::unordered_map<tt::tt_fabric::RoutingDirection, CoreCoord>& TestDeviceResources::get_mux_cores()
-    const {
-    TT_FATAL(mux_reservation_.is_enabled, "Mux cores not reserved on device {}", node_id_);
-    return mux_reservation_.reserved_cores;
-}
-
 // ======================================================================================
 // Credit Allocation Helpers
 // ======================================================================================
@@ -520,9 +516,8 @@ public:
     void allocate_resources(TestConfig& test_config);
     void reset();
 
-    // Public interface for mux core access
-    std::unordered_map<tt::tt_fabric::RoutingDirection, CoreCoord> get_mux_cores_for_device(
-        const FabricNodeId& node_id) const;
+    // Get pristine cores for a device (for local mux allocation)
+    std::vector<CoreCoord> get_pristine_cores_for_device(const FabricNodeId& node_id) const;
 
 private:
     TestDeviceResources& get_or_create_device_resources(const FabricNodeId& node_id);
@@ -571,12 +566,6 @@ inline TestDeviceResources& GlobalAllocator::get_or_create_device_resources(cons
             policies_.receiver_config,
             receiver_memory_map_.payload_chunks,
             receiver_memory_map_.atomic_counters));
-
-    // Reserve mux cores if flow control is enabled
-    if (enable_flow_control_) {
-        inserted_it->second->reserve_mux_cores();
-        log_debug(tt::LogTest, "Reserved mux cores for device {} (flow control enabled)", node_id);
-    }
 
     return *inserted_it->second;
 }
@@ -861,18 +850,15 @@ inline void GlobalAllocator::reset() {
     enable_flow_control_ = false;
 }
 
-inline std::unordered_map<tt::tt_fabric::RoutingDirection, CoreCoord> GlobalAllocator::get_mux_cores_for_device(
-    const FabricNodeId& node_id) const {
+inline std::vector<CoreCoord> GlobalAllocator::get_pristine_cores_for_device(const FabricNodeId& node_id) const {
     auto it = all_device_resources_.find(node_id);
     if (it == all_device_resources_.end()) {
-        return {};  // Device not found, return empty map
+        // Device not found in allocator (no workers allocated on this device)
+        // Return empty vector - no cores available for mux allocation
+        return {};
     }
-
-    if (!it->second->has_mux_cores()) {
-        return {};  // No mux cores reserved for this device
-    }
-
-    return it->second->get_mux_cores();
+    // Collect remaining pristine cores from all pools (after allocation is complete)
+    return it->second->collect_remaining_pristine_cores();
 }
 
 }  // namespace tt::tt_fabric::fabric_tests

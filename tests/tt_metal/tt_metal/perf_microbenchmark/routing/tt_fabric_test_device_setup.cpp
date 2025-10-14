@@ -41,7 +41,7 @@ void FabricConnectionManager::register_client(
 }
 
 void FabricConnectionManager::process(
-    const std::unordered_map<RoutingDirection, CoreCoord>& mux_cores,
+    LocalDeviceCoreAllocator& local_alloc,
     TestDevice* test_device_ptr,
     std::shared_ptr<IDeviceInfoProvider> device_info_provider) {
     for (auto& [key, conn] : connections_) {
@@ -52,21 +52,25 @@ void FabricConnectionManager::process(
         if (conn.needs_mux) {
             assign_and_validate_channels(conn, key);
 
-            // Get mux core for this connection's direction
-            auto mux_core_it = mux_cores.find(key.direction);
-            TT_FATAL(mux_core_it != mux_cores.end(), "Mux core not found for direction {}", key.direction);
-
-            const CoreCoord& mux_core = mux_core_it->second;
+            // Allocate mux core on-demand from local allocator
+            auto mux_core = local_alloc.allocate_core();
+            TT_FATAL(
+                mux_core.has_value(),
+                "No pristine cores available for mux on device {} for connection dir={} link={}. "
+                "Consider optimizing core placement or reducing worker cores.",
+                test_device_ptr->get_node_id(),
+                key.direction,
+                key.link_idx);
 
             // Store the connection key -> mux core mapping
-            mux_cores_[key] = mux_core;
-            mux_core_to_key_[mux_core] = key;
+            mux_cores_[key] = mux_core.value();
+            mux_core_to_key_[mux_core.value()] = key;
 
             // mux config shouldnt exist already (one config per connection/mux)
             TT_FATAL(
-                mux_configs_.find(mux_core) == mux_configs_.end(),
+                mux_configs_.find(mux_core.value()) == mux_configs_.end(),
                 "Mux config already exists for mux core {}",
-                mux_core);
+                mux_core.value());
 
             // Create and store mux config for this connection key
             // Count channels by type using worker types
@@ -87,7 +91,7 @@ void FabricConnectionManager::process(
 
             // Create the mux config
             mux_configs_.emplace(
-                mux_core,
+                mux_core.value(),
                 std::make_unique<FabricMuxConfig>(
                     num_full_size_channels,
                     num_header_only_channels,
@@ -101,7 +105,7 @@ void FabricConnectionManager::process(
                 all_mux_client_cores_.insert(client_core);
             }
 
-            test_device_ptr->add_mux_worker_config(mux_core, mux_configs_.at(mux_core).get(), key);
+            test_device_ptr->add_mux_worker_config(mux_core.value(), mux_configs_.at(mux_core.value()).get(), key);
         }
     }
 
@@ -691,12 +695,15 @@ void TestDevice::add_mux_worker_config(
 void TestDevice::create_kernels() {
     log_debug(tt::LogTest, "creating kernels on node: {}", fabric_node_id_);
 
+    // Create local allocator for on-demand mux core allocation
+    LocalDeviceCoreAllocator local_alloc(std::move(pristine_cores_));
+
     // Process fabric connections to determine mux requirements and assign channels
-    connection_manager_.process(mux_cores_, this, device_info_provider_);
+    connection_manager_.process(local_alloc, this, device_info_provider_);
 
     // Process sync connections separately if not using unified connection manager
     if (!use_unified_connection_manager_) {
-        sync_connection_manager_.process(mux_cores_, this, device_info_provider_);
+        sync_connection_manager_.process(local_alloc, this, device_info_provider_);
     }
 
     // Create mux kernels for connections that need them

@@ -215,8 +215,12 @@ public:
             }
         }
 
-        // Transfer mux cores from allocator to devices
-        setup_mux_cores();
+        // Transfer pristine cores from allocator to each device
+        for (auto& [coord, device] : test_devices_) {
+            auto node_id = device.get_node_id();
+            auto pristine_cores = allocator_->get_pristine_cores_for_device(node_id);
+            device.set_pristine_cores(std::move(pristine_cores));
+        }
 
         if (config.global_sync) {
             // set it only after the test_config is built since it needs set the sync value during expand the high-level
@@ -504,21 +508,6 @@ public:
     void set_global_sync(bool global_sync) { global_sync_ = global_sync; }
 
     void set_global_sync_val(uint32_t val) { global_sync_val_ = val; }
-
-    void setup_mux_cores() {
-        // Transfer allocated mux cores from allocator to each device
-        for (auto& [coord, device] : test_devices_) {
-            auto node_id = device.get_node_id();
-            auto mux_cores = allocator_->get_mux_cores_for_device(node_id);
-
-            if (!mux_cores.empty()) {
-                log_debug(tt::LogTest, "Setting up {} mux cores for device {}", mux_cores.size(), node_id);
-
-                // Set all mux cores at once
-                device.set_mux_cores(mux_cores);
-            }
-        }
-    }
 
     bool has_test_failures() const { return has_test_failures_; }
 
