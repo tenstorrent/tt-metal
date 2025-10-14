@@ -6,14 +6,9 @@ import ttnn
 import pytest
 import math
 
-from models.demos.deepseek_v3.utils.config_helpers import (
-    COMPUTE_KERNEL_CONFIG_HIFI2,
-    COMPUTE_KERNEL_CONFIG_HIFI4,
-    COMPUTE_KERNEL_CONFIG_LOFI,
-)
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.common.utility_functions import is_blackhole
-from tests.ttnn.nightly.unit_tests.operations.pool.test_maxpool2d import HS
+from tests.ttnn.nightly.unit_tests.operations.pool.test_maxpool2d import HS, BS, WS
 
 
 # helper to correct torch output for asymmetric padding
@@ -104,7 +99,6 @@ def run_avg_pool2d(
     skips_enabled=True,
     out_dtype=ttnn.bfloat16,
     output_layout=ttnn.ROW_MAJOR_LAYOUT,
-    compute_kernel_config=None,
 ):
     in_n, in_c, in_h, in_w = input_shape
     kernel_h, kernel_w = kernel_size
@@ -204,7 +198,6 @@ def run_avg_pool2d(
         applied_shard_scheme=shard_scheme,
         dtype=out_dtype,
         output_layout=output_layout,
-        compute_kernel_config=compute_kernel_config,
     )
 
     # TODO always use run_twice after resolution of https://github.com/tenstorrent/tt-metal/issues/26093
@@ -230,7 +223,6 @@ def run_avg_pool2d(
             applied_shard_scheme=shard_scheme,
             dtype=out_dtype,
             output_layout=output_layout,
-            compute_kernel_config=compute_kernel_config,
         )
 
     # apply padding manually to torch tensor since torch doesn't support asymmetric padding
@@ -297,8 +289,6 @@ def run_avg_pool2d(
         pcc_thresh = 0.98
     if in_dtype == ttnn.bfloat8_b or out_dtype == ttnn.bfloat8_b or out_dtype == ttnn.bfloat4_b:
         atol = 0.35
-    if compute_kernel_config.math_fidelity == ttnn.MathFidelity.LoFi:
-        atol = 0.045  # LOFI has less precise accumulation, so relax atol further
     assert_with_pcc(torch_output, ttnn_output, pcc_thresh)
     # Ensure both tensors have the same dtype for comparison
     if out_dtype != ttnn.bfloat16:
@@ -459,50 +449,4 @@ def test_avg_pool2d_output_formats_and_layouts(
         in_dtype=in_dtype,
         output_layout=output_layout,
         out_dtype=out_dtype,
-    )
-
-
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
-@pytest.mark.parametrize(
-    "input_shape",  # NCHW
-    ([1, 64, 112, 112],),
-)
-@pytest.mark.parametrize(
-    "kernel_size",
-    ((3, 3),),
-)
-@pytest.mark.parametrize(
-    "stride",
-    ((1, 1),),
-)
-@pytest.mark.parametrize(
-    "padding",
-    ((0, 0),),
-)
-@pytest.mark.parametrize(
-    "compute_kernel_config",
-    [COMPUTE_KERNEL_CONFIG_HIFI4, COMPUTE_KERNEL_CONFIG_HIFI2, COMPUTE_KERNEL_CONFIG_LOFI],
-)
-def test_avg_pool2d_compute_kernel_config(
-    device,
-    tensor_map,
-    input_shape,
-    kernel_size,
-    stride,
-    padding,
-    compute_kernel_config,
-):
-    run_avg_pool2d(
-        device,
-        tensor_map,
-        input_shape,
-        kernel_size,
-        stride,
-        padding,
-        ceil_mode=False,
-        divisor_override=None,
-        count_include_pad=False,
-        shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        in_dtype=ttnn.bfloat16,
-        compute_kernel_config=compute_kernel_config,
     )
