@@ -131,12 +131,3 @@ jobs:
           name: bisect-nd-results
           path: docker-job/bisect_nd_results.csv
           if-no-files-found: ignore
-
-      - name: ND results CSV not found (debug)
-        if: ${{ hashFiles('docker-job/bisect_nd_results.csv') == '' }}
-        run: |
-          echo "bisect_nd_results.csv not found in $(pwd)"
-          echo "Listing current directory:"
-          ls -la
-          echo "Searching for CSV files nearby:"
-          find . -maxdepth 3 -type f -name "bisect_nd_results*.csv" -print || true
