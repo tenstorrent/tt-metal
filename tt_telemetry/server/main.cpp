@@ -198,15 +198,10 @@ int main(int argc, char* argv[]) {
     bool print_link_health = result["print-link-health"].as<bool>();
     int port = result["port"].as<int>();
     int collector_port = result["collector-port"].as<int>();
-<<<<<<< HEAD
-    std::string metal_src_dir = "";
-    if (result.contains("metal-src-dir")) {
-=======
 
     std::string metal_src_dir;
     // Check if metal-src-dir was provided; else fallback to environment var
     if (result.count("metal-src-dir")) {
->>>>>>> 7a54feed67 (Add initial PromWriter implementation)
         metal_src_dir = result["metal-src-dir"].as<std::string>();
     } else {
         const char* env_metal_home = std::getenv("TT_METAL_HOME");
@@ -283,8 +278,6 @@ int main(int argc, char* argv[]) {
         log_info(tt::LogAlways, "Starting Prometheus metrics writer");
         std::future<bool> prom_writer_future;
         std::shared_ptr<TelemetrySubscriber> prom_writer_subscriber;
-        // TODO(kkfernandez): figure out a nice location
-        // TODO(kkfernandez): portable path construction
         std::tie(prom_writer_future, prom_writer_subscriber) = run_prom_writer(prom_metrics_file);
         subscribers.push_back(prom_writer_subscriber);
     } else {

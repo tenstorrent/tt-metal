@@ -107,6 +107,7 @@ private:
                 std::this_thread::sleep_for(std::chrono::milliseconds(1000));
                 continue;
             }
+            print_snapshot(snapshot);
             telemetry_state_.merge_from(*snapshot);
             send_snapshot_to_clients(snapshot);
         }

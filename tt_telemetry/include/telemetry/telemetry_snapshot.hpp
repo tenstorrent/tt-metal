@@ -243,3 +243,84 @@ static inline void from_json(const nlohmann::json &j, TelemetrySnapshot &t) {
     j.at("metric_unit_display_label_by_code").get_to(t.metric_unit_display_label_by_code);
     j.at("metric_unit_full_label_by_code").get_to(t.metric_unit_full_label_by_code);
 }
+
+static inline void print_snapshot(const std::shared_ptr<TelemetrySnapshot>& snapshot) {
+    if (!snapshot) {
+        return;
+    }
+    
+    std::cout << "\n=== Telemetry Snapshot ===" << std::endl;
+    std::cout << "Timestamp: " << std::chrono::system_clock::now().time_since_epoch().count() << std::endl;
+    
+    // Print bool metrics
+    if (!snapshot->bool_metrics.empty()) {
+        std::cout << "\nBool metrics (" << snapshot->bool_metrics.size() << "):" << std::endl;
+        for (const auto& [path, value] : snapshot->bool_metrics) {
+            std::cout << "  " << path << ": " << (value ? "true" : "false");
+            
+            // Add timestamp if available
+            if (snapshot->bool_metric_timestamps.count(path)) {
+                std::cout << " (ts: " << snapshot->bool_metric_timestamps.at(path) << ")";
+            }
+            std::cout << std::endl;
+        }
+    }
+    
+    // Print uint metrics
+    if (!snapshot->uint_metrics.empty()) {
+        std::cout << "\nUint metrics (" << snapshot->uint_metrics.size() << "):" << std::endl;
+        for (const auto& [path, value] : snapshot->uint_metrics) {
+            std::cout << "  " << path << ": " << value;
+            
+            // Add unit if available
+            if (snapshot->uint_metric_units.count(path)) {
+                uint16_t unit_code = snapshot->uint_metric_units.at(path);
+                if (snapshot->metric_unit_display_label_by_code.count(unit_code)) {
+                    std::cout << " " << snapshot->metric_unit_display_label_by_code.at(unit_code);
+                }
+            }
+            
+            // Add timestamp if available
+            if (snapshot->uint_metric_timestamps.count(path)) {
+                std::cout << " (ts: " << snapshot->uint_metric_timestamps.at(path) << ")";
+            }
+            std::cout << std::endl;
+        }
+    }
+    
+    // Print double metrics
+    if (!snapshot->double_metrics.empty()) {
+        std::cout << "\nDouble metrics (" << snapshot->double_metrics.size() << "):" << std::endl;
+        for (const auto& [path, value] : snapshot->double_metrics) {
+            std::cout << "  " << path << ": " << std::fixed << std::setprecision(3) << value;
+            
+            // Add unit if available
+            if (snapshot->double_metric_units.count(path)) {
+                uint16_t unit_code = snapshot->double_metric_units.at(path);
+                if (snapshot->metric_unit_display_label_by_code.count(unit_code)) {
+                    std::cout << " " << snapshot->metric_unit_display_label_by_code.at(unit_code);
+                }
+            }
+            
+            // Add timestamp if available
+            if (snapshot->double_metric_timestamps.count(path)) {
+                std::cout << " (ts: " << snapshot->double_metric_timestamps.at(path) << ")";
+            }
+            std::cout << std::endl;
+        }
+    }
+    
+    // Print unit mappings if any new ones
+    if (!snapshot->metric_unit_display_label_by_code.empty()) {
+        std::cout << "\nUnit mappings:" << std::endl;
+        for (const auto& [code, label] : snapshot->metric_unit_display_label_by_code) {
+            std::cout << "  " << code << ": " << label;
+            if (snapshot->metric_unit_full_label_by_code.count(code)) {
+                std::cout << " (" << snapshot->metric_unit_full_label_by_code.at(code) << ")";
+            }
+            std::cout << std::endl;
+        }
+    }
+    
+    std::cout << "=========================" << std::endl;
+}
