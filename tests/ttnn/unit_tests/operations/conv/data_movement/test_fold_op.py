@@ -412,18 +412,17 @@ def test_fold(act_shape, stride_h, stride_w, device):
         ((1, 24, 32, 16), 3, 4, (3, 0), None),
         ((1, 20, 20, 8), 2, 2, (1, 3, 0, 2), None),
         ((2, 16, 16, 16), 4, 4, (2, 2, 1, 3), None),
-        ((1, 4, 4, 3), 1, 1, (0, 0), (2, 2)),
-        ((2, 4, 4, 5), 2, 2, (0, 0), (2, 2)),
-        ((4, 4, 4, 7), 2, 2, (0, 0), (2, 2)),
-        ((8, 4, 4, 11), 2, 2, (0, 0), (4, 2)),
-        ((16, 4, 4, 13), 2, 2, (0, 0), (8, 2)),
-        ((4, 4, 8, 17), 1, 2, (0, 0), (2, 2)),
-        ((8, 2, 8, 19), 2, 1, (0, 0), (2, 2)),
-        ((8, 8, 4, 23), 1, 2, (0, 0), (2, 2)),
-        ((16, 2, 8, 29), 2, 1, (0, 0), (4, 2)),
-        ((16, 2, 8, 31), 1, 4, (0, 0), (4, 2)),
-        ((4, 4, 4, 15), 2, 2, (0, 0), (2, 2)),
-        ((16, 4, 4, 63), 2, 2, (0, 0), (8, 2)),
+        ((1, 6, 6, 3), 1, 1, (3, 3), (1, 4)),
+        ((2, 6, 6, 5), 2, 2, (1, 1), (2, 4)),
+        ((4, 8, 8, 7), 2, 2, (4, 4), (4, 4)),
+        ((8, 6, 6, 11), 2, 2, (1, 1), (4, 4)),
+        ((16, 6, 6, 13), 2, 2, (5, 5), (8, 2)),
+        ((4, 8, 8, 17), 1, 2, (2, 2), (6, 2)),
+        ((8, 4, 8, 19), 2, 1, (3, 1), (2, 5)),
+        ((8, 10, 6, 23), 1, 2, (0, 2), (2, 5)),
+        ((10, 4, 8, 29), 2, 1, (1, 1), (2, 5)),
+        ((4, 16, 16, 15), 3, 3, (1, 1), (4, 6)),
+        ((16, 16, 16, 63), 3, 3, (1, 1), (8, 6)),
     ],
 )
 def test_fold_sharded(device, act_shape, stride_h, stride_w, padding, core_grid):
@@ -437,15 +436,17 @@ def test_fold_sharded(device, act_shape, stride_h, stride_w, padding, core_grid)
         expected = fold_torch(torch_input, stride_h, stride_w, padding=padding)
         expected = expected.reshape(1, 1, -1, expected.shape[-1])
 
-        # Simple sharding: always try for maximum cores for best performance
-        total_elements = N * H * W
-
         if core_grid is None:
+            # Fit to max cores that divides total elements without padding. In case of padding cases,
+            # reshard in fold will take care of it.
+            total_elements = N * H * W
             for grid_x, grid_y in [(8, 8), (4, 4), (2, 2), (1, 1)]:
                 n_cores = grid_x * grid_y
                 if total_elements % n_cores == 0:
                     break
         else:
+            # Curretnly, unaligned channel inputs are supported only without reshard path(Issue #29514).
+            total_elements = N * (H + padding[0] * 2) * (W + padding[1] * 2)
             grid_x, grid_y = core_grid
             n_cores = grid_x * grid_y
             if total_elements % n_cores != 0:
