@@ -123,16 +123,6 @@ class OperationArgument:
     value: str
 
 
-@dataclasses.dataclass
-class ErrorRecord:
-    operation_id: int
-    operation_name: str
-    error_type: str
-    error_message: str
-    stack_trace: str
-    timestamp: str
-
-
 def get_or_create_sqlite_db(report_path):
     global SQLITE_CONNECTION
     sqlite_db_path = report_path / SQLITE_DB_PATH
@@ -227,10 +217,6 @@ def get_or_create_sqlite_db(report_path):
     cursor.execute(
         """CREATE TABLE IF NOT EXISTS captured_graph
                 (operation_id int, captured_graph text)"""
-    )
-    cursor.execute(
-        """CREATE TABLE IF NOT EXISTS errors
-                (operation_id int, operation_name text, error_type text, error_message text, stack_trace text, timestamp text)"""
     )
     sqlite_connection.commit()
     return sqlite_connection
@@ -628,15 +614,6 @@ def insert_tensor_comparison_records(report_path, table_name, tensor_comparison_
                 {record.actual_pcc}
             )"""
         )
-    sqlite_connection.commit()
-
-
-def insert_error(report_path, operation_id, operation_name, error_type, error_message, stack_trace, timestamp):
-    sqlite_connection = ttnn.database.get_or_create_sqlite_db(report_path)
-    cursor = sqlite_connection.cursor()
-
-    statement = "INSERT INTO errors (operation_id, operation_name, error_type, error_message, stack_trace, timestamp) VALUES (?, ?, ?, ?, ?, ?)"
-    cursor.execute(statement, (operation_id, operation_name, error_type, error_message, stack_trace, timestamp))
     sqlite_connection.commit()
 
 

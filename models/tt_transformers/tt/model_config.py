@@ -1551,7 +1551,7 @@ class ModelArgs:
             self.multiple_of = text_config["multiple_of"]
             self.hidden_dim = calculate_hidden_dim(self.dim, self.ffn_dim_multiplier, self.multiple_of)
 
-        if "_name_or_path" in config:
+        if "_name_or_path" in config and config["_name_or_path"]:
             if is_hf:
                 normalized_path = os.path.normpath(config["_name_or_path"])
                 # For HF paths, they might end with `<model_name>/snapshots/<snapshot_id>/`

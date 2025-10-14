@@ -180,6 +180,11 @@ test_suite_wh_6u_metal_torus_xy_health_check_tests() {
     ./build/test/tt_metal/tt_fabric/test_system_health --system-topology TORUS_XY
 }
 
+test_suite_wh_6u_metal_qsfp_links_health_check_tests() {
+    echo "[upstream-tests] Checking QSFP links on WH 6U (Only works on XY (2D) Torus systems. Check https://github.com/tenstorrent/tt-metal/issues/30415 for updates)"
+    ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_deadlock_stability_6U_galaxy.yaml
+}
+
 test_suite_wh_6u_model_unit_tests() {
     echo "[upstream-tests] running WH 6U upstream model unit tests"
     pytest tests/ttnn/unit_tests/operations/ccl/test_ccl_async_TG_llama.py
@@ -219,6 +224,7 @@ declare -A hw_topology_test_suites
 # Store test suites as newline-separated lists
 hw_topology_test_suites["blackhole"]="
 test_suite_bh_umd_unit_tests
+test_suite_bh_pcie_didt_tests
 test_suite_bh_single_pcie_python_unit_tests
 test_suite_bh_single_pcie_metal_unit_tests
 test_suite_bh_single_pcie_small_ml_model_tests
@@ -226,32 +232,38 @@ test_suite_bh_single_pcie_llama_demo_tests" # NOTE: This test MUST be last becau
 
 hw_topology_test_suites["blackhole_no_models"]="
 test_suite_bh_umd_unit_tests
+test_suite_bh_pcie_didt_tests
 test_suite_bh_single_pcie_python_unit_tests
 test_suite_bh_single_pcie_metal_unit_tests"
 
 hw_topology_test_suites["blackhole_llmbox"]="
 test_suite_bh_multi_pcie_metal_unit_tests
+test_suite_bh_pcie_didt_tests
 test_suite_bh_multi_pcie_llama_demo_tests"
 
 hw_topology_test_suites["blackhole_deskbox"]="
 test_suite_bh_multi_pcie_metal_unit_tests
+test_suite_bh_pcie_didt_tests
 test_suite_bh_multi_pcie_llama_demo_tests"
 
 hw_topology_test_suites["blackhole_loudbox"]="
 test_suite_bh_multi_pcie_metal_unit_tests
+test_suite_bh_pcie_didt_tests
 test_suite_bh_multi_pcie_llama_demo_tests"
 
 hw_topology_test_suites["blackhole_p300"]="
 test_suite_bh_umd_unit_tests
 test_suite_bh_single_pcie_metal_unit_tests
 test_suite_bh_multi_pcie_metal_unit_tests
+test_suite_bh_pcie_didt_tests
 test_suite_bh_multi_pcie_llama_demo_tests"
 
 
 hw_topology_test_suites["wh_6u"]="test_suite_wh_6u_model_unit_tests
 test_suite_wh_6u_llama_demo_tests
 test_suite_wh_6u_metal_unit_tests
-test_suite_wh_6u_metal_torus_xy_health_check_tests"
+test_suite_wh_6u_metal_torus_xy_health_check_tests
+test_suite_wh_6u_metal_qsfp_links_health_check_tests"
 
 # Function to display help
 show_help() {
