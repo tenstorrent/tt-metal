@@ -68,24 +68,100 @@ struct AllShardSpecs {
 
 ShardSpec adjust_to_shape(const ShardSpec& shard_spec, const ttnn::Shape& from_shape, const ttnn::Shape& to_shape) {
     auto ret = shard_spec;
-    // TODO: redesign to handle shard spec mismatch
-    ret.shape[0] = std::max((ret.shape[0] * to_shape[-2]) / from_shape[-2], 32u);
-    ret.shape[1] = std::max((ret.shape[1] * to_shape[-1]) / from_shape[-1], 32u);
 
+    // Calculate volume of all dimensions EXCEPT the last (width)
+    // This is the "collapsed height" for sharding purposes
+    uint32_t from_volume_except_width = 1;
+    uint32_t to_volume_except_width = 1;
+
+    const int rank = std::max(from_shape.rank(), to_shape.rank());
+
+    // Accumulate all dimensions except the last
+    for (int i = 0; i < rank - 1; ++i) {
+        uint32_t from_dim = (i < from_shape.rank()) ? from_shape[i] : 1;
+        uint32_t to_dim = (i < to_shape.rank()) ? to_shape[i] : 1;
+        from_volume_except_width *= from_dim;
+        to_volume_except_width *= to_dim;
+    }
+
+    // Get width dimensions
+    uint32_t from_width = from_shape[-1];
+    uint32_t to_width = to_shape[-1];
+
+    // Adjust shard shape based on full volume ratios
+    ret.shape[0] = std::max((ret.shape[0] * to_volume_except_width) / from_volume_except_width, 32u);
+    ret.shape[1] = std::max((ret.shape[1] * to_width) / from_width, 32u);
     return ret;
 }
 
 TensorMemoryLayout get_memory_layout(const Tensor& a, const std::optional<Tensor>& b, const Tensor& c) {
+    if (!b.has_value()) {
+        return TensorMemoryLayout::INTERLEAVED;
+    }
+    // c is first prefered
+    if (c.memory_config().is_sharded()) {
+        return c.memory_config().memory_layout();
+    }
+
     if (a.memory_config().is_sharded()) {
         return a.memory_config().memory_layout();
     }
     if (b.has_value() && b->memory_config().is_sharded()) {
         return b->memory_config().memory_layout();
     }
-    if (c.memory_config().is_sharded()) {
-        return c.memory_config().memory_layout();
-    }
+
     return TensorMemoryLayout::INTERLEAVED;
+}
+
+inline auto is_uneven(const Tensor& t) {
+    if (not t.is_sharded()) {
+        return false;
+    }
+
+    const auto& shape = t.padded_shape();
+    const auto& shard = t.shard_spec()->shape;
+    const auto rank = shape.rank();
+
+    // Compute product of all dimensions except the last
+    uint64_t volume_except_last = 1;
+    for (int i = 0; i < static_cast<int>(rank) - 1; ++i) {
+        volume_except_last *= shape[i];
+    }
+
+    return (volume_except_last % shard[0]) != 0 or (shape[-1] % shard[1]) != 0;
+}
+
+bool is_native_L1_sharding(const Tensor& a, const std::optional<Tensor>& b, const Tensor& c) {
+    if (!b.has_value()) {
+        return false;
+    }
+
+    if (!c.memory_config().is_sharded()) {
+        return false;
+    }
+
+    // tensor scalar
+    if (!b.has_value() && a.memory_config().is_sharded()) {
+        return !is_uneven(a);
+    }
+
+    // a and b identical shape, no broadcast on any dimension
+    if (b.has_value() && (a.logical_shape() == b->logical_shape())) {
+        if (is_uneven(a) || is_uneven(*b) || is_uneven(c)) {
+            return false;
+        }
+        if ((a.memory_config().is_sharded() && a.memory_config().buffer_type() == BufferType::L1)) {
+            return true;
+        }
+        if (b->memory_config().is_sharded() && b->memory_config().buffer_type() == BufferType::L1) {
+            return true;
+        }
+        if (c.memory_config().is_sharded() && c.memory_config().buffer_type() == BufferType::L1) {
+            return true;
+        }
+    }
+
+    return false;
 }
 
 std::optional<AllShardSpecs> get_shard_specs(const Tensor& a, const std::optional<Tensor>& b, const Tensor& c) {
@@ -93,7 +169,19 @@ std::optional<AllShardSpecs> get_shard_specs(const Tensor& a, const std::optiona
     bool b_sharded = b.has_value() && b->memory_config().is_sharded();
     bool c_sharded = c.memory_config().is_sharded();
 
-    if (!a_sharded && !b_sharded && !c_sharded) {
+    // if (b.has_value() && b->logical_shape() != a.logical_shape()) {
+    //     //c is first prefered. if c is interleaved, program will be in tensor accessor interleaved mode
+    //     if ((!a_sharded && !b_sharded) || !c_sharded) {
+    //         return std::nullopt;
+    //    }
+    // } else {
+    if ((!a_sharded && !b_sharded) && !c_sharded) {
+        return std::nullopt;
+    }
+    //}
+
+    if (!is_native_L1_sharding(a, b, c)) {
+        // if not returning std::nullopt, all tensor+tensor uneven will hang
         return std::nullopt;
     }
 
@@ -107,7 +195,8 @@ std::optional<AllShardSpecs> get_shard_specs(const Tensor& a, const std::optiona
     if (!c_sharded && !a_sharded && b_sharded) {
         // If only B is sharded, then output shape must match input B shape
         // This is to avoid ambiguity when both A and C are not sharded
-        TT_FATAL(c_shape == b_shape, "If input B is sharded and input A is not, output shape must match input B shape");
+        // TT_FATAL(c_shape == b_shape, "If input B is sharded and input A is not, output shape must match input B
+        // shape");
     }
     return AllShardSpecs{
         a_sharded ? *a.shard_spec() : adjust_to_shape(c_shard_spec, c_shape, a_shape),
@@ -197,17 +286,6 @@ public:
     }
 };
 
-inline auto is_uneven(const Tensor& t) {
-    if (not t.is_sharded()) {
-        return false;
-    }
-
-    const auto& shape = t.padded_shape();
-    const auto& shard = t.shard_spec()->shape;
-
-    return (shape[-4] * shape[-3] * shape[-2] % shard[0]) != 0 or (shape[-1] % shard[1]) != 0;
-}
-
 bool is_native_L1_sharding(
     const BinaryNgDeviceOperation::tensor_args_t& tensor_args,
     const BinaryNgDeviceOperation::tensor_return_value_t& c,
@@ -215,10 +293,17 @@ bool is_native_L1_sharding(
     const auto& a = tensor_args.input_tensor_a;
     const auto& b = tensor_args.input_tensor_b;
 
+    if (!b.has_value()) {
+        return false;
+    }
+
+    if (!c.memory_config().is_sharded()) {
+        return false;
+    }
+
     // tensor scalar
     if (!b.has_value() && a.memory_config().is_sharded()) {
         return !is_uneven(a);
-        // return true;
     }
 
     // a and b identical shape, no broadcast on any dimension
@@ -369,20 +454,13 @@ void set_or_update_runtime_arguments(
             c_current_shard_width = c_shard_shape[1];           // actual
             auto a_shard_shape = a_shard_shape_generator(core);
             a_num_tiles = a_shard_shape[0] * a_shard_shape[1];  // actual
-            if (is_native_L1_sharding(tensor_args, c, operation_attributes) || !b.has_value()) {
+            if (is_native_L1_sharding(tensor_args, c, operation_attributes)) {
                 c_start_id =
                     (i / num_shards_per_width) * (c_shard_height * cWt) + (i % num_shards_per_width) * c_shard_width;
-                //} //else {
-                // For non-native L1 sharding (e.g., uneven), also use column-aware addressing for width/block sharding
-                // auto memory_layout = get_memory_layout(a, b, c);
-                // if (memory_layout == TensorMemoryLayout::WIDTH_SHARDED ||
-                //     memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
-                //     c_start_id = (i / num_shards_per_width) * (c_shard_height * cWt) +
-                //                  (i % num_shards_per_width) * c_shard_width;
             } else {
+                // c_current_shard_width = 0;
                 c_start_id = start_tile_id;
             }
-            //}
         } else {
             c_start_id = start_tile_id;
         }

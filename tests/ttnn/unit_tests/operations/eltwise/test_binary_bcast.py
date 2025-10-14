@@ -1152,8 +1152,8 @@ def test_binary_sharded_bcast_w_height(device, dtype_pt, dtype_tt):
 
     input_combinations = (
         (ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, a_sharded_config),
-        # (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config, ttnn.DRAM_MEMORY_CONFIG),
-        # (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config, a_sharded_config),
+        (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config, ttnn.DRAM_MEMORY_CONFIG),
+        (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config, a_sharded_config),
         (a_sharded_config, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
         (a_sharded_config, ttnn.DRAM_MEMORY_CONFIG, a_sharded_config),
         (a_sharded_config, b_sharded_config, ttnn.DRAM_MEMORY_CONFIG),
@@ -1215,10 +1215,9 @@ def test_binary_sharded_bcast_w_height_c(device, dtype_pt, dtype_tt):
     )
 
     input_combinations = (
-        # (ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, a_sharded_config),
-        # TODO below
-        # (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config, ttnn.DRAM_MEMORY_CONFIG),
-        # (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config, a_sharded_config),
+        (ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, a_sharded_config),
+        (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config, ttnn.DRAM_MEMORY_CONFIG),
+        (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config, a_sharded_config),
         (a_sharded_config, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
         (a_sharded_config, ttnn.DRAM_MEMORY_CONFIG, a_sharded_config),
         (a_sharded_config, b_sharded_config, ttnn.DRAM_MEMORY_CONFIG),
@@ -1281,9 +1280,8 @@ def test_binary_sharded_bcast_w_height_n(device, dtype_pt, dtype_tt):
 
     input_combinations = (
         (ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, a_sharded_config),
-        # TODO below
-        # (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config, ttnn.DRAM_MEMORY_CONFIG),
-        # (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config, a_sharded_config),
+        (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config, ttnn.DRAM_MEMORY_CONFIG),
+        (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config, a_sharded_config),
         (a_sharded_config, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
         (a_sharded_config, ttnn.DRAM_MEMORY_CONFIG, a_sharded_config),
         (a_sharded_config, b_sharded_config, ttnn.DRAM_MEMORY_CONFIG),
@@ -1346,8 +1344,8 @@ def test_binary_sharded_bcast_h_height(device, dtype_pt, dtype_tt):
 
     input_combinations = (
         (ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, a_sharded_config),
-        # (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config, ttnn.DRAM_MEMORY_CONFIG),
-        # (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config, a_sharded_config),
+        (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config, ttnn.DRAM_MEMORY_CONFIG),
+        (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config, a_sharded_config),
         (a_sharded_config, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
         (a_sharded_config, ttnn.DRAM_MEMORY_CONFIG, a_sharded_config),
         (a_sharded_config, b_sharded_config, ttnn.DRAM_MEMORY_CONFIG),
@@ -1411,8 +1409,8 @@ def test_binary_sharded_bcast_scalar_height(device, dtype_pt, dtype_tt):
 
     input_combinations = (
         (ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, a_sharded_config),
-        # (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config, ttnn.DRAM_MEMORY_CONFIG),
-        # (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config, a_sharded_config),
+        (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config, ttnn.DRAM_MEMORY_CONFIG),
+        (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config, a_sharded_config),
         (a_sharded_config, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
         (a_sharded_config, ttnn.DRAM_MEMORY_CONFIG, a_sharded_config),
         (a_sharded_config, b_sharded_config, ttnn.DRAM_MEMORY_CONFIG),
@@ -1475,7 +1473,8 @@ def test_binary_sharded_bcast_hw_mixed_height(device, dtype_pt, dtype_tt):
     )
 
     input_combinations = (
-        # (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config),
+        (ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
+        (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config),
         (a_sharded_config, ttnn.DRAM_MEMORY_CONFIG),
         (a_sharded_config, b_sharded_config),
     )
@@ -1538,8 +1537,8 @@ def test_binary_sharded_bcast_w_width(device, dtype_pt, dtype_tt):
 
     input_combinations = (
         (ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, a_sharded_config),
-        # (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config, ttnn.DRAM_MEMORY_CONFIG),
-        # (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config, a_sharded_config),
+        (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config, ttnn.DRAM_MEMORY_CONFIG),
+        (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config, a_sharded_config),
         (a_sharded_config, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
         (a_sharded_config, ttnn.DRAM_MEMORY_CONFIG, a_sharded_config),
         (a_sharded_config, b_sharded_config, ttnn.DRAM_MEMORY_CONFIG),
@@ -1603,8 +1602,8 @@ def test_binary_sharded_bcast_h_width(device, dtype_pt, dtype_tt):
 
     input_combinations = (
         (ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, a_sharded_config),
-        # (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config, ttnn.DRAM_MEMORY_CONFIG),
-        # (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config, a_sharded_config),
+        (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config, ttnn.DRAM_MEMORY_CONFIG),
+        (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config, a_sharded_config),
         (a_sharded_config, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
         (a_sharded_config, ttnn.DRAM_MEMORY_CONFIG, a_sharded_config),
         (a_sharded_config, b_sharded_config, ttnn.DRAM_MEMORY_CONFIG),
@@ -1668,8 +1667,8 @@ def test_binary_sharded_bcast_scalar_width(device, dtype_pt, dtype_tt):
 
     input_combinations = (
         (ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, a_sharded_config),
-        # (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config, ttnn.DRAM_MEMORY_CONFIG),
-        # (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config, a_sharded_config),
+        (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config, ttnn.DRAM_MEMORY_CONFIG),
+        (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config, a_sharded_config),
         (a_sharded_config, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
         (a_sharded_config, ttnn.DRAM_MEMORY_CONFIG, a_sharded_config),
         (a_sharded_config, b_sharded_config, ttnn.DRAM_MEMORY_CONFIG),
@@ -1732,7 +1731,7 @@ def test_binary_sharded_bcast_hw_mixed_width(device, dtype_pt, dtype_tt):
     )
 
     input_combinations = (
-        # ttnn.DRAM_MEMORY_CONFIG, b_sharded_config),
+        (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config),
         (a_sharded_config, ttnn.DRAM_MEMORY_CONFIG),
         (a_sharded_config, b_sharded_config),
     )
@@ -2050,7 +2049,7 @@ def test_binary_sharded_auto(a_shape, b_shape, shard_type, core_coord, device):
         [ttnn.ShardStrategy.BLOCK, [32 * 8, 64], ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (1, 4))})],
     ),
 )
-def test_binary_sharded_uneven(a_shape, b_shape, shard_type, shard_size, core_range, device):
+def test_binary_sharded_bcast_no_identical_uneven(a_shape, b_shape, shard_type, shard_size, core_range, device):
     torch.manual_seed(0)
     a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=torch.bfloat16), ttnn.bfloat16)(a_shape)
     b_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=torch.bfloat16), ttnn.bfloat16)(b_shape)
@@ -2067,11 +2066,9 @@ def test_binary_sharded_uneven(a_shape, b_shape, shard_type, shard_size, core_ra
         (ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, a_sharded_config),
         (ttnn.DRAM_MEMORY_CONFIG, a_sharded_config, ttnn.DRAM_MEMORY_CONFIG),
         (ttnn.DRAM_MEMORY_CONFIG, a_sharded_config, a_sharded_config),
-        # crash
-        # (a_sharded_config, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
-        # TODO
-        # (a_sharded_config, ttnn.DRAM_MEMORY_CONFIG, a_sharded_config),
-        # (a_sharded_config, a_sharded_config, ttnn.DRAM_MEMORY_CONFIG),
+        (a_sharded_config, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
+        (a_sharded_config, ttnn.DRAM_MEMORY_CONFIG, a_sharded_config),
+        (a_sharded_config, a_sharded_config, ttnn.DRAM_MEMORY_CONFIG),
         (a_sharded_config, a_sharded_config, a_sharded_config),
     )
     for a_config, b_config, dst_config in input_combinations:
@@ -2087,7 +2084,7 @@ def test_binary_sharded_uneven(a_shape, b_shape, shard_type, shard_size, core_ra
             dtype=ttnn.bfloat16,
             device=device,
             layout=ttnn.TILE_LAYOUT,
-            memory_config=a_config,
+            memory_config=b_config,
         )
 
         out_pt = torch.add(a_pt, b_pt)
@@ -2101,42 +2098,36 @@ def test_binary_sharded_uneven(a_shape, b_shape, shard_type, shard_size, core_ra
         assert ttnn.pearson_correlation_coefficient(out_tt_sharded, out_pt) >= 0.99988
 
 
-@pytest.mark.parametrize(
-    "scalar",
-    [
-        -0.25,
-        # -16.5, 0.0, 0.05, 1.7, 19.0
-    ],
-)
+@pytest.mark.parametrize("scalar", [1.7, -0.25])
 @pytest.mark.parametrize(
     "a_shape, shard_type, shard_size, core_range",
     (
         # W + HEIGHT
         [
-            torch.Size([1, 4 * 32]),
+            torch.Size([1, 40 * 32]),
             ttnn.ShardStrategy.HEIGHT,
-            [32, 4 * 32],
+            [32, 40 * 32],
             ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (0, 0))}),
         ],
         # W + WIDTH
         [
-            torch.Size([1, 4 * 32]),
+            torch.Size([1, 40 * 32]),
             ttnn.ShardStrategy.WIDTH,
-            [32, 32],
+            [32, 10 * 32],
             ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (0, 3))}),
         ],
         # W + BLOCK
         [
-            torch.Size([1, 4 * 32]),
+            torch.Size([1, 40 * 32]),
             ttnn.ShardStrategy.BLOCK,
-            [32, 32],
+            [32, 10 * 32],
             ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (3, 0))}),
         ],
         # H + HEIGHT
         [
-            torch.Size([4 * 32, 1]),
+            torch.Size([40 * 32, 1]),
             ttnn.ShardStrategy.HEIGHT,
-            [32, 32],
+            [10 * 32, 32],
             ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (0, 3))}),
         ],
         # H + WIDTH
@@ -2148,51 +2139,51 @@ def test_binary_sharded_uneven(a_shape, b_shape, shard_type, shard_size, core_ra
         ],
         # H + BLOCK
         [
-            torch.Size([4 * 32, 1]),
+            torch.Size([40 * 32, 1]),
             ttnn.ShardStrategy.BLOCK,
-            [32, 32],
+            [10 * 32, 32],
             ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (0, 3))}),
         ],
         # C + HEIGHT
         [
-            torch.Size([4, 1, 1]),
+            torch.Size([40, 1, 1]),
             ttnn.ShardStrategy.HEIGHT,
-            [32, 32],
+            [10 * 32, 32],
             ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (0, 3))}),
         ],
         # C + WIDTH
         [
-            torch.Size([4, 1, 1]),
+            torch.Size([40, 1, 1]),
             ttnn.ShardStrategy.WIDTH,
-            [4 * 32, 32],
+            [40 * 32, 32],
             ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (0, 0))}),
         ],
         # C + BLOCK
         [
-            torch.Size([4, 1, 1]),
+            torch.Size([40, 1, 1]),
             ttnn.ShardStrategy.BLOCK,
-            [32, 32],
+            [10 * 32, 32],
             ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (0, 3))}),
         ],
         # N + HEIGHT
         [
-            torch.Size([4, 1, 1, 1]),
+            torch.Size([40, 1, 1, 1]),
             ttnn.ShardStrategy.HEIGHT,
-            [32, 32],
+            [10 * 32, 32],
             ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (0, 3))}),
         ],
         # N + WIDTH
         [
-            torch.Size([4, 1, 1, 1]),
+            torch.Size([40, 1, 1, 1]),
             ttnn.ShardStrategy.WIDTH,
-            [4 * 32, 32],
+            [40 * 32, 32],
             ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (0, 0))}),
         ],
         # N + BLOCK
         [
-            torch.Size([4, 1, 1, 1]),
+            torch.Size([40, 1, 1, 1]),
             ttnn.ShardStrategy.BLOCK,
-            [32, 32],
+            [10 * 32, 32],
             ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (0, 3))}),
         ],
     ),
@@ -2209,35 +2200,37 @@ def test_binary_sharded_bcast_scalar_value(
     dtype_pt, dtype_tt, scalar, a_shape, shard_type, shard_size, core_range, device
 ):
     torch.manual_seed(0)
-    a_sharded_config = ttnn.create_sharded_memory_config(
+    sharded_config = ttnn.create_sharded_memory_config(
         shard_size,
         core_grid=core_range,
         strategy=shard_type,
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
         use_height_and_width_as_shard_shape=True,
     )
-
-    a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(a_shape)
-    a_tt = ttnn.from_torch(
-        a_pt,
-        dtype=dtype_tt,
-        device=device,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=a_sharded_config,
+    input_combinations = (
+        (ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
+        (ttnn.DRAM_MEMORY_CONFIG, sharded_config),
+        (sharded_config, ttnn.DRAM_MEMORY_CONFIG),
+        (sharded_config, sharded_config),
     )
+    for a_config, dst_config in input_combinations:
+        a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(a_shape)
+        a_tt = ttnn.from_torch(
+            a_pt,
+            dtype=dtype_tt,
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=a_config,
+        )
 
-    out_pt = torch.add(a_pt, scalar)
-    out_tt_sharded = ttnn.add(a_tt, scalar, memory_config=a_sharded_config, use_legacy=None)
-    out_tt_sharded = ttnn.to_torch(out_tt_sharded)
-    assert_with_pcc(out_tt_sharded, out_pt)
+        out_pt = torch.add(a_pt, scalar)
+        out_tt_sharded = ttnn.add(a_tt, scalar, memory_config=dst_config, use_legacy=None)
+        out_tt_sharded = ttnn.to_torch(out_tt_sharded)
+        assert_with_pcc(out_tt_sharded, out_pt)
 
-    out_tt_interleaved = ttnn.add(a_tt, scalar, memory_config=ttnn.DRAM_MEMORY_CONFIG, use_legacy=None)
-    out_tt_interleaved = ttnn.to_torch(out_tt_interleaved)
-    assert_with_pcc(out_tt_interleaved, out_pt)
-
-    out_tt_interleaved = ttnn.add(a_tt, scalar, use_legacy=None)
-    out_tt_interleaved = ttnn.to_torch(out_tt_interleaved)
-    assert_with_pcc(out_tt_interleaved, out_pt)
+        out_tt_interleaved = ttnn.add(a_tt, scalar, use_legacy=None)
+        out_tt_interleaved = ttnn.to_torch(out_tt_interleaved)
+        assert_with_pcc(out_tt_interleaved, out_pt)
 
 
 @pytest.mark.parametrize("scalar", [1.7, -0.25])
@@ -2278,37 +2271,38 @@ def test_binary_sharded_bcast_scalar_value(
 def test_binary_sharded_bcast_scalar_value_uneven(
     dtype_pt, dtype_tt, scalar, a_shape, shard_type, shard_size, core_range, device
 ):
-    # pytest.skip("not supported yet")
     torch.manual_seed(0)
-    a_sharded_config = ttnn.create_sharded_memory_config(
+    sharded_config = ttnn.create_sharded_memory_config(
         shard_size,
         core_grid=core_range,
         strategy=shard_type,
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
         use_height_and_width_as_shard_shape=True,
     )
-
-    a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(a_shape)
-    a_tt = ttnn.from_torch(
-        a_pt,
-        dtype=dtype_tt,
-        device=device,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=a_sharded_config,
+    input_combinations = (
+        (ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
+        (ttnn.DRAM_MEMORY_CONFIG, sharded_config),
+        # (sharded_config, ttnn.DRAM_MEMORY_CONFIG),
+        # (sharded_config, sharded_config),
     )
+    for a_config, dst_config in input_combinations:
+        a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(a_shape)
+        a_tt = ttnn.from_torch(
+            a_pt,
+            dtype=dtype_tt,
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=a_config,
+        )
 
-    out_pt = torch.add(a_pt, scalar)
-    out_tt_sharded = ttnn.add(a_tt, scalar, memory_config=a_sharded_config, use_legacy=None)
-    out_tt_sharded = ttnn.to_torch(out_tt_sharded)
-    assert_with_pcc(out_tt_sharded, out_pt)
+        out_pt = torch.add(a_pt, scalar)
+        out_tt_sharded = ttnn.add(a_tt, scalar, memory_config=dst_config, use_legacy=None)
+        out_tt_sharded = ttnn.to_torch(out_tt_sharded)
+        assert_with_pcc(out_tt_sharded, out_pt)
 
-    # out_tt_interleaved = ttnn.add(a_tt, scalar, memory_config=ttnn.DRAM_MEMORY_CONFIG, use_legacy=None)
-    # out_tt_interleaved = ttnn.to_torch(out_tt_interleaved)
-    # assert_with_pcc(out_tt_interleaved, out_pt)
-
-    out_tt_interleaved = ttnn.add(a_tt, scalar, use_legacy=None)
-    out_tt_interleaved = ttnn.to_torch(out_tt_interleaved)
-    assert_with_pcc(out_tt_interleaved, out_pt)
+        out_tt_interleaved = ttnn.add(a_tt, scalar, use_legacy=None)
+        out_tt_interleaved = ttnn.to_torch(out_tt_interleaved)
+        assert_with_pcc(out_tt_interleaved, out_pt)
 
 
 @pytest.mark.parametrize("scalar", [-0.25])
@@ -3356,8 +3350,8 @@ def test_binary_sharded_bcast_w_block(device, dtype_pt, dtype_tt):
 
     input_combinations = (
         (ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, a_sharded_config),
-        # (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config, ttnn.DRAM_MEMORY_CONFIG),
-        # (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config, a_sharded_config),
+        (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config, ttnn.DRAM_MEMORY_CONFIG),
+        (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config, a_sharded_config),
         (a_sharded_config, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
         (a_sharded_config, ttnn.DRAM_MEMORY_CONFIG, a_sharded_config),
         (a_sharded_config, b_sharded_config, ttnn.DRAM_MEMORY_CONFIG),
@@ -3421,8 +3415,8 @@ def test_binary_sharded_bcast_h_block(device, dtype_pt, dtype_tt):
 
     input_combinations = (
         (ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, a_sharded_config),
-        # (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config, ttnn.DRAM_MEMORY_CONFIG),
-        # (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config, a_sharded_config),
+        (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config, ttnn.DRAM_MEMORY_CONFIG),
+        (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config, a_sharded_config),
         (a_sharded_config, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
         (a_sharded_config, ttnn.DRAM_MEMORY_CONFIG, a_sharded_config),
         (a_sharded_config, b_sharded_config, ttnn.DRAM_MEMORY_CONFIG),
@@ -3486,8 +3480,8 @@ def test_binary_sharded_bcast_scalar_block(device, dtype_pt, dtype_tt):
 
     input_combinations = (
         (ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, a_sharded_config),
-        # (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config, ttnn.DRAM_MEMORY_CONFIG),
-        # (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config, a_sharded_config),
+        (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config, ttnn.DRAM_MEMORY_CONFIG),
+        (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config, a_sharded_config),
         (a_sharded_config, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
         (a_sharded_config, ttnn.DRAM_MEMORY_CONFIG, a_sharded_config),
         (a_sharded_config, b_sharded_config, ttnn.DRAM_MEMORY_CONFIG),
@@ -3550,7 +3544,7 @@ def test_binary_sharded_bcast_hw_mixed_block(device, dtype_pt, dtype_tt):
     )
 
     input_combinations = (
-        # (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config),
+        (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config),
         (a_sharded_config, ttnn.DRAM_MEMORY_CONFIG),
         (a_sharded_config, b_sharded_config),
     )
@@ -3857,11 +3851,11 @@ def test_binary_sharded_bcast_w_height_uneven(device, dtype_pt, dtype_tt):
     input_combinations = (
         (ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
         (ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, a_sharded_config),
-        # (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config, ttnn.DRAM_MEMORY_CONFIG),
-        # (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config, a_sharded_config),
-        # (a_sharded_config, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
-        # (a_sharded_config, ttnn.DRAM_MEMORY_CONFIG, a_sharded_config),
-        # (a_sharded_config, b_sharded_config, ttnn.DRAM_MEMORY_CONFIG),
+        (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config, ttnn.DRAM_MEMORY_CONFIG),
+        (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config, a_sharded_config),
+        (a_sharded_config, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
+        (a_sharded_config, ttnn.DRAM_MEMORY_CONFIG, a_sharded_config),
+        (a_sharded_config, b_sharded_config, ttnn.DRAM_MEMORY_CONFIG),
         (a_sharded_config, b_sharded_config, a_sharded_config),
     )
 
@@ -3922,11 +3916,11 @@ def test_binary_sharded_bcast_w_width_uneven(device, dtype_pt, dtype_tt):
     input_combinations = (
         (ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
         (ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, a_sharded_config),
-        # (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config, ttnn.DRAM_MEMORY_CONFIG),
-        # (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config, a_sharded_config),
-        # (a_sharded_config, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
-        # (a_sharded_config, ttnn.DRAM_MEMORY_CONFIG, a_sharded_config),
-        # (a_sharded_config, b_sharded_config, ttnn.DRAM_MEMORY_CONFIG),
+        (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config, ttnn.DRAM_MEMORY_CONFIG),
+        (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config, a_sharded_config),
+        (a_sharded_config, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
+        (a_sharded_config, ttnn.DRAM_MEMORY_CONFIG, a_sharded_config),
+        (a_sharded_config, b_sharded_config, ttnn.DRAM_MEMORY_CONFIG),
         (a_sharded_config, b_sharded_config, a_sharded_config),
     )
 
@@ -3988,11 +3982,11 @@ def test_binary_sharded_bcast_w_block_uneven(device, dtype_pt, dtype_tt):
     input_combinations = (
         (ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
         (ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, a_sharded_config),
-        # (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config, ttnn.DRAM_MEMORY_CONFIG),
-        # (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config, a_sharded_config),
-        # (a_sharded_config, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
-        # (a_sharded_config, ttnn.DRAM_MEMORY_CONFIG, a_sharded_config),
-        # (a_sharded_config, b_sharded_config, ttnn.DRAM_MEMORY_CONFIG),
+        (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config, ttnn.DRAM_MEMORY_CONFIG),
+        (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config, a_sharded_config),
+        (a_sharded_config, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
+        (a_sharded_config, ttnn.DRAM_MEMORY_CONFIG, a_sharded_config),
+        (a_sharded_config, b_sharded_config, ttnn.DRAM_MEMORY_CONFIG),
         (a_sharded_config, b_sharded_config, a_sharded_config),
     )
 
@@ -4053,11 +4047,11 @@ def test_binary_sharded_bcast_h_height_uneven(device, dtype_pt, dtype_tt):
 
     input_combinations = (
         (ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, a_sharded_config),
-        # (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config, ttnn.DRAM_MEMORY_CONFIG),
-        # (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config, a_sharded_config),
-        # (a_sharded_config, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
-        # (a_sharded_config, ttnn.DRAM_MEMORY_CONFIG, a_sharded_config),
-        # (a_sharded_config, b_sharded_config, ttnn.DRAM_MEMORY_CONFIG),
+        (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config, ttnn.DRAM_MEMORY_CONFIG),
+        (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config, a_sharded_config),
+        (a_sharded_config, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
+        (a_sharded_config, ttnn.DRAM_MEMORY_CONFIG, a_sharded_config),
+        (a_sharded_config, b_sharded_config, ttnn.DRAM_MEMORY_CONFIG),
         (a_sharded_config, b_sharded_config, a_sharded_config),
     )
 
@@ -4118,11 +4112,11 @@ def test_binary_sharded_bcast_h_width_uneven(device, dtype_pt, dtype_tt):
 
     input_combinations = (
         (ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, a_sharded_config),
-        # (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config, ttnn.DRAM_MEMORY_CONFIG),
-        # (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config, a_sharded_config),
-        # (a_sharded_config, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
-        # (a_sharded_config, ttnn.DRAM_MEMORY_CONFIG, a_sharded_config),
-        # (a_sharded_config, b_sharded_config, ttnn.DRAM_MEMORY_CONFIG),
+        (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config, ttnn.DRAM_MEMORY_CONFIG),
+        (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config, a_sharded_config),
+        (a_sharded_config, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
+        (a_sharded_config, ttnn.DRAM_MEMORY_CONFIG, a_sharded_config),
+        (a_sharded_config, b_sharded_config, ttnn.DRAM_MEMORY_CONFIG),
         (a_sharded_config, b_sharded_config, a_sharded_config),
     )
 
@@ -4183,11 +4177,11 @@ def test_binary_sharded_bcast_h_block_uneven(device, dtype_pt, dtype_tt):
 
     input_combinations = (
         (ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, a_sharded_config),
-        # (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config, ttnn.DRAM_MEMORY_CONFIG),
-        # (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config, a_sharded_config),
-        # (a_sharded_config, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
-        # (a_sharded_config, ttnn.DRAM_MEMORY_CONFIG, a_sharded_config),
-        # (a_sharded_config, b_sharded_config, ttnn.DRAM_MEMORY_CONFIG),
+        (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config, ttnn.DRAM_MEMORY_CONFIG),
+        (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config, a_sharded_config),
+        (a_sharded_config, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
+        (a_sharded_config, ttnn.DRAM_MEMORY_CONFIG, a_sharded_config),
+        (a_sharded_config, b_sharded_config, ttnn.DRAM_MEMORY_CONFIG),
         (a_sharded_config, b_sharded_config, a_sharded_config),
     )
 
@@ -4248,11 +4242,11 @@ def test_binary_sharded_bcast_scalar_height_uneven(device, dtype_pt, dtype_tt):
 
     input_combinations = (
         (ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, a_sharded_config),
-        # (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config, ttnn.DRAM_MEMORY_CONFIG),
-        # (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config, a_sharded_config),
-        # (a_sharded_config, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
-        # (a_sharded_config, ttnn.DRAM_MEMORY_CONFIG, a_sharded_config),
-        # (a_sharded_config, b_sharded_config, ttnn.DRAM_MEMORY_CONFIG),
+        (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config, ttnn.DRAM_MEMORY_CONFIG),
+        (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config, a_sharded_config),
+        (a_sharded_config, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
+        (a_sharded_config, ttnn.DRAM_MEMORY_CONFIG, a_sharded_config),
+        (a_sharded_config, b_sharded_config, ttnn.DRAM_MEMORY_CONFIG),
         (a_sharded_config, b_sharded_config, a_sharded_config),
     )
 
@@ -4313,11 +4307,11 @@ def test_binary_sharded_bcast_scalar_width_uneven(device, dtype_pt, dtype_tt):
 
     input_combinations = (
         (ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, a_sharded_config),
-        # (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config, ttnn.DRAM_MEMORY_CONFIG),
-        # (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config, a_sharded_config),
-        # (a_sharded_config, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
-        # (a_sharded_config, ttnn.DRAM_MEMORY_CONFIG, a_sharded_config),
-        # (a_sharded_config, b_sharded_config, ttnn.DRAM_MEMORY_CONFIG),
+        (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config, ttnn.DRAM_MEMORY_CONFIG),
+        (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config, a_sharded_config),
+        (a_sharded_config, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
+        (a_sharded_config, ttnn.DRAM_MEMORY_CONFIG, a_sharded_config),
+        (a_sharded_config, b_sharded_config, ttnn.DRAM_MEMORY_CONFIG),
         (a_sharded_config, b_sharded_config, a_sharded_config),
     )
 
@@ -4378,11 +4372,11 @@ def test_binary_sharded_bcast_scalar_block_uneven(device, dtype_pt, dtype_tt):
 
     input_combinations = (
         (ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, a_sharded_config),
-        # (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config, ttnn.DRAM_MEMORY_CONFIG),
-        # (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config, a_sharded_config),
-        # (a_sharded_config, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
-        # (a_sharded_config, ttnn.DRAM_MEMORY_CONFIG, a_sharded_config),
-        # (a_sharded_config, b_sharded_config, ttnn.DRAM_MEMORY_CONFIG),
+        (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config, ttnn.DRAM_MEMORY_CONFIG),
+        (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config, a_sharded_config),
+        (a_sharded_config, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
+        (a_sharded_config, ttnn.DRAM_MEMORY_CONFIG, a_sharded_config),
+        (a_sharded_config, b_sharded_config, ttnn.DRAM_MEMORY_CONFIG),
         (a_sharded_config, b_sharded_config, a_sharded_config),
     )
 
