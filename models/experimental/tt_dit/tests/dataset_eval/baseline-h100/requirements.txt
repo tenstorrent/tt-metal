@@ -1,0 +1,7 @@
+sentencepiece
+diffusers
+transformers
+open_clip_torch
+loguru
+numpy
+scipy
