@@ -319,6 +319,20 @@ constexpr bool implements_compute_output_specs() {
 }
 
 template <class T, class... Args>
+using has_compute_output_topologies_t = decltype(std::declval<T>().compute_output_topologies(std::declval<Args>()...));
+
+template <class T>
+constexpr bool implements_compute_output_topologies_with_optional_output_tensors() {
+    return std::experimental::is_detected_v<has_compute_output_topologies_t, T, const Tensors&, const OptionalTensors&>;
+}
+
+template <class T>
+constexpr bool implements_compute_output_topologies() {
+    return std::experimental::is_detected_v<has_compute_output_topologies_t, T, const Tensors&> ||
+           implements_compute_output_topologies_with_optional_output_tensors<T>();
+}
+
+template <class T, class... Args>
 using has_create_output_tensors_t = decltype(std::declval<T>().create_output_tensors(std::declval<Args>()...));
 
 template <class T>
@@ -567,6 +581,7 @@ public:
     using storage_t = std::array<std::byte, 1240>;
     using OutputTensors = OutputTensorsT;
     using ComputedSpecs = std::vector<ttnn::TensorSpec>;
+    using ComputedTopologies = std::vector<tt::tt_metal::TensorTopology>;
 
     std::string get_type_name() const { return this->get_type_name_impl_(this->type_erased_storage); }
 
@@ -579,6 +594,11 @@ public:
 
     ComputedSpecs compute_output_specs(const Tensors& input_tensors, const OptionalTensors& output_tensors) const {
         return this->compute_output_specs_impl_(this->type_erased_storage, input_tensors, output_tensors);
+    }
+
+    ComputedTopologies compute_output_topologies(
+        const Tensors& input_tensors, const OptionalTensors& output_tensors) const {
+        return this->compute_output_topologies_impl_(this->type_erased_storage, input_tensors, output_tensors);
     }
 
     OutputTensors create_output_tensors(const Tensors& input_tensors, const OptionalTensors& output_tensors) const {
@@ -753,6 +773,21 @@ public:
                 } else {
                     static_assert(
                         tt::stl::concepts::always_false_v<T>, "Operation must implement compute_output_specs");
+                }
+            }},
+        compute_output_topologies_impl_{
+            [](const storage_t& storage,
+               const Tensors& input_tensors,
+               const OptionalTensors& output_tensors) -> ComputedTopologies {
+                const auto& operation = *reinterpret_cast<const std::decay_t<T>*>(&storage);
+                if constexpr (detail::implements_compute_output_topologies_with_optional_output_tensors<T>()) {
+                    return operation.compute_output_topologies(input_tensors, output_tensors);
+                } else if constexpr (detail::implements_compute_output_topologies<T>()) {
+                    return operation.compute_output_topologies(input_tensors);
+                } else {
+                    // Optional function - return empty vector if not implemented
+                    // Default topology handling will be provided by calling code
+                    return ComputedTopologies{};
                 }
             }},
         create_output_tensors_impl_{
@@ -954,6 +989,7 @@ public:
         get_type_name_impl_{other.get_type_name_impl_},
         validate_impl_{other.validate_impl_},
         compute_output_specs_impl_{other.compute_output_specs_impl_},
+        compute_output_topologies_impl_{other.compute_output_topologies_impl_},
         create_output_tensors_impl_{other.create_output_tensors_impl_},
         create_program_impl_{other.create_program_impl_},
         create_mesh_workload_impl_{other.create_mesh_workload_impl_},
@@ -979,6 +1015,7 @@ public:
             this->get_type_name_impl_ = other.get_type_name_impl_;
             this->validate_impl_ = other.validate_impl_;
             this->compute_output_specs_impl_ = other.compute_output_specs_impl_;
+            this->compute_output_topologies_impl_ = other.compute_output_topologies_impl_;
             this->create_output_tensors_impl_ = other.create_output_tensors_impl_;
             this->create_program_impl_ = other.create_program_impl_;
             this->create_mesh_workload_impl_ = other.create_mesh_workload_impl_;
@@ -1002,6 +1039,7 @@ public:
         get_type_name_impl_{other.get_type_name_impl_},
         validate_impl_{other.validate_impl_},
         compute_output_specs_impl_{other.compute_output_specs_impl_},
+        compute_output_topologies_impl_{other.compute_output_topologies_impl_},
         create_output_tensors_impl_{other.create_output_tensors_impl_},
         create_program_impl_{other.create_program_impl_},
         create_mesh_workload_impl_{other.create_mesh_workload_impl_},
@@ -1027,6 +1065,7 @@ public:
             this->get_type_name_impl_ = other.get_type_name_impl_;
             this->validate_impl_ = other.validate_impl_;
             this->compute_output_specs_impl_ = other.compute_output_specs_impl_;
+            this->compute_output_topologies_impl_ = other.compute_output_topologies_impl_;
             this->create_output_tensors_impl_ = other.create_output_tensors_impl_;
             this->create_program_impl_ = other.create_program_impl_;
             this->create_mesh_workload_impl_ = other.create_mesh_workload_impl_;
@@ -1059,6 +1098,8 @@ private:
         const std::vector<std::optional<const Tensor>>&,
         const OptionalTensors&);
     ComputedSpecs (*compute_output_specs_impl_)(const storage_t& value, const Tensors&, const OptionalTensors&);
+    ComputedTopologies (*compute_output_topologies_impl_)(
+        const storage_t& value, const Tensors&, const OptionalTensors&);
     OutputTensors (*create_output_tensors_impl_)(const storage_t& value, const Tensors&, const OptionalTensors&);
 
     CacheableProgram<OutputTensors> (*create_program_impl_)(
