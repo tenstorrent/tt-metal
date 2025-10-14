@@ -180,3 +180,4 @@ jobs:
           ls outputs
           echo " ================= "
           ls outputs/*
+          echo " ================= "
