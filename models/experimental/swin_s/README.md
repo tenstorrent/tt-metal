@@ -32,7 +32,7 @@ pytest models/experimental/swin_s/tests/perf/test_e2e_performant.py::test_e2e_pe
 
 -  For overall rutime inference (end-2-end), use the following command to run for multi device:
 ```sh
-pytest  models/experimental/swin_s/tests/perf/test_e2e_performant.py::test_e2e_performant_dp
+pytest models/experimental/swin_s/tests/perf/test_e2e_performant.py::test_e2e_performant_dp
 ```
 - end-2-end perf is 23 FPS
 

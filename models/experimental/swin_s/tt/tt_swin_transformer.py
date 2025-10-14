@@ -7,6 +7,7 @@ from models.experimental.swin_s.tt.tt_swin_transformer_block import TtSwinTransf
 from models.experimental.swin_s.tt.tt_patchmerging import TtPatchMerging
 import ttnn
 from models.experimental.swin_s.tt.common import Conv
+import math
 
 
 class TtSwinTransformer:
@@ -34,7 +35,7 @@ class TtSwinTransformer:
         self.blocks = block
         self.norm_layer = norm_layer
 
-        self.conv2d = Conv([4, 4, 0, 0], parameters=parameters["features"][0][0], reshard=True)
+        self.conv2d = Conv([4, 4, 0, 0], parameters=parameters["features"][0][0], reshard=True, core_count=64)
         if block is None:
             self.block = TtSwinTransformerBlock
 
@@ -78,7 +79,6 @@ class TtSwinTransformer:
         ttnn.deallocate(input_tensor)
         nhwc = ttnn.reallocate(nhwc)
         output_tensor = self.conv2d(self.device, nhwc)
-        output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
         output_tensor = ttnn.sharded_to_interleaved(output_tensor, ttnn.L1_MEMORY_CONFIG)
 
         if self.norm_layer is None:
@@ -109,16 +109,29 @@ class TtSwinTransformer:
             )
         else:
             pass
-        output_tensor = ttnn.permute(output_tensor, (0, 3, 1, 2), memory_config=ttnn.L1_MEMORY_CONFIG)
-        # AdaptiveAvgPool2d starts
-        output_tensor = ttnn.permute(output_tensor, (0, 2, 3, 1), memory_config=ttnn.L1_MEMORY_CONFIG)
-        output_tensor = ttnn.global_avg_pool2d(output_tensor, memory_config=ttnn.L1_MEMORY_CONFIG)
-        output_tensor = ttnn.permute(output_tensor, (0, 3, 1, 2), memory_config=ttnn.L1_MEMORY_CONFIG)
-        # AdaptiveAvgPool2d  ends
-        output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
+
         output_tensor = ttnn.reshape(
-            output_tensor, (output_tensor.shape[0], -1)
+            output_tensor,
+            (1, 1, output_tensor.shape[0] * output_tensor.shape[1] * output_tensor.shape[2], output_tensor.shape[3]),
+        )
+
+        input_h = int(math.sqrt(output_tensor.shape[-2]))
+        input_w = int(math.sqrt(output_tensor.shape[-2]))
+
+        output_tensor = ttnn.adaptive_avg_pool2d(
+            input_tensor=output_tensor,
+            batch_size=output_tensor.shape[0],
+            input_h=input_h,
+            input_w=input_w,
+            channels=output_tensor.shape[3],
+            output_size=[1, 1],
+        )
+
+        output_tensor = ttnn.reshape(
+            output_tensor, (output_tensor.shape[0], output_tensor.shape[3])
         )  # Replace for flatten, self.flatten(output_tensor)
+
+        output_tensor = ttnn.sharded_to_interleaved(output_tensor, ttnn.L1_MEMORY_CONFIG)
         output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
         output_tensor = ttnn.linear(
             output_tensor,
