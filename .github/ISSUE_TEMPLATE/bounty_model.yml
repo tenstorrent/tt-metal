@@ -15,10 +15,9 @@ body:
       label: "."
       description: "Context about what the bounty is about — What model to bring up, where it's used, and who would be interested."
       placeholder: |
-        Example:
-        - Model: Whisper
-        - Purpose: Speech-to-text on TT hardware
-        - Used in: OpenAI API, transcription systems
+        Faster-RCNN example:
+        This bounty is for bringing up the [Faster-RCNN](https://docs.pytorch.org/vision/main/models/faster_rcnn.html) model using TTNN APIs on Tenstorrent hardware (Wormhole or Blackhole). Faster-RCNN is a widely used deep learning model for object detection in images, applied in autonomous vehicles, surveillance, robotics, and various vision-based industrial applications. The objective is to enable the model to run efficiently on TT hardware, allowing Tenstorrent users and partners to leverage high-throughput, low-latency inference for object detection tasks.
+
 
 
   - type: markdown
