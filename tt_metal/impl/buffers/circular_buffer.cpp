@@ -6,6 +6,7 @@
 #include <circular_buffer.hpp>
 #include <global_circular_buffer.hpp>
 #include <array>
+#include <ranges>
 #include <string>
 
 #include <tt_stl/assert.hpp>
@@ -175,6 +176,35 @@ void CircularBuffer::set_global_circular_buffer(const experimental::GlobalCircul
 }
 
 DeviceAddr CircularBuffer::config_address() const { return this->global_circular_buffer_config_address_; }
+
+// CircularBufferMetadata implementations
+CBHandle CircularBufferMetadata::id() const { return buffer->id(); }
+
+bool CircularBufferMetadata::globally_allocated() const { return buffer->globally_allocated(); }
+
+const CoreRangeSet& CircularBufferMetadata::core_ranges() const { return buffer->core_ranges(); }
+
+std::size_t CircularBufferMetadata::size() const { return buffer->size(); }
+
+std::vector<CircularBufferIndexMetadata> CircularBufferMetadata::indicies() const {
+    auto result_view = std::ranges::transform_view(buffer->buffer_indices(), [&](auto index) {
+        return CircularBufferIndexMetadata{buffer, static_cast<CBIndex>(index)};
+    });
+
+    return {result_view.begin(), result_view.end()};
+}
+
+// CircularBufferIndexMetadata implementations
+CircularBufferIndexMetadata::CircularBufferIndexMetadata(CircularBuffer* buffer, CBIndex idx_) :
+    buffer(buffer), idx(idx_) {}
+
+CBIndex CircularBufferIndexMetadata::index() const { return idx; }
+
+std::size_t CircularBufferIndexMetadata::page_size() const { return buffer->page_size(idx); }
+
+std::size_t CircularBufferIndexMetadata::num_pages() const { return buffer->num_pages(idx); }
+
+DataFormat CircularBufferIndexMetadata::data_format() const { return buffer->data_format(idx); }
 
 }  // namespace tt_metal
 

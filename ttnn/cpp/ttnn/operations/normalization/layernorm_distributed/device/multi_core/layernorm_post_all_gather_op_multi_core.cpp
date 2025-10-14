@@ -466,15 +466,12 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
             .set_page_size(tt::CBIndex::c_14, out_single_tile_size);
     CreateCircularBuffer(program, all_cores, cb_out0_config);
 
-    // Log all circular buffers with program.circular_buffers(), which returns
-    // std::vector<std::shared_ptr<CircularBuffer>>
-
     for (const auto& cb : program.circular_buffers()) {
-        for ([[maybe_unused]] const auto index : cb->buffer_indices()) {
-            log_debug(tt::LogOp, "cb_id {}", index);
-            log_debug(tt::LogOp, "page_size: {}", cb->page_size(index));
-            log_debug(tt::LogOp, "num_pages: {}", cb->num_pages(index));
-            log_debug(tt::LogOp, "data_format: {}", cb->data_format(index));
+        for ([[maybe_unused]] const auto& index : cb.indicies()) {
+            log_debug(tt::LogOp, "cb_id {}", index.index());
+            log_debug(tt::LogOp, "page_size: {}", index.page_size());
+            log_debug(tt::LogOp, "num_pages: {}", index.num_pages());
+            log_debug(tt::LogOp, "data_format: {}", index.data_format());
         }
     }
 

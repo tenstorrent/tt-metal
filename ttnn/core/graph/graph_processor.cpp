@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/graph/graph_processor.hpp"
+#include "tt-metalium/global_circular_buffer.hpp"
 #include "ttnn/graph/graph_argument_serializer.hpp"
 #include "ttnn/graph/graph_consts.hpp"
 #include "ttnn/types.hpp"
@@ -150,7 +151,7 @@ void GraphProcessor::track_program(tt::tt_metal::Program* program, const tt::tt_
     }
 
     for (auto& cb : program->circular_buffers()) {
-        track_allocate_cb(cb->core_ranges(), 0, cb->size(), cb->globally_allocated(), device);
+        track_allocate_cb(cb.core_ranges(), 0, cb.size(), cb.globally_allocated(), device);
     }
 }
 

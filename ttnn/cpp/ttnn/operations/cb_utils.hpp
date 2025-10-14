@@ -51,8 +51,8 @@ inline std::tuple<uint32_t, CBHandle> create_cb(
 
 inline uint32_t calculate_total_cb_size(const Program& program) {
     const auto& cbs = program.circular_buffers();
-    return std::accumulate(cbs.begin(), cbs.end(), uint32_t{0}, [](auto acc, const auto& cb) {
-        return acc + (cb->globally_allocated() ? 0 : cb->size());
+    return std::accumulate(cbs.begin(), cbs.end(), uint32_t{0}, [&](auto acc, const auto& cb) {
+        return acc + (cb.globally_allocated() ? 0 : cb.size());
     });
 }
 

@@ -6,14 +6,13 @@
 
 #include <cstdint>
 #include <memory>
-#include <span>
 #include <vector>
 
 namespace tt::tt_metal {
 
 // Fwd declares
 struct ProgramDescriptor;
-class CircularBuffer;
+class CircularBufferMetadata;
 
 namespace detail {
 class ProgramImpl;
@@ -45,8 +44,7 @@ public:
     // Buffer related functions:
     //////////////////////////////
 
-    // Used in ops.
-    std::span<const std::shared_ptr<CircularBuffer>> circular_buffers() const;
+    std::vector<CircularBufferMetadata> circular_buffers() const;
 
     // debug/test/internal usage.
     detail::ProgramImpl& impl() { return *internal_; }

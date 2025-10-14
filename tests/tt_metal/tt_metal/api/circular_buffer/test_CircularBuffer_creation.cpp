@@ -54,7 +54,7 @@ bool test_cb_config_written_to_core(
     vector<uint32_t> cb_config_vector;
 
     for (const auto& cb : program.circular_buffers()) {
-        for (const CoreRange& core_range : cb->core_ranges().ranges()) {
+        for (const CoreRange& core_range : cb.core_ranges().ranges()) {
             for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
                 for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                     CoreCoord core_coord(x, y);

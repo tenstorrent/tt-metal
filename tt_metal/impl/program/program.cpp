@@ -1550,8 +1550,11 @@ std::span<const std::shared_ptr<CircularBuffer>> detail::ProgramImpl::circular_b
     return circular_buffers_;
 }
 
-std::span<const std::shared_ptr<CircularBuffer>> Program::circular_buffers() const {
-    return internal_->circular_buffers();
+std::vector<CircularBufferMetadata> Program::circular_buffers() const {
+    auto result_view = std::ranges::transform_view(
+        this->impl().circular_buffers(), [](const auto& cb_ptr) { return CircularBufferMetadata{cb_ptr.get()}; });
+
+    return {result_view.begin(), result_view.end()};
 }
 
 const std::vector<Semaphore>& detail::ProgramImpl::semaphores() const { return semaphores_; }
