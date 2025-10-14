@@ -43,7 +43,7 @@ void FabricConnectionManager::register_client(
 void FabricConnectionManager::process(
     LocalDeviceCoreAllocator& local_alloc,
     TestDevice* test_device_ptr,
-    std::shared_ptr<IDeviceInfoProvider> device_info_provider) {
+    const std::shared_ptr<IDeviceInfoProvider> device_info_provider) {
     for (auto& [key, conn] : connections_) {
         // Mux is needed if more than 1 client (any type) uses this link
         size_t total_clients = conn.sender_cores.size() + conn.receiver_cores.size() + conn.sync_cores.size();
@@ -167,7 +167,7 @@ bool FabricConnectionManager::is_mux_client(const CoreCoord& core) const {
 }
 
 std::vector<uint32_t> FabricConnectionManager::generate_mux_termination_local_args_for_core(
-    const CoreCoord& core, std::shared_ptr<IDeviceInfoProvider> device_info_provider) const {
+    const CoreCoord& core, const std::shared_ptr<IDeviceInfoProvider> device_info_provider) const {
     // Not a mux client? Return empty vector
     if (!is_mux_client(core)) {
         return {};
@@ -210,8 +210,8 @@ std::vector<uint32_t> FabricConnectionManager::generate_mux_termination_local_ar
 std::vector<uint32_t> FabricConnectionManager::generate_connection_args_for_core(
     const CoreCoord& core,
     TestWorkerType worker_type,
-    std::shared_ptr<IDeviceInfoProvider> device_info_provider,
-    std::shared_ptr<IRouteManager> route_manager,
+    const std::shared_ptr<IDeviceInfoProvider> device_info_provider,
+    const std::shared_ptr<IRouteManager> route_manager,
     const FabricNodeId& fabric_node_id,
     tt::tt_metal::Program& program_handle) const {
     std::vector<uint32_t> rt_args;

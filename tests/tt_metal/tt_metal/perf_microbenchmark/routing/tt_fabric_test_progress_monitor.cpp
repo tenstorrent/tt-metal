@@ -220,11 +220,11 @@ std::string TestProgressMonitor::format_throughput(double packets_per_second) co
 std::string TestProgressMonitor::format_duration(double seconds) const {
     if (seconds >= 3600) {
         uint32_t hours = static_cast<uint32_t>(seconds / 3600);
-        uint32_t minutes = static_cast<uint32_t>((seconds - hours * 3600) / 60);
+        uint32_t minutes = static_cast<uint32_t>((seconds - (hours * 3600)) / 60);
         return std::to_string(hours) + "h" + std::to_string(minutes) + "m";
     } else if (seconds >= 60) {
         uint32_t minutes = static_cast<uint32_t>(seconds / 60);
-        uint32_t secs = static_cast<uint32_t>(seconds - minutes * 60);
+        uint32_t secs = static_cast<uint32_t>(seconds - (minutes * 60));
         return std::to_string(minutes) + "m" + std::to_string(secs) + "s";
     } else {
         return std::to_string(static_cast<uint32_t>(seconds)) + "s";
