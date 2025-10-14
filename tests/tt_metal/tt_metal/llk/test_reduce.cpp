@@ -2,10 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// To enable pattern test data for MAX row reduction (instead of random data):
-// Compile with: -DUSE_PATTERN_DATA
-// Example: make -j8 build_hw DEFINES="-DUSE_PATTERN_DATA"
-
 #include <chrono>
 #include <fmt/base.h>
 #include <gtest/gtest.h>
@@ -16,7 +12,6 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <cmath>
 #include <cstdint>
-#include <cstring>
 #include <functional>
 #include <map>
 #include <memory>
@@ -84,7 +79,6 @@ struct ReduceConfig {
     // Whether or not to sync full/half DST between MATH and PACK:
     bool dst_full_sync_en = false;
     MathFidelity math_fidelity = MathFidelity::HiFi4;
-    bool use_pattern_data = false;
 };
 
 float get_scaler(const ReduceConfig& test_config) {
@@ -206,7 +200,7 @@ void add_reader_writer_kernels(
 
             auto unary_reader_kernel = tt_metal::CreateKernel(
                 program,
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_8bank.cpp",
+                "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_8bank_reduce.cpp",
                 logical_core,
                 tt_metal::DataMovementConfig{
                     .processor = tt_metal::DataMovementProcessor::RISCV_1,
@@ -228,28 +222,31 @@ void add_reader_writer_kernels(
                     .noc = tt_metal::NOC::RISCV_0_default,
                     .compile_args = writer_compile_args});
 
-            // New argument order: src_addr, Ht, Wt, NC, scaler
             tt_metal::SetRuntimeArgs(
                 program,
                 unary_reader_kernel,
                 logical_core,
                 {
                     src_dram_buffer->address(),
-                    Ht,                                     // Number of rows (height in tiles)
-                    Wt,                                     // Number of cols (width in tiles)
-                    NC,                                     // Number of channels
-                    *reinterpret_cast<uint32_t*>(&scaler),  // scaler value
+                    (uint32_t)0,  // dram bank id
+                    (uint32_t)0,  // unused
+                    num_tensor_tiles,
+                    NC,
+                    Ht,
+                    Wt,
+                    Ht * Wt,
+                    *reinterpret_cast<uint32_t*>(&scaler),
                 });
 
-            // Output tiles: one per row per channel (NC * Ht)
-            uint32_t output_tiles = NC * Ht;
+            uint32_t num_tiles =
+                test_config.reduce_dim == ReduceDim::W ? (num_tensor_tiles / Wt) : (num_tensor_tiles / (Wt * Ht));
             tt_metal::SetRuntimeArgs(
                 program,
                 unary_writer_kernel,
                 logical_core,
                 {dst_dram_buffer->address(),
-                 (uint32_t)0,     // dram bank id
-                 output_tiles});  // number of output tiles
+                 (uint32_t)0,  // dram bank id
+                 num_tiles});
 
             break;
         }
@@ -288,7 +285,6 @@ void run_single_core_reduce_program(
     Program program = tt_metal::CreateProgram();
     workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
-    auto device = mesh_device->get_devices()[0];
 
     CoreCoord core = {0, 0};
 
@@ -326,6 +322,10 @@ void run_single_core_reduce_program(
     uint32_t src_page_size = single_tile_bytes;
     uint32_t dst_page_size = single_tile_bytes;
 
+    distributed::DeviceLocalBufferConfig src_local_config{
+        .page_size = src_page_size, .buffer_type = tt_metal::BufferType::DRAM, .bottom_up = false};
+    distributed::ReplicatedBufferConfig src_buffer_config{.size = dram_buffer_size};
+
     uint32_t output_size_bytes;
     switch (test_config.reduce_dim) {
         case ReduceDim::H: output_size_bytes = dram_buffer_size / Ht; break;
@@ -334,24 +334,17 @@ void run_single_core_reduce_program(
         default: TT_THROW("Unsupported reduce dim!");
     }
 
-    tt_metal::InterleavedBufferConfig src_dram_config{
-        .device = device,
-        .size = dram_buffer_size,
-        .page_size = src_page_size,
-        .buffer_type = tt_metal::BufferType::DRAM};
-    tt_metal::InterleavedBufferConfig dst_dram_config{
-        .device = device,
-        .size = output_size_bytes,
-        .page_size = dst_page_size,
-        .buffer_type = tt_metal::BufferType::DRAM};
+    distributed::DeviceLocalBufferConfig dst_local_config{
+        .page_size = dst_page_size, .buffer_type = tt_metal::BufferType::DRAM, .bottom_up = false};
+    distributed::ReplicatedBufferConfig dst_buffer_config{.size = output_size_bytes};
 
-    std::shared_ptr<tt_metal::Buffer> src_dram_buffer = CreateBuffer(src_dram_config);
-    std::shared_ptr<tt_metal::Buffer> dst_dram_buffer = CreateBuffer(dst_dram_config);
+    std::shared_ptr<distributed::MeshBuffer> src_dram_buffer =
+        distributed::MeshBuffer::create(src_buffer_config, src_local_config, mesh_device.get());
+    std::shared_ptr<distributed::MeshBuffer> dst_dram_buffer =
+        distributed::MeshBuffer::create(dst_buffer_config, dst_local_config, mesh_device.get());
 
     uint32_t src0_cb_index = 0;
-    // Increase buffer size to handle NC * Ht * Wt tiles for reduce_c pattern
-    uint32_t max_input_tiles = NC * Ht * Wt;
-    uint32_t num_buffer_tiles = std::max(32U, max_input_tiles);
+    uint32_t num_buffer_tiles = 32;
     tt_metal::CircularBufferConfig cb_src0_config =
         tt_metal::CircularBufferConfig(
             num_buffer_tiles * single_tile_bytes, {{src0_cb_index, tt::DataFormat::Float16_b}})
@@ -360,9 +353,7 @@ void run_single_core_reduce_program(
     tt_metal::CreateCircularBuffer(program_, core, cb_src0_config);
 
     uint32_t ouput_cb_index = tt::CBIndex::c_16;
-    // Increase output buffer size to handle NC * Ht output tiles
-    uint32_t max_output_tiles = NC * Ht;
-    uint32_t num_output_buffer_tiles = std::max(32U, max_output_tiles);
+    uint32_t num_output_buffer_tiles = 32;
     tt_metal::CircularBufferConfig cb_output_config =
         tt_metal::CircularBufferConfig(
             num_output_buffer_tiles * single_tile_bytes, {{ouput_cb_index, tt::DataFormat::Float16_b}})
@@ -376,52 +367,7 @@ void run_single_core_reduce_program(
             .set_tile_dims(CBIndex::c_2, tt_metal::Tile({32, 32}));
     tt_metal::CreateCircularBuffer(program_, core, cb_temp_reduce_tile_config);
 
-    // Create reader and writer kernels for W reduce
-    auto unary_reader_kernel = tt_metal::CreateKernel(
-        program_,
-        "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_8bank.cpp",
-        core,
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_1,
-            .noc = tt_metal::NOC::RISCV_1_default,
-            .defines = {{"GENERATE_BCAST_SCALER", "1"}, {"BLOCK_SIZE", "1"}}});
-
-    std::vector<uint32_t> writer_compile_args = {};
-    tt_metal::TensorAccessorArgs(dst_dram_buffer).append_to(writer_compile_args);
-
-    auto unary_writer_kernel = tt_metal::CreateKernel(
-        program_,
-        "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank.cpp",
-        core,
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt_metal::NOC::RISCV_0_default,
-            .compile_args = writer_compile_args});
-
-    // Set runtime args for reader kernel
-    tt_metal::SetRuntimeArgs(
-        program_,
-        unary_reader_kernel,
-        core,
-        {
-            src_dram_buffer->address(),
-            Ht,                                     // Number of rows (height in tiles)
-            Wt,                                     // Number of cols (width in tiles)
-            NC,                                     // Number of channels
-            *reinterpret_cast<uint32_t*>(&scaler),  // scaler value
-        });
-
-    // Set runtime args for writer kernel
-    uint32_t output_tiles = NC * Ht;
-    tt_metal::SetRuntimeArgs(
-        program_,
-        unary_writer_kernel,
-        core,
-        {
-            dst_dram_buffer->address(),
-            (uint32_t)0,  // dram bank id
-            output_tiles  // num tiles
-        });
+    add_reader_writer_kernels(workload, device_range, core, test_config, src_dram_buffer, dst_dram_buffer);
 
     vector<uint32_t> compute_kernel_args = {
         uint(Ht),
@@ -470,7 +416,7 @@ void run_single_core_reduce_program(
 
     // The kernel will view the input as TILED_NFACES
     std::vector<uint32_t> result_vec;
-    tt_metal::detail::ReadFromBuffer(dst_dram_buffer, result_vec);
+    distributed::ReadShard(cq, result_vec, dst_dram_buffer, zero_coord);
 
     EXPECT_EQ(result_vec.size(), num_golden_elements);
 
@@ -504,26 +450,6 @@ void run_single_core_reduce_program(
     std::vector<uint16_t> gold_reduced = test_config.golden_function(
         src_linear, test_config.shape, scaler, uint8_t(test_config.reduce_type), true);  // result is uint16_t untilized
 
-    // Debug output for MAX row reduction with custom test data
-    if (test_config.use_pattern_data) {
-        if (test_config.reduce_dim == ReduceDim::W && test_config.reduce_type == ReduceType::MAX) {
-            log_info(LogTest, "=== MAX Row Reduction Test Debug Info ===");
-            log_info(LogTest, "Input pattern: 0.5 everywhere except column 1 (values 1-32)");
-            log_info(LogTest, "Expected output: Each row should reduce to its row number (1-32)");
-
-            // Print first few expected results
-            log_info(LogTest, "Expected results (first 10 rows):");
-            for (int i = 0; i < std::min(10, (int)gold_reduced.size()); i++) {
-                // Convert uint16 raw bits to bfloat16 and then to float
-                bfloat16 bf16_val;
-                std::memcpy(&bf16_val, &gold_reduced[i], sizeof(uint16_t));
-                float expected_val = static_cast<float>(bf16_val);
-                log_info(LogTest, "  Row {}: {}", i, expected_val);
-            }
-            log_info(LogTest, "==========================================");
-        }
-    }
-
     // Tilize from row major and convert to pairs (uint32_t)
     auto gold_4f_u32 = u32_from_u16_vector(convert_layout<uint16_t>(
         gold_reduced,
@@ -531,23 +457,6 @@ void run_single_core_reduce_program(
         TensorLayoutType::LIN_ROW_MAJOR,
         TensorLayoutType::TILED_NFACES,
         PhysicalSize{tile_H, tile_W}));
-
-    // Debug output for actual kernel results
-    if (test_config.use_pattern_data) {
-        if (test_config.reduce_dim == ReduceDim::W && test_config.reduce_type == ReduceType::MAX) {
-            log_info(LogTest, "=== Actual Kernel Results ===");
-            auto result_u16 = u16_from_u32_vector(result_vec);
-            log_info(LogTest, "Actual results (first 10 rows):");
-            for (int i = 0; i < std::min(10, (int)result_u16.size()); i++) {
-                // Convert uint16 raw bits to bfloat16 and then to float
-                bfloat16 bf16_val;
-                std::memcpy(&bf16_val, &result_u16[i], sizeof(uint16_t));
-                float actual_val = static_cast<float>(bf16_val);
-                log_info(LogTest, "  Row {}: {}", i, actual_val);
-            }
-            log_info(LogTest, "=============================");
-        }
-    }
 
     bool pass = packed_uint32_t_vector_comparison(result_vec, gold_4f_u32, comparison_function, &argfail);
     if (!pass) {
@@ -610,17 +519,17 @@ TEST_F(MeshDeviceFixture, TensixComputeReduceH) {
 TEST_F(MeshDeviceFixture, TensixComputeReduceW) {
     std::vector<uint32_t> shape = {1, 3, 17 * TILE_HEIGHT, 19 * TILE_WIDTH};
     std::vector<uint32_t> result_shape = {shape[0], shape[1], shape[2], 32};
-    for (uint8_t math_fid = uint8_t(MathFidelity::HiFi4); math_fid <= uint8_t(MathFidelity::HiFi4); math_fid++) {
+    for (uint8_t math_fid = uint8_t(MathFidelity::LoFi); math_fid <= uint8_t(MathFidelity::HiFi4); math_fid++) {
         // MathFidelity : {0, 2, 3, 4}; so skip value 1
         if (math_fid == 1) {
             continue;
         }
-        for (uint8_t reduce_type = uint8_t(ReduceType::MAX); reduce_type <= uint8_t(ReduceType::MAX); reduce_type++) {
-            for (bool fp32_dest_acc_en : {false}) {
+        for (uint8_t reduce_type = uint8_t(ReduceType::SUM); reduce_type <= uint8_t(ReduceType::MAX); reduce_type++) {
+            for (bool fp32_dest_acc_en : {true, false}) {
                 if ((fp32_dest_acc_en) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
                     continue;
                 }
-                for (bool dst_full_sync_en : {false}) {
+                for (bool dst_full_sync_en : {true, false}) {
                     ReduceConfig test_config = {
                         .shape = shape,
                         .reduce_dim = ReduceDim::W,

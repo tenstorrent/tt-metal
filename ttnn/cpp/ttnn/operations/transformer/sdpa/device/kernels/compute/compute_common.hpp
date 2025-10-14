@@ -57,27 +57,18 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, bool do_eltwise_max = false) {
     cb_wait_front(scale_cb, 1);
     cb_wait_front(in0_cb, num_tiles);
     cb_reserve_back(out_cb, rows);
+
     max_tile_init();
     constexpr uint32_t reduce_dst_idx = 0;
     constexpr uint32_t prev_max_dst_idx = 1;
 
     for (uint32_t i = 0; i < rows; i++) {
-        // Reinitialize block-based reduce for each row (needed due to potential copy_tile reconfig)
-        reduce_block_max_row_init<cols>();
-        // asm volatile ("ebreak");
-        // reduce_block_max_row_init<1>();
-        // reduce_init<pool_type, reduce_dim>(in0_cb, scale_cb, out_cb);
-        // reduce_max_row_init();
         acquire_dst();
-        // for (uint32_t j = 0; j < cols; j += 1) {
-        reduce_block_max_row<cols>(in0_cb, scale_cb, i * cols, reduce_dst_idx);
-        // reduce_block_max_row<1>(in0_cb, scale_cb, i * cols + j, reduce_dst_idx);
-        // reduce_tile<pool_type, reduce_dim>(in0_cb, scale_cb, i * cols + j, 0, reduce_dst_idx);
-        // reduce_tile_max_row(in0_cb, scale_cb, i * cols + j, reduce_dst_idx);
-        // }
-        // Safe to move out of the loop since the packer config is not changed by copy calls
-        reduce_max_row_uninit();
-
+        reduce_init<pool_type, reduce_dim>(in0_cb, scale_cb, out_cb);
+        for (uint32_t j = 0; j < cols; j++) {
+            reduce_tile<pool_type, reduce_dim>(in0_cb, scale_cb, i * cols + j, 0, reduce_dst_idx);
+        }
+        reduce_uninit();
         if (do_eltwise_max) {
             copy_tile_to_dst_init_short(prev_cb);
             copy_tile(prev_cb, i, prev_max_dst_idx);
@@ -169,6 +160,68 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb) {
         cb_reserve_back(in0_cb, rows * cols);
         cb_push_back(in0_cb, rows * cols);
     }
+    cb_push_back(reduce_cb, rows);
+}
+
+template <uint32_t in0_cb, uint32_t rows, uint32_t cols, uint32_t scale_fp32>
+void sub_exp_rows_transposed(uint32_t in1_cb, uint32_t reduce_cb) {
+    DeviceZoneScopedN("sub_exp_rows_transposed");
+    /**
+     * in0_cb: rows*cols tiles, where each tile is transposed
+     * in1_cb: rows tiles, where each tile contains one row
+     *
+     * first computes in0[i, j] - in1[i] for i = 0..rows, j = 0..cols where in1 row is broadcasted
+     * then computes exp(dst)
+     * then packs the result into in0_cb and packs with accumulation into reduce_cb
+     */
+
+    // sub_bcast_rows_init_short(in0_cb, in1_cb);
+    init_bcast<ELWSUB, BroadcastType::ROW>(in0_cb, in1_cb, in0_cb);
+
+    exp_tile_init<true, true, scale_fp32>();
+    cb_wait_front(in0_cb, rows * cols);
+    cb_wait_front(in1_cb, rows);
+    cb_reserve_back(reduce_cb, rows);
+
+    constexpr uint32_t dst_tiles = SUB_EXP_GRANULARITY;
+    constexpr uint32_t granularity = cols >> LOG2_SUB_EXP_GRANULARITY;
+    uint32_t in0_index = 0;
+    for (uint32_t i = 0; i < rows; ++i) {
+        for (uint32_t u = 0; u < granularity; u++) {
+            tile_regs_acquire();
+            for (uint32_t j = 0; j < dst_tiles; ++j) {
+                // sub_tiles_bcast_rows(in0_cb, in1_cb, in0_index, i, j);
+                any_tiles_bcast<ELWSUB, BroadcastType::ROW>(in0_cb, in1_cb, in0_index, i, j);
+                exp_tile<true, true>(j);
+                in0_index++;
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+
+            for (uint32_t j = 0; j < dst_tiles; ++j) {
+                pack_tile(j, in0_cb);
+            }
+
+            // While we have results in DST, take advantage of L1 accumulation
+            // to reduce row x cols tiles to rows x 1 tiles.
+            if (u > 0) {
+                // If on the same row, keep accumulating
+                PACK((llk_pack_reconfig_l1_acc(1)));
+            }
+            for (uint32_t j = 0; j < dst_tiles; ++j) {
+                pack_tile<true>(j, reduce_cb, i);
+                if (u == 0 && j == 0) {
+                    // If this was the first tile of a row, start accumulating
+                    PACK((llk_pack_reconfig_l1_acc(1)));
+                }
+            }
+            tile_regs_release();
+            PACK((llk_pack_reconfig_l1_acc(0)));
+        }
+    }
+    cb_pop_front(in0_cb, rows * cols);
+    cb_reserve_back(in0_cb, rows * cols);
+    cb_push_back(in0_cb, rows * cols);
     cb_push_back(reduce_cb, rows);
 }
 
