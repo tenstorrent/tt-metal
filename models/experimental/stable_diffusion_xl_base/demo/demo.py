@@ -39,19 +39,34 @@ def run_demo_inference(
     guidance_scale,
     use_cfg_parallel,
     fixed_seed_for_batch,
+    prompt_2=None,
+    negative_prompt_2=None,
+    crop_coords_top_left=(0, 0),
+    guidance_rescale=0.0,
+    timesteps=None,
+    sigmas=None,
 ):
     batch_size = list(ttnn_device.shape)[1] if use_cfg_parallel else ttnn_device.get_num_devices()
 
     start_from, _ = evaluation_range
 
+    assert 0.0 <= guidance_rescale <= 1.0, f"guidance_rescale must be in [0.0, 1.0], got {guidance_rescale}"
+
+    assert not (timesteps is not None and sigmas is not None), "Cannot pass both timesteps and sigmas. Choose one."
+
     if isinstance(prompts, str):
         prompts = [prompts]
+
+    if prompt_2 is not None and isinstance(prompt_2, str):
+        prompt_2 = [prompt_2]
 
     needed_padding = (batch_size - len(prompts) % batch_size) % batch_size
     if isinstance(negative_prompts, list):
         assert len(negative_prompts) == len(prompts), "prompts and negative_prompt lists must be the same length"
 
     prompts = prompts + [""] * needed_padding
+    if prompt_2 is not None:
+        prompt_2 = prompt_2 + [""] * needed_padding
     if isinstance(negative_prompts, list):
         negative_prompts = negative_prompts + [""] * needed_padding
 
@@ -80,6 +95,8 @@ def run_demo_inference(
             guidance_scale=guidance_scale,
             is_galaxy=is_galaxy(),
             use_cfg_parallel=use_cfg_parallel,
+            crop_coords_top_left=crop_coords_top_left,
+            guidance_rescale=guidance_rescale,
         ),
     )
 
@@ -89,6 +106,8 @@ def run_demo_inference(
     tt_latents, tt_prompt_embeds, tt_add_text_embeds = tt_sdxl.generate_input_tensors(
         all_prompt_embeds_torch=torch.randn(batch_size, 2, MAX_SEQUENCE_LENGTH, CONCATENATED_TEXT_EMBEDINGS_SIZE),
         torch_add_text_embeds=torch.randn(batch_size, 2, TEXT_ENCODER_2_PROJECTION_DIM),
+        timesteps=timesteps,
+        sigmas=sigmas,
     )
 
     tt_sdxl.compile_image_processing()
@@ -118,16 +137,27 @@ def run_demo_inference(
             else negative_prompts
         )
 
+        prompts_2_batch = (
+            prompt_2[iter * batch_size : (iter + 1) * batch_size] if isinstance(prompt_2, list) else prompt_2
+        )
+        negative_prompts_2_batch = (
+            negative_prompt_2[iter * batch_size : (iter + 1) * batch_size]
+            if isinstance(negative_prompt_2, list)
+            else negative_prompt_2
+        )
+
         (
             all_prompt_embeds_torch,
             torch_add_text_embeds,
-        ) = tt_sdxl.encode_prompts(prompts_batch, negative_prompts_batch)
+        ) = tt_sdxl.encode_prompts(prompts_batch, negative_prompts_batch, prompts_2_batch, negative_prompts_2_batch)
 
         tt_latents, tt_prompt_embeds, tt_add_text_embeds = tt_sdxl.generate_input_tensors(
             all_prompt_embeds_torch,
             torch_add_text_embeds,
             start_latent_seed=0,
             fixed_seed_for_batch=fixed_seed_for_batch,
+            timesteps=timesteps,
+            sigmas=sigmas,
         )
 
         tt_sdxl.prepare_input_tensors(
@@ -243,6 +273,22 @@ def prepare_device(mesh_device, use_cfg_parallel):
     ],
     ids=("with_trace", "no_trace"),
 )
+@pytest.mark.parametrize(
+    "prompt_2, negative_prompt_2, crop_coords_top_left, guidance_rescale, timesteps, sigmas",
+    [
+        (None, None, (0, 0), 0.0, None, None),
+        # TODO: Remove once this is tested properly
+        (
+            "highly detailed, photorealistic, 8k",  # prompt_2
+            "blurry, low quality",  # negative_prompt_2
+            (64, 64),  # crop_coords_top_left - slight offset
+            0.7,  # guidance_rescale - fixes overexposure
+            None,  # timesteps
+            None,  # sigmas
+        ),
+    ],
+    ids=["baseline", "test_crop_offset"],
+)
 def test_demo(
     validate_fabric_compatibility,
     mesh_device,
@@ -257,6 +303,12 @@ def test_demo(
     guidance_scale,
     use_cfg_parallel,
     fixed_seed_for_batch,
+    prompt_2,
+    negative_prompt_2,
+    crop_coords_top_left,
+    guidance_rescale,
+    timesteps,
+    sigmas,
 ):
     prepare_device(mesh_device, use_cfg_parallel)
     return run_demo_inference(
@@ -272,4 +324,10 @@ def test_demo(
         guidance_scale,
         use_cfg_parallel,
         fixed_seed_for_batch,
+        prompt_2,
+        negative_prompt_2,
+        crop_coords_top_left,
+        guidance_rescale,
+        timesteps,
+        sigmas,
     )
