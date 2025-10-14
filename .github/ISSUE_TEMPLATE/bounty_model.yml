@@ -1,0 +1,136 @@
+# [Bounty $amount] [Issue Title]
+
+
+
+
+## 📝 Background
+
+
+
+
+Context about what the bounty is about - What model to bring up. Where the model is used in the real world. What does the model do? Who would be interested in the models?
+
+
+
+
+## 🎯 What Success Looks Like
+
+
+
+
+Define a list or checklist of clear, testable acceptance criteria - this is the goal the developer is chasing. They achieve all stages, we pay. Model bounties are split into 3 stages
+
+
+### Stage 1 - bring up
+
+
+List things that they need to achieve for us to consider the model working
+
+
+ex:
+- Produce correct classification given input images
+- Generates coherent text or correct object detections
+- Which to validate against? What's the expected accuracy?
+- Output should be easily verifiable, we can see the model is working
+
+
+### Stage 2 - basic optimizations
+
+
+A list of techniques that are easy to implement. Make sure they are applicable to the model
+
+
+- Store temporary results in L1
+- Fused activation after matmul
+- Change image tensors to sharding
+- You name it, these should be relatively easy changes
+
+
+
+
+### Stage 3 - Deeper Optimization
+
+
+
+
+More involved optimizations are listed here. Adapt the model to exploit TT hardware features and reduce unnecessary TM/memory overheads. We are not asking the user to understand all possible optimization processes. But enough to touch on the differences of our hardware and GPUs.
+
+
+
+
+ex:
+- Grouped Convolutions
+- Use of SDPA operator
+- avoiding TMs by changing order of operation
+
+
+
+
+## 🧭 Guidance & Starting Points
+Provide guidance, links to files, or code snippets and links. Help the user to get started with the bounty
+
+
+
+
+ex:
+- Links to code, docs, previous work or tech report
+- Advice on what to look out for, or who to ask for help
+- Link to original model paper
+
+
+
+
+## 🔎 Possible Approaches
+- List one or more technical paths, architectural suggestions, or research ideas
+- Help the developer not succumb to analysis paralysis/"too many options, don't know what to do"
+
+
+
+
+## 📊 Result submission guidelines notes
+
+
+
+
+Mention to the user that they are welcomed to open a PR at any stage if they want us to check if their approach is on the right path. But payout is only made after all 3 stages are completed.
+
+
+
+
+* Functional model implementation
+* Validation logs (output correctness)
+* Performance report + header for final review
+
+
+Links:
+- [Link to perf sheet](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/ttnn/TTNN-model-bringup.md#41-performance-sheet)
+- [Perf header](https://docs.tenstorrent.com/tt-metal/latest/ttnn/ttnn/profiling_ttnn_operations.html#perf-report-headers)
+
+
+Something along the lines of:
+
+
+> Beyond the model implementation itself. Contributors must submit the following material as a proof of work. However, feel free to open a PR at any time if you want us checking you are on the right track. Just understand that payout is only made after all 3 stages are completed.
+> * Functional model implementation
+> * Validation logs (output correctness)
+> * Performance report + header for final review
+> 
+> Links:
+> - [Link to perf sheet](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/ttnn/TTNN-model-bringup.md#41-performance-sheet)
+> - [Perf header](https://docs.tenstorrent.com/tt-metal/latest/ttnn/ttnn/profiling_ttnn_operations.html#perf-report-headers)
+
+
+
+
+---
+## 📚 Resources
+
+
+
+
+- resources (possibly external) to help the user to get started
+- [Example implementation or related PR](link)
+- [Reference documentation](link)
+- [Original model paper](link)
+- [Outside link](https://)
+
