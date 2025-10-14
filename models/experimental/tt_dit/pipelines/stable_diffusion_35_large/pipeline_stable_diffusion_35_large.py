@@ -581,7 +581,7 @@ class StableDiffusion3Pipeline:
                 )
 
                 shard_latents_dims = [None, None]
-                shard_latents_dims[self.dit_parallel_config.sequence_parallel.mesh_axis] = 1  # height of latents
+                shard_latents_dims[self.dit_parallel_config.sequence_parallel.mesh_axis] = 2
                 tt_initial_latents = ttnn.from_torch(
                     latents,
                     layout=ttnn.TILE_LAYOUT,
@@ -665,7 +665,7 @@ class StableDiffusion3Pipeline:
                 ttnn.synchronize_device(self.vae_device)
                 tt_latents = ttnn.experimental.all_gather_async(
                     input_tensor=tt_latents_step_list[self.vae_submesh_idx],
-                    dim=1,
+                    dim=2,
                     multi_device_global_semaphore=self.ccl_managers[self.vae_submesh_idx].get_ag_ping_pong_semaphore(
                         self.dit_parallel_config.sequence_parallel.mesh_axis
                     ),
@@ -828,7 +828,7 @@ class StableDiffusion3Pipeline:
                 torch_noise_pred = uncond + guidance_scale * (cond - uncond)
 
                 shard_latents_dims = [None, None]
-                shard_latents_dims[self.dit_parallel_config.sequence_parallel.mesh_axis] = 1  # height of latents
+                shard_latents_dims[self.dit_parallel_config.sequence_parallel.mesh_axis] = 2
                 noise_pred_list[0] = ttnn.from_torch(
                     torch_noise_pred,
                     layout=ttnn.TILE_LAYOUT,

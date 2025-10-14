@@ -632,13 +632,22 @@ class SD35Transformer2DModel:
         batch_size, height, width, channels = latents.shape
         patch = self.patch_size
 
+        if height % patch != 0 or width % patch != 0:
+            msg = f"height ({height}) and width ({width}) must be divisible by patch_size ({patch})"
+            raise ValueError(msg)
+
         latents = latents.reshape([batch_size, height // patch, patch, width // patch, patch, channels])
         return latents.transpose(2, 3).flatten(3, 5).flatten(1, 2).unsqueeze(0)
 
     def unpatchify(self, spatial: torch.Tensor, *, height: int, width: int) -> torch.Tensor:
         # 1, N, (H / P) * (W / P), P * P * C -> N, H, W, C
-        _, batch_size, _, _ = spatial.shape
+        one, batch_size, _, _ = spatial.shape
+        assert one == 1
         patch = self.patch_size
+
+        if height % patch != 0 or width % patch != 0:
+            msg = f"height ({height}) and width ({width}) must be divisible by patch_size ({patch})"
+            raise ValueError(msg)
 
         spatial = spatial.reshape([batch_size, height // patch, width // patch, patch, patch, -1])
         return spatial.transpose(2, 3).flatten(3, 4).flatten(1, 2)
