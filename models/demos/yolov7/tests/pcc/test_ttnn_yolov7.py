@@ -19,6 +19,7 @@ sys.modules["models.common"] = yolov7_utils
 sys.modules["models.yolo"] = yolov7_model
 
 
+# Test hanging with watcher enabled, github issue #30520
 @skip_with_watcher()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": YOLOV7_L1_SMALL_SIZE}], indirect=True)
 def test_yolov7(device, reset_seeds, model_location_generator):
