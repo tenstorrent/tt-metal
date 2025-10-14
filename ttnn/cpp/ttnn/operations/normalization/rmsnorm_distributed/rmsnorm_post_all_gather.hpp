@@ -24,8 +24,8 @@ struct ExecuteRMSNormPostAllGather {
         const std::optional<const LayerNormProgramConfig>& program_config = std::nullopt,
         const std::optional<const DataType>& dtype = std::nullopt,
         const std::optional<bool>& use_2d_core_grid = std::nullopt,
-        const std::optional<bool> use_fp32_reduction = false,
-        const std::optional<bool> use_legacy_rsqrt = true);
+        bool legacy_reduction = true,
+        bool legacy_rsqrt = true);
 };
 
 }  // namespace operations::normalization

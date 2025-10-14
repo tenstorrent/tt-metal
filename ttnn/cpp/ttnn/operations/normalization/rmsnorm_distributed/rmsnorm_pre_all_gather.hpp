@@ -21,7 +21,7 @@ struct ExecuteRMSNormPreAllGather {
         const std::optional<const LayerNormProgramConfig>& program_config = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<bool>& use_2d_core_grid = std::nullopt,
-        const std::optional<bool> use_fp32_reduction = false);
+        bool legacy_reduction = true);
 };
 
 }  // namespace operations::normalization

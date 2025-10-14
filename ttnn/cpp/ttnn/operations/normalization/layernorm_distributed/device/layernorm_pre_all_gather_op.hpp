@@ -20,14 +20,14 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_pre_allgather_multi_core
     LayerNormDistributedType norm_type,
     DeviceComputeKernelConfig compute_kernel_config,
     std::optional<bool> use_2d_core_grid = std::nullopt,
-    std::optional<bool> use_fp32_reduction = false);
+    bool legacy_reduction = true);
 
 struct LayerNormPreAllGather {
     LayerNormDistributedType norm_type;
     const DataType dtype;
     const DeviceComputeKernelConfig compute_kernel_config;
     std::optional<bool> use_2d_core_grid;
-    std::optional<bool> use_fp32_reduction;
+    bool legacy_reduction;
 
     void validate(const std::vector<Tensor>& input_tensors) const;
     std::vector<TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;

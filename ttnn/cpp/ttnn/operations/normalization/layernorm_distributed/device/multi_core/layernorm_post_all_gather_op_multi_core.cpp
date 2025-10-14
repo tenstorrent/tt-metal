@@ -58,8 +58,8 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
     float eps,
     ttnn::DeviceComputeKernelConfig compute_kernel_config,
     std::optional<bool> use_2d_core_grid,
-    std::optional<bool> use_fp32_reduction,
-    std::optional<bool> use_legacy_rsqrt) {
+    bool legacy_reduction,
+    bool legacy_rsqrt) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     using tt::tt_metal::CBHandle;
     using tt::tt_metal::CircularBuffer;
@@ -363,6 +363,7 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
+    bool float32_reduction = fp32_dest_acc_en && !legacy_reduction;
     std::vector<uint32_t> compute_args = {
         tiles_per_core_y,
         block_size,
@@ -370,8 +371,8 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
         gamma.has_value(),
         beta.has_value(),
         fp32_dest_acc_en,
-        use_fp32_reduction ? 1 : 0,
-        use_legacy_rsqrt ? 1 : 0};
+        float32_reduction ? 1 : 0,
+        legacy_rsqrt ? 1 : 0};
 
     auto compute_kernels_id = CreateKernel(
         program,

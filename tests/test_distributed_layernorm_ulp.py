@@ -317,11 +317,11 @@ def test_distributed_norm_comparison(
     """
     if norm_type == "layer_norm":
         ttnn_stats = ttnn.layer_norm_pre_all_gather(
-            ttnn_input, compute_kernel_config=compute_kernel_config, dtype=ttnn.bfloat16, use_fp32_reduction=True
+            ttnn_input, compute_kernel_config=compute_kernel_config, dtype=ttnn.bfloat16, legacy_reduction=False
         )
     elif norm_type == "rms_norm":
         ttnn_stats = ttnn.rms_norm_pre_all_gather(
-            ttnn_input, compute_kernel_config=compute_kernel_config, dtype=ttnn.bfloat16, use_fp32_reduction=True
+            ttnn_input, compute_kernel_config=compute_kernel_config, dtype=ttnn.bfloat16, legacy_reduction=False
         )
     ccl_semaphore_handles = setup_ccl_semahpores(mesh_device)
     ttnn.synchronize_device(mesh_device)
@@ -344,7 +344,6 @@ def test_distributed_norm_comparison(
             weight=ttnn_weight,
             bias=ttnn_bias,
             compute_kernel_config=compute_kernel_config,
-            use_fp32_reduction=True,
         )
     elif norm_type == "rms_norm":
         ttnn_output = ttnn.rms_norm_post_all_gather(
@@ -353,8 +352,8 @@ def test_distributed_norm_comparison(
             epsilon=eps,
             weight=ttnn_weight,
             compute_kernel_config=compute_kernel_config,
-            use_fp32_reduction=True,
-            use_legacy_rsqrt=False,
+            legacy_reduction=False,
+            legacy_rsqrt=False,
         )
 
     ttnn_output_torch = ttnn.to_torch(ttnn_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))
