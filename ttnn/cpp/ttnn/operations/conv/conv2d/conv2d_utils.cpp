@@ -862,7 +862,15 @@ Conv2dConfig determine_conv_config_for_auto_shard(
     // anything.
 
     log_debug(
-        tt::LogOp, "Auto sharding Input={}x{}, Output={}x{}, ", input_height, input_width, output_height, output_width);
+        tt::LogOp,
+        "Auto sharding Input={}x{}, Output={}x{}, Padding={}, Input, Output DTYPE = {},{}",
+        input_height,
+        input_width,
+        output_height,
+        output_width,
+        padding,
+        input_datatype,
+        output_datatype);
     if ((input_memory_config.has_value() && input_memory_config.value().is_sharded()) ||
         conv_config.shard_layout.has_value()) {
         return conv_config;
@@ -980,25 +988,22 @@ Conv2dConfig determine_conv_config_for_auto_shard(
             input_parallel_config,
             conv_config.act_block_h_override));
 
+        auto halo_input_shard_shape = halo_input_memory_config.shard_spec().value().shape;
         uint32_t approx_input_size_per_core = estimate_halo_output_elems(
-            halo_input_memory_config.shard_spec().value().shape,
-            batch_size,
-            input_height,
-            input_width,
-            kernel_size,
-            dilation,
-            padding);
+            halo_input_shard_shape, batch_size, input_height, input_width, kernel_size, dilation, padding);
 
-        l1_usage.tensor_allocation_size += approx_input_size_per_core * input_datum_size;
-        log_debug(
+        log_trace(
             tt::LogOp,
-            "L1 usage for {}: {}, {}, Halo Output : {}",
+            "L1 usage for {}: Input {}, Output {}, CBs {}, Halo Output : {}",
             conv_config.shard_layout,
+            halo_input_memory_config,
             l1_usage.tensor_allocation_size,
             l1_usage.CB_allocation_size,
             approx_input_size_per_core);
+        l1_usage.tensor_allocation_size += approx_input_size_per_core * input_datum_size;
+
         return core_count_and_size{
-            .core_count = input_parallel_config.grid.num_cores(),
+            .core_count = std::max(input_parallel_config.grid.num_cores(), output_parallel_config.grid.num_cores()),
             .size = l1_usage.CB_allocation_size + l1_usage.tensor_allocation_size,
             .conv_config = conv_config};
     };
@@ -1023,10 +1028,9 @@ Conv2dConfig determine_conv_config_for_auto_shard(
         winning_config = width;
     }
 
-    log_debug(tt::LogOp, "Core counts H: {} B: {}, W: {}", height.core_count, block.core_count, width.core_count);
-    log_debug(
-        tt::LogOp, "Selected shard layout: {}, size: {}", winning_config.conv_config.shard_layout, winning_config.size);
 
+    log_trace(
+        tt::LogOp, "Selected shard layout: {}, size: {}", winning_config.conv_config.shard_layout, winning_config.size);
     return winning_config.conv_config;
 }
 
@@ -1083,7 +1087,12 @@ uint32_t estimate_halo_output_elems(
     std::array<uint32_t, 2> kernel_size,
     std::array<uint32_t, 2> dilation,
     std::array<uint32_t, 4> padding) {
-    float shard_height = (float)halo_input_shard_shape[0] / (float)input_width;
+    // When the shard begins in the middle of the tensor's width, we have two partial rows. This increases the number of
+    // rows of the shard. This causes halo to bring in extra rows of unused data. When batch_boundary_multiplier > 1, we
+    // can take the exact size.
+    float shard_height = batch_size > 1 ? halo_input_shard_shape[0] / input_width
+                                        : tt::div_up(halo_input_shard_shape[0], (float)input_width);
+
     uint32_t shard_batches = shard_height / input_height;
     // Halo adds the overlap region of the input tensor that is needed for the convolution.
     //  As width is the faster changing dimension, we typically have the entire width in every shard.
@@ -1101,20 +1110,46 @@ uint32_t estimate_halo_output_elems(
     uint32_t approx_max_halo_size = approx_max_halo_num_sticks * halo_input_shard_shape[1];
     log_trace(
         tt::LogOp,
-        "Halo Max Size Approximation, Shard Height: {}, Batch Multiplier: {}, Max Num Sticks : {}",
+        "Halo Max Size Approximation, Shard Shape: {}, Shard Height: {}, Batch Multiplier: {}, Max Num Sticks : {}",
+        halo_input_shard_shape,
         shard_height,
         batch_boundary_multiplier,
         approx_max_halo_num_sticks);
     return approx_max_halo_size;
 };
 
-uint32_t calculate_conv_dram_slice_L1_usage(
+// Decide whether to slice along height or width based on input dimensions and output layout
+// We ideally want to slice along the width dimension as it results in smaller halo size
+// However, in case of very tall and narrow inputs, slicing along height is preferred to avoid
+// very small slice sizes
+// Additionally, for tiled outputs, there is a constraint that each slice's width must be a multiple of TILE_HEIGHT
+// In this case, slicing along height is preferred to avoid this constraint.
+static Conv2dSliceConfig::SliceType determine_conv_slice_type(
+    uint32_t input_height, uint32_t input_width, Layout output_layout) {
+    if (output_layout == Layout::ROW_MAJOR) {
+        float threshold_ratio = 3.0;
+        if (input_height > input_width * threshold_ratio) {
+            return Conv2dSliceConfig::SliceType::DRAM_HEIGHT;
+        }
+        return Conv2dSliceConfig::SliceType::DRAM_WIDTH;
+    } else {
+        if (input_width < 200) {
+            return Conv2dSliceConfig::SliceType::DRAM_HEIGHT;
+        } else {
+            if (input_height > input_width) {
+                return Conv2dSliceConfig::SliceType::DRAM_HEIGHT;
+            }
+            return Conv2dSliceConfig::SliceType::DRAM_WIDTH;
+        }
+    }
+}
+static std::pair<uint32_t, Conv2dConfig> calculate_conv_dram_slice_L1_usage(
     const ConvDRAMParamters& params, MeshDevice* device, const Conv2dSliceConfig& dram_slice_config) {
     Conv2dConfig conv_config = params.conv_config;
     TT_FATAL(
         dram_slice_config.num_slices > 0, "Number of slices must be greater than 0 for DRAM L1 usage calculation.");
 
-    const uint32_t output_sliced_dim = dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::HEIGHT
+    const uint32_t output_sliced_dim = dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::DRAM_HEIGHT
                                            ? params.output_height
                                            : params.output_width;
 
@@ -1125,8 +1160,9 @@ uint32_t calculate_conv_dram_slice_L1_usage(
     const uint32_t input_datum_size = conv_input_dtype == tt::tt_metal::DataType::FLOAT32 ? 4 : 2;
 
     uint32_t slice_rounding_value = 1;
+
     if (conv_config.output_layout == tt::tt_metal::Layout::TILE &&
-        dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::WIDTH) {
+        dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::DRAM_WIDTH) {
         // In Conv2d DRAM with Outputs in Tile layout, we need to round the slice size to a multiple of TILE_HEIGHT.
         slice_rounding_value = tt::constants::TILE_HEIGHT;
     }
@@ -1137,7 +1173,7 @@ uint32_t calculate_conv_dram_slice_L1_usage(
                                           uint32_t input_slice_width,
                                           uint32_t output_slice_height,
                                           uint32_t output_slice_width) {
-        log_debug(
+        log_trace(
             tt::LogOp,
             "Conv2D DRAM Auto Slice Max Input Size : {}x{}, Max Output Size : {}x{}",
             input_slice_height,
@@ -1170,7 +1206,6 @@ uint32_t calculate_conv_dram_slice_L1_usage(
                 params.groups,
                 params.enable_bias,
                 params.compute_kernel_config);
-            log_debug(tt::LogOp, "Conv2D DRAM Auto Slice Selected Shard Layout: {}", conv_config.shard_layout);
         }
         ShardOrientation shard_orientation =
             conv_config.transpose_shards ? ShardOrientation::COL_MAJOR : ShardOrientation::ROW_MAJOR;
@@ -1255,7 +1290,7 @@ uint32_t calculate_conv_dram_slice_L1_usage(
                                              params.dilation,
                                              params.padding_n4) *
                                          input_datum_size;
-        log_debug(
+        log_trace(
             tt::LogOp,
             "Conv DRAM Auto slicing: num_slices = {}, input_shard_shape = {}, approx_max_halo_bytes = {}, conv size = "
             "{}",
@@ -1272,6 +1307,8 @@ uint32_t calculate_conv_dram_slice_L1_usage(
         tt::div_up(output_sliced_dim, slice_rounding_value) % dram_slice_config.num_slices;
 
     uint32_t max_memory_consumed = 0;
+    uint32_t old_max_memory_consumed = 0;
+    uint32_t max_memory_index = 0;
     uint32_t slice_index = 0;
     uint32_t output_slice_dim_start = 0;
 
@@ -1285,7 +1322,7 @@ uint32_t calculate_conv_dram_slice_L1_usage(
         uint32_t output_slice_height_start, output_slice_height_end, input_slice_height_start, input_slice_height_end;
         uint32_t output_slice_width_start, output_slice_width_end, input_slice_width_start, input_slice_width_end;
         int pad_top, pad_bottom, pad_left, pad_right;
-        if (dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::HEIGHT) {
+        if (dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::DRAM_HEIGHT) {
             output_slice_height_start = output_slice_dim_start;
             output_slice_height_end = output_slice_dim_end;
             output_slice_width_start = 0;
@@ -1385,9 +1422,86 @@ uint32_t calculate_conv_dram_slice_L1_usage(
                      this_slice_l1_usage.CB_allocation_size,
                  this_slice_input_size + this_slice_approx_max_halo_size});
         }
+        if (max_memory_consumed > old_max_memory_consumed) {
+            old_max_memory_consumed = max_memory_consumed;
+            max_memory_index = slice_index;
+        }
     }
-    return max_memory_consumed;
+    log_debug(
+        tt::LogOp,
+        " Conv2d DRAM AutoSlicing: Max L1 usage at slice {} of {} with params {}",
+        max_memory_index,
+        max_memory_consumed,
+        params);
+    return {max_memory_consumed, conv_config};
 }
+
+std::pair<Conv2dSliceConfig, Conv2dConfig> determine_conv2d_slice_config(
+    std::optional<Conv2dSliceConfig> slice_config_, const ConvDRAMParamters& params, MeshDevice* device) {
+    if (slice_config_.has_value() && slice_config_.value().num_slices > 0) {
+        return {slice_config_.value(), params.conv_config};
+    }
+    auto L1_stats = device->allocator()->get_statistics(tt::tt_metal::BufferType::L1);
+    Conv2dSliceConfig return_slice_config;
+    Conv2dConfig conv_config = params.conv_config;
+    bool auto_slice_type = false;
+    if (!slice_config_.has_value()) {
+        auto_slice_type = true;
+        return_slice_config = Conv2dSliceConfig{
+            .slice_type =
+                determine_conv_slice_type(params.input_height, params.input_width, params.conv_config.output_layout),
+            .num_slices = 0};
+    } else {
+        return_slice_config = slice_config_.value();
+    }
+    uint32_t current_num_slices = 1;
+    log_debug(tt::LogOp, "Conv2D DRAM Auto slice with {} free memory", L1_stats.total_free_bytes);
+    const uint32_t output_sliced_dim = return_slice_config.slice_type == Conv2dSliceConfig::SliceType::DRAM_HEIGHT
+                                           ? params.output_height
+                                           : params.output_width;
+    uint32_t l1_usage;
+    while (current_num_slices <= output_sliced_dim) {
+        return_slice_config.num_slices = current_num_slices;
+        std::tie(l1_usage, conv_config) = calculate_conv_dram_slice_L1_usage(params, device, return_slice_config);
+        log_debug(
+            tt::LogOp, "Conv2D DRAM Auto slice with {} slices requires {} L1 memory", current_num_slices, l1_usage);
+        if (L1_stats.total_free_bytes >= l1_usage) {
+            break;
+        }
+        current_num_slices++;
+    }
+    if (params.conv_config.output_layout == tt::tt_metal::Layout::TILE &&
+        return_slice_config.slice_type == Conv2dSliceConfig::SliceType::DRAM_WIDTH) {
+        // In Conv2d DRAM with Outputs in Tile layout, we need to round the slice size to a multiple of TILE_HEIGHT.
+        // This can result in more slices than expected, so we need to adjust the number of slices accordingly.
+        const uint32_t max_slices = tt::div_up(output_sliced_dim, tt::constants::TILE_HEIGHT);
+        return_slice_config.num_slices = std::min(return_slice_config.num_slices, max_slices);
+    }
+    if (auto_slice_type && current_num_slices > output_sliced_dim &&
+        params.conv_config.output_layout == tt::tt_metal::Layout::TILE &&
+        return_slice_config.slice_type == Conv2dSliceConfig::SliceType::DRAM_WIDTH) {
+        // For Tiled output with width slicing, we may not be able to find a suitable number of slices due to the
+        // TILE_HEIGHT constraint.
+        //  In this case, we switch to height slicing and try again.
+        log_debug(
+            tt::LogOp,
+            "Conv2D DRAM Auto slice could not find suitable number of slices with width slicing, switching to height "
+            "slicing");
+        return determine_conv2d_slice_config(
+            Conv2dSliceConfig{.slice_type = Conv2dSliceConfig::SliceType::DRAM_HEIGHT, .num_slices = 0},
+            params,
+            device);
+    }
+    if (current_num_slices > output_sliced_dim) {
+        log_warning(
+            tt::LogOp,
+            "Conv2D DRAM Auto slice could not find suitable number of slices with params {}. Slice config = {}",
+            params,
+            return_slice_config);
+    }
+    return {return_slice_config, conv_config};
+}
+
 conv_op_l1_usage conv2d::calculate_L1_usage(
     const DeviceComputeKernelConfig& compute_kernel_config,
     const Conv2dBlockConfig& block_config,
@@ -1427,19 +1541,84 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
     for (const CBInfo& cb : cb_info) {
         if (!cb.is_globally_allocated) {
             total_CB_size += cb.cb_size_per_core();
-            log_trace(tt::LogOp, "CB: {}, size: {}", enchantum::to_string(cb.name), cb.cb_size_per_core());
         }
         if (cb.name == Conv2dCb::OUT) {
             output_size = cb.cb_size_per_core();
         }
     }
-    log_debug(tt::LogOp, "Conv L1 Size Estimation, Total CB size: {}, Output Size: {}", total_CB_size, output_size);
+    log_trace(tt::LogOp, "Conv L1 Size Estimation, Total CB size: {}, Output Size: {}", total_CB_size, output_size);
 
     return conv2d::conv_op_l1_usage{.tensor_allocation_size = output_size, .CB_allocation_size = total_CB_size};
 }
 
 bool conv2d::determine_packer_l1_acc(bool packer_l1_acc, bool enable_bias, uint32_t in0_num_blocks_w) {
     return packer_l1_acc && ((enable_bias && in0_num_blocks_w > 1) || (in0_num_blocks_w > 2));
+}
+
+bool auto_enable_kernel_folding(
+    std::optional<bool> enable_folding_,
+    bool is_dram,
+    uint32_t input_height,
+    uint32_t input_width,
+    std::array<uint32_t, 2>& kernel_size,
+    std::array<uint32_t, 2>& stride,
+    std::array<uint32_t, 4>& padding_n4) {
+    if (!enable_folding_.has_value()) {
+        if (stride[0] == kernel_size[0] && stride[1] == kernel_size[1] && (input_height % stride[0] == 0) &&
+            (input_width % stride[1] == 0) &&
+            (padding_n4[0] == 0 && padding_n4[1] == 0 && padding_n4[2] == 0 && padding_n4[3] == 0) && is_dram) {
+            log_debug(tt::LogOp, "Auto enabling kernel folding");
+            return true;
+        } else {
+            return false;
+        }
+    } else {
+        return enable_folding_.value();
+    }
+}
+Tensor fold_input_tensor_if_required(
+    const ttnn::Tensor& input_tensor,
+    MeshDevice* device,
+    uint32_t& input_height,
+    uint32_t& input_width,
+    uint32_t& in_channels,
+    std::array<uint32_t, 2>& kernel_size,
+    std::array<uint32_t, 2>& stride,
+    std::array<uint32_t, 4>& padding_n4,
+    bool& mm_conv,
+    Conv2dConfig& conv_config) {
+    // Conv DRAM would fold the input tensor, but conv_config.enable_kernel_stride_folding would stil be true as weights
+    // also need to be folded.
+    conv_config.enable_kernel_stride_folding = auto_enable_kernel_folding(
+        conv_config.enable_kernel_stride_folding,
+        input_tensor.memory_config().is_dram(),
+        input_height,
+        input_width,
+        kernel_size,
+        stride,
+        padding_n4);
+
+    if (conv_config.enable_kernel_stride_folding.value() && (stride[0] > 1 || stride[1] > 1)) {
+        auto folding_result = compute_kernel_stride_folding_params(
+            input_height, input_width, in_channels, kernel_size, stride, padding_n4, conv_config);
+        auto folded_input_tensor = fold_tensor(input_tensor, device, stride, kernel_size, padding_n4);
+        if (conv_config.deallocate_activation) {
+            auto tensor_to_deallocate = input_tensor;
+            tensor_to_deallocate.deallocate(true);
+        }
+
+        // Update the input tensor parameters to the folding result
+        input_height = folding_result.input_height;
+        input_width = folding_result.input_width;
+        in_channels = folding_result.in_channels;
+        stride = folding_result.stride;
+        kernel_size = folding_result.kernel_size;
+        padding_n4 = folding_result.padding_n4;  // Padding is zero after folding
+        mm_conv = folding_result.mm_conv;
+        return folded_input_tensor;
+    } else {
+        return input_tensor;
+    }
 }
 
 ttnn::Tensor fold_tensor(
@@ -1452,9 +1631,6 @@ ttnn::Tensor fold_tensor(
     TT_FATAL(
         !tensor.memory_config().is_l1(),
         "Conv2D kernel stride folding: Input tensor must not be in L1 memory for folding");
-    TT_FATAL(
-        padding_n4[0] == 0 && padding_n4[1] == 0 && padding_n4[2] == 0 && padding_n4[3] == 0,
-        "Conv2D kernel stride folding: Padding must be 0 for folding");
     TT_FATAL(
         tensor.dtype() != tt::tt_metal::DataType::BFLOAT8_B,
         "Conv2D kernel stride folding: Currently doesn't support BFLOAT8_B");
@@ -1469,7 +1645,7 @@ ttnn::Tensor fold_tensor(
     }
 
     // Core folding operation
-    tensor_on_device = ttnn::fold(tensor_on_device, stride[0], stride[1], false, std::nullopt, 0, 0, 0);
+    tensor_on_device = ttnn::fold(tensor_on_device, stride[0], stride[1], false, std::nullopt, padding_n4);
 
     return tensor_on_device;
 }
@@ -1482,29 +1658,52 @@ KernelStrideFoldingResult compute_kernel_stride_folding_params(
     std::array<uint32_t, 2> stride,
     std::array<uint32_t, 4> padding_n4,
     const Conv2dConfig& conv_config) {
-    TT_FATAL(input_height % stride[0] == 0, "Input height must be divisible by stride for kernel stride folding.");
-    TT_FATAL(input_width % stride[1] == 0, "Input width must be divisible by stride for kernel stride folding.");
+    // Calculate padded dimensions first - this is what the folding operation will see
+    uint32_t padded_height = input_height + padding_n4[0] + padding_n4[1];
+    uint32_t padded_width = input_width + padding_n4[2] + padding_n4[3];
 
-    // Update dimensions for folded operation
-    input_height = input_height / stride[0];
-    input_width = input_width / stride[1];
-    in_channels = in_channels * stride[0] * stride[1];
+    TT_FATAL(
+        padded_height % stride[0] == 0,
+        "Padded input height ({}) must be divisible by stride ({}) for kernel stride folding.",
+        padded_height,
+        stride[0]);
+    TT_FATAL(
+        padded_width % stride[1] == 0,
+        "Padded input width ({}) must be divisible by stride ({}) for kernel stride folding.",
+        padded_width,
+        stride[1]);
+
+    // Update dimensions for folded operation based on padded dimensions
+    uint32_t folded_height = padded_height / stride[0];
+    uint32_t folded_width = padded_width / stride[1];
+    uint32_t folded_channels = in_channels * stride[0] * stride[1];
 
     auto kernel_h = tt::div_up(kernel_size[0], stride[0]);
     auto kernel_w = tt::div_up(kernel_size[1], stride[1]);
 
     return KernelStrideFoldingResult{
-        .input_height = input_height,
-        .input_width = input_width,
-        .in_channels = in_channels,
+        .input_height = folded_height,
+        .input_width = folded_width,
+        .in_channels = folded_channels,
         .stride = {1, 1},
         .kernel_size = {kernel_h, kernel_w},
+        .padding_n4 = {0, 0, 0, 0},  // Padding is zero after folding
         .mm_conv = (kernel_size[0] == stride[0] && kernel_size[1] == stride[1])};
 }
 
 std::ostream& operator<<(std::ostream& os, const Conv2dConfig& config) {
     tt::stl::reflection::operator<<(os, config);
     return os;
+}
+
+void tilize_with_optional_deallocation(Tensor& input_tensor_on_device, bool deallocate) {
+    if (input_tensor_on_device.layout() != Layout::TILE) {
+        Tensor input_tensor_tilized = ttnn::to_layout(input_tensor_on_device, Layout::TILE);
+        if (deallocate) {
+            input_tensor_on_device.deallocate(/*force*/ true);
+        }
+        input_tensor_on_device = std::move(input_tensor_tilized);
+    }
 }
 
 }  // namespace operations::conv

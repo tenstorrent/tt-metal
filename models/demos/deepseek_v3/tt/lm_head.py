@@ -22,8 +22,8 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
 )
 from models.demos.deepseek_v3.utils.config_helpers import (
     COMPUTE_KERNEL_CONFIG_LOFI,
-    MAX_BATCH_SIZE,
     SEQ_LEN_CHUNK_SIZE,
+    USERS_PER_ROW,
     dram_sharded_weight_config,
     even_int_div,
     find_largest_divisor,
@@ -110,7 +110,7 @@ class LMHead(AbstractModule):
         """Get the memory config for an activation tensor in decode mode."""
         return ttnn.create_sharded_memory_config_(
             shape=(
-                ttnn.core.roundup(MAX_BATCH_SIZE, ttnn.TILE_SIZE),
+                ttnn.core.roundup(USERS_PER_ROW, ttnn.TILE_SIZE),
                 ttnn.core.roundup(even_int_div(per_device_width, activation_sharding_num_cores), ttnn.TILE_SIZE),
             ),
             core_grid=ttnn.num_cores_to_corerangeset(
@@ -183,7 +183,7 @@ class LMHead(AbstractModule):
                 input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
                 memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
                 program_config=get_dram_sharded_matmul_config(
-                    MAX_BATCH_SIZE, hidden_dim, even_int_div(vocab_size, num_devices), input_num_cores, output_num_cores
+                    USERS_PER_ROW, hidden_dim, even_int_div(vocab_size, num_devices), input_num_cores, output_num_cores
                 ),
                 compute_kernel_config=COMPUTE_KERNEL_CONFIG_LOFI,
             ),
@@ -253,12 +253,10 @@ class LMHead(AbstractModule):
 
     @classmethod
     def create_state(cls, hf_config: PretrainedConfig, mesh_device: ttnn.Device, ccl: CCL) -> ModelState:
+        # Store CCL object for runtime semaphore initialization
         return {
             MESH_DEVICE_STATE_DICT_KEY: mesh_device,
-            "all_gather": {
-                "multi_device_global_semaphore": ccl.get_gather_sem(1),
-                "num_links": ccl.get_max_links(1),
-            },
+            "ccl": ccl,
         }
 
     @classmethod
@@ -266,13 +264,10 @@ class LMHead(AbstractModule):
         assert x.memory_config() == cfg["input_memory_config"], f"{x.memory_config()} != {cfg['input_memory_config']}"
 
         mesh_scatter(x, **cfg["mesh_scatter"])
-
-        print("running linear")
-        print(f"{x.shape=}, {cfg['linear']['input_tensor_b'].shape=}")
         output = ttnn.linear(x, **cfg["linear"])
 
-        # Debug print removed
         assert output.memory_config() == cfg["output_memory_config"]
+
         return output
 
     @classmethod

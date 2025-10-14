@@ -18,7 +18,7 @@ on:
       ttsim-ref:
         required: false
         type: string
-        default: "b22b5c02f501d5c7ab2dbf9512e9f16cc35f4135"
+        default: "8d6a0c997c4ba585c519c27f304b976b243d4bd9"
 
 jobs:
   ttsim-integration:
@@ -91,14 +91,17 @@ jobs:
           cp $TT_METAL_HOME/tt_metal/soc_descriptors/${{ matrix.soc_desc }} $TT_METAL_SIMULATOR_HOME/soc_descriptor.yaml
 
       - name: Build and Run Metal Examples
-        timeout-minutes: 15
+        timeout-minutes: 3
         run: |
           working_examples=(
             "add_2_integers_in_compute"
             "add_2_integers_in_riscv"
             "eltwise_binary"
+            "eltwise_sfpu"
             "hello_world_compute_kernel"
             "hello_world_datamovement_kernel"
+            "matmul_multi_core"
+            "matmul_multicore_reuse"
           )
           for example_name in "${working_examples[@]}"; do
             example_path="/usr/share/tt-metalium/examples/${example_name}"
@@ -152,7 +155,7 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
         timeout-minutes: 10
         with:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
@@ -177,19 +180,22 @@ jobs:
           cp /work/tt_metal/soc_descriptors/${{ matrix.soc_desc }} $TT_METAL_SIMULATOR_HOME/soc_descriptor.yaml
 
       - name: Run TTNN Pytests
+        timeout-minutes: 5
         run: |
           pytest \
-            tests/ttnn/unit_tests/operations/ccl/blackhole_CI/Sys_eng_smoke_tests/test_ccl_smoke_test.py \
-            tests/ttnn/unit_tests/operations/ccl/blackhole_CI/Sys_eng_smoke_tests/test_ccl_smoke_test_p300.py \
             tests/ttnn/unit_tests/operations/ccl/blackhole_CI/all_post_commit/test_all_gather_apc.py \
             tests/ttnn/unit_tests/operations/ccl/blackhole_CI/all_post_commit/test_reduce_scatter_apc.py \
-            tests/ttnn/unit_tests/operations/ccl/blackhole_CI/nightly/perf_tests.py \
             tests/ttnn/unit_tests/operations/ccl/blackhole_CI/nightly/test_all_gather_nightly.py \
-            tests/ttnn/unit_tests/operations/ccl/blackhole_CI/nightly/test_all_to_all.py \
             tests/ttnn/unit_tests/operations/ccl/blackhole_CI/nightly/test_all_to_all_combine_bh.py \
+            tests/ttnn/unit_tests/operations/ccl/blackhole_CI/nightly/test_all_to_all_dispatch_bh.py \
+            tests/ttnn/unit_tests/operations/ccl/blackhole_CI/nightly/test_all_to_all.py \
+            tests/ttnn/unit_tests/operations/ccl/blackhole_CI/nightly/test_ccl_perf.py \
             tests/ttnn/unit_tests/operations/ccl/blackhole_CI/nightly/test_minimal_reduce_scatter_async_bh.py \
             tests/ttnn/unit_tests/operations/ccl/blackhole_CI/nightly/test_new_all_broadcast.py \
             tests/ttnn/unit_tests/operations/ccl/blackhole_CI/nightly/test_reduce_scatter_nightly.py \
+            tests/ttnn/unit_tests/operations/ccl/blackhole_CI/Sys_eng_smoke_tests/test_ccl_smoke_test_qb.py \
+            tests/ttnn/unit_tests/operations/ccl/blackhole_CI/Sys_eng_smoke_tests/test_ccl_smoke_test_lb.py \
+            tests/ttnn/unit_tests/operations/ccl/blackhole_CI/Sys_eng_smoke_tests/test_ccl_smoke_test_p300.py \
             tests/ttnn/unit_tests/operations/ccl/perf/test_ccl_async_perf.py \
             tests/ttnn/unit_tests/operations/ccl/perf/test_ccl_perf.py \
             tests/ttnn/unit_tests/operations/ccl/test_ag_rs_llama_prefill_TG.py \
@@ -288,7 +294,6 @@ jobs:
             tests/ttnn/unit_tests/operations/test_moreh_full.py \
             tests/ttnn/unit_tests/operations/test_non_zero_indices.py \
             tests/ttnn/unit_tests/operations/test_paged_cache_mask.py \
-            tests/ttnn/unit_tests/operations/test_plus_one.py \
             tests/ttnn/unit_tests/operations/test_polyval.py \
             tests/ttnn/unit_tests/operations/test_prefetcher_TG.py \
             tests/ttnn/unit_tests/operations/test_reallocate.py \

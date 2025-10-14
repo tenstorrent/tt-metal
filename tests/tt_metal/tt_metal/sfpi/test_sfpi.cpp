@@ -59,7 +59,7 @@ bool runTest(
     auto pos = path.find_last_of('.');
     // NOLINTNEXTLINE(bugprone-inc-dec-in-conditions)
     while (--pos && path[pos] >= '0' && path[pos] <= '9') {
-        continue;
+        continue;  // NOLINT(readability-redundant-control-flow)
     }
     if (path[pos] == '-') {
         while (path[++pos] != '.') {
@@ -129,8 +129,6 @@ bool runTestsuite(const std::shared_ptr<distributed::MeshDevice>& mesh_device, c
     path.append(KernelDir);
     return runTests(mesh_device, coord, path, path.find_last_of('/') + 1);
 }
-
-using tt::tt_metal::UnitMeshCQSingleCardProgramFixture;
 
 TEST_F(UnitMeshCQFixture, TensixSFPI) {
     CoreCoord core{0, 0};

@@ -166,7 +166,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_concat_heads_boltz(
             uint32_t num_blocks_per_core = i < g1_numcores ? num_blocks_per_core_group_1 : num_blocks_per_core_group_2;
 
             uint32_t in0_h_dim = num_blocks_written % in0_h_tiles;
-            uint32_t in0_tensor_tile_id = num_blocks_written / in0_h_tiles * in0_CHtWt + in0_h_dim * in0_w_tiles;
+            uint32_t in0_tensor_tile_id = (num_blocks_written / in0_h_tiles * in0_CHtWt) + (in0_h_dim * in0_w_tiles);
 
             std::vector<uint32_t> reader_runtime_args = {
                 (std::uint32_t)in0_buffer->address(),

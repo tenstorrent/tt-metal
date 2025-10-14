@@ -86,6 +86,7 @@ class EfficientNetb0Conv2D:
             return_weights_and_bias=True,
             return_output_dim=True,
             dtype=ttnn.bfloat8_b,
+            slice_config=ttnn.Conv2dL1FullSliceConfig,
         )
 
         return x

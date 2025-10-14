@@ -37,6 +37,12 @@ def reference_model(hf_config):
     indirect=True,
 )
 @pytest.mark.parametrize(
+    "topk_fallback",
+    [
+        True,
+    ],
+)
+@pytest.mark.parametrize(
     "mode,seq_len",
     [
         ("decode", 128),
@@ -52,6 +58,7 @@ def test_forward_pass(
     mesh_device,
     ccl,
     set_deterministic_env,
+    topk_fallback,
 ):
     """Test forward pass against reference model."""
     batch_size = 1
@@ -75,7 +82,7 @@ def test_forward_pass(
     weight_config = MoE.convert_weights(hf_config, (state_dict,), tmp_path, mesh_device)
 
     # Generate appropriate config using utility function
-    model_config = get_model_config(MoE, mode, hf_config, mesh_device)
+    model_config = get_model_config(MoE, mode, hf_config, mesh_device, topk_fallback=topk_fallback)
 
     # Create a new model state with CCL
     model_state = MoE.create_state(hf_config, mesh_device, ccl)

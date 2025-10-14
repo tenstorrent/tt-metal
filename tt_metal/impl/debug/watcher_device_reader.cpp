@@ -982,9 +982,12 @@ void WatcherDeviceReader::Core::DumpLaunchMessage() const {
     if (programmable_core_type_ == HalProgrammableCoreType::TENSIX) {
         fprintf(reader_.f, "smsg:");
         DumpRunState(subordinate_sync.dm1());
-        DumpRunState(subordinate_sync.trisc0());
-        DumpRunState(subordinate_sync.trisc1());
-        DumpRunState(subordinate_sync.trisc2());
+        if (tt::tt_metal::MetalContext::instance().get_cluster().arch() !=
+            ARCH::QUASAR) {  // TODO enable when we have triscs running
+            DumpRunState(subordinate_sync.trisc0());
+            DumpRunState(subordinate_sync.trisc1());
+            DumpRunState(subordinate_sync.trisc2());
+        }
         fprintf(reader_.f, " ");
     } else if (tt::tt_metal::MetalContext::instance().get_cluster().arch() == ARCH::BLACKHOLE) {
         fprintf(reader_.f, "smsg:");
@@ -1028,14 +1031,14 @@ void WatcherDeviceReader::Core::DumpSyncRegs() const {
     for (uint32_t operand = 0; operand < NUM_CIRCULAR_BUFFERS; operand++) {
         // XXXX TODO(PGK) get this from device
         const uint32_t OPERAND_START_STREAM = 8;
-        uint32_t base = NOC_OVERLAY_START_ADDR + (OPERAND_START_STREAM + operand) * NOC_STREAM_REG_SPACE_SIZE;
+        uint32_t base = NOC_OVERLAY_START_ADDR + ((OPERAND_START_STREAM + operand) * NOC_STREAM_REG_SPACE_SIZE);
 
-        uint32_t rcvd_addr = base + STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX * sizeof(uint32_t);
+        uint32_t rcvd_addr = base + (STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX * sizeof(uint32_t));
         data = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
             reader_.device_id, virtual_coord_, rcvd_addr, sizeof(uint32_t));
         uint32_t rcvd = data[0];
 
-        uint32_t ackd_addr = base + STREAM_REMOTE_DEST_BUF_START_REG_INDEX * sizeof(uint32_t);
+        uint32_t ackd_addr = base + (STREAM_REMOTE_DEST_BUF_START_REG_INDEX * sizeof(uint32_t));
         data = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
             reader_.device_id, virtual_coord_, ackd_addr, sizeof(uint32_t));
         uint32_t ackd = data[0];

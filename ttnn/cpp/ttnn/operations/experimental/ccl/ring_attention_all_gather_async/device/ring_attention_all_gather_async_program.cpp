@@ -334,8 +334,8 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
         uint32_t single_batch_head_num_pages = input_tensor_num_pages / batch_head_size;
         const uint32_t base_pages_per_worker = single_batch_head_num_pages / num_links;
         const uint32_t remainder = single_batch_head_num_pages % num_links;
-        const uint32_t input_tile_id_start = link * base_pages_per_worker + std::min(link, remainder);
-        const uint32_t input_tile_id_end = (link + 1) * base_pages_per_worker + std::min(link + 1, remainder);
+        const uint32_t input_tile_id_start = (link * base_pages_per_worker) + std::min(link, remainder);
+        const uint32_t input_tile_id_end = ((link + 1) * base_pages_per_worker) + std::min(link + 1, remainder);
 
         TT_ASSERT(!(input_tensor_shape[3] % tt::constants::TILE_WIDTH));
         TT_ASSERT(!(output_tensor_shape[3] % tt::constants::TILE_WIDTH));
@@ -369,7 +369,7 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
         tt::tt_metal::SetRuntimeArgs(
             program,
             worker_sender_reader_forward_kernel_id,
-            {sender_worker_cores[link * 2 + 1]},
+            {sender_worker_cores[(link * 2) + 1]},
             reader_forward_rt_args);
 
         std::vector<uint32_t> reader_backward_rt_args = {
@@ -397,7 +397,7 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
             program, worker_sender_reader_backward_kernel_id, {sender_worker_cores[link * 2]}, reader_backward_rt_args);
 
         const CoreCoord sender_forward_worker_core =
-            mesh_device->worker_core_from_logical_core(sender_worker_cores[link * 2 + 1]);
+            mesh_device->worker_core_from_logical_core(sender_worker_cores[(link * 2) + 1]);
         const CoreCoord sender_backward_worker_core =
             mesh_device->worker_core_from_logical_core(sender_worker_cores[link * 2]);
 
@@ -432,7 +432,7 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
                 backward_fabric_node_id,
                 link,
                 program,
-                sender_worker_cores[link * 2 + 1],
+                sender_worker_cores[(link * 2) + 1],
                 writer_forward_rt_args);
         }
         if (fuse_op) {
@@ -440,7 +440,10 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
                 writer_forward_rt_args, num_links, link, 1);
         }
         tt::tt_metal::SetRuntimeArgs(
-            program, worker_sender_writer_forward_kernel_id, sender_worker_cores[link * 2 + 1], writer_forward_rt_args);
+            program,
+            worker_sender_writer_forward_kernel_id,
+            sender_worker_cores[(link * 2) + 1],
+            writer_forward_rt_args);
 
         std::vector<uint32_t> writer_backward_rt_args = {
             input_tensor_Wt,                // width in tiles of the input shard
@@ -509,17 +512,17 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
 
             for (int link = 0; link < num_links; link++) {
                 auto& worker_reader_sender_forward_runtime_args =
-                    worker_reader_sender_forward_runtime_args_by_core[sender_worker_cores[1 + link * 2].x]
-                                                                     [sender_worker_cores[1 + link * 2].y];
+                    worker_reader_sender_forward_runtime_args_by_core[sender_worker_cores[1 + (link * 2)].x]
+                                                                     [sender_worker_cores[1 + (link * 2)].y];
                 auto& worker_reader_sender_backward_runtime_args =
-                    worker_reader_sender_backward_runtime_args_by_core[sender_worker_cores[0 + link * 2].x]
-                                                                      [sender_worker_cores[0 + link * 2].y];
+                    worker_reader_sender_backward_runtime_args_by_core[sender_worker_cores[0 + (link * 2)].x]
+                                                                      [sender_worker_cores[0 + (link * 2)].y];
                 auto& worker_writer_sender_forward_runtime_args =
-                    worker_writer_sender_forward_runtime_args_by_core[sender_worker_cores[1 + link * 2].x]
-                                                                     [sender_worker_cores[1 + link * 2].y];
+                    worker_writer_sender_forward_runtime_args_by_core[sender_worker_cores[1 + (link * 2)].x]
+                                                                     [sender_worker_cores[1 + (link * 2)].y];
                 auto& worker_writer_sender_backward_runtime_args =
-                    worker_writer_sender_backward_runtime_args_by_core[sender_worker_cores[0 + link * 2].x]
-                                                                      [sender_worker_cores[0 + link * 2].y];
+                    worker_writer_sender_backward_runtime_args_by_core[sender_worker_cores[0 + (link * 2)].x]
+                                                                      [sender_worker_cores[0 + (link * 2)].y];
 
                 worker_reader_sender_forward_runtime_args[9] = semaphore.at(1).address();
                 worker_reader_sender_backward_runtime_args[9] = semaphore.at(0).address();

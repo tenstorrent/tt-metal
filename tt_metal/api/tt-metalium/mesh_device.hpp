@@ -130,9 +130,6 @@ private:
     void mark_allocations_unsafe();
     void mark_allocations_safe();
 
-    // Returns the devices in row-major order for the new mesh shape
-    std::vector<IDevice*> get_row_major_devices(const MeshShape& new_shape) const;
-
     std::shared_ptr<MeshTraceBuffer>& create_mesh_trace(const MeshTraceId& trace_id);
 
     std::lock_guard<std::mutex> lock_api() { return std::lock_guard<std::mutex>(api_mutex_); }
@@ -299,6 +296,7 @@ public:
     std::string to_string() const;
     bool is_parent_mesh() const;
 
+    const std::shared_ptr<MeshDevice>& get_parent_mesh() const;
     std::vector<std::shared_ptr<MeshDevice>> get_submeshes() const;
 
     std::shared_ptr<MeshDevice> create_submesh(

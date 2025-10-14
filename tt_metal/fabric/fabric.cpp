@@ -15,6 +15,7 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/device.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>  // chip_id_t
+#include "tt_metal/fabric/builder/fabric_static_sized_channels_allocator.hpp"
 #include <optional>
 #include <set>
 #include <vector>
@@ -191,12 +192,18 @@ void append_fabric_connection_rt_args(
                 src_chip_id, fabric_router_channel);
 
         const auto& edm_config = fabric_context.get_fabric_router_config();
+        auto channel_allocator = edm_config.channel_allocator.get();
+        TT_FATAL(
+            dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(channel_allocator) != nullptr,
+            "Only FabricStaticSizedChannelsAllocator is supported currently.");
+        const auto static_channel_allocator =
+            dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(channel_allocator);
         const auto sender_channel = is_2d_fabric ? router_direction : 0;
         tt::tt_fabric::SenderWorkerAdapterSpec edm_connection = {
             .edm_noc_x = fabric_router_virtual_core.x,
             .edm_noc_y = fabric_router_virtual_core.y,
-            .edm_buffer_base_addr = edm_config.sender_channels_base_address[sender_channel],
-            .num_buffers_per_channel = edm_config.sender_channels_num_buffers[sender_channel],
+            .edm_buffer_base_addr = static_channel_allocator->get_sender_channel_base_address(sender_channel),
+            .num_buffers_per_channel = static_channel_allocator->get_sender_channel_number_of_slots(sender_channel),
             .edm_l1_sem_addr = edm_config.sender_channels_local_flow_control_semaphore_address[sender_channel],
             .edm_connection_handshake_addr = edm_config.sender_channels_connection_semaphore_address[sender_channel],
             .edm_worker_location_info_addr = edm_config.sender_channels_worker_conn_info_base_address[sender_channel],
@@ -222,6 +229,7 @@ void append_routing_plane_connection_manager_rt_args(
     tt::tt_metal::KernelHandle& kernel_id,
     const CoreCoord& worker_core,
     std::vector<uint32_t>& worker_args,
+    FabricApiType api_type,
     CoreType core_type) {
     // 1) append tag (like direction) and fabric connection info for each route
     TT_FATAL(
@@ -277,9 +285,14 @@ void append_routing_plane_connection_manager_rt_args(
             src_fabric_node_id, dst_node, link_idx, worker_program, worker_core, worker_args, core_type);
     }
 
+    auto kernel = worker_program.impl().get_kernel(kernel_id);
+    switch (api_type) {
+        case FabricApiType::Linear: kernel->add_defines({{"API_TYPE_Linear", "1"}}); break;
+        case FabricApiType::Mesh: kernel->add_defines({{"API_TYPE_Mesh", "1"}}); break;
+        default: TT_FATAL(false, "Unsupported FabricApiType: {}", static_cast<int>(api_type));
+    }
     // 2) Append additional info for 2D Mesh
     if (fabric_context.is_2D_routing_enabled()) {
-        auto kernel = worker_program.impl().get_kernel(kernel_id);
         kernel->add_defines({{"FABRIC_2D", "1"}});
         if (fabric_context.is_dynamic_routing_enabled()) {
             kernel->add_defines({{"FABRIC_2D_DYNAMIC", "1"}});

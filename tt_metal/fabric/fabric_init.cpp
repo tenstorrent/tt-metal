@@ -4,6 +4,7 @@
 
 #include "fabric.hpp"
 
+#include <umd/device/types/arch.hpp>
 #include <variant>
 
 #include "erisc_datamover_builder.hpp"
@@ -18,6 +19,7 @@
 #include "hostdevcommon/fabric_common.h"
 #include "impl/context/metal_context.hpp"
 #include "dispatch/kernel_config/relay_mux.hpp"
+#include <fmt/ranges.h>
 
 // hack for test_basic_fabric_apis.cpp
 // https://github.com/tenstorrent/tt-metal/issues/20000
@@ -45,7 +47,8 @@ std::pair<tt::tt_fabric::FabricEriscDatamoverType, tt::tt_fabric::FabricEriscDat
         return {fabric_edm_type, fabric_edm_axis};
     }
 
-    auto physical_mesh_shape = control_plane.get_physical_mesh_shape(mesh_id0);
+    // Need global mesh shape to determine dateline placement for multi-host setups
+    auto physical_mesh_shape = control_plane.get_physical_mesh_shape(mesh_id0, tt::tt_fabric::MeshScope::GLOBAL);
     TT_FATAL(physical_mesh_shape.dims() == 2, "Dateline routing only supported for 2D mesh");
 
     auto mesh_num_rows = physical_mesh_shape[0];
@@ -246,11 +249,13 @@ void build_tt_fabric_program(
         active_fabric_eth_channels.insert({direction, active_eth_chans});
         log_debug(
             tt::LogMetal,
-            "Building fabric router -> device (phys): {}, (logical): {}, direction: {}, active_eth_chans: {}",
+            "Building fabric router -> device (phys): {}, (logical): {}, direction: {}, active_eth_chans.size(): {}, "
+            "active_eth_chans: [{}]",
             device->id(),
             control_plane.get_fabric_node_id_from_physical_chip_id(device->id()).chip_id,
             direction,
-            active_eth_chans.size());
+            active_eth_chans.size(),
+            fmt::join(active_eth_chans, ", "));
     }
 
     if (active_fabric_eth_channels.empty()) {
@@ -315,6 +320,14 @@ void build_tt_fabric_program(
                 eth_direction,
                 has_tensix_extension);
             edm_builders.insert({eth_chan, edm_builder});
+
+            if (tt::tt_metal::MetalContext::instance().get_cluster().arch() == tt::ARCH::BLACKHOLE &&
+                tt::tt_metal::MetalContext::instance().rtoptions().get_enable_2_erisc_mode()) {
+                // Enable updates at a fixed interval for link stability and link status updates
+                constexpr uint32_t k_BlackholeFabricRouterContextSwitchInterval = 32;
+                edm_builder.set_firmware_context_switch_interval(k_BlackholeFabricRouterContextSwitchInterval);
+                edm_builder.set_firmware_context_switch_type(FabricEriscDatamoverContextSwitchType::INTERVAL);
+            }
 
             if (fabric_tensix_extension_enabled) {
                 // Only create tensix builder if this channel is not used by dispatch
@@ -426,8 +439,6 @@ void build_tt_fabric_program(
         connect_downstream_builders(RoutingDirection::N, RoutingDirection::S);
         connect_downstream_builders(RoutingDirection::E, RoutingDirection::W);
     }
-
-    return;
 }
 
 std::unique_ptr<tt::tt_metal::Program> create_and_compile_tt_fabric_program(tt::tt_metal::IDevice* device) {
@@ -483,6 +494,12 @@ std::unique_ptr<tt::tt_metal::Program> create_and_compile_tt_fabric_program(tt::
             ct_args.push_back(num_local_fabric_routers);
             ct_args.push_back(router_channels_mask);
 
+            auto proc = static_cast<tt::tt_metal::DataMovementProcessor>(risc_id);
+            if (tt::tt_metal::MetalContext::instance().rtoptions().get_enable_2_erisc_mode()) {
+                // Force fabric to run on erisc1
+                proc = tt::tt_metal::DataMovementProcessor::RISCV_1;
+            }
+
             auto eth_logical_core = soc_desc.get_eth_core_for_channel(eth_chan, CoordSystem::LOGICAL);
             auto kernel = tt::tt_metal::CreateKernel(
                 *fabric_program_ptr,
@@ -490,7 +507,7 @@ std::unique_ptr<tt::tt_metal::Program> create_and_compile_tt_fabric_program(tt::
                 eth_logical_core,
                 tt::tt_metal::EthernetConfig{
                     .noc = edm_builder.config.risc_configs[risc_id].get_configured_noc(),
-                    .processor = static_cast<tt::tt_metal::DataMovementProcessor>(risc_id),
+                    .processor = proc,
                     .compile_args = ct_args,
                     .defines = defines,
                     .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});

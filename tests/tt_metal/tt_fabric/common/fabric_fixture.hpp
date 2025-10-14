@@ -73,6 +73,19 @@ public:
         } else {
             log_info(tt::LogTest, "Running fabric api tests with fast dispatch");
         }
+
+        // Fabric Reliability Mode
+        // Default to STRICT_SYSTEM_HEALTH_SETUP_MODE
+        // If runtime option RELIABILITY_MODE is set, use the value from the runtime option
+        tt::tt_fabric::FabricReliabilityMode reliability_mode =
+            tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
+        // Query runtime options for an env-parsed override
+        auto reliability_mode_override = tt::tt_metal::MetalContext::instance().rtoptions().get_reliability_mode();
+        if (reliability_mode_override.has_value()) {
+            reliability_mode = reliability_mode_override.value();
+        }
+        log_info(tt::LogTest, "Fabric Reliability Mode: {}", enchantum::to_string(reliability_mode));
+
         // Set up all available devices
         arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         auto num_devices = tt::tt_metal::GetNumAvailableDevices();
@@ -81,11 +94,7 @@ public:
         for (unsigned int id = 0; id < num_devices; id++) {
             ids.push_back(id);
         }
-        tt::tt_fabric::SetFabricConfig(
-            fabric_config,
-            tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
-            num_routing_planes,
-            fabric_tensix_config);
+        tt::tt_fabric::SetFabricConfig(fabric_config, reliability_mode, num_routing_planes, fabric_tensix_config);
         const auto& dispatch_core_config =
             tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
         devices_map_ = tt::tt_metal::distributed::MeshDevice::create_unit_meshes(
@@ -278,12 +287,19 @@ void FabricUnicastCommon(
     BaseFabricFixture* fixture,
     NocSendType noc_send_type,
     const std::vector<std::tuple<RoutingDirection, uint32_t /*num_hops*/>>& dir_configs,
+    FabricApiType api_type = FabricApiType::Linear,
     bool with_state = false);
 
 void FabricMulticastCommon(
     BaseFabricFixture* fixture,
     NocSendType noc_send_type,
     const std::vector<std::tuple<RoutingDirection, uint32_t /*start_distance*/, uint32_t /*range*/>>& dir_configs,
+    bool with_state = false);
+
+void Fabric2DMulticastCommon(
+    BaseFabricFixture* fixture,
+    NocSendType noc_send_type,
+    const std::vector<std::vector<std::tuple<RoutingDirection, uint32_t, uint32_t>>>& connection_configs,
     bool with_state = false);
 
 void RunEDMConnectionStressTest(

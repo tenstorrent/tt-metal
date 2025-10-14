@@ -272,8 +272,7 @@ def run_conv2d_short_sweep(
             tt_bias_tensor = ttnn.from_torch(torch_bias_tensor, weights_dtype)
         output_layout = ttnn.Layout(output_layout)
         output_dtype = ttnn.DataType(output_dtype)
-        if stride_h == kernel_height and stride_w == kernel_width and stride_h >= 16 and pad_h == 0 and pad_w == 0:
-            conv_config.enable_kernel_stride_folding = True
+
         conv_output_dtype = output_dtype
         conv_config.weights_dtype = weights_dtype
         conv_config.output_layout = output_layout
@@ -283,7 +282,6 @@ def run_conv2d_short_sweep(
             tt_bias_tensor = ttnn.from_torch(torch_bias_tensor, ttnn.bfloat16)
 
         tt_input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16, device=device)
-
     start_time = start_measuring_time()
     [tt_output_tensor_on_device, [out_height, out_width], [weights_device, bias_device]] = ttnn.conv2d(
         input_tensor=tt_input_tensor,
@@ -315,9 +313,14 @@ def run_conv2d_short_sweep(
     torch_output_tensor = torch_output_tensor.reshape(batch_size, out_height, out_width, torch_output_tensor.shape[-1])
     torch_output_tensor = torch_output_tensor[:, :, :, :output_channels]
 
-    torch_output_tensor = torch.permute(torch_output_tensor, (0, 3, 1, 2))
+    torch_out_golden_tensor = torch.permute(torch_out_golden_tensor, (0, 2, 3, 1))
 
-    return [check_with_pcc_without_tensor_printout(torch_output_tensor, torch_out_golden_tensor, pcc=0.985), e2e_perf]
+    return [
+        *check_with_pcc_without_tensor_printout(torch_output_tensor, torch_out_golden_tensor, pcc=0.985),
+        e2e_perf,
+        torch_output_tensor,
+        torch_out_golden_tensor,
+    ]
 
 
 def run_conv1d_short_sweep(

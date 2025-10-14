@@ -57,6 +57,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     sudo \
     uuid-runtime \
     wget \
+    zstd \
     libgtest-dev \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
@@ -94,12 +95,12 @@ COPY /docs/requirements-docs.txt ${TT_METAL_INFRA_DIR}/tt-metal/docs/.
 # Copy requirements from tt-metal folders for sweeps (requirements-sweeps.txt)
 COPY /tests/sweep_framework/requirements-sweeps.txt ${TT_METAL_INFRA_DIR}/tt-metal/tests/sweep_framework/.
 COPY /tt_metal/python_env/requirements-dev.txt ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/.
-COPY /scripts/debugging_scripts/requirements.txt ${TT_METAL_INFRA_DIR}/scripts/debugging_scripts/requirements.txt
+COPY /tools/triage/requirements.txt ${TT_METAL_INFRA_DIR}/tools/triage/requirements.txt
 
 RUN umask 000 && python3 -m pip config set global.extra-index-url https://download.pytorch.org/whl/cpu && \
     python3 -m pip install --no-cache-dir -r ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/requirements-dev.txt && \
     python3 -m pip install --no-cache-dir -r ${TT_METAL_INFRA_DIR}/tt-metal/docs/requirements-docs.txt && \
-    python3 -m pip install --no-cache-dir -r ${TT_METAL_INFRA_DIR}/scripts/debugging_scripts/requirements.txt
+    python3 -m pip install --no-cache-dir -r ${TT_METAL_INFRA_DIR}/tools/triage/requirements.txt
 
 COPY /scripts/install_debugger.sh ${TT_METAL_INFRA_DIR}/scripts/install_debugger.sh
 COPY /scripts/ttexalens_ref.txt ${TT_METAL_INFRA_DIR}/scripts/ttexalens_ref.txt

@@ -66,7 +66,7 @@
 #include "tile.hpp"
 #include "tt_memory.h"
 #include "tt_metal/detail/kernel_cache.hpp"
-#include "tt_metal/impl/debug/inspector.hpp"
+#include "tt_metal/impl/debug/inspector/inspector.hpp"
 #include "tt_metal/impl/dispatch/data_collection.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/impl/program/dispatch.hpp"
@@ -507,7 +507,7 @@ KernelGroup* detail::ProgramImpl::kernels_on_core(const CoreCoord& core, uint32_
         return nullptr;
     }
     uint8_t index = core_to_kernel_group_index_table_[programmable_core_type_index].at(
-        core.y * grid_extent_[programmable_core_type_index].x + core.x);
+        (core.y * grid_extent_[programmable_core_type_index].x) + core.x);
     return (index == core_to_kernel_group_invalid_index) ? nullptr
                                                          : kernel_groups_[programmable_core_type_index].at(index).get();
 }
@@ -543,7 +543,7 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
         std::vector<std::set<KernelHandle>> grid(grid_size);
         for (const auto& [id, kernel] : handle_to_kernel) {
             for (auto core : kernel->logical_cores()) {
-                int core_index = core.y * grid_extent_[programmable_core_type_index].x + core.x;
+                int core_index = (core.y * grid_extent_[programmable_core_type_index].x) + core.x;
                 valid[core_index] = true;
                 grid[core_index].insert(id);
             }
@@ -553,7 +553,7 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
         std::map<std::set<KernelHandle>, std::set<CoreRange>> map;
         for (auto y = base.y; y < grid_extent_[programmable_core_type_index].y; y++) {
             for (auto x = base.x; x < grid_extent_[programmable_core_type_index].x; x++) {
-                int index = y * grid_extent_[programmable_core_type_index].x + x;
+                int index = (y * grid_extent_[programmable_core_type_index].x) + x;
                 if (valid[index]) {
                     // grid is not used any more. Avoid copy construction by moving.
                     auto [it, inserted] = map.try_emplace(std::move(grid[index]));
@@ -583,7 +583,8 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
                 for (auto y = range.start_coord.y; y <= range.end_coord.y; y++) {
                     for (auto x = range.start_coord.x; x <= range.end_coord.x; x++) {
                         core_to_kernel_group_index_table_[programmable_core_type_index]
-                                                         [y * grid_extent_[programmable_core_type_index].x + x] = index;
+                                                         [(y * grid_extent_[programmable_core_type_index].x) + x] =
+                                                             index;
 
                         if (not hal.get_supports_cbs(programmable_core_type_index)) {
                             continue;
@@ -1198,8 +1199,6 @@ void detail::ProgramImpl::populate_dispatch_data(IDevice* device) {
     }
 
     this->program_transfer_info.num_active_cores = num_active_cores;
-
-    return;
 }
 
 ProgramConfig& detail::ProgramImpl::get_program_config(uint32_t programmable_core_type_index) {

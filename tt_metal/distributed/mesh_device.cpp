@@ -51,7 +51,7 @@
 #include <env_lib.hpp>
 
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
-#include "tt_metal/impl/debug/inspector.hpp"
+#include "tt_metal/impl/debug/inspector/inspector.hpp"
 #include "tt_metal/impl/sub_device/sub_device_manager.hpp"
 #include "dispatch/launch_message_ring_buffer_state.hpp"
 #include "sub_device/sub_device_manager_tracker.hpp"
@@ -84,8 +84,6 @@ std::shared_ptr<ThreadPool> create_default_thread_pool(const std::vector<IDevice
     // Bind the thread-pool to the physical devices being used.
     if (tt::parse_env("TT_MESH_PASS_THROUGH_THREAD_POOL", false) || physical_devices.size() == 1) {
         return create_passthrough_thread_pool();
-    } else if (tt::parse_env("TT_MESH_BOOST_THREAD_POOL", false)) {
-        return create_boost_thread_pool(physical_devices.size());
     } else {
         return create_device_bound_thread_pool(physical_devices);
     }
@@ -626,6 +624,7 @@ chip_id_t MeshDevice::build_id() const { return reference_device()->id(); }
 
 bool MeshDevice::is_parent_mesh() const { return parent_mesh_ == nullptr; }
 
+const std::shared_ptr<MeshDevice>& MeshDevice::get_parent_mesh() const { return parent_mesh_; }
 std::vector<std::shared_ptr<MeshDevice>> MeshDevice::get_submeshes() const {
     std::vector<std::shared_ptr<MeshDevice>> result;
     result.reserve(submeshes_.size());

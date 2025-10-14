@@ -64,7 +64,13 @@ jobs:
             runs-on: "tt-ubuntu-2204-p150b-viommu-stable",
             name: "BH P150 PCIe Performance",
             cmd: build/tools/mem_bench --benchmark_filter="Device (Reading|Writing) Host"
-          } # Nigel Huang
+          }, # Nigel Huang
+          {
+            arch: wormhole_b0,
+            runs-on: ["arch-wormhole_b0", "pipeline-perf", "config-t3000", "in-service"],
+            name: "Fabric Collectives ubench - Point to Point",
+            cmd: "tests/tt_metal/tt_fabric/benchmark/collectives/unicast/ci_run_unicast.sh"
+          } # Tomer Levin
         ]
     container:
       image: ${{ inputs.docker-image }}
@@ -90,7 +96,7 @@ jobs:
     runs-on: ${{ matrix.test-group.runs-on }}
     steps:
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
