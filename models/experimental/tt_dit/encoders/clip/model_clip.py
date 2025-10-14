@@ -6,14 +6,14 @@ from __future__ import annotations
 
 import torch
 import ttnn
-from ttnn.distributed.distributed import ConcatMeshToTensor
 
-from ...layers.feedforward import FeedForward, ParallelFeedForward
-from ...layers.linear import ColParallelLinear, Linear
-from ...parallel.config import EncoderParallelConfig
-from ...parallel.manager import CCLManager
-from ...utils.substate import indexed_substates, substate
 from ...utils.tensor import bf16_tensor
+from ...utils.substate import substate, indexed_substates
+from ...parallel.manager import CCLManager
+from ...parallel.config import EncoderParallelConfig
+from ...layers.feedforward import ParallelFeedForward, FeedForward
+from ...layers.linear import ColParallelLinear, Linear
+from ttnn.distributed.distributed import ConcatMeshToTensor
 
 
 class CLIPConfig:

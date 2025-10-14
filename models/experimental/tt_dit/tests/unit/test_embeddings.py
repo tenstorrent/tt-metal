@@ -3,29 +3,24 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-import math
-
 import pytest
 import torch
 import ttnn
-from diffusers.models.embeddings import (
-    CombinedTimestepGuidanceTextProjEmbeddings as TorchCombinedTimestepGuidanceTextProjEmbeddings,
-)
-from diffusers.models.transformers.transformer_mochi import MochiTransformer3DModel
+import math
 
-from ....stable_diffusion_35_large.reference import SD3Transformer2DModel as TorchSD3Transformer2DModel
-from ...layers.embeddings import (
-    CombinedTimestepGuidanceTextProjEmbeddings,
-    MochiPatchEmbed,
-    PatchEmbed,
-    PixartAlphaTextProjection,
-    SD35CombinedTimestepTextProjEmbeddings,
-    TimestepEmbedding,
-    WanPatchEmbed,
-)
+from ...utils.tensor import bf16_tensor
 from ...utils.check import assert_quality
 from ...utils.substate import substate
-from ...utils.tensor import bf16_tensor
+from ...layers.embeddings import (
+    TimestepEmbedding,
+    PixartAlphaTextProjection,
+    SD35CombinedTimestepTextProjEmbeddings,
+    PatchEmbed,
+    MochiPatchEmbed,
+    WanPatchEmbed,
+)
+from ....stable_diffusion_35_large.reference import SD3Transformer2DModel as TorchSD3Transformer2DModel
+from diffusers.models.transformers.transformer_mochi import MochiTransformer3DModel
 
 
 class TorchCombinedTimestepTextProjEmbeddings(torch.nn.Module):

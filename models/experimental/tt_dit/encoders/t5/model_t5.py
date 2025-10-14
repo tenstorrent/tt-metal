@@ -2,18 +2,17 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import math
-
 import torch
 import ttnn
 
-from ...layers.linear import ColParallelLinear, RowParallelLinear
-from ...layers.module import Module, ModuleList
-from ...layers.normalization import RMSNorm
-from ...parallel.config import EncoderParallelConfig
-from ...parallel.manager import CCLManager
-from ...utils.substate import indexed_substates, substate
 from ...utils.tensor import bf16_tensor
+from ...utils.substate import substate, indexed_substates
+from ...parallel.manager import CCLManager
+from ...parallel.config import EncoderParallelConfig
+from ...layers.linear import ColParallelLinear, RowParallelLinear
+import math
+from ...layers.normalization import RMSNorm
+from ...layers.module import Module, ModuleList
 
 
 class T5Config:
