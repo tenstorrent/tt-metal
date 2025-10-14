@@ -47,7 +47,7 @@ inline std::string get_core_descriptor_file(
 
     bool use_small_core_desc_yaml = false; // override to a different core descriptor for small RTL sims
     if (tt_metal::MetalContext::instance().rtoptions().get_simulator_enabled()) {
-        auto soc_desc = tt::umd::SimulationDevice::get_soc_descriptor_path_from_simulator_path(
+        auto soc_desc = tt::umd::SimulationChip::get_soc_descriptor_path_from_simulator_path(
             tt_metal::MetalContext::instance().rtoptions().get_simulator_path());
         tt_xy_pair grid_size = tt::umd::SocDescriptor::get_grid_size_from_soc_descriptor_path(soc_desc);
         if (grid_size.y <= 2) {  // these SOC descriptors declare a 2x2 grid

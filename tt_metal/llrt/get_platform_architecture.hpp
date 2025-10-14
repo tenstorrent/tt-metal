@@ -86,7 +86,7 @@ inline tt::ARCH get_platform_architecture(const tt::llrt::RunTimeOptions& rtopti
         return arch;
     } else if (rtoptions.get_target_device() == tt::TargetDevice::Simulator) {
         auto soc_desc =
-            tt::umd::SimulationDevice::get_soc_descriptor_path_from_simulator_path(rtoptions.get_simulator_path());
+            tt::umd::SimulationChip::get_soc_descriptor_path_from_simulator_path(rtoptions.get_simulator_path());
         arch = tt::umd::SocDescriptor::get_arch_from_soc_descriptor_path(soc_desc);
     } else {
         arch = get_physical_architecture();
