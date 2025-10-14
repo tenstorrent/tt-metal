@@ -569,6 +569,83 @@ void bind_unary_operation_with_float_parameter(
 }
 
 template <typename unary_operation_t>
+void bind_unary_operation_with_scalar_parameter(
+    py::module& module,
+    const unary_operation_t& operation,
+    const std::string& parameter_name,
+    const std::string& parameter_doc,
+    const std::string& info_doc,
+    const std::string& supported_dtype = "BFLOAT16",
+    const std::string& note = "") {
+    auto doc = fmt::format(
+        R"doc(
+        Applies {0} to :attr:`input_tensor` element-wise with {2}.
+
+        {4}
+
+        .. math::
+            \mathrm{{output\_tensor}}_i = \verb|{0}|(\mathrm{{input\_tensor}}_i, \verb|{2}|)
+
+        Args:
+            input_tensor (ttnn.Tensor): the input tensor.
+            {2} (float/int): {3}.
+
+        Keyword Args:
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+
+
+        Returns:
+            ttnn.Tensor: the output tensor.
+
+        Note:
+            Supported dtypes, layouts, and ranks:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+                 - Ranks
+               * - {5}
+                 - TILE
+                 - 2, 3, 4
+
+            {6}
+
+        Example:
+            >>> tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+            >>> {2} = 3
+            >>> output = {1}(tensor, {2})
+        )doc",
+        operation.base_name(),
+        operation.python_fully_qualified_name(),
+        parameter_name,
+        parameter_doc,
+        info_doc,
+        supported_dtype,
+        note);
+
+    bind_registered_operation(
+        module,
+        operation,
+        doc,
+        ttnn::pybind_overload_t{
+            [](const unary_operation_t& self,
+               const Tensor& input_tensor,
+               const std::variant<uint32_t, int32_t, float> parameter,
+               const std::optional<MemoryConfig>& memory_config,
+               const std::optional<ttnn::Tensor>& output_tensor) {
+                return self(input_tensor, parameter, memory_config, output_tensor);
+            },
+            py::arg("input_tensor"),
+            py::arg(parameter_name.c_str()),
+            py::kw_only(),
+            py::arg("memory_config") = std::nullopt,
+            py::arg("output_tensor") = std::nullopt});
+}
+
+template <typename unary_operation_t>
 void bind_unary_operation_with_float_parameter_default(
     py::module& module,
     const unary_operation_t& operation,
@@ -2148,14 +2225,6 @@ void py_module(py::module& module) {
         R"doc(FLOAT32, BFLOAT16, BFLOAT8_B)doc");
     bind_unary_operation_with_float_parameter(
         module,
-        ttnn::fill,
-        "fill_value",
-        "The value to be filled in the output tensor",
-        "This will create a tensor of same shape and dtype as input reference tensor with fill_value.",
-        R"doc(BFLOAT16, BFLOAT8_B)doc",
-        R"doc(Support provided for float32 dtypes in Wormhole_B0. System memory is not supported.)doc");
-    bind_unary_operation_with_float_parameter(
-        module,
         ttnn::relu_max,
         "upper_limit",
         "The max value for ReLU function",
@@ -2184,6 +2253,57 @@ void py_module(py::module& module) {
         1.0f,
         "",
         R"doc(FLOAT32, BFLOAT16, BFLOAT8_B)doc");
+
+    bind_unary_operation_with_scalar_parameter(
+        module,
+        ttnn::fill,
+        "fill_value",
+        "The value to be filled in the output tensor",
+        "This will create a tensor of same shape and dtype as input reference tensor with fill_value.",
+        R"doc(BFLOAT16, BFLOAT8_B)doc",
+        R"doc(Support provided for float32 dtypes in Wormhole_B0. System memory is not supported.)doc");
+    // bind_unary_operation_with_scalar_parameter(
+    //     module,
+    //     ttnn::eq_unary,
+    //     "value",
+    //     "The value parameter for the eq_unary function",
+    //     "scalar value",
+    //     R"doc(BFLOAT16, BFLOAT8_B)doc");
+    // bind_unary_operation_with_scalar_parameter(
+    //     module,
+    //     ttnn::ne_unary,
+    //     "value",
+    //     "The value parameter for the ne_unary function",
+    //     "scalar value",
+    //     R"doc(BFLOAT16, BFLOAT8_B)doc");
+    // bind_unary_operation_with_scalar_parameter(
+    //     module,
+    //     ttnn::gt_unary,
+    //     "value",
+    //     "The value parameter for the gt_unary function",
+    //     "scalar value",
+    //     R"doc(BFLOAT16, BFLOAT8_B)doc");
+    // bind_unary_operation_with_scalar_parameter(
+    //     module,
+    //     ttnn::lt_unary,
+    //     "value",
+    //     "The value parameter for the lt_unary function",
+    //     "scalar value",
+    //     R"doc(BFLOAT16, BFLOAT8_B)doc");
+    // bind_unary_operation_with_scalar_parameter(
+    //     module,
+    //     ttnn::ge_unary,
+    //     "value",
+    //     "The value parameter for the ge_unary function",
+    //     "scalar value",
+    //     R"doc(BFLOAT16, BFLOAT8_B)doc");
+    // bind_unary_operation_with_scalar_parameter(
+    //     module,
+    //     ttnn::le_unary,
+    //     "value",
+    //     "The value parameter for the le_unary function",
+    //     "scalar value",
+    //     R"doc(BFLOAT16, BFLOAT8_B)doc");
 
     // Unary ops with dim parameter
     bind_unary_operation_with_dim_parameter(

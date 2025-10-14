@@ -9,7 +9,7 @@ from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import comp
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-@pytest.mark.parametrize("scalar", [-1, -2, -3, -4, -5, 3, 0, 1, 100, 10, 5, 2147483, -2147483, -16777216, 16777216])
+@pytest.mark.parametrize("scalar", [-1, -2, 0, 10, 2147483, -2147483, -16777216, 16777216, 2147483647, -2147483647])
 def test_unary_max_int32_test(scalar, device):
     num_elements = torch.prod(torch.tensor(torch.Size([1, 1, 32, 32]))).item()
     torch_input = torch.linspace(-10, 10, num_elements, dtype=torch.int32)

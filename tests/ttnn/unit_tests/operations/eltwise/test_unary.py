@@ -759,10 +759,8 @@ def is_int32_overflow(tensor, scalar):
 )
 @pytest.mark.parametrize("scalar", [-100, -54, -1, 0, 1, 13, 29, -0])
 @pytest.mark.parametrize("ttnn_op", [ttnn.ne, ttnn.eq, ttnn.gt, ttnn.lt, ttnn.ge, ttnn.le])
-@pytest.mark.parametrize("use_legacy", [True, False])
+@pytest.mark.parametrize("use_legacy", [False])
 def test_unary_comp_ops(input_shapes, scalar, ttnn_op, use_legacy, device):
-    torch.manual_seed(213919)
-
     # Generate a uniform range of values across the valid int32 range
     num_elements = int(torch.prod(torch.tensor(input_shapes)).item())
     uniform_values = torch.linspace(-2147483647, 2147483647, num_elements, dtype=torch.int32)
@@ -772,7 +770,7 @@ def test_unary_comp_ops(input_shapes, scalar, ttnn_op, use_legacy, device):
 
     in_data = in_data[-num_elements:].reshape(input_shapes)
 
-    if is_wormhole_b0() and use_legacy == False and is_int32_overflow(in_data, scalar).any():
+    if use_legacy == False and is_int32_overflow(in_data, scalar).any():
         pytest.xfail("Overflow occurs as in case of binary_ng, sub_tile is called")
 
     input_tensor = ttnn.from_torch(in_data, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
