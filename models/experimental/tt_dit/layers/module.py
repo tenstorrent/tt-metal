@@ -256,6 +256,25 @@ class Parameter:
         mesh_axes: Sequence[int | None] | None = None,
         on_host: bool = False,
     ) -> None:
+        """Initialize a Parameter for use in a Module.
+
+        The parameter is initially uninitialized. It is typically populated via the parent module's
+        `load_torch_state_dict()`. Alternatively, call `load_torch_tensor()` or assign the `data`
+        property directly with a correctly shaped and distributed `ttnn.Tensor`.
+
+        Args:
+            total_shape: The global shape of the parameter tensor across all mesh devices.
+            device: The mesh device on which the parameter is stored. If `on_host` is
+                `True`, this is used only to create the mesh mapper for distributing the tensor.
+            layout: See `ttnn.from_torch()`. Defaults to `ttnn.Layout.TILE`.
+            dtype: See `ttnn.from_torch()`. Defaults to `ttnn.bfloat16`.
+            memory_config: See `ttnn.from_torch()`. Defaults to `ttnn.DRAM_MEMORY_CONFIG`.
+            pad_value: See `ttnn.from_torch()`. Defaults to `None`.
+            mesh_axes: Maps tensor dimensions to mesh device axes for distribution.
+                For a rank-3 tensor whose second and third dimensions are sharded on mesh axes 0 and
+                1, respectively, use `[None, 0, 1]`.
+            on_host: If `True`, keep the tensor in host memory instead of device memory.
+        """
         total_shape = tuple(total_shape)
         mesh_axes = tuple(mesh_axes) if mesh_axes is not None else (None,) * len(total_shape)
 
