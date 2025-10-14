@@ -5,7 +5,6 @@
 #include "generic_pools.hpp"
 
 #include "tt-metalium/constants.hpp"
-#include "ttnn/operations/pool/generic/device/pool_op.hpp"
 #include <cmath>
 #include <tt-metalium/buffer_types.hpp>
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
@@ -46,7 +45,6 @@ static std::vector<Tensor> pool2d_invoke(
     std::optional<int32_t> divisor_override = std::nullopt,
     const std::optional<const MemoryConfig>& memory_config = std::nullopt,
     const std::optional<const TensorMemoryLayout> applied_shard_scheme = std::nullopt,
-    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
     bool in_place_halo = false,
     bool deallocate_input = false,
     bool reallocate_halo_output = true,
@@ -331,7 +329,6 @@ static std::vector<Tensor> pool2d_invoke(
         dtype,
         output_layout,
         out_memory_config,
-        compute_kernel_config,
         count_include_pad,
         divisor_override,
         return_indices,
@@ -391,7 +388,6 @@ std::vector<Tensor> MaxPool2DOp::invoke(
         std::nullopt,  // divisor_override
         memory_config,
         applied_shard_scheme,
-        std::nullopt,  // compute_kernel_config - not needed for max pool
         in_place_halo,
         deallocate_input,
         reallocate_halo_output,
@@ -414,7 +410,6 @@ Tensor AvgPool2DOp::invoke(
     std::optional<int32_t> divisor_override,
     const std::optional<const MemoryConfig>& memory_config,
     const std::optional<const TensorMemoryLayout> applied_shard_scheme,
-    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
     bool in_place_halo,
     bool deallocate_input,
     bool reallocate_halo_output,
@@ -436,7 +431,6 @@ Tensor AvgPool2DOp::invoke(
         divisor_override,
         memory_config,
         applied_shard_scheme,
-        compute_kernel_config,
         in_place_halo,
         deallocate_input,
         reallocate_halo_output,
