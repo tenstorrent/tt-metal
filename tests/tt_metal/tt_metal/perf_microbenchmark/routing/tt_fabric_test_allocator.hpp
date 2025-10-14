@@ -614,6 +614,8 @@ inline void GlobalAllocator::allocate_resources(TestConfig& test_config) {
                 continue;
             }
 
+            uint32_t num_receivers_for_credits = 0;
+
             if (dest.hops.has_value()) {  // process based on hops
                 std::vector<FabricNodeId> dst_node_ids =
                     route_manager_.get_dst_node_ids_from_hops(sender.device, dest.hops.value(), pattern.ftype.value());
@@ -753,28 +755,7 @@ inline void GlobalAllocator::allocate_resources(TestConfig& test_config) {
                     }
                 }
 
-                // NEW: Allocate credit addresses for sender (if flow control enabled)
-                if (enable_flow_control_) {
-                    uint32_t num_receivers = static_cast<uint32_t>(dst_node_ids.size());
-
-                    // Allocate credit chunk from sender device's L1
-                    auto& sender_device_resources = get_or_create_device_resources(sender.device);
-                    uint32_t credit_chunk_base =
-                        sender_device_resources.allocate_credit_chunk(num_receivers, sender_memory_map_);
-
-                    // Calculate credit configuration using simple policy
-                    uint32_t buffer_capacity_bytes = policies_.default_payload_chunk_size;
-                    uint32_t packet_size_bytes = pattern.size.value();
-                    auto [initial_credits, batch_size] =
-                        calculate_credit_config(buffer_capacity_bytes, packet_size_bytes);
-
-                    // Populate sender credit info directly in pattern
-                    pattern.sender_credit_info = SenderCreditInfo{
-                        .expected_receiver_count = num_receivers,
-                        .credit_reception_address_base = credit_chunk_base,
-                        .initial_credits = initial_credits};
-                    pattern.credit_return_batch_size = batch_size;
-                }
+                num_receivers_for_credits = static_cast<uint32_t>(dst_node_ids.size());
             } else if (dest.device.has_value()) {  // process dest devices directly
                 auto& device_resources = get_or_create_device_resources(dest.device.value());
 
@@ -814,26 +795,26 @@ inline void GlobalAllocator::allocate_resources(TestConfig& test_config) {
                     dest.atomic_inc_address = core_resources.allocate_atomic_counter();
                 }
 
-                // NEW: Allocate credits for sender (if flow control enabled)
-                if (enable_flow_control_) {
-                    uint32_t num_receivers = 1;  // Direct-device = single receiver
+                num_receivers_for_credits = 1;  // Direct-device = single receiver
+            }
 
-                    // Allocate from sender device (same as hops-based path!)
-                    auto& sender_device_resources = get_or_create_device_resources(sender.device);
-                    uint32_t credit_chunk_base =
-                        sender_device_resources.allocate_credit_chunk(num_receivers, sender_memory_map_);
+            if (enable_flow_control_) {
+                // Allocate credit chunk from sender device's L1
+                auto& sender_device_resources = get_or_create_device_resources(sender.device);
+                uint32_t credit_chunk_base =
+                    sender_device_resources.allocate_credit_chunk(num_receivers_for_credits, sender_memory_map_);
 
-                    uint32_t buffer_capacity_bytes = policies_.default_payload_chunk_size;
-                    uint32_t packet_size_bytes = pattern.size.value();
-                    auto [initial_credits, batch_size] =
-                        calculate_credit_config(buffer_capacity_bytes, packet_size_bytes);
+                // Calculate credit configuration using simple policy
+                uint32_t buffer_capacity_bytes = policies_.default_payload_chunk_size;
+                uint32_t packet_size_bytes = pattern.size.value();
+                auto [initial_credits, batch_size] = calculate_credit_config(buffer_capacity_bytes, packet_size_bytes);
 
-                    pattern.sender_credit_info = SenderCreditInfo{
-                        .expected_receiver_count = num_receivers,
-                        .credit_reception_address_base = credit_chunk_base,
-                        .initial_credits = initial_credits};
-                    pattern.credit_return_batch_size = batch_size;
-                }
+                // Populate sender credit info directly in pattern
+                pattern.sender_credit_info = SenderCreditInfo{
+                    .expected_receiver_count = num_receivers_for_credits,
+                    .credit_reception_address_base = credit_chunk_base,
+                    .initial_credits = initial_credits};
+                pattern.credit_return_batch_size = batch_size;
             }
         }
     }
