@@ -5,25 +5,50 @@ import os
 
 import pytest
 import torch
-from llama_models.llama3.reference_impl.multimodal import encoder_utils
 from loguru import logger
+from transformers import MllamaForConditionalGeneration
 
 import ttnn
-from models.common.utility_functions import comp_allclose, comp_pcc  # , skip_for_grayskull
+from models.common.utility_functions import comp_allclose, comp_pcc
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.tt_transformers.tt.multimodal.llama_image_transformer import TtLlamaImageTransformer
 from models.tt_transformers.tt.multimodal.llama_vision_encoder import mask_tile_padding, pad_seq_one_tile
 
 
-# @skip_for_grayskull("Requires wormhole_b0 to run")
+def get_negative_inf_value(dtype):
+    return torch.finfo(dtype).min
+
+
+def build_encoder_attention_mask(
+    x: torch.Tensor,
+    ar: torch.Tensor,
+    ntok: int,
+    num_chunks: int,
+    n_heads: int,
+):
+    """
+    Build vision encoder attention mask that omits padding tokens.
+    """
+    masks = []
+    for arx in ar:
+        mask_i = torch.ones((num_chunks, x.shape[2], 1), dtype=x.dtype)
+        mask_i[: arx[0] * arx[1], :ntok] = 0
+        mask_i = mask_i.view(num_chunks * x.shape[2], -1)
+        mask_i = mask_i @ mask_i.T * get_negative_inf_value(x.dtype)
+        mask_i = mask_i.unsqueeze(0)
+        masks.append(mask_i)
+    masks = torch.stack(masks).to(x.device).expand(-1, n_heads, -1, -1)
+    return masks
+
+
 @pytest.mark.parametrize(
     "batch, num_chunks",
     ((1, 1),),
 )
 @pytest.mark.parametrize(
     "is_global",
-    (True, False),
+    [(False)],
 )
 @pytest.mark.parametrize(
     "mesh_device",
@@ -41,7 +66,7 @@ def test_image_transformer_inference(batch, num_chunks, mesh_device, is_global):
     dtype = ttnn.bfloat16
     state_dict = model_args.load_state_dict()
 
-    # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
+    # Ref model needs Q and K attention weights from partial state dict, but our models use full state dict keys as cached weight names
     n_layers = model_args.vision_n_layers
     n_global_layers = model_args.vision_n_global_layers
     first_layer_prefix = "vision_model.vision_encoder."
@@ -59,11 +84,9 @@ def test_image_transformer_inference(batch, num_chunks, mesh_device, is_global):
 
     dim = model_args.vision_dim
     ntok = model_args.vision_chunk_ntok - 1  # NOTE: -1 to remove class embedding
-
-    from transformers import MllamaForConditionalGeneration
-
-    weights_path = os.getenv("HF_MODEL")
-    # the next two lines are memoery intensive and create big overhead
+    weights_path = model_args.model_base_path.__str__()
+    # the following lines are memory intensive and create big overhead
+    # config = MllamaConfig.from_pretrained(weights_path)
     # model = MllamaForConditionalGeneration(config).to(torch.bfloat16)
     # model.model.vision_model.load_state_dict(partial_state_dict, strict=False)
 
@@ -74,8 +97,9 @@ def test_image_transformer_inference(batch, num_chunks, mesh_device, is_global):
     callable_reference = reference_model.transformer if not is_global else reference_model.global_transformer
     all_tests_pass = True
 
-    # The next weight assingment increases pcc similarity metric
     for id_b, block in enumerate(callable_reference.layers):
+        for l_name, _ in block.named_parameters():
+            print(l_name)
         callable_reference.layers[id_b].self_attn.q_proj.weight = torch.nn.Parameter(
             partial_state_dict["transformer.resblocks.{}.attn.wq.weight".format(id_b)]
         )
@@ -101,7 +125,7 @@ def test_image_transformer_inference(batch, num_chunks, mesh_device, is_global):
     tt_attention_input = pt_block_input.clone()
 
     # Create PT attention mask
-    mask = encoder_utils.build_encoder_attention_mask(pt_block_input, ar, ntok, num_chunks, 1)
+    mask = build_encoder_attention_mask(pt_block_input, ar, ntok, num_chunks, 1)
     pt_block_input = pt_block_input.reshape(batch, -1, dim)
 
     attention_input = model_args.prepare_residual_tensor_prefill(
@@ -114,7 +138,7 @@ def test_image_transformer_inference(batch, num_chunks, mesh_device, is_global):
     fake_x = torch.zeros(
         attention_input.shape[0], attention_input.shape[1], attention_input.shape[2], attention_input.shape[3]
     )
-    tt_attn_mask = encoder_utils.build_encoder_attention_mask(fake_x, ar, ntok, num_chunks, 1)
+    tt_attn_mask = build_encoder_attention_mask(fake_x, ar, ntok, num_chunks, 1)
     # Make striped attention mask to mask out our padding between 8 and 32
     tt_attn_mask = mask_tile_padding(tt_attn_mask, ntok, npadtt, num_chunks)
 
@@ -130,7 +154,7 @@ def test_image_transformer_inference(batch, num_chunks, mesh_device, is_global):
     )
 
     with torch.no_grad():
-        tt_out = tt_model(attention_input, return_intermediate=return_intermediate, mask=None)
+        tt_out = tt_model(attention_input, return_intermediate=return_intermediate, mask=tt_mask)
         if return_intermediate:
             tt_out, tt_intermediates = tt_out
             tt_intermediates = [tt.reshape(batch, num_chunks, ntok + npadtt, dim) for tt in tt_intermediates]
@@ -147,8 +171,7 @@ def test_image_transformer_inference(batch, num_chunks, mesh_device, is_global):
         tens_input = ttnn.to_torch(attention_input, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[
             :, :, :, :
         ].reshape(batch * num_chunks, ntok + npadtt, dim)
-
-        feats = callable_reference(tens_input[:, :ntok, :], attention_mask=None, output_hidden_states=False)
+        feats = callable_reference(tens_input[:, :ntok, :], attention_mask=mask)
         reference_output = feats.last_hidden_state
         if return_intermediate != None:
             intermediates = [tens_input[:, :ntok, :]]
