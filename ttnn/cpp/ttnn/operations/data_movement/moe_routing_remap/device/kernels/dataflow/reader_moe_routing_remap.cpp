@@ -7,25 +7,6 @@
 #include "ttnn/cpp/ttnn/operations/ccl/common/kernels/moe_utils.hpp"
 #include "ttnn/cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
 
-namespace detail {
-
-template <uint32_t Size, class Enable = void>
-struct DataTypeHolder {
-    typedef void type;
-};
-
-template <uint32_t Size>
-struct DataTypeHolder<Size, typename std::enable_if<Size == 2>::type> {
-    typedef uint16_t type;
-};
-
-template <uint32_t Size>
-struct DataTypeHolder<Size, typename std::enable_if<Size == 4>::type> {
-    typedef uint32_t type;
-};
-
-}  // namespace detail
-
 void kernel_main() {
     constexpr uint32_t routing_weights_cb_id = get_compile_time_arg_val(0);
     constexpr uint32_t local_weights_idxs_cb_id = get_compile_time_arg_val(1);
@@ -37,7 +18,7 @@ void kernel_main() {
 
     constexpr auto routing_weights_args = TensorAccessorArgs<5>();
 
-    using weight_addr_t = detail::DataTypeHolder<weight_datum_size_bytes>::type;
+    using weight_addr_t = tt::data_movement::common::ByteSizeAddressType<weight_datum_size_bytes>::type;
 
     const auto routing_weights_base_address = get_arg_val<uint32_t>(0);
     const auto device_weights_count_offset = get_arg_val<uint32_t>(1);

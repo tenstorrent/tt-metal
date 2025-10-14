@@ -147,7 +147,9 @@ MoeRoutingRemapDeviceOperation::SingleCore::create_at(
 
     return {
         std::move(program),
-        {.unary_reader_kernel_id = unary_reader_kernel_id, .unary_writer_kernel_id = unary_writer_kernel_id}};
+        {.unary_reader_kernel_id = unary_reader_kernel_id,
+         .unary_writer_kernel_id = unary_writer_kernel_id,
+         .utilized_core = *total_cores.begin()}};
 }
 
 void MoeRoutingRemapDeviceOperation::SingleCore::override_runtime_arguments(
@@ -155,8 +157,25 @@ void MoeRoutingRemapDeviceOperation::SingleCore::override_runtime_arguments(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
-    // TODO
+    for (auto& [range, program] : cached_workload.workload.get_programs()) {
+        const auto& coord = range.start_coord();
+        TT_FATAL(
+            coord == range.end_coord(),
+            "Expected single coordinate per program but got range of {} to {}",
+            coord,
+            range.end_coord());
 
-    // for (auto& [range, program] : cached_workload.workload.get_programs()) {
+        const auto& shared_variables = cached_workload.shared_variables.at(range);
+
+        auto& unary_reader_kernel_id = shared_variables.unary_reader_kernel_id;
+        auto& unary_writer_kernel_id = shared_variables.unary_writer_kernel_id;
+        auto& utilized_core = shared_variables.utilized_core;
+
+        auto& reader_runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, utilized_core);
+        auto& writer_runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, utilized_core);
+
+        reader_runtime_args.at(0) = tensor_args.input_routing_weights.buffer()->address();
+        writer_runtime_args.at(0) = tensor_return_value.buffer()->address();
+    }
 }
 }  // namespace ttnn::operations::data_movement

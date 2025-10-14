@@ -69,7 +69,7 @@ def _gen_tensors(non_zero_size, expert_parallel_size, num_cluster_experts, mesh_
 @pytest.mark.parametrize("cluster_axis", [0, 1])
 @pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16])
 @pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG])
-@pytest.mark.parametrize("num_iters", [1])
+@pytest.mark.parametrize("num_iters", [2])
 def test_moe_routing_remap(
     mesh_device,
     non_zero_size,

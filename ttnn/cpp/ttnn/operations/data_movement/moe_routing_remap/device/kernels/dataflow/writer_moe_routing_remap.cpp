@@ -6,24 +6,7 @@
 #include "ttnn/cpp/ttnn/operations/ccl/common/kernels/moe_utils.hpp"
 #include "ttnn/cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
 
-namespace detail {
-
-template <uint32_t Size, class Enable = void>
-struct DataTypeHolder {
-    typedef void type;
-};
-
-template <uint32_t Size>
-struct DataTypeHolder<Size, typename std::enable_if<Size == 2>::type> {
-    typedef uint16_t type;
-};
-
-template <uint32_t Size>
-struct DataTypeHolder<Size, typename std::enable_if<Size == 4>::type> {
-    typedef uint32_t type;
-};
-
-}  // namespace detail
+using namespace tt::data_movement::common;
 
 void kernel_main() {
     constexpr uint32_t routing_weights_cb_id = get_compile_time_arg_val(0);
@@ -35,7 +18,7 @@ void kernel_main() {
     constexpr uint32_t local_weights_page_size_bytes = weight_datum_size_bytes * num_cluster_experts;
 
     constexpr auto local_weights_args = TensorAccessorArgs<6>();
-    using weight_addr_t = detail::DataTypeHolder<weight_datum_size_bytes>::type;
+    using weight_addr_t = ByteSizeAddressType<weight_datum_size_bytes>::type;
 
     const auto local_weights_base_address = get_arg_val<uint32_t>(0);
 
@@ -46,7 +29,7 @@ void kernel_main() {
     const uint32_t local_weights_l1_addr = get_read_ptr(local_weights_cb_id);
     cb_push_back(local_weights_cb_id, 1);
 
-    tt::data_movement::common::fill_with_val<weight_addr_t>(local_weights_l1_addr, num_cluster_experts, 0u);
+    fill_with_val<weight_addr_t>(local_weights_l1_addr, num_cluster_experts, 0u);
 
     cb_wait_front(routing_weights_cb_id, 1);
     cb_wait_front(local_weights_idxs_cb_id, 1);
@@ -57,7 +40,7 @@ void kernel_main() {
 
     for (uint32_t i = 0; i < num_non_zero_per_device; ++i) {
         const uint32_t offset = local_weights_idxs_ptr[i] * weight_datum_size_bytes;
-        tt::data_movement::common::tt_memmove<false, false, false, weight_datum_size_bytes>(
+        tt_memmove<false, false, false, weight_datum_size_bytes>(
             local_weights_l1_addr + offset, routing_weights_addr + offset, weight_datum_size_bytes);
     }
     noc_async_write_barrier();
