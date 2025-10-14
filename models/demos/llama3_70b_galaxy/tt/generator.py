@@ -65,6 +65,43 @@ class Generator:
         self.trace_inputs_prefill = defaultdict(lambda: None)
         self.trace_output_prefill = defaultdict(lambda: None)
         self.prev_page_table = None
+        self.prefill_traces_warmup = False
+
+    def warmup_prefill_traces(
+        self,
+        tokens: torch.Tensor,
+        page_table=None,
+        kv_cache=None,
+        prompt_lens=None,
+        enable_trace=True,
+        sampling_params=None,
+        empty_slots=None,
+        tt_out_logits_all_users=None,
+    ):
+        # Avoids an infinite loop
+        self.prefill_traces_warmup = True
+
+        logger.info("Warming up prefill traces for all supported sequence lengths")
+        for supported_length in self.model.tt_ccl.support_seqlens:
+            logger.info(f"Creating warmup tensor for sequence length: {supported_length}")
+            # Capture trace for both
+            for batch in (1,):  # , 32):  # TODO add proper support for batched prefill == b-32
+                warmup_tokens = torch.zeros(batch, supported_length, dtype=torch.long)
+                # For batched prefill this needs to be *32
+                warmup_prompt_lens = torch.tensor([supported_length] * batch, dtype=torch.long)
+                self.prefill_forward_text(
+                    warmup_tokens,
+                    page_table,
+                    kv_cache,
+                    warmup_prompt_lens,
+                    enable_trace,
+                    sampling_params,
+                    empty_slots,
+                    tt_out_logits_all_users,
+                )
+
+        # trace_id_prefill dict check
+        logger.info("Prefill traces warmup completed")
 
     def prefill_forward_text(
         self,
@@ -77,6 +114,18 @@ class Generator:
         empty_slots=None,
         tt_out_logits_all_users=None,
     ):
+        if self.prefill_traces_warmup is False:
+            self.warmup_prefill_traces(
+                tokens,
+                page_table,
+                kv_cache,
+                prompt_lens,
+                enable_trace,
+                sampling_params,
+                empty_slots,
+                tt_out_logits_all_users,
+            )
+
         if sampling_params is None:
             return_logits = True
         else:
@@ -233,32 +282,12 @@ class Generator:
         """
         trace_key = f"{prefill_seq_len}_{batch_size}"
         if self.trace_id_prefill[trace_key] is None:
-            # Miguel
-            tokens_len = tokens.size(-1)
-            for current_seqlen in self.model.tt_ccl.support_seqlens:
-                logger.info(f"Miguel - Tracing for seqlen: {current_seqlen}")
-                trace_key = f"{current_seqlen}_{batch_size}"
-                breakpoint()
-                if tokens_len <= current_seqlen:
-                    if current_seqlen == 128:
-                        tokens = tokens[:, :128]
-                    else:
-                        # Expand tokens to match current_seqlen
-                        tokens = torch.cat(
-                            [tokens, torch.zeros(tokens.shape[0], current_seqlen - tokens_len).long()], dim=-1
-                        )
-                breakpoint()
-                trace_id, tt_out_trace, *device_inputs = self._capture_trace_prefill(
-                    tokens,
-                    last_token_idx,
-                    page_table=page_table,
-                    kv_cache=kv_cache,
-                    user_id=user_id,
-                    batch_size=batch_size,
-                )
-                self.trace_id_prefill[trace_key] = trace_id
-                self.trace_inputs_prefill[trace_key] = device_inputs
-                self.trace_output_prefill[trace_key] = tt_out_trace
+            trace_id, tt_out_trace, *device_inputs = self._capture_trace_prefill(
+                tokens, last_token_idx, page_table=page_table, kv_cache=kv_cache, user_id=user_id, batch_size=batch_size
+            )
+            self.trace_id_prefill[trace_key] = trace_id
+            self.trace_inputs_prefill[trace_key] = device_inputs
+            self.trace_output_prefill[trace_key] = tt_out_trace
 
         logger.info("Executing prefill trace")
         tt_out_trace = self._prefill_forward_trace_text(
