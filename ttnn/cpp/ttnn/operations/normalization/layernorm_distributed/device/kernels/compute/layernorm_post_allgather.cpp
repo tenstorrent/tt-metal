@@ -36,6 +36,7 @@ void MAIN {
     constexpr uint32_t do_beta = get_compile_time_arg_val(4);
     constexpr bool FLOAT32_DTYPE = get_compile_time_arg_val(5) == 1;
     constexpr bool FLOAT32_REDUCTION = get_compile_time_arg_val(6) == 1;
+    constexpr bool LEGACY_RSQRT = get_compile_time_arg_val(7) == 1;
 
     constexpr uint32_t onetile = 1;
 
@@ -186,8 +187,8 @@ void MAIN {
         add_tiles_init(cb_var, cb_eps);
         ACQ();
         add_tiles(cb_var, cb_eps, 0, 0, 0);
-        rsqrt_tile_init<true>();
-        rsqrt_tile<true>(0);
+        rsqrt_tile_init<LEGACY_RSQRT>();
+        rsqrt_tile<LEGACY_RSQRT>(0);
         pack_tile(0, cb_recip_sqrt_var);
         REL();
         cb_push_back(cb_recip_sqrt_var, 1);

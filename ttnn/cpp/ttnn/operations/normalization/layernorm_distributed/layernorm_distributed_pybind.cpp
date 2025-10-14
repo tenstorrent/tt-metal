@@ -107,7 +107,8 @@ void bind_normalization_layernorm_post_all_gather_operation(py::module& module) 
             py::arg("compute_kernel_config") = std::nullopt,
             py::arg("program_config") = std::nullopt,
             py::arg("dtype") = std::nullopt,
-            py::arg("use_fp32_reduction") = false});
+            py::arg("use_fp32_reduction") = false,
+            py::arg("use_legacy_rsqrt") = true});
 }
 
 void bind_normalization_layernorm_distributed(py::module& module) {

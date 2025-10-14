@@ -184,6 +184,7 @@ tt::tt_metal::operation::ProgramWithCallbacks LayerNormPostAllGather::create_pro
         this->eps,
         this->compute_kernel_config,
         this->use_2d_core_grid,
-        this->use_fp32_reduction);
+        this->use_fp32_reduction,
+        this->use_legacy_rsqrt);
 }
 }  // namespace ttnn::operations::normalization

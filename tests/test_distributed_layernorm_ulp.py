@@ -354,6 +354,7 @@ def test_distributed_norm_comparison(
             weight=ttnn_weight,
             compute_kernel_config=compute_kernel_config,
             use_fp32_reduction=True,
+            use_legacy_rsqrt=False,
         )
 
     ttnn_output_torch = ttnn.to_torch(ttnn_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))

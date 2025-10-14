@@ -20,7 +20,8 @@ ttnn::Tensor ExecuteLayerNormPostAllGather::invoke(
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const LayerNormProgramConfig>& program_config,
     const std::optional<const DataType>& dtype,
-    const std::optional<bool> use_fp32_reduction) {
+    const std::optional<bool> use_fp32_reduction,
+    const std::optional<bool> use_legacy_rsqrt) {
     auto arch = input_tensor.storage_type() == StorageType::DEVICE
                     ? input_tensor.device()->arch()
                     : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
@@ -48,7 +49,8 @@ ttnn::Tensor ExecuteLayerNormPostAllGather::invoke(
                        .compute_kernel_config = kernel_config_val,
                        .dtype = dtype,
                        .use_2d_core_grid = std::nullopt,  // LayerNorm doesn't expose this parameter
-                       .use_fp32_reduction = use_fp32_reduction},
+                       .use_fp32_reduction = use_fp32_reduction,
+                       .use_legacy_rsqrt = use_legacy_rsqrt},
                    {input_tensor, stats},
                    {weight, bias})
             .at(0);
