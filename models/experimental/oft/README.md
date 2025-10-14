@@ -228,17 +228,22 @@ Comprehensive performance benchmarking for OFT model components on TT device har
 **Decoder**: ~4.8M nanoseconds per iteration
 **Full Demo**: ~345.6M nanoseconds per iteration
 
+
 **Usage:**
 ```bash
-# Run individual performance tests
+# Run OFTNet performance test
 TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="4,3" pytest models/experimental/oft/tests/test_device_perf_oft.py::test_device_perf_oft_oftnet
-bash
+```
+```bash
+# Run decoder performance test
 TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="4,3" pytest models/experimental/oft/tests/test_device_perf_oft.py::test_device_perf_oft_decoder
-bash
+```
+```bash
+# Run full oft performance test
 TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="4,3" pytest models/experimental/oft/tests/test_device_perf_oft.py::test_device_perf_oft_full
-
+```
+```bash
 # Run all performance tests
-bash
 TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="4,3" pytest models/experimental/oft/tests/test_device_perf_oft.py
 ```
 
