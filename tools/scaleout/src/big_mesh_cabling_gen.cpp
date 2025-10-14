@@ -127,7 +127,7 @@ int main(int argc, char** argv) {
 
 
         std::string graph_template_name = "big_mesh_" + config.galaxy_structure;
-    std::string dim_1_graph_template_name = "big_mesh_dim1";
+    const std::string dim_1_graph_template_name = "big_mesh_dim1";
 
 
     tt::scaleout_tools::cabling_generator::proto::ClusterDescriptor big_mesh_descriptor = tt::scaleout_tools::cabling_generator::proto::ClusterDescriptor();
