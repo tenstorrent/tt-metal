@@ -577,6 +577,10 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
                     dir,                      // direction
                     chunks_per_sync_val,      // chunks_per_sync
                     dim,                      // dim
+                    start_pages_read_in_row,  // start_pages_read_in_row
+                    start_row_offset,         // start_row_offset
+                    start_tiles_read,         // start_tiles_read
+                    start_tiles_to_read       // start_tiles_to_read
                 };
                 if (input_is_sharded) {
                     shard_builder::extend_sharding_compile_time_args(input_tensor, sender_reader_compile_args);
@@ -601,10 +605,6 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
                     input_tensor.buffer()->address(),         // input_tensor_address
                     intermediate_tensor.buffer()->address(),  // intermediate_tensor_address
                     semaphore.at(dir).address(),              // out_ready_semaphore
-                    start_pages_read_in_row,                  // start_pages_read_in_row
-                    start_row_offset,                         // start_row_offset
-                    start_tiles_read,                         // start_tiles_read
-                    start_tiles_to_read                       // start_tiles_to_read
                 };
                 if (input_is_sharded) {
                     shard_builder::extend_sharding_run_time_args(input_tensor, reader_rt_args);
@@ -642,6 +642,10 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
                     dir,                            // direction
                     chunks_per_sync_val,            // chunks_per_sync
                     dim,                            // dim
+                    start_pages_read_in_row,        // start_pages_read_in_row
+                    start_row_offset,               // start_row_offset
+                    start_tiles_read,               // start_tiles_read
+                    start_tiles_to_read,            // tiles_to_read
                 };
                 append_fabric_mux_connection_ct_args(
                     worker == 0,
@@ -691,10 +695,6 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
                     virtual_core.y,                                              // out_ready_sem_noc0_y
                     semaphore.at(dir).address(),                                 // out_ready_fwd_semaphore
                     semaphore.at(num_directions_per_link).address(),             // batch_ready_semaphore
-                    start_pages_read_in_row,                                     // start_pages_read_in_row
-                    start_row_offset,                                            // start_row_offset
-                    start_tiles_read,                                            // start_tiles_read
-                    start_tiles_to_read,                                         // tiles_to_read
                     barrier_semaphore.has_value() && !using_persistent_buffers,  // use_barrier_sem
                     barrier_semaphore.has_value()                                // barrier_sem
                         ? barrier_semaphore.value().address()
@@ -789,7 +789,7 @@ void ring_reduce_scatter_minimal_async_helper_override_runtime_arguments(
                 worker_writer_sender_runtime_args[5] = semaphore.at(num_directions_per_link).address();
 
                 if (barrier_semaphore.has_value()) {
-                    worker_writer_sender_runtime_args[11] = barrier_semaphore.value().address();
+                    worker_writer_sender_runtime_args[7] = barrier_semaphore.value().address();
                 }
 
                 core_idx++;
@@ -1065,18 +1065,40 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
 
     // Tensor Info
     const auto& input_tensor_shape = input_tensor.padded_shape();
-    const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
-    const auto num_batches = input_tensor_shape[0];
-    const auto batch_slice_num_pages = input_tensor_num_pages / ring_size / num_batches;
-
+    TT_FATAL(
+        !(input_tensor_shape[2] % tt::constants::TILE_HEIGHT),
+        "Input tensor height ({}) must be divisible by tile height ({}).",
+        input_tensor_shape[2],
+        tt::constants::TILE_HEIGHT);
     TT_FATAL(
         !(input_tensor_shape[3] % tt::constants::TILE_WIDTH),
-        "Error, The number of tiles at input tensor dimension {} should be divisible by tile_width but the number of "
-        "tiles is {} and the tile_width is {}",
-        3,
-        input_tensor_shape[3] / tt::constants::TILE_WIDTH,
+        "Input tensor width ({}) must be divisible by tile width ({}).",
+        input_tensor_shape[3],
         tt::constants::TILE_WIDTH);
-    uint32_t input_tensor_Wt = input_tensor_shape[3] / tt::constants::TILE_WIDTH;
+
+    const uint32_t input_tensor_B = input_tensor_shape[0];
+    const uint32_t input_tensor_C = input_tensor_shape[1];
+    const uint32_t input_tensor_Ht = input_tensor_shape[2] / tt::constants::TILE_HEIGHT;
+    const uint32_t input_tensor_Wt = input_tensor_shape[3] / tt::constants::TILE_WIDTH;
+
+    uint32_t slice_C = input_tensor_C;
+    uint32_t slice_Ht = input_tensor_Ht;
+    uint32_t slice_Wt = input_tensor_Wt;
+    if (dim == 1) {
+        slice_C /= ring_size;
+    } else if (dim == 2) {
+        slice_Ht /= ring_size;
+    } else if (dim == 3) {
+        slice_Wt /= ring_size;
+    } else {
+        TT_FATAL(false, "reduce_scatter_minimal_async line implementation only supports scattering on dim 1, 2, or 3");
+    }
+
+    const uint32_t input_num_pages = input_tensor.buffer()->num_pages();
+    const uint32_t input_batch_num_pages = input_num_pages / input_tensor_B;
+    const uint32_t output_batch_num_pages = input_batch_num_pages / ring_size;
+    const uint32_t input_channel_num_pages = input_batch_num_pages / input_tensor_C;
+    const uint32_t output_channel_num_pages = output_batch_num_pages / slice_C;
 
     bool input_is_sharded = input_tensor.is_sharded();
     bool intermediate_is_sharded = intermediate_tensor.is_sharded();
@@ -1189,39 +1211,52 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
                 const bool do_final_reduction = !is_first_device_in_direction;
                 const int num_total_reduction_steps = num_intermediate_reduction_steps + (do_final_reduction ? 1 : 0);
                 const bool sync_with_other_direction = !(is_first_chip || is_last_chip);
-                uint32_t tiles_read =
-                    ((link * num_workers_per_direction + worker) * batch_slice_num_pages /
-                     (num_links * num_workers_per_direction));
-                uint32_t tiles_to_read = (link * num_workers_per_direction + worker + 1) * batch_slice_num_pages /
-                                         (num_links * num_workers_per_direction);
+
+                uint32_t worker_id = (link * num_workers_per_direction) + worker;
+                uint32_t num_workers = num_links * num_workers_per_direction;
+
+                uint32_t start_tiles_read = worker_id * output_channel_num_pages / num_workers;
+                uint32_t start_tiles_to_read = (worker_id + 1) * output_channel_num_pages / num_workers;
+
+                uint32_t start_pages_read_in_row = start_tiles_read % slice_Wt;
+                uint32_t start_row_offset = start_tiles_read / slice_Wt * input_tensor_Wt;
+
                 uint32_t chunks_per_sync_val =
                     chunks_per_sync.value_or(operations::experimental::ccl::detail::default_chunks_per_sync(
-                        topology, tiles_to_read, tiles_read, tile_granularity));
+                        topology, start_tiles_to_read * slice_C, start_tiles_read * slice_C, tile_granularity));
                 log_trace(tt::LogOp, "DEBUG: chunks_per_sync_val: {}", chunks_per_sync_val);
 
                 // Reader
                 std::vector<uint32_t> sender_reader_compile_args = {
-                    ring_index,                 // my_chip_id
-                    input_cb_index,             // cb_input_id
-                    intermediate_cb_index,      // cb_intermediate_id
-                    reader_output_cb_index,     // cb_reader_output_id
-                    tile_granularity,           // packet_size_in_pages
-                    page_size,                  // tensor0_page_size
-                    input_tensor_Wt,            // input_tensor_Wt
-                    batch_slice_num_pages,      // batch_slice_num_pages
-                    ring_size,                  // ring_size
-                    num_batches,                // num_batches
-                    fuse_op,                    // fused op
-                    tiles_to_write_per_packet,  // contig_pages_advanced
-                    is_forward,                 // direction
-                    is_first_device_in_direction,
-                    num_targets_in_direction,
-                    num_intermediate_reduction_steps,
-                    do_final_reduction,
-                    num_total_reduction_steps,
-                    sync_with_other_direction,
-                    chunks_per_sync_val,
-                };
+                    ring_index,                    // my_chip_id
+                    ring_size,                     // ring_size
+                    input_cb_index,                // cb_input_id
+                    intermediate_cb_index,         // cb_intermediate_id
+                    reader_output_cb_index,        // cb_reader_output_id
+                    tile_granularity,              // tile_granularity
+                    page_size,                     // page_size
+                    input_num_pages,               // input_num_pages
+                    input_batch_num_pages,         // input_batch_num_pages
+                    input_channel_num_pages,       // input_channel_num_pages
+                    output_batch_num_pages,        // output_batch_num_pages
+                    output_channel_num_pages,      // output_channel_num_pages
+                    input_tensor_B,                // input_tensor_B
+                    input_tensor_Wt,               // input_tensor_Wt
+                    slice_C,                       // slice_C
+                    slice_Ht,                      // slice_Ht
+                    slice_Wt,                      // slice_Wt
+                    fuse_op,                       // fuse_op
+                    is_forward,                    // is_forward
+                    is_first_device_in_direction,  // is_first_device_in_direction
+                    num_targets_in_direction,      // num_targets_in_direction
+                    do_final_reduction,            // do_final_reduction
+                    sync_with_other_direction,     // sync_with_other_direction
+                    chunks_per_sync_val,           // chunks_per_sync
+                    dim,                           // dim
+                    start_pages_read_in_row,       // start_pages_read_in_row
+                    start_row_offset,              // start_row_offset
+                    start_tiles_read,              // start_tiles_read
+                    start_tiles_to_read};          // start_tiles_to_read
                 if (input_is_sharded) {
                     shard_builder::extend_sharding_compile_time_args(input_tensor, sender_reader_compile_args);
                 } else {
@@ -1250,8 +1285,6 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
                     intermediate_tensor.buffer()->address(),  // intermediate_tensor_address
                     output_tensor.buffer()->address(),        // output_tensor_address
                     semaphore.at(0).address(),                // remote transfer sync semaphore
-                    (link * num_workers_per_direction) + worker,
-                    num_links * num_workers_per_direction,
                     fwd_bwd_semaphore_address};
                 if (input_is_sharded) {
                     shard_builder::extend_sharding_run_time_args(input_tensor, reader_rt_args);
@@ -1272,24 +1305,33 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
                     mesh_device->worker_core_from_logical_core(termination_master_logical_core);
                 // Writer
                 std::vector<uint32_t> sender_writer_compile_args = {
-                    ring_index,                 // my_chip_id
-                    compute_output_cb_index,    // cb_compute_output_id
-                    reader_output_cb_index,     // cb_reader_output_id
-                    tile_granularity,           // packet_size_in_pages
-                    page_size,                  // tensor0_page_size
-                    input_tensor_Wt,            // input_tensor_Wt
-                    batch_slice_num_pages,      // batch_slice_num_pages
-                    ring_size,                  // ring_size
-                    num_batches,                // num_batches
-                    tiles_to_write_per_packet,  // contig_pages_advanced
-                    is_forward,                 // direction
-                    is_first_device_in_direction,
-                    num_targets_in_direction,
-                    num_intermediate_reduction_steps,
-                    do_final_reduction,
-                    num_total_reduction_steps,
-                    sync_with_other_direction,
-                    chunks_per_sync_val,
+                    ring_size,                     // ring_size
+                    compute_output_cb_index,       // cb_compute_output_id
+                    reader_output_cb_index,        // cb_reader_output_id
+                    tile_granularity,              // tile_granularity
+                    page_size,                     // page_size
+                    tiles_to_write_per_packet,     // contig_pages_advanced
+                    input_num_pages,               // input_num_pages
+                    input_batch_num_pages,         // input_batch_num_pages
+                    input_channel_num_pages,       // input_channel_num_pages
+                    output_batch_num_pages,        // output_batch_num_pages
+                    output_channel_num_pages,      // output_channel_num_pages
+                    input_tensor_B,                // input_tensor_b
+                    input_tensor_Wt,               // input_tensor_Wt
+                    slice_C,                       // slice_C
+                    slice_Ht,                      // slice_Ht
+                    slice_Wt,                      // slice_Wt
+                    is_forward,                    // is_forward
+                    is_first_device_in_direction,  // is_first_device_in_direction
+                    num_targets_in_direction,      // num_targets_in_direction
+                    do_final_reduction,            // do_final_reduction
+                    sync_with_other_direction,     // sync_with_other_direction
+                    chunks_per_sync_val,           // chunks_per_sync
+                    dim,                           // dim
+                    start_pages_read_in_row,       // start_pages_read_in_row
+                    start_row_offset,              // start_row_offset
+                    start_tiles_read,              // start_tiles_read
+                    start_tiles_to_read,           // start_tiles_to_read
                 };
                 append_fabric_mux_connection_ct_args(
                     worker == 0,
@@ -1337,10 +1379,6 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
                     virtual_core.x,                           // out_ready_sem_noc0_x
                     virtual_core.y,                           // out_ready_sem_noc0_y
                     semaphore.at(0).address(),                // remote transfer sync semaphore
-                    semaphore.at(1).address(),                // final reduction slot semaphore
-                    semaphore.at(2).address(),                // batch_ready_semaphore
-                    (link * num_workers_per_direction) + worker,
-                    num_links * num_workers_per_direction,
                     fwd_bwd_semaphore_address,
                     opposite_core_coord.x,
                     opposite_core_coord.y,
@@ -1368,12 +1406,13 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
                     input_cb_index,
                     intermediate_cb_index,
                     compute_output_cb_index,
-                    batch_slice_num_pages,
                     tile_granularity,
-                    ring_size,
-                    num_batches,
-                    num_links * num_workers_per_direction,
-                    num_total_reduction_steps};
+                    input_tensor_B,
+                    slice_C,
+                    num_total_reduction_steps,
+                    start_tiles_read,
+                    start_tiles_to_read,
+                };
                 auto reduce_kernel_id = tt::tt_metal::CreateKernel(
                     program,
                     "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/kernels/"
@@ -1382,7 +1421,7 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
                     sender_reduce_kernel_config);
                 reduce_kernel_ids.push_back(reduce_kernel_id);
 
-                std::vector<uint32_t> reduce_rt_args = {(link * num_workers_per_direction) + worker};
+                std::vector<uint32_t> reduce_rt_args = {};
                 tt::tt_metal::SetRuntimeArgs(program, reduce_kernel_id, {core}, reduce_rt_args);
             }
         }
@@ -1437,11 +1476,9 @@ void line_reduce_scatter_minimal_async_helper_override_runtime_arguments(
                 worker_writer_sender_runtime_args[0] = intermed.buffer()->address();
                 worker_writer_sender_runtime_args[1] = output.buffer()->address();
                 worker_writer_sender_runtime_args[4] = semaphore.at(0).address();
-                worker_writer_sender_runtime_args[5] = semaphore.at(1).address();
-                worker_writer_sender_runtime_args[6] = semaphore.at(2).address();
 
                 if (barrier_semaphore.has_value()) {
-                    worker_writer_sender_runtime_args[13] = barrier_semaphore.value().address();
+                    worker_writer_sender_runtime_args[9] = barrier_semaphore.value().address();
                 }
 
                 core_idx++;

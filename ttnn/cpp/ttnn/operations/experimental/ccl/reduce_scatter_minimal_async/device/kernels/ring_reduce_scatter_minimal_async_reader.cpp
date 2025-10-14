@@ -35,6 +35,10 @@ constexpr uint32_t fuse_op = get_compile_time_arg_val(14);
 constexpr bool direction = get_compile_time_arg_val(15);
 constexpr uint32_t chunks_per_sync = get_compile_time_arg_val(16);
 constexpr uint32_t dim = get_compile_time_arg_val(17);
+constexpr uint32_t start_pages_read_in_row = get_compile_time_arg_val(18);
+constexpr uint32_t start_row_offset = get_compile_time_arg_val(19);
+constexpr int32_t start_tiles_read = get_compile_time_arg_val(20);
+constexpr uint32_t start_tiles_to_read = get_compile_time_arg_val(21);
 
 void kernel_main() {
     ///////////////////////////////////////////////////
@@ -47,12 +51,7 @@ void kernel_main() {
     address_t intermediate_tensor_address = get_arg_val<address_t>(arg_idx++);
     size_t out_ready_sem = get_arg_val<uint32_t>(arg_idx++);
 
-    uint32_t start_pages_read_in_row = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t start_row_offset = get_arg_val<uint32_t>(arg_idx++);
-    int32_t start_tiles_read = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t start_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
-
-    constexpr uint32_t ct_idx = 18;
+    constexpr uint32_t ct_idx = 22;
 
 #ifdef INPUT_IS_SHARDED
     constexpr uint32_t ct_offset = 7;
@@ -142,8 +141,8 @@ void kernel_main() {
                 input_tile_id_start = actual_slice_idx * slice_Ht * slice_Wt + batch_offset;
                 intermediate_tile_id_start = actual_slice_idx * slice_Ht * slice_Wt;
             } else if constexpr (dim == 1) {
-                input_tile_id_start = actual_slice_idx * input_channel_num_pages * slice_C + batch_offset;
-                intermediate_tile_id_start = actual_slice_idx * input_channel_num_pages * slice_C;
+                input_tile_id_start = actual_slice_idx * slice_C * slice_Ht * slice_Wt + batch_offset;
+                intermediate_tile_id_start = actual_slice_idx * slice_C * slice_Ht * slice_Wt;
             } else {
                 ASSERT(false);
             }
@@ -198,11 +197,10 @@ void kernel_main() {
                     cb_reserve_back(cb_in0, tile_granularity);
                     uint32_t l1_write_addr = get_write_ptr(cb_in0);
                     for (uint32_t j = 0; j < tiles_to_read_in_current_direction; ++j) {
-                        uint32_t tile_id = input_tile_id_start + input_row_offset + input_pages_read_in_row;
-                        uint64_t noc_read_addr = get_noc_addr(tile_id, input_tensor_addrgen);
+                        uint32_t input_tile_id = input_tile_id_start + input_row_offset + input_pages_read_in_row;
+                        uint64_t noc_read_addr = get_noc_addr(input_tile_id, input_tensor_addrgen);
                         noc_async_read(noc_read_addr, l1_write_addr, page_size);
                         l1_write_addr += page_size;
-                        tiles_read++;
 
                         input_pages_read_in_row++;
                         if (input_pages_read_in_row == slice_Wt) {
@@ -210,6 +208,7 @@ void kernel_main() {
                             input_pages_read_in_row -= slice_Wt;
                         }
                     }
+                    tiles_read += tiles_to_read_in_current_direction;
 
                     if (do_reduce) {
                         // read next intermediate slice out of the intermediate buffer, and put it in intermediate CB

@@ -36,7 +36,7 @@ ttnn::Tensor ExecuteReduceScatter::invoke(
     // when not all devices are mmio capable. Manually doing it requires the use of "is_mmio_capable" counting, but as
     // the one link that's subtracted out is only along one cluster axis, we will be using less links we would like
     uint32_t num_links_ = num_links.value_or(common::get_num_links(*mesh_device, cluster_axis));
-    if (composite_common::use_composite_reduce_scatter(input_tensor, topology_, dim, cluster_axis)) {
+    if (composite_common::use_composite_reduce_scatter(input_tensor, dim, cluster_axis)) {
         return composite_common::composite_reduce_scatter(
             input_tensor, dim, num_links_, memory_config_, subdevice_id, cluster_axis);
     }
