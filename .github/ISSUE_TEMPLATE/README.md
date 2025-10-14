@@ -1,1 +1,0 @@
-# Bounty Model Template
