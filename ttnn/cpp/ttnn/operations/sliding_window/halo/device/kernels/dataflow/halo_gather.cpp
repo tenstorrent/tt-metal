@@ -133,7 +133,7 @@ static inline uint64_t get_remote_core_l1_noc_addr(
     return get_noc_addr(noc_x, noc_y, out_base_l1_addr);
 }
 
-template <uint32_t StickSizeBytes, uint32_t PageSize, bool EnableBlocking, uint32_t BlockHeightSticks>
+template <uint32_t StickSizeBytes, bool EnableBlocking, uint32_t BlockHeightSticks>
 static inline void write_stick_async(
     uint32_t in_base_l1_addr,
     uint64_t out_base_l1_addr,
@@ -142,14 +142,14 @@ static inline void write_stick_async(
     uint16_t transfer_size) {
     if constexpr (EnableBlocking) {
         const uint32_t src_offset = (src_offset_id % BlockHeightSticks) *
-                                    PageSize;  // Convert from global stick offset to local block stick offset
+                                    StickSizeBytes;  // Convert from global stick offset to local block stick offset
         const uint32_t dst_offset = dst_offset_id * StickSizeBytes;
         const uint32_t size = transfer_size * StickSizeBytes;
         const uint32_t src_addr = in_base_l1_addr + src_offset;
         const uint64_t dst_addr = out_base_l1_addr + dst_offset;
         noc_async_write(src_addr, dst_addr, size);
     } else {
-        const uint32_t src_offset = src_offset_id * PageSize;
+        const uint32_t src_offset = src_offset_id * StickSizeBytes;
         const uint32_t dst_offset = dst_offset_id * StickSizeBytes;
         const uint32_t size = transfer_size * StickSizeBytes;
         const uint32_t src_addr = in_base_l1_addr + src_offset;
@@ -162,7 +162,6 @@ template <
     uint32_t InputCBIndex,
     uint32_t OutputCBIndex,
     uint32_t StickSizeBytes,
-    uint32_t InputPageSizeAligned,
     uint32_t BlockSizeHeight,
     uint32_t BlockSizeWidthTiles,
     uint32_t BlockStride,
@@ -224,7 +223,7 @@ static inline void run_halo_gather(const tt_l1_ptr uint16_t* config, uint32_t my
                     in_base_l1_addr = get_read_ptr(InputCBIndex);  // Ensure base address is at front of input CB
                 }
             }
-            write_stick_async<StickSizeBytes, InputPageSizeAligned, EnableBlocking, BlockSizeHeight>(
+            write_stick_async<StickSizeBytes, EnableBlocking, BlockSizeHeight>(
                 in_base_l1_addr, out_l1_addr, src_offset, dst_offset, transfer_size);
             transfers_remaining--;
         }
@@ -245,17 +244,16 @@ void kernel_main() {
     constexpr uint32_t pad_cb_id = get_compile_time_arg_val(5);
     constexpr uint32_t pad_val_u32 = get_compile_time_arg_val(6);
     constexpr uint32_t in_nsticks = get_compile_time_arg_val(7);
-    constexpr uint32_t stick_nbytes = get_compile_time_arg_val(8);
+    constexpr uint32_t aligned_stick_nbytes = get_compile_time_arg_val(8);
     constexpr bool is_block_sharded = get_compile_time_arg_val(9) == 1;
     constexpr bool remote_read = get_compile_time_arg_val(10) == 1;
     constexpr bool is_col_major = get_compile_time_arg_val(11) == 1;
     constexpr bool is_width_sharded = get_compile_time_arg_val(12) == 1;
-    constexpr uint32_t input_aligned_page_size = get_compile_time_arg_val(13);
-    constexpr bool skip_untilize = get_compile_time_arg_val(14) == 1;
-    constexpr uint32_t block_size_height = get_compile_time_arg_val(15);
-    constexpr uint32_t block_size_width_tiles = get_compile_time_arg_val(16);
-    constexpr uint32_t block_start_offset = get_compile_time_arg_val(17);
-    constexpr uint32_t block_stride = get_compile_time_arg_val(18);
+    constexpr bool skip_untilize = get_compile_time_arg_val(13) == 1;
+    constexpr uint32_t block_size_height = get_compile_time_arg_val(14);
+    constexpr uint32_t block_size_width_tiles = get_compile_time_arg_val(15);
+    constexpr uint32_t block_start_offset = get_compile_time_arg_val(16);
+    constexpr uint32_t block_stride = get_compile_time_arg_val(17);
 
     static_assert(!remote_read, "Remote read is not supported in this kernel");
 
@@ -300,15 +298,15 @@ void kernel_main() {
             // Use MEM_ZEROS_BASE if we are zero padded
             const uint64_t padding_l1_addr = get_noc_addr(my_noc_x, my_noc_y, MEM_ZEROS_BASE);
             constexpr uint32_t padding_region_size = MEM_ZEROS_SIZE;
-            copy_padding<padding_config_cb_id, out_cb_id, stick_nbytes, padding_region_size>(padding_l1_addr);
+            copy_padding<padding_config_cb_id, out_cb_id, aligned_stick_nbytes, padding_region_size>(padding_l1_addr);
         } else {
             constexpr uint16_t pad_val = static_cast<uint16_t>(pad_val_u32);
-            constexpr uint32_t num_elements_to_fill = stick_nbytes / elem_nbytes;
+            constexpr uint32_t num_elements_to_fill = aligned_stick_nbytes / elem_nbytes;
             fill_with_val<num_elements_to_fill, pad_val>(get_write_ptr(pad_cb_id));
 
             const uint64_t padding_l1_addr = get_noc_addr(my_noc_x, my_noc_y, get_read_ptr(pad_cb_id));
-            constexpr uint32_t padding_region_size = stick_nbytes / elem_nbytes;
-            copy_padding<padding_config_cb_id, out_cb_id, stick_nbytes, padding_region_size>(padding_l1_addr);
+            constexpr uint32_t padding_region_size = aligned_stick_nbytes / elem_nbytes;
+            copy_padding<padding_config_cb_id, out_cb_id, aligned_stick_nbytes, padding_region_size>(padding_l1_addr);
         }
     }
 
@@ -321,8 +319,7 @@ void kernel_main() {
     run_halo_gather<
         in_cb_id,
         out_cb_id,
-        stick_nbytes,
-        input_aligned_page_size,
+        aligned_stick_nbytes,
         block_size_height,
         block_size_width_tiles,
         block_stride,
