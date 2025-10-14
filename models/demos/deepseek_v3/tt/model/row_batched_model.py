@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 import torch
+from tqdm.auto import tqdm
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
@@ -56,7 +57,10 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
                     output_path / f"mlp_decoder_block_{layer_idx}",
                     mesh_device,
                 )
-                for layer_idx in range(hf_config.first_k_dense_replace)
+                for layer_idx in tqdm(
+                    range(hf_config.first_k_dense_replace),
+                    desc="Converting MLP layers",
+                )
             ],
             "moe_decoder_block": [
                 MoEDecoderBlock2D.convert_weights(
@@ -65,7 +69,10 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
                     output_path / f"moe_decoder_block_{layer_idx}",
                     mesh_device,
                 )
-                for layer_idx in range(hf_config.first_k_dense_replace, hf_config.num_hidden_layers)
+                for layer_idx in tqdm(
+                    range(hf_config.first_k_dense_replace, hf_config.num_hidden_layers),
+                    desc="Converting MoE layers",
+                )
             ],
             "norm": DistributedRMSNorm.convert_weights(
                 hf_config,
@@ -222,7 +229,10 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
 
         x = ttnn.to_memory_config(x, **cfg["norm_reshard"])
         x = DistributedRMSNorm.forward_decode(x, cfg["norm"])
-        x = ttnn.experimental.all_gather_async(x, **cfg["lm_head"]["all_gather"])
+
+        ccl = cfg["lm_head"]["ccl"]
+
+        x = ttnn.experimental.all_gather_async(x, **ccl.populate_all_gather_runtime_args(cfg["lm_head"]["all_gather"]))
         x = ttnn.to_memory_config(x, cfg["lm_head"]["input_memory_config"])
         x = LMHead.forward_decode(x, cfg["lm_head"])
         return x
@@ -251,6 +261,9 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
             x = BlockClass.forward_prefill(x, user_id, block_cfg, rope_tensors, page_table)
 
         x = DistributedRMSNorm.forward_prefill(x, cfg["norm"])  # no resharding needed for prefill
-        x = ttnn.experimental.all_gather_async(x, **cfg["lm_head"]["all_gather"])
+
+        ccl = cfg["lm_head"]["ccl"]
+
+        x = ttnn.experimental.all_gather_async(x, **ccl.populate_all_gather_runtime_args(cfg["lm_head"]["all_gather"]))
         x = LMHead.forward_prefill(x, cfg["lm_head"])
         return x

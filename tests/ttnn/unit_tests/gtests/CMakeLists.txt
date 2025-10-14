@@ -174,6 +174,7 @@ target_sources(
         tensor/test_tensor_nd_sharding.cpp
         tensor/test_tensor_serialization.cpp
         tensor/test_tensor_sharding.cpp
+        tensor/test_unit_mesh_utils.cpp
         tensor/test_vector_conversion.cpp
         tensor/test_xtensor_adapter.cpp
         tensor/test_xtensor_conversion.cpp
