@@ -4,7 +4,7 @@
 
 import torch
 import pytest
-from models.experimental.detr3d.reference.detr3d_model import (
+from models.experimental.detr3d.reference.model_3detr import (
     Model3DETR as ref_model,
     build_preencoder as ref_build_preencoder,
     build_encoder as ref_build_encoder,

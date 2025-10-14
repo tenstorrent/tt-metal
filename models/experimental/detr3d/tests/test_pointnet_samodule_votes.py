@@ -4,7 +4,7 @@
 
 import torch
 import pytest
-from models.experimental.detr3d.reference.detr3d_model import PointnetSAModuleVotes as ref_model
+from models.experimental.detr3d.reference.model_3detr import PointnetSAModuleVotes as ref_model
 from models.experimental.detr3d.source.detr3d.third_party.pointnet2.pointnet2_modules import (
     PointnetSAModuleVotes as org_model,
 )

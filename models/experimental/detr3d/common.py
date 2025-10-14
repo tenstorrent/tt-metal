@@ -6,9 +6,8 @@ import os
 import torch
 
 from loguru import logger
-from models.experimental.detr3d.reference.detr3d_model import (
+from models.experimental.detr3d.reference.model_3detr import (
     Model3DETR,
-    SharedMLP,
     GenericMLP,
     PointnetSAModuleVotes,
     MaskedTransformerEncoder,
@@ -17,6 +16,7 @@ from models.experimental.detr3d.reference.detr3d_model import (
     TransformerDecoder,
 )
 from torch.nn import MultiheadAttention
+from models.experimental.detr3d.reference.pointnet2_modules import SharedMLP
 
 
 def load_partial_state(torch_model: torch.nn.Module, state_dict, layer_name: str = ""):

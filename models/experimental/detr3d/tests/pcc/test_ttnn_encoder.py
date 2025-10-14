@@ -12,10 +12,9 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 from models.common.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 from models.experimental.detr3d.ttnn.custom_preprocessing import create_custom_mesh_preprocessor
 
-from models.experimental.detr3d.reference.detr3d_model import (
-    MaskedTransformerEncoder,
-    PointnetSAModuleVotes,
+from models.experimental.detr3d.reference.model_3detr import (
     TransformerEncoderLayer,
+    build_encoder,
 )
 from models.experimental.detr3d.ttnn.masked_transformer_encoder import (
     TTTransformerEncoderLayer,
@@ -24,6 +23,7 @@ from models.experimental.detr3d.ttnn.masked_transformer_encoder import (
 )
 from models.experimental.detr3d.ttnn.pointnet_samodule_votes import TtnnPointnetSAModuleVotes
 from models.experimental.detr3d.common import load_torch_model_state
+from models.experimental.detr3d.reference.model_config import Detr3dArgs
 
 
 def compute_mask(device, xyz, radius, dist=None):
@@ -233,38 +233,8 @@ def test_masked_transformer_encoder_inference(
     device,
 ):
     torch.manual_seed(0)
-    encoder_layer = TransformerEncoderLayer(
-        d_model,
-        nhead,
-        dim_feedforward,
-        dropout,
-        dropout_attn,
-        activation,
-        normalize_before,
-        norm_name,
-        use_ffn,
-        ffn_use_bias,
-    )
-    interim_downsampling = PointnetSAModuleVotes(
-        mlp=mlp[:],
-        npoint=npoint,
-        radius=radius,
-        nsample=nsample,
-        bn=bn,
-        use_xyz=use_xyz,
-        pooling=pooling,
-        sigma=sigma,
-        normalize_xyz=normalize_xyz,
-        sample_uniformly=sample_uniformly,
-        ret_unique_cnt=ret_unique_cnt,
-    )
-    ref_module = MaskedTransformerEncoder(
-        encoder_layer,
-        num_layers,
-        masking_radius,
-        interim_downsampling,
-        norm=None,
-    )
+    args = Detr3dArgs()
+    ref_module = build_encoder(args)
     load_torch_model_state(ref_module, "encoder")
 
     src = torch.randn(src_shape)
@@ -288,7 +258,7 @@ def test_masked_transformer_encoder_inference(
         normalize_xyz=normalize_xyz,
         sample_uniformly=sample_uniformly,
         ret_unique_cnt=ret_unique_cnt,
-        module=interim_downsampling,
+        module=ref_module.interim_downsampling,
         parameters=ref_module_parameters.interim_downsampling.mlp_module,
         device=device,
     )

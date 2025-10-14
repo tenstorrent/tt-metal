@@ -8,7 +8,7 @@ import pytest
 from models.experimental.detr3d.ttnn.shared_mlp import TtnnSharedMLP
 from ttnn.model_preprocessing import preprocess_model_parameters
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.experimental.detr3d.reference.detr3d_model import SharedMLP
+from models.experimental.detr3d.reference.model_3detr import SharedMLP
 from models.experimental.detr3d.ttnn.custom_preprocessing import create_custom_mesh_preprocessor
 from models.experimental.detr3d.common import load_torch_model_state
 

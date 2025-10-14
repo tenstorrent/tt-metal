@@ -22,7 +22,7 @@ from models.experimental.detr3d.ttnn.masked_transformer_encoder import (
 )
 from models.experimental.detr3d.ttnn.transformer_decoder import TTTransformerDecoder
 from models.experimental.detr3d.ttnn.generic_mlp import TttnnGenericMLP
-from models.experimental.detr3d.reference.detr3d_model import PositionEmbeddingCoordsSine
+from models.experimental.detr3d.reference.model_3detr import PositionEmbeddingCoordsSine
 
 
 def build_ttnn_preencoder(args):

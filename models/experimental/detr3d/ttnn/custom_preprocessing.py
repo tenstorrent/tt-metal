@@ -6,8 +6,9 @@ import torch
 
 from ttnn.model_preprocessing import convert_torch_model_to_ttnn_model, fold_batch_norm2d_into_conv2d
 
-from models.experimental.detr3d.reference.detr3d_model import SharedMLP, GenericMLP
-from models.experimental.detr3d.reference.detr3d_model import MaskedTransformerEncoder, TransformerEncoderLayer
+from models.experimental.detr3d.reference.model_3detr import GenericMLP
+from models.experimental.detr3d.reference.model_3detr import MaskedTransformerEncoder, TransformerEncoderLayer
+from models.experimental.detr3d.reference.pointnet2_modules import SharedMLP
 
 
 def preprocess_conv_parameter(parameter, *, dtype):

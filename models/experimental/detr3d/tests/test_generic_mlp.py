@@ -4,7 +4,7 @@
 
 import torch
 import pytest
-from models.experimental.detr3d.reference.detr3d_model import GenericMLP as ref_model
+from models.experimental.detr3d.reference.model_3detr import GenericMLP as ref_model
 from models.experimental.detr3d.source.detr3d.models.helpers import GenericMLP as org_model
 from tests.ttnn.utils_for_testing import assert_with_pcc
 

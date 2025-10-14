@@ -4,7 +4,7 @@
 
 import torch
 import pytest
-from models.experimental.detr3d.reference.detr3d_model import (
+from models.experimental.detr3d.reference.model_3detr import (
     MaskedTransformerEncoder as ref_model,
     PointnetSAModuleVotes as ref_point_net_module_votes,
     TransformerEncoderLayer as ref_encoder_layer,

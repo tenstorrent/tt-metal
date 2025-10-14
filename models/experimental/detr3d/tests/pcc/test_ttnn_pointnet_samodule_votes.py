@@ -5,7 +5,7 @@
 import torch
 import pytest
 import ttnn
-from models.experimental.detr3d.reference.detr3d_model import PointnetSAModuleVotes
+from models.experimental.detr3d.reference.model_3detr import PointnetSAModuleVotes
 from models.experimental.detr3d.ttnn.pointnet_samodule_votes import TtnnPointnetSAModuleVotes
 from tests.ttnn.utils_for_testing import comp_pcc
 from ttnn.model_preprocessing import preprocess_model_parameters
