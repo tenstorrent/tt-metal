@@ -5,10 +5,11 @@
 import random
 from math import prod
 
-
 import pytest
 import torch
+
 import ttnn
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal
 
 
 def _gen_input_routing_weights(non_zero_size, num_cluster_experts):
@@ -66,9 +67,55 @@ def _gen_tensors(non_zero_size, expert_parallel_size, num_cluster_experts, mesh_
 @pytest.mark.parametrize("expert_parallel_size", [2, 4])
 @pytest.mark.parametrize("num_cluster_experts", [32])
 @pytest.mark.parametrize("cluster_axis", [0, 1])
+@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16])
+@pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG])
+@pytest.mark.parametrize("num_iters", [1])
+def test_moe_routing_remap(
+    mesh_device,
+    non_zero_size,
+    expert_parallel_size,
+    num_cluster_experts,
+    cluster_axis,
+    num_iters,
+    dtype,
+    input_memory_config,
+):
+    mesh_shape = tuple(mesh_device.shape)
+
+    if expert_parallel_size != mesh_shape[cluster_axis]:
+        pytest.skip("expert parallel size should match cluster size")
+
+    for _ in range(num_iters):
+        routing_weights_torch, reference_outputs_torch = _gen_tensors(
+            non_zero_size, expert_parallel_size, num_cluster_experts, mesh_shape, cluster_axis
+        )
+
+        tt_routing_weights = ttnn.from_torch(
+            routing_weights_torch,
+            device=mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=dtype,
+            memory_config=input_memory_config,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+
+        tt_output = ttnn.moe_routing_remap(tt_routing_weights, non_zero_size, expert_parallel_size, cluster_axis)
+
+        tt_outputs = ttnn.get_device_tensors(tt_output)
+        assert len(tt_outputs) == len(reference_outputs_torch)
+        for i, (test, ref) in enumerate(zip(tt_outputs, reference_outputs_torch)):
+            test_torch = ttnn.to_torch(test)
+            assert_with_pcc(test_torch, ref)
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=["mesh_device"])
+@pytest.mark.parametrize("non_zero_size", [8])
+@pytest.mark.parametrize("expert_parallel_size", [2, 4])
+@pytest.mark.parametrize("num_cluster_experts", [32])
+@pytest.mark.parametrize("cluster_axis", [0, 1])
 def test_gen_tensors(mesh_device, non_zero_size, expert_parallel_size, num_cluster_experts, cluster_axis):
     mesh_shape = tuple(mesh_device.shape)
-    # TODO check that this restriction is absolute
+    # TODO check that this restriction is firm
     if expert_parallel_size != mesh_shape[cluster_axis]:
         pytest.skip("expert parallel size should match cluster size")
 
