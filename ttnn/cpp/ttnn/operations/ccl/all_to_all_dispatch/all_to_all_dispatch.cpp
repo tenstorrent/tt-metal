@@ -33,6 +33,10 @@ std::array<ttnn::Tensor, 2> ExecuteAllToAllDispatch::invoke(
     uint32_t num_links_ = num_links.value_or(common::get_num_links(*mesh_device, axis));
     log_debug(tt::LogOp, "num_links: {}", num_links_);
     tt::tt_fabric::Topology topology_ = topology.value_or(tt::tt_fabric::get_fabric_topology());
+    if (num_links_ == 2)
+    {
+        topology_ = tt::tt_fabric::Topology::Linear;
+    }
     auto memory_config_ = memory_config.value_or(input_tensor.memory_config());
     uint32_t output_concat_dim_ = output_concat_dim.value_or(1);
 
