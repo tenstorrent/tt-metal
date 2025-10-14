@@ -4,7 +4,6 @@ title: "[Bounty $amount] [Issue Title]"
 labels: ["model bringup"]
 
 body:
-
   - type: textarea
     id: background
     attributes:
@@ -76,13 +75,6 @@ body:
         - Links to code, docs, previous work or tech report
         - Advice on what to look out for, or who to ask for help
         - Link to original model paper
-        Faster-RCNN example:
-        - Use the [TTNN model bring-up tech report](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/ttnn/TTNN-model-bringup.md) as your primary reference.
-        - Reference [Yolov4 implementation (PR 29157)](https://github.com/tenstorrent/tt-metal/pull/29157) for example end-to-end flows.
-        - Use the [alternative PyTorch implementation](https://github.com/jwyang/faster-rcnn.pytorch) for model structure details.
-        - Refer to [TT fused ops](https://github.com/tenstorrent/tt-metal/pull/29236) for opportunities to optimize.
-        - Target input resolutions: start with 320x320x3, then 640x640x3.
-        - Ask for help or file issues if ops are missing in TTNN.
 
 
   - type: textarea
@@ -126,12 +118,3 @@ body:
         - [Reference documentation](link)
         - [Original model paper](link)
         - [Outside link](https://)
-        Faster-RCNN example:
-        - [TTNN model bring-up tech report](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/ttnn/TTNN-model-bringup.md)
-        - [CNN Bring-up & Optimization in TT-NN](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/CNNs/cnn_optimizations.md)
-        - [Yolov4 TTNN implementation PR](https://github.com/tenstorrent/tt-metal/pull/29157)
-        - [Faster-RCNN PyTorch implementation](https://github.com/jwyang/faster-rcnn.pytorch)
-        - [Faster-RCNN official docs](https://docs.pytorch.org/vision/main/models/faster_rcnn.html)
-        - [TT fused ops PR](https://github.com/tenstorrent/tt-metal/pull/29236)
-        - [Perf report header](https://docs.tenstorrent.com/tt-metal/latest/ttnn/ttnn/profiling_ttnn_operations.html#perf-report-headers)
-
