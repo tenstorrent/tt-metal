@@ -9,9 +9,9 @@ import numpy as np
 import pytest
 from loguru import logger
 
+from models.demos.blackhole.ufld_v2.demo import model_config as cfg
+from models.demos.blackhole.ufld_v2.demo.demo_utils import LaneEval, run_test_tusimple
 from models.demos.ufld_v2.common import UFLD_V2_L1_SMALL_SIZE
-from models.demos.ufld_v2.demo import model_config as cfg
-from models.demos.ufld_v2.demo.demo_utils import LaneEval, run_test_tusimple
 from models.demos.ufld_v2.reference.ufld_v2_model import TuSimple34
 from models.demos.ufld_v2.runner.performant_runner import UFLDPerformantRunner
 from models.demos.ufld_v2.runner.performant_runner_infra import load_torch_model

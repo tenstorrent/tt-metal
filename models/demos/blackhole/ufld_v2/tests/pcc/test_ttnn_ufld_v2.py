@@ -9,10 +9,10 @@ import torch
 from ttnn.model_preprocessing import fold_batch_norm2d_into_conv2d, infer_ttnn_module_args, preprocess_model_parameters
 
 import ttnn
+from models.demos.blackhole.ufld_v2.ttnn.ttnn_ufld_v2 import TtnnUFLDv2
 from models.demos.ufld_v2.common import UFLD_V2_L1_SMALL_SIZE
 from models.demos.ufld_v2.reference.ufld_v2_model import BasicBlock, TuSimple34
 from models.demos.ufld_v2.ttnn.ttnn_basic_block import TtnnBasicBlock
-from models.demos.ufld_v2.ttnn.ttnn_ufld_v2 import TtnnUFLDv2
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 

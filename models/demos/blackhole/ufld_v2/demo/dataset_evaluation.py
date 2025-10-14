@@ -10,8 +10,8 @@ import numpy as np
 import pytest
 from loguru import logger
 
-from models.demos.ufld_v2.demo import model_config as cfg
-from models.demos.ufld_v2.demo.demo_utils import LaneEval, run_test_tusimple
+from models.demos.blackhole.ufld_v2.demo import model_config as cfg
+from models.demos.blackhole.ufld_v2.demo.demo_utils import LaneEval, run_test_tusimple
 from models.demos.ufld_v2.reference.ufld_v2_model import TuSimple34
 from models.demos.ufld_v2.runner.performant_runner import UFLDPerformantRunner
 from models.demos.ufld_v2.runner.performant_runner_infra import load_torch_model
@@ -43,9 +43,9 @@ def run_ufld_v2_dataset_inference(
     cfg.row_anchor = np.linspace(160, 710, cfg.num_row) / 720
     cfg.col_anchor = np.linspace(0, 1, cfg.num_col)
 
-    dataset_path = "models/demos/ufld_v2/demo/image_data"
+    dataset_path = "models/demos/blackhole/ufld_v2/demo/image_data"
     if not os.path.exists(dataset_path):
-        subprocess.run(["python3", "models/demos/ufld_v2/demo/data_download.py"], check=True)
+        subprocess.run(["python3", "models/demos/blackhole/ufld_v2/demo/data_download.py"], check=True)
     cfg.row_anchor = np.linspace(160, 710, cfg.num_row) / 720
     cfg.col_anchor = np.linspace(0, 1, cfg.num_col)
     run_test_tusimple(
@@ -84,9 +84,9 @@ def run_ufld_v2_dataset_inference(
         is_eval=True,
         model_location_generator=model_location_generator,
     )
-    gt_file_path = "models/demos/ufld_v2/demo/image_data/test_label_till_nimages.json"
+    gt_file_path = "models/demos/blackhole/ufld_v2/demo/image_data/test_label_till_nimages.json"
     os.makedirs(os.path.dirname(gt_file_path), exist_ok=True)
-    input_file = "models/demos/ufld_v2/demo/image_data/test_label.json"
+    input_file = "models/demos/blackhole/ufld_v2/demo/image_data/test_label.json"
     with open(input_file, "r") as infile, open(gt_file_path, "w") as outfile:
         for i, line in enumerate(infile):
             if i >= num_of_images:

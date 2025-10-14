@@ -9,7 +9,7 @@ import kagglehub
 from loguru import logger
 
 DATASET_PATH = "manideep1108/tusimple"
-TARGET_FOLDER = "models/demos/ufld_v2/demo/image_data"
+TARGET_FOLDER = "models/demos/wormhole/ufld_v2/demo/image_data"
 REQUIRED_IMAGES_SUBFOLDER = "TUSimple/test_set/clips"
 REQUIRED_LABELS = "TUSimple/test_label.json"
 path = kagglehub.dataset_download(DATASET_PATH)

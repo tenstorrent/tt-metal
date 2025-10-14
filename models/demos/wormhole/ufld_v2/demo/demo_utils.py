@@ -276,7 +276,7 @@ def run_test_tusimple(
     num_grid_row=100,
     n_images=100,
     is_overlay=False,
-    json_path="models/demos/ufld_v2/demo/image_data/test_label.json",
+    json_path="models/demos/wormhole/ufld_v2/demo/image_data/test_label.json",
     is_eval=False,
     model_location_generator=None,
 ):
