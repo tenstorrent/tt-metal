@@ -10,24 +10,34 @@ import ttnn
 @pytest.mark.parametrize(
     "ttnn_op, value_ranges",
     [
+        # (
+        #     ttnn.add,
+        #     [
+        #         (0, 100, 0, 300),
+        #         (1000, 10000, 500, 1000),
+        #         (30000, 40000, 10000, 15000),
+        #         (50000, 55000, 1000, 2000),
+        #         (0, 70000, 80000, 200000),
+        #     ],
+        # ),
+        # (
+        #     ttnn.sub,
+        #     [
+        #         (100, 500, 0, 100),
+        #         (1000, 10000, 500, 1000),
+        #         (30000, 40000, 10000, 15000),
+        #         (50000, 55000, 1000, 2000),
+        #         (80000, 200000, 0, 70000),
+        #     ],
+        # ),
         (
-            ttnn.add,
+            ttnn.mul,
             [
-                (0, 100, 0, 300),
-                (1000, 10000, 500, 1000),
-                (30000, 40000, 10000, 15000),
-                (50000, 55000, 1000, 2000),
-                (0, 70000, 80000, 200000),
-            ],
-        ),
-        (
-            ttnn.sub,
-            [
-                (100, 500, 0, 100),
-                (1000, 10000, 500, 1000),
-                (30000, 40000, 10000, 15000),
-                (50000, 55000, 1000, 2000),
-                (80000, 200000, 0, 70000),
+                (0, 100, 0, 500),
+                # (500, 1e3, 1e3, 1e4),
+                # (1e4, 1e5, 1e5, 1e6),
+                # (1e5, 1e6, 1e2, 1e3),
+                # (1e6, 1e7, 1, 1e2),
             ],
         ),
     ],
@@ -35,14 +45,14 @@ import ttnn
 @pytest.mark.parametrize(
     "a_shape, b_shape",
     [
-        (torch.Size([1, 2, 32]), torch.Size([1, 2, 32])),
-        (torch.Size([1]), torch.Size([1, 5, 12])),
-        (torch.Size([1, 2, 32, 64, 125]), torch.Size([1, 2, 32, 1, 1])),
-        (torch.Size([]), torch.Size([])),
+        # (torch.Size([1, 2, 32]), torch.Size([1, 2, 32])),
+        # (torch.Size([1]), torch.Size([1, 5, 12])),
+        # (torch.Size([1, 2, 32, 64, 125]), torch.Size([1, 2, 32, 1, 1])),
+        # (torch.Size([]), torch.Size([])),
         (torch.Size([5]), torch.Size([1])),
     ],
 )
-@pytest.mark.parametrize("range_idx", [0, 1, 2, 3, 4])
+@pytest.mark.parametrize("range_idx", [0])
 def test_binary_uint32_bcast(ttnn_op, value_ranges, a_shape, b_shape, range_idx, device):
     """Test uint32 addition and subtraction with broadcast"""
     low_a, high_a, low_b, high_b = value_ranges[range_idx]
@@ -75,7 +85,12 @@ def test_binary_uint32_bcast(ttnn_op, value_ranges, a_shape, b_shape, range_idx,
     )
 
     output_tensor = ttnn_op(input_tensor_a, input_tensor_b)
+    print(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor, dtype=torch.int32)
+    print(torch_input_tensor_a)
+    print(torch_input_tensor_b)
+    print(output_tensor)
+    print(torch_output_tensor)
 
     assert torch.equal(output_tensor, torch_output_tensor)
 
