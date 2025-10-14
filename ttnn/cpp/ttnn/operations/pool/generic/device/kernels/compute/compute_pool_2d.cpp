@@ -12,7 +12,7 @@
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
 
-#define DEBUG_PRINT 0
+#define DEBUG_PRINT 1
 
 #if DEBUG_PRINT == 1
 #include "debug/dprint.h"
@@ -170,15 +170,8 @@ void MAIN {
             in_cb_id_0, in_scalar_cb_id_0, max_tiles_per_iter, tilize_untilize_cb, num_faces_in_input_tile, face_r_dim);
         pack_untilize_dest_init<max_tiles_per_iter>(tilize_untilize_cb, num_out_sticks, num_faces_in_output_tile);
     } else {
-        if constexpr (use_tilize_dest) {
-            unary_op_init_common(in_cb_id_0, in_cb_id_0);
-            tilize_init_no_pack(in_cb_id_0, topk_output_tiles);
-            if constexpr (!pack_untilize_reinit) {
-                const uint32_t output_faces =
-                    last_tile_is_partial ? num_faces_in_last_output_tile : num_faces_in_output_tile;
-                pack_untilize_dest_init<topk_output_tiles>(out_cb_id, num_out_sticks, output_faces);
-            }
-        }
+        unary_op_init_common(in_cb_id_0, in_cb_id_0);
+        // tilize_init(in_cb_id_0, topk_output_tiles, in_cb_id_0);
 
         // this can be done here because we do not use the SFPU for anything else so it does not get reprogrammed
         // if you use the sfpu for other operations, you need to call this to reprogram the sfpu
@@ -216,7 +209,7 @@ void MAIN {
                 (last_tile_is_partial && last_c_block)
                     ? (number_of_tiles - 1) * num_faces_in_output_tile + num_faces_in_last_output_tile
                     : number_of_tiles * num_faces_in_output_tile;
-            if constexpr (!is_output_tiled) {
+            if constexpr (!is_output_tiled && !return_indices) {
                 cb_reserve_back(out_cb_id, output_faces);
             }
             if constexpr (tilize_reconfig) {
@@ -231,21 +224,15 @@ void MAIN {
                 if constexpr (return_indices) {
                     cb_wait_front(curr_in_idx_cb_id, 1);
 
-                    if constexpr (use_tilize_dest) {
-                        tilize_dest_function<topk_output_tiles, data_dst_idx, index_dst_idx, topk_cb_tile_idx>(
-                            curr_in_cb_id, curr_in_idx_cb_id);
-                    } else {
-                        tilize_copy_function<
-                            topk_output_tiles,
-                            data_dst_idx,
-                            index_dst_idx,
-                            topk_cb_tile_idx,
-                            tile_tmp_cb_id,
-                            tile_idx_tmp_cb_id,
-                            out_cb_id,
-                            num_out_sticks,
-                            pack_untilize_reinit>(curr_in_cb_id, curr_in_idx_cb_id, output_faces);
-                    }
+                    copy_tile_to_dst_init_short(curr_in_cb_id);
+                    reconfig_data_format_srca(curr_in_cb_id);
+                    pack_reconfig_data_format(curr_in_cb_id);
+                    copy_tile(curr_in_cb_id, topk_cb_tile_idx, data_dst_idx);
+
+                    copy_tile_to_dst_init_short(curr_in_idx_cb_id);
+                    reconfig_data_format_srca(curr_in_idx_cb_id);
+                    pack_reconfig_data_format(curr_in_idx_cb_id);
+                    copy_tile(curr_in_idx_cb_id, topk_cb_tile_idx, index_dst_idx);
 
                     // the max_reduce_with_indices LLK function only supports kernel_size=9, pending
                     // https://github.com/tenstorrent/tt-metal/issues/28141 but, since for return_indices the in_cb is
@@ -332,32 +319,16 @@ void MAIN {
                     tile_regs_release();
                 }
             } else {
-                if constexpr (use_tilize_dest) {
-                    if constexpr (pack_untilize_reinit) {
-#ifdef ARCH_BLACKHOLE
-                        // Needed for setting swizzle_32b:
-                        MATH((llk_math_hw_configure_disaggregated<true, true>(0, 0)));
-#endif
-                        PACK((llk_pack_untilize_init<topk_output_tiles, topk_output_tiles, false, false, TILE_C_DIM>(
-                            out_cb_id, num_out_sticks, output_faces)));
-                        PACK((llk_init_packer_dest_offset_registers<true, false>()));
-                    }
-                }
+                cb_reserve_back(tile_tmp_cb_id, 1);
+                pack_reconfig_data_format(tile_tmp_cb_id);
+                pack_tile<true>(data_dst_idx, tile_tmp_cb_id, topk_cb_tile_idx);
+                cb_push_back(tile_tmp_cb_id, 1);
 
-                pack_reconfig_data_format(out_cb_id);
-                pack_untilize_dest<topk_output_tiles, topk_output_tiles, false, false, TILE_C_DIM, data_dst_idx>(
-                    out_cb_id, 1, 0, num_out_sticks, output_faces);
-                pack_reconfig_data_format(out_idx_cb_id);
-                pack_untilize_dest<topk_output_tiles, topk_output_tiles, false, false, TILE_C_DIM, index_dst_idx>(
-                    out_idx_cb_id, 1, 0, num_out_sticks, output_faces);
+                cb_reserve_back(tile_idx_tmp_cb_id, 1);
+                pack_reconfig_data_format(tile_idx_tmp_cb_id);
+                pack_tile<true>(index_dst_idx, tile_idx_tmp_cb_id, topk_cb_tile_idx);
+                cb_push_back(tile_idx_tmp_cb_id, 1);
 
-                if constexpr (pack_untilize_reinit) {
-                    pack_untilize_uninit(out_cb_id);
-                }
-                cb_push_back(out_cb_id, output_faces);
-                if constexpr (return_indices) {
-                    cb_push_back(out_idx_cb_id, output_faces);
-                }
                 tile_regs_release();
             }
         }

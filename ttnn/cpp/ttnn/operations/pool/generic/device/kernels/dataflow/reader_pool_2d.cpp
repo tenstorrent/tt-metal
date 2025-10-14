@@ -6,7 +6,7 @@
 #include <cstdint>
 #include "dataflow_api.h"
 
-#define ENABLE_DEBUG_PRINT 0
+#define ENABLE_DEBUG_PRINT 1
 
 #if ENABLE_DEBUG_PRINT == 1
 #include "debug/dprint.h"
@@ -103,7 +103,9 @@ template <
     uint32_t dilation_h,
     uint32_t dilation_w,
     bool return_indices,
-    bool zero_pages>
+    bool zero_pages,
+    uint32_t out_cb_id,
+    uint32_t out_idx_cb_id>
 ALWI void read_window_with_top_left_index(
     uint32_t ind, uint32_t in_l1_read_base_addr, uint32_t in_idx_l1_read_base_addr) {
     constexpr uint32_t BYTES_PER_ELEM = 2;
@@ -117,14 +119,8 @@ ALWI void read_window_with_top_left_index(
     uint32_t max_write_inc = wide_reduction ? MAX_BYTES_PER_REDUCTION : in_nbytes_leftover;
     if constexpr (return_indices) {
         static_assert(MAX_TILES_PER_REDUCTION == 1, "MAX_TILES_PER_REDUCTION must be 1 for return indices");
+        max_write_inc = TILE_WIDTH * BYTES_PER_ELEM;
     }
-#ifdef ARCH_BLACKHOLE
-    if constexpr (return_indices) {
-        if (in_c <= FACE_WIDTH) {
-            max_write_inc = FACE_WIDTH * BYTES_PER_ELEM;
-        }
-    }
-#endif
     for (uint32_t c_i = 0; c_i < in_nblocks_c; c_i++) {
         uint32_t read_bytes = in_nbytes_c;
         if constexpr (wide_reduction) {
@@ -220,9 +216,35 @@ ALWI void read_window_with_top_left_index(
         }
         if constexpr (!is_large_kernel) {
             noc_async_read_barrier();
+
             cb_push_back(in_cb_id, 1);
             if constexpr (return_indices) {
                 cb_push_back(in_idx_cb_id, 1);
+
+                constexpr uint32_t num_faces_in_output_tile = 2;
+                constexpr uint32_t num_faces_in_last_output_tile =
+                    last_tile_is_partial && in_c % TILE_WIDTH <= FACE_WIDTH ? 1 : 2;
+                uint32_t output_faces =
+                    c_i == in_nblocks_c - 1 ? num_faces_in_last_output_tile : num_faces_in_output_tile;
+
+                cb_wait_front(tile_tmp_cb_id, 1);
+                noc_async_read_one_packet(
+                    get_noc_addr(get_read_ptr(tile_tmp_cb_id)),
+                    get_write_ptr(out_cb_id),
+                    output_faces * FACE_WIDTH * BYTES_PER_ELEM);
+                cb_wait_front(tile_idx_tmp_cb_id, 1);
+                noc_async_read_one_packet(
+                    get_noc_addr(get_read_ptr(tile_idx_tmp_cb_id)),
+                    get_write_ptr(out_idx_cb_id),
+                    output_faces * FACE_WIDTH * BYTES_PER_ELEM);
+                noc_async_read_barrier();
+                cb_pop_front(tile_tmp_cb_id, 1);
+                cb_pop_front(tile_idx_tmp_cb_id, 1);
+
+                cb_push_back(out_cb_id, output_faces);
+                if constexpr (return_indices) {
+                    cb_push_back(out_idx_cb_id, output_faces);
+                }
             }
         }
     }
@@ -310,6 +332,8 @@ void kernel_main() {
     constexpr uint32_t dilation_w = get_compile_time_arg_val(35);
     constexpr bool return_indices = (bool)get_compile_time_arg_val(36);
     constexpr bool zero_pages = (bool)get_compile_time_arg_val(37);
+    constexpr uint32_t out_cb_id = get_compile_time_arg_val(38);
+    constexpr uint32_t out_idx_cb_id = get_compile_time_arg_val(39);
 
     constexpr bool last_tile_is_partial = in_c % TILE_WIDTH != 0;
     constexpr uint32_t in_scalar_cb_id =
@@ -348,6 +372,7 @@ void kernel_main() {
         if constexpr (!is_avg_pool || !is_large_kernel || return_indices) {
             clear_out_tiles<in_cb_id, clear_value_cb_id>();
             if constexpr (return_indices) {
+                ;
                 clear_out_tiles<in_idx_cb_id, clear_value_cb_id>();
             }
         }
@@ -443,7 +468,9 @@ void kernel_main() {
                 dilation_h,
                 dilation_w,
                 return_indices,
-                zero_pages>(ind, in_l1_read_base_addr, in_idx_l1_read_base_addr);
+                zero_pages,
+                out_cb_id,
+                out_idx_cb_id>(ind, in_l1_read_base_addr, in_idx_l1_read_base_addr);
             if (split_reader && ind == end) {
                 first_row_value = false;
             }
@@ -479,6 +506,8 @@ void kernel_main() {
             dilation_h,
             dilation_w,
             return_indices,
-            zero_pages>(0, in_l1_read_base_addr, in_idx_l1_read_base_addr);
+            zero_pages,
+            out_cb_id,
+            out_idx_cb_id>(0, in_l1_read_base_addr, in_idx_l1_read_base_addr);
     }
 }  // kernel_main()
