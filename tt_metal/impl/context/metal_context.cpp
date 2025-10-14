@@ -1071,8 +1071,16 @@ dev_msgs::core_info_msg_t MetalContext::populate_core_info_msg(
     auto factory = hal_->get_dev_msgs_factory(programmable_core_type);
     dev_msgs::core_info_msg_t buffer = factory.create<dev_msgs::core_info_msg_t>();
     auto core_info = buffer.view();
-    core_info.noc_pcie_addr_base() = hal_->get_pcie_addr_lower_bound();
-    core_info.noc_pcie_addr_end() = hal_->get_pcie_addr_upper_bound();
+    // Set PCIe NOC address bounds only for MMIO-capable chips; zero them out for remote chips
+    const bool is_mmio_capable = cluster_->mmio_chip_ids().count(device_id) > 0;
+    if (is_mmio_capable) {
+        core_info.noc_pcie_addr_base() = hal_->get_pcie_addr_lower_bound();
+        core_info.noc_pcie_addr_end() = hal_->get_pcie_addr_upper_bound();
+    } else {
+        // End is inclusive, so set base to > end to ensure the range is empty.
+        core_info.noc_pcie_addr_base() = 1;
+        core_info.noc_pcie_addr_end() = 0;
+    }
     core_info.noc_dram_addr_base() = 0;
     core_info.noc_dram_addr_end() = soc_d.dram_core_size;
     core_info.l1_unreserved_start() = align(worker_l1_unreserved_start_, hal_->get_alignment(HalMemType::DRAM));
