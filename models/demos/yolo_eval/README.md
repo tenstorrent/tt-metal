@@ -7,7 +7,7 @@
 ### The below observations are for ttnn_model vs dataset(ground truth data):
 
 The following model is evaluated (mAPval 50-95) for `500 samples` :-
--   YOLOv4 (320x320 resolution) - **0.7562**
+-   YOLOv4 (320x320 resolution) - **0.6834**
 -   YOLOv4 (640x640 resolution) - **0.7535**
 -   YOLOv8s_World (640x640 resolution) - **0.7338**
 -   YOLOv8x (640x640 resolution) - **0.7254**
