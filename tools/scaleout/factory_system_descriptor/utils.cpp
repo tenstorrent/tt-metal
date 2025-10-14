@@ -28,7 +28,8 @@ std::set<PhysicalChannelConnection> validate_fsd_against_gsd(
     const std::string& fsd_filename,
     const std::string& gsd_filename,
     bool strict_validation,
-    bool assert_on_connection_mismatch) {
+    bool assert_on_connection_mismatch,
+    bool log_output) {
     // Read the generated FSD using protobuf
     tt::scaleout_tools::fsd::proto::FactorySystemDescriptor generated_fsd;
     std::ifstream fsd_file(fsd_filename);
@@ -455,7 +456,9 @@ std::set<PhysicalChannelConnection> validate_fsd_against_gsd(
         for (const auto& conn : missing_port_info) {
             oss << "  - " << conn.first << " <-> " << conn.second << "\n";
         }
-        std::cout << oss.str() << std::endl;
+        if (log_output) {
+            std::cout << oss.str() << std::endl;
+        }
     }
 
     // Report extra connections (in GSD but not in FSD) - both modes check this
@@ -475,7 +478,9 @@ std::set<PhysicalChannelConnection> validate_fsd_against_gsd(
         for (const auto& conn : extra_port_info) {
             oss << "  - " << conn.first << " <-> " << conn.second << "\n";
         }
-        std::cout << oss.str() << std::endl;
+        if (log_output) {
+            std::cout << oss.str() << std::endl;
+        }
     }
 
     // Handle validation results
@@ -487,12 +492,14 @@ std::set<PhysicalChannelConnection> validate_fsd_against_gsd(
         }
     } else {
         // Success message differs based on validation mode
-        if (strict_validation) {
-            std::cout << "All connections match between FSD and GSD (" << generated_connections.size()
-                      << " connections)" << std::endl;
-        } else {
-            std::cout << "All GSD connections found in FSD (" << discovered_connections.size()
-                      << " connections checked)" << std::endl;
+        if (log_output) {
+            if (strict_validation) {
+                std::cout << "All connections match between FSD and GSD (" << generated_connections.size()
+                        << " connections)" << std::endl;
+            } else {
+                std::cout << "All GSD connections found in FSD (" << discovered_connections.size()
+                        << " connections checked)" << std::endl;
+            }
         }
     }
     return missing_in_gsd;

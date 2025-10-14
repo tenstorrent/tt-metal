@@ -200,8 +200,10 @@ AsicTopology validate_connectivity(const InputArgs& input_args, PhysicalSystemDe
     // Dump the discovered system to YAML
     physical_system_descriptor.dump_to_yaml(gsd_yaml_path);
     log_output_rank0("Validating Factory System Descriptor (Golden Representation) against Global System Descriptor");
+    auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
+    bool log_output = *distributed_context.rank() == 0;
     auto missing_physical_connections = tt::scaleout_tools::validate_fsd_against_gsd(
-        get_factory_system_descriptor_path(input_args), gsd_yaml_path, true, input_args.fail_on_warning);
+        get_factory_system_descriptor_path(input_args), gsd_yaml_path, true, input_args.fail_on_warning, log_output);
     log_output_rank0("Factory System Descriptor (Golden Representation) Validation Complete");
     return generate_missing_asic_topology(missing_physical_connections, physical_system_descriptor);
 }
@@ -259,16 +261,18 @@ int main(int argc, char* argv[]) {
     // Create physical system descriptor and discover the system
     auto physical_system_descriptor = generate_physical_system_descriptor(input_args);
 
-    if (*distributed_context.rank() == 0) {
-        bool first_iter = true;
-        AsicTopology missing_asic_topology = {};
-        while (missing_asic_topology.size() or first_iter) {
-            missing_asic_topology = validate_connectivity(input_args, physical_system_descriptor);
-            reset_ethernet_links(physical_system_descriptor, missing_asic_topology);
-            physical_system_descriptor.run_discovery(true);
-            first_iter = false;
-        }
+    AsicTopology missing_asic_topology = {};
+    bool first_iter = true;
+    while (missing_asic_topology.size() or first_iter) {
+        missing_asic_topology = validate_connectivity(input_args, physical_system_descriptor);
+        std::cout << "Resetting Ethernet Links" << std::endl;
+        reset_ethernet_links(physical_system_descriptor, missing_asic_topology);
+        std::cout << "Running Physical Discovery" << std::endl;
+        physical_system_descriptor.run_discovery(true);
+        std::cout << "Physical Discovery Complete" << std::endl;
+        first_iter = false;
     }
+
     eth_connections_healthy = generate_link_metrics(
         physical_system_descriptor,
         input_args.num_iterations,

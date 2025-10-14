@@ -23,6 +23,7 @@ std::set<PhysicalChannelConnection> validate_fsd_against_gsd(
     const std::string& fsd_filename,
     const std::string& gsd_filename,
     bool strict_validation = true,
-    bool assert_on_connection_mismatch = true);
+    bool assert_on_connection_mismatch = true,
+    bool log_output = true);
 
 }  // namespace tt::scaleout_tools
