@@ -9,8 +9,10 @@
 
 #include "ttnn/operations/ccl/mesh_partition/mesh_partition_pybind.hpp"
 #include "ttnn/operations/ccl/barrier/barrier_pybind.hpp"
+#include "ttnn/operations/ccl/all_gather/all_gather_pybind.hpp"
 #include "ttnn/operations/ccl/all_to_all_combine/all_to_all_combine_pybind.hpp"
 #include "ttnn/operations/ccl/all_to_all_dispatch/all_to_all_dispatch_pybind.hpp"
+#include "ttnn/operations/ccl/reduce_scatter/reduce_scatter_pybind.hpp"
 
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include <tt-metalium/fabric.hpp>
@@ -27,8 +29,10 @@ void py_module(py::module& module) {
     ccl::py_bind_common(module);
     ccl::py_bind_mesh_partition(module);
     ccl::py_bind_barrier(module);
+    ccl::py_bind_all_gather(module);
     ccl::py_bind_all_to_all_combine(module);
     ccl::py_bind_all_to_all_dispatch(module);
+    ccl::py_bind_reduce_scatter(module);
 }
 
 }  // namespace ttnn::operations::ccl

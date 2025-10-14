@@ -1,9 +1,9 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Optional, Tuple
 from functools import partial
+import pytest
 
 import torch
 import random
@@ -11,19 +11,18 @@ import ttnn
 from tests.sweep_framework.sweep_utils.utils import gen_shapes
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 
-from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
+from tests.ttnn.utils_for_testing import start_measuring_time, stop_measuring_time
 from tests.sweep_framework.sweep_utils.roofline_utils import get_run_return
-from models.utility_functions import torch_random
+from models.common.utility_functions import torch_random
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 30
 
 random.seed(0)
 
-# Parameters provided to the test vector generator are defined here.
-# They are defined as dict-type suites that contain the arguments to the run function as keys, and lists of possible inputs as values.
-# Each suite has a key name (in this case "suite_1") which will associate the test vectors to this specific suite of inputs.
-# Developers can create their own generator functions and pass them to the parameters as inputs.
+# Parameters provided to the test vector generator,
+# defined as dict-type suites that contain the arguments to the run function as keys,
+# and lists of possible inputs as values.
 parameters = {
     "xfail": {
         "input_shape": gen_shapes([1, 1, 32, 32], [6, 12, 256, 256], [1, 1, 32, 32], 16)
@@ -37,11 +36,8 @@ parameters = {
 }
 
 
-# This is the run instructions for the test, defined by the developer.
-# The run function must take the above-defined parameters as inputs.
-# The runner will call this run function with each test vector, and the returned results from this function will be stored.
-# If you defined a device_mesh_fixture above, the object you yielded will be passed into this function as 'device'. Otherwise, it will be the default ttnn device opened by the infra.
-def run(
+# The actual test function that will be run.
+def run_softmax(
     input_shape,
     input_a_dtype,
     input_a_layout,
@@ -74,3 +70,30 @@ def run(
     expected_pcc = 0.999
     tensors = [input_tensor_a, result]
     return get_run_return(torch_output_tensor, output_tensor, expected_pcc, tensors, e2e_perf)
+
+
+# Entry point for the sweep framework.
+# Takes one test vector (as defined above) as the input.
+def run(
+    input_shape,
+    input_a_dtype,
+    input_a_layout,
+    input_a_memory_config,
+    output_memory_config,
+    *,
+    device,
+) -> list:
+    return run_softmax(
+        input_shape, input_a_dtype, input_a_layout, input_a_memory_config, output_memory_config, device=device
+    )
+
+
+# Entry point for pytest.
+@pytest.mark.xfail
+@pytest.mark.parametrize("input_shape", parameters["xfail"]["input_shape"])
+@pytest.mark.parametrize("input_a_dtype", parameters["xfail"]["input_a_dtype"])
+@pytest.mark.parametrize("input_a_layout", parameters["xfail"]["input_a_layout"])
+@pytest.mark.parametrize("input_a_memory_config", parameters["xfail"]["input_a_memory_config"])
+@pytest.mark.parametrize("output_memory_config", parameters["xfail"]["output_memory_config"])
+def test_softmax(device, input_shape, input_a_dtype, input_a_layout, input_a_memory_config, output_memory_config):
+    run_softmax(input_shape, input_a_dtype, input_a_layout, input_a_memory_config, output_memory_config, device=device)

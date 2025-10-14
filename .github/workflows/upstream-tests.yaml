@@ -19,7 +19,8 @@ env:
   BLACKHOLE_PROFILER_IMAGE_NAME: ghcr.io/tenstorrent/tt-metal/upstream-profiler-tests-bh
   BLACKHOLE_LLMBOX_IMAGE_NAME: ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-llmbox
   BLACKHOLE_DESKBOX_IMAGE_NAME: ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-deskbox
-  BLACKHOLE_RACKBOX_IMAGE_NAME: ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-rackbox
+  BLACKHOLE_LOUDBOX_IMAGE_NAME: ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-loudbox
+  BLACKHOLE_P300_IMAGE_NAME: ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-p300
 
 jobs:
   build-artifact:
@@ -50,7 +51,8 @@ jobs:
       bh-profiler-image-tag: ${{ steps.set-image-tags.outputs.bh-profiler-image-tag }}
       bh-llmbox-image-tag: ${{ steps.set-image-tags.outputs.bh-llmbox-image-tag }}
       bh-deskbox-image-tag: ${{ steps.set-image-tags.outputs.bh-deskbox-image-tag }}
-      bh-rackbox-image-tag: ${{ steps.set-image-tags.outputs.bh-rackbox-image-tag }}
+      bh-loudbox-image-tag: ${{ steps.set-image-tags.outputs.bh-loudbox-image-tag }}
+      bh-p300-image-tag: ${{ steps.set-image-tags.outputs.bh-p300-image-tag }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -68,7 +70,8 @@ jobs:
           echo "bh-profiler-image-tag=${{ env.BLACKHOLE_PROFILER_IMAGE_NAME }}:${{ steps.set-image-tag-suffix.outputs.image-tag-suffix }}" >> "$GITHUB_OUTPUT"
           echo "bh-llmbox-image-tag=${{ env.BLACKHOLE_LLMBOX_IMAGE_NAME }}:${{ steps.set-image-tag-suffix.outputs.image-tag-suffix }}" >> "$GITHUB_OUTPUT"
           echo "bh-deskbox-image-tag=${{ env.BLACKHOLE_DESKBOX_IMAGE_NAME }}:${{ steps.set-image-tag-suffix.outputs.image-tag-suffix }}" >> "$GITHUB_OUTPUT"
-          echo "bh-rackbox-image-tag=${{ env.BLACKHOLE_RACKBOX_IMAGE_NAME }}:${{ steps.set-image-tag-suffix.outputs.image-tag-suffix }}" >> "$GITHUB_OUTPUT"
+          echo "bh-loudbox-image-tag=${{ env.BLACKHOLE_LOUDBOX_IMAGE_NAME }}:${{ steps.set-image-tag-suffix.outputs.image-tag-suffix }}" >> "$GITHUB_OUTPUT"
+          echo "bh-p300-image-tag=${{ env.BLACKHOLE_P300_IMAGE_NAME }}:${{ steps.set-image-tag-suffix.outputs.image-tag-suffix }}" >> "$GITHUB_OUTPUT"
   build-images:
     needs:
       - build-artifact
@@ -120,10 +123,17 @@ jobs:
             build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
             wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
             techdebt-install-ttt-reqs: true
-          - image-tag: ${{ needs.get-image-tags.outputs.bh-rackbox-image-tag }}
+          - image-tag: ${{ needs.get-image-tags.outputs.bh-loudbox-image-tag }}
             dockerfile: dockerfile/upstream_test_images/Dockerfile
             test-command: dockerfile/upstream_test_images/run_upstream_tests_vanilla.sh
-            hw-topology: blackhole_rackbox
+            hw-topology: blackhole_loudbox
+            build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+            wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+            techdebt-install-ttt-reqs: true
+          - image-tag: ${{ needs.get-image-tags.outputs.bh-p300-image-tag }}
+            dockerfile: dockerfile/upstream_test_images/Dockerfile
+            test-command: dockerfile/upstream_test_images/run_upstream_tests_vanilla.sh
+            hw-topology: blackhole_p300
             build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
             wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
             techdebt-install-ttt-reqs: true
@@ -132,15 +142,15 @@ jobs:
       - uses: actions/checkout@v4
       - name: Download artifacts from metal
         id: download-artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         with:
           # 22.04 artifact... we'll probably need to key on that in the original action in metal
           name: ${{ matrix.image-config.build-artifact-name }}
       - run: mkdir -p _tt-metal
-      - run: tar -xvf ttm_any.tar -C _tt-metal/
+      - run: tar --zstd -xvf ttm_any.tar.zst -C _tt-metal/
       - run: ls -hal _tt-metal
       - name: 🧪 Download Python Wheel
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         with:
           name: ${{ matrix.image-config.wheel-artifact-name }}
       - name: 💿 Verify Wheel exists
@@ -212,21 +222,21 @@ jobs:
         bh-config:
           - runner-label: BH-LLMBox
             image-name: ${{ needs.get-image-tags.outputs.bh-llmbox-image-tag }}
-          # - runner-label: BH-DeskBox
-          #   image-name: ${{ needs.get-image-tags.outputs.bh-deskbox-image-tag }}
-          # - runner-label: BH-RackBox
-          #   image-name: ${{ needs.get-image-tags.outputs.bh-rackbox-image-tag }}
+          - runner-label: BH-DeskBox
+            image-name: ${{ needs.get-image-tags.outputs.bh-deskbox-image-tag }}
+          - runner-label: BH-LoudBox
+            image-name: ${{ needs.get-image-tags.outputs.bh-loudbox-image-tag }}
     runs-on:
       - ${{ matrix.bh-config.runner-label }}
       - in-service
-      - cloud-virtual-machine
+      - pipeline-perf
     steps:
       - name: Run image
         timeout-minutes: 30
         env:
-          LLAMA_DIR: ${{ contains(runner.name, 'tt-metal-ci') && !contains(runner.name, 'qb') && '/mnt/MLPerf/tt_dnn-models/meta-llama/Llama-3.1-8B-Instruct' || '/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct' }}
+          LLAMA_DIR: /localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct
         run: docker run --network none -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent -v $LLAMA_DIR:$LLAMA_DIR:ro -e LLAMA_DIR ${{ matrix.bh-config.image-name }}
-  test-bh-multicard-image-ignore-status:
+  test-bh-p300-image:
     needs:
       - get-image-tags
       - build-images
@@ -234,20 +244,22 @@ jobs:
       fail-fast: false
       matrix:
         bh-config:
-          - runner-label: BH-DeskBox
-            image-name: ${{ needs.get-image-tags.outputs.bh-deskbox-image-tag }}
-          - runner-label: BH-RackBox
-            image-name: ${{ needs.get-image-tags.outputs.bh-rackbox-image-tag }}
+          - runner-label: P300
+            image-name: ${{ needs.get-image-tags.outputs.bh-p300-image-tag }}
     runs-on:
       - ${{ matrix.bh-config.runner-label }}
       - in-service
-      - cloud-virtual-machine
     steps:
+      - name: Download Llama model weights from LFC
+        timeout-minutes: 15
+        run: |
+          mkdir -p /localdev/blackhole_demos/huggingface_data/meta-llama
+          wget -r -nH -x --cut-dirs=5 -np --progress=dot:giga -R "index.html*" -P /localdev/blackhole_demos/huggingface_data/meta-llama http://yyz2-lfcache564.yyz2.tenstorrent.com/mldata/model_checkpoints/pytorch/huggingface/meta-llama/Llama-3.1-8B-Instruct/
       - name: Run image
-        timeout-minutes: 30
+        timeout-minutes: 60
         env:
-          LLAMA_DIR: ${{ contains(runner.name, 'tt-metal-ci') && !contains(runner.name, 'qb') && '/mnt/MLPerf/tt_dnn-models/meta-llama/Llama-3.1-8B-Instruct' || '/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct' }}
-        run: docker run --network none -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent -v $LLAMA_DIR:$LLAMA_DIR:ro -e LLAMA_DIR ${{ matrix.bh-config.image-name }}
+          LLAMA_DIR: /localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct
+        run: docker run --network none --device /dev/tenstorrent -v $LLAMA_DIR:$LLAMA_DIR:ro -e LLAMA_DIR ${{ matrix.bh-config.image-name }}
   test-bh-image:
     needs:
       - get-image-tags
@@ -295,6 +307,7 @@ jobs:
       - get-image-tags
       - test-wh-6u-image
       - test-bh-image
+      - test-bh-p300-image
       - test-bh-multicard-image
     permissions:
       packages: write
@@ -308,7 +321,8 @@ jobs:
           - image-tag: ${{ needs.get-image-tags.outputs.bh-profiler-image-tag }}
           - image-tag: ${{ needs.get-image-tags.outputs.bh-llmbox-image-tag }}
           - image-tag: ${{ needs.get-image-tags.outputs.bh-deskbox-image-tag }}
-          - image-tag: ${{ needs.get-image-tags.outputs.bh-rackbox-image-tag }}
+          - image-tag: ${{ needs.get-image-tags.outputs.bh-loudbox-image-tag }}
+          - image-tag: ${{ needs.get-image-tags.outputs.bh-p300-image-tag }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

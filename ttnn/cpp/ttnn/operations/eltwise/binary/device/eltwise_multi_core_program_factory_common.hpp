@@ -12,7 +12,6 @@
 #include <tt-metalium/work_split.hpp>
 
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 
 namespace ttnn::operations::binary {
@@ -271,8 +270,8 @@ inline __attribute__((always_inline)) void set_eltwise_binary_runtime_args(
                     unpadded_block_width,
                     output_width,
                     block_size,
-                    (i / num_shards_per_width) * (block_height * block_width * num_shards_per_width) +
-                        (i % num_shards_per_width) * block_width,
+                    ((i / num_shards_per_width) * (block_height * block_width * num_shards_per_width)) +
+                        ((i % num_shards_per_width) * block_width),
                     0};
             } else {
                 auto& writer_args = cached_writer_args.at(core.x).at(core.y);

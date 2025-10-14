@@ -18,14 +18,14 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     MeshDeviceStub,
     MulConfig,
     OpConfigBase,
-    ReduceScatterAsyncConfig,
+    ReduceScatterAsyncMinimalConfig,
     ReshardConfig,
     SavedWeight,
 )
 from models.demos.deepseek_v3.utils.config_helpers import (
     COMPUTE_KERNEL_CONFIG_LOFI,
-    MAX_BATCH_SIZE,
     SEQ_LEN_CHUNK_SIZE,
+    USERS_PER_ROW,
     dram_sharded_weight_config,
     even_int_div,
     find_largest_divisor,
@@ -203,11 +203,9 @@ class MLP(AbstractModule):
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
             ),
-            "reduce_scatter_async": ReduceScatterAsyncConfig(
-                dim=-1,  # We are scattering across the feature dimension (last one)
+            "reduce_scatter_async": ReduceScatterAsyncMinimalConfig(
+                dim=3,  # We are scattering across the feature dimension (last one)
                 cluster_axis=1,  # Reduce-scatter across the mesh rows
-                mesh_device=MeshDeviceStub(mesh_device.shape),
-                math_op=ttnn.ReduceType.Sum,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 topology=ttnn.Topology.Linear,  # One row of Galaxy does not form a ring
             ),
@@ -282,7 +280,7 @@ class MLP(AbstractModule):
                 input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
                 memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
                 program_config=get_dram_sharded_matmul_config(
-                    MAX_BATCH_SIZE, dim, even_int_div(hidden_dim, mesh_width), input_num_cores, inner_num_cores
+                    USERS_PER_ROW, dim, even_int_div(hidden_dim, mesh_width), input_num_cores, inner_num_cores
                 ),
                 compute_kernel_config=COMPUTE_KERNEL_CONFIG_LOFI,
             ),
@@ -290,7 +288,7 @@ class MLP(AbstractModule):
                 input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
                 memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
                 program_config=get_dram_sharded_matmul_config(
-                    MAX_BATCH_SIZE,
+                    USERS_PER_ROW,
                     even_int_div(hidden_dim, mesh_width),
                     dim,
                     inner_num_cores,
@@ -302,7 +300,7 @@ class MLP(AbstractModule):
                 input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
                 memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
                 program_config=get_dram_sharded_matmul_config(
-                    MAX_BATCH_SIZE, dim, even_int_div(hidden_dim, mesh_width), input_num_cores, inner_num_cores
+                    USERS_PER_ROW, dim, even_int_div(hidden_dim, mesh_width), input_num_cores, inner_num_cores
                 ),
                 compute_kernel_config=COMPUTE_KERNEL_CONFIG_LOFI,
             ),
@@ -310,11 +308,9 @@ class MLP(AbstractModule):
                 memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
                 input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
             ),
-            "reduce_scatter_async": ReduceScatterAsyncConfig(
-                mesh_device=MeshDeviceStub(mesh_device.shape),
+            "reduce_scatter_async": ReduceScatterAsyncMinimalConfig(
                 cluster_axis=1,  # Reduce-scatter across the mesh rows
-                dim=-1,  # We are scattering across the feature dimension (last one)
-                math_op=ttnn.ReduceType.Sum,
+                dim=3,  # We are scattering across the feature dimension (last one)
                 topology=ttnn.Topology.Linear,  # One row of Galaxy does not form a ring
                 memory_config=output_memory_config,
             ),
@@ -343,7 +339,7 @@ class MLP(AbstractModule):
         """Get the memory config for an activation tensor in decode mode."""
         return ttnn.create_sharded_memory_config_(
             shape=(
-                ttnn.core.roundup(MAX_BATCH_SIZE, ttnn.TILE_SIZE),
+                ttnn.core.roundup(USERS_PER_ROW, ttnn.TILE_SIZE),
                 ttnn.core.roundup(even_int_div(per_device_width, activation_sharding_num_cores), ttnn.TILE_SIZE),
             ),
             core_grid=ttnn.num_cores_to_corerangeset(
@@ -369,17 +365,10 @@ class MLP(AbstractModule):
         Returns:
             ModelState containing the state information for this module
         """
+        # Store CCL object for runtime semaphore initialization
         return {
             MESH_DEVICE_STATE_DICT_KEY: mesh_device,
-            "all_gather": {
-                "multi_device_global_semaphore": ccl.get_gather_sem(1),
-                "num_links": ccl.get_max_links(1),
-            },
-            "reduce_scatter_async": {
-                "from_remote_multi_device_global_semaphore": ccl.get_from_sem(1),
-                "to_remote_multi_device_global_semaphore": ccl.get_to_sem(1),
-                "num_links": ccl.get_max_links(1),
-            },
+            "ccl": ccl,
         }
 
     @classmethod
@@ -443,8 +432,11 @@ class MLP(AbstractModule):
     def forward_prefill(cls, x: ttnn.Tensor, cfg: RunPrefillConfig) -> ttnn.Tensor:
         num_layers, _, seq_len, _ = x.shape
 
+        # CCL runtime initialization in execution order
+        ccl = cfg["ccl"]
+
         # All gather for efficient matmuls
-        x = ttnn.experimental.all_gather_async(x, **cfg["all_gather"])
+        x = ttnn.experimental.all_gather_async(x, **ccl.populate_all_gather_runtime_args(cfg["all_gather"]))
 
         # Chunk the input if needed
         if seq_len > cfg["max_rows"]:  # For large sequence lengths, process the input in chunks
@@ -478,7 +470,9 @@ class MLP(AbstractModule):
         ttnn.deallocate(activated)
 
         # Reduce-scatter across devices to sum partial results
-        output = ttnn.experimental.reduce_scatter_async(output, **cfg["reduce_scatter_async"])
+        output = ttnn.experimental.reduce_scatter_minimal_async(
+            output, **ccl.populate_reduce_scatter_runtime_args(cfg["reduce_scatter_async"])
+        )
 
         # De-chunk the output if the input was chunked
         _, num_chunks, _, output_dim = output.shape
@@ -490,8 +484,11 @@ class MLP(AbstractModule):
 
     @classmethod
     def forward_decode(cls, x: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor:
+        # CCL runtime initialization in execution order
+        ccl = cfg["ccl"]
+
         # All gather
-        x = ttnn.experimental.all_gather_async(x, **cfg["all_gather"])
+        x = ttnn.experimental.all_gather_async(x, **ccl.populate_all_gather_runtime_args(cfg["all_gather"]))
 
         # TODO: File issue on AG not being able to do this internally (Issue #26672)
         x = ttnn.to_memory_config(x, **cfg["all_gather_reshard"])
@@ -514,7 +511,11 @@ class MLP(AbstractModule):
         ttnn.deallocate(activated)
 
         # Add reduce-scatter
-        output = ttnn.experimental.reduce_scatter_async(w2_out, **cfg["reduce_scatter_async"])
+        w2_out = ttnn.to_memory_config(w2_out, ttnn.DRAM_MEMORY_CONFIG)
+        # TODO: File issue on RS not being able to run sharded memory config
+        output = ttnn.experimental.reduce_scatter_minimal_async(
+            w2_out, **ccl.populate_reduce_scatter_runtime_args(cfg["reduce_scatter_async"])
+        )
         ttnn.deallocate(w2_out)
 
         assert output.memory_config() == cfg["output_memory_config"]

@@ -96,6 +96,7 @@ class TtYOLOv7Conv2D:
             input_width=self.input_params[2],
             conv_config=conv_config,
             compute_config=compute_config,
+            slice_config=ttnn.Conv2dL1FullSliceConfig,
             groups=self.groups,
             return_weights_and_bias=True,
             return_output_dim=True,

@@ -8,7 +8,7 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
-#include "tt-metalium/assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "tt-metalium/distributed_host_buffer.hpp"
 #include "tt-metalium/host_buffer.hpp"
 #include "tt-metalium/memory_pin.hpp"
@@ -32,35 +32,13 @@
 
 using namespace tt::tt_metal;
 
-namespace {
-
-// Threshold for switch for mmap-based allocations to regular allocations.
-// Determined empirically using a microbenchmark; see https://github.com/tenstorrent/tt-metal/pull/22959 for details.
-constexpr size_t kMmapThresholdBytes = 1 << 20;
-
-// Allocates memory on the host in batch; using either mmap for large allocations or std::vector for small allocations.
-using SharedMemoryPtr = std::shared_ptr<void>;
-SharedMemoryPtr allocate_host_data(size_t size_bytes) {
-    if (size_bytes >= kMmapThresholdBytes) {
-        ZoneScopedN("AllocateBufferMmap");
-        void* ptr = mmap(nullptr, size_bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-        TT_FATAL(ptr != MAP_FAILED, "Failed to allocate {} bytes of memory", size_bytes);
-        return SharedMemoryPtr(ptr, [size_bytes](void* p) { madvise(p, size_bytes, MADV_FREE); });
-    } else {
-        auto vec = std::make_shared<std::vector<std::byte>>(size_bytes);
-        return SharedMemoryPtr(vec, vec->data());
-    }
-}
-
-}  // unnamed namespace
-
 namespace tt {
 
 namespace tt_metal {
 
 namespace tensor_impl {
 
-TensorPrintProfile TTNN_TENSOR_PRINT_PROFILE = TensorPrintProfile::Short;
+PrintOptions TTNN_PRINT_OPTIONS;
 
 std::ostream& operator<<(std::ostream& os, const DataType& dtype) {
     switch (dtype) {
@@ -292,11 +270,11 @@ struct DimensionShortener {
 };
 
 inline DimensionShortener get_dimension_shortener(std::size_t size) {
-    switch (TTNN_TENSOR_PRINT_PROFILE) {
+    switch (TTNN_PRINT_OPTIONS.profile) {
         case TensorPrintProfile::Empty: return DimensionShortener{size, 0};
         case TensorPrintProfile::Short: return DimensionShortener{size, 4};
         case TensorPrintProfile::Full: return DimensionShortener{size, std::nullopt};
-        default: TT_THROW("Unrecognized TTNN_TENSOR_PRINT_PROFILE {}", TTNN_TENSOR_PRINT_PROFILE);
+        default: TT_THROW("Unrecognized TTNN_TENSOR_PRINT_PROFILE {}", TTNN_PRINT_OPTIONS.profile);
     }
 }
 
@@ -307,22 +285,65 @@ inline void print_trailing_comma(std::ostream& ss, std::size_t index, std::size_
 }
 
 template <typename T>
-inline void print_datum(std::ostream& ss, T datum) {
+inline void print_datum(std::ostream& ss, T datum, bool use_scientific = false) {
     if (std::is_integral<T>::value) {
         ss << std::setw(5) << datum;
     } else {
-        ss << std::fixed << std::setw(8) << std::setprecision(5) << datum;
+        int precision = TTNN_PRINT_OPTIONS.precision;
+        if (use_scientific) {
+            // Note: scientific required fixed width + 4 (e+/-AB, e.g. 1.23456e+08)
+            ss << std::scientific << std::setw(precision + 7) << std::setprecision(precision) << datum;
+        } else {
+            ss << std::fixed << std::setw(precision + 3) << std::setprecision(precision) << datum;
+        }
     }
 }
 
 template <>
-inline void print_datum(std::ostream& ss, bfloat16 datum) {
-    print_datum(ss, static_cast<float>(datum));
+inline void print_datum(std::ostream& ss, bfloat16 datum, bool use_scientific) {
+    print_datum(ss, static_cast<float>(datum), use_scientific);
 }
 
 template <>
-inline void print_datum(std::ostream& ss, uint8_t datum) {
-    print_datum<uint32_t>(ss, datum);
+inline void print_datum(std::ostream& ss, uint8_t datum, bool use_scientific) {
+    print_datum<uint32_t>(ss, datum, use_scientific);
+}
+
+// Helper function to determine if scientific notation should be used
+template <typename T>
+bool should_use_scientific_notation(tt::stl::Span<const T> buffer) {
+    if (TTNN_PRINT_OPTIONS.sci_mode == SciMode::Enable) {
+        return true;
+    }
+    if (TTNN_PRINT_OPTIONS.sci_mode == SciMode::Disable) {
+        return false;
+    }
+
+    // SciMode::Default - auto-detect based on data range
+    if constexpr (std::is_integral_v<T>) {
+        return false;  // Never use scientific notation for integers
+    } else {
+        double nonzero_finite_min = std::numeric_limits<double>::max();
+        double nonzero_finite_max = std::numeric_limits<double>::lowest();
+        bool found_nonzero_finite = false;
+
+        for (const auto& value : buffer) {
+            double val = static_cast<double>(value);
+            if (std::isfinite(val) && val != 0.0) {
+                double abs_val = std::abs(val);
+                nonzero_finite_min = std::min(nonzero_finite_min, abs_val);
+                nonzero_finite_max = std::max(nonzero_finite_max, abs_val);
+                found_nonzero_finite = true;
+            }
+        }
+
+        if (!found_nonzero_finite) {
+            return false;  // No nonzero finite values, don't use scientific notation
+        }
+
+        return (nonzero_finite_max / nonzero_finite_min > 1000.0) || (nonzero_finite_max > 1.0e8) ||
+               (nonzero_finite_min < 1.0e-4);
+    }
 }
 
 constexpr int constexpr_strlen(const char* str) { return *str ? 1 + constexpr_strlen(str + 1) : 0; }
@@ -339,7 +360,8 @@ void to_string_row_major(
     std::size_t outer_index,
     const std::size_t buffer_offset,
     int64_t rank,
-    int64_t dim = 0) {
+    int64_t dim,
+    bool use_scientific) {
     auto stride = dim < strides.size() ? strides[dim] : 0;
 
     std::string spaces = std::string(TENSOR_TYPE_STRING_PLUS_OPEN_PARENTHESIS_LENGTH + dim, ' ');
@@ -377,9 +399,10 @@ void to_string_row_major(
         }
 
         if (rank > 1) {
-            to_string_row_major(ss, buffer, shape, strides, index, buffer_offset + index * stride, rank - 1, dim + 1);
+            to_string_row_major(
+                ss, buffer, shape, strides, index, buffer_offset + (index * stride), rank - 1, dim + 1, use_scientific);
         } else {
-            print_datum(ss, buffer[buffer_offset + index]);
+            print_datum(ss, buffer[buffer_offset + index], use_scientific);
         }
         print_trailing_comma(ss, index, rank != 0 ? shape[-rank] : 1, after_comma);
     }
@@ -398,10 +421,11 @@ void to_string(
     Layout layout) {
     ss << TENSOR_TYPE_STRING << "(";
 
-    if (TTNN_TENSOR_PRINT_PROFILE == TensorPrintProfile::Empty) {
+    if (TTNN_PRINT_OPTIONS.profile == TensorPrintProfile::Empty) {
         ss << "...";
     } else {
-        to_string_row_major<T>(ss, buffer, shape, strides, 0, 0, shape.rank());
+        bool use_scientific = should_use_scientific_notation<T>(buffer);
+        to_string_row_major<T>(ss, buffer, shape, strides, 0, 0, shape.rank(), 0, use_scientific);
     }
     ss << ", shape=" << fmt::format("{}", shape) << ", dtype=" << fmt::format("{}", dtype)
        << ", layout=" << fmt::format("{}", layout) << ")";
@@ -545,7 +569,7 @@ Tensor to_host(const Tensor& tensor, bool blocking, std::optional<ttnn::QueueId>
     mesh_cq.enqueue_read(mesh_buffer, distributed_host_buffer, /*shards=*/std::nullopt, blocking);
 
     HostStorage host_storage(std::move(distributed_host_buffer));
-    return Tensor(std::move(host_storage), tensor.tensor_spec(), TensorTopology{});
+    return Tensor(std::move(host_storage), tensor.tensor_spec(), tensor.tensor_topology());
 }
 
 template Tensor to_host<bfloat16>(const Tensor& tensor, bool blocking, std::optional<ttnn::QueueId> cq_id);
@@ -617,32 +641,38 @@ DeviceStorage write_to_mesh_buffer(
 }  // namespace
 
 template <typename T>
-DeviceStorage to_device_mesh_buffer(
+std::pair<DeviceStorage, TensorTopology> to_device_mesh_buffer(
     const Storage& host_storage,
     const std::shared_ptr<distributed::MeshBuffer>& mesh_buffer,
     const TensorSpec& tensor_spec,
     const TensorAttributes& host_tensor_attributes,
+    const TensorTopology& tensor_topology,
     std::optional<ttnn::QueueId> cq_id) {
     return std::visit(
         tt::stl::overloaded{
-            [&mesh_buffer, &tensor_spec, cq_id, &host_tensor_attributes](const HostStorage& storage) {
+            [&mesh_buffer, &tensor_spec, cq_id, &host_tensor_attributes, &tensor_topology](
+                const HostStorage& storage) -> std::pair<DeviceStorage, TensorTopology> {
                 const auto& host_storage_shape = storage.buffer().shape();
                 const auto& mesh_device_shape = mesh_buffer->device()->shape();
                 if (host_storage_shape.mesh_size() < mesh_device_shape.mesh_size() &&
                     host_storage_shape == distributed::MeshShape(1, 1)) {
                     // Special case of replicating tensors on 1x1 mesh across the entire mesh device.
                     const auto device_buffer = storage.buffer().get_shard(distributed::MeshCoordinate(0, 0));
-                    return replicate_to_mesh_buffer(*device_buffer, mesh_buffer, tensor_spec, cq_id);
+                    return {
+                        replicate_to_mesh_buffer(*device_buffer, mesh_buffer, tensor_spec, cq_id),
+                        TensorTopology::create_fully_replicated_tensor_topology(mesh_device_shape)};
                 } else {
                     TT_FATAL(
                         host_storage_shape == mesh_device_shape,
                         "Distributed host buffer has different shape {} than the mesh device {}",
                         host_storage_shape,
                         mesh_device_shape);
-                    return write_to_mesh_buffer(storage.buffer(), mesh_buffer, cq_id);
+                    return {write_to_mesh_buffer(storage.buffer(), mesh_buffer, cq_id), tensor_topology};
                 }
             },
-            [](const auto& s) -> DeviceStorage { TT_THROW("Unexpected storage type {}", tt::stl::get_type_name(s)); }},
+            [](const auto& s) -> std::pair<DeviceStorage, TensorTopology> {
+                TT_THROW("Unexpected storage type {}", tt::stl::get_type_name(s));
+            }},
         host_storage);
 }
 
@@ -667,9 +697,9 @@ Tensor to_device(
                                   ? &tensor_spec_overriden_memory_config.value()
                                   : &tensor.tensor_spec();
     auto mesh_buffer = allocate_device_buffer(mesh_device, *tensor_spec);
-    DeviceStorage mesh_storage =
-        to_device_mesh_buffer<T>(tensor.storage(), mesh_buffer, *tensor_spec, *tensor.tensor_attributes, cq_id);
-    return Tensor(std::move(mesh_storage), *tensor_spec, tensor.tensor_topology());
+    auto [mesh_storage, topology] = to_device_mesh_buffer<T>(
+        tensor.storage(), mesh_buffer, *tensor_spec, *tensor.tensor_attributes, tensor.tensor_topology(), cq_id);
+    return Tensor(std::move(mesh_storage), *tensor_spec, topology);
 }
 
 template <typename T>
@@ -723,8 +753,10 @@ void copy_to_host(const Tensor& device_tensor, Tensor& host_tensor, bool blockin
 
     mesh_cq.enqueue_read(mesh_buffer, dst_distributed_host_buffer, /*shards=*/std::nullopt, blocking);
 
-    host_tensor =
-        Tensor(HostStorage(std::move(dst_distributed_host_buffer)), device_tensor.tensor_spec(), TensorTopology{});
+    host_tensor = Tensor(
+        HostStorage(std::move(dst_distributed_host_buffer)),
+        device_tensor.tensor_spec(),
+        device_tensor.tensor_topology());
 }
 
 template <typename T>
@@ -742,12 +774,15 @@ void copy_to_device(const Tensor& host_tensor, Tensor& device_tensor, std::optio
 
     auto mesh_buffer = device_tensor.device_storage().mesh_buffer;
 
-    DeviceStorage mesh_storage = to_device_mesh_buffer<T>(
-        host_tensor.storage(), mesh_buffer, device_tensor.tensor_spec(), *host_tensor.tensor_attributes, cq_id);
+    auto [mesh_storage, topology] = to_device_mesh_buffer<T>(
+        host_tensor.storage(),
+        mesh_buffer,
+        device_tensor.tensor_spec(),
+        *host_tensor.tensor_attributes,
+        host_tensor.tensor_topology(),
+        cq_id);
     device_tensor = Tensor(
-        std::move(mesh_storage),
-        host_tensor.tensor_spec().with_memory_config(device_tensor.memory_config()),
-        device_tensor.tensor_topology());  // TODO (#25340): Add test for this
+        std::move(mesh_storage), host_tensor.tensor_spec().with_memory_config(device_tensor.memory_config()), topology);
 }
 
 template Tensor to_device<bfloat16>(
@@ -846,17 +881,6 @@ std::array<Shape2D, 2> get_logical_and_physical_shard_shapes(const TensorSpec& t
     const auto& logical_shape = tensor_spec.logical_shape();
     const auto& padded_shape = tensor_spec.padded_shape();
 
-    // TODO: get_logical_shard_shape always returns shard shape from shard spec, which is not correct in physical mode
-    // if there is padding
-    if (tensor_spec.memory_config().is_sharded() &&
-        ((tensor_spec.memory_config().shard_spec().has_value() &&
-          tensor_spec.memory_config().shard_spec().value().mode == ShardMode::LOGICAL) ||
-         logical_shape == padded_shape)) {
-        return {
-            tensor_spec.tensor_layout().get_logical_shard_shape(),
-            tensor_spec.tensor_layout().get_physical_shard_shape()};
-    }
-
     Shape2D logical_shard_shape{logical_shape[-2], logical_shape[-1]};
     Shape2D physical_shard_shape = {padded_shape[-2], padded_shape[-1]};
     return {logical_shard_shape, physical_shard_shape};
@@ -885,12 +909,12 @@ std::vector<LogicalPhysicalMapping> compute_logical_to_physical_shards_mapping(
                 shard_width_idx == num_shards_width - 1 ? last_shard_width : logical_shard_shape.width();
 
             auto indices = LogicalPhysicalIdxPairs(num_shard_rows);
-            const auto logical_start_idx = shard_height_idx * logical_shard_shape.height() * logical_stride +
-                                           shard_width_idx * logical_shard_shape.width();
-            const auto physical_start_idx = shard_height_idx * physical_shard_shape.height() * physical_stride +
-                                            shard_width_idx * physical_shard_shape.width();
+            const auto logical_start_idx = (shard_height_idx * logical_shard_shape.height() * logical_stride) +
+                                           (shard_width_idx * logical_shard_shape.width());
+            const auto physical_start_idx = (shard_height_idx * physical_shard_shape.height() * physical_stride) +
+                                            (shard_width_idx * physical_shard_shape.width());
             for (size_t i = 0; i < num_shard_rows; i++) {
-                indices[i] = {i * logical_stride + logical_start_idx, i * physical_stride + physical_start_idx};
+                indices[i] = {(i * logical_stride) + logical_start_idx, (i * physical_stride) + physical_start_idx};
             }
 
             logical_physical_mapping.emplace_back(indices, num_shard_cols);
@@ -1116,7 +1140,7 @@ Tensor to_layout(const Tensor& tensor, Layout target_layout) {
                 MemoryConfig{},
                 tensor.logical_shape(),
                 tensor.padded_shape())),
-        TensorTopology{});
+        tensor.tensor_topology());
 }
 
 template Tensor to_layout<bfloat16>(const Tensor& tensor, Layout target_layout);
@@ -1243,7 +1267,7 @@ Tensor pad(
                 MemoryConfig{},
                 tensor.logical_shape(),
                 output_padded_shape)),
-        TensorTopology{});
+        tensor.tensor_topology());
 }
 
 template Tensor pad<bfloat16>(
@@ -1346,7 +1370,7 @@ Tensor unpad(const Tensor& tensor, const ttnn::Shape& output_tensor_start, const
                 tensor.dtype(),
                 tt::tt_metal::PageConfig(tensor.layout(), tensor.tensor_spec().tile()),
                 tt::tt_metal::MemoryConfig{})),
-        TensorTopology{});
+        tensor.tensor_topology());
 }
 
 template Tensor unpad<bfloat16>(

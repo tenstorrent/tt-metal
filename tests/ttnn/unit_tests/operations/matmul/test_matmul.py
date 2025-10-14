@@ -10,7 +10,7 @@ import torch
 import math
 import ttnn
 
-from models.utility_functions import comp_pcc, is_blackhole, skip_for_blackhole
+from models.common.utility_functions import comp_pcc, is_blackhole, skip_for_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
@@ -67,7 +67,7 @@ def test_tiny_tiles_bfloat(device, n, c, h, w, tile_h, tile_w, dtype, transpose_
     assert_with_pcc(torch_input_tensor, output_tensor, expected_pcc)
 
 
-@skip_for_blackhole("TinyTile Matmul needs to be fixed on BH. Issue #22103")
+@skip_for_blackhole("TinyTile Matmul needs to be fixed on BH. Issue #29890")
 @pytest.mark.parametrize("n", [1])
 @pytest.mark.parametrize("c", [1])
 @pytest.mark.parametrize("m", [1024])
@@ -247,7 +247,7 @@ def test_matmul_reuse_config_sharded_fd_column(
     assert_with_pcc(pt_out, output_tensor, expected_pcc)
 
 
-@skip_for_blackhole("TinyTile Matmul needs to be fixed on BH. Issue #22103")
+@skip_for_blackhole("TinyTile Matmul needs to be fixed on BH. Issue #29890")
 @pytest.mark.parametrize("b", [2])
 @pytest.mark.parametrize("h", [3])
 @pytest.mark.parametrize("m", [256])
@@ -355,7 +355,7 @@ def pad_to_dram_banks(num, tile_w, lcm=32 * 12):
     return padded_number
 
 
-@skip_for_blackhole("TinyTile Matmul needs to be fixed on BH. Issue #22103")
+@skip_for_blackhole("TinyTile Matmul needs to be fixed on BH. Issue #29890")
 @pytest.mark.parametrize("k", [1024])
 @pytest.mark.parametrize("n", [1280])
 @pytest.mark.parametrize("has_bias", [False, True])
@@ -790,7 +790,7 @@ def run_matmul_2d_tiny_tile(
     assert_with_pcc(pt_out, output_tensor, 0.999)
 
 
-@skip_for_blackhole("TinyTile Matmul needs to be fixed on BH. Issue #22103")
+@skip_for_blackhole("TinyTile Matmul needs to be fixed on BH. Issue #29890")
 @pytest.mark.parametrize("m", [512])
 @pytest.mark.parametrize("k", [512])
 @pytest.mark.parametrize("n", [768])
@@ -947,7 +947,7 @@ def run_matmul_1d_tiny_tile(
     assert_with_pcc(pt_out, output_tensor, 0.999)
 
 
-@skip_for_blackhole("TinyTile Matmul needs to be fixed on BH. Issue #22103")
+@skip_for_blackhole("TinyTile Matmul needs to be fixed on BH. Issue #29890")
 @pytest.mark.parametrize("m", [128])
 @pytest.mark.parametrize("k", [1024])
 @pytest.mark.parametrize("n", [1024])
@@ -2234,7 +2234,6 @@ def test_sharded_matmul_with_multiple_out_block_values(device, out_block_h, out_
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1))}),
             (192, 64),
             ttnn.ShardOrientation.ROW_MAJOR,
-            ttnn.ShardMode.PHYSICAL,
         ),
     )
 

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -72,12 +72,15 @@ int main(int argc, char** argv) {
     TestContext test_context;
     test_context.init(fixture, allocation_policies);
 
-    // Initialize CSV file for bandwidth results if any of the configs have benchmark mode set
-    for (const auto& config : raw_test_configs) {
-        if (config.benchmark_mode) {
-            test_context.initialize_csv_file();
-            break;
+    bool benchmark_mode = std::any_of(raw_test_configs.begin(), raw_test_configs.end(),
+        [](const auto& config) {
+            return config.benchmark_mode;
         }
+    );
+
+    // Initialize CSV file for bandwidth results if any of the configs have benchmark mode set
+    if (benchmark_mode) {
+        test_context.initialize_bandwidth_results_csv_file();
     }
 
     cmdline_parser.apply_overrides(raw_test_configs);
@@ -202,6 +205,16 @@ int main(int argc, char** argv) {
     test_context.close_devices();
 
     tt::tt_metal::MetalContext::instance().rtoptions().set_enable_fabric_telemetry(false);
+
+    // Bandwidth summary is generated after all tests have run, to collect multi-run statistics
+    if (benchmark_mode) {
+        test_context.generate_bandwidth_summary();
+    }
+
+    // Setup Bandwidth CSV files for CI to upload
+    if (benchmark_mode) {
+        test_context.setup_ci_artifacts();
+    }
 
     // Check if any tests failed validation and throw at the end
     if (test_context.has_test_failures()) {

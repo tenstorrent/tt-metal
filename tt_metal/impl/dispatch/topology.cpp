@@ -17,7 +17,7 @@
 #include <unordered_set>
 #include <utility>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "command_queue_common.hpp"
 #include "core_coord.hpp"
 #include "data_types.hpp"

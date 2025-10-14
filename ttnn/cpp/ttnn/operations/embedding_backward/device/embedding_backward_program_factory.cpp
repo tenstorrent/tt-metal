@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/math.hpp"
@@ -39,7 +38,7 @@ operation::ProgramWithCallbacks embedding_backward_multi_core(
     constexpr uint32_t INPUT_SIZE = 32;
 
     tt::DataFormat grad_cb_data_format = datatype_to_dataformat_converter(grad_tensor.dtype());
-    uint32_t grad_single_tile_size = tt::tt_metal::detail::TileSize(grad_cb_data_format);
+    uint32_t grad_single_tile_size = tt::tile_size(grad_cb_data_format);
 
     tt::DataFormat index_cb_data_format = datatype_to_dataformat_converter(index_tensor.dtype());
     uint32_t index_single_page_size =
@@ -50,7 +49,7 @@ operation::ProgramWithCallbacks embedding_backward_multi_core(
     uint32_t mask_single_page_size = INPUT_SIZE * 1;  // UInt8 is 1 byte per element
 
     tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
-    uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_cb_data_format);
+    uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
 
     uint32_t embedding_dim = grad_tensor.padded_shape()[-1];
     uint32_t embedding_tiles = embedding_dim / TILE_WIDTH;

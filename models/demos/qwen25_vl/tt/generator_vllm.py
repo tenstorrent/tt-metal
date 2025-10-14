@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -47,7 +47,7 @@ def allocate_vllm_kv_cache(kv_cache_shape, dtype, num_layers, model: Transformer
 
 def get_platform_specific_optimizations(model_name):
     is_72B = "72B" in model_name
-    max_seq_len = 4096 if is_72B else 12288
+    max_seq_len = 65536 if is_72B else 131072
 
     performance_opt = lambda model_args: DecodersPrecision.performance(model_args.n_layers, model_args.model_name)
 
@@ -223,13 +223,13 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
             kv_cache=kv_cache,
             prompt_lens=decoding_pos,
         )
-
         return logits, rot_mats
 
     def decode_forward(self, *args, **kwargs):
-        rot_mats_list: list = kwargs.pop("rot_mats_all_users", None)
-        assert rot_mats_list is not None, "rot_mats_all_users must be provided for Qwen2.5-VL"
-        # [INFO] update the cos/sin matrices for the current users in the batch
-        super().update_cos_sin_rows(rot_mats_list)
+        rot_mats_list: list = kwargs.pop(
+            "rot_mats_all_users", None
+        )  # [INFO] update the cos/sin matrices for the current users in the batch
+        if rot_mats_list is not None:
+            super().update_cos_sin_rows(rot_mats_list)
 
         return super().decode_forward_text(*args, **kwargs)

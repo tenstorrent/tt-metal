@@ -10,7 +10,7 @@
 #include "tt_metal/fabric/fabric_context.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 #include <enchantum/enchantum.hpp>
-
+#include "tt_metal/fabric/builder/fabric_static_sized_channels_allocator.hpp"
 namespace tt::tt_fabric {
 
 // Implementation of nested MemoryRegion methods
@@ -211,28 +211,38 @@ std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_compile_time_args() const 
             tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context().get_tensix_config();
         fabric_endpoint_channel_num_buffers_ = fabric_tensix_config.get_num_buffers_per_channel();
     } else {
-        fabric_endpoint_channel_num_buffers_ = fabric_router_config.sender_channels_num_buffers[0];
+        auto channel_allocator = fabric_router_config.channel_allocator.get();
+        TT_FATAL(
+            dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(channel_allocator) != nullptr,
+            "Only FabricStaticSizedChannelsAllocator is supported currently.");
+        const auto static_channel_allocator =
+            dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(channel_allocator);
+        fabric_endpoint_channel_num_buffers_ = static_channel_allocator->get_sender_channel_number_of_slots(0);
     }
     fabric_endpoint_status_address_ = fabric_router_config.edm_status_address;
 
     auto ct_args = get_fabric_mux_compile_time_main_args(fabric_router_config);
     append_default_stream_ids_to_ct_args(ct_args);
-    append_default_persistent_channel_flags_to_ct_args(ct_args);
     return ct_args;
 }
 
 std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_compile_time_args_for_relay_mux() const {
     const auto& fabric_router_config =
         tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context().get_fabric_router_config();
+    auto channel_allocator = fabric_router_config.channel_allocator.get();
+    TT_FATAL(
+        dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(channel_allocator) != nullptr,
+        "Only FabricStaticSizedChannelsAllocator is supported currently.");
+    const auto static_channel_allocator =
+        dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(channel_allocator);
 
     // For relay mux, always use fabric router config
-    fabric_endpoint_channel_num_buffers_ = fabric_router_config.sender_channels_num_buffers[0];
+    fabric_endpoint_channel_num_buffers_ = static_channel_allocator->get_sender_channel_number_of_slots(0);
     wait_for_fabric_endpoint_ready_ = true;
     fabric_endpoint_status_address_ = fabric_router_config.edm_status_address;
 
     auto ct_args = get_fabric_mux_compile_time_main_args(fabric_router_config);
     append_default_stream_ids_to_ct_args(ct_args);
-    append_default_persistent_channel_flags_to_ct_args(ct_args);
     return ct_args;
 }
 
@@ -246,7 +256,7 @@ std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_run_time_args(
 
     auto regions_to_clear = get_memory_regions_to_clear();
     const auto num_regions_to_clear = regions_to_clear.size();
-    args.reserve(num_regions_to_clear * 2 + 1);
+    args.reserve((num_regions_to_clear * 2) + 1);
     args.push_back(static_cast<uint32_t>(num_regions_to_clear));
     for (const auto& [address, size] : regions_to_clear) {
         args.push_back(static_cast<uint32_t>(address));

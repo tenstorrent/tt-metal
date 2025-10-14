@@ -166,19 +166,20 @@ class resnet50Bottleneck:
                 "device": device,
                 "conv_config": ttnn.Conv2dConfig(
                     weights_dtype=self.model_config["WEIGHTS_DTYPE"],
-                    shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-                    if height_sharding and input_height != 28
-                    else ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+                    shard_layout=(
+                        ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+                        if height_sharding and input_height != 28
+                        else ttnn.TensorMemoryLayout.BLOCK_SHARDED
+                    ),
                     deallocate_activation=True,
                     reallocate_halo_output=True,
                     reshard_if_not_optimal=reshard_if_not_optimal,
-                    enable_act_double_buffer=enable_act_double_buffer
-                    if height_sharding
-                    else True
-                    if input_width < 56
-                    else False,
+                    enable_act_double_buffer=(
+                        enable_act_double_buffer if height_sharding else True if input_width < 56 else False
+                    ),
                     enable_weights_double_buffer=True if input_width < 56 else False,
                     full_inner_dim=True,
+                    force_split_reader=None if height_sharding else True,
                 ),
             }
 
@@ -241,10 +242,11 @@ class resnet50Bottleneck:
             "conv_config": ttnn.Conv2dConfig(
                 weights_dtype=self.model_config["WEIGHTS_DTYPE"],
                 activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
-                shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-                if height_sharding
-                else ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+                shard_layout=(
+                    ttnn.TensorMemoryLayout.HEIGHT_SHARDED if height_sharding else ttnn.TensorMemoryLayout.BLOCK_SHARDED
+                ),
                 reshard_if_not_optimal=reshard_if_not_optimal,
+                force_split_reader=None if height_sharding else True,
             ),
         }
 
@@ -286,13 +288,14 @@ class resnet50Bottleneck:
                 deallocate_activation=True,
                 reallocate_halo_output=not is_wormhole_b0(),
                 act_block_h_override=act_block_h_override,
-                shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-                if height_sharding
-                else ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+                shard_layout=(
+                    ttnn.TensorMemoryLayout.HEIGHT_SHARDED if height_sharding else ttnn.TensorMemoryLayout.BLOCK_SHARDED
+                ),
                 reshard_if_not_optimal=reshard_if_not_optimal,
                 enable_act_double_buffer=enable_act_double_buffer,
                 enable_weights_double_buffer=True,
                 full_inner_dim=True,
+                force_split_reader=None if height_sharding else True,
             ),
         }
 
@@ -334,10 +337,11 @@ class resnet50Bottleneck:
             "device": device,
             "conv_config": ttnn.Conv2dConfig(
                 weights_dtype=self.model_config["WEIGHTS_DTYPE"],
-                shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-                if height_sharding
-                else ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+                shard_layout=(
+                    ttnn.TensorMemoryLayout.HEIGHT_SHARDED if height_sharding else ttnn.TensorMemoryLayout.BLOCK_SHARDED
+                ),
                 reshard_if_not_optimal=reshard_if_not_optimal,
+                force_split_reader=None if height_sharding else True,
             ),
         }
 
@@ -497,9 +501,7 @@ class resnet50:
             shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             reshard_if_not_optimal=False,
             # otherwise act block h is not big enough for the reuse
-            enable_activation_reuse=(
-                not is_blackhole_p100(device) and (not is_wormhole_b0() or device.get_num_devices() <= 8)
-            ),
+            enable_activation_reuse=(not is_wormhole_b0() or device.get_num_devices() <= 8),
         )
         self.conv1_compute_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
@@ -636,9 +638,7 @@ class resnet50:
             self.fold_stride_h,
             self.fold_stride_w,
             use_transpose_as_fold=True,
-            pad_c=self.fold_pad_c,
-            pad_h=self.fold_pad_h,
-            pad_w=self.fold_pad_w,
+            padding=[self.fold_pad_h, self.fold_pad_h, self.fold_pad_w, self.fold_pad_w, 0, self.fold_pad_c],
             grid_size=self.fold_compute_grid_size,
             override_memory_config=self.override_fold_mem_config,
         )

@@ -30,6 +30,8 @@ def torch_equal_nan(a, b):
         ((1, 1, 1024, 1), (1, 1, 1024, 1024), (1, 1, 1024, 1024)),  # Acol, B, C
         ((1, 1, 1024, 1024), (1, 1, 1024, 1024), (1, 1, 1024, 1)),  # A, B, Ccol
         ((1, 1, 64, 1), (1, 1, 64, 64), (1, 1, 64, 64)),  # Acol, B, C
+        ((1, 1, 1, 1024), (1, 1, 1024, 1024), (1, 1, 1, 1024)),  # Arow, B, Crow
+        ((1, 1, 1024, 1024), (1, 1, 1, 1024), (1, 1, 1, 1024)),  # A, Brow, Crow
         ((256,), (256,), (256,)),  # LLK
         # Bcast cases for dims -5, -4, -3 (outer dims)
         ((128, 128), (2, 2, 2, 128, 128), (2, 2, 128, 128)),
@@ -712,3 +714,65 @@ def test_where_int_golden_verification(c_shape, t_shape, f_shape, device):
     assert torch_equal_nan(
         result_torch, golden_output
     ), f"Values don't match. Max difference: {torch.max(torch.abs(result_torch - golden_output))}"
+
+
+@pytest.mark.parametrize(
+    "a_shape, b_shape, c_shape",
+    [
+        ((2, 2, 128, 128), (1, 1, 1, 128), (1, 1, 1, 128)),  # row bcast
+        ((2, 2, 128, 128), (1, 1, 128, 1), (1, 1, 128, 1)),  # col bcast
+        ((128, 128), (2, 2, 2, 128, 128), (2, 2, 128, 128)),  # outer
+        ((128, 128), (128, 128), (128, 128)),
+        ((4, 1, 1, 1, 1, 1), (4, 2, 2, 2, 128, 128), (4, 1, 2, 1, 128, 128)),  # scalar bcast
+        ((3, 2, 3, 64, 128), (3, 2, 3, 1, 1), (3, 2, 3, 1, 1)),  # scalar
+    ],
+)
+@pytest.mark.parametrize("scalar", [15.5])
+@pytest.mark.parametrize("variant", ["TTT", "TST", "TTS"])
+@pytest.mark.parametrize("condition", [1, 0])
+def test_ttnn_where_preallocated(a_shape, b_shape, c_shape, scalar, variant, condition, device):
+    torch.manual_seed(0)
+
+    C = torch.ones(a_shape, dtype=torch.float32) * condition
+    # Set zeros at flattened indices which are multiples of 8
+    C_flat = C.flatten()
+    C_flat[::8] = 1 - condition
+    C = C_flat.reshape(a_shape)
+
+    if variant == "TTS":
+        T = torch.randn(b_shape, dtype=torch.float32)
+        F = scalar
+
+    elif variant == "TST":
+        T = scalar
+        F = torch.randn(b_shape, dtype=torch.float32)
+
+    elif variant == "TTT":
+        T = torch.randn(b_shape, dtype=torch.float32)
+        F = torch.ones(c_shape, dtype=torch.float32) * 10
+    elif variant == "TSS":
+        T = scalar
+        F = 25.5
+
+    golden = torch.where(C.bool(), T, F)
+    out = torch.zeros_like(golden)
+
+    ttnn_C = ttnn.from_torch(C, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_out = ttnn.from_torch(out, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    if variant == "TTS":
+        ttnn_T = ttnn.from_torch(T, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+        ttnn_F = scalar
+    elif variant == "TST":
+        ttnn_T = scalar
+        ttnn_F = ttnn.from_torch(F, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    elif variant == "TTT":
+        ttnn_T = ttnn.from_torch(T, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+        ttnn_F = ttnn.from_torch(F, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    elif variant == "TSS":
+        ttnn_T = scalar
+        ttnn_F = 25.5
+
+    ttnn.where(ttnn_C, ttnn_T, ttnn_F, output_tensor=ttnn_out)
+    result = ttnn.to_torch(ttnn_out)
+    assert torch_equal_nan(result, golden)

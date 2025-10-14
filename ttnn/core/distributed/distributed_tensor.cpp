@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/distributed_host_buffer.hpp>
 #include <tt-metalium/shape.hpp>
 #include <tt-metalium/mesh_coord.hpp>
@@ -32,9 +32,6 @@
 
 namespace ttnn::distributed {
 namespace {
-
-using ::tt::tt_metal::DistributedHostBuffer;
-using ::tt::tt_metal::distributed::MeshContainer;
 
 // Returns a function that remaps a mesh coordinates from the mesh mapper / composer distribution shape to the device
 // shape. `global_range` must outlive the use of the returned function.
@@ -208,7 +205,8 @@ public:
             sharded_mesh_size);
 
         using StridedViewRef = std::reference_wrapper<experimental::xtensor::StridedView<decltype(input_xtensor)>>;
-        MeshContainer<std::optional<StridedViewRef>> sharded_xtensor_views(distribution_shape_, std::nullopt);
+        tt::tt_metal::distributed::MeshContainer<std::optional<StridedViewRef>> sharded_xtensor_views(
+            distribution_shape_, std::nullopt);
 
         // Distribute chunks to appropriate mesh coordinates.
         size_t chunk_idx = 0;

@@ -14,6 +14,7 @@
 #include <vector>
 #include <umd/device/types/core_coordinates.hpp>
 #include <optional>
+#include <hostdevcommon/fabric_common.h>
 
 namespace tt {
 namespace tt_metal {
@@ -66,18 +67,25 @@ void append_fabric_connection_rt_args(
     std::vector<uint32_t>& worker_args,
     CoreType core_type = CoreType::WORKER);
 
+enum class FabricApiType : uint8_t {
+    Linear = 0,
+    Mesh = 1,
+};
+
 // Appends connection manager RT args for one or more routes.
 // next_hop_nodes: vector of next-hop nodes, one per route.
 // connection_link_indices: optional per-route link indices; if empty, a valid link is auto-selected.
+// api_type: set envvar for the kernel to indicate which fabric API type being used. Linear or Mesh.
 void append_routing_plane_connection_manager_rt_args(
     const FabricNodeId& src_fabric_node_id,
     const std::vector<FabricNodeId>& dst_nodes,
+    const std::vector<uint32_t>& connection_link_indices,
     tt::tt_metal::Program& worker_program,
     tt::tt_metal::KernelHandle& kernel_id,
     const CoreCoord& worker_core,
     std::vector<uint32_t>& worker_args,
-    CoreType core_type = CoreType::WORKER,
-    const std::vector<uint32_t>& connection_link_indices = std::vector<uint32_t>{});
+    FabricApiType api_type = FabricApiType::Linear,
+    CoreType core_type = CoreType::WORKER);
 
 // returns which links on a given src chip are available for forwarding the data to a dst chip
 // these link indices can then be used to establish connection with the fabric routers

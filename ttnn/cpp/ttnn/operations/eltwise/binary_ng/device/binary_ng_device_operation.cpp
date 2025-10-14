@@ -30,7 +30,8 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b) {
         case LOGADDEXP:
         case LOGADDEXP2:
         case LDEXP:
-        case BIAS_GELU: return (a == FLOAT32 && b == FLOAT32);
+        case BIAS_GELU:
+        case HYPOT: return (a == FLOAT32 && b == FLOAT32);
         case RSUB:
         case GT:
         case LT:
@@ -140,6 +141,7 @@ DataType BinaryNgDeviceOperation::operation_attributes_t::get_dtype() const {
     return this->dtype.value_or(this->input_dtype);
 }
 
+// TODO: more to check, or less
 void validate_sharding(
     TensorMemoryLayout memory_layout_x,
     const ShardSpec& shard_spec_x,
@@ -152,23 +154,11 @@ void validate_sharding(
         case SubtileBroadcastType::NONE:
             TT_FATAL(shard_spec_x == shard_spec_y, "Operands to eltwise binary need to have the same shard spec");
             break;
-        case SubtileBroadcastType::COL_A:
-        case SubtileBroadcastType::COL_B:
-            TT_FATAL(
-                memory_layout_x == TensorMemoryLayout::HEIGHT_SHARDED,
-                "Operands to eltwise binary must be height sharded when broadcasting on W");
-            TT_FATAL(
-                memory_layout_y == TensorMemoryLayout::HEIGHT_SHARDED,
-                "Operands to eltwise binary must be height sharded when broadcasting on W");
-            TT_FATAL(
-                shard_spec_x.shape[0] == shard_spec_y.shape[0],
-                "Operands to eltwise binary need to have the same"
-                "shard height when broadcasting on W");
+        default:
             TT_FATAL(
                 shard_spec_x.orientation == shard_spec_y.orientation,
                 "Operands to eltwise binary must have same shard orientation");
             break;
-        default: TT_THROW("Invalid subtile broadcast type for sharding validation");
     }
 }
 
@@ -210,6 +200,10 @@ void BinaryNgDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
             "LHS operand must be either sharded or interleaved");
+    } else {
+        TT_FATAL(
+            input_tensor_a.memory_config().buffer_type() == BufferType::L1,
+            "Sharded input tensor A memory config must be in L1");
     }
 
     bool output_sharded = attributes.memory_config.is_sharded();
@@ -217,6 +211,9 @@ void BinaryNgDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             attributes.memory_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
             "Output must be interleaved or sharded");
+    } else {
+        TT_FATAL(
+            attributes.memory_config.buffer_type() == BufferType::L1, "Sharded output memory config must be in L1");
     }
 
     bool tensor_b_sharded = false;
@@ -232,6 +229,10 @@ void BinaryNgDeviceOperation::validate_on_program_cache_miss(
             TT_FATAL(
                 input_tensor_b->memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
                 "RHS operand must be either sharded or interleaved");
+        } else {
+            TT_FATAL(
+                input_tensor_b->memory_config().buffer_type() == BufferType::L1,
+                "Sharded input tensor B memory config must be in L1");
         }
     }
 
@@ -309,16 +310,6 @@ void BinaryNgDeviceOperation::validate_on_program_cache_hit(
                 a_dim,
                 b_dim);
         }
-
-        if (has_shard_spec and i != -1) {
-            TT_FATAL(
-                a_dim == b_dim,
-                "Cannot broadcast sharded tensors on dims other than W, violation for rank {}, dim a: {}, dim b: "
-                "{}",
-                i,
-                a_dim,
-                b_dim);
-        }
     }
 }
 
@@ -390,6 +381,7 @@ BinaryNgDeviceOperation::spec_return_value_t BinaryNgDeviceOperation::compute_ou
         const auto& shard_spec = attributes.memory_config.shard_spec();
         const auto& input_a_shard_spec = input_tensor_a.memory_config().shard_spec();
         const auto& input_b_shard_spec = tensor_b.has_value() ? tensor_b->memory_config().shard_spec() : std::nullopt;
+        // TODO: is prefered order of a over b correct?
         const auto& output_shard_spec = shard_spec.has_value()           ? *shard_spec
                                         : input_a_shard_spec.has_value() ? *input_a_shard_spec
                                                                          : *input_b_shard_spec;
@@ -529,6 +521,7 @@ BinaryNgDeviceOperation::invoke(
             {rhs_activations.begin(), rhs_activations.end()},
             {post_activations.begin(), post_activations.end()},
             scalar,
+            // TODO : verify memory config choice is correct, by fall back to input a
             memory_config.value_or(
                 output_tensor.has_value() ? output_tensor->memory_config() : input_tensor_a.memory_config()),
             input_tensor_a.dtype(),

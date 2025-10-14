@@ -27,7 +27,7 @@ void kernel_main() {
         auto page_id = i % tensor_accessor.dspec().tensor_volume();
         {
             DeviceZoneScopedN(ACCESSOR_CONFIG_NAME);
-            volatile auto _ = tensor_accessor.get_noc_addr(i);
+            volatile auto _ = tensor_accessor.get_noc_addr(page_id);
         }
     }
 }

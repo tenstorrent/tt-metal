@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -9,11 +9,11 @@ import pytest
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=True)
-def test_max_pool2d_with_indices(device):
+@pytest.mark.parametrize("in_c", [1, 16, 24, 32, 40, 48, 56, 64])
+def test_max_pool2d_with_indices(device, in_c):
     in_n = 1
     in_h = 159
     in_w = 159
-    in_c = 1
     kernel_size = [3, 3]
     stride = [1, 1]
     padding = [1, 1]
@@ -68,14 +68,15 @@ def test_max_pool2d_with_indices(device):
         ttnn_layout = ttnn.TILE_LAYOUT
 
     # Memory configuration for ttnn_input
+    # Calculate shard width as the nearest multiple of 32 that is >= in_c
+    shard_width = math.ceil(in_c / 32) * 32
     memory_config = ttnn.MemoryConfig(
         memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         buffer_type=ttnn.BufferType.L1,
         shard_spec=ttnn.ShardSpec(
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 3))}),
-            [1280, 32],
+            [1280, shard_width],
             ttnn.ShardOrientation.ROW_MAJOR,
-            ttnn.ShardMode.PHYSICAL,
         ),
     )
     ttnn_input = ttnn.from_torch(
@@ -108,24 +109,24 @@ def test_max_pool2d_with_indices(device):
     # print("Indices:\n", ttnn.to_torch(indices))
 
     # Check that ttnn_output_base is exactly equal to ttnn_output
-    ttnn_output_base = ttnn.max_pool2d(
-        input_tensor=ttnn_input,
-        batch_size=in_n,
-        input_h=in_h,
-        input_w=in_w,
-        channels=in_c,
-        kernel_size=kernel_size,
-        stride=stride,
-        padding=padding,
-        dilation=dilation,
-        # applied_shard_scheme=shard_scheme,
-        ceil_mode=ceil_mode,
-        in_place_halo=True,  # test the base with IPH for a little more IPH coverage
-        deallocate_input=False,
-        reallocate_halo_output=True,
-        return_indices=False,
-    )
-    ttnn_outputs_exactly_equal = torch.equal(ttnn.to_torch(ttnn_output_base), ttnn.to_torch(ttnn_output))
+    # ttnn_output_base = ttnn.max_pool2d(
+    #     input_tensor=ttnn_input,
+    #     batch_size=in_n,
+    #     input_h=in_h,
+    #     input_w=in_w,
+    #     channels=in_c,
+    #     kernel_size=kernel_size,
+    #     stride=stride,
+    #     padding=padding,
+    #     dilation=dilation,
+    #     # applied_shard_scheme=shard_scheme,
+    #     ceil_mode=ceil_mode,
+    #     in_place_halo=True,  # test the base with IPH for a little more IPH coverage
+    #     deallocate_input=False,
+    #     reallocate_halo_output=True,
+    #     return_indices=False,
+    # )
+    # ttnn_outputs_exactly_equal = torch.equal(ttnn.to_torch(ttnn_output_base), ttnn.to_torch(ttnn_output))
     print(f"ttnn_output_base exactly equals ttnn_output: {ttnn_outputs_exactly_equal}")
 
     # Run PyTorch max pool for reference

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,7 +8,7 @@
 #include <fmt/ranges.h>
 #include <kernel_types.hpp>
 #include <enchantum/enchantum.hpp>
-#include <utils.hpp>
+#include <tt_stl/tt_stl/reflection.hpp>
 #include <algorithm>
 #include <cstring>
 #include <filesystem>
@@ -17,7 +17,8 @@
 #include <type_traits>
 #include <utility>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
+#include "base_types.hpp"
 #include "data_types.hpp"
 #include "hal_types.hpp"
 #include "jit_build/build.hpp"
@@ -41,48 +42,60 @@ namespace tt_metal {
 namespace fs = std::filesystem;
 
 namespace {
-// Kernel path searching:
+// Kernel path resolve:
 //
-// If the path doesn't exist as a absolute/relative path, then it must be relative to
-// TT_METAL_HOME/TT_METAL_KERNEL_PATH.
-//
-std::vector<fs::path> source_search_paths(const fs::path& given_file_name) {
-    std::vector<fs::path> paths = {given_file_name};
+// If the path is not an absolute path, then it must be resolved relative to:
+// 1. CWD
+// 2. TT_METAL_KERNEL_PATH
+// 3. TT_METAL_HOME / SetRootDir (API)
+// 4. System Kernel Directory
+fs::path resolve_path(const fs::path& given_file_name) {
+    // Priority 0: Absolute path
+    if (given_file_name.is_absolute()) {
+        return given_file_name;
+    }
 
-    TT_ASSERT(
-        fs::exists(given_file_name) || (!fs::path(given_file_name).is_absolute()),
-        "Kernel source path {} must be relative to TT_METAL_HOME/TT_METAL_KERNEL_PATH or be an absolute path to a "
-        "valid file",
-        given_file_name);
+    // Priority 1: Current working directory
+    {
+        auto current_working_dir_search_path = fs::current_path() / given_file_name;
+        if (fs::exists(current_working_dir_search_path)) {
+            return current_working_dir_search_path;
+        }
+    }
 
     const auto& rtoptions = tt_metal::MetalContext::instance().rtoptions();
-    if (rtoptions.is_root_dir_specified()) {
-        auto root_dir_search_path = fs::path(rtoptions.get_root_dir()) / given_file_name;
-        paths.push_back(root_dir_search_path);
-    }
 
+    // Priority 2: Kernel directory
     if (rtoptions.is_kernel_dir_specified()) {
-        auto kernel_dir_search_path = fs::path(rtoptions.get_kernel_dir()) / given_file_name;
-        paths.push_back(kernel_dir_search_path);
+        auto kernel_dir_search_path = fs::absolute(fs::path(rtoptions.get_kernel_dir()) / given_file_name);
+        if (fs::exists(kernel_dir_search_path)) {
+            return kernel_dir_search_path;
+        }
     }
 
-    auto system_kernel_dir_search_path = fs::path(rtoptions.get_system_kernel_dir()) / given_file_name;
-    paths.push_back(system_kernel_dir_search_path);
+    // Priority 3: Root directory
+    if (rtoptions.is_root_dir_specified()) {
+        auto root_dir_search_path = fs::absolute(fs::path(rtoptions.get_root_dir()) / given_file_name);
+        if (fs::exists(root_dir_search_path)) {
+            return root_dir_search_path;
+        }
+    }
 
-    return paths;
+    // Priority 4: System kernel directory
+    auto system_kernel_dir_search_path = fs::absolute(fs::path(rtoptions.get_system_kernel_dir()) / given_file_name);
+    if (fs::exists(system_kernel_dir_search_path)) {
+        return system_kernel_dir_search_path;
+    }
+
+    // Not found
+    TT_THROW("Kernel file {} doesn't exist in any of the searched paths!", given_file_name);
 }
 }  // namespace
 
 KernelSource::KernelSource(const std::string& source, const SourceType& source_type) :
     source_(source), source_type_(source_type) {
     if (source_type == FILE_PATH) {
-        auto search_paths = source_search_paths(source);
-        auto itr = std::ranges::find_if(search_paths, [](const auto& path) { return fs::exists(path); });
-        if (itr == search_paths.end()) {
-            log_critical(LogMetal, "Kernel file searched in {}!", source, fmt::join(search_paths, ", "));
-            TT_THROW("Kernel file {} doesn't exist in any of the searched paths!", source);
-        }
-        path_ = *itr;
+        path_ = resolve_path(source);
     }
 };
 
@@ -320,18 +333,29 @@ std::string EthernetKernel::config_hash() const {
 }
 
 std::string ComputeKernel::config_hash() const {
+    // This handles config hashing for unpack_to_dest_mode which can be:
+    // 1. Having specific configuration (e.g. some CBs are set to UnpackToDestFp32)
+    // 2. Having explicit default configuration (vector full of Default)
+    // 3. Having implicit default configuration (vector empty)
+    std::string unpack_mode_descriptor = "default";
+    const auto& unpack_modes = this->config_.unpack_to_dest_mode;
+    if (std::ranges::any_of(this->config_.unpack_to_dest_mode, [](auto v) { return v != UnpackToDestMode::Default; })) {
+        unpack_mode_descriptor = fmt::format("{}", fmt::join(unpack_modes, "."));
+    }
+
     return fmt::format(
-        "{}_{}_{}_{}",
+        "{}_{}_{}_{}_{}",
         enchantum::to_string(this->config_.math_fidelity),
         this->config_.fp32_dest_acc_en,
         this->config_.math_approx_mode,
-        this->config_.dst_full_sync_en);
+        this->config_.dst_full_sync_en,
+        unpack_mode_descriptor);
 }
 
 std::string Kernel::compute_hash() const {
     size_t define_hash_value = 0;
     for (const auto& [define, value] : this->defines_) {
-        tt::utils::hash_combine(define_hash_value, std::hash<std::string>{}(define + value));
+        ttsl::hash::hash_combine(define_hash_value, std::hash<std::string>{}(define + value));
     }
 
     size_t named_args_hash_value = ttsl::hash::hash_objects_with_default_seed(this->named_compile_time_args_);

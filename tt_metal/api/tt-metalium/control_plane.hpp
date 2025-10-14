@@ -249,7 +249,8 @@ private:
 
     std::vector<chip_id_t> get_mesh_physical_chip_ids(
         const tt::tt_metal::distributed::MeshContainer<chip_id_t>& mesh_container,
-        std::optional<chip_id_t> nw_corner_chip_id = std::nullopt) const;
+        std::optional<chip_id_t> nw_corner_chip_id = std::nullopt,
+        std::optional<chip_id_t> ne_corner_chip_id = std::nullopt) const;
 
     std::map<FabricNodeId, chip_id_t> get_logical_chip_to_physical_chip_mapping(
         const std::string& mesh_graph_desc_file);

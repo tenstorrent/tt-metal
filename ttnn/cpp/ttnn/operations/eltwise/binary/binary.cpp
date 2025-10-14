@@ -357,9 +357,7 @@ bool is_legacy_only(
     const auto& output_mem_cfg = memory_config.value_or(output ? output->memory_config() : MemoryConfig{});
 
     if (detail::any_non_llk_row_broadcasted(lhs, rhs) or detail::any_sharded_block_format(lhs, rhs) or
-        detail::any_subtile_broadcasted_block_format(lhs, rhs) or
-        detail::any_non_height_sharded_w_bcast(lhs, rhs, output_mem_cfg) or detail::any_uneven(lhs, rhs, output) or
-        detail::any_sharded_scalar(lhs, rhs)) {
+        detail::any_subtile_broadcasted_block_format(lhs, rhs) or detail::any_uneven(lhs, rhs, output)) {
         TT_FATAL(
             lhs_activations.size() <= 1,
             "lhs_activations support maximum of 1 for legacy-only configuration; Override with use_legacy=False "
@@ -720,6 +718,25 @@ Tensor BinaryOperationSubalpha<binary_op_type>::invoke(
         lhs, rhs, std::nullopt, memory_config, output, {}, {}, rhs_activations, false);
 }
 
+template <BinaryOpType binary_op_type>
+Tensor BinaryOperationHypot<binary_op_type>::invoke(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    return detail::invoke_binary_ng(
+        input_tensor_a,
+        input_tensor_b,
+        binary_op_type,
+        std::nullopt,
+        memory_config,
+        optional_output_tensor,
+        {},      // no post_activations
+        {},      // no lhs_activations
+        {},      // no rhs_activations
+        false);  // legacy_flag
+}
+
 template struct BinaryOperation<BinaryOpType::ADD>;
 template struct InplaceBinaryOperation<BinaryOpType::ADD>;
 template struct BinaryOperation<BinaryOpType::SUB>;
@@ -783,5 +800,6 @@ template struct BinaryOperationSfpu<BinaryOpType::LCM>;
 
 template struct BinaryOperationAddalpha<BinaryOpType::ADDALPHA>;
 template struct BinaryOperationSubalpha<BinaryOpType::SUBALPHA>;
+template struct BinaryOperationHypot<BinaryOpType::HYPOT>;
 
 }  // namespace ttnn::operations::binary

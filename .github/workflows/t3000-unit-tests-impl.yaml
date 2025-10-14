@@ -25,8 +25,7 @@ jobs:
         test-group: [
           { name: "t3k ttmetal tests", arch: wormhole_b0, cmd: run_t3000_ttmetal_tests, timeout: 40, owner_id: ULMEPM2MA}, #Sean Nijjar
           { name: "t3k ttnn tests", arch: wormhole_b0, cmd: run_t3000_ttnn_tests, timeout: 45, owner_id: UBHPP2NDP}, #Joseph Chu
-          { name: "t3k tt_metal multiprocess tests", arch: wormhole_b0, cmd: run_t3000_tt_metal_multiprocess_tests, timeout: 25, owner_id: U03NG0A5ND7}, #Aditya Saigal
-          { name: "t3k ttnn multiprocess tests", arch: wormhole_b0, cmd: run_t3000_ttnn_multiprocess_tests, timeout: 15, owner_id: U013121KDH9}, #Austin Ho
+          { name: "t3k tt_metal multiprocess tests", arch: wormhole_b0, cmd: run_t3000_tt_metal_multiprocess_tests, timeout: 15, owner_id: U03NG0A5ND7}, #Aditya Saigal
           { name: "t3k falcon7b tests", arch: wormhole_b0, cmd: run_t3000_falcon7b_tests, timeout: 30, owner_id: UBHPP2NDP}, #Joseph Chu
           { name: "t3k falcon40b tests", arch: wormhole_b0, cmd: run_t3000_falcon40b_tests, timeout: 30, owner_id: U053W15B6JF}, #Djordje Ivanovic
           { name: "t3k llama3-small tests", arch: wormhole_b0, cmd: run_t3000_llama3-small_tests, timeout: 30, owner_id: U03PUAKE719},  #Miguel Tairum Cruz
@@ -71,7 +70,7 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}

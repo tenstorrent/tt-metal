@@ -7,7 +7,6 @@
 #include <tt-metalium/work_split.hpp>
 
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 
 namespace tt {
@@ -27,19 +26,19 @@ operation::ProgramWithCallbacks rotary_embedding_llama_fused_qk_multi_core_shard
     Program program{};
 
     const tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(q_input.dtype());
-    const uint32_t input_single_tile_size = tt_metal::detail::TileSize(input_cb_data_format);
+    const uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
 
     const tt::DataFormat cos_cb_data_format = tt_metal::datatype_to_dataformat_converter(cos.dtype());
-    const uint32_t cos_single_tile_size = tt_metal::detail::TileSize(cos_cb_data_format);
+    const uint32_t cos_single_tile_size = tt::tile_size(cos_cb_data_format);
 
     const tt::DataFormat sin_cb_data_format = tt_metal::datatype_to_dataformat_converter(sin.dtype());
-    const uint32_t sin_single_tile_size = tt_metal::detail::TileSize(sin_cb_data_format);
+    const uint32_t sin_single_tile_size = tt::tile_size(sin_cb_data_format);
 
     const tt::DataFormat trans_mat_cb_data_format = tt_metal::datatype_to_dataformat_converter(trans_mat.dtype());
-    const uint32_t trans_mat_single_tile_size = tt_metal::detail::TileSize(trans_mat_cb_data_format);
+    const uint32_t trans_mat_single_tile_size = tt::tile_size(trans_mat_cb_data_format);
 
     const tt::DataFormat output_cb_data_format = tt_metal::datatype_to_dataformat_converter(q_output.dtype());
-    const uint32_t output_single_tile_size = tt_metal::detail::TileSize(output_cb_data_format);
+    const uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
 
     const std::optional<ShardSpec>& q_shard_spec = q_input.shard_spec();
     const std::optional<ShardSpec>& k_shard_spec = k_input.shard_spec();

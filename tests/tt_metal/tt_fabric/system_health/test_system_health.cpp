@@ -42,7 +42,7 @@ ConnectorType get_connector_type(chip_id_t chip_id, CoreCoord eth_core, uint32_t
     auto arch = cluster.arch();
     auto board_type = cluster.get_board_type(chip_id);
     if (arch == tt::ARCH::WORMHOLE_B0) {
-        if (cluster_type == ClusterType::GALAXY) {
+        if (cluster.is_ubb_galaxy()) {
             if (cluster.is_external_cable(chip_id, eth_core)) {
                 return ConnectorType::QSFP;
             }
@@ -111,7 +111,8 @@ ConnectorType get_connector_type(chip_id_t chip_id, CoreCoord eth_core, uint32_t
 
 bool is_chip_on_edge_of_mesh(chip_id_t physical_chip_id, tt::tt_metal::ClusterType cluster_type) {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    if (cluster_type == tt::tt_metal::ClusterType::GALAXY) {
+    if (cluster_type == tt::tt_metal::ClusterType::GALAXY ||
+        cluster_type == tt::tt_metal::ClusterType::BLACKHOLE_GALAXY) {
         auto ubb_asic_id = cluster.get_ubb_asic_id(physical_chip_id);
         return (ubb_asic_id >= 2) and (ubb_asic_id <= 5);
     } else if (cluster_type == tt::tt_metal::ClusterType::T3K) {
@@ -128,7 +129,8 @@ bool is_chip_on_edge_of_mesh(chip_id_t physical_chip_id, tt::tt_metal::ClusterTy
 
 bool is_chip_on_corner_of_mesh(chip_id_t physical_chip_id, tt::tt_metal::ClusterType cluster_type) {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    if (cluster_type == tt::tt_metal::ClusterType::GALAXY) {
+    if (cluster_type == tt::tt_metal::ClusterType::GALAXY ||
+        cluster_type == tt::tt_metal::ClusterType::BLACKHOLE_GALAXY) {
         auto ubb_asic_id = cluster.get_ubb_asic_id(physical_chip_id);
         return (ubb_asic_id == 1);
     } else if (cluster_type == tt::tt_metal::ClusterType::T3K) {
@@ -159,7 +161,8 @@ std::string get_physical_slot_str(chip_id_t chip_id) {
 }
 
 std::string get_physical_loc_str(chip_id_t chip_id, ClusterType cluster_type) {
-    if (cluster_type == tt::tt_metal::ClusterType::GALAXY) {
+    if (cluster_type == tt::tt_metal::ClusterType::GALAXY ||
+        cluster_type == tt::tt_metal::ClusterType::BLACKHOLE_GALAXY) {
         return get_ubb_id_str(chip_id);
     } else {
         return get_physical_slot_str(chip_id);
@@ -217,7 +220,12 @@ TEST(Cluster, ReportIntermeshLinks) {
     for (const auto& chip_id : cluster.user_exposed_chip_ids()) {
         if (all_intermesh_links.find(chip_id) != all_intermesh_links.end()) {
             auto links = all_intermesh_links.at(chip_id);
-            log_info(tt::LogTest, "Chip {}: {} inter-mesh ethernet links", chip_id, links.size());
+            log_info(
+                tt::LogTest,
+                "Chip {} {} : {} inter-mesh ethernet links",
+                chip_id,
+                get_physical_loc_str(chip_id, cluster.get_cluster_type()),
+                links.size());
             for (const auto& [channel, remote_connection] : links) {
                 tt::umd::CoreCoord eth_core =
                     cluster.get_soc_desc(chip_id).get_eth_core_for_channel(channel, CoordSystem::LOGICAL);
@@ -376,6 +384,10 @@ TEST(Cluster, TestMeshFullConnectivity) {
         num_expected_chips = 32;
         num_expected_mmio_chips = 32;
         num_connections_per_side = 4;
+    } else if (cluster_type == tt::tt_metal::ClusterType::BLACKHOLE_GALAXY) {
+        num_expected_chips = 32;
+        num_expected_mmio_chips = 32;
+        num_connections_per_side = 2;
     } else if (cluster_type == tt::tt_metal::ClusterType::P150_X2) {
         num_expected_chips = 2;
         num_expected_mmio_chips = 2;
@@ -424,6 +436,7 @@ TEST(Cluster, TestMeshFullConnectivity) {
             bool supported_topology = false;
             switch (cluster_type) {
                 case tt::tt_metal::ClusterType::GALAXY:
+                case tt::tt_metal::ClusterType::BLACKHOLE_GALAXY:
                 case tt::tt_metal::ClusterType::T3K:
                     supported_topology = *target_system_topology == FabricType::MESH;
                     break;
@@ -478,7 +491,8 @@ TEST(Cluster, TestMeshFullConnectivity) {
                 validate_num_connections(num_connections_to_chip.size(), num_expected_chip_connections);
             } else {
                 uint32_t num_chip_connections = 0;
-                if (cluster_type == tt::tt_metal::ClusterType::GALAXY) {
+                if (cluster_type == tt::tt_metal::ClusterType::GALAXY ||
+                    cluster_type == tt::tt_metal::ClusterType::BLACKHOLE_GALAXY) {
                     num_chip_connections = num_internal_connections_to_chip.size();
                 } else {
                     num_chip_connections = num_connections_to_chip.size();

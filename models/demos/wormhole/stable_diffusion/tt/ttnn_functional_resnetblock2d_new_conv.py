@@ -332,6 +332,7 @@ class resnetBlock2D:
             "groups": 1,
             "device": self.device,
             "conv_config": conv_config,
+            "slice_config": ttnn.Conv2dL1FullSliceConfig,
         }
 
         hidden_states, [self.conv1_weight, self.conv1_bias] = ttnn.conv2d(
@@ -437,6 +438,7 @@ class resnetBlock2D:
             "groups": 1,
             "device": self.device,
             "conv_config": conv_config,
+            "slice_config": ttnn.Conv2dL1FullSliceConfig,
         }
 
         hidden_states, [self.conv2_weights, self.conv2_bias] = ttnn.conv2d(
@@ -491,6 +493,7 @@ class resnetBlock2D:
                 "groups": 1,
                 "device": self.device,
                 "conv_config": conv_config,
+                "slice_config": ttnn.Conv2dL1FullSliceConfig,
             }
 
             input_tensor, [self.conv_shortcut_weights, self.conv_shortcut_bias] = ttnn.conv2d(

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 #include <tt-metalium/distributed_context.hpp>
@@ -112,7 +112,7 @@ TEST(FaultTolerance, DisableBrokenBlock) {
     ctx = filtered_ctx;  // continue with communicator containing only healthy blocks
 
     // ‑‑ 5 · Verify global properties -------------------------------------
-    const int expected_blocks = world / ranks_per_block - 1;  // one block lost
+    const int expected_blocks = (world / ranks_per_block) - 1;  // one block lost
     const int expected_ranks = expected_blocks * ranks_per_block;
     const int new_world = *ctx->size();
 

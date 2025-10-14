@@ -6,8 +6,8 @@ import pytest
 import torch
 import ttnn
 
-from models.utility_functions import comp_pcc
-from models.utility_functions import torch_random
+from models.common.utility_functions import comp_pcc
+from models.common.utility_functions import torch_random
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from functools import reduce
 from functools import partial

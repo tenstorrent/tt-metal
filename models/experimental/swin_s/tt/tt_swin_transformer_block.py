@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -37,7 +37,7 @@ class TtSwinTransformerBlock(nn.Module):
             [int(dim * mlp_ratio), dim],
             device,
             parameters.mlp,
-            activation_layer=ttnn.gelu,
+            activation_layer="gelu",
             inplace=None,
         )
 

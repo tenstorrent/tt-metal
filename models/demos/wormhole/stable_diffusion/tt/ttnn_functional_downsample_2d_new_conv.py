@@ -145,6 +145,7 @@ class downsample_2d:
             "groups": 1,
             "device": self.device,
             "conv_config": conv_config,
+            "slice_config": ttnn.Conv2dL1FullSliceConfig,
         }
 
         hidden_states, [self.conv_weights, self.conv_bias] = ttnn.conv2d(

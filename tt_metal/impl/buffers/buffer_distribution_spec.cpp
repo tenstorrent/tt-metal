@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "buffer_distribution_spec.hpp"
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 
 #include <tt-metalium/math.hpp>
 
@@ -60,7 +60,7 @@ void iterate_over_shards(PageMappingIntermData& params, size_t dim, size_t src_o
     params.actual_shard_size[dim] = shard_size;
 
     for (size_t i = 0; i < params.shard_grid[dim] - 1; i++) {
-        iterate_over_shards(params, dim + 1, src_offset + i * params.shard_shape[dim] * params.tensor_strides[dim]);
+        iterate_over_shards(params, dim + 1, src_offset + (i * params.shard_shape[dim] * params.tensor_strides[dim]));
     }
 
     // Last shard may be partial, so we need to handle it separately
@@ -69,7 +69,7 @@ void iterate_over_shards(PageMappingIntermData& params, size_t dim, size_t src_o
     iterate_over_shards(
         params,
         dim + 1,
-        src_offset + (params.shard_grid[dim] - 1) * params.shard_shape[dim] * params.tensor_strides[dim]);
+        src_offset + ((params.shard_grid[dim] - 1) * params.shard_shape[dim] * params.tensor_strides[dim]));
 }
 
 tt::tt_metal::Shape convert_shape_to_pages(tt::tt_metal::Shape shape, const tt::tt_metal::Shape2D& page_shape) {
@@ -239,7 +239,7 @@ size_t BufferDistributionSpec::max_num_shards_per_core() const {
 size_t BufferDistributionSpec::max_num_dev_pages_per_core() const { return max_num_shards_per_core() * shard_volume_; }
 
 size_t BufferDistributionSpec::num_shards_per_core(size_t core_idx) const {
-    return num_shards() / num_cores() + (core_idx < num_shards() % num_cores() ? 1 : 0);
+    return (num_shards() / num_cores()) + (core_idx < num_shards() % num_cores() ? 1 : 0);
 }
 
 size_t BufferDistributionSpec::num_dev_pages_per_core(size_t core_idx) const {
@@ -290,7 +290,7 @@ void BufferDistributionSpec::init_precomputed_data() {
                 .cores_with_data = std::move(cores_with_data),
                 .cores_in_group_1 = CoreRangeSet(cores_with_more_shards),
                 .cores_in_group_2 = CoreRangeSet(cores_with_less_shards),
-                .num_shards_per_core_in_group_1 = num_shards() / num_cores() + 1,
+                .num_shards_per_core_in_group_1 = (num_shards() / num_cores()) + 1,
                 .num_shards_per_core_in_group_2 = num_shards() / num_cores(),
             };
         }

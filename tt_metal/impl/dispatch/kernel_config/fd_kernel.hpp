@@ -11,11 +11,12 @@
 #include <string>
 #include <vector>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "core_coord.hpp"
 #include "impl/context/metal_context.hpp"
 #include <umd/device/types/xy_pair.hpp>
 #include <umd/device/types/core_coordinates.hpp>
+#include <tt_stl/tt_stl/reflection.hpp>
 
 namespace tt {
 namespace tt_metal {
@@ -202,10 +203,10 @@ template <>
 struct hash<tt::tt_metal::TerminationInfo> {
     std::size_t operator()(const tt::tt_metal::TerminationInfo& info) const {
         size_t hash = 0;
-        tt::utils::hash_combine(hash, info.logical_core);
-        tt::utils::hash_combine(hash, info.core_type);
-        tt::utils::hash_combine(hash, info.address);
-        tt::utils::hash_combine(hash, info.val);
+        ttsl::hash::hash_combine(hash, info.logical_core);
+        ttsl::hash::hash_combine(hash, info.core_type);
+        ttsl::hash::hash_combine(hash, info.address);
+        ttsl::hash::hash_combine(hash, info.val);
         return hash;
     }
 };

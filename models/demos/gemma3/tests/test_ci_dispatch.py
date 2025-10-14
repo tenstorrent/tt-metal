@@ -7,11 +7,8 @@ import os
 import pytest
 from loguru import logger
 
-from models.common.utility_functions import skip_for_grayskull
-
 
 # This test will run all the nightly fast dispatch tests for all supported TTT models in CI [N150 / N300 only]
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "model_weights",
     ["/mnt/MLPerf/tt_dnn-models/google/gemma-3-4b-it", "/mnt/MLPerf/tt_dnn-models/google/gemma-3-27b-it"],
@@ -27,6 +24,7 @@ def test_ci_dispatch(model_weights, is_ci_env):
     # Pass the exit code of pytest to proper keep track of failures during runtime
     exit_code = pytest.main(
         [
+            "models/demos/gemma3/tests/test_benchmark_vision_cross_attention_transformer.py",
             "models/demos/siglip/tests/test_attention.py",
             "models/demos/gemma3/tests/test_mmp.py",
             "models/demos/gemma3/tests/test_patch_embedding.py",

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -106,16 +106,13 @@ void check_connections(
     const std::vector<ConnectionId>& connections,
     const std::unordered_set<LocalNodeId>& expected_nodes,
     uint32_t expected_channel_count,
-    bool expected_directional,
     GlobalNodeId expected_parent_instance_id,
-    const std::unordered_set<std::string>& expected_node_names
-) {
+    const std::unordered_set<std::string>& expected_node_names) {
     for (size_t idx = 0; idx < connections.size(); ++idx) {
         const auto connection_id = connections[idx];
         const auto& connection = desc.get_connection(connection_id);
 
         EXPECT_EQ(connection.count, expected_channel_count);
-        EXPECT_EQ(connection.directional, expected_directional);
         EXPECT_EQ(connection.parent_instance_id, expected_parent_instance_id);
 
         const auto& global_nodes = connection.nodes;
@@ -555,41 +552,17 @@ TEST(MeshGraphDescriptorTests, TestIntraMeshConnections) {
     auto device_0 = desc.instances_by_name("D0")[0];
     auto connections = desc.connections_by_source_device_id(device_0);
     ASSERT_EQ(connections.size(), 4);
-    check_connections(
-        desc,
-        connections,
-        {1, 3, 5},
-        1u,
-        false,
-        mesh_ids[0],
-        {"D1","D3", "D5"}
-    );
+    check_connections(desc, connections, {1, 3, 5}, 1u, mesh_ids[0], {"D1", "D3", "D5"});
 
     auto device_1 = desc.instances_by_name("D1")[0];
     connections = desc.connections_by_source_device_id(device_1);
     ASSERT_EQ(connections.size(), 5);
-    check_connections(
-        desc,
-        connections,
-        {2, 4, 0, 5},
-        1u,
-        false,
-        mesh_ids[0],
-        {"D0", "D2", "D4", "D5"}
-    );
+    check_connections(desc, connections, {2, 4, 0, 5}, 1u, mesh_ids[0], {"D0", "D2", "D4", "D5"});
 
     auto device_2 = desc.instances_by_name("D2")[0];
     connections = desc.connections_by_source_device_id(device_2);
     ASSERT_EQ(connections.size(), 3);
-    check_connections(
-        desc,
-        connections,
-        {1, 5},
-        1u,
-        false,
-        mesh_ids[0],
-        {"D1", "D5"}
-    );
+    check_connections(desc, connections, {1, 5}, 1u, mesh_ids[0], {"D1", "D5"});
 }
 
 
@@ -866,15 +839,7 @@ TEST(MeshGraphDescriptorTests, IntermeshConnectionsExplicitMultiLevel) {
         auto cluster_id = desc.instances_by_type("CLUSTER")[0];
         auto connections = desc.connections_by_instance_id(cluster_id);
         ASSERT_EQ(connections.size(), 2);
-        check_connections(
-            desc,
-            connections,
-            {0, 1},
-            2u,
-            false,
-            cluster_id,
-            {"D0", "D1"}
-        );
+        check_connections(desc, connections, {0, 1}, 2u, cluster_id, {"D0", "D1"});
     }
     {
         auto pod_ids = desc.instances_by_type("POD");
@@ -882,22 +847,12 @@ TEST(MeshGraphDescriptorTests, IntermeshConnectionsExplicitMultiLevel) {
         for (auto pod_id : pod_ids) {
             auto connections = desc.connections_by_instance_id(pod_id);
             ASSERT_EQ(connections.size(), 2);
-            check_connections(
-                desc,
-                connections,
-                {0, 1},
-                1u,
-                false,
-                pod_id,
-                {"M0"}
-            );
+            check_connections(desc, connections, {0, 1}, 1u, pod_id, {"M0"});
         }
     }
 }
 
 TEST(MeshGraphDescriptorTests, IntermeshConnectionsGraphTopologyAllToAll) {
-    log_info(tt::LogTest, "NOTE: This test is skipped because topology connections are not yet implemented");
-    GTEST_SKIP();
     // Topology shorthand case: two POD graphs, each containing two meshes.
     // The CLUSTER graph uses graph_topology: ALL_TO_ALL with channels.
     std::string text_proto = R"proto(
@@ -914,7 +869,10 @@ TEST(MeshGraphDescriptorTests, IntermeshConnectionsGraphTopologyAllToAll) {
           type: "POD"
           instances: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
           instances: { mesh: { mesh_descriptor: "M0" mesh_id: 1 } }
-          graph_topology: { layout_type: ALL_TO_ALL channels: { count: 1 } }
+          graph_topology: {
+            layout_type: ALL_TO_ALL
+            channels: { count: 1 }
+          }
         }
 
         graph_descriptors: {
@@ -922,7 +880,10 @@ TEST(MeshGraphDescriptorTests, IntermeshConnectionsGraphTopologyAllToAll) {
           type: "CLUSTER"
           instances: { graph: { graph_descriptor: "G_POD" graph_id: 0 } }
           instances: { graph: { graph_descriptor: "G_POD" graph_id: 1 } }
-          graph_topology: { layout_type: ALL_TO_ALL channels: { count: 2 } }
+          graph_topology: {
+            layout_type: ALL_TO_ALL
+            channels: { count: 2 }
+          }
         }
 
         top_level_instance: { graph: { graph_descriptor: "G_CLUSTER" graph_id: 0 } }
@@ -937,15 +898,7 @@ TEST(MeshGraphDescriptorTests, IntermeshConnectionsGraphTopologyAllToAll) {
         auto cluster_id = desc.instances_by_type("CLUSTER")[0];
         auto connections = desc.connections_by_instance_id(cluster_id);
         ASSERT_EQ(connections.size(), 2);
-        check_connections(
-            desc,
-            connections,
-            {0, 1},
-            2u,
-            false,
-            cluster_id,
-            {"D0", "D1"}
-        );
+        check_connections(desc, connections, {0, 1}, 2u, cluster_id, {"G_POD"});
     }
     {
         auto pod_ids = desc.instances_by_type("POD");
@@ -953,15 +906,7 @@ TEST(MeshGraphDescriptorTests, IntermeshConnectionsGraphTopologyAllToAll) {
         for (auto pod_id : pod_ids) {
             auto connections = desc.connections_by_instance_id(pod_id);
             ASSERT_EQ(connections.size(), 2);
-            check_connections(
-                desc,
-                connections,
-                {0, 1},
-                1u,
-                false,
-                pod_id,
-                {"M0"}
-            );
+            check_connections(desc, connections, {0, 1}, 1u, pod_id, {"M0"});
         }
     }
 }
@@ -1004,6 +949,196 @@ TEST(MeshGraphDescriptorTests, DuplicateGraphDescriptorTypeInHierarchyError) {
             )));
 }
 
-// TODO: Test directional connections
+TEST(MeshGraphDescriptorTests, AllToAllGraphTopology) {
+    std::string text_proto = R"proto(
+        mesh_descriptors: {
+          name: "M0"
+          arch: WORMHOLE_B0
+          device_topology: { dims: [ 2, 2 ] }
+          channels: { count: 1 }
+          host_topology: { dims: [ 1, 1 ] }
+        }
+
+        graph_descriptors: {
+          name: "G0"
+          type: "POD"
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 1 } }
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 2 } }
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 3 } }
+          graph_topology: {
+            layout_type: ALL_TO_ALL
+            channels: { count: 1 }
+          }
+          connections: {
+            # One extra explicit connection
+            nodes: { mesh: { mesh_descriptor: "M0" mesh_id: 0 device_id: 0 } }
+            nodes: { mesh: { mesh_descriptor: "M0" mesh_id: 1 device_id: 1 } }
+            channels: { count: 1 }
+            directional: true
+          }
+        }
+
+        top_level_instance: { graph: { graph_descriptor: "G0" graph_id: 0 } }
+    )proto";
+
+    EXPECT_NO_THROW(MeshGraphDescriptor desc(text_proto));
+
+    MeshGraphDescriptor desc(text_proto);
+
+    auto pod_id = desc.instances_by_type("POD")[0];
+    {
+        auto connections = desc.connections_by_instance_id(pod_id);
+        ASSERT_EQ(connections.size(), 13);
+        check_connections(desc, connections, {0, 1, 2, 3}, 1u, pod_id, {"M0", "D1", "D0"});
+    }
+    // Check connections from M0(0)
+    {
+        auto pod_instance = desc.get_instance(pod_id);
+        auto connections = desc.connections_by_source_device_id(pod_instance.sub_instances_local_id_to_global_id.at(0));
+        ASSERT_EQ(connections.size(), 3);
+        check_connections(desc, connections, {1, 2, 3}, 1u, pod_id, {"M0", "D1"});
+    }
+}
+
+TEST(MeshGraphDescriptorTests, RingGraphTopology) {
+    std::string text_proto = R"proto(
+        mesh_descriptors: {
+          name: "M0"
+          arch: WORMHOLE_B0
+          device_topology: { dims: [ 2, 2 ] }
+          channels: { count: 1 }
+          host_topology: { dims: [ 1, 1 ] }
+        }
+        mesh_descriptors: {
+          name: "M1"
+          arch: WORMHOLE_B0
+          device_topology: { dims: [ 2, 2 ] }
+          channels: { count: 2 }
+          host_topology: { dims: [ 1, 1 ] }
+        }
+
+        graph_descriptors: {
+          name: "G0"
+          type: "POD"
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 1 } }
+          instances: { mesh: { mesh_descriptor: "M1" mesh_id: 2 } }
+          instances: { mesh: { mesh_descriptor: "M1" mesh_id: 3 } }
+          graph_topology: {
+            layout_type: RING
+            channels: { count: 1 }
+          }
+        }
+
+        top_level_instance: { graph: { graph_descriptor: "G0" graph_id: 0 } }
+    )proto";
+
+    EXPECT_NO_THROW(MeshGraphDescriptor desc(text_proto));
+
+    MeshGraphDescriptor desc(text_proto);
+
+    auto pod_id = desc.instances_by_type("POD")[0];
+    {
+        auto connections = desc.connections_by_instance_id(pod_id);
+        ASSERT_EQ(connections.size(), 8);
+        check_connections(desc, connections, {0, 1, 2, 3}, 1u, pod_id, {"M0", "M1"});
+    }
+    // Check connections from M0(0)
+    {
+        auto pod_instance = desc.get_instance(pod_id);
+        auto connections = desc.connections_by_source_device_id(pod_instance.sub_instances_local_id_to_global_id.at(0));
+        ASSERT_EQ(connections.size(), 2);
+        check_connections(desc, connections, {1, 3}, 1u, pod_id, {"M0", "M1"});
+    }
+}
+
+TEST(MeshGraphDescriptorTests, BidirectionalConnections) {
+    // Test that when directional=false, connections exist in both directions
+    std::string text_proto = R"proto(
+        mesh_descriptors: {
+          name: "M0"
+          arch: WORMHOLE_B0
+          device_topology: { dims: [ 1, 2 ] }
+          channels: { count: 1 }
+          host_topology: { dims: [ 1, 1 ] }
+        }
+
+        graph_descriptors: {
+          name: "G0"
+          type: "POD"
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 1 } }
+          connections: {
+            nodes: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+            nodes: { mesh: { mesh_descriptor: "M0" mesh_id: 1 } }
+            channels: { count: 2 }
+            directional: false
+          }
+        }
+
+        top_level_instance: { graph: { graph_descriptor: "G0" graph_id: 0 } }
+    )proto";
+
+    EXPECT_NO_THROW(MeshGraphDescriptor desc(text_proto));
+
+    MeshGraphDescriptor desc(text_proto);
+
+    auto pod_id = desc.instances_by_type("POD")[0];
+    const auto& pod_instance = desc.get_instance(pod_id);
+    auto mesh_0_device_0 = pod_instance.sub_instances_local_id_to_global_id.at(0);
+    auto mesh_1_device_0 = pod_instance.sub_instances_local_id_to_global_id.at(1);
+
+    // Check that both devices have outgoing connections (bidirectional)
+    const auto& connections_from_mesh_0 = desc.connections_by_source_device_id(mesh_0_device_0);
+    const auto& connections_from_mesh_1 = desc.connections_by_source_device_id(mesh_1_device_0);
+
+    ASSERT_EQ(connections_from_mesh_0.size(), 1);
+    ASSERT_EQ(connections_from_mesh_1.size(), 1);
+}
+
+TEST(MeshGraphDescriptorTests, DirectionalConnections) {
+    // Test that when directional=true, only one direction exists
+    std::string text_proto = R"proto(
+        mesh_descriptors: {
+          name: "M0"
+          arch: WORMHOLE_B0
+          device_topology: { dims: [ 1, 2 ] }
+          channels: { count: 1 }
+          host_topology: { dims: [ 1, 1 ] }
+        }
+
+        graph_descriptors: {
+          name: "G0"
+          type: "POD"
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 1 } }
+          connections: {
+            nodes: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+            nodes: { mesh: { mesh_descriptor: "M0" mesh_id: 1 } }
+            channels: { count: 3 }
+            directional: true
+          }
+        }
+
+        top_level_instance: { graph: { graph_descriptor: "G0" graph_id: 0 } }
+    )proto";
+
+    EXPECT_NO_THROW(MeshGraphDescriptor desc(text_proto));
+
+    MeshGraphDescriptor desc(text_proto);
+
+    auto pod_id = desc.instances_by_type("POD")[0];
+    const auto& pod_instance = desc.get_instance(pod_id);
+    auto mesh_0_device_0 = pod_instance.sub_instances_local_id_to_global_id.at(0);
+    auto mesh_1_device_0 = pod_instance.sub_instances_local_id_to_global_id.at(1);
+
+    // Check that only one device has outgoing connections (directional)
+    const auto& connections_from_mesh_0 = desc.connections_by_source_device_id(mesh_0_device_0);
+    const auto& connections_from_mesh_1 = desc.connections_by_source_device_id(mesh_1_device_0);
+
+    ASSERT_EQ(connections_from_mesh_0.size(), 1);
+    ASSERT_EQ(connections_from_mesh_1.size(), 0);
+}
 
 }  // namespace tt::tt_fabric::fabric_router_tests

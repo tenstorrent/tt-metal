@@ -16,7 +16,7 @@
 #include <unordered_set>
 #include <vector>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/control_plane.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
@@ -103,7 +103,7 @@ private:
     void init_fabric(const std::vector<tt_metal::IDevice*>& active_devices) const;
     void initialize_active_devices() const;
     void add_devices_to_pool(const std::vector<chip_id_t>& device_ids);
-    void wait_for_fabric_router_sync() const;
+    void wait_for_fabric_router_sync(uint32_t timeout_ms = 5000) const;
     tt_metal::IDevice* get_device(chip_id_t id) const;
     void teardown_fd(const std::unordered_set<chip_id_t>& devices_to_close);
 

@@ -21,7 +21,8 @@ struct ExecuteAllToAllDispatch {
         std::optional<uint32_t> num_links = std::nullopt,
         std::optional<tt::tt_fabric::Topology> topology = std::nullopt,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id = std::nullopt);
+        const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id = std::nullopt,
+        const std::optional<uint32_t>& output_concat_dim = std::nullopt);
 };
 
 }  // namespace operations::ccl

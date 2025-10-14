@@ -13,7 +13,6 @@
 #include "eth_fw_api.h"
 #include "hal_types.hpp"
 #include "llrt/hal.hpp"
-#include "noc/noc_overlay_parameters.h"
 #include "noc/noc_parameters.h"
 #include "tensix.h"
 #include "hal_2xx_common.hpp"
@@ -65,16 +64,16 @@ public:
     std::vector<std::string> link_objs(const Params& params) const override {
         std::vector<std::string> objs;
         if (params.is_fw) {
-            objs.push_back("runtime/hw/lib/blackhole/tmu-crt0.o");
+            objs.push_back("runtime/hw/lib/quasar/tmu-crt0.o");
         }
         if ((params.core_type == HalProgrammableCoreType::TENSIX and
              params.processor_class == HalProcessorClassType::DM and params.processor_id == 0) or
             (params.core_type == HalProgrammableCoreType::IDLE_ETH and
              params.processor_class == HalProcessorClassType::DM and params.processor_id == 0)) {
             // Brisc and Idle Erisc.
-            objs.push_back("runtime/hw/lib/blackhole/noc.o");
+            objs.push_back("runtime/hw/lib/quasar/noc.o");
         }
-        objs.push_back("runtime/hw/lib/blackhole/substitutes.o");
+        objs.push_back("runtime/hw/lib/quasar/substitutes.o");
         return objs;
     }
 
@@ -84,9 +83,10 @@ public:
         // Common includes for all core types
         includes.push_back("tt_metal/hw/ckernels/blackhole/metal/common");
         includes.push_back("tt_metal/hw/ckernels/blackhole/metal/llk_io");
-        includes.push_back("tt_metal/hw/inc/blackhole");
-        includes.push_back("tt_metal/hw/inc/blackhole/blackhole_defines");
-        includes.push_back("tt_metal/hw/inc/blackhole/noc");
+        includes.push_back("tt_metal/hw/inc/tt-2xx");
+        includes.push_back("tt_metal/hw/inc/tt-2xx/quasar");
+        includes.push_back("tt_metal/hw/inc/tt-2xx/quasar/quasar_defines");
+        includes.push_back("tt_metal/hw/inc/tt-2xx/quasar/noc");
         includes.push_back("tt_metal/third_party/tt_llk/tt_llk_blackhole/common/inc");
         includes.push_back("tt_metal/third_party/tt_llk/tt_llk_blackhole/llk_lib");
 
@@ -109,7 +109,7 @@ public:
                 TT_THROW(
                     "Unsupported programmable core type {} to query includes", enchantum::to_string(params.core_type));
         }
-        includes.push_back("tt_metal/hw/firmware/src/tt-1xx");
+        includes.push_back("tt_metal/hw/firmware/src/tt-2xx");
         return includes;
     }
 
@@ -132,7 +132,9 @@ public:
     }
 
     std::string common_flags(const Params& params) const override {
-        std::string cflags = "-mcpu=tt-qa -fno-rvtt-sfpu-replay ";
+        std::string cflags =
+            "-mcpu=tt-bh -fno-rvtt-sfpu-replay ";  // TODO: change to -mcpu=tt-qa once
+                                                   // https://github.com/tenstorrent/tt-metal/issues/29186 is ready
         if (!(params.core_type == HalProgrammableCoreType::TENSIX &&
               params.processor_class == HalProcessorClassType::COMPUTE)) {
             cflags += "-fno-tree-loop-distribute-patterns ";  // don't use memcpy for cpy loops
@@ -146,28 +148,29 @@ public:
                 switch (params.processor_class) {
                     case HalProcessorClassType::DM: {
                         return fmt::format(
-                            "runtime/hw/toolchain/blackhole/{}_{}risc.ld",
+                            "runtime/hw/toolchain/quasar/{}_dm{}.ld",
                             params.is_fw ? "firmware" : "kernel",
-                            params.processor_id == 0 ? "b" : "nc");
+                            params.processor_id);
                     }
                     case HalProcessorClassType::COMPUTE:
                         return fmt::format(
-                            "runtime/hw/toolchain/blackhole/{}_trisc{}.ld",
+                            "runtime/hw/toolchain/quasar/{}_trisc{}.ld",
                             params.is_fw ? "firmware" : "kernel",
                             params.processor_id);
                 }
                 break;
             case HalProgrammableCoreType::ACTIVE_ETH:
-                return params.is_fw ? "runtime/hw/toolchain/blackhole/firmware_aerisc.ld"
-                                    : "runtime/hw/toolchain/blackhole/kernel_aerisc.ld";
+                return params.is_fw ? "runtime/hw/toolchain/quasar/firmware_aerisc.ld"
+                                    : "runtime/hw/toolchain/quasar/kernel_aerisc.ld";
             case HalProgrammableCoreType::IDLE_ETH:
                 switch (params.processor_id) {
                     case 0:
-                        return params.is_fw ? "runtime/hw/toolchain/blackhole/firmware_ierisc.ld"
-                                            : "runtime/hw/toolchain/blackhole/kernel_ierisc.ld";
+                        return params.is_fw ? "runtime/hw/toolchain/quasar/firmware_ierisc.ld"
+                                            : "runtime/hw/toolchain/quasar/kernel_ierisc.ld";
                     case 1:
-                        return params.is_fw ? "runtime/hw/toolchain/blackhole/firmware_subordinate_ierisc.ld"
-                                            : "runtime/hw/toolchain/blackhole/kernel_subordinate_ierisc.ld";
+                        return params.is_fw ? "runtime/hw/toolchain/quasar/firmware_subordinate_ierisc.ld"
+                                            : "runtime/hw/toolchain/quasar/kernel_subordinate_ierisc.ld";
+                    default: TT_THROW("Invalid processor id {}", params.processor_id);
                 }
             default:
                 TT_THROW(
@@ -259,18 +262,12 @@ void Hal::initialize_qa() {
     this->erisc_iram_relocate_func_ = [](uint64_t addr) { return addr; };
 
     this->valid_reg_addr_func_ = [](uint32_t addr) {
-        return (
-            ((addr >= NOC_OVERLAY_START_ADDR) &&
-             (addr < NOC_OVERLAY_START_ADDR + NOC_STREAM_REG_SPACE_SIZE * NOC_NUM_STREAMS)) ||
-            ((addr >= NOC0_REGS_START_ADDR) && (addr < NOC0_REGS_START_ADDR + 0x1000)) ||
-            ((addr >= NOC1_REGS_START_ADDR) && (addr < NOC1_REGS_START_ADDR + 0x1000)) ||
-            (addr == RISCV_DEBUG_REG_SOFT_RESET_0) ||
-            (addr == IERISC_RESET_PC || addr == SUBORDINATE_IERISC_RESET_PC));  // used to program start addr for eth FW
+        return true;  // used to program start addr for eth FW TODO: add correct value
     };
 
-    this->noc_xy_encoding_func_ = [](uint32_t x, uint32_t y) { return NOC_XY_ENCODING(x, y); };
+    this->noc_xy_encoding_func_ = [](uint32_t x, uint32_t y) { return NOC_XY_ADDR(x, y, 0); };
     this->noc_multicast_encoding_func_ = [](uint32_t x_start, uint32_t y_start, uint32_t x_end, uint32_t y_end) {
-        return NOC_MULTICAST_ENCODING(x_start, y_start, x_end, y_end);
+        return NOC_MULTICAST_ADDR(x_start, y_start, x_end, y_end, 0);
     };
     this->noc_mcast_addr_start_x_func_ = [](uint64_t addr) -> uint64_t { return NOC_MCAST_ADDR_START_X(addr); };
     this->noc_mcast_addr_start_y_func_ = [](uint64_t addr) -> uint64_t { return NOC_MCAST_ADDR_START_Y(addr); };
@@ -304,15 +301,14 @@ void Hal::initialize_qa() {
     this->noc_node_id_ = NOC_NODE_ID;
     this->noc_node_id_mask_ = NOC_NODE_ID_MASK;
     this->noc_addr_node_id_bits_ = NOC_ADDR_NODE_ID_BITS;
-    this->noc_encoding_reg_ = COORDINATE_VIRTUALIZATION_ENABLED ? NOC_CFG(NOC_ID_LOGICAL) : NOC_NODE_ID;
-    this->noc_coord_reg_offset_ = NOC_COORD_REG_OFFSET;
-    this->noc_overlay_start_addr_ = NOC_OVERLAY_START_ADDR;
-    this->noc_stream_reg_space_size_ = NOC_STREAM_REG_SPACE_SIZE;
-    this->noc_stream_remote_dest_buf_size_reg_index_ = STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX;
-    this->noc_stream_remote_dest_buf_start_reg_index_ = STREAM_REMOTE_DEST_BUF_START_REG_INDEX;
-    this->noc_stream_remote_dest_buf_space_available_reg_index_ = STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX;
-    this->noc_stream_remote_dest_buf_space_available_update_reg_index_ =
-        STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX;
+    this->noc_encoding_reg_ = NOC_NODE_ID;                                   // TODO: add correct value
+    this->noc_coord_reg_offset_ = 0;                                         // TODO: add correct value
+    this->noc_overlay_start_addr_ = 0;                                       // TODO: add correct value
+    this->noc_stream_reg_space_size_ = 0;                                    // TODO: add correct value
+    this->noc_stream_remote_dest_buf_size_reg_index_ = 0;                    // TODO: add correct value
+    this->noc_stream_remote_dest_buf_start_reg_index_ = 0;                   // TODO: add correct value
+    this->noc_stream_remote_dest_buf_space_available_reg_index_ = 0;         // TODO: add correct value
+    this->noc_stream_remote_dest_buf_space_available_update_reg_index_ = 0;  // TODO: add correct value
     this->coordinate_virtualization_enabled_ = COORDINATE_VIRTUALIZATION_ENABLED;
     this->virtual_worker_start_x_ = VIRTUAL_TENSIX_START_X;
     this->virtual_worker_start_y_ = VIRTUAL_TENSIX_START_Y;
@@ -329,21 +325,9 @@ void Hal::initialize_qa() {
     this->nan_ = NAN_QA;
     this->inf_ = INF_QA;
 
-    this->noc_x_id_translate_table_ = {
-        NOC_CFG(NOC_X_ID_TRANSLATE_TABLE_0),
-        NOC_CFG(NOC_X_ID_TRANSLATE_TABLE_1),
-        NOC_CFG(NOC_X_ID_TRANSLATE_TABLE_2),
-        NOC_CFG(NOC_X_ID_TRANSLATE_TABLE_3),
-        NOC_CFG(NOC_X_ID_TRANSLATE_TABLE_4),
-        NOC_CFG(NOC_X_ID_TRANSLATE_TABLE_5)};
+    this->noc_x_id_translate_table_ = {};
 
-    this->noc_y_id_translate_table_ = {
-        NOC_CFG(NOC_Y_ID_TRANSLATE_TABLE_0),
-        NOC_CFG(NOC_Y_ID_TRANSLATE_TABLE_1),
-        NOC_CFG(NOC_Y_ID_TRANSLATE_TABLE_2),
-        NOC_CFG(NOC_Y_ID_TRANSLATE_TABLE_3),
-        NOC_CFG(NOC_Y_ID_TRANSLATE_TABLE_4),
-        NOC_CFG(NOC_Y_ID_TRANSLATE_TABLE_5)};
+    this->noc_y_id_translate_table_ = {};
 
     this->jit_build_query_ = std::make_unique<HalJitBuildQueryQuasar>();
 }

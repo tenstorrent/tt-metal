@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -64,8 +64,12 @@ static_assert(
     "Stream IDs end marker not found. This implies some arguments were misaligned between host and device. Double "
     "check the CT args.");
 
-// Main configuration arguments (after stream IDs and marker)
-constexpr size_t SENDER_CHANNEL_NOC_CONFIG_START_IDX = STREAM_IDS_END_MARKER_IDX + 1;
+// Downstream tensix connections argument (after stream IDs and marker)
+constexpr size_t NUM_DOWNSTREAM_TENSIX_CONNECTIONS_IDX = STREAM_IDS_END_MARKER_IDX + 1;
+constexpr uint32_t num_downstream_tensix_connections = get_compile_time_arg_val(NUM_DOWNSTREAM_TENSIX_CONNECTIONS_IDX);
+
+// Main configuration arguments (after stream IDs, marker, and downstream tensix connections)
+constexpr size_t SENDER_CHANNEL_NOC_CONFIG_START_IDX = NUM_DOWNSTREAM_TENSIX_CONNECTIONS_IDX + 1;
 constexpr size_t NUM_SENDER_CHANNELS = get_compile_time_arg_val(SENDER_CHANNEL_NOC_CONFIG_START_IDX);
 constexpr size_t NUM_RECEIVER_CHANNELS_CT_ARG_IDX = SENDER_CHANNEL_NOC_CONFIG_START_IDX + 1;
 constexpr size_t NUM_RECEIVER_CHANNELS = get_compile_time_arg_val(NUM_RECEIVER_CHANNELS_CT_ARG_IDX);
@@ -85,12 +89,14 @@ static_assert(
     NUM_SENDER_CHANNELS <= MAX_NUM_SENDER_CHANNELS,
     "NUM_SENDER_CHANNELS must be less than or equal to MAX_NUM_SENDER_CHANNELS");
 static_assert(
-    wait_for_host_signal_IDX == 27, "wait_for_host_signal_IDX must be 27 (23 stream IDs + 1 marker + 3 config args)");
+    wait_for_host_signal_IDX == 28,
+    "wait_for_host_signal_IDX must be 28 (23 stream IDs + 1 marker + 1 tensix connections + 3 config args)");
 static_assert(
     get_compile_time_arg_val(wait_for_host_signal_IDX) == 0 || get_compile_time_arg_val(wait_for_host_signal_IDX) == 1,
     "wait_for_host_signal must be 0 or 1");
 static_assert(
-    MAIN_CT_ARGS_START_IDX == 28, "MAIN_CT_ARGS_START_IDX must be 28 (23 stream IDs + 1 marker + 4 config args)");
+    MAIN_CT_ARGS_START_IDX == 29,
+    "MAIN_CT_ARGS_START_IDX must be 29 (23 stream IDs + 1 marker + 1 tensix connections + 4 config args)");
 
 constexpr uint32_t SWITCH_INTERVAL =
 #ifndef DEBUG_PRINT_ENABLED
@@ -98,15 +104,13 @@ constexpr uint32_t SWITCH_INTERVAL =
 #else
     0;
 #endif
-constexpr bool enable_first_level_ack = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 1);
-constexpr bool fuse_receiver_flush_and_completion_ptr = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 2);
-constexpr bool enable_deadlock_avoidance = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 3);
-constexpr bool dateline_connection = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 4);
-constexpr bool is_intermesh_router = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 5);
-constexpr bool is_handshake_sender = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 6) != 0;
-constexpr size_t handshake_addr = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 7);
+constexpr bool fuse_receiver_flush_and_completion_ptr = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 1);
+constexpr bool enable_deadlock_avoidance = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 2);
+constexpr bool dateline_connection = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 3);
+constexpr bool is_intermesh_router = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 4);
+constexpr bool is_handshake_sender = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 5) != 0;
+constexpr size_t handshake_addr = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 6);
 
-static_assert(enable_first_level_ack == 0, "enable_first_level_ack must be 0");
 static_assert(fuse_receiver_flush_and_completion_ptr == 1, "fuse_receiver_flush_and_completion_ptr must be 0");
 static_assert(
     !enable_deadlock_avoidance || NUM_RECEIVER_CHANNELS > 1,
@@ -128,11 +132,29 @@ constexpr size_t worker_info_offset_past_connection_semaphore = 32;
 
 // the size of one of the buffers within a sender channel
 // For example if `channel_buffer_size` = 4k, with `SENDER_NUM_BUFFERS` = 2
-// then the total amount of buffering for that
-constexpr size_t channel_buffer_size = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 8);
-constexpr bool vc1_has_different_downstream_dest = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 9);
+// then the total amount of buffering for that channel is 8k.
+// This `channel_buffer_size` includes packet headers in the size.
+// This should be renamed to channel_slot_size_bytes to avoid confusion/ambiguity:
+//   "is it the payload size or does it include the packet header size?"
+constexpr size_t channel_buffer_size = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 7);
+constexpr bool vc1_has_different_downstream_dest = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 8);
+constexpr bool has_tensix_extension = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 9);
+constexpr bool skip_src_ch_id_update = has_tensix_extension;
 
-constexpr size_t SENDER_NUM_BUFFERS_IDX = MAIN_CT_ARGS_START_IDX + 10;
+constexpr size_t REMOTE_CHANNEL_INFO_START_IDX = MAIN_CT_ARGS_START_IDX + 10;
+constexpr uint32_t remote_vc1_sender_channel =
+    conditional_get_compile_time_arg<skip_src_ch_id_update, REMOTE_CHANNEL_INFO_START_IDX>();
+constexpr size_t remote_worker_sender_channel =
+    conditional_get_compile_time_arg<skip_src_ch_id_update, REMOTE_CHANNEL_INFO_START_IDX + 1>();
+
+constexpr size_t ANOTHER_SPECIAL_TAG = 0xabcd1234;
+constexpr size_t ANOTHER_SPECIAL_TAG_IDX = REMOTE_CHANNEL_INFO_START_IDX + (skip_src_ch_id_update ? 2 : 0);
+static_assert(
+    get_compile_time_arg_val(ANOTHER_SPECIAL_TAG_IDX) == ANOTHER_SPECIAL_TAG,
+    "ANOTHER_SPECIAL_TAG not found. This implies some arguments were misaligned between host and device. Double check "
+    "the CT args.");
+
+constexpr size_t SENDER_NUM_BUFFERS_IDX = ANOTHER_SPECIAL_TAG_IDX + 1;
 constexpr std::array<size_t, NUM_SENDER_CHANNELS> SENDER_NUM_BUFFERS_ARRAY =
     fill_array_with_next_n_args<size_t, SENDER_NUM_BUFFERS_IDX, NUM_SENDER_CHANNELS>();
 
@@ -145,49 +167,75 @@ constexpr size_t REMOTE_RECEIVER_NUM_BUFFERS_IDX = RECEIVER_NUM_BUFFERS_IDX + NU
 constexpr std::array<size_t, NUM_RECEIVER_CHANNELS> REMOTE_RECEIVER_NUM_BUFFERS_ARRAY =
     fill_array_with_next_n_args<size_t, REMOTE_RECEIVER_NUM_BUFFERS_IDX, NUM_RECEIVER_CHANNELS>();
 
+constexpr size_t STATIC_CHANNEL_ADDRS_ARG_IDX_BASE = REMOTE_RECEIVER_NUM_BUFFERS_IDX + NUM_RECEIVER_CHANNELS;
+constexpr size_t local_sender_0_channel_address = get_compile_time_arg_val(STATIC_CHANNEL_ADDRS_ARG_IDX_BASE);
+constexpr size_t local_sender_1_channel_address = get_compile_time_arg_val(STATIC_CHANNEL_ADDRS_ARG_IDX_BASE + 1);
+constexpr size_t local_sender_2_channel_address = get_compile_time_arg_val(STATIC_CHANNEL_ADDRS_ARG_IDX_BASE + 2);
+constexpr size_t local_sender_3_channel_address = get_compile_time_arg_val(STATIC_CHANNEL_ADDRS_ARG_IDX_BASE + 3);
+constexpr size_t local_sender_4_channel_address = get_compile_time_arg_val(STATIC_CHANNEL_ADDRS_ARG_IDX_BASE + 4);
+constexpr size_t local_receiver_0_channel_buffer_address =
+    get_compile_time_arg_val(STATIC_CHANNEL_ADDRS_ARG_IDX_BASE + 5);
+constexpr size_t remote_receiver_0_channel_buffer_address =
+    get_compile_time_arg_val(STATIC_CHANNEL_ADDRS_ARG_IDX_BASE + 6);
+constexpr size_t local_receiver_1_channel_buffer_address =
+    get_compile_time_arg_val(STATIC_CHANNEL_ADDRS_ARG_IDX_BASE + 7);
+constexpr size_t remote_receiver_1_channel_buffer_address =
+    get_compile_time_arg_val(STATIC_CHANNEL_ADDRS_ARG_IDX_BASE + 8);
+constexpr size_t remote_sender_0_channel_address = get_compile_time_arg_val(STATIC_CHANNEL_ADDRS_ARG_IDX_BASE + 9);
+constexpr size_t remote_sender_1_channel_address = get_compile_time_arg_val(STATIC_CHANNEL_ADDRS_ARG_IDX_BASE + 10);
+constexpr size_t remote_sender_2_channel_address = get_compile_time_arg_val(STATIC_CHANNEL_ADDRS_ARG_IDX_BASE + 11);
+constexpr size_t remote_sender_3_channel_address = get_compile_time_arg_val(STATIC_CHANNEL_ADDRS_ARG_IDX_BASE + 12);
+constexpr size_t remote_sender_4_channel_address = get_compile_time_arg_val(STATIC_CHANNEL_ADDRS_ARG_IDX_BASE + 13);
+
 constexpr size_t NUM_DOWNSTREAM_CHANNELS = NUM_FORWARDING_PATHS;
-constexpr size_t DOWNSTREAM_SENDER_NUM_BUFFERS_IDX = REMOTE_RECEIVER_NUM_BUFFERS_IDX + NUM_RECEIVER_CHANNELS;
+constexpr size_t DOWNSTREAM_SENDER_NUM_BUFFERS_IDX = STATIC_CHANNEL_ADDRS_ARG_IDX_BASE + 14;
 constexpr std::array<size_t, NUM_DOWNSTREAM_CHANNELS> DOWNSTREAM_SENDER_NUM_BUFFERS_ARRAY =
     fill_array_with_next_n_args<size_t, DOWNSTREAM_SENDER_NUM_BUFFERS_IDX, NUM_DOWNSTREAM_CHANNELS>();
 // TODO: remove DOWNSTREAM_SENDER_NUM_BUFFERS and use TMP on downstream sender channels.
 constexpr size_t DOWNSTREAM_SENDER_NUM_BUFFERS_VC0 = DOWNSTREAM_SENDER_NUM_BUFFERS_ARRAY[0];
 constexpr size_t DOWNSTREAM_SENDER_NUM_BUFFERS_VC1 = DOWNSTREAM_SENDER_NUM_BUFFERS_ARRAY[NUM_RECEIVER_CHANNELS - 1];
 
-constexpr size_t SKIP_CHANNEL_IDX = DOWNSTREAM_SENDER_NUM_BUFFERS_IDX + NUM_DOWNSTREAM_CHANNELS;
+constexpr size_t ANOTHER_SPECIAL_TAG_2 = 0xabaddad9;
+constexpr size_t ANOTHER_SPECIAL_TAG_2_IDX = DOWNSTREAM_SENDER_NUM_BUFFERS_IDX + NUM_DOWNSTREAM_CHANNELS;
+static_assert(
+    get_compile_time_arg_val(ANOTHER_SPECIAL_TAG_2_IDX) == ANOTHER_SPECIAL_TAG_2,
+    "ANOTHER_SPECIAL_TAG_2 not found. This implies some arguments were misaligned between host and device. Double "
+    "check the CT args.");
+
+constexpr size_t SKIP_CHANNEL_IDX = ANOTHER_SPECIAL_TAG_2_IDX + 1;
 constexpr bool skip_receiver_channel_1_connection = get_compile_time_arg_val(SKIP_CHANNEL_IDX);
 constexpr bool skip_sender_channel_1_connection = get_compile_time_arg_val(SKIP_CHANNEL_IDX + 1);
 constexpr bool skip_sender_vc1_channel_connection = get_compile_time_arg_val(SKIP_CHANNEL_IDX + 2);
 
 constexpr size_t MAIN_CT_ARGS_IDX_1 = SKIP_CHANNEL_IDX + 3;
-constexpr size_t local_sender_0_channel_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1);
-constexpr size_t local_sender_channel_0_connection_info_addr = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1 + 1);
-constexpr size_t local_sender_1_channel_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1 + 2);
-constexpr size_t local_sender_channel_1_connection_info_addr = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1 + 3);
-constexpr size_t local_sender_2_channel_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1 + 4);
-constexpr size_t local_sender_channel_2_connection_info_addr = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1 + 5);
-constexpr size_t local_sender_3_channel_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1 + 6);
-constexpr size_t local_sender_channel_3_connection_info_addr = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1 + 7);
-constexpr size_t local_sender_4_channel_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1 + 8);
-constexpr size_t local_sender_channel_4_connection_info_addr = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1 + 9);
-constexpr size_t local_receiver_0_channel_buffer_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1 + 10);
-constexpr size_t remote_receiver_0_channel_buffer_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1 + 11);
-constexpr size_t local_receiver_1_channel_buffer_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1 + 12);
-constexpr size_t remote_receiver_1_channel_buffer_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1 + 13);
-constexpr size_t remote_sender_0_channel_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1 + 14);
-constexpr size_t remote_sender_1_channel_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1 + 15);
-constexpr size_t remote_sender_2_channel_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1 + 16);
-constexpr size_t remote_sender_3_channel_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1 + 17);
-constexpr size_t remote_sender_4_channel_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1 + 18);
+constexpr size_t local_sender_channel_0_connection_info_addr = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1 + 0);
+constexpr size_t local_sender_channel_1_connection_info_addr = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1 + 1);
+constexpr size_t local_sender_channel_2_connection_info_addr = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1 + 2);
+constexpr size_t local_sender_channel_3_connection_info_addr = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1 + 3);
+constexpr size_t local_sender_channel_4_connection_info_addr = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1 + 4);
 
 // TODO: CONVERT TO SEMAPHORE
-constexpr size_t MAIN_CT_ARGS_IDX_2 = MAIN_CT_ARGS_IDX_1 + 19;
+constexpr size_t MAIN_CT_ARGS_IDX_2 = MAIN_CT_ARGS_IDX_1 + 5;
 constexpr uint32_t termination_signal_addr = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_2);
 constexpr uint32_t edm_local_sync_ptr_addr =
     wait_for_host_signal ? get_compile_time_arg_val(MAIN_CT_ARGS_IDX_2 + 1) : 0;
-constexpr uint32_t edm_status_ptr_addr = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_2 + 2);
+constexpr uint32_t edm_local_tensix_sync_ptr_addr = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_2 + 2);
+constexpr uint32_t edm_status_ptr_addr = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_2 + 3);
+
+// for blackhole we need to disable the noc flush in inline writes to L1 for better perf. For wormhole this flag is not
+// used.
+constexpr bool enable_read_counter_update_noc_flush = false;
+constexpr uint32_t notify_worker_of_read_counter_update_src_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_2 + 4);
+constexpr size_t NOTIFY_WORKER_SRC_ADDR_MARKER_IDX = MAIN_CT_ARGS_IDX_2 + 5;
+constexpr size_t NOTIFY_WORKER_SRC_ADDR_MARKER = 0x7A9B3C4D;
+static_assert(
+    !SPECIAL_MARKER_CHECK_ENABLED ||
+        get_compile_time_arg_val(NOTIFY_WORKER_SRC_ADDR_MARKER_IDX) == NOTIFY_WORKER_SRC_ADDR_MARKER,
+    "Notify worker marker not found. This implies some arguments were misaligned between host and device. Double "
+    "check the CT args.");
 
 // Per-channel counters
-constexpr size_t MAIN_CT_ARGS_IDX_3 = MAIN_CT_ARGS_IDX_2 + 3;
+constexpr size_t MAIN_CT_ARGS_IDX_3 = MAIN_CT_ARGS_IDX_2 + 6;
 constexpr bool enable_fabric_counters = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_3 + 0) != 0;
 constexpr size_t receiver_channel_0_counters_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_3 + 1);
 constexpr size_t receiver_channel_1_counters_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_3 + 2);
@@ -476,5 +524,13 @@ constexpr bool local_chip_noc_equals_downstream_noc =
     receiver_channel_forwarding_noc_ids[0] == receiver_channel_local_write_noc_ids[0];
 static constexpr uint8_t local_chip_data_cmd_buf = receiver_channel_local_write_cmd_buf_ids[0];
 static constexpr uint8_t forward_and_local_write_noc_vc = get_compile_time_arg_val(EDM_NOC_VC_IDX);
+
+// ----------------------------------------------------------------------------- //
+// --------------------------------- PLACEHOLDER ------------------------------- //
+// ---------------------- UNTIL ELASTIC CHANNELS IMPLEMENTED ------------------- //
+// --------------------------------- ISSUE #26311 ------------------------------ //
+constexpr size_t CHUNK_N_PKTS = 0;
+constexpr std::array<bool, NUM_SENDER_CHANNELS> IS_ELASTIC_SENDER_CHANNEL =
+    initialize_array<NUM_SENDER_CHANNELS, bool, false>();
 
 }  // namespace tt::tt_fabric

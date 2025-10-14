@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -249,12 +249,11 @@ FORCE_INLINE void update_packet_header_for_next_hop(
 }
 
 FORCE_INLINE void update_packet_header_for_next_hop(
-    volatile tt_l1_ptr tt::tt_fabric::LowLatencyMeshPacketHeader* packet_header,
-    tt::tt_fabric::LowLatencyMeshRoutingFields cached_routing_fields) {
+    volatile tt_l1_ptr tt::tt_fabric::HybridMeshPacketHeader* packet_header,
+    tt::tt_fabric::LowLatencyMeshRoutingFieldsV2 cached_routing_fields) {
     if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
         packet_header->routing_fields.value = cached_routing_fields.value + 1;
     }
-    // Intentionally empty - mesh routing updates the header on sender channel side
 }
 
 template <uint8_t NUM_SENDER_BUFFERS>
@@ -272,7 +271,7 @@ void update_packet_header_for_next_hop(
     downstream_edm_interface.template update_edm_buffer_slot_word(offset, value, tt::tt_fabric::edm_to_downstream_noc);
 #else
     if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
-        tt::tt_fabric::LowLatencyMeshPacketHeader* packet_base = nullptr;
+        tt::tt_fabric::HybridMeshPacketHeader* packet_base = nullptr;
         std::uintptr_t offset = reinterpret_cast<std::uintptr_t>(&(packet_base->routing_fields));
         downstream_edm_interface.template update_edm_buffer_slot_word(
             offset, value, tt::tt_fabric::edm_to_downstream_noc);
@@ -300,7 +299,7 @@ template <
     bool stateful_api,
     bool increment_pointers = true,
     uint8_t NUM_SENDER_BUFFERS>
-#ifndef FABRIC_2D
+#if !defined(FABRIC_2D) && !defined(ARCH_BLACKHOLE)
 FORCE_INLINE
 #endif
     void
