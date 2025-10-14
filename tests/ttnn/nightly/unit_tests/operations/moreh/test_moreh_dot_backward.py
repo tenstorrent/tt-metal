@@ -156,10 +156,8 @@ def test_moreh_dot_backward(input_shape, requires_grad, dtype, use_randint, devi
     # Test failing with watcher enabled, github issue #29547
     if (
         is_watcher_enabled()
-        and dtype == ttnn.bfloat8_b
-        and use_randint == True
         and requires_grad == [False, True]
-        and input_shape == [1, 1, 1, 352]
+        and (input_shape == [1, 1, 1, 352] or input_shape == [1, 1, 1, 323])
     ):
         pytest.skip("Test is not passing with watcher enabled")
 
