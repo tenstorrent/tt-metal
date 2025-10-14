@@ -462,6 +462,7 @@ inline void GlobalAllocator::allocate_resources(TestConfig& test_config) {
         if (sender.core.has_value()) {
             auto& device_resources = get_or_create_device_resources(sender.device);
             device_resources.reserve_sender_core(sender.core);
+            log_info(tt::LogTest, "Reserved core {} as sender on device {}", sender.core.value().str(), sender.device);
         }
     }
 
@@ -470,6 +471,7 @@ inline void GlobalAllocator::allocate_resources(TestConfig& test_config) {
         if (!sender.core.has_value()) {
             auto& device_resources = get_or_create_device_resources(sender.device);
             sender.core = device_resources.reserve_sender_core(std::nullopt);
+            log_info(tt::LogTest, "Assigned core {} as sender on device {}", sender.core.value().str(), sender.device);
         }
     }
 
