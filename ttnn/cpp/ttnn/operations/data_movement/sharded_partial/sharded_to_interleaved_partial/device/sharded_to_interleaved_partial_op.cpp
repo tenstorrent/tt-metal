@@ -13,6 +13,7 @@ namespace ttnn::operations::data_movement {
 
 void ShardedToInterleavedPartialDeviceOperation::validate(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
+    const auto& output_tensor = input_tensors.at(1);
     auto shard_spec = input_tensor.shard_spec().value();
 
     // Validate output tensor
@@ -23,7 +24,7 @@ void ShardedToInterleavedPartialDeviceOperation::validate(const std::vector<Tens
         num_slices);
     TT_FATAL(input_tensor.layout() == Layout::TILE, "Currently, only tile layout is supported for partial I->S");
     TT_FATAL(
-        (input_tensor.physical_volume() / input_tensor.padded_shape()[-1]) % num_slices == 0,
+        (output_tensor.physical_volume() / output_tensor.padded_shape()[-1]) % num_slices == 0,
         "Total height of a tensor must be divisible by num_slices!");
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to shard need to be on device!");
