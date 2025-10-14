@@ -13,6 +13,7 @@
 #include "autograd/auto_context.hpp"
 #include "core/random.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "test_utils/env_utils.hpp"
 #include "ttnn_fixed/distributed/tt_metal.hpp"
 
 namespace {
@@ -40,6 +41,8 @@ protected:
 };
 
 TEST_F(N300CommOpsTest, TestAllReduceNotFullyTiled) {
+    SKIP_FOR_WATCHER();
+
     auto* device = &ttml::autograd::ctx().get_device();
     auto mesh_shape = device->shape();
 
@@ -97,6 +100,8 @@ TEST_F(N300CommOpsTest, TestAllReduceNotFullyTiled) {
 }
 
 TEST_F(N300CommOpsTest, TestAllReduceNanoGPT) {
+    SKIP_FOR_WATCHER();
+
     auto* device = &ttml::autograd::ctx().get_device();
     auto mesh_shape = device->shape();
 
@@ -159,6 +164,8 @@ TEST_F(N300CommOpsTest, TestAllReduceNanoGPT) {
 }
 
 TEST_F(N300CommOpsTest, TestAllReduceFullyTiled) {
+    SKIP_FOR_WATCHER();
+
     auto* device = &ttml::autograd::ctx().get_device();
     auto mesh_shape = device->shape();
 
