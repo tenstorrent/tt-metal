@@ -41,6 +41,7 @@ set(TT_METAL_TESTS_SRCS
     test_sdpa_sub_exp.cpp
     test_sdpa_reduce_c.cpp
     test_sdpa_sub_exp_rows_transposed.cpp
+    test_sdpa_reduce_c_transposed.cpp
 )
 
 foreach(TEST_SRC ${TT_METAL_TESTS_SRCS})
