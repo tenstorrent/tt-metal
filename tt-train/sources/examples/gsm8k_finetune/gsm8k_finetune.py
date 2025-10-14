@@ -69,10 +69,10 @@ class GradientAccumulator:
 @dataclass
 class SchedulerConfig:
     lr_max: float = 3e-4
-    min_lr: float = 0.0
-    warmup_steps: int = 2000
+    min_lr: float = 1e-5
+    warmup_steps: int = 10
     hold_steps: int = 0
-    total_steps: int = 150_000  # full micro-steps or optimizer steps; we apply on optimizer steps
+    total_steps: int = 100
     # optional momentum warmup (beta1 ramp)
     beta1_start: Optional[float] = None  # e.g., 0.85
     beta1_end: Optional[float] = None  # e.g., 0.9
@@ -224,43 +224,133 @@ def get_batch_generator(dataloader, batch_size, max_sequence_length, padded_voca
 
 
 def generate_text_tt(
-    model, tokenizer, question, max_sequence_length, causal_mask, temperature, logits_mask_tensor, max_gen_tokens=100
+    model,
+    tokenizer,
+    question,
+    max_sequence_length,
+    causal_mask,
+    temperature,
+    logits_mask_tensor,
+    max_gen_tokens=100,
+    pad_token_id=None,
+    return_with_prompt=False,
 ):
-    """Generate text given a question."""
+    """
+    Greedy/temperature=0 generation that prints the *full* text once at the end.
+    Uses a sliding window if prompt exceeds max_sequence_length.
+    """
     model.eval()
     ttml.autograd.AutoContext.get_instance().set_gradient_mode(ttml.autograd.GradMode.DISABLED)
 
-    # Tokenize and prepare input
+    # --- Tokenize once ---
     prompt_tokens = tokenizer.encode(question)
+    if pad_token_id is None:
+        # Try tokenizer.pad_token_id, else fall back to 0
+        pad_token_id = getattr(tokenizer, "pad_token_id", None)
+        if pad_token_id is None:
+            pad_token_id = 0
 
-    # Generate tokens autoregressively
     generated_tokens = []
-    padded_prompt_tokens = np.zeros((1, 1, 1, max_sequence_length), dtype=np.uint32)
-    start_idx = 0
+
+    # Preallocate once
+    padded_prompt_tokens = np.full((1, 1, 1, max_sequence_length), pad_token_id, dtype=np.uint32)
 
     for _ in range(max_gen_tokens):
+        # Sliding window for long prompts
         if len(prompt_tokens) > max_sequence_length:
             start_idx = len(prompt_tokens) - max_sequence_length
+            window = prompt_tokens[start_idx:]
+        else:
+            start_idx = 0
+            window = prompt_tokens
 
-        padded_prompt_tokens[0, 0, 0, : len(prompt_tokens)] = prompt_tokens[start_idx:]
+        # Refill buffer (fully) to avoid stale ids
+        padded_prompt_tokens[...] = pad_token_id
+        padded_prompt_tokens[0, 0, 0, : len(window)] = np.asarray(window, dtype=np.uint32)
+
+        # [1,1,1,T] -> TT tensor
         padded_prompt_tensor = ttml.autograd.Tensor.from_numpy(
             padded_prompt_tokens, ttml.Layout.ROW_MAJOR, ttml.autograd.DataType.UINT32
-        )  # [1,1,1, max_seq_len], uint32
+        )
 
-        logits = model(padded_prompt_tensor, causal_mask)  # out=[1,1,seq_len, vocab_size], bf16
+        # Forward: logits [1,1,T,V]
+        logits = model(padded_prompt_tensor, causal_mask)
 
-        next_token_tensor = ttml.ops.sample.sample_op(
-            logits, 0.0, np.random.randint(low=1e7), logits_mask_tensor
-        )  # out=[1,1,seq_len,1], uint32
+        # Sample: next tokens for all positions [1,1,T,1]
+        # With temperature=0.0 this behaves like argmax/greedy.
+        next_token_tensor = ttml.ops.sample.sample_op(logits, 0.0, np.random.randint(low=1e7), logits_mask_tensor)
 
-        next_token_idx = max_sequence_length - 1 if len(prompt_tokens) > max_sequence_length else len(prompt_tokens) - 1
-        next_token = next_token_tensor.to_numpy().flatten()[next_token_idx]
+        # Take the token at the last active position in the current window
+        next_token_idx = max_sequence_length - 1 if len(prompt_tokens) > max_sequence_length else len(window) - 1
+        next_token = int(next_token_tensor.to_numpy().reshape(-1, 1)[next_token_idx][0])
 
         generated_tokens.append(next_token)
-        print(tokenizer.decode(next_token), end="", flush=True)
         prompt_tokens.append(next_token)
 
+    # Decode once at the end
+    gen_text = tokenizer.decode(generated_tokens)
+    if return_with_prompt:
+        full_text = tokenizer.decode(prompt_tokens)  # includes original question + generated
+        print(full_text, end="")
+        out = full_text
+    else:
+        print(gen_text, end="")
+        out = gen_text
+
     ttml.autograd.AutoContext.get_instance().set_gradient_mode(ttml.autograd.GradMode.ENABLED)
+    return out
+
+
+def validate(
+    tt_model,
+    tokenizer,
+    val_batch_generator,
+    testing_data,
+    loss_fn,
+    causal_mask,
+    logits_mask_tensor,
+    max_sequence_length,
+):
+    reduce = ttml.ops.ReduceType.NONE
+    ttml.autograd.AutoContext.get_instance().set_gradient_mode(ttml.autograd.GradMode.DISABLED)
+    tt_model.eval()
+    eval_batch_count = 4
+    cur_val_losses = []
+    for _ in range(eval_batch_count):
+        val_X, val_y, val_logits_mask, val_logits_add_mask, val_loss_scaler = next(val_batch_generator)
+        val_logits = tt_model(val_X, causal_mask)
+
+        # Apply mask to validation logits
+        val_masked_logits = adjust_logits(val_logits, val_logits_mask, val_logits_add_mask)
+
+        # Compute validation loss
+        val_loss = loss_fn(val_masked_logits, val_y, reduce)
+        val_loss = val_loss * val_loss_scaler
+        val_loss = ttml.ops.unary.mean(val_loss)
+        cur_val_losses.append(val_loss.to_numpy().item())
+
+    checks_count = 4
+    for check in range(checks_count):
+        print("Validation check: ", check)
+        print("====================================")
+        print(f"Question: {testing_data[check]['question']}")
+        print("====================================")
+
+        generate_text_tt(
+            tt_model,
+            tokenizer,
+            testing_data[check]["question"],
+            max_sequence_length,
+            causal_mask,
+            0.0,
+            logits_mask_tensor,
+        )
+
+        print("\n====================================")
+
+    ttml.autograd.AutoContext.get_instance().set_gradient_mode(ttml.autograd.GradMode.ENABLED)
+    tt_model.train()
+    return np.mean(cur_val_losses)
 
 
 def generate_text_tinyllama(tokenizer, question, max_gen_tokens=100, temperature=0.7):
@@ -387,14 +477,13 @@ def main():
     print("Tokens per accumulated batch:", tokens_per_batch * training_config.gradient_accumulation_steps)
     optim_steps_done = 0
 
-    total_optim_steps = max(1, training_config.steps // max(1, training_config.gradient_accumulation_steps))
     sched = SpeedrunScheduler(
         SchedulerConfig(
             lr_max=1e-4,
             min_lr=3e-5,
-            warmup_steps=250,
+            warmup_steps=20,
             hold_steps=1000,
-            total_steps=total_optim_steps,
+            total_steps=training_config.steps,
             beta1_start=0.85,
             beta1_end=0.9,
             beta1_warmup_steps=3000,
@@ -403,108 +492,79 @@ def main():
     setter = OptimParamSetter(optim)
 
     print(f"Starting training for {training_config.epochs} epochs, max {training_config.steps} steps...")
-    bar = tqdm(range(1, data_steps + 1))
+    bar = tqdm(range(1, training_config.steps + 1))
 
     total_steps = 0
     last_val_loss = 0
     accum_loss = 0
-
+    accum_steps = training_config.gradient_accumulation_steps
     # ========== Training Loop ===========
-    for step in bar:
-        if accum.should_zero_grad():
-            optim.zero_grad()
+    for opt_step in bar:
+        # LR (and optional beta1) updated once per optimizer step
+        optim.zero_grad()
+        lr_now = sched.lr_at(opt_step - 1)  # zero-based inside scheduler
+        setter.set_lr(lr_now)
 
-            lr_now = sched.lr_at(optim_steps_done)
-            setter.set_lr(lr_now)
+        # ---- internal micro-steps ----
+        # Aggregate the true (unscaled) mean losses across micro-steps to report per optimizer step.
+        micro_losses = []
 
-        X, y, logits_mask, logits_add_mask, loss_scaler = next(train_batch_generator)
+        for micro in range(accum_steps):
+            X, y, logits_mask, logits_add_mask, loss_scaler = next(train_batch_generator)
 
-        # Forward pass: input is the concatenated sequence
-        logits = tt_model(X, causal_mask)  # Shape: [batch, 1, seq_len, vocab_size]
+            # Forward
+            logits = tt_model(X, causal_mask)  # [B,1,T,V]
 
-        # Apply mask to logits (zero out question token logits)
-        masked_logits = adjust_logits(logits, logits_mask, logits_add_mask)
+            # Mask logits
+            masked_logits = adjust_logits(logits, logits_mask, logits_add_mask)
 
-        # Compute cross-entropy loss on masked logits
-        unscaled_loss = loss_fn(masked_logits, y, reduce)
+            # CE on masked logits
+            unscaled_loss = loss_fn(masked_logits, y, reduce)  # [B,1,T,1] shape reduced later
+            loss = unscaled_loss * loss_scaler
+            loss = ttml.ops.unary.mean(loss)  # scalar
 
-        loss = unscaled_loss * loss_scaler  # Scale loss based on non-masked tokens
-        loss = ttml.ops.unary.mean(loss)
+            # Track true loss for reporting
+            micro_losses.append(float(loss.to_numpy()))
 
-        scaled_loss = accum.scale(loss)
-        scaled_loss.backward(False)
-        ttml.autograd.AutoContext.get_instance().reset_graph()
+            # Scale for accumulation and backward
+            scaled_loss = ttml.ops.binary.mul(loss, 1.0 / float(accum_steps))
+            scaled_loss.backward(False)
+            ttml.autograd.AutoContext.get_instance().reset_graph()
 
-        train_loss = float(loss.to_numpy())
-        accum_loss += train_loss
-        accum.update(train_loss, tokens_per_batch)
+        # Optimizer step after micro-steps
+        optim.step()
 
-        if step == 1:
-            print(f"First loss: {train_loss:.4f}")
+        # Average loss across micro-steps (this corresponds to the optimizer step)
+        step_loss = float(np.mean(micro_losses)) if len(micro_losses) > 0 else 0.0
+        train_losses.append(step_loss)
 
-        if accum.should_step():
-            optim.step()
-            optim_steps_done += 1
-
-            train_losses.append(train_loss)
-
-            accum_loss /= training_config.gradient_accumulation_steps
-
-            postfix = {"train_loss": f"{accum_loss:.4f}"}
-            if last_val_loss is not None:
-                postfix["val_loss"] = f"{last_val_loss:.4f}"
-            bar.set_postfix(postfix, refresh=False)
-
-            accum_loss = 0.0
-            total_steps += 1
+        # tqdm postfix
+        postfix = {"train_loss": f"{step_loss:.4f}", "lr": f"{lr_now:.6f}"}
+        if last_val_loss is not None:
+            postfix["val_loss"] = f"{last_val_loss:.4f}"
+        bar.set_postfix(postfix, refresh=False)
 
         # Validation every eval_every steps
-        if step % training_config.eval_every == 0:
-            ttml.autograd.AutoContext.get_instance().set_gradient_mode(ttml.autograd.GradMode.DISABLED)
-            tt_model.eval()
-
-            val_X, val_y, val_logits_mask, val_logits_add_mask, val_loss_scaler = next(val_batch_generator)
-            val_logits = tt_model(val_X, causal_mask)
-
-            # Apply mask to validation logits
-            val_masked_logits = adjust_logits(val_logits, val_logits_mask, val_logits_add_mask)
-
-            # Compute validation loss
-            val_loss = loss_fn(val_masked_logits, val_y, reduce)
-            val_loss = val_loss * val_loss_scaler
-            val_loss = ttml.ops.unary.mean(val_loss)
-            val_losses.append(val_loss.to_numpy().item())
-            last_val_loss = val_loss.to_numpy().item()
-
-            print("Validation check")
-            print("====================================")
-            print(f"Question: {testing_data[-1]['question']}")
-            print("====================================")
-
-            generate_text_tt(
+        if total_steps % training_config.eval_every == 0:
+            last_val_loss = validate(
                 tt_model,
                 tokenizer,
-                testing_data[-1]["question"],
-                max_sequence_length,
+                val_batch_generator,
+                testing_data,
+                loss_fn,
                 causal_mask,
-                0.7,
                 logits_mask_tensor,
+                max_sequence_length,
             )
-
-            print("\n====================================")
-
-            ttml.autograd.AutoContext.get_instance().set_gradient_mode(ttml.autograd.GradMode.ENABLED)
-            tt_model.train()
-
-        if training_config.save_every > 0 and (step % training_config.save_every == 0):
+            val_losses.append(last_val_loss)
+        """
+        if training_config.save_every > 0 and (total_steps % training_config.save_every == 0):
             ckpt_path = tt_serialization._save_model_npz(
-                tt_model, training_config.checkpoint_dir, step=step, extra={"optim_steps_done": optim_steps_done}
+                tt_model, training_config.checkpoint_dir, step=total_steps
             )
             print(f"[Checkpoint] Saved model to {ckpt_path}")
-
-        if total_steps >= training_config.steps:
-            break
-
+        """
+        total_steps += 1
     print("Training completed!")
 
     # Plot training curves
@@ -518,31 +578,6 @@ def main():
     axs.legend()
     plt.savefig("training_curves.png")
     plt.show()
-
-    # Test generation
-    print("\nTesting text generation...")
-    test_question = testing_data[-1]["question"]
-    print("Test question:", test_question)
-
-    # Generate with TinyLlama for comparison
-    print("\n" + "=" * 60)
-    print("COMPARISON: Tinyllama (HuggingFace) Generation")
-    print("=" * 60)
-    gpt2_answer = generate_text_tinyllama(tokenizer, test_question, max_gen_tokens=100, temperature=0.0)
-
-    print(gpt2_answer)
-
-    # Generate with fine-tuned TT-Metal model
-    print("\n" + "=" * 60)
-    print("FINE-TUNED: TT-Metal Model Generation")
-    print("=" * 60)
-    print(test_question, end="", flush=True)
-    generate_text_tt(tt_model, tokenizer, test_question, max_sequence_length, causal_mask, 0.0, logits_mask_tensor, 100)
-
-    print("\n" + "=" * 60)
-    print("EXPECTED ANSWER:")
-    print("=" * 60)
-    print(testing_data[-1]["answer"])
 
 
 if __name__ == "__main__":
