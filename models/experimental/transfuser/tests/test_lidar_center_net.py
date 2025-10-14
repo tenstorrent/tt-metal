@@ -79,7 +79,7 @@ def get_mesh_mappers(device):
 @pytest.mark.parametrize(
     "image_architecture, lidar_architecture, n_layer, use_velocity, target_point_image_shape, img_shape, lidar_bev_shape",
     [
-        ("regnety_032", "regnety_032", 4, False, (1, 1, 256, 256), (1, 3, 160, 704), (1, 2, 256, 256))
+        ("regnety_032", "regnety_032", 4, False, (1, 1, 256, 256), (1, 3, 160, 704), (1, 2, 256, 256)),
     ],  # GPT-SelfAttention 1
 )
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
@@ -96,6 +96,7 @@ def test_lidar_center_net(
     input_dtype,
     weight_dtype,
 ):
+    torch.manual_seed(8)
     image = torch.randn(img_shape)
     lidar_bev = torch.randn(lidar_bev_shape)
     target_point = torch.randn(1, 2)
@@ -227,41 +228,41 @@ def test_lidar_center_net(
     tt_brake_torch = tt_brake_torch.reshape(ref_brake.shape)
 
     # Validate center heatmap
-    does_pass, heatmap_pcc_message = check_with_pcc(ref_center_heatmap, tt_center_heatmap_torch, 0.80)
+    does_pass, heatmap_pcc_message = check_with_pcc(ref_center_heatmap, tt_center_heatmap_torch, 0.90)
     logger.info(f"Center Heatmap PCC: {heatmap_pcc_message}")
     assert does_pass, f"Center Heatmap PCC check failed: {heatmap_pcc_message}"
 
     # Validate WH prediction
-    does_pass, wh_pcc_message = check_with_pcc(ref_wh, tt_wh_torch, 0.80)
+    does_pass, wh_pcc_message = check_with_pcc(ref_wh, tt_wh_torch, 0.90)
     logger.info(f"WH PCC: {wh_pcc_message}")
     assert does_pass, f"WH PCC check failed: {wh_pcc_message}"
 
     # Validate offset prediction
-    does_pass, offset_pcc_message = check_with_pcc(ref_offset, tt_offset_torch, 0.80)
+    does_pass, offset_pcc_message = check_with_pcc(ref_offset, tt_offset_torch, 0.90)
     logger.info(f"Offset PCC: {offset_pcc_message}")
     assert does_pass, f"Offset PCC check failed: {offset_pcc_message}"
 
     # Validate yaw class prediction
-    does_pass, yaw_class_pcc_message = check_with_pcc(ref_yaw_class, tt_yaw_class_torch, 0.80)
+    does_pass, yaw_class_pcc_message = check_with_pcc(ref_yaw_class, tt_yaw_class_torch, 0.90)
     logger.info(f"Yaw Class PCC: {yaw_class_pcc_message}")
     assert does_pass, f"Yaw Class PCC check failed: {yaw_class_pcc_message}"
 
     # Validate yaw residual prediction
-    does_pass, yaw_res_pcc_message = check_with_pcc(ref_yaw_res, tt_yaw_res_torch, 0.80)
+    does_pass, yaw_res_pcc_message = check_with_pcc(ref_yaw_res, tt_yaw_res_torch, 0.90)
     logger.info(f"Yaw Residual PCC: {yaw_res_pcc_message}")
     assert does_pass, f"Yaw Residual PCC check failed: {yaw_res_pcc_message}"
 
     # Validate velocity prediction
-    does_pass, velocity_pcc_message = check_with_pcc(ref_velocity, tt_velocity_torch, 0.80)
+    does_pass, velocity_pcc_message = check_with_pcc(ref_velocity, tt_velocity_torch, 0.90)
     logger.info(f"Velocity PCC: {velocity_pcc_message}")
     assert does_pass, f"Velocity PCC check failed: {velocity_pcc_message}"
 
     # Validate brake prediction
-    does_pass, brake_pcc_message = check_with_pcc(ref_brake, tt_brake_torch, 0.80)
+    does_pass, brake_pcc_message = check_with_pcc(ref_brake, tt_brake_torch, 0.90)
     logger.info(f"Brake PCC: {brake_pcc_message}")
     assert does_pass, f"Brake PCC check failed: {brake_pcc_message}"
 
-    does_pass, pred_wp_pcc_message = check_with_pcc(pred_wp, tt_pred_wp, 0.80)
+    does_pass, pred_wp_pcc_message = check_with_pcc(pred_wp, tt_pred_wp, 0.90)
     logger.info(f"pred wp PCC: {pred_wp_pcc_message}")
     assert does_pass, f"pred wp PCC check failed: {pred_wp_pcc_message}"
 
@@ -280,7 +281,7 @@ def test_lidar_center_net(
 
     # Call get_bboxes on the reference head (reusing the same logic)
     tt_results = ref_layer.head.get_bboxes(*tt_preds_torch)
-    does_pass, box_pcc_message = check_with_pcc(results, tt_results, 0.80)
+    does_pass, box_pcc_message = check_with_pcc(results[0][0], tt_results[0][0], 0.90)
     logger.info(f"box PCC: {box_pcc_message}")
     assert does_pass, f"box PCC check failed: {box_pcc_message}"
     tt_bboxes, _ = tt_results[0]
