@@ -2,7 +2,6 @@ name: "Model Bounty"
 description: "Create a new model bring-up or optimization bounty"
 title: "[Bounty $amount] [Issue Title]"
 labels: ["bounty", "model bringup"]
-assignees: []
 
 body:
   - type: markdown
@@ -29,10 +28,15 @@ body:
         Define testable acceptance criteria — what we expect to verify before paying out.
         Model bounties are split into 3 stages:
 
+  - type: markdown
+    attributes:
+      value: |
+        ### Stage 1 — Bring-Up
+
   - type: textarea
     id: stage1
     attributes:
-      label: "### Stage 1 — Bring-Up"
+      label: "Stage 1 — Bring-Up"
       description: "List requirements for a successful model bring-up."
       placeholder: |
         - Produce correct classification or text generation
@@ -41,10 +45,15 @@ body:
     validations:
       required: true
 
+  - type: markdown
+    attributes:
+      value: |
+        ### Stage 2 — Basic Optimizations
+
   - type: textarea
     id: stage2
     attributes:
-      label: "### Stage 2 — Basic Optimizations"
+      label: "Stage 2 — Basic Optimizations"
       description: "List easy-to-implement optimizations."
       placeholder: |
         - Store temporary results in L1
@@ -54,10 +63,15 @@ body:
     validations:
       required: false
 
+  - type: markdown
+    attributes:
+      value: |
+        ### Stage 3 — Deeper Optimization
+
   - type: textarea
     id: stage3
     attributes:
-      label: "### Stage 3 — Deeper Optimization"
+      label: "Stage 3 — Deeper Optimization"
       description: "Describe deeper, TT-specific optimization goals."
       placeholder: |
         - Grouped convolutions
@@ -65,6 +79,7 @@ body:
         - Avoid TMs by changing operation order
     validations:
       required: false
+
 
   - type: markdown
     attributes:
