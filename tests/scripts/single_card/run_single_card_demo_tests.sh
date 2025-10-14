@@ -54,10 +54,8 @@ run_qwen25_vl_func() {
 }
 
 run_ds_r1_qwen_func() {
-
   ds_r1_qwen=deepseek-ai/DeepSeek-R1-Distill-Qwen-14B
   HF_MODEL=$ds_r1_qwen MESH_DEVICE=N300 pytest models/tt_transformers/demo/simple_text_demo.py -k performance-ci-1
-
 }
 
 run_gemma3_func() {
