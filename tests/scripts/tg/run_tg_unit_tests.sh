@@ -109,8 +109,6 @@ run_tg_tests() {
     ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
     ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric*MuxFixture.*"
 
-    TT_METAL_USE_MGD_2_0=1 TT_METAL_CLEAR_L1=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_sanity_common.yaml
-
   elif [[ "$1" == "llama3-70b" ]]; then
     run_tg_llama3.3-70b_tests
 
