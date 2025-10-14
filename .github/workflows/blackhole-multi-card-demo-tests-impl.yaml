@@ -99,7 +99,7 @@ jobs:
           fi
           ${{ matrix.test-group.cmd }}
       - name: Print tt-smi data on failure
-        if: failure()
+        if: ${{ failure() }}
         run: |
           tt-smi -s
       - name: Save environment data

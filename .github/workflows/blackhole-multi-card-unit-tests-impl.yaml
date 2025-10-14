@@ -113,7 +113,7 @@ jobs:
             ${{ matrix.test-group.cmd }}
           fi
       - name: Print tt-smi data on failure
-        if: failure()
+        if: ${{ failure() }}
         run: |
           tt-smi -s
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
