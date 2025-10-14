@@ -47,7 +47,8 @@ std::pair<tt::tt_fabric::FabricEriscDatamoverType, tt::tt_fabric::FabricEriscDat
         return {fabric_edm_type, fabric_edm_axis};
     }
 
-    auto physical_mesh_shape = control_plane.get_physical_mesh_shape(mesh_id0);
+    // Need global mesh shape to determine dateline placement for multi-host setups
+    auto physical_mesh_shape = control_plane.get_physical_mesh_shape(mesh_id0, tt::tt_fabric::MeshScope::GLOBAL);
     TT_FATAL(physical_mesh_shape.dims() == 2, "Dateline routing only supported for 2D mesh");
 
     auto mesh_num_rows = physical_mesh_shape[0];

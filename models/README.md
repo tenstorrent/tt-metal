@@ -49,8 +49,9 @@
 ## Diffusion Models
 | Model                                                                       | Batch | Hardware                                                 | Sec/Image     | Target Sec/Image | Release     |
 |-----------------------------------------------------------------------------|-------|----------------------------------------------------------|---------|------------|-------------|
-| [Stable Diffusion 1.4 (512x512)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/wormhole/stable_diffusion)  | 1     | [n150 (Wormhole)](https://tenstorrent.com/hardware/wormhole)        | 6.25   | 3        |           |
-| [Stable Diffusion 3.5 Medium (512x512)](https://github.com/tenstorrent/tt-metal/tree/main/models/experimental/stable_diffusion_35_large)  | 1     | [n150 (Wormhole)](https://tenstorrent.com/hardware/wormhole)        | 16   | 10        |             |
+| [Stable Diffusion 1.4 (512x512)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/wormhole/stable_diffusion)               | 1     | [n150 (Wormhole)](https://tenstorrent.com/hardware/wormhole)        | 6.25   | 3        |           |
+| [Stable Diffusion 1.4 (512x512)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/blackhole/stable_diffusion)              | 1     | [p150 (Blackhole)](https://tenstorrent.com/hardware/blackhole)      | 3.50   |          |           |
+| [Stable Diffusion 3.5 Medium (512x512)](https://github.com/tenstorrent/tt-metal/tree/main/models/experimental/stable_diffusion_35_large) | 1     | [n150 (Wormhole)](https://tenstorrent.com/hardware/wormhole)        | 16     | 10       |           |
 
 **Notes:**
 - Stable Diffusion sec/image is based on the time elapsed from submitting the input prompt to receiving the image from the VAE decoder.
