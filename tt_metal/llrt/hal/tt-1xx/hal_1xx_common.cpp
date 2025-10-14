@@ -10,15 +10,10 @@ namespace tt::tt_metal::hal_1xx {
 
 std::vector<std::string> HalJitBuildQueryBase::defines(const HalJitBuildQueryInterface::Params& params) const {
     std::vector<std::string> defines;
-    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
-    const auto& l1_cache_enable_processors =
-        rtoptions.get_feature_processors(tt::llrt::RunTimeDebugFeatureEnableL1DataCache);
     auto processor_index = MetalContext::instance().hal().get_processor_index(
         params.core_type, params.processor_class, params.processor_id);
     defines.push_back(fmt::format("PROCESSOR_INDEX={}", processor_index));
-    if (l1_cache_enable_processors.contains(params.core_type, processor_index)) {
-        defines.push_back("ENABLE_L1_DATA_CACHE");
-    }
+    defines.push_back("ENABLE_L1_DATA_CACHE");
     switch (params.core_type) {
         case HalProgrammableCoreType::TENSIX:
             switch (params.processor_class) {

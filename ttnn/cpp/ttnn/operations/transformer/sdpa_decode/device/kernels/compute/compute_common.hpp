@@ -283,7 +283,6 @@ void mul_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
     cb_wait_front(in0_cb, num_tiles);
     cb_wait_front(in1_cb, num_tiles);
     for (uint32_t i = 0; i < num_tiles; i++) {
-        invalidate_l1_cache();
         acquire_dst();
         mul_tiles(in0_cb, in1_cb, 0, i, 0);
         cb_pop_front(in0_cb, 1);
@@ -312,7 +311,6 @@ void sub_exp_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t n
     constexpr uint16_t scale_bf16 = scale_fp32 >> 16;
 
     for (uint32_t i = 0; i < num_tiles; i++) {
-        invalidate_l1_cache();
         acquire_dst();
         sub_tiles(in0_cb, in1_cb, i, i, 0);
         exp_tile<EXP_APPROX_MODE, false, true, true>(0, static_cast<int>(vector_mode), scale_bf16);
