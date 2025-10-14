@@ -203,7 +203,7 @@ class Transformer(LightweightModule):
             self.rope_setup.cos_matrix.shape[2] >= start_pos + S
         ), f"Padded prefill end idx {start_pos + S} exceeds max seq len {self.rope_setup.cos_matrix.shape[2]}"
 
-        # We need to use the whole cos_matrix and sin_matrix for tracing because we can't pass the start_pos and end_pos to the trace, so we use the whole matrix for all seq_lens when using trace
+        # We set the end_pos to max_seq_len so that we don't create a new tensor for the whole cos_matrix and sin_matrix ; in case of trace, we will use the whole matrix for all seq_lens supported by trace
         start_pos = 0 if trace_enabled else start_pos
         end_pos = self.args.max_seq_len if trace_enabled else start_pos + S
 
