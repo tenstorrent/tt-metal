@@ -378,7 +378,7 @@ class Generator:
                 # Until https://github.com/tenstorrent/tt-metal/issues/30289 is fixed,
                 # we must clamp top-p in range [0.0, 0.99] instead of [0.0, 1.0]
                 TOP_P_MIN = 0.0
-                TOP_P_MAX = 0.99
+                TOP_P_MAX = 0.9
 
                 updated_temperature = []
 
@@ -386,7 +386,7 @@ class Generator:
                     # Clamp top-p
                     clamped_top_p = self._clamp(top_p, TOP_P_MIN, TOP_P_MAX)
                     if clamped_top_p is not None:
-                        logger.info(f"Clamped Top-P value of {top_p} to {clamped_top_p}")
+                        logger.warning(f"Clamped Top-P value of {top_p} to {clamped_top_p}")
                         sampling_params.top_p[i] = clamped_top_p
 
                     # Process temperature
