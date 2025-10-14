@@ -50,9 +50,9 @@ void kernel_main() {
                 dst_addr = l1_addr;
                 for (uint32_t bank_id = 0; bank_id < num_banks; bank_id++) {
                     uint64_t src_noc_addr = get_noc_addr_from_bank_id<true>(bank_id, src_addr);
-                    noc_async_read_set_state(src_noc_addr);
+                    noc_async_read_one_packet_set_state(src_noc_addr, page_size_bytes);
                     for (uint32_t i = 0; i < pages_per_bank; i++) {
-                        noc_async_read_with_state(src_addr + i * page_size_bytes, dst_addr, page_size_bytes);
+                        noc_async_read_one_packet_with_state(src_addr + i * page_size_bytes, dst_addr);
                         dst_addr += page_size_bytes;
                     }
                 }
