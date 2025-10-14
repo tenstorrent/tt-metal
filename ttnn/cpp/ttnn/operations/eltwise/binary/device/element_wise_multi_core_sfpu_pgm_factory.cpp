@@ -170,7 +170,7 @@ BinaryDeviceOperation::ElementWiseMultiCoreSfpu::create(
                             (dst_cb_data_format == tt::DataFormat::Int32) ||
                             (dst_cb_data_format == tt::DataFormat::UInt32);
 
-    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    auto unpack_to_dest_mode = ComputeConfig::default_unpack_to_dest_modes();
     if (op_type != BinaryOpType::POWER) {
         unpack_to_dest_mode[src0_cb_index] = UnpackToDestMode::UnpackToDestFp32;
         unpack_to_dest_mode[src1_cb_index] = UnpackToDestMode::UnpackToDestFp32;

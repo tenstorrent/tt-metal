@@ -4,6 +4,8 @@
 
 #include <kernel_types.hpp>
 #include <stdint.h>
+#include "base_types.hpp"
+#include "circular_buffer_constants.h"
 #include "impl/context/metal_context.hpp"
 #include <utility>
 
@@ -37,5 +39,11 @@ WriterDataMovementConfig::WriterDataMovementConfig(
         .defines = std::move(defines),
         .named_compile_args = std::move(named_compile_args),
         .opt_level = opt_level} {}
+
+std::vector<UnpackToDestMode> ComputeConfig::default_unpack_to_dest_modes() {
+    static std::vector<UnpackToDestMode> default_modes(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    // Explicitly a copy
+    return std::vector<UnpackToDestMode>(default_modes);
+}
 
 }  // namespace tt::tt_metal

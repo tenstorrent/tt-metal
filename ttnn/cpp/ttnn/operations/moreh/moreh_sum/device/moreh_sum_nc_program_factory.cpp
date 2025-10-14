@@ -105,7 +105,7 @@ MorehSumOperation::MorehSumNCFactory::cached_program_t MorehSumOperation::MorehS
         compute_defines["FP32_DEST_ACC_EN"] = "1";
     }
     // set unpack_to_dest_mode to the same value as fp32_dest_acc_en
-    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    auto unpack_to_dest_mode = ComputeConfig::default_unpack_to_dest_modes();
     auto compute_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_sum/device/moreh_sum_nc_impl_kernels/moreh_sum_nc.cpp";
     if (device->arch() == tt::ARCH::GRAYSKULL) {

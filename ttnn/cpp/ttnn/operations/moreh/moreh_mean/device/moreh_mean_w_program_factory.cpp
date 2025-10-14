@@ -124,7 +124,7 @@ MorehMeanOperation::MorehMeanWFactory::cached_program_t MorehMeanOperation::More
         1,                       // NC
         origin_W,
     };
-    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    auto unpack_to_dest_mode = ComputeConfig::default_unpack_to_dest_modes();
 
     auto compute_kernel_ids = CreateComputeKernel(
         program,

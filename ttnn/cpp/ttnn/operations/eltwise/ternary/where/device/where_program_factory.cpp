@@ -692,7 +692,7 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
                             output_data_format == tt::DataFormat::Int32 ||
                             output_data_format == tt::DataFormat::Float32;
 
-    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    auto unpack_to_dest_mode = ComputeConfig::default_unpack_to_dest_modes();
 
     // c_0 is always predicate
     unpack_to_dest_mode[tt::CBIndex::c_0] = (predicate_tensor.dtype() == DataType::FLOAT32)

@@ -115,7 +115,7 @@ TypecastShardedProgramFactory::cached_program_t TypecastShardedProgramFactory::c
         in_cb_id,
         out_cb_id};
 
-    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    auto unpack_to_dest_mode = ComputeConfig::default_unpack_to_dest_modes();
     if (args.preserve_fp32_precision) {
         unpack_to_dest_mode[in_cb_id] = UnpackToDestMode::UnpackToDestFp32;
     }

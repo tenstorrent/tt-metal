@@ -77,6 +77,7 @@ struct ComputeConfig {
     MathFidelity math_fidelity = MathFidelity::HiFi4;
     bool fp32_dest_acc_en = false;
     bool dst_full_sync_en = false;
+    // Since we know the maximum number of elements, this would be a good place to have a SmallVector?
     std::vector<UnpackToDestMode> unpack_to_dest_mode;
     bool bfp8_pack_precise = false;
     bool math_approx_mode = false;
@@ -95,6 +96,8 @@ struct ComputeConfig {
     std::unordered_map<std::string, uint32_t> named_compile_args;
     // Set the compiler and linker optimization level
     KernelBuildOptLevel opt_level = KernelBuildOptLevel::O3;
+
+    static std::vector<UnpackToDestMode> default_unpack_to_dest_modes();
 };
 
 struct EthernetConfig {
