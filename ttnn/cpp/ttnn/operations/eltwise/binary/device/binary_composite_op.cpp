@@ -201,6 +201,7 @@ Tensor ExecuteDiv::invoke(
     tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations,
     tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations,
     const std::optional<bool>& use_legacy) {
+    std::cout << "In binary_composite_op.cpp under first executediv" << std::endl;
     const auto has_legacy_only_args = round_mode.has_value() or accurate_mode;
     if (not(use_legacy ? *use_legacy
                        : has_legacy_only_args or
@@ -246,19 +247,30 @@ Tensor ExecuteDiv::invoke(
     tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations,
     tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations,
     const std::optional<bool>& use_legacy) {
+    std::cout << "In binary_composite_op.cpp under second executediv" << std::endl;
     const auto has_legacy_only_args = round_mode.has_value() or accurate_mode;
     if (not(use_legacy
                 ? *use_legacy
                 : has_legacy_only_args or
                       binary::is_legacy_only(
                           input_a, input_b, output_mem_config, output_tensor, lhs_activations, rhs_activations))) {
+        std::cout << "In binary_composite_op.cpp under not legacy" << std::endl;
         TT_FATAL(
             not has_legacy_only_args,
             "round_mode, accurate_mode are not valid when passing use_legacy parameter in div");
+
+        std::optional<DataType> result_dtype;
+        result_dtype =
+            (input_a.dtype() == DataType::INT32 && input_b.dtype() == DataType::INT32)
+                ? std::optional<DataType>(
+                      output_dtype.has_value() && output_dtype.value() == DataType::INT32 ? DataType::INT32
+                                                                                          : DataType::FLOAT32)
+                : std::nullopt;
+
         return BinaryOperation<BinaryOpType::DIV>::invoke(
             input_a,
             input_b,
-            std::nullopt,
+            result_dtype,
             output_mem_config,
             output_tensor,
             post_activations,
@@ -267,16 +279,21 @@ Tensor ExecuteDiv::invoke(
             use_legacy);
     }
 
+    std::cout << "In binary_composite_op.cpp under legacy" << std::endl;
+
     TT_FATAL(
         (round_mode == std::nullopt || round_mode == "trunc" || round_mode == "floor"),
         "Incorrect rounding mode (expected None, 'trunc', or 'floor')");
 
     DataType input_dtype = input_a.dtype();
+    std::cout << "input_dtype: " << input_dtype << std::endl;
     const bool is_fp32 = input_dtype == DataType::FLOAT32 && input_b.dtype() == DataType::FLOAT32;
+    const bool is_int32 = input_dtype == DataType::INT32 && input_b.dtype() == DataType::INT32;
     Tensor result;
 
     // No accurate_mode for FP32 div as inf/nan are handled at kernel level
-    if (is_fp32) {
+    if (is_fp32 || is_int32) {
+        std::cout << "going to ttnn.divide" << std::endl;
         result = ttnn::divide(input_a, input_b, std::nullopt, output_mem_config, output_tensor);
     } else {
         Tensor a = typecast(input_a, DataType::FLOAT32);
@@ -319,7 +336,13 @@ Tensor ExecuteDiv::invoke(
         }
     }
 
-    return typecast(result, input_dtype, std::nullopt, output_tensor);
+    DataType result_dtype;
+    result_dtype = (input_a.dtype() == DataType::INT32 && input_b.dtype() == DataType::INT32)
+                       ? (output_dtype.has_value() && output_dtype.value() == DataType::INT32 ? DataType::INT32
+                                                                                              : DataType::FLOAT32)
+                       : input_dtype;
+
+    return typecast(result, result_dtype, std::nullopt, output_tensor);
 }
 
 Tensor _div_no_nan_overload(const Tensor& input_a, float value, const std::optional<MemoryConfig>& output_mem_config) {

@@ -82,7 +82,7 @@ enum class SfpuType {
     sub_uint16,
     mul_uint16,
     mul_int32,
-    div_int32,
+    // div_int32,
     lt,
     gt,
     ge,

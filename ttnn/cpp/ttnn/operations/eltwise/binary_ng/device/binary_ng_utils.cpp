@@ -374,8 +374,10 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
             }
         case DIV:
             if (dtype == DataType::INT32) {
+                std::cout << "in binary ng utils int32" << std::endl;
                 return {"div_int32_tile_init();", "div_int32_tile"};
             } else {
+                std::cout << "in binary ng utils fp32" << std::endl;
                 return {"div_binary_tile_init();", "div_binary_tile"};
             }
         case POWER: return {"power_binary_tile_init();", "power_binary_tile"};

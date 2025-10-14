@@ -25,6 +25,7 @@ inline void calculate_div_int32(const uint dst_index_in0, const uint dst_index_i
         sfpi::vFloat recip = _sfpu_reciprocal_<2>(in1_float);
 
         sfpi::vFloat result = in0_float * sfpi::setsgn(recip, in1);
+        // sfpi::vInt result = 2;
 
         sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
         sfpi::dst_reg++;
