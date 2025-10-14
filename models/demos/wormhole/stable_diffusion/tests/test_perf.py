@@ -283,8 +283,9 @@ def test_stable_diffusion_perf(
 
     # setup pytorch model
     torch.manual_seed(0)
-    model = get_reference_stable_diffusion_pipeline(is_ci_env, is_ci_v2_env, model_location_generator).unet
-    vae = get_reference_vae(is_ci_env, is_ci_v2_env, model_location_generator)
+    ref_model = get_reference_stable_diffusion_pipeline(is_ci_env, is_ci_v2_env, model_location_generator)
+    model = ref_model.unet
+    vae = ref_model.vae
     config = model.config
 
     # setup scheduler
