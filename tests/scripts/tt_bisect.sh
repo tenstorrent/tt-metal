@@ -21,6 +21,8 @@ bad_commit=""
 tracy_enabled=0
 retries=3
 nd_mode=false
+run_idx=0
+timeout_rc=1
 
 while getopts ":f:g:b:t:pr:n" opt; do
   case "$opt" in
@@ -213,24 +215,24 @@ while [[ "$found" == "false" ]]; do
         ;;
     esac
   else
-    attempt=1
+    run_idx=1
     timeout_rc=1
-    while [ $attempt -le $retries ]; do
-      echo "Attempt $attempt/$retries on $(git rev-parse HEAD)"
+    while [ $run_idx -le $retries ]; do
+      echo "Attempt $run_idx/$retries on $(git rev-parse HEAD)"
       echo "Run: $test"
       if timeout -k 10s "$timeout_duration_iteration" bash -lc "$test" 2>&1 | tee "$output_file"; then
         timeout_rc=0
-        echo "--- Logs (attempt $attempt) ---"
+        echo "--- Logs (attempt $run_idx) ---"
         sed -n '1,200p' "$output_file" || true
         echo "------------------------------"
         break
       else
         timeout_rc=$?
         echo "Test failed (code $timeout_rc), retrying…"
-        echo "--- Logs (attempt $attempt) ---"
+        echo "--- Logs (attempt $run_idx) ---"
         sed -n '1,200p' "$output_file" || true
         echo "------------------------------"
-        attempt=$((attempt+1))
+        run_idx=$((run_idx+1))
       fi
     done
     echo "Final exit code: $timeout_rc"
