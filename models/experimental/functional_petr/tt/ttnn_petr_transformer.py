@@ -50,7 +50,7 @@ class FFN:
         return input + x
 
 
-class PETRMultiheadAttention:
+class TTPETRMultiheadAttention:
     def __init__(self, device, parameter, embed_dims=256, num_heads=8):
         super().__init__()
         self.embed_dims = embed_dims
@@ -196,11 +196,11 @@ class PETRMultiheadAttention:
         return attn_output + identity, attn_output_weights
 
 
-class PETRTransformerDecoderLayer(nn.Module):
+class TTPETRTransformerDecoderLayer(nn.Module):
     def __init__(self, device, parameter):
         super().__init__()
-        self.mha = PETRMultiheadAttention(device, parameter.attentions[0])
-        self.petr_mha = PETRMultiheadAttention(device, parameter.attentions[1])
+        self.mha = TTPETRMultiheadAttention(device, parameter.attentions[0])
+        self.petr_mha = TTPETRMultiheadAttention(device, parameter.attentions[1])
         self.ffns = FFN(device, parameter.ffns[0].layers)
 
         self.norm1_weight = ttnn.from_torch(parameter.norms[0].weight, layout=ttnn.TILE_LAYOUT, device=device)
@@ -227,15 +227,15 @@ class PETRTransformerDecoderLayer(nn.Module):
         return x
 
 
-class PETRTransformerDecoder(nn.Module):
+class TTPETRTransformerDecoder(nn.Module):
     def __init__(self, device, parameter):
         super().__init__()
-        self.decoder0 = PETRTransformerDecoderLayer(device, parameter.decoder.module.layers[0])
-        self.decoder1 = PETRTransformerDecoderLayer(device, parameter.decoder.module.layers[1])
-        self.decoder2 = PETRTransformerDecoderLayer(device, parameter.decoder.module.layers[2])
-        self.decoder3 = PETRTransformerDecoderLayer(device, parameter.decoder.module.layers[3])
-        self.decoder4 = PETRTransformerDecoderLayer(device, parameter.decoder.module.layers[4])
-        self.decoder5 = PETRTransformerDecoderLayer(device, parameter.decoder.module.layers[5])
+        self.decoder0 = TTPETRTransformerDecoderLayer(device, parameter.decoder.module.layers[0])
+        self.decoder1 = TTPETRTransformerDecoderLayer(device, parameter.decoder.module.layers[1])
+        self.decoder2 = TTPETRTransformerDecoderLayer(device, parameter.decoder.module.layers[2])
+        self.decoder3 = TTPETRTransformerDecoderLayer(device, parameter.decoder.module.layers[3])
+        self.decoder4 = TTPETRTransformerDecoderLayer(device, parameter.decoder.module.layers[4])
+        self.decoder5 = TTPETRTransformerDecoderLayer(device, parameter.decoder.module.layers[5])
 
         self.post_norm_weight = ttnn.from_torch(
             parameter.decoder.module.post_norm.weight, layout=ttnn.TILE_LAYOUT, device=device
@@ -274,10 +274,10 @@ class PETRTransformerDecoder(nn.Module):
         return x
 
 
-class PETRTransformer:
+class TTPETRTransformer:
     def __init__(self, device, parameter):
         super().__init__()
-        self.decoder = PETRTransformerDecoder(device, parameter)
+        self.decoder = TTPETRTransformerDecoder(device, parameter)
 
     def __call__(
         self,

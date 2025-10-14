@@ -67,6 +67,7 @@ class PETR(nn.Module):
 
         self.grid_mask = GridMask(True, True, rotate=1, offset=False, ratio=0.5, mode=1, prob=0.7)
         self.use_grid_mask = use_grid_mask
+        self.head_outs = None
 
     def extract_img_feat(self, img, img_metas):
         """Extract features of images."""
@@ -130,6 +131,14 @@ class PETR(nn.Module):
     def simple_test_pts(self, x, img_metas, rescale=False):
         """Test function of point cloud branch."""
         outs = self.pts_bbox_head(x, img_metas)
+        self.head_outs = {
+            "all_cls_scores": outs["all_cls_scores"]
+            if "all_cls_scores" in outs and isinstance(outs["all_cls_scores"], torch.Tensor)
+            else outs.get("all_cls_scores"),
+            "all_bbox_preds": outs["all_bbox_preds"]
+            if "all_bbox_preds" in outs and isinstance(outs["all_bbox_preds"], torch.Tensor)
+            else outs.get("all_bbox_preds"),
+        }
         bbox_list = self.pts_bbox_head.get_bboxes(outs, img_metas, rescale=rescale)
         bbox_results = [bbox3d2result(bboxes, scores, labels) for bboxes, scores, labels in bbox_list]
         return bbox_results

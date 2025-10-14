@@ -6,6 +6,7 @@ import ttnn
 from models.experimental.functional_petr.tt.common import Conv, Conv_with_split
 import torch.nn.functional as F
 from loguru import logger
+import torch
 
 
 class ttnn_hsigmoid:
@@ -32,7 +33,11 @@ class ttnn_esemodule:
         input = x
         # x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
         # x = self.avg_pool(x)
-        x = ttnn.global_avg_pool2d(x)
+        # x = ttnn.global_avg_pool2d(x)
+        x_torch = ttnn.to_torch(x).to(torch.float32)  # Convert to float32
+        x_torch = x_torch.mean(dim=(1, 2), keepdim=True)  # Global avg pool
+        x = ttnn.from_torch(x_torch, dtype=ttnn.bfloat16, device=device)
+        x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
         # x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
         x = self.fc(device, x)
         # x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
@@ -184,13 +189,19 @@ class ttnn_osa_module:
             if hasattr(x, "memory_config") and x.memory_config().is_sharded():
                 x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
             output.append(x)
+        output_float32 = []
         for idx in range(len(output)):
             if output[idx].get_layout() != ttnn.ROW_MAJOR_LAYOUT:
                 output[idx] = ttnn.to_layout(output[idx], ttnn.ROW_MAJOR_LAYOUT)
             if hasattr(output[idx], "memory_config") and output[idx].memory_config().is_sharded():
                 output[idx] = ttnn.to_memory_config(output[idx], ttnn.L1_MEMORY_CONFIG)
+            output_torch = ttnn.to_torch(output[idx]).to(torch.float32)
+            output_float32.append(ttnn.from_torch(output_torch, dtype=ttnn.bfloat16, device=device))
 
-        x = ttnn.concat(output, dim=3)
+        x = ttnn.concat(output_float32, dim=3)
+        # for y in output_float32:
+        #     if y not in [output[0]]:  # Don't deallocate what we still need
+        #         ttnn.deallocate(y)
 
         for y in output:
             ttnn.deallocate(y)
@@ -317,24 +328,51 @@ class ttnn_osa_stage:
             #     dilation=[1, 1],
             #     ceil_mode=True,
             # )
-            x_torch = ttnn.to_torch(x)  # [B, H, W, C] in NHWC
+            # x_torch = ttnn.to_torch(x)  # [B, H, W, C] in NHWC
 
-            # Check input shape
-            logger.debug(f"Before pooling (NHWC): {x_torch.shape}")
+            # # Check input shape
+            # logger.debug(f"Before pooling (NHWC): {x_torch.shape}")
 
-            # Convert to NCHW for PyTorch
-            x_torch = x_torch.permute(0, 3, 1, 2)  # [B, C, H, W]
+            # # Convert to NCHW for PyTorch
+            # x_torch = x_torch.permute(0, 3, 1, 2)  # [B, C, H, W]
+
+            # # Apply pooling
+            # x_torch = F.max_pool2d(x_torch, kernel_size=3, stride=2, padding=0, ceil_mode=True)
+
+            # # Convert back to NHWC
+            # x_torch = x_torch.permute(0, 2, 3, 1)  # [B, H, W, C]
+
+            # logger.debug(f"After pooling (NHWC): {x_torch.shape}")
+
+            # # Convert back to ttnn
+            # x = ttnn.from_torch(x_torch, dtype=ttnn.float32, device=device)
+            # x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+            # Store original dtype
+            original_dtype = x.dtype if hasattr(x, "dtype") else ttnn.bfloat16
+
+            # Convert to torch in HIGHER precision to avoid loss
+            x_torch = ttnn.to_torch(x).to(torch.float32)  # ← Use float32 in torch
+
+            # NHWC → NCHW
+            x_torch = x_torch.permute(0, 3, 1, 2)
+
+            logger.debug(f"Before pooling (NCHW): {x_torch.shape}")
 
             # Apply pooling
             x_torch = F.max_pool2d(x_torch, kernel_size=3, stride=2, padding=0, ceil_mode=True)
 
-            # Convert back to NHWC
-            x_torch = x_torch.permute(0, 2, 3, 1)  # [B, H, W, C]
+            # NCHW → NHWC
+            x_torch = x_torch.permute(0, 2, 3, 1)
 
             logger.debug(f"After pooling (NHWC): {x_torch.shape}")
 
-            # Convert back to ttnn
-            x = ttnn.from_torch(x_torch, dtype=ttnn.bfloat16, device=device)
+            # Convert back - keep in float32 if original was float32, otherwise bfloat16
+            if original_dtype == ttnn.float32:
+                x = ttnn.from_torch(x_torch, dtype=ttnn.float32, device=device)
+            else:
+                # Even if original was bfloat16, the float32 intermediate helps
+                x = ttnn.from_torch(x_torch.to(torch.float32), dtype=ttnn.bfloat16, device=device)
+
             x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
 
         for module_name in self.blocks:

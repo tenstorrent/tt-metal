@@ -6,7 +6,7 @@ import ttnn
 import torch
 import math
 from models.experimental.functional_petr.tt.ttnn_positional_encoding import ttnn_SinePositionalEncoding3D
-from models.experimental.functional_petr.tt.ttnn_petr_transformer import PETRTransformer
+from models.experimental.functional_petr.tt.ttnn_petr_transformer import TTPETRTransformer
 from models.experimental.functional_petr.reference.nms_free_coder import NMSFreeCoder
 from loguru import logger
 
@@ -124,7 +124,7 @@ class ttnn_PETRHead:
         self.cls_out_channels = num_classes
         self._init_layers(self.parameters)
         self.positional_encoding = ttnn_SinePositionalEncoding3D(num_feats=128, normalize=True)
-        self.transformer = PETRTransformer(device=device, parameter=parameters["transformer"])
+        self.transformer = TTPETRTransformer(device=device, parameter=parameters["transformer"])
         # self.code_weights = ttnn.Tensor(self.code_weights)
         self.bbox_coder = NMSFreeCoder(
             post_center_range=[-61.2, -61.2, -10.0, 61.2, 61.2, 10.0],
@@ -399,6 +399,10 @@ class ttnn_PETRHead:
         masks = ttnn.from_torch(masks, device=device)
 
         outs_dec, _ = self.transformer(device, x, masks, query_embeds, pos_embed)  # , self.reg_branches)
+        outs_dec_torch = ttnn.to_torch(outs_dec).to(torch.float32)
+        print(f"[DEBUG] Transformer output stats: mean={outs_dec_torch.mean():.6f}, std={outs_dec_torch.std():.6f}")
+        if torch.isnan(outs_dec_torch).any():
+            print("  WARNING: Transformer output contains NaN!")
         # outs_dec = torch.nan_to_num(outs_dec) # This is not needed as outs_dec produces no nan values
         outs_dec_torch = ttnn.to_torch(outs_dec).to(torch.float32)
         if torch.isnan(outs_dec_torch).any() or torch.isinf(outs_dec_torch).any():
@@ -426,25 +430,86 @@ class ttnn_PETRHead:
             assert reference.shape[-1] == 3
 
             # outputs_class = self.cls_branches[lvl](outs_dec[lvl])
-            outputs_class = outs_dec[lvl : lvl + 1]
+            # outputs_class = outs_dec[lvl : lvl + 1]
+            # print(f"[DEBUG] Before cls_branches[{lvl}]: mean={ttnn.to_torch(outs_dec[lvl:lvl+1]).mean():.6f}, std={ttnn.to_torch(outs_dec[lvl:lvl+1]).std():.6f}")
+
+            # for index, operation in enumerate(self.cls_branches[lvl]):
+            #     if operation == ttnn.linear:
+
+            #         # outputs_class = ttnn.to_dtype(outputs_class, ttnn.float32) if outputs_class.dtype != ttnn.float32 else outputs_class
+
+            #         outputs_class = operation(
+            #             outputs_class,
+            #             self.parameters["cls_branches"][lvl][index].weight,
+            #             bias=self.parameters["cls_branches"][lvl][index].bias,
+            #         )
+            #         print(f"[DEBUG] After cls linear {index}: mean={ttnn.to_torch(outputs_class).mean():.6f}, std={ttnn.to_torch(outputs_class).std():.6f}")
+            #     elif operation == ttnn.relu:
+            #         outputs_class = operation(outputs_class)
+            #         print(f"[DEBUG] After cls relu {index}: mean={ttnn.to_torch(outputs_class).mean():.6f}, std={ttnn.to_torch(outputs_class).std():.6f}")
+
+            #     elif operation == ttnn.layer_norm:
+            #     #     outputs_class = operation(
+            #     #         outputs_class,
+            #     #         weight=self.parameters["cls_branches"][lvl][index].weight,
+            #     #         bias=self.parameters["cls_branches"][lvl][index].bias,
+            #     #     )
+            #         outputs_class_torch = ttnn.to_torch(outputs_class).to(torch.float32)
+
+            #         # Get weight and bias as torch tensors
+            #         ln_weight = ttnn.to_torch(self.parameters["cls_branches"][lvl][index].weight).to(torch.float32)
+            #         ln_bias = ttnn.to_torch(self.parameters["cls_branches"][lvl][index].bias).to(torch.float32)
+
+            #         # Apply LayerNorm in torch with float32
+            #         outputs_class_torch = torch.nn.functional.layer_norm(
+            #             outputs_class_torch,
+            #             normalized_shape=(outputs_class_torch.shape[-1],),
+            #             weight=ln_weight.squeeze(),
+            #             bias=ln_bias.squeeze()
+            #         )
+
+            #         # Convert back to ttnn bfloat16 on device
+            #         outputs_class = ttnn.from_torch(outputs_class_torch, dtype=ttnn.bfloat16, device=device)
+            #         outputs_class = ttnn.to_layout(outputs_class, ttnn.TILE_LAYOUT)
+            #         print(f"[DEBUG] After cls layernorm {index}: mean={ttnn.to_torch(outputs_class).mean():.6f}, std={ttnn.to_torch(outputs_class).std():.6f}")
+
+            outputs_class_f32 = ttnn.from_torch(
+                ttnn.to_torch(outs_dec[lvl : lvl + 1]).to(torch.float32),
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+            )
+
             for index, operation in enumerate(self.cls_branches[lvl]):
                 if operation == ttnn.linear:
-                    outputs_class = operation(
-                        outputs_class,
+                    # Keep using ttnn.linear but with float32 tensors
+                    outputs_class_f32 = operation(
+                        outputs_class_f32,
                         self.parameters["cls_branches"][lvl][index].weight,
                         bias=self.parameters["cls_branches"][lvl][index].bias,
                     )
                 elif operation == ttnn.relu:
-                    outputs_class = operation(outputs_class)
+                    outputs_class_f32 = operation(outputs_class_f32)
                 elif operation == ttnn.layer_norm:
-                    outputs_class = operation(
-                        outputs_class,
+                    outputs_class_f32 = operation(
+                        outputs_class_f32,
                         weight=self.parameters["cls_branches"][lvl][index].weight,
                         bias=self.parameters["cls_branches"][lvl][index].bias,
                     )
 
+            # Convert back to bfloat16
+            outputs_class = ttnn.from_torch(
+                ttnn.to_torch(outputs_class_f32).to(torch.bfloat16), dtype=ttnn.bfloat16, device=device
+            )
+            print(f"[DEBUG] Final cls_scores[{lvl}] before concat: PCC vs reference needed")
+
             # tmp = self.reg_branches[lvl](outs_dec[lvl])
             tmp = outs_dec[lvl : lvl + 1]
+            print(f"\n[DEBUG CLS DTYPE] Layer {lvl}:")
+            print(f"  Input (outs_dec): {outputs_class.dtype}")
+            print(f"  Weight[0]: {self.parameters['cls_branches'][lvl][0].weight.dtype}")
+            print(f"  Bias[0]: {self.parameters['cls_branches'][lvl][0].bias.dtype}")
+
             # tmp = ttnn.to_dtype(tmp, ttnn.float32)
             # tmp = ttnn.from_torch(tmp, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
             # tmp = ttnn.to_device(tmp, device)
@@ -457,6 +522,9 @@ class ttnn_PETRHead:
                     )
                 elif operation == ttnn.relu:
                     tmp = operation(tmp)
+
+                if index == 0:
+                    print(f"  After operation {index}: {outputs_class.dtype}")
 
             tmp_torch = ttnn.to_torch(tmp).to(torch.float32)
             if torch.isnan(tmp_torch).any() or torch.isinf(tmp_torch).any():
