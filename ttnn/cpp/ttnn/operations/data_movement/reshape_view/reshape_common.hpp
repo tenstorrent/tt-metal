@@ -4,7 +4,7 @@
 
 #include <variant>
 #include <cstdint>
-#include "reshape_struct_common.hpp"
+#include "reshape_kernel_common.hpp"
 
 #pragma once
 using PadValue = std::variant<uint32_t, float>;
@@ -264,6 +264,8 @@ struct GlobalCompressedReshapeMap {
     std::vector<PagePatternRun> page_pattern_runs;
 };
 
+inline uint32_t pack_rt_short(uint16_t val1, uint16_t val2) { return (val1 << 16) | val2; }
+
 inline size_t detect_stride_run(
     const std::vector<SegmentMapData>& segs,
     size_t start,
@@ -417,7 +419,6 @@ inline GlobalCompressedReshapeMap compress_mapping_global(
     // Compress page pattern instances into runs
     std::vector<PagePatternRun> page_pattern_runs = compress_page_pattern_instances(page_pattern_instances);
 
-    printf("pattern templates length: %zu\n", pattern_templates.size());
     return {pattern_templates, page_pattern_instances, page_pattern_runs};
 }
 
