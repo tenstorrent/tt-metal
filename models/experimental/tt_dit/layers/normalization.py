@@ -238,12 +238,12 @@ class DistributedLayerNorm(Module):
         shape = [embedding_dim // n, n]
 
         self.weight = (
-            Parameter(total_shape=shape, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_axes=[0, mesh_axis], device=mesh_device)
+            Parameter(total_shape=shape, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_axes=[None, mesh_axis], device=mesh_device)
             if norm_elementwise_affine or self.workaround
             else None
         )
         self.bias = (
-            Parameter(total_shape=shape, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_axes=[0, mesh_axis], device=mesh_device)
+            Parameter(total_shape=shape, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_axes=[None, mesh_axis], device=mesh_device)
             if (norm_elementwise_affine and bias) or self.workaround
             else None
         )
@@ -281,9 +281,9 @@ class DistributedLayerNorm(Module):
             )
 
     def forward(self, x: ttnn.Tensor, compute_kernel_config=None) -> ttnn.Tensor:
-        assert self.weight is not None and self.bias is not None, (
-            "weight and bias must be initialized before calling __call__"
-        )
+        assert (
+            self.weight is not None and self.bias is not None
+        ), "weight and bias must be initialized before calling forward"
         stats = ttnn.layer_norm_pre_all_gather(x)
 
         if tuple(self.mesh_device.shape)[self.mesh_axis] > 1:
@@ -348,9 +348,9 @@ class GroupNorm(Module):
         )
 
         # Assert group norm parameters
-        assert self.num_channels % 32 == 0 == self.num_channels % self.num_groups, (
-            f"num_channels must be divisible by 32 and num_groups"
-        )
+        assert (
+            self.num_channels % 32 == 0 == self.num_channels % self.num_groups
+        ), f"num_channels must be divisible by 32 and num_groups"
 
         weight_shape = [
             self.num_devices,

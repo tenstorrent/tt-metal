@@ -162,7 +162,6 @@ class CombinedTimestepGuidanceTextProjEmbeddings(Module):
 class PatchEmbed(Module):
     """
     Patch embedding with unfolded conv2d implementation.
-
     Converts input images to patch embeddings with positional encoding.
     """
 

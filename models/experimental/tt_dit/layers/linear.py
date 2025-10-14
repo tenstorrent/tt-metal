@@ -38,8 +38,8 @@ class Linear(Module):
             packer_l1_acc=True,
         )
 
-        self.weight = Parameter(total_shape=[in_features, out_features], device=mesh_device)
-        self.bias = Parameter(total_shape=[1, out_features], device=mesh_device) if bias else None
+        self.weight = Parameter(total_shape=[self.in_features, self.out_features], device=mesh_device)
+        self.bias = Parameter(total_shape=[1, self.out_features], device=mesh_device) if bias else None
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         if "weight" in state:
@@ -124,10 +124,12 @@ class ColParallelLinear(Module):
         )
 
         self.weight = Parameter(
-            total_shape=[in_features, out_features], mesh_axes=[fsdp_mesh_axis, mesh_axis], device=mesh_device
+            total_shape=[self.in_features, self.out_features], mesh_axes=[fsdp_mesh_axis, mesh_axis], device=mesh_device
         )
         self.bias = (
-            Parameter(total_shape=[1, out_features], mesh_axes=[None, mesh_axis], device=mesh_device) if bias else None
+            Parameter(total_shape=[1, self.out_features], mesh_axes=[None, mesh_axis], device=mesh_device)
+            if bias
+            else None
         )
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
@@ -234,10 +236,10 @@ class RowParallelLinear(Module):
         ndev = tuple(self.mesh_device.shape)[self.mesh_axis]
 
         self.weight = Parameter(
-            total_shape=[in_features, out_features], mesh_axes=[mesh_axis, fsdp_mesh_axis], device=mesh_device
+            total_shape=[self.in_features, self.out_features], mesh_axes=[mesh_axis, fsdp_mesh_axis], device=mesh_device
         )
         self.bias = (
-            Parameter(total_shape=[1, out_features * ndev], mesh_axes=[None, mesh_axis], device=mesh_device)
+            Parameter(total_shape=[1, self.out_features * ndev], mesh_axes=[None, mesh_axis], device=mesh_device)
             if bias
             else None
         )
