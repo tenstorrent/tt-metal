@@ -318,7 +318,7 @@ void py_bind_conv2d(py::module& module) {
             bool,
             bool,
             bool,
-            bool,
+            std::optional<bool>,
             bool,
             std::optional<bool>>(),
         py::kw_only(),
@@ -339,7 +339,7 @@ void py_bind_conv2d(py::module& module) {
         py::arg("enable_weights_double_buffer") = false,
         py::arg("full_inner_dim") = false,
         py::arg("in_place") = false,
-        py::arg("enable_kernel_stride_folding") = false,
+        py::arg("enable_kernel_stride_folding") = std::nullopt,
         py::arg("enable_activation_reuse") = false,
         py::arg("force_split_reader") = std::nullopt);
     py_conv_config.def_readwrite("weights_dtype", &Conv2dConfig::weights_dtype, R"doc(
