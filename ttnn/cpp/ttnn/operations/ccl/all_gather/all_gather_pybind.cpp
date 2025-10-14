@@ -27,14 +27,29 @@ void py_bind_all_gather(py::module& module) {
                 dim (int): Dimension along which to gather.
 
             Keyword Args:
-                cluster_axis (int, optional): The cluster axis to gather across. Defaults to `None`.
+                cluster_axis (int, optional): The axis on the mesh device to gather across. Defaults to `None`.
                 topology (ttnn.Topology, optional): Fabric topology. Defaults to `None`.
                 output_tensor (ttnn.Tensor, optional): Preallocated output tensor.
                 memory_config (ttnn.MemoryConfig, optional): Output memory configuration.
                 subdevice_id (ttnn.SubDeviceId, optional): Subdevice id for worker cores.
 
            Returns:
-               ttnn.Tensor: The gathered tensor.)doc";
+               ttnn.Tensor: The gathered tensor.
+
+            Example:
+                >>> full_tensor = torch.randn([1, 1, 32, 256], dtype=torch.bfloat16)
+                >>> mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 8))
+                >>> ttnn_tensor = ttnn.from_torch(
+                                full_tensor,
+                                dtype=input_dtype,
+                                device=mesh_device,
+                                layout=layout,
+                                memory_config=mem_config,
+                                mesh_mapper=ShardTensor2dMesh(mesh_device, mesh_shape=(1, 8), dims=(-1, -2)))
+                >>> output = ttnn.all_gather(ttnn_tensor, dim=0)
+                >>> print(output.shape)
+                [8, 1, 32, 256]
+                )doc";
 
     using OperationType = decltype(ttnn::all_gather);
     ttnn::bind_registered_operation(
