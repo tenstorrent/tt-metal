@@ -32,38 +32,29 @@ void py_bind_conv2d(py::module& module) {
         module,
         ttnn::conv2d,
         R"doc(
-        Applies a 2D convolution over an input signal composed of several input planes.
+        Performs a 2D convolution between the input tensor and weight tensor. A 2D kernel (weights tensor) traverses the image (4D input tensor) and a dot dot product is computed over the overlapping region.
 
-        For more information, refer to `this tech report. <https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/CNNs/ttcnn.md>`_
+        For more information, refer to [CNNs on Tenstorrent Architectures](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/CNNs/ttcnn.md) tech report.
 
-        :param ttnn.Tensor input_tensor:  The input tensor. This must be in the format [N, H, W, C]. It can be on host or device.
-        :param ttnn.Tensor weight_tensor: The weight tensor. The weights can be passed in the same format as PyTorch, [out_channels, in_channels, kernel_height, kernel_width]. The op w
-        :param ttnn.Tensor, None bias_tensor:   Optional bias tensor. Default: None
-        :param ttnn.MeshDevice device:  The device to use.
-        :param int in_channels:  Number of input channels.
-        :param int out_channels:  Number of output channels.
-        :param int batch_size:  Batch size.
-        :param int input_height:  Height of the input tensor.
-        :param int input_width:  Width of the input tensor.
-        :param tuple[int, int] kernel_size: Size of the convolving kernel.
-        :param tuple[int, int] stride: Stride of the cross-correlation.
-        :param tuple[int, int] or tuple[int, int, int, int]) padding: Zero-padding added to both sides of the input. [pad_height, pad_width] or [pad_top, pad_bottom, pad_left, pad_right].
-        :param tuple[int, int] dilation: Spacing between kernel elements.
-        :param int groups:  Number of blocked connections from input channels to output channels.
-        :param ttnn.DataType, None dtype:  The data type of the output tensor. Default: None (inferred from input tensor).
-        :param ttnn.Conv2dConfig, None conv_config: Configuration for convolution. Default: None
-        :param ttnn.DeviceComputeKernelConfig, None compute_config: Configuration for compute kernel. Default: None
-        :param ttnn.MemoryConfig, None memory_config: Output Tensor's Memory Configuration. Default: None
-        :param ttnn.Conv2dSliceConfig, None slice_config: Configuration for slicing the input & output tensors when they are in DRAM. If this is set to None, and the input is in DRAM, DRAM Slicing will be automatically enabled. Default: None
-        :param bool return_output_dim:  If true, the op also returns the height and width of the output tensor in [N, H, W, C] format,
-        :param bool return_weights_and_bias:  If true, the op also returns the preprocessed weight and bias on device .
+        :param ttnn.Tensor input_tensor: The input tensor in [N, H, W, C] format.
+        :param ttnn.Tensor weight_tensor: The convolution weights, typically in [out_channels, in_channels // groups, kernel_height, kernel_width] format.
+        :param ttnn.Tensor, optional bias_tensor: The bias tensor to be added. Defaults to None.
+        :param int in_channels:  Number of channels in the input tensor.
+        :param int out_channels:  Number of channels produced by the convolution.
+        :param int batch_size: The batch size of the input tensor.
+        :param tuple[int, int] kernel_size: The size of the convolving kernel.
+        :param tuple[int, int] stride: The stride of the convolution. Defaults to (1, 1).
+        :param tuple[int, int], optional padding: Zero-padding added to both sides of the input. Defaults to (0, 0). [pad_height, pad_width] or [pad_top, pad_bottom, pad_left, pad_right].
+        :param tuple[int, int], optional dilation: The spacing between kernel elements. Defaults to (1, 1).
+        :param int groups: Number of blocked connections from input channels to output channels. Defaults to 1.
+        :param ttnn.DataType, optional dtype: The data type of the output tensor. If not provided, it is inferred from the input tensor.
 
         :return: The output tensor, output height and width, and the preprocessed weights and bias.
 
-        :rtype: [ttnn.Tensor]: The output tensor, when return_output_dim = False and return_weights_and_bias = False
+        :rtype: [ttnn.Tensor]: Default. The output tensor, when return_output_dim = False and return_weights_and_bias = False
         :rtype: [ttnn.Tensor, Tuple[int, int]]: The output tensor, and it's height and width, if return_output_dim = True
-        :rtype: [ttnn.Tensor, Tuple[ttnn.Tensor, ttnn.Tensor]]: The output tensor, and it's height and width, if return_weights_and_bias = True
-        :rtype: [ttnn.Tensor, Tuple[int, int], Tuple[ttnn.Tensor, ttnn.Tensor]]: The output tensor, and it's height and width, if return_output_dim = True and return_weights_and_bias = True
+        :rtype: [ttnn.Tensor, Tuple[ttnn.Tensor, Optional[ttnn.Tensor]]]: The output tensor, and preprocessed weight and bias tensors that are  both on device, if return_weights_and_bias = True
+        :rtype: [ttnn.Tensor, Tuple[int, int], Tuple[ttnn.Tensor, Optional[ttnn.Tensor]]]: The output tensor, and it's height and width are preprocessed weight and bias tensors that are both on device, if return_output_dim = True and return_weights_and_bias = True
         )doc",
         ttnn::pybind_overload_t{
             [](const decltype(ttnn::conv2d)& self,
