@@ -218,11 +218,6 @@ tests/ttnn/unit_tests/operations/data_movement/test_slice_for_conv.py @tenstorre
 tests/ttnn/nightly/unit_tests/operations/conv/ @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-codeowners-large-changes
 tests/ttnn/nightly/unit_tests/operations/pool/ @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-codeowners-large-changes
 tests/sweep_framework/ @stevendae @bbradelTT @tenstorrent/metalium-codeowners-large-changes
-tests/sweep_framework/sweep_utils/conv2d_common.py @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-codeowners-large-changes
-tests/sweep_framework/sweep_utils/adaptive_pool2d_common.py @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-codeowners-large-changes
-tests/sweep_framework/sweep_utils/conv_transpose2d_common.py @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-codeowners-large-changes
-tests/sweep_framework/sweep_utils/max_pool2d_common.py @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-codeowners-large-changes
-tests/sweep_framework/sweep_utils/max_pool2d_with_indices_common.py @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-codeowners-large-changes
 tests/ttnn/nightly/unit_tests/operations/matmul/ @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/metalium-codeowners-large-changes
 tests/ttnn/nightly/unit_tests/operations/eltwise/ @patrickroberts @sjameelTT @ntarafdar @dchenTT @tenstorrent/metalium-codeowners-large-changes
 tests/nightly/t3000/ @tenstorrent/metalium-codeowners-large-changes @sjameelTT @ntarafdar @nardoTT @llongTT @amorrisonTT @yugi957 @jvegaTT
@@ -237,6 +232,10 @@ tests/sweep_framework/sweeps/normalization/  @tenstorrent/metalium-developers-mm
 tests/sweep_framework/sweeps/matmul/  @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/metalium-codeowners-large-changes
 tests/sweep_framework/sweeps/reduction/  @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/metalium-codeowners-large-changes
 tests/sweep_framework/sweep_utils/adaptive_pool2d_common.py @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-codeowners-large-changes
+tests/sweep_framework/sweep_utils/conv2d_common.py @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-codeowners-large-changes
+tests/sweep_framework/sweep_utils/conv_transpose2d_common.py @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-codeowners-large-changes
+tests/sweep_framework/sweep_utils/max_pool2d_common.py @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-codeowners-large-changes
+tests/sweep_framework/sweep_utils/max_pool2d_with_indices_common.py @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-codeowners-large-changes
 
 # TTNN Distributed
 ttnn/ttnn/distributed/ @tenstorrent/metalium-developers-ttnn-core @tenstorrent/metalium-codeowners-large-changes
