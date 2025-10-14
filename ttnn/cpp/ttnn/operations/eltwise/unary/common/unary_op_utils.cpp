@@ -4,6 +4,7 @@
 
 #include "unary_op_utils.hpp"
 
+#include <cstdint>
 #include <optional>
 #include <tt_stl/assert.hpp>
 #include "ttnn/tensor/types.hpp"
@@ -545,7 +546,16 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 fmt::format("hardmish_tile<{1}u>({0});", idst, (uint32_t)param0)};
             break;
         }
-
+        case UnaryOpType::RSQRT:{
+            op_init_and_name = {
+                "rsqrt_tile_init<false>();", fmt::format("rsqrt_tile<false, {1}>({0});", idst, param0_raw)};
+            break;
+        }
+        case UnaryOpType::SQRT:{
+            op_init_and_name = {
+                "sqrt_tile_init<false>();", fmt::format("sqrt_tile<false, {1}>({0});", idst, param0_raw)};
+            break;
+        }
         default: TT_THROW("unexpected parameterized op type {}", op_type);
     };
     return op_init_and_name;
@@ -562,12 +572,6 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
             op_init_and_name = {"recip_tile_init<false>();", fmt::format("recip_tile<false>({});", idst)};
             break;
         case UnaryOpType::GELU: op_init_and_name = {"gelu_tile_init();", fmt::format("gelu_tile({});", idst)}; break;
-        case UnaryOpType::RSQRT:
-            op_init_and_name = {"rsqrt_tile_init<false>();", fmt::format("rsqrt_tile<false>({});", idst)};
-            break;
-        case UnaryOpType::SQRT:
-            op_init_and_name = {"sqrt_tile_init<false>();", fmt::format("sqrt_tile<false>({});", idst)};
-            break;
         case UnaryOpType::LOG: op_init_and_name = {"log_tile_init();", fmt::format("log_tile({});", idst)}; break;
         case UnaryOpType::LOG1P: op_init_and_name = {"log1p_tile_init();", fmt::format("log1p_tile({});", idst)}; break;
         case UnaryOpType::TANH: op_init_and_name = {"tanh_tile_init();", fmt::format("tanh_tile({});", idst)}; break;
@@ -838,9 +842,9 @@ UnaryWithParam string_to_unary_with_param(const std::string& name) {
     } else if (name == "sigmoid_approx") {
         return UnaryWithParam(UnaryOpType::SIGMOID, {static_cast<float>(VecMode::RC), static_cast<float>(true)});
     } else if (name == "sqrt") {
-        return UnaryWithParam(UnaryOpType::SQRT);
+        return UnaryWithParam(UnaryOpType::SQRT, {static_cast<float>(false)});
     } else if (name == "rsqrt") {
-        return UnaryWithParam(UnaryOpType::RSQRT);
+        return UnaryWithParam(UnaryOpType::RSQRT, {static_cast<float>(false)});
     } else if (name == "exp") {
         return UnaryWithParam(UnaryOpType::EXP, static_cast<float>(true));
     } else if (name == "recip") {
@@ -899,6 +903,7 @@ std::string unary_with_param_to_string(const UnaryWithParam& unary_op) {
             }
             return "sigmoid";
         case UnaryOpType::SQRT: return "sqrt";
+        case UnaryOpType::RSQRT: return "rsqrt";
         case UnaryOpType::EXP: return "exp";
         case UnaryOpType::RECIP: return "recip";
         case UnaryOpType::LOG: return "log";

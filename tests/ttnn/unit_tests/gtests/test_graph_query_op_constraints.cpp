@@ -236,7 +236,7 @@ TEST_P(EltwiseUnaryOpIfTest, Sqrt) {
         auto* device = device_;
         const auto& output_spec = input_spec;
         auto query = ttnn::graph::query_op_constraints(
-            ttnn::sqrt, device, input_spec, output_spec.tensor_layout().get_memory_config());
+            ttnn::sqrt, device, input_spec, false, output_spec.tensor_layout().get_memory_config());
 
         EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
         // Ensure some real usage is reported
