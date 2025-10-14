@@ -595,6 +595,3 @@ jobs:
           gh workflow run "code-analysis.yaml" \
             --ref "Aswinmcw/approve_llk_uplift" \
             --repo "${{ github.repository }}" \
-            -f pr_number="$PR_NUMBER" \
-            -f trigger_type="llk_uplift" \
-            -f branch="${{ env.BRANCH_NAME }}"
