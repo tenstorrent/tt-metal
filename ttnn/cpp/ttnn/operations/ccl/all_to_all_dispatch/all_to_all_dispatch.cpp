@@ -32,7 +32,8 @@ std::array<ttnn::Tensor, 2> ExecuteAllToAllDispatch::invoke(
 
     uint32_t num_links_ = num_links.value_or(common::get_num_links(*mesh_device, axis));
     log_debug(tt::LogOp, "num_links: {}", num_links_);
-    tt::tt_fabric::Topology topology_ = topology.value_or(tt::tt_fabric::get_fabric_topology());
+    tt::tt_fabric::Topology topology_ =
+        topology.value_or(::ttnn::ccl::get_usable_topology(input_tensor, tt::tt_fabric::get_fabric_topology(), axis));
     auto mesh_view = mesh_device->get_view();
 
     if (mesh_view.num_devices() == 2) {
