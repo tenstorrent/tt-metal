@@ -1809,7 +1809,7 @@ void ControlPlane::write_all_to_all_routing_fields<1, false>(MeshId mesh_id) con
     auto host_rank_id = this->get_local_host_rank_id_binding();
     const auto& local_mesh_chip_id_container =
         this->routing_table_generator_->mesh_graph->get_chip_ids(mesh_id, host_rank_id);
-    MeshShape mesh_shape = this->get_physical_mesh_shape(mesh_id);
+    auto mesh_shape = this->get_physical_mesh_shape(mesh_id);
     intra_mesh_routing_path_t<1, false> routing_path;
     routing_path.calculate_chip_to_all_routing_fields(0, mesh_shape);
 
