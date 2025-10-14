@@ -44,6 +44,7 @@ jobs:
         ARCH_NAME: ${{ inputs.arch_name }}
         LOGURU_LEVEL: INFO
         TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE: "4,3"
+        TRACY_NO_INVARIANT_CHECK: 1
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
