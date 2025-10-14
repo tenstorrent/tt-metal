@@ -23,7 +23,8 @@ namespace unit_tests::dm::dram_sharded {
 struct DramShardedConfig {
     uint32_t test_id = 0;
     uint32_t num_of_transactions = 0;
-    uint32_t num_pages = 0;
+    uint32_t num_banks = 0;
+    uint32_t pages_per_bank = 0;
     uint32_t page_size_bytes = 0;
     DataFormat l1_data_format = DataFormat::Invalid;
     CoreRangeSet cores = CoreRangeSet();
@@ -40,14 +41,16 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const DramSh
     // Program
     Program program = CreateProgram();
 
-    // Shape tensor_pages_shape = {2, 2};
-    // Shape shard_pages_shape = {1, 1};
-    CoreRange dram_core_range({0, 0}, {5, 0});
+    uint32_t num_pages = test_config.num_banks * test_config.pages_per_bank;
+    const size_t total_size_bytes = num_pages * test_config.page_size_bytes;
+
+    // DRAM coords are 1D but use the same CoreCoord structs. y value is 0 and x range describes which banks to use
+    CoreRange dram_bank_range({0, 0}, {test_config.num_banks - 1, 0});
+
     BufferDistributionSpec shard_spec = BufferDistributionSpec(
-        // Shape{1, test_config.num_pages},  // tensor shape in pages
-        Shape{1, 24},  // tensor shape in pages
-        Shape{1, 4},   // shard shape in pages
-        corerange_to_cores(dram_core_range));
+        Shape{1, num_pages},                   // tensor shape in pages
+        Shape{1, test_config.pages_per_bank},  // shard shape in pages
+        corerange_to_cores(dram_bank_range));
 
     // uint32_t single_tile_size = tt::tile_size(test_config.l1_data_format);
     uint32_t single_tile_size = test_config.page_size_bytes;
@@ -58,9 +61,9 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const DramSh
         .bottom_up = std::nullopt};  // idk what bottom up does
     // const size_t total_size_bytes = test_config.num_pages * test_config.page_size_bytes;
     // Shape2D global_shape = {32, 32 * test_config.num_pages};
-    Shape2D global_shape = {32, 32 * 24};
+    Shape2D global_shape = {32, 32 * num_pages};
     // Shape2D shard_shape = {32, 32};
-    const size_t total_size_bytes = global_shape.height() * global_shape.width() * sizeof(bfloat16);
+    // const size_t total_size_bytes = global_shape.height() * global_shape.width() * sizeof(bfloat16);
     distributed::ShardedBufferConfig sharded_buffer_config{
         .global_size = total_size_bytes,
         .global_buffer_shape = global_shape,
@@ -118,7 +121,8 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const DramSh
     // Compile-time arguments for kernels
     vector<uint32_t> reader_compile_args = {
         (uint32_t)test_config.num_of_transactions,
-        (uint32_t)test_config.num_pages,
+        (uint32_t)test_config.num_banks,
+        (uint32_t)test_config.pages_per_bank,
         (uint32_t)test_config.page_size_bytes,
         (uint32_t)test_config.test_id};
     // tt::tt_metal::TensorAccessorArgs(input_buffer).append_to(reader_compile_args);
@@ -187,8 +191,8 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMShardedReadBaseCase) {
     // auto [flit_size_bytes, max_transmittable_bytes, max_transmittable_flits] =
     //     tt::tt_metal::unit_tests::dm::compute_physical_constraints(mesh_device);
     // Parameters
-    uint32_t page_size_bytes = tt::tile_size(DataFormat::Float16_b);
-    uint32_t num_pages = 24;
+    DataFormat l1_data_format = DataFormat::Float16_b;
+    uint32_t page_size_bytes = tt::tile_size(l1_data_format);
     uint32_t num_of_transactions = 1;
 
     // Cores
@@ -199,9 +203,10 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMShardedReadBaseCase) {
     unit_tests::dm::dram_sharded::DramShardedConfig test_config = {
         .test_id = 1000,
         .num_of_transactions = num_of_transactions,
-        .num_pages = num_pages,
+        .num_banks = 4,
+        .pages_per_bank = 1,
         .page_size_bytes = page_size_bytes,
-        .l1_data_format = DataFormat::Float16_b,
+        .l1_data_format = l1_data_format,
         .cores = core_range_set};
 
     // Run
@@ -215,7 +220,9 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMShardedReadTileNumbers) {
     // auto [flit_size_bytes, max_transmittable_bytes, max_transmittable_flits] =
     //     tt::tt_metal::unit_tests::dm::compute_physical_constraints(mesh_device);
     // Parameters
-    uint32_t page_size_bytes = tt::tile_size(DataFormat::Float16_b);
+    DataFormat l1_data_format = DataFormat::Float16_b;
+    uint32_t page_size_bytes = tt::tile_size(l1_data_format);
+    uint32_t num_banks = mesh_device->num_dram_channels();
     uint32_t max_num_pages = 32;
     uint32_t max_transactions = 256;
 
@@ -229,9 +236,45 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMShardedReadTileNumbers) {
             unit_tests::dm::dram_sharded::DramShardedConfig test_config = {
                 .test_id = 1001,
                 .num_of_transactions = num_of_transactions,
-                .num_pages = num_pages,
+                .num_banks = num_banks,
+                .pages_per_bank = num_pages,
                 .page_size_bytes = page_size_bytes,
-                .l1_data_format = DataFormat::Float16_b,
+                .l1_data_format = l1_data_format,
+                .cores = core_range_set};
+
+            // Run
+            EXPECT_TRUE(run_dm(mesh_device, test_config));
+        }
+    }
+}
+
+/* ========== Directed Ideal Test Case; Test id = 65 ========== */
+TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMShardedReadBankNumbers) {
+    auto mesh_device = get_mesh_device();
+    // Physical Constraints
+    // auto [flit_size_bytes, max_transmittable_bytes, max_transmittable_flits] =
+    //     tt::tt_metal::unit_tests::dm::compute_physical_constraints(mesh_device);
+    // Parameters
+    DataFormat l1_data_format = DataFormat::Float16_b;
+    uint32_t page_size_bytes = tt::tile_size(l1_data_format);
+    uint32_t max_num_banks = mesh_device->num_dram_channels();
+    uint32_t num_pages = 16;
+    uint32_t max_transactions = 256;
+
+    // Cores
+    CoreRange core_range({0, 0}, {0, 0});
+    CoreRangeSet core_range_set({core_range});
+
+    for (uint32_t num_of_transactions = 1; num_of_transactions <= max_transactions; num_of_transactions *= 4) {
+        for (uint32_t num_banks = 1; num_banks <= max_num_banks; num_banks++) {
+            // Test config
+            unit_tests::dm::dram_sharded::DramShardedConfig test_config = {
+                .test_id = 1002,
+                .num_of_transactions = num_of_transactions,
+                .num_banks = num_banks,
+                .pages_per_bank = num_pages,
+                .page_size_bytes = page_size_bytes,
+                .l1_data_format = l1_data_format,
                 .cores = core_range_set};
 
             // Run
