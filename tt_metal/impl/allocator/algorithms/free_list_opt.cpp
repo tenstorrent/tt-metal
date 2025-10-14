@@ -403,6 +403,9 @@ Statistics FreeListOpt::get_statistics() const {
     std::vector<uint32_t> largest_free_block_addrs;
 
     for (size_t i = 0; i < block_address_.size(); i++) {
+        if (!meta_block_is_allocated_[i]) {
+            continue;
+        }
         if (block_is_allocated_[i]) {
             total_allocated_bytes += block_size_[i];
         } else {

@@ -25,10 +25,14 @@
 #include "tt_target_device.hpp"
 #include <umd/device/types/xy_pair.hpp>
 #include <umd/device/types/core_coordinates.hpp>
+#include <tt-metalium/fabric_types.hpp>
 
 namespace tt {
 
 namespace llrt {
+
+inline std::string g_root_dir;
+inline std::once_flag g_root_once;
 
 // Enumerates the debug features that can be enabled at runtime. These features allow for
 // fine-grained control over targeted cores, chips, harts, etc.
@@ -91,7 +95,7 @@ struct InspectorSettings {
 };
 
 class RunTimeOptions {
-    bool is_root_dir_env_var_set = false;
+    bool is_root_dir_set = false;
     std::string root_dir;
 
     bool is_cache_dir_env_var_set = false;
@@ -210,12 +214,16 @@ class RunTimeOptions {
     // Using MGD 2.0 syntax for mesh graph descriptor in Fabric Control Plane
     bool use_mesh_graph_descriptor_2_0 = false;
 
+    // Reliability mode override parsed from environment (RELIABILITY_MODE)
+    std::optional<tt::tt_fabric::FabricReliabilityMode> reliability_mode = std::nullopt;
+
 public:
     RunTimeOptions();
     RunTimeOptions(const RunTimeOptions&) = delete;
     RunTimeOptions& operator=(const RunTimeOptions&) = delete;
 
-    bool is_root_dir_specified() const { return this->is_root_dir_env_var_set; }
+    bool is_root_dir_specified() const { return this->is_root_dir_set; }
+    static void set_root_dir(const std::string& root_dir);
     const std::string& get_root_dir() const;
 
     bool is_cache_dir_specified() const { return this->is_cache_dir_env_var_set; }
@@ -496,8 +504,11 @@ public:
     bool get_enable_fabric_telemetry() const { return enable_fabric_telemetry; }
     void set_enable_fabric_telemetry(bool enable) { enable_fabric_telemetry = enable; }
 
+    // Reliability mode override accessor
+    std::optional<tt::tt_fabric::FabricReliabilityMode> get_reliability_mode() const { return reliability_mode; }
+
     // Mock cluster accessors
-    bool get_mock_enabled() const { return runtime_target_device_ == TargetDevice::Mock; }
+    bool get_mock_enabled() const { return !mock_cluster_desc_path.empty(); }
     const std::string& get_mock_cluster_desc_path() const { return mock_cluster_desc_path; }
 
     // Target device accessor

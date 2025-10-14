@@ -22,9 +22,10 @@ from diffusers.pipelines.pipeline_utils import DiffusionPipeline
 from diffusers.pipelines.mochi.pipeline_output import MochiPipelineOutput
 
 
-from ...parallel.config import DiTParallelConfig
+from ...parallel.config import DiTParallelConfig, MochiVAEParallelConfig
 from ...parallel.manager import CCLManager
 from ...models.transformers.transformer_mochi import MochiTransformer3DModel
+from ...models.vae.vae_mochi import MochiVAEDecoder
 from ...utils.cache import get_cache_path, load_cache_dict
 
 
@@ -138,8 +139,10 @@ class MochiPipeline(DiffusionPipeline):
         self,
         mesh_device: ttnn.MeshDevice,
         parallel_config: DiTParallelConfig,
+        vae_parallel_config: MochiVAEParallelConfig,
         num_links: int,
         use_cache: bool = False,
+        use_reference_vae: bool = False,
         model_name: str = "genmo/mochi-1-preview",
         force_zeros_for_empty_prompt: bool = False,
     ):
@@ -158,6 +161,7 @@ class MochiPipeline(DiffusionPipeline):
         # Store device and config for model initialization
         self.mesh_device = mesh_device
         self.parallel_config = parallel_config
+        self.vae_parallel_config = vae_parallel_config
         self.num_links = num_links
         self.use_cache = use_cache
 
@@ -222,7 +226,32 @@ class MochiPipeline(DiffusionPipeline):
             self.transformer.load_state_dict(torch_transformer.state_dict())
 
         # Load pretrained VAE (Torch)
-        self.vae = AutoencoderKLMochi.from_pretrained(model_name, subfolder="vae", torch_dtype=torch.float32)
+        torch_vae = AutoencoderKLMochi.from_pretrained(model_name, subfolder="vae", torch_dtype=torch.float32)
+        if use_reference_vae:
+            self.vae = torch_vae
+        else:
+            self.vae = MochiVAEDecoder(
+                mesh_device=mesh_device,
+                torch_ref=torch_vae.decoder,
+                parallel_config=vae_parallel_config,
+                ccl_manager=self.ccl_manager,
+                out_channels=torch_vae.config.out_channels,
+                base_channels=torch_vae.config.decoder_block_out_channels[0],
+                channel_multipliers=[
+                    x // torch_vae.config.decoder_block_out_channels[0]
+                    for x in torch_vae.config.decoder_block_out_channels
+                ],
+                temporal_expansions=torch_vae.config.temporal_expansions,
+                spatial_expansions=torch_vae.config.spatial_expansions,
+                num_res_blocks=torch_vae.config.layers_per_block,
+                latent_dim=torch_vae.config.latent_channels,
+                has_attention=[False, False, False, False, False],  # torch_vae.config.add_attention_block,
+                nonlinearity=torch_vae.config.act_fn,
+                output_nonlinearity=torch_vae.config.act_fn,
+                latents_mean=torch_vae.config.latents_mean,
+                latents_std=torch_vae.config.latents_std,
+                scaling_factor=torch_vae.config.scaling_factor,
+            )
 
         # Update tokenizer max length
         self.tokenizer_max_length = self.tokenizer.model_max_length if self.tokenizer is not None else 256

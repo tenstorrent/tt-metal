@@ -1583,6 +1583,7 @@ Tensor fold_input_tensor_if_required(
         in_channels = folding_result.in_channels;
         stride = folding_result.stride;
         kernel_size = folding_result.kernel_size;
+        padding_n4 = folding_result.padding_n4;  // Padding is zero after folding
         mm_conv = folding_result.mm_conv;
         return folded_input_tensor;
     } else {
@@ -1601,9 +1602,6 @@ ttnn::Tensor fold_tensor(
         !tensor.memory_config().is_l1(),
         "Conv2D kernel stride folding: Input tensor must not be in L1 memory for folding");
     TT_FATAL(
-        padding_n4[0] == 0 && padding_n4[1] == 0 && padding_n4[2] == 0 && padding_n4[3] == 0,
-        "Conv2D kernel stride folding: Padding must be 0 for folding");
-    TT_FATAL(
         tensor.dtype() != tt::tt_metal::DataType::BFLOAT8_B,
         "Conv2D kernel stride folding: Currently doesn't support BFLOAT8_B");
     TT_FATAL(
@@ -1617,7 +1615,7 @@ ttnn::Tensor fold_tensor(
     }
 
     // Core folding operation
-    tensor_on_device = ttnn::fold(tensor_on_device, stride[0], stride[1], false, std::nullopt, 0, 0, 0);
+    tensor_on_device = ttnn::fold(tensor_on_device, stride[0], stride[1], false, std::nullopt, padding_n4);
 
     return tensor_on_device;
 }
@@ -1630,23 +1628,36 @@ KernelStrideFoldingResult compute_kernel_stride_folding_params(
     std::array<uint32_t, 2> stride,
     std::array<uint32_t, 4> padding_n4,
     const Conv2dConfig& conv_config) {
-    TT_FATAL(input_height % stride[0] == 0, "Input height must be divisible by stride for kernel stride folding.");
-    TT_FATAL(input_width % stride[1] == 0, "Input width must be divisible by stride for kernel stride folding.");
+    // Calculate padded dimensions first - this is what the folding operation will see
+    uint32_t padded_height = input_height + padding_n4[0] + padding_n4[1];
+    uint32_t padded_width = input_width + padding_n4[2] + padding_n4[3];
 
-    // Update dimensions for folded operation
-    input_height = input_height / stride[0];
-    input_width = input_width / stride[1];
-    in_channels = in_channels * stride[0] * stride[1];
+    TT_FATAL(
+        padded_height % stride[0] == 0,
+        "Padded input height ({}) must be divisible by stride ({}) for kernel stride folding.",
+        padded_height,
+        stride[0]);
+    TT_FATAL(
+        padded_width % stride[1] == 0,
+        "Padded input width ({}) must be divisible by stride ({}) for kernel stride folding.",
+        padded_width,
+        stride[1]);
+
+    // Update dimensions for folded operation based on padded dimensions
+    uint32_t folded_height = padded_height / stride[0];
+    uint32_t folded_width = padded_width / stride[1];
+    uint32_t folded_channels = in_channels * stride[0] * stride[1];
 
     auto kernel_h = tt::div_up(kernel_size[0], stride[0]);
     auto kernel_w = tt::div_up(kernel_size[1], stride[1]);
 
     return KernelStrideFoldingResult{
-        .input_height = input_height,
-        .input_width = input_width,
-        .in_channels = in_channels,
+        .input_height = folded_height,
+        .input_width = folded_width,
+        .in_channels = folded_channels,
         .stride = {1, 1},
         .kernel_size = {kernel_h, kernel_w},
+        .padding_n4 = {0, 0, 0, 0},  // Padding is zero after folding
         .mm_conv = (kernel_size[0] == stride[0] && kernel_size[1] == stride[1])};
 }
 

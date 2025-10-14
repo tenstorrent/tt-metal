@@ -16,7 +16,7 @@
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
 #include "tt_metal/impl/debug/dprint_server.hpp"
-#include "tt_metal/impl/debug/inspector.hpp"
+#include "tt_metal/impl/debug/inspector/inspector.hpp"
 #include "tt_metal/impl/debug/inspector/data.hpp"
 #include "tt_metal/impl/debug/noc_logging.hpp"
 #include "tt_metal/impl/debug/watcher_server.hpp"
@@ -256,17 +256,12 @@ MetalContext& MetalContext::instance() {
 MetalContext::MetalContext() {
     // If a custom fabric mesh graph descriptor is specified as an RT Option, use it by default
     // to initialize the control plane.
-    std::unique_ptr<tt_ClusterDescriptor> cluster_desc;
     if (rtoptions_.is_custom_fabric_mesh_graph_desc_path_specified()) {
         custom_mesh_graph_desc_path_ = rtoptions_.get_custom_fabric_mesh_graph_desc_path();
     }
 
-    if (rtoptions_.get_mock_enabled()) {
-        cluster_desc = tt::umd::tt_ClusterDescriptor::create_from_yaml(rtoptions_.get_mock_cluster_desc_path());
-    }
-
-    bool is_base_routing_fw_enabled = Cluster::is_base_routing_fw_enabled(
-        Cluster::get_cluster_type_from_cluster_desc(rtoptions_, cluster_desc.get()));
+    bool is_base_routing_fw_enabled =
+        Cluster::is_base_routing_fw_enabled(Cluster::get_cluster_type_from_cluster_desc(rtoptions_));
     hal_ = std::make_unique<Hal>(get_platform_architecture(rtoptions_), is_base_routing_fw_enabled);
     rtoptions_.ParseAllFeatureEnv(*hal_);
     cluster_ = std::make_unique<Cluster>(rtoptions_, *hal_);
@@ -590,28 +585,43 @@ void MetalContext::initialize_control_plane() {
     auto cluster_type = cluster_->get_cluster_type();
     std::filesystem::path mesh_graph_desc_path =
         tt::tt_fabric::MeshGraph::get_mesh_graph_descriptor_path_for_cluster_type(
-            cluster_type, std::filesystem::path(rtoptions_.get_root_dir()), true);
+            cluster_type, std::filesystem::path(rtoptions_.get_root_dir()), rtoptions_.get_use_mesh_graph_descriptor_2_0());
 
-    std::string suffix = ".textproto";
+    std::string suffix;
+    if (rtoptions_.get_use_mesh_graph_descriptor_2_0()) {
+        suffix = ".textproto";
+        log_debug(tt::LogDistributed, "Using MGD 2.0 mesh graph descriptor.");
+    } else {
+        suffix = ".yaml";
+        log_debug(tt::LogDistributed, "Using MGD 1.0 mesh graph descriptor.");
+    }
 
     // If the cluster is a GALAXY and the fabric type is TORUS_XY, override the mesh graph descriptor path
     if (cluster_->is_ubb_galaxy()) {
         std::string mesh_graph_descriptor;
-        switch (tt::tt_fabric::get_fabric_type(this->fabric_config_)) {
-            case tt::tt_fabric::FabricType::TORUS_XY:
-                mesh_graph_descriptor = "single_galaxy_torus_xy_graph_descriptor" + suffix;
-                break;
-            case tt::tt_fabric::FabricType::TORUS_X:
-                mesh_graph_descriptor = "single_galaxy_torus_x_graph_descriptor" + suffix;
-                break;
-            case tt::tt_fabric::FabricType::TORUS_Y:
-                mesh_graph_descriptor = "single_galaxy_torus_y_graph_descriptor" + suffix;
-                break;
-            default: mesh_graph_descriptor = "single_galaxy_mesh_graph_descriptor" + suffix; break;
+        if (cluster_type == tt::tt_metal::ClusterType::BLACKHOLE_GALAXY) {
+            // For Blackhole Galaxy, only use the default descriptor
+            mesh_graph_descriptor = "single_bh_galaxy_mesh_graph_descriptor" + suffix;
+        } else {
+            // For regular Galaxy, handle different fabric types
+            switch (tt::tt_fabric::get_fabric_type(this->fabric_config_)) {
+                case tt::tt_fabric::FabricType::TORUS_XY:
+                    mesh_graph_descriptor = "single_galaxy_torus_xy_graph_descriptor" + suffix;
+                    break;
+                case tt::tt_fabric::FabricType::TORUS_X:
+                    mesh_graph_descriptor = "single_galaxy_torus_x_graph_descriptor" + suffix;
+                    break;
+                case tt::tt_fabric::FabricType::TORUS_Y:
+                    mesh_graph_descriptor = "single_galaxy_torus_y_graph_descriptor" + suffix;
+                    break;
+                default: mesh_graph_descriptor = "single_galaxy_mesh_graph_descriptor" + suffix; break;
+            }
         }
         mesh_graph_desc_path = std::filesystem::path(rtoptions_.get_root_dir()) /
                                "tt_metal/fabric/mesh_graph_descriptors" / mesh_graph_descriptor;
     }
+
+    log_debug(tt::LogMetal, "Using mesh graph descriptor: {}", mesh_graph_desc_path);
 
     TT_FATAL(!mesh_graph_desc_path.empty(), "No mesh graph descriptor found for cluster type");
     TT_FATAL(
@@ -655,10 +665,8 @@ void MetalContext::reset_cores(chip_id_t device_id) {
                 llrt::internal_::return_to_base_firmware_and_wait_for_heartbeat(device_id, virtual_core);
             }
             // Only send reset to subordinate cores
-            TensixSoftResetOptions reset_val = TENSIX_ASSERT_SOFT_RESET;
-            reset_val =
-                reset_val & static_cast<TensixSoftResetOptions>(
-                                ~std::underlying_type<TensixSoftResetOptions>::type(TensixSoftResetOptions::BRISC));
+            // Assert all cores except ERISC0, which is running base firmware.
+            tt::umd::RiscType reset_val = tt::umd::RiscType::ALL_TENSIX & ~tt::umd::RiscType::ERISC0;
             tt::tt_metal::MetalContext::instance().get_cluster().assert_risc_reset_at_core(
                 tt_cxy_pair(device_id, virtual_core), reset_val);
         }
@@ -690,7 +698,7 @@ void MetalContext::reset_cores(chip_id_t device_id) {
             CoreCoord worker_core =
                 cluster_->get_virtual_coordinate_from_logical_coordinates(device_id, logical_core, CoreType::WORKER);
             if (!storage_only_cores_set.contains(logical_core)) {
-                cluster_->assert_risc_reset_at_core(tt_cxy_pair(device_id, worker_core));
+                cluster_->assert_risc_reset_at_core(tt_cxy_pair(device_id, worker_core), tt::umd::RiscType::ALL);
             }
         }
     }
@@ -699,7 +707,7 @@ void MetalContext::reset_cores(chip_id_t device_id) {
     for (const auto& logical_core : this->get_control_plane().get_inactive_ethernet_cores(device_id)) {
         CoreCoord virtual_core =
             cluster_->get_virtual_coordinate_from_logical_coordinates(device_id, logical_core, CoreType::ETH);
-        cluster_->assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core));
+        cluster_->assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core), tt::umd::RiscType::ALL);
     }
 
     cluster_->l1_barrier(device_id);
@@ -727,7 +735,7 @@ void MetalContext::assert_cores(chip_id_t device_id) {
                         // Below will return to base FW
                         continue;
                     }
-                    cluster_->assert_risc_reset_at_core(tt_cxy_pair(device_id, worker_core));
+                    cluster_->assert_risc_reset_at_core(tt_cxy_pair(device_id, worker_core), tt::umd::RiscType::ALL);
                 }
             } else {
                 log_debug(tt::LogMetal, "{} will not be Reset when closing Device {}", worker_core.str(), device_id);
@@ -745,10 +753,8 @@ void MetalContext::assert_cores(chip_id_t device_id) {
                 llrt::internal_::return_to_base_firmware_and_wait_for_heartbeat(device_id, virtual_eth_core);
             }
             // Stop subordinate
-            TensixSoftResetOptions reset_val =
-                TENSIX_ASSERT_SOFT_RESET &
-                static_cast<TensixSoftResetOptions>(
-                    ~std::underlying_type<TensixSoftResetOptions>::type(TensixSoftResetOptions::BRISC));
+            // Assert all cores except ERISC0, which is running base firmware.
+            tt::umd::RiscType reset_val = tt::umd::RiscType::ALL_TENSIX & ~tt::umd::RiscType::ERISC0;
             cluster_->assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_eth_core), reset_val);
         };
 
@@ -986,12 +992,10 @@ void MetalContext::initialize_firmware(
         case HalProgrammableCoreType::IDLE_ETH: {
             const bool is_idle_eth = core_type == HalProgrammableCoreType::IDLE_ETH;
             const bool is_active_eth = !is_idle_eth;
-            TensixSoftResetOptions reset_val = TENSIX_ASSERT_SOFT_RESET;
-            // Do not put dm0 into reset. It is running base fw
+            tt::umd::RiscType reset_val = tt::umd::RiscType::ALL_TENSIX;
             if (is_active_eth) {
-                reset_val =
-                    reset_val & static_cast<TensixSoftResetOptions>(
-                                    ~std::underlying_type<TensixSoftResetOptions>::type(TensixSoftResetOptions::BRISC));
+                // On active eth, don't assert ERISC0, which is running base firmware.
+                reset_val &= ~tt::umd::RiscType::ERISC0;
             }
             if (is_idle_eth or !hal_->get_eth_fw_is_cooperative()) {
                 cluster_->assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core), reset_val);
@@ -1330,14 +1334,10 @@ void MetalContext::initialize_and_launch_firmware(chip_id_t device_id) {
             continue;
         }
 
-        TensixSoftResetOptions reset_val = TENSIX_DEASSERT_SOFT_RESET;
+        tt::umd::RiscType reset_val = tt::umd::RiscType::BRISC;
         if (multi_risc_active_eth_cores.contains(worker_core)) {
             // bit 12 needs to be deasserted to run second erisc on BH
-            reset_val = TENSIX_DEASSERT_SOFT_RESET &
-                        static_cast<TensixSoftResetOptions>(
-                            ~std::underlying_type<TensixSoftResetOptions>::type(TensixSoftResetOptions::TRISC0));
-        } else {
-            reset_val = TENSIX_DEASSERT_SOFT_RESET;
+            reset_val |= tt::umd::RiscType::ERISC1;
         }
         cluster_->deassert_risc_reset_at_core(tt_cxy_pair(device_id, worker_core), reset_val);
     }

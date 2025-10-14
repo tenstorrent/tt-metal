@@ -332,7 +332,6 @@ class GroupNorm(Module):
         mesh_device=None,
         mesh_axis=None,
         core_grid=None,
-        num_out_blocks=-1,
         torch_ref=None,
     ):
         super().__init__()
@@ -343,7 +342,6 @@ class GroupNorm(Module):
         self.num_devices = tuple(mesh_device.shape)[mesh_axis] if mesh_axis is not None else 1
         self.num_channels = (num_channels or torch_ref.num_channels) // self.num_devices
         self.num_groups = (num_groups or torch_ref.num_groups) // self.num_devices
-        self.num_out_blocks = num_out_blocks
         self.core_grid = core_grid or ttnn.CoreGrid(x=8, y=8)  # self.mesh_device.core_grid # Issue on 6U 8x9 grid
         self.num_virtual_cols = ttnn.operations.normalization.dram_group_norm_virtual_columns(
             self.mesh_device.core_grid, self.num_channels, self.num_groups
@@ -383,12 +381,11 @@ class GroupNorm(Module):
             self.load_torch_state_dict(torch_ref.state_dict())
 
     @classmethod
-    def from_torch(cls, torch_ref, num_output_blocks=-1, mesh_device=None, mesh_axis=None, core_grid=None):
+    def from_torch(cls, torch_ref, mesh_device=None, mesh_axis=None, core_grid=None):
         layer = cls(
             mesh_device=mesh_device,
             mesh_axis=mesh_axis,
             core_grid=core_grid,
-            num_out_blocks=num_output_blocks,
             torch_ref=torch_ref,
         )
         return layer
@@ -411,7 +408,8 @@ class GroupNorm(Module):
         ]
         return torch.cat(torch_sharded_lst, dim=0)
 
-    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+    def forward(self, x: ttnn.Tensor, num_out_blocks=-1) -> ttnn.Tensor:
+        self.num_out_blocks = num_out_blocks
         batch_size, height, width, channels = x.shape
         x = x.reshape([batch_size, 1, width * height, channels])
         x = ttnn.group_norm(

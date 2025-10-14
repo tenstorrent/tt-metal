@@ -18,7 +18,7 @@ on:
       ttsim-ref:
         required: false
         type: string
-        default: "6f5a357da16b3d0f9a4f70cdae2b4b7485723612"
+        default: "8d6a0c997c4ba585c519c27f304b976b243d4bd9"
 
 jobs:
   ttsim-integration:
@@ -91,14 +91,17 @@ jobs:
           cp $TT_METAL_HOME/tt_metal/soc_descriptors/${{ matrix.soc_desc }} $TT_METAL_SIMULATOR_HOME/soc_descriptor.yaml
 
       - name: Build and Run Metal Examples
-        timeout-minutes: 15
+        timeout-minutes: 3
         run: |
           working_examples=(
             "add_2_integers_in_compute"
             "add_2_integers_in_riscv"
             "eltwise_binary"
+            "eltwise_sfpu"
             "hello_world_compute_kernel"
             "hello_world_datamovement_kernel"
+            "matmul_multi_core"
+            "matmul_multicore_reuse"
           )
           for example_name in "${working_examples[@]}"; do
             example_path="/usr/share/tt-metalium/examples/${example_name}"
@@ -177,6 +180,7 @@ jobs:
           cp /work/tt_metal/soc_descriptors/${{ matrix.soc_desc }} $TT_METAL_SIMULATOR_HOME/soc_descriptor.yaml
 
       - name: Run TTNN Pytests
+        timeout-minutes: 5
         run: |
           pytest \
             tests/ttnn/unit_tests/operations/ccl/blackhole_CI/all_post_commit/test_all_gather_apc.py \
