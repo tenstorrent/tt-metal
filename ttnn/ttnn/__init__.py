@@ -396,6 +396,9 @@ Conv1dConfig = ttnn._ttnn.operations.conv.Conv2dConfig
 
 from ttnn.operations.transformer import SDPAProgramConfig
 
+import ttnn.operations.lazy as lazy
+from ttnn.prim import materialize
+
 import ttnn.graph
 
 if importlib.util.find_spec("torch") is not None:

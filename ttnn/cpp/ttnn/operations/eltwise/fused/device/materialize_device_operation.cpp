@@ -12,6 +12,7 @@ MaterializeDeviceOperation::program_factory_t MaterializeDeviceOperation::select
     return ProgramFactory{};
 }
 
+// ideally validation should remain a no-op, as Expressions should be correct by construction
 void MaterializeDeviceOperation::validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&) {}
 
 void MaterializeDeviceOperation::validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&) {}
@@ -20,7 +21,7 @@ MaterializeDeviceOperation::spec_return_value_t MaterializeDeviceOperation::comp
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     namespace metal = tt::tt_metal;
 
-    // TODO broadcast
+    // TODO handle broadcasting
     return TensorSpec(
         tensor_args.input_tensors.front().logical_shape(),
         metal::TensorLayout(
@@ -38,7 +39,7 @@ MaterializeDeviceOperation::invoke(lazy::FunctionView expression) {
     namespace metal = tt::tt_metal;
 
     std::map<tt::CBIndex, std::size_t> inputs;
-    ttsl::SmallVector<lazy::Param> params;
+    ttsl::SmallVector<std::uint32_t> params;
     std::vector<Tensor> input_tensors;
 
     lazy::traverse(
@@ -47,13 +48,29 @@ MaterializeDeviceOperation::invoke(lazy::FunctionView expression) {
             [&](lazy::FunctionView function) {
                 for (const auto argument : function.arguments()) {
                     if (auto tensor = argument.tensor()) {
+                        // input_tensors.size() before push_back() is index of current tensor
                         inputs.emplace(argument.cb_index(), input_tensors.size());
                         input_tensors.push_back(*tensor);
                     }
                 }
 
-                const auto sub_params = function.params();
-                params.insert(params.end(), sub_params.begin(), sub_params.end());
+                // TODO handle param type coercion during Function creation
+                const auto dtype = function.dtype();
+                for (const auto param : function.params()) {
+                    const auto value = std::visit(
+                        [=](auto scalar) -> std::uint32_t {
+                            using enum DataType;
+                            switch (dtype) {
+                                case BFLOAT16: return std::bit_cast<std::uint16_t>(bfloat16(scalar)) << 16;
+                                case FLOAT32: return std::bit_cast<std::uint32_t>(float(scalar));
+                                case INT32: return std::bit_cast<std::uint32_t>(std::int32_t(scalar));
+                                case UINT32:
+                                default: return std::uint32_t(scalar);
+                            }
+                        },
+                        param);
+                    params.push_back(value);
+                }
             }},
         expression);
 
