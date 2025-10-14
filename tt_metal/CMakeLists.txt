@@ -30,16 +30,100 @@ add_custom_target(
     COMMENT "Generating all FlatBuffer headers"
 )
 
-# Globbing non-build files is acceptable for now because devs don't generate packages.
-# TODO: maybe a bad idea in the age of clang-tidy checks
-file(GLOB_RECURSE api api/*)
+set(TT_METAL_PUBLIC_API
+  ${CMAKE_CURRENT_SOURCE_DIR}/api/tt-metalium/allocator.hpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/api/tt-metalium/base_types.hpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/api/tt-metalium/bfloat16.hpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/api/tt-metalium/bfloat4.hpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/api/tt-metalium/bfloat8.hpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/api/tt-metalium/blockfloat_common.hpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/api/tt-metalium/buffer.hpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/api/tt-metalium/buffer_distribution_spec.hpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/api/tt-metalium/buffer_page_mapping.hpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/api/tt-metalium/buffer_types.hpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/api/tt-metalium/circular_buffer.hpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/api/tt-metalium/circular_buffer_config.hpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/api/tt-metalium/circular_buffer_constants.h
+  ${CMAKE_CURRENT_SOURCE_DIR}/api/tt-metalium/cluster.hpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/api/tt-metalium/command_queue.hpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/api/tt-metalium/constants.hpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/api/tt-metalium/control_plane.hpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/api/tt-metalium/core_coord.hpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/api/tt-metalium/core_descriptor.hpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/api/tt-metalium/data_format.hpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/api/tt-metalium/data_types.hpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/api/tt-metalium/device.hpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/api/tt-metalium/device_pool.hpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/api/tt-metalium/dispatch_core_common.hpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/api/tt-metalium/distributed.hpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/api/tt-metalium/distributed_context.hpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/api/tt-metalium/distributed_host_buffer.hpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/api/tt-metalium/edm_fabric_counters.hpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/api/tt-metalium/event.hpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/api/tt-metalium/fabric.hpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/api/tt-metalium/fabric_edm_types.hpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/api/tt-metalium/fabric_types.hpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/api/tt-metalium/global_circular_buffer.hpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/api/tt-metalium/global_semaphore.hpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/api/tt-metalium/graph_tracking.hpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/api/tt-metalium/hal.hpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/api/tt-metalium/hal_types.hpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/api/tt-metalium/hlk_desc.hpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/api/tt-metalium/host_api.hpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/api/tt-metalium/host_buffer.hpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/api/tt-metalium/kernel_types.hpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/api/tt-metalium/lightmetal_binary.hpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/api/tt-metalium/lightmetal_capture_utils.hpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/api/tt-metalium/lightmetal_replay.hpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/api/tt-metalium/math.hpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/api/tt-metalium/maybe_remote.hpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/api/tt-metalium/memory_pin.hpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/api/tt-metalium/memory_reporter.hpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/api/tt-metalium/mesh_buffer.hpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/api/tt-metalium/mesh_command_queue.hpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/api/tt-metalium/mesh_config.hpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/api/tt-metalium/mesh_coord.hpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/api/tt-metalium/mesh_device.hpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/api/tt-metalium/mesh_device_view.hpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/api/tt-metalium/mesh_event.hpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/api/tt-metalium/mesh_graph.hpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/api/tt-metalium/mesh_graph_descriptor.hpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/api/tt-metalium/mesh_socket.hpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/api/tt-metalium/mesh_trace_id.hpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/api/tt-metalium/mesh_workload.hpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/api/tt-metalium/metal_soc_descriptor.h
+  ${CMAKE_CURRENT_SOURCE_DIR}/api/tt-metalium/persistent_kernel_cache.hpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/api/tt-metalium/profiler_optional_metadata.hpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/api/tt-metalium/profiler_types.hpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/api/tt-metalium/program.hpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/api/tt-metalium/program_cache.hpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/api/tt-metalium/program_descriptors.hpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/api/tt-metalium/routing_table_generator.hpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/api/tt-metalium/runtime_args_data.hpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/api/tt-metalium/semaphore.hpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/api/tt-metalium/shape.hpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/api/tt-metalium/shape2d.hpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/api/tt-metalium/shape_base.hpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/api/tt-metalium/sub_device.hpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/api/tt-metalium/sub_device_types.hpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/api/tt-metalium/system_mesh.hpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/api/tt-metalium/tensor_accessor_args.hpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/api/tt-metalium/tile.hpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/api/tt-metalium/tilize_utils.hpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/api/tt-metalium/tt_align.hpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/api/tt-metalium/tt_backend_api_types.hpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/api/tt-metalium/tt_metal.hpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/api/tt-metalium/tt_metal_profiler.hpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/api/tt-metalium/vector_aligned.hpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/api/tt-metalium/work_split.hpp
+)
 target_sources(
     tt_metal
     PUBLIC
         FILE_SET api
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/api ${CMAKE_CURRENT_BINARY_DIR}/api
-        FILES ${api}
+        FILES ${TT_METAL_PUBLIC_API}
     PRIVATE
         tt_metal.cpp
         graph/graph_tracking.cpp
