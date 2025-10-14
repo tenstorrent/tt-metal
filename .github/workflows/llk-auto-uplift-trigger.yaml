@@ -582,3 +582,12 @@ jobs:
 
           echo "✅ Updated PR body with test status"
           echo "✅ PR #$PR_NUMBER ready for review"
+
+      - name: Notify code owners
+        env:
+          GH_TOKEN: ${{ secrets.TEMP_METAL_PAT }}
+        run: |
+          PR_NUMBER="${{ inputs.recheck_tests == true && needs.recheck-tests.outputs.pr-number || needs.update-submodule.outputs.pr-number }}"
+
+          echo "📢 Posting /codeowners comment to trigger Slack notification"
+          gh pr comment "$PR_NUMBER" --body "/codeowners ping "LLK uplift PR is ready for your review." --repo "${{ github.repository }}"
