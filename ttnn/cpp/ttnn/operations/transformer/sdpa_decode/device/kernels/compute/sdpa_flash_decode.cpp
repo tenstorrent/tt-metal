@@ -278,7 +278,7 @@ void MAIN {
                 // OPTIMIZATION: Add the attention mask directly on top of DST if chunk sizes are dynamic
 #ifdef DYNAMIC_CHUNK_SIZE
                 bool add_causal_mask_fusion = is_causal && k_chunk == k_chunk_end - 1 && apply_mask_at_last_chunk;
-                bool add_sliding_window_mask_fusion = k_chunk == window_start_chunk;
+                bool add_sliding_window_mask_fusion = k_chunk == window_start_chunk && window_start_unaligned > 0;
                 bool add_mask_fusion = add_causal_mask_fusion || use_attention_mask || add_sliding_window_mask_fusion;
 #else
                 bool add_mask_fusion = false;
