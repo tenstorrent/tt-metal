@@ -269,8 +269,12 @@ __attribute__((noinline)) void finish_profiler() {
 
     NocDestinationStateSaver noc_state;
     for (uint32_t riscID = 0; riscID < PROCESSOR_COUNT; riscID++) {
+#if defined(COMPILE_FOR_IDLE_ERISC)
+        profiler_data_buffer[riscID].data[ID_LH] = ((core_flat_id & 0xFF) << 3) | riscID;
+#else
         profiler_data_buffer[riscID].data[ID_LH] =
             ((traceCount & 0xFFFF) << 11) | ((core_flat_id & 0xFF) << 3) | riscID;
+#endif
         int hostIndex = riscID;
         int deviceIndex = kernel_profiler::DEVICE_BUFFER_END_INDEX_BR_ER + riscID;
         if (profiler_control_buffer[deviceIndex]) {
@@ -349,8 +353,12 @@ __attribute__((noinline)) void quick_push() {
     uint32_t core_flat_id = profiler_control_buffer[FLAT_ID];
     uint32_t profiler_core_count_per_dram = profiler_control_buffer[CORE_COUNT_PER_DRAM];
 
+#if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_IDLE_ERISC)
+    profiler_data_buffer[myRiscID].data[ID_LH] = ((core_flat_id & 0xFF) << 3) | myRiscID;
+#else
     profiler_data_buffer[myRiscID].data[ID_LH] =
         ((traceCount & 0xFFFF) << 11) | ((core_flat_id & 0xFF) << 3) | myRiscID;
+#endif
 
     uint32_t dram_offset = (core_flat_id % profiler_core_count_per_dram) * MaxProcessorsPerCoreType *
                                PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC +
@@ -634,11 +642,18 @@ __attribute__((noinline)) void trace_only_init() {
         kernel_profiler::set_host_counter(counter);    \
     }
 
+#if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_AERISC)
 #define DeviceProfilerInit()                          \
     if constexpr (kernel_profiler::TRACE_ON_TENSIX) { \
         kernel_profiler::init_profiler();             \
     }                                                 \
     kernel_profiler::traceCount = 0;
+#else
+#define DeviceProfilerInit()                          \
+    if constexpr (kernel_profiler::TRACE_ON_TENSIX) { \
+        kernel_profiler::init_profiler();             \
+    }
+#endif
 
 #define DeviceTraceOnlyProfilerInit() kernel_profiler::trace_only_init();
 
