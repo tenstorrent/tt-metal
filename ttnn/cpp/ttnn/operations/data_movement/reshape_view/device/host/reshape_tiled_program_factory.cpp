@@ -177,13 +177,9 @@ tt::tt_metal::operation::ProgramWithCallbacks reshape_tiled_program_factory(
             uint32_t local_template_idx = global_to_local_template_map[run.pattern_template_index];
 
             if (run.run_length == 1) {
-                // Short format: 6 fields
-                core_rt_args.push_back(start);                       // output_page_index_start
-                core_rt_args.push_back(end);                         // output_page_index_end
-                core_rt_args.push_back(run.input_page_index_start);  // input_page_index_start
-                core_rt_args.push_back(local_template_idx);          // pattern_template_index
-                core_rt_args.push_back(run.input_offset_start);      // input_offset_start
-                core_rt_args.push_back(run.output_offset_start);     // output_offset_start
+                core_rt_args.push_back(detail::pack_rt_short(start, end));
+                core_rt_args.push_back(detail::pack_rt_short(run.input_page_index_start, local_template_idx));
+                core_rt_args.push_back(detail::pack_rt_short(run.input_offset_start, run.output_offset_start));
             }
         }
 
@@ -197,16 +193,11 @@ tt::tt_metal::operation::ProgramWithCallbacks reshape_tiled_program_factory(
 
             if (run.run_length > 1) {
                 // Long format: 10 fields
-                core_rt_args.push_back(start);                        // output_page_index_start
-                core_rt_args.push_back(end);                          // output_page_index_end
-                core_rt_args.push_back(run.input_page_index_start);   // input_page_index_start
-                core_rt_args.push_back(local_template_idx);           // pattern_template_index
-                core_rt_args.push_back(run.input_offset_start);       // input_offset_start
-                core_rt_args.push_back(run.output_offset_start);      // output_offset_start
-                core_rt_args.push_back(run.run_length);               // run_length
-                core_rt_args.push_back(run.input_page_index_stride);  // input_page_index_stride
-                core_rt_args.push_back(run.input_offset_stride);      // input_offset_stride
-                core_rt_args.push_back(run.output_offset_stride);     // output_offset_stride
+                core_rt_args.push_back(detail::pack_rt_short(start, end));
+                core_rt_args.push_back(detail::pack_rt_short(run.input_page_index_start, local_template_idx));
+                core_rt_args.push_back(detail::pack_rt_short(run.input_offset_start, run.output_offset_start));
+                core_rt_args.push_back(detail::pack_rt_short(run.run_length, run.input_page_index_stride));
+                core_rt_args.push_back(detail::pack_rt_short(run.input_offset_stride, run.output_offset_stride));
             }
         }
 
@@ -225,13 +216,10 @@ tt::tt_metal::operation::ProgramWithCallbacks reshape_tiled_program_factory(
             reader_runtime_args.push_back(tmpl.output_offset_stride);
             reader_runtime_args.push_back(tmpl.num_elements);
         }
-
-        printf("reader runtime size after templates: %zu\n", reader_runtime_args.size());
         // Add run data
         for (auto k : core_rt_args) {
             reader_runtime_args.push_back(k);
         }
-
         tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, c, reader_runtime_args);
 
         // Same for writer

@@ -5,10 +5,11 @@
 #include "dataflow_api.h"
 
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
-#include "ttnn/operations/data_movement/reshape_view/reshape_struct_common.hpp"
+#include "ttnn/operations/data_movement/reshape_view/reshape_kernel_common.hpp"
 
 using namespace tt::data_movement::common;
 using ttnn::operations::data_movement::reshape::detail::SegmentMapData;
+using ttnn::operations::data_movement::reshape::detail::unpack_rt_short;
 
 void kernel_main() {
     uint32_t num_templates = get_arg_val<uint32_t>(0);
@@ -23,9 +24,6 @@ void kernel_main() {
     constexpr auto output_args = TensorAccessorArgs<4>();
 
     const auto output_addrgen = TensorAccessor(output_args, output_base_addr, Tile_size_bytes);
-
-    DPRINT << "num_templates=" << num_templates << " num_short_runs=" << num_short_runs
-           << " num_long_runs=" << num_long_runs << "\n";
 
     cb_reserve_back(cb_id_working, 1);
     const uint32_t working_write_addr = get_write_ptr(cb_id_working);
@@ -47,20 +45,18 @@ void kernel_main() {
     }
 
     uint32_t short_runs_base = tmpl_base + num_templates * 4;
-    uint32_t long_runs_base = short_runs_base + num_short_runs * 6;
+    uint32_t long_runs_base = short_runs_base + num_short_runs * 3;
 
     uint32_t input_base_addr, previous_input_page_idx = std::numeric_limits<uint32_t>::max();
     bool first = true;
 
     // Process short runs (run_length = 1)
     for (uint32_t i = 0; i < num_short_runs; ++i) {
-        uint32_t out_page_start = get_arg_val<uint32_t>(short_runs_base + i * 6 + 0);
-        uint32_t out_page_end = get_arg_val<uint32_t>(short_runs_base + i * 6 + 1);
-        uint32_t in_page_start = get_arg_val<uint32_t>(short_runs_base + i * 6 + 2);
-        uint32_t pattern_template_index = get_arg_val<uint32_t>(short_runs_base + i * 6 + 3);
-        uint32_t in_offset_start = get_arg_val<uint32_t>(short_runs_base + i * 6 + 4);
-        uint32_t out_offset_start = get_arg_val<uint32_t>(short_runs_base + i * 6 + 5);
-
+        auto [out_page_start, out_page_end] = unpack_rt_short(get_arg_val<uint32_t>(short_runs_base + i * 3 + 0));
+        auto packed_template = get_arg_val<uint32_t>(short_runs_base + i * 3 + 1);
+        auto [in_offset_start, out_offset_start] = unpack_rt_short(get_arg_val<uint32_t>(short_runs_base + i * 3 + 2));
+        uint32_t in_page_start = packed_template >> 16;
+        uint32_t pattern_template_index = (packed_template >> 8) & 0xFF;
         const auto& tmpl = templates[pattern_template_index];
 
         for (uint32_t out_page_idx = out_page_start; out_page_idx <= out_page_end; ++out_page_idx) {
@@ -101,16 +97,12 @@ void kernel_main() {
     }
 
     for (uint32_t i = 0; i < num_long_runs; ++i) {
-        uint32_t out_page_start = get_arg_val<uint32_t>(long_runs_base + i * 10 + 0);
-        uint32_t out_page_end = get_arg_val<uint32_t>(long_runs_base + i * 10 + 1);
-        uint32_t in_page_start = get_arg_val<uint32_t>(long_runs_base + i * 10 + 2);
-        uint32_t pattern_template_index = get_arg_val<uint32_t>(long_runs_base + i * 10 + 3);
-        uint32_t in_offset_start = get_arg_val<uint32_t>(long_runs_base + i * 10 + 4);
-        uint32_t out_offset_start = get_arg_val<uint32_t>(long_runs_base + i * 10 + 5);
-        uint32_t run_length = get_arg_val<uint32_t>(long_runs_base + i * 10 + 6);
-        int32_t in_page_stride = get_arg_val<uint32_t>(long_runs_base + i * 10 + 7);
-        int32_t in_offset_stride = get_arg_val<uint32_t>(long_runs_base + i * 10 + 8);
-        int32_t out_offset_stride = get_arg_val<uint32_t>(long_runs_base + i * 10 + 9);
+        auto [out_page_start, out_page_end] = unpack_rt_short(get_arg_val<uint32_t>(long_runs_base + i * 5 + 0));
+        auto [in_page_start, pattern_template_index] =
+            unpack_rt_short(get_arg_val<uint32_t>(long_runs_base + i * 5 + 1));
+        auto [in_offset_start, out_offset_start] = unpack_rt_short(get_arg_val<uint32_t>(long_runs_base + i * 5 + 2));
+        auto [run_length, in_page_stride] = unpack_rt_short(get_arg_val<uint32_t>(long_runs_base + i * 5 + 3));
+        auto [in_offset_stride, out_offset_stride] = unpack_rt_short(get_arg_val<uint32_t>(long_runs_base + i * 5 + 4));
 
         const auto& tmpl = templates[pattern_template_index];
 
@@ -157,5 +149,4 @@ void kernel_main() {
         }
     }
     cb_push_back(cb_id_working, 1);
-    DPRINT << "end of writer kernel\n";
 }

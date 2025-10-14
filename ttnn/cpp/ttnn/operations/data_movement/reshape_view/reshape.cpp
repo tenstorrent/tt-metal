@@ -245,10 +245,10 @@ ttnn::Tensor reshape_tiled(
     auto estimated_num_cores = std::min(num_output_pages, total_num_cores);
     // calculate estimated size of rt args
     size_t rt_args_size = 4 + compressed_map.pattern_templates.size() * 4 +
-                          compressed_map.page_pattern_runs.size() * 10;  // 4 header + pattern templates + runs
+                          5 * compressed_map.page_pattern_runs.size();  // 4 header + pattern templates + runs
     const uint32_t max_rt_args = 341;
     Tensor output_tensor_3d;
-    if (rt_args_size / estimated_num_cores > max_rt_args) {
+    if (std::ceil(rt_args_size / estimated_num_cores) > max_rt_args) {
         // run untilize + reshape + tilize
         auto untilize_tensor =
             ttnn::to_layout(tensor3d, ttnn::ROW_MAJOR_LAYOUT, tensor3d.dtype(), tensor3d.memory_config());
