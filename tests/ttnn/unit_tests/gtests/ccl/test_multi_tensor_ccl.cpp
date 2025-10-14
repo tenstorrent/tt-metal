@@ -85,32 +85,70 @@ TEST_F(MeshDevice1x4Fixture, AllGatherCommandProcessorAsync) {
         tensors.push_back(Tensor::from_vector(std::move(data), tensor_spec).to_device(mesh_devices[dev_idx].get()));
     }
 
-    // auto aggregated_tensor = ttnn::experimental::unit_mesh::aggregate(tensors);
+    auto aggregated_tensor = ttnn::experimental::unit_mesh::aggregate(tensors);
+    auto disaggregated_output_tensors = ttnn::experimental::unit_mesh::disaggregate(aggregated_tensor);
     // aggregated_tensor.print();
-
-    // tt::tt_metal::distributed::Synchronize(aggregated_tensor.device(), std::nullopt, std::vector<SubDeviceId>());
 
     // auto all_gathered_tensor = ttnn::all_gather(
     //     aggregated_tensor,
     //     /* dim */ 0);
 
-    // // all_gathered_tensor.print(); missing 1 values on coord  (0, 1)
+    // // all_gathered_tensor.print(); // missing 1 values on coord  (0, 1)
 
-    // tt::tt_metal::distributed::Synchronize(all_gathered_tensor.device(), std::nullopt, std::vector<SubDeviceId>());
-    // // auto disaggregated_output_tensors = ttnn::experimental::unit_mesh::disaggregate(all_gathered_tensor);
-    // // // std::cout << "disaggregated_output_tensors: " << std::endl;
-    // // for (const auto& tensor : disaggregated_output_tensors) {
-    // //     tt::tt_metal::distributed::Synchronize(tensor.device(), std::nullopt, std::vector<SubDeviceId>());
-    // //     // tensor.print();
-    // // }
+    // auto disaggregated_output_tensors = ttnn::experimental::unit_mesh::disaggregate(all_gathered_tensor);
+    // for (int dev_idx = 0; dev_idx < mesh_devices.size(); dev_idx++) {
+    //     auto data = disaggregated_output_tensors[dev_idx].to_vector<bfloat16>();
+    //     for (int i = 0; i < data.size(); i++) {
+    //         float expected = static_cast<float>(i / tensor_spec.logical_shape().volume());
+    //         EXPECT_EQ(static_cast<float>(data[i]), expected);
+    //     }
+    // }
+    for (const auto& tensor : disaggregated_output_tensors) {
+        tensor.print();
+    }
+}
 
-    // // for (int dev_idx = 0; dev_idx < mesh_devices.size(); dev_idx++) {
-    // //     auto data = disaggregated_output_tensors[dev_idx].to_vector<bfloat16>();
-    // //     for (int i = 0; i < data.size(); i++) {
-    // //         float expected = static_cast<float>(i / tensor_spec.logical_shape().volume());
-    // //         EXPECT_EQ(static_cast<float>(data[i]), expected);
-    // //     }
-    // // }
+TEST_F(MeshDevice1x4Fixture, AllGatherPreallocatedOutputTensor) {
+    auto mesh_devices = CMAKE_UNIQUE_NAMESPACE::get_line_devices(mesh_device_.get());
+    auto devices = CMAKE_UNIQUE_NAMESPACE::get_line_devices_as_idevice(mesh_devices);
+
+    std::vector<ttnn::Tensor> tensors, output_tensors;
+    TensorSpec tensor_spec(
+        ttnn::Shape({1, 8, 1024, 768}), TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), MemoryConfig{}));
+    TensorSpec output_tensor_spec(
+        ttnn::Shape({4, 8, 1024, 768}), TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), MemoryConfig{}));
+    for (int dev_idx = 0; dev_idx < mesh_devices.size(); dev_idx++) {
+        std::vector<bfloat16> data(tensor_spec.logical_shape().volume(), bfloat16(static_cast<float>(dev_idx)));
+        tensors.push_back(Tensor::from_vector(std::move(data), tensor_spec).to_device(mesh_devices[dev_idx].get()));
+        std::vector<bfloat16> output_data(output_tensor_spec.logical_shape().volume(), bfloat16(0));
+        output_tensors.push_back(
+            Tensor::from_vector(std::move(output_data), output_tensor_spec).to_device(mesh_devices[dev_idx].get()));
+    }
+
+    auto aggregated_tensor = ttnn::experimental::unit_mesh::aggregate(tensors);
+    auto aggregated_output_tensor = ttnn::experimental::unit_mesh::aggregate(output_tensors);
+
+    auto all_gathered_tensor = ttnn::all_gather(
+        aggregated_tensor,
+        /* dim */ 0,
+        std::nullopt,
+        std::nullopt,
+        std::nullopt,
+        aggregated_output_tensor);
+
+    // all_gathered_tensor.print(); // missing 1 values on coord  (0, 1)
+
+    // auto disaggregated_output_tensors = ttnn::experimental::unit_mesh::disaggregate(all_gathered_tensor);
+    for (int dev_idx = 0; dev_idx < mesh_devices.size(); dev_idx++) {
+        auto data = output_tensors[dev_idx].to_vector<bfloat16>();
+        for (int i = 0; i < data.size(); i++) {
+            float expected = static_cast<float>(i / tensor_spec.logical_shape().volume());
+            EXPECT_EQ(static_cast<float>(data[i]), expected);
+        }
+    }
+    for (const auto& tensor : output_tensors) {
+        tensor.print();
+    }
 }
 
 // TODO: uncomment this once the composite implementation is completed (#28556)
