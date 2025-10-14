@@ -380,7 +380,6 @@ run_t3000_mochi_tests() {
 
   echo "LOG_METAL: Running run_t3000_mochi_tests"
 
-  # Run test_model for mochi
   pytest -n auto models/experimental/tt_dit/tests/models/mochi/test_vae_mochi.py -k "T3K"; fail+=$?
   pytest -n auto models/experimental/tt_dit/tests/models/mochi/test_attention_mochi.py; fail+=$?
   pytest -n auto models/experimental/tt_dit/tests/models/mochi/test_transformer_mochi.py; fail+=$?

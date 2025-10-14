@@ -360,8 +360,7 @@ run_t3000_mochi_tests() {
 
   echo "LOG_METAL: Running run_t3000_mochi_tests"
 
-  #Cache path
-  NO_PROMPT=1 pytest -n auto models/experimental/tt_dit/tests/models/mochi/test_mochi_pipeline.py -k "2x4sp1tp0" --timeout 600 ; fail+=$?
+  NO_PROMPT=1 pytest -n auto models/experimental/tt_dit/tests/models/mochi/test_pipeline_mochi.py --timeout 600 ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
