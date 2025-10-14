@@ -131,6 +131,55 @@ void fabric_mux_connection_rt_args(
     worker_rt_args.push_back(num_workers_per_direction);
 }
 
+void all_gather_async_minimal_default_helper_override_runtime_arguments(
+    tt::tt_metal::Program& program,
+    const std::vector<tt::tt_metal::KernelHandle>& reader_kernel_ids,
+    const std::vector<tt::tt_metal::KernelHandle>& writer_kernel_ids,
+    const std::vector<tt::tt_metal::CoreCoord>& all_cores,
+    uint32_t num_links,
+    uint32_t num_directions_per_link,
+    uint32_t num_workers_per_direction,
+    uint32_t num_mux_cores_per_direction_per_link,
+    uint32_t num_cores_per_link,
+    const std::optional<GlobalSemaphore>& barrier_semaphore,
+    const std::vector<GlobalSemaphore>& semaphore,
+    const Tensor& input,
+    const Tensor& output) {
+    // Update runtime arguments for all worker cores
+    uint32_t core_idx = 0;
+    for (uint32_t link = 0; link < num_links; link++) {
+        for (uint32_t dir = 0; dir < num_directions_per_link; dir++) {
+            for (uint32_t worker = 0; worker < num_workers_per_direction; worker++) {
+                uint32_t mux_core_offset = (link * num_cores_per_link) +
+                                           (dir * (num_mux_cores_per_direction_per_link + num_workers_per_direction));
+                tt::tt_metal::CoreCoord core =
+                    all_cores[mux_core_offset + num_mux_cores_per_direction_per_link + worker];
+                auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_ids[core_idx]);
+                auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_ids[core_idx]);
+
+                const auto& out_ready_semaphore = semaphore.at(dir);
+
+                // sender reader
+                auto& worker_reader_sender_runtime_args = reader_runtime_args[core.x][core.y];
+                worker_reader_sender_runtime_args[0] = input.buffer()->address();
+                worker_reader_sender_runtime_args[1] = output.buffer()->address();
+                worker_reader_sender_runtime_args[13] = out_ready_semaphore.address();
+
+                // sender writer
+                auto& worker_writer_sender_runtime_args = writer_runtime_args[core.x][core.y];
+                worker_writer_sender_runtime_args[0] = output.buffer()->address();
+                worker_writer_sender_runtime_args[14] = out_ready_semaphore.address();
+
+                if (barrier_semaphore.has_value()) {
+                    worker_writer_sender_runtime_args[18] = barrier_semaphore.value().address();
+                }
+
+                core_idx++;
+            }
+        }
+    }
+}
+
 tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default(
     const Tensor& input_tensor,
     const MeshCoordinate& sender_device_coord,
@@ -176,7 +225,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default(
         reverse_order);
 }
 
-tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_helper(
+AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifacts(
     tt::tt_metal::Program& program,
     const Tensor& input_tensor,
     const MeshCoordinate& sender_device_coord,
@@ -630,6 +679,72 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
         }
     }
 
+    // Return the program artifacts
+    return {
+        reader_kernel_ids,
+        writer_kernel_ids,
+        all_cores,
+        num_directions_per_link,
+        num_workers_per_direction,
+        num_mux_cores_per_direction_per_link,
+        num_cores_per_link};
+}
+
+tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_helper(
+    tt::tt_metal::Program& program,
+    const Tensor& input_tensor,
+    const MeshCoordinate& sender_device_coord,
+    const std::optional<MeshCoordinate>& forward_coord,
+    const std::optional<MeshCoordinate>& backward_coord,
+    Tensor& output_tensor,
+    const uint32_t dim,
+    const uint32_t num_links,
+    const uint32_t ring_size,
+    const uint32_t ring_index,
+    ccl::Topology topology,
+    const std::vector<GlobalSemaphore>& semaphore,
+    const std::optional<GlobalSemaphore>& barrier_semaphore,
+    bool using_persistent_buffers,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    std::optional<experimental::ccl::AllGatherFusedOpSignaler>& fused_op_signaler,
+    std::optional<uint32_t> chunks_per_sync,
+    std::optional<uint32_t> num_workers_per_direction_opt,
+    std::optional<uint32_t> num_buffers_per_channel,
+    const CoreCoord core_grid_offset,
+    const bool reverse_order) {
+    // Call the builder to create the program and get artifacts
+    auto
+        [reader_kernel_ids,
+         writer_kernel_ids,
+         all_cores,
+         num_directions_per_link,
+         num_workers_per_direction,
+         num_mux_cores_per_direction_per_link,
+         num_cores_per_link] =
+            build_all_gather_async_minimal_default_program_artifacts(
+                program,
+                input_tensor,
+                sender_device_coord,
+                forward_coord,
+                backward_coord,
+                output_tensor,
+                dim,
+                num_links,
+                ring_size,
+                ring_index,
+                topology,
+                semaphore,
+                barrier_semaphore,
+                using_persistent_buffers,
+                sub_device_id,
+                fused_op_signaler,
+                chunks_per_sync,
+                num_workers_per_direction_opt,
+                num_buffers_per_channel,
+                core_grid_offset,
+                reverse_order);
+
+    // Create the callback using the artifacts returned by the builder
     auto override_runtime_arguments_callback =
         [reader_kernel_ids,
          writer_kernel_ids,
@@ -648,38 +763,22 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
             const auto& output = output_tensors[0];
 
             auto barrier_semaphore = static_cast<const ttnn::AllGatherAsync*>(operation)->barrier_semaphore;
-            // update senders
-            uint32_t core_idx = 0;
-            for (uint32_t link = 0; link < num_links; link++) {
-                for (uint32_t dir = 0; dir < num_directions_per_link; dir++) {
-                    for (uint32_t worker = 0; worker < num_workers_per_direction; worker++) {
-                        uint32_t mux_core_offset =
-                            (link * num_cores_per_link) +
-                            (dir * (num_mux_cores_per_direction_per_link + num_workers_per_direction));
-                        CoreCoord core = all_cores[mux_core_offset + num_mux_cores_per_direction_per_link + worker];
-                        auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_ids[core_idx]);
-                        auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_ids[core_idx]);
+            auto semaphore = static_cast<const ttnn::AllGatherAsync*>(operation)->semaphore;
 
-                        auto out_ready_semaphore =
-                            static_cast<const ttnn::AllGatherAsync*>(operation)->semaphore.at(dir);
-                        // sender reader
-                        auto& worker_reader_sender_runtime_args = reader_runtime_args[core.x][core.y];
-                        worker_reader_sender_runtime_args[0] = input.buffer()->address();
-                        worker_reader_sender_runtime_args[1] = output.buffer()->address();
-                        worker_reader_sender_runtime_args[13] = out_ready_semaphore.address();
-                        // sender writer
-                        auto& worker_writer_sender_runtime_args = writer_runtime_args[core.x][core.y];
-                        worker_writer_sender_runtime_args[0] = output.buffer()->address();
-                        worker_writer_sender_runtime_args[14] = out_ready_semaphore.address();
-
-                        if (barrier_semaphore.has_value()) {
-                            worker_writer_sender_runtime_args[18] = barrier_semaphore.value().address();
-                        }
-
-                        core_idx++;
-                    }
-                }
-            }
+            all_gather_async_minimal_default_helper_override_runtime_arguments(
+                program,
+                reader_kernel_ids,
+                writer_kernel_ids,
+                all_cores,
+                num_links,
+                num_directions_per_link,
+                num_workers_per_direction,
+                num_mux_cores_per_direction_per_link,
+                num_cores_per_link,
+                barrier_semaphore,
+                semaphore,
+                input,
+                output);
         };
 
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};

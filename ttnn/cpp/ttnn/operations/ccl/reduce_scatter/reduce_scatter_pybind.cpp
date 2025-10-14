@@ -28,11 +28,11 @@ void py_bind_reduce_scatter(py::module& module) {
 
             Keyword Args:
                 cluster_axis (int, optional): The cluster axis to reduce across. Defaults to `None`.
-                topology (ttnn.Topology, optional): Fabric topology. Defaults to current mesh topology.
+
+                topology (ttnn.Topology, optional): Fabric topology. Defaults to `None`.
                 output_tensor (ttnn.Tensor, optional): Preallocated output tensor.
                 memory_config (ttnn.MemoryConfig, optional): Output memory configuration.
                 subdevice_id (ttnn.SubDeviceId, optional): Subdevice id for worker cores.
-                queue_id (int, optional): Command queue id. Defaults to 0.
 
            Returns:
                ttnn.Tensor: The reduced and scattered tensor.)doc";
@@ -70,7 +70,7 @@ void py_bind_reduce_scatter(py::module& module) {
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
             py::arg("num_links") = std::nullopt,
-            py::arg("topology") = tt::tt_fabric::Topology::Linear,
+            py::arg("topology") = std::nullopt,
         });
 }
 
