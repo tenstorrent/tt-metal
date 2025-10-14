@@ -99,6 +99,7 @@ void kernel_main() {
 
     // Unpack pattern templates
     struct PatternTemplate {
+        int32_t input_page_stride;
         int32_t input_offset_stride;
         int32_t output_offset_stride;
         uint32_t num_elements;
@@ -106,12 +107,13 @@ void kernel_main() {
     PatternTemplate templates[num_templates];
     uint32_t tmpl_base = 4;
     for (uint32_t i = 0; i < num_templates; ++i) {
-        templates[i].input_offset_stride = get_arg_val<uint32_t>(tmpl_base + i * 3 + 0);
-        templates[i].output_offset_stride = get_arg_val<uint32_t>(tmpl_base + i * 3 + 1);
-        templates[i].num_elements = get_arg_val<uint32_t>(tmpl_base + i * 3 + 2);
+        templates[i].input_page_stride = get_arg_val<uint32_t>(tmpl_base + i * 4 + 0);
+        templates[i].input_offset_stride = get_arg_val<uint32_t>(tmpl_base + i * 4 + 1);
+        templates[i].output_offset_stride = get_arg_val<uint32_t>(tmpl_base + i * 4 + 2);
+        templates[i].num_elements = get_arg_val<uint32_t>(tmpl_base + i * 4 + 3);
     }
 
-    uint32_t short_runs_base = tmpl_base + num_templates * 3;
+    uint32_t short_runs_base = tmpl_base + num_templates * 4;
     uint32_t long_runs_base = short_runs_base + num_short_runs * 6;
 
     uint32_t previous_input_page_idx = std::numeric_limits<uint32_t>::max();
@@ -182,24 +184,25 @@ void kernel_main() {
                 if (tmpl.num_elements == 0) {
                     continue;
                 }
+                uint32_t seg_input_page_idx = input_page_idx + seg * tmpl.input_page_stride;
 
                 DPRINT << "long_run i=" << i << " out_page_idx=" << out_page_idx << " seg=" << seg << "\n";
                 DPRINT << "input_page_idx=" << input_page_idx << " input_offset=" << input_offset << "\n";
 
                 if (first) {
                     first = false;
-                } else if (input_page_idx == previous_input_page_idx) {
+                } else if (seg_input_page_idx == previous_input_page_idx) {
                     continue;
                 }
 
                 cb_reserve_back(input_cb_id, 1);
                 const uint32_t input_write_addr = get_read_ptr(input_cb_id);
-                const uint64_t input_page_noc_addr = get_noc_addr(input_page_idx, input_addr_gen);
+                const uint64_t input_page_noc_addr = get_noc_addr(seg_input_page_idx, input_addr_gen);
 
                 enhanced_noc_async_read<Tile_Size_Bytes, true>(input_page_noc_addr, input_write_addr, Tile_Size_Bytes);
                 noc_async_read_barrier();
                 cb_push_back(input_cb_id, 1);
-                previous_input_page_idx = input_page_idx;
+                previous_input_page_idx = seg_input_page_idx;
             }
         }
     }
