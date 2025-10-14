@@ -14,7 +14,7 @@ from models.demos.wormhole.stable_diffusion.common import SD_L1_SMALL_SIZE
 from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
 from models.demos.wormhole.stable_diffusion.sd_helper_funcs import (
     STABLE_DIFFUSION_V1_4_MODEL_LOCATION,
-    get_refference_unet,
+    get_refference_stable_diffusion_pipeline,
 )
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_unet_2d_condition_model_new_conv import (
     UNet2DConditionModel as UNet2D,
@@ -75,7 +75,7 @@ def test_unet_2d_condition_model_512x512(
     torch.manual_seed(0)
     load_from_disk = False
     if not load_from_disk:
-        model = get_refference_unet(is_ci_env, is_ci_v2_env, model_location_generator)
+        model = get_refference_stable_diffusion_pipeline(is_ci_env, is_ci_v2_env, model_location_generator).unet
         config = model.config
         torch.save(model, "unet.pt")
         torch.save(config, "unet_config.pt")

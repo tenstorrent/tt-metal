@@ -11,7 +11,7 @@ from models.demos.wormhole.stable_diffusion.common import SD_L1_SMALL_SIZE
 from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
 from models.demos.wormhole.stable_diffusion.sd_helper_funcs import (
     STABLE_DIFFUSION_V1_4_MODEL_LOCATION,
-    get_refference_unet,
+    get_refference_stable_diffusion_pipeline,
 )
 from models.demos.wormhole.stable_diffusion.tests.parameterizations import TRANSFORMER_PARAMETERIZATIONS
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_transformer_2d_new_conv import transformer_2d_model
@@ -61,7 +61,7 @@ def test_transformer_2d_model_512x512(
     input = torch.randn(input_shape) * 0.01
     encoder_hidden_states = torch.rand(encoder_hidden_states)
 
-    unet = get_refference_unet(is_ci_env, is_ci_v2_env, model_location_generator)
+    unet = get_refference_stable_diffusion_pipeline(is_ci_env, is_ci_v2_env, model_location_generator).unet
     config = unet.config
 
     parameters = preprocess_model_parameters(

@@ -15,7 +15,7 @@ from models.demos.wormhole.stable_diffusion.common import SD_L1_SMALL_SIZE, SD_T
 from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
 from models.demos.wormhole.stable_diffusion.sd_helper_funcs import (
     STABLE_DIFFUSION_V1_4_MODEL_LOCATION,
-    get_refference_unet,
+    get_refference_stable_diffusion_pipeline,
     get_refference_vae,
     run,
 )
@@ -62,7 +62,7 @@ def test_stable_diffusion_unet_trace(device, is_ci_env, is_ci_v2_env, model_loca
     profiler.clear()
     torch.manual_seed(0)
 
-    torch_model = get_refference_unet(is_ci_env, is_ci_v2_env, model_location_generator)
+    torch_model = get_refference_stable_diffusion_pipeline(is_ci_env, is_ci_v2_env, model_location_generator).unet
     config = torch_model.config
 
     # Setup scheduler
@@ -283,7 +283,7 @@ def test_stable_diffusion_perf(
 
     # setup pytorch model
     torch.manual_seed(0)
-    model = get_refference_unet(is_ci_env, is_ci_v2_env, model_location_generator)
+    model = get_refference_stable_diffusion_pipeline(is_ci_env, is_ci_v2_env, model_location_generator).unet
     vae = get_refference_vae(is_ci_env, is_ci_v2_env, model_location_generator)
     config = model.config
 

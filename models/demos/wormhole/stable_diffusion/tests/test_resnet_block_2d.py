@@ -9,7 +9,7 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 import ttnn
 from models.demos.wormhole.stable_diffusion.common import SD_L1_SMALL_SIZE
 from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
-from models.demos.wormhole.stable_diffusion.sd_helper_funcs import get_refference_unet
+from models.demos.wormhole.stable_diffusion.sd_helper_funcs import get_refference_stable_diffusion_pipeline
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_resnetblock2d_new_conv import resnetBlock2D
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
     preprocess_and_push_input_to_device,
@@ -86,7 +86,7 @@ def test_resnet_block_2d_512x512(
     if not load_from_disk:
         # setup pytorch model
 
-        unet = get_refference_unet(is_ci_env, is_ci_v2_env, model_location_generator)
+        unet = get_refference_stable_diffusion_pipeline(is_ci_env, is_ci_v2_env, model_location_generator).unet
         config = unet.config
 
         parameters = preprocess_model_parameters(
