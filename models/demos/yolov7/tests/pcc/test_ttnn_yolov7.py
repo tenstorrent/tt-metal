@@ -8,6 +8,7 @@ import pytest
 import torch
 
 import ttnn
+from models.common.utility_functions import skip_with_watcher
 from models.demos.yolov7.common import YOLOV7_L1_SMALL_SIZE, load_torch_model
 from models.demos.yolov7.reference import yolov7_model, yolov7_utils
 from models.demos.yolov7.tt.ttnn_yolov7 import ttnn_yolov7
@@ -18,6 +19,7 @@ sys.modules["models.common"] = yolov7_utils
 sys.modules["models.yolo"] = yolov7_model
 
 
+@skip_with_watcher()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": YOLOV7_L1_SMALL_SIZE}], indirect=True)
 def test_yolov7(device, reset_seeds, model_location_generator):
     torch_model = load_torch_model(model_location_generator)

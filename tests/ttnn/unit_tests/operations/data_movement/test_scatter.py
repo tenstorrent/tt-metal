@@ -66,7 +66,7 @@ def rand_permutations(shape, dim, dtype):
     ],
 )
 def test_scatter_spec(input_shape, dim, index_and_source_shape, input_dtype, index_dtype, layout, device):
-    # Skip specific failing test case with watcher enabled
+    # Test failing with watcher enabled, github issue #30516
     if is_watcher_enabled():
         pytest.skip("Test is not passing with watcher enabled")
 

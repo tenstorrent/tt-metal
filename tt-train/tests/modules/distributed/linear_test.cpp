@@ -53,6 +53,7 @@ protected:
 };
 
 TEST_F(N300TensorParallelLinearTest, RowParallelLinearHasBiasNotInputParallel) {
+    // Test failing with watcher enabled, github issue #30521
     SKIP_FOR_WATCHER();
 
     uint32_t in_features = 64U;
@@ -105,6 +106,7 @@ TEST_F(N300TensorParallelLinearTest, RowParallelLinearHasBiasNotInputParallel) {
 };
 
 TEST_F(N300TensorParallelLinearTest, RowParallelLinearNoBiasNotInputParallel) {
+    // Test failing with watcher enabled, github issue #30521
     SKIP_FOR_WATCHER();
 
     uint32_t in_features = 64U;
@@ -151,6 +153,7 @@ TEST_F(N300TensorParallelLinearTest, RowParallelLinearNoBiasNotInputParallel) {
 };
 
 TEST_F(N300TensorParallelLinearTest, RowParallelLinearHasBiasInputParallel) {
+    // Test failing with watcher enabled, github issue #30521
     SKIP_FOR_WATCHER();
 
     uint32_t in_features = 64U;
@@ -199,6 +202,7 @@ TEST_F(N300TensorParallelLinearTest, RowParallelLinearHasBiasInputParallel) {
 };
 
 TEST_F(N300TensorParallelLinearTest, RowParallelLinearNoBiasInputParallel) {
+    // Test failing with watcher enabled, github issue #30521
     SKIP_FOR_WATCHER();
 
     uint32_t in_features = 64U;
@@ -439,6 +443,7 @@ TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearNoBiasNoAllGather) {
 };
 
 TEST_F(N300TensorParallelLinearTest, RowParallelLinearHasBiasNanoGPT) {
+    // Test failing with watcher enabled, github issue #30521
     SKIP_FOR_WATCHER();
 
     uint32_t batch_size = 64;
@@ -520,6 +525,7 @@ TEST_F(N300TensorParallelLinearTest, RowParallelLinearHasBiasNanoGPT) {
 };
 
 TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearHasBiasNanoGPT) {
+    // Test failing with watcher enabled, github issue #30521
     SKIP_FOR_WATCHER();
 
     uint32_t batch_size = 64;
@@ -600,6 +606,7 @@ TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearHasBiasNanoGPT) {
 };
 
 TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearNoBiasNanoGPT) {
+    // Test failing with watcher enabled, github issue #30521
     SKIP_FOR_WATCHER();
 
     uint32_t batch_size = 64;

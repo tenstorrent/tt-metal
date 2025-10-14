@@ -41,6 +41,7 @@ protected:
 };
 
 TEST_F(N300CommOpsTest, TestAllReduceNotFullyTiled) {
+    // Test failing with watcher enabled, github issue #30521
     SKIP_FOR_WATCHER();
 
     auto* device = &ttml::autograd::ctx().get_device();
@@ -100,6 +101,7 @@ TEST_F(N300CommOpsTest, TestAllReduceNotFullyTiled) {
 }
 
 TEST_F(N300CommOpsTest, TestAllReduceNanoGPT) {
+    // Test failing with watcher enabled, github issue #30521
     SKIP_FOR_WATCHER();
 
     auto* device = &ttml::autograd::ctx().get_device();
@@ -164,6 +166,7 @@ TEST_F(N300CommOpsTest, TestAllReduceNanoGPT) {
 }
 
 TEST_F(N300CommOpsTest, TestAllReduceFullyTiled) {
+    // Test failing with watcher enabled, github issue #30521
     SKIP_FOR_WATCHER();
 
     auto* device = &ttml::autograd::ctx().get_device();
