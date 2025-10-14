@@ -447,15 +447,17 @@ void CablingGenerator::emit_cabling_guide_csv(const std::string& output_path, bo
         {tt::ARCH::WORMHOLE_B0, "400G"}, {tt::ARCH::BLACKHOLE, "800G"}, {tt::ARCH::Invalid, "UNKNOWN"}};
 
     // Unknown for lengths unable to be calculated (longer than avaiable cables, cross-aisle/hall, etc.)
-    
+
     // Vector of (Host,Tray,Port) Connection Pairs
     std::vector<std::pair<std::tuple<HostId, TrayId, PortId>, std::tuple<HostId, TrayId, PortId>>> conn_list;
 
     CablingGenerator::get_all_connections_of_type(root_instance_, {PortType::QSFP_DD}, conn_list);
     output_file.fill('0');
     if (loc_info) {
-        output_file << "Source,,,,,,,,Destination,,,,,,,,Cable Length,Cable Type" << std::endl;
-        output_file << "Hall,Aisle,Rack,Shelf U,Tray,Port,Label,Node Type,Hall,Aisle,Rack,Shelf U,Tray,Port,Label,Node Type,," << std::endl;
+        output_file << "Source,,,,,,,,,Destination,,,,,,,,,Cable Length,Cable Type" << std::endl;
+        output_file << "Hostname,Hall,Aisle,Rack,Shelf U,Tray,Port,Label,Node Type,Hostname,Hall,Aisle,Rack,Shelf "
+                       "U,Tray,Port,Label,Node Type,,"
+                    << std::endl;
     } else {
         output_file << "Source,,,,Destination,,," << std::endl;
         output_file << "Hostname,Tray,Port,Node Type,Hostname,Tray,Port,Node Type" << std::endl;
@@ -475,12 +477,12 @@ void CablingGenerator::emit_cabling_guide_csv(const std::string& output_path, bo
         // Create node_type strings with "_DEFAULT" suffix removed if present
         const std::string suffix = "_DEFAULT";
         std::string host1_node_type = host1.node_type;
-        if (host1_node_type.size() >= suffix.size() && 
+        if (host1_node_type.size() >= suffix.size() &&
             host1_node_type.compare(host1_node_type.size() - suffix.size(), suffix.size(), suffix) == 0) {
             host1_node_type = host1_node_type.substr(0, host1_node_type.size() - suffix.size());
         }
         std::string host2_node_type = host2.node_type;
-        if (host2_node_type.size() >= suffix.size() && 
+        if (host2_node_type.size() >= suffix.size() &&
             host2_node_type.compare(host2_node_type.size() - suffix.size(), suffix.size(), suffix) == 0) {
             host2_node_type = host2_node_type.substr(0, host2_node_type.size() - suffix.size());
         }
@@ -492,12 +494,14 @@ void CablingGenerator::emit_cabling_guide_csv(const std::string& output_path, bo
 
         CableLength cable_l = calc_cable_length(host1, host2);
         if (loc_info) {
+            output_file << host1.hostname << ",";
             output_file << host1.hall << "," << host1.aisle << "," << std::setw(2) << host1.rack << ",U" << std::setw(2)
                         << host1.shelf_u << "," << tray_id1 << "," << port_id1 << ",";
 
             output_file << host1.hall << host1.aisle << std::setw(2) << host1.rack << "U" << std::setw(2)
                         << host1.shelf_u << "-" << tray_id1 << "-" << port_id1 << "," << host1_node_type << ",";
 
+            output_file << host2.hostname << ",";
             output_file << host2.hall << "," << host2.aisle << "," << std::setw(2) << host2.rack << ",U" << std::setw(2)
                         << host2.shelf_u << "," << tray_id2 << "," << port_id2 << ",";
             output_file << host2.hall << host2.aisle << std::setw(2) << host2.rack << "U" << std::setw(2)
