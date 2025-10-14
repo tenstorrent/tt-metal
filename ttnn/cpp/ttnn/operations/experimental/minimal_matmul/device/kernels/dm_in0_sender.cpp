@@ -166,7 +166,7 @@ void kernel_main() {
             if constexpr (!is_output_writer) {
                 DPRINT << "D0 output writer " << ENDL();
 
-                cb_reserve_back(cb_id_in2, out_block_num_tiles);
+                cb_reserve_back(cb_id_in2, N_block_tiles);
 
                 uint32_t l1_write_addr_in2 = get_write_ptr(cb_id_in2);
                 for (uint32_t n_tile_id = n_block * N_block_tiles; n_tile_id < (n_block + 1) * N_block_tiles;
@@ -176,7 +176,7 @@ void kernel_main() {
                 }
                 noc_async_read_barrier();
 
-                cb_push_back(cb_id_in2, out_block_num_tiles);
+                cb_push_back(cb_id_in2, N_block_tiles);
                 DPRINT << "D0 after output writer push " << ENDL();
             }
 #endif
