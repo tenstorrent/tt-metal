@@ -40,8 +40,6 @@ void kernel_main() {
 
             noc_async_read(src0_noc_addr, l1_write_addr_in0, ublock_size_bytes_0);
 
-            noc_async_read_barrier();
-
             cb_push_back(cb_id_in0, ublock_size_tiles);
         }
 
@@ -52,8 +50,6 @@ void kernel_main() {
             l1_write_addr_in1 = get_write_ptr(cb_id_in1);
 
             noc_async_read(src1_noc_addr, l1_write_addr_in1, ublock_size_bytes_1);
-
-            noc_async_read_barrier();
 
             cb_push_back(cb_id_in1, ublock_size_tiles);
         }
