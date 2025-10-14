@@ -42,8 +42,7 @@ constexpr auto TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE_ENV_VAR = "TT_METAL_CORE_
 RunTimeOptions::RunTimeOptions() {
 // Default assume package install path
 #ifdef TT_METAL_INSTALL_ROOT
-    if (std::filesystem::exists(std::filesystem::path(TT_METAL_INSTALL_ROOT)) &&
-        std::filesystem::is_directory(std::filesystem::path(TT_METAL_INSTALL_ROOT))) {
+    if (std::filesystem::is_directory(std::filesystem::path(TT_METAL_INSTALL_ROOT))) {
         this->root_dir = std::filesystem::path(TT_METAL_INSTALL_ROOT).string();
     }
 #endif
@@ -59,14 +58,14 @@ RunTimeOptions::RunTimeOptions() {
         // treat the current working directory as the repository root.
         std::filesystem::path current_working_directory = std::filesystem::current_path();
         std::filesystem::path tt_metal_subdirectory = current_working_directory / "tt_metal";
-        if (std::filesystem::exists(tt_metal_subdirectory) && std::filesystem::is_directory(tt_metal_subdirectory)) {
+        if (std::filesystem::is_directory(tt_metal_subdirectory)) {
             this->root_dir = current_working_directory.string();
         }
     }
 
     TT_FATAL(!this->root_dir.empty(), "Root Directory is not set.");
 
-    if (!this->root_dir.empty()) {
+    {
         std::filesystem::path p(root_dir);
         p /= "";  // ensures trailing slash, never duplicates
         this->root_dir = p.string();
