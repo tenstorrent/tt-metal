@@ -2,9 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import os
-import random
-
 import pytest
 
 from models.common.utility_functions import is_wormhole_b0
@@ -49,22 +46,6 @@ def test_demo(
     mesh_device,
     is_ci_env,
 ):
-    # raise AssertionError("Injected deterministic failure")
-    fail_rate = float(os.environ.get("ND_FAIL_RATE", "0.95"))  # tune as needed
-    if random.random() < fail_rate:
-        raise AssertionError("Injected nondeterministic failure")
-
-    # comment 1
-    # comment 2
-    # comment 3
-    # comment 4
-    # comment 5
-    # comment 6
-    # comment 7
-    # comment 8
-    # comment 9
-    # comment 10
-
     if is_ci_env:
         if not expected_greedy_output_path and not expected_perf_metrics and not len(user_input) == 1:
             pytest.skip("Skipping test in CI since it provides redundant testing")
