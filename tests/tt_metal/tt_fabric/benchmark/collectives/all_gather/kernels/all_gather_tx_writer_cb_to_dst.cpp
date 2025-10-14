@@ -146,11 +146,11 @@ void kernel_main() {
                 dst_mesh_N,
                 e_hops,
                 w_hops,
-                n_hops,
+                (uint16_t)(n_hops ? (n_hops - 1) : 0),
                 0);
             hdr_N->to_noc_unicast_write(NocUnicastCommandHeader{dest_noc_addr}, PAGE_SIZE);
             conn_N.send_payload_without_header_non_blocking_from_address(src_l1_addr, PAGE_SIZE);
-            conn_N.send_payload_blocking_from_address((uint32_t)hdr_N, sizeof(PACKET_HEADER_TYPE));
+            conn_N.send_payload_flush_non_blocking_from_address((uint32_t)hdr_N, sizeof(PACKET_HEADER_TYPE));
         }
         // SOUTH trunk
         if (use_S) {
@@ -165,10 +165,10 @@ void kernel_main() {
                 e_hops,
                 w_hops,
                 0,
-                s_hops);
+                (uint16_t)(s_hops ? (s_hops - 1) : 0));
             hdr_S->to_noc_unicast_write(NocUnicastCommandHeader{dest_noc_addr}, PAGE_SIZE);
             conn_S.send_payload_without_header_non_blocking_from_address(src_l1_addr, PAGE_SIZE);
-            conn_S.send_payload_blocking_from_address((uint32_t)hdr_S, sizeof(PACKET_HEADER_TYPE));
+            conn_S.send_payload_flush_non_blocking_from_address((uint32_t)hdr_S, sizeof(PACKET_HEADER_TYPE));
         }
         // WEST branch on source row
         if (use_W) {
@@ -181,12 +181,12 @@ void kernel_main() {
                 dst_dev_W,
                 dst_mesh_W,
                 0,
-                w_hops,
+                (uint16_t)(w_hops ? (w_hops - 1) : 0),
                 0,
                 0);
             hdr_W->to_noc_unicast_write(NocUnicastCommandHeader{dest_noc_addr}, PAGE_SIZE);
             conn_W.send_payload_without_header_non_blocking_from_address(src_l1_addr, PAGE_SIZE);
-            conn_W.send_payload_blocking_from_address((uint32_t)hdr_W, sizeof(PACKET_HEADER_TYPE));
+            conn_W.send_payload_flush_non_blocking_from_address((uint32_t)hdr_W, sizeof(PACKET_HEADER_TYPE));
         }
         // EAST branch on source row
         if (use_E) {
@@ -200,7 +200,7 @@ void kernel_main() {
                 reinterpret_cast<volatile tt_l1_ptr LowLatencyMeshPacketHeader*>(mh_E),
                 dst_dev_E,
                 dst_mesh_E,
-                e_hops,
+                (uint16_t)(e_hops ? (e_hops - 1) : 0),
                 0,
                 0,
                 0);
@@ -209,7 +209,7 @@ void kernel_main() {
             DPRINT << "writer:E after to_noc_unicast_write" << i << ENDL();
             conn_E.send_payload_without_header_non_blocking_from_address(src_l1_addr, PAGE_SIZE);
             DPRINT << "writer:E after send_payload_without_header_non_blocking_from_address" << i << ENDL();
-            conn_E.send_payload_blocking_from_address((uint32_t)hdr_E, sizeof(PACKET_HEADER_TYPE));
+            conn_E.send_payload_flush_non_blocking_from_address((uint32_t)hdr_E, sizeof(PACKET_HEADER_TYPE));
             DPRINT << "writer:E after send_payload_blocking_from_address" << i << ENDL();
         }
         DPRINT << "writer: Before cb_pop_front" << i << ENDL();
@@ -238,7 +238,7 @@ void kernel_main() {
             dst_mesh_N,
             e_hops,
             w_hops,
-            n_hops,
+            (uint16_t)(n_hops ? (n_hops - 1) : 0),
             0);
         hdr_N->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader(sem_noc, 1, 32));
         bool last = mark_last();
@@ -258,7 +258,7 @@ void kernel_main() {
             e_hops,
             w_hops,
             0,
-            s_hops);
+            (uint16_t)(s_hops ? (s_hops - 1) : 0));
         hdr_S->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader(sem_noc, 1, 32));
         bool last = mark_last();
         if (last) {
@@ -275,7 +275,7 @@ void kernel_main() {
             dst_dev_W,
             dst_mesh_W,
             0,
-            w_hops,
+            (uint16_t)(w_hops ? (w_hops - 1) : 0),
             0,
             0);
         hdr_W->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader(sem_noc, 1, 32));
@@ -293,7 +293,7 @@ void kernel_main() {
             reinterpret_cast<volatile tt_l1_ptr LowLatencyMeshPacketHeader*>(mh_E),
             dst_dev_E,
             dst_mesh_E,
-            e_hops,
+            (uint16_t)(e_hops ? (e_hops - 1) : 0),
             0,
             0,
             0);

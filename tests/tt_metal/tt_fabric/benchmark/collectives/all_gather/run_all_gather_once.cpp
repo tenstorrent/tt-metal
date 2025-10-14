@@ -37,22 +37,22 @@ inline bool validate_workload_or_fail(const PerfParams& p) {
     return true;
 }
 
-// Resolve forwarding link and fail early if none found.
-inline bool pick_forwarding_link_or_fail(
-    const tt::tt_fabric::FabricNodeId& src,
-    const tt::tt_fabric::FabricNodeId& dst,
-    uint32_t& out_link_idx,
-    const PerfParams& p) {
-    auto links = tt::tt_fabric::get_forwarding_link_indices(src, dst);
+// // Resolve forwarding link and fail early if none found.
+// inline bool pick_forwarding_link_or_fail(
+//     const tt::tt_fabric::FabricNodeId& src,
+//     const tt::tt_fabric::FabricNodeId& dst,
+//     uint32_t& out_link_idx,
+//     const PerfParams& p) {
+//     auto links = tt::tt_fabric::get_forwarding_link_indices(src, dst);
 
-    if (links.empty()) {
-        ADD_FAILURE() << "No forwarding links from src(mesh=" << p.mesh_id << ",dev=" << p.src_chip
-                      << ") to dst(mesh=" << p.mesh_id << ",dev=" << p.dst_chip << ")";
-        return false;
-    }
-    out_link_idx = links[0];
-    return true;
-}
+//     if (links.empty()) {
+//         ADD_FAILURE() << "No forwarding links from src(mesh=" << p.mesh_id << ",dev=" << p.src_chip
+//                       << ") to dst(mesh=" << p.mesh_id << ",dev=" << p.dst_chip << ")";
+//         return false;
+//     }
+//     out_link_idx = links[0];
+//     return true;
+// }
 
 // Device lookup and basic existence check.
 inline bool lookup_devices_or_fail(
@@ -409,55 +409,54 @@ Notes:
 
     auto src_fid = tt::tt_fabric::FabricNodeId{tt::tt_fabric::MeshId{p.mesh_id}, src_phys};
     std::optional<tt::tt_fabric::FabricNodeId> dstW, dstE, dstN, dstS;
-    uint32_t link_W = 0, link_E = 0, link_N = 0, link_S = 0;
+    constexpr uint32_t ROUTING_PLANE_ID = 0;  // single plane in this run
 
     if (want_W) {
         TT_FATAL(in_mesh(src_r, src_c - 1), "No west neighbor for source.");
         dstW = fabric_id_of({src_r, src_c - 1});
-        TT_FATAL(pick_forwarding_link_or_fail(src_fid, *dstW, link_W, p), "No west link from source.");
     }
+
     if (want_E) {
         TT_FATAL(in_mesh(src_r, src_c + 1), "No east neighbor for source.");
         dstE = fabric_id_of({src_r, src_c + 1});
-        TT_FATAL(pick_forwarding_link_or_fail(src_fid, *dstE, link_E, p), "No east link from source.");
     }
+
     if (want_N) {
         TT_FATAL(in_mesh(src_r - 1, src_c), "No north neighbor for source.");
         dstN = fabric_id_of({src_r - 1, src_c});
-        TT_FATAL(pick_forwarding_link_or_fail(src_fid, *dstN, link_N, p), "No north link from source.");
     }
+
     if (want_S) {
         TT_FATAL(in_mesh(src_r + 1, src_c), "No south neighbor for source.");
         dstS = fabric_id_of({src_r + 1, src_c});
-        TT_FATAL(pick_forwarding_link_or_fail(src_fid, *dstS, link_S, p), "No south link from source.");
     }
 
     // Fallback for unused legs: duplicate any available leg so kernel arg layout stays fixed (W,E,N,S).
     const int have_any = (want_W ? 1 : 0) + (want_E ? 1 : 0) + (want_N ? 1 : 0) + (want_S ? 1 : 0);
     TT_FATAL(have_any > 0, "No active multicast legs detected.");
-    auto pick_any = [&]() {
+    auto pick_any_dst = [&]() -> tt::tt_fabric::FabricNodeId {
         if (want_E) {
-            return std::pair{*dstE, link_E};
+            return *dstE;
         }
         if (want_W) {
-            return std::pair{*dstW, link_W};
+            return *dstW;
         }
         if (want_N) {
-            return std::pair{*dstN, link_N};
+            return *dstN;
         }
-        return std::pair{*dstS, link_S};
+        return *dstS;
     };
-    auto [any_dst, any_link] = pick_any();
+    tt::tt_fabric::FabricNodeId any_dst = pick_any_dst();
 
     // Append FOUR connections in fixed order: W, E, N, S (so kernel can parse uniformly).
     tt::tt_fabric::append_fabric_connection_rt_args(
-        src_fid, (want_W ? *dstW : any_dst), (want_W ? link_W : any_link), sender_prog, p.sender_core, writer_rt);
+        src_fid, (want_W ? *dstW : any_dst), ROUTING_PLANE_ID, sender_prog, p.sender_core, writer_rt);
     tt::tt_fabric::append_fabric_connection_rt_args(
-        src_fid, (want_E ? *dstE : any_dst), (want_E ? link_E : any_link), sender_prog, p.sender_core, writer_rt);
+        src_fid, (want_E ? *dstE : any_dst), ROUTING_PLANE_ID, sender_prog, p.sender_core, writer_rt);
     tt::tt_fabric::append_fabric_connection_rt_args(
-        src_fid, (want_N ? *dstN : any_dst), (want_N ? link_N : any_link), sender_prog, p.sender_core, writer_rt);
+        src_fid, (want_N ? *dstN : any_dst), ROUTING_PLANE_ID, sender_prog, p.sender_core, writer_rt);
     tt::tt_fabric::append_fabric_connection_rt_args(
-        src_fid, (want_S ? *dstS : any_dst), (want_S ? link_S : any_link), sender_prog, p.sender_core, writer_rt);
+        src_fid, (want_S ? *dstS : any_dst), ROUTING_PLANE_ID, sender_prog, p.sender_core, writer_rt);
 
     uint16_t dev_W = pick_adjacent(want_W, src_coord[0], src_coord[1] - 1, "W");
     uint16_t dev_E = pick_adjacent(want_E, src_coord[0], src_coord[1] + 1, "E");

@@ -1,5 +1,4 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
-//
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
@@ -7,30 +6,29 @@
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "debug/dprint.h"
 
-// Receiver-side completion wait.
-// Runs on the destination device and blocks until the receiver's global
-// semaphore reaches `expected_value`. In this bench, the sender atomically
-// increments the semaphore after sending all pages, so reaching the target
-// value implies "all data has arrived". Fabric guarantees the semaphore
-// signal is delivered after payload data.
-//
-// CT (compile-time) args: none
-// RT (runtime) args:
-//   0: completion_sem_addr   (u32)  // L1 address of the global semaphore on receiver
-//   1: expected_value        (u32)  // e.g. number of pages, or just 1
+// RT args:
+//   0: completion_sem_addr (u32)
+//   1: expected_value      (u32)
 
 void kernel_main() {
     size_t idx = 0;
     const uint32_t sem_addr = get_arg_val<uint32_t>(idx++);
     const uint32_t expected_value = get_arg_val<uint32_t>(idx++);
 
-    DPRINT << "TEST " << ENDL();
-
     volatile tt_l1_ptr uint32_t* sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr);
 
+    const uint32_t cur0 = *sem_ptr;
+    DPRINT << "rx_wait: enter sem@0x" << sem_addr << " exp=" << expected_value << " cur=" << cur0 << ENDL();
+
+    // Block here until the writer's atomic_inc arrives.
     noc_semaphore_wait(sem_ptr, expected_value);
 
-    // Reset for next iteration so we always observe a fresh 0→1 transition.
-    // (Prevents the next run from passing the wait immediately on a stale '1'.)
+    const uint32_t cur1 = *sem_ptr;
+    DPRINT << "rx_wait: PASSED cur=" << cur1 << " -> resetting to 0" << ENDL();
+
+    // Reset so subsequent iterations see a fresh transition.
     noc_semaphore_set(sem_ptr, 0);
+
+    const uint32_t cur2 = *sem_ptr;
+    DPRINT << "rx_wait: reset done cur=" << cur2 << ENDL();
 }
