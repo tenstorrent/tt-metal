@@ -4,15 +4,11 @@ title: "[Bounty $amount] [Issue Title]"
 labels: ["model bringup"]
 
 body:
-  - type: markdown
-    attributes:
-      value: |
-        ## 📝 Background
 
   - type: textarea
     id: background
     attributes:
-      label: "."
+      label: "📝 Background"
       description: "Context about what the bounty is about — What model to bring up, where it's used, and who would be interested."
       placeholder: |
         Faster-RCNN example:
@@ -23,25 +19,20 @@ body:
   - type: markdown
     attributes:
       value: |
-        ## 🎯 What Success Looks Like
-        A successful submission will fulfill all requirements in the following stages. Payout is made after **all stages** are completed.
+        ### 🎯 What Success Looks Like
 
   - type: textarea
     id: success_criteria
     attributes:
-      label: "."
+      label: "A successful submission will fulfill all requirements in the following stages. Payout is made after all stages are completed."
       placeholder: |
         Define a list or checklist of clear, testable acceptance criteria - this is the goal the developer is chasing. They achieve all stages, we pay. Model bounties are split into 3 stages.
 
-  - type: markdown
-    attributes:
-      value: |
-        ### Stage 1 — Bring-Up
 
   - type: textarea
     id: stage1
     attributes:
-      label: "."
+      label: "Stage 1 — Bring-Up"
       description: "List things that they need to achieve for us to consider the model working"
       placeholder: |
         Example:
@@ -52,15 +43,10 @@ body:
     validations:
       required: true
 
-  - type: markdown
-    attributes:
-      value: |
-        ### Stage 2 — Basic Optimizations
-
   - type: textarea
     id: stage2
     attributes:
-      label: "."
+      label: "Stage 2 — Basic Optimizations"
       description: "A list of techniques that are easy to implement. Make sure they are applicable to the model."
       placeholder: |
         Example:
@@ -71,15 +57,10 @@ body:
     validations:
       required: true
 
-  - type: markdown
-    attributes:
-      value: |
-        ### Stage 3 — Deeper Optimization
-
   - type: textarea
     id: stage3
     attributes:
-      label: "."
+      label: "Stage 3 — Deeper Optimization"
       description: "More involved optimizations are listed here. Adapt the model to exploit TT hardware features and reduce unnecessary TM/memory overheads. We are not asking the user to understand all possible optimization processes. But enough to touch on the differences of our hardware and GPUs."
       placeholder: |
         Example:
@@ -90,15 +71,10 @@ body:
       required: true
 
 
-  - type: markdown
-    attributes:
-      value: |
-        ## 🧭 Guidance & Starting Points
-
   - type: textarea
     id: guidance
     attributes:
-      label: "."
+      label: "🧭 Guidance & Starting Points"
       description: "Provide guidance, links to files, or code snippets and links. Help the user to get started with the bounty"
       placeholder: |
         Example:
@@ -113,15 +89,11 @@ body:
         - Target input resolutions: start with 320x320x3, then 640x640x3.
         - Ask for help or file issues if ops are missing in TTNN.
 
-  - type: markdown
-    attributes:
-      value: |
-        ## 🔎 Possible Approaches
 
   - type: textarea
     id: approaches
     attributes:
-      label: "."
+      label: "🔎 Possible Approaches"
       description: "List one or more technical paths, architectural suggestions, or research ideas; Help the developer not succumb to analysis paralysis - too many options, don't know what to do"
       placeholder: |
         Example:
@@ -146,15 +118,11 @@ body:
         - [Performance Sheet](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/ttnn/TTNN-model-bringup.md#41-performance-sheet)
         - [Perf Header Docs](https://docs.tenstorrent.com/tt-metal/latest/ttnn/ttnn/profiling_ttnn_operations.html#perf-report-headers)
 
-  - type: markdown
-    attributes:
-      value: |
-        ## 📚 Resources
 
   - type: textarea
     id: resources
     attributes:
-      label: "."
+      label: "📚 Resources"
       description: "Add helpful links for contributors: example PRs or implementations, reference docs, original model paper, outside tutorials"
       placeholder: |
         Example:
