@@ -47,7 +47,7 @@ def test_vovnetcp_hsigmoid(device, reset_seeds, n, c, h, w):
     torch_model = Hsigmoid()
     torch_output = torch_model(input_tensor)
     input_tensor = torch.permute(input_tensor, (0, 2, 3, 1))
-    ttnn_input = ttnn.from_torch(input_tensor, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_input = ttnn.from_torch(input_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     ttnn_model = ttnn_hsigmoid(device)
     ttnn_output = ttnn_model(ttnn_input)
     ttnn_output = ttnn.to_torch(ttnn_output)
@@ -87,9 +87,9 @@ def stem_parameters_preprocess(model):
                 )
 
                 # Convert to ttnn format (same as other Conv layers)
-                parameters[prefix]["weight"] = ttnn.from_torch(conv_weight, dtype=ttnn.float32)  # Use float32 for stem
+                parameters[prefix]["weight"] = ttnn.from_torch(conv_weight, dtype=ttnn.bfloat16)  # Use float32 for stem
                 parameters[prefix]["bias"] = ttnn.from_torch(
-                    torch.reshape(conv_bias, (1, 1, 1, -1)), dtype=ttnn.float32
+                    torch.reshape(conv_bias, (1, 1, 1, -1)), dtype=ttnn.bfloat16
                 )
 
     return parameters
@@ -100,17 +100,17 @@ def create_custom_preprocessor(device):
         parameters = {}
         if isinstance(model, eSEModule):
             parameters["fc"] = {}
-            parameters["fc"]["weight"] = ttnn.from_torch(model.fc.weight, dtype=ttnn.float32)
-            parameters["fc"]["bias"] = ttnn.from_torch(torch.reshape(model.fc.bias, (1, 1, 1, -1)), dtype=ttnn.float32)
+            parameters["fc"]["weight"] = ttnn.from_torch(model.fc.weight, dtype=ttnn.bfloat16)
+            parameters["fc"]["bias"] = ttnn.from_torch(torch.reshape(model.fc.bias, (1, 1, 1, -1)), dtype=ttnn.bfloat16)
         if isinstance(model, _OSA_module):
             if hasattr(model, "conv_reduction"):
                 first_layer_name, _ = list(model.conv_reduction.named_children())[0]
                 base_name = first_layer_name.split("/")[0]
                 parameters[base_name] = {}
                 conv_weight, conv_bias = fold_batch_norm2d_into_conv2d(model.conv_reduction[0], model.conv_reduction[1])
-                parameters[base_name]["weight"] = ttnn.from_torch(conv_weight, dtype=ttnn.float32)
+                parameters[base_name]["weight"] = ttnn.from_torch(conv_weight, dtype=ttnn.bfloat16)
                 parameters[base_name]["bias"] = ttnn.from_torch(
-                    torch.reshape(conv_bias, (1, 1, 1, -1)), dtype=ttnn.float32
+                    torch.reshape(conv_bias, (1, 1, 1, -1)), dtype=ttnn.bfloat16
                 )
 
             for i, layers in enumerate(model.layers):
@@ -122,9 +122,9 @@ def create_custom_preprocessor(device):
                 #     parameters[prefix]["weight"] = conv_weight
                 #     parameters[prefix]["bias"] = conv_bias
                 # else:
-                parameters[prefix]["weight"] = ttnn.from_torch(conv_weight, dtype=ttnn.float32)
+                parameters[prefix]["weight"] = ttnn.from_torch(conv_weight, dtype=ttnn.bfloat16)
                 parameters[prefix]["bias"] = ttnn.from_torch(
-                    torch.reshape(conv_bias, (1, 1, 1, -1)), dtype=ttnn.float32
+                    torch.reshape(conv_bias, (1, 1, 1, -1)), dtype=ttnn.bfloat16
                 )
 
             first_layer_name, _ = list(model.concat.named_children())[0]
@@ -135,15 +135,15 @@ def create_custom_preprocessor(device):
             #     parameters[base_name]["bias"] = model.concat[0].bias
             # else:
             concat_weight, concat_bias = fold_batch_norm2d_into_conv2d(model.concat[0], model.concat[1])
-            parameters[base_name]["weight"] = ttnn.from_torch(concat_weight, dtype=ttnn.float32)
+            parameters[base_name]["weight"] = ttnn.from_torch(concat_weight, dtype=ttnn.bfloat16)
             parameters[base_name]["bias"] = ttnn.from_torch(
-                torch.reshape(concat_bias, (1, 1, 1, -1)), dtype=ttnn.float32
+                torch.reshape(concat_bias, (1, 1, 1, -1)), dtype=ttnn.bfloat16
             )
 
             parameters["fc"] = {}
-            parameters["fc"]["weight"] = ttnn.from_torch(model.ese.fc.weight, dtype=ttnn.float32)
+            parameters["fc"]["weight"] = ttnn.from_torch(model.ese.fc.weight, dtype=ttnn.bfloat16)
             parameters["fc"]["bias"] = ttnn.from_torch(
-                torch.reshape(model.ese.fc.bias, (1, 1, 1, -1)), dtype=ttnn.float32
+                torch.reshape(model.ese.fc.bias, (1, 1, 1, -1)), dtype=ttnn.bfloat16
             )
         if isinstance(model, _OSA_stage):
             if isinstance(model, _OSA_module):
@@ -154,9 +154,9 @@ def create_custom_preprocessor(device):
                     conv_weight, conv_bias = fold_batch_norm2d_into_conv2d(
                         model.conv_reduction[0], model.conv_reduction[1]
                     )
-                    parameters[base_name]["weight"] = ttnn.from_torch(conv_weight, dtype=ttnn.float32)
+                    parameters[base_name]["weight"] = ttnn.from_torch(conv_weight, dtype=ttnn.bfloat16)
                     parameters[base_name]["bias"] = ttnn.from_torch(
-                        torch.reshape(conv_bias, (1, 1, 1, -1)), dtype=ttnn.float32
+                        torch.reshape(conv_bias, (1, 1, 1, -1)), dtype=ttnn.bfloat16
                     )
 
                 for i, layers in enumerate(model.layers):
@@ -164,9 +164,9 @@ def create_custom_preprocessor(device):
                     prefix = first_layer_name.split("/")[0]
                     parameters[prefix] = {}
                     conv_weight, conv_bias = fold_batch_norm2d_into_conv2d(layers[0], layers[1])
-                    parameters[prefix]["weight"] = ttnn.from_torch(conv_weight, dtype=ttnn.float32)
+                    parameters[prefix]["weight"] = ttnn.from_torch(conv_weight, dtype=ttnn.bfloat16)
                     parameters[prefix]["bias"] = ttnn.from_torch(
-                        torch.reshape(conv_bias, (1, 1, 1, -1)), dtype=ttnn.float32
+                        torch.reshape(conv_bias, (1, 1, 1, -1)), dtype=ttnn.bfloat16
                     )
 
                 first_layer_name, _ = list(model.concat.named_children())[0]
@@ -176,9 +176,9 @@ def create_custom_preprocessor(device):
                 parameters[base_name]["bias"] = model.concat[0].bias
 
                 parameters["fc"] = {}
-                parameters["fc"]["weight"] = ttnn.from_torch(model.ese.fc.weight, dtype=ttnn.float32)
+                parameters["fc"]["weight"] = ttnn.from_torch(model.ese.fc.weight, dtype=ttnn.bfloat16)
                 parameters["fc"]["bias"] = ttnn.from_torch(
-                    torch.reshape(model.ese.fc.bias, (1, 1, 1, -1)), dtype=ttnn.float32
+                    torch.reshape(model.ese.fc.bias, (1, 1, 1, -1)), dtype=ttnn.bfloat16
                 )
 
         return parameters
@@ -199,7 +199,7 @@ def create_custom_preprocessor(device):
 def test_vovnetcp_esemodule(device, n, c, h, w):
     torch_input_tensor = torch.randn(n, c, h, w)
     ttnn_input_tensor = ttnn.from_torch(
-        torch_input_tensor.permute(0, 2, 3, 1), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device
+        torch_input_tensor.permute(0, 2, 3, 1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
     )
 
     torch_model = eSEModule(c)
@@ -244,7 +244,7 @@ def test_vovnetcp_osa_stage(
     device, reset_seeds, in_ch, stage_ch, concat_ch, block_per_stage, layer_per_block, stage_num, input_shape
 ):
     torch_input_tensor = torch.randn(input_shape)
-    ttnn_input_tensor = ttnn.from_torch(torch_input_tensor.permute(0, 2, 3, 1), dtype=ttnn.float32, device=device)
+    ttnn_input_tensor = ttnn.from_torch(torch_input_tensor.permute(0, 2, 3, 1), dtype=ttnn.bfloat16, device=device)
     torch_model = _OSA_stage(
         in_ch, stage_ch, concat_ch, block_per_stage, layer_per_block, stage_num, SE=True, depthwise=False
     )
@@ -285,7 +285,7 @@ def test_vovnetcp(
     device,
 ):
     torch_input_tensor = torch.randn(1, 3, 320, 800)
-    ttnn_input_tensor = ttnn.from_torch(torch_input_tensor.permute(0, 2, 3, 1), dtype=ttnn.float32, device=device)
+    ttnn_input_tensor = ttnn.from_torch(torch_input_tensor.permute(0, 2, 3, 1), dtype=ttnn.bfloat16, device=device)
     weights_state_dict = torch.load(
         "models/experimental/functional_petr/resources/petr_vovnet_gridmask_p4_800x320-e2191752.pth", weights_only=False
     )["state_dict"]

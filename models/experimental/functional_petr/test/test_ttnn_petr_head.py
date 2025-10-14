@@ -57,10 +57,10 @@ def create_custom_preprocessor(device):
         parameters = {}
         if isinstance(model, PETRHead):
             parameters["input_proj"] = {}
-            parameters["input_proj"]["weight"] = ttnn.from_torch(model.input_proj.weight, dtype=ttnn.float32)
+            parameters["input_proj"]["weight"] = ttnn.from_torch(model.input_proj.weight, dtype=ttnn.bfloat16)
             parameters["input_proj"]["bias"] = ttnn.from_torch(
                 torch.reshape(model.input_proj.bias, (1, 1, 1, -1)),
-                dtype=ttnn.float32,
+                dtype=ttnn.bfloat16,
             )
 
             parameters["cls_branches"] = {}
@@ -70,17 +70,17 @@ def create_custom_preprocessor(device):
                     parameters["cls_branches"][index][index1] = {}
                     if isinstance(child1, Linear):
                         parameters["cls_branches"][index][index1]["weight"] = preprocess_linear_weight(
-                            child1.weight, dtype=ttnn.float32
+                            child1.weight, dtype=ttnn.bfloat16
                         )
                         parameters["cls_branches"][index][index1]["bias"] = preprocess_linear_bias(
-                            child1.bias, dtype=ttnn.float32
+                            child1.bias, dtype=ttnn.bfloat16
                         )
                     elif isinstance(child1, nn.LayerNorm):
                         parameters["cls_branches"][index][index1]["weight"] = preprocess_layernorm_parameter(
-                            child1.weight, dtype=ttnn.float32
+                            child1.weight, dtype=ttnn.bfloat16
                         )
                         parameters["cls_branches"][index][index1]["bias"] = preprocess_layernorm_parameter(
-                            child1.bias, dtype=ttnn.float32
+                            child1.bias, dtype=ttnn.bfloat16
                         )
 
             parameters["reg_branches"] = {}
@@ -90,30 +90,30 @@ def create_custom_preprocessor(device):
                     parameters["reg_branches"][index][index1] = {}
                     if isinstance(child1, Linear):
                         parameters["reg_branches"][index][index1]["weight"] = preprocess_linear_weight(
-                            child1.weight, dtype=ttnn.float32
+                            child1.weight, dtype=ttnn.bfloat16
                         )
                         parameters["reg_branches"][index][index1]["bias"] = preprocess_linear_bias(
-                            child1.bias, dtype=ttnn.float32
+                            child1.bias, dtype=ttnn.bfloat16
                         )
 
             parameters["adapt_pos3d"] = {}
             for index, child in enumerate(model.adapt_pos3d):
                 parameters["adapt_pos3d"][index] = {}
                 if isinstance(child, Conv2d):
-                    parameters["adapt_pos3d"][index]["weight"] = ttnn.from_torch(child.weight, dtype=ttnn.float32)
+                    parameters["adapt_pos3d"][index]["weight"] = ttnn.from_torch(child.weight, dtype=ttnn.bfloat16)
                     parameters["adapt_pos3d"][index]["bias"] = ttnn.from_torch(
                         torch.reshape(child.bias, (1, 1, 1, -1)),
-                        dtype=ttnn.float32,
+                        dtype=ttnn.bfloat16,
                     )
 
             parameters["position_encoder"] = {}
             for index, child in enumerate(model.position_encoder):
                 parameters["position_encoder"][index] = {}
                 if isinstance(child, Conv2d):
-                    parameters["position_encoder"][index]["weight"] = ttnn.from_torch(child.weight, dtype=ttnn.float32)
+                    parameters["position_encoder"][index]["weight"] = ttnn.from_torch(child.weight, dtype=ttnn.bfloat16)
                     parameters["position_encoder"][index]["bias"] = ttnn.from_torch(
                         torch.reshape(child.bias, (1, 1, 1, -1)),
-                        dtype=ttnn.float32,
+                        dtype=ttnn.bfloat16,
                     )
 
             parameters["query_embedding"] = {}
@@ -121,10 +121,10 @@ def create_custom_preprocessor(device):
                 parameters["query_embedding"][index] = {}
                 if isinstance(child, Linear):
                     parameters["query_embedding"][index]["weight"] = preprocess_linear_weight(
-                        child.weight, dtype=ttnn.float32
+                        child.weight, dtype=ttnn.bfloat16
                     )
                     parameters["query_embedding"][index]["bias"] = preprocess_linear_bias(
-                        child.bias, dtype=ttnn.float32
+                        child.bias, dtype=ttnn.bfloat16
                     )
             parameters["reference_points"] = {}
             parameters["reference_points"]["weight"] = ttnn.from_torch(model.reference_points.weight, device=device)
