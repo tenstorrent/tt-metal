@@ -59,7 +59,7 @@ public:
 
     static inspector::RpcServer& get_rpc_server();
 
-    static void set_build_env_fw_compile_hash(const uint64_t fw_compile_hash);
+    static void set_build_env_fw_compile_hash(uint64_t fw_compile_hash);
 };
 
 }  // namespace tt::tt_metal
