@@ -73,7 +73,9 @@ class MeshConfig:
         # Optional performance padding (caller specifies, no magic numbers)
         padded = False
         if pad_size and tensor.shape[-2] >= 32:
-            tensor = ttnn.pad(tensor, [(0, 0), (0, 0), (0, 0), (0, pad_size)], 0)
+            tensor_padded = ttnn.pad(tensor, [(0, 0), (0, 0), (0, 0), (0, pad_size)], 0)
+            tensor.deallocate(True)
+            tensor = tensor_padded
             padded = True
 
         # Reduce-scatter along TP axis
@@ -103,7 +105,9 @@ class MeshConfig:
 
         # Remove padding if applied
         if padded:
-            gathered = gathered[:, :, :, :-pad_size]
+            gathered_sliced = gathered[:, :, :, :-pad_size]
+            gathered.deallocate(True)
+            gathered = gathered_sliced
 
         return gathered
 

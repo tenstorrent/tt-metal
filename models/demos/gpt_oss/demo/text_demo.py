@@ -109,10 +109,10 @@ def prepare_gpt_oss_generator_args(
             1,  # data_parallel
             1,  # batch_size
             1,  # repeat_batches
-            1024,  # max_seq_len
+            4 * 1024,  # max_seq_len
             200,  # max_generated_tokens
             True,  # instruct (set to False for base model, True for instruct model)
-            {"page_block_size": 64, "page_max_num_blocks_per_dp": 1024 // 64},  # page_params
+            {"page_block_size": 64, "page_max_num_blocks_per_dp": 4 * 1024 // 64},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (greedy decoding)
         ),
         (  # Galaxy (4×8) - Multi-device mesh, higher throughput
@@ -120,10 +120,10 @@ def prepare_gpt_oss_generator_args(
             1,  # data_parallel
             1,  # batch_size
             1,  # repeat_batches
-            1024,  # max_seq_len
+            4 * 1024,  # max_seq_len
             200,  # max_generated_tokens
             True,  # instruct
-            {"page_block_size": 64, "page_max_num_blocks_per_dp": 1024 // 64},  # page_params
+            {"page_block_size": 64, "page_max_num_blocks_per_dp": 4 * 1024 // 64},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params
         ),
     ],

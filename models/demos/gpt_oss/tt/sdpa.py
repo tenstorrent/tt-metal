@@ -127,6 +127,8 @@ def sdpa(
 
     # Compute attention scores: Q @ K^T
     tt_qk = ttnn.matmul(tt_q, tt_k)  # (nkv, nh // nkv, num_tokens, kv_len)
+    tt_q.deallocate(True)
+    tt_k.deallocate(True)
     tt_qk = ttnn.mul(tt_qk, sm_scale, output_tensor=tt_qk)  # Scale by 1/sqrt(head_dim)
 
     # Apply sliding window mask if provided
@@ -135,9 +137,13 @@ def sdpa(
 
     # Add attention sink logits for stable long-context attention
     tt_sink = ttnn.reshape(tt_sink, [nkv, nh // nkv, 1, 1])  # (nkv, nh // nkv, 1, 1)
-    tt_sink = ttnn.repeat(tt_sink, [1, 1, num_tokens, 1])  # (nkv, nh // nkv, num_tokens, 1)
+    tt_sink_rep = ttnn.repeat(tt_sink, [1, 1, num_tokens, 1])  # (nkv, nh // nkv, num_tokens, 1)
+    tt_sink.deallocate(True)
+    tt_sink = tt_sink_rep
     # Concat sink as an extra attention position (dim=-1 is kv_len dimension)
-    tt_qk = ttnn.concat([tt_qk, tt_sink], dim=-1)  # (nkv, nh // nkv, num_tokens, kv_len + 1)
+    tt_qk_concat = ttnn.concat([tt_qk, tt_sink], dim=-1)  # (nkv, nh // nkv, num_tokens, kv_len + 1)
+    tt_qk.deallocate(True)
+    tt_qk = tt_qk_concat
 
     # Softmax - using custom implementation for stability
     tt_qk = softmax(tt_qk, stable=True)  # (nkv, nh // nkv, num_tokens, kv_len + 1)
@@ -146,6 +152,8 @@ def sdpa(
 
     # Compute attention output: softmax(QK^T) @ V
     out = ttnn.matmul(tt_qk, tt_v)  # (nkv, nh // nkv, num_tokens, dim)
+    tt_qk.deallocate(True)
+    tt_v.deallocate(True)
     out = ttnn.reshape(out, [1, nh, num_tokens, dim])
 
     # Concatenate attention heads back into single hidden dimension

@@ -267,10 +267,11 @@ class Experts:
                 ttnn.reshape(self.prefill_sparsity, (1, self.num_experts)),
                 output_tensor=routing_weights,
             )
-            routing_weights_transposed = ttnn.permute(routing_weights, (1, 0))
-            routing_weights.deallocate(True)
-            routing_weights = routing_weights_transposed
-            routing_weights = ttnn.reshape(routing_weights, (batch_size, self.num_experts, seq_len, 1))
+
+        routing_weights_transposed = ttnn.permute(routing_weights, (1, 0))
+        routing_weights.deallocate(True)
+        routing_weights = routing_weights_transposed
+        routing_weights = ttnn.reshape(routing_weights, (batch_size, self.num_experts, seq_len, 1))
 
         SPLIT_SIZE = 2048
         if seq_len > SPLIT_SIZE:
@@ -307,7 +308,6 @@ class Experts:
             next_states = ttnn.mul(next_states, routing_weights_list[i], output_tensor=next_states)
             next_states_reduced = ttnn.unsqueeze_to_4D(ttnn.experimental.fast_reduce_nc(next_states, dims=[1]))
             next_states.deallocate(True)
-            print("next_states_reduced shape", next_states_reduced.shape)
             next_states_reduced_list.append(next_states_reduced)
             routing_weights_list[i].deallocate(True)
 

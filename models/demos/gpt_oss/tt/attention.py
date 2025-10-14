@@ -362,8 +362,12 @@ class Attention:
                 )
 
             # Transpose tensors back for SDPA computation
-            tt_k = ttnn.transpose(tt_k, 1, 2)
-            tt_v = ttnn.transpose(tt_v, 1, 2)
+            tt_k_transposed = ttnn.transpose(tt_k, 1, 2)
+            tt_k.deallocate(True)
+            tt_k = tt_k_transposed
+            tt_v_transposed = ttnn.transpose(tt_v, 1, 2)
+            tt_v.deallocate(True)
+            tt_v = tt_v_transposed
 
             tt_q = ttnn.reshape(tt_q, [batch_size * seq_len, -1, self.num_local_heads, self.head_dim])
             tt_k = ttnn.reshape(tt_k, [batch_size * seq_len, -1, self.head_dim])
@@ -379,9 +383,6 @@ class Attention:
                 tt_cache=None,
                 position_idx=None,
             )
-            tt_q.deallocate(True)
-            tt_k.deallocate(True)
-            tt_v.deallocate(True)
 
         tt_out = ttnn.matmul(tt_sdpa_out, self.o_proj, dtype=ttnn.bfloat16)
         tt_sdpa_out.deallocate(True)
