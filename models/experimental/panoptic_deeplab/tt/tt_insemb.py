@@ -5,8 +5,7 @@ from typing import Dict, Optional, Tuple
 import ttnn
 from loguru import logger
 
-from models.experimental.panoptic_deeplab.tt.tt_conv2d_wrapper import TtConv2d, TtConv2dParameters
-from models.experimental.panoptic_deeplab.tt.tt_upsample_wrapper import TtUpsample
+from models.tt_cnn.tt.builder import TtUpsample, UpsampleConfiguration
 from models.experimental.panoptic_deeplab.tt.tt_semseg import TtDeepLabV3PlusHead
 from models.experimental.panoptic_deeplab.reference.pytorch_semseg import ShapeSpec
 
@@ -14,6 +13,9 @@ from models.experimental.panoptic_deeplab.reference.pytorch_semseg import ShapeS
 class TtPanopticDeepLabInsEmbedHead(TtDeepLabV3PlusHead):
     """
     TTNN implementation for Panoptic-DeepLab instance embedding head.
+    Uses TT CNN Builder API for convolutions and upsampling.
+
+    Inherits from TtDeepLabV3PlusHead which provides the decoder and _create_conv_layer helper.
     """
 
     def __init__(
@@ -53,216 +55,32 @@ class TtPanopticDeepLabInsEmbedHead(TtDeepLabV3PlusHead):
         decoder_out_ch = decoder_channels[0]
         logger.debug(f"Initializing TtPanopticDeepLabInsEmbedHead with head_channels: {head_channels}")
 
-        # --- Center Prediction Branch ---
-        # center_head_0
-        # Handle both dict and object parameter formats
+        # --- Center Prediction Branch - use builder API ---
         center_head_params = parameters["center_head"] if isinstance(parameters, dict) else parameters.center_head
-        center_head0_path = center_head_params[0]
-        ch0_bias = (
-            center_head0_path["bias"]
-            if isinstance(center_head0_path, dict) and "bias" in center_head0_path
-            else (center_head0_path.bias if hasattr(center_head0_path, "bias") else None)
-        )
-        ch0_weight = center_head0_path["weight"] if isinstance(center_head0_path, dict) else center_head0_path.weight
-        ch0_params = TtConv2dParameters(
-            weight=ch0_weight,
-            bias=ch0_bias,
-            device=self.device,
-        )
-        # Get slice config from model_configs for center_head.0
-        if self.model_configs is not None:
-            head_slice_config = self.model_configs.get_head_slice_config("center")
-            self.center_head_0 = TtConv2d.create_with_height_slicing(
-                ch0_params,
-                num_slices=head_slice_config["num_slices"],
-                stride=(1, 1),
-                padding=(1, 1),
-                conv_path="instance_head.center_head.0",
-                model_configs=self.model_configs,
-            )
-        else:
-            # Fallback to original logic
-            logger.warning(
-                "FALLBACK INSEMB CENTER_HEAD.0: Using original hardcoded logic for instance_head.center_head.0 instead of model_configs"
-            )
-            self.center_head_0 = TtConv2d.create_with_height_slicing(
-                ch0_params,
-                num_slices=2,
-                stride=(1, 1),
-                padding=(1, 1),
-                conv_path="instance_head.center_head.0",
-                model_configs=self.model_configs,
-            )
+        self.center_head_0 = self._create_conv_layer(center_head_params[0], "instance_head.center_head.0")
+        self.center_head_1 = self._create_conv_layer(center_head_params[1], "instance_head.center_head.1")
 
-        # center_head_1
-        center_head1_path = center_head_params[1]
-        ch1_bias = (
-            center_head1_path["bias"]
-            if isinstance(center_head1_path, dict) and "bias" in center_head1_path
-            else (center_head1_path.bias if hasattr(center_head1_path, "bias") else None)
-        )
-        ch1_weight = center_head1_path["weight"] if isinstance(center_head1_path, dict) else center_head1_path.weight
-        ch1_params = TtConv2dParameters(
-            weight=ch1_weight,
-            bias=ch1_bias,
-            device=self.device,
-        )
-        # Get slice config from model_configs for center_head.1
-        if self.model_configs is not None:
-            head_slice_config = self.model_configs.get_head_slice_config("center")
-            self.center_head_1 = TtConv2d.create_with_height_slicing(
-                ch1_params,
-                num_slices=head_slice_config["num_slices"],
-                stride=(1, 1),
-                padding=(1, 1),
-                conv_path="instance_head.center_head.1",
-                model_configs=self.model_configs,
-            )
-        else:
-            # Fallback to original logic
-            logger.warning(
-                "FALLBACK INSEMB CENTER_HEAD.1: Using original hardcoded logic for instance_head.center_head.1 instead of model_configs"
-            )
-            self.center_head_1 = TtConv2d.create_with_height_slicing(
-                ch1_params,
-                num_slices=2,
-                stride=(1, 1),
-                padding=(1, 1),
-                conv_path="instance_head.center_head.1",
-                model_configs=self.model_configs,
-            )
-
-        # center_predictor
         center_predictor_params = (
             parameters["center_predictor"] if isinstance(parameters, dict) else parameters.center_predictor
         )
-        center_predictor_path = center_predictor_params
-        cp_bias = (
-            center_predictor_path["bias"]
-            if isinstance(center_predictor_path, dict) and "bias" in center_predictor_path
-            else (center_predictor_path.bias if hasattr(center_predictor_path, "bias") else None)
-        )
-        cp_weight = (
-            center_predictor_path["weight"] if isinstance(center_predictor_path, dict) else center_predictor_path.weight
-        )
-        cp_params = TtConv2dParameters(
-            weight=cp_weight,
-            bias=cp_bias,
-            device=self.device,
-        )
-        self.center_predictor = TtConv2d.create(
-            cp_params,
-            stride=(1, 1),
-            padding=(0, 0),
-            conv_path="instance_head.center_predictor",
-            model_configs=self.model_configs,
-        )
+        self.center_predictor = self._create_conv_layer(center_predictor_params, "instance_head.center_predictor")
 
-        # --- Offset Prediction Branch ---
-        # offset_head_0
+        # --- Offset Prediction Branch - use builder API ---
         offset_head_params = parameters["offset_head"] if isinstance(parameters, dict) else parameters.offset_head
-        offset_head0_path = offset_head_params[0]
-        oh0_bias = (
-            offset_head0_path["bias"]
-            if isinstance(offset_head0_path, dict) and "bias" in offset_head0_path
-            else (offset_head0_path.bias if hasattr(offset_head0_path, "bias") else None)
-        )
-        oh0_weight = offset_head0_path["weight"] if isinstance(offset_head0_path, dict) else offset_head0_path.weight
-        oh0_params = TtConv2dParameters(
-            weight=oh0_weight,
-            bias=oh0_bias,
-            device=self.device,
-        )
-        # Get slice config from model_configs for offset_head.0
-        if self.model_configs is not None:
-            head_slice_config = self.model_configs.get_head_slice_config("offset")
-            self.offset_head_0 = TtConv2d.create_with_height_slicing(
-                oh0_params,
-                num_slices=head_slice_config["num_slices"],
-                stride=(1, 1),
-                padding=(1, 1),
-                conv_path="instance_head.offset_head.0",
-                model_configs=self.model_configs,
-            )
-        else:
-            # Fallback to original logic
-            logger.warning(
-                "FALLBACK INSEMB OFFSET_HEAD.0: Using original hardcoded logic for instance_head.offset_head.0 instead of model_configs"
-            )
-            self.offset_head_0 = TtConv2d.create_with_height_slicing(
-                oh0_params,
-                num_slices=2,
-                stride=(1, 1),
-                padding=(1, 1),
-                conv_path="instance_head.offset_head.0",
-                model_configs=self.model_configs,
-            )
+        self.offset_head_0 = self._create_conv_layer(offset_head_params[0], "instance_head.offset_head.0")
+        self.offset_head_1 = self._create_conv_layer(offset_head_params[1], "instance_head.offset_head.1")
 
-        # offset_head_1
-        offset_head1_path = offset_head_params[1]
-        oh1_bias = (
-            offset_head1_path["bias"]
-            if isinstance(offset_head1_path, dict) and "bias" in offset_head1_path
-            else (offset_head1_path.bias if hasattr(offset_head1_path, "bias") else None)
-        )
-        oh1_weight = offset_head1_path["weight"] if isinstance(offset_head1_path, dict) else offset_head1_path.weight
-        oh1_params = TtConv2dParameters(
-            weight=oh1_weight,
-            bias=oh1_bias,
-            device=self.device,
-        )
-        # Get slice config from model_configs for offset_head.1
-        if self.model_configs is not None:
-            head_slice_config = self.model_configs.get_head_slice_config("offset")
-            self.offset_head_1 = TtConv2d.create_with_height_slicing(
-                oh1_params,
-                num_slices=head_slice_config["num_slices"],
-                stride=(1, 1),
-                padding=(1, 1),
-                conv_path="instance_head.offset_head.1",
-                model_configs=self.model_configs,
-            )
-        else:
-            # Fallback to original logic
-            logger.warning(
-                "FALLBACK INSEMB OFFSET_HEAD.1: Using original hardcoded logic for instance_head.offset_head.1 instead of model_configs"
-            )
-            self.offset_head_1 = TtConv2d.create_with_height_slicing(
-                oh1_params,
-                num_slices=2,
-                stride=(1, 1),
-                padding=(1, 1),
-                conv_path="instance_head.offset_head.1",
-                model_configs=self.model_configs,
-            )
-
-        # offset_predictor
         offset_predictor_params = (
             parameters["offset_predictor"] if isinstance(parameters, dict) else parameters.offset_predictor
         )
-        offset_predictor_path = offset_predictor_params
-        op_bias = (
-            offset_predictor_path["bias"]
-            if isinstance(offset_predictor_path, dict) and "bias" in offset_predictor_path
-            else (offset_predictor_path.bias if hasattr(offset_predictor_path, "bias") else None)
-        )
-        op_weight = (
-            offset_predictor_path["weight"] if isinstance(offset_predictor_path, dict) else offset_predictor_path.weight
-        )
-        op_params = TtConv2dParameters(
-            weight=op_weight,
-            bias=op_bias,
-            device=self.device,
-        )
-        self.offset_predictor = TtConv2d.create(
-            op_params,
-            stride=(1, 1),
-            padding=(0, 0),
-            conv_path="instance_head.offset_predictor",
-            model_configs=self.model_configs,
-        )
+        self.offset_predictor = self._create_conv_layer(offset_predictor_params, "instance_head.offset_predictor")
 
-        self.final_upsample = TtUpsample.create(device=device, scale_factor=common_stride, mode="nearest")
+        # Final upsample - use builder API
+        # Store scale factor for dynamic upsample creation during forward pass
+        self.final_upsample_scale = (
+            common_stride if isinstance(common_stride, tuple) else (common_stride, common_stride)
+        )
+        self.final_upsample_mode = "nearest"
         logger.debug("TtPanopticDeepLabInsEmbedHead initialization complete")
 
     def forward(self, features: Dict[str, ttnn.Tensor]) -> Tuple[ttnn.Tensor, ttnn.Tensor, Dict, Dict]:
@@ -270,11 +88,29 @@ class TtPanopticDeepLabInsEmbedHead(TtDeepLabV3PlusHead):
         center_logits, offset_logits = self.layers(features)
 
         # --- Final Upsample for Center ---
-        center_logits = self.final_upsample(center_logits)
+        center_upsample_config = UpsampleConfiguration(
+            scale_factor=self.final_upsample_scale,
+            mode=self.final_upsample_mode,
+            input_height=center_logits.shape[1],
+            input_width=center_logits.shape[2],
+            batch_size=center_logits.shape[0],
+            channels=center_logits.shape[3],
+        )
+        center_upsample = TtUpsample(center_upsample_config, self.device)
+        center_logits = center_upsample(center_logits)
         logger.debug(f"TtPanopticDeepLabInsEmbedHead center upsample complete - shape: {center_logits.shape}")
 
         # --- Final Upsample for Offset ---
-        offset_logits = self.final_upsample(offset_logits)
+        offset_upsample_config = UpsampleConfiguration(
+            scale_factor=self.final_upsample_scale,
+            mode=self.final_upsample_mode,
+            input_height=offset_logits.shape[1],
+            input_width=offset_logits.shape[2],
+            batch_size=offset_logits.shape[0],
+            channels=offset_logits.shape[3],
+        )
+        offset_upsample = TtUpsample(offset_upsample_config, self.device)
+        offset_logits = offset_upsample(offset_logits)
         offset_logits = ttnn.mul(offset_logits, self.common_stride)
         logger.debug(f"TtPanopticDeepLabInsEmbedHead offset upsample complete - shape: {offset_logits.shape}")
 

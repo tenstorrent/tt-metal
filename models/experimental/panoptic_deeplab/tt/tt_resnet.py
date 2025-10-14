@@ -12,21 +12,29 @@ from models.common.lightweightmodule import LightweightModule
 
 class TtResNet(LightweightModule):
     """
-    TTNN implementation of ResNet backbone for Panoptic DeepLab.
+    TTNN implementation of ResNet backbone for Panoptic DeepLab using TT CNN Builder API.
 
     Architecture:
-    - stem: DeepLabStem (3 conv layers)
-    - res2: 3 blocks, stride=1
-    - res3: 4 blocks, first has stride=2
-    - res4: 6 blocks, first has stride=2
-    - res5: 3 blocks, dilated convolutions (2, 4, 8)
+    - stem: DeepLabStem (3 conv layers + maxpool)
+    - res2: 3 BottleneckBlocks, stride=1
+    - res3: 4 BottleneckBlocks, first has stride=2
+    - res4: 6 BottleneckBlocks, first has stride=2
+    - res5: 3 BottleneckBlocks, dilated convolutions (dilation=2,4,8)
+
+    This implementation uses the TT CNN Builder API for all convolutional and pooling
+    layers. Layer configurations (Conv2dConfiguration, MaxPool2dConfiguration) are
+    extracted from the PyTorch model during preprocessing and can be customized via
+    the model_configs parameter.
 
     Args:
-        parameters: Model parameters
+        parameters: Preprocessed model parameters containing Conv2dConfiguration and
+                   MaxPool2dConfiguration objects for each layer
         device: TTNN device
         dtype: Either a single DataType to apply to all layers, or a dict mapping
                layer names ("stem", "res2", "res3", "res4", "res5") to DataTypes
-               for per-layer precision control.
+               for per-layer precision control
+        model_configs: ModelOptimisations instance for applying layer-specific config
+                      overrides (slicing strategies, sharding strategies, etc.)
     """
 
     def __init__(

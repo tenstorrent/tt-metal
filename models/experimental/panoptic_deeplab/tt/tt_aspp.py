@@ -7,11 +7,7 @@ import ttnn
 from typing import Any
 from loguru import logger
 
-from models.experimental.panoptic_deeplab.tt.tt_conv2d_wrapper import (
-    TtConv2d,
-    TtConv2dParameters,
-)
-from models.experimental.panoptic_deeplab.tt.tt_upsample_wrapper import TtUpsample
+from models.tt_cnn.tt.builder import TtConv2d, TtUpsample
 from models.common.lightweightmodule import LightweightModule
 
 
@@ -90,6 +86,16 @@ def get_ttnn_norm(norm_name: str, num_channels: int, device, norm_params: Any = 
 
 
 class TtASPP(LightweightModule):
+    """
+    TTNN implementation of ASPP using TT CNN Builder API.
+
+    ASPP (Atrous Spatial Pyramid Pooling) consists of:
+    - Branch 0: 1x1 convolution
+    - Branches 1-3: 3x3 convolutions with different dilation rates
+    - Branch 4: Global average pooling + 1x1 conv
+    - Project layer: 1x1 convolution to combine all branches
+    """
+
     def __init__(
         self,
         parameters,
@@ -106,7 +112,7 @@ class TtASPP(LightweightModule):
     ):
         super(TtASPP, self).__init__()
         logger.debug(
-            f"Initializing TtASPP with in_channels: {in_channels}, out_channels: {out_channels}, dilations: {dilations}"
+            f"Initializing TtASPP with TT CNN Builder - in_channels: {in_channels}, out_channels: {out_channels}, dilations: {dilations}"
         )
         assert len(dilations) == 3, "ASPP expects 3 dilations, got {}".format(len(dilations))
         self.dropout = dropout
@@ -119,84 +125,64 @@ class TtASPP(LightweightModule):
 
         self.conv_branches = []
 
-        # Branch 1: 1x1 convolution (BatchNorm fused into Conv)
-        conv0_path = parameters["convs"][0]
-        conv0_bias = conv0_path.get("bias", None)
-
-        conv0_params = TtConv2dParameters(
-            weight=conv0_path["weight"],
-            bias=conv0_bias,
-            device=self.device,
-        )
-        conv0 = TtConv2d.create(
-            conv0_params, stride=(1, 1), padding=(0, 0), conv_path="aspp.convs.0", model_configs=self.model_configs
-        )
+        # Branch 0: 1x1 convolution (BatchNorm fused)
+        conv0_params = parameters["convs"][0]
+        conv0 = self._create_conv_layer(conv0_params, "aspp.convs.0")
         self.conv_branches.append(conv0)
 
-        # Branches 2, 3, 4: 3x3 convolutions with dilations (BatchNorm fused)
-        # Default channel slices (fallback if model_configs not available)
-        default_channel_slices = [2, 4, 8]
-
+        # Branches 1-3: 3x3 convolutions with dilations (BatchNorm fused)
         for i, dilation in enumerate(dilations):
             conv_idx = i + 1
-            conv_params_path = parameters["convs"][conv_idx]
-
-            conv_bias = conv_params_path.get("bias", None)
-            conv_params = TtConv2dParameters(
-                weight=conv_params_path["weight"], bias=conv_bias, device=self.device, dilation=(dilation, dilation)
-            )
-
-            # Get slice config from model_configs or use default
-            if self.model_configs is not None:
-                aspp_slice_config = self.model_configs.get_aspp_slice_config(conv_idx)
-                num_slices = aspp_slice_config["num_slices"]
-            else:
-                logger.warning(
-                    f"FALLBACK ASPP SLICE CONFIG: Using default channel slicing with num_slices={default_channel_slices[i]} for aspp.convs.{conv_idx} instead of model_configs"
-                )
-                num_slices = default_channel_slices[i]
-
-            conv = TtConv2d.create_with_channel_slicing(
-                conv_params,
-                stride=(1, 1),
-                padding=(dilation, dilation),
-                num_slices=num_slices,
-                conv_path=f"aspp.convs.{i+1}",
-                model_configs=self.model_configs,
-            )
+            conv_params = parameters["convs"][conv_idx]
+            conv = self._create_conv_layer(conv_params, f"aspp.convs.{conv_idx}")
             self.conv_branches.append(conv)
 
-        # Branch 5: Global pooling (BatchNorm fused into Conv)
-        pool_conv_path = parameters["convs"][4][1]  # pooling branch is convs[4], then [1] for the Conv2d part
-        pool_conv_bias = pool_conv_path.get("bias", None)
-        pool_conv_params = TtConv2dParameters(
-            weight=pool_conv_path["weight"],
-            bias=pool_conv_bias,
-            device=self.device,
-        )
-        self.pool_conv = TtConv2d.create(
-            pool_conv_params, stride=(1, 1), padding=(0, 0), conv_path="aspp.convs.4", model_configs=self.model_configs
-        )
+        # Branch 4: Global pooling + 1x1 conv (BatchNorm fused)
+        pool_conv_params = parameters["convs"][4][1]  # pooling branch is convs[4], then [1] for the Conv2d part
+        self.pool_conv = self._create_conv_layer(pool_conv_params, "aspp.convs.4")
 
-        # Final Project convolution (BatchNorm fused into Conv)
-        project_conv_path = parameters["project"]
-        project_conv_bias = project_conv_path.get("bias", None)
-        project_conv_params = TtConv2dParameters(
-            weight=project_conv_path["weight"],
-            bias=project_conv_bias,
-            device=self.device,
-        )
-        self.project_conv = TtConv2d.create(
-            project_conv_params,
-            stride=(1, 1),
-            padding=(0, 0),
-            conv_path="aspp.project",
-            model_configs=self.model_configs,
-        )
+        # Final Project convolution (BatchNorm fused)
+        project_conv_params = parameters["project"]
+        self.project_conv = self._create_conv_layer(project_conv_params, "aspp.project")
 
-        self.pool_upsample = TtUpsample.create(device=device, scale_factor=(1, 1), mode="bilinear")
+        # Upsample for pooling branch (scale factor will be set dynamically)
+        # Use TT CNN Builder TtUpsample - parameters don't need config for bilinear upsample
+        from models.tt_cnn.tt.builder import UpsampleConfiguration
+
+        upsample_config = UpsampleConfiguration(
+            input_height=1,  # Will be set dynamically
+            input_width=1,  # Will be set dynamically
+            channels=out_channels,
+            batch_size=1,
+            scale_factor=(1, 1),  # Will be set dynamically
+            mode="bilinear",
+        )
+        self.pool_upsample = TtUpsample(upsample_config, device)
+        self.pool_upsample._mode = "bilinear"  # Allow dynamic mode changes
+        self.pool_upsample._scale_factor = (1, 1)  # Allow dynamic scale changes
 
         logger.debug("TtASPP initialization complete")
+
+    def _create_conv_layer(self, params, conv_path: str):
+        """Helper to create conv layer using TT CNN Builder with config overrides"""
+        # Get base Conv2dConfiguration from preprocessing
+        if "conv_config" in params:
+            base_config = params["conv_config"]
+            logger.debug(f"Using Conv2dConfiguration from preprocessing for {conv_path}")
+        else:
+            logger.error(f"Conv2dConfiguration not found for {conv_path}")
+            raise ValueError(f"Expected 'conv_config' in parameters for {conv_path}")
+
+        # Apply model-specific overrides if model_configs is provided
+        if self.model_configs is not None:
+            final_config = self.model_configs.apply_conv_overrides(base_config, conv_path=conv_path)
+            logger.debug(f"Applied config overrides for {conv_path}")
+        else:
+            final_config = base_config
+            logger.debug(f"No model_configs for {conv_path}, using base config")
+
+        # Create TtConv2d using TT CNN Builder
+        return TtConv2d(final_config, self.device)
 
     def forward(self, x):
         input_shape = x.shape
