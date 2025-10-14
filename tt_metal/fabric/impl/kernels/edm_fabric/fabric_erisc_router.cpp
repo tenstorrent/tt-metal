@@ -1684,6 +1684,16 @@ FORCE_INLINE void run_sender_channel_step(
     }
 }
 
+template <bool CHECK_BUSY>
+FORCE_INLINE void receiver_send_completion_ack_erisc(
+    ReceiverChannelResponseCreditSender& receiver_channel_response_credit_sender, uint8_t src_id) {
+    if constexpr (NUM_ACTIVE_ERISCS > 1) {
+        inc_ptr_val<receiver_channel_ack_counters_src>(1);
+    } else {
+        receiver_send_completion_ack<CHECK_BUSY>(receiver_channel_response_credit_sender, src_id);
+    }
+}
+
 template <
     uint8_t receiver_channel,
     uint8_t to_receiver_pkts_sent_id,
@@ -1813,7 +1823,7 @@ void run_receiver_channel_step_impl(
         if (unsent_completions) {
             // completion ptr incremented in callee
             auto receiver_buffer_index = wr_flush_counter.get_buffer_index();
-            receiver_send_completion_ack<ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK>(
+            receiver_send_completion_ack_erisc<ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK>(
                 receiver_channel_response_credit_sender,
                 receiver_channel_pointers.get_src_chan_id(receiver_buffer_index));
             completion_counter.increment();
@@ -1837,7 +1847,7 @@ void run_receiver_channel_step_impl(
             } else {
                 src_ch_id = receiver_channel_pointers.get_src_chan_id(receiver_buffer_index);
             }
-            receiver_send_completion_ack<ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK>(
+            receiver_send_completion_ack_erisc<ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK>(
                 receiver_channel_response_credit_sender, src_ch_id);
             receiver_channel_trid_tracker.clear_trid_at_buffer_slot(receiver_buffer_index);
             completion_counter.increment();
@@ -1882,6 +1892,21 @@ bool any_sender_channels_active(
         }
     }
     return false;
+}
+
+FORCE_INLINE void run_forward_acks_over_eth_step() {
+    auto num_ack_requests = get_ptr_val<outstanding_receiver_channel_eth_acks_stream_id>();
+    if (num_ack_requests) {
+        decrement_local_update_ptr_val<outstanding_receiver_channel_eth_acks_stream_id>(num_ack_requests);
+        while (internal_::eth_txq_is_busy(receiver_txq_id)) {
+        };
+        internal_::eth_send_packet_bytes_unsafe(
+            receiver_txq_id,
+            receiver_channel_ack_counters_src,
+            receiver_channel_ack_counters_dest,
+            receiver_channel_ack_counters_size_bytes);
+        remote_update_ptr_val<to_receiver_pkts_sent_id, receiver_txq_id>(num_ack_requests);
+    }
 }
 
 /*
@@ -1980,6 +2005,9 @@ void run_fabric_edm_main_loop(
                 local_sender_channel_free_slots_stream_ids_ordered,
                 sender_channel_from_receiver_credits,
                 inner_loop_perf_telemetry_collector);
+            if constexpr (NUM_ACTIVE_ERISCS > 1) {
+                run_forward_acks_over_eth_step();
+            }
             if constexpr (!dateline_connection) {
                 run_receiver_channel_step<0, DOWNSTREAM_SENDER_NUM_BUFFERS_VC0, DOWNSTREAM_SENDER_NUM_BUFFERS_VC1>(
                     local_receiver_channels,
@@ -1989,6 +2017,9 @@ void run_fabric_edm_main_loop(
                     receiver_channel_0_trid_tracker,
                     port_direction_table,
                     receiver_channel_response_credit_senders);
+            }
+            if constexpr (NUM_ACTIVE_ERISCS > 1) {
+                run_forward_acks_over_eth_step();
             }
             if constexpr (enable_deadlock_avoidance && !skip_receiver_channel_1_connection) {
                 run_receiver_channel_step<1, DOWNSTREAM_SENDER_NUM_BUFFERS_VC0, DOWNSTREAM_SENDER_NUM_BUFFERS_VC1>(
@@ -2000,7 +2031,9 @@ void run_fabric_edm_main_loop(
                     port_direction_table,
                     receiver_channel_response_credit_senders);
             }
-
+            if constexpr (NUM_ACTIVE_ERISCS > 1) {
+                run_forward_acks_over_eth_step();
+            }
             if constexpr (is_sender_channel_serviced[1] && !skip_sender_channel_1_connection) {
                 run_sender_channel_step<enable_packet_header_recording, VC0_RECEIVER_CHANNEL, 1>(
                     local_sender_channels,
@@ -2012,6 +2045,9 @@ void run_fabric_edm_main_loop(
                     local_sender_channel_free_slots_stream_ids_ordered,
                     sender_channel_from_receiver_credits,
                     inner_loop_perf_telemetry_collector);
+            }
+            if constexpr (NUM_ACTIVE_ERISCS > 1) {
+                run_forward_acks_over_eth_step();
             }
             if constexpr (is_2d_fabric) {
                 run_sender_channel_step<enable_packet_header_recording, VC0_RECEIVER_CHANNEL, 2>(
@@ -2035,6 +2071,9 @@ void run_fabric_edm_main_loop(
                     sender_channel_from_receiver_credits,
                     inner_loop_perf_telemetry_collector);
             }
+            if constexpr (NUM_ACTIVE_ERISCS > 1) {
+                run_forward_acks_over_eth_step();
+            }
             if constexpr (enable_deadlock_avoidance && !dateline_connection && !skip_sender_vc1_channel_connection) {
                 run_sender_channel_step<enable_packet_header_recording, VC1_RECEIVER_CHANNEL, NUM_SENDER_CHANNELS - 1>(
                     local_sender_channels,
@@ -2046,6 +2085,9 @@ void run_fabric_edm_main_loop(
                     local_sender_channel_free_slots_stream_ids_ordered,
                     sender_channel_from_receiver_credits,
                     inner_loop_perf_telemetry_collector);
+            }
+            if constexpr (NUM_ACTIVE_ERISCS > 1) {
+                run_forward_acks_over_eth_step();
             }
         }
 
@@ -2381,6 +2423,7 @@ void kernel_main() {
     init_ptr_val<receiver_channel_0_free_slots_from_north_stream_id>(DOWNSTREAM_SENDER_NUM_BUFFERS_VC0);
     init_ptr_val<receiver_channel_0_free_slots_from_south_stream_id>(DOWNSTREAM_SENDER_NUM_BUFFERS_VC0);
     init_ptr_val<receiver_channel_1_free_slots_from_downstream_stream_id>(DOWNSTREAM_SENDER_NUM_BUFFERS_VC1);
+    init_ptr_val<receiver_channel_ack_counters_src>(0);
 
     if constexpr (NUM_ACTIVE_ERISCS > 1) {
         wait_for_other_local_erisc();
