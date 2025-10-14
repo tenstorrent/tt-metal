@@ -939,7 +939,7 @@ private:
 
     void expand_all_devices_uniform_pattern(ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern) {
         log_debug(LogTest, "Expanding all_devices_uniform_pattern for test: {}", test.name);
-        std::vector<FabricNodeId> devices = device_info_provider_.get_local_node_ids();
+        std::vector<FabricNodeId> devices = device_info_provider_.get_global_node_ids();
         TT_FATAL(!devices.empty(), "Cannot expand all_devices_uniform_pattern because no devices were found.");
 
         for (const auto& src_node : devices) {
@@ -952,7 +952,7 @@ private:
         ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern, HighLevelTrafficPattern pattern_type) {
         const char* pattern_name = (pattern_type == HighLevelTrafficPattern::OneToAll) ? "one_to_all" : "all_to_all";
         log_debug(LogTest, "Expanding {}_multicast pattern for test: {}", pattern_name, test.name);
-        std::vector<FabricNodeId> devices = device_info_provider_.get_local_node_ids();
+        std::vector<FabricNodeId> devices = device_info_provider_.get_global_node_ids();
         TT_FATAL(!devices.empty(), "Cannot expand {}_multicast because no devices were found.", pattern_name);
 
         // Determine which devices should be senders
@@ -1084,7 +1084,7 @@ private:
             test.name,
             static_cast<int>(test.fabric_setup.topology));
 
-        std::vector<FabricNodeId> all_devices = device_info_provider_.get_local_node_ids();
+        std::vector<FabricNodeId> all_devices = device_info_provider_.get_global_node_ids();
         TT_FATAL(!all_devices.empty(), "Cannot expand line sync patterns because no devices were found.");
 
         // Create sync patterns based on topology - returns multiple patterns per device for mcast
