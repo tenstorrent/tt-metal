@@ -12,8 +12,13 @@ body:
   - type: textarea
     id: background
     attributes:
+      label: "Background"
+      description: "Context about what the bounty is about — What model to bring up, where it's used, and who would be interested."
       placeholder: |
-        Context about what the bounty is about — What model to bring up, where it’s used, and who would be interested.
+        Example:
+        - Model: Whisper
+        - Purpose: Speech-to-text on TT hardware
+        - Used in: OpenAI API, transcription systems
 
 
   - type: markdown
@@ -23,7 +28,9 @@ body:
         A successful submission will fulfill all requirements in the following stages. Payout is made after **all stages** are completed.
 
   - type: textarea
+    id: success_criteria
     attributes:
+      label: "What Success Looks Like"
       description: "Define a list or checklist of clear, testable acceptance criteria - this is the goal the developer is chasing. They achieve all stages, we pay. Model bounties are split into 3 stages."
 
   - type: markdown
@@ -34,6 +41,7 @@ body:
   - type: textarea
     id: stage1
     attributes:
+      label: "Stage 1 — Bring-Up"
       description: "List things that they need to achieve for us to consider the model working"
       placeholder: |
         e.g.
@@ -52,6 +60,7 @@ body:
   - type: textarea
     id: stage2
     attributes:
+      label: "Stage 2 — Basic Optimizations"
       description: "A list of techniques that are easy to implement. Make sure they are applicable to the model."
       placeholder: |
         e.g.
@@ -70,6 +79,7 @@ body:
   - type: textarea
     id: stage3
     attributes:
+      label: "Stage 3 — Deeper Optimization"
       description: "More involved optimizations are listed here. Adapt the model to exploit TT hardware features and reduce unnecessary TM/memory overheads. We are not asking the user to understand all possible optimization processes. But enough to touch on the differences of our hardware and GPUs."
       placeholder: |
         e.g.
@@ -88,6 +98,7 @@ body:
   - type: textarea
     id: guidance
     attributes:
+      label: "Guidance & Starting Points"
       description: "Provide guidance, links to files, or code snippets and links. Help the user to get started with the bounty"
       placeholder: |
         e.g.
@@ -110,6 +121,7 @@ body:
   - type: textarea
     id: approaches
     attributes:
+      label: "Possible Approaches"
       description: "List one or more technical paths, architectural suggestions, or research ideas; Help the developer not succumb to analysis paralysis - too many options, don't know what to do"
       placeholder: |
         e.g.
@@ -142,6 +154,7 @@ body:
   - type: textarea
     id: resources
     attributes:
+      label: "Resources"
       description: "Add helpful links for contributors: example PRs or implementations, reference docs, original model paper, outside tutorials"
       placeholder: |
         e.g.
