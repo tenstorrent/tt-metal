@@ -114,6 +114,6 @@ def test_ttnn_semseg(device, model_location_generator):
 
     ttnn_out_torch = ttnn.to_torch(ttnn_out_tt).permute(0, 3, 1, 2)
 
-    passed, msg = assert_with_pcc(torch_out, ttnn_out_torch, pcc=0.97)
+    passed, msg = assert_with_pcc(torch_out, ttnn_out_torch, pcc=0.99)
     logger.info(f"Semantic segmentation PCC: {msg}")
     assert passed, f"Semantic segmentation PCC test failed: {msg}"

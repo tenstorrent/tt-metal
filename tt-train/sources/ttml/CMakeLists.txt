@@ -142,6 +142,8 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/adamw.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/optimizer_base.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/optimizer_base.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/remote_optimizer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/remote_optimizer.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/sgd.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/sgd.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/no_op.cpp
