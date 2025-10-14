@@ -664,9 +664,12 @@ bool is_dst_optimization_viable(uint32_t channel_tiles, uint32_t l1_usage_bytes,
     }
 
     // Check L1 memory constraints
-    // Leave 20% safety margin
-    const uint32_t l1_size = tt::tt_metal::hal::get_l1_size();
-    const uint32_t l1_limit = static_cast<uint32_t>(l1_size * 0.8);
+    // Leave 20% safety margin - CACHE L1 SIZE TO AVOID EXPENSIVE HARDWARE QUERIES
+    static uint32_t cached_l1_size = 0;
+    if (cached_l1_size == 0) {
+        cached_l1_size = tt::tt_metal::hal::get_l1_size();
+    }
+    const uint32_t l1_limit = static_cast<uint32_t>(cached_l1_size * 0.8);
 
     if (l1_usage_bytes > l1_limit) {
         return false;

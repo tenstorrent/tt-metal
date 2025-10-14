@@ -318,13 +318,17 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
 
         // TEMPORARY: Disable DST optimization for complex sharding scenarios
         // Our 4-way parallel algorithm currently only supports simple split_reader coordination
-        bool has_complex_sharding = (ncores > 64) || (num_shards_c > 4);
+        // Updated threshold: Wormhole N150/N300 commonly use 72-80 cores in normal configurations
+        bool is_block_sharded = (inputs[0].memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED);
+        bool has_complex_sharding = (ncores > 120) || (num_shards_c > 8) || is_block_sharded;
         if (has_complex_sharding) {
             log_warning(
                 tt::LogOp,
-                "DST optimization disabled for complex sharding (ncores={}, num_shards_c={})",
+                "DST optimization disabled for complex sharding (ncores={}, num_shards_c={}, block_sharded={}) - "
+                "thresholds: max_cores=120, max_shards_c=8",
                 ncores,
-                num_shards_c);
+                num_shards_c,
+                is_block_sharded);
             optimization_viable = false;
         }
 
@@ -723,7 +727,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         is_output_tiled,                // 20
         is_output_block_format,         // 21
 
-        // DST Optimization parameters - Phase 2: Re-enable parameter passing
+        // DST Optimization parameters
         static_cast<uint32_t>(params.dst_optimization_mode),  // 22
         params.positions_per_iteration};                      // 23
 
