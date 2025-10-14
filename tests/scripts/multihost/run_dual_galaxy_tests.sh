@@ -20,10 +20,11 @@ run_dual_galaxy_unit_tests() {
   local mpi_args="--host g10glx03,g10glx04 $mpi_args_base"
   local mpi_args_reversed="--host g10glx04,g10glx03 $mpi_args_base"
   local rank_binding="tests/tt_metal/distributed/config/dual_galaxy_rank_bindings.yaml"
+  local multi_mesh_rank_binding="tests/tt_metal/distributed/config/dual_galaxy_multi_mesh_rank_bindings.yaml"
 
   tt-run --rank-binding "$rank_binding" --mpi-args "$mpi_args" ./build/test/tt_metal/tt_fabric/test_physical_discovery ; fail+=$?
   tt-run --rank-binding "$rank_binding" --mpi-args "$mpi_args" ./build/tools/scaleout/run_cluster_validation ; fail+=$?
-  tt-run --rank-binding "$rank_binding" --mpi-args "$mpi_args" ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_dual_galaxy_multi_mesh.yaml ; fail+=$?
+  tt-run --rank-binding "$multi_mesh_rank_binding" --mpi-args "$mpi_args" ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_dual_galaxy_multi_mesh.yaml ; fail+=$?
   tt-run --rank-binding "$rank_binding" --mpi-args "$mpi_args" ./build/test/tt_metal/tt_fabric/test_system_health --gtest_filter="Cluster.ReportIntermeshLinks" ; fail+=$?
   tt-run --rank-binding "$rank_binding" --mpi-args "$mpi_args" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MultiHost.TestDualGalaxyControlPlaneInit" ; fail+=$?
   tt-run --rank-binding "$rank_binding" --mpi-args "$mpi_args" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MultiHost.TestDualGalaxyFabric2DSanity" ; fail+=$?
