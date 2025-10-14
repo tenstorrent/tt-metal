@@ -44,10 +44,8 @@ struct DynamicMemoryRegion {
         TT_FATAL(
             current + chunk_size <= end(),
             "Chunk allocation exceeds region bounds: "
-            "need {} bytes ({} receivers × {} stride) at address {} but region ends at {}",
+            "need {} bytes at address {} but region ends at {}",
             chunk_size,
-            num_elements,
-            stride,
             current,
             end());
         uint32_t chunk_base = current;

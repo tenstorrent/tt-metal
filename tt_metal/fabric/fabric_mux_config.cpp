@@ -20,6 +20,7 @@ FabricMuxConfig::MemoryRegion::MemoryRegion(size_t base, size_t unit_sz, size_t 
 size_t FabricMuxConfig::MemoryRegion::get_address(size_t offset) const {
     // Special case for empty regions
     if (num_units == 0) {
+        TT_FATAL(offset == 0, "Offset {} is invalid for empty region (num_units == 0)", offset);
         return base_address;
     }
 

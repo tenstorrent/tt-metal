@@ -260,7 +260,7 @@ struct TestTrafficConfig {
     std::optional<CoreCoord> dst_logical_core;
     std::optional<uint32_t> target_address;
     std::optional<uint32_t> atomic_inc_address;
-    uint32_t link_id;  // Link ID for multi-link tests
+    uint32_t link_id = 0;  // Link ID for multi-link tests
 
     // Credit info (copied from pattern if populated by allocator)
     std::optional<SenderCreditInfo> sender_credit_info;
@@ -302,7 +302,7 @@ struct TestTrafficSenderConfig {
     std::optional<size_t> atomic_inc_address;
     uint32_t dst_noc_encoding;  // TODO: decide if we should keep it here or not
     uint32_t payload_buffer_size;  // Add payload buffer size field
-    uint32_t link_id;              // Link ID for multi-link tests
+    uint32_t link_id = 0;          // Link ID for multi-link tests
 
     // Credit flow info (when enable_flow_control is true)
     std::optional<SenderCreditInfo> sender_credit_info;
@@ -316,7 +316,7 @@ struct TestTrafficReceiverConfig {
     size_t target_address;
     std::optional<size_t> atomic_inc_address;
     uint32_t payload_buffer_size;  // Add payload buffer size field
-    uint32_t link_id;              // Link ID derived from corresponding sender
+    uint32_t link_id = 0;          // Link ID derived from corresponding sender
 
     // Credit flow info (when enable_flow_control is true)
     std::optional<ReceiverCreditInfo> receiver_credit_info;
