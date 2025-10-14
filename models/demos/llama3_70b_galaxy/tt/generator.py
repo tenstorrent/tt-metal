@@ -108,7 +108,7 @@ class Generator:
             and tt_out_logits_all_users is None
             and not return_logits
         ):
-            use_batched_prefill = True
+            use_batched_prefill = False
 
         if return_logits:
             tt_out_logits_all_users = torch.zeros(batch, 1, 131072)
@@ -233,12 +233,32 @@ class Generator:
         """
         trace_key = f"{prefill_seq_len}_{batch_size}"
         if self.trace_id_prefill[trace_key] is None:
-            trace_id, tt_out_trace, *device_inputs = self._capture_trace_prefill(
-                tokens, last_token_idx, page_table=page_table, kv_cache=kv_cache, user_id=user_id, batch_size=batch_size
-            )
-            self.trace_id_prefill[trace_key] = trace_id
-            self.trace_inputs_prefill[trace_key] = device_inputs
-            self.trace_output_prefill[trace_key] = tt_out_trace
+            # Miguel
+            tokens_len = tokens.size(-1)
+            for current_seqlen in self.model.tt_ccl.support_seqlens:
+                logger.info(f"Miguel - Tracing for seqlen: {current_seqlen}")
+                trace_key = f"{current_seqlen}_{batch_size}"
+                breakpoint()
+                if tokens_len <= current_seqlen:
+                    if current_seqlen == 128:
+                        tokens = tokens[:, :128]
+                    else:
+                        # Expand tokens to match current_seqlen
+                        tokens = torch.cat(
+                            [tokens, torch.zeros(tokens.shape[0], current_seqlen - tokens_len).long()], dim=-1
+                        )
+                breakpoint()
+                trace_id, tt_out_trace, *device_inputs = self._capture_trace_prefill(
+                    tokens,
+                    last_token_idx,
+                    page_table=page_table,
+                    kv_cache=kv_cache,
+                    user_id=user_id,
+                    batch_size=batch_size,
+                )
+                self.trace_id_prefill[trace_key] = trace_id
+                self.trace_inputs_prefill[trace_key] = device_inputs
+                self.trace_output_prefill[trace_key] = tt_out_trace
 
         logger.info("Executing prefill trace")
         tt_out_trace = self._prefill_forward_trace_text(
