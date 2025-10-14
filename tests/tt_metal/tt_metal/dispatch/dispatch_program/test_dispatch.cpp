@@ -35,6 +35,7 @@
 
 // Access to internal API: ProgramImpl::get_cb_base_addr, ProgramImpl::get_cb_size
 #include "impl/program/program_impl.hpp"
+#include "impl/buffers/circular_buffer_constants.h"
 
 namespace tt::tt_metal {
 

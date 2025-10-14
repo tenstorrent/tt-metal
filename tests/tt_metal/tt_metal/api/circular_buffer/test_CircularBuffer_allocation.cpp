@@ -36,6 +36,7 @@
 
 // Access to internal API: ProgramImpl::get_cb_base_addr
 #include "impl/program/program_impl.hpp"
+#include "impl/buffers/circular_buffer_constants.h"
 
 using std::vector;
 using namespace tt::tt_metal;

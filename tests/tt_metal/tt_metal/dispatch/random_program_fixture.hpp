@@ -16,6 +16,7 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "impl/buffers/semaphore.hpp"
 #include "dispatch_test_utils.hpp"
+#include "impl/buffers/circular_buffer_constants.h"
 
 namespace tt::tt_metal {
 

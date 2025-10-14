@@ -32,6 +32,7 @@
 #include "buffer.hpp"
 #include "impl/buffers/circular_buffer.hpp"
 #include "circular_buffer_constants.h"
+#include "impl/buffers/circular_buffer_constants.h"
 #include "core_coord.hpp"
 #include "device.hpp"
 #include "dispatch/device_command.hpp"
