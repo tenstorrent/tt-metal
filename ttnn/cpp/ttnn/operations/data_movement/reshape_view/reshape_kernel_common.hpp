@@ -20,5 +20,6 @@ struct SegmentMapData {
 
     static constexpr uint32_t size = 4;
 };
+inline std::pair<uint16_t, uint16_t> unpack_rt_short(uint32_t packed) { return {packed >> 16, packed & 0xFFFF}; }
 
 }  // namespace ttnn::operations::data_movement::reshape::detail
