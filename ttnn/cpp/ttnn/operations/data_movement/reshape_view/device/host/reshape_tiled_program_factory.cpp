@@ -274,7 +274,6 @@ struct GlobalCompressedReshapeMap {
     std::vector<PatternTemplate> pattern_templates;
     std::vector<PagePatternInstance> page_pattern_instances;
     std::vector<PagePatternRun> page_pattern_runs;
-    std::vector<SegmentMapData> irregular_segments;
 };
 
 // Detects the longest stride run starting at 'start'
@@ -290,8 +289,10 @@ size_t detect_stride_run(
     auto& base = segs[start];
     size_t len = 1;
     int32_t input_stride = 0, output_stride = 0;
-    if (start + 1 < segs.size() && segs[start + 1].num_elements == base.num_elements &&
-        segs[start + 1].input_page_index == base.input_page_index) {
+
+    if (start + 1 < segs.size() && segs[start + 1].num_elements != 0 &&
+        segs[start + 1].input_page_index == base.input_page_index &&
+        segs[start + 1].num_elements == base.num_elements) {
         input_stride =
             static_cast<int32_t>(segs[start + 1].input_page_offset) - static_cast<int32_t>(base.input_page_offset);
         output_stride =
@@ -323,7 +324,11 @@ size_t detect_stride_run(
             0};  // pattern_template_index to be filled later
         return len;
     }
-    return 0;
+
+    // If no stride found, treat as run of length 1
+    tmpl = {0, 0, base.num_elements};
+    instance = {output_page_index, base.input_page_index, base.input_page_offset, base.output_page_offset, 1, 0};
+    return 1;
 }
 
 std::vector<PagePatternRun> compress_page_pattern_instances(const std::vector<PagePatternInstance>& instances) {
@@ -419,8 +424,8 @@ GlobalCompressedReshapeMap compress_mapping_global(const std::vector<std::vector
     // Compress page pattern instances into runs
     std::vector<PagePatternRun> page_pattern_runs = compress_page_pattern_instances(page_pattern_instances);
 
-    // No need for a separate irregular_segments vector anymore
-    return {pattern_templates, page_pattern_instances, page_pattern_runs, {}};
+    printf("pattern templates length: %zu\n", pattern_templates.size());
+    return {pattern_templates, page_pattern_instances, page_pattern_runs};
 }
 
 inline uint32_t pack4(uint8_t a, uint8_t b, uint8_t c, uint8_t d) { return (a << 24) | (b << 16) | (c << 8) | d; }
@@ -456,27 +461,6 @@ std::tuple<Tensor, GlobalCompressedReshapeMap> compute_reshape_mapping_host_tens
 
     printf("general compressed mapping\n");
     auto compressed_map = compress_mapping_global(mapping_vector);
-
-    std::vector<uint32_t> rt_args;
-    for (const auto& run : compressed_map.page_pattern_runs) {
-        // Example: pack output_page_index_start, output_page_index_end, input_page_index_start, pattern_template_index
-        rt_args.push_back(pack4(
-            run.output_page_index_start & 0xFF,
-            run.output_page_index_end & 0xFF,
-            run.input_page_index_start & 0xFF,
-            run.pattern_template_index & 0xFF));
-
-        // Pack input_offset_start, output_offset_start, run_length, input_page_index_stride
-        rt_args.push_back(pack4(
-            run.input_offset_start & 0xFF,
-            run.output_offset_start & 0xFF,
-            run.run_length & 0xFF,
-            run.input_page_index_stride & 0xFF));
-
-        // Pack input_offset_stride, output_offset_stride, (pad with zeros)
-        rt_args.push_back(pack4(run.input_offset_stride & 0xFF, run.output_offset_stride & 0xFF, 0, 0));
-    }
-    printf("len of rt_args (page pattern runs): %zu\n", rt_args.size());
 
     printf("Pattern Templates (%zu):\n", compressed_map.pattern_templates.size());
     for (size_t i = 0; i < compressed_map.pattern_templates.size(); ++i) {
@@ -514,15 +498,6 @@ std::tuple<Tensor, GlobalCompressedReshapeMap> compute_reshape_mapping_host_tens
             pr.input_page_index_stride,
             pr.input_offset_stride,
             pr.output_offset_stride);
-    }
-    printf("Irregular Segments (%zu):\n", compressed_map.irregular_segments.size());
-    for (const auto& seg : compressed_map.irregular_segments) {
-        printf(
-            "  Segment: InputPage %u, InOffset %u, OutOffset %u, NumElem %u\n",
-            seg.input_page_index,
-            seg.input_page_offset,
-            seg.output_page_offset,
-            seg.num_elements);
     }
 
     // flatten again
@@ -719,17 +694,21 @@ tt::tt_metal::operation::ProgramWithCallbacks reshape_tiled_program_factory(
 
         // Build per-core rt_args from compressed_map.page_pattern_runs
         std::vector<uint32_t> core_rt_args;
+        size_t num_short_runs = 0, num_long_runs = 0;
 
-        // Pack pattern templates
-        for (const auto& tmpl : compressed_map.pattern_templates) {
-            core_rt_args.push_back(tmpl.input_offset_stride);
-            core_rt_args.push_back(tmpl.output_offset_stride);
-            core_rt_args.push_back(tmpl.num_elements);
+        // Count runs by type
+        for (const auto& run : compressed_map.page_pattern_runs) {
+            if (run.output_page_index_end < page_idx_start || run.output_page_index_start >= page_idx_end) {
+                continue;
+            }
+            if (run.run_length == 1) {
+                num_short_runs++;
+            } else {
+                num_long_runs++;
+            }
         }
 
-        // Pack runs
-        size_t num_runs = 0;
-        printf("size of compressed_map.page_pattern_runs: %zu\n", compressed_map.page_pattern_runs.size());
+        // Pack short runs first, then long runs
         for (const auto& run : compressed_map.page_pattern_runs) {
             if (run.output_page_index_end < page_idx_start || run.output_page_index_start >= page_idx_end) {
                 continue;
@@ -737,43 +716,76 @@ tt::tt_metal::operation::ProgramWithCallbacks reshape_tiled_program_factory(
             uint32_t start = std::max(run.output_page_index_start, page_idx_start);
             uint32_t end = std::min(run.output_page_index_end, page_idx_end - 1);
 
-            core_rt_args.push_back(start);                        // output_page_index_start (32 bits)
-            core_rt_args.push_back(end);                          // output_page_index_end   (32 bits)
-            core_rt_args.push_back(run.input_page_index_start);   // input_page_index_start  (32 bits)
-            core_rt_args.push_back(run.pattern_template_index);   // pattern_template_index  (32 bits)
-            core_rt_args.push_back(run.input_offset_start);       // input_offset_start      (32 bits)
-            core_rt_args.push_back(run.output_offset_start);      // output_offset_start     (32 bits)
-            core_rt_args.push_back(run.run_length);               // run_length              (32 bits)
-            core_rt_args.push_back(run.input_page_index_stride);  // input_page_index_stride (32 bits)
-            core_rt_args.push_back(run.input_offset_stride);      // input_offset_stride     (32 bits)
-            core_rt_args.push_back(run.output_offset_stride);     // output_offset_stride    (32 bits)
-            ++num_runs;
+            if (run.run_length == 1) {
+                // Short format: 6 fields
+                core_rt_args.push_back(start);                       // output_page_index_start
+                core_rt_args.push_back(end);                         // output_page_index_end
+                core_rt_args.push_back(run.input_page_index_start);  // input_page_index_start
+                core_rt_args.push_back(run.pattern_template_index);  // pattern_template_index
+                core_rt_args.push_back(run.input_offset_start);      // input_offset_start
+                core_rt_args.push_back(run.output_offset_start);     // output_offset_start
+            }
+        }
+
+        for (const auto& run : compressed_map.page_pattern_runs) {
+            if (run.output_page_index_end < page_idx_start || run.output_page_index_start >= page_idx_end) {
+                continue;
+            }
+            uint32_t start = std::max(run.output_page_index_start, page_idx_start);
+            uint32_t end = std::min(run.output_page_index_end, page_idx_end - 1);
+
+            if (run.run_length > 1) {
+                // Long format: 10 fields
+                core_rt_args.push_back(start);                        // output_page_index_start
+                core_rt_args.push_back(end);                          // output_page_index_end
+                core_rt_args.push_back(run.input_page_index_start);   // input_page_index_start
+                core_rt_args.push_back(run.pattern_template_index);   // pattern_template_index
+                core_rt_args.push_back(run.input_offset_start);       // input_offset_start
+                core_rt_args.push_back(run.output_offset_start);      // output_offset_start
+                core_rt_args.push_back(run.run_length);               // run_length
+                core_rt_args.push_back(run.input_page_index_stride);  // input_page_index_stride
+                core_rt_args.push_back(run.input_offset_stride);      // input_offset_stride
+                core_rt_args.push_back(run.output_offset_stride);     // output_offset_stride
+            }
         }
 
         // Build final RT args vector
         std::vector<uint32_t> reader_runtime_args;
         reader_runtime_args.push_back(compressed_map.pattern_templates.size());  // num_templates
-        reader_runtime_args.push_back(num_runs);                                 // num_runs
+        reader_runtime_args.push_back(num_short_runs);                           // num_short_runs
+        reader_runtime_args.push_back(num_long_runs);                            // num_long_runs
         reader_runtime_args.push_back(input_buffer->address());                  // buffer_addr
+
+        // Add pattern templates
+        for (const auto& tmpl : compressed_map.pattern_templates) {
+            reader_runtime_args.push_back(tmpl.input_offset_stride);
+            reader_runtime_args.push_back(tmpl.output_offset_stride);
+            reader_runtime_args.push_back(tmpl.num_elements);
+        }
+
+        printf("reader runtime size after templates: %zu\n", reader_runtime_args.size());
+        // Add run data
         for (auto k : core_rt_args) {
             reader_runtime_args.push_back(k);
         }
+
         tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, c, reader_runtime_args);
 
+        // Same for writer
         std::vector<uint32_t> writer_runtime_args;
         writer_runtime_args.push_back(compressed_map.pattern_templates.size());
-        writer_runtime_args.push_back(num_runs);
+        writer_runtime_args.push_back(num_short_runs);
+        writer_runtime_args.push_back(num_long_runs);
         writer_runtime_args.push_back(output_buffer->address());
+        for (const auto& tmpl : compressed_map.pattern_templates) {
+            writer_runtime_args.push_back(tmpl.input_offset_stride);
+            writer_runtime_args.push_back(tmpl.output_offset_stride);
+            writer_runtime_args.push_back(tmpl.num_elements);
+        }
         for (auto k : core_rt_args) {
             writer_runtime_args.push_back(k);
         }
-
-        printf("core_rt_args for core %zu %zu : \n", c.x, c.y);
-        for (auto k : core_rt_args) {
-            printf("%u ", k);
-        }
         tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, c, writer_runtime_args);
-
         page_idx_start += increment;
         utilized_cores.push_back(c);
     }
