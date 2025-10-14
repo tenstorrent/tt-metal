@@ -77,8 +77,8 @@ jobs:
           # Check if this is a scheduled P100-only run at 7:00 UTC (daily)
           if [[ "${{ github.event_name }}" = "schedule" && "${{ github.event.schedule }}" = "0 7 * * *" ]]; then
             matrix='["P100"]'
-            civ2_matrix='["P100"]'
-            civ2_viommu_matrix='["P100"]'
+            civ2_matrix='["P100a"]'
+            civ2_viommu_matrix='["P100a-viommu"]'
           elif [ "${{ inputs.enable-llmbox-tests }}" = "true" ]; then
             if [[ "$runner_label" != *"BH-LLMBox"* ]]; then
               echo "::warning::LLMBox tests are enabled but runner-label does not contain BH-LLMBox. Current value: $runner_label"
@@ -91,14 +91,24 @@ jobs:
             civ2_matrix="$runner_label"
             civ2_viommu_matrix="$runner_label"
 
+            # Transform P100 to P100a for civ2_matrix (only if P100 exists, not P100a)
+            if [[ "$runner_label" == *"P100"* && "$runner_label" != *"P100a"* ]]; then
+              civ2_matrix=$(echo "$civ2_matrix" | sed 's/"P100"/"P100a"/g')
+            fi
+
             # Transform P150 to P150b for civ2_matrix (only if P150 exists, not P150b)
             if [[ "$runner_label" == *"P150"* && "$runner_label" != *"P150b"* ]]; then
-              civ2_matrix=$(echo "$runner_label" | sed 's/"P150"/"P150b"/g')
+              civ2_matrix=$(echo "$civ2_matrix" | sed 's/"P150"/"P150b"/g')
+            fi
+
+            # Transform P100 to P100a for civ2_viommu_matrix (only if P100 exists, not P100a)
+            if [[ "$runner_label" == *"P100"* && "$runner_label" != *"P100a"* ]]; then
+              civ2_viommu_matrix=$(echo "$civ2_viommu_matrix" | sed 's/"P100"/"P100a-viommu"/g')
             fi
 
             # Transform P150 to P150b-viommu for civ2_viommu_matrix (only if P150 exists, not P150b)
             if [[ "$runner_label" == *"P150"* && "$runner_label" != *"P150b"* ]]; then
-              civ2_viommu_matrix=$(echo "$runner_label" | sed 's/"P150"/"P150b-viommu"/g')
+              civ2_viommu_matrix=$(echo "$civ2_viommu_matrix" | sed 's/"P150"/"P150b-viommu"/g')
             fi
           fi
           echo "matrix=$matrix" >> $GITHUB_OUTPUT
@@ -358,7 +368,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        test-group: ${{ fromJson(needs.generate-matrix.outputs.civ2-matrix) }}
+        test-group: ${{ fromJson(needs.generate-matrix.outputs.civ2-viommu-matrix) }}
     with:
       arch: blackhole
       runner-label: ${{ matrix.test-group }}
@@ -374,7 +384,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        test-group: [ "BH-LLMBox", "BH-LoudBox" ]
+        test-group: [ "BH-LLMBox", "BH-LoudBox", "P300-viommu" ]
     with:
       arch: blackhole
       runner-label: ${{ matrix.test-group }}

@@ -18,6 +18,8 @@ void bind_normalization_group_norm_operation(pybind11::module& module) {
         module,
         ttnn::group_norm,
         R"doc(
+                ``ttnn.group_norm(input_tensor: ttnn.Tensor, num_groups: int, epsilon: float = 1e-12, input_mask: Optional[ttnn.Tensor] = None, weight: Optional[ttnn.Tensor] = None, bias: Optional[ttnn.Tensor] = None, reciprocals: Optional[ttnn.Tensor] = None, memory_config: Optional[ttnn.MemoryConfig] = None, dtype: Optional[ttnn.DataType] = None, core_grid: Optional[ttnn.CoreGrid] = None, inplace: bool = True, output_layout: Optional[ttnn.Layout] = None, num_out_blocks: Optional[int] = None, compute_kernel_config: Optional[ttnn.DeviceComputeKernelConfig] = None, negative_mask: Optional[ttnn.Tensor] = None, use_welford: bool = False) -> ttnn.Tensor``
+
                 Computes group_norm over :attr:`input_tensor`.
                 See `Group Normalization <https://arxiv.org/abs/1803.08494>`_ for more details.
 
@@ -98,6 +100,10 @@ void bind_normalization_group_norm_operation(pybind11::module& module) {
                     * - BFLOAT16
                       - TILE, ROW_MAJOR
 
+            Memory Support:
+              - Interleaved: DRAM and L1
+              - Sharded (L1): Height and Block sharded
+
             Limitations:
               - :attr:`input_tensor` is a 4D tensor of shape [N, 1, H*W, C] and is allocated on the device
               - For the :attr:`input_tensor`, N*H*W must be a multiple of the tile size (32) and C must divide evenly into :attr:`num_groups`.
@@ -106,12 +112,12 @@ void bind_normalization_group_norm_operation(pybind11::module& module) {
               - :attr:`inplace` is not supported for TILE-layout inputs and requires input and output layouts to be identical.
               - When generating inputs (e.g. weight, bias) for block sharded tensors, the number of cores in a column should draw upon core.x rather than core.y.
               - When generating inputs (e.g. weight, bias) for height sharded tensors, the number of cores in a column should be 1 rather than core.y.
-              - Width-sharding is not supported (use height or block sharding)
+              - Width-sharding is not supported
 
             Example (Sharded Input):
                 .. code-block:: python
 
-                     N, C, H, W = 1, 64, 32, 1
+                    N, C, H, W = 1, 64, 32, 1
                     num_groups = 2
 
                     # Prepare random inputs

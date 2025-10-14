@@ -30,6 +30,8 @@ jobs:
             runner-label: BH-DeskBox
           - name: LoudBox unit tests
             runner-label: BH-LoudBox
+          - name: P300 unit tests
+            runner-label: P300-viommu
         test-group:
           - name: fabric 1D unit tests
             cmd: |
@@ -49,6 +51,17 @@ jobs:
               ./build/test/tt_metal/unit_tests_eth
               ./build/test/tt_metal/unit_tests_tunneling
             timeout: 15
+          - name: multi erisc tests
+            cmd: |
+              TT_METAL_MULTI_AERISC=1 build/test/tt_metal/unit_tests_eth
+              TT_METAL_MULTI_AERISC=1 build/test/tt_metal/unit_tests_debug_tools --gtest_filter=DPrintMeshFixture.ActiveEthTestPrint
+              TT_METAL_MULTI_AERISC=1 build/test/tt_metal/unit_tests_debug_tools --gtest_filter=WatcherAssertTest.TensixTestWatcherPause
+              TT_METAL_MULTI_AERISC=1 build/test/tt_metal/unit_tests_debug_tools --gtest_filter=WatcherAssertTest.TestWatcherAssert
+              TT_METAL_MULTI_AERISC=1 build/test/tt_metal/unit_tests_debug_tools --gtest_filter=MeshWatcherFixture.ActiveEthTestWatcherSanitizeEth
+              TT_METAL_MULTI_AERISC=1 build/test/tt_metal/unit_tests_dispatch --gtest_filter=UnitMeshRandomProgramFixture.ActiveEthTestPrograms
+              TT_METAL_MULTI_AERISC=1 build/test/tt_metal/unit_tests_dispatch --gtest_filter=UnitMeshRandomProgramTraceFixture.ActiveEthTestProgramsTrace
+              TT_METAL_MULTI_AERISC=1 build/test/tt_metal/unit_tests_dispatch --gtest_filter=UnitMeshCQFixture.ActiveEthTwoRiscsHandshake
+            timeout: 60
           - name: ccl nightly tests
             cmd: pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/nightly
             timeout: 60
@@ -75,7 +88,7 @@ jobs:
         GTEST_OUTPUT: xml:/work/generated/test_reports/
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
-        - /dev/hugepages-1G:/dev/hugepages-1G
+        - ${{ (!contains(inputs.runner-label, 'viommu') && '/dev/hugepages-1G:/dev/hugepages-1G') || '/no_hugepages' }}
       options: "--device /dev/tenstorrent"
     defaults:
       run:
@@ -83,7 +96,7 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
