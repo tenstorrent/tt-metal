@@ -942,7 +942,7 @@ bool generate_link_metrics(
             packet_size_bytes,
             data_size,
             asic_id_to_chip_id);
-    } else {
+    } else if (log_ethernet_metrics) {
         std::unordered_map<EthChannelIdentifier, std::vector<LinkStatus>> statuses_per_link;
         std::vector<uint32_t> inputs = {};
         std::map<int, std::shared_ptr<tt::tt_metal::distributed::MeshDevice>> empty_devices;

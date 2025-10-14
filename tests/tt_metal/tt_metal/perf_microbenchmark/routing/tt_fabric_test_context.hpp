@@ -350,6 +350,9 @@ public:
 
         log_debug(tt::LogTest, "Initializing sync memory for line sync");
 
+        // multi-host barrier to avoid race condition
+        fixture_->barrier();
+
         // Initialize sync memory location with 16 bytes of zeros on all devices
         uint32_t global_sync_address = this->sender_memory_map_.get_global_sync_address();
         uint32_t global_sync_memory_size = this->sender_memory_map_.get_global_sync_region_size();

@@ -45,61 +45,7 @@ jobs:
         with:
           name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       - name: Extract files
-        run: tar -xvf ttm_any.tar
-      - name: ⬇️ Download Wheel
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
-        timeout-minutes: 10
-        with:
-          name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      - name: Capture runner's home directory
-        id: capture-home
-        run: echo "home=${HOME}" >> $GITHUB_OUTPUT
-      - name: Run tests on multiple hosts
-        uses: ./.github/actions/docker-run
-        timeout-minutes: 30
-        with:
-          docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-          docker_password: ${{ secrets.GITHUB_TOKEN }}
-          docker_opts: |
-            -e PYTHONPATH=${{ github.workspace }}
-            -e TT_METAL_HOME=${{ github.workspace }}
-            -e TT_METAL_ENABLE_ERISC_IRAM="1"
-            -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
-            -v /etc/mpirun:/etc/mpirun:ro
-            -v ${{ steps.capture-home.outputs.home }}/.ssh:${{ steps.capture-home.outputs.home }}/.ssh:ro
-            --device /dev/tenstorrent
-            --pid=host
-            --hostname=mpirun-host
-          install_wheel: true
-          run_args: |
-            mpirun --hostfile /etc/mpirun/hostfile --mca btl_tcp_if_exclude docker0,lo -x TT_METAL_HOME=$(pwd) -x LD_LIBRARY_PATH=$(pwd)/build/lib ./build/test/tt_metal/tt_fabric/test_physical_discovery
-            mpirun --hostfile /etc/mpirun/hostfile --mca btl_tcp_if_exclude docker0,lo -x TT_METAL_HOME=$(pwd) -x LD_LIBRARY_PATH=$(pwd)/build/lib ./build/tools/scaleout/run_cluster_validation  --print-connectivity --send-traffic --hard-fail
-            tt-run --rank-binding tests/tt_metal/distributed/config/dual_t3k_rank_bindings.yaml --mpi-args "--hostfile /etc/mpirun/hostfile --mca btl_tcp_if_exclude docker0,lo --tag-output" ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/perf_microbenchmark/routing/test_dual_t3k.yaml
-            tt-run --rank-binding tests/tt_metal/distributed/config/dual_t3k_rank_bindings.yaml --mpi-args "--hostfile /etc/mpirun/hostfile --mca btl_tcp_if_exclude docker0,lo --tag-output" ./build/test/tt_metal/multi_host_fabric_tests
-            tt-run --rank-binding tests/tt_metal/distributed/config/dual_t3k_rank_bindings.yaml --mpi-args "--hostfile /etc/mpirun/hostfile --mca btl_tcp_if_exclude docker0,lo --tag-output" ./build/test/tt_metal/test_mesh_socket_main --test_config tests/tt_metal/multihost/fabric_tests/mesh_socket_dual_t3k.yaml
-            tt-run --rank-binding tests/tt_metal/distributed/config/dual_t3k_strict_connection_rank_bindings.yaml --mpi-args "--hostfile /etc/mpirun/hostfile --mca btl_tcp_if_exclude docker0,lo --tag-output" ./build/test/tt_metal/multi_host_fabric_tests
-
-  multi-host-galaxy:
-    if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.galaxy_multihost == 'true' }}
-    runs-on:
-      # A physical, multi-host WH Galaxy that's in service
-      - multi-host-galaxy
-      - arch-wormhole_b0
-      - bare-metal
-      - in-service
-    needs: build-artifact
-    steps:
-      - name: ⬇️ Checkout
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-      - name: ⬇️ Download Build
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
-        timeout-minutes: 10
-        with:
-          name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      - name: Extract files
-        run: tar -xvf ttm_any.tar
+        run: tar --zstd -xvf ttm_any.tar.zst
       - name: ⬇️ Download Wheel
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         timeout-minutes: 10
@@ -122,6 +68,7 @@ jobs:
             -e PYTHONPATH=${{ github.workspace }}
             -e PYTHON_ENV_DIR=${{ github.workspace }}/python_env
             -e TT_METAL_HOME=${{ github.workspace }}
+            -e ARCH_NAME=wormhole_b0
             -e TT_METAL_ENABLE_ERISC_IRAM="1"
             -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
             -v /etc/mpirun:/etc/mpirun:ro
@@ -131,12 +78,59 @@ jobs:
             --hostname=mpirun-host
           install_wheel: true
           run_args: |
-            source ./python_env/bin/activate
-            tt-run --rank-binding tests/tt_metal/distributed/config/dual_galaxy_rank_bindings.yaml --mpi-args "--host g10glx03,g10glx04 --map-by rankfile:file=/etc/mpirun/rankfile --mca btl self,tcp --mca btl_tcp_if_include cnx1 --tag-output" ./build/test/tt_metal/tt_fabric/test_system_health --gtest_filter="Cluster.ReportIntermeshLinks"
-            tt-run --rank-binding tests/tt_metal/distributed/config/dual_galaxy_rank_bindings.yaml --mpi-args "--host g10glx03,g10glx04 --map-by rankfile:file=/etc/mpirun/rankfile --mca btl self,tcp --mca btl_tcp_if_include cnx1 --tag-output" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MultiHost.TestDualGalaxyControlPlaneInit"
-            tt-run --rank-binding tests/tt_metal/distributed/config/dual_galaxy_rank_bindings.yaml --mpi-args "--host g10glx03,g10glx04 --map-by rankfile:file=/etc/mpirun/rankfile --mca btl self,tcp --mca btl_tcp_if_include cnx1 --tag-output" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MultiHost.TestDualGalaxyFabric2DSanity"
-            tt-run --rank-binding tests/tt_metal/distributed/config/dual_galaxy_rank_bindings.yaml --mpi-args "--host g10glx03,g10glx04 --map-by rankfile:file=/etc/mpirun/rankfile --mca btl self,tcp --mca btl_tcp_if_include cnx1 --tag-output" ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_dual_galaxy_fabric_2d_sanity.yaml
-            tt-run --rank-binding tests/tt_metal/distributed/config/dual_galaxy_rank_bindings.yaml --mpi-args "--host g10glx04,g10glx03 --map-by rankfile:file=/etc/mpirun/rankfile --mca btl self,tcp --mca btl_tcp_if_include cnx1 --tag-output" bash -c "source ./python_env/bin/activate && pytest -svv "tests/ttnn/unit_tests/operations/ccl/test_all_to_all_dispatch_6U.py::test_all_to_all_dispatch_no_trace[silicon_arch_name=wormhole_b0-dram-l1-dtype=DataType.BFLOAT16-topology=None-num_links=1-s2-hidden_size=7168-select_experts_k=8-experts=256-batches_per_device=32-cluster_axis=1-8x8_grid-trace_mode=False-fabric_2d]""
-            tt-run --rank-binding tests/tt_metal/distributed/config/dual_galaxy_rank_bindings.yaml --mpi-args "--host g10glx04,g10glx03 --map-by rankfile:file=/etc/mpirun/rankfile --mca btl self,tcp --mca btl_tcp_if_include cnx1 --tag-output" bash -c "source ./python_env/bin/activate && pytest -svv "tests/ttnn/unit_tests/operations/ccl/test_all_to_all_dispatch_6U.py::test_all_to_all_dispatch_no_trace[silicon_arch_name=wormhole_b0-dram-l1-dtype=DataType.BFLOAT16-topology=None-num_links=1-s2-hidden_size=7168-select_experts_k=8-experts=256-batches_per_device=32-cluster_axis=1-8x8_grid-trace_mode=False-fabric_1d_line]""
-            tt-run --rank-binding tests/tt_metal/distributed/config/dual_galaxy_rank_bindings.yaml --mpi-args "--host g10glx04,g10glx03 --map-by rankfile:file=/etc/mpirun/rankfile --mca btl self,tcp --mca btl_tcp_if_include cnx1 --tag-output" bash -c "source ./python_env/bin/activate && pytest -svv "tests/nightly/tg/ccl/test_minimal_reduce_scatter_async.py::test_reduce_scatter_async_big_mesh""
-            tt-run --rank-binding tests/tt_metal/distributed/config/dual_galaxy_rank_bindings.yaml --mpi-args "--host g10glx04,g10glx03 --map-by rankfile:file=/etc/mpirun/rankfile --mca btl self,tcp --mca btl_tcp_if_include cnx1 --tag-output" bash -c "source ./python_env/bin/activate && pytest -svv "tests/nightly/tg/ccl/test_minimal_all_gather_async.py::test_all_gather_async_big_mesh""
+            ./tests/scripts/multihost/run_dual_t3k_tests.sh
+
+  multi-host-galaxy:
+    if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.galaxy_multihost == 'true' }}
+    runs-on:
+      # A physical, multi-host WH Galaxy that's in service
+      - multi-host-galaxy
+      - arch-wormhole_b0
+      - bare-metal
+      - in-service
+    needs: build-artifact
+    steps:
+      - name: ⬇️ Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: ⬇️ Download Build
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+        timeout-minutes: 10
+        with:
+          name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      - name: Extract files
+        run: tar --zstd -xvf ttm_any.tar.zst
+      - name: ⬇️ Download Wheel
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+        timeout-minutes: 10
+        with:
+          name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      - name: Create Python venv
+        run: |
+          ./create_venv.sh
+      - name: Capture runner's home directory
+        id: capture-home
+        run: echo "home=${HOME}" >> $GITHUB_OUTPUT
+      - name: Run tests on multiple hosts
+        uses: ./.github/actions/docker-run
+        timeout-minutes: 30
+        with:
+          docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+          docker_password: ${{ secrets.GITHUB_TOKEN }}
+          docker_opts: |
+            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+            -e PYTHONPATH=${{ github.workspace }}
+            -e PYTHON_ENV_DIR=${{ github.workspace }}/python_env
+            -e TT_METAL_HOME=${{ github.workspace }}
+            -e ARCH_NAME=wormhole_b0
+            -e TT_METAL_ENABLE_ERISC_IRAM="1"
+            -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
+            -v /etc/mpirun:/etc/mpirun:ro
+            -v ${{ steps.capture-home.outputs.home }}/.ssh:${{ steps.capture-home.outputs.home }}/.ssh:ro
+            --device /dev/tenstorrent
+            --pid=host
+            --hostname=mpirun-host
+          install_wheel: true
+          run_args: |
+            ./tests/scripts/multihost/run_dual_galaxy_tests.sh
