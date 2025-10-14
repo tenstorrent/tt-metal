@@ -975,11 +975,10 @@ void FDMeshCommandQueue::capture_program_trace_on_subgrid(
             program_cmd_seq, sysmem_manager_for_trace, id_, dispatch_core_type, stall_first, stall_before_program);
         auto mesh_trace_md = MeshTraceStagingMetadata{
             sub_grid,
-            sub_grid.start_coord(),
+            local_start_coord,
             sysmem_manager_offset,
             sysmem_manager_for_trace.get_issue_queue_write_ptr(id_) - sysmem_manager_offset};
         ordered_mesh_trace_md_.push_back(mesh_trace_md);
-    }
 }
 
 void FDMeshCommandQueue::capture_go_signal_trace_on_unused_subgrids(

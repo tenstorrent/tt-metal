@@ -142,6 +142,7 @@ bool use_all_gather_async_llama_sharded(const ttnn::Tensor& input_tensor, const 
     auto input_tensor_memory_config = input_tensor.memory_config();
     bool input_is_sharded = input_tensor_memory_config.shard_spec().has_value();
     bool output_is_sharded = output_mem_config.shard_spec().has_value();
+    bool input_is_tile = input_tensor.layout() == ttnn::Layout::TILE;
 
     log_trace(tt::LogOp, "[select_version] input_tensor_shape: {}", input_tensor_shape);
     log_trace(tt::LogOp, "[select_version] input_tensor_memory_config: {}", input_tensor_memory_config);
@@ -151,7 +152,7 @@ bool use_all_gather_async_llama_sharded(const ttnn::Tensor& input_tensor, const 
     log_trace(tt::LogOp, "[select_version] output_is_sharded: {}", output_is_sharded);
 
     // Check for minimal sharded case
-    if (input_is_sharded && output_is_sharded) {
+    if (input_is_sharded && output_is_sharded && input_is_tile) {
         uint32_t input_shard_num_cores = input_tensor_memory_config.shard_spec()->grid.num_cores();
         uint32_t output_shard_num_cores = output_mem_config.shard_spec()->grid.num_cores();
 
@@ -236,9 +237,9 @@ bool use_composite_all_gather(
     }
 
     // Use composite if tiled and padded on the gather dim
-    bool is_tiled_and_padded_on_gather_dim =
-        input_tensor.layout() == ttnn::Layout::TILE && ((gather_dim == 2 && input_shape[2] % tile_height != 0) ||
-                                                        (gather_dim == 3 && input_shape[3] % tile_width != 0));
+    bool is_tiled_and_padded_on_gather_dim = input_tensor.layout() == ttnn::Layout::TILE &&
+                                             ((gather_dim == rank - 2 && input_shape[-2] % tile_height != 0) ||
+                                              (gather_dim == rank - 1 && input_shape[-1] % tile_width != 0));
     return is_tiled_and_padded_on_gather_dim;
 }
 

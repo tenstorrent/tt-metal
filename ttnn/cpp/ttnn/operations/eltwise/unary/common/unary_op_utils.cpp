@@ -39,8 +39,7 @@ std::string get_macro_definition(UnaryOpType op_type) {
         case UnaryOpType::TRUNC:
         case UnaryOpType::FRAC:
         case UnaryOpType::ROUND: return "SFPU_OP_ROUND_FAMILY_INCLUDE";
-        case UnaryOpType::RDIV:
-        case UnaryOpType::RSUB: return "SFPU_OP_REVERSE_FAMILY_INCLUDE";
+        case UnaryOpType::RSUB: return "SFPU_OP_RSUB_INCLUDE";
         case UnaryOpType::ISINF:
         case UnaryOpType::ISNAN:
         case UnaryOpType::ISNEGINF:
@@ -265,8 +264,21 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             break;
         case UnaryOpType::RDIV: op_init_and_name = {}; break;
         case UnaryOpType::RSUB:
-            op_init_and_name = {
-                "rsub_tile_init();", fmt::format("rsub_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
+            TT_FATAL(
+                input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
+            if (input_dtype == DataType::UINT16 || input_dtype == DataType::UINT8) {
+                TT_THROW("Unsupported data type");
+            } else if (input_dtype == DataType::INT32 || input_dtype == DataType::UINT32) {
+                op_init_and_name = {
+                    "rsub_unary_int32_tile_init();",
+                    fmt::format(
+                        "rsub_unary_int32_tile({}, {}u);",
+                        idst,
+                        std::bit_cast<uint32_t>(static_cast<int32_t>(param0_raw)))};
+            } else {
+                op_init_and_name = {
+                    "rsub_tile_init();", fmt::format("rsub_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
+            }
             break;
         case UnaryOpType::RPOW:
             op_init_and_name = {
@@ -805,6 +817,8 @@ UnaryWithParam string_to_unary_with_param(const std::string& name) {
     } else if (name == "relu6") {
         return UnaryWithParam(UnaryOpType::RELU6);
     } else if (name == "gelu") {
+        return UnaryWithParam(UnaryOpType::GELU, static_cast<float>(false));
+    } else if (name == "gelu_approx") {
         return UnaryWithParam(UnaryOpType::GELU, static_cast<float>(true));
     } else if (name == "silu") {
         return UnaryWithParam(UnaryOpType::SILU);
@@ -860,7 +874,11 @@ std::string unary_with_param_to_string(const UnaryWithParam& unary_op) {
     switch (unary_op.op_type) {
         case UnaryOpType::RELU: return "relu";
         case UnaryOpType::RELU6: return "relu6";
-        case UnaryOpType::GELU: return "gelu";
+        case UnaryOpType::GELU:
+            if (!unary_op.params.empty() && unary_op.params[0] == static_cast<float>(true)) {
+                return "gelu_approx";
+            }
+            return "gelu";
         case UnaryOpType::SILU: return "silu";
         case UnaryOpType::SIGMOID:
             if (unary_op.params.size() >= 2 && unary_op.params[1] == static_cast<float>(true)) {

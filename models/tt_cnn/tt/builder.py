@@ -11,6 +11,56 @@ from ttnn.model_preprocessing import Conv2dArgs
 import ttnn
 
 
+@dataclass
+class SliceStrategyConfiguration:
+    num_slices: int = 0
+
+    def get_slice_type(self):
+        ...
+
+    def get_num_slices(self):
+        return self.num_slices
+
+
+# Currently, channel slicing is not natively supported by the Conv2D operation and must be done manually
+@dataclass
+class HeightSliceStrategyConfiguration(SliceStrategyConfiguration):
+    def get_slice_type(self):
+        return ttnn.Conv2dDRAMSliceHeight
+
+
+@dataclass
+class WidthSliceStrategyConfiguration(SliceStrategyConfiguration):
+    def get_slice_type(self):
+        return ttnn.Conv2dDRAMSliceWidth
+
+
+@dataclass
+class ChannelSliceStrategyConfiguration(SliceStrategyConfiguration):
+    def get_slice_type(self):
+        return ttnn.Conv2dL1Full
+
+    def __post_init__(self):
+        if self.num_slices <= 1:
+            # for height and width slicing passing 0 will result in auto-slice, but for channel slice it's not implemented
+            raise ValueError(f"Channel slicing requires num_slices > 1")
+
+
+# If slicing is None, DRAM is assumed; Need explicit Strategy for L1
+@dataclass
+class L1FullSliceStrategyConfiguration(SliceStrategyConfiguration):
+    def get_slice_type(self):
+        return ttnn.Conv2dL1Full
+
+
+SliceStrategy = Union[
+    HeightSliceStrategyConfiguration,
+    WidthSliceStrategyConfiguration,
+    ChannelSliceStrategyConfiguration,
+    L1FullSliceStrategyConfiguration,
+]
+
+
 @dataclass(frozen=True)
 class ShardedStrategyConfiguration:
     def get_tensor_memory_layout(self):
@@ -105,6 +155,7 @@ class Conv2dConfiguration:
     output_layout: ttnn.Layout = ttnn.TILE_LAYOUT
 
     sharding_strategy: ShardedStrategyConfiguration = AutoShardedStrategyConfiguration()
+    slice_strategy: Optional[SliceStrategy] = None
 
     math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.LoFi
     fp32_dest_acc_en: bool = False
@@ -267,6 +318,24 @@ class MaxPool2dConfiguration:
     deallocate_input: bool = False
     reallocate_halo_output: bool = True
 
+    slice_strategy: Optional[SliceStrategy] = None
+
+    def __post_init__(self):
+        # Validate that only channel slicing is supported for MaxPool2d
+        if self.slice_strategy is not None and isinstance(
+            self.slice_strategy, (HeightSliceStrategyConfiguration, WidthSliceStrategyConfiguration)
+        ):
+            raise ValueError(
+                "Height and Width slicing are not supported for MaxPool2d. Only channel slicing is supported."
+            )
+
+        # Validate channel slicing configuration
+        if self.slice_strategy is not None and isinstance(self.slice_strategy, ChannelSliceStrategyConfiguration):
+            if self.channels % self.slice_strategy.get_num_slices() != 0:
+                raise ValueError(
+                    f"Number of channels ({self.channels}) must be divisible by number of slices ({self.slice_strategy.get_num_slices()})"
+                )
+
     @classmethod
     def from_torch(
         cls,
@@ -294,7 +363,67 @@ class MaxPool2dConfiguration:
         )
 
 
-LayerConfiguration = Union[Conv2dConfiguration, MaxPool2dConfiguration]
+@dataclass(frozen=True)
+class UpsampleConfiguration:
+    input_height: int
+    input_width: int
+    channels: int
+    batch_size: int
+    scale_factor: Union[int, Tuple[int, int]]
+    mode: str = "nearest"
+
+    slice_strategy: Optional[SliceStrategy] = None
+
+    def __post_init__(self):
+        # Validate that only channel slicing is supported for Upsample
+        if self.slice_strategy is not None and isinstance(
+            self.slice_strategy, (HeightSliceStrategyConfiguration, WidthSliceStrategyConfiguration)
+        ):
+            raise ValueError(
+                "Height and Width slicing are not supported for Upsample. Only channel slicing is supported."
+            )
+
+        # Validate channel slicing configuration
+        if self.slice_strategy is not None and isinstance(self.slice_strategy, ChannelSliceStrategyConfiguration):
+            if self.channels % self.slice_strategy.get_num_slices() != 0:
+                raise ValueError(
+                    f"Number of channels ({self.channels}) must be divisible by number of slices ({self.slice_strategy.get_num_slices()})"
+                )
+
+        # Validate mode
+        supported_modes = {"nearest", "bilinear"}
+        if self.mode not in supported_modes:
+            raise ValueError(f"Mode must be one of {supported_modes}, got '{self.mode}'")
+
+    @classmethod
+    def from_torch(
+        cls,
+        torch_layer: torch.nn.Upsample,
+        input_height: int,
+        input_width: int,
+        batch_size: int,
+        channels: int,
+        **kwargs,
+    ):
+        scale_factor = torch_layer.scale_factor
+        if isinstance(scale_factor, (list, tuple)):
+            scale_factor = tuple(scale_factor)
+        elif isinstance(scale_factor, (int, float)):
+            # Normalize single number to tuple for consistency
+            scale_factor = (scale_factor, scale_factor)
+        mode = torch_layer.mode
+        return cls(
+            input_height=input_height,
+            input_width=input_width,
+            channels=channels,
+            batch_size=batch_size,
+            scale_factor=scale_factor,
+            mode=mode,
+            **kwargs,
+        )
+
+
+LayerConfiguration = Union[Conv2dConfiguration, MaxPool2dConfiguration, UpsampleConfiguration]
 
 
 def sharding_strategy_to_conv2d_config(sharding_strategy: ShardingStrategy):
@@ -353,6 +482,18 @@ def to_compute_config(configuration: Conv2dConfiguration, device: ttnn.Device):
     )
 
 
+def to_slice_config(slice_strategy: Optional[SliceStrategy]):
+    if slice_strategy is None:
+        return None
+    # Channel slicing uses the predefined Conv2dL1FullSliceConfig
+    if isinstance(slice_strategy, ChannelSliceStrategyConfiguration):
+        return ttnn.Conv2dL1FullSliceConfig
+    return ttnn.Conv2dSliceConfig(
+        slice_type=slice_strategy.get_slice_type(),
+        num_slices=slice_strategy.get_num_slices(),
+    )
+
+
 class TtConv2d:
     def __init__(
         self,
@@ -362,11 +503,55 @@ class TtConv2d:
         self.configuration = configuration
         self.conv2d_config = to_conv2d_config(configuration)
         self.compute_config = to_compute_config(configuration, device)
+        self.slice_config = to_slice_config(configuration.slice_strategy)
 
         self.device = device
 
         self.weight = configuration.weight
         self.bias = configuration.bias
+
+        # Initialize weight_slices as empty list
+        self.weight_slices = []
+
+        # Check for channel slicing
+        if (
+            configuration.slice_strategy is not None
+            and isinstance(configuration.slice_strategy, ChannelSliceStrategyConfiguration)
+            and configuration.slice_strategy.get_num_slices() > 0
+        ):
+            split_in_channels = configuration.in_channels // configuration.slice_strategy.get_num_slices()
+
+            # slice weights - this should only run on first inference
+            if ttnn.is_tensor_storage_on_device(self.weight):
+                # Weights are on device - use ttnn.slice
+                for i in range(configuration.slice_strategy.get_num_slices()):
+                    start_idx = i * split_in_channels
+                    end_idx = (i + 1) * split_in_channels
+                    weight_slice = ttnn.slice(
+                        self.weight,
+                        [0, start_idx, 0, 0],
+                        [
+                            configuration.out_channels,
+                            end_idx,
+                            configuration.kernel_size[0],
+                            configuration.kernel_size[1],
+                        ],
+                    )
+                    self.weight_slices.append(weight_slice)
+            else:
+                # Weights are on host - convert to torch, slice, then convert back to TTNN
+                torch_weight = ttnn.to_torch(self.weight)
+                for i in range(configuration.slice_strategy.get_num_slices()):
+                    start_idx = i * split_in_channels
+                    end_idx = (i + 1) * split_in_channels
+                    torch_slice = torch_weight[:, start_idx:end_idx, :, :]
+                    # This TTNN tensor will remain on host until pulled by Conv2D
+                    weight_slice = ttnn.from_torch(torch_slice, dtype=self.weight.dtype, layout=self.weight.layout)
+                    self.weight_slices.append(weight_slice)
+
+            # bias needs to be on device for channel slicing due to ttnn.add requirements
+            if not ttnn.is_tensor_storage_on_device(self.bias):
+                self.bias = ttnn.to_device(self.bias, self.device)
 
         if not isinstance(self.weight, ttnn.Tensor):
             raise ValueError(f"Weight tensor should be of type ttnn.Tensor (was {type(self.weight)}")
@@ -389,18 +574,84 @@ class TtConv2d:
             "dtype": self.configuration.output_dtype,
             "device": self.device,
             "conv_config": self.conv2d_config,
+            "slice_config": self.slice_config,
         }
 
+    def _apply_channel_slicing(self, x):
+        """Apply channel slicing to the input tensor and return the result."""
+        # slice input
+        input_slices = []
+        for i in range(self.configuration.slice_strategy.get_num_slices()):
+            input_slices.append(
+                ttnn.slice(
+                    x,
+                    [
+                        0,
+                        0,
+                        0,
+                        i * self.configuration.in_channels // self.configuration.slice_strategy.get_num_slices(),
+                    ],
+                    [
+                        self.configuration.batch_size,
+                        self.configuration.input_height,
+                        self.configuration.input_width,
+                        (i + 1) * self.configuration.in_channels // self.configuration.slice_strategy.get_num_slices(),
+                    ],
+                )
+            )
+
+        # perform conv2d on each slice
+        accumulated_output = None
+        channels_per_slice = self.configuration.in_channels // self.configuration.slice_strategy.get_num_slices()
+
+        for i in range(self.configuration.slice_strategy.get_num_slices()):
+            # Create kwargs with correct in_channels for this slice
+            slice_kwargs = self.get_conv2d_kwargs()
+            slice_kwargs["in_channels"] = channels_per_slice
+
+            output_slice, self.weight_slices[i] = ttnn.conv2d(
+                input_tensor=input_slices[i],
+                weight_tensor=self.weight_slices[i],
+                bias_tensor=None,
+                return_output_dim=False,
+                return_weights_and_bias=True,
+                compute_config=self.compute_config,
+                **slice_kwargs,
+            )
+            # Without this, some edge case convs OOM
+            output_slice = ttnn.move(output_slice)
+            if i == 0:
+                accumulated_output = ttnn.to_memory_config(output_slice, ttnn.DRAM_MEMORY_CONFIG)
+            else:
+                accumulated_output = ttnn.add(output_slice, accumulated_output, output_tensor=accumulated_output)
+            output_slice.deallocate(True)
+
+        # Apply bias
+        if self.bias is not None:
+            # ttnn.add will fail if layout is not tile or dtype doesn't match
+            # this should only run on first inference
+            if self.bias.layout != ttnn.TILE_LAYOUT or self.bias.dtype != accumulated_output.dtype:
+                self.bias = ttnn.to_layout(self.bias, ttnn.TILE_LAYOUT, dtype=accumulated_output.dtype)
+
+            accumulated_output = ttnn.add(accumulated_output, self.bias, output_tensor=accumulated_output)
+
+        return accumulated_output
+
     def __call__(self, x):
-        x, [self.weight, self.bias] = ttnn.conv2d(
-            input_tensor=x,
-            weight_tensor=self.weight,
-            bias_tensor=self.bias,
-            return_output_dim=False,
-            return_weights_and_bias=True,
-            compute_config=self.compute_config,
-            **self.get_conv2d_kwargs(),
-        )
+        if not self.weight_slices:
+            # No slicing
+            x, [self.weight, self.bias] = ttnn.conv2d(
+                input_tensor=x,
+                weight_tensor=self.weight,
+                bias_tensor=self.bias,
+                return_output_dim=False,
+                return_weights_and_bias=True,
+                compute_config=self.compute_config,
+                **self.get_conv2d_kwargs(),
+            )
+        else:
+            x = self._apply_channel_slicing(x)
+
         return x
 
 
@@ -409,20 +660,161 @@ class TtMaxPool2d:
         self.configuration = configuration
         self.device = device
 
-    def __call__(self, x):
-        x = ttnn.max_pool2d(
-            input_tensor=x,
-            batch_size=self.configuration.batch_size,
-            input_h=self.configuration.input_height,
-            input_w=self.configuration.input_width,
-            channels=self.configuration.channels,
-            kernel_size=self.configuration.kernel_size,
-            stride=self.configuration.stride,
-            padding=self.configuration.padding,
-            dilation=self.configuration.dilation,
-            ceil_mode=self.configuration.ceil_mode,
-            in_place_halo=self.configuration.in_place,
-            deallocate_input=self.configuration.deallocate_input,
-            reallocate_halo_output=self.configuration.reallocate_halo_output,
+        # Check for channel slicing
+        self.use_channel_slicing = configuration.slice_strategy is not None and isinstance(
+            configuration.slice_strategy, ChannelSliceStrategyConfiguration
         )
+
+        if self.use_channel_slicing:
+            self.num_slices = configuration.slice_strategy.get_num_slices()
+            self.channels_per_slice = configuration.channels // self.num_slices
+
+    def get_maxpool2d_kwargs(self):
+        return {
+            "batch_size": self.configuration.batch_size,
+            "input_h": self.configuration.input_height,
+            "input_w": self.configuration.input_width,
+            "kernel_size": self.configuration.kernel_size,
+            "stride": self.configuration.stride,
+            "padding": self.configuration.padding,
+            "dilation": self.configuration.dilation,
+            "ceil_mode": self.configuration.ceil_mode,
+            "in_place_halo": self.configuration.in_place,
+            "deallocate_input": self.configuration.deallocate_input,
+            "reallocate_halo_output": self.configuration.reallocate_halo_output,
+        }
+
+    def _apply_channel_slicing(self, x):
+        """Apply channel slicing to the input tensor and return the result."""
+        # Slice input tensor along channel dimension
+        input_slices = []
+        for i in range(self.num_slices):
+            start_channel = i * self.channels_per_slice
+            end_channel = (i + 1) * self.channels_per_slice
+
+            input_slice = ttnn.slice(
+                x,
+                [0, 0, 0, start_channel],
+                [
+                    1,
+                    1,
+                    self.configuration.batch_size * self.configuration.input_height * self.configuration.input_width,
+                    end_channel,
+                ],
+            )
+            input_slices.append(input_slice)
+
+        # Perform max pooling on each slice
+        output_slices = []
+        for i in range(self.num_slices):
+            output_slice = ttnn.max_pool2d(
+                input_tensor=input_slices[i],
+                channels=self.channels_per_slice,
+                **self.get_maxpool2d_kwargs(),
+            )
+            # Output slice to DRAM
+            output_slice = ttnn.to_memory_config(output_slice, ttnn.DRAM_MEMORY_CONFIG)
+            output_slices.append(output_slice)
+
+        # Concatenate output slices along channel dimension
+        x = ttnn.concat(output_slices, dim=3)
+
+        # Clean up intermediate tensors
+        for slice_tensor in input_slices + output_slices:
+            slice_tensor.deallocate(True)
+
+        return x
+
+    def __call__(self, x):
+        if not self.use_channel_slicing:
+            # No slicing
+            x = ttnn.max_pool2d(
+                input_tensor=x,
+                channels=self.configuration.channels,
+                **self.get_maxpool2d_kwargs(),
+            )
+        else:
+            x = self._apply_channel_slicing(x)
+
+        return x
+
+
+class TtUpsample:
+    def __init__(self, configuration: UpsampleConfiguration, device: ttnn.Device):
+        self.configuration = configuration
+        self.device = device
+
+        # Check for channel slicing
+        self.use_channel_slicing = configuration.slice_strategy is not None and isinstance(
+            configuration.slice_strategy, ChannelSliceStrategyConfiguration
+        )
+
+        if self.use_channel_slicing:
+            self.num_slices = configuration.slice_strategy.get_num_slices()
+            self.channels_per_slice = configuration.channels // self.num_slices
+
+    def get_upsample_kwargs(self):
+        # Convert scale_factor to the format expected by ttnn.upsample
+        scale_factor = self.configuration.scale_factor
+        if isinstance(scale_factor, tuple) and len(scale_factor) == 2:
+            # Convert to list of integers as expected by ttnn
+            scale_factor = [int(scale_factor[0]), int(scale_factor[1])]
+        elif isinstance(scale_factor, (int, float)):
+            scale_factor = int(scale_factor)
+
+        return {
+            "scale_factor": scale_factor,
+            "mode": self.configuration.mode,
+        }
+
+    def _apply_channel_slicing(self, x):
+        """Apply channel slicing to the input tensor and return the result."""
+        # Slice input tensor along channel dimension
+        input_slices = []
+        for i in range(self.num_slices):
+            start_channel = i * self.channels_per_slice
+            end_channel = (i + 1) * self.channels_per_slice
+
+            input_slice = ttnn.slice(
+                x,
+                [0, 0, 0, start_channel],
+                [
+                    self.configuration.batch_size,
+                    self.configuration.input_height,
+                    self.configuration.input_width,
+                    end_channel,
+                ],
+            )
+            input_slices.append(input_slice)
+
+        # Perform upsampling on each slice
+        output_slices = []
+        for i in range(self.num_slices):
+            output_slice = ttnn.upsample(
+                input_tensor=input_slices[i],
+                **self.get_upsample_kwargs(),
+            )
+            # Output slice to DRAM
+            output_slice = ttnn.to_memory_config(output_slice, ttnn.DRAM_MEMORY_CONFIG)
+            output_slices.append(output_slice)
+
+        # Concatenate output slices along channel dimension
+        x = ttnn.concat(output_slices, dim=3)
+
+        # Clean up intermediate tensors
+        for slice_tensor in input_slices + output_slices:
+            slice_tensor.deallocate(True)
+
+        return x
+
+    def __call__(self, x):
+        if not self.use_channel_slicing:
+            # No slicing
+            x = ttnn.upsample(
+                input_tensor=x,
+                **self.get_upsample_kwargs(),
+            )
+        else:
+            x = self._apply_channel_slicing(x)
+
         return x

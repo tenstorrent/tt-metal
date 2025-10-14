@@ -36,7 +36,7 @@
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tracy/Tracy.hpp"
 #include "tt_metal/distributed/fd_mesh_command_queue.hpp"
-#include "tt_metal/impl/debug/inspector.hpp"
+#include "tt_metal/impl/debug/inspector/inspector.hpp"
 
 #include <umd/device/types/core_coordinates.hpp>
 
