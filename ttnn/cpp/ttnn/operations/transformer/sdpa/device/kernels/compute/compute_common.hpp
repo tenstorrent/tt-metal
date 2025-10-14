@@ -82,6 +82,49 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, bool do_eltwise_max = false) {
     cb_push_back(out_cb, rows);
 }
 
+template <uint32_t in0_cb, uint32_t scale_cb, uint32_t rows, uint32_t cols>
+void reduce_c_transposed(uint32_t out_cb, uint32_t prev_cb, bool do_eltwise_max = false) {
+    DeviceZoneScopedN("reduce_c");
+    /**
+     * in0_cb: rows*cols tiles, where each tile is transposed
+     * prev_cb: rows tiles, where each tile contains one row
+     *
+     * This operation performs reduce_max_col on the transposed tiles.
+     * This is because the standard reduce_c is a reduce_max_row, and the tiles have been transposed.
+     *
+     * This test can be used to verify SFPU reduce_max_col LLK. Simply replace reduce_tile with
+     * copy_tile and reduce_max_col_sfpu.
+     */
+
+    constexpr uint32_t num_tiles = rows * cols;
+    cb_wait_front(scale_cb, 1);
+    cb_wait_front(in0_cb, num_tiles);
+    cb_reserve_back(out_cb, rows);
+
+    max_tile_init();
+    constexpr uint32_t reduce_dst_idx = 0;
+    constexpr uint32_t prev_max_dst_idx = 1;
+
+    for (uint32_t i = 0; i < rows; i++) {
+        acquire_dst();
+        reduce_init<PoolType::MAX, ReduceDim::REDUCE_COL>(in0_cb, scale_cb, out_cb);
+        for (uint32_t j = 0; j < cols; j++) {
+            reduce_tile<PoolType::MAX, ReduceDim::REDUCE_COL>(in0_cb, scale_cb, i * cols + j, 0, reduce_dst_idx);
+        }
+        reduce_uninit();
+        if (do_eltwise_max) {
+            copy_tile_to_dst_init_short(prev_cb);
+            copy_tile(prev_cb, i, prev_max_dst_idx);
+            max_tile(reduce_dst_idx, prev_max_dst_idx, static_cast<int>(VectorMode::R));
+        }
+
+        pack_tile(reduce_dst_idx, out_cb);
+        release_dst();
+    }
+
+    cb_push_back(out_cb, rows);
+}
+
 void recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
     DeviceZoneScopedN("recip_block_inplace");
     // Precondition: in_cb has num_tiles produced
