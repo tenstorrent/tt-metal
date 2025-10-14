@@ -44,11 +44,11 @@ def build_encoder_attention_mask(
 
 @pytest.mark.parametrize(
     "batch, num_chunks",
-    ((1, 1),),
+    ((1, 4),),
 )
 @pytest.mark.parametrize(
     "is_global",
-    [(False)],
+    (True, False),
 )
 @pytest.mark.parametrize(
     "mesh_device",
