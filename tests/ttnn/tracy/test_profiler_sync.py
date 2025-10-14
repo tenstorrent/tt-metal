@@ -7,6 +7,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import is_watcher_enabled
 
 
 def test_with_ops(device):
@@ -43,4 +44,7 @@ def test_with_ops(device):
 def test_all_devices(
     mesh_device,
 ):
+    if is_watcher_enabled():
+        pytest.skip("Test is not passing with watcher enabled due to overflow of the code size")
+
     logger.debug("Testing All Devices")
