@@ -504,7 +504,6 @@ struct NocScatterWriteSenderOperations {
 
 /* ****************************************************************************
  * MuxCachedInfo
- * Cached information needed to wait for mux readiness before connecting
  * *****************************************************************************/
 struct MuxCachedInfo {
     uint8_t mux_x = 0;
@@ -514,17 +513,10 @@ struct MuxCachedInfo {
 };
 
 /* ****************************************************************************
- * FabricConnectionArray: Unified connection management for sender and receiver
+ * FabricConnectionArray: Unified connection management for kernel
  *
  * Provides type-erased storage for both WorkerToFabricEdmSender and
  * WorkerToFabricMuxSender connections with runtime dispatch.
- *
- * Uses MAX_NUM_FABRIC_CONNECTIONS for storage to avoid template proliferation.
- * Actual num_connections is set at runtime and bounds-checked.
- *
- * Used by:
- * - SenderKernelConfig: For sending data packets
- * - ReceiverKernelConfig: For sending credit returns
  * *****************************************************************************/
 struct FabricConnectionArray {
     // TODO: get the num buffers more systematically
@@ -668,7 +660,7 @@ struct FabricConnectionArray {
         }
     }
 
-    // Combined: send payload + header (most common case)
+    // Combined: send payload + header
     FORCE_INLINE void send_payload_with_header(
         uint8_t idx, uint32_t payload_addr, size_t payload_size, uint32_t header_addr) {
         if (is_mux[idx]) {
@@ -688,7 +680,6 @@ struct FabricConnectionArray {
 };
 
 // Line sync for each fabric connection (used by SyncKernelConfig)
-// Uses unified connection array pattern - templated for proper typing
 struct LineSyncConfig {
     LineSyncConfig(
         FabricConnectionArray* connection_array,
@@ -701,7 +692,7 @@ struct LineSyncConfig {
 
     template <bool IS_2D_FABRIC, bool USE_DYNAMIC_ROUTING>
     void setup_packet_header(size_t& arg_idx, uint32_t packet_header_address) {
-        // setup header fields. 2 rt args for 1D (connection handle not needed for header setup)
+        // setup header fields. 2 rt args for 1D
         ChipSendTypeHandler<ChipSendType::CHIP_MULTICAST, IS_2D_FABRIC, USE_DYNAMIC_ROUTING>::parse_and_setup(
             arg_idx, packet_header_address, packet_header);
 
@@ -714,9 +705,8 @@ struct LineSyncConfig {
             NocUnicastAtomicIncCommandHeader{noc_addr, fields.atomic_inc_val, fields.atomic_inc_wrap});
     }
 
-    // Expanded 2-step send using connection array
     void global_sync_start() {
-        // Send packet to remote devices using properly typed connection array
+        // Send packet to remote devices
         connections_->wait_for_empty_write_slot(connection_idx_);
         connections_->send_header_flush(connection_idx_, (uint32_t)packet_header);
     }
@@ -727,7 +717,7 @@ struct LineSyncConfig {
     }
 
 private:
-    FabricConnectionArray* connections_;                   // Properly typed pointer!
+    FabricConnectionArray* connections_;
     uint8_t connection_idx_;                               // Index into the connection array
     volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header;
     volatile tt_l1_ptr uint32_t* line_sync_ptr;
@@ -774,9 +764,7 @@ private:
     uint32_t sync_val;
 };
 
-// Credit management structures (kernel-side)
 struct SenderCreditInfo {
-    // Default constructor with dummy values (needed for array initialization)
     SenderCreditInfo() = default;
 
     static SenderCreditInfo build_from_args(size_t& arg_idx) { return SenderCreditInfo(arg_idx); }
@@ -795,11 +783,10 @@ private:
 
 // Helper class to manage sender-side credit consumption
 // Encapsulates all credit checking and consumption logic in one place
-// Mirrors ReceiverCreditManager pattern for consistency
 struct SenderCreditManager {
     SenderCreditManager() = default;
 
-    // Initialize from args (called during config construction)
+    // Initialize from args
     void init(size_t& arg_idx) {
         enabled_ = get_local_arg_val<uint32_t>(arg_idx++) != 0;
         if (!enabled_) {
@@ -808,11 +795,8 @@ struct SenderCreditManager {
 
         sender_credit_info_ = SenderCreditInfo::build_from_args(arg_idx);
 
-        // Store base pointer (cast once, index many times)
         credit_semaphores_base_ptr_ =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sender_credit_info_.credit_reception_address_base);
-
-        // Cache base NOC address (get_noc_addr(0) encodes our own core's x,y coordinates)
         credit_semaphores_base_noc_addr_ = get_noc_addr(0) + sender_credit_info_.credit_reception_address_base;
 
         num_receivers_ = sender_credit_info_.expected_receiver_count;
@@ -823,17 +807,15 @@ struct SenderCreditManager {
         ASSERT(credit_semaphores_base_ptr_ != nullptr);
     }
 
-    // Initialize credit semaphores (called at connection open)
+    // Initialize credit semaphores
     void initialize() {
         if (!enabled_) {
             return;
         }
 
-        // Initialize all receiver credit semaphores to initial_credits
         for (uint32_t i = 0; i < num_receivers_; i++) {
             credit_semaphores_base_ptr_[i * CREDIT_STRIDE_WORDS] = initial_credits_;
         }
-
         estimated_available_credits_ = initial_credits_;
     }
 
@@ -873,7 +855,7 @@ struct SenderCreditManager {
         return estimated_available_credits_ > 0;
     }
 
-    // Consume one credit (called after successful send - decrements ALL receivers)
+    // Consume one credit (called after successful send - decrements ALL receivers for mcast)
     FORCE_INLINE void consume_credit() {
         if (!enabled_) {
             return;
@@ -881,7 +863,6 @@ struct SenderCreditManager {
 
         ASSERT(estimated_available_credits_ > 0);
 
-        // Decrement all receivers using NOC atomic ops (they all will receive the mcast packet)
         for (uint32_t i = 0; i < num_receivers_; i++) {
             uint32_t offset = i * CREDIT_ADDRESS_STRIDE;
             uint64_t credit_noc_addr = credit_semaphores_base_noc_addr_ + offset;
@@ -898,7 +879,6 @@ struct SenderCreditManager {
             return;
         }
 
-        // Wait for all receivers to return to initial credit count
         bool all_returned = false;
         while (!all_returned) {
             invalidate_l1_cache();
@@ -920,16 +900,14 @@ private:
     SenderCreditInfo sender_credit_info_;
 
     // Per-receiver credit tracking
-    volatile tt_l1_ptr uint32_t* credit_semaphores_base_ptr_ = nullptr;  // Base pointer to credit array
-    uint64_t credit_semaphores_base_noc_addr_ = 0;                       // Cached NOC address (get_noc_addr(0) + base)
+    volatile tt_l1_ptr uint32_t* credit_semaphores_base_ptr_ = nullptr;
+    uint64_t credit_semaphores_base_noc_addr_ = 0;
     uint32_t num_receivers_ = 0;
     uint32_t initial_credits_ = 0;
-    uint32_t estimated_available_credits_ = 0;  // Cached minimum (updated lazily)
+    uint32_t estimated_available_credits_ = 0;
 
-    // Stride in words (uint32_t units), not bytes
-    // 16 bytes = 4 words
-    static constexpr uint32_t CREDIT_ADDRESS_STRIDE = 16;                                      // bytes
-    static constexpr uint32_t CREDIT_STRIDE_WORDS = CREDIT_ADDRESS_STRIDE / sizeof(uint32_t);  // 4
+    static constexpr uint32_t CREDIT_ADDRESS_STRIDE = 16;
+    static constexpr uint32_t CREDIT_STRIDE_WORDS = CREDIT_ADDRESS_STRIDE / sizeof(uint32_t);
 };
 
 struct SenderKernelTrafficConfig {
@@ -1018,7 +996,7 @@ struct SenderKernelTrafficConfig {
             }
         }
 
-        // STEP 2: Wait for connection to be ready (dispatch hidden in array)
+        // STEP 2: Wait for space
         connections_->wait_for_empty_write_slot(connection_idx_);
 
         // STEP 3: Send packet
@@ -1026,13 +1004,13 @@ struct SenderKernelTrafficConfig {
             if (payload_size_bytes > 0 && payload_buffer_) {
                 payload_buffer_->fill_data(metadata.seed);
 
-                // Send payload without header (dispatch hidden in array)
+                // Send payload without header
                 connections_->send_payload_without_header(
                     connection_idx_, payload_buffer_->get_physical_address(), payload_size_bytes);
             }
         }
 
-        // Send header with flush (dispatch hidden in array)
+        // Send header with flush
         connections_->send_header_flush(connection_idx_, (uint32_t)packet_header);
 
         // STEP 4: Update state (after successful send)
@@ -1046,7 +1024,7 @@ struct SenderKernelTrafficConfig {
             }
             metadata.seed = prng_next(metadata.seed);
 
-            // STEP 5: Consume credit AFTER successful send (grouped with state updates)
+            // STEP 5: Consume credit AFTER successful send
             credit_manager_.consume_credit();
         }
 
@@ -1085,9 +1063,8 @@ private:
     }
 
 public:
-    // Connection management (replaces fabric_connection_handle)
-    FabricConnectionArray* connections_;                   // Properly typed pointer!
-    uint8_t connection_idx_;                               // Index into the connection array
+    FabricConnectionArray* connections_;
+    uint8_t connection_idx_;  // Index into the connection array
 
     SenderTrafficConfigMetadata metadata;
     volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header;
@@ -1095,7 +1072,6 @@ public:
     uint32_t num_packets_processed = 0;
     uint64_t elapsed_cycles = 0;
 
-    // Credit management (encapsulated in manager object)
     SenderCreditManager credit_manager_;
 
 private:
@@ -1315,20 +1291,14 @@ struct MuxTerminationManager<false, NUM_MUXES> {
 template <uint8_t NUM_MUXES>
 struct MuxTerminationManager<true, NUM_MUXES> {
     MuxTerminationManager(size_t& local_args_idx, uint32_t sync_address) {
-        // Arg 0: is_master
         is_master_ = get_local_arg_val<uint32_t>(local_args_idx++) != 0;
-
-        // Arg 1: total_mux_clients
         total_mux_clients_ = get_local_arg_val<uint32_t>(local_args_idx++);
-
-        // Arg 2: master NOC encoding
         uint32_t master_noc_encoding = get_local_arg_val<uint32_t>(local_args_idx++);
 
         if (is_master_) {
             // Master: setup sync semaphore (should be cleared by host)
             termination_sync_ptr_ = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sync_address);
 
-            // Arg 3: number of muxes to terminate
             num_muxes_to_terminate_ = get_local_arg_val<uint32_t>(local_args_idx++);
             ASSERT(num_muxes_to_terminate_ <= NUM_MUXES);
 
@@ -1525,14 +1495,12 @@ struct SenderKernelConfig {
 
     SenderKernelMemoryMap memory_map;
 
-    // Unified connection array (replaces custom storage)
     FabricConnectionArray connections;
 
     alignas(LocalSyncConfig<MASTER_SYNC_CORE, NUM_LOCAL_SYNC_CORES>)
         std::array<char, sizeof(LocalSyncConfig<MASTER_SYNC_CORE, NUM_LOCAL_SYNC_CORES>)> local_sync_config_storage;
     std::array<uint8_t, NUM_TRAFFIC_CONFIGS> traffic_config_to_fabric_connection_map;
 
-    // Typedef for the templated traffic config type
     using TrafficConfigType = SenderKernelTrafficConfig;
 
     alignas(
@@ -1549,7 +1517,6 @@ struct SenderKernelConfig {
         return reinterpret_cast<TrafficConfigType*>(traffic_configs_storage.data() + idx * sizeof(TrafficConfigType));
     }
 
-    // Accessor for traffic config pointers (for kernel to use)
     const std::array<TrafficConfigType*, NUM_TRAFFIC_CONFIGS>& traffic_config_ptrs_array() const {
         return traffic_config_ptrs;
     }
@@ -1627,7 +1594,6 @@ private:
 // Encapsulates all credit batching logic in one place
 // Works with FabricConnectionArray (supports both direct and mux connections)
 struct ReceiverCreditManager {
-    // Default constructor with dummy values for credit_fields_ (needed for array initialization)
     ReceiverCreditManager() : credit_fields_(0, 0, 0, 0) {}
 
     template <bool IS_2D_FABRIC, bool USE_DYNAMIC_ROUTING>
@@ -2156,10 +2122,8 @@ struct SyncKernelConfig {
 
     SenderKernelMemoryMap memory_map;
 
-    // Unified connection array for sync connections
     FabricConnectionArray sync_connections;
 
-    // Typedef for line sync config type (no longer templated)
     using LineSyncConfigType = LineSyncConfig;
     alignas(LineSyncConfigType)
         std::array<char, NUM_SYNC_FABRIC_CONNECTIONS * sizeof(LineSyncConfigType)> line_sync_configs_storage;
@@ -2196,7 +2160,6 @@ private:
 
         for (uint8_t i = 0; i < NUM_SYNC_FABRIC_CONNECTIONS; i++) {
             uint32_t packet_header_address = this->memory_map.get_packet_header_address();
-            // Use the mapped connection index instead of 'i'
             uint8_t connection_idx = sync_config_to_fabric_connection_map[i];
             new (&line_sync_configs()[i])
                 LineSyncConfigType(&sync_connections, connection_idx, packet_header_address, line_sync_val);

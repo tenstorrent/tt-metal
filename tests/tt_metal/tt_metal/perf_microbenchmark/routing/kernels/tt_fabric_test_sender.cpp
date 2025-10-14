@@ -115,6 +115,9 @@ void kernel_main() {
 
     uint64_t total_elapsed_cycles_outer_loop = get_timestamp() - start_timestamp;
 
+    // Terminate muxes and wait for completion
+    mux_termination_manager.terminate_muxes();
+
     // Collect results from all traffic configs
     for (uint8_t i = 0; i < NUM_TRAFFIC_CONFIGS; i++) {
         auto* traffic_config = sender_config->traffic_config_ptrs[i];
@@ -126,7 +129,5 @@ void kernel_main() {
     write_test_packets(sender_config->get_result_buffer_address(), total_packets_sent);
     write_test_status(sender_config->get_result_buffer_address(), TT_FABRIC_STATUS_PASS);
 
-    // Terminate muxes and wait for completion
-    mux_termination_manager.terminate_muxes();
     noc_async_full_barrier();
 }

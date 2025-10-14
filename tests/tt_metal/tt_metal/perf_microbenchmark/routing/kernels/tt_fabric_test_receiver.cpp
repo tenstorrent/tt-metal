@@ -101,12 +101,13 @@ void kernel_main() {
     // Close credit connections (automatically flushes remaining credits, no-op if NUM_CREDIT_CONNECTIONS == 0)
     receiver_config->close_credit_connections();
 
+    // Terminate muxes and wait for completion
+    mux_termination_manager.terminate_muxes();
+
     // Write test results
     write_test_packets(receiver_config->get_result_buffer_address(), total_packets_received);
     uint32_t final_status = failed ? TT_FABRIC_STATUS_DATA_MISMATCH : TT_FABRIC_STATUS_PASS;
     write_test_status(receiver_config->get_result_buffer_address(), final_status);
 
-    // Terminate muxes and wait for completion
-    mux_termination_manager.terminate_muxes();
     noc_async_full_barrier();
 }

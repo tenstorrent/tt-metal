@@ -43,7 +43,7 @@ struct DynamicMemoryRegion {
         uint32_t chunk_size = num_elements * stride;
         TT_FATAL(
             current + chunk_size <= end(),
-            "Credit chunk allocation exceeds region bounds: "
+            "Chunk allocation exceeds region bounds: "
             "need {} bytes ({} receivers × {} stride) at address {} but region ends at {}",
             chunk_size,
             num_elements,
