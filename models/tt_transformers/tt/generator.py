@@ -267,19 +267,8 @@ class Generator:
                 # Slicing the tensor to the nearest ceiling/floor multiples of 32 for the prefill_len, to get the last token
                 # We need to do this here, because we can't do this part in forward() if we have trace enabled
                 # The reason we can't do it in trace is because we can't pass the correct get_last_token to trace
-                get_last_token = (last_token_idx // 32) * 32
-                logits = ttnn.slice(
-                    logits,
-                    (0, 0, get_last_token, 0),
-                    (1, 1, get_last_token + 32, logits.shape[-1]),
-                )
-                logits = self.model[model_id].norm(logits, mode="prefill")
-                if self.model[model_id].model_config["LM_HEAD_INPUT_MEMCFG"].is_sharded():
-                    logits = ttnn.interleaved_to_sharded(
-                        logits, self.model[model_id].model_config["LM_HEAD_INPUT_MEMCFG"]
-                    )
-                logits = self.model[model_id].lm_head(logits)
-                logits = ttnn.to_layout(logits, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                logits = self.model[model_id].process_logits_after_prefill_trace(logits, last_token_idx)
+
             # if data parallel is greater than 1, we need to add logits to out_list and do the processing after all the prefill are done
             # otherwise, we can process the logits after prefill immediately
             if self.data_parallel > 1:
@@ -1579,9 +1568,6 @@ class Generator:
                 # If page table is too short, pad it with -1
                 padding = torch.ones(1, num_blocks - page_table.shape[1], dtype=torch.int32) * -1
                 page_table = torch.cat([page_table, padding], dim=1)
-            padded_page_table = torch.ones(1, page_table.shape[1], dtype=torch.int32) * -1
-            padded_page_table[0, :num_blocks] = page_table[0, :num_blocks]
-            return padded_page_table[:, :num_blocks]
         return page_table[:, :num_blocks]
 
     ## Destructor

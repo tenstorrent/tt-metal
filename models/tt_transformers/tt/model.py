@@ -153,6 +153,20 @@ class Transformer(LightweightModule):
             self.decode_sliding_mask_mat = None
             self.device_decode_sliding_mask = None
 
+    def process_logits_after_prefill_trace(self, logits, last_token_idx):
+        get_last_token = (last_token_idx // 32) * 32
+        logits = ttnn.slice(
+            logits,
+            (0, 0, get_last_token, 0),
+            (1, 1, get_last_token + 32, logits.shape[-1]),
+        )
+        logits = self.norm(logits, mode="prefill")
+        if self.model_config["LM_HEAD_INPUT_MEMCFG"].is_sharded():
+            logits = ttnn.interleaved_to_sharded(logits, self.model_config["LM_HEAD_INPUT_MEMCFG"])
+        logits = self.lm_head(logits)
+        logits = ttnn.to_layout(logits, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        return logits
+
     def prepare_prefill_inputs_host(self, tokens, page_table=None, chunk_page_table=None):
         """
         Inputs are torch tensors or python types. This function returns ttnn
@@ -175,11 +189,8 @@ class Transformer(LightweightModule):
         TODO: Debate whether this function is responsible for padding
         """
 
-        # We set the device to None if trace is enabled so we keep the tensors on host instead of sending it to the device
-        # We do that because if we called this function with device != None, the tensors will be allocated on device on different adresses, which we don't want for tracing
-        # We prepare all tensors on host first, and then using copy_host_to_device copy them to the device
-        # We copy the tensors to memory locations on the device where tensors resided during the capturing of the trace
-        # That way, the tensors will be on the same memory locations as the tensors during the capturing of the trace, so the ops will use good data instead of corrupted data
+        # We set the device to None if trace is enabled so we keep the tensors on host instead of sending it to the device (None - keeps on host, device - sends to specified device)
+        # We will send them to device later (copy_host_to_device)
         device = None if trace_enabled else self.mesh_device
 
         assert tokens.dim() == 2, "tokens must be a 2D tensor"
@@ -193,7 +204,7 @@ class Transformer(LightweightModule):
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
 
-        # we do it this way because we want to run this when all our inputs are on the device
+        # self.embd expects that tokens are on device ; if trace is enabled, the tensors will be later on device, so we will do these 2 steps when we copy the tokens to the device
         if not trace_enabled:
             tokens_embd = self.embd(tokens)
             tokens_embd = ttnn.unsqueeze_to_4D(tokens_embd)
