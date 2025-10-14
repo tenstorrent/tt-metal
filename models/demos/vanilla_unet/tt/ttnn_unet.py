@@ -8,10 +8,6 @@ from models.tt_cnn.tt.builder import TtConv2d, TtMaxPool2d
 
 
 class TtUNet:
-    """
-    TT-CNN UNet implementation built from UNetConfig configurations
-    """
-
     def __init__(self, configs: TtUNetLayerConfigs, device: ttnn.Device):
         self.device = device
         self.configs = configs
@@ -35,25 +31,23 @@ class TtUNet:
         self.bottleneck_conv1 = TtConv2d(configs.bottleneck_conv1, device)
         self.bottleneck_conv2 = TtConv2d(configs.bottleneck_conv2, device)
 
+        self.upconv4_config = configs.upconv4
         self.decoder4_conv1 = TtConv2d(configs.decoder4_conv1, device)
         self.decoder4_conv2 = TtConv2d(configs.decoder4_conv2, device)
 
+        self.upconv3_config = configs.upconv3
         self.decoder3_conv1 = TtConv2d(configs.decoder3_conv1, device)
         self.decoder3_conv2 = TtConv2d(configs.decoder3_conv2, device)
 
+        self.upconv2_config = configs.upconv2
         self.decoder2_conv1 = TtConv2d(configs.decoder2_conv1, device)
         self.decoder2_conv2 = TtConv2d(configs.decoder2_conv2, device)
 
+        self.upconv1_config = configs.upconv1
         self.decoder1_conv1 = TtConv2d(configs.decoder1_conv1, device)
         self.decoder1_conv2 = TtConv2d(configs.decoder1_conv2, device)
 
         self.final_conv = TtConv2d(configs.final_conv, device)
-
-        # Store upconv configurations
-        self.upconv4_config = configs.upconv4
-        self.upconv3_config = configs.upconv3
-        self.upconv2_config = configs.upconv2
-        self.upconv1_config = configs.upconv1
 
     def __call__(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
         # Encoder 1
@@ -85,37 +79,30 @@ class TtUNet:
         bottleneck = self.bottleneck_conv2(bottleneck)
 
         # Decoder 4
-        print("decoder 4")
         dec4 = self._transpose_conv(bottleneck, self.upconv4_config)
         dec4 = self._concatenate_skip_connection(dec4, skip4)
         dec4 = self.decoder4_conv1(dec4)
         dec4 = self.decoder4_conv2(dec4)
 
         # Decoder 3
-        print("decoder 3")
         dec3 = self._transpose_conv(dec4, self.upconv3_config)
         dec3 = self._concatenate_skip_connection(dec3, skip3)
         dec3 = self.decoder3_conv1(dec3)
         dec3 = self.decoder3_conv2(dec3)
 
         # Decoder 2
-        print("decoder 2")
         dec2 = self._transpose_conv(dec3, self.upconv2_config)
         dec2 = self._concatenate_skip_connection(dec2, skip2)
         dec2 = self.decoder2_conv1(dec2)
         dec2 = self.decoder2_conv2(dec2)
 
         # Decoder 1
-        print("decoder 1")
         dec1 = self._transpose_conv(dec2, self.upconv1_config, fp32_dest_acc_en=False, packer_l1_acc=False)
         dec1 = self._concatenate_skip_connection(dec1, skip1, rm=False)
         dec1 = self.decoder1_conv1(dec1)
         dec1 = self.decoder1_conv2(dec1)
 
-        print("final guy")
-        output = self.final_conv(dec1)
-
-        return output
+        return self.final_conv(dec1)
 
     def _transpose_conv(
         self,
@@ -134,7 +121,6 @@ class TtUNet:
         Returns:
             Upsampled tensor
         """
-        print(f"running conv2d transpose: {upconv_config}")
         conv_config = ttnn.Conv2dConfig(
             weights_dtype=ttnn.bfloat8_b,
             shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
@@ -167,7 +153,7 @@ class TtUNet:
         )
 
     def _concatenate_skip_connection(self, upsampled: ttnn.Tensor, skip: ttnn.Tensor, rm=True) -> ttnn.Tensor:
-        assert upsampled.shape[-1] == skip.shape[-1]
+        assert upsampled.shape == skip.shape
 
         input_core_grid = upsampled.memory_config().shard_spec.grid
         input_shard_shape = upsampled.memory_config().shard_spec.shape
@@ -199,7 +185,6 @@ class TtUNet:
             ttnn.deallocate(concatenated)
             return concat_tiled
         else:
-            print(upsampled, skip)
             concatenated = ttnn.concat([upsampled, skip], dim=3, memory_config=output_memory_config)
             ttnn.deallocate(upsampled)
             ttnn.deallocate(skip)

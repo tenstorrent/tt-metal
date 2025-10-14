@@ -378,6 +378,7 @@ class TtConv2d:
         self.configuration = configuration
         self.conv2d_config = to_conv2d_config(configuration)
         self.compute_config = to_compute_config(configuration, device)
+        self.slice_config = ttnn.Conv2dL1FullSliceConfig
 
         self.device = device
 
@@ -419,6 +420,7 @@ class TtConv2d:
             return_output_dim=False,
             return_weights_and_bias=True,
             compute_config=self.compute_config,
+            slice_config=self.slice_config,
             **self.get_conv2d_kwargs(),
         )
         return x
