@@ -269,10 +269,6 @@ target_link_libraries(
         fmt::fmt-header-only
 )
 
-if(TT_INSTALL)
-    include(packaging)
-endif()
-
 ############################################################################################################################
 # Build subdirectories
 ############################################################################################################################
@@ -325,4 +321,9 @@ add_custom_target(
 
 if(BUILD_TT_TRAIN)
     add_subdirectory(tt-train)
+endif()
+
+# If we've been asked to build static libs, packaging is left up to them to sort out.
+if(TT_INSTALL)
+    include(packaging)
 endif()
