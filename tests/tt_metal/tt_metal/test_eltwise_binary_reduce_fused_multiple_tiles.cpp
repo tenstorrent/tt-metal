@@ -87,6 +87,14 @@ int main(int argc, char** argv) {
         }
     }
 
+    // Allow override of number of tiles via command line (argv[2])
+    if (argc > 2) {
+        num_input_tiles = static_cast<uint32_t>(std::stoi(argv[2]));
+        H = tile_H * num_input_tiles;
+        Ht = H / tile_H;
+        log_info(LogTest, "Using {} input tiles from command line", num_input_tiles);
+    }
+
     try {
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
@@ -206,21 +214,18 @@ int main(int argc, char** argv) {
         log_info(LogTest, "Each tile is 32x32 elements, composed of 4 faces of 16x16 each:");
         log_info(LogTest, "  Face layout: F0 F1");
         log_info(LogTest, "               F2 F3");
-        log_info(LogTest, "With constant input values of 2.0, eltwise multiply gives 4.0");
-        log_info(LogTest, "Column-wise reduce: 4.0 * 8 tiles * 32 columns = 1024 per element");
-        log_info(LogTest, "Expected result: 1024 in rows 0 and 8 (F0/F2 and F1/F3 faces), 0s elsewhere");
 
         // Use random seed for reproducible tests
         int seed = 1;
         log_info(LogTest, "Using random seed: {}", seed);
 
         // Note: create_random_vector_of_bfloat16 packs 2 bfloat16 values per uint32_t
-        // std::vector<uint32_t> src0_vec = create_random_vector_of_bfloat16(input_buffer_size, 5.0f, seed, -5.0f);
-        std::vector<uint32_t> src0_vec = create_constant_vector_of_bfloat16(input_buffer_size, 10.0f);
+        std::vector<uint32_t> src0_vec = create_random_vector_of_bfloat16(input_buffer_size, 5.0f, seed, -5.0f);
+        // std::vector<uint32_t> src0_vec = create_constant_vector_of_bfloat16(input_buffer_size, 10.0f);
         // std::vector<uint32_t> src0_vec = create_arange_vector_of_bfloat16(input_buffer_size, false);
 
-        // std::vector<uint32_t> src1_vec = create_random_vector_of_bfloat16(input_buffer_size, 5.0f, seed + 1, -5.0f);
-        std::vector<uint32_t> src1_vec = create_constant_vector_of_bfloat16(input_buffer_size, 1.5f);
+        std::vector<uint32_t> src1_vec = create_random_vector_of_bfloat16(input_buffer_size, 5.0f, seed + 1, -5.0f);
+        // std::vector<uint32_t> src1_vec = create_constant_vector_of_bfloat16(input_buffer_size, 1.5f);
         // std::vector<uint32_t> src1_vec = create_arange_vector_of_bfloat16(input_buffer_size, false);
 
         // Write input data to device
@@ -291,16 +296,15 @@ int main(int argc, char** argv) {
         }
 
         constexpr uint32_t FACES_PER_TILE = 4;
-        constexpr uint32_t TILES = 8;
         constexpr uint32_t ELEMENTS_PER_FACE = 16 * 16;
         constexpr uint32_t FACE_WIDTH = 16;
         constexpr uint32_t FACE_HEIGHT = 16;
 
         std::vector<float> reduce_result(FACE_WIDTH*2, 0.0f);
         bool second_half = false;
-        
+
         // CALCULATE THE REDUCE RESULT CORRECTLY
-        for(uint32_t face = 0; face < FACES_PER_TILE*TILES; ++face) {
+        for (uint32_t face = 0; face < FACES_PER_TILE * num_input_tiles; ++face) {
             for(uint32_t row = 0; row < FACE_HEIGHT; ++row) {
                 for(uint32_t col = 0; col < FACE_WIDTH; ++col) {
                     uint32_t index = face*ELEMENTS_PER_FACE + row*FACE_HEIGHT + col;

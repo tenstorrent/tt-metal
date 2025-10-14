@@ -81,7 +81,7 @@ ALWI void fused_eltwise_binary_reduce(
     uint32_t cb_inp0, uint32_t cb_inp1, uint32_t itile0, uint32_t itile1, uint32_t tile_cnt) {
     // Step 1: Perform eltwise binary operations on all tiles
     for (uint32_t i = 0; i < tile_cnt; ++i) {
-        UNPACK((llk_unpack_AB(cb_inp0, cb_inp1, itile0, itile1)));
+        UNPACK((llk_unpack_AB(cb_inp0, cb_inp1, i, i)));
         MATH((llk_math_eltwise_binary<
               eltwise_binary_type,
               NONE,
@@ -92,6 +92,8 @@ ALWI void fused_eltwise_binary_reduce(
 
     // Step 2: Reset counters before reduce operation
     MATH((_fused_eltwise_binary_uninit_()));
+
+    UNPACK((llk_unpack_AB_but_fused_so_no_mop(0, 0, 0, 0)));
 
     // Step 3: Prepare data for reduce operation
     MATH(eltwise_binary_reuse_dest_as_src_tile<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(0));  // Move tile 0 to srcA
@@ -105,16 +107,14 @@ ALWI void fused_eltwise_binary_reduce(
     // Step 5: Perform reduce operation (result stored in tile 0)
     // Note: This compute processes up to 8 tiles in a loop
     uint32_t reduce_dst_idx = 0;
+
     for (uint32_t i = 0; i < tile_cnt; ++i) {
         if (i != 0) {
             MATH(eltwise_binary_reuse_dest_as_src_tile<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(i));
         }
 
-        dprint_tensix_dest_reg(0);
-
         MATH((llk_math_reduce_column<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY, false, fp32_transpose>(
             reduce_dst_idx)));
-        UNPACK((llk_unpack_AB_but_fused_so_no_mop(0, 0, 0, 0)));
     }
 
     // Step 6: Clear data valid flags after reduce loop

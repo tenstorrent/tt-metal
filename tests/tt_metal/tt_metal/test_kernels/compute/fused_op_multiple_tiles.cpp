@@ -5,6 +5,7 @@
 #include "compute_kernel_api/fused_eltwise_binary_reduce_multiple_tiles.h"
 
 #include "tt_metal/hw/inc/debug/dprint_tensix.h"
+#include "tt_metal/hw/inc/debug/dprint_pages.h"
 
 #include <cstdint>
 
@@ -18,6 +19,8 @@ void MAIN {
 
     cb_wait_front(cb_inp0, tile_cnt);
     cb_wait_front(cb_inp1, tile_cnt);
+
+    // UNPACK(tt::compute::common::print_full_tile(cb_inp1, 0, true));
 
     cb_reserve_back(cb_out0, 1);
 
@@ -34,6 +37,13 @@ void MAIN {
     cb_pop_front(cb_inp1, tile_cnt);
 
     pack_tile(0, cb_out0);  // Result is always in tile 0 after reduce operation
+
+    // Add some NOPs to ensure pack is done before we print the tile
+    for (uint32_t i = 0; i < 32; ++i) {
+        PACK(TTI_NOP);
+    }
+
+    PACK(tt::compute::common::print_full_tile(cb_out0, 0, true));
 
     cb_push_back(cb_out0, 1);
 
