@@ -125,7 +125,7 @@ jobs:
           ./build_bisect/tt_bisect.sh -t ${{ inputs.timeout }} -f '${{ inputs.command }}' -b ${{ inputs.bad-commit }} -g ${{ inputs.good-commit }} ${{ inputs.tracy == 'true' && '-p' || '' }} -r ${{ inputs.retries }} ${{ inputs.nd-mode == 'true' && '-n' || '' }}
 
       - name: Upload ND results CSV
-        if: ${{ inputs.nd-mode == 'true' }}
+        if: ${{ hashFiles('bisect_nd_results.csv') != '' }}
         uses: actions/upload-artifact@v4
         with:
           name: bisect-nd-results
