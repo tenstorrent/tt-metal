@@ -38,101 +38,11 @@ jobs:
           fetch-tags: true
           ref: stable
 
-      - name: Get latest semver tag
-        id: get-latest-semver
-        run: |
-          # Get all tags matching exact semver format v{number}.{number}.{number} excluding any with dashes
-          latest_semver=$(git tag -l | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | grep -v '-' | sort -V | tail -1)
-          if [ -z "$latest_semver" ]; then
-            echo "No semver tags found, using v0.0.0"
-            latest_semver="v0.0.0"
-          fi
-          echo "Latest semver tag: $latest_semver"
-          echo "latest_semver=$latest_semver" >> "$GITHUB_OUTPUT"
-
-      - name: Analyze commits for version bump
-        id: analyze-commits
-        run: |
-          latest_tag="${{ steps.get-latest-semver.outputs.latest_semver }}"
-          echo "Analyzing commits since $latest_tag"
-
-          # Get commit messages since the latest tag
-          if [ "$latest_tag" = "v0.0.0" ]; then
-            # If no previous tag, analyze all commits
-            commits=$(git log --oneline --pretty=format:"%s")
-          else
-            # Get commits since the latest tag
-            commits=$(git log ${latest_tag}..HEAD --oneline --pretty=format:"%s")
-          fi
-
-          # Check for version bump indicators
-          bump_type="none"
-
-          # Check for MAJOR version indicators
-          if echo "$commits" | grep "(MAJOR)"; then
-            bump_type="major"
-            echo "Found MAJOR version indicators"
-
-          # Check for MINOR version indicators
-          elif echo "$commits" | grep "(MINOR)"; then
-            bump_type="minor"
-            echo "Found MINOR version indicators"
-
-          # Check for PATCH version indicators
-          elif echo "$commits" | grep "(PATCH)"; then
-            bump_type="patch"
-            echo "Found PATCH version indicators"
-          fi
-
-
-          echo "Determined bump type: $bump_type"
-          echo "bump_type=$bump_type" >> "$GITHUB_OUTPUT"
-
-      - name: Calculate new version
+      - name: Calculate version
         id: calculate-version
-        run: |
-          latest_tag="${{ steps.get-latest-semver.outputs.latest_semver }}"
-          bump_type="${{ steps.analyze-commits.outputs.bump_type }}"
-          tag_type="${{ inputs.tag-type }}"
-
-          if [ "$tag_type" = "dev" ]; then
-            echo "Dev tag type - ignoring version bump, using latest version"
-            echo "new_version=$latest_tag" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          if [ "$bump_type" = "none" ]; then
-            echo "No version bump needed - no relevant commit indicators found"
-            echo "new_version=$latest_tag" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          # Extract version numbers (remove 'v' prefix)
-          version_no_v=${latest_tag#v}
-          IFS='.' read -r major minor patch <<< "$version_no_v"
-
-          echo "Current version: $major.$minor.$patch"
-          echo "Bump type: $bump_type"
-
-          # Calculate new version based on bump type
-          case $bump_type in
-            "major")
-              major=$((major + 1))
-              minor=0
-              patch=0
-              ;;
-            "minor")
-              minor=$((minor + 1))
-              patch=0
-              ;;
-            "patch")
-              patch=$((patch + 1))
-              ;;
-          esac
-
-          new_version="v$major.$minor.$patch"
-          echo "New calculated version: $new_version"
-          echo "new_version=$new_version" >> "$GITHUB_OUTPUT"
+        uses: tenstorrent/tt-metal/.github/actions/calculate-version@dpopov-fix-dev-tags
+        with:
+          tag-type: ${{ inputs.tag-type }}
 
       - name: Get tag version
         id: get-tag-version
