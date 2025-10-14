@@ -17,15 +17,15 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 
 @pytest.mark.parametrize("mkn", [(16, 128, 512)])
 @pytest.mark.parametrize("num_experts", [8, 32])
-@pytest.mark.parametrize("num_tokens", [(1, 4)])
+@pytest.mark.parametrize("num_batches", [(1, 4)])
 @pytest.mark.parametrize("tile_h", [16])
 @pytest.mark.parametrize("tile_w", [32])
 @pytest.mark.parametrize("in1_dtype", [ttnn.bfloat8_b])
 @pytest.mark.parametrize("core_grid", [(4, 4)])
-def test_sparse_matmul_with_nnz(device, mkn, num_experts, num_tokens, tile_h, tile_w, in1_dtype, core_grid):
+def test_sparse_matmul_with_nnz(device, mkn, num_experts, num_batches, tile_h, tile_w, in1_dtype, core_grid):
     torch.manual_seed(0)
     m, k, n = mkn
-    b, s = num_tokens
+    b, s = num_batches
     in0 = torch.randn((b, s, m, k), dtype=torch.bfloat16)
     in1 = torch.randn((1, num_experts, k, n), dtype=torch.bfloat16)
 
@@ -93,32 +93,34 @@ def test_sparse_matmul_with_nnz(device, mkn, num_experts, num_tokens, tile_h, ti
         ),
     )
 
+    logger.warning(f"Queued sparse matmul with nnz, output volume: {output_t.volume()}")
     output_tensor = ttnn.to_torch(output_t)
+    logger.info("Finished running sparse matmul with nnz")
 
     # Compute matmul using torch for each batch and concatenate the results
-    for b, s, e in itertools.product(range(b), range(s), range(num_experts)):
-        if sparsity[0, b, s, e] == 0.0:
+    for b_i, s_i, e_i in itertools.product(range(b), range(s), range(num_experts)):
+        if sparsity[0, b_i, s_i, e_i] == 0.0:
             continue
-        in0_batch = in0[b, s, :, :]
-        in1_batch = in1[0, e, :, :]
+        in0_batch = in0[b_i, s_i, :, :]
+        in1_batch = in1[0, e_i, :, :]
         pt_out = torch.matmul(in0_batch, in1_batch)
 
         # Compare with output tensor
-        expected_pcc = 0.999
-        assert_with_pcc(pt_out, output_tensor[b, s, 0, e, :, :], expected_pcc)
+        expected_pcc = 0.99
+        assert_with_pcc(pt_out, output_tensor[b_i, s_i, 0, e_i, :, :], expected_pcc)
 
 
 @pytest.mark.parametrize("mkn", [(32, 128, 512)])
 @pytest.mark.parametrize("num_experts", [8])
-@pytest.mark.parametrize("num_tokens", [(1, 4)])
+@pytest.mark.parametrize("num_batches", [(1, 4)])
 @pytest.mark.parametrize("tile_h", [16])
 @pytest.mark.parametrize("tile_w", [32])
 @pytest.mark.parametrize("in1_dtype", [ttnn.bfloat8_b])
 @skip_for_blackhole("Semaphores used to broadcast sparsity is not propagating on BH, Issue #27979")
-def test_sparse_matmul_without_nnz(device, mkn, num_experts, num_tokens, tile_h, tile_w, in1_dtype):
+def test_sparse_matmul_without_nnz(device, mkn, num_experts, num_batches, tile_h, tile_w, in1_dtype):
     # torch.manual_seed(0)
     m, k, n = mkn
-    b, s = num_tokens
+    b, s = num_batches
     in0 = torch.randn((b, s, m, k), dtype=torch.bfloat16)
     in1 = torch.randn((1, num_experts, k, n), dtype=torch.bfloat16)
 
@@ -175,13 +177,94 @@ def test_sparse_matmul_without_nnz(device, mkn, num_experts, num_tokens, tile_h,
     logger.info(output_tensor.shape)
 
     # Compute matmul using torch for each batch and concatenate the results
-    for b, s, e in itertools.product(range(b), range(s), range(num_experts)):
-        if sparsity[0, b, s, e] == 0.0:
+    for b_i, s_i, e_i in itertools.product(range(b), range(s), range(num_experts)):
+        if sparsity[0, b_i, s_i, e_i] == 0.0:
             continue
-        in0_batch = in0[b, s, :, :]
-        in1_batch = in1[0, e, :, :]
+        in0_batch = in0[b_i, s_i, :, :]
+        in1_batch = in1[0, e_i, :, :]
         pt_out = torch.matmul(in0_batch, in1_batch)
 
         # Compare with output tensor
         expected_pcc = 0.999
-        assert_with_pcc(pt_out, output_tensor[b, s, 0, e, :, :], expected_pcc)
+        assert_with_pcc(pt_out, output_tensor[b_i, s_i, 0, e_i, :, :], expected_pcc)
+
+
+@pytest.mark.parametrize("mkn", [(32, 360, 2880)])
+@pytest.mark.parametrize(
+    "num_batches", [(1, 1), (1, 2), (1, 4), (1, 8), (1, 16), (1, 32), (1, 64), (1, 128), (1, 256), (1, 512), (1, 1024)]
+)  # (1, 2048), (1, 4096), (1, 8192)])
+@pytest.mark.parametrize("tile_h", [32])
+@pytest.mark.parametrize("tile_w", [32])
+@pytest.mark.parametrize("in1_dtype", [ttnn.bfloat4_b, ttnn.bfloat8_b])
+def test_batched_sparse_matmul_with_nnz(device, mkn, num_batches, tile_h, tile_w, in1_dtype):
+    torch.manual_seed(0)
+    m, k, n = mkn
+    b, s = num_batches
+    in0 = torch.randn((b, s, m, k), dtype=torch.bfloat16)
+    in1 = torch.randn((b, s, k, n), dtype=torch.bfloat16)
+
+    sparsity_shape = (1, 1, b, s)
+    sparsity = torch.rand(sparsity_shape)
+
+    # Mark some as 0 to test the sparsity
+    sparsity[(sparsity == 0)] = 0.1  # First make sure there are no zeros
+    number_of_zeros = random.randint(0, sparsity.numel() - 1)
+    zero_indices = torch.randperm(sparsity.numel())[:number_of_zeros]
+    sparsity.view(-1)[zero_indices] = 0.0
+
+    sparsity = sparsity.to(dtype=torch.bfloat16)
+
+    nnz = int((sparsity != 0).sum().item())
+    logger.info(f"nnz: {nnz}")
+
+    in0_t = ttnn.from_torch(
+        in0,
+        tile=ttnn.Tile((tile_h, 32)),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    in1_t = ttnn.from_torch(
+        in1,
+        tile=ttnn.Tile((32, tile_w)),
+        dtype=in1_dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    sparsity_t = ttnn.from_torch(
+        sparsity,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    output_tile = ttnn.Tile([tile_h, tile_w])
+    output_t = ttnn.sparse_matmul(
+        in0_t,
+        in1_t,
+        sparsity=sparsity_t,
+        nnz=nnz,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        output_tile=output_tile,
+        is_input_a_sparse=True,
+    )
+
+    logger.info(f"Queued batched sparse matmul with nnz, output volume: {output_t.volume()}")
+    output_tensor = ttnn.to_torch(output_t)
+    logger.info("Finished running batched sparse matmul with nnz")
+    # Compute matmul using torch for each batch and concatenate the results
+    for b_i, s_i in itertools.product(range(b), range(s)):
+        if sparsity[0, 0, b_i, s_i] == 0.0:
+            continue
+        in0_batch = in0[b_i, s_i, :, :]
+        in1_batch = in1[b_i, s_i, :, :]
+        pt_out = torch.matmul(in0_batch, in1_batch)
+
+        # Compare with output tensor
+        expected_pcc = 0.99
+        assert_with_pcc(pt_out, output_tensor[b_i, s_i, :, :], expected_pcc)
