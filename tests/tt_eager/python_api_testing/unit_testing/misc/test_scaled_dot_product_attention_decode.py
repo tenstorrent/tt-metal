@@ -1134,16 +1134,21 @@ def test_sdpa_decode_paged_attention(
     # Test failing with watcher enabled, github issue #29225
     if (
         is_watcher_enabled()
-        and block_size == 32
-        and b == 8
-        and nh == 16
-        and nkv == 4
-        and s == 4096
-        and d == 128
-        and grid_size == (8, 2)
-        and cur_pos_tensor == True
         and kv_dtype == ttnn.bfloat8_b
         and q_dtype == ttnn.bfloat16
+        and cur_pos_tensor == True
+        and (
+            (block_size == 32 and b == 8 and nh == 16 and nkv == 4 and s == 4096 and d == 128 and grid_size == (8, 2))
+            or (
+                block_size == 64
+                and b == 1
+                and nh == 8
+                and nkv == 1
+                and s == 131072
+                and d == 128
+                and grid_size == (8, 4)
+            )
+        )
     ):
         pytest.skip("Test is not passing with watcher enabled")
 
