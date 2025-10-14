@@ -307,7 +307,7 @@ void kernel_main() {
             fill_with_val<num_elements_to_fill, pad_val>(get_write_ptr(pad_cb_id));
 
             const uint64_t padding_l1_addr = get_noc_addr(my_noc_x, my_noc_y, get_read_ptr(pad_cb_id));
-            constexpr uint32_t padding_region_size = stick_nbytes / elem_nbytes;
+            constexpr uint32_t padding_region_size = std::max(stick_nbytes, stick_nbytes / elem_nbytes);
             copy_padding<padding_config_cb_id, out_cb_id, stick_nbytes, padding_region_size>(padding_l1_addr);
         }
     }

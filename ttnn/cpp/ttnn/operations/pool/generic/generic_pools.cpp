@@ -144,11 +144,7 @@ static std::vector<Tensor> pool2d_invoke(
         num_cores_c = conv::get_num_cores_channels_from_parallel_config(parallel_config);
 
         uint32_t input_channels_alignment = conv::get_input_channels_alignment(
-            shard_layout,
-            input_tensor.layout(),
-            input_tensor.memory_config().buffer_type(),
-            false,
-            input_tensor.memory_config());
+            shard_layout, input_tensor.layout(), BufferType::L1, false, input_tensor.memory_config());
 
         ttnn::Shape input_tensor_shape = input_tensor.padded_shape();
 
