@@ -78,7 +78,7 @@ Tests:
             (optional) mcast_start_hops: 0
     # 2. High-level pattern
     (optional) patterns:
-      - type: all_to_all/one_to_all/full_device_random_pairing/unidirectional_linear/full_ring/half_ring/all_devices_uniform_pattern
+      - type: all_to_all/one_to_all/all_to_one/all_to_one_random/full_device_random_pairing/unidirectional_linear/full_ring/half_ring/all_devices_uniform_pattern
         (optional) iterations: 2 # How many times to run the pattern.
       - type: all_to_all
       - type: one_to_all
