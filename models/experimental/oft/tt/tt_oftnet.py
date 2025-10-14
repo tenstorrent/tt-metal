@@ -130,7 +130,7 @@ class TTOftNet:
         lat8 = self.lat8(feats8)
         if lat8.layout == ttnn.TILE_LAYOUT:
             lat8 = ttnn.to_layout(lat8, ttnn.ROW_MAJOR_LAYOUT)
-        lat8 = self.bn8(lat8, shard="HS")
+        lat8 = self.bn8(device, lat8, shard="HS")
         lat8 = ttnn.relu(lat8)
         lat8 = ttnn.sharded_to_interleaved(lat8, ttnn.DRAM_MEMORY_CONFIG)
         lat8 = ttnn.to_layout(lat8, ttnn.TILE_LAYOUT)
@@ -138,7 +138,7 @@ class TTOftNet:
         lat16 = self.lat16(feats16)
         if lat16.layout == ttnn.TILE_LAYOUT:
             lat16 = ttnn.to_layout(lat16, ttnn.ROW_MAJOR_LAYOUT)
-        lat16 = self.bn16(lat16, shard="HS")
+        lat16 = self.bn16(device, lat16, shard="HS")
         lat16 = ttnn.relu(lat16)
         lat16 = ttnn.sharded_to_interleaved(lat16, ttnn.DRAM_MEMORY_CONFIG)
         lat16 = ttnn.to_layout(lat16, ttnn.TILE_LAYOUT)
@@ -146,7 +146,7 @@ class TTOftNet:
         lat32 = self.lat32(feats32)
         if lat32.layout == ttnn.TILE_LAYOUT:
             lat32 = ttnn.to_layout(lat32, ttnn.ROW_MAJOR_LAYOUT)
-        lat32 = self.bn32(lat32, shard="BS")
+        lat32 = self.bn32(device, lat32, shard="BS")
         lat32 = ttnn.relu(lat32)
         lat32 = ttnn.sharded_to_interleaved(lat32, ttnn.DRAM_MEMORY_CONFIG)
         lat32 = ttnn.to_layout(lat32, ttnn.TILE_LAYOUT)
@@ -302,14 +302,16 @@ class TTOftNet:
         td = ortho
         for layer in self.topdown:
             logger.debug(f"Topdown layer {layer=}")
-            td = layer.forward(td)
+            td = layer.forward(device, td, gn_shard="HS", num_splits=2)  # hangs on top down with these settings;
+            # td = layer.forward(device, td)
         signpost(header="Topdown finished")
         return td
 
     def forward_predict_encoded_outputs(self, device, td):
         """Predict encoded outputs and slice them"""
         signpost(header="Head started")
-        outputs, out_h, out_w = self.head(device, td)
+        out_h, out_w = 159, 159  # todo extract magic numbers from a state dict
+        outputs = self.head(td)
         logger.debug(f"Head output shape: {outputs.shape}, dtype: {outputs.dtype} {out_h=} {out_w=}")
         outputs = ttnn.permute(outputs, (0, 3, 1, 2), memory_config=ttnn.L1_MEMORY_CONFIG)
         outputs = ttnn.reshape(outputs, (1, -1, 9, out_h, out_w))

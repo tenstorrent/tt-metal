@@ -37,10 +37,10 @@ from loguru import logger
     "model_dtype, use_host_oft, pcc_scores_oft, pcc_positions_oft, pcc_dimensions_oft, pcc_angles_oft",
     # fmt: off
     [
-       ( torch.bfloat16, False, 0.808, 0.896, 0.998, 0.915),
-       ( torch.bfloat16,  True, 0.821, 0.967, 0.999, 0.937),
-       ( torch.float32, False, 0.923, 0.982, 0.999, 0.943),
-       ( torch.float32,  True, 0.918, 0.885, 0.998, 0.942)
+       ( torch.bfloat16, False, 0.803, 0.896, 0.998, 0.917),
+       ( torch.bfloat16,  True, 0.827, 0.966, 0.999, 0.940),
+       ( torch.float32, False, 0.919, 0.978, 0.999, 0.939),
+       ( torch.float32,  True, 0.910, 0.887, 0.998, 0.945)
     ],
     # fmt: on
     ids=[
@@ -63,6 +63,7 @@ def test_oftnet(
     model_location_generator,
 ):
     skip_if_not_blackhole_20_cores(device)
+    device.disable_and_clear_program_cache()  # test hangs without this line on P150
     torch.manual_seed(42)
 
     # OFT configuration based on real model parameters
