@@ -32,7 +32,7 @@ void py_bind_conv2d(py::module& module) {
         module,
         ttnn::conv2d,
         R"doc(
-        Performs a 2D convolution between the input tensor and weight tensor. A 2D kernel (weights tensor) traverses the image (4D input tensor) and a dot dot product is computed over the overlapping region.
+        Performs a 2D convolution between the input tensor and weight tensor. A 2D kernel (weights tensor) traverses the image (4D input tensor) and a dot product is computed over the overlapping region.
 
         For more information, refer to [CNNs on Tenstorrent Architectures](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/CNNs/ttcnn.md) tech report.
 
