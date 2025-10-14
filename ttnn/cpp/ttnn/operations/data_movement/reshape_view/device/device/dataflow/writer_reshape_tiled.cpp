@@ -79,23 +79,20 @@ void kernel_main() {
 
 void kernel_main() {
     uint32_t num_templates = get_arg_val<uint32_t>(0);
-    const uint32_t output_base_addr = get_arg_val<uint32_t>(2);
-    uint32_t num_runs = get_arg_val<uint32_t>(1);
+    uint32_t num_short_runs = get_arg_val<uint32_t>(1);
+    uint32_t num_long_runs = get_arg_val<uint32_t>(2);
+    const uint32_t output_base_addr = get_arg_val<uint32_t>(3);
 
-    DPRINT << "all writer rt args: ";
-    for (uint32_t i = 0; i < 3 + num_templates * 3 + num_runs * 3; ++i) {
-        DPRINT << get_arg_val<uint32_t>(i) << " ";
-    }
-    DPRINT << "\n";
-
-    DPRINT << "start of writer kernel\n";
     constexpr uint32_t Tile_size_bytes = get_compile_time_arg_val(0);
     constexpr uint8_t element_sz_bytes = get_compile_time_arg_val(2);
-
     constexpr uint32_t cb_id_input = get_compile_time_arg_val(4);
-    constexpr uint32_t cb_id_working = get_compile_time_arg_val(5);  // scratch
+    constexpr uint32_t cb_id_working = get_compile_time_arg_val(5);
     constexpr auto output_args = TensorAccessorArgs<6>();
+
     const auto output_addrgen = TensorAccessor(output_args, output_base_addr, Tile_size_bytes);
+
+    DPRINT << "num_templates=" << num_templates << " num_short_runs=" << num_short_runs
+           << " num_long_runs=" << num_long_runs << "\n";
 
     cb_reserve_back(cb_id_working, 1);
     const uint32_t working_write_addr = get_write_ptr(cb_id_working);
@@ -107,28 +104,79 @@ void kernel_main() {
         uint32_t num_elements;
     };
     PatternTemplate templates[num_templates];
-    uint32_t tmpl_base = 3;
+    uint32_t tmpl_base = 4;
     for (uint32_t i = 0; i < num_templates; ++i) {
         templates[i].input_offset_stride = get_arg_val<uint32_t>(tmpl_base + i * 3 + 0);
         templates[i].output_offset_stride = get_arg_val<uint32_t>(tmpl_base + i * 3 + 1);
         templates[i].num_elements = get_arg_val<uint32_t>(tmpl_base + i * 3 + 2);
     }
 
-    uint32_t runs_base = tmpl_base + num_templates * 3;
+    uint32_t short_runs_base = tmpl_base + num_templates * 3;
+    uint32_t long_runs_base = short_runs_base + num_short_runs * 6;
+
     uint32_t input_base_addr, previous_input_page_idx = std::numeric_limits<uint32_t>::max();
-    DPRINT << "num of runs: " << num_runs << "\n";
     bool first = true;
-    for (uint32_t run_idx = 0; run_idx < num_runs; ++run_idx) {
-        uint32_t out_page_start = get_arg_val<uint32_t>(runs_base + run_idx * 10 + 0);
-        uint32_t out_page_end = get_arg_val<uint32_t>(runs_base + run_idx * 10 + 1);
-        uint32_t in_page_start = get_arg_val<uint32_t>(runs_base + run_idx * 10 + 2);
-        uint32_t pattern_template_index = get_arg_val<uint32_t>(runs_base + run_idx * 10 + 3);
-        uint32_t in_offset_start = get_arg_val<uint32_t>(runs_base + run_idx * 10 + 4);
-        uint32_t out_offset_start = get_arg_val<uint32_t>(runs_base + run_idx * 10 + 5);
-        uint32_t run_length = get_arg_val<uint32_t>(runs_base + run_idx * 10 + 6);
-        int32_t in_page_stride = get_arg_val<uint32_t>(runs_base + run_idx * 10 + 7);
-        int32_t in_offset_stride = get_arg_val<uint32_t>(runs_base + run_idx * 10 + 8);
-        int32_t out_offset_stride = get_arg_val<uint32_t>(runs_base + run_idx * 10 + 9);
+
+    // Process short runs (run_length = 1)
+    for (uint32_t i = 0; i < num_short_runs; ++i) {
+        uint32_t out_page_start = get_arg_val<uint32_t>(short_runs_base + i * 6 + 0);
+        uint32_t out_page_end = get_arg_val<uint32_t>(short_runs_base + i * 6 + 1);
+        uint32_t in_page_start = get_arg_val<uint32_t>(short_runs_base + i * 6 + 2);
+        uint32_t pattern_template_index = get_arg_val<uint32_t>(short_runs_base + i * 6 + 3);
+        uint32_t in_offset_start = get_arg_val<uint32_t>(short_runs_base + i * 6 + 4);
+        uint32_t out_offset_start = get_arg_val<uint32_t>(short_runs_base + i * 6 + 5);
+
+        const auto& tmpl = templates[pattern_template_index];
+
+        for (uint32_t out_page_idx = out_page_start; out_page_idx <= out_page_end; ++out_page_idx) {
+            uint32_t input_page_idx = in_page_start;
+            uint32_t input_offset = in_offset_start;
+            uint32_t output_offset = out_offset_start;
+
+            if (tmpl.num_elements == 0) {
+                continue;
+            }
+
+            if (first) {
+                cb_wait_front(cb_id_input, 1);
+                input_base_addr = get_read_ptr(cb_id_input);
+                previous_input_page_idx = input_page_idx;
+                first = false;
+            } else if (input_page_idx != previous_input_page_idx) {
+                noc_async_write_barrier();
+                cb_pop_front(cb_id_input, 1);
+                cb_wait_front(cb_id_input, 1);
+                input_base_addr = get_read_ptr(cb_id_input);
+                previous_input_page_idx = input_page_idx;
+            }
+
+            // For short runs, run_length is always 1
+            for (uint32_t seg = 0; seg < 1; ++seg) {
+                const uint32_t output_addr = working_write_addr + output_offset * element_sz_bytes;
+                const uint32_t input_addr = input_base_addr + input_offset * element_sz_bytes;
+                uint32_t szbytes = tmpl.num_elements * element_sz_bytes;
+                tt_memmove<false, true, false, Tile_size_bytes>(output_addr, input_addr, szbytes);
+            }
+
+            noc_async_write_barrier();
+            const uint64_t output_noc_addr = get_noc_addr(out_page_idx, output_addrgen);
+            enhanced_noc_async_write<Tile_size_bytes, true>(working_write_addr, output_noc_addr, Tile_size_bytes);
+            noc_async_write_barrier();
+        }
+    }
+
+    // Process long runs (run_length > 1) - similar structure with stride calculations
+    for (uint32_t i = 0; i < num_long_runs; ++i) {
+        uint32_t out_page_start = get_arg_val<uint32_t>(long_runs_base + i * 10 + 0);
+        uint32_t out_page_end = get_arg_val<uint32_t>(long_runs_base + i * 10 + 1);
+        uint32_t in_page_start = get_arg_val<uint32_t>(long_runs_base + i * 10 + 2);
+        uint32_t pattern_template_index = get_arg_val<uint32_t>(long_runs_base + i * 10 + 3);
+        uint32_t in_offset_start = get_arg_val<uint32_t>(long_runs_base + i * 10 + 4);
+        uint32_t out_offset_start = get_arg_val<uint32_t>(long_runs_base + i * 10 + 5);
+        uint32_t run_length = get_arg_val<uint32_t>(long_runs_base + i * 10 + 6);
+        int32_t in_page_stride = get_arg_val<uint32_t>(long_runs_base + i * 10 + 7);
+        int32_t in_offset_stride = get_arg_val<uint32_t>(long_runs_base + i * 10 + 8);
+        int32_t out_offset_stride = get_arg_val<uint32_t>(long_runs_base + i * 10 + 9);
 
         const auto& tmpl = templates[pattern_template_index];
         // For each output page in the run
@@ -140,10 +188,6 @@ void kernel_main() {
             if (tmpl.num_elements == 0) {
                 continue;
             }
-
-            DPRINT << "run_idx=" << run_idx << " out_page_idx=" << out_page_idx << "\n";
-            DPRINT << "input_page_idx=" << input_page_idx << " input_offset=" << input_offset
-                   << " output_offset=" << output_offset << "\n";
             if (first) {
                 cb_wait_front(cb_id_input, 1);
                 input_base_addr = get_read_ptr(cb_id_input);
@@ -162,15 +206,11 @@ void kernel_main() {
                 uint32_t seg_output_offset = output_offset + seg * tmpl.output_offset_stride;
 
                 const uint32_t output_addr = working_write_addr + seg_output_offset * element_sz_bytes;
-                DPRINT << "seg=" << seg << " seg_input_offset=" << seg_input_offset
-                       << " seg_output_offset=" << seg_output_offset << "\n";
-                DPRINT << "OUTPUT addr: " << output_addr << "\n";
                 const uint32_t input_addr = input_base_addr + seg_input_offset * element_sz_bytes;
 
                 uint32_t szbytes = tmpl.num_elements * element_sz_bytes;
                 tt_memmove<false, true, false, Tile_size_bytes>(output_addr, input_addr, szbytes);
             }
-            DPRINT << "after seg loop\n";
 
             noc_async_write_barrier();
             const uint64_t output_noc_addr = get_noc_addr(out_page_idx, output_addrgen);
