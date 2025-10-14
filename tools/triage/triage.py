@@ -150,30 +150,8 @@ def collection_serializer(separator: str):
 def triage_field(serialized_name: str | None = None, serializer: Callable[[Any], str] | None = None, verbose: int = 0):
     if serializer is None:
         serializer = default_serializer
-    return field(metadata={"recurse": False, "serialized_name": serialized_name, "serializer": serializer, "verbose": verbose})
-
-
-def combined_field(
-    additional_fields: str | list[str] | None = None, serialized_name: str | None = None, serializer=None, verbose: int = 0
-):
-    if additional_fields is None and serialized_name is None and serializer is None:
-        return field(metadata={"recurse": False, "dont_serialize": True})
-    assert (
-        additional_fields is not None and serialized_name is not None
-    ), "additional_fields and serialized_name must be provided."
-    if serializer is None:
-        serializer = default_serializer
-    # TODO: If serializer accepts single value, it should be wrapped around method that converts arguments to list and passes them to serializer
-    if not isinstance(additional_fields, list):
-        additional_fields = [additional_fields]
     return field(
-        metadata={
-            "recurse": False,
-            "additional_fields": additional_fields,
-            "serialized_name": serialized_name,
-            "serializer": serializer,
-            "verbose": verbose,
-        }
+        metadata={"recurse": False, "serialized_name": serialized_name, "serializer": serializer, "verbose": verbose}
     )
 
 
