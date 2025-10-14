@@ -446,6 +446,7 @@ std::tuple<Tensor, GlobalCompressedReshapeMap> compute_reshape_mapping_host_tens
         mapping_vector.emplace_back(reshape_map_output_page(
             output_page_idx, input_shape, output_shape, tile_dims_input, tile_dims_output, tile_shape, face_shape));
     }
+
     printf("initial mapping\n");
     for (uint32_t output_page_idx = 0; output_page_idx < num_output_pages; ++output_page_idx) {
         printf("Output Page %u:\n", output_page_idx);
@@ -697,15 +698,24 @@ tt::tt_metal::operation::ProgramWithCallbacks reshape_tiled_program_factory(
         size_t num_short_runs = 0, num_long_runs = 0;
 
         // Count runs by type
+        std::set<uint32_t> used_template_indices;
         for (const auto& run : compressed_map.page_pattern_runs) {
             if (run.output_page_index_end < page_idx_start || run.output_page_index_start >= page_idx_end) {
                 continue;
             }
+            used_template_indices.insert(run.pattern_template_index);
             if (run.run_length == 1) {
                 num_short_runs++;
             } else {
                 num_long_runs++;
             }
+        }
+        std::vector<uint32_t> global_to_local_template_map(compressed_map.pattern_templates.size(), UINT32_MAX);
+        std::vector<uint32_t> core_template_indices;
+        uint32_t local_idx = 0;
+        for (uint32_t global_idx : used_template_indices) {
+            global_to_local_template_map[global_idx] = local_idx++;
+            core_template_indices.push_back(global_idx);
         }
 
         // Pack short runs first, then long runs
@@ -716,12 +726,14 @@ tt::tt_metal::operation::ProgramWithCallbacks reshape_tiled_program_factory(
             uint32_t start = std::max(run.output_page_index_start, page_idx_start);
             uint32_t end = std::min(run.output_page_index_end, page_idx_end - 1);
 
+            uint32_t local_template_idx = global_to_local_template_map[run.pattern_template_index];
+
             if (run.run_length == 1) {
                 // Short format: 6 fields
                 core_rt_args.push_back(start);                       // output_page_index_start
                 core_rt_args.push_back(end);                         // output_page_index_end
                 core_rt_args.push_back(run.input_page_index_start);  // input_page_index_start
-                core_rt_args.push_back(run.pattern_template_index);  // pattern_template_index
+                core_rt_args.push_back(local_template_idx);          // pattern_template_index
                 core_rt_args.push_back(run.input_offset_start);      // input_offset_start
                 core_rt_args.push_back(run.output_offset_start);     // output_offset_start
             }
@@ -733,13 +745,14 @@ tt::tt_metal::operation::ProgramWithCallbacks reshape_tiled_program_factory(
             }
             uint32_t start = std::max(run.output_page_index_start, page_idx_start);
             uint32_t end = std::min(run.output_page_index_end, page_idx_end - 1);
+            uint32_t local_template_idx = global_to_local_template_map[run.pattern_template_index];
 
             if (run.run_length > 1) {
                 // Long format: 10 fields
                 core_rt_args.push_back(start);                        // output_page_index_start
                 core_rt_args.push_back(end);                          // output_page_index_end
                 core_rt_args.push_back(run.input_page_index_start);   // input_page_index_start
-                core_rt_args.push_back(run.pattern_template_index);   // pattern_template_index
+                core_rt_args.push_back(local_template_idx);           // pattern_template_index
                 core_rt_args.push_back(run.input_offset_start);       // input_offset_start
                 core_rt_args.push_back(run.output_offset_start);      // output_offset_start
                 core_rt_args.push_back(run.run_length);               // run_length
@@ -751,13 +764,14 @@ tt::tt_metal::operation::ProgramWithCallbacks reshape_tiled_program_factory(
 
         // Build final RT args vector
         std::vector<uint32_t> reader_runtime_args;
-        reader_runtime_args.push_back(compressed_map.pattern_templates.size());  // num_templates
+        reader_runtime_args.push_back(used_template_indices.size());             // num_templates
         reader_runtime_args.push_back(num_short_runs);                           // num_short_runs
         reader_runtime_args.push_back(num_long_runs);                            // num_long_runs
         reader_runtime_args.push_back(input_buffer->address());                  // buffer_addr
 
         // Add pattern templates
-        for (const auto& tmpl : compressed_map.pattern_templates) {
+        for (uint32_t global_idx : core_template_indices) {
+            const auto& tmpl = compressed_map.pattern_templates[global_idx];
             reader_runtime_args.push_back(tmpl.input_offset_stride);
             reader_runtime_args.push_back(tmpl.output_offset_stride);
             reader_runtime_args.push_back(tmpl.num_elements);
@@ -773,11 +787,12 @@ tt::tt_metal::operation::ProgramWithCallbacks reshape_tiled_program_factory(
 
         // Same for writer
         std::vector<uint32_t> writer_runtime_args;
-        writer_runtime_args.push_back(compressed_map.pattern_templates.size());
+        writer_runtime_args.push_back(used_template_indices.size());
         writer_runtime_args.push_back(num_short_runs);
         writer_runtime_args.push_back(num_long_runs);
         writer_runtime_args.push_back(output_buffer->address());
-        for (const auto& tmpl : compressed_map.pattern_templates) {
+        for (uint32_t global_idx : core_template_indices) {
+            const auto& tmpl = compressed_map.pattern_templates[global_idx];
             writer_runtime_args.push_back(tmpl.input_offset_stride);
             writer_runtime_args.push_back(tmpl.output_offset_stride);
             writer_runtime_args.push_back(tmpl.num_elements);
