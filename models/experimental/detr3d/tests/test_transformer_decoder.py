@@ -4,7 +4,7 @@
 
 import torch
 import pytest
-from models.experimental.detr3d.reference.detr3d_model import (
+from models.experimental.detr3d.reference.model_3detr import (
     TransformerDecoder as ref_model,
     TransformerDecoderLayer as ref_layer,
 )

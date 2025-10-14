@@ -11,7 +11,7 @@ from models.common.utility_functions import comp_allclose, comp_pcc, skip_for_gr
 from ttnn.model_preprocessing import preprocess_model_parameters
 from models.experimental.detr3d.ttnn.custom_preprocessing import create_custom_mesh_preprocessor
 
-from models.experimental.detr3d.reference.detr3d_model import (
+from models.experimental.detr3d.reference.model_3detr import (
     TransformerDecoderLayer,
     build_decoder,
 )
@@ -20,6 +20,7 @@ from models.experimental.detr3d.ttnn.transformer_decoder import (
     TTTransformerDecoder,
 )
 from models.experimental.detr3d.common import load_torch_model_state
+from models.experimental.detr3d.reference.model_config import Detr3dArgs
 
 
 @torch.no_grad()
@@ -167,7 +168,8 @@ def test_transformer_decoder_inference(device):
     args.device = device
 
     # Build reference decoder
-    reference_model = build_decoder(args)
+    torch_args = Detr3dArgs()
+    reference_model = build_decoder(torch_args)
     load_torch_model_state(reference_model, "decoder")
 
     # Create test inputs with the specified shapes

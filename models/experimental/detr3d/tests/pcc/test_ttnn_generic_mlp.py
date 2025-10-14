@@ -6,7 +6,7 @@ import ttnn
 import torch
 import pytest
 from models.experimental.detr3d.ttnn.generic_mlp import TttnnGenericMLP
-from models.experimental.detr3d.reference.detr3d_model import GenericMLP
+from models.experimental.detr3d.reference.model_3detr import GenericMLP
 from ttnn.model_preprocessing import preprocess_model_parameters
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.experimental.detr3d.ttnn.custom_preprocessing import create_custom_mesh_preprocessor

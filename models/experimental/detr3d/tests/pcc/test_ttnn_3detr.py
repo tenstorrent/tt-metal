@@ -10,8 +10,8 @@ from tests.ttnn.utils_for_testing import comp_pcc
 from ttnn.model_preprocessing import preprocess_model_parameters
 from models.experimental.detr3d.ttnn.custom_preprocessing import create_custom_mesh_preprocessor
 
-from models.experimental.detr3d.ttnn.tt_3detr import build_ttnn_3detr
-from models.experimental.detr3d.reference.detr3d_model import build_3detr
+from models.experimental.detr3d.ttnn.model_3detr import build_ttnn_3detr
+from models.experimental.detr3d.reference.model_3detr import build_3detr
 from models.experimental.detr3d.reference.model_utils import SunrgbdDatasetConfig
 from models.experimental.detr3d.reference.model_config import Detr3dArgs
 from models.experimental.detr3d.common import load_torch_model_state

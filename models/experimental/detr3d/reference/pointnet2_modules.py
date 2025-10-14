@@ -1,23 +1,49 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
-# SPDX-License-Identifier: Apache-2.0
 # Copyright (c) Facebook, Inc. and its affiliates.
+# TODO: Check copyright
+""" Pointnet2 layers.
+Modified based on: https://github.com/erikwijmans/Pointnet2_PyTorch
+Extended with the following:
+1. Uniform sampling in each local region (sample_uniformly)
+2. Return sampled points indices to support votenet.
 """
-Modified from https://github.com/facebookresearch/3detr
-PointnetSAModuleVotes Class
-
-Uses CUDA equivalent Pytorch code for
-- QueryAndGroup()
-- gather_operation
-- furthest_point_sample
-"""
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 from typing import List
-from models.experimental.detr3d.reference import torch_pointnet2_ops as pointnet2_utils
-from models.experimental.detr3d.reference import pytorch_utils as pt_utils
+from models.experimental.detr3d.reference.model_utils import (
+    QueryAndGroup,
+    GroupAll,
+    GatherOperation,
+    FurthestPointSampling,
+    Conv2d,
+)
+
+
+class SharedMLP(nn.Sequential):
+    def __init__(
+        self,
+        args: List[int],
+        *,
+        bn: bool = False,
+        activation=nn.ReLU(inplace=True),
+        preact: bool = False,
+        first: bool = False,
+        name: str = "",
+    ):
+        super().__init__()
+
+        for i in range(len(args) - 1):
+            self.add_module(
+                name + "layer{}".format(i),
+                Conv2d(
+                    args[i],
+                    args[i + 1],
+                    bn=(not first or not preact or (i != 0)) and bn,
+                    activation=activation if (not first or not preact or (i != 0)) else None,
+                    preact=preact,
+                ),
+            )
 
 
 class PointnetSAModuleVotes(nn.Module):
@@ -53,7 +79,7 @@ class PointnetSAModuleVotes(nn.Module):
         self.ret_unique_cnt = ret_unique_cnt
 
         if npoint is not None:
-            self.grouper = pointnet2_utils.QueryAndGroup(
+            self.grouper = QueryAndGroup(
                 radius,
                 nsample,
                 use_xyz=use_xyz,
@@ -63,12 +89,14 @@ class PointnetSAModuleVotes(nn.Module):
                 ret_unique_cnt=ret_unique_cnt,
             )
         else:
-            raise NotImplementedError("Only QueryAndGroup is supported")
+            self.grouper = GroupAll(use_xyz, ret_grouped_xyz=True)
 
         mlp_spec = mlp
         if use_xyz and len(mlp_spec) > 0:
             mlp_spec[0] += 3
-        self.mlp_module = pt_utils.SharedMLP(mlp_spec, bn=bn)
+        self.mlp_module = SharedMLP(mlp_spec, bn=bn)
+        self.gather_operation = GatherOperation()
+        self.furthest_point_sample = FurthestPointSampling()
 
     def forward(
         self, xyz: torch.Tensor, features: torch.Tensor = None, inds: torch.Tensor = None
@@ -95,13 +123,11 @@ class PointnetSAModuleVotes(nn.Module):
 
         xyz_flipped = xyz.transpose(1, 2).contiguous()
         if inds is None:
-            inds = pointnet2_utils.furthest_point_sample(xyz, self.npoint)
+            inds = self.furthest_point_sample(xyz, self.npoint)
         else:
             assert inds.shape[1] == self.npoint
         new_xyz = (
-            pointnet2_utils.gather_operation(xyz_flipped, inds).transpose(1, 2).contiguous()
-            if self.npoint is not None
-            else None
+            self.gather_operation(xyz_flipped, inds).transpose(1, 2).contiguous() if self.npoint is not None else None
         )
 
         if not self.ret_unique_cnt:
