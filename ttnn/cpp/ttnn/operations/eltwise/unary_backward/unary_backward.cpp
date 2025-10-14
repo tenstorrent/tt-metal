@@ -308,7 +308,7 @@ std::vector<std::optional<Tensor>> ExecuteUnaryBackwardSqrt::invoke(
     float t_inf = std::numeric_limits<float>::infinity();
 
     input_grad = input_grad.value_or(ttnn::empty_like(input));
-    ttnn::sqrt(input, output_mem_config, input_grad);
+    ttnn::sqrt(input, false, output_mem_config, input_grad);
     ttnn::multiply(
         grad,
         ttnn::reciprocal(ttnn::multiply(input_grad.value(), 2.0, std::nullopt, output_mem_config), output_mem_config),
@@ -472,7 +472,7 @@ std::vector<std::optional<ttnn::Tensor>> ExecuteUnaryBackwardRsqrt::invoke(
     float t_inf = std::numeric_limits<float>::infinity();
     float t_nan = std::nanf("");
 
-    ttnn::rsqrt(input, output_mem_config, input_grad);
+    ttnn::rsqrt(input, false, output_mem_config, input_grad);
     ttnn::power(input_grad.value(), 3, output_mem_config, input_grad);
     ttnn::multiply(
         ttnn::multiply(grad, input_grad.value(), std::nullopt, output_mem_config),
@@ -564,7 +564,8 @@ std::vector<Tensor> ExecuteUnaryBackwardAcosh::invoke(
     const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor in_sq = ttnn::square(input, output_mem_config);
-    Tensor in_rsqrt = ttnn::rsqrt(ttnn::subtract(in_sq, 1.0, std::nullopt, output_mem_config), output_mem_config);
+    Tensor in_rsqrt =
+        ttnn::rsqrt(ttnn::subtract(in_sq, 1.0, std::nullopt, output_mem_config), false, output_mem_config);
     Tensor grad_a = ttnn::multiply(grad, in_rsqrt, std::nullopt, output_mem_config);
     float t_nan = tt::tt_metal::hal::get_nan();
     float t_inf = tt::tt_metal::hal::get_inf();
@@ -611,6 +612,7 @@ std::vector<Tensor> ExecuteUnaryBackwardAcos::invoke(
     Tensor in_rsqrt = ttnn::rsqrt(
         ttnn::add(
             ttnn::multiply(neg_in, input, std::nullopt, output_mem_config), 1.0f, std::nullopt, output_mem_config),
+        false,
         output_mem_config);
     in_rsqrt = ttnn::neg(in_rsqrt, output_mem_config);
     Tensor grad_a = ttnn::multiply(grad, in_rsqrt, std::nullopt, output_mem_config);
