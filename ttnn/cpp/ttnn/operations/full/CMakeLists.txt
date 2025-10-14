@@ -7,8 +7,8 @@ TT_ENABLE_UNITY_BUILD(ttnn_op_full)
 set_target_properties(
     ttnn_op_full
     PROPERTIES
-        VERIFY_INTERFACE_HEADER_SETS
-            FALSE
+        INTERFACE_HEADER_SETS_TO_VERIFY
+            api
 )
 
 file(GLOB_RECURSE kernels device/kernels/*)
@@ -16,6 +16,10 @@ file(GLOB_RECURSE kernels device/kernels/*)
 target_sources(
     ttnn_op_full
     PUBLIC
+        FILE_SET api
+        TYPE HEADERS
+        BASE_DIRS ${FixmeOpAPIDir}
+        FILES
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
