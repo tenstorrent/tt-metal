@@ -50,6 +50,7 @@ jobs:
             cmd: |
               ./build/test/tt_metal/unit_tests_eth
               ./build/test/tt_metal/unit_tests_tunneling
+              TT_METAL_SLOW_DISPATCH_MODE=true ./build/test/tt_metal/unit_tests_eth
             timeout: 15
           - name: multi erisc tests
             cmd: |
