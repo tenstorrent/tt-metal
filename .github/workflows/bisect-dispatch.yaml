@@ -129,5 +129,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: bisect-nd-results
-          path: docker-job/bisect_nd_results.csv
+          path: bisect_nd_results.csv
           if-no-files-found: ignore
