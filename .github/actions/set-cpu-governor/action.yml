@@ -32,28 +32,27 @@ runs:
         set -euxo pipefail
 
         governor="${{ inputs.governor }}"
-        cores_set=0
-        cores_failed=0
+        echo "🔧 Setting CPU governor to: $governor for all cores"
 
-        echo "🔧 Setting CPU governor to: $governor"
+        # Set governor for all CPU cores using -r flag
+        if sudo cpufreq-set -r -g "$governor"; then
+          echo "✅ Successfully set $governor governor for all CPU cores"
+        else
+          echo "❌ Failed to set $governor governor"
+          exit 1
+        fi
 
-        # Iterate through all CPU cores
+        # Verify the setting on a few cores for confirmation
+        echo "🔍 Verifying governor settings:"
         for cpu in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
           if [ -f "$cpu" ]; then
             cpu_num=$(echo "$cpu" | grep -o 'cpu[0-9]*' | grep -o '[0-9]*')
-            echo "Setting $governor governor for CPU $cpu_num"
-
-            if sudo cpufreq-set -c "$cpu_num" -g "$governor" 2>/dev/null; then
-              cores_set=$((cores_set + 1))
-            else
-              echo "⚠️  Failed to set governor for CPU $cpu_num"
-              cores_failed=$((cores_failed + 1))
+            current_governor=$(cat "$cpu" 2>/dev/null || echo "unknown")
+            echo "CPU $cpu_num: $current_governor"
+            # Only show first few cores to avoid too much output
+            if [ "$cpu_num" -ge 3 ]; then
+              break
             fi
           fi
         done
-
-        echo "✅ Successfully set governor for $cores_set CPU cores"
-        if [ $cores_failed -gt 0 ]; then
-          echo "⚠️  Failed to set governor for $cores_failed CPU cores"
-        fi
       shell: bash
