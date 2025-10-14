@@ -18,7 +18,13 @@ from ttnn.model_preprocessing import (
     fold_batch_norm2d_into_conv2d,
     infer_ttnn_module_args,
 )
+import sys
 
+sys.settrace(
+    lambda frame, event, arg: print(f"Called: {frame.f_code.co_name}")
+    if event == "call" and "Conv_with_split" in frame.f_code.co_name
+    else None
+)
 
 from models.experimental.functional_petr.reference.petr import PETR
 from models.experimental.functional_petr.reference.petr_head import PETRHead, pos2posemb3d
@@ -31,7 +37,7 @@ from models.experimental.functional_petr.tt.ttnn_petr import ttnn_PETR
 from torch.nn import Conv2d, Linear
 
 from torch import nn
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc
 
 
 def move_to_device(object, device):
@@ -472,3 +478,91 @@ def test_petr(device, reset_seeds):
     assert_with_pcc(
         output[0]["pts_bbox"]["labels_3d"], ttnn_output[0]["pts_bbox"]["labels_3d"], pcc=0.99
     )  # -0.0063037415388272665
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+def test_backbone_standalone_vs_in_pipeline(device, reset_seeds):
+    """Compare backbone when called standalone vs in full PETR pipeline"""
+
+    inputs = torch.load(
+        "models/experimental/functional_petr/resources/golden_input_inputs_sample1.pt", weights_only=False
+    )
+
+    torch_model = PETR(use_grid_mask=True)
+    # weights_state_dict = torch.load(
+    #     "models/experimental/functional_petr/resources/petr_vovnet_gridmask_p4_800x320-e2191752.pth",
+    #     weights_only=False
+    # )["state_dict"]
+    # torch_model.load_state_dict(weights_state_dict)
+    torch_model.eval()
+
+    # Setup
+    parameters_petr_vovnetcp = preprocess_model_parameters(
+        initialize_model=lambda: torch_model.img_backbone,
+        custom_preprocessor=create_custom_preprocessor_vovnetcp(None),
+        device=None,
+    )
+    stem_parameters = stem_parameters_preprocess(torch_model.img_backbone)
+
+    from models.experimental.functional_petr.tt.ttnn_vovnetcp import ttnn_VoVNetCP
+
+    ttnn_backbone = ttnn_VoVNetCP(parameters=parameters_petr_vovnetcp, stem_parameters=stem_parameters, device=device)
+
+    # Get the image after reshape (6, 3, 320, 800)
+    img_torch = inputs["imgs"].view(6, 3, 320, 800)
+
+    print("\n" + "=" * 80)
+    print("TEST 1: Backbone on full batch (6 cameras at once)")
+    print("=" * 80)
+
+    # Torch: Process all 6 cameras at once
+    with torch.no_grad():
+        torch_feats_batch = torch_model.img_backbone(img_torch)
+        if isinstance(torch_feats_batch, dict):
+            torch_feats_batch = list(torch_feats_batch.values())
+
+    # TTNN: Process all 6 cameras at once (like your standalone test probably did)
+    img_ttnn_batch = ttnn.from_torch(img_torch, layout=ttnn.TILE_LAYOUT, device=device)
+    img_ttnn_batch_nhwc = ttnn.permute(img_ttnn_batch, (0, 2, 3, 1))
+    ttnn_feats_batch = ttnn_backbone(device=device, x=img_ttnn_batch_nhwc)
+
+    for stage_idx in range(2):
+        ttnn_feat_torch = ttnn.to_torch(ttnn.permute(ttnn_feats_batch[stage_idx], (0, 3, 1, 2)))
+        passed, pcc = check_with_pcc(torch_feats_batch[stage_idx], ttnn_feat_torch, pcc=0.99)
+        print(f"Stage {stage_idx+4} (batch): PCC = {pcc:.6f}")
+
+    print("\n" + "=" * 80)
+    print("TEST 2: Backbone camera-by-camera (as in your PETR pipeline)")
+    print("=" * 80)
+
+    # TTNN: Process camera-by-camera (as your extract_img_feat does)
+    ttnn_feats_per_cam = []
+    for cam_idx in range(6):
+        single_img_torch = img_torch[cam_idx : cam_idx + 1]
+        single_img_ttnn = ttnn.from_torch(single_img_torch, layout=ttnn.TILE_LAYOUT, device=device)
+        single_img_nhwc = ttnn.permute(single_img_ttnn, (0, 2, 3, 1))
+        single_feats = ttnn_backbone(device=device, x=single_img_nhwc)
+        ttnn_feats_per_cam.append(single_feats)
+
+    # Combine the per-camera features
+    ttnn_feats_combined = []
+    for stage_idx in range(2):
+        stage_feats = [ttnn_feats_per_cam[cam][stage_idx] for cam in range(6)]
+        stacked_feat = ttnn.concat(stage_feats, dim=0)
+        ttnn_feats_combined.append(stacked_feat)
+
+    for stage_idx in range(2):
+        ttnn_feat_torch = ttnn.to_torch(ttnn.permute(ttnn_feats_combined[stage_idx], (0, 3, 1, 2)))
+        passed, pcc = check_with_pcc(torch_feats_batch[stage_idx], ttnn_feat_torch, pcc=0.99)
+        print(f"Stage {stage_idx+4} (per-camera): PCC = {pcc:.6f}")
+
+    print("\n" + "=" * 80)
+    print("TEST 3: Compare batch vs per-camera TTNN outputs")
+    print("=" * 80)
+
+    for stage_idx in range(2):
+        ttnn_batch_torch = ttnn.to_torch(ttnn.permute(ttnn_feats_batch[stage_idx], (0, 3, 1, 2)))
+        ttnn_percam_torch = ttnn.to_torch(ttnn.permute(ttnn_feats_combined[stage_idx], (0, 3, 1, 2)))
+        passed, pcc = check_with_pcc(ttnn_batch_torch, ttnn_percam_torch, pcc=0.99)
+        print(f"Stage {stage_idx+4} (TTNN batch vs per-camera): PCC = {pcc:.6f}")
+        print(f"  Max diff: {(ttnn_batch_torch - ttnn_percam_torch).abs().max():.6f}")
