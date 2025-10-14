@@ -16,12 +16,12 @@ import torch
 import ttnn
 from models.experimental.detr3d.ttnn.pointnet_samodule_votes import TtnnPointnetSAModuleVotes
 from models.experimental.detr3d.ttnn.masked_transformer_encoder import (
-    TTTransformerEncoderLayer,
-    TtMaskedTransformerEncoder,
+    TtnnTransformerEncoderLayer,
+    TtnnMaskedTransformerEncoder,
     EncoderLayerArgs,
 )
-from models.experimental.detr3d.ttnn.transformer_decoder import TTTransformerDecoder
-from models.experimental.detr3d.ttnn.generic_mlp import TttnnGenericMLP
+from models.experimental.detr3d.ttnn.transformer_decoder import TtnnTransformerDecoder
+from models.experimental.detr3d.ttnn.generic_mlp import TtnnGenericMLP
 from models.experimental.detr3d.reference.model_3detr import PositionEmbeddingCoordsSine
 
 
@@ -42,7 +42,7 @@ def build_ttnn_preencoder(args):
 
 def build_ttnn_encoder(args):
     if args.enc_type in ["masked"]:
-        encoder_layer = TTTransformerEncoderLayer
+        encoder_layer = TtnnTransformerEncoderLayer
         interim_downsampling = TtnnPointnetSAModuleVotes(
             radius=0.4,
             nsample=32,
@@ -55,7 +55,7 @@ def build_ttnn_encoder(args):
         )
 
         masking_radius = [math.pow(x, 2) for x in [0.4, 0.8, 1.2]]
-        encoder = TtMaskedTransformerEncoder(
+        encoder = TtnnMaskedTransformerEncoder(
             encoder_layer=encoder_layer,
             num_layers=args.enc_nlayers,
             interim_downsampling=interim_downsampling,
@@ -74,7 +74,7 @@ def build_ttnn_encoder(args):
 
 
 def build_ttnn_decoder(args):
-    decoder = TTTransformerDecoder(
+    decoder = TtnnTransformerDecoder(
         device=args.device,
         decoder_layer_config={
             "d_model": args.dec_dim,
@@ -93,7 +93,7 @@ def build_ttnn_3detr(args, dataset_config):
     pre_encoder = build_ttnn_preencoder(args)
     encoder = build_ttnn_encoder(args)
     decoder = build_ttnn_decoder(args)
-    model = TTModel3DETR(
+    model = TtnnModel3DETR(
         pre_encoder,
         encoder,
         decoder,
@@ -112,7 +112,7 @@ def build_ttnn_3detr(args, dataset_config):
 # 9: Detr3d model
 
 
-class TTModel3DETR(LightweightModule):
+class TtnnModel3DETR(LightweightModule):
     """
     Main 3DETR model. Consists of the following learnable sub-models
     - pre_encoder: takes raw point cloud, subsamples it and projects into "D" dimensions
@@ -149,13 +149,13 @@ class TTModel3DETR(LightweightModule):
         self.torch_module = torch_module
         self.parameters = parameters
         self.device = device
-        self.encoder_to_decoder_projection = TttnnGenericMLP(
+        self.encoder_to_decoder_projection = TtnnGenericMLP(
             torch_module.encoder_to_decoder_projection,
             parameters.encoder_to_decoder_projection,
             device,
         )
         self.pos_embedding = PositionEmbeddingCoordsSine(d_pos=decoder_dim, pos_type=position_embedding, normalize=True)
-        self.query_projection = TttnnGenericMLP(
+        self.query_projection = TtnnGenericMLP(
             torch_module.query_projection,
             parameters.query_projection,
             device,
@@ -169,27 +169,27 @@ class TTModel3DETR(LightweightModule):
 
     def build_mlp_heads(self):
         self.mlp_heads = {
-            "sem_cls_head": TttnnGenericMLP(
+            "sem_cls_head": TtnnGenericMLP(
                 self.torch_module.mlp_heads.sem_cls_head,
                 self.parameters.mlp_heads.sem_cls_head,
                 self.device,
             ),
-            "center_head": TttnnGenericMLP(
+            "center_head": TtnnGenericMLP(
                 self.torch_module.mlp_heads.center_head,
                 self.parameters.mlp_heads.center_head,
                 self.device,
             ),
-            "size_head": TttnnGenericMLP(
+            "size_head": TtnnGenericMLP(
                 self.torch_module.mlp_heads.size_head,
                 self.parameters.mlp_heads.size_head,
                 self.device,
             ),
-            "angle_cls_head": TttnnGenericMLP(
+            "angle_cls_head": TtnnGenericMLP(
                 self.torch_module.mlp_heads.angle_cls_head,
                 self.parameters.mlp_heads.angle_cls_head,
                 self.device,
             ),
-            "angle_residual_head": TttnnGenericMLP(
+            "angle_residual_head": TtnnGenericMLP(
                 self.torch_module.mlp_heads.angle_residual_head,
                 self.parameters.mlp_heads.angle_residual_head,
                 self.device,

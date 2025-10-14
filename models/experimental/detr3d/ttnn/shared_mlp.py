@@ -3,11 +3,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
+from models.common.lightweightmodule import LightweightModule
 from models.experimental.detr3d.ttnn.common import TtnnConv2D
 
 
-class TtnnSharedMLP:
+class TtnnSharedMLP(LightweightModule):
     def __init__(self, module, parameters, device):
+        super().__init__()
         self.device = device
         self.parameters = parameters
         self.conv1 = TtnnConv2D(
@@ -35,7 +37,7 @@ class TtnnSharedMLP:
             return_dims=True,
         )
 
-    def __call__(self, features):
+    def forward(self, features):
         shape = features.shape
         conv1, shape = self.conv1(features, shape)
         conv2, shape = self.conv2(conv1, shape)

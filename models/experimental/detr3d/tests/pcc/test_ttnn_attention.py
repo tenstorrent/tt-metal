@@ -6,15 +6,13 @@ import ttnn
 import torch
 import pytest
 
-from models.common.utility_functions import comp_pcc
-from models.experimental.detr3d.ttnn.multihead_attention import TTNNMultiheadAttention
-
-from tests.ttnn.utils_for_testing import assert_with_pcc
 from loguru import logger
+from models.common.utility_functions import comp_pcc, comp_allclose
+from models.experimental.detr3d.ttnn.multihead_attention import TtnnMultiheadAttention
 from models.experimental.detr3d.common import load_torch_model_state
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 13684}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize("batch_size", [128])
 @pytest.mark.parametrize("seq_len", [1])
 @pytest.mark.parametrize("d_model", [256])
@@ -27,7 +25,7 @@ def test_multihead_attention(device, batch_size, seq_len, d_model, nhead, reset_
     load_torch_model_state(torch_mha, "encoder.layers.0.self_attn")
 
     # Create TTNN model
-    ttnn_mha = TTNNMultiheadAttention(d_model, nhead, device)
+    ttnn_mha = TtnnMultiheadAttention(d_model, nhead, device)
 
     # Extract and convert PyTorch weights to TTNN format
     with torch.no_grad():
@@ -88,11 +86,16 @@ def test_multihead_attention(device, batch_size, seq_len, d_model, nhead, reset_
     ttnn_output_torch = ttnn.to_torch(ttnn_output)
     ttnn_output_torch = torch.permute(ttnn_output_torch, (1, 0, 2))
 
-    # Calculate and log PCC before assertion
-    passing, pcc_message = comp_pcc(torch_output, ttnn_output_torch, 0.99)
-    logger.info(f"PCC: {pcc_message}")
-    logger.info(f"PCC: {torch_output.shape}")
-    logger.info(f"PCC: {ttnn_output_torch.shape}")
-
     # Compare outputs with PCC (Pearson Correlation Coefficient)
-    assert_with_pcc(torch_output, ttnn_output_torch, 0.99)
+    passing, pcc_message = comp_pcc(torch_output, ttnn_output_torch, 0.99)
+    logger.info(f"Output PCC: {pcc_message}")
+    logger.info(comp_allclose(torch_output, ttnn_output_torch))
+    logger.info(f"Output shape - PyTorch: {torch_output.shape}, TTNN: {ttnn_output_torch.shape}")
+    logger.info(f"Batch: {batch_size}, Seq: {seq_len}, D_model: {d_model}, Heads: {nhead}")
+
+    if passing:
+        logger.info("MultiheadAttention Test Passed!")
+    else:
+        logger.warning("MultiheadAttention Test Failed!")
+
+    assert passing, f"PCC value is lower than 0.99. Check implementation! {pcc_message}"

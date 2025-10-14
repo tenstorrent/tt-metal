@@ -4,10 +4,10 @@
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.experimental.detr3d.ttnn.multihead_attention import TTNNMultiheadAttention
+from models.experimental.detr3d.ttnn.multihead_attention import TtnnMultiheadAttention
 
 
-class TTTransformerDecoderLayer(LightweightModule):
+class TtnnTransformerDecoderLayer(LightweightModule):
     def __init__(
         self,
         device,
@@ -24,8 +24,11 @@ class TTTransformerDecoderLayer(LightweightModule):
         self.dim_feedforward = dim_feedforward
         self.normalize_before = normalize_before
 
-        self.self_attn = TTNNMultiheadAttention(d_model, nhead, device)
-        self.multihead_attn = TTNNMultiheadAttention(d_model, nhead, device)
+        # Initialize attention layers with parameters
+        self_attn_params = parameters.get("self_attn") if parameters is not None else None
+        multihead_attn_params = parameters.get("multihead_attn") if parameters is not None else None
+        self.self_attn = TtnnMultiheadAttention(d_model, nhead, device, parameters=self_attn_params)
+        self.multihead_attn = TtnnMultiheadAttention(d_model, nhead, device, parameters=multihead_attn_params)
 
         # Load preprocessed parameters
         if parameters is not None:
@@ -42,28 +45,6 @@ class TTTransformerDecoderLayer(LightweightModule):
 
     def load_parameters(self, parameters):
         """Load preprocessed parameters from the preprocessor"""
-        # Self-attention weights
-        if "self_attn" in parameters:
-            self.self_attn.q_weight = parameters["self_attn"].get("q_weight")
-            self.self_attn.k_weight = parameters["self_attn"].get("k_weight")
-            self.self_attn.v_weight = parameters["self_attn"].get("v_weight")
-            self.self_attn.q_bias = parameters["self_attn"].get("q_bias")
-            self.self_attn.k_bias = parameters["self_attn"].get("k_bias")
-            self.self_attn.v_bias = parameters["self_attn"].get("v_bias")
-            self.self_attn.out_weight = parameters["self_attn"].get("out_weight")
-            self.self_attn.out_bias = parameters["self_attn"].get("out_bias")
-
-        # Cross-attention weights
-        if "multihead_attn" in parameters:
-            self.multihead_attn.q_weight = parameters["multihead_attn"].get("q_weight")
-            self.multihead_attn.k_weight = parameters["multihead_attn"].get("k_weight")
-            self.multihead_attn.v_weight = parameters["multihead_attn"].get("v_weight")
-            self.multihead_attn.q_bias = parameters["multihead_attn"].get("q_bias")
-            self.multihead_attn.k_bias = parameters["multihead_attn"].get("k_bias")
-            self.multihead_attn.v_bias = parameters["multihead_attn"].get("v_bias")
-            self.multihead_attn.out_weight = parameters["multihead_attn"].get("out_weight")
-            self.multihead_attn.out_bias = parameters["multihead_attn"].get("out_bias")
-
         # Feedforward weights
         if "linear1" in parameters:
             self.ff_weights1 = parameters["linear1"]["weight"]
@@ -191,7 +172,7 @@ class TTTransformerDecoderLayer(LightweightModule):
         return tgt, None
 
 
-class TTTransformerDecoder(LightweightModule):
+class TtnnTransformerDecoder(LightweightModule):
     def __init__(
         self,
         device,
@@ -210,7 +191,7 @@ class TTTransformerDecoder(LightweightModule):
         self.layers = []
         for i in range(num_layers):
             layer_params = parameters.layers[i] if parameters else None
-            layer = TTTransformerDecoderLayer(
+            layer = TtnnTransformerDecoderLayer(
                 device=device,
                 d_model=decoder_layer_config["d_model"],
                 nhead=decoder_layer_config["nhead"],
@@ -283,7 +264,7 @@ class TTTransformerDecoder(LightweightModule):
             pass
 
         if self.return_intermediate:
-            # TTNN doesn't support torch.stack directly, return list for now
+            # TTNN doesn't support torch.stack using ttnn.concat for now
             intermediate = [ttnn.reshape(t, (1, *t.shape)) for t in intermediate]
             intermediate = ttnn.concat(intermediate, dim=0, memory_config=ttnn.L1_MEMORY_CONFIG)
             return intermediate, attns if return_attn_weights else None
