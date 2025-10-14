@@ -220,8 +220,10 @@ inline void riscv_wait(uint32_t cycles) {
 // Flush i$ on ethernet riscs
 inline __attribute__((always_inline)) void flush_erisc_icache() {
 #ifdef ARCH_BLACKHOLE
-#pragma GCC unroll 2048
-    for (int i = 0; i < 2048; i++) {
+    // 2K is enough to touch all entries but after running base firmware there seems to be some
+    // state in the i$ which is sticking and adding 1K more nops resolves it.
+#pragma GCC unroll 3072
+    for (int i = 0; i < 3072; i++) {
         __asm__ volatile("nop");
     }
 #else
