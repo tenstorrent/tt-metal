@@ -70,6 +70,7 @@
 #include "tt_metal/impl/dispatch/data_collection.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/impl/program/dispatch.hpp"
+#include "tt_metal/impl/buffers/circular_buffer.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"
 #include "tt_metal/jit_build/genfiles.hpp"
 #include <umd/device/types/core_coordinates.hpp>

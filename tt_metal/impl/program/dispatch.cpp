@@ -30,7 +30,7 @@
 
 #include <tt_stl/assert.hpp>
 #include "buffer.hpp"
-#include "circular_buffer.hpp"
+#include "impl/buffers/circular_buffer.hpp"
 #include "circular_buffer_constants.h"
 #include "core_coord.hpp"
 #include "device.hpp"

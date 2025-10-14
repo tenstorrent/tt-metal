@@ -2,8 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt-metalium/circular_buffer.hpp>
+#include "impl/buffers/circular_buffer.hpp"
+
 #include <buffer.hpp>
-#include <circular_buffer.hpp>
 #include <global_circular_buffer.hpp>
 #include <array>
 #include <ranges>
@@ -77,7 +79,7 @@ CircularBuffer::CircularBuffer(const CBDescriptor& descriptor) :
 
 void CircularBuffer::validate_set_config_attributes() {
     for (uint8_t buffer_index = 0; buffer_index < NUM_CIRCULAR_BUFFERS; buffer_index++) {
-        std::optional<DataFormat> data_format_spec = this->config_.data_formats().at(buffer_index);
+        std::optional<tt::DataFormat> data_format_spec = this->config_.data_formats().at(buffer_index);
         std::optional<uint32_t> page_size_spec = this->config_.page_sizes().at(buffer_index);
 
         bool df_set = data_format_spec.has_value();
@@ -137,7 +139,7 @@ uint32_t CircularBuffer::num_pages(uint32_t buffer_index) const {
     return num_pages;
 }
 
-DataFormat CircularBuffer::data_format(uint32_t buffer_index) const {
+tt::DataFormat CircularBuffer::data_format(uint32_t buffer_index) const {
     if (not this->uses_buffer_index(buffer_index)) {
         TT_THROW(
             "Cannot access data format for buffer index {} because circular buffer is not configured on that index",
@@ -204,7 +206,7 @@ std::size_t CircularBufferIndexMetadata::page_size() const { return buffer->page
 
 std::size_t CircularBufferIndexMetadata::num_pages() const { return buffer->num_pages(idx); }
 
-DataFormat CircularBufferIndexMetadata::data_format() const { return buffer->data_format(idx); }
+tt::DataFormat CircularBufferIndexMetadata::data_format() const { return buffer->data_format(idx); }
 
 }  // namespace tt_metal
 

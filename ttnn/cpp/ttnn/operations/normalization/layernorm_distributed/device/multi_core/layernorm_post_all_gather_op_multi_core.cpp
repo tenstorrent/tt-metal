@@ -60,7 +60,6 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
     std::optional<bool> use_2d_core_grid) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     using tt::tt_metal::CBHandle;
-    using tt::tt_metal::CircularBuffer;
     using tt::tt_metal::CircularBufferConfig;
 
     const bool is_rmsnorm = norm_type == LayerNormDistributedType::RMSNORM;

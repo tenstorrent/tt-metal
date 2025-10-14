@@ -5,6 +5,7 @@
 #pragma once
 
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/circular_buffer.hpp>
 
 namespace tt::tt_metal {
 

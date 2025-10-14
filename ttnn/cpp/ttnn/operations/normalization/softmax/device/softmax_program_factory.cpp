@@ -911,7 +911,6 @@ SoftmaxProgramFactoryAttentionOptimized::cached_program_t SoftmaxProgramFactoryA
 
     // Circular buffers
     using tt::tt_metal::CBHandle;
-    using tt::tt_metal::CircularBuffer;
     using tt::tt_metal::CircularBufferConfig;
     auto c_in0_config = CircularBufferConfig(in0_t * in0_tile_size, {{tt::CBIndex::c_0, in0_cb_data_format}})
                             .set_page_size(tt::CBIndex::c_0, in0_tile_size);
@@ -1456,7 +1455,6 @@ SoftmaxShardedProgramFactoryAttentionOptimized::cached_program_t SoftmaxShardedP
     // Create circular buffers
     // in0 sharded
     using tt::tt_metal::CBHandle;
-    using tt::tt_metal::CircularBuffer;
     using tt::tt_metal::CircularBufferConfig;
     auto c_in0_config = CircularBufferConfig(in0_CB_size, {{tt::CBIndex::c_0, in0_cb_data_format}})
                             .set_page_size(tt::CBIndex::c_0, in0_tile_size)
