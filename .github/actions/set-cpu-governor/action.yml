@@ -8,25 +8,6 @@ inputs:
 runs:
   using: "composite"
   steps:
-    - name: Check and install cpufrequtils
-      run: |
-        set -euo pipefail
-
-        # Check if cpufreq-set is already available
-        if command -v cpufreq-set >/dev/null 2>&1; then
-          echo "✅ cpufrequtils is already installed"
-          cpufreq-set --version || echo "cpufreq-set found but version check failed"
-        else
-          echo "📦 Installing cpufrequtils..."
-          apt-get update
-          apt-get install -y --no-install-recommends cpufrequtils
-          echo "✅ cpufrequtils installed successfully"
-        fi
-
-        # Verify installation
-        command -v cpufreq-set || { echo "❌ cpufreq-set installation failed"; exit 1; }
-      shell: bash
-
     - name: Set CPU governor to ${{ inputs.governor }}
       run: |
         set -euo pipefail
@@ -34,8 +15,8 @@ runs:
         governor="${{ inputs.governor }}"
         echo "🔧 Setting CPU governor to: $governor for all cores"
 
-        # Set governor for all CPU cores using -r flag
-        if sudo cpufreq-set -r -g "$governor"; then
+        # Set governor for all CPU cores by writing directly to sysfs
+        if echo "$governor" | sudo tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor > /dev/null; then
           echo "✅ Successfully set $governor governor for all CPU cores"
         else
           echo "❌ Failed to set $governor governor"
@@ -49,10 +30,6 @@ runs:
             cpu_num=$(echo "$cpu" | grep -o 'cpu[0-9]*' | grep -o '[0-9]*')
             current_governor=$(cat "$cpu" 2>/dev/null || echo "unknown")
             echo "CPU $cpu_num: $current_governor"
-            # Only show first few cores to avoid too much output
-            if [ "$cpu_num" -ge 3 ]; then
-              break
-            fi
           fi
         done
       shell: bash
