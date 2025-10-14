@@ -433,6 +433,9 @@ inline void llk_pack_reduce_mask_config() {
     _llk_pack_reduce_mask_config_<untilize, dim>();
 }
 
+// OPTIMIZED, DO NOT CALL UNLESS REGULAR TILE SIZE
+inline void llk_pack_reduce_max_row_mask_config() { _llk_pack_reduce_max_row_mask_config_(); }
+
 inline void llk_pack_reduce_mask_clear() { _llk_pack_reduce_mask_clear_(); }
 
 // FIXME-WH-UPLIFT
