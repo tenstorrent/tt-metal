@@ -104,10 +104,10 @@ void TopologyMapper::build_mapping() {
     // Only 1 host builds the mapping the rest will wait and use the mapping from the 1st host
     if (*tt::tt_metal::MetalContext::instance().global_distributed_context().rank() == 0) {
         // Find corners per host: map<host, set<AsicID>>
-        auto host_corner_map = build_host_corner_mappings();
+        auto host_corners_map = build_host_corner_mappings();
 
         // Locate mesh corners per mesh
-        auto mesh_corners_map = build_mesh_corners_mappings(host_corner_map, mesh_id_host_names);
+        auto mesh_corners_map = build_mesh_corners_mappings(host_corners_map, mesh_id_host_names);
 
         // Populate fabric_node_id_to_asic_id mapping for each mesh
         populate_fabric_node_id_to_asic_id_mappings(mesh_corners_map, mesh_id_host_names);

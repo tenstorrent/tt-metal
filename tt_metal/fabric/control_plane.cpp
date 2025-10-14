@@ -13,6 +13,7 @@
 #include <limits>
 #include <map>
 #include <memory>
+#include <optional>
 #include <ostream>
 #include <queue>
 #include <set>
@@ -445,13 +446,16 @@ void ControlPlane::init_control_plane(
     this->physical_system_descriptor_ = std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(
         driver, distributed_context, &tt::tt_metal::MetalContext::instance().hal(), rtoptions);
     this->local_mesh_binding_ = this->initialize_local_mesh_binding();
-    this->topology_mapper_ = std::make_unique<tt::tt_fabric::TopologyMapper>(*this->routing_table_generator_->mesh_graph, *this->physical_system_descriptor_, this->local_mesh_binding_);
 
     this->initialize_distributed_contexts();
 
     if (logical_mesh_chip_id_to_physical_chip_id_mapping.has_value()) {
+        // Do not initialize topology mapper if user provided physical chip mapping
+        this->topology_mapper_ = nullptr;
         this->load_physical_chip_mapping(logical_mesh_chip_id_to_physical_chip_id_mapping->get());
     } else {
+        this->topology_mapper_ = std::make_unique<tt::tt_fabric::TopologyMapper>(
+            *this->routing_table_generator_->mesh_graph, *this->physical_system_descriptor_, this->local_mesh_binding_);
         this->load_physical_chip_mapping(
             topology_mapper_->get_local_logical_mesh_chip_id_to_physical_chip_id_mapping());
     }
