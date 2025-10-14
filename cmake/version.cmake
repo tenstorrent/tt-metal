@@ -18,6 +18,7 @@ function(ParseGitDescribe)
                 ${GIT_EXECUTABLE} describe --abbrev=10 --first-parent --dirty=-dirty
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
             OUTPUT_VARIABLE version
+            RESULT_VARIABLE git_describe_result
             OUTPUT_STRIP_TRAILING_WHITESPACE
             ERROR_QUIET
         )
@@ -26,9 +27,14 @@ function(ParseGitDescribe)
                 ${GIT_EXECUTABLE} rev-parse --short=10 HEAD
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
             OUTPUT_VARIABLE VERSION_HASH
+            RESULT_VARIABLE git_rev_parse_result
             OUTPUT_STRIP_TRAILING_WHITESPACE
             ERROR_QUIET
         )
+        if(NOT git_describe_result EQUAL 0 AND NOT git_rev_parse_result EQUAL 0)
+            message(WARNING "Git failed, using fallback version")
+            set(version ${fallbackVersion})
+        endif()
     endif()
     if(NOT VERSION_HASH)
         set(VERSION_HASH ${fallbackHash})
