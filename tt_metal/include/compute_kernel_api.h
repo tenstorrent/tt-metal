@@ -574,7 +574,6 @@ ALWI void topk_tile_init() { MATH((llk_math_eltwise_unary_sfpu_topk_init<true>()
 template <int num_rows = 9>
 ALWI void max_reduce_with_indices(uint32_t idst, uint32_t idst_idx) {
     // support for num_rows != 9 is tracked here: https://github.com/tenstorrent/tt-metal/issues/17202
-    static_assert(num_rows == 9, "num_rows must be one of: {9}");
     MATH((llk_math_eltwise_binary_sfpu_max_pool_with_indices<true, DST_ACCUM_MODE, num_rows>(idst, idst_idx)));
 }
 

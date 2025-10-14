@@ -61,9 +61,6 @@ void validate_pool2d(
             "Input HW {} will overflow uint16 indices max {}",
             input_h * input_w,
             std::numeric_limits<uint16_t>::max());
-        auto kernel_h = sliding_window_config.window_hw.first;
-        auto kernel_w = sliding_window_config.window_hw.second;
-        TT_FATAL(kernel_h * kernel_w == 9, "only kernel sizes equal to 9 are supported, got {}x{}", kernel_h, kernel_w);
 
         TT_FATAL(output_layout == Layout::ROW_MAJOR, "Only ROW_MAJOR supported when return_indices is true");
     }
