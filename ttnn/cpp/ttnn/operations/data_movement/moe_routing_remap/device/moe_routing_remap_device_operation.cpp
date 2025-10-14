@@ -17,7 +17,37 @@ MoeRoutingRemapDeviceOperation::program_factory_t MoeRoutingRemapDeviceOperation
 
 void MoeRoutingRemapDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    // TODO!
+    const auto& input_routing_weights = tensor_args.input_routing_weights;
+    TT_FATAL(
+        input_routing_weights.layout() == tt::tt_metal::Layout::ROW_MAJOR, "input tensor expected to be row major");
+
+    const auto& input_routing_weights_shape = input_routing_weights.logical_shape();
+    TT_FATAL(
+        input_routing_weights_shape.rank() == 2 && input_routing_weights_shape[0] == 1, "expected input shape [1,E]");
+    const auto num_cluster_experts = input_routing_weights_shape[1];
+
+    TT_FATAL(
+        operation_attributes.non_zero_weight_size <= num_cluster_experts,
+        "Number of non Zero weights must be less than or equal to weights");
+
+    const auto& expert_parallel_size = operation_attributes.expert_parallel_size;
+    TT_FATAL(num_cluster_experts % expert_parallel_size == 0, "Number of experts must be evenly divisible by cluster");
+
+    const auto cluster_axis = operation_attributes.cluster_axis;
+    TT_FATAL(cluster_axis == 0 || cluster_axis == 1, "Invalid cluster axis, should be 0 (rows), or 1 (cols)");
+
+    const auto mesh_view = input_routing_weights.device()->get_view();
+    TT_FATAL(
+        expert_parallel_size == (cluster_axis == 0) ? mesh_view.num_cols() : mesh_view.num_rows(),
+        "expert parallel size should be the same as size of cluster axis");
+
+    const auto& optional_output_routing_weights = tensor_args.optional_output_routing_weights;
+    if (optional_output_routing_weights.has_value()) {
+        const auto& provided_spec = optional_output_routing_weights.value().tensor_spec();
+        const auto expected_spec = compute_output_specs(operation_attributes, tensor_args);
+
+        TT_FATAL(provided_spec == expected_spec, "Invalid output Tensor Spec, expected {}", expected_spec);
+    }
 }
 
 MoeRoutingRemapDeviceOperation::spec_return_value_t MoeRoutingRemapDeviceOperation::compute_output_specs(
