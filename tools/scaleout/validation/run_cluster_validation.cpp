@@ -143,8 +143,9 @@ PhysicalSystemDescriptor generate_physical_system_descriptor(const InputArgs& in
     } else {
         log_output_rank0("Running Physical Discovery");
         auto& context = tt::tt_metal::MetalContext::instance();
+        auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
         auto physical_system_descriptor = tt::tt_metal::PhysicalSystemDescriptor(
-            context.get_distributed_context_ptr(), &context.hal(), context.rtoptions().get_mock_enabled());
+            context.get_distributed_context_ptr(), &context.hal(), context.rtoptions().get_mock_enabled(), cluster.get_driver(), true);
         log_output_rank0("Physical Discovery Complete");
         log_output_rank0("Detected Hosts: " + log_hostnames(physical_system_descriptor.get_all_hostnames()));
         return physical_system_descriptor;
@@ -259,8 +260,14 @@ int main(int argc, char* argv[]) {
     auto physical_system_descriptor = generate_physical_system_descriptor(input_args);
 
     if (*distributed_context.rank() == 0) {
-        auto missing_asic_topology = validate_connectivity(input_args, physical_system_descriptor);
-        reset_ethernet_links(physical_system_descriptor, missing_asic_topology);
+        bool first_iter = true;
+        AsicTopology missing_asic_topology = {};
+        while (missing_asic_topology.size() or first_iter) {
+            missing_asic_topology = validate_connectivity(input_args, physical_system_descriptor);
+            reset_ethernet_links(physical_system_descriptor, missing_asic_topology);
+            physical_system_descriptor.run_discovery(true);
+            first_iter = false;
+        }
     }
     eth_connections_healthy = generate_link_metrics(
         physical_system_descriptor,
