@@ -36,7 +36,7 @@ def allocate_vllm_kv_cache(kv_cache_shape, dtype, num_layers, dp_model: List[Tra
                     mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
                     layout=ttnn.TILE_LAYOUT,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    dtype=ttnn.bfloat8_b,
+                    dtype=ttnn.bfloat16,
                     cache_file_name=tt_cache_path / f"empty_cache_paged_attention{kv_cache_shape}",
                 )
                 for lp in (cache_kv, cache_kv)

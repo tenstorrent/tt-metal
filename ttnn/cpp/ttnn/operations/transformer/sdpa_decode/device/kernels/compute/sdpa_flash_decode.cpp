@@ -182,19 +182,19 @@ void MAIN {
     } else {
         mm_init(cb_q_in, cb_k_in, cb_qk_im);
     }
-    cb_wait_front(cb_q_in, q_chunk_tiles);
-    for (uint8_t r = 0; r < 32; ++r) {
-        SliceRange sr1 = SliceRange{
-            .h0 = static_cast<uint8_t>(r), .h1 = static_cast<uint8_t>(r + 1), .hs = 1, .w0 = 0, .w1 = 32, .ws = 1};
-        DPRINT_DATA0({
-            DPRINT << (uint)r << " --READ--cb_q_in-- "
-                   << TileSlice(cb_q_in, 0, sr1, TSLICE_INPUT_CB, TSLICE_RD_PTR, true, false) << ENDL();
-        });
-        DPRINT_UNPACK(
-            { DPRINT << (uint)r << " --READ--cb_q_in-- " << TileSlice(cb_q_in, 0, sr1, true, false) << ENDL(); });
-        DPRINT_PACK(
-            { DPRINT << (uint)r << " --READ--cb_q_in-- " << TileSlice(cb_q_in, 0, sr1, true, false) << ENDL(); });
-    }
+    // cb_wait_front(cb_q_in, q_chunk_tiles);
+    // for (uint8_t r = 0; r < 32; ++r) {
+    //     SliceRange sr1 = SliceRange{
+    //         .h0 = static_cast<uint8_t>(r), .h1 = static_cast<uint8_t>(r + 1), .hs = 1, .w0 = 0, .w1 = 32, .ws = 1};
+    //     DPRINT_DATA0({
+    //         DPRINT << (uint)r << " --READ--cb_q_in-- "
+    //                << TileSlice(cb_q_in, 0, sr1, TSLICE_INPUT_CB, TSLICE_RD_PTR, true, false) << ENDL();
+    //     });
+    //     DPRINT_UNPACK(
+    //         { DPRINT << (uint)r << " --READ--cb_q_in-- " << TileSlice(cb_q_in, 0, sr1, true, false) << ENDL(); });
+    //     DPRINT_PACK(
+    //         { DPRINT << (uint)r << " --READ--cb_q_in-- " << TileSlice(cb_q_in, 0, sr1, true, false) << ENDL(); });
+    // }
 
     // cb_wait_front(cb_v_in, vDHt * Sk_chunk_t_dynamic);
     // for (uint8_t r = 0; r < 32; ++r) {
@@ -310,25 +310,27 @@ void MAIN {
 #endif
 
                 cb_wait_front(cb_k_in, Sk_chunk_t_dynamic * DHt);
-                for (uint8_t r = 0; r < 32; ++r) {
-                    SliceRange sr1 = SliceRange{
-                        .h0 = static_cast<uint8_t>(r),
-                        .h1 = static_cast<uint8_t>(r + 1),
-                        .hs = 1,
-                        .w0 = 0,
-                        .w1 = 32,
-                        .ws = 1};
-                    DPRINT_DATA0({
-                        DPRINT << (uint)r << " --READ--cb_k_in-- "
-                               << TileSlice(cb_k_in, 0, sr1, TSLICE_INPUT_CB, TSLICE_RD_PTR, true, false) << ENDL();
-                    });
-                    DPRINT_UNPACK({
-                        DPRINT << (uint)r << " --READ--cb_k_in-- " << TileSlice(cb_k_in, 0, sr1, true, false) << ENDL();
-                    });
-                    DPRINT_PACK({
-                        DPRINT << (uint)r << " --READ--cb_k_in-- " << TileSlice(cb_k_in, 0, sr1, true, false) << ENDL();
-                    });
-                }
+                // for (uint8_t r = 0; r < 32; ++r) {
+                //     SliceRange sr1 = SliceRange{
+                //         .h0 = static_cast<uint8_t>(r),
+                //         .h1 = static_cast<uint8_t>(r + 1),
+                //         .hs = 1,
+                //         .w0 = 0,
+                //         .w1 = 32,
+                //         .ws = 1};
+                //     DPRINT_DATA0({
+                //         DPRINT << (uint)r << " --READ--cb_k_in-- "
+                //                << TileSlice(cb_k_in, 0, sr1, TSLICE_INPUT_CB, TSLICE_RD_PTR, true, false) << ENDL();
+                //     });
+                //     DPRINT_UNPACK({
+                //         DPRINT << (uint)r << " --READ--cb_k_in-- " << TileSlice(cb_k_in, 0, sr1, true, false) <<
+                //         ENDL();
+                //     });
+                //     DPRINT_PACK({
+                //         DPRINT << (uint)r << " --READ--cb_k_in-- " << TileSlice(cb_k_in, 0, sr1, true, false) <<
+                //         ENDL();
+                //     });
+                // }
 
                 /* QK = Q_CHUNK @ K_CHUNK */
                 cb_matmul_blocks(
@@ -374,6 +376,35 @@ void MAIN {
                     }
                 }
 
+                DPRINT << "WAITING FOR cb_qk_im..." << ENDL();
+                // cb_wait_front(cb_qk_im, qk_chunk_tiles_dynamic);
+                // for (uint8_t r = 0; r < 32; ++r) {
+                //     SliceRange sr = SliceRange{.h0 = static_cast<uint8_t>(r), .h1 = static_cast<uint8_t>(r + 1), .hs
+                //     = 1, .w0 = 0, .w1 = 32, .ws = 1}; DPRINT_DATA0({
+                //         DPRINT << "cb_qk_im row" << (uint)r << " (TR1 OUTPUT/WR_PTR) "
+                //                << TileSlice(cb_qk_im, 0, sr, TSLICE_OUTPUT_CB, TSLICE_WR_PTR, true, false)
+                //                << ENDL();
+                //     });
+                // }
+                // DPRINT << "END OF WAITING FOR cb_qk_im..." << ENDL();
+                // }
+                // SliceRange sr = SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1};
+                // DPRINT_DATA0({
+                //     DPRINT << "cb_qk_im row0 (TR1 OUTPUT/WR_PTR) "
+                //            << TileSlice(cb_qk_im, 0, sr, TSLICE_OUTPUT_CB, TSLICE_WR_PTR, true, false)
+                //            << ENDL();
+                // });
+                // for (uint8_t r = 0; r < 32; ++r) {
+                //     SliceRange sr1 = SliceRange{.h0 = static_cast<uint8_t>(r), .h1 = static_cast<uint8_t>(r + 1), .hs
+                //     = 1, .w0 = 0, .w1 = 32, .ws = 1};
+                //     // DPRINT_DATA0({ DPRINT << (uint)r << " --BEFORE--cb_qk_im-- " << TileSlice(cb_qk_im, 0, sr1,
+                //     TSLICE_INPUT_CB, TSLICE_RD_PTR, true, false) << ENDL(); }); DPRINT_UNPACK({ DPRINT << (uint)r <<
+                //     " --BEFORE--cb_qk_im-- " << TileSlice(cb_qk_im, 0, sr1, true, false) << ENDL(); });
+                //     // DPRINT_PACK({ DPRINT << (uint)r << " --BEFORE--cb_qk_im-- " << TileSlice(cb_qk_im, 0, sr1,
+                //     true, false) << ENDL(); });
+                // }
+                // DPRINT << "END OF MAX REDUCE_C PRINTING..." << ENDL();
+
                 /**
                  * OPTIMIZATION
                  * Typically, scores are multiplied by a scalar here, but an optimization was employed
@@ -383,7 +414,6 @@ void MAIN {
 
                 reconfig_data_format(cb_qk_im, cb_identity_scale_in);
                 pack_reconfig_data_format(cb_cur_max);
-
                 /**
                  * OPTIMIZATION
                  * reduce_c can perform both reduce_max and eltwise max with previous result.
@@ -392,10 +422,17 @@ void MAIN {
                  * else:
                  *  cur_max = max(qk, dim=-1)
                  */
+                if (k_chunk > k_chunk_start) {
+                    DPRINT << "do_eltwise_max is false" << ENDL();
+                }
                 DPRINT << "Computing the max reduction on cb_cur_max ..." << ENDL();
                 reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_qk_im, cb_identity_scale_in, Sq_chunk_t, vector_mode>(
                     cb_cur_max, cb_prev_max, Sk_chunk_t_dynamic, k_chunk > k_chunk_start);
+                DPRINT << "WAITING FOR cb_cur_max..." << ENDL();
+                DPRINT << "END OF MAX REDUCE_C ..." << ENDL();
 
+                // cb_pop_front(cb_cur_max, 1);
+                DPRINT << "END OF MAX REDUCE_C PRINTING..." << ENDL();
                 /* QK -= cb_cur_max */
                 /* QK = exp(QK)*/
                 reconfig_data_format(cb_qk_im, cb_cur_max);

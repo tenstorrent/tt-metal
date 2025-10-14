@@ -16,7 +16,7 @@
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/reduce.h"
 #include "debug/dprint.h"
-
+// #include "tt_train/sources/ttml/metal/ops/common/dataflow_utils.hpp"
 /******************************************************************************
  *                                                                             *
  *                   Common Functions for Compute Kernels                      *
@@ -95,18 +95,25 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, uint32_t cols, bool do_eltwise_
         pack_tile(reduce_dst_idx, out_cb);
         release_dst();
     }
-    // for (uint8_t r = 0; r < 32; ++r) {
-    //     SliceRange sr1 = SliceRange{.h0 = static_cast<uint8_t>(r), .h1 = static_cast<uint8_t>(r + 1), .hs = 1, .w0 =
-    //     0, .w1 = 32, .ws = 1};
-    //     // On data movement RISCs, tiles can be printed from either the CB read or write pointers. Also need to
-    //     specify whether
-    //     // the CB is input or output.
-    //     DPRINT_DATA0({ DPRINT << (uint)r << " --READ-- reduce out_cb-- " << TileSlice(out_cb, 0, sr1,
-    //     TSLICE_OUTPUT_CB, TSLICE_RD_PTR, true, false) << ENDL(); });
-    //     // Unpacker RISC only has rd_ptr and only input CBs, so no extra args
-    //     DPRINT_PACK({ DPRINT << (uint)r << " --READ-- reduce out_cb-- " << TileSlice(out_cb, 0, sr1, true, false) <<
-    //     ENDL(); });
+    // if (do_eltwise_max) {
+    //     DPRINT << "do_eltwise_max is true" << ENDL();
     // }
+    if (PoolType::SUM == pool_type) {
+        DPRINT << "PoolType::SUM is true" << ENDL();
+    } else {
+        DPRINT << "PoolType::MAX is true" << ENDL();
+
+        // for (uint8_t r = 0; r < 32; ++r) {
+        //     SliceRange sr1 = SliceRange{.h0 = static_cast<uint8_t>(r), .h1 = static_cast<uint8_t>(r + 1), .hs = 1,
+        //     .w0 = 0, .w1 = 32, .ws = 1};
+        //     //DPRINT_DATA0({ DPRINT << (uint)r << " --AFTER--TR1--out_cb-- " << TileSlice(out_cb, 0, sr1,
+        //     TSLICE_OUTPUT_CB, TSLICE_WR_PTR, true, false) << ENDL(); });
+        //     // DPRINT_UNPACK({ DPRINT << (uint)r << " --AFTER--TR0--out_cb-- " << TileSlice(out_cb, 0, sr1, true,
+        //     false) << ENDL(); }); DPRINT_PACK({ DPRINT << (uint)r << " --AFTER-- TR2 --out_cb-- " <<
+        //     TileSlice(out_cb, 0, sr1, true, false) << ENDL(); });
+        // }
+        // DPRINT << "END OF PRINTING out_cb..." << ENDL();
+    }
     cb_push_back(out_cb, rows);
     reduce_uninit();
 }
@@ -245,6 +252,7 @@ void add_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
 
     add_tiles_init(in0_cb, in1_cb);
     cb_wait_front(in0_cb, num_tiles);
+
     cb_wait_front(in1_cb, num_tiles);
     for (uint32_t i = 0; i < num_tiles; i++) {
         acquire_dst();
@@ -252,6 +260,7 @@ void add_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
         cb_pop_front(in0_cb, 1);
         cb_reserve_back(in0_cb, 1);
         pack_tile(0, in0_cb);
+        // print in0_cb here
         cb_push_back(in0_cb, 1);
         release_dst();
     }
