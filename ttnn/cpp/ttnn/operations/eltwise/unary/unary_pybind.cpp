@@ -2133,7 +2133,7 @@ void py_module(py::module& module) {
         "negative_slope",
         "The slope parameter for the Leaky ReLU function",
         "",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(FLOAT32, BFLOAT16, BFLOAT8_B)doc");
     bind_unary_operation_with_float_parameter(
         module,
         ttnn::fill,
