@@ -6,7 +6,6 @@ import os
 
 import pytest
 import torch
-from diffusers import AutoencoderKL, StableDiffusionPipeline
 from loguru import logger
 from ttnn.model_preprocessing import preprocess_model_parameters
 
@@ -14,7 +13,12 @@ import ttnn
 from models.common.utility_functions import is_blackhole, is_wormhole_b0, profiler
 from models.demos.wormhole.stable_diffusion.common import SD_L1_SMALL_SIZE, SD_TRACE_REGION_SIZE
 from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
-from models.demos.wormhole.stable_diffusion.sd_helper_funcs import run
+from models.demos.wormhole.stable_diffusion.sd_helper_funcs import (
+    STABLE_DIFFUSION_V1_4_MODEL_LOCATION,
+    get_refference_unet,
+    get_refference_vae,
+    run,
+)
 from models.demos.wormhole.stable_diffusion.sd_pndm_scheduler import TtPNDMScheduler
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_unet_2d_condition_model_new_conv import (
     UNet2DConditionModel as UNet2D,
@@ -58,14 +62,7 @@ def test_stable_diffusion_unet_trace(device, is_ci_env, is_ci_v2_env, model_loca
     profiler.clear()
     torch.manual_seed(0)
 
-    model_location = model_location_generator("stable-diffusion-v1-4", download_if_ci_v2=True, ci_v2_timeout_in_s=1800)
-    pipe = StableDiffusionPipeline.from_pretrained(
-        "CompVis/stable-diffusion-v1-4" if not is_ci_v2_env else model_location,
-        torch_dtype=torch.float32,
-        local_files_only=is_ci_env or is_ci_v2_env,
-    )
-    torch_model = pipe.unet
-    torch_model.eval()
+    torch_model = get_refference_unet(is_ci_env, is_ci_v2_env, model_location_generator)
     config = torch_model.config
 
     # Setup scheduler
@@ -75,7 +72,7 @@ def test_stable_diffusion_unet_trace(device, is_ci_env, is_ci_v2_env, model_loca
     ttnn_scheduler.set_timesteps(4)
 
     parameters = preprocess_model_parameters(
-        model_name="CompVis/stable-diffusion-v1-4",
+        model_name=STABLE_DIFFUSION_V1_4_MODEL_LOCATION,
         initialize_model=lambda: torch_model,
         custom_preprocessor=custom_preprocessor,
         device=device,
@@ -188,14 +185,7 @@ def test_stable_diffusion_vae_trace(device, is_ci_env, is_ci_v2_env, model_locat
     profiler.clear()
     torch.manual_seed(0)
 
-    model_location = model_location_generator(
-        "stable-diffusion-v1-4/vae", download_if_ci_v2=True, ci_v2_timeout_in_s=1800
-    )
-    vae = AutoencoderKL.from_pretrained(
-        "CompVis/stable-diffusion-v1-4" if not is_ci_v2_env else model_location,
-        subfolder="vae" if not is_ci_v2_env else None,
-        local_files_only=is_ci_env or is_ci_v2_env,
-    )
+    vae = get_refference_vae(is_ci_env, is_ci_v2_env, model_location_generator)
     ttnn_model = Vae(torch_vae=vae, device=device)
 
     input_channels = 4
@@ -293,15 +283,8 @@ def test_stable_diffusion_perf(
 
     # setup pytorch model
     torch.manual_seed(0)
-    model_location = model_location_generator("stable-diffusion-v1-4", download_if_ci_v2=True, ci_v2_timeout_in_s=1800)
-    pipe = StableDiffusionPipeline.from_pretrained(
-        "CompVis/stable-diffusion-v1-4" if not is_ci_v2_env else model_location,
-        torch_dtype=torch.float32,
-        local_files_only=is_ci_env or is_ci_v2_env,
-    )
-    model = pipe.unet
-    vae = pipe.vae
-    model.eval()
+    model = get_refference_unet(is_ci_env, is_ci_v2_env, model_location_generator)
+    vae = get_refference_vae(is_ci_env, is_ci_v2_env, model_location_generator)
     config = model.config
 
     # setup scheduler
@@ -321,7 +304,7 @@ def test_stable_diffusion_perf(
     ttnn_scheduler.set_timesteps(num_inference_steps)
 
     parameters = preprocess_model_parameters(
-        model_name="CompVis/stable-diffusion-v1-4",
+        model_name=STABLE_DIFFUSION_V1_4_MODEL_LOCATION,
         initialize_model=lambda: model,
         custom_preprocessor=custom_preprocessor,
         device=device,

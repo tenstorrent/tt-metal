@@ -5,12 +5,12 @@
 
 import pytest
 import torch
-from diffusers import StableDiffusionPipeline
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
 from models.demos.wormhole.stable_diffusion.common import SD_L1_SMALL_SIZE
 from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
+from models.demos.wormhole.stable_diffusion.sd_helper_funcs import get_refference_unet
 from models.demos.wormhole.stable_diffusion.tests.parameterizations import TRANSFORMER_PARAMETERIZATIONS
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_basic_transformer_block import basic_transformer_block
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
@@ -42,24 +42,15 @@ def test_basic_transformer_block_512x512(
 
     N, C, H, W = input_shape
 
-    model_location = model_location_generator(
-        "stable-diffusion-v1-4/unet", download_if_ci_v2=True, ci_v2_timeout_in_s=1800
-    )
-    pipe = StableDiffusionPipeline.from_pretrained(
-        "CompVis/stable-diffusion-v1-4" if not is_ci_v2_env else model_location,
-        torch_dtype=torch.float32,
-        local_files_only=is_ci_env or is_ci_v2_env,
-    )
-    model = pipe.unet
-    model.eval()
-    config = model.config
+    unet = get_refference_unet(is_ci_env, is_ci_v2_env, model_location_generator)
+    config = unet.config
 
     if block == "up":
-        basic_transformer = pipe.unet.up_blocks[block_index].attentions[attention_index].transformer_blocks[0]
+        basic_transformer = unet.up_blocks[block_index].attentions[attention_index].transformer_blocks[0]
     elif block == "down":
-        basic_transformer = pipe.unet.down_blocks[block_index].attentions[attention_index].transformer_blocks[0]
+        basic_transformer = unet.down_blocks[block_index].attentions[attention_index].transformer_blocks[0]
     elif block == "mid":
-        basic_transformer = pipe.unet.mid_block.attentions[0].transformer_blocks[0]
+        basic_transformer = unet.mid_block.attentions[0].transformer_blocks[0]
 
     parameters = preprocess_model_parameters(
         initialize_model=lambda: basic_transformer, custom_preprocessor=custom_preprocessor, device=device

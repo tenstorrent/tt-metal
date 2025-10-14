@@ -5,13 +5,13 @@
 
 import pytest
 import torch
-from diffusers import StableDiffusionPipeline
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
 from models.common.utility_functions import torch_random
 from models.demos.wormhole.stable_diffusion.common import SD_L1_SMALL_SIZE
 from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
+from models.demos.wormhole.stable_diffusion.sd_helper_funcs import get_refference_unet
 from models.demos.wormhole.stable_diffusion.tests.parameterizations import DOWN_MID_UP_BLOCKS_HIDDEN_STATES_INFO
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_unet_mid_block_2d_cross_attn_new_conv import (
     unet_mid_block_2d_cross_attn,
@@ -42,16 +42,7 @@ def test_cross_attention_midblock_512x512(
     model_location_generator,
 ):
     # Initialize PyTorch component
-    model_location = model_location_generator(
-        "stable-diffusion-v1-4/unet", download_if_ci_v2=True, ci_v2_timeout_in_s=1800
-    )
-    pipe = StableDiffusionPipeline.from_pretrained(
-        "CompVis/stable-diffusion-v1-4" if not is_ci_v2_env else model_location,
-        torch_dtype=torch.float32,
-        local_files_only=is_ci_env or is_ci_v2_env,
-    )
-    unet = pipe.unet
-    unet.eval()
+    unet = get_refference_unet(is_ci_env, is_ci_v2_env, model_location_generator)
     torch_midblock = unet.mid_block
 
     # Initialize ttnn component

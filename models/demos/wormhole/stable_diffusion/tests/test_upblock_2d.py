@@ -4,13 +4,13 @@
 
 import pytest
 import torch
-from diffusers import StableDiffusionPipeline
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
 from models.common.utility_functions import torch_random
 from models.demos.wormhole.stable_diffusion.common import SD_L1_SMALL_SIZE
 from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
+from models.demos.wormhole.stable_diffusion.sd_helper_funcs import get_refference_unet
 from models.demos.wormhole.stable_diffusion.tests.parameterizations import DOWN_MID_UP_BLOCKS_HIDDEN_STATES_INFO
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_upblock_2d_new_conv import upblock_2d
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
@@ -40,16 +40,9 @@ def test_upblock_512x512(
     is_ci_v2_env,
     model_location_generator,
 ):
-    model_location = model_location_generator("stable-diffusion-v1-4", download_if_ci_v2=True, ci_v2_timeout_in_s=1800)
-    pipe = StableDiffusionPipeline.from_pretrained(
-        "CompVis/stable-diffusion-v1-4" if not is_ci_v2_env else model_location,
-        torch_dtype=torch.float32,
-        local_files_only=is_ci_env or is_ci_v2_env,
-    )
-    unet = pipe.unet
-    unet.eval()
+    unet = get_refference_unet(is_ci_env, is_ci_v2_env, model_location_generator)
     state_dict = unet.state_dict()
-    unet_upblock = pipe.unet.up_blocks[0]
+    unet_upblock = unet.up_blocks[0]
 
     parameters = preprocess_model_parameters(
         initialize_model=lambda: unet, custom_preprocessor=custom_preprocessor, device=device

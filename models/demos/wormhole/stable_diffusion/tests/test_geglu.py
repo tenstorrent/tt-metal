@@ -4,13 +4,13 @@
 
 import pytest
 import torch
-from diffusers import UNet2DConditionModel
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
 from models.common.utility_functions import torch_random
 from models.demos.wormhole.stable_diffusion.common import SD_L1_SMALL_SIZE
 from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
+from models.demos.wormhole.stable_diffusion.sd_helper_funcs import get_refference_unet
 from models.demos.wormhole.stable_diffusion.tests.parameterizations import TRANSFORMER_PARAMETERIZATIONS
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_geglu import geglu
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
@@ -38,14 +38,7 @@ def test_geglu_512x512(
     is_ci_v2_env,
     model_location_generator,
 ):
-    model_location = model_location_generator(
-        "stable-diffusion-v1-4/unet", download_if_ci_v2=True, ci_v2_timeout_in_s=1800
-    )
-    model = UNet2DConditionModel.from_pretrained(
-        "CompVis/stable-diffusion-v1-4" if not is_ci_v2_env else model_location,
-        subfolder="unet" if not is_ci_v2_env else None,
-        local_files_only=is_ci_env or is_ci_v2_env,
-    ).eval()
+    model = get_refference_unet(is_ci_env, is_ci_v2_env, model_location_generator)
 
     if block == "up":
         basic_transformer = model.up_blocks[block_index].attentions[attention_index].transformer_blocks[0]

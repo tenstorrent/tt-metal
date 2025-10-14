@@ -4,9 +4,9 @@
 
 import pytest
 import torch
-from diffusers import AutoencoderKL
 
 import ttnn
+from models.demos.wormhole.stable_diffusion.sd_helper_funcs import get_refference_vae
 from models.demos.wormhole.stable_diffusion.tt.vae.ttnn_vae_attention import Attention
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
@@ -24,14 +24,7 @@ def test_vae_attention(
     is_ci_v2_env,
     model_location_generator,
 ):
-    model_location = model_location_generator(
-        "stable-diffusion-v1-4/vae", download_if_ci_v2=True, ci_v2_timeout_in_s=1800
-    )
-    vae = AutoencoderKL.from_pretrained(
-        "CompVis/stable-diffusion-v1-4" if not is_ci_v2_env else model_location,
-        subfolder="vae" if not is_ci_v2_env else None,
-        local_files_only=is_ci_env or is_ci_v2_env,
-    )
+    vae = get_refference_vae(is_ci_env, is_ci_v2_env, model_location_generator)
     torch_attention = vae.decoder.mid_block.attentions[0]
 
     batch_size, in_channels, height, width = input_shape

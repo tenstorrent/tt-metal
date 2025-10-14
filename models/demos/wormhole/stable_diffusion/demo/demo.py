@@ -9,20 +9,24 @@ import numpy as np
 import pytest
 import torch
 from datasets import load_dataset
-from diffusers import AutoencoderKL, UNet2DConditionModel
 from loguru import logger
 from PIL import Image
 from torchmetrics.image.fid import FrechetInceptionDistance
 from torchmetrics.multimodal.clip_score import CLIPScore
 from torchvision.transforms import ToTensor
-from transformers import CLIPTextModel, CLIPTokenizer
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
 from models.common.utility_functions import enable_persistent_kernel_cache, is_wormhole_b0, profiler
 from models.demos.wormhole.stable_diffusion.common import SD_L1_SMALL_SIZE, SD_TRACE_REGION_SIZE
 from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
-from models.demos.wormhole.stable_diffusion.sd_helper_funcs import compile_trace_sd
+from models.demos.wormhole.stable_diffusion.sd_helper_funcs import (
+    compile_trace_sd,
+    get_refference_clip_text_encoder,
+    get_refference_clip_tokenizer,
+    get_refference_unet,
+    get_refference_vae,
+)
 from models.demos.wormhole.stable_diffusion.sd_pndm_scheduler import TtPNDMScheduler
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_unet_2d_condition_model_new_conv import (
     UNet2DConditionModel as UNet2D,
@@ -88,37 +92,15 @@ def run_demo_inference(
 
     torch_device = "cpu"
     # 1. Load the autoencoder model which will be used to decode the latents into image space.
-    model_location = model_location_generator(
-        "stable-diffusion-v1-4/vae", download_if_ci_v2=True, ci_v2_timeout_in_s=1800
-    )
-    vae = AutoencoderKL.from_pretrained(
-        "CompVis/stable-diffusion-v1-4" if not is_ci_v2_env else model_location,
-        subfolder="vae" if not is_ci_v2_env else None,
-        local_files_only=is_ci_env or is_ci_v2_env,
-    )
-    vae.to(torch_device)
+    vae = get_refference_vae(is_ci_env, is_ci_v2_env, model_location_generator)
     vae_scale_factor = 2 ** (len(vae.config.block_out_channels) - 1)
     tt_vae = Vae(torch_vae=vae, device=device)
     # 2. Load the tokenizer and text encoder to tokenize and encode the text.
-    model_location = model_location_generator("clip-vit-large-patch14", download_if_ci_v2=True, ci_v2_timeout_in_s=1800)
-    tokenizer = CLIPTokenizer.from_pretrained(
-        "openai/clip-vit-large-patch14" if not is_ci_v2_env else model_location,
-        local_files_only=is_ci_env or is_ci_v2_env,
-    )
-    text_encoder = CLIPTextModel.from_pretrained(
-        "openai/clip-vit-large-patch14" if not is_ci_v2_env else model_location,
-        local_files_only=is_ci_env or is_ci_v2_env,
-    )
+    tokenizer = get_refference_clip_tokenizer(is_ci_env, is_ci_v2_env, model_location_generator)
+    text_encoder = get_refference_clip_text_encoder(is_ci_env, is_ci_v2_env, model_location_generator)
 
     # 3. The UNet model for generating the latents.
-    model_location = model_location_generator(
-        "stable-diffusion-v1-4/unet", download_if_ci_v2=True, ci_v2_timeout_in_s=1800
-    )
-    unet = UNet2DConditionModel.from_pretrained(
-        "CompVis/stable-diffusion-v1-4" if not is_ci_v2_env else model_location,
-        subfolder="unet" if not is_ci_v2_env else None,
-        local_files_only=is_ci_env or is_ci_v2_env,
-    )
+    unet = get_refference_unet(is_ci_env, is_ci_v2_env, model_location_generator)
 
     # 4. load the K-LMS scheduler with some fitting parameters.
     ttnn_scheduler = TtPNDMScheduler(
@@ -130,9 +112,6 @@ def run_demo_inference(
         steps_offset=1,
         device=device,
     )
-
-    text_encoder.to(torch_device)
-    unet.to(torch_device)
 
     config = unet.config
     parameters = preprocess_model_parameters(
@@ -270,38 +249,16 @@ def run_interactive_demo_inference(
 
     torch_device = "cpu"
     # 1. Load the autoencoder model which will be used to decode the latents into image space.
-    model_location = model_location_generator(
-        "stable-diffusion-v1-4/vae", download_if_ci_v2=True, ci_v2_timeout_in_s=1800
-    )
-    vae = AutoencoderKL.from_pretrained(
-        "CompVis/stable-diffusion-v1-4" if not is_ci_v2_env else model_location,
-        subfolder="vae" if not is_ci_v2_env else None,
-        local_files_only=is_ci_env or is_ci_v2_env,
-    )
-    vae.to(torch_device)
+    vae = get_refference_vae(is_ci_env, is_ci_v2_env, model_location_generator)
     vae_scale_factor = 2 ** (len(vae.config.block_out_channels) - 1)
     tt_vae = Vae(torch_vae=vae, device=device)
 
     # 2. Load the tokenizer and text encoder to tokenize and encode the text.
-    model_location = model_location_generator("clip-vit-large-patch14", download_if_ci_v2=True, ci_v2_timeout_in_s=1800)
-    tokenizer = CLIPTokenizer.from_pretrained(
-        "openai/clip-vit-large-patch14" if not is_ci_v2_env else model_location,
-        local_files_only=is_ci_env or is_ci_v2_env,
-    )
-    text_encoder = CLIPTextModel.from_pretrained(
-        "openai/clip-vit-large-patch14" if not is_ci_v2_env else model_location,
-        local_files_only=is_ci_env or is_ci_v2_env,
-    )
+    tokenizer = get_refference_clip_tokenizer(is_ci_env, is_ci_v2_env, model_location_generator)
+    text_encoder = get_refference_clip_text_encoder(is_ci_env, is_ci_v2_env, model_location_generator)
 
     # 3. The UNet model for generating the latents.
-    model_location = model_location_generator(
-        "stable-diffusion-v1-4/unet", download_if_ci_v2=True, ci_v2_timeout_in_s=1800
-    )
-    unet = UNet2DConditionModel.from_pretrained(
-        "CompVis/stable-diffusion-v1-4" if not is_ci_v2_env else model_location,
-        subfolder="unet" if not is_ci_v2_env else None,
-        local_files_only=is_ci_env or is_ci_v2_env,
-    )
+    unet = get_refference_unet(is_ci_env, is_ci_v2_env, model_location_generator)
 
     # 4. load the K-LMS scheduler with some fitting parameters.
     ttnn_scheduler = TtPNDMScheduler(
@@ -313,9 +270,6 @@ def run_interactive_demo_inference(
         steps_offset=1,
         device=device,
     )
-
-    text_encoder.to(torch_device)
-    unet.to(torch_device)
 
     config = unet.config
     parameters = preprocess_model_parameters(
@@ -444,38 +398,16 @@ def run_demo_inference_diffusiondb(
 
     torch_device = "cpu"
     # 1. Load the autoencoder model which will be used to decode the latents into image space.
-    model_location = model_location_generator(
-        "stable-diffusion-v1-4/vae", download_if_ci_v2=True, ci_v2_timeout_in_s=1800
-    )
-    vae = AutoencoderKL.from_pretrained(
-        "CompVis/stable-diffusion-v1-4" if not is_ci_v2_env else model_location,
-        subfolder="vae" if not is_ci_v2_env else None,
-        local_files_only=is_ci_env or is_ci_v2_env,
-    )
-    vae.to(torch_device)
+    vae = get_refference_vae(is_ci_env, is_ci_v2_env, model_location_generator)
     vae_scale_factor = 2 ** (len(vae.config.block_out_channels) - 1)
     tt_vae = Vae(torch_vae=vae, device=device)
 
     # 2. Load the tokenizer and text encoder to tokenize and encode the text.
-    model_location = model_location_generator("clip-vit-large-patch14", download_if_ci_v2=True, ci_v2_timeout_in_s=1800)
-    tokenizer = CLIPTokenizer.from_pretrained(
-        "openai/clip-vit-large-patch14" if not is_ci_v2_env else model_location,
-        local_files_only=is_ci_env or is_ci_v2_env,
-    )
-    text_encoder = CLIPTextModel.from_pretrained(
-        "openai/clip-vit-large-patch14" if not is_ci_v2_env else model_location,
-        local_files_only=is_ci_env or is_ci_v2_env,
-    )
+    tokenizer = get_refference_clip_tokenizer(is_ci_env, is_ci_v2_env, model_location_generator)
+    text_encoder = get_refference_clip_text_encoder(is_ci_env, is_ci_v2_env, model_location_generator)
 
     # 3. The UNet model for generating the latents.
-    model_location = model_location_generator(
-        "stable-diffusion-v1-4/unet", download_if_ci_v2=True, ci_v2_timeout_in_s=1800
-    )
-    unet = UNet2DConditionModel.from_pretrained(
-        "CompVis/stable-diffusion-v1-4" if not is_ci_v2_env else model_location,
-        subfolder="unet" if not is_ci_v2_env else None,
-        local_files_only=is_ci_env or is_ci_v2_env,
-    )
+    unet = get_refference_unet(is_ci_env, is_ci_v2_env, model_location_generator)
 
     # 4. load the K-LMS scheduler with some fitting parameters.
     ttnn_scheduler = TtPNDMScheduler(
@@ -487,9 +419,6 @@ def run_demo_inference_diffusiondb(
         steps_offset=1,
         device=device,
     )
-
-    text_encoder.to(torch_device)
-    unet.to(torch_device)
 
     config = unet.config
     parameters = preprocess_model_parameters(

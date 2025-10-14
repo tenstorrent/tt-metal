@@ -5,13 +5,17 @@
 
 import pytest
 import torch
-from diffusers import LMSDiscreteScheduler, StableDiffusionPipeline
+from diffusers import LMSDiscreteScheduler
 from tqdm.auto import tqdm
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
 from models.demos.wormhole.stable_diffusion.common import SD_L1_SMALL_SIZE
 from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
+from models.demos.wormhole.stable_diffusion.sd_helper_funcs import (
+    STABLE_DIFFUSION_V1_4_MODEL_LOCATION,
+    get_refference_unet,
+)
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_unet_2d_condition_model_new_conv import (
     UNet2DConditionModel as UNet2D,
 )
@@ -69,17 +73,9 @@ def test_unet_2d_condition_model_512x512(
     ttnn.CONFIG.throw_exception_on_fallback = True
     # setup pytorch model
     torch.manual_seed(0)
-    model_location = model_location_generator("stable-diffusion-v1-4", download_if_ci_v2=True, ci_v2_timeout_in_s=1800)
     load_from_disk = False
     if not load_from_disk:
-        pipe = StableDiffusionPipeline.from_pretrained(
-            "CompVis/stable-diffusion-v1-4" if not is_ci_v2_env else model_location,
-            torch_dtype=torch.float32,
-            local_files_only=is_ci_env or is_ci_v2_env,
-        )
-
-        model = pipe.unet
-        model.eval()
+        model = get_refference_unet(is_ci_env, is_ci_v2_env, model_location_generator)
         config = model.config
         torch.save(model, "unet.pt")
         torch.save(config, "unet_config.pt")
@@ -88,7 +84,7 @@ def test_unet_2d_condition_model_512x512(
         config = torch.load("unet_config.pt")
 
     parameters = preprocess_model_parameters(
-        model_name="CompVis/stable-diffusion-v1-4",
+        model_name=STABLE_DIFFUSION_V1_4_MODEL_LOCATION,
         initialize_model=lambda: model,
         custom_preprocessor=custom_preprocessor,
         device=device,

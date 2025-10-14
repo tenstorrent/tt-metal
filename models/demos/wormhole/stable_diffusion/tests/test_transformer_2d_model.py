@@ -4,12 +4,15 @@
 
 import pytest
 import torch
-from diffusers import StableDiffusionPipeline
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
 from models.demos.wormhole.stable_diffusion.common import SD_L1_SMALL_SIZE
 from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
+from models.demos.wormhole.stable_diffusion.sd_helper_funcs import (
+    STABLE_DIFFUSION_V1_4_MODEL_LOCATION,
+    get_refference_unet,
+)
 from models.demos.wormhole.stable_diffusion.tests.parameterizations import TRANSFORMER_PARAMETERIZATIONS
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_transformer_2d_new_conv import transformer_2d_model
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
@@ -58,18 +61,11 @@ def test_transformer_2d_model_512x512(
     input = torch.randn(input_shape) * 0.01
     encoder_hidden_states = torch.rand(encoder_hidden_states)
 
-    model_location = model_location_generator("stable-diffusion-v1-4", download_if_ci_v2=True, ci_v2_timeout_in_s=1800)
-    pipe = StableDiffusionPipeline.from_pretrained(
-        "CompVis/stable-diffusion-v1-4" if not is_ci_v2_env else model_location,
-        torch_dtype=torch.float32,
-        local_files_only=is_ci_env or is_ci_v2_env,
-    )
-    unet = pipe.unet
-    unet.eval()
+    unet = get_refference_unet(is_ci_env, is_ci_v2_env, model_location_generator)
     config = unet.config
 
     parameters = preprocess_model_parameters(
-        model_name="CompVis/stable-diffusion-v1-4",
+        model_name=STABLE_DIFFUSION_V1_4_MODEL_LOCATION,
         initialize_model=lambda: unet,
         custom_preprocessor=custom_preprocessor,
         device=device,
@@ -77,13 +73,13 @@ def test_transformer_2d_model_512x512(
 
     if block == "up":
         parameters = parameters.up_blocks[block_index].attentions[attention_index]
-        transformer = pipe.unet.up_blocks[block_index].attentions[attention_index]
+        transformer = unet.up_blocks[block_index].attentions[attention_index]
     elif block == "down":
         parameters = parameters.down_blocks[block_index].attentions[attention_index]
-        transformer = pipe.unet.down_blocks[block_index].attentions[attention_index]
+        transformer = unet.down_blocks[block_index].attentions[attention_index]
     elif block == "mid":
         parameters = parameters.mid_block.attentions[0]
-        transformer = pipe.unet.mid_block.attentions[0]
+        transformer = unet.mid_block.attentions[0]
 
     torch_output = transformer(input, encoder_hidden_states.squeeze(0)).sample
 

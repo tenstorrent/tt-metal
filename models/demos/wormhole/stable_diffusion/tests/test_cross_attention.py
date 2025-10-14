@@ -4,12 +4,12 @@
 
 import pytest
 import torch
-from diffusers import StableDiffusionPipeline
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
 from models.demos.wormhole.stable_diffusion.common import SD_L1_SMALL_SIZE
 from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
+from models.demos.wormhole.stable_diffusion.sd_helper_funcs import get_refference_unet
 from models.demos.wormhole.stable_diffusion.tests.parameterizations import TRANSFORMER_PARAMETERIZATIONS
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_cross_attention import cross_attention
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
@@ -43,26 +43,17 @@ def test_cross_attention_512x512(
 
     N, C, H, W = input_shape
 
-    model_location = model_location_generator(
-        "stable-diffusion-v1-4/unet", download_if_ci_v2=True, ci_v2_timeout_in_s=1800
-    )
-    pipe = StableDiffusionPipeline.from_pretrained(
-        "CompVis/stable-diffusion-v1-4" if not is_ci_v2_env else model_location,
-        torch_dtype=torch.float32,
-        local_files_only=is_ci_env or is_ci_v2_env,
-    )
-    model = pipe.unet
-    model.eval()
+    unet = get_refference_unet(is_ci_env, is_ci_v2_env, model_location_generator)
 
     hidden_states_shape = torch.Size(input_shape)
     hidden_states = torch.rand(hidden_states_shape)
 
     if block == "up":
-        basic_transformer = pipe.unet.up_blocks[block_index].attentions[attention_index].transformer_blocks[0]
+        basic_transformer = unet.up_blocks[block_index].attentions[attention_index].transformer_blocks[0]
     elif block == "down":
-        basic_transformer = pipe.unet.down_blocks[block_index].attentions[attention_index].transformer_blocks[0]
+        basic_transformer = unet.down_blocks[block_index].attentions[attention_index].transformer_blocks[0]
     elif block == "mid":
-        basic_transformer = pipe.unet.mid_block.attentions[0].transformer_blocks[0]
+        basic_transformer = unet.mid_block.attentions[0].transformer_blocks[0]
 
     if has_encoder_hidden_states:
         cross_attn = basic_transformer.attn2

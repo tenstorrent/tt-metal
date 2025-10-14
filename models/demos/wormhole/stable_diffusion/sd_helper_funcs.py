@@ -8,7 +8,9 @@ from typing import List, Optional, Tuple, Union
 
 import numpy as np
 import torch
+from diffusers import AutoencoderKL, StableDiffusionPipeline, UNet2DConditionModel
 from tqdm.auto import tqdm
+from transformers import CLIPTextModel, CLIPTokenizer
 
 import ttnn
 
@@ -268,3 +270,71 @@ def reshard_for_output_channels_divisibility(hidden_states, out_channels):
                 hidden_states = ttnn.reshard(hidden_states, mem_cfg)
 
     return hidden_states
+
+
+STABLE_DIFFUSION_V1_4_MODEL_LOCATION = "CompVis/stable-diffusion-v1-4"
+CLIP_VIT_LARGE_PATCH14_MODEL_LOCATION = "openai/clip-vit-large-patch14"
+STABLE_DIFFUSION_CIV2_MODEL_LOCATION = "stable-diffusion-v1-4"
+CLIP_VIT_LARGE_PATCH14_CIV2_MODEL_LOCATION = "clip-vit-large-patch14"
+
+
+def get_refference_vae(is_ci_env, is_ci_v2_env, model_location_generator):
+    model_location = model_location_generator(
+        f"{STABLE_DIFFUSION_CIV2_MODEL_LOCATION}/vae", download_if_ci_v2=True, ci_v2_timeout_in_s=1800
+    )
+    vae = AutoencoderKL.from_pretrained(
+        STABLE_DIFFUSION_V1_4_MODEL_LOCATION if not is_ci_v2_env else model_location,
+        subfolder="vae" if not is_ci_v2_env else None,
+        local_files_only=is_ci_env or is_ci_v2_env,
+        use_safetensors=True,
+    )
+    return vae.to("cpu")
+
+
+def get_refference_unet(is_ci_env, is_ci_v2_env, model_location_generator):
+    model_location = model_location_generator(
+        f"{STABLE_DIFFUSION_CIV2_MODEL_LOCATION}/unet", download_if_ci_v2=True, ci_v2_timeout_in_s=1800
+    )
+    unet = UNet2DConditionModel.from_pretrained(
+        STABLE_DIFFUSION_V1_4_MODEL_LOCATION if not is_ci_v2_env else model_location,
+        subfolder="unet" if not is_ci_v2_env else None,
+        local_files_only=is_ci_env or is_ci_v2_env,
+        use_safetensors=True,
+    )
+    return unet.to("cpu")
+
+
+def get_refference_clip_tokenizer(is_ci_env, is_ci_v2_env, model_location_generator):
+    model_location = model_location_generator(
+        CLIP_VIT_LARGE_PATCH14_CIV2_MODEL_LOCATION, download_if_ci_v2=True, ci_v2_timeout_in_s=1800
+    )
+    tokenizer = CLIPTokenizer.from_pretrained(
+        CLIP_VIT_LARGE_PATCH14_MODEL_LOCATION if not is_ci_v2_env else model_location,
+        local_files_only=is_ci_env or is_ci_v2_env,
+        use_safetensors=True,
+    )
+    return tokenizer
+
+
+def get_refference_clip_text_encoder(is_ci_env, is_ci_v2_env, model_location_generator):
+    model_location = model_location_generator(
+        CLIP_VIT_LARGE_PATCH14_CIV2_MODEL_LOCATION, download_if_ci_v2=True, ci_v2_timeout_in_s=1800
+    )
+    text_encoder = CLIPTextModel.from_pretrained(
+        CLIP_VIT_LARGE_PATCH14_MODEL_LOCATION if not is_ci_v2_env else model_location,
+        local_files_only=is_ci_env or is_ci_v2_env,
+        use_safetensors=True,
+    )
+    return text_encoder
+
+
+def get_refference_stable_diffusion_pipeline(is_ci_env, is_ci_v2_env, model_location_generator):
+    model_location = model_location_generator(
+        STABLE_DIFFUSION_CIV2_MODEL_LOCATION, download_if_ci_v2=True, ci_v2_timeout_in_s=1800
+    )
+    pipeline = StableDiffusionPipeline.from_pretrained(
+        STABLE_DIFFUSION_V1_4_MODEL_LOCATION if not is_ci_v2_env else model_location,
+        local_files_only=is_ci_env or is_ci_v2_env,
+        use_safetensors=True,
+    )
+    return pipeline.to("cpu")

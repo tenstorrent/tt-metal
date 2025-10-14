@@ -4,12 +4,12 @@
 
 import pytest
 import torchvision.transforms as transforms
-from diffusers import StableDiffusionPipeline
 
 from models.demos.wormhole.stable_diffusion.common import SD_L1_SMALL_SIZE, SD_TRACE_REGION_SIZE
 from models.demos.wormhole.stable_diffusion.demo.demo import load_inputs
 from models.demos.wormhole.stable_diffusion.demo.demo import run_demo_inference as demo
 from models.demos.wormhole.stable_diffusion.demo.demo import run_demo_inference_diffusiondb as demo_db
+from models.demos.wormhole.stable_diffusion.sd_helper_funcs import get_refference_stable_diffusion_pipeline
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
@@ -71,12 +71,7 @@ def test_demo_sd(device, reset_seeds, input_path, is_ci_env, is_ci_v2_env, model
 
     inputs = load_inputs(input_path)
     input_prompts = inputs[:1]
-    model_location = model_location_generator("stable-diffusion-v1-4", download_if_ci_v2=True, ci_v2_timeout_in_s=1800)
-    pipe = StableDiffusionPipeline.from_pretrained(
-        "CompVis/stable-diffusion-v1-4" if not is_ci_v2_env else model_location,
-        local_files_only=is_ci_env or is_ci_v2_env,
-    )
-    pipe = pipe.to("cpu")
+    pipe = get_refference_stable_diffusion_pipeline(is_ci_env, is_ci_v2_env, model_location_generator)
 
     import torch
 

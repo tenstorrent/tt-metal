@@ -4,10 +4,10 @@
 
 import pytest
 import torch
-from diffusers import AutoencoderKL
 
 import ttnn
 from models.demos.wormhole.stable_diffusion.common import SD_L1_SMALL_SIZE
+from models.demos.wormhole.stable_diffusion.sd_helper_funcs import get_refference_vae
 from models.demos.wormhole.stable_diffusion.tt.vae.ttnn_vae_configs import (
     GROUPNORM_DECODER_NUM_BLOCKS,
     MIDBLOCK_RESNET_CONV_CHANNEL_SPLIT_FACTORS,
@@ -69,14 +69,7 @@ def test_decoder(
 ):
     torch.manual_seed(0)
 
-    model_location = model_location_generator(
-        "stable-diffusion-v1-4/vae", download_if_ci_v2=True, ci_v2_timeout_in_s=1800
-    )
-    vae = AutoencoderKL.from_pretrained(
-        "CompVis/stable-diffusion-v1-4" if not is_ci_v2_env else model_location,
-        subfolder="vae" if not is_ci_v2_env else None,
-        local_files_only=is_ci_env or is_ci_v2_env,
-    )
+    vae = get_refference_vae(is_ci_env, is_ci_v2_env, model_location_generator)
     torch_decoder = vae.decoder
 
     # Run pytorch model

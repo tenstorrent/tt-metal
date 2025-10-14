@@ -4,13 +4,13 @@
 
 import pytest
 import torch
-from diffusers import StableDiffusionPipeline
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
 from models.common.utility_functions import torch_random
 from models.demos.wormhole.stable_diffusion.common import SD_L1_SMALL_SIZE
 from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
+from models.demos.wormhole.stable_diffusion.sd_helper_funcs import get_refference_unet
 from models.demos.wormhole.stable_diffusion.tests.parameterizations import (
     CROSS_UP_BLOCKS_HIDDEN_STATES_INFO,
     DOWN_MID_UP_BLOCKS_HIDDEN_STATES_INFO,
@@ -51,17 +51,9 @@ def test_upsample2d_512x512(
     model_location_generator,
 ):
     torch.manual_seed(0)
-    model_location = model_location_generator("stable-diffusion-v1-4", download_if_ci_v2=True, ci_v2_timeout_in_s=1800)
     # setup pytorch model
-    pipe = StableDiffusionPipeline.from_pretrained(
-        "CompVis/stable-diffusion-v1-4" if not is_ci_v2_env else model_location,
-        torch_dtype=torch.float32,
-        local_files_only=is_ci_env or is_ci_v2_env,
-    )
-
-    unet = pipe.unet
-    unet.eval()
-    unet_upblock = pipe.unet.up_blocks[index]
+    unet = get_refference_unet(is_ci_env, is_ci_v2_env, model_location_generator)
+    unet_upblock = unet.up_blocks[index]
     resnet_upsampler = unet_upblock.upsamplers[0]
 
     parameters = preprocess_model_parameters(
