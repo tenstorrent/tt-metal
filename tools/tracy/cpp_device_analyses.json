@@ -52,7 +52,7 @@
         "type": "OP_FIRST_TO_LAST_MARKER",
         "dimension": "OP",
         "results_config": {
-            "analysis_name": "DEVICE FIRMWARE DURATION [ns]",
+            "analysis_name": "DEVICE FW DURATION [ns]",
             "display_start_and_end_timestamps": true,
             "start_timestamp_header": "DEVICE FW START CYCLE",
             "end_timestamp_header": "DEVICE FW END CYCLE"
