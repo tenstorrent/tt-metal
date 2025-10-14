@@ -6,8 +6,10 @@ Standalone application that currently presents a web-based GUI. To build and run
 
 ```
 ./build_metal.sh --build-telemetry
-build/tt_telemetry/tt_telemetry_server
+build/tt_telemetry/tt_telemetry_server --fsd=/path/to/system/fsd/file
 ```
+
+A factory system descriptor (FSD) is required to run telemetry now.
 
 If running on an IRD machine, the Debuda port (usually 5555) is exposed and can be used as the web server port:
 
@@ -105,8 +107,20 @@ docker run -h `hostname` --device /dev/tenstorrent -p 8080:8080 -p 8081:8081 -v 
 
 The container host name is set with `-h` to match the actual machine host name. Ports 8080 and 8081 must be exposed for the web server and intra-process communication, respectively. UMD requires `/dev/tenstorrent` to be passed through along with `/dev/hugepages-1G`. Lastly, `/var/telemetry` must be mounted to make the FSD file accessible.
 
+# Generating Factory System Descriptors
+
+For basic single-node machine types, one of the unit tests will produce FSD files, which must be hand-edited to populate host names.
+
+```
+./build_metal.sh --build-metal-tests
+./build/test/tools/scaleout/test_factory_system_descriptor --gtest_filter="Cluster.TestFactorySystemDescriptorSingleNodeTypes"
+```
+
+The files will be placed in `fsd/`.
+
 # TODO
 
+- If a machine is down, the aggregator won't receive its metrics and that host will not appear in the GUI. We need to instead somehow mark the machine as being down, perhaps by having the aggregator create metrics associated with hosts it expects to see, or by having a fake bool metric e.g. "/hostname".
 - Wait until each `TelemetrySubscriber` has finished processing a buffer before fetching a new one and continue to use existing buffer until ready for hand off. May not be necessary but we should at least watch for slow consumers causing the number of buffers
 being allocated to increase (ideally, there should only be two at any given time -- one being written, one being consumed).
 - On Blackhole, Ethernet link status update rate is not clear and we may want to investigate triggering a forced update, although this may have adverse performance effects. Requires further discussion. Sample code:
