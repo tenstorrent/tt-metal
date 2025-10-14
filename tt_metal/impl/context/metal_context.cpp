@@ -1031,6 +1031,17 @@ void MetalContext::initialize_firmware(
             // For eth, write the go and launch message before initializing because when using the ETH FW API
             // it will launch immediately. DM0 is not in a reset state as it is running base FW.
             write_initial_go_launch_msg();
+            if (core_type == HalProgrammableCoreType::ACTIVE_ETH) {
+                // Clear the ncrisc_halt message
+                tt::tt_metal::DeviceAddr mailbox_addr =
+                    hal_->get_dev_addr(core_type, tt::tt_metal::HalL1MemAddrType::MAILBOX);
+                auto factory = hal_->get_dev_msgs_factory(core_type);
+                tt::tt_metal::DeviceAddr ncrisc_halt_addr =
+                    mailbox_addr + factory.offset_of<tt::tt_metal::dev_msgs::mailboxes_t>(
+                                       tt::tt_metal::dev_msgs::mailboxes_t::Field::ncrisc_halt);
+                std::vector<uint8_t> data(factory.size_of<tt::tt_metal::dev_msgs::ncrisc_halt_msg_t>(), 0);
+                cluster_->write_core(data.data(), data.size(), tt_cxy_pair(device_id, virtual_core), ncrisc_halt_addr);
+            }
 
             // Write firmware main to primary erisc (DM0)
             // Using classic ASSERT/DEASSERT PC method for 1 erisc mode because erisc1 has no base firmware
