@@ -140,7 +140,7 @@ def test_linear_with_core_grid(
 @pytest.mark.parametrize("m_size", [32, 64])
 @pytest.mark.parametrize("k_size", [1024])
 @pytest.mark.parametrize("n_size", [1024])
-@pytest.mark.parametrize("activation", [None, "relu", "silu"])
+@pytest.mark.parametrize("activation", [None, "relu", "silu", "gelu", "gelu_approx", "relu6"])
 def test_wide_linear_with_argument_for_core_grid_set_to_device_grid(
     device, batch_size, m_size, k_size, n_size, activation
 ):
@@ -151,14 +151,53 @@ def test_wide_linear_with_argument_for_core_grid_set_to_device_grid(
     torch_output_tensor = torch_input_tensor_a @ torch_input_tensor_b
     if activation == "relu":
         torch_output_tensor = torch.relu(torch_output_tensor)
+    elif activation == "relu6":
+        torch_output_tensor = torch.nn.functional.relu6(torch_output_tensor)
     elif activation == "silu":
         torch_output_tensor = torch.nn.functional.silu(torch_output_tensor)
+    elif activation == "gelu" or activation == "gelu_approx":
+        torch_output_tensor = torch.nn.functional.gelu(torch_output_tensor)
 
     input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
     input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
 
     output_tensor = ttnn.linear(input_tensor_a, input_tensor_b, core_grid=device.core_grid, activation=activation)
 
+    output_tensor = ttnn.to_torch(output_tensor)
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
+
+
+@pytest.mark.parametrize("batch_size", [1, 8])
+@pytest.mark.parametrize("m_size", [32, 64])
+@pytest.mark.parametrize("k_size", [1024])
+@pytest.mark.parametrize("n_size", [1024])
+@pytest.mark.parametrize(
+    "activation", [None, "relu", "relu6", "silu", "gelu", "gelu_approx", "sigmoid", "sigmoid_approx"]
+)
+def test_linear_with_compound_activation(device, batch_size, m_size, k_size, n_size, activation):
+    torch.manual_seed(0)
+
+    torch_input_tensor_a = torch.randn((batch_size, m_size, k_size), dtype=torch.bfloat16)
+    torch_input_tensor_b = torch.randn((k_size, n_size), dtype=torch.bfloat16)
+    torch_output_tensor = torch_input_tensor_a @ torch_input_tensor_b
+    if activation == "relu":
+        torch_output_tensor = torch.relu(torch_output_tensor)
+    elif activation == "relu6":
+        torch_output_tensor = torch.nn.functional.relu6(torch_output_tensor)
+    elif activation == "silu":
+        torch_output_tensor = torch.nn.functional.silu(torch_output_tensor)
+    elif activation in ["gelu", "gelu_approx"]:
+        torch_output_tensor = torch.nn.functional.gelu(torch_output_tensor)
+    elif activation in ["sigmoid", "sigmoid_approx"]:
+        torch_output_tensor = torch.nn.functional.sigmoid(torch_output_tensor)
+
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output_tensor = ttnn.linear(input_tensor_a, input_tensor_b, core_grid=device.core_grid, activation=activation)
+
+    # We supply no program config or core grid, so this uses the unfused path.
+    output_tensor = ttnn.linear(input_tensor_a, input_tensor_b, activation=activation)
     output_tensor = ttnn.to_torch(output_tensor)
     assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
 

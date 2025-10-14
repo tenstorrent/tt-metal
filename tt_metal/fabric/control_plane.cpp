@@ -49,6 +49,7 @@
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
 #include "tt_metal/fabric/serialization/port_descriptor_serialization.hpp"
 #include "tt_metal/fabric/serialization/intermesh_connections_serialization.hpp"
+#include "tt_metal/fabric/builder/fabric_static_sized_channels_allocator.hpp"
 
 namespace tt::tt_fabric {
 
@@ -489,9 +490,7 @@ void ControlPlane::init_control_plane(
     } else {
         this->load_physical_chip_mapping(get_logical_chip_to_physical_chip_mapping(mesh_graph_desc_file));
     }
-    if (routing_table_generator_->mesh_graph->is_legacy_mode()) {
-        this->generate_intermesh_connectivity();
-    }
+    this->generate_intermesh_connectivity();
 
     // Printing, only enabled with log_debug
     this->routing_table_generator_->mesh_graph->print_connectivity();
@@ -557,7 +556,8 @@ void ControlPlane::validate_mesh_connections() const {
 // TODO: update logical_mesh_chip_id_to_physical_chip_id_mapping_ to be updated here probably
 std::vector<chip_id_t> ControlPlane::get_mesh_physical_chip_ids(
     const tt::tt_metal::distributed::MeshContainer<chip_id_t>& mesh_container,
-    std::optional<chip_id_t> nw_corner_chip_id) const {
+    std::optional<chip_id_t> nw_corner_chip_id,
+    std::optional<chip_id_t> ne_corner_chip_id) const {
     // Convert the coordinate range to a set of chip IDs using MeshContainer iterator
     const auto& user_chip_ids = tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids();
     TT_FATAL(
@@ -592,7 +592,7 @@ std::vector<chip_id_t> ControlPlane::get_mesh_physical_chip_ids(
     }
 
     // Handle 2D meshes
-    return convert_2d_mesh_adjacency_to_row_major_vector(topology_info, nw_corner_chip_id);
+    return convert_2d_mesh_adjacency_to_row_major_vector(topology_info, nw_corner_chip_id, ne_corner_chip_id);
 }
 
 std::map<FabricNodeId, chip_id_t> ControlPlane::get_logical_chip_to_physical_chip_mapping(
@@ -644,6 +644,7 @@ std::map<FabricNodeId, chip_id_t> ControlPlane::get_logical_chip_to_physical_chi
                 this->routing_table_generator_->mesh_graph->get_chip_ids(mesh_id, host_rank_id);
 
             std::optional<chip_id_t> nw_chip_physical_id = std::nullopt;
+            std::optional<chip_id_t> ne_chip_physical_id = std::nullopt;
             const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
             // TODO: remove once we use global physical graph to map logical big mesh to physical chips
             // NOTE: This nw chip may not be set the same for UBB devices when using the Mock Cluster Descriptor
@@ -674,9 +675,16 @@ std::map<FabricNodeId, chip_id_t> ControlPlane::get_logical_chip_to_physical_chi
                 nw_chip_physical_id =
                     tt::tt_metal::MetalContext::instance().get_cluster().get_physical_chip_id_from_eth_coord(
                         min_coord.second);
+
+                auto ne_chip_coord = min_coord.second;
+                ne_chip_coord.x += 1;
+                ne_chip_physical_id =
+                    tt::tt_metal::MetalContext::instance().get_cluster().get_physical_chip_id_from_eth_coord(
+                        ne_chip_coord);
             }
 
-            const auto& physical_chip_ids = this->get_mesh_physical_chip_ids(mesh_container, nw_chip_physical_id);
+            const auto& physical_chip_ids =
+                this->get_mesh_physical_chip_ids(mesh_container, nw_chip_physical_id, ne_chip_physical_id);
             std::uint32_t i = 0;
             for (const auto& [_, fabric_chip_id] : mesh_container) {
                 logical_mesh_chip_id_to_physical_chip_id_mapping.emplace(
@@ -1085,33 +1093,9 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels(
             }
         }
     }
-    if (routing_table_generator_->mesh_graph->is_legacy_mode()) {
-        for (const auto& [exit_node_fabric_node_id, exit_node_directions] : this->exit_node_directions_) {
-            for (const auto& [src_eth_chan, port_direction] : exit_node_directions) {
-                this->assign_direction_to_fabric_eth_chan(exit_node_fabric_node_id, src_eth_chan, port_direction);
-            }
-        }
-    } else {
-        // TODO (AS): This is a workaround until direction assignment is integrated with MGD 2.0
-        // In the code below, we assign directions to physical links based on the Mesh Graph, which
-        // comes with manually specified directions.
-        const auto& mesh_graph = this->routing_table_generator_->mesh_graph;
-        const auto& intermesh_connectivity = mesh_graph->get_inter_mesh_connectivity();
-        for (auto src_mesh : local_mesh_binding_.mesh_ids) {
-            for (std::size_t chip_id = 0; chip_id < intermesh_connectivity[*src_mesh].size(); chip_id++) {
-                for (const auto& [dst_mesh, edge] : intermesh_connectivity[*src_mesh][chip_id]) {
-                    auto src_physical_id = this->get_physical_chip_id_from_fabric_node_id(FabricNodeId(src_mesh, chip_id));
-                    const auto src_asic_id = tt::tt_metal::MetalContext::instance().get_cluster().get_unique_chip_ids().at(src_physical_id);
-                    for (const auto& asic_neigbor : physical_system_descriptor_->get_asic_neighbors(tt::tt_metal::AsicID{src_asic_id})) {
-                        auto neighbor_fabric_node_id = this->get_fabric_node_id_from_asic_id(*asic_neigbor);
-                        if (neighbor_fabric_node_id.mesh_id == dst_mesh) {
-                            for (const auto chan : physical_system_descriptor_->get_eth_connections(tt::tt_metal::AsicID{src_asic_id}, asic_neigbor)) {
-                                this->assign_direction_to_fabric_eth_chan(FabricNodeId(src_mesh, chip_id), chan.src_chan, edge.port_direction);
-                            }
-                        }
-                    }
-                }
-            }
+    for (const auto& [exit_node_fabric_node_id, exit_node_directions] : this->exit_node_directions_) {
+        for (const auto& [src_eth_chan, port_direction] : exit_node_directions) {
+            this->assign_direction_to_fabric_eth_chan(exit_node_fabric_node_id, src_eth_chan, port_direction);
         }
     }
 
@@ -2262,10 +2246,17 @@ void fill_connection_info_fields(
     const FabricEriscDatamoverConfig& config,
     uint32_t sender_channel,
     uint16_t worker_free_slots_stream_id) {
+    auto channel_allocator = config.channel_allocator.get();
+    TT_FATAL(
+        dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(channel_allocator) != nullptr,
+        "Only FabricStaticSizedChannelsAllocator is supported currently.");
+    const auto static_channel_allocator =
+        dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(channel_allocator);
     connection_info.edm_noc_x = static_cast<uint8_t>(virtual_core.x);
     connection_info.edm_noc_y = static_cast<uint8_t>(virtual_core.y);
-    connection_info.edm_buffer_base_addr = config.sender_channels_base_address[sender_channel];
-    connection_info.num_buffers_per_channel = config.sender_channels_num_buffers[sender_channel];
+    connection_info.edm_buffer_base_addr = static_channel_allocator->get_sender_channel_base_address(sender_channel);
+    connection_info.num_buffers_per_channel =
+        static_channel_allocator->get_sender_channel_number_of_slots(sender_channel);
     connection_info.edm_connection_handshake_addr = config.sender_channels_connection_semaphore_address[sender_channel];
     connection_info.edm_worker_location_info_addr =
         config.sender_channels_worker_conn_info_base_address[sender_channel];

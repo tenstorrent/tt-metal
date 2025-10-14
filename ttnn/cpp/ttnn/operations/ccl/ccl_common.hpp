@@ -23,6 +23,8 @@ namespace ccl {
 uint32_t get_topological_dimension(
     const Tensor& tensor, const std::optional<uint32_t>& cluster_axis);
 
+tt::tt_fabric::Topology get_usable_topology(const Tensor& tensor, tt::tt_fabric::Topology whole_device_topology, const std::optional<uint32_t>& cluster_axis = std::nullopt);
+
 uint32_t get_linearized_index_from_physical_coord(
     const Tensor& tensor,
     const MeshCoordinate& physical_coord,

@@ -63,8 +63,8 @@ Notes:
 - --src-type/--dst-type are accepted for future use; current code uses DRAM src and L1/DRAM dst.
 - Trace semantics: each measured iteration does
     1) warm-up (outside trace),
-    2) BeginTraceCapture → enqueue the workload N=--trace-iters times → EndTraceCapture,
-    3) ReplayTrace once and time it, then divides by N to get per-iter time.
+    2) BeginTraceCapture → enqueue the workload N=--trace-iters times → end_mesh_trace,
+    3) replay_mesh_trace once and time it, then divides by N to get per-iter time.
   Thus:
     * --trace-iters controls how many enqueues are captured per trace.
     * --iters controls how many times the capture+replay cycle is repeated to collect stats (p50/mean, etc.).

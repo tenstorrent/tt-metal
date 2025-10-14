@@ -18,7 +18,7 @@ on:
       ttsim-ref:
         required: false
         type: string
-        default: "6f5a357da16b3d0f9a4f70cdae2b4b7485723612"
+        default: "8d6a0c997c4ba585c519c27f304b976b243d4bd9"
 
 jobs:
   ttsim-integration:
@@ -97,8 +97,11 @@ jobs:
             "add_2_integers_in_compute"
             "add_2_integers_in_riscv"
             "eltwise_binary"
+            "eltwise_sfpu"
             "hello_world_compute_kernel"
             "hello_world_datamovement_kernel"
+            "matmul_multi_core"
+            "matmul_multicore_reuse"
           )
           for example_name in "${working_examples[@]}"; do
             example_path="/usr/share/tt-metalium/examples/${example_name}"
@@ -152,7 +155,7 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
         timeout-minutes: 10
         with:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
