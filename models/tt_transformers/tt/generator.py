@@ -304,6 +304,11 @@ class Generator:
                 )
 
         logger.info(f"Finished prefill for all users up to {batch_seq_len} tokens, Starting decode...")
+        # We need to synchronize to make sure the prefill is finished
+        # We want to make sure that if some processing is done on the host on the tensors used in prefill, that those tensors will have correct data (in other words, that prefill is fully finished)
+        # Synchronization is not needed always (depends on the workflow), but we want to be safe for future workflow changes
+        for model_id in range(self.data_parallel):
+            ttnn.synchronize_device(self.model_args[model_id].mesh_device)
         return output_logits
 
     def prefill_forward_single_user_text(
