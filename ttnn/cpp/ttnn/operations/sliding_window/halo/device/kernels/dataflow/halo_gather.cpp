@@ -261,13 +261,13 @@ void kernel_main() {
     constexpr bool enable_blocking = !skip_untilize;
 
 #ifdef CONFIG_TENSOR_IN_DRAM
-    constexpr uint32_t padding_config_dram_addr = get_compile_time_arg_val(19);
-    constexpr uint32_t padding_config_page_size = get_compile_time_arg_val(20);
-    constexpr uint32_t gather_config_dram_addr = get_compile_time_arg_val(21);
-    constexpr uint32_t gather_config_page_size = get_compile_time_arg_val(22);
+    constexpr uint32_t padding_config_dram_addr = get_compile_time_arg_val(18);
+    constexpr uint32_t padding_config_page_size = get_compile_time_arg_val(19);
+    constexpr uint32_t gather_config_dram_addr = get_compile_time_arg_val(20);
+    constexpr uint32_t gather_config_page_size = get_compile_time_arg_val(21);
 
-    constexpr auto padding_config_tensor_args = TensorAccessorArgs<23>();
-    constexpr auto gather_config_tensor_args = TensorAccessorArgs<24>();
+    constexpr auto padding_config_tensor_args = TensorAccessorArgs<22>();
+    constexpr auto gather_config_tensor_args = TensorAccessorArgs<23>();
 
     const auto padding_config_accessor =
         TensorAccessor(padding_config_tensor_args, padding_config_dram_addr, padding_config_page_size);
