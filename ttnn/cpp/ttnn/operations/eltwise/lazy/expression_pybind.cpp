@@ -17,48 +17,32 @@ namespace ttnn::operations::lazy {
 
 template <typename T>
 void bind_iterable(py::handle scope, const std::string& name) {
-    auto cls = py::class_<T>(scope, name.c_str())
-                   .def(py::init<>())
-                   .def(py::init<const T&>())
-                   .def(
-                       "__getitem__",
-                       [](const T& iterable, std::ptrdiff_t i) {
-                           if (i < 0) {
-                               i += iterable.size();
-                               if (i < 0) {
-                                   throw py::index_error();
-                               }
-                           }
-                           auto i_st = static_cast<std::size_t>(i);
-                           if (i_st >= iterable.size()) {
-                               throw py::index_error();
-                           }
-                           return iterable[i_st];
-                       })
-                   .def(
-                       "__iter__",
-                       [](const T& iterable) {
-                           return py::make_iterator<py::return_value_policy::copy>(iterable.begin(), iterable.end());
-                       },
-                       py::keep_alive<0, 1>())
-                   .def("__bool__", [](const T& iterable) { return not iterable.empty(); })
-                   .def("__len__", &T::size);
-
-    using value_type = typename T::value_type;
-
-    if constexpr (requires(T& iter, const value_type& val) { iter.push_back(val); }) {
-        cls.def(py::init([](const py::list& list) {
-            T result;
-
-            for (const auto& item : list) {
-                result.push_back(item.cast<value_type>());
-            }
-
-            return result;
-        }));
-
-        py::implicitly_convertible<py::list, T>();
-    }
+    py::class_<T>(scope, name.c_str())
+        .def(py::init<>())
+        .def(py::init<const T&>())
+        .def(
+            "__getitem__",
+            [](const T& iterable, std::ptrdiff_t i) {
+                if (i < 0) {
+                    i += iterable.size();
+                    if (i < 0) {
+                        throw py::index_error();
+                    }
+                }
+                auto i_st = static_cast<std::size_t>(i);
+                if (i_st >= iterable.size()) {
+                    throw py::index_error();
+                }
+                return iterable[i_st];
+            })
+        .def(
+            "__iter__",
+            [](const T& iterable) {
+                return py::make_iterator<py::return_value_policy::copy>(iterable.begin(), iterable.end());
+            },
+            py::keep_alive<0, 1>())
+        .def("__bool__", [](const T& iterable) { return not iterable.empty(); })
+        .def("__len__", &T::size);
 }
 
 template <typename... Args, typename Func, typename... Extra>
@@ -95,7 +79,7 @@ void def_overloads(py::class_<Func>& cls, ttsl::overloaded<Overloads...> functor
 }
 
 template <typename Func>
-void def_functor(py::handle scope, Func functor, const std::string& name) {
+void def_functor(py::handle scope, const std::string& name, Func functor) {
     static_assert(
         not ttsl::short_type_name<Func>.ends_with('>'),
         "Func must be a non-template strong type like OverloadedBinaryFn, not a template specialization like "
@@ -117,7 +101,6 @@ void py_module(py::module& module) {
     export_enum<Ternary>(module);
 
     bind_iterable<Arguments<ExpressionView>>(module, "Arguments");
-    bind_iterable<Params>(module, "Params");
     bind_iterable<ParamsView>(module, "ParamsView");
 
     auto operation = py::class_<Operation>(module, "Operation");
@@ -128,86 +111,88 @@ void py_module(py::module& module) {
     auto function = py::class_<Function>(module, "Function");
     auto value = py::class_<Value>(module, "Value");
 
-    expression_view.def(py::init<const ExpressionView&>())
-        .def(py::init<const FunctionView&>())
-        .def(py::init<const Expression&>())
-        .def(py::init<const Function&>())
-        .def_property_readonly("tensor", &ExpressionView::tensor)
-        .def_property_readonly("function", &ExpressionView::function)
-        .def_property_readonly("value", &ExpressionView::value)
-        .def_property_readonly("dtype", &ExpressionView::dtype)
-        .def_property_readonly("shape", &ExpressionView::logical_shape)
-        .def_property_readonly("cb_index", &ExpressionView::cb_index)
-        .def_property_readonly("rt_offset", &ExpressionView::rt_offset)
-        .def_property_readonly("inputs", &ExpressionView::inputs)
-        .def_property_readonly("circular_buffers", &ExpressionView::circular_buffers);
-
-    function_view.def(py::init<const FunctionView&>())
-        .def(py::init<const Function&>())
-        .def_property_readonly("operation", &FunctionView::operation)
-        .def_property_readonly("arguments", &FunctionView::arguments)
-        .def_property_readonly("params", &FunctionView::params)
-        .def_property_readonly("dtype", &FunctionView::dtype)
-        .def_property_readonly("shape", &FunctionView::logical_shape)
-        .def_property_readonly("cb_index", &FunctionView::cb_index)
-        .def_property_readonly("rt_offset", &FunctionView::rt_offset)
-        .def_property_readonly("inputs", &FunctionView::inputs)
-        .def_property_readonly("circular_buffers", &FunctionView::circular_buffers);
-
-    expression.def(py::init<const Expression&>())
-        .def(py::init<const Function&>())
-        .def_property_readonly("tensor", &Expression::tensor)
-        .def_property_readonly("function", &Expression::function)
-        .def_property_readonly("value", &Expression::value)
-        .def_property_readonly("dtype", &Expression::dtype)
-        .def_property_readonly("shape", &Expression::logical_shape)
-        .def_property_readonly("cb_index", &Expression::cb_index)
-        .def_property_readonly("rt_offset", &Expression::rt_offset)
-        .def_property_readonly("inputs", &Expression::inputs)
-        .def_property_readonly("circular_buffers", &Expression::circular_buffers);
-
-    function.def(py::init<const Function&>())
-        .def_property_readonly("operation", &Function::operation)
-        .def_property_readonly("arguments", &Function::arguments)
-        .def_property_readonly("params", &Function::params)
-        .def_property_readonly("dtype", &Function::dtype)
-        .def_property_readonly("shape", &Function::logical_shape)
-        .def_property_readonly("cb_index", &Function::cb_index)
-        .def_property_readonly("rt_offset", &Function::rt_offset)
-        .def_property_readonly("inputs", &Function::inputs)
-        .def_property_readonly("circular_buffers", &Function::circular_buffers);
-
     py::implicitly_convertible<Expression, ExpressionView>();
     py::implicitly_convertible<Function, FunctionView>();
     py::implicitly_convertible<Function, ExpressionView>();
     py::implicitly_convertible<FunctionView, ExpressionView>();
 
-    module.def("to_compute_kernel_string", &to_compute_kernel_string).def("to_debug_string", &to_debug_string);
+    expression_view.def(py::init<const ExpressionView&>())
+        .def(py::init<const FunctionView&>())
+        .def(py::init<const Expression&>())
+        .def(py::init<const Function&>())
+        .def("tensor", &ExpressionView::tensor)
+        .def("function", &ExpressionView::function)
+        .def("value", &ExpressionView::value)
+        .def("dtype", &ExpressionView::dtype)
+        .def("shape", &ExpressionView::logical_shape)
+        .def("cb_index", &ExpressionView::cb_index)
+        .def("rt_offset", &ExpressionView::rt_offset)
+        .def("inputs", &ExpressionView::inputs)
+        .def("circular_buffers", &ExpressionView::circular_buffers);
 
-    def_functor(module, recip, "recip");
-    def_functor(module, negative, "negative");
-    def_functor(module, exp, "exp");
-    def_functor(module, eqz, "eqz");
-    def_functor(module, gez, "gez");
-    def_functor(module, gtz, "gtz");
-    def_functor(module, lez, "lez");
-    def_functor(module, ltz, "ltz");
-    def_functor(module, nez, "nez");
-    def_functor(module, logical_not, "logical_not");
-    def_functor(module, eq, "eq");
-    def_functor(module, ge, "ge");
-    def_functor(module, gt, "gt");
-    def_functor(module, le, "le");
-    def_functor(module, lt, "lt");
-    def_functor(module, ne, "ne");
-    def_functor(module, add, "add");
-    def_functor(module, sub, "sub");
-    def_functor(module, rsub, "rsub");
-    def_functor(module, mul, "mul");
-    def_functor(module, div, "div");
-    def_functor(module, rdiv, "rdiv");
-    def_functor(module, power, "power");
-    def_functor(module, where, "where");
+    function_view.def(py::init<const FunctionView&>())
+        .def(py::init<const Function&>())
+        .def("__str__", &to_debug_string)
+        .def("source", &to_compute_kernel_string)
+        .def("operation", &FunctionView::operation)
+        .def("arguments", &FunctionView::arguments)
+        .def("params", &FunctionView::params)
+        .def("dtype", &FunctionView::dtype)
+        .def("shape", &FunctionView::logical_shape)
+        .def("cb_index", &FunctionView::cb_index)
+        .def("rt_offset", &FunctionView::rt_offset)
+        .def("inputs", &FunctionView::inputs)
+        .def("circular_buffers", &FunctionView::circular_buffers);
+
+    expression.def(py::init<const Expression&>())
+        .def(py::init<const Function&>())
+        .def("tensor", &Expression::tensor)
+        .def("function", &Expression::function)
+        .def("value", &Expression::value)
+        .def("dtype", &Expression::dtype)
+        .def("shape", &Expression::logical_shape)
+        .def("cb_index", &Expression::cb_index)
+        .def("rt_offset", &Expression::rt_offset)
+        .def("inputs", &Expression::inputs)
+        .def("circular_buffers", &Expression::circular_buffers);
+
+    function.def(py::init<const Function&>())
+        .def("__str__", &to_debug_string)
+        .def("source", &to_compute_kernel_string)
+        .def("operation", &Function::operation)
+        .def("arguments", &Function::arguments)
+        .def("params", &Function::params)
+        .def("dtype", &Function::dtype)
+        .def("shape", &Function::logical_shape)
+        .def("cb_index", &Function::cb_index)
+        .def("rt_offset", &Function::rt_offset)
+        .def("inputs", &Function::inputs)
+        .def("circular_buffers", &Function::circular_buffers);
+
+    def_functor(module, "recip", recip);
+    def_functor(module, "negative", negative);
+    def_functor(module, "exp", exp);
+    def_functor(module, "eqz", eqz);
+    def_functor(module, "gez", gez);
+    def_functor(module, "gtz", gtz);
+    def_functor(module, "lez", lez);
+    def_functor(module, "ltz", ltz);
+    def_functor(module, "nez", nez);
+    def_functor(module, "logical_not", logical_not);
+    def_functor(module, "eq", eq);
+    def_functor(module, "ge", ge);
+    def_functor(module, "gt", gt);
+    def_functor(module, "le", le);
+    def_functor(module, "lt", lt);
+    def_functor(module, "ne", ne);
+    def_functor(module, "add", add);
+    def_functor(module, "sub", sub);
+    def_functor(module, "rsub", rsub);
+    def_functor(module, "mul", mul);
+    def_functor(module, "div", div);
+    def_functor(module, "rdiv", rdiv);
+    def_functor(module, "power", power);
+    def_functor(module, "where", where);
 }
 
 }  // namespace ttnn::operations::lazy

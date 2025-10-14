@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
 #pragma once
 
 #include "transform_view.h"
@@ -21,7 +25,7 @@
 namespace views {
 
 template <size_t In, size_t Out>
-constexpr auto init_sfpu() {
+constexpr auto init_sfpu(void) {
     constexpr auto compute = [](uint32_t in_cb_id, uint32_t out_cb_id) -> void {
         return ckernel::init_sfpu(in_cb_id, out_cb_id);
     };
@@ -72,58 +76,58 @@ inline void _pack(NumTilesPerCycle num_tiles_per_cycle, uint32_t out_cb_id) {
 
 template <void (*Init)(uint32_t, uint32_t), void (*Compute)(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t)>
 constexpr auto _binary(void) {
-    return views::transform<0, 1, 2, 3>(
-        [](auto num_tiles_per_cycle, uint32_t a_cb_id, uint32_t b_cb_id, uint32_t out_cb_id) -> void {
-            Init(a_cb_id, b_cb_id);
+    return [](auto num_tiles_per_cycle, uint32_t a_cb_id, uint32_t b_cb_id, uint32_t out_cb_id) -> void {
+        Init(a_cb_id, b_cb_id);
 
-            for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
-                Compute(a_cb_id, b_cb_id, i, i, i);
-            }
+        for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
+            Compute(a_cb_id, b_cb_id, i, i, i);
+        }
 
-            views::_pack(num_tiles_per_cycle, out_cb_id);
-        });
+        views::_pack(num_tiles_per_cycle, out_cb_id);
+    };
 }
 
 template <void (*Init)(void), void (*Compute)(uint32_t, uint32_t, uint32_t)>
 constexpr auto _binary_sfpu(void) {
-    return views::transform<0, 1, 2, 3>(
-        [](auto num_tiles_per_cycle, uint32_t a_cb_id, uint32_t b_cb_id, uint32_t out_cb_id) -> void {
-            views::_copy(num_tiles_per_cycle, a_cb_id, 0);
-            views::_copy(num_tiles_per_cycle, b_cb_id, num_tiles_per_cycle);
+    return [](auto num_tiles_per_cycle, uint32_t a_cb_id, uint32_t b_cb_id, uint32_t out_cb_id) -> void {
+        views::_copy(num_tiles_per_cycle, a_cb_id, 0);
+        views::_copy(num_tiles_per_cycle, b_cb_id, num_tiles_per_cycle);
 
-            Init();
+        Init();
 
-            for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
-                Compute(i, i + num_tiles_per_cycle, i);
-            }
+        for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
+            Compute(i, i + num_tiles_per_cycle, i);
+        }
 
-            views::_pack(num_tiles_per_cycle, out_cb_id);
-        });
+        views::_pack(num_tiles_per_cycle, out_cb_id);
+    };
 }
 
-constexpr auto add() {
+constexpr auto add(void) {
     constexpr auto add_tiles_init = [](uint32_t a_cb_id, uint32_t b_cb_id) -> void {
         return ckernel::add_tiles_init(a_cb_id, b_cb_id);
     };
     return _binary<add_tiles_init, &ckernel::add_tiles>();
 }
 
-constexpr auto sub() {
+constexpr auto sub(void) {
     constexpr auto sub_tiles_init = [](uint32_t a_cb_id, uint32_t b_cb_id) {
         return ckernel::sub_tiles_init(a_cb_id, b_cb_id);
     };
     return _binary<sub_tiles_init, &ckernel::sub_tiles>();
 }
 
-constexpr auto mul() { return _binary<&ckernel::mul_tiles_init, &ckernel::mul_tiles>(); }
+constexpr auto mul(void) { return _binary<&ckernel::mul_tiles_init, &ckernel::mul_tiles>(); }
 
-constexpr auto div_binary() { return _binary_sfpu<&ckernel::div_binary_tile_init, &ckernel::div_binary_tile>(); }
+constexpr auto div_binary(void) { return _binary_sfpu<&ckernel::div_binary_tile_init, &ckernel::div_binary_tile>(); }
 
-constexpr auto power_binary() { return _binary_sfpu<&ckernel::power_binary_tile_init, &ckernel::power_binary_tile>(); }
+constexpr auto power_binary(void) {
+    return _binary_sfpu<&ckernel::power_binary_tile_init, &ckernel::power_binary_tile>();
+}
 
 template <void (*Init)(void), void (*Compute)(uint32_t, uint32_t)>
 constexpr auto _unary_sfpu_with_param(uint32_t param) {
-    return views::transform<0, 1, 2>([=](auto num_tiles_per_cycle, uint32_t in_cb_id, uint32_t out_cb_id) -> void {
+    return [=](auto num_tiles_per_cycle, uint32_t in_cb_id, uint32_t out_cb_id) -> void {
         views::_copy(num_tiles_per_cycle, in_cb_id, 0);
 
         Init();
@@ -133,7 +137,7 @@ constexpr auto _unary_sfpu_with_param(uint32_t param) {
         }
 
         views::_pack(num_tiles_per_cycle, out_cb_id);
-    });
+    };
 }
 
 constexpr auto add_unary(uint32_t param) {
@@ -161,8 +165,8 @@ constexpr auto div_unary(uint32_t param) {
 }
 
 template <void (*Init)(void), void (*Compute)(uint32_t)>
-constexpr auto _unary_sfpu() {
-    return views::transform<0, 1, 2>([](auto num_tiles_per_cycle, uint32_t in_cb_id, uint32_t out_cb_id) -> void {
+constexpr auto _unary_sfpu(void) {
+    return [](auto num_tiles_per_cycle, uint32_t in_cb_id, uint32_t out_cb_id) -> void {
         views::_copy(num_tiles_per_cycle, in_cb_id, 0);
 
         Init();
@@ -172,19 +176,21 @@ constexpr auto _unary_sfpu() {
         }
 
         views::_pack(num_tiles_per_cycle, out_cb_id);
-    });
+    };
 }
 
-constexpr auto recip() {
+constexpr auto recip(void) {
     constexpr auto recip_tile = [](uint32_t dst_tile_index) { return ckernel::recip_tile(dst_tile_index); };
     return _unary_sfpu<&ckernel::recip_tile_init, recip_tile>();
 }
 
-constexpr auto negative() { return _unary_sfpu<&ckernel::negative_tile_init, &ckernel::negative_tile>(); }
+constexpr auto negative(void) { return _unary_sfpu<&ckernel::negative_tile_init, &ckernel::negative_tile>(); }
 
-constexpr auto negative_int32() { return _unary_sfpu<&ckernel::negative_tile_init, &ckernel::negative_tile_int32>(); }
+constexpr auto negative_int32(void) {
+    return _unary_sfpu<&ckernel::negative_tile_init, &ckernel::negative_tile_int32>();
+}
 
-constexpr auto exp() {
+constexpr auto exp(void) {
     constexpr auto exp_tile = [](uint32_t dst_tile_index) { return ckernel::exp_tile(dst_tile_index); };
     return _unary_sfpu<&ckernel::exp_tile_init, exp_tile>();
 }
@@ -193,57 +199,57 @@ constexpr auto power(uint32_t param) {
     return _unary_sfpu_with_param<&ckernel::power_tile_init, &ckernel::power_tile>(param);
 }
 
-constexpr auto eqz() { return _unary_sfpu<&ckernel::eqz_tile_init, &ckernel::eqz_tile>(); }
+constexpr auto eqz(void) { return _unary_sfpu<&ckernel::eqz_tile_init, &ckernel::eqz_tile>(); }
 
-constexpr auto eqz_int32() { return _unary_sfpu<&ckernel::eqz_tile_init, &ckernel::eqz_tile_int32>(); }
+constexpr auto eqz_int32(void) { return _unary_sfpu<&ckernel::eqz_tile_init, &ckernel::eqz_tile_int32>(); }
 
-constexpr auto eqz_uint16() { return _unary_sfpu<&ckernel::eqz_tile_init, &ckernel::eqz_tile_uint16>(); }
+constexpr auto eqz_uint16(void) { return _unary_sfpu<&ckernel::eqz_tile_init, &ckernel::eqz_tile_uint16>(); }
 
-constexpr auto eqz_uint32() { return _unary_sfpu<&ckernel::eqz_tile_init, &ckernel::eqz_tile_uint32>(); }
+constexpr auto eqz_uint32(void) { return _unary_sfpu<&ckernel::eqz_tile_init, &ckernel::eqz_tile_uint32>(); }
 
-constexpr auto gez() { return _unary_sfpu<&ckernel::gez_tile_init, &ckernel::gez_tile>(); }
+constexpr auto gez(void) { return _unary_sfpu<&ckernel::gez_tile_init, &ckernel::gez_tile>(); }
 
-constexpr auto gez_int32() { return _unary_sfpu<&ckernel::gez_tile_init, &ckernel::gez_tile_int32>(); }
+constexpr auto gez_int32(void) { return _unary_sfpu<&ckernel::gez_tile_init, &ckernel::gez_tile_int32>(); }
 
-constexpr auto gtz() { return _unary_sfpu<&ckernel::gtz_tile_init, &ckernel::gtz_tile>(); }
+constexpr auto gtz(void) { return _unary_sfpu<&ckernel::gtz_tile_init, &ckernel::gtz_tile>(); }
 
-constexpr auto gtz_int32() { return _unary_sfpu<&ckernel::gtz_tile_init, &ckernel::gtz_tile_int32>(); }
+constexpr auto gtz_int32(void) { return _unary_sfpu<&ckernel::gtz_tile_init, &ckernel::gtz_tile_int32>(); }
 
-constexpr auto lez() { return _unary_sfpu<&ckernel::lez_tile_init, &ckernel::lez_tile>(); }
+constexpr auto lez(void) { return _unary_sfpu<&ckernel::lez_tile_init, &ckernel::lez_tile>(); }
 
-constexpr auto lez_int32() { return _unary_sfpu<&ckernel::lez_tile_init, &ckernel::lez_tile_int32>(); }
+constexpr auto lez_int32(void) { return _unary_sfpu<&ckernel::lez_tile_init, &ckernel::lez_tile_int32>(); }
 
-constexpr auto ltz() { return _unary_sfpu<&ckernel::ltz_tile_init, &ckernel::ltz_tile>(); }
+constexpr auto ltz(void) { return _unary_sfpu<&ckernel::ltz_tile_init, &ckernel::ltz_tile>(); }
 
-constexpr auto ltz_int32() { return _unary_sfpu<&ckernel::ltz_tile_init, &ckernel::ltz_tile_int32>(); }
+constexpr auto ltz_int32(void) { return _unary_sfpu<&ckernel::ltz_tile_init, &ckernel::ltz_tile_int32>(); }
 
-constexpr auto nez() { return _unary_sfpu<&ckernel::nez_tile_init, &ckernel::nez_tile>(); }
+constexpr auto nez(void) { return _unary_sfpu<&ckernel::nez_tile_init, &ckernel::nez_tile>(); }
 
-constexpr auto nez_int32() { return _unary_sfpu<&ckernel::nez_tile_init, &ckernel::nez_tile_int32>(); }
+constexpr auto nez_int32(void) { return _unary_sfpu<&ckernel::nez_tile_init, &ckernel::nez_tile_int32>(); }
 
-constexpr auto nez_uint16() { return _unary_sfpu<&ckernel::nez_tile_init, &ckernel::nez_tile_uint16>(); }
+constexpr auto nez_uint16(void) { return _unary_sfpu<&ckernel::nez_tile_init, &ckernel::nez_tile_uint16>(); }
 
-constexpr auto nez_uint32() { return _unary_sfpu<&ckernel::nez_tile_init, &ckernel::nez_tile_uint32>(); }
+constexpr auto nez_uint32(void) { return _unary_sfpu<&ckernel::nez_tile_init, &ckernel::nez_tile_uint32>(); }
 
-constexpr auto logical_not() {
+constexpr auto logical_not(void) {
     return _unary_sfpu<&ckernel::logical_not_unary_tile_init, &ckernel::logical_not_unary_tile>();
 }
 
-constexpr auto logical_not_int32() {
+constexpr auto logical_not_int32(void) {
     return _unary_sfpu<&ckernel::logical_not_unary_tile_init, &ckernel::logical_not_unary_tile_int32>();
 }
 
-constexpr auto logical_not_uint16() {
+constexpr auto logical_not_uint16(void) {
     return _unary_sfpu<&ckernel::logical_not_unary_tile_init, &ckernel::logical_not_unary_tile_uint16>();
 }
 
-constexpr auto logical_not_uint32() {
+constexpr auto logical_not_uint32(void) {
     return _unary_sfpu<&ckernel::logical_not_unary_tile_init, &ckernel::logical_not_unary_tile_uint32>();
 }
 
 template <void (*Init)(void), void (*Compute)(uint32_t, uint32_t, uint32_t, uint32_t)>
-constexpr auto _ternary_sfpu() {
-    return views::transform<0, 1, 2, 3, 4>(
+constexpr auto _ternary_sfpu(void) {
+    return
         [](auto num_tiles_per_cycle, uint32_t a_cb_id, uint32_t b_cb_id, uint32_t c_cb_id, uint32_t out_cb_id) -> void {
             views::_copy(num_tiles_per_cycle, a_cb_id, 0);
             views::_copy(num_tiles_per_cycle, b_cb_id, num_tiles_per_cycle);
@@ -256,13 +262,13 @@ constexpr auto _ternary_sfpu() {
             }
 
             views::_pack(num_tiles_per_cycle, out_cb_id);
-        });
+        };
 }
 
-constexpr auto where() { return _ternary_sfpu<&ckernel::where_tile_init, &ckernel::where_tile>(); }
+constexpr auto where(void) { return _ternary_sfpu<&ckernel::where_tile_init, &ckernel::where_tile>(); }
 
-constexpr auto where_fp32() { return _ternary_sfpu<&ckernel::where_tile_init, &ckernel::where_fp32_tile>(); }
+constexpr auto where_fp32(void) { return _ternary_sfpu<&ckernel::where_tile_init, &ckernel::where_fp32_tile>(); }
 
-constexpr auto where_int32() { return _ternary_sfpu<&ckernel::where_tile_init, &ckernel::where_int32_tile>(); }
+constexpr auto where_int32(void) { return _ternary_sfpu<&ckernel::where_tile_init, &ckernel::where_int32_tile>(); }
 
 }  // namespace views
