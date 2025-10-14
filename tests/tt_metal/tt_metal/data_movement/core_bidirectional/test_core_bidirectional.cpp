@@ -335,6 +335,9 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementCoreBidirectionalSameVCSameKe
 }
 
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementCoreBidirectionalSameVCDifferentKernels) {
+    // Test failing with watcher enabled, github issue #29229
+    SKIP_FOR_WATCHER();
+
     GTEST_SKIP() << "Skipping test";  // Timeout issue (#36428)
 
     // Test ID (Arbitrary)
