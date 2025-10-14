@@ -51,41 +51,13 @@ void kernel_main() {
     uint32_t start_tw = offset_c % Wt;
     uint32_t end_tw = has_sharding ? start_tw + dst_shard_width : Wt;
 
-    // this is the INPUT tile offset
-    uint32_t tile_offset =
-        start_nd * nD_stride + start_d * d_stride + start_n * n_stride + start_c * c_stride + start_th * Wt;
-    uint32_t next_c_shift = c_stride - HtWt;
-    uint32_t next_n_shift = n_stride - c_stride * C;
-    uint32_t next_d_shift = d_stride - n_stride * N;
-    uint32_t next_nd_shift = nD_stride - d_stride * D;
-
-    uint32_t num_tiles_read = 0;
-    for (uint32_t nd = start_nd; nd < cND && num_tiles_read < dst_num_tiles; ++nd, start_d = 0) {
-        for (uint32_t d = start_d; d < D && num_tiles_read < dst_num_tiles; ++d, start_n = 0) {
-            for (uint32_t n = start_n; n < N && num_tiles_read < dst_num_tiles; ++n, start_c = 0) {
-                for (uint32_t c = start_c; c < C && num_tiles_read < dst_num_tiles; ++c, start_th = 0) {
-                    for (uint32_t th = start_th; th < Ht && num_tiles_read < dst_num_tiles; ++th) {
-                        for (uint32_t tw = start_tw; tw < end_tw && num_tiles_read < dst_num_tiles;
-                             ++tw, ++num_tiles_read) {
-                            cb_reserve_back(cb_id_src, onetile);
-                            uint32_t l1_write_addr_src = get_write_ptr(cb_id_src);
-                            noc_async_read_page(tile_offset + tw, src, l1_write_addr_src);
-                            noc_async_read_barrier();
-                            cb_push_back(cb_id_src, onetile);
-                        }
-                        if constexpr (!has_sharding) {
-                            // next row of tiles should start at the first column
-                            start_tw = 0;
-                        }
-                        tile_offset += Wt;
-                    }
-                    tile_offset += next_c_shift;
-                }
-                tile_offset += next_n_shift;
-            }
-            tile_offset += next_d_shift;
-        }
-        tile_offset += next_nd_shift;
+    // Use simple linear tile reading for treating sharded as interleaved
+    for (uint32_t i = 0; i < dst_num_tiles; ++i) {
+        cb_reserve_back(cb_id_src, onetile);
+        uint32_t l1_write_addr_src = get_write_ptr(cb_id_src);
+        noc_async_read_page(start_tile_id + i, src, l1_write_addr_src);
+        noc_async_read_barrier();
+        cb_push_back(cb_id_src, onetile);
     }
 #endif
 }

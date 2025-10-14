@@ -1797,18 +1797,18 @@ def test_binary_sharded_invalid_bcast(a_shape, b_shape, a_shard_size, b_shard_si
         use_height_and_width_as_shard_shape=True,
     )
 
-    a_pt, a_tt = rand_bf16_gen(a_shape, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    a_pt, a_tt = rand_bf16_gen(a_shape, device, memory_config=a_sharded_config)
     b_pt, b_tt = rand_bf16_gen(b_shape, device, memory_config=b_sharded_config)
 
+    # this will work a + b
+    # out_pt = torch.add(b_pt, a_pt)
+    # out_tt_sharded = ttnn.add(a_tt, b_tt, use_legacy=None)
+    # out_tt_sharded = ttnn.to_torch(out_tt_sharded)
+    # assert_with_pcc(out_tt_sharded, out_pt)
+
+    # this does not work b + a
     with pytest.raises(RuntimeError):
-        out_tt_sharded = ttnn.add(a_tt, b_tt, use_legacy=None)
-
-    # TODO
-    # a_pt, a_tt = rand_bf16_gen(a_shape, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    # b_pt, b_tt = rand_bf16_gen(b_shape, device, memory_config=b_sharded_config)
-
-    # with pytest.raises(RuntimeError):
-    #      out_tt_sharded = ttnn.add(b_tt, a_tt, use_legacy=None)
+        out_tt_sharded = ttnn.add(b_tt, a_tt, use_legacy=None)
 
 
 @pytest.mark.parametrize(
@@ -2282,8 +2282,8 @@ def test_binary_sharded_bcast_scalar_value_uneven(
     input_combinations = (
         (ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
         (ttnn.DRAM_MEMORY_CONFIG, sharded_config),
-        # (sharded_config, ttnn.DRAM_MEMORY_CONFIG),
-        # (sharded_config, sharded_config),
+        (sharded_config, ttnn.DRAM_MEMORY_CONFIG),
+        (sharded_config, sharded_config),
     )
     for a_config, dst_config in input_combinations:
         a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(a_shape)

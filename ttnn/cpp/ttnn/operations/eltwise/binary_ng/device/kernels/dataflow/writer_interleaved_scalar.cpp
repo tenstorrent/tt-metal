@@ -44,9 +44,7 @@ void kernel_main() {
     uint32_t start_c = offset_n / HtWt;
     uint32_t start_th = offset_c / Wt;
     uint32_t start_tw = offset_c % Wt;
-    // Runtime detection: if dst_shard_width < Wt, we have width sharding
-    bool has_width_sharding = dst_shard_width > 0 && dst_shard_width < Wt;
-    uint32_t end_tw = has_width_sharding ? start_tw + dst_shard_width : Wt;
+    uint32_t end_tw = has_sharding ? start_tw + dst_shard_width : Wt;
 #endif
     // we only need to fill a tile with the scalar value once
     cb_reserve_back(cb_id_src, onetile);
@@ -60,34 +58,13 @@ void kernel_main() {
     cb_push_back(cb_id_src, onetile);
 
 #if !DST_SHARDED
-    uint32_t num_tiles_written = 0;
-    // For 2D addressing, dst_tile_offset should point to row start (without column offset)
-    uint32_t dst_tile_offset = start_tile_id - start_tw;
-
-    for (uint32_t nd = start_nd; nd < cND && num_tiles_written < dst_num_tiles; ++nd, start_d = 0) {
-        for (uint32_t d = start_d; d < D && num_tiles_written < dst_num_tiles; ++d, start_n = 0) {
-            for (uint32_t n = start_n; n < N && num_tiles_written < dst_num_tiles; ++n, start_c = 0) {
-                for (uint32_t c = start_c; c < C && num_tiles_written < dst_num_tiles; ++c, start_th = 0) {
-                    for (uint32_t th = start_th; th < Ht && num_tiles_written < dst_num_tiles; ++th) {
-                        for (uint32_t tw = start_tw; tw < end_tw && num_tiles_written < dst_num_tiles;
-                             ++tw, ++num_tiles_written) {
-                            // Write using 2D addressing: row offset + column index
-                            cb_wait_front(cb_id_dst, onetile);
-                            uint32_t l1_read_addr = get_read_ptr(cb_id_dst);
-                            noc_async_write_page(dst_tile_offset + tw, dst, l1_read_addr);
-                            noc_async_write_barrier();
-                            cb_pop_front(cb_id_dst, onetile);
-                        }
-                        // Move to next row
-                        dst_tile_offset += Wt;
-                        if (!has_width_sharding) {
-                            // For non-width-sharded, reset to column 0 for next row
-                            start_tw = 0;
-                        }
-                    }
-                }
-            }
-        }
+    // Use simple linear tile writing for treating sharded as interleaved
+    for (uint32_t i = 0; i < dst_num_tiles; ++i) {
+        cb_wait_front(cb_id_dst, onetile);
+        uint32_t l1_read_addr = get_read_ptr(cb_id_dst);
+        noc_async_write_page(start_tile_id + i, dst, l1_read_addr);
+        noc_async_write_barrier();
+        cb_pop_front(cb_id_dst, onetile);
     }
 #endif
 }
