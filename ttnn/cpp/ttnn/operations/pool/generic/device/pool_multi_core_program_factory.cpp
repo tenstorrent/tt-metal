@@ -16,7 +16,6 @@
 #include "ttnn/tensor/storage.hpp"
 #include <tt-metalium/hal.hpp>
 #include <algorithm>
-#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 namespace ttnn::operations::pool {
 /**
@@ -239,7 +238,6 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     uint32_t dilation_w,
     uint32_t num_shards_c,
     const MemoryConfig& out_mem_config,
-    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
     std::optional<int32_t> divisor_override,
     uint32_t memory_used,
     const Layout& output_layout) {
@@ -627,23 +625,11 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         is_output_tiled,                // 20
         is_output_block_format};        // 21
 
-    // Get device arch for compute kernel config initialization
-    auto device_arch = inputs[0].device()->arch();
-
-    // Initialize device compute kernel config with user-provided config or defaults
-    auto device_compute_kernel_config = init_device_compute_kernel_config(
-        device_arch,
-        compute_kernel_config,
-        MathFidelity::HiFi4,
-        false,                                         // math_approx_mode
-        params.is_avg_pool && params.is_large_kernel,  // fp32_dest_acc_en
-        false,                                         // packer_l1_acc
-        false                                          // dst_full_sync_en
-    );
-
     auto compute_config = tt::tt_metal::ComputeConfig{
-        .math_fidelity = get_math_fidelity(device_compute_kernel_config),
-        .fp32_dest_acc_en = get_fp32_dest_acc_en(device_compute_kernel_config),
+        .math_fidelity = MathFidelity::HiFi4,
+        .fp32_dest_acc_en =
+            params.is_avg_pool && params.is_large_kernel,  // for average pool requires fp32 accumulation to avoid
+                                                           // precision error buildup over multiuple reduction stages
         .math_approx_mode = false,
         .compile_args = compute_ct_args,
         .defines = get_defines(pool_type)};
@@ -751,7 +737,6 @@ Pool2D::MultiCore::cached_program_t Pool2D::MultiCore::create(
     const auto& sliding_window_config = op_attr.sliding_window_config_;
     const auto& pool_type = op_attr.pool_type_;
     const auto& out_mem_config = op_attr.memory_config_;
-    const auto& compute_kernel_config = op_attr.compute_kernel_config_;
     const auto& output_layout = op_attr.output_layout_;
     bool count_include_pad = op_attr.count_include_pad_;
     std::optional<int32_t> divisor_override = op_attr.divisor_override_;
@@ -832,7 +817,6 @@ Pool2D::MultiCore::cached_program_t Pool2D::MultiCore::create(
         dilation_w,
         num_shards_c,
         out_mem_config,
-        compute_kernel_config,
         divisor_override,
         op_attr.memory_used,
         output_layout);
