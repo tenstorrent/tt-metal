@@ -20,7 +20,7 @@ void py_bind_all_gather(py::module& module) {
     auto doc =
         R"doc(all_gather(input_tensor: ttnn.Tensor, dim: int, cluster_axis: Optional[int] = None, topology: ttnn.Topology = ttnn.Topology.Linear, output_tensor: Optional[ttnn.Tensor] = None, memory_config: Optional[ttnn.MemoryConfig] = None, subdevice_id: Optional[ttnn.SubDeviceId] = None) -> ttnn.Tensor
 
-            All-gather operation across devices along a selected dimension and optional cluster axis.
+            All-gather operation across devices along a selected dimension and optional cluster axis. If cluster axis is specified then we gather across the cluster axis. All-gather is a collective operation that gathers data from all devices into a new output tensor, concatenated along the specified `dim`. When cluster_axis is specified, each of the non-cluster_axis dimensions are performing independent all-gathers along the devices on the cluster axis.
 
             Args:
                 input_tensor (ttnn.Tensor): Input tensor to be gathered.
@@ -34,7 +34,7 @@ void py_bind_all_gather(py::module& module) {
                 subdevice_id (ttnn.SubDeviceId, optional): Subdevice id for worker cores.
 
            Returns:
-               ttnn.Tensor: The gathered tensor.
+               ttnn.Tensor: The gathered tensor, with output_shape = input_shape for all the unspecified dimensions, and output_shape[dim] = input_shape[dim] * num_devices, where num_devices is the number of devices along the `cluster_axis` if specified, else the total number of devices along the mesh.
 
             Example:
                 >>> full_tensor = torch.randn([1, 1, 32, 256], dtype=torch.bfloat16)
