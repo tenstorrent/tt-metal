@@ -817,8 +817,8 @@ static Tensor to_folded_weight_layout(const Tensor& conv_weight_tensor, std::arr
     // Get input data type
     auto dtype = conv_weight_tensor.dtype();
 
-    auto pad_h = kernel_h % stride[0];
-    auto pad_w = kernel_w % stride[1];
+    auto pad_h = (stride[0] - (kernel_h % stride[0])) % stride[0];
+    auto pad_w = (stride[1] - (kernel_w % stride[1])) % stride[1];
 
     auto padded_kernel_h = kernel_h + pad_h;
     auto padded_kernel_w = kernel_w + pad_w;
@@ -1113,8 +1113,15 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
     bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding_n4, dilation, groups, conv_config);
     auto orig_stride = stride;
     const bool is_conv1d = is_1d_conv(kernel_size[1], input_width);
-
-    if (conv_config.enable_kernel_stride_folding) {
+    conv_config.enable_kernel_stride_folding = auto_enable_kernel_folding(
+        conv_config.enable_kernel_stride_folding,
+        input_memory_config.is_dram(),
+        input_height,
+        input_width,
+        kernel_size,
+        stride,
+        padding_n4);
+    if (conv_config.enable_kernel_stride_folding.value()) {
         auto folding_result = compute_kernel_stride_folding_params(
             input_height, input_width, in_channels, kernel_size, stride, padding_n4, conv_config);
 
@@ -1345,7 +1352,7 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
         mm_conv && auto_shard,
         has_bias,
         true,  // parameters_on_device
-        conv_config.enable_kernel_stride_folding,
+        conv_config.enable_kernel_stride_folding.value(),
         conv_config.full_inner_dim,
         conv_config.enable_activation_reuse,
         kernel_size,

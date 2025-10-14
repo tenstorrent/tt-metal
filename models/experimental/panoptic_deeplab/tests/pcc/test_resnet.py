@@ -136,7 +136,7 @@ def test_resnet_stem_pcc(device, batch_size, height, width, reset_seeds, model_l
     "height,width",
     [(512, 1024)],
 )
-@pytest.mark.parametrize("layer_name, expected_pcc", [("res2", 0.99), ("res3", 0.99), ("res4", 0.95), ("res5", 0.93)])
+@pytest.mark.parametrize("layer_name, expected_pcc", [("res2", 0.99), ("res3", 0.99), ("res4", 0.99), ("res5", 0.99)])
 def test_resnet_layer_pcc(
     device, batch_size, height, width, layer_name, expected_pcc, reset_seeds, model_location_generator
 ):
@@ -249,8 +249,8 @@ def test_resnet_full_pcc(device, batch_size, height, width, reset_seeds, model_l
     layer_pcc_thresholds = {
         "res2": 0.99,
         "res3": 0.99,
-        "res4": 0.96,
-        "res5": 0.93,
+        "res4": 0.99,
+        "res5": 0.99,
     }
 
     for layer_name in ["res2", "res3", "res4", "res5"]:
