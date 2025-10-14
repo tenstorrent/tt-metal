@@ -358,7 +358,6 @@ def convert_meta_to_hf(state_dict, head_dim, fuse_qkv=False, fuse_mlp=False):
     if fuse_mlp:
         state_dict = fuse_mlp_meta(state_dict)
 
-    # stojko - this one is rewritten
     state_dict = map_meta_to_hf_keys(state_dict)
 
     return state_dict
@@ -566,6 +565,7 @@ def map_meta_to_hf_keys(state_dict):
     See replace_keys for more details on the format of replacements.
     """
     replacements = [
+        ("layers", "model.layers"),
         ("attention_norm", "input_layernorm"),
         ("ffn_norm", "post_attention_layernorm"),
         ("attention", "self_attn"),

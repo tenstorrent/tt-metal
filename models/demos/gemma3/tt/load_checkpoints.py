@@ -337,6 +337,7 @@ def map_meta_to_hf_keys(state_dict):
     See replace_keys for more details on the format of replacements.
     """
     replacements = [
+        ("layers", "model.layers"),
         ("attention_norm", "input_layernorm"),
         ("ffn_norm", "post_attention_layernorm"),
         ("attention", "self_attn"),
