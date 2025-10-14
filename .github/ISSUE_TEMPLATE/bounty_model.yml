@@ -15,18 +15,13 @@ body:
         This bounty is for bringing up the [Faster-RCNN](https://docs.pytorch.org/vision/main/models/faster_rcnn.html) model using TTNN APIs on Tenstorrent hardware (Wormhole or Blackhole). Faster-RCNN is a widely used deep learning model for object detection in images, applied in autonomous vehicles, surveillance, robotics, and various vision-based industrial applications. The objective is to enable the model to run efficiently on TT hardware, allowing Tenstorrent users and partners to leverage high-throughput, low-latency inference for object detection tasks.
 
 
-
-  - type: markdown
-    attributes:
-      value: |
-        ### 🎯 What Success Looks Like
-
   - type: textarea
     id: success_criteria
     attributes:
-      label: "A successful submission will fulfill all requirements in the following stages. Payout is made after all stages are completed."
+      label: "🎯 What Success Looks Like"
       placeholder: |
         Define a list or checklist of clear, testable acceptance criteria - this is the goal the developer is chasing. They achieve all stages, we pay. Model bounties are split into 3 stages.
+        e.g. A successful submission will fulfill all requirements in the following stages. Payout is made after all stages are completed.
 
 
   - type: textarea
@@ -106,7 +101,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        ## 📊 Result Submission Guidelines
+        ###  📊 Result Submission Guidelines
         Beyond the model implementation itself. Contributors must submit the following material as a proof of work. However, feel free to open a PR at any time if you want us checking you are on the right track. Just understand that payout is only made after **all 3 stages** are completed.
 
         **Deliverables:**
