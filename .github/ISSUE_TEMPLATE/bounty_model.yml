@@ -77,13 +77,10 @@ body:
     id: approaches
     attributes:
       label: "🔎 Possible Approaches"
-      description: "List one or more technical paths, architectural suggestions, or research ideas; Help the developer not succumb to analysis paralysis - too many options, don't know what to do"
       placeholder: |
-        - Start from an existing PyTorch Faster-RCNN model and port layers one by one to TTNN.
-        - Validate each submodule's output against CPU/PyTorch reference before full integration.
-        - Experiment with different sharding strategies and memory configs for convolutions.
-        - Use TTNN profiling tools to identify bottlenecks and areas for fusion.
-        - Open a draft PR early to get feedback on your approach.
+        - List one or more technical approaches, architectural suggestions, or research ideas.
+        - Help the developer avoid analysis paralysis (i.e., “too many options, not sure what to do”).
+
 
   - type: markdown
     attributes:
