@@ -265,4 +265,6 @@ while [[ "$found" == "false" ]]; do
     esac
   fi
 
+done
+
 git bisect reset || true
