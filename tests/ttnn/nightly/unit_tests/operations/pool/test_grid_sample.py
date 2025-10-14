@@ -36,7 +36,7 @@ def validate_grid_sample_output(
 
     # Determine allclose tolerances based on grid type and precomputed grid usage
     if use_precomputed_grid:
-        atol, rtol = 1.0, 1e-1  # Precomputed grid has slightly lower accuracy
+        atol, rtol = 0.02, 2e-2  # Precomputed grid has slightly lower accuracy
     else:
         if grid_dtype == ttnn.float32:
             atol, rtol = 0.02, 1e-2
