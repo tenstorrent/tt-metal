@@ -198,3 +198,47 @@ The tests require:
 All tests generate:
 - **Console logs**: Detailed PCC comparisons and validation results
 - **Visualizations**: Debug plots and comparison images (saved to `outputs/` directories)
+
+## Section 3: Device Performance Tests
+
+The device performance test suite benchmarks the OFT model components on TT hardware, measuring execution time and ensuring performance regression detection.
+
+### test_device_perf_oft.py
+Comprehensive performance benchmarking for OFT model components on TT device hardware.
+
+**What it tests:**
+- **OFTNet Model Performance**: Full model inference excluding decoder (test_device_perf_oft_oftnet)
+- **Decoder Performance**: Object detection decoder performance in isolation (test_device_perf_oft_decoder)
+- **Full Pipeline Performance**: End-to-end inference including complete demo pipeline (test_device_perf_oft_full)
+
+**Key features:**
+- **Performance Regression Detection**: Validates execution time against expected baselines
+- **Hardware Profiling**: Measures DEVICE FW, DEVICE KERNEL, and DEVICE BRISC KERNEL cycles
+- **Statistical Analysis**: Runs multiple iterations (3x) for reliable performance measurements
+- **Automated Reporting**: Generates detailed performance reports with timing breakdowns
+- **Margin-based Validation**: 1.5% tolerance for performance variations
+
+**Performance Targets:**
+- **OFTNet**: ~342.8M nanoseconds per iteration
+- **Decoder**: ~4.8M nanoseconds per iteration
+- **Full Demo**: ~345.6M nanoseconds per iteration
+
+**Usage:**
+```bash
+# Run individual performance tests
+TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="4,3" pytest models/experimental/oft/tests/test_device_perf_oft.py::test_device_perf_oft_oftnet
+bash
+TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="4,3" pytest models/experimental/oft/tests/test_device_perf_oft.py::test_device_perf_oft_decoder
+bash
+TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="4,3" pytest models/experimental/oft/tests/test_device_perf_oft.py::test_device_perf_oft_full
+
+# Run all performance tests
+bash
+TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="4,3" pytest models/experimental/oft/tests/test_device_perf_oft.py
+```
+
+**Output:**
+- Performance reports saved to `generated/profiler/reports/`
+- Detailed timing breakdowns by hardware component
+- Comparison against expected performance baselines
+- Pass/fail status based on performance regression thresholds
