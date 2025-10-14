@@ -37,7 +37,7 @@ def main(python_ops_perf_report, cpp_ops_perf_report):
         logger.info("Skipping comparison because the two ops perf reports have no common columns")
         return
 
-    assert common_columns.size >= 11, f"Only {common_columns.size} common columns found"
+    assert common_columns.size >= 17, f"Only {common_columns.size} common columns found"
 
     python_df_filtered = python_df[common_columns].astype(float)
     assert (
