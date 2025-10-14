@@ -32,7 +32,7 @@ from ttexalens.context import Context
 from ttexalens.gdb.gdb_server import GdbServer, ServerSocket
 from ttexalens.hardware.risc_debug import CallstackEntry, ParsedElfFile
 from ttexalens.tt_exalens_lib import top_callstack, callstack
-from utils import BLUE, GREEN, ORANGE, RED, RST, should_use_color
+from utils import BLUE, GREEN, ORANGE, RED, RST
 
 import re
 import socket
@@ -44,9 +44,6 @@ from pathlib import Path
 script_config = ScriptConfig(
     depends=["run_checks", "dispatcher_data", "elfs_cache"],
 )
-
-# Module-level flag to control color output in callstacks
-_color_enabled = False
 
 
 def get_process_ids(gdb_server: GdbServer):
@@ -233,24 +230,18 @@ def get_callstack(
         return KernelCallstackWithMessage(callstack=[], message=str(e))
 
 
-def _format_callstack(callstack: list[CallstackEntry], color: bool = False) -> list[str]:
+def _format_callstack(callstack: list[CallstackEntry]) -> list[str]:
     """Return string representation of the callstack."""
     frame_number_width = len(str(len(callstack) - 1))
     result = []
     cwd = Path.cwd()
 
-    # Set color codes based on color flag
-    pc_color = BLUE if color else ""
-    func_color = ORANGE if color else ""
-    path_color = GREEN if color else ""
-    reset = RST if color else ""
-
     for i, frame in enumerate(callstack):
         line = f"  #{i:<{frame_number_width}} "
         if frame.pc is not None:
-            line += f"{pc_color}0x{frame.pc:08X}{reset} in "
+            line += f"{BLUE}0x{frame.pc:08X}{RST} in "
         if frame.function_name is not None:
-            line += f"{func_color}{frame.function_name}{reset} () "
+            line += f"{ORANGE}{frame.function_name}{RST} () "
         if frame.file is not None:
             # Convert absolute path to relative path with ./ prefix
             file_path = Path(frame.file)
@@ -264,11 +255,11 @@ def _format_callstack(callstack: list[CallstackEntry], color: bool = False) -> l
                 # Path is not relative to cwd, keep as is
                 display_path = frame.file
 
-            line += f"at {path_color}{display_path}{reset}"
+            line += f"at {GREEN}{display_path}{RST}"
             if frame.line is not None:
-                line += f" {path_color}{frame.line}{reset}"
+                line += f" {GREEN}{frame.line}{RST}"
                 if frame.column is not None:
-                    line += f"{path_color}:{frame.column}{reset}"
+                    line += f"{GREEN}:{frame.column}{RST}"
         result.append(line)
     return result
 
@@ -277,17 +268,12 @@ def format_callstack_with_message(callstack_with_message: KernelCallstackWithMes
     """Return string representation of the callstack with optional error message. Adding empty line at the beginning for prettier look."""
     empty_line = ""  # For prettier look
 
-    # Set color codes based on color flag
-    error_color = RED if _color_enabled else ""
-    reset = RST if _color_enabled else ""
-
     if callstack_with_message.message is not None:
         return "\n".join(
-            [f"{error_color}{callstack_with_message.message}{reset}"]
-            + _format_callstack(callstack_with_message.callstack, _color_enabled)
+            [f"{RED}{callstack_with_message.message}{RST}"] + _format_callstack(callstack_with_message.callstack)
         )
     else:
-        return "\n".join([empty_line] + _format_callstack(callstack_with_message.callstack, _color_enabled))
+        return "\n".join([empty_line] + _format_callstack(callstack_with_message.callstack))
 
 
 @dataclass
@@ -320,10 +306,6 @@ def dump_callstacks(
     show_all_cores: bool = False,
 ) -> DumpCallstacksData | None:
     result: DumpCallstacksData | None = None
-
-    # Set color codes based on color flag
-    error_color = ORANGE if _color_enabled else ""
-    reset = RST if _color_enabled else ""
 
     try:
         dispatcher_core_data = dispatcher_data.get_core_data(location, risc_name)
@@ -398,7 +380,7 @@ def dump_callstacks(
     except Exception as e:
         log_check(
             False,
-            f"{error_color}Failed to dump callstacks for {risc_name} at {location} on device {location._device._id}: {e}{reset}",
+            f"{ORANGE}Failed to dump callstacks for {risc_name} at {location} on device {location._device._id}: {e}{RST}",
         )
         return result
 
@@ -439,7 +421,6 @@ def start_gdb_server(port: int, context: Context) -> GdbServer:
 
 
 def run(args, context: Context):
-    global _color_enabled
     from triage import set_verbose_level
 
     full_callstack = args["--full-callstack"]
@@ -449,9 +430,6 @@ def run(args, context: Context):
     # Set verbose level from -v count (controls which columns are displayed)
     verbose_level = args["-v"]
     set_verbose_level(verbose_level)
-
-    # Set color mode
-    _color_enabled = should_use_color()
 
     BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth"]
     elfs_cache = get_elfs_cache(args, context)
