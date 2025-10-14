@@ -236,6 +236,8 @@ class TtUNetConfigBuilder:
                 self.features * 2,
                 self.features,  # After concat: features + features
                 self.parameters["decoder1"][0],
+                fp32_dest_acc_en=False,
+                packer_l1_acc=False,
             ),
             decoder1_conv2=self._create_conv_config_from_params(
                 self.input_height,
@@ -245,6 +247,8 @@ class TtUNetConfigBuilder:
                 self.parameters["decoder1"][1],
                 activation_dtype=ttnn.bfloat8_b,
                 output_dtype=ttnn.bfloat8_b,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=False,
             ),
             # Final convolution (1x1 conv)
             final_conv=self._create_conv_config_from_params(
@@ -255,6 +259,8 @@ class TtUNetConfigBuilder:
                 self.parameters["conv"],
                 kernel_size=(1, 1),
                 padding=(0, 0),
+                weights_dtype=ttnn.bfloat16,
+                math_fidelity=ttnn.MathFidelity.HiFi2,
                 activation=None,  # No activation for final layer
             ),
             # Transpose convolution configurations from preprocessed parameters
@@ -307,6 +313,9 @@ class TtUNetConfigBuilder:
         activation_dtype=ttnn.bfloat16,
         weights_dtype=ttnn.bfloat8_b,
         output_dtype=ttnn.bfloat16,
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
     ) -> Conv2dConfiguration:
         """Create a Conv2dConfiguration from preprocessed parameters dict containing weight and bias"""
         return Conv2dConfiguration(
@@ -328,9 +337,9 @@ class TtUNetConfigBuilder:
             output_layout=ttnn.TILE_LAYOUT,
             enable_weights_double_buffer=False,
             enable_act_double_buffer=False,
-            math_fidelity=ttnn.MathFidelity.LoFi,
-            fp32_dest_acc_en=False,
-            packer_l1_acc=False,
+            math_fidelity=math_fidelity,
+            fp32_dest_acc_en=fp32_dest_acc_en,
+            packer_l1_acc=packer_l1_acc,
         )
 
     def _create_pool_config(self, input_height: int, input_width: int, channels: int) -> MaxPool2dConfiguration:

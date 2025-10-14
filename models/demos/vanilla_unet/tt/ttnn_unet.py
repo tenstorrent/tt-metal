@@ -107,7 +107,7 @@ class TtUNet:
 
         # Decoder 1
         print("decoder 1")
-        dec1 = self._transpose_conv(dec2, self.upconv1_config)
+        dec1 = self._transpose_conv(dec2, self.upconv1_config, fp32_dest_acc_en=False, packer_l1_acc=False)
         dec1 = self._concatenate_skip_connection(dec1, skip1, rm=False)
         dec1 = self.decoder1_conv1(dec1)
         dec1 = self.decoder1_conv2(dec1)
@@ -117,7 +117,13 @@ class TtUNet:
 
         return output
 
-    def _transpose_conv(self, input_tensor: ttnn.Tensor, upconv_config: UpconvConfiguration) -> ttnn.Tensor:
+    def _transpose_conv(
+        self,
+        input_tensor: ttnn.Tensor,
+        upconv_config: UpconvConfiguration,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    ) -> ttnn.Tensor:
         """
         Perform transpose convolution using UpconvConfiguration
 
@@ -140,8 +146,8 @@ class TtUNet:
         compute_config = ttnn.init_device_compute_kernel_config(
             self.device.arch(),
             math_fidelity=ttnn.MathFidelity.LoFi,
-            fp32_dest_acc_en=False,
-            packer_l1_acc=False,
+            fp32_dest_acc_en=fp32_dest_acc_en,
+            packer_l1_acc=packer_l1_acc,
         )
         return ttnn.conv_transpose2d(
             input_tensor=input_tensor,
