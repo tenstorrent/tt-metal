@@ -39,8 +39,13 @@ def main(python_ops_perf_report, cpp_ops_perf_report):
 
     assert common_columns.size >= 11, f"Only {common_columns.size} common columns found"
 
-    python_df_filtered = python_df[common_columns]
-    cpp_df_filtered = cpp_df[common_columns]
+    python_df_filtered = python_df[common_columns].astype(float)
+    assert (
+        "DEVICE FW DURATION [ns]" in python_df_filtered.columns
+    ), "'DEVICE FW DURATION [ns]' column not found in Python ops perf report"
+    python_df_filtered = python_df_filtered[python_df_filtered["DEVICE FW DURATION [ns]"].notna()]
+
+    cpp_df_filtered = cpp_df[common_columns].astype(float)
     cpp_df_filtered = cpp_df_filtered[cpp_df_filtered["GLOBAL CALL COUNT"] != 0]
 
     python_df_sorted = python_df_filtered.sort_values(by="GLOBAL CALL COUNT").reset_index(drop=True)
