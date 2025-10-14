@@ -107,3 +107,66 @@ INSTANTIATE_TEST_SUITE_P(
         BinaryOpTraceRuntime::m_interleaved_1_3_1024_1024_tiled)));
 
 }  // namespace ttnn::operations::binary::test
+
+namespace ttnn::operations::reshape::test {
+
+class ReshapeOpTraceRuntime : public binary::test::TTNNFixtureWithTraceEnabledDevice {};
+
+TEST_F(ReshapeOpTraceRuntime, Reshape) {
+    tt::tt_metal::distributed::MeshDevice* device = device_;
+
+    // Create input tensor spec
+    const auto input_spec = ttnn::TensorSpec(
+        ttnn::Shape{64, 1024},
+        tt::tt_metal::TensorLayout(
+            tt::tt_metal::DataType::BFLOAT16,
+            tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
+            ttnn::DRAM_MEMORY_CONFIG));
+
+    // Create output tensor spec for DRAM
+    const auto output_specDRAM = ttnn::TensorSpec(
+        ttnn::Shape{1, 1, 256, 256},
+        tt::tt_metal::TensorLayout(
+            tt::tt_metal::DataType::BFLOAT16,
+            tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
+            ttnn::DRAM_MEMORY_CONFIG));
+
+    // Create output tensor spec for L1
+    const auto output_specL1 = ttnn::TensorSpec(
+        ttnn::Shape{1, 1, 256, 256},
+        tt::tt_metal::TensorLayout(
+            tt::tt_metal::DataType::BFLOAT16,
+            tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
+            ttnn::L1_MEMORY_CONFIG));
+
+    // hang sequence: runtime -> constraints -> runtime
+    auto runQueryDRAM = ttnn::graph::query_op_runtime(
+        ttnn::reshape,
+        device,
+        input_spec,
+        output_specDRAM.logical_shape(),
+        output_specDRAM.tensor_layout().get_memory_config());
+    auto constraintsL1 = ttnn::graph::query_op_constraints(
+        ttnn::reshape,
+        device,
+        input_spec,
+        output_specL1.logical_shape(),
+        output_specL1.tensor_layout().get_memory_config());
+    auto runQueryL1 = ttnn::graph::query_op_runtime(
+        ttnn::reshape,
+        device,
+        input_spec,
+        output_specL1.logical_shape(),
+        output_specL1.tensor_layout().get_memory_config());
+
+    // Verify the operations were successful
+    EXPECT_EQ(runQueryDRAM.status, ttnn::graph::ExecutionStatus::Success);
+    EXPECT_EQ(constraintsL1.status, ttnn::graph::ExecutionStatus::Success);
+    EXPECT_EQ(runQueryL1.status, ttnn::graph::ExecutionStatus::Success);
+
+    // Verify we got a valid runtime measurements
+    EXPECT_GT(runQueryDRAM.runtime, 0);
+    EXPECT_GT(runQueryL1.runtime, 0);
+}
+
+}  // namespace ttnn::operations::reshape::test
