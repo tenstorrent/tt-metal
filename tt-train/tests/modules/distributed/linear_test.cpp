@@ -15,6 +15,7 @@
 #include "core/random.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "modules/linear_module.hpp"
+#include "test_utils/env_utils.hpp"
 #include "ttnn_fixed/distributed/tt_metal.hpp"
 
 namespace {
@@ -52,6 +53,8 @@ protected:
 };
 
 TEST_F(N300TensorParallelLinearTest, RowParallelLinearHasBiasNotInputParallel) {
+    SKIP_FOR_WATCHER();
+
     uint32_t in_features = 64U;
     uint32_t out_features = 64U;
     bool has_bias = true;
@@ -102,6 +105,8 @@ TEST_F(N300TensorParallelLinearTest, RowParallelLinearHasBiasNotInputParallel) {
 };
 
 TEST_F(N300TensorParallelLinearTest, RowParallelLinearNoBiasNotInputParallel) {
+    SKIP_FOR_WATCHER();
+
     uint32_t in_features = 64U;
     uint32_t out_features = 64U;
     bool has_bias = false;
@@ -146,6 +151,8 @@ TEST_F(N300TensorParallelLinearTest, RowParallelLinearNoBiasNotInputParallel) {
 };
 
 TEST_F(N300TensorParallelLinearTest, RowParallelLinearHasBiasInputParallel) {
+    SKIP_FOR_WATCHER();
+
     uint32_t in_features = 64U;
     uint32_t out_features = 64U;
     bool has_bias = true;
@@ -192,6 +199,8 @@ TEST_F(N300TensorParallelLinearTest, RowParallelLinearHasBiasInputParallel) {
 };
 
 TEST_F(N300TensorParallelLinearTest, RowParallelLinearNoBiasInputParallel) {
+    SKIP_FOR_WATCHER();
+
     uint32_t in_features = 64U;
     uint32_t out_features = 64U;
     bool has_bias = false;
@@ -430,6 +439,8 @@ TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearNoBiasNoAllGather) {
 };
 
 TEST_F(N300TensorParallelLinearTest, RowParallelLinearHasBiasNanoGPT) {
+    SKIP_FOR_WATCHER();
+
     uint32_t batch_size = 64;
     uint32_t sequence_length = 256;
     uint32_t in_features = 384U;
@@ -509,6 +520,8 @@ TEST_F(N300TensorParallelLinearTest, RowParallelLinearHasBiasNanoGPT) {
 };
 
 TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearHasBiasNanoGPT) {
+    SKIP_FOR_WATCHER();
+
     uint32_t batch_size = 64;
     uint32_t sequence_length = 256;
     uint32_t in_features = 384U;
@@ -587,6 +600,8 @@ TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearHasBiasNanoGPT) {
 };
 
 TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearNoBiasNanoGPT) {
+    SKIP_FOR_WATCHER();
+
     uint32_t batch_size = 64;
     uint32_t sequence_length = 256;
     uint32_t in_features = 384U;
