@@ -32,19 +32,17 @@ void generate_bcast_scaler() {
 
 void kernel_main() {
     uint32_t src_addr = get_arg_val<uint32_t>(0);
-    uint32_t Ht = get_arg_val<uint32_t>(1);  // Number of rows (height in tiles)
-    uint32_t Wt = get_arg_val<uint32_t>(2);  // Number of cols (width in tiles)
-    uint32_t NC = get_arg_val<uint32_t>(3);  // Number of channels
+    uint32_t num_tiles =
+        get_arg_val<uint32_t>(3);  // same arg index as in reader_unary and in reader_unary_transpose_wh_8bank
 
     constexpr uint32_t cb_id_in0 = 0, cb_id_in1 = 1;
 
     // ublocks size defined in tiles
     constexpr uint32_t onetile = 1;
     constexpr uint32_t tile_bytes = get_tile_size(cb_id_in0);
-    constexpr uint32_t log_2_tile_bytes = 11;  // log2(2048) = 11
 
-    // Use bank_id 0 as default for interleaved buffer
-    constexpr uint32_t bank_id = 0;
+    constexpr auto src_args = TensorAccessorArgs<0>();
+    const auto src_a = TensorAccessor(src_args, src_addr, tile_bytes);
 
 #if GENERATE_BCAST_SCALER
     // TODO(AP): cleanup, probably with named args/param pack/reflection.
@@ -61,22 +59,20 @@ void kernel_main() {
 #endif
     // DPRINT << "Reader Tile offset=" << tile_offset << ENDL();
 
-    // Read all Ht*Wt tiles for all NC channels at once (like reduce_c pattern)
-    uint32_t total_tiles = NC * Ht * Wt;
-    cb_reserve_back(cb_id_in0, total_tiles);
-    uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
+    // read a ublock of tiles from src to CB, and then push the ublock to unpacker
+    uint32_t i_tile = 0;
+    for (uint32_t i = 0; i < num_tiles; i += blk) {
+        uint32_t rem = blk;  // (i + blk > num_tiles) ? num_tiles - i : blk;
+        cb_reserve_back(cb_id_in0, rem);
+        uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
 
-    for (uint32_t nc = 0; nc < NC; nc++) {
-        for (uint32_t ht = 0; ht < Ht; ht++) {
-            for (uint32_t wt = 0; wt < Wt; wt++) {
-                uint32_t tile_idx = nc * Ht * Wt + ht * Wt + wt;
-                uint64_t src_noc_addr =
-                    get_noc_addr_from_bank_id<true>(bank_id, src_addr + (tile_idx + tile_offset) * tile_bytes);
-                auto addr = l1_write_addr + (tile_idx << log_2_tile_bytes);
-                noc_async_read(src_noc_addr, addr, tile_bytes);
-            }
+        for (uint32_t r = 0; r < rem; r++) {
+            uint64_t src_noc_addr =
+                get_noc_addr(i + r + tile_offset, src_a);  // not contiguous for sequential r, can be banked
+            auto addr = l1_write_addr + (r * tile_bytes);
+            noc_async_read(src_noc_addr, addr, tile_bytes);  // TODO(AP): data type size
         }
+        noc_async_read_barrier();
+        cb_push_back(cb_id_in0, rem);
     }
-    noc_async_read_barrier();
-    cb_push_back(cb_id_in0, total_tiles);
 }

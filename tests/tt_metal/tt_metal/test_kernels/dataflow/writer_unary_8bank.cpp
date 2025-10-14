@@ -15,16 +15,16 @@ void kernel_main() {
     constexpr auto dst_args = TensorAccessorArgs<0>();
     const auto s = TensorAccessor(dst_args, dst_addr, tile_bytes);
 
-    // Wait on all output tiles at once (like reduce_c pattern)
-    cb_wait_front(cb_id_out0, num_tiles);
-    uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
-
     for (uint32_t i = 0; i < num_tiles; i++) {
         uint64_t dst_noc_addr = get_noc_addr(i, s);
-        uint32_t tile_addr = l1_read_addr + (i * tile_bytes);
-        noc_async_write_tile(i, s, tile_addr);
-    }
 
-    noc_async_write_barrier();
-    cb_pop_front(cb_id_out0, num_tiles);
+        cb_wait_front(cb_id_out0, onetile);
+        uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
+
+        noc_async_write(l1_read_addr, dst_noc_addr, tile_bytes);
+
+        noc_async_write_barrier();
+
+        cb_pop_front(cb_id_out0, onetile);
+    }
 }
