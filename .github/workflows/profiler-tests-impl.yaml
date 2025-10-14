@@ -28,10 +28,12 @@ jobs:
     strategy:
       fail-fast: false
     name: "profiler tests"
-    runs-on:
-      - arch-wormhole_b0
-      - ${{ inputs.topology }}
-      - ${{ inputs.extra-tag }}
+    runs-on: >
+      ${{
+        inputs.topology == 'config-t3000' &&
+        'tt-ubuntu-2204-N300-llmbox-stable' ||
+        fromJSON('["arch-wormhole_b0", "${{ inputs.topology }}", "${{ inputs.extra-tag }}"]')
+      }}
     container:
       image: ${{ inputs.docker-image }}
       env:
