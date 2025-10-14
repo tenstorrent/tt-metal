@@ -44,7 +44,6 @@ jobs:
         ARCH_NAME: ${{ inputs.arch_name }}
         LOGURU_LEVEL: INFO
         TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE: "4,3"
-        # TRACY_NO_INVARIANT_CHECK: 1
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -55,14 +54,14 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: ⬇️  Setup Job
-        # uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
 
       - name: Run frequent reg tests scripts
+        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
         timeout-minutes: 180
         run: ${{ matrix.test-group.cmd }}
 
