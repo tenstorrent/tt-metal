@@ -111,6 +111,24 @@ run_t3000_stable_diffusion_35_large_tests() {
   fi
 }
 
+run_t3000_mochi_tests() {
+  # Record the start time
+  fail=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_t3000_mochi_tests"
+
+  pytest models/experimental/tt_dit/tests/models/mochi/test_performance_mochi.py -k "2x4sp1tp0" ; fail+=$?
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_mochi_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
 run_t3000_ccl_all_gather_perf_tests() {
   # Record the start time
   fail=0

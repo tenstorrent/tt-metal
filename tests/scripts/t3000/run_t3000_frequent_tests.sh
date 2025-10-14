@@ -373,6 +373,28 @@ run_t3000_sd35large_tests() {
 }
 
 
+run_t3000_mochi_tests() {
+  # Record the start time
+  fail=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_t3000_mochi_tests"
+
+  # Run test_model for mochi
+  pytest -n auto models/experimental/tt_dit/tests/models/mochi/test_vae_mochi.py -k "T3K"; fail+=$?
+  pytest -n auto models/experimental/tt_dit/tests/models/mochi/test_attention_mochi.py; fail+=$?
+  pytest -n auto models/experimental/tt_dit/tests/models/mochi/test_transformer_mochi.py; fail+=$?
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_mochi_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
+
 run_t3000_tests() {
   # Run ethernet tests
   run_t3000_ethernet_tests
