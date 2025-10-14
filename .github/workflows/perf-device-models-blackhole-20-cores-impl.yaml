@@ -63,7 +63,10 @@ jobs:
       - name: Run frequent reg tests scripts
         uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
         timeout-minutes: 180
-        run: ${{ matrix.test-group.cmd }}
+        with:
+          device_perf_model_name: "${{ matrix.test-group.model }} device perf tests"
+          commands: |
+            ${{ matrix.test-group.cmd }}
 
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
