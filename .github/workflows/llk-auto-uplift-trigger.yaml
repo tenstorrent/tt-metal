@@ -585,13 +585,8 @@ jobs:
 
       - name: Auto-approve by codeowners
         if: success()
-        env:
-          GH_TOKEN: ${{ secrets.TEMP_METAL_PAT }}
         run: |
-          PR_NUMBER="${{ inputs.recheck_tests == true && needs.recheck-tests.outputs.pr-number || needs.update-submodule.outputs.pr-number }}"
-
-          echo "🚀 Triggering auto-approval for PR #$PR_NUMBER"
-
+          echo "🚀 Triggering auto-approval"
           gh workflow run "code-analysis.yaml" \
             --ref "Aswinmcw/approve_llk_uplift" \
-            --repo "${{ github.repository }}" \
+            --repo "${{ github.repository }}"
