@@ -12,6 +12,7 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/fabric.hpp>
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
+#include "ttnn/operations/experimental/ccl/composite_common.hpp"
 
 namespace ttnn::operations::ccl {
 
