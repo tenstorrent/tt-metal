@@ -96,6 +96,7 @@ def test_all_to_all_dispatch_broken(
         cluster_axis=cluster_axis,
     )
 
+
 @pytest.mark.parametrize(
     "device_params",
     [
