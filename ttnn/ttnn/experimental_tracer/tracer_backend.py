@@ -40,7 +40,7 @@ def no_dispatch() -> Iterator[None]:
 class TracerData:
     id: int = 0
 
-    def __init__(self, save_original_tensors=False):
+    def __init__(self, save_original_tensors=False, track_params=True):
         self.graph_output_to_input: Dict[str, List[TrackableTensorArgument]] = {}
         self.graph_output_to_node: Dict[str, Dict[str, Any]] = {}
         self.post_run_output_to_input: Dict[str, List[TrackableTensorArgument]] = {}
@@ -48,6 +48,7 @@ class TracerData:
         self.constants: Dict[str, ConstantTensor] = {}
         self.save_original_tensors = save_original_tensors
         ConstantTensor.ConstantTensorFromModel = save_original_tensors
+        self.track_params = track_params
 
     def get_next_id(self):
         current_id = TracerData.id
@@ -1236,7 +1237,7 @@ def trace_torch_model(
 
     assert len(input_shapes) > 0, "Input shapes must be provided"
 
-    tracer = TracerData(save_original_tensors=save_original_tensors)
+    tracer = TracerData(save_original_tensors=save_original_tensors, track_params=track_params)
     if track_params:
         state_dict = model.state_dict()
         Trackable_Tensor.set_tracer_data(tracer)  # Set the tracer data instance for Trackable_Tensor

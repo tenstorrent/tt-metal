@@ -1257,6 +1257,7 @@ class ConstantTensor(Parameter):
 
     value: torch.Tensor = field(default_factory=lambda: torch.tensor([]))
     id: str = ""
+    is_state_dict: bool = True
     counter: ClassVar[int] = 0
     ConstantTensorFromModel: ClassVar[bool] = False
 
@@ -1264,6 +1265,7 @@ class ConstantTensor(Parameter):
         if self.id == "":
             self.id = f"const{ConstantTensor.counter}"
             print(f"Warning: ConstantTensor not inferred from state_dict, generating a unique id {self.id}")
+            self.is_state_dict = False
         ConstantTensor.counter += 1
 
     def generate_code(self) -> str:

@@ -2,17 +2,89 @@ import torch
 import functools
 import gzip
 import json
+import numpy as np
+
+
+def compress_tensor(t):
+    t = t.detach().cpu().flatten().to(torch.float32)
+    n = t.numel()
+    num_quantiles = round(max(7, min(40, n ** (1 / 4))))  # at least 7 quantiles, at most 40 or n**(1/5)
+    if n == 0:
+        return {
+            "type": "dynamic_quantiles_stats",
+            "norm": 0.0,
+            "mean": 0.0,
+            "std": 0.0,
+            "quantiles": [0.0] * num_quantiles,
+        }
+
+    norm = t.norm().item()
+    mean = t.mean().item()
+    std = t.std().item()
+
+    # Normalize to unit vector to preserve cosine similarity
+    u = t / norm
+
+    # Compute quantiles
+    if n < num_quantiles:
+        # interpolate between max and min if not enough elements
+        q = [u.min().item() + (u.max().item() - u.min().item()) * i / (num_quantiles - 1) for i in range(num_quantiles)]
+    else:
+        q = torch.quantile(u, torch.linspace(0, 1, num_quantiles)).tolist()
+
+    return {"type": "dynamic_quantiles_stats", "norm": norm, "mean": mean, "std": std, "quantiles": q}
+
+
+def decompress_tensor(summary, shape, dtype):
+    assert summary["type"] == "dynamic_quantiles_stats", f"Unsupported summary type: {summary['type']}"
+    q = summary["quantiles"]
+    num_quantiles = len(q)
+    norm = summary["norm"]
+    mean = summary["mean"]
+    std = summary["std"]
+
+    if len(shape) == 0 or norm == 0 or (len(shape) == 1 and shape[0] == 0):
+        return torch.zeros(shape, dtype=torch.float32)
+
+    # Linearly interpolate 7 quantiles to reconstruct direction
+    t_lin = torch.linspace(0, num_quantiles - 1, steps=np.prod(shape)).to(torch.float32)
+    q_vals = torch.tensor(q)
+    idx_lower = t_lin.floor().long().clamp(0, num_quantiles - 1)
+    idx_upper = t_lin.ceil().long().clamp(0, num_quantiles - 1)
+    alpha = t_lin - idx_lower
+    approx_unit = (1 - alpha) * q_vals[idx_lower] + alpha * q_vals[idx_upper]
+
+    # Rescale to original norm
+    approx = approx_unit * norm
+
+    # Optionally adjust mean and std for better approximation
+    approx_mean = approx.mean()
+    approx_std = approx.std(unbiased=False)
+
+    if approx_std > 0:
+        approx = (approx - approx_mean) / approx_std * std + mean
+    else:
+        approx.fill_(mean)
+    approx = approx.clamp(min=-1e6, max=1e6)
+    return approx.reshape(shape)
 
 
 def _tensor_info(obj):
     if isinstance(obj, torch.Tensor) and not obj.__class__.__name__ == "Trackable_Tensor" and obj.device.type != "meta":
-        min_max = (obj.min().item(), obj.max().item()) if obj.numel() > 0 else (0, 0)
-        if torch.isnan(torch.tensor(min_max)).any():
-            print("NaN detected in tensor...")
+        assert not torch.isnan(
+            obj
+        ).any(), f"NaN detected in tensor with shape {obj.shape} and dtype {obj.dtype}, please make sure the model params are valid. Please fill `download_original_model_state_dict` to load original model state_dict."
+        compressed_summary = compress_tensor(obj)
         return {
             "shape": list(obj.shape),
             "dtype": str(obj.dtype),
-            "min_max": min_max,
+            "summary": compressed_summary,
+        }
+    elif isinstance(obj, StateDictConstant):
+        return {
+            "shape": list(obj.value.shape),
+            "dtype": str(obj.value.dtype),
+            "summary": {"type": "state_dict_constant", "name": obj.name},
         }
     elif isinstance(obj, (list, tuple)):
         return [_tensor_info(x) for x in obj]
@@ -21,11 +93,32 @@ def _tensor_info(obj):
     return str(type(obj))
 
 
+def flatten_state_dict_constants(args):
+    if isinstance(args, (list, tuple)):
+        new_args = []
+        for arg in args:
+            if isinstance(arg, StateDictConstant):
+                new_args.append(arg.value)
+            else:
+                new_args.append(flatten_state_dict_constants(arg))
+        return type(args)(new_args)
+    elif isinstance(args, dict):
+        new_args = {}
+        for k, v in args.items():
+            if isinstance(v, StateDictConstant):
+                new_args[k] = v.value
+            else:
+                new_args[k] = flatten_state_dict_constants(v)
+        return new_args
+    return args
+
+
 def track_input_output(_tensor_io_log):
     def _track_input_output(fn):
         @functools.wraps(fn)
         def wrapper(*args, **kwargs):
             input_info = _tensor_info(args)
+            args = flatten_state_dict_constants(args)
             output = fn(*args, **kwargs)
             output_info = _tensor_info(output)
             _tensor_io_log.append(
@@ -42,28 +135,34 @@ def track_input_output(_tensor_io_log):
     return _track_input_output
 
 
-def get_tensors_from_shape_dtype_minmax(shape, dtype, min_max):
-    if len(shape) == 1 and shape[0] == 0:
-        return torch.tensor([], dtype=dtype)
-    if torch.is_floating_point(torch.empty((), dtype=dtype)):
-        # torch.randn does not support min/max, so use uniform_ after creation
-        t = torch.randn(*shape, dtype=dtype)
-        t = t * (min_max[1] - min_max[0]) + min_max[0]
-    else:
-        # torch.randint's high is exclusive, so add 1 if min==max
-        low, high = min_max
-        if high == low:
-            high = low + 1
-        t = torch.randint(low, high, shape, dtype=dtype)
-    return t.to("cuda" if torch.cuda.is_available() else "cpu")
-
-
-def get_tensors_from_input_spec(input_specs):
+def get_tensors_from_input_spec(input_specs, state_dict=None):
     tensors = []
-    for shape, dtype_str, min_max in input_specs:
+    for shape, dtype_str, summary_type, summary in input_specs:
         dtype = getattr(torch, dtype_str.split(".")[1])
-        tensors.append(get_tensors_from_shape_dtype_minmax(shape, dtype, min_max))
+        if summary_type == "state_dict_constant":
+            assert state_dict is not None, "state_dict must be provided for state_dict_constant"
+            tensor = state_dict[summary]
+            tensors.append(tensor.to(torch.float32))
+            continue
+        elif summary_type == "dynamic_quantiles_stats":
+            assert len(summary) == 2, "Expected 2 values in summary"
+            summary = {
+                "quantiles": summary[0],
+                "mean": summary[1][0],
+                "std": summary[1][1],
+                "norm": summary[1][2],
+                "type": summary_type,
+            }
+            tensors.append(decompress_tensor(summary, shape, dtype))
+        else:
+            raise ValueError(f"Unknown summary type: {summary_type}")
     return tensors
+
+
+class StateDictConstant:
+    def __init__(self, name, value):
+        self.name = name
+        self.value = value
 
 
 class LazyParams:
@@ -89,11 +188,18 @@ class LazyParams:
             if len(shape) == 0:
                 shape = (1,)
             dtype = getattr(torch, const_meta["dtype"].split(".")[1])
-            min_max = const_meta["min_max"]
             if self.empty:
                 return torch.empty(*shape, device="meta", dtype=dtype)
-            return get_tensors_from_shape_dtype_minmax(shape, dtype, min_max)
-        return self.data[const_name]
+            assert (
+                const_meta["summary"]["type"] == "dynamic_quantiles_stats"
+            ), f"Expected dynamic_quantiles_stats tensor type, got {const_meta['summary']['type']}"
+            decompressed_tensor = const_meta["summary"]
+            if const_meta["is_state_dict"]:
+                print(
+                    f"Warning: Generating {const_name} state_dict parameter from statistics, this may lead to unexpected behavior."
+                )
+            return decompress_tensor(decompressed_tensor, shape, dtype)
+        return StateDictConstant(const_name, self.data[const_name])
 
     def to_dict(self):
         if self.fake:

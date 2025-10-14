@@ -72,6 +72,31 @@ def extract_functions(filepath, func_names):
 # ---------- Test file generation ----------
 
 
+def get_test_params_from_tensor_summary(tensor_summary):
+    if tensor_summary["summary"]["type"] == "dynamic_quantiles_stats":
+        return (
+            tensor_summary["shape"],
+            tensor_summary["dtype"],
+            tensor_summary["summary"]["type"],
+            [
+                tensor_summary["summary"]["quantiles"],
+                (
+                    tensor_summary["summary"]["mean"],
+                    tensor_summary["summary"]["std"],
+                    tensor_summary["summary"]["norm"],
+                ),
+            ],
+        )
+    elif tensor_summary["summary"]["type"] == "state_dict_constant":
+        return (
+            tensor_summary["shape"],
+            tensor_summary["dtype"],
+            tensor_summary["summary"]["type"],
+            tensor_summary["summary"]["name"],
+        )
+    raise ValueError(f"Unknown tensor summary type: {tensor_summary['summary']['type']}")
+
+
 def generate_test_file(json_file, ref_file, ttnn_file, output_file="test_generated.py"):
     # Load JSON (list of test cases)
     with open(json_file, "r") as f:
@@ -96,8 +121,13 @@ def generate_test_file(json_file, ref_file, ttnn_file, output_file="test_generat
         f.write("import pytest\n")
         f.write("import torch\n")
         f.write("import ttnn\n")
+        f.write("import numpy as np\n")
         f.write("from utils import get_tensors_from_input_spec\n")
         f.write("from tests.ttnn.utils_for_testing import assert_with_pcc\n\n\n")
+        f.write("def download_original_model_state_dict():\n")
+        f.write("    # Implement this function to download and return the original model parameters if needed\n")
+        f.write("    return None  # return original_model.state_dict()\n")
+        f.write("STATE_DICT = download_original_model_state_dict()\n")
 
         # ---------- Add helper function ----------
         ######### End
@@ -126,13 +156,13 @@ def generate_test_file(json_file, ref_file, ttnn_file, output_file="test_generat
                     if isinstance(inp, (list, tuple)):
                         single_case.append(
                             [
-                                (nested_inp["shape"], nested_inp["dtype"], nested_inp["min_max"])
+                                get_test_params_from_tensor_summary(nested_inp)
                                 for nested_inp in inp
                                 if isinstance(nested_inp, dict)
                             ]
                         )
                     else:
-                        single_case.append((inp["shape"], inp["dtype"], inp["min_max"]))
+                        single_case.append(get_test_params_from_tensor_summary(inp))
                 param_values.append(single_case)
 
             param_str = ",\n    ".join([str(v) for v in param_values])
@@ -141,7 +171,7 @@ def generate_test_file(json_file, ref_file, ttnn_file, output_file="test_generat
             test_body = textwrap.dedent(
                 f"""
                 torch.manual_seed(0)
-                tensors = get_tensors_from_input_spec(input_specs)
+                tensors = get_tensors_from_input_spec(input_specs, STATE_DICT)
                 out_ref = ref_{func_name}(*tensors)
                 tensors_tt = [ttnn.from_torch(t, dtype=ttnn.bfloat16, device=device) for t in tensors]
                 out_opt = ttnn_{func_name}(*tensors_tt)

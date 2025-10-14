@@ -12,6 +12,7 @@ from find_repeated_subgraphs import CompositeOperation
 import gzip
 import torch
 import json
+from utils import compress_tensor
 
 
 class PytorchGraph:
@@ -112,18 +113,12 @@ class CompositePytorchGraph(PytorchGraph):
             if isinstance(self.graph.graph.nodes[node_id]["operation"], InputOp)
         ]
         if self.dump_const_meta:
-
-            def get_min_max(v):
-                try:
-                    return [v.value.min().item(), v.value.max().item()]
-                except:
-                    return [-1, 1]
-
             const_meta = {
                 k: {
                     "shape": list(v.value.shape),
                     "dtype": str(v.value.dtype),
-                    "min_max": get_min_max(v),
+                    "summary": compress_tensor(v.value),
+                    "is_state_dict": v.is_state_dict,
                 }
                 for k, v in CompositeOperation.ALL_CONSTANTS.items()
             }
@@ -133,6 +128,10 @@ class CompositePytorchGraph(PytorchGraph):
         code_lines[
             "main"
         ] += f"""
+
+def download_original_model_state_dict():
+    # Implement this function to download and return the original model parameters if needed
+    return None # return original_model.state_dict()
 class CustomModel(torch.nn.Module):
     def __init__(self, params):
         self.params = params
@@ -153,6 +152,7 @@ class CustomModel(torch.nn.Module):
             "main"
         ] += f"""
 # Fake tensors used based on const_meta.json
+original_model_state_dict = download_original_model_state_dict()
 params = LazyParams(
     meta_path="const_meta.json", empty={not self.clustered_graph}
 )
@@ -161,6 +161,9 @@ params = LazyParams(
         input_args = [f"torch.ones({shape})" for shape in input_shapes]
 
         code_lines["main"] += f"\ntorch_model = CustomModel(params)"
+        code_lines[
+            "main"
+        ] += f"\nif original_model_state_dict is not None:\n    torch_model.load_state_dict(original_model_state_dict)"
         if self.clustered_graph:
             code_lines["main"] += f"\n_tensor_io_log.clear()"
             code_lines["main"] += f"\ntorch_model({','.join(input_args)})"
@@ -176,8 +179,8 @@ params = LazyParams(
             ] += f"\nclustered_graph, composite_ops = find_repeated_subgraphs(operation_graph, custom_patterns=[])"
             code_lines["main"] += f"\npytorch_graph = CompositePytorchGraph(clustered_graph, clustered_graph=True)"
             code_lines["main"] += f"\npytorch_graph.dump_to_python_file('clustered_graph.py', True)"
-            tensor_dict = {k: v.value.detach() for k, v in CompositeOperation.ALL_CONSTANTS.items()}
         if self.dump_constants:
+            tensor_dict = {k: v.value.detach() for k, v in CompositeOperation.ALL_CONSTANTS.items()}
             with open("graph.pth", "wb") as f:
                 torch.save(tensor_dict, f)
         ConstantTensor.ConstantTensorFromModel = self.orig_config
