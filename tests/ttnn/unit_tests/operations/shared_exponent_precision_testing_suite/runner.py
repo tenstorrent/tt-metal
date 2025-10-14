@@ -84,44 +84,73 @@ def _compute_metrics(reference: torch.Tensor, test: torch.Tensor) -> dict:
     return metrics
 
 
+# Operation mapping: Key -> (torch_function, ttnn_function, uses_axis, uses_second_tensor)
+OPERATION_MAP = {
+    OperationType.SUM_KEY: (
+        lambda tensor, axis, _: torch.sum(tensor, dim=axis),
+        lambda tensor, axis, _: ttnn.sum(tensor, dim=axis),
+        True,  # uses_axis
+        False,  # uses_second_tensor
+    ),
+    OperationType.MEAN_KEY: (
+        lambda tensor, axis, _: torch.mean(tensor, dim=axis),
+        lambda tensor, axis, _: ttnn.mean(tensor, dim=axis),
+        True,
+        False,
+    ),
+    OperationType.MAX_KEY: (
+        lambda tensor, axis, _: torch.max(tensor, dim=axis)[0],
+        lambda tensor, axis, _: ttnn.max(tensor, dim=axis),
+        True,
+        False,
+    ),
+    OperationType.MATMUL_KEY: (
+        lambda tensor, _, second_tensor: torch.matmul(tensor, second_tensor),
+        lambda tensor, _, second_tensor: ttnn.matmul(tensor, second_tensor),
+        False,
+        True,
+    ),
+    OperationType.MATMUL_TT_KEY: (
+        lambda tensor, _, second_tensor: torch.matmul(tensor, second_tensor),
+        lambda tensor, _, second_tensor: ttnn.matmul(tensor, second_tensor),
+        False,
+        True,
+    ),
+    OperationType.SOFTMAX_KEY: (
+        lambda tensor, axis, _: torch.softmax(tensor, dim=axis),
+        lambda tensor, axis, _: ttnn.softmax(tensor, dim=axis),
+        True,
+        False,
+    ),
+}
+
+
 def _perform_torch_operation(
     tensor: torch.Tensor, operation: str = "sum", axis: int = 0, optional_second_tensor: torch.Tensor = None
 ) -> torch.Tensor:
-    """Perform the specified operation on the tensor"""
-    if operation == OperationType.SUM_KEY:
-        return torch.sum(tensor, dim=axis)
-    elif operation == OperationType.MEAN_KEY:
-        return torch.mean(tensor, dim=axis)
-    elif operation == OperationType.MAX_KEY:
-        return torch.max(tensor, dim=axis)[0]
-    elif operation in [OperationType.MATMUL_KEY, OperationType.MATMUL_TT_KEY]:
-        return torch.matmul(tensor, optional_second_tensor)
-    elif operation == OperationType.SOFTMAX_KEY:
-        return torch.softmax(tensor, dim=axis)
-    elif operation == OperationType.CUMSUM_KEY:
-        return torch.cumsum(tensor, dim=axis)
-    else:
+    """Perform the specified operation on the tensor using torch"""
+    if operation not in OPERATION_MAP:
         raise ValueError(f"Unknown operation: {operation}")
 
+    torch_func, _, uses_axis, uses_second_tensor = OPERATION_MAP[operation]
 
-def _perform_ttnn_operation(
-    tensor: ttnn.Tensor, device, operation: str, axis: int = 0, optional_second_tensor: ttnn.Tensor = None
-) -> ttnn.Tensor:
+    if uses_second_tensor and optional_second_tensor is None:
+        raise ValueError(f"Operation {operation} requires a second tensor")
+
+    return torch_func(tensor, axis, optional_second_tensor)
+
+
+def _perform_ttnn_operation(tensor, operation: str, axis: int = 0, optional_second_tensor=None):
     """Perform the specified operation using ttnn"""
-    if operation == OperationType.SUM_KEY:
-        return ttnn.sum(tensor, dim=axis)
-    elif operation == OperationType.MEAN_KEY:
-        return ttnn.mean(tensor, dim=axis)
-    elif operation == OperationType.MAX_KEY:
-        return ttnn.max(tensor, dim=axis)
-    elif operation in [OperationType.MATMUL_KEY, OperationType.MATMUL_TT_KEY]:
-        return ttnn.matmul(tensor, optional_second_tensor)
-    elif operation == OperationType.SOFTMAX_KEY:
-        return ttnn.softmax(tensor, dim=axis)
-    elif operation == OperationType.CUMSUM_KEY:
-        return ttnn.cumsum(tensor, dim=axis)
-    else:
+    if operation not in OPERATION_MAP:
         raise ValueError(f"Unknown operation: {operation}")
+
+    _, ttnn_func, uses_axis, uses_second_tensor = OPERATION_MAP[operation]
+
+    if uses_second_tensor and optional_second_tensor is None:
+        raise ValueError(f"Operation {operation} requires a second tensor")
+
+    return ttnn_func(tensor, axis, optional_second_tensor)
 
 
 def _run_precision_test(
@@ -164,9 +193,7 @@ def _run_precision_test(
     result_torch_tensor_bf16 = _perform_torch_operation(
         torch_tensor_bf16, operation, axis, torch_optional_second_tensor
     )
-    result_ttnn_tensor_bf8_b = _perform_ttnn_operation(
-        ttnn_tensor_bf8_b, device, operation, axis, ttnn_optional_second_tensor
-    )
+    result_ttnn_tensor_bf8_b = _perform_ttnn_operation(ttnn_tensor_bf8_b, operation, axis, ttnn_optional_second_tensor)
 
     # Compute metrics
     result_ttnn_tensor_bf8_b_converted = ttnn.to_torch(result_ttnn_tensor_bf8_b, dtype=torch.float32)
