@@ -292,6 +292,9 @@ Notes:
     std::vector<uint32_t> writer_rt = {
         (uint32_t)dst_buf->address(), (uint32_t)rx_xy.x, (uint32_t)rx_xy.y, (uint32_t)gsem_done->address()};
 
+    std::cerr << "[host] rx_xy=(" << (int)rx_xy.x << "," << (int)rx_xy.y << ") sem_l1=0x" << std::hex
+              << gsem_done->address() << std::dec << "\n";
+
     tt::tt_metal::Program local_prog = tt::tt_metal::CreateProgram();
 
     // Recreate the same CB on the same core for this program

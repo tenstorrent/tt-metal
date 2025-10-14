@@ -47,6 +47,8 @@ void kernel_main() {
     const uint32_t rx_noc_y = get_arg_val<uint32_t>(idx++);
     const uint32_t sem_l1_addr = get_arg_val<uint32_t>(idx++);
 
+    DPRINT << "writer: rx=(" << rx_noc_x << "," << rx_noc_y << ") sem_l1=0x" << sem_l1_addr << ENDL();
+
     // Four fabric connections in fixed order: W, E, N, S
     auto conn_W = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(idx);
     auto conn_E = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(idx);
@@ -128,10 +130,10 @@ void kernel_main() {
 
     for (uint32_t i = 0; i < TOTAL_PAGES; ++i) {
         cb_wait_front(CB_ID, 1);
-        const uint32_t src_l1_addr = get_read_ptr(CB_ID);
+        const uint32_t page_l1_addr = get_read_ptr(CB_ID);
         uint64_t dest_noc_addr = dst_acc.get_noc_addr(i, rx_noc_x, rx_noc_y);
         if (should_log(i)) {
-            DPRINT << "writer:page " << i << " src_l1=" << src_l1_addr << ENDL();
+            DPRINT << "writer:page " << i << " page_l1=0x" << page_l1_addr << ENDL();
         }
 
         // NORTH trunk (fan-out E/W on each north row)
@@ -149,7 +151,7 @@ void kernel_main() {
                 (uint16_t)(n_hops ? (n_hops - 1) : 0),
                 0);
             hdr_N->to_noc_unicast_write(NocUnicastCommandHeader{dest_noc_addr}, PAGE_SIZE);
-            conn_N.send_payload_without_header_non_blocking_from_address(src_l1_addr, PAGE_SIZE);
+            conn_N.send_payload_without_header_non_blocking_from_address(page_l1_addr, PAGE_SIZE);
             conn_N.send_payload_flush_non_blocking_from_address((uint32_t)hdr_N, sizeof(PACKET_HEADER_TYPE));
         }
         // SOUTH trunk
@@ -167,7 +169,7 @@ void kernel_main() {
                 0,
                 (uint16_t)(s_hops ? (s_hops - 1) : 0));
             hdr_S->to_noc_unicast_write(NocUnicastCommandHeader{dest_noc_addr}, PAGE_SIZE);
-            conn_S.send_payload_without_header_non_blocking_from_address(src_l1_addr, PAGE_SIZE);
+            conn_S.send_payload_without_header_non_blocking_from_address(page_l1_addr, PAGE_SIZE);
             conn_S.send_payload_flush_non_blocking_from_address((uint32_t)hdr_S, sizeof(PACKET_HEADER_TYPE));
         }
         // WEST branch on source row
@@ -185,7 +187,7 @@ void kernel_main() {
                 0,
                 0);
             hdr_W->to_noc_unicast_write(NocUnicastCommandHeader{dest_noc_addr}, PAGE_SIZE);
-            conn_W.send_payload_without_header_non_blocking_from_address(src_l1_addr, PAGE_SIZE);
+            conn_W.send_payload_without_header_non_blocking_from_address(page_l1_addr, PAGE_SIZE);
             conn_W.send_payload_flush_non_blocking_from_address((uint32_t)hdr_W, sizeof(PACKET_HEADER_TYPE));
         }
         // EAST branch on source row
@@ -207,7 +209,7 @@ void kernel_main() {
             DPRINT << "writer:E after fabric_set_mcast_rout" << i << ENDL();
             hdr_E->to_noc_unicast_write(NocUnicastCommandHeader{dest_noc_addr}, PAGE_SIZE);
             DPRINT << "writer:E after to_noc_unicast_write" << i << ENDL();
-            conn_E.send_payload_without_header_non_blocking_from_address(src_l1_addr, PAGE_SIZE);
+            conn_E.send_payload_without_header_non_blocking_from_address(page_l1_addr, PAGE_SIZE);
             DPRINT << "writer:E after send_payload_without_header_non_blocking_from_address" << i << ENDL();
             conn_E.send_payload_flush_non_blocking_from_address((uint32_t)hdr_E, sizeof(PACKET_HEADER_TYPE));
             DPRINT << "writer:E after send_payload_blocking_from_address" << i << ENDL();
@@ -224,6 +226,9 @@ void kernel_main() {
     // === Single multicast completion to identical mailboxes on all destination chips ===
     ASSERT(sem_l1_addr != 0);
     const uint64_t sem_noc = safe_get_noc_addr(rx_noc_x, rx_noc_y, sem_l1_addr, 0);
+    const uint32_t sem_noc_hi = static_cast<uint32_t>(sem_noc >> 32);
+    const uint32_t sem_noc_lo = static_cast<uint32_t>(sem_noc & 0xffffffffu);
+    DPRINT << "writer: sem_noc[hi:lo]=0x" << sem_noc_hi << ":0x" << sem_noc_lo << ENDL();
 
     uint32_t legs = (use_N ? 1u : 0u) + (use_S ? 1u : 0u) + (use_W ? 1u : 0u) + (use_E ? 1u : 0u);
     uint32_t sent = 0;
