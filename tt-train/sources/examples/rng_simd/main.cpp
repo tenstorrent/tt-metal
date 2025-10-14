@@ -25,7 +25,6 @@ using ttml::core::CpuFeatures;
 // Benchmark Infrastructure
 // ============================================================================
 
-template <typename T>
 struct BenchmarkResult {
     std::string name;
     std::string type;
@@ -37,9 +36,9 @@ struct BenchmarkResult {
 };
 
 template <typename T, typename Func>
-BenchmarkResult<T> run_benchmark(
-    const std::string& name, const std::string& type_name, Func&& func, size_t size, int iterations = 10) {
-    BenchmarkResult<T> result;
+BenchmarkResult run_benchmark(
+    const std::string& name, const std::string& type_name, Func& func, size_t size, int iterations = 10) {
+    BenchmarkResult result;
     result.name = name;
     result.type = type_name;
 
@@ -93,18 +92,13 @@ BenchmarkResult<T> run_benchmark(
 
 template <typename T>
 void benchmark_type(const std::string& type_name, size_t size) {
-    std::cout << "\n+============================================================================+\n";
-    std::cout << "| " << type_name << " Performance Benchmark (" << size << " elements)";
-    int padding = 78 - 32 - type_name.length() - std::to_string(size).length();
-    if (padding < 0)
-        padding = 0;
-    std::cout << std::string(padding, ' ') << "|\n";
-    std::cout << "+============================================================================+\n\n";
+    // Print header
+    std::cout << "\n\n\n" << (type_name + " Performance Benchmark (" + std::to_string(size) + " elements)") << "\n";
 
     auto dist_factory = []() { return std::uniform_real_distribution<float>(-1.0f, 1.0f); };
     uint32_t seed = 42;
 
-    std::vector<BenchmarkResult<T>> results;
+    std::vector<BenchmarkResult> results;
 
     // MT19937 (skip for bfloat16 as it requires linking against full tt-metalium library)
     if constexpr (!std::same_as<T, bfloat16>) {
@@ -128,19 +122,30 @@ void benchmark_type(const std::string& type_name, size_t size) {
         results.push_back(run_benchmark<T>("AVX2", type_name, func, size));
     }
 
-    // Print results
-    std::cout << std::left << std::setw(15) << "Implementation" << std::right << std::setw(12) << "Time (ms)"
-              << std::setw(15) << "Throughput" << std::setw(15) << "Elements/sec" << std::setw(12) << "Speedup"
-              << std::setw(10) << "Mean" << std::setw(10) << "StdDev"
-              << "\n";
-    std::cout << std::string(89, '-') << "\n";
-
+    // Print results in vertical format
     double baseline = results.empty() ? 1.0 : results[0].time_ms;
+    constexpr int label_width = 18;
+
     for (const auto& r : results) {
-        std::cout << std::left << std::setw(15) << r.name << std::right << std::fixed << std::setprecision(3)
-                  << std::setw(12) << r.time_ms << std::setw(13) << r.throughput_gb_s << " GB/s" << std::setw(13)
-                  << r.elements_per_sec_m << " M" << std::setw(11) << (baseline / r.time_ms) << "x" << std::setw(10)
-                  << r.mean << std::setw(10) << r.stddev << "\n";
+        std::cout << r.name << ":\n";
+
+        std::cout << "  " << std::left << std::setw(label_width) << "Time (ms):" << std::right << std::fixed
+                  << std::setprecision(3) << r.time_ms << "\n";
+
+        std::cout << "  " << std::left << std::setw(label_width) << "Throughput:" << std::right << std::fixed
+                  << std::setprecision(2) << r.throughput_gb_s << " GB/s\n";
+
+        std::cout << "  " << std::left << std::setw(label_width) << "Elements/sec:" << std::right << std::fixed
+                  << std::setprecision(1) << r.elements_per_sec_m << " M\n";
+
+        std::cout << "  " << std::left << std::setw(label_width) << "Speedup:" << std::right << std::fixed
+                  << std::setprecision(1) << (baseline / r.time_ms) << "x\n";
+
+        std::cout << "  " << std::left << std::setw(label_width) << "Mean:" << std::right << std::fixed
+                  << std::setprecision(6) << r.mean << "\n";
+
+        std::cout << "  " << std::left << std::setw(label_width) << "StdDev:" << std::right << std::fixed
+                  << std::setprecision(6) << r.stddev << "\n";
     }
 }
 
@@ -148,60 +153,19 @@ void benchmark_type(const std::string& type_name, size_t size) {
 // Main
 // ============================================================================
 
-int main() {
-    std::cout << "\n";
-    std::cout << "+============================================================================+\n";
-    std::cout << "|                                                                            |\n";
-    std::cout << "|      Float / Double / bfloat16 SIMD RNG Performance Comparison            |\n";
-    std::cout << "|                                                                            |\n";
-    std::cout << "+============================================================================+\n";
-
-    // System info
-    std::cout << "\n+============================================================================+\n";
-    std::cout << "| System Information                                                         |\n";
-    std::cout << "+============================================================================+\n\n";
+int main(int argc, const char** argv) {
     std::cout << "CPU Features:\n";
     std::cout << "  SSE4.2 + AES-NI: " << (CpuFeatures::has_sse_support() ? "✓" : "✗") << "\n";
     std::cout << "  AVX2 + AES-NI:   " << (CpuFeatures::has_avx2_support() ? "✓" : "✗") << "\n";
     std::cout << "  Hardware threads: " << std::thread::hardware_concurrency() << "\n";
 
-    // Test size
-    size_t size = 4194304;  // 4M elements
+    // Run benchmarks
+    constexpr size_t default_size = 4194304;  // 4M elements
+    auto const size = argc > 1 ? std::stoul(argv[1]) : default_size;
 
     benchmark_type<float>("float (32-bit)", size);
     benchmark_type<double>("double (64-bit)", size);
     benchmark_type<bfloat16>("bfloat16 (16-bit)", size);
-
-    // Summary
-    std::cout << "\n+============================================================================+\n";
-    std::cout << "| Summary                                                                    |\n";
-    std::cout << "+============================================================================+\n\n";
-
-    std::cout << "Type Sizes:\n";
-    std::cout << "  • float:    " << sizeof(float) << " bytes (32-bit)\n";
-    std::cout << "  • double:   " << sizeof(double) << " bytes (64-bit)\n";
-    std::cout << "  • bfloat16: " << sizeof(bfloat16) << " bytes (16-bit)\n\n";
-
-    std::cout << "SIMD Width Comparison:\n";
-    std::cout << "  • float:    SSE = 4 elements (128-bit), AVX2 = 8 elements (256-bit)\n";
-    std::cout << "  • double:   SSE = 2 elements (128-bit), AVX2 = 4 elements (256-bit)\n";
-    std::cout << "  • bfloat16: SSE = 4 elements (128-bit), AVX2 = 8 elements (256-bit)\n";
-    std::cout << "              (Generated from float, then converted)\n\n";
-
-    std::cout << "Expected Speedup vs MT19937:\n";
-    std::cout << "  • float:    SSE ~100x, AVX2 ~200x\n";
-    std::cout << "  • double:   SSE ~50x, AVX2 ~100x\n";
-    std::cout << "  • bfloat16: SSE ~100x, AVX2 ~200x (similar to float)\n\n";
-
-    std::cout << "Precision:\n";
-    std::cout << "  • float:    23-bit mantissa (~7 decimal digits)\n";
-    std::cout << "  • double:   52-bit mantissa (~15 decimal digits)\n";
-    std::cout << "  • bfloat16: 7-bit mantissa (~2-3 decimal digits)\n\n";
-
-    std::cout << "Use Cases:\n";
-    std::cout << "  • float:    General ML training, neural networks\n";
-    std::cout << "  • double:   Scientific computing, high precision needs\n";
-    std::cout << "  • bfloat16: ML training (dynamic range of float32, less memory)\n\n";
 
     return 0;
 }
