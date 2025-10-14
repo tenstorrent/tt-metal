@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 GSM8K Fine-tuning Script
-Fine-tunes a GPT-2 model on the GSM8K math word problems dataset using TT-Metal.
+Fine-tunes a Llama model on the GSM8K math word problems dataset using TT-Metal.
 """
 
 import os
