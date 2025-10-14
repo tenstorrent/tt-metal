@@ -16,10 +16,22 @@ jobs:
       tracy: true
       build-wheel: true
       version: 22.04
-  device-perf:
+  # device-perf:
+  #   needs: build-artifact-profiler
+  #   secrets: inherit
+  #   uses: ./.github/workflows/perf-device-models-impl.yaml
+  #   with:
+  #     docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
+  #     build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
+  #     wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
+  device-perf-blackhole-20-cores:
     needs: build-artifact-profiler
     secrets: inherit
-    uses: ./.github/workflows/perf-device-models-impl.yaml
+    uses: ./.github/workflows/perf-device-models-blackhole-20-cores-impl.yaml
+    strategy:
+      fail-fast: false
+      matrix:
+        card_type: ["p150b"]  # use CIv2 runner
     with:
       docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
