@@ -246,14 +246,6 @@ private:
     routing_plane_id_t get_routing_plane_id(
         chan_id_t eth_chan_id, const std::vector<chan_id_t>& eth_chans_in_direction) const;
 
-    std::vector<chip_id_t> get_mesh_physical_chip_ids(
-        const tt::tt_metal::distributed::MeshContainer<chip_id_t>& mesh_container,
-        std::optional<chip_id_t> nw_corner_chip_id = std::nullopt,
-        std::optional<chip_id_t> ne_corner_chip_id = std::nullopt) const;
-
-    std::map<FabricNodeId, chip_id_t> get_logical_chip_to_physical_chip_mapping(
-        const std::string& mesh_graph_desc_file);
-
     // Tries to get a valid downstream channel from the candidate_target_chans
     // First along same routing plane, but if not available, take round robin from candidates
     chan_id_t get_downstream_eth_chan_id(

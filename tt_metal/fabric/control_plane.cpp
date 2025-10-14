@@ -84,44 +84,6 @@ void build_golden_link_counts(
     }
 }
 
-std::vector<chip_id_t> get_adjacent_chips_from_ethernet_connections(
-    chip_id_t chip_id, std::uint32_t num_ports_per_side) {
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    auto eth_links = cluster.get_ethernet_cores_grouped_by_connected_chips(chip_id);
-    bool is_ubb = cluster.get_board_type(chip_id) == BoardType::UBB;
-
-    auto mmio_chip_ids = cluster.mmio_chip_ids();
-
-    std::vector<chip_id_t> adjacent_chips;
-
-    for (const auto& [connected_chip_id, eth_ports] : eth_links) {
-        // Do not include any corner to corner links on UBB
-        if (is_ubb && cluster.is_external_cable(chip_id, eth_ports[0])) {
-            continue;
-        }
-        if (!eth_ports.empty()) {
-            // Special case for TG not to include MMIO devices in adjacency map because they are control chips
-            if (cluster.get_cluster_type() == tt::tt_metal::ClusterType::TG &&
-                mmio_chip_ids.contains(connected_chip_id)) {
-                continue;
-            }
-
-            if (eth_ports.size() < num_ports_per_side) {
-                log_warning(
-                    tt::LogFabric,
-                    "Ethernet between chip {} and chip {} have {} expected ethernet ports, but only {} present",
-                    chip_id,
-                    connected_chip_id,
-                    num_ports_per_side,
-                    eth_ports.size());
-            }
-            adjacent_chips.push_back(connected_chip_id);
-        }
-    }
-
-    return adjacent_chips;
-}
-
 std::uint64_t encode_mesh_id_and_rank(MeshId mesh_id, MeshHostRankId host_rank) {
     return (static_cast<uint64_t>(mesh_id.get()) << 32) | static_cast<uint64_t>(host_rank.get());
 }
@@ -489,7 +451,8 @@ void ControlPlane::init_control_plane(
     if (logical_mesh_chip_id_to_physical_chip_id_mapping.has_value()) {
         this->load_physical_chip_mapping(logical_mesh_chip_id_to_physical_chip_id_mapping->get());
     } else {
-        this->load_physical_chip_mapping(get_logical_chip_to_physical_chip_mapping(mesh_graph_desc_file));
+        this->load_physical_chip_mapping(
+            topology_mapper_->get_local_logical_mesh_chip_id_to_physical_chip_id_mapping());
     }
     if (routing_table_generator_->mesh_graph->is_legacy_mode()) {
         this->generate_intermesh_connectivity();
@@ -553,151 +516,6 @@ void ControlPlane::validate_mesh_connections() const {
             this->validate_mesh_connections(mesh_id);
         }
     }
-}
-
-// TODO: refactor mesh_ns_size/mesh_ew_size to use MeshCoordinateRange
-// TODO: update logical_mesh_chip_id_to_physical_chip_id_mapping_ to be updated here probably
-std::vector<chip_id_t> ControlPlane::get_mesh_physical_chip_ids(
-    const tt::tt_metal::distributed::MeshContainer<chip_id_t>& mesh_container,
-    std::optional<chip_id_t> nw_corner_chip_id,
-    std::optional<chip_id_t> ne_corner_chip_id) const {
-    // Convert the coordinate range to a set of chip IDs using MeshContainer iterator
-    const auto& user_chip_ids = tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids();
-    TT_FATAL(
-        user_chip_ids.size() >= mesh_container.size(),
-        "Number of chips visible ({}) is less than the number of chips specified in mesh graph descriptor ({}), check "
-        "system status with tt-smi that all chips are visible.",
-        user_chip_ids.size(),
-        mesh_container.size());
-
-    // Special case for 1x1 mesh
-    if (mesh_container.shape() == tt::tt_metal::distributed::MeshShape(1, 1)) {
-        std::vector<chip_id_t> physical_chip_ids(1);
-        physical_chip_ids[0] = *user_chip_ids.begin();
-        return physical_chip_ids;
-    }
-
-    // Build mesh adjacency map using BFS
-    std::uint32_t num_ports_per_side =
-        routing_table_generator_->mesh_graph->get_chip_spec().num_eth_ports_per_direction;
-    auto topology_info = build_mesh_adjacency_map(
-        user_chip_ids,
-        mesh_container.shape(),
-        [num_ports_per_side](chip_id_t chip_id) {
-            return get_adjacent_chips_from_ethernet_connections(chip_id, num_ports_per_side);
-        },
-        nw_corner_chip_id);
-
-    // Handle 1D meshes (1xN or Nx1)
-    bool is_1d_mesh = (topology_info.ns_size == 1) || (topology_info.ew_size == 1);
-    if (is_1d_mesh) {
-        return convert_1d_mesh_adjacency_to_row_major_vector(topology_info);
-    }
-
-    // Handle 2D meshes
-    return convert_2d_mesh_adjacency_to_row_major_vector(topology_info, nw_corner_chip_id, ne_corner_chip_id);
-}
-
-std::map<FabricNodeId, chip_id_t> ControlPlane::get_logical_chip_to_physical_chip_mapping(
-    const std::string& mesh_graph_desc_file) {
-    std::map<FabricNodeId, chip_id_t> logical_mesh_chip_id_to_physical_chip_id_mapping;
-
-    std::string mesh_graph_desc_filename = std::filesystem::path(mesh_graph_desc_file).filename().string();
-
-    // NOTE: This is a special case for the TG mesh graph descriptor.
-    // It has to use Ethernet coordinates because ethernet coordinates must be mapped manually to physical chip IDs
-    // because the TG intermesh ethernet links could be inverted when mapped to physical chip IDs.
-    if (mesh_graph_desc_filename.starts_with("tg_mesh_graph_descriptor.")) {
-        // Add the N150 MMIO devices
-        auto eth_coords_per_chip =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_all_chip_ethernet_coordinates();
-        std::unordered_map<int, chip_id_t> eth_coord_y_for_gateway_chips = {};
-        for (const auto& [chip_id, eth_coord] : eth_coords_per_chip) {
-            if (tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(chip_id) == BoardType::N150) {
-                eth_coord_y_for_gateway_chips[eth_coord.y] = chip_id;
-            }
-        }
-        logical_mesh_chip_id_to_physical_chip_id_mapping.insert(
-            {FabricNodeId(MeshId{0}, 0), eth_coord_y_for_gateway_chips[3]});
-        logical_mesh_chip_id_to_physical_chip_id_mapping.insert(
-            {FabricNodeId(MeshId{1}, 0), eth_coord_y_for_gateway_chips[2]});
-        logical_mesh_chip_id_to_physical_chip_id_mapping.insert(
-            {FabricNodeId(MeshId{2}, 0), eth_coord_y_for_gateway_chips[1]});
-        logical_mesh_chip_id_to_physical_chip_id_mapping.insert(
-            {FabricNodeId(MeshId{3}, 0), eth_coord_y_for_gateway_chips[0]});
-
-        auto nw_chip_physical_id =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_physical_chip_id_from_eth_coord({0, 3, 7, 0, 1});
-        // Main board
-        const auto& mesh_container = this->routing_table_generator_->mesh_graph->get_chip_ids(MeshId{4});
-        const auto& physical_chip_ids = this->get_mesh_physical_chip_ids(mesh_container, nw_chip_physical_id);
-        for (std::uint32_t i = 0; i < physical_chip_ids.size(); i++) {
-            logical_mesh_chip_id_to_physical_chip_id_mapping.insert({FabricNodeId(MeshId{4}, i), physical_chip_ids[i]});
-        }
-        // This case can be depreciated once we have multi-host testing and validate it working
-    } else {
-        // Iterate over every mesh defined in the mesh-graph descriptor and embed it on top of
-        // the physical cluster using the generic helper.
-        for (const auto& mesh_id : this->routing_table_generator_->mesh_graph->get_mesh_ids()) {
-            if (!this->is_local_mesh(mesh_id)) {
-                continue;
-            }
-            auto host_rank_id = this->get_local_host_rank_id_binding();
-            const auto& mesh_container =
-                this->routing_table_generator_->mesh_graph->get_chip_ids(mesh_id, host_rank_id);
-
-            std::optional<chip_id_t> nw_chip_physical_id = std::nullopt;
-            std::optional<chip_id_t> ne_chip_physical_id = std::nullopt;
-            const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-            // TODO: remove once we use global physical graph to map logical big mesh to physical chips
-            // NOTE: This nw chip may not be set the same for UBB devices when using the Mock Cluster Descriptor
-            if (cluster.get_board_type(0) == BoardType::UBB) {
-                for (const auto& chip_id : cluster.all_chip_ids()) {
-                    auto candidate_ubb_id = tt::tt_fabric::get_ubb_id(chip_id);
-                    if (candidate_ubb_id.tray_id == 1 && candidate_ubb_id.asic_id == 1) {
-                        nw_chip_physical_id = chip_id;
-                    }
-                }
-            }
-
-            // TODO: Remove this once we have global physical to logical mapping
-            // Use ethernet coordinates for 2x4 big mesh because of unpredictable nw chip pinning
-            if (cluster.get_cluster_type() == tt::tt_metal::ClusterType::N300_2x2 &&
-                tt::tt_metal::distributed::multihost::DistributedContext::get_current_world()->size().get() == 2) {
-                // Pick out the chip with the lowest ethernet coordinate (i.e. NW chip)
-                const auto& chip_eth_coords =
-                    tt::tt_metal::MetalContext::instance().get_cluster().get_all_chip_ethernet_coordinates();
-                TT_FATAL(!chip_eth_coords.empty(), "No chip ethernet coordinates found in ethernet coordinates map");
-
-                // TODO: Support custom operator< for eth_coord_t to allow usage in std::set
-                const auto min_coord =
-                    *std::min_element(chip_eth_coords.begin(), chip_eth_coords.end(), [](const auto& a, const auto& b) {
-                        return a.second < b.second;
-                    });
-
-                nw_chip_physical_id =
-                    tt::tt_metal::MetalContext::instance().get_cluster().get_physical_chip_id_from_eth_coord(
-                        min_coord.second);
-
-                auto ne_chip_coord = min_coord.second;
-                ne_chip_coord.x += 1;
-                ne_chip_physical_id =
-                    tt::tt_metal::MetalContext::instance().get_cluster().get_physical_chip_id_from_eth_coord(
-                        ne_chip_coord);
-            }
-
-            const auto& physical_chip_ids =
-                this->get_mesh_physical_chip_ids(mesh_container, nw_chip_physical_id, ne_chip_physical_id);
-            std::uint32_t i = 0;
-            for (const auto& [_, fabric_chip_id] : mesh_container) {
-                logical_mesh_chip_id_to_physical_chip_id_mapping.emplace(
-                    FabricNodeId(mesh_id, fabric_chip_id), physical_chip_ids[i]);
-                i++;
-            }
-        }
-    }
-
-    return logical_mesh_chip_id_to_physical_chip_id_mapping;
 }
 
 routing_plane_id_t ControlPlane::get_routing_plane_id(

@@ -29,6 +29,18 @@ std::pair<MeshId, MeshHostRankId> decode_mesh_id_and_rank(std::uint64_t encoded_
         MeshId{static_cast<std::uint32_t>(encoded_value >> 32)},
         MeshHostRankId{static_cast<std::uint32_t>(encoded_value & 0xFFFFFFFF)}};
 }
+
+// Encodes/decodes a FabricNodeId (mesh_id, chip_id) into/from a 64-bit value.
+std::uint64_t encode_fabric_node_id(const FabricNodeId& fabric_node_id) {
+    return (static_cast<std::uint64_t>(fabric_node_id.mesh_id.get()) << 32) |
+           static_cast<std::uint64_t>(fabric_node_id.chip_id);
+}
+
+FabricNodeId decode_fabric_node_id(std::uint64_t encoded_value) {
+    return FabricNodeId(
+        MeshId{static_cast<std::uint32_t>(encoded_value >> 32)},
+        static_cast<std::uint32_t>(encoded_value & 0xFFFFFFFF));
+}
 }  // namespace
 
 FabricNodeId TopologyMapper::get_fabric_node_id_from_asic_id(tt::tt_metal::AsicID asic_id) const {
@@ -36,21 +48,17 @@ FabricNodeId TopologyMapper::get_fabric_node_id_from_asic_id(tt::tt_metal::AsicI
 }
 
 FabricNodeId TopologyMapper::get_fabric_node_id_from_physical_chip_id(chip_id_t physical_chip_id) const {
-    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    auto asic_id = cluster.get_unique_chip_ids().at(physical_chip_id);
-    return asic_id_to_fabric_node_id_.at(tt::tt_metal::AsicID{asic_id});
+    auto it = physical_chip_id_to_asic_id_.find(physical_chip_id);
+    TT_FATAL(it != physical_chip_id_to_asic_id_.end(), "Physical chip id {} not found in mapping", physical_chip_id);
+    return asic_id_to_fabric_node_id_.at(it->second);
 }
 
 chip_id_t TopologyMapper::get_physical_chip_id_from_fabric_node_id(const FabricNodeId& fabric_node_id) const {
-    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     auto asic_id = fabric_node_id_to_asic_id_.at(fabric_node_id);
-    for (const auto& [physical_chip_id, unique_id] : cluster.get_unique_chip_ids()) {
-        if (*asic_id == unique_id) {
-            return physical_chip_id;
-        }
-    }
-    TT_FATAL(false, "Physical chip id not found for fabric node id {}", fabric_node_id);
-    return 0;
+    auto it = asic_id_to_physical_chip_id_.find(asic_id);
+    TT_FATAL(
+        it != asic_id_to_physical_chip_id_.end(), "Physical chip id not found for fabric node id {}", fabric_node_id);
+    return it->second;
 }
 
 tt::tt_metal::AsicID TopologyMapper::get_asic_id_from_fabric_node_id(const FabricNodeId& fabric_node_id) const {
@@ -64,7 +72,21 @@ TopologyMapper::TopologyMapper(
     mesh_graph_(mesh_graph),
     physical_system_descriptor_(physical_system_descriptor),
     local_mesh_binding_(local_mesh_binding) {
+    build_asic_physical_chip_id_mappings();
     build_mapping();
+}
+
+chip_id_t TopologyMapper::get_physical_chip_id_from_asic_id(tt::tt_metal::AsicID asic_id) const {
+    return asic_id_to_physical_chip_id_.at(asic_id);
+}
+
+void TopologyMapper::build_asic_physical_chip_id_mappings() {
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    for (const auto& [physical_chip_id, unique_id] : cluster.get_unique_chip_ids()) {
+        tt::tt_metal::AsicID asic_id{unique_id};
+        asic_id_to_physical_chip_id_.emplace(asic_id, physical_chip_id);
+        physical_chip_id_to_asic_id_.emplace(physical_chip_id, asic_id);
+    }
 }
 
 void TopologyMapper::build_mapping() {
@@ -79,16 +101,23 @@ void TopologyMapper::build_mapping() {
     // Build host-to-mesh mapping via distributed all-gather of local bindings.
     auto mesh_id_host_names = build_cross_host_mesh_mappings();
 
-    // Find corners per host: map<host, set<AsicID>>
-    auto host_corner_map = build_host_corner_mappings();
+    // Only 1 host builds the mapping the rest will wait and use the mapping from the 1st host
+    if (*tt::tt_metal::MetalContext::instance().global_distributed_context().rank() == 0) {
+        // Find corners per host: map<host, set<AsicID>>
+        auto host_corner_map = build_host_corner_mappings();
 
-    // Locate mesh corners per mesh
-    auto mesh_corners_map = build_mesh_corners_mappings(host_corner_map, mesh_id_host_names);
+        // Locate mesh corners per mesh
+        auto mesh_corners_map = build_mesh_corners_mappings(host_corner_map, mesh_id_host_names);
 
-    // Populate fabric_node_id_to_asic_id mapping for each mesh
-    populate_fabric_node_id_to_asic_id_mappings(mesh_corners_map, mesh_id_host_names);
+        // Populate fabric_node_id_to_asic_id mapping for each mesh
+        populate_fabric_node_id_to_asic_id_mappings(mesh_corners_map, mesh_id_host_names);
 
-    // TODO: Verify that all mapping on each host is the same
+        // Broadcast the mapping to all hosts
+        broadcast_mapping_to_all_hosts();
+    } else {
+        // Wait for the 1st host to build the mapping
+        receive_mapping_from_host(0);
+    }
 }
 
 std::unordered_map<MeshId, std::unordered_set<HostName>> TopologyMapper::build_cross_host_mesh_mappings() {
@@ -443,6 +472,122 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
             asic_id_to_fabric_node_id_.emplace(found_asic, FabricNodeId(mesh_id, logical_chip_id));
         }
     }
+}
+
+void TopologyMapper::broadcast_mapping_to_all_hosts() {
+    using namespace tt::tt_metal::distributed::multihost;
+    auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
+
+    const std::size_t world_size = *distributed_context.size();
+    if (world_size <= 1) {
+        return;  // single-host, nothing to broadcast
+    }
+
+    // Only controller broadcasts
+    constexpr std::size_t CONTROLLER_RANK = 0;
+    auto my_rank = *distributed_context.rank();
+    if (my_rank != CONTROLLER_RANK) {
+        return;
+    }
+
+    // Streaming format:
+    // [u32 count]
+    // repeated 'count' times send a fixed-size record:
+    //   record = [u64 asic_id][u64 encoded_fabric_node_id]
+    auto serialize_u64 = [](std::vector<uint8_t>& buf, std::uint64_t v) {
+        for (int i = 0; i < 8; ++i) {
+            buf.push_back(static_cast<uint8_t>((v >> (8 * i)) & 0xFF));
+        }
+    };
+
+    const std::uint32_t count = static_cast<std::uint32_t>(fabric_node_id_to_asic_id_.size());
+
+    for (std::size_t peer = 0; peer < world_size; ++peer) {
+        if (peer == CONTROLLER_RANK) {
+            continue;
+        }
+
+        // Send count first (synchronous send to ensure receiver posted recv)
+        std::uint32_t count_copy = count;
+        distributed_context.ssend(
+            tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&count_copy), sizeof(count_copy)),
+            Rank{static_cast<uint32_t>(peer)},
+            Tag{0});
+
+        // Send one record at a time using synchronous send
+        for (const auto& [fabric_node_id, asic_id] : fabric_node_id_to_asic_id_) {
+            std::vector<uint8_t> record;
+            record.reserve(16);
+            serialize_u64(record, *asic_id);
+            const std::uint64_t encoded_fn = encode_fabric_node_id(fabric_node_id);
+            serialize_u64(record, encoded_fn);
+
+            distributed_context.ssend(
+                tt::stl::as_writable_bytes(tt::stl::Span<uint8_t>(record.data(), record.size())),
+                Rank{static_cast<uint32_t>(peer)},
+                Tag{0});
+        }
+    }
+}
+
+void TopologyMapper::receive_mapping_from_host(int rank) {
+    using namespace tt::tt_metal::distributed::multihost;
+    auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
+
+    auto my_rank = *distributed_context.rank();
+    if (static_cast<int>(my_rank) == rank) {
+        return;  // sender does not receive
+    }
+
+    // Receive count, then 'count' fixed-size records
+    std::uint32_t count = 0;
+    distributed_context.recv(
+        tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&count), sizeof(count)),
+        Rank{static_cast<uint32_t>(rank)},
+        Tag{0});
+
+    fabric_node_id_to_asic_id_.clear();
+    asic_id_to_fabric_node_id_.clear();
+
+    auto read_u64_from = [&](const std::vector<uint8_t>& buf, std::size_t& idx) -> std::uint64_t {
+        TT_FATAL(idx + 8 <= buf.size(), "Deserializer overflow reading u64");
+        std::uint64_t v = 0;
+        for (int i = 0; i < 8; ++i) {
+            v |= (static_cast<std::uint64_t>(buf[idx++]) << (8 * i));
+        }
+        return v;
+    };
+
+    for (std::uint32_t i = 0; i < count; ++i) {
+        std::vector<uint8_t> record(16);
+        distributed_context.recv(
+            tt::stl::as_writable_bytes(tt::stl::Span<uint8_t>(record.data(), record.size())),
+            Rank{static_cast<uint32_t>(rank)},
+            Tag{0});
+
+        std::size_t idx = 0;
+        const auto asic_val = read_u64_from(record, idx);
+        const auto encoded_fn = read_u64_from(record, idx);
+        tt::tt_metal::AsicID asic_id{asic_val};
+
+        FabricNodeId fn = decode_fabric_node_id(encoded_fn);
+        fabric_node_id_to_asic_id_.emplace(fn, asic_id);
+        asic_id_to_fabric_node_id_.emplace(asic_id, fn);
+    }
+
+    TT_FATAL(
+        fabric_node_id_to_asic_id_.size() == count && asic_id_to_fabric_node_id_.size() == count,
+        "Topology mapping size mismatch after streaming receive");
+}
+
+std::map<FabricNodeId, chip_id_t> TopologyMapper::get_local_logical_mesh_chip_id_to_physical_chip_id_mapping() const {
+    std::map<FabricNodeId, chip_id_t> mapping;
+    // Only return the mapping for local logical mesh ids
+    for (const auto& asic_id :
+         physical_system_descriptor_.get_asics_connected_to_host(physical_system_descriptor_.my_host_name())) {
+        mapping[get_fabric_node_id_from_asic_id(asic_id)] = get_physical_chip_id_from_asic_id(asic_id);
+    }
+    return mapping;
 }
 
 }  // namespace tt::tt_fabric

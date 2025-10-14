@@ -41,21 +41,4 @@ struct IntraMeshAdjacencyMap {
     std::uint32_t ew_size{};         // East-West size (columns)
 };
 
-IntraMeshAdjacencyMap build_mesh_adjacency_map(
-    const std::set<chip_id_t>& user_chip_ids,
-    const tt::tt_metal::distributed::MeshShape& mesh_shape,
-    const std::function<std::vector<chip_id_t>(chip_id_t)>& get_adjacent_chips_func,
-    std::optional<chip_id_t> start_chip_id = std::nullopt);
-
-// Helper: Convert 1D mesh adjacency map to row-major vector representation
-std::vector<chip_id_t> convert_1d_mesh_adjacency_to_row_major_vector(
-    const IntraMeshAdjacencyMap& topology_info,
-    std::optional<std::function<std::pair<AdjacencyMap, chip_id_t>(const IntraMeshAdjacencyMap&)>> = std::nullopt);
-
-// Helper: Convert 2D mesh adjacency map to row-major vector representation
-std::vector<chip_id_t> convert_2d_mesh_adjacency_to_row_major_vector(
-    const IntraMeshAdjacencyMap& topology_info,
-    std::optional<chip_id_t> nw_corner_chip_id = std::nullopt,
-    std::optional<chip_id_t> ne_corner_chip_id = std::nullopt);
-
 }  // namespace tt::tt_fabric
