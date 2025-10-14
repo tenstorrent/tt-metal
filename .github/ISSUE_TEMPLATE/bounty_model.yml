@@ -85,7 +85,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        ###  📊 Result Submission Guidelines
+        ### 📊 Result Submission Guidelines
         Beyond the model implementation itself. Contributors must submit the following material as a proof of work. However, feel free to open a PR at any time if you want us checking you are on the right track. Just understand that payout is only made after **all 3 stages** are completed.
 
         **Deliverables:**
