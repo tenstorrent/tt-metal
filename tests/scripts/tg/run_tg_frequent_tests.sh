@@ -58,6 +58,12 @@ run_tg_tests() {
     pytest -n auto models/experimental/tt_dit/tests/models/test_attention_sd35.py -k "4x4sp0tp1" --timeout=300; fail+=$?
     pytest -n auto models/experimental/tt_dit/tests/models/test_transformer_sd35.py::test_sd35_transformer_block -k "4x4sp0tp1" --timeout=300; fail+=$?
 
+  elif [[ "$1" == "mochi" ]]; then
+    echo "LOG_METAL: running mochi run_tg_frequent_tests"
+    pytest -n auto models/experimental/tt_dit/tests/models/mochi/test_vae_mochi.py -k "TG" --timeout=300; fail+=$?
+    pytest -n auto models/experimental/tt_dit/tests/models/mochi/test_attention_mochi.py -k "4x8sp1tp0" --timeout=300; fail+=$?
+    pytest -n auto models/experimental/tt_dit/tests/models/mochi/test_transformer_mochi.py -k "4x8sp1tp0" --timeout=300; fail+=$?
+
   else
     echo "LOG_METAL: Unknown model type: $1"
     return 1
