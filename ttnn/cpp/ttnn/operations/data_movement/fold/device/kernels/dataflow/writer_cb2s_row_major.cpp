@@ -3,7 +3,24 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
+#include <cstdint>
 #include "dataflow_api.h"
+
+#define dump(a)                                               \
+    do {                                                      \
+        DPRINT << "Activations: " << #a " = " << a << ENDL(); \
+    } while (false)
+
+inline void print_bf16_pages(uint32_t l1_addr, uint32_t elts_per_page, uint32_t npages, uint32_t start = 0) {
+    volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_addr) + start * elts_per_page;
+    for (uint32_t page = 0; page < npages; ++page) {
+        DPRINT << start + page << ": ";
+        for (uint32_t j = 0; j < elts_per_page; ++j, ++ptr) {
+            DPRINT << BF16(*ptr) << " ";
+        }
+        DPRINT << ENDL();
+    }
+}
 
 void kernel_main() {
     constexpr uint32_t src_cb = get_compile_time_arg_val(0);
@@ -31,8 +48,11 @@ void kernel_main() {
 
     uint64_t src_noc_addr = get_noc_addr(get_read_ptr(src_cb));
     const uint32_t dst_addr_base = get_write_ptr(dst_cb);
+    uint32_t src_addr_base = get_read_ptr(src_cb);
 
-    noc_async_read_one_packet_set_state(src_noc_addr, read_size);
+    if (is_aligned) {
+        noc_async_read_one_packet_set_state(src_noc_addr, read_size);
+    }
 
     for (uint32_t row = 0; row < num_dst_rows; ++row) {
         uint64_t src_col_offset = core_col_offset;
@@ -40,18 +60,21 @@ void kernel_main() {
 
         for (uint32_t col = 0; col < process_cols; ++col) {
             uint32_t dst_pixel_addr = dst_addr;
+            volatile tt_l1_ptr uint16_t* dst_h_addr = (volatile uint16_t*)dst_pixel_addr;
             for (uint32_t h = 0; h < stride_h; ++h) {
                 const uint32_t h_offset = h * aligned_row_size;
+                volatile tt_l1_ptr uint16_t* src_h_addr =
+                    (volatile uint16_t*)(src_addr_base + src_col_offset + h_offset);
                 if constexpr (is_aligned) {
                     noc_async_read_one_packet_with_state<true>(
                         src_noc_addr + src_col_offset + h_offset, dst_pixel_addr);
                     dst_pixel_addr += aligned_chunk_size;
                 } else {
                     for (uint32_t w = 0; w < stride_w; ++w) {
-                        const uint32_t w_offset = w * aligned_pixel_size;
-                        noc_async_read_one_packet_with_state<true>(
-                            src_noc_addr + src_col_offset + h_offset + w_offset, dst_pixel_addr);
-                        dst_pixel_addr += pixel_size;
+                        for (uint32_t i = 0; i < pixel_size / 2; ++i) {
+                            *(dst_h_addr++) = *(src_h_addr++);
+                        }
+                        src_h_addr += ((aligned_pixel_size - pixel_size) / 2);
                     }
                 }
             }
@@ -59,6 +82,7 @@ void kernel_main() {
             dst_addr += aligned_dst_pixel_size * 2;
         }
         src_noc_addr += dst_row_offset;
+        src_addr_base += dst_row_offset;
     }
 
     noc_async_read_barrier();
