@@ -109,6 +109,7 @@ class Generator:
             and not return_logits
         ):
             use_batched_prefill = True
+        use_batched_prefill = False
 
         if return_logits:
             tt_out_logits_all_users = torch.zeros(batch, 1, 155648)
@@ -253,6 +254,7 @@ class Generator:
         toks = self.model.process_output_prefill(
             tt_out_trace, last_token_idx=last_token_idx, tt_out_logits_saved=tt_out_logits_saved
         )
+        print(toks)
         return toks
 
     def _capture_trace_prefill(
@@ -348,6 +350,7 @@ class Generator:
         if self.model.is_decode_setup is False:
             self.model.switch_mode("decode")
             reset_inputs = True
+
         kv_cache = kv_cache[0]
         decode_kwargs = {
             "current_pos": start_pos,

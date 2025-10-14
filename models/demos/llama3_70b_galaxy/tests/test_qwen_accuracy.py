@@ -239,6 +239,7 @@ def test_qwen_model_acc(
         weight_cache_path=model_args.weight_cache_path(dtype),
         paged_attention_config=paged_attention_config,
         enable_prefetcher_performance_mode=True,
+        decode_mode_only=True,
     )
     tt_sampling = TTSampling(
         args=model_args,
