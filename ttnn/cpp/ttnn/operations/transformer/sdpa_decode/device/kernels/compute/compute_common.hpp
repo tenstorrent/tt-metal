@@ -84,7 +84,7 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, uint32_t cols, bool do_eltwise_
         if (do_eltwise_max) {
             copy_tile_to_dst_init_short(prev_cb);
             copy_tile(prev_cb, r, prev_max_dst_idx);
-            max_tile(reduce_dst_idx, prev_max_dst_idx);
+            max_tile(reduce_dst_idx, prev_max_dst_idx, static_cast<int>(vector_mode));
         }
         pack_tile(reduce_dst_idx, out_cb);
         release_dst();
