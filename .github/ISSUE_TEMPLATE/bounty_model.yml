@@ -1,32 +1,30 @@
 name: "Model Bounty"
 description: "Create a new model bring-up or optimization bounty"
 title: "[Bounty $amount] [Issue Title]"
-labels: ["bounty", "model bringup"]
+labels: ["model bringup"]
 
 body:
   - type: markdown
     attributes:
       value: |
         ## 📝 Background
-        Context about what the bounty is about — What model to bring up, where it’s used, and who would be interested.
 
   - type: textarea
     id: background
     attributes:
-      label: Background
-      description: "Explain the model context, purpose, and relevance."
       placeholder: |
-        Example:
-        - Model: Whisper
-        - Purpose: Speech-to-text on TT hardware
-        - Used in: OpenAI API, transcription systems
+        Context about what the bounty is about — What model to bring up, where it’s used, and who would be interested.
+
 
   - type: markdown
     attributes:
       value: |
         ## 🎯 What Success Looks Like
-        Define testable acceptance criteria — what we expect to verify before paying out.
-        Model bounties are split into 3 stages:
+        A successful submission will fulfill all requirements in the following stages. Payout is made after **all stages** are completed.
+
+  - type: textarea
+    attributes:
+      description: "Define a list or checklist of clear, testable acceptance criteria - this is the goal the developer is chasing. They achieve all stages, we pay. Model bounties are split into 3 stages."
 
   - type: markdown
     attributes:
@@ -36,12 +34,13 @@ body:
   - type: textarea
     id: stage1
     attributes:
-      label: "Stage 1 — Bring-Up"
-      description: "List requirements for a successful model bring-up."
+      description: "List things that they need to achieve for us to consider the model working"
       placeholder: |
-        - Produce correct classification or text generation
-        - Validate against sample dataset
-        - Output easily verifiable (visible correctness)
+        e.g.
+        - Produce correct classification given input images
+        - Generates coherent text or correct object detections
+        - Which to validate against? What's the expected accuracy?
+        - Output should be easily verifiable, we can see the model is working
     validations:
       required: true
 
@@ -53,15 +52,15 @@ body:
   - type: textarea
     id: stage2
     attributes:
-      label: "Stage 2 — Basic Optimizations"
-      description: "List easy-to-implement optimizations."
+      description: "A list of techniques that are easy to implement. Make sure they are applicable to the model."
       placeholder: |
+        e.g.
         - Store temporary results in L1
-        - Fuse activation after matmul
+        - Fused activation after matmul
         - Change image tensors to sharding
-        - Optimize small bottlenecks
+        - You name it, these should be relatively easy changes
     validations:
-      required: false
+      required: true
 
   - type: markdown
     attributes:
@@ -71,56 +70,65 @@ body:
   - type: textarea
     id: stage3
     attributes:
-      label: "Stage 3 — Deeper Optimization"
-      description: "Describe deeper, TT-specific optimization goals."
+      description: "More involved optimizations are listed here. Adapt the model to exploit TT hardware features and reduce unnecessary TM/memory overheads. We are not asking the user to understand all possible optimization processes. But enough to touch on the differences of our hardware and GPUs."
       placeholder: |
-        - Grouped convolutions
+        e.g.
+        - Grouped Convolutions
         - Use of SDPA operator
-        - Avoid TMs by changing operation order
+        - avoiding TMs by changing order of operation
     validations:
-      required: false
+      required: true
 
 
   - type: markdown
     attributes:
       value: |
         ## 🧭 Guidance & Starting Points
-        Provide guidance, links, or hints to help contributors begin.
 
   - type: textarea
     id: guidance
     attributes:
-      label: Guidance
+      description: "Provide guidance, links to files, or code snippets and links. Help the user to get started with the bounty"
       placeholder: |
-        - Links to code, docs, previous models
-        - Tips on what to look out for
-        - Who to contact for help
+        e.g.
+        - Links to code, docs, previous work or tech report
+        - Advice on what to look out for, or who to ask for help
+        - Link to original model paper
+        Faster-RCNN example:
+        - Use the [TTNN model bring-up tech report](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/ttnn/TTNN-model-bringup.md) as your primary reference.
+        - Reference [Yolov4 implementation (PR 29157)](https://github.com/tenstorrent/tt-metal/pull/29157) for example end-to-end flows.
+        - Use the [alternative PyTorch implementation](https://github.com/jwyang/faster-rcnn.pytorch) for model structure details.
+        - Refer to [TT fused ops](https://github.com/tenstorrent/tt-metal/pull/29236) for opportunities to optimize.
+        - Target input resolutions: start with 320x320x3, then 640x640x3.
+        - Ask for help or file issues if ops are missing in TTNN.
 
   - type: markdown
     attributes:
       value: |
         ## 🔎 Possible Approaches
-        Suggest one or more technical paths or architecture ideas.
 
   - type: textarea
     id: approaches
     attributes:
-      label: Possible Approaches
+      description: "List one or more technical paths, architectural suggestions, or research ideas; Help the developer not succumb to analysis paralysis - too many options, don't know what to do"
       placeholder: |
-        - Suggested methods
-        - Implementation hints
-        - Performance considerations
+        e.g.
+        - Start from an existing PyTorch Faster-RCNN model and port layers one by one to TTNN.
+        - Validate each submodule's output against CPU/PyTorch reference before full integration.
+        - Experiment with different sharding strategies and memory configs for convolutions.
+        - Use TTNN profiling tools to identify bottlenecks and areas for fusion.
+        - Open a draft PR early to get feedback on your approach.
 
   - type: markdown
     attributes:
       value: |
         ## 📊 Result Submission Guidelines
-        Contributors can open a PR anytime for feedback, but payout is only made after all 3 stages are completed.
+        Beyond the model implementation itself. Contributors must submit the following material as a proof of work. However, feel free to open a PR at any time if you want us checking you are on the right track. Just understand that payout is only made after **all 3 stages** are completed.
 
         **Deliverables:**
-        * Functional model implementation
-        * Validation logs (output correctness)
-        * Performance report + header for final review
+        *Functional model implementation
+        *Validation logs (output correctness)
+        *Performance report + header for final review
 
         **Links:**
         - [Performance Sheet](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/ttnn/TTNN-model-bringup.md#41-performance-sheet)
@@ -130,18 +138,24 @@ body:
     attributes:
       value: |
         ## 📚 Resources
-        Add helpful links for contributors:
-        - Example PRs or implementations
-        - Reference docs
-        - Original model paper
-        - Outside tutorials
 
   - type: textarea
     id: resources
     attributes:
-      label: Resources
+      description: "Add helpful links for contributors: example PRs or implementations, reference docs, original model paper, outside tutorials"
       placeholder: |
-        - [Example implementation](link)
+        e.g.
+        - resources (possibly external) to help the user to get started
+        - [Example implementation or related PR](link)
         - [Reference documentation](link)
         - [Original model paper](link)
-        - [External resources](link)
+        - [Outside link](https://)
+        Faster-RCNN example:
+        - [TTNN model bring-up tech report](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/ttnn/TTNN-model-bringup.md)
+        - [CNN Bring-up & Optimization in TT-NN](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/CNNs/cnn_optimizations.md)
+        - [Yolov4 TTNN implementation PR](https://github.com/tenstorrent/tt-metal/pull/29157)
+        - [Faster-RCNN PyTorch implementation](https://github.com/jwyang/faster-rcnn.pytorch)
+        - [Faster-RCNN official docs](https://docs.pytorch.org/vision/main/models/faster_rcnn.html)
+        - [TT fused ops PR](https://github.com/tenstorrent/tt-metal/pull/29236)
+        - [Perf report header](https://docs.tenstorrent.com/tt-metal/latest/ttnn/ttnn/profiling_ttnn_operations.html#perf-report-headers)
+
