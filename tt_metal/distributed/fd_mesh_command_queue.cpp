@@ -979,6 +979,7 @@ void FDMeshCommandQueue::capture_program_trace_on_subgrid(
             sysmem_manager_offset,
             sysmem_manager_for_trace.get_issue_queue_write_ptr(id_) - sysmem_manager_offset};
         ordered_mesh_trace_md_.push_back(mesh_trace_md);
+    }
 }
 
 void FDMeshCommandQueue::capture_go_signal_trace_on_unused_subgrids(
