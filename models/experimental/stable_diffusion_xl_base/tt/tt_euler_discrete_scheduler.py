@@ -80,6 +80,7 @@ class TtEulerDiscreteScheduler(LightweightModule):
 
     def set_begin_index(self, begin_index: int):
         self.begin_index = begin_index
+        self.set_step_index(self.begin_index)
 
     def inc_step_index(self):
         self.set_step_index(self.step_index + 1)
@@ -325,10 +326,10 @@ class TtEulerDiscreteScheduler(LightweightModule):
         Ensures interchangeability with schedulers that need to scale the denoising model input depending on the
         current timestep. Scales the denoising model input by `(sigma**2 + 1) ** 0.5` to match the Euler algorithm.
         """
-        if self.step_index == 0:
-            print("Scheduler timesteps are: ", self.timesteps)
-            print(f"Setting step index to begin index = {self.begin_index}")
-            self.step_index = self.begin_index
+        # if self.step_index == 0:
+        #     print("Scheduler timesteps are: ", self.timesteps)
+        #     print(f"Setting step index to begin index = {self.begin_index}")
+        #     self.set_step_index(self.begin_index)
 
         # timestep is not used in this implementation, step_index is already initialized at set_timesteps()
         # Note: Don't use inplace op here since UNet deallocates its input
@@ -409,14 +410,14 @@ class TtEulerDiscreteScheduler(LightweightModule):
 
         # this is working
         # sigma = self.sigmas[step_indices].flatten()
-        sigma = self.tt_sigmas[step_index]
-        while len(sigma.shape) < len(original_samples.shape):
-            sigma = ttnn.unsqueeze(sigma, dim=-1)
+        # sigma = self.tt_sigmas[step_index]
+        # while len(sigma.shape) < len(original_samples.shape):
+        #     sigma = ttnn.unsqueeze(sigma, dim=-1)
 
         # temp workaround
-        sigma = ttnn.to_device(sigma, self.device)
+        # sigma = ttnn.to_device(sigma, self.device)
         print("Orignal samples shape is: ", original_samples.shape)
         print("Noise shape is: ", noise.shape)
-        print("Sigma shape is: ", sigma.shape)
-        noisy_samples = original_samples + noise * sigma
+        # print("Sigma shape is: ", sigma.shape)
+        noisy_samples = original_samples + noise * self.tt_sigma_step
         return noisy_samples

@@ -6,7 +6,6 @@ import os
 import torch
 from dataclasses import dataclass
 
-from diffusers import StableDiffusionXLPipeline, StableDiffusionXLInpaintPipeline
 from loguru import logger
 import ttnn
 
@@ -49,12 +48,12 @@ class TtSDXLPipeline(LightweightModule):
     def __init__(self, ttnn_device, torch_pipeline, pipeline_config: TtSDXLPipelineConfig):
         super().__init__()
 
-        if not isinstance(torch_pipeline, StableDiffusionXLPipeline) and not isinstance(
-            torch_pipeline, StableDiffusionXLInpaintPipeline
-        ):
-            assert (
-                False
-            ), "torch_pipeline must be an instance of StableDiffusionXLPipeline or StableDiffusionXLInpaintPipeline"
+        # if not isinstance(torch_pipeline, StableDiffusionXLPipeline) and not isinstance(
+        #     torch_pipeline, StableDiffusionXLInpaintPipeline
+        # ):
+        #     assert (
+        #         False
+        #     ), "torch_pipeline must be an instance of StableDiffusionXLPipeline or StableDiffusionXLInpaintPipeline"
         assert isinstance(torch_pipeline.text_encoder, CLIPTextModel), "pipeline.text_encoder is not a CLIPTextModel"
         assert isinstance(
             torch_pipeline.text_encoder_2, CLIPTextModelWithProjection
@@ -307,7 +306,7 @@ class TtSDXLPipeline(LightweightModule):
                 self.tt_prompt_embeds_device,
                 self.tt_time_ids_device,
                 self.tt_text_embeds_device,
-                [self.ttnn_timesteps[0]],
+                1,
                 self.extra_step_kwargs,
                 self.guidance_scale,
                 self.scaling_factor,
@@ -566,7 +565,7 @@ class TtSDXLPipeline(LightweightModule):
             self.tt_prompt_embeds_device,
             self.tt_time_ids_device,
             self.tt_text_embeds_device,
-            self.ttnn_timesteps,
+            self.pipeline_config.num_inference_steps,
             self.extra_step_kwargs,
             self.guidance_scale,
             self.scaling_factor,
@@ -747,7 +746,7 @@ class TtSDXLPipeline(LightweightModule):
             self.tt_prompt_embeds_device,
             self.tt_time_ids_device,
             self.tt_text_embeds_device,
-            [self.ttnn_timesteps[0]],
+            1,
             self.extra_step_kwargs,
             self.guidance_scale,
             self.scaling_factor,

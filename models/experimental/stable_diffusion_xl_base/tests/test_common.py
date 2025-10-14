@@ -19,7 +19,7 @@ import ttnn
 
 from models.experimental.stable_diffusion_xl_base.vae.tt.tt_autoencoder_kl import TtAutoencoderKL
 
-SDXL_L1_SMALL_SIZE = 23000
+SDXL_L1_SMALL_SIZE = 29000
 SDXL_TRACE_REGION_SIZE = 34000000
 SDXL_CI_WEIGHTS_PATH = "/mnt/MLPerf/tt_dnn-models/hf_home"
 SDXL_FABRIC_CONFIG = ttnn.FabricConfig.FABRIC_1D
@@ -498,7 +498,31 @@ def prepare_latents_inpainting(
 
     cpu_device = torch.device("cpu")
     image = image.to(device=cpu_device, dtype=dtype)
-    image_latents = torch_pipeline._encode_vae_image(image, generator=None)
+    # if tt_inpainting_pipeline.pipeline_config.vae_on_device == False:
+    #     image_latents = tt_inpainting_pipeline.torch_pipeline._encode_vae_image(image, generator=None)
+    # else:
+    #     # To channel last
+    #     B, C, H, W = image.shape  # 1, 3, 1024, 1024
+    #     tt_image = ttnn.from_torch(
+    #         image, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=tt_inpainting_pipeline.ttnn_device
+    #     )
+    #     tt_image = ttnn.permute(tt_image, (0, 2, 3, 1))
+    #     tt_image = ttnn.reshape(tt_image, (B, 1, H * W, C))
+    #     image_latents = tt_inpainting_pipeline.tt_vae.encode(tt_image, [B, C, H, W]).latent_dist.sample()
+    #     image_latents = tt_inpainting_pipeline.torch_pipeline.vae.config.scaling_factor * image_latents
+    # image = image.to(device=cpu_device, dtype=dtype)
+    image = torch.permute(image, (0, 2, 3, 1))  # NHWC to NCHW
+    image = torch.reshape(image, (1, 1, 1024 * 1024, 3))
+    image = ttnn.from_torch(
+        image,
+        dtype=ttnn.bfloat16,
+        device=tt_pipeline.ttnn_device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    # image_latents = torch_pipeline._encode_vae_image(image, generator=None)  # has VAE encode and scaling
+    image_latents = tt_pipeline.tt_vae.encode(image, [1, 3, height, width]).latent_dist.sample()
+    image_latents = tt_pipeline.torch_pipeline.vae.config.scaling_factor * image_latents
     image_latents = image_latents.repeat(batch_size // image_latents.shape[0], 1, 1, 1)
     # print(f"Path 4 in prepare latents")
 
@@ -673,7 +697,7 @@ def run_tt_image_gen(
     tt_prompt_embeds,
     tt_time_ids,
     tt_text_embeds,
-    tt_timesteps,
+    num_steps,
     tt_extra_step_kwargs,
     guidance_scale,
     scaling_factor,
@@ -690,12 +714,12 @@ def run_tt_image_gen(
     use_cfg_parallel=False,
     guidance_rescale=0.0,
 ):
-    assert not (capture_trace and len(tt_timesteps) != 1), "Trace should capture only 1 iteration"
+    assert not (capture_trace and num_steps != 1), "Trace should capture only 1 iteration"
     profiler.start("image_gen")
     profiler.start("denoising_loop")
 
-    print("tt_timesteps: ", tt_timesteps)
-    for i, _ in tqdm(enumerate(tt_timesteps), total=len(tt_timesteps)):
+    # print("tt_timesteps: ", tt_timesteps)
+    for i in range(num_steps):  # tqdm(enumerate(tt_timesteps), total=len(tt_timesteps)):
         unet_outputs = []
         if tid is None or capture_trace:
             tid = ttnn.begin_trace_capture(ttnn_device, cq_id=0) if capture_trace else None
@@ -781,7 +805,7 @@ def run_tt_image_gen(
         else:
             ttnn.execute_trace(ttnn_device, tid, cq_id=0, blocking=False)
 
-        if i < (len(tt_timesteps) - 1):
+        if i < (num_steps - 1):
             tt_scheduler.inc_step_index()
 
     ttnn.synchronize_device(ttnn_device)
@@ -837,7 +861,7 @@ def run_tt_image_gen(
 
         # VAE upcasting to float32 is happening in the reference SDXL demo if VAE dtype is float16. If it's bfloat16, it will not be upcasted.
         latents = latents / vae.config.scaling_factor
-        warmup_run = len(tt_timesteps) == 1
+        warmup_run = num_steps == 1
         if warmup_run == False:
             # Do not run host VAE if we are on a warmup run
             imgs = vae.decode(latents, return_dict=False)[0]
