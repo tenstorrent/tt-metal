@@ -57,7 +57,8 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
     LayerNormDistributedType norm_type,
     float eps,
     ttnn::DeviceComputeKernelConfig compute_kernel_config,
-    std::optional<bool> use_2d_core_grid) {
+    std::optional<bool> use_2d_core_grid,
+    std::optional<bool> use_fp32_reduction) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     using tt::tt_metal::CBHandle;
     using tt::tt_metal::CircularBuffer;
@@ -362,7 +363,13 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     std::vector<uint32_t> compute_args = {
-        tiles_per_core_y, block_size, stats_tiles_cols, gamma.has_value(), beta.has_value(), fp32_dest_acc_en};
+        tiles_per_core_y,
+        block_size,
+        stats_tiles_cols,
+        gamma.has_value(),
+        beta.has_value(),
+        fp32_dest_acc_en,
+        use_fp32_reduction ? 1 : 0};
 
     auto compute_kernels_id = CreateKernel(
         program,

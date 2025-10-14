@@ -344,6 +344,7 @@ def test_distributed_norm_comparison(
             weight=ttnn_weight,
             bias=ttnn_bias,
             compute_kernel_config=compute_kernel_config,
+            use_fp32_reduction=True,
         )
     elif norm_type == "rms_norm":
         ttnn_output = ttnn.rms_norm_post_all_gather(
@@ -352,6 +353,7 @@ def test_distributed_norm_comparison(
             epsilon=eps,
             weight=ttnn_weight,
             compute_kernel_config=compute_kernel_config,
+            use_fp32_reduction=True,
         )
 
     ttnn_output_torch = ttnn.to_torch(ttnn_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))

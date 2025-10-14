@@ -110,7 +110,8 @@ void bind_normalization_rmsnorm_post_all_gather_operation(py::module& module) {
             py::arg("compute_kernel_config") = std::nullopt,
             py::arg("program_config") = std::nullopt,
             py::arg("dtype") = std::nullopt,
-            py::arg("use_2d_core_grid") = std::nullopt});
+            py::arg("use_2d_core_grid") = std::nullopt,
+            py::arg("use_fp32_reduction") = false});
 }
 
 void bind_normalization_rms_norm_distributed(py::module& module) {

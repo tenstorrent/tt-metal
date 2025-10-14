@@ -22,7 +22,8 @@ struct ExecuteLayerNormPostAllGather {
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
         const std::optional<const LayerNormProgramConfig>& program_config = std::nullopt,
-        const std::optional<const DataType>& dtype = std::nullopt);
+        const std::optional<const DataType>& dtype = std::nullopt,
+        const std::optional<bool> use_fp32_reduction = false);
 };
 
 }  // namespace operations::normalization
