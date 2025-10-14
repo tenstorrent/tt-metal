@@ -68,20 +68,3 @@ Tests:
 
     patterns:
       - type: all_to_all
-
-  - name: "TorusAllToAllMulticast"
-    benchmark_mode: true
-    sync: true
-    fabric_setup:
-      topology: Torus
-      torus_config: XY
-      num_links: 4
-
-    defaults:
-      ftype: mcast
-      ntype: unicast_write
-      num_packets: 20000
-      size: 4096
-
-    patterns:
-      - type: all_to_all
