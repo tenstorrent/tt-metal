@@ -185,15 +185,15 @@ TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="4,3" pytest models/experimental/oft/tes
 ```
 
 ## Running All Tests
-
 To run the complete test suite:
 
+**Usage**
 ```bash
 # Run all PCC tests
 TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="4,3" pytest models/experimental/oft/tests/pcc/
+```
 
 ## Environment Setup
-
 The tests require:
 - Pre-trained model checkpoint
 - Test images and calibration files
@@ -201,8 +201,8 @@ The tests require:
 ## Expected Outputs
 
 All tests generate:
-- **Console logs**: Detailed PCC comparisons and validation results
-- **Visualizations**: Debug plots and comparison images (saved to `outputs/` directories)
+**Console logs**: Detailed PCC comparisons and validation results
+**Visualizations**: Debug plots and comparison images (saved to `outputs/` directories)
 
 ## Section 3: Device Performance Tests
 
@@ -212,21 +212,21 @@ The device performance test suite benchmarks the OFT model components on TT hard
 Comprehensive performance benchmarking for OFT model components on TT device hardware.
 
 **What it tests:**
-- **OFTNet Model Performance**: Full model inference excluding decoder (test_device_perf_oft_oftnet)
-- **Decoder Performance**: Object detection decoder performance in isolation (test_device_perf_oft_decoder)
-- **Full Pipeline Performance**: End-to-end inference including complete demo pipeline (test_device_perf_oft_full)
+**OFTNet Model Performance**: Full model inference excluding decoder (test_device_perf_oft_oftnet)
+**Decoder Performance**: Object detection decoder performance in isolation (test_device_perf_oft_decoder)
+**Full Pipeline Performance**: End-to-end inference including complete demo pipeline (test_device_perf_oft_full)
 
 **Key features:**
-- **Performance Regression Detection**: Validates execution time against expected baselines
-- **Hardware Profiling**: Measures DEVICE FW, DEVICE KERNEL, and DEVICE BRISC KERNEL cycles
-- **Statistical Analysis**: Runs multiple iterations (3x) for reliable performance measurements
-- **Automated Reporting**: Generates detailed performance reports with timing breakdowns
-- **Margin-based Validation**: 1.5% tolerance for performance variations
+**Performance Regression Detection**: Validates execution time against expected baselines
+**Hardware Profiling**: Measures DEVICE FW, DEVICE KERNEL, and DEVICE BRISC KERNEL cycles
+**Statistical Analysis**: Runs multiple iterations (3x) for reliable performance measurements
+**Automated Reporting**: Generates detailed performance reports with timing breakdowns
+**Margin-based Validation**: 1.5% tolerance for performance variations
 
 **Performance Targets:**
-- **OFTNet**: ~342.8M nanoseconds per iteration
-- **Decoder**: ~4.8M nanoseconds per iteration
-- **Full Demo**: ~345.6M nanoseconds per iteration
+**OFTNet**: ~342.8M nanoseconds per iteration
+**Decoder**: ~4.8M nanoseconds per iteration
+**Full Demo**: ~345.6M nanoseconds per iteration
 
 **Usage:**
 ```bash
