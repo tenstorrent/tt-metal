@@ -12,6 +12,7 @@
 #include <stdexcept>
 #include <string>
 
+#include <tt-logger/tt-logger.hpp>
 #include <tt_stl/assert.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 
@@ -45,14 +46,17 @@ RunTimeOptions::RunTimeOptions() {
     if (std::filesystem::is_directory(std::filesystem::path(TT_METAL_INSTALL_ROOT))) {
         this->root_dir = std::filesystem::path(TT_METAL_INSTALL_ROOT).string();
     }
+    log_info(tt::LogMetal, "initial root_dir: {}", this->root_dir);
 #endif
 
     // ENV Can Override
     const char* root_dir_str = std::getenv(TT_METAL_HOME_ENV_VAR);
     if (root_dir_str != nullptr) {
         this->root_dir = std::string(root_dir_str);
+        log_info(tt::LogMetal, "ENV override root_dir: {}", this->root_dir);
     } else if (!g_root_dir.empty()) {
         this->root_dir = g_root_dir;
+        log_info(tt::LogMetal, "API override root_dir: {}", this->root_dir);
     } else if (this->root_dir.empty()) {
         // If the current working directory contains a "tt_metal/" directory,
         // treat the current working directory as the repository root.
@@ -60,6 +64,7 @@ RunTimeOptions::RunTimeOptions() {
         std::filesystem::path tt_metal_subdirectory = current_working_directory / "tt_metal";
         if (std::filesystem::is_directory(tt_metal_subdirectory)) {
             this->root_dir = current_working_directory.string();
+            log_info(tt::LogMetal, "current working directory fallback root_dir: {}", this->root_dir);
         }
     }
 
