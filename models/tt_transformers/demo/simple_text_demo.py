@@ -13,6 +13,7 @@ import pytest
 import requests
 import torch
 from loguru import logger
+from tracy import signpost
 
 import ttnn
 from models.common.utility_functions import is_wormhole_b0
@@ -271,7 +272,7 @@ def prepare_generator_args(
             1,  # repeat_batches
             1024,  # max_seq_len
             1,  # batch_size
-            200,  # max_generated_tokens
+            2,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
@@ -825,12 +826,20 @@ def test_demo_text(
 
         logger.info(f"Starting prefill...")
         profiler.start(f"inference_prefill", iteration=batch_idx)
+
+        # Check if tracy signposts should be enabled (controlled by environment variable)
+        enable_tracy_signposts = os.getenv("ENABLE_TRACY_SIGNPOSTS", "1") == "1"
+
+        if enable_tracy_signposts:
+            signpost("start_prefill_perf_test")
         logits = generator.prefill_forward_text(
             input_tokens_prefill_pt,
             page_table=page_table,
             kv_cache=tt_kv_cache,
             prompt_lens=decoding_pos,
         )
+        if enable_tracy_signposts:
+            signpost("end_prefill_perf_test")
         prefilled_token = torch.argmax(logits, dim=-1)
         profiler.end(f"inference_prefill", iteration=batch_idx)
         logger.info(f"Prefill finished")
