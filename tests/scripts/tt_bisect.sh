@@ -3,16 +3,16 @@ set -euo pipefail
 
 die() { echo "ERROR: $*" >&2; exit 1; }
 
-# : << 'END'
-# Usage:
-#   -f TEST        : test command to run (quote if it has spaces)
-#   -g GOOD_SHA    : known good commit
-#   -b BAD_SHA     : known bad commit
-#   -t TIMEOUT     : per-iteration timeout (default 30m)
-#   -p             : enable Tracy profiling
-#   -r RETRIES     : number of retries (default 3)
-#   -n             : enable non-deterministic detection mode (ND mode)
-# END
+: << 'END'
+Usage:
+  -f TEST        : test command to run (quote if it has spaces)
+  -g GOOD_SHA    : known good commit
+  -b BAD_SHA     : known bad commit
+  -t TIMEOUT     : per-iteration timeout (default 30m)
+  -p             : enable Tracy profiling
+  -r RETRIES     : number of retries (default 3)
+  -n             : enable non-deterministic detection mode (ND mode)
+END
 
 # timeout_duration_iteration="30m"
 # test=""
@@ -22,19 +22,19 @@ die() { echo "ERROR: $*" >&2; exit 1; }
 # retries=3
 # nd_mode=false
 
-# while getopts ":f:g:b:t:pr:n" opt; do
-#   case "$opt" in
-#     f) test="$OPTARG" ;;
-#     g) good_commit="$OPTARG" ;;
-#     b) bad_commit="$OPTARG" ;;
-#     t) timeout_duration_iteration="$OPTARG" ;;
-#     p) tracy_enabled=1 ;;
-#     r) retries="$OPTARG" ;;
-#     n) nd_mode=true ;;
-#     \?) die "Invalid option: -$OPTARG" ;;
-#     :)  die "Option -$OPTARG requires an argument." ;;
-#   esac
-# done
+while getopts ":f:g:b:t:pr:n" opt; do
+  case "$opt" in
+    f) test="$OPTARG" ;;
+    g) good_commit="$OPTARG" ;;
+    b) bad_commit="$OPTARG" ;;
+    t) timeout_duration_iteration="$OPTARG" ;;
+    p) tracy_enabled=1 ;;
+    r) retries="$OPTARG" ;;
+    n) nd_mode=true ;;
+    \?) die "Invalid option: -$OPTARG" ;;
+    :)  die "Option -$OPTARG requires an argument." ;;
+  esac
+done
 
 # [ -n "$test" ] || die "Please specify -f TEST."
 # [ -n "$good_commit" ] || die "Please specify -g GOOD_SHA."
