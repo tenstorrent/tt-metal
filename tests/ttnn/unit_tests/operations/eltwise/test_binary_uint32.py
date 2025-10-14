@@ -49,6 +49,16 @@ def create_full_range_tensor(input_shape, dtype, value_ranges):
                 (80000, 200000, 0, 70000),
             ],
         ),
+        (
+            ttnn.mul,
+            [
+                (0, 100, 0, 500),
+                (500, 1e3, 1e3, 1e4),
+                (1e4, 1e5, 1e5, 1e6),
+                (1e6, 1e7, 1, 1e2),
+                (0, 65535, 0, 65535),
+            ],
+        ),
     ],
 )
 @pytest.mark.parametrize(
@@ -131,6 +141,7 @@ block_sharded_memory_config = ttnn.create_sharded_memory_config(
         (ttnn.sub, 50000, 100000, 0, 40000),  # Subtraction: ensure a > b for valid results
         (ttnn.eq, 0, 1610612735, 536870911, 2147483647),
         (ttnn.ne, 0, 1610612735, 536870911, 2147483647),
+        (ttnn.mul, 0, 100, 200, 300),
     ],
 )
 @pytest.mark.parametrize(
@@ -330,7 +341,7 @@ def test_binary_add_uint32_upper_edge_cases(device):
     # Since ttnn.to_torch does not support int64, we cannot compare with the torch output. We can manually check the outputs:
     # Torch output: tensor([4294967290, 4150000000, 4294967295, 4294967294, 4294967292, 4294967295, 4294967295])
     # TT output: ttnn.Tensor([4294967290, 4150000000, 4294967295, 4294967294, 4294967292, 4294967295, 4294967295],
-    #               shape=Shape([3]), dtype=DataType::UINT32, layout=Layout::TILE)
+    #               shape=Shape([7]), dtype=DataType::UINT32, layout=Layout::TILE)
 
 
 @pytest.mark.parametrize(
@@ -544,3 +555,6 @@ def test_binary_comp_ops_uint32_edge_cases(ttnn_op, device):
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert torch.equal(output_tensor, torch_output_tensor)
+
+
+
