@@ -40,16 +40,31 @@ constexpr auto TT_METAL_CACHE_ENV_VAR = "TT_METAL_CACHE";
 constexpr auto TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE_ENV_VAR = "TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE";
 
 RunTimeOptions::RunTimeOptions() {
+// Default assume package install path
+#ifdef TT_METAL_INSTALL_ROOT
+    if (std::filesystem::exists(std::filesystem::path(TT_METAL_INSTALL_ROOT)) &&
+        std::filesystem::is_directory(std::filesystem::path(TT_METAL_INSTALL_ROOT))) {
+        this->root_dir = std::filesystem::path(TT_METAL_INSTALL_ROOT).string();
+    }
+#endif
+
+    // ENV Can Override
     const char* root_dir_str = std::getenv(TT_METAL_HOME_ENV_VAR);
     if (root_dir_str != nullptr) {
-        this->is_root_dir_set = true;
         this->root_dir = std::string(root_dir_str);
     } else if (!g_root_dir.empty()) {
-        this->is_root_dir_set = true;
         this->root_dir = g_root_dir;
+    } else if (this->root_dir.empty()) {
+        // If the current working directory contains a "tt_metal/" directory,
+        // treat the current working directory as the repository root.
+        std::filesystem::path current_working_directory = std::filesystem::current_path();
+        std::filesystem::path tt_metal_subdirectory = current_working_directory / "tt_metal";
+        if (std::filesystem::exists(tt_metal_subdirectory) && std::filesystem::is_directory(tt_metal_subdirectory)) {
+            this->root_dir = current_working_directory.string();
+        }
     }
 
-    TT_FATAL(this->is_root_dir_set, "Root Directory is not set.");
+    TT_FATAL(!this->root_dir.empty(), "Root Directory is not set.");
 
     if (!this->root_dir.empty()) {
         std::filesystem::path p(root_dir);
@@ -295,13 +310,7 @@ void RunTimeOptions::set_root_dir(const std::string& root_dir) {
     std::call_once(g_root_once, [&] { g_root_dir = root_dir; });
 }
 
-const std::string& RunTimeOptions::get_root_dir() const {
-    if (!this->is_root_dir_specified()) {
-        TT_THROW("Root Directory is unspecified.");
-    }
-
-    return root_dir;
-}
+const std::string& RunTimeOptions::get_root_dir() const { return root_dir; }
 
 const std::string& RunTimeOptions::get_cache_dir() const {
     if (!this->is_cache_dir_specified()) {
@@ -398,11 +407,8 @@ void RunTimeOptions::ParseInspectorEnv() {
     const char* inspector_log_path_str = getenv("TT_METAL_INSPECTOR_LOG_PATH");
     if (inspector_log_path_str != nullptr) {
         inspector_settings.log_path = std::filesystem::path(inspector_log_path_str);
-    } else if (this->is_root_dir_specified()) {
-        inspector_settings.log_path = std::filesystem::path(get_root_dir()) / "generated/inspector";
     } else {
-        inspector_settings.log_path = std::filesystem::temp_directory_path() / "tt-metal" / "inspector";
-        std::filesystem::create_directories(inspector_settings.log_path);
+        inspector_settings.log_path = std::filesystem::path(get_root_dir()) / "generated/inspector";
     }
 
     const char* inspector_initialization_is_important_str = getenv("TT_METAL_INSPECTOR_INITIALIZATION_IS_IMPORTANT");

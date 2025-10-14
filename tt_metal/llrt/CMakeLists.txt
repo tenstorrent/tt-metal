@@ -35,3 +35,10 @@ target_link_libraries(
 )
 target_include_directories(llrt PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_options(llrt PRIVATE -Wno-int-to-pointer-cast)
+
+# Provide default install-time root for Debian-like installs without hardcoding
+# Use GNUInstallDirs for a canonical libexec location; allow override via TT_METAL_INSTALL_ROOT
+include(GNUInstallDirs)
+
+set(TT_METAL_DEFAULT_INSTALL_ROOT "${CMAKE_INSTALL_FULL_LIBEXECDIR}/tt-metalium")
+target_compile_definitions(llrt PRIVATE TT_METAL_INSTALL_ROOT="${TT_METAL_DEFAULT_INSTALL_ROOT}")
