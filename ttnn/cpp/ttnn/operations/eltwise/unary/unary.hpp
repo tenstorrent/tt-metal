@@ -326,6 +326,22 @@ struct Rsub {
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
 
+struct Rsqrt {
+    static Tensor invoke(
+        const Tensor& input_tensor,
+        bool fast_approx_mode = false,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+};
+
+struct Sqrt {
+    static Tensor invoke(
+        const Tensor& input_tensor,
+        bool fast_approx_mode = false,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+};
+
 }  // namespace operations::unary
 
 // NOLINTBEGIN(bugprone-macro-parentheses)
@@ -405,8 +421,6 @@ REGISTER_UNARY_OPERATION(sign, SIGN);
 REGISTER_UNARY_OPERATION(signbit, SIGNBIT);
 REGISTER_UNARY_OPERATION(silu, SILU);
 REGISTER_UNARY_OPERATION(sin, SIN);
-REGISTER_UNARY_OPERATION(sqrt, SQRT);
-REGISTER_UNARY_OPERATION(rsqrt, RSQRT);
 REGISTER_UNARY_OPERATION(square, SQUARE);
 REGISTER_UNARY_OPERATION(tan, TAN);
 REGISTER_UNARY_OPERATION(tiled_prod, TILED_PROD);
@@ -469,7 +483,8 @@ constexpr auto softplus = ttnn::register_operation<"ttnn::softplus", ttnn::opera
 constexpr auto tanh = ttnn::register_operation<"ttnn::tanh", ttnn::operations::unary::Tanh>();
 constexpr auto tanhshrink = ttnn::register_operation<"ttnn::tanhshrink", ttnn::operations::unary::Tanhshrink>();
 constexpr auto prelu_sfpu = ttnn::register_operation<"ttnn::prelu_sfpu", ttnn::operations::unary::Prelu>();
-
+constexpr auto sqrt = ttnn::register_operation<"ttnn::sqrt", ttnn::operations::unary::Sqrt>();
+constexpr auto rsqrt = ttnn::register_operation<"ttnn::rsqrt", ttnn::operations::unary::Rsqrt>();
 constexpr auto selu = ttnn::register_operation<"ttnn::selu", ttnn::operations::unary::Selu>();
 constexpr auto fill = ttnn::register_operation<
     "ttnn::fill",

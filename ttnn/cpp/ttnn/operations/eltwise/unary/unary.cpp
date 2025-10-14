@@ -105,8 +105,6 @@ template struct ExecuteUnary<UnaryOpType::SIGN>;
 template struct ExecuteUnary<UnaryOpType::SIGNBIT>;
 template struct ExecuteUnary<UnaryOpType::SILU>;
 template struct ExecuteUnary<UnaryOpType::SIN>;
-template struct ExecuteUnary<UnaryOpType::SQRT>;
-template struct ExecuteUnary<UnaryOpType::RSQRT>;
 template struct ExecuteUnary<UnaryOpType::SQUARE>;
 template struct ExecuteUnary<UnaryOpType::TAN>;
 template struct ExecuteUnary<UnaryOpType::TILED_PROD>;
@@ -238,6 +236,24 @@ Tensor Sigmoid_accurate::invoke(
          UnaryWithParam(UnaryOpType::RECIP)},
         memory_config,
         optional_output_tensor);
+}
+
+Tensor Sqrt::invoke(
+    const Tensor& input_tensor,
+    const bool fast_approx_mode,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    return detail::unary_impl(
+        input_tensor, {UnaryWithParam{UnaryOpType::SQRT, fast_approx_mode}}, memory_config, optional_output_tensor);
+}
+
+Tensor Rsqrt::invoke(
+    const Tensor& input_tensor,
+    const bool fast_approx_mode,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    return detail::unary_impl(
+        input_tensor, {UnaryWithParam{UnaryOpType::RSQRT, fast_approx_mode}}, memory_config, optional_output_tensor);
 }
 
 template struct ExecuteUnary<UnaryOpType::SIGMOID, UnaryOpType::LOG>;
