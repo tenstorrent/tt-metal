@@ -14,6 +14,7 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/core/clip_grad_norm.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/compute_kernel_config.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/compute_kernel_config.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/core/cpu_features.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/debug.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/device.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/device.hpp
@@ -27,6 +28,9 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/core/mesh_device.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/not_null.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/random.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/core/random_auto.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/core/random_avx.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/core/random_sse.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/scoped.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/system_utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/system_utils.hpp

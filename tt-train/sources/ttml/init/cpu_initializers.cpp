@@ -8,6 +8,7 @@
 #include <random>
 
 #include "autograd/auto_context.hpp"
+#include "core/random_auto.hpp"
 
 namespace ttml::init {
 

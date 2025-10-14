@@ -2,209 +2,206 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <iomanip>
 #include <iostream>
+#include <numeric>
 #include <random>
 #include <span>
 #include <vector>
 
+#include "core/cpu_features.hpp"
 #include "core/random.hpp"
-#include "core/random_modern.hpp"
+#include "core/random_avx.hpp"
+#include "core/random_sse.hpp"
+#include "tt-metalium/bfloat16.hpp"
 
 using namespace std::chrono;
+using ttml::core::CpuFeatures;
 
-template <typename Func>
-double benchmark_fast(Func&& func, int iterations = 10) {
+// ============================================================================
+// Benchmark Infrastructure
+// ============================================================================
+
+template <typename T>
+struct BenchmarkResult {
+    std::string name;
+    std::string type;
+    double time_ms{0.0};
+    double throughput_gb_s{0.0};
+    double elements_per_sec_m{0.0};
+    double mean{0.0};
+    double stddev{0.0};
+};
+
+template <typename T, typename Func>
+BenchmarkResult<T> run_benchmark(
+    const std::string& name, const std::string& type_name, Func&& func, size_t size, int iterations = 10) {
+    BenchmarkResult<T> result;
+    result.name = name;
+    result.type = type_name;
+
+    std::vector<double> times;
+    times.reserve(iterations);
+
+    std::vector<T> data(size);
+
     // Warmup
-    func();
+    for (int i = 0; i < 3; ++i) {
+        func(data);
+    }
 
-    auto start = high_resolution_clock::now();
+    // Measure
     for (int i = 0; i < iterations; ++i) {
-        func();
+        auto start = high_resolution_clock::now();
+        func(data);
+        auto end = high_resolution_clock::now();
+        times.push_back(duration_cast<nanoseconds>(end - start).count() / 1e6);
     }
-    auto end = high_resolution_clock::now();
 
-    return duration_cast<microseconds>(end - start).count() / (1000.0 * iterations);
+    // Statistics
+    double sum = std::accumulate(times.begin(), times.end(), 0.0);
+    result.time_ms = sum / times.size();
+
+    // Throughput
+    double bytes = size * sizeof(T);
+    result.throughput_gb_s = (bytes / (result.time_ms / 1000.0)) / (1024.0 * 1024.0 * 1024.0);
+    result.elements_per_sec_m = (size / (result.time_ms / 1000.0)) / 1e6;
+
+    // Distribution stats
+    double data_sum = 0.0;
+    for (const auto& val : data) {
+        data_sum += static_cast<double>(val);
+    }
+    result.mean = data_sum / size;
+
+    double var_sum = 0.0;
+    for (const auto& val : data) {
+        double diff = static_cast<double>(val) - result.mean;
+        var_sum += diff * diff;
+    }
+    result.stddev = std::sqrt(var_sum / size);
+
+    return result;
 }
 
-void print_row(const std::string& name, size_t size, double nonsimd_ms, double simd_ms) {
-    double speedup = nonsimd_ms / simd_ms;
-    double throughput_nonsimd = (size * sizeof(float)) / (nonsimd_ms * 1e6);  // GB/s
-    double throughput_simd = (size * sizeof(float)) / (simd_ms * 1e6);        // GB/s
+// ============================================================================
+// Benchmark Runners
+// ============================================================================
 
-    std::cout << std::left << std::setw(18) << name << std::right << std::fixed << std::setprecision(3) << std::setw(10)
-              << nonsimd_ms << std::setw(10) << simd_ms << std::setw(10) << speedup << "x" << std::setw(12)
-              << throughput_nonsimd << std::setw(12) << throughput_simd << "\n";
-}
-
-void benchmark_uniform_sequential() {
-    std::cout << "\n╔══════════════════════════════════════════════════════════════════════════╗\n";
-    std::cout << "║  SEQUENTIAL UNIFORM DISTRIBUTION: non-SIMD (MT19937) vs SIMD (AES-NI)   ║\n";
-    std::cout << "╚══════════════════════════════════════════════════════════════════════════╝\n\n";
-
-    std::cout << std::left << std::setw(18) << "Size" << std::right << std::setw(10) << "Non-SIMD" << std::setw(10)
-              << "SIMD" << std::setw(10) << "Speedup" << std::setw(12) << "Non-SIMD" << std::setw(12) << "SIMD"
-              << "\n";
-    std::cout << std::left << std::setw(18) << "" << std::right << std::setw(10) << "(ms)" << std::setw(10) << "(ms)"
-              << std::setw(10) << "" << std::setw(12) << "GB/s" << std::setw(12) << "GB/s"
-              << "\n";
-    std::cout << std::string(80, '-') << "\n";
+template <typename T>
+void benchmark_type(const std::string& type_name, size_t size) {
+    std::cout << "\n+============================================================================+\n";
+    std::cout << "| " << type_name << " Performance Benchmark (" << size << " elements)";
+    int padding = 78 - 32 - type_name.length() - std::to_string(size).length();
+    if (padding < 0)
+        padding = 0;
+    std::cout << std::string(padding, ' ') << "|\n";
+    std::cout << "+============================================================================+\n\n";
 
     auto dist_factory = []() { return std::uniform_real_distribution<float>(-1.0f, 1.0f); };
     uint32_t seed = 42;
 
-    std::vector<size_t> sizes = {1024, 4096, 16384, 65536, 262144, 1048576, 4194304};
+    std::vector<BenchmarkResult<T>> results;
 
-    for (auto size : sizes) {
-        std::vector<float> data_nonsimd(size);
-        std::vector<float> data_simd(size);
+    // MT19937 (skip for bfloat16 as it requires linking against full tt-metalium library)
+    if constexpr (!std::same_as<T, bfloat16>) {
+        auto func = [&](std::vector<T>& data) { ttml::core::sequential_generate(std::span{data}, dist_factory, seed); };
+        results.push_back(run_benchmark<T>("MT19937", type_name, func, size));
+    }
 
-        auto time_nonsimd =
-            benchmark_fast([&]() { ttml::core::sequential_generate(std::span{data_nonsimd}, dist_factory, seed); });
+    // SSE
+    if (CpuFeatures::has_sse_support()) {
+        auto func = [&](std::vector<T>& data) {
+            ttml::core::sse::sequential_generate(std::span{data}, dist_factory, seed);
+        };
+        results.push_back(run_benchmark<T>("SSE", type_name, func, size));
+    }
 
-        auto time_simd = benchmark_fast(
-            [&]() { ttml::core::modern::sequential_generate(std::span{data_simd}, dist_factory, seed); });
+    // AVX2
+    if (CpuFeatures::has_avx2_support()) {
+        auto func = [&](std::vector<T>& data) {
+            ttml::core::avx::sequential_generate(std::span{data}, dist_factory, seed);
+        };
+        results.push_back(run_benchmark<T>("AVX2", type_name, func, size));
+    }
 
-        std::string size_str = std::to_string(size / 1024) + (size >= 1048576 ? "M" : "K");
-        print_row(size_str, size, time_nonsimd, time_simd);
+    // Print results
+    std::cout << std::left << std::setw(15) << "Implementation" << std::right << std::setw(12) << "Time (ms)"
+              << std::setw(15) << "Throughput" << std::setw(15) << "Elements/sec" << std::setw(12) << "Speedup"
+              << std::setw(10) << "Mean" << std::setw(10) << "StdDev"
+              << "\n";
+    std::cout << std::string(89, '-') << "\n";
+
+    double baseline = results.empty() ? 1.0 : results[0].time_ms;
+    for (const auto& r : results) {
+        std::cout << std::left << std::setw(15) << r.name << std::right << std::fixed << std::setprecision(3)
+                  << std::setw(12) << r.time_ms << std::setw(13) << r.throughput_gb_s << " GB/s" << std::setw(13)
+                  << r.elements_per_sec_m << " M" << std::setw(11) << (baseline / r.time_ms) << "x" << std::setw(10)
+                  << r.mean << std::setw(10) << r.stddev << "\n";
     }
 }
 
-void benchmark_uniform_parallel() {
-    std::cout << "\n╔══════════════════════════════════════════════════════════════════════════╗\n";
-    std::cout << "║  PARALLEL UNIFORM DISTRIBUTION: non-SIMD (MT19937) vs SIMD (AES-NI)     ║\n";
-    std::cout << "╚══════════════════════════════════════════════════════════════════════════╝\n\n";
-
-    std::cout << std::left << std::setw(18) << "Size" << std::right << std::setw(10) << "Non-SIMD" << std::setw(10)
-              << "SIMD" << std::setw(10) << "Speedup" << std::setw(12) << "Non-SIMD" << std::setw(12) << "SIMD"
-              << "\n";
-    std::cout << std::left << std::setw(18) << "" << std::right << std::setw(10) << "(ms)" << std::setw(10) << "(ms)"
-              << std::setw(10) << "" << std::setw(12) << "GB/s" << std::setw(12) << "GB/s"
-              << "\n";
-    std::cout << std::string(80, '-') << "\n";
-
-    auto dist_factory = []() { return std::uniform_real_distribution<float>(-1.0f, 1.0f); };
-    uint32_t seed = 42;
-    uint32_t threads = std::thread::hardware_concurrency();
-
-    std::vector<size_t> sizes = {4096, 16384, 65536, 262144, 1048576, 4194304};
-
-    for (auto size : sizes) {
-        std::vector<float> data_nonsimd(size);
-        std::vector<float> data_simd(size);
-
-        auto time_nonsimd = benchmark_fast(
-            [&]() { ttml::core::parallel_generate(std::span{data_nonsimd}, dist_factory, seed, threads); });
-
-        auto time_simd = benchmark_fast(
-            [&]() { ttml::core::modern::parallel_generate(std::span{data_simd}, dist_factory, seed, threads); });
-
-        std::string size_str = std::to_string(size / 1024) + (size >= 1048576 ? "M" : "K");
-        print_row(size_str, size, time_nonsimd, time_simd);
-    }
-}
-
-void verify_distribution() {
-    std::cout << "\n╔══════════════════════════════════════════════════════════════════════════╗\n";
-    std::cout << "║  DISTRIBUTION CORRECTNESS VERIFICATION                                   ║\n";
-    std::cout << "╚══════════════════════════════════════════════════════════════════════════╝\n\n";
-
-    size_t size = 1000000;
-    std::vector<float> data_nonsimd(size);
-    std::vector<float> data_simd(size);
-    uint32_t seed = 42;
-
-    auto dist_factory = []() { return std::uniform_real_distribution<float>(-1.0f, 1.0f); };
-
-    ttml::core::sequential_generate(std::span{data_nonsimd}, dist_factory, seed);
-    ttml::core::modern::sequential_generate(std::span{data_simd}, dist_factory, seed);
-
-    auto check_stats = [](const std::vector<float>& data, const std::string& name) {
-        double sum = 0.0, sum_sq = 0.0;
-        float min_val = data[0], max_val = data[0];
-
-        for (float val : data) {
-            sum += val;
-            sum_sq += val * val;
-            if (val < min_val)
-                min_val = val;
-            if (val > max_val)
-                max_val = val;
-        }
-
-        double mean = sum / data.size();
-        double variance = (sum_sq / data.size()) - (mean * mean);
-        double stddev = std::sqrt(variance);
-
-        std::cout << name << " (1M samples):\n";
-        std::cout << "  Range:     [" << std::fixed << std::setprecision(6) << min_val << ", " << max_val << "]\n";
-        std::cout << "  Mean:      " << std::setw(10) << mean << " (expected: 0.0)\n";
-        std::cout << "  Std Dev:   " << std::setw(10) << stddev << " (expected: 0.577)\n";
-        std::cout << "  Variance:  " << std::setw(10) << variance << " (expected: 0.333)\n";
-
-        bool valid =
-            (min_val >= -1.0f) && (max_val <= 1.0f) && (std::abs(mean) < 0.01) && (std::abs(stddev - 0.577) < 0.01);
-        std::cout << "  Status:    " << (valid ? "✓ PASS" : "✗ FAIL") << "\n\n";
-    };
-
-    check_stats(data_nonsimd, "Non-SIMD (MT19937)");
-    check_stats(data_simd, "SIMD (AES-NI)");
-}
-
-void benchmark_thread_scaling() {
-    std::cout << "\n╔══════════════════════════════════════════════════════════════════════════╗\n";
-    std::cout << "║  THREAD SCALING (1M elements uniform distribution)                      ║\n";
-    std::cout << "╚══════════════════════════════════════════════════════════════════════════╝\n\n";
-
-    std::cout << std::left << std::setw(18) << "Threads" << std::right << std::setw(10) << "Non-SIMD" << std::setw(10)
-              << "SIMD" << std::setw(10) << "Speedup" << std::setw(12) << "Non-SIMD" << std::setw(12) << "SIMD"
-              << "\n";
-    std::cout << std::left << std::setw(18) << "" << std::right << std::setw(10) << "(ms)" << std::setw(10) << "(ms)"
-              << std::setw(10) << "" << std::setw(12) << "GB/s" << std::setw(12) << "GB/s"
-              << "\n";
-    std::cout << std::string(80, '-') << "\n";
-
-    size_t size = 1048576;
-    auto dist_factory = []() { return std::uniform_real_distribution<float>(-1.0f, 1.0f); };
-    uint32_t seed = 42;
-
-    std::vector<uint32_t> thread_counts = {1, 2, 4, 8};
-
-    for (auto threads : thread_counts) {
-        std::vector<float> data_nonsimd(size);
-        std::vector<float> data_simd(size);
-
-        auto time_nonsimd = benchmark_fast(
-            [&]() { ttml::core::parallel_generate(std::span{data_nonsimd}, dist_factory, seed, threads); }, 5);
-
-        auto time_simd = benchmark_fast(
-            [&]() { ttml::core::modern::parallel_generate(std::span{data_simd}, dist_factory, seed, threads); }, 5);
-
-        print_row(std::to_string(threads), size, time_nonsimd, time_simd);
-    }
-}
+// ============================================================================
+// Main
+// ============================================================================
 
 int main() {
     std::cout << "\n";
-    std::cout << "╔══════════════════════════════════════════════════════════════════════════╗\n";
-    std::cout << "║                                                                          ║\n";
-    std::cout << "║           SIMD vs Non-SIMD Random Generation Benchmark                  ║\n";
-    std::cout << "║                                                                          ║\n";
-    std::cout << "║  Comparing: ttml::core (MT19937) vs ttml::core::modern (AES-NI SIMD)   ║\n";
-    std::cout << "║                                                                          ║\n";
-    std::cout << "╚══════════════════════════════════════════════════════════════════════════╝\n";
+    std::cout << "+============================================================================+\n";
+    std::cout << "|                                                                            |\n";
+    std::cout << "|      Float / Double / bfloat16 SIMD RNG Performance Comparison            |\n";
+    std::cout << "|                                                                            |\n";
+    std::cout << "+============================================================================+\n";
 
-    std::cout << "\nSystem Configuration:\n";
+    // System info
+    std::cout << "\n+============================================================================+\n";
+    std::cout << "| System Information                                                         |\n";
+    std::cout << "+============================================================================+\n\n";
+    std::cout << "CPU Features:\n";
+    std::cout << "  SSE4.2 + AES-NI: " << (CpuFeatures::has_sse_support() ? "✓" : "✗") << "\n";
+    std::cout << "  AVX2 + AES-NI:   " << (CpuFeatures::has_avx2_support() ? "✓" : "✗") << "\n";
     std::cout << "  Hardware threads: " << std::thread::hardware_concurrency() << "\n";
-    std::cout << "  SIMD width:       128-bit (4x float32)\n";
-    std::cout << "  AES-NI:           Enabled\n";
-    std::cout << "  Optimization:     -O3 -march=native\n";
 
-    verify_distribution();
-    benchmark_uniform_sequential();
-    benchmark_uniform_parallel();
-    benchmark_thread_scaling();
+    // Test size
+    size_t size = 4194304;  // 4M elements
+
+    benchmark_type<float>("float (32-bit)", size);
+    benchmark_type<double>("double (64-bit)", size);
+    benchmark_type<bfloat16>("bfloat16 (16-bit)", size);
+
+    // Summary
+    std::cout << "\n+============================================================================+\n";
+    std::cout << "| Summary                                                                    |\n";
+    std::cout << "+============================================================================+\n\n";
+
+    std::cout << "Type Sizes:\n";
+    std::cout << "  • float:    " << sizeof(float) << " bytes (32-bit)\n";
+    std::cout << "  • double:   " << sizeof(double) << " bytes (64-bit)\n";
+    std::cout << "  • bfloat16: " << sizeof(bfloat16) << " bytes (16-bit)\n\n";
+
+    std::cout << "SIMD Width Comparison:\n";
+    std::cout << "  • float:    SSE = 4 elements (128-bit), AVX2 = 8 elements (256-bit)\n";
+    std::cout << "  • double:   SSE = 2 elements (128-bit), AVX2 = 4 elements (256-bit)\n";
+    std::cout << "  • bfloat16: SSE = 4 elements (128-bit), AVX2 = 8 elements (256-bit)\n";
+    std::cout << "              (Generated from float, then converted)\n\n";
+
+    std::cout << "Expected Speedup vs MT19937:\n";
+    std::cout << "  • float:    SSE ~100x, AVX2 ~200x\n";
+    std::cout << "  • double:   SSE ~50x, AVX2 ~100x\n";
+    std::cout << "  • bfloat16: SSE ~100x, AVX2 ~200x (similar to float)\n\n";
+
+    std::cout << "Precision:\n";
+    std::cout << "  • float:    23-bit mantissa (~7 decimal digits)\n";
+    std::cout << "  • double:   52-bit mantissa (~15 decimal digits)\n";
+    std::cout << "  • bfloat16: 7-bit mantissa (~2-3 decimal digits)\n\n";
+
+    std::cout << "Use Cases:\n";
+    std::cout << "  • float:    General ML training, neural networks\n";
+    std::cout << "  • double:   Scientific computing, high precision needs\n";
+    std::cout << "  • bfloat16: ML training (dynamic range of float32, less memory)\n\n";
 
     return 0;
 }
