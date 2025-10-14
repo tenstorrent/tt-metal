@@ -71,7 +71,7 @@ class Generator:
         model_id=-1,
     ):
         host_inputs = self.model[model_id].prepare_prefill_inputs_host(prefill_ids, page_table=page_table)
-        # We don't need to copy these matrices since they are already on device (we took care of that in prepare_prefill_inputs_host)
+        # These matrices will actually be pointing to the whole cos_matrix and sin_matrix that was allocated on device in the RotarySetup class
         tt_rot_mats_prefill_global = host_inputs[1]
         tt_rot_mats_prefill_local = host_inputs[2]
         host_inputs = (host_inputs[0], host_inputs[3], host_inputs[4])
