@@ -2654,7 +2654,7 @@ private:
     uint32_t local_l1_addr_;
 };
 
-// TODO: The traits classes for TensorAccessor and related classes could be moved to tensor_accessor.h
+// TODO(#29597): The traits classes for TensorAccessor and related classes could be moved to tensor_accessor.h
 // (need to break the include dependency dataflow_api.h -> tensor_accessor.h.).
 template <typename DSpecT>
 struct noc_traits_t<TensorAccessor<DSpecT>> {
