@@ -221,15 +221,19 @@ std::vector<SegmentMapData> reshape_map_output_page(
 
 // Pattern template: describes a stride run structure
 struct PatternTemplate {
+    int32_t input_page_stride;
     int32_t input_offset_stride;
     int32_t output_offset_stride;
     uint32_t num_elements;
 
     bool operator==(const PatternTemplate& other) const {
-        return input_offset_stride == other.input_offset_stride && output_offset_stride == other.output_offset_stride &&
-               num_elements == other.num_elements;
+        return input_page_stride == other.input_page_stride && input_offset_stride == other.input_offset_stride &&
+               output_offset_stride == other.output_offset_stride && num_elements == other.num_elements;
     }
     bool operator<(const PatternTemplate& other) const {
+        if (input_page_stride != other.input_page_stride) {
+            return input_page_stride < other.input_page_stride;
+        }
         if (input_offset_stride != other.input_offset_stride) {
             return input_offset_stride < other.input_offset_stride;
         }
@@ -276,7 +280,6 @@ struct GlobalCompressedReshapeMap {
     std::vector<PagePatternRun> page_pattern_runs;
 };
 
-// Detects the longest stride run starting at 'start'
 size_t detect_stride_run(
     const std::vector<SegmentMapData>& segs,
     size_t start,
@@ -288,45 +291,50 @@ size_t detect_stride_run(
     }
     auto& base = segs[start];
     size_t len = 1;
-    int32_t input_stride = 0, output_stride = 0;
+    int32_t input_page_stride = 0, input_offset_stride = 0, output_stride = 0;
 
-    if (start + 1 < segs.size() && segs[start + 1].num_elements != 0 &&
-        segs[start + 1].input_page_index == base.input_page_index &&
-        segs[start + 1].num_elements == base.num_elements) {
-        input_stride =
+    // Try to find stride by looking at consecutive segments
+    if (start + 1 < segs.size() && segs[start + 1].num_elements == base.num_elements) {
+        input_page_stride =
+            static_cast<int32_t>(segs[start + 1].input_page_index) - static_cast<int32_t>(base.input_page_index);
+        input_offset_stride =
             static_cast<int32_t>(segs[start + 1].input_page_offset) - static_cast<int32_t>(base.input_page_offset);
         output_stride =
             static_cast<int32_t>(segs[start + 1].output_page_offset) - static_cast<int32_t>(base.output_page_offset);
         len = 2;
+
         for (size_t i = start + 2; i < segs.size(); ++i) {
-            if (segs[i].num_elements == 0) {
+            if (segs[i].num_elements == 0 || segs[i].num_elements != base.num_elements) {
                 break;
             }
-            if (segs[i].input_page_index != base.input_page_index || segs[i].num_elements != base.num_elements) {
-                break;
-            }
-            int32_t curr_input_stride =
+
+            int32_t curr_input_page_stride =
+                static_cast<int32_t>(segs[i].input_page_index) - static_cast<int32_t>(segs[i - 1].input_page_index);
+            int32_t curr_input_offset_stride =
                 static_cast<int32_t>(segs[i].input_page_offset) - static_cast<int32_t>(segs[i - 1].input_page_offset);
             int32_t curr_output_stride =
                 static_cast<int32_t>(segs[i].output_page_offset) - static_cast<int32_t>(segs[i - 1].output_page_offset);
-            if (curr_input_stride != input_stride || curr_output_stride != output_stride) {
+
+            if (curr_input_page_stride != input_page_stride || curr_input_offset_stride != input_offset_stride ||
+                curr_output_stride != output_stride) {
                 break;
             }
             len++;
         }
-        tmpl = {input_stride, output_stride, base.num_elements};
+
+        tmpl = {input_page_stride, input_offset_stride, output_stride, base.num_elements};
         instance = {
             output_page_index,
             base.input_page_index,
             base.input_page_offset,
             base.output_page_offset,
             static_cast<uint32_t>(len),
-            0};  // pattern_template_index to be filled later
+            0};
         return len;
     }
 
-    // If no stride found, treat as run of length 1
-    tmpl = {0, 0, base.num_elements};
+    // Fall back to single segment
+    tmpl = {0, 0, 0, base.num_elements};
     instance = {output_page_index, base.input_page_index, base.input_page_offset, base.output_page_offset, 1, 0};
     return 1;
 }
@@ -404,7 +412,7 @@ GlobalCompressedReshapeMap compress_mapping_global(const std::vector<std::vector
             }
             // Treat irregular segment as a run of length 1 with its own template
             const auto& irr = segments[i];
-            PatternTemplate irr_tmpl = {0, 0, irr.num_elements};  // stride 0, size = num_elements
+            PatternTemplate irr_tmpl = {0, 0, 0, irr.num_elements};  // stride 0, size = num_elements
             uint32_t irr_tmpl_idx;
             auto it = template_to_index.find(irr_tmpl);
             if (it == template_to_index.end()) {
@@ -446,7 +454,7 @@ std::tuple<Tensor, GlobalCompressedReshapeMap> compute_reshape_mapping_host_tens
         mapping_vector.emplace_back(reshape_map_output_page(
             output_page_idx, input_shape, output_shape, tile_dims_input, tile_dims_output, tile_shape, face_shape));
     }
-
+    /*
     printf("initial mapping\n");
     for (uint32_t output_page_idx = 0; output_page_idx < num_output_pages; ++output_page_idx) {
         printf("Output Page %u:\n", output_page_idx);
@@ -461,8 +469,9 @@ std::tuple<Tensor, GlobalCompressedReshapeMap> compute_reshape_mapping_host_tens
     }
 
     printf("general compressed mapping\n");
+    */
     auto compressed_map = compress_mapping_global(mapping_vector);
-
+    /*
     printf("Pattern Templates (%zu):\n", compressed_map.pattern_templates.size());
     for (size_t i = 0; i < compressed_map.pattern_templates.size(); ++i) {
         const auto& pt = compressed_map.pattern_templates[i];
@@ -499,6 +508,13 @@ std::tuple<Tensor, GlobalCompressedReshapeMap> compute_reshape_mapping_host_tens
             pr.input_page_index_stride,
             pr.input_offset_stride,
             pr.output_offset_stride);
+    }
+    */
+    // if run len is greater than 2 print its value
+    for (const auto& pr : compressed_map.page_pattern_runs) {
+        if (pr.run_length > 2) {
+            printf("Run length greater than 2: %u\n", pr.run_length);
+        }
     }
 
     // flatten again
@@ -772,6 +788,7 @@ tt::tt_metal::operation::ProgramWithCallbacks reshape_tiled_program_factory(
         // Add pattern templates
         for (uint32_t global_idx : core_template_indices) {
             const auto& tmpl = compressed_map.pattern_templates[global_idx];
+            reader_runtime_args.push_back(tmpl.input_page_stride);
             reader_runtime_args.push_back(tmpl.input_offset_stride);
             reader_runtime_args.push_back(tmpl.output_offset_stride);
             reader_runtime_args.push_back(tmpl.num_elements);
@@ -793,6 +810,7 @@ tt::tt_metal::operation::ProgramWithCallbacks reshape_tiled_program_factory(
         writer_runtime_args.push_back(output_buffer->address());
         for (uint32_t global_idx : core_template_indices) {
             const auto& tmpl = compressed_map.pattern_templates[global_idx];
+            writer_runtime_args.push_back(tmpl.input_page_stride);
             writer_runtime_args.push_back(tmpl.input_offset_stride);
             writer_runtime_args.push_back(tmpl.output_offset_stride);
             writer_runtime_args.push_back(tmpl.num_elements);
