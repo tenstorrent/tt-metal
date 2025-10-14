@@ -441,5 +441,73 @@ inline GlobalCompressedReshapeMap compute_reshape_map(
     auto compressed_map = compress_mapping_global(mapping_vector);
     return compressed_map;
 }
+
+struct ReshapeRTArgsEstimate {
+    uint32_t max_reader_args_per_core;
+    uint32_t max_writer_args_per_core;
+    uint32_t total_cores_used;
+    bool exceeds_limit;
+
+    bool can_fit_in_rt_args(uint32_t limit = 341) const {
+        return !exceeds_limit && max_reader_args_per_core < limit && max_writer_args_per_core < limit;
+    }
+};
+
+inline ReshapeRTArgsEstimate estimate_reshape_rt_args(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Shape& output_shape,
+    const ttnn::Shape& padded_output_shape,
+    const tt::tt_metal::MemoryConfig& memory_config) {
+    ReshapeRTArgsEstimate estimate{0, 0, 0, false};
+
+    const auto input_shape = input_tensor.logical_shape();
+    const auto padded_input_shape = input_tensor.padded_shape();
+
+    auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
+    auto face_shape = input_tensor.tensor_spec().tile().get_face_shape();
+    const uint32_t num_input_pages = tt::div_up(input_tensor.physical_volume(), tile_shape[0] * tile_shape[1]);
+    const uint32_t num_output_pages = tt::div_up(padded_output_shape.volume(), tile_shape[0] * tile_shape[1]);
+
+    auto compressed_map = reshape::detail::compute_reshape_map(
+        num_input_pages, num_output_pages, input_shape, output_shape, tile_shape, face_shape);
+
+    auto device = input_tensor.device();
+    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    uint32_t num_cores = compute_with_storage_grid_size.x * compute_with_storage_grid_size.y;
+    estimate.total_cores_used = std::min(num_cores, num_output_pages);
+
+    uint32_t pages_per_core = (num_output_pages + estimate.total_cores_used - 1) / estimate.total_cores_used;
+
+    // Estimate RT args per core
+    uint32_t base_args = 4;
+    uint32_t template_args = compressed_map.pattern_templates.size() * 4;
+
+    // Estimate runs per core (pessimistic)
+    uint32_t estimated_short_runs_per_core = 0;
+    uint32_t estimated_long_runs_per_core = 0;
+
+    for (const auto& run : compressed_map.page_pattern_runs) {
+        uint32_t run_pages = run.output_page_index_end - run.output_page_index_start + 1;
+        // Assume uniform distribution across cores (simplified)
+        if (run_pages <= pages_per_core * 2) {
+            if (run.run_length == 1) {
+                estimated_short_runs_per_core += 1;
+            } else {
+                estimated_long_runs_per_core += 1;
+            }
+        }
+    }
+
+    uint32_t short_run_args = estimated_short_runs_per_core * 3;
+    uint32_t long_run_args = estimated_long_runs_per_core * 5;
+
+    estimate.max_reader_args_per_core = base_args + template_args + short_run_args + long_run_args;
+    estimate.max_writer_args_per_core = estimate.max_reader_args_per_core;  // Similar complexity
+
+    // Check if we exceed limits
+    estimate.exceeds_limit = (estimate.max_reader_args_per_core > 341) || (estimate.max_writer_args_per_core > 341);
+
+    return estimate;
+}
 }  // namespace detail
 }  // namespace ttnn::operations::data_movement::reshape

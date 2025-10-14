@@ -229,26 +229,11 @@ ttnn::Tensor reshape_tiled(
             MemoryConfig{TensorMemoryLayout::INTERLEAVED, working_output_memory_config.buffer_type()};
     }
 
-    // get the variables for compressing the mapping
-    auto input_shape = tensor3d.logical_shape();
-    auto output_shape = requested_shape_3d;
-    auto tile_shape = tensor3d.tensor_spec().tile().get_tile_shape();
-    auto face_shape = tensor3d.tensor_spec().tile().get_face_shape();
-    const uint32_t num_input_pages = tt::div_up(tensor3d.physical_volume(), tile_shape[0] * tile_shape[1]);
-    const uint32_t num_output_pages = tt::div_up(requested_padded_shape_3d.volume(), tile_shape[0] * tile_shape[1]);
-
-    auto compressed_map = reshape::detail::compute_reshape_map(
-        num_input_pages, num_output_pages, tensor3d.logical_shape(), requested_shape_3d, tile_shape, face_shape);
-    // find total_num_cores
-    const uint32_t total_num_cores =
-        tensor3d.device()->compute_with_storage_grid_size().x * tensor3d.device()->compute_with_storage_grid_size().y;
-    auto estimated_num_cores = std::min(num_output_pages, total_num_cores);
-    // calculate estimated size of rt args
-    size_t rt_args_size = 4 + compressed_map.pattern_templates.size() * 4 +
-                          5 * compressed_map.page_pattern_runs.size();  // 4 header + pattern templates + runs
-    const uint32_t max_rt_args = 341;
     Tensor output_tensor_3d;
-    if (std::ceil(rt_args_size / estimated_num_cores) > max_rt_args) {
+    auto rt_args_estimate = reshape::detail::estimate_reshape_rt_args(
+        tensor3d, requested_shape_3d, requested_padded_shape_3d, memory_config);
+
+    if (!rt_args_estimate.can_fit_in_rt_args()) {
         // run untilize + reshape + tilize
         auto untilize_tensor =
             ttnn::to_layout(tensor3d, ttnn::ROW_MAJOR_LAYOUT, tensor3d.dtype(), tensor3d.memory_config());
