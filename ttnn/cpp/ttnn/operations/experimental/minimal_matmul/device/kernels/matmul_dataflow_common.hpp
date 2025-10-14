@@ -6,6 +6,7 @@
 #include <algorithm>
 #include "dataflow_api.h"
 #include <tt-metalium/constants.hpp>
+#include "debug/dprint.h"
 
 void fill_zeros_async(uint32_t write_addr, uint32_t tile_bytes) {
     volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(write_addr);
@@ -53,10 +54,8 @@ void read_in0_block_sync(
     uint32_t d0_end,
     uint32_t d1_start,
     uint32_t d1_end) {
-    ASSERT(d0_start >= 0);
-    ASSERT(d0_end <= shape.padded_d0);
-    ASSERT(d1_start >= 0);
-    ASSERT(d1_end <= shape.padded_d1);
+    ASSERT(d0_end > d0_start);
+    ASSERT(d1_end > d1_start);
 
     for (uint32_t i = d0_start; i < d0_end; i++) {
         if (i >= shape.logical_d0) {
@@ -90,6 +89,8 @@ void read_in1_block_sync(
     uint32_t d0_end,
     uint32_t d1_start,
     uint32_t d1_end) {
+    ASSERT(d0_end > d0_start);
+    ASSERT(d1_end > d1_start);
     for (uint32_t i = d0_start; i < d0_end; i++) {
         for (uint32_t j = d1_start; j < d1_end; j++) {
             if (j >= shape.logical_d1) {
@@ -122,6 +123,8 @@ void write_block_sync(
     uint32_t d0_end,
     uint32_t d1_start,
     uint32_t d1_end) {
+    ASSERT(d0_end > d0_start);
+    ASSERT(d1_end > d1_start);
 #ifndef SKIP_OUT
     for (uint32_t i = d0_start; i < d0_end; i++) {
         if (i >= shape.logical_d0) {
