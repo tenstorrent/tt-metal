@@ -200,6 +200,7 @@ class StableDiffusion3Pipeline:
         encoder_device = self.submesh_devices[0]
         self.original_submesh_shape = tuple(encoder_device.shape)
         self.desired_encoder_submesh_shape = tuple(encoder_device.shape)
+        breakpoint()
 
         if encoder_device.shape[1] != 4:
             # If reshaping, vae_device must be on submesh 0. That means T5 can't fit, so disable it.
