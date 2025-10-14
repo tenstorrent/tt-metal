@@ -52,8 +52,15 @@ WORKDIR ${TT_METAL_HOME}
 # Copy the pre-built telemetry server binary
 COPY build/tt_telemetry/tt_telemetry_server ./build/tt_telemetry/tt_telemetry_server
 
+# Copy libs
+COPY build_Release/lib ./build_Release/lib
+
 # Copy the entire tt_telemetry directory (contains frontend files, etc.)
 COPY tt_telemetry/ ./tt_telemetry/
+
+# Set library search path to find the copied libraries
+ENV LD_LIBRARY_PATH=/tt-metal/build_Release/lib:$LD_LIBRARY_PATH
+
 
 # Make sure the binary is executable
 RUN chmod +x ./build/tt_telemetry/tt_telemetry_server

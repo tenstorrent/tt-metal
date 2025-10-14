@@ -22,7 +22,7 @@ fi
 # Build telemetry server locally first
 echo "Building telemetry server locally..."
 cd $TT_METAL_HOME
-./build_metal.sh --build-telemetry
+./build_metal.sh --build-telemetry --build-static-libs
 
 # Check if the binary was built successfully
 if [ ! -f "$TT_METAL_HOME/build/tt_telemetry/tt_telemetry_server" ]; then
