@@ -30,6 +30,16 @@ import ttnn
                 (80000, 200000, 0, 70000),
             ],
         ),
+        (
+            ttnn.mul,
+            [
+                (0, 100, 0, 500),
+                (500, 1e3, 1e3, 1e4),
+                (1e4, 1e5, 1e5, 1e6),
+                (1e6, 1e7, 1, 1e2),
+                (0, 65535, 0, 65535),
+            ],
+        ),
     ],
 )
 @pytest.mark.parametrize(
@@ -110,6 +120,7 @@ block_sharded_memory_config = ttnn.create_sharded_memory_config(
     [
         (ttnn.add, 0, 100, 100, 200),  # Addition: ranges don't overlap to avoid overflow
         (ttnn.sub, 50000, 100000, 0, 40000),  # Subtraction: ensure a > b for valid results
+        (ttnn.mul, 0, 100, 200, 300),
     ],
 )
 @pytest.mark.parametrize(
@@ -309,7 +320,7 @@ def test_binary_add_uint32_upper_edge_cases(device):
     # Since ttnn.to_torch does not support int64, we cannot compare with the torch output. We can manually check the outputs:
     # Torch output: tensor([4294967290, 4150000000, 4294967295, 4294967294, 4294967292, 4294967295, 4294967295])
     # TT output: ttnn.Tensor([4294967290, 4150000000, 4294967295, 4294967294, 4294967292, 4294967295, 4294967295],
-    #               shape=Shape([3]), dtype=DataType::UINT32, layout=Layout::TILE)
+    #               shape=Shape([7]), dtype=DataType::UINT32, layout=Layout::TILE)
 
 
 @pytest.mark.parametrize(
@@ -371,3 +382,63 @@ def test_bitwise_uint32_full_range(device, ttnn_function, use_legacy):
     tt_out = ttnn.to_torch(z_tt_out, dtype=torch.uint32)
 
     assert torch.equal(z_torch, tt_out)
+
+
+# For inputs within int32 range [0, 2147483647]
+def test_binary_mul_uint32_lower_edge_cases(device):
+    torch_input_tensor_a = torch.tensor([0, 1, 0, 2147483647, 1, 1073741823, 715827882, 46340])
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a,
+        dtype=ttnn.uint32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    torch_input_tensor_b = torch.tensor([0, 0, 1, 1, 2147483646, 2, 3, 46340])
+    input_tensor_b = ttnn.from_torch(
+        torch_input_tensor_b,
+        dtype=ttnn.uint32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    golden_function = ttnn.get_golden_function(ttnn.mul)
+    torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, device=device)
+
+    output_tensor = ttnn.mul(input_tensor_a, input_tensor_b)
+    output_tensor = ttnn.to_torch(output_tensor, dtype=torch.int32)
+
+    assert torch.equal(output_tensor, torch_output_tensor)
+
+
+# For inputs outside int32 range [2147483648, 4294967295]
+def test_binary_mul_uint32_upper_edge_cases(device):
+    torch_input_tensor_a = torch.tensor(
+        [4294967295, 1, 4294967295, 4294967294, 2147483647, 1431655765, 16777215, 65535]
+    )
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a,
+        dtype=ttnn.uint32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    torch_input_tensor_b = torch.tensor([1, 4294967295, 0, 1, 2, 3, 256, 65535])
+    input_tensor_b = ttnn.from_torch(
+        torch_input_tensor_b,
+        dtype=ttnn.uint32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    golden_function = ttnn.get_golden_function(ttnn.mul)
+    torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, device=device)
+    output_tensor = ttnn.mul(input_tensor_a, input_tensor_b)
+    # Since ttnn.to_torch does not support int64, we cannot compare with the torch output. We can manually check the outputs:
+    # Torch output: tensor([4294967295, 4294967295, 0, 4294967294, 4294967294, 4294967295, 4294967040, 4294836225])
+    # TT output: ttnn.Tensor([4294967290, 4150000000, 4294967295, 4294967294, 4294967292, 4294967295, 4294967295],
+    #               shape=Shape([8]), dtype=DataType::UINT32, layout=Layout::TILE)
