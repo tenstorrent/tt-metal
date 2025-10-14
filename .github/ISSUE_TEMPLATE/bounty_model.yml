@@ -12,7 +12,7 @@ body:
   - type: textarea
     id: background
     attributes:
-      label: "Background"
+      label: "."
       description: "Context about what the bounty is about — What model to bring up, where it's used, and who would be interested."
       placeholder: |
         Example:
@@ -30,8 +30,9 @@ body:
   - type: textarea
     id: success_criteria
     attributes:
-      label: "What Success Looks Like"
-      description: "Define a list or checklist of clear, testable acceptance criteria - this is the goal the developer is chasing. They achieve all stages, we pay. Model bounties are split into 3 stages."
+      label: "."
+      placeholder: |
+        Define a list or checklist of clear, testable acceptance criteria - this is the goal the developer is chasing. They achieve all stages, we pay. Model bounties are split into 3 stages.
 
   - type: markdown
     attributes:
@@ -41,10 +42,10 @@ body:
   - type: textarea
     id: stage1
     attributes:
-      label: "Stage 1 — Bring-Up"
+      label: "."
       description: "List things that they need to achieve for us to consider the model working"
       placeholder: |
-        e.g.
+        Example:
         - Produce correct classification given input images
         - Generates coherent text or correct object detections
         - Which to validate against? What's the expected accuracy?
@@ -60,10 +61,10 @@ body:
   - type: textarea
     id: stage2
     attributes:
-      label: "Stage 2 — Basic Optimizations"
+      label: "."
       description: "A list of techniques that are easy to implement. Make sure they are applicable to the model."
       placeholder: |
-        e.g.
+        Example:
         - Store temporary results in L1
         - Fused activation after matmul
         - Change image tensors to sharding
@@ -79,10 +80,10 @@ body:
   - type: textarea
     id: stage3
     attributes:
-      label: "Stage 3 — Deeper Optimization"
+      label: "."
       description: "More involved optimizations are listed here. Adapt the model to exploit TT hardware features and reduce unnecessary TM/memory overheads. We are not asking the user to understand all possible optimization processes. But enough to touch on the differences of our hardware and GPUs."
       placeholder: |
-        e.g.
+        Example:
         - Grouped Convolutions
         - Use of SDPA operator
         - avoiding TMs by changing order of operation
@@ -98,10 +99,10 @@ body:
   - type: textarea
     id: guidance
     attributes:
-      label: "Guidance & Starting Points"
+      label: "."
       description: "Provide guidance, links to files, or code snippets and links. Help the user to get started with the bounty"
       placeholder: |
-        e.g.
+        Example:
         - Links to code, docs, previous work or tech report
         - Advice on what to look out for, or who to ask for help
         - Link to original model paper
@@ -121,10 +122,10 @@ body:
   - type: textarea
     id: approaches
     attributes:
-      label: "Possible Approaches"
+      label: "."
       description: "List one or more technical paths, architectural suggestions, or research ideas; Help the developer not succumb to analysis paralysis - too many options, don't know what to do"
       placeholder: |
-        e.g.
+        Example:
         - Start from an existing PyTorch Faster-RCNN model and port layers one by one to TTNN.
         - Validate each submodule's output against CPU/PyTorch reference before full integration.
         - Experiment with different sharding strategies and memory configs for convolutions.
@@ -138,9 +139,9 @@ body:
         Beyond the model implementation itself. Contributors must submit the following material as a proof of work. However, feel free to open a PR at any time if you want us checking you are on the right track. Just understand that payout is only made after **all 3 stages** are completed.
 
         **Deliverables:**
-        *Functional model implementation
-        *Validation logs (output correctness)
-        *Performance report + header for final review
+        - Functional model implementation
+        - Validation logs (output correctness)
+        - Performance report + header for final review
 
         **Links:**
         - [Performance Sheet](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/ttnn/TTNN-model-bringup.md#41-performance-sheet)
@@ -154,10 +155,10 @@ body:
   - type: textarea
     id: resources
     attributes:
-      label: "Resources"
+      label: "."
       description: "Add helpful links for contributors: example PRs or implementations, reference docs, original model paper, outside tutorials"
       placeholder: |
-        e.g.
+        Example:
         - resources (possibly external) to help the user to get started
         - [Example implementation or related PR](link)
         - [Reference documentation](link)
