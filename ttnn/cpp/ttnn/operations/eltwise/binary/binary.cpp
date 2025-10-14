@@ -435,6 +435,14 @@ Tensor BinaryOperation<binary_op_type>::invoke(
     tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations,
     tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations,
     const std::optional<bool>& use_legacy) {
+    std::cout << "In binary.cpp under binaryoperation" << std::endl;
+    std::cout << "input lhs dtype: " << lhs.dtype() << std::endl;
+    std::cout << "input rhs dtype: " << rhs.dtype() << std::endl;
+    if (dtype.has_value()) {
+        std::cout << "output dtype: " << dtype.value() << std::endl;
+    } else {
+        std::cout << "output dtype: nullopt" << std::endl;
+    }
     return detail::invoke_binary_ng(
         lhs,
         rhs,
