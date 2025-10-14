@@ -317,11 +317,11 @@ def test_distributed_norm_comparison(
     """
     if norm_type == "layer_norm":
         ttnn_stats = ttnn.layer_norm_pre_all_gather(
-            ttnn_input, compute_kernel_config=compute_kernel_config, dtype=ttnn.bfloat16
+            ttnn_input, compute_kernel_config=compute_kernel_config, dtype=ttnn.bfloat16, use_fp32_reduction=True
         )
     elif norm_type == "rms_norm":
         ttnn_stats = ttnn.rms_norm_pre_all_gather(
-            ttnn_input, compute_kernel_config=compute_kernel_config, dtype=ttnn.bfloat16
+            ttnn_input, compute_kernel_config=compute_kernel_config, dtype=ttnn.bfloat16, use_fp32_reduction=True
         )
     ccl_semaphore_handles = setup_ccl_semahpores(mesh_device)
     ttnn.synchronize_device(mesh_device)
