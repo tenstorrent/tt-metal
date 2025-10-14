@@ -142,7 +142,7 @@ ttnn/cpp/ttnn/deprecated/tt_lib/csrc/ @ayerofieiev-tt @razorback3 @dongjin-na @t
 ttnn/cpp/ttnn/operations/moreh*/ @razorback3 @dongjin-na @cfjchu @ayerofieiev-tt @dmakoviichuk-tt @nmauriceTT @jbbieniekTT @aczajkowskiTT @tenstorrent/metalium-codeowners-large-changes
 ttnn/cpp/ttnn/operations/moreh*/**/CMakeLists.txt @razorback3 @dongjin-na @cfjchu @ayerofieiev-tt @dmakoviichuk-tt @tenstorrent/metalium-developers-infra @tenstorrent/metalium-codeowners-large-changes
 ttnn/cpp/ttnn/operations/ccl/ @cfjchu @omilyutin-tt @jvegaTT @tt-aho @sjameelTT @ntarafdar @nardoTT @llongTT @amorrisonTT @tenstorrent/metalium-codeowners-large-changes
-ttnn/cpp/ttnn/operations/ccl/**/CMakeLists.txt @cfjchu @omilyutin-tt @jvegaTT @tt-aho @sjameelTT @ntarafdar @nardoTT @llongTT @amorrisonTT @tenstorrent/metalium-developers-infra @tenstorrent/metalium-codeowners-large-changes
+ttnn/cpp/ttnn/operations/ccl/**/CMakeLists.txt @cfjchu @omilyutin-tt @tt-aho @sjameelTT @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/metalium-developers-infra @tenstorrent/metalium-codeowners-large-changes
 ttnn/cpp/ttnn/operations/point_to_point/ @jvegaTT @sjameelTT @ntarafdar @nardoTT @llongTT @amorrisonTT @tenstorrent/metalium-codeowners-large-changes
 ttnn/cpp/ttnn/operations/pool/ @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-codeowners-large-changes
 ttnn/cpp/ttnn/operations/pool/**/CMakeLists.txt @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-developers-infra @tenstorrent/metalium-codeowners-large-changes
