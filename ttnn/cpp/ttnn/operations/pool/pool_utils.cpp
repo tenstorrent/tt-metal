@@ -205,7 +205,15 @@ uint32_t calculate_L1_usage(
     }
 
     FactoryParameters params = get_factory_parameters(
-        num_shards_c, input.dtype(), output_dtype, kernel_h, kernel_w, in_channels, pool_type, return_indices, output_layout);
+        num_shards_c,
+        input.dtype(),
+        output_dtype,
+        kernel_h,
+        kernel_w,
+        in_channels,
+        pool_type,
+        return_indices,
+        output_layout);
 
     bool one_scalar_per_core = is_pool_op_one_scalar_per_core(
         pool_type, ceil_mode, ceil_pad_h, ceil_pad_w, count_include_pad, pad_h, pad_w, divisor_override);
