@@ -565,17 +565,18 @@ inline void noc_async_read(
  * | max_page_size (template argument) | Maximum size of a single transaction in bytes      | uint32_t  | Any uint32_t number                      | False    |
  */
 // clang-format on
-FORCE_INLINE
-void noc_async_read_one_packet_set_state(uint64_t src_noc_addr, uint32_t size, uint8_t noc = noc_index) {
+template <bool use_vc = false>
+FORCE_INLINE void noc_async_read_one_packet_set_state(
+    uint64_t src_noc_addr, uint32_t size, uint8_t noc = noc_index, const uint32_t vc = 0) {
     /*
         Read requests - use static VC
         Read responses - assigned VCs dynamically
     */
     DEBUG_SANITIZE_NO_LINKED_TRANSACTION(noc, DEBUG_SANITIZE_NOC_UNICAST);
-    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::READ_SET_STATE, src_noc_addr, size, -1);
+    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::READ_SET_STATE, src_noc_addr, size, (use_vc) ? vc : -1);
 
     WAYPOINT("NASW");
-    ncrisc_noc_read_set_state<noc_mode, true /* one_packet */>(noc, read_cmd_buf, src_noc_addr, size);
+    ncrisc_noc_read_set_state<noc_mode, true /* one_packet */, use_vc>(noc, read_cmd_buf, src_noc_addr, size, vc);
     WAYPOINT("NASD");
 }
 
@@ -594,14 +595,15 @@ void noc_async_read_one_packet_set_state(uint64_t src_noc_addr, uint32_t size, u
  * | inc_num_issued (template argument)| Whether issued read counter should be increment    | uint32_t  | Any uint32_t number | False    |
  */
 // clang-format on
-template <bool inc_num_issued = true>
+template <bool inc_num_issued = true, bool use_vc = false>
 FORCE_INLINE void noc_async_read_one_packet_with_state(
-    uint32_t src_local_l1_addr, uint32_t dst_local_l1_addr, uint8_t noc = noc_index) {
+    uint32_t src_local_l1_addr, uint32_t dst_local_l1_addr, uint8_t noc = noc_index, const uint32_t vc = 0) {
     /*
         Read requests - use static VC
         Read responses - assigned VCs dynamically
     */
-    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::READ_WITH_STATE, static_cast<uint64_t>(src_local_l1_addr), 0, -1);
+    RECORD_NOC_EVENT_WITH_ADDR(
+        NocEventType::READ_WITH_STATE, static_cast<uint64_t>(src_local_l1_addr), 0, (use_vc) ? vc : -1);
 
     WAYPOINT("NATW");
 
