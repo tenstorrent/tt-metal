@@ -78,7 +78,14 @@ class Module(ABC):
         super().__delattr__(name)
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:  # noqa: B027
-        """Prepare Torch state dict before loading."""
+        """Prepare a PyTorch `state_dict` in place before loading.
+
+        Override this method to adjust entries before loading them into submodules and parameters.
+
+        This method should modify `state` in place and, where possible, avoid raising exceptions for
+        missing keys; skip them instead. This way, missing keys can be collected and returned by
+        `load_torch_state_dict`.
+        """
 
     def _load_torch_state_dict_inner(
         self,
@@ -211,10 +218,12 @@ class ModuleList(Module):
         return len(self._children)
 
     @overload
-    def __getitem__(self, key: int) -> Module: ...
+    def __getitem__(self, key: int) -> Module:
+        ...
 
     @overload
-    def __getitem__(self, key: slice) -> ModuleList: ...
+    def __getitem__(self, key: slice) -> ModuleList:
+        ...
 
     def __getitem__(self, key: int | slice) -> Module | ModuleList:
         n = len(self._children)
@@ -243,6 +252,7 @@ class Parameter:
         layout: ttnn.Layout = ttnn.Layout.TILE,
         dtype: ttnn.DataType = ttnn.bfloat16,
         memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
+        pad_value: float | None = None,
         mesh_axes: Sequence[int | None] | None = None,
         on_host: bool = False,
     ) -> None:
@@ -270,6 +280,7 @@ class Parameter:
         self.layout = layout
         self.dtype = dtype
         self.memory_config = memory_config
+        self.pad_value = pad_value
         self.mesh_axes = mesh_axes
         self.on_host = on_host
         self._data = None
@@ -286,6 +297,7 @@ class Parameter:
             layout=self.layout,
             dtype=self.dtype,
             memory_config=self.memory_config,
+            pad_value=self.pad_value,
             mesh_axes=self.mesh_axes,
             on_host=self.on_host,
         )

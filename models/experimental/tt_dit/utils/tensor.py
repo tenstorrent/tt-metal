@@ -59,6 +59,7 @@ def from_torch(
     layout: ttnn.Layout = ttnn.Layout.TILE,
     dtype: ttnn.DataType = ttnn.bfloat16,
     memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
+    pad_value: float | None = None,
     mesh_axes: Sequence[int | None] | None = None,
     on_host: bool = False,
 ) -> ttnn.Tensor:
@@ -83,6 +84,7 @@ def from_torch(
         memory_config=memory_config,
         device=None if on_host else device,
         mesh_mapper=mesh_mapper,
+        pad_value=pad_value,
     )
 
 
