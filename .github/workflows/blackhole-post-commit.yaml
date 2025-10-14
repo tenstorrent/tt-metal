@@ -77,8 +77,8 @@ jobs:
           # Check if this is a scheduled P100-only run at 7:00 UTC (daily)
           if [[ "${{ github.event_name }}" = "schedule" && "${{ github.event.schedule }}" = "0 7 * * *" ]]; then
             matrix='["P100"]'
-            civ2_matrix='["P100"]'
-            civ2_viommu_matrix='["P100"]'
+            civ2_matrix='["P100a"]'
+            civ2_viommu_matrix='["P100a-viommu"]'
           elif [ "${{ inputs.enable-llmbox-tests }}" = "true" ]; then
             if [[ "$runner_label" != *"BH-LLMBox"* ]]; then
               echo "::warning::LLMBox tests are enabled but runner-label does not contain BH-LLMBox. Current value: $runner_label"

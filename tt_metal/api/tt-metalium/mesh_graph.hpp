@@ -162,8 +162,6 @@ public:
 
     // Load Inter-Mesh Connectivity into the Mesh Graph.
     void load_intermesh_connections(const AnnotatedIntermeshConnections& intermesh_connections);
-    // True if using MGD 1.0 as an input (a YAML file)
-    bool is_legacy_mode() const { return legacy_mode_; }
 
 private:
     void validate_mesh_id(MeshId mesh_id) const;
@@ -191,7 +189,6 @@ private:
     std::vector<std::unordered_map<port_id_t, chip_id_t, hash_pair>> mesh_edge_ports_to_chip_id_;
     RequestedIntermeshConnections requested_intermesh_connections_;
     RequestedIntermeshPorts requested_intermesh_ports_;
-    bool legacy_mode_ = false;
 };
 
 }  // namespace tt::tt_fabric

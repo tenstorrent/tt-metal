@@ -208,7 +208,6 @@ std::unordered_map<chip_id_t, RouterEdge> MeshGraph::get_valid_connections(
 }
 
 void MeshGraph::initialize_from_mgd(const MeshGraphDescriptor& mgd) {
-    legacy_mode_ = false;
     static const std::unordered_map<const proto::Architecture, tt::ARCH> proto_arch_to_arch = {
         {proto::Architecture::WORMHOLE_B0, tt::ARCH::WORMHOLE_B0},
         {proto::Architecture::BLACKHOLE, tt::ARCH::BLACKHOLE},
@@ -272,41 +271,25 @@ void MeshGraph::initialize_from_mgd(const MeshGraphDescriptor& mgd) {
         const auto& src_instance = mgd.get_instance(connection_data.nodes[0]);
         const auto& dst_instance = mgd.get_instance(connection_data.nodes[1]);
 
-        const auto& src_mesh_instance = mgd.get_instance(src_instance.hierarchy.back());
-        const auto& dst_mesh_instance = mgd.get_instance(dst_instance.hierarchy.back());
+        bool is_device_level = (src_instance.kind == NodeKind::Device) && (dst_instance.kind == NodeKind::Device);
 
-        const MeshId src_mesh_id = MeshId(src_mesh_instance.local_id);
-        const MeshId dst_mesh_id = MeshId(dst_mesh_instance.local_id);
+        if (is_device_level) {
+            const auto& src_mesh_instance = mgd.get_instance(src_instance.hierarchy.back());
+            const auto& dst_mesh_instance = mgd.get_instance(dst_instance.hierarchy.back());
 
-        const chip_id_t src_chip_id = src_instance.local_id;
-        const chip_id_t dst_chip_id = dst_instance.local_id;
+            const MeshId src_mesh_id = MeshId(src_mesh_instance.local_id);
+            const MeshId dst_mesh_id = MeshId(dst_mesh_instance.local_id);
 
-        for (unsigned int i = 0; i < connection_data.count; i++) {
-            if (src_mesh_id != dst_mesh_id) {
-                // Intermesh Connection
-                auto& edge = this->inter_mesh_connectivity_[*src_mesh_id][src_chip_id];
-                auto [it, is_inserted] = edge.insert(
-                    {dst_mesh_id,
-                     RouterEdge{
-                         .port_direction = routing_direction_to_port_direction(connection_data.routing_direction),
-                         .connected_chip_ids = {dst_chip_id},
-                         .weight = 0}});
-                if (!is_inserted) {
-                    it->second.connected_chip_ids.push_back(dst_chip_id);
-                }
-            } else {
-                // Intramesh Connection
-                auto& edge = this->intra_mesh_connectivity_[*src_mesh_id][src_chip_id];
-                auto [it, is_inserted] = edge.insert(
-                    {dst_chip_id,
-                     RouterEdge{
-                         .port_direction = routing_direction_to_port_direction(connection_data.routing_direction),
-                         .connected_chip_ids = {dst_chip_id},
-                         .weight = 0}});
-                if (!is_inserted) {
-                    it->second.connected_chip_ids.push_back(dst_chip_id);
-                }
-            }
+            const chip_id_t src_chip_id = src_instance.local_id;
+            const chip_id_t dst_chip_id = dst_instance.local_id;
+
+            requested_intermesh_ports_[*src_mesh_id][*dst_mesh_id].push_back(
+                {src_chip_id, dst_chip_id, connection_data.count});
+        } else {
+            const MeshId src_mesh_id = MeshId(src_instance.local_id);
+            const MeshId dst_mesh_id = MeshId(dst_instance.local_id);
+
+            requested_intermesh_connections_[*src_mesh_id][*dst_mesh_id] = connection_data.count;
         }
     }
 
@@ -320,6 +303,9 @@ void MeshGraph::initialize_from_mgd(const MeshGraphDescriptor& mgd) {
     for ([[maybe_unused]] const auto& mesh : all_meshes) {
         this->mesh_host_ranks_.emplace_back(MeshShape{1, 1}, MeshHostRankId{0});
     }
+
+    // Set up the mesh_edge_ports_to_chip_id_ with empty containers for all meshes
+    mesh_edge_ports_to_chip_id_.resize(mgd.all_meshes().size());
 
     for (const auto& mesh : all_meshes) {
         const auto& mesh_instance = mgd.get_instance(mesh);
@@ -365,6 +351,39 @@ void MeshGraph::initialize_from_mgd(const MeshGraphDescriptor& mgd) {
         std::vector<chip_id_t> chip_ids(mesh_shape[0] * mesh_shape[1]);
         std::iota(chip_ids.begin(), chip_ids.end(), 0);
         this->mesh_to_chip_ids_.emplace(mesh_instance.local_id, tt_metal::distributed::MeshContainer<chip_id_t>(mesh_shape, chip_ids));
+
+        // Get the edge ports of each mesh
+        // North, start from NW corner
+        std::uint32_t chan_id = 0;
+        for (std::uint32_t chip_id = 0; chip_id < mesh_shape[1]; chip_id++) {
+            for (std::uint32_t i = 0; i < chip_spec_.num_eth_ports_per_direction; i++) {
+                mesh_edge_ports_to_chip_id_[*mesh_id][{RoutingDirection::N, chan_id++}] = chip_id;
+            }
+        }
+        // South, start from SW corner
+        chan_id = 0;
+        for (std::uint32_t chip_id = ((mesh_shape[0] * mesh_shape[1]) - mesh_shape[1]);
+             chip_id < (mesh_shape[0] * mesh_shape[1]);
+             chip_id++) {
+            for (std::uint32_t i = 0; i < chip_spec_.num_eth_ports_per_direction; i++) {
+                mesh_edge_ports_to_chip_id_[*mesh_id][{RoutingDirection::S, chan_id++}] = chip_id;
+            }
+        }
+        // East, start from NE corner
+        chan_id = 0;
+        for (std::uint32_t chip_id = (mesh_shape[1] - 1); chip_id < (mesh_shape[0] * mesh_shape[1]);
+             chip_id += mesh_shape[1]) {
+            for (std::uint32_t i = 0; i < chip_spec_.num_eth_ports_per_direction; i++) {
+                mesh_edge_ports_to_chip_id_[*mesh_id][{RoutingDirection::E, chan_id++}] = chip_id;
+            }
+        }
+        // West, start from NW corner
+        chan_id = 0;
+        for (std::uint32_t chip_id = 0; chip_id < (mesh_shape[0] * mesh_shape[1]); chip_id += mesh_shape[1]) {
+            for (std::uint32_t i = 0; i < chip_spec_.num_eth_ports_per_direction; i++) {
+                mesh_edge_ports_to_chip_id_[*mesh_id][{RoutingDirection::W, chan_id++}] = chip_id;
+            }
+        }
     }
 }
 
@@ -394,7 +413,6 @@ const std::vector<std::unordered_map<port_id_t, chip_id_t, hash_pair>>& MeshGrap
 }
 
 void MeshGraph::initialize_from_yaml(const std::string& mesh_graph_desc_file_path) {
-    legacy_mode_ = true;
     std::ifstream fdesc(mesh_graph_desc_file_path);
     TT_FATAL(not fdesc.fail(), "Failed to open file: {}", mesh_graph_desc_file_path);
 
@@ -588,7 +606,6 @@ void MeshGraph::initialize_from_yaml(const std::string& mesh_graph_desc_file_pat
             }
         }
     }
-    std::vector<std::tuple<std::pair<uint32_t, std::string>, std::pair<uint32_t, std::string>>> connections;
 
     TT_FATAL(
         !(yaml["RelaxedGraph"] && yaml["Graph"]),

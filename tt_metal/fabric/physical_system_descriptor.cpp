@@ -317,7 +317,7 @@ void PhysicalSystemDescriptor::run_local_discovery() {
                 .eth_conn = EthConnection(eth_chan, dst_chan, false)});
         }
     }
-    this->generate_ethernet_metrics();
+    this->generate_local_ethernet_metrics();
     system_graph_.host_connectivity_graph[hostname] = {};
 }
 
@@ -799,7 +799,7 @@ std::pair<AsicID, uint8_t> PhysicalSystemDescriptor::get_connected_asic_and_chan
     return {AsicID{0}, 0};
 }
 
-void PhysicalSystemDescriptor::generate_ethernet_metrics() {
+void PhysicalSystemDescriptor::generate_local_ethernet_metrics() {
     const auto& local_asics = get_asics_connected_to_host(my_host_name());
     const auto& local_asic_graph = get_asic_topology(my_host_name());
 
