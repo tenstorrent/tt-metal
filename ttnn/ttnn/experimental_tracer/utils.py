@@ -44,7 +44,7 @@ def decompress_tensor(summary, shape, dtype):
     std = summary["std"]
 
     if len(shape) == 0 or norm == 0 or (len(shape) == 1 and shape[0] == 0):
-        return torch.zeros(shape, dtype=torch.float32)
+        return torch.zeros(shape, dtype=dtype)
 
     # Linearly interpolate 7 quantiles to reconstruct direction
     t_lin = torch.linspace(0, num_quantiles - 1, steps=np.prod(shape)).to(torch.float32)
@@ -66,7 +66,7 @@ def decompress_tensor(summary, shape, dtype):
     else:
         approx.fill_(mean)
     approx = approx.clamp(min=-1e6, max=1e6)
-    return approx.reshape(shape)
+    return approx.reshape(shape).to(dtype)
 
 
 def _tensor_info(obj):
@@ -136,27 +136,29 @@ def track_input_output(_tensor_io_log):
 
 
 def get_tensors_from_input_spec(input_specs, state_dict=None):
-    tensors = []
-    for shape, dtype_str, summary_type, summary in input_specs:
-        dtype = getattr(torch, dtype_str.split(".")[1])
-        if summary_type == "state_dict_constant":
-            assert state_dict is not None, "state_dict must be provided for state_dict_constant"
-            tensor = state_dict[summary]
-            tensors.append(tensor.to(torch.float32))
-            continue
-        elif summary_type == "dynamic_quantiles_stats":
-            assert len(summary) == 2, "Expected 2 values in summary"
-            summary = {
-                "quantiles": summary[0],
-                "mean": summary[1][0],
-                "std": summary[1][1],
-                "norm": summary[1][2],
-                "type": summary_type,
-            }
-            tensors.append(decompress_tensor(summary, shape, dtype))
-        else:
-            raise ValueError(f"Unknown summary type: {summary_type}")
-    return tensors
+    if isinstance(input_specs, (tuple, list)) and len(input_specs) != 4 and not (len(input_specs) == 4 and isinstance(input_specs[2], str)):
+        return [get_tensors_from_input_spec(spec, state_dict) for spec in input_specs]
+    assert isinstance(input_specs, (list, tuple)) and len(input_specs) == 4 and isinstance(input_specs[2], str), "input_specs must be a list of 4 elements where the 3rd element contains the spec type."
+    shape, dtype_str, summary_type, summary = input_specs
+    dtype = getattr(torch, dtype_str.split(".")[1])
+    tensor = None
+    if summary_type == "state_dict_constant":
+        assert state_dict is not None, "state_dict must be provided for state_dict_constant"
+        tensor = state_dict[summary]
+        tensor = tensor.to(dtype)
+    elif summary_type == "dynamic_quantiles_stats":
+        assert len(summary) == 2, "Expected 2 values in summary"
+        summary = {
+            "quantiles": summary[0],
+            "mean": summary[1][0],
+            "std": summary[1][1],
+            "norm": summary[1][2],
+            "type": summary_type,
+        }
+        tensor = decompress_tensor(summary, shape, dtype)
+    else:
+        raise ValueError(f"Unknown summary type: {summary_type}")
+    return tensor
 
 
 class StateDictConstant:

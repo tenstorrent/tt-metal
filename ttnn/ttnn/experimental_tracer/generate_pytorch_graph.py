@@ -9,7 +9,6 @@ import os
 from pytorch_graph_utils import format_file_with_black
 from typing import Dict, List, Tuple
 from find_repeated_subgraphs import CompositeOperation
-import gzip
 import torch
 import json
 from utils import compress_tensor
@@ -97,14 +96,16 @@ class CompositePytorchGraph(PytorchGraph):
         main_op_code = main_op.generate_code()
         main_op_code = main_op_code.replace(")", ", params)")
         imports["main"] = [
-            "import gzip",
             "import torch",
             "import json",
-            "from tracer_backend import trace_torch_model",
-            "from find_repeated_subgraphs import PatternObjFactory as POFactory, find_repeated_subgraphs",
-            "from generate_pytorch_graph import CompositePytorchGraph",
             "from utils import LazyParams",
         ]
+        if not self.clustered_graph:
+            imports["main"] += [
+                "from tracer_backend import trace_torch_model",
+                "from find_repeated_subgraphs import PatternObjFactory as POFactory, find_repeated_subgraphs",
+                "from generate_pytorch_graph import CompositePytorchGraph",
+            ]
         main_import_code = main_op.generate_import_code()
         imports["main"] += main_import_code
         input_ops = [
