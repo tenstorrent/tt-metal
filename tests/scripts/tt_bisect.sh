@@ -173,11 +173,11 @@ while [[ "$found" == "false" ]]; do
       passrate="NA"
     fi
 
-    nd_log_file="bisect_nd_results.tsv"
+    nd_log_file="bisect_nd_results.csv"
     if [ ! -f "$nd_log_file" ]; then
-      echo -e "timestamp\tcommit_sha\trev_short\tsuccesses\tfailures\tskips\tevaluated\tpassrate_percent" > "$nd_log_file"
+      echo "timestamp,commit_sha,rev_short,successes,failures,skips,evaluated,passrate_percent" > "$nd_log_file"
     fi
-    echo -e "$(date -Iseconds)\t$(git rev-parse HEAD)\t$rev\t$success_count\t$failure_count\t$skip_count\t$evaluated\t$passrate" >> "$nd_log_file"
+    echo "$(date -Iseconds),$(git rev-parse HEAD),$rev,$success_count,$failure_count,$skip_count,$evaluated,$passrate" >> "$nd_log_file"
 
     echo "ND summary for $rev: successes=$success_count failures=$failure_count skips=$skip_count evaluated=$evaluated passrate=$passrate%"
     echo "::endgroup::"
