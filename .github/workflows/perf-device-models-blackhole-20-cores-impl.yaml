@@ -1,4 +1,4 @@
-name: "[internal] Blackhole nightly tests 20 cores impl"
+name: "[internal] Blackhole perf tests 20 cores impl"
 
 on:
   workflow_call:
@@ -24,17 +24,16 @@ on:
         description: 'Architecture name to use'
 
 jobs:
-  nightly-bh-models:
+  device-perf-blackhole-20-cores:
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines
       fail-fast: false
       matrix:
         test-group: [
-            { model: oft, owner_id: U08AWRT6U3E, cmd: pytest models/experimental/oft/tests/pcc/ }, # Boris Janjic
-            { model: panoptic-deeplab, owner_id: U08ARDXARPF, cmd: pytest models/experimental/panoptic_deeplab/tests/pcc/ }, # Ilija Anastasijevic
+            { model: oft, owner_id: U08AWRT6U3E, cmd: pytest models/experimental/oft/tests/test_device_perf_oft.py }, # Boris Janjic
           ]
-    name: Nightly 20 cores ${{ matrix.test-group.model }}
+    name: Device perf bh 20 cores ${{ matrix.test-group.model }}
     # CIv2 to get weights
     runs-on: ${{ format('tt-ubuntu-2204-{0}-stable', inputs.runner-label) }}
     container:
