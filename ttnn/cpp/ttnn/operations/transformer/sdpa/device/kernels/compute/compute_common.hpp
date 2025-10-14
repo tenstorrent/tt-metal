@@ -63,11 +63,14 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, bool do_eltwise_max = false) {
 
     for (uint32_t i = 0; i < rows; i++) {
         acquire_dst();
-        reduce_init<pool_type, reduce_dim>(in0_cb, scale_cb, out_cb);
-        for (uint32_t j = 0; j < cols; j++) {
-            reduce_tile<pool_type, reduce_dim>(in0_cb, scale_cb, i * cols + j, 0, reduce_dst_idx);
-        }
-        reduce_uninit();
+        // reduce_init<pool_type, reduce_dim>(in0_cb, scale_cb, out_cb);
+        reduce_block_max_row_init<cols>();
+        // for (uint32_t j = 0; j < cols; j++) {
+        //     reduce_tile<pool_type, reduce_dim>(in0_cb, scale_cb, i * cols + j, 0, reduce_dst_idx);
+        // }
+        reduce_block_max_row<cols>(in0_cb, scale_cb, i * cols, reduce_dst_idx);
+        // reduce_uninit();
+        reduce_max_row_uninit();
         if (do_eltwise_max) {
             copy_tile_to_dst_init_short(prev_cb);
             copy_tile(prev_cb, i, prev_max_dst_idx);
