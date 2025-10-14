@@ -119,6 +119,7 @@ TEST_F(N300UtilsTest, TestXTensorShardAxis2) {
 }
 
 TEST_F(N300UtilsTest, TestXTensorReplicateAllReduce) {
+    // Test failing with watcher enabled, github issue #30521
     SKIP_FOR_WATCHER();
 
     auto* device = &ttml::autograd::ctx().get_device();
@@ -149,6 +150,7 @@ TEST_F(N300UtilsTest, TestXTensorReplicateAllReduce) {
 }
 
 TEST_F(N300UtilsTest, TestXTensorReplicateAllReduceBadTiles) {
+    // Test failing with watcher enabled, github issue #30521
     SKIP_FOR_WATCHER();
 
     auto* device = &ttml::autograd::ctx().get_device();
