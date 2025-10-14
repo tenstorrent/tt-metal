@@ -43,7 +43,7 @@ void FabricConnectionManager::register_client(
 void FabricConnectionManager::process(
     LocalDeviceCoreAllocator& local_alloc,
     TestDevice* test_device_ptr,
-    const std::shared_ptr<IDeviceInfoProvider> device_info_provider) {
+    const std::shared_ptr<IDeviceInfoProvider>& device_info_provider) {
     for (auto& [key, conn] : connections_) {
         // Mux is needed if more than 1 client (any type) uses this link
         size_t total_clients = conn.sender_cores.size() + conn.receiver_cores.size() + conn.sync_cores.size();
@@ -167,7 +167,7 @@ bool FabricConnectionManager::is_mux_client(const CoreCoord& core) const {
 }
 
 std::vector<uint32_t> FabricConnectionManager::generate_mux_termination_local_args_for_core(
-    const CoreCoord& core, const std::shared_ptr<IDeviceInfoProvider> device_info_provider) const {
+    const CoreCoord& core, const std::shared_ptr<IDeviceInfoProvider>& device_info_provider) const {
     // Not a mux client? Return empty vector
     if (!is_mux_client(core)) {
         return {};
@@ -210,8 +210,8 @@ std::vector<uint32_t> FabricConnectionManager::generate_mux_termination_local_ar
 std::vector<uint32_t> FabricConnectionManager::generate_connection_args_for_core(
     const CoreCoord& core,
     TestWorkerType worker_type,
-    const std::shared_ptr<IDeviceInfoProvider> device_info_provider,
-    const std::shared_ptr<IRouteManager> route_manager,
+    const std::shared_ptr<IDeviceInfoProvider>& device_info_provider,
+    const std::shared_ptr<IRouteManager>& route_manager,
     const FabricNodeId& fabric_node_id,
     tt::tt_metal::Program& program_handle) const {
     std::vector<uint32_t> rt_args;
@@ -545,7 +545,7 @@ TestMux::TestMux(CoreCoord logical_core, TestDevice* test_device_ptr, std::optio
 void TestMux::set_config(FabricMuxConfig* mux_config, ConnectionKey connection_key) {
     TT_FATAL(config_ == nullptr, "Mux config already set for core {}", logical_core_);
     config_ = mux_config;
-    connection_key_ = std::move(connection_key);
+    connection_key_ = connection_key;
 }
 
 // ====================================
@@ -689,7 +689,7 @@ void TestDevice::add_mux_worker_config(
         this->add_worker(TestWorkerType::MUX, logical_core);
     }
 
-    this->muxes_.at(logical_core).set_config(mux_config, std::move(connection_key));
+    this->muxes_.at(logical_core).set_config(mux_config, connection_key);
 }
 
 void TestDevice::create_kernels() {
@@ -834,7 +834,7 @@ void TestDevice::create_sync_kernel() {
     };
 
     // clear out mux termination sync address (if mux connections are present)
-    if (mux_termination_local_args.size() > 0) {
+    if (!mux_termination_local_args.empty()) {
         addresses_and_size_to_clear.push_back(
             {sender_memory_map_->get_mux_termination_sync_address(),
              sender_memory_map_->get_mux_termination_sync_size()});
@@ -942,7 +942,7 @@ void TestDevice::create_sender_kernels() {
         }
 
         // clear out mux termination sync address (if mux connections are present)
-        if (mux_termination_local_args.size() > 0) {
+        if (!mux_termination_local_args.empty()) {
             addresses_and_size_to_clear.push_back(
                 {sender_memory_map_->get_mux_termination_sync_address(),
                  sender_memory_map_->get_mux_termination_sync_size()});
@@ -1023,7 +1023,7 @@ void TestDevice::create_receiver_kernels() {
         std::vector<uint32_t> local_args;
         if (!receiver.configs_.empty()) {
             const auto first_traffic_args = receiver.configs_[0].first.get_args();
-            local_args.reserve(local_args.size() + receiver.configs_.size() * first_traffic_args.size());
+            local_args.reserve(local_args.size() + (receiver.configs_.size() * first_traffic_args.size()));
             local_args.insert(local_args.end(), first_traffic_args.begin(), first_traffic_args.end());
 
             for (size_t i = 1; i < receiver.configs_.size(); ++i) {
@@ -1038,7 +1038,7 @@ void TestDevice::create_receiver_kernels() {
         local_args.insert(local_args.end(), mux_termination_local_args.begin(), mux_termination_local_args.end());
 
         std::vector<std::pair<size_t, size_t>> addresses_and_size_to_clear;
-        if (mux_termination_local_args.size() > 0) {
+        if (!mux_termination_local_args.empty()) {
             addresses_and_size_to_clear.push_back(
                 {receiver_memory_map_->get_mux_termination_sync_address(),
                  receiver_memory_map_->get_mux_termination_sync_size()});

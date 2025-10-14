@@ -126,7 +126,7 @@ public:
     void process(
         LocalDeviceCoreAllocator& local_alloc,
         TestDevice* test_device_ptr,
-        const std::shared_ptr<IDeviceInfoProvider> device_info_provider);
+        const std::shared_ptr<IDeviceInfoProvider>& device_info_provider);
 
     // Access to all connections (for mux kernel creation)
     const std::unordered_map<ConnectionKey, Connection, ConnectionKeyHash>& get_all_connections() const {
@@ -156,7 +156,7 @@ public:
     // Generate mux termination local args for a core
     // Returns empty vector if core is not a mux client
     std::vector<uint32_t> generate_mux_termination_local_args_for_core(
-        const CoreCoord& core, const std::shared_ptr<IDeviceInfoProvider> device_info_provider) const;
+        const CoreCoord& core, const std::shared_ptr<IDeviceInfoProvider>& device_info_provider) const;
 
     // Generate all fabric connection args for a specific core
     // Returns rt_args to append (includes is_mux flag + connection args for each connection)
@@ -164,8 +164,8 @@ public:
     std::vector<uint32_t> generate_connection_args_for_core(
         const CoreCoord& core,
         TestWorkerType worker_type,
-        const std::shared_ptr<IDeviceInfoProvider> device_info_provider,
-        const std::shared_ptr<IRouteManager> route_manager,
+        const std::shared_ptr<IDeviceInfoProvider>& device_info_provider,
+        const std::shared_ptr<IRouteManager>& route_manager,
         const FabricNodeId& fabric_node_id,
         tt::tt_metal::Program& program_handle) const;
 
