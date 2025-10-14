@@ -157,13 +157,6 @@ void MAIN {
     // data which is much slower than just untilizing the entire MAX_TILES_PER_REDUCTION
     constexpr bool tilize_reconfig = in_nblocks_c > 1 && in_ntiles_c % MAX_TILES_PER_REDUCTION != 0 &&
                                      window_size_hw <= FACE_HEIGHT && !last_tile_is_partial;
-#ifdef ARCH_BLACKHOLE
-    constexpr bool use_tilize_dest = in_c <= FACE_WIDTH;
-    constexpr bool pack_untilize_reinit = !use_tilize_dest;
-#else
-    constexpr bool use_tilize_dest = true;
-    constexpr bool pack_untilize_reinit = last_tile_is_partial && in_ntiles_c > 1;
-#endif
     if constexpr (!return_indices) {
         constexpr uint32_t tilize_untilize_cb = is_output_tiled ? pre_tilize_cb_id : out_cb_id;
         tilizeA_B_reduce_init<neginf_srca_maxpool, zero_srca_avgpool>(

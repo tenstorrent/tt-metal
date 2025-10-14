@@ -372,7 +372,6 @@ void kernel_main() {
         if constexpr (!is_avg_pool || !is_large_kernel || return_indices) {
             clear_out_tiles<in_cb_id, clear_value_cb_id>();
             if constexpr (return_indices) {
-                ;
                 clear_out_tiles<in_idx_cb_id, clear_value_cb_id>();
             }
         }
