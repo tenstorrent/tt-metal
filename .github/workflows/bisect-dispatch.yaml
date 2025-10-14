@@ -112,4 +112,9 @@ jobs:
           GIT_COMMITTER_NAME: "GitHub Actions"
           GIT_COMMITTER_EMAIL: "actions@github.com"
         run: |
-          ./tests/scripts/tt_bisect.sh -t ${{ inputs.timeout }} -f "${{ inputs.command }}" -b ${{ inputs.bad-commit }} -g ${{ inputs.good-commit }} ${{ inputs.tracy == 'true' && '-p' || '' }} -r ${{ inputs.retries }}
+          set -euo pipefail
+          trap 'rm -rf ./build_bisect' EXIT
+          mkdir -p ./build_bisect
+          cp ./tests/scripts/tt_bisect.sh ./build_bisect/
+          chmod +x ./build_bisect/tt_bisect.sh
+          ./build_bisect/tt_bisect.sh -t ${{ inputs.timeout }} -f "${{ inputs.command }}" -b ${{ inputs.bad-commit }} -g ${{ inputs.good-commit }} ${{ inputs.tracy == 'true' && '-p' || '' }} -r ${{ inputs.retries }}
