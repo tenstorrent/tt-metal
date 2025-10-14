@@ -44,7 +44,7 @@ void PrintNocData(noc_data_t noc_data, const std::string& file_name) {
     outfile.close();
 }
 
-void DumpCoreNocData(ChipId device_id, const CoreDescriptor& logical_core, noc_data_t& noc_data) {
+void DumpCoreNocData(ChipId device_id, const umd::CoreDescriptor& logical_core, noc_data_t& noc_data) {
     CoreCoord virtual_core =
         tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
             device_id, logical_core.coord, logical_core.type);
@@ -71,7 +71,7 @@ void DumpDeviceNocData(ChipId device_id, noc_data_t& noc_data, noc_data_t& dispa
 
     // Now go through all cores on the device, and dump noc data for them.
     CoreDescriptorSet all_cores = GetAllCores(device_id);
-    for (const CoreDescriptor& logical_core : all_cores) {
+    for (const umd::CoreDescriptor& logical_core : all_cores) {
         if (dispatch_cores.count(logical_core)) {
             DumpCoreNocData(device_id, logical_core, dispatch_noc_data);
         } else {
@@ -109,7 +109,7 @@ void ClearNocData(ChipId device_id) {
         "NOC transfer recording is incompatible with DPRINT");
 
     CoreDescriptorSet all_cores = GetAllCores(device_id);
-    for (const CoreDescriptor& logical_core : all_cores) {
+    for (const umd::CoreDescriptor& logical_core : all_cores) {
         CoreCoord virtual_core =
             tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
                 device_id, logical_core.coord, logical_core.type);

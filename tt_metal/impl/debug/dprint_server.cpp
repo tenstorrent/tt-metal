@@ -128,7 +128,7 @@ public:
 NullBuffer null_buffer;
 std::ostream null_stream(&null_buffer);
 
-using RiscKey = std::tuple<ChipId, CoreDescriptor, uint32_t>;  // Chip id, core, risc id
+using RiscKey = std::tuple<ChipId, umd::CoreDescriptor, uint32_t>;  // Chip id, core, risc id
 
 struct RiscKeyComparator {
     bool operator()(const RiscKey& x, const RiscKey& y) const {
@@ -136,8 +136,8 @@ struct RiscKeyComparator {
         const ChipId y_device_id = get<0>(y);
         const uint32_t x_risc_id = get<2>(x);
         const uint32_t y_risc_id = get<2>(y);
-        const CoreDescriptor& x_core_desc = get<1>(x);
-        const CoreDescriptor& y_core_desc = get<1>(y);
+        const umd::CoreDescriptor& x_core_desc = get<1>(x);
+        const umd::CoreDescriptor& y_core_desc = get<1>(y);
 
         if (x_device_id != y_device_id) {
             return x_device_id < y_device_id;
@@ -456,7 +456,7 @@ private:
 
     // A map from Device -> Core Range, which is used to determine which cores on which devices
     // to scan for print data. Also a lock for editing it.
-    std::map<ChipId, std::vector<CoreDescriptor>> device_to_core_range_;
+    std::map<ChipId, std::vector<umd::CoreDescriptor>> device_to_core_range_;
     std::map<ChipId, bool> device_reads_dispatch_cores_;  // True if given device reads any dispatch cores. Used to
                                                           // know whether dprint can be compiled out.
     std::mutex device_to_core_range_lock_;
@@ -474,7 +474,7 @@ private:
     // out to host-side stream. Returns true if some data was read out, and false if no new
     // print data was present on the device.
     bool peek_one_risc_non_blocking(
-        ChipId device_id, const CoreDescriptor& logical_core, int risc_index, bool new_data_this_iter);
+        ChipId device_id, const umd::CoreDescriptor& logical_core, int risc_index, bool new_data_this_iter);
 
     // Transfers data from all intermdeiate streams to output stream and flushes it.
     void transfer_all_streams_to_output(ChipId device_id);
@@ -640,12 +640,12 @@ void DPrintServer::Impl::attach_device(ChipId device_id) {
     }
 
     // Core range depends on whether dprint_all_cores flag is set.
-    std::vector<CoreDescriptor> print_cores_sanitized;
+    std::vector<umd::CoreDescriptor> print_cores_sanitized;
     for (CoreType core_type : {CoreType::WORKER, CoreType::ETH}) {
         if (rtoptions.get_feature_all_cores(tt::llrt::RunTimeDebugFeatureDprint, core_type) ==
             tt::llrt::RunTimeDebugClassAll) {
             // Print from all cores of the given type, cores returned here are guaranteed to be valid.
-            for (CoreDescriptor logical_core : all_cores) {
+            for (umd::CoreDescriptor logical_core : all_cores) {
                 if (logical_core.type == core_type) {
                     print_cores_sanitized.push_back(logical_core);
                 }
@@ -658,7 +658,7 @@ void DPrintServer::Impl::attach_device(ChipId device_id) {
         } else if (
             rtoptions.get_feature_all_cores(tt::llrt::RunTimeDebugFeatureDprint, core_type) ==
             tt::llrt::RunTimeDebugClassDispatch) {
-            for (CoreDescriptor logical_core : dispatch_cores) {
+            for (umd::CoreDescriptor logical_core : dispatch_cores) {
                 if (logical_core.type == core_type) {
                     print_cores_sanitized.push_back(logical_core);
                 }
@@ -672,7 +672,7 @@ void DPrintServer::Impl::attach_device(ChipId device_id) {
             rtoptions.get_feature_all_cores(tt::llrt::RunTimeDebugFeatureDprint, core_type) ==
             tt::llrt::RunTimeDebugClassWorker) {
             // For worker cores, take all cores and remove dispatch cores.
-            for (CoreDescriptor logical_core : all_cores) {
+            for (umd::CoreDescriptor logical_core : all_cores) {
                 if (dispatch_cores.find(logical_core) == dispatch_cores.end()) {
                     if (logical_core.type == core_type) {
                         print_cores_sanitized.push_back(logical_core);
@@ -876,7 +876,7 @@ void DPrintServer::Impl::clear_log_file() {
 }  // clear_log_file
 
 bool DPrintServer::Impl::peek_one_risc_non_blocking(
-    ChipId device_id, const CoreDescriptor& logical_core, int risc_id, bool new_data_this_iter) {
+    ChipId device_id, const umd::CoreDescriptor& logical_core, int risc_id, bool new_data_this_iter) {
     // If init magic isn't cleared for this risc, then dprint isn't enabled on it, don't read it.
     CoreCoord virtual_core =
         tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
@@ -1136,7 +1136,7 @@ void DPrintServer::Impl::poll_print_data() {
         }
 
         // Make a copy of the device->core map, so that it can be modified while polling.
-        std::map<ChipId, std::vector<CoreDescriptor>> device_to_core_range_copy;
+        std::map<ChipId, std::vector<umd::CoreDescriptor>> device_to_core_range_copy;
         device_to_core_range_lock_.lock();
         device_to_core_range_copy = device_to_core_range_;
 
@@ -1218,7 +1218,7 @@ string DPrintServer::Impl::get_formatted_output_data(const RiscKey& risc_key, co
             tt::llrt::RunTimeDebugFeatureDprint);
     if (prepend_device_core_risc) {
         const ChipId device_id = get<0>(risc_key);
-        const CoreDescriptor& core_desc = get<1>(risc_key);
+        const umd::CoreDescriptor& core_desc = get<1>(risc_key);
         const uint32_t risc_id = get<2>(risc_key);
 
         const string& device_id_str = to_string(device_id);
@@ -1242,7 +1242,7 @@ ostream* DPrintServer::Impl::get_output_stream(const RiscKey& risc_key) {
     if (rtoptions.get_feature_one_file_per_risc(tt::llrt::RunTimeDebugFeatureDprint)) {
         if (!risc_to_file_stream_[risc_key]) {
             const ChipId chip_id = get<0>(risc_key);
-            const CoreDescriptor& logical_core = get<1>(risc_key);
+            const umd::CoreDescriptor& logical_core = get<1>(risc_key);
             const int risc_id = get<2>(risc_key);
             string filename = rtoptions.get_root_dir() + logfile_path;
             filename += fmt::format(

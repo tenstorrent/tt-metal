@@ -16,7 +16,7 @@ namespace tt::tt_metal {
 
 // Helper function for comparing CoreDescriptors for using in sets.
 struct CoreDescriptorComparator {
-    bool operator()(const CoreDescriptor& x, const CoreDescriptor& y) const {
+    bool operator()(const umd::CoreDescriptor& x, const umd::CoreDescriptor& y) const {
         if (x.coord == y.coord) {
             return x.type < y.type;
         } else {
@@ -24,7 +24,7 @@ struct CoreDescriptorComparator {
         }
     }
 };
-using CoreDescriptorSet = std::set<CoreDescriptor, CoreDescriptorComparator>;
+using CoreDescriptorSet = std::set<umd::CoreDescriptor, CoreDescriptorComparator>;
 
 // Helper function to get CoreDescriptors for all debug-relevant cores on device.
 inline static CoreDescriptorSet GetAllCores(ChipId device_id) {
