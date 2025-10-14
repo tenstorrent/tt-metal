@@ -66,6 +66,14 @@ class Generator:
         self.trace_output_prefill = defaultdict(lambda: None)
         self.prev_page_table = None
 
+    @staticmethod
+    def _clamp(value, min_value, max_value):
+        if value < min_value:
+            return min_value
+        elif value > max_value:
+            return max_value
+        return None
+
     def prefill_forward_text(
         self,
         tokens: torch.Tensor,
@@ -367,13 +375,25 @@ class Generator:
         }
         if reset_inputs and sampling_params is not None:
             if isinstance(sampling_params.temperature, List):
+                # Until https://github.com/tenstorrent/tt-metal/issues/30289 is fixed,
+                # we must clamp top-p in range [0.0, 0.99] instead of [0.0, 1.0]
+                TOP_P_MIN = 0.0
+                TOP_P_MAX = 0.99
+
                 updated_temperature = []
-                for i, temp in enumerate(sampling_params.temperature):
+
+                for i, (top_p, temp) in enumerate(zip(sampling_params.top_p, sampling_params.temperature)):
+                    # Clamp top-p
+                    clamped_top_p = self._clamp(top_p, TOP_P_MIN, TOP_P_MAX)
+                    if clamped_top_p is not None:
+                        logger.info(f"Clamped Top-P value of {top_p} to {clamped_top_p}")
+                        sampling_params.top_p[i] = clamped_top_p
+
+                    # Process temperature
                     if temp == 0:
                         updated_temperature.append(1.0)
                         sampling_params.top_k[i] = 1
                     else:
-                        # need reciprocal for the sampling op
                         updated_temperature.append(1 / temp)
                 self.model.tt_sampling.reset_params(
                     k=sampling_params.top_k,
