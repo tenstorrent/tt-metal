@@ -28,7 +28,7 @@ void MAIN {
                 uint32_t tiles_to_read = start_tiles_to_read;
 
                 while (tiles_read < tiles_to_read) {
-                    uint32_t tiles_remaining_to_read = tiles_read - tiles_to_read;
+                    uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
                     uint32_t num_pages_to_read = std::min(tiles_remaining_to_read, tile_granularity);
 
                     cb_wait_front(input_cb_id, tile_granularity);
