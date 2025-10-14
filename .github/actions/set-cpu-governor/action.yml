@@ -10,7 +10,7 @@ runs:
   steps:
     - name: Check and install cpufrequtils
       run: |
-        set -euxo pipefail
+        set -euo pipefail
 
         # Check if cpufreq-set is already available
         if command -v cpufreq-set >/dev/null 2>&1; then
@@ -29,7 +29,7 @@ runs:
 
     - name: Set CPU governor to ${{ inputs.governor }}
       run: |
-        set -euxo pipefail
+        set -euo pipefail
 
         governor="${{ inputs.governor }}"
         echo "🔧 Setting CPU governor to: $governor for all cores"
