@@ -256,7 +256,6 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(
         remote_read,
         (uint32_t)(transpose_mcast ? 1 : 0),
         is_width_sharded,
-        aligned_stick_nbytes,
         skip_untilize,
         clamped_block_size_height,  // Block size in sticks
         ntiles_per_block,
@@ -300,7 +299,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(
     core_1_reader_ct_args[1] = cb_indices.gather_config1;
     core_1_reader_ct_args[3] = input_to_writer_cb_id1;
     core_1_reader_ct_args[5] = cb_indices.pad_cb_id1;
-    core_1_reader_ct_args[17] = 1;  // Block start offset
+    core_1_reader_ct_args[16] = 1;  // Block start offset
 
     auto reader_0_kernel_id = CreateKernel(
         program,

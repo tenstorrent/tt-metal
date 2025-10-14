@@ -397,25 +397,36 @@ def test_fold(act_shape, stride_h, stride_w, device):
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
-    "act_shape,stride_h,stride_w,padding",
+    "act_shape,stride_h,stride_w,padding, core_grid",
     [
-        ((8, 224, 14, 8), 16, 1, (0, 0)),
-        ((16, 224, 224, 8), 2, 2, (3, 3)),
-        ((1, 16, 16, 8), 2, 2, (0, 0)),
-        ((16, 42, 42, 64), 6, 6, (0, 0)),
-        ((1, 16, 16, 8), 2, 2, (2, 2)),
-        ((4, 64, 64, 24), 2, 2, (0, 0)),
-        ((4, 62, 62, 24), 2, 2, (1, 1)),
-        ((4, 14, 14, 256), 2, 2, (1, 1)),
-        ((1, 20, 20, 16), 4, 4, (2, 2)),
-        ((8, 18, 12, 8), 3, 2, (3, 2)),
-        ((2, 30, 30, 32), 5, 5, (0, 0)),
-        ((1, 24, 32, 16), 3, 4, (3, 0)),
-        ((1, 20, 20, 8), 2, 2, (1, 3, 0, 2)),
-        ((2, 16, 16, 16), 4, 4, (2, 2, 1, 3)),
+        ((8, 224, 14, 8), 16, 1, (0, 0), None),
+        ((1, 16, 16, 8), 2, 2, (0, 0), None),
+        ((16, 42, 42, 64), 6, 6, (0, 0), None),
+        ((1, 16, 16, 8), 2, 2, (2, 2), None),
+        ((4, 64, 64, 24), 2, 2, (0, 0), None),
+        ((4, 62, 62, 24), 2, 2, (1, 1), None),
+        ((4, 14, 14, 256), 2, 2, (1, 1), None),
+        ((1, 20, 20, 16), 4, 4, (2, 2), None),
+        ((8, 18, 12, 8), 3, 2, (3, 2), None),
+        ((2, 30, 30, 32), 5, 5, (0, 0), None),
+        ((1, 24, 32, 16), 3, 4, (3, 0), None),
+        ((1, 20, 20, 8), 2, 2, (1, 3, 0, 2), None),
+        ((2, 16, 16, 16), 4, 4, (2, 2, 1, 3), None),
+        ((1, 4, 4, 3), 1, 1, (0, 0), (2, 2)),
+        ((2, 4, 4, 5), 2, 2, (0, 0), (2, 2)),
+        ((4, 4, 4, 7), 2, 2, (0, 0), (2, 2)),
+        ((8, 4, 4, 11), 2, 2, (0, 0), (4, 2)),
+        ((16, 4, 4, 13), 2, 2, (0, 0), (8, 2)),
+        ((4, 4, 8, 17), 1, 2, (0, 0), (2, 2)),
+        ((8, 2, 8, 19), 2, 1, (0, 0), (2, 2)),
+        ((8, 8, 4, 23), 1, 2, (0, 0), (2, 2)),
+        ((16, 2, 8, 29), 2, 1, (0, 0), (4, 2)),
+        ((16, 2, 8, 31), 1, 4, (0, 0), (4, 2)),
+        ((4, 4, 4, 15), 2, 2, (0, 0), (2, 2)),
+        ((16, 4, 4, 63), 2, 2, (0, 0), (8, 2)),
     ],
 )
-def test_fold_sharded(device, act_shape, stride_h, stride_w, padding):
+def test_fold_sharded(device, act_shape, stride_h, stride_w, padding, core_grid):
     torch.manual_seed(0)
 
     N, H, W, C = act_shape
@@ -429,11 +440,16 @@ def test_fold_sharded(device, act_shape, stride_h, stride_w, padding):
         # Simple sharding: always try for maximum cores for best performance
         total_elements = N * H * W
 
-        for grid_x, grid_y in [(8, 8), (4, 4), (2, 2), (1, 1)]:
+        if core_grid is None:
+            for grid_x, grid_y in [(8, 8), (4, 4), (2, 2), (1, 1)]:
+                n_cores = grid_x * grid_y
+                if total_elements % n_cores == 0:
+                    break
+        else:
+            grid_x, grid_y = core_grid
             n_cores = grid_x * grid_y
-            if total_elements % n_cores == 0:
-                break
-
+            if total_elements % n_cores != 0:
+                pytest.skip(f"total elements {total_elements} not divisible by n_cores {n_cores}")
         shard_grid = ttnn.CoreRangeSet(
             {
                 ttnn.CoreRange(
