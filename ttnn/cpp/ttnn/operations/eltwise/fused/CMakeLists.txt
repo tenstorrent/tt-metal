@@ -18,7 +18,7 @@ target_sources(
         FILE_SET api
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
-        FILES device/materialize_device_operation.hpp materialize.hpp
+        FILES device/materialize_device_operation.hpp
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
@@ -26,7 +26,6 @@ target_sources(
     PRIVATE
         device/materialize_device_operation.cpp
         device/materialize_program_factory.cpp
-        materialize.cpp
 )
 
 target_include_directories(ttnn_op_eltwise_fused PRIVATE ${FixmeOpIncDirs})

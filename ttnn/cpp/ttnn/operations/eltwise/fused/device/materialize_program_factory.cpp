@@ -32,16 +32,14 @@ void set_or_update_runtime_arguments(
             ttsl::SmallVector<std::uint32_t> reader_runtime_args{num_tiles_per_core_group, group_start_id};
             ttsl::SmallVector<std::uint32_t> writer_runtime_args{
                 num_tiles_per_core_group, group_start_id, output_tensor.buffer()->address()};
-            ttsl::SmallVector<std::uint32_t> compute_runtime_args{num_tiles_per_core_group, group_start_id};
+            ttsl::SmallVector<std::uint32_t> compute_runtime_args{num_tiles_per_core_group};
 
             for (const auto& tensor : tensor_args.input_tensors) {
                 reader_runtime_args.push_back(tensor.buffer()->address());
             }
 
-            for (const auto& param : operation_attributes.params) {
-                constexpr auto to_uint32 = [](auto from) { return std::bit_cast<std::uint32_t>(from); };
-                compute_runtime_args.push_back(std::visit(to_uint32, param));
-            }
+            const std::span params = operation_attributes.params;
+            compute_runtime_args.insert(compute_runtime_args.end(), params.begin(), params.end());
 
             for (const auto& range : group.ranges()) {
                 for (const auto& core : range) {
@@ -52,7 +50,6 @@ void set_or_update_runtime_arguments(
                     constexpr auto group_start_index = 1;
                     reader_runtime_args[group_start_index] = group_start_id;
                     writer_runtime_args[group_start_index] = group_start_id;
-                    compute_runtime_args[group_start_index] = group_start_id;
                 }
             }
 
@@ -83,10 +80,11 @@ MaterializeDeviceOperation::ProgramFactory::cached_program_t MaterializeDeviceOp
     ttsl::SmallVector<metal::CBHandle> cbs;
 
     for (std::size_t index = 0; index < operation_attributes.circular_buffers; ++index) {
+        // TODO handle heterogenous data formats for circular buffers
         cbs.push_back(metal::CreateCircularBuffer(
             program,
             all_device_cores,
-            metal::CircularBufferConfig(2 * tt::constants::TILE_HW, {{tt::CBIndex(index), data_format}})
+            metal::CircularBufferConfig(2 * tile_size, {{tt::CBIndex(index), data_format}})
                 .set_page_size(index, tile_size)));
     }
 

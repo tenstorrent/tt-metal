@@ -20,7 +20,7 @@ struct MaterializeDeviceOperation {
         std::size_t circular_buffers;
         std::map<tt::CBIndex, std::size_t> inputs;
         tt::CBIndex output;
-        ttsl::SmallVector<lazy::Param> params;
+        ttsl::SmallVector<std::uint32_t> params;
         tt::tt_metal::MemoryConfig memory_config;
         DataType dtype;
         CoreRangeSet worker_grid;
@@ -44,13 +44,13 @@ struct MaterializeDeviceOperation {
         static cached_program_t create(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
-            tensor_return_value_t& outout);
+            tensor_return_value_t& output_tensor);
 
         static void override_runtime_arguments(
             cached_program_t& cached_program,
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
-            tensor_return_value_t& output);
+            tensor_return_value_t& output_tensor);
     };
 
     using program_factory_t = std::variant<ProgramFactory>;
@@ -61,6 +61,7 @@ struct MaterializeDeviceOperation {
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 
+    // TODO allow output tensor/dtype/memory_config
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(lazy::FunctionView expression);
 };
 

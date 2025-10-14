@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,6 +11,7 @@ void kernel_main() {
     constexpr auto num_tiles_per_cycle = get_compile_time_arg_val(0);
     constexpr auto accessors = get_compile_time_arg_val(1);
 
-    const auto view = views::AccessorView<accessors, 2, num_tiles_per_cycle>(2);
+    using View = views::AccessorView<accessors, 2, num_tiles_per_cycle>;
+    const auto view = View(2);
     view.read_tiles(n_tiles, start_id);
 }
