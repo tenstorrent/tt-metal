@@ -370,7 +370,7 @@ class ttnn_PETRHead:
         if torch.isnan(ref_check).any() or torch.isinf(ref_check).any():
             logger.error("reference_points contains NaN/Inf at initialization!")
             ref_check = torch.nan_to_num(ref_check, nan=0.5, posinf=1.0, neginf=0.0)
-            self.parameters.reference_points.weight = ttnn.from_torch(ref_check, dtype=ttnn.float32, device=device)
+            self.parameters.reference_points.weight = ttnn.from_torch(ref_check, dtype=ttnn.bfloat16, device=device)
         for index, i in enumerate(
             self.query_embedding
         ):  # replaced this by preprocessing pos2posemb3d(reference_points))
@@ -399,6 +399,7 @@ class ttnn_PETRHead:
         masks = ttnn.from_torch(masks, device=device)
 
         outs_dec, _ = self.transformer(device, x, masks, query_embeds, pos_embed)  # , self.reg_branches)
+
         outs_dec_torch = ttnn.to_torch(outs_dec).to(torch.float32)
         print(f"[DEBUG] Transformer output stats: mean={outs_dec_torch.mean():.6f}, std={outs_dec_torch.std():.6f}")
         if torch.isnan(outs_dec_torch).any():
@@ -408,24 +409,24 @@ class ttnn_PETRHead:
         if torch.isnan(outs_dec_torch).any() or torch.isinf(outs_dec_torch).any():
             logger.warning(f"NaN/Inf detected in outs_dec! Applying nan_to_num")
             outs_dec_torch = torch.nan_to_num(outs_dec_torch, nan=0.0, posinf=1e6, neginf=-1e6)
-            outs_dec = ttnn.from_torch(outs_dec_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+            outs_dec = ttnn.from_torch(outs_dec_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
             outs_dec = ttnn.to_device(outs_dec, device)
         # else:
         #     # Just ensure it's float32
-        #     outs_dec = ttnn.to_dtype(outs_dec, ttnn.float32)
-        outs_dec = ttnn.from_torch(outs_dec_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
+        #     outs_dec = ttnn.to_dtype(outs_dec, ttnn.bfloat16)
+        outs_dec = ttnn.from_torch(outs_dec_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
         outs_dec = ttnn.to_device(outs_dec, device)
         outputs_classes = []
         outputs_coords = []
         for lvl in range(outs_dec.shape[0]):
             reference = ttnn_inverse_sigmoid(ttnn.clone(reference_points))
-            # reference = ttnn.to_dtype(reference, ttnn.float32)
+            # reference = ttnn.to_dtype(reference, ttnn.bfloat16)
 
             ref_torch = ttnn.to_torch(reference)
             if torch.isnan(ref_torch).any() or torch.isinf(ref_torch).any():
                 logger.warning(f"Layer {lvl}: NaN/Inf in reference! Fixing...")
                 ref_torch = torch.nan_to_num(ref_torch, nan=0.0, posinf=10.0, neginf=-10.0)
-                reference = ttnn.from_torch(ref_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+                reference = ttnn.from_torch(ref_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
             assert reference.shape[-1] == 3
 
@@ -436,7 +437,7 @@ class ttnn_PETRHead:
             # for index, operation in enumerate(self.cls_branches[lvl]):
             #     if operation == ttnn.linear:
 
-            #         # outputs_class = ttnn.to_dtype(outputs_class, ttnn.float32) if outputs_class.dtype != ttnn.float32 else outputs_class
+            #         # outputs_class = ttnn.to_dtype(outputs_class, ttnn.bfloat16) if outputs_class.dtype != ttnn.bfloat16 else outputs_class
 
             #         outputs_class = operation(
             #             outputs_class,
@@ -475,7 +476,7 @@ class ttnn_PETRHead:
 
             outputs_class_f32 = ttnn.from_torch(
                 ttnn.to_torch(outs_dec[lvl : lvl + 1]).to(torch.float32),
-                dtype=ttnn.float32,
+                dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 device=device,
             )
@@ -510,8 +511,8 @@ class ttnn_PETRHead:
             print(f"  Weight[0]: {self.parameters['cls_branches'][lvl][0].weight.dtype}")
             print(f"  Bias[0]: {self.parameters['cls_branches'][lvl][0].bias.dtype}")
 
-            # tmp = ttnn.to_dtype(tmp, ttnn.float32)
-            # tmp = ttnn.from_torch(tmp, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
+            # tmp = ttnn.to_dtype(tmp, ttnn.bfloat16)
+            # tmp = ttnn.from_torch(tmp, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
             # tmp = ttnn.to_device(tmp, device)
             for index, operation in enumerate(self.reg_branches[lvl]):
                 if operation == ttnn.linear:
@@ -557,9 +558,9 @@ class ttnn_PETRHead:
                 logger.warning(f"Layer {lvl}: NaN/Inf in tmp after sigmoid! Fixing...")
                 tmp_torch = torch.nan_to_num(tmp_torch, nan=0.0, posinf=1.0, neginf=0.0)
 
-            tmp = ttnn.from_torch(tmp_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+            tmp = ttnn.from_torch(tmp_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
             tmp = ttnn.to_device(tmp, device)
-            reference = ttnn.from_torch(reference, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+            reference = ttnn.from_torch(reference, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
             reference = ttnn.to_device(reference, device)
 
             outputs_coord = tmp

@@ -18,7 +18,7 @@ class Conv:
         height_sharding=True,
         width_sharding=None,
         activation="",
-        dtype=ttnn.float32,
+        dtype=ttnn.bfloat16,
         groups=1,
         dilation=1,
         use_shallow_conv_variant=False,
@@ -296,7 +296,7 @@ class Conv_with_split:
         height_sharding=True,
         width_sharding=None,
         activation="",
-        dtype=ttnn.float32,
+        dtype=ttnn.bfloat16,
         groups=1,
         dilation=1,
         use_shallow_conv_variant=False,
@@ -345,7 +345,7 @@ class Conv_with_split:
         split_input_tensors = torch.split(input_tensor, self.split_input_channels, 3)
         split_weight_tensors = torch.split(weights_torch, self.split_input_channels, 1)
 
-        weights_dtype = ttnn.float32
+        weights_dtype = ttnn.bfloat16
 
         compute_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
@@ -359,7 +359,7 @@ class Conv_with_split:
             tt_weight_tensor = ttnn.from_torch(
                 split_weight_tensors[i],
                 weights_dtype
-                # split_weight_tensors[i], weights_dtype if weights_dtype != ttnn.bfloat8_b else ttnn.float32
+                # split_weight_tensors[i], weights_dtype if weights_dtype != ttnn.bfloat8_b else ttnn.bfloat16
             )
 
             # if i == 0:
@@ -369,7 +369,7 @@ class Conv_with_split:
             #     else:
             #         tt_bias_tensor = bias_torch
             tt_bias_tensor = None
-            tt_input_tensor = ttnn.from_torch(split_input_tensors[i], ttnn.float32)
+            tt_input_tensor = ttnn.from_torch(split_input_tensors[i], ttnn.bfloat16)
 
             [tt_output_tensor_on_device, [out_height, out_width]] = ttnn.conv2d(
                 input_tensor=tt_input_tensor,
@@ -407,7 +407,7 @@ class Conv_with_split:
         elif torch_output_tensor.shape[1] == 1 and torch_output_tensor.shape[2] != out_width:
             torch_output_tensor = torch_output_tensor.reshape(batch, out_height, out_width, self.output_channels)
 
-        output_tensor = ttnn.from_torch(torch_output_tensor, dtype=ttnn.float32, device=device)
+        output_tensor = ttnn.from_torch(torch_output_tensor, dtype=ttnn.bfloat16, device=device)
 
         if output_tensor.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
             output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)

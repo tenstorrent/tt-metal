@@ -367,11 +367,11 @@ class ttnn_osa_stage:
             logger.debug(f"After pooling (NHWC): {x_torch.shape}")
 
             # Convert back - keep in float32 if original was float32, otherwise bfloat16
-            if original_dtype == ttnn.float32:
-                x = ttnn.from_torch(x_torch, dtype=ttnn.float32, device=device)
-            else:
-                # Even if original was bfloat16, the float32 intermediate helps
-                x = ttnn.from_torch(x_torch.to(torch.float32), dtype=ttnn.bfloat16, device=device)
+            # if original_dtype == ttnn.float32:
+            #     x = ttnn.from_torch(x_torch, dtype=ttnn.float32, device=device)
+            # else:
+            # Even if original was bfloat16, the float32 intermediate helps
+            x = ttnn.from_torch(x_torch.to(torch.float32), dtype=ttnn.bfloat16, device=device)
 
             x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
 
