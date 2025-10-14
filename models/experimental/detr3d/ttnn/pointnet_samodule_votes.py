@@ -4,11 +4,8 @@
 
 import torch
 import ttnn
+from models.common.lightweightmodule import LightweightModule
 from models.experimental.detr3d.ttnn.shared_mlp import TtnnSharedMLP
-from models.experimental.detr3d.reference.model_utils import (
-    QueryAndGroup,
-    FurthestPointSampling,
-)
 from models.experimental.detr3d.reference.model_utils import (
     QueryAndGroup,
     GatherOperation,
@@ -17,18 +14,19 @@ from models.experimental.detr3d.reference.model_utils import (
 from typing import List
 
 
-class TtnnBallQuery:
+class TtnnBallQuery(LightweightModule):
     def __init__(
         self,
         device,
         radius,
         nsample,
     ):
+        super().__init__()
         self.device = device
         self.radius = radius
         self.nsample = nsample
 
-    def __call__(self, xyz, new_xyz):
+    def forward(self, xyz, new_xyz):
         # Get shapes
         b, m, _ = new_xyz.shape
         _, n, _ = xyz.shape
@@ -73,8 +71,11 @@ class TtnnBallQuery:
         return result
 
 
-class TtnnGatherOperation:
-    def __call__(self, points, idx):
+class TtnnGatherOperation(LightweightModule):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, points, idx):
         B, C, N = points.shape
         M = idx.shape[1]
         # idx = ttnn.to_layout(idx, ttnn.TILE_LAYOUT)
@@ -88,8 +89,11 @@ class TtnnGatherOperation:
         return output
 
 
-class TtnnGroupingOperation:
-    def __call__(self, points, idx):
+class TtnnGroupingOperation(LightweightModule):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, points, idx):
         B, C, N = points.shape
         _, npoint, nsample = idx.shape
 
@@ -106,7 +110,7 @@ class TtnnGroupingOperation:
         return output
 
 
-class TtnnQueryAndGroup:
+class TtnnQueryAndGroup(LightweightModule):
     def __init__(
         self,
         device,
@@ -118,6 +122,7 @@ class TtnnQueryAndGroup:
         sample_uniformly=False,
         ret_unique_cnt=False,
     ):
+        super().__init__()
         self.radius, self.nsample, self.use_xyz = radius, nsample, use_xyz
         self.ret_grouped_xyz = ret_grouped_xyz
         self.normalize_xyz = normalize_xyz
@@ -128,7 +133,7 @@ class TtnnQueryAndGroup:
         if self.ret_unique_cnt:
             assert self.sample_uniformly
 
-    def __call__(self, xyz, new_xyz, features):
+    def forward(self, xyz, new_xyz, features):
         idx = self.ball_query(xyz, new_xyz)
         xyz_trans = ttnn.permute(xyz, (1, 2))
 
@@ -154,8 +159,11 @@ class TtnnQueryAndGroup:
         return tuple(ret)
 
 
-class TtnnFurthestPointSampling:
-    def __call__(self, points: ttnn.Tensor, n_samples: int, device):
+class TtnnFurthestPointSampling(LightweightModule):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, points: ttnn.Tensor, n_samples: int, device):
         B, N, _ = points.shape
 
         # Initialize centroids tensor
@@ -217,7 +225,7 @@ class TtnnFurthestPointSampling:
         return centroids
 
 
-class TtnnPointnetSAModuleVotes:
+class TtnnPointnetSAModuleVotes(LightweightModule):
     def __init__(
         self,
         mlp: List[int],
@@ -233,6 +241,7 @@ class TtnnPointnetSAModuleVotes:
         parameters=None,
         device=None,
     ):
+        super().__init__()
         self.device = device
         self.parameters = parameters
         self.npoint = npoint
@@ -266,7 +275,7 @@ class TtnnPointnetSAModuleVotes:
         self.gather_operation = GatherOperation()
         self.furthest_point_sample = FurthestPointSampling()
 
-    def __call__(self, xyz, features=None, inds=None):
+    def forward(self, xyz, features=None, inds=None):
         if not isinstance(xyz, torch.Tensor):
             xyz = ttnn.to_torch(xyz)
         if not isinstance(features, torch.Tensor) and features is not None:

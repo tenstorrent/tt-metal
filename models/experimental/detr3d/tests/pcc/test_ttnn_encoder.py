@@ -7,7 +7,6 @@ import ttnn
 import pytest
 
 from loguru import logger
-from tests.ttnn.utils_for_testing import assert_with_pcc
 from ttnn.model_preprocessing import preprocess_model_parameters
 from models.common.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 from models.experimental.detr3d.ttnn.custom_preprocessing import create_custom_mesh_preprocessor
@@ -17,8 +16,8 @@ from models.experimental.detr3d.reference.model_3detr import (
     build_encoder,
 )
 from models.experimental.detr3d.ttnn.masked_transformer_encoder import (
-    TTTransformerEncoderLayer,
-    TtMaskedTransformerEncoder,
+    TtnnTransformerEncoderLayer,
+    TtnnMaskedTransformerEncoder,
     EncoderLayerArgs,
 )
 from models.experimental.detr3d.ttnn.pointnet_samodule_votes import TtnnPointnetSAModuleVotes
@@ -58,7 +57,7 @@ def test_transformer_encoder_layer_inference(
     weight_key_prefix,
     device,
 ):
-    """Test TTTransformerEncoderLayer against PyTorch reference implementation"""
+    """Test TtnnTransformerEncoderLayer against PyTorch reference implementation"""
 
     torch.manual_seed(0)
     mesh_device = device
@@ -101,7 +100,7 @@ def test_transformer_encoder_layer_inference(
     )
 
     # Initialize TTNN model with preprocessed parameters
-    tt_model = TTTransformerEncoderLayer(
+    tt_model = TtnnTransformerEncoderLayer(
         mesh_device,
         d_model,
         nhead,
@@ -148,34 +147,27 @@ def test_transformer_encoder_layer_inference(
 @torch.no_grad()
 @skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
-    "d_model, nhead, dim_feedforward, dropout, dropout_attn, activation, normalize_before, norm_name, use_ffn, ffn_use_bias",
+    "d_model, nhead, dim_feedforward, normalize_before, use_ffn",
     [
         (
             256,  # d_model
             4,  # nhead
             128,  # dim_feedforward
-            0.0,  # dropout
-            None,  # dropout_attn
-            "relu",  # activation
             True,  # normalize_before
-            "ln",  # norm_name
             True,  # use_ffn
-            True,  # ffn_use_bias
         )
     ],
 )
 @pytest.mark.parametrize(
-    "mlp, npoint, radius, nsample, bn, use_xyz, pooling, sigma, normalize_xyz, sample_uniformly, ret_unique_cnt",
+    "mlp, npoint, radius, nsample, use_xyz, pooling, normalize_xyz, sample_uniformly, ret_unique_cnt",
     [
         (
             [256, 256, 256, 256],  # mlp
             1024,  # npoint
             0.4,  # radius
             32,  # nsample
-            True,  # bn
             True,  # use_xyz
             "max",  # pooling
-            None,  # sigma
             True,  # normalize_xyz
             False,  # sample_uniformly
             False,  # ret_unique_cnt
@@ -183,13 +175,11 @@ def test_transformer_encoder_layer_inference(
     ],
 )
 @pytest.mark.parametrize(
-    "num_layers,masking_radius,norm, weight_init_name,src_shape,mask,pos,xyz_shape,transpose_swap",
+    "num_layers, masking_radius, src_shape, mask, pos, xyz_shape, transpose_swap",
     [
         (
             3,
             [0.16000000000000003, 0.6400000000000001, 1.44],
-            None,
-            "xavier_uniform",
             (2048, 1, 256),
             None,
             None,
@@ -202,8 +192,6 @@ def test_transformer_encoder_layer_inference(
 def test_masked_transformer_encoder_inference(
     num_layers,
     masking_radius,
-    norm,
-    weight_init_name,
     src_shape,
     mask,
     pos,
@@ -212,21 +200,14 @@ def test_masked_transformer_encoder_inference(
     d_model,
     nhead,
     dim_feedforward,
-    dropout,
-    dropout_attn,
-    activation,
     normalize_before,
-    norm_name,
     use_ffn,
-    ffn_use_bias,
     mlp,
     npoint,
     radius,
     nsample,
-    bn,
     use_xyz,
     pooling,
-    sigma,
     normalize_xyz,
     sample_uniformly,
     ret_unique_cnt,
@@ -247,7 +228,7 @@ def test_masked_transformer_encoder_inference(
         device=device,
     )
 
-    tt_encoder_layer = TTTransformerEncoderLayer
+    tt_encoder_layer = TtnnTransformerEncoderLayer
     tt_interim_downsampling = TtnnPointnetSAModuleVotes(
         mlp=mlp[:],
         npoint=npoint,
@@ -262,7 +243,7 @@ def test_masked_transformer_encoder_inference(
         parameters=ref_module_parameters.interim_downsampling.mlp_module,
         device=device,
     )
-    tt_module = TtMaskedTransformerEncoder(
+    tt_module = TtnnMaskedTransformerEncoder(
         tt_encoder_layer,
         num_layers,
         masking_radius,
@@ -288,8 +269,21 @@ def test_masked_transformer_encoder_inference(
     )
 
     tt_output = tt_module(tt_src, mask, pos, xyz, transpose_swap)
-    for tt_out, torch_out in zip(tt_output, ref_out):
+
+    all_passing = True
+    for idx, (tt_out, torch_out) in enumerate(zip(tt_output, ref_out)):
         if not isinstance(tt_out, torch.Tensor):
             tt_out = ttnn.to_torch(tt_out)
             tt_out = torch.reshape(tt_out, torch_out.shape)
-        assert_with_pcc(torch_out, tt_out, 0.99)
+
+        passing, pcc_message = comp_pcc(torch_out, tt_out, pcc=0.99)
+        logger.info(f"Output {idx} PCC: {pcc_message}")
+        logger.info(comp_allclose(torch_out, tt_out))
+
+        if passing:
+            logger.info(f"Output {idx} Test Passed!")
+        else:
+            logger.warning(f"Output {idx} Test Failed!")
+            all_passing = False
+
+    assert all_passing, "One or more outputs failed PCC check with threshold 0.99"

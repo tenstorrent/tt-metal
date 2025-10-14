@@ -4,16 +4,18 @@
 
 import ttnn
 import torch
+from models.common.lightweightmodule import LightweightModule
 from models.experimental.detr3d.ttnn.common import TtnnConv1D
 
 
-class TttnnGenericMLP:
+class TtnnGenericMLP(LightweightModule):
     def __init__(
         self,
         module=None,
         parameters=None,
         device=None,
     ):
+        super().__init__()
         self.device = device
         self.parameters = parameters
         self.module = module
@@ -26,7 +28,7 @@ class TttnnGenericMLP:
                 relu_layer = ttnn.relu
                 self.tt_layers.append(relu_layer)
 
-    def __call__(self, x):
+    def forward(self, x):
         for layer in self.tt_layers:
             x = layer(x)
         return x

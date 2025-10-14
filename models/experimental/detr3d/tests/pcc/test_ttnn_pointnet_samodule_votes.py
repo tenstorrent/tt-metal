@@ -5,9 +5,11 @@
 import torch
 import pytest
 import ttnn
+
+from loguru import logger
+from models.common.utility_functions import comp_pcc, comp_allclose
 from models.experimental.detr3d.reference.model_3detr import PointnetSAModuleVotes
 from models.experimental.detr3d.ttnn.pointnet_samodule_votes import TtnnPointnetSAModuleVotes
-from tests.ttnn.utils_for_testing import comp_pcc
 from ttnn.model_preprocessing import preprocess_model_parameters
 from models.experimental.detr3d.ttnn.custom_preprocessing import create_custom_mesh_preprocessor
 from models.experimental.detr3d.common import load_torch_model_state
@@ -146,10 +148,22 @@ def test_pointnet_samodule_votes(
     tt_output = ttnn_model(xyz=ttnn_xyz, features=ttnn_features, inds=ttnn_inds)
 
     ttnn_torch_out = []
-    for tt_out, torch_out in zip(tt_output, ref_out):
+    all_passing = True
+    for idx, (tt_out, torch_out) in enumerate(zip(tt_output, ref_out)):
         if not isinstance(tt_out, torch.Tensor):
             tt_out = ttnn.to_torch(tt_out)
             tt_out = torch.reshape(tt_out, torch_out.shape)
         ttnn_torch_out.append(tt_out)
-        pcc_pass, pcc_message = comp_pcc(torch_out, tt_out, 0.99)
-        print(f"{pcc_message=}")
+
+        passing, pcc_message = comp_pcc(torch_out, tt_out, 0.99)
+        logger.info(f"Output {idx} PCC: {pcc_message}")
+        logger.info(comp_allclose(torch_out, tt_out))
+
+        if passing:
+            logger.info(f"Output {idx} Test Passed!")
+        else:
+            logger.warning(f"Output {idx} Test Failed!")
+            all_passing = False
+
+    logger.info(f"Weight prefix: {weight_key_prefix}, npoint: {npoint}, radius: {radius}")
+    assert all_passing, "One or more outputs failed PCC check with threshold 0.99"

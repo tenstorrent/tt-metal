@@ -5,10 +5,12 @@
 import ttnn
 import torch
 import pytest
-from models.experimental.detr3d.ttnn.generic_mlp import TttnnGenericMLP
+
+from loguru import logger
+from models.common.utility_functions import comp_pcc, comp_allclose
+from models.experimental.detr3d.ttnn.generic_mlp import TtnnGenericMLP
 from models.experimental.detr3d.reference.model_3detr import GenericMLP
 from ttnn.model_preprocessing import preprocess_model_parameters
-from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.experimental.detr3d.ttnn.custom_preprocessing import create_custom_mesh_preprocessor
 from models.experimental.detr3d.common import load_torch_model_state
 
@@ -158,7 +160,7 @@ def test_ttnn_generic_mlp(
         custom_preprocessor=create_custom_mesh_preprocessor(None),
         device=device,
     )
-    ttnn_model = TttnnGenericMLP(torch_model, parameters, device)
+    ttnn_model = TtnnGenericMLP(torch_model, parameters, device)
     ttnn_x = ttnn.from_torch(
         x.permute(0, 2, 1).unsqueeze(dim=0),
         dtype=ttnn.bfloat16,
@@ -171,4 +173,16 @@ def test_ttnn_generic_mlp(
     ttnn_out = ttnn_out.squeeze(dim=0)
     ttnn_out = torch.reshape(ttnn_out, (x_shape[-3], ttnn_out.shape[-2] // x_shape[-3], -1))
     ttnn_out = ttnn_out.permute(0, 2, 1)
-    assert_with_pcc(torch_out, ttnn_out, 0.999)
+
+    passing, pcc_message = comp_pcc(torch_out, ttnn_out, 0.999)
+    logger.info(f"Output PCC: {pcc_message}")
+    logger.info(comp_allclose(torch_out, ttnn_out))
+    logger.info(f"Input shape: {x_shape}, Weight prefix: {weight_key_prefix}")
+    logger.info(f"MLP config - Input: {input_dim}, Hidden: {hidden_dims}, Output: {output_dim}")
+
+    if passing:
+        logger.info("GenericMLP Test Passed!")
+    else:
+        logger.warning("GenericMLP Test Failed!")
+
+    assert passing, f"PCC value is lower than 0.999. Check implementation! {pcc_message}"

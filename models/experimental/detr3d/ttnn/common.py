@@ -3,9 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
+from models.common.lightweightmodule import LightweightModule
 
 
-class TtnnConv1D:
+class TtnnConv1D(LightweightModule):
     def __init__(
         self,
         conv,
@@ -20,6 +21,7 @@ class TtnnConv1D:
         deallocate_activation=False,
         math_fidelity=ttnn.MathFidelity.LoFi,
     ):
+        super().__init__()
         self.conv = conv
         self.device = device
         self.in_channels = conv.in_channels
@@ -50,7 +52,7 @@ class TtnnConv1D:
         weight = ttnn.from_device(parameters.weight)
         self.weight = weight
 
-    def __call__(self, x):
+    def forward(self, x):
         input_length = x.shape[1]  # self.conv.input_length
         batch_size = 1  # self.conv.batch_size
         [tt_output_tensor_on_device, out_length, [weights_device, bias_device]] = ttnn.conv1d(
@@ -81,7 +83,7 @@ class TtnnConv1D:
         return tt_output_tensor_on_device
 
 
-class TtnnConv2D:
+class TtnnConv2D(LightweightModule):
     def __init__(
         self,
         conv,
@@ -96,6 +98,7 @@ class TtnnConv2D:
         is_dealloc_act=False,
         return_dims=False,
     ):
+        super().__init__()
         self.conv = conv
         self.device = device
         self.in_channels = conv.in_channels
@@ -140,7 +143,7 @@ class TtnnConv2D:
 
         self.weight = ttnn.from_device(conv_pth.weight)
 
-    def __call__(self, x, shape=None):
+    def forward(self, x, shape=None):
         if shape is not None:
             batch_size = shape[0]
             input_height = shape[1]

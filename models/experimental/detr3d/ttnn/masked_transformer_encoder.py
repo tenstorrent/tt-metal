@@ -6,7 +6,7 @@ import ttnn
 import torch
 from typing import Optional
 from models.common.lightweightmodule import LightweightModule
-from models.experimental.detr3d.ttnn.multihead_attention import TTNNMultiheadAttention
+from models.experimental.detr3d.ttnn.multihead_attention import TtnnMultiheadAttention
 from dataclasses import dataclass, asdict
 
 
@@ -19,7 +19,7 @@ class EncoderLayerArgs:
     use_ffn: bool = True
 
 
-class TTTransformerEncoderLayer(LightweightModule):
+class TtnnTransformerEncoderLayer(LightweightModule):
     def __init__(
         self,
         device,
@@ -38,7 +38,9 @@ class TTTransformerEncoderLayer(LightweightModule):
         self.normalize_before = normalize_before
         self.use_ffn = use_ffn
 
-        self.self_attn = TTNNMultiheadAttention(d_model, nhead, device)
+        # Initialize self-attention with parameters
+        attn_params = parameters.get("self_attn") if parameters is not None else None
+        self.self_attn = TtnnMultiheadAttention(d_model, nhead, device, parameters=attn_params)
 
         # Load preprocessed parameters
         if parameters is not None:
@@ -53,17 +55,6 @@ class TTTransformerEncoderLayer(LightweightModule):
 
     def load_parameters(self, parameters):
         """Load preprocessed parameters from the preprocessor"""
-        # Self-attention weights
-        if "self_attn" in parameters:
-            self.self_attn.q_weight = parameters["self_attn"].get("q_weight")
-            self.self_attn.k_weight = parameters["self_attn"].get("k_weight")
-            self.self_attn.v_weight = parameters["self_attn"].get("v_weight")
-            self.self_attn.q_bias = parameters["self_attn"].get("q_bias")
-            self.self_attn.k_bias = parameters["self_attn"].get("k_bias")
-            self.self_attn.v_bias = parameters["self_attn"].get("v_bias")
-            self.self_attn.out_weight = parameters["self_attn"].get("out_weight")
-            self.self_attn.out_bias = parameters["self_attn"].get("out_bias")
-
         # Feedforward weights
         if "linear1" in parameters:
             self.ff_weights1 = parameters["linear1"]["weight"]
@@ -148,7 +139,7 @@ class TTTransformerEncoderLayer(LightweightModule):
         return src
 
 
-class TtMaskedTransformerEncoder(LightweightModule):
+class TtnnMaskedTransformerEncoder(LightweightModule):
     def __init__(
         self,
         encoder_layer,
