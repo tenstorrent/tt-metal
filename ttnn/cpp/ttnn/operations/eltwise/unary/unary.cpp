@@ -187,17 +187,21 @@ Tensor ExecuteUnaryWithTwoFloatParameter<unary_op_type>::invoke(
 }
 
 template <UnaryOpType unary_op_type>
-template <typename T>
 Tensor ExecuteUnaryWithVariantFloatIntParameter<unary_op_type>::invoke(
     const Tensor& input_tensor,
-    const T parameter,
+    std::variant<uint32_t, int32_t, float> parameter,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
-    return detail::unary_impl(
-        input_tensor,
-        {EltwiseUnaryWithParam{unary_op_type, static_cast<T>(parameter)}},
-        memory_config,
-        optional_output_tensor);
+    return std::visit(
+        [&](auto param) {
+            using ParamT = std::decay_t<decltype(param)>;
+            return detail::unary_impl(
+                input_tensor,
+                {EltwiseUnaryWithParam{unary_op_type, static_cast<ParamT>(param)}},
+                memory_config,
+                optional_output_tensor);
+        },
+        parameter);
 }
 
 template struct ExecuteUnaryWithFloatParameter<UnaryOpType::ELU>;
@@ -208,35 +212,22 @@ template struct ExecuteUnaryWithFloatParameter<UnaryOpType::RELU_MAX>;
 template struct ExecuteUnaryWithFloatParameter<UnaryOpType::RELU_MIN>;
 template struct ExecuteUnaryWithFloatParameter<UnaryOpType::REMAINDER>;
 template struct ExecuteUnaryWithFloatParameter<UnaryOpType::FMOD>;
-template struct ExecuteUnaryWithFloatParameter<UnaryOpType::UNARY_GT>;
-template struct ExecuteUnaryWithFloatParameter<UnaryOpType::UNARY_LT>;
-template struct ExecuteUnaryWithFloatParameter<UnaryOpType::UNARY_NE>;
-template struct ExecuteUnaryWithFloatParameter<UnaryOpType::UNARY_EQ>;
-template struct ExecuteUnaryWithFloatParameter<UnaryOpType::UNARY_GE>;
-template struct ExecuteUnaryWithFloatParameter<UnaryOpType::UNARY_LE>;
 template struct ExecuteUnaryWithFloatParameter<UnaryOpType::CELU>;
 template struct ExecuteUnaryWithFloatParameter<UnaryOpType::RPOW>;
 
 // threshold(a,t,v) = (a <= t ? v : a)
 template struct ExecuteUnaryWithTwoFloatParameter<UnaryOpType::THRESHOLD>;
 
-template Tensor ExecuteUnaryWithVariantFloatIntParameter<UnaryOpType::MINIMUM>::invoke<float>(
-    const Tensor&, const float, const std::optional<MemoryConfig>&, const std::optional<Tensor>&);
+template struct ExecuteUnaryWithVariantFloatIntParameter<UnaryOpType::MINIMUM>;
+template struct ExecuteUnaryWithVariantFloatIntParameter<UnaryOpType::MAXIMUM>;
+template struct ExecuteUnaryWithVariantFloatIntParameter<UnaryOpType::FILL>;
 
-template Tensor ExecuteUnaryWithVariantFloatIntParameter<UnaryOpType::MINIMUM>::invoke<int32_t>(
-    const Tensor&, const int32_t, const std::optional<MemoryConfig>&, const std::optional<Tensor>&);
-
-template Tensor ExecuteUnaryWithVariantFloatIntParameter<UnaryOpType::MAXIMUM>::invoke<float>(
-    const Tensor&, const float, const std::optional<MemoryConfig>&, const std::optional<Tensor>&);
-
-template Tensor ExecuteUnaryWithVariantFloatIntParameter<UnaryOpType::MAXIMUM>::invoke<int32_t>(
-    const Tensor&, const int32_t, const std::optional<MemoryConfig>&, const std::optional<Tensor>&);
-
-template Tensor ExecuteUnaryWithVariantFloatIntParameter<UnaryOpType::FILL>::invoke<float>(
-    const Tensor&, const float, const std::optional<MemoryConfig>&, const std::optional<Tensor>&);
-
-template Tensor ExecuteUnaryWithVariantFloatIntParameter<UnaryOpType::FILL>::invoke<int32_t>(
-    const Tensor&, const int32_t, const std::optional<MemoryConfig>&, const std::optional<Tensor>&);
+template struct ExecuteUnaryWithVariantFloatIntParameter<UnaryOpType::UNARY_EQ>;
+template struct ExecuteUnaryWithVariantFloatIntParameter<UnaryOpType::UNARY_GE>;
+template struct ExecuteUnaryWithVariantFloatIntParameter<UnaryOpType::UNARY_LE>;
+template struct ExecuteUnaryWithVariantFloatIntParameter<UnaryOpType::UNARY_LT>;
+template struct ExecuteUnaryWithVariantFloatIntParameter<UnaryOpType::UNARY_NE>;
+template struct ExecuteUnaryWithVariantFloatIntParameter<UnaryOpType::UNARY_GT>;
 
 Tensor Sigmoid_accurate::invoke(
     const Tensor& input,

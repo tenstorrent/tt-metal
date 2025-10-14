@@ -378,7 +378,7 @@ void bind_binary_unary_max_operation(
         ttnn::pybind_overload_t{
             [](const binary_operation_t& self,
                const ttnn::Tensor& input_tensor_a,
-               const std::variant<int32_t, float> scalar,
+               const std::variant<uint32_t, int32_t, float> scalar,
                const std::optional<const DataType>& dtype,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& output_tensor,
