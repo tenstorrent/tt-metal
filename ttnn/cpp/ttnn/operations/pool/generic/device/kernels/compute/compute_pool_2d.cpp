@@ -124,6 +124,8 @@ void MAIN {
     constexpr bool is_output_tiled = get_compile_time_arg_val(20);  // 1 = TILED, 0 = ROW_MAJOR
     constexpr bool is_output_block_format = (bool)get_compile_time_arg_val(21);
 
+    constexpr bool use_split_reader = split_reader && !return_indices;
+
     constexpr uint32_t topk_output_tiles = 1;
     constexpr uint32_t topk_cb_tile_idx = 0;
     constexpr uint32_t data_dst_idx = 0;
@@ -182,7 +184,7 @@ void MAIN {
 
     uint32_t tilize_stick_counter = 0;
     for (uint32_t n = 0; n < nsticks_per_core_by_nblocks; ++n) {
-        const bool reader0 = !(split_reader && (n & 0x1));
+        const bool reader0 = !(use_split_reader && (n & 0x1));
         const uint32_t curr_scalar_cb_id = (!reader0 && !one_scalar_per_core) ? in_scalar_cb_id_1 : in_scalar_cb_id_0;
         const uint32_t curr_in_cb_id = !reader0 ? in_cb_id_1 : in_cb_id_0;
         const uint32_t curr_in_idx_cb_id = !reader0 ? in_idx_cb_id_1 : in_idx_cb_id_0;

@@ -35,6 +35,7 @@ void validate_pool2d(
     TT_FATAL(input.memory_config().is_sharded(), "Input needs to be sharded");
 
     if (return_indices) {
+        TT_FATAL(pool_type == Pool2DType::MAX_POOL2D, "Return_indices is only supported for MAX pool type");
         // check the index tensor
         TT_FATAL(input_tensors.size() == 2, "Indices tensor must be provided if return_indices is true");
         const auto& index = input_tensors[1];

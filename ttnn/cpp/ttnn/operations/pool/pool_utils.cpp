@@ -117,7 +117,8 @@ FactoryParameters get_factory_parameters(
     bool return_indices,
     const Layout& output_layout) {
     uint32_t multi_buffering_factor = 2;
-    bool split_reader = false;
+    bool split_reader = true;
+    TT_FATAL((split_reader && return_indices) || !return_indices, "split_reader must be true for MPWI");
 
     auto dtype = input_dtype == DataType::BFLOAT8_B ? DataType::BFLOAT16 : input_dtype;
     tt::DataFormat data_format = datatype_to_dataformat_converter(dtype);

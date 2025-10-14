@@ -105,7 +105,8 @@ template <
     bool return_indices,
     bool zero_pages,
     uint32_t out_cb_id,
-    uint32_t out_idx_cb_id>
+    uint32_t out_idx_cb_id,
+    uint32_t reader_id>
 ALWI void read_window_with_top_left_index(
     uint32_t ind, uint32_t in_l1_read_base_addr, uint32_t in_idx_l1_read_base_addr) {
     constexpr uint32_t BYTES_PER_ELEM = 2;
@@ -122,128 +123,133 @@ ALWI void read_window_with_top_left_index(
         max_write_inc = TILE_WIDTH * BYTES_PER_ELEM;
     }
     for (uint32_t c_i = 0; c_i < in_nblocks_c; c_i++) {
-        uint32_t read_bytes = in_nbytes_c;
-        if constexpr (wide_reduction) {
-            read_bytes =
-                (c_i == in_nblocks_c - 1) ? in_nbytes_c - c_i * MAX_BYTES_PER_REDUCTION : MAX_BYTES_PER_REDUCTION;
-        }
-
-        uint32_t in_l1_write_addr = get_write_ptr(in_cb_id);
-        cb_reserve_back(in_cb_id, 1);
-        uint32_t in_idx_l1_write_addr = 0;
-        if constexpr (return_indices) {
-            in_idx_l1_write_addr = get_write_ptr(in_idx_cb_id);
-            cb_reserve_back(in_idx_cb_id, 1);
-        }
-        uint32_t processed_sticks = 0;
-        // page zeroing is only necessary for tiled block output format so that scale is not affected by junk/padding
-        // data
-        if constexpr (zero_pages) {
-            if (c_i == in_nblocks_c - 1 && last_tile_is_partial) {
-                zero_out_page<in_cb_id>();
+        if (reader_id == 0 || !return_indices) {
+            uint32_t read_bytes = in_nbytes_c;
+            if constexpr (wide_reduction) {
+                read_bytes =
+                    (c_i == in_nblocks_c - 1) ? in_nbytes_c - c_i * MAX_BYTES_PER_REDUCTION : MAX_BYTES_PER_REDUCTION;
             }
-        }
-        for (uint32_t h = 0; h < window_h; ++h) {
-            auto process_h = [&](uint32_t w_offset, uint32_t w_multiple) __attribute__((always_inline)) {
-                const uint32_t stick_offset = ind + w_offset + h * dilation_h * in_w_padded;
-                const uint32_t read_offset =
-                    in_l1_read_base_addr + (stick_offset * shard_width_bytes + c_i * MAX_BYTES_PER_REDUCTION);
-                noc_async_read_one_packet(get_noc_addr(read_offset), in_l1_write_addr, read_bytes * w_multiple);
-                // if compute is using tilize_reconfig we will only untilize the needed number of tiles rather
-                // than the entire MAX_TILES_PER_REDUCTION, thus we use a different offset for the write address
-                if constexpr (tilize_reconfig) {
-                    in_l1_write_addr += read_bytes * w_multiple;
-                } else {
-                    in_l1_write_addr += max_write_inc * w_multiple;
+
+            uint32_t in_l1_write_addr = get_write_ptr(in_cb_id);
+            cb_reserve_back(in_cb_id, 1);
+            uint32_t in_idx_l1_write_addr = 0;
+            if constexpr (return_indices) {
+                in_idx_l1_write_addr = get_write_ptr(in_idx_cb_id);
+                cb_reserve_back(in_idx_cb_id, 1);
+            }
+            uint32_t processed_sticks = 0;
+            // page zeroing is only necessary for tiled block output format so that scale is not affected by
+            // junk/padding data
+            if constexpr (zero_pages) {
+                if (c_i == in_nblocks_c - 1 && last_tile_is_partial) {
+                    zero_out_page<in_cb_id>();
                 }
-                if constexpr (return_indices) {
-                    const uint32_t idx_read_offset =
-                        in_idx_l1_read_base_addr + (stick_offset * shard_width_bytes + c_i * MAX_BYTES_PER_REDUCTION);
-                    noc_async_read_one_packet(
-                        get_noc_addr(idx_read_offset), in_idx_l1_write_addr, read_bytes * w_multiple);
+            }
+            for (uint32_t h = 0; h < window_h; ++h) {
+                auto process_h = [&](uint32_t w_offset, uint32_t w_multiple) __attribute__((always_inline)) {
+                    const uint32_t stick_offset = ind + w_offset + h * dilation_h * in_w_padded;
+                    const uint32_t read_offset =
+                        in_l1_read_base_addr + (stick_offset * shard_width_bytes + c_i * MAX_BYTES_PER_REDUCTION);
+                    noc_async_read_one_packet(get_noc_addr(read_offset), in_l1_write_addr, read_bytes * w_multiple);
+                    // if compute is using tilize_reconfig we will only untilize the needed number of tiles rather
+                    // than the entire MAX_TILES_PER_REDUCTION, thus we use a different offset for the write address
                     if constexpr (tilize_reconfig) {
-                        in_idx_l1_write_addr += read_bytes * w_multiple;
+                        in_l1_write_addr += read_bytes * w_multiple;
                     } else {
-                        in_idx_l1_write_addr += max_write_inc * w_multiple;
+                        in_l1_write_addr += max_write_inc * w_multiple;
                     }
-                }
-                processed_sticks += w_multiple;
-                if constexpr (is_large_kernel) {
-                    if ((processed_sticks % max_sticks_for_reduction) == 0 ||
-                        processed_sticks == total_elems_to_reduce) {
-                        noc_async_read_barrier();
-                        cb_push_back(in_cb_id, 1);
-                        cb_reserve_back(in_cb_id, 1);
-                        in_l1_write_addr = get_write_ptr(in_cb_id);
-                        // If next is last chunk, fill whole buffer with the init_value. note for max pool we do
-                        // not need to fill the CB for the partial chunk since as long as we have N>1 chunks we
-                        // are guaranteed that the junk data remaining from chunk N-1 will fill the entire CB and
-                        // cannot contain values greater than the max value, and if we have N=1 chunks we already
-                        // initialized the entire CB with the init value, but for avg pool we need to fill the
-                        // entire CB with the init value since the junk data will contribute to the average.
-                        if constexpr (is_avg_pool) {
-                            // clear the in CB
-                            if ((total_elems_to_reduce - processed_sticks) < max_sticks_for_reduction &&
-                                processed_sticks != total_elems_to_reduce) {
-                                clear_out_tiles<clear_value_cb_id, in_cb_ntiles>(
-                                    get_noc_addr(in_l1_write_addr), get_noc_addr(get_read_ptr(clear_value_cb_id)));
+                    if constexpr (return_indices) {
+                        const uint32_t idx_read_offset = in_idx_l1_read_base_addr + (stick_offset * shard_width_bytes +
+                                                                                     c_i * MAX_BYTES_PER_REDUCTION);
+                        noc_async_read_one_packet(
+                            get_noc_addr(idx_read_offset), in_idx_l1_write_addr, read_bytes * w_multiple);
+                        if constexpr (tilize_reconfig) {
+                            in_idx_l1_write_addr += read_bytes * w_multiple;
+                        } else {
+                            in_idx_l1_write_addr += max_write_inc * w_multiple;
+                        }
+                    }
+                    processed_sticks += w_multiple;
+                    if constexpr (is_large_kernel) {
+                        if ((processed_sticks % max_sticks_for_reduction) == 0 ||
+                            processed_sticks == total_elems_to_reduce) {
+                            noc_async_read_barrier();
+                            cb_push_back(in_cb_id, 1);
+                            cb_reserve_back(in_cb_id, 1);
+                            in_l1_write_addr = get_write_ptr(in_cb_id);
+                            // If next is last chunk, fill whole buffer with the init_value. note for max pool we do
+                            // not need to fill the CB for the partial chunk since as long as we have N>1 chunks we
+                            // are guaranteed that the junk data remaining from chunk N-1 will fill the entire CB and
+                            // cannot contain values greater than the max value, and if we have N=1 chunks we already
+                            // initialized the entire CB with the init value, but for avg pool we need to fill the
+                            // entire CB with the init value since the junk data will contribute to the average.
+                            if constexpr (is_avg_pool) {
+                                // clear the in CB
+                                if ((total_elems_to_reduce - processed_sticks) < max_sticks_for_reduction &&
+                                    processed_sticks != total_elems_to_reduce) {
+                                    clear_out_tiles<clear_value_cb_id, in_cb_ntiles>(
+                                        get_noc_addr(in_l1_write_addr), get_noc_addr(get_read_ptr(clear_value_cb_id)));
+                                }
                             }
                         }
                     }
+                };
+
+                // Case where in_nbytes_leftover and in_nbytes_c is different is when we are dealing with
+                // tesnors that have last tile as partial. Cb page size is multiple of tile but when the last
+                // tile is partial we have to read the smaller stick width. Therefore we need to write out the next
+                // stick right bellow the previous one and this is when increment of the write pointer and the read
+                // stick size is not compliant.
+                bool use_contiguous_read = !wide_reduction && in_nbytes_leftover == in_nbytes_c &&
+                                           dilation_w == 1;  // read entire row as one chunk (only if no width dilation)
+                if constexpr (is_large_kernel) {
+                    bool whole_row_remaining =
+                        window_w <= max_sticks_for_reduction - (processed_sticks % max_sticks_for_reduction);
+                    use_contiguous_read &= whole_row_remaining;
                 }
-            };
 
-            // Case where in_nbytes_leftover and in_nbytes_c is different is when we are dealing with
-            // tesnors that have last tile as partial. Cb page size is multiple of tile but when the last
-            // tile is partial we have to read the smaller stick width. Therefore we need to write out the next stick
-            // right bellow the previous one and this is when increment of the write pointer and the read stick size is
-            // not compliant.
-            bool use_contiguous_read = !wide_reduction && in_nbytes_leftover == in_nbytes_c &&
-                                       dilation_w == 1;  // read entire row as one chunk (only if no width dilation)
-            if constexpr (is_large_kernel) {
-                bool whole_row_remaining =
-                    window_w <= max_sticks_for_reduction - (processed_sticks % max_sticks_for_reduction);
-                use_contiguous_read &= whole_row_remaining;
-            }
-
-            if (use_contiguous_read) {
-                process_h(0, window_w);
-            } else {  // read rows stick by stick with dilation
-                for (uint32_t w = 0; w < window_w; ++w) {
-                    process_h(w * dilation_w, 1);
+                if (use_contiguous_read) {
+                    process_h(0, window_w);
+                } else {  // read rows stick by stick with dilation
+                    for (uint32_t w = 0; w < window_w; ++w) {
+                        process_h(w * dilation_w, 1);
+                    }
                 }
             }
         }
         if constexpr (!is_large_kernel) {
-            noc_async_read_barrier();
-
-            cb_push_back(in_cb_id, 1);
-            if constexpr (return_indices) {
-                cb_push_back(in_idx_cb_id, 1);
-
-                constexpr uint32_t num_faces_in_output_tile = 2;
-                constexpr uint32_t num_faces_in_last_output_tile =
-                    last_tile_is_partial && in_c % TILE_WIDTH <= FACE_WIDTH ? 1 : 2;
-                uint32_t output_faces =
-                    c_i == in_nblocks_c - 1 ? num_faces_in_last_output_tile : num_faces_in_output_tile;
-
-                cb_wait_front(tile_tmp_cb_id, 1);
-                noc_async_read_one_packet(
-                    get_noc_addr(get_read_ptr(tile_tmp_cb_id)),
-                    get_write_ptr(out_cb_id),
-                    output_faces * FACE_WIDTH * BYTES_PER_ELEM);
-                cb_wait_front(tile_idx_tmp_cb_id, 1);
-                noc_async_read_one_packet(
-                    get_noc_addr(get_read_ptr(tile_idx_tmp_cb_id)),
-                    get_write_ptr(out_idx_cb_id),
-                    output_faces * FACE_WIDTH * BYTES_PER_ELEM);
+            if (reader_id == 0 || !return_indices) {
                 noc_async_read_barrier();
-                cb_pop_front(tile_tmp_cb_id, 1);
-                cb_pop_front(tile_idx_tmp_cb_id, 1);
+                cb_push_back(in_cb_id, 1);
+            }
+            if constexpr (return_indices) {
+                if (reader_id == 0) {
+                    cb_push_back(in_idx_cb_id, 1);
+                } else {
+                    constexpr uint32_t num_faces_in_output_tile = 2;
+                    constexpr uint32_t num_faces_in_last_output_tile =
+                        last_tile_is_partial && in_c % TILE_WIDTH <= FACE_WIDTH ? 1 : 2;
+                    uint32_t output_faces =
+                        c_i == in_nblocks_c - 1 ? num_faces_in_last_output_tile : num_faces_in_output_tile;
 
-                cb_push_back(out_cb_id, output_faces);
-                if constexpr (return_indices) {
-                    cb_push_back(out_idx_cb_id, output_faces);
+                    cb_wait_front(tile_tmp_cb_id, 1);
+                    noc_async_read_one_packet(
+                        get_noc_addr(get_read_ptr(tile_tmp_cb_id)),
+                        get_write_ptr(out_cb_id),
+                        output_faces * FACE_WIDTH * BYTES_PER_ELEM);
+                    cb_wait_front(tile_idx_tmp_cb_id, 1);
+                    noc_async_read_one_packet(
+                        get_noc_addr(get_read_ptr(tile_idx_tmp_cb_id)),
+                        get_write_ptr(out_idx_cb_id),
+                        output_faces * FACE_WIDTH * BYTES_PER_ELEM);
+                    noc_async_read_barrier();
+                    cb_pop_front(tile_tmp_cb_id, 1);
+                    cb_pop_front(tile_idx_tmp_cb_id, 1);
+
+                    cb_push_back(out_cb_id, output_faces);
+                    if constexpr (return_indices) {
+                        cb_push_back(out_idx_cb_id, output_faces);
+                    }
                 }
             }
         }
@@ -335,9 +341,11 @@ void kernel_main() {
     constexpr uint32_t out_cb_id = get_compile_time_arg_val(38);
     constexpr uint32_t out_idx_cb_id = get_compile_time_arg_val(39);
 
+    constexpr bool use_split_reader = split_reader && !return_indices;
+
     constexpr bool last_tile_is_partial = in_c % TILE_WIDTH != 0;
     constexpr uint32_t in_scalar_cb_id =
-        split_reader && reader_id == 1 && !one_scalar_per_core ? in_scalar_cb_id_1 : in_scalar_cb_id_0;
+        use_split_reader && reader_id == 1 && !one_scalar_per_core ? in_scalar_cb_id_1 : in_scalar_cb_id_0;
 
     uint32_t scalar_index = 0;
     uint32_t scalar_start = 0;
@@ -416,7 +424,7 @@ void kernel_main() {
 
     uint32_t reader_indices_on_core = 0;
 
-    if (split_reader) {
+    if (use_split_reader) {
         if (reader_id == 0) {
             reader_indices_on_core = (reader_nindices + 1) / 2;
         } else {
@@ -436,10 +444,10 @@ void kernel_main() {
             first_row_value = true;
         }
 
-        constexpr uint32_t stride_multiple = split_reader ? 2 : 1;
+        constexpr uint32_t stride_multiple = use_split_reader ? 2 : 1;
         for (uint16_t ind = start; ind <= end; ind += stride_multiple * stride_w) {
             if constexpr (!one_scalar_per_core) {
-                fill_scalar<one_scalar_per_core, in_scalar_cb_id, reader_nindices, split_reader>(
+                fill_scalar<one_scalar_per_core, in_scalar_cb_id, reader_nindices, use_split_reader>(
                     scalar_start, scalar_end, scalar_value, scalar_index, counter, config_ptr);
             }
             reader_indices_on_core--;
@@ -469,8 +477,9 @@ void kernel_main() {
                 return_indices,
                 zero_pages,
                 out_cb_id,
-                out_idx_cb_id>(ind, in_l1_read_base_addr, in_idx_l1_read_base_addr);
-            if (split_reader && ind == end) {
+                out_idx_cb_id,
+                reader_id>(ind, in_l1_read_base_addr, in_idx_l1_read_base_addr);
+            if (use_split_reader && ind == end) {
                 first_row_value = false;
             }
         }
@@ -478,7 +487,7 @@ void kernel_main() {
 
     while (reader_indices_on_core--) {
         if constexpr (!one_scalar_per_core) {
-            fill_scalar<one_scalar_per_core, in_scalar_cb_id, reader_nindices, split_reader>(
+            fill_scalar<one_scalar_per_core, in_scalar_cb_id, reader_nindices, use_split_reader>(
                 scalar_start, scalar_end, scalar_value, scalar_index, counter, config_ptr);
         }
         read_window_with_top_left_index<
@@ -507,6 +516,7 @@ void kernel_main() {
             return_indices,
             zero_pages,
             out_cb_id,
-            out_idx_cb_id>(0, in_l1_read_base_addr, in_idx_l1_read_base_addr);
+            out_idx_cb_id,
+            reader_id>(0, in_l1_read_base_addr, in_idx_l1_read_base_addr);
     }
 }  // kernel_main()
