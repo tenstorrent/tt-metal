@@ -43,11 +43,11 @@ class DispatcherCoreData:
 
     # Level 1: Detailed fields
     host_assigned_id: int | None = triage_field("Host Assigned ID", hex_serializer, verbose=1)
-    watcher_previous_kernel_id: int = triage_field("Previous Kernel ID")
-    previous_kernel_name: str | None = triage_field("Previous Kernel Name")
+    watcher_previous_kernel_id: int = triage_field("Previous Kernel ID", verbose=1)
+    previous_kernel_name: str | None = triage_field("Previous Kernel Name", verbose=1)
     kernel_offset: int | None = triage_field("Kernel Offset", hex_serializer, verbose=1)
-    kernel_path: str = triage_field("Kernel Path")
-    firmware_path: str = triage_field("Firmware Path")
+    kernel_path: str = triage_field("Kernel Path", verbose=1)
+    firmware_path: str = triage_field("Firmware Path", verbose=1)
 
     # Level 2: Internal debug fields
     launch_msg_rd_ptr: int = triage_field("RD PTR", verbose=2)
