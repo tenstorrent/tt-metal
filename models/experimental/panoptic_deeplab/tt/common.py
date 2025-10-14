@@ -11,7 +11,7 @@ import torch
 import ttnn
 import os
 
-PDL_L1_SMALL_SIZE = 4 * 1024  # Minimum L1 small size for Panoptic DeepLab
+PDL_L1_SMALL_SIZE = 64 * 1024  # Minimum L1 small size for Panoptic DeepLab
 
 
 def get_panoptic_deeplab_weights_path(model_location_generator=None, test_file_path=None):

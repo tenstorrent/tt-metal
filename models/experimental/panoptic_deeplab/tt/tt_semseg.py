@@ -6,9 +6,7 @@ import ttnn
 from loguru import logger
 
 from models.experimental.panoptic_deeplab.tt.tt_aspp import TtASPP, get_ttnn_activation
-
-from models.experimental.panoptic_deeplab.tt.tt_conv2d_wrapper import TtConv2d, TtConv2dParameters
-from models.experimental.panoptic_deeplab.tt.tt_upsample_wrapper import TtUpsample
+from models.tt_cnn.tt.builder import TtConv2d, TtUpsample
 from models.experimental.panoptic_deeplab.reference.pytorch_semseg import ShapeSpec
 from models.common.lightweightmodule import LightweightModule
 
@@ -16,6 +14,10 @@ from models.common.lightweightmodule import LightweightModule
 class TtDeepLabV3PlusHead(LightweightModule):
     """
     TTNN implementation of the DeepLabV3+ segmentation head.
+    Uses TT CNN Builder API for convolutions and upsampling.
+
+    Conv2dConfiguration objects are extracted during preprocessing and stored
+    in parameters dict. This class applies model-specific overrides via model_configs.
     """
 
     def __init__(
@@ -51,6 +53,54 @@ class TtDeepLabV3PlusHead(LightweightModule):
         self.model_configs = model_configs
         self.activation = get_ttnn_activation("relu")
 
+        # Initialize decoder with all stages
+        self._initialize_decoder(
+            parameters,
+            in_channels,
+            in_strides,
+            project_channels,
+            decoder_channels,
+            aspp_dilations,
+            aspp_dropout,
+            norm,
+            train_size,
+        )
+
+    def _create_conv_layer(self, params, conv_path: str):
+        """Helper to create conv layer using TT CNN Builder with config overrides"""
+        if "conv_config" in params:
+            base_config = params["conv_config"]
+            logger.debug(f"Using Conv2dConfiguration from preprocessing for {conv_path}")
+        else:
+            logger.error(f"Conv2dConfiguration not found for {conv_path}")
+            raise ValueError(
+                f"Expected 'conv_config' in parameters for {conv_path}. Please use new preprocessing system."
+            )
+
+        # Apply model-specific overrides if model_configs is provided
+        if self.model_configs is not None:
+            final_config = self.model_configs.apply_conv_overrides(base_config, conv_path=conv_path)
+            logger.debug(f"Applied config overrides for {conv_path}")
+        else:
+            final_config = base_config
+            logger.debug(f"No model_configs provided, using base config for {conv_path}")
+
+        # Create TtConv2d using TT CNN Builder
+        return TtConv2d(final_config, self.device)
+
+    def _initialize_decoder(
+        self,
+        parameters,
+        in_channels,
+        in_strides,
+        project_channels,
+        decoder_channels,
+        aspp_dilations,
+        aspp_dropout,
+        norm,
+        train_size,
+    ):
+        """Initialize decoder stages"""
         self.decoder = {}
         use_bias = norm == ""
 
@@ -74,6 +124,7 @@ class TtDeepLabV3PlusHead(LightweightModule):
                 project_conv_params = (
                     feature_params["project_conv"] if isinstance(feature_params, dict) else feature_params.project_conv
                 )
+                aspp_channels = decoder_channels[-1]
                 project_conv = TtASPP(
                     in_channels=in_channel,
                     out_channels=aspp_channels,
@@ -95,151 +146,25 @@ class TtDeepLabV3PlusHead(LightweightModule):
                 # Parameter path for this decoder stage
                 base_path = parameters[feature_name]
 
-                # Project Conv
-                # Handle both dict and object parameter formats
-                proj_conv_path = base_path["project_conv"] if isinstance(base_path, dict) else base_path.project_conv
-                proj_bias = (
-                    proj_conv_path["bias"]
-                    if isinstance(proj_conv_path, dict) and "bias" in proj_conv_path
-                    else (proj_conv_path.bias if hasattr(proj_conv_path, "bias") else None)
-                )
-                proj_weight = proj_conv_path["weight"] if isinstance(proj_conv_path, dict) else proj_conv_path.weight
-                proj_params = TtConv2dParameters(weight=proj_weight, bias=proj_bias, device=self.device)
-                project_conv = TtConv2d.create(
-                    proj_params,
-                    stride=(1, 1),
-                    padding=(0, 0),
-                    conv_path=f"decoder.{feature_name}.project_conv",
-                    model_configs=self.model_configs,
-                )
+                # Project Conv - use builder API
+                proj_conv_params = base_path["project_conv"] if isinstance(base_path, dict) else base_path.project_conv
+                project_conv = self._create_conv_layer(proj_conv_params, f"decoder.{feature_name}.project_conv")
 
-                # Fuse Conv 0
+                # Fuse Conv 0 - use builder API
                 fuse_conv_params = base_path["fuse_conv"] if isinstance(base_path, dict) else base_path.fuse_conv
-                fuse0_path = fuse_conv_params[0]
-                fuse0_bias = (
-                    fuse0_path["bias"]
-                    if isinstance(fuse0_path, dict) and "bias" in fuse0_path
-                    else (fuse0_path.bias if hasattr(fuse0_path, "bias") else None)
-                )
-                fuse0_weight = fuse0_path["weight"] if isinstance(fuse0_path, dict) else fuse0_path.weight
-                fuse0_params = TtConv2dParameters(weight=fuse0_weight, bias=fuse0_bias, device=self.device)
+                fuse_conv_0 = self._create_conv_layer(fuse_conv_params[0], f"decoder.{feature_name}.fuse_conv.0")
 
-                fuse_conv_0_no_slice = TtConv2d.create(
-                    fuse0_params,
-                    stride=(1, 1),
-                    padding=(1, 1),
-                    conv_path=f"decoder.{feature_name}.fuse_conv.0",
-                    model_configs=self.model_configs,
-                )
-                # Get slice config from model_configs for fuse_conv.0
-                if self.model_configs is not None:
-                    decoder_slice_config = self.model_configs.get_decoder_slice_config(
-                        f"decoder.{feature_name}.fuse_conv.0", iteration_index=0
-                    )
-                    if decoder_slice_config["mode"] == "channel":
-                        fuse_conv_0_slice = TtConv2d.create_with_channel_slicing(
-                            fuse0_params,
-                            num_slices=decoder_slice_config["num_slices"],
-                            stride=(1, 1),
-                            padding=(1, 1),
-                            conv_path=f"decoder.{feature_name}.fuse_conv.0",
-                            model_configs=self.model_configs,
-                        )
-                    elif decoder_slice_config["mode"] == "height":
-                        fuse_conv_0_slice = TtConv2d.create_with_height_slicing(
-                            fuse0_params,
-                            num_slices=decoder_slice_config["num_slices"],
-                            stride=(1, 1),
-                            padding=(1, 1),
-                            conv_path=f"decoder.{feature_name}.fuse_conv.0",
-                            model_configs=self.model_configs,
-                        )
-                    else:
-                        fuse_conv_0_slice = fuse_conv_0_no_slice
-                else:
-                    # Fallback to original logic
-                    logger.warning(
-                        f"FALLBACK SEMSEG FUSE_CONV.0: Using original hardcoded logic for decoder.{feature_name}.fuse_conv.0 instead of model_configs"
-                    )
-                    if fuse0_params.in_channels == 160:
-                        fuse_conv_0_slice = TtConv2d.create_with_channel_slicing(
-                            fuse0_params,
-                            num_slices=5,
-                            stride=(1, 1),
-                            padding=(1, 1),
-                            conv_path=f"decoder.{feature_name}.fuse_conv.0",
-                            model_configs=self.model_configs,
-                        )
-                    else:
-                        fuse_conv_0_slice = TtConv2d.create_with_height_slicing(
-                            fuse0_params,
-                            num_slices=4,
-                            stride=(1, 1),
-                            padding=(1, 1),
-                            conv_path=f"decoder.{feature_name}.fuse_conv.0",
-                            model_configs=self.model_configs,
-                        )
-
-                # Fuse Conv 1
-                fuse1_path = fuse_conv_params[1]
-                fuse1_bias = (
-                    fuse1_path["bias"]
-                    if isinstance(fuse1_path, dict) and "bias" in fuse1_path
-                    else (fuse1_path.bias if hasattr(fuse1_path, "bias") else None)
-                )
-                fuse1_weight = fuse1_path["weight"] if isinstance(fuse1_path, dict) else fuse1_path.weight
-                fuse1_params = TtConv2dParameters(weight=fuse1_weight, bias=fuse1_bias, device=self.device)
-
-                fuse_conv_1_no_slice = TtConv2d.create(
-                    fuse1_params,
-                    stride=(1, 1),
-                    padding=(1, 1),
-                    conv_path=f"decoder.{feature_name}.fuse_conv.1",
-                    model_configs=self.model_configs,
-                )
-                # Get slice config from model_configs for fuse_conv.1
-                if self.model_configs is not None:
-                    decoder_slice_config = self.model_configs.get_decoder_slice_config(
-                        f"decoder.{feature_name}.fuse_conv.1", iteration_index=0
-                    )
-                    if decoder_slice_config["mode"] == "height":
-                        fuse_conv_1_height_slice = TtConv2d.create_with_height_slicing(
-                            fuse1_params,
-                            num_slices=decoder_slice_config["num_slices"],
-                            stride=(1, 1),
-                            padding=(1, 1),
-                            conv_path=f"decoder.{feature_name}.fuse_conv.1",
-                            model_configs=self.model_configs,
-                        )
-                    else:
-                        fuse_conv_1_height_slice = fuse_conv_1_no_slice
-                else:
-                    # Fallback to original logic
-                    logger.warning(
-                        f"FALLBACK SEMSEG FUSE_CONV.1: Using original hardcoded logic for decoder.{feature_name}.fuse_conv.1 instead of model_configs"
-                    )
-                    fuse_conv_1_height_slice = TtConv2d.create_with_height_slicing(
-                        fuse1_params,
-                        num_slices=2,
-                        stride=(1, 1),
-                        padding=(1, 1),
-                        conv_path=f"decoder.{feature_name}.fuse_conv.1",
-                        model_configs=self.model_configs,
-                    )
+                # Fuse Conv 1 - use builder API
+                fuse_conv_1 = self._create_conv_layer(fuse_conv_params[1], f"decoder.{feature_name}.fuse_conv.1")
 
                 decoder_stage["project_conv"] = project_conv
-                decoder_stage["fuse_conv_0_no_slice"] = fuse_conv_0_no_slice
-                decoder_stage["fuse_conv_0_height_slice"] = fuse_conv_0_slice
-                decoder_stage["fuse_conv_1_no_slice"] = fuse_conv_1_no_slice
-                decoder_stage["fuse_conv_1_height_slice"] = fuse_conv_1_height_slice
+                decoder_stage["fuse_conv_0"] = fuse_conv_0
+                decoder_stage["fuse_conv_1"] = fuse_conv_1
 
             self.decoder[feature_name] = decoder_stage
 
-        # Initialize upsample operations for decoder
-        self.upsample_standard = TtUpsample.create(device=device, scale_factor=(1, 1), mode="bilinear")
-        self.upsample_with_slicing = TtUpsample.create_with_channel_slicing(
-            device=device, scale_factor=(1, 1), mode="bilinear", num_slices=2
-        )
+        # Initialize upsample operations for decoder using builder API
+        # Upsamples will be created dynamically during forward pass with the correct shapes
         logger.debug("TtDeepLabV3PlusHead initialization complete")
 
     def forward(self, features: Dict[str, ttnn.Tensor]) -> Union[ttnn.Tensor, Tuple[ttnn.Tensor, Dict]]:
@@ -249,6 +174,7 @@ class TtDeepLabV3PlusHead(LightweightModule):
     def layers(self, features: Dict[str, ttnn.Tensor]) -> ttnn.Tensor:
         """
         Executes the decoder pipeline, mirroring the PyTorch version's logic.
+        Simplified to use single conv versions - slicing is handled by Conv2dConfiguration.
         """
         logger.debug(f"TtDeepLabV3PlusHead layers - processing features: {list(features.keys())}")
         y = None
@@ -279,15 +205,21 @@ class TtDeepLabV3PlusHead(LightweightModule):
             scale_h = proj_x.shape[1] // y.shape[1]
             scale_w = proj_x.shape[2] // y.shape[2]
 
-            # Use appropriate upsample operation based on iteration
-            if i == 0:
-                # No slicing for first iteration
-                self.upsample_standard._scale_factor = (scale_h, scale_w)
-                y_upsampled = self.upsample_standard(y)
-            else:
-                # Channel slicing for subsequent iterations
-                self.upsample_with_slicing._scale_factor = (scale_h, scale_w)
-                y_upsampled = self.upsample_with_slicing(y)
+            # Update upsample scale and perform upsampling
+            # Note: TtUpsample with builder API might need dynamic scale update
+            # For now, we'll use the same approach but with a single upsample instance
+            from models.tt_cnn.tt.builder import UpsampleConfiguration
+
+            upsample_config = UpsampleConfiguration(
+                scale_factor=(scale_h, scale_w),
+                mode="bilinear",
+                input_height=y.shape[1],
+                input_width=y.shape[2],
+                batch_size=y.shape[0],
+                in_channels=y.shape[3],
+            )
+            upsample_op = TtUpsample(upsample_config, self.device)
+            y_upsampled = upsample_op(y)
 
             y_upsampled = ttnn.to_memory_config(y_upsampled, ttnn.DRAM_MEMORY_CONFIG)
             y_upsampled = ttnn.to_layout(y_upsampled, ttnn.TILE_LAYOUT)
@@ -305,21 +237,14 @@ class TtDeepLabV3PlusHead(LightweightModule):
             ttnn.deallocate(proj_x)
             ttnn.deallocate(y_upsampled)
 
-            # Choose the appropriate conv based on iteration index
-            if i == 0:
-                y_conv0 = stage["fuse_conv_0_no_slice"](y)
-            else:
-                y_conv0 = stage["fuse_conv_0_height_slice"](y)
+            # Use single conv versions - slicing handled by config
+            y_conv0 = stage["fuse_conv_0"](y)
             ttnn.deallocate(y)
             y_act0 = self.activation(y_conv0)
             ttnn.deallocate(y_conv0)
 
             ttnn.to_memory_config(y_act0, ttnn.DRAM_MEMORY_CONFIG)
-            # Choose the appropriate conv based on iteration index
-            if i == 0:
-                y_conv1 = stage["fuse_conv_1_no_slice"](y_act0)
-            else:
-                y_conv1 = stage["fuse_conv_1_height_slice"](y_act0)
+            y_conv1 = stage["fuse_conv_1"](y_act0)
             y = self.activation(y_conv1)
             ttnn.deallocate(y_conv1)
 
@@ -370,107 +295,23 @@ class TtPanopticDeepLabSemSegHead(TtDeepLabV3PlusHead):
         decoder_out_ch = decoder_channels[0]
         logger.debug(f"Initializing TtPanopticDeepLabSemSegHead with {num_classes} classes")
 
-        # Head 0
-        # Handle both dict and object parameter formats
+        # Head 0 - use builder API
         head_params = parameters["head"] if isinstance(parameters, dict) else parameters.head
-        head0_path = head_params[0]
-        head0_bias = (
-            head0_path["bias"]
-            if isinstance(head0_path, dict) and "bias" in head0_path
-            else (head0_path.bias if hasattr(head0_path, "bias") else None)
-        )
-        head0_weight = head0_path["weight"] if isinstance(head0_path, dict) else head0_path.weight
-        head0_params = TtConv2dParameters(
-            weight=head0_weight,
-            bias=head0_bias,
-            device=self.device,
-        )
-        # Get slice config from model_configs for head.0
-        if self.model_configs is not None:
-            head_slice_config = self.model_configs.get_head_slice_config("semantic")
-            self.head_0 = TtConv2d.create_with_height_slicing(
-                head0_params,
-                num_slices=head_slice_config["num_slices"],
-                stride=(1, 1),
-                padding=(1, 1),
-                conv_path="semantic_head.head.0",
-                model_configs=self.model_configs,
-            )
-        else:
-            # Fallback to original logic
-            logger.warning(
-                "FALLBACK SEMSEG HEAD.0: Using original hardcoded logic for semantic_head.head.0 instead of model_configs"
-            )
-            self.head_0 = TtConv2d.create_with_height_slicing(
-                head0_params,
-                num_slices=2,
-                stride=(1, 1),
-                padding=(1, 1),
-                conv_path="semantic_head.head.0",
-                model_configs=self.model_configs,
-            )
+        self.head_0 = self._create_conv_layer(head_params[0], "semantic_head.head.0")
 
-        # Head 1
-        head1_path = head_params[1]
-        head1_bias = (
-            head1_path["bias"]
-            if isinstance(head1_path, dict) and "bias" in head1_path
-            else (head1_path.bias if hasattr(head1_path, "bias") else None)
-        )
-        head1_weight = head1_path["weight"] if isinstance(head1_path, dict) else head1_path.weight
-        head1_params = TtConv2dParameters(
-            weight=head1_weight,
-            bias=head1_bias,
-            device=self.device,
-        )
-        # Get slice config from model_configs for head.1
-        if self.model_configs is not None:
-            head_slice_config = self.model_configs.get_head_slice_config("semantic")
-            self.head_1 = TtConv2d.create_with_height_slicing(
-                head1_params,
-                num_slices=head_slice_config["num_slices"],
-                stride=(1, 1),
-                padding=(1, 1),
-                conv_path="semantic_head.head.1",
-                model_configs=self.model_configs,
-            )
-        else:
-            # Fallback to original logic
-            logger.warning(
-                "FALLBACK SEMSEG HEAD.1: Using original hardcoded logic for semantic_head.head.1 instead of model_configs"
-            )
-            self.head_1 = TtConv2d.create_with_height_slicing(
-                head1_params,
-                num_slices=2,
-                stride=(1, 1),
-                padding=(1, 1),
-                conv_path="semantic_head.head.1",
-                model_configs=self.model_configs,
-            )
+        # Head 1 - use builder API
+        self.head_1 = self._create_conv_layer(head_params[1], "semantic_head.head.1")
 
-        # Predictor
+        # Predictor - use builder API
         predictor_params = parameters["predictor"] if isinstance(parameters, dict) else parameters.predictor
-        predictor_path = predictor_params
-        predictor_bias = (
-            predictor_path["bias"]
-            if isinstance(predictor_path, dict) and "bias" in predictor_path
-            else (predictor_path.bias if hasattr(predictor_path, "bias") else None)
-        )
-        predictor_weight = predictor_path["weight"] if isinstance(predictor_path, dict) else predictor_path.weight
-        predictor_params = TtConv2dParameters(
-            weight=predictor_weight,
-            bias=predictor_bias,
-            device=self.device,
-        )
-        self.predictor = TtConv2d.create(
-            predictor_params,
-            stride=(1, 1),
-            padding=(0, 0),
-            conv_path="semantic_head.predictor",
-            model_configs=self.model_configs,
-        )
+        self.predictor = self._create_conv_layer(predictor_params, "semantic_head.predictor")
 
-        self.final_upsample = TtUpsample.create(device=device, scale_factor=common_stride, mode="nearest")
+        # Final upsample - use builder API
+        # Store scale factor for dynamic upsample creation during forward pass
+        self.final_upsample_scale = (
+            common_stride if isinstance(common_stride, tuple) else (common_stride, common_stride)
+        )
+        self.final_upsample_mode = "nearest"
         logger.debug("TtPanopticDeepLabSemSegHead initialization complete")
 
     def forward(self, features: Dict[str, ttnn.Tensor]) -> Tuple[ttnn.Tensor, Dict]:
@@ -480,7 +321,20 @@ class TtPanopticDeepLabSemSegHead(TtDeepLabV3PlusHead):
         logger.debug("TtPanopticDeepLabSemSegHead forward pass starting")
         y = self.layers(features)
 
-        y = self.final_upsample(y)
+        # Create dynamic upsample for final output
+        from models.tt_cnn.tt.builder import UpsampleConfiguration
+
+        final_upsample_config = UpsampleConfiguration(
+            scale_factor=self.final_upsample_scale,
+            mode=self.final_upsample_mode,
+            input_height=y.shape[1],
+            input_width=y.shape[2],
+            batch_size=y.shape[0],
+            channels=y.shape[3],
+        )
+        final_upsample = TtUpsample(final_upsample_config, self.device)
+        y = final_upsample(y)
+
         logger.debug(f"TtPanopticDeepLabSemSegHead forward pass complete - final output shape: {y.shape}")
         return y, {}
 

@@ -58,7 +58,10 @@ def create_panoptic_models(device, weights_path):
     pytorch_model.eval()
 
     # Create TTNN parameters from the PyTorch model with loaded weights
-    ttnn_parameters = create_panoptic_deeplab_parameters(pytorch_model, device)
+    # The new preprocessing system automatically computes input shapes
+    ttnn_parameters = create_panoptic_deeplab_parameters(
+        pytorch_model, device, input_height=512, input_width=1024, batch_size=1  # Use half the original Cityscapes size
+    )
 
     # Apply Conv+BatchNorm fusion to the parameters
     logger.info("Applying Conv+BatchNorm fusion to parameters...")

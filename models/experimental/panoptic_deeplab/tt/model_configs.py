@@ -3,6 +3,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
+from dataclasses import replace
+from models.tt_cnn.tt.builder import (
+    Conv2dConfiguration,
+    AutoShardedStrategyConfiguration,
+    HeightSliceStrategyConfiguration,
+    WidthSliceStrategyConfiguration,
+    ChannelSliceStrategyConfiguration,
+)
 
 
 class ModelOptimisations:
@@ -11,312 +19,191 @@ class ModelOptimisations:
         conv_act_dtype=ttnn.bfloat8_b,
         conv_w_dtype=ttnn.bfloat8_b,
     ):
-        self.conv_configs = {}
+        # Store default data types for convolutions
         self.conv_output_dtype = conv_act_dtype
-        self.compute_configs = {}
         self.conv_w_dtype = conv_w_dtype
         self.conv_ws_dtype = ttnn.bfloat8_b
 
-        # DEFAULT CONFIGURATION (used by most layers)
-        self.conv_configs["DEFAULT"] = ttnn.Conv2dConfig(
-            weights_dtype=conv_w_dtype,
-            shard_layout=None,
-            deallocate_activation=False,
-            enable_act_double_buffer=False,
-            reshard_if_not_optimal=True,
-            act_block_w_div=1,
-            act_block_h_override=0,
-            config_tensors_in_dram=True,
-        )
+        # Default override configuration - these will be applied on top of base Conv2dConfiguration
+        self.default_overrides = {
+            "weights_dtype": conv_w_dtype,
+            "output_dtype": conv_act_dtype,
+            "activation_dtype": conv_act_dtype,
+            "sharding_strategy": AutoShardedStrategyConfiguration(),
+            "slice_strategy": None,
+            "math_fidelity": ttnn.MathFidelity.LoFi,
+            "fp32_dest_acc_en": True,
+            "packer_l1_acc": False,
+            "deallocate_activation": False,
+            "enable_act_double_buffer": False,
+            "enable_weights_double_buffer": True,
+            "reallocate_halo_output": True,
+        }
 
-        # COMPUTE KERNEL CONFIGURATION (used by all convolutions)
-        self.compute_configs["CONV_COMPUTE_CONFIG"] = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.LoFi,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=False,
-        )
+        # Layer-specific overrides: map from conv_path to override dict
+        self.layer_overrides = {}
 
-    def get_conv_config(self, conv_path):
+    def apply_conv_overrides(self, base_config: Conv2dConfiguration, conv_path: str = None) -> Conv2dConfiguration:
         """
-        Get the appropriate Conv2dConfig for a given convolution path in Panoptic DeepLab.
+        Apply configuration overrides to a base Conv2dConfiguration.
+
+        This method takes a base Conv2dConfiguration extracted from preprocessing and applies:
+        1. Default overrides (common to all layers)
+        2. Layer-specific overrides (if conv_path is provided and has custom overrides)
 
         Args:
+            base_config: Base Conv2dConfiguration from preprocessing
             conv_path: String path identifying the convolution layer (e.g., "stem.conv1", "res2.0.conv1")
 
         Returns:
-            ttnn.Conv2dConfig: Configuration for the convolution layer
+            Conv2dConfiguration: Updated configuration with overrides applied
         """
-        if conv_path is None:
-            return self.conv_configs["DEFAULT"]
+        # Start with default overrides
+        overrides = self.default_overrides.copy()
 
-        # STEM CONVOLUTIONS
-        if conv_path == "stem.conv1":
-            return self.conv_configs["DEFAULT"]
-        elif conv_path == "stem.conv2":
-            return self.conv_configs["DEFAULT"]
-        elif conv_path == "stem.conv3":
-            return self.conv_configs["DEFAULT"]
+        # Apply layer-specific overrides if available
+        if conv_path is not None and conv_path in self.layer_overrides:
+            overrides.update(self.layer_overrides[conv_path])
 
-        # RES2 LAYER CONVOLUTIONS
-        elif conv_path == "res2.0.conv1":
-            return self.conv_configs["DEFAULT"]
-        elif conv_path == "res2.0.conv2":
-            return self.conv_configs["DEFAULT"]
-        elif conv_path == "res2.0.conv3":
-            return self.conv_configs["DEFAULT"]
-        elif conv_path == "res2.0.shortcut":
-            return self.conv_configs["DEFAULT"]
-        elif conv_path == "res2.1.conv1":
-            return self.conv_configs["DEFAULT"]
-        elif conv_path == "res2.1.conv2":
-            return self.conv_configs["DEFAULT"]
-        elif conv_path == "res2.1.conv3":
-            return self.conv_configs["DEFAULT"]
-        elif conv_path == "res2.2.conv1":
-            return self.conv_configs["DEFAULT"]
-        elif conv_path == "res2.2.conv2":
-            return self.conv_configs["DEFAULT"]
-        elif conv_path == "res2.2.conv3":
-            return self.conv_configs["DEFAULT"]
+        # Use dataclass replace to create new configuration with overrides
+        return replace(base_config, **overrides)
 
-        # RES3 LAYER CONVOLUTIONS
-        elif conv_path == "res3.0.conv1":
-            return self.conv_configs["DEFAULT"]
-        elif conv_path == "res3.0.conv2":
-            return self.conv_configs["DEFAULT"]
-        elif conv_path == "res3.0.conv3":
-            return self.conv_configs["DEFAULT"]
-        elif conv_path == "res3.0.shortcut":
-            return self.conv_configs["DEFAULT"]
-        elif conv_path == "res3.1.conv1":
-            return self.conv_configs["DEFAULT"]
-        elif conv_path == "res3.1.conv2":
-            return self.conv_configs["DEFAULT"]
-        elif conv_path == "res3.1.conv3":
-            return self.conv_configs["DEFAULT"]
-        elif conv_path == "res3.2.conv1":
-            return self.conv_configs["DEFAULT"]
-        elif conv_path == "res3.2.conv2":
-            return self.conv_configs["DEFAULT"]
-        elif conv_path == "res3.2.conv3":
-            return self.conv_configs["DEFAULT"]
-        elif conv_path == "res3.3.conv1":
-            return self.conv_configs["DEFAULT"]
-        elif conv_path == "res3.3.conv2":
-            return self.conv_configs["DEFAULT"]
-        elif conv_path == "res3.3.conv3":
-            return self.conv_configs["DEFAULT"]
-
-        # RES4 LAYER CONVOLUTIONS
-        elif conv_path == "res4.0.conv1":
-            return self.conv_configs["DEFAULT"]
-        elif conv_path == "res4.0.conv2":
-            return self.conv_configs["DEFAULT"]
-        elif conv_path == "res4.0.conv3":
-            return self.conv_configs["DEFAULT"]
-        elif conv_path == "res4.0.shortcut":
-            return self.conv_configs["DEFAULT"]
-        elif conv_path == "res4.1.conv1":
-            return self.conv_configs["DEFAULT"]
-        elif conv_path == "res4.1.conv2":
-            return self.conv_configs["DEFAULT"]
-        elif conv_path == "res4.1.conv3":
-            return self.conv_configs["DEFAULT"]
-        elif conv_path == "res4.2.conv1":
-            return self.conv_configs["DEFAULT"]
-        elif conv_path == "res4.2.conv2":
-            return self.conv_configs["DEFAULT"]
-        elif conv_path == "res4.2.conv3":
-            return self.conv_configs["DEFAULT"]
-        elif conv_path == "res4.3.conv1":
-            return self.conv_configs["DEFAULT"]
-        elif conv_path == "res4.3.conv2":
-            return self.conv_configs["DEFAULT"]
-        elif conv_path == "res4.3.conv3":
-            return self.conv_configs["DEFAULT"]
-        elif conv_path == "res4.4.conv1":
-            return self.conv_configs["DEFAULT"]
-        elif conv_path == "res4.4.conv2":
-            return self.conv_configs["DEFAULT"]
-        elif conv_path == "res4.4.conv3":
-            return self.conv_configs["DEFAULT"]
-        elif conv_path == "res4.5.conv1":
-            return self.conv_configs["DEFAULT"]
-        elif conv_path == "res4.5.conv2":
-            return self.conv_configs["DEFAULT"]
-        elif conv_path == "res4.5.conv3":
-            return self.conv_configs["DEFAULT"]
-
-        # RES5 LAYER CONVOLUTIONS
-        elif conv_path == "res5.0.conv1":
-            return self.conv_configs["DEFAULT"]
-        elif conv_path == "res5.0.conv2":
-            return self.conv_configs["DEFAULT"]
-        elif conv_path == "res5.0.conv3":
-            return self.conv_configs["DEFAULT"]
-        elif conv_path == "res5.1.conv1":
-            return self.conv_configs["DEFAULT"]
-        elif conv_path == "res5.1.conv2":
-            return self.conv_configs["DEFAULT"]
-        elif conv_path == "res5.1.conv3":
-            return self.conv_configs["DEFAULT"]
-        elif conv_path == "res5.2.conv1":
-            return self.conv_configs["DEFAULT"]
-        elif conv_path == "res5.2.conv2":
-            return self.conv_configs["DEFAULT"]
-        elif conv_path == "res5.2.conv3":
-            return self.conv_configs["DEFAULT"]
-
-        # ASPP CONVOLUTIONS
-        elif conv_path == "aspp.convs.0":  # 1x1 conv branch
-            return self.conv_configs["DEFAULT"]
-        elif conv_path == "aspp.convs.1":  # 3x3 dilated conv (dilation=6)
-            return self.conv_configs["DEFAULT"]
-        elif conv_path == "aspp.convs.2":  # 3x3 dilated conv (dilation=12)
-            return self.conv_configs["DEFAULT"]
-        elif conv_path == "aspp.convs.3":  # 3x3 dilated conv (dilation=18)
-            return self.conv_configs["DEFAULT"]
-        elif conv_path == "aspp.convs.4":  # Global pooling branch
-            return self.conv_configs["DEFAULT"]
-        elif conv_path == "aspp.project":  # Final projection conv
-            return self.conv_configs["DEFAULT"]
-
-        # DECODER CONVOLUTIONS
-        elif conv_path == "decoder.res5.project_conv":
-            return self.conv_configs["DEFAULT"]
-        elif conv_path == "decoder.res4.project_conv":
-            return self.conv_configs["DEFAULT"]
-        elif conv_path == "decoder.res4.fuse_conv.0":
-            return self.conv_configs["DEFAULT"]
-        elif conv_path == "decoder.res4.fuse_conv.1":
-            return self.conv_configs["DEFAULT"]
-        elif conv_path == "decoder.res3.project_conv":
-            return self.conv_configs["DEFAULT"]
-        elif conv_path == "decoder.res3.fuse_conv.0":
-            return self.conv_configs["DEFAULT"]
-        elif conv_path == "decoder.res3.fuse_conv.1":
-            return self.conv_configs["DEFAULT"]
-
-        # SEMANTIC SEGMENTATION HEAD CONVOLUTIONS
-        elif conv_path == "semantic_head.head.0":
-            return self.conv_configs["DEFAULT"]
-        elif conv_path == "semantic_head.head.1":
-            return self.conv_configs["DEFAULT"]
-        elif conv_path == "semantic_head.predictor":
-            return self.conv_configs["DEFAULT"]
-
-        # INSTANCE EMBEDDING HEAD CONVOLUTIONS
-        elif conv_path == "instance_head.center_head.0":
-            return self.conv_configs["DEFAULT"]
-        elif conv_path == "instance_head.center_head.1":
-            return self.conv_configs["DEFAULT"]
-        elif conv_path == "instance_head.center_predictor":
-            return self.conv_configs["DEFAULT"]
-        elif conv_path == "instance_head.offset_head.0":
-            return self.conv_configs["DEFAULT"]
-        elif conv_path == "instance_head.offset_head.1":
-            return self.conv_configs["DEFAULT"]
-        elif conv_path == "instance_head.offset_predictor":
-            return self.conv_configs["DEFAULT"]
-
-        # DEFAULT FALLBACK
-        else:
-            return self.conv_configs["DEFAULT"]
-
-    def get_conv_compute_config(self, module_path):
+    def register_layer_override(self, conv_path: str, **overrides):
         """
-        Get the appropriate compute kernel configuration for a given module path.
+        Register layer-specific overrides for a given convolution path.
 
         Args:
-            module_path: String path identifying the module
+            conv_path: String path identifying the convolution layer
+            **overrides: Keyword arguments for Conv2dConfiguration fields to override
 
-        Returns:
-            ttnn.WormholeComputeKernelConfig: Compute configuration for the module
+        Example:
+            config.register_layer_override(
+                "stem.conv1",
+                sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=64),
+                slice_strategy=WidthSliceStrategyConfiguration(num_slices=4)
+            )
         """
-        return self.compute_configs["CONV_COMPUTE_CONFIG"]
+        if conv_path not in self.layer_overrides:
+            self.layer_overrides[conv_path] = {}
+        self.layer_overrides[conv_path].update(overrides)
 
     def get_conv_output_dtype(self):
         """Get the default output dtype for convolutions."""
         return self.conv_output_dtype
 
-    def get_slice_config(self, conv_path):
+    def setup_default_layer_overrides(self):
         """
-        Get the appropriate slicing configuration for a given convolution path.
+        Setup commonly used layer-specific overrides for Panoptic-DeepLab model.
 
-        Args:
-            conv_path: String path identifying the convolution layer
-
-        Returns:
-            dict: Slicing configuration with mode and num_slices
+        This method pre-configures slicing strategies and sharding strategies for
+        specific layers that benefit from custom configurations.
         """
-        # STEM: Use width slicing for all conv layers
-        if "stem" in conv_path:
-            return {"mode": "width", "num_slices": 4}
+        # STEM CONVOLUTIONS: Use width slicing for all stem layers
+        for conv_name in ["stem.conv1", "stem.conv2", "stem.conv3"]:
+            self.register_layer_override(conv_name, slice_strategy=WidthSliceStrategyConfiguration(num_slices=4))
 
         # RESNET BOTTLENECKS: Use width slicing for res3 shortcuts
-        elif "res3" in conv_path and "shortcut" in conv_path:
-            return {"mode": "width", "num_slices": 2}
-        else:
-            return {"mode": "none", "num_slices": 1}
+        for i in range(4):  # res3 typically has 4 blocks
+            self.register_layer_override(
+                f"res3.{i}.shortcut", slice_strategy=WidthSliceStrategyConfiguration(num_slices=2)
+            )
 
-    def get_aspp_slice_config(self, branch_index):
+    def setup_aspp_layer_overrides(self):
         """
-        Get slicing configuration for ASPP branches.
+        Setup layer-specific overrides for ASPP (Atrous Spatial Pyramid Pooling) layers.
+
+        ASPP branches use different slicing strategies:
+        - Branch 0: 1x1 conv (no slicing)
+        - Branches 1-3: Dilated convs (channel slicing with increasing num_slices)
+        - Branch 4: Global pooling (no slicing)
+        """
+        # Branch 0: 1x1 conv branch (no slicing)
+        self.register_layer_override("aspp.convs.0", slice_strategy=None)
+
+        # Branches 1-3: Dilated conv branches (channel slicing)
+        channel_slices = [2, 4, 8]
+        for i, num_slices in enumerate(channel_slices, start=1):
+            self.register_layer_override(
+                f"aspp.convs.{i}", slice_strategy=ChannelSliceStrategyConfiguration(num_slices=num_slices)
+            )
+
+        # Branch 4: Global pooling branch (no slicing)
+        self.register_layer_override("aspp.convs.4", slice_strategy=None)
+
+        # Project layer
+        self.register_layer_override("aspp.project", slice_strategy=None)
+
+    def setup_decoder_layer_overrides(self, iteration_index=0):
+        """
+        Setup layer-specific overrides for decoder convolutions.
 
         Args:
-            branch_index: Index of the ASPP branch (0-4)
-
-        Returns:
-            dict: Slicing configuration for the branch
-        """
-        if branch_index == 0:  # 1x1 conv branch
-            return {"mode": "none", "num_slices": 1}
-        elif branch_index in [1, 2, 3]:  # Dilated conv branches
-            channel_slices = [2, 4, 8]
-            return {"mode": "channel", "num_slices": channel_slices[branch_index - 1]}
-        elif branch_index == 4:  # Global pooling branch
-            return {"mode": "none", "num_slices": 1}
-        else:
-            return {"mode": "none", "num_slices": 1}
-
-    def get_decoder_slice_config(self, conv_path, iteration_index=0):
-        """
-        Get slicing configuration for decoder convolutions.
-
-        Args:
-            conv_path: String path identifying the decoder convolution
             iteration_index: Index of the decoder iteration (0 for first, 1+ for subsequent)
-
-        Returns:
-            dict: Slicing configuration for the decoder conv
         """
-        if "fuse_conv.0" in conv_path:
-            if iteration_index == 0:
-                # Check if this is res3 stage (which has 160 channels after projection) - use channel slicing
-                if "res3" in conv_path:
-                    return {"mode": "channel", "num_slices": 5}
-                else:
-                    # Other stages use height slicing
-                    return {"mode": "height", "num_slices": 4}
+        # Decoder projection layers (no slicing typically)
+        for stage in ["res5", "res4", "res3"]:
+            self.register_layer_override(f"decoder.{stage}.project_conv", slice_strategy=None)
+
+        # Decoder fuse convolutions
+        for stage in ["res4", "res3"]:
+            # fuse_conv.0
+            fuse_conv_0_path = f"decoder.{stage}.fuse_conv.0"
+            if iteration_index == 0 and stage == "res3":
+                # res3 stage uses channel slicing
+                self.register_layer_override(
+                    fuse_conv_0_path, slice_strategy=ChannelSliceStrategyConfiguration(num_slices=5)
+                )
             else:
-                # Use height slicing for subsequent iterations
-                return {"mode": "height", "num_slices": 4}
-        elif "fuse_conv.1" in conv_path:
-            # Always use height slicing with num_slices=2 (matches original hardcoded logic)
-            return {"mode": "height", "num_slices": 2}
-        else:
-            return {"mode": "none", "num_slices": 1}
+                # Other stages use height slicing
+                self.register_layer_override(
+                    fuse_conv_0_path, slice_strategy=HeightSliceStrategyConfiguration(num_slices=4)
+                )
 
-    def get_head_slice_config(self, head_type):
+            # fuse_conv.1: Always use height slicing
+            self.register_layer_override(
+                f"decoder.{stage}.fuse_conv.1", slice_strategy=HeightSliceStrategyConfiguration(num_slices=2)
+            )
+
+    def setup_head_layer_overrides(self):
         """
-        Get slicing configuration for head convolutions.
+        Setup layer-specific overrides for head convolutions.
 
-        Args:
-            head_type: Type of head ("semantic", "center", "offset")
-
-        Returns:
-            dict: Slicing configuration for the head
+        All head convolutions typically use height slicing with num_slices=2.
         """
-        # All head convolutions use height slicing
-        return {"mode": "height", "num_slices": 2}
+        # Semantic segmentation head
+        for i in [0, 1]:
+            self.register_layer_override(
+                f"semantic_head.head.{i}", slice_strategy=HeightSliceStrategyConfiguration(num_slices=2)
+            )
+        self.register_layer_override(
+            "semantic_head.predictor", slice_strategy=HeightSliceStrategyConfiguration(num_slices=2)
+        )
+
+        # Instance embedding head - center
+        for i in [0, 1]:
+            self.register_layer_override(
+                f"instance_head.center_head.{i}", slice_strategy=HeightSliceStrategyConfiguration(num_slices=2)
+            )
+        self.register_layer_override(
+            "instance_head.center_predictor", slice_strategy=HeightSliceStrategyConfiguration(num_slices=2)
+        )
+
+        # Instance embedding head - offset
+        for i in [0, 1]:
+            self.register_layer_override(
+                f"instance_head.offset_head.{i}", slice_strategy=HeightSliceStrategyConfiguration(num_slices=2)
+            )
+        self.register_layer_override(
+            "instance_head.offset_predictor", slice_strategy=HeightSliceStrategyConfiguration(num_slices=2)
+        )
+
+    def setup_all_layer_overrides(self):
+        """
+        Setup all commonly used layer-specific overrides for the complete Panoptic-DeepLab model.
+
+        This is a convenience method that calls all the individual setup methods.
+        """
+        self.setup_default_layer_overrides()
+        self.setup_aspp_layer_overrides()
+        self.setup_decoder_layer_overrides()
+        self.setup_head_layer_overrides()
