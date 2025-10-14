@@ -130,8 +130,6 @@ uint32_t compute_build_key(chip_id_t device_id, uint8_t num_hw_cqs) {
         hash ^= uint32_hasher(harvested_core_count) << 4;
     }
 
-    hash ^= std::hash<std::string>{}(MetalContext::instance().rtoptions().get_compile_hash_string());
-
     // Convert the hash to a 32-bit value
     return static_cast<uint32_t>(hash);
 }
@@ -177,10 +175,12 @@ void BuildEnvManager::add_build_env(chip_id_t device_id, uint8_t num_hw_cqs) {
     const std::lock_guard<std::mutex> lock(this->lock);
     uint32_t build_key = compute_build_key(device_id, num_hw_cqs);
     auto device_kernel_defines = initialize_device_kernel_defines(device_id, num_hw_cqs);
+    const size_t fw_compile_hash =
+        std::hash<std::string>{}(tt::tt_metal::MetalContext::instance().rtoptions().get_compile_hash_string());
 
     device_id_to_build_env_[device_id].build_key = build_key;
     device_id_to_build_env_[device_id].build_env.init(
-        build_key, tt::tt_metal::MetalContext::instance().get_cluster().arch(), device_kernel_defines);
+        build_key, fw_compile_hash, tt::tt_metal::MetalContext::instance().get_cluster().arch(), device_kernel_defines);
     device_id_to_build_env_[device_id].firmware_build_states =
         create_build_state(device_id_to_build_env_[device_id].build_env, device_id, num_hw_cqs, true);
     device_id_to_build_env_[device_id].kernel_build_states =
@@ -231,4 +231,14 @@ void BuildEnvManager::build_firmware(chip_id_t device_id) {
     jit_build_subset(get_device_build_env(device_id).firmware_build_states, nullptr);
 }
 
+// Get build environment info for all devices
+std::vector<BuildEnvInfo> BuildEnvManager::get_all_build_envs_info() {
+    const std::lock_guard<std::mutex> lock(this->lock);
+    std::vector<BuildEnvInfo> build_env_info;
+    build_env_info.reserve(device_id_to_build_env_.size());
+    for (const auto& [device_id, build_env] : device_id_to_build_env_) {
+        build_env_info.emplace_back(device_id, build_env.build_key, build_env.build_env.get_out_firmware_root_path());
+    }
+    return build_env_info;
+}
 }  // namespace tt::tt_metal
