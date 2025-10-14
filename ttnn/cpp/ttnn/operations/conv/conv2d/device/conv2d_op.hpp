@@ -103,7 +103,7 @@ struct Conv2dConfig {
     //    4. Input tensor's padding must be zero.
     //    5. Input tensor data type is not BFLOAT8_B.
 
-    bool enable_kernel_stride_folding = false;
+    std::optional<bool> enable_kernel_stride_folding = std::nullopt;
 
     // Activation reuse is a feature that enables reusing data between consecutive image rows.
     // It can be enabled for height sharding only and boosts im2col performance,
