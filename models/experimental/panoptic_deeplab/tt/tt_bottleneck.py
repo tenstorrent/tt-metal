@@ -134,13 +134,22 @@ class TtBottleneck(LightweightModule):
             f"Created {conv_path} - in={final_config.in_channels}, out={final_config.out_channels}, stride={final_config.stride}, dilation={final_config.dilation}, out_shape={output_shape}"
         )
 
+        # Debug print memory config
+        shard_type = type(final_config.sharding_strategy).__name__ if final_config.sharding_strategy else "None"
+        act_block_h = (
+            final_config.sharding_strategy.act_block_h_override
+            if hasattr(final_config.sharding_strategy, "act_block_h_override")
+            else 0
+        )
+        logger.info(f"[MEMORY_CONFIG] {conv_path}: sharding={shard_type}, act_block_h_override={act_block_h}")
+
         return conv_layer, output_shape
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         logger.debug(f"TtBottleneck {self.block_id} forward pass starting, input shape: {x.shape}")
 
-        # Store input for residual connection
-        identity = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+        # Store input for residual connection (don't move - use as is)
+        identity = x
         # workaround for conv tilize issue with non-height shard
         if identity.spec.layout != ttnn.TILE_LAYOUT:
             identity = ttnn.tilize(identity)
@@ -152,27 +161,31 @@ class TtBottleneck(LightweightModule):
             # TT CNN returns flattened [B, 1, H*W, C], reshape to pre-computed output shape
             if identity.shape[1] == 1:  # Flattened format
                 identity = ttnn.reshape(identity, self.shortcut_out_shape)
+            # res3 shortcuts use width slicing, so move to DRAM. Others use ttnn.move()
+            if "res3" in self.block_id:
+                identity = ttnn.to_memory_config(identity, ttnn.DRAM_MEMORY_CONFIG)
+            else:
+                identity = ttnn.move(identity)
             logger.debug(f"TtBottleneck {self.block_id} shortcut processing complete, shape: {identity.shape}")
 
-        # Main path: Conv1 + ReLU (BatchNorm fused into Conv1)
+        # Main path: Conv1 + separate ReLU (BatchNorm fused into Conv1)
         logger.debug(f"TtBottleneck {self.block_id} processing conv1 (1x1 reduction)")
-        x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
         out = self.conv1(x)
         # TT CNN returns flattened [B, 1, H*W, C], reshape to pre-computed output shape
         if out.shape[1] == 1:  # Flattened format
             out = ttnn.reshape(out, self.conv1_out_shape)
-        out = ttnn.relu(out)
-        out = ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG)
+        out = ttnn.relu(out)  # Separate ReLU
+        out = ttnn.move(out)
         logger.debug(f"TtBottleneck {self.block_id} conv1 complete, output shape: {out.shape}")
 
-        # Conv2 + ReLU (BatchNorm fused into Conv2)
+        # Conv2 + separate ReLU (BatchNorm fused into Conv2)
         logger.debug(f"TtBottleneck {self.block_id} processing conv2 (3x3 spatial)")
         out = self.conv2(out)
         # TT CNN returns flattened [B, 1, H*W, C], reshape to pre-computed output shape
         if out.shape[1] == 1:  # Flattened format
             out = ttnn.reshape(out, self.conv2_out_shape)
-        out = ttnn.relu(out)
-        out = ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG)
+        out = ttnn.relu(out)  # Separate ReLU
+        out = ttnn.move(out)
         logger.debug(f"TtBottleneck {self.block_id} conv2 complete, output shape: {out.shape}")
 
         # Conv3 (no ReLU yet, BatchNorm fused into Conv3)
@@ -181,7 +194,7 @@ class TtBottleneck(LightweightModule):
         # TT CNN returns flattened [B, 1, H*W, C], reshape to pre-computed output shape
         if out.shape[1] == 1:  # Flattened format
             out = ttnn.reshape(out, self.conv3_out_shape)
-        out = ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG)
+        out = ttnn.move(out)
         logger.debug(f"TtBottleneck {self.block_id} conv3 complete, output shape: {out.shape}")
 
         # Residual connection + ReLU
@@ -189,7 +202,7 @@ class TtBottleneck(LightweightModule):
         # Always add residual - shapes should match after reshape
         out = ttnn.add(out, identity)
         out = ttnn.relu(out)
-        out = ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG)
+        out = ttnn.move(out)
 
         logger.debug(f"TtBottleneck {self.block_id} forward pass complete, final output shape: {out.shape}")
         return out
