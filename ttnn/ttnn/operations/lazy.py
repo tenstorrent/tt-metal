@@ -12,7 +12,7 @@ from ttnn._ttnn.operations.lazy import (
     FunctionView,
     Operation,
     Param,
-    Params,
+    ParamsView,
     Ternary,
     Unary,
     Value,
@@ -40,6 +40,4 @@ from ttnn._ttnn.operations.lazy import (
     rdiv,
     power,
     where,
-    to_compute_kernel_string,
-    to_debug_string,
 )

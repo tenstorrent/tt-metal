@@ -121,6 +121,11 @@ std::optional<BasicExpression<T>> BasicExpression<T>::from(const Tensor& tensor)
         return std::nullopt;
     }
 
+    // TODO relax requirement
+    if (tensor.dtype() != DataType::BFLOAT16) {
+        return std::nullopt;
+    }
+
     // add tensor validation here
 
     return BasicExpression<T>(tensor);
@@ -242,8 +247,8 @@ auto get_circular_buffers(std::span<const Node> nodes) noexcept {
         if (auto function_ptr = std::get_if<FunctionNode>(&node)) {
             for (const auto offset : function_ptr->offsets) {
                 if (std::holds_alternative<FunctionNode>(*(&node - offset))) {
-                    // this assumes no common sub-expressions
-                    // when CSE is introduced, this will need revised
+                    // this assumes no common subexpressions
+                    // CSE requires liveness tracking
                     ++result.reusable;
                 }
             }
