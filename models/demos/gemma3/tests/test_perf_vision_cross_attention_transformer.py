@@ -140,7 +140,11 @@ def run_model(mesh_device, batch_size, profiler, nr_forward_iterations):
     return tt_output_torch
 
 
+<<<<<<< HEAD
 def load_targets(filename, device_type, model_name):
+=======
+def load_targets(filename, device_type):
+>>>>>>> cb25b73173 (Mstojko/test vision cross attention transformer benchmark (#29699))
     if not os.path.exists(filename):
         logger.warning(f"Expected outputs file {filename} does not exist. Skipping loading targets.")
         return []
@@ -152,6 +156,7 @@ def load_targets(filename, device_type, model_name):
             logger.error(f"Error decoding JSON from {filename}: {e}. Returning empty list.")
             return []
 
+<<<<<<< HEAD
     dict_targets = targets[model_name][device_type]
 
     return dict_targets
@@ -169,3 +174,8 @@ def get_model_name():
         return "gemma-3-27b-it"
     else:
         raise ValueError(f"Unsupported model name: {full_name}")
+=======
+    dict_targets = targets[device_type]
+
+    return dict_targets
+>>>>>>> cb25b73173 (Mstojko/test vision cross attention transformer benchmark (#29699))
