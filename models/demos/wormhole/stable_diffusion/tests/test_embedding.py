@@ -8,7 +8,7 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
 from models.demos.wormhole.stable_diffusion.common import SD_L1_SMALL_SIZE
-from models.demos.wormhole.stable_diffusion.sd_helper_funcs import get_refference_stable_diffusion_pipeline
+from models.demos.wormhole.stable_diffusion.sd_helper_funcs import get_reference_stable_diffusion_pipeline
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_embeddings import TtTimestepEmbedding
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
@@ -16,7 +16,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SD_L1_SMALL_SIZE}], indirect=True)
 def test_embeddings(device, is_ci_env, is_ci_v2_env, model_location_generator):
     torch.manual_seed(0)
-    model = get_refference_stable_diffusion_pipeline(is_ci_env, is_ci_v2_env, model_location_generator).unet
+    model = get_reference_stable_diffusion_pipeline(is_ci_env, is_ci_v2_env, model_location_generator).unet
     time_embedding = model.time_embedding
 
     parameters = preprocess_model_parameters(initialize_model=lambda: time_embedding, device=device)

@@ -9,7 +9,7 @@ from models.demos.wormhole.stable_diffusion.common import SD_L1_SMALL_SIZE, SD_T
 from models.demos.wormhole.stable_diffusion.demo.demo import load_inputs
 from models.demos.wormhole.stable_diffusion.demo.demo import run_demo_inference as demo
 from models.demos.wormhole.stable_diffusion.demo.demo import run_demo_inference_diffusiondb as demo_db
-from models.demos.wormhole.stable_diffusion.sd_helper_funcs import get_refference_stable_diffusion_pipeline
+from models.demos.wormhole.stable_diffusion.sd_helper_funcs import get_reference_stable_diffusion_pipeline
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
@@ -71,7 +71,7 @@ def test_demo_sd(device, reset_seeds, input_path, is_ci_env, is_ci_v2_env, model
 
     inputs = load_inputs(input_path)
     input_prompts = inputs[:1]
-    pipe = get_refference_stable_diffusion_pipeline(is_ci_env, is_ci_v2_env, model_location_generator)
+    pipe = get_reference_stable_diffusion_pipeline(is_ci_env, is_ci_v2_env, model_location_generator)
 
     import torch
 

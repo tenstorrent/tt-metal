@@ -10,7 +10,7 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 import ttnn
 from models.demos.wormhole.stable_diffusion.common import SD_L1_SMALL_SIZE
 from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
-from models.demos.wormhole.stable_diffusion.sd_helper_funcs import get_refference_unet
+from models.demos.wormhole.stable_diffusion.sd_helper_funcs import get_reference_unet
 from models.demos.wormhole.stable_diffusion.tests.parameterizations import TRANSFORMER_PARAMETERIZATIONS
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_basic_transformer_block import basic_transformer_block
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
@@ -42,7 +42,7 @@ def test_basic_transformer_block_512x512(
 
     N, C, H, W = input_shape
 
-    unet = get_refference_unet(is_ci_env, is_ci_v2_env, model_location_generator)
+    unet = get_reference_unet(is_ci_env, is_ci_v2_env, model_location_generator)
     config = unet.config
 
     if block == "up":

@@ -10,7 +10,7 @@ import ttnn
 from models.common.utility_functions import torch_random
 from models.demos.wormhole.stable_diffusion.common import SD_L1_SMALL_SIZE
 from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
-from models.demos.wormhole.stable_diffusion.sd_helper_funcs import get_refference_stable_diffusion_pipeline
+from models.demos.wormhole.stable_diffusion.sd_helper_funcs import get_reference_stable_diffusion_pipeline
 from models.demos.wormhole.stable_diffusion.tests.parameterizations import (
     CROSS_UP_BLOCKS_HIDDEN_STATES_INFO,
     DOWN_MID_UP_BLOCKS_HIDDEN_STATES_INFO,
@@ -52,7 +52,7 @@ def test_upsample2d_512x512(
 ):
     torch.manual_seed(0)
     # setup pytorch model
-    unet = get_refference_stable_diffusion_pipeline(is_ci_env, is_ci_v2_env, model_location_generator).unet
+    unet = get_reference_stable_diffusion_pipeline(is_ci_env, is_ci_v2_env, model_location_generator).unet
     unet_upblock = unet.up_blocks[index]
     resnet_upsampler = unet_upblock.upsamplers[0]
 

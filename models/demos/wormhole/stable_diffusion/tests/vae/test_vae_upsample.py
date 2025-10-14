@@ -7,7 +7,7 @@ import torch
 
 import ttnn
 from models.demos.wormhole.stable_diffusion.common import SD_L1_SMALL_SIZE
-from models.demos.wormhole.stable_diffusion.sd_helper_funcs import get_refference_vae
+from models.demos.wormhole.stable_diffusion.sd_helper_funcs import get_reference_vae
 from models.demos.wormhole.stable_diffusion.tt.vae.ttnn_vae_configs import UPBLOCK_UPSAMPLE_CONV_CHANNEL_SPLIT_FACTORS
 from models.demos.wormhole.stable_diffusion.tt.vae.ttnn_vae_upsample import UpsampleBlock
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -36,7 +36,7 @@ def test_upsample(
     is_ci_v2_env,
     model_location_generator,
 ):
-    vae = get_refference_vae(is_ci_env, is_ci_v2_env, model_location_generator)
+    vae = get_reference_vae(is_ci_env, is_ci_v2_env, model_location_generator)
     torch_upsample = vae.decoder.up_blocks[block_id].upsamplers[0]
 
     # Run pytorch model

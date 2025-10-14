@@ -8,7 +8,7 @@ import torch
 import ttnn
 from models.common.utility_functions import skip_for_blackhole
 from models.demos.wormhole.stable_diffusion.common import SD_L1_SMALL_SIZE
-from models.demos.wormhole.stable_diffusion.sd_helper_funcs import get_refference_vae
+from models.demos.wormhole.stable_diffusion.sd_helper_funcs import get_reference_vae
 from models.demos.wormhole.stable_diffusion.tt.vae.ttnn_vae_configs import (
     MIDBLOCK_RESNET_CONV_CHANNEL_SPLIT_FACTORS,
     MIDBLOCK_RESNET_NORM_NUM_BLOCKS,
@@ -36,7 +36,7 @@ def test_vae_midblock(
     is_ci_v2_env,
     model_location_generator,
 ):
-    vae = get_refference_vae(is_ci_env, is_ci_v2_env, model_location_generator)
+    vae = get_reference_vae(is_ci_env, is_ci_v2_env, model_location_generator)
 
     torch_midblock = vae.decoder.mid_block
 

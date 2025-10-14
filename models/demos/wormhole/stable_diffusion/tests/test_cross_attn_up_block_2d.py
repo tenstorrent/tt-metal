@@ -10,7 +10,7 @@ import ttnn
 from models.common.utility_functions import torch_random
 from models.demos.wormhole.stable_diffusion.common import SD_L1_SMALL_SIZE
 from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
-from models.demos.wormhole.stable_diffusion.sd_helper_funcs import get_refference_unet
+from models.demos.wormhole.stable_diffusion.sd_helper_funcs import get_reference_unet
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_cross_attn_upblock_new_conv import (
     cross_attention_upblock2d,
 )
@@ -88,7 +88,7 @@ def test_cross_attn_up_block_2d_512x512(
     is_ci_v2_env,
     model_location_generator,
 ):
-    unet = get_refference_unet(is_ci_env, is_ci_v2_env, model_location_generator)
+    unet = get_reference_unet(is_ci_env, is_ci_v2_env, model_location_generator)
     config = unet.config
     unet_upblock = unet.up_blocks[index]
 

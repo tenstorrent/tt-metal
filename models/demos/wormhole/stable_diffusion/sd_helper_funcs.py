@@ -278,7 +278,7 @@ STABLE_DIFFUSION_CIV2_MODEL_LOCATION = "stable-diffusion-v1-4"
 CLIP_VIT_LARGE_PATCH14_CIV2_MODEL_LOCATION = "clip-vit-large-patch14"
 
 
-def get_refference_vae(is_ci_env, is_ci_v2_env, model_location_generator):
+def get_reference_vae(is_ci_env, is_ci_v2_env, model_location_generator):
     model_location = model_location_generator(
         f"{STABLE_DIFFUSION_CIV2_MODEL_LOCATION}/vae", download_if_ci_v2=True, ci_v2_timeout_in_s=1800
     )
@@ -291,7 +291,7 @@ def get_refference_vae(is_ci_env, is_ci_v2_env, model_location_generator):
     return vae.to("cpu")
 
 
-def get_refference_unet(is_ci_env, is_ci_v2_env, model_location_generator):
+def get_reference_unet(is_ci_env, is_ci_v2_env, model_location_generator):
     model_location = model_location_generator(
         f"{STABLE_DIFFUSION_CIV2_MODEL_LOCATION}/unet", download_if_ci_v2=True, ci_v2_timeout_in_s=1800
     )
@@ -304,7 +304,7 @@ def get_refference_unet(is_ci_env, is_ci_v2_env, model_location_generator):
     return unet.to("cpu")
 
 
-def get_refference_clip_tokenizer(is_ci_env, is_ci_v2_env, model_location_generator):
+def get_reference_clip_tokenizer(is_ci_env, is_ci_v2_env, model_location_generator):
     model_location = model_location_generator(
         CLIP_VIT_LARGE_PATCH14_CIV2_MODEL_LOCATION, download_if_ci_v2=True, ci_v2_timeout_in_s=1800
     )
@@ -316,7 +316,7 @@ def get_refference_clip_tokenizer(is_ci_env, is_ci_v2_env, model_location_genera
     return tokenizer
 
 
-def get_refference_clip_text_encoder(is_ci_env, is_ci_v2_env, model_location_generator):
+def get_reference_clip_text_encoder(is_ci_env, is_ci_v2_env, model_location_generator):
     model_location = model_location_generator(
         CLIP_VIT_LARGE_PATCH14_CIV2_MODEL_LOCATION, download_if_ci_v2=True, ci_v2_timeout_in_s=1800
     )
@@ -328,7 +328,7 @@ def get_refference_clip_text_encoder(is_ci_env, is_ci_v2_env, model_location_gen
     return text_encoder
 
 
-def get_refference_stable_diffusion_pipeline(is_ci_env, is_ci_v2_env, model_location_generator):
+def get_reference_stable_diffusion_pipeline(is_ci_env, is_ci_v2_env, model_location_generator):
     model_location = model_location_generator(
         STABLE_DIFFUSION_CIV2_MODEL_LOCATION, download_if_ci_v2=True, ci_v2_timeout_in_s=1800
     )

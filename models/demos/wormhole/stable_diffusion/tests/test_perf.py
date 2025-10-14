@@ -15,8 +15,8 @@ from models.demos.wormhole.stable_diffusion.common import SD_L1_SMALL_SIZE, SD_T
 from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
 from models.demos.wormhole.stable_diffusion.sd_helper_funcs import (
     STABLE_DIFFUSION_V1_4_MODEL_LOCATION,
-    get_refference_stable_diffusion_pipeline,
-    get_refference_vae,
+    get_reference_stable_diffusion_pipeline,
+    get_reference_vae,
     run,
 )
 from models.demos.wormhole.stable_diffusion.sd_pndm_scheduler import TtPNDMScheduler
@@ -62,7 +62,7 @@ def test_stable_diffusion_unet_trace(device, is_ci_env, is_ci_v2_env, model_loca
     profiler.clear()
     torch.manual_seed(0)
 
-    torch_model = get_refference_stable_diffusion_pipeline(is_ci_env, is_ci_v2_env, model_location_generator).unet
+    torch_model = get_reference_stable_diffusion_pipeline(is_ci_env, is_ci_v2_env, model_location_generator).unet
     config = torch_model.config
 
     # Setup scheduler
@@ -185,7 +185,7 @@ def test_stable_diffusion_vae_trace(device, is_ci_env, is_ci_v2_env, model_locat
     profiler.clear()
     torch.manual_seed(0)
 
-    vae = get_refference_vae(is_ci_env, is_ci_v2_env, model_location_generator)
+    vae = get_reference_vae(is_ci_env, is_ci_v2_env, model_location_generator)
     ttnn_model = Vae(torch_vae=vae, device=device)
 
     input_channels = 4
@@ -283,8 +283,8 @@ def test_stable_diffusion_perf(
 
     # setup pytorch model
     torch.manual_seed(0)
-    model = get_refference_stable_diffusion_pipeline(is_ci_env, is_ci_v2_env, model_location_generator).unet
-    vae = get_refference_vae(is_ci_env, is_ci_v2_env, model_location_generator)
+    model = get_reference_stable_diffusion_pipeline(is_ci_env, is_ci_v2_env, model_location_generator).unet
+    vae = get_reference_vae(is_ci_env, is_ci_v2_env, model_location_generator)
     config = model.config
 
     # setup scheduler

@@ -17,10 +17,10 @@ from models.demos.wormhole.stable_diffusion.common import SD_L1_SMALL_SIZE, SD_T
 from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
 from models.demos.wormhole.stable_diffusion.sd_helper_funcs import (
     compile_trace_sd,
-    get_refference_clip_text_encoder,
-    get_refference_clip_tokenizer,
-    get_refference_unet,
-    get_refference_vae,
+    get_reference_clip_text_encoder,
+    get_reference_clip_tokenizer,
+    get_reference_unet,
+    get_reference_vae,
 )
 from models.demos.wormhole.stable_diffusion.sd_pndm_scheduler import TtPNDMScheduler
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_unet_2d_condition_model_new_conv import (
@@ -56,15 +56,15 @@ def create_model_pipeline(
 
     torch_device = "cpu"
     # 1. Load the autoencoder model which will be used to decode the latents into image space.
-    vae = get_refference_vae(is_ci_env, is_ci_v2_env, model_location_generator)
+    vae = get_reference_vae(is_ci_env, is_ci_v2_env, model_location_generator)
     vae_scale_factor = 2 ** (len(vae.config.block_out_channels) - 1)
     tt_vae = Vae(torch_vae=vae, device=device)
     # 2. Load the tokenizer and text encoder to tokenize and encode the text.
-    tokenizer = get_refference_clip_tokenizer(is_ci_env, is_ci_v2_env, model_location_generator)
-    text_encoder = get_refference_clip_text_encoder(is_ci_env, is_ci_v2_env, model_location_generator)
+    tokenizer = get_reference_clip_tokenizer(is_ci_env, is_ci_v2_env, model_location_generator)
+    text_encoder = get_reference_clip_text_encoder(is_ci_env, is_ci_v2_env, model_location_generator)
 
     # 3. The UNet model for generating the latents.
-    unet = get_refference_unet(is_ci_env, is_ci_v2_env, model_location_generator)
+    unet = get_reference_unet(is_ci_env, is_ci_v2_env, model_location_generator)
 
     # 4. load the K-LMS scheduler with some fitting parameters.
     ttnn_scheduler = TtPNDMScheduler(

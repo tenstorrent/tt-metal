@@ -7,7 +7,7 @@ import torch
 
 import ttnn
 from models.demos.wormhole.stable_diffusion.common import SD_L1_SMALL_SIZE
-from models.demos.wormhole.stable_diffusion.sd_helper_funcs import get_refference_vae
+from models.demos.wormhole.stable_diffusion.sd_helper_funcs import get_reference_vae
 from models.demos.wormhole.stable_diffusion.tt.vae.ttnn_vae import Vae
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
@@ -40,7 +40,7 @@ def test_decoder(
 ):
     torch.manual_seed(0)
 
-    vae = get_refference_vae(is_ci_env, is_ci_v2_env, model_location_generator)
+    vae = get_reference_vae(is_ci_env, is_ci_v2_env, model_location_generator)
 
     # Run pytorch model
     torch_input = torch.randn([1, input_channels, input_height, input_width])

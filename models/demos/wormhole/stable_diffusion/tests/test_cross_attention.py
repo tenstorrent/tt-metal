@@ -9,7 +9,7 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 import ttnn
 from models.demos.wormhole.stable_diffusion.common import SD_L1_SMALL_SIZE
 from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
-from models.demos.wormhole.stable_diffusion.sd_helper_funcs import get_refference_unet
+from models.demos.wormhole.stable_diffusion.sd_helper_funcs import get_reference_unet
 from models.demos.wormhole.stable_diffusion.tests.parameterizations import TRANSFORMER_PARAMETERIZATIONS
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_cross_attention import cross_attention
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
@@ -43,7 +43,7 @@ def test_cross_attention_512x512(
 
     N, C, H, W = input_shape
 
-    unet = get_refference_unet(is_ci_env, is_ci_v2_env, model_location_generator)
+    unet = get_reference_unet(is_ci_env, is_ci_v2_env, model_location_generator)
 
     hidden_states_shape = torch.Size(input_shape)
     hidden_states = torch.rand(hidden_states_shape)

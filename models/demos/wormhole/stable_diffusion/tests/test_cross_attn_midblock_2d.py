@@ -11,7 +11,7 @@ import ttnn
 from models.common.utility_functions import torch_random
 from models.demos.wormhole.stable_diffusion.common import SD_L1_SMALL_SIZE
 from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
-from models.demos.wormhole.stable_diffusion.sd_helper_funcs import get_refference_unet
+from models.demos.wormhole.stable_diffusion.sd_helper_funcs import get_reference_unet
 from models.demos.wormhole.stable_diffusion.tests.parameterizations import DOWN_MID_UP_BLOCKS_HIDDEN_STATES_INFO
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_unet_mid_block_2d_cross_attn_new_conv import (
     unet_mid_block_2d_cross_attn,
@@ -42,7 +42,7 @@ def test_cross_attention_midblock_512x512(
     model_location_generator,
 ):
     # Initialize PyTorch component
-    unet = get_refference_unet(is_ci_env, is_ci_v2_env, model_location_generator)
+    unet = get_reference_unet(is_ci_env, is_ci_v2_env, model_location_generator)
     torch_midblock = unet.mid_block
 
     # Initialize ttnn component
