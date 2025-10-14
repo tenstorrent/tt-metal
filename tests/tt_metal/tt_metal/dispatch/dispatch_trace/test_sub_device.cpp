@@ -11,7 +11,7 @@
 #include <unordered_set>
 #include <vector>
 
-#include <tt-metalium/command_queue.hpp>
+#include "impl/dispatch/command_queue.hpp"
 #include <tt-metalium/tt_metal_profiler.hpp>
 #include "command_queue_fixture.hpp"
 #include "dispatch_test_utils.hpp"

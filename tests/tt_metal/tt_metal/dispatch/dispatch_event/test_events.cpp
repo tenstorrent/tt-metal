@@ -6,7 +6,7 @@
 #include <fmt/base.h>
 #include <stddef.h>
 #include <stdint.h>
-#include <tt-metalium/command_queue.hpp>
+#include "impl/dispatch/command_queue.hpp"
 #include <tt-metalium/event.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <future>
