@@ -25,6 +25,13 @@ from models.experimental.panoptic_deeplab.tt.tt_insemb import TtPanopticDeepLabI
 from models.experimental.panoptic_deeplab.reference.pytorch_postprocessing import get_panoptic_segmentation
 from models.experimental.panoptic_deeplab.reference.pytorch_semseg import ShapeSpec
 
+try:
+    from tracy import signpost
+except ModuleNotFoundError:
+
+    def signpost(*args, **kwargs):
+        pass
+
 
 class TtPanopticDeepLab:
     """
@@ -181,6 +188,7 @@ class TtPanopticDeepLab:
         logger.debug(f"Starting TtPanopticDeepLab forward pass with input shape: {x.shape}")
 
         # Extract multi-scale features from backbone
+        signpost(header="Backbone_started")
         features = self.backbone(x)
         logger.debug(
             f"Backbone features extracted - res2: {features['res2'].shape}, res3: {features['res3'].shape}, res4: {features['res4'].shape}, res5: {features['res5'].shape}"
@@ -190,13 +198,16 @@ class TtPanopticDeepLab:
         # del features["res4"]
 
         # Get semantic segmentation predictions
+        signpost(header="Semantic_head_started")
         semantic_logits, _ = self.semantic_head(features)
         logger.debug(f"Semantic segmentation output shape: {semantic_logits.shape}")
 
         # Get instance embedding predictions
+        signpost(header="Instance_head_started")
         center_heatmap, offset_map, _, _ = self.instance_head(features)
         logger.debug(f"Instance embedding outputs - center: {center_heatmap.shape}, offset: {offset_map.shape}")
 
+        signpost(header="Ended")
         # Return predictions and optionally features
         if return_features:
             return semantic_logits, center_heatmap, offset_map, features
