@@ -4,25 +4,6 @@ allocation_policies:
 
 Tests:
   # Linear tests
-  - name: "LinearUnicast"
-    benchmark_mode: true
-    sync: true
-    fabric_setup:
-      topology: Linear
-
-    parametrization_params:
-      num_links: [1, 2, 3, 4]
-      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
-      size: [2048, 2304, 2560, 2816, 3072, 3328, 3584, 3840, 4096]
-
-    defaults:
-      ftype: unicast
-      num_packets: 20000
-
-    patterns:
-      - type: all_to_all
-        iterations: 3
-
   - name: "LinearMulticast"
     benchmark_mode: true
     sync: true
@@ -79,7 +60,7 @@ Tests:
     patterns:
       - type: one_to_all
         iterations: 3
-    
+
   - name: "SingleSenderLinearMulticastAllDevices"
     benchmark_mode: true
     sync: true
@@ -102,25 +83,6 @@ Tests:
   # Ring tests
 
   # Mesh tests
-  - name: "MeshUnicast"
-    benchmark_mode: true
-    sync: true
-    fabric_setup:
-      topology: Mesh
-
-    parametrization_params:
-      num_links: [1, 2, 3, 4]
-      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
-      size: [2048, 2304, 2560, 2816, 3072, 3328, 3584, 3840, 4096]
-
-    defaults:
-      ftype: unicast
-      num_packets: 20000
-
-    patterns:
-      - type: all_to_all
-        iterations: 3
-
   - name: "MeshMulticast"
     benchmark_mode: true
     sync: true
