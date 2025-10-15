@@ -45,7 +45,7 @@ struct BankedConfig {
     BufferType input_buffer_type = BufferType::L1;
     BufferType output_buffer_type = BufferType::L1;
     CoreCoord logical_core = CoreCoord(0, 0);
-    tt::DataFormat l1_data_format = tt::DataFormat::Float16_b;
+    tt::DataFormat l1_data_format = tt::DataFormat::Float32;
 };
 
 namespace local_test_functions {
