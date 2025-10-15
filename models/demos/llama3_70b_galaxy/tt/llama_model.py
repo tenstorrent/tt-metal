@@ -350,7 +350,9 @@ class TtTransformer(LightweightModule):
         """
         B = tokens.shape[0]
         # assert current_pos.shape[0] == B, "Batch size mismatch"
-        assert B == self.args.max_batch_size, f"Batch size must be equal to max_batch_size {self.args.max_batch_size}"
+        assert (
+            B == self.args.max_batch_size
+        ), f"Batch size {B} must be equal to max_batch_size {self.args.max_batch_size}"
 
         # Necessary padding to be full tile sized when on device
         tokens = torch.nn.functional.pad(tokens.view(-1), (0, 32 - len(tokens)), "constant", 0)
@@ -535,7 +537,18 @@ class TtTransformer(LightweightModule):
             kv_cache=kv_cache,
         )
         if return_logits:
-            return tt_logits[0]
+            tt_logits = self.tt_ccl.line_all_gather(
+                tt_logits[0],
+                dim=3,
+                num_links=3,
+                cluster_axis=0,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                buffer_key="SAMPLING",
+            )
+
+            tt_logits = ttnn.untilize(tt_logits, use_multicore=True, sub_core_grids=self.args.sub_core_grids)
+
+            return tt_logits
 
         # sampling
         tt_toks = self.tt_sampling(tt_logits[0], tt_out_tok=x)

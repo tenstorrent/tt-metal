@@ -16,7 +16,7 @@
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
 #include "tt_metal/impl/debug/dprint_server.hpp"
-#include "tt_metal/impl/debug/inspector.hpp"
+#include "tt_metal/impl/debug/inspector/inspector.hpp"
 #include "tt_metal/impl/debug/inspector/data.hpp"
 #include "tt_metal/impl/debug/noc_logging.hpp"
 #include "tt_metal/impl/debug/watcher_server.hpp"
@@ -73,7 +73,7 @@ void MetalContext::initialize(
         force_reinit_ = true;
     }
     // Settings that affect FW build can also trigger a re-initialization
-    auto fw_compile_hash = std::hash<std::string>{}(rtoptions_.get_compile_hash_string());
+    const size_t fw_compile_hash = std::hash<std::string>{}(rtoptions_.get_compile_hash_string());
     validate_worker_l1_size(worker_l1_size, *hal_);
     if (initialized_) {
         if (dispatch_core_config_ != dispatch_core_config or num_hw_cqs != num_hw_cqs_ or
@@ -109,6 +109,8 @@ void MetalContext::initialize(
 
     // Initialize inspector
     inspector_data_ = Inspector::initialize();
+    // Set fw_compile_hash for Inspector RPC build environment info
+    Inspector::set_build_env_fw_compile_hash(fw_compile_hash);
 
     // Initialize dispatch state
     dispatch_core_manager_ = std::make_unique<dispatch_core_manager>(dispatch_core_config, num_hw_cqs);
@@ -153,7 +155,15 @@ void MetalContext::initialize(
 
         // Create build env for this device, and build FW if it's not built already
         BuildEnvManager::get_instance().add_build_env(device_id, num_hw_cqs_);
-        uint32_t fw_build_key = BuildEnvManager::get_instance().get_device_build_env(device_id).build_key;
+        // fw_build_key is a combination of build_key and fw_compile_hash
+        // If fw_compile_hash changes, the fw_build_key will change and FW will be rebuilt
+        // if it's not already in firmware_built_keys_
+        // Combine build_key and fw_compile_hash using XOR to create unique firmware build key
+        // Uses full 64-bit fw_compile_hash for proper change detection
+        uint64_t fw_build_key =
+            (static_cast<uint64_t>(BuildEnvManager::get_instance().get_device_build_env(device_id).build_key)) ^
+            fw_compile_hash;
+
         if (!firmware_built_keys_.contains(fw_build_key)) {
             BuildEnvManager::get_instance().build_firmware(device_id);
             firmware_built_keys_.insert(fw_build_key);
@@ -585,9 +595,16 @@ void MetalContext::initialize_control_plane() {
     auto cluster_type = cluster_->get_cluster_type();
     std::filesystem::path mesh_graph_desc_path =
         tt::tt_fabric::MeshGraph::get_mesh_graph_descriptor_path_for_cluster_type(
-            cluster_type, std::filesystem::path(rtoptions_.get_root_dir()), true);
+            cluster_type, std::filesystem::path(rtoptions_.get_root_dir()), rtoptions_.get_use_mesh_graph_descriptor_2_0());
 
-    std::string suffix = ".textproto";
+    std::string suffix;
+    if (rtoptions_.get_use_mesh_graph_descriptor_2_0()) {
+        suffix = ".textproto";
+        log_debug(tt::LogDistributed, "Using MGD 2.0 mesh graph descriptor.");
+    } else {
+        suffix = ".yaml";
+        log_debug(tt::LogDistributed, "Using MGD 1.0 mesh graph descriptor.");
+    }
 
     // If the cluster is a GALAXY and the fabric type is TORUS_XY, override the mesh graph descriptor path
     if (cluster_->is_ubb_galaxy()) {
@@ -658,10 +675,8 @@ void MetalContext::reset_cores(chip_id_t device_id) {
                 llrt::internal_::return_to_base_firmware_and_wait_for_heartbeat(device_id, virtual_core);
             }
             // Only send reset to subordinate cores
-            TensixSoftResetOptions reset_val = TENSIX_ASSERT_SOFT_RESET;
-            reset_val =
-                reset_val & static_cast<TensixSoftResetOptions>(
-                                ~std::underlying_type<TensixSoftResetOptions>::type(TensixSoftResetOptions::BRISC));
+            // Assert all cores except ERISC0, which is running base firmware.
+            tt::umd::RiscType reset_val = tt::umd::RiscType::ALL_TENSIX & ~tt::umd::RiscType::ERISC0;
             tt::tt_metal::MetalContext::instance().get_cluster().assert_risc_reset_at_core(
                 tt_cxy_pair(device_id, virtual_core), reset_val);
         }
@@ -693,7 +708,7 @@ void MetalContext::reset_cores(chip_id_t device_id) {
             CoreCoord worker_core =
                 cluster_->get_virtual_coordinate_from_logical_coordinates(device_id, logical_core, CoreType::WORKER);
             if (!storage_only_cores_set.contains(logical_core)) {
-                cluster_->assert_risc_reset_at_core(tt_cxy_pair(device_id, worker_core));
+                cluster_->assert_risc_reset_at_core(tt_cxy_pair(device_id, worker_core), tt::umd::RiscType::ALL);
             }
         }
     }
@@ -702,7 +717,7 @@ void MetalContext::reset_cores(chip_id_t device_id) {
     for (const auto& logical_core : this->get_control_plane().get_inactive_ethernet_cores(device_id)) {
         CoreCoord virtual_core =
             cluster_->get_virtual_coordinate_from_logical_coordinates(device_id, logical_core, CoreType::ETH);
-        cluster_->assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core));
+        cluster_->assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core), tt::umd::RiscType::ALL);
     }
 
     cluster_->l1_barrier(device_id);
@@ -730,7 +745,7 @@ void MetalContext::assert_cores(chip_id_t device_id) {
                         // Below will return to base FW
                         continue;
                     }
-                    cluster_->assert_risc_reset_at_core(tt_cxy_pair(device_id, worker_core));
+                    cluster_->assert_risc_reset_at_core(tt_cxy_pair(device_id, worker_core), tt::umd::RiscType::ALL);
                 }
             } else {
                 log_debug(tt::LogMetal, "{} will not be Reset when closing Device {}", worker_core.str(), device_id);
@@ -748,10 +763,8 @@ void MetalContext::assert_cores(chip_id_t device_id) {
                 llrt::internal_::return_to_base_firmware_and_wait_for_heartbeat(device_id, virtual_eth_core);
             }
             // Stop subordinate
-            TensixSoftResetOptions reset_val =
-                TENSIX_ASSERT_SOFT_RESET &
-                static_cast<TensixSoftResetOptions>(
-                    ~std::underlying_type<TensixSoftResetOptions>::type(TensixSoftResetOptions::BRISC));
+            // Assert all cores except ERISC0, which is running base firmware.
+            tt::umd::RiscType reset_val = tt::umd::RiscType::ALL_TENSIX & ~tt::umd::RiscType::ERISC0;
             cluster_->assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_eth_core), reset_val);
         };
 
@@ -989,12 +1002,10 @@ void MetalContext::initialize_firmware(
         case HalProgrammableCoreType::IDLE_ETH: {
             const bool is_idle_eth = core_type == HalProgrammableCoreType::IDLE_ETH;
             const bool is_active_eth = !is_idle_eth;
-            TensixSoftResetOptions reset_val = TENSIX_ASSERT_SOFT_RESET;
-            // Do not put dm0 into reset. It is running base fw
+            tt::umd::RiscType reset_val = tt::umd::RiscType::ALL_TENSIX;
             if (is_active_eth) {
-                reset_val =
-                    reset_val & static_cast<TensixSoftResetOptions>(
-                                    ~std::underlying_type<TensixSoftResetOptions>::type(TensixSoftResetOptions::BRISC));
+                // On active eth, don't assert ERISC0, which is running base firmware.
+                reset_val &= ~tt::umd::RiscType::ERISC0;
             }
             if (is_idle_eth or !hal_->get_eth_fw_is_cooperative()) {
                 cluster_->assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core), reset_val);
@@ -1030,6 +1041,17 @@ void MetalContext::initialize_firmware(
             // For eth, write the go and launch message before initializing because when using the ETH FW API
             // it will launch immediately. DM0 is not in a reset state as it is running base FW.
             write_initial_go_launch_msg();
+            if (core_type == HalProgrammableCoreType::ACTIVE_ETH) {
+                // Clear the ncrisc_halt message
+                tt::tt_metal::DeviceAddr mailbox_addr =
+                    hal_->get_dev_addr(core_type, tt::tt_metal::HalL1MemAddrType::MAILBOX);
+                auto factory = hal_->get_dev_msgs_factory(core_type);
+                tt::tt_metal::DeviceAddr ncrisc_halt_addr =
+                    mailbox_addr + factory.offset_of<tt::tt_metal::dev_msgs::mailboxes_t>(
+                                       tt::tt_metal::dev_msgs::mailboxes_t::Field::ncrisc_halt);
+                std::vector<uint8_t> data(factory.size_of<tt::tt_metal::dev_msgs::ncrisc_halt_msg_t>(), 0);
+                cluster_->write_core(data.data(), data.size(), tt_cxy_pair(device_id, virtual_core), ncrisc_halt_addr);
+            }
 
             // Write firmware main to primary erisc (DM0)
             // Using classic ASSERT/DEASSERT PC method for 1 erisc mode because erisc1 has no base firmware
@@ -1333,14 +1355,15 @@ void MetalContext::initialize_and_launch_firmware(chip_id_t device_id) {
             continue;
         }
 
-        TensixSoftResetOptions reset_val = TENSIX_DEASSERT_SOFT_RESET;
-        if (multi_risc_active_eth_cores.contains(worker_core)) {
-            // bit 12 needs to be deasserted to run second erisc on BH
-            reset_val = TENSIX_DEASSERT_SOFT_RESET &
-                        static_cast<TensixSoftResetOptions>(
-                            ~std::underlying_type<TensixSoftResetOptions>::type(TensixSoftResetOptions::TRISC0));
+        tt::umd::RiscType reset_val;
+        if (cluster_->arch() == ARCH::QUASAR) {
+            reset_val = tt::umd::RiscType::ALL_NEO_DMS;
         } else {
-            reset_val = TENSIX_DEASSERT_SOFT_RESET;
+            reset_val = tt::umd::RiscType::BRISC;
+            if (multi_risc_active_eth_cores.contains(worker_core)) {
+                // bit 12 needs to be deasserted to run second erisc on BH
+                reset_val |= tt::umd::RiscType::ERISC1;
+            }
         }
         cluster_->deassert_risc_reset_at_core(tt_cxy_pair(device_id, worker_core), reset_val);
     }

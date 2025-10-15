@@ -1633,7 +1633,6 @@ operation::ProgramWithCallbacks pad_tile_multicore(
             num_pages_per_core = num_pages_per_core_group_2;
         } else {
             num_pages_per_core = 0;  // no-op
-            continue;
         }
 
         all_runtime_args = {
