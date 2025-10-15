@@ -58,8 +58,6 @@ class DispatcherData:
         self.programs = inspector_data.getPrograms().programs
         self.kernels = {kernel.watcherKernelId: kernel for program in self.programs for kernel in program.kernels}
         self.use_rpc_kernel_find = True
-        if len(self.kernels) == 0:
-            raise TTTriageError("No kernels found in inspector data.")
         # Cache build_env per device to avoid multiple RPC calls
         # Each device needs to have its own build_env to get the correct firmware path
         self._build_env_cache = {}
