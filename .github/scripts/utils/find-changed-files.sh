@@ -12,12 +12,15 @@ CMAKE_CHANGED=false
 CLANG_TIDY_CONFIG_CHANGED=false
 TTMETALIUM_CHANGED=false
 TTNN_CHANGED=false
+TTMETALIUM_TESTS_CHANGED=false
+TTNN_TESTS_CHANGED=false
 TTMETALIUM_OR_TTNN_TESTS_CHANGED=false
 TTTRAIN_CHANGED=false
 TOOLS_CHANGED=false
 ANY_CODE_CHANGED=false
 DOCS_CHANGED=false
 MODEL_CHARTS_CHANGED=false
+MODELS_CHANGED=false
 
 while IFS= read -r FILE; do
     case "$FILE" in
@@ -36,19 +39,29 @@ while IFS= read -r FILE; do
             TTMETALIUM_CHANGED=true
             ANY_CODE_CHANGED=true
             ;;
-        tt_metal/**/*.h|tt_metal/**/*.hpp|tt_metal/**/*.c|tt_metal/**/*.cpp)
+        tt_metal/**/*.h|tt_metal/**/*.hpp|tt_metal/**/*.c|tt_metal/**/*.cpp|tt_metal/**/*.py)
             TTMETALIUM_CHANGED=true
             ANY_CODE_CHANGED=true
             ;;
-        ttnn/**/*.h|ttnn/**/*.hpp|ttnn/**/*.c|ttnn/**/*.cpp)
+        ttnn/**/*.h|ttnn/**/*.hpp|ttnn/**/*.c|ttnn/**/*.cpp|ttnn/**/*.py)
             TTNN_CHANGED=true
             ANY_CODE_CHANGED=true
             ;;
-        tests/**/*.h|tests/**/*.hpp|tests/**/*.c|tests/**/*.cpp)
+        tests/tt_metal/**/*.h|tests/tt_metal/**/*.hpp|tests/tt_metal/**/*.c|tests/tt_metal/**/*.cpp|tests/tt_metal/**/*.py)
+            TTMETALIUM_TESTS_CHANGED=true
             TTMETALIUM_OR_TTNN_TESTS_CHANGED=true
             ANY_CODE_CHANGED=true
             ;;
-        tt-train/**/*.h|tt-train/**/*.hpp|tt-train/**/*.c|tt-train/**/*.cpp)
+        tests/ttnn/**/*.h|tests/ttnn/**/*.hpp|tests/ttnn/**/*.c|tests/ttnn/**/*.cpp|tests/ttnn/**/*.py)
+            TTNN_TESTS_CHANGED=true
+            TTMETALIUM_OR_TTNN_TESTS_CHANGED=true
+            ANY_CODE_CHANGED=true
+            ;;
+        tests/**/*.h|tests/**/*.hpp|tests/**/*.c|tests/**/*.cpp|tests/**/*.py)
+            TTMETALIUM_OR_TTNN_TESTS_CHANGED=true
+            ANY_CODE_CHANGED=true
+            ;;
+        tt-train/**/*.h|tt-train/**/*.hpp|tt-train/**/*.c|tt-train/**/*.cpp|tt-train/**/*.py)
             TTTRAIN_CHANGED=true
             ANY_CODE_CHANGED=true
             ;;
@@ -61,6 +74,10 @@ while IFS= read -r FILE; do
             if [[ "$FILE" == "README.md" || "$FILE" == "models/README.md" ]]; then
                MODEL_CHARTS_CHANGED=true
             fi
+            ;;
+        models/**)
+            MODELS_CHANGED=true
+            ANY_CODE_CHANGED=true
             ;;
     esac
 done <<< "$CHANGED_FILES"
@@ -78,6 +95,8 @@ if [[ "$SUBMODULE_CHANGED" = true ]]; then
     # Treat any submodule change as a change to everything; not going to manage dependency trees for this
     TTMETALIUM_CHANGED=true
     TTNN_CHANGED=true
+    TTMETALIUM_TESTS_CHANGED=true
+    TTNN_TESTS_CHANGED=true
     TTMETALIUM_OR_TTNN_TESTS_CHANGED=true
     TTTRAIN_CHANGED=true
     # TODO: Well, this could likely just depend on the UMD submodule changing...
@@ -91,6 +110,8 @@ declare -A changes=(
     [clang-tidy-config-changed]=$CLANG_TIDY_CONFIG_CHANGED
     [tt-metalium-changed]=$TTMETALIUM_CHANGED
     [tt-nn-changed]=$TTNN_CHANGED
+    [tt-metalium-tests-changed]=$TTMETALIUM_TESTS_CHANGED
+    [tt-nn-tests-changed]=$TTNN_TESTS_CHANGED
     [tt-metalium-or-tt-nn-tests-changed]=$TTMETALIUM_OR_TTNN_TESTS_CHANGED
     [tt-train-changed]=$TTTRAIN_CHANGED
     [tools-changed]=$TOOLS_CHANGED
@@ -98,6 +119,7 @@ declare -A changes=(
     [any-code-changed]=$ANY_CODE_CHANGED
     [docs-changed]=$DOCS_CHANGED
     [model-charts-changed]=$MODEL_CHARTS_CHANGED
+    [models-changed]=$MODELS_CHANGED
 )
 
 for var in "${!changes[@]}"; do
