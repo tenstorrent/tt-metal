@@ -4,139 +4,481 @@ CPU Features:
   Hardware threads: 8
 
 
-
-float (32-bit) Performance Benchmark (4194304 elements)
+float (32-bit) - Uniform[-1,1] (4194304 elements)
+================================================================================
 MT19937 (Sequential):
-  Time (ms):        469.987
+  Time (ms):        471.605
   Throughput:       0.03 GB/s
   Elements/sec:     8.9 M
   Speedup:          1.0x
-  Mean:             -0.000128
-  StdDev:           0.577227
+  Mean:             -0.000128 (✓ 0.01%)
+  StdDev:           0.577227 (✓ 0.02%)
 MT19937 (Parallel):
-  Time (ms):        63.785
+  Time (ms):        64.361
   Throughput:       0.24 GB/s
-  Elements/sec:     65.8 M
-  Speedup:          7.4x
-  Mean:             0.000065
-  StdDev:           0.577568
+  Elements/sec:     65.2 M
+  Speedup:          7.3x
+  Mean:             0.000065 (✓ 0.01%)
+  StdDev:           0.577568 (✓ 0.04%)
 SSE (Sequential):
-  Time (ms):        4.554
-  Throughput:       3.43 GB/s
-  Elements/sec:     920.9 M
-  Speedup:          103.2x
-  Mean:             -0.000116
-  StdDev:           0.577418
+  Time (ms):        4.503
+  Throughput:       3.47 GB/s
+  Elements/sec:     931.5 M
+  Speedup:          104.7x
+  Mean:             -0.000116 (✓ 0.01%)
+  StdDev:           0.577418 (✓ 0.01%)
 SSE (Parallel):
-  Time (ms):        2.048
-  Throughput:       7.63 GB/s
-  Elements/sec:     2048.1 M
-  Speedup:          229.5x
-  Mean:             0.000347
-  StdDev:           0.577646
+  Time (ms):        1.273
+  Throughput:       12.27 GB/s
+  Elements/sec:     3294.1 M
+  Speedup:          370.4x
+  Mean:             0.000347 (✓ 0.03%)
+  StdDev:           0.577646 (✓ 0.05%)
 AVX2 (Sequential):
-  Time (ms):        2.413
-  Throughput:       6.48 GB/s
-  Elements/sec:     1738.1 M
-  Speedup:          194.8x
-  Mean:             -0.000502
-  StdDev:           0.577559
+  Time (ms):        2.381
+  Throughput:       6.56 GB/s
+  Elements/sec:     1761.4 M
+  Speedup:          198.0x
+  Mean:             -0.000502 (✓ 0.05%)
+  StdDev:           0.577559 (✓ 0.04%)
 AVX2 (Parallel):
-  Time (ms):        0.850
-  Throughput:       18.38 GB/s
-  Elements/sec:     4933.1 M
-  Speedup:          552.8x
-  Mean:             -0.000185
-  StdDev:           0.577672
+  Time (ms):        0.879
+  Throughput:       17.78 GB/s
+  Elements/sec:     4772.2 M
+  Speedup:          536.6x
+  Mean:             -0.000185 (✓ 0.02%)
+  StdDev:           0.577672 (✓ 0.06%)
+
+Expected: Mean=0.0000, StdDev=0.5774
 
 
-
-double (64-bit) Performance Benchmark (4194304 elements)
+float (32-bit) - Normal(0,1) (4194304 elements)
+================================================================================
 MT19937 (Sequential):
-  Time (ms):        471.321
-  Throughput:       0.07 GB/s
-  Elements/sec:     8.9 M
-  Speedup:          1.0x
-  Mean:             -0.000128
-  StdDev:           0.577227
-MT19937 (Parallel):
-  Time (ms):        81.970
-  Throughput:       0.38 GB/s
-  Elements/sec:     51.2 M
-  Speedup:          5.7x
-  Mean:             0.000065
-  StdDev:           0.577568
-SSE (Sequential):
-  Time (ms):        9.038
-  Throughput:       3.46 GB/s
-  Elements/sec:     464.1 M
-  Speedup:          52.2x
-  Mean:             0.000117
-  StdDev:           0.577381
-SSE (Parallel):
-  Time (ms):        2.930
-  Throughput:       10.66 GB/s
-  Elements/sec:     1431.3 M
-  Speedup:          160.8x
-  Mean:             0.000335
-  StdDev:           0.577421
-AVX2 (Sequential):
-  Time (ms):        4.826
-  Throughput:       6.47 GB/s
-  Elements/sec:     869.0 M
-  Speedup:          97.7x
-  Mean:             -0.000274
-  StdDev:           0.577612
-AVX2 (Parallel):
-  Time (ms):        1.946
-  Throughput:       16.06 GB/s
-  Elements/sec:     2155.6 M
-  Speedup:          242.2x
-  Mean:             0.000012
-  StdDev:           0.577782
-
-
-
-bfloat16 (16-bit) Performance Benchmark (4194304 elements)
-MT19937 (Sequential):
-  Time (ms):        482.879
+  Time (ms):        680.173
   Throughput:       0.02 GB/s
-  Elements/sec:     8.7 M
+  Elements/sec:     6.2 M
   Speedup:          1.0x
-  Mean:             -0.000127
-  StdDev:           0.577229
+  Mean:             -0.000369 (✓ 0.04%)
+  StdDev:           1.000472 (✓ 0.05%)
 MT19937 (Parallel):
-  Time (ms):        81.806
-  Throughput:       0.10 GB/s
-  Elements/sec:     51.3 M
-  Speedup:          5.9x
-  Mean:             0.000064
-  StdDev:           0.577569
+  Time (ms):        108.906
+  Throughput:       0.14 GB/s
+  Elements/sec:     38.5 M
+  Speedup:          6.2x
+  Mean:             -0.000245 (✓ 0.02%)
+  StdDev:           0.999939 (✓ 0.01%)
 SSE (Sequential):
-  Time (ms):        4.673
-  Throughput:       1.67 GB/s
-  Elements/sec:     897.6 M
-  Speedup:          103.3x
-  Mean:             -0.002394
-  StdDev:           0.575684
+  Time (ms):        56.166
+  Throughput:       0.28 GB/s
+  Elements/sec:     74.7 M
+  Speedup:          12.1x
+  Mean:             0.000432 (✓ 0.04%)
+  StdDev:           1.000128 (✓ 0.01%)
 SSE (Parallel):
-  Time (ms):        2.070
-  Throughput:       3.77 GB/s
-  Elements/sec:     2026.3 M
-  Speedup:          233.3x
-  Mean:             -0.001929
-  StdDev:           0.575914
+  Time (ms):        16.535
+  Throughput:       0.94 GB/s
+  Elements/sec:     253.7 M
+  Speedup:          41.1x
+  Mean:             -0.000382 (✓ 0.04%)
+  StdDev:           1.000427 (✓ 0.04%)
 AVX2 (Sequential):
-  Time (ms):        2.466
-  Throughput:       3.17 GB/s
-  Elements/sec:     1700.6 M
-  Speedup:          195.8x
-  Mean:             -0.002778
-  StdDev:           0.575825
+  Time (ms):        57.254
+  Throughput:       0.27 GB/s
+  Elements/sec:     73.3 M
+  Speedup:          11.9x
+  Mean:             0.000326 (✓ 0.03%)
+  StdDev:           1.000254 (✓ 0.03%)
 AVX2 (Parallel):
-  Time (ms):        2.315
-  Throughput:       3.37 GB/s
-  Elements/sec:     1811.4 M
-  Speedup:          208.5x
-  Mean:             -0.002462
-  StdDev:           0.575936
+  Time (ms):        16.105
+  Throughput:       0.97 GB/s
+  Elements/sec:     260.4 M
+  Speedup:          42.2x
+  Mean:             0.001124 (✓ 0.11%)
+  StdDev:           1.000224 (✓ 0.02%)
+
+Expected: Mean=0.0000, StdDev=1.0000
+
+
+float (32-bit) - Exponential(1.0) (4194304 elements)
+================================================================================
+Note: SIMD benchmarks disabled (no optimization available for this distribution)
+MT19937 (Sequential):
+  Time (ms):        500.847
+  Throughput:       0.03 GB/s
+  Elements/sec:     8.4 M
+  Speedup:          1.0x
+  Mean:             0.999956 (✓ 0.00%)
+  StdDev:           1.000532 (✓ 0.05%)
+MT19937 (Parallel):
+  Time (ms):        83.574
+  Throughput:       0.19 GB/s
+  Elements/sec:     50.2 M
+  Speedup:          6.0x
+  Mean:             1.000512 (✓ 0.05%)
+  StdDev:           1.001042 (✓ 0.10%)
+
+Expected: Mean=1.0000, StdDev=1.0000
+
+
+float (32-bit) - LogNormal(0,1) (4194304 elements)
+================================================================================
+Note: SIMD benchmarks disabled (no optimization available for this distribution)
+MT19937 (Sequential):
+  Time (ms):        707.599
+  Throughput:       0.02 GB/s
+  Elements/sec:     5.9 M
+  Speedup:          1.0x
+  Mean:             1.649100 (✓ 0.02%)
+  StdDev:           2.168561 (✓ 0.34%)
+MT19937 (Parallel):
+  Time (ms):        112.967
+  Throughput:       0.14 GB/s
+  Elements/sec:     37.1 M
+  Speedup:          6.3x
+  Mean:             1.648345 (✓ 0.02%)
+  StdDev:           2.161439 (✓ 0.01%)
+
+Expected: Mean=1.6487, StdDev=2.1612
+
+
+float (32-bit) - Cauchy(0,1) (4194304 elements)
+================================================================================
+Note: SIMD benchmarks disabled (no optimization available for this distribution)
+MT19937 (Sequential):
+  Time (ms):        582.881
+  Throughput:       0.03 GB/s
+  Elements/sec:     7.2 M
+  Speedup:          1.0x
+  Mean:             1.643402
+  StdDev:           2741.497576
+  Median:           0.000169 (✓ Δ=0.0002)
+  Q25 (25th %ile):  -1.001534 (✓ Δ=0.0015)
+  Q75 (75th %ile):  1.000453 (✓ Δ=0.0005)
+  IQR:              2.001987 (✓ Δ=0.0020)
+MT19937 (Parallel):
+  Time (ms):        110.977
+  Throughput:       0.14 GB/s
+  Elements/sec:     37.8 M
+  Speedup:          5.3x
+  Mean:             1.720609
+  StdDev:           3066.263190
+  Median:           0.000244 (✓ Δ=0.0002)
+  Q25 (25th %ile):  -0.998507 (✓ Δ=0.0015)
+  Q75 (75th %ile):  0.999225 (✓ Δ=0.0008)
+  IQR:              1.997732 (✓ Δ=0.0023)
+
+Note: This distribution has undefined mean/variance.
+Verification uses robust statistics (median, IQR, quantiles).
+Expected: Median=0.0000, IQR=2.0000
+
+
+double (64-bit) - Uniform[-1,1] (4194304 elements)
+================================================================================
+MT19937 (Sequential):
+  Time (ms):        493.675
+  Throughput:       0.06 GB/s
+  Elements/sec:     8.5 M
+  Speedup:          1.0x
+  Mean:             0.000015 (✓ 0.00%)
+  StdDev:           0.577331 (✓ 0.00%)
+MT19937 (Parallel):
+  Time (ms):        82.773
+  Throughput:       0.38 GB/s
+  Elements/sec:     50.7 M
+  Speedup:          6.0x
+  Mean:             -0.000160 (✓ 0.02%)
+  StdDev:           0.577688 (✓ 0.06%)
+SSE (Sequential):
+  Time (ms):        9.058
+  Throughput:       3.45 GB/s
+  Elements/sec:     463.0 M
+  Speedup:          54.5x
+  Mean:             0.000117 (✓ 0.01%)
+  StdDev:           0.577381 (✓ 0.01%)
+SSE (Parallel):
+  Time (ms):        2.933
+  Throughput:       10.65 GB/s
+  Elements/sec:     1429.9 M
+  Speedup:          168.3x
+  Mean:             0.000335 (✓ 0.03%)
+  StdDev:           0.577421 (✓ 0.01%)
+AVX2 (Sequential):
+  Time (ms):        4.865
+  Throughput:       6.42 GB/s
+  Elements/sec:     862.1 M
+  Speedup:          101.5x
+  Mean:             -0.000274 (✓ 0.03%)
+  StdDev:           0.577612 (✓ 0.05%)
+AVX2 (Parallel):
+  Time (ms):        1.918
+  Throughput:       16.30 GB/s
+  Elements/sec:     2187.1 M
+  Speedup:          257.4x
+  Mean:             0.000012 (✓ 0.00%)
+  StdDev:           0.577782 (✓ 0.07%)
+
+Expected: Mean=0.0000, StdDev=0.5774
+
+
+double (64-bit) - Normal(0,1) (4194304 elements)
+================================================================================
+Note: SIMD benchmarks disabled (no optimization available for this distribution)
+MT19937 (Sequential):
+  Time (ms):        749.692
+  Throughput:       0.04 GB/s
+  Elements/sec:     5.6 M
+  Speedup:          1.0x
+  Mean:             0.000168 (✓ 0.02%)
+  StdDev:           0.999941 (✓ 0.01%)
+MT19937 (Parallel):
+  Time (ms):        123.159
+  Throughput:       0.25 GB/s
+  Elements/sec:     34.1 M
+  Speedup:          6.1x
+  Mean:             -0.000119 (✓ 0.01%)
+  StdDev:           0.999267 (✓ 0.07%)
+
+Expected: Mean=0.0000, StdDev=1.0000
+
+
+double (64-bit) - Exponential(1.0) (4194304 elements)
+================================================================================
+Note: SIMD benchmarks disabled (no optimization available for this distribution)
+MT19937 (Sequential):
+  Time (ms):        556.349
+  Throughput:       0.06 GB/s
+  Elements/sec:     7.5 M
+  Speedup:          1.0x
+  Mean:             0.999932 (✓ 0.01%)
+  StdDev:           1.000060 (✓ 0.01%)
+MT19937 (Parallel):
+  Time (ms):        97.967
+  Throughput:       0.32 GB/s
+  Elements/sec:     42.8 M
+  Speedup:          5.7x
+  Mean:             1.000115 (✓ 0.01%)
+  StdDev:           1.000294 (✓ 0.03%)
+
+Expected: Mean=1.0000, StdDev=1.0000
+
+
+double (64-bit) - LogNormal(0,1) (4194304 elements)
+================================================================================
+Note: SIMD benchmarks disabled (no optimization available for this distribution)
+MT19937 (Sequential):
+  Time (ms):        809.791
+  Throughput:       0.04 GB/s
+  Elements/sec:     5.2 M
+  Speedup:          1.0x
+  Mean:             1.648990 (✓ 0.02%)
+  StdDev:           2.161153 (✓ 0.00%)
+MT19937 (Parallel):
+  Time (ms):        127.775
+  Throughput:       0.24 GB/s
+  Elements/sec:     32.8 M
+  Speedup:          6.3x
+  Mean:             1.647201 (✓ 0.09%)
+  StdDev:           2.157761 (✓ 0.16%)
+
+Expected: Mean=1.6487, StdDev=2.1612
+
+
+double (64-bit) - Cauchy(0,1) (4194304 elements)
+================================================================================
+Note: SIMD benchmarks disabled (no optimization available for this distribution)
+MT19937 (Sequential):
+  Time (ms):        634.170
+  Throughput:       0.05 GB/s
+  Elements/sec:     6.6 M
+  Speedup:          1.0x
+  Mean:             1.612405
+  StdDev:           1865.910710
+  Median:           -0.000479 (✓ Δ=0.0005)
+  Q25 (25th %ile):  -1.001288 (✓ Δ=0.0013)
+  Q75 (75th %ile):  0.998817 (✓ Δ=0.0012)
+  IQR:              2.000106 (✓ Δ=0.0001)
+MT19937 (Parallel):
+  Time (ms):        117.924
+  Throughput:       0.27 GB/s
+  Elements/sec:     35.6 M
+  Speedup:          5.4x
+  Mean:             1.499471
+  StdDev:           2748.896602
+  Median:           0.000364 (✓ Δ=0.0004)
+  Q25 (25th %ile):  -0.998546 (✓ Δ=0.0015)
+  Q75 (75th %ile):  0.998180 (✓ Δ=0.0018)
+  IQR:              1.996726 (✓ Δ=0.0033)
+
+Note: This distribution has undefined mean/variance.
+Verification uses robust statistics (median, IQR, quantiles).
+Expected: Median=0.0000, IQR=2.0000
+
+
+bfloat16 (16-bit) - Uniform[-1,1] (4194304 elements)
+================================================================================
+MT19937 (Sequential):
+  Time (ms):        485.163
+  Throughput:       0.02 GB/s
+  Elements/sec:     8.6 M
+  Speedup:          1.0x
+  Mean:             -0.000127 (✓ 0.01%)
+  StdDev:           0.577229 (✓ 0.02%)
+MT19937 (Parallel):
+  Time (ms):        82.373
+  Throughput:       0.09 GB/s
+  Elements/sec:     50.9 M
+  Speedup:          5.9x
+  Mean:             0.000064 (✓ 0.01%)
+  StdDev:           0.577569 (✓ 0.04%)
+SSE (Sequential):
+  Time (ms):        4.646
+  Throughput:       1.68 GB/s
+  Elements/sec:     902.8 M
+  Speedup:          104.4x
+  Mean:             -0.002394 (✓ 0.24%)
+  StdDev:           0.575684 (✓ 0.29%)
+SSE (Parallel):
+  Time (ms):        1.995
+  Throughput:       3.92 GB/s
+  Elements/sec:     2102.6 M
+  Speedup:          243.2x
+  Mean:             -0.001929 (✓ 0.19%)
+  StdDev:           0.575914 (✓ 0.25%)
+AVX2 (Sequential):
+  Time (ms):        2.424
+  Throughput:       3.22 GB/s
+  Elements/sec:     1730.1 M
+  Speedup:          200.1x
+  Mean:             -0.002778 (✓ 0.28%)
+  StdDev:           0.575825 (✓ 0.26%)
+AVX2 (Parallel):
+  Time (ms):        1.339
+  Throughput:       5.83 GB/s
+  Elements/sec:     3131.9 M
+  Speedup:          362.3x
+  Mean:             -0.002462 (✓ 0.25%)
+  StdDev:           0.575936 (✓ 0.25%)
+
+Expected: Mean=0.0000, StdDev=0.5774
+
+
+bfloat16 (16-bit) - Normal(0,1) (4194304 elements)
+================================================================================
+MT19937 (Sequential):
+  Time (ms):        684.636
+  Throughput:       0.01 GB/s
+  Elements/sec:     6.1 M
+  Speedup:          1.0x
+  Mean:             -0.000368 (✓ 0.04%)
+  StdDev:           1.000471 (✓ 0.05%)
+MT19937 (Parallel):
+  Time (ms):        112.428
+  Throughput:       0.07 GB/s
+  Elements/sec:     37.3 M
+  Speedup:          6.1x
+  Mean:             -0.000245 (✓ 0.02%)
+  StdDev:           0.999939 (✓ 0.01%)
+SSE (Sequential):
+  Time (ms):        58.722
+  Throughput:       0.13 GB/s
+  Elements/sec:     71.4 M
+  Speedup:          11.7x
+  Mean:             0.000430 (✓ 0.04%)
+  StdDev:           0.997311 (✓ 0.27%)
+SSE (Parallel):
+  Time (ms):        19.803
+  Throughput:       0.39 GB/s
+  Elements/sec:     211.8 M
+  Speedup:          34.6x
+  Mean:             -0.000380 (✓ 0.04%)
+  StdDev:           0.997608 (✓ 0.24%)
+AVX2 (Sequential):
+  Time (ms):        59.587
+  Throughput:       0.13 GB/s
+  Elements/sec:     70.4 M
+  Speedup:          11.5x
+  Mean:             0.000325 (✓ 0.03%)
+  StdDev:           0.997437 (✓ 0.26%)
+AVX2 (Parallel):
+  Time (ms):        20.174
+  Throughput:       0.39 GB/s
+  Elements/sec:     207.9 M
+  Speedup:          33.9x
+  Mean:             0.001122 (✓ 0.11%)
+  StdDev:           0.997402 (✓ 0.26%)
+
+Expected: Mean=0.0000, StdDev=1.0000
+
+
+bfloat16 (16-bit) - Exponential(1.0) (4194304 elements)
+================================================================================
+Note: SIMD benchmarks disabled (no optimization available for this distribution)
+MT19937 (Sequential):
+  Time (ms):        511.517
+  Throughput:       0.02 GB/s
+  Elements/sec:     8.2 M
+  Speedup:          1.0x
+  Mean:             0.999955 (✓ 0.00%)
+  StdDev:           1.000535 (✓ 0.05%)
+MT19937 (Parallel):
+  Time (ms):        86.028
+  Throughput:       0.09 GB/s
+  Elements/sec:     48.8 M
+  Speedup:          5.9x
+  Mean:             1.000510 (✓ 0.05%)
+  StdDev:           1.001042 (✓ 0.10%)
+
+Expected: Mean=1.0000, StdDev=1.0000
+
+
+bfloat16 (16-bit) - LogNormal(0,1) (4194304 elements)
+================================================================================
+Note: SIMD benchmarks disabled (no optimization available for this distribution)
+MT19937 (Sequential):
+  Time (ms):        715.505
+  Throughput:       0.01 GB/s
+  Elements/sec:     5.9 M
+  Speedup:          1.0x
+  Mean:             1.649093 (✓ 0.02%)
+  StdDev:           2.168552 (✓ 0.34%)
+MT19937 (Parallel):
+  Time (ms):        113.138
+  Throughput:       0.07 GB/s
+  Elements/sec:     37.1 M
+  Speedup:          6.3x
+  Mean:             1.648340 (✓ 0.02%)
+  StdDev:           2.161441 (✓ 0.01%)
+
+Expected: Mean=1.6487, StdDev=2.1612
+
+
+bfloat16 (16-bit) - Cauchy(0,1) (4194304 elements)
+================================================================================
+Note: SIMD benchmarks disabled (no optimization available for this distribution)
+MT19937 (Sequential):
+  Time (ms):        595.671
+  Throughput:       0.01 GB/s
+  Elements/sec:     7.0 M
+  Speedup:          1.0x
+  Mean:             1.644176
+  StdDev:           2745.443224
+  Median:           0.000169 (✓ Δ=0.0002)
+  Q25 (25th %ile):  -1.000000 (✓ Δ=0.0000)
+  Q75 (75th %ile):  1.000000 (✓ Δ=0.0000)
+  IQR:              2.000000 (✓ Δ=0.0000)
+MT19937 (Parallel):
+  Time (ms):        110.096
+  Throughput:       0.07 GB/s
+  Elements/sec:     38.1 M
+  Speedup:          5.4x
+  Mean:             1.723685
+  StdDev:           3069.648136
+  Median:           0.000245 (✓ Δ=0.0002)
+  Q25 (25th %ile):  -1.000000 (✓ Δ=0.0000)
+  Q75 (75th %ile):  1.000000 (✓ Δ=0.0000)
+  IQR:              2.000000 (✓ Δ=0.0000)
+
+Note: This distribution has undefined mean/variance.
+Verification uses robust statistics (median, IQR, quantiles).
+Expected: Median=0.0000, IQR=2.0000

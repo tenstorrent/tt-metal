@@ -8,9 +8,12 @@
 #include <wmmintrin.h>  // AES-NI
 
 #include <algorithm>
+#include <cmath>
 #include <concepts>
 #include <cstdint>
+#include <iostream>
 #include <limits>
+#include <numbers>
 #include <random>
 #include <ranges>
 #include <span>
@@ -176,9 +179,8 @@ public:
 // Internal SIMD Generation (AVX2)
 // ============================================================================
 
-template <std::same_as<float> T = float>
 __attribute__((target("aes,sse4.2,avx2"))) void generate_uniform_simd_avx(
-    std::span<T> output, uint32_t seed, auto dist_factory) {
+    std::span<float> output, uint32_t seed, auto dist_factory) {
     AesRngAvx rng{seed};
     auto dist = dist_factory();
     auto params = dist.param();
@@ -201,7 +203,7 @@ __attribute__((target("aes,sse4.2,avx2"))) void generate_uniform_simd_avx(
     for (size_t i : std::views::iota(num_batches * simd_float_batch_size, output.size())) {
         // Extract first float from the 8-float vector
         __m256 rand_vec = rng.generate_float_x8();
-        T rand_val = _mm256_cvtss_f32(rand_vec);
+        float rand_val = _mm256_cvtss_f32(rand_vec);
         output[i] = min + rand_val * (max - min);
     }
 }
@@ -242,12 +244,109 @@ __attribute__((target("aes,sse4.2,avx2"))) void generate_uniform_simd_avx_parall
 }
 
 // ============================================================================
+// Internal SIMD Generation (Normal Distribution - Box-Muller AVX2)
+// ============================================================================
+
+__attribute__((target("aes,sse4.2,avx2"))) void generate_normal_simd_avx(
+    std::span<float> output, uint32_t seed, auto dist_factory) {
+    AesRngAvx rng{seed};
+    auto dist = dist_factory();
+    auto params = dist.param();
+
+    const float mean = params.mean();
+    const float stddev = params.stddev();
+
+    const __m256 mean_vec = _mm256_set1_ps(mean);
+    const __m256 stddev_vec = _mm256_set1_ps(stddev);
+    const float two_pi = 2.0f * std::numbers::pi_v<float>;
+
+    // Process pairs of values (Box-Muller generates 2 values per iteration)
+    // AVX2 processes 8 values at a time, so we get 16 normal values per iteration
+    // (8 from z1, 8 from z2)
+    size_t i = 0;
+    for (; i + 16 <= output.size(); i += 16) {
+        // Generate 8 uniform random values for U1 and 8 for U2
+        __m256 u1 = rng.generate_float_x8();
+        __m256 u2 = rng.generate_float_x8();
+
+        // Extract to array for scalar math
+        alignas(32) float u1_arr[8], u2_arr[8];
+        _mm256_store_ps(u1_arr, u1);
+        _mm256_store_ps(u2_arr, u2);
+
+        // Box-Muller transform using scalar math functions
+        alignas(32) float z1_arr[8], z2_arr[8];
+        for (int j = 0; j < 8; ++j) {
+            float r = std::sqrt(-2.0f * std::log(std::max(u1_arr[j], 1e-10f)));
+            float theta = two_pi * u2_arr[j];
+            z1_arr[j] = r * std::cos(theta);
+            z2_arr[j] = r * std::sin(theta);
+        }
+
+        // Load back into SIMD registers
+        __m256 z1 = _mm256_load_ps(z1_arr);
+        __m256 z2 = _mm256_load_ps(z2_arr);
+
+        // Scale and shift: z * stddev + mean
+        z1 = _mm256_add_ps(_mm256_mul_ps(z1, stddev_vec), mean_vec);
+        z2 = _mm256_add_ps(_mm256_mul_ps(z2, stddev_vec), mean_vec);
+
+        // Store results
+        _mm256_storeu_ps(&output[i], z1);
+        _mm256_storeu_ps(&output[i + 8], z2);
+    }
+
+    // Handle remainder (< 16 elements remaining)
+    if (i < output.size()) {
+        std::mt19937 fallback_rng{seed + static_cast<uint32_t>(i)};
+        auto fallback_dist = dist_factory();
+        for (; i < output.size(); ++i) {
+            output[i] = fallback_dist(fallback_rng);
+        }
+    }
+}
+
+// Parallel SIMD generation for normal_distribution<float> (AVX2)
+template <typename DistFactory>
+__attribute__((target("aes,sse4.2,avx2"))) void generate_normal_simd_avx_parallel(
+    std::span<float> output, DistFactory dist_factory, uint32_t seed, size_t num_threads) {
+    if (output.size() < parallel_min_size) [[unlikely]] {
+        generate_normal_simd_avx(output, seed, dist_factory);
+        return;
+    }
+
+    constexpr size_t elems_per_line = cache_line_size_bytes / sizeof(float);
+    size_t chunk_size = output.size() / num_threads;
+    if constexpr (elems_per_line > 1) {
+        chunk_size = ((chunk_size + elems_per_line - 1) / elems_per_line) * elems_per_line;
+    }
+
+    auto chunks = std::views::iota(0u, num_threads) | std::views::transform([&](size_t i) {
+                      const size_t offset = i * chunk_size;
+                      const size_t size = std::min(chunk_size, output.size() - offset);
+                      return std::span{output.data() + offset, size};
+                  }) |
+                  std::views::take_while([](auto chunk) { return !chunk.empty(); });
+
+    std::vector<std::jthread> threads;
+    threads.reserve(num_threads);
+
+    size_t thread_id = 0;
+    for (auto chunk : chunks) {
+        const uint64_t thread_seed =
+            static_cast<uint64_t>(seed) + (static_cast<uint64_t>(thread_id++) << thread_seed_shift_bits);
+        threads.emplace_back([chunk, thread_seed, dist_factory]() {
+            generate_normal_simd_avx(chunk, static_cast<uint32_t>(thread_seed), dist_factory);
+        });
+    }
+}
+
+// ============================================================================
 // Internal SIMD Generation (Double)
 // ============================================================================
 
-template <std::same_as<double> T = double>
 __attribute__((target("aes,sse4.2,avx2"))) void generate_uniform_simd_avx_double(
-    std::span<T> output, uint32_t seed, auto dist_factory) {
+    std::span<double> output, uint32_t seed, auto dist_factory) {
     constexpr size_t simd_double_batch_size = 4;  // 4 doubles per AVX2 register
 
     AesRngAvx rng{seed};
@@ -281,9 +380,8 @@ __attribute__((target("aes,sse4.2,avx2"))) void generate_uniform_simd_avx_double
     }
 }
 
-template <std::same_as<double> T = double>
 __attribute__((target("aes,sse4.2,avx2"))) void generate_uniform_simd_parallel_avx_double(
-    std::span<T> output, uint32_t seed, auto dist_factory, size_t num_threads) {
+    std::span<double> output, uint32_t seed, auto dist_factory, size_t num_threads) {
     if (output.size() < parallel_min_size) [[unlikely]] {
         generate_uniform_simd_avx_double(output, seed, dist_factory);
         return;
@@ -319,9 +417,8 @@ __attribute__((target("aes,sse4.2,avx2"))) void generate_uniform_simd_parallel_a
 // Internal SIMD Generation (bfloat16)
 // ============================================================================
 
-template <std::same_as<bfloat16> T = bfloat16>
 __attribute__((target("aes,sse4.2,avx2"))) void generate_uniform_simd_avx_bfloat16(
-    std::span<T> output, uint32_t seed, auto dist_factory) {
+    std::span<bfloat16> output, uint32_t seed, auto dist_factory) {
     constexpr size_t simd_bf16_batch_size = 8;  // 8 bfloat16s generated at a time
 
     AesRngAvx rng{seed};
@@ -363,9 +460,8 @@ __attribute__((target("aes,sse4.2,avx2"))) void generate_uniform_simd_avx_bfloat
     }
 }
 
-template <std::same_as<bfloat16> T = bfloat16>
 __attribute__((target("aes,sse4.2,avx2"))) void generate_uniform_simd_parallel_avx_bfloat16(
-    std::span<T> output, uint32_t seed, auto dist_factory, size_t num_threads) {
+    std::span<bfloat16> output, uint32_t seed, auto dist_factory, size_t num_threads) {
     if (output.size() < parallel_min_size) [[unlikely]] {
         generate_uniform_simd_avx_bfloat16(output, seed, dist_factory);
         return;
@@ -398,53 +494,58 @@ __attribute__((target("aes,sse4.2,avx2"))) void generate_uniform_simd_parallel_a
 }
 
 // ============================================================================
-// Type Traits for Distribution Detection
-// ============================================================================
-
-template <typename Dist>
-concept UniformRealDistribution = requires(Dist d) {
-    { d.param().a() } -> std::convertible_to<typename Dist::result_type>;
-    { d.param().b() } -> std::convertible_to<typename Dist::result_type>;
-};
-
-// ============================================================================
 // Drop-in Replacement API (AVX2 version)
 // ============================================================================
 
 // Sequential generate - matches original random.hpp API
 template <typename T, typename DistGenFunc>
 inline void sequential_generate(std::span<T> seq, DistGenFunc dist_factory, uint32_t seed) noexcept {
-    // SIMD fast path for uniform_real_distribution<float>
+    // SIMD fast path for float distributions
     if constexpr (std::same_as<T, float>) {
-        auto dist = dist_factory();
-        if constexpr (UniformRealDistribution<decltype(dist)>) {
+        using Dist = decltype(dist_factory());
+        if constexpr (std::same_as<Dist, std::uniform_real_distribution<float>>) {
             generate_uniform_simd_avx(seq, seed, dist_factory);
+        } else if constexpr (std::same_as<Dist, std::normal_distribution<float>>) {
+            generate_normal_simd_avx(seq, seed, dist_factory);
         } else {
-            // Fallback to original MT19937 implementation for non-uniform distributions
+            // Fallback to original MT19937 implementation for other distributions
+            std::cerr << "AVX2: Falling back to MT19937 for non-optimized distribution (sequential, float)\n";
             core::sequential_generate(seq, dist_factory, seed);
         }
     }
     // SIMD fast path for uniform_real_distribution<double>
     else if constexpr (std::same_as<T, double>) {
-        auto dist = dist_factory();
-        if constexpr (UniformRealDistribution<decltype(dist)>) {
+        using Dist = decltype(dist_factory());
+        if constexpr (std::same_as<Dist, std::uniform_real_distribution<double>>) {
             generate_uniform_simd_avx_double(seq, seed, dist_factory);
         } else {
             // Fallback to original MT19937 implementation for non-uniform distributions
+            std::cerr << "AVX2: Falling back to MT19937 for non-uniform distribution (sequential, double)\n";
             core::sequential_generate(seq, dist_factory, seed);
         }
     }
-    // SIMD fast path for uniform_real_distribution<bfloat16>
+    // SIMD fast path for bfloat16 distributions
     else if constexpr (std::same_as<T, bfloat16>) {
-        auto dist = dist_factory();
-        if constexpr (UniformRealDistribution<decltype(dist)>) {
+        using Dist = decltype(dist_factory());
+        if constexpr (std::same_as<Dist, std::uniform_real_distribution<float>>) {
             generate_uniform_simd_avx_bfloat16(seq, seed, dist_factory);
+        } else if constexpr (std::same_as<Dist, std::normal_distribution<float>>) {
+            // For normal distribution with bfloat16, generate as float then convert
+            std::vector<float> temp(seq.size());
+            generate_normal_simd_avx(std::span<float>{temp}, seed, dist_factory);
+            for (size_t i = 0; i < seq.size(); ++i) {
+                uint32_t float_bits = std::bit_cast<uint32_t>(temp[i]);
+                uint16_t bf16_bits = static_cast<uint16_t>(float_bits >> 16);
+                seq[i] = std::bit_cast<bfloat16>(bf16_bits);
+            }
         } else {
-            // Fallback to original MT19937 implementation for non-uniform distributions
+            // Fallback to original MT19937 implementation for other distributions
+            std::cerr << "AVX2: Falling back to MT19937 for non-optimized distribution (sequential, bfloat16)\n";
             core::sequential_generate(seq, dist_factory, seed);
         }
     } else {
         // Fallback to original MT19937 implementation
+        std::cerr << "AVX2: Falling back to MT19937 for unsupported type (sequential)\n";
         core::sequential_generate(seq, dist_factory, seed);
     }
 }
@@ -456,37 +557,52 @@ inline void parallel_generate(
     DistGenFunc dist_factory,
     uint32_t seed,
     uint32_t max_threads = std::thread::hardware_concurrency()) noexcept {
-    // SIMD fast path for uniform_real_distribution<float>
+    // SIMD fast path for float distributions
     if constexpr (std::same_as<T, float>) {
-        auto dist = dist_factory();
-        if constexpr (UniformRealDistribution<decltype(dist)>) {
+        using Dist = decltype(dist_factory());
+        if constexpr (std::same_as<Dist, std::uniform_real_distribution<float>>) {
             generate_uniform_simd_avx_parallel(seq, dist_factory, seed, max_threads);
+        } else if constexpr (std::same_as<Dist, std::normal_distribution<float>>) {
+            generate_normal_simd_avx_parallel(seq, dist_factory, seed, max_threads);
         } else {
-            // Fallback to original MT19937 implementation for non-uniform distributions
+            // Fallback to original MT19937 implementation for other distributions
+            std::cerr << "AVX2: Falling back to MT19937 for non-optimized distribution (parallel, float)\n";
             core::parallel_generate(seq, dist_factory, seed, max_threads);
         }
     }
     // SIMD fast path for uniform_real_distribution<double>
     else if constexpr (std::same_as<T, double>) {
-        auto dist = dist_factory();
-        if constexpr (UniformRealDistribution<decltype(dist)>) {
+        using Dist = decltype(dist_factory());
+        if constexpr (std::same_as<Dist, std::uniform_real_distribution<double>>) {
             generate_uniform_simd_parallel_avx_double(seq, seed, dist_factory, max_threads);
         } else {
             // Fallback to original MT19937 implementation for non-uniform distributions
+            std::cerr << "AVX2: Falling back to MT19937 for non-uniform distribution (parallel, double)\n";
             core::parallel_generate(seq, dist_factory, seed, max_threads);
         }
     }
-    // SIMD fast path for uniform_real_distribution<bfloat16>
+    // SIMD fast path for bfloat16 distributions
     else if constexpr (std::same_as<T, bfloat16>) {
-        auto dist = dist_factory();
-        if constexpr (UniformRealDistribution<decltype(dist)>) {
+        using Dist = decltype(dist_factory());
+        if constexpr (std::same_as<Dist, std::uniform_real_distribution<float>>) {
             generate_uniform_simd_parallel_avx_bfloat16(seq, seed, dist_factory, max_threads);
+        } else if constexpr (std::same_as<Dist, std::normal_distribution<float>>) {
+            // For normal distribution with bfloat16, generate as float then convert
+            std::vector<float> temp(seq.size());
+            generate_normal_simd_avx_parallel(std::span<float>{temp}, dist_factory, seed, max_threads);
+            for (size_t i = 0; i < seq.size(); ++i) {
+                uint32_t float_bits = std::bit_cast<uint32_t>(temp[i]);
+                uint16_t bf16_bits = static_cast<uint16_t>(float_bits >> 16);
+                seq[i] = std::bit_cast<bfloat16>(bf16_bits);
+            }
         } else {
-            // Fallback to original MT19937 implementation for non-uniform distributions
+            // Fallback to original MT19937 implementation for other distributions
+            std::cerr << "AVX2: Falling back to MT19937 for non-optimized distribution (parallel, bfloat16)\n";
             core::parallel_generate(seq, dist_factory, seed, max_threads);
         }
     } else {
         // Fallback to original MT19937 implementation
+        std::cerr << "AVX2: Falling back to MT19937 for unsupported type (parallel)\n";
         core::parallel_generate(seq, dist_factory, seed, max_threads);
     }
 }

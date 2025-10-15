@@ -7,9 +7,12 @@
 #include <wmmintrin.h>  // AES-NI
 
 #include <algorithm>
+#include <cmath>
 #include <concepts>
 #include <cstdint>
+#include <iostream>
 #include <limits>
+#include <numbers>
 #include <random>
 #include <ranges>
 #include <span>
@@ -27,7 +30,7 @@ namespace ttml::core::sse {
 
 inline constexpr size_t simd_float_batch_size = 4;
 inline constexpr size_t cache_line_size_bytes = 64;
-inline constexpr size_t parallel_min_size = 1 << 12;
+inline constexpr size_t parallel_min_size = 4096;
 inline constexpr size_t thread_seed_shift_bits = 32;
 inline constexpr int aes_warmup_rounds = 10;
 inline constexpr uint64_t seed_mix_constant_1 = 0x0123456789abcdefULL;
@@ -141,9 +144,8 @@ public:
 // Internal SIMD Generation (Float)
 // ============================================================================
 
-template <std::same_as<float> T = float>
 __attribute__((target("aes,sse4.2"))) void generate_uniform_simd(
-    std::span<T> output, uint32_t seed, auto dist_factory) {
+    std::span<float> output, uint32_t seed, auto dist_factory) {
     AesRng rng{seed};
     auto dist = dist_factory();
     auto params = dist.param();
@@ -162,7 +164,7 @@ __attribute__((target("aes,sse4.2"))) void generate_uniform_simd(
     }
 
     for (size_t i : std::views::iota(num_batches * simd_float_batch_size, output.size())) {
-        T rand_val = _mm_cvtss_f32(rng.generate_float_x4());
+        float rand_val = _mm_cvtss_f32(rng.generate_float_x4());
         output[i] = min + rand_val * (max - min);
     }
 }
@@ -203,12 +205,109 @@ __attribute__((target("aes,sse4.2"))) void generate_uniform_simd_parallel(
 }
 
 // ============================================================================
+// Internal SIMD Generation (Normal Distribution - Box-Muller)
+// ============================================================================
+
+__attribute__((target("aes,sse4.2"))) void generate_normal_simd(
+    std::span<float> output, uint32_t seed, auto dist_factory) {
+    AesRng rng{seed};
+    auto dist = dist_factory();
+    auto params = dist.param();
+
+    const float mean = params.mean();
+    const float stddev = params.stddev();
+
+    const __m128 mean_vec = _mm_set1_ps(mean);
+    const __m128 stddev_vec = _mm_set1_ps(stddev);
+    const float two_pi = 2.0f * std::numbers::pi_v<float>;
+
+    // Process pairs of values (Box-Muller generates 2 values per iteration)
+    // SSE processes 4 values at a time, so we get 8 normal values per iteration
+    // (4 from z1, 4 from z2)
+    size_t i = 0;
+    for (; i + 8 <= output.size(); i += 8) {
+        // Generate 4 uniform random values for U1 and 4 for U2
+        __m128 u1 = rng.generate_float_x4();
+        __m128 u2 = rng.generate_float_x4();
+
+        // Extract to array for scalar math
+        alignas(16) float u1_arr[4], u2_arr[4];
+        _mm_store_ps(u1_arr, u1);
+        _mm_store_ps(u2_arr, u2);
+
+        // Box-Muller transform using scalar math functions
+        alignas(16) float z1_arr[4], z2_arr[4];
+        for (int j = 0; j < 4; ++j) {
+            float r = std::sqrt(-2.0f * std::log(std::max(u1_arr[j], 1e-10f)));
+            float theta = two_pi * u2_arr[j];
+            z1_arr[j] = r * std::cos(theta);
+            z2_arr[j] = r * std::sin(theta);
+        }
+
+        // Load back into SIMD registers
+        __m128 z1 = _mm_load_ps(z1_arr);
+        __m128 z2 = _mm_load_ps(z2_arr);
+
+        // Scale and shift: z * stddev + mean
+        z1 = _mm_add_ps(_mm_mul_ps(z1, stddev_vec), mean_vec);
+        z2 = _mm_add_ps(_mm_mul_ps(z2, stddev_vec), mean_vec);
+
+        // Store results
+        _mm_storeu_ps(&output[i], z1);
+        _mm_storeu_ps(&output[i + 4], z2);
+    }
+
+    // Handle remainder (< 8 elements remaining)
+    if (i < output.size()) {
+        std::mt19937 fallback_rng{seed + static_cast<uint32_t>(i)};
+        auto fallback_dist = dist_factory();
+        for (; i < output.size(); ++i) {
+            output[i] = fallback_dist(fallback_rng);
+        }
+    }
+}
+
+// Parallel SIMD generation for normal_distribution<float>
+template <typename DistFactory>
+__attribute__((target("aes,sse4.2"))) void generate_normal_simd_parallel(
+    std::span<float> output, DistFactory dist_factory, uint32_t seed, size_t num_threads) {
+    if (output.size() < parallel_min_size) [[unlikely]] {
+        generate_normal_simd(output, seed, dist_factory);
+        return;
+    }
+
+    constexpr size_t elems_per_line = cache_line_size_bytes / sizeof(float);
+    size_t chunk_size = output.size() / num_threads;
+    if constexpr (elems_per_line > 1) {
+        chunk_size = ((chunk_size + elems_per_line - 1) / elems_per_line) * elems_per_line;
+    }
+
+    auto chunks = std::views::iota(0u, num_threads) | std::views::transform([&](size_t i) {
+                      const size_t offset = i * chunk_size;
+                      const size_t size = std::min(chunk_size, output.size() - offset);
+                      return std::span{output.data() + offset, size};
+                  }) |
+                  std::views::take_while([](auto chunk) { return !chunk.empty(); });
+
+    std::vector<std::jthread> threads;
+    threads.reserve(num_threads);
+
+    size_t thread_id = 0;
+    for (auto chunk : chunks) {
+        const uint64_t thread_seed =
+            static_cast<uint64_t>(seed) + (static_cast<uint64_t>(thread_id++) << thread_seed_shift_bits);
+        threads.emplace_back([chunk, thread_seed, dist_factory]() {
+            generate_normal_simd(chunk, static_cast<uint32_t>(thread_seed), dist_factory);
+        });
+    }
+}
+
+// ============================================================================
 // Internal SIMD Generation (Double)
 // ============================================================================
 
-template <std::same_as<double> T = double>
 __attribute__((target("aes,sse4.2"))) void generate_uniform_simd_double(
-    std::span<T> output, uint32_t seed, auto dist_factory) {
+    std::span<double> output, uint32_t seed, auto dist_factory) {
     constexpr size_t simd_double_batch_size = 2;  // 2 doubles per SSE register
 
     AesRng rng{seed};
@@ -242,11 +341,10 @@ __attribute__((target("aes,sse4.2"))) void generate_uniform_simd_double(
     }
 }
 
-template <std::same_as<double> T = double>
 __attribute__((target("aes,sse4.2"))) void generate_uniform_simd_parallel_double(
-    std::span<T> output, uint32_t seed, auto dist_factory, size_t num_threads) {
+    std::span<double> output, uint32_t seed, auto dist_factory, size_t num_threads) {
     constexpr size_t simd_double_batch_size = 2;
-    constexpr size_t elems_per_cache_line = cache_line_size_bytes / sizeof(T);
+    constexpr size_t elems_per_cache_line = cache_line_size_bytes / sizeof(double);
     constexpr size_t elems_per_line = (elems_per_cache_line / simd_double_batch_size) * simd_double_batch_size;
 
     size_t chunk_size = output.size() / num_threads;
@@ -281,9 +379,8 @@ __attribute__((target("aes,sse4.2"))) void generate_uniform_simd_parallel_double
 // Internal SIMD Generation (bfloat16)
 // ============================================================================
 
-template <std::same_as<bfloat16> T = bfloat16>
 __attribute__((target("aes,sse4.2"))) void generate_uniform_simd_bfloat16(
-    std::span<T> output, uint32_t seed, auto dist_factory) {
+    std::span<bfloat16> output, uint32_t seed, auto dist_factory) {
     constexpr size_t simd_bf16_batch_size = 4;  // 4 bfloat16s generated at a time
 
     AesRng rng{seed};
@@ -325,11 +422,10 @@ __attribute__((target("aes,sse4.2"))) void generate_uniform_simd_bfloat16(
     }
 }
 
-template <std::same_as<bfloat16> T = bfloat16>
 __attribute__((target("aes,sse4.2"))) void generate_uniform_simd_parallel_bfloat16(
-    std::span<T> output, uint32_t seed, auto dist_factory, size_t num_threads) {
+    std::span<bfloat16> output, uint32_t seed, auto dist_factory, size_t num_threads) {
     constexpr size_t simd_bf16_batch_size = 4;
-    constexpr size_t elems_per_cache_line = cache_line_size_bytes / sizeof(T);
+    constexpr size_t elems_per_cache_line = cache_line_size_bytes / sizeof(bfloat16);
     constexpr size_t elems_per_line = (elems_per_cache_line / simd_bf16_batch_size) * simd_bf16_batch_size;
 
     size_t chunk_size = output.size() / num_threads;
@@ -361,53 +457,58 @@ __attribute__((target("aes,sse4.2"))) void generate_uniform_simd_parallel_bfloat
 }
 
 // ============================================================================
-// Type Traits for Distribution Detection
-// ============================================================================
-
-template <typename Dist>
-concept UniformRealDistribution = requires(Dist d) {
-    { d.param().a() } -> std::convertible_to<typename Dist::result_type>;
-    { d.param().b() } -> std::convertible_to<typename Dist::result_type>;
-};
-
-// ============================================================================
 // Drop-in Replacement API
 // ============================================================================
 
 // Sequential generate - matches original random.hpp API
 template <typename T, typename DistGenFunc>
 inline void sequential_generate(std::span<T> seq, DistGenFunc dist_factory, uint32_t seed) noexcept {
-    // SIMD fast path for uniform_real_distribution<float>
+    // SIMD fast path for float distributions
     if constexpr (std::same_as<T, float>) {
-        auto dist = dist_factory();
-        if constexpr (UniformRealDistribution<decltype(dist)>) {
+        using Dist = decltype(dist_factory());
+        if constexpr (std::same_as<Dist, std::uniform_real_distribution<float>>) {
             generate_uniform_simd(seq, seed, dist_factory);
+        } else if constexpr (std::same_as<Dist, std::normal_distribution<float>>) {
+            generate_normal_simd(seq, seed, dist_factory);
         } else {
-            // Fallback to original MT19937 implementation for non-uniform distributions
+            // Fallback to original MT19937 implementation for other distributions
+            std::cerr << "SSE: Falling back to MT19937 for non-optimized distribution (sequential, float)\n";
             core::sequential_generate(seq, dist_factory, seed);
         }
     }
     // SIMD fast path for uniform_real_distribution<double>
     else if constexpr (std::same_as<T, double>) {
-        auto dist = dist_factory();
-        if constexpr (UniformRealDistribution<decltype(dist)>) {
+        using Dist = decltype(dist_factory());
+        if constexpr (std::same_as<Dist, std::uniform_real_distribution<double>>) {
             generate_uniform_simd_double(seq, seed, dist_factory);
         } else {
             // Fallback to original MT19937 implementation for non-uniform distributions
+            std::cerr << "SSE: Falling back to MT19937 for non-uniform distribution (sequential, double)\n";
             core::sequential_generate(seq, dist_factory, seed);
         }
     }
-    // SIMD fast path for uniform_real_distribution<bfloat16>
+    // SIMD fast path for bfloat16 distributions
     else if constexpr (std::same_as<T, bfloat16>) {
-        auto dist = dist_factory();
-        if constexpr (UniformRealDistribution<decltype(dist)>) {
+        using Dist = decltype(dist_factory());
+        if constexpr (std::same_as<Dist, std::uniform_real_distribution<float>>) {
             generate_uniform_simd_bfloat16(seq, seed, dist_factory);
+        } else if constexpr (std::same_as<Dist, std::normal_distribution<float>>) {
+            // For normal distribution with bfloat16, generate as float then convert
+            std::vector<float> temp(seq.size());
+            generate_normal_simd(std::span<float>{temp}, seed, dist_factory);
+            for (size_t i = 0; i < seq.size(); ++i) {
+                uint32_t float_bits = std::bit_cast<uint32_t>(temp[i]);
+                uint16_t bf16_bits = static_cast<uint16_t>(float_bits >> 16);
+                seq[i] = std::bit_cast<bfloat16>(bf16_bits);
+            }
         } else {
-            // Fallback to original MT19937 implementation for non-uniform distributions
+            // Fallback to original MT19937 implementation for other distributions
+            std::cerr << "SSE: Falling back to MT19937 for non-optimized distribution (sequential, bfloat16)\n";
             core::sequential_generate(seq, dist_factory, seed);
         }
     } else {
         // Fallback to original MT19937 implementation
+        std::cerr << "SSE: Falling back to MT19937 for unsupported type (sequential)\n";
         core::sequential_generate(seq, dist_factory, seed);
     }
 }
@@ -419,37 +520,52 @@ inline void parallel_generate(
     DistGenFunc dist_factory,
     uint32_t seed,
     uint32_t max_threads = std::thread::hardware_concurrency()) noexcept {
-    // SIMD fast path for uniform_real_distribution<float>
+    // SIMD fast path for float distributions
     if constexpr (std::same_as<T, float>) {
-        auto dist = dist_factory();
-        if constexpr (UniformRealDistribution<decltype(dist)>) {
+        using Dist = decltype(dist_factory());
+        if constexpr (std::same_as<Dist, std::uniform_real_distribution<float>>) {
             generate_uniform_simd_parallel(seq, dist_factory, seed, max_threads);
+        } else if constexpr (std::same_as<Dist, std::normal_distribution<float>>) {
+            generate_normal_simd_parallel(seq, dist_factory, seed, max_threads);
         } else {
-            // Fallback to original MT19937 implementation for non-uniform distributions
+            // Fallback to original MT19937 implementation for other distributions
+            std::cerr << "SSE: Falling back to MT19937 for non-optimized distribution (parallel, float)\n";
             core::parallel_generate(seq, dist_factory, seed, max_threads);
         }
     }
     // SIMD fast path for uniform_real_distribution<double>
     else if constexpr (std::same_as<T, double>) {
-        auto dist = dist_factory();
-        if constexpr (UniformRealDistribution<decltype(dist)>) {
+        using Dist = decltype(dist_factory());
+        if constexpr (std::same_as<Dist, std::uniform_real_distribution<double>>) {
             generate_uniform_simd_parallel_double(seq, seed, dist_factory, max_threads);
         } else {
             // Fallback to original MT19937 implementation for non-uniform distributions
+            std::cerr << "SSE: Falling back to MT19937 for non-uniform distribution (parallel, double)\n";
             core::parallel_generate(seq, dist_factory, seed, max_threads);
         }
     }
-    // SIMD fast path for uniform_real_distribution<bfloat16>
+    // SIMD fast path for bfloat16 distributions
     else if constexpr (std::same_as<T, bfloat16>) {
-        auto dist = dist_factory();
-        if constexpr (UniformRealDistribution<decltype(dist)>) {
+        using Dist = decltype(dist_factory());
+        if constexpr (std::same_as<Dist, std::uniform_real_distribution<float>>) {
             generate_uniform_simd_parallel_bfloat16(seq, seed, dist_factory, max_threads);
+        } else if constexpr (std::same_as<Dist, std::normal_distribution<float>>) {
+            // For normal distribution with bfloat16, generate as float then convert
+            std::vector<float> temp(seq.size());
+            generate_normal_simd_parallel(std::span<float>{temp}, dist_factory, seed, max_threads);
+            for (size_t i = 0; i < seq.size(); ++i) {
+                uint32_t float_bits = std::bit_cast<uint32_t>(temp[i]);
+                uint16_t bf16_bits = static_cast<uint16_t>(float_bits >> 16);
+                seq[i] = std::bit_cast<bfloat16>(bf16_bits);
+            }
         } else {
-            // Fallback to original MT19937 implementation for non-uniform distributions
+            // Fallback to original MT19937 implementation for other distributions
+            std::cerr << "SSE: Falling back to MT19937 for non-optimized distribution (parallel, bfloat16)\n";
             core::parallel_generate(seq, dist_factory, seed, max_threads);
         }
     } else {
         // Fallback to original MT19937 implementation
+        std::cerr << "SSE: Falling back to MT19937 for unsupported type (parallel)\n";
         core::parallel_generate(seq, dist_factory, seed, max_threads);
     }
 }
