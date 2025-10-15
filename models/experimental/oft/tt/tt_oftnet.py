@@ -90,7 +90,6 @@ class TTOftNet:
             use_precomputed_grid=True,
             num_slices=11,
         )
-        ttnn.device.ReadDeviceProfiler(device)
         self.topdown = [
             block(
                 device,
@@ -360,6 +359,7 @@ class TTOftNet:
             # feats8, feats16, feats32 = self.frontend.forward(device, normalized_input)
             feats8, feats16, feats32 = self.frontend.forward(device, normalized_input)
 
+        ttnn.device.ReadDeviceProfiler(device)
         # Apply lateral layers
         if self.Lateral_fallback and self.host_fallback_model is not None:
             logger.warning("Using host fallback Lateral model")

@@ -115,7 +115,7 @@ class TTBasicBlock:
 class TTResNetFeatures:
     def __init__(self, device, parameters, conv_pt, block, layers, return_intermediates=False):
         self.conv1 = TtConv2d(conv_pt.conv1["optimized_configuration"], device)
-        self.bn1 = GroupNormDRAM(parameters.bn1, conv_pt.bn1)
+        self.bn1 = GroupNorm(parameters.bn1, conv_pt.bn1)
         self.maxpool = TtMaxPool2d(
             configuration=MaxPool2dConfiguration(
                 input_height=conv_pt.maxpool.input_height,
@@ -190,9 +190,18 @@ class TTResNetFeatures:
         conv1 = self.conv1(x)
         host_conv1f = ttnn.to_torch(conv1).permute(0, 3, 1, 2)
 
-        conv1 = ttnn.to_layout(conv1, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        conv1 = self.bn1(device, conv1, num_splits=10)
+        conv1 = ttnn.to_memory_config(conv1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        splits = [conv1[:, :, :, i : i + 32] for i in range(0, conv1.shape[3], 32)]
+        processed_splits = []
+        for split in splits:
+            split = ttnn.to_layout(split, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            split = self.bn1(device, split, shard="HS", num_splits=10, negative_mask=True)
+            split = ttnn.to_memory_config(split, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            processed_splits.append(split)
+        conv1 = ttnn.concat(processed_splits, dim=3, memory_config=ttnn.L1_MEMORY_CONFIG)
         conv1 = ttnn.to_layout(conv1, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        for split in processed_splits:
+            ttnn.deallocate(split)
         host_gn = ttnn.to_torch(conv1).permute(0, 3, 1, 2)
         conv1 = ttnn.relu(conv1, output_tensor=conv1)
         host_relu = ttnn.to_torch(conv1).permute(0, 3, 1, 2).reshape(1, 64, 192, 640)
