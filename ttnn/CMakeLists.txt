@@ -5,11 +5,6 @@
 ##################################################
 # Set options
 ##################################################
-if(ENABLE_COVERAGE AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    message(STATUS "Enabling code coverage flags for all ttnn targets")
-    add_compile_options(--coverage)
-    add_link_options(--coverage)
-endif()
 
 set(LIB_TYPE OBJECT)
 if(ENABLE_TTNN_SHARED_SUBLIBS)
