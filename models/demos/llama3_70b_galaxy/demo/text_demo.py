@@ -5,7 +5,6 @@ from pathlib import Path
 from loguru import logger
 from datetime import datetime
 import hashlib
-import numpy as np
 import requests
 import json
 import torch
@@ -227,9 +226,9 @@ def create_tt_model(
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
             {
-                "temperature": list(np.linspace(0.0, 1.0, 32)),
-                "top_p": list(np.linspace(0.08, 1.0, 32)),
-                "top_k": list(np.linspace(1, 32, 32).astype(int)),
+                "temperature": torch.linspace(0.0, 1.0, steps=32).tolist(),
+                "top_p": torch.linspace(0.08, 1.0, steps=32).tolist(),
+                "top_k": torch.arange(1, 33).tolist(),  # 1 to 32 inclusive
             },  # sampling_params (non-uniform)
             False,  # stop_at_eos
             False,  # apc_test

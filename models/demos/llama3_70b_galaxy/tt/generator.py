@@ -72,7 +72,7 @@ class Generator:
             return min_value
         elif value > max_value:
             return max_value
-        return None
+        return value
 
     def prefill_forward_text(
         self,
@@ -385,7 +385,7 @@ class Generator:
                 for i, (top_p, temp) in enumerate(zip(sampling_params.top_p, sampling_params.temperature)):
                     # Clamp top-p
                     clamped_top_p = self._clamp(top_p, TOP_P_MIN, TOP_P_MAX)
-                    if clamped_top_p is not None:
+                    if clamped_top_p != top_p:
                         logger.warning(f"Clamped Top-P value of {top_p} to {clamped_top_p}")
                         sampling_params.top_p[i] = clamped_top_p
 
