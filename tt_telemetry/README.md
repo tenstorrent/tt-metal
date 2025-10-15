@@ -116,7 +116,7 @@ For basic single-node machine types, one of the unit tests will produce FSD file
 ./build/test/tools/scaleout/test_factory_system_descriptor --gtest_filter="Cluster.TestFactorySystemDescriptorSingleNodeTypes"
 ```
 
-The files will be placed in `fsd/`.
+The files will be placed in `fsd/`. FSD files should be placed in `/var/telemetry` to be usable with the Docker container.
 
 # TODO
 
