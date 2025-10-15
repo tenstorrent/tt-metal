@@ -197,15 +197,13 @@ def get_callstack(
         offsets.append(dispatcher_core_data.kernel_offset)
     try:
         if not full_callstack:
-            pc = location._device.get_block(location).get_risc_debug(risc_name).get_pc()
+            pc = location._device.get_block(location).get_risc_debug(risc_name).get_pc() - 4
             try:
                 cs = top_callstack(pc, elfs, offsets, context)
                 error_message = None
                 if len(cs) == 0:
                     error_message = "PC was not in range of any provided ELF files."
-                    if location in location._device.active_eth_block_locations and isinstance(
-                        location._device, WormholeDevice
-                    ):
+                    if location in location._device.active_eth_block_locations:
                         error_message += " Probably context switch occurred and PC is contained in base ERISC firmware."
                 return KernelCallstackWithMessage(callstack=cs, message=error_message)
             except Exception as e:
@@ -221,9 +219,7 @@ def get_callstack(
                     cs = top_callstack(pc, elfs, offsets, context)
                     if len(cs) == 0:
                         additional_message = "PC was not in range of any provided ELF files."
-                        if location in location._device.active_eth_block_locations and isinstance(
-                            location._device, WormholeDevice
-                        ):
+                        if location in location._device.active_eth_block_locations:
                             additional_message += (
                                 " Probably context switch occurred and PC is contained in base ERISC firmware."
                             )

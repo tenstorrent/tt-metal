@@ -309,7 +309,7 @@ class DispatcherData:
                 firmware_path = os.path.join(build_env.firmwarePath, "active_erisc", "active_erisc.elf")
             elif proc_name.lower() == "erisc1":
                 firmware_path = os.path.join(
-                    build_env.firmwarePath, "subordinate_idle_erisc", "subordinate_idle_erisc.elf"
+                    build_env.firmwarePath, "subordinate_active_erisc", "subordinate_active_erisc.elf"
                 )
         else:
             if proc_name.lower() == "erisc" or proc_name.lower() == "erisc0":
@@ -329,7 +329,7 @@ class DispatcherData:
                 elif proc_name.lower() == "erisc0":
                     kernel_path = kernel.path + "/active_erisc/active_erisc.elf"
                 elif proc_name.lower() == "erisc1":
-                    kernel_path = kernel.path + "/subordinate_erisc/subordinate_erisc.elf"
+                    kernel_path = kernel.path + "/subordinate_active_erisc/subordinate_active_erisc.elf"
             else:
                 if proc_name.lower() == "erisc" or proc_name.lower() == "erisc0":
                     kernel_path = kernel.path + "/idle_erisc/idle_erisc.elf"
