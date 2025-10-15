@@ -27,7 +27,12 @@ nd_mode=false
 run_idx=0
 timeout_rc=1
 
-while getopts ":f:s:g:b:t:pr:n" opt; do
+echo "setting the compiler versions to clang-17"
+
+export CC=clang-17
+export CXX=clang++-17
+
+while getopts ":f:g:b:t:pr:n" opt; do
   case "$opt" in
     f) test="$OPTARG" ;;
     s) script_path="$OPTARG" ;;
