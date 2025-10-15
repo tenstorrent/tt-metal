@@ -173,7 +173,8 @@ class TtStem(LightweightModule):
         logger.debug(f"Conv3 - raw conv output shape: {x.shape}, expected: {self.conv3_out_shape}")
         # Don't reshape yet - pass flattened to maxpool
         # x = ttnn.relu(x)  # Separate ReLU
-        x = ttnn.move(x)  # Keep in current memory config
+        if x.memory_config().buffer_type != ttnn.BufferType.DRAM:
+            x = ttnn.move(x)  # Keep in current memory config
         logger.debug(f"Conv3 + separate ReLU - output: {x.shape}")
 
         # MaxPool (takes flattened input, returns flattened output)
@@ -197,6 +198,7 @@ class TtStem(LightweightModule):
             logger.debug(f"Reshaping {layer_name} from {x.shape} to {output_shape}")
             # x = ttnn.reshape(x, output_shape)
         # x = ttnn.relu(x)  # Separate ReLU
-        x = ttnn.move(x)  # Keep in current memory config
+        if x.memory_config().buffer_type != ttnn.BufferType.DRAM:
+            x = ttnn.move(x)  # Keep in current memory config
         logger.debug(f"{layer_name} + separate ReLU - output: {x.shape}")
         return x
