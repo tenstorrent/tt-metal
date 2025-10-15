@@ -87,7 +87,7 @@
 | [UNet - VGG19 (256x256)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/wormhole/vgg_unet)                                   | 1     | [n150 (Wormhole)](https://tenstorrent.com/hardware/wormhole)        | 77      | 150        |             |
 | [SegFormer Semantic Segmentation (512x512)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/segformer)       | 1     | [n150 (Wormhole)](https://tenstorrent.com/hardware/wormhole)        | 84      | 300        |              |
 | [YOLOv9c (640x640)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/yolov9c)                                   | 1     | [n150 (Wormhole)](https://tenstorrent.com/hardware/wormhole)        | 40      | 240        |             |
-| [UFLD - v2 (320x800)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/ufld_v2)                                   | 1     | [n150 (Wormhole)](https://tenstorrent.com/hardware/wormhole)        | 255      | 2000        |             |
+| [UFLD - v2 (320x800)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/rowmhole/ufld_v2)                                   | 1     | [n150 (Wormhole)](https://tenstorrent.com/hardware/wormhole)        | 255      | 2000        |             |
 
 ## NLPs
 
