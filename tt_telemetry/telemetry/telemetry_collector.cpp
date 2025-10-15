@@ -24,6 +24,7 @@
 #include "protobuf/factory_system_descriptor.pb.h"
 
 #include <telemetry/telemetry_collector.hpp>
+#include <telemetry/watchdog.hpp>
 #include <hal/hal.hpp>
 #include <telemetry/ethernet/ethernet_metrics.hpp>
 #include <telemetry/arc/arc_metrics.hpp>
@@ -231,8 +232,16 @@ static void telemetry_thread(
     std::vector<std::shared_ptr<TelemetrySubscriber>> subscribers,
     const std::vector<std::string>& aggregate_endpoints,
     const tt::llrt::RunTimeOptions& rtoptions,
-    tt::scaleout_tools::fsd::proto::FactorySystemDescriptor fsd) {
+    tt::scaleout_tools::fsd::proto::FactorySystemDescriptor fsd,
+    int watchdog_timeout_seconds) {
     try {
+        Watchdog watchdog(watchdog_timeout_seconds);
+        TT_FATAL(
+            watchdog_timeout_seconds <= 0 || std::chrono::seconds(watchdog_timeout_seconds) > MONITOR_INTERVAL_SECONDS,
+            "Watchdog timeout ({} seconds) cannot be shorter than the telemetry monitoring interval ({} seconds)",
+            watchdog_timeout_seconds,
+            MONITOR_INTERVAL_SECONDS.count());
+
         std::unique_ptr<tt::umd::Cluster> cluster;
         std::unique_ptr<tt::tt_metal::Hal> hal;
         std::unique_ptr<tt::tt_metal::PhysicalSystemDescriptor> psd;
@@ -264,6 +273,9 @@ static void telemetry_thread(
             log_info(tt::LogAlways, "Obtained initial readout and sent snapshot");
         }
 
+        // Increment heartbeat after initialization
+        watchdog.heartbeat();
+
         // Main telemetry monitoring loop
         while (!stopped_.load()) {
             try {
@@ -283,20 +295,25 @@ static void telemetry_thread(
                 for (auto& subscriber : subscribers) {
                     subscriber->on_telemetry_ready(delta_snapshot);
                 }
+
+                // Increment heartbeat to signal watchdog that we've completed this loop iteration
+                watchdog.heartbeat();
+
             } catch (const std::exception& e) {
                 log_fatal(tt::LogAlways, "Exception in telemetry monitoring loop: {}", e.what());
             } catch (...) {
                 log_fatal(tt::LogAlways, "Unknown exception in telemetry monitoring loop");
             }
         }
-
     } catch (const std::exception& e) {
         log_fatal(tt::LogAlways, "Fatal exception during telemetry thread initialization: {}", e.what());
     } catch (...) {
         log_fatal(tt::LogAlways, "Unknown fatal exception during telemetry thread initialization");
     }
 
-    log_info(tt::LogAlways, "Telemetry thread stopped");
+    // Telemetry thread should currently never stop. If it happens, it's an error and should terminate the app.
+    log_fatal(tt::LogAlways, "Telemetry thread stopped");
+    exit(1);  // kill process so that job scheduler notices and restarts app
 }
 
 void run_telemetry_collector(
@@ -304,7 +321,8 @@ void run_telemetry_collector(
     std::vector<std::shared_ptr<TelemetrySubscriber>> subscribers,
     const std::vector<std::string>& aggregate_endpoints,
     const tt::llrt::RunTimeOptions& rtoptions,
-    tt::scaleout_tools::fsd::proto::FactorySystemDescriptor fsd) {
+    tt::scaleout_tools::fsd::proto::FactorySystemDescriptor fsd,
+    int watchdog_timeout_seconds) {
     // Prefill hostname
     gethostname(hostname_, sizeof(hostname_));
 
@@ -316,6 +334,7 @@ void run_telemetry_collector(
         subscribers,
         aggregate_endpoints,
         std::cref(rtoptions),
-        fsd);
+        fsd,
+        watchdog_timeout_seconds);
     t.wait();
 }
