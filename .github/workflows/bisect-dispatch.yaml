@@ -123,10 +123,12 @@ jobs:
 
           # Check and install GitHub CLI
           if ! command -v gh >/dev/null 2>&1; then
-            echo "Installing GitHub CLI..."
+            echo "Installing GitHub CLI 2.8..."
             apt-get update
-            apt-get install -y --no-install-recommends gh
-            echo "✅ GitHub CLI installed successfully"
+            wget -O gh_2.8.0_linux_amd64.deb https://github.com/cli/cli/releases/download/v2.8.0/gh_2.8.0_linux_amd64.deb
+            apt-get install -y --no-install-recommends ./gh_2.8.0_linux_amd64.deb
+            rm -f gh_2.8.0_linux_amd64.deb
+            echo "✅ GitHub CLI 2.8.0 installed successfully"
           else
             echo "✅ GitHub CLI is already installed"
           fi
