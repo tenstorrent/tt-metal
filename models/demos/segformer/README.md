@@ -1,7 +1,7 @@
 # Segformer
 
 ## Platforms:
-Wormhole (n150, n300)
+    Wormhole (n150, n300)
 
 ## Introduction
 SegFormer's architecture is adept for both classification and segmentation tasks, utilizing a hierarchical design that extracts rich, multi-scale visual features. Its robust Transformer encoder generates powerful representations, suitable for discerning object categories, while a lightweight MLP decode head precisely maps these features for accurate pixel-level segmentation.
@@ -33,7 +33,7 @@ Semantic segmentation: [source](https://huggingface.co/nvidia/segformer-b0-finet
 
 ### Performant Model with Trace+2CQ
 #### Single Device (BS=1):
-- end-2-end perf is 105 FPS (**On N150**), _On N300 single device, the FPS will be low as it uses ethernet dispatch_
+- end-2-end perf is 132 FPS (**On N150**), _On N300 single device, the FPS will be low as it uses ethernet dispatch_
 
 Use the following command to run Model performant running with Trace+2CQ
 ```
@@ -41,7 +41,7 @@ pytest models/demos/segformer/tests/perf/test_e2e_performant.py::test_segformer_
 ```
 
 #### Multi Device (DP=2, n300):
-- end-2-end perf is 182 FPS
+- end-2-end perf is 248 FPS
 
 Use the following command to run Model performant running with Trace+2CQ
 ```

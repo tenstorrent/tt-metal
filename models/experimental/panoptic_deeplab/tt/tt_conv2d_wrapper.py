@@ -170,9 +170,15 @@ class TtConv2d:
         *,
         stride: tuple[int, int] = (1, 1),
         padding: tuple[int, int] = (0, 0),
+        dtype: ttnn.DataType = ttnn.bfloat8_b,
+        conv_path: str = None,
+        model_configs=None,
     ) -> None:
         self._stride = stride
         self._padding = padding
+        self._conv_path = conv_path
+        self._model_configs = model_configs
+        self._dtype = dtype
 
         self._in_channels = parameters.in_channels
         self._out_channels = parameters.out_channels
@@ -189,38 +195,57 @@ class TtConv2d:
         self._bias_slices = []
 
     def _get_conv_config(self) -> ttnn.Conv2dConfig:
-        """Create default conv2d configuration"""
-        return ttnn.Conv2dConfig(
-            weights_dtype=ttnn.bfloat8_b,
-            shard_layout=None,
-            deallocate_activation=False,
-            enable_act_double_buffer=False,
-            enable_weights_double_buffer=False,
-            output_layout=ttnn.TILE_LAYOUT,
-            activation=None,
-            transpose_shards=False,
-            in_place=False,
-            enable_kernel_stride_folding=False,
-            full_inner_dim=False,
-            act_block_h_override=32,
-        )
+        """Get conv2d configuration from model configs or create default"""
+        if self._model_configs is not None and self._conv_path is not None:
+            return self._model_configs.get_conv_config(self._conv_path)
+        else:
+            # Fallback to default configuration
+            logger.warning(
+                f"FALLBACK CONV CONFIG: Using default config instead of model_configs. conv_path={self._conv_path}, model_configs={self._model_configs}"
+            )
+            return ttnn.Conv2dConfig(
+                weights_dtype=ttnn.bfloat8_b,
+                shard_layout=None,
+                deallocate_activation=False,
+                enable_act_double_buffer=False,
+                enable_weights_double_buffer=False,
+                output_layout=ttnn.TILE_LAYOUT,
+                activation=None,
+                transpose_shards=False,
+                in_place=False,
+                enable_kernel_stride_folding=False,
+                full_inner_dim=False,
+                act_block_h_override=32,
+                config_tensors_in_dram=True,
+            )
 
     def _get_compute_kernel_config(self) -> ttnn.WormholeComputeKernelConfig:
-        """Create LoFi compute kernel configuration for optimal performance"""
-        return ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.LoFi,
-            math_approx_mode=True,
-            fp32_dest_acc_en=False,
-            packer_l1_acc=False,
-        )
+        """Get compute kernel configuration from model configs or create default"""
+        if self._model_configs is not None and self._conv_path is not None:
+            return self._model_configs.get_conv_compute_config(self._conv_path)
+        else:
+            # Fallback to default configuration
+            logger.warning(
+                f"FALLBACK COMPUTE CONFIG: Using default config instead of model_configs. conv_path={self._conv_path}, model_configs={self._model_configs}"
+            )
+            return ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.LoFi,
+                math_approx_mode=False,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=False,
+            )
 
     def _create_spatial_slice_config(self) -> Optional[ttnn.Conv2dSliceConfig]:
         """Create spatial slice configuration based on slice_config"""
         if self._slice_config.mode == SliceMode.HEIGHT:
-            return ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dSliceHeight, num_slices=self._slice_config.num_slices)
+            return ttnn.Conv2dSliceConfig(
+                slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=self._slice_config.num_slices
+            )
         elif self._slice_config.mode == SliceMode.WIDTH:
-            return ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dSliceWidth, num_slices=self._slice_config.num_slices)
-        return None
+            return ttnn.Conv2dSliceConfig(
+                slice_type=ttnn.Conv2dDRAMSliceWidth, num_slices=self._slice_config.num_slices
+            )
+        return ttnn.Conv2dL1FullSliceConfig
 
     def _perform_channel_slicing(
         self,
@@ -311,8 +336,9 @@ class TtConv2d:
                 return_weights_and_bias=True,
                 conv_config=conv_config,
                 memory_config=memory_config,
-                dtype=ttnn.bfloat8_b,
+                dtype=self._dtype,
                 compute_config=self._get_compute_kernel_config(),
+                slice_config=ttnn.Conv2dL1FullSliceConfig,
             )
             output_slice = ttnn.move(output_slice)
             if i == 0:
@@ -370,7 +396,7 @@ class TtConv2d:
             conv_config=conv_config,
             memory_config=memory_config,
             slice_config=spatial_slice_config,
-            dtype=ttnn.bfloat8_b,
+            dtype=self._dtype,
             compute_config=self._get_compute_kernel_config(),
         )
 
@@ -445,10 +471,20 @@ class TtConv2d:
         *,
         stride: tuple[int, int] = (1, 1),
         padding: tuple[int, int] = (0, 0),
+        conv_path: str = None,
+        model_configs=None,
+        dtype: ttnn.DataType = ttnn.bfloat8_b,
     ) -> "TtConv2d":
         """Create TtConv2d with channel slicing configuration."""
+        # Get slice config from model_configs if available, otherwise use provided num_slices
+        if model_configs is not None and conv_path is not None:
+            slice_config_dict = model_configs.get_slice_config(conv_path)
+            if slice_config_dict["mode"] == "channel":
+                num_slices = slice_config_dict["num_slices"]
         parameters.slice_config = SliceConfig(mode=SliceMode.CHANNEL, num_slices=num_slices)
-        return cls(parameters, stride=stride, padding=padding)
+        return cls(
+            parameters, stride=stride, padding=padding, conv_path=conv_path, model_configs=model_configs, dtype=dtype
+        )
 
     @classmethod
     def create_with_height_slicing(
@@ -458,10 +494,20 @@ class TtConv2d:
         *,
         stride: tuple[int, int] = (1, 1),
         padding: tuple[int, int] = (0, 0),
+        conv_path: str = None,
+        model_configs=None,
+        dtype: ttnn.DataType = ttnn.bfloat8_b,
     ) -> "TtConv2d":
         """Create TtConv2d with height slicing configuration."""
+        # Get slice config from model_configs if available, otherwise use provided num_slices
+        if model_configs is not None and conv_path is not None:
+            slice_config_dict = model_configs.get_slice_config(conv_path)
+            if slice_config_dict["mode"] == "height":
+                num_slices = slice_config_dict["num_slices"]
         parameters.slice_config = SliceConfig(mode=SliceMode.HEIGHT, num_slices=num_slices)
-        return cls(parameters, stride=stride, padding=padding)
+        return cls(
+            parameters, stride=stride, padding=padding, conv_path=conv_path, model_configs=model_configs, dtype=dtype
+        )
 
     @classmethod
     def create_with_width_slicing(
@@ -471,10 +517,20 @@ class TtConv2d:
         *,
         stride: tuple[int, int] = (1, 1),
         padding: tuple[int, int] = (0, 0),
+        conv_path: str = None,
+        model_configs=None,
+        dtype: ttnn.DataType = ttnn.bfloat8_b,
     ) -> "TtConv2d":
         """Create TtConv2d with width slicing configuration."""
+        # Get slice config from model_configs if available, otherwise use provided num_slices
+        if model_configs is not None and conv_path is not None:
+            slice_config_dict = model_configs.get_slice_config(conv_path)
+            if slice_config_dict["mode"] == "width":
+                num_slices = slice_config_dict["num_slices"]
         parameters.slice_config = SliceConfig(mode=SliceMode.WIDTH, num_slices=num_slices)
-        return cls(parameters, stride=stride, padding=padding)
+        return cls(
+            parameters, stride=stride, padding=padding, conv_path=conv_path, model_configs=model_configs, dtype=dtype
+        )
 
     @classmethod
     def create(
@@ -483,7 +539,12 @@ class TtConv2d:
         *,
         stride: tuple[int, int] = (1, 1),
         padding: tuple[int, int] = (0, 0),
+        dtype: ttnn.DataType = ttnn.bfloat8_b,
+        conv_path: str = None,
+        model_configs=None,
     ) -> "TtConv2d":
         """Create TtConv2d without any slicing."""
         parameters.slice_config = SliceConfig(mode=SliceMode.NONE)
-        return cls(parameters, stride=stride, padding=padding)
+        return cls(
+            parameters, stride=stride, padding=padding, conv_path=conv_path, model_configs=model_configs, dtype=dtype
+        )

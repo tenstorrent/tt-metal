@@ -21,7 +21,9 @@ std::vector<std::string> HalJitBuildQueryBase::defines(const HalJitBuildQueryInt
     switch (params.core_type) {
         case HalProgrammableCoreType::TENSIX:
             switch (params.processor_class) {
-                case HalProcessorClassType::DM: break;
+                case HalProcessorClassType::DM:
+                    defines.push_back(fmt::format("COMPILE_FOR_DM={}", params.processor_id));
+                    break;
                 case HalProcessorClassType::COMPUTE: {
                     switch (params.processor_id) {
                         case 0:
@@ -36,6 +38,7 @@ std::vector<std::string> HalJitBuildQueryBase::defines(const HalJitBuildQueryInt
                             defines.push_back("UCK_CHLKC_PACK");
                             defines.push_back("NAMESPACE=chlkc_pack");
                             break;
+                        default: TT_THROW("Invalid processor id {}", params.processor_id);
                     }
                     defines.push_back(fmt::format("COMPILE_FOR_TRISC={}", params.processor_id));
                     break;
@@ -100,6 +103,7 @@ std::vector<std::string> HalJitBuildQueryBase::srcs(const HalJitBuildQueryInterf
                         srcs.push_back("tt_metal/hw/firmware/src/tt-1xx/idle_erisck.cc");
                     }
                     break;
+                default: TT_THROW("Invalid processor id {}", params.processor_id);
             }
             break;
         default: TT_ASSERT(false, "Unsupported programmable core type {} to query srcs", params.core_type); break;

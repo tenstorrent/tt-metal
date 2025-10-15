@@ -204,7 +204,11 @@ std::vector<MeshCoordinate> MeshDeviceView::get_line_coordinates(
         }
     }
 
-    TT_FATAL(line_coords.size() == length, "Failed to get line coordinates");
+    TT_FATAL(
+        line_coords.size() == length,
+        "Failed to get line coordinates, got {} coordinates, expected {}",
+        line_coords.size(),
+        length);
     return line_coords;
 }
 

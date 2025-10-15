@@ -27,21 +27,20 @@ DeviceInfo get_device_info(tt::tt_metal::distributed::MeshDevice* device) {
     info.num_x_cores = device->logical_grid_size().x;
     info.num_y_compute_cores = descriptor.compute_grid_size.y;
     info.num_x_compute_cores = descriptor.compute_grid_size.x;
-    info.worker_l1_size = device_allocator->get_config().worker_l1_size;
+    info.worker_l1_size = device_allocator->get_worker_l1_size();
     info.l1_num_banks = device_allocator->get_num_banks(tt::tt_metal::BufferType::L1);
     info.l1_bank_size = device_allocator->get_bank_size(tt::tt_metal::BufferType::L1);
     info.address_at_first_l1_bank = device_allocator->get_bank_offset(tt::tt_metal::BufferType::L1, 0);
     info.address_at_first_l1_cb_buffer = device_allocator->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-    info.num_banks_per_storage_core = device_allocator->get_config().worker_l1_size / info.l1_bank_size;
+    info.num_banks_per_storage_core = device_allocator->get_worker_l1_size() / info.l1_bank_size;
     info.num_storage_cores = descriptor.relative_storage_cores.size();
     info.num_compute_cores = descriptor.relative_compute_cores.size();
-    info.total_l1_memory =
-        (info.num_storage_cores + info.num_compute_cores) * device_allocator->get_config().worker_l1_size;
+    info.total_l1_memory = (info.num_storage_cores + info.num_compute_cores) * device_allocator->get_worker_l1_size();
     info.total_l1_for_interleaved_buffers =
         (info.num_storage_cores + info.num_compute_cores + (info.num_banks_per_storage_core * info.num_storage_cores)) *
         info.l1_bank_size;
     info.total_l1_for_sharded_buffers = info.num_compute_cores * info.l1_bank_size;
-    info.cb_limit = device_allocator->get_config().worker_l1_size -
+    info.cb_limit = device_allocator->get_worker_l1_size() -
                     device_allocator->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
     return info;
 }

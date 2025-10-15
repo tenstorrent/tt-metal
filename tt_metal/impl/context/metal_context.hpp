@@ -10,7 +10,6 @@
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/core_descriptor.hpp>
 #include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/allocator_types.hpp>
 #include <llrt/tt_cluster.hpp>
 #include <llrt/hal.hpp>
 #include <llrt/rtoptions.hpp>
@@ -19,6 +18,7 @@
 #include <impl/dispatch/dispatch_query_manager.hpp>
 #include <impl/debug/dprint_server.hpp>
 #include <impl/debug/watcher_server.hpp>
+#include <impl/allocator/allocator_types.hpp>
 
 #include <array>
 #include <umd/device/types/cluster_descriptor_types.hpp>
@@ -150,7 +150,7 @@ private:
     size_t fw_compile_hash_ = 0;  // To check if FW recompilation is needed
 
     // Used to track which FW has been built already
-    std::unordered_set<uint32_t> firmware_built_keys_;
+    std::unordered_set<uint64_t> firmware_built_keys_;
 
     // Written to device as part of FW init, device-specific
     std::unordered_map<chip_id_t, std::vector<int32_t>> dram_bank_offset_map_;

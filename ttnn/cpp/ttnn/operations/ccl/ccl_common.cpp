@@ -30,6 +30,9 @@ tt::tt_metal::distributed::MeshCoordinate::BoundaryMode get_boundary_mode(
     // ring is possible if device coordinates along our cluster axis are the same as the last coordinate in the mesh
     // shape first_index = 0 last index = mesh_shape[cluster_axis] - 1
     if (cluster_axis.has_value()) {
+        if (mesh_shape[cluster_axis.value()] == 2) {
+            return tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::NONE;
+        }
         bool first_index_is_0 = device_coords.at(0)[cluster_axis.value()] == 0;
         bool last_index_is_mesh_shape_minus_1 =
             device_coords.at(device_coords.size() - 1)[cluster_axis.value()] == mesh_shape[cluster_axis.value()] - 1;
@@ -39,6 +42,9 @@ tt::tt_metal::distributed::MeshCoordinate::BoundaryMode get_boundary_mode(
             return tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::NONE;
         }
     } else {
+        if (mesh_shape[0] == 2 || mesh_shape[1] == 2) {
+            return tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::NONE;
+        }
         TT_FATAL(!device_coords.empty(), "device_coords is empty");
         for (int i = 0; i < device_coords.front().dims(); i++) {
             if (device_coords.front()[i] != 0) {
@@ -52,6 +58,22 @@ tt::tt_metal::distributed::MeshCoordinate::BoundaryMode get_boundary_mode(
         }
     }
     return tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::WRAP;
+}
+
+tt::tt_fabric::Topology get_usable_topology(
+    const Tensor& tensor, tt::tt_fabric::Topology whole_device_topology, const std::optional<uint32_t>& cluster_axis) {
+    if (whole_device_topology == tt::tt_fabric::Topology::Ring ||
+        whole_device_topology == tt::tt_fabric::Topology::Torus) {
+        auto boundary_mode = get_boundary_mode(tensor, whole_device_topology, cluster_axis);
+        if (boundary_mode == tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::WRAP) {
+            return whole_device_topology;
+        } else if (whole_device_topology == tt::tt_fabric::Topology::Torus) {
+            return tt::tt_fabric::Topology::Mesh;
+        } else {
+            return tt::tt_fabric::Topology::Linear;
+        }
+    }
+    return whole_device_topology;
 }
 
 uint32_t get_topological_dimension(const Tensor& tensor, const std::optional<uint32_t>& cluster_axis) {

@@ -161,7 +161,7 @@ void test_sub_device_synchronization(distributed::MeshDevice* device) {
 
     // Test record event won't cause a stall
 
-    auto event = distributed::EnqueueRecordEventToHost(device->mesh_command_queue());
+    auto event = device->mesh_command_queue().enqueue_record_event_to_host();
     distributed::Synchronize(device, std::nullopt);
 
     // Test blocking read buffer doesn't stall
@@ -514,8 +514,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceFixture, TensixTestSubDeviceCQOwnership) {
 
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), mesh_workload_1, false);
     std::array sub_device_ids_for_event = {SubDeviceId{1}};
-    auto early_event =
-        distributed::EnqueueRecordEventToHost(mesh_device->mesh_command_queue(1), sub_device_ids_for_event);
+    auto early_event = mesh_device->mesh_command_queue(1).enqueue_record_event_to_host(sub_device_ids_for_event);
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(1), mesh_workload_2, false);
 
     // CQ 0 owns sub device 1, CQ 1 owns sub device 2.
@@ -537,8 +536,8 @@ TEST_F(UnitMeshMultiCQSingleDeviceFixture, TensixTestSubDeviceCQOwnership) {
         distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), mesh_workload_2, false), std::exception);
 
     // Later event allows transferring ownership of sub device 2 to CQ 0
-    auto event1 = distributed::EnqueueRecordEventToHost(mesh_device->mesh_command_queue(1), sub_device_ids_for_event);
-    auto event2 = distributed::EnqueueRecordEventToHost(mesh_device->mesh_command_queue(1), sub_device_ids_for_event);
+    auto event1 = mesh_device->mesh_command_queue(1).enqueue_record_event_to_host(sub_device_ids_for_event);
+    auto event2 = mesh_device->mesh_command_queue(1).enqueue_record_event_to_host(sub_device_ids_for_event);
     log_info(tt::LogTest, "waiting on event2");
     mesh_device->mesh_command_queue(0).enqueue_wait_for_event(event2);
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), mesh_workload_2, false);

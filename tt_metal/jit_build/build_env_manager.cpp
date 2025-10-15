@@ -103,38 +103,35 @@ std::map<std::string, std::string> initialize_device_kernel_defines(chip_id_t de
 }
 
 uint32_t compute_build_key(chip_id_t device_id, uint8_t num_hw_cqs) {
-    uint32_t build_key = 0;
-    constexpr uint32_t harvesting_map_bits = 12;
-    constexpr uint32_t num_hw_cq_bits = 8;
-    constexpr uint32_t dispatch_core_axis_bits = 1;
-    constexpr uint32_t dispatch_core_type_bits = 1;
-    static_assert(dispatch_core_manager::MAX_NUM_HW_CQS <= (1 << num_hw_cq_bits));
-    static_assert(static_cast<uint32_t>(DispatchCoreAxis::COUNT) <= (1 << dispatch_core_axis_bits));
-    static_assert(static_cast<uint32_t>(DispatchCoreType::COUNT) <= (1 << dispatch_core_type_bits));
-    static_assert(
-        harvesting_map_bits + num_hw_cq_bits + dispatch_core_axis_bits + dispatch_core_type_bits <=
-        sizeof(build_key) * CHAR_BIT);
-
-    // num_hw_cqs, dispatch_core_axis, dispatch_core_type all change the number of banks, so need to be part of the
-    // build key since we have defines based on number of banks.
     const auto& dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
-    build_key = (static_cast<uint32_t>(dispatch_core_config.get_dispatch_core_type())
-                 << (harvesting_map_bits + num_hw_cq_bits + dispatch_core_axis_bits)) |
-                (static_cast<uint32_t>(dispatch_core_config.get_dispatch_core_axis())
-                 << (harvesting_map_bits + num_hw_cq_bits)) |
-                (static_cast<uint32_t>(num_hw_cqs) << harvesting_map_bits);
+
+    // Collect all the parameters that affect the build configuration
+    std::size_t hash = 0;
+
+    // Hash the dispatch core configuration
+    std::hash<uint32_t> uint32_hasher;
+    hash ^= uint32_hasher(static_cast<uint32_t>(dispatch_core_config.get_dispatch_core_type()));
+    hash ^= uint32_hasher(static_cast<uint32_t>(dispatch_core_config.get_dispatch_core_axis())) << 1;
+
+    // Hash the number of hardware command queues
+    hash ^= uint32_hasher(static_cast<uint32_t>(num_hw_cqs)) << 2;
+
+    // Hash the harvesting configuration based on whether coordinate virtualization is enabled
     if (not MetalContext::instance().hal().is_coordinate_virtualization_enabled()) {
         // Coordinate virtualization is not enabled. For a single program, its associated binaries will vary across
         // devices with different cores harvested.
-        build_key |= tt::tt_metal::MetalContext::instance().get_cluster().get_harvesting_mask(device_id);
+        hash ^= uint32_hasher(tt::tt_metal::MetalContext::instance().get_cluster().get_harvesting_mask(device_id)) << 3;
     } else {
         // Coordinate Virtualization is enabled. Track only the number of harvested cores, instead of the exact
         // harvesting configuration (this is not needed).
-        build_key |= (std::bitset<harvesting_map_bits>(
-                          tt::tt_metal::MetalContext::instance().get_cluster().get_harvesting_mask(device_id))
-                          .count());
+        uint32_t harvested_core_count = std::bitset<32>(
+            tt::tt_metal::MetalContext::instance().get_cluster().get_harvesting_mask(device_id)
+        ).count();
+        hash ^= uint32_hasher(harvested_core_count) << 4;
     }
-    return build_key;
+
+    // Convert the hash to a 32-bit value
+    return static_cast<uint32_t>(hash);
 }
 
 std::vector<JitBuildState> create_build_state(
@@ -178,10 +175,12 @@ void BuildEnvManager::add_build_env(chip_id_t device_id, uint8_t num_hw_cqs) {
     const std::lock_guard<std::mutex> lock(this->lock);
     uint32_t build_key = compute_build_key(device_id, num_hw_cqs);
     auto device_kernel_defines = initialize_device_kernel_defines(device_id, num_hw_cqs);
+    const size_t fw_compile_hash =
+        std::hash<std::string>{}(tt::tt_metal::MetalContext::instance().rtoptions().get_compile_hash_string());
 
     device_id_to_build_env_[device_id].build_key = build_key;
     device_id_to_build_env_[device_id].build_env.init(
-        build_key, tt::tt_metal::MetalContext::instance().get_cluster().arch(), device_kernel_defines);
+        build_key, fw_compile_hash, tt::tt_metal::MetalContext::instance().get_cluster().arch(), device_kernel_defines);
     device_id_to_build_env_[device_id].firmware_build_states =
         create_build_state(device_id_to_build_env_[device_id].build_env, device_id, num_hw_cqs, true);
     device_id_to_build_env_[device_id].kernel_build_states =
@@ -232,4 +231,14 @@ void BuildEnvManager::build_firmware(chip_id_t device_id) {
     jit_build_subset(get_device_build_env(device_id).firmware_build_states, nullptr);
 }
 
+// Get build environment info for all devices
+std::vector<BuildEnvInfo> BuildEnvManager::get_all_build_envs_info() {
+    const std::lock_guard<std::mutex> lock(this->lock);
+    std::vector<BuildEnvInfo> build_env_info;
+    build_env_info.reserve(device_id_to_build_env_.size());
+    for (const auto& [device_id, build_env] : device_id_to_build_env_) {
+        build_env_info.emplace_back(device_id, build_env.build_key, build_env.build_env.get_out_firmware_root_path());
+    }
+    return build_env_info;
+}
 }  // namespace tt::tt_metal

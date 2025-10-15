@@ -92,8 +92,8 @@ class StatsCollector:
             timer_analysis[analysis_key] = {
                 "across": "core",
                 "type": "adjacent",
-                "start": {"risc": "ANY", "zone_name": risc.upper().replace("_", "")},
-                "end": {"risc": "ANY", "zone_name": risc.upper().replace("_", "")},
+                "start": {"risc": "ANY", "zone_phase": "ZONE_START", "zone_name": risc.upper().replace("_", "")},
+                "end": {"risc": "ANY", "zone_phase": "ZONE_END", "zone_name": risc.upper().replace("_", "")},
             }
 
             # Add events configuration

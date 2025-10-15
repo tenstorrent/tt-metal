@@ -57,12 +57,9 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
 
 def untilize_with_unpadding(x, output_tensor_end, *args, **kwargs):
     untilized = untilize_util(x)
-    unpad = untilized[
-        : output_tensor_end[0] + 1,
-        : output_tensor_end[1] + 1,
-        : output_tensor_end[2] + 1,
-        : output_tensor_end[3] + 1,
-    ]
+    # Build slice dynamically based on the number of dimensions
+    slices = tuple(slice(None, end + 1) for end in output_tensor_end)
+    unpad = untilized[slices]
     return unpad
 
 
