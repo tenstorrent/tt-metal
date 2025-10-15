@@ -533,7 +533,12 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core(
     const bool is_block_sharded = input_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
     const bool is_width_sharded = input_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
 
-    const auto delta = in_out_shard_size_delta * out_stick_nbytes;
+    bool is_in_tiled = input_tensor.layout() == ttnn::TILE_LAYOUT;
+    const auto stick_delta = in_out_shard_size_delta * out_stick_nbytes;
+    const auto buffer_delta =
+        output_tensor.buffer()->aligned_size_per_bank() - input_tensor.buffer()->aligned_size_per_bank();
+    const auto delta =
+        is_in_tiled ? buffer_delta : stick_delta;  // for tiled inputs we untilize directly into the output buffer
     TT_ASSERT(
         src_buffer->address() == dst_buffer->address() + delta,
         "In-place halo requires input and output buffers to be sharded at the same address");
