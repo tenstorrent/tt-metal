@@ -3,17 +3,21 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+
 import torch
 import ttnn
-from ..utils.tensor import bf16_tensor, bf16_tensor_2dshard
+
+from .module import Module, Parameter
 
 
-class Linear:
+class Linear(Module):
     """
     Linear layer with replicated weights
     """
 
     def __init__(self, in_features, out_features, bias=True, activation_fn=None, mesh_device=None):
+        super().__init__()
+
         self.in_features = in_features
         self.out_features = out_features
         if activation_fn == "swiglu":
@@ -34,44 +38,20 @@ class Linear:
             packer_l1_acc=True,
         )
 
-    def to_cached_state_dict(self, path_prefix, path_suffix=".tensorbin"):
-        weight_path = path_prefix + "weight" + path_suffix
-        bias_path = path_prefix + "bias" + path_suffix
-        ttnn.dump_tensor(weight_path, self.weight)
-        if self.bias is not None:
-            ttnn.dump_tensor(bias_path, self.bias)
-        cache_dict = {"weight": weight_path}
-        if self.bias is not None:
-            cache_dict["bias"] = bias_path
-        return cache_dict
+        self.weight = Parameter(total_shape=[self.in_features, self.out_features], device=mesh_device)
+        self.bias = Parameter(total_shape=[1, self.out_features], device=mesh_device) if bias else None
 
-    def from_cached_state_dict(self, cache_dict):
-        self.weight = ttnn.load_tensor(cache_dict["weight"], device=self.mesh_device)
-        if "bias" in cache_dict:
-            self.bias = ttnn.load_tensor(cache_dict["bias"], device=self.mesh_device)
-        else:
-            self.bias = None
+    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
+        if "weight" in state:
+            state["weight"] = state["weight"].transpose(0, 1)
+        if "bias" in state:
+            state["bias"] = state["bias"].reshape(1, -1)
 
-    def load_state_dict(self, state_dict):
-        """
-        Loads the state dict into the layer.
-        """
-        weight = state_dict["weight"].transpose(0, 1)
-        bias = state_dict.get("bias", None)
-        if bias is not None:
-            bias = bias.reshape(1, -1)
-
-        self.weight = bf16_tensor(weight, device=self.mesh_device)
-        if bias is not None:
-            self.bias = bf16_tensor(bias, device=self.mesh_device)
-        else:
-            self.bias = None
-
-    def __call__(self, x, core_grid=None, compute_kernel_config=None):
+    def forward(self, x: ttnn.Tensor, core_grid=None, compute_kernel_config=None) -> ttnn.Tensor:
         output = ttnn.linear(
             x,
-            self.weight,
-            bias=self.bias,
+            self.weight.data,
+            bias=self.bias.data if self.bias is not None else None,
             core_grid=core_grid,
             compute_kernel_config=compute_kernel_config or self.compute_config,
         )
@@ -100,7 +80,7 @@ def gelu_decomposed(x: ttnn.Tensor) -> ttnn.Tensor:
     return ttnn.multiply(x_times_bracket, 0.5)
 
 
-class ColParallelLinear:
+class ColParallelLinear(Module):
     """
     Linear layer with column parallel weights
     """
@@ -116,6 +96,8 @@ class ColParallelLinear:
         fsdp_mesh_axis=None,
         ccl_manager=None,
     ):
+        super().__init__()
+
         self.in_features = in_features
         self.out_features = out_features
         self.activation_fn = activation_fn
@@ -139,30 +121,18 @@ class ColParallelLinear:
             packer_l1_acc=True,
         )
 
-    def to_cached_state_dict(self, path_prefix, path_suffix=".tensorbin"):
-        weight_path = path_prefix + "weight" + path_suffix
-        bias_path = path_prefix + "bias" + path_suffix
-        ttnn.dump_tensor(weight_path, self.weight)
-        if self.bias is not None:
-            ttnn.dump_tensor(bias_path, self.bias)
-        cache_dict = {"weight": weight_path}
-        if self.bias is not None:
-            cache_dict["bias"] = bias_path
-        return cache_dict
+        self.weight = Parameter(
+            total_shape=[self.in_features, self.out_features], mesh_axes=[fsdp_mesh_axis, mesh_axis], device=mesh_device
+        )
+        self.bias = (
+            Parameter(total_shape=[1, self.out_features], mesh_axes=[None, mesh_axis], device=mesh_device)
+            if bias
+            else None
+        )
 
-    def from_cached_state_dict(self, cache_dict):
-        self.weight = ttnn.load_tensor(cache_dict["weight"], device=self.mesh_device)
-        if "bias" in cache_dict:
-            self.bias = ttnn.load_tensor(cache_dict["bias"], device=self.mesh_device)
-        else:
-            self.bias = None
-
-    def load_state_dict(self, state_dict):
-        """
-        Loads the state dict into the layer.
-        """
-        weight = state_dict["weight"].transpose(0, 1)
-        bias = state_dict.get("bias", None)
+    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
+        weight = state.pop("weight", None)
+        bias = state.pop("bias", None)
 
         def permute_for_swiglu(tensor):
             assert self.activation_fn == "swiglu"
@@ -173,42 +143,36 @@ class ColParallelLinear:
             assert tensor.shape[0] in [1, self.in_features]
             return tensor
 
-        if self.activation_fn == "swiglu":
-            weight = permute_for_swiglu(weight)
-            if bias is not None:
-                bias = permute_for_swiglu(bias)
-
-        if self.fsdp_mesh_axis is not None:
-            self.weight = bf16_tensor_2dshard(
-                weight, device=self.mesh_device, shard_mapping={self.mesh_axis: 1, self.fsdp_mesh_axis: 0}
-            )
-        else:
-            self.weight = bf16_tensor(weight, device=self.mesh_device, mesh_axis=self.mesh_axis, shard_dim=-1)
+        if weight is not None:
+            weight = weight.transpose(0, 1)
+            if self.activation_fn == "swiglu":
+                weight = permute_for_swiglu(weight)
+            state["weight"] = weight
         if bias is not None:
             bias = bias.reshape(1, -1)
-            self.bias = bf16_tensor(bias, device=self.mesh_device, mesh_axis=self.mesh_axis, shard_dim=-1)
-        else:
-            self.bias = None
+            if self.activation_fn == "swiglu":
+                bias = permute_for_swiglu(bias)
+            state["bias"] = bias
 
-    def __call__(self, x, core_grid=None, compute_kernel_config=None):
+    def forward(self, x: ttnn.Tensor, core_grid=None, compute_kernel_config=None) -> ttnn.Tensor:
         """
         Expects x to be replicated.
         Return output fractured on columns.
         """
         if self.fsdp_mesh_axis is not None and self.mesh_device.shape[self.fsdp_mesh_axis] > 1:
-            unsqueezed_weight = ttnn.unsqueeze_to_4D(self.weight)
+            unsqueezed_weight = ttnn.unsqueeze_to_4D(self.weight.data)
             weight = self.ccl_manager.all_gather_persistent_buffer(
                 unsqueezed_weight, dim=2, mesh_axis=self.fsdp_mesh_axis
             )
 
             weight = ttnn.reshape(weight, (weight.shape[-2], weight.shape[-1]))
         else:
-            weight = self.weight
+            weight = self.weight.data
 
         output = ttnn.linear(
             x,
             weight,
-            bias=self.bias,
+            bias=self.bias.data if self.bias is not None else None,
             core_grid=core_grid,
             compute_kernel_config=compute_kernel_config or self.compute_config,
         )
@@ -228,7 +192,7 @@ class ColParallelLinear:
         return output
 
 
-class RowParallelLinear:
+class RowParallelLinear(Module):
     """
     Linear layer with row parallel weights
     """
@@ -244,6 +208,8 @@ class RowParallelLinear:
         fsdp_mesh_axis=None,
         ccl_manager=None,
     ):
+        super().__init__()
+
         self.in_features = in_features
         self.out_features = out_features
         self.activation_fn = activation_fn
@@ -263,65 +229,48 @@ class RowParallelLinear:
             packer_l1_acc=True,
         )
 
-    def to_cached_state_dict(self, path_prefix, path_suffix=".tensorbin"):
-        weight_path = path_prefix + "weight" + path_suffix
-        bias_path = path_prefix + "bias" + path_suffix
-        ttnn.dump_tensor(weight_path, self.weight)
-        if self.bias is not None:
-            ttnn.dump_tensor(bias_path, self.bias)
-        cache_dict = {"weight": weight_path}
-        if self.bias is not None:
-            cache_dict["bias"] = bias_path
-        return cache_dict
+        ndev = tuple(self.mesh_device.shape)[self.mesh_axis]
 
-    def from_cached_state_dict(self, cache_dict):
-        self.weight = ttnn.load_tensor(cache_dict["weight"], device=self.mesh_device)
-        if "bias" in cache_dict:
-            self.bias = ttnn.load_tensor(cache_dict["bias"], device=self.mesh_device)
-        else:
-            self.bias = None
+        self.weight = Parameter(
+            total_shape=[self.in_features, self.out_features], mesh_axes=[mesh_axis, fsdp_mesh_axis], device=mesh_device
+        )
+        self.bias = (
+            Parameter(total_shape=[1, self.out_features * ndev], mesh_axes=[None, mesh_axis], device=mesh_device)
+            if bias
+            else None
+        )
 
-    def load_state_dict(self, state_dict):
-        """
-        Loads the state dict into the layer.
-        """
-        weight = state_dict["weight"].transpose(0, 1)
-        bias = state_dict.get("bias", None)
+    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
+        if "weight" in state:
+            state["weight"] = state["weight"].transpose(0, 1)
 
-        if self.fsdp_mesh_axis is not None:
-            self.weight = bf16_tensor_2dshard(
-                weight, device=self.mesh_device, shard_mapping={self.mesh_axis: 0, self.fsdp_mesh_axis: 1}
-            )
-        else:
-            self.weight = bf16_tensor(weight, device=self.mesh_device, mesh_axis=self.mesh_axis, shard_dim=-2)
+        bias = state.pop("bias", None)
         if bias is not None:
             bias = bias.reshape(1, -1)
             if tuple(self.mesh_device.shape)[self.mesh_axis] > 1:
                 zero_bias = torch.zeros(1, bias.shape[1] * (tuple(self.mesh_device.shape)[self.mesh_axis] - 1))
                 bias = torch.cat([bias, zero_bias], dim=-1)
-            self.bias = bf16_tensor(bias, device=self.mesh_device, mesh_axis=self.mesh_axis, shard_dim=-1)
-        else:
-            self.bias = None
+            state["bias"] = bias
 
-    def __call__(self, x, core_grid=None, compute_kernel_config=None):
+    def forward(self, x: ttnn.Tensor, core_grid=None, compute_kernel_config=None) -> ttnn.Tensor:
         """
         Expects x to be column fractured.
         Return output fractured on columns.
         """
         if self.fsdp_mesh_axis is not None and self.mesh_device.shape[self.fsdp_mesh_axis] > 1:
-            unsqueezed_weight = ttnn.unsqueeze_to_4D(self.weight)
+            unsqueezed_weight = ttnn.unsqueeze_to_4D(self.weight.data)
             weight = self.ccl_manager.all_gather_persistent_buffer(
                 unsqueezed_weight, dim=3, mesh_axis=self.fsdp_mesh_axis
             )
 
             weight = ttnn.reshape(weight, (weight.shape[-2], weight.shape[-1]))
         else:
-            weight = self.weight
+            weight = self.weight.data
 
         output = ttnn.linear(
             x,
             weight,
-            bias=self.bias,
+            bias=self.bias.data if self.bias is not None else None,
             core_grid=core_grid,
             compute_kernel_config=compute_kernel_config or self.compute_config,
         )
