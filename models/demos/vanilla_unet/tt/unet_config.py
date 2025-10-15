@@ -11,6 +11,7 @@ from models.tt_cnn.tt.builder import (
     Conv2dConfiguration,
     HeightShardedStrategyConfiguration,
     MaxPool2dConfiguration,
+    ShardingStrategy,
 )
 
 
@@ -85,25 +86,21 @@ class TtUNetConfigBuilder:
         self.parameters = parameters
         self.in_channels = in_channels
         self.out_channels = out_channels
-        self.init_features = init_features
         self.input_height = input_height
         self.input_width = input_width
         self.batch_size = batch_size
-
-        self.default_sharding_strategy = HeightShardedStrategyConfiguration(act_block_h_override=32)
-
         self.features = init_features
 
     def build_configs(self) -> TtUNetLayerConfigs:
-        """Build all layer configurations from the preprocessed parameters"""
         return TtUNetLayerConfigs(
-            # Encoder 1
+            # Encoder 1 (480x640 = 307200)
             encoder1_conv1=self._create_conv_config_from_params(
                 self.input_height,
                 self.input_width,
                 self.in_channels,
                 self.features,
                 self.parameters["encoder1"][0],
+                sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=2 * 96),
             ),
             encoder1_conv2=self._create_conv_config_from_params(
                 self.input_height,
@@ -113,15 +110,17 @@ class TtUNetConfigBuilder:
                 self.parameters["encoder1"][1],
                 activation_dtype=ttnn.bfloat8_b,
                 output_dtype=ttnn.bfloat8_b,
+                sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=2 * 96),
             ),
             encoder1_pool=self._create_pool_config(self.input_height, self.input_width, self.features),
-            # Encoder 2
+            # Encoder 2 (240x320 = 76800)
             encoder2_conv1=self._create_conv_config_from_params(
                 self.input_height // 2,
                 self.input_width // 2,
                 self.features,
                 self.features * 2,
                 self.parameters["encoder2"][0],
+                sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=64),
             ),
             encoder2_conv2=self._create_conv_config_from_params(
                 self.input_height // 2,
@@ -130,15 +129,17 @@ class TtUNetConfigBuilder:
                 self.features * 2,
                 self.parameters["encoder2"][1],
                 deallocate_activation=False,
+                sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=64),
             ),
             encoder2_pool=self._create_pool_config(self.input_height // 2, self.input_width // 2, self.features * 2),
-            # Encoder 3
+            # Encoder 3 (120x160 = 19200)
             encoder3_conv1=self._create_conv_config_from_params(
                 self.input_height // 4,
                 self.input_width // 4,
                 self.features * 2,
                 self.features * 4,
                 self.parameters["encoder3"][0],
+                sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=64),
             ),
             encoder3_conv2=self._create_conv_config_from_params(
                 self.input_height // 4,
@@ -146,15 +147,17 @@ class TtUNetConfigBuilder:
                 self.features * 4,
                 self.features * 4,
                 self.parameters["encoder3"][1],
+                sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=64),
             ),
             encoder3_pool=self._create_pool_config(self.input_height // 4, self.input_width // 4, self.features * 4),
-            # Encoder 4
+            # Encoder 4 (60x80 = 4800)
             encoder4_conv1=self._create_conv_config_from_params(
                 self.input_height // 8,
                 self.input_width // 8,
                 self.features * 4,
                 self.features * 8,
                 self.parameters["encoder4"][0],
+                sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=48),
             ),
             encoder4_conv2=self._create_conv_config_from_params(
                 self.input_height // 8,
@@ -162,15 +165,17 @@ class TtUNetConfigBuilder:
                 self.features * 8,
                 self.features * 8,
                 self.parameters["encoder4"][1],
+                sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=48),
             ),
             encoder4_pool=self._create_pool_config(self.input_height // 8, self.input_width // 8, self.features * 8),
-            # Bottleneck
+            # Bottleneck (30x40 = 1200)
             bottleneck_conv1=self._create_conv_config_from_params(
                 self.input_height // 16,
                 self.input_width // 16,
                 self.features * 8,
                 self.features * 16,
                 self.parameters["bottleneck"][0],
+                sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=32),
             ),
             bottleneck_conv2=self._create_conv_config_from_params(
                 self.input_height // 16,
@@ -178,8 +183,9 @@ class TtUNetConfigBuilder:
                 self.features * 16,
                 self.features * 16,
                 self.parameters["bottleneck"][1],
+                sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=32),
             ),
-            # Decoder 4 (after upconv: features*16 -> features*8, concat with skip: features*8+features*8 -> features*8)
+            # Decoder 4 (60x80 = 4800)
             decoder4_conv1=self._create_conv_config_from_params(
                 self.input_height // 8,
                 self.input_width // 8,
@@ -196,14 +202,16 @@ class TtUNetConfigBuilder:
                 self.features * 8,
                 self.features * 8,
                 self.parameters["decoder4"][1],
+                sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=48),
             ),
-            # Decoder 3
+            # Decoder 3 (120x160 = 19200)
             decoder3_conv1=self._create_conv_config_from_params(
                 self.input_height // 4,
                 self.input_width // 4,
                 self.features * 8,
                 self.features * 4,  # After concat: features*4 + features*4
                 self.parameters["decoder3"][0],
+                sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=64),
             ),
             decoder3_conv2=self._create_conv_config_from_params(
                 self.input_height // 4,
@@ -211,14 +219,16 @@ class TtUNetConfigBuilder:
                 self.features * 4,
                 self.features * 4,
                 self.parameters["decoder3"][1],
+                sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=64),
             ),
-            # Decoder 2
+            # Decoder 2 (240x320 = 76800)
             decoder2_conv1=self._create_conv_config_from_params(
                 self.input_height // 2,
                 self.input_width // 2,
                 self.features * 4,
                 self.features * 2,  # After concat: features*2 + features*2
                 self.parameters["decoder2"][0],
+                sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=64),
             ),
             decoder2_conv2=self._create_conv_config_from_params(
                 self.input_height // 2,
@@ -228,8 +238,9 @@ class TtUNetConfigBuilder:
                 self.parameters["decoder2"][1],
                 activation_dtype=ttnn.bfloat8_b,
                 output_dtype=ttnn.bfloat8_b,
+                sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=64),
             ),
-            # Decoder 1
+            # Decoder 1 (480x640 = 307200)
             decoder1_conv1=self._create_conv_config_from_params(
                 self.input_height,
                 self.input_width,
@@ -238,6 +249,7 @@ class TtUNetConfigBuilder:
                 self.parameters["decoder1"][0],
                 fp32_dest_acc_en=False,
                 packer_l1_acc=False,
+                sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=96),
             ),
             decoder1_conv2=self._create_conv_config_from_params(
                 self.input_height,
@@ -249,8 +261,9 @@ class TtUNetConfigBuilder:
                 output_dtype=ttnn.bfloat8_b,
                 fp32_dest_acc_en=False,
                 packer_l1_acc=False,
+                sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=96),
             ),
-            # Final convolution (1x1 conv)
+            # Final convolution (1x1 conv, 480x640 = 307200)
             final_conv=self._create_conv_config_from_params(
                 self.input_height,
                 self.input_width,
@@ -262,6 +275,7 @@ class TtUNetConfigBuilder:
                 weights_dtype=ttnn.bfloat16,
                 math_fidelity=ttnn.MathFidelity.HiFi2,
                 activation=None,  # No activation for final layer
+                sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=96),
             ),
             # Transpose convolution configurations from preprocessed parameters
             upconv4=self._create_upconv_config(
@@ -309,7 +323,7 @@ class TtUNetConfigBuilder:
         padding: Tuple[int, int] = (1, 1),
         activation: Optional[ttnn.UnaryWithParam] = ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
         deallocate_activation: bool = True,
-        sharding_strategy=None,
+        sharding_strategy: ShardingStrategy = HeightShardedStrategyConfiguration(act_block_h_override=32),
         activation_dtype=ttnn.bfloat16,
         weights_dtype=ttnn.bfloat8_b,
         output_dtype=ttnn.bfloat16,
@@ -330,7 +344,7 @@ class TtUNetConfigBuilder:
             bias=parameters["bias"],
             activation=activation,
             deallocate_activation=deallocate_activation,
-            sharding_strategy=sharding_strategy if sharding_strategy is not None else self.default_sharding_strategy,
+            sharding_strategy=sharding_strategy,
             activation_dtype=activation_dtype,
             output_dtype=output_dtype,
             weights_dtype=weights_dtype,
