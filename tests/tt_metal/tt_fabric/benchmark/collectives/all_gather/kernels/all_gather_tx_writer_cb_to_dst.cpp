@@ -47,29 +47,13 @@ void kernel_main() {
     const uint32_t rx_noc_y = get_arg_val<uint32_t>(idx++);
     const uint32_t sem_l1_addr = get_arg_val<uint32_t>(idx++);
 
-    DPRINT << "writer: rx=(" << rx_noc_x << "," << rx_noc_y << ") sem_l1=0x" << sem_l1_addr << ENDL();
+    // DPRINT << "writer: rx=(" << rx_noc_x << "," << rx_noc_y << ") sem_l1=0x" << sem_l1_addr << ENDL();
 
     // Four fabric connections in fixed order: W, E, N, S
     auto conn_W = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(idx);
-    {
-        const uint32_t tag = get_arg_val<uint32_t>(idx++);
-        // DPRINT << HEX() << "[TAG] W=0x" << tag << ENDL();
-    }
     auto conn_E = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(idx);
-    {
-        const uint32_t tag = get_arg_val<uint32_t>(idx++);
-        // DPRINT << HEX() << "[TAG] E=0x" << tag << ENDL();
-    }
     auto conn_N = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(idx);
-    {
-        const uint32_t tag = get_arg_val<uint32_t>(idx++);
-        // DPRINT << HEX() << "[TAG] N=0x" << tag << ENDL();
-    }
     auto conn_S = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(idx);
-    {
-        const uint32_t tag = get_arg_val<uint32_t>(idx++);
-        // DPRINT << HEX() << "[TAG] S=0x" << tag << ENDL();
-    }
 
     // First-hop start node IDs per leg (must match host order W,E,N,S).
     const uint16_t dst_dev_W = static_cast<uint16_t>(get_arg_val<uint32_t>(idx++));
@@ -88,9 +72,8 @@ void kernel_main() {
     const uint16_t s_hops = static_cast<uint16_t>(get_arg_val<uint32_t>(idx++));
     const uint32_t leg_mask = get_arg_val<uint32_t>(idx++);
 
-    // DPRINT << "P0 pre: hops E/W/N/S=" << (uint32_t)e_hops << "/" << (uint32_t)w_hops << "/" << (uint32_t)n_hops <<
-    // "/"
-    //        << (uint32_t)s_hops << " leg_mask=" << leg_mask << ENDL();
+    DPRINT << "P0 pre: hops E/W/N/S=" << (uint32_t)e_hops << "/" << (uint32_t)w_hops << "/" << (uint32_t)n_hops << "/"
+           << (uint32_t)s_hops << " leg_mask=" << leg_mask << ENDL();
 
     // DPRINT << "P1 alloc: begin" << ENDL();
 
@@ -128,8 +111,8 @@ void kernel_main() {
     const bool use_N = (n_hops > 0) && (leg_mask & 4u);
     const bool use_S = (s_hops > 0) && (leg_mask & 8u);
 
-    DPRINT << "P0 use: [W,E,N,S]=" << (int)use_W << "," << (int)use_E << "," << (int)use_N << "," << (int)use_S
-           << ENDL();
+    // DPRINT << "P0 use: [W,E,N,S]=" << (int)use_W << "," << (int)use_E << "," << (int)use_N << "," << (int)use_S
+    //        << ENDL();
 
     if (use_W) {
         DPRINT << "P2W open enter" << ENDL();
@@ -153,37 +136,37 @@ void kernel_main() {
     }
 
     // --- One-shot config dump ---
-    DPRINT << "writer:init pages=" << TOTAL_PAGES << " page=" << PAGE_SIZE << " rx=(" << rx_noc_x << "," << rx_noc_y
-           << ")"
-           << " legs[W,E,N,S]=" << (int)use_W << "," << (int)use_E << "," << (int)use_N << "," << (int)use_S
-           << " hops E/W/N/S=" << e_hops << "/" << w_hops << "/" << n_hops << "/" << s_hops << ENDL();
-    if (use_W) {
-        DPRINT << "writer:W start (mesh,dev)=(" << (int)dst_mesh_W << "," << (int)dst_dev_W << ")" << ENDL();
-    }
-    if (use_E) {
-        DPRINT << "writer:E start (mesh,dev)=(" << (int)dst_mesh_E << "," << (int)dst_dev_E << ")" << ENDL();
-    }
-    if (use_N) {
-        DPRINT << "writer:N start (mesh,dev)=(" << (int)dst_mesh_N << "," << (int)dst_dev_N << ")" << ENDL();
-    }
-    if (use_S) {
-        DPRINT << "writer:S start (mesh,dev)=(" << (int)dst_mesh_S << "," << (int)dst_dev_S << ")" << ENDL();
-    }
+    // DPRINT << "writer:init pages=" << TOTAL_PAGES << " page=" << PAGE_SIZE << " rx=(" << rx_noc_x << "," << rx_noc_y
+    //        << ")"
+    //        << " legs[W,E,N,S]=" << (int)use_W << "," << (int)use_E << "," << (int)use_N << "," << (int)use_S
+    //        << " hops E/W/N/S=" << e_hops << "/" << w_hops << "/" << n_hops << "/" << s_hops << ENDL();
+    // if (use_W) {
+    //     DPRINT << "writer:W start (mesh,dev)=(" << (int)dst_mesh_W << "," << (int)dst_dev_W << ")" << ENDL();
+    // }
+    // if (use_E) {
+    //     DPRINT << "writer:E start (mesh,dev)=(" << (int)dst_mesh_E << "," << (int)dst_dev_E << ")" << ENDL();
+    // }
+    // if (use_N) {
+    //     DPRINT << "writer:N start (mesh,dev)=(" << (int)dst_mesh_N << "," << (int)dst_dev_N << ")" << ENDL();
+    // }
+    // if (use_S) {
+    //     DPRINT << "writer:S start (mesh,dev)=(" << (int)dst_mesh_S << "," << (int)dst_dev_S << ")" << ENDL();
+    // }
 
     auto should_log = [&](uint32_t i) -> bool { return (i == 0) || (i + 1 == TOTAL_PAGES) || ((i & 31u) == 0); };
 
     const auto dst_acc = TensorAccessor(ta_args, /*bank_base=*/dst_base, /*page_size=*/PAGE_SIZE);
 
     for (uint32_t i = 0; i < TOTAL_PAGES; ++i) {
-        DPRINT << "L" << i << " A cb_wait_front enter" << ENDL();
+        // DPRINT << "L" << i << " A cb_wait_front enter" << ENDL();
         cb_wait_front(CB_ID, 1);
-        DPRINT << "L" << i << " B cb_wait_front done; get_read_ptr" << ENDL();
+        // DPRINT << "L" << i << " B cb_wait_front done; get_read_ptr" << ENDL();
 
         const uint32_t page_l1_addr = get_read_ptr(CB_ID);
-        DPRINT << "L" << i << " C got ptr=0x" << page_l1_addr << ENDL();
+        // DPRINT << "L" << i << " C got ptr=0x" << page_l1_addr << ENDL();
         uint64_t dest_noc_addr = dst_acc.get_noc_addr(i, rx_noc_x, rx_noc_y);
         if (should_log(i)) {
-            DPRINT << "writer:page " << i << " page_l1=0x" << page_l1_addr << ENDL();
+            // DPRINT << "writer:page " << i << " page_l1=0x" << page_l1_addr << ENDL();
         }
 
         // NORTH trunk (fan-out E/W on each north row)
@@ -204,6 +187,7 @@ void kernel_main() {
                 DPRINT << "writer:S route&send page " << i << ENDL();
             }
             fabric_set_mcast_route(mh_S, dst_dev_S, dst_mesh_S, e_hops, w_hops, 0, s_hops);
+            hdr_S->to_noc_unicast_write(NocUnicastCommandHeader{dest_noc_addr}, PAGE_SIZE);
             DPRINT << "writer:S route&send page " << i << ENDL();
             DPRINT << "S: header prepared" << ENDL();
             conn_S.send_payload_without_header_non_blocking_from_address(page_l1_addr, PAGE_SIZE);

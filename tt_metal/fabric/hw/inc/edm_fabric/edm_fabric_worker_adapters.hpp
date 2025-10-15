@@ -352,9 +352,10 @@ struct WorkerToFabricEdmSenderImpl {
 
         if constexpr (!I_USE_STREAM_REG_FOR_CREDIT_RECEIVE) {
             const uint64_t remote_buffer_index_addr = dest_noc_addr_coord_only | edm_copy_of_wr_counter_addr;
-            DPRINT << "[EDM] rd wr_ctr @ 0x" << (uint32_t)(remote_buffer_index_addr >> 32) << ":0x"
+            DPRINT << "[EDM] rd wr_ctr @ xy=(" << (uint32_t)this->edm_noc_x << "," << (uint32_t)this->edm_noc_y
+                   << ") addr=0x" << HEX() << (uint32_t)(remote_buffer_index_addr >> 32) << ":0x"
                    << (uint32_t)(remote_buffer_index_addr & 0xffffffffu) << " -> local 0x"
-                   << (uint32_t)reinterpret_cast<size_t>(this->worker_teardown_addr) << ENDL();
+                   << (uint32_t)((uintptr_t)this->worker_teardown_addr & 0xffffffffu) << ENDL();
             // piggy back off of worker_teardown_addr just to temporarily store the read-back write pointer
             // then once we get it we will use that address for the teardown ack
             // Note this is safe because only the worker can initiate teardown (and it will not do it until)
@@ -369,9 +370,10 @@ struct WorkerToFabricEdmSenderImpl {
                 dest_noc_addr_coord_only | reinterpret_cast<size_t>(
                                                edm_worker_location_info_addr +
                                                offsetof(tt::tt_fabric::EDMChannelWorkerLocationInfo, edm_read_counter));
-            DPRINT << "[EDM] rd free_slots @ 0x" << (uint32_t)(edm_read_free_slots_or_read_counter_addr >> 32) << ":0x"
+            DPRINT << "[EDM] rd free_slots @ xy=(" << (uint32_t)this->edm_noc_x << "," << (uint32_t)this->edm_noc_y
+                   << ") addr=0x" << HEX() << (uint32_t)(edm_read_free_slots_or_read_counter_addr >> 32) << ":0x"
                    << (uint32_t)(edm_read_free_slots_or_read_counter_addr & 0xffffffffu) << " -> local 0x"
-                   << (uint32_t)reinterpret_cast<size_t>(this->edm_buffer_local_free_slots_read_ptr) << ENDL();
+                   << (uint32_t)((uintptr_t)this->edm_buffer_local_free_slots_read_ptr & 0xffffffffu) << ENDL();
             // Read the read/pointer or buffer free slots
             noc_async_read(
                 edm_read_free_slots_or_read_counter_addr,
@@ -384,9 +386,9 @@ struct WorkerToFabricEdmSenderImpl {
             reinterpret_cast<size_t>(
                 edm_worker_location_info_addr +
                 offsetof(tt::tt_fabric::EDMChannelWorkerLocationInfo, worker_semaphore_address));
-        DPRINT << "[EDM] wr worker_sem_addr_ptr @ 0x" << (uint32_t)(dest_edm_location_info_addr >> 32) << ":0x"
-               << (uint32_t)(dest_edm_location_info_addr & 0xffffffffu) << " = 0x"
-               << (uint32_t)reinterpret_cast<size_t>(edm_buffer_local_free_slots_update_ptr) << ENDL();
+        // DPRINT << "[EDM] wr worker_sem_addr_ptr @ 0x" << (uint32_t)(dest_edm_location_info_addr >> 32) << ":0x"
+        //        << (uint32_t)(dest_edm_location_info_addr & 0xffffffffu) << " = 0x"
+        //        << (uint32_t)reinterpret_cast<size_t>(edm_buffer_local_free_slots_update_ptr) << ENDL();
         // write the address of our local copy of read counter (that EDM is supposed to update)
         if constexpr (!I_USE_STREAM_REG_FOR_CREDIT_RECEIVE) {
             noc_inline_dw_write<InlineWriteDst::L1, posted>(
@@ -431,7 +433,9 @@ struct WorkerToFabricEdmSenderImpl {
     void open_finish() {
         const uint64_t edm_connection_handshake_noc_addr =
             get_noc_addr(this->edm_noc_x, this->edm_noc_y, edm_connection_handshake_l1_addr);
+        DPRINT << "[OPEN_FINISH] barrier noc=" << (uint32_t)WORKER_HANDSHAKE_NOC << ENDL();
         noc_async_read_barrier(WORKER_HANDSHAKE_NOC);
+        DPRINT << "[OPEN_FINISH] after noc_async_read_barrier" << ENDL();
         // Order here is important
         // We need to write our read counter value to the register before we signal the EDM
         // As EDM will potentially increment the register as well
