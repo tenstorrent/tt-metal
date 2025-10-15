@@ -25,4 +25,12 @@ target_link_libraries(tt-metalium-validation-basic PRIVATE TT::Metalium::Test::D
 
 install(TARGETS tt-metalium-validation-basic RUNTIME COMPONENT metalium-validation)
 
-install(FILES lsan.supp DESTINATION ${CMAKE_INSTALL_DATADIR}/tt-metalium CONFIGURATIONS ASan COMPONENT metalium-runtime)
+install(
+    FILES
+        lsan.supp
+    DESTINATION ${CMAKE_INSTALL_DATADIR}/tt-metalium
+    CONFIGURATIONS
+        ASan
+        ASanCoverage
+    COMPONENT metalium-runtime
+)
