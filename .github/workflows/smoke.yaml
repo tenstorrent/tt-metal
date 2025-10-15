@@ -19,6 +19,10 @@ on:
       product:
         required: true
         type: string # tt-metalium or tt-nn
+      upload-coverage:
+        required: false
+        type: boolean
+        default: true
 
 jobs:
   smoke:
@@ -116,9 +120,9 @@ jobs:
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
-        if: ${{ !cancelled() && (
-              (github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false && github.workflow == 'PR Gate')
-              || (github.event_name == 'push' && github.ref_name == 'main' && github.workflow == 'PR Gate')
+        if: ${{ !cancelled() && inputs.upload-coverage && (
+              (github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false)
+              || (github.event_name == 'push' && github.ref_name == 'main')
             ) }}
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
