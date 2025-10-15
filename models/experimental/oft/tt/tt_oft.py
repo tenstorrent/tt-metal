@@ -215,9 +215,6 @@ class OFT:
             batch_output_channels=True,
         )
 
-        # this is used as intermediate tensor for tracking pcc over model
-        # if removing intermediate tensors, remove this but call ttnn.deallocate(integral_image)
-        integral_image = ttnn.to_torch(integral_image).permute(0, 3, 1, 2)
         # btm_left = ttnn.permute(btm_left, (0, 2, 1, 3))
         btm_left = ttnn.reshape(btm_left, [btm_left.shape[0], btm_left.shape[2], btm_left.shape[1], btm_left.shape[3]])
         btm_left = ttnn.to_layout(btm_left, ttnn.TILE_LAYOUT)
@@ -238,6 +235,10 @@ class OFT:
             dtype=ttnn.bfloat16,
         )
         ttnn.deallocate(vox_feats)
+
+        # this is used as intermediate tensor for tracking pcc over model
+        # if removing intermediate tensors, remove this but call ttnn.deallocate(integral_image)
+        integral_image = ttnn.to_torch(integral_image).permute(0, 3, 1, 2)
 
         if use_signpost:
             signpost(header="OFT block ended")
