@@ -70,6 +70,7 @@ jobs:
       env:
         ARCH_NAME: ${{ inputs.arch }}
         LOGURU_LEVEL: INFO
+        PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
         GTEST_OUTPUT: xml:/work/generated/test_reports/
         TT_METAL_HOME: /work
