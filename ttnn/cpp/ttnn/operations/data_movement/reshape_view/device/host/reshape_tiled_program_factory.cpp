@@ -177,13 +177,9 @@ tt::tt_metal::operation::ProgramWithCallbacks reshape_tiled_program_factory(
             uint32_t local_template_idx = global_to_local_template_map[run.pattern_template_index];
 
             if (run.run_length == 1) {
-                core_rt_args.push_back(detail::pack_short_run_ultra(
-                    static_cast<uint8_t>(start),
-                    static_cast<uint8_t>(end),
-                    static_cast<uint8_t>(run.input_page_index_start),
-                    static_cast<uint8_t>(local_template_idx)));
-                core_rt_args.push_back(detail::pack_rt_short(
-                    static_cast<uint16_t>(run.input_offset_start), static_cast<uint16_t>(run.output_offset_start)));
+                core_rt_args.push_back(detail::pack_rt_short(start, end));
+                core_rt_args.push_back(detail::pack_rt_short(run.input_page_index_start, local_template_idx));
+                core_rt_args.push_back(detail::pack_rt_short(run.input_offset_start, run.output_offset_start));
             }
         }
 
