@@ -128,7 +128,7 @@ jobs:
           # mkdir -p ./build_bisect
           # cp ./tests/scripts/tt_bisect.sh ./build_bisect/
           # chmod +x ./build_bisect/tt_bisect.sh
-          ./tt_bisect.sh -t ${{ inputs.timeout }} -f '${{ inputs.command }}' -b ${{ inputs.bad-commit }} -g ${{ inputs.good-commit }} ${{ inputs.tracy == 'true' && '-p' || '' }} -r ${{ inputs.retries }} ${{ inputs.nd-mode == 'true' && '-n' || '' }} ${{ inputs.download-artifacts == 'true' && '-a' || '' }}
+          ./tests/scripts/tt_bisect.sh -t ${{ inputs.timeout }} -f '${{ inputs.command }}' -b ${{ inputs.bad-commit }} -g ${{ inputs.good-commit }} ${{ inputs.tracy == 'true' && '-p' || '' }} -r ${{ inputs.retries }} ${{ inputs.nd-mode == 'true' && '-n' || '' }} ${{ inputs.download-artifacts == 'true' && '-a' || '' }}
 
       - name: Upload ND results CSV
         if: ${{ hashFiles('docker-job/bisect_nd_results.csv') != '' }}
