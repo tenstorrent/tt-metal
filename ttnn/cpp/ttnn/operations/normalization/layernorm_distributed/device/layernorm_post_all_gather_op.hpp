@@ -24,8 +24,7 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
     float eps,
     DeviceComputeKernelConfig compute_kernel_config,
     std::optional<bool> use_2d_core_grid = std::nullopt,
-    bool legacy_reduction = true,
-    bool legacy_rsqrt = true);
+    LayerNormDistributedDefaultProgramConfig program_config = LayerNormDistributedDefaultProgramConfig{});
 
 struct LayerNormPostAllGather {
     LayerNormDistributedType norm_type;
@@ -34,8 +33,7 @@ struct LayerNormPostAllGather {
     const DeviceComputeKernelConfig compute_kernel_config;
     std::optional<DataType> dtype;
     std::optional<bool> use_2d_core_grid;
-    bool legacy_reduction;
-    bool legacy_rsqrt;
+    LayerNormDistributedDefaultProgramConfig program_config;
 
     void validate(
         const std::vector<Tensor>& input_tensors,

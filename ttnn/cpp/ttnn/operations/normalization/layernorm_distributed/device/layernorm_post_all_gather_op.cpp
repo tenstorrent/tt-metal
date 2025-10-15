@@ -184,7 +184,6 @@ tt::tt_metal::operation::ProgramWithCallbacks LayerNormPostAllGather::create_pro
         this->eps,
         this->compute_kernel_config,
         this->use_2d_core_grid,
-        this->legacy_reduction,
-        this->legacy_rsqrt);
+        this->program_config);
 }
 }  // namespace ttnn::operations::normalization

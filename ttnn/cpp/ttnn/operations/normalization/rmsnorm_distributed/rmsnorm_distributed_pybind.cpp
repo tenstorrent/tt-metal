@@ -57,7 +57,7 @@ void bind_normalization_rmsnorm_pre_all_gather_operation(py::module& module) {
             py::arg("program_config") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
             py::arg("use_2d_core_grid") = std::nullopt,
-            py::arg("legacy_reduction") = true});
+            py::arg("distributed_program_config") = LayerNormDistributedDefaultProgramConfig{}});
 }
 
 void bind_normalization_rmsnorm_post_all_gather_operation(py::module& module) {
@@ -112,8 +112,7 @@ void bind_normalization_rmsnorm_post_all_gather_operation(py::module& module) {
             py::arg("program_config") = std::nullopt,
             py::arg("dtype") = std::nullopt,
             py::arg("use_2d_core_grid") = std::nullopt,
-            py::arg("legacy_reduction") = true,
-            py::arg("legacy_rsqrt") = true});
+            py::arg("distributed_program_config") = LayerNormDistributedDefaultProgramConfig{}});
 }
 
 void bind_normalization_rms_norm_distributed(py::module& module) {

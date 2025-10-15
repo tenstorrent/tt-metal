@@ -51,7 +51,7 @@ operation::ProgramWithCallbacks layernorm_pre_allgather_multi_core_2d(
     Tensor& output,
     LayerNormDistributedType norm_type,
     DeviceComputeKernelConfig compute_kernel_config,
-    bool legacy_reduction) {
+    LayerNormDistributedDefaultProgramConfig program_config) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     const auto& shape = a.padded_shape();
     const uint32_t W = shape[-1], H = shape[-2];
@@ -174,7 +174,7 @@ operation::ProgramWithCallbacks layernorm_pre_allgather_multi_core_2d(
         merge_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
-    bool float32_reduction = fp32_dest_acc_en && !legacy_reduction;
+    bool float32_reduction = fp32_dest_acc_en && !program_config.legacy_reduction;
     std::vector<uint32_t> compute_args = {
         tiles_per_core_x, tiles_per_core_y, block_size, cores_y, float32_reduction ? 1 : 0};
 
@@ -303,7 +303,7 @@ operation::ProgramWithCallbacks layernorm_pre_allgather_multi_core(
     LayerNormDistributedType norm_type,
     DeviceComputeKernelConfig compute_kernel_config,
     std::optional<bool> use_2d_core_grid,
-    bool legacy_reduction) {
+    LayerNormDistributedDefaultProgramConfig program_config) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     const bool is_rmsnorm = norm_type == LayerNormDistributedType::RMSNORM;
     const auto& shape = a.padded_shape();
@@ -327,7 +327,7 @@ operation::ProgramWithCallbacks layernorm_pre_allgather_multi_core(
     }
 
     if (use_2d_kernel) {
-        return layernorm_pre_allgather_multi_core_2d(a, output, norm_type, compute_kernel_config, legacy_reduction);
+        return layernorm_pre_allgather_multi_core_2d(a, output, norm_type, compute_kernel_config, program_config);
     }
 
     uint32_t num_tile_rows = NC * Ht;
@@ -448,7 +448,7 @@ operation::ProgramWithCallbacks layernorm_pre_allgather_multi_core(
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
-    bool float32_reduction = fp32_dest_acc_en && !legacy_reduction;
+    bool float32_reduction = fp32_dest_acc_en && !program_config.legacy_reduction;
     std::vector<uint32_t> compute_args = {Wt, block_size, float32_reduction ? 1 : 0};
 
     auto compute_kernels_id =

@@ -315,6 +315,14 @@ def test_distributed_norm_comparison(
     2. Gather stats tensor across devices.
     3. Reduce stats tensor. Compute variance and mean. Do normalization.
     """
+    use_new = ttnn.LayerNormDistributedDefaultProgramConfig(
+        legacy_reduction=False,
+        legacy_rsqrt=False,
+    )
+    use_old = ttnn.LayerNormDistributedDefaultProgramConfig(
+        legacy_reduction=True,
+        legacy_rsqrt=True,
+    )
     if norm_type == "layer_norm":
         ttnn_stats = ttnn.layer_norm_pre_all_gather(
             ttnn_input,
@@ -325,7 +333,8 @@ def test_distributed_norm_comparison(
         ttnn_stats = ttnn.rms_norm_pre_all_gather(
             ttnn_input,
             compute_kernel_config=compute_kernel_config,
-            dtype=ttnn.bfloat16,  # legacy_reduction=False
+            dtype=ttnn.bfloat16,
+            distributed_program_config=use_new,
         )
     ccl_semaphore_handles = setup_ccl_semaphores(mesh_device)
     ttnn.synchronize_device(mesh_device)
@@ -356,8 +365,7 @@ def test_distributed_norm_comparison(
             epsilon=eps,
             weight=ttnn_weight,
             compute_kernel_config=compute_kernel_config,
-            # legacy_reduction=False,
-            # legacy_rsqrt=False,
+            distributed_program_config=use_new,
         )
 
     ttnn_output_torch = ttnn.to_torch(ttnn_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))

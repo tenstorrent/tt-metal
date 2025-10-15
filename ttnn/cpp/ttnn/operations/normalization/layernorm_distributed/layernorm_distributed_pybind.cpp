@@ -11,6 +11,18 @@ namespace ttnn::operations::normalization::detail {
 
 namespace py = pybind11;
 
+void bind_normalization_layernorm_distributed_program_config(py::module& module) {
+    py::class_<LayerNormDistributedDefaultProgramConfig>(module, "LayerNormDistributedDefaultProgramConfig")
+        .def(
+            py::init<bool, bool>(),
+            py::kw_only(),
+            py::arg("legacy_reduction").noconvert() = false,
+            py::arg("legacy_rsqrt").noconvert() = false)
+        .def("__repr__", [](const LayerNormDistributedDefaultProgramConfig& config) {
+            return fmt::format("{}", config);
+        });
+}
+
 void bind_normalization_layernorm_pre_all_gather_operation(py::module& module) {
     ttnn::bind_registered_operation(
         module,
@@ -52,7 +64,7 @@ void bind_normalization_layernorm_pre_all_gather_operation(py::module& module) {
             py::arg("compute_kernel_config") = std::nullopt,
             py::arg("program_config") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
-            py::arg("legacy_reduction") = true});
+            py::arg("distributed_program_config") = LayerNormDistributedDefaultProgramConfig{}});
 }
 
 void bind_normalization_layernorm_post_all_gather_operation(py::module& module) {
@@ -107,11 +119,11 @@ void bind_normalization_layernorm_post_all_gather_operation(py::module& module) 
             py::arg("compute_kernel_config") = std::nullopt,
             py::arg("program_config") = std::nullopt,
             py::arg("dtype") = std::nullopt,
-            py::arg("legacy_reduction") = true,
-            py::arg("legacy_rsqrt") = true});
+            py::arg("distributed_program_config") = LayerNormDistributedDefaultProgramConfig{}});
 }
 
 void bind_normalization_layernorm_distributed(py::module& module) {
+    bind_normalization_layernorm_distributed_program_config(module);
     bind_normalization_layernorm_pre_all_gather_operation(module);
     bind_normalization_layernorm_post_all_gather_operation(module);
 }
