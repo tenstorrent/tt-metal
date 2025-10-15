@@ -27,16 +27,15 @@ void kernel_main() {
     constexpr uint32_t core_dst_offset = is_reader ? 0 : aligned_dst_pixel_size;
 
     constexpr bool is_aligned = (pixel_size == aligned_pixel_size);
-    constexpr uint32_t read_size = is_aligned ? aligned_chunk_size : pixel_size;
     constexpr uint32_t num_pixels = pixel_size / 2;
-    constexpr uint32_t pixel_skip_u16 = (aligned_pixel_size - pixel_size) / 2;
+    constexpr uint32_t aligned_pixels = aligned_pixel_size / 2;
 
     uint64_t src_noc_addr = get_noc_addr(get_read_ptr(src_cb));
     const uint32_t dst_addr_base = get_write_ptr(dst_cb);
     uint32_t src_addr_base = get_read_ptr(src_cb);
 
-    if (is_aligned) {
-        noc_async_read_one_packet_set_state(src_noc_addr, read_size);
+    if constexpr (is_aligned) {
+        noc_async_read_one_packet_set_state(src_noc_addr, aligned_chunk_size);
     }
 
     for (uint32_t row = 0; row < num_dst_rows; ++row) {
@@ -52,15 +51,15 @@ void kernel_main() {
                         src_noc_addr + src_col_offset + h_offset, dst_pixel_addr);
                     dst_pixel_addr += aligned_chunk_size;
                 } else {
-                    volatile tt_l1_ptr uint16_t* src_h_addr =
-                        (volatile tt_l1_ptr uint16_t*)(src_addr_base + src_col_offset + h_offset);
-                    volatile tt_l1_ptr uint16_t* dst_h_addr = (volatile tt_l1_ptr uint16_t*)dst_pixel_addr;
+                    uint16_t* src_ptr = (uint16_t*)(src_addr_base + src_col_offset + h_offset);
+                    uint16_t* dst_ptr = (uint16_t*)dst_pixel_addr;
 
                     for (uint32_t w = 0; w < stride_w; ++w) {
                         for (uint32_t i = 0; i < num_pixels; ++i) {
-                            *dst_h_addr++ = *src_h_addr++;
+                            dst_ptr[i] = src_ptr[i];
                         }
-                        src_h_addr += pixel_skip_u16;
+                        src_ptr += aligned_pixels;
+                        dst_ptr += num_pixels;
                     }
                     dst_pixel_addr += pixel_size * stride_w;
                 }
