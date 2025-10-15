@@ -1,7 +1,7 @@
 # YOLOV10x
 
 ## Platforms:
-Wormhole (n150, n300)
+    Wormhole (n150, n300)
 
 ## Introduction:
 Demo showcasing Yolov10x running on Wormhole - n150, n300 using ttnn.
@@ -28,7 +28,7 @@ pytest --disable-warnings models/demos/yolov10x/tests/pcc/test_ttnn_yolov10x.py:
   ```
 
 #### Multi Device (DP=2, n300):
-- For `640x640`, end-2-end perf is `83` FPS.
+- For `640x640`, end-2-end perf is `91` FPS.
 
   ```bash
   pytest --disable-warnings models/demos/yolov10x/tests/perf/test_e2e_performant.py::test_e2e_performant_dp

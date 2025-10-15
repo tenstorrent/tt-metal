@@ -1,7 +1,7 @@
 # Ultra-Fast-Lane-Detection-v2
 
 ## Platforms:
-Wormhole (n150, n300)
+    Wormhole (n150, n300)
 
 ## Introduction
 The Ultra-Fast-Lane-Detection-v2 is a PyTorch-based implementation designed for fast and efficient deep lane detection using hybrid anchor-driven ordinal classification. It enhances the speed and accuracy of lane detection models with a focus on real-time applications.
@@ -29,7 +29,7 @@ Use the following command to run the model:
   pytest --disable-warnings models/demos/ufld_v2/tests/perf/test_ufld_v2_e2e_performant.py::test_ufldv2_e2e_performant
   ```
 #### Multi Device (DP=2, N300):
-- end-2-end perf is `572` FPS
+- end-2-end perf is `637` FPS
 
   ```
   pytest --disable-warnings models/demos/ufld_v2/tests/perf/test_ufld_v2_e2e_performant.py::test_ufldv2_e2e_performant_dp

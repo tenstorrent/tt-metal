@@ -1,7 +1,7 @@
 # Segformer
 
 ## Platforms:
-Wormhole (n150, n300)
+    Wormhole (n150, n300)
 
 ## Introduction
 SegFormer's architecture is adept for both classification and segmentation tasks, utilizing a hierarchical design that extracts rich, multi-scale visual features. Its robust Transformer encoder generates powerful representations, suitable for discerning object categories, while a lightweight MLP decode head precisely maps these features for accurate pixel-level segmentation.
@@ -41,7 +41,7 @@ pytest models/demos/segformer/tests/perf/test_e2e_performant.py::test_segformer_
 ```
 
 #### Multi Device (DP=2, n300):
-- end-2-end perf is 182 FPS
+- end-2-end perf is 248 FPS
 
 Use the following command to run Model performant running with Trace+2CQ
 ```

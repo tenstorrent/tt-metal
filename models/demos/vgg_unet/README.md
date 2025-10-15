@@ -1,7 +1,7 @@
 # VGG Unet
 
 ## Platforms:
-Wormhole (n150, n300)
+    Wormhole (n150, n300)
 
 ## Introduction
 The VGG-UNet model performs brain tumor segmentation on MRI images. It takes an MRI scan as input and outputs a pixel-wise mask that highlights the regions where a tumor is present. In simple terms, it automatically identifies and outlines brain tumors in medical images to assist doctors in diagnosis and treatment planning.
@@ -28,14 +28,14 @@ Use the following command to run the e2e perf with trace 2cq:
 ```sh
 pytest models/demos/vgg_unet/tests/perf/test_e2e_performant.py::test_vgg_unet_e2e
 ```
-- end-2-end perf with Trace+2CQs is 185 FPS (**On N150**), _On N300 single device, the FPS will be low as it uses ethernet dispatch_
+- end-2-end perf with Trace+2CQs is 198 FPS (**On N150**), _On N300 single device, the FPS will be low as it uses ethernet dispatch_
 
 #### Multi Device (DP=2, n300):
 Use the following command to run the e2e perf with trace 2cq:
 ```sh
 pytest models/demos/vgg_unet/tests/perf/test_e2e_performant.py::test_vgg_unet_e2e_dp
 ```
-- end-2-end perf with Trace+2CQs is 303 FPS
+- end-2-end perf with Trace+2CQs is 318 FPS
 
 ### Performant Demo with Trace+2CQ
 #### Single Device (BS=1):
