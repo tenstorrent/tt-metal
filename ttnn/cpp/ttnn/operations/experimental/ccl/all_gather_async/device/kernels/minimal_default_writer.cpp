@@ -176,7 +176,9 @@ void kernel_main() {
                     32});
 
             if (topology == Topology::Linear) {
-                // multicast to both the forward and backward worker on all devices that you write to
+                // multicast to both the forward and backward worker on all devices that you write to.
+                // this only executes if the worker actually sends something over fabric (i.e. the writers
+                // on the end of the line pointing outward don't issue sem incs)
 
                 // device going in the same direction
                 uint64_t same_direction_barrier_sem_noc_addr_in_pkt =
