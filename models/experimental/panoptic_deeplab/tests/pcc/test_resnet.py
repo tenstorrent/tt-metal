@@ -121,7 +121,7 @@ def test_resnet_stem_pcc(device, batch_size, height, width, reset_seeds, model_l
         torch_input.permute(0, 2, 3, 1),
         dtype=ttnn.bfloat16,
         device=device,
-        layout=ttnn.TILE_LAYOUT,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
     )
 
     ttnn_stem_output = ttnn_model.backbone.stem(ttnn_input)
@@ -177,7 +177,7 @@ def test_resnet_layer_pcc(
         torch_layer_input.permute(0, 2, 3, 1),
         dtype=ttnn.bfloat16,
         device=device,
-        layout=ttnn.TILE_LAYOUT,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
     )
 
     if layer_name == "res2":
@@ -242,7 +242,7 @@ def test_resnet_full_pcc(device, batch_size, height, width, reset_seeds, model_l
         torch_input.permute(0, 2, 3, 1),
         dtype=ttnn.bfloat16,
         device=device,
-        layout=ttnn.TILE_LAYOUT,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
     )
 
     ttnn_outputs = ttnn_model.backbone(ttnn_input)

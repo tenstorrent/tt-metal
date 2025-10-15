@@ -148,8 +148,27 @@ class TtBottleneck(LightweightModule):
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         logger.debug(f"TtBottleneck {self.block_id} forward pass starting, input shape: {x.shape}")
 
-        # Store input for residual connection (don't move - use as is)
-        identity = x
+        # Store input for residual connection
+        # For blocks without shortcuts, we must create a deep copy of the input because conv1 will
+        # deallocate x (deallocate_activation=True), and if identity is just a reference to x,
+        # it will also become deallocated, causing PCC errors when we try to add it later.
+        # For blocks with shortcuts (res2.0, res3.0, res4.0, res5.0), conv1 has deallocate_activation=False
+        # configured in model_configs, so identity can safely reference x (shortcut will replace it anyway).
+        if not self.has_shortcut or "res4" in self.block_id or "res5" in self.block_id:
+            # All blocks without shortcuts need a deep copy
+            # Efficient strategy based on current memory location:
+            # - If already in DRAM: Use ttnn.clone() to create a copy
+            # - If sharded or L1: Move to DRAM (this creates a new allocation)
+            if x.memory_config().buffer_type == ttnn.BufferType.DRAM:
+                # Already in DRAM: clone works and is efficient
+                identity = ttnn.clone(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            else:
+                # Sharded or L1 tensor: moving to DRAM creates new allocation
+                identity = ttnn.to_memory_config(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        else:
+            # Blocks with shortcuts: conv1 won't deallocate x, so identity can reference it
+            # (it will be replaced by shortcut output anyway)
+            identity = x
         # workaround for conv tilize issue with non-height shard
         if identity.spec.layout != ttnn.TILE_LAYOUT:
             identity = ttnn.tilize(identity)
@@ -174,9 +193,13 @@ class TtBottleneck(LightweightModule):
         # TT CNN returns flattened [B, 1, H*W, C], reshape to pre-computed output shape
         if out.shape[1] == 1:  # Flattened format
             out = ttnn.reshape(out, self.conv1_out_shape)
-        out = ttnn.relu(out)  # Separate ReLU
+        # out = ttnn.relu(out)  # Separate ReLU
         out = ttnn.move(out)
         logger.debug(f"TtBottleneck {self.block_id} conv1 complete, output shape: {out.shape}")
+
+        # dilated convs in res5 experience huge circular buffers if input is L1 sharded
+        if "res5" in self.block_id:
+            out = ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG)
 
         # Conv2 + separate ReLU (BatchNorm fused into Conv2)
         logger.debug(f"TtBottleneck {self.block_id} processing conv2 (3x3 spatial)")
@@ -184,7 +207,7 @@ class TtBottleneck(LightweightModule):
         # TT CNN returns flattened [B, 1, H*W, C], reshape to pre-computed output shape
         if out.shape[1] == 1:  # Flattened format
             out = ttnn.reshape(out, self.conv2_out_shape)
-        out = ttnn.relu(out)  # Separate ReLU
+        # out = ttnn.relu(out)  # Separate ReLU
         out = ttnn.move(out)
         logger.debug(f"TtBottleneck {self.block_id} conv2 complete, output shape: {out.shape}")
 
@@ -199,6 +222,10 @@ class TtBottleneck(LightweightModule):
 
         # Residual connection + ReLU
         logger.debug(f"TtBottleneck {self.block_id} adding residual connection and applying final ReLU")
+        # Reshard identity to match output memory config when shortcuts use BlockSharded strategy
+        # This is needed for res3.0 and res4.0 where shortcut uses BlockSharded but conv3 outputs HeightSharded
+        if "res4.0" in self.block_id:
+            identity = ttnn.reshard(identity, out.memory_config())
         # Always add residual - shapes should match after reshape
         out = ttnn.add(out, identity)
         out = ttnn.relu(out)

@@ -131,7 +131,10 @@ class TtResNet(LightweightModule):
         outputs = {}
         for layer_name, layer in [("res2", self.res2), ("res3", self.res3), ("res4", self.res4), ("res5", self.res5)]:
             x = self._forward_res_layer(x, layer)
-            outputs[layer_name] = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+            if x.is_sharded():
+                outputs[layer_name] = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+            else:
+                outputs[layer_name] = ttnn.clone(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             logger.debug(f"{layer_name} complete - output: {outputs[layer_name].shape}")
 
         return outputs
