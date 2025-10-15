@@ -222,7 +222,7 @@ jobs:
         timeout-minutes: ${{ matrix.test-info.timeout }}
         uses: ./.github/actions/single-card-perf-test
         with:
-          commands: pytest -n auto models/demos/vanilla_unet/tests/perf/ -m models_performance_bare_metal
+          commands: pytest -n auto models/demos/${{ matrix.test-info.arch == 'blackhole' && 'blackhole' || 'wormhole' }}/vanilla_unet/tests/perf/ -m models_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' }}
       - name: Run yolov8x model_perf test
         timeout-minutes: ${{ matrix.test-info.timeout }}

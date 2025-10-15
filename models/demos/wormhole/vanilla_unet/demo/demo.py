@@ -14,8 +14,8 @@ from tqdm import tqdm
 import ttnn
 from models.common.utility_functions import run_for_wormhole_b0
 from models.demos.vanilla_unet.common import VANILLA_UNET_L1_SMALL_SIZE, load_torch_model
-from models.demos.vanilla_unet.demo import demo_utils
 from models.demos.vanilla_unet.runner.performant_runner import VanillaUNetPerformantRunner
+from models.demos.wormhole.vanilla_unet.demo import demo_utils
 
 
 def run_unet_demo_single_image(
@@ -38,7 +38,7 @@ def run_unet_demo_single_image(
             model_location_generator("vision-models/unet_vanilla", model_subdir="", download_if_ci_v2=True) / "unet.pt"
         )
 
-    pred_dir = "models/demos/vanilla_unet/demo/pred"
+    pred_dir = "models/demos/wormhole/vanilla_unet/demo/pred"
     # Create the directory if it doesn't exist
     if not os.path.exists(pred_dir):
         os.makedirs(pred_dir)
@@ -47,10 +47,10 @@ def run_unet_demo_single_image(
         device="cpu",  # Choose "cpu" or "cuda:0" based on your setup
         batch_size=1,
         weights=weights_path,  # Path to the pre-trained model weights
-        image="models/demos/vanilla_unet/demo/images/TCGA_CS_4944_20010208_1.tif",  # Path to your input image
-        mask="models/demos/vanilla_unet/demo/images/TCGA_CS_4944_20010208_1_mask.tif",  # Path to your input mask
+        image="models/demos/wormhole/vanilla_unet/demo/images/TCGA_CS_4944_20010208_1.tif",  # Path to your input image
+        mask="models/demos/wormhole/vanilla_unet/demo/images/TCGA_CS_4944_20010208_1_mask.tif",  # Path to your input mask
         image_size=resolution,  # Resize input image to this size
-        predictions="models/demos/vanilla_unet/demo/pred",  # Directory to save prediction results
+        predictions="models/demos/wormhole/vanilla_unet/demo/pred",  # Directory to save prediction results
     )
 
     loader = demo_utils.data_loader(args)  # loader will load just a single image

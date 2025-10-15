@@ -77,7 +77,10 @@ def evaluation(
     if model_name == "vanilla_unet":
         from collections import defaultdict
 
-        from models.demos.vanilla_unet.demo import demo_utils
+        if is_wormhole_b0():
+            from models.demos.wormhole.vanilla_unet.demo import demo_utils
+        elif is_blackhole():
+            from models.demos.blackhole.vanilla_unet.demo import demo_utils
 
         root_dir = "models/demos/segmentation_evaluation/imageset"
         patient_folders = sorted(os.listdir(root_dir))

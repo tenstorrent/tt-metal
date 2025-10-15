@@ -1,7 +1,7 @@
 # Unet Vanilla
 
 ## Platforms:
-Wormhole (n150, n300)
+        Wormhole (n150, n300), Blackhole (p150)
 
 ## Prerequisites
 - Cloned [tt-metal repository](https://github.com/tenstorrent/tt-metal) for source code
@@ -9,67 +9,10 @@ Wormhole (n150, n300)
    - To obtain the perf reports through profiler, please build with: `./build_metal.sh -p`
 
 
-## How to run (480x640 resolution)
+## How to run
 
-Use the following command to run the inference pipeline:
+Find Unet Vanilla instructions for the following devices:
 
-    ```
-    pytest models/demos/vanilla_unet/tests/pcc/test_ttnn_unet.py::test_unet
-    ```
+- Wormhole (n150, n300): [models/demos/wormhole/vanilla_unet](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/wormhole/vanilla_unet)
 
-### Model performant running with Trace+2CQs
-#### Single Device (BS=1):
-
-- For `480x640`, end-2-end perf is `60` FPS
-
-    ```sh
-    pytest models/demos/vanilla_unet/tests/perf/test_e2e_performant.py::test_e2e_performant
-    ```
-
-#### Multi Device (DP=2, N300):
-
-- For `480x640`, end-2-end perf is `119` FPS
-
-    ```sh
-    pytest models/demos/vanilla_unet/tests/perf/test_e2e_performant.py::test_e2e_performant_dp
-    ```
-
-### Performant Demo with Trace+2CQ
-
-#### Single image
-- Use the following command to run the demo for `480x640` resolution:
-
-    ```
-    pytest models/demos/vanilla_unet/demo/demo.py::test_unet_demo_single_image
-    ```
-
-- Output images will be saved in the `models/demos/vanilla_unet/demo/pred` folder
-
-
-### Evaluation test:
-
-#### Single Device (BS=1):
-
-- Use the following command to run the performant evaluation with Trace+2CQs:
-
-    ```sh
-    pytest models/demos/segmentation_evaluation/test_segmentation_eval.py::test_vanilla_unet
-    ```
-
-#### Multi Device (DP=2, N300):
-
-- Use the following command to run the performant evaluation with Trace+2CQs:
-
-    ```sh
-    pytest models/demos/segmentation_evaluation/test_segmentation_eval.py::test_vanilla_unet_dp
-    ```
-
-**Note:** If vanilla unet evaluation test fails with the error: `ValueError: Sample larger than population or is negative`
-Try deleting the `imageset` folder in `models/demos/segmentation_evaluation` directory and try running again.
-
-
-## Details
-- Entry point for the model is `models/demos/vanilla_unet/ttnn/ttnn_unet.py`
-- Batch Size: 1 (Single Device).
-- Support Input Resolution: (480, 640) - (Height, Width).
-- Dataset - [mri-segmentation](https://www.kaggle.com/datasets/mateuszbuda/lgg-mri-segmentation)
+- Blackhole (p150): [models/demos/blackhole/vanilla_unet](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/blackhole/vanilla_unet)

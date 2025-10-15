@@ -20,7 +20,7 @@ def test_perf_device_vanilla_unet(batch_size, expected_perf):
     subdir = "ttnn_vanilla_unet"
     num_iterations = 1
     margin = 0.03
-    command = f"pytest models/demos/vanilla_unet/tests/pcc/test_ttnn_unet.py"
+    command = f"pytest models/demos/blackhole/vanilla_unet/tests/pcc/test_ttnn_unet.py"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
 
     inference_time_key = "AVG DEVICE KERNEL SAMPLES/S"
