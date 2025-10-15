@@ -293,13 +293,13 @@ def run_avg_pool2d(
     # These factors compound, especially with small divisor overrides and large kernels,
     # requiring relaxed rtol thresholds for robust comparisons.
     rtol = 0.01
+    if compute_kernel_config is not None:
+        if compute_kernel_config.math_fidelity == ttnn.MathFidelity.LoFi:
+            atol = 0.045  # LOFI has less precise accumulation, so relax atol further
     if out_dtype == ttnn.bfloat4_b:
         pcc_thresh = 0.98
     if in_dtype == ttnn.bfloat8_b or out_dtype == ttnn.bfloat8_b or out_dtype == ttnn.bfloat4_b:
         atol = 0.35
-    if compute_kernel_config is not None:
-        if compute_kernel_config.math_fidelity == ttnn.MathFidelity.LoFi:
-            atol = 0.045  # LOFI has less precise accumulation, so relax atol further
     assert_with_pcc(torch_output, ttnn_output, pcc_thresh)
     # Ensure both tensors have the same dtype for comparison
     if out_dtype != ttnn.bfloat16:
