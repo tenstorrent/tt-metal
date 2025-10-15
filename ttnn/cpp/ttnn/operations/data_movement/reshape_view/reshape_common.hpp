@@ -265,7 +265,14 @@ struct GlobalCompressedReshapeMap {
     std::vector<PagePatternRun> page_pattern_runs;
 };
 
-inline uint32_t pack_rt_short(uint16_t val1, uint16_t val2) { return (val1 << 16) | val2; }
+inline uint32_t pack_rt_short(uint16_t a, uint16_t b) {
+    return (static_cast<uint32_t>(a) << 16) | static_cast<uint32_t>(b);
+}
+
+inline uint32_t pack_short_run_ultra(uint8_t out_start, uint8_t out_end, uint8_t in_page_low, uint8_t template_idx) {
+    return (static_cast<uint32_t>(out_start) << 24) | (static_cast<uint32_t>(out_end) << 16) |
+           (static_cast<uint32_t>(in_page_low) << 8) | static_cast<uint32_t>(template_idx);
+}
 
 inline size_t detect_stride_run(
     const std::vector<SegmentMapData>& segs,
@@ -512,7 +519,7 @@ inline ReshapeRTArgsEstimate estimate_reshape_rt_args(
 
         uint32_t base_args = 4;  // num_templates, num_short_runs, num_long_runs, buffer_addr
         uint32_t template_args = used_template_indices.size() * 4;  // 4 args per template
-        uint32_t short_run_args = num_short_runs * 3;
+        uint32_t short_run_args = num_short_runs * 2;
         uint32_t long_run_args = num_long_runs * 5;
 
         uint32_t core_reader_args = base_args + template_args + short_run_args + long_run_args;

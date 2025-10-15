@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <cstdint>
+#include <array>
+#include <vector>
 
 namespace ttnn::operations::data_movement::reshape::detail {
 
@@ -21,5 +24,20 @@ struct SegmentMapData {
     static constexpr uint32_t size = 4;
 };
 inline std::pair<uint16_t, uint16_t> unpack_rt_short(uint32_t packed) { return {packed >> 16, packed & 0xFFFF}; }
+
+inline auto unpack_short_run_ultra(uint32_t packed) {
+    struct Result {
+        uint8_t out_start;
+        uint8_t out_end;
+        uint8_t in_page_low;
+        uint8_t template_idx;
+    };
+
+    return Result{
+        static_cast<uint8_t>((packed >> 24) & 0xFF),
+        static_cast<uint8_t>((packed >> 16) & 0xFF),
+        static_cast<uint8_t>((packed >> 8) & 0xFF),
+        static_cast<uint8_t>(packed & 0xFF)};
+}
 
 }  // namespace ttnn::operations::data_movement::reshape::detail
