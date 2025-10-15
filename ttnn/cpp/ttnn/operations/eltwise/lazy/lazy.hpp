@@ -44,6 +44,32 @@ struct RBinaryFn : OverloadsFor<RBinaryFn, ExpressionView, ExpressionView> {
     using OverloadsFor<RBinaryFn, ExpressionView, ExpressionView>::operator();
 };
 
+struct TernaryFn : OverloadsFor<TernaryFn, ExpressionView, ExpressionView, ExpressionView> {
+    Ternary operation;
+
+    [[nodiscard]] Function operator()(ExpressionView first, ExpressionView second, ExpressionView third) const;
+    using OverloadsFor<TernaryFn, ExpressionView, ExpressionView, ExpressionView>::operator();
+};
+
+struct CompareFn : ttsl::overloaded<
+                       OverloadsFor<CompareFn, ExpressionView, ExpressionView>,
+                       OverloadsFor<CompareFn, ExpressionView, Param>,
+                       OverloadsFor<CompareFn, Param, ExpressionView>> {
+    UnaryFn operation;
+
+    [[nodiscard]] Function operator()(ExpressionView first, ExpressionView second) const;
+    [[nodiscard]] Function operator()(ExpressionView first, Param second) const;
+    [[nodiscard]] Function operator()(Param first, ExpressionView second) const;
+
+    using OverloadsFor<CompareFn, ExpressionView, ExpressionView>::operator();
+    using OverloadsFor<CompareFn, ExpressionView, Param>::operator();
+    using OverloadsFor<CompareFn, Param, ExpressionView>::operator();
+};
+
+struct OverloadedBinaryFn : ttsl::overloaded<UnaryWithParamFn, RUnaryWithParamFn, BinaryFn> {};
+
+struct OverloadedRBinaryFn : ttsl::overloaded<UnaryWithParamFn, RUnaryWithParamFn, RBinaryFn> {};
+
 struct DivFn : ttsl::overloaded<UnaryWithParamFn, BinaryFn, OverloadsFor<DivFn, Param, ExpressionView>> {
     [[nodiscard]] Function operator()(Param first, ExpressionView second) const;
 
@@ -60,41 +86,48 @@ struct RDivFn : ttsl::overloaded<RUnaryWithParamFn, RBinaryFn, OverloadsFor<RDiv
     using OverloadsFor<RDivFn, ExpressionView, Param>::operator();
 };
 
-struct TernaryFn : OverloadsFor<TernaryFn, ExpressionView, ExpressionView, ExpressionView> {
-    Ternary operation;
+struct LogicalBinaryFn : ttsl::overloaded<
+                             OverloadsFor<LogicalBinaryFn, ExpressionView, ExpressionView>,
+                             OverloadsFor<LogicalBinaryFn, ExpressionView, Param>,
+                             OverloadsFor<LogicalBinaryFn, Param, ExpressionView>> {
+    OverloadedBinaryFn operation;
 
-    [[nodiscard]] Function operator()(ExpressionView first, ExpressionView second, ExpressionView third) const;
-    using OverloadsFor<TernaryFn, ExpressionView, ExpressionView, ExpressionView>::operator();
-};
-
-struct CompareFn : ttsl::overloaded<
-                       OverloadsFor<CompareFn, ExpressionView, Param>,
-                       OverloadsFor<CompareFn, Param, ExpressionView>,
-                       OverloadsFor<CompareFn, ExpressionView, ExpressionView>> {
-    Unary operation;
-
+    [[nodiscard]] Function operator()(ExpressionView first, ExpressionView second) const;
     [[nodiscard]] Function operator()(ExpressionView first, Param second) const;
     [[nodiscard]] Function operator()(Param first, ExpressionView second) const;
+
+    using OverloadsFor<LogicalBinaryFn, ExpressionView, ExpressionView>::operator();
+    using OverloadsFor<LogicalBinaryFn, ExpressionView, Param>::operator();
+    using OverloadsFor<LogicalBinaryFn, Param, ExpressionView>::operator();
+};
+
+struct WhereFn : ttsl::overloaded<
+                     TernaryFn,
+                     OverloadsFor<WhereFn, ExpressionView, ExpressionView, Param>,
+                     OverloadsFor<WhereFn, ExpressionView, Param, ExpressionView>,
+                     OverloadsFor<WhereFn, ExpressionView, Param, Param>> {
+    [[nodiscard]] Function operator()(ExpressionView condition, ExpressionView input, Param other) const;
+    [[nodiscard]] Function operator()(ExpressionView condition, Param input, ExpressionView other) const;
+    [[nodiscard]] Function operator()(ExpressionView condition, Param input, Param other) const;
+
+    using TernaryFn::operator();
+    using OverloadsFor<WhereFn, ExpressionView, ExpressionView, Param>::operator();
+    using OverloadsFor<WhereFn, ExpressionView, Param, ExpressionView>::operator();
+    using OverloadsFor<WhereFn, ExpressionView, Param, Param>::operator();
+};
+
+struct Atan2Fn : ttsl::overloaded<
+                     OverloadsFor<Atan2Fn, ExpressionView, ExpressionView>,
+                     OverloadsFor<Atan2Fn, ExpressionView, Param>,
+                     OverloadsFor<Atan2Fn, Param, ExpressionView>> {
     [[nodiscard]] Function operator()(ExpressionView first, ExpressionView second) const;
+    [[nodiscard]] Function operator()(ExpressionView first, Param second) const;
+    [[nodiscard]] Function operator()(Param first, ExpressionView second) const;
 
-    using OverloadsFor<CompareFn, ExpressionView, Param>::operator();
-    using OverloadsFor<CompareFn, Param, ExpressionView>::operator();
-    using OverloadsFor<CompareFn, ExpressionView, ExpressionView>::operator();
+    using OverloadsFor<Atan2Fn, ExpressionView, ExpressionView>::operator();
+    using OverloadsFor<Atan2Fn, ExpressionView, Param>::operator();
+    using OverloadsFor<Atan2Fn, Param, ExpressionView>::operator();
 };
-
-struct OverloadedBinaryFn : ttsl::overloaded<UnaryWithParamFn, RUnaryWithParamFn, BinaryFn> {};
-
-struct OverloadedRBinaryFn : ttsl::overloaded<UnaryWithParamFn, RUnaryWithParamFn, RBinaryFn> {};
-
-struct PowerFn : ttsl::overloaded<UnaryWithParamFn, BinaryFn, OverloadsFor<PowerFn, float, ExpressionView>> {
-    [[nodiscard]] Function operator()(float first, ExpressionView second) const;
-
-    using UnaryWithParamFn::operator();
-    using BinaryFn::operator();
-    using OverloadsFor<PowerFn, float, ExpressionView>::operator();
-};
-
-struct WhereFn : ttsl::overloaded<TernaryFn> {};
 
 inline constexpr UnaryFn recip{.operation = Unary::RECIP};
 inline constexpr UnaryFn negative{.operation = Unary::NEGATIVE};
@@ -109,12 +142,14 @@ inline constexpr UnaryFn nez{.operation = Unary::NEZ};
 
 inline constexpr UnaryFn logical_not{.operation = Unary::LOGICAL_NOT};
 
-inline constexpr CompareFn eq{.operation = Unary::EQZ};
-inline constexpr CompareFn ge{.operation = Unary::GEZ};
-inline constexpr CompareFn gt{.operation = Unary::GTZ};
-inline constexpr CompareFn le{.operation = Unary::LEZ};
-inline constexpr CompareFn lt{.operation = Unary::LTZ};
-inline constexpr CompareFn ne{.operation = Unary::NEZ};
+inline constexpr UnaryFn atan{.operation = Unary::ATAN};
+
+inline constexpr CompareFn eq{.operation = lazy::eqz};
+inline constexpr CompareFn ge{.operation = lazy::gez};
+inline constexpr CompareFn gt{.operation = lazy::gtz};
+inline constexpr CompareFn le{.operation = lazy::lez};
+inline constexpr CompareFn lt{.operation = lazy::ltz};
+inline constexpr CompareFn ne{.operation = lazy::nez};
 
 inline constexpr OverloadedBinaryFn add{
     UnaryWithParamFn{.operation = UnaryWithParam::ADD},
@@ -140,6 +175,18 @@ inline constexpr OverloadedBinaryFn mul{
     BinaryFn{.operation = Binary::MUL},
 };
 
+inline constexpr OverloadedBinaryFn pow{
+    UnaryWithParamFn{.operation = UnaryWithParam::POWER},
+    RUnaryWithParamFn{.operation = UnaryWithParam::RPOW},
+    BinaryFn{.operation = Binary::POWER},
+};
+
+inline constexpr OverloadedRBinaryFn rpow{
+    UnaryWithParamFn{.operation = UnaryWithParam::RPOW},
+    RUnaryWithParamFn{.operation = UnaryWithParam::POWER},
+    RBinaryFn{.operation = Binary::POWER},
+};
+
 inline constexpr DivFn div{
     UnaryWithParamFn{.operation = UnaryWithParam::DIV},
     BinaryFn{.operation = Binary::DIV},
@@ -150,13 +197,14 @@ inline constexpr RDivFn rdiv{
     RBinaryFn{.operation = Binary::DIV},
 };
 
-inline constexpr PowerFn power{
-    UnaryWithParamFn{.operation = UnaryWithParam::POWER},
-    BinaryFn{.operation = Binary::POWER},
-};
+inline constexpr LogicalBinaryFn logical_and{.operation = lazy::mul};
+inline constexpr LogicalBinaryFn logical_or{.operation = lazy::add};
+inline constexpr LogicalBinaryFn logical_xor{.operation = lazy::sub};
 
 inline constexpr WhereFn where{
     TernaryFn{.operation = Ternary::WHERE},
 };
+
+inline constexpr Atan2Fn atan2{};
 
 }  // namespace ttnn::operations::lazy

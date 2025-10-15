@@ -10,7 +10,7 @@
 
 namespace ttnn::operations::lazy {
 
-template <std::same_as<ExpressionView>>
+template <std::constructible_from<Expression>>
 Expression convert_to(std::same_as<const Tensor&> auto tensor) {
     return lazy::defer(tensor).value();
 }

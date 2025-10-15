@@ -179,6 +179,7 @@ void py_module(py::module& module) {
     def_functor(module, "ltz", ltz);
     def_functor(module, "nez", nez);
     def_functor(module, "logical_not", logical_not);
+    def_functor(module, "atan", atan);
     def_functor(module, "eq", eq);
     def_functor(module, "ge", ge);
     def_functor(module, "gt", gt);
@@ -189,10 +190,15 @@ void py_module(py::module& module) {
     def_functor(module, "sub", sub);
     def_functor(module, "rsub", rsub);
     def_functor(module, "mul", mul);
+    def_functor(module, "pow", pow);
+    def_functor(module, "rpow", rpow);
     def_functor(module, "div", div);
     def_functor(module, "rdiv", rdiv);
-    def_functor(module, "power", power);
+    def_functor(module, "logical_and", logical_and);
+    def_functor(module, "logical_or", logical_or);
+    def_functor(module, "logical_xor", logical_xor);
     def_functor(module, "where", where);
+    def_functor(module, "atan2", atan2);
 }
 
 }  // namespace ttnn::operations::lazy
