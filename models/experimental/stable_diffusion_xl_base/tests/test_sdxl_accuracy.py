@@ -152,7 +152,10 @@ def test_accuracy_sdxl(
     except Exception as e:
         data["benchmarks_summary"][0]["stability_check"] = 3
         save_json_results(data, capture_trace, vae_on_device, encoders_on_device, use_cfg_parallel, num_inference_steps)
-        logger.warning(f"Error detected during inference")
+        if "timeout" in str(e).lower() and "hang" in str(e).lower():
+            logger.warning(f"Device timeout - exiting to avoid deadlock")
+            import sys
+            sys.exit(1)
         raise
 
     clip = CLIPEncoder()
