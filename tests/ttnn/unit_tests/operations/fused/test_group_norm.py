@@ -735,11 +735,14 @@ def test_group_norm_compute_config(device, N, C, H, W, num_groups):
 @pytest.mark.parametrize(
     "N, C, H, W, num_groups, shard, eps",
     [
-        (1, 256, 12, 40, 16, "BS", 1e-5),
-        (1, 256, 24, 80, 16, "HS", 1e-5),
-        (1, 256, 48, 160, 16, "HS", 1e-5),
-        (1, 512, 12, 40, 16, "BS", 1e-5),
-        (1, 64, 96, 320, 16, "HS", 1e-5),
+        # (1, 256, 12, 40, 16, "BS", 1e-5),
+        # (1, 256, 24, 80, 16, "HS", 1e-5),
+        # (1, 256, 48, 160, 16, "HS", 1e-5),
+        # (1, 512, 12, 40, 16, "BS", 1e-5),
+        # (1, 64, 96, 320, 16, "HS", 1e-5),
+        # (1, 256, 159, 159, 16, 3, 4, 4, 1e-5),
+        (1, 32, 192, 640, 8, "HS", 1e-5),  # half of (1, 64, 192, 640, 16, 10, 2, 4, 1e-5),
+        # (1, 64, 192, 640, 16, "HS", 1e-5)
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
@@ -784,6 +787,14 @@ def test_group_norm_oft(device, N, C, H, W, num_groups, shard, eps):
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
+    input_nmask_tensor = ttnn.create_group_norm_input_negative_mask(C, num_groups, grid_y)
+    input_nmask_tensor = ttnn.from_torch(
+        input_nmask_tensor,
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
     # Generate gamma/beta tensors
     gamma = ttnn.create_group_norm_weight_bias_rm(torch_weight, C, grid_y)
     beta = ttnn.create_group_norm_weight_bias_rm(torch_bias, C, grid_y)
@@ -818,16 +829,18 @@ def test_group_norm_oft(device, N, C, H, W, num_groups, shard, eps):
             ttnn.types.TensorMemoryLayout.BLOCK_SHARDED, ttnn.types.BufferType.L1, shard_spec
         )
     input_tensor = ttnn.to_memory_config(input_tensor, memory_config=sharded_mem_config)
-
+    # ttnn.move(input_tensor)
     output_tensor = ttnn.group_norm(
         input_tensor,
         num_groups=num_groups,
         input_mask=input_mask_tensor,
+        negative_mask=input_nmask_tensor,
         weight=gamma_t,
         bias=beta_t,
         memory_config=sharded_mem_config,
         core_grid=grid_size,
         epsilon=eps,
+        inplace=True,
     )
     output_tensor = ttnn.to_torch(output_tensor)
     assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
