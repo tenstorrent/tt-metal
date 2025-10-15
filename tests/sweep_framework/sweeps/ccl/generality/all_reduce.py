@@ -67,7 +67,7 @@ def _model_shape_iterator(model_shapes, batch_params):
 
 LEAD_MODEL_SHARD_SPECS = [
     get_serializable_shard_specs(
-        input_shape=(32, 128),
+        input_shape=(32, 256),
         input_cores=(4, 4),
         input_strategy="w",
         output_shape=None,
@@ -76,7 +76,7 @@ LEAD_MODEL_SHARD_SPECS = [
         valid_tensor_shapes=[[1, 1, 32, 4096]],
     ),
     get_serializable_shard_specs(
-        input_shape=(32, 256),
+        input_shape=(32, 128),
         input_cores=(4, 4),
         input_strategy="w",
         output_shape=None,
