@@ -121,8 +121,12 @@ std::optional<BasicExpression<T>> BasicExpression<T>::from(const Tensor& tensor)
         return std::nullopt;
     }
 
-    // TODO relax requirement
+    // TODO relax dtype and memory_config requirements
     if (tensor.dtype() != DataType::BFLOAT16) {
+        return std::nullopt;
+    }
+
+    if (tensor.memory_config().is_sharded()) {
         return std::nullopt;
     }
 
@@ -231,33 +235,42 @@ const Shape& BasicExpression<T>::logical_shape() const noexcept {
 
 struct circular_buffers {
     std::size_t inputs;
-    std::size_t outputs;
     std::size_t internal;
-    std::size_t reusable;
+    std::size_t outputs;
+    tt::CBIndex internal_id;
 
-    tt::CBIndex input_id() const noexcept { return tt::CBIndex(inputs + internal - reusable - 1); }
+    tt::CBIndex input_id() const noexcept { return tt::CBIndex(inputs + internal - 1); }
     tt::CBIndex output_id() const noexcept { return tt::CBIndex(inputs + internal); }
     std::size_t total() const noexcept { return inputs + internal + outputs; }
 };
 
 auto get_circular_buffers(std::span<const Node> nodes) noexcept {
+    const auto nodes_ptr = nodes.data();
     circular_buffers result{.outputs = 1};
+    std::unordered_map<std::size_t, tt::CBIndex> internal_ids;
+    std::queue<tt::CBIndex> reusable_ids;
 
-    for (const auto& node : nodes) {
-        if (auto function_ptr = std::get_if<FunctionNode>(&node)) {
+    for (const auto& parent : nodes) {
+        if (auto function_ptr = std::get_if<FunctionNode>(&parent)) {
             for (const auto offset : function_ptr->offsets) {
-                if (std::holds_alternative<FunctionNode>(*(&node - offset))) {
+                if (const auto child_ptr = &parent - offset; std::holds_alternative<FunctionNode>(*child_ptr)) {
                     // this assumes no common subexpressions
-                    // CSE requires liveness tracking
-                    ++result.reusable;
+                    // TODO apply CSE optimization
+                    reusable_ids.push(internal_ids.find(child_ptr - nodes_ptr)->second);
                 }
             }
-
-            if (result.reusable > 0) {
-                --result.reusable;
-            } else {
+            // if no reusable nodes available
+            if (reusable_ids.empty()) {
+                // new internal id is next output id
+                result.internal_id = result.output_id();
                 ++result.internal;
+            } else {
+                // otherwise new internal id is first reusable id
+                result.internal_id = reusable_ids.front();
+                reusable_ids.pop();
             }
+
+            internal_ids.emplace(&parent - nodes_ptr, result.internal_id);
         } else {
             static_assert(std::variant_size_v<Value> == 2, "assumption below relies on process of elimination");
             ++result.inputs;
@@ -283,7 +296,8 @@ auto get_runtime_arguments(std::span<const Node> nodes) noexcept {
 template <typename T>
 tt::CBIndex BasicExpressionView<T>::cb_index() const noexcept {
     const auto result = get_circular_buffers(nodes);
-    return tt::CBIndex(is_root ? result.output_id() : result.input_id());
+    const auto is_function = std::holds_alternative<FunctionNode>(root());
+    return tt::CBIndex(is_root ? result.output_id() : is_function ? result.internal_id : result.input_id());
 }
 
 template <typename T>
@@ -467,27 +481,29 @@ std::string function_name(DataType dtype, Unary operation) {
     using enum Unary;
     switch (operation) {
         case RECIP: return "recip";
-        case NEGATIVE: return function_name_i32(dtype, "negative");
+        case NEGATIVE: return lazy::function_name_i32(dtype, "negative");
         case EXP: return "exp";
-        case EQZ: return function_name_i32_u16_u32(dtype, "eqz");
-        case GEZ: return function_name_i32(dtype, "gez");
-        case GTZ: return function_name_i32(dtype, "gtz");
-        case LEZ: return function_name_i32(dtype, "lez");
-        case LTZ: return function_name_i32(dtype, "ltz");
-        case NEZ: return function_name_i32_u16_u32(dtype, "nez");
-        case LOGICAL_NOT: return function_name_i32_u16_u32(dtype, "logical_not");
+        case EQZ: return lazy::function_name_i32_u16_u32(dtype, "eqz");
+        case GEZ: return lazy::function_name_i32(dtype, "gez");
+        case GTZ: return lazy::function_name_i32(dtype, "gtz");
+        case LEZ: return lazy::function_name_i32(dtype, "lez");
+        case LTZ: return lazy::function_name_i32(dtype, "ltz");
+        case NEZ: return lazy::function_name_i32_u16_u32(dtype, "nez");
+        case LOGICAL_NOT: return lazy::function_name_i32_u16_u32(dtype, "logical_not");
+        case ATAN: return "atan";
     }
 }
 
 std::string function_name(DataType dtype, UnaryWithParam operation) {
     using enum UnaryWithParam;
     switch (operation) {
-        case ADD: return function_name_i32(dtype, "add_unary");
+        case ADD: return lazy::function_name_i32(dtype, "add_unary");
         case SUB: return "sub_unary";
         case RSUB: return "rsub_unary";
         case MUL: return "mul_unary";
         case DIV: return "div_unary";
         case POWER: return "power";
+        case RPOW: return "rpow";
     }
 }
 
@@ -505,7 +521,7 @@ std::string function_name(DataType dtype, Binary operation) {
 std::string function_name(DataType dtype, Ternary operation) {
     using enum Ternary;
     switch (operation) {
-        case WHERE: return function_name_f32_i32(dtype, "where");
+        case WHERE: return lazy::function_name_f32_i32(dtype, "where");
     }
 }
 
@@ -514,9 +530,10 @@ void format_to_kernel_string(
     return std::visit(
         ttsl::overloaded{
             [&](UnaryWithParam alternative) {
-                fmt::format_to(out, "{}(get_arg_val<uint32_t>({}))", function_name(dtype, alternative), rt_offset);
+                fmt::format_to(
+                    out, "{}(get_arg_val<uint32_t>({}))", lazy::function_name(dtype, alternative), rt_offset);
             },
-            [&](auto alternative) { fmt::format_to(out, "{}()", function_name(dtype, alternative)); }},
+            [&](auto alternative) { fmt::format_to(out, "{}()", lazy::function_name(dtype, alternative)); }},
         operation);
 }
 
