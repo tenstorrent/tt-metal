@@ -54,9 +54,9 @@ struct MinimalMatmulConfig {
 };
 
 struct MinimalMatmulOp {
-    MinimalMatmulConfig config;
+    std::optional<const MinimalMatmulConfig> config;
     std::optional<unary::UnaryWithParam> fused_activation;
-    tt::tt_metal::MemoryConfig output_mem_config;
+    std::optional<tt::tt_metal::MemoryConfig> output_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;
 
     void validate(

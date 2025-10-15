@@ -171,7 +171,18 @@ def test_linear_dtype_compute_config(
     "M_block_size, K_block_size, N_block_size, subblock_h, subblock_w",
     [(8, 8, 8, 2, 2)],
 )
-def test_linear_padded_sweep(device, M, K, N, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w):
+def test_linear_block_padding(device, M, K, N, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w):
+    check_result = run_test_linear(device, M, K, N, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w)
+    assert check_result["pcc"] > 0.999_500
+    assert check_result["relative_rmse"] < 0.02
+
+
+@pytest.mark.parametrize("M,K,N", [(255, 255, 255)])
+@pytest.mark.parametrize(
+    "M_block_size, K_block_size, N_block_size, subblock_h, subblock_w",
+    [(1, 1, 1, 1, 1)],
+)
+def test_linear_tile_padding(device, M, K, N, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w):
     check_result = run_test_linear(device, M, K, N, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w)
     assert check_result["pcc"] > 0.999_500
     assert check_result["relative_rmse"] < 0.02

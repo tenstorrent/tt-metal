@@ -14,7 +14,7 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
     const Tensor& weight_tensor,
     const std::optional<const Tensor>& bias_tensor,
     const std::optional<unary::UnaryWithParam>& fused_activation,
-    const MinimalMatmulConfig& config,
+    const std::optional<const MinimalMatmulConfig>& config,
     const Tensor& output_tensor,
     const DeviceComputeKernelConfig& compute_kernel_config);
 

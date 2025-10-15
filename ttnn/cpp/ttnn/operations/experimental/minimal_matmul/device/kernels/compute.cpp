@@ -12,8 +12,6 @@
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
-#include "debug/dprint.h"
-#include "debug/dprint_pages.h"
 
 void copy_block(uint32_t in_cb, uint32_t out_cb, uint32_t M_block_tiles, uint32_t N_block_tiles) {
     copy_tile_to_dst_init_short(in_cb);
@@ -108,12 +106,6 @@ void matmul_blocks(
         }
         in0_index_offset += subblock_h * K_block_tiles;
     }
-}
-
-void safe_print_full_tile(uint32_t cb_id) {
-#if defined(DEBUG_PRINT_ENABLED)
-    UNPACK(tt::compute::common::print_full_tile(cb_id));
-#endif
 }
 
 namespace NAMESPACE {

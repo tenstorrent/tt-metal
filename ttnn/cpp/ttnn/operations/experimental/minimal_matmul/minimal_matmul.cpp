@@ -20,7 +20,7 @@ ttnn::Tensor ExecuteMinimalMatmul::invoke(
     const ttnn::Tensor& weight_tensor,
     const std::optional<ttnn::Tensor>& bias_tensor,
     std::optional<unary::UnaryWithParam> fused_activation,
-    const MinimalMatmulConfig& config,
+    const std::optional<const MinimalMatmulConfig>& config,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
     auto kernel_config_val = init_device_compute_kernel_config(
@@ -35,7 +35,7 @@ ttnn::Tensor ExecuteMinimalMatmul::invoke(
                MinimalMatmulOp{
                    .config = config,
                    .fused_activation = fused_activation,
-                   .output_mem_config = memory_config.value_or(operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
+                   .output_mem_config = memory_config,
                    .compute_kernel_config = kernel_config_val},
                {input_tensor, weight_tensor},
                {bias_tensor},

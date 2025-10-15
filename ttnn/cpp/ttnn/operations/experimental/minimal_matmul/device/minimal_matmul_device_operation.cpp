@@ -22,17 +22,17 @@ void MinimalMatmulOp::validate(
     const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {}
 
 std::vector<TensorSpec> MinimalMatmulOp::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
-    const auto& input_tensor_a = input_tensors.at(0);
-    const auto& input_tensor_b = input_tensors.at(1);
-    const auto& input_tensor_a_shape = input_tensor_a.logical_shape();
-    const auto& input_tensor_b_shape = input_tensor_b.logical_shape();
-    uint32_t M = input_tensor_a_shape[0];
-    uint32_t N = input_tensor_b_shape[1];
+    const auto& in0_input_tensor = input_tensors.at(0);
+    const auto& in1_input_tensor = input_tensors.at(1);
+    const auto& in0_input_tensor_shape = in0_input_tensor.logical_shape();
+    const auto& in1_input_tensor_shape = in1_input_tensor.logical_shape();
+    uint32_t M = in0_input_tensor_shape[0];
+    uint32_t N = in1_input_tensor_shape[1];
 
     ttnn::Shape output_shape({M, N});
 
-    const auto& memory_config = input_tensor_a.memory_config();
-    auto dtype = input_tensor_a.dtype();
+    const auto& memory_config = this->output_mem_config.value_or(in0_input_tensor.memory_config());
+    auto dtype = in0_input_tensor.dtype();
 
     return {TensorSpec(output_shape, TensorLayout(dtype, PageConfig(Layout::TILE), memory_config))};
 }
