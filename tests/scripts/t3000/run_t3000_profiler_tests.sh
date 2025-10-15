@@ -73,6 +73,43 @@ run_async_tracing_T3000_test() {
     fi
 }
 
+run_async_tracing_mid_run_dump_T3000_test() {
+    #Some tests here do not skip grayskull
+    if [ "$ARCH_NAME" == "wormhole_b0" ]; then
+        remove_default_log_locations
+        mkdir -p $PROFILER_ARTIFACTS_DIR
+
+        python -m tracy -v -r -p --cpp-post-process --dump-device-data-mid-run -m "pytest models/demos/ttnn_resnet/tests/test_resnet50_performant.py::test_run_resnet50_trace_2cqs_inference[wormhole_b0-16-act_dtype0-weight_dtype0-math_fidelity0-device_params0]" | tee $PROFILER_ARTIFACTS_DIR/test_out.log
+
+        if cat $PROFILER_ARTIFACTS_DIR/test_out.log | grep "SKIPPED"
+        then
+            echo "No verification as test was skipped"
+        else
+            echo "Verifying test results"
+            runDate=$(ls $PROFILER_OUTPUT_DIR/)
+            echo $runDate
+            LINE_COUNT=2700
+            res=$(verify_perf_line_count_floor "$PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv" "$LINE_COUNT")
+            echo $res
+            python $PROFILER_SCRIPTS_ROOT/compare_ops_logs.py --python-ops-perf-report $PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv --cpp-ops-perf-report $PROFILER_ARTIFACTS_DIR/.logs/cpp_ops_device_perf_report.csv
+
+            # Testing device only report on the same artifacts
+            rm -rf $PROFILER_OUTPUT_DIR/$runDate
+            ./tools/tracy/process_ops_logs.py --device-only --date
+            echo "Verifying device-only results"
+            runDate=$(ls $PROFILER_OUTPUT_DIR/)
+            echo $runDate
+            LINE_COUNT=1800
+            res=$(verify_perf_line_count_floor "$PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv" "$LINE_COUNT")
+            echo $res
+            python $PROFILER_SCRIPTS_ROOT/compare_ops_logs.py --python-ops-perf-report $PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv --cpp-ops-perf-report $PROFILER_ARTIFACTS_DIR/.logs/cpp_ops_device_perf_report.csv
+            LINE_COUNT=1800
+            res=$(verify_perf_line_count_floor "$PROFILER_OUTPUT_DIR/$runDate/per_core_op_to_op_times_$runDate.csv" "$LINE_COUNT")
+            echo $res
+        fi
+    fi
+}
+
 run_ccl_T3000_test() {
     remove_default_log_locations
     mkdir -p $PROFILER_ARTIFACTS_DIR

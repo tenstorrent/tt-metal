@@ -1764,12 +1764,12 @@ void DeviceProfiler::dumpDeviceResults(bool is_mid_run_dump) {
     std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>> device_markers_vec =
         getSortedDeviceMarkersVector(this->device_markers_per_core_risc_map, *this->thread_pool);
 
-    if (!is_mid_run_dump && tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_cpp_post_process()) {
+    if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_cpp_post_process()) {
         generateAnalysesForDeviceMarkers(
             device_markers_vec, this->device_logs_output_dir / PROFILER_OPS_PERF_REPORT_NAME, *this->thread_pool);
+    } else {
+        this->thread_pool->enqueue([this]() { writeDeviceResultsToFiles(); });
     }
-
-    this->thread_pool->enqueue([this]() { writeDeviceResultsToFiles(); });
 
     pushTracyDeviceResults(device_markers_vec);
 
