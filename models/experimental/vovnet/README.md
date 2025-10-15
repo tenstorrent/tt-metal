@@ -1,7 +1,7 @@
 # Vovnet
 
 ## Platforms:
-Wormhole (n150, n300)
+    Wormhole (n150, n300)
 
 ## Introduction
 **VoVNet** is a convolutional neural network designed for efficient and high-performance image recognition tasks. It introduces a novel One-Shot Aggregation (OSA) module that aggregates features from several layers at once, reducing redundancy and improving efficiency. Unlike DenseNet, which uses dense connections, VoVNet performs a single aggregation at the end of each block. This design leads to faster inference and lower memory usage while maintaining strong accuracy.
@@ -24,7 +24,7 @@ Wormhole (n150, n300)
 
 #### Single Device (BS=1):
 
-- For `224x224`, end-2-end perf is `127` FPS
+- For `224x224`, end-2-end perf is `150` FPS
 
   ```
   pytest models/experimental/vovnet/tests/perf/test_e2e_performant.py::test_vovnet_e2e_performant
