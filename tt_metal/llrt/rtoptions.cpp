@@ -53,10 +53,10 @@ RunTimeOptions::RunTimeOptions() {
     const char* root_dir_str = std::getenv(TT_METAL_RUNTIME_ROOT_ENV_VAR);
     if (root_dir_str != nullptr) {
         this->root_dir = std::string(root_dir_str);
-        log_info(tt::LogMetal, "ENV override root_dir: {}", this->root_dir);
+        log_debug(tt::LogMetal, "ENV override root_dir: {}", this->root_dir);
     } else if (!g_root_dir.empty()) {
         this->root_dir = g_root_dir;
-        log_info(tt::LogMetal, "API override root_dir: {}", this->root_dir);
+        log_debug(tt::LogMetal, "API override root_dir: {}", this->root_dir);
     } else if (this->root_dir.empty()) {
         // If the current working directory contains a "tt_metal/" directory,
         // treat the current working directory as the repository root.
@@ -64,7 +64,7 @@ RunTimeOptions::RunTimeOptions() {
         std::filesystem::path tt_metal_subdirectory = current_working_directory / "tt_metal";
         if (std::filesystem::is_directory(tt_metal_subdirectory)) {
             this->root_dir = current_working_directory.string();
-            log_info(tt::LogMetal, "current working directory fallback root_dir: {}", this->root_dir);
+            log_debug(tt::LogMetal, "current working directory fallback root_dir: {}", this->root_dir);
         }
     }
 
