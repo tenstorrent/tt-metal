@@ -160,8 +160,6 @@ operation::ProgramWithCallbacks layernorm_pre_allgather_multi_core_2d(
 
     std::map<std::string, std::string> compute_defines;
 
-    compute_defines["RMSNORM"] = "1";
-
     auto reader_kernels_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/dataflow/"
@@ -435,10 +433,6 @@ operation::ProgramWithCallbacks layernorm_pre_allgather_multi_core(
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
 
     std::map<std::string, std::string> compute_defines;
-
-    if (is_rmsnorm) {
-        compute_defines["RMSNORM"] = "1";
-    }
 
     auto reader_kernels_id = CreateKernel(
         program,

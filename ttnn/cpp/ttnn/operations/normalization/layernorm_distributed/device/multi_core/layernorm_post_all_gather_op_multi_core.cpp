@@ -340,10 +340,6 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
         reader_defines["FUSE_BETA"] = "1";
     }
 
-    if (is_rmsnorm) {
-        compute_defines["RMSNORM"] = "1";
-    }
-
     auto use_row_major_kernel = (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) or
                                 (beta.has_value() and beta.value().layout() == Layout::ROW_MAJOR);
     TT_FATAL(

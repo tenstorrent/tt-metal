@@ -54,17 +54,13 @@ void MAIN {
     constexpr uint32_t cb_x_normed = tt::CBIndex::c_12;  // (x - E(x)) * 1/sqrt(var+eps) or x * 1/sqrt(E(x**2) + eps)
 
     constexpr uint32_t cb_var = tt::CBIndex::c_8;  // E(x**2) - E(x)**2 or E(x**2)
-#ifndef RMSNORM
+
     // Layernorm-specific CBs
     constexpr uint32_t cb_mean_squared = tt::CBIndex::c_7;   // E(x)**2
     constexpr uint32_t cb_x_minus_mean = tt::CBIndex::c_11;  // x - E(x)
 
     constexpr uint32_t cb_norm_x_input = cb_x_minus_mean;
     constexpr uint32_t stats_tile_stride = 2;
-#else
-    constexpr uint32_t cb_norm_x_input = cb_inp;
-    constexpr uint32_t stats_tile_stride = 1;
-#endif
 
     constexpr uint32_t cb_gamma = tt::CBIndex::c_2;
     constexpr uint32_t cb_beta = tt::CBIndex::c_3;
@@ -93,9 +89,7 @@ void MAIN {
         reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_stats, cb_reduce, cb_stats_reduced);
         cb_wait_front(cb_stats, stats_tiles_cols);
         cb_reserve_back(cb_stats_reduced, stats_tile_stride);
-#ifdef RMSNORM
-        cb_reserve_back(cb_var, 1);
-#endif
+
         ACQ();
         // Reduce sum(x**2) first
         for (uint32_t i = 0; i < stats_tiles_cols; i += stats_tile_stride) {
@@ -103,25 +97,18 @@ void MAIN {
         }
         pack_tile(0, cb_stats_reduced);
 
-#ifndef RMSNORM
         // Reduce sum(x) next
         for (uint32_t i = 1; i < stats_tiles_cols; i += stats_tile_stride) {
             reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_stats, cb_reduce, i, 0, 1);
         }
         pack_tile(1, cb_stats_reduced);
-#else
-        pack_tile(0, cb_var);
-#endif
+
         REL();
         cb_push_back(cb_stats_reduced, stats_tile_stride);
         cb_pop_front(cb_stats, stats_tiles_cols);
-#ifdef RMSNORM
-        cb_push_back(cb_var, 1);
-#endif
 
         reduce_uninit();
 
-#ifndef RMSNORM
         /*
          * E[x]**2
          */
@@ -171,7 +158,6 @@ void MAIN {
             cb_push_back(cb_x_minus_mean, blk);
             cb_pop_front(cb_inp, blk);
         }
-#endif
 
         // free up CBs
         cb_pop_front(cb_stats_reduced, stats_tile_stride);

@@ -83,8 +83,6 @@ void MAIN {
 
         reduce_uninit();
 
-#ifndef RMSNORM
-
         /*
          * sum(x)
          */
@@ -101,8 +99,6 @@ void MAIN {
         cb_push_back(cb_out, onetile);
 
         reduce_uninit();
-
-#endif
 
         cb_pop_front(cb_inp, Wt);
     }
