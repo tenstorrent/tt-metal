@@ -107,6 +107,8 @@ class TtGemmaImageTransformerBlock(LightweightModule):
             attn_out = ttnn.mul(attn_out, ttnn.tanh(self.gate_attn))
 
         if self.num_devices > 1:
+            breakpoint()
+            assert False
             attn_out = ttnn.experimental.all_gather_async(
                 attn_out,
                 persistent_output_buffer=None,
