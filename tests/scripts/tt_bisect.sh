@@ -6,16 +6,19 @@ die() { echo "ERROR: $*" >&2; exit 1; }
 : << 'END'
 Usage:
   -f TEST        : test command to run (quote if it has spaces)
+  -s SCRIPT      : path to script to run instead of test command (optional)
   -g GOOD_SHA    : known good commit
   -b BAD_SHA     : known bad commit
   -t TIMEOUT     : per-iteration timeout (default 30m)
   -p             : enable Tracy profiling
   -r RETRIES     : number of retries (default 3)
   -n             : enable non-deterministic detection mode (ND mode)
+Note: Either -f or -s must be specified, but not both.
 END
 
 timeout_duration_iteration="30m"
 test=""
+script_path=""
 good_commit=""
 bad_commit=""
 tracy_enabled=0
@@ -24,9 +27,10 @@ nd_mode=false
 run_idx=0
 timeout_rc=1
 
-while getopts ":f:g:b:t:pr:n" opt; do
+while getopts ":f:s:g:b:t:pr:n" opt; do
   case "$opt" in
     f) test="$OPTARG" ;;
+    s) script_path="$OPTARG" ;;
     g) good_commit="$OPTARG" ;;
     b) bad_commit="$OPTARG" ;;
     t) timeout_duration_iteration="$OPTARG" ;;
@@ -38,9 +42,20 @@ while getopts ":f:g:b:t:pr:n" opt; do
   esac
 done
 
-[ -n "$test" ] || die "Please specify -f TEST."
+# Either test or script_path must be specified, but not both
+if [ -n "$script_path" ] && [ -n "$test" ]; then
+  die "Cannot specify both -f TEST and -s SCRIPT. Use one or the other."
+elif [ -z "$script_path" ] && [ -z "$test" ]; then
+  die "Please specify either -f TEST or -s SCRIPT."
+fi
+
 [ -n "$good_commit" ] || die "Please specify -g GOOD_SHA."
 [ -n "$bad_commit" ] || die "Please specify -b BAD_SHA."
+
+# Validate script exists if specified
+if [ -n "$script_path" ] && [ ! -f "$script_path" ]; then
+  die "Script not found: $script_path"
+fi
 
 
 echo "TT_METAL_HOME: $TT_METAL_HOME"
@@ -142,8 +157,15 @@ while [[ "$found" == "false" ]]; do
       tt-smi -r >/dev/null 2>&1 || true
       echo "Devices reset"
 
-      echo "Run: $test"
-      if timeout -k 10s "$timeout_duration_iteration" bash -lc "$test" 2>&1 | tee "$output_file"; then
+      if [ -n "$script_path" ]; then
+        echo "Run: $script_path"
+        run_cmd="$script_path"
+      else
+        echo "Run: $test"
+        run_cmd="$test"
+      fi
+
+      if timeout -k 10s "$timeout_duration_iteration" bash -lc "$run_cmd" 2>&1 | tee "$output_file"; then
         if grep -qiE "(^|[^a-zA-Z])(SKIP|SKIPPED)([^a-zA-Z]|$)" "$output_file"; then
           echo "Attempt $run_idx: detected skip (exit 0 with 'SKIP' in output)"
           skip_count=$((skip_count+1))
@@ -219,8 +241,16 @@ while [[ "$found" == "false" ]]; do
     timeout_rc=1
     while [ $run_idx -le $retries ]; do
       echo "Attempt $run_idx/$retries on $(git rev-parse HEAD)"
-      echo "Run: $test"
-      if timeout -k 10s "$timeout_duration_iteration" bash -lc "$test" 2>&1 | tee "$output_file"; then
+
+      if [ -n "$script_path" ]; then
+        echo "Run: $script_path"
+        run_cmd="$script_path"
+      else
+        echo "Run: $test"
+        run_cmd="$test"
+      fi
+
+      if timeout -k 10s "$timeout_duration_iteration" bash -lc "$run_cmd" 2>&1 | tee "$output_file"; then
         timeout_rc=0
         echo "--- Logs (attempt $run_idx) ---"
         sed -n '1,200p' "$output_file" || true

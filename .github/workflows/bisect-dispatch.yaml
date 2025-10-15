@@ -49,6 +49,11 @@ on:
         type: string
         default: "3"
         description: "Number of retries (default 3)"
+      gist-url:
+        required: false
+        type: string
+        default: ""
+        description: "Optional GitHub gist URL for a .sh script to run instead of command"
 run-name: "Bisect on ${{ inputs.runner-label }}"
 jobs:
   test-dispatch:
@@ -110,6 +115,28 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Download Gist Script
+        if: ${{ inputs.gist-url != '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Downloading gist from ${{ inputs.gist-url }}"
+          # Convert gist URL to raw URL if needed
+          GIST_URL="${{ inputs.gist-url }}"
+          if [[ "$GIST_URL" =~ gist\.github\.com/.*/.*/([a-f0-9]+)$ ]]; then
+            # Extract gist ID and get raw content
+            GIST_ID="${BASH_REMATCH[1]}"
+            # For gists, we need to fetch the raw content
+            curl -fsSL "$GIST_URL/raw" -o /work/bisect_gist_script.sh
+          elif [[ "$GIST_URL" =~ raw\.githubusercontent\.com ]]; then
+            # Already a raw URL
+            curl -fsSL "$GIST_URL" -o /work/bisect_gist_script.sh
+          else
+            # Try appending /raw
+            curl -fsSL "${GIST_URL}/raw" -o /work/bisect_gist_script.sh
+          fi
+          chmod +x /work/bisect_gist_script.sh
+          echo "Gist script downloaded and made executable"
 
       - name: Run Git Bisect
         shell: bash
@@ -122,7 +149,16 @@ jobs:
           mkdir -p ./build_bisect
           cp ./tests/scripts/tt_bisect.sh ./build_bisect/
           chmod +x ./build_bisect/tt_bisect.sh
-          ./build_bisect/tt_bisect.sh -t ${{ inputs.timeout }} -f '${{ inputs.command }}' -b ${{ inputs.bad-commit }} -g ${{ inputs.good-commit }} ${{ inputs.tracy == 'true' && '-p' || '' }} -r ${{ inputs.retries }} ${{ inputs.nd-mode == 'true' && '-n' || '' }}
+
+          BISECT_CMD="./build_bisect/tt_bisect.sh -t ${{ inputs.timeout }} -b ${{ inputs.bad-commit }} -g ${{ inputs.good-commit }} ${{ inputs.tracy == 'true' && '-p' || '' }} -r ${{ inputs.retries }} ${{ inputs.nd-mode == 'true' && '-n' || '' }}"
+
+          if [ -n "${{ inputs.gist-url }}" ]; then
+            BISECT_CMD="$BISECT_CMD -s /work/bisect_gist_script.sh"
+          else
+            BISECT_CMD="$BISECT_CMD -f '${{ inputs.command }}'"
+          fi
+
+          eval "$BISECT_CMD"
 
       - name: Upload ND results CSV
         if: ${{ hashFiles('docker-job/bisect_nd_results.csv') != '' }}
