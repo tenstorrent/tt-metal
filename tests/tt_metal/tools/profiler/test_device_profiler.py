@@ -13,6 +13,7 @@ from conftest import is_6u
 
 import pandas as pd
 import numpy as np
+import multiprocessing as mp
 
 from tracy.common import (
     TT_METAL_HOME,
@@ -660,10 +661,20 @@ def test_fabric_event_profiler_fabric_mux():
         ), f"Incorrect number of fabric events found in noc trace: {fabric_event_count}, expected {expected_output['FABRIC_EVENT_COUNT']}"
 
 
+def is_6u_wrapper():
+    ctx = mp.get_context("spawn")
+    with ctx.Pool() as pool:
+        result = pool.apply(is_6u)
+        pool.close()
+        pool.join()
+    return result
+
+
 @skip_for_blackhole()
 def test_fabric_event_profiler_2d():
     ENV_VAR_ARCH_NAME = os.getenv("ARCH_NAME")
     assert ENV_VAR_ARCH_NAME in ["wormhole_b0", "blackhole"]
+    is_6u_bool = is_6u_wrapper()
 
     # test that current device has a valid fabric API connection
     sanity_check_test_bin = "build/test/tt_metal/tt_fabric/fabric_unit_tests"
@@ -683,7 +694,7 @@ def test_fabric_event_profiler_2d():
         "Fabric2DFixture.Test2DMCastConnAPI_1N1E1W",
     ]
 
-    if is_6u():
+    if is_6u_bool:
         tests.extend(
             [
                 "Fabric2DFixture.TestUnicastRaw_3N",
@@ -708,7 +719,7 @@ def test_fabric_event_profiler_2d():
         },
     ]
 
-    if is_6u():
+    if is_6u_bool:
         all_tests_expected_event_counts.extend(
             [
                 {
