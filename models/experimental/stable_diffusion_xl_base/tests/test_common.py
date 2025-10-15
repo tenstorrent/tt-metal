@@ -486,7 +486,6 @@ def prepare_image_latents(
     latents=None,  # passed in latents
 ):
     # 4, 5, 8
-    assert not is_strength_max, "Max strength is not supported for inpainting pipeline atm"
     assert image is not None, "Image is not provided"
     assert image.shape[1] == 3, "Image is not 3 channels"
     assert add_noise is True, "Add noise should be True"
@@ -517,6 +516,9 @@ def prepare_image_latents(
     # Need to convert:
     # - image_latents to ttnn_tensor
     # - noise to ttnn_tensor
+    if is_strength_max:
+        return torch_noise * tt_pipeline.tt_scheduler.init_noise_sigma
+
     tt_noise = ttnn.from_torch(
         torch_noise, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=tt_pipeline.ttnn_device
     )

@@ -10,7 +10,10 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import (
     prepare_mask_latents_inpainting,
     run_tt_image_gen_inpainting,
 )
-from models.experimental.stable_diffusion_xl_base.tt.tt_sdxl_pipeline import TtSDXLPipeline, TtSDXLPipelineConfig
+from models.experimental.stable_diffusion_xl_base.tt.tt_sdxl_img2img_pipeline import (
+    TtSDXLPipeline,
+    TtSDXLImg2ImgPipelineConfig,
+)
 import torch
 from loguru import logger
 from models.common.utility_functions import profiler
@@ -19,10 +22,8 @@ import ttnn
 
 
 @dataclass
-class TtSDXLInpaintingPipelineConfig(TtSDXLPipelineConfig):
-    strength: float = 0.99
-    aesthetic_score: float = 6.0
-    negative_aesthetic_score: float = 2.5
+class TtSDXLInpaintingPipelineConfig(TtSDXLImg2ImgPipelineConfig):
+    strength = 0.99
     _torch_pipeline_type = StableDiffusionXLInpaintPipeline
 
 
@@ -43,9 +44,6 @@ class TtSDXLInpaintingPipeline(TtSDXLPipeline):
 
         B, C, H, W = 1, self.num_channels_image_latents, 128, 128
         self.tt_image_latents_shape = [B, C, H, W]
-
-        assert self.pipeline_config.strength != 1.0, "Max strength is not supported for inpainting pipeline atm"
-        # to support it, we need to modify prepare_latents function, and several other functions
 
     def _prepare_timesteps(self):
         super()._prepare_timesteps()
@@ -104,7 +102,7 @@ class TtSDXLInpaintingPipeline(TtSDXLPipeline):
                 self.cpu_device,
                 all_prompt_embeds_torch.dtype,
                 torch_image,
-                False,  # Make this configurable
+                self.pipeline_config.strength == 1,
                 True,  # Make this configurable
                 None,  # passed in latents
             )
