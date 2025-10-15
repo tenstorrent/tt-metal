@@ -1690,6 +1690,8 @@ FORCE_INLINE void receiver_send_completion_ack_erisc(
     if constexpr (NUM_ACTIVE_ERISCS > 1) {
         receiver_channel_response_credit_sender.completion_counters[src_id]++;
         receiver_channel_response_credit_sender.completion_counters_base_ptr[src_id] = receiver_channel_response_credit_sender.completion_counters[src_id];
+        asm volatile("fence" : : : "memory");
+        [[maybe_unused]] auto readback = receiver_channel_response_credit_sender.completion_counters_base_ptr[src_id];
         increment_local_update_ptr_val<outstanding_receiver_channel_eth_acks_stream_id>(1);
     } else {
         receiver_send_completion_ack<CHECK_BUSY>(receiver_channel_response_credit_sender, src_id);
@@ -1902,7 +1904,7 @@ FORCE_INLINE void run_forward_acks_over_eth_step() {
     if constexpr (is_sender_channel_serviced[0]) {
         auto num_ack_requests = get_ptr_val<outstanding_receiver_channel_eth_acks_stream_id>();
         if (num_ack_requests) {
-            increment_local_update_ptr_val<outstanding_receiver_channel_eth_acks_stream_id>(num_ack_requests);
+            increment_local_update_ptr_val<outstanding_receiver_channel_eth_acks_stream_id>(-num_ack_requests);
             while (internal_::eth_txq_is_busy(receiver_txq_id)) {
             };
             constexpr size_t SEND_SIZE_BYTES = (((NUM_SENDER_CHANNELS * sizeof(uint32_t)) - 1) / ETH_WORD_SIZE_BYTES) * ETH_WORD_SIZE_BYTES;
