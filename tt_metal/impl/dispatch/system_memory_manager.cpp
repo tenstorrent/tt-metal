@@ -176,6 +176,7 @@ SystemMemoryManager::SystemMemoryManager(ChipId device_id, uint8_t num_hw_cqs) :
 uint32_t SystemMemoryManager::get_next_event(const uint8_t cq_id) {
     cq_to_event_locks[cq_id].lock();
     uint32_t next_event = ++this->cq_to_event[cq_id];  // Event ids start at 1
+
     cq_to_event_locks[cq_id].unlock();
     return next_event;
 }
@@ -184,6 +185,15 @@ uint32_t SystemMemoryManager::get_next_event(const uint8_t cq_id) {
 uint32_t SystemMemoryManager::get_last_event(const uint8_t cq_id) {
     std::lock_guard<std::mutex> lock(cq_to_event_locks[cq_id]);
     return this->cq_to_event[cq_id];
+}
+
+void SystemMemoryManager::set_current_and_last_completed_event(
+    const uint8_t cq_id, const uint32_t current_event_id, const uint32_t last_completed_event_id) {
+    cq_to_event_locks[cq_id].lock();
+
+    this->cq_to_event[cq_id] = current_event_id;
+    this->cq_to_last_completed_event[cq_id] = last_completed_event_id;
+    cq_to_event_locks[cq_id].unlock();
 }
 
 void SystemMemoryManager::reset_event_id(const uint8_t cq_id) {
@@ -202,12 +212,21 @@ void SystemMemoryManager::set_last_completed_event(const uint8_t cq_id, const ui
     TT_ASSERT(
         wrap_ge(event_id, this->cq_to_last_completed_event[cq_id]),
         "Event ID is expected to increase. Wrapping not supported for sync. Completed event {} but last recorded "
-        "completed event is {}",
+        "completed event is {}, manager {}",
         event_id,
-        this->cq_to_last_completed_event[cq_id]);
+        this->cq_to_last_completed_event[cq_id],
+        fmt::ptr(this));
     cq_to_event_locks[cq_id].lock();
+
     this->cq_to_last_completed_event[cq_id] = event_id;
     cq_to_event_locks[cq_id].unlock();
+}
+
+uint32_t SystemMemoryManager::get_current_event(const uint8_t cq_id) {
+    cq_to_event_locks[cq_id].lock();
+    uint32_t current_event = this->cq_to_event[cq_id];
+    cq_to_event_locks[cq_id].unlock();
+    return current_event;
 }
 
 uint32_t SystemMemoryManager::get_last_completed_event(const uint8_t cq_id) {

@@ -126,6 +126,8 @@ private:
     std::unique_ptr<program_cache::detail::ProgramCache> program_cache_;
     // This is a reference device used to query properties that are the same for all devices in the mesh.
     IDevice* reference_device() const;
+    // Recursively quiesce all submeshes.
+    void quiesce_internal();
 
     void mark_allocations_unsafe();
     void mark_allocations_safe();
@@ -298,6 +300,18 @@ public:
 
     const std::shared_ptr<MeshDevice>& get_parent_mesh() const;
     std::vector<std::shared_ptr<MeshDevice>> get_submeshes() const;
+
+    /**
+     * @brief Synchronize with all submeshes created from this mesh.
+     *
+     * Blocks until all in-flight work enqueued on every submesh derived from this mesh has completed.  Use this to
+     * insert a barrier between phases that use overlapping submeshes on the same physical devices.  After this call
+     * returns, it is safe to enqueue new work on this mesh or any submesh derived from this mesh that may overlap with
+     * submeshes that were previously active. All submeshes must be using the default subdevice manager when this is
+     * called.
+     *
+     */
+    void quiesce_submeshes();
 
     std::shared_ptr<MeshDevice> create_submesh(
         const MeshShape& submesh_shape, const std::optional<MeshCoordinate>& offset = std::nullopt);

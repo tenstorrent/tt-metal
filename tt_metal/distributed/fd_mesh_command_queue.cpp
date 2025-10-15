@@ -1178,4 +1178,56 @@ void FDMeshCommandQueue::capture_expected_worker_count_reset_cmd(
     }
 }
 
+void FDMeshCommandQueue::wait_for_completion(bool reset_launch_msg_state) {
+    if (in_use_) {
+        size_t num_sub_devices = mesh_device_->num_sub_devices();
+        for (auto device : mesh_device_->get_devices()) {
+            TT_FATAL(!device->sysmem_manager().get_bypass_mode(), "Cannot reset worker state during trace capture");
+        }
+        cq_shared_state_->sub_device_cq_owner.clear();
+        cq_shared_state_->sub_device_cq_owner.resize(num_sub_devices);
+        in_use_ = true;
+        for (auto device : mesh_device_->get_devices()) {
+            program_dispatch::reset_worker_dispatch_state_on_device(
+                mesh_device_,
+                device->sysmem_manager(),
+                id_,
+                this->virtual_program_dispatch_core(),
+                expected_num_workers_completed_,
+                reset_launch_msg_state);
+        }
+        program_dispatch::reset_config_buf_mgrs_and_expected_workers(
+            config_buffer_mgr_,
+            expected_num_workers_completed_,
+            mesh_device_->num_sub_devices(),
+            mesh_device_->allocator()->get_config().l1_unreserved_base);
+        if (reset_launch_msg_state) {
+            std::for_each(
+                this->cq_shared_state_->worker_launch_message_buffer_state.begin(),
+                this->cq_shared_state_->worker_launch_message_buffer_state.begin() + num_sub_devices,
+                std::mem_fn(&LaunchMessageRingBufferState::reset));
+        }
+        finish();
+    }
+}
+
+void FDMeshCommandQueue::finish_and_reset_in_use() {
+    if (in_use_) {
+        auto lock = lock_api_function_();
+        uint32_t current_event = reference_sysmem_manager().get_current_event(id_);
+        for (auto device : mesh_device_->get_devices()) {
+            TT_ASSERT(
+                device->sysmem_manager().get_last_completed_event(id_) == current_event,
+                "Current event must be equal to last completed event");
+            bool is_reference_cq = &device->sysmem_manager() == &reference_sysmem_manager();
+            // Ensure the next command will be recorded as event 0
+            device->sysmem_manager().set_current_and_last_completed_event(
+                id_, is_reference_cq ? UINT32_MAX : 0, UINT32_MAX);
+        }
+        finish_nolock({});
+
+        in_use_ = false;
+    }
+}
+
 }  // namespace tt::tt_metal::distributed
