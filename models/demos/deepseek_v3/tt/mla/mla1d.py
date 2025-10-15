@@ -737,15 +737,6 @@ class MLA1D(AbstractModule):
         if caches is None:
             caches = (torch.zeros(cache_shape),) * mesh_device.shape[0]
 
-        tt_cache = ttnn.as_tensor(
-            torch.concatenate(tuple(caches)),
-            dtype=ttnn.bfloat8_b,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, 0),
-        )
-
         # Store CCL object for runtime semaphore initialization
         return {
             MESH_DEVICE_STATE_DICT_KEY: mesh_device,
