@@ -74,6 +74,7 @@ def test_demo_inference(
     model_location_generator,
 ):
     skip_if_not_blackhole_20_cores(device)
+    device.disable_and_clear_program_cache()
     assert use_host_decoder == False, "Only use_host_decoder=False is supported for now"
     # Create output directory for saving visualizations
     output_dir = os.path.join(os.path.dirname(__file__), "outputs")
