@@ -735,7 +735,7 @@ void TopologyMapper::rebuild_host_rank_structs_from_mapping() {
                 // find host whose range starts at (r,c)
                 for (const auto& [host, range] : range_map) {
                     if (range.start_coord()[0] == r && range.start_coord()[1] == c) {
-                        std::size_t idx = row_index(r) * host_grid_shape[1] + col_index(c);
+                        std::size_t idx = (row_index(r) * host_grid_shape[1]) + col_index(c);
                         if (idx < host_rank_values.size()) {
                             host_rank_values[idx] = next_rank;
                         }
