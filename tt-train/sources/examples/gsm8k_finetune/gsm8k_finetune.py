@@ -21,7 +21,7 @@ from typing import List, Tuple, Dict, Optional
 # Add TT-Metal path
 sys.path.append(f"{os.environ['TT_METAL_HOME']}/tt-train/sources/ttml")
 import ttml
-from ttml.common.config import get_config, TransformerConfig, TrainingConfig
+from ttml.common.config import get_config, TransformerConfig, TrainingConfig, SchedulerConfig
 from ttml.common.model_factory import TransformerModelFactory
 from ttml.common.utils import set_seed, round_up_to_tile, create_optimizer
 from ttml.common.data import build_causal_mask
@@ -395,12 +395,20 @@ def adjust_logits(logits, binary_mask, add_mask):
     return masked_logits
 
 
-def main():
+def train():
     print("Loading tokenizer and config...")
     tokenizer = AutoTokenizer.from_pretrained("TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T")
     yaml_config = get_config(CONFIG)
 
     training_config = TrainingConfig(yaml_config)
+    scheduler_config = SchedulerConfig(yaml_config)
+
+    if os.path.isfile("training_overrides.yaml"):
+        print("Applying training overrides...")
+        override_config = get_config("training_overrides.yaml")
+        training_config = training_config.update_config(override_config)
+        scheduler_config = scheduler_config.update_config(override_config)
+
     batch_size = training_config.batch_size
 
     # Download safetensors
@@ -461,7 +469,6 @@ def main():
     # Training setup
 
     tt_model.train()
-    data_steps = (len(training_data) // batch_size) + 1
     train_losses = []
     val_losses = []
 
@@ -475,14 +482,13 @@ def main():
     tokens_per_batch = batch_size * max_sequence_length
     print("Tokens per micro-batch:", tokens_per_batch)
     print("Tokens per accumulated batch:", tokens_per_batch * training_config.gradient_accumulation_steps)
-    optim_steps_done = 0
 
     sched = SpeedrunScheduler(
         SchedulerConfig(
-            lr_max=1e-4,
-            min_lr=3e-5,
-            warmup_steps=20,
-            hold_steps=1000,
+            lr_max=scheduler_config.max_lr,
+            min_lr=scheduler_config.min_lr,
+            warmup_steps=scheduler_config.warmup_steps,
+            hold_steps=scheduler_config.hold_steps,
             total_steps=training_config.steps,
             beta1_start=0.85,
             beta1_end=0.9,
@@ -496,7 +502,6 @@ def main():
 
     total_steps = 0
     last_val_loss = 0
-    accum_loss = 0
     accum_steps = training_config.gradient_accumulation_steps
     # ========== Training Loop ===========
     for opt_step in bar:
@@ -581,4 +586,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    train()

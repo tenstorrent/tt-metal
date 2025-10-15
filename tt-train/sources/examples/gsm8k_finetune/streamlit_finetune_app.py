@@ -173,13 +173,17 @@ def create_training_yaml(config_dict, output_path="training_overrides.yaml"):
     training_config = {
         "batch_size": config_dict["batch_size"],
         "max_steps": config_dict["max_steps"],
-        "learning_rate": config_dict["learning_rate"],
         "gradient_accumulation_steps": config_dict["gradient_accumulation"],
         "eval_every": config_dict["eval_every"],
         "transformer_config": {"max_sequence_length": config_dict["max_seq_length"]},
     }
 
-    scheduler_config = {"warmup_steps": config_dict["warmup_steps"]}
+    scheduler_config = {
+        "warmup_steps": config_dict["warmup_steps"],
+        "hold_steps": config_dict["hold_steps"],
+        "min_lr": config_dict["min_lr"],
+        "max_lr": config_dict["max_lr"],
+    }
 
     # Write YAML with blank lines between top-level sections
     with open(output_path, "w") as f:
@@ -205,47 +209,68 @@ def start_training(config_dict):
     try:
         # Create the YAML config file
         yaml_path = create_training_yaml(config_dict)
-        st.success(f"Created configuration file: {yaml_path}")
+        yaml_abs_path = os.path.abspath(yaml_path)
+        st.success(f"Created configuration file: {yaml_abs_path}")
+
+        # Get the directory containing gsm8k_finetune.py
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        script_path = os.path.join(script_dir, "gsm8k_finetune.py")
+
+        # Check if script exists
+        if not os.path.exists(script_path):
+            return False, f"Training script not found at: {script_path}"
+
+        # Create log files for stdout and stderr
+        log_dir = script_dir
+        stdout_log = os.path.join(log_dir, "training_stdout.log")
+        stderr_log = os.path.join(log_dir, "training_stderr.log")
 
         # Start the training process
-        # Note: This assumes gsm8k_finetune.py can be run with the config
-        # Adjust the command based on your actual training script
-        cmd = ["python", "gsm8k_finetune.py", "--config", yaml_path]
-
-        process = subprocess.Popen(
-            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=os.path.dirname(os.path.abspath(__file__))
-        )
+        with open(stdout_log, "w") as stdout_f, open(stderr_log, "w") as stderr_f:
+            process = subprocess.Popen(
+                ["python3", script_path], stdout=stdout_f, stderr=stderr_f, cwd=script_dir, env=os.environ.copy()
+            )
 
         st.session_state.training_process = process
         st.session_state.training_running = True
+        st.session_state.training_pid = process.pid
 
-        return True, "Training started successfully!"
+        return True, f"Training started successfully! PID: {process.pid}\nLogs: {stdout_log}"
     except Exception as e:
-        return False, f"Error starting training: {str(e)}"
+        import traceback
+
+        error_details = traceback.format_exc()
+        return False, f"Error starting training: {str(e)}\n{error_details}"
 
 
 def stop_training():
     """Stop the training process."""
     try:
         if st.session_state.training_process is not None:
+            pid = st.session_state.training_process.pid
+
             # Send SIGTERM to gracefully stop the process
             st.session_state.training_process.terminate()
 
             # Wait for a few seconds for graceful shutdown
             try:
                 st.session_state.training_process.wait(timeout=5)
+                message = f"Training stopped gracefully (PID: {pid})"
             except subprocess.TimeoutExpired:
                 # If it doesn't stop, force kill
                 st.session_state.training_process.kill()
                 st.session_state.training_process.wait()
+                message = f"Training force-stopped (PID: {pid})"
 
             st.session_state.training_process = None
             st.session_state.training_running = False
 
-            return True, "Training stopped successfully!"
+            return True, message
         else:
             return False, "No training process to stop"
     except Exception as e:
+        st.session_state.training_process = None
+        st.session_state.training_running = False
         return False, f"Error stopping training: {str(e)}"
 
 
@@ -289,14 +314,25 @@ def main():
         # Hyperparameters
         st.subheader("Hyperparameters")
 
-        learning_rate = st.number_input(
-            "Learning Rate",
-            min_value=1e-6,
-            max_value=1e-2,
-            value=3e-4,
-            format="%.2e",
-            help="Initial learning rate for training",
-        )
+        col_lr1, col_lr2 = st.columns(2)
+        with col_lr1:
+            min_lr = st.number_input(
+                "Min Learning Rate",
+                min_value=1e-7,
+                max_value=1e-2,
+                value=1e-5,
+                format="%.2e",
+                help="Minimum learning rate (decay target)",
+            )
+        with col_lr2:
+            max_lr = st.number_input(
+                "Max Learning Rate",
+                min_value=1e-6,
+                max_value=1e-2,
+                value=3e-4,
+                format="%.2e",
+                help="Maximum learning rate (peak value)",
+            )
 
         col1, col2 = st.columns(2)
         with col1:
@@ -307,7 +343,9 @@ def main():
         with col2:
             warmup_steps = st.number_input("Warmup Steps", min_value=0, max_value=1000, value=20, step=10)
 
-            eval_every = st.number_input("Eval Every", min_value=10, max_value=1000, value=100, step=10)
+            hold_steps = st.number_input("Hold Steps", min_value=0, max_value=10000, value=0, step=10)
+
+        eval_every = st.number_input("Eval Every", min_value=10, max_value=1000, value=100, step=10)
 
         gradient_accumulation = st.number_input(
             "Gradient Accumulation Steps", min_value=1, max_value=32, value=1, step=1
@@ -333,10 +371,12 @@ def main():
         with col_start:
             if st.button("Start Training", use_container_width=True, disabled=is_running):
                 config = {
-                    "learning_rate": learning_rate,
+                    "min_lr": min_lr,
+                    "max_lr": max_lr,
                     "batch_size": batch_size,
                     "max_steps": max_steps,
                     "warmup_steps": warmup_steps,
+                    "hold_steps": hold_steps,
                     "eval_every": eval_every,
                     "gradient_accumulation": gradient_accumulation,
                     "max_seq_length": max_seq_length,
@@ -361,6 +401,16 @@ def main():
         if os.path.exists("training_overrides.yaml"):
             st.caption(f"Config: training_overrides.yaml")
 
+        # Show training process info if running
+        if is_running and hasattr(st.session_state, "training_pid"):
+            st.caption(f"Process ID: {st.session_state.training_pid}")
+
+            # Show log file location
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            stdout_log = os.path.join(script_dir, "training_stdout.log")
+            if os.path.exists(stdout_log):
+                st.caption(f"Log: training_stdout.log")
+
         st.divider()
 
         # File paths
@@ -379,10 +429,12 @@ def main():
                 {
                     "model": selected_model,
                     "dataset": selected_dataset,
-                    "learning_rate": learning_rate,
+                    "min_lr": min_lr,
+                    "max_lr": max_lr,
                     "batch_size": batch_size,
                     "max_steps": max_steps,
                     "warmup_steps": warmup_steps,
+                    "hold_steps": hold_steps,
                     "eval_every": eval_every,
                     "gradient_accumulation": gradient_accumulation,
                     "max_seq_length": max_seq_length,
@@ -436,7 +488,7 @@ def main():
                         st.code(f.read())
 
     # Main content area
-    tab1, tab2, tab3 = st.tabs(["Training Progress", "Validation Output", "About"])
+    tab1, tab2, tab3, tab4 = st.tabs(["Training Progress", "Validation Output", "Training Logs", "About"])
 
     with tab1:
         # Parse current training data and update history
@@ -550,6 +602,64 @@ def main():
             st.info("Waiting for validation data... Make sure `validation.txt` is being generated.")
 
     with tab3:
+        st.header("Training Logs")
+
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        stdout_log = os.path.join(script_dir, "training_stdout.log")
+        stderr_log = os.path.join(script_dir, "training_stderr.log")
+
+        # Display stdout log
+        if os.path.exists(stdout_log):
+            st.subheader("Standard Output")
+            try:
+                with open(stdout_log, "r") as f:
+                    stdout_content = f.read()
+                    if stdout_content:
+                        # Show last 100 lines
+                        lines = stdout_content.split("\n")
+                        last_lines = lines[-100:] if len(lines) > 100 else lines
+                        st.text_area(
+                            "Training Output (last 100 lines)", "\n".join(last_lines), height=400, disabled=True
+                        )
+
+                        # Download button
+                        st.download_button(
+                            label="Download Full Output Log",
+                            data=stdout_content,
+                            file_name=f"training_stdout_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log",
+                            mime="text/plain",
+                        )
+                    else:
+                        st.info("Output log is empty")
+            except Exception as e:
+                st.error(f"Error reading output log: {e}")
+        else:
+            st.info("No output log file found. Start training to generate logs.")
+
+        st.divider()
+
+        # Display stderr log
+        if os.path.exists(stderr_log):
+            st.subheader("Error Output")
+            try:
+                with open(stderr_log, "r") as f:
+                    stderr_content = f.read()
+                    if stderr_content:
+                        st.text_area("Error Log", stderr_content, height=200, disabled=True)
+
+                        # Download button
+                        st.download_button(
+                            label="Download Error Log",
+                            data=stderr_content,
+                            file_name=f"training_stderr_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log",
+                            mime="text/plain",
+                        )
+                    else:
+                        st.success("No errors reported")
+            except Exception as e:
+                st.error(f"Error reading error log: {e}")
+
+    with tab4:
         st.header("About This Dashboard")
 
         st.markdown(
