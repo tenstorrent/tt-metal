@@ -434,7 +434,7 @@ Tensor Tensor::reshape(const ttnn::Shape& new_logical_shape, const ttnn::Shape& 
 Tensor Tensor::with_tensor_topology(TensorTopology tensor_topology) const {
     Tensor result = *this;
     result.tensor_attributes =
-        std::make_shared<TensorAttributes>(tensor_attributes->with_tensor_topology(tensor_topology));
+        std::make_shared<TensorAttributes>(tensor_attributes->with_tensor_topology(std::move(tensor_topology)));
     return result;
 }
 
