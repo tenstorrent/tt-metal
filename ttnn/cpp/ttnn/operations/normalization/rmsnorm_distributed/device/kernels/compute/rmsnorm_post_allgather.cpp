@@ -194,7 +194,9 @@ void MAIN {
     }
     cb_pop_front(cb_eps, 1);
     cb_pop_front(cb_reduce, 1);
-    cb_pop_front(cb_gamma, Wt);
+    if constexpr (do_gamma) {
+        cb_pop_front(cb_gamma, Wt);
+    }
     if constexpr (do_beta) {
         cb_pop_front(cb_beta, Wt);
     }
