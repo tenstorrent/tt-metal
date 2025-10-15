@@ -509,7 +509,7 @@ def create_tt_model(
     ],
     ids=[
         "batch-32",  # throughput
-        "batch-32-non-uniform-sampling",  # throughtput w/ non-uniform sampling
+        "batch-32-non-uniform-sampling",  # throughput w/ non-uniform sampling
         "batch-1",  # latency
         "evals-1",  # Single user, 32 repeated batches, smaller prompts (<4K)
         "evals-32",  # 32 users, 32 repeated batches, smaller prompts (<4K)
