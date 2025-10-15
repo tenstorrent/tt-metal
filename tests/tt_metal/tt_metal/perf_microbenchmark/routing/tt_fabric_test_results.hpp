@@ -25,15 +25,15 @@ namespace tt::tt_fabric::fabric_tests {
 
 // Bandwidth measurement result structures
 struct BandwidthResult {
-    uint32_t num_devices;
-    uint32_t device_id;
-    RoutingDirection direction;
-    uint32_t total_traffic_count;
-    uint32_t num_packets;
-    uint32_t packet_size;
-    uint64_t cycles;
-    double bandwidth_GB_s;
-    double packets_per_second;
+    uint32_t num_devices{};
+    uint32_t device_id{};
+    RoutingDirection direction = RoutingDirection::NONE;
+    uint32_t total_traffic_count{};
+    uint32_t num_packets{};
+    uint32_t packet_size{};
+    uint64_t cycles{};
+    double bandwidth_GB_s{};
+    double packets_per_second{};
     std::optional<double> telemetry_bw_GB_s_min;
     std::optional<double> telemetry_bw_GB_s_avg;
     std::optional<double> telemetry_bw_GB_s_max;
@@ -41,14 +41,14 @@ struct BandwidthResult {
 
 struct BandwidthResultSummary {
     std::string test_name;
-    uint32_t num_iterations;
+    uint32_t num_iterations{};
     std::string ftype;
     std::string ntype;
     std::string topology;
-    uint32_t num_links;
-    uint32_t num_packets;
+    uint32_t num_links{};
+    uint32_t num_packets{};
     std::vector<uint32_t> num_devices;
-    uint32_t packet_size;
+    uint32_t packet_size{};
     std::vector<double> cycles_vector;
     std::vector<double> bandwidth_vector_GB_s;
     std::vector<double> packets_per_second_vector;
@@ -93,7 +93,7 @@ struct ComparisonResult {
 
 // Used to organize per-test speedups by test topology, packet size, and ntype
 struct SpeedupsByTopology {
-    Topology topology;
+    Topology topology = Topology::Linear;
     double topology_geomean_speedup{};
     std::unordered_map<uint32_t, std::vector<double>> speedups_by_packet_size;
     std::unordered_map<uint32_t, double> geomean_speedup_by_packet_size;
