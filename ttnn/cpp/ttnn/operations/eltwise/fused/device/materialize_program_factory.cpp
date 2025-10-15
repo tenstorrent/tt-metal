@@ -21,8 +21,7 @@ void set_or_update_runtime_arguments(
     const fused::MaterializeDeviceOperation::tensor_args_t& tensor_args,
     fused::MaterializeDeviceOperation::tensor_return_value_t& output_tensor,
     F handle_args) {
-    const auto tile = output_tensor.tensor_spec().tile();
-    const auto num_tiles = output_tensor.physical_volume() / tile.get_tile_hw();
+    const auto num_tiles = output_tensor.physical_volume() / output_tensor.tensor_spec().tile().get_tile_hw();
     const auto
         [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
             tt::tt_metal::split_work_to_cores(operation_attributes.worker_grid, num_tiles);

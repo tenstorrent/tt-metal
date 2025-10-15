@@ -76,7 +76,6 @@ MaterializeDeviceOperation::invoke(lazy::FunctionView expression) {
 
     const auto& input_tensor = input_tensors.front();
     auto device = input_tensor.device();
-    auto memory_config = input_tensor.memory_config();
     auto worker_cores =
         device->worker_cores(metal::HalProgrammableCoreType::TENSIX, device->get_sub_device_ids().front());
 
@@ -87,7 +86,7 @@ MaterializeDeviceOperation::invoke(lazy::FunctionView expression) {
             .inputs = std::move(inputs),
             .output = expression.cb_index(),
             .params = std::move(params),
-            .memory_config = std::move(memory_config),
+            .memory_config = input_tensor.memory_config(),
             .dtype = expression.dtype(),
             .worker_grid = std::move(worker_cores)},
         tensor_args_t{.input_tensors = std::move(input_tensors)}};
