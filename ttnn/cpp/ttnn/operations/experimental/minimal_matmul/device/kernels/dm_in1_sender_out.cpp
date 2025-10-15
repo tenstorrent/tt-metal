@@ -143,6 +143,10 @@ void kernel_main() {
 
                     noc_async_write(in1_start_address, in1_unicast_data_addr, in1_block_num_tiles * in1_tile_size);
 
+#ifdef ARCH_BLACKHOLE
+                    noc_async_writes_flushed();
+#endif
+
                     noc_semaphore_set_remote(in1_valid_semaphore_addr, in1_receiver_semaphore_noc_addr);
                 }
             }
