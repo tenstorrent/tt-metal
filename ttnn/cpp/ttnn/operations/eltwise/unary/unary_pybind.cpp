@@ -1078,7 +1078,7 @@ void bind_sigmoid_accurate(py::module& module, const unary_operation_t& operatio
 
         Args:
             input_tensor (ttnn.Tensor): the input tensor.
-            fast_and_approximate_mode (bool, optional): Enables accurate version of exponential operation. Defaults to `False`.
+            fast_and_approximate_mode (bool, optional): Enables fast and approximate mode for exponential operation. When False, uses the accurate version of exponential algorithm. Defaults to `False`.
 
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
@@ -1106,7 +1106,7 @@ void bind_sigmoid_accurate(py::module& module, const unary_operation_t& operatio
             >>> output = {1}(tensor)
 
             >>> tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> output = {1}(tensor, False)
+            >>> output = {1}(tensor, fast_and_approximate_mode = False)
         )doc",
         ttnn::sigmoid_accurate.base_name(),
         ttnn::sigmoid_accurate.python_fully_qualified_name());
