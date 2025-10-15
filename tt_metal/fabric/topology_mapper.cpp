@@ -252,9 +252,16 @@ std::unordered_map<MeshId, std::unordered_set<tt::tt_metal::AsicID>> TopologyMap
 
     // Populate corners per mesh
     for (const auto& [mesh_id, mesh_hostnames] : mesh_id_to_host_names) {
+        // Ensure an entry exists even if no corners are discovered (e.g., 1x1 meshes)
+        (void)mesh_corner_map[mesh_id];
         // Get the corners for each host
         for (const auto& host_name : mesh_hostnames) {
-            for (const auto& corner : host_corners.at(host_name)) {
+            auto hc_it = host_corners.find(host_name);
+            if (hc_it == host_corners.end()) {
+                // No local ASICs or no detected corners on this host; skip. 1x1 will be handled downstream.
+                continue;
+            }
+            for (const auto& corner : hc_it->second) {
                 bool is_mesh_corner = true;
                 // Check if the corner is a mesh corner
                 // The mesh corner is the one that is not connected to any other host in the mesh

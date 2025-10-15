@@ -317,6 +317,19 @@ void PhysicalSystemDescriptor::run_local_discovery() {
                 .eth_conn = EthConnection(eth_chan, dst_chan, false)});
         }
     }
+    // Fallback: If no connectivity was discovered, still register all local ASICs as isolated nodes.
+    // This ensures callers (e.g., TopologyMapper) can query hosts' ASICs even without links.
+    if (asic_graph.empty()) {
+        for (const auto& [chip_id, unique_id] : chip_unique_ids) {
+            AsicID asic{unique_id};
+            if (asic_descriptors_.find(asic) == asic_descriptors_.end()) {
+                add_local_asic_descriptor(asic, chip_id);
+            }
+            // Touch the node to create an empty adjacency list for this ASIC on this host.
+            (void)asic_graph[asic];
+        }
+    }
+
     this->generate_local_ethernet_metrics();
     system_graph_.host_connectivity_graph[hostname] = {};
 }

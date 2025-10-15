@@ -246,6 +246,51 @@ TEST_F(TopologyMapperTest, N300MeshGraphTest) {
         MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(0, 1)));
 }
 
+TEST_F(TopologyMapperTest, P100MeshGraphTest) {
+    const std::filesystem::path p100_mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tt_metal/fabric/mesh_graph_descriptors/p100_mesh_graph_descriptor.yaml";
+
+    auto mesh_graph = MeshGraph(p100_mesh_graph_desc_path.string());
+
+    // Create a local mesh binding for testing
+    LocalMeshBinding local_mesh_binding;
+    local_mesh_binding.mesh_ids = {MeshId{0}};
+    local_mesh_binding.host_rank = MeshHostRankId{0};
+
+    auto topology_mapper = TopologyMapper(mesh_graph, *physical_system_descriptor_, local_mesh_binding);
+
+    // Single-chip mesh: 1x1 with chip id 0
+    const MeshId mesh_id{0};
+    EXPECT_EQ(mesh_graph.get_mesh_shape(mesh_id), MeshShape(1, 1));
+    EXPECT_EQ(topology_mapper.get_mesh_shape(mesh_id), MeshShape(1, 1));
+
+    const auto& host_ranks = topology_mapper.get_host_ranks(mesh_id);
+    EXPECT_EQ(host_ranks.size(), 1u);
+    EXPECT_EQ(host_ranks.values(), std::vector<MeshHostRankId>({MeshHostRankId(0)}));
+
+    // Mapping checks for the single fabric node
+    auto fabric_node = FabricNodeId(mesh_id, 0);
+    auto asic_id = topology_mapper.get_asic_id_from_fabric_node_id(fabric_node);
+
+    // Neighbors should be empty for a single-chip system
+    EXPECT_EQ(physical_system_descriptor_->get_asic_neighbors(asic_id).size(), 0u);
+
+    // Bidirectional mappings
+    auto phys_chip_id = topology_mapper.get_physical_chip_id_from_fabric_node_id(fabric_node);
+    EXPECT_EQ(phys_chip_id, 0);
+    EXPECT_EQ(topology_mapper.get_fabric_node_id_from_physical_chip_id(0), fabric_node);
+    EXPECT_EQ(topology_mapper.get_physical_chip_id_from_asic_id(asic_id), 0);
+    EXPECT_EQ(topology_mapper.get_fabric_node_id_from_asic_id(asic_id), fabric_node);
+
+    // Host rank for chip 0 should be rank 0
+    EXPECT_EQ(topology_mapper.get_host_rank_for_chip(mesh_id, 0), MeshHostRankId(0));
+
+    // Chip IDs list
+    EXPECT_EQ(
+        topology_mapper.get_chip_ids(mesh_id), MeshContainer<chip_id_t>(MeshShape(1, 1), std::vector<chip_id_t>{0}));
+}
+
 TEST_F(TopologyMapperTest, T3kMultiMeshTest) {
     // TODO: This test is currently disabled due to lack of support for multi-mesh-per-host systems
     GTEST_SKIP();
