@@ -520,11 +520,7 @@ void populate_interleaved_buffer_write_dispatch_cmds(
         dispatch_params.page_size_to_write,
         use_pinned_transfer ? dispatch_params.total_pages_to_write : dispatch_params.pages_per_txn);
 
-    if (use_pinned_transfer) {
-        const uint64_t data_size_bytes = (uint64_t)dispatch_params.total_pages_to_write * dispatch_params.page_size_to_write;
-        command_sequence.add_prefetch_relay_linear_h(
-            dispatch_params.pinned_src_noc_xy, data_size_bytes, dispatch_params.pinned_src_addr_lo);
-    } else {
+    if (not use_pinned_transfer) {
         const uint32_t data_size_bytes = dispatch_params.pages_per_txn * dispatch_params.page_size_to_write;
         // TODO: Consolidate
         if (dispatch_params.write_large_pages()) {
@@ -650,9 +646,7 @@ void issue_buffer_dispatch_command_sequence(
     } else {
         calculator.add_dispatch_write_paged<false>(dispatch_params.page_size_to_write, num_pages_to_write);
     }
-    if (use_pinned_memory) {
-        calculator.add_prefetch_relay_linear_h();
-    } else {
+    if (not use_pinned_memory) {
         calculator.add_data<false>(data_size_bytes);
     }
 
@@ -702,6 +696,26 @@ void issue_buffer_dispatch_command_sequence(
     sysmem_manager.issue_queue_push_back(cmd_sequence_sizeB, dispatch_params.cq_id);
     sysmem_manager.fetch_queue_reserve_back(dispatch_params.cq_id);
     sysmem_manager.fetch_queue_write(cmd_sequence_sizeB, dispatch_params.cq_id);
+
+    if (use_pinned_memory) {
+        // Send CQ_PREFETCH_CMD_RELAY_LINEAR_H command in a separate fetch Q entry to ensure it will be processed in
+        // prefetch_h for remote device. If we don't do this, prefetch_h will "fetch" it along with the
+        // CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH command and send it to prefetch_d
+        calculator.clear();
+        calculator.add_prefetch_relay_linear_h();
+        const uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();
+        void* cmd_region = sysmem_manager.issue_queue_reserve(cmd_sequence_sizeB, dispatch_params.cq_id);
+        HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
+
+        const uint64_t data_size_bytes =
+            (uint64_t)dispatch_params.total_pages_to_write * dispatch_params.page_size_to_write;
+        command_sequence.add_prefetch_relay_linear_h(
+            dispatch_params.pinned_src_noc_xy, data_size_bytes, dispatch_params.pinned_src_addr_lo);
+
+        sysmem_manager.issue_queue_push_back(cmd_sequence_sizeB, dispatch_params.cq_id);
+        sysmem_manager.fetch_queue_reserve_back(dispatch_params.cq_id);
+        sysmem_manager.fetch_queue_write(cmd_sequence_sizeB, dispatch_params.cq_id);
+    }
 }
 
 // Top level helper functions to write buffer data
