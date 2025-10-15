@@ -71,7 +71,6 @@ def test_sparse_matmul_with_nnz(device, mkn, num_experts, num_batches, tile_h, t
 
     core_x, core_y = core_grid
     output_tile = ttnn.Tile([tile_h, tile_w])
-    core_x, core_y = 3, 4
     output_t = ttnn.sparse_matmul(
         in0_t,
         in1_t,
