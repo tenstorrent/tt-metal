@@ -78,6 +78,7 @@ struct LogSigmoid {
 struct Sigmoid_accurate {
     static Tensor invoke(
         const Tensor& input,
+        bool fast_and_approximate_mode = false,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
@@ -309,6 +310,15 @@ struct Clamp {
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
 
+struct Rsub {
+    template <typename T>
+    static Tensor invoke(
+        const Tensor& input_tensor,
+        T param,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+};
+
 }  // namespace operations::unary
 
 // NOLINTBEGIN(bugprone-macro-parentheses)
@@ -466,7 +476,7 @@ constexpr auto sigmoid_accurate =
     ttnn::register_operation<"ttnn::sigmoid_accurate", ttnn::operations::unary::Sigmoid_accurate>();
 constexpr auto log_sigmoid = ttnn::register_operation<"ttnn::log_sigmoid", ttnn::operations::unary::LogSigmoid>();
 constexpr auto unary_chain = ttnn::register_operation<"ttnn::unary_chain", ttnn::operations::unary::Unary_chain>();
-
+constexpr auto rsub_sfpu = ttnn::register_operation<"ttnn::rsub_sfpu", ttnn::operations::unary::Rsub>();
 constexpr auto add_sfpu = ttnn::register_operation<
     "ttnn::add_sfpu",
     ttnn::operations::unary::SymmetricBinop<ttnn::operations::unary::UnaryOpType::ADD_UNARY_SFPU>>();

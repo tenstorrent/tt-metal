@@ -26,16 +26,10 @@ void reduce_scatter_common_validates(
     TT_FATAL(
         page_size % input_tensor.buffer()->alignment() == 0,
         "reduce_scatter_minimal_async currently requires aligned pages");
-    if (topology == ::ttnn::ccl::Topology::Linear) {
-        TT_FATAL(
-            dim == 3, "reduce_scatter_minimal_async line topology implementation only supports scattering on dim 3");
-    } else if (topology == ::ttnn::ccl::Topology::Ring) {
-        TT_FATAL(
-            dim == 1 || dim == 2 || dim == 3,
-            "reduce_scatter_minimal_async ring topology implementation only supports scattering on dim 1, 2, or 3");
-    } else {
-        TT_FATAL(false, "reduce_scatter_minimal_async only supports linear or ring topology");
-    }
+
+    TT_FATAL(
+        dim == 1 || dim == 2 || dim == 3, "reduce_scatter_minimal_async only supports scattering on dim 1, 2, or 3");
+
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to all_gather need to be on device!");
     TT_FATAL(
         input_tensor.buffer() != nullptr,

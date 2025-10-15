@@ -582,3 +582,11 @@ jobs:
 
           echo "✅ Updated PR body with test status"
           echo "✅ PR #$PR_NUMBER ready for review"
+
+      - name: Auto-approve by codeowners
+        if: success()
+        run: |
+          echo "🚀 Triggering auto-approval"
+          gh workflow run "code-analysis.yaml" \
+            --ref "Aswinmcw/approve_llk_uplift" \
+            --repo "${{ github.repository }}"
