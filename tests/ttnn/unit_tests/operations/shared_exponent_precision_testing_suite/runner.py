@@ -69,16 +69,16 @@ def _compute_metrics(reference: torch.Tensor, test: torch.Tensor) -> dict:
         pcc = pcc if torch.isfinite(torch.tensor(pcc)) else 0.0
 
     metrics = {
-        ResultKeys.PCC_KEY: pcc,
-        ResultKeys.ALLCLOSE_1E_2_KEY: torch.allclose(reference, test, rtol=1e-2),
-        ResultKeys.ALLCLOSE_1E_3_KEY: torch.allclose(reference, test, rtol=1e-3),
-        ResultKeys.MAX_ABS_ERROR_KEY: torch.max(torch.abs(reference - test)).item(),
-        ResultKeys.MEAN_ABS_ERROR_KEY: torch.mean(torch.abs(reference - test)).item(),
-        ResultKeys.MAX_REL_ERROR_KEY: torch.max(rel_error).item(),
-        ResultKeys.MEAN_REL_ERROR_KEY: torch.mean(rel_error).item(),
-        ResultKeys.ULP_MEAN_KEY: ulp_errors["mean"],
-        ResultKeys.ULP_MAX_KEY: ulp_errors["max"],
-        ResultKeys.ULP_PERCENTILES_KEY: ulp_errors["percentiles"],
+        ResultKeys.PCC: pcc,
+        ResultKeys.ALLCLOSE_1E_2: torch.allclose(reference, test, rtol=1e-2),
+        ResultKeys.ALLCLOSE_1E_3: torch.allclose(reference, test, rtol=1e-3),
+        ResultKeys.MAX_ABS_ERROR: torch.max(torch.abs(reference - test)).item(),
+        ResultKeys.MEAN_ABS_ERROR: torch.mean(torch.abs(reference - test)).item(),
+        ResultKeys.MAX_REL_ERROR: torch.max(rel_error).item(),
+        ResultKeys.MEAN_REL_ERROR: torch.mean(rel_error).item(),
+        ResultKeys.ULP_MEAN: ulp_errors["mean"],
+        ResultKeys.ULP_MAX: ulp_errors["max"],
+        ResultKeys.ULP_PERCENTILES: ulp_errors["percentiles"],
     }
 
     return metrics
@@ -86,37 +86,37 @@ def _compute_metrics(reference: torch.Tensor, test: torch.Tensor) -> dict:
 
 # Operation mapping: Key -> (torch_function, ttnn_function, uses_axis, uses_second_tensor)
 OPERATION_MAP = {
-    OperationType.SUM_KEY: (
+    OperationType.SUM: (
         lambda tensor, axis, _: torch.sum(tensor, dim=axis),
         lambda tensor, axis, _: ttnn.sum(tensor, dim=axis),
         True,  # uses_axis
         False,  # uses_second_tensor
     ),
-    OperationType.MEAN_KEY: (
+    OperationType.MEAN: (
         lambda tensor, axis, _: torch.mean(tensor, dim=axis),
         lambda tensor, axis, _: ttnn.mean(tensor, dim=axis),
         True,
         False,
     ),
-    OperationType.MAX_KEY: (
+    OperationType.MAX: (
         lambda tensor, axis, _: torch.max(tensor, dim=axis)[0],
         lambda tensor, axis, _: ttnn.max(tensor, dim=axis),
         True,
         False,
     ),
-    OperationType.MATMUL_KEY: (
+    OperationType.MATMUL: (
         lambda tensor, _, second_tensor: torch.matmul(tensor, second_tensor),
         lambda tensor, _, second_tensor: ttnn.matmul(tensor, second_tensor),
         False,
         True,
     ),
-    OperationType.MATMUL_TT_KEY: (
+    OperationType.MATMUL_TT: (
         lambda tensor, _, second_tensor: torch.matmul(tensor, second_tensor),
         lambda tensor, _, second_tensor: ttnn.matmul(tensor, second_tensor),
         False,
         True,
     ),
-    OperationType.SOFTMAX_KEY: (
+    OperationType.SOFTMAX: (
         lambda tensor, axis, _: torch.softmax(tensor, dim=axis),
         lambda tensor, axis, _: ttnn.softmax(tensor, dim=axis),
         True,
@@ -162,7 +162,7 @@ def _run_precision_test(
     torch_optional_second_tensor = None
     ttnn_optional_second_tensor = None
     torch_tensor_bf16 = input_tensor.bfloat16()
-    if operation in [OperationType.MATMUL_KEY, OperationType.MATMUL_TT_KEY]:
+    if operation in [OperationType.MATMUL, OperationType.MATMUL_TT]:
         # For matmul, create a second tensor with compatible shape
         second_shape = (input_tensor.shape[1], input_tensor.shape[0])
         torch_optional_second_tensor = torch.randn(second_shape).bfloat16()
@@ -170,22 +170,22 @@ def _run_precision_test(
     # Convert to ttnn tensors
     ttnn_tensor_bf8_b = ttnn.from_torch(torch_tensor_bf16, device=device, layout=ttnn.Layout.TILE, dtype=ttnn.bfloat8_b)
 
-    if operation == OperationType.MATMUL_KEY:
+    if operation == OperationType.MATMUL:
         ttnn_optional_second_tensor = ttnn.from_torch(
             torch_optional_second_tensor,
             device=device,
             layout=ttnn.Layout.TILE,
             dtype=ttnn.bfloat8_b,
         )
-    elif operation == OperationType.MATMUL_TT_KEY:
+    elif operation == OperationType.MATMUL_TT:
         ttnn_optional_second_tensor = ttnn.from_torch(
             torch_optional_second_tensor,
             device=device,
             layout=ttnn.Layout.TILE,
             dtype=ttnn.bfloat8_b,
             tile=ttnn.Tile(
-                (32, matmul_config[MatmulTTConfig.TILE_W_KEY]),
-                transpose_tile=matmul_config[MatmulTTConfig.TRANSPOSE_KEY],
+                (32, matmul_config[MatmulTTConfig.TILE_W]),
+                transpose_tile=matmul_config[MatmulTTConfig.TRANSPOSE],
             ),
         )
 
@@ -237,14 +237,14 @@ def _run_shape_experiments(shape, operations: list, axes: int, device) -> dict:
             # Test each operation
             for operation in tqdm(operations, desc="Operations", leave=False):
                 # Some operations don't use axis
-                if operation == OperationType.MATMUL_KEY:
+                if operation == OperationType.MATMUL:
                     results[pattern_name][dist_name][operation] = _run_precision_test(test_input, device, operation)
-                elif operation == OperationType.MATMUL_TT_KEY:
+                elif operation == OperationType.MATMUL_TT:
                     for tile_w in [16, 32]:
                         for transpose in [False, True]:
                             config = {
-                                MatmulTTConfig.TILE_W_KEY: tile_w,
-                                MatmulTTConfig.TRANSPOSE_KEY: transpose,
+                                MatmulTTConfig.TILE_W: tile_w,
+                                MatmulTTConfig.TRANSPOSE: transpose,
                             }
                             if operation not in results[pattern_name][dist_name]:
                                 results[pattern_name][dist_name][operation] = {}
@@ -278,30 +278,30 @@ def run_experiments() -> dict:
 
     # Configuration
     operations = [
-        OperationType.SUM_KEY,
-        OperationType.MEAN_KEY,
-        OperationType.MAX_KEY,
-        OperationType.MATMUL_KEY,
-        OperationType.MATMUL_TT_KEY,
+        OperationType.SUM,
+        OperationType.MEAN,
+        OperationType.MAX,
+        OperationType.MATMUL,
+        OperationType.MATMUL_TT,
     ]
     axes = [0, 1]  # Test both row-wise and column-wise operations
 
     # Test 1: Single tile (32x32)
     logger.info("=== Running single tile experiments ===")
     single_tile_shape = (32, 32)
-    results[ShapeType.SINGLE_TILE_KEY] = _run_shape_experiments(single_tile_shape, operations, axes, device)
+    results[ShapeType.SINGLE_TILE] = _run_shape_experiments(single_tile_shape, operations, axes, device)
 
     # Test 2: Multiple tiles (16x16 tiles of 32x32 each = 512x512)
     logger.info("=== Running multi-tile experiments ===")
     multi_tile_shape = (512, 512)
-    key = ShapeType.MULTI_TILE_KEY + "-512x512"
+    key = ShapeType.MULTI_TILE + "-512x512"
     results[key] = _run_shape_experiments(multi_tile_shape, operations, axes, device)
 
     # Test 3: Rectangular shapes (to test non-square behavior)
     logger.info("=== Running rectangular experiments ===")
     rect_shapes = [(32, 128), (128, 32), (64, 256)]
     for shape in rect_shapes:
-        key = ShapeType.RECTANGULAR_KEY + "-" + str(shape)
+        key = ShapeType.RECTANGULAR + "-" + str(shape)
         results[key] = _run_shape_experiments(shape, operations, axes, device)
 
     ttnn.close_device(device)

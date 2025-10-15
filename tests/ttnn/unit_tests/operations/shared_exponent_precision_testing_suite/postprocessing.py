@@ -44,12 +44,12 @@ def _analyze_pattern_impact(results: dict) -> dict:
             }
 
         # Collect metrics
-        pattern_stats[pattern]["pcc_values"].append(metrics.get(ResultKeys.PCC_KEY, 1.0))
-        pattern_stats[pattern]["max_abs_errors"].append(metrics.get(ResultKeys.MAX_ABS_ERROR_KEY, 0))
-        pattern_stats[pattern]["mean_abs_errors"].append(metrics.get(ResultKeys.MEAN_ABS_ERROR_KEY, 0))
-        pattern_stats[pattern]["ulp_max_values"].append(metrics.get(ResultKeys.ULP_MAX_KEY, 0))
-        pattern_stats[pattern]["ulp_mean_values"].append(metrics.get(ResultKeys.ULP_MEAN_KEY, 0))
-        pattern_stats[pattern]["max_rel_errors"].append(metrics.get(ResultKeys.MAX_REL_ERROR_KEY, 0))
+        pattern_stats[pattern]["pcc_values"].append(metrics.get(ResultKeys.PCC, 1.0))
+        pattern_stats[pattern]["max_abs_errors"].append(metrics.get(ResultKeys.MAX_ABS_ERROR, 0))
+        pattern_stats[pattern]["mean_abs_errors"].append(metrics.get(ResultKeys.MEAN_ABS_ERROR, 0))
+        pattern_stats[pattern]["ulp_max_values"].append(metrics.get(ResultKeys.ULP_MAX, 0))
+        pattern_stats[pattern]["ulp_mean_values"].append(metrics.get(ResultKeys.ULP_MEAN, 0))
+        pattern_stats[pattern]["max_rel_errors"].append(metrics.get(ResultKeys.MAX_REL_ERROR, 0))
         pattern_stats[pattern]["count"] += 1
 
         # Track operations per pattern
@@ -352,11 +352,11 @@ def _find_worst_cases(results: dict, top_n: int = 10, metrics_to_track=None):
     """
     if metrics_to_track is None:
         metrics_to_track = [
-            ResultKeys.PCC_KEY,
-            ResultKeys.MAX_ABS_ERROR_KEY,
-            ResultKeys.ULP_MAX_KEY,
-            ResultKeys.MEAN_ABS_ERROR_KEY,
-            ResultKeys.MAX_REL_ERROR_KEY,
+            ResultKeys.PCC,
+            ResultKeys.MAX_ABS_ERROR,
+            ResultKeys.ULP_MAX,
+            ResultKeys.MEAN_ABS_ERROR,
+            ResultKeys.MAX_REL_ERROR,
         ]
 
     # Initialize worst cases tracker
@@ -375,7 +375,7 @@ def _find_worst_cases(results: dict, top_n: int = 10, metrics_to_track=None):
 
     # Sort and keep top N worst for each metric
     for metric_name in worst_cases:
-        if metric_name == ResultKeys.PCC_KEY:
+        if metric_name == ResultKeys.PCC:
             # For PCC, lower is worse
             worst_cases[metric_name] = sorted(worst_cases[metric_name], key=lambda x: x["value"])[:top_n]
         else:
@@ -423,7 +423,7 @@ def _flatten_results(results: dict):
                     continue
 
                 for operation, op_data in dist_data.items():
-                    if operation == OperationType.MATMUL_KEY:
+                    if operation == OperationType.MATMUL:
                         # Direct metrics for matmul
                         case_info = {
                             "shape_type": shape_type,
@@ -434,7 +434,7 @@ def _flatten_results(results: dict):
                         }
                         flattened.append((case_info, op_data))
 
-                    elif operation == OperationType.MATMUL_TT_KEY:
+                    elif operation == OperationType.MATMUL_TT:
                         # Handle matmul_tt structure: [tile_w][transpose] -> metrics
                         for tile_w, tile_data in op_data.items():
                             if isinstance(tile_data, dict):
@@ -446,8 +446,8 @@ def _flatten_results(results: dict):
                                             "distribution": distribution,
                                             "operation": operation,
                                             "params": {
-                                                MatmulTTConfig.TILE_W_KEY: tile_w,
-                                                MatmulTTConfig.TRANSPOSE_KEY: transpose,
+                                                MatmulTTConfig.TILE_W: tile_w,
+                                                MatmulTTConfig.TRANSPOSE: transpose,
                                             },
                                         }
                                         flattened.append((case_info, metrics))
@@ -490,7 +490,7 @@ def _format_worst_cases_report(worst_cases: dict, top_n: int = 5):
     report_lines = ["# Worst Cases Analysis\n"]
 
     metric_descriptions = {
-        ResultKeys.PCC_KEY: "Lowest PCC (Pearson Correlation Coefficient)",
+        ResultKeys.PCC: "Lowest PCC (Pearson Correlation Coefficient)",
         ResultKeys.MAX_ABS_ERROR: "Highest Maximum Absolute Error",
         ResultKeys.MEAN_ABS_ERROR: "Highest Mean Absolute Error",
         ResultKeys.MAX_REL_ERROR: "Highest Maximum Relative Error",
@@ -613,11 +613,11 @@ def worst_cases_analysis(
     markdown_content.append("\n\n# Summary Tables\n")
 
     metric_descriptions = {
-        ResultKeys.PCC_KEY: "PCC (Pearson Correlation Coefficient) - Worst Cases",
-        ResultKeys.MAX_ABS_ERROR_KEY: "Maximum Absolute Error - Worst Cases",
-        ResultKeys.MEAN_ABS_ERROR_KEY: "Mean Absolute Error - Worst Cases",
-        ResultKeys.MAX_REL_ERROR_KEY: "Maximum Relative Error - Worst Cases",
-        ResultKeys.ULP_MAX_KEY: "Maximum ULP Error - Worst Cases",
+        ResultKeys.PCC: "PCC (Pearson Correlation Coefficient) - Worst Cases",
+        ResultKeys.MAX_ABS_ERROR: "Maximum Absolute Error - Worst Cases",
+        ResultKeys.MEAN_ABS_ERROR: "Mean Absolute Error - Worst Cases",
+        ResultKeys.MAX_REL_ERROR: "Maximum Relative Error - Worst Cases",
+        ResultKeys.ULP_MAX: "Maximum ULP Error - Worst Cases",
     }
 
     for metric in worst_cases.keys():
@@ -680,15 +680,15 @@ def _create_matmul_table(results: dict) -> str:
     for operation, result in results:
         row = [
             operation,
-            f"{result[ResultKeys.PCC_KEY]:.6f}",
-            f"{result[ResultKeys.MAX_ABS_ERROR_KEY]:.2f}",
-            f"{result[ResultKeys.MEAN_ABS_ERROR_KEY]:.2f}",
-            f"{result[ResultKeys.MAX_REL_ERROR_KEY]:.6f}",
-            f"{result[ResultKeys.MEAN_REL_ERROR_KEY]:.6f}",
-            f"{result[ResultKeys.ULP_MEAN_KEY]:.2f}",
-            f"{result[ResultKeys.ULP_MAX_KEY]:.0f}",
-            "True" if result[ResultKeys.ALLCLOSE_1E_2_KEY] else "False",
-            "True" if result[ResultKeys.ALLCLOSE_1E_3_KEY] else "False",
+            f"{result[ResultKeys.PCC]:.6f}",
+            f"{result[ResultKeys.MAX_ABS_ERROR]:.2f}",
+            f"{result[ResultKeys.MEAN_ABS_ERROR]:.2f}",
+            f"{result[ResultKeys.MAX_REL_ERROR]:.6f}",
+            f"{result[ResultKeys.MEAN_REL_ERROR]:.6f}",
+            f"{result[ResultKeys.ULP_MEAN]:.2f}",
+            f"{result[ResultKeys.ULP_MAX]:.0f}",
+            "True" if result[ResultKeys.ALLCLOSE_1E_2] else "False",
+            "True" if result[ResultKeys.ALLCLOSE_1E_3] else "False",
         ]
         table_lines.append("| " + " | ".join(row) + " |")
 
@@ -730,15 +730,15 @@ def _create_matmul_tt_table(results: dict) -> str:
             operation,
             str(tile_w),
             str(transpose),
-            f"{result[ResultKeys.PCC_KEY]:.6f}",
-            f"{result[ResultKeys.MAX_ABS_ERROR_KEY]:.2f}",
-            f"{result[ResultKeys.MEAN_ABS_ERROR_KEY]:.2f}",
-            f"{result[ResultKeys.MAX_REL_ERROR_KEY]:.6f}",
-            f"{result[ResultKeys.MEAN_REL_ERROR_KEY]:.6f}",
-            f"{result[ResultKeys.ULP_MEAN_KEY]:.2f}",
-            f"{result[ResultKeys.ULP_MAX_KEY]:.0f}",
-            "True" if result[ResultKeys.ALLCLOSE_1E_2_KEY] else "False",
-            "True" if result[ResultKeys.ALLCLOSE_1E_3_KEY] else "False",
+            f"{result[ResultKeys.PCC]:.6f}",
+            f"{result[ResultKeys.MAX_ABS_ERROR]:.2f}",
+            f"{result[ResultKeys.MEAN_ABS_ERROR]:.2f}",
+            f"{result[ResultKeys.MAX_REL_ERROR]:.6f}",
+            f"{result[ResultKeys.MEAN_REL_ERROR]:.6f}",
+            f"{result[ResultKeys.ULP_MEAN]:.2f}",
+            f"{result[ResultKeys.ULP_MAX]:.0f}",
+            "True" if result[ResultKeys.ALLCLOSE_1E_2] else "False",
+            "True" if result[ResultKeys.ALLCLOSE_1E_3] else "False",
         ]
         table_lines.append("| " + " | ".join(row) + " |")
 
@@ -781,15 +781,15 @@ def _create_other_ops_table(results: dict) -> str:
         row = [
             operation,
             str(axis),
-            f"{result[ResultKeys.PCC_KEY]:.6f}",
-            f"{result[ResultKeys.MAX_ABS_ERROR_KEY]:.2f}",
-            f"{result[ResultKeys.MEAN_ABS_ERROR_KEY]:.2f}",
-            f"{result[ResultKeys.MAX_REL_ERROR_KEY]:.6f}",
-            f"{result[ResultKeys.MEAN_REL_ERROR_KEY]:.6f}",
-            f"{result[ResultKeys.ULP_MEAN_KEY]:.2f}",
-            f"{result[ResultKeys.ULP_MAX_KEY]:.0f}",
-            "True" if result[ResultKeys.ALLCLOSE_1E_2_KEY] else "False",
-            "True" if result[ResultKeys.ALLCLOSE_1E_3_KEY] else "False",
+            f"{result[ResultKeys.PCC]:.6f}",
+            f"{result[ResultKeys.MAX_ABS_ERROR]:.2f}",
+            f"{result[ResultKeys.MEAN_ABS_ERROR]:.2f}",
+            f"{result[ResultKeys.MAX_REL_ERROR]:.6f}",
+            f"{result[ResultKeys.MEAN_REL_ERROR]:.6f}",
+            f"{result[ResultKeys.ULP_MEAN]:.2f}",
+            f"{result[ResultKeys.ULP_MAX]:.0f}",
+            "True" if result[ResultKeys.ALLCLOSE_1E_2] else "False",
+            "True" if result[ResultKeys.ALLCLOSE_1E_3] else "False",
         ]
         table_lines.append("| " + " | ".join(row) + " |")
 
@@ -835,9 +835,9 @@ def _dict_to_markdown(results_dict):
                 other_results = []
 
                 for operation, operation_data in distribution_data.items():
-                    if operation == OperationType.MATMUL_KEY:
+                    if operation == OperationType.MATMUL:
                         matmul_results.append((operation, operation_data))
-                    elif operation == OperationType.MATMUL_TT_KEY:
+                    elif operation == OperationType.MATMUL_TT:
                         # Process matmul_tt nested structure
                         for tile_w, tile_data in operation_data.items():
                             for transpose, result in tile_data.items():
