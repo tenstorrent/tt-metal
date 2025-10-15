@@ -253,6 +253,47 @@ class ModuleList(Module):
         raise ValueError(msg)
 
 
+class UnregisteredModule:
+    """A wrapper for Module instances that prevents automatic registration in parent modules.
+
+    This class provides a way to hold references to Module instances without having them
+    automatically registered as child modules when assigned as attributes to another Module. This is
+    useful when you need to store a module reference but don't want it to appear in the module
+    hierarchy or participate in operations like parameter loading.
+
+    The UnregisteredModule acts as a transparent proxy, forwarding all attribute access and method
+    calls to the wrapped module.
+
+    Args:
+        module: The Module instance to wrap and keep unregistered.
+
+    Example:
+        >>> class MyModule(Module):
+        ...     def __init__(self):
+        ...         super().__init__()
+        ...         # This will be registered as a child module
+        ...         self.registered_child = SomeModule()
+        ...         # This will NOT be registered as a child module
+        ...         self.unregistered_child = UnregisteredModule(SomeModule())
+        ...
+        ...     def forward(self, x):
+        ...         return self.registered_child(x) + self.unregistered_child(x)
+        ...
+        >>> my_module = MyModule()
+        >>> list(my_module.named_children())
+        [('registered_child', <SomeModule instance>)]
+    """
+
+    def __init__(self, module: Module) -> None:
+        self.module = module
+
+    def __getattr__(self, name: str) -> Any:  # noqa: ANN401
+        return getattr(self.module, name)
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
+        return self.module(*args, **kwargs)
+
+
 class Parameter:
     def __init__(
         self,
