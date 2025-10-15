@@ -104,3 +104,10 @@ In order to run and generate summaary of results for Full grid matmul test scena
 1. `git checkout skrsmanovic/cb-timing-testing-matmul`
 2. `TT_METAL_DEVICE_PROFILER=1 pytest scripts/cb_analysis/sweep_cb_length.py`
 3. Results are generated in `cb_matmul_length_logs/$timestamp/cb_matmul_length_all_stats.csv`
+
+| test case                           | variant | core_compute_cb_wait_front | core_compute_cb_reserve_back | core_writer_cb_wait_front | core_reader_cb_reserve_back | DM/Compute bound |
+|:-----------------------------------:|:-------:|:--------------------------:|:----------------------------:|:-------------------------:|:---------------------------:|:----------------:|
+| 1D matmul - DM bound                | zone    | 1959086.0                  | 17623.0                      | 14952.0                   | 89292.0                     | DM reader        |
+| 2D matmul with gelu - Compute bound | zone    | 91181.0                    | 53267.0                      | 181085.0                  | 1873649.0                   | Compute unpack   |
+| 1D matmul - DM bound                | counter | 162504.0                   | 771.0                        | 1253.0                    | 5021.0                      | DM reader        |
+| 2D matmul with gelu - Compute bound | counter | 7199.0                     | 512.0                        | 15152.0                   | 103827.0                    | Compute unpack   |
