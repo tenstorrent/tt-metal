@@ -18,8 +18,16 @@ namespace ttnn::operations::data_movement::detail {
 namespace py = pybind11;
 
 void py_bind_experimental_split(pybind11::module& module) {
-    module.def(
-        "experimental_split",
+    // Create a submodule for experimental functions
+    auto split_submodule = module.def_submodule("split", "Experimental split operation");
+
+    // Add attributes to the submodule
+    split_submodule.attr("version") = "LAZY_JIT";
+    split_submodule.attr("python_fully_qualified_name") = "ttnn.jit_split";
+
+    // Define the function in the submodule and store the function object
+    auto split_func = split_submodule.def(
+        "operation_function",
         [](const ttnn::Tensor& input_tensor,
            int num_splits,
            int dim,
@@ -60,7 +68,7 @@ void py_bind_experimental_split(pybind11::module& module) {
         py::arg("dim"),
         py::kw_only(),
         py::arg("memory_config") = std::nullopt,
-        R"doc(experimental_split(input_tensor: ttnn.Tensor, num_splits: int, dim: int, *, Optional[ttnn.MemoryConfig] = None) -> List[ttnn.Tensor]
+        R"doc(split(input_tensor: ttnn.Tensor, num_splits: int, dim: int, *, Optional[ttnn.MemoryConfig] = None) -> List[ttnn.Tensor]
 
         Returns a list of split tensors from splitting the input tensor into num_splits parts along the specified dimension.
         This is a JIT version that builds a computation graph without immediate execution.
@@ -83,10 +91,12 @@ void py_bind_experimental_split(pybind11::module& module) {
         Example:
 
             >>> tensor = ttnn.from_torch(torch.rand(1, 1, 4, 8), dtype=ttnn.bfloat16, device=device)
-            >>> split_tensors = ttnn.experimental_split(tensor, 2, 3)
+            >>> split_tensors = ttnn.experimental.split(tensor, 2, 3)
             >>> print(f"Number of splits: {len(split_tensors)}")
 
         )doc");
+
+    split_submodule.attr("function") = split_func.attr("operation_function");
 }
 
 }  // namespace ttnn::operations::data_movement::detail

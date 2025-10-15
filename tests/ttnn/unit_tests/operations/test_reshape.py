@@ -28,14 +28,12 @@ def test_reshape(input_shape, target_shape, device):
     torch_tensor = torch.randn((N, C, H, W), dtype=torch.float32).bfloat16().float()
 
     ttnn_tensor = ttnn.Tensor(torch_tensor, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
-    reshaped_tensor = ttnn._ttnn.operations.data_movement.experimental_reshape(
-        ttnn_tensor, target_shape[0], target_shape[1], target_shape[2], target_shape[3]
-    )
+    reshaped_tensor = ttnn.jit_reshape(ttnn_tensor, target_shape[0], target_shape[1], target_shape[2], target_shape[3])
     assert reshaped_tensor.producer_node() is not None
     assert reshaped_tensor.producer_node() != 0
     assert list(reshaped_tensor.padded_shape) == list(target_shape)
 
-    splits = ttnn._ttnn.operations.data_movement.experimental_split(reshaped_tensor, 2, 3)
+    splits = ttnn.jit_split(reshaped_tensor, 2, 3)
     assert len(splits) == 2
     new_target_shape = (target_shape[0], target_shape[1], target_shape[2], target_shape[3] // 2)
     assert splits[0].padded_shape == new_target_shape

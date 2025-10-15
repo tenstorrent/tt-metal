@@ -15,8 +15,15 @@
 namespace ttnn::operations::data_movement {
 
 void py_bind_reshape(pybind11::module& module) {
-    module.def(
-        "experimental_reshape",
+    auto reshape_submodule = module.def_submodule("reshape_on_device", "Experimental reshape operation");
+
+    // Add attributes to the submodule
+    reshape_submodule.attr("version") = "LAZY_JIT";
+    reshape_submodule.attr("python_fully_qualified_name") = "ttnn.jit_reshape";
+
+    // Define the function in the submodule and store the function object
+    auto reshape_func = reshape_submodule.def(
+        "operation_function",
         [](const ttnn::Tensor& input_tensor,
            int W,
            int Z,
@@ -94,6 +101,8 @@ void py_bind_reshape(pybind11::module& module) {
             >>> output = ttnn.reshape_on_device(tensor, 1, 1, 2, 2)
 
         )doc");
+
+    reshape_submodule.attr("function") = reshape_func.attr("operation_function");
 }
 
 }  // namespace ttnn::operations::data_movement
