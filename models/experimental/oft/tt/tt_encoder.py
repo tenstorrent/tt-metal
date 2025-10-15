@@ -80,7 +80,6 @@ class TTObjectEncoder:
         dimensions = self._decode_dimensions(device, dim_offsets)
         angles = self._decode_angles(device, ang_offsets)
         peaks_torch, max_inds, scores, smoothed, mp = self._decode_heatmaps(device, heatmaps)
-
         # fallback to torch
         classids = torch.nonzero(peaks_torch)[:, 0]
 
