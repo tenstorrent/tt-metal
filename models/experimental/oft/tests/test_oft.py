@@ -132,7 +132,11 @@ def test_oft_forward(
             [pcc_integral_img, pcc_output],
         )
     ):
-        torch_tt = ttnn.to_torch(tt, dtype=torch.float32).permute(0, 3, 1, 2).reshape(ref.shape)
+        if isinstance(tt, ttnn.Tensor):
+            torch_tt = ttnn.to_torch(tt, dtype=torch.float32).permute(0, 3, 1, 2).reshape(ref.shape)
+        else:
+            torch_tt = tt.reshape(ref.shape)  # assume it's already a torch tensor in the right format
+
         passed, pcc = check_with_pcc(ref, torch_tt, exp_pcc)
         abs, rel = get_abs_and_relative_error(ref, torch_tt)
 

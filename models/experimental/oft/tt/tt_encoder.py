@@ -67,7 +67,7 @@ class TTObjectEncoder:
         self.nms_thresh = nms_thresh  # is there a typo in refernece code? nms_tresh is passed but heatmaps is called with default value 0.05
         self.nms_conv = Conv(
             parameters.nms_conv,
-            parameters.conv_args,
+            parameters.layer_args,
             output_layout=ttnn.ROW_MAJOR_LAYOUT,
             dtype=ttnn.bfloat16,
             weights_dtype=ttnn.bfloat16,

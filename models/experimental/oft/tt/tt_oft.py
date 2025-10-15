@@ -363,9 +363,6 @@ class OFT:
 
         integral_image = ttnn.to_memory_config(integral_image, ttnn.L1_MEMORY_CONFIG)
 
-        logger.debug(f"Integral image shape: {integral_image.shape}")
-        logger.debug(f"Bounding box corners shape: {self.bbox_corners[0][0].shape}")
-
         grid_size = self.device.compute_with_storage_grid_size()
         core_grid = ttnn.CoreGrid(y=grid_size.y, x=grid_size.x)
 
@@ -460,8 +457,11 @@ class OFT:
                 vox_feats_slice, ortho_feats, self.num_slices, i, memory_config=ttnn.DRAM_MEMORY_CONFIG
             )
 
-        integral_image = ttnn.to_memory_config(integral_image, ttnn.DRAM_MEMORY_CONFIG)
         ortho_feats = ortho_feats[:, :, : w - PAD_AMOUNT, :]
+
+        # this is used as intermediate tensor for tracking pcc over model
+        # if removing intermediate tensors, remove this but call ttnn.deallocate(integral_image)
+        integral_image = ttnn.to_torch(integral_image).permute(0, 3, 1, 2)
 
         if use_signpost:
             signpost(header="OFT block ended")
