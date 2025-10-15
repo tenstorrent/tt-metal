@@ -5,6 +5,7 @@
 #include <variant>
 #include <cstdint>
 #include "reshape_kernel_common.hpp"
+#include <tt-metalium/work_split.hpp>
 
 #pragma once
 using PadValue = std::variant<uint32_t, float>;
@@ -461,10 +462,9 @@ inline ReshapeRTArgsEstimate estimate_reshape_rt_args(
     ReshapeRTArgsEstimate estimate{0, 0, 0, false};
 
     const auto input_shape = input_tensor.logical_shape();
-    const auto padded_input_shape = input_tensor.padded_shape();
-
     auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
     auto face_shape = input_tensor.tensor_spec().tile().get_face_shape();
+
     const uint32_t num_input_pages = tt::div_up(input_tensor.physical_volume(), tile_shape[0] * tile_shape[1]);
     const uint32_t num_output_pages = tt::div_up(padded_output_shape.volume(), tile_shape[0] * tile_shape[1]);
 
@@ -472,40 +472,63 @@ inline ReshapeRTArgsEstimate estimate_reshape_rt_args(
         num_input_pages, num_output_pages, input_shape, output_shape, tile_shape, face_shape);
 
     auto device = input_tensor.device();
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    uint32_t num_cores = compute_with_storage_grid_size.x * compute_with_storage_grid_size.y;
-    estimate.total_cores_used = std::min(num_cores, num_output_pages);
+    const auto grid = device->compute_with_storage_grid_size();
 
-    uint32_t pages_per_core = (num_output_pages + estimate.total_cores_used - 1) / estimate.total_cores_used;
+    const auto
+        [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
+            tt::tt_metal::split_work_to_cores(grid, num_output_pages);
 
-    // Estimate RT args per core
-    uint32_t base_args = 4;
-    uint32_t template_args = compressed_map.pattern_templates.size() * 4;
+    estimate.total_cores_used = num_cores;
 
-    // Estimate runs per core (pessimistic)
-    uint32_t estimated_short_runs_per_core = 0;
-    uint32_t estimated_long_runs_per_core = 0;
+    uint32_t page_idx_start = 0;
+    uint32_t max_reader_args = 0, max_writer_args = 0;
 
-    for (const auto& run : compressed_map.page_pattern_runs) {
-        uint32_t run_pages = run.output_page_index_end - run.output_page_index_start + 1;
-        // Assume uniform distribution across cores (simplified)
-        if (run_pages <= pages_per_core * 2) {
+    for (auto c : corerange_to_cores(all_cores, std::nullopt)) {
+        uint32_t increment = 0;
+        if (core_group_1.contains(c)) {
+            increment = num_tiles_per_core_group_1;
+        } else if (core_group_2.contains(c)) {
+            increment = num_tiles_per_core_group_2;
+        } else {
+            continue;
+        }
+
+        uint32_t page_idx_end = page_idx_start + increment;
+
+        size_t num_short_runs = 0, num_long_runs = 0;
+        std::set<uint32_t> used_template_indices;
+
+        for (const auto& run : compressed_map.page_pattern_runs) {
+            if (run.output_page_index_end < page_idx_start || run.output_page_index_start >= page_idx_end) {
+                continue;
+            }
+            used_template_indices.insert(run.pattern_template_index);
             if (run.run_length == 1) {
-                estimated_short_runs_per_core += 1;
+                num_short_runs++;
             } else {
-                estimated_long_runs_per_core += 1;
+                num_long_runs++;
             }
         }
+
+        uint32_t base_args = 4;  // num_templates, num_short_runs, num_long_runs, buffer_addr
+        uint32_t template_args = used_template_indices.size() * 4;  // 4 args per template
+        uint32_t short_run_args = num_short_runs * 3;
+        uint32_t long_run_args = num_long_runs * 5;
+
+        uint32_t core_reader_args = base_args + template_args + short_run_args + long_run_args;
+        uint32_t core_writer_args = core_reader_args;  // Writer uses same args structure
+
+        max_reader_args = std::max(max_reader_args, core_reader_args);
+        max_writer_args = std::max(max_writer_args, core_writer_args);
+
+        page_idx_start += increment;
     }
 
-    uint32_t short_run_args = estimated_short_runs_per_core * 3;
-    uint32_t long_run_args = estimated_long_runs_per_core * 5;
-
-    estimate.max_reader_args_per_core = base_args + template_args + short_run_args + long_run_args;
-    estimate.max_writer_args_per_core = estimate.max_reader_args_per_core;  // Similar complexity
+    estimate.max_reader_args_per_core = max_reader_args;
+    estimate.max_writer_args_per_core = max_writer_args;
 
     // Check if we exceed limits
-    estimate.exceeds_limit = (estimate.max_reader_args_per_core > 341) || (estimate.max_writer_args_per_core > 341);
+    estimate.exceeds_limit = (estimate.max_reader_args_per_core >= 341) || (estimate.max_writer_args_per_core >= 341);
 
     return estimate;
 }
