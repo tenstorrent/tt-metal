@@ -16,8 +16,13 @@ namespace sfpu {
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int num_rows, int ITERATIONS = 8>
 inline void calculate_max_pool_with_indices(uint values_tile_idx, uint indices_tile_idx, uint tile_idx) {
-    _calculate_max_pool_with_indices_<APPROXIMATION_MODE, is_fp32_dest_acc_en, num_rows, ITERATIONS>(
-        values_tile_idx, indices_tile_idx, tile_idx);
+    if constexpr (num_rows == 9) {
+        _calculate_max_pool_with_indices_<APPROXIMATION_MODE, is_fp32_dest_acc_en, 9, ITERATIONS>(
+            values_tile_idx, indices_tile_idx, tile_idx);
+    } else {
+        _calculate_max_pool_with_indices_generic_<APPROXIMATION_MODE, is_fp32_dest_acc_en, num_rows, ITERATIONS>(
+            values_tile_idx, indices_tile_idx, tile_idx);
+    }
 }
 
 template <bool APPROXIMATION_MODE>
