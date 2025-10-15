@@ -11,6 +11,8 @@
 #include <algorithm>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tuple>
+#include <utility>
+#include <vector>
 
 namespace ttnn::operations::experimental::minimal_matmul::detail {
 
@@ -34,6 +36,62 @@ static inline std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t> deter
     }
 
     return {M_block_tiles, K_block_tiles, N_block_tiles, subblock_h, subblock_w};
+}
+
+// Build a linear order of cores along one axis for data movement, plus index of the current core
+static inline std::pair<std::vector<CoreCoord>, uint32_t> build_core_order_for_axis(
+    const CoreCoord& core,
+    bool transpose_core_grid,
+    uint32_t axis_length,
+    tt::tt_metal::NOC noc,
+    bool axis_is_x_when_not_transposed,
+    const CoreCoord& initial_endpoint) {
+    std::vector<CoreCoord> order;
+    order.reserve(axis_length);
+    order.push_back(initial_endpoint);
+
+    // Determine which coordinate of the current core defines its position along this axis
+    const size_t current_axis_value = transpose_core_grid ? (axis_is_x_when_not_transposed ? core.y : core.x)
+                                                          : (axis_is_x_when_not_transposed ? core.x : core.y);
+
+    // Direction along the axis: increasing for NOC_0, decreasing for NOC_1
+    const bool increasing = (noc == tt::tt_metal::NOC::NOC_0);
+
+    uint32_t index_of_current = 0;  // default to 0 if axis_length == 1
+    for (uint32_t worker_idx = 1; worker_idx < axis_length; ++worker_idx) {
+        CoreCoord worker_core = core;
+        size_t& coord_to_modify = transpose_core_grid ? (axis_is_x_when_not_transposed ? worker_core.y : worker_core.x)
+                                                      : (axis_is_x_when_not_transposed ? worker_core.x : worker_core.y);
+
+        coord_to_modify = increasing ? worker_idx : (axis_length - worker_idx);
+        if (coord_to_modify == current_axis_value) {
+            index_of_current = worker_idx;
+        }
+        order.push_back(worker_core);
+    }
+    return {order, index_of_current};
+}
+
+static inline CoreCoord clamped_prev(const std::vector<CoreCoord>& order, uint32_t index) {
+    return order.at(index == 0 ? 0 : index - 1);
+}
+
+static inline CoreCoord clamped_next(const std::vector<CoreCoord>& order, uint32_t index) {
+    const uint32_t last = static_cast<uint32_t>(order.size() - 1);
+    return order.at(index >= last ? last : index + 1);
+}
+
+// Append tensor accessors in a consistent order
+static inline void append_accessors(
+    std::vector<uint32_t>& args,
+    const Tensor& main_tensor,
+    const Tensor& output_tensor,
+    const std::optional<const Tensor>& bias_tensor) {
+    tt::tt_metal::TensorAccessorArgs(*main_tensor.buffer()).append_to(args);
+    tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(args);
+    if (bias_tensor.has_value()) {
+        tt::tt_metal::TensorAccessorArgs(*bias_tensor.value().buffer()).append_to(args);
+    }
 }
 
 tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
@@ -282,11 +340,8 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
         in0_is_output_writer,
         true  // is_injector_core
     };
-    tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer()).append_to(in0_sender_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(in0_sender_compile_time_args);
-    if (use_bias) {
-        tt::tt_metal::TensorAccessorArgs(*bias_tensor.value().buffer()).append_to(in0_sender_compile_time_args);
-    }
+    append_accessors(in0_sender_compile_time_args, input_tensor, output_tensor, bias_tensor);
+
     auto in0_sender_kernels_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in0_sender.cpp",
@@ -313,11 +368,8 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
         in0_is_output_writer,
         false  // is_injector_core
     };
-    tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer()).append_to(in0_receiver_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(in0_receiver_compile_time_args);
-    if (use_bias) {
-        tt::tt_metal::TensorAccessorArgs(*bias_tensor.value().buffer()).append_to(in0_receiver_compile_time_args);
-    }
+    append_accessors(in0_receiver_compile_time_args, input_tensor, output_tensor, bias_tensor);
+
     auto in0_receiver_kernels_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in0_sender.cpp",
@@ -344,11 +396,7 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
         in1_is_output_writer,
         true  // is_injector_core
     };
-    tt::tt_metal::TensorAccessorArgs(*weight_tensor.buffer()).append_to(in1_sender_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(in1_sender_compile_time_args);
-    if (use_bias) {
-        tt::tt_metal::TensorAccessorArgs(*bias_tensor.value().buffer()).append_to(in1_sender_compile_time_args);
-    }
+    append_accessors(in1_sender_compile_time_args, weight_tensor, output_tensor, bias_tensor);
     auto in1_sender_kernels_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in1_sender_out.cpp",
@@ -375,11 +423,7 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
         in1_is_output_writer,
         false  // is_injector_core
     };
-    tt::tt_metal::TensorAccessorArgs(*weight_tensor.buffer()).append_to(in1_receiver_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(in1_receiver_compile_time_args);
-    if (use_bias) {
-        tt::tt_metal::TensorAccessorArgs(*bias_tensor.value().buffer()).append_to(in1_receiver_compile_time_args);
-    }
+    append_accessors(in1_receiver_compile_time_args, weight_tensor, output_tensor, bias_tensor);
     auto in1_receiver_kernels_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in1_sender_out.cpp",
@@ -431,61 +475,38 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
         CoreCoord left_core = {(std::size_t)0, (std::size_t)core.y};
         CoreCoord top_core = {(std::size_t)core.x, (std::size_t)0};
 
-        std::vector<CoreCoord> in0_core_order;
-        in0_core_order.push_back(transpose_core_grid ? top_core : left_core);
-        uint32_t in0_core_order_index = 0;
-        for (uint32_t in0_worker_idx = 1; in0_worker_idx < in1_parallel_axis_cores; in0_worker_idx++) {
-            CoreCoord in0_worker_core = core;
-            size_t& in0_coord_to_modify = transpose_core_grid ? in0_worker_core.y : in0_worker_core.x;
-            if (in0_noc == tt::tt_metal::NOC::NOC_1) {
-                in0_coord_to_modify = in1_parallel_axis_cores - in0_worker_idx;
-            } else {
-                in0_coord_to_modify = in0_worker_idx;
-            }
-            if (in0_coord_to_modify == (transpose_core_grid ? core.y : core.x)) {
-                in0_core_order_index = in0_worker_idx;
-            }
-            in0_core_order.push_back(in0_worker_core);
-        }
-        std::vector<CoreCoord> in1_core_order;
-        in1_core_order.push_back(transpose_core_grid ? left_core : top_core);
-        uint32_t in1_core_order_index = 0;
-        for (uint32_t in1_worker_idx = 1; in1_worker_idx < in0_parallel_axis_cores; in1_worker_idx++) {
-            CoreCoord in1_worker_core = core;
-            size_t& in1_coord_to_modify = transpose_core_grid ? in1_worker_core.x : in1_worker_core.y;
-            if (in1_noc == tt::tt_metal::NOC::NOC_0) {
-                in1_coord_to_modify = in1_worker_idx;
-            } else {
-                in1_coord_to_modify = in0_parallel_axis_cores - in1_worker_idx;
-            }
-            if (in1_coord_to_modify == (transpose_core_grid ? core.x : core.y)) {
-                in1_core_order_index = in1_worker_idx;
-            }
-            in1_core_order.push_back(in1_worker_core);
-        }
-        auto in0_prev_core = in0_core_order.at((std::size_t)std::max((int32_t)in0_core_order_index - 1, 0));
-        auto in0_next_core = in0_core_order.at(
-            (std::size_t)std::min((size_t)in0_core_order_index + 1, (size_t)in1_parallel_axis_cores - 1));
-        auto in1_prev_core = in1_core_order.at((std::size_t)std::max((int32_t)in1_core_order_index - 1, 0));
-        auto in1_next_core = in1_core_order.at(
-            (std::size_t)std::min((size_t)in1_core_order_index + 1, (size_t)in0_parallel_axis_cores - 1));
+        auto [in0_core_order, in0_core_order_index] = build_core_order_for_axis(
+            core,
+            transpose_core_grid,
+            in1_parallel_axis_cores,
+            in0_noc,
+            /*axis_is_x_when_not_transposed=*/true,
+            /*initial_endpoint=*/(transpose_core_grid ? top_core : left_core));
+
+        auto [in1_core_order, in1_core_order_index] = build_core_order_for_axis(
+            core,
+            transpose_core_grid,
+            in0_parallel_axis_cores,
+            in1_noc,
+            /*axis_is_x_when_not_transposed=*/false,
+            /*initial_endpoint=*/(transpose_core_grid ? left_core : top_core));
+
+        auto in0_prev_core = clamped_prev(in0_core_order, in0_core_order_index);
+        auto in0_next_core = clamped_next(in0_core_order, in0_core_order_index);
+        auto in1_prev_core = clamped_prev(in1_core_order, in1_core_order_index);
+        auto in1_next_core = clamped_next(in1_core_order, in1_core_order_index);
 
         auto in0_prev_core_physical = device->worker_core_from_logical_core(in0_prev_core);
-        ;
         auto in0_next_core_physical = device->worker_core_from_logical_core(in0_next_core);
-        ;
         auto in1_prev_core_physical = device->worker_core_from_logical_core(in1_prev_core);
-        ;
         auto in1_next_core_physical = device->worker_core_from_logical_core(in1_next_core);
-        ;
 
-        // uint32_t M_start_block = std::min(M_blocks_per_core * in0_idx, M_blocks - 1);
-        // uint32_t M_end_block = std::min(M_blocks_per_core * (in0_idx + 1) - 1, M_blocks - 1);
-        // uint32_t N_start_block = std::min(N_blocks_per_core * in1_idx, N_blocks - 1);
-        // uint32_t N_end_block = std::min(N_blocks_per_core * (in1_idx + 1) - 1, N_blocks - 1);
-
-        // NOTE: I do not use std::min here because even if a core doesn't need to process a block, the mcast core needs
-        // its ACK
+        /**
+         * NOTE: Some cores are doing unnecessary work, on blocks which are processed just to make
+         * the total number of blocks divisible by the number of cores.
+         * We can't yet get rid of these blocks, since the receiver cores must ack
+         * all blocks that sender cores are expected to send.
+         */
         uint32_t M_start_block = M_blocks_per_core * in0_idx;
         uint32_t M_end_block = M_blocks_per_core * (in0_idx + 1) - 1;
         uint32_t N_start_block = N_blocks_per_core * in1_idx;
@@ -496,83 +517,54 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
         uint32_t defer_write_k_block = core.y * k_blocks_per_core;
         defer_write_k_block = std::min(defer_write_k_block, K_blocks - 1);
 
-        bool is_in0_sink = core == in0_core_order.at(in1_parallel_axis_cores - 1);
-        bool is_in1_sink = core == in1_core_order.at(in0_parallel_axis_cores - 1);
+        bool is_in0_sink = core == in0_core_order.back();
+        bool is_in1_sink = core == in1_core_order.back();
+
+        std::vector<uint32_t> in0_args = {
+            in0_addr,
+            out_addr,
+            in2_addr,
+            is_in0_sink,
+            (std::uint32_t)in0_next_core_physical.x,  // in0_dest_noc_x
+            (std::uint32_t)in0_next_core_physical.y,  // in0_dest_noc_y
+            (std::uint32_t)in0_prev_core_physical.x,  // in0_sender_noc_x
+            (std::uint32_t)in0_prev_core_physical.y,  // in0_sender_noc_y
+            M_start_block,
+            M_end_block,
+            N_start_block,
+            N_end_block,
+            defer_write_k_block,
+        };
 
         if (in1_idx == 0) {
             // in0 sender
-            std::vector<uint32_t> in0_sender_args = {
-                in0_addr,
-                out_addr,
-                in2_addr,
-                is_in0_sink,
-                (std::uint32_t)in0_next_core_physical.x,  // in0_dest_noc_x
-                (std::uint32_t)in0_next_core_physical.y,  // in0_dest_noc_y
-                (std::uint32_t)in0_prev_core_physical.x,  // in0_sender_noc_x
-                (std::uint32_t)in0_prev_core_physical.y,  // in0_sender_noc_y
-                M_start_block,
-                M_end_block,
-                N_start_block,
-                N_end_block,
-                defer_write_k_block,
-            };
-            SetRuntimeArgs(program, in0_sender_kernels_id, core, in0_sender_args);
+            SetRuntimeArgs(program, in0_sender_kernels_id, core, in0_args);
         } else {
             // in0 receiver
-            std::vector<uint32_t> in0_receiver_args = {
-                in0_addr,
-                out_addr,
-                in2_addr,
-                is_in0_sink,
-                (std::uint32_t)in0_next_core_physical.x,  // in0_dest_noc_x
-                (std::uint32_t)in0_next_core_physical.y,  // in0_dest_noc_y
-                (std::uint32_t)in0_prev_core_physical.x,  // in0_sender_noc_x
-                (std::uint32_t)in0_prev_core_physical.y,  // in0_sender_noc_y
-                M_start_block,
-                M_end_block,
-                N_start_block,
-                N_end_block,
-                defer_write_k_block,
-            };
-            SetRuntimeArgs(program, in0_receiver_kernels_id, core, in0_receiver_args);
+            SetRuntimeArgs(program, in0_receiver_kernels_id, core, in0_args);
         }
 
+        std::vector<uint32_t> in1_args = {
+            in1_addr,
+            out_addr,
+            in2_addr,
+            is_in1_sink,
+            (std::uint32_t)in1_next_core_physical.x,  // in1_dest_noc_x
+            (std::uint32_t)in1_next_core_physical.y,  // in1_dest_noc_y
+            (std::uint32_t)in1_prev_core_physical.x,  // in1_sender_noc_x
+            (std::uint32_t)in1_prev_core_physical.y,  // in1_sender_noc_y
+            M_start_block,
+            M_end_block,
+            N_start_block,
+            N_end_block,
+            defer_write_k_block,
+        };
         if (in0_idx == 0) {
             // in1 sender
-            std::vector<uint32_t> in1_sender_args = {
-                in1_addr,
-                out_addr,
-                in2_addr,
-                is_in1_sink,
-                (std::uint32_t)in1_next_core_physical.x,  // in1_dest_noc_x
-                (std::uint32_t)in1_next_core_physical.y,  // in1_dest_noc_y
-                (std::uint32_t)in1_prev_core_physical.x,  // in1_sender_noc_x
-                (std::uint32_t)in1_prev_core_physical.y,  // in1_sender_noc_y
-                M_start_block,
-                M_end_block,
-                N_start_block,
-                N_end_block,
-                defer_write_k_block,
-            };
-            SetRuntimeArgs(program, in1_sender_kernels_id, core, in1_sender_args);
+            SetRuntimeArgs(program, in1_sender_kernels_id, core, in1_args);
         } else {
             // in1 receiver
-            std::vector<uint32_t> in1_receiver_args = {
-                in1_addr,
-                out_addr,
-                in2_addr,
-                is_in1_sink,
-                (std::uint32_t)in1_next_core_physical.x,  // in1_dest_noc_x
-                (std::uint32_t)in1_next_core_physical.y,  // in1_dest_noc_y
-                (std::uint32_t)in1_prev_core_physical.x,  // in1_sender_noc_x
-                (std::uint32_t)in1_prev_core_physical.y,  // in1_sender_noc_y
-                M_start_block,
-                M_end_block,
-                N_start_block,
-                N_end_block,
-                defer_write_k_block,
-            };
-            SetRuntimeArgs(program, in1_receiver_kernels_id, core, in1_receiver_args);
+            SetRuntimeArgs(program, in1_receiver_kernels_id, core, in1_args);
         }
 
         std::vector<uint32_t> compute_runtime_args = {
