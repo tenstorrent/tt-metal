@@ -74,7 +74,7 @@ def fa_rand(*shape):
     return normal_1 + normal_2 * bernoulli
 
 
-def create_sliding_window_mask(b, nh, seq_len, cur_pos_list, sliding_window):
+def create_sliding_window_mask(b, nh, seq_len, cur_pos_list, sliding_window_size):
     """
     Create attention mask for sliding window attention.
 
@@ -83,7 +83,7 @@ def create_sliding_window_mask(b, nh, seq_len, cur_pos_list, sliding_window):
         nh: number of heads
         seq_len: sequence length
         cur_pos_list: list of current positions for each batch
-        sliding_window: sliding window size
+        sliding_window_size: sliding window size
 
     Returns:
         attn_mask: [b, nh, 1, seq_len] mask with -inf for positions outside window
@@ -95,7 +95,7 @@ def create_sliding_window_mask(b, nh, seq_len, cur_pos_list, sliding_window):
 
         # Calculate sliding window bounds
         window_end = cur_pos + 1  # exclusive
-        window_start = max(0, window_end - sliding_window)
+        window_start = max(0, window_end - sliding_window_size)
 
         # Mask positions before sliding window start
         if window_start > 0:
@@ -359,7 +359,7 @@ def run_test_sdpa_decode_single_iter(
     sub_core_grids=None,
     override_q_chunk_size=None,
     override_k_chunk_size=None,
-    sliding_window=None,
+    sliding_window_size=None,
 ):
     compute_grid_size = device.compute_with_storage_grid_size()
     if sub_core_grids is None:
@@ -435,9 +435,9 @@ def run_test_sdpa_decode_single_iter(
     logger.debug(f"Using padded num heads: {padded_num_heads}")
 
     if causal:
-        if sliding_window is not None:
+        if sliding_window_size is not None:
             # Use sliding window mask
-            attn_mask = create_sliding_window_mask(b, nh, padded_layer_len, start_indices, sliding_window)
+            attn_mask = create_sliding_window_mask(b, nh, padded_layer_len, start_indices, sliding_window_size)
         else:
             # Use regular causal mask
             attn_mask = torch.zeros((b, nh, 1, padded_layer_len))
@@ -471,7 +471,7 @@ def run_test_sdpa_decode_single_iter(
                 tt_V,
                 cur_pos_tensor=start_indices_tt,
                 scale=scale,
-                sliding_window=sliding_window,
+                sliding_window_size=sliding_window_size,
                 program_config=program_config,
                 compute_kernel_config=compute_kernel_config,
                 memory_config=height_sharded_memcfg if sharded_out else dram_memcfg,
@@ -483,7 +483,7 @@ def run_test_sdpa_decode_single_iter(
                 tt_V,
                 cur_pos=start_indices,
                 scale=scale,
-                sliding_window=sliding_window,
+                sliding_window_size=sliding_window_size,
                 program_config=program_config,
                 compute_kernel_config=compute_kernel_config,
                 memory_config=height_sharded_memcfg if sharded_out else dram_memcfg,
@@ -662,7 +662,7 @@ def run_test_sdpa_decode_paged_attention(
     block_size,
     sharded_in=True,
     sharded_out=True,
-    sliding_window=None,
+    sliding_window_size=None,
 ):
     compute_grid_size = device.compute_with_storage_grid_size()
     if grid_size[0] > compute_grid_size.x or grid_size[1] > compute_grid_size.y:
@@ -774,9 +774,9 @@ def run_test_sdpa_decode_paged_attention(
         logger.info(f"Using padded num heads: {padded_num_heads}")
 
         if causal:
-            if sliding_window is not None:
+            if sliding_window_size is not None:
                 # Use sliding window mask
-                attn_mask = create_sliding_window_mask(b, nh, padded_layer_len, start_indices, sliding_window)
+                attn_mask = create_sliding_window_mask(b, nh, padded_layer_len, start_indices, sliding_window_size)
             else:
                 # Use regular causal mask
                 attn_mask = torch.zeros((b, nh, 1, padded_layer_len))
@@ -812,7 +812,7 @@ def run_test_sdpa_decode_paged_attention(
                 tt_page_table,
                 cur_pos_tensor=start_indices_tt,
                 scale=scale,
-                sliding_window=sliding_window,
+                sliding_window_size=sliding_window_size,
                 program_config=program_config,
                 compute_kernel_config=compute_kernel_config,
                 memory_config=height_sharded_memcfg if sharded_out else dram_memcfg,
@@ -1114,7 +1114,7 @@ def run_test_sdpa_decode_paged_attention_single_iter(
     ],
 )
 @pytest.mark.parametrize(
-    "b, nh, nkv, s, d, grid_size, cur_pos_tensor, sliding_window",
+    "b, nh, nkv, s, d, grid_size, cur_pos_tensor, sliding_window_size",
     (
         # [32, 8, 1, 32768, 128, (8, 6), True, None],  # Llama2-70B
         # [4, 32, 8, 4096, 128, (8, 8), True, None],  # llama 3.1 8b
@@ -1136,7 +1136,7 @@ def run_test_sdpa_decode_paged_attention_single_iter(
 )
 @pytest.mark.parametrize("block_size", (32, 64, 128), ids=["paged_32", "paged_64", "paged_128"])
 def test_sdpa_decode_paged_attention(
-    device, b, nh, nkv, s, d, kv_dtype, grid_size, q_dtype, cur_pos_tensor, sliding_window, block_size, reset_seeds
+    device, b, nh, nkv, s, d, kv_dtype, grid_size, q_dtype, cur_pos_tensor, sliding_window_size, block_size, reset_seeds
 ):
     if s == 128 * 1024 and block_size != 64:
         # 128k sequence, block_size 64 tests the sizing of the page table CB
@@ -1156,7 +1156,7 @@ def test_sdpa_decode_paged_attention(
         block_size=block_size,
         sharded_in=True,
         sharded_out=False,
-        sliding_window=sliding_window,
+        sliding_window_size=sliding_window_size,
     )
 
     assert device.num_program_cache_entries() == 4
@@ -1570,7 +1570,7 @@ def test_sdpa_decode_ndpcc(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype):
     ],
 )
 @pytest.mark.parametrize(
-    "b, nh, nkv, s, d, grid_size, sliding_window",
+    "b, nh, nkv, s, d, grid_size, sliding_window_size",
     [
         # Test different sliding window sizes
         [1, 4, 2, 1024 * 16, 128, (8, 8), 1024],  # Gemma test
@@ -1585,7 +1585,7 @@ def test_sdpa_decode_ndpcc(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype):
 @pytest.mark.parametrize("cur_pos_tensor", [False, True])
 @pytest.mark.timeout(120)
 def test_sdpa_decode_sliding_window(
-    device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, sliding_window, cur_pos_tensor
+    device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, sliding_window_size, cur_pos_tensor
 ):
     """Test sliding window attention functionality."""
 
@@ -1593,16 +1593,16 @@ def test_sdpa_decode_sliding_window(
         pytest.skip("nkv > 1 requires q_dtype to be bfloat16")
 
     # Ensure sliding window is smaller than sequence length
-    if sliding_window >= s:
-        pytest.skip(f"Sliding window {sliding_window} must be smaller than sequence length {s}")
+    if sliding_window_size >= s:
+        pytest.skip(f"Sliding window {sliding_window_size} must be smaller than sequence length {s}")
 
     ttnn.device.DisablePersistentKernelCache()
 
     # Test different positions to ensure sliding window works correctly
     test_positions = [
-        sliding_window * 2,  # Window fully slides
-        sliding_window // 2,  # Window partially filled
-        sliding_window - 1,  # Window almost full
+        sliding_window_size * 2,  # Window fully slides
+        sliding_window_size // 2,  # Window partially filled
+        sliding_window_size - 1,  # Window almost full
         s // 2,  # Middle of sequence
         s - 10,  # Near end of sequence
     ]
@@ -1611,7 +1611,7 @@ def test_sdpa_decode_sliding_window(
         if cur_pos >= s:
             continue
 
-        logger.info(f"Testing sliding window={sliding_window} at position {cur_pos}")
+        logger.info(f"Testing sliding window={sliding_window_size} at position {cur_pos}")
 
         # Test both cur_pos and cur_pos_tensor modes
         run_test_sdpa_decode_single_iter(
@@ -1628,5 +1628,5 @@ def test_sdpa_decode_sliding_window(
             sharded_in=False,
             sharded_out=False,
             start_indices=[cur_pos + i for i in range(b)],  # test a batch with different start positions
-            sliding_window=sliding_window,
+            sliding_window_size=sliding_window_size,
         )
