@@ -2,20 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
-import logging
-from loguru import logger
-
-
-@pytest.fixture(autouse=True)
-def loguru_to_std_logging():
-    class PropagateHandler(logging.Handler):
-        def emit(self, record):
-            logging.getLogger(record.name).handle(record)
-
-    logger.remove()
-    logger.add(PropagateHandler(), level="DEBUG")
-
 
 # These inputs override the default inputs used by simple_text_demo.py. Check the main demo to see the default values.
 def pytest_addoption(parser):
