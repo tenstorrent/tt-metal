@@ -38,14 +38,15 @@ void MAIN {
 
     pack_tile(0, cb_out0);  // Result is always in tile 0 after reduce operation
 
-    // Add some NOPs to ensure pack is done before we print the tile
+    // Add some NOPs to ensure pack is done before we push/print the tile
     for (uint32_t i = 0; i < 32; ++i) {
         PACK(TTI_NOP);
     }
 
-    PACK(tt::compute::common::print_full_tile(cb_out0, 0, true));
-
     cb_push_back(cb_out0, 1);
+    
+    // Print the output tile for debugging
+    // tt::compute::common::print_full_tile(cb_out0, 0, true);
 
     tile_regs_release();
 

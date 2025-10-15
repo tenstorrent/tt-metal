@@ -93,15 +93,23 @@ ALWI void fused_eltwise_binary_reduce(
     // Step 2: Reset counters before reduce operation
     MATH((_fused_eltwise_binary_uninit_()));
 
+    // Step 3: Switch banks - UNPACK thread switches srcA/srcB banks for reduce
     UNPACK((llk_unpack_AB_but_fused_so_no_mop(0, 0, 0, 0)));
 
-    // Step 3: Prepare data for reduce operation
+    MATH((llk_math_reduce_init<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY>()));
+
+    
+    // Step 3a: Prepare data for reduce operation
     MATH(eltwise_binary_reuse_dest_as_src_tile<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(0));  // Move tile 0 to srcA
+    
     MATH(ckernel::sfpu::_populate_first_tile_with_ones_());                               // Fill tile 0 with ones
     MATH(eltwise_binary_reuse_dest_as_src_tile<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(0));  // Move tile 0 to srcB
 
+
+    MATH(ckernel::sfpu::_populate_first_tile_with_zeroes_());
+
+
     // Step 4: Initialize reduce operation
-    MATH((llk_math_reduce_init<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY>()));
     PACK((llk_pack_reduce_mask_config<false /*untilize*/, reduce_dim>()));
 
     // Step 5: Perform reduce operation (result stored in tile 0)
@@ -112,7 +120,6 @@ ALWI void fused_eltwise_binary_reduce(
         if (i != 0) {
             MATH(eltwise_binary_reuse_dest_as_src_tile<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(i));
         }
-
         MATH((llk_math_reduce_column<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY, false, fp32_transpose>(
             reduce_dst_idx)));
     }
