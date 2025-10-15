@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from models.demos.vanilla_unet.tt.unet_config import TtUNetLayerConfigs, UpconvConfiguration
+from models.demos.vanilla_unet_new.tt.config import TtUNetLayerConfigs, UpconvConfiguration
 from models.tt_cnn.tt.builder import TtConv2d, TtMaxPool2d
 
 
@@ -100,7 +100,7 @@ class TtUNet:
         dec1 = self._transpose_conv(
             dec2, self.upconv1_config, fp32_dest_acc_en=False, packer_l1_acc=False, act_block_h_override=5 * 32
         )
-        dec1 = self._concatenate_skip_connection(dec1, skip1, rm=False)
+        dec1 = self._concatenate_skip_connection(dec1, skip1, use_row_major_layout_for_inputs=False)
         dec1 = self.decoder1_conv1(dec1)
         dec1 = self.decoder1_conv2(dec1)
 
@@ -155,15 +155,21 @@ class TtUNet:
             compute_config=compute_config,
         )
 
-    def _concatenate_skip_connection(self, upsampled: ttnn.Tensor, skip: ttnn.Tensor, rm=True) -> ttnn.Tensor:
-        assert upsampled.shape == skip.shape
+    def _concatenate_skip_connection(
+        self, upsampled: ttnn.Tensor, skip: ttnn.Tensor, use_row_major_layout_for_inputs=True
+    ) -> ttnn.Tensor:
+        assert (
+            upsampled.shape == skip.shape
+        ), f"Expected input tensors to have identical shapes for concatenation (was {upsampled.shape} and {skip.shape})"
 
-        input_core_grid = upsampled.memory_config().shard_spec.grid
-        input_shard_shape = upsampled.memory_config().shard_spec.shape
-        input_shard_spec = ttnn.ShardSpec(input_core_grid, input_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
-        input_memory_config = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec
-        )
+        if not skip.is_sharded():
+            input_core_grid = upsampled.memory_config().shard_spec.grid
+            input_shard_shape = upsampled.memory_config().shard_spec.shape
+            input_shard_spec = ttnn.ShardSpec(input_core_grid, input_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+            input_memory_config = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec
+            )
+            skip = ttnn.to_memory_config(skip, input_memory_config)
 
         output_core_grid = input_core_grid
         output_shard_shape = (input_shard_shape[0], input_shard_shape[1] * 2)
@@ -171,10 +177,7 @@ class TtUNet:
         output_memory_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, output_shard_spec
         )
-
-        skip = ttnn.to_memory_config(skip, input_memory_config)
-
-        if rm:
+        if use_row_major_layout_for_inputs:
             upsampled_rm = ttnn.to_layout(upsampled, ttnn.ROW_MAJOR_LAYOUT)
             skip_rm = ttnn.to_layout(skip, ttnn.ROW_MAJOR_LAYOUT)
             ttnn.deallocate(upsampled)
@@ -195,4 +198,7 @@ class TtUNet:
 
 
 def create_unet_from_configs(configs: TtUNetLayerConfigs, device: ttnn.Device) -> TtUNet:
+    """
+    Construct a TtUnet instance using TtUnetLayerConfigs configuration object
+    """
     return TtUNet(configs, device)

@@ -2,20 +2,47 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
+import os
+
 import torch
-from loguru import logger
-from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
-from models.demos.vanilla_unet.common import VANILLA_UNET_L1_SMALL_SIZE, load_torch_model
-from models.demos.vanilla_unet.reference.unet import UNet
-from models.demos.vanilla_unet.tt.ttnn_unet import create_unet_from_configs
-from models.demos.vanilla_unet.tt.unet_config import create_unet_configs_from_parameters
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from models.demos.vanilla_unet_new.reference.model import UNet
+
+VANILLA_UNET_L1_SMALL_SIZE = 12 * 8192
+VANILLA_UNET_PCC_WH = 0.9771
 
 
-def create_custom_preprocessor(device):
+def load_reference_model(model_location_generator=None):
+    if model_location_generator == None or "TT_GH_CI_INFRA" not in os.environ:
+        weights_path = "models/demos/vanilla_unet/unet.pt"
+        if not os.path.exists(weights_path):
+            os.system("bash models/demos/vanilla_unet/weights_download.sh")
+    else:
+        weights_path = (
+            model_location_generator("vision-models/unet_vanilla", model_subdir="", download_if_ci_v2=True) / "unet.pt"
+        )
+
+    state_dict = torch.load(
+        weights_path,
+        map_location=torch.device("cpu"),
+    )
+    ds_state_dict = {k: v for k, v in state_dict.items()}
+
+    reference_model = UNet()
+
+    new_state_dict = {}
+    keys = [name for name, parameter in reference_model.state_dict().items()]
+    values = [parameter for name, parameter in ds_state_dict.items()]
+    for i in range(len(keys)):
+        new_state_dict[keys[i]] = values[i]
+
+    reference_model.load_state_dict(new_state_dict)
+    reference_model.eval()
+    return reference_model
+
+
+def create_unet_preprocessor(device):
     def custom_preprocessor(model, name, ttnn_module_args):
         parameters = {}
         if isinstance(model, UNet):
@@ -141,41 +168,3 @@ def create_custom_preprocessor(device):
         return parameters
 
     return custom_preprocessor
-
-
-@pytest.mark.parametrize("device_params", [{"l1_small_size": VANILLA_UNET_L1_SMALL_SIZE}], indirect=True)
-def test_tt_cnn_unet_small_inference(device, reset_seeds, model_location_generator):
-    reference_model = load_torch_model(model_location_generator)
-
-    torch_input_tensor = torch.randn(1, 3, 480, 640)
-    torch_output_tensor = reference_model(torch_input_tensor)
-
-    parameters = preprocess_model_parameters(
-        initialize_model=lambda: reference_model, custom_preprocessor=create_custom_preprocessor(device), device=None
-    )
-
-    configs = create_unet_configs_from_parameters(
-        parameters=parameters, input_height=480, input_width=640, batch_size=1
-    )
-    model = create_unet_from_configs(configs, device)
-
-    n, c, h, w = torch_input_tensor.shape
-    ttnn_input_host = ttnn.from_torch(
-        torch_input_tensor.permute(0, 2, 3, 1),  # NCHW -> NHWC
-        dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=None,  # device,
-        memory_config=None,  # ttnn.L1_MEMORY_CONFIG,
-    )
-
-    ttnn_output = model(ttnn_input_host)
-    ttnn_output = ttnn.to_torch(ttnn_output)
-
-    ttnn_output = ttnn_output.permute(0, 3, 1, 2)  # NHWC -> NCHW
-    ttnn_output = ttnn_output.reshape(torch_output_tensor.shape)
-
-    assert ttnn_output.shape == torch_output_tensor.shape
-    logger.info(f"Output shape verification passed: {ttnn_output.shape}")
-
-    pcc_passed, pcc_message = assert_with_pcc(torch_output_tensor, ttnn_output, pcc=0.80)
-    logger.info(pcc_message)
