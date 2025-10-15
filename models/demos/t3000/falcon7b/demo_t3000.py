@@ -41,6 +41,7 @@ def test_demo_multichip(
     greedy_sampling,  # Option to use greedy decoding instead of top-k/p
     expected_greedy_output_path,  # Path for expected outputs for greedy decoding
     user_input,
+    model_location_generator,
     get_tt_cache_path,
     mesh_device,
     is_ci_env,
@@ -64,13 +65,12 @@ def test_demo_multichip(
     else:
         json_perf_targets = {}
 
-    simple_model_location_generator = lambda model_version, *_, **__: model_version
     return run_falcon_demo_kv(
         user_input=user_input,
         batch_size=batch_size,
         max_seq_len=max_seq_len,
         model_config_strs_prefill_decode=["BFLOAT16-DRAM", "BFLOAT16-L1_SHARDED"],
-        model_location_generator=simple_model_location_generator,
+        model_location_generator=model_location_generator,
         get_tt_cache_path=get_tt_cache_path,
         mesh_device=mesh_device,
         perf_mode=perf_mode,
