@@ -69,6 +69,7 @@ foreach(TEST_SRC ${PERF_MICROBENCH_TESTS_SRCS})
                 routing/tt_fabric_test_config.cpp
                 routing/tt_fabric_test_results.cpp
                 routing/tt_fabric_test_context.cpp
+                routing/tt_fabric_test_eth_readback.cpp
         )
         target_link_libraries(${TEST_TARGET} PRIVATE yaml-cpp::yaml-cpp)
     endif()

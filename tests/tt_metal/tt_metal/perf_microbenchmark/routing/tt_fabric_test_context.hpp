@@ -25,6 +25,7 @@
 #include "tt_fabric_test_memory_map.hpp"
 #include "tt_fabric_telemetry.hpp"
 #include "tt_fabric_test_results.hpp"
+#include "tt_fabric_test_eth_readback.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/mesh_coord.hpp>
@@ -549,9 +550,6 @@ public:
     void report_code_profiling_results();
 
 private:
-    void clear_ethernet_cores_buffer(uint32_t address, size_t buffer_size);
-    std::unordered_map<FabricNodeId, std::unordered_map<CoreCoord, std::vector<uint32_t>>>
-    read_ethernet_cores_buffer(uint32_t address, size_t buffer_size);
     void reset_local_variables() {
         benchmark_mode_ = false;
         global_sync_ = false;
@@ -1487,4 +1485,15 @@ private:
 
     // Golden CSV comparison statistics
     std::filesystem::path comparison_statistics_csv_file_path_;
+    
+    // Ethernet core buffer readback helper
+    std::unique_ptr<EthCoreBufferReadback> eth_readback_;
+    
+    // Getter for lazy initialization of eth_readback_
+    EthCoreBufferReadback& get_eth_readback() {
+        if (!eth_readback_) {
+            eth_readback_ = std::make_unique<EthCoreBufferReadback>(test_devices_, *fixture_);
+        }
+        return *eth_readback_;
+    }
 };
