@@ -8,15 +8,15 @@ import torch.nn as nn
 import os
 import ttnn
 
-from ...utils.check import assert_quality
-from ...models.vae.vae_mochi import (
+from ....utils.check import assert_quality
+from ....models.vae.vae_mochi import (
     Conv1x1 as TtConv1x1,
     ResBlock as TtResBlock,
     CausalUpsampleBlock as TtCausalUpsampleBlock,
     MochiVAEDecoder as TtDecoder,
 )
-from ...parallel.manager import CCLManager
-from ...parallel.config import MochiVAEParallelConfig, ParallelFactor
+from ....parallel.manager import CCLManager
+from ....parallel.config import MochiVAEParallelConfig, ParallelFactor
 from diffusers.models.autoencoders.autoencoder_kl_mochi import MochiResnetBlock3D, MochiUpBlock3D, MochiDecoder3D
 
 from loguru import logger
