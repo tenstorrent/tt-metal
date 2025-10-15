@@ -1,7 +1,7 @@
 # Mobilenetv2
 
 ## Platforms:
-Wormhole (n150, n300)
+    Wormhole (n150, n300)
 
 ### Introduction
 The MobileNetV2 model is a convolutional neural network (CNN) architecture designed for efficient mobile and embedded vision applications. It was introduced in the paper ["MobileNetV2: Inverted Residuals and Linear Bottlenecks"](https://arxiv.org/abs/1801.04381). </br>
@@ -21,14 +21,14 @@ pytest models/demos/mobilenetv2/tests/pcc/test_mobilenetv2.py::test_mobilenetv2
 
 ### Performant Model with Trace+2CQ
 #### Single Device (BS=10):
-- End-2-end perf is 3009 FPS (**On N150**), _On N300 single device, the FPS will be low as it uses ethernet dispatch_
+- End-2-end perf is 3030 FPS (**On N150**), _On N300 single device, the FPS will be low as it uses ethernet dispatch_
 
 ```
 pytest models/demos/mobilenetv2/tests/perf/test_perf_e2e_mobilenetv2.py:test_mobilenetv2_e2e
 ```
 
 #### Multi Device (DP=2, n300):
-- End-2-end perf is 5146 FPS
+- End-2-end perf is 5280 FPS
 
 ```
 pytest models/demos/mobilenetv2/tests/perf/test_perf_e2e_mobilenetv2.py::test_mobilenetv2_e2e_dp

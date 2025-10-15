@@ -172,6 +172,9 @@ Tensor Tensor::from_vector(
     size_t volume = spec.logical_shape().volume();
     TT_FATAL(
         buffer.size() == volume, "Current buffer size is {} different from shape volume {}", buffer.size(), volume);
+    if (spec.data_type() == DataType::BFLOAT8_B || spec.data_type() == DataType::BFLOAT4_B) {
+        TT_FATAL(spec.layout() == Layout::TILE, "Block float types are only supported in TILE layout");
+    }
 
     // Create host tensor with DataType matching buffer
     auto buffer_dtype = convert_to_data_type<T>();
