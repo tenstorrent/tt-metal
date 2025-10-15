@@ -830,6 +830,24 @@ def create_module_if_not_exists(module_name):
     return new_module
 
 
+def register_jit_cpp_operation(target_module: types.ModuleType, func_name: str, module: types.ModuleType):
+    operation_class = FastOperation if ttnn.CONFIG.enable_fast_runtime_mode else Operation
+    operation = operation_class(
+        python_fully_qualified_name=module.python_fully_qualified_name,
+        function=module.function,
+        golden_function=None,
+        preprocess_golden_function_inputs=None,
+        postprocess_golden_function_outputs=None,
+        is_cpp_operation=True,
+        is_experimental=False,
+    )
+
+    REGISTERED_OPERATIONS.add(operation, func_name)
+    setattr(target_module, func_name, operation)
+
+    return operation
+
+
 def register_cpp_operation(target_module: types.ModuleType, func_name: str, function: Callable):
     operation_class = FastOperation if ttnn.CONFIG.enable_fast_runtime_mode else Operation
 
