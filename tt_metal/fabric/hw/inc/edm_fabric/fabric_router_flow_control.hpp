@@ -75,8 +75,9 @@ struct ReceiverChannelStreamRegisterFreeSlotsBasedCreditSender {
     std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> sender_channel_packets_completed_stream_ids;
 };
 
+constexpr bool use_counter_based_credit_sender = multi_txq_enabled || NUM_ACTIVE_ERISCS > 1;
 using ReceiverChannelResponseCreditSender = typename std::conditional_t<
-    multi_txq_enabled,
+    use_counter_based_credit_sender,
     ReceiverChannelCounterBasedResponseCreditSender,
     ReceiverChannelStreamRegisterFreeSlotsBasedCreditSender>;
 
@@ -211,14 +212,14 @@ struct init_sender_channel_from_receiver_credits_flow_controllers_impl<
 };
 
 using SenderChannelFromReceiverCredits = typename std::conditional_t<
-    multi_txq_enabled,
+    use_counter_based_credit_sender,
     SenderChannelFromReceiverCounterBasedCreditsReceiver,
     SenderChannelFromReceiverStreamRegisterFreeSlotsBasedCreditsReceiver>;
 
 // SFINAE-based overload for multi_txq_enabled case
 template <uint8_t NUM_SENDER_CHANNELS>
 constexpr FORCE_INLINE auto init_sender_channel_from_receiver_credits_flow_controllers()
-    -> std::enable_if_t<!multi_txq_enabled, std::array<SenderChannelFromReceiverCredits, NUM_SENDER_CHANNELS>> {
+    -> std::enable_if_t<!use_counter_based_credit_sender, std::array<SenderChannelFromReceiverCredits, NUM_SENDER_CHANNELS>> {
     return init_sender_channel_from_receiver_credits_flow_controllers_impl<
         SenderChannelFromReceiverStreamRegisterFreeSlotsBasedCreditsReceiver>::template init<NUM_SENDER_CHANNELS>();
 }
@@ -226,7 +227,7 @@ constexpr FORCE_INLINE auto init_sender_channel_from_receiver_credits_flow_contr
 // SFINAE-based overload for !multi_txq_enabled case
 template <uint8_t NUM_SENDER_CHANNELS>
 constexpr FORCE_INLINE auto init_sender_channel_from_receiver_credits_flow_controllers()
-    -> std::enable_if_t<multi_txq_enabled, std::array<SenderChannelFromReceiverCredits, NUM_SENDER_CHANNELS>> {
+    -> std::enable_if_t<use_counter_based_credit_sender, std::array<SenderChannelFromReceiverCredits, NUM_SENDER_CHANNELS>> {
     return init_sender_channel_from_receiver_credits_flow_controllers_impl<
         SenderChannelFromReceiverCounterBasedCreditsReceiver>::template init<NUM_SENDER_CHANNELS>();
 }

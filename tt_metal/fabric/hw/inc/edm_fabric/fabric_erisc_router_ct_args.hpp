@@ -55,7 +55,7 @@ constexpr uint32_t sender_channel_3_free_slots_stream_id = get_compile_time_arg_
 constexpr uint32_t sender_channel_4_free_slots_stream_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 20);
 constexpr uint32_t vc1_sender_channel_free_slots_stream_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 21);
 constexpr uint32_t MULTI_RISC_TEARDOWN_SYNC_STREAM_ID = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 22);
-constexpr uint32_t receiver_channel_ack_counters_src = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 23);
+constexpr uint32_t outstanding_receiver_channel_eth_acks_stream_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 23);
 
 // Special marker after stream IDs
 constexpr size_t STREAM_IDS_END_MARKER_IDX = STREAM_ID_ARGS_START_IDX + 24;
@@ -90,13 +90,13 @@ static_assert(
     NUM_SENDER_CHANNELS <= MAX_NUM_SENDER_CHANNELS,
     "NUM_SENDER_CHANNELS must be less than or equal to MAX_NUM_SENDER_CHANNELS");
 static_assert(
-    wait_for_host_signal_IDX == 28,
+    wait_for_host_signal_IDX == 29,
     "wait_for_host_signal_IDX must be 28 (23 stream IDs + 1 marker + 1 tensix connections + 3 config args)");
 static_assert(
     get_compile_time_arg_val(wait_for_host_signal_IDX) == 0 || get_compile_time_arg_val(wait_for_host_signal_IDX) == 1,
     "wait_for_host_signal must be 0 or 1");
 static_assert(
-    MAIN_CT_ARGS_START_IDX == 29,
+    MAIN_CT_ARGS_START_IDX == 30,
     "MAIN_CT_ARGS_START_IDX must be 29 (23 stream IDs + 1 marker + 1 tensix connections + 4 config args)");
 
 constexpr uint32_t SWITCH_INTERVAL =
@@ -373,32 +373,33 @@ static_assert(
 
 constexpr size_t TO_SENDER_CREDIT_COUNTERS_START_IDX = SPECIAL_MARKER_2_IDX + SPECIAL_MARKER_CHECK_ENABLED;
 
+constexpr bool use_two_erisc_credit_mode = multi_txq_enabled || NUM_ACTIVE_ERISCS > 1;
 constexpr size_t to_sender_remote_ack_counters_base_address =
-    conditional_get_compile_time_arg<multi_txq_enabled, TO_SENDER_CREDIT_COUNTERS_START_IDX>();
+    conditional_get_compile_time_arg<use_two_erisc_credit_mode, TO_SENDER_CREDIT_COUNTERS_START_IDX>();
 
 constexpr size_t to_sender_remote_completion_counters_base_address =
-    conditional_get_compile_time_arg<multi_txq_enabled, TO_SENDER_CREDIT_COUNTERS_START_IDX + 1>();
+    conditional_get_compile_time_arg<use_two_erisc_credit_mode, TO_SENDER_CREDIT_COUNTERS_START_IDX + 1>();
 
 constexpr size_t local_receiver_ack_counters_base_address =
-    conditional_get_compile_time_arg<multi_txq_enabled, TO_SENDER_CREDIT_COUNTERS_START_IDX + 2>();
+    conditional_get_compile_time_arg<use_two_erisc_credit_mode, TO_SENDER_CREDIT_COUNTERS_START_IDX + 2>();
 
 constexpr size_t local_receiver_completion_counters_base_address =
-    conditional_get_compile_time_arg<multi_txq_enabled, TO_SENDER_CREDIT_COUNTERS_START_IDX + 3>();
+    conditional_get_compile_time_arg<use_two_erisc_credit_mode, TO_SENDER_CREDIT_COUNTERS_START_IDX + 3>();
 
 static_assert(
-    !multi_txq_enabled || to_sender_remote_ack_counters_base_address != 0,
+    !(use_two_erisc_credit_mode) || to_sender_remote_ack_counters_base_address != 0,
     "to_sender_remote_ack_counters_base_address must be valid");
 static_assert(
-    !multi_txq_enabled || to_sender_remote_completion_counters_base_address != 0,
+    !(use_two_erisc_credit_mode) || to_sender_remote_completion_counters_base_address != 0,
     "to_sender_remote_completion_counters_base_address must be valid");
 static_assert(
-    !multi_txq_enabled || local_receiver_ack_counters_base_address != 0,
+    !(use_two_erisc_credit_mode) || local_receiver_ack_counters_base_address != 0,
     "local_receiver_ack_counters_base_address must be valid");
 static_assert(
-    !multi_txq_enabled || local_receiver_completion_counters_base_address != 0,
+    !(use_two_erisc_credit_mode) || local_receiver_completion_counters_base_address != 0,
     "local_receiver_completion_counters_base_address must be valid");
 
-constexpr size_t SPECIAL_MARKER_3_IDX = TO_SENDER_CREDIT_COUNTERS_START_IDX + (multi_txq_enabled ? 4 : 0);
+constexpr size_t SPECIAL_MARKER_3_IDX = TO_SENDER_CREDIT_COUNTERS_START_IDX + ((use_two_erisc_credit_mode) ? 4 : 0);
 constexpr size_t SPECIAL_MARKER_3 = 0x30c0ffee;
 static_assert(
     !SPECIAL_MARKER_CHECK_ENABLED || get_compile_time_arg_val(SPECIAL_MARKER_3_IDX) == SPECIAL_MARKER_3,

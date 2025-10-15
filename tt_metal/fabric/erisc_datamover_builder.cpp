@@ -232,7 +232,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topo
         }
     }
 
-    if (this->sender_txq_id != this->receiver_txq_id) {
+    if (this->num_riscv_cores > 1) {
         // counters are packed contiguously in memory, This can lead to resends of values but
         // this is safe for free running counters, which are enabled in this mode.
         size_t num_words_consumed_per_counter = tt::align(sizeof(uint32_t) * num_sender_channels, field_size);
@@ -964,7 +964,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
     ct_args.push_back(0x20c0ffee);
 
     bool multi_txq_enabled = config.sender_txq_id != config.receiver_txq_id;
-    if (multi_txq_enabled) {
+    if (config.num_riscv_cores > 1) {
         ct_args.push_back(config.to_sender_channel_remote_ack_counters_base_addr);
         ct_args.push_back(config.to_sender_channel_remote_completion_counters_base_addr);
         ct_args.push_back(config.receiver_channel_remote_ack_counters_base_addr);

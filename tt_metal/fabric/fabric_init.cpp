@@ -497,7 +497,9 @@ std::unique_ptr<tt::tt_metal::Program> create_and_compile_tt_fabric_program(tt::
             auto proc = static_cast<tt::tt_metal::DataMovementProcessor>(risc_id);
             if (tt::tt_metal::MetalContext::instance().rtoptions().get_enable_2_erisc_mode()) {
                 // Force fabric to run on erisc1
-                proc = tt::tt_metal::DataMovementProcessor::RISCV_1;
+                if (!tt::tt_metal::MetalContext::instance().rtoptions().get_enable_2_erisc_mode()) {
+                    proc = tt::tt_metal::DataMovementProcessor::RISCV_1;
+                }
             }
 
             auto eth_logical_core = soc_desc.get_eth_core_for_channel(eth_chan, CoordSystem::LOGICAL);

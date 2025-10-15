@@ -1688,7 +1688,9 @@ template <bool CHECK_BUSY>
 FORCE_INLINE void receiver_send_completion_ack_erisc(
     ReceiverChannelResponseCreditSender& receiver_channel_response_credit_sender, uint8_t src_id) {
     if constexpr (NUM_ACTIVE_ERISCS > 1) {
-        inc_ptr_val<receiver_channel_ack_counters_src>(1);
+        receiver_channel_response_credit_sender.completion_counters[src_id]++;
+        receiver_channel_response_credit_sender.completion_counters_base_ptr[src_id] = receiver_channel_response_credit_sender.completion_counters[src_id];
+        increment_local_update_ptr_val<outstanding_receiver_channel_eth_acks_stream_id>(1);
     } else {
         receiver_send_completion_ack<CHECK_BUSY>(receiver_channel_response_credit_sender, src_id);
     }
@@ -1894,18 +1896,22 @@ bool any_sender_channels_active(
     return false;
 }
 
+static_assert(receiver_txq_id == sender_txq_id, "receiver_txq_id must be equal to sender_txq_id");
+
 FORCE_INLINE void run_forward_acks_over_eth_step() {
-    auto num_ack_requests = get_ptr_val<outstanding_receiver_channel_eth_acks_stream_id>();
-    if (num_ack_requests) {
-        decrement_local_update_ptr_val<outstanding_receiver_channel_eth_acks_stream_id>(num_ack_requests);
-        while (internal_::eth_txq_is_busy(receiver_txq_id)) {
-        };
-        internal_::eth_send_packet_bytes_unsafe(
-            receiver_txq_id,
-            receiver_channel_ack_counters_src,
-            receiver_channel_ack_counters_dest,
-            receiver_channel_ack_counters_size_bytes);
-        remote_update_ptr_val<to_receiver_pkts_sent_id, receiver_txq_id>(num_ack_requests);
+    if constexpr (is_sender_channel_serviced[0]) {
+        auto num_ack_requests = get_ptr_val<outstanding_receiver_channel_eth_acks_stream_id>();
+        if (num_ack_requests) {
+            increment_local_update_ptr_val<outstanding_receiver_channel_eth_acks_stream_id>(num_ack_requests);
+            while (internal_::eth_txq_is_busy(receiver_txq_id)) {
+            };
+            constexpr size_t SEND_SIZE_BYTES = (((NUM_SENDER_CHANNELS * sizeof(uint32_t)) - 1) / ETH_WORD_SIZE_BYTES) * ETH_WORD_SIZE_BYTES;
+            internal_::eth_send_packet_bytes_unsafe(
+                receiver_txq_id,
+                local_receiver_completion_counters_base_address,
+                to_sender_remote_completion_counters_base_address,
+                SEND_SIZE_BYTES);
+        }
     }
 }
 
@@ -2133,7 +2139,7 @@ void __attribute__((noinline)) wait_for_static_connection_to_ready(
         }
         establish_edm_connection(interface, local_sender_channel_free_slots_stream_ids_ordered[sender_channel_idx]);
     };
-    if constexpr (multi_txq_enabled) {
+    if constexpr (multi_txq_enabled || NUM_ACTIVE_ERISCS > 1) {
         tuple_for_each_constexpr(
             local_sender_channel_worker_interfaces.channel_worker_interfaces, [&](auto& interface, auto idx) {
                 if constexpr (is_sender_channel_serviced[idx]) {
@@ -2382,7 +2388,7 @@ void kernel_main() {
     static_assert(
         receiver_txq_id == sender_txq_id || receiver_txq_id == 1,
         "For multi-txq mode, the only currently supported configuration is sender_txq_id=0 and receiver_txq_id=1");
-    if constexpr (receiver_txq_id != sender_txq_id) {
+    if constexpr (NUM_ACTIVE_ERISCS > 1) {
         constexpr bool is_erisc_that_sets_up_second_txq = is_receiver_channel_serviced[0];
         if constexpr (is_erisc_that_sets_up_second_txq) {
             initialize_state_for_txq1_active_mode();
@@ -2423,7 +2429,7 @@ void kernel_main() {
     init_ptr_val<receiver_channel_0_free_slots_from_north_stream_id>(DOWNSTREAM_SENDER_NUM_BUFFERS_VC0);
     init_ptr_val<receiver_channel_0_free_slots_from_south_stream_id>(DOWNSTREAM_SENDER_NUM_BUFFERS_VC0);
     init_ptr_val<receiver_channel_1_free_slots_from_downstream_stream_id>(DOWNSTREAM_SENDER_NUM_BUFFERS_VC1);
-    init_ptr_val<receiver_channel_ack_counters_src>(0);
+    init_ptr_val<outstanding_receiver_channel_eth_acks_stream_id>(0);
 
     if constexpr (NUM_ACTIVE_ERISCS > 1) {
         wait_for_other_local_erisc();
