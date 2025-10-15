@@ -394,6 +394,18 @@ void Hal::initialize_bh() {
         NOC_CFG(NOC_Y_ID_TRANSLATE_TABLE_5)};
 
     this->jit_build_query_ = std::make_unique<HalJitBuildQueryBlackHole>();
+
+    this->verify_eth_fw_version_func_ = [](tt::umd::tt_version fw_version) {
+        if (blackhole::is_2_erisc_mode()) {
+            tt::umd::tt_version min_version(1, 6, 2);
+            if (min_version >= fw_version) {
+                TT_THROW(
+                    "In 2-erisc mode, the minimum supported ethernet firmware version is {}. Detected version is {}",
+                    min_version.str(),
+                    fw_version.str());
+            }
+        }
+    };
 }
 
 }  // namespace tt_metal

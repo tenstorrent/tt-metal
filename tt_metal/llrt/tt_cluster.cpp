@@ -310,6 +310,7 @@ void Cluster::initialize_device_drivers() {
     this->start_driver(default_params);
     this->generate_virtual_to_umd_coord_mapping();
     this->generate_virtual_to_profiler_flat_id_mapping();
+    this->verify_eth_fw_capability();
 }
 
 void Cluster::assert_risc_reset() {
@@ -852,6 +853,8 @@ void Cluster::verify_sw_fw_versions(
         TT_FATAL(sw.minor <= fw.minor, "SW version is newer than FW version");
     }
 }
+
+void Cluster::verify_eth_fw_capability() const { hal_.verify_eth_fw_version(this->driver_->get_ethernet_fw_version()); }
 
 // DRAM barrier is used to implement host-to-device synchronization and should be used when all previous writes to DRAM
 // need to be flushed This is needed because writes to device are not blocking unless strict TLB ordering is used
