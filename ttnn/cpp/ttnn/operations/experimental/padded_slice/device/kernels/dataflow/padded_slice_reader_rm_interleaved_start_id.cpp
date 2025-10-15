@@ -25,15 +25,20 @@ void kernel_main() {
 
     constexpr uint32_t is_non_aligned = get_compile_time_arg_val(0);
     constexpr uint32_t cb_id_non_aligned = get_compile_time_arg_val(1);
-    constexpr auto src_args = TensorAccessorArgs<2>();
-    uint32_t read_size = unpadded_stick_size;
+    constexpr uint32_t src_buffer_alignment = get_compile_time_arg_val(2);
+    constexpr auto src_args = TensorAccessorArgs<3>();
 
-    const auto s0 = TensorAccessor(src_args, src_addr, padded_stick_size);
+    uint32_t read_size = unpadded_stick_size;
 
     constexpr uint32_t cb_id_in0 = 0;
 
     uint32_t src_stick_id = start_id;
     uint32_t sticks_read = 0;
+    uint32_t misalignment = 0;
+    if constexpr (is_non_aligned) {
+        misalignment = (src_addr % src_buffer_alignment);
+    }
+    const auto s0 = TensorAccessor(src_args, src_addr - misalignment, padded_stick_size);
 
 #ifdef DEBUG
     DPRINT << "src_addr: " << src_addr << ", padded_stick_size: " << padded_stick_size
@@ -67,9 +72,10 @@ void kernel_main() {
             sticks_read++;
             uint64_t src_noc_addr = get_noc_addr(src_stick_id, s0);
             if constexpr (is_non_aligned) {
-                noc_async_read(src_noc_addr, non_aligned_temp_addr, padded_stick_size);
+                noc_async_read(src_noc_addr, non_aligned_temp_addr, padded_stick_size + misalignment);
                 noc_async_read_barrier();
-                noc_async_read(get_noc_addr(non_aligned_temp_addr), src_buffer_l1_addr, unpadded_stick_size);
+                noc_async_read(
+                    get_noc_addr(non_aligned_temp_addr + misalignment), src_buffer_l1_addr, unpadded_stick_size);
                 noc_async_read_barrier();
             } else {
                 noc_async_read(src_noc_addr, src_buffer_l1_addr, unpadded_stick_size);

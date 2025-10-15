@@ -360,8 +360,7 @@ Result conv2d_DRAM(
             output_sliced_dim);
     }
     if (dram_slice_config.num_slices == 1) {
-        ttnn::Tensor output_tensor;
-        std::tie(output_tensor, std::ignore, std::ignore, weight_tensor_on_device, bias_tensor_on_device) = conv2d_L1(
+        return conv2d_L1(
             input_tensor_on_device,
             weight_tensor,
             device,
@@ -380,7 +379,6 @@ Result conv2d_DRAM(
             conv_config,
             compute_config_,
             DRAM_MEMORY_CONFIG);
-        return {output_tensor, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
     }
     const auto unflattened_input_shape = ttnn::Shape{batch_size, input_height, input_width, in_channels};
     input_tensor_on_device = ttnn::reshape(input_tensor_on_device, unflattened_input_shape, unflattened_input_shape);

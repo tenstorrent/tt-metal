@@ -323,15 +323,13 @@ def test_slice_height_sharded_for_conv2d(device, dims, slice_dim, slice_size, co
 @pytest.mark.parametrize("slice_dim", [1, 2])
 @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat8_b, ttnn.bfloat16, ttnn.float32])
-@pytest.mark.parametrize("pad_value", [32])
+@pytest.mark.parametrize("pad_value", [8, 32])
 def test_slice_block_sharded_for_conv2d(
     device, dims, slice_dim, slice_size, core_x, core_y, layout, input_dtype, pad_value
 ):
     if input_dtype == ttnn.bfloat8_b and layout == ttnn.ROW_MAJOR_LAYOUT:
         pytest.skip("bfloat8_b is not supported in row major layout")
 
-    if pad_value == 8 and layout == ttnn.TILE_LAYOUT:
-        pytest.skip("pad_value of 8 is not supported in tile layout & block sharding")
     orientation = ttnn.ShardOrientation.COL_MAJOR
     core_grid = device.core_grid
     if core_grid.x < core_x or core_grid.y < core_y:
