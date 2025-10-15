@@ -54,13 +54,15 @@ on:
         type: boolean
         default: true
         description: "Download artifacts from GitHub for each commit (requires gh cli to be authenticated)"
+
+permissions:
+  contents: write
+  actions: write
+
 run-name: "Bisect on ${{ inputs.runner-label }}"
 jobs:
   test-dispatch:
     timeout-minutes: 1440
-    permissions:
-      contents: read
-      actions: read
     runs-on: >-
       ${{
         fromJSON(format('["{0}", "in-service", "cloud-virtual-machine"]', inputs.runner-label))
@@ -69,7 +71,7 @@ jobs:
     container:
       image: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-dev-amd64:dec9417e1b2b355d286ee299d80f97f587aa27ec
       env:
-        GH_TOKEN: ${{ github.token }}
+        GH_TOKEN: ${{ secrets.TT_METAL_RELEASE_TOKEN }}
         ARCH_NAME: ${{ inputs.arch }}
         LOGURU_LEVEL: DEBUG
         PYTHONPATH: /work
