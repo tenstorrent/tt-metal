@@ -58,6 +58,9 @@ run-name: "Bisect on ${{ inputs.runner-label }}"
 jobs:
   test-dispatch:
     timeout-minutes: 1440
+    permissions:
+      contents: read
+      actions: read
     runs-on: >-
       ${{
         fromJSON(format('["{0}", "in-service", "cloud-virtual-machine"]', inputs.runner-label))
