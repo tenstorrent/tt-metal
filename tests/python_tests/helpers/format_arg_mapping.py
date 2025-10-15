@@ -177,11 +177,6 @@ class StochasticRounding(Enum):
     All = "StochRndType::All"
 
 
-class Transpose(Enum):
-    Yes = "true"
-    No = "false"
-
-
 class Haloize(Enum):
     Yes = "true"
     No = "false"
