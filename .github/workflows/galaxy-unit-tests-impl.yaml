@@ -55,13 +55,11 @@ jobs:
        shell: bash
        working-directory: /work # https://github.com/actions/runner/issues/878
    steps:
-     - name: ⬇️ Checkout
-       uses: actions/checkout@v4
+     - name: ⬇️  Setup Job
+       uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
+       timeout-minutes: 10
        with:
-         submodules: recursive
-         fetch-depth: 500 # Need enough history for `git describe`
-         fetch-tags: true # Need tags for `git describe`
-         path: docker-job # Here be dragons; keep it scoped to our desired volume, yet must be under github.workspace and be sure to clean up at the end
+         build-artifact-name: ${{ inputs.build-artifact-name }}
 
      - name: Build UMD device and tests
        run: |
