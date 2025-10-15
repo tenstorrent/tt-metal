@@ -542,7 +542,7 @@ class Linear:
         if self.shard_layout is ttnn.TensorMemoryLayout.BLOCK_SHARDED:
             memory_config_in = self._create_memory_config(out=False)
             input_tensor = ttnn.reshard(input_tensor, output_memory_config=memory_config_in)
-            print(f"Resharded input tensor to {memory_config_in}")
+            logger.debug(f"Resharded input tensor to {memory_config_in}")
 
         memory_config_out = self._create_memory_config(out=True)
 
