@@ -22,7 +22,7 @@ on:
 
 jobs:
   ttsim-integration:
-    runs-on: tt-ubuntu-2204-small-stable
+    runs-on: tt-ubuntu-2204-small-metal
     name: "TTSim Integration - ${{ matrix.arch }}"
     strategy:
       fail-fast: false
@@ -155,7 +155,7 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
         timeout-minutes: 10
         with:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
