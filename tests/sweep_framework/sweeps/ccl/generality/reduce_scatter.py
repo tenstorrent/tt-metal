@@ -107,7 +107,7 @@ parameters = {
         "num_links": [1],
         "input_shape": [
             [1, 1, 32, 2880],  # GPT-OSS 20B. Dim: 3, cluster_axis 1
-            [1, 1, 32, 1280],  # Qwen3 dim: 1 cluster_axis: 1; Llama glx dim: 2 cluster_axis 1
+            [1, 1, 32, 1280],  # Qwen3 dim: 2 cluster_axis: 1; Llama glx dim: 2 cluster_axis 1
             [1, 1, 32, 3200],  # Qwen3 dim: 3 cluster_axis: 1
             [1, 1, 32, 3584],  # Llama Glx. dim:3 cluster_axis:1
             [1, 1, 32, 7168],  # DeepSeek dim:3 cluster_axis 1
@@ -201,7 +201,9 @@ def _get_tensors(
     torch_reference = torch_input.unsqueeze(0).repeat([replicate_dim] + [1] * len(input_shape))
     torch_references = _reference_map_op(math_op)(torch_reference, dim=0).split(per_device_dim, dim=dim)
 
-    input_memory_config, output_memory_config = get_mem_configs(buffer_type, shard_specs, layout, torch_references[0].shape)
+    input_memory_config, output_memory_config = get_mem_configs(
+        buffer_type, shard_specs, layout, torch_references[0].shape
+    )
 
     tt_input = ttnn.from_torch(
         torch_input,
