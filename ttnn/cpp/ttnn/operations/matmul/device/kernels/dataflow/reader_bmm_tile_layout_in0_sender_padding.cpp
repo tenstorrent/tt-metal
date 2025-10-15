@@ -165,7 +165,7 @@ void kernel_main() {
                     noc_semaphore_wait(in0_mcast_sender_semaphore_addr_ptr, in0_mcast_num_dests);
                     noc_semaphore_set(in0_mcast_sender_semaphore_addr_ptr, 0);
                     noc_semaphore_set(in0_mcast_receiver_semaphore_addr_ptr, is_batch_valid ? VALID : IGNORE_BATCH);
-                    ckernel::wait(500);
+                    // ckernel::wait(500);
                     noc_semaphore_set_multicast(
                         in0_mcast_receiver_semaphore_addr, in0_mcast_receiver_semaphore_noc_addr, in0_mcast_num_cores);
                     noc_async_writes_flushed();

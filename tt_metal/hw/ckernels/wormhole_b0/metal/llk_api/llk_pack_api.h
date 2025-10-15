@@ -377,9 +377,9 @@ inline void llk_pack_dest_init(const std::uint32_t pack_output = 16) {
         face_r_dim, narrow_tile);
 }
 
-template <bool mail2math = true, bool mail2pack = true>
+template <bool mail2math = true, bool mail2pack = true, uint32_t timeout = 0>
 inline void llk_pack_get_tile(std::uint32_t output, std::uint32_t tile_index, std::uint32_t* p_tile) {
-    _llk_pack_get_tile_<mail2math, mail2pack>(tile_index, p_tile);
+    _llk_pack_get_tile_<mail2math, mail2pack, timeout>(tile_index, p_tile);
 }
 
 template <bool mail2math = true, bool mail2pack = true>

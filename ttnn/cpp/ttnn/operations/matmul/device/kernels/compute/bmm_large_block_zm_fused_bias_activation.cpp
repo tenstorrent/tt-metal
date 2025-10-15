@@ -79,6 +79,22 @@ inline void reblock_and_untilize(
     cb_pop_front(interm_cb_id, num_tiles_in_row_of_subblocks);
 }
 
+inline void cb_get_tile_local(uint32_t cb_id, uint32_t index, volatile void* p_tile) {
+    UNPACK((llk_unpack_get_tile<false, true>(cb_id, index, (uint32_t*)p_tile)));
+
+    MATH((llk_math_get_tile<false, true>(cb_id, index, (uint32_t*)p_tile)));
+
+    PACK((llk_pack_get_tile<false, true>(cb_id, index, (uint32_t*)p_tile)));
+}
+
+inline void cb_release_tile_local(uint32_t cb_id) {
+    UNPACK((llk_unpack_release_tile<false, true>(cb_id)));
+
+    MATH((llk_math_release_tile<false, true>(cb_id)));
+
+    PACK((llk_pack_release_tile<false, true>(cb_id)));
+}
+
 void MAIN {
 // RUNTIME ARGS
 #ifdef MATMUL_DRAM_SHARDED
@@ -148,12 +164,12 @@ void MAIN {
         if constexpr (get_batch_from_reader) {
             // Check whether this batch is valid
             cb_wait_front(nnz_cb_id, 1);
-            tensix_sync();
-            cb_get_tile(nnz_cb_id, 0, &nnz_addr_ptr);
+            // tensix_sync();
+            cb_get_tile_local(nnz_cb_id, 0, &nnz_addr_ptr);
             // The first 4 entries have metadata, so we look at the 5th entry
             // for our value pushed from the reader.
             uint32_t nnz = nnz_addr_ptr[4];
-            cb_release_tile(nnz_cb_id);
+            cb_release_tile_local(nnz_cb_id);
             cb_pop_front(nnz_cb_id, 1);
 
             if (nnz == 0) {

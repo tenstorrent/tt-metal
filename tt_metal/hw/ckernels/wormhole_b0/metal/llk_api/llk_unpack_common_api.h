@@ -33,13 +33,13 @@ void llk_zero_operand(std::uint32_t operand) {
     _llk_zero_buffer_(fifo_base_addr, size);
 }
 
-template <bool mail2math = true, bool mail2pack = true>
+template <bool mail2math = true, bool mail2pack = true, uint32_t timeout = 0>
 inline void llk_unpack_get_tile(std::uint32_t operand, std::uint32_t tile_index, std::uint32_t* p_tile) {
     std::uint32_t operand_id = get_operand_id(operand);
     std::uint32_t base_address = get_local_cb_interface(operand_id).fifo_rd_ptr - 1;
     std::uint32_t offset_address = get_local_cb_interface(operand_id).fifo_page_size * tile_index;
     std::uint32_t address = base_address + offset_address;
-    _llk_unpack_get_tile_<mail2math, mail2pack>(address, p_tile);
+    _llk_unpack_get_tile_<mail2math, mail2pack, timeout>(address, p_tile);
 }
 
 template <bool mail2math = true, bool mail2pack = true>
