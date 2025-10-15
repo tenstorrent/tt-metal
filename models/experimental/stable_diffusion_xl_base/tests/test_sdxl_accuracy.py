@@ -154,8 +154,8 @@ def test_accuracy_sdxl(
         save_json_results(data, capture_trace, vae_on_device, encoders_on_device, use_cfg_parallel, num_inference_steps)
         if "timeout" in str(e).lower() and "hang" in str(e).lower():
             logger.warning(f"Device timeout - exiting to avoid deadlock")
-            import sys
-            sys.exit(1)
+            import subprocess
+            subprocess.Popen(["kill", "-9", str(os.getpid())])
         raise
 
     clip = CLIPEncoder()
