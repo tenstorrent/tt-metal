@@ -13,13 +13,15 @@ class TtnnConv1D(LightweightModule):
         parameters,
         device,
         activation_dtype=ttnn.bfloat16,
-        weights_dtype=ttnn.bfloat8_b,
-        shard_layout=None,  # ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        weights_dtype=ttnn.bfloat16,
+        shard_layout=None,
         fp32_accum=False,
         packer_l1_acc=False,
         activation=None,
         deallocate_activation=False,
         math_fidelity=ttnn.MathFidelity.LoFi,
+        return_dims=False,
+        reshape_output=False,
     ):
         super().__init__()
         self.conv = conv
@@ -31,7 +33,6 @@ class TtnnConv1D(LightweightModule):
         self.stride = conv.stride[0]
         self.groups = conv.groups
         self.conv_config = ttnn.Conv1dConfig(
-            # dtype=activation_dtype,
             weights_dtype=weights_dtype,
             shard_layout=shard_layout,
             deallocate_activation=deallocate_activation,
@@ -43,18 +44,23 @@ class TtnnConv1D(LightweightModule):
             fp32_dest_acc_en=fp32_accum,
             packer_l1_acc=packer_l1_acc,
         )
+        self.weight = ttnn.from_device(parameters.weight)
+        self.bias = None
         if "bias" in parameters and parameters["bias"] is not None:
             bias = ttnn.from_device(parameters.bias)
             self.bias = bias
+        self.activation_dtype = activation_dtype
+        self.return_dims = return_dims
+        self.reshape_output = reshape_output
+
+    def forward(self, x, shape=None):
+        if shape is not None:
+            batch_size = shape[0]
+            input_length = shape[1]
         else:
-            self.bias = None
+            batch_size = x.shape[0]
+            input_length = x.shape[1]
 
-        weight = ttnn.from_device(parameters.weight)
-        self.weight = weight
-
-    def forward(self, x):
-        input_length = x.shape[1]  # self.conv.input_length
-        batch_size = 1  # self.conv.batch_size
         [tt_output_tensor_on_device, out_length, [weights_device, bias_device]] = ttnn.conv1d(
             input_tensor=x,
             weight_tensor=self.weight,
@@ -73,13 +79,13 @@ class TtnnConv1D(LightweightModule):
             return_output_dim=True,
             return_weights_and_bias=True,
             memory_config=ttnn.L1_MEMORY_CONFIG,
+            dtype=self.activation_dtype,
         )
-        # print(f"{out_length=}")
-        # tt_output_tensor_on_device = ttnn.reshape(
-        #     tt_output_tensor_on_device,
-        #     (1, out_length, tt_output_tensor_on_device.shape[-2] // out_length, tt_output_tensor_on_device.shape[-1]),
-        # )
-        # print(f"{tt_output_tensor_on_device.shape=}")
+        shape = (batch_size, out_length, tt_output_tensor_on_device.shape[-1])
+        if self.reshape_output:
+            tt_output_tensor_on_device = ttnn.reshape(tt_output_tensor_on_device, shape)
+        if self.return_dims:
+            return tt_output_tensor_on_device, shape
         return tt_output_tensor_on_device
 
 
@@ -91,12 +97,12 @@ class TtnnConv2D(LightweightModule):
         device=None,
         cache={},
         activation=None,
-        activation_dtype=ttnn.bfloat8_b,
-        weights_dtype=ttnn.bfloat8_b,
+        activation_dtype=ttnn.bfloat16,
+        weights_dtype=ttnn.bfloat16,
         shard_layout=None,
-        # shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         is_dealloc_act=False,
         return_dims=False,
+        reshape_output=False,
     ):
         super().__init__()
         self.conv = conv
@@ -121,26 +127,18 @@ class TtnnConv2D(LightweightModule):
             shard_layout=shard_layout,
             deallocate_activation=self.is_dealloc_act,
             enable_act_double_buffer=False,
-            # enable_split_reader=False,
-            # enable_subblock_padding=False,
             reshard_if_not_optimal=False,
             activation=activation,
         )
-        # if self.conv_config.shard_layout is None:
-        #     self.input_memory_config = ttnn.L1_MEMORY_CONFIG
-        # elif self.conv_config.shard_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
-        #     self.input_memory_config = ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG
-        # elif self.conv_config.shard_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED:
-        #     self.input_memory_config = ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG
-
         if conv_pth.bias is not None:
             bias = ttnn.from_device(conv_pth.bias)
             self.bias = bias
         else:
             self.bias = None
 
+        self.activation_dtype = activation_dtype
         self.return_dims = return_dims
-
+        self.reshape_output = reshape_output
         self.weight = ttnn.from_device(conv_pth.weight)
 
     def forward(self, x, shape=None):
@@ -153,44 +151,10 @@ class TtnnConv2D(LightweightModule):
             input_height = x.shape[1]
             input_width = x.shape[2]
 
-        # self.conv_kwargs = {
-        #     "in_channels": self.conv.in_channels,
-        #     "out_channels": self.conv.out_channels,
-        #     "batch_size": x.shape[0],
-        #     "input_height": x.shape[1],
-        #     "input_width": x.shape[2],
-        #     "kernel_size": self.conv.kernel_size,
-        #     "stride": self.conv.stride,
-        #     "padding": self.conv.padding,
-        #     "dilation": self.conv.dilation,
-        #     "groups": self.conv.groups,
-        #     "device": self.device,
-        #     "conv_config": self.conv_config,
-        # }
-        # if not ttnn.is_tensor_storage_on_device(self.weight):
-        #     self.weight = ttnn.prepare_conv_weights(
-        #         weight_tensor=self.weight,
-        #         weights_format="OIHW",
-        #         input_memory_config=self.input_memory_config,
-        #         input_layout=ttnn.TILE_LAYOUT,
-        #         has_bias=True,
-        #         **self.conv_kwargs,
-        #     )
-
-        #     self.bias = ttnn.prepare_conv_bias(
-        #         bias_tensor=self.bias,
-        #         input_memory_config=self.input_memory_config,
-        #         input_layout=ttnn.TILE_LAYOUT,
-        #         **self.conv_kwargs,
-        #     )
-        #     self.weight = ttnn.to_device(self.weight, self.device)
-        #     self.bias = ttnn.to_device(self.bias, self.device)
-
         [x, [_out_height, _out_width], [self.weight, self.bias]] = ttnn.conv2d(
             input_tensor=x,
             weight_tensor=self.weight,
             bias_tensor=self.bias,
-            # **self.conv_kwargs,
             in_channels=self.conv.in_channels,
             out_channels=self.conv.out_channels,
             device=self.device,
@@ -206,10 +170,12 @@ class TtnnConv2D(LightweightModule):
             compute_config=self.compute_config,
             return_output_dim=True,
             return_weights_and_bias=True,
+            dtype=self.activation_dtype,
         )
         shape = (batch_size, _out_height, _out_width, x.shape[-1])
+        if self.reshape_output:
+            x = ttnn.reshape(x, shape)
         if self.return_dims:
             return x, shape
         else:
-            del shape
             return x

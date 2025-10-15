@@ -162,7 +162,7 @@ def test_ttnn_generic_mlp(
     )
     ttnn_model = TtnnGenericMLP(torch_model, parameters, device)
     ttnn_x = ttnn.from_torch(
-        x.permute(0, 2, 1).unsqueeze(dim=0),
+        x.permute(0, 2, 1),
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=device,
@@ -170,8 +170,6 @@ def test_ttnn_generic_mlp(
     )
     ttnn_out = ttnn_model(ttnn_x)
     ttnn_out = ttnn.to_torch(ttnn_out)
-    ttnn_out = ttnn_out.squeeze(dim=0)
-    ttnn_out = torch.reshape(ttnn_out, (x_shape[-3], ttnn_out.shape[-2] // x_shape[-3], -1))
     ttnn_out = ttnn_out.permute(0, 2, 1)
 
     passing, pcc_message = comp_pcc(torch_out, ttnn_out, 0.999)
