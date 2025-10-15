@@ -187,6 +187,10 @@ void BinaryNgDeviceOperation::validate_on_program_cache_miss(
 
     BinaryNgDeviceOperation::validate_on_program_cache_hit(attributes, tensor_args);
 
+    if (attributes.dtype.has_value()) {
+        std::cout << "dtype in binary ng device operation: " << *attributes.dtype << std::endl;
+    }
+
     if (attributes.dtype.has_value() && output_tensor.has_value()) {
         TT_FATAL(
             *attributes.dtype == output_tensor->dtype(),
@@ -315,6 +319,7 @@ void BinaryNgDeviceOperation::validate_on_program_cache_hit(
 
 BinaryNgDeviceOperation::spec_return_value_t BinaryNgDeviceOperation::compute_output_specs(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    std::cout << "Here in binary ng device operation" << std::endl;
     const auto& output_tensor = tensor_args.output_tensor;
 
     const auto& input_tensor_a = tensor_args.input_tensor_a;
@@ -388,13 +393,15 @@ BinaryNgDeviceOperation::spec_return_value_t BinaryNgDeviceOperation::compute_ou
         return TensorSpec(
             output_shape,
             TensorLayout(
-                attributes.get_dtype(),
+                // attributes.get_dtype(),
+                DataType::FLOAT32,
                 PageConfig(Layout::TILE),
                 MemoryConfig(memory_layout, buffer_type, output_shard_spec)));
     }
 
+    std::cout << "Getting dtype in compute output specs: " << attributes.get_dtype() << std::endl;
     return TensorSpec(
-        output_shape, TensorLayout(attributes.get_dtype(), PageConfig(Layout::TILE), attributes.memory_config));
+        output_shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE), attributes.memory_config));
 }
 
 BinaryNgDeviceOperation::program_factory_t BinaryNgDeviceOperation::select_program_factory(
@@ -459,6 +466,9 @@ BinaryNgDeviceOperation::invoke(
     tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations,
     tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations,
     tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations) {
+    if (output_dtype.has_value()) {
+        std::cout << "invoke dtype: " << static_cast<int>(*output_dtype) << std::endl;  // should print 1 for FLOAT32
+    }
     // Validate storage type for input tensors
     TT_FATAL(
         input_tensor_a.storage_type() == StorageType::DEVICE,

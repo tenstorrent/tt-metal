@@ -616,9 +616,11 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
                          : is_sfpu_op  ? a_dtype
                                        : DataType::BFLOAT16;
     const auto c_dtype = c.dtype();
+    std::cout << "c.dtype in binary ng program factory: " << c_dtype << std::endl;
     const auto a_data_format = datatype_to_dataformat_converter(a_dtype);
     const auto b_data_format = datatype_to_dataformat_converter(b_dtype);
     const auto c_data_format = datatype_to_dataformat_converter(c_dtype);
+    std::cout << "c_data_format in binary ng program factory: " << c_data_format << std::endl;
 
     uint32_t a_single_tile_size = tt::tile_size(a_data_format);
     uint32_t b_single_tile_size = tt::tile_size(b_data_format);
@@ -751,6 +753,7 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
         create_cb(tt::CBIndex::c_6, program, all_device_cores, b_single_tile_size, 2, b_data_format);
     }
 
+    std::cout << "dtype before creating c cb: " << c_data_format << std::endl;
     auto [c_cb, c_cb_handle] = create_cb(
         tt::CBIndex::c_2,
         program,

@@ -69,6 +69,7 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b) {
 
 BinaryDeviceOperation::program_factory_t BinaryDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    std::cout << "Here in binary device operation" << std::endl;
     ZoneScopedN("BinaryDeviceOperation::select_program_factory");
     const auto input_shape_a = tensor_args.input_tensor_a.logical_shape();
 
@@ -460,7 +461,7 @@ BinaryDeviceOperation::invoke(
             memory_config.value_or(
                 optional_output_tensor.has_value() ? optional_output_tensor->memory_config()
                                                    : input_tensor_a_arg.memory_config()),
-            output_dtype.value_or(input_tensor_a_arg.dtype()),
+            output_dtype.value_or(input_tensor_a_arg.dtype()), // is this where the issue is?
             std::move(worker_grid),
             std::nullopt},
         tensor_args_t{input_tensor_a_arg, input_tensor_b_arg, optional_output_tensor}};

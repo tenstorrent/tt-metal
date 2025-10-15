@@ -340,6 +340,7 @@ inline auto invoke_binary_ng(
     if (use_legacy ? *use_legacy
                    : binary::is_legacy_only(lhs, rhs, memory_config, output, lhs_activations, rhs_activations) and
                          (not detail::is_binary_ng_only(lhs, rhs, binary_op_type))) {
+        std::cout << "Here in legacy path in binary.cpp" << std::endl;  // should not enter if use_legacy = false
         const std::vector activations(post_activations.begin(), post_activations.end());
         const std::optional lhs_activation =
             lhs_activations.empty() ? std::nullopt : std::optional{lhs_activations.front()};
@@ -357,7 +358,8 @@ inline auto invoke_binary_ng(
     const auto a_dtype = lhs.dtype();
     const auto output_preallocated = output.has_value();
     const auto out_dtype = output_preallocated ? output->dtype() : dtype.value_or(a_dtype);
-
+    std::cout << "Here in non-legacy path in binary.cpp" << std::endl;
+    std::cout << "out_dtype in binary.cpp: " << out_dtype << std::endl;
     const auto mem_config = output_preallocated ? output->memory_config() : memory_config.value_or(lhs.memory_config());
 
     if (dtype.has_value() && output_preallocated) {
@@ -370,6 +372,7 @@ inline auto invoke_binary_ng(
 
     // RM is never BFLOAT8 or BFLOAT4 so we can assume it goes in here.
     if (not typecast_a and not typecast_b) {
+        std::cout << "Not typecasting in binary.cpp" << std::endl;
         const auto input_a_rm = detail::is_layout(lhs, Layout::ROW_MAJOR);
         const auto input_b_rm = detail::is_layout(rhs, Layout::ROW_MAJOR);
         const auto input_a = detail::to_layout(lhs, Layout::TILE);
