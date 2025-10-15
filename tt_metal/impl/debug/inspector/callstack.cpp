@@ -24,6 +24,7 @@
 #include <cxxabi.h>
 #include <sstream>
 #include <filesystem>
+#include <vector>
 
 namespace tt::tt_metal::inspector {
 
@@ -47,7 +48,8 @@ std::string get_python_callstack() {
     using PyFrame_GetBack_t = PyFrameObject* (*)(PyFrameObject*);
     using PyFrame_GetLineNumber_t = int (*)(PyFrameObject*);
     using PyUnicode_AsUTF8_t = const char* (*)(PyObject*);
-    using Py_DECREF_t = void (*)(PyObject*);
+    // Note: Py_DECREF is actually a macro in Python, not a function
+    // We can't directly load it, so we'll handle refcounting differently
 
     // Load Python API functions dynamically
     static auto* dyn_PyGILState_Ensure = (PyGILState_Ensure_t)dlsym(RTLD_DEFAULT, "PyGILState_Ensure");
@@ -57,72 +59,134 @@ std::string get_python_callstack() {
     static auto* dyn_PyFrame_GetBack = (PyFrame_GetBack_t)dlsym(RTLD_DEFAULT, "PyFrame_GetBack");
     static auto* dyn_PyFrame_GetLineNumber = (PyFrame_GetLineNumber_t)dlsym(RTLD_DEFAULT, "PyFrame_GetLineNumber");
     static auto* dyn_PyUnicode_AsUTF8 = (PyUnicode_AsUTF8_t)dlsym(RTLD_DEFAULT, "PyUnicode_AsUTF8");
-    static auto* dyn_Py_DecRef = (Py_DECREF_t)dlsym(RTLD_DEFAULT, "Py_DecRef");
 
     // Check if all required functions are available
     if (!dyn_PyGILState_Ensure || !dyn_PyGILState_Release || !dyn_PyEval_GetFrame || !dyn_PyFrame_GetCode ||
-        !dyn_PyFrame_GetBack || !dyn_PyFrame_GetLineNumber || !dyn_PyUnicode_AsUTF8 || !dyn_Py_DecRef) {
+        !dyn_PyFrame_GetBack || !dyn_PyFrame_GetLineNumber || !dyn_PyUnicode_AsUTF8) {
         return "";  // Some Python functions not available
     }
 
+    // Define additional function types for safer access to code object attributes
+    using PyObject_GetAttrString_t = PyObject* (*)(PyObject*, const char*);
+    using Py_DecRef_t = void (*)(PyObject*);
+
+    static auto* dyn_PyObject_GetAttrString = (PyObject_GetAttrString_t)dlsym(RTLD_DEFAULT, "PyObject_GetAttrString");
+    static auto* dyn_Py_DecRef = (Py_DecRef_t)dlsym(RTLD_DEFAULT, "Py_DecRef");
+
+    if (!dyn_PyObject_GetAttrString) {
+        return "";  // Can't safely access Python objects
+    }
+
     PyGILState_STATE gstate = dyn_PyGILState_Ensure();
+    std::string result;  // Store result to return after releasing GIL
 
-    PyFrameObject* frame = dyn_PyEval_GetFrame();
-    if (frame != nullptr) {
-        // Traverse up the stack to find the first user frame
-        // Skip internal frames from site-packages and ttnn/decorators.py
-        while (frame != nullptr) {
-            PyCodeObject* code = dyn_PyFrame_GetCode(frame);
-            if (code != nullptr) {
-                PyObject* filename_obj = code->co_filename;
-                if (filename_obj) {
-                    const char* filename = dyn_PyUnicode_AsUTF8(filename_obj);
-                    if (filename) {
-                        std::string filename_str(filename);
-                        // Skip internal frames
-                        if (filename_str.find("site-packages") == std::string::npos &&
-                            filename_str.find("ttnn/decorators.py") == std::string::npos &&
-                            filename_str.find("ttnn/api") == std::string::npos &&
-                            filename_str.find("_ttnn.so") == std::string::npos) {
-                            // Get line number
-                            int lineno = dyn_PyFrame_GetLineNumber(frame);
+    // Keep track of frames we need to clean up
+    std::vector<PyFrameObject*> frames_to_clean;
 
-                            // Try to make path relative from tests/ or ttnn/ directory
-                            std::filesystem::path filepath(filename_str);
-                            std::string relative_path = filepath.filename().string();
+    try {
+        PyFrameObject* frame = dyn_PyEval_GetFrame();  // Borrowed reference
 
-                            auto tests_pos = filename_str.find("/tests/");
-                            auto ttnn_pos = filename_str.find("/ttnn/");
-                            if (tests_pos != std::string::npos) {
-                                relative_path = filename_str.substr(tests_pos + 1);
-                            } else if (ttnn_pos != std::string::npos) {
-                                relative_path = filename_str.substr(ttnn_pos + 1);
-                            } else {
-                                relative_path = filepath.filename().string();
+        if (frame != nullptr) {
+            // Traverse up the stack to find the first user frame
+            while (frame != nullptr) {
+                PyCodeObject* code = dyn_PyFrame_GetCode(frame);
+                if (code != nullptr) {
+                    // Use PyObject_GetAttrString for thread-safe access to co_filename
+                    PyObject* filename_obj = dyn_PyObject_GetAttrString((PyObject*)code, "co_filename");
+                    if (filename_obj) {
+                        const char* filename = dyn_PyUnicode_AsUTF8(filename_obj);
+                        if (filename) {
+                            std::string filename_str(filename);
+                            // Skip internal frames
+                            if (filename_str.find("site-packages") == std::string::npos &&
+                                filename_str.find("ttnn/decorators.py") == std::string::npos &&
+                                filename_str.find("ttnn/api") == std::string::npos &&
+                                filename_str.find("_ttnn.so") == std::string::npos) {
+                                // Get line number
+                                int lineno = dyn_PyFrame_GetLineNumber(frame);
+
+                                // Try to make path relative from tests/ or ttnn/ directory
+                                std::filesystem::path filepath(filename_str);
+                                std::string relative_path = filepath.filename().string();
+
+                                auto tests_pos = filename_str.find("/tests/");
+                                auto ttnn_pos = filename_str.find("/ttnn/");
+                                if (tests_pos != std::string::npos) {
+                                    relative_path = filename_str.substr(tests_pos + 1);
+                                } else if (ttnn_pos != std::string::npos) {
+                                    relative_path = filename_str.substr(ttnn_pos + 1);
+                                } else {
+                                    relative_path = filepath.filename().string();
+                                }
+
+                                std::stringstream ss;
+                                ss << relative_path << ":" << lineno;
+                                result = ss.str();
+
+                                // Clean up the filename object
+                                if (dyn_Py_DecRef) {
+                                    dyn_Py_DecRef(filename_obj);
+                                }
+
+                                // Found user frame, exit
+                                break;
                             }
+                        }
 
-                            std::stringstream ss;
-                            ss << relative_path << ":" << lineno;
-
-                            dyn_Py_DecRef((PyObject*)code);
-                            dyn_PyGILState_Release(gstate);
-                            return ss.str();
+                        // Always clean up the filename object
+                        if (dyn_Py_DecRef) {
+                            dyn_Py_DecRef(filename_obj);
                         }
                     }
                 }
-                dyn_Py_DecRef((PyObject*)code);
-            }
 
-            // Move to the next frame
-            PyFrameObject* prev_frame = frame;
-            frame = dyn_PyFrame_GetBack(frame);
-            if (frame == prev_frame) {
-                break;  // Avoid infinite loop
+                // Move to the next frame
+                PyFrameObject* prev_frame = frame;
+                PyFrameObject* next_frame = dyn_PyFrame_GetBack(frame);
+
+                // PyFrame_GetBack returns a new reference, add it to cleanup list
+                if (next_frame) {
+                    frames_to_clean.push_back(next_frame);
+                }
+
+                frame = next_frame;
+
+                // Check for infinite loop
+                if (frame == prev_frame) {
+                    break;
+                }
+
+                // Also break if we've traversed too many frames (safety limit)
+                if (frames_to_clean.size() > 100) {
+                    break;
+                }
             }
         }
+
+        // Clean up all frames we got from PyFrame_GetBack (they are new references)
+        if (dyn_Py_DecRef) {
+            for (PyFrameObject* f : frames_to_clean) {
+                if (f) {
+                    dyn_Py_DecRef((PyObject*)f);
+                }
+            }
+        }
+    } catch (...) {
+        // Clean up frames before releasing GIL
+        if (dyn_Py_DecRef) {
+            for (PyFrameObject* f : frames_to_clean) {
+                if (f) {
+                    dyn_Py_DecRef((PyObject*)f);
+                }
+            }
+        }
+        // Ensure we always release the GIL even if an exception occurs
+        dyn_PyGILState_Release(gstate);
+        return "";
     }
 
     dyn_PyGILState_Release(gstate);
+    return result;
 #endif
     return "";  // Return empty string if Python callstack not available
 }
