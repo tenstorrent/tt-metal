@@ -119,7 +119,51 @@ public:
      */
     std::map<FabricNodeId, chip_id_t> get_local_logical_mesh_chip_id_to_physical_chip_id_mapping() const;
 
-    // Interface for providing local logical mesh mapping to control plane
+    /**
+     * @brief Return the host-rank layout for a mesh (independent of MeshGraph storage)
+     *
+     * Mirrors MeshGraph's host rank API but is derived from TopologyMapper's
+     * fabric-node-to-ASIC mapping. The returned container enumerates host
+     * ranks in a row-major grid describing how hosts tile the logical mesh.
+     */
+    const MeshContainer<MeshHostRankId>& get_host_ranks(MeshId mesh_id) const;
+
+    /**
+     * @brief Get the logical mesh shape or the per-host submesh shape
+     *
+     * When host_rank is not provided, returns the global mesh shape for mesh_id.
+     * When host_rank is provided, returns the shape of the submesh owned by that host.
+     * Shapes are derived from TopologyMapper's host-rank coordinate ranges.
+     */
+    MeshShape get_mesh_shape(MeshId mesh_id, std::optional<MeshHostRankId> host_rank = std::nullopt) const;
+
+    /**
+     * @brief Get the coordinate range for the global mesh or a host's submesh
+     *
+     * When host_rank is not provided, returns the full logical mesh coordinate range (0..N-1, 0..M-1).
+     * When host_rank is provided, returns the coordinate range owned by that host rank.
+     * Ranges are constructed from the fabric-node-to-ASIC mapping.
+     */
+    MeshCoordinateRange get_coord_range(MeshId mesh_id, std::optional<MeshHostRankId> host_rank = std::nullopt) const;
+
+    /**
+     * @brief Get the host rank that owns a logical chip in a mesh
+     *
+     * The chip_id parameter is the Fabric Node (logical) chip id for mesh_id.
+     * The returned rank is derived from TopologyMapper's host-rank coordinate ranges.
+     */
+    std::optional<MeshHostRankId> get_host_rank_for_chip(MeshId mesh_id, chip_id_t chip_id) const;
+
+    /**
+     * @brief Get the logical chip ids for a mesh or a host submesh
+     *
+     * When host_rank is not provided, returns a container of all logical chip
+     * ids in the mesh in row-major order. When host_rank is provided, returns
+     * the logical chip ids contained within that host's coordinate range,
+     * preserving row-major order within the subrange. Logical chip ids are
+     * derived from the global mesh shape via (i * width + j).
+     */
+    MeshContainer<chip_id_t> get_chip_ids(MeshId mesh_id, std::optional<MeshHostRankId> host_rank = std::nullopt) const;
 
 private:
     /**
@@ -201,6 +245,13 @@ private:
     // Bidirectional mapping between AsicID and physical chip id for fast lookups
     std::unordered_map<tt::tt_metal::AsicID, chip_id_t> asic_id_to_physical_chip_id_;
     std::unordered_map<chip_id_t, tt::tt_metal::AsicID> physical_chip_id_to_asic_id_;
+
+    // Host-rank metadata for fabric-node-based queries (independent of MeshGraph's storage)
+    std::vector<MeshContainer<MeshHostRankId>> mesh_host_ranks_;
+    std::unordered_map<std::pair<MeshId, MeshHostRankId>, MeshCoordinateRange, hash_pair> mesh_host_rank_coord_ranges_;
+
+    // Rebuild host-rank containers purely from fabric_node_id_to_asic_id_ mapping
+    void rebuild_host_rank_structs_from_mapping();
 };
 
 }  // namespace tt::tt_fabric

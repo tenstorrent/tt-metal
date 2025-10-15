@@ -72,6 +72,9 @@ TopologyMapper::TopologyMapper(
     mesh_graph_(mesh_graph),
     physical_system_descriptor_(physical_system_descriptor),
     local_mesh_binding_(local_mesh_binding) {
+    // Initialize containers; population will occur during build_mapping
+    mesh_host_ranks_.clear();
+    mesh_host_rank_coord_ranges_.clear();
     build_asic_physical_chip_id_mappings();
     build_mapping();
 }
@@ -114,9 +117,13 @@ void TopologyMapper::build_mapping() {
 
         // Broadcast the mapping to all hosts
         broadcast_mapping_to_all_hosts();
+        // Build host rank containers now that mapping is complete
+        rebuild_host_rank_structs_from_mapping();
     } else {
         // Wait for the 1st host to build the mapping
         receive_mapping_from_host(0);
+        // Build host rank containers now that mapping is received
+        rebuild_host_rank_structs_from_mapping();
     }
 }
 
@@ -588,6 +595,152 @@ std::map<FabricNodeId, chip_id_t> TopologyMapper::get_local_logical_mesh_chip_id
         mapping[get_fabric_node_id_from_asic_id(asic_id)] = get_physical_chip_id_from_asic_id(asic_id);
     }
     return mapping;
+}
+
+// Replacement MeshGraph-like APIs backed by TopologyMapper
+const MeshContainer<MeshHostRankId>& TopologyMapper::get_host_ranks(MeshId mesh_id) const {
+    TT_FATAL(*mesh_id < mesh_host_ranks_.size(), "TopologyMapper: mesh_id {} not found", mesh_id);
+    return mesh_host_ranks_[*mesh_id];
+}
+
+MeshShape TopologyMapper::get_mesh_shape(MeshId mesh_id, std::optional<MeshHostRankId> host_rank) const {
+    if (host_rank.has_value()) {
+        auto it = mesh_host_rank_coord_ranges_.find(std::make_pair(mesh_id, *host_rank));
+        TT_FATAL(
+            it != mesh_host_rank_coord_ranges_.end(),
+            "TopologyMapper: host_rank {} not found for mesh {}",
+            *host_rank,
+            *mesh_id);
+        return it->second.shape();
+    }
+    return mesh_graph_.get_mesh_shape(mesh_id);
+}
+
+MeshCoordinateRange TopologyMapper::get_coord_range(MeshId mesh_id, std::optional<MeshHostRankId> host_rank) const {
+    if (host_rank.has_value()) {
+        auto it = mesh_host_rank_coord_ranges_.find(std::make_pair(mesh_id, *host_rank));
+        TT_FATAL(
+            it != mesh_host_rank_coord_ranges_.end(),
+            "TopologyMapper: host_rank {} not found for mesh {}",
+            *host_rank,
+            *mesh_id);
+        return it->second;
+    }
+    return mesh_graph_.get_coord_range(mesh_id);
+}
+
+std::optional<MeshHostRankId> TopologyMapper::get_host_rank_for_chip(MeshId mesh_id, chip_id_t chip_id) const {
+    // Compute coord and check which host range contains it
+    MeshCoordinate coord = mesh_graph_.chip_to_coordinate(mesh_id, chip_id);
+    for (const auto& [key, range] : mesh_host_rank_coord_ranges_) {
+        if (key.first == mesh_id && range.contains(coord)) {
+            return key.second;
+        }
+    }
+    return std::nullopt;
+}
+
+MeshContainer<chip_id_t> TopologyMapper::get_chip_ids(MeshId mesh_id, std::optional<MeshHostRankId> host_rank) const {
+    // Return global or submesh chip ids using the same indexing convention as MeshGraph.
+    if (!host_rank.has_value()) {
+        auto shape = mesh_graph_.get_mesh_shape(mesh_id);
+        std::vector<chip_id_t> chip_ids(shape.mesh_size());
+        std::iota(chip_ids.begin(), chip_ids.end(), 0);
+        return MeshContainer<chip_id_t>(shape, chip_ids);
+    }
+
+    // Submesh: iterate over coord range and collect logical chip ids
+    MeshCoordinateRange coord_range = get_coord_range(mesh_id, host_rank);
+    MeshShape sub_shape = coord_range.shape();
+    std::vector<chip_id_t> sub_chip_ids;
+    sub_chip_ids.reserve(sub_shape.mesh_size());
+    for (const auto& coord : coord_range) {
+        // Convert coordinate to logical chip id using global mesh shape
+        auto chip = mesh_graph_.coordinate_to_chip(mesh_id, coord);
+        sub_chip_ids.push_back(chip);
+    }
+    return MeshContainer<chip_id_t>(sub_shape, sub_chip_ids);
+}
+
+void TopologyMapper::rebuild_host_rank_structs_from_mapping() {
+    // Derive per-mesh host sets and per-host coord ranges from current mapping
+    std::unordered_map<MeshId, std::unordered_set<HostName>> mesh_to_hosts;
+    std::unordered_map<MeshId, std::unordered_map<HostName, MeshCoordinateRange>> mesh_host_to_range;
+
+    // Precompute coordinate per chip from MeshGraph
+    std::unordered_map<MeshId, std::unordered_map<chip_id_t, MeshCoordinate>> per_mesh_chip_to_coord;
+    for (const auto& [fabric_node_id, _] : fabric_node_id_to_asic_id_) {
+        auto& m = per_mesh_chip_to_coord[fabric_node_id.mesh_id];
+        if (m.find(fabric_node_id.chip_id) == m.end()) {
+            m.emplace(
+                fabric_node_id.chip_id, mesh_graph_.chip_to_coordinate(fabric_node_id.mesh_id, fabric_node_id.chip_id));
+        }
+    }
+
+    // Accumulate ranges
+    for (const auto& [fabric_node_id, asic_id] : fabric_node_id_to_asic_id_) {
+        const auto host = physical_system_descriptor_.get_host_name_for_asic(asic_id);
+        mesh_to_hosts[fabric_node_id.mesh_id].insert(host);
+        const auto coord = per_mesh_chip_to_coord[fabric_node_id.mesh_id].at(fabric_node_id.chip_id);
+        auto& range_map = mesh_host_to_range[fabric_node_id.mesh_id];
+        auto it = range_map.find(host);
+        if (it == range_map.end()) {
+            range_map.emplace(host, MeshCoordinateRange(coord, coord));
+        } else {
+            auto start = it->second.start_coord();
+            auto end = it->second.end_coord();
+            MeshCoordinate new_start(std::min(start[0], coord[0]), std::min(start[1], coord[1]));
+            MeshCoordinate new_end(std::max(end[0], coord[0]), std::max(end[1], coord[1]));
+            it->second = MeshCoordinateRange(new_start, new_end);
+        }
+    }
+
+    // Build MeshContainer<MeshHostRankId> by row-major ordering of host tile ranges
+    // Determine host grid using unique start rows/cols
+    mesh_host_ranks_.clear();
+    mesh_host_rank_coord_ranges_.clear();
+    std::size_t max_mesh_index = 0;
+    for (const auto& [mid, _] : mesh_to_hosts) {
+        max_mesh_index = std::max<std::size_t>(max_mesh_index, *mid + 1);
+    }
+    mesh_host_ranks_.resize(max_mesh_index, MeshContainer<MeshHostRankId>(MeshShape{1, 1}, MeshHostRankId{0}));
+    for (const auto& [mesh_id, hosts] : mesh_to_hosts) {
+        const auto& range_map = mesh_host_to_range.at(mesh_id);
+        std::set<std::uint32_t> rows;
+        std::set<std::uint32_t> cols;
+        for (const auto& [host, range] : range_map) {
+            rows.insert(range.start_coord()[0]);
+            cols.insert(range.start_coord()[1]);
+        }
+        MeshShape host_grid_shape(rows.size(), cols.size());
+        std::vector<MeshHostRankId> host_rank_values(host_grid_shape.mesh_size(), MeshHostRankId{0});
+        std::vector<std::uint32_t> row_list(rows.begin(), rows.end());
+        std::vector<std::uint32_t> col_list(cols.begin(), cols.end());
+        auto row_index = [&](std::uint32_t r) {
+            return std::distance(row_list.begin(), std::find(row_list.begin(), row_list.end(), r));
+        };
+        auto col_index = [&](std::uint32_t c) {
+            return std::distance(col_list.begin(), std::find(col_list.begin(), col_list.end(), c));
+        };
+        MeshHostRankId next_rank{0};
+        for (std::uint32_t r : row_list) {
+            for (std::uint32_t c : col_list) {
+                // find host whose range starts at (r,c)
+                for (const auto& [host, range] : range_map) {
+                    if (range.start_coord()[0] == r && range.start_coord()[1] == c) {
+                        std::size_t idx = row_index(r) * host_grid_shape[1] + col_index(c);
+                        if (idx < host_rank_values.size()) {
+                            host_rank_values[idx] = next_rank;
+                        }
+                        mesh_host_rank_coord_ranges_.insert({{mesh_id, next_rank}, range});
+                        next_rank = MeshHostRankId{*next_rank + 1};
+                        break;
+                    }
+                }
+            }
+        }
+        mesh_host_ranks_[*mesh_id] = MeshContainer<MeshHostRankId>(host_grid_shape, host_rank_values);
+    }
 }
 
 }  // namespace tt::tt_fabric

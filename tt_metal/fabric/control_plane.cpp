@@ -57,11 +57,6 @@ namespace tt::tt_fabric {
 
 namespace {
 
-// Get the physical chip ids for a mesh
-std::unordered_map<chip_id_t, std::vector<CoreCoord>> get_ethernet_cores_grouped_by_connected_chips(chip_id_t chip_id) {
-    return tt::tt_metal::MetalContext::instance().get_cluster().get_ethernet_cores_grouped_by_connected_chips(chip_id);
-}
-
 template <typename CONNECTIVITY_MAP_T>
 void build_golden_link_counts(
     CONNECTIVITY_MAP_T const& golden_connectivity_map,
@@ -483,32 +478,42 @@ void ControlPlane::load_physical_chip_mapping(
 
 void ControlPlane::validate_mesh_connections(MeshId mesh_id) const {
     MeshShape mesh_shape = routing_table_generator_->mesh_graph->get_mesh_shape(mesh_id);
-    auto get_physical_chip_id = [&](const MeshCoordinate& mesh_coord) {
-        auto fabric_chip_id = this->routing_table_generator_->mesh_graph->coordinate_to_chip(mesh_id, mesh_coord);
-        return logical_mesh_chip_id_to_physical_chip_id_mapping_.at(FabricNodeId(mesh_id, fabric_chip_id));
-    };
-    auto validate_chip_connections = [&](const MeshCoordinate& mesh_coord, const MeshCoordinate& other_mesh_coord) {
-        chip_id_t physical_chip_id = get_physical_chip_id(mesh_coord);
-        chip_id_t physical_chip_id_other = get_physical_chip_id(other_mesh_coord);
-        auto eth_links = get_ethernet_cores_grouped_by_connected_chips(physical_chip_id);
-        auto eth_links_to_other = eth_links.find(physical_chip_id_other);
-        TT_FATAL(
-            eth_links_to_other != eth_links.end(),
-            "Chip {} not connected to chip {}",
-            physical_chip_id,
-            physical_chip_id_other);
-    };
+
+    // Get the local mesh coordinate range (only the portion owned by this host)
     const auto& mesh_coord_range = this->get_coord_range(mesh_id, MeshScope::LOCAL);
+
+    auto get_asic_id_from_mesh_coord = [&](const MeshCoordinate& mesh_coord) -> tt::tt_metal::AsicID {
+        auto fabric_chip_id = this->routing_table_generator_->mesh_graph->coordinate_to_chip(mesh_id, mesh_coord);
+        auto fabric_node_id = FabricNodeId(mesh_id, fabric_chip_id);
+
+        chip_id_t physical_chip_id = logical_mesh_chip_id_to_physical_chip_id_mapping_.at(fabric_node_id);
+
+        // Convert physical chip id to asic id using topology mapper if available
+        auto asic_id = tt::tt_metal::MetalContext::instance().get_cluster().get_unique_chip_ids().at(physical_chip_id);
+        return tt::tt_metal::AsicID{asic_id};
+    };
+
+    auto validate_asic_connections = [&](const MeshCoordinate& mesh_coord, const MeshCoordinate& other_mesh_coord) {
+        tt::tt_metal::AsicID asic_id = get_asic_id_from_mesh_coord(mesh_coord);
+        tt::tt_metal::AsicID other_asic_id = get_asic_id_from_mesh_coord(other_mesh_coord);
+
+        // Use physical system descriptor to validate connections
+        auto eth_connections = physical_system_descriptor_->get_eth_connections(asic_id, other_asic_id);
+        TT_FATAL(
+            !eth_connections.empty(), "ASIC {} not connected to ASIC {} in mesh {}", asic_id, other_asic_id, mesh_id);
+    };
+
+    // Validate connections only for the local portion of the mesh
     for (const auto& mesh_coord : mesh_coord_range) {
-        chip_id_t physical_chip_id = get_physical_chip_id(mesh_coord);
         MeshCoordinate mesh_coord_next{mesh_coord[0], mesh_coord[1] + 1};
         MeshCoordinate mesh_coord_next_row{mesh_coord[0] + 1, mesh_coord[1]};
-        const auto& eth_links = get_ethernet_cores_grouped_by_connected_chips(physical_chip_id);
+
+        // Only validate connections to neighbors that are also in the local mesh portion
         if (mesh_coord_range.contains(mesh_coord_next)) {
-            validate_chip_connections(mesh_coord, mesh_coord_next);
+            validate_asic_connections(mesh_coord, mesh_coord_next);
         }
         if (mesh_coord_range.contains(mesh_coord_next_row)) {
-            validate_chip_connections(mesh_coord, mesh_coord_next_row);
+            validate_asic_connections(mesh_coord, mesh_coord_next_row);
         }
     }
 }
@@ -590,9 +595,13 @@ void ControlPlane::convert_fabric_routing_table_to_chip_routing_table() {
     for (std::uint32_t mesh_id_val = 0; mesh_id_val < router_intra_mesh_routing_table.size(); mesh_id_val++) {
         MeshId mesh_id{mesh_id_val};
         if (this->is_local_mesh(mesh_id)) {
+            // TODO: Remove this once Topology mapper works for multi-mesh systems
             // Get the number of ports per chip from any chip in the local mesh
-            const auto& local_mesh_chip_id_container =
-                this->routing_table_generator_->mesh_graph->get_chip_ids(mesh_id, host_rank_id);
+            auto local_mesh_chip_id_container =
+                (this->topology_mapper_ == nullptr)
+                    ? this->routing_table_generator_->mesh_graph->get_chip_ids(mesh_id, host_rank_id)
+                    : this->topology_mapper_->get_chip_ids(mesh_id, host_rank_id);
+
             for (const auto& [_, src_fabric_chip_id] : local_mesh_chip_id_container) {
                 const auto src_fabric_node_id = FabricNodeId(mesh_id, src_fabric_chip_id);
                 auto physical_chip_id = get_physical_chip_id_from_fabric_node_id(src_fabric_node_id);
@@ -822,8 +831,13 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels(
             continue;
         }
         const auto& local_mesh_coord_range = this->get_coord_range(mesh_id, MeshScope::LOCAL);
-        const auto& local_mesh_chip_id_container =
-            this->routing_table_generator_->mesh_graph->get_chip_ids(mesh_id, host_rank_id);
+
+        // TODO: Remove this once Topology mapper works for multi-mesh systems
+        MeshContainer<chip_id_t> local_mesh_chip_id_container =
+            (this->topology_mapper_ == nullptr)
+                ? this->routing_table_generator_->mesh_graph->get_chip_ids(mesh_id, host_rank_id)
+                : this->topology_mapper_->get_chip_ids(mesh_id, host_rank_id);
+
         for (const auto& [_, fabric_chip_id] : local_mesh_chip_id_container) {
             const auto fabric_node_id = FabricNodeId(mesh_id, fabric_chip_id);
             auto physical_chip_id = this->get_physical_chip_id_from_fabric_node_id(fabric_node_id);
@@ -877,16 +891,18 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels(
                         this->assign_direction_to_fabric_eth_core(fabric_node_id, eth_core, edge.port_direction);
                     }
                 } else {
+                    auto host_rank_for_chip =
+                        (this->topology_mapper_ == nullptr)
+                            ? this->routing_table_generator_->mesh_graph->get_host_rank_for_chip(
+                                  mesh_id, logical_connected_chip_id)
+                            : this->topology_mapper_->get_host_rank_for_chip(mesh_id, logical_connected_chip_id);
                     TT_ASSERT(
-                        this->routing_table_generator_->mesh_graph
-                            ->get_host_rank_for_chip(mesh_id, logical_connected_chip_id)
-                            .has_value(),
+                        host_rank_for_chip.has_value(),
                         "Mesh {} Chip {} does not have a host rank associated with it",
                         mesh_id,
-                        fabric_chip_id);
-                    auto connected_host_rank_id = this->routing_table_generator_->mesh_graph
-                                                      ->get_host_rank_for_chip(mesh_id, logical_connected_chip_id)
-                                                      .value();
+                        logical_connected_chip_id);
+                    auto connected_host_rank_id = host_rank_for_chip.value();
+
                     auto unique_chip_id =
                         tt::tt_metal::MetalContext::instance().get_cluster().get_unique_chip_ids().at(physical_chip_id);
                     // Iterate over all neighboring hosts
@@ -1632,8 +1648,11 @@ size_t ControlPlane::get_num_available_routing_planes_in_direction(
 template <>
 void ControlPlane::write_all_to_all_routing_fields<1, false>(MeshId mesh_id) const {
     auto host_rank_id = this->get_local_host_rank_id_binding();
+    // TODO: Remove mesh graph chip ids once Topology mapper works for multi-mesh systems
     const auto& local_mesh_chip_id_container =
-        this->routing_table_generator_->mesh_graph->get_chip_ids(mesh_id, host_rank_id);
+        (this->topology_mapper_ == nullptr)
+            ? this->routing_table_generator_->mesh_graph->get_chip_ids(mesh_id, host_rank_id)
+            : this->topology_mapper_->get_chip_ids(mesh_id, host_rank_id);
     uint16_t num_chips = MAX_CHIPS_LOWLAT_1D < local_mesh_chip_id_container.size()
                              ? MAX_CHIPS_LOWLAT_1D
                              : static_cast<uint16_t>(local_mesh_chip_id_container.size());
@@ -1693,8 +1712,11 @@ void ControlPlane::write_all_to_all_routing_fields<1, false>(MeshId mesh_id) con
 template <>
 void ControlPlane::write_all_to_all_routing_fields<2, true>(MeshId mesh_id) const {
     auto host_rank_id = this->get_local_host_rank_id_binding();
+    // TODO: Remove mesh graph chip ids once Topology mapper works for multi-mesh systems
     const auto& local_mesh_chip_id_container =
-        this->routing_table_generator_->mesh_graph->get_chip_ids(mesh_id, host_rank_id);
+        (this->topology_mapper_ == nullptr)
+            ? this->routing_table_generator_->mesh_graph->get_chip_ids(mesh_id, host_rank_id)
+            : this->topology_mapper_->get_chip_ids(mesh_id, host_rank_id);
 
     // Get mesh shape for 2D routing calculation
     MeshShape mesh_shape = this->get_physical_mesh_shape(mesh_id);
@@ -1821,7 +1843,13 @@ std::vector<MeshId> ControlPlane::get_user_physical_mesh_ids() const {
 MeshShape ControlPlane::get_physical_mesh_shape(MeshId mesh_id, MeshScope scope) const {
     std::optional<MeshHostRankId> local_host_rank_id =
         MeshScope::LOCAL == scope ? std::make_optional(this->get_local_host_rank_id_binding()) : std::nullopt;
-    return this->routing_table_generator_->mesh_graph->get_mesh_shape(mesh_id, local_host_rank_id);
+
+    // TODO: Remove this once Topology mapper works for multi-mesh systems
+    if (this->topology_mapper_ == nullptr) {
+        return this->routing_table_generator_->mesh_graph->get_mesh_shape(mesh_id, local_host_rank_id);
+    }
+
+    return this->topology_mapper_->get_mesh_shape(mesh_id, local_host_rank_id);
 }
 
 void ControlPlane::print_routing_tables() const {
@@ -2038,7 +2066,13 @@ MeshCoordinate ControlPlane::get_local_mesh_offset() const {
 MeshCoordinateRange ControlPlane::get_coord_range(MeshId mesh_id, MeshScope scope) const {
     std::optional<MeshHostRankId> local_host_rank_id =
         MeshScope::LOCAL == scope ? std::make_optional(this->get_local_host_rank_id_binding()) : std::nullopt;
-    return this->routing_table_generator_->mesh_graph->get_coord_range(mesh_id, local_host_rank_id);
+
+    // TODO: Remove this once Topology mapper works for multi-mesh systems
+    if (this->topology_mapper_ == nullptr) {
+        return this->routing_table_generator_->mesh_graph->get_coord_range(mesh_id, local_host_rank_id);
+    }
+
+    return this->topology_mapper_->get_coord_range(mesh_id, local_host_rank_id);
 }
 
 bool ControlPlane::is_local_mesh(MeshId mesh_id) const {

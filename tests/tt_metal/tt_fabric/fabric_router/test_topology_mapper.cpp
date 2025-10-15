@@ -77,6 +77,19 @@ TEST_F(TopologyMapperTest, T3kMeshGraphTest) {
     // 6 and 7 are adjacent for mesh 0
     EXPECT_TRUE(contains(physical_system_descriptor_->get_asic_neighbors(asic_id_6), asic_id_7));
     EXPECT_TRUE(contains(physical_system_descriptor_->get_asic_neighbors(asic_id_7), asic_id_6));
+
+    // Validate only one host rank for mesh 0
+    const MeshId mesh_id{0};
+    const auto& host_ranks = topology_mapper.get_host_ranks(mesh_id);
+    EXPECT_EQ(host_ranks.size(), 1u);
+
+    // Validate that the full shape and sub shape is 2x4
+    MeshShape full_shape = mesh_graph.get_mesh_shape(mesh_id);
+    EXPECT_EQ(full_shape, MeshShape(2, 4));
+    EXPECT_EQ(topology_mapper.get_mesh_shape(mesh_id), full_shape);
+
+    // Validate that the host rank is 0
+    EXPECT_EQ(host_ranks.values(), std::vector<MeshHostRankId>({MeshHostRankId(0)}));
 }
 
 TEST_F(TopologyMapperTest, DualGalaxyBigMeshTest) {
@@ -163,6 +176,34 @@ TEST_F(TopologyMapperTest, DualGalaxyBigMeshTest) {
     EXPECT_TRUE(contains(physical_system_descriptor_->get_asic_neighbors(asic_id_31), asic_id_39));
     EXPECT_TRUE(contains(physical_system_descriptor_->get_asic_neighbors(asic_id_35), asic_id_27));
     EXPECT_TRUE(contains(physical_system_descriptor_->get_asic_neighbors(asic_id_27), asic_id_35));
+
+    // Check the host ranks are right
+    const MeshId mesh_id{0};
+    const auto& host_ranks = topology_mapper.get_host_ranks(mesh_id);
+    EXPECT_EQ(host_ranks.size(), 2u);
+
+    // Check the full shape and sub shape are right
+    MeshShape full_shape = mesh_graph.get_mesh_shape(mesh_id);
+    EXPECT_EQ(full_shape, MeshShape(8, 8));
+    EXPECT_EQ(topology_mapper.get_mesh_shape(mesh_id), full_shape);
+
+    // Check coord range for host rank 0 is 0,0 4, 7
+    EXPECT_EQ(
+        topology_mapper.get_coord_range(mesh_id, MeshHostRankId(0)),
+        MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(3, 7)));
+    // Check coord range for host rank 1 is 4,0 8, 7
+    EXPECT_EQ(
+        topology_mapper.get_coord_range(mesh_id, MeshHostRankId(1)),
+        MeshCoordinateRange(MeshCoordinate(4, 0), MeshCoordinate(7, 7)));
+
+    // Check the host rank for chip 56 is 0
+    EXPECT_EQ(topology_mapper.get_host_rank_for_chip(mesh_id, 56), MeshHostRankId(1));
+    // Check the host rank for chip 48 is 1
+    EXPECT_EQ(topology_mapper.get_host_rank_for_chip(mesh_id, 48), MeshHostRankId(1));
+    // Check the host rank for chip 8 is 0
+    EXPECT_EQ(topology_mapper.get_host_rank_for_chip(mesh_id, 8), MeshHostRankId(0));
+    // Check the host rank for chip 0 is 0
+    EXPECT_EQ(topology_mapper.get_host_rank_for_chip(mesh_id, 0), MeshHostRankId(0));
 }
 
 TEST_F(TopologyMapperTest, N300MeshGraphTest) {
@@ -188,6 +229,21 @@ TEST_F(TopologyMapperTest, N300MeshGraphTest) {
     // Check for adjacency
     EXPECT_TRUE(contains(physical_system_descriptor_->get_asic_neighbors(asic_id_0), asic_id_1));
     EXPECT_TRUE(contains(physical_system_descriptor_->get_asic_neighbors(asic_id_1), asic_id_0));
+
+    // Check the host ranks are right
+    const MeshId mesh_id{0};
+    const auto& host_ranks = topology_mapper.get_host_ranks(mesh_id);
+    EXPECT_EQ(host_ranks.size(), 1u);
+
+    // Check the full shape and sub shape are right
+    MeshShape full_shape = mesh_graph.get_mesh_shape(mesh_id);
+    EXPECT_EQ(full_shape, MeshShape(1, 2));
+    EXPECT_EQ(topology_mapper.get_mesh_shape(mesh_id), full_shape);
+
+    // Check coord range for host rank 0 is 0,0 1, 1
+    EXPECT_EQ(
+        topology_mapper.get_coord_range(mesh_id, MeshHostRankId(0)),
+        MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(0, 1)));
 }
 
 TEST_F(TopologyMapperTest, T3kMultiMeshTest) {
