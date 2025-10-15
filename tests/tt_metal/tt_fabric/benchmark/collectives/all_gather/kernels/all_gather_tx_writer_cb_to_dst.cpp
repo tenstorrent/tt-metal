@@ -51,9 +51,25 @@ void kernel_main() {
 
     // Four fabric connections in fixed order: W, E, N, S
     auto conn_W = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(idx);
+    {
+        const uint32_t tag = get_arg_val<uint32_t>(idx++);
+        // DPRINT << HEX() << "[TAG] W=0x" << tag << ENDL();
+    }
     auto conn_E = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(idx);
+    {
+        const uint32_t tag = get_arg_val<uint32_t>(idx++);
+        // DPRINT << HEX() << "[TAG] E=0x" << tag << ENDL();
+    }
     auto conn_N = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(idx);
+    {
+        const uint32_t tag = get_arg_val<uint32_t>(idx++);
+        // DPRINT << HEX() << "[TAG] N=0x" << tag << ENDL();
+    }
     auto conn_S = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(idx);
+    {
+        const uint32_t tag = get_arg_val<uint32_t>(idx++);
+        // DPRINT << HEX() << "[TAG] S=0x" << tag << ENDL();
+    }
 
     // First-hop start node IDs per leg (must match host order W,E,N,S).
     const uint16_t dst_dev_W = static_cast<uint16_t>(get_arg_val<uint32_t>(idx++));
@@ -72,28 +88,29 @@ void kernel_main() {
     const uint16_t s_hops = static_cast<uint16_t>(get_arg_val<uint32_t>(idx++));
     const uint32_t leg_mask = get_arg_val<uint32_t>(idx++);
 
-    DPRINT << "P0 pre: hops E/W/N/S=" << (uint32_t)e_hops << "/" << (uint32_t)w_hops << "/" << (uint32_t)n_hops << "/"
-           << (uint32_t)s_hops << " leg_mask=" << leg_mask << ENDL();
+    // DPRINT << "P0 pre: hops E/W/N/S=" << (uint32_t)e_hops << "/" << (uint32_t)w_hops << "/" << (uint32_t)n_hops <<
+    // "/"
+    //        << (uint32_t)s_hops << " leg_mask=" << leg_mask << ENDL();
 
-    DPRINT << "P1 alloc: begin" << ENDL();
+    // DPRINT << "P1 alloc: begin" << ENDL();
 
-    DPRINT << "P1W alloc try" << ENDL();
+    // DPRINT << "P1W alloc try" << ENDL();
     volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr_W = PacketHeaderPool::allocate_header();
-    DPRINT << "P1W alloc ok ptr=0x" << (uint32_t)((uintptr_t)hdr_W & 0xffffffffu) << ENDL();
+    // DPRINT << "P1W alloc ok ptr=0x" << (uint32_t)((uintptr_t)hdr_W & 0xffffffffu) << ENDL();
 
-    DPRINT << "P1E alloc try" << ENDL();
+    // DPRINT << "P1E alloc try" << ENDL();
     volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr_E = PacketHeaderPool::allocate_header();
-    DPRINT << "P1E alloc ok ptr=0x" << (uint32_t)((uintptr_t)hdr_E & 0xffffffffu) << ENDL();
+    // DPRINT << "P1E alloc ok ptr=0x" << (uint32_t)((uintptr_t)hdr_E & 0xffffffffu) << ENDL();
 
-    DPRINT << "P1N alloc try" << ENDL();
+    // DPRINT << "P1N alloc try" << ENDL();
     volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr_N = PacketHeaderPool::allocate_header();
-    DPRINT << "P1N alloc ok ptr=0x" << (uint32_t)((uintptr_t)hdr_N & 0xffffffffu) << ENDL();
+    // DPRINT << "P1N alloc ok ptr=0x" << (uint32_t)((uintptr_t)hdr_N & 0xffffffffu) << ENDL();
 
-    DPRINT << "P1S alloc try" << ENDL();
+    // DPRINT << "P1S alloc try" << ENDL();
     volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr_S = PacketHeaderPool::allocate_header();
-    DPRINT << "P1S alloc ok ptr=0x" << (uint32_t)((uintptr_t)hdr_S & 0xffffffffu) << ENDL();
+    // DPRINT << "P1S alloc ok ptr=0x" << (uint32_t)((uintptr_t)hdr_S & 0xffffffffu) << ENDL();
 
-    DPRINT << "P1 alloc: done" << ENDL();
+    // DPRINT << "P1 alloc: done" << ENDL();
 
     // Clear headers so fabric_set_mcast_route writes into a clean slate
     zero_l1_buf(reinterpret_cast<uint32_t*>(const_cast<PACKET_HEADER_TYPE*>(hdr_W)), sizeof(PACKET_HEADER_TYPE));

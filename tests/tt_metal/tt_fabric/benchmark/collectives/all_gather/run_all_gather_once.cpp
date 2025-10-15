@@ -454,12 +454,19 @@ Notes:
     // Append FOUR connections in fixed order: W, E, N, S (so kernel can parse uniformly).
     tt::tt_fabric::append_fabric_connection_rt_args(
         src_fid, (want_W ? *dstW : any_dst), ROUTING_PLANE_ID, sender_prog, p.sender_core, writer_rt);
+    writer_rt.push_back(0xC0FFEE01);  // TAG_W
+
     tt::tt_fabric::append_fabric_connection_rt_args(
         src_fid, (want_E ? *dstE : any_dst), ROUTING_PLANE_ID, sender_prog, p.sender_core, writer_rt);
+    writer_rt.push_back(0xC0FFEE02);  // TAG_E
+
     tt::tt_fabric::append_fabric_connection_rt_args(
         src_fid, (want_N ? *dstN : any_dst), ROUTING_PLANE_ID, sender_prog, p.sender_core, writer_rt);
+    writer_rt.push_back(0xC0FFEE03);  // TAG_N
+
     tt::tt_fabric::append_fabric_connection_rt_args(
         src_fid, (want_S ? *dstS : any_dst), ROUTING_PLANE_ID, sender_prog, p.sender_core, writer_rt);
+    writer_rt.push_back(0xC0FFEE04);  // TAG_S
 
     uint16_t dev_W = pick_adjacent(want_W, src_coord[0], src_coord[1] - 1, "W");
     uint16_t dev_E = pick_adjacent(want_E, src_coord[0], src_coord[1] + 1, "E");

@@ -343,11 +343,18 @@ struct WorkerToFabricEdmSenderImpl {
     void open_start() {
         const auto dest_noc_addr_coord_only = get_noc_addr(this->edm_noc_x, this->edm_noc_y, 0);
 
+        DPRINT << "[EDM] open_start: edm_xy=(" << (uint32_t)this->edm_noc_x << "," << (uint32_t)this->edm_noc_y
+               << ") noc=" << (uint32_t)WORKER_HANDSHAKE_NOC << " posted=" << (uint32_t)posted
+               << " send_credit_addr=" << (uint32_t)SEND_CREDIT_ADDR << ENDL();
+
         tt::tt_fabric::EDMChannelWorkerLocationInfo* worker_location_info_ptr =
             reinterpret_cast<tt::tt_fabric::EDMChannelWorkerLocationInfo*>(edm_worker_location_info_addr);
 
         if constexpr (!I_USE_STREAM_REG_FOR_CREDIT_RECEIVE) {
             const uint64_t remote_buffer_index_addr = dest_noc_addr_coord_only | edm_copy_of_wr_counter_addr;
+            DPRINT << "[EDM] rd wr_ctr @ 0x" << (uint32_t)(remote_buffer_index_addr >> 32) << ":0x"
+                   << (uint32_t)(remote_buffer_index_addr & 0xffffffffu) << " -> local 0x"
+                   << (uint32_t)reinterpret_cast<size_t>(this->worker_teardown_addr) << ENDL();
             // piggy back off of worker_teardown_addr just to temporarily store the read-back write pointer
             // then once we get it we will use that address for the teardown ack
             // Note this is safe because only the worker can initiate teardown (and it will not do it until)
@@ -362,6 +369,9 @@ struct WorkerToFabricEdmSenderImpl {
                 dest_noc_addr_coord_only | reinterpret_cast<size_t>(
                                                edm_worker_location_info_addr +
                                                offsetof(tt::tt_fabric::EDMChannelWorkerLocationInfo, edm_read_counter));
+            DPRINT << "[EDM] rd free_slots @ 0x" << (uint32_t)(edm_read_free_slots_or_read_counter_addr >> 32) << ":0x"
+                   << (uint32_t)(edm_read_free_slots_or_read_counter_addr & 0xffffffffu) << " -> local 0x"
+                   << (uint32_t)reinterpret_cast<size_t>(this->edm_buffer_local_free_slots_read_ptr) << ENDL();
             // Read the read/pointer or buffer free slots
             noc_async_read(
                 edm_read_free_slots_or_read_counter_addr,
@@ -374,6 +384,9 @@ struct WorkerToFabricEdmSenderImpl {
             reinterpret_cast<size_t>(
                 edm_worker_location_info_addr +
                 offsetof(tt::tt_fabric::EDMChannelWorkerLocationInfo, worker_semaphore_address));
+        DPRINT << "[EDM] wr worker_sem_addr_ptr @ 0x" << (uint32_t)(dest_edm_location_info_addr >> 32) << ":0x"
+               << (uint32_t)(dest_edm_location_info_addr & 0xffffffffu) << " = 0x"
+               << (uint32_t)reinterpret_cast<size_t>(edm_buffer_local_free_slots_update_ptr) << ENDL();
         // write the address of our local copy of read counter (that EDM is supposed to update)
         if constexpr (!I_USE_STREAM_REG_FOR_CREDIT_RECEIVE) {
             noc_inline_dw_write<InlineWriteDst::L1, posted>(
@@ -391,6 +404,9 @@ struct WorkerToFabricEdmSenderImpl {
         const uint64_t edm_teardown_semaphore_address_address =
             dest_noc_addr_coord_only |
             reinterpret_cast<uint64_t>(&(worker_location_info_ptr->worker_teardown_semaphore_address));
+        DPRINT << "[EDM] wr teardown_sem_addr @ 0x" << (uint32_t)(edm_teardown_semaphore_address_address >> 32) << ":0x"
+               << (uint32_t)(edm_teardown_semaphore_address_address & 0xffffffffu) << " = 0x"
+               << (uint32_t)reinterpret_cast<size_t>(worker_teardown_addr) << ENDL();
         // Write our local teardown ack address to EDM
         noc_inline_dw_write<InlineWriteDst::L1, posted>(
             edm_teardown_semaphore_address_address,
@@ -400,6 +416,9 @@ struct WorkerToFabricEdmSenderImpl {
         // Write out core noc-xy coord to EDM
         const uint64_t connection_worker_xy_address =
             dest_noc_addr_coord_only | reinterpret_cast<uint64_t>(&(worker_location_info_ptr->worker_xy));
+        DPRINT << "[EDM] wr worker_xy @ 0x" << (uint32_t)(connection_worker_xy_address >> 32) << ":0x"
+               << (uint32_t)(connection_worker_xy_address & 0xffffffffu) << " = 0x"
+               << WorkerXY(my_x[0], my_y[0]).to_uint32() << ENDL();
         noc_inline_dw_write<InlineWriteDst::L1, posted>(
             connection_worker_xy_address, WorkerXY(my_x[0], my_y[0]).to_uint32(), 0xf, WORKER_HANDSHAKE_NOC);
     }
