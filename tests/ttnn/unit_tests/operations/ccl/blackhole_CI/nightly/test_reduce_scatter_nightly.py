@@ -467,3 +467,130 @@ def test_rs_row_ring_nightly(
         num_buffers_per_channel=num_buffers_per_channel,
     )
     ttnn.ReadDeviceProfiler(submesh_device)
+
+
+@skip_for_wormhole_b0()
+@skip_for_n_or_less_dev(3)
+@pytest.mark.parametrize("num_links", [1, 2], ids=["1_link", "2_links"])
+@pytest.mark.parametrize(
+    "num_devices, rs_input_shape, layout",
+    [
+        (4, [1, 1, 32, 3584], ttnn.ROW_MAJOR_LAYOUT),
+    ],
+)
+@pytest.mark.parametrize(
+    "rs_input_dtype",
+    [
+        ttnn.bfloat16,
+    ],
+)
+@pytest.mark.parametrize(
+    "mem_config_input, mem_config_rs,dim",
+    [
+        (
+            ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(
+                    ttnn.CoreRangeSet(
+                        {
+                            ttnn.CoreRange(
+                                ttnn.CoreCoord(0, 0),
+                                ttnn.CoreCoord(4, 6),
+                            ),
+                        }
+                    ),
+                    [
+                        32,  # shard_height
+                        160,  # shard_width_hidden_dim_across_8_cores
+                    ],
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+            ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(
+                    ttnn.CoreRangeSet(
+                        {
+                            ttnn.CoreRange(
+                                ttnn.CoreCoord(0, 0),
+                                ttnn.CoreCoord(4, 6),
+                            ),
+                        }
+                    ),
+                    [
+                        32,  # shard_height
+                        64,  # shard_width_hidden_dim_across_8_cores
+                    ],
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+            3,
+        )
+    ],
+)
+@pytest.mark.parametrize(
+    "enable_trace, num_iters",
+    [
+        (False, 10),
+    ],
+    ids=[
+        "non-trace",
+    ],
+)
+@pytest.mark.parametrize(
+    "device_params, rs_topology",
+    [
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 113664}, ttnn.Topology.Linear),
+    ],
+    indirect=["device_params"],
+    ids=[
+        "fabric_linear",
+    ],
+)
+@pytest.mark.parametrize("chunks_per_sync", [2])
+@pytest.mark.parametrize("num_workers_per_link", [2])
+@pytest.mark.parametrize("num_buffers_per_channel", [8])
+def test_rs_broken(
+    bh_2d_mesh_device,
+    num_devices,
+    num_links,
+    rs_input_shape,
+    dim,
+    layout,
+    rs_input_dtype,
+    mem_config_input,
+    mem_config_rs,
+    enable_trace,
+    num_iters,
+    rs_topology,
+    chunks_per_sync,
+    num_workers_per_link,
+    num_buffers_per_channel,
+):
+    cluster_axis = 0
+    validate_test(num_devices, rs_topology, bh_2d_mesh_device.shape, cluster_axis)
+    if cluster_axis == 0:
+        submesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
+    else:
+        submesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((1, num_devices)))
+    run_reduce_scatter_impl(
+        submesh_device,
+        num_devices,
+        rs_input_shape,
+        dim,
+        num_links,
+        rs_input_dtype,
+        layout,
+        mem_config_input,
+        mem_config_rs,
+        rs_topology=rs_topology,
+        enable_trace=enable_trace,
+        num_iters=num_iters,
+        cluster_axis=cluster_axis,
+        chunks_per_sync=chunks_per_sync,
+        num_workers_per_link=num_workers_per_link,
+        num_buffers_per_channel=num_buffers_per_channel,
+    )
+    ttnn.ReadDeviceProfiler(submesh_device)
