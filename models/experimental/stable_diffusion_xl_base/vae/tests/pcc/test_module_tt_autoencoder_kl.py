@@ -52,21 +52,24 @@ def test_vae(device, input_shape, vae_block, pcc, is_ci_env, reset_seeds, is_ci_
         torch_output_tensor = vae.decode(torch_input_tensor, return_dict=False)[0]
     logger.info("Torch model done")
 
-    ttnn_input_tensor = ttnn.from_torch(
-        torch_input_tensor,
-        dtype=ttnn.bfloat16,
-        device=device,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-    B, C, H, W = list(ttnn_input_tensor.shape)
+    if vae_block == "encoder":
+        ttnn_input_tensor = torch_input_tensor
+    else:
+        ttnn_input_tensor = ttnn.from_torch(
+            torch_input_tensor,
+            dtype=ttnn.bfloat16,
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        B, C, H, W = list(ttnn_input_tensor.shape)
 
-    ttnn_input_tensor = ttnn.permute(ttnn_input_tensor, (0, 2, 3, 1))
-    ttnn_input_tensor = ttnn.reshape(ttnn_input_tensor, (B, 1, H * W, C))
+        ttnn_input_tensor = ttnn.permute(ttnn_input_tensor, (0, 2, 3, 1))
+        ttnn_input_tensor = ttnn.reshape(ttnn_input_tensor, (B, 1, H * W, C))
 
     logger.info("Running TT model")
     if vae_block == "encoder":
-        output_tensor = tt_vae.encode(ttnn_input_tensor, [B, C, H, W])
+        output_tensor = tt_vae.encode(ttnn_input_tensor)
 
         output_tensor = output_tensor.latent_dist.sample()
         torch_output_tensor = torch_output_tensor.sample()

@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from dataclasses import dataclass
+from diffusers import StableDiffusionXLInpaintPipeline
 from models.experimental.stable_diffusion_xl_base.tests.test_common import (
     get_timesteps,
     prepare_latents_inpainting,
@@ -20,6 +21,9 @@ import ttnn
 @dataclass
 class TtSDXLInpaintingPipelineConfig(TtSDXLPipelineConfig):
     strength: float = 0.99
+    aesthetic_score: float = 6.0
+    negative_aesthetic_score: float = 2.5
+    _torch_pipeline_type = StableDiffusionXLInpaintPipeline
 
 
 class TtSDXLInpaintingPipeline(TtSDXLPipeline):
@@ -147,15 +151,13 @@ class TtSDXLInpaintingPipeline(TtSDXLPipeline):
         original_size = (height, width)
         target_size = (height, width)
         crops_coords_top_left = (0, 0)
-        aesthetic_score = 6.0
-        negative_aesthetic_score = 2.5
 
         add_time_ids, negative_add_time_ids = self.torch_pipeline._get_add_time_ids(
             original_size,
             crops_coords_top_left,
             target_size,
-            aesthetic_score,
-            negative_aesthetic_score,
+            self.pipeline_config.aesthetic_score,
+            self.pipeline_config.negative_aesthetic_score,
             original_size,  # negative_original_size, assume the same as positive
             crops_coords_top_left,  # negative_crops_coords_top_left, assume the same as positive
             target_size,  # negative_target_size, assume the same as positive

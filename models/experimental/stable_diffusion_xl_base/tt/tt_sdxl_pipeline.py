@@ -6,6 +6,7 @@ import os
 import torch
 from dataclasses import dataclass
 
+from diffusers import StableDiffusionXLPipeline
 from loguru import logger
 import ttnn
 
@@ -36,6 +37,11 @@ class TtSDXLPipelineConfig:
     use_cfg_parallel: bool = False
     crop_coords_top_left: tuple = (0, 0)
     guidance_rescale: float = 0.0
+    _torch_pipeline_type = StableDiffusionXLPipeline
+
+    @property
+    def pipeline_type(self):
+        return self._torch_pipeline_type
 
 
 class TtSDXLPipeline(LightweightModule):
@@ -48,12 +54,9 @@ class TtSDXLPipeline(LightweightModule):
     def __init__(self, ttnn_device, torch_pipeline, pipeline_config: TtSDXLPipelineConfig):
         super().__init__()
 
-        # if not isinstance(torch_pipeline, StableDiffusionXLPipeline) and not isinstance(
-        #     torch_pipeline, StableDiffusionXLInpaintPipeline
-        # ):
-        #     assert (
-        #         False
-        #     ), "torch_pipeline must be an instance of StableDiffusionXLPipeline or StableDiffusionXLInpaintPipeline"
+        assert isinstance(
+            torch_pipeline, pipeline_config.pipeline_type
+        ), f"torch_pipeline must be an instance of {pipeline_config.pipeline_type.__name__}, but got {type(torch_pipeline).__name__}"
         assert isinstance(torch_pipeline.text_encoder, CLIPTextModel), "pipeline.text_encoder is not a CLIPTextModel"
         assert isinstance(
             torch_pipeline.text_encoder_2, CLIPTextModelWithProjection

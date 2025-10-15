@@ -466,6 +466,63 @@ def retrieve_timesteps(
     return timesteps, num_inference_steps
 
 
+def prepare_image_latents(
+    torch_pipeline,
+    tt_pipeline,
+    batch_size,
+    num_channels_latents,
+    height,
+    width,
+    cpu_device,
+    dtype,
+    image=None,
+    is_strength_max=True,
+    add_noise=True,
+    latents=None,  # passed in latents
+):
+    # 4, 5, 8
+    assert not is_strength_max, "Max strength is not supported for inpainting pipeline atm"
+    assert image is not None, "Image is not provided"
+    assert image.shape[1] == 3, "Image is not 3 channels"
+    assert add_noise is True, "Add noise should be True"
+    assert batch_size == 1, "Batch size should be 1"
+    assert torch_pipeline.vae_scale_factor == 8, "Vae scale factor should be 8"
+    assert latents is None, "Latents are not supported for inpainting pipeline atm"
+
+    shape = (
+        batch_size,
+        num_channels_latents,
+        int(height) // torch_pipeline.vae_scale_factor,
+        int(width) // torch_pipeline.vae_scale_factor,
+    )
+
+    cpu_device = torch.device("cpu")
+    image = image.to(device=cpu_device, dtype=dtype)
+
+    if tt_pipeline.pipeline_config.vae_on_device == True:
+        image_latents = tt_pipeline.tt_vae.encode(image).latent_dist.sample()
+    else:
+        image_latents = torch_pipeline.vae.encode(image).latent_dist.sample()
+    image_latents = tt_pipeline.torch_pipeline.vae.config.scaling_factor * image_latents
+    image_latents = image_latents.repeat(batch_size // image_latents.shape[0], 1, 1, 1)
+    # print(f"Path 4 in prepare latents")
+
+    torch_noise = torch.randn(shape, generator=None, device=cpu_device, dtype=dtype)
+    # if strength is 1. then initialise the latents to noise, else initial to image + noise
+    # Need to convert:
+    # - image_latents to ttnn_tensor
+    # - noise to ttnn_tensor
+    tt_noise = ttnn.from_torch(
+        torch_noise, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=tt_pipeline.ttnn_device
+    )
+    tt_image_latents = ttnn.from_torch(
+        image_latents, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=tt_pipeline.ttnn_device
+    )
+    latents = tt_pipeline.tt_scheduler.add_noise(tt_image_latents, tt_noise, tt_pipeline.tt_scheduler.begin_index)
+
+    return ttnn.to_torch(latents)
+
+
 def prepare_latents_inpainting(
     torch_pipeline,
     tt_pipeline,

@@ -55,8 +55,22 @@ class TtAutoencoderKL(LightweightModule):
             device, post_quant_conv_weights, post_quant_conv_bias, model_config.conv_w_dtype
         )
 
-    def encode(self, hidden_states, input_shape):
-        B, C, H, W = input_shape
+    def encode(self, hidden_states):
+        assert isinstance(
+            hidden_states, torch.Tensor
+        ), "encode only supports torch tensors as input, conversion to ttnn done within"
+
+        B, C, H, W = hidden_states.shape
+        hidden_states = torch.permute(hidden_states, (0, 2, 3, 1))  # NHWC to NCHW
+        hidden_states = torch.reshape(hidden_states, (B, 1, H * W, C))
+        hidden_states = ttnn.from_torch(
+            hidden_states,
+            dtype=ttnn.bfloat16,
+            device=self.device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
         hidden_states, [C, H, W] = self.encoder(hidden_states, [B, C, H, W])
         hidden_states = ttnn.linear(
             hidden_states,
