@@ -327,8 +327,22 @@ TestFabricSetup YamlConfigParser::parse_fabric_setup(const YAML::Node& fabric_se
             "Invalid torus_config '{}'. Supported values are: 'X', 'Y', 'XY'",
             config);
     }
-
+    validate_torus_setup(config);
     return fabric_setup;
+}
+
+void YamlConfigParser::validate_torus_setup(const std::string& torus_config) {
+    PhysicalSystemDescriptor physical_system_descriptor(
+        MetalContext::instance().get_distributed_context_ptr(),
+        &MetalContext::instance().hal(),
+        MetalContext::instance().rtoptions().get_mock_enabled());
+
+    auto all_hostnames = physical_system_descriptor.get_all_hostnames();
+
+    auto cabling_descriptor_path = get_cabling_descriptor_path(torus_config);
+
+    CablingGenerator cabling_generator(cabling_descriptor_path, all_hostnames);
+    validate_fsd_against_gsd(cabling_descriptor_path, physical_system_descriptor.get_yaml_path(), false);
 }
 
 PhysicalMeshConfig YamlConfigParser::parse_physical_mesh_config(const YAML::Node& physical_mesh_yaml) {

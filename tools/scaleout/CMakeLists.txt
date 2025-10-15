@@ -7,6 +7,13 @@ add_executable(
     validation/utils/cluster_validation_utils.cpp
 )
 
+add_executable(
+    run_runtime_fsd_validation
+    validation/run_runtime_fsd_validation.cpp
+    validation/utils/ethernet_link_metrics_serialization.cpp
+    validation/utils/cluster_validation_utils.cpp
+)
+
 # Library target
 add_library(scaleout_tools OBJECT)
 add_library(TT::ScaleoutTools ALIAS scaleout_tools)
@@ -60,6 +67,10 @@ target_include_directories(run_cluster_validation PRIVATE "$<TARGET_PROPERTY:TT:
 target_include_directories(run_cluster_validation PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_include_directories(run_cluster_validation SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 
+target_include_directories(run_runtime_fsd_validation PRIVATE "$<TARGET_PROPERTY:TT::Metalium,INCLUDE_DIRECTORIES>")
+target_include_directories(run_runtime_fsd_validation PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(run_runtime_fsd_validation SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+
 target_link_libraries(
     scaleout_tools
     PUBLIC
@@ -74,6 +85,15 @@ target_link_libraries(
 
 target_link_libraries(
     run_cluster_validation
+    PRIVATE
+        TT::ScaleoutTools
+        enchantum::enchantum
+        protobuf::libprotobuf
+        tt_metal
+)
+
+target_link_libraries(
+    run_runtime_fsd_validation
     PRIVATE
         TT::ScaleoutTools
         enchantum::enchantum
