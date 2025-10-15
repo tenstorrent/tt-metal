@@ -12,11 +12,16 @@ import torch.nn.functional as F
 
 from typing import List
 from models.experimental.detr3d.reference.model_utils import (
-    QueryAndGroup,
+    # QueryAndGroup,
     GroupAll,
+    # GatherOperation,
+    # FurthestPointSampling,
+    Conv2d,
+)
+from models.experimental.detr3d.reference.torch_pointnet2_ops import (
+    QueryAndGroup,
     GatherOperation,
     FurthestPointSampling,
-    Conv2d,
 )
 
 

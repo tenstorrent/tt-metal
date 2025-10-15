@@ -18,6 +18,7 @@ from models.experimental.detr3d.reference.model_3detr import (
 from models.experimental.detr3d.ttnn.transformer_decoder import (
     TtnnTransformerDecoderLayer,
     TtnnTransformerDecoder,
+    DecoderLayerArgs,
 )
 from models.experimental.detr3d.common import load_torch_model_state
 from models.experimental.detr3d.reference.model_config import Detr3dArgs
@@ -189,15 +190,16 @@ def test_transformer_decoder_inference(device):
     )
 
     tt_decoder = TtnnTransformerDecoder(
-        device=args.device,
-        decoder_layer_config={
-            "d_model": args.dec_dim,
-            "nhead": args.dec_nhead,
-            "dim_feedforward": args.dec_ffn_dim,
-            "normalize_before": True,  # Match the reference implementation
-        },
+        decoder_layer=TtnnTransformerDecoderLayer,
         num_layers=args.dec_nlayers,
+        device=args.device,
         return_intermediate=True,
+        decoder_args=DecoderLayerArgs(
+            d_model=args.dec_dim,
+            nhead=args.dec_nhead,
+            dim_feedforward=args.dec_ffn_dim,
+            normalize_before=True,
+        ),
         parameters=parameters,
     )
 

@@ -5,6 +5,15 @@
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.experimental.detr3d.ttnn.multihead_attention import TtnnMultiheadAttention
+from dataclasses import dataclass, asdict
+
+
+@dataclass
+class DecoderLayerArgs:
+    d_model: int = None
+    nhead: int = 4
+    dim_feedforward: int = 256
+    normalize_before: bool = True
 
 
 class TtnnTransformerDecoderLayer(LightweightModule):
@@ -175,11 +184,12 @@ class TtnnTransformerDecoderLayer(LightweightModule):
 class TtnnTransformerDecoder(LightweightModule):
     def __init__(
         self,
-        device,
-        decoder_layer_config,
+        decoder_layer,
         num_layers,
+        device=None,
         use_norm=True,
         return_intermediate=False,
+        decoder_args=DecoderLayerArgs(),
         parameters=None,
     ):
         super().__init__()
@@ -191,12 +201,9 @@ class TtnnTransformerDecoder(LightweightModule):
         self.layers = []
         for i in range(num_layers):
             layer_params = parameters.layers[i] if parameters else None
-            layer = TtnnTransformerDecoderLayer(
-                device=device,
-                d_model=decoder_layer_config["d_model"],
-                nhead=decoder_layer_config["nhead"],
-                dim_feedforward=decoder_layer_config["dim_feedforward"],
-                normalize_before=decoder_layer_config.get("normalize_before", True),
+            layer = decoder_layer(
+                device,
+                **asdict(decoder_args),
                 parameters=layer_params,
             )
             self.layers.append(layer)
@@ -259,12 +266,12 @@ class TtnnTransformerDecoder(LightweightModule):
 
         # Stack results if needed
         if return_attn_weights and attns:
-            # TTNN doesn't support torch.stack directly, so we'd need to handle this differently
-            # For now, return list of attention weights
-            pass
+            # TTNN doesn't support torch.stack directly, using ttnn.concat for now
+            attns = [ttnn.reshape(t, (1, *t.shape)) for t in attns]
+            attns = ttnn.concat(attns, dim=0, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         if self.return_intermediate:
-            # TTNN doesn't support torch.stack using ttnn.concat for now
+            # TTNN doesn't support torch.stack directly, using ttnn.concat for now
             intermediate = [ttnn.reshape(t, (1, *t.shape)) for t in intermediate]
             intermediate = ttnn.concat(intermediate, dim=0, memory_config=ttnn.L1_MEMORY_CONFIG)
             return intermediate, attns if return_attn_weights else None
