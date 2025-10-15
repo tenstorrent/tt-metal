@@ -17,6 +17,8 @@
 #include "compute_kernel_api/eltwise_unary/logical_not_noti.h"
 #include "compute_kernel_api/eltwise_unary/negative.h"
 #include "compute_kernel_api/eltwise_unary/recip.h"
+#include "compute_kernel_api/eltwise_unary/rpow.h"
+#include "compute_kernel_api/eltwise_unary/trigonometry.h"
 #include "compute_kernel_api/eltwise_unary/where.h"
 #include "compute_kernel_api/pack.h"
 #include "compute_kernel_api/reg_api.h"
@@ -199,6 +201,13 @@ constexpr auto power(uint32_t param) {
     return _unary_sfpu_with_param<&ckernel::power_tile_init, &ckernel::power_tile>(param);
 }
 
+constexpr auto rpow(uint32_t param) {
+    constexpr auto rpow_tile = [](uint32_t dst_tile_index, uint32_t base_val) {
+        return ckernel::rpow_tile(dst_tile_index, base_val);
+    };
+    return _unary_sfpu_with_param<&ckernel::rpow_tile_init, rpow_tile>(param);
+}
+
 constexpr auto eqz(void) { return _unary_sfpu<&ckernel::eqz_tile_init, &ckernel::eqz_tile>(); }
 
 constexpr auto eqz_int32(void) { return _unary_sfpu<&ckernel::eqz_tile_init, &ckernel::eqz_tile_int32>(); }
@@ -246,6 +255,8 @@ constexpr auto logical_not_uint16(void) {
 constexpr auto logical_not_uint32(void) {
     return _unary_sfpu<&ckernel::logical_not_unary_tile_init, &ckernel::logical_not_unary_tile_uint32>();
 }
+
+constexpr auto atan(void) { return _unary_sfpu<&ckernel::atan_tile_init, &ckernel::atan_tile>(); }
 
 template <void (*Init)(void), void (*Compute)(uint32_t, uint32_t, uint32_t, uint32_t)>
 constexpr auto _ternary_sfpu(void) {
