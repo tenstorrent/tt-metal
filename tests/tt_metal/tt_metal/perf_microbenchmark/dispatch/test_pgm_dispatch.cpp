@@ -734,6 +734,8 @@ static int pgm_dispatch(T& state, TestInfo info) {
         // Run benchmark timing loop
         run_benchmark_timing_loop(state, info, mesh_cq, executor, tid, mesh_device);
 
+        sleep(10000);
+
         pass &= mesh_device->close();
     } catch (const std::exception& e) {
         pass = false;

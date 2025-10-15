@@ -269,11 +269,6 @@ void Device::init_command_queue_host() {
 
     auto cq_shared_state = std::make_shared<CQSharedState>();
     cq_shared_state->sub_device_cq_owner.resize(1);
-    command_queues_.reserve(num_hw_cqs());
-    for (size_t cq_id = 0; cq_id < num_hw_cqs(); cq_id++) {
-        command_queues_.push_back(std::make_unique<HWCommandQueue>(
-            this, cq_shared_state, cq_id, k_dispatch_downstream_noc, completion_queue_reader_core_));
-    }
 }
 
 void Device::init_command_queue_device() {
