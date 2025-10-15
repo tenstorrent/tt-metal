@@ -313,6 +313,17 @@ def test_dispatch_cores():
 
     verify_stats(
         run_device_profiler_test(
+            testName=f"pytest {TRACY_TESTS_DIR}/test_dispatch_profiler.py::test_mesh_device -k DispatchCoreType.ETH",
+            setupAutoExtract=True,
+            doDispatchCores=True,
+        ),
+        statTypes=["Dispatch", "Prefetch"],
+        allowedRange=1000,
+        refCountDict=REF_COUNT_DICT,
+    )
+
+    verify_stats(
+        run_device_profiler_test(
             testName=f"pytest {TRACY_TESTS_DIR}/test_trace_runs.py",
             setupAutoExtract=False,
             doDispatchCores=True,
@@ -346,11 +357,54 @@ def test_ethernet_dispatch_cores():
                     res
                 ), f"Wrong ethernet dispatch zone count for {ref}, read {readCount} which is not within {allowedRange} cycle counts of any of the limits {counts}"
 
+    devicesData = run_device_profiler_test(
+        testName=f"pytest {TRACY_TESTS_DIR}/test_dispatch_profiler.py::test_mesh_device -k DispatchCoreType.ETH",
+        setupAutoExtract=True,
+        doDispatchCores=True,
+    )
+    for device, deviceData in devicesData["data"]["devices"].items():
+        for ref, counts in REF_COUNT_DICT.items():
+            if ref in deviceData["cores"]["DEVICE"]["analysis"].keys():
+                res = False
+                readCount = deviceData["cores"]["DEVICE"]["analysis"][ref]["stats"]["Count"]
+                allowedRange = 200
+                for count in counts:
+                    if count - allowedRange < readCount < count + allowedRange:
+                        res = True
+                        break
+                assert (
+                    res
+                ), f"Wrong ethernet dispatch zone count for {ref}, read {readCount} which is not within {allowedRange} cycle counts of any of the limits {counts}"
+
 
 def test_profiler_host_device_sync():
     TOLERANCE = 0.1
 
     syncInfoFile = PROFILER_LOGS_DIR / PROFILER_HOST_DEVICE_SYNC_INFO
+
+    deviceData = run_device_profiler_test(
+        testName=f"pytest {TRACY_TESTS_DIR}/test_profiler_sync.py::test_mesh_device", doSync=True
+    )
+    reportedFreq = deviceData["data"]["deviceInfo"]["freq"] * 1e6
+    assert os.path.isfile(syncInfoFile)
+
+    syncinfoDF = pd.read_csv(syncInfoFile)
+    devices = sorted(syncinfoDF["device id"].unique())
+    for device in devices:
+        deviceFreq = syncinfoDF[syncinfoDF["device id"] == device].iloc[-1]["frequency"]
+        if not np.isnan(deviceFreq):  # host sync entry
+            freq = float(deviceFreq) * 1e9
+
+            assert freq < (reportedFreq * (1 + TOLERANCE)), f"Frequency {freq} is too large on device {device}"
+            assert freq > (reportedFreq * (1 - TOLERANCE)), f"Frequency {freq} is too small on device {device}"
+        else:  # device sync entry
+            deviceFreqRatio = syncinfoDF[syncinfoDF["device id"] == device].iloc[-1]["device_frequency_ratio"]
+            assert deviceFreqRatio < (
+                1 + TOLERANCE
+            ), f"Frequency ratio {deviceFreqRatio} is too large on device {device}"
+            assert deviceFreqRatio > (
+                1 - TOLERANCE
+            ), f"Frequency ratio {deviceFreqRatio} is too small on device {device}"
 
     deviceData = run_device_profiler_test(
         testName=f"pytest {TRACY_TESTS_DIR}/test_profiler_sync.py::test_with_ops", doSync=1
