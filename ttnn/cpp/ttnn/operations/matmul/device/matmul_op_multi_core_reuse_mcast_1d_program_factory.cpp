@@ -3099,8 +3099,13 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
     //                      Matmul Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
     // NOTE: Pads matmul input dims to 512 x 512 multiples (ie. multiples of 16*32 x 16*32)
-    // NOTE: Maximum number of tiles in output is 120 * 16^2 = 30,720 (eg. [1, 1, 5120, 6144])
+    // NOTE: Maximum number of tiles in output is 120 * 16^2 = 30,720 (eg. [1, 1, 5120, 6144])0
     const auto B_B = get_batch_size(bshape);
+
+    // When input A and input B are sparse, the batch dims are same. We pick B_B and set B_A to 1.
+    // When input A is sparse but B is not, both in0 and in1 need to loop over the "additional"
+    // batch dims in A that are not in B. So we divide by B_B and set that.
+    // In the default case (only input B is sparse), we set B_A to the batch dims of A.
     uint32_t B_A = 1;
     if (is_input_a_sparse && is_input_b_sparse) {
         B_A = 1;
