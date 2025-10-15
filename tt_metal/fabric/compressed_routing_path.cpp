@@ -4,13 +4,17 @@
 
 #include "compressed_routing_path.hpp"
 #include <cstring>
+#include <tt_stl/assert.hpp>
 
 namespace tt::tt_fabric {
 
 // 1D routing specialization
 template <>
 void intra_mesh_routing_path_t<1, false>::calculate_chip_to_all_routing_fields(
-    uint16_t src_chip_id, tt_metal::distributed::MeshShape& mesh_shape, FabricType torus_type) {
+    uint16_t src_chip_id,
+    tt_metal::distributed::MeshShape& mesh_shape,
+    FabricType torus_type,
+    const std::vector<std::vector<RoutingDirection>>* /*first_hop_table*/) {
     uint32_t* route_ptr = reinterpret_cast<uint32_t*>(&paths);
     route_ptr[0] = 0;
     for (uint16_t hops = 1; hops < MAX_CHIPS_LOWLAT_1D; ++hops) {
@@ -22,84 +26,100 @@ void intra_mesh_routing_path_t<1, false>::calculate_chip_to_all_routing_fields(
 // 1D compressed routing specialization. No-op
 template <>
 void intra_mesh_routing_path_t<1, true>::calculate_chip_to_all_routing_fields(
-    uint16_t src_chip_id, tt_metal::distributed::MeshShape& mesh_shape, FabricType torus_type) {
+    uint16_t src_chip_id,
+    tt_metal::distributed::MeshShape& mesh_shape,
+    FabricType torus_type,
+    const std::vector<std::vector<RoutingDirection>>* /*first_hop_table*/) {
     // No-op
 }
 
 // 2D compressed routing specialization
 template <>
 void intra_mesh_routing_path_t<2, true>::calculate_chip_to_all_routing_fields(
-    uint16_t src_chip_id, tt_metal::distributed::MeshShape& mesh_shape, FabricType torus_type) {
-    // Calculate NS dimension size (assuming rectangular grid)
+    uint16_t src_chip_id,
+    tt_metal::distributed::MeshShape& mesh_shape,
+    FabricType torus_type,
+    const std::vector<std::vector<RoutingDirection>>* first_hop_table) {
+    TT_ASSERT(first_hop_table != nullptr, "intra_mesh first-hop table must be provided");
     uint16_t num_chips = mesh_shape[0] * mesh_shape[1];
     uint8_t ew_dim = mesh_shape[1];
     uint8_t ns_dim = mesh_shape[0];
-    // Axis-aware torus handling
+
     const bool torus_y = (torus_type == FabricType::TORUS_Y || torus_type == FabricType::TORUS_XY);
     const bool torus_x = (torus_type == FabricType::TORUS_X || torus_type == FabricType::TORUS_XY);
 
     for (uint16_t dst_chip_id = 0; dst_chip_id < num_chips; ++dst_chip_id) {
         if (src_chip_id == dst_chip_id) {
-            // Self route - no movement needed
             paths[dst_chip_id].set(0, 0, 0, 0, 0);
             continue;
         }
 
-        // Calculate 2D coordinates (row-major: row = id / width, col = id % width)
-        uint16_t src_row = src_chip_id / ew_dim;
-        uint16_t src_col = src_chip_id % ew_dim;
-        uint16_t dst_row = dst_chip_id / ew_dim;
-        uint16_t dst_col = dst_chip_id % ew_dim;
-
-        uint8_t ns_hops, ew_hops;
-        uint8_t ns_direction, ew_direction;
-
-        // North-South (Y axis, mesh_coord[0])
         {
-            uint8_t ns_direct = (dst_row > src_row) ? (dst_row - src_row) : (src_row - dst_row);
-            if (torus_y && ns_direct != 0) {
-                uint8_t ns_wrap = ns_dim - ns_direct;
-                if (ns_direct < ns_wrap) {
-                    ns_hops = ns_direct;
-                    ns_direction = dst_row > src_row;  // 0=north, 1=south
-                } else if (ns_direct > ns_wrap) {
-                    ns_hops = ns_wrap;
-                    ns_direction = src_row > dst_row;  // Reverse direction for wrap
-                } else {
-                    // Equal distance: choose North to match host tie-break
-                    ns_hops = ns_direct;  // same as ns_wrap
-                    ns_direction = 0;     // 0=north
-                }
-            } else {
-                ns_hops = ns_direct;
-                ns_direction = dst_row > src_row;  // 0=north, 1=south
-            }
-        }
+            // Follow precomputed first-hop table exactly to unify tie-breaks
+            uint16_t cur = src_chip_id;
+            uint8_t ns_hops = 0;
+            uint8_t ew_hops = 0;
+            uint8_t ns_direction = 0;  // 0=north, 1=south
+            uint8_t ew_direction = 0;  // 0=west, 1=east
+            bool ns_dir_set = false;
+            bool ew_dir_set = false;
 
-        // East-West (X axis, mesh_coord[1])
-        {
-            uint8_t ew_direct = (dst_col > src_col) ? (dst_col - src_col) : (src_col - dst_col);
-            if (torus_x && ew_direct != 0) {
-                uint8_t ew_wrap = ew_dim - ew_direct;
-                if (ew_direct < ew_wrap) {
-                    ew_hops = ew_direct;
-                    ew_direction = dst_col > src_col;  // 0=west, 1=east
-                } else if (ew_direct > ew_wrap) {
-                    ew_hops = ew_wrap;
-                    ew_direction = src_col > dst_col;  // Reverse direction for wrap
-                } else {
-                    // Equal distance: choose East to match host tie-break
-                    ew_hops = ew_direct;  // same as ew_wrap
-                    ew_direction = 1;     // 1=east
+            while (cur != dst_chip_id) {
+                RoutingDirection dir = (*first_hop_table)[cur][dst_chip_id];
+                uint16_t cur_row = cur / ew_dim;
+                uint16_t cur_col = cur % ew_dim;
+                switch (dir) {
+                    case RoutingDirection::N:
+                        if (!ns_dir_set) {
+                            ns_direction = 0;
+                            ns_dir_set = true;
+                        }
+                        ns_hops++;
+                        cur_row = torus_y ? static_cast<uint16_t>((cur_row + ns_dim - 1) % ns_dim)
+                                          : static_cast<uint16_t>(cur_row - 1);
+                        cur = static_cast<uint16_t>(cur_row * ew_dim + cur_col);
+                        break;
+                    case RoutingDirection::S:
+                        if (!ns_dir_set) {
+                            ns_direction = 1;
+                            ns_dir_set = true;
+                        }
+                        ns_hops++;
+                        cur_row = torus_y ? static_cast<uint16_t>((cur_row + 1) % ns_dim)
+                                          : static_cast<uint16_t>(cur_row + 1);
+                        cur = static_cast<uint16_t>(cur_row * ew_dim + cur_col);
+                        break;
+                    case RoutingDirection::E:
+                        if (!ew_dir_set) {
+                            ew_direction = 1;
+                            ew_dir_set = true;
+                        }
+                        ew_hops++;
+                        cur_col = torus_x ? static_cast<uint16_t>((cur_col + 1) % ew_dim)
+                                          : static_cast<uint16_t>(cur_col + 1);
+                        cur = static_cast<uint16_t>(cur_row * ew_dim + cur_col);
+                        break;
+                    case RoutingDirection::W:
+                        if (!ew_dir_set) {
+                            ew_direction = 0;
+                            ew_dir_set = true;
+                        }
+                        ew_hops++;
+                        cur_col = torus_x ? static_cast<uint16_t>((cur_col + ew_dim - 1) % ew_dim)
+                                          : static_cast<uint16_t>(cur_col - 1);
+                        cur = static_cast<uint16_t>(cur_row * ew_dim + cur_col);
+                        break;
+                    default:
+                        // Should not happen for valid table entries
+                        // Treat as no-op to avoid undefined behavior
+                        cur = dst_chip_id;  // exit
+                        break;
                 }
-            } else {
-                ew_hops = ew_direct;
-                ew_direction = dst_col > src_col;  // 0=west, 1=east
             }
+            uint8_t turn_after_ns = ns_hops;  // XY routing per table
+            paths[dst_chip_id].set(ns_hops, ew_hops, ns_direction, ew_direction, turn_after_ns);
+            continue;
         }
-
-        uint8_t turn_after_ns = ns_hops;  // XY routing: complete NS first, then EW
-        paths[dst_chip_id].set(ns_hops, ew_hops, ns_direction, ew_direction, turn_after_ns);
     }
 }
 

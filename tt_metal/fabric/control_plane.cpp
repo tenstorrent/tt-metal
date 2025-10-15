@@ -1879,12 +1879,15 @@ void ControlPlane::write_all_to_all_routing_fields<2, true>(MeshId mesh_id) cons
         mesh_shape[0],
         mesh_shape[1]);
     FabricType torus_type = this->fabric_context_->get_torus_type();
+    const auto& intra_mesh_first_hop_table = this->routing_table_generator_->get_intra_mesh_table();
 
     for (const auto& [_, src_chip_id] : local_mesh_chip_id_container) {
         intra_mesh_routing_path_t<2, true> routing_path;
         FabricNodeId src_fabric_node_id(mesh_id, src_chip_id);
 
-        routing_path.calculate_chip_to_all_routing_fields(src_chip_id, mesh_shape, torus_type);
+        // Pass the full first-hop table for the mesh so device-side follows host tie-breaks exactly
+        routing_path.calculate_chip_to_all_routing_fields(
+            src_chip_id, mesh_shape, torus_type, &intra_mesh_first_hop_table[*mesh_id]);
         auto physical_chip_id = this->logical_mesh_chip_id_to_physical_chip_id_mapping_.at(src_fabric_node_id);
         write_to_all_tensix_cores(
             &routing_path,
