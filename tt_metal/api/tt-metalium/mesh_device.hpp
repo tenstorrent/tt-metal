@@ -302,6 +302,9 @@ public:
     std::shared_ptr<MeshDevice> create_submesh(
         const MeshShape& submesh_shape, const std::optional<MeshCoordinate>& offset = std::nullopt);
 
+    // Wait for all submeshes of this mesh to finish their work. After this call, overlapping submeshes can start work.
+    void quiesce_submeshes();
+
     std::vector<std::shared_ptr<MeshDevice>> create_submeshes(const MeshShape& submesh_shape);
 
     // This method will get removed once in favour of the ones in IDevice* and TT-Mesh bringup

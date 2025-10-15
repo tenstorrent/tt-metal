@@ -18,6 +18,7 @@ target_sources(
         test_mesh_allocator.cpp
         test_mesh_events.cpp
         test_mesh_trace.cpp
+        test_mesh_quiesce_submeshes.cpp
         test_thread_pool.cpp
         utils.cpp
 )

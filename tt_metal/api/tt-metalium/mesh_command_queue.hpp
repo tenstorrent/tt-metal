@@ -131,6 +131,8 @@ public:
     virtual void record_begin(const MeshTraceId& trace_id, const std::shared_ptr<MeshTraceDescriptor>& ctx) = 0;
     virtual void record_end() = 0;
     virtual void enqueue_trace(const MeshTraceId& trace_id, bool blocking) = 0;
+
+    virtual void wait_for_completion(bool reset_launch_msg_state) {}
 };
 
 }  // namespace tt::tt_metal::distributed

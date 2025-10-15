@@ -1028,6 +1028,20 @@ bool MeshDevice::is_mmio_capable() const {
     return reference_device()->is_mmio_capable();
 }
 
+void MeshDevice::quiesce_submeshes() {
+    for (const auto& submesh : submeshes_) {
+        if (auto submesh_ptr = submesh.lock()) {
+            submesh_ptr->quiesce_submeshes();
+        }
+    }
+
+    bool have_reset_launch_msg_state = false;
+    for (auto& command_queue : mesh_command_queues_) {
+        command_queue->wait_for_completion(!have_reset_launch_msg_state);
+        have_reset_launch_msg_state = true;
+    }
+}
+
 // Allocator methods
 std::optional<DeviceAddr> MeshDevice::lowest_occupied_compute_l1_address() const {
     return sub_device_manager_tracker_->lowest_occupied_compute_l1_address();
