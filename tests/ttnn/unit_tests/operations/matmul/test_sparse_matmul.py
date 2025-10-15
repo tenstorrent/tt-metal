@@ -188,16 +188,15 @@ def test_sparse_matmul_without_nnz(device, mkn, num_experts, num_batches, tile_h
         assert_with_pcc(pt_out, output_tensor[b_i, s_i, 0, e_i, :, :], expected_pcc)
 
 
-@pytest.mark.parametrize("m", [16])
-@pytest.mark.parametrize("kn", [(128, 512)])
+@pytest.mark.parametrize("mkn", [(16, 128, 512)])
 @pytest.mark.parametrize("num_experts", [(1, 32), (1, 128)])
 @pytest.mark.parametrize("tile_h", [16])
 @pytest.mark.parametrize("tile_w", [32])
 @pytest.mark.parametrize("in1_dtype", [ttnn.bfloat8_b])
 @pytest.mark.parametrize("core_grid", [(4, 4)])
-def test_batched_sparse_matmul_with_nnz(device, m, kn, num_experts, tile_h, tile_w, in1_dtype, core_grid):
+def test_batched_sparse_matmul_with_nnz(device, mkn, num_experts, tile_h, tile_w, in1_dtype, core_grid):
     torch.manual_seed(0)
-    k, n = kn
+    m, k, n = mkn
     b, s = num_experts
     in0 = torch.randn((b, s, m, k), dtype=torch.bfloat16)
     in1 = torch.randn((b, s, k, n), dtype=torch.bfloat16)
