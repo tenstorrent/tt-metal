@@ -8,6 +8,82 @@
 
 namespace ttnn::operations::lazy {
 
+// Unary
+Function operator-(ExpressionView first) { return lazy::neg(first); }
+
+// Binary
+Function operator+(ExpressionView first, ExpressionView second) { return lazy::add(first, second); }
+Function operator+(ExpressionView first, const Tensor& second) { return lazy::add(first, second); }
+Function operator+(ExpressionView first, Param second) { return lazy::add(first, second); }
+Function operator+(const Tensor& first, ExpressionView second) { return lazy::add(first, second); }
+Function operator+(Param first, ExpressionView second) { return lazy::add(first, second); }
+
+Function operator-(ExpressionView first, ExpressionView second) { return lazy::sub(first, second); }
+Function operator-(ExpressionView first, const Tensor& second) { return lazy::sub(first, second); }
+Function operator-(ExpressionView first, Param second) { return lazy::sub(first, second); }
+Function operator-(const Tensor& first, ExpressionView second) { return lazy::sub(first, second); }
+Function operator-(Param first, ExpressionView second) { return lazy::sub(first, second); }
+
+Function operator*(ExpressionView first, ExpressionView second) { return lazy::mul(first, second); }
+Function operator*(ExpressionView first, const Tensor& second) { return lazy::mul(first, second); }
+Function operator*(ExpressionView first, Param second) { return lazy::mul(first, second); }
+Function operator*(const Tensor& first, ExpressionView second) { return lazy::mul(first, second); }
+Function operator*(Param first, ExpressionView second) { return lazy::mul(first, second); }
+
+Function operator/(ExpressionView first, ExpressionView second) { return lazy::div(first, second); }
+Function operator/(ExpressionView first, const Tensor& second) { return lazy::div(first, second); }
+Function operator/(ExpressionView first, Param second) { return lazy::div(first, second); }
+Function operator/(const Tensor& first, ExpressionView second) { return lazy::div(first, second); }
+Function operator/(Param first, ExpressionView second) { return lazy::div(first, second); }
+
+Function operator<(ExpressionView first, ExpressionView second) { return lazy::lt(first, second); }
+Function operator<(ExpressionView first, const Tensor& second) { return lazy::lt(first, second); }
+Function operator<(ExpressionView first, Param second) { return lazy::lt(first, second); }
+Function operator<(const Tensor& first, ExpressionView second) { return lazy::lt(first, second); }
+Function operator<(Param first, ExpressionView second) { return lazy::lt(first, second); }
+
+Function operator>(ExpressionView first, ExpressionView second) { return lazy::gt(first, second); }
+Function operator>(ExpressionView first, const Tensor& second) { return lazy::gt(first, second); }
+Function operator>(ExpressionView first, Param second) { return lazy::gt(first, second); }
+Function operator>(const Tensor& first, ExpressionView second) { return lazy::gt(first, second); }
+Function operator>(Param first, ExpressionView second) { return lazy::gt(first, second); }
+
+Function operator==(ExpressionView first, ExpressionView second) { return lazy::eq(first, second); }
+Function operator==(ExpressionView first, const Tensor& second) { return lazy::eq(first, second); }
+Function operator==(ExpressionView first, Param second) { return lazy::eq(first, second); }
+Function operator==(const Tensor& first, ExpressionView second) { return lazy::eq(first, second); }
+Function operator==(Param first, ExpressionView second) { return lazy::eq(first, second); }
+
+Function operator!=(ExpressionView first, ExpressionView second) { return lazy::ne(first, second); }
+Function operator!=(ExpressionView first, const Tensor& second) { return lazy::ne(first, second); }
+Function operator!=(ExpressionView first, Param second) { return lazy::ne(first, second); }
+Function operator!=(const Tensor& first, ExpressionView second) { return lazy::ne(first, second); }
+Function operator!=(Param first, ExpressionView second) { return lazy::ne(first, second); }
+
+Function operator<=(ExpressionView first, ExpressionView second) { return lazy::le(first, second); }
+Function operator<=(ExpressionView first, const Tensor& second) { return lazy::le(first, second); }
+Function operator<=(ExpressionView first, Param second) { return lazy::le(first, second); }
+Function operator<=(const Tensor& first, ExpressionView second) { return lazy::le(first, second); }
+Function operator<=(Param first, ExpressionView second) { return lazy::le(first, second); }
+
+Function operator>=(ExpressionView first, ExpressionView second) { return lazy::ge(first, second); }
+Function operator>=(ExpressionView first, const Tensor& second) { return lazy::ge(first, second); }
+Function operator>=(ExpressionView first, Param second) { return lazy::ge(first, second); }
+Function operator>=(const Tensor& first, ExpressionView second) { return lazy::ge(first, second); }
+Function operator>=(Param first, ExpressionView second) { return lazy::ge(first, second); }
+
+Function operator and(ExpressionView first, ExpressionView second) { return lazy::logical_and(first, second); }
+Function operator and(ExpressionView first, const Tensor& second) { return lazy::logical_and(first, second); }
+Function operator and(ExpressionView first, Param second) { return lazy::logical_and(first, second); }
+Function operator and(const Tensor& first, ExpressionView second) { return lazy::logical_and(first, second); }
+Function operator and(Param first, ExpressionView second) { return lazy::logical_and(first, second); }
+
+Function operator or(ExpressionView first, ExpressionView second) { return lazy::logical_or(first, second); }
+Function operator or(ExpressionView first, const Tensor& second) { return lazy::logical_or(first, second); }
+Function operator or(ExpressionView first, Param second) { return lazy::logical_or(first, second); }
+Function operator or(const Tensor& first, ExpressionView second) { return lazy::logical_or(first, second); }
+Function operator or(Param first, ExpressionView second) { return lazy::logical_or(first, second); }
+
 Function UnaryFn::operator()(ExpressionView first) const { return lazy::defer(operation, first).value(); }
 
 Function UnaryWithParamFn::operator()(ExpressionView first, Param second) const {
@@ -30,26 +106,15 @@ Function TernaryFn::operator()(ExpressionView first, ExpressionView second, Expr
     return lazy::defer(operation, first, second, third).value();
 }
 
-Function DivFn::operator()(Param first, ExpressionView second) const { return lazy::mul(first, lazy::recip(second)); }
+Function DivFn::operator()(Param first, ExpressionView second) const { return first * lazy::recip(second); }
 
-Function RDivFn::operator()(ExpressionView first, Param second) const { return lazy::div(second, first); }
+Function RDivFn::operator()(ExpressionView first, Param second) const { return second / first; }
 
-template <typename First, typename Second>
-auto _compare(UnaryFn compare_to_zero, First first, Second second) {
-    return compare_to_zero(lazy::sub(first, second));
-}
+Function CompareFn::operator()(ExpressionView first, ExpressionView second) const { return operation(first - second); }
 
-Function CompareFn::operator()(ExpressionView first, ExpressionView second) const {
-    return lazy::_compare(operation, first, second);
-}
+Function CompareFn::operator()(ExpressionView first, Param second) const { return operation(first - second); }
 
-Function CompareFn::operator()(ExpressionView first, Param second) const {
-    return lazy::_compare(operation, first, second);
-}
-
-Function CompareFn::operator()(Param first, ExpressionView second) const {
-    return lazy::_compare(operation, first, second);
-}
+Function CompareFn::operator()(Param first, ExpressionView second) const { return operation(first - second); }
 
 inline auto _nez(ExpressionView first) { return lazy::nez(first); }
 
@@ -75,8 +140,9 @@ Function LogicalBinaryFn::operator()(Param first, ExpressionView second) const {
 }
 
 template <typename Input, typename Other>
+    requires std::constructible_from<Param, Input> or std::constructible_from<Param, Other>
 auto _where(ExpressionView condition, Input input, Other other) {
-    return lazy::add(lazy::mul(lazy::nez(condition), input), lazy::mul(lazy::eqz(condition), other));
+    return (lazy::nez(condition) * input) + (lazy::eqz(condition) * other);
 }
 
 Function WhereFn::operator()(ExpressionView condition, ExpressionView input, Param other) const {
@@ -109,6 +175,10 @@ constexpr auto _gez(Param first) {
     return std::visit([](auto value) { return value >= 0; }, first);
 }
 
+inline auto _where(ExpressionView condition, ExpressionView input, ExpressionView other) {
+    return lazy::where(condition, input, other);
+}
+
 template <typename Input, typename Other>
 constexpr auto _where(bool condition, Input input, Other other) {
     return condition ? input : other;
@@ -116,21 +186,21 @@ constexpr auto _where(bool condition, Input input, Other other) {
 
 template <typename Condition, typename Input, typename... Other>
     requires(sizeof...(Other) > 1)
-auto _where(Condition condition, Input input, Other... other) {
+constexpr auto _where(Condition condition, Input input, Other... other) {
     return lazy::_where(condition, input, lazy::_where(other...));
 }
 
 template <typename First, typename Second>
 auto _atan2(First y, Second x) {
     constexpr auto pi = std::numbers::pi_v<float>;
-    const auto atan = lazy::atan(lazy::div(y, x));
+    const auto atan = lazy::atan(y / x);
     return lazy::_where(
         lazy::_gtz(x),
         atan,
-        lazy::logical_and(lazy::_ltz(x), lazy::_gez(y)),
-        lazy::add(atan, pi),
-        lazy::logical_and(lazy::_ltz(x), lazy::_ltz(y)),
-        lazy::sub(atan, pi),
+        lazy::_ltz(x) and lazy::_gez(y),
+        atan + pi,
+        lazy::_ltz(x) and lazy::_ltz(y),
+        atan - pi,
         lazy::_gtz(y),
         pi * 2,
         lazy::_ltz(y),
