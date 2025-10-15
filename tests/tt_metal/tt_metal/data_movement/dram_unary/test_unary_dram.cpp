@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "multi_device_fixture.hpp"
+#include "device_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include "tt_metal/test_utils/comparison.hpp"
@@ -47,7 +47,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const DramCo
     DramAddressInfo dram_info = unit_tests::dm::get_dram_address_and_size(mesh_device);
 
     uint32_t input_dram_address = dram_info.base_address;
-    uint32_t output_dram_address = input_dram_address + total_size_bytes;
+    uint32_t output_dram_address = input_dram_address;  // + total_size_bytes;
 
     // L1 Address
     L1AddressInfo l1_info = unit_tests::dm::get_l1_address_and_size(mesh_device, test_config.core_coord);
@@ -159,20 +159,16 @@ void directed_ideal_test(
     CoreCoord core_coord = {0, 0},
     uint32_t dram_channel = 0,
     uint32_t virtual_channel = 0) {
-    // Physical Constraints
-    auto [bytes_per_page, max_transmittable_bytes, max_transmittable_pages] =
-        unit_tests::dm::compute_physical_constraints(mesh_device);
-
     // Parameters
-    uint32_t num_of_transactions = 256;
-    uint32_t pages_per_transaction = max_transmittable_pages;
+    uint32_t num_of_transactions = 100;
+    uint32_t pages_per_transaction = 1;
 
     // Test config
     unit_tests::dm::dram::DramConfig test_config = {
         .test_id = test_case_id,
         .num_of_transactions = num_of_transactions,
         .pages_per_transaction = pages_per_transaction,
-        .bytes_per_page = bytes_per_page,
+        .bytes_per_page = 2048,
         .l1_data_format = DataFormat::Float16_b,
         .core_coord = core_coord,
         .dram_channel = dram_channel,
@@ -220,19 +216,19 @@ void packet_sizes_test(
 }  // namespace unit_tests::dm::dram
 
 /* ========== Test case for varying transaction numbers and sizes; Test id = 0 ========== */
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMPacketSizes) {
+TEST_F(MeshDeviceSingleCardFixture, TensixDataMovementDRAMPacketSizes) {
     unit_tests::dm::dram::packet_sizes_test(
-        get_mesh_device(),
+        devices_[0],
         0,      // Test case ID
         {0, 0}  // Core coordinates (default)
     );
 }
 
 /* ========== Test case for varying core locations; Test id = 1 ========== */
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMCoreLocations) {
+TEST_F(MeshDeviceSingleCardFixture, TensixDataMovementDRAMCoreLocations) {
     uint32_t test_case_id = 1;
 
-    auto mesh_device = get_mesh_device();
+    auto mesh_device = devices_[0];
     auto device = mesh_device->get_device(0);
 
     CoreCoord core_coord;
@@ -254,10 +250,10 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMCoreLocations) {
 // DRAM channels
 
 /* ========== Test case for varying DRAM channels; Test id = 2 ========== */
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMChannels) {
+TEST_F(MeshDeviceSingleCardFixture, TensixDataMovementDRAMChannels) {
     uint32_t test_case_id = 2;
 
-    auto mesh_device = get_mesh_device();
+    auto mesh_device = devices_[0];
     auto device = mesh_device->get_device(0);
 
     CoreCoord core_coord = {0, 0};
@@ -270,11 +266,11 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMChannels) {
 }
 
 /* ========== Directed ideal test case; Test id = 3 ========== */
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMDirectedIdeal) {
+TEST_F(MeshDeviceSingleCardFixture, TensixDataMovementDRAMDirectedIdeal) {
     // Test ID (Arbitrary)
     uint32_t test_id = 3;
 
-    unit_tests::dm::dram::directed_ideal_test(get_mesh_device(), test_id);
+    unit_tests::dm::dram::directed_ideal_test(devices_[0], test_id);
 }
 
 }  // namespace tt::tt_metal

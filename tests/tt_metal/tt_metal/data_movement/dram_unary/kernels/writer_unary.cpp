@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dataflow_api.h"
+#include "debug/dprint.h"
 
 // L1 to DRAM write
 void kernel_main() {
@@ -16,24 +17,60 @@ void kernel_main() {
     constexpr uint32_t sem_id = get_compile_time_arg_val(7);
     constexpr uint32_t virtual_channel = get_compile_time_arg_val(8);
 
+    // Debug prints for compile time arguments
+    DPRINT << "=== Writer Kernel Debug Info ===" << ENDL();
+    DPRINT << "test_id: " << test_id << ENDL();
+    DPRINT << "num_of_transactions: " << num_of_transactions << ENDL();
+    DPRINT << "pages_per_transaction: " << pages_per_transaction << ENDL();
+    DPRINT << "bytes_per_page: " << bytes_per_page << ENDL();
+    DPRINT << "dram_addr: " << HEX() << dram_addr << DEC() << ENDL();
+    DPRINT << "dram_channel: " << dram_channel << ENDL();
+    DPRINT << "local_l1_addr: " << HEX() << local_l1_addr << DEC() << ENDL();
+    DPRINT << "sem_id: " << sem_id << ENDL();
+    DPRINT << "virtual_channel: " << virtual_channel << ENDL();
+
     constexpr uint32_t bytes_per_transaction = pages_per_transaction * bytes_per_page;
 
     constexpr bool dram = true;
     uint64_t dram_noc_addr = get_noc_addr_from_bank_id<dram>(dram_channel, dram_addr);
+    DPRINT << "dram_noc_addr: " << HEX() << dram_noc_addr << DEC() << ENDL();
 
     uint32_t sem_addr = get_semaphore(sem_id);
     auto sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr);
 
-    // Wait for semaphore to be set by the reader
-    noc_semaphore_wait(sem_ptr, 1);
+    DPRINT << "bytes_per_transaction: " << bytes_per_transaction << ENDL();
+    DPRINT << "dram_noc_addr: " << HEX() << dram_noc_addr << DEC() << ENDL();
+    DPRINT << "sem_addr: " << HEX() << sem_addr << DEC() << ENDL();
+    DPRINT << "Starting NOC writes..." << ENDL();
+
+    uint64_t tx_start;
+    uint64_t tx_end;
 
     {
         DeviceZoneScopedN("RISCV0");
+        tx_start = get_timestamp();
+        uint64_t curr_dram_noc_addr = dram_noc_addr;
+
         for (uint32_t i = 0; i < num_of_transactions; i++) {
-            noc_async_write(local_l1_addr, dram_noc_addr, bytes_per_transaction, noc_index, virtual_channel);
+            // DPRINT << "Transaction " << i << "/" << num_of_transactions << ": writing " << bytes_per_transaction << "
+            // bytes" << ENDL();
+            noc_async_write(local_l1_addr, curr_dram_noc_addr, bytes_per_transaction, noc_index, virtual_channel);
+            curr_dram_noc_addr += bytes_per_transaction;
         }
+        // DPRINT << "All writes issued, waiting for barrier..." << ENDL();
         noc_async_write_barrier();
+        tx_end = get_timestamp();
+        // DPRINT << "Write barrier complete!" << ENDL();
     }
+    uint64_t tx_diff = tx_end - tx_start;
+    DPRINT << "Transaction time writes: " << tx_diff << ENDL();
+    uint64_t bw_gbs = bytes_per_transaction * num_of_transactions / tx_diff * 1.35;
+    DPRINT << "Transaction bandwidth: " << bw_gbs << " GB/s" << ENDL();
+
+    // Set the semaphore to indicate that the reader can proceed
+    DPRINT << "Setting semaphore to signal reader..." << ENDL();
+    noc_semaphore_set(sem_ptr, 1);
+    DPRINT << "Semaphore set, writer complete!" << ENDL();
 
     DeviceTimestampedData("Test id", test_id);
 

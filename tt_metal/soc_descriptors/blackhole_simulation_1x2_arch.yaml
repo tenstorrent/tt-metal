@@ -1,6 +1,6 @@
 grid:
-  x_size: 2
-  y_size: 2
+  x_size: 3
+  y_size: 3
 
 arc:
   []
@@ -9,7 +9,7 @@ pcie:
   []
 
 dram:
-  [[1-0]]
+  [[2-1, 2-2, 2-0]]
 
 dram_views:
   [
@@ -34,7 +34,7 @@ harvested_workers:
   []
 
 router_only:
-  [0-0]
+  [0-0, 0-2, 1-2, 1-0]
 
 worker_l1_size:
   1499136
@@ -46,6 +46,17 @@ eth_l1_size:
   0
 
 arch_name: BLACKHOLE
+
+
+noc0_x_to_noc1_x:
+  [
+   2, 1, 0
+  ]
+
+noc0_y_to_noc1_y:
+  [
+    2, 1, 0
+  ]
 
 features:
   unpacker:

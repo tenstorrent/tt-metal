@@ -51,7 +51,7 @@ inline std::string get_core_descriptor_file(
         auto soc_desc = tt::umd::SimulationDevice::get_soc_descriptor_path_from_simulator_path(
             tt_metal::MetalContext::instance().rtoptions().get_simulator_path());
         tt_xy_pair grid_size = tt::umd::SocDescriptor::get_grid_size_from_soc_descriptor_path(soc_desc);
-        if (grid_size.y <= 2) {  // these SOC descriptors declare a 2x2 grid
+        if (grid_size.y <= 3) {  // these SOC descriptors declare a 2x2 grid
             use_small_core_desc_yaml = true;
         }
     }
