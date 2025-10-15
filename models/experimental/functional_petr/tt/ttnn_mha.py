@@ -1,14 +1,13 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-
 import ttnn
 import torch
 from ttnn.model_preprocessing import preprocess_linear_weight, preprocess_linear_bias
 import math
 
 
-class PETRMultiheadAttention:
+class TTPETRMultiheadAttention:
     def __init__(self, device, torch_model, embed_dims=256, num_heads=8):
         super().__init__()
         self.embed_dims = embed_dims

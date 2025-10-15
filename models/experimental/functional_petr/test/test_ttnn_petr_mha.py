@@ -34,7 +34,7 @@ def test_petr_mha(device, reset_seeds):
 
     print(torch_model)
 
-    ttnn_model = ttnn_mha.PETRMultiheadAttention(device, torch_model)
+    ttnn_model = ttnn_mha.TTPETRMultiheadAttention(device, torch_model)
 
     ttnn_query = ttnn.from_torch(query, dtype=ttnn.bfloat16, device=device)
     ttnn_key = ttnn.from_torch(key, dtype=ttnn.bfloat16, device=device)
