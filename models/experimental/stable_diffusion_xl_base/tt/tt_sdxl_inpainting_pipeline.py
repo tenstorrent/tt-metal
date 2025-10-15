@@ -208,7 +208,7 @@ class TtSDXLInpaintingPipeline(TtSDXLPipeline):
                 self.tt_prompt_embeds_device,
                 self.tt_time_ids_device,
                 self.tt_text_embeds_device,
-                [self.ttnn_timesteps[0]],
+                1,
                 self.extra_step_kwargs,
                 self.guidance_scale,
                 self.scaling_factor,
@@ -225,7 +225,7 @@ class TtSDXLInpaintingPipeline(TtSDXLPipeline):
             profiler.end("warmup_run")
 
             if self.pipeline_config.capture_trace:
-                self._TtSDXLPipeline__trace_image_processing()
+                self.__trace_image_processing()
 
             self.image_processing_compiled = True
 
@@ -266,7 +266,7 @@ class TtSDXLInpaintingPipeline(TtSDXLPipeline):
             self.tt_prompt_embeds_device,
             self.tt_time_ids_device,
             self.tt_text_embeds_device,
-            self.ttnn_timesteps,
+            self.pipeline_config.num_inference_steps,
             self.extra_step_kwargs,
             self.guidance_scale,
             self.scaling_factor,
@@ -400,3 +400,37 @@ class TtSDXLInpaintingPipeline(TtSDXLPipeline):
         ttnn.synchronize_device(self.ttnn_device)
         profiler.end("create_user_tensors")
         return tt_img_latents, tt_masked_image_latents, tt_mask, tt_prompt_embeds, tt_add_text_embeds
+
+    def __trace_image_processing(self):
+        # Helper method for image processing trace capture.
+
+        self._TtSDXLPipeline__release_trace()
+
+        logger.info("Capturing model trace...")
+        profiler.start("capture_model_trace")
+
+        _, self.tid, self.output_device, self.output_shape, self.tid_vae = run_tt_image_gen_inpainting(
+            self.ttnn_device,
+            self.tt_unet,
+            self.tt_scheduler,
+            self.tt_latents_device,
+            self.tt_masked_image_latents_device,
+            self.tt_mask_device,
+            self.tt_prompt_embeds_device,
+            self.tt_time_ids_device,
+            self.tt_text_embeds_device,
+            1,
+            self.extra_step_kwargs,
+            self.guidance_scale,
+            self.scaling_factor,
+            self.tt_latents_shape,
+            self.tt_image_latents_shape,
+            self.tt_vae if self.pipeline_config.vae_on_device else self.torch_pipeline.vae,
+            self.batch_size,
+            self.ag_persistent_buffer,
+            self.ag_semaphores,
+            capture_trace=False,
+            use_cfg_parallel=self.pipeline_config.use_cfg_parallel,
+        )
+        ttnn.synchronize_device(self.ttnn_device)
+        profiler.end("capture_model_trace")

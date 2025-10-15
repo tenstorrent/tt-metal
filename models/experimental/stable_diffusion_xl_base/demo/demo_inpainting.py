@@ -326,7 +326,6 @@ def test_demo(
     fixed_seed_for_batch,
 ):
     prepare_device(device, use_cfg_parallel)
-    assert capture_trace == False, "Capture trace is not supported for inpainting pipeline atm"
     return run_demo_inference(
         device,
         is_ci_env,
