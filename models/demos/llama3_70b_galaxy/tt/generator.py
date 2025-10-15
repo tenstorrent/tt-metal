@@ -86,9 +86,14 @@ class Generator:
             logger.info(f"Creating warmup tensor for sequence length: {supported_length}")
             # Capture trace for both
             for batch in (1,):  # , 32):  # TODO add proper support for batched prefill == b-32
-                warmup_tokens = torch.zeros(batch, supported_length, dtype=torch.long)
                 # For batched prefill this needs to be *32
+                if batch == 32 and supported_length == 4096:
+                    # For batched prefill max batch sequence length is 2048 or lower (128k limit)
+                    logger.info(f"Skipping warm up step on batched prefill for sequence length {supported_length}")
+                    continue
+                warmup_tokens = torch.zeros(batch, supported_length, dtype=torch.long)
                 warmup_prompt_lens = torch.tensor([supported_length] * batch, dtype=torch.long)
+                empty_slots = list(range(batch))
                 self.prefill_forward_text(
                     warmup_tokens,
                     page_table,
@@ -99,7 +104,6 @@ class Generator:
                     empty_slots,
                     tt_out_logits_all_users,
                 )
-
         # trace_id_prefill dict check
         logger.info("Prefill traces warmup completed")
 
@@ -167,7 +171,7 @@ class Generator:
         for id, user_id in enumerate(all_users):
             logger.info(f"Prefilling User {user_id + 1}, use_batched_prefill: {use_batched_prefill}")
             if use_batched_prefill:
-                user_id = empty_slots
+                user_id = [user_id]
                 last_token_idx = [(seq_len - 1) for seq_len in prompt_lens]
                 prefill_seq_len = prefill_seq_lens[0]
                 seq_len = prompt_lens
@@ -655,7 +659,6 @@ class Generator:
 
     def _get_prefill_user_page_table(self, page_table, kv_cache, prefill_len, user_id, use_batched_prefill=False):
         # Ensure page_table is not padded with extra blocks for paged_fill_cache to work properly
-
         block_size = get_block_size(kv_cache)
         num_blocks = num_blocks_in_seq(prefill_len, block_size)
         page_table = page_table[:, :num_blocks]

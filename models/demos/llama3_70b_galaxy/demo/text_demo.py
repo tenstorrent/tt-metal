@@ -255,17 +255,16 @@ def create_tt_model(
             False,  # is_page_table_sharded
         ),
         (  # evals-32 run (Throughput) - 32 users, smaller prompts, batch repeat 32
-            # "models/demos/llama3_70b_galaxy/demo/sample_prompts/eval_repeat_prompts_debug_simple_prompts.json",  # input_prompts
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/eval_repeat_prompts_debug.json",  # input_prompts
             True,  # instruct mode
-            10,  # repeat_batches
+            16,  # repeat_batches
             128 * 1024,  # max_seq_len
             32,  # batch_size
-            200,  # max_generated_tokens
+            1024,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
             {"temperature": 0.0, "top_p": 0.05},  # sampling_params (argmax)
-            True,  # stop_at_eos
+            False,  # stop_at_eos
             False,  # apc_test
             False,  # pcc_check
             False,  # prefill-only profile
@@ -516,7 +515,7 @@ def create_tt_model(
     "device_params",
     [
         {
-            "trace_region_size": 102000000,
+            "trace_region_size": 184915840,
             "num_command_queues": 1,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "worker_l1_size": 1345000,
@@ -788,6 +787,7 @@ def test_demo_text(
             logger.info("Starting prefill warmup...")
             profiler.start(f"compile_prefill", iteration=batch_idx)
             try:
+                # We run prefill warm up for all supported sequence lengths once on 1 user
                 tt_out_logits_all_users = torch.zeros(batch_size, 1, 131072) if pcc_check else None
                 toks = generator.prefill_forward_text(
                     input_tokens_prefill_pt,
@@ -801,52 +801,6 @@ def test_demo_text(
             except Exception as e:
                 logger.error(f"Error during prefill warmup: {str(e)}")
                 raise e
-            # # Warmup again for seqlen=128
-            # try:
-            #     tt_out_logits_all_users = torch.zeros(batch_size, 1, 131072) if pcc_check else None
-            #     toks = generator.prefill_forward_text(
-            #         input_tokens_prefill_pt[:, :100],  # Just warmup prefill for 1 user
-            #         page_table=page_table,
-            #         kv_cache=tt_kv_cache,
-            #         prompt_lens= [100]*32, #decoding_pos,
-            #         enable_trace=prefill_enable_trace,
-            #         tt_out_logits_all_users=tt_out_logits_all_users,
-            #         sampling_params=device_sampling_params,
-            #     )
-            # except Exception as e:
-            #     logger.error(f"Error during prefill warmup: {str(e)}")
-            #     raise e
-            # # warmup again for seqlen=2k
-            # try:
-            #     tt_out_logits_all_users = torch.zeros(batch_size, 1, 131072) if pcc_check else None
-            #     toks = generator.prefill_forward_text(
-            #         input_tokens_prefill_pt.repeat(1,5),  # Just warmup prefill for 1 user
-            #         page_table=page_table,
-            #         kv_cache=tt_kv_cache,
-            #         prompt_lens=[input_tokens_prefill_pt.repeat(1,5).size(-1)]*32, # decoding_pos,
-            #         enable_trace=prefill_enable_trace,
-            #         tt_out_logits_all_users=tt_out_logits_all_users,
-            #         sampling_params=device_sampling_params,
-            #     )
-            # except Exception as e:
-            #     logger.error(f"Error during prefill warmup: {str(e)}")
-            #     raise e
-            # # warmup again for seqlen=4k
-            # try:
-            #     tt_out_logits_all_users = torch.zeros(batch_size, 1, 131072) if pcc_check else None
-            #     toks = generator.prefill_forward_text(
-            #     input_tokens_prefill_pt.repeat(1,10),  # Just warmup prefill for 1 user
-            #     page_table=page_table,
-            #     kv_cache=tt_kv_cache,
-            #     prompt_lens=[input_tokens_prefill_pt.repeat(1,10).size(-1)]*32, #decoding_pos,
-            #     enable_trace=prefill_enable_trace,
-            #     tt_out_logits_all_users=tt_out_logits_all_users,
-            #     sampling_params=device_sampling_params,
-            # )
-            # except Exception as e:
-            #     logger.error(f"Error during prefill warmup: {str(e)}")
-            #     raise e
-
             profiler.end(f"compile_prefill", iteration=batch_idx)
             logger.info("Finished prefill warmup")
         logger.info(f"Starting prefill...")
