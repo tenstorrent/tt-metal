@@ -86,6 +86,7 @@ jobs:
     steps:
       - name: 🧬 Checkout Repository
         uses: actions/checkout@v4
+        timeout-minutes: 10
         with:
           fetch-depth: 1
           submodules: recursive
@@ -93,19 +94,23 @@ jobs:
           ref: ${{ inputs.commit || github.sha }}
       - name: 📦 Download Build Artifact
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+        timeout-minutes: 10
         with:
           name: ${{ needs.build-artifact.outputs.build-artifact-name }}
           path: docker-job
       - name: 📂 Extract Build Files
+        timeout-minutes: 10
         working-directory: docker-job
         run: tar --zstd -xf ttm_any.tar.zst
         shell: bash
       - name: 🧪 Download Python Wheel
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+        timeout-minutes: 10
         with:
           name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
           path: docker-job
       - name: 💿 Install Wheel
+        timeout-minutes: 10
         working-directory: docker-job
         run: |
           echo "📂 In directory: $(pwd)"
