@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /*
- * This kernel computes larnorm statistics.
+ * This kernel computes rmsnorm statistics.
  * For rmsnorm we compute E(x**2) and return it as a one tile wide output
  * tensor containing E(x**2) in the left most column per tile.
  */
