@@ -398,7 +398,7 @@ void Hal::initialize_bh() {
     this->verify_eth_fw_version_func_ = [](tt::umd::tt_version fw_version) {
         if (blackhole::is_2_erisc_mode()) {
             tt::umd::tt_version min_version(1, 6, 2);
-            if (min_version >= fw_version) {
+            if (!(fw_version >= min_version)) {
                 TT_THROW(
                     "In 2-erisc mode, the minimum supported ethernet firmware version is {}. Detected version is {}",
                     min_version.str(),
