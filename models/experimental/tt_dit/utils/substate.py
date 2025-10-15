@@ -31,6 +31,15 @@ def pop_substate(state: MutableMapping[str, torch.Tensor], key: str) -> dict[str
     return {k.removeprefix(prefix): state.pop(k) for k in list(state) if k.startswith(prefix)}
 
 
+def rename_substate(state: MutableMapping[str, torch.Tensor], key_from: str, key_to: str) -> None:
+    src_prefix = f"{key_from}."
+    dst_prefix = f"{key_to}."
+
+    for k in list(state):
+        if k.startswith(src_prefix):
+            state[dst_prefix + k.removeprefix(src_prefix)] = state.pop(k)
+
+
 def indexed_substates(state: Mapping[str, torch.Tensor], key: str) -> list[dict[str, torch.Tensor]]:
     result = []
     for i in itertools.count():

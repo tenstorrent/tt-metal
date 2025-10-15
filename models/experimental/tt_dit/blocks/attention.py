@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
@@ -8,19 +9,23 @@ from typing import TYPE_CHECKING
 import torch
 import ttnn
 
-from ...layers.linear import ColParallelLinear
-from ...layers.module import Module
-from ...layers.normalization import RMSNorm
-from ...utils.padding import PaddingConfig, pad_weight_tensor
-from ...utils.substate import substate
+from ..layers.linear import ColParallelLinear
+from ..layers.module import Module, Parameter
+from ..layers.normalization import RMSNorm
+from ..utils.padding import PaddingConfig, pad_weight_tensor
+from ..utils.substate import pop_substate
 
 if TYPE_CHECKING:
-    from ...parallel.config import DiTParallelConfig
-    from ...parallel.manager import CCLManager
+    from typing import Any
+
+    from ..parallel.config import DiTParallelConfig
+    from ..parallel.manager import CCLManager
 
 
 # adapted from https://github.com/huggingface/diffusers/blob/v0.31.0/src/diffusers/models/attention_processor.py
-class Flux1Attention(Module):
+class Attention(Module):
+    K_CHUNK_SIZE = 512
+
     def __init__(
         self,
         *,
@@ -31,12 +36,13 @@ class Flux1Attention(Module):
         added_kv_proj_dim: int,
         context_pre_only: bool = False,
         pre_only: bool = False,
+        use_spatial_weights_for_prompt: bool = False,
+        context_head_scaling: bool = False,
         eps: float,
         mesh_device: ttnn.MeshDevice,
         ccl_manager: CCLManager | None,
         parallel_config: DiTParallelConfig,
         padding_config: PaddingConfig | None,
-        use_spatial_weights_for_prompt: bool = False,
     ) -> None:
         super().__init__()
 
@@ -67,10 +73,10 @@ class Flux1Attention(Module):
         )
 
         if use_spatial_weights_for_prompt:
-            self.add_qkv_proj = self.to_qkv
-            self.norm_added_q = self.norm_q
-            self.norm_added_k = self.norm_k
-            self.to_add_out = self.to_out
+            self.add_qkv_proj = UnregisteredModule(self.to_qkv)
+            self.norm_added_q = UnregisteredModule(self.norm_q)
+            self.norm_added_k = UnregisteredModule(self.norm_k)
+            self.to_add_out = UnregisteredModule(self.to_out) if self.to_out is not None else None
         elif added_kv_proj_dim > 0:
             self.add_qkv_proj = ColParallelLinear(
                 added_kv_proj_dim, 3 * padded_inner_dim, mesh_axis=tp_axis, **common_args
@@ -90,45 +96,61 @@ class Flux1Attention(Module):
             self.norm_added_k = None
             self.to_add_out = None
 
-    # TODO: migrate to _prepare_torch_state
-    def load_state_dict(self, state_dict: dict[str, torch.Tensor]) -> None:
-        def pad_dense_out(state):
-            # Pad dense output weights and biases to match the padded heads
-            weight = state["weight"].T
-            bias = state["bias"]
-            if self.padding_config is not None:
-                weight = pad_weight_tensor(weight, self.padding_config, pad_input_dim=True)
-            weight = weight.T
-            return {"weight": weight, "bias": bias}
-
-        self.norm_q.load_state_dict(substate(state_dict, "norm_q"))
-        self.norm_k.load_state_dict(substate(state_dict, "norm_k"))
-        qkv_state = self._reshape_and_merge_qkv(
-            substate(state_dict, "to_q"), substate(state_dict, "to_k"), substate(state_dict, "to_v")
+        self.context_head_factors = (
+            Parameter(total_shape=[self.padded_heads, 1, 1], device=mesh_device, mesh_axes=[tp_axis, None, None])
+            if context_head_scaling and self.add_qkv_proj is not None
+            else None
         )
-        self.to_qkv.load_state_dict(qkv_state)
 
-        if not self.pre_only:
-            self.to_out.load_state_dict(pad_dense_out(substate(state_dict, "to_out.0")))
+    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
+        weight, bias = self._reshape_and_merge_qkv(
+            pop_substate(state, "to_q"),
+            pop_substate(state, "to_k"),
+            pop_substate(state, "to_v"),
+        )
+        if weight is not None:
+            state["to_qkv.weight"] = weight
+        if bias is not None:
+            state["to_qkv.bias"] = bias
 
-        if self.add_qkv_proj is not None and not self.use_spatial_weights_for_prompt:
-            add_qkv_state = self._reshape_and_merge_qkv(
-                substate(state_dict, "add_q_proj"),
-                substate(state_dict, "add_k_proj"),
-                substate(state_dict, "add_v_proj"),
-            )
-            self.add_qkv_proj.load_state_dict(add_qkv_state)
-            if self.to_add_out is not None:
-                self.to_add_out.load_state_dict(pad_dense_out(substate(state_dict, "to_add_out")))
-            self.norm_added_q.load_state_dict(substate(state_dict, "norm_added_q"))
-            self.norm_added_k.load_state_dict(substate(state_dict, "norm_added_k"))
+        weight, bias = self._reshape_and_merge_qkv(
+            pop_substate(state, "add_q_proj"),
+            pop_substate(state, "add_k_proj"),
+            pop_substate(state, "add_v_proj"),
+        )
+        if weight is not None:
+            state["add_qkv_proj.weight"] = weight
+        if bias is not None:
+            state["add_qkv_proj.bias"] = bias
+
+        if "to_out.0.weight" in state:
+            state["to_out.weight"] = state.pop("to_out.0.weight")
+        if "to_out.0.bias" in state:
+            state["to_out.bias"] = state.pop("to_out.0.bias")
+
+        if self.padding_config is not None:
+            if "to_out.weight" in state:
+                weight = state["to_out.weight"].T
+                weight = pad_weight_tensor(weight, self.padding_config, pad_input_dim=True)
+                state["to_out.weight"] = weight.T
+            if "to_add_out.weight" in state:
+                weight = state["to_add_out.weight"].T
+                weight = pad_weight_tensor(weight, self.padding_config, pad_input_dim=True)
+                state["to_add_out.weight"] = weight.T
+
+        if "context_head_factors" in state:
+            factors = state["context_head_factors"]
+            if self.padding_config is not None:
+                pad = (0, self.padding_config.head_padding)
+                factors = torch.nn.functional.pad(factors, pad)
+            state["context_head_factors"] = factors.reshape([-1, 1, 1])
 
     def _reshape_and_merge_qkv(
         self,
         q_state: dict[str, torch.Tensor],
         k_state: dict[str, torch.Tensor],
         v_state: dict[str, torch.Tensor],
-    ) -> dict[str, torch.Tensor]:
+    ) -> tuple[torch.Tensor | None, torch.Tensor | None]:
         # Rearrange QKV projections such column-fracturing shards the heads
         def _merge_tensors(q, k, v):
             n_dev = self.parallel_config.tensor_parallel.factor
@@ -146,16 +168,20 @@ class Flux1Attention(Module):
             qkv = qkv.T
             return qkv
 
-        weight = _merge_tensors(q_state["weight"], k_state["weight"], v_state["weight"])
+        if "weight" in q_state and "weight" in k_state and "weight" in v_state:
+            weight = _merge_tensors(q_state["weight"], k_state["weight"], v_state["weight"])
+        else:
+            weight = None
 
-        out_state = {"weight": weight}
-        if "bias" in q_state:
+        if "bias" in q_state and "bias" in k_state and "bias" in v_state:
             bias = _merge_tensors(
                 q_state["bias"].unsqueeze(-1), k_state["bias"].unsqueeze(-1), v_state["bias"].unsqueeze(-1)
             )
             bias = bias.squeeze(-1)
-            out_state["bias"] = bias
-        return out_state
+        else:
+            bias = None
+
+        return weight, bias
 
     def forward(
         self,
@@ -174,15 +200,25 @@ class Flux1Attention(Module):
             spatial_rope: Tuple of two tensors with shape [spatial_sequence_length / sp_factor, head_dim].
             prompt_rope: Tuple of two tensors with shape [prompt_sequence_length, head_dim] (not sharded!).
         """
+        assert len(spatial.shape) == 3
+        if prompt is not None:
+            assert len(prompt.shape) == 3
+        for t in spatial_rope or ():
+            assert len(t.shape) == 2
+        for t in prompt_rope or ():
+            assert len(t.shape) == 2
+
         device_grid = self.mesh_device.compute_with_storage_grid_size()
         core_grid = ttnn.CoreGrid(x=device_grid.x, y=device_grid.y)
         tp_axis = self.parallel_config.tensor_parallel.mesh_axis
 
-        qkv = self.to_qkv(spatial, core_grid=core_grid)
+        qkv = self.to_qkv(
+            spatial, core_grid=core_grid
+        )  # [batch_size, spatial_sequence_length / sp_factor, 3 * n_local_heads * head_dim (in this order)]
         local_heads = self.n_local_heads
         q, k, v = ttnn.transformer.split_query_key_value_and_split_heads(
             qkv, num_heads=local_heads, transpose_key=False
-        )
+        )  # [batch_size, n_local_heads, spatial_sequence_length / sp_factor, head_dim]
 
         q = self.norm_q(q)
         k = self.norm_k(k)
@@ -202,13 +238,12 @@ class Flux1Attention(Module):
             if prompt_rope is not None:
                 add_q = _apply_rope(add_q, prompt_rope)
                 add_k = _apply_rope(add_k, prompt_rope)
+
+            if self.context_head_factors is not None:
+                add_q = add_q * self.context_head_factors.data
         else:
             shape = [1, self.n_local_heads, 0, self.head_dim]
             add_q = add_k = add_v = ttnn.zeros(shape, device=self.mesh_device, layout=q.layout, dtype=q.dtype)
-
-        k_chunk_size = 512
-        while q.shape[-2] % k_chunk_size != 0:
-            k_chunk_size //= 2
 
         full_grid = self.mesh_device.compute_with_storage_grid_size()
         sdpa_worker_grid = (full_grid.x, full_grid.y - 1)
@@ -216,7 +251,7 @@ class Flux1Attention(Module):
         sdpa_program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=sdpa_worker_grid,
             q_chunk_size=128,
-            k_chunk_size=k_chunk_size,
+            k_chunk_size=self.K_CHUNK_SIZE,
             exp_approx_mode=False,  # NOTE: False is more correct
         )
         sdpa_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
@@ -255,6 +290,10 @@ class Flux1Attention(Module):
                 ccl_core_grid_offset=(0, sdpa_worker_grid[1]),
             )
         else:
+            assert spatial_sequence_length == spatial.shape[1], (
+                "spatial sequence must not be padded without sequence parallelism"
+            )
+
             spatial, prompt = ttnn.transformer.joint_scaled_dot_product_attention(
                 q,
                 k,
@@ -272,14 +311,31 @@ class Flux1Attention(Module):
             prompt = ttnn.transformer.concatenate_heads(prompt)
 
         if self.to_out is not None:
-            spatial = self.ccl_manager.all_gather(spatial, dim=2, mesh_axis=tp_axis)
+            spatial = self.ccl_manager.all_gather_persistent_buffer(
+                spatial, dim=2, mesh_axis=tp_axis, use_hyperparams=True
+            )
             spatial = self.to_out(spatial, core_grid=core_grid)
 
         if self.to_add_out is not None:
-            prompt = self.ccl_manager.all_gather(prompt, dim=2, mesh_axis=tp_axis)
+            prompt = self.ccl_manager.all_gather_persistent_buffer(
+                prompt, dim=2, mesh_axis=tp_axis, use_hyperparams=True
+            )
             prompt = self.to_add_out(prompt, core_grid=core_grid)
 
         return spatial, prompt
+
+    @classmethod
+    def spatial_sequence_padding_length(cls, *, length: int, sp_factor: int) -> int:
+        if sp_factor == 1:
+            return 0
+
+        divisor = cls.K_CHUNK_SIZE * sp_factor
+        return -length % divisor
+
+    @classmethod
+    def pad_spatial_sequence(cls, x: torch.Tensor, /, *, sp_factor: int) -> torch.Tensor:
+        padding_len = cls.spatial_sequence_padding_length(length=x.shape[-2], sp_factor=sp_factor)
+        return torch.nn.functional.pad(x, (0, 0, 0, padding_len))
 
 
 def _apply_rope(x: ttnn.Tensor, freqs_cis: tuple[ttnn.Tensor, ttnn.Tensor]) -> ttnn.Tensor:
@@ -288,3 +344,12 @@ def _apply_rope(x: ttnn.Tensor, freqs_cis: tuple[ttnn.Tensor, ttnn.Tensor]) -> t
     sin = sin.reshape([1, 1, *sin.shape])
 
     return x * cos + ttnn.alt_complex_rotate90(x) * sin
+
+
+# TODO: move to module.py
+class UnregisteredModule:
+    def __init__(self, module: Module) -> None:
+        self.module = module
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
+        return self.module(*args, **kwargs)

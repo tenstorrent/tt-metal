@@ -9,13 +9,13 @@ from typing import TYPE_CHECKING
 import torch
 import ttnn
 
+from ...blocks.attention import Attention
+from ...blocks.transformer_block import TransformerBlock
 from ...layers.embeddings import CombinedTimestepGuidanceTextProjEmbeddings
-from ...layers.feedforward import ParallelFeedForward
 from ...layers.linear import ColParallelLinear, Linear, RowParallelLinear
 from ...layers.module import Module, ModuleList
 from ...layers.normalization import DistributedLayerNorm
-from ...utils.substate import substate
-from .attention_flux1 import Flux1Attention
+from ...utils.substate import rename_substate
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -45,7 +45,7 @@ class Flux1SingleTransformerBlock(Module):
 
         mlp_hidden_dim = 4 * dim
 
-        self.attn = Flux1Attention(
+        self.attn = Attention(
             query_dim=dim,
             head_dim=head_dim,
             heads=num_heads,
@@ -95,44 +95,24 @@ class Flux1SingleTransformerBlock(Module):
             ccl_manager=ccl_manager,
         )
 
-    # TODO: migrate to _prepare_torch_state
-    def load_state_dict(self, state_dict: dict[str, torch.Tensor], /) -> None:
-        embedding_dim = state_dict["norm.linear.weight"].shape[1]
+    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
+        rename_substate(state, "norm.linear", "time_embed")
 
-        self.attn.load_state_dict(substate(state_dict, "attn"))
-        self.norm.load_state_dict(substate(state_dict, "norm"))
-        self.time_embed.load_state_dict(self._shuffle_ada_norm_linear(substate(state_dict, "norm.linear")))
-        self.proj_mlp.load_state_dict(substate(state_dict, "proj_mlp"))
-        self.proj_out.load_state_dict(
-            _re_fuse_proj_out_parameters(
-                substate(state_dict, "proj_out"),
+        embedding_dim = state["time_embed.weight"].shape[1]
+
+        _shuffle_linear_output(
+            state,
+            prefix="time_embed",
+            device_count=self.parallel_config.tensor_parallel.factor,
+            chunks=3,
+        )
+
+        if "proj_out.weight" in state:
+            state["proj_out.weight"] = _re_fuse_proj_out_weight(
+                state["proj_out.weight"],
                 embedding_dim=embedding_dim,
                 device_count=self.parallel_config.tensor_parallel.factor,
             )
-        )
-
-    def _shuffle_ada_norm_linear(self, linear_state: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-        # Rearrange QKV projections such column-fracturing shards the heads
-        def _shuffle(x, in_dim):
-            ndev = self.parallel_config.tensor_parallel.factor
-            x = x.T
-            cur_in_dim = x.shape[0]  # in_dim for weight, 1 for bias
-            expansions = x.shape[-1] // in_dim
-            x = x.reshape(-1, expansions, ndev, in_dim // ndev)
-            x = x.permute(0, 2, 1, 3)
-            x = x.reshape(cur_in_dim, -1)
-            assert x.shape[1] == in_dim * expansions
-            x = x.T
-            return x
-
-        in_dim = linear_state["weight"].shape[1]
-        weight = _shuffle(linear_state["weight"], in_dim)
-        out_state = {"weight": weight}
-        if "bias" in linear_state:
-            bias = _shuffle(linear_state["bias"].reshape(-1, 1), in_dim)
-            bias = bias.squeeze()
-            out_state["bias"] = bias
-        return out_state
 
     # Since we do not have operations to concatenate and slice a tensor along a sharded dimension,
     # we keep the spatial and prompt tensors separate for now.
@@ -146,7 +126,7 @@ class Flux1SingleTransformerBlock(Module):
         # rope: tuple[ttnn.Tensor, ttnn.Tensor] | None = None,
         spatial_rope: tuple[ttnn.Tensor, ttnn.Tensor] | None = None,
         prompt_rope: tuple[ttnn.Tensor, ttnn.Tensor] | None = None,
-        skip_time_embed_activation: bool = False,
+        skip_time_embed_activation_fn: bool = False,
         # sequence_length: int,
         spatial_sequence_length: int,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
@@ -159,7 +139,7 @@ class Flux1SingleTransformerBlock(Module):
         """
         tp_axis = self.parallel_config.tensor_parallel.mesh_axis
 
-        if not skip_time_embed_activation:
+        if not skip_time_embed_activation_fn:
             time_embed = ttnn.silu(time_embed)
         time = self.time_embed(time_embed)
 
@@ -172,11 +152,15 @@ class Flux1SingleTransformerBlock(Module):
         norm_spatial = spatial_normed * (1 + scale_msa) + shift_msa
         norm_prompt = prompt_normed * (1 + scale_msa) + shift_msa
 
-        # norm_combined = self.ccl_manager.all_gather(
-        #     norm_combined, dim=2, mesh_axis=tp_axis
+        # norm_combined = self.ccl_manager.all_gather_persistent_buffer(
+        #     norm_combined, dim=2, mesh_axis=tp_axis, use_hyperparams=True
         # )
-        norm_spatial = self.ccl_manager.all_gather(norm_spatial, dim=2, mesh_axis=tp_axis)
-        norm_prompt = self.ccl_manager.all_gather(norm_prompt, dim=2, mesh_axis=tp_axis)
+        norm_spatial = self.ccl_manager.all_gather_persistent_buffer(
+            norm_spatial, dim=2, mesh_axis=tp_axis, use_hyperparams=True
+        )
+        norm_prompt = self.ccl_manager.all_gather_persistent_buffer(
+            norm_prompt, dim=2, mesh_axis=tp_axis, use_hyperparams=True
+        )
 
         # call `unsqueeze` since RowParallelLinear currently requires rank 4 tensors
         # mlp_combined = ttnn.squeeze(self.proj_mlp(ttnn.unsqueeze(norm_combined, 0)), 0)
@@ -218,281 +202,12 @@ class Flux1SingleTransformerBlock(Module):
         return spatial, prompt
 
 
-# adapted from https://github.com/huggingface/diffusers/blob/v0.31.0/src/diffusers/models/attention_processor.py
-class Flux1TransformerBlock(Module):
-    def __init__(
-        self,
-        *,
-        dim: int,
-        num_heads: int,
-        head_dim: int,
-        context_pre_only: bool,
-        mesh_device: ttnn.MeshDevice,
-        ccl_manager: CCLManager | None,
-        parallel_config: DiTParallelConfig,
-        padding_config: PaddingConfig | None,
-    ):
-        super().__init__()
-
-        self.dim = dim
-        self.num_heads = num_heads
-        self.head_dim = head_dim
-
-        self.context_pre_only = context_pre_only
-        self.mesh_device = mesh_device
-        self.ccl_manager = ccl_manager
-        self.parallel_config = parallel_config
-
-        self.norm1_linear = ColParallelLinear(
-            dim,
-            6 * dim,
-            bias=True,
-            mesh_device=mesh_device,
-            mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-        )
-        self.norm1_norm = DistributedLayerNorm(
-            dim,
-            norm_eps=1e-6,
-            norm_elementwise_affine=False,
-            bias=False,
-            mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-            mesh_device=mesh_device,
-            ccl_manager=ccl_manager,
-        )
-
-        context_norm_dim = 6 * dim if not context_pre_only else 2 * dim
-        self.norm1_context_linear = ColParallelLinear(
-            dim,
-            context_norm_dim,
-            bias=True,
-            mesh_device=mesh_device,
-            mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-        )
-        self.norm1_context_norm = DistributedLayerNorm(
-            dim,
-            norm_eps=1e-6,
-            norm_elementwise_affine=False,
-            bias=False,
-            mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-            mesh_device=mesh_device,
-            ccl_manager=ccl_manager,
-        )
-
-        self.attn = Flux1Attention(
-            query_dim=dim,
-            head_dim=head_dim,
-            heads=num_heads,
-            out_dim=dim,
-            added_kv_proj_dim=dim,
-            context_pre_only=context_pre_only,
-            eps=1e-6,
-            mesh_device=mesh_device,
-            ccl_manager=ccl_manager,
-            parallel_config=parallel_config,
-            padding_config=padding_config,
-        )
-
-        self.norm2 = DistributedLayerNorm(
-            dim,
-            norm_eps=1e-6,
-            norm_elementwise_affine=False,
-            bias=False,
-            mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-            mesh_device=mesh_device,
-            ccl_manager=ccl_manager,
-        )
-
-        self.ff = ParallelFeedForward(
-            dim=dim,
-            dim_out=dim,
-            activation_fn="gelu",
-            mesh_device=mesh_device,
-            mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-            ccl_manager=ccl_manager,
-        )
-
-        self.norm2_context = None
-        self.ff_context = None
-
-        if not context_pre_only:
-            self.norm2_context = DistributedLayerNorm(
-                dim,
-                norm_eps=1e-6,
-                norm_elementwise_affine=False,
-                bias=False,
-                mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-                mesh_device=mesh_device,
-                ccl_manager=ccl_manager,
-            )
-            self.ff_context = ParallelFeedForward(
-                dim=dim,
-                dim_out=dim,
-                activation_fn="gelu",
-                mesh_device=mesh_device,
-                mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-                ccl_manager=ccl_manager,
-            )
-
-        device_grid = self.mesh_device.compute_with_storage_grid_size()
-        self.core_grid = ttnn.CoreGrid(x=device_grid.x, y=device_grid.y)
-
-    # TODO: migrate to _prepare_torch_state
-    def load_state_dict(self, state_dict):
-        def _shuffle_ada_norm_linear(linear_state):
-            # Rearrange QKV projections such column-fracturing shards the heads
-            def _shuffle(x, in_dim):
-                ndev = self.parallel_config.tensor_parallel.factor
-                x = x.T
-                cur_in_dim = x.shape[0]  # in_dim for weight, 1 for bias
-                expansions = x.shape[-1] // in_dim
-                x = x.reshape(-1, expansions, ndev, in_dim // ndev)
-                x = x.permute(0, 2, 1, 3)
-                x = x.reshape(cur_in_dim, -1)
-                assert x.shape[1] == in_dim * expansions
-                x = x.T
-                return x
-
-            in_dim = linear_state["weight"].shape[1]
-            weight = _shuffle(linear_state["weight"], in_dim)
-            out_state = {"weight": weight}
-            if "bias" in linear_state:
-                bias = _shuffle(linear_state["bias"].reshape(-1, 1), in_dim)
-                bias = bias.squeeze()
-                out_state["bias"] = bias
-            return out_state
-
-        def rename_ff_state(state):
-            out_state = {
-                f"{replacement}{k[len(prefix) :]}": v
-                for k, v in state.items()
-                for prefix, replacement in [("net.0.proj", "ff1"), ("net.2", "ff2")]
-                if prefix in k
-            }
-            return out_state
-
-        self.norm1_linear.load_state_dict(_shuffle_ada_norm_linear(substate(state_dict, "norm1.linear")))
-        self.norm1_norm.load_state_dict(substate(state_dict, "norm1.norm"))
-        self.norm1_context_linear.load_state_dict(
-            _shuffle_ada_norm_linear(substate(state_dict, "norm1_context.linear"))
-        )
-        self.norm1_context_norm.load_state_dict(substate(state_dict, "norm1_context.norm"))
-        self.attn.load_state_dict(substate(state_dict, "attn"))
-        self.norm2.load_state_dict(substate(state_dict, "norm2"))
-        self.ff.load_state_dict(rename_ff_state(substate(state_dict, "ff")))
-        if not self.context_pre_only:
-            self.norm2_context.load_state_dict(substate(state_dict, "norm2_context"))
-            self.ff_context.load_state_dict(rename_ff_state(substate(state_dict, "ff_context")))
-
-    def forward(
-        self,
-        spatial: ttnn.Tensor,
-        prompt: ttnn.Tensor,
-        time_embed: ttnn.Tensor,
-        spatial_sequence_length: int,
-        *,
-        spatial_rope: tuple[ttnn.Tensor, ttnn.Tensor] | None = None,
-        prompt_rope: tuple[ttnn.Tensor, ttnn.Tensor] | None = None,
-        skip_time_embed_activation: bool = False,
-    ) -> tuple[ttnn.Tensor, ttnn.Tensor | None]:
-        """Run the model forward.
-
-        Args:
-            spatial: Tensor with shape [batch_size, spatial_sequence_length / sp_factor, query_dim / tp_factor].
-            prompt: Tensor with shape [batch_size, prompt_sequence_length, query_dim / tp_factor] (sequence is not sharded!).
-            time_embed: Tensor with shape [batch_size, 1, query_dim].
-            spatial_rope: Tuple of two tensors with shape [spatial_sequence_length / sp_factor, head_dim].
-            prompt_rope: Tuple of two tensors with shape [prompt_sequence_length, head_dim] (sequence is not sharded!).
-        """
-        tp_axis = self.parallel_config.tensor_parallel.mesh_axis
-
-        if not skip_time_embed_activation:
-            time_embed = ttnn.silu(time_embed, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
-        spatial_time = self.norm1_linear(time_embed, core_grid=self.core_grid)
-        prompt_time = self.norm1_context_linear(time_embed, core_grid=self.core_grid)
-
-        (
-            spatial_shift_attn,
-            spatial_scale_attn,
-            spatial_gate_attn,
-            spatial_shift_ff,
-            spatial_scale_ff,
-            spatial_gate_ff,
-        ) = _chunk_time3d(spatial_time, 6)
-
-        spatial_normed = ttnn.squeeze(self.norm1_norm(ttnn.unsqueeze(spatial, 0)), 0)
-        spatial_normed = spatial_normed * (1 + spatial_scale_attn) + spatial_shift_attn
-
-        if self.context_pre_only:
-            prompt_scale_attn, prompt_shift_attn = _chunk_time3d(prompt_time, 2)
-            prompt_gate_attn = None
-            prompt_shift_ff = None
-            prompt_scale_ff = None
-            prompt_gate_ff = None
-        else:
-            (
-                prompt_shift_attn,
-                prompt_scale_attn,
-                prompt_gate_attn,
-                prompt_shift_ff,
-                prompt_scale_ff,
-                prompt_gate_ff,
-            ) = _chunk_time3d(prompt_time, 6)
-
-        prompt_normed = ttnn.squeeze(self.norm1_context_norm(ttnn.unsqueeze(prompt, 0)), 0)
-        prompt_normed = prompt_normed * (1 + prompt_scale_attn) + prompt_shift_attn
-
-        # Gather spatial, prompt before attention
-        spatial_normed = self.ccl_manager.all_gather(spatial_normed, dim=2, mesh_axis=tp_axis)
-        prompt_normed = self.ccl_manager.all_gather(prompt_normed, dim=2, mesh_axis=tp_axis)
-
-        spatial_attn, prompt_attn = self.attn.forward(
-            spatial=spatial_normed,
-            prompt=prompt_normed,
-            spatial_rope=spatial_rope,
-            prompt_rope=prompt_rope,
-            spatial_sequence_length=spatial_sequence_length,
-        )
-        spatial_attn = spatial_attn * spatial_gate_attn
-        prompt_attn = prompt_attn * prompt_gate_attn if prompt_gate_attn is not None else None
-
-        # residual
-        spatial = spatial + spatial_attn
-
-        spatial_normed = ttnn.squeeze(self.norm2(ttnn.unsqueeze(spatial, 0)), 0)
-        spatial_normed = spatial_normed * (1 + spatial_scale_ff) + spatial_shift_ff
-
-        spatial_normed = self.ccl_manager.all_gather(spatial_normed, dim=2, mesh_axis=tp_axis)
-
-        spatial_ff = ttnn.squeeze(self.ff(ttnn.unsqueeze(spatial_normed, 0), core_grid=self.core_grid), 0)
-        spatial_ff = spatial_ff * spatial_gate_ff
-
-        spatial += spatial_ff
-
-        if self.context_pre_only:
-            return spatial, None
-
-        prompt += prompt_attn
-
-        prompt_normed = ttnn.squeeze(self.norm2_context(ttnn.unsqueeze(prompt, 0)), 0)
-        prompt_normed = prompt_normed * (1 + prompt_scale_ff) + prompt_shift_ff
-
-        prompt_normed = self.ccl_manager.all_gather(prompt_normed, dim=2, mesh_axis=tp_axis)
-
-        prompt_ff = ttnn.squeeze(self.ff_context(ttnn.unsqueeze(prompt_normed, 0), core_grid=self.core_grid), 0)
-        prompt_ff = prompt_ff * prompt_gate_ff
-
-        prompt += prompt_ff
-
-        return spatial, prompt
-
-
-def _re_fuse_proj_out_parameters(
-    state: dict[str, torch.Tensor],
+def _re_fuse_proj_out_weight(
+    weight: torch.Tensor,
     *,
     embedding_dim: int,
     device_count: int,
-) -> dict[str, torch.Tensor]:
+) -> torch.Tensor:
     """Re-fuse out-projection parameters.
 
     The out-projection layer inputs are fused activations coming from the attention network and
@@ -500,23 +215,20 @@ def _re_fuse_proj_out_parameters(
     take into account mesh sharding.
     """
     if device_count == 1:
-        return state
+        return weight
 
-    w = state["weight"]
-    _, in_dim = w.shape
+    _, in_dim = weight.shape
 
     in_dim1 = embedding_dim
     in_dim2 = in_dim - in_dim1
 
     # unfuse
-    w1, w2 = w.split([in_dim1, in_dim2], dim=-1)
+    w1, w2 = weight.split([in_dim1, in_dim2], dim=-1)
 
     # re-fuse
     w1 = w1.reshape([-1, device_count, in_dim1 // device_count])
     w2 = w2.reshape([-1, device_count, in_dim2 // device_count])
-    w = torch.cat([w1, w2], dim=-1).reshape([-1, in_dim])
-
-    return {"weight": w, "bias": state["bias"]}
+    return torch.cat([w1, w2], dim=-1).reshape([-1, in_dim])
 
 
 # adapted from https://github.com/huggingface/diffusers/blob/v0.31.0/src/diffusers/models/transformers/transformer_flux.py
@@ -574,7 +286,7 @@ class Flux1Transformer(Module):
         )
 
         self.transformer_blocks = ModuleList(
-            Flux1TransformerBlock(
+            TransformerBlock(
                 dim=inner_dim,
                 num_heads=num_attention_heads,
                 head_dim=attention_head_dim,
@@ -621,18 +333,9 @@ class Flux1Transformer(Module):
             mesh_device=mesh_device,
         )
 
-    # TODO: migrate to _prepare_torch_state
-    def load_state_dict(self, state_dict: dict[str, torch.Tensor], /) -> None:
-        self.time_text_embed.load_state_dict(substate(state_dict, "time_text_embed"))
-        self.context_embedder.load_state_dict(substate(state_dict, "context_embedder"))
-        self.x_embedder.load_state_dict(substate(state_dict, "x_embedder"))
-        for i, block in enumerate(self.transformer_blocks):
-            block.load_state_dict(substate(state_dict, f"transformer_blocks.{i}"))
-        for i, block in enumerate(self.single_transformer_blocks):
-            block.load_state_dict(substate(state_dict, f"single_transformer_blocks.{i}"))
-        self.time_embed_out.load_state_dict(substate(state_dict, "norm_out.linear"))  # chunks=2 if sharded
-        self.norm_out.load_state_dict(substate(state_dict, "norm_out.norm"))
-        self.proj_out.load_state_dict(substate(state_dict, "proj_out"))
+    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
+        rename_substate(state, "norm_out.linear", "time_embed_out")
+        rename_substate(state, "norm_out.norm", "norm_out")
 
     # We do not shard the last dimension of spatial, because its dimension is less than the tile
     # size for a device count of four and more. This requires padding, which is not currently
@@ -678,7 +381,7 @@ class Flux1Transformer(Module):
                 spatial_rope=spatial_rope,
                 prompt_rope=prompt_rope,
                 spatial_sequence_length=spatial_sequence_length,
-                skip_time_embed_activation=True,
+                skip_time_embed_activation_fn=True,
             )
 
             if i % 6 == 0:
@@ -700,7 +403,7 @@ class Flux1Transformer(Module):
                 prompt_rope=prompt_rope,
                 # sequence_length=spatial_sequence_length + prompt_sequence_length,
                 spatial_sequence_length=spatial_sequence_length,
-                skip_time_embed_activation=True,
+                skip_time_embed_activation_fn=True,
             )
 
             if i % 6 == 0:
@@ -714,7 +417,7 @@ class Flux1Transformer(Module):
         spatial_time = self.time_embed_out(time_embed)
         [scale, shift] = _chunk_time3d(spatial_time, 2)
 
-        spatial = self.ccl_manager.all_gather(spatial, dim=2, mesh_axis=tp_axis)
+        spatial = self.ccl_manager.all_gather_persistent_buffer(spatial, dim=2, mesh_axis=tp_axis, use_hyperparams=True)
 
         spatial = spatial * (1 + scale) + shift
 
@@ -724,3 +427,20 @@ class Flux1Transformer(Module):
 def _chunk_time3d(t: ttnn.Tensor, count: int) -> list[ttnn.Tensor]:
     size = t.shape[-1] // count
     return [t[:, :, i * size : (i + 1) * size] for i in range(count)]
+
+
+def _shuffle_linear_output(state: dict[str, torch.Tensor], *, prefix: str, device_count: int, chunks: int) -> None:
+    weight_key = f"{prefix}.weight"
+    bias_key = f"{prefix}.bias"
+
+    weight = state.get(weight_key)
+    bias = state.get(bias_key)
+
+    if weight is not None:
+        _, in_dim = weight.shape
+        weight = weight.reshape([chunks, device_count, -1, in_dim]).transpose(0, 1).reshape([-1, in_dim])
+        state[weight_key] = weight
+
+    if bias is not None:
+        bias = state[bias_key].reshape([chunks, device_count, -1]).transpose(0, 1).reshape([-1])
+        state[bias_key] = bias

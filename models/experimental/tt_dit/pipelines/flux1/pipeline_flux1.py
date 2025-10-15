@@ -623,8 +623,11 @@ class Flux1Pipeline:
                 # Sync because we don't pass a persistent buffer or a barrier semaphore.
                 ttnn.synchronize_device(self.vae_device)
 
-                tt_latents = self._ccl_managers[self.vae_submesh_idx].all_gather(
-                    tt_latents_step_list[self.vae_submesh_idx], dim=1, mesh_axis=sp_axis
+                tt_latents = self._ccl_managers[self.vae_submesh_idx].all_gather_persistent_buffer(
+                    tt_latents_step_list[self.vae_submesh_idx],
+                    dim=1,
+                    mesh_axis=sp_axis,
+                    use_hyperparams=True,
                 )
 
                 torch_latents = ttnn.to_torch(ttnn.get_device_tensors(tt_latents)[0])
