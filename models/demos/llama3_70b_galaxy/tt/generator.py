@@ -91,17 +91,27 @@ class Generator:
                     # For batched prefill max batch sequence length is 2048 or lower (128k limit)
                     logger.info(f"Skipping warm up step on batched prefill for sequence length {supported_length}")
                     continue
+                if batch == 32:
+                    current_batch = page_table.shape[0]
+                    if current_batch < batch:
+                        pad_rows = batch - current_batch
+                        padding = torch.full((pad_rows, page_table.shape[1]), -1, dtype=torch.int32)
+                        warmup_page_table = torch.cat([page_table, padding], dim=0)
+                    else:
+                        warmup_page_table = page_table
+                else:
+                    warmup_page_table = page_table
                 warmup_tokens = torch.zeros(batch, supported_length, dtype=torch.long)
                 warmup_prompt_lens = torch.tensor([supported_length] * batch, dtype=torch.long)
-                empty_slots = list(range(batch))
+                warmup_empty_slots = list(range(batch))
                 self.prefill_forward_text(
                     warmup_tokens,
-                    page_table,
+                    warmup_page_table,
                     kv_cache,
                     warmup_prompt_lens,
                     enable_trace,
                     sampling_params,
-                    empty_slots,
+                    warmup_empty_slots,
                     tt_out_logits_all_users,
                 )
         # trace_id_prefill dict check
@@ -161,7 +171,7 @@ class Generator:
             and tt_out_logits_all_users is None
             and not return_logits
         ):
-            use_batched_prefill = False
+            use_batched_prefill = True
 
         if return_logits:
             tt_out_logits_all_users = torch.zeros(batch, 1, 131072)
@@ -171,7 +181,7 @@ class Generator:
         for id, user_id in enumerate(all_users):
             logger.info(f"Prefilling User {user_id + 1}, use_batched_prefill: {use_batched_prefill}")
             if use_batched_prefill:
-                user_id = [user_id]
+                user_id = empty_slots
                 last_token_idx = [(seq_len - 1) for seq_len in prompt_lens]
                 prefill_seq_len = prefill_seq_lens[0]
                 seq_len = prompt_lens
