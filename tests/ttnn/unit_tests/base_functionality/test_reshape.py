@@ -345,12 +345,12 @@ def test_reshape_tile_layout_only_change_shape(device):
 @pytest.mark.parametrize(
     "input_shape, output_shape",
     [
-        ((1, 64, 8), (1, 16, 32)),
+        ((1, 8, 8), (1, 16, 4)),
         ((1, 17, 1), (1, 1, 17)),
         ((1, 32, 17), (1, 17, 32)),
         ((2, 32, 17), (2, 17, 32)),
         ((2, 2, 1), (1, 4, 1)),
-        ((8, 1, 5), (2, 2, 10)),
+        ((16, 1, 5), (4, 2, 10)),
         ((1, 256, 1), (1, 256)),
         ((1, 256, 1), (1, 256, 1, 1)),
         ((1, 180, 1), (1, 180, 1, 1)),
@@ -368,9 +368,9 @@ def test_reshape_tile_layout_only_change_shape(device):
         ((32, 1, 96, 64), (1, 32, 96, 64)),  # issue 20238
     ],
 )
-@pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG])
+@pytest.mark.parametrize("memory_config", [ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG])
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
-@pytest.mark.parametrize("dtype", [(torch.bfloat16, ttnn.bfloat16)])
+@pytest.mark.parametrize("dtype", [(torch.bfloat16, ttnn.bfloat16), (torch.int32, ttnn.uint32)])
 def test_reshape_tile(device, input_shape, output_shape, layout, memory_config, dtype):
     if memory_config == ttnn.L1_MEMORY_CONFIG and input_shape in [(2888, 49, 96), (1, 1500, 1, 512)]:
         pytest.xfail("Test case is too big for L1")
@@ -389,8 +389,6 @@ def test_reshape_tile(device, input_shape, output_shape, layout, memory_config, 
     )
     ttnn_output = ttnn.reshape(input_tensor, output_shape)
     output = ttnn.to_torch(ttnn_output)
-    print("expected tensor: ", torch_result)
-    print("output tensor: ", output)
     assert_with_pcc(torch_result, output, 0.9999)
 
 
