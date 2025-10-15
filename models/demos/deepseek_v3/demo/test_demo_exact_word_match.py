@@ -7,11 +7,12 @@ import pytest
 
 from models.demos.deepseek_v3.demo.demo import run_demo
 
-# === Paths ====================================================================
-MODEL_PATH = Path("/proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528")  # Path("models/demos/deepseek_v3/reference")
+# Paths
+MODEL_PATH = Path(os.getenv("DEEPSEEK_V3_HF_MODEL", "models/demos/deepseek_v3/reference"))
+CACHE_DIR = Path(os.getenv("DEEPSEEK_V3_CACHE", "generated/deepseek_v3"))
 REFERENCE_JSON = Path("models/demos/deepseek_v3/demo/deepseek_32_prompts_outputs.json")
 
-# === Comparison options =======================================================
+# Compare settings
 IGNORE_CASE = False
 STRIP_PUNCT = False
 
@@ -22,7 +23,7 @@ WER_TOLERANCE = 0.0
 # Limit of prompts to pass in one run (demo supports up to 32)
 MAX_PROMPTS = 32
 
-# === Tokenization / diff utilities ===========================================
+# Tokenization
 _WORD_RE = re.compile(r"\w+('\w+)?|\S", flags=re.UNICODE)
 
 
@@ -77,7 +78,7 @@ def word_diff_metrics(generated: str, reference: str, *, ignore_case=True, strip
     }
 
 
-# === Reference JSON loading ===================================================
+# Reference JSON loading
 def load_reference_map(path: Path) -> dict[str, str]:
     with path.open("r", encoding="utf-8", errors="ignore") as f:
         raw = json.load(f)
@@ -100,18 +101,16 @@ def load_reference_map(path: Path) -> dict[str, str]:
     "max_new_tokens",
     [200],
 )
-def test_multi_prompt_generation_matches_reference(tmp_path, max_new_tokens):
+def test_multi_prompt_generation_matches_reference(max_new_tokens):
     """
     Loads a JSON dict {prompt: expected_text}, executes the demo ONCE with up to 32 prompts
     by calling run_demo(), and validates each returned generation['text'] against its reference.
 
     Defaults to case/punctuation-sensitive exact match (WER==0); see flags above.
     """
-    # cache_dir = tmp_path / "cache"
-    cache_dir = Path("/proj_sw/user_dev/deepseek-v3-cache")
     ref_map = load_reference_map(REFERENCE_JSON)
 
-    # Respect demo's 32-prompt limit
+    # Ensure demo's 32-prompt limit
     all_prompts = list(ref_map.keys())
     prompts = all_prompts[:MAX_PROMPTS]
 
@@ -123,7 +122,7 @@ def test_multi_prompt_generation_matches_reference(tmp_path, max_new_tokens):
         prompts=prompts,
         model_path=str(MODEL_PATH),
         max_new_tokens=max_new_tokens,
-        cache_dir=str(cache_dir),
+        cache_dir=str(CACHE_DIR),
         random_weights=False,
         token_accuracy=False,
         early_print_first_user=False,
@@ -134,16 +133,15 @@ def test_multi_prompt_generation_matches_reference(tmp_path, max_new_tokens):
     assert isinstance(generations, list), "run_demo()['generations'] must be a list."
     assert len(generations) == len(prompts), f"Got {len(generations)} generations but passed {len(prompts)} prompts."
 
-    # Build prompt -> generated map by index (run_demo preserves order)
+    # Build prompt -> generated map by index
     gen_map: dict[str, str] = {}
     for i, gen_entry in enumerate(generations):
         prompt = prompts[i]
         text = gen_entry.get("text")
-        # In random-weights mode text may be None; we are not in that mode here.
         assert isinstance(text, str), f"Generation for prompt index {i} has no 'text'."
         gen_map[prompt] = text
 
-    # Verify every prompt we passed has a corresponding generation
+    # Verify every prompt passed has a corresponding generation
     missing = [p for p in prompts if p not in gen_map]
     assert not missing, "Missing generations for prompts:\n" + "\n".join(f"- {m!r}" for m in missing)
 
@@ -188,6 +186,3 @@ def test_multi_prompt_generation_matches_reference(tmp_path, max_new_tokens):
     if failures:
         message = f"{len(failures)} prompt(s) failed the word-accuracy check.\n\n" + "\n\n".join(failures)
         pytest.fail(message)
-
-    # If we get here, all prompts passed
-    assert True
