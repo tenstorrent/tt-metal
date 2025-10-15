@@ -31,7 +31,7 @@ jobs:
     runs-on: >
       ${{
         inputs.topology == 'config-t3000' &&
-        'tt-ubuntu-2204-N300-llmbox-stable' ||
+        'tt-ubuntu-2204-n300-llmbox-stable' ||
         fromJSON('["arch-wormhole_b0", "${{ inputs.topology }}", "${{ inputs.extra-tag }}"]')
       }}
     container:
