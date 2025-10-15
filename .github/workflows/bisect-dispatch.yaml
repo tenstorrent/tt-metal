@@ -164,6 +164,7 @@ jobs:
       - name: Run Git Bisect
         shell: bash
         env:
+          GH_TOKEN: ${{ secrets.TT_METAL_RELEASE_TOKEN }}
           GIT_COMMITTER_NAME: "GitHub Actions"
           GIT_COMMITTER_EMAIL: "actions@github.com"
         run: |
