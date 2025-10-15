@@ -175,6 +175,7 @@ class TtTransformerBlock(LightweightModule):
             # ff_in_sharded, _ = self.ff_norm(attn_out, h, mode)
             h = ttnn.add(attn_out, h)
             ff_in_sharded, _ = self.ff_norm(h, None, mode)
+            attn_out.deallocate(True)
 
         # MLP takes replicated inputs and produces fractured outputs
         ff_out = self.feed_forward.forward(ff_in_sharded, mode)

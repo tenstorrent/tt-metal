@@ -107,9 +107,7 @@ class TtTransformer(LightweightModule):
                 weight_key="norm",
                 is_distributed=self.args.is_distributed_norm,
                 sharded_program_config=self.model_config["SHARDED_NORM_LM_HEAD_PRGM_CFG"],
-                sharded_output_config=self.model_config["LM_HEAD_INPUT_MEMCFG"]
-                if not args.qk_norm
-                else self.model_config["SHARDED_LM_HEAD_INPUT_RING_MEMCFG"],
+                sharded_output_config=self.model_config["LM_HEAD_INPUT_MEMCFG"],
             ),
             args,
             args.is_galaxy,
@@ -118,7 +116,6 @@ class TtTransformer(LightweightModule):
         )
 
         state_dict_prefix = args.get_state_dict_prefix("", None)
-        self.norm_weight = state_dict[f"{state_dict_prefix}norm.weight"]
 
         self.lm_head = LMHead(
             args=args,
@@ -433,7 +430,6 @@ class TtTransformer(LightweightModule):
         # print("tokens", tokens.shape, tokens.memory_config)
         tt_rot_mats = self.rope_setup.get_rm_rot_mats(rope_idxs)
         tt_tokens = self.embd(tokens)
-        tt_tokens = tokens
         return tt_tokens, current_pos, tt_rot_mats, page_table
 
     def process_output_prefill(self, tt_out, last_token_idx, tt_out_logits_saved=None):

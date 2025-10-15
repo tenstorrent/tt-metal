@@ -183,7 +183,6 @@ class TT_CCL:
         - SAMPLING_VALUES: (1, 1, 32, 256)
         - SAMPLING_INDICES: (1, 1, 32, 256)
         - BINARY_MUL: (1, 1, 32, 3584)
-        - W2_AR: (1, 1, 32, 1280)
 
         """
 
@@ -207,46 +206,21 @@ class TT_CCL:
 
         # Layernorm
         grid_offset = ttnn.CoreCoord(1, 0)
-        tt_stats_sharded_config = (
-            ttnn.create_sharded_memory_config(
-                shape=(32, 128),
-                core_grid=ttnn.CoreRangeSet([ttnn.CoreRange(grid_offset, grid_offset)]),
-                strategy=ttnn.ShardStrategy.WIDTH,
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                use_height_and_width_as_shard_shape=True,
-            )
-            if not self.use_qwen_mlp
-            else ttnn.create_sharded_memory_config(
-                # shape=(32, 64),
-                # shape=(32, 160),
-                shape=(32, 128),
-                core_grid=ttnn.CoreRangeSet([ttnn.CoreRange(grid_offset, grid_offset)]),
-                strategy=ttnn.ShardStrategy.WIDTH,
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                use_height_and_width_as_shard_shape=True,
-            )
+        tt_stats_sharded_config = ttnn.create_sharded_memory_config(
+            shape=(32, 128),
+            core_grid=ttnn.CoreRangeSet([ttnn.CoreRange(grid_offset, grid_offset)]),
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
         )
 
-        tt_buffer = (
-            ttnn.from_torch(
-                torch.zeros((1, 1, M, 128)),
-                device=self.mesh_device,
-                layout=ttnn.TILE_LAYOUT,
-                dtype=ttnn.bfloat16,
-                memory_config=tt_stats_sharded_config,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-            )
-            if not self.use_qwen_mlp
-            else ttnn.from_torch(
-                # torch.zeros((1, 1, M, 64)),
-                # torch.zeros((1, 1, M, 160)),
-                torch.zeros((1, 1, M, 128)),
-                device=self.mesh_device,
-                layout=ttnn.TILE_LAYOUT,
-                dtype=ttnn.bfloat16,
-                memory_config=tt_stats_sharded_config,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-            )
+        tt_buffer = ttnn.from_torch(
+            torch.zeros((1, 1, M, 128)),
+            device=self.mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+            memory_config=tt_stats_sharded_config,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
         persistent_buffers["LAYERNORM"] = tt_buffer
 
@@ -272,13 +246,24 @@ class TT_CCL:
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
         persistent_buffers["SAMPLING_INDICES"] = tt_buffer
-        tt_buffer = ttnn.from_torch(
-            torch.zeros((1, 1, 32, 128 * 1024)),
-            device=self.mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat8_b,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        tt_buffer = (
+            ttnn.from_torch(
+                torch.zeros((1, 1, 32, 128 * 1024)),
+                device=self.mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat8_b,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+            if not self.use_qwen_mlp
+            else ttnn.from_torch(
+                torch.zeros((1, 1, 32, 155648)),
+                device=self.mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat8_b,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
         )
         persistent_buffers["SAMPLING"] = tt_buffer
 
@@ -294,7 +279,7 @@ class TT_CCL:
             )
             if not self.use_qwen_mlp
             else ttnn.from_torch(
-                torch.zeros((1, 1, 32, 3200)),
+                torch.zeros((1, 1, self.max_batch_size, 3200)),
                 device=self.mesh_device,
                 layout=ttnn.TILE_LAYOUT,
                 dtype=ttnn.bfloat8_b,
@@ -325,7 +310,6 @@ class TT_CCL:
         N_per_shard = (
             2048 // 16 * cluster_shape[cluster_axis]
             if not self.use_qwen_mlp
-            # else 1280 // 20 * cluster_shape[cluster_axis]
             else 1280 // 10 * cluster_shape[cluster_axis]
         )  # FF2/DO
         buffer_mem_cfg = ttnn.MemoryConfig(
@@ -411,21 +395,21 @@ class TT_CCL:
         cluster_shape = (8, 4)
 
         # Create persistent buffers for cluster axis 1
-        for cluster_axis in [0, 1]:
-            buffer_mem_cfg = self.model_config["REDUCE_SCATTER_INTERIM_MEMCFG"]
-            for _ in range(self.num_cbs):
-                tt_buffer = (
-                    # 512 = 4 devices * 4 pages per packet * 32 tile_width
-                    ttnn.from_torch(
-                        torch.zeros((*cluster_shape, 32, 512 * buffer_mem_cfg.shard_spec.num_cores())),
-                        device=self.mesh_device,
-                        layout=ttnn.TILE_LAYOUT,
-                        dtype=ttnn.bfloat8_b,
-                        memory_config=buffer_mem_cfg,
-                        mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
-                    )
+        cluster_axis = 1
+        buffer_mem_cfg = self.model_config["REDUCE_SCATTER_INTERIM_MEMCFG"]
+        for _ in range(self.num_cbs):
+            tt_buffer = (
+                # 512 = 4 devices * 4 pages per packet * 32 tile_width
+                ttnn.from_torch(
+                    torch.zeros((*cluster_shape, 32, 512 * buffer_mem_cfg.shard_spec.num_cores())),
+                    device=self.mesh_device,
+                    layout=ttnn.TILE_LAYOUT,
+                    dtype=ttnn.bfloat8_b,
+                    memory_config=buffer_mem_cfg,
+                    mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
                 )
-                persistent_buffers[cluster_axis].append(tt_buffer)
+            )
+            persistent_buffers[cluster_axis].append(tt_buffer)
 
         return persistent_buffers
 
