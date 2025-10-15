@@ -1214,66 +1214,38 @@ void reset_ethernet_links(
     std::vector<ResetPair> cross_node_reset_pairs;
     std::unordered_map<uint32_t, std::vector<EthChannelIdentifier>> ordered_exit_nodes;
     std::unordered_map<uint32_t, std::vector<ResetPair>> ordered_reset_pairs;
+
+    for (const auto& host : physical_system_descriptor.get_all_hostnames()) {
+        ordered_exit_nodes[physical_system_descriptor.get_rank_for_hostname(host)] =
+            std::vector<EthChannelIdentifier>();
+        ordered_reset_pairs[physical_system_descriptor.get_rank_for_hostname(host)] = std::vector<ResetPair>();
+    }
+
     if (*distributed_context.rank() == CONTROLLER_RANK) {
-        for (const auto& host : physical_system_descriptor.get_all_hostnames()) {
-            ordered_exit_nodes[physical_system_descriptor.get_rank_for_hostname(host)] =
-                std::vector<EthChannelIdentifier>();
-            ordered_reset_pairs[physical_system_descriptor.get_rank_for_hostname(host)] = std::vector<ResetPair>();
-        }
-        // Filter out the cross-node links to reset in the requested topology.
-        std::unordered_set<EthChannelIdentifier> exit_nodes_to_reset;
         for (const auto& [asic_id, asic_connections] : asic_topology) {
+            auto src_host_rank = physical_system_descriptor.get_rank_for_hostname(
+                physical_system_descriptor.get_host_name_for_asic(asic_id));
             for (const auto& [dst_asic_id, eth_connections] : asic_connections) {
-                if (physical_system_descriptor.get_host_name_for_asic(asic_id) ==
-                    physical_system_descriptor.get_host_name_for_asic(dst_asic_id)) {
+                auto dst_host_rank = physical_system_descriptor.get_rank_for_hostname(
+                    physical_system_descriptor.get_host_name_for_asic(dst_asic_id));
+                if (src_host_rank == dst_host_rank) {
                     continue;
                 }
                 for (const auto& eth_connection : eth_connections) {
-                    exit_nodes_to_reset.insert(EthChannelIdentifier{
+                    ordered_exit_nodes[src_host_rank].push_back(EthChannelIdentifier{
                         physical_system_descriptor.get_host_name_for_asic(asic_id),
                         asic_id,
                         TrayID{0},
                         ASICLocation{0},
                         eth_connection.src_chan});
-                    exit_nodes_to_reset.insert(EthChannelIdentifier{
+                    ordered_exit_nodes[dst_host_rank].push_back(EthChannelIdentifier{
                         physical_system_descriptor.get_host_name_for_asic(dst_asic_id),
                         dst_asic_id,
                         TrayID{0},
                         ASICLocation{0},
                         eth_connection.dst_chan});
-                }
-            }
-        }
-        // Iterate over all hosts. Pair up the exit nodes to reset.
-        std::set<std::pair<uint32_t, uint32_t>> paired_hosts;
-        for (const auto& host : physical_system_descriptor.get_all_hostnames()) {
-            auto curr_rank = physical_system_descriptor.get_rank_for_hostname(host);
-            for (const auto& neighbor_host : physical_system_descriptor.get_host_neighbors(host)) {
-                auto neighbor_rank = physical_system_descriptor.get_rank_for_hostname(neighbor_host);
-                auto min_rank = std::min(curr_rank, neighbor_rank);
-                auto max_rank = std::max(curr_rank, neighbor_rank);
-                if (paired_hosts.find({min_rank, max_rank}) != paired_hosts.end()) {
-                    continue;
-                }
-                paired_hosts.insert({min_rank, max_rank});
-                for (const auto& exit_node :
-                     physical_system_descriptor.get_connecting_exit_nodes(host, neighbor_host)) {
-                    auto src = EthChannelIdentifier{
-                        host, exit_node.src_exit_node, TrayID{0}, ASICLocation{0}, exit_node.eth_conn.src_chan};
-                    auto dst = EthChannelIdentifier{
-                        neighbor_host,
-                        exit_node.dst_exit_node,
-                        TrayID{0},
-                        ASICLocation{0},
-                        exit_node.eth_conn.dst_chan};
-                    if (exit_nodes_to_reset.find(src) == exit_nodes_to_reset.end()) {
-                        continue;
-                    }
-                    TT_FATAL(exit_nodes_to_reset.find(dst) != exit_nodes_to_reset.end(), "Error");
-                    ordered_exit_nodes[curr_rank].push_back(src);
-                    ordered_exit_nodes[neighbor_rank].push_back(dst);
-                    ordered_reset_pairs[curr_rank].push_back(ResetPair{curr_rank, neighbor_rank});
-                    ordered_reset_pairs[neighbor_rank].push_back(ResetPair{curr_rank, neighbor_rank});
+                    ordered_reset_pairs[src_host_rank].push_back(ResetPair{src_host_rank, dst_host_rank});
+                    ordered_reset_pairs[dst_host_rank].push_back(ResetPair{src_host_rank, dst_host_rank});
                 }
             }
         }
