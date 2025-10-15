@@ -623,12 +623,14 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
         act_mcast_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
         act_mcast_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
 
-        weights_mcast_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, output_cores, INVALID);
-        weights_mcast_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, output_cores, INVALID);
-
         if (split_reader_overlapped) {
+            weights_mcast_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
+            weights_mcast_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
             act_split_reader_sync_first_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
             act_split_reader_sync_second_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
+        } else {
+            weights_mcast_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, output_cores, INVALID);
+            weights_mcast_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, output_cores, INVALID);
         }
     } else {
         // 1D mcast
@@ -1156,6 +1158,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
         for (const CoreCoord& core : core_range) {
             if (populate_skipped_work_cores && !output_cores.contains(core)) {
                 std::vector<uint32_t> args = std::vector<uint32_t>(14, 0);
+                args[10] = weights_mcast_sender_semaphore_id;
+                args[11] = weights_mcast_receiver_semaphore_id;
                 args[12] =
                     static_cast<uint32_t>(true);  // is_sender_core, is always true for cores that belong to input_cores
                 args[13] = static_cast<uint32_t>(true);  //  skip work
