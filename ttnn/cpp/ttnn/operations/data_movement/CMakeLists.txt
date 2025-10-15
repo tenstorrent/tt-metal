@@ -16,16 +16,29 @@ file(
     bcast/device/kernels/*
     concat/device/kernels/*
     common/kernels/*
+    fill_pad/device/kernels/*
+    fill_rm/device/kernels/*
+    fold/device/kernels/*
+    gather/device/kernels/*
     copy/device/kernels/*
+    moe_expert_token_remap/device/kernels/*
+    non_zero_indices/device/kernels/*
     move/device/kernels/*
+    pad/device/kernels/*
     permute/device/kernels/*
+    reshape_on_device/device/kernels/*
     repeat/device/device/*
     reshape_view/device/device/*
+    scatter/device/kernels/*
+    sort/device/kernels/*
+    split/device/kernels/*
+    tilize/device/kernels/*
     sharded/device/kernels/*
     slice/device/kernels/*
     tilize_with_val_padding/device/kernels/*
     transpose/device/kernels/*
     untilize/device/kernels/*
+    untilize_with_unpadding/device/kernels/*
 )
 target_sources(
     ttnn_op_data_movement
