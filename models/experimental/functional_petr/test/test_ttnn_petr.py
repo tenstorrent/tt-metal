@@ -1,5 +1,4 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
-
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 
@@ -20,8 +19,8 @@ from models.experimental.functional_petr.tt.common import (
     create_custom_preprocessor_cpfpn,
     create_custom_preprocessor_vovnetcp,
     stem_parameters_preprocess,
+    move_to_device,
 )
-from models.experimental.functional_petr.tt.common import move_to_device
 from tests.ttnn.utils_for_testing import check_with_pcc, assert_with_pcc
 
 

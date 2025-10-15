@@ -120,7 +120,6 @@ class ttnn_PETRHead:
         self._init_layers(self.parameters)
         self.positional_encoding = ttnn_SinePositionalEncoding3D(num_feats=128, normalize=True)
         self.transformer = TTPETRTransformer(device=device, parameter=parameters["transformer"])
-        # self.code_weights = ttnn.Tensor(self.code_weights)
         self.bbox_coder = NMSFreeCoder(
             post_center_range=[-61.2, -61.2, -10.0, 61.2, 61.2, 10.0],
             pc_range=[-51.2, -51.2, -5.0, 51.2, 51.2, 3.0],  # self.point_cloud_range,
