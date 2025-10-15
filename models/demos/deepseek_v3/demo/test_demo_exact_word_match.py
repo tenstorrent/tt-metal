@@ -7,8 +7,7 @@ from pathlib import Path
 import pytest
 
 # === Paths ====================================================================
-MODEL_PATH = Path("/proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528")
-CACHE_DIR = Path("/proj_sw/user_dev/deepseek-v3-cache")
+MODEL_PATH = Path("models/demos/deepseek_v3/reference")
 DEMO_SCRIPT = Path("models/demos/deepseek_v3/demo/demo.py")
 REFERENCE_JSON = Path("models/demos/deepseek_v3/demo/deepseek_32_prompts_outputs.json")
 
@@ -167,22 +166,6 @@ def load_reference_map(path: Path) -> dict[str, str]:
     return ref_map
 
 
-# === Preconditions / skip condition ==========================================
-skip_reason = None
-if not DEMO_SCRIPT.exists():
-    skip_reason = f"Demo script not found at {DEMO_SCRIPT}"
-elif not MODEL_PATH.exists():
-    skip_reason = f"Model path not found at {MODEL_PATH}"
-elif not CACHE_DIR.exists():
-    skip_reason = f"Cache dir not found at {CACHE_DIR}"
-elif not REFERENCE_JSON.exists():
-    skip_reason = f"Reference JSON not found at {REFERENCE_JSON}"
-
-SKIP_COND = skip_reason is not None
-SKIP_REASON = skip_reason or "preconditions satisfied; not skipping"
-
-
-@pytest.mark.skipif(SKIP_COND, reason=SKIP_REASON)
 def test_multi_prompt_generation_matches_reference(tmp_path):
     """
     Loads a JSON dict {prompt: expected_text}, executes the demo ONCE with up to 32 prompts,
@@ -190,6 +173,7 @@ def test_multi_prompt_generation_matches_reference(tmp_path):
 
     Defaults to case/punctuation-sensitive exact match (WER==0); see flags above.
     """
+    cache_dir = tmp_path / "cache"
     ref_map = load_reference_map(REFERENCE_JSON)
 
     # Respect demo's 32-prompt limit (stable order using JSON key order if Python 3.7+)
@@ -207,7 +191,7 @@ def test_multi_prompt_generation_matches_reference(tmp_path):
         "--model-path",
         str(MODEL_PATH),
         "--cache-dir",
-        str(CACHE_DIR),
+        str(cache_dir),
         "--max-new-tokens",
         "200",
     ]
