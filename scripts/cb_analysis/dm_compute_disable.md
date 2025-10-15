@@ -33,15 +33,15 @@ Make CB operations like data is always available/there is always free place in C
 #### Problem
 This would maybe work, but would also skew the measurements a lot because CBs aren't only used for Reader -> Compute and Compute -> Writer, but also for Compute -> Compute (Storing intermediate values) and we don't want to eliminate waiting time for Compute -> Compute.
 
-### Disable NOC operations in Kernel using #define
+### Disable NOC operations in Kernel using `#define`
 #### Idea
 Create debug header that will replace NOC operations with empty function. Include debug header as last include in files where NOC operations should be skipped. Similar can be done for compute in order to measure DM.
 #### Problem
-This almost works, the header contains #define noc_async_read(...)
-This would work almost always because the preprocessor would remove calls to noc function inside of the reader/writer kernel C++ file, but it breaks if we call NOC functions with non-default template params (ex noc_asyc_read<something>()) because the preprocessor cannot remove these calls. This would require manual intervention from the person trying to measure the compute performance
+This almost works, the header contains `#define noc_async_read(...)`
+This would work almost always because the preprocessor would remove calls to noc function inside of the reader/writer kernel C++ file, but it breaks if we call NOC functions with non-default template params (ex `noc_asyc_read<something>()`) because the preprocessor cannot remove these calls. This would require manual intervention from the person trying to measure the compute performance.
 
-### Disable NOC in Kernel using __attribute__((weak))
+### Disable NOC in Kernel using `__attribute__((weak))`
 #### Idea
 Provide the correct implementation marked as a weak symbol so that the firmware can be linked with it, but include overrides for the kernel build that will override the original implementation.
 #### Problem
-This solution doesn't work because a lot of the NOC functions are marked inline __attribute__((always_inline)), which doesn't work together with __attribute__((weak)) because of linking.
+This solution doesn't work because a lot of the NOC functions are marked inline `__attribute__((always_inline))`, which doesn't work together with `__attribute__((weak))` because of linking.
