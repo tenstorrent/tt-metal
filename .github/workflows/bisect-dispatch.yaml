@@ -125,27 +125,10 @@ jobs:
         run: |
           set -euo pipefail
           trap 'rm -rf ./build_bisect' EXIT
-
-          echo "🔧 Bisect Configuration:"
-          echo "  Architecture: ${{ inputs.arch }}"
-          echo "  Tracy enabled: ${{ inputs.tracy }}"
-          echo "  ND mode: ${{ inputs.nd-mode }}"
-          echo "  Runner label: ${{ inputs.runner-label }}"
-          echo "  Good commit: ${{ inputs.good-commit }}"
-          echo "  Bad commit: ${{ inputs.bad-commit }}"
-          echo "  Command: ${{ inputs.command }}"
-          echo "  Timeout: ${{ inputs.timeout }}"
-          echo "  Retries: ${{ inputs.retries }}"
-          echo "  Download artifacts: ${{ inputs.download-artifacts }}"
-          echo ""
-          echo "  Tracy flag: ${{ inputs.tracy == 'true' && '-p' || '' }}"
-          echo "  ND mode flag: ${{ inputs.nd-mode == 'true' && '-n' || '' }}"
-          echo "  Download artifacts flag: ${{ inputs.download-artifacts == true && '-a' || '' }}"
-
           mkdir -p ./build_bisect
           cp ./tests/scripts/tt_bisect.sh ./build_bisect/
           chmod +x ./build_bisect/tt_bisect.sh
-          ./build_bisect/tt_bisect.sh -t ${{ inputs.timeout }} -f '${{ inputs.command }}' -b ${{ inputs.bad-commit }} -g ${{ inputs.good-commit }} ${{ inputs.tracy == 'true' && '-p' || '' }} -r ${{ inputs.retries }} ${{ inputs.nd-mode == 'true' && '-n' || '' }} ${{ inputs.download-artifacts == true && '-a' || '' }}
+          ./build_bisect/tt_bisect.sh -t ${{ inputs.timeout }} -f '${{ inputs.command }}' -b ${{ inputs.bad-commit }} -g ${{ inputs.good-commit }} ${{ inputs.tracy == true && '-p' || '' }} -r ${{ inputs.retries }} ${{ inputs.nd-mode == true && '-n' || '' }} ${{ inputs.download-artifacts == true && '-a' || '' }}
 
       - name: Upload ND results CSV
         if: ${{ hashFiles('docker-job/bisect_nd_results.csv') != '' }}
