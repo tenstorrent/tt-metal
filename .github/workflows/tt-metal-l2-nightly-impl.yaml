@@ -83,12 +83,12 @@ jobs:
     name: ttnn nightly conv tests ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: >-
       ${{
-        ((inputs.runner-label == 'P150b') && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label))
+        ((inputs.runner-label == 'P150b') && format('tt-ubuntu-2204-{0}-metal', inputs.runner-label))
         || fromJSON(format('["{0}", "in-service", "cloud-virtual-machine"]', inputs.runner-label))
       }}
     steps:
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@6b36ef848f5f66ba0ae6f883ff69b09692e48ce9
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
@@ -131,12 +131,12 @@ jobs:
     name: ttnn nightly matmul tests ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: >-
       ${{
-        ((inputs.runner-label == 'P150b') && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label))
+        ((inputs.runner-label == 'P150b') && format('tt-ubuntu-2204-{0}-metal', inputs.runner-label))
         || fromJSON(format('["{0}", "in-service"]', inputs.runner-label))
       }}
     steps:
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@6b36ef848f5f66ba0ae6f883ff69b09692e48ce9
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
@@ -179,12 +179,12 @@ jobs:
     name: ttnn nightly pool tests ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: >-
       ${{
-        ((inputs.runner-label == 'P150b') && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label))
+        ((inputs.runner-label == 'P150b') && format('tt-ubuntu-2204-{0}-metal', inputs.runner-label))
         || fromJSON(format('["{0}", "in-service"]', inputs.runner-label))
       }}
     steps:
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@6b36ef848f5f66ba0ae6f883ff69b09692e48ce9
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
@@ -228,12 +228,12 @@ jobs:
     name: ttnn nightly sdxl tests ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: >-
       ${{
-        ((inputs.runner-label == 'P150b') && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label))
+        ((inputs.runner-label == 'P150b') && format('tt-ubuntu-2204-{0}-metal', inputs.runner-label))
         || fromJSON(format('["{0}", "in-service"]', inputs.runner-label))
       }}
     steps:
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@6b36ef848f5f66ba0ae6f883ff69b09692e48ce9
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
@@ -241,6 +241,12 @@ jobs:
       - name: ttnn nightly sdxl tests
         timeout-minutes: ${{ inputs.timeout }}
         run: pytest -n auto models/experimental/stable_diffusion_xl_base/tests/pcc/test_unet_loop.py --loop-iter-num=50 -xv -m "not disable_fast_runtime_mode" --timeout=${{ env.TEST_BUDGET_SECONDS }}
+      - name: ttnn nightly sdxl refiner tests (4 refiner iterations)
+        timeout-minutes: ${{ inputs.timeout }}
+        run: pytest -n auto models/experimental/stable_diffusion_xl_refiner/tests/pcc/test_unet_loop_refiner.py --loop-iter-num=20 -xv -m "not disable_fast_runtime_mode" --timeout=${{ env.TEST_BUDGET_SECONDS }}
+      - name: ttnn nightly sdxl refiner tests (10 refiner iterations)
+        timeout-minutes: ${{ inputs.timeout }}
+        run: pytest -n auto models/experimental/stable_diffusion_xl_refiner/tests/pcc/test_unet_loop_refiner.py --loop-iter-num=50 -xv -m "not disable_fast_runtime_mode" --timeout=${{ env.TEST_BUDGET_SECONDS }}
       - name: ttnn nightly sdxl demo cfg parallel test (N300 only)
         if: ${{ inputs.runner-label == 'N300' }}
         timeout-minutes: ${{ inputs.timeout }}
@@ -281,12 +287,12 @@ jobs:
     name: tt-train nightly tests ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: >-
       ${{
-        ((inputs.runner-label == 'P150b') && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label))
+        ((inputs.runner-label == 'P150b') && format('tt-ubuntu-2204-{0}-metal', inputs.runner-label))
         || fromJSON(format('["{0}", "in-service"]', inputs.runner-label))
       }}
     steps:
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@6b36ef848f5f66ba0ae6f883ff69b09692e48ce9
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
@@ -328,12 +334,12 @@ jobs:
     name: tt-sdpa-stress tests ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: >-
       ${{
-        (contains('P150b, N150, N300', inputs.runner-label) && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label))
+        (contains('P150b, N150, N300', inputs.runner-label) && format('tt-ubuntu-2204-{0}-metal', inputs.runner-label))
         || fromJSON(format('["{0}", "in-service"]', inputs.runner-label))
       }}
     steps:
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@6b36ef848f5f66ba0ae6f883ff69b09692e48ce9
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
@@ -378,12 +384,12 @@ jobs:
     name: ttnn nightly bos conv tests ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: >-
       ${{
-        ((inputs.runner-label == 'P150b') && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label))
+        ((inputs.runner-label == 'P150b') && format('tt-ubuntu-2204-{0}-metal', inputs.runner-label))
         || fromJSON(format('["{0}", "in-service", "cloud-virtual-machine"]', inputs.runner-label))
       }}
     steps:
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@6b36ef848f5f66ba0ae6f883ff69b09692e48ce9
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
@@ -427,11 +433,11 @@ jobs:
     name: ttnn nightly bos group norm tests ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: >-
       ${{
-        (format('tt-ubuntu-2204-{0}-stable', inputs.runner-label))
+        (format('tt-ubuntu-2204-{0}-metal', inputs.runner-label))
       }}
     steps:
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@6b36ef848f5f66ba0ae6f883ff69b09692e48ce9
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
@@ -475,12 +481,12 @@ jobs:
     name: ttnn nightly eltwise tests ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: >-
       ${{
-        ((inputs.runner-label == 'P150b') && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label))
+        ((inputs.runner-label == 'P150b') && format('tt-ubuntu-2204-{0}-metal', inputs.runner-label))
         || fromJSON(format('["{0}", "in-service", "cloud-virtual-machine"]', inputs.runner-label))
       }}
     steps:
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@6b36ef848f5f66ba0ae6f883ff69b09692e48ce9
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}

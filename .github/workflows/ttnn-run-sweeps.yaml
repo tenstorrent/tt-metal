@@ -608,10 +608,10 @@ jobs:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     timeout-minutes: 30
-    runs-on: tt-ubuntu-2204-n150-stable
+    runs-on: tt-ubuntu-2204-n150-metal
     steps:
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@6b36ef848f5f66ba0ae6f883ff69b09692e48ce9
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
@@ -704,13 +704,13 @@ jobs:
             {
               name: "wormhole-n150-sweeps",
               arch: wormhole_b0,
-              runs-on: tt-ubuntu-2204-n150-stable,
+              runs-on: tt-ubuntu-2204-n150-metal,
               tt-smi-cmd: "tt-smi -r"
             },
             # {
             #   name: "Wormhole N300 Sweeps",
             #   arch: wormhole_b0,
-            #   runs-on: tt-ubuntu-2204-n300-stable,
+            #   runs-on: tt-ubuntu-2204-n300-metal,
             #   tt-smi-cmd: "tt-smi-metal -r 0"
             # }
           ]
@@ -739,7 +739,7 @@ jobs:
     runs-on: ${{ matrix.test-group.runs-on }}
     steps:
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@6b36ef848f5f66ba0ae6f883ff69b09692e48ce9
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
@@ -781,13 +781,13 @@ jobs:
             {
               name: "wormhole-n150-sweeps",
               arch: wormhole_b0,
-              runs-on: tt-ubuntu-2204-n150-stable,
+              runs-on: tt-ubuntu-2204-n150-metal,
               tt-smi-cmd: "tt-smi -r"
             },
             # {
             #   name: "Wormhole N300 Sweeps",
             #   arch: wormhole_b0,
-            #   runs-on: tt-ubuntu-2204-n300-stable,
+            #   runs-on: tt-ubuntu-2204-n300-metal,
             #   tt-smi-cmd: "tt-smi-metal -r 0"
             # }
           ]
@@ -817,7 +817,7 @@ jobs:
     runs-on: ${{ matrix.test-group.runs-on }}
     steps:
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@6b36ef848f5f66ba0ae6f883ff69b09692e48ce9
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
@@ -886,10 +886,10 @@ jobs:
       run:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
-    runs-on: tt-ubuntu-2204-large-stable
+    runs-on: tt-ubuntu-2204-large-metal
     steps:
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@6b36ef848f5f66ba0ae6f883ff69b09692e48ce9
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}

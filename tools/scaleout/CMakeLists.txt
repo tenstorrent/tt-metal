@@ -26,6 +26,10 @@ foreach(PROTO_FILE ${PROTO_SCHEMAS})
     list(APPEND GENERATED_PROTO_SRCS ${PROTO_SRCS})
 endforeach()
 
+# Ensure protobufs are generated before compiling the executable
+add_custom_target(scaleout_generated_protos DEPENDS ${GENERATED_PROTO_SRCS})
+add_dependencies(run_cluster_validation scaleout_generated_protos)
+
 # TODO: Should refactor into an API directory
 target_sources(
     scaleout_tools

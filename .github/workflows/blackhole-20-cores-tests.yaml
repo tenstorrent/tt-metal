@@ -35,7 +35,7 @@ jobs:
     name: ${{ matrix.test-group.name }}
     runs-on: >-
       ${{
-        (github.event.pull_request.head.repo.fork == true) || format('tt-ubuntu-2204-{0}-stable', inputs.runner-label)
+        (github.event.pull_request.head.repo.fork == true) || format('tt-ubuntu-2204-{0}-metal', inputs.runner-label)
       }}
     container:
       image: ${{ inputs.docker-image }}
@@ -53,7 +53,7 @@ jobs:
         working-directory: /work
     steps:
       - name: Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@6b36ef848f5f66ba0ae6f883ff69b09692e48ce9
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}

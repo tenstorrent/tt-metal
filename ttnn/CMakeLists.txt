@@ -44,12 +44,16 @@ endforeach()
 set_target_properties(
     ttnn_core
     PROPERTIES
-        VERIFY_INTERFACE_HEADER_SETS
-            FALSE
+        INTERFACE_HEADER_SETS_TO_VERIFY
+            api
 )
 target_sources(
     ttnn_core
     PUBLIC
+        FILE_SET api
+        TYPE HEADERS
+        BASE_DIRS ${FixmeOpAPIDir}
+        FILES
         FILE_SET jit_api
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
@@ -358,6 +362,7 @@ set(CCL_TTNN_SRCS_PYBIND
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/ccl/mesh_partition/mesh_partition_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/ccl/barrier/barrier_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/ccl/reduce_scatter/reduce_scatter_${PY_BINDING}.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/ccl/all_gather/all_gather_${PY_BINDING}.cpp
 )
 
 set(DEBUG_TTNN_SRCS_PYBIND
