@@ -165,7 +165,9 @@ def _get_tensors(
     torch_reference = torch_input.unsqueeze(0).repeat([replicate_dim] + [1] * len(input_shape))
     torch_references = _reference_map_op(math_op)(torch_reference, dim=0).split(per_device_dim, dim=dim)
 
-    input_memory_config, output_memory_config = get_mem_configs(buffer_type, shard_specs, torch_references[0].shape)
+    input_memory_config, output_memory_config = get_mem_configs(
+        buffer_type, shard_specs, torch_references[0].shape, tile_layout=(layout == ttnn.TILE_LAYOUT)
+    )
 
     tt_input = ttnn.from_torch(
         torch_input,
@@ -247,10 +249,7 @@ def run(
             tt_output_tensor = ttnn.to_torch(t)
             logger.info(f"Brought tensor {i} back from host. Shape: {tt_output_tensor.shape}")
 
-            if input_dtype == ttnn.bfloat16:
-                eq, output = comp_equal(tt_output_tensor, ref)
-            else:
-                eq, output = comp_pcc(tt_output_tensor, ref)
+            eq, output = comp_pcc(tt_output_tensor, ref)
             if not eq:
                 logger.error(f"output mismatch for tensor {i}")
             return [(eq, output), e2e_perf]
