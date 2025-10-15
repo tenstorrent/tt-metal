@@ -508,115 +508,113 @@ class ModelOptimizations:
         # not a matmul
         return None
 
-    def apply(self, state_dict, model_prefix=None):
-        """Apply optimizations to the provided layer_args dictionary in place"""
+    @staticmethod
+    def _load_to_weights_and_biases(state_dict, all_layers=None, is_layer=None, prefix=""):
+        """Recursively walk through state dictionary and map path to weights and biases"""
+        all_layers = all_layers or {}
 
-        # Get all weights and biases from state_dict
+        for key, value in state_dict.items():
+            current_path = f"{prefix}.{key}" if prefix else key
 
-        def load_to_weights_and_biases(state_dict, all_conv_layers=None, all_mm_layers=None, prefix=""):
-            """Recursively walk through state dictionary and map path to weights and biases"""
-            all_conv_layers = all_conv_layers or {}
-            all_mm_layers = all_mm_layers or {}
+            if isinstance(value, dict):
+                # Check if this dictionary contains any non-dict values (leaf nodes))
+                has_leaf_nodes = any(not isinstance(v, dict) for v in value.values())
+                if has_leaf_nodes:
+                    # Check if any of the leaf nodes are target layers
+                    if is_layer and is_layer(current_path):
+                        all_layers[current_path] = all_layers.get(current_path) or {}
+                        all_layers[current_path]["bias"] = value.get("bias", None)
+                        all_layers[current_path]["weight"] = value.get("weight", None)
 
-            for key, value in state_dict.items():
-                current_path = f"{prefix}.{key}" if prefix else key
+                # Continue recursion for all dictionaries
+                recursive_result = ModelOptimizations._load_to_weights_and_biases(
+                    value, all_layers=all_layers, is_layer=is_layer, prefix=current_path
+                )
+                all_layers.update(recursive_result)
 
-                if isinstance(value, dict):
-                    # Check if this dictionary contains any non-dict values (leaf nodes))
-                    has_leaf_nodes = any(not isinstance(v, dict) for v in value.values())
-                    if has_leaf_nodes:
-                        # Check if any of the leaf nodes are conv layers
-                        if self._is_conv_layer(current_path):
-                            all_conv_layers[current_path] = all_conv_layers.get(current_path) or {}
-                            all_conv_layers[current_path]["bias"] = value.get("bias", None)
-                            all_conv_layers[current_path]["weight"] = value.get("weight", None)
-                        elif self._is_mm_layer(current_path):
-                            all_mm_layers[current_path] = all_mm_layers.get(current_path) or {}
-                            all_mm_layers[current_path]["bias"] = value.get("bias", None)
-                            all_mm_layers[current_path]["weight"] = value.get("weight", None)
+        return all_layers
 
-                    # Continue recursion for all dictionaries
-                    conv_layers_rec, mm_layers_rec = load_to_weights_and_biases(
-                        value, all_conv_layers=all_conv_layers, all_mm_layers=all_mm_layers, prefix=current_path
-                    )
-                    all_conv_layers.update(conv_layers_rec)
-                    all_mm_layers.update(mm_layers_rec)
+    @staticmethod
+    def _load_path_to_layer_args(layer_args, all_layers=None, is_layer=None, prefix=""):
+        """Recursively walk through layer_args and map path to layer arguments"""
+        all_layers = all_layers or {}
 
-            return all_conv_layers, all_mm_layers
+        for key, value in layer_args.items():
+            current_path = f"{prefix}.{key}" if prefix else key
 
-        def load_path_to_layer_args(layer_args, all_conv_layers=None, all_mm_layers=None, prefix=""):
-            """Recursively walk through layer_args and map path to conv and matmul layer arguments"""
-            all_conv_layers = all_conv_layers or {}
-            all_mm_layers = all_mm_layers or {}
+            if isinstance(value, dict):
+                # Check if this dictionary contains any non-dict values (leaf nodes))
+                # from ttnn.model_preprocessing import ModuleArgs, Conv2dArgs
+                # has_leaf_nodes = isinstance(value, ModuleArgs)
+                has_leaf_nodes = any(not isinstance(v, dict) for v in value.values())
+                if has_leaf_nodes:
+                    # Check if any of the leaf nodes are target layers
+                    if is_layer and is_layer(current_path):
+                        all_layers[current_path] = all_layers.get(current_path) or {}
+                        all_layers[current_path]["layer_args"] = value
 
-            for key, value in layer_args.items():
-                current_path = f"{prefix}.{key}" if prefix else key
+                # Continue recursion for all dictionaries
+                recursive_result = ModelOptimizations._load_path_to_layer_args(
+                    value, all_layers=all_layers, is_layer=is_layer, prefix=current_path
+                )
+                all_layers.update(recursive_result)
 
-                if isinstance(value, dict):
-                    # Check if this dictionary contains any non-dict values (leaf nodes))
-                    # from ttnn.model_preprocessing import ModuleArgs, Conv2dArgs
-                    # has_leaf_nodes = isinstance(value, ModuleArgs)
-                    has_leaf_nodes = any(not isinstance(v, dict) for v in value.values())
-                    if has_leaf_nodes:
-                        # Check if any of the leaf nodes are conv layers
-                        if self._is_conv_layer(current_path):
-                            all_conv_layers[current_path] = all_conv_layers.get(current_path) or {}
-                            all_conv_layers[current_path]["layer_args"] = value
-                        elif self._is_mm_layer(current_path):
-                            all_mm_layers[current_path] = all_mm_layers.get(current_path) or {}
-                            all_mm_layers[current_path]["layer_args"] = value
+        return all_layers
 
-                    # Continue recursion for all dictionaries
-                    conv_layers_rec, mm_layers_rec = load_path_to_layer_args(
-                        value, all_conv_layers=all_conv_layers, all_mm_layers=all_mm_layers, prefix=current_path
-                    )
-                    all_conv_layers.update(conv_layers_rec)
-                    all_mm_layers.update(mm_layers_rec)
+    @staticmethod
+    def _store_configuration_to_layer_args(layer_args, all_layers, is_layer, prefix=""):
+        """Recursively store optimized configurations to layer arguments for specific layers."""
+        for key, value in layer_args.items():
+            current_path = f"{prefix}.{key}" if prefix else key
 
-            return all_conv_layers, all_mm_layers
+            if isinstance(value, dict):
+                # Check if this dictionary contains any non-dict values (leaf nodes))
+                has_leaf_nodes = any(not isinstance(v, dict) for v in value.values())
+                if has_leaf_nodes:
+                    # Check if any of the leaf nodes are conv layers
+                    if is_layer(current_path):
+                        value["optimized_configuration"] = all_layers.get(current_path, {}).get(
+                            "conv2d_configuration", None
+                        )
 
-        def store_configuration_to_layer_args(layer_args, all_layers, is_layer, prefix=""):
-            """ """
-            for key, value in layer_args.items():
-                current_path = f"{prefix}.{key}" if prefix else key
+                # Continue recursion for all dictionaries
+                ModelOptimizations._store_configuration_to_layer_args(
+                    value, all_layers=all_layers, is_layer=is_layer, prefix=current_path
+                )
 
-                if isinstance(value, dict):
-                    # Check if this dictionary contains any non-dict values (leaf nodes))
-                    # from ttnn.model_preprocessing import ModuleArgs, Conv2dArgs
-                    # has_leaf_nodes = isinstance(value, ModuleArgs)
-                    has_leaf_nodes = any(not isinstance(v, dict) for v in value.values())
-                    if has_leaf_nodes:
-                        # Check if any of the leaf nodes are conv layers
-                        if is_layer(current_path):
-                            value["optimized_configuration"] = all_layers.get(current_path, {}).get(
-                                "conv2d_configuration", None
-                            )
+    @staticmethod
+    def _apply_layer_optimizations(state_dict, is_layer_func, process_layer_func, model_prefix=None):
+        """
+        Generic function to apply optimizations to layers of a specific type.
 
-                    # Continue recursion for all dictionaries
-                    store_configuration_to_layer_args(
-                        value, all_layers=all_layers, is_layer=is_layer, prefix=current_path
-                    )
+        Args:
+            state_dict: The state dictionary containing layer_args and weights
+            is_layer_func: Function to check if a path belongs to the layer type
+            process_layer_func: Function to process each layer (path, layer_data) -> None
+            model_prefix: Optional prefix for the model path
 
-        conv_layers, matmul_layers = {}, {}
-        conv_layers, matmul_layers = load_path_to_layer_args(
-            state_dict.layer_args, all_conv_layers=conv_layers, all_mm_layers=matmul_layers, prefix=model_prefix
+        Returns:
+            Dictionary mapping layer paths to their data
+        """
+        # Load layer arguments and weights/biases
+        layers = {}
+        layers = ModelOptimizations._load_path_to_layer_args(
+            state_dict.layer_args, all_layers=layers, is_layer=is_layer_func, prefix=model_prefix
         )
-        conv_layers, matmul_layers = load_to_weights_and_biases(
-            state_dict, all_conv_layers=conv_layers, all_mm_layers=matmul_layers, prefix=model_prefix
+        layers = ModelOptimizations._load_to_weights_and_biases(
+            state_dict, all_layers=layers, is_layer=is_layer_func, prefix=model_prefix
         )
 
-        for path, conv_arg in conv_layers.items():
-            conv2d_configuration = Conv2dConfiguration.from_model_args(
-                conv_arg["layer_args"], conv_arg["weight"], conv_arg["bias"]
-            )
-            conv2d_config, conv2d_slice_config, compute_config, output_dtype = self.get_conv_config(path)
-            conv_arg["conv2d_configuration"] = update_conv2d_configuration(
-                conv2d_configuration, output_dtype, conv2d_config, conv2d_slice_config, compute_config
-            )
+        # Process each layer with the provided function
+        for path, layer_data in layers.items():
+            process_layer_func(path, layer_data)
 
-        store_configuration_to_layer_args(
-            state_dict.layer_args, all_layers=conv_layers, is_layer=self._is_conv_layer, prefix=model_prefix
+        # Store configurations back to layer_args
+        ModelOptimizations._store_configuration_to_layer_args(
+            state_dict.layer_args, all_layers=layers, is_layer=is_layer_func, prefix=model_prefix
         )
+
+        return layers
 
     def _is_conv_layer(self, path):
         """Check if a parameter path belongs to a convolution layer"""
@@ -629,3 +627,52 @@ class ModelOptimizations:
         if self.get_matmul_config(path) is not None:
             return True
         return False
+
+    def _process_matmul_layer(self, path, layer_data):
+        """Process a single matmul layer - placeholder for future optimizations"""
+        # TODO (mbezulj): apply matmul optimizations here
+
+    def _process_conv_layer(self, path, layer_data):
+        """Process a single conv layer - create optimized configuration"""
+        conv2d_config, conv2d_slice_config, compute_config, output_dtype = self.get_conv_config(path)
+        layer_data["conv2d_configuration"] = Conv2dConfiguration(
+            input_height=layer_data["layer_args"].input_height,
+            input_width=layer_data["layer_args"].input_width,
+            in_channels=layer_data["layer_args"].in_channels,
+            out_channels=layer_data["layer_args"].out_channels,
+            batch_size=layer_data["layer_args"].batch_size,
+            kernel_size=layer_data["layer_args"].kernel_size,
+            stride=layer_data["layer_args"].stride,
+            padding=layer_data["layer_args"].padding,
+            groups=layer_data["layer_args"].groups,
+            dilation=layer_data["layer_args"].dilation,
+            weight=layer_data["weight"],
+            bias=layer_data["bias"],
+            # Update with new configuration values
+            sharding_strategy=create_sharding_strategy(conv2d_config),
+            slice_strategy=create_slice_strategy(conv2d_slice_config),
+            weights_dtype=conv2d_config.weights_dtype,
+            activation=conv2d_config.activation,
+            output_dtype=output_dtype,
+            output_layout=conv2d_config.output_layout,
+            enable_act_double_buffer=conv2d_config.enable_act_double_buffer,
+            enable_weights_double_buffer=conv2d_config.enable_weights_double_buffer,
+            deallocate_activation=conv2d_config.deallocate_activation,
+            reallocate_halo_output=conv2d_config.reallocate_halo_output,
+            math_fidelity=compute_config.math_fidelity,
+            fp32_dest_acc_en=compute_config.fp32_dest_acc_en,
+            packer_l1_acc=compute_config.packer_l1_acc,
+        )
+
+    def apply(self, state_dict, model_prefix=None):
+        """Apply optimizations to the provided layer_args dictionary in place"""
+
+        # Apply conv optimizations, keep track of conv layers
+        self.conv_layers = self._apply_layer_optimizations(
+            state_dict, self._is_conv_layer, self._process_conv_layer, model_prefix
+        )
+
+        # Apply matmul optimizations, keep track of matmul layers
+        self.matmul_layers = self._apply_layer_optimizations(
+            state_dict, self._is_mm_layer, self._process_matmul_layer, model_prefix
+        )
