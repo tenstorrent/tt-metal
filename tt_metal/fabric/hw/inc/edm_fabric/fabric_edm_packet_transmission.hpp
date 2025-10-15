@@ -138,12 +138,20 @@ FORCE_INLINE
     constexpr bool update_counter = false;
 
     tt::tt_fabric::NocSendType noc_send_type = header.noc_send_type;
+
+    DPRINT << "edm/local: enter type=" << (uint32_t)noc_send_type << " payload=" << payload_size_bytes
+           << " trid=" << transaction_id << " rx_ch=" << (uint32_t)rx_channel_id << ENDL();
+
     if (noc_send_type > tt::tt_fabric::NocSendType::NOC_SEND_TYPE_LAST) {
         __builtin_unreachable();
     }
     switch (noc_send_type) {
         case tt::tt_fabric::NocSendType::NOC_UNICAST_WRITE: {
             const auto dest_address = header.command_fields.unicast_write.noc_address;
+
+            DPRINT << "edm/local: write dest[hi:lo]=0x" << (uint32_t)((uint64_t)dest_address >> 32) << ":0x"
+                   << (uint32_t)((uint64_t)dest_address & 0xffffffffu) << " bytes=" << payload_size_bytes << ENDL();
+
             noc_async_write_one_packet_with_trid<update_counter, false>(
                 payload_start_address,
                 dest_address,
@@ -157,6 +165,11 @@ FORCE_INLINE
         case tt::tt_fabric::NocSendType::NOC_UNICAST_ATOMIC_INC: {
             const uint64_t dest_address = header.command_fields.unicast_seminc.noc_address;
             const auto increment = header.command_fields.unicast_seminc.val;
+
+            DPRINT << "edm/local: sem.inc dest[hi:lo]=0x" << (uint32_t)(dest_address >> 32) << ":0x"
+                   << (uint32_t)(dest_address & 0xffffffffu) << " inc=" << (uint32_t)increment
+                   << " flush=" << (uint32_t)header.command_fields.unicast_seminc.flush << ENDL();
+
             if (header.command_fields.unicast_seminc.flush) {
                 flush_write_to_noc_pipeline(rx_channel_id);
             }
@@ -171,6 +184,10 @@ FORCE_INLINE
         case tt::tt_fabric::NocSendType::NOC_UNICAST_INLINE_WRITE: {
             const auto dest_address = header.command_fields.unicast_inline_write.noc_address;
             const auto value = header.command_fields.unicast_inline_write.value;
+
+            DPRINT << "edm/local: inline write dest[hi:lo]=0x" << (uint32_t)((uint64_t)dest_address >> 32) << ":0x"
+                   << (uint32_t)((uint64_t)dest_address & 0xffffffffu) << " val=0x" << (uint32_t)value << ENDL();
+
             noc_inline_dw_write<InlineWriteDst::DEFAULT, true>(
                 dest_address,
                 value,
@@ -192,6 +209,13 @@ FORCE_INLINE
 
             const uint64_t semaphore_dest_address = header.command_fields.unicast_seminc_fused.semaphore_noc_address;
             const auto increment = header.command_fields.unicast_seminc_fused.val;
+
+            DPRINT << "edm/local: fused write+sem dest[hi:lo]=0x" << (uint32_t)((uint64_t)dest_address >> 32) << ":0x"
+                   << (uint32_t)((uint64_t)dest_address & 0xffffffffu) << " sem[hi:lo]=0x"
+                   << (uint32_t)(semaphore_dest_address >> 32) << ":0x"
+                   << (uint32_t)(semaphore_dest_address & 0xffffffffu) << " inc=" << (uint32_t)increment
+                   << " flush=" << (uint32_t)header.command_fields.unicast_seminc_fused.flush << ENDL();
+
             if (header.command_fields.unicast_seminc_fused.flush) {
                 flush_write_to_noc_pipeline(rx_channel_id);
             }
@@ -212,6 +236,12 @@ FORCE_INLINE
                     chunk_size = header.command_fields.unicast_scatter_write.chunk_size[i];
                 }
                 const auto dest_address = header.command_fields.unicast_scatter_write.noc_address[i];
+
+                DPRINT << "edm/local: scatter[" << (uint32_t)i << "] dest[hi:lo]=0x"
+                       << (uint32_t)((uint64_t)dest_address >> 32) << ":0x"
+                       << (uint32_t)((uint64_t)dest_address & 0xffffffffu) << " bytes=" << (uint32_t)chunk_size
+                       << " offset=" << (uint32_t)offset << ENDL();
+
                 noc_async_write_one_packet_with_trid<update_counter, false>(
                     payload_start_address + offset,
                     dest_address,

@@ -277,6 +277,9 @@ static FORCE_INLINE void fabric_set_mcast_route(
 #if defined(DYNAMIC_ROUTING_ENABLED)
         hop -= 1;
 #endif
+        DPRINT << "[ROUTER] linear::fabric_set_mcast_route i=" << (uint32_t)i << " tag=" << (uint32_t)slot.tag
+               << " dst=(" << (uint32_t)slot.dst_mesh_id << "," << (uint32_t)slot.dst_dev_id << ")"
+               << " hop=" << (uint32_t)hop << ENDL();
         switch (static_cast<eth_chan_directions>(slot.tag)) {
             case eth_chan_directions::EAST: {
                 fabric_set_mcast_route(packet_header, slot.dst_dev_id, slot.dst_mesh_id, hop, 0, 0, 0);

@@ -117,11 +117,20 @@ void fabric_set_mcast_route(
     uint16_t w_num_hops,
     uint16_t n_num_hops,
     uint16_t s_num_hops) {
+    DPRINT << "[ROUTER] fabric_set_mcast_route(MESH) "
+           << "dst=(" << (uint32_t)dst_mesh_id << "," << (uint32_t)dst_dev_id << ") "
+           << "e=" << (uint32_t)e_num_hops << " w=" << (uint32_t)w_num_hops << " n=" << (uint32_t)n_num_hops
+           << " s=" << (uint32_t)s_num_hops << " ptr=0x" << (uint32_t)((uintptr_t)packet_header & 0xffffffffu)
+           << ENDL();
+
     packet_header->dst_start_node_id = ((uint32_t)dst_mesh_id << 16) | (uint32_t)dst_dev_id;
     // Minimize writes to L1 by doing 1 u64 write (decomposed to 2 u32 writes) instead of 4 u16 writes
     packet_header->mcast_params_64 = ((uint64_t)s_num_hops << 48) | ((uint64_t)n_num_hops << 32) |
                                      ((uint64_t)w_num_hops << 16) | ((uint64_t)e_num_hops);
     packet_header->is_mcast_active = 0;
+
+    DPRINT << "[ROUTER] MESH params64=0x" << (uint32_t)(packet_header->mcast_params_64 >> 32) << ":0x"
+           << (uint32_t)(packet_header->mcast_params_64 & 0xffffffffu) << ENDL();
 }
 
 void fabric_set_unicast_route(
@@ -192,6 +201,11 @@ void fabric_set_mcast_route(
     uint16_t w_num_hops,
     uint16_t n_num_hops,
     uint16_t s_num_hops) {
+    DPRINT << "[ROUTER] fabric_set_mcast_route(LL-MESH) "
+           << "e=" << (uint32_t)e_num_hops << " w=" << (uint32_t)w_num_hops << " n=" << (uint32_t)n_num_hops
+           << " s=" << (uint32_t)s_num_hops << " ptr=0x" << (uint32_t)((uintptr_t)packet_header & 0xffffffffu)
+           << ENDL();
+
     uint32_t spine_hops = 0;
     uint32_t mcast_branch = 0;
 
@@ -206,20 +220,26 @@ void fabric_set_mcast_route(
     }
 
     if (n_num_hops) {
+        DPRINT << "[ROUTER] trunk=NORTH spine=" << (uint32_t)n_num_hops << " branches(E/W flags)=" << mcast_branch
+               << ENDL();
         // Is a 2D mcast if mcast_branch != 0
         fabric_set_route<true>(packet_header, eth_chan_directions::NORTH, mcast_branch, 0, n_num_hops);
         spine_hops = n_num_hops;
     } else if (s_num_hops) {
+        DPRINT << "[ROUTER] trunk=SOUTH spine=" << (uint32_t)s_num_hops << " branches(E/W flags)=" << mcast_branch
+               << ENDL();
         // Is a 2D mcast if mcast_branch != 0
         fabric_set_route<true>(packet_header, eth_chan_directions::SOUTH, mcast_branch, 0, s_num_hops);
         spine_hops = s_num_hops;
     }
     if (e_num_hops) {
+        DPRINT << "[ROUTER] branch=EAST offset=" << spine_hops << " hops=" << (uint32_t)e_num_hops << ENDL();
         // Is a line mcast if spine_hops == 0
         fabric_set_route<true>(packet_header, eth_chan_directions::EAST, 0, spine_hops, e_num_hops);
         spine_hops += e_num_hops;
     }
     if (w_num_hops) {
+        DPRINT << "[ROUTER] branch=WEST offset=" << spine_hops << " hops=" << (uint32_t)w_num_hops << ENDL();
         // Is a line mcast if spine_hops == 0
         fabric_set_route<true>(packet_header, eth_chan_directions::WEST, 0, spine_hops, w_num_hops);
     }
