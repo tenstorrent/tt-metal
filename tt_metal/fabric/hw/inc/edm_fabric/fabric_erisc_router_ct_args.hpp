@@ -9,6 +9,7 @@
 
 #include "tt_metal/fabric/hw/inc/edm_fabric/compile_time_arg_tmp.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/fabric_bandwidth_telemetry.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/fabric_code_profiling.hpp"
 
 #include <array>
 #include <utility>
@@ -362,15 +363,24 @@ constexpr PerfTelemetryRecorderType perf_telemetry_mode =
 
 constexpr size_t PERF_TELEMETRY_BUFFER_ADDR_IDX = PERF_TELEMETRY_MODE_IDX + 1;
 constexpr size_t perf_telemetry_buffer_addr = get_compile_time_arg_val(PERF_TELEMETRY_BUFFER_ADDR_IDX);
+ 
 
-constexpr size_t SPECIAL_MARKER_2_IDX = PERF_TELEMETRY_BUFFER_ADDR_IDX + 1;
-constexpr size_t SPECIAL_MARKER_2 = 0x20c0ffee;
+///////////////////////////////////////////////
+// Code Profiling
+constexpr size_t CODE_PROFILING_ENABLED_TIMERS_IDX = PERF_TELEMETRY_BUFFER_ADDR_IDX + 1;
+constexpr uint32_t code_profiling_enabled_timers_bitfield = get_compile_time_arg_val(CODE_PROFILING_ENABLED_TIMERS_IDX);
+
+constexpr size_t CODE_PROFILING_BUFFER_ADDR_IDX = CODE_PROFILING_ENABLED_TIMERS_IDX + 1;
+constexpr size_t code_profiling_buffer_base_addr = get_compile_time_arg_val(CODE_PROFILING_BUFFER_ADDR_IDX);
+
+constexpr size_t SPECIAL_MARKER_2A_IDX = CODE_PROFILING_BUFFER_ADDR_IDX + 1;
+constexpr size_t SPECIAL_MARKER_2A = 0x20c0ffee;
 static_assert(
-    !SPECIAL_MARKER_CHECK_ENABLED || get_compile_time_arg_val(SPECIAL_MARKER_2_IDX) == SPECIAL_MARKER_2,
-    "Special marker 2 not found. This implies some arguments were misaligned between host and device. Double check the "
+    !SPECIAL_MARKER_CHECK_ENABLED || get_compile_time_arg_val(SPECIAL_MARKER_2A_IDX) == SPECIAL_MARKER_2A,
+    "Special marker 2A not found. This implies some arguments were misaligned between host and device. Double check the "
     "CT args.");
 
-constexpr size_t TO_SENDER_CREDIT_COUNTERS_START_IDX = SPECIAL_MARKER_2_IDX + SPECIAL_MARKER_CHECK_ENABLED;
+constexpr size_t TO_SENDER_CREDIT_COUNTERS_START_IDX = SPECIAL_MARKER_2A_IDX + SPECIAL_MARKER_CHECK_ENABLED;
 
 constexpr size_t to_sender_remote_ack_counters_base_address =
     conditional_get_compile_time_arg<multi_txq_enabled, TO_SENDER_CREDIT_COUNTERS_START_IDX>();

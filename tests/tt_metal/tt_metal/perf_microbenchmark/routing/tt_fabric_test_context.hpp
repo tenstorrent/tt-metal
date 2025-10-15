@@ -454,6 +454,13 @@ public:
 
     bool get_telemetry_enabled() { return telemetry_enabled_; }
 
+    // Code profiling getters/setters
+    bool get_code_profiling_enabled() const { return code_profiling_enabled_; }
+    void set_code_profiling_enabled(bool enabled) { code_profiling_enabled_ = enabled; }
+    const std::vector<CodeProfilingEntry>& get_code_profiling_entries() const { 
+        return code_profiling_entries_; 
+    }
+
     void set_global_sync(bool global_sync) { global_sync_ = global_sync; }
 
     void set_global_sync_val(uint32_t val) { global_sync_val_ = val; }
@@ -534,7 +541,17 @@ public:
 
     void dump_raw_telemetry_csv(const TestConfig& config);
 
+    // Code profiling methods
+    void read_code_profiling_results();
+
+    void clear_code_profiling_buffers();
+
+    void report_code_profiling_results();
+
 private:
+    void clear_ethernet_cores_buffer(uint32_t address, size_t buffer_size);
+    std::unordered_map<FabricNodeId, std::unordered_map<CoreCoord, std::vector<uint32_t>>>
+    read_ethernet_cores_buffer(uint32_t address, size_t buffer_size);
     void reset_local_variables() {
         benchmark_mode_ = false;
         global_sync_ = false;
@@ -543,6 +560,7 @@ private:
         device_direction_cycles_.clear();
         device_core_cycles_.clear();
         bandwidth_results_.clear();
+        code_profiling_entries_.clear();
         // Note: has_test_failures_ is NOT reset here to preserve failures across tests
         // Note: golden_csv_entries_ is kept loaded for reuse across tests
     }
@@ -1447,6 +1465,8 @@ private:
     std::vector<BandwidthResult> bandwidth_results_;
     std::vector<BandwidthResultSummary> bandwidth_results_summary_;
     std::vector<TelemetryEntry> telemetry_entries_;  // Per-test raw data
+    std::vector<CodeProfilingEntry> code_profiling_entries_;  // Per-test code profiling data
+    bool code_profiling_enabled_ = false;
 
     // Device frequency cache to avoid repeated calculations
     std::unordered_map<FabricNodeId, uint32_t> device_freq_mhz_map_;

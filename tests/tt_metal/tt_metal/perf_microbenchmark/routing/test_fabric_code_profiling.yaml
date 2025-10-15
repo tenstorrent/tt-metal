@@ -1,0 +1,22 @@
+allocation_policies:
+    receiver:
+      max_configs_per_core: 4
+
+Tests:
+  - name: "CodeProfiling"
+    benchmark_mode: true
+    sync: true
+    
+    parametrization_params:
+      topology: [Linear, Ring, Mesh]
+      num_links: [1]
+      ntype: [unicast_write]
+      size: [2048]
+    
+    defaults:
+      ftype: unicast
+      num_packets: 1000
+    
+    patterns:
+      - type: all_to_all
+        iterations: 1
