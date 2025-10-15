@@ -26,7 +26,7 @@ class IncompatibleKeys(NamedTuple):
     unexpected_keys: list[str]
 
 
-class ParameterLoadingError(Exception):
+class LoadingError(Exception):
     pass
 
 
@@ -101,20 +101,26 @@ class Module(ABC):
         for name, child in self.named_children():
             child_state = pop_substate(state_dict, name)
 
-            child._load_torch_state_dict_inner(  # noqa: SLF001
-                child_state,
-                module_key_prefix=f"{module_key_prefix}{name}.",
-                missing_keys=missing_keys,
-                unexpected_keys=unexpected_keys,
-            )
+            try:
+                child._load_torch_state_dict_inner(  # noqa: SLF001
+                    child_state,
+                    module_key_prefix=f"{module_key_prefix}{name}.",
+                    missing_keys=missing_keys,
+                    unexpected_keys=unexpected_keys,
+                )
+            except LoadingError:
+                raise
+            except Exception as err:
+                msg = f"an exception occurred while loading '{module_key_prefix}{name}'"
+                raise LoadingError(msg) from err
 
         for name, parameter in self.named_parameters():
             if name in state_dict:
                 try:
                     parameter.load_torch_tensor(state_dict.pop(name))
-                except ParameterLoadingError as err:
+                except LoadingError as err:
                     msg = f"while loading '{module_key_prefix}{name}': {err}"
-                    raise ParameterLoadingError(msg) from err
+                    raise LoadingError(msg) from err
             else:
                 missing_keys.append(f"{module_key_prefix}{name}")
 
@@ -166,9 +172,9 @@ class Module(ABC):
             path = directory / f"{name}.tensorbin"
             try:
                 parameter.load(path)
-            except ParameterLoadingError as err:
+            except LoadingError as err:
                 msg = f"{err} while loading '{path}'"
-                raise ParameterLoadingError(msg) from err
+                raise LoadingError(msg) from err
 
     def to_cached_state_dict(self, path_prefix: str) -> dict[str, str]:
         cache_dict = {}
@@ -195,9 +201,9 @@ class Module(ABC):
             path = cache_dict[name]
             try:
                 parameter.load(path)
-            except ParameterLoadingError as err:
+            except LoadingError as err:
                 msg = f"{err} while loading '{path}'"
-                raise ParameterLoadingError(msg) from err
+                raise LoadingError(msg) from err
 
     @abstractmethod
     def forward(self, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
@@ -312,7 +318,7 @@ class Parameter:
         shape = tuple(torch_tensor.shape)
         if shape != self.total_shape:
             msg = f"expected tensor shape {self.total_shape}, got {shape}"
-            raise ParameterLoadingError(msg)
+            raise LoadingError(msg)
 
         self.data = tensor.from_torch(
             torch_tensor,
@@ -347,23 +353,23 @@ class Parameter:
         if self.on_host:
             if value.device() is not None:
                 msg = "expected host tensor, got device tensor"
-                raise ParameterLoadingError(msg)
+                raise LoadingError(msg)
         elif value.device() != self.device:
             msg = "device mismatch"
-            raise ParameterLoadingError(msg)
+            raise LoadingError(msg)
 
         if value.dtype != self.dtype:
             msg = f"dtype mismatch: expected {self.dtype}, got {value.dtype}"
-            raise ParameterLoadingError(msg)
+            raise LoadingError(msg)
 
         if value.layout != self.layout:
             msg = f"layout mismatch: expected {self.layout}, got {value.layout}"
-            raise ParameterLoadingError(msg)
+            raise LoadingError(msg)
 
         if value.memory_config() != self.memory_config:
             msg = f"memory config mismatch: expected {self.memory_config}, got {value.memory_config()}"
-            raise ParameterLoadingError(msg)
+            raise LoadingError(msg)
 
         if value.shape != self.local_shape:
             msg = f"shape mismatch: expected {self.local_shape}, got {tuple(value.shape)}"
-            raise ParameterLoadingError(msg)
+            raise LoadingError(msg)
