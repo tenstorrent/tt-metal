@@ -1,0 +1,142 @@
+CPU Features:
+  SSE4.2 + AES-NI: ✓
+  AVX2 + AES-NI:   ✓
+  Hardware threads: 8
+
+
+
+float (32-bit) Performance Benchmark (4194304 elements)
+MT19937 (Sequential):
+  Time (ms):        469.987
+  Throughput:       0.03 GB/s
+  Elements/sec:     8.9 M
+  Speedup:          1.0x
+  Mean:             -0.000128
+  StdDev:           0.577227
+MT19937 (Parallel):
+  Time (ms):        63.785
+  Throughput:       0.24 GB/s
+  Elements/sec:     65.8 M
+  Speedup:          7.4x
+  Mean:             0.000065
+  StdDev:           0.577568
+SSE (Sequential):
+  Time (ms):        4.554
+  Throughput:       3.43 GB/s
+  Elements/sec:     920.9 M
+  Speedup:          103.2x
+  Mean:             -0.000116
+  StdDev:           0.577418
+SSE (Parallel):
+  Time (ms):        2.048
+  Throughput:       7.63 GB/s
+  Elements/sec:     2048.1 M
+  Speedup:          229.5x
+  Mean:             0.000347
+  StdDev:           0.577646
+AVX2 (Sequential):
+  Time (ms):        2.413
+  Throughput:       6.48 GB/s
+  Elements/sec:     1738.1 M
+  Speedup:          194.8x
+  Mean:             -0.000502
+  StdDev:           0.577559
+AVX2 (Parallel):
+  Time (ms):        0.850
+  Throughput:       18.38 GB/s
+  Elements/sec:     4933.1 M
+  Speedup:          552.8x
+  Mean:             -0.000185
+  StdDev:           0.577672
+
+
+
+double (64-bit) Performance Benchmark (4194304 elements)
+MT19937 (Sequential):
+  Time (ms):        471.321
+  Throughput:       0.07 GB/s
+  Elements/sec:     8.9 M
+  Speedup:          1.0x
+  Mean:             -0.000128
+  StdDev:           0.577227
+MT19937 (Parallel):
+  Time (ms):        81.970
+  Throughput:       0.38 GB/s
+  Elements/sec:     51.2 M
+  Speedup:          5.7x
+  Mean:             0.000065
+  StdDev:           0.577568
+SSE (Sequential):
+  Time (ms):        9.038
+  Throughput:       3.46 GB/s
+  Elements/sec:     464.1 M
+  Speedup:          52.2x
+  Mean:             0.000117
+  StdDev:           0.577381
+SSE (Parallel):
+  Time (ms):        2.930
+  Throughput:       10.66 GB/s
+  Elements/sec:     1431.3 M
+  Speedup:          160.8x
+  Mean:             0.000335
+  StdDev:           0.577421
+AVX2 (Sequential):
+  Time (ms):        4.826
+  Throughput:       6.47 GB/s
+  Elements/sec:     869.0 M
+  Speedup:          97.7x
+  Mean:             -0.000274
+  StdDev:           0.577612
+AVX2 (Parallel):
+  Time (ms):        1.946
+  Throughput:       16.06 GB/s
+  Elements/sec:     2155.6 M
+  Speedup:          242.2x
+  Mean:             0.000012
+  StdDev:           0.577782
+
+
+
+bfloat16 (16-bit) Performance Benchmark (4194304 elements)
+MT19937 (Sequential):
+  Time (ms):        482.879
+  Throughput:       0.02 GB/s
+  Elements/sec:     8.7 M
+  Speedup:          1.0x
+  Mean:             -0.000127
+  StdDev:           0.577229
+MT19937 (Parallel):
+  Time (ms):        81.806
+  Throughput:       0.10 GB/s
+  Elements/sec:     51.3 M
+  Speedup:          5.9x
+  Mean:             0.000064
+  StdDev:           0.577569
+SSE (Sequential):
+  Time (ms):        4.673
+  Throughput:       1.67 GB/s
+  Elements/sec:     897.6 M
+  Speedup:          103.3x
+  Mean:             -0.002394
+  StdDev:           0.575684
+SSE (Parallel):
+  Time (ms):        2.070
+  Throughput:       3.77 GB/s
+  Elements/sec:     2026.3 M
+  Speedup:          233.3x
+  Mean:             -0.001929
+  StdDev:           0.575914
+AVX2 (Sequential):
+  Time (ms):        2.466
+  Throughput:       3.17 GB/s
+  Elements/sec:     1700.6 M
+  Speedup:          195.8x
+  Mean:             -0.002778
+  StdDev:           0.575825
+AVX2 (Parallel):
+  Time (ms):        2.315
+  Throughput:       3.37 GB/s
+  Elements/sec:     1811.4 M
+  Speedup:          208.5x
+  Mean:             -0.002462
+  StdDev:           0.575936

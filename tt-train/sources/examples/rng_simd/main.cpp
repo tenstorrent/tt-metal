@@ -100,26 +100,36 @@ void benchmark_type(const std::string& type_name, size_t size) {
 
     std::vector<BenchmarkResult> results;
 
-    // MT19937 (skip for bfloat16 as it requires linking against full tt-metalium library)
-    if constexpr (!std::same_as<T, bfloat16>) {
-        auto func = [&](std::vector<T>& data) { ttml::core::sequential_generate(std::span{data}, dist_factory, seed); };
-        results.push_back(run_benchmark<T>("MT19937", type_name, func, size));
-    }
+    auto func_seq = [&](std::vector<T>& data) { ttml::core::sequential_generate(std::span{data}, dist_factory, seed); };
+    results.push_back(run_benchmark<T>("MT19937 (Sequential)", type_name, func_seq, size));
 
-    // SSE
+    auto func_par = [&](std::vector<T>& data) { ttml::core::parallel_generate(std::span{data}, dist_factory, seed); };
+    results.push_back(run_benchmark<T>("MT19937 (Parallel)", type_name, func_par, size));
+
+    // SSE Sequential and Parallel
     if (CpuFeatures::has_sse_support()) {
-        auto func = [&](std::vector<T>& data) {
+        auto func_seq = [&](std::vector<T>& data) {
             ttml::core::sse::sequential_generate(std::span{data}, dist_factory, seed);
         };
-        results.push_back(run_benchmark<T>("SSE", type_name, func, size));
+        results.push_back(run_benchmark<T>("SSE (Sequential)", type_name, func_seq, size));
+
+        auto func_par = [&](std::vector<T>& data) {
+            ttml::core::sse::parallel_generate(std::span{data}, dist_factory, seed);
+        };
+        results.push_back(run_benchmark<T>("SSE (Parallel)", type_name, func_par, size));
     }
 
-    // AVX2
+    // AVX2 Sequential and Parallel
     if (CpuFeatures::has_avx2_support()) {
-        auto func = [&](std::vector<T>& data) {
+        auto func_seq = [&](std::vector<T>& data) {
             ttml::core::avx::sequential_generate(std::span{data}, dist_factory, seed);
         };
-        results.push_back(run_benchmark<T>("AVX2", type_name, func, size));
+        results.push_back(run_benchmark<T>("AVX2 (Sequential)", type_name, func_seq, size));
+
+        auto func_par = [&](std::vector<T>& data) {
+            ttml::core::avx::parallel_generate(std::span{data}, dist_factory, seed);
+        };
+        results.push_back(run_benchmark<T>("AVX2 (Parallel)", type_name, func_par, size));
     }
 
     // Print results in vertical format

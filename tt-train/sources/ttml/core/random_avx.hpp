@@ -470,7 +470,7 @@ inline void parallel_generate(
     else if constexpr (std::same_as<T, double>) {
         auto dist = dist_factory();
         if constexpr (UniformRealDistribution<decltype(dist)>) {
-            generate_uniform_simd_parallel_avx_double(seq, dist_factory, seed, max_threads);
+            generate_uniform_simd_parallel_avx_double(seq, seed, dist_factory, max_threads);
         } else {
             // Fallback to original MT19937 implementation for non-uniform distributions
             core::parallel_generate(seq, dist_factory, seed, max_threads);
@@ -480,7 +480,7 @@ inline void parallel_generate(
     else if constexpr (std::same_as<T, bfloat16>) {
         auto dist = dist_factory();
         if constexpr (UniformRealDistribution<decltype(dist)>) {
-            generate_uniform_simd_parallel_avx_bfloat16(seq, dist_factory, seed, max_threads);
+            generate_uniform_simd_parallel_avx_bfloat16(seq, seed, dist_factory, max_threads);
         } else {
             // Fallback to original MT19937 implementation for non-uniform distributions
             core::parallel_generate(seq, dist_factory, seed, max_threads);
