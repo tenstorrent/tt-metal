@@ -347,27 +347,27 @@ void ckernel_template::program_and_run_and_finish(volatile uint *instrn_buffer)
     run_and_finish(instrn_buffer);
 }
 
-void ckernel_template::run(volatile uint *instrn_buffer)
+void ckernel_template::run([[maybe_unused]] volatile uint *instrn_buffer)
 {
     TTI_MOP(1, 0, 0, 0); // run the double-loop template
 }
 
-void ckernel_template::run_bank0_sw_cntl(volatile uint *instrn_buffer)
+void ckernel_template::run_bank0_sw_cntl([[maybe_unused]] volatile uint *instrn_buffer)
 {
     TTI_MOP(1, 0, 0, 0); // run the double-loop template
 }
 
-void ckernel_template::run_and_finish(volatile uint *instrn_buffer)
+void ckernel_template::run_and_finish([[maybe_unused]] volatile uint *instrn_buffer)
 {
     TTI_MOP(1, 1, 0, 0); // run the double-loop template
 }
 
-void ckernel_template::run_bank1_sw_cntl(volatile uint *instrn_buffer)
+void ckernel_template::run_bank1_sw_cntl([[maybe_unused]] volatile uint *instrn_buffer)
 {
     TTI_MOP(1, 1, 0, 0); // run the double-loop template
 }
 
-void ckernel_template::program(volatile uint *instrn_buffer)
+void ckernel_template::program([[maybe_unused]] volatile uint *instrn_buffer)
 {
     volatile mop_config_regs_t *mop_cfg = reinterpret_cast<volatile mop_config_regs_t *>(MOP_CFG_BASE);
 
@@ -387,7 +387,7 @@ void ckernel_template::program(volatile uint *instrn_buffer)
     mop_cfg->MOP_CONFIG              = 1;
 }
 
-void ckernel_template::program_bank0_sw_cntl(volatile uint *instrn_buffer)
+void ckernel_template::program_bank0_sw_cntl([[maybe_unused]] volatile uint *instrn_buffer)
 {
     volatile mop_config_regs_t *mop_cfg = reinterpret_cast<volatile mop_config_regs_t *>(MOP_CFG_BASE);
 
@@ -406,7 +406,7 @@ void ckernel_template::program_bank0_sw_cntl(volatile uint *instrn_buffer)
     //    mop_cfg->MOP_CONFIG               = 1;
 }
 
-void ckernel_template::program_bank1_sw_cntl(volatile uint *instrn_buffer)
+void ckernel_template::program_bank1_sw_cntl([[maybe_unused]] volatile uint *instrn_buffer)
 {
     volatile mop_config_regs_t *mop_cfg = reinterpret_cast<volatile mop_config_regs_t *>(MOP_CFG_BASE);
 
