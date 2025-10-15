@@ -13,12 +13,21 @@ from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_f
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.common.utility_functions import torch_random
 
+# Import master config utilities for real-world configurations
+from tests.sweep_framework.sweep_config_utils import load_binary_op_configs
+
 # Ref: https://github.com/tenstorrent/pytorch2.0_ttnn/blob/main/docs/operations/aten.add.Tensor.md
 
 # Parameters provided to the test vector generator are defined here.
 # They are defined as dict-type suites that contain the arguments to the run function as keys, and lists of possible inputs as values.
 # Each suite has a key name (in this case "suite_1") which will associate the test vectors to this specific suite of inputs.
 # Developers can create their own generator functions and pass them to the parameters as inputs.
+
+# Load master configurations for real-world test cases
+# By default: 6 exact configs (each shape with its original memory config)
+# To enable all combinations: load_binary_op_configs("add", all_cases=True) for 216 tests
+master_traced_config = load_binary_op_configs("add")  # Default: 6 tests
+# master_traced_config = load_binary_op_configs("add", all_cases=True)  # 216 tests
 parameters = {
     "nightly": {
         "input_shape": [
@@ -526,6 +535,8 @@ parameters = {
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
         "input_b_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
     },
+    # New suite using real-world configurations from traced models
+    "model_traced": master_traced_config,
 }
 
 
