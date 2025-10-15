@@ -38,8 +38,10 @@ on:
         required: true
         type: string
       command:
-        required: true
+        required: false
         type: string
+        default: ""
+        description: "Test command to run (not needed if gist-url is provided)"
       timeout:
         required: true
         type: string
@@ -154,7 +156,9 @@ jobs:
 
           if [ -n "${{ inputs.gist-url }}" ]; then
             BISECT_CMD="$BISECT_CMD -s /work/bisect_gist_script.sh"
-          else
+          fi
+
+          if [ -n "${{ inputs.command }}" ]; then
             BISECT_CMD="$BISECT_CMD -f '${{ inputs.command }}'"
           fi
 
