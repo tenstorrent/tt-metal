@@ -12,6 +12,7 @@ Usage:
   -p             : enable Tracy profiling
   -r RETRIES     : number of retries (default 3)
   -n             : enable non-deterministic detection mode (ND mode)
+  -a             : enable artifact download optimization (requires gh CLI)
 END
 
 timeout_duration_iteration="30m"
@@ -21,10 +22,11 @@ bad_commit=""
 tracy_enabled=0
 retries=3
 nd_mode=false
+artifact_mode=false
 run_idx=0
 timeout_rc=1
 
-while getopts ":f:g:b:t:pr:n" opt; do
+while getopts ":f:g:b:t:pr:na" opt; do
   case "$opt" in
     f) test="$OPTARG" ;;
     g) good_commit="$OPTARG" ;;
@@ -33,6 +35,7 @@ while getopts ":f:g:b:t:pr:n" opt; do
     p) tracy_enabled=1 ;;
     r) retries="$OPTARG" ;;
     n) nd_mode=true ;;
+    a) artifact_mode=true ;;
     \?) die "Invalid option: -$OPTARG" ;;
     :)  die "Option -$OPTARG requires an argument." ;;
   esac
@@ -42,6 +45,22 @@ done
 [ -n "$good_commit" ] || die "Please specify -g GOOD_SHA."
 [ -n "$bad_commit" ] || die "Please specify -b BAD_SHA."
 
+# Check required tools for artifact mode
+if [ "$artifact_mode" = true ]; then
+  if ! command -v gh >/dev/null 2>&1; then
+    echo "GitHub CLI (gh) not found, artifact mode disabled"
+    artifact_mode=false
+  elif ! command -v jq >/dev/null 2>&1; then
+    echo "jq not found, artifact mode disabled"
+    artifact_mode=false
+  elif ! gh auth status >/dev/null 2>&1; then
+    echo "GitHub CLI not authenticated, artifact mode disabled"
+    artifact_mode=false
+  else
+    echo "Artifact download mode enabled"
+  fi
+fi
+
 
 echo "TT_METAL_HOME: $TT_METAL_HOME"
 echo "PYTHONPATH: $PYTHONPATH"
@@ -49,6 +68,10 @@ echo "ARCH_NAME: ${ARCH_NAME:-}"
 echo "pwd: $(pwd)"
 if [ "$tracy_enabled" -eq 1 ]; then
   echo "Tracy profiling enabled for builds."
+fi
+
+if [ "$artifact_mode" = true ]; then
+  echo "Artifact download optimization enabled."
 fi
 
 # Creating virtual environment where we can install ttnn
@@ -90,26 +113,117 @@ print("ttnn imported from:", ttnn.__file__)
 PY
 }
 
+# Try to download build artifacts from GitHub Actions
+try_download_artifacts() {
+  local commit_sha="$1"
+  local tracy_suffix=""
+
+  if [ "$tracy_enabled" -eq 1 ]; then
+    tracy_suffix="-tracy"
+  fi
+
+  # Look for workflow runs for this commit
+  echo "🔎 Searching for workflow runs for commit $commit_sha..."
+  local runs
+  runs=$(gh run list --commit "$commit_sha" --json workflowName,conclusion,databaseId --limit 100 2>/dev/null || echo "[]")
+
+  if [ "$runs" = "[]" ]; then
+    echo "No workflow runs found for commit $commit_sha"
+    return 1
+  fi
+
+  # Look for successful build workflows (prioritize "All post-commit tests")
+  local build_run_id
+  # First try to find "All post-commit tests" workflow specifically
+  build_run_id=$(echo "$runs" | jq -r '.[] | select(.workflowName == "All post-commit tests") | select(.conclusion == "success") | .databaseId' | head -1)
+
+  # If not found, fall back to other build workflow patterns
+  if [ -z "$build_run_id" ] || [ "$build_run_id" = "null" ]; then
+    build_run_id=$(echo "$runs" | jq -r '.[] | select(.workflowName | test("build|Build|CI|build-wheels")) | select(.conclusion == "success") | .databaseId' | head -1)
+  fi
+
+  if [ -z "$build_run_id" ] || [ "$build_run_id" = "null" ]; then
+    echo "No successful build workflow found for commit $commit_sha"
+    return 1
+  fi
+
+  echo "Found successful build run: $build_run_id"
+
+  # Download build artifacts
+  local artifact_name="ttm_any${tracy_suffix}"
+  echo "Downloading artifact: $artifact_name"
+
+  # Clean up any previous artifact files
+  rm -f ttm_any.tar.zst 2>/dev/null || true
+
+  if gh run download "$build_run_id" --name "$artifact_name" --dir . 2>/dev/null; then
+    # Extract the artifact
+    if [ -f "ttm_any.tar.zst" ]; then
+      if tar --zstd -xf ttm_any.tar.zst; then
+        echo "Build artifact extracted successfully"
+        # Clean up the archive
+        rm -f ttm_any.tar.zst
+        return 0
+      else
+        echo "Failed to extract build artifact"
+        rm -f ttm_any.tar.zst 2>/dev/null || true
+        return 1
+      fi
+    else
+      echo "Expected artifact file ttm_any.tar.zst not found"
+      return 1
+    fi
+  else
+    # Try to list available artifacts to help debugging
+    echo "Available artifacts for run $build_run_id:"
+    gh run view "$build_run_id" --json artifacts --jq '.artifacts[].name' 2>/dev/null || echo "  (failed to list artifacts)"
+    return 1
+  fi
+}
+
 echo "Starting git bisect…"
 git bisect start "$bad_commit" "$good_commit"
 
 found=false
 while [[ "$found" == "false" ]]; do
   rev="$(git rev-parse --short=12 HEAD)"
+  full_sha="$(git rev-parse HEAD)"
   echo "::group::Building $rev"
 
   fresh_clean
 
   build_rc=0
-  if [ "$tracy_enabled" -eq 1 ]; then
-    ./build_metal.sh \
-      --build-all \
-      --enable-ccache \
-      --enable-profiler || build_rc=$?
+
+  # Try to download artifacts first if artifact mode is enabled
+  if [ "$artifact_mode" = true ]; then
+    if try_download_artifacts "$full_sha"; then
+      echo "Using downloaded artifacts for $rev"
+      build_rc=0
+    else
+      echo "⚠️  Artifact download failed, falling back to local build"
+      if [ "$tracy_enabled" -eq 1 ]; then
+        ./build_metal.sh \
+          --build-all \
+          --enable-ccache \
+          --enable-profiler || build_rc=$?
+      else
+        ./build_metal.sh \
+          --build-all \
+          --enable-ccache || build_rc=$?
+      fi
+    fi
   else
-    ./build_metal.sh \
-      --build-all \
-      --enable-ccache || build_rc=$?
+    # Standard local build
+    if [ "$tracy_enabled" -eq 1 ]; then
+      ./build_metal.sh \
+        --build-all \
+        --enable-ccache \
+        --enable-profiler || build_rc=$?
+    else
+      ./build_metal.sh \
+        --build-all \
+        --enable-ccache || build_rc=$?
+    fi
   fi
 
   echo "::endgroup::"
