@@ -32,7 +32,7 @@ const char* RunTimeDebugFeatureNames[RunTimeDebugFeatureCount] = {
 
 const char* RunTimeDebugClassNames[RunTimeDebugClassCount] = {"N/A", "worker", "dispatch", "all"};
 
-constexpr auto TT_METAL_HOME_ENV_VAR = "TT_METAL_HOME";
+constexpr auto TT_METAL_RUNTIME_ROOT_ENV_VAR = "TT_METAL_RUNTIME_ROOT";
 constexpr auto TT_METAL_KERNEL_PATH_ENV_VAR = "TT_METAL_KERNEL_PATH";
 // Set this var to change the cache dir.
 constexpr auto TT_METAL_CACHE_ENV_VAR = "TT_METAL_CACHE";
@@ -50,7 +50,7 @@ RunTimeOptions::RunTimeOptions() {
 #endif
 
     // ENV Can Override
-    const char* root_dir_str = std::getenv(TT_METAL_HOME_ENV_VAR);
+    const char* root_dir_str = std::getenv(TT_METAL_RUNTIME_ROOT_ENV_VAR);
     if (root_dir_str != nullptr) {
         this->root_dir = std::string(root_dir_str);
         log_info(tt::LogMetal, "ENV override root_dir: {}", this->root_dir);
