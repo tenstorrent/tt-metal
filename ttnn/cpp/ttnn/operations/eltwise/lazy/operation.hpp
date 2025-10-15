@@ -25,6 +25,7 @@ enum class Unary {
     LTZ,
     NEZ,
     LOGICAL_NOT,
+    ATAN,
 };
 
 enum class UnaryWithParam {
@@ -34,6 +35,7 @@ enum class UnaryWithParam {
     MUL,
     DIV,
     POWER,
+    RPOW,
 };
 
 enum class Binary {

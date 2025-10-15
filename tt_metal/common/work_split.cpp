@@ -359,6 +359,12 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
         return std::make_tuple(0, CoreRangeSet(), CoreRangeSet(), CoreRangeSet(), 0, 0);
     }
     uint32_t max_num_cores = core_grid.num_cores(), target_num_cores;
+
+    if (const auto bounding_box = core_grid.bounding_box();
+        bounding_box.size() == max_num_cores and bounding_box.start_coord == CoreCoord(0, 0)) {
+        return split_work_to_cores(bounding_box.end_coord, units_to_divide, row_wise);
+    }
+
     TT_FATAL(max_num_cores > 0, "Core grid must contain at least one core");
     auto start_core = core_grid.ranges().begin()->start_coord;
     CoreRangeSet all_cores;
