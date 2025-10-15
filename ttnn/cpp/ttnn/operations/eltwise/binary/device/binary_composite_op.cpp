@@ -259,18 +259,18 @@ Tensor ExecuteDiv::invoke(
             not has_legacy_only_args,
             "round_mode, accurate_mode are not valid when passing use_legacy parameter in div");
 
-        std::optional<DataType> result_dtype;
-        result_dtype =
-            (input_a.dtype() == DataType::INT32 && input_b.dtype() == DataType::INT32)
-                ? std::optional<DataType>(
-                      output_dtype.has_value() && output_dtype.value() == DataType::INT32 ? DataType::INT32
-                                                                                          : DataType::FLOAT32)
-                : std::nullopt;
+        // std::optional<DataType> result_dtype;
+        // result_dtype = DataType::FLOAT32;
+        //     (input_a.dtype() == DataType::INT32 && input_b.dtype() == DataType::INT32)
+        //         ? std::optional<DataType>(
+        //               output_dtype.has_value() && output_dtype.value() == DataType::INT32 ? DataType::INT32
+        //                                                                                   : DataType::FLOAT32)
+        //         : std::nullopt;
 
         return BinaryOperation<BinaryOpType::DIV>::invoke(
             input_a,
             input_b,
-            result_dtype,
+            std::nullopt,
             output_mem_config,
             output_tensor,
             post_activations,

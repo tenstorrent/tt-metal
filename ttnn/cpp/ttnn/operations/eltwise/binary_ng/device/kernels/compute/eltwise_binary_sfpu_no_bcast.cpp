@@ -69,7 +69,7 @@ void MAIN {
             copy_tile(cb_post_rhs, i, i * 2 + 1);
 
             BINARY_SFPU_OP(i * 2, i * 2 + 1, i * 2);
-            PROCESS_POST_ACTIVATIONS(i * 2);
+            // PROCESS_POST_ACTIVATIONS(i * 2);
         }
         tile_regs_commit();
 

@@ -708,7 +708,7 @@ def test_div_edge_cases(device):
         # (100000000, 2147483647, 100000050, 2147483647),
     ],
 )
-@pytest.mark.parametrize("use_legacy", [True])
+@pytest.mark.parametrize("use_legacy", [False])
 def test_div(input_shapes, low_a, high_a, low_b, high_b, use_legacy, device):
     num_elements = max(int(torch.prod(torch.tensor(input_shapes)).item()), 1)
     torch_input_tensor_a = torch.linspace(high_a, low_a, num_elements, dtype=torch.int32)
