@@ -88,6 +88,82 @@ public:
     [[nodiscard]] std::size_t circular_buffers() const noexcept;
 };
 
+// Unary
+[[nodiscard]] Function operator-(ExpressionView first);
+
+// Binary
+[[nodiscard]] Function operator+(ExpressionView first, ExpressionView second);
+[[nodiscard]] Function operator+(ExpressionView first, const Tensor& second);
+[[nodiscard]] Function operator+(ExpressionView first, Param second);
+[[nodiscard]] Function operator+(const Tensor& first, ExpressionView second);
+[[nodiscard]] Function operator+(Param first, ExpressionView second);
+
+[[nodiscard]] Function operator-(ExpressionView first, ExpressionView second);
+[[nodiscard]] Function operator-(ExpressionView first, const Tensor& second);
+[[nodiscard]] Function operator-(ExpressionView first, Param second);
+[[nodiscard]] Function operator-(const Tensor& first, ExpressionView second);
+[[nodiscard]] Function operator-(Param first, ExpressionView second);
+
+[[nodiscard]] Function operator*(ExpressionView first, ExpressionView second);
+[[nodiscard]] Function operator*(ExpressionView first, const Tensor& second);
+[[nodiscard]] Function operator*(ExpressionView first, Param second);
+[[nodiscard]] Function operator*(const Tensor& first, ExpressionView second);
+[[nodiscard]] Function operator*(Param first, ExpressionView second);
+
+[[nodiscard]] Function operator/(ExpressionView first, ExpressionView second);
+[[nodiscard]] Function operator/(ExpressionView first, const Tensor& second);
+[[nodiscard]] Function operator/(ExpressionView first, Param second);
+[[nodiscard]] Function operator/(const Tensor& first, ExpressionView second);
+[[nodiscard]] Function operator/(Param first, ExpressionView second);
+
+[[nodiscard]] Function operator<(ExpressionView first, ExpressionView second);
+[[nodiscard]] Function operator<(ExpressionView first, const Tensor& second);
+[[nodiscard]] Function operator<(ExpressionView first, Param second);
+[[nodiscard]] Function operator<(const Tensor& first, ExpressionView second);
+[[nodiscard]] Function operator<(Param first, ExpressionView second);
+
+[[nodiscard]] Function operator>(ExpressionView first, ExpressionView second);
+[[nodiscard]] Function operator>(ExpressionView first, const Tensor& second);
+[[nodiscard]] Function operator>(ExpressionView first, Param second);
+[[nodiscard]] Function operator>(const Tensor& first, ExpressionView second);
+[[nodiscard]] Function operator>(Param first, ExpressionView second);
+
+[[nodiscard]] Function operator==(ExpressionView first, ExpressionView second);
+[[nodiscard]] Function operator==(ExpressionView first, const Tensor& second);
+[[nodiscard]] Function operator==(ExpressionView first, Param second);
+[[nodiscard]] Function operator==(const Tensor& first, ExpressionView second);
+[[nodiscard]] Function operator==(Param first, ExpressionView second);
+
+[[nodiscard]] Function operator!=(ExpressionView first, ExpressionView second);
+[[nodiscard]] Function operator!=(ExpressionView first, const Tensor& second);
+[[nodiscard]] Function operator!=(ExpressionView first, Param second);
+[[nodiscard]] Function operator!=(const Tensor& first, ExpressionView second);
+[[nodiscard]] Function operator!=(Param first, ExpressionView second);
+
+[[nodiscard]] Function operator<=(ExpressionView first, ExpressionView second);
+[[nodiscard]] Function operator<=(ExpressionView first, const Tensor& second);
+[[nodiscard]] Function operator<=(ExpressionView first, Param second);
+[[nodiscard]] Function operator<=(const Tensor& first, ExpressionView second);
+[[nodiscard]] Function operator<=(Param first, ExpressionView second);
+
+[[nodiscard]] Function operator>=(ExpressionView first, ExpressionView second);
+[[nodiscard]] Function operator>=(ExpressionView first, const Tensor& second);
+[[nodiscard]] Function operator>=(ExpressionView first, Param second);
+[[nodiscard]] Function operator>=(const Tensor& first, ExpressionView second);
+[[nodiscard]] Function operator>=(Param first, ExpressionView second);
+
+[[nodiscard]] Function operator and(ExpressionView first, ExpressionView second);
+[[nodiscard]] Function operator and(ExpressionView first, const Tensor& second);
+[[nodiscard]] Function operator and(ExpressionView first, Param second);
+[[nodiscard]] Function operator and(const Tensor& first, ExpressionView second);
+[[nodiscard]] Function operator and(Param first, ExpressionView second);
+
+[[nodiscard]] Function operator or(ExpressionView first, ExpressionView second);
+[[nodiscard]] Function operator or(ExpressionView first, const Tensor& second);
+[[nodiscard]] Function operator or(ExpressionView first, Param second);
+[[nodiscard]] Function operator or(const Tensor& first, ExpressionView second);
+[[nodiscard]] Function operator or(Param first, ExpressionView second);
+
 // traverses in post-order
 template <typename Visitor>
 void traverse(Visitor visitor, ExpressionView expression) {

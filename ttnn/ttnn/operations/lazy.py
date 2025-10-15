@@ -17,7 +17,7 @@ from ttnn._ttnn.operations.lazy import (
     Unary,
     Value,
     recip,
-    negative,
+    neg,
     exp,
     eqz,
     gez,
