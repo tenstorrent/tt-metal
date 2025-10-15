@@ -102,6 +102,15 @@ class TtSDXLPipeline(LightweightModule):
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.ttnn_device),
         )
 
+        self.guidance_rescale = ttnn.from_torch(
+            torch.Tensor([self.pipeline_config.guidance_rescale]),
+            dtype=ttnn.bfloat16,
+            device=self.ttnn_device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.ttnn_device),
+        )
+
         compute_grid_size = self.ttnn_device.compute_with_storage_grid_size()
         ccl_sub_device_crs = ttnn.CoreRangeSet(
             {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
@@ -137,6 +146,16 @@ class TtSDXLPipeline(LightweightModule):
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.ttnn_device),
         )
         ttnn.copy_host_to_device_tensor(host_guidance_scale, self.guidance_scale)
+
+    def set_guidance_rescale(self, guidance_rescale: float):
+        self.pipeline_config.guidance_rescale = guidance_rescale
+        host_guidance_rescale = ttnn.from_torch(
+            torch.Tensor([self.pipeline_config.guidance_rescale]),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.ttnn_device),
+        )
+        ttnn.copy_host_to_device_tensor(host_guidance_rescale, self.guidance_rescale)
 
     def __validate_config(self):
         """
