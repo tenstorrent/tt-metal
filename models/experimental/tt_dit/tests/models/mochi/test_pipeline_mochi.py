@@ -147,11 +147,11 @@ def test_tt_mochi_pipeline(
         tensor_parallel=ParallelFactor(factor=tp_factor, mesh_axis=tp_axis),
         sequence_parallel=ParallelFactor(factor=sp_factor, mesh_axis=sp_axis),
     )
-    h_parallel_factor = 4
+    w_parallel_factor = 2
     vae_parallel_config = MochiVAEParallelConfig(
         time_parallel=ParallelFactor(factor=mesh_device.shape[0], mesh_axis=0),
-        h_parallel=ParallelFactor(factor=h_parallel_factor, mesh_axis=1),
-        w_parallel=ParallelFactor(factor=mesh_device.shape[1] // h_parallel_factor, mesh_axis=1),
+        w_parallel=ParallelFactor(factor=w_parallel_factor, mesh_axis=1),
+        h_parallel=ParallelFactor(factor=mesh_device.shape[1] // w_parallel_factor, mesh_axis=1),
     )
     assert vae_parallel_config.h_parallel.factor * vae_parallel_config.w_parallel.factor == mesh_device.shape[1]
     assert vae_parallel_config.h_parallel.mesh_axis == vae_parallel_config.w_parallel.mesh_axis

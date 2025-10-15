@@ -80,11 +80,11 @@ def test_tt_conv3d_1x1x1(mesh_device, N, C_in, C_out, T, H, W, reset_seeds):
     """Test forward pass of TtConv1x1 against Conv3d with 1x1x1 kernel."""
     reference_model, tt_model = create_random_conv3d_models(mesh_device, C_in, C_out)
 
-    h_parallel_factor = 4
+    w_parallel_factor = 2
     vae_parallel_config = MochiVAEParallelConfig(
         time_parallel=ParallelFactor(factor=mesh_device.shape[1], mesh_axis=1),
-        h_parallel=ParallelFactor(factor=h_parallel_factor, mesh_axis=0),
-        w_parallel=ParallelFactor(factor=mesh_device.shape[0] // h_parallel_factor, mesh_axis=0),
+        w_parallel=ParallelFactor(factor=w_parallel_factor, mesh_axis=0),
+        h_parallel=ParallelFactor(factor=mesh_device.shape[0] // w_parallel_factor, mesh_axis=0),
     )
     assert vae_parallel_config.h_parallel.factor * vae_parallel_config.w_parallel.factor == mesh_device.shape[0]
     assert vae_parallel_config.h_parallel.mesh_axis == vae_parallel_config.w_parallel.mesh_axis
@@ -215,11 +215,11 @@ def test_tt_resblock_forward(mesh_device, N, C, T, H, W, reset_seeds, num_links)
     block_args["nonlinearity"] = "silu"
 
     ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear, num_links=num_links)
-    h_parallel_factor = 4
+    w_parallel_factor = 2
     vae_parallel_config = MochiVAEParallelConfig(
         time_parallel=ParallelFactor(factor=mesh_device.shape[1], mesh_axis=1),
-        h_parallel=ParallelFactor(factor=h_parallel_factor, mesh_axis=0),
-        w_parallel=ParallelFactor(factor=mesh_device.shape[0] // h_parallel_factor, mesh_axis=0),
+        w_parallel=ParallelFactor(factor=w_parallel_factor, mesh_axis=0),
+        h_parallel=ParallelFactor(factor=mesh_device.shape[0] // w_parallel_factor, mesh_axis=0),
     )
     assert vae_parallel_config.h_parallel.factor * vae_parallel_config.w_parallel.factor == mesh_device.shape[0]
     assert vae_parallel_config.h_parallel.mesh_axis == vae_parallel_config.w_parallel.mesh_axis
@@ -439,11 +439,11 @@ def test_tt_upsample_forward(mesh_device, config, reset_seeds, num_links):
     N, C, T, H, W = input_shape
 
     ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear, num_links=num_links)
-    h_parallel_factor = 4
+    w_parallel_factor = 2
     vae_parallel_config = MochiVAEParallelConfig(
         time_parallel=ParallelFactor(factor=mesh_device.shape[1], mesh_axis=1),
-        h_parallel=ParallelFactor(factor=h_parallel_factor, mesh_axis=0),
-        w_parallel=ParallelFactor(factor=mesh_device.shape[0] // h_parallel_factor, mesh_axis=0),
+        w_parallel=ParallelFactor(factor=w_parallel_factor, mesh_axis=0),
+        h_parallel=ParallelFactor(factor=mesh_device.shape[0] // w_parallel_factor, mesh_axis=0),
     )
     assert vae_parallel_config.h_parallel.factor * vae_parallel_config.w_parallel.factor == mesh_device.shape[0]
     assert vae_parallel_config.h_parallel.mesh_axis == vae_parallel_config.w_parallel.mesh_axis
@@ -664,11 +664,11 @@ def test_tt_decoder_forward(mesh_device, config, reset_seeds, load_dit_weights, 
     # Create models
     logger.info("Creating VAE decoder models")
     ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear, num_links=num_links)
-    h_parallel_factor = 4
+    w_parallel_factor = 2
     vae_parallel_config = MochiVAEParallelConfig(
         time_parallel=ParallelFactor(factor=mesh_device.shape[1], mesh_axis=1),
-        h_parallel=ParallelFactor(factor=h_parallel_factor, mesh_axis=0),
-        w_parallel=ParallelFactor(factor=mesh_device.shape[0] // h_parallel_factor, mesh_axis=0),
+        w_parallel=ParallelFactor(factor=w_parallel_factor, mesh_axis=0),
+        h_parallel=ParallelFactor(factor=mesh_device.shape[0] // w_parallel_factor, mesh_axis=0),
     )
     assert vae_parallel_config.h_parallel.factor * vae_parallel_config.w_parallel.factor == mesh_device.shape[0]
     assert vae_parallel_config.h_parallel.mesh_axis == vae_parallel_config.w_parallel.mesh_axis
