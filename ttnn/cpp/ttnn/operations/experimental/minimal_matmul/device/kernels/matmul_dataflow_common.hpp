@@ -6,7 +6,6 @@
 #include <algorithm>
 #include "dataflow_api.h"
 #include <tt-metalium/constants.hpp>
-#include "debug/dprint.h"
 
 void fill_zeros_async(uint32_t write_addr, uint32_t tile_bytes) {
     volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(write_addr);
@@ -125,7 +124,7 @@ void write_block_sync(
     uint32_t d1_end) {
     ASSERT(d0_end > d0_start);
     ASSERT(d1_end > d1_start);
-#ifndef SKIP_OUT
+
     for (uint32_t i = d0_start; i < d0_end; i++) {
         if (i >= shape.logical_d0) {
             break;
@@ -141,7 +140,6 @@ void write_block_sync(
         }
     }
     noc_async_writes_flushed();
-#endif
 }
 
 /**
@@ -161,7 +159,6 @@ void write_block_sync_granular(
     uint32_t d1_end) {
     for (uint32_t i = d0_start; i < d0_end; i++) {
         cb_wait_front(cb_id_out, block_col_tiles);
-#ifndef SKIP_OUT
         if (i < shape.logical_d0) {
             uint32_t out_read_ptr = get_read_ptr(cb_id_out);
             for (uint32_t j = d1_start; j < d1_end; j++) {
@@ -173,7 +170,6 @@ void write_block_sync_granular(
                 out_read_ptr += tile_size_bytes;
             }
         }
-#endif
         cb_pop_front(cb_id_out, block_col_tiles);
     }
     noc_async_writes_flushed();

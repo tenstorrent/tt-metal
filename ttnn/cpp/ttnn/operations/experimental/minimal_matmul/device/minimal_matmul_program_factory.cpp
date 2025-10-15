@@ -10,66 +10,119 @@
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include <algorithm>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tuple>
 
 namespace ttnn::operations::experimental::minimal_matmul::detail {
+
+static inline std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t> determine_default_block_sizes(
+    uint32_t M, uint32_t K, uint32_t N, bool fp32_dest_acc_en) {
+    (void)K;  // K not used for determining defaults currently
+    uint32_t M_block_tiles = 8;
+    uint32_t K_block_tiles = 8;
+    uint32_t N_block_tiles = 8;
+
+    uint32_t subblock_h = 2;
+    uint32_t subblock_w = 2;
+    if (!fp32_dest_acc_en) {
+        if (N >= M) {
+            subblock_h = 2;
+            subblock_w = 4;
+        } else {
+            subblock_h = 4;
+            subblock_w = 2;
+        }
+    }
+
+    return {M_block_tiles, K_block_tiles, N_block_tiles, subblock_h, subblock_w};
+}
 
 tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
     const Tensor& input_tensor,
     const Tensor& weight_tensor,
     const std::optional<const Tensor>& bias_tensor,
     const std::optional<unary::UnaryWithParam>& fused_activation,
-    const MinimalMatmulConfig& config,
+    const std::optional<const MinimalMatmulConfig>& config,
     const Tensor& output_tensor,
     const DeviceComputeKernelConfig& compute_kernel_config) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
+    auto device = input_tensor.device();
 
-    auto grid_size = config.compute_with_storage_grid_size;
+    if (!config.has_value()) {
+        log_debug(tt::LogOp, "No config provided, using default block sizes and core grid");
+    }
+
+    auto grid_size =
+        config.has_value() ? config.value().compute_with_storage_grid_size : device->compute_with_storage_grid_size();
     auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
     auto num_cores = core_grid.size();
 
-    auto input_tensor_shape = input_tensor.logical_shape();
-    auto weight_tensor_shape = weight_tensor.logical_shape();
-    uint32_t M = input_tensor_shape[0];
-    uint32_t K = input_tensor_shape[1];
-    uint32_t N = weight_tensor_shape[1];
+    bool use_bias = bias_tensor.has_value();
 
-    auto data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
-    auto input_tile_size = tt::tile_size(data_format);
+    /**
+     * Determine dataformats, compute kernel config
+     */
+    auto in0_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
+    auto in0_tile_size = tt::tile_size(in0_data_format);
+    auto in1_data_format = tt::tt_metal::datatype_to_dataformat_converter(weight_tensor.dtype());
+    auto in1_tile_size = tt::tile_size(in1_data_format);
+    auto output_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
+    auto out_tile_size = tt::tile_size(output_data_format);
 
-    auto device = input_tensor.device();
+    auto in2_data_format =
+        use_bias ? tt::tt_metal::datatype_to_dataformat_converter(bias_tensor.value().dtype()) : in1_data_format;
+    auto in2_tile_size = tt::tile_size(in2_data_format);
+
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 
+    // Intermediate CB dataformat is the same datatype as DST register.
     auto intermediate_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     auto intermediate_tile_size = tt::tile_size(intermediate_data_format);
 
-    bool use_bias = bias_tensor.has_value();
-
-    std::map<std::string, std::string> compute_activation_defines;
-    if (fused_activation.has_value()) {
-        compute_activation_defines = ttnn::operations::unary::utils::get_defines(
-            fused_activation.value().op_type,
-            fused_activation.value().params,
-            "ACTIVATION",
-            "fused_act_dst_id",
-            output_tensor.dtype());
-    }
     /**
-     * A: M_tiles x K_tiles
-     * A subdivided into M_block x K_block tiles
+     * in0: M_tiles x K_tiles
+     * in0 is divided into blocks, which are M_block_tiles x K_block_tiles
+     *
+     * in1: K_tiles x N_tiles
+     * in1 is divided into blocks, which are K_block_tiles x N_block_tiles
+     *
+     * output: M_tiles x N_tiles
+     * output is divided into blocks, which are M_block_tiles x N_block_tiles
+     *
+     * Blocks are further subdivided into subblocks. The output block is subdivided into subblock_h x subblock_w
+     * subblocks. The in0 and in1 blocks are accordingly subdivided on M and N.
      */
+
+    auto in0_tensor_shape = input_tensor.padded_shape();
+    auto in1_tensor_shape = weight_tensor.padded_shape();
+    uint32_t M = in0_tensor_shape[0];
+    uint32_t K = in0_tensor_shape[1];
+    uint32_t N = in1_tensor_shape[1];
 
     uint32_t M_tiles = M / tt::constants::TILE_HEIGHT;
     uint32_t K_tiles = K / tt::constants::TILE_WIDTH;
     uint32_t N_tiles = N / tt::constants::TILE_WIDTH;
 
+    auto [default_M_block_tiles, default_K_block_tiles, default_N_block_tiles, default_subblock_h, default_subblock_w] =
+        determine_default_block_sizes(M, K, N, fp32_dest_acc_en);
+
     /**
-     * We see that for non-square outputs, N > M is significantly faster than M > N.
-     * This is because the in0 DM kernel is responsible for reading in0 and writing output.
+     * TODO: Pick optimal subblock sizes. Currently a simple default is used.
+     */
+    uint32_t subblock_h = config.has_value() ? config.value().subblock_h : default_subblock_h;
+    uint32_t subblock_w = config.has_value() ? config.value().subblock_w : default_subblock_w;
+
+    uint32_t M_block_tiles = config.has_value() ? config.value().M_block_size : default_M_block_tiles;
+    uint32_t K_block_tiles = config.has_value() ? config.value().K_block_size : default_K_block_tiles;
+    uint32_t N_block_tiles = config.has_value() ? config.value().N_block_size : default_N_block_tiles;
+
+    /**
+     * We originally saw that for non-square outputs, N > M was significantly faster than M > N.
+     * This is because originally, the in0 DM kernel was responsible for reading in0 and writing output.
      * When M > N, the in0 DM kernel has more data to read on top of its responsibility to write output.
      *
      * An optimization is to have the DM kernel with less data to read handle writes, and transpose the core_grid
-     * to keep NOC usage consistent.
+     * to keep NOC usage consistent. With this optimization, N > M performance is symmetric with M > N.
      *
      * The smaller input read and mcast is always across a row of cores (x, y): (0, core_y) -> (grid_size.x-1, core_y)
      * The larger input read and mcast is always across a column of cores (x, y): (core_x, 0) -> (core_x. grid_size.y-1)
@@ -98,18 +151,9 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
     uint32_t in1_parallel_axis_cores = transpose_core_grid ? grid_size.y : grid_size.x;
 
     /**
-     * TODO: Pick optimal subblock sizes, hardcoded to 2x4 or 1x4 or 2x2
-     */
-    uint32_t subblock_h = config.subblock_h;
-    uint32_t subblock_w = config.subblock_w;
-
-    uint32_t M_block_tiles = config.M_block_size;
-    uint32_t K_block_tiles = config.K_block_size;
-    uint32_t N_block_tiles = config.N_block_size;
-
-    /**
-     * We pad the number of tiles to the nearest multiple of the block size
-     * This is to ensure that the number of tiles is a multiple of the block size
+     * In order to enable arbitrary blockings, we pad the input dims to the nearest multiple of block size.
+     *
+     * In addition, we "pad" up the number of blocks in M, K, N in order to divide by the number of cores.
      */
     uint32_t padded_M_tiles = tt::round_up(M_tiles, M_block_tiles);
     uint32_t padded_N_tiles = tt::round_up(N_tiles, N_block_tiles);
@@ -130,6 +174,7 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
     const uint32_t double_buffer_factor = 2;
     uint32_t in0_cb_num_tiles = in0_block_num_tiles * double_buffer_factor;
     uint32_t in1_cb_num_tiles = in1_block_num_tiles * double_buffer_factor;
+    // TODO: consider not double buffering the output
     uint32_t out_cb_num_tiles = out_block_num_tiles * double_buffer_factor;
     uint32_t interm_cb_num_tiles = out_block_num_tiles;  // not double buffered
     uint32_t in2_cb_num_tiles = in2_block_num_tiles;     // not double buffered
@@ -154,13 +199,13 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
     auto in1_valid_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, VALID);
 
     uint32_t in0_cb_id = tt::CBIndex::c_0;
-    tt::tt_metal::create_cb(in0_cb_id, program, core_grid, input_tile_size, in0_cb_num_tiles, data_format);
+    tt::tt_metal::create_cb(in0_cb_id, program, core_grid, in0_tile_size, in0_cb_num_tiles, in0_data_format);
 
     uint32_t in1_cb_id = tt::CBIndex::c_1;
-    tt::tt_metal::create_cb(in1_cb_id, program, core_grid, input_tile_size, in1_cb_num_tiles, data_format);
+    tt::tt_metal::create_cb(in1_cb_id, program, core_grid, in1_tile_size, in1_cb_num_tiles, in1_data_format);
 
     uint32_t out_cb_id = tt::CBIndex::c_2;
-    tt::tt_metal::create_cb(out_cb_id, program, core_grid, input_tile_size, out_cb_num_tiles, data_format);
+    tt::tt_metal::create_cb(out_cb_id, program, core_grid, out_tile_size, out_cb_num_tiles, output_data_format);
 
     uint32_t intermediate_cb_id = tt::CBIndex::c_3;
     tt::tt_metal::create_cb(
@@ -168,76 +213,52 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
 
     if (use_bias) {
         uint32_t in2_cb_id = tt::CBIndex::c_4;
-        tt::tt_metal::create_cb(in2_cb_id, program, core_grid, input_tile_size, in2_cb_num_tiles, data_format);
+        tt::tt_metal::create_cb(in2_cb_id, program, core_grid, in2_tile_size, in2_cb_num_tiles, in2_data_format);
     }
 
-    log_info(tt::LogOp, "in0_cb_id: {}", in0_cb_id);
-    log_info(tt::LogOp, "in1_cb_id: {}", in1_cb_id);
-    log_info(tt::LogOp, "out_cb_id: {}", out_cb_id);
-    log_info(tt::LogOp, "intermediate_cb_id: {}", intermediate_cb_id);
-    log_info(tt::LogOp, "M_tiles: {}", M_tiles);
-    log_info(tt::LogOp, "padded_M_tiles: {}", padded_M_tiles);
-    log_info(tt::LogOp, "K_tiles: {}", K_tiles);
-    log_info(tt::LogOp, "padded_K_tiles: {}", padded_K_tiles);
-    log_info(tt::LogOp, "N_tiles: {}", N_tiles);
-    log_info(tt::LogOp, "padded_N_tiles: {}", padded_N_tiles);
-    log_info(tt::LogOp, "M_block_tiles: {}", M_block_tiles);
-    log_info(tt::LogOp, "K_block_tiles: {}", K_block_tiles);
-    log_info(tt::LogOp, "N_block_tiles: {}", N_block_tiles);
-    log_info(tt::LogOp, "M_blocks: {}", M_blocks);
-    log_info(tt::LogOp, "N_blocks: {}", N_blocks);
-    log_info(tt::LogOp, "M_blocks_per_core: {}", M_blocks_per_core);
-    log_info(tt::LogOp, "N_blocks_per_core: {}", N_blocks_per_core);
-    log_info(tt::LogOp, "subblock_h: {}", subblock_h);
-    log_info(tt::LogOp, "subblock_w: {}", subblock_w);
-    log_info(tt::LogOp, "input_tile_size: {}", input_tile_size);
-    log_info(tt::LogOp, "intermediate_tile_size: {}", intermediate_tile_size);
-    log_info(tt::LogOp, "intermediate_data_format: {}", intermediate_data_format);
-    log_info(tt::LogOp, "in0_cb_num_tiles: {}", in0_cb_num_tiles);
-    log_info(tt::LogOp, "in1_cb_num_tiles: {}", in1_cb_num_tiles);
-    log_info(tt::LogOp, "out_cb_num_tiles: {}", out_cb_num_tiles);
-    log_info(tt::LogOp, "interm_cb_num_tiles: {}", interm_cb_num_tiles);
+    log_debug(tt::LogOp, "in0_cb_id: {}", in0_cb_id);
+    log_debug(tt::LogOp, "in1_cb_id: {}", in1_cb_id);
+    log_debug(tt::LogOp, "out_cb_id: {}", out_cb_id);
+    log_debug(tt::LogOp, "intermediate_cb_id: {}", intermediate_cb_id);
+    log_debug(tt::LogOp, "M_tiles: {}", M_tiles);
+    log_debug(tt::LogOp, "padded_M_tiles: {}", padded_M_tiles);
+    log_debug(tt::LogOp, "K_tiles: {}", K_tiles);
+    log_debug(tt::LogOp, "padded_K_tiles: {}", padded_K_tiles);
+    log_debug(tt::LogOp, "N_tiles: {}", N_tiles);
+    log_debug(tt::LogOp, "padded_N_tiles: {}", padded_N_tiles);
+    log_debug(tt::LogOp, "M_block_tiles: {}", M_block_tiles);
+    log_debug(tt::LogOp, "K_block_tiles: {}", K_block_tiles);
+    log_debug(tt::LogOp, "N_block_tiles: {}", N_block_tiles);
+    log_debug(tt::LogOp, "M_blocks: {}", M_blocks);
+    log_debug(tt::LogOp, "N_blocks: {}", N_blocks);
+    log_debug(tt::LogOp, "M_blocks_per_core: {}", M_blocks_per_core);
+    log_debug(tt::LogOp, "N_blocks_per_core: {}", N_blocks_per_core);
+    log_debug(tt::LogOp, "subblock_h: {}", subblock_h);
+    log_debug(tt::LogOp, "subblock_w: {}", subblock_w);
+    log_debug(tt::LogOp, "in0_tile_size: {}", in0_tile_size);
+    log_debug(tt::LogOp, "in1_tile_size: {}", in1_tile_size);
+    log_debug(tt::LogOp, "out_tile_size: {}", out_tile_size);
+    log_debug(tt::LogOp, "in2_tile_size: {}", in2_tile_size);
+    log_debug(tt::LogOp, "intermediate_tile_size: {}", intermediate_tile_size);
+    log_debug(tt::LogOp, "intermediate_data_format: {}", intermediate_data_format);
+    log_debug(tt::LogOp, "in0_cb_num_tiles: {}", in0_cb_num_tiles);
+    log_debug(tt::LogOp, "in1_cb_num_tiles: {}", in1_cb_num_tiles);
+    log_debug(tt::LogOp, "out_cb_num_tiles: {}", out_cb_num_tiles);
+    log_debug(tt::LogOp, "interm_cb_num_tiles: {}", interm_cb_num_tiles);
 
-    // Get environment variables to optionally skip data movement kernels
-    bool skip_in0 = false;
-    bool skip_in1 = false;
-    bool skip_out = false;
-    if (const char* env_p = std::getenv("TT_MM_SKIP_IN0")) {
-        skip_in0 = std::string(env_p) == "1";
-    }
-    if (const char* env_p = std::getenv("TT_MM_SKIP_IN1")) {
-        skip_in1 = std::string(env_p) == "1";
-    }
-    if (const char* env_p = std::getenv("TT_MM_SKIP_OUT")) {
-        skip_out = std::string(env_p) == "1";
-    }
     std::map<std::string, std::string> defines;
-    if (skip_in0) {
-        defines["SKIP_IN0"] = "1";
-        log_warning(tt::LogOp, "Skipping in0 data movement! PCC will be wrong!");
-    }
-    if (skip_in1) {
-        defines["SKIP_IN1"] = "1";
-        log_warning(tt::LogOp, "Skipping in1 data movement! PCC will be wrong!");
-    }
-    if (skip_out) {
-        defines["SKIP_OUT"] = "1";
-        log_warning(tt::LogOp, "Skipping out data movement! PCC will be wrong!");
-    }
     if (use_bias) {
         defines["FUSE_BIAS"] = "1";
     }
 
-    uint32_t input_addr = input_tensor.buffer()->address();
-    uint32_t weight_addr = weight_tensor.buffer()->address();
-    uint32_t bias_addr = use_bias ? bias_tensor.value().buffer()->address() : 0;
+    uint32_t in0_addr = input_tensor.buffer()->address();
+    uint32_t in1_addr = weight_tensor.buffer()->address();
+    uint32_t in2_addr = use_bias ? bias_tensor.value().buffer()->address() : 0;
     uint32_t out_addr = output_tensor.buffer()->address();
 
     /**
      * Create kernels
      */
-    // auto in0_mcast_num_dests = grid_size.x - 1;
-    // auto in1_mcast_num_dests = grid_size.y - 1;
 
     bool in0_is_output_writer = !transpose_core_grid;
     bool in1_is_output_writer = transpose_core_grid;
@@ -252,7 +273,9 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
         M_block_tiles,
         K_block_tiles,
         N_block_tiles,
-        input_tile_size,
+        in0_tile_size,
+        out_tile_size,
+        in2_tile_size,
         in0_sender_semaphore_id,
         in0_receiver_semaphore_id,
         in0_valid_semaphore_id,
@@ -281,7 +304,9 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
         M_block_tiles,
         K_block_tiles,
         N_block_tiles,
-        input_tile_size,
+        in0_tile_size,
+        out_tile_size,
+        in2_tile_size,
         in0_sender_semaphore_id,
         in0_receiver_semaphore_id,
         in0_valid_semaphore_id,
@@ -310,7 +335,9 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
         M_block_tiles,
         K_block_tiles,
         N_block_tiles,
-        input_tile_size,
+        in1_tile_size,
+        out_tile_size,
+        in2_tile_size,
         in1_sender_semaphore_id,
         in1_receiver_semaphore_id,
         in1_valid_semaphore_id,
@@ -339,7 +366,9 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
         M_block_tiles,
         K_block_tiles,
         N_block_tiles,
-        input_tile_size,
+        in1_tile_size,
+        out_tile_size,
+        in2_tile_size,
         in1_sender_semaphore_id,
         in1_receiver_semaphore_id,
         in1_valid_semaphore_id,
@@ -362,6 +391,15 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
         K_blocks, M_block_tiles, K_block_tiles, N_block_tiles, subblock_h, subblock_w};
 
     auto compute_defines = defines;
+    std::map<std::string, std::string> compute_activation_defines;
+    if (fused_activation.has_value()) {
+        compute_activation_defines = ttnn::operations::unary::utils::get_defines(
+            fused_activation.value().op_type,
+            fused_activation.value().params,
+            "ACTIVATION",
+            "fused_act_dst_id",
+            output_tensor.dtype());
+    }
     compute_defines.merge(compute_activation_defines);
     auto compute_kernels_id = CreateKernel(
         program,
@@ -453,10 +491,6 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
         uint32_t N_start_block = N_blocks_per_core * in1_idx;
         uint32_t N_end_block = N_blocks_per_core * (in1_idx + 1) - 1;
 
-        // log_info(tt::LogOp, "core: {}, in0_idx: {}, in1_idx: {}", core, in0_idx, in1_idx);
-        // log_info(tt::LogOp, "M_start_block: {}, M_end_block: {}, N_start_block: {}, N_end_block: {}", M_start_block,
-        // M_end_block, N_start_block, N_end_block);
-
         // Defer write to K block with same coordinate as core
         // The writer receiver cores always have core.x > 0
         uint32_t defer_write_k_block = core.y * k_blocks_per_core;
@@ -465,21 +499,12 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
         bool is_in0_sink = core == in0_core_order.at(in1_parallel_axis_cores - 1);
         bool is_in1_sink = core == in1_core_order.at(in0_parallel_axis_cores - 1);
 
-        // log_info(
-        //     tt::LogOp,
-        //     "core: {}, in0_idx: {}, in1_idx: {}, is_in0_sink: {}, is_in1_sink: {}",
-        //     core,
-        //     in0_idx,
-        //     in1_idx,
-        //     is_in0_sink,
-        //     is_in1_sink);
-
         if (in1_idx == 0) {
             // in0 sender
             std::vector<uint32_t> in0_sender_args = {
-                input_addr,
+                in0_addr,
                 out_addr,
-                bias_addr,
+                in2_addr,
                 is_in0_sink,
                 (std::uint32_t)in0_next_core_physical.x,  // in0_dest_noc_x
                 (std::uint32_t)in0_next_core_physical.y,  // in0_dest_noc_y
@@ -495,9 +520,9 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
         } else {
             // in0 receiver
             std::vector<uint32_t> in0_receiver_args = {
-                input_addr,
+                in0_addr,
                 out_addr,
-                bias_addr,
+                in2_addr,
                 is_in0_sink,
                 (std::uint32_t)in0_next_core_physical.x,  // in0_dest_noc_x
                 (std::uint32_t)in0_next_core_physical.y,  // in0_dest_noc_y
@@ -515,9 +540,9 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
         if (in0_idx == 0) {
             // in1 sender
             std::vector<uint32_t> in1_sender_args = {
-                weight_addr,
+                in1_addr,
                 out_addr,
-                bias_addr,
+                in2_addr,
                 is_in1_sink,
                 (std::uint32_t)in1_next_core_physical.x,  // in1_dest_noc_x
                 (std::uint32_t)in1_next_core_physical.y,  // in1_dest_noc_y
@@ -533,9 +558,9 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
         } else {
             // in1 receiver
             std::vector<uint32_t> in1_receiver_args = {
-                weight_addr,
+                in1_addr,
                 out_addr,
-                bias_addr,
+                in2_addr,
                 is_in1_sink,
                 (std::uint32_t)in1_next_core_physical.x,  // in1_dest_noc_x
                 (std::uint32_t)in1_next_core_physical.y,  // in1_dest_noc_y
@@ -572,9 +597,11 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<Tensor>& output_tensors) {
-            auto input_addr = input_tensors.at(0).buffer()->address();
-            auto weight_addr = input_tensors.at(1).buffer()->address();
+            auto in0_addr = input_tensors.at(0).buffer()->address();
+            auto in1_addr = input_tensors.at(1).buffer()->address();
             auto output_addr = output_tensors.at(0).buffer()->address();
+            auto in2_addr =
+                optional_input_tensors.at(0).has_value() ? optional_input_tensors.at(0).value().buffer()->address() : 0;
 
             auto& in0_sender_runtime_args = GetRuntimeArgs(program, in0_sender_kernels_id);
             auto& in0_receiver_runtime_args = GetRuntimeArgs(program, in0_receiver_kernels_id);
@@ -587,19 +614,23 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
                 uint32_t in1_idx = transpose_core_grid ? core.y : core.x;
                 if (in1_idx == 0) {
                     auto& in0_sender_args = in0_sender_runtime_args[core.x][core.y];
-                    in0_sender_args[0] = input_addr;
+                    in0_sender_args[0] = in0_addr;
                     in0_sender_args[1] = output_addr;
+                    in0_sender_args[2] = in2_addr;
                 } else {
                     auto& in0_receiver_args = in0_receiver_runtime_args[core.x][core.y];
-                    in0_receiver_args[0] = output_addr;
+                    in0_receiver_args[1] = output_addr;
+                    in0_receiver_args[2] = in2_addr;
                 }
                 if (in0_idx == 0) {
                     auto& in1_sender_args = in1_sender_runtime_args[core.x][core.y];
-                    in1_sender_args[0] = weight_addr;
+                    in1_sender_args[0] = in1_addr;
                     in1_sender_args[1] = output_addr;
+                    in1_sender_args[2] = in2_addr;
                 } else {
                     auto& in1_receiver_args = in1_receiver_runtime_args[core.x][core.y];
-                    in1_receiver_args[0] = output_addr;
+                    in1_receiver_args[1] = output_addr;
+                    in1_receiver_args[2] = in2_addr;
                 }
             }
         };
