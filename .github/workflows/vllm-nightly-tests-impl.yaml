@@ -47,6 +47,7 @@ jobs:
             tt-llama-text-ver: tt_transformers,
             override-tt-config: "{\"fabric_config\": \"FABRIC_1D\", \"trace_region_size\": 28467200}",
             multimodal: true,
+            additional-args: "--max_model_len 2048",
             co-owner-1-id: U07RY6B5FLJ, # Gongyu Wang
           },
           # {
@@ -208,6 +209,7 @@ jobs:
 
           python3 vllm/examples/server_example_tt.py \
             --model ${{ matrix.test-group.model }} \
+            ${{ matrix.test-group.additional-args }} \
             "${OVERRIDE_TT_CONFIG[@]}" \
             > "${FILE_SERVER_LOG}" 2>&1 &
 
