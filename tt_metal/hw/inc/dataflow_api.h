@@ -2457,7 +2457,7 @@ public:
 
     /** @brief Initiates an asynchronous write.
      *
-     * @see async_write.
+     * @see async_write_barrier.
      *
      * @param src Source object (e.g., local L1 memory)
      * @param dst Destination object (e.g., TensorAccessor)
