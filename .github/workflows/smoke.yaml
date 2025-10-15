@@ -24,7 +24,7 @@ jobs:
   smoke:
     runs-on: >-
       ${{
-        (format('tt-ubuntu-2204-{0}-stable', inputs.runner))
+        (format('tt-ubuntu-2204-{0}-metal', inputs.runner))
       }}
     container:
       image: ${{ (inputs.docker-image && format('harbor.ci.tenstorrent.net/{0}', inputs.docker-image)) || 'docker-image-unresolved!' }}
