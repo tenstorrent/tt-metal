@@ -47,7 +47,8 @@ std::pair<tt::tt_fabric::FabricEriscDatamoverType, tt::tt_fabric::FabricEriscDat
         return {fabric_edm_type, fabric_edm_axis};
     }
 
-    auto physical_mesh_shape = control_plane.get_physical_mesh_shape(mesh_id0);
+    // Need global mesh shape to determine dateline placement for multi-host setups
+    auto physical_mesh_shape = control_plane.get_physical_mesh_shape(mesh_id0, tt::tt_fabric::MeshScope::GLOBAL);
     TT_FATAL(physical_mesh_shape.dims() == 2, "Dateline routing only supported for 2D mesh");
 
     auto mesh_num_rows = physical_mesh_shape[0];
@@ -494,10 +495,6 @@ std::unique_ptr<tt::tt_metal::Program> create_and_compile_tt_fabric_program(tt::
             ct_args.push_back(router_channels_mask);
 
             auto proc = static_cast<tt::tt_metal::DataMovementProcessor>(risc_id);
-            if (tt::tt_metal::MetalContext::instance().rtoptions().get_enable_2_erisc_mode()) {
-                // Force fabric to run on erisc1
-                proc = tt::tt_metal::DataMovementProcessor::RISCV_1;
-            }
 
             auto eth_logical_core = soc_desc.get_eth_core_for_channel(eth_chan, CoordSystem::LOGICAL);
             auto kernel = tt::tt_metal::CreateKernel(
