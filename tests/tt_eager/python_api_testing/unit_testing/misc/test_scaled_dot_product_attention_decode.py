@@ -1124,7 +1124,7 @@ def run_test_sdpa_decode_paged_attention_single_iter(
         [1, 8, 1, 128 * 1024, 128, (8, 4), True, None],  # llama 3.1 8b N300
         [1, 32, 8, 32 * 1024, 128, (8, 1), True, None],  # llama3.1 8b (performance-batch-1 settings)
         [1, 4, 2, 1024 * 128, 128, (8, 8), True, 1024],  # gemma-3-27b on T3K
-        [1, 8, 1, 1024 * 128, 128, (8, 8), True, 128],  # GPT-OSS
+        [1, 8, 1, 1024 * 128, 64, (8, 8), True, 128],  # GPT-OSS
         # [32, 32, 8, 1024, 128, (8, 8), True, None],  # llama 3.1 8b (performance-batch-32 settings) -- Issue 21534: Breaking blackhole post commit tests
         # [1, 8, 1, 32768, 128, (8, 1), True, None],  # Llama2-70B
         # [16, 8, 1, 32768, 128, (8, 6), False, False, None],  # Llama2-70B

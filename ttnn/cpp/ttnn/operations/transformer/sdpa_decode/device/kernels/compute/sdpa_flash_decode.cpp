@@ -62,7 +62,7 @@ void MAIN {
     constexpr uint32_t q_heads_parallel_factor = get_compile_time_arg_val(26);
     constexpr bool use_half_tile = get_compile_time_arg_val(27);
     constexpr uint32_t scale_fp32 = get_compile_time_arg_val(28);
-    constexpr uint32_t sliding_window = get_compile_time_arg_val(29);
+    constexpr uint32_t sliding_window_size = get_compile_time_arg_val(29);
 
     constexpr uint32_t q_chunk_tiles = Sq_chunk_t * DHt;
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
@@ -152,7 +152,7 @@ void MAIN {
         core_num_in_reduce,
         num_cores_per_head,
         k_chunk_size_dynamic,
-        sliding_window > 0 ? std::optional<uint32_t>(sliding_window) : std::nullopt);
+        sliding_window_size > 0 ? std::optional<uint32_t>(sliding_window_size) : std::nullopt);
     if (k_chunk_start == k_chunk_end) {
         return;  // early exit because no computes needs to be done
     }

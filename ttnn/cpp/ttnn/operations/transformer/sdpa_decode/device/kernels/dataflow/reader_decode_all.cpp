@@ -45,7 +45,7 @@ void kernel_main() {
     constexpr bool is_cur_pos_tensor_sharded = get_compile_time_arg_val(27);
     constexpr bool is_page_table_sharded = get_compile_time_arg_val(28);
     constexpr uint32_t q_page_size_bytes = get_compile_time_arg_val(29);
-    constexpr uint32_t sliding_window = get_compile_time_arg_val(30);
+    constexpr uint32_t sliding_window_size = get_compile_time_arg_val(30);
 
     constexpr auto k_args = TensorAccessorArgs<31>();
     constexpr auto q_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
@@ -119,7 +119,7 @@ void kernel_main() {
         core_num_in_reduce,
         num_cores_per_head,
         k_chunk_size_dynamic,
-        sliding_window > 0 ? std::optional<uint32_t>(sliding_window) : std::nullopt);
+        sliding_window_size > 0 ? std::optional<uint32_t>(sliding_window_size) : std::nullopt);
 
     if (k_chunk_start == k_chunk_end) {
         return;  // early exit because no computes needs to be done

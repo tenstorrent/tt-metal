@@ -17,7 +17,7 @@ struct ScaledDotProductAttentionDecode {
     const bool is_causal;
     std::vector<uint32_t> cur_pos;
     const std::optional<float> scale;
-    const std::optional<uint32_t> sliding_window;
+    const std::optional<uint32_t> sliding_window_size;
     const tt::tt_metal::MemoryConfig output_mem_config;
     const std::optional<SDPAProgramConfig> program_config;
     const DeviceComputeKernelConfig compute_kernel_config;

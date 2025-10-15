@@ -36,7 +36,7 @@ void kernel_main() {
     constexpr bool is_causal = get_compile_time_arg_val(22) == 1;
     constexpr uint32_t max_dynamic_chunk_size = get_compile_time_arg_val(23);
     constexpr uint32_t q_heads_parallel_factor = get_compile_time_arg_val(24);
-    constexpr uint32_t sliding_window = get_compile_time_arg_val(25);
+    constexpr uint32_t sliding_window_size = get_compile_time_arg_val(25);
 
     constexpr auto out_args = TensorAccessorArgs<26>();
 
@@ -88,7 +88,7 @@ void kernel_main() {
         core_num_in_reduce,
         num_cores_per_head,
         k_chunk_size_dynamic,
-        sliding_window > 0 ? std::optional<uint32_t>(sliding_window) : std::nullopt);
+        sliding_window_size > 0 ? std::optional<uint32_t>(sliding_window_size) : std::nullopt);
 
     if (k_chunk_start == k_chunk_end) {
         return;  // early exit because no computes needs to be done

@@ -22,7 +22,7 @@ struct ExecuteScaledDotProductAttentionDecode {
         const std::optional<const Tensor>& cur_pos_tensor = std::nullopt,
         const std::optional<const Tensor>& attention_sink = std::nullopt,
         std::optional<float> scale = std::nullopt,
-        std::optional<uint32_t> sliding_window = std::nullopt,
+        std::optional<uint32_t> sliding_window_size = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<SDPAProgramConfig> program_config = std::nullopt,
         std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
@@ -39,7 +39,7 @@ struct ExecutePagedScaledDotProductAttentionDecode {
         const std::optional<const Tensor>& cur_pos_tensor = std::nullopt,
         const std::optional<const Tensor>& attention_sink = std::nullopt,
         std::optional<float> scale = std::nullopt,
-        std::optional<uint32_t> sliding_window = std::nullopt,
+        std::optional<uint32_t> sliding_window_size = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<SDPAProgramConfig> program_config = std::nullopt,
         std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
@@ -56,7 +56,7 @@ struct ExecuteFlashMultiLatentAttentionDecode {
         const std::optional<const Tensor>& cur_pos_tensor = std::nullopt,
         const std::optional<const Tensor>& attention_sink = std::nullopt,
         std::optional<float> scale = std::nullopt,
-        std::optional<uint32_t> sliding_window = std::nullopt,
+        std::optional<uint32_t> sliding_window_size = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<SDPAProgramConfig> program_config = std::nullopt,
         std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
@@ -73,7 +73,7 @@ struct ExecutePagedFlashMultiLatentAttentionDecode {
         const std::optional<const Tensor>& cur_pos_tensor = std::nullopt,
         const std::optional<const Tensor>& attention_sink = std::nullopt,
         std::optional<float> scale = std::nullopt,
-        std::optional<uint32_t> sliding_window = std::nullopt,
+        std::optional<uint32_t> sliding_window_size = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<SDPAProgramConfig> program_config = std::nullopt,
         std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);

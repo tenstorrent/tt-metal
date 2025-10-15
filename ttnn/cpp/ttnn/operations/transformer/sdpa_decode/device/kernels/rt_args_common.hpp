@@ -36,15 +36,16 @@ inline std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t> ge
     int core_num,
     int num_cores_per_batch,
     uint32_t k_chunk_size,
-    std::optional<uint32_t> sliding_window = std::nullopt) {
+    std::optional<uint32_t> sliding_window_size = std::nullopt) {
     uint32_t window_start = 0;
     uint32_t window_start_unaligned = 0;  // Keep track of the actual window start for masking
     uint32_t valid_seq_len;
 
-    if (sliding_window.has_value() && sliding_window.value() > 0) {
+    if (sliding_window_size.has_value() && sliding_window_size.value() > 0) {
         // Calculate actual window bounds
         uint32_t window_end = cur_pos + 1;  // exclusive end
-        window_start_unaligned = (window_end > sliding_window.value()) ? (window_end - sliding_window.value()) : 0;
+        window_start_unaligned =
+            (window_end > sliding_window_size.value()) ? (window_end - sliding_window_size.value()) : 0;
 
         // Round window_start down to chunk boundary to ensure we capture the full window
         uint32_t window_start_aligned = (window_start_unaligned / k_chunk_size) * k_chunk_size;
