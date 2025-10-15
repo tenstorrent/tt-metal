@@ -351,9 +351,22 @@ std::shared_ptr<Buffer> Buffer::create(
 }
 
 std::shared_ptr<Buffer> Buffer::view(const BufferRegion& region) {
-    TT_FATAL(region.offset % page_size() == 0, "Region offset must be a multiple of page size");
-    TT_FATAL(region.size % page_size() == 0, "Region size must be a multiple of page size");
-    TT_FATAL(region.offset + region.size <= size(), "Region must be within buffer");
+    TT_FATAL(
+        region.offset % page_size() == 0,
+        "Region offset must be a multiple of page size. Region offset is {}, page size is {}",
+        region.offset,
+        page_size());
+    TT_FATAL(
+        region.size % page_size() == 0,
+        "Region size must be a multiple of page size. Region size is {}, page size is {}",
+        region.size,
+        page_size());
+    TT_FATAL(
+        region.offset + region.size <= size(),
+        "Region must be within buffer, but region offset {} + region size {} is greater than size {}",
+        region.offset,
+        region.size,
+        size());
 
     if (region.offset == 0 && region.size == size()) {
         return shared_from_this();

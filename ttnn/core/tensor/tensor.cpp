@@ -813,6 +813,9 @@ struct TensorPreparedConversion {
     DataType host_convert_data_type = DataType::INVALID;
 };
 
+#define py_log(...) \
+    std::cout << fmt::format("{}:{} {} {}", __FILE__, __LINE__, __func__, fmt::format(__VA_ARGS__)) << std::endl;
+
 template <typename T>
 Tensor create_typed_tt_tensor_from_host_data(
     const HostBuffer& host_data,
@@ -839,23 +842,43 @@ Tensor create_typed_tt_tensor_from_host_data(
     if (mesh_mapper == nullptr) {
         // Create a single tt tensor from the pydata.
         const TensorSpec tensor_spec(tensor_shape, tensor_layout);
+        Tensor output;
         if (const bool pydata_borrowable = tensor_spec.layout() == Layout::ROW_MAJOR &&
                                            tensor_spec.physical_shape() == tensor_spec.logical_2d_shape() &&
                                            tensor_spec.data_type() == convert_to_data_type<T>();
             pydata_borrowable) {
-            auto output = Tensor(
+            output = Tensor(
                 host_data,
                 tensor_shape,
                 tensor_layout.get_data_type(),
                 tensor_layout.get_layout(),
                 tensor_layout.get_tile());
-            if (device != nullptr) {
-                output = output.to_device(device, tensor_spec.memory_config(), cq_id);
-            }
-            return output;
         } else {
-            return Tensor::from_span(tt::stl::make_const_span(pydata_span), tensor_spec, device, cq_id, pad_value);
+            const bool is_custom_bfloat =
+                std::is_same_v<T, float> && (tensor_layout.get_data_type() == DataType::BFLOAT4_B ||
+                                             tensor_layout.get_data_type() == DataType::BFLOAT8_B);
+
+            if (is_custom_bfloat) {
+                // Using already implemented logic for the bfloat4/8
+                output =
+                    Tensor::from_span(tt::stl::make_const_span(pydata_span), tensor_spec, device, cq_id, pad_value);
+            } else {
+                // Otherwise construct the tensor from the host buffer directly, or through encoding. Calling
+                // `make_span` for other cases is inefficient here, as it will create a new host buffer from the span.
+                if (tensor_impl::logical_matches_physical(tensor_spec)) {
+                    output = Tensor(host_data, tensor_spec);
+                } else {
+                    output = Tensor(
+                        HostBuffer(tensor_impl::encode_tensor_data(
+                            tt::stl::make_const_span(pydata_span), tensor_spec, pad_value)),
+                        tensor_spec);
+                }
+            }
         }
+        if (device != nullptr) {
+            output = output.to_device(device, tensor_spec.memory_config(), cq_id);
+        }
+        return output;
     } else {
         // Shard pydata across mesh and apply `tensor_layout` at each shard.
         // Shapes of multi device shards will be derived automatically.
