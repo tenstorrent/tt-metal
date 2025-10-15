@@ -334,7 +334,6 @@ def get_reference_stable_diffusion_pipeline(is_ci_env, is_ci_v2_env, model_locat
     )
     pipeline = StableDiffusionPipeline.from_pretrained(
         STABLE_DIFFUSION_V1_4_MODEL_LOCATION if not is_ci_v2_env else model_location,
-        local_files_only=is_ci_env or is_ci_v2_env,
         use_safetensors=True,
     )
     return pipeline.to("cpu")
