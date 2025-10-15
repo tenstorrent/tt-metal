@@ -24,25 +24,27 @@ done
 
 # Check if all required arguments were provided
 if [ -z "$OWNER" ] || [ -z "$REPO" ] || [ -z "$COMMIT_HASH" ] || [ -z "$GITHUB_TOKEN" ]; then
-    echo "Error: Missing required arguments."
+    echo "Error: Missing required arguments." >&2
     usage
 fi
 
 # --- API Call and Parsing ---
-API_URL="https://api.github.com/repos/$OWNER/$REPO/actions/runs?head_sha=$COMMIT_HASH&per_page=1"
+# Note: Removed 'per_page=1' to fetch all runs. The default 'per_page' is 30,
+# you may need to implement pagination for repos with many runs per commit.
+API_URL="https://api.github.com/repos/$OWNER/$REPO/actions/runs?head_sha=$COMMIT_HASH"
 
-RUN_ID=$(curl -s -L \
+# Curl the API and use jq to extract the 'id' field from every object in the
+# 'workflow_runs' array. The -r flag ensures raw (unquoted) output.
+RUN_IDS=$(curl -s -L \
     -H "Accept: application/vnd.github.v3+json" \
     -H "Authorization: token $GITHUB_TOKEN" \
     "$API_URL" | \
-    jq -r '.workflow_runs[0].id')
+    jq -r '.workflow_runs[].id')
 
 # --- Output ---
-if [[ "$RUN_ID" != "null" && -n "$RUN_ID" ]]; then
-    echo "$RUN_ID" # Print only the ID for easy use in other scripts
-    # You can uncomment the line below for a more verbose output:
-    # echo "Workflow Run ID for commit $COMMIT_HASH: $RUN_ID"
+if [[ -n "$RUN_IDS" ]]; then
+    echo "$RUN_IDS" # Prints all IDs, one per line
 else
-    # Output an empty string and a message to stderr for scripting reliability
-    echo >&2 "Error: No workflow run found for commit $COMMIT_HASH on $OWNER/$REPO."
+    # Output an error message to stderr
+    echo "Error: No workflow runs found for commit $COMMIT_HASH on $OWNER/$REPO." >&2
 fi

@@ -90,6 +90,19 @@ print("ttnn imported from:", ttnn.__file__)
 PY
 }
 
+can_use_debians=true
+echo "testing to see if the debians are sufficient for the build"
+potential_run_ids = $TT_METAL_HOME/.github/actions/bisect-utilities/get-pipeline-run-id.sh <fill in the needed parameters>
+
+# check out the good commit
+# download the build artifacts using download-debians.sh
+# install the debians
+# run the test
+# if the test passes, then the debians are sufficient for the build
+# if the test fails, then the debians are not sufficient for the build, so set can_use_debians to false
+# if the test fails, then we need to use the build artifacts
+
+
 echo "Starting git bisect…"
 git bisect start "$bad_commit" "$good_commit"
 
@@ -101,15 +114,17 @@ while [[ "$found" == "false" ]]; do
   fresh_clean
 
   build_rc=0
-  if [ "$tracy_enabled" -eq 1 ]; then
-    ./build_metal.sh \
-      --build-all \
-      --enable-ccache \
-      --enable-profiler || build_rc=$?
-  else
-    ./build_metal.sh \
-      --build-all \
-      --enable-ccache || build_rc=$?
+  if [ $can_use_debians = false ]; then
+    if [ "$tracy_enabled" -eq 1 ]; then
+      ./build_metal.sh \
+        --build-all \
+        --enable-ccache \
+        --enable-profiler || build_rc=$?
+    else
+      ./build_metal.sh \
+        --build-all \
+        --enable-ccache || build_rc=$?
+    fi
   fi
 
   echo "::endgroup::"
