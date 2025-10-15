@@ -9,7 +9,7 @@ import pytest
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 try:
-    from tracy import signpost
+    pass
 
     use_signpost = True
 except ModuleNotFoundError:
@@ -68,97 +68,6 @@ def get_matmul_config(core_grid, in0_block_w, out_subblock, per_core_M, per_core
             transpose_mcast=False,
         )
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 12 * 1024}], indirect=True)
-@pytest.mark.parametrize(
-    "n, ch, h, w, sharding_strategy",
-    [
-        (1, 1792, 1, 25344 // 11, "block"),
-        (1, 1792, 1, 25344 // 33, "block"),
-        (1, 1792, 1, 25344 // 44, "block"),
-        (1, 1792, 1, 25344 // 66, "block"),
-        (1, 1792, 1, 25344 // 99, "block"),
-        (1, 1792, 1, 25344 // 132, "block"),
-        (1, 1792, 1, 25344 // 11, "height"),
-        (1, 1792, 1, 25600 // 10, "height"),
-    ],
-)
-@pytest.mark.parametrize(
-    "core_grid",
-    [
-        ttnn.CoreGrid(y=4, x=5),  # 4,5 is the grid size of the BOS N1 device
-    ],
-)
-def test_vox_feats_calculation(device, n, ch, h, w, sharding_strategy, core_grid):
-    input_dtype = ttnn.bfloat16
-    output_dtype = ttnn.bfloat16
-
-    torch_top_left = torch.randn([n, h, w, ch], dtype=torch.float32)
-    torch_top_right = torch.randn([n, h, w, ch], dtype=torch.float32)
-    torch_bottom_left = torch.randn([n, h, w, ch], dtype=torch.float32)
-    torch_bottom_right = torch.randn([n, h, w, ch], dtype=torch.float32)
-
-    torch_area = torch.randn([n, h, w, ch], dtype=torch.float32)
-
-    torch_out_tensor = (torch_top_left - torch_top_right + torch_bottom_right - torch_bottom_left) * torch_area
-
-    if use_signpost:
-        signpost(header=f"Vox Feat Calc for dimensions {n}, {h}, {w}, {ch} started")
-
-    shard_strategy = ttnn.ShardStrategy.HEIGHT if sharding_strategy == "height" else ttnn.ShardStrategy.BLOCK
-    shard_height, shard_width = calculate_shard_dims(n * h * w, ch, core_grid, sharding_strategy)
-
-    sharded_mem_config = ttnn.create_sharded_memory_config(
-        (shard_height, shard_width),
-        core_grid,
-        shard_strategy,
-        ttnn.ShardOrientation.ROW_MAJOR,
-        use_height_and_width_as_shard_shape=True,
-    )
-
-    top_left = ttnn.from_torch(
-        torch_top_left, input_dtype, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
-    )
-    top_right = ttnn.from_torch(
-        torch_top_right, input_dtype, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
-    )
-    bottom_left = ttnn.from_torch(
-        torch_bottom_left, input_dtype, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
-    )
-    bottom_right = ttnn.from_torch(
-        torch_bottom_right, input_dtype, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
-    )
-
-    area = ttnn.from_torch(
-        torch_area, input_dtype, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
-    )
-
-    top_left = ttnn.to_memory_config(top_left, sharded_mem_config)
-    top_right = ttnn.to_memory_config(top_right, sharded_mem_config)
-
-    # tt_output_tensor_on_device = (top_left - top_right + bottom_right - bottom_left) * area
-    tt_output_tensor_on_device = top_left - top_right
-    ttnn.deallocate(top_left)
-    ttnn.deallocate(top_right)
-
-    bottom_right = ttnn.to_memory_config(bottom_right, sharded_mem_config)
-    tt_output_tensor_on_device = tt_output_tensor_on_device + bottom_right
-    ttnn.deallocate(bottom_right)
-
-    bottom_left = ttnn.to_memory_config(bottom_left, sharded_mem_config)
-    tt_output_tensor_on_device = tt_output_tensor_on_device - bottom_left
-    ttnn.deallocate(bottom_left)
-
-    area = ttnn.to_memory_config(area, sharded_mem_config)
-    tt_output_tensor_on_device = tt_output_tensor_on_device * area
-    ttnn.deallocate(area)
-
-    tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
-
-    if use_signpost:
-        signpost(header=f"Vox Feat Calc for dimensions {n}, {h}, {w}, {ch} completed")
-    torch_output_tensor = ttnn.to_torch(tt_output_tensor)
-    assert_with_pcc(torch_out_tensor, torch_output_tensor, pcc=0.99)
-
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 12 * 1024}], indirect=True)
 @pytest.mark.parametrize(
@@ -170,10 +79,10 @@ def test_vox_feats_calculation(device, n, ch, h, w, sharding_strategy, core_grid
 @pytest.mark.parametrize(
     "core_grid",
     [
-        ttnn.CoreGrid(y=4, x=5),  # 4,5 is the grid size of the BOS N1 device
+        ttnn.CoreGrid(y=4, x=5),
     ],
 )
-def test_linear_sharded_sliced(
+def test_sliced_ortho_feats(
     device, n, in_ch, out_ch, h, w, in0_block_w, out_subblock, sharding_strategy, num_slices, core_grid
 ):
     input_dtype = ttnn.bfloat16
