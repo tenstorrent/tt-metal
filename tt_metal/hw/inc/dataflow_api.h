@@ -2445,16 +2445,6 @@ public:
             read_req_vc);
     }
 
-    /** @brief Increments the internal counter of issued reads.
-     *
-     * This is used to manually increment the counter.
-     *
-     * @param num_issued_reads_inc Number of issued reads to increment the counter by
-     */
-    void async_read_inc_num_issued(uint32_t num_issued_reads_inc) const {
-        noc_async_read_inc_num_issued(num_issued_reads_inc, noc_id_);
-    }
-
     /** @brief Initiates an asynchronous write.
      *
      * @see async_write_barrier.
