@@ -72,6 +72,11 @@ TEST_F(MeshDevice1x4Fixture, AllGatherReturnedTensor) {
         aggregated_tensor,
         /* dim */ 0);
 
+    // tt::tt_metal::distributed::Synchronize(aggregated_tensor.device(), std::nullopt, std::vector<SubDeviceId>());
+    // for (const auto& tensor : tensors) {
+    //     tt::tt_metal::distributed::Synchronize(tensor.device(), std::nullopt, std::vector<SubDeviceId>());
+    // }
+
     auto disaggregated_output_tensors = ttnn::experimental::unit_mesh::disaggregate(all_gathered_tensor);
     for (int dev_idx = 0; dev_idx < mesh_devices.size(); dev_idx++) {
         auto data = disaggregated_output_tensors[dev_idx].to_vector<bfloat16>();
