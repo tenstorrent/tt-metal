@@ -434,6 +434,13 @@ Tensor Tensor::reshape(const ttnn::Shape& new_logical_shape, const ttnn::Shape& 
     return tensor_ops::tensor_reshape(*this, new_logical_shape, new_padded_shape);
 }
 
+Tensor Tensor::with_tensor_topology(TensorTopology tensor_topology) const {
+    Tensor result = *this;
+    result.tensor_attributes =
+        std::make_shared<TensorAttributes>(tensor_attributes->with_tensor_topology(std::move(tensor_topology)));
+    return result;
+}
+
 bool Tensor::is_allocated() const {
     ZoneScoped;
     auto output = std::visit(
