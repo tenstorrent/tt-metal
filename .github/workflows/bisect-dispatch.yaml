@@ -123,20 +123,44 @@ jobs:
         run: |
           set -euo pipefail
           echo "Downloading gist from ${{ inputs.gist-url }}"
-          # Convert gist URL to raw URL if needed
           GIST_URL="${{ inputs.gist-url }}"
-          if [[ "$GIST_URL" =~ gist\.github\.com/.*/.*/([a-f0-9]+)$ ]]; then
-            # Extract gist ID and get raw content
-            GIST_ID="${BASH_REMATCH[1]}"
-            # For gists, we need to fetch the raw content
-            curl -fsSL "$GIST_URL/raw" -o /work/bisect_gist_script.sh
-          elif [[ "$GIST_URL" =~ raw\.githubusercontent\.com ]]; then
-            # Already a raw URL
-            curl -fsSL "$GIST_URL" -o /work/bisect_gist_script.sh
+
+          # Extract gist ID and filename from various URL formats
+          if [[ "$GIST_URL" =~ gist\.github\.com/([^/]+)/([a-f0-9]+) ]]; then
+            # Regular gist URL: https://gist.github.com/username/gist_id
+            GIST_USER="${BASH_REMATCH[1]}"
+            GIST_ID="${BASH_REMATCH[2]}"
+            # Get the filename from the end of URL if present, otherwise use default
+            if [[ "$GIST_URL" =~ /([^/]+\.sh)$ ]]; then
+              FILENAME="${BASH_REMATCH[1]}"
+            else
+              FILENAME=""
+            fi
+          elif [[ "$GIST_URL" =~ gist\.githubusercontent\.com/([^/]+)/([a-f0-9]+)/raw/[^/]+/(.+\.sh)$ ]]; then
+            # Raw gist URL with revision: https://gist.githubusercontent.com/username/gist_id/raw/revision/filename.sh
+            GIST_USER="${BASH_REMATCH[1]}"
+            GIST_ID="${BASH_REMATCH[2]}"
+            FILENAME="${BASH_REMATCH[3]}"
+          elif [[ "$GIST_URL" =~ gist\.githubusercontent\.com/([^/]+)/([a-f0-9]+)/raw/(.+\.sh)$ ]]; then
+            # Raw gist URL without revision: https://gist.githubusercontent.com/username/gist_id/raw/filename.sh
+            GIST_USER="${BASH_REMATCH[1]}"
+            GIST_ID="${BASH_REMATCH[2]}"
+            FILENAME="${BASH_REMATCH[3]}"
           else
-            # Try appending /raw
-            curl -fsSL "${GIST_URL}/raw" -o /work/bisect_gist_script.sh
+            echo "ERROR: Could not parse gist URL format"
+            exit 1
           fi
+
+          # Construct the raw URL without revision hash to always get latest
+          if [ -n "$FILENAME" ]; then
+            RAW_URL="https://gist.githubusercontent.com/${GIST_USER}/${GIST_ID}/raw/${FILENAME}"
+          else
+            # If no filename, try to get the first .sh file
+            RAW_URL="https://gist.githubusercontent.com/${GIST_USER}/${GIST_ID}/raw"
+          fi
+
+          echo "Fetching from: $RAW_URL"
+          curl -fsSL "$RAW_URL" -o /work/bisect_gist_script.sh
           chmod +x /work/bisect_gist_script.sh
           echo "Gist script downloaded and made executable"
 
