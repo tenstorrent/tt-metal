@@ -277,17 +277,8 @@ def prepare_device(mesh_device, use_cfg_parallel):
     "prompt_2, negative_prompt_2, crop_coords_top_left, guidance_rescale, timesteps, sigmas",
     [
         (None, None, (0, 0), 0.0, None, None),
-        # TODO: Remove once this is tested properly
-        (
-            "highly detailed, photorealistic, 8k",  # prompt_2
-            "blurry, low quality",  # negative_prompt_2
-            (64, 64),  # crop_coords_top_left - slight offset
-            0.7,  # guidance_rescale - fixes overexposure
-            None,  # timesteps
-            None,  # sigmas
-        ),
     ],
-    ids=["baseline", "test_crop_offset"],
+    ids=["default_additional_parameters"],
 )
 def test_demo(
     validate_fabric_compatibility,
