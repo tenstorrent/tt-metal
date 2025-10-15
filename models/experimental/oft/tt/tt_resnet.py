@@ -69,6 +69,8 @@ class TTBasicBlock:
     def forward(self, device, x, gn_shard="HS", num_splits=1):
         if use_signpost:
             signpost(header=f"TTBasicBlock {self.block_id} forward started")
+        if x.layout != ttnn.ROW_MAJOR_LAYOUT and self.is_sliced:
+            x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
         out = self.conv1(x)
         logger.debug(
             f"FORWARD X Input shape: {x.shape}, dtype: {x.dtype}, layout: {x.layout} memory_config: {x.memory_config()}"
@@ -79,6 +81,8 @@ class TTBasicBlock:
         logger.debug(f"BN1 output shape: {out.shape}")
         ttnn.relu(out, output_tensor=out)
 
+        if out.layout != ttnn.ROW_MAJOR_LAYOUT and self.is_sliced:
+            out = ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT)
         out = self.conv2(out)
         logger.debug(f"Conv2 output shape: {out.shape}")
         out = ttnn.move(out)
