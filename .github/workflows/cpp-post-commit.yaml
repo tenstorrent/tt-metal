@@ -60,6 +60,7 @@ jobs:
             cmd: |
               ./build/test/tt_metal/unit_tests_eth --gtest_filter=$GTEST_FILTER
               ./build/test/tt_metal/unit_tests_misc --gtest_filter=$GTEST_FILTER
+              TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_api
               rm -rf /tmp/kernels
               mkdir -p /tmp/kernels
               TT_METAL_KERNEL_PATH=/tmp/kernels ./build/test/tt_metal/unit_tests_api --gtest_filter=CompileProgramWithKernelPathEnvVarFixture.${GTEST_FILTER}
