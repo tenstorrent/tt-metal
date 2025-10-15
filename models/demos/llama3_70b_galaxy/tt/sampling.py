@@ -112,12 +112,12 @@ class TTSampling(LightweightModule):
     def forward(
         self,
         x: ttnn.Tensor,
-        seed: int = 42,
+        seed: int = 0,
         tt_out_tok: ttnn.Tensor = None,
     ):
         if self.warmup_done is False:
             self.warmup_done = True
-            self.forward(x, seed=0, tt_out_tok=tt_out_tok)
+            self.forward(x, seed=42, tt_out_tok=tt_out_tok)
 
         x_bf16 = ttnn.typecast(x, dtype=ttnn.bfloat16, sub_core_grids=self.args.sub_core_grids)
 
