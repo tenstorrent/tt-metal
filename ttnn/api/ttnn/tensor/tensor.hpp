@@ -196,6 +196,8 @@ public:
     // ======================================================================================
     [[nodiscard]] Tensor reshape(const ttnn::Shape& new_shape) const;
     [[nodiscard]] Tensor reshape(const ttnn::Shape& new_logical_shape, const ttnn::Shape& new_padded_shape) const;
+
+    Tensor with_tensor_topology(TensorTopology tensor_topology) const;
     // ======================================================================================
     //                                      Getters
     // ======================================================================================

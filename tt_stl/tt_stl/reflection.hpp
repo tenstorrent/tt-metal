@@ -699,6 +699,7 @@ struct transform_object_of_type_t<std::vector<T>> {
     template <typename object_t>
     std::vector<T> operator()(auto&& callback, const std::vector<T>& value) const {
         std::vector<T> return_value;
+        return_value.reserve(value.size());
         for (auto& tensor : value) {
             return_value.emplace_back(transform_object_of_type<object_t>(callback, tensor));
         }
