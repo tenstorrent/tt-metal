@@ -125,7 +125,7 @@ try_download_artifacts() {
   # Look for workflow runs for this commit
   echo "🔎 Searching for workflow runs for commit $commit_sha..."
   local runs
-  runs=$(gh run list --commit "$commit_sha" --json workflowName,conclusion,databaseId --limit 100 2>/dev/null || echo "[]")
+  runs=$(gh run list --commit "$commit_sha" --json workflowName,conclusion,databaseId --limit 1000 2>/dev/null || echo "[]")
 
   if [ "$runs" = "[]" ]; then
     echo "No workflow runs found for commit $commit_sha"
