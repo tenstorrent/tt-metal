@@ -217,7 +217,7 @@ std::vector<std::shared_ptr<Program>> create_random_programs(
                 auto active_eth_core = active_eth_cores.begin();
                 for (int k = 0; k < max_eth_cores && active_eth_core != active_eth_cores.end();
                      ++i, ++active_eth_core) {
-                    CreateSemaphore(program, *active_eth_core, j + 1, CoreType::ETH);
+                    CreateSemaphore(program, *active_eth_core, j + 1);
                 }
             }
         }
