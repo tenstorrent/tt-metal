@@ -335,6 +335,7 @@ def main(args_dict):
         dump_const_meta=True,
         dump_constants=args.dump_constants,
         clustered_graph=args.maintain_module_structure,
+        skip_state_dict_compression=True,
     )
 
     pytorch_graph.dump_to_python_file(file_name, True)

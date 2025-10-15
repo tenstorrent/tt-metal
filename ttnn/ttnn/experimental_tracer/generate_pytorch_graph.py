@@ -65,11 +65,19 @@ class CompositePytorchGraph(PytorchGraph):
     It overrides the `find_repeated_subgraphs` method to use the custom implementation.
     """
 
-    def __init__(self, graph: OperationGraph, clustered_graph=False, dump_const_meta=False, dump_constants=False):
+    def __init__(
+        self,
+        graph: OperationGraph,
+        clustered_graph=False,
+        dump_const_meta=False,
+        dump_constants=False,
+        skip_state_dict_compression=False,
+    ):
         super().__init__(graph)
         self.clustered_graph = clustered_graph
         self.dump_const_meta = dump_const_meta
         self.dump_constants = dump_constants
+        self.skip_state_dict_compression = skip_state_dict_compression
 
     def get_imports_and_code_lines(self) -> Tuple[Dict[str, List[str]], Dict[str, List[str]]]:
         self.orig_config = ConstantTensor.ConstantTensorFromModel
@@ -118,7 +126,9 @@ class CompositePytorchGraph(PytorchGraph):
                 k: {
                     "shape": list(v.value.shape),
                     "dtype": str(v.value.dtype),
-                    "summary": compress_tensor(v.value),
+                    "summary": compress_tensor(v.value)
+                    if not v.is_state_dict or not self.skip_state_dict_compression
+                    else {"type": "state_dict_constant", "name": k},
                     "is_state_dict": v.is_state_dict,
                 }
                 for k, v in CompositeOperation.ALL_CONSTANTS.items()

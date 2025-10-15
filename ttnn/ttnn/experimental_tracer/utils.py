@@ -5,10 +5,10 @@ import json
 import numpy as np
 
 
-def compress_tensor(t):
+def compress_tensor(t, sample_limit=1000):
     t = t.detach().cpu().flatten().to(torch.float32)
     n = t.numel()
-    num_quantiles = round(max(7, min(40, n ** (1 / 4))))  # at least 7 quantiles, at most 40 or n**(1/5)
+    num_quantiles = round(max(7, min(40, n ** (1 / 4))))  # at least 7 quantiles, at most 40 or n**(1/4)
     if n == 0:
         return {
             "type": "dynamic_quantiles_stats",
@@ -18,12 +18,19 @@ def compress_tensor(t):
             "quantiles": [0.0] * num_quantiles,
         }
 
-    norm = t.norm().item()
-    mean = t.mean().item()
-    std = t.std().item()
+    # If too large, sample subset
+    max_samples = sample_limit
+    u = t
+    if n > max_samples:
+        idx = torch.randperm(n)[:max_samples]
+        u = t[idx]
+
+    norm = u.norm().item()
+    mean = u.mean().item()
+    std = u.std().item()
 
     # Normalize to unit vector to preserve cosine similarity
-    u = t / norm
+    u = u / norm
 
     # Compute quantiles
     if n < num_quantiles:
@@ -136,9 +143,15 @@ def track_input_output(_tensor_io_log):
 
 
 def get_tensors_from_input_spec(input_specs, state_dict=None):
-    if isinstance(input_specs, (tuple, list)) and len(input_specs) != 4 and not (len(input_specs) == 4 and isinstance(input_specs[2], str)):
+    if (
+        isinstance(input_specs, (tuple, list))
+        and len(input_specs) != 4
+        and not (len(input_specs) == 4 and isinstance(input_specs[2], str))
+    ):
         return [get_tensors_from_input_spec(spec, state_dict) for spec in input_specs]
-    assert isinstance(input_specs, (list, tuple)) and len(input_specs) == 4 and isinstance(input_specs[2], str), "input_specs must be a list of 4 elements where the 3rd element contains the spec type."
+    assert (
+        isinstance(input_specs, (list, tuple)) and len(input_specs) == 4 and isinstance(input_specs[2], str)
+    ), "input_specs must be a list of 4 elements where the 3rd element contains the spec type."
     shape, dtype_str, summary_type, summary = input_specs
     dtype = getattr(torch, dtype_str.split(".")[1])
     tensor = None
@@ -174,34 +187,42 @@ class LazyParams:
         self.data = None
         self.fake = fake and data_path is None
         self.empty = empty
+        with open(self.meta_path, "r") as f:
+            self.meta = json.load(f)
         if not self.fake:
             assert self.data_path is not None, "data_path must be provided when fake=False"
             with open(self.data_path, "rb") as f:
                 self.data = torch.load(f, map_location="cuda" if torch.cuda.is_available() else "cpu")
-        else:
-            # load const meta json and fake the data
-            with open(self.meta_path, "r") as f:
-                self.meta = json.load(f)
 
     def __getitem__(self, const_name):
-        if self.fake or (self.data is not None and const_name not in self.data):
-            const_meta = self.meta[const_name]
-            shape = const_meta["shape"]
-            if len(shape) == 0:
-                shape = (1,)
-            dtype = getattr(torch, const_meta["dtype"].split(".")[1])
-            if self.empty:
-                return torch.empty(*shape, device="meta", dtype=dtype)
+        const_meta = self.meta[const_name]
+        shape = const_meta["shape"]
+        dtype = getattr(torch, const_meta["dtype"].split(".")[1])
+        if len(shape) == 0:
+            shape = (1,)
+        if self.empty:
+            return torch.empty(*shape, device="meta", dtype=dtype)
+        decompressed_tensor = const_meta["summary"]
+        if const_meta["summary"]["type"] == "dynamic_quantiles_stats":
             assert (
                 const_meta["summary"]["type"] == "dynamic_quantiles_stats"
             ), f"Expected dynamic_quantiles_stats tensor type, got {const_meta['summary']['type']}"
-            decompressed_tensor = const_meta["summary"]
             if const_meta["is_state_dict"]:
                 print(
                     f"Warning: Generating {const_name} state_dict parameter from statistics, this may lead to unexpected behavior."
                 )
             return decompress_tensor(decompressed_tensor, shape, dtype)
-        return StateDictConstant(const_name, self.data[const_name])
+        elif const_meta["is_state_dict"] == "state_dict_constant":
+            return (
+                StateDictConstant(const_name, self.data[const_name])
+                if const_meta["is_state_dict"]
+                else self.data[const_name]
+            )
+        elif self.data is not None and const_name in self.data:
+            return self.data[const_name]
+        raise RuntimeError(
+            f"Constant {const_name} not found in data file. Please make sure you populate data_path correctly, or download_original_model_state_dict is implemented."
+        )
 
     def to_dict(self):
         if self.fake:
