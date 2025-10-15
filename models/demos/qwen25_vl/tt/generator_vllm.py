@@ -122,7 +122,7 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
             hf_config,
             mesh_device,
             max_batch_size,
-            max_seq_len=max_seq_len,
+            max_seq_len=max_seq_len // max_batch_size,  # max_seq_len is for all users to share
             dtype=ttnn.bfloat8_b,
             optimizations=optimizations,
         )
