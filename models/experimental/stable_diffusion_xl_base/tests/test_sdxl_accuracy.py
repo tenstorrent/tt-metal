@@ -152,8 +152,7 @@ def test_accuracy_sdxl(
     except Exception as e:
         data["benchmarks_summary"][0]["stability_check"] = 3
         save_json_results(data, capture_trace, vae_on_device, encoders_on_device, use_cfg_parallel, num_inference_steps)
-        logger.warning(f"Error detected during inference")
-        raise
+        pytest.fail(f"Error detected during inference: {e}")
 
     clip = CLIPEncoder()
 
