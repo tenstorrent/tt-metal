@@ -130,7 +130,7 @@ struct Atan2Fn : ttsl::overloaded<
 };
 
 inline constexpr UnaryFn recip{.operation = Unary::RECIP};
-inline constexpr UnaryFn negative{.operation = Unary::NEGATIVE};
+inline constexpr UnaryFn neg{.operation = Unary::NEGATIVE};
 inline constexpr UnaryFn exp{.operation = Unary::EXP};
 
 inline constexpr UnaryFn eqz{.operation = Unary::EQZ};
