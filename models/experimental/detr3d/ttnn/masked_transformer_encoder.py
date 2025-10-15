@@ -181,6 +181,69 @@ class TtnnMaskedTransformerEncoder(LightweightModule):
         mask_ttnn = ttnn.from_torch(mask_ttnn, dtype=ttnn.bfloat16, device=self.device, layout=ttnn.TILE_LAYOUT)
         return mask_ttnn, dist
 
+    def compute_mask_ttnn(self, xyz, radius, dist=None):
+        """
+        Compute attention mask and distance matrix using ttnn operations.
+
+        Args:
+            xyz_ttnn: ttnn tensor of shape (batch_size, seq_len, 3)
+            radius: masking radius threshold
+            dist: optional precomputed distance tensor
+
+        Returns:
+            mask_ttnn: boolean mask tensor where True means distance >= radius
+            dist_ttnn: distance matrix
+        """
+        # Compute pairwise distances using ttnn operations
+        # Using the formula: ||a - b||^2 = ||a||^2 + ||b||^2 - 2*a·b
+
+        tt_xyz = ttnn.from_torch(
+            xyz,
+            device=self.device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        if dist is None or dist.shape[1] != xyz.shape[1]:
+            # Compute squared norms: ||a||^2 for each point
+            # xyz_ttnn shape: (batch_size, seq_len, 3)
+            xyz_squared = ttnn.pow(tt_xyz, 2)  # (batch_size, seq_len, 3)
+            norms_squared = ttnn.sum(xyz_squared, dim=-1, keepdim=True)  # (batch_size, seq_len, 1)
+
+            # Compute dot products: xyz @ xyz^T
+            xyz_transpose = ttnn.permute(tt_xyz, (0, 2, 1))  # (batch_size, 3, seq_len)
+            dot_products = ttnn.matmul(tt_xyz, xyz_transpose)  # (batch_size, seq_len, seq_len)
+
+            # Compute squared distances: ||a||^2 + ||b||^2 - 2*a·b
+            # norms_squared: (batch_size, seq_len, 1)
+            # norms_squared^T: (batch_size, 1, seq_len)
+            norms_squared_t = ttnn.permute(norms_squared, (0, 2, 1))
+
+            # dist^2 = ||a||^2 + ||b||^2 - 2*a·b
+            dist_squared_ttnn = ttnn.add(norms_squared, norms_squared_t)  # broadcast to (batch_size, seq_len, seq_len)
+            dist_squared_ttnn = ttnn.subtract(dist_squared_ttnn, ttnn.multiply(dot_products, 2.0))
+
+            # Take sqrt to get actual distances
+            # Add small epsilon to avoid numerical issues with sqrt(0)
+            epsilon = 1e-8
+            dist_squared_ttnn = ttnn.add(dist_squared_ttnn, epsilon)
+            dist_ttnn = ttnn.sqrt(dist_squared_ttnn)
+        else:
+            dist_ttnn = dist
+
+        ttnn.deallocate(tt_xyz)
+
+        # Create mask: distance >= radius
+        # Convert radius to ttnn scalar and compare
+        radius_threshold = ttnn.full_like(dist_ttnn, radius)
+
+        # Create mask where True means distance >= radius (should be masked)
+        mask_ttnn = ttnn.ge(dist_ttnn, radius_threshold)  # boolean-like (0 or 1)
+        mask_ttnn = mask_ttnn * float("-inf")
+
+        return mask_ttnn, dist_ttnn
+
     def forward(
         self,
         src,
@@ -214,7 +277,8 @@ class TtnnMaskedTransformerEncoder(LightweightModule):
         for idx, layer in enumerate(self.layers):
             attn_mask = None
             if self.masking_radius[idx] > 0:
-                attn_mask, xyz_dist = self.compute_mask(xyz, self.masking_radius[idx], xyz_dist)
+                # attn_mask, xyz_dist_torch = self.compute_mask(xyz, self.masking_radius[idx], xyz_dist)
+                attn_mask, xyz_dist = self.compute_mask_ttnn(xyz, self.masking_radius[idx], xyz_dist)
                 attn_mask = ttnn.unsqueeze(attn_mask, 1)
 
             output = ttnn.permute(output, (1, 0, 2))

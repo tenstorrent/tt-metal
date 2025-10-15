@@ -20,7 +20,11 @@ from models.experimental.detr3d.ttnn.masked_transformer_encoder import (
     TtnnMaskedTransformerEncoder,
     EncoderLayerArgs,
 )
-from models.experimental.detr3d.ttnn.transformer_decoder import TtnnTransformerDecoder
+from models.experimental.detr3d.ttnn.transformer_decoder import (
+    TtnnTransformerDecoder,
+    TtnnTransformerDecoderLayer,
+    DecoderLayerArgs,
+)
 from models.experimental.detr3d.ttnn.generic_mlp import TtnnGenericMLP
 from models.experimental.detr3d.reference.model_3detr import PositionEmbeddingCoordsSine
 
@@ -75,15 +79,16 @@ def build_ttnn_encoder(args):
 
 def build_ttnn_decoder(args):
     decoder = TtnnTransformerDecoder(
-        device=args.device,
-        decoder_layer_config={
-            "d_model": args.dec_dim,
-            "nhead": args.dec_nhead,
-            "dim_feedforward": args.dec_ffn_dim,
-            "normalize_before": True,  # Match the reference implementation
-        },
+        decoder_layer=TtnnTransformerDecoderLayer,
         num_layers=args.dec_nlayers,
+        device=args.device,
         return_intermediate=True,
+        decoder_args=DecoderLayerArgs(
+            d_model=args.dec_dim,
+            nhead=args.dec_nhead,
+            dim_feedforward=args.dec_ffn_dim,
+            normalize_before=True,
+        ),
         parameters=args.parameters.decoder,
     )
     return decoder
