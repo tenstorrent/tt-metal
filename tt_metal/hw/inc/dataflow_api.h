@@ -2360,8 +2360,15 @@ void reset_noc_trid_barrier_counter(uint32_t id_mask = NOC_CLEAR_OUTSTANDING_REQ
 namespace experimental {
 
 template <typename T>
-struct noc_traits_t;
+struct noc_traits_t {
+    static_assert(sizeof(T) == 0, "NoC transactions are not supported for this type");
+};
 
+/**
+ * @brief Noc class that provides a high-level interface for asynchronous read and write operations.
+ *
+ * It abstracts the details of source and destination address calculations.
+ */
 class Noc {
 public:
     enum class AddressType { NOC, LOCAL_L1 };
@@ -2402,11 +2409,27 @@ public:
         return is_local_bank(x, y);
     }
 
+    /**
+     * @brief Initiates an asynchronous read from a specified source.
+     *
+     * The destination is in L1 memory on the Tensix core executing this function call.
+     *
+     * @see async_read_barrier.
+     *
+     * @param src Source object (e.g., TensorAccessor)
+     * @param dst Destination object (e.g., local L1 memory)
+     * @param size_bytes Size of the data transfer in bytes
+     * @param src_args Additional arguments for source address calculation
+     * @param dst_args Additional arguments for destination address calculation
+     * @param read_req_vc Virtual channel to use for the read request (default: NOC_UNICAST_WRITE_VC)
+     * @tparam max_page_size Maximum page size for the transfer (default: NOC_MAX_BURST_SIZE + 1)
+     * @tparam enable_noc_tracing Enable NoC tracing for debugging (default: true)
+     */
     template <
-        typename Src,
-        typename Dst,
         uint32_t max_page_size = NOC_MAX_BURST_SIZE + 1,
-        bool enable_noc_tracing = true>
+        bool enable_noc_tracing = true,
+        typename Src,
+        typename Dst>
     void async_read(
         const Src& src,
         const Dst& dst,
@@ -2414,16 +2437,31 @@ public:
         const src_args_t<Src>& src_args,
         const dst_args_t<Dst>& dst_args,
         uint32_t read_req_vc = NOC_UNICAST_WRITE_VC) const {
-        uint64_t src_noc_addr{get_src_ptr<AddressType::NOC>(src, src_args)};
-        uint32_t dst_local_l1_addr{get_dst_ptr<AddressType::LOCAL_L1>(dst, dst_args)};
-        noc_async_read<max_page_size, enable_noc_tracing>(src_noc_addr, dst_local_l1_addr, size_bytes, noc_id_, read_req_vc);
+        noc_async_read<max_page_size, enable_noc_tracing>(
+            get_src_ptr<AddressType::NOC>(src, src_args),
+            get_dst_ptr<AddressType::LOCAL_L1>(dst, dst_args),
+            size_bytes,
+            noc_id_,
+            read_req_vc);
     }
 
+    /** @brief Initiates an asynchronous write.
+     *
+     * @see async_write_barrier.
+     *
+     * @param src Source object (e.g., local L1 memory)
+     * @param dst Destination object (e.g., TensorAccessor)
+     * @param size_bytes Size of the data transfer in bytes
+     * @param src_args Additional arguments for source address calculation
+     * @param dst_args Additional arguments for destination address calculation
+     * @param vc Virtual channel to use for the write transaction (default: NOC_UNICAST_WRITE_VC)
+     * @tparam enable_noc_tracing Enable NoC tracing for debugging (default: true)
+     */
     template <
-        typename Src,
-        typename Dst,
         uint32_t max_page_size = NOC_MAX_BURST_SIZE + 1,
-        bool enable_noc_tracing = true>
+        bool enable_noc_tracing = true,
+        typename Src,
+        typename Dst>
     void async_write(
         const Src& src,
         const Dst& dst,
@@ -2431,14 +2469,61 @@ public:
         const src_args_t<Src>& src_args,
         const dst_args_t<Dst>& dst_args,
         uint32_t vc = NOC_UNICAST_WRITE_VC) const {
-        uint32_t src_local_l1_addr{get_src_ptr<AddressType::LOCAL_L1>(src, src_args)};
-        uint64_t dst_noc_addr{get_dst_ptr<AddressType::NOC>(dst, dst_args)};
-        noc_async_write<max_page_size, enable_noc_tracing>(src_local_l1_addr, dst_noc_addr, size_bytes, noc_id_, vc);
+        noc_async_write<max_page_size, enable_noc_tracing>(
+            get_src_ptr<AddressType::LOCAL_L1>(src, src_args),
+            get_dst_ptr<AddressType::NOC>(dst, dst_args),
+            size_bytes,
+            noc_id_,
+            vc);
     }
 
+    /** @brief Initiates a read barrier for synchronization.
+     *
+     * This blocking call waits for all the outstanding enqueued read transactions
+     * issued on the current Tensix core to complete.
+     * After returning from this call there will be no outstanding read transactions for this noc for the current core.
+     */
     void async_read_barrier() const { noc_async_read_barrier(noc_id_); }
 
+    /** @brief Initiates a write barrier for synchronization.
+     *
+     * This blocking call waits for all the outstanding enqueued write transactions
+     * issued on the current Tensix core to complete.
+     * After returning from this call there will be no outstanding write transactions for this noc for the current core.
+     */
     void async_write_barrier() const { noc_async_write_barrier(noc_id_); }
+
+    /** @brief Waits for all outstanding write transactions to be flushed.
+     *
+     * This blocking call waits for all the outstanding enqueued write transactions
+     * issued on the current Tensix core to depart, but will not wait for them to complete.
+     */
+    void async_writes_flushed() const { noc_async_writes_flushed(noc_id_); }
+
+    /** @brief Waits for all outstanding posted write transactions to be flushed.
+     *
+     * This blocking call waits for all the outstanding enqueued posted write transactions
+     * issued on the current Tensix core to depart, but will not wait for them to complete.
+     */
+    void async_posted_writes_flushed() const { noc_async_posted_writes_flushed(noc_id_); }
+
+    /** @brief Initiates an atomic barrier for synchronization.
+     *
+     * This blocking call waits for all the outstanding enqueued atomic transactions
+     * issued on the current Tensix core to complete.
+     * After returning from this call there will be no outstanding atomic transactions for this noc for the current
+     * core.
+     */
+    void async_atomic_barrier() const { noc_async_atomic_barrier(noc_id_); }
+
+    /** @brief Initiates a full barrier for synchronization.
+     *
+     * This blocking call waits for all the outstanding read, write and atomic noc transactions
+     * issued on the current Tensix core to complete.
+     * After returning from this call there will be no outstanding transactions for this noc for the current
+     * core.
+     */
+    void async_full_barrier() const { noc_async_full_barrier(noc_id_); }
 
 private:
     uint8_t noc_id_;
