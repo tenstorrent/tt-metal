@@ -214,6 +214,10 @@ class ModuleList(Module):
         for i, m in enumerate(modules):
             self._children[str(i)] = m
 
+    def forward(self) -> None:
+        msg = "forward() should not be called on ModuleList. Iterate over the modules instead."
+        raise RuntimeError(msg)
+
     def __len__(self) -> int:
         return len(self._children)
 
