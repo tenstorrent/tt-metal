@@ -97,7 +97,7 @@ class T5Encoder(Module):
         self.encoder.load_state_dict(substate(state_dict, "encoder"))
         self.final_layer_norm.load_state_dict(substate(state_dict, "encoder.final_layer_norm"))
 
-    def __call__(self, prompt: ttnn.Tensor, device: ttnn.Device) -> ttnn.Tensor:
+    def forward(self, prompt: ttnn.Tensor, device: ttnn.Device) -> ttnn.Tensor:
         embeddings, position_bias = self.token_embeddings(prompt, device)
         hidden_states = self.encoder(embeddings, position_bias)
 
@@ -136,7 +136,7 @@ class T5Stack(Module):
         for idx, (layer, layer_state) in enumerate(zip(self.layers, layer_states)):
             layer.load_state_dict(layer_state)
 
-    def __call__(
+    def forward(
         self,
         hidden_states: ttnn.Tensor,
         position_bias: ttnn.Tensor,
@@ -177,7 +177,7 @@ class T5FF(Module):
         self.layer_norm.load_state_dict(substate(state_dict, "layer_norm"))
         self.dense_gated_dense.load_state_dict(substate(state_dict, "DenseReluDense"))
 
-    def __call__(
+    def forward(
         self, hidden_states: ttnn.Tensor, ccl_manager: CCLManager, parallel_config: EncoderParallelConfig
     ) -> ttnn.Tensor:
         normalized_hidden_states = self.layer_norm(hidden_states)
@@ -227,7 +227,7 @@ class T5DenseGatedActDense(Module):
         self.wi1.load_state_dict({"weight": state_dict["wi_1.weight"]})
         self.wo.load_state_dict({"weight": state_dict["wo.weight"]})
 
-    def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
+    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         # breakpoint()
         gelu = new_gelu_activation(self.wi0(x))
         linear = self.wi1(x)
@@ -281,7 +281,7 @@ class T5EncoderLayer(Module):
         self.self_attn.load_state_dict(substate(state_dict, "layer.0"))
         self.ff.load_state_dict(substate(state_dict, "layer.1"))
 
-    def __call__(self, hidden_states: ttnn.Tensor, position_bias: ttnn.Tensor) -> ttnn.Tensor:
+    def forward(self, hidden_states: ttnn.Tensor, position_bias: ttnn.Tensor) -> ttnn.Tensor:
         attn_output = self.self_attn(
             hidden_states,
             position_bias=position_bias,
@@ -359,7 +359,7 @@ class T5Attention(Module):
 
         self.layer_norm.load_state_dict(substate(state_dict, "layer_norm"))
 
-    def __call__(
+    def forward(
         self,
         hidden_states: ttnn.Tensor,
         position_bias: ttnn.Tensor,
@@ -515,7 +515,7 @@ class RelativeTextEmbeddings(Module):
             device=self.mesh_device,
         )
 
-    def __call__(self, prompt: ttnn.Tensor, device: ttnn.Device) -> ttnn.Tensor:
+    def forward(self, prompt: ttnn.Tensor, device: ttnn.Device) -> ttnn.Tensor:
         input_embeddings = ttnn.embedding(prompt, self.token_embedding_weights, layout=ttnn.TILE_LAYOUT)
         position_bias = _compute_relative_position_bias(
             seq_length=prompt.shape[-1],
