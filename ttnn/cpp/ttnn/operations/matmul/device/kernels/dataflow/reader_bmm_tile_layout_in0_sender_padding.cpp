@@ -55,18 +55,18 @@ void kernel_main() {
     constexpr uint32_t batch = get_compile_time_arg_val(19);
 
     // sparsity args
-
-    constexpr uint32_t batchA_batchB = get_compile_time_arg_val(20);
-    constexpr uint32_t sparsity_pagesize = get_compile_time_arg_val(21);
+    constexpr uint32_t batchB = get_compile_time_arg_val(20);
+    constexpr bool is_A_sparse = (bool)get_compile_time_arg_val(21);
+    constexpr uint32_t sparsity_pagesize = get_compile_time_arg_val(22);
     // Boolean that is set when input A is sparse. If set, both input A and B are assumed to be sparse.
     // Based on the sparsity tensor, the corresponding batch in input A and B are skipped.
-    constexpr bool bcast_A = (bool)get_compile_time_arg_val(22);
+    constexpr bool bcast_A = (bool)get_compile_time_arg_val(23);
     // This boolean is set when the number of batches is only known at runtime, typically based on a sparsity tensor.
-    constexpr bool get_batch_from_reader = (bool)get_compile_time_arg_val(23);
+    constexpr bool get_batch_from_reader = (bool)get_compile_time_arg_val(24);
 
-    constexpr bool fuse_op = (bool)get_compile_time_arg_val(24);
+    constexpr bool fuse_op = (bool)get_compile_time_arg_val(25);
 
-    constexpr auto in0_args = TensorAccessorArgs<25>();
+    constexpr auto in0_args = TensorAccessorArgs<26>();
     constexpr auto sparsity_args = TensorAccessorArgs<in0_args.next_compile_time_args_offset()>();
 
     // Reader will use this CB to pass the number of non-zero (nnz) entries in the sparsity tensor.
@@ -77,8 +77,6 @@ void kernel_main() {
     // 0x2 is used to specify "IGNORE_BATCH" state, i.e. when the batch is not valid.
     constexpr uint32_t IGNORE_BATCH = 0x2;
 
-    constexpr uint32_t batchB = batchA_batchB & 0xFFFF;
-    constexpr uint32_t is_A_sparse = (bool)(batchA_batchB >> 16);
     constexpr bool is_B_sparse = (!is_A_sparse) && (batchB > 0);
     // When sparsity is disabled, we just loop once
     constexpr uint32_t batchB_lim = (is_A_sparse || is_B_sparse) ? batchB : 1;

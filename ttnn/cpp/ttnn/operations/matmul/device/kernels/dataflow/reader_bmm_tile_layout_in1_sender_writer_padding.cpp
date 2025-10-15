@@ -66,27 +66,26 @@ void kernel_main() {
     constexpr uint32_t batch = get_compile_time_arg_val(15);
     constexpr uint32_t bcast_B = get_compile_time_arg_val(16);
     // sparsity args
-    constexpr uint32_t batchA_batchB = get_compile_time_arg_val(17);
-    constexpr uint32_t sparsity_pagesize = get_compile_time_arg_val(18);
+    constexpr uint32_t batchB = get_compile_time_arg_val(17);
+    constexpr bool is_A_sparse = (bool)get_compile_time_arg_val(18);
+    constexpr uint32_t sparsity_pagesize = get_compile_time_arg_val(19);
 
     // WRITER
     // out tensor args
-    constexpr uint32_t out_tensor_stride_w = get_compile_time_arg_val(19);
-    constexpr uint32_t out_tensor_stride_h = get_compile_time_arg_val(20);
-    constexpr uint32_t out_tensor_next_subblock_stride_w = get_compile_time_arg_val(21);
-    constexpr uint32_t out_tensor_next_subblock_stride_h = get_compile_time_arg_val(22);
-    constexpr uint32_t out_tensor_next_w_dim_block_stride = get_compile_time_arg_val(23);
-    constexpr uint32_t out_tensor_next_h_dim_block_stride = get_compile_time_arg_val(24);
+    constexpr uint32_t out_tensor_stride_w = get_compile_time_arg_val(20);
+    constexpr uint32_t out_tensor_stride_h = get_compile_time_arg_val(21);
+    constexpr uint32_t out_tensor_next_subblock_stride_w = get_compile_time_arg_val(22);
+    constexpr uint32_t out_tensor_next_subblock_stride_h = get_compile_time_arg_val(23);
+    constexpr uint32_t out_tensor_next_w_dim_block_stride = get_compile_time_arg_val(24);
+    constexpr uint32_t out_tensor_next_h_dim_block_stride = get_compile_time_arg_val(25);
     // out subblock args
-    constexpr uint32_t out_subblock_w = get_compile_time_arg_val(25);
-    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(26);
-    constexpr uint32_t out_subblock_tile_count = get_compile_time_arg_val(27);
+    constexpr uint32_t out_subblock_w = get_compile_time_arg_val(26);
+    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(27);
+    constexpr uint32_t out_subblock_tile_count = get_compile_time_arg_val(28);
     // batch args
-    constexpr uint32_t MtNt = get_compile_time_arg_val(28);  // if 0
+    constexpr uint32_t MtNt = get_compile_time_arg_val(29);  // if 0
     // Don't need batch; same as batch from READER args
 
-    constexpr uint32_t batchB = batchA_batchB & 0xFFFF;
-    constexpr uint32_t is_A_sparse = (bool)(batchA_batchB >> 16);
     constexpr bool is_B_sparse = (!is_A_sparse) && (batchB > 0);
     // When sparsity is disabled, we just loop once
     constexpr uint32_t batchB_lim = (is_A_sparse || is_B_sparse) ? batchB : 1;
@@ -98,7 +97,7 @@ void kernel_main() {
     const uint32_t in3_tensor_addr = get_arg_val<uint32_t>(rt_args_idx++);
     const uint32_t in3_tensor_start_tile_id = get_arg_val<uint32_t>(rt_args_idx++);
 
-    constexpr uint32_t in3_tensor_stride_w = get_compile_time_arg_val(29);
+    constexpr uint32_t in3_tensor_stride_w = get_compile_time_arg_val(30);
 
     constexpr uint32_t cb_id_in3 = 3;
     constexpr uint32_t bias_single_tile_size_bytes = get_tile_size(cb_id_in3);
@@ -115,8 +114,8 @@ void kernel_main() {
     const uint32_t last_num_blocks_w_dim = get_arg_val<uint32_t>(rt_args_idx++);
 #endif  // OUT_SHARDED
 
-    constexpr bool fuse_op_all_gather = (bool)get_compile_time_arg_val(30);
-    constexpr bool fuse_op_reduce_scatter = (bool)get_compile_time_arg_val(31);
+    constexpr bool fuse_op_all_gather = (bool)get_compile_time_arg_val(31);
+    constexpr bool fuse_op_reduce_scatter = (bool)get_compile_time_arg_val(32);
 
     MatmulOpReceiver fused_op_receiver;
     OpSignaler op_signaler;
@@ -131,7 +130,7 @@ void kernel_main() {
         op_signaler = OpSignaler(rt_args_idx);
     }
 
-    constexpr auto in1_args = TensorAccessorArgs<32>();
+    constexpr auto in1_args = TensorAccessorArgs<33>();
     constexpr auto sparsity_args = TensorAccessorArgs<in1_args.next_compile_time_args_offset()>();
     constexpr auto out_args = TensorAccessorArgs<sparsity_args.next_compile_time_args_offset()>();
 #ifdef FUSE_BIAS

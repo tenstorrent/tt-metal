@@ -338,6 +338,7 @@ process_mcast_in0_program_and_create_override_variables(
             (std::uint32_t)B,      // batch
             // sparsity args
             (std::uint32_t)0,     // batchB
+            (std::uint32_t)0,     // is_A_sparse
             (std::uint32_t)0,     // sparsity_pagesize (placeholder since sparsity not used in this case)
             (std::uint32_t)true,  // bcast_A
             (std::uint32_t)false  // get_batch_from_reader
@@ -373,6 +374,7 @@ process_mcast_in0_program_and_create_override_variables(
         (std::uint32_t)bcast_batch,  // bcast_B
         // sparsity args
         (std::uint32_t)0,  // batchB
+        (std::uint32_t)0,  // is_A_sparse
         (std::uint32_t)0,  // sparsity_pagesize (placeholder since sparsity not used in this case)
 
         // WRITER
@@ -1161,6 +1163,7 @@ process_mcast_in1_program_and_create_override_variables(
 
         // sparsity args
         (std::uint32_t)0,     // batchB
+        (std::uint32_t)0,     // is_A_sparse
         (std::uint32_t)0,     // sparsity_pagesize (placeholder since sparsity not used in this case)
         (std::uint32_t)true,  // bcast_A
         (std::uint32_t)false  // get_batch_from_reader
@@ -1195,6 +1198,7 @@ process_mcast_in1_program_and_create_override_variables(
         (std::uint32_t)bcast_batch,  // bcast_B
         // sparsity args
         (std::uint32_t)0,  // batchB
+        (std::uint32_t)0,  // is_A_sparse
         (std::uint32_t)0,  // sparsity_pagesize (placeholder since sparsity not used in this case)
 
         // WRITER
@@ -3233,7 +3237,6 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
     uint32_t in0_num_subblocks = (out_block_h / out_subblock_h);
     uint32_t in0_block_num_tiles = out_subblock_h * in0_block_w * in0_num_subblocks;
     uint32_t in0_last_ktile_w = a.logical_shape()[-1] % in0_tile.get_tile_shape()[1];
-    uint32_t batchA_batchB = ((is_input_a_sparse && (!is_input_b_sparse)) << 16) | B_B;
 
     std::vector<uint32_t> in0_sender_compile_time_args;
     in0_sender_compile_time_args = {
@@ -3264,7 +3267,8 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
         (std::uint32_t)Mt * Kt,  // MtKt
         (std::uint32_t)B_A,      // batchA
         // sparsity args
-        (std::uint32_t)batchA_batchB,                              // batchA_batchB
+        (std::uint32_t)B_B,                                        // batchB
+        (std::uint32_t)is_input_a_sparse && (!is_input_b_sparse),  // is_A_sparse
         (std::uint32_t)sparsity.buffer()->aligned_page_size(),     // sparsity_pagesize
         (std::uint32_t)!(is_input_a_sparse && is_input_b_sparse),  // bcast_A
         (std::uint32_t)!nnz.has_value(),                           // get_batch_from_reader
@@ -3299,8 +3303,9 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
         (std::uint32_t)B_A,      // batchA
         (std::uint32_t)true,     // bcast_B
         // sparsity args
-        (std::uint32_t)batchA_batchB,                           // batchA_batchB
-        (std::uint32_t)sparsity.buffer()->aligned_page_size(),  // sparsity_pagesize
+        (std::uint32_t)B_B,                                        // batchB
+        (std::uint32_t)is_input_a_sparse && (!is_input_b_sparse),  // is_A_sparse
+        (std::uint32_t)sparsity.buffer()->aligned_page_size(),     // sparsity_pagesize
 
         // WRITER
         // out tensor args
