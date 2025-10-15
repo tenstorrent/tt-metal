@@ -143,7 +143,7 @@ FactoryParameters get_factory_parameters(
         (in_channels / num_shards_c) % tt::constants::TILE_WIDTH != 0 &&
         (in_channels / num_shards_c) % tt::constants::TILE_WIDTH <= tt::constants::FACE_WIDTH;
     const uint32_t max_rows_for_reduction =
-        !last_tile_is_partial ? tt::constants::TILE_HEIGHT : tt::constants::TILE_HEIGHT / 2;
+        !last_tile_is_partial || return_indices ? tt::constants::TILE_HEIGHT : tt::constants::TILE_HEIGHT / 2;
     const bool is_large_kernel = kernel_size_hw > max_rows_for_reduction;
     if (return_indices) {
         TT_FATAL(
