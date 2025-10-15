@@ -172,7 +172,7 @@ std::unordered_map<MeshId, std::unordered_set<HostName>> TopologyMapper::build_c
     for (std::size_t mpi_rank = 0; mpi_rank < world_size; ++mpi_rank) {
         const auto entries_for_rank = counts[mpi_rank];
         for (std::uint32_t j = 0; j < entries_for_rank; ++j) {
-            const auto encoded = gathered[mpi_rank * max_count + j];
+            const auto encoded = gathered[(mpi_rank * max_count) + j];
             if (encoded == sentinel) {
                 continue;
             }
