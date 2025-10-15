@@ -116,6 +116,43 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: 🔧 Setup GitHub CLI and jq
+        if: ${{ inputs.download-artifacts == true }}
+        run: |
+          echo "📦 Checking GitHub CLI and jq installation..."
+
+          # Check and install GitHub CLI
+          if ! command -v gh >/dev/null 2>&1; then
+            echo "Installing GitHub CLI..."
+            apt-get update
+            apt-get install -y --no-install-recommends gh
+            echo "✅ GitHub CLI installed successfully"
+          else
+            echo "✅ GitHub CLI is already installed"
+          fi
+
+          # Check and install jq
+          if ! command -v jq >/dev/null 2>&1; then
+            echo "Installing jq..."
+            apt-get update
+            apt-get install -y --no-install-recommends jq
+            echo "✅ jq installed successfully"
+          else
+            echo "✅ jq is already installed"
+          fi
+
+          # Verify installations
+          echo "🔍 Verifying installations:"
+          gh --version
+          jq --version
+
+          # Check GitHub CLI authentication (GH_TOKEN is provided via env)
+          if gh auth status >/dev/null 2>&1; then
+            echo "✅ GitHub CLI is authenticated"
+          else
+            echo "⚠️  GitHub CLI authentication check failed, but GH_TOKEN is set"
+          fi
+        shell: bash
 
       - name: Run Git Bisect
         shell: bash

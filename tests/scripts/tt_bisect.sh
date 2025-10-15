@@ -45,8 +45,6 @@ done
 [ -n "$good_commit" ] || die "Please specify -g GOOD_SHA."
 [ -n "$bad_commit" ] || die "Please specify -b BAD_SHA."
 
-echo "🔍 Debug: artifact_mode initially set to: $artifact_mode"
-
 # Check required tools for artifact mode
 if [ "$artifact_mode" = true ]; then
   if ! command -v gh >/dev/null 2>&1; then
