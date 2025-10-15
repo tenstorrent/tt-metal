@@ -212,12 +212,8 @@ class LazyParams:
                     f"Warning: Generating {const_name} state_dict parameter from statistics, this may lead to unexpected behavior."
                 )
             return decompress_tensor(decompressed_tensor, shape, dtype)
-        elif const_meta["is_state_dict"] == "state_dict_constant":
-            return (
-                StateDictConstant(const_name, self.data[const_name])
-                if const_meta["is_state_dict"]
-                else self.data[const_name]
-            )
+        elif const_meta["summary"]["type"] == "state_dict_constant":
+            return StateDictConstant(const_name, self.data[const_name])
         elif self.data is not None and const_name in self.data:
             return self.data[const_name]
         raise RuntimeError(
