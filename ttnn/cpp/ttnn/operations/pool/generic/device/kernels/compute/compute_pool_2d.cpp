@@ -219,7 +219,7 @@ void MAIN {
             if constexpr (!is_output_tiled) {
                 cb_reserve_back(out_cb_id, output_faces);
             }
-            if constexpr (tilize_reconfig || is_output_tiled) {
+            if constexpr (tilize_reconfig) {
                 if (first_c_block || last_c_block) {
                     UNPACK((llk_unpack_tilizeA_B_init<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
                         in_cb_id_0, in_scalar_cb_id_0, tiles_to_reduce, num_faces_in_input_tile, face_r_dim, 1)));
@@ -247,7 +247,13 @@ void MAIN {
                             pack_untilize_reinit>(curr_in_cb_id, curr_in_idx_cb_id, output_faces);
                     }
 
-                    max_reduce_with_indices<window_size_hw>(data_dst_idx, index_dst_idx);
+                    // the max_reduce_with_indices LLK function only supports kernel_size=9, pending
+                    // https://github.com/tenstorrent/tt-metal/issues/28141 but, since for return_indices the in_cb is
+                    // oversized (equal to 1 tile), and since this CB is filled with padding values in the beginning of
+                    // the data movement kernel, it is possible to still use max_reduce_with_indices with kernel sizes
+                    // smaller than 9 as the excess sticks are just filled with padding values
+                    constexpr uint32_t max_mpwi_kernel_size = 9;
+                    max_reduce_with_indices<max_mpwi_kernel_size>(data_dst_idx, index_dst_idx);
 
                     cb_pop_front(curr_in_idx_cb_id, 1);
                 } else {
@@ -267,18 +273,18 @@ void MAIN {
             tile_regs_commit();
             tile_regs_wait();
             if constexpr (!return_indices) {
-                 if constexpr (is_output_tiled) {
-                     // TILED output: accumulate sticks and perform tilization when needed
-                     if (last_c_block) {
-                         pack_untilize_dest<partial_iter_output_tiles>(
-                             pre_tilize_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
-                         cb_push_back(pre_tilize_cb_id, partial_iter_output_tiles);
-                         tilize_stick_counter++;
-                     } else {
-                         pack_untilize_dest<max_tiles_per_iter>(
-                             pre_tilize_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
-                         cb_push_back(pre_tilize_cb_id, max_tiles_per_iter);
-                     }
+                if constexpr (is_output_tiled) {
+                    // TILED output: accumulate sticks and perform tilization when needed
+                    if (last_c_block) {
+                        pack_untilize_dest<partial_iter_output_tiles>(
+                            pre_tilize_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
+                        cb_push_back(pre_tilize_cb_id, partial_iter_output_tiles);
+                        tilize_stick_counter++;
+                    } else {
+                        pack_untilize_dest<max_tiles_per_iter>(
+                            pre_tilize_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
+                        cb_push_back(pre_tilize_cb_id, max_tiles_per_iter);
+                    }
                     tile_regs_release();
 
                     if (tilize_stick_counter == TILE_HEIGHT) {
@@ -302,6 +308,9 @@ void MAIN {
                         }
 
                         tilize_stick_counter = 0;
+
+                        UNPACK((llk_unpack_tilizeA_B_init<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
+                            in_cb_id_0, in_scalar_cb_id_0, tiles_to_reduce, num_faces_in_input_tile, face_r_dim, 1)));
                         // init math for reduction again since FPU gets reprogrammed by tilize
                         MATH((llk_math_reduce_init<REDUCE_OP, REDUCE_DIM, DST_ACCUM_MODE, MATH_FIDELITY>()));
 #ifdef ARCH_BLACKHOLE

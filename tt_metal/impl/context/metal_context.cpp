@@ -73,7 +73,7 @@ void MetalContext::initialize(
         force_reinit_ = true;
     }
     // Settings that affect FW build can also trigger a re-initialization
-    auto fw_compile_hash = std::hash<std::string>{}(rtoptions_.get_compile_hash_string());
+    const size_t fw_compile_hash = std::hash<std::string>{}(rtoptions_.get_compile_hash_string());
     validate_worker_l1_size(worker_l1_size, *hal_);
     if (initialized_) {
         if (dispatch_core_config_ != dispatch_core_config or num_hw_cqs != num_hw_cqs_ or
@@ -109,6 +109,8 @@ void MetalContext::initialize(
 
     // Initialize inspector
     inspector_data_ = Inspector::initialize();
+    // Set fw_compile_hash for Inspector RPC build environment info
+    Inspector::set_build_env_fw_compile_hash(fw_compile_hash);
 
     // Initialize dispatch state
     dispatch_core_manager_ = std::make_unique<dispatch_core_manager>(dispatch_core_config, num_hw_cqs);
@@ -153,7 +155,15 @@ void MetalContext::initialize(
 
         // Create build env for this device, and build FW if it's not built already
         BuildEnvManager::get_instance().add_build_env(device_id, num_hw_cqs_);
-        uint32_t fw_build_key = BuildEnvManager::get_instance().get_device_build_env(device_id).build_key;
+        // fw_build_key is a combination of build_key and fw_compile_hash
+        // If fw_compile_hash changes, the fw_build_key will change and FW will be rebuilt
+        // if it's not already in firmware_built_keys_
+        // Combine build_key and fw_compile_hash using XOR to create unique firmware build key
+        // Uses full 64-bit fw_compile_hash for proper change detection
+        uint64_t fw_build_key =
+            (static_cast<uint64_t>(BuildEnvManager::get_instance().get_device_build_env(device_id).build_key)) ^
+            fw_compile_hash;
+
         if (!firmware_built_keys_.contains(fw_build_key)) {
             BuildEnvManager::get_instance().build_firmware(device_id);
             firmware_built_keys_.insert(fw_build_key);
@@ -1031,6 +1041,17 @@ void MetalContext::initialize_firmware(
             // For eth, write the go and launch message before initializing because when using the ETH FW API
             // it will launch immediately. DM0 is not in a reset state as it is running base FW.
             write_initial_go_launch_msg();
+            if (core_type == HalProgrammableCoreType::ACTIVE_ETH) {
+                // Clear the ncrisc_halt message
+                tt::tt_metal::DeviceAddr mailbox_addr =
+                    hal_->get_dev_addr(core_type, tt::tt_metal::HalL1MemAddrType::MAILBOX);
+                auto factory = hal_->get_dev_msgs_factory(core_type);
+                tt::tt_metal::DeviceAddr ncrisc_halt_addr =
+                    mailbox_addr + factory.offset_of<tt::tt_metal::dev_msgs::mailboxes_t>(
+                                       tt::tt_metal::dev_msgs::mailboxes_t::Field::ncrisc_halt);
+                std::vector<uint8_t> data(factory.size_of<tt::tt_metal::dev_msgs::ncrisc_halt_msg_t>(), 0);
+                cluster_->write_core(data.data(), data.size(), tt_cxy_pair(device_id, virtual_core), ncrisc_halt_addr);
+            }
 
             // Write firmware main to primary erisc (DM0)
             // Using classic ASSERT/DEASSERT PC method for 1 erisc mode because erisc1 has no base firmware
@@ -1334,10 +1355,15 @@ void MetalContext::initialize_and_launch_firmware(chip_id_t device_id) {
             continue;
         }
 
-        tt::umd::RiscType reset_val = tt::umd::RiscType::BRISC;
-        if (multi_risc_active_eth_cores.contains(worker_core)) {
-            // bit 12 needs to be deasserted to run second erisc on BH
-            reset_val |= tt::umd::RiscType::ERISC1;
+        tt::umd::RiscType reset_val;
+        if (cluster_->arch() == ARCH::QUASAR) {
+            reset_val = tt::umd::RiscType::ALL_NEO_DMS;
+        } else {
+            reset_val = tt::umd::RiscType::BRISC;
+            if (multi_risc_active_eth_cores.contains(worker_core)) {
+                // bit 12 needs to be deasserted to run second erisc on BH
+                reset_val |= tt::umd::RiscType::ERISC1;
+            }
         }
         cluster_->deassert_risc_reset_at_core(tt_cxy_pair(device_id, worker_core), reset_val);
     }

@@ -111,6 +111,7 @@ jobs:
   #          # Moved to t3k tests until OOM on single card runners resolved
             # { name: "qwen7b", runner-label: "N300", performance: false, cmd: run_qwen7b_func, owner_id: U03PUAKE719}, # Mark O'Connor
             { name: "qwen25_vl", runner-label: "N300", performance: true, cmd: run_qwen25_vl_func, owner_id: U07RY6B5FLJ},  #Gongyu Wang
+            { name: "ds_r1_qwen", runner-label: "N300", performance: false, cmd: run_ds_r1_qwen_func, owner_id: U07RY6B5FLJ, civ2-compatible: true},  #Gongyu Wang
             # { name: "gemma3", runner-label: "N150", performance: true, cmd: run_gemma3_perf, owner_id: U08TJ70UFRT},  # Harry Andrews TODO: Gemma3 N150 tests pulled due to OOM; will be addressed in future PR
             { name: "gemma3", runner-label: "N300", performance: true, cmd: run_gemma3_perf, owner_id: U08TJ70UFRT},  # Harry Andrews
           ]]
@@ -166,7 +167,7 @@ jobs:
     runs-on: >-
       ${{
         matrix.test-group.civ2-compatible == true
-        && format('tt-ubuntu-2204-{0}-stable', matrix.test-group.runner-label)
+        && format('tt-ubuntu-2204-{0}-metal', matrix.test-group.runner-label)
         || (matrix.test-group.runner-label == 'N300' && matrix.test-group.performance)
           && fromJSON(format('["{0}", "{1}", "bare-metal", "pipeline-perf"]',
               matrix.test-group.runner-label,
@@ -188,7 +189,7 @@ jobs:
         with:
           name: ${{ inputs.build-artifact-name }}
       - name: Extract files
-        run: tar -xvf ttm_any.tar
+        run: tar --zstd -xvf ttm_any.tar.zst
       - name: ⬇️ Download Wheel
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         timeout-minutes: 10

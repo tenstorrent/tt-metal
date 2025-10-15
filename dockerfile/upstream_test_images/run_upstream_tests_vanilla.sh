@@ -22,20 +22,9 @@ test_suite_bh_single_pcie_metal_unit_tests() {
 
 # Function test run BH UMD tests, should be any topology
 test_suite_bh_umd_unit_tests() {
-    # Can't find test SOC descs... we don't actually run this test in metal CI
-    # so makes sense we broke it
-    # ./build/test/umd/api/api_tests
     ./build/test/umd/blackhole/unit_tests
     # Filter out the test that is failing due to local YAML files, see: https://github.com/tenstorrent/tt-metal/issues/24359
     gtest_filter="-ApiClusterTest.DifferentConstructors"
-
-    # Add more tests to exclude if hw_topology is blackhole_p300
-    # Issue: https://github.com/tenstorrent/tt-umd/issues/1412
-    if [[ "$hw_topology" == "blackhole_p300" ]]; then
-        gtest_filter+=":ApiClusterDescriptorTest.VerifyStandardTopology"
-        gtest_filter+=":ApiClusterTest.OpenChipsByPciId"
-        gtest_filter+=":ApiClusterTest.OpenClusterByLogicalID"
-    fi
     ./build/test/umd/api/api_tests --gtest_filter="$gtest_filter"
 }
 
@@ -180,6 +169,11 @@ test_suite_wh_6u_metal_torus_xy_health_check_tests() {
     ./build/test/tt_metal/tt_fabric/test_system_health --system-topology TORUS_XY
 }
 
+test_suite_wh_6u_metal_qsfp_links_health_check_tests() {
+    echo "[upstream-tests] Checking QSFP links on WH 6U (Only works on XY (2D) Torus systems. Check https://github.com/tenstorrent/tt-metal/issues/30415 for updates)"
+    ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_deadlock_stability_6U_galaxy.yaml
+}
+
 test_suite_wh_6u_model_unit_tests() {
     echo "[upstream-tests] running WH 6U upstream model unit tests"
     pytest tests/ttnn/unit_tests/operations/ccl/test_ccl_async_TG_llama.py
@@ -257,7 +251,8 @@ test_suite_bh_multi_pcie_llama_demo_tests"
 hw_topology_test_suites["wh_6u"]="test_suite_wh_6u_model_unit_tests
 test_suite_wh_6u_llama_demo_tests
 test_suite_wh_6u_metal_unit_tests
-test_suite_wh_6u_metal_torus_xy_health_check_tests"
+test_suite_wh_6u_metal_torus_xy_health_check_tests
+test_suite_wh_6u_metal_qsfp_links_health_check_tests"
 
 # Function to display help
 show_help() {
