@@ -68,17 +68,6 @@ def get_matmul_config(core_grid, in0_block_w, out_subblock, per_core_M, per_core
             transpose_mcast=False,
         )
 
-
-def calculate_shardd_dims(nhw, ch, core_grid, sharding_strategy):
-    if sharding_strategy == "height":
-        shard_height = (nhw // (core_grid.x * core_grid.y) + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE * ttnn.TILE_SIZE
-        shard_width = (ch + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE * ttnn.TILE_SIZE
-    else:
-        shard_height = (nhw // core_grid.y + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE * ttnn.TILE_SIZE
-        shard_width = (ch // core_grid.x + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE * ttnn.TILE_SIZE
-    return shard_height, shard_width
-
-
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 12 * 1024}], indirect=True)
 @pytest.mark.parametrize(
     "n, ch, h, w, sharding_strategy",
