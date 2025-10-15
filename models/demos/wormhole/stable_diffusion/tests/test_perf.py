@@ -251,7 +251,7 @@ def test_stable_diffusion_vae_trace(device):
 @pytest.mark.parametrize(
     "batch_size, num_inference_steps, expected_compile_time, expected_inference_time",
     [
-        (1, 50, 3600, 6.31) if is_wormhole_b0() else (1, 50, 3600, 3.50),  # Wormhole B0 vs Blackhole performance
+        (1, 50, 3600, 5.10) if is_wormhole_b0() else (1, 50, 3600, 3.50),  # Wormhole B0 vs Blackhole performance
     ],
 )
 def test_stable_diffusion_perf(device, batch_size, num_inference_steps, expected_compile_time, expected_inference_time):
