@@ -47,6 +47,29 @@ def check_noc_status(
 
     loc_mem_access = MemoryAccess.get(location.noc_block.get_risc_debug(risc_name))
 
+    # Skip check for BRISC when operating in dynamic NOC mode.
+    # DM_DEDICATED_NOC is 0 as defined in dev firmware headers (see dev_msgs.h).
+    if risc_name == "brisc":
+        DM_DEDICATED_NOC = 0
+        try:
+            prev_noc_mode = mem_access(fw_elf, "prev_noc_mode", loc_mem_reader)[0][0]
+        except Exception:
+            prev_noc_mode = DM_DEDICATED_NOC  # Default to dedicated if symbol is not readable
+        if prev_noc_mode != DM_DEDICATED_NOC:
+            message += "    Skipping NOC status check: prev_noc_mode != DM_DEDICATED_NOC\n"
+            log_check(True, message)
+            return
+
+        # Also validate that BRISC's runtime-selected NOC matches the NOC being checked.
+        try:
+            active_noc_index = mem_access(fw_elf, "noc_index", loc_mem_reader)[0][0]
+        except Exception:
+            message += "    Skipping NOC status check: could not read noc_index from BRISC firmware\n"
+            log_check(False, message)
+            return
+        if active_noc_index != noc_id:
+            return
+
     # Check if variables match with corresponding register
     for var in var_to_reg_map:
         reg = var_to_reg_map[var]
@@ -70,7 +93,7 @@ def check_noc_status(
 def run(args, context: Context):
     BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth"]
     RISC_CORES_TO_CHECK = ["brisc", "erisc", "erisc0", "erisc1"]
-    NOC_ID = 0  # TODO: Add support for NOC1
+    NOC_IDS = [0, 1]
     # Dictionary of corresponding variables and registers to check
     VAR_TO_REG_MAP = {
         "noc_reads_num_issued": "NIU_MST_RD_RESP_RECEIVED",
@@ -83,13 +106,14 @@ def run(args, context: Context):
     dispatcher_data = get_dispatcher_data(args, context)
     elfs_cache = get_elfs_cache(args, context)
     run_checks = get_run_checks(args, context)
-    run_checks.run_per_core_check(
-        lambda location, risc_name: check_noc_status(
-            location, risc_name, dispatcher_data, VAR_TO_REG_MAP, elfs_cache, NOC_ID
-        ),
-        block_filter=BLOCK_TYPES_TO_CHECK,
-        core_filter=RISC_CORES_TO_CHECK,
-    )
+    for noc_id in NOC_IDS:
+        run_checks.run_per_core_check(
+            lambda location, risc_name, _noc_id=noc_id: check_noc_status(
+                location, risc_name, dispatcher_data, VAR_TO_REG_MAP, elfs_cache, _noc_id
+            ),
+            block_filter=BLOCK_TYPES_TO_CHECK,
+            core_filter=RISC_CORES_TO_CHECK,
+        )
 
 
 if __name__ == "__main__":
