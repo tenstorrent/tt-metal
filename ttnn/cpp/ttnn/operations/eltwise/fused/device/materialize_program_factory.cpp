@@ -69,7 +69,7 @@ MaterializeDeviceOperation::ProgramFactory::cached_program_t MaterializeDeviceOp
     tensor_return_value_t& output_tensor) {
     namespace metal = tt::tt_metal;
 
-    constexpr uint32_t tiles_per_cycle = 2;
+    constexpr uint32_t tiles_per_cycle = 1;
     const auto& all_device_cores = operation_attributes.worker_grid;
     const auto data_format = metal::datatype_to_dataformat_converter(output_tensor.dtype());
     const auto fp32_dest_acc_en = data_format == tt::DataFormat::Float32 or data_format == tt::DataFormat::Int32 or

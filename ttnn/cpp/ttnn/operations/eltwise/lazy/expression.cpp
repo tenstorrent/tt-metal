@@ -166,13 +166,15 @@ std::optional<BasicExpression<T>> BasicExpression<T>::from(
         return std::nullopt;
     }
 
-    if (first.cb_index() + second.cb_index() + 2 >= tt::CBIndex::SIZE) {
+    // add binary validation here
+
+    auto expression = BasicExpression<T>(operation, first, second);
+
+    if (expression.cb_index() >= tt::CBIndex::SIZE) {
         return std::nullopt;
     }
 
-    // add binary validation here
-
-    return BasicExpression<T>(operation, first, second);
+    return expression;
 }
 
 template <typename T>
@@ -188,13 +190,15 @@ std::optional<BasicExpression<T>> BasicExpression<T>::from(
         return std::nullopt;
     }
 
-    if (first.cb_index() + second.cb_index() + third.cb_index() + 3 >= tt::CBIndex::SIZE) {
+    // add ternary validation here
+
+    auto expression = BasicExpression<T>(operation, first, second, third);
+
+    if (expression.cb_index() >= tt::CBIndex::SIZE) {
         return std::nullopt;
     }
 
-    // add ternary validation here
-
-    return BasicExpression<T>(operation, first, second, third);
+    return expression;
 }
 
 template <typename T>
