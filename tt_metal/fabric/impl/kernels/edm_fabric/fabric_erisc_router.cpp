@@ -2392,7 +2392,7 @@ void kernel_main() {
         "For multi-txq mode, the only currently supported configuration is sender_txq_id=0 and receiver_txq_id=1");
     if constexpr (NUM_ACTIVE_ERISCS > 1) {
         constexpr bool is_erisc_that_sets_up_second_txq = is_receiver_channel_serviced[0];
-        if constexpr (is_erisc_that_sets_up_second_txq) {
+        if constexpr (multi_txq_enabled && is_erisc_that_sets_up_second_txq) {
             initialize_state_for_txq1_active_mode();
         }
         if constexpr (is_sender_channel_serviced[0]) {
