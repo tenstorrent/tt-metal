@@ -2445,83 +2445,6 @@ public:
             read_req_vc);
     }
 
-    /** @brief Sets the stateful registers for an asynchronous read for a single packet.
-     *
-     * Refer to \a noc_async_read_set_state for more details
-     *
-     * @param src Source object (e.g., TensorAccessor)
-     * @param size_bytes Size of the data transfer in bytes
-     * @param src_args Additional arguments for source address calculation
-     */
-    template <typename Src>
-    void async_read_one_packet_set_state(const Src& src, uint32_t size_bytes, const src_args_t<Src>& src_args) const {
-        noc_async_read_one_packet_set_state(get_src_ptr<AddressType::NOC>(src, src_args), size_bytes, noc_id_);
-    }
-
-    /** @brief Initiates an asynchronous read for a single packet with state preservation.
-     *
-     * Refer to \a noc_async_read_with_state for more details
-     *
-     * @param src Source object (e.g., TensorAccessor)
-     * @param dst Destination object (e.g., local L1 memory)
-     * @param src_args Additional arguments for source address calculation
-     * @param dst_args Additional arguments for destination address calculation
-     * @tparam inc_num_issued Whether issued read counter should increment (default: true)
-     */
-    template <bool inc_num_issued = true, typename Src, typename Dst>
-    void async_read_one_packet_with_state(
-        const Src& src, const Dst& dst, const src_args_t<Src>& src_args, const dst_args_t<Dst>& dst_args) const {
-        noc_async_read_one_packet_with_state<inc_num_issued>(
-            get_src_ptr<AddressType::NOC>(src, src_args), get_dst_ptr<AddressType::LOCAL_L1>(dst, dst_args), noc_id_);
-    }
-
-    /** @brief Sets the stateful registers for an asynchronous read.
-     *
-     * This function is used to set up the state for \a async_read_set_state, which will issue the actual
-     * read request.
-     *
-     * @note \a async_read can be used instead if the state preservation is not needed.
-     *
-     * @see async_read_barrier
-     *
-     * @param src Source object (e.g., TensorAccessor)
-     * @param src_args Additional arguments for source address calculation
-     */
-    template <typename Src>
-    void async_read_set_state(const Src& src, const src_args_t<Src>& src_args) const {
-        noc_async_read_set_state(get_src_ptr<AddressType::NOC>(src, src_args), noc_id_);
-    }
-
-    /** @brief Initiates an asynchronous read with state preservation.
-     *
-     * This function is used to issue the actual read request after the state has been set up.
-     *
-     * @note This function must be preceded by a call to \a async_read_set_state.
-     * @note \a async_read can be used instead if the state preservation is not needed.
-     *
-     * @see async_read_barrier
-     *
-     * @param src Source object (e.g., TensorAccessor)
-     * @param dst Destination object (e.g., local L1 memory)
-     * @param size_bytes Size of the data transfer in bytes
-     * @param src_args Additional arguments for source address calculation
-     * @param dst_args Additional arguments for destination address calculation
-     * @tparam inc_num_issued Whether issued read counter should increment (default: true)
-     */
-    template <bool inc_num_issued = true, typename Src, typename Dst>
-    void async_read_with_state(
-        const Src& src,
-        const Dst& dst,
-        uint32_t size_bytes,
-        const src_args_t<Src>& src_args,
-        const dst_args_t<Dst>& dst_args) const {
-        noc_async_read_with_state<inc_num_issued>(
-            get_src_ptr<AddressType::NOC>(src, src_args),
-            get_dst_ptr<AddressType::LOCAL_L1>(dst, dst_args),
-            size_bytes,
-            noc_id_);
-    }
-
     /** @brief Increments the internal counter of issued reads.
      *
      * This is used to manually increment the counter.
@@ -2530,35 +2453,6 @@ public:
      */
     void async_read_inc_num_issued(uint32_t num_issued_reads_inc) const {
         noc_async_read_inc_num_issued(num_issued_reads_inc, noc_id_);
-    }
-
-    /** @brief Initiates an asynchronous write for a single packet.
-     *
-     * Refer to \a async_write for more details.
-     *
-     * @param src Source object (e.g., local L1 memory)
-     * @param dst Destination object (e.g., TensorAccessor)
-     * @param size_bytes Size of the data transfer in bytes
-     * @param src_args Additional arguments for source address calculation
-     * @param dst_args Additional arguments for destination address calculation
-     * @param vc Virtual channel to use for the write transaction (default: NOC_UNICAST_WRITE_VC)
-     * @tparam enable_noc_tracing Enable NoC tracing for debugging (default: true)
-     * @tparam posted Whether the call is posted (i.e. needs to be acked) (default: false)
-     */
-    template <bool enable_noc_tracing = true, bool posted = false, typename Src, typename Dst>
-    void async_write_one_packet(
-        const Src& src,
-        const Dst& dst,
-        uint32_t size_bytes,
-        const src_args_t<Src>& src_args,
-        const dst_args_t<Dst>& dst_args,
-        uint32_t vc = NOC_UNICAST_WRITE_VC) const {
-        noc_async_write_one_packet<enable_noc_tracing, posted>(
-            get_src_ptr<AddressType::LOCAL_L1>(src, src_args),
-            get_dst_ptr<AddressType::NOC>(dst, dst_args),
-            size_bytes,
-            noc_id_,
-            vc);
     }
 
     /** @brief Initiates an asynchronous write.
@@ -2591,58 +2485,6 @@ public:
             size_bytes,
             noc_id_,
             vc);
-    }
-
-    /** @brief Initiates an asynchronous write for a single packet and sets its state.
-     *
-     * This function is used to set up the state for \a async_write_one_packet_set_state, which will issue the actual
-     * write request.
-     *
-     * @note \a async_write can be used instead if the state preservation is not needed.
-     *
-     * @see async_write_barrier
-     *
-     * @param dst Destination object (e.g., TensorAccessor)
-     * @param size_bytes Size of the data transfer in bytes
-     * @param dst_args Additional arguments for destination address calculation
-     * @param vc Virtual channel to use for the write transaction (default: NOC_UNICAST_WRITE_VC)
-     * @tparam posted Whether the call is posted (i.e. needs to be acked) (default: false)
-     */
-    template <bool posted = false, typename Dst>
-    void async_write_one_packet_set_state(
-        const Dst& dst, uint32_t size_bytes, const dst_args_t<Dst>& dst_args, uint8_t vc = NOC_UNICAST_WRITE_VC) const {
-        noc_async_write_one_packet_set_state<posted>(
-            get_dst_ptr<AddressType::NOC>(dst, dst_args), size_bytes, noc_id_, vc);
-    }
-
-    /** @brief Initiates an asynchronous write for a single packet.
-     *
-     * This function is used to issue the actual write request after the state has been set up.
-     *
-     * @note This function must be preceded by a call to \a async_write_one_packet_set_state.
-     * @note \a async_write can be used instead if the state preservation is not needed.
-     *
-     * @see async_write_barrier
-     *
-     * @param src Source object (e.g., local L1 memory)
-     * @param dst Destination object (e.g., TensorAccessor)
-     * @param size_bytes Size of the data transfer in bytes
-     * @param src_args Additional arguments for source address calculation
-     * @param dst_args Additional arguments for destination address calculation
-     * @tparam posted Whether the call is posted (i.e. needs to be acked) (default: false)
-     */
-    template <bool posted = false, typename Src, typename Dst>
-    void async_write_one_packet_with_state(
-        const Src& src,
-        const Dst& dst,
-        uint32_t size_bytes,
-        const src_args_t<Src>& src_args,
-        const dst_args_t<Dst>& dst_args) const {
-        noc_async_write_one_packet_with_state<posted>(
-            get_src_ptr<AddressType::NOC>(src, src_args),
-            get_dst_ptr<AddressType::LOCAL_L1>(dst, dst_args),
-            size_bytes,
-            noc_id_);
     }
 
     /** @brief Initiates a read barrier for synchronization.
