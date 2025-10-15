@@ -31,7 +31,7 @@
 
 #include "allocator.hpp"
 #include <tt_stl/assert.hpp>
-#include "command_queue.hpp"
+#include "dispatch/command_queue.hpp"
 #include "dispatch/command_queue_common.hpp"
 #include "common/core_assignment.hpp"
 #include "program/program_impl.hpp"
@@ -58,7 +58,6 @@
 #include <tt-metalium/control_plane.hpp>
 #include <umd/device/coordinates/coordinate_manager.hpp>
 #include <umd/device/types/core_coordinates.hpp>
-#include <umd/device/types/tensix_soft_reset_options.hpp>
 #include <umd/device/types/xy_pair.hpp>
 
 namespace tt {
