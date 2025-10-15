@@ -2821,16 +2821,27 @@ void SparseMatmul::validate(
     TT_FATAL(this->nnz.value_or(1) > 0, "nnz ({}) must be greater than 0", this->nnz.value());
 
     // Check that nnz is less than or equal to the length of all batch dimensions
-    uint32_t batch_length = 1;
-    if ((!(this->is_input_a_sparse && this->is_input_b_sparse)) && ashape.rank() > 2) {
+    uint32_t batch_length_A = 1;
+    if (ashape.rank() > 2) {
         for (int i = 0; i < ashape.rank() - 2; ++i) {
-            batch_length *= ashape[i];
+            batch_length_A *= ashape[i];
         }
     }
+
+    uint32_t batch_length_B = 1;
     if (bshape.rank() > 2) {
         for (int i = 0; i < bshape.rank() - 2; ++i) {
-            batch_length *= bshape[i];
+            batch_length_B *= bshape[i];
         }
+    }
+
+    uint32_t batch_length = 1;
+    if (this->is_input_a_sparse && this->is_input_b_sparse) {
+        batch_length = batch_length_B;
+    } else if (this->is_input_a_sparse) {
+        batch_length = batch_length_A;
+    } else {
+        batch_length = batch_length_A * batch_length_B;
     }
 
     // Check that sparsity has enough entries
@@ -2840,11 +2851,19 @@ void SparseMatmul::validate(
         sparsity.logical_volume(),
         batch_length);
 
-    TT_FATAL(
-        this->nnz.value_or(1) <= batch_length,
-        "nnz ({}) must be less than or equal to the length of all batch dimensions ({})",
-        this->nnz,
-        batch_length);
+    if (this->is_input_a_sparse && (!this->is_input_b_sparse)) {
+        TT_FATAL(
+            this->nnz.value_or(1) <= (batch_length_A * batch_length_B),
+            "nnz ({}) must be less than or equal to the length of all batch dimensions ({})",
+            this->nnz,
+            batch_length);
+    } else {
+        TT_FATAL(
+            this->nnz.value_or(1) <= batch_length,
+            "nnz ({}) must be less than or equal to the length of all batch dimensions ({})",
+            this->nnz,
+            batch_length);
+    }
 }
 
 std::vector<ttnn::TensorSpec> SparseMatmul::compute_output_specs(

@@ -56,7 +56,7 @@ void kernel_main() {
 
     // sparsity args
 
-    constexpr uint32_t batchB = get_compile_time_arg_val(20);
+    constexpr uint32_t batchA_batchB = get_compile_time_arg_val(20);
     constexpr uint32_t sparsity_pagesize = get_compile_time_arg_val(21);
     // Boolean that is set when input A is sparse. If set, both input A and B are assumed to be sparse.
     // Based on the sparsity tensor, the corresponding batch in input A and B are skipped.
@@ -77,8 +77,11 @@ void kernel_main() {
     // 0x2 is used to specify "IGNORE_BATCH" state, i.e. when the batch is not valid.
     constexpr uint32_t IGNORE_BATCH = 0x2;
 
+    constexpr uint32_t batchB = batchA_batchB & 0xFFFF;
+    constexpr uint32_t is_A_sparse = (bool)(batchA_batchB >> 16);
+    constexpr bool is_B_sparse = (!is_A_sparse) && (batchB > 0);
     // When sparsity is disabled, we just loop once
-    constexpr uint32_t batchB_lim = batchB == 0 ? 1u : batchB;
+    constexpr uint32_t batchB_lim = (is_A_sparse || is_B_sparse) ? batchB : 1;
 
     MatmulOpReceiver fused_op_receiver;
     if constexpr (fuse_op) {
@@ -143,19 +146,31 @@ void kernel_main() {
 #endif  // SKIP_MCAST
 
     uint32_t l1_write_addr_sparsity = 0;
-    if constexpr (batchB > 0) {
+    if constexpr (is_A_sparse || is_B_sparse) {
         cb_reserve_back(cb_id_sparsity, 1);
         l1_write_addr_sparsity = get_write_ptr(cb_id_sparsity);
     }
 
+    if constexpr (is_A_sparse) {
+        noc_async_read_page(0, s_sparsity, l1_write_addr_sparsity);
+        noc_async_read_barrier();
+    }
+
     for (uint32_t b = 0; b < batch; ++b) {
-        if constexpr (batchB > 0) {
+        if constexpr (is_A_sparse) {
+            if (reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_write_addr_sparsity)[b] == 0) {
+                in0_tensor_start_tile_id += MtKt;
+                continue;
+            }
+        }
+
+        if constexpr (is_B_sparse) {
             noc_async_read_page(b, s_sparsity, l1_write_addr_sparsity);
             noc_async_read_barrier();
         }
 
         for (uint32_t bB = 0; bB < batchB_lim; ++bB) {
-            if constexpr (batchB > 0) {
+            if constexpr (is_B_sparse) {
                 volatile auto is_batch_valid =
                     ((reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_write_addr_sparsity))[bB]) != 0;
 
@@ -342,7 +357,7 @@ void kernel_main() {
     }
     noc_async_write_barrier();
     // For completeness, we empty the sparsity CB if it was reserved earlier
-    if constexpr (batchB > 0) {
+    if constexpr (is_B_sparse) {
         cb_push_back(cb_id_sparsity, 1);
         cb_wait_front(cb_id_sparsity, 1);
         cb_pop_front(cb_id_sparsity, 1);

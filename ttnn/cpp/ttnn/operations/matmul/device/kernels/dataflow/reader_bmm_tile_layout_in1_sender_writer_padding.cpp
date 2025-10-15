@@ -66,7 +66,7 @@ void kernel_main() {
     constexpr uint32_t batch = get_compile_time_arg_val(15);
     constexpr uint32_t bcast_B = get_compile_time_arg_val(16);
     // sparsity args
-    constexpr uint32_t batchB = get_compile_time_arg_val(17);
+    constexpr uint32_t batchA_batchB = get_compile_time_arg_val(17);
     constexpr uint32_t sparsity_pagesize = get_compile_time_arg_val(18);
 
     // WRITER
@@ -85,8 +85,11 @@ void kernel_main() {
     constexpr uint32_t MtNt = get_compile_time_arg_val(28);  // if 0
     // Don't need batch; same as batch from READER args
 
+    constexpr uint32_t batchB = batchA_batchB & 0xFFFF;
+    constexpr uint32_t is_A_sparse = (bool)(batchA_batchB >> 16);
+    constexpr bool is_B_sparse = (!is_A_sparse) && (batchB > 0);
     // When sparsity is disabled, we just loop once
-    constexpr uint32_t batchB_lim = batchB == 0 ? 1u : batchB;
+    constexpr uint32_t batchB_lim = (is_A_sparse || is_B_sparse) ? batchB : 1;
 
     constexpr uint32_t one_tile = 1;
 
@@ -206,7 +209,7 @@ void kernel_main() {
 #endif  // SKIP_MCAST
 
     uint32_t l1_write_addr_sparsity = 0;
-    if constexpr (batchB > 0) {
+    if constexpr (is_A_sparse || is_B_sparse) {
         cb_reserve_back(cb_id_sparsity, 1);
         l1_write_addr_sparsity = get_write_ptr(cb_id_sparsity);
     }
@@ -216,16 +219,28 @@ void kernel_main() {
     uint32_t in1_block_w_bytes = in1_block_w * in1_single_tile_size_bytes;
 #endif  // IN1_DRAM_SHARDED
 
+    if constexpr (is_A_sparse) {
+        noc_async_read_page(0, s_sparsity, l1_write_addr_sparsity);
+        noc_async_read_barrier();
+    }
+
     for (uint32_t b = 0; b < batch; ++b) {
+        if constexpr (is_A_sparse) {
+            if (reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_write_addr_sparsity)[b] == 0) {
+                out_tensor_start_tile_id += MtNt * batchB_lim;
+                continue;
+            }
+        }
+
         uint32_t in1_batch_tile_id = in1_tensor_start_tile_id;
 
-        if constexpr (batchB > 0) {
+        if constexpr (is_B_sparse) {
             noc_async_read_page(b, s_sparsity, l1_write_addr_sparsity);
             noc_async_read_barrier();
         }
 
         for (uint32_t bB = 0; bB < batchB_lim; ++bB) {
-            if constexpr (batchB > 0) {
+            if constexpr (is_B_sparse) {
                 if (reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_write_addr_sparsity)[bB] == 0) {
                     out_tensor_start_tile_id += MtNt;
                     in1_batch_tile_id += KtNt;
