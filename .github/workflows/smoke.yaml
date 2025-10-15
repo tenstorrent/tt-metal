@@ -118,6 +118,12 @@ jobs:
             : > /work/coverage/coverage.info
           fi
 
+      - name: Checkout repository for Codecov mapping
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
         if: ${{ !cancelled() && inputs.upload-coverage && (
