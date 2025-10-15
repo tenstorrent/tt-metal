@@ -5,6 +5,7 @@
 #include "generic_pools.hpp"
 
 #include "tt-metalium/constants.hpp"
+#include "ttnn/operations/pool/generic/device/pool_op.hpp"
 #include <cmath>
 #include <tt-metalium/buffer_types.hpp>
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
