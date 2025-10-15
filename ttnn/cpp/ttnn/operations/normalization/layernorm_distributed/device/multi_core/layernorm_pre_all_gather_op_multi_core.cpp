@@ -457,17 +457,29 @@ operation::ProgramWithCallbacks layernorm_pre_allgather_multi_core(
     bool float32_reduction = fp32_dest_acc_en && !legacy_reduction;
     std::vector<uint32_t> compute_args = {Wt, block_size, float32_reduction ? 1 : 0};
 
-    auto compute_kernels_id = CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/compute/"
-        "layernorm_pre_allgather.cpp",
-        all_cores,
-        tt::tt_metal::ComputeConfig{
-            .math_fidelity = math_fidelity,
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .math_approx_mode = math_approx_mode,
-            .compile_args = compute_args,
-            .defines = compute_defines});
+    auto compute_kernels_id =
+        is_rmsnorm ? CreateKernel(
+                         program,
+                         "ttnn/cpp/ttnn/operations/normalization/rmsnorm_distributed/device/kernels/compute/"
+                         "rmsnorm_pre_allgather.cpp",
+                         all_cores,
+                         tt::tt_metal::ComputeConfig{
+                             .math_fidelity = math_fidelity,
+                             .fp32_dest_acc_en = fp32_dest_acc_en,
+                             .math_approx_mode = math_approx_mode,
+                             .compile_args = compute_args,
+                             .defines = compute_defines})
+                   : CreateKernel(
+                         program,
+                         "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/compute/"
+                         "layernorm_pre_allgather.cpp",
+                         all_cores,
+                         tt::tt_metal::ComputeConfig{
+                             .math_fidelity = math_fidelity,
+                             .fp32_dest_acc_en = fp32_dest_acc_en,
+                             .math_approx_mode = math_approx_mode,
+                             .compile_args = compute_args,
+                             .defines = compute_defines});
 
     // Create circular buffers
     // c_in0 -> a

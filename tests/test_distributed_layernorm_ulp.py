@@ -317,7 +317,9 @@ def test_distributed_norm_comparison(
     """
     if norm_type == "layer_norm":
         ttnn_stats = ttnn.layer_norm_pre_all_gather(
-            ttnn_input, compute_kernel_config=compute_kernel_config, dtype=ttnn.bfloat16, legacy_reduction=False
+            ttnn_input,
+            compute_kernel_config=compute_kernel_config,
+            dtype=ttnn.bfloat16,
         )
     elif norm_type == "rms_norm":
         ttnn_stats = ttnn.rms_norm_pre_all_gather(
