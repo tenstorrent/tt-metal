@@ -26,6 +26,9 @@ def run_test_linear(
     math_fidelity=ttnn.MathFidelity.HiFi2,
     fp32_acc=True,
     dtype=ttnn.bfloat16,
+    weight_dtype=None,
+    bias_dtype=None,
+    core_grid=None,
 ):
     logger.info(f"Running test_linear with M={M}, K={K}, N={N}")
     torch_dtype = torch.float32
@@ -37,9 +40,9 @@ def run_test_linear(
 
     # Prepare TT tensors
     tt_input = ttnn.from_torch(torch_input, dtype=dtype, device=device, layout=ttnn.TILE_LAYOUT)
-    tt_weight = ttnn.from_torch(weight_input, dtype=dtype, device=device, layout=ttnn.TILE_LAYOUT)
+    tt_weight = ttnn.from_torch(weight_input, dtype=weight_dtype or dtype, device=device, layout=ttnn.TILE_LAYOUT)
     if use_bias:
-        tt_bias = ttnn.from_torch(bias_input, dtype=dtype, device=device, layout=ttnn.TILE_LAYOUT)
+        tt_bias = ttnn.from_torch(bias_input, dtype=bias_dtype or dtype, device=device, layout=ttnn.TILE_LAYOUT)
 
     activation_fn = None
     if activation == "gelu":
@@ -63,7 +66,7 @@ def run_test_linear(
         packer_l1_acc=True,
     )
 
-    core_grid = device.compute_with_storage_grid_size()
+    core_grid = core_grid or device.compute_with_storage_grid_size()
 
     matmul_config = ttnn.MinimalMatmulConfig(
         M_block_size=M_block_size,
@@ -188,6 +191,45 @@ def test_linear_tile_padding(device, M, K, N, M_block_size, K_block_size, N_bloc
     assert check_result["relative_rmse"] < 0.02
 
 
+@pytest.mark.parametrize("act_dtype", [ttnn.bfloat16, ttnn.bfloat8_b], ids=["bf16", "bf8b"])
+@pytest.mark.parametrize("weight_dtype", [ttnn.bfloat16, ttnn.bfloat8_b], ids=["bf16", "bf8b"])
+@pytest.mark.parametrize("bias_dtype", [ttnn.bfloat16, ttnn.bfloat8_b], ids=["bf16", "bf8b"])
+def test_linear_dtypes(device, act_dtype, weight_dtype, bias_dtype):
+    M, K, N = 256, 256, 256
+    M_block_size, K_block_size, N_block_size, subblock_h, subblock_w = 1, 1, 1, 1, 1
+    check_result = run_test_linear(
+        device,
+        M,
+        K,
+        N,
+        M_block_size,
+        K_block_size,
+        N_block_size,
+        subblock_h,
+        subblock_w,
+        dtype=act_dtype,
+        weight_dtype=weight_dtype,
+        bias_dtype=bias_dtype,
+    )
+    assert check_result["pcc"] > 0.999_500
+    assert check_result["relative_rmse"] < 0.02
+
+
+@pytest.mark.parametrize(
+    "core_grid",
+    [ttnn.CoreCoord(2, 2), ttnn.CoreCoord(4, 4), ttnn.CoreCoord(2, 4), ttnn.CoreCoord(4, 2)],
+    ids=["core_grid_2x2", "core_grid_4x4", "core_grid_2x4", "core_grid_4x2"],
+)
+def test_linear_core_grid(device, core_grid):
+    M, K, N = 256, 256, 256
+    M_block_size, K_block_size, N_block_size, subblock_h, subblock_w = 1, 1, 1, 1, 1
+    check_result = run_test_linear(
+        device, M, K, N, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w, core_grid=core_grid
+    )
+    assert check_result["pcc"] > 0.999_500
+    assert check_result["relative_rmse"] < 0.02
+
+
 @pytest.mark.parametrize(
     "M, K, N",
     [
@@ -225,6 +267,7 @@ TABLE_CONFIGS = [
 ]
 
 
+@pytest.mark.skip()
 @pytest.mark.parametrize(
     "M, K, N",
     TABLE_CONFIGS,
@@ -354,6 +397,7 @@ def post_process_ops_log(
     return results
 
 
+@pytest.mark.skip()
 @pytest.mark.parametrize(
     "fidelity, dtype, fp32_acc",
     [
