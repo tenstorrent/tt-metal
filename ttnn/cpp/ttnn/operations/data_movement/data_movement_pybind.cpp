@@ -38,6 +38,7 @@
 #include "ttnn/operations/data_movement/sharded_partial/sharded_to_interleaved_partial/sharded_to_interleaved_partial_pybind.hpp"
 #include "ttnn/operations/data_movement/slice/slice_pybind.hpp"
 #include "ttnn/operations/data_movement/split/split_pybind.hpp"
+#include "ttnn/operations/data_movement/split/split_experimental_pybind.hpp"
 #include "ttnn/operations/data_movement/squeeze/squeeze_pybind.hpp"
 #include "ttnn/operations/data_movement/stack/stack_pybind.hpp"
 #include "ttnn/operations/data_movement/tilize/tilize_pybind.hpp"
@@ -64,7 +65,8 @@ void py_module(py::module& module) {
     detail::bind_permute(module);
     detail::bind_repeat_interleave(module);
     detail::bind_slice(module);
-    detail::py_bind_experimental_split(module);
+    detail::bind_split(module);
+    detail::bind_experimental_split(module);
     detail::bind_tilize(module);
     detail::bind_tilize_with_val_padding(module);
     detail::bind_tilize_with_zero_padding(module);

@@ -21,6 +21,7 @@ NodeId Context::create_node(
     size_t index = nodes_.size();
 
     args->validate(inputs);
+
     nodes_.emplace_back(
         id,
         inputs,
@@ -82,7 +83,9 @@ std::unordered_set<NodeId> Context::get_dependencies(const std::vector<Tensor>& 
 
     // Start from output tensors
     for (const auto& tensor : outputs) {
-        if (tensor.producer_node() != 0) {
+        // if the tensor has a producer and the producer node is not materialized, add it to the to_visit list
+        // this avoids reevaluating parts of the graph that have already been materialized
+        if (tensor.producer_node() != 0 && !get_node(tensor.producer_node())->is_materialized()) {
             to_visit.push_back(tensor.producer_node());
         }
     }

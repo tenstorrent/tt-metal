@@ -9,6 +9,6 @@
 namespace ttnn::operations::data_movement::detail {
 namespace py = pybind11;
 
-void bind_split(py::module& module);
+void bind_experimental_split(py::module& module);
 
 }  // namespace ttnn::operations::data_movement::detail
