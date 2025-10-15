@@ -202,7 +202,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
     bool composite_all_gather =
         composite_common::use_composite_all_gather(padded_tensor, composite_dim, out_memory_config);
     bool composite_reduce_scatter =
-        composite_common::use_composite_reduce_scatter(padded_tensor, topology, composite_dim, std::nullopt);
+        composite_common::use_composite_reduce_scatter(padded_tensor, composite_dim, std::nullopt);
 
     // when input is sharded, shard specs are not compatible with the intermediate tensor shapes of the composite ops
     // convert to interleaved in this case
@@ -329,7 +329,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
     bool composite_all_gather =
         composite_common::use_composite_all_gather(padded_tensor, composite_dim, out_memory_config);
     bool composite_reduce_scatter =
-        composite_common::use_composite_reduce_scatter(padded_tensor, topology, composite_dim, cluster_axis);
+        composite_common::use_composite_reduce_scatter(padded_tensor, composite_dim, cluster_axis);
     if (composite_all_gather || composite_reduce_scatter || (dim != composite_dim) || is_fabric_2d()) {
         // All reduce = all gather + local reduce
         composite_dim = 0;
