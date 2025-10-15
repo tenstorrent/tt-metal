@@ -77,6 +77,27 @@ class DataFormat(Enum):
         return (self.size * num_datums) + num_exponents
 
 
+class BroadcastType(Enum):
+    """
+    Enum for broadcast types in LLK kernels.
+    """
+
+    None_ = "NONE"
+    Column = "COL"
+    Row = "ROW"
+    Scalar = "SCALAR"
+
+
+class EltwiseBinaryReuseDestType(Enum):
+    """
+    Enum for destination reuse types in elementwise binary ops.
+    """
+
+    NONE = 0
+    DEST_TO_SRCA = 1
+    DEST_TO_SRCB = 2
+
+
 @dataclass
 class FormatConfig:
     """

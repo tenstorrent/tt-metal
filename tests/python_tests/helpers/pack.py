@@ -97,10 +97,29 @@ def float_to_bfp8_block(block):
 
 
 def pack_bfp8_b(tensor, block_size=16, num_faces=4):
-    faces_per_tile = 4
+    """Pack tensor into BFP8_b format.
+
+    BFP8_b uses 16-element blocks, each with a shared exponent and 8-bit mantissas.
+    Only the first (256 * num_faces) elements are packed.
+
+    Args:
+        tensor: Input tensor (typically 1024 elements for full tile)
+        block_size: Elements per block (always 16 for BFP8_b)
+        num_faces: Number of faces to pack (1, 2, or 4)
+
+    Returns:
+        List of packed bytes: [exponents...] + [mantissas...]
+    """
     flattened_tensor = tensor.flatten()
+
+    # Only pack the first (256 * num_faces) elements
+    elements_to_pack = 256 * num_faces
+    assert (
+        len(flattened_tensor) >= elements_to_pack
+    ), f"Tensor has {len(flattened_tensor)} elements, but need at least {elements_to_pack} for {num_faces} face(s)"
+    flattened_tensor = flattened_tensor[:elements_to_pack]
+
     num_blocks = len(flattened_tensor) // block_size
-    num_blocks = num_blocks * num_faces // faces_per_tile
 
     exponents = []
     mantissas = []
