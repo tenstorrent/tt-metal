@@ -423,6 +423,12 @@ private:
             auto cluster_type = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type();
             std::string cluster_name = std::string(enchantum::to_string(cluster_type));
             for (const auto& token : test_config.skip.value()) {
+                log_info(LogTest, "Cluster: {} - Architecture: {}", cluster_name, arch_name);
+                log_info(
+                    LogTest,
+                    "Checking if test '{}' should be skipped on architecture or platform '{}'",
+                    test_config.name,
+                    token);
                 if (token == arch_name || token == cluster_name) {
                     log_info(LogTest, "Skipping test '{}' on architecture or platform '{}'", test_config.name, token);
                     return true;
