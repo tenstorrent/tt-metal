@@ -66,7 +66,9 @@
                 });                                                                                           \
             }                                                                                                 \
         }                                                                                                     \
-    #else
+    }
+
+#else
 
 #define TracyTTMetalBeginMeshTrace(device_ids, trace_id)
 #define TracyTTMetalEndMeshTrace(device_ids, trace_id)
