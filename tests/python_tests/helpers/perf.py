@@ -305,7 +305,8 @@ def dump_scatter(testname: str, report: PerfReport):
     # generate a scatter plot using plotly.graph_objects (no pandas required)
 
     if not report.sweep_names or not report.stat_names:
-        raise ValueError("Report is missing names")
+        # This is possible on CI when the whole split of the test is skipped
+        return
 
     dir = create_benchmark_dir(testname)
     output_path = dir / f"{testname}.html"
