@@ -404,7 +404,7 @@ get_padded_slice_runtime_args_tile_sharded_output(
         num_tiles_per_channel,
         tt::div_up(output_shard_shape[1], tt::constants::TILE_WIDTH));
 
-    [[maybe_unused]] uint32_t output_row_size_bytes = output_shard_shape[1] * input_tensor.element_size();
+    [[maybe_unused]] uint32_t output_row_size_bytes = output_shard_shape[1] * output_tensor.element_size();
     uint32_t output_row_size_elems = output_shard_shape[1];
 
     uint32_t input_channels_num_tiles = tt::div_up(input_padded_shape[3], tt::constants::TILE_WIDTH);
@@ -514,9 +514,12 @@ get_padded_slice_runtime_args_tile_sharded_output(
         const uint32_t width_offset_start_tile = width_offset_elems / TILE_WIDTH;
         const uint32_t width_offset_end_tile = tt::div_up(width_offset_elems + output_row_size_elems, TILE_WIDTH);
         const uint32_t this_core_num_tiles_per_channel = width_offset_end_tile - width_offset_start_tile;
+        const uint32_t misalignment_bytes = width_offset_elems % TILE_WIDTH * output_tensor.element_size();
         const auto num_tiles_per_full_row = num_output_tiles_per_dim[1] * this_core_num_tiles_per_channel;
 
         reader_kernel_args[5] = this_core_num_tiles_per_channel;
+        reader_kernel_args[9] = tt::div_up(input_padded_shape[-1], TILE_WIDTH) - this_core_num_tiles_per_channel;
+
         std::vector<uint32_t> start_index_per_dim(num_dims);
         std::vector<uint32_t> end_index_per_dim(num_dims);
 
@@ -646,18 +649,15 @@ get_padded_slice_runtime_args_tile_sharded_output(
             input_channels_num_tiles,
             output_channels_padding_ntiles);
         std::vector<uint32_t> writer_kernel_args = {
-            num_tiles_this_core, this_core_num_tiles_per_channel, num_sticks_per_core, output_channels_padding_ntiles};
+            num_tiles_this_core,
+            this_core_num_tiles_per_channel,
+            num_sticks_per_core,
+            output_channels_padding_ntiles,
+            misalignment_bytes};
         writer_kernel_args.insert(writer_kernel_args.end(), reversed_start_index.begin(), reversed_start_index.end());
         writer_kernel_args.insert(
             writer_kernel_args.end(), reversed_output_start_in_input.begin(), reversed_output_start_in_input.end());
         writer_kernel_args.insert(writer_kernel_args.end(), reversed_output_end.begin(), reversed_output_end.end());
-        log_info(
-            tt::LogOp,
-            "Core {}, Reader Args {}, Compute Args {}, Writer Args: {}",
-            core,
-            reader_kernel_args,
-            compute_kernel_args,
-            writer_kernel_args);
         ret_val[core_index] = {reader_kernel_args, compute_kernel_args, writer_kernel_args};
         core_index++;
     }

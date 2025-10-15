@@ -342,6 +342,7 @@ def test_slice_block_sharded_for_conv2d(
     torch.manual_seed(2005)
     torch_dtype = torch.float32 if input_dtype == ttnn.float32 else torch.bfloat16
     torch_input = torch.randint(-10, 10, dims).to(dtype=torch_dtype)
+    torch_input = torch.tensor(range(0, dims[3])).reshape(1, 1, 1, dims[3]).broadcast_to(dims).to(dtype=torch_dtype)
     num_slices = dims[slice_dim] // slice_size
     ttnn_input = ttnn.from_torch(
         torch_input, device=device, layout=layout, dtype=input_dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG
@@ -389,7 +390,8 @@ def test_slice_block_sharded_for_conv2d(
 @pytest.mark.parametrize("slice_dim", [1, 2])
 @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat8_b, ttnn.bfloat16, ttnn.float32])
-def test_slice_width_sharded_for_conv2d(device, dims, slice_dim, slice_size, cores, layout, input_dtype):
+@pytest.mark.parametrize("pad_value", [8, 32])
+def test_slice_width_sharded_for_conv2d(device, dims, slice_dim, slice_size, cores, layout, input_dtype, pad_value):
     if input_dtype == ttnn.bfloat8_b and layout == ttnn.ROW_MAJOR_LAYOUT:
         pytest.skip("bfloat8_b is not supported in row major layout")
 
@@ -414,7 +416,7 @@ def test_slice_width_sharded_for_conv2d(device, dims, slice_dim, slice_size, cor
     parallel_config = ttnn.SlidingWindowParallelConfig(
         grid=core_range, shard_scheme=ttnn.TensorMemoryLayout.WIDTH_SHARDED, shard_orientation=orientation
     )
-    padded_channels = round_up(dims[-1], 32)
+    padded_channels = round_up(dims[-1], pad_value * cores)
     padded_torch_input = torch.nn.functional.pad(torch_input, (0, padded_channels - dims[-1]))
     torch.set_printoptions(sci_mode=False, precision=2)
     for i in range(num_slices):
@@ -424,7 +426,12 @@ def test_slice_width_sharded_for_conv2d(device, dims, slice_dim, slice_size, cor
         ends[slice_dim] = (i + 1) * slice_size
         this_torch_output = padded_torch_input[begins[0] : ends[0], begins[1] : ends[1], begins[2] : ends[2]]
         output_shape = this_torch_output.shape
-        output_shape = [1, 1, output_shape[0] * output_shape[1] * output_shape[2], round_up(output_shape[3], 32)]
+        output_shape = [
+            1,
+            1,
+            output_shape[0] * output_shape[1] * output_shape[2],
+            round_up(output_shape[3], pad_value * cores),
+        ]
 
         memory_config = ttnn._ttnn.operations.conv.create_sharded_memory_config_from_parallel_config(
             output_shape, parallel_config, 1

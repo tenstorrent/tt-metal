@@ -78,17 +78,9 @@ uint32_t get_input_channels_alignment(
     BufferType input_tensor_buffer_type,
     bool is_mm_conv,
     const std::optional<MemoryConfig>& input_memory_config) {
-    if (input_tensor_buffer_type == BufferType::DRAM) {
-        if (input_tensor_memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
-            // Height Sharded padded_slice now supports L1 alignment.
-            return tt::tt_metal::hal::get_l1_alignment() / 2;
-        }
-        // DRAM accesses needs 32 byte alignment, which corresponds to 16 elements for bfloat16 data type.
-        // This is due to a limitation of padded slice, which needs to be removed. #28689
-        return tt::tt_metal::hal::get_dram_alignment() / 2;
-    } else if (
-        !is_mm_conv && input_tensor_memory_layout != TensorMemoryLayout::WIDTH_SHARDED &&
-        input_tensor_layout == Layout::ROW_MAJOR) {
+    if (!is_mm_conv && input_tensor_memory_layout != TensorMemoryLayout::WIDTH_SHARDED &&
+        (input_tensor_layout == Layout::ROW_MAJOR ||
+         input_tensor_buffer_type == BufferType::DRAM /*DRAM inputs are always converted to RM by padded_slice*/)) {
         if (input_memory_config.has_value() && input_memory_config->is_sharded()) {
             const uint32_t shard_width = input_memory_config->shard_spec()->shape[1];
             if (shard_width % tt::constants::TILE_WIDTH == 0) {

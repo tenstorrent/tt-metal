@@ -625,7 +625,6 @@ Result conv2d_DRAM(
         first_run = false;
         output_slice_dim_start += output_slice_size;
         slice_index++;
-        // return {dram_output_tensor, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
     }
 
     if (conv_config.deallocate_activation) {

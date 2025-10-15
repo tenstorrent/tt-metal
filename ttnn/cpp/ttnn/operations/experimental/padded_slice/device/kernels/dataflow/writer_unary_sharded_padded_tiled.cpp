@@ -17,13 +17,7 @@ uint32_t round_down(uint32_t value, uint32_t multiple) {
     }
     return value;
 }
-
 void kernel_main() {
-    const uint32_t total_num_tiles = get_arg_val<uint32_t>(0);
-    const uint32_t num_tiles_per_read = get_arg_val<uint32_t>(1);
-    const uint32_t num_sticks_this_core = get_arg_val<uint32_t>(2);
-    const uint32_t padded_channels_ntiles = get_arg_val<uint32_t>(3);
-
     constexpr uint32_t cb_untilized_id = get_compile_time_arg_val(0);
     constexpr uint32_t cb_out_id = get_compile_time_arg_val(1);
     constexpr uint32_t cb_padding_id = get_compile_time_arg_val(2);
@@ -32,9 +26,14 @@ void kernel_main() {
     constexpr uint32_t output_elem_size = get_compile_time_arg_val(5);
     constexpr uint32_t output_row_size_bytes = get_compile_time_arg_val(6);
 
-    const uint32_t output_coord_addr = get_arg_addr(4);
-    const uint32_t output_start_in_input_addr = get_arg_addr(4 + num_dims);
-    const uint32_t output_end_addr = get_arg_addr(4 + 2 * num_dims);
+    const uint32_t total_num_tiles = get_arg_val<uint32_t>(0);
+    const uint32_t num_tiles_per_read = get_arg_val<uint32_t>(1);
+    const uint32_t num_sticks_this_core = get_arg_val<uint32_t>(2);
+    const uint32_t padded_channels_ntiles = get_arg_val<uint32_t>(3);
+    const uint32_t misalignment = get_arg_val<uint32_t>(4);
+    const uint32_t output_coord_addr = get_arg_addr(5);
+    const uint32_t output_start_in_input_addr = get_arg_addr(5 + num_dims);
+    const uint32_t output_end_addr = get_arg_addr(5 + 2 * num_dims);
 
     constexpr uint32_t tile_size = get_tile_size(cb_out_id);
     const uint32_t read_size = tile_size * num_tiles_per_read;
@@ -98,18 +97,20 @@ void kernel_main() {
                << ", Read Start Offset: " << read_start_offset << ", Read Rows Size: " << read_rows_size << "Remaining "
                << rows_remaining << ENDL();
         DPRINT << "output row size bytes " << output_row_size_bytes << ENDL();
+        DPRINT << "misalignment " << misalignment << ENDL();
         DPRINT << "Output Coord: " << output_coord[0] << ", " << output_coord[1] << ", " << output_coord[2] << ", "
                << output_coord[3] << ENDL();
         DPRINT << "Write Addr Offset " << write_addr - base_write_addr << ENDL();
 #endif
         cb_wait_front(cb_untilized_id, num_tiles_per_read);
         uint64_t noc_read_addr = get_noc_addr(get_read_ptr(cb_untilized_id));
+
         noc_read_addr += read_start_offset * block_row_size;
         if (is_non_aligned) {
             uint64_t current_noc_read_addr = noc_read_addr;
             uint32_t current_write_addr = write_addr;
             for (uint32_t row = 0; row < read_rows_size; row++) {
-                noc_async_read(current_noc_read_addr, current_write_addr, output_row_size_bytes);
+                noc_async_read(current_noc_read_addr + misalignment, current_write_addr, output_row_size_bytes);
                 current_noc_read_addr += block_row_size;
                 current_write_addr += output_row_size_bytes;
             }
