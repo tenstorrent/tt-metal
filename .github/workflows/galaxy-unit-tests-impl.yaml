@@ -31,13 +31,15 @@ jobs:
            name: "Galaxy UMD unit tests",
            arch: wormhole_b0,
            runs-on: ["arch-wormhole_b0", "${{ inputs.topology }}", "${{ inputs.extra-tag }}", "bare-metal", "pipeline-functional"],
-           cmd: "./build/test/umd/galaxy/unit_tests_glx"
+           cmd: "./build/test/umd/galaxy/unit_tests_glx",
+           timeout: 10
          },  # Bojan Roško
          {
            name: "UMD API tests",
            arch: wormhole_b0,
            runs-on: ["arch-wormhole_b0", "${{ inputs.topology }}", "${{ inputs.extra-tag }}", "bare-metal", "pipeline-functional"],
-           cmd: "./build/test/umd/api/api_tests"
+           cmd: "./build/test/umd/api/api_tests",
+           timeout: 20
          },
        ]
    runs-on: ${{ matrix.test-group.runs-on }}
@@ -61,13 +63,8 @@ jobs:
        with:
          build-artifact-name: ${{ inputs.build-artifact-name }}
 
-     - name: Build UMD device and tests
-       run: |
-         cmake -B build -G Ninja -DTT_UMD_BUILD_TESTS=ON -DCMAKE_TOOLCHAIN_FILE=cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake
-         cmake --build build --target umd_tests
-
      - name: Run UMD unit regression tests
-       timeout-minutes: 10
+       timeout-minutes: ${{ matrix.test-group.timeout }}
        run: |
          ${{ matrix.test-group.cmd }}
 
