@@ -5,7 +5,7 @@
 #pragma once
 
 #include <cstdint>
-
+#include <bit>
 /**
  * @brief Enumeration of code profiling timer types as bitfield
  * Each timer type is a unique bit position, allowing multiple timers to be enabled simultaneously
@@ -44,6 +44,7 @@ constexpr uint32_t get_num_code_profiling_timer_types() {
  */
 constexpr uint32_t get_max_code_profiling_timer_types() {
     // get the bit offset of LAST
-    uint32_t leading_zero_bits = __builtin_clz(static_cast<uint32_t>(CodeProfilingTimerType::LAST));
-    return leading_zero_bits;
+    uint32_t number_of_least_significant_zero_bits =
+        std::countr_zero(static_cast<uint32_t>(CodeProfilingTimerType::LAST));
+    return number_of_least_significant_zero_bits;
 }

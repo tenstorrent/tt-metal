@@ -14,7 +14,7 @@
 
 /**
  * @brief Generic code profiling timer base class
- * 
+ *
  * @tparam enabled Whether this timer is enabled (compile-time constant)
  * @tparam result_addr L1 address where results are stored
  */
@@ -77,12 +77,12 @@ public:
  */
 template<CodeProfilingTimerType TimerType>
 constexpr size_t get_timer_result_addr(size_t buffer_base_addr) {
-    return buffer_base_addr + (__builtin_ctz(static_cast<uint32_t>(TimerType)) * sizeof(CodeProfilingTimerResult));
+    return buffer_base_addr + (std::countr_zero(static_cast<uint32_t>(TimerType)) * sizeof(CodeProfilingTimerResult));
 }
 
 /**
  * @brief Named profiler wrapper that simplifies timer usage
- * 
+ *
  * @tparam TimerType The specific timer type (from CodeProfilingTimerType enum)
  * @tparam bitfield The enabled timers bitfield (compile-time constant)
  * @tparam buffer_base_addr The L1 buffer base address (compile-time constant)
@@ -92,20 +92,20 @@ class NamedProfiler {
 private:
     static constexpr bool is_enabled = (bitfield & static_cast<uint32_t>(TimerType)) != 0;
     static constexpr size_t result_addr = get_timer_result_addr<TimerType>(buffer_base_addr);
-    
+
     CodeProfilingTimer<is_enabled, result_addr> timer;
 
 public:
     NamedProfiler() = default;
-    
+
     FORCE_INLINE void set_should_dump(bool dump) {
         timer.set_should_dump(dump);
     }
-    
+
     FORCE_INLINE void open() {
         timer.open();
     }
-    
+
     FORCE_INLINE void close() {
         timer.close();
     }
@@ -117,10 +117,10 @@ public:
  */
 FORCE_INLINE void clear_code_profiling_buffer(size_t buffer_base_addr) {
     volatile tt_l1_ptr auto* buffer_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(buffer_base_addr);
-    constexpr size_t num_timers = 32;  // Maximum number of timer types
+    constexpr size_t num_timers = get_max_code_profiling_timer_types();  // Maximum number of timer types
     constexpr size_t words_per_result = sizeof(CodeProfilingTimerResult) / sizeof(uint32_t);
     constexpr size_t total_words = num_timers * words_per_result;
-    
+
     for (size_t i = 0; i < total_words; i++) {
         buffer_ptr[i] = 0;
     }
