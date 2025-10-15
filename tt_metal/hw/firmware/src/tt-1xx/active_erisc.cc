@@ -65,6 +65,7 @@ uint32_t wIndex __attribute__((used));
 uint32_t stackSize __attribute__((used));
 uint32_t sums[SUM_COUNT] __attribute__((used));
 uint32_t sumIDs[SUM_COUNT] __attribute__((used));
+uint32_t traceCount __attribute__((used));
 }  // namespace kernel_profiler
 #endif
 
@@ -231,6 +232,7 @@ int __attribute__((noinline)) main(void) {
     // Add an invalidate before the first read of mailboxes->go_messages[0].signal
     invalidate_l1_cache();
 
+    DeviceProfilerInit();
     while (1) {
         // Wait...
         WAYPOINT("GW");
@@ -244,10 +246,15 @@ int __attribute__((noinline)) main(void) {
             if (flag_disable[0] != 1) {
                 return 0;
             } else if (
-                go_message_signal == RUN_MSG_RESET_READ_PTR || go_message_signal == RUN_MSG_RESET_READ_PTR_FROM_HOST) {
+                go_message_signal == RUN_MSG_RESET_READ_PTR || go_message_signal == RUN_MSG_RESET_READ_PTR_FROM_HOST ||
+                go_message_signal == RUN_MSG_REPLAY_TRACE) {
                 // Set the rd_ptr on workers to specified value
                 mailboxes->launch_msg_rd_ptr = 0;
-                if (go_message_signal == RUN_MSG_RESET_READ_PTR) {
+                if (go_message_signal == RUN_MSG_RESET_READ_PTR || go_message_signal == RUN_MSG_REPLAY_TRACE) {
+                    if (go_message_signal == RUN_MSG_REPLAY_TRACE) {
+                        DeviceIncrementTraceCount();
+                        DeviceTraceOnlyProfilerInit();
+                    }
                     uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_messages[0]);
                     mailboxes->go_messages[0].signal = RUN_MSG_DONE;
                     // Notify dispatcher that this has been done
