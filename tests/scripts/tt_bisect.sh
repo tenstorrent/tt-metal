@@ -64,6 +64,7 @@ fi
 
 echo "TT_METAL_HOME: $TT_METAL_HOME"
 echo "PYTHONPATH: $PYTHONPATH"
+echo "GH_TOKEN: $GH_TOKEN"
 echo "ARCH_NAME: ${ARCH_NAME:-}"
 echo "pwd: $(pwd)"
 if [ "$tracy_enabled" -eq 1 ]; then
