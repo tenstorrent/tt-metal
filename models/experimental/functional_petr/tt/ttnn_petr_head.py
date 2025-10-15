@@ -1,5 +1,4 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
-
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
@@ -10,7 +9,6 @@ from models.experimental.functional_petr.tt.ttnn_petr_transformer import TTPETRT
 from models.experimental.functional_petr.reference.nms_free_coder import NMSFreeCoder
 from loguru import logger
 
-# from models.experimental.functional_petr.reference.utils import inverse_sigmoid
 from models.experimental.functional_petr.tt.utils import inverse_sigmoid as ttnn_inverse_sigmoid
 
 from models.experimental.functional_petr.tt.common import Conv, Conv_with_split
@@ -19,7 +17,6 @@ import numpy as np
 import torch.nn.functional as F
 
 
-# This is in hold, we are planning to preprocess method operation.
 def ttnn_pos2posemb3d(pos, num_pos_feats=128, temperature=10000, device=None):  # input size of pos =(900,3)
     scale = 2 * math.pi
     pos = pos * scale
@@ -27,25 +24,23 @@ def ttnn_pos2posemb3d(pos, num_pos_feats=128, temperature=10000, device=None):  
     dim_t = ttnn.to_layout(dim_t, layout=ttnn.TILE_LAYOUT)
     dim_t = ttnn.reshape(dim_t, (1, -1))
 
-    print(dim_t.shape)
-
-    # dim_t = temperature ** (2 * (dim_t // 2) / num_pos_feats)
-    # dim_t//2 is replaced with the next two lines
     dim_t = ttnn.div(dim_t, 2)
     dim_t = ttnn.floor(dim_t)
     dim_t = 2 * ttnn.div(dim_t, num_pos_feats)
-    dim_t = temperature ** ttnn.to_torch(dim_t)  # issue 15211
+
+    # TORCH
+    dim_t = temperature ** ttnn.to_torch(dim_t)
     pos = ttnn.to_layout(pos, layout=ttnn.ROW_MAJOR_LAYOUT)
-    # dim_t=ttnn.from_torch(dim_t,layout=ttnn.TILE_LAYOUT,device=device)
     pos_x = ttnn.to_torch(pos[..., 0:1]) / dim_t
     pos_y = ttnn.to_torch(pos[..., 1:2]) / dim_t
     pos_z = ttnn.to_torch(pos[..., 2:3]) / dim_t
 
+    # Convert back to ttnn
     pos_x = ttnn.from_torch(pos_x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    print("pos_x", pos_x.shape)
     pos_y = ttnn.from_torch(pos_y, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     pos_z = ttnn.from_torch(pos_z, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
+    # TORCH
     pos_x = torch.stack((pos_x[..., 0::2].sin(), pos_x[..., 1::2].cos()), dim=-1).flatten(-2)
     pos_y = torch.stack((pos_y[..., 0::2].sin(), pos_y[..., 1::2].cos()), dim=-1).flatten(-2)
     pos_z = torch.stack((pos_z[..., 0::2].sin(), pos_z[..., 1::2].cos()), dim=-1).flatten(-2)
@@ -160,7 +155,6 @@ class ttnn_PETRHead:
         # reg_branch.append(*reg_branch)
 
         self.cls_branches = [fc_cls for _ in range(self.num_pred)]
-        # print("self.cls_branches",len(self.cls_branches))
         self.reg_branches = [reg_branch for _ in range(self.num_pred)]
 
         if self.with_multiview:
@@ -301,10 +295,6 @@ class ttnn_PETRHead:
 
         x = mlvl_feats[0]
         batch_size, num_cams = x.shape[0], x.shape[1]
-        # print(f"x: {x}")
-        # print(f"img_metas: {img_metas}")
-        print(f"batch_size: {batch_size}")
-        print(f"num_cams: {num_cams}")
         input_img_h, input_img_w = img_metas[0]["pad_shape"]
         x = ttnn.to_torch(x)
         masks = x.new_ones((batch_size, num_cams, input_img_h, input_img_w))
@@ -389,10 +379,6 @@ class ttnn_PETRHead:
             else:
                 query_embeds = i(query_embeds)
 
-        # query_embeds = self.query_embedding(
-        #     self.query_embedding_input
-        # )
-        # print("reference_points",reference_points.shape,batch_size)
         reference_points = ttnn.reshape(reference_points, (1, reference_points.shape[0], reference_points.shape[1]))
         reference_points = ttnn.repeat_interleave(reference_points, batch_size, dim=0)  # .sigmoid()
         masks = masks.to(dtype=torch.float16)
@@ -401,26 +387,18 @@ class ttnn_PETRHead:
         outs_dec, _ = self.transformer(device, x, masks, query_embeds, pos_embed)  # , self.reg_branches)
 
         outs_dec_torch = ttnn.to_torch(outs_dec).to(torch.float32)
-        print(f"[DEBUG] Transformer output stats: mean={outs_dec_torch.mean():.6f}, std={outs_dec_torch.std():.6f}")
-        if torch.isnan(outs_dec_torch).any():
-            print("  WARNING: Transformer output contains NaN!")
-        # outs_dec = torch.nan_to_num(outs_dec) # This is not needed as outs_dec produces no nan values
         outs_dec_torch = ttnn.to_torch(outs_dec).to(torch.float32)
         if torch.isnan(outs_dec_torch).any() or torch.isinf(outs_dec_torch).any():
             logger.warning(f"NaN/Inf detected in outs_dec! Applying nan_to_num")
             outs_dec_torch = torch.nan_to_num(outs_dec_torch, nan=0.0, posinf=1e6, neginf=-1e6)
             outs_dec = ttnn.from_torch(outs_dec_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
             outs_dec = ttnn.to_device(outs_dec, device)
-        # else:
-        #     # Just ensure it's float32
-        #     outs_dec = ttnn.to_dtype(outs_dec, ttnn.bfloat16)
         outs_dec = ttnn.from_torch(outs_dec_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
         outs_dec = ttnn.to_device(outs_dec, device)
         outputs_classes = []
         outputs_coords = []
         for lvl in range(outs_dec.shape[0]):
             reference = ttnn_inverse_sigmoid(ttnn.clone(reference_points))
-            # reference = ttnn.to_dtype(reference, ttnn.bfloat16)
 
             ref_torch = ttnn.to_torch(reference)
             if torch.isnan(ref_torch).any() or torch.isinf(ref_torch).any():
@@ -429,50 +407,6 @@ class ttnn_PETRHead:
                 reference = ttnn.from_torch(ref_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
             assert reference.shape[-1] == 3
-
-            # outputs_class = self.cls_branches[lvl](outs_dec[lvl])
-            # outputs_class = outs_dec[lvl : lvl + 1]
-            # print(f"[DEBUG] Before cls_branches[{lvl}]: mean={ttnn.to_torch(outs_dec[lvl:lvl+1]).mean():.6f}, std={ttnn.to_torch(outs_dec[lvl:lvl+1]).std():.6f}")
-
-            # for index, operation in enumerate(self.cls_branches[lvl]):
-            #     if operation == ttnn.linear:
-
-            #         # outputs_class = ttnn.to_dtype(outputs_class, ttnn.bfloat16) if outputs_class.dtype != ttnn.bfloat16 else outputs_class
-
-            #         outputs_class = operation(
-            #             outputs_class,
-            #             self.parameters["cls_branches"][lvl][index].weight,
-            #             bias=self.parameters["cls_branches"][lvl][index].bias,
-            #         )
-            #         print(f"[DEBUG] After cls linear {index}: mean={ttnn.to_torch(outputs_class).mean():.6f}, std={ttnn.to_torch(outputs_class).std():.6f}")
-            #     elif operation == ttnn.relu:
-            #         outputs_class = operation(outputs_class)
-            #         print(f"[DEBUG] After cls relu {index}: mean={ttnn.to_torch(outputs_class).mean():.6f}, std={ttnn.to_torch(outputs_class).std():.6f}")
-
-            #     elif operation == ttnn.layer_norm:
-            #     #     outputs_class = operation(
-            #     #         outputs_class,
-            #     #         weight=self.parameters["cls_branches"][lvl][index].weight,
-            #     #         bias=self.parameters["cls_branches"][lvl][index].bias,
-            #     #     )
-            #         outputs_class_torch = ttnn.to_torch(outputs_class).to(torch.float32)
-
-            #         # Get weight and bias as torch tensors
-            #         ln_weight = ttnn.to_torch(self.parameters["cls_branches"][lvl][index].weight).to(torch.float32)
-            #         ln_bias = ttnn.to_torch(self.parameters["cls_branches"][lvl][index].bias).to(torch.float32)
-
-            #         # Apply LayerNorm in torch with float32
-            #         outputs_class_torch = torch.nn.functional.layer_norm(
-            #             outputs_class_torch,
-            #             normalized_shape=(outputs_class_torch.shape[-1],),
-            #             weight=ln_weight.squeeze(),
-            #             bias=ln_bias.squeeze()
-            #         )
-
-            #         # Convert back to ttnn bfloat16 on device
-            #         outputs_class = ttnn.from_torch(outputs_class_torch, dtype=ttnn.bfloat16, device=device)
-            #         outputs_class = ttnn.to_layout(outputs_class, ttnn.TILE_LAYOUT)
-            #         print(f"[DEBUG] After cls layernorm {index}: mean={ttnn.to_torch(outputs_class).mean():.6f}, std={ttnn.to_torch(outputs_class).std():.6f}")
 
             outputs_class_f32 = ttnn.from_torch(
                 ttnn.to_torch(outs_dec[lvl : lvl + 1]).to(torch.float32),
@@ -502,18 +436,8 @@ class ttnn_PETRHead:
             outputs_class = ttnn.from_torch(
                 ttnn.to_torch(outputs_class_f32).to(torch.bfloat16), dtype=ttnn.bfloat16, device=device
             )
-            print(f"[DEBUG] Final cls_scores[{lvl}] before concat: PCC vs reference needed")
 
-            # tmp = self.reg_branches[lvl](outs_dec[lvl])
             tmp = outs_dec[lvl : lvl + 1]
-            print(f"\n[DEBUG CLS DTYPE] Layer {lvl}:")
-            print(f"  Input (outs_dec): {outputs_class.dtype}")
-            print(f"  Weight[0]: {self.parameters['cls_branches'][lvl][0].weight.dtype}")
-            print(f"  Bias[0]: {self.parameters['cls_branches'][lvl][0].bias.dtype}")
-
-            # tmp = ttnn.to_dtype(tmp, ttnn.bfloat16)
-            # tmp = ttnn.from_torch(tmp, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-            # tmp = ttnn.to_device(tmp, device)
             for index, operation in enumerate(self.reg_branches[lvl]):
                 if operation == ttnn.linear:
                     tmp = operation(
@@ -524,25 +448,12 @@ class ttnn_PETRHead:
                 elif operation == ttnn.relu:
                     tmp = operation(tmp)
 
-                if index == 0:
-                    print(f"  After operation {index}: {outputs_class.dtype}")
-
             tmp_torch = ttnn.to_torch(tmp).to(torch.float32)
             if torch.isnan(tmp_torch).any() or torch.isinf(tmp_torch).any():
                 logger.warning(f"Layer {lvl}: NaN/Inf in tmp before sigmoid! Fixing...")
                 tmp_torch = torch.nan_to_num(tmp_torch, nan=0.0, posinf=10.0, neginf=-10.0)
 
-            # tmp = ttnn.to_torch(tmp)
             reference = ttnn.to_torch(reference).to(torch.float32)
-
-            # tmp[..., 0:2] = tmp[..., 0:2] + reference[..., 0:2]
-            # tmp[..., 0:2] = tmp[..., 0:2].sigmoid()
-            # tmp[..., 4:5] += reference[..., 2:3]
-            # tmp[..., 4:5] = tmp[..., 4:5].sigmoid()
-
-            # tmp = ttnn.from_torch(tmp, layout=ttnn.TILE_LAYOUT, device=device)
-            # reference = ttnn.from_torch(reference, layout=ttnn.TILE_LAYOUT, device=device)
-
             tmp_torch[..., 0:2] = tmp_torch[..., 0:2] + reference[..., 0:2]
 
             # Safety clamp before sigmoid to prevent overflow
@@ -607,10 +518,7 @@ class ttnn_PETRHead:
         Returns:
             list[dict]: Decoded bbox, scores and labels after nms.
         """
-        # print("preds_dicts",preds_dicts)
-        # torch.save(preds_dicts,"/home/ubuntu/punith/tt-metal/models/experimental/functional_petr/tt/ttnn_preds_dicts_nmscoder.pt")
-        # preds_dicts["all_cls_scores"]=ttnn.from_torch(preds_dicts["all_cls_scores"],device=self.device)
-        # preds_dicts["all_bbox_preds"]=ttnn.from_torch(preds_dicts["all_bbox_preds"],device=self.device)
+
         preds_dicts = self.bbox_coder.decode(preds_dicts)
         num_samples = len(preds_dicts)
 

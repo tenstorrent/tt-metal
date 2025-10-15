@@ -33,7 +33,7 @@ def test_petr_transformer(device, reset_seeds):
 
     parameters = create_petr_transformer_model_parameters(torch_model, x, mask, query_embed, pos_embed, device=device)
 
-    ttnn_model = ttnn_petr_transformer.PETRTransformer(device, parameters)
+    ttnn_model = ttnn_petr_transformer.TTPETRTransformer(device, parameters)
     ttnn_output, ttnn_memory = ttnn_model(device, ttnn_x, ttnn_mask, ttnn_query_embed, ttnn_pos_embed)
 
     ttnn_memory = ttnn_memory.reshape(torch_memory.shape)

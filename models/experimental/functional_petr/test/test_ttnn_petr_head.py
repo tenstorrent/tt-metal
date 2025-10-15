@@ -1,5 +1,4 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
-
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
@@ -10,128 +9,12 @@ from models.experimental.functional_petr.reference.petr_head import PETRHead
 from models.experimental.functional_petr.tt.ttnn_petr_head import ttnn_PETRHead, pos2posemb3d
 from ttnn.model_preprocessing import (
     preprocess_model_parameters,
-    preprocess_linear_weight,
-    preprocess_layernorm_parameter,
-    preprocess_linear_bias,
-    ParameterDict,
-    ParameterList,
     infer_ttnn_module_args,
 )
-from torch.nn import Conv2d, Linear
-from torch import nn
 from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc
 from loguru import logger
 from models.experimental.functional_petr.reference.utils import LiDARInstance3DBoxes
-
-# from models.experimental.functional_petr.tt.ttnn_petr_head import ttnn_pos2posemb3d
-# from models.experimental.functional_petr.reference.petr_head import pos2posemb3d
-
-# @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
-# def test_pos2posemb3d(device):
-#     input=torch.randn(900,3,dtype=torch.bfloat16)
-#     output=pos2posemb3d(input)
-#     print(output.shape)
-#     ttnn_input=ttnn.from_torch(input,dtype=ttnn.bfloat16,layout=ttnn.TILE_LAYOUT,device=device)
-#     ttnn_output=ttnn_pos2posemb3d(ttnn_input,device=device)
-
-
-def move_to_device(object, device):
-    if isinstance(object, ParameterDict):
-        for name, value in list(object.items()):
-            if name in ["input_proj", "adapt_pos3d", "position_encoder"]:
-                continue
-            object[name] = move_to_device(value, device)
-        return object
-    elif isinstance(object, ParameterList):
-        for index, element in enumerate(object):
-            object[index] = move_to_device(element, device)
-        return object
-    elif isinstance(object, ttnn.Tensor):
-        return ttnn.to_device(object, device)
-    else:
-        return object
-
-
-def create_custom_preprocessor(device):
-    def custom_preprocessor(model, name, ttnn_module_args):
-        parameters = {}
-        if isinstance(model, PETRHead):
-            parameters["input_proj"] = {}
-            parameters["input_proj"]["weight"] = ttnn.from_torch(model.input_proj.weight, dtype=ttnn.bfloat16)
-            parameters["input_proj"]["bias"] = ttnn.from_torch(
-                torch.reshape(model.input_proj.bias, (1, 1, 1, -1)),
-                dtype=ttnn.bfloat16,
-            )
-
-            parameters["cls_branches"] = {}
-            for index, child in enumerate(model.cls_branches):
-                parameters["cls_branches"][index] = {}
-                for index1, child1 in enumerate(child):
-                    parameters["cls_branches"][index][index1] = {}
-                    if isinstance(child1, Linear):
-                        parameters["cls_branches"][index][index1]["weight"] = preprocess_linear_weight(
-                            child1.weight, dtype=ttnn.bfloat16
-                        )
-                        parameters["cls_branches"][index][index1]["bias"] = preprocess_linear_bias(
-                            child1.bias, dtype=ttnn.bfloat16
-                        )
-                    elif isinstance(child1, nn.LayerNorm):
-                        parameters["cls_branches"][index][index1]["weight"] = preprocess_layernorm_parameter(
-                            child1.weight, dtype=ttnn.bfloat16
-                        )
-                        parameters["cls_branches"][index][index1]["bias"] = preprocess_layernorm_parameter(
-                            child1.bias, dtype=ttnn.bfloat16
-                        )
-
-            parameters["reg_branches"] = {}
-            for index, child in enumerate(model.reg_branches):
-                parameters["reg_branches"][index] = {}
-                for index1, child1 in enumerate(child):
-                    parameters["reg_branches"][index][index1] = {}
-                    if isinstance(child1, Linear):
-                        parameters["reg_branches"][index][index1]["weight"] = preprocess_linear_weight(
-                            child1.weight, dtype=ttnn.bfloat16
-                        )
-                        parameters["reg_branches"][index][index1]["bias"] = preprocess_linear_bias(
-                            child1.bias, dtype=ttnn.bfloat16
-                        )
-
-            parameters["adapt_pos3d"] = {}
-            for index, child in enumerate(model.adapt_pos3d):
-                parameters["adapt_pos3d"][index] = {}
-                if isinstance(child, Conv2d):
-                    parameters["adapt_pos3d"][index]["weight"] = ttnn.from_torch(child.weight, dtype=ttnn.bfloat16)
-                    parameters["adapt_pos3d"][index]["bias"] = ttnn.from_torch(
-                        torch.reshape(child.bias, (1, 1, 1, -1)),
-                        dtype=ttnn.bfloat16,
-                    )
-
-            parameters["position_encoder"] = {}
-            for index, child in enumerate(model.position_encoder):
-                parameters["position_encoder"][index] = {}
-                if isinstance(child, Conv2d):
-                    parameters["position_encoder"][index]["weight"] = ttnn.from_torch(child.weight, dtype=ttnn.bfloat16)
-                    parameters["position_encoder"][index]["bias"] = ttnn.from_torch(
-                        torch.reshape(child.bias, (1, 1, 1, -1)),
-                        dtype=ttnn.bfloat16,
-                    )
-
-            parameters["query_embedding"] = {}
-            for index, child in enumerate(model.query_embedding):
-                parameters["query_embedding"][index] = {}
-                if isinstance(child, Linear):
-                    parameters["query_embedding"][index]["weight"] = preprocess_linear_weight(
-                        child.weight, dtype=ttnn.bfloat16
-                    )
-                    parameters["query_embedding"][index]["bias"] = preprocess_linear_bias(
-                        child.bias, dtype=ttnn.bfloat16
-                    )
-            parameters["reference_points"] = {}
-            parameters["reference_points"]["weight"] = ttnn.from_torch(model.reference_points.weight, device=device)
-
-        return parameters
-
-    return custom_preprocessor
+from models.experimental.functional_petr.tt.common import create_custom_preprocessor_petr_head, move_to_device
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
@@ -174,7 +57,9 @@ def test_petr_head_without_saved_input(device, reset_seeds):
     )
 
     parameters = preprocess_model_parameters(
-        initialize_model=lambda: torch_model, custom_preprocessor=create_custom_preprocessor(None), device=None
+        initialize_model=lambda: torch_model,
+        custom_preprocessor=create_custom_preprocessor_petr_head(None),
+        device=None,
     )
     parameters = move_to_device(parameters, device)
     output = torch_model(mlvl_feats, img_metas)
@@ -222,22 +107,8 @@ def test_petr_head_without_saved_input(device, reset_seeds):
     passed, msg = check_with_pcc(output["all_cls_scores"], ttnn_output["all_cls_scores"], pcc=0.99)
     passed1, msg1 = check_with_pcc(output["all_bbox_preds"], ttnn_output["all_bbox_preds"], pcc=0.99)
 
-    logger.info(
-        f"petr_head_without_saved_input_cls_scores test passed: "
-        # f"batch_size={batch_size}, "
-        # # f"act_dtype={self.model_config['ACTIVATIONS_DTYPE']}, "
-        # f"weight_dtype={self.model_config['WEIGHTS_DTYPE']}, "
-        # f"math_fidelity={self.model_config['MATH_FIDELITY']}, "
-        f"PCC={msg}"
-    )
-    logger.info(
-        f"petr_head_without_saved_input_bbox_preds test passed: "
-        # f"batch_size={batch_size}, "
-        # # f"act_dtype={self.model_config['ACTIVATIONS_DTYPE']}, "
-        # f"weight_dtype={self.model_config['WEIGHTS_DTYPE']}, "
-        # f"math_fidelity={self.model_config['MATH_FIDELITY']}, "
-        f"PCC={msg1}"
-    )
+    logger.info(f"petr_head_without_saved_input_cls_scores test passed: " f"PCC={msg}")
+    logger.info(f"petr_head_without_saved_input_bbox_preds test passed: " f"PCC={msg1}")
     torch_bbox = output["all_bbox_preds"]
     ttnn_bbox = ttnn_output["all_bbox_preds"]
 
@@ -277,12 +148,7 @@ def test_petr_head(device, reset_seeds):
     )
     for meta in img_metas:
         if "img_shape" in meta and isinstance(meta["img_shape"], tuple):
-            # Convert (320, 800) to [(320, 800), (320, 800), ...] for 6 cameras
             meta["img_shape"] = [meta["img_shape"]] * 6
-    # print(f"img_metas type: {type(img_metas)}")
-    # print(f"img_metas[0] keys: {img_metas[0].keys()}")
-    # print(f"img_shape type: {type(img_metas[0]['img_shape'])}")
-    # print(f"img_shape content: {img_metas[0]['img_shape']}")
     torch_model = PETRHead(
         num_classes=10,
         in_channels=256,
@@ -295,7 +161,9 @@ def test_petr_head(device, reset_seeds):
     )
 
     parameters = preprocess_model_parameters(
-        initialize_model=lambda: torch_model, custom_preprocessor=create_custom_preprocessor(None), device=None
+        initialize_model=lambda: torch_model,
+        custom_preprocessor=create_custom_preprocessor_petr_head(None),
+        device=None,
     )
     parameters = move_to_device(parameters, device)
     output = torch_model(mlvl_feats, img_metas)
@@ -344,21 +212,7 @@ def test_petr_head(device, reset_seeds):
     passed, msg = check_with_pcc(output["all_cls_scores"], ttnn_output["all_cls_scores"], pcc=0.99)
     passed1, msg1 = check_with_pcc(output["all_bbox_preds"], ttnn_output["all_bbox_preds"], pcc=0.99)
 
-    logger.info(
-        f"petr_head_cls_scores test passed: "
-        # f"batch_size={batch_size}, "
-        # # f"act_dtype={self.model_config['ACTIVATIONS_DTYPE']}, "
-        # f"weight_dtype={self.model_config['WEIGHTS_DTYPE']}, "
-        # f"math_fidelity={self.model_config['MATH_FIDELITY']}, "
-        f"PCC={msg}"
-    )
-    logger.info(
-        f"petr_head_bbox_preds test passed: "
-        # f"batch_size={batch_size}, "
-        # # f"act_dtype={self.model_config['ACTIVATIONS_DTYPE']}, "
-        # f"weight_dtype={self.model_config['WEIGHTS_DTYPE']}, "
-        # f"math_fidelity={self.model_config['MATH_FIDELITY']}, "
-        f"PCC={msg1}"
-    )
+    logger.info(f"petr_head_cls_scores test passed: " f"PCC={msg}")
+    logger.info(f"petr_head_bbox_preds test passed: " f"PCC={msg1}")
     assert_with_pcc(output["all_cls_scores"], ttnn_output["all_cls_scores"], pcc=0.99)
     assert_with_pcc(output["all_bbox_preds"], ttnn_output["all_bbox_preds"], pcc=0.99)  # Pcc > 0.99

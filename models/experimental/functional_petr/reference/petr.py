@@ -109,7 +109,6 @@ class PETR(nn.Module):
 
     def predict(self, inputs=None, data_samples=None, mode=None, **kwargs):
         img = inputs["imgs"]
-        # batch_img_metas = [ds.metainfo for ds in data_samples]
         batch_img_metas = data_samples  # the above is preprocessed outside
         for var, name in [(batch_img_metas, "img_metas")]:
             if not isinstance(var, list):
@@ -120,13 +119,7 @@ class PETR(nn.Module):
 
         results_list_3d = self.simple_test(batch_img_metas, img, **kwargs)
 
-        # for i, data_sample in enumerate(data_samples):
-        #     results_list_3d_i = InstanceData(metainfo=results_list_3d[i]["pts_bbox"])
-        #     data_sample.pred_instances_3d = results_list_3d_i
-        #     data_sample.pred_instances = InstanceData()
-
         return results_list_3d
-        # return data_sample
 
     def simple_test_pts(self, x, img_metas, rescale=False):
         """Test function of point cloud branch."""
@@ -168,8 +161,6 @@ class PETR(nn.Module):
         else:
             img = img
 
-        print("img.shapetorch reference", img.shape)
-        print("img.shapetorch", img.shape)
         for meta in batch_input_metas:
             lidar2img_rts = []
             # obtain lidar to image transformation matrix
@@ -186,12 +177,7 @@ class PETR(nn.Module):
                 # and LoadMultiViewImageFromMultiSweepsFiles.
                 lidar2img_rts.append(lidar2img_rt)
             meta["lidar2img"] = lidar2img_rts
-            print("meta[img_shape]", meta["img_shape"])
             img_shape = meta["img_shape"][:3]
             meta["img_shape"] = [img_shape] * len(img[0])
-            # meta["img_shape"] = [img_shape] * len(img[0])
-            print("meta[img_shape]", meta["img_shape"])
-            print("img_shape::", img_shape)
-            print("img[0].shape::", img[0].shape)
 
         return batch_input_metas

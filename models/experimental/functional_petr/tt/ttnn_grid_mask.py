@@ -1,5 +1,4 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
-
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 import numpy as np
@@ -17,12 +16,12 @@ class ttnn_GridMask:
         self.mode = mode
         self.st_prob = prob
         self.prob = prob
-        self.training = False  # This was taken from reference
+        self.training = False
 
     def __call__(self, x):
         if np.random.rand() > self.prob or not self.training:
             return x
-        # This is not invoked in our run
+
         n, c, h, w = x.size()
         x = x.view(-1, h, w)
         hh = int(1.5 * h)
