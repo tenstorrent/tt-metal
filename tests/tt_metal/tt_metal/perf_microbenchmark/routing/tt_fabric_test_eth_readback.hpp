@@ -20,10 +20,24 @@ using MeshCoordinate = tt::tt_metal::distributed::MeshCoordinate;
 using CoreCoord = tt::tt_metal::CoreCoord;
 using TestDevice = tt::tt_fabric::fabric_tests::TestDevice;
 using TestFixture = tt::tt_fabric::fabric_tests::TestFixture;
+using RoutingDirection = tt::tt_fabric::RoutingDirection;
+
+/**
+ * @brief Result structure containing buffer data and location metadata for a single ethernet core
+ */
+struct EthCoreBufferResult {
+    MeshCoordinate coord;                  // Device mesh coordinate
+    FabricNodeId fabric_node_id;           // Fabric node ID
+    CoreCoord eth_core;                    // Ethernet core coordinate
+    tt::tt_fabric::chan_id_t eth_channel;  // Ethernet channel ID
+    RoutingDirection direction;            // Direction this core serves
+    uint32_t link_index;                   // Link index within direction
+    std::vector<uint32_t> buffer_data;     // The actual buffer contents
+};
 
 /**
  * @brief Helper class for reading/writing buffers to ethernet cores
- * 
+ *
  * This class encapsulates the common operations for reading and clearing
  * buffers on active ethernet cores across all test devices.
  */
@@ -49,10 +63,9 @@ public:
      * @brief Read buffer from all active ethernet cores
      * @param address The buffer address to read from
      * @param buffer_size The size of the buffer to read
-     * @return Map of results organized by fabric node ID and core coordinate
+     * @return Vector of results containing buffer data and location metadata for each core
      */
-    std::unordered_map<FabricNodeId, std::unordered_map<CoreCoord, std::vector<uint32_t>>>
-    read_buffer(uint32_t address, size_t buffer_size);
+    std::vector<EthCoreBufferResult> read_buffer(uint32_t address, size_t buffer_size);
 
 private:
     const std::unordered_map<MeshCoordinate, TestDevice>& test_devices_;

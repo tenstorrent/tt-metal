@@ -77,7 +77,7 @@ public:
  */
 template<CodeProfilingTimerType TimerType>
 constexpr size_t get_timer_result_addr(size_t buffer_base_addr) {
-    return buffer_base_addr + (std::countr_zero(static_cast<uint32_t>(TimerType)) * sizeof(CodeProfilingTimerResult));
+    return buffer_base_addr + (__builtin_ctz(static_cast<uint32_t>(TimerType)) * sizeof(CodeProfilingTimerResult));
 }
 
 /**

@@ -27,7 +27,7 @@ void EthCoreBufferReadback::clear_buffer(uint32_t address, size_t buffer_size) {
 
     // Create zero vector for the buffer
     std::vector<uint8_t> zero_vec(buffer_size, 0);
-    
+
     for (const auto& [coord, test_device] : test_devices_) {
         auto device_id = test_device.get_node_id();
         auto physical_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(device_id);
@@ -43,33 +43,48 @@ void EthCoreBufferReadback::clear_buffer(uint32_t address, size_t buffer_size) {
     }
 }
 
-std::unordered_map<FabricNodeId, std::unordered_map<CoreCoord, std::vector<uint32_t>>>
-EthCoreBufferReadback::read_buffer(uint32_t address, size_t buffer_size) {
+std::vector<EthCoreBufferResult> EthCoreBufferReadback::read_buffer(uint32_t address, size_t buffer_size) {
     auto& ctx = tt::tt_metal::MetalContext::instance();
     auto& cluster = ctx.get_cluster();
     auto& control_plane = ctx.get_control_plane();
 
-    std::unordered_map<FabricNodeId, std::unordered_map<CoreCoord, std::vector<uint32_t>>> results;
     auto results_num_elements = tt::align(buffer_size, sizeof(uint32_t)) / sizeof(uint32_t);
-    
-    // Initialize results map
+
+    // Build metadata and temporary buffer map for batch reading
+    std::vector<EthCoreBufferResult> flat_results;
+    std::unordered_map<FabricNodeId, std::unordered_map<CoreCoord, std::vector<uint32_t>>> temp_buffer_map;
+
+    // First pass: collect metadata and initialize temp buffer storage
     for (const auto& [coord, test_device] : test_devices_) {
         auto device_id = test_device.get_node_id();
         auto physical_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(device_id);
         auto& soc_desc = cluster.get_soc_desc(physical_chip_id);
         auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(physical_chip_id);
+
         for (const auto& [direction, link_indices] : test_device.get_used_fabric_connections()) {
             const auto& eth_cores =
                 control_plane.get_active_fabric_eth_channels_in_direction(fabric_node_id, direction);
             for (const auto& link_index : link_indices) {
                 const tt::tt_fabric::chan_id_t eth_channel = eth_cores.at(link_index);
                 const CoreCoord& eth_core = soc_desc.get_eth_core_for_channel(eth_channel, CoordSystem::LOGICAL);
-                results[fabric_node_id][eth_core] = std::vector<uint32_t>(results_num_elements, 0);
+
+                // Create result entry with metadata using aggregate initialization
+                flat_results.push_back(
+                    {.coord = coord,
+                     .fabric_node_id = fabric_node_id,
+                     .eth_core = eth_core,
+                     .eth_channel = eth_channel,
+                     .direction = direction,
+                     .link_index = link_index,
+                     .buffer_data = std::vector<uint32_t>(results_num_elements, 0)});
+
+                // Initialize temp buffer for reading
+                temp_buffer_map[fabric_node_id][eth_core] = std::vector<uint32_t>(results_num_elements, 0);
             }
         }
     }
 
-    // Read buffer data from all active ethernet cores
+    // Second pass: perform buffer reads
     for (const auto& [coord, test_device] : test_devices_) {
         auto device_id = test_device.get_node_id();
         auto physical_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(device_id);
@@ -90,11 +105,17 @@ EthCoreBufferReadback::read_buffer(uint32_t address, size_t buffer_size) {
 
                 std::vector<CoreCoord> cores = {eth_core};
                 fixture_.read_buffer_from_ethernet_cores(
-                    coord, cores, address, buffer_size, false, results[fabric_node_id]);
+                    coord, cores, address, buffer_size, false, temp_buffer_map[fabric_node_id]);
             }
         }
     }
 
     fixture_.barrier_reads();
-    return results;
+
+    // Third pass: copy buffer data from temp map to flat results
+    for (auto& result : flat_results) {
+        result.buffer_data = temp_buffer_map[result.fabric_node_id][result.eth_core];
+    }
+
+    return flat_results;
 }

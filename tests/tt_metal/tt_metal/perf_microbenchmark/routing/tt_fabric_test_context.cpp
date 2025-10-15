@@ -4,7 +4,6 @@
 
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/tt_fabric_test_context.hpp"
 
-#include <unordered_map>
 #include "impl/context/metal_context.hpp"
 
 static double calc_bw_bytes_per_cycle(uint32_t total_words, uint64_t cycles) {
@@ -40,65 +39,51 @@ void TestContext::read_telemetry() {
     auto& cluster = ctx.get_cluster();
     auto& control_plane = ctx.get_control_plane();
 
-    for (const auto& [coord, test_device] : test_devices_) {
-        auto device_id = test_device.get_node_id();
+    for (const auto& result : results) {
+        const auto& core_data = result.buffer_data;
+        auto device_id = result.fabric_node_id;
         auto physical_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(device_id);
-        auto& soc_desc = cluster.get_soc_desc(physical_chip_id);
-        auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(physical_chip_id);
         auto freq_mhz = get_device_frequency_mhz(device_id);
         double freq_ghz = double(freq_mhz) / 1000.0;
 
-        for (const auto& [direction, link_indices] : test_device.get_used_fabric_connections()) {
-            const auto& eth_cores =
-                control_plane.get_active_fabric_eth_channels_in_direction(fabric_node_id, direction);
-            for (const auto& link_index : link_indices) {
-                const tt::tt_fabric::chan_id_t eth_channel = eth_cores.at(link_index);
-                const CoreCoord& eth_core = soc_desc.get_eth_core_for_channel(eth_channel, CoordSystem::LOGICAL);
-                const auto& core_data = results.at(fabric_node_id).at(eth_core);
-
-                LowResolutionBandwidthTelemetryResult tel{};
-                if (reinterpret_cast<uintptr_t>(core_data.data()) % alignof(LowResolutionBandwidthTelemetryResult) ==
-                    0) {
-                    constexpr size_t NUM_ELEMENTS =
-                        tt::align(sizeof(LowResolutionBandwidthTelemetryResult), sizeof(uint32_t)) / sizeof(uint32_t);
-                    const std::array<uint32_t, NUM_ELEMENTS>& data_array =
-                        *reinterpret_cast<const std::array<uint32_t, NUM_ELEMENTS>*>(core_data.data());
-                    tel = std::bit_cast<LowResolutionBandwidthTelemetryResult>(data_array);
-                } else {
-                    // Fall back to memcpy approach
-                    std::array<std::byte, sizeof(LowResolutionBandwidthTelemetryResult)> staging_buf{};
-                    memcpy(staging_buf.data(), core_data.data(), sizeof(LowResolutionBandwidthTelemetryResult));
-                    tel = std::bit_cast<LowResolutionBandwidthTelemetryResult>(staging_buf);
-                }
-
-                uint64_t cycles = tel.duration.full;
-                double bytes_per_cycle = calc_bw_bytes_per_cycle(tel.num_words_sent, cycles);
-                double bw_GB_s = bytes_per_cycle * double(freq_ghz);
-                double time_s = static_cast<double>(cycles) / (freq_mhz * 1e6);
-                double pps = static_cast<double>(tel.num_packets_sent) / time_s;
-                log_info(
-                    tt::LogTest,
-                    "Telemetry from {} core {}: BW (GB/s)={:.6f}, pps={:.6f}, cycles={:d}, eth_words_sent={:d}, "
-                    "packets_sent={:d}",
-                    coord,
-                    eth_core.str(),
-                    bw_GB_s,
-                    pps,
-                    cycles,
-                    tel.num_words_sent,
-                    tel.num_packets_sent);
-                auto [connected_physical_id, connected_eth_core] =
-                    cluster.get_connected_ethernet_core({physical_chip_id, eth_core});
-                auto connected_device_id =
-                    control_plane.get_fabric_node_id_from_physical_chip_id(connected_physical_id);
-                ::tt::tt_metal::distributed::MeshCoordinate connected_coord =
-                    fixture_->get_device_coord(connected_device_id);
-                uint32_t connected_eth_channel =
-                    cluster.get_soc_desc(connected_physical_id).logical_eth_core_to_chan_map.at(connected_eth_core);
-                telemetry_entries_.push_back(
-                    {coord, eth_channel, bw_GB_s, pps, connected_coord, connected_eth_channel});
-            }
+        LowResolutionBandwidthTelemetryResult tel{};
+        if (reinterpret_cast<uintptr_t>(core_data.data()) % alignof(LowResolutionBandwidthTelemetryResult) == 0) {
+            constexpr size_t NUM_ELEMENTS =
+                tt::align(sizeof(LowResolutionBandwidthTelemetryResult), sizeof(uint32_t)) / sizeof(uint32_t);
+            const std::array<uint32_t, NUM_ELEMENTS>& data_array =
+                *reinterpret_cast<const std::array<uint32_t, NUM_ELEMENTS>*>(core_data.data());
+            tel = std::bit_cast<LowResolutionBandwidthTelemetryResult>(data_array);
+        } else {
+            // Fall back to memcpy approach
+            std::array<std::byte, sizeof(LowResolutionBandwidthTelemetryResult)> staging_buf{};
+            memcpy(staging_buf.data(), core_data.data(), sizeof(LowResolutionBandwidthTelemetryResult));
+            tel = std::bit_cast<LowResolutionBandwidthTelemetryResult>(staging_buf);
         }
+
+        uint64_t cycles = tel.duration.full;
+        double bytes_per_cycle = calc_bw_bytes_per_cycle(tel.num_words_sent, cycles);
+        double bw_GB_s = bytes_per_cycle * double(freq_ghz);
+        double time_s = static_cast<double>(cycles) / (freq_mhz * 1e6);
+        double pps = static_cast<double>(tel.num_packets_sent) / time_s;
+        log_info(
+            tt::LogTest,
+            "Telemetry from {} core {}: BW (GB/s)={:.6f}, pps={:.6f}, cycles={:d}, eth_words_sent={:d}, "
+            "packets_sent={:d}",
+            result.coord,
+            result.eth_core.str(),
+            bw_GB_s,
+            pps,
+            cycles,
+            tel.num_words_sent,
+            tel.num_packets_sent);
+        auto [connected_physical_id, connected_eth_core] =
+            cluster.get_connected_ethernet_core({physical_chip_id, result.eth_core});
+        auto connected_device_id = control_plane.get_fabric_node_id_from_physical_chip_id(connected_physical_id);
+        ::tt::tt_metal::distributed::MeshCoordinate connected_coord = fixture_->get_device_coord(connected_device_id);
+        uint32_t connected_eth_channel =
+            cluster.get_soc_desc(connected_physical_id).logical_eth_core_to_chan_map.at(connected_eth_core);
+        telemetry_entries_.push_back(
+            {result.coord, result.eth_channel, bw_GB_s, pps, connected_coord, connected_eth_channel});
     }
 }
 
@@ -152,56 +137,41 @@ void TestContext::read_code_profiling_results() {
         enabled_timers.push_back(CodeProfilingTimerType::RECEIVER_CHANNEL_FORWARD);
     }
 
-    auto& cluster = ctx.get_cluster();
-    auto& control_plane = ctx.get_control_plane();
+    for (const auto& location : results) {
+        const auto& core_data = location.buffer_data;
 
-    for (const auto& [coord, test_device] : test_devices_) {
-        auto device_id = test_device.get_node_id();
-        auto physical_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(device_id);
-        auto& soc_desc = cluster.get_soc_desc(physical_chip_id);
-        auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(physical_chip_id);
+        // Process each enabled timer type
+        for (const auto& timer_type : enabled_timers) {
+            // Calculate offset for this timer type
+            uint32_t timer_bit_position = std::countr_zero(static_cast<uint32_t>(timer_type));
+            size_t offset = timer_bit_position * sizeof(CodeProfilingTimerResult);
 
-        for (const auto& [direction, link_indices] : test_device.get_used_fabric_connections()) {
-            const auto& eth_cores =
-                control_plane.get_active_fabric_eth_channels_in_direction(fabric_node_id, direction);
-            for (const auto& link_index : link_indices) {
-                const tt::tt_fabric::chan_id_t eth_channel = eth_cores.at(link_index);
-                const CoreCoord& eth_core = soc_desc.get_eth_core_for_channel(eth_channel, CoordSystem::LOGICAL);
-                const auto& core_data = results.at(fabric_node_id).at(eth_core);
-
-                // Process each enabled timer type
-                for (const auto& timer_type : enabled_timers) {
-                    // Calculate offset for this timer type
-                    uint32_t timer_bit_position = std::countr_zero(static_cast<uint32_t>(timer_type));
-                    size_t offset = timer_bit_position * sizeof(CodeProfilingTimerResult);
-
-                    // Extract CodeProfilingTimerResult from buffer
-                    CodeProfilingTimerResult result{};
-                    if (offset + sizeof(CodeProfilingTimerResult) <= core_data.size() * sizeof(uint32_t)) {
-                        // Safe to read the result
-                        const uint8_t* data_ptr = reinterpret_cast<const uint8_t*>(core_data.data()) + offset;
-                        if (reinterpret_cast<uintptr_t>(data_ptr) % alignof(CodeProfilingTimerResult) == 0) {
-                            result = *reinterpret_cast<const CodeProfilingTimerResult*>(data_ptr);
-                        } else {
-                            // Fall back to memcpy approach
-                            std::array<std::byte, sizeof(CodeProfilingTimerResult)> staging_buf{};
-                            memcpy(staging_buf.data(), data_ptr, sizeof(CodeProfilingTimerResult));
-                            result = std::bit_cast<CodeProfilingTimerResult>(staging_buf);
-                        }
-                    }
-
-                    // Only add entry if timer fired (num_instances > 0)
-                    if (result.num_instances > 0) {
-                        double avg_cycles_per_instance = static_cast<double>(result.total_cycles) / static_cast<double>(result.num_instances);
-                        code_profiling_entries_.push_back(
-                            {coord,
-                             eth_channel,
-                             timer_type,
-                             result.total_cycles,
-                             result.num_instances,
-                             avg_cycles_per_instance});
-                    }
+            // Extract CodeProfilingTimerResult from buffer
+            CodeProfilingTimerResult result{};
+            if (offset + sizeof(CodeProfilingTimerResult) <= core_data.size() * sizeof(uint32_t)) {
+                // Safe to read the result
+                const uint8_t* data_ptr = reinterpret_cast<const uint8_t*>(core_data.data()) + offset;
+                if (reinterpret_cast<uintptr_t>(data_ptr) % alignof(CodeProfilingTimerResult) == 0) {
+                    result = *reinterpret_cast<const CodeProfilingTimerResult*>(data_ptr);
+                } else {
+                    // Fall back to memcpy approach
+                    std::array<std::byte, sizeof(CodeProfilingTimerResult)> staging_buf{};
+                    memcpy(staging_buf.data(), data_ptr, sizeof(CodeProfilingTimerResult));
+                    result = std::bit_cast<CodeProfilingTimerResult>(staging_buf);
                 }
+            }
+
+            // Only add entry if timer fired (num_instances > 0)
+            if (result.num_instances > 0) {
+                double avg_cycles_per_instance =
+                    static_cast<double>(result.total_cycles) / static_cast<double>(result.num_instances);
+                code_profiling_entries_.push_back(
+                    {location.coord,
+                     location.eth_channel,
+                     timer_type,
+                     result.total_cycles,
+                     result.num_instances,
+                     avg_cycles_per_instance});
             }
         }
     }

@@ -40,11 +40,9 @@ constexpr uint32_t get_num_code_profiling_timer_types() {
 
 /**
  * @brief Get the maximum number of timer types supported
- * @return Maximum number of timer types (32 bits - 2 for NONE and LAST)
+ * @return Maximum number of timer types
  */
 constexpr uint32_t get_max_code_profiling_timer_types() {
     // get the bit offset of LAST
-    uint32_t number_of_least_significant_zero_bits =
-        std::countr_zero(static_cast<uint32_t>(CodeProfilingTimerType::LAST));
-    return number_of_least_significant_zero_bits;
+    return __builtin_ctz(static_cast<uint32_t>(CodeProfilingTimerType::LAST));
 }
