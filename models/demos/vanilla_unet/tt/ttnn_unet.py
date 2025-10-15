@@ -79,25 +79,27 @@ class TtUNet:
         bottleneck = self.bottleneck_conv2(bottleneck)
 
         # Decoder 4
-        dec4 = self._transpose_conv(bottleneck, self.upconv4_config)
+        dec4 = self._transpose_conv(bottleneck, self.upconv4_config, act_block_h_override=3 * 32)
         dec4 = self._concatenate_skip_connection(dec4, skip4)
         dec4 = self.decoder4_conv1(dec4)
         dec4 = self.decoder4_conv2(dec4)
 
         # Decoder 3
-        dec3 = self._transpose_conv(dec4, self.upconv3_config)
+        dec3 = self._transpose_conv(dec4, self.upconv3_config, act_block_h_override=5 * 32)
         dec3 = self._concatenate_skip_connection(dec3, skip3)
         dec3 = self.decoder3_conv1(dec3)
         dec3 = self.decoder3_conv2(dec3)
 
         # Decoder 2
-        dec2 = self._transpose_conv(dec3, self.upconv2_config)
+        dec2 = self._transpose_conv(dec3, self.upconv2_config, act_block_h_override=2 * 32)
         dec2 = self._concatenate_skip_connection(dec2, skip2)
         dec2 = self.decoder2_conv1(dec2)
         dec2 = self.decoder2_conv2(dec2)
 
         # Decoder 1
-        dec1 = self._transpose_conv(dec2, self.upconv1_config, fp32_dest_acc_en=False, packer_l1_acc=False)
+        dec1 = self._transpose_conv(
+            dec2, self.upconv1_config, fp32_dest_acc_en=False, packer_l1_acc=False, act_block_h_override=5 * 32
+        )
         dec1 = self._concatenate_skip_connection(dec1, skip1, rm=False)
         dec1 = self.decoder1_conv1(dec1)
         dec1 = self.decoder1_conv2(dec1)
@@ -108,6 +110,7 @@ class TtUNet:
         self,
         input_tensor: ttnn.Tensor,
         upconv_config: UpconvConfiguration,
+        act_block_h_override=32,
         fp32_dest_acc_en=True,
         packer_l1_acc=True,
     ) -> ttnn.Tensor:
@@ -127,7 +130,7 @@ class TtUNet:
             deallocate_activation=True,
             enable_act_double_buffer=False,
             output_layout=ttnn.TILE_LAYOUT,
-            act_block_h_override=32,
+            act_block_h_override=act_block_h_override,
         )
         compute_config = ttnn.init_device_compute_kernel_config(
             self.device.arch(),
