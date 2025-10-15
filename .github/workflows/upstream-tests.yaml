@@ -137,7 +137,7 @@ jobs:
             build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
             wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
             techdebt-install-ttt-reqs: true
-    runs-on: tt-ubuntu-2204-large-stable
+    runs-on: tt-ubuntu-2204-large-metal
     steps:
       - uses: actions/checkout@v4
       - name: Download artifacts from metal
@@ -147,7 +147,7 @@ jobs:
           # 22.04 artifact... we'll probably need to key on that in the original action in metal
           name: ${{ matrix.image-config.build-artifact-name }}
       - run: mkdir -p _tt-metal
-      - run: tar -xvf ttm_any.tar -C _tt-metal/
+      - run: tar --zstd -xvf ttm_any.tar.zst -C _tt-metal/
       - run: ls -hal _tt-metal
       - name: 🧪 Download Python Wheel
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0

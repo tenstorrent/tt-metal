@@ -31,7 +31,7 @@ add_custom_target(
 )
 
 # Globbing non-build files is acceptable for now because devs don't generate packages.
-# TODO: maybe a bad idea in the age of clang-tidy checks
+# TODO: maybe a bad idea in the age of clang-tidy checks?
 file(GLOB_RECURSE api api/*)
 target_sources(
     tt_metal
@@ -86,7 +86,10 @@ target_sources(
             api/tt-metalium/fabric_edm_types.hpp
             api/tt-metalium/edm_fabric_counters.hpp
             core_descriptors/blackhole_140_arch.yaml
+            core_descriptors/blackhole_140_arch_eth_dispatch.yaml
+            core_descriptors/blackhole_140_arch_fabric_mux.yaml
             core_descriptors/wormhole_b0_80_arch.yaml
+            core_descriptors/wormhole_b0_80_arch_fabric_mux.yaml
             core_descriptors/wormhole_b0_80_arch_eth_dispatch.yaml
             fabric/mesh_graph_descriptors/n150_mesh_graph_descriptor.yaml
             fabric/mesh_graph_descriptors/n300_mesh_graph_descriptor.yaml

@@ -162,7 +162,7 @@ jobs:
     name: "🛠️ Build ${{ inputs.build-type }} ${{ inputs.distro }} ${{ inputs.version }}"
     needs: build-docker-image
     timeout-minutes: 100
-    runs-on: tt-ubuntu-2204-large-stable
+    runs-on: tt-ubuntu-2204-large-metal
     environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
     outputs:
       packages-artifact-name: ${{ steps.set-artifact-name.outputs.name }}
@@ -300,11 +300,11 @@ jobs:
       - name: 'Tar files'
         if: ${{ inputs.publish-artifact }}
         run: |
-          ARTIFACT_PATHS="ttnn/ttnn/*.so build/lib ttnn/ttnn/*.so build/programming_examples build/test build/tools runtime"
+          ARTIFACT_PATHS="ttnn/ttnn/*.so build/lib build/programming_examples build/test build/tools runtime/hw"
           if [[ "${{ inputs.skip-tt-train }}" != "true" ]]; then
             ARTIFACT_PATHS="$ARTIFACT_PATHS build/tt-train data"
           fi
-          tar -cvhf /work/ttm_any.tar $ARTIFACT_PATHS
+          tar -I 'zstd --adapt=min=9 -T0' -cvhf /work/ttm_any.tar.zst $ARTIFACT_PATHS
 
       - name: Set build artifact name
         id: set_build_artifact_name
@@ -324,15 +324,16 @@ jobs:
         timeout-minutes: 10
         with:
           name: ${{ env.build_artifact_name }}
-          path: /work/ttm_any.tar
+          path: /work/ttm_any.tar.zst
           if-no-files-found: error
+          compression-level: 0
 
   build-wheel:
     if: ${{ inputs.build-wheel }}
     name: 🐍 Build wheel (Python ${{ inputs.version == '22.04' && '3.10' || '3.12' }})
     needs: build-docker-image
     timeout-minutes: 30
-    runs-on: tt-ubuntu-2204-large-stable
+    runs-on: tt-ubuntu-2204-large-metal
     environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
     outputs:
       wheel_artifact_name: ${{ steps.set_wheel_artifact_name.outputs.wheel_artifact_name }}
