@@ -23,6 +23,31 @@ run_tg_llama3.3-70b_tests() {
   fi
 }
 
+run_tg_gpt_oss_tests() {
+  # Record the start time
+  fail=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_tg_gpt_oss_tests"
+  pip install -r models/demos/gpt_oss/requirements.txt
+
+  # GPT-OSS weights for 20B and 120B
+  gpt_oss_20b=/mnt/MLPerf/tt_dnn-models/tt/GPT-OSS-20B/
+  gpt_oss_120b=/mnt/MLPerf/tt_dnn-models/tt/GPT-OSS-120B/
+
+  for gpt_oss_dir in "$gpt_oss_20b" "$gpt_oss_120b"; do
+    HF_MODEL=$gpt_oss_dir pytest -n auto models/demos/gpt_oss/tests/unit --timeout 600; fail+=$?
+  done
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_tg_gpt_oss_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
 run_tg_distributed_op_tests() {
   # Record the start time
   fail=0
@@ -86,6 +111,9 @@ run_tg_tests() {
 
   elif [[ "$1" == "llama3-70b" ]]; then
     run_tg_llama3.3-70b_tests
+
+  elif [[ "$1" == "gpt-oss" ]]; then
+    run_tg_gpt_oss_tests
 
   elif [[ "$1" == "prefetcher" ]]; then
     run_tg_prefetcher_tests
