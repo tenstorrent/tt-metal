@@ -12,6 +12,7 @@
 using tt::data_movement::common::enhanced_noc_async_read;
 using ttnn::operations::data_movement::reshape::detail::SegmentMapData;
 using ttnn::operations::data_movement::reshape::detail::unpack_rt_short;
+using ttnn::operations::data_movement::reshape::detail::unpack_short_run_ultra;
 constexpr uint32_t One_Tile_Reserve = 1;
 
 void kernel_main() {
@@ -43,19 +44,16 @@ void kernel_main() {
     }
 
     uint32_t short_runs_base = tmpl_base + num_templates * 4;
-    uint32_t long_runs_base = short_runs_base + num_short_runs * 3;
+    uint32_t long_runs_base = short_runs_base + num_short_runs * 2;
 
     uint32_t previous_input_page_idx = std::numeric_limits<uint32_t>::max();
     bool first = true;
 
     // Process short runs (run_length = 1)
     for (uint32_t i = 0; i < num_short_runs; ++i) {
-        auto [out_page_start, out_page_end] = unpack_rt_short(get_arg_val<uint32_t>(short_runs_base + i * 3 + 0));
-        auto packed_template = get_arg_val<uint32_t>(short_runs_base + i * 3 + 1);
-        auto [in_offset_start, out_offset_start] = unpack_rt_short(get_arg_val<uint32_t>(short_runs_base + i * 3 + 2));
-
-        uint32_t in_page_start = packed_template >> 16;
-        uint32_t pattern_template_index = (packed_template >> 8) & 0xFF;
+        auto [out_page_start, out_page_end, in_page_start, pattern_template_index] =
+            unpack_short_run_ultra(get_arg_val<uint32_t>(short_runs_base + i * 2 + 0));
+        auto [in_offset_start, out_offset_start] = unpack_rt_short(get_arg_val<uint32_t>(short_runs_base + i * 2 + 1));
         const auto& tmpl = templates[pattern_template_index];
 
         for (uint32_t out_page_idx = out_page_start; out_page_idx <= out_page_end; ++out_page_idx) {
