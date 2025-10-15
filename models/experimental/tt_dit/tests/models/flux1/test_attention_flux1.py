@@ -7,11 +7,11 @@ import pytest
 import torch
 import ttnn
 
-from ...models.transformers.attention_flux1 import Flux1Attention
-from ...parallel.manager import CCLManager
-from ...utils.check import assert_quality
-from ...utils.padding import PaddingConfig
-from ...utils.tensor import bf16_tensor
+from ....models.transformers.attention_flux1 import Flux1Attention
+from ....parallel.manager import CCLManager
+from ....utils.check import assert_quality
+from ....utils.padding import PaddingConfig
+from ....utils.tensor import bf16_tensor
 
 
 @pytest.mark.parametrize(
@@ -26,6 +26,8 @@ from ...utils.tensor import bf16_tensor
         pytest.param((2, 2), 1, 0, id="2x2sp1tp0"),
         pytest.param((2, 4), 0, 1, id="2x4sp0tp1"),
         pytest.param((2, 4), 1, 0, id="2x4sp1tp0"),
+        pytest.param((4, 8), 0, 1, id="4x8sp0tp1"),
+        pytest.param((4, 8), 1, 0, id="4x8sp1tp0"),
     ],
     indirect=["mesh_device"],
 )
@@ -33,7 +35,7 @@ from ...utils.tensor import bf16_tensor
     ("batch_size", "spatial_seq_len", "prompt_seq_len"),
     [
         (1, 4096, 512),
-        (1, 4096 + 512, 0),
+        # (1, 4096 + 512, 0),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)

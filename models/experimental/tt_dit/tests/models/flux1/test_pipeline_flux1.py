@@ -58,6 +58,13 @@ from ....pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large 
         pytest.param(False, id="not_traced"),
     ],
 )
+@pytest.mark.parametrize(
+    "use_cache",
+    [
+        pytest.param(True, id="yes_use_cache"),
+        pytest.param(False, id="no_use_cache"),
+    ],
+)
 def test_flux1_pipeline(
     *,
     mesh_device: ttnn.MeshDevice,
@@ -78,7 +85,19 @@ def test_flux1_pipeline(
     model_location_generator,
     traced: bool,
     mesh_test_id: str,
+    use_cache: bool,
+    is_ci_env: bool,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # Setup CI environment
+    if is_ci_env:
+        if use_cache:
+            monkeypatch.setenv("TT_DIT_CACHE_DIR", "/tmp/TT_DIT_CACHE")
+        else:
+            pytest.skip("Skipping. No use cache is implicitly tested with the configured non persistent cache path.")
+        if traced:
+            pytest.skip("Skipping traced test in CI environment. Use Performance test for detailed timing analysis.")
+
     sp_factor, sp_axis = sp
     tp_factor, tp_axis = tp
 

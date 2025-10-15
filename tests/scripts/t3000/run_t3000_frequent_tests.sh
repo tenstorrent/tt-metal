@@ -350,8 +350,43 @@ run_t3000_resnet_tests() {
   fi
 }
 
+run_t3000_dit_tests() {
+  # Record the start time
+  fail=0
+  start_time=$(date +%s)
+  test_name=${FUNCNAME[1]}
+
+  echo "LOG_METAL: Running ${test_name}"
+
+  # Run test_model for sd35 large
+  for test_cmd in "$@"; do
+    pytest -n auto ${test_cmd} ; fail+=$?
+  done
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: ${test_name} $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
 
 run_t3000_sd35large_tests() {
+  run_t3000_dit_tests \
+    "models/experimental/tt_dit/tests/models/test_vae_sd35.py -k t3k" \
+    "models/experimental/tt_dit/tests/models/test_attention_sd35.py" \
+    "models/experimental/tt_dit/tests/models/test_transformer_sd35.py::test_sd35_transformer_block"
+}
+
+run_t3000_flux1_tests() {
+  run_t3000_dit_tests \
+    "models/experimental/tt_dit/tests/models/flux1/test_attention_flux1.py" \
+    "models/experimental/tt_dit/tests/models/flux1/test_transformer_flux1.py::test_single_transformer_block" \
+    "models/experimental/tt_dit/tests/models/flux1/test_transformer_flux1.py::test_transformer_block"
+}
+
+run_t3000_sd35large_tests_() {
   # Record the start time
   fail=0
   start_time=$(date +%s)
@@ -419,6 +454,9 @@ run_t3000_tests() {
 
   # Run sd35_large tests
   run_t3000_sd35large_tests
+
+  # Run flux1 tests
+  run_t3000_flux1_tests
 
   # Run trace tests
   run_t3000_trace_stress_tests
