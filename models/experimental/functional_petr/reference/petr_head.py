@@ -237,10 +237,6 @@ class PETRHead(nn.Module):
         return coords_position_embeding.view(B, N, self.embed_dims, H, W), coords_mask
 
     def forward(self, mlvl_feats, img_metas):
-        # print("torch mlvl_feats ",mlvl_feats)
-        # for i in range(len(mlvl_feats)):
-        #     print("mlvl_feats",mlvl_feats[i].shape)
-        # print("torch img_metas",img_metas)
         """Forward function.
 
         Args:
@@ -258,10 +254,7 @@ class PETRHead(nn.Module):
         """
 
         x = mlvl_feats[0]
-        # batch_size, num_cams = 1,1
         batch_size, num_cams = x.size(0), x.size(1)
-        print(f"batch_size: {batch_size}")
-        print(f"num_cams: {num_cams}")
         input_img_h, input_img_w = img_metas[0]["pad_shape"]
         masks = x.new_ones((batch_size, num_cams, input_img_h, input_img_w))
         for img_id in range(batch_size):

@@ -10,35 +10,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc
 from loguru import logger
 from models.experimental.functional_petr.tt.ttnn_cp_fpn import ttnn_CPFPN
 from models.experimental.functional_petr.reference.cp_fpn import CPFPN
-
-
-def create_custom_preprocessor(device):
-    def custom_preprocessor(model, name, ttnn_module_args):
-        parameters = {}
-        if isinstance(model, CPFPN):
-            parameters["lateral_convs"] = {}
-            for i, child in enumerate(model.lateral_convs):
-                parameters["lateral_convs"][i] = {}
-                parameters["lateral_convs"][i]["conv"] = {}
-                parameters["lateral_convs"][i]["conv"]["weight"] = ttnn.from_torch(
-                    child.conv.weight, dtype=ttnn.bfloat16
-                )
-                parameters["lateral_convs"][i]["conv"]["bias"] = ttnn.from_torch(
-                    torch.reshape(child.conv.bias, (1, 1, 1, -1)),
-                    dtype=ttnn.bfloat16,
-                )
-            parameters["fpn_convs"] = {}
-            for i, child in enumerate(model.fpn_convs):
-                parameters["fpn_convs"][i] = {}
-                parameters["fpn_convs"][i]["conv"] = {}
-                parameters["fpn_convs"][i]["conv"]["weight"] = ttnn.from_torch(child.conv.weight, dtype=ttnn.bfloat16)
-                parameters["fpn_convs"][i]["conv"]["bias"] = ttnn.from_torch(
-                    torch.reshape(child.conv.bias, (1, 1, 1, -1)),
-                    dtype=ttnn.bfloat16,
-                )
-        return parameters
-
-    return custom_preprocessor
+from models.experimental.functional_petr.tt.common import create_custom_preprocessor_cpfpn
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
@@ -46,7 +18,7 @@ def test_cp_fpn(device, reset_seeds):
     torch_model = CPFPN(in_channels=[768, 1024], out_channels=256, num_outs=2)
     torch_model.eval()
     parameters = preprocess_model_parameters(
-        initialize_model=lambda: torch_model, custom_preprocessor=create_custom_preprocessor(None), device=None
+        initialize_model=lambda: torch_model, custom_preprocessor=create_custom_preprocessor_cpfpn(None), device=None
     )
 
     input_a = torch.randn(6, 768, 20, 50)
@@ -64,11 +36,4 @@ def test_cp_fpn(device, reset_seeds):
         pcc_threshold = 0.99
         passed, msg = check_with_pcc(torch_output[i], ttnn_output_check, pcc=pcc_threshold)
         assert_with_pcc(ttnn_output_check, torch_output[i], pcc=0.99)
-        logger.info(
-            f"cp_fpn layer  passed: "
-            # f"batch_size={batch_size}, "
-            # # f"act_dtype={self.model_config['ACTIVATIONS_DTYPE']}, "
-            # f"weight_dtype={self.model_config['WEIGHTS_DTYPE']}, "
-            # f"math_fidelity={self.model_config['MATH_FIDELITY']}, "
-            f"PCC={msg}"
-        )
+        logger.info(f"cp_fpn layer  passed: " f"PCC={msg}")

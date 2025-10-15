@@ -1,11 +1,9 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
-
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
 from models.experimental.functional_petr.tt.common import Conv, Conv_with_split
 import torch.nn.functional as F
-from loguru import logger
 import torch
 
 
@@ -38,11 +36,8 @@ class ttnn_esemodule:
         x_torch = x_torch.mean(dim=(1, 2), keepdim=True)  # Global avg pool
         x = ttnn.from_torch(x_torch, dtype=ttnn.bfloat16, device=device)
         x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
-        # x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
         x = self.fc(device, x)
-        # x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
         x = self.hsigmoid(x)
-        # x = ttnn.div(ttnn.relu6(x + 3.0), 6.0)  # Hsigmoid()
         if input.get_layout() != ttnn.TILE_LAYOUT:
             input = ttnn.to_layout(input, ttnn.TILE_LAYOUT)
         return input * x
@@ -129,17 +124,7 @@ class ttnn_osa_module:
                     activation="relu",
                     height_sharding=True,
                 )
-            # elif module_name == "OSA3_1":
-            #     self.conv_concat = Conv_with_split([1, 1, 0, 0], parameters["{}_{}".format(module_name, "concat")],
-            #                     activation="relu", split_factor=2)  # Reduced from 4
-            # elif module_name == "OSA3_2" or module_name == "OSA3_3":
-            #     self.conv_concat = Conv_with_split([1, 1, 0, 0], parameters["{}_{}".format(module_name, "concat")],
-            #                     activation="relu", split_factor=8)  # Reduced from 16
-            elif (
-                module_name
-                == "OSA4_1"
-                # module_name == "OSA3_3" or module_name == "OSA4_1" or module_name == "OSA3_1" or module_name == "OSA3_2"
-            ):
+            elif module_name == "OSA4_1":
                 self.conv_concat = Conv(
                     [1, 1, 0, 0],
                     parameters["{}_{}".format(module_name, "concat")],
@@ -199,9 +184,6 @@ class ttnn_osa_module:
             output_float32.append(ttnn.from_torch(output_torch, dtype=ttnn.bfloat16, device=device))
 
         x = ttnn.concat(output_float32, dim=3)
-        # for y in output_float32:
-        #     if y not in [output[0]]:  # Don't deallocate what we still need
-        #         ttnn.deallocate(y)
 
         for y in output:
             ttnn.deallocate(y)
@@ -218,9 +200,6 @@ class ttnn_osa_module:
             x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
         if self.identity:
             x = x + identity_feat
-
-        # Debug shape before returning
-        print(f"OSA module {self.module_name} output shape: {x.shape}")
 
         # Ensure we're maintaining 4D shape
         if len(x.shape) != 4:
@@ -249,9 +228,7 @@ class ttnn_osa_module:
 
             if height * width == total_spatial:
                 x = ttnn.reshape(x, (batch_size, height, width, channels))
-                print(f"Fixed shape in {self.module_name}: from [1, 1, {total_spatial}, {channels}] to {x.shape}")
 
-        print(f"OSA module {self.module_name} output shape: {x.shape}")
         return x
 
 
@@ -316,47 +293,13 @@ class ttnn_osa_stage:
 
     def __call__(self, device, x):
         if self.pooling is True:
-            # x = ttnn.max_pool2d(
-            #     input_tensor=x,
-            #     batch_size=x.shape[0],
-            #     input_h=x.shape[1],
-            #     input_w=x.shape[2],
-            #     channels=x.shape[3],
-            #     kernel_size=[3, 3],
-            #     stride=[2, 2],
-            #     padding=[0, 0],
-            #     dilation=[1, 1],
-            #     ceil_mode=True,
-            # )
-            # x_torch = ttnn.to_torch(x)  # [B, H, W, C] in NHWC
-
-            # # Check input shape
-            # logger.debug(f"Before pooling (NHWC): {x_torch.shape}")
-
-            # # Convert to NCHW for PyTorch
-            # x_torch = x_torch.permute(0, 3, 1, 2)  # [B, C, H, W]
-
-            # # Apply pooling
-            # x_torch = F.max_pool2d(x_torch, kernel_size=3, stride=2, padding=0, ceil_mode=True)
-
-            # # Convert back to NHWC
-            # x_torch = x_torch.permute(0, 2, 3, 1)  # [B, H, W, C]
-
-            # logger.debug(f"After pooling (NHWC): {x_torch.shape}")
-
-            # # Convert back to ttnn
-            # x = ttnn.from_torch(x_torch, dtype=ttnn.float32, device=device)
-            # x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
-            # Store original dtype
             original_dtype = x.dtype if hasattr(x, "dtype") else ttnn.bfloat16
 
-            # Convert to torch in HIGHER precision to avoid loss
+            # Maxpool in torch
             x_torch = ttnn.to_torch(x).to(torch.float32)  # ← Use float32 in torch
 
             # NHWC → NCHW
             x_torch = x_torch.permute(0, 3, 1, 2)
-
-            logger.debug(f"Before pooling (NCHW): {x_torch.shape}")
 
             # Apply pooling
             x_torch = F.max_pool2d(x_torch, kernel_size=3, stride=2, padding=0, ceil_mode=True)
@@ -364,15 +307,7 @@ class ttnn_osa_stage:
             # NCHW → NHWC
             x_torch = x_torch.permute(0, 2, 3, 1)
 
-            logger.debug(f"After pooling (NHWC): {x_torch.shape}")
-
-            # Convert back - keep in float32 if original was float32, otherwise bfloat16
-            # if original_dtype == ttnn.float32:
-            #     x = ttnn.from_torch(x_torch, dtype=ttnn.float32, device=device)
-            # else:
-            # Even if original was bfloat16, the float32 intermediate helps
             x = ttnn.from_torch(x_torch.to(torch.float32), dtype=ttnn.bfloat16, device=device)
-
             x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
 
         for module_name in self.blocks:
@@ -391,8 +326,6 @@ class ttnn_VoVNetCP:
         out_features=["stage5", "stage4"],
     ):
         self.device = device
-        # self.stem_parameters = stem_parameters
-        # self.device = device
         self.stem_parameters = stem_parameters
         self.out_features = out_features
 
@@ -414,107 +347,24 @@ class ttnn_VoVNetCP:
         self.stage3 = ttnn_osa_stage(parameters.stage3, 256, 160, 512, 3, 5, 3, SE=True, depthwise=False)
         self.stage4 = ttnn_osa_stage(parameters.stage4, 512, 192, 768, 9, 5, 4, SE=True, depthwise=False)
         self.stage5 = ttnn_osa_stage(parameters.stage5, 768, 224, 1024, 3, 5, 5, SE=True, depthwise=False)
-        # self.out_features = out_features
 
         self.stage2 = ttnn_osa_stage(parameters.stage2, 128, 128, 256, 1, 5, 2, SE=True, depthwise=False)
         self.stage3 = ttnn_osa_stage(parameters.stage3, 256, 160, 512, 3, 5, 3, SE=True, depthwise=False)
         self.stage4 = ttnn_osa_stage(parameters.stage4, 512, 192, 768, 9, 5, 4, SE=True, depthwise=False)
         self.stage5 = ttnn_osa_stage(parameters.stage5, 768, 224, 1024, 3, 5, 5, SE=True, depthwise=False)
 
-    # def __call__(self, device, x):
-    #     outputs = []
-    #     x = ttnn.permute(x, (0, 3, 1, 2))
-    #     x = ttnn.to_torch(x)
-    #     if x.dtype == torch.bfloat16:
-    #         x = x.to(torch.float32)
-    #     input_device = x.device
-    #     logger.info(f"Input to stem: shape={x.shape}, dtype={x.dtype}, device={x.device}")
-    #     logger.info(f"Input stats: mean={x.mean():.6f}, std={x.std():.6f}, min={x.min():.6f}, max={x.max():.6f}")
-
-    #     # Stem conv 1
-    #     stem1_weight = self.stem_parameters["stem_1"]["weight"]
-    #     stem1_bias = self.stem_parameters["stem_1"]["bias"]
-
-    #     # Ensure same device and dtype
-    #     stem1_weight = stem1_weight.to(device=input_device, dtype=torch.float32)
-    #     stem1_bias = stem1_bias.to(device=input_device, dtype=torch.float32)
-
-    #     logger.info(f"Stem1 weight: shape={stem1_weight.shape}, device={stem1_weight.device}, dtype={stem1_weight.dtype}")
-    #     logger.info(f"Stem1 weight stats: mean={stem1_weight.mean():.6f}, std={stem1_weight.std():.6f}")
-
-    #     x = F.conv2d(
-    #         x,
-    #         self.stem_parameters["stem_1"]["weight"],
-    #         bias=self.stem_parameters["stem_1"]["bias"],
-    #         stride=2,
-    #         padding=1,
-    #     )
-    #     logger.info(f"After stem1: shape={x.shape}, mean={x.mean():.6f}, std={x.std():.6f}")
-
-    #     # Stem conv 2
-    #     stem2_weight = self.stem_parameters["stem_2"]["weight"].to(device=input_device, dtype=torch.float32)
-    #     stem2_bias = self.stem_parameters["stem_2"]["bias"].to(device=input_device, dtype=torch.float32)
-
-    #     x = F.conv2d(
-    #         x,
-    #         self.stem_parameters["stem_2"]["weight"],
-    #         bias=self.stem_parameters["stem_2"]["bias"],
-    #         stride=1,
-    #         padding=1,
-    #     )
-    #     logger.info(f"After stem2: shape={x.shape}, mean={x.mean():.6f}, std={x.std():.6f}")
-
-    #     # Stem conv 3
-    #     stem3_weight = self.stem_parameters["stem_3"]["weight"].to(device=input_device, dtype=torch.float32)
-    #     stem3_bias = self.stem_parameters["stem_3"]["bias"].to(device=input_device, dtype=torch.float32)
-
-    #     stem = F.conv2d(
-    #         x,
-    #         self.stem_parameters["stem_3"]["weight"],
-    #         bias=self.stem_parameters["stem_3"]["bias"],
-    #         stride=2,
-    #         padding=1,
-    #     )
-    #     logger.info(f"After stem3 (final): shape={stem.shape}, mean={stem.mean():.6f}, std={stem.std():.6f}")
-
-    #     x = ttnn.from_torch(stem.permute(0, 2, 3, 1), layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
-    #     stage2 = self.stage2(device, x)
-
-    #     stage3 = self.stage3(device, stage2)
-    #     # stage3 = ttnn.reshape(stage3, (1, 512, 40, 100))
-    #     print("stage3", stage3.shape)
-    #     stage4 = self.stage4(device, stage3)
-    #     stage5 = self.stage5(device, stage4)
-
-    #     tensors = {"stem": stem, "stage2": stage2, "stage3": stage3, "stage4": stage4, "stage5": stage5}
-
-    #     for name, tensor in tensors.items():
-    #         if name in self.out_features:
-    #             outputs.append(tensor)
-    #     return outputs
     def __call__(self, device, x):
         outputs = []
 
-        # Input is NHWC, convert to NCHW for processing
+        # Convert to NCHW for processing
         x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
-        print(f"[STEM] Initial input (NHWC): shape={x.shape}")
-        # Stem conv 1: stride=2, padding=1
+        # Stem conv 1 (stride=2, padding=1)
         x = self.stem_conv1(device, x)
-        print(
-            f"[STEM] After conv1: shape={x.shape}, mean={ttnn.to_torch(x).mean():.6f}, std={ttnn.to_torch(x).std():.6f}"
-        )
-
-        # Stem conv 2: stride=1, padding=1
+        # Stem conv 2 (stride=1, padding=1)
         x = self.stem_conv2(device, x)
-        print(
-            f"[STEM] After conv2: shape={x.shape}, mean={ttnn.to_torch(x).mean():.6f}, std={ttnn.to_torch(x).std():.6f}"
-        )
 
-        # Stem conv 3: stride=2, padding=1
+        # Stem conv 3 (stride=2, padding=1)
         x = self.stem_conv3(device, x)
-        print(
-            f"[STEM] After conv3: shape={x.shape}, mean={ttnn.to_torch(x).mean():.6f}, std={ttnn.to_torch(x).std():.6f}"
-        )
 
         # Now x is ready for stages
         stage2 = self.stage2(device, x)

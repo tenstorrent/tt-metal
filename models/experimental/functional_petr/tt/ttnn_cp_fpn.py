@@ -1,5 +1,4 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
-
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
@@ -109,7 +108,6 @@ class ttnn_CPFPN:
         used_backbone_levels = len(laterals)
         for i in range(used_backbone_levels - 1, 0, -1):
             if "scale_factor" in self.upsample_cfg:
-                # This is not invoked, So, This part is not tested.
                 laterals[i - 1] += ttnn.upsample(laterals[i], **self.upsample_cfg)
             else:
                 laterals[i - 1] += ttnn.to_layout(
@@ -123,28 +121,4 @@ class ttnn_CPFPN:
 
         outs = [self.fpn_convs[i](device, laterals[i]) if i == 0 else laterals[i] for i in range(used_backbone_levels)]
 
-        ### This case is not invoked in our flow ###
-        # # part 2: add extra levels
-        # if self.num_outs > len(outs):
-        #     # use max pool to get more levels on top of outputs
-        #     # (e.g., Faster R-CNN, Mask R-CNN)
-        #     if not self.add_extra_convs:
-        #         for i in range(self.num_outs - used_backbone_levels):
-        #             outs.append(ttnn.max_pool2d(outs[-1], 1, stride=2))
-        #     # add conv layers on top of original feature maps (RetinaNet)
-        #     else:
-        #         if self.add_extra_convs == "on_input":
-        #             extra_source = inputs[self.backbone_end_level - 1]
-        #         elif self.add_extra_convs == "on_lateral":
-        #             extra_source = laterals[-1]
-        #         elif self.add_extra_convs == "on_output":
-        #             extra_source = outs[-1]
-        #         else:
-        #             raise NotImplementedError
-        #         outs.append(self.fpn_convs[used_backbone_levels](extra_source))
-        #         for i in range(used_backbone_levels + 1, self.num_outs):
-        #             if self.relu_before_extra_convs:
-        #                 outs.append(self.fpn_convs[i](ttnn.relu(outs[-1])))
-        #             else:
-        #                 outs.append(self.fpn_convs[i](outs[-1]))
         return tuple(outs)

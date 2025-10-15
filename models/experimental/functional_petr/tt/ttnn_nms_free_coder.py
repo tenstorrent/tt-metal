@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -34,13 +34,6 @@ class ttnn_NMSFreeCoder(BaseBBoxCoder):
 
         scores, indexes = temp_cls_scores.topk(max_num)  # issue in ttnn topk
 
-        # print("scores",scores.shape)
-        # print("indexes",indexes.shape)
-
-        # print("ttnn indexes",indexes)
-
-        # .topk(max_num)
-
         labels = indexes % self.num_classes
         bbox_index = indexes // self.num_classes
 
@@ -48,15 +41,10 @@ class ttnn_NMSFreeCoder(BaseBBoxCoder):
         indexes = ttnn.from_torch(indexes, device=device)
         labels = ttnn.from_torch(labels, device=device)
 
-        # print("bbox_preds",bbox_preds)
-        # print("bbox_index",bbox_index)
-
         bbox_preds = ttnn.to_torch(bbox_preds)
 
         bbox_preds = bbox_preds.squeeze()
         bbox_index = bbox_index.squeeze()
-        # print("ttnn bbox_preds",bbox_preds.shape)
-        # print("ttnn bbox_index",bbox_index.shape)
         bbox_preds = bbox_preds[bbox_index]
 
         bbox_preds = ttnn.from_torch(bbox_preds, device=device)
@@ -73,17 +61,9 @@ class ttnn_NMSFreeCoder(BaseBBoxCoder):
             final_preds = ttnn.to_torch(final_preds)
             final_box_preds = ttnn.to_torch(final_box_preds)
 
-            # print("ttnn final_scores",final_box_preds.shape)
-            # print("ttnn final_scores",final_scores.shape)
-            # print("ttnn final_preds",final_preds.shape)
-
             final_scores = final_scores.squeeze()
             final_preds = final_preds.squeeze()
             final_box_preds = final_box_preds.squeeze()
-
-            # print("ttnn after final_scores",final_box_preds.shape)
-            # print("ttnn after final_scores",final_scores.shape)
-            # print("ttnn  after final_preds",final_preds.shape)
 
             self.post_center_range = torch.tensor(self.post_center_range)
 
@@ -97,9 +77,6 @@ class ttnn_NMSFreeCoder(BaseBBoxCoder):
             scores = final_scores[mask]
             labels = final_preds[mask]
 
-            # print("ttnn boxes3d",boxes3d.shape)
-            # print("ttnn scores",scores.shape)
-            # print("ttnn labels",labels.shape)
             predictions_dict = {"bboxes": boxes3d, "scores": scores, "labels": labels}
 
         else:
@@ -116,13 +93,8 @@ class ttnn_NMSFreeCoder(BaseBBoxCoder):
         all_cls_scores = ttnn.from_torch(all_cls_scores, device=device)
         all_bbox_preds = ttnn.from_torch(all_bbox_preds, device=device)
 
-        # print("ttnn all_cls_scores",all_cls_scores.shape)
-        # print("ttnn all_bbox_preds",all_bbox_preds.shape)
-
         batch_size = all_cls_scores.shape[0]
         predictions_list = []
         for i in range(batch_size):
-            # print("all_cls_scores[i]",all_cls_scores[i:i+1].shape)
-            # print("all_bbox_preds[i]",all_bbox_preds[i:i+1].shape)
             predictions_list.append(self.decode_single(all_cls_scores[i : i + 1], all_bbox_preds[i : i + 1]))
         return predictions_list

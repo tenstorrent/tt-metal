@@ -39,7 +39,6 @@ class ttnn_SinePositionalEncoding3D:
 
         if self.torch_fallback:
             # Convert to torch for remaining operations
-            # (More efficient to do all torch ops together than convert back/forth)
             n_embed = ttnn.to_torch(n_embed).to(torch.float32)
             y_embed = ttnn.to_torch(y_embed).to(torch.float32)
             x_embed = ttnn.to_torch(x_embed).to(torch.float32)
@@ -98,28 +97,14 @@ class ttnn_SinePositionalEncoding3D:
                 x_embed = ttnn.div(x_embed, norm_factor)
                 x_embed = x_embed * self.scale
 
-            # . Create dim_t for positional encoding
-            # dim_t = ttnn.arange(0, self.num_feats, device=device)
-
-            # dim_t = self.temperature ** (2 * (dim_t // 2) / self.num_feats)
-            # dim_t = ttnn.to_torch(dim_t)  # Compute 2*(dim_t//2) in torch
-            # dim_t = self.temperature ** (2 * (dim_t // 2) / self.num_feats)
-            # dim_t = ttnn.from_torch(dim_t, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-
-            # dim_t = ttnn.div(dim_t, 2)
-            # dim_t = ttnn.floor(dim_t)
-            # dim_t = 2 * ttnn.div(dim_t, self.num_feats)
-            # dim_t = self.temperature ** dim_t
             dim_t = ttnn.arange(end=self.num_feats, dtype=ttnn.bfloat16, device=mask.device())
             dim_t = ttnn.to_layout(dim_t, layout=ttnn.TILE_LAYOUT)
             dim_t = ttnn.reshape(dim_t, (1, -1))  # This is becuase ttnn.arange creates 4d tensor
 
-            # dim_t = self.temperature ** (2 * (dim_t // 2) / self.num_feats) Replaced this with the following steps
             dim_t = ttnn.div(dim_t, 2)
             dim_t = ttnn.floor(dim_t)
             dim_t = 2 * ttnn.div(dim_t, self.num_feats)
 
-            # power = ttnn.div((2 * dim_t), float(self.num_feats))
             dim_t = ttnn.pow(float(self.temperature), dim_t)
 
             # Add dimension for broadcasting: [B, N, H, W] -> [B, N, H, W, 1]
@@ -133,7 +118,6 @@ class ttnn_SinePositionalEncoding3D:
             pos_x = ttnn.div(x_embed, dim_t)
 
             # Apply sin/cos to alternating dimensions
-            # B, N, H, W = mask.shape
 
             # For pos_n
             sin_part_n = ttnn.sin(pos_n[:, :, :, :, 0::2])

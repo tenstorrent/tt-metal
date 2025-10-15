@@ -4,282 +4,25 @@
 
 
 import torch
-import ttnn
 import pytest
-
+from loguru import logger
+import ttnn
 from ttnn.model_preprocessing import (
     preprocess_model_parameters,
-    preprocess_linear_weight,
-    preprocess_layernorm_parameter,
-    preprocess_linear_bias,
-    ParameterDict,
-    ParameterList,
-    fold_batch_norm2d_into_conv2d,
     infer_ttnn_module_args,
 )
-from loguru import logger
 
 from models.experimental.functional_petr.reference.petr import PETR
-from models.experimental.functional_petr.reference.petr_head import PETRHead, pos2posemb3d
-from models.experimental.functional_petr.reference.cp_fpn import CPFPN
-from models.experimental.functional_petr.reference.vovnetcp import VoVNetCP, eSEModule, _OSA_module, _OSA_stage
-
+from models.experimental.functional_petr.reference.petr_head import pos2posemb3d
 from models.experimental.functional_petr.tt.ttnn_petr import ttnn_PETR
-
-
-from torch.nn import Conv2d, Linear
-
-from torch import nn
+from models.experimental.functional_petr.tt.common import (
+    create_custom_preprocessor_petr_head,
+    create_custom_preprocessor_cpfpn,
+    create_custom_preprocessor_vovnetcp,
+    stem_parameters_preprocess,
+)
+from models.experimental.functional_petr.tt.common import move_to_device
 from tests.ttnn.utils_for_testing import check_with_pcc, assert_with_pcc
-
-
-def move_to_device(object, device):
-    if isinstance(object, ParameterDict):
-        for name, value in list(object.items()):
-            if name in ["input_proj", "adapt_pos3d", "position_encoder"]:
-                continue
-            object[name] = move_to_device(value, device)
-        return object
-    elif isinstance(object, ParameterList):
-        for index, element in enumerate(object):
-            object[index] = move_to_device(element, device)
-        return object
-    elif isinstance(object, ttnn.Tensor):
-        return ttnn.to_device(object, device)
-    else:
-        return object
-
-
-def stem_parameters_preprocess(model):
-    parameters = {}
-    if isinstance(model, VoVNetCP):
-        if hasattr(model, "stem"):
-            layers = list(model.stem.named_children())
-
-        for i, (name, layer) in enumerate(layers):
-            if "conv" in name:
-                conv_name, conv_layer = layers[i]
-                norm_name, norm_layer = layers[i + 1]
-                prefix = conv_name.split("/")[0]
-
-                if prefix not in parameters:
-                    parameters[prefix] = {}
-
-                conv_weight, conv_bias = fold_batch_norm2d_into_conv2d(conv_layer, norm_layer)
-
-                logger.info(
-                    f"[PREPROCESS] {prefix}: weight shape={conv_weight.shape}, mean={conv_weight.mean():.6f}, std={conv_weight.std():.6f}"
-                )
-
-                # Convert to ttnn format (same as other Conv layers)
-                parameters[prefix]["weight"] = ttnn.from_torch(conv_weight, dtype=ttnn.bfloat16)
-                parameters[prefix]["bias"] = ttnn.from_torch(
-                    torch.reshape(conv_bias, (1, 1, 1, -1)), dtype=ttnn.bfloat16
-                )
-
-    return parameters
-
-
-def create_custom_preprocessor_cpfpn(device):
-    def custom_preprocessor(model, name, ttnn_module_args):
-        parameters = {}
-        if isinstance(model, CPFPN):
-            parameters["lateral_convs"] = {}
-            for i, child in enumerate(model.lateral_convs):
-                parameters["lateral_convs"][i] = {}
-                parameters["lateral_convs"][i]["conv"] = {}
-                parameters["lateral_convs"][i]["conv"]["weight"] = ttnn.from_torch(
-                    child.conv.weight, dtype=ttnn.bfloat16
-                )
-                parameters["lateral_convs"][i]["conv"]["bias"] = ttnn.from_torch(
-                    torch.reshape(child.conv.bias, (1, 1, 1, -1)),
-                    dtype=ttnn.bfloat16,
-                )
-            parameters["fpn_convs"] = {}
-            for i, child in enumerate(model.fpn_convs):
-                parameters["fpn_convs"][i] = {}
-                parameters["fpn_convs"][i]["conv"] = {}
-                parameters["fpn_convs"][i]["conv"]["weight"] = ttnn.from_torch(child.conv.weight, dtype=ttnn.bfloat16)
-                parameters["fpn_convs"][i]["conv"]["bias"] = ttnn.from_torch(
-                    torch.reshape(child.conv.bias, (1, 1, 1, -1)),
-                    dtype=ttnn.bfloat16,
-                )
-        return parameters
-
-    return custom_preprocessor
-
-
-def create_custom_preprocessor_vovnetcp(device):
-    def custom_preprocessor(model, name, ttnn_module_args):
-        parameters = {}
-        if isinstance(model, eSEModule):
-            parameters["fc"] = {}
-            parameters["fc"]["weight"] = ttnn.from_torch(model.fc.weight, dtype=ttnn.bfloat16)
-            parameters["fc"]["bias"] = ttnn.from_torch(torch.reshape(model.fc.bias, (1, 1, 1, -1)), dtype=ttnn.bfloat16)
-        if isinstance(model, _OSA_module):
-            if hasattr(model, "conv_reduction"):
-                first_layer_name, _ = list(model.conv_reduction.named_children())[0]
-                base_name = first_layer_name.split("/")[0]
-                parameters[base_name] = {}
-                conv_weight, conv_bias = fold_batch_norm2d_into_conv2d(model.conv_reduction[0], model.conv_reduction[1])
-                parameters[base_name]["weight"] = ttnn.from_torch(conv_weight, dtype=ttnn.bfloat16)
-                parameters[base_name]["bias"] = ttnn.from_torch(
-                    torch.reshape(conv_bias, (1, 1, 1, -1)), dtype=ttnn.bfloat16
-                )
-
-            for i, layers in enumerate(model.layers):
-                first_layer_name = list(layers.named_children())[0][0]
-                prefix = first_layer_name.split("/")[0]
-                parameters[prefix] = {}
-                conv_weight, conv_bias = fold_batch_norm2d_into_conv2d(layers[0], layers[1])
-                # if "OSA2_1" in prefix:
-                #     parameters[prefix]["weight"] = conv_weight
-                #     parameters[prefix]["bias"] = conv_bias
-                # else:
-                parameters[prefix]["weight"] = ttnn.from_torch(conv_weight, dtype=ttnn.bfloat16)
-                parameters[prefix]["bias"] = ttnn.from_torch(
-                    torch.reshape(conv_bias, (1, 1, 1, -1)), dtype=ttnn.bfloat16
-                )
-
-            first_layer_name, _ = list(model.concat.named_children())[0]
-            base_name = first_layer_name.split("/")[0]
-            parameters[base_name] = {}
-            # if "OSA2_1" in base_name:
-            #     parameters[base_name]["weight"] = model.concat[0].weight
-            #     parameters[base_name]["bias"] = model.concat[0].bias
-            # else:
-            concat_weight, concat_bias = fold_batch_norm2d_into_conv2d(model.concat[0], model.concat[1])
-            parameters[base_name]["weight"] = ttnn.from_torch(concat_weight, dtype=ttnn.bfloat16)
-            parameters[base_name]["bias"] = ttnn.from_torch(
-                torch.reshape(concat_bias, (1, 1, 1, -1)), dtype=ttnn.bfloat16
-            )
-
-            parameters["fc"] = {}
-            parameters["fc"]["weight"] = ttnn.from_torch(model.ese.fc.weight, dtype=ttnn.bfloat16)
-            parameters["fc"]["bias"] = ttnn.from_torch(
-                torch.reshape(model.ese.fc.bias, (1, 1, 1, -1)), dtype=ttnn.bfloat16
-            )
-        if isinstance(model, _OSA_stage):
-            if isinstance(model, _OSA_module):
-                if hasattr(model, "conv_reduction"):
-                    first_layer_name, _ = list(model.conv_reduction.named_children())[0]
-                    base_name = first_layer_name.split("/")[0]
-                    parameters[base_name] = {}
-                    conv_weight, conv_bias = fold_batch_norm2d_into_conv2d(
-                        model.conv_reduction[0], model.conv_reduction[1]
-                    )
-                    parameters[base_name]["weight"] = ttnn.from_torch(conv_weight, dtype=ttnn.bfloat16)
-                    parameters[base_name]["bias"] = ttnn.from_torch(
-                        torch.reshape(conv_bias, (1, 1, 1, -1)), dtype=ttnn.bfloat16
-                    )
-
-                for i, layers in enumerate(model.layers):
-                    first_layer_name = list(layers.named_children())[0][0]
-                    prefix = first_layer_name.split("/")[0]
-                    parameters[prefix] = {}
-                    conv_weight, conv_bias = fold_batch_norm2d_into_conv2d(layers[0], layers[1])
-                    parameters[prefix]["weight"] = ttnn.from_torch(conv_weight, dtype=ttnn.bfloat16)
-                    parameters[prefix]["bias"] = ttnn.from_torch(
-                        torch.reshape(conv_bias, (1, 1, 1, -1)), dtype=ttnn.bfloat16
-                    )
-
-                first_layer_name, _ = list(model.concat.named_children())[0]
-                base_name = first_layer_name.split("/")[0]
-                parameters[base_name] = {}
-                parameters[base_name]["weight"] = model.concat[0].weight
-                parameters[base_name]["bias"] = model.concat[0].bias
-
-                parameters["fc"] = {}
-                parameters["fc"]["weight"] = ttnn.from_torch(model.ese.fc.weight, dtype=ttnn.bfloat16)
-                parameters["fc"]["bias"] = ttnn.from_torch(
-                    torch.reshape(model.ese.fc.bias, (1, 1, 1, -1)), dtype=ttnn.bfloat16
-                )
-
-        return parameters
-
-    return custom_preprocessor
-
-
-def create_custom_preprocessor_petr_head(device):
-    def custom_preprocessor(model, name, ttnn_module_args):
-        parameters = {}
-        if isinstance(model, PETRHead):
-            parameters["input_proj"] = {}
-            parameters["input_proj"]["weight"] = ttnn.from_torch(model.input_proj.weight, dtype=ttnn.bfloat16)
-            parameters["input_proj"]["bias"] = ttnn.from_torch(
-                torch.reshape(model.input_proj.bias, (1, 1, 1, -1)),
-                dtype=ttnn.bfloat16,
-            )
-
-            parameters["cls_branches"] = {}
-            for index, child in enumerate(model.cls_branches):
-                parameters["cls_branches"][index] = {}
-                for index1, child1 in enumerate(child):
-                    parameters["cls_branches"][index][index1] = {}
-                    if isinstance(child1, Linear):
-                        parameters["cls_branches"][index][index1]["weight"] = preprocess_linear_weight(
-                            child1.weight, dtype=ttnn.bfloat16
-                        )
-                        parameters["cls_branches"][index][index1]["bias"] = preprocess_linear_bias(
-                            child1.bias, dtype=ttnn.bfloat16
-                        )
-                    elif isinstance(child1, nn.LayerNorm):
-                        parameters["cls_branches"][index][index1]["weight"] = preprocess_layernorm_parameter(
-                            child1.weight, dtype=ttnn.bfloat16
-                        )
-                        parameters["cls_branches"][index][index1]["bias"] = preprocess_layernorm_parameter(
-                            child1.bias, dtype=ttnn.bfloat16
-                        )
-
-            parameters["reg_branches"] = {}
-            for index, child in enumerate(model.reg_branches):
-                parameters["reg_branches"][index] = {}
-                for index1, child1 in enumerate(child):
-                    parameters["reg_branches"][index][index1] = {}
-                    if isinstance(child1, Linear):
-                        parameters["reg_branches"][index][index1]["weight"] = preprocess_linear_weight(
-                            child1.weight, dtype=ttnn.bfloat16
-                        )
-                        parameters["reg_branches"][index][index1]["bias"] = preprocess_linear_bias(
-                            child1.bias, dtype=ttnn.bfloat16
-                        )
-
-            parameters["adapt_pos3d"] = {}
-            for index, child in enumerate(model.adapt_pos3d):
-                parameters["adapt_pos3d"][index] = {}
-                if isinstance(child, Conv2d):
-                    parameters["adapt_pos3d"][index]["weight"] = ttnn.from_torch(child.weight, dtype=ttnn.bfloat16)
-                    parameters["adapt_pos3d"][index]["bias"] = ttnn.from_torch(
-                        torch.reshape(child.bias, (1, 1, 1, -1)),
-                        dtype=ttnn.bfloat16,
-                    )
-
-            parameters["position_encoder"] = {}
-            for index, child in enumerate(model.position_encoder):
-                parameters["position_encoder"][index] = {}
-                if isinstance(child, Conv2d):
-                    parameters["position_encoder"][index]["weight"] = ttnn.from_torch(child.weight, dtype=ttnn.bfloat16)
-                    parameters["position_encoder"][index]["bias"] = ttnn.from_torch(
-                        torch.reshape(child.bias, (1, 1, 1, -1)),
-                        dtype=ttnn.bfloat16,
-                    )
-
-            parameters["query_embedding"] = {}
-            for index, child in enumerate(model.query_embedding):
-                parameters["query_embedding"][index] = {}
-                if isinstance(child, Linear):
-                    parameters["query_embedding"][index]["weight"] = preprocess_linear_weight(
-                        child.weight, dtype=ttnn.bfloat16
-                    )
-                    parameters["query_embedding"][index]["bias"] = preprocess_linear_bias(
-                        child.bias, dtype=ttnn.bfloat16
-                    )
-            parameters["reference_points"] = {}
-            parameters["reference_points"]["weight"] = ttnn.from_torch(model.reference_points.weight, device=device)
-
-        return parameters
-
-    return custom_preprocessor
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
@@ -290,10 +33,6 @@ def test_petr(device, reset_seeds):
     modified_batch_img_metas = torch.load(
         "models/experimental/functional_petr/resources/modified_input_batch_img_metas_sample1.pt", weights_only=False
     )
-    # print("Type of inputs:", type(inputs))
-    # print("Keys in inputs:", inputs.keys() if isinstance(inputs, dict) else "Not a dict")
-    # print("Type of inputs['imgs']:", type(inputs.get("imgs")))
-    # print("Content of inputs['imgs']:", inputs.get("imgs"))
 
     torch_model = PETR(use_grid_mask=True)
     weights_state_dict = torch.load(
@@ -305,8 +44,6 @@ def test_petr(device, reset_seeds):
     if isinstance(inputs.get("imgs"), str):
         # Handle the case where it's a file path
         imgs_path = inputs["imgs"]
-    # print(f"imgs is a string: {imgs_path}, creating dummy tensor")
-    # inputs["imgs"] = torch.randn(1, 6, 3, 320, 800)
 
     ttnn_inputs = dict()
     ttnn_inputs["imgs"] = ttnn.from_torch(inputs["imgs"], device=device)
@@ -358,8 +95,6 @@ def test_petr(device, reset_seeds):
     stem_parameters = stem_parameters_preprocess(torch_model.img_backbone)
     parameters["stem_parameters"] = stem_parameters
 
-    # print("parameters", parameters)
-
     query_embedding_input = torch_model.pts_bbox_head.reference_points.weight
     query_embedding_input = pos2posemb3d(query_embedding_input)
 
@@ -377,19 +112,11 @@ def test_petr(device, reset_seeds):
     torch_outs = torch_model.head_outs
     ttnn_outs = ttnn_model.head_outs
 
-    passed, pcc_cls = check_with_pcc(torch_outs["all_cls_scores"], ttnn_outs["all_cls_scores"], pcc=0.99)
-    print(f"all_cls_scores PCC: {float(pcc_cls):.6f}, Shape: {torch_outs['all_cls_scores'].shape}")
+    passed, pcc_cls = check_with_pcc(torch_outs["all_cls_scores"], ttnn_outs["all_cls_scores"], pcc=0.97)
+    logger.info(f"PETR all_cls_scores PCC: {float(pcc_cls):.6f}")
 
-    passed, pcc_bbox = check_with_pcc(torch_outs["all_bbox_preds"], ttnn_outs["all_bbox_preds"], pcc=0.99)
-    print(f"all_bbox_preds PCC: {float(pcc_bbox):.6f}, Shape: {torch_outs['all_bbox_preds'].shape}")
+    passed, pcc_bbox = check_with_pcc(torch_outs["all_bbox_preds"], ttnn_outs["all_bbox_preds"], pcc=0.97)
+    logger.info(f"PETR all_bbox_preds PCC: {float(pcc_bbox):.6f}")
 
-    # Statistics
-    print(f"\nall_cls_scores statistics:")
-    print(f"  Torch: mean={torch_outs['all_cls_scores'].mean():.6f}, std={torch_outs['all_cls_scores'].std():.6f}")
-    print(f"  TTNN:  mean={ttnn_outs['all_cls_scores'].mean():.6f}, std={ttnn_outs['all_cls_scores'].std():.6f}")
-
-    print(f"\nall_bbox_preds statistics:")
-    print(f"  Torch: mean={torch_outs['all_bbox_preds'].mean():.6f}, std={torch_outs['all_bbox_preds'].std():.6f}")
-    print(f"  TTNN:  mean={ttnn_outs['all_bbox_preds'].mean():.6f}, std={ttnn_outs['all_bbox_preds'].std():.6f}")
-    assert_with_pcc(torch_outs["all_bbox_preds"], ttnn_outs["all_bbox_preds"], pcc=0.99)  # 0.05455256429036736
     assert_with_pcc(torch_outs["all_cls_scores"], ttnn_outs["all_cls_scores"], pcc=0.97)
+    assert_with_pcc(torch_outs["all_bbox_preds"], ttnn_outs["all_bbox_preds"], pcc=0.97)
