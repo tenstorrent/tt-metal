@@ -36,8 +36,6 @@
 #include <umd/device/types/harvesting.hpp>
 #include <umd/device/types/cluster_types.hpp>
 
-// REVERT ME, FORCING CI TO RUN
-
 namespace tt {
 namespace llrt {
 class RunTimeOptions;
