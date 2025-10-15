@@ -1,14 +1,14 @@
 import difflib
 import json
 import re
-import subprocess
 from pathlib import Path
 
 import pytest
 
+from models.demos.deepseek_v3.demo.demo import run_demo
+
 # === Paths ====================================================================
-MODEL_PATH = Path("models/demos/deepseek_v3/reference")
-DEMO_SCRIPT = Path("models/demos/deepseek_v3/demo/demo.py")
+MODEL_PATH = Path("/proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528")  # Path("models/demos/deepseek_v3/reference")
 REFERENCE_JSON = Path("models/demos/deepseek_v3/demo/deepseek_32_prompts_outputs.json")
 
 # === Comparison options =======================================================
@@ -77,76 +77,6 @@ def word_diff_metrics(generated: str, reference: str, *, ignore_case=True, strip
     }
 
 
-# === Demo stdout parsing ======================================================
-_PROMPT_HDR_RE = re.compile(r"^Prompt\[(\d+)\]:\s*(.*)$")
-_GEN_HDR_RE = re.compile(r"^Generation\[(\d+)\]:")
-
-
-def extract_all_generations(stdout: str):
-    """
-    Demo prints:
-        ===== Generated =====
-
-        ------------------------------
-        Prompt[1]: <prompt text>
-        Generation[1]:
-        <gen text...>
-        ------------------------------
-        Prompt[2]: ...
-        Generation[2]:
-        <gen text...>
-        ------------------------------
-        =====================
-
-    Return a list of tuples: [(prompt_text, gen_text), ...] preserving order.
-    """
-    # Focus only on the block between the markers to reduce noise
-    start = "===== Generated ====="
-    end = "====================="
-    if start in stdout and end in stdout:
-        block = stdout.split(start, 1)[1].split(end, 1)[0]
-    else:
-        block = stdout
-
-    lines = block.splitlines()
-
-    results = []
-    i = 0
-    while i < len(lines):
-        line = lines[i].strip()
-        m_prompt = _PROMPT_HDR_RE.match(line)
-        if m_prompt:
-            idx = int(m_prompt.group(1))
-            prompt_text = m_prompt.group(2)
-            # Next non-empty, expect Generation[idx]:
-            i += 1
-            while i < len(lines) and not _GEN_HDR_RE.match(lines[i].strip()):
-                i += 1
-            if i >= len(lines):
-                # Malformed: no Generation header
-                results.append((prompt_text, ""))
-                break
-            # Consume "Generation[idx]:" line
-            i += 1
-            # Accumulate generation text until a dashed separator or next Prompt[...] or end
-            gen_lines = []
-            while i < len(lines):
-                s = lines[i]
-                if s.strip().startswith("-" * 10):
-                    break
-                if _PROMPT_HDR_RE.match(s.strip()):
-                    # We've hit the next prompt block without a dashed line
-                    i -= 1  # step back so outer loop sees this as a prompt header
-                    break
-                gen_lines.append(s)
-                i += 1
-            gen_text = "\n".join(gen_lines).strip()
-            results.append((prompt_text, gen_text))
-        i += 1
-
-    return results
-
-
 # === Reference JSON loading ===================================================
 def load_reference_map(path: Path) -> dict[str, str]:
     with path.open("r", encoding="utf-8", errors="ignore") as f:
@@ -166,57 +96,52 @@ def load_reference_map(path: Path) -> dict[str, str]:
     return ref_map
 
 
-def test_multi_prompt_generation_matches_reference(tmp_path):
+@pytest.mark.parametrize(
+    "max_new_tokens",
+    [200],
+)
+def test_multi_prompt_generation_matches_reference(tmp_path, max_new_tokens):
     """
-    Loads a JSON dict {prompt: expected_text}, executes the demo ONCE with up to 32 prompts,
-    parses all generations, and validates each against its expected reference.
+    Loads a JSON dict {prompt: expected_text}, executes the demo ONCE with up to 32 prompts
+    by calling run_demo(), and validates each returned generation['text'] against its reference.
 
     Defaults to case/punctuation-sensitive exact match (WER==0); see flags above.
     """
-    cache_dir = tmp_path / "cache"
+    # cache_dir = tmp_path / "cache"
+    cache_dir = Path("/proj_sw/user_dev/deepseek-v3-cache")
     ref_map = load_reference_map(REFERENCE_JSON)
 
-    # Respect demo's 32-prompt limit (stable order using JSON key order if Python 3.7+)
+    # Respect demo's 32-prompt limit
     all_prompts = list(ref_map.keys())
     prompts = all_prompts[:MAX_PROMPTS]
 
-    # Sanity: ensure we have at least one prompt
+    # Ensure at least one prompt
     assert len(prompts) > 0, "No prompts found in reference JSON."
 
     # Run the demo once with ALL prompts
-    cmd = [
-        "python",
-        str(DEMO_SCRIPT),
-        *prompts,
-        "--model-path",
-        str(MODEL_PATH),
-        "--cache-dir",
-        str(cache_dir),
-        "--max-new-tokens",
-        "200",
-    ]
-    proc = subprocess.run(
-        cmd,
-        stdout=subprocess.PIPE,  # capture stdout
-        stderr=subprocess.STDOUT,  # fold stderr into stdout (helps debugging)
-        text=True,  # decode to str
-        check=False,
+    results = run_demo(
+        prompts=prompts,
+        model_path=str(MODEL_PATH),
+        max_new_tokens=max_new_tokens,
+        cache_dir=str(cache_dir),
+        random_weights=False,
+        token_accuracy=False,
+        early_print_first_user=False,
     )
 
-    assert proc.returncode == 0, (
-        "demo.py failed.\n" f"Exit code: {proc.returncode}\n" f"--- stdout/stderr (tail) ---\n{proc.stdout[-4000:]}"
-    )
+    assert isinstance(results, dict) and "generations" in results, "run_demo() did not return expected structure."
+    generations = results["generations"]
+    assert isinstance(generations, list), "run_demo()['generations'] must be a list."
+    assert len(generations) == len(prompts), f"Got {len(generations)} generations but passed {len(prompts)} prompts."
 
-    parsed = extract_all_generations(proc.stdout)
-    assert len(parsed) == len(prompts), (
-        f"Parsed {len(parsed)} generations but passed {len(prompts)} prompts.\n"
-        f"--- stdout/stderr (tail) ---\n{proc.stdout[-4000:]}"
-    )
-
-    # Build prompt -> generated map (the demo prints each block with its prompt)
+    # Build prompt -> generated map by index (run_demo preserves order)
     gen_map: dict[str, str] = {}
-    for p_text, g_text in parsed:
-        gen_map[p_text] = g_text
+    for i, gen_entry in enumerate(generations):
+        prompt = prompts[i]
+        text = gen_entry.get("text")
+        # In random-weights mode text may be None; we are not in that mode here.
+        assert isinstance(text, str), f"Generation for prompt index {i} has no 'text'."
+        gen_map[prompt] = text
 
     # Verify every prompt we passed has a corresponding generation
     missing = [p for p in prompts if p not in gen_map]
@@ -261,12 +186,7 @@ def test_multi_prompt_generation_matches_reference(tmp_path):
             )
 
     if failures:
-        message = (
-            f"{len(failures)} prompt(s) failed the word-accuracy check.\n\n"
-            + "\n\n".join(failures)
-            + "\n\n--- Raw tail of stdout ---\n"
-            + proc.stdout[-2000:]
-        )
+        message = f"{len(failures)} prompt(s) failed the word-accuracy check.\n\n" + "\n\n".join(failures)
         pytest.fail(message)
 
     # If we get here, all prompts passed
