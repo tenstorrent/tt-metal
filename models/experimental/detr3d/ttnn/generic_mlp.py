@@ -11,24 +11,40 @@ from models.experimental.detr3d.ttnn.common import TtnnConv1D
 class TtnnGenericMLP(LightweightModule):
     def __init__(
         self,
-        module=None,
-        parameters=None,
-        device=None,
+        module,
+        parameters,
+        device,
     ):
         super().__init__()
         self.device = device
         self.parameters = parameters
-        self.module = module
-        self.tt_layers = []
-        for i, layer in enumerate(module.layers):
+        self.tt_layers = list()
+
+        for layer_num, layer in enumerate(module.layers):
             if isinstance(layer, torch.nn.Conv1d):
-                conv1d_layer = TtnnConv1D(layer, parameters.layers[i], device)
-                self.tt_layers.append(conv1d_layer)
-            elif isinstance(layer, torch.nn.ReLU):
-                relu_layer = ttnn.relu
-                self.tt_layers.append(relu_layer)
+                activation = None
+                # Checking the next 2 consecutive layers for activation in case batchnorm is next layer
+                for index in range(1, 3):
+                    if (layer_num + index) < len(module.layers):
+                        successor_layer = module.layers[layer_num + index]
+                        if isinstance(successor_layer, torch.nn.ReLU):
+                            activation = ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)
+                            break
+                    else:
+                        break
+                self.tt_layers.append(
+                    TtnnConv1D(
+                        layer,
+                        parameters.layers[layer_num],
+                        device,
+                        activation=activation,
+                        return_dims=True,
+                    )
+                )
 
     def forward(self, x):
+        shape = x.shape
         for layer in self.tt_layers:
-            x = layer(x)
+            x, shape = layer(x, shape)
+        x = ttnn.reshape(x, shape)
         return x
