@@ -163,6 +163,7 @@ class TtStem(LightweightModule):
 
         # Conv1 + separate ReLU + Reshape
         x = self._conv_relu_block(self.conv1, x, "Conv1", self.conv1_out_shape)
+        x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)  # next conv is sliced
 
         # Conv2 + separate ReLU + Reshape
         x = self._conv_relu_block(self.conv2, x, "Conv2", self.conv2_out_shape)
@@ -171,7 +172,7 @@ class TtStem(LightweightModule):
         x = self.conv3(x)
         logger.debug(f"Conv3 - raw conv output shape: {x.shape}, expected: {self.conv3_out_shape}")
         # Don't reshape yet - pass flattened to maxpool
-        x = ttnn.relu(x)  # Separate ReLU
+        # x = ttnn.relu(x)  # Separate ReLU
         x = ttnn.move(x)  # Keep in current memory config
         logger.debug(f"Conv3 + separate ReLU - output: {x.shape}")
 
@@ -194,8 +195,8 @@ class TtStem(LightweightModule):
         # TT CNN Builder returns flattened [B, 1, H*W, C], reshape to [B, H, W, C]
         if list(x.shape) != list(output_shape):
             logger.debug(f"Reshaping {layer_name} from {x.shape} to {output_shape}")
-            x = ttnn.reshape(x, output_shape)
-        x = ttnn.relu(x)  # Separate ReLU
+            # x = ttnn.reshape(x, output_shape)
+        # x = ttnn.relu(x)  # Separate ReLU
         x = ttnn.move(x)  # Keep in current memory config
         logger.debug(f"{layer_name} + separate ReLU - output: {x.shape}")
         return x

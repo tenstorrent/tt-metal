@@ -35,11 +35,12 @@ class ModelOptimisations:
             "math_fidelity": ttnn.MathFidelity.LoFi,
             "fp32_dest_acc_en": True,
             "packer_l1_acc": False,
-            "deallocate_activation": False,
-            "enable_act_double_buffer": False,
-            "enable_weights_double_buffer": True,
+            "deallocate_activation": True,
+            "enable_act_double_buffer": True,
+            "enable_weights_double_buffer": False,
             "reallocate_halo_output": True,
-            "activation": None,  # Disable fusion - separate ReLU gives better PCC
+            "activation": ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),  # Disable fusion - separate ReLU gives better PCC
+            "config_tensors_in_dram": True,
         }
 
         # Layer-specific overrides: map from conv_path to override dict
@@ -66,6 +67,16 @@ class ModelOptimisations:
         # Apply layer-specific overrides if available
         if conv_path is not None and conv_path in self.layer_overrides:
             overrides.update(self.layer_overrides[conv_path])
+
+        # Debug logging for stem layers to track slice_strategy
+        if conv_path and conv_path.startswith("stem."):
+            import loguru
+
+            slice_strat = overrides.get("slice_strategy", None)
+            slice_type = type(slice_strat).__name__ if slice_strat else "None"
+            loguru.logger.debug(f"[CONFIG_DEBUG] {conv_path}: slice_strategy={slice_type}")
+            if conv_path in self.layer_overrides:
+                loguru.logger.debug(f"[CONFIG_DEBUG] {conv_path}: layer_overrides={self.layer_overrides[conv_path]}")
 
         # Use dataclass replace to create new configuration with overrides
         return replace(base_config, **overrides)
@@ -100,7 +111,7 @@ class ModelOptimisations:
         This method pre-configures slicing strategies and sharding strategies for
         specific layers that benefit from custom configurations.
         """
-        # STEM CONVOLUTIONS: Use width slicing for all stem layers
+        # STEM CONVOLUTIONS: Use width slicing for stem.conv2 and stem.conv3 (stem.conv1 uses HeightSharded from setup_resnet_test_configs)
         for conv_name in ["stem.conv1", "stem.conv2", "stem.conv3"]:
             self.register_layer_override(conv_name, slice_strategy=WidthSliceStrategyConfiguration(num_slices=4))
 
@@ -113,11 +124,12 @@ class ModelOptimisations:
                 if i == 0:
                     self.register_layer_override(f"{stage}.{i}.shortcut", activation=None)
 
-        # RESNET BOTTLENECKS: Use width slicing for res3 shortcuts
-        for i in range(4):  # res3 typically has 4 blocks
-            self.register_layer_override(
-                f"res3.{i}.shortcut", slice_strategy=WidthSliceStrategyConfiguration(num_slices=2)
-            )
+        # RESNET BOTTLENECKS: Use width slicing for res3.0 shortcut (only first block has shortcut)
+        self.register_layer_override(
+            "res3.0.shortcut",
+            slice_strategy=WidthSliceStrategyConfiguration(num_slices=2),
+            deallocate_activation=False,
+        )
 
     def setup_resnet_test_configs(self):
         """
@@ -125,8 +137,14 @@ class ModelOptimisations:
 
         This configures sharding strategies and act_block_h overrides for all ResNet
         backbone layers to match the validated test configurations from test_conv2d_panoptic.
+
+        Note: This method automatically calls setup_default_layer_overrides() first to ensure
+        base configurations (like stem width slicing) are applied.
         """
         from models.tt_cnn.tt.builder import HeightShardedStrategyConfiguration, BlockShardedStrategyConfiguration
+
+        # First apply default layer overrides (includes stem width slicing, activation settings, etc.)
+        self.setup_default_layer_overrides()
 
         # === STEM ===
         # stem.conv1: 3->64, 512x1024, 3x3, stride 2, HS, act_block_h=1312
@@ -142,6 +160,28 @@ class ModelOptimisations:
                 f"res2.{i}.conv2",
                 sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=128),  # 4 tiles
             )
+
+        # reduce massive matmul buffer size
+        self.register_layer_override(
+            "res2.0.conv3",
+            slice_strategy=WidthSliceStrategyConfiguration(num_slices=2),
+            sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=1 * 32),  # 4 tiles
+        )
+        self.register_layer_override(
+            "res2.1.conv3",
+            slice_strategy=WidthSliceStrategyConfiguration(num_slices=2),
+            sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=1 * 32),  # 4 tiles
+        )
+        self.register_layer_override(
+            "res2.2.conv3",
+            slice_strategy=WidthSliceStrategyConfiguration(num_slices=2),
+            sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=1 * 32),  # 4 tiles
+        )
+        self.register_layer_override(
+            "res3.0.conv3",
+            slice_strategy=WidthSliceStrategyConfiguration(num_slices=2),
+            sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=1 * 32),  # 4 tiles
+        )
 
         # res2 1x1 convs: 128->64 (conv1), 64->256 (conv3), 128x256, use AutoSharded (matmul path)
         # Don't explicitly override sharding_strategy - let it use default AutoSharded
@@ -185,6 +225,7 @@ class ModelOptimisations:
         self.register_layer_override(
             "res5.0.conv2",
             sharding_strategy=BlockShardedStrategyConfiguration(),
+            slice_strategy=WidthSliceStrategyConfiguration(num_slices=2),
         )
 
         # res5.{1-2}.conv2: 512->512, 32x64, 3x3, stride 1, dilation 2, BS, act_block_h=288
@@ -192,6 +233,7 @@ class ModelOptimisations:
             self.register_layer_override(
                 f"res5.{i}.conv2",
                 sharding_strategy=BlockShardedStrategyConfiguration(),
+                slice_strategy=WidthSliceStrategyConfiguration(num_slices=2),
             )
 
         # === 1x1 CONVOLUTIONS (matmul convs - use AutoSharded default) ===
