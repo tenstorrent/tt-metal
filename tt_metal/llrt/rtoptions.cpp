@@ -46,7 +46,7 @@ RunTimeOptions::RunTimeOptions() {
     if (std::filesystem::is_directory(std::filesystem::path(TT_METAL_INSTALL_ROOT))) {
         this->root_dir = std::filesystem::path(TT_METAL_INSTALL_ROOT).string();
     }
-    log_info(tt::LogMetal, "initial root_dir: {}", this->root_dir);
+    log_debug(tt::LogMetal, "initial root_dir: {}", this->root_dir);
 #endif
 
     // ENV Can Override
