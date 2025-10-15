@@ -64,7 +64,7 @@ jobs:
         uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
         timeout-minutes: 180
         with:
-          device_perf_model_name: "${{ matrix.test-group.model }} device perf tests"
+          device_perf_model_name: ${{ matrix.test-group.model }}
           commands: |
             ${{ matrix.test-group.cmd }}
 
