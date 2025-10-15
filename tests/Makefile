@@ -13,16 +13,19 @@ TOOL_PATH       ?= sfpi/compiler/bin
 # =========================
 ARCH            := $(if $(archname),$(archname),$(CHIP_ARCH))
 ifeq ($(ARCH),wormhole)
-	ARCH_CPU        := -mcpu=tt-wh
+	ARCH_NON_COMPUTE:= -mcpu=tt-wh
+	ARCH_COMPUTE    := -mcpu=tt-wh-tensix
 	ARCH_DEFINE     := -DARCH_WORMHOLE
 	ARCH_LLK_ROOT   := tt_llk_wormhole_b0
 else ifeq ($(ARCH),blackhole)
-	ARCH_CPU        := -mcpu=tt-bh
+	ARCH_NON_COMPUTE:= -mcpu=tt-bh
+	ARCH_COMPUTE    := -mcpu=tt-bh-tensix
 	ARCH_DEFINE     := -DARCH_BLACKHOLE
 	ARCH_LLK_ROOT   := tt_llk_blackhole
 else ifeq ($(ARCH),quasar)
 # until there is official support for quasar in SFPI fallback to BH
-	ARCH_CPU        := -mcpu=tt-bh
+	ARCH_NON_COMPUTE:= -mcpu=tt-bh
+	ARCH_COMPUTE    := -mcpu=tt-bh-tensix
 	ARCH_DEFINE     := -DARCH_QUASAR
 	ARCH_LLK_ROOT   := tt_llk_quasar
 else
@@ -58,10 +61,10 @@ OBJCOPY         := $(TOOL_PATH)/riscv-tt-elf-objcopy
 # =========================
 # Compiler and Linker Flags
 # =========================
-OPTIONS_ALL	:= -g -O3 -mabi=ilp32 -std=$(CXX_VERSION) -ffast-math $(ARCH_CPU)
+OPTIONS_ALL	:= -g -O3 -mabi=ilp32 -std=$(CXX_VERSION) -ffast-math
 OPTIONS_COMPILE := -fno-use-cxa-atexit -Wall -fno-exceptions -fno-rtti -Werror -Wunused-parameter \
 				   -Wfloat-equal -Wpointer-arith -Wnull-dereference -Wredundant-decls -Wuninitialized \
-				   -Wmaybe-uninitialized -DTENSIX_FIRMWARE $(ARCH_DEFINE) -DCOMPILE_FOR_TRISC=
+				   -Wmaybe-uninitialized -DTENSIX_FIRMWARE $(ARCH_DEFINE)
 
 BOOT_MODE := $(if $(bootmode),$(bootmode),brisc)
 ifeq ($(BOOT_MODE),brisc)
@@ -134,42 +137,42 @@ $(SHARED_DIS_DIR)/%.S: $(SHARED_ELF_DIR)/%.elf | $(SHARED_DIS_DIR)
 
 # link unpack.elf, math.elf, pack.elf
 $(ELF_DIR)/%.elf: $(SHARED_OBJ_DIR)/tmu-crt0.o $(SHARED_OBJ_DIR)/main_%.o $(OBJ_DIR)/kernel_%.o | $(ELF_DIR)
-	$(GXX) $(OPTIONS_ALL) $(OPTIONS_LINK) $^ -T$(LINKER_SCRIPTS)/memory.$(ARCH).ld -T$(LINKER_SCRIPTS)/$*.ld -T$(LINKER_SCRIPTS)/sections.ld -o $@
+	$(GXX) $(ARCH_COMPUTE) $(OPTIONS_ALL) $(OPTIONS_LINK) $^ -T$(LINKER_SCRIPTS)/memory.$(ARCH).ld -T$(LINKER_SCRIPTS)/$*.ld -T$(LINKER_SCRIPTS)/sections.ld -o $@
 
 # link brisc.elf
 $(SHARED_ELF_DIR)/brisc.elf: $(SHARED_OBJ_DIR)/tmu-crt0.o $(SHARED_OBJ_DIR)/brisc.o | $(SHARED_ELF_DIR)
-	$(GXX) $(OPTIONS_ALL) $(OPTIONS_LINK) $^ -T$(LINKER_SCRIPTS)/memory.$(ARCH).ld -T$(LINKER_SCRIPTS)/brisc.ld -T$(LINKER_SCRIPTS)/sections.ld -o $@
+	$(GXX) $(ARCH_NON_COMPUTE) $(OPTIONS_ALL) $(OPTIONS_LINK) $^ -T$(LINKER_SCRIPTS)/memory.$(ARCH).ld -T$(LINKER_SCRIPTS)/brisc.ld -T$(LINKER_SCRIPTS)/sections.ld -o $@
 
 # disable make automatically deleting important intermediate files
 .SECONDARY: $(SHARED_OBJ_DIR)/*.o $(OBJ_DIR)/*.o
 
 # build kernel_unpack.o, kernel_math.o, kernel_pack.o from ai_gen subdirectory
 $(OBJ_DIR)/kernel_%.o: sources/ai_gen/$(testname).cpp $(BUILD_DIR)/params.stamp | $(OBJ_DIR) $(DEPS_DIR)
-	$(GXX) $(OPTIONS_ALL) $(OPTIONS_COMPILE) \
+	$(GXX) $(ARCH_COMPUTE) $(OPTIONS_ALL) $(OPTIONS_COMPILE) -DCOMPILE_FOR_TRISC= \
 	-MMD -MP -MF $(patsubst $(OBJ_DIR)/%.o,$(DEPS_DIR)/%.d,$@) \
 	-DLLK_TRISC_$(call TO_UPPER, $*) -c -o $@ $<
 
 # build kernel_unpack.o, kernel_math.o, kernel_pack.o from main sources directory
 $(OBJ_DIR)/kernel_%.o: sources/$(testname).cpp $(BUILD_DIR)/params.stamp | $(OBJ_DIR) $(DEPS_DIR)
-	$(GXX) $(OPTIONS_ALL) $(OPTIONS_COMPILE) \
+	$(GXX) $(ARCH_COMPUTE) $(OPTIONS_ALL) $(OPTIONS_COMPILE) -DCOMPILE_FOR_TRISC= \
 	-MMD -MP -MF $(patsubst $(OBJ_DIR)/%.o,$(DEPS_DIR)/%.d,$@) \
 	-DLLK_TRISC_$(call TO_UPPER, $*) -c -o $@ $<
 
 # build main_unpack.o, main_math.o, main_pack.o
 $(SHARED_OBJ_DIR)/main_%.o: $(RISCV_SOURCES)/trisc.cpp $(BUILD_DIR)/params.stamp | $(SHARED_OBJ_DIR) $(SHARED_DEPS_DIR)
-	$(GXX) $(OPTIONS_ALL) $(OPTIONS_COMPILE) \
+	$(GXX) $(ARCH_COMPUTE) $(OPTIONS_ALL) $(OPTIONS_COMPILE) -DCOMPILE_FOR_TRISC= \
 	-MMD -MP -MF $(patsubst $(SHARED_OBJ_DIR)/%.o,$(SHARED_DEPS_DIR)/%.d,$@) \
 	-DLLK_TRISC_$(call TO_UPPER, $*) -c -o $@ $<
 
 # build brisc.o
 $(SHARED_OBJ_DIR)/brisc.o: $(RISCV_SOURCES)/brisc.cpp $(BUILD_DIR)/params.stamp | $(SHARED_OBJ_DIR) $(SHARED_DEPS_DIR)
-	$(GXX) $(OPTIONS_ALL) $(OPTIONS_COMPILE) \
+	$(GXX) $(ARCH_NON_COMPUTE) $(OPTIONS_ALL) $(OPTIONS_COMPILE) \
 	-MMD -MP -MF $(patsubst $(SHARED_OBJ_DIR)/%.o,$(SHARED_DEPS_DIR)/%.d,$@) \
 	-c -o $@ $<
 
 # build c runtime library
 $(SHARED_OBJ_DIR)/tmu-crt0.o: $(HELPERS)/tmu-crt0.S | $(SHARED_OBJ_DIR) $(SHARED_DEPS_DIR)
-	$(GXX) $(OPTIONS_ALL) $(OPTIONS_COMPILE) \
+	$(GXX) $(ARCH_NON_COMPUTE) $(OPTIONS_ALL) $(OPTIONS_COMPILE) \
 	-MMD -MP -MF $(patsubst $(SHARED_OBJ_DIR)/%.o,$(SHARED_DEPS_DIR)/%.d,$@) \
 	-c -o $@ $<
 
