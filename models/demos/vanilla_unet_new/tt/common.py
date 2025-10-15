@@ -10,7 +10,7 @@ import ttnn
 from models.demos.vanilla_unet_new.reference.model import UNet
 
 VANILLA_UNET_L1_SMALL_SIZE = 12 * 8192
-VANILLA_UNET_PCC_WH = 0.9771
+VANILLA_UNET_PCC_WH = 0.97700
 
 
 def load_reference_model(model_location_generator=None):

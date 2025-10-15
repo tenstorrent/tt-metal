@@ -20,17 +20,20 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": VANILLA_UNET_L1_SMALL_SIZE}], indirect=True)
-def test_vanilla_unet_model(device, reset_seeds, model_location_generator):
+@pytest.mark.parametrize("batch, input_channels, input_height, input_width", [(1, 3, 480, 640)])
+def test_vanilla_unet_model(
+    batch, input_channels, input_height, input_width, device, reset_seeds, model_location_generator
+):
     reference_model = load_reference_model(model_location_generator)
 
-    torch_input_tensor = torch.randn(1, 3, 480, 640)
+    torch_input_tensor = torch.randn(batch, input_channels, input_height, input_width)
     torch_output_tensor = reference_model(torch_input_tensor)
 
     parameters = preprocess_model_parameters(
         initialize_model=lambda: reference_model, custom_preprocessor=create_unet_preprocessor(device), device=None
     )
     configs = create_unet_configs_from_parameters(
-        parameters=parameters, input_height=480, input_width=640, batch_size=1
+        parameters=parameters, input_height=input_height, input_width=input_width, batch_size=batch
     )
     model = create_unet_from_configs(configs, device)
 
@@ -41,10 +44,9 @@ def test_vanilla_unet_model(device, reset_seeds, model_location_generator):
     )
     ttnn_output = model(ttnn_input_host)
     ttnn_output = ttnn.to_torch(ttnn_output)
-
     ttnn_output = ttnn_output.permute(0, 3, 1, 2)  # NHWC -> NCHW
     ttnn_output = ttnn_output.reshape(torch_output_tensor.shape)
 
     assert ttnn_output.shape == torch_output_tensor.shape
     pcc_passed, pcc_message = assert_with_pcc(torch_output_tensor, ttnn_output, pcc=VANILLA_UNET_PCC_WH)
-    logger.info(f"PCC check was successful ({pcc_message:.8f} > {VANILLA_UNET_PCC_WH:.8f})")
+    logger.info(f"PCC check was successful ({pcc_message:.5f} > {VANILLA_UNET_PCC_WH:.5f})")
