@@ -162,6 +162,8 @@ void MAIN {
 
                     max_reduce_with_indices<window_size_hw>(data_dst_idx, index_dst_idx);
 
+                    // dprint_tensix_dest_reg(2);
+
                     cb_pop_front(curr_in_idx_cb_id, 1);
                 } else {
                     unpack_tilizeA_B_block<neginf_srca_maxpool, true, false, zero_srca_avgpool>(

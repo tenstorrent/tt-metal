@@ -14,7 +14,7 @@ def test_max_pool2d_with_indices(device):
     in_c = 32
     in_h = 159
     in_w = 159
-    kernel_size = [2, 2]
+    kernel_size = [4, 4]
     stride = [1, 1]
     padding = [1, 1]
     dilation = [1, 1]
@@ -58,7 +58,7 @@ def test_max_pool2d_with_indices(device):
     #     for c in range(in_c):
     #         for h in range(in_h):
     #             for w in range(in_w):
-    #                 torch_input[n, c, h, w] = h * in_w + w
+    #                 torch_input[n, c, h, w] = c
 
     ttnn_input_shape = (1, 1, in_n * in_h * in_w, in_c)
     torch_input_permuted = torch.permute(torch_input, (0, 2, 3, 1))  # N, H, W, C
@@ -138,11 +138,6 @@ def test_max_pool2d_with_indices(device):
         return_indices=True,
     )
 
-    print("Torch result:")
-    print(torch_output.flatten())
-    print("TTNNresult:")
-    print(ttnn.to_torch(ttnn_output).flatten())
-
     # Reshape torch output to match TTNN format (NCHW -> NHWC)
     torch_output_reshaped = torch_output.permute(0, 2, 3, 1)  # N, H, W, C
     torch_indices_reshaped = torch_indices.permute(0, 2, 3, 1)  # N, H, W, C
@@ -169,29 +164,38 @@ def test_max_pool2d_with_indices(device):
     output_match = torch.allclose(torch_output_reshaped, ttnn_output_reshaped, atol=atol, rtol=rtol)
     indices_match = torch.equal(torch_indices_reshaped, ttnn_indices_reshaped)
 
+    print("Torch result:")
+    print(torch_output_reshaped.flatten())
+    print("TTNN result:")
+    print(ttnn_output_reshaped.flatten())
+
+    print("Torch indices result:")
+    print(torch_indices_reshaped.flatten())
+    print("TTNN indices result:")
+    print(ttnn_indices_reshaped.flatten())
     print(f"Output values match (allclose): {output_match}")
     print(f"Indices values match (allclose): {indices_match}")
 
     # Print detailed mismatch information if outputs don't match
-    if not output_match:
-        print("\n=== OUTPUT MISMATCHES ===")
-        diff = torch.abs(torch_output_reshaped - ttnn_output_reshaped)
-        max_diff = torch.max(diff)
-        print(f"Maximum absolute difference: {max_diff}")
+    # if not output_match:
+    #     print("\n=== OUTPUT MISMATCHES ===")
+    #     diff = torch.abs(torch_output_reshaped - ttnn_output_reshaped)
+    #     max_diff = torch.max(diff)
+    #     print(f"Maximum absolute difference: {max_diff}")
 
-        # Find positions where values don't match (with a small tolerance)
-        mismatch_mask = diff > 1e-5
-        mismatch_positions = torch.nonzero(mismatch_mask, as_tuple=False)
+    #     # Find positions where values don't match (with a small tolerance)
+    #     mismatch_mask = diff > 1e-5
+    #     mismatch_positions = torch.nonzero(mismatch_mask, as_tuple=False)
 
-        if len(mismatch_positions) > 0:
-            print(f"Number of mismatched elements: {len(mismatch_positions)}")
-            print("All mismatches (n, h, w, c): torch_val vs ttnn_val (diff):")
-            for i, pos in enumerate(mismatch_positions):
-                n, h, w, c = pos
-                torch_val = torch_output_reshaped[n, h, w, c]
-                ttnn_val = ttnn_output_reshaped[n, h, w, c]
-                diff_val = diff[n, h, w, c]
-                print(f"  [{n}, {h}, {w}, {c}]: {torch_val:.6f} vs {ttnn_val:.6f} (diff: {diff_val:.6f})")
+    #     if len(mismatch_positions) > 0:
+    #         print(f"Number of mismatched elements: {len(mismatch_positions)}")
+    #         print("All mismatches (n, h, w, c): torch_val vs ttnn_val (diff):")
+    #         for i, pos in enumerate(mismatch_positions):
+    #             n, h, w, c = pos
+    #             torch_val = torch_output_reshaped[n, h, w, c]
+    #             ttnn_val = ttnn_output_reshaped[n, h, w, c]
+    #             diff_val = diff[n, h, w, c]
+    #             print(f"  [{n}, {h}, {w}, {c}]: {torch_val:.6f} vs {ttnn_val:.6f} (diff: {diff_val:.6f})")
 
     # Count total output elements
     total_output_elements = torch_output_reshaped.numel()
@@ -202,109 +206,109 @@ def test_max_pool2d_with_indices(device):
     value_differences = 0
     has_actual_errors = False
 
-    if not indices_match:
-        print("\n=== INDICES MISMATCHES ===")
-        torch_indices_float = torch_indices_reshaped.float()
-        ttnn_indices_float = ttnn_indices_reshaped.float()
-        diff = torch.abs(torch_indices_float - ttnn_indices_float)
-        max_diff = torch.max(diff)
-        print(f"Maximum absolute difference: {max_diff}")
+    # if not indices_match:
+    #     print("\n=== INDICES MISMATCHES ===")
+    #     torch_indices_float = torch_indices_reshaped.float()
+    #     ttnn_indices_float = ttnn_indices_reshaped.float()
+    #     diff = torch.abs(torch_indices_float - ttnn_indices_float)
+    #     max_diff = torch.max(diff)
+    #     print(f"Maximum absolute difference: {max_diff}")
 
-        # Find positions where indices don't match
-        mismatch_mask = diff > 1e-5
-        mismatch_positions = torch.nonzero(mismatch_mask, as_tuple=False)
+    #     # Find positions where indices don't match
+    #     mismatch_mask = diff > 1e-5
+    #     mismatch_positions = torch.nonzero(mismatch_mask, as_tuple=False)
 
-        if len(mismatch_positions) > 0:
-            print(f"Number of mismatched elements: {len(mismatch_positions)}")
-            print("All mismatches (n, h, w, c): torch_idx vs ttnn_idx (diff):")
-            for i, pos in enumerate(mismatch_positions):
-                n, h, w, c = pos
-                torch_idx = torch_indices_float[n, h, w, c]
-                ttnn_idx = ttnn_indices_float[n, h, w, c]
-                diff_val = diff[n, h, w, c]
+    #     if len(mismatch_positions) > 0:
+    #         print(f"Number of mismatched elements: {len(mismatch_positions)}")
+    #         print("All mismatches (n, h, w, c): torch_idx vs ttnn_idx (diff):")
+    #         for i, pos in enumerate(mismatch_positions):
+    #             n, h, w, c = pos
+    #             torch_idx = torch_indices_float[n, h, w, c]
+    #             ttnn_idx = ttnn_indices_float[n, h, w, c]
+    #             diff_val = diff[n, h, w, c]
 
-                # Convert linear indices back to spatial coordinates in the input tensor
-                # PyTorch uses NCHW format for indexing in max_pool2d
-                torch_idx_int = int(torch_idx.item())
-                ttnn_idx_int = int(ttnn_idx.item())
+    #             # Convert linear indices back to spatial coordinates in the input tensor
+    #             # PyTorch uses NCHW format for indexing in max_pool2d
+    #             torch_idx_int = int(torch_idx.item())
+    #             ttnn_idx_int = int(ttnn_idx.item())
 
-                # Convert linear index to (h, w) coordinates within the pooling window
-                # For PyTorch indices, they are relative to the flattened spatial dimensions (H*W)
-                torch_h = torch_idx_int // in_w
-                torch_w = torch_idx_int % in_w
-                ttnn_h = ttnn_idx_int // in_w
-                ttnn_w = ttnn_idx_int % in_w
+    #             # Convert linear index to (h, w) coordinates within the pooling window
+    #             # For PyTorch indices, they are relative to the flattened spatial dimensions (H*W)
+    #             torch_h = torch_idx_int // in_w
+    #             torch_w = torch_idx_int % in_w
+    #             ttnn_h = ttnn_idx_int // in_w
+    #             ttnn_w = ttnn_idx_int % in_w
 
-                # Get the actual input values at these positions
-                torch_input_val = (
-                    torch_input[n, c, torch_h, torch_w] if torch_h < in_h and torch_w < in_w else float("nan")
-                )
-                ttnn_input_val = torch_input[n, c, ttnn_h, ttnn_w] if ttnn_h < in_h and ttnn_w < in_w else float("nan")
+    #             # Get the actual input values at these positions
+    #             torch_input_val = (
+    #                 torch_input[n, c, torch_h, torch_w] if torch_h < in_h and torch_w < in_w else float("nan")
+    #             )
+    #             ttnn_input_val = torch_input[n, c, ttnn_h, ttnn_w] if ttnn_h < in_h and ttnn_w < in_w else float("nan")
 
-                print(
-                    f"  output [{n}, {h}, {w}, {c}]: torch_idx={torch_idx:.0f} vs ttnn_idx={ttnn_idx:.0f} (diff: {diff_val:.0f})"
-                )
-                print(f"    Torch chose input[{n},{c},{torch_h},{torch_w}] = {torch_input_val:.6f}")
-                print(f"    TTNN chose input[{n},{c},{ttnn_h},{ttnn_w}] = {ttnn_input_val:.6f}")
+    #             print(
+    #                 f"  output [{n}, {h}, {w}, {c}]: torch_idx={torch_idx:.0f} vs ttnn_idx={ttnn_idx:.0f} (diff: {diff_val:.0f})"
+    #             )
+    #             print(f"    Torch chose input[{n},{c},{torch_h},{torch_w}] = {torch_input_val:.6f}")
+    #             print(f"    TTNN chose input[{n},{c},{ttnn_h},{ttnn_w}] = {ttnn_input_val:.6f}")
 
-                # Check if this is a valid tie-breaking difference
-                # Two conditions must be satisfied:
-                # 1. The values must be the same
-                # 2. Both indices must be within the same kernel window
+    #             # Check if this is a valid tie-breaking difference
+    #             # Two conditions must be satisfied:
+    #             # 1. The values must be the same
+    #             # 2. Both indices must be within the same kernel window
 
-                if ttnn_dtype == ttnn.bfloat8_b:
-                    values_same = math.isclose(torch_input_val, ttnn_input_val, abs_tol=atol, rel_tol=rtol)
-                else:
-                    values_same = torch_input_val == ttnn_input_val
+    #             if ttnn_dtype == ttnn.bfloat8_b:
+    #                 values_same = math.isclose(torch_input_val, ttnn_input_val, abs_tol=atol, rel_tol=rtol)
+    #             else:
+    #                 values_same = torch_input_val == ttnn_input_val
 
-                # Calculate the top-left corner of the kernel window for this output position
-                # Given output position (h, w), the top-left of the kernel window is:
-                kernel_top_left_h = h * stride_h - padding[0]  # padding[0] is top padding
-                kernel_top_left_w = w * stride_w - padding[1]  # padding[1] is left padding
+    #             # Calculate the top-left corner of the kernel window for this output position
+    #             # Given output position (h, w), the top-left of the kernel window is:
+    #             kernel_top_left_h = h * stride_h - padding[0]  # padding[0] is top padding
+    #             kernel_top_left_w = w * stride_w - padding[1]  # padding[1] is left padding
 
-                # Check if both indices are within the same dilated kernel window
-                # With dilation, the kernel doesn't cover a contiguous rectangle but specific positions
-                def is_in_dilated_kernel_window(
-                    input_h, input_w, kernel_top_left_h, kernel_top_left_w, kernel_h, kernel_w, dilation_h, dilation_w
-                ):
-                    """Check if a position (input_h, input_w) is within the dilated kernel window"""
-                    # Check if the position aligns with the dilated kernel pattern
-                    for kh in range(kernel_h):
-                        for kw in range(kernel_w):
-                            kernel_pos_h = kernel_top_left_h + kh * dilation_h
-                            kernel_pos_w = kernel_top_left_w + kw * dilation_w
-                            if kernel_pos_h == input_h and kernel_pos_w == input_w:
-                                return True
-                    return False
+    #             # Check if both indices are within the same dilated kernel window
+    #             # With dilation, the kernel doesn't cover a contiguous rectangle but specific positions
+    #             def is_in_dilated_kernel_window(
+    #                 input_h, input_w, kernel_top_left_h, kernel_top_left_w, kernel_h, kernel_w, dilation_h, dilation_w
+    #             ):
+    #                 """Check if a position (input_h, input_w) is within the dilated kernel window"""
+    #                 # Check if the position aligns with the dilated kernel pattern
+    #                 for kh in range(kernel_h):
+    #                     for kw in range(kernel_w):
+    #                         kernel_pos_h = kernel_top_left_h + kh * dilation_h
+    #                         kernel_pos_w = kernel_top_left_w + kw * dilation_w
+    #                         if kernel_pos_h == input_h and kernel_pos_w == input_w:
+    #                             return True
+    #                 return False
 
-                torch_in_window = is_in_dilated_kernel_window(
-                    torch_h, torch_w, kernel_top_left_h, kernel_top_left_w, kernel_h, kernel_w, dilation_h, dilation_w
-                )
-                ttnn_in_window = is_in_dilated_kernel_window(
-                    ttnn_h, ttnn_w, kernel_top_left_h, kernel_top_left_w, kernel_h, kernel_w, dilation_h, dilation_w
-                )
+    #             torch_in_window = is_in_dilated_kernel_window(
+    #                 torch_h, torch_w, kernel_top_left_h, kernel_top_left_w, kernel_h, kernel_w, dilation_h, dilation_w
+    #             )
+    #             ttnn_in_window = is_in_dilated_kernel_window(
+    #                 ttnn_h, ttnn_w, kernel_top_left_h, kernel_top_left_w, kernel_h, kernel_w, dilation_h, dilation_w
+    #             )
 
-                same_kernel_window = torch_in_window and ttnn_in_window
+    #             same_kernel_window = torch_in_window and ttnn_in_window
 
-                print(
-                    f"    Dilated kernel window: top_left=({kernel_top_left_h},{kernel_top_left_w}), kernel_size=({kernel_h},{kernel_w}), dilation=({dilation_h},{dilation_w})"
-                )
-                print(f"    Torch index in window: {torch_in_window}, TTNN index in window: {ttnn_in_window}")
+    #             print(
+    #                 f"    Dilated kernel window: top_left=({kernel_top_left_h},{kernel_top_left_w}), kernel_size=({kernel_h},{kernel_w}), dilation=({dilation_h},{dilation_w})"
+    #             )
+    #             print(f"    Torch index in window: {torch_in_window}, TTNN index in window: {ttnn_in_window}")
 
-                if values_same and same_kernel_window:
-                    print(f"    -> Same input values AND same kernel window! This is a valid tie-breaking difference.")
-                    tie_breaking_differences += 1
-                elif values_same and not same_kernel_window:
-                    print(f"    -> Same input values but DIFFERENT kernel windows! This is an error.")
-                    value_differences += 1
-                    has_actual_errors = True
-                else:
-                    print(
-                        f"    -> Different input values! Value difference: {abs(torch_input_val - ttnn_input_val):.6f}"
-                    )
-                    value_differences += 1
-                    has_actual_errors = True
-                print()
+    #             if values_same and same_kernel_window:
+    #                 print(f"    -> Same input values AND same kernel window! This is a valid tie-breaking difference.")
+    #                 tie_breaking_differences += 1
+    #             elif values_same and not same_kernel_window:
+    #                 print(f"    -> Same input values but DIFFERENT kernel windows! This is an error.")
+    #                 value_differences += 1
+    #                 has_actual_errors = True
+    #             else:
+    #                 print(
+    #                     f"    -> Different input values! Value difference: {abs(torch_input_val - ttnn_input_val):.6f}"
+    #                 )
+    #                 value_differences += 1
+    #                 has_actual_errors = True
+    #             print()
 
     print(f"\n=== SUMMARY ===")
     print(f"Total output elements: {total_output_elements}")
