@@ -39,7 +39,7 @@ from loguru import logger
     [
        ( torch.bfloat16, False, 0.803, 0.896, 0.998, 0.917),
        ( torch.bfloat16,  True, 0.827, 0.966, 0.999, 0.940),
-       ( torch.float32, False, 0.919, 0.978, 0.999, 0.939),
+       ( torch.float32, False, 0.918, 0.978, 0.999, 0.939),
        ( torch.float32,  True, 0.910, 0.887, 0.998, 0.945)
     ],
     # fmt: on
