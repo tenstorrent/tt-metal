@@ -149,28 +149,66 @@ try_download_artifacts() {
 
   echo "Found successful build run: $build_run_id"
 
-  # Download build artifacts
-  local artifact_name="ttm_any${tracy_suffix}"
-  echo "Downloading artifact: $artifact_name"
+  # Download build artifacts - need to find the actual artifact name pattern
+  echo "🔍 Looking for build artifacts..."
+
+  # Get list of all artifacts for this run
+  local artifacts
+  artifacts=$(gh run view "$build_run_id" --json artifacts --jq '.artifacts[].name' 2>/dev/null || echo "")
+
+  if [ -z "$artifacts" ]; then
+    echo "❌ Could not list artifacts for run $build_run_id"
+    return 1
+  fi
+
+  echo "📋 Available artifacts:"
+  echo "$artifacts"
+
+  # Search for TTMetal_build_any artifact with proper tracy suffix
+  local artifact_name
+  if [ "$tracy_enabled" -eq 1 ]; then
+    # Look for artifact with "_profiler_" in the name
+    artifact_name=$(echo "$artifacts" | grep "TTMetal_build_any.*_profiler_" | head -1)
+  else
+    # Look for artifact without "_profiler_" in the name (but may have other suffixes)
+    artifact_name=$(echo "$artifacts" | grep "TTMetal_build_any" | grep -v "_profiler_" | head -1)
+  fi
+
+  if [ -z "$artifact_name" ]; then
+    echo "❌ No matching TTMetal_build_any artifact found"
+    echo "   Tracy enabled: $tracy_enabled"
+    return 1
+  fi
+
+  echo "✅ Selected artifact: $artifact_name"
 
   # Clean up any previous artifact files
   rm -f ttm_any.tar.zst 2>/dev/null || true
 
-  if gh run download "$build_run_id" --name "$artifact_name" --dir . 2>/dev/null; then
+  if gh run download "$build_run_id" --name "$artifact_name" --dir . 2>&1; then
+    echo "✅ Artifact downloaded successfully"
+
+    # Debug: List what was actually downloaded
+    echo "📂 Files in current directory after download:"
+    ls -la . | head -10
+
     # Extract the artifact
     if [ -f "ttm_any.tar.zst" ]; then
+      echo "✅ Found ttm_any.tar.zst, extracting..."
       if tar --zstd -xf ttm_any.tar.zst; then
-        echo "Build artifact extracted successfully"
+        echo "✅ Build artifact extracted successfully"
         # Clean up the archive
         rm -f ttm_any.tar.zst
         return 0
       else
-        echo "Failed to extract build artifact"
+        echo "❌ Failed to extract build artifact"
         rm -f ttm_any.tar.zst 2>/dev/null || true
         return 1
       fi
     else
-      echo "Expected artifact file ttm_any.tar.zst not found"
+      echo "❌ Expected artifact file ttm_any.tar.zst not found"
+      echo "📂 Current directory contents:"
+      ls -la .
       return 1
     fi
   else
