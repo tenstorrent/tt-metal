@@ -284,7 +284,7 @@ def test_batched_sparse_matmul_with_nnz(device, mkn, num_experts, tile_h, tile_w
 
 @pytest.mark.parametrize("mkn", [(16, 128, 512)])
 @pytest.mark.parametrize("num_experts", [8, 32])
-@pytest.mark.parametrize("num_batches", [(1, 4)])
+@pytest.mark.parametrize("num_batches", [4])
 @pytest.mark.parametrize("tile_h", [16])
 @pytest.mark.parametrize("tile_w", [32])
 @pytest.mark.parametrize("in1_dtype", [ttnn.bfloat8_b])
@@ -292,11 +292,11 @@ def test_batched_sparse_matmul_with_nnz(device, mkn, num_experts, tile_h, tile_w
 def test_sparse_matmul_inputA_with_nnz(device, mkn, num_experts, num_batches, tile_h, tile_w, in1_dtype, core_grid):
     torch.manual_seed(0)
     m, k, n = mkn
-    b, s = num_batches
-    in0 = torch.randn((b, s, m, k), dtype=torch.bfloat16)
+    b = num_batches
+    in0 = torch.randn((b, num_experts, m, k), dtype=torch.bfloat16)
     in1 = torch.randn((1, num_experts, k, n), dtype=torch.bfloat16)
 
-    sparsity_shape = (1, 1, b, s)
+    sparsity_shape = (1, 1, b, num_experts)
     sparsity = torch.rand(sparsity_shape)
 
     # Mark some as 0 to test the sparsity
@@ -307,7 +307,7 @@ def test_sparse_matmul_inputA_with_nnz(device, mkn, num_experts, num_batches, ti
 
     sparsity = sparsity.to(dtype=torch.bfloat16)
 
-    nnz = int((sparsity != 0).sum().item()) * num_experts
+    nnz = int((sparsity != 0).sum().item())
     logger.info(f"nnz: {nnz}")
 
     in0_t = ttnn.from_torch(
@@ -363,15 +363,16 @@ def test_sparse_matmul_inputA_with_nnz(device, mkn, num_experts, num_batches, ti
     )
 
     output_tensor = ttnn.to_torch(output_t)
+    logger.info(f"output_tensor.shape: {output_tensor.shape}")
 
     # Compute matmul using torch for each batch and check the results
-    for b_i, s_i, e_i in itertools.product(range(b), range(s), range(num_experts)):
-        if sparsity[0, 0, b_i, s_i] == 0.0:
+    for b_i, e_i in itertools.product(range(b), range(num_experts)):
+        if sparsity[0, 0, b_i, e_i] == 0.0:
             continue
-        in0_batch = in0[b_i, s_i, :, :]
+        in0_batch = in0[b_i, e_i, :, :]
         in1_batch = in1[0, e_i, :, :]
         pt_out = torch.matmul(in0_batch, in1_batch)
 
         # Compare with output tensor
         expected_pcc = 0.999
-        assert_with_pcc(pt_out, output_tensor[b_i, s_i, 0, e_i, :, :], expected_pcc)
+        assert_with_pcc(pt_out, output_tensor[b_i, e_i, :, :], expected_pcc)

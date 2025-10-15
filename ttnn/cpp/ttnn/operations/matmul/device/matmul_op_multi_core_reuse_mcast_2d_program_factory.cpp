@@ -386,7 +386,6 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
 
             // sparsity args
             (std::uint32_t)0,      // batchB
-            (std::uint32_t)0,      // is_A_sparse
             (std::uint32_t)0,      // sparsity_pagesize (placeholder since sparsity not used in this case)
             (std::uint32_t)true,   // bcast_A
             (std::uint32_t)false,  // get_batch_from_reader
@@ -422,7 +421,6 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         (std::uint32_t)bcast_batch,  // bcast_B
         // sparsity args
         (std::uint32_t)0,  // batchB
-        (std::uint32_t)0,  // is_A_sparse
         (std::uint32_t)0,  // sparsity_pagesize (placeholder since sparsity not used in this case)
 
         // WRITER

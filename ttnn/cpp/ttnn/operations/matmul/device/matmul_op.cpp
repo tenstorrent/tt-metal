@@ -1509,7 +1509,7 @@ ttnn::Shape compute_sparse_matmul_output_shape(
     // Find batched dimensions in both. Add batched dimensions from both to output rank and then add 2
     // Batched dimensions are all dimensions except the last two
     uint32_t a_batched_dims = ((is_input_a_sparse && is_input_b_sparse) || (a_rank <= 2)) ? 0 : (a_rank - 2);
-    uint32_t b_batched_dims = (b_rank > 2) ? (b_rank - 2) : 0;
+    uint32_t b_batched_dims = ((is_input_a_sparse && !is_input_b_sparse) || (b_rank <= 2)) ? 0 : (b_rank - 2);
     uint32_t output_rank = a_batched_dims + b_batched_dims + 2;
 
     // Initialize output shape with zeros based on the output rank
@@ -2835,7 +2835,7 @@ void SparseMatmul::validate(
         }
     }
 
-    uint32_t batch_length = 1;
+    uint32_t batch_length = 0;
     if (this->is_input_a_sparse && this->is_input_b_sparse) {
         batch_length = batch_length_B;
     } else if (this->is_input_a_sparse) {
@@ -2851,19 +2851,11 @@ void SparseMatmul::validate(
         sparsity.logical_volume(),
         batch_length);
 
-    if (this->is_input_a_sparse && (!this->is_input_b_sparse)) {
-        TT_FATAL(
-            this->nnz.value_or(1) <= (batch_length_A * batch_length_B),
-            "nnz ({}) must be less than or equal to the length of all batch dimensions ({})",
-            this->nnz,
-            batch_length);
-    } else {
-        TT_FATAL(
-            this->nnz.value_or(1) <= batch_length,
-            "nnz ({}) must be less than or equal to the length of all batch dimensions ({})",
-            this->nnz,
-            batch_length);
-    }
+    TT_FATAL(
+        this->nnz.value_or(1) <= batch_length,
+        "nnz ({}) must be less than or equal to the length of all batch dimensions ({})",
+        this->nnz,
+        batch_length);
 }
 
 std::vector<ttnn::TensorSpec> SparseMatmul::compute_output_specs(

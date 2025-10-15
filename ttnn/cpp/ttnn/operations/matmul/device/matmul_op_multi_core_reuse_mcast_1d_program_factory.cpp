@@ -338,7 +338,6 @@ process_mcast_in0_program_and_create_override_variables(
             (std::uint32_t)B,      // batch
             // sparsity args
             (std::uint32_t)0,     // batchB
-            (std::uint32_t)0,     // is_A_sparse
             (std::uint32_t)0,     // sparsity_pagesize (placeholder since sparsity not used in this case)
             (std::uint32_t)true,  // bcast_A
             (std::uint32_t)false  // get_batch_from_reader
@@ -374,7 +373,6 @@ process_mcast_in0_program_and_create_override_variables(
         (std::uint32_t)bcast_batch,  // bcast_B
         // sparsity args
         (std::uint32_t)0,  // batchB
-        (std::uint32_t)0,  // is_A_sparse
         (std::uint32_t)0,  // sparsity_pagesize (placeholder since sparsity not used in this case)
 
         // WRITER
@@ -1163,7 +1161,6 @@ process_mcast_in1_program_and_create_override_variables(
 
         // sparsity args
         (std::uint32_t)0,     // batchB
-        (std::uint32_t)0,     // is_A_sparse
         (std::uint32_t)0,     // sparsity_pagesize (placeholder since sparsity not used in this case)
         (std::uint32_t)true,  // bcast_A
         (std::uint32_t)false  // get_batch_from_reader
@@ -1198,7 +1195,6 @@ process_mcast_in1_program_and_create_override_variables(
         (std::uint32_t)bcast_batch,  // bcast_B
         // sparsity args
         (std::uint32_t)0,  // batchB
-        (std::uint32_t)0,  // is_A_sparse
         (std::uint32_t)0,  // sparsity_pagesize (placeholder since sparsity not used in this case)
 
         // WRITER
@@ -3104,8 +3100,16 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
     ////////////////////////////////////////////////////////////////////////////
     // NOTE: Pads matmul input dims to 512 x 512 multiples (ie. multiples of 16*32 x 16*32)
     // NOTE: Maximum number of tiles in output is 120 * 16^2 = 30,720 (eg. [1, 1, 5120, 6144])
-    const auto B_A = (is_input_a_sparse && is_input_b_sparse) ? 1 : get_batch_size(ashape);
     const auto B_B = get_batch_size(bshape);
+    uint32_t B_A = 1;
+    if (is_input_a_sparse && is_input_b_sparse) {
+        B_A = 1;
+    } else if (is_input_a_sparse) {
+        B_A = get_batch_size(ashape) / B_B;
+    } else {
+        B_A = get_batch_size(ashape);
+    }
+
     const uint32_t Mt = ashape[-2] / in0_tile_shape[0];
     const uint32_t Kt = ashape[-1] / in0_tile_shape[1];
     const uint32_t Nt = bshape[-1] / in1_tile_shape[1];
@@ -3267,11 +3271,10 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
         (std::uint32_t)Mt * Kt,  // MtKt
         (std::uint32_t)B_A,      // batchA
         // sparsity args
-        (std::uint32_t)B_B,                                        // batchB
-        (std::uint32_t)is_input_a_sparse && (!is_input_b_sparse),  // is_A_sparse
-        (std::uint32_t)sparsity.buffer()->aligned_page_size(),     // sparsity_pagesize
-        (std::uint32_t)!(is_input_a_sparse && is_input_b_sparse),  // bcast_A
-        (std::uint32_t)!nnz.has_value(),                           // get_batch_from_reader
+        (std::uint32_t)B_B,                                     // batchB
+        (std::uint32_t)sparsity.buffer()->aligned_page_size(),  // sparsity_pagesize
+        (std::uint32_t)!is_input_a_sparse,                      // bcast_A
+        (std::uint32_t)!nnz.has_value(),                        // get_batch_from_reader
         // fuse op args
         (std::uint32_t)false,  // fuse_op
     };
@@ -3303,9 +3306,8 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
         (std::uint32_t)B_A,      // batchA
         (std::uint32_t)true,     // bcast_B
         // sparsity args
-        (std::uint32_t)B_B,                                        // batchB
-        (std::uint32_t)is_input_a_sparse && (!is_input_b_sparse),  // is_A_sparse
-        (std::uint32_t)sparsity.buffer()->aligned_page_size(),     // sparsity_pagesize
+        (std::uint32_t)B_B,                                     // batchB
+        (std::uint32_t)sparsity.buffer()->aligned_page_size(),  // sparsity_pagesize
 
         // WRITER
         // out tensor args
