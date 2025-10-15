@@ -323,9 +323,11 @@ def test_distributed_norm_comparison(
         )
     elif norm_type == "rms_norm":
         ttnn_stats = ttnn.rms_norm_pre_all_gather(
-            ttnn_input, compute_kernel_config=compute_kernel_config, dtype=ttnn.bfloat16, legacy_reduction=False
+            ttnn_input,
+            compute_kernel_config=compute_kernel_config,
+            dtype=ttnn.bfloat16,  # legacy_reduction=False
         )
-    ccl_semaphore_handles = setup_ccl_semahpores(mesh_device)
+    ccl_semaphore_handles = setup_ccl_semaphores(mesh_device)
     ttnn.synchronize_device(mesh_device)
     ttnn_stats_gathered = ttnn.experimental.all_gather_async(
         ttnn_stats,
@@ -354,8 +356,8 @@ def test_distributed_norm_comparison(
             epsilon=eps,
             weight=ttnn_weight,
             compute_kernel_config=compute_kernel_config,
-            legacy_reduction=False,
-            legacy_rsqrt=False,
+            # legacy_reduction=False,
+            # legacy_rsqrt=False,
         )
 
     ttnn_output_torch = ttnn.to_torch(ttnn_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))
