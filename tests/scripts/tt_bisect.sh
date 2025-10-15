@@ -9,7 +9,9 @@ Usage:
   -g GOOD_SHA    : known good commit
   -b BAD_SHA     : known bad commit
   -t TIMEOUT     : per-iteration timeout (default 30m)
-  -p PROFILING   : enable Tracy profiling
+  -p             : enable Tracy profiling
+  -r RETRIES     : number of retries (default 3)
+  -n             : enable non-deterministic detection mode (ND mode)
 END
 
 timeout_duration_iteration="30m"
@@ -17,14 +19,20 @@ test=""
 good_commit=""
 bad_commit=""
 tracy_enabled=0
+retries=3
+nd_mode=false
+run_idx=0
+timeout_rc=1
 
-while getopts ":f:g:b:t:p" opt; do
+while getopts ":f:g:b:t:pr:n" opt; do
   case "$opt" in
     f) test="$OPTARG" ;;
     g) good_commit="$OPTARG" ;;
     b) bad_commit="$OPTARG" ;;
     t) timeout_duration_iteration="$OPTARG" ;;
     p) tracy_enabled=1 ;;
+    r) retries="$OPTARG" ;;
+    n) nd_mode=true ;;
     \?) die "Invalid option: -$OPTARG" ;;
     :)  die "Option -$OPTARG requires an argument." ;;
   esac
@@ -122,58 +130,143 @@ while [[ "$found" == "false" ]]; do
   echo "::endgroup::"
 
   echo "::group::Testing $rev"
-  timeout_rc=1
-  max_retries=3
-  attempt=1
   output_file="bisect_test_output.log"
-  while [ $attempt -le $max_retries ]; do
-    echo "Attempt $attempt on $(git rev-parse HEAD)"
-    echo "Run: $test"
-    if timeout -k 10s "$timeout_duration_iteration" bash -lc "$test" >"$output_file" 2>&1; then
-      timeout_rc=0
-      echo "--- Logs (attempt $attempt) ---"
-      sed -n '1,200p' "$output_file" || true
-      echo "------------------------------"
-      break
-    else
-      timeout_rc=$?
-      echo "Test failed (code $timeout_rc), retrying…"
-      echo "--- Logs (attempt $attempt) ---"
-      sed -n '1,200p' "$output_file" || true
-      echo "------------------------------"
-      attempt=$((attempt+1))
-    fi
-  done
-  echo "Final exit code: $timeout_rc"
-  echo "::endgroup::"
+  if [ "$nd_mode" = true ]; then
+    success_count=0
+    failure_count=0
+    skip_count=0
+    run_idx=1
+    while [ $run_idx -le $retries ]; do
+      echo "Attempt $run_idx/$retries on $(git rev-parse HEAD)"
+      echo "Resetting devices..."
+      tt-smi -r >/dev/null 2>&1 || true
+      echo "Devices reset"
 
-  if [ $timeout_rc -eq 0 ]; then
-    out="$(git bisect good || true)"
-  elif [ $timeout_rc -eq 124 ] || [ $timeout_rc -eq 137 ] || [ $timeout_rc -eq 143 ]; then
-    echo "Timeout/kill detected; skipping this commit"
-    git bisect skip
-    continue
+      echo "Run: $test"
+      if timeout -k 10s "$timeout_duration_iteration" bash -lc "$test" 2>&1 | tee "$output_file"; then
+        if grep -qiE "(^|[^a-zA-Z])(SKIP|SKIPPED)([^a-zA-Z]|$)" "$output_file"; then
+          echo "Attempt $run_idx: detected skip (exit 0 with 'SKIP' in output)"
+          skip_count=$((skip_count+1))
+        else
+          echo "Attempt $run_idx: success"
+          success_count=$((success_count+1))
+        fi
+      else
+        rc=$?
+        if [ $rc -eq 124 ] || [ $rc -eq 137 ] || [ $rc -eq 143 ]; then
+          echo "Attempt $run_idx: timeout/kill (rc=$rc) -> counting as skipped"
+          skip_count=$((skip_count+1))
+        else
+          echo "Attempt $run_idx: failure (rc=$rc)"
+          failure_count=$((failure_count+1))
+        fi
+      fi
+
+      echo "--- Logs (attempt $run_idx) ---"
+      sed -n '1,200p' "$output_file" || true
+      echo "------------------------------"
+      run_idx=$((run_idx+1))
+    done
+
+    evaluated=$((success_count + failure_count))
+    if [ $evaluated -gt 0 ]; then
+      passrate=$(awk -v s=$success_count -v e=$evaluated 'BEGIN { printf "%.2f", (s*100.0)/e }')
+    else
+      passrate="NA"
+    fi
+
+    nd_log_file="bisect_nd_results.csv"
+    if [ ! -f "$nd_log_file" ]; then
+      echo "timestamp,commit_sha,rev_short,successes,failures,skips,evaluated,passrate_percent" > "$nd_log_file"
+    fi
+    echo "$(date -Iseconds),$(git rev-parse HEAD),$rev,$success_count,$failure_count,$skip_count,$evaluated,$passrate" >> "$nd_log_file"
+
+    echo "ND summary for $rev: successes=$success_count failures=$failure_count skips=$skip_count evaluated=$evaluated passrate=$passrate%"
+    echo "::endgroup::"
+
+    if [ $failure_count -ge 1 ]; then
+      out="$(git bisect bad || true)"
+    elif [ $evaluated -eq 0 ]; then
+      echo "All attempts were skipped; skipping this commit"
+      git bisect skip
+      continue
+    else
+      out="$(git bisect good || true)"
+    fi
+
+    first_line="$(printf '%s\n' "$out" | head -n1)"
+    case "$first_line" in
+      *"is the first bad commit"*)
+        bad_sha="$(git rev-parse HEAD)"
+        echo "FOUND IT: $first_line"
+        echo "Commit: $bad_sha"
+        echo "Title : $(git log -1 --pretty=%s "$bad_sha")"
+        found=true
+        ;;
+      *"There are only 'skip'ped commits left to test."*)
+        echo "Bisect inconclusive: only skipped commits left."
+        echo "Last bisect output: $first_line"
+        break
+        ;;
+      "")
+        echo "git bisect produced no output; stopping to avoid an infinite loop."
+        echo "Last bisect output: $first_line"
+        break
+        ;;
+    esac
   else
-    out="$(git bisect bad || true)"
+    run_idx=1
+    timeout_rc=1
+    while [ $run_idx -le $retries ]; do
+      echo "Attempt $run_idx/$retries on $(git rev-parse HEAD)"
+      echo "Run: $test"
+      if timeout -k 10s "$timeout_duration_iteration" bash -lc "$test" 2>&1 | tee "$output_file"; then
+        timeout_rc=0
+        echo "--- Logs (attempt $run_idx) ---"
+        sed -n '1,200p' "$output_file" || true
+        echo "------------------------------"
+        break
+      else
+        timeout_rc=$?
+        echo "Test failed (code $timeout_rc), retrying…"
+        echo "--- Logs (attempt $run_idx) ---"
+        sed -n '1,200p' "$output_file" || true
+        echo "------------------------------"
+        run_idx=$((run_idx+1))
+      fi
+    done
+    echo "Final exit code: $timeout_rc"
+    echo "::endgroup::"
+
+    if [ $timeout_rc -eq 0 ]; then
+      out="$(git bisect good || true)"
+    elif [ $timeout_rc -eq 124 ] || [ $timeout_rc -eq 137 ] || [ $timeout_rc -eq 143 ]; then
+      echo "Timeout/kill detected; skipping this commit"
+      git bisect skip
+      continue
+    else
+      out="$(git bisect bad || true)"
+    fi
+
+    first_line="$(printf '%s\n' "$out" | head -n1)"
+    case "$first_line" in
+      *"is the first bad commit"*)
+        echo "FOUND IT: $first_line"
+        found=true
+        ;;
+      *"There are only 'skip'ped commits left to test."*)
+        echo "Bisect inconclusive: only skipped commits left."
+        echo "Last bisect output: $first_line"
+        break
+        ;;
+      "")
+        echo "git bisect produced no output; stopping to avoid an infinite loop."
+        echo "Last bisect output: $first_line"
+        break
+        ;;
+    esac
   fi
 
-  first_line="$(printf '%s\n' "$out" | head -n1)"
-  case "$first_line" in
-    *"is the first bad commit"*)
-      echo "FOUND IT: $first_line"
-      found=true
-      ;;
-    *"There are only 'skip'ped commits left to test."*)
-      echo "Bisect inconclusive: only skipped commits left."
-      echo "Last bisect output: $first_line"
-      break
-      ;;
-    "")
-      echo "git bisect produced no output; stopping to avoid an infinite loop."
-      echo "Last bisect output: $first_line"
-      break
-      ;;
-  esac
 done
 
 git bisect reset || true

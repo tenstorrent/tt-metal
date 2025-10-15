@@ -19,6 +19,12 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import (
 import json
 from models.common.utility_functions import profiler
 from models.experimental.stable_diffusion_xl_base.conftest import get_device_name
+from models.experimental.stable_diffusion_xl_base.utils.clip_fid_ranges import (
+    accuracy_check_clip,
+    accuracy_check_fid,
+    get_appr_delta_metric,
+    targets,
+)
 
 test_demo.__test__ = False
 COCO_CAPTIONS_DOWNLOAD_PATH = "https://github.com/mlcommons/inference/raw/4b1d1156c23965172ae56eacdd8372f8897eb771/text_to_image/coco2014/captions/captions_source.tsv"
@@ -122,7 +128,8 @@ def test_accuracy_sdxl(
         capture_trace,
         evaluation_range,
         guidance_scale,
-        use_cfg_parallel,
+        use_cfg_parallel=use_cfg_parallel,
+        fixed_seed_for_batch=True,
     )
 
     clip = CLIPEncoder()
@@ -147,9 +154,12 @@ def test_accuracy_sdxl(
     print(f"Average CLIP Score: {average_clip_score}")
     print(f"Standard Deviation of CLIP Scores: {deviation_clip_score}")
 
+    avg_gen_end_to_end = profiler.get("end_to_end_generation")
+
     data = {
-        "model": "sdxl",  # For compatibility with current processes
+        "model": "sdxl",
         "metadata": {
+            "model_name": "sdxl",
             "device": get_device_name(),
             "device_vae": vae_on_device,
             "capture_trace": capture_trace,
@@ -159,24 +169,58 @@ def test_accuracy_sdxl(
             "num_prompts": num_prompts,
             "negative_prompt": negative_prompt,
             "guidance_scale": guidance_scale,
-            "model_name": "sdxl",
         },
         "benchmarks_summary": [
             {
-                "device": get_device_name(),
                 "model": "sdxl",
+                "device": get_device_name(),
+                "avg_gen_time": avg_gen_end_to_end,
+                "target_checks": {
+                    "functional": {
+                        "avg_gen_time": targets["perf"]["functional"],
+                        "avg_gen_time_check": 2 if targets["perf"]["functional"] >= avg_gen_end_to_end else 3,
+                    },
+                    "complete": {
+                        "avg_gen_time": targets["perf"]["complete"],
+                        "avg_gen_time_check": 2 if targets["perf"]["complete"] >= avg_gen_end_to_end else 3,
+                    },
+                    "target": {
+                        "avg_gen_time": targets["perf"]["target"],
+                        "avg_gen_time_check": 2 if targets["perf"]["target"] >= avg_gen_end_to_end else 3,
+                    },
+                },
                 "average_denoising_time": profiler.get("denoising_loop"),
                 "average_vae_time": profiler.get("vae_decode"),
-                "average_inference_time": profiler.get("denoising_loop") + profiler.get("vae_decode"),
-                "min_inference_time": min(
-                    i + j for i, j in zip(profiler.times["denoising_loop"], profiler.times["vae_decode"])
-                ),
-                "max_inference_time": max(
-                    i + j for i, j in zip(profiler.times["denoising_loop"], profiler.times["vae_decode"])
-                ),
+                "min_gen_time": min(profiler.times["end_to_end_generation"]),
+                "max_gen_time": max(profiler.times["end_to_end_generation"]),
+                "average_encoding_time": profiler.get("encode_prompts"),
+            }
+        ],
+        "evals": [
+            {
+                "model": "sdxl",
+                "device": get_device_name(),
                 "average_clip": average_clip_score,
                 "deviation_clip": deviation_clip_score,
+                "approx_clip_accuracy_check": accuracy_check_clip(average_clip_score, num_prompts, mode="approx"),
+                "average_clip_accuracy_check": accuracy_check_clip(average_clip_score, num_prompts, mode="valid"),
+                "delta_clip": get_appr_delta_metric(average_clip_score, num_prompts, score_type="clip"),
                 "fid_score": fid_score,
+                "approx_fid_accuracy_check": accuracy_check_fid(fid_score, num_prompts, mode="approx"),
+                "fid_score_accuracy_check": accuracy_check_fid(fid_score, num_prompts, mode="valid"),
+                "delta_fid": get_appr_delta_metric(fid_score, num_prompts, score_type="fid"),
+                "accuracy_check_approx": min(
+                    accuracy_check_fid(fid_score, num_prompts, mode="approx"),
+                    accuracy_check_clip(average_clip_score, num_prompts, mode="approx"),
+                ),
+                "accuracy_check_delta": min(
+                    accuracy_check_fid(fid_score, num_prompts, mode="delta"),
+                    accuracy_check_clip(average_clip_score, num_prompts, mode="delta"),
+                ),
+                "accuracy_check_valid": min(
+                    accuracy_check_fid(fid_score, num_prompts, mode="valid"),
+                    accuracy_check_clip(average_clip_score, num_prompts, mode="valid"),
+                ),
             }
         ],
     }

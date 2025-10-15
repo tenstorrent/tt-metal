@@ -13,8 +13,11 @@ set_target_properties(
 # Globbing non-build files is acceptable for now because devs don't generate packages.
 file(
     GLOB_RECURSE kernels
+    common/kernels/*
     kernel_common/*
     kernels/*
+    all_to_all_combine/device/kernels/*
+    all_to_all_dispatch/device/kernels/*
 )
 target_sources(
     ttnn_op_ccl
@@ -37,6 +40,7 @@ target_sources(
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES
             ${kernels}
+            ccl_host_types.hpp
             shared_with_host/hetergeneous_data_structs.hpp
             shared_with_host/sharded_tensor_addr_gen.hpp
             common/types/ccl_types.hpp
@@ -64,12 +68,18 @@ target_sources(
         common/host/ccl_command_stream_builders.cpp
         common/host/moe_utils.cpp
         # Ops
+        all_gather/all_gather.cpp
+        all_gather/device/all_gather_device_operation.cpp
+        all_gather/device/all_gather_program_factory.cpp
         all_to_all_combine/all_to_all_combine.cpp
         all_to_all_combine/device/all_to_all_combine_device_operation.cpp
         all_to_all_combine/device/all_to_all_combine_program_factory.cpp
         all_to_all_dispatch/all_to_all_dispatch.cpp
         all_to_all_dispatch/device/all_to_all_dispatch_device_operation.cpp
         all_to_all_dispatch/device/all_to_all_dispatch_program_factory.cpp
+        reduce_scatter/reduce_scatter.cpp
+        reduce_scatter/device/reduce_scatter_device_operation.cpp
+        reduce_scatter/device/reduce_scatter_program_factory.cpp
         mesh_partition/mesh_partition.cpp
         mesh_partition/device/mesh_partition_device_operation.cpp
         mesh_partition/device/mesh_partition_program_factory.cpp

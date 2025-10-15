@@ -60,7 +60,6 @@
 
 using std::vector;
 using namespace tt;
-using std::chrono::duration_cast;
 using std::chrono::microseconds;
 
 ////////////////////////////////////////////////////////////////////////////////

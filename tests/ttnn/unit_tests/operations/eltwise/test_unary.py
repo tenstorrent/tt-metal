@@ -1847,7 +1847,7 @@ def test_cbrt_arange(device):
     assert_with_ulp(golden, result, 2, allow_nonfinite=True)
 
 
-@pytest.mark.parametrize("ttnn_op", [ttnn.isinf, ttnn.isnan, ttnn.isposinf, ttnn.isneginf])
+@pytest.mark.parametrize("ttnn_op", [ttnn.isinf, ttnn.isnan, ttnn.isposinf, ttnn.isneginf, ttnn.isfinite])
 @pytest.mark.parametrize(
     "torch_dtype, ttnn_dtype",
     [
@@ -1858,7 +1858,8 @@ def test_cbrt_arange(device):
 )
 def test_inf_nan_check(ttnn_op, torch_dtype, ttnn_dtype, device):
     in_data = torch.tensor(
-        [float("-inf"), float("inf"), float("nan"), 5.0, -5.0, 0.0, -0.0, 1e38, 1e-45], dtype=torch_dtype
+        [float("-inf"), float("inf"), float("nan"), 5.0, -5.0, 0.0, -0.0, 1e38, 1e-45, 3.4e38, -3.4e38],
+        dtype=torch_dtype,
     )
     input_tensor = ttnn.from_torch(in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
@@ -1867,3 +1868,38 @@ def test_inf_nan_check(ttnn_op, torch_dtype, ttnn_dtype, device):
     golden_tensor = golden_function(in_data)
 
     assert torch.equal(golden_tensor, ttnn.to_torch(output_tensor))
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([100])),
+        (torch.Size([64, 32])),
+        (torch.Size([3, 128, 32])),
+        (torch.Size([1, 3, 320, 384])),
+        (torch.Size([1, 1, 32, 320, 12])),
+    ),
+)
+@pytest.mark.parametrize(
+    "torch_dtype, ttnn_dtype",
+    [
+        (torch.float32, ttnn.float32),
+        (torch.bfloat16, ttnn.bfloat16),
+        (torch.bfloat16, ttnn.bfloat8_b),
+    ],
+)
+@pytest.mark.parametrize("negative_slope", [0.01, 0.1, 1.0, 5.75, 10.0])
+def test_unary_leaky_relu_ttnn(input_shapes, negative_slope, torch_dtype, ttnn_dtype, device):
+    in_data = torch.empty(input_shapes, dtype=torch_dtype).uniform_(-100, 100)
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    if ttnn_dtype == ttnn.bfloat8_b:
+        in_data = ttnn.to_torch(input_tensor, dtype=torch_dtype)
+
+    output_tensor = ttnn.leaky_relu(input_tensor, negative_slope=negative_slope)
+    golden_function = ttnn.get_golden_function(ttnn.leaky_relu)
+    golden_tensor = golden_function(in_data, negative_slope=negative_slope)
+
+    if ttnn_dtype == ttnn.bfloat8_b:
+        assert_with_pcc(ttnn.to_torch(output_tensor), golden_tensor, pcc=0.999)
+    else:
+        assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=1)

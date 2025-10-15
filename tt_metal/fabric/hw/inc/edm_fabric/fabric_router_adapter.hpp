@@ -15,6 +15,7 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_interface.hpp"
 #include "fabric_edm_packet_header_validate.hpp"
 #include "tt_metal/hw/inc/utils/utils.h"
+#include "tt_metal/fabric/hw/inc/edm_fabric/adapters/fabric_adapter_utils.hpp"
 #include "debug/assert.h"
 
 #include <cstdint>
@@ -53,9 +54,7 @@ struct RouterStaticSizedChannelWriterAdapter {
     //  --> Not splitting yet though to avoid change conflict issues with some other in flight changes
     static constexpr bool IS_POW2_NUM_BUFFERS = is_power_of_2(EDM_NUM_BUFFER_SLOTS);
     static constexpr size_t BUFFER_SLOT_PTR_WRAP = EDM_NUM_BUFFER_SLOTS * 2;
-    static constexpr uint32_t unused_connection_value = 0;
-    static constexpr uint32_t open_connection_value = 1;
-    static constexpr uint32_t close_connection_request_value = 2;
+
     // HACK: Need a way to properly set this up
 
     RouterStaticSizedChannelWriterAdapter() = default;
@@ -154,78 +153,6 @@ struct RouterStaticSizedChannelWriterAdapter {
 
     static constexpr size_t edm_sender_channel_field_stride_bytes = 16;
 
-    template <bool SEND_CREDIT_ADDR = false, bool posted = false, uint8_t WORKER_HANDSHAKE_NOC = noc_index>
-    void open_start() {
-        const auto dest_noc_addr_coord_only = get_noc_addr(this->edm_noc_x, this->edm_noc_y, 0);
-
-        tt::tt_fabric::EDMChannelWorkerLocationInfo* worker_location_info_ptr =
-            reinterpret_cast<tt::tt_fabric::EDMChannelWorkerLocationInfo*>(edm_worker_location_info_addr);
-
-        const uint64_t dest_edm_location_info_addr =
-            dest_noc_addr_coord_only |
-            reinterpret_cast<size_t>(
-                edm_worker_location_info_addr +
-                offsetof(tt::tt_fabric::EDMChannelWorkerLocationInfo, worker_semaphore_address));
-        // write the address of our local copy of read counter (that EDM is supposed to update)
-        noc_inline_dw_write<InlineWriteDst::L1, posted>(
-            dest_edm_location_info_addr,
-            reinterpret_cast<size_t>(edm_buffer_local_free_slots_update_ptr),
-            0xf,
-            WORKER_HANDSHAKE_NOC);
-        const uint64_t edm_teardown_semaphore_address_address =
-            dest_noc_addr_coord_only |
-            reinterpret_cast<uint64_t>(&(worker_location_info_ptr->worker_teardown_semaphore_address));
-        // Write our local teardown ack address to EDM
-        noc_inline_dw_write<InlineWriteDst::L1, posted>(
-            edm_teardown_semaphore_address_address,
-            reinterpret_cast<size_t>(worker_teardown_addr),
-            0xf,
-            WORKER_HANDSHAKE_NOC);
-        // Write out core noc-xy coord to EDM
-        const uint64_t connection_worker_xy_address =
-            dest_noc_addr_coord_only | reinterpret_cast<uint64_t>(&(worker_location_info_ptr->worker_xy));
-        noc_inline_dw_write<InlineWriteDst::L1, posted>(
-            connection_worker_xy_address, WorkerXY(my_x[0], my_y[0]).to_uint32(), 0xf, WORKER_HANDSHAKE_NOC);
-    }
-
-    template <bool posted = false, uint8_t WORKER_HANDSHAKE_NOC = noc_index>
-    void open_finish() {
-        const uint64_t edm_connection_handshake_noc_addr =
-            get_noc_addr(this->edm_noc_x, this->edm_noc_y, edm_connection_handshake_l1_addr);
-        noc_async_read_barrier(WORKER_HANDSHAKE_NOC);
-        // Order here is important
-        // We need to write our read counter value to the register before we signal the EDM
-        // As EDM will potentially increment the register as well
-        this->buffer_slot_index = BufferIndex(0);
-
-        noc_inline_dw_write<InlineWriteDst::L1, posted>(
-            edm_connection_handshake_noc_addr, open_connection_value, 0xf, WORKER_HANDSHAKE_NOC);
-        *this->worker_teardown_addr = 0;
-    }
-
-    void close_start() {
-        const auto dest_noc_addr_coord_only =
-            get_noc_addr(this->edm_noc_x, this->edm_noc_y, 0) & ~(uint64_t)NOC_COORDINATE_MASK;
-
-        // buffer index stored at location after handshake addr
-        const uint64_t remote_buffer_index_addr = dest_noc_addr_coord_only | edm_copy_of_wr_counter_addr;
-        noc_inline_dw_write<InlineWriteDst::L1>(remote_buffer_index_addr, this->get_buffer_slot_index());
-
-        const uint64_t dest_edm_connection_state_addr = dest_noc_addr_coord_only | edm_connection_handshake_l1_addr;
-        noc_inline_dw_write<InlineWriteDst::L1>(dest_edm_connection_state_addr, close_connection_request_value);
-    }
-
-    void close_finish() {
-        WAYPOINT("FCFW");
-        // Need to wait for the ack to teardown notice, from edm
-        while (*this->worker_teardown_addr != 1) {
-            invalidate_l1_cache();
-        }
-        WAYPOINT("FCFD");
-        noc_async_write_barrier();
-        *(this->worker_teardown_addr) = 0;
-    }
-
 public:
     template <uint8_t EDM_TO_DOWNSTREAM_NOC = noc_index, uint8_t EDM_TO_DOWNSTREAM_NOC_VC = NOC_UNICAST_WRITE_VC>
     FORCE_INLINE void setup_edm_noc_cmd_buf() const {
@@ -277,12 +204,8 @@ public:
     //                   or some legacy code which skips connection info copy on Tensix L1 static address
     template <bool SEND_CREDIT_ADDR = false, bool posted = false, uint8_t WORKER_HANDSHAKE_NOC = noc_index>
     void open() {
-        open_start<SEND_CREDIT_ADDR, posted, WORKER_HANDSHAKE_NOC>();
-        open_finish<posted, WORKER_HANDSHAKE_NOC>();
-    }
-    void close() {
-        close_start();
-        close_finish();
+        this->open_start<SEND_CREDIT_ADDR, posted, WORKER_HANDSHAKE_NOC>();
+        this->open_finish<posted, WORKER_HANDSHAKE_NOC>();
     }
 
     // Only for debug/watcher asserts
@@ -317,6 +240,23 @@ private:
     // the cmd buffer is used for edm-edm path
     uint8_t data_noc_cmd_buf;
     uint8_t sync_noc_cmd_buf;
+
+    template <bool SEND_CREDIT_ADDR = false, bool posted = false, uint8_t WORKER_HANDSHAKE_NOC = noc_index>
+    void open_start() {
+        connection::open_start<SEND_CREDIT_ADDR, posted, WORKER_HANDSHAKE_NOC>(
+            this->edm_worker_location_info_addr,
+            reinterpret_cast<size_t>(this->edm_buffer_local_free_slots_update_ptr),
+            reinterpret_cast<size_t>(this->worker_teardown_addr),
+            this->edm_noc_x,
+            this->edm_noc_y);
+    }
+
+    template <bool posted = false, uint8_t WORKER_HANDSHAKE_NOC = noc_index>
+    void open_finish() {
+        connection::open_finish<posted, WORKER_HANDSHAKE_NOC>(
+            this->edm_connection_handshake_l1_addr, this->worker_teardown_addr, this->edm_noc_x, this->edm_noc_y);
+        this->buffer_slot_index = BufferIndex(0);
+    }
 
     template <
         bool stateful_api = false,

@@ -39,7 +39,6 @@
 namespace ttnn {
 namespace operations::conv {
 using namespace tt;
-using sliding_window::ParallelConfig;
 using sliding_window::SlidingWindowConfig;
 
 namespace conv2d {
@@ -83,6 +82,7 @@ ResultWithOptions conv2d(
     bool return_weights_and_bias) {
     if (dram_slice_config_.has_value()) {
         if (dram_slice_config_.value().slice_type == Conv2dSliceConfig::SliceType::L1_FULL) {
+            log_trace(tt::LogOp, "Conv2d L1 with slice config {}", dram_slice_config_);
             return result_to_result_with_options(
                 conv2d_L1(
                     input_tensor,
@@ -106,6 +106,7 @@ ResultWithOptions conv2d(
                 return_output_dim,
                 return_weights_and_bias);
         } else {
+            log_trace(tt::LogOp, "Conv2d DRAM with slice config {}", dram_slice_config_);
             return result_to_result_with_options(
                 conv2d_DRAM(
                     input_tensor,
@@ -133,6 +134,7 @@ ResultWithOptions conv2d(
     } else {
         bool input_is_on_device = tt::tt_metal::is_device_tensor(input_tensor);
         if (input_is_on_device && input_tensor.memory_config().is_l1()) {
+            log_trace(tt::LogOp, "Conv2d L1 without slice config");
             return result_to_result_with_options(
                 conv2d_L1(
                     input_tensor,
@@ -156,6 +158,7 @@ ResultWithOptions conv2d(
                 return_output_dim,
                 return_weights_and_bias);
         }
+        log_trace(tt::LogOp, "Conv2d DRAM without slice config");
         return result_to_result_with_options(
             conv2d_DRAM(
                 input_tensor,
@@ -217,7 +220,6 @@ Result conv2d_DRAM(
     bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding_n4, dilation, groups, conv_config);
     DeviceComputeKernelConfig compute_config = compute_config_.value_or(get_conv_default_compute_kernel_config(device));
     const auto compute_grid_size = device->compute_with_storage_grid_size();
-
     ttnn::Tensor input_tensor_on_device = fold_input_tensor_if_required(
         input_tensor,
         device,
@@ -257,7 +259,7 @@ Result conv2d_DRAM(
             true,  // DRAM MM Convs are always interleaved
             bias_tensor.has_value(),
             true,  // parameters_on_device
-            conv_config.enable_kernel_stride_folding,
+            conv_config.enable_kernel_stride_folding.value(),
             conv_config.full_inner_dim,
             conv_config.enable_activation_reuse,
             kernel_size,
@@ -663,10 +665,18 @@ Result conv2d_L1(
     if (conv_config.enable_activation_reuse) {
         if (conv_config.enable_act_double_buffer) {
             conv_config.enable_act_double_buffer = false;
-            log_warning(
+            log_debug(
                 tt::LogOp,
                 "Activation double buffering is currently not supported when activation reuse optimization is enabled, "
                 "disabling double buffering.");
+        }
+
+        if (conv_config.enable_weights_double_buffer) {
+            conv_config.enable_weights_double_buffer = false;
+            log_debug(
+                tt::LogOp,
+                "Weights are already fully buffered when activation reuse optimization is enabled, disabling weights "
+                "double buffering.");
         }
     }
     auto [output_height, output_width] =
@@ -759,7 +769,7 @@ Result conv2d_L1(
         mm_conv && auto_shard,
         bias_tensor.has_value(),
         true,  // parameters_on_device
-        conv_config.enable_kernel_stride_folding,
+        conv_config.enable_kernel_stride_folding.value(),
         conv_config.full_inner_dim,
         conv_config.enable_activation_reuse,
         kernel_size,

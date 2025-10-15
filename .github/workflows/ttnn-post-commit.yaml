@@ -74,44 +74,42 @@ jobs:
         os: ["ubuntu-22.04"]
         test-group:
           - name: ttnn group 1
-            cmd: TT_METAL_ENABLE_ERISC_IRAM=1 pytest tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --group 1 -m "not disable_fast_runtime_mode"
+            cmd: TT_METAL_ENABLE_ERISC_IRAM=1 pytest -n auto --timeout 300 tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --group 1 -m "not disable_fast_runtime_mode"
           - name: ttnn group 2
-            cmd: pytest tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --group 2 -m "not disable_fast_runtime_mode"
+            cmd: pytest -n auto --timeout 300 tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --group 2 -m "not disable_fast_runtime_mode"
           - name: ttnn group 3
-            cmd: pytest tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --group 3 -m "not disable_fast_runtime_mode"
+            cmd: pytest -n auto --timeout 300 tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --group 3 -m "not disable_fast_runtime_mode"
           - name: ttnn group 4
-            cmd: pytest tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --group 4 -m "not disable_fast_runtime_mode"
+            cmd: pytest -n auto --timeout 300 tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --group 4 -m "not disable_fast_runtime_mode"
           - name: ttnn group 5
-            cmd: pytest tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --group 5 -m "not disable_fast_runtime_mode"
+            cmd: pytest -n auto --timeout 300 tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --group 5 -m "not disable_fast_runtime_mode"
           - name: ttnn group 6
-            cmd: pytest tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --group 6 -m "not disable_fast_runtime_mode"
+            cmd: pytest -n auto --timeout 300 tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --group 6 -m "not disable_fast_runtime_mode"
           - name: ttnn group 7
-            cmd: pytest tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --group 7 -m "not disable_fast_runtime_mode"
+            cmd: pytest -n auto --timeout 300 tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --group 7 -m "not disable_fast_runtime_mode"
           - name: ttnn group 8
-            cmd: pytest tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --group 8 -m "not disable_fast_runtime_mode"
+            cmd: pytest -n auto --timeout 300 tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --group 8 -m "not disable_fast_runtime_mode"
           - name: ttnn group 9
-            cmd: pytest tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --group 9 -m "not disable_fast_runtime_mode"
+            cmd: pytest -n auto --timeout 300 tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --group 9 -m "not disable_fast_runtime_mode"
           - name: ttnn group 10
-            cmd: pytest tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --group 10 -m "not disable_fast_runtime_mode"
+            cmd: pytest -n auto --timeout 300 tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --group 10 -m "not disable_fast_runtime_mode"
           - name: ttnn group 11
-            cmd: pytest tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --group 11 -m "not disable_fast_runtime_mode"
+            cmd: pytest -n auto --timeout 300 tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --group 11 -m "not disable_fast_runtime_mode"
           - name: ttnn group 12
-            cmd: pytest tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --group 12 -m "not disable_fast_runtime_mode"
+            cmd: pytest -n auto --timeout 300 tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --group 12 -m "not disable_fast_runtime_mode"
           - name: ttnn notebook
-            cmd: TT_METAL_ENABLE_ERISC_IRAM=1 pytest tests/ttnn/notebook_tests -xv -m "not disable_fast_runtime_mode"
+            cmd: TT_METAL_ENABLE_ERISC_IRAM=1 pytest -n auto --timeout 300 tests/ttnn/notebook_tests -xv -m "not disable_fast_runtime_mode"
           - name: ttnn fast runtime off
-            cmd: pytest tests/ttnn/unit_tests -xv -m requires_fast_runtime_mode_off
+            cmd: pytest -n auto --timeout 300 tests/ttnn/unit_tests -xv -m requires_fast_runtime_mode_off
             fast_runtime_mode_off: true
           - name: ttnn example tests
             cmd: ./tests/scripts/run_ttnn_examples.sh
     name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
-    # ttnn group 1 is timing out on CIv2: https://github.com/tenstorrent/tt-metal/issues/29443
     runs-on: >-
       ${{
         (inputs.runner-label == 'P100') && fromJSON(format('["in-service", "cloud-virtual-machine", "{0}"]', inputs.runner-label))
-        || ((inputs.runner-label == 'N300' && matrix.test-group.name == 'ttnn group 1') && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label))
-        || ((inputs.runner-label == 'P150b') && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label))
-        || format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label)
+        || ((inputs.runner-label == 'P150b') && format('tt-ubuntu-2204-{0}-metal', inputs.runner-label))
+        || format('tt-ubuntu-2204-{0}-viommu-metal', inputs.runner-label)
       }}
     container:
       image: ${{ ((inputs.runner-label != 'P100') && format('harbor.ci.tenstorrent.net/{0}', inputs.docker-image)) || inputs.docker-image || 'docker-image-unresolved!' }}
@@ -122,14 +120,14 @@ jobs:
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
-      options: "--device /dev/tenstorrent"
+      options: "--device /dev/tenstorrent -e TT_GH_CI_INFRA"
     defaults:
       run:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
         timeout-minutes: 10
         with:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}

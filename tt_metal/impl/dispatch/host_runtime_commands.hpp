@@ -15,7 +15,6 @@
 #include <utility>
 #include <vector>
 
-#include "command_queue_interface.hpp"
 #include "core_coord.hpp"
 #include "device_command.hpp"
 #include "env_lib.hpp"

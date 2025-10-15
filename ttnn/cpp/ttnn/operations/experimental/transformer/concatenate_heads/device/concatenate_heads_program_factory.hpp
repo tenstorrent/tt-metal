@@ -13,7 +13,7 @@ using namespace tt::constants;
 using namespace tt::tt_metal;
 using namespace tt;
 
-tt::tt_metal::operation::ProgramWithCallbacks concatenate_heads_multi_core(
+inline tt::tt_metal::operation::ProgramWithCallbacks concatenate_heads_multi_core(
     const Tensor& a, Tensor& output, CoreCoord compute_with_storage_grid_size) {
     const auto& ashape = a.padded_shape();
 

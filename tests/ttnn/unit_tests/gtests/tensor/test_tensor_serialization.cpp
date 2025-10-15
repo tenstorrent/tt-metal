@@ -20,7 +20,6 @@
 namespace ttnn {
 namespace {
 
-using ::testing::ElementsAre;
 using ::testing::FloatEq;
 using ::testing::Pointwise;
 using ::testing::SizeIs;
