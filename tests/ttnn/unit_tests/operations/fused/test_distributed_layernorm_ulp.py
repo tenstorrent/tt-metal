@@ -197,7 +197,7 @@ def calculate_detailed_ulp_stats(expected, actual):
     }
 
 
-def setup_ccl_semahpores(mesh_device):
+def setup_ccl_semaphores(mesh_device):
     compute_grid_size = mesh_device.compute_with_storage_grid_size()
     ccl_sub_device_crs = ttnn.CoreRangeSet(
         {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
