@@ -6,9 +6,6 @@
 #include "dataflow_api.h"
 #include "matmul_dataflow_common.hpp"
 
-#include "debug/dprint.h"
-#include "debug/dprint_pages.h"
-
 void kernel_main() {
     constexpr uint32_t M_tiles = get_compile_time_arg_val(0);
     constexpr uint32_t padded_M_tiles = get_compile_time_arg_val(1);
@@ -19,12 +16,14 @@ void kernel_main() {
     constexpr uint32_t M_block_tiles = get_compile_time_arg_val(6);
     constexpr uint32_t K_block_tiles = get_compile_time_arg_val(7);
     constexpr uint32_t N_block_tiles = get_compile_time_arg_val(8);
-    constexpr uint32_t input_tile_size = get_compile_time_arg_val(9);
-    uint32_t in1_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(10));
-    uint32_t in1_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(11));
-    uint32_t in1_valid_semaphore_addr = get_semaphore(get_compile_time_arg_val(12));
-    constexpr uint32_t is_output_writer = get_compile_time_arg_val(13);
-    constexpr uint32_t is_injector_core = get_compile_time_arg_val(14);
+    constexpr uint32_t in1_tile_size = get_compile_time_arg_val(9);
+    constexpr uint32_t out_tile_size = get_compile_time_arg_val(10);
+    constexpr uint32_t in2_tile_size = get_compile_time_arg_val(11);
+    uint32_t in1_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(12));
+    uint32_t in1_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(13));
+    uint32_t in1_valid_semaphore_addr = get_semaphore(get_compile_time_arg_val(14));
+    constexpr uint32_t is_output_writer = get_compile_time_arg_val(15);
+    constexpr uint32_t is_injector_core = get_compile_time_arg_val(16);
 
     // Load input/output addresses and range parameters
     uint32_t argidx = 0;
@@ -43,13 +42,13 @@ void kernel_main() {
     const uint32_t defer_write_k_block = get_arg_val<uint32_t>(argidx++);
 
     // Tensor accessor for input tensor
-    constexpr auto in1_args = TensorAccessorArgs<15>();
-    const auto in1_reader = TensorAccessor(in1_args, in1_addr, input_tile_size);
+    constexpr auto in1_args = TensorAccessorArgs<17>();
+    const auto in1_reader = TensorAccessor(in1_args, in1_addr, in1_tile_size);
     constexpr auto out_args = TensorAccessorArgs<in1_args.next_compile_time_args_offset()>();
-    const auto out_reader = TensorAccessor(out_args, out_addr, input_tile_size);
+    const auto out_reader = TensorAccessor(out_args, out_addr, out_tile_size);
 #ifdef FUSE_BIAS
     constexpr auto in2_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
-    const auto in2_reader = TensorAccessor(in2_args, in2_addr, input_tile_size);
+    const auto in2_reader = TensorAccessor(in2_args, in2_addr, in2_tile_size);
 #endif
 
     const TensorShape2D in1_shape(K_tiles, N_tiles, padded_K_tiles, padded_N_tiles);
@@ -99,7 +98,7 @@ void kernel_main() {
                             out_reader,
                             out_shape,
                             out_read_ptr,
-                            input_tile_size,
+                            out_tile_size,
                             defer_write_m_block * M_block_tiles,
                             (defer_write_m_block + 1) * M_block_tiles,
                             defer_write_n_block * N_block_tiles,
@@ -115,14 +114,13 @@ void kernel_main() {
                 uint32_t k_block = k_forward ? k_block_iter : (K_num_blocks - 1) - k_block_iter;
                 cb_reserve_back(cb_id_in1, in1_block_num_tiles);
 
-#ifndef SKIP_IN1
                 uint32_t in1_start_address = get_write_ptr(cb_id_in1);
                 if constexpr (is_injector_core) {
                     read_in1_block_sync(
                         in1_reader,
                         in1_shape,
                         in1_start_address,
-                        input_tile_size,
+                        in1_tile_size,
                         k_block * K_block_tiles,
                         (k_block + 1) * K_block_tiles,
                         n_block * N_block_tiles,
@@ -132,11 +130,10 @@ void kernel_main() {
                     noc_semaphore_inc(in1_sender_semaphore_noc_addr, 1);
                     noc_semaphore_wait(in1_receiver_semaphore_addr_ptr, VALID);
                 }
-#endif
+
                 // Critical to performance for sender to push data to compute before mcasting
                 // This frees sender to start next read earlier
                 cb_push_back(cb_id_in1, in1_block_num_tiles);
-#ifndef SKIP_IN1
 
                 if (!is_sink_core) {
                     noc_semaphore_wait(in1_sender_semaphore_addr_ptr, 1);
@@ -144,11 +141,10 @@ void kernel_main() {
 
                     uint64_t in1_unicast_data_addr = get_noc_addr(in1_dest_noc_x, in1_dest_noc_y, in1_start_address);
 
-                    noc_async_write(in1_start_address, in1_unicast_data_addr, in1_block_num_tiles * input_tile_size);
+                    noc_async_write(in1_start_address, in1_unicast_data_addr, in1_block_num_tiles * in1_tile_size);
 
                     noc_semaphore_set_remote(in1_valid_semaphore_addr, in1_receiver_semaphore_noc_addr);
                 }
-#endif
             }
 #ifdef FUSE_BIAS
             if constexpr (!is_output_writer) {
@@ -158,7 +154,7 @@ void kernel_main() {
                 for (uint32_t n_tile_id = n_block * N_block_tiles; n_tile_id < (n_block + 1) * N_block_tiles;
                      n_tile_id++) {
                     noc_async_read_tile(n_tile_id, in2_reader, l1_write_addr_in2);
-                    l1_write_addr_in2 += input_tile_size;
+                    l1_write_addr_in2 += in2_tile_size;
                 }
                 noc_async_read_barrier();
 
@@ -185,7 +181,7 @@ void kernel_main() {
                         out_shape,
                         cb_id_out,
                         N_block_tiles,
-                        input_tile_size,
+                        out_tile_size,
                         m_block * M_block_tiles,
                         (m_block + 1) * M_block_tiles,
                         n_block * N_block_tiles,

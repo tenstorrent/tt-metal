@@ -30,7 +30,7 @@ void py_bind_minimal_matmul(py::module& module) {
                const ttnn::Tensor& weight_tensor,
                const std::optional<ttnn::Tensor>& bias_tensor,
                const std::optional<unary::UnaryWithParam>& fused_activation,
-               const MinimalMatmulConfig& config,
+               const std::optional<const MinimalMatmulConfig>& config,
                const std::optional<const MemoryConfig>& memory_config,
                const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
                 return self(
@@ -47,7 +47,7 @@ void py_bind_minimal_matmul(py::module& module) {
             py::arg("weight_tensor"),
             py::arg("bias_tensor") = std::nullopt,
             py::arg("fused_activation") = std::nullopt,
-            py::arg("config"),
+            py::arg("config") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
             py::arg("compute_kernel_config") = std::nullopt});
 
