@@ -1583,30 +1583,14 @@ static uint32_t relay_linear_to_downstream(
     } else if (downstream_data_ptr + amt_to_write > downstream_cb_end) {  // wrap
         uint32_t last_chunk_size = downstream_cb_end - downstream_data_ptr;
         noc_addr = get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr);
-#if 0
         relay_client.write_any_len<my_noc_index, true, NCRISC_WR_CMD_BUF>(
             scratch_write_addr, noc_addr, last_chunk_size);
-#else
-#if defined(FABRIC_RELAY)
-        noc_async_write(scratch_write_addr, noc_addr, last_chunk_size);
-#else
-        cq_noc_async_write_with_state_any_len<true, true>(scratch_write_addr, noc_addr, last_chunk_size);
-#endif
-#endif
         downstream_data_ptr = downstream_cb_base;
         scratch_write_addr += last_chunk_size;
         amt_to_write -= last_chunk_size;
     }
     noc_addr = get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr);
-#if 0
     relay_client.write_any_len<my_noc_index, true, NCRISC_WR_CMD_BUF>(scratch_write_addr, noc_addr, amt_to_write);
-#else
-#if defined(FABRIC_RELAY)
-    noc_async_write(scratch_write_addr, noc_addr, amt_to_write);
-#else
-    cq_noc_async_write_with_state_any_len<true, true>(scratch_write_addr, noc_addr, amt_to_write);
-#endif
-#endif
     downstream_data_ptr += amt_to_write;
     return npages;
 }
@@ -1653,6 +1637,8 @@ uint32_t process_relay_linear_h_cmd(uint32_t cmd_ptr, uint32_t& downstream_data_
     // Writes are fast, reads are slow
     uint32_t db_toggle = 0;
     uint32_t scratch_write_addr;
+    // Add back start_offset to amt_to_read to ensure all bytes from scratch_db are transferred
+    amt_to_read += start_offset;
     constexpr uint32_t max_batch_size = ~(scratch_db_half_size - 1);
     while (wlength != 0) {
         uint32_t read_length = (wlength > max_batch_size) ? max_batch_size : wlength;
@@ -1672,9 +1658,8 @@ uint32_t process_relay_linear_h_cmd(uint32_t cmd_ptr, uint32_t& downstream_data_
 
             // Third step - write from DB
             uint32_t npages =
-            //write_pages_to_dispatcher<0, false>(downstream_data_ptr, scratch_write_addr, amt_to_write);
             relay_linear_to_downstream(downstream_data_ptr, scratch_write_addr, amt_to_write);
-            cb_release_pages<my_noc_index, downstream_noc_xy, downstream_cb_sem_id>(npages);
+            relay_client.release_pages<my_noc_index, downstream_noc_xy, downstream_cb_sem_id>(npages);
             read_length -= amt_to_read;
 
             // TODO(pgk); we can do better on WH w/ tagging
@@ -1686,7 +1671,7 @@ uint32_t process_relay_linear_h_cmd(uint32_t cmd_ptr, uint32_t& downstream_data_
     scratch_write_addr = scratch_db_top[db_toggle];
     uint32_t amt_to_write = amt_to_read;
     uint32_t npages = relay_linear_to_downstream(downstream_data_ptr, scratch_write_addr, amt_to_write);
-    cb_release_pages<my_noc_index, downstream_noc_xy, downstream_cb_sem_id>(npages+1);
+    relay_client.release_pages<my_noc_index, downstream_noc_xy, downstream_cb_sem_id>(npages + 1);
 
     downstream_data_ptr = round_up_pow2(downstream_data_ptr, downstream_cb_page_size);
 
@@ -1758,7 +1743,7 @@ static uint32_t process_relay_inline_all(uint32_t data_ptr, uint32_t fence, bool
 // at once.
 template <typename RelayInlineState>
 inline void relay_raw_data_to_downstream(
-    uint32_t& fence, uint32_t& data_ptr, uint32_t wlength, uint32_t& local_downstream_data_ptr) {
+    uint32_t& fence, uint32_t& data_ptr, uint64_t wlength, uint32_t& local_downstream_data_ptr) {
     // Stream data to downstream as it arrives. Acquire upstream pages incrementally.
     uint64_t remaining = wlength;
 
