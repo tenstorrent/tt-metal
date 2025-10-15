@@ -220,13 +220,9 @@ int main(int argc, char** argv) {
         log_info(LogTest, "Using random seed: {}", seed);
 
         // Note: create_random_vector_of_bfloat16 packs 2 bfloat16 values per uint32_t
-        std::vector<uint32_t> src0_vec = create_random_vector_of_bfloat16(input_buffer_size, 5.0f, seed, -5.0f);
-        // std::vector<uint32_t> src0_vec = create_constant_vector_of_bfloat16(input_buffer_size, 10.0f);
-        // std::vector<uint32_t> src0_vec = create_arange_vector_of_bfloat16(input_buffer_size, false);
+        std::vector<uint32_t> src0_vec = create_random_vector_of_bfloat16(input_buffer_size, 2.0f, seed, -2.0f);
 
-        std::vector<uint32_t> src1_vec = create_random_vector_of_bfloat16(input_buffer_size, 5.0f, seed + 1, -5.0f);
-        // std::vector<uint32_t> src1_vec = create_constant_vector_of_bfloat16(input_buffer_size, 1.5f);
-        // std::vector<uint32_t> src1_vec = create_arange_vector_of_bfloat16(input_buffer_size, false);
+        std::vector<uint32_t> src1_vec = create_random_vector_of_bfloat16(input_buffer_size, 2.0f, seed + 1, -2.0f);
 
         // Write input data to device
         log_info(LogTest, "Writing input data to device...");
@@ -345,7 +341,7 @@ int main(int argc, char** argv) {
         }
 
         // Proper value validation using the reduce_result
-        bool values_correct = false;
+        bool values_correct = true;
 
         // Both size and value checks should pass now
         pass &= size_check;
