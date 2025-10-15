@@ -385,3 +385,72 @@ def test_layer_norm_sharded_with_weight_and_bias_and_residual(device, use_welfor
         weight=weight[0],
         bias=bias[0],
     )
+
+
+@pytest.mark.parametrize("use_welford", [True])
+@skip_welford_blackhole("'use_welford'")
+def test_layer_norm_sharded_padded(device, use_welford):
+    """
+    Test layer norm on a sharded tensor that is padded with zeros
+    in the width dimension.
+    Compare against analytic layer norm calculation: (x - mean) / sqrt(var + eps)
+    Only tests Welford layernorm, since legacy reduce doesn't give the correct
+    result for partially-filled tiles.
+    """
+    torch.manual_seed(0)
+
+    h, w = 32, 256
+    num_cores_h, num_cores_w = 1, 8
+    non_zero_columns = 3
+    torch_input_tensor = torch.zeros((h, w), dtype=torch.bfloat16)
+    torch_input_tensor[:, :non_zero_columns] = 1.0
+
+    # Create sharded memory config for 2x8 core grid
+    shard_height = h // num_cores_h
+    shard_width = w // num_cores_w
+    shard_spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 0),
+                    ttnn.CoreCoord(num_cores_w - 1, num_cores_h - 1),
+                )
+            }
+        ),
+        [shard_height, shard_width],
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    sharded_mem_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        buffer_type=ttnn.BufferType.L1,
+        shard_spec=shard_spec,
+    )
+
+    # Convert to TTNN tensor
+    tt_input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        layout=ttnn.Layout.TILE,
+        device=device,
+        memory_config=sharded_mem_config,
+    )
+
+    # Run sharded layer norm
+    output_ttnn = layer_norm_sharded(
+        device,
+        tt_input_tensor,
+        use_welford,
+        block_ht=1,
+        block_wt=1,
+        subblock_w=1,
+        residual=None,
+        weight=None,
+        bias=None,
+    )
+
+    golden = ttnn.get_golden_function(ttnn.layer_norm)
+    golden_output = golden(torch_input_tensor, weight=None, bias=None, eps=1e-12)
+
+    # Assert that the output is close to the golden output
+    rtol = 1.6e-2
+    atol = 1e-5
+    assert torch.allclose(output_ttnn, golden_output, rtol=rtol, atol=atol)
