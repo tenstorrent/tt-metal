@@ -251,6 +251,7 @@ models/common @yieldthought @mtairum @uaydonat @tenstorrent/metalium-codeowners-
 models/datasets/llm_dataset_utils.py @skhorasganiTT @uaydonat @tenstorrent/metalium-codeowners-large-changes
 models/demos @uaydonat @yieldthought @cglagovichTT @tenstorrent/metalium-codeowners-large-changes
 models/demos/deepseek_v3 @uaydonat @yieldthought @kpaigwar @barci2 @pprajapatiTT @tenstorrent/metalium-codeowners-large-changes
+models/demos/gpt_oss @uaydonat @mtairum @sraizada-tt @tenstorrent/metalium-codeowners-large-changes
 models/**/bert*/ @TT-BrianLiu @uaydonat @tenstorrent/metalium-codeowners-large-changes
 models/demos/metal_BERT_large_11 @tt-aho @TT-BrianLiu @tenstorrent/metalium-codeowners-large-changes
 models/**/distilbert/ @tt-aho @uaydonat @tenstorrent/metalium-codeowners-large-changes
