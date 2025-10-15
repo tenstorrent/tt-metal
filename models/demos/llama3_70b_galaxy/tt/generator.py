@@ -375,10 +375,10 @@ class Generator:
         }
         if reset_inputs and sampling_params is not None:
             if isinstance(sampling_params.temperature, List):
-                # Until https://github.com/tenstorrent/tt-metal/issues/30289 is fixed,
-                # we must clamp top-p in range [0.0, 0.99] instead of [0.0, 1.0]
+                # we must clamp top-p in range [0.0, 1.0]
+                # cannot rely on external SamplingParams to be clamped
                 TOP_P_MIN = 0.0
-                TOP_P_MAX = 0.9
+                TOP_P_MAX = 1.0
 
                 updated_temperature = []
 
