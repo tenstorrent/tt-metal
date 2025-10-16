@@ -18,7 +18,7 @@ namespace ttnn::operations::ccl {
 
 void py_bind_reduce_scatter(py::module& module) {
     auto doc =
-        R"doc(reduce_scatter(input_tensor: ttnn.Tensor, dim: int, cluster_axis: Optional[int] = None, topology: ttnn.Topology = None, output_tensor: Optional[ttnn.Tensor] = None, memory_config: Optional[ttnn.MemoryConfig] = None, subdevice_id: Optional[ttnn.SubDeviceId] = None) -> ttnn.Tensor
+        R"doc(reduce_scatter(input_tensor: ttnn.Tensor, dim: int, cluster_axis: Optional[int] = None, subdevice_id: Optional[ttnn.SubDeviceId] = None, memory_config: Optional[ttnn.MemoryConfig] = None, output_tensor: Optional[ttnn.Tensor] = None, num_links: Optional[int] = None, topology: ttnn.Topology = None) -> ttnn.Tensor
 
             Reduce-scatter operation across devices along a selected dimension and optional cluster axis.
 
@@ -28,11 +28,11 @@ void py_bind_reduce_scatter(py::module& module) {
 
             Keyword Args:
                 cluster_axis (int, optional): The cluster axis to reduce across. Defaults to `None`.
+                subdevice_id (ttnn.SubDeviceId, optional): Subdevice id for worker cores.
+                memory_config (ttnn.MemoryConfig, optional): Output memory configuration.
+                output_tensor (ttnn.Tensor, optional): Preallocated output tensor.
                 num_links (int, optional): The number of links to use for the reduce-scatter operation. Defaults to `None`, for which the number of links is determined automatically.
                 topology (ttnn.Topology, optional): Fabric topology. Defaults to `None`.
-                output_tensor (ttnn.Tensor, optional): Preallocated output tensor.
-                memory_config (ttnn.MemoryConfig, optional): Output memory configuration.
-                subdevice_id (ttnn.SubDeviceId, optional): Subdevice id for worker cores.
 
            Returns:
                ttnn.Tensor: The reduced and scattered tensor.)doc";

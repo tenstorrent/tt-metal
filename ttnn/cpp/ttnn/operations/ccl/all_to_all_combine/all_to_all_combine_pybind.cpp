@@ -19,7 +19,7 @@ namespace ttnn::operations::ccl {
 
 void py_bind_all_to_all_combine(py::module& module) {
     auto doc =
-        R"doc(all_to_all_combine(input_tensor: ttnn.Tensor, expert_indices_tensor: ttnn.Tensor, expert_mapping_tensor: ttnn.Tensor, local_reduce: bool = false, num_links: Optional[int] = None, topology: Optional[ttnn.Topology] = std::nullopt, memory_config: Optional[ttnn.MemoryConfig] = None, axis: Optional[int] = None, subdevice_id: Optional[ttnn.SubDeviceId] = None, optional_output_tensor: Optional[ttnn.Tensor] = None)) -> ttnn.Tensor
+        R"doc(all_to_all_combine(input_tensor: ttnn.Tensor, expert_indices_tensor: ttnn.Tensor, expert_mapping_tensor: ttnn.Tensor, local_reduce: bool = false, num_links: Optional[int] = None, topology: Optional[ttnn.Topology] = std::nullopt, memory_config: Optional[ttnn.MemoryConfig] = None, cluster_axis: Optional[int] = None, subdevice_id: Optional[ttnn.SubDeviceId] = None, output_tensor: Optional[ttnn.Tensor] = None)) -> ttnn.Tensor
 
             All to all combine operation for combining the output tokens from the experts, based on the expert indices and expert mapping tensors. If cluster axis is specified then we combine the tokens only on that axis.
             B = batch size
@@ -79,7 +79,7 @@ void py_bind_all_to_all_combine(py::module& module) {
                const std::optional<uint32_t> cluster_axis,
                const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
                const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& optional_output_tensor,
+               const std::optional<ttnn::Tensor>& output_tensor,
                const std::optional<uint32_t> num_links,
                const std::optional<tt::tt_fabric::Topology> topology) {
                 return self(
@@ -93,7 +93,7 @@ void py_bind_all_to_all_combine(py::module& module) {
                     cluster_axis,
                     output_shard_dim,
                     subdevice_id,
-                    optional_output_tensor);
+                    output_tensor);
             },
             py::arg("input_tensor").noconvert(),
             py::arg("expert_metadata_tensor").noconvert(),
