@@ -166,6 +166,7 @@ void MAIN {
         pack_untilize_dest_init<max_tiles_per_iter>(tilize_untilize_cb, num_out_sticks, num_faces_in_output_tile);
     } else {
         unary_op_init_common(in_cb_id_0, in_cb_id_0);
+        copy_tile_to_dst_init_short(in_cb_id_0);
         // tilize_init(in_cb_id_0, topk_output_tiles, in_cb_id_0);
 
         // this can be done here because we do not use the SFPU for anything else so it does not get reprogrammed
@@ -219,14 +220,10 @@ void MAIN {
                 if constexpr (return_indices) {
                     cb_wait_front(curr_in_idx_cb_id, 1);
 
-                    copy_tile_to_dst_init_short(curr_in_cb_id);
                     reconfig_data_format_srca(curr_in_cb_id);
-                    pack_reconfig_data_format(curr_in_cb_id);
                     copy_tile(curr_in_cb_id, topk_cb_tile_idx, data_dst_idx);
 
-                    copy_tile_to_dst_init_short(curr_in_idx_cb_id);
                     reconfig_data_format_srca(curr_in_idx_cb_id);
-                    pack_reconfig_data_format(curr_in_idx_cb_id);
                     copy_tile(curr_in_idx_cb_id, topk_cb_tile_idx, index_dst_idx);
 
                     // the max_reduce_with_indices LLK function only supports kernel_size=9, pending
