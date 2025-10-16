@@ -71,7 +71,7 @@ jobs:
     container:
       image: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-dev-amd64:dec9417e1b2b355d286ee299d80f97f587aa27ec
       env:
-        GH_TOKEN: ${{ secrets.TT_METAL_RELEASE_TOKEN }}
+        GH_TOKEN: ${{ secrets.RETRY_WORKFLOW_TOKEN }}
         ARCH_NAME: ${{ inputs.arch }}
         LOGURU_LEVEL: DEBUG
         PYTHONPATH: /work
@@ -169,7 +169,7 @@ jobs:
       - name: Run Git Bisect
         shell: bash
         env:
-          GH_TOKEN: ${{ secrets.TT_METAL_RELEASE_TOKEN }}
+          GH_TOKEN: ${{ secrets.RETRY_WORKFLOW_TOKEN }}
           GIT_COMMITTER_NAME: "GitHub Actions"
           GIT_COMMITTER_EMAIL: "actions@github.com"
         run: |
