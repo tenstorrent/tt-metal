@@ -10,6 +10,7 @@
 #include <tt-metalium/device.hpp>
 #include "erisc_datamover_builder.hpp"
 #include "fabric/fabric_edm_packet_header.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/code_profiling_types.hpp"
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/math.hpp>
@@ -190,8 +191,14 @@ FabricRiscConfig::FabricRiscConfig(uint32_t risc_id) :
 
 namespace {
 bool requires_forced_assignment_to_noc1() {
+    // When creating a kernel on erisc0 and 2 erisc mode is disabled, the physical processor is erisc1 while erisc0 is
+    // running base firmware. As base firmware may occasionally use noc0 force fabric on "erisc0" to use noc1
+    //
+    // When 2 erisc mode is enabled on the runtime, erisc index == noc index is enforced hence the condition
+    // !get_enable_2_erisc_mode() below.
+    //
     return tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::BLACKHOLE &&
-           get_num_riscv_cores() == 1;
+           get_num_riscv_cores() == 1 && !tt::tt_metal::MetalContext::instance().rtoptions().get_enable_2_erisc_mode();
 }
 }  // anonymous namespace
 
@@ -209,6 +216,17 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topo
         // Avoid a bug on BH, always allocate the space for the telemetry buffer
         this->perf_telemetry_buffer_address = next_l1_addr;
         next_l1_addr += 32;
+    }
+
+    // Allocate code profiling buffer (conditionally enabled)
+    auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    if (rtoptions.get_enable_fabric_code_profiling_rx_ch_fwd()) {
+        // Buffer size: max timer types * 16 bytes per result
+        constexpr size_t code_profiling_buffer_size = get_max_code_profiling_timer_types() * sizeof(CodeProfilingTimerResult);
+        this->code_profiling_buffer_address = next_l1_addr;
+        next_l1_addr += code_profiling_buffer_size;
+    } else {
+        this->code_profiling_buffer_address = 0; // Not allocated
     }
 
     this->handshake_addr = next_l1_addr;
@@ -689,6 +707,20 @@ void FabricEriscDatamoverBuilder::get_telemetry_compile_time_args(std::vector<ui
 
     // Add telemetry buffer address (16B aligned)
     ct_args.push_back(static_cast<uint32_t>(config.perf_telemetry_buffer_address));
+
+    // Add code profiling arguments (conditionally enabled)
+    if (rtoptions.get_enable_fabric_code_profiling_rx_ch_fwd()) {
+        // Enable RECEIVER_CHANNEL_FORWARD timer (bit 0)
+        uint32_t code_profiling_enabled_timers = static_cast<uint32_t>(CodeProfilingTimerType::RECEIVER_CHANNEL_FORWARD);
+        ct_args.push_back(code_profiling_enabled_timers);
+
+        // Add code profiling buffer address (16B aligned)
+        ct_args.push_back(static_cast<uint32_t>(config.code_profiling_buffer_address));
+    } else {
+        // Code profiling disabled - add zeros
+        ct_args.push_back(0); // No timers enabled
+        ct_args.push_back(0); // No buffer address
+    }
 }
 
 std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_t risc_id) const {

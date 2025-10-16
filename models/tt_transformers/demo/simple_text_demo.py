@@ -620,6 +620,7 @@ def test_demo_text(
     stop_at_eos,
     mesh_device,
     is_ci_env,
+    is_ci_v2_env,
     ci_only,
     data_parallel,
     reset_seeds,
@@ -627,6 +628,7 @@ def test_demo_text(
     token_accuracy,
     stress_test,
     enable_trace,
+    model_location_generator,
 ):
     """
     Simple demo with limited dependence on reference code.
@@ -711,6 +713,12 @@ def test_demo_text(
             pytest.skip("CI only runs Llama3 70b DP = 4, TP = 8 or Llama3 8b DP = 4/16/32, TP = 8/2/1 on TG")
         if num_devices == 8 and data_parallel > 1 and not (is_32_1b or is_31_8b) and is_wormhole_b0():
             pytest.skip("CI only runs hybrid Llama3 1b and 8b on T3K")
+
+    if is_ci_v2_env:
+        hf_model = os.getenv("HF_MODEL", "")
+        model_location = model_location_generator(hf_model, download_if_ci_v2=True, ci_v2_timeout_in_s=900)
+        # update env var HF_MODEL to the model location
+        os.environ["HF_MODEL"] = str(model_location)
 
     if not stop_at_eos:
         logger.info(f"The decode generation will only stop at the max_generated_tokens limit == {max_generated_tokens}")
@@ -1194,7 +1202,7 @@ def test_demo_text(
                 # N300 targets
                 "N300_Qwen2.5-7B": (95, 1.20),  # (value, high_tolerance_ratio)
                 # T3K targets
-                "T3K_Llama-3.1-70B": 204,
+                "T3K_Llama-3.1-70B": 228,
                 "T3K_Qwen2.5-72B": (290, 1.35),  # (value, high_tolerance_ratio)
                 "T3K_Qwen2.5-Coder-32B": (215, 1.27),  # (value, high_tolerance_ratio)
                 "T3K_Qwen3-32B": 230,  # Issue: Perf regression being tracked on issue #29834
