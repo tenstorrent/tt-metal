@@ -202,7 +202,7 @@ def get_callstack(
         offsets.append(dispatcher_core_data.kernel_offset)
     try:
         if not full_callstack:
-            pc = location._device.get_block(location).get_risc_debug(risc_name).get_pc() - 4
+            pc = location._device.get_block(location).get_risc_debug(risc_name).get_pc()
             try:
                 cs = top_callstack(pc, elfs, offsets, context)
                 error_message = None
