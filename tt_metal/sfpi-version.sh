@@ -6,13 +6,10 @@
 # Canonical location is in tenstorrent/tt-sfpi project's script directory.
 
 # Define release, update this bit for new release
-sfpi_version=7.5.0
-sfpi_aarch64_linux_deb_md5=bc0adb8f67a75b0f226ed2cbdf396a40
-sfpi_aarch64_linux_rpm_md5=7701729b1f2567764183aab320502558
-sfpi_aarch64_linux_txz_md5=15c8147501ffbc0d6869a7481f650987
-sfpi_x86_64_linux_deb_md5=ff911ffe11a0a4bb40c48d87376295b0
-sfpi_x86_64_linux_rpm_md5=c4899b46201329a9811b8cda33bc411c
-sfpi_x86_64_linux_txz_md5=4ca0388aa696c9bf297651931938eb6b
+sfpi_version=7.5.0-ext-29186
+sfpi_x86_64_linux_deb_md5=89703a481f2b879414721400ecbe8d72
+sfpi_x86_64_linux_rpm_md5=be3f324dba9f0661343f6d7dc8727c18
+sfpi_x86_64_linux_txz_md5=4336613ad03920923ab324163e06eb5f
 
 # One ring to rule them all,
 # One ring to find them,
