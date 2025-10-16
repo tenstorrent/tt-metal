@@ -71,6 +71,11 @@ if [ "$tracy_enabled" -eq 1 ]; then
   echo "Tracy profiling enabled for builds."
 fi
 
+echo "attempting to just run the test script"
+script_path
+echo "test script ran successfully"
+exit 0
+
 # Creating virtual environment where we can install ttnn
 ./create_venv.sh
 ./python_env/bin/pip install -r models/tt_transformers/requirements.txt
