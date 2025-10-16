@@ -12,6 +12,8 @@
 #include "rmsnorm_pre_all_gather.hpp"
 #include "rmsnorm_post_all_gather.hpp"
 
+#include "ttnn/operations/normalization/layernorm_distributed/device/layernorm_distributed_types.hpp"
+
 namespace ttnn::operations::normalization::detail {
 
 namespace py = pybind11;
