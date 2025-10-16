@@ -30,9 +30,9 @@ void kernel_main() {
 
 #endif
     tt_l1_ptr uint32_t* num_unpadded_sticks = (tt_l1_ptr uint32_t*)(get_arg_addr(9));
-    volatile tt_l1_ptr uint32_t* num_padded_sticks = num_unpadded_sticks + num_dims;
-    volatile tt_l1_ptr uint32_t* id_per_dim = num_padded_sticks + num_dims;
-    volatile tt_l1_ptr uint32_t* rev_stride = id_per_dim + num_dims;
+    tt_l1_ptr uint32_t* num_padded_sticks = num_unpadded_sticks + num_dims;
+    tt_l1_ptr uint32_t* id_per_dim = num_padded_sticks + num_dims;
+    tt_l1_ptr uint32_t* rev_stride = id_per_dim + num_dims;
 
 #ifdef DEBUG
     DPRINT << "num_input_sticks_per_dim: ";

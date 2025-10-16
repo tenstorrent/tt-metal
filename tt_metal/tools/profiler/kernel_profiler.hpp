@@ -317,7 +317,7 @@ __attribute__((noinline)) void finish_profiler() {
     }
 
     profiler_noc_async_flush_posted_write();
-    profiler_control_buffer[RUN_COUNTER]++;
+    profiler_control_buffer[RUN_COUNTER] += 1;
     profiler_control_buffer[PROFILER_DONE] = 1;
 #endif
 }
