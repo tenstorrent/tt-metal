@@ -175,7 +175,7 @@ jobs:
           echo "📋 Testing workflow run listing for current commit:"
           CURRENT_COMMIT=$(git rev-parse HEAD)
           echo "Current commit: 827addf2a449c516c0e3d33155c1e36c0f4c5e4d"
-          gh run list --repo tenstorrent/tt-metal --commit 827addf2a449c516c0e3d33155c1e36c0f4c5e4d 2>&1 || echo "⚠️  Failed to list runs for current commit"
+          gh run list --repo tenstorrent/tt-metal --commit 827addf2a449c516c0e3d33155c1e36c0f4c5e4d --json conclusion,databaseId,workflowName || echo "⚠️  Failed to list runs for current commit"
         shell: bash
 
       - name: Run Git Bisect
