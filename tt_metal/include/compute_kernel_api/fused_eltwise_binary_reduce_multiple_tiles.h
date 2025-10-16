@@ -106,6 +106,7 @@ ALWI void fused_eltwise_binary_reduce(
     MATH(eltwise_binary_reuse_dest_as_src_tile<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(0));  // Move tile 0 to srcB
 
 
+    // Could be replaced with zeroacc for DEST, this was replaced with SFPUs calculate_fill due to debugging issues
     MATH(ckernel::sfpu::_populate_first_tile_with_zeroes_());
 
 
