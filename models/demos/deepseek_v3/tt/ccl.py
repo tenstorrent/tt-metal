@@ -15,6 +15,7 @@ class CCL:
         self.grid = mesh_device.compute_with_storage_grid_size()
         self.num_cores = self.grid.x * self.grid.y
         self.core_range_set = ttnn.num_cores_to_corerangeset(self.num_cores, self.grid, row_wise=True)
+        self.sems_per_axis = 2
 
         self.gather_sems = []
         self.reduce_scatter_sems = []
@@ -23,7 +24,7 @@ class CCL:
             self.gather_sems.append([])
             self.reduce_scatter_sems.append([])
             self.barrier_sems.append([])
-            for _ in range(2):
+            for _ in range(self.sems_per_axis):
                 self.gather_sems[-1].append(
                     [
                         ttnn.create_global_semaphore(self.mesh_device, self.core_range_set, 0),
@@ -62,13 +63,27 @@ class CCL:
         else:
             raise ValueError("Axis must be 0 or 1.")
 
+    def _get_sem_and_update_counter(self, sem_list, counter_list, axis):
+        """
+        Helper method to get a semaphore and update its counter.
+
+        Args:
+            sem_list: The semaphore list to select from
+            counter_list: The counter list to update
+            axis: The cluster axis
+
+        Returns:
+            The selected semaphore
+        """
+        sem = sem_list[axis][counter_list[axis]]
+        counter_list[axis] = (counter_list[axis] + 1) % self.sems_per_axis
+        return sem
+
     def get_gather_sem(self, axis):
         """
         Get a semaphore for the given axis.
         """
-        sem = self.gather_sems[axis][self.gather_sem_cnt[axis]]
-        self.gather_sem_cnt[axis] = (self.gather_sem_cnt[axis] + 1) % 2
-        return sem
+        return self._get_sem_and_update_counter(self.gather_sems, self.gather_sem_cnt, axis)
 
     def get_buffer(self, key):
         """
@@ -82,17 +97,13 @@ class CCL:
         """
         Get a semaphore for the given axis.
         """
-        sem = self.reduce_scatter_sems[axis][self.reduce_scatter_sem_cnt[axis]]
-        self.reduce_scatter_sem_cnt[axis] = (self.reduce_scatter_sem_cnt[axis] + 1) % 2
-        return sem
+        return self._get_sem_and_update_counter(self.reduce_scatter_sems, self.reduce_scatter_sem_cnt, axis)
 
     def get_barrier_sem(self, axis):
         """
         Get a semaphore for the given axis.
         """
-        sem = self.barrier_sems[axis][self.barrier_sem_cnt[axis]]
-        self.barrier_sem_cnt[axis] = (self.barrier_sem_cnt[axis] + 1) % 2
-        return sem
+        return self._get_sem_and_update_counter(self.barrier_sems, self.barrier_sem_cnt, axis)
 
     def get_ccl_params_for_reduce_scatter(self, axis):
         """
