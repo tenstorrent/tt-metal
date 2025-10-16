@@ -123,7 +123,7 @@ ALWI void read_window_with_top_left_index(
         max_write_inc = TILE_WIDTH * BYTES_PER_ELEM;
     }
     for (uint32_t c_i = 0; c_i < in_nblocks_c; c_i++) {
-        if (reader_id == 0 || !return_indices) {
+        if constexpr (reader_id == 0 || !return_indices) {
             uint32_t read_bytes = in_nbytes_c;
             if constexpr (wide_reduction) {
                 read_bytes =
@@ -223,7 +223,7 @@ ALWI void read_window_with_top_left_index(
                 cb_push_back(in_cb_id, 1);
             }
             if constexpr (return_indices) {
-                if (reader_id == 0) {
+                if constexpr (reader_id == 0) {
                     cb_push_back(in_idx_cb_id, 1);
                 } else {
                     constexpr uint32_t num_faces_in_output_tile = 2;
