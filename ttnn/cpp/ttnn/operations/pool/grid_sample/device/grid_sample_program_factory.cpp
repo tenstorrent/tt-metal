@@ -112,12 +112,35 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
 
     if (is_sharded) {
         const auto grid_shard_spec = grid_tensor.shard_spec().value();
-        all_cores = grid_shard_spec.grid;
-        num_cores = grid_shard_spec.num_cores();
         grid_nsticks_per_core = grid_shard_spec.shape[0];
         output_nsticks_per_core = output_tensor.shard_spec().value().shape[0];
-        logical_cores = corerange_to_cores(
-            all_cores, num_cores, grid_shard_spec.orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR);
+
+        // Calculate total work and determine actual cores needed
+        const uint32_t total_grid_nsticks = grid_tensor.physical_volume() / grid_shape[-1];
+        const uint32_t actual_cores_needed = (total_grid_nsticks + grid_nsticks_per_core - 1) / grid_nsticks_per_core;
+        const uint32_t max_available_cores = grid_shard_spec.num_cores();
+
+        // Only dispatch to cores that actually have work
+        num_cores = std::min(actual_cores_needed, max_available_cores);
+
+        // Create core range set with only the cores that have work
+        if (num_cores < max_available_cores) {
+            // Convert full core range to vector, then take only the needed cores
+            auto all_logical_cores = corerange_to_cores(
+                grid_shard_spec.grid,
+                max_available_cores,
+                grid_shard_spec.orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR);
+
+            // Create logical_cores with only the first num_cores
+            logical_cores.assign(all_logical_cores.begin(), all_logical_cores.begin() + num_cores);
+
+            // Create a new core range set using span constructor
+            all_cores = CoreRangeSet(tt::stl::Span<const CoreCoord>(logical_cores.data(), num_cores));
+        } else {
+            all_cores = grid_shard_spec.grid;
+            logical_cores = corerange_to_cores(
+                all_cores, num_cores, grid_shard_spec.orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR);
+        }
     } else {
         const uint32_t grid_nsticks = grid_tensor.physical_volume() / grid_shape[-1];
         const auto compute_grid_size = device->compute_with_storage_grid_size();
