@@ -28,46 +28,53 @@ def run_device_perf_tests(
     )
 
 
+@pytest.mark.parametrize(
+    "command, expected_device_perf_cycles_per_iteration, subdir, model_name, num_iterations, batch_size, margin",
+    [
+        (
+            "pytest models/experimental/oft/tests/pcc/test_oftnet.py::test_oftnet -k bfp16_use_device_oft",
+            253_123_435,
+            "oft_oftnet",
+            "oft_oftnet",
+            1,
+            1,
+            0.015,
+        ),
+        (
+            "pytest models/experimental/oft/tests/pcc/test_encoder.py::test_decode",
+            4_764_102,
+            "oft_decoder",
+            "oft_decoder",
+            1,
+            1,
+            0.015,
+        ),
+        (
+            "pytest models/experimental/oft/demo/demo.py::test_demo_inference",
+            256_114_255,
+            "oft_full_demo",
+            "oft_full_demo",
+            1,
+            1,
+            0.015,
+        ),
+    ],
+    ids=[
+        "device_perf_oft_oftnet",
+        "device_perf_oft_decoder",
+        "device_perf_oft_full",
+    ],
+)
 @pytest.mark.models_device_performance_bare_metal
-def test_device_perf_oft_oftnet():
-    expected_device_perf_cycles_per_iteration = 253_123_435
-    command = "pytest models/experimental/oft/tests/pcc/test_oftnet.py::test_oftnet -k bfp16_use_device_oft"
+def test_device_perf_oft(
+    command, expected_device_perf_cycles_per_iteration, subdir, model_name, num_iterations, batch_size, margin
+):
     run_device_perf_tests(
         command,
         expected_device_perf_cycles_per_iteration,
-        subdir="oft_oftnet",
-        model_name="oft_oftnet",
-        num_iterations=1,
-        batch_size=1,
-        margin=0.015,
-    )
-
-
-@pytest.mark.models_device_performance_bare_metal
-def test_device_perf_oft_decoder():
-    expected_device_perf_cycles_per_iteration = 4_764_102
-    command = "pytest models/experimental/oft/tests/pcc/test_encoder.py::test_decode"
-    run_device_perf_tests(
-        command,
-        expected_device_perf_cycles_per_iteration,
-        subdir="oft_decoder",
-        model_name="oft_decoder",
-        num_iterations=1,
-        batch_size=1,
-        margin=0.015,
-    )
-
-
-@pytest.mark.models_device_performance_bare_metal
-def test_device_perf_oft_full():
-    expected_device_perf_cycles_per_iteration = 256_114_255
-    command = "pytest models/experimental/oft/demo/demo.py::test_demo_inference"
-    run_device_perf_tests(
-        command,
-        expected_device_perf_cycles_per_iteration,
-        subdir="oft_full_demo",
-        model_name="oft_full_demo",
-        num_iterations=1,
-        batch_size=1,
-        margin=0.015,
+        subdir=subdir,
+        model_name=model_name,
+        num_iterations=num_iterations,
+        batch_size=batch_size,
+        margin=margin,
     )
