@@ -11,7 +11,7 @@ OFT_DEVICE_TEST_TOTAL_ITERATIONS = 1
 @pytest.mark.models_device_performance_bare_metal
 def test_device_perf_oft_oftnet():
     expected_device_perf_cycles_per_iteration = 342_772_374
-    command = f"pytest models/experimental/oft/tests/pcc/test_oftnet.py::test_oftnet -k bfp16_use_device_oft"
+    command = "pytest models/experimental/oft/tests/pcc/test_oftnet.py::test_oftnet -k bfp16_use_device_oft"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
 
     batch_size = 1
@@ -36,7 +36,7 @@ def test_device_perf_oft_oftnet():
 @pytest.mark.models_device_performance_bare_metal
 def test_device_perf_oft_decoder():
     expected_device_perf_cycles_per_iteration = 4_767_804
-    command = f"pytest models/experimental/oft/tests/pcc/test_encoder.py::test_decode"
+    command = "pytest models/experimental/oft/tests/pcc/test_encoder.py::test_decode"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
 
     batch_size = 1
@@ -61,7 +61,7 @@ def test_device_perf_oft_decoder():
 @pytest.mark.models_device_performance_bare_metal
 def test_device_perf_oft_full():
     expected_device_perf_cycles_per_iteration = 345_592_041
-    command = f"pytest models/experimental/oft/demo/demo.py::test_demo_inference"
+    command = "pytest models/experimental/oft/demo/demo.py::test_demo_inference"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
 
     batch_size = 1
