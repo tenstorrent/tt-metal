@@ -20,7 +20,7 @@ Use the following command to run the inference pipeline:
 ### Model performant running with Trace+2CQs
 #### Single Device (BS=1):
 
-- For `480x640`, end-2-end perf (P150) is `115` FPS
+- For `480x640`, end-2-end perf is `115` FPS (**On P150**)
 
     ```sh
     pytest models/demos/blackhole/vanilla_unet/tests/perf/test_e2e_performant.py::test_e2e_performant

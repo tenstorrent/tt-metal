@@ -24,8 +24,9 @@ pytest --disable-warnings tests/nightly/single_card/vit/test_ttnn_optimized_shar
 ```
 
 ### Demo
-To run the demo for ViT model, follow these instructions:
+
 -  For overall runtime inference (end-2-end), use the following command to run the demo:
+- Model runtime (end-2-end) is `~3700` FPS (**On P150**)
 ```sh
 pytest --disable-warnings models/demos/blackhole/vit/tests/test_demo_vit_ttnn_inference_perf_e2e_2cq_trace.py
 ```
@@ -52,7 +53,4 @@ pytest --disable-warnings models/demos/blackhole/vit/demo/demo_vit_performant_im
 - Batch Size: 8
 - Sequence size: 224
 - Dataset Used: `ImageNet-21k dataset`.
-
-### Results
-- Model runtime (host end-2-end) is `~3600` FPS
 - The Imagenet-21K inference accuracy is `80%`
