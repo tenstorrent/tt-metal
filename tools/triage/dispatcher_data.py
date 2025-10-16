@@ -87,14 +87,14 @@ class DispatcherData:
             # Use build_env for initial firmware paths
             brisc_elf_path = os.path.join(build_env.firmwarePath, "brisc", "brisc.elf")
             idle_erisc_elf_path = os.path.join(build_env.firmwarePath, "idle_erisc", "idle_erisc.elf")
-            active_erisc_elf_name = "erisc" if isinstance(context.devices[0], WormholeDevice) else "active_erisc"
+            active_erisc_elf_name = "erisc" if isinstance(run_checks.devices[0], WormholeDevice) else "active_erisc"
             active_erisc_elf_path = os.path.join(
                 build_env.firmwarePath, active_erisc_elf_name, active_erisc_elf_name + ".elf"
             )
 
             # On blackhole we have 2 modes (1-ERISC and 2-ERISC)
             # By checking if the subordinate active erisc elf exists, we can determine in which mode we are
-            if isinstance(context.devices[0], BlackholeDevice):
+            if isinstance(run_checks.devices[0], BlackholeDevice):
                 self._is_2_erisc_mode = os.path.exists(
                     os.path.join(build_env.firmwarePath, "subordinate_active_erisc", "subordinate_active_erisc.elf")
                 )
@@ -135,7 +135,7 @@ class DispatcherData:
         }
 
         # EthProcessorTypes::DM1 is only available on blackhole
-        # ERISC1 BEHAVES LIKE DM0 if 1 ERISC mode is used
+        # ERISC1 behaves like DM0 if 1 ERISC mode is used
         if "EthProcessorTypes::DM1" in self._idle_erisc_elf.enumerators:
             self._enum_values_eth["ProcessorTypes"]["ERISC1"] = (
                 self._idle_erisc_elf.enumerators["EthProcessorTypes::DM1"].value
@@ -201,6 +201,8 @@ class DispatcherData:
             fw_elf = self._active_erisc_elf
             programmable_core_type = self._ProgrammableCoreTypes_ACTIVE_ETH
             enum_values = self._enum_values_eth
+        else:
+            raise TTTriageError(f"Unsupported block type: {location._device.get_block_type(location)}")
 
         # Get the build_env for the device to get the correct firmware path
         # Each device may have different firmware paths based on its build configuration

@@ -210,7 +210,13 @@ def get_callstack(
                 return KernelCallstackWithMessage(callstack=[], message=str(e))
         else:
             try:
-                return KernelCallstackWithMessage(callstack=callstack(location, elfs, offsets, risc_name), message=None)
+                cs = callstack(location, elfs, offsets, risc_name)
+                error_message = None
+                if len(cs) == 0:
+                    error_message = "PC was not in range of any provided ELF files."
+                    if location in location._device.active_eth_block_locations:
+                        error_message += " Probably context switch occurred and PC is contained in base ERISC firmware."
+                return KernelCallstackWithMessage(callstack=cs, message=error_message)
             except Exception as e:
                 try:
                     # If full callstack failed, we default to top callstack
@@ -398,7 +404,7 @@ def run(args, context: Context):
     full_callstack = args["--full-callstack"]
     gdb_callstack = args["--gdb-callstack"]
     active_cores = args["--active-cores"]
-    BLOCK_TYPES_TO_CHECK = ["active_eth"]
+    BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth", "active_eth"]
     elfs_cache = get_elfs_cache(args, context)
     run_checks = get_run_checks(args, context)
     dispatcher_data = get_dispatcher_data(args, context)
