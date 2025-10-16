@@ -71,11 +71,11 @@ if [ "$tracy_enabled" -eq 1 ]; then
   echo "Tracy profiling enabled for builds."
 fi
 
-echo "attempting to just run the test script: "
-echo "$script_path"
-"$script_path"
-echo "test script ran successfully"
-exit 0
+if [ "$script_path" ]; then
+  echo "script path is set: $script_path"
+else
+  echo "command is set: $test"
+fi
 
 # Creating virtual environment where we can install ttnn
 ./create_venv.sh
