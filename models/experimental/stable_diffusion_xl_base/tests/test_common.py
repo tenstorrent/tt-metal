@@ -594,6 +594,8 @@ def get_timesteps(tt_scheduler, num_inference_steps, strength, denoising_start=N
     t_start = max(num_inference_steps - init_timestep, 0)
 
     timesteps = tt_scheduler.timesteps[t_start * tt_scheduler.order :]
+
+    # set_begin_index will update the step index as well to avoid doing so during trace capture
     tt_scheduler.set_begin_index(t_start * tt_scheduler.order)
     return timesteps, num_inference_steps - t_start
 
@@ -775,9 +777,8 @@ def run_tt_image_gen(
 
     ttnn.synchronize_device(ttnn_device)
 
-    # reset scheduler
+    # set_begin_index resets both begin and step index of the scheduler
     tt_scheduler.set_begin_index(0)
-    tt_scheduler.set_step_index(0)
 
     profiler.end("denoising_loop")
 
@@ -820,167 +821,6 @@ def run_tt_image_gen(
         profiler.end("read_output_tensor")
         profiler.start("vae_decode")
         B, C, H, W = input_shape
-        latents = latents.reshape(batch_size * B, H, W, C)
-        latents = torch.permute(latents, (0, 3, 1, 2))
-        latents = latents.to(vae.dtype)
-
-        # VAE upcasting to float32 is happening in the reference SDXL demo if VAE dtype is float16. If it's bfloat16, it will not be upcasted.
-        latents = latents / vae.config.scaling_factor
-        warmup_run = num_steps == 1
-        if warmup_run == False:
-            # Do not run host VAE if we are on a warmup run
-            imgs = vae.decode(latents, return_dict=False)[0]
-        else:
-            imgs = None
-        del latents
-        gc.collect()
-        profiler.end("vae_decode")
-    profiler.end("image_gen")
-
-    return imgs, tid, output_device, output_shape, tid_vae
-
-
-# Runs a single iteration of the tt image generation
-# This includes the following steps:
-# - n denoising loops
-# - vae
-def run_tt_image_gen_inpainting(
-    ttnn_device,
-    tt_unet,
-    tt_scheduler,
-    tt_latents,
-    tt_masked_image_latents,
-    tt_mask,
-    tt_prompt_embeds,
-    tt_time_ids,
-    tt_text_embeds,
-    num_steps,
-    tt_extra_step_kwargs,
-    guidance_scale,
-    scaling_factor,
-    image_latents_shape,
-    vae,  # can be host vae or tt vae
-    batch_size,
-    persistent_buffer,
-    semaphores,
-    output_device=None,
-    output_shape=None,
-    tid=None,
-    tid_vae=None,
-    capture_trace=False,
-    use_cfg_parallel=False,
-):
-    assert not (capture_trace and num_steps != 1), "Trace should capture only 1 iteration"
-    profiler.start("image_gen")
-    profiler.start("denoising_loop")
-
-    for i in range(num_steps):  # tqdm(enumerate(tt_timesteps), total=len(tt_timesteps)):
-        unet_outputs = []
-        if tid is None or capture_trace:
-            tid = ttnn.begin_trace_capture(ttnn_device, cq_id=0) if capture_trace else None
-            for unet_slice in range(tt_prompt_embeds.shape[0]):
-                latent_model_input = tt_latents
-                noise_pred, _ = run_tt_iteration_inpainting(
-                    tt_unet,
-                    tt_scheduler,
-                    latent_model_input,
-                    tt_masked_image_latents,
-                    tt_mask,
-                    image_latents_shape,
-                    tt_prompt_embeds[unet_slice] if not use_cfg_parallel else tt_prompt_embeds,
-                    tt_time_ids if use_cfg_parallel else tt_time_ids[unet_slice],
-                    ttnn.unsqueeze(tt_text_embeds[unet_slice], dim=0) if not use_cfg_parallel else tt_text_embeds,
-                )
-
-                unet_outputs.append(noise_pred)
-
-            if use_cfg_parallel:
-                noise_pred_interleaved = ttnn.to_memory_config(noise_pred, ttnn.L1_MEMORY_CONFIG)
-                ttnn.deallocate(noise_pred)
-                noise_pred = noise_pred_interleaved
-                noise_pred_out = ttnn.experimental.all_gather_async(
-                    noise_pred,
-                    dim=0,
-                    persistent_output_tensor=persistent_buffer,
-                    multi_device_global_semaphore=semaphores,
-                    num_links=1,
-                    cluster_axis=0,
-                    mesh_device=ttnn_device,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    topology=ttnn.Topology.Linear,
-                )
-                ttnn.deallocate(noise_pred)
-                noise_pred = noise_pred_out
-                noise_pred = noise_pred[..., :4]
-                noise_pred_uncond, noise_pred_text = ttnn.unsqueeze(noise_pred[0], 0), ttnn.unsqueeze(noise_pred[1], 0)
-            else:
-                noise_pred_uncond, noise_pred_text = unet_outputs
-
-            # perform guidance
-            noise_pred_text = ttnn.sub_(noise_pred_text, noise_pred_uncond)
-            noise_pred_text = ttnn.mul_(noise_pred_text, guidance_scale)
-            noise_pred = ttnn.add_(noise_pred_uncond, noise_pred_text)
-
-            tt_latents = tt_scheduler.step(noise_pred, None, tt_latents, **tt_extra_step_kwargs, return_dict=False)[0]
-
-            ttnn.deallocate(noise_pred_uncond)
-            ttnn.deallocate(noise_pred_text)
-
-            if capture_trace:
-                ttnn.end_trace_capture(ttnn_device, tid, cq_id=0)
-        else:
-            ttnn.execute_trace(ttnn_device, tid, cq_id=0, blocking=False)
-
-        if i < (num_steps - 1):
-            tt_scheduler.inc_step_index()
-
-    ttnn.synchronize_device(ttnn_device)
-
-    # reset scheduler
-    tt_scheduler.set_begin_index(0)
-    tt_scheduler.set_step_index(0)
-
-    profiler.end("denoising_loop")
-
-    vae_on_device = isinstance(vae, TtAutoencoderKL)
-
-    if vae_on_device:
-        profiler.start("vae_decode")
-        if tid_vae is None or capture_trace:
-            tid_vae = ttnn.begin_trace_capture(ttnn_device, cq_id=0) if capture_trace else None
-            tt_latents = ttnn.div(tt_latents, scaling_factor)
-
-            logger.info("Running TT VAE")
-            output_tensor, [C, H, W] = vae.decode(tt_latents, image_latents_shape)
-            ttnn.deallocate(tt_latents)
-
-            if capture_trace:
-                ttnn.end_trace_capture(ttnn_device, tid_vae, cq_id=0)
-            output_device = output_tensor
-            output_shape = [image_latents_shape[0], C, H, W]
-        else:
-            ttnn.execute_trace(ttnn_device, tid_vae, cq_id=0, blocking=False)
-
-        ttnn.synchronize_device(ttnn_device)
-        profiler.end("vae_decode")
-
-        profiler.start("read_output_tensor")
-        output_tensor = ttnn.to_torch(output_device, mesh_composer=ttnn.ConcatMeshToTensor(ttnn_device, dim=0)).float()[
-            :batch_size, ...
-        ]
-        ttnn.synchronize_device(ttnn_device)
-        profiler.end("read_output_tensor")
-
-        B, C, H, W = output_shape
-        output_tensor = output_tensor.reshape(batch_size * B, H, W, C)
-        imgs = torch.permute(output_tensor, (0, 3, 1, 2))
-    else:
-        profiler.start("read_output_tensor")
-        latents = ttnn.to_torch(tt_latents, mesh_composer=ttnn.ConcatMeshToTensor(ttnn_device, dim=0))[:batch_size, ...]
-        ttnn.synchronize_device(ttnn_device)
-        profiler.end("read_output_tensor")
-        profiler.start("vae_decode")
-        B, C, H, W = [1, 4, 128, 128]  # fix this and add in proper shape separation :)
         latents = latents.reshape(batch_size * B, H, W, C)
         latents = torch.permute(latents, (0, 3, 1, 2))
         latents = latents.to(vae.dtype)
@@ -1098,9 +938,8 @@ def run_tt_image_gen_inpainting(
 
     ttnn.synchronize_device(ttnn_device)
 
-    # reset scheduler
+    # set_begin_index resets both begin and step index of the scheduler
     tt_scheduler.set_begin_index(0)
-    tt_scheduler.set_step_index(0)
 
     profiler.end("denoising_loop")
 
