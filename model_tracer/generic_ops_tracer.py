@@ -583,7 +583,7 @@ def main():
         return 1
 
     test_path = sys.argv[1]
-    output_dir = sys.argv[2] if len(sys.argv) > 2 else "./traced_operations"
+    output_dir = sys.argv[2] if len(sys.argv) > 2 else "./model_tracer/traced_operations"
 
     print("🚀 TTNN Operations Tracer")
     print("=" * 50)

@@ -512,8 +512,8 @@ Examples:
     parser.add_argument("--debug", action="store_true", help="Show all arguments including nullopt (debug mode)")
     parser.add_argument(
         "--master-file",
-        default="./traced_operations/ttnn_operations_master.json",
-        help="Path to master JSON file (default: ./traced_operations/ttnn_operations_master.json)",
+        default="./model_tracer/traced_operations/ttnn_operations_master.json",
+        help="Path to master JSON file (default: ./model_tracer/traced_operations/ttnn_operations_master.json)",
     )
 
     args = parser.parse_args()

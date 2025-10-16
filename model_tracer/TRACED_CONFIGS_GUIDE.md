@@ -20,16 +20,16 @@
 
 | Task | Command |
 |------|---------|
-| **Trace a model** | `python generic_ops_tracer.py <test_path>` |
-| **View configurations** | `python analyze_operations.py <operation_name>` |
+| **Trace a model** | `python model_tracer/generic_ops_tracer.py <test_path>` |
+| **View configurations** | `python model_tracer/analyze_operations.py <operation_name>` |
 | **Generate sweep vectors** | `python3 tests/sweep_framework/sweeps_parameter_generator.py --module-name <op_name> --dump-file` |
 | **Run sweep test** | `python3 tests/sweep_framework/sweeps_runner.py --module-name <op_name> --suite model_traced` (see [Sweep Framework README](tests/sweep_framework/README.md)) |
 
 ### Key Files
 
-- **Tracer**: `generic_ops_tracer.py`
-- **Master JSON**: `traced_operations/ttnn_operations_master.json`
-- **Analyzer**: `analyze_operations.py`
+- **Tracer**: `model_tracer/generic_ops_tracer.py`
+- **Master JSON**: `model_tracer/traced_operations/ttnn_operations_master.json`
+- **Analyzer**: `model_tracer/analyze_operations.py`
 - **Config Loader**: `tests/sweep_framework/master_config_loader.py`
 
 ### Integration Pattern (Copy & Paste)
@@ -146,16 +146,16 @@ The **Model Trace to Test Automation** system automatically extracts real-world 
 
 ```bash
 # Trace any model test to extract TTNN operations
-python generic_ops_tracer.py /path/to/model/test.py::test_function
+python model_tracer/generic_ops_tracer.py /path/to/model/test.py::test_function
 ```
 
 **Example:**
 ```bash
-python generic_ops_tracer.py /home/ubuntu/tt-metal/models/experimental/efficientnetb0/tests/pcc/test_ttnn_efficientnetb0.py::test_efficientnetb0_model
+python model_tracer/generic_ops_tracer.py /home/ubuntu/tt-metal/models/experimental/efficientnetb0/tests/pcc/test_ttnn_efficientnetb0.py::test_efficientnetb0_model
 ```
 
 **Output:**
-- Creates/updates `traced_operations/ttnn_operations_master.json`
+- Creates/updates `model_tracer/traced_operations/ttnn_operations_master.json`
 - Adds unique configurations from this model
 - Shows summary: "Added X new unique configurations"
 
@@ -163,11 +163,11 @@ python generic_ops_tracer.py /home/ubuntu/tt-metal/models/experimental/efficient
 
 ```bash
 # See all configurations for a specific operation
-python analyze_operations.py sigmoid_accurate
+python model_tracer/analyze_operations.py sigmoid_accurate
 
 # See configurations for any operation
-python analyze_operations.py add
-python analyze_operations.py matmul
+python model_tracer/analyze_operations.py add
+python model_tracer/analyze_operations.py matmul
 ```
 
 ### 3. Use in Sweep Tests
@@ -263,9 +263,9 @@ python3 tests/sweep_framework/sweeps_runner.py \
 
 | Component | Purpose | Location |
 |-----------|---------|----------|
-| **generic_ops_tracer.py** | Traces model tests, extracts operations | `/home/ubuntu/tt-metal/` |
-| **ttnn_operations_master.json** | Master storage of all traced configs | `traced_operations/` |
-| **analyze_operations.py** | Query tool to view configurations | `/home/ubuntu/tt-metal/` |
+| **generic_ops_tracer.py** | Traces model tests, extracts operations | `model_tracer/` |
+| **ttnn_operations_master.json** | Master storage of all traced configs | `model_tracer/traced_operations/` |
+| **analyze_operations.py** | Query tool to view configurations | `model_tracer/` |
 | **master_config_loader.py** | Parses master JSON, converts to TTNN objects, provides utilities | `tests/sweep_framework/` |
 | **Sweep test files** | Use traced configs via `model_traced` suite | `tests/sweep_framework/sweeps/...` |
 
@@ -279,11 +279,11 @@ python3 tests/sweep_framework/sweeps_runner.py \
 
 ```bash
 # Trace a single test
-python generic_ops_tracer.py <test_path>
+python model_tracer/generic_ops_tracer.py <test_path>
 
 # Examples:
-python generic_ops_tracer.py models/demos/wormhole/resnet50/demo/demo.py::test_demo
-python generic_ops_tracer.py models/demos/wormhole/distilbert/demo/demo.py::test_demo
+python model_tracer/generic_ops_tracer.py models/demos/wormhole/resnet50/demo/demo.py::test_demo
+python model_tracer/generic_ops_tracer.py models/demos/wormhole/distilbert/demo/demo.py::test_demo
 ```
 
 #### What Gets Captured?
@@ -308,7 +308,7 @@ The tracer automatically filters:
 #### View Configurations for an Operation
 
 ```bash
-python analyze_operations.py <operation_name>
+python model_tracer/analyze_operations.py <operation_name>
 ```
 
 **Example Output:**
@@ -595,10 +595,13 @@ pcc = check_with_pcc(torch_reference, ttnn_output, threshold=0.999)
 
 ```
 tt-metal/
-├── generic_ops_tracer.py              # Main tracing script
-├── analyze_operations.py              # Query tool for master JSON
-├── traced_operations/                 # Storage directory
-│   └── ttnn_operations_master.json    # Master configuration store
+├── model_tracer/                      # Model tracing tools
+│   ├── generic_ops_tracer.py          # Main tracing script
+│   ├── analyze_operations.py          # Query tool for master JSON
+│   ├── analyze_sweep_results.py       # Sweep results analyzer
+│   ├── TRACED_CONFIGS_GUIDE.md        # This guide
+│   └── traced_operations/             # Storage directory
+│       └── ttnn_operations_master.json # Master configuration store
 ├── tests/sweep_framework/
 │   ├── master_config_loader.py        # Config loader and utilities
 │   ├── Allops.txt                     # Official TTNN operations list
@@ -658,7 +661,7 @@ tt-metal/
 
 ```bash
 # Trace EfficientNet model
-python generic_ops_tracer.py \
+python model_tracer/generic_ops_tracer.py \
   models/experimental/efficientnetb0/tests/pcc/test_ttnn_efficientnetb0.py::test_efficientnetb0_model
 ```
 
@@ -690,7 +693,7 @@ Test Result: ✅ PASSED
 ### Example 2: Analyzing Sigmoid Configurations
 
 ```bash
-python analyze_operations.py sigmoid_accurate
+python model_tracer/analyze_operations.py sigmoid_accurate
 ```
 
 **Output:**
@@ -792,10 +795,10 @@ python analyze_sweep_results.py
 **Solution:**
 ```bash
 # 1. Check what operations are available
-python analyze_operations.py | grep "Operation:"
+python model_tracer/analyze_operations.py | grep "Operation:"
 
 # 2. Trace a model that uses this operation
-python generic_ops_tracer.py <model_test_path>
+python model_tracer/generic_ops_tracer.py <model_test_path>
 
 # 3. Check the operation name format (ttnn::op_name vs ttnn.op_name)
 ```
@@ -809,7 +812,7 @@ python generic_ops_tracer.py <model_test_path>
 **Verification:**
 ```python
 # Check the shard shape
-python analyze_operations.py <operation> | grep "shard_shape"
+python model_tracer/analyze_operations.py <operation> | grep "shard_shape"
 
 # Shard dimensions should be multiples of 32 for TILE_LAYOUT
 # e.g., [224, 32] ✓, [64, 96] ✓, [33, 17] ✗
@@ -926,7 +929,7 @@ def test_my_custom_model(device):
     pass
 
 # 2. Trace it
-python generic_ops_tracer.py path/to/test.py::test_my_custom_model
+python model_tracer/generic_ops_tracer.py path/to/test.py::test_my_custom_model
 
 # 3. Configurations automatically added to master JSON
 ```
@@ -940,7 +943,7 @@ python generic_ops_tracer.py path/to/test.py::test_my_custom_model
 # Trace all models in a directory
 for test in models/demos/wormhole/*/demo/demo.py; do
     echo "Tracing $test"
-    python generic_ops_tracer.py "$test::test_demo"
+    python model_tracer/generic_ops_tracer.py "$test::test_demo"
 done
 
 # Results accumulated in ttnn_operations_master.json
@@ -990,10 +993,10 @@ parameters = {"model_traced": loader.get_suite_parameters("your_op")}
 
 ```bash
 # Trace a model
-python generic_ops_tracer.py <test_path>
+python model_tracer/generic_ops_tracer.py <test_path>
 
 # View configurations
-python analyze_operations.py <operation_name>
+python model_tracer/analyze_operations.py <operation_name>
 
 # Generate and run sweep test with traced configs
 python3 tests/sweep_framework/sweeps_parameter_generator.py --module-name <op_name> --dump-file
@@ -1006,9 +1009,9 @@ python analyze_sweep_results.py
 
 ### Key Files
 
-- **Tracer**: `generic_ops_tracer.py`
-- **Master JSON**: `traced_operations/ttnn_operations_master.json`
-- **Analyzer**: `analyze_operations.py`
+- **Tracer**: `model_tracer/generic_ops_tracer.py`
+- **Master JSON**: `model_tracer/traced_operations/ttnn_operations_master.json`
+- **Analyzer**: `model_tracer/analyze_operations.py`
 - **Config Loader**: `tests/sweep_framework/master_config_loader.py`
 
 ### Important Concepts

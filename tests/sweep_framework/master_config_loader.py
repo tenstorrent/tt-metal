@@ -26,7 +26,9 @@ class TensorConfig:
 class MasterConfigLoader:
     """Loads and converts master JSON configurations to sweep test parameters"""
 
-    def __init__(self, master_file_path: str = "/home/ubuntu/tt-metal/traced_operations/ttnn_operations_master.json"):
+    def __init__(
+        self, master_file_path: str = "/home/ubuntu/tt-metal/model_tracer/traced_operations/ttnn_operations_master.json"
+    ):
         self.master_file_path = master_file_path
         self.master_data = None
         self.traced_configs_cache = {}  # Cache configs by operation name
