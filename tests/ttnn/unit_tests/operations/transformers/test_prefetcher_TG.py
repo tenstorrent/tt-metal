@@ -8,7 +8,7 @@ import ttnn
 from loguru import logger
 
 from models.common.utility_functions import is_grayskull, is_wormhole_b0, is_blackhole
-from tests.ttnn.operations.prefetcher_common import run_prefetcher_mm
+from tests.ttnn.unit_tests.operations.prefetcher_common import run_prefetcher_mm
 
 LLAMA_INPUT_SHAPES = [(2304, 1536), (1536, 2304), (2304, 3840), (2304, 3840), (3840, 2304)]
 LLAMA_INPUT_DTYPES = [ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat4_b, ttnn.bfloat4_b, ttnn.bfloat8_b]
