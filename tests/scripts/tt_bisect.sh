@@ -73,7 +73,7 @@ fi
 
 # Creating virtual environment where we can install ttnn
 ./create_venv.sh
-pip install -r models/tt_transformers/requirements.txt
+./python_env/bin/pip install -r models/tt_transformers/requirements.txt
 
 git cat-file -e "$good_commit^{commit}" 2>/dev/null || die "Invalid good commit: $good_commit"
 git cat-file -e "$bad_commit^{commit}" 2>/dev/null  || die "Invalid bad commit: $bad_commit"
@@ -103,7 +103,12 @@ fresh_clean() {
 
 # After building, verify we import from the workspace
 verify_import_path() {
-  python - <<'PY'
+  # Prefer the venv python if it exists so imports reflect the built workspace
+  PY_BIN="python"
+  if [ -x "./python_env/bin/python" ]; then
+    PY_BIN="./python_env/bin/python"
+  fi
+  "$PY_BIN" - <<'PY'
 import ttnn, sys
 print(ttnn.get_arch_name())
 print("ttnn imported from:", ttnn.__file__)
