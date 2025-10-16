@@ -291,13 +291,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
         pad_w = 0;
     }
 
-    // Activation reuse validation
-    if (enable_activation_reuse) {
-        TT_FATAL(!block_sharded, "Activation data reuse is not supported for block sharded");
-        TT_FATAL(dilation_h == 1 && dilation_w == 1, "Activation data reuse is not supported for dilation > 1");
-        TT_FATAL(stride_h == 1 && stride_w == 1, "Activation data reuse is not supported for stride > 1");
-    }
-
     const bool is_conv_1d_depthwise_conv =
         is_1d_deptwise_conv(groups, ashape[3], output_channels, filter_w, ashape[2], has_bias);
 
@@ -327,6 +320,14 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
         per_core_out_matrix_height_ntiles / block_config.act_block_h_ntiles,
         per_core_out_matrix_height_ntiles,
         block_config.act_block_h_ntiles);
+
+    // Activation reuse validation
+    if (enable_activation_reuse) {
+        TT_FATAL(!block_sharded, "Activation data reuse is not supported for block sharded");
+        TT_FATAL(dilation_h == 1 && dilation_w == 1, "Activation data reuse is not supported for dilation > 1");
+        TT_FATAL(stride_h == 1 && stride_w == 1, "Activation data reuse is not supported for stride > 1");
+        TT_FATAL(enable_split_reader, "Activation data reuse requires split reader to be on");
+    }
 
     TT_FATAL(input_channels_padded >= ashape[3], "Incorrect padding of input channels!");
     // check is for 16-byte alignment
