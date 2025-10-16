@@ -6,7 +6,7 @@
 #include <cstdint>
 #include "dataflow_api.h"
 
-#define ENABLE_DEBUG_PRINT 0
+#define ENABLE_DEBUG_PRINT 1
 
 #if ENABLE_DEBUG_PRINT == 1
 #include "debug/dprint.h"
@@ -19,22 +19,8 @@
 #define TILE_WIDTH 32
 #define FACE_WIDTH 16
 #define FACE_HEIGHT 16
-
-// Zero out a single page (where wr ptr points) for a given circular buffer.
-template <uint32_t cb_id>
-ALWI void zero_out_page() {
-    uint32_t page_size = get_local_cb_interface(cb_id).fifo_page_size;
-    const uint32_t num_zeros_reads = page_size / MEM_ZEROS_SIZE;
-    uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
-    uint32_t write_addr = get_write_ptr(cb_id);
-
-    noc_async_read_one_packet_set_state(zeros_noc_addr, MEM_ZEROS_SIZE);
-    for (uint32_t i = 0; i < num_zeros_reads; ++i) {
-        noc_async_read_one_packet_with_state<true>(zeros_noc_addr, write_addr);
-        write_addr += MEM_ZEROS_SIZE;
-    }
-    noc_async_read_barrier();
-}
+#define FACE_SIZE (FACE_WIDTH * FACE_HEIGHT)
+#define FACES_PER_TILE_WIDTH (TILE_WIDTH / FACE_WIDTH)
 
 // Fill an L1 buffer with the given val
 // WARNING: Use with caution as there's no memory protection. Make sure size is within limits
@@ -82,9 +68,6 @@ ALWI void clear_out_tiles(uint64_t write_addr, uint64_t clear_value_addr) {
 template <
     uint32_t in_nblocks_c,
     uint32_t in_cb_id,
-    uint32_t in_idx_cb_id,
-    uint32_t tile_tmp_cb_id,
-    uint32_t tile_idx_tmp_cb_id,
     uint32_t window_h,
     uint32_t window_w,
     uint32_t in_w_padded,
@@ -104,8 +87,7 @@ template <
     uint32_t dilation_w,
     bool return_indices,
     bool zero_pages>
-ALWI void read_window_with_top_left_index(
-    uint32_t ind, uint32_t in_l1_read_base_addr, uint32_t in_idx_l1_read_base_addr) {
+ALWI void read_window_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base_addr) {
     constexpr uint32_t BYTES_PER_ELEM = 2;
     // average pool with large kernels requires fp32 accumulation so we can only reduce 4 tiles at a time,
     // return_indices requires 1 tile at a time, otherwise we can reduce 8 tiles at a time.
@@ -134,11 +116,6 @@ ALWI void read_window_with_top_left_index(
 
         uint32_t in_l1_write_addr = get_write_ptr(in_cb_id);
         cb_reserve_back(in_cb_id, 1);
-        uint32_t in_idx_l1_write_addr = 0;
-        if constexpr (return_indices) {
-            in_idx_l1_write_addr = get_write_ptr(in_idx_cb_id);
-            cb_reserve_back(in_idx_cb_id, 1);
-        }
         uint32_t processed_sticks = 0;
         // page zeroing is only necessary for tiled block output format so that scale is not affected by junk/padding
         // data
@@ -159,17 +136,6 @@ ALWI void read_window_with_top_left_index(
                     in_l1_write_addr += read_bytes * w_multiple;
                 } else {
                     in_l1_write_addr += max_write_inc * w_multiple;
-                }
-                if constexpr (return_indices) {
-                    const uint32_t idx_read_offset =
-                        in_idx_l1_read_base_addr + (stick_offset * shard_width_bytes + c_i * MAX_BYTES_PER_REDUCTION);
-                    noc_async_read_one_packet(
-                        get_noc_addr(idx_read_offset), in_idx_l1_write_addr, read_bytes * w_multiple);
-                    if constexpr (tilize_reconfig) {
-                        in_idx_l1_write_addr += read_bytes * w_multiple;
-                    } else {
-                        in_idx_l1_write_addr += max_write_inc * w_multiple;
-                    }
                 }
                 processed_sticks += w_multiple;
                 if constexpr (is_large_kernel) {
@@ -220,10 +186,10 @@ ALWI void read_window_with_top_left_index(
         }
         if constexpr (!is_large_kernel) {
             noc_async_read_barrier();
+            // if (in_cb_id == 5) {
+            //     tt::data_movement::common::print_bf16_pages(get_write_ptr(in_cb_id), 32, 32);
+            // }
             cb_push_back(in_cb_id, 1);
-            if constexpr (return_indices) {
-                cb_push_back(in_idx_cb_id, 1);
-            }
         }
     }
 }
@@ -291,26 +257,30 @@ void kernel_main() {
 
     constexpr uint32_t in_cb_id = (reader_id == 1) ? get_compile_time_arg_val(16) : get_compile_time_arg_val(15);
     constexpr uint32_t in_shard_cb_id = get_compile_time_arg_val(17);
-    constexpr uint32_t in_idx_cb_id = (reader_id == 1) ? get_compile_time_arg_val(19) : get_compile_time_arg_val(18);
-    constexpr uint32_t in_shard_idx_cb_id = get_compile_time_arg_val(20);
-    constexpr uint32_t in_reader_indices_cb_id = get_compile_time_arg_val(21);
-    constexpr uint32_t in_scalar_cb_id_0 = get_compile_time_arg_val(22);
-    constexpr uint32_t in_scalar_cb_id_1 = get_compile_time_arg_val(23);
-    constexpr uint32_t tile_tmp_cb_id = get_compile_time_arg_val(24);
-    constexpr uint32_t tile_idx_tmp_cb_id = get_compile_time_arg_val(25);
-    constexpr uint32_t clear_value_cb_id = get_compile_time_arg_val(26);
-    constexpr bool is_avg_pool = (bool)get_compile_time_arg_val(27);
-    constexpr bool one_scalar_per_core = get_compile_time_arg_val(28);
-    constexpr uint32_t config_cb_id = get_compile_time_arg_val(29);
-    constexpr uint32_t in_nbytes_c = get_compile_time_arg_val(30);
-    constexpr uint32_t shard_width_bytes = get_compile_time_arg_val(31);
-    constexpr uint32_t multi_buffering_factor = get_compile_time_arg_val(32);
-    constexpr uint32_t stride_w = get_compile_time_arg_val(33);
-    constexpr uint32_t dilation_h = get_compile_time_arg_val(34);
-    constexpr uint32_t dilation_w = get_compile_time_arg_val(35);
-    constexpr bool return_indices = (bool)get_compile_time_arg_val(36);
-    constexpr bool zero_pages = (bool)get_compile_time_arg_val(37);
+    constexpr uint32_t in_reader_indices_cb_id = get_compile_time_arg_val(18);
+    constexpr uint32_t in_scalar_cb_id_0 = get_compile_time_arg_val(19);
+    constexpr uint32_t in_scalar_cb_id_1 = get_compile_time_arg_val(20);
+    constexpr uint32_t idx_tmp_cb_id = get_compile_time_arg_val(21);
+    constexpr uint32_t right_inc_tmp_cb_id = get_compile_time_arg_val(22);
+    constexpr uint32_t down_left_wrap_inc_tmp_cb_id = get_compile_time_arg_val(23);
+    constexpr uint32_t clear_value_cb_id = get_compile_time_arg_val(24);
+    constexpr bool is_avg_pool = (bool)get_compile_time_arg_val(25);
+    constexpr bool one_scalar_per_core = get_compile_time_arg_val(26);
+    constexpr uint32_t config_cb_id = get_compile_time_arg_val(27);
+    constexpr uint32_t in_nbytes_c = get_compile_time_arg_val(28);
+    constexpr uint32_t shard_width_bytes = get_compile_time_arg_val(29);
+    constexpr uint32_t multi_buffering_factor = get_compile_time_arg_val(30);
+    constexpr uint32_t stride_w = get_compile_time_arg_val(31);
+    constexpr uint32_t dilation_h = get_compile_time_arg_val(32);
+    constexpr uint32_t dilation_w = get_compile_time_arg_val(33);
+    constexpr bool return_indices = (bool)get_compile_time_arg_val(34);
+    constexpr uint32_t pad_t = get_compile_time_arg_val(35);
+    constexpr uint32_t pad_l = get_compile_time_arg_val(36);
+    constexpr uint32_t right_inc = get_compile_time_arg_val(37);
+    constexpr uint32_t down_left_wrap_inc = get_compile_time_arg_val(38);
+    constexpr bool zero_pages = (bool)get_compile_time_arg_val(39);
 
+    constexpr uint32_t in_w_padded = in_w + pad_w + ceil_pad_w;
     constexpr bool last_tile_is_partial = in_c % TILE_WIDTH != 0;
     constexpr uint32_t in_scalar_cb_id =
         split_reader && reader_id == 1 && !one_scalar_per_core ? in_scalar_cb_id_1 : in_scalar_cb_id_0;
@@ -345,13 +315,94 @@ void kernel_main() {
             cb_wait_front(clear_value_cb_id, 1);
         }
         // for average pool clear out tiles runs in loop, no need to initialize here
+        // TODO do we really need to init the in CB for return indices?
         if constexpr (!is_avg_pool || !is_large_kernel || return_indices) {
             clear_out_tiles<in_cb_id, clear_value_cb_id>();
+            // TODO we don't need to init the idx CBs, but eases debugging for now
             if constexpr (return_indices) {
-                clear_out_tiles<in_idx_cb_id, clear_value_cb_id>();
+                clear_out_tiles<idx_tmp_cb_id, clear_value_cb_id>();
             }
         }
-        // we don't need to clear the idx CB since the data CB is the one being sorted
+    }
+
+    // since kernels can start in padded regions we need to have "indexes" in these regions
+    // we choose a paradigm where we padding indexes must satisfy the following conditions:
+    //   1. they are 1 less than the index to the right (whether it's padding or not)
+    //   2. they are in_w less than the index below (whether it's padding or not)
+    // this results in repeat indexes, negative indexes and other such effects, but since
+    // padding is never chosen as a max index, validity of the padding index is unimportant
+    // we only care that when they are incremented they result in the correct index which
+    // this paradigm guarantees
+    // Note we also use unsigned integers and allow wrapping for negatives to preserve range
+    // and since all negative values correspond to padding indexes which will never be a max
+    uint16_t init_index = 0;
+    if constexpr (reader_id == 0 && return_indices) {
+        const uint16_t start_row = (uint16_t)get_arg_val<uint32_t>(0);
+        const uint16_t start_col = (uint16_t)get_arg_val<uint32_t>(1);
+        if (start_row <= pad_t) {
+            // top left is in top padding, we increment from the padding index in the top left
+            // of the padded tensor
+            uint16_t global_top_left_pad_idx = -(uint16_t)pad_l - (uint16_t)pad_t * in_w;
+            init_index = global_top_left_pad_idx + start_col + start_row * in_w;
+        } else if (start_col <= pad_l) {
+            // top left is in left padding, we increment from the padding index in the leftmost
+            // column of the starting row of the padded tensor
+            uint16_t leftmost_valid_index = (start_row - pad_t) * in_w;
+            uint16_t start_row_left_pad_idx = leftmost_valid_index - (uint16_t)pad_l;
+            init_index = start_row_left_pad_idx + start_col;
+        } else {
+            // top left is in valid region, we choose the valid index
+            init_index = (start_row - (uint16_t)pad_t) * in_w + (start_col - (uint16_t)pad_l);
+        }
+
+        // initialize the right inc tile
+        cb_reserve_back(right_inc_tmp_cb_id, 1);
+        volatile tt_l1_ptr uint16_t* right_ptr =
+            reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(right_inc_tmp_cb_id));
+        for (uint32_t i = 0; i < TILE_HEIGHT * TILE_WIDTH; ++i) {
+            right_ptr[i] = right_inc;
+        }
+        cb_push_back(right_inc_tmp_cb_id, 1);
+
+        // initialize the down left wrap inc tile
+        cb_reserve_back(down_left_wrap_inc_tmp_cb_id, 1);
+        volatile tt_l1_ptr uint16_t* down_left_ptr =
+            reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(down_left_wrap_inc_tmp_cb_id));
+        for (uint32_t i = 0; i < TILE_HEIGHT * TILE_WIDTH; ++i) {
+            down_left_ptr[i] = down_left_wrap_inc;
+        }
+        cb_push_back(down_left_wrap_inc_tmp_cb_id, 1);
+
+        // initialize the index CB
+        cb_reserve_back(idx_tmp_cb_id, 1);
+        volatile tt_l1_ptr uint16_t* idx_ptr =
+            reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(idx_tmp_cb_id));
+        uint32_t write_inc = TILE_WIDTH;
+#ifdef ARCH_BLACKHOLE
+        if (in_c <= FACE_WIDTH) {
+            write_inc = FACE_WIDTH;
+        }
+#endif
+        uint16_t kernel_idx = 0;
+        for (uint32_t h = 0; h < window_h; ++h) {
+            for (uint32_t w = 0; w < window_w; ++w) {
+                uint16_t hw = h * window_w + w;
+                const uint32_t fill_c = in_c <= TILE_WIDTH ? in_c : TILE_WIDTH;
+                for (uint32_t c = 0; c < fill_c; ++c) {
+                    uint32_t face_h = hw / FACE_HEIGHT;
+                    uint32_t face_w = c / FACE_WIDTH;
+                    uint32_t face_offset = (face_w + face_h * FACES_PER_TILE_WIDTH) * FACE_SIZE;
+                    uint32_t intra_face_h = hw % FACE_HEIGHT;
+                    uint32_t intra_face_w = c % FACE_WIDTH;
+                    uint32_t intra_face_offset = intra_face_w + intra_face_h * FACE_WIDTH;
+                    uint16_t index = init_index + kernel_idx;
+                    idx_ptr[face_offset + intra_face_offset] = index;
+                }
+                kernel_idx++;
+            }
+            kernel_idx += in_w - window_w;
+        }
+        cb_push_back(idx_tmp_cb_id, 1);
     }
 
     // initialize the scalar CB
@@ -361,17 +412,11 @@ void kernel_main() {
     }
 
     const uint32_t in_l1_read_base_addr = get_read_ptr(in_shard_cb_id);
-    uint32_t in_idx_l1_read_base_addr = 0;
-    if constexpr (return_indices) {
-        in_idx_l1_read_base_addr = get_read_ptr(in_shard_idx_cb_id);
-    }
     uint32_t reader_indices_l1_addr = get_read_ptr(in_reader_indices_cb_id);
     volatile tt_l1_ptr uint32_t* reader_indices_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reader_indices_l1_addr);
     uint32_t config_l1_addr;
     volatile tt_l1_ptr uint16_t* config_ptr;
-
-    constexpr uint32_t in_w_padded = in_w + pad_w + ceil_pad_w;
 
     uint32_t segments_counter = 1;
     uint32_t counter = reader_id;
@@ -422,9 +467,6 @@ void kernel_main() {
             read_window_with_top_left_index<
                 in_nblocks_c,
                 in_cb_id,
-                in_idx_cb_id,
-                tile_tmp_cb_id,
-                tile_idx_tmp_cb_id,
                 window_h,
                 window_w,
                 in_w_padded,
@@ -443,7 +485,7 @@ void kernel_main() {
                 dilation_h,
                 dilation_w,
                 return_indices,
-                zero_pages>(ind, in_l1_read_base_addr, in_idx_l1_read_base_addr);
+                zero_pages>(ind, in_l1_read_base_addr);
             if (split_reader && ind == end) {
                 first_row_value = false;
             }
@@ -458,9 +500,6 @@ void kernel_main() {
         read_window_with_top_left_index<
             in_nblocks_c,
             in_cb_id,
-            in_idx_cb_id,
-            tile_tmp_cb_id,
-            tile_idx_tmp_cb_id,
             window_h,
             window_w,
             in_w_padded,
@@ -479,6 +518,6 @@ void kernel_main() {
             dilation_h,
             dilation_w,
             return_indices,
-            zero_pages>(0, in_l1_read_base_addr, in_idx_l1_read_base_addr);
+            zero_pages>(0, in_l1_read_base_addr);
     }
 }  // kernel_main()
