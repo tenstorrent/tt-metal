@@ -125,7 +125,15 @@ try_download_artifacts() {
   # Look for workflow runs for this commit
   echo "🔎 Searching for workflow runs for commit $commit_sha..."
   local runs
-  runs=$(gh run list --repo tenstorrent/tt-metal --commit "$commit_sha" --json --limit 1000 2>/dev/null || echo "[]")
+  echo "🔧 Debug: Running command - gh run list --repo tenstorrent/tt-metal --commit $commit_sha --json --limit 1000"
+  runs=$(gh run list --repo tenstorrent/tt-metal --commit "$commit_sha" --json --limit 1000 2>&1)
+
+  # Check if gh command failed
+  if [ $? -ne 0 ]; then
+    echo "❌ gh run list command failed:"
+    echo "$runs"
+    return 1
+  fi
 
   if [ "$runs" = "[]" ]; then
     echo "No workflow runs found for commit $commit_sha"
