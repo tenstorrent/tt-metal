@@ -24,7 +24,7 @@ from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.firmware import ELF
 from ttexalens.parse_elf import mem_access
 from ttexalens.context import Context
-from triage import TTTriageError, combined_field, collection_serializer, triage_field, hex_serializer
+from triage import TTTriageError, collection_serializer, triage_field, hex_serializer
 from run_checks import run as get_run_checks
 from run_checks import RunChecks
 
@@ -36,23 +36,26 @@ script_config = ScriptConfig(
 
 @dataclass
 class DispatcherCoreData:
-    launch_msg_rd_ptr: int = triage_field("RD PTR")
-    kernel_config_base: int = triage_field("Base", hex_serializer)
-    kernel_text_offset: int = triage_field("Offset", hex_serializer)
-    host_assigned_id: int | None = triage_field("Host Assigned ID", hex_serializer)
-    watcher_kernel_id: int = combined_field("kernel_name", "Kernel ID:Name", collection_serializer(":"))
-    watcher_previous_kernel_id: int = combined_field(
-        "previous_kernel_name", "Previous Kernel ID:Name", collection_serializer(":")
-    )
-    kernel_offset: int | None = triage_field("Kernel Offset", hex_serializer)
-    firmware_path: str = combined_field("kernel_path", "Firmware / Kernel Path", collection_serializer("\n"))
-    kernel_path: str | None = combined_field()
-    kernel_name: str | None = combined_field()
-    previous_kernel_name: str | None = combined_field()
+    # Level 0: Essential fields (always shown)
+    watcher_kernel_id: int = triage_field("Kernel ID")
+    kernel_name: str | None = triage_field("Kernel Name")
     subdevice: int = triage_field("Subdevice")
     go_message: str = triage_field("Go Message")
     preload: bool = triage_field("Preload")
     waypoint: str = triage_field("Waypoint")
+
+    # Level 1: Detailed fields
+    host_assigned_id: int | None = triage_field("Host Assigned ID", hex_serializer, verbose=1)
+    watcher_previous_kernel_id: int = triage_field("Previous Kernel ID", verbose=1)
+    previous_kernel_name: str | None = triage_field("Previous Kernel Name", verbose=1)
+    kernel_offset: int | None = triage_field("Kernel Offset", hex_serializer, verbose=1)
+    kernel_path: str = triage_field("Kernel Path", verbose=1)
+    firmware_path: str = triage_field("Firmware Path", verbose=1)
+
+    # Level 2: Internal debug fields
+    launch_msg_rd_ptr: int = triage_field("RD PTR", verbose=2)
+    kernel_config_base: int = triage_field("Base", hex_serializer, verbose=2)
+    kernel_text_offset: int = triage_field("Offset", hex_serializer, verbose=2)
 
 
 class DispatcherData:
