@@ -842,7 +842,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
     }
 
     if (enable_activation_reuse) {
-        compute_defines["ACTIVATION_REUSE"] = "1";
         reader_defines["ACTIVATION_REUSE"] = "1";
         writer_mcast_sender_defines["ACTIVATION_REUSE"] = "1";
         writer_defines["ACTIVATION_REUSE"] = "1";
@@ -951,17 +950,20 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
         pack_relu,
         weight_block_w_ntiles <= 8,  // packer_untilize
         packer_l1_acc_en,
-        has_bias};
+        has_bias,
+        enable_split_reader,
+        enable_activation_reuse};
 
     if (enable_activation_reuse) {
         compute_kernel_args.push_back(activation_reuse_config.image_width_tiles);
         compute_kernel_args.push_back(activation_reuse_config.reuse_window_offset / COMPUTE_KERNEL_ADDRESS_DIVISOR);
-        if (enable_split_reader) {
-            compute_kernel_args.push_back(
-                activation_reuse_config.tilized_cb_row_offset / COMPUTE_KERNEL_ADDRESS_DIVISOR);
-            compute_kernel_args.push_back(
-                activation_reuse_config.tilized_cb_second_reader_offset / COMPUTE_KERNEL_ADDRESS_DIVISOR);
-        }
+        compute_kernel_args.push_back(activation_reuse_config.tilized_cb_row_offset / COMPUTE_KERNEL_ADDRESS_DIVISOR);
+        compute_kernel_args.push_back(
+            activation_reuse_config.tilized_cb_second_reader_offset / COMPUTE_KERNEL_ADDRESS_DIVISOR);
+    } else {
+        std::vector<uint32_t> activation_reuse_dummy_args = {0, 0, 0, 0};
+        compute_kernel_args.insert(
+            compute_kernel_args.end(), activation_reuse_dummy_args.begin(), activation_reuse_dummy_args.end());
     }
 
     const tt::tt_metal::NOC writer_mcast_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
@@ -1189,7 +1191,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
                      total_num_cores - 1,  // mcast_num_dests, mcast_num_cores
                      weights_mcast_sender_semaphore_id,
                      weights_mcast_receiver_semaphore_id});
-                if (enable_split_reader && enable_activation_reuse) {
+                if (enable_activation_reuse) {
                     uint32_t writer_remaining_tiles_to_push = 0;
                     if (activation_reuse_config.has_partial_core && core == activation_reuse_config.partial_work_core) {
                         writer_remaining_tiles_to_push =
@@ -1236,7 +1238,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
                     top_left_core_physical.y,
                     weights_mcast_sender_semaphore_id,
                     weights_mcast_receiver_semaphore_id};
-                if (enable_split_reader && enable_activation_reuse) {
+                if (enable_activation_reuse) {
                     uint32_t writer_remaining_tiles_to_push = 0;
                     if (activation_reuse_config.has_partial_core && core == activation_reuse_config.partial_work_core) {
                         writer_remaining_tiles_to_push =

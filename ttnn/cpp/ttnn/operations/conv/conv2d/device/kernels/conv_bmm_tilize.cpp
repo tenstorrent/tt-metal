@@ -202,18 +202,13 @@ void MAIN {
     constexpr bool packer_untilize = get_compile_time_arg_val(30);
     constexpr bool packer_l1_acc = get_compile_time_arg_val(31);
     constexpr bool fuse_bias = get_compile_time_arg_val(32);
+    constexpr bool split_reader = get_compile_time_arg_val(33);
+    constexpr bool activation_reuse = get_compile_time_arg_val(34);
 
-#ifdef ACTIVATION_REUSE
-    constexpr uint32_t image_width_in_tiles = get_compile_time_arg_val(33);
-    constexpr uint32_t window_reuse_offset = get_compile_time_arg_val(34);
-    constexpr uint32_t tilized_cb_row_offset = get_compile_time_arg_val(35);
-    constexpr uint32_t tilized_cb_second_reader_offset = get_compile_time_arg_val(36);
-#else
-    constexpr uint32_t image_width_in_tiles = 0;
-    constexpr uint32_t window_reuse_offset = 0;
-    constexpr uint32_t tilized_cb_row_offset = 0;
-    constexpr uint32_t tilized_cb_second_reader_offset = 0;
-#endif
+    constexpr uint32_t image_width_in_tiles = get_compile_time_arg_val(35);
+    constexpr uint32_t window_reuse_offset = get_compile_time_arg_val(36);
+    constexpr uint32_t tilized_cb_row_offset = get_compile_time_arg_val(37);
+    constexpr uint32_t tilized_cb_second_reader_offset = get_compile_time_arg_val(38);
 
     constexpr uint32_t out_block_num_tiles = in0_num_subblocks * in1_num_subblocks * out_subblock_num_tiles;
     constexpr uint32_t out_block_w = in1_block_w;
@@ -228,31 +223,19 @@ void MAIN {
 
     constexpr uint32_t mm_in0_cb_id = height_sharded ? tilized_in0_cb_id : in0_cb_id;
 
-#ifdef SPLIT_READER
-    constexpr bool split_reader = true;
-    constexpr uint32_t in0_num_subblocks_read_last = reader_num_h_subblocks / 2;
-    constexpr uint32_t in0_num_subblocks_read = reader_num_h_subblocks - in0_num_subblocks_read_last;
-#else
-    constexpr bool split_reader = false;
-    constexpr uint32_t in0_num_subblocks_read = reader_num_h_subblocks;
-    constexpr uint32_t in0_num_subblocks_read_last = 0;
-#endif
+    constexpr uint32_t in0_num_subblocks_read_last = split_reader ? reader_num_h_subblocks / 2 : 0;
+    constexpr uint32_t in0_num_subblocks_read =
+        split_reader ? reader_num_h_subblocks - in0_num_subblocks_read_last : reader_num_h_subblocks;
 
-#if defined(SPLIT_READER) && defined(ACTIVATION_REUSE)
-    constexpr bool activation_reuse = true;
     // if activation reuse is enabled, we need to update read pointers of the act buffers
     // each time we pass on to the new output image row to match the reader behavior
-    uint32_t act_cb_start_address = get_local_cb_interface(in0_cb_id).fifo_rd_ptr;
-    const uint32_t out_cb_tiles = in0_block_w * (in0_num_subblocks_read + in0_num_subblocks_read_last);
-    const uint32_t tilized_cb_start_address = get_local_cb_interface(tilized_in0_cb_id).fifo_wr_ptr;
-    const uint32_t act_cb_second_reader_start_address = get_local_cb_interface(in0_cb_second_reader_id).fifo_rd_ptr;
-#else
-    constexpr bool activation_reuse = false;
-    uint32_t act_cb_start_address = 0;
-    const uint32_t out_cb_tiles = 0;
-    const uint32_t tilized_cb_start_address = 0;
-    const uint32_t act_cb_second_reader_start_address = 0;
-#endif
+    uint32_t act_cb_start_address = activation_reuse ? get_local_cb_interface(in0_cb_id).fifo_rd_ptr : 0;
+    const uint32_t out_cb_tiles =
+        activation_reuse ? in0_block_w * (in0_num_subblocks_read + in0_num_subblocks_read_last) : 0;
+    const uint32_t tilized_cb_start_address =
+        activation_reuse ? get_local_cb_interface(tilized_in0_cb_id).fifo_wr_ptr : 0;
+    const uint32_t act_cb_second_reader_start_address =
+        activation_reuse ? get_local_cb_interface(in0_cb_second_reader_id).fifo_rd_ptr : 0;
 
     // For block sharded conv2d, compute kernels may be scheduled on cores that only need tilize
     // operations (input grid) while actual matmul occurs on different cores (output grid).
@@ -299,10 +282,10 @@ void MAIN {
                         }
                         tilize_in<true, !split_reader>(
                             in0_pretilize_cb_id, in0_block_w, in0_num_subblocks_read, tilized_in0_cb_id);
-#ifdef SPLIT_READER
-                        tilize_in<false, true>(
-                            in0_cb_second_reader_id, in0_block_w, in0_num_subblocks_read_last, tilized_in0_cb_id);
-#endif
+                        if constexpr (split_reader) {
+                            tilize_in<false, true>(
+                                in0_cb_second_reader_id, in0_block_w, in0_num_subblocks_read_last, tilized_in0_cb_id);
+                        }
                         mm_block_init_short_with_both_dt(
                             in0_cb_id,
                             in1_cb_id,
