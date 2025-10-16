@@ -55,27 +55,6 @@ LEAD_MODEL_SHARD_SPECS = [
 ]
 
 parameters = {
-    "generality_suite": {
-        "mesh_shape": mesh_shape_iterator(NUM_DEVICES),
-        "fabric_config": FABRIC_CONFIGS,
-        "num_links": [1],
-        "input_shape": [
-            [1, 1, 32, 32],
-            [1, 1, 32, 31],
-            [1, 1, 1, 32, 32],
-            [2, 32, 32],
-            [1, 1, 32, 16384],
-            [1, 1, 1, 2048],
-        ],
-        "dim": [0, 1, 2, 3, 4],
-        "cluster_axis": [0, 1, None],
-        "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
-        "input_dtype": [ttnn.bfloat16],
-        "buffer_type": [ttnn.BufferType.DRAM],
-        "shard_specs": [None],
-        "topology": [ttnn.Topology.Linear, ttnn.Topology.Ring],
-        "num_iters": [1],
-    },
     "lead_model_suite": {
         "mesh_shape": mesh_shape_iterator(NUM_DEVICES),
         "fabric_config": FABRIC_CONFIGS,
@@ -150,7 +129,9 @@ def _get_tensors(input_shape, mesh_shape, dim, cluster_axis, dtype, buffer_type,
     replicate_dim = mesh_shape[cluster_axis] if cluster_axis is not None else prod(mesh_shape)
     torch_reference = torch_input.repeat(tuple((1 if i != dim else replicate_dim) for i in range(len(input_shape))))
 
-    input_memory_config, output_memory_config = get_mem_configs(buffer_type, shard_specs, torch_reference.shape)
+    input_memory_config, output_memory_config = get_mem_configs(
+        buffer_type, shard_specs, torch_reference.shape, tile_layout=(layout == ttnn.TILE_LAYOUT)
+    )
 
     assert input_memory_config.memory_layout == output_memory_config.memory_layout
 

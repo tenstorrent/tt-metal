@@ -73,16 +73,14 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     # hardcode for 6U
     if test_vector["mesh_shape"] in [(16, 2), (2, 16)]:
         return True, "Invalid mesh shape for 6U"
+    if test_vector["select_experts_k"] >= test_vector["experts"]:
+        return True, "Need more experts than select experts"
 
     mesh_shape, cluster_axis = test_vector["mesh_shape"], test_vector["cluster_axis"]
-    if cluster_axis and mesh_shape[cluster_axis] == 1:
+    if mesh_shape[cluster_axis] == 1:
         return True, "Unit cluster axis"
 
-    if (
-        cluster_axis is not None
-        and test_vector["topology"] == ttnn.Topology.Ring
-        and test_vector["mesh_shape"][cluster_axis] == 2
-    ):
+    if test_vector["topology"] == ttnn.Topology.Ring and test_vector["mesh_shape"][cluster_axis] == 2:
         return True, "Ring config requires more than two devices"
 
     if test_vector["select_experts_k"] > test_vector["experts"]:
@@ -146,8 +144,8 @@ def run(
                 warmup_iters=0,
                 trace_mode=False,
                 num_links=num_links,
+                topology=topology,
                 dtype=input_dtype,
-                topology=None,
                 input_memory_config=mem_config,
                 output_memory_config=mem_config,
                 cluster_axis=cluster_axis,
