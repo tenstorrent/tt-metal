@@ -286,12 +286,13 @@ def filter_params_with_z3(all_params):
                 Or(
                     BoolVal(stochastic_rnd == StochasticRounding.All),
                     BoolVal(stochastic_rnd == StochasticRounding.Pack),
+                    BoolVal(stochastic_rnd == StochasticRounding.No),
                 ),
                 transpose_faces,
                 within_face_transpose,
                 Or(
-                    # reuse=NONE fails only with num_faces > 1
-                    And(reuse_none, Or(num_faces_z3 == 2, num_faces_z3 == 4)),
+                    # reuse=NONE fails fails for all num_faces
+                    reuse_none,
                     # reuse=DEST_TO_SRCA fails for all num_faces
                     reuse_srca,
                 ),
