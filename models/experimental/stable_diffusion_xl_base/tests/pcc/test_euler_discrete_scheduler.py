@@ -165,7 +165,7 @@ def test_euler_discrete_scheduler_add_noise(device, input_shape, num_inference_s
     latent_timestep = torch_timesteps[:1]
     torch_noisy_sample = scheduler.add_noise(torch_original_samples, torch_noise, latent_timestep)
 
-    tt_noisy_sample = tt_scheduler.add_noise(tt_original_samples, tt_noise, begin_index)
+    tt_noisy_sample = tt_scheduler.add_noise(tt_original_samples, tt_noise)
 
     tt_noisy_sample = ttnn.to_torch(tt_noisy_sample)
     assert_with_pcc(tt_noisy_sample, torch_noisy_sample, 0.999)

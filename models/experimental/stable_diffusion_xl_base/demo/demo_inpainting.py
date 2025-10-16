@@ -69,9 +69,6 @@ def run_demo_inference(
     )
     profiler.end("diffusion_pipeline_from_pretrained")
 
-    torch_scheduler = pipeline.scheduler
-    torch_vae = pipeline.vae
-
     assert isinstance(pipeline.text_encoder, CLIPTextModel), "pipeline.text_encoder is not a CLIPTextModel"
     assert isinstance(
         pipeline.text_encoder_2, CLIPTextModelWithProjection

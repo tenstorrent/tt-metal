@@ -5,13 +5,12 @@
 from dataclasses import dataclass
 from diffusers import StableDiffusionXLInpaintPipeline
 from models.experimental.stable_diffusion_xl_base.tests.test_common import (
-    get_timesteps,
     prepare_image_latents,
     prepare_mask_latents_inpainting,
     run_tt_image_gen_inpainting,
 )
 from models.experimental.stable_diffusion_xl_base.tt.tt_sdxl_img2img_pipeline import (
-    TtSDXLPipeline,
+    TtSDXLImg2ImgPipeline,
     TtSDXLImg2ImgPipelineConfig,
 )
 import torch
@@ -27,7 +26,7 @@ class TtSDXLInpaintingPipelineConfig(TtSDXLImg2ImgPipelineConfig):
     _torch_pipeline_type = StableDiffusionXLInpaintPipeline
 
 
-class TtSDXLInpaintingPipeline(TtSDXLPipeline):
+class TtSDXLInpaintingPipeline(TtSDXLImg2ImgPipeline):
     def __init__(self, ttnn_device, torch_pipeline, pipeline_config: TtSDXLInpaintingPipelineConfig):
         super().__init__(ttnn_device, torch_pipeline, pipeline_config)
 
@@ -44,19 +43,6 @@ class TtSDXLInpaintingPipeline(TtSDXLPipeline):
 
         B, C, H, W = 1, self.num_channels_image_latents, 128, 128
         self.tt_image_latents_shape = [B, C, H, W]
-
-    def _prepare_timesteps(self):
-        super()._prepare_timesteps()
-
-        self.ttnn_timesteps, self.pipeline_config.num_inference_steps = get_timesteps(
-            self.tt_scheduler, self.pipeline_config.num_inference_steps, self.pipeline_config.strength, None
-        )
-
-        if self.pipeline_config.num_inference_steps < 1:
-            raise ValueError(
-                f"After adjusting the num_inference_steps by strength parameter: {self.pipeline_config.strength}, the number of pipeline"
-                f"steps is {self.pipeline_config.num_inference_steps} which is < 1 and not appropriate for this pipeline."
-            )
 
     def generate_input_tensors(
         self,

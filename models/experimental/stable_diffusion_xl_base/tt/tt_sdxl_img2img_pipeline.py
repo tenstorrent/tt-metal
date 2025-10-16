@@ -33,8 +33,20 @@ class TtSDXLImg2ImgPipeline(TtSDXLPipeline):
         B, C, H, W = 1, self.num_in_channels_unet, 128, 128
         self.tt_latents_shape = [B, C, H, W]
 
-        assert self.pipeline_config.strength != 1.0, "Max strength is not supported for inpainting pipeline atm"
-        # to support it, we need to modify prepare_latents function
+    def set_strength(self, strength: int):
+        # When changing strength, the timesteps and latents need to be recreated.
+        self.pipeline_config.strength = strength
+        self.generated_input_tensors = False
+
+    def set_aesthetic_score(self, aesthetic_score: int):
+        # When changing strength, the timesteps and latents need to be recreated.
+        self.pipeline_config.aesthetic_score = aesthetic_score
+        self.generated_input_tensors = False
+
+    def set_negative_aesthetic_score(self, negative_aesthetic_score: int):
+        # When changing strength, the timesteps and latents need to be recreated.
+        self.pipeline_config.negative_aesthetic_score = negative_aesthetic_score
+        self.generated_input_tensors = False
 
     def _prepare_timesteps(self):
         super()._prepare_timesteps()
@@ -42,8 +54,6 @@ class TtSDXLImg2ImgPipeline(TtSDXLPipeline):
         self.ttnn_timesteps, self.pipeline_config.num_inference_steps = get_timesteps(
             self.torch_pipeline.scheduler, self.pipeline_config.num_inference_steps, self.pipeline_config.strength, None
         )
-
-        print("Num timesteps after prepare timesteps is: ", self.pipeline_config.num_inference_steps)
 
         if self.pipeline_config.num_inference_steps < 1:
             raise ValueError(
@@ -90,11 +100,10 @@ class TtSDXLImg2ImgPipeline(TtSDXLPipeline):
                 self.cpu_device,
                 all_prompt_embeds_torch.dtype,
                 torch_image,
-                False,  # Make this configurable
+                False,  # No max strength path in ref img2img implementation
                 True,  # Make this configurable
                 None,  # passed in latents
             )
-            print("Done with generating latents, shape is: ", img_latents.shape)
             B, C, H, W = img_latents.shape  # 1, 4, 128, 128
             img_latents = torch.permute(img_latents, (0, 2, 3, 1))  # [1, H, W, C]
             img_latents = img_latents.reshape(B, 1, H * W, C)  # [1, 1, H*W, C]

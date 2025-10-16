@@ -247,7 +247,7 @@ def prepare_device(mesh_device, use_cfg_parallel):
 )
 @pytest.mark.parametrize(
     "num_inference_steps",
-    ((20),),
+    ((50),),
 )
 @pytest.mark.parametrize(
     "guidance_scale",

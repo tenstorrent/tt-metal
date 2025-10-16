@@ -166,8 +166,6 @@ class TtUNet2DConditionModel(LightweightModule):
     def forward(self, sample, input_shape, timestep, encoder_hidden_states, time_ids, text_embeds):
         B, C, H, W = input_shape
 
-        # print("In tt unet, sample is: ", sample.shape)
-
         temb = self.time_proj.forward(timestep)
         temb = self.time_embedding.forward(temb)
 
@@ -204,7 +202,6 @@ class TtUNet2DConditionModel(LightweightModule):
             return_weights_and_bias=True,
             dtype=self.conv_output_dtype,
         )
-        # print("Following tt conv in, sample shape is: ", sample.shape)
         C = self.conv1_params["output_channels"]
 
         sample = ttnn.to_memory_config(sample, ttnn.DRAM_MEMORY_CONFIG)

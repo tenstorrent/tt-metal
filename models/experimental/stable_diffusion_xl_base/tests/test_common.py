@@ -418,7 +418,6 @@ def retrieve_timesteps(
     sigmas: Optional[List[float]] = None,
     **kwargs,
 ):
-    print("Scheduler we are calling this with is: ", scheduler)
     r"""
     Calls the scheduler's `set_timesteps` method and retrieves timesteps from the scheduler after the call. Handles
     custom timesteps. Any kwargs will be supplied to `scheduler.set_timesteps`.
@@ -508,13 +507,8 @@ def prepare_image_latents(
         image_latents = torch_pipeline.vae.encode(image).latent_dist.sample()
     image_latents = tt_pipeline.torch_pipeline.vae.config.scaling_factor * image_latents
     image_latents = image_latents.repeat(batch_size // image_latents.shape[0], 1, 1, 1)
-    # print(f"Path 4 in prepare latents")
 
     torch_noise = torch.randn(shape, generator=None, device=cpu_device, dtype=dtype)
-    # if strength is 1. then initialise the latents to noise, else initial to image + noise
-    # Need to convert:
-    # - image_latents to ttnn_tensor
-    # - noise to ttnn_tensor
     if is_strength_max:
         return torch_noise * tt_pipeline.tt_scheduler.init_noise_sigma
 
@@ -524,7 +518,7 @@ def prepare_image_latents(
     tt_image_latents = ttnn.from_torch(
         image_latents, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=tt_pipeline.ttnn_device
     )
-    latents = tt_pipeline.tt_scheduler.add_noise(tt_image_latents, tt_noise, tt_pipeline.tt_scheduler.begin_index)
+    latents = tt_pipeline.tt_scheduler.add_noise(tt_image_latents, tt_noise)
 
     return ttnn.to_torch(latents)
 
@@ -685,8 +679,7 @@ def run_tt_image_gen(
     profiler.start("image_gen")
     profiler.start("denoising_loop")
 
-    # print("tt_timesteps: ", tt_timesteps)
-    for i in range(num_steps):  # tqdm(enumerate(tt_timesteps), total=len(tt_timesteps)):
+    for i in range(num_steps):
         unet_outputs = []
         if tid is None or capture_trace:
             tid = ttnn.begin_trace_capture(ttnn_device, cq_id=0) if capture_trace else None

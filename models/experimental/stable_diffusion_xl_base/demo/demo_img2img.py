@@ -282,13 +282,8 @@ def test_demo(
     mesh_device = device
     from PIL import Image
 
-    # import torch
-    # from torchvision import transforms
-
     image_path = "output/output1.png"
     img = Image.open(image_path).convert("RGB")
-    # to_tensor = transforms.ToTensor()
-    # img_tensor = to_tensor(img).unsqueeze(0)
 
     prepare_device(mesh_device, use_cfg_parallel)
     return run_demo_inference(
