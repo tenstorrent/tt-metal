@@ -71,8 +71,9 @@ if [ "$tracy_enabled" -eq 1 ]; then
   echo "Tracy profiling enabled for builds."
 fi
 
-echo "attempting to just run the test script"
-script_path
+echo "attempting to just run the test script: "
+echo "$script_path"
+"$script_path"
 echo "test script ran successfully"
 exit 0
 
