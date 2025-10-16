@@ -10,7 +10,7 @@ from models.demos.deepseek_v3.demo.demo import run_demo
 # Paths
 MODEL_PATH = Path(os.getenv("DEEPSEEK_V3_HF_MODEL", "models/demos/deepseek_v3/reference"))
 CACHE_DIR = Path(os.getenv("DEEPSEEK_V3_CACHE", "generated/deepseek_v3"))
-REFERENCE_JSON = Path("models/demos/deepseek_v3/demo/deepseek_32_prompts_outputs.json")
+REFERENCE_JSON = Path("models/demos/deepseek_v3/tests/deepseek_32_prompts_outputs.json")
 
 # Compare settings
 IGNORE_CASE = False
