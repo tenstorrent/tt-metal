@@ -1898,6 +1898,12 @@ void py_module(py::module& module) {
         R"doc(BFLOAT16, BFLOAT8_B)doc");
     bind_unary_operation(
         module,
+        ttnn::hardmish,
+        R"doc(\mathrm{{output\_tensor}}_i = \verb|hardmish|(\mathrm{{input\_tensor}}_i))doc",
+        "[Supported range -20 to inf]",
+        R"doc(BFLOAT16, BFLOAT8_B)doc");
+    bind_unary_operation(
+        module,
         ttnn::gez,
         R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor_i\ >= 0}}))doc",
         "",

@@ -130,4 +130,5 @@ enum SfpuType {
     selu,
     rpow,
     cbrt,  // cube root
+    hardmish,
 };
