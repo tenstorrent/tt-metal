@@ -359,7 +359,7 @@ void Cluster::open_driver(const bool &skip_driver_allocs) {
         device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
             .num_host_mem_ch_per_mmio_device = num_host_mem_ch_per_mmio_device,
             .sdesc_path = sdesc_path,
-        });
+            .disable_wait_on_eth_core_training = true});
     } else if (this->target_type_ == TargetDevice::Simulator) {
         std::unique_ptr<tt_ClusterDescriptor> mock_cluster_desc;
         if (rtoptions_.get_mock_enabled()) {

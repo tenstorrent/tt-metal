@@ -143,9 +143,13 @@ PhysicalSystemDescriptor generate_physical_system_descriptor(const InputArgs& in
     } else {
         log_output_rank0("Running Physical Discovery");
         auto& context = tt::tt_metal::MetalContext::instance();
-        auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+        auto& driver = tt::tt_metal::MetalContext::instance().get_cluster().get_driver();
         auto physical_system_descriptor = tt::tt_metal::PhysicalSystemDescriptor(
-            context.get_distributed_context_ptr(), &context.hal(), context.rtoptions().get_mock_enabled(), cluster.get_driver(), true);
+            context.get_distributed_context_ptr(),
+            &context.hal(),
+            context.rtoptions().get_mock_enabled(),
+            driver,
+            true);
         log_output_rank0("Physical Discovery Complete");
         log_output_rank0("Detected Hosts: " + log_hostnames(physical_system_descriptor.get_all_hostnames()));
         return physical_system_descriptor;
