@@ -112,7 +112,7 @@ int main() {
                 // Trigger a soft reset of ERISC0. Wait 100 cycles, and then deassert
                 WRITE_REG(RISCV_DEBUG_REG_SOFT_RESET_0, RISCV_SOFT_RESET_0_BRISC);
                 riscv_wait(100);
-                WRITE_REG(RISCV_DEBUG_REG_SOFT_RESET_0, 0);
+                WRITE_REG(RISCV_DEBUG_REG_SOFT_RESET_0, RISCV_SOFT_RESET_0_NONE);
 
                 break;
             }
