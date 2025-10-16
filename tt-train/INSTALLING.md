@@ -1,13 +1,6 @@
 # Installation Guide for tt-train
 
-This guide provides instructions for installing tt-train via pip.
-
-## Prerequisites
-
-### System Requirements
-- Python 3.10 or higher
-- Ubuntu 20.04+ (or compatible Linux distribution)
-- Tenstorrent hardware (for running on device)
+This guide provides instructions for installing tt-train's ttml python module via pip.
 
 ## Step 1: Install tt-metal (Prerequisite)
 
@@ -100,13 +93,13 @@ Once tt-metal is installed and your virtual environment is activated, install tt
 **Regular installation:**
 
 ```bash
-pip install /path/to/tt-metal/tt-train/
+pip install /path/to/tt-train/
 ```
 
 **Editable installation (for development):**
 
 ```bash
-pip install -e /path/to/tt-metal/tt-train/
+pip install -e /path/to/tt-train/
 ```
 
 Use the editable installation (`-e`) if you plan to modify the tt-train source code and want changes to be reflected immediately without reinstalling.
