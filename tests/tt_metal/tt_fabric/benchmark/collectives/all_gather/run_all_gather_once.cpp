@@ -55,16 +55,16 @@ inline bool validate_workload_or_fail(const PerfParams& p) {
 // }
 
 // Device lookup and basic existence check.
-inline bool lookup_devices_or_fail(
-    chip_id_t src_phys, chip_id_t dst_phys, tt::tt_metal::IDevice*& src_dev, tt::tt_metal::IDevice*& dst_dev) {
-    src_dev = find_device_by_id(src_phys);
-    dst_dev = find_device_by_id(dst_phys);
-    if (!src_dev || !dst_dev) {
-        ADD_FAILURE() << "Failed to find devices: src=" << src_phys << " dst=" << dst_phys;
-        return false;
-    }
-    return true;
-}
+// inline bool lookup_devices_or_fail(
+//     chip_id_t src_phys, chip_id_t dst_phys, tt::tt_metal::IDevice*& src_dev, tt::tt_metal::IDevice*& dst_dev) {
+//     src_dev = find_device_by_id(src_phys);
+//     dst_dev = find_device_by_id(dst_phys);
+//     if (!src_dev || !dst_dev) {
+//         ADD_FAILURE() << "Failed to find devices: src=" << src_phys << " dst=" << dst_phys;
+//         return false;
+//     }
+//     return true;
+// }
 
 // Generate deterministic TX pattern.
 inline std::vector<uint32_t> make_tx_pattern(size_t n_words) {
@@ -98,15 +98,10 @@ PerfPoint run_all_gather_once(HelpersFixture* fixture, const PerfParams& p) {
     const auto& cp = tt::tt_metal::MetalContext::instance().get_control_plane();
 
     tt::tt_fabric::FabricNodeId src{tt::tt_fabric::MeshId{p.mesh_id}, p.src_chip};
-    // representative destination to seed the forwarding link
-    tt::tt_fabric::FabricNodeId dst{tt::tt_fabric::MeshId{p.mesh_id}, p.dst_chip};
-
     chip_id_t src_phys = cp.get_physical_chip_id_from_fabric_node_id(src);
-    chip_id_t dst_phys = cp.get_physical_chip_id_from_fabric_node_id(dst);
-
-    tt::tt_metal::IDevice* src_dev = nullptr;
-    tt::tt_metal::IDevice* dst_dev = nullptr;
-    if (!lookup_devices_or_fail(src_phys, dst_phys, src_dev, dst_dev)) {
+    tt::tt_metal::IDevice* src_dev = find_device_by_id(src_phys);
+    if (!src_dev) {
+        ADD_FAILURE() << "Failed to find source device: src=" << src_phys;
         return PerfPoint{};
     }
 
@@ -114,7 +109,9 @@ PerfPoint run_all_gather_once(HelpersFixture* fixture, const PerfParams& p) {
         return PerfPoint{};
     }
 
-    tt::tt_metal::CoreCoord rx_xy = dst_dev->worker_core_from_logical_core(p.receiver_core);
+    // Logical → worker mapping is identical across chips in the MeshDevice,
+    // so using src_dev for receiver_core is fine.
+    tt::tt_metal::CoreCoord rx_xy = src_dev->worker_core_from_logical_core(p.receiver_core);
     tt::tt_metal::CoreCoord tx_xy = src_dev->worker_core_from_logical_core(p.sender_core);
 
     // --- IO buffers & initialization ---
@@ -133,7 +130,6 @@ PerfPoint run_all_gather_once(HelpersFixture* fixture, const PerfParams& p) {
         return Dist::MeshCoordinate(0);
     };
     Dist::MeshCoordinate src_coord = coord_of_phys(src_phys);
-    Dist::MeshCoordinate dst_coord = coord_of_phys(dst_phys);
 
     // MeshBuffer-based IO
     Dist::DeviceLocalBufferConfig src_local{.page_size = p.page_size, .buffer_type = tt::tt_metal::BufferType::DRAM};
@@ -149,7 +145,6 @@ PerfPoint run_all_gather_once(HelpersFixture* fixture, const PerfParams& p) {
     // Blocking writes so data is resident before kernels run
     auto& mcq = mesh->mesh_command_queue();
     Dist::WriteShard(mcq, src_buf, tx, src_coord, /*blocking=*/true);
-    Dist::WriteShard(mcq, dst_buf, zeros, dst_coord, /*blocking=*/true);
     // === Build the multicast receiver set from a rectangular sub-mesh (0,0) .. (rows-1, cols-1) ===
     std::vector<Dist::MeshCoordinate> dst_coords;
     const auto shape = view.shape();  // [rows, cols]
@@ -404,9 +399,8 @@ Notes:
     const bool want_S = (s_hops > 0);
 
     // Debug: basic topology snapshot
-    std::cerr << "[host] mesh=" << shape[0] << "x" << shape[1] << " src_phys=" << src_phys << " dst_phys=" << dst_phys
-              << " src_coord=(" << src_coord[0] << "," << src_coord[1] << ")"
-              << " dst_coord=(" << dst_coord[0] << "," << dst_coord[1] << ")"
+    std::cerr << "[host] mesh=" << shape[0] << "x" << shape[1] << " src_phys=" << src_phys << " src_coord=("
+              << src_coord[0] << "," << src_coord[1] << ")"
               << " rx_xy=(" << (int)rx_xy.x << "," << (int)rx_xy.y << ")"
               << " tx_xy=(" << (int)tx_xy.x << "," << (int)tx_xy.y << ")\n";
 

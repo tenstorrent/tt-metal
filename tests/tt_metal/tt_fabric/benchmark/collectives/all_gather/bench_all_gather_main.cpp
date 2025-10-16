@@ -52,7 +52,7 @@ static void usage(const char* argv0) {
 
     const std::string text = fmt::format(
         R"(Usage:
-        {bin} --src-dev <mesh:chip|chip> --dst-dev <mesh:chip|chip> --size <bytes>
+        {bin} --src-dev <mesh:chip|chip> --size <bytes>
          [--mesh-rows R] [--mesh-cols C]
          [--page <bytes>] [--src-type <l1|dram>] [--dst-type <l1|dram>]
          [--send-core x,y] [--recv-core x,y]
@@ -63,8 +63,7 @@ static void usage(const char* argv0) {
 Notes:
 This binary runs ONE configuration per invocation. For sweeps, invoke it repeatedly (see examples below).
 --src-type/--dst-type are accepted for future use; current code uses DRAM src and L1/DRAM dst.
-   rows∈[0,R), cols∈[0,C) (excluding the sender chip). You must still provide
-   one --dst-dev on the same mesh to seed a forwarding link.
+   rows∈[0,R), cols∈[0,C) (excluding the sender chip).
 Trace semantics: each measured iteration does
     1) warm-up (outside trace),
     2) BeginTraceCapture → enqueue the workload N=--trace-iters times → EndTraceCapture,
@@ -76,21 +75,21 @@ Trace semantics: each measured iteration does
 Examples:
 
 # Single run, 1 MiB tensor, 4 KiB pages, capture 64 enqueues per trace, repeat 10 times for stats:
-  {bin} --src-dev 0:0 --dst-dev 0:1 --size 1048576 --page 4096 \
+  {bin} --src-dev 0:0 --size 1048576 --page 4096 \
         --send-core 0,0 --recv-core 0,0 \
         --iters 10 --warmup 1 --trace-iters 64 \
         --csv artifacts/all_gather.csv
 
 
 # Multicast to a 1x3 rectangle of receivers (chips logical (0,1),(0,2),(0,3)), same recv core:
-  {bin} --src-dev 0:0 --dst-dev 0:1 --size 1048576 --page 4096 \
+  {bin} --src-dev 0:0 --size 1048576 --page 4096 \
         --mesh-rows 1 --mesh-cols 4 \
         --send-core 0,0 --recv-core 1,1 \
         --iters 10 --warmup 1 --trace-iters 64
 
 # Sweep multiple sizes via helper script:
   python tests/tt_metal/tt_fabric/benchmark/collectives/all_gather/run_all_gather_sweep.py \
-        --src 0:0 --dst 0:1 --sizes 4096,32768,1048576 \
+        --src 0:0 --sizes 4096,32768,1048576 \
         --recv-core 0,0 --iters 10 --warmup 1 --trace-iters 64 \
         --out-dir artifacts
 
@@ -126,8 +125,7 @@ static bool parse_xy(const std::string& s, int& x, int& y) {
 }
 
 // Fills RunOptions + PerfParams + raw src/dst strings. Returns false on bad args.
-static bool parse_cli_or_usage(
-    int argc, char** argv, RunOptions& run, PerfParams& p, std::string& src_dev_str, std::string& dst_dev_str) {
+static bool parse_cli_or_usage(int argc, char** argv, RunOptions& run, PerfParams& p, std::string& src_dev_str) {
     std::string src_type = "dram";  // reserved
     std::string dst_type = "l1";    // reserved
 
@@ -144,8 +142,6 @@ static bool parse_cli_or_usage(
 
         if (a == "--src-dev" && need(i, 1)) {
             src_dev_str = argv[++i];
-        } else if (a == "--dst-dev" && need(i, 1)) {
-            dst_dev_str = argv[++i];
         } else if (a == "--size" && need(i, 1)) {
             p.tensor_bytes = static_cast<uint32_t>(std::stoul(argv[++i]));
         } else if (a == "--page" && need(i, 1)) {
@@ -191,25 +187,20 @@ static bool parse_cli_or_usage(
         }
     }
 
-    if (src_dev_str.empty() || dst_dev_str.empty() || p.tensor_bytes == 0) {
+    if (src_dev_str.empty() || p.tensor_bytes == 0) {
         usage(argv[0]);
         return false;
     }
 
-    uint32_t src_mesh = 0, dst_mesh = 0;
-    int src_chip = 0, dst_chip = 0;
+    uint32_t src_mesh = 0;
+    int src_chip = 0;
     if (!parse_mesh_chip(src_dev_str, src_mesh, src_chip)) {
         usage(argv[0]);
         return false;
     }
-    if (!parse_mesh_chip(dst_dev_str, dst_mesh, dst_chip)) {
-        usage(argv[0]);
-        return false;
-    }
 
-    p.mesh_id = src_mesh;  // assume same mesh
+    p.mesh_id = src_mesh;
     p.src_chip = static_cast<chip_id_t>(src_chip);
-    p.dst_chip = static_cast<chip_id_t>(dst_chip);
 
     return true;
 }
@@ -228,11 +219,11 @@ void append_csv_if_requested(const RunOptions& run, const PerfParams& p, const P
         return;
     }
     if (newfile) {
-        ofs << "mesh,src_chip,dst_chip,send_x,send_y,recv_x,recv_y,sizeB,pageB,iters,warmup,"
+        ofs << "mesh,src_chip,send_x,send_y,recv_x,recv_y,sizeB,pageB,iters,warmup,"
                "p50_ms,p95_ms,mean_GB_s,p50_GB_s,p10_GB_s,cv_GB_s_pct\n";
     }
-    ofs << p.mesh_id << "," << p.src_chip << "," << p.dst_chip << "," << p.sender_core.x << "," << p.sender_core.y
-        << "," << p.receiver_core.x << "," << p.receiver_core.y << "," << p.tensor_bytes << "," << p.page_size << ","
+    ofs << p.mesh_id << "," << p.src_chip << "," << p.sender_core.x << "," << p.sender_core.y << ","
+        << p.receiver_core.x << "," << p.receiver_core.y << "," << p.tensor_bytes << "," << p.page_size << ","
         << run.iters << "," << run.warmup << "," << stats.p50_ms << "," << stats.p95_ms << "," << stats.mean_GB_s << ","
         << stats.p50_GB_s << "," << stats.p10_GB_s << "," << stats.cv_GB_s_pct << "\n";
 
@@ -244,18 +235,16 @@ void append_csv_if_requested(const RunOptions& run, const PerfParams& p, const P
 int main(int argc, char** argv) {
     RunOptions run;
     PerfParams p;
-    std::string src_dev_str, dst_dev_str;
-
-    if (!parse_cli_or_usage(argc, argv, run, p, src_dev_str, dst_dev_str)) {
+    std::string src_dev_str;
+    if (!parse_cli_or_usage(argc, argv, run, p, src_dev_str)) {
         return 2;
     }
 
     log_info(
         tt::LogTest,
-        "Starting all gather bench: src={} dst={} sizeB={} pageB={} send_core=[{},{}] "
+        "Starting all gather bench: src={} sizeB={} pageB={} send_core=[{},{}] "
         "recv_core=[{},{}] mesh_rect={}x{} iters={} warmup={}",
         src_dev_str,
-        dst_dev_str,
         p.tensor_bytes,
         p.page_size,
         p.sender_core.x,
