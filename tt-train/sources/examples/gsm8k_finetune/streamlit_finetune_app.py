@@ -98,7 +98,7 @@ def parse_validation_file(file_path="validation.txt"):
         return f"Error reading validation.txt: {e}"
 
 
-def create_loss_plot(history_df):
+def create_loss_plot(history_df, eval_every=None):
     """Create an interactive plot for training and validation loss."""
     fig = go.Figure()
 
@@ -114,11 +114,20 @@ def create_loss_plot(history_df):
         )
     )
 
-    # Validation loss
+    # Validation loss - filter to only show at eval_every intervals
+    if eval_every is not None and eval_every > 0:
+        # Filter to only show validation loss at eval_every intervals
+        # This includes step 0 and steps that are multiples of eval_every
+        val_mask = (history_df["step"] % eval_every == 0) | (history_df["step"] == 0)
+        val_df = history_df[val_mask]
+    else:
+        # If eval_every not provided, show all validation points
+        val_df = history_df
+
     fig.add_trace(
         go.Scatter(
-            x=history_df["step"],
-            y=history_df["val_loss"],
+            x=val_df["step"],
+            y=val_df["val_loss"],
             mode="lines+markers",
             name="Validation Loss",
             line=dict(color="#ff7f0e", width=2),
@@ -657,7 +666,7 @@ def main():
             plot_col1, plot_col2 = st.columns(2)
 
             with plot_col1:
-                fig_loss = create_loss_plot(history_df)
+                fig_loss = create_loss_plot(history_df, eval_every=eval_every)
                 st.plotly_chart(fig_loss, use_container_width=True)
 
             with plot_col2:
