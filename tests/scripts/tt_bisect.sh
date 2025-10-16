@@ -162,9 +162,9 @@ try_download_artifacts() {
   # Download build artifacts - need to find the actual artifact name pattern
   echo "🔍 Looking for build artifacts..."
 
-  # Get list of all artifacts for this run
+  # Get list of all artifacts for this run using GitHub API
   local artifacts
-  artifacts="$(gh run view "$build_run_id" --repo tenstorrent/tt-metal --json artifacts --jq '.artifacts[].name' 2>/dev/null || echo "")"
+  artifacts="$(gh api repos/tenstorrent/tt-metal/actions/runs/"$build_run_id"/artifacts --jq '.artifacts[].name' 2>/dev/null || echo "")"
 
   if [ -z "$artifacts" ]; then
     echo "❌ Could not list artifacts for run $build_run_id"
@@ -194,6 +194,7 @@ try_download_artifacts() {
 
   # Clean up any previous artifact files
   rm -f ttm_any.tar.zst 2>/dev/null || true
+  rm -f "$artifact_name" 2>/dev/null || true
 
   if gh run download "$build_run_id" --repo tenstorrent/tt-metal --name "$artifact_name" --dir . 2>&1; then
     echo "✅ Artifact downloaded successfully"
@@ -202,7 +203,19 @@ try_download_artifacts() {
     echo "📂 Files in current directory after download:"
     ls -la . | head -10
 
-    # Extract the artifact
+    # First unzip the artifact (GitHub artifacts are zipped but without .zip extension)
+    if [ -f "$artifact_name" ]; then
+      echo "✅ Found $artifact_name, unzipping..."
+      if unzip -q "$artifact_name"; then
+        echo "✅ Artifact unzipped successfully"
+        rm -f "$artifact_name"
+      else
+        echo "❌ Failed to unzip artifact"
+        return 1
+      fi
+    fi
+
+    # Extract the tar.zst archive
     if [ -f "ttm_any.tar.zst" ]; then
       echo "✅ Found ttm_any.tar.zst, extracting..."
       if tar --zstd -xf ttm_any.tar.zst; then
