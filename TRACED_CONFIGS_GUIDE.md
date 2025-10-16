@@ -22,7 +22,8 @@
 |------|---------|
 | **Trace a model** | `python generic_ops_tracer.py <test_path>` |
 | **View configurations** | `python analyze_operations.py <operation_name>` |
-| **Run sweep test** | `pytest tests/sweep_framework/sweeps/.../test.py` (results in Superset dashboard) |
+| **Generate sweep vectors** | `python3 tests/sweep_framework/sweeps_parameter_generator.py --module-name <op_name> --dump-file` |
+| **Run sweep test** | `python3 tests/sweep_framework/sweeps_runner.py --module-name <op_name> --suite model_traced` (see [Sweep Framework README](tests/sweep_framework/README.md)) |
 
 ### Key Files
 
@@ -191,9 +192,54 @@ parameters = {
 
 ### 4. Run Sweep Tests
 
+**Note:** See [Sweep Framework README](tests/sweep_framework/README.md) for complete sweep test documentation.
+
 ```bash
-# Run sweep test normally - results appear in Superset dashboard
-pytest tests/sweep_framework/sweeps/eltwise/unary/sigmoid_accurate/sigmoid_accurate.py
+# Step 1: Generate test vectors
+python3 tests/sweep_framework/sweeps_parameter_generator.py \
+  --module-name eltwise.unary.sigmoid_accurate.sigmoid_accurate \
+  --dump-file
+
+# Step 2: Run the sweep test
+python3 tests/sweep_framework/sweeps_runner.py \
+  --module-name eltwise.unary.sigmoid_accurate.sigmoid_accurate \
+  --vector-source vectors_export \
+  --result-dest results_export \
+  --suite model_traced
+
+# Results appear in Superset dashboard
+```
+
+**Complete Examples:**
+
+**For Unary Operations (e.g., sigmoid_accurate):**
+```bash
+# Generate vectors
+python3 tests/sweep_framework/sweeps_parameter_generator.py \
+  --module-name eltwise.unary.sigmoid_accurate.sigmoid_accurate \
+  --dump-file
+
+# Run test
+python3 tests/sweep_framework/sweeps_runner.py \
+  --module-name eltwise.unary.sigmoid_accurate.sigmoid_accurate \
+  --vector-source vectors_export \
+  --result-dest results_export \
+  --suite model_traced
+```
+
+**For Binary Operations (e.g., add):**
+```bash
+# Generate vectors
+python3 tests/sweep_framework/sweeps_parameter_generator.py \
+  --module-name eltwise.binary.add.add_all_pytorch2 \
+  --dump-file
+
+# Run test
+python3 tests/sweep_framework/sweeps_runner.py \
+  --module-name eltwise.binary.add.add_all_pytorch2 \
+  --vector-source vectors_export \
+  --result-dest results_export \
+  --suite model_traced
 ```
 
 ---
@@ -715,12 +761,23 @@ python analyze_operations.py sigmoid_accurate
 ### Example 3: Running Model-Traced Sweep Test
 
 ```bash
-# Run only the model_traced suite
-pytest tests/sweep_framework/sweeps/eltwise/unary/sigmoid_accurate/sigmoid_accurate.py \
-  -k model_traced -v
+# Generate vectors for the model_traced suite
+python3 tests/sweep_framework/sweeps_parameter_generator.py \
+  --module-name eltwise.unary.sigmoid_accurate.sigmoid_accurate \
+  --dump-file
 
-# Or run all suites (including model_traced)
-pytest tests/sweep_framework/sweeps/eltwise/unary/sigmoid_accurate/sigmoid_accurate.py
+# Run only the model_traced suite
+python3 tests/sweep_framework/sweeps_runner.py \
+  --module-name eltwise.unary.sigmoid_accurate.sigmoid_accurate \
+  --vector-source vectors_export \
+  --result-dest results_export \
+  --suite model_traced
+
+# Or run all suites (nightly, model_traced, etc.)
+python3 tests/sweep_framework/sweeps_runner.py \
+  --module-name eltwise.unary.sigmoid_accurate.sigmoid_accurate \
+  --vector-source vectors_export \
+  --result-dest results_export
 ```
 
 **Output:**
@@ -826,7 +883,11 @@ output_mem_config = mem_config  # Same as input for unary ops
 pytest test_sigmoid_traced_configs.py
 
 # Sweep test should also pass
-pytest tests/sweep_framework/sweeps/.../sigmoid_accurate.py -k model_traced
+python3 tests/sweep_framework/sweeps_parameter_generator.py \
+  --module-name eltwise.unary.sigmoid_accurate.sigmoid_accurate --dump-file
+python3 tests/sweep_framework/sweeps_runner.py \
+  --module-name eltwise.unary.sigmoid_accurate.sigmoid_accurate \
+  --vector-source vectors_export --result-dest results_export --suite model_traced
 ```
 
 ### Issue: "UnparsedElement" errors
@@ -1020,8 +1081,10 @@ python generic_ops_tracer.py <test_path>
 # View configurations
 python analyze_operations.py <operation_name>
 
-# Run sweep test with traced configs
-pytest tests/sweep_framework/sweeps/.../test.py -k model_traced
+# Generate and run sweep test with traced configs
+python3 tests/sweep_framework/sweeps_parameter_generator.py --module-name <op_name> --dump-file
+python3 tests/sweep_framework/sweeps_runner.py --module-name <op_name> --suite model_traced \
+  --vector-source vectors_export --result-dest results_export
 
 # Analyze sweep results
 python analyze_sweep_results.py
