@@ -30,8 +30,7 @@
 - **Tracer**: `generic_ops_tracer.py`
 - **Master JSON**: `traced_operations/ttnn_operations_master.json`
 - **Analyzer**: `analyze_operations.py`
-- **Config Utilities**: `tests/sweep_framework/sweep_config_utils.py`
-- **JSON Parser**: `tests/sweep_framework/master_config_loader.py`
+- **Config Loader**: `tests/sweep_framework/master_config_loader.py`
 
 ### Integration Pattern (Copy & Paste)
 
@@ -283,7 +282,7 @@ python3 tests/sweep_framework/sweeps_runner.py \
 └─────────────────────┬───────────────────────────────────────┘
                       │
                       │ 3. Query with analyze_operations.py
-                      │    or Load with sweep_config_utils.py
+                      │    or Load with master_config_loader.py
                       ↓
 ┌─────────────────────────────────────────────────────────────┐
 │                    Sweep Tests                               │
@@ -302,8 +301,7 @@ python3 tests/sweep_framework/sweeps_runner.py \
 | **generic_ops_tracer.py** | Traces model tests, extracts operations | `/home/ubuntu/tt-metal/` |
 | **ttnn_operations_master.json** | Master storage of all traced configs | `traced_operations/` |
 | **analyze_operations.py** | Query tool to view configurations | `/home/ubuntu/tt-metal/` |
-| **master_config_loader.py** | Parses master JSON, converts to TTNN objects | `tests/sweep_framework/` |
-| **sweep_config_utils.py** | High-level utilities for sweep tests | `tests/sweep_framework/` |
+| **master_config_loader.py** | Parses master JSON, converts to TTNN objects, provides utilities | `tests/sweep_framework/` |
 | **Sweep test files** | Use traced configs via `model_traced` suite | `tests/sweep_framework/sweeps/...` |
 
 ---
@@ -567,18 +565,19 @@ def parse_memory_config(self, memory_config: Dict, tensor_shape: list) -> Any:
 #### Step 4: Format for Sweep Framework
 
 ```python
-# sweep_config_utils.py
-def load_unary_op_configs(operation_name, all_cases=False):
+# master_config_loader.py - get_suite_parameters()
+def get_suite_parameters(operation_name, all_cases=False):
     if all_cases:
         # Return separate lists for Cartesian product (N×M tests)
         return {
-            "input_shapes": [shape1, shape2, ...],
-            "input_memory_config": [mem1, mem2, ...],
+            "input_shape": [shape1, shape2, ...],
+            "input_a_memory_config": [mem1, mem2, ...],
+            "input_a_dtype": [dtype1, dtype2, ...],
         }
     else:
-        # Return paired tuples for exact configs (N tests)
+        # Return config names for exact paired configs (N tests)
         return {
-            "traced_config": [(shape1, mem1), (shape2, mem2), ...],
+            "traced_config_name": ["op_traced_0", "op_traced_1", ...],
         }
 ```
 
@@ -588,15 +587,16 @@ def load_unary_op_configs(operation_name, all_cases=False):
 
 ```python
 # Sweep framework passes config name (string)
-def run(traced_config_name="traced_0", *, device):
-    # Lookup actual config object
-    config = _CONFIG_LOOKUP[traced_config_name]
+def run(traced_config_name=None, *, device):
+    # Unpack all parameters in ONE line
+    if traced_config_name:
+        shape, dtype, layout, input_mem_config, output_mem_config = unpack_traced_config(traced_config_name)
 
-    # Extract all parameters
-    shape = config["shape"]                    # [1, 1, 12544, 32]
-    mem_config = config["memory_config"]       # SHARDED with exact shard_shape
-    layout = config["layout"]                  # TILE_LAYOUT
-    dtype = config["dtype"]                    # bfloat8_b
+    # Now you have all the config values:
+    # shape = [1, 1, 12544, 32]
+    # input_mem_config = SHARDED with exact shard_shape
+    # layout = TILE_LAYOUT
+    # dtype = bfloat8_b
 ```
 
 #### Step 2: Create Tensor
@@ -637,8 +637,7 @@ tt-metal/
 ├── traced_operations/                 # Storage directory
 │   └── ttnn_operations_master.json    # Master configuration store
 ├── tests/sweep_framework/
-│   ├── master_config_loader.py        # Low-level JSON parser
-│   ├── sweep_config_utils.py          # High-level utilities
+│   ├── master_config_loader.py        # Config loader and utilities
 │   ├── Allops.txt                     # Official TTNN operations list
 │   └── sweeps/
 │       └── eltwise/unary/sigmoid_accurate/
@@ -1095,8 +1094,7 @@ python analyze_sweep_results.py
 - **Tracer**: `generic_ops_tracer.py`
 - **Master JSON**: `traced_operations/ttnn_operations_master.json`
 - **Analyzer**: `analyze_operations.py`
-- **Config Utils**: `tests/sweep_framework/sweep_config_utils.py`
-- **Parser**: `tests/sweep_framework/master_config_loader.py`
+- **Config Loader**: `tests/sweep_framework/master_config_loader.py`
 
 ### Important Concepts
 
