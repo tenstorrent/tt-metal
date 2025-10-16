@@ -67,14 +67,14 @@ class Conv:
         input_channels = input_tensor.shape[3]
 
         # Ensure input is in DRAM and interleaved
-        input_tensor = ttnn.to_memory_config(input_tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        input_tensor = ttnn.to_memory_config(input_tensor, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         if hasattr(input_tensor, "memory_config") and input_tensor.memory_config().is_sharded():
-            input_tensor = ttnn.sharded_to_interleaved(input_tensor, ttnn.DRAM_MEMORY_CONFIG)
+            input_tensor = ttnn.sharded_to_interleaved(input_tensor, ttnn.L1_MEMORY_CONFIG)
 
         # Ensure weights are in DRAM and interleaved
         if hasattr(self.weights, "memory_config") and self.weights.memory_config().is_sharded():
-            self.weights = ttnn.sharded_to_interleaved(self.weights, ttnn.DRAM_MEMORY_CONFIG)
+            self.weights = ttnn.sharded_to_interleaved(self.weights, ttnn.L1_MEMORY_CONFIG)
 
         # High precision compute config
         compute_config = ttnn.init_device_compute_kernel_config(
@@ -114,7 +114,7 @@ class Conv:
 
         # Post-processing
         if hasattr(output_tensor, "memory_config") and output_tensor.memory_config().is_sharded():
-            output_tensor = ttnn.sharded_to_interleaved(output_tensor, ttnn.DRAM_MEMORY_CONFIG)
+            output_tensor = ttnn.sharded_to_interleaved(output_tensor, ttnn.L1_MEMORY_CONFIG)
 
         output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
         output_tensor = ttnn.reshape(output_tensor, (batch_size, _out_height, _out_width, output_tensor.shape[3]))
@@ -198,7 +198,9 @@ class Conv_with_split:
             tt_weight_tensor = ttnn.from_torch(split_weight_tensors[i], weights_dtype)
 
             tt_bias_tensor = None
-            tt_input_tensor = ttnn.from_torch(split_input_tensors[i], ttnn.bfloat16)
+            tt_input_tensor = ttnn.from_torch(
+                split_input_tensors[i], ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG
+            )
 
             [tt_output_tensor_on_device, [out_height, out_width]] = ttnn.conv2d(
                 input_tensor=tt_input_tensor,
