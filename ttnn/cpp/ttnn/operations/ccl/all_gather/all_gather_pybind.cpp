@@ -18,7 +18,7 @@ namespace ttnn::operations::ccl {
 
 void py_bind_all_gather(py::module& module) {
     auto doc =
-        R"doc(all_gather(input_tensor: ttnn.Tensor, dim: int, cluster_axis: Optional[int] = None, subdevice_id: Optional[ttnn.SubDeviceId] = None, memory_config: Optional[ttnn.MemoryConfig] = None, output_tensor: Optional[ttnn.Tensor] = None, num_links: Optional[int] = None, topology: ttnn.Topology = None) -> ttnn.Tensor
+        R"doc(all_gather(input_tensor: ttnn.Tensor, dim: int, cluster_axis: Optional[int] = None, subdevice_id: Optional[ttnn.SubDeviceId] = None, memory_config: Optional[ttnn.MemoryConfig] = None, output_tensor: Optional[ttnn.Tensor] = None, num_links: Optional[int] = None, topology: Optional[ttnn.Topology] = None) -> ttnn.Tensor
 
             All-gather operation across devices along a selected dimension and optional cluster axis. If cluster axis is specified then we gather across the cluster axis. All-gather is a collective operation that gathers data from all devices into a new output tensor, concatenated along the specified `dim`. When cluster_axis is specified, each of the non-cluster_axis dimensions are performing independent all-gathers along the devices on the cluster axis. When the layout is row-major or we have tile padding on the gather dim, we use the composite all-gather implementation that falls back to all-broadcast.
 

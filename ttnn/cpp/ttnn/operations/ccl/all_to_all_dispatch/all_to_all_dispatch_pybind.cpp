@@ -19,7 +19,7 @@ namespace ttnn::operations::ccl {
 
 void py_bind_all_to_all_dispatch(py::module& module) {
     auto doc =
-        R"doc(all_to_all_dispatch(input_tensor: ttnn.Tensor, expert_indices_tensor: ttnn.Tensor, expert_mapping_tensor: ttnn.Tensor, num_links: Optional[int] = None, topology: Optional[ttnn.Topology] = None, memory_config: Optional[ttnn.MemoryConfig] = None, subdevice_id: Optional[ttnn.SubDeviceId] = None)) -> Tuple[ttnn.Tensor, ttnn.Tensor]
+        R"doc(all_to_all_dispatch(input_tensor: ttnn.Tensor, expert_indices_tensor: ttnn.Tensor, expert_mapping_tensor: ttnn.Tensor, num_links: Optional[int] = None, topology: Optional[ttnn.Topology] = None, memory_config: Optional[ttnn.MemoryConfig] = None, subdevice_id: Optional[ttnn.SubDeviceId] = None) -> Tuple[ttnn.Tensor, ttnn.Tensor]
 
             All to all dispatch operation for dispatching the input tokens to devices with the selected experts, based on the expert indices and expert mapping tensors. If cluster axis is specified then we dispatch the tokens to the experts only on that axis.
             B = batch size

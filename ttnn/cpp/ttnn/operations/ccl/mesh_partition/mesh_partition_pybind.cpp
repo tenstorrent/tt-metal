@@ -14,14 +14,14 @@ namespace ttnn::operations::ccl {
 
 void py_bind_mesh_partition(py::module& module) {
     auto doc =
-        R"doc(mesh_partition(input_tensor: ttnn.Tensor, dims: List[int], memory_config: Optional[MemoryConfig] = std::nullopt)) -> ttnn.Tensor
+        R"doc(mesh_partition(input_tensor: ttnn.Tensor, dim: int, cluster_axis: Optional[int] = None, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
 
             Partitions the input tensor across the mesh such that each device has the i/num_devices-th partition of the input tensor along the specified dimension. This is the inverse of all_gather
 
             Args:
                 input_tensor (ttnn.Tensor): the input tensor.
-                dim (number): the dimension to partition along
-                cluster_axis (number): the cluster axis on the mesh.
+                dim (int): the dimension to partition along.
+                cluster_axis (int, optional): the cluster axis on the mesh. Defaults to `None`.
 
             Keyword Args:
                 memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.

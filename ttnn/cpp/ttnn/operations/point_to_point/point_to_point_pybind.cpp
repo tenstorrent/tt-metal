@@ -16,14 +16,14 @@ namespace py = pybind11;
 
 void py_bind_point_to_point(py::module& module) {
     auto doc =
-        R"doc(point_to_point(input_tensor: ttnn.Tensor, send_coord: ttnn.MeshCoordinate, receive_coord: ttnn.MeshCoordinate, topology: ttnn.Topology, output_tensor: Optional[ttnn.Tensor] = None, intermediate_tensor: Optional[ttnn.Tensor] = None) -> ttnn.Tensor
+        R"doc(point_to_point(input_tensor: ttnn.Tensor, sender_coord: ttnn.MeshCoordinate, receiver_coord: ttnn.MeshCoordinate, topology: ttnn.Topology, output_tensor: Optional[ttnn.Tensor] = None, intermediate_tensor: Optional[ttnn.Tensor] = None) -> ttnn.Tensor
 
             Point-to-point send receive Op. Send a tensor from one device to another.
 
             Args:
                 input_tensor (ttnn.Tensor): the input tensor.
-                send_coord (ttnn.MeshCoordinate): Coordinate of device containing input_tensor (shard).
-                receive_coord (ttnn.MeshCoordinate): Coordinate of device receiving input_tensor (shard).
+                sender_coord (ttnn.MeshCoordinate): Coordinate of device containing input_tensor (shard).
+                receiver_coord (ttnn.MeshCoordinate): Coordinate of device receiving input_tensor (shard).
 
             Keyword Args:
                 topology (ttnn.Topology): Fabric topology.
@@ -44,8 +44,8 @@ void py_bind_point_to_point(py::module& module) {
                 >>> sender_coord, receiver_coord = (ttnn.MeshCoordinate(c) for c in ((0,0), (0,1)))
                 >>> sent_tensor = ttnn.point_to_point(
                         input_tensor,
-                        receiver_coord,
                         sender_coord,
+                        receiver_coord,
                         ttnn.Topology.Linear)
             )doc";
 
@@ -57,16 +57,16 @@ void py_bind_point_to_point(py::module& module) {
         ttnn::pybind_overload_t{
             [](const OperationType& self,
                const ttnn::Tensor& input_tensor,
-               const MeshCoordinate& receiver_coord,
                const MeshCoordinate& sender_coord,
+               const MeshCoordinate& receiver_coord,
                const std::optional<ttnn::Tensor>& output_tensor,
                const std::optional<ttnn::Tensor>& intermediate_tensor,
                const ccl::Topology topology) {
                 return self(input_tensor, receiver_coord, sender_coord, topology, output_tensor, intermediate_tensor);
             },
             py::arg("input_tensor").noconvert(),
-            py::arg("receiver_coord"),
             py::arg("sender_coord"),
+            py::arg("receiver_coord"),
             py::kw_only(),
             py::arg("output_tensor") = std::nullopt,
             py::arg("intermediate_tensor") = std::nullopt,
@@ -75,8 +75,8 @@ void py_bind_point_to_point(py::module& module) {
         "p2p_compute_intermediate_tensor_spec",
         p2p_compute_intermediate_tensor_spec,
         py::arg("input_tensor"),
-        py::arg("receiver_coord"),
         py::arg("sender_coord"),
+        py::arg("receiver_coord"),
         py::arg("topology"));
 }
 }  // namespace ttnn::operations::point_to_point

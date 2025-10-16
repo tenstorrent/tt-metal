@@ -18,7 +18,7 @@ namespace ttnn::operations::ccl {
 
 void py_bind_reduce_scatter(py::module& module) {
     auto doc =
-        R"doc(reduce_scatter(input_tensor: ttnn.Tensor, dim: int, cluster_axis: Optional[int] = None, subdevice_id: Optional[ttnn.SubDeviceId] = None, memory_config: Optional[ttnn.MemoryConfig] = None, output_tensor: Optional[ttnn.Tensor] = None, num_links: Optional[int] = None, topology: ttnn.Topology = None) -> ttnn.Tensor
+        R"doc(reduce_scatter(input_tensor: ttnn.Tensor, dim: int, cluster_axis: Optional[int] = None, subdevice_id: Optional[ttnn.SubDeviceId] = None, memory_config: Optional[ttnn.MemoryConfig] = None, output_tensor: Optional[ttnn.Tensor] = None, num_links: Optional[int] = None, topology: Optional[ttnn.Topology] = None) -> ttnn.Tensor
 
             Reduce-scatter operation across devices along a selected dimension and optional cluster axis.
 
