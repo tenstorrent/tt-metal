@@ -1,4 +1,4 @@
-# TTNN Traced Configurations System - Complete Guide
+# Model Trace to Test Automation - Complete Guide
 
 ## 📋 Table of Contents
 - [Quick Reference](#quick-reference)
@@ -122,7 +122,7 @@ def run(
 
 ### What is This System?
 
-The **TTNN Traced Configurations System** automatically extracts real-world operation configurations from model tests and integrates them into sweep tests. This ensures sweep tests validate operations using the exact same configurations that actual production models use.
+The **Model Trace to Test Automation** system automatically extracts real-world operation configurations from model tests and integrates them into sweep tests. This ensures sweep tests validate operations using the exact same configurations that actual production models use.
 
 ### Key Benefits
 
