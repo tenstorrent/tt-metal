@@ -43,7 +43,7 @@ struct TensorShape2D {
  * Since this is for matmul, no need to read when M >= logical_M
  * Otherwise, if K >= logical_K, fill with zeros.
  */
-template <typename TensorAccessorType>
+template <uint32_t M_block_tiles, uint32_t K_block_tiles, typename TensorAccessorType>
 void read_in0_block_sync(
     const TensorAccessorType& tensor_accessor,
     const TensorShape2D& shape,
@@ -69,6 +69,8 @@ void read_in0_block_sync(
             }
             write_ptr += tile_size_bytes;
         }
+        // finish up incrementing write_ptr if (d1_end - d1_start) < K_block_tiles
+        write_ptr += (K_block_tiles - (d1_end - d1_start)) * tile_size_bytes;
     }
     noc_async_read_barrier();
 }
@@ -78,7 +80,7 @@ void read_in0_block_sync(
  * Since this is for matmul, no need to read when N >= logical_N
  * Otherwise, if K >= logical_K, fill with zeros.
  */
-template <typename TensorAccessorType>
+template <uint32_t K_block_tiles, uint32_t N_block_tiles, typename TensorAccessorType>
 void read_in1_block_sync(
     const TensorAccessorType& tensor_accessor,
     const TensorShape2D& shape,
@@ -104,6 +106,8 @@ void read_in1_block_sync(
             }
             write_ptr += tile_size_bytes;
         }
+        // finish up incrementing write_ptr if (d1_end - d1_start) < K_block_tiles
+        write_ptr += (N_block_tiles - (d1_end - d1_start)) * tile_size_bytes;
     }
     noc_async_read_barrier();
 }
@@ -112,7 +116,7 @@ void read_in1_block_sync(
  * Write a block of output to a potentially padded tensor.
  * Skip writing when M >= logical_M or N >= logical_N
  */
-template <typename TensorAccessorType>
+template <uint32_t M_block_tiles, uint32_t N_block_tiles, typename TensorAccessorType>
 void write_block_sync(
     const TensorAccessorType& tensor_accessor,
     const TensorShape2D& shape,
@@ -138,6 +142,8 @@ void write_block_sync(
             noc_async_write_tile(tile_id, tensor_accessor, read_ptr);
             read_ptr += tile_size_bytes;
         }
+        // finish up incrementing read_ptr if (d1_end - d1_start) < N_block_tiles
+        read_ptr += (N_block_tiles - (d1_end - d1_start)) * tile_size_bytes;
     }
     noc_async_writes_flushed();
 }
@@ -146,31 +152,31 @@ void write_block_sync(
  * This write method is more granular, waiting on a row of output tiles
  * in the output CB before writing those out, rather than waiting on the entire block.
  */
-template <typename TensorAccessorType>
+template <uint32_t M_block_tiles, uint32_t N_block_tiles, typename TensorAccessorType>
 void write_block_sync_granular(
     const TensorAccessorType& tensor_accessor,
     const TensorShape2D& shape,
     uint32_t cb_id_out,
-    uint32_t block_col_tiles,
     uint32_t tile_size_bytes,
     uint32_t d0_start,
     uint32_t d0_end,
     uint32_t d1_start,
     uint32_t d1_end) {
-    for (uint32_t i = d0_start; i < d0_end; i++) {
-        cb_wait_front(cb_id_out, block_col_tiles);
-        if (i < shape.logical_d0) {
+    for (uint32_t m_id = 0; m_id < M_block_tiles; m_id++) {
+        cb_wait_front(cb_id_out, N_block_tiles);
+        uint32_t m_tile = d0_start + m_id;
+        if (m_tile < d0_end && m_tile < shape.logical_d0) {
             uint32_t out_read_ptr = get_read_ptr(cb_id_out);
-            for (uint32_t j = d1_start; j < d1_end; j++) {
-                if (j >= shape.logical_d1) {
+            for (uint32_t n_tile_id = d1_start; n_tile_id < d1_end; n_tile_id++) {
+                if (n_tile_id >= shape.logical_d1) {
                     break;
                 }
-                uint32_t tile_id = i * shape.logical_d1 + j;
+                uint32_t tile_id = m_tile * shape.logical_d1 + n_tile_id;
                 noc_async_write_tile(tile_id, tensor_accessor, out_read_ptr);
                 out_read_ptr += tile_size_bytes;
             }
         }
-        cb_pop_front(cb_id_out, block_col_tiles);
+        cb_pop_front(cb_id_out, N_block_tiles);
     }
     noc_async_writes_flushed();
 }
