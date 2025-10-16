@@ -65,6 +65,7 @@ void matmul_blocks(
     const uint32_t out_cb,
     const uint32_t M_block_tiles,
     const uint32_t N_block_tiles,
+    const uint32_t padded_N_block_tiles,
     const uint32_t K_block_tiles,
     const uint32_t M_num_subblocks,
     const uint32_t N_num_subblocks,
@@ -72,9 +73,9 @@ void matmul_blocks(
     const uint32_t subblock_w) {
     uint32_t in0_index_offset = 0;
 
-    for (uint32_t M_subblock = 0; M_subblock < M_num_subblocks; ++M_subblock) {
+    for (uint32_t M_start = 0; M_start < M_block_tiles; M_start += subblock_h) {
         uint32_t in1_index_offset = 0;
-        for (uint32_t N_subblock = 0; N_subblock < N_num_subblocks; ++N_subblock) {
+        for (uint32_t N_start = 0; N_start < N_block_tiles; N_start += subblock_w) {
             tile_regs_acquire();
 
             uint32_t dst_index = 0;
@@ -85,17 +86,17 @@ void matmul_blocks(
                 matmul_block(
                     in0_cb, in1_cb, in0_index, in1_index, dst_index, false, subblock_w, subblock_h, K_block_tiles);
                 in0_index++;
-                in1_index += N_block_tiles;
+                in1_index += padded_N_block_tiles;
             }
             tile_regs_commit();
 
             tile_regs_wait();
             uint32_t write_dst_index = 0;
             for (uint32_t h = 0; h < subblock_h; h++) {
-                uint32_t h_tile_id = M_subblock * subblock_h + h;
+                uint32_t h_tile_id = M_start + h;
                 for (uint32_t w = 0; w < subblock_w; w++) {
-                    uint32_t w_tile_id = N_subblock * subblock_w + w;
-                    uint32_t out_tile_id = h_tile_id * N_block_tiles + w_tile_id;
+                    uint32_t w_tile_id = N_start + w;
+                    uint32_t out_tile_id = h_tile_id * padded_N_block_tiles + w_tile_id;
                     pack_tile<true>(write_dst_index, out_cb, out_tile_id);
                     write_dst_index++;
                     dst_index++;
@@ -150,11 +151,22 @@ void MAIN {
     const uint32_t N_num_blocks = div_up(N_tiles_per_core, N_block_tiles);
     const uint32_t M_num_blocks = div_up(M_tiles_per_core, M_block_tiles);
 
+    bool n_forward = true;
+
     bool reuse_in0_block = false;
     bool reuse_in1_block = false;
+    uint32_t current_M_block_tiles = M_block_tiles;
+    uint32_t current_N_block_tiles = N_block_tiles;
+
     for (uint32_t m_block_iter = 0; m_block_iter < M_num_blocks; m_block_iter++) {
-        // uint32_t m_tile = M_start_tile + m_block_iter * M_block_tiles;
+        uint32_t m_tile = M_start_tile + m_block_iter * M_block_tiles;
+        uint32_t m_tile_end = std::min(m_tile + M_block_tiles, M_end_tile);
+        current_M_block_tiles = m_tile_end - m_tile;
         for (uint32_t n_block_iter = 0; n_block_iter < N_num_blocks; n_block_iter++) {
+            uint32_t n_tile = n_forward ? N_start_tile + n_block_iter * N_block_tiles
+                                        : N_start_tile + (N_num_blocks - 1 - n_block_iter) * N_block_tiles;
+            uint32_t n_tile_end = std::min(n_tile + N_block_tiles, N_end_tile);
+            current_N_block_tiles = n_tile_end - n_tile;
             mm_block_init_short(
                 in0_cb,
                 in1_cb,
@@ -175,6 +187,7 @@ void MAIN {
                     in1_cb,
                     intermediate_cb,
                     M_block_tiles,
+                    N_block_tiles,
                     N_block_tiles,
                     K_block_tiles,
                     M_num_subblocks,
@@ -227,6 +240,7 @@ void MAIN {
 #endif
             cb_pop_front(intermediate_cb, out_block_num_tiles);
         }
+        n_forward = !n_forward;
     }
 }
 }  // namespace NAMESPACE
