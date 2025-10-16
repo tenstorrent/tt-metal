@@ -127,7 +127,7 @@ try_download_artifacts() {
   local runs
   echo "🔧 Debug: Running command - gh run list --repo tenstorrent/tt-metal --commit $commit_sha --json conclusion,databaseId,workflowName"
   gh run list --repo tenstorrent/tt-metal --commit "$commit_sha" --json conclusion,databaseId,workflowName
-  runs=$(gh run list --repo tenstorrent/tt-metal --commit "$commit_sha" --json conclusion,databaseId,workflowName)
+  runs="$(gh run list --repo tenstorrent/tt-metal --commit "$commit_sha" --json conclusion,databaseId,workflowName)"
 
   # Check if gh command failed
   if [ $? -ne 0 ]; then
@@ -144,11 +144,11 @@ try_download_artifacts() {
   # Look for successful build workflows (prioritize "All post-commit tests")
   local build_run_id
   # First try to find "All post-commit tests" workflow specifically
-  build_run_id=$(echo "$runs" | jq -r '.[] | select(.workflowName == "All post-commit tests") | select(.conclusion == "success") | .databaseId' | head -1)
+  build_run_id="$(echo "$runs" | jq -r '.[] | select(.workflowName == "All post-commit tests") | select(.conclusion == "success") | .databaseId' | head -1)"
 
   # If not found, fall back to other build workflow patterns
   if [ -z "$build_run_id" ] || [ "$build_run_id" = "null" ]; then
-    build_run_id=$(echo "$runs" | jq -r '.[] | select(.workflowName | test("build|Build|CI|build-wheels")) | select(.conclusion == "success") | .databaseId' | head -1)
+    build_run_id="$(echo "$runs" | jq -r '.[] | select(.workflowName | test("build|Build|CI|build-wheels")) | select(.conclusion == "success") | .databaseId' | head -1)"
   fi
 
   if [ -z "$build_run_id" ] || [ "$build_run_id" = "null" ]; then
@@ -163,7 +163,7 @@ try_download_artifacts() {
 
   # Get list of all artifacts for this run
   local artifacts
-  artifacts=$(gh run view "$build_run_id" --repo tenstorrent/tt-metal --json artifacts --jq '.artifacts[].name' 2>/dev/null || echo "")
+  artifacts="$(gh run view "$build_run_id" --repo tenstorrent/tt-metal --json artifacts --jq '.artifacts[].name' 2>/dev/null || echo "")"
 
   if [ -z "$artifacts" ]; then
     echo "❌ Could not list artifacts for run $build_run_id"
@@ -177,10 +177,10 @@ try_download_artifacts() {
   local artifact_name
   if [ "$tracy_enabled" -eq 1 ]; then
     # Look for artifact with "_profiler_" in the name
-    artifact_name=$(echo "$artifacts" | grep "TTMetal_build_any.*_profiler_" | head -1)
+    artifact_name="$(echo "$artifacts" | grep "TTMetal_build_any.*_profiler_" | head -1)"
   else
     # Look for artifact without "_profiler_" in the name (but may have other suffixes)
-    artifact_name=$(echo "$artifacts" | grep "TTMetal_build_any" | grep -v "_profiler_" | head -1)
+    artifact_name="$(echo "$artifacts" | grep "TTMetal_build_any" | grep -v "_profiler_" | head -1)"
   fi
 
   if [ -z "$artifact_name" ]; then
