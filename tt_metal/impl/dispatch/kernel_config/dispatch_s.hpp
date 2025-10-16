@@ -7,6 +7,7 @@
 
 #include "fd_kernel.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/debug/inspector/inspector.hpp"
 #include <umd/device/types/xy_pair.hpp>
 
 namespace tt {
@@ -43,6 +44,10 @@ public:
         this->logical_core_ = tt::tt_metal::MetalContext::instance().get_dispatch_core_manager().dispatcher_s_core(
             device_id, channel, cq_id_);
         this->kernel_type_ = FDKernelType::DISPATCH;
+
+        auto virtual_core = this->GetVirtualCore();
+        tt::tt_metal::Inspector::set_dispatch_s_core_info(
+            virtual_core, DISPATCH_S, cq_id, device_id, servicing_device_id);
     }
     void CreateKernel() override;
     void GenerateStaticConfigs() override;

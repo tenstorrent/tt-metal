@@ -25,7 +25,7 @@ from ttexalens.elf import MemoryAccess
 
 
 script_config = ScriptConfig(
-    depends=["run_checks", "dispatcher_data", "elfs_cache"],
+    depends=["run_checks", "dispatcher_data", "elfs_cache", "inspector_data"],
 )
 
 
@@ -40,8 +40,12 @@ class DumpWaitGlobalsData:
     cb_fence: int | None = triage_field("cb_fence")
     cmd_ptr: int | None = triage_field("cmd_ptr")
     last_event: int | None = triage_field("last_event")
-    is_d_variant: int | None = triage_field("is_d_variant")
-    is_h_variant: int | None = triage_field("is_h_variant")
+    x: int | None = triage_field("x")
+    y: int | None = triage_field("y")
+    worker_type: str | None = triage_field("worker_type")
+    cq_id: int | None = triage_field("cq_id")
+    servicing_device_id: int | None = triage_field("servicing_device_id")
+    last_event_issued_to_cq: int | None = triage_field("last_event_issued_to_cq")
 
 
 def _read_symbol_value(elf_obj: ParsedElfFile, symbol: str, mem_access: MemoryAccess) -> int | None:
@@ -60,11 +64,13 @@ def read_wait_globals(
     risc_name: str,
     dispatcher_data: DispatcherData,
     elf_cache: ElfsCache,
+    inspector_data: InspectorData,
 ) -> DumpWaitGlobalsData | None:
     """Read wait globals and related constants from the current kernel at this core.
 
     Returns a populated DumpWaitGlobalsData if any relevant values were found; otherwise None.
     """
+
     # If no kernel loaded, nothing to read
     dispatcher_core_data = dispatcher_data.get_core_data(location, risc_name)
     if dispatcher_core_data.kernel_path is None:
@@ -92,8 +98,6 @@ def read_wait_globals(
     stream_addr1 = None
     stream_width = None
 
-    is_d_variant = get_const_value("is_d_variant")
-    is_h_variant = get_const_value("is_h_variant")
     stream_addr0 = get_const_value("stream_addr0")
     stream_addr1 = get_const_value("stream_addr1")
     stream_width = get_const_value("stream_width")
@@ -110,16 +114,42 @@ def read_wait_globals(
         # Wrap the global wait count to the stream width, to match the stream wrap behavior
         last_wait_count = last_wait_count & ((1 << stream_width) - 1)
 
-    has_values = (
-        last_wait_count is not None
-        or last_wait_stream is not None
-        or is_d_variant is not None
-        or is_h_variant is not None
-    )
+    has_values = last_wait_count is not None or last_wait_stream is not None
 
-    if not has_values:
+    # Get virtual coordinate for this specific core
+    virtual_coord = location.to("translated")
+    chip_id = location._device._id
+    x, y = virtual_coord
+
+    # Create virtual core object
+    vc = VirtualCore()
+    vc.chip = chip_id
+    vc.x = x
+    vc.y = y
+
+    # Try to get dispatch core info for this specific location
+    dispatch_core_info = get_core_info(inspector_data, vc, "getDispatchCoreInfo")
+    # Try to get dispatch_s core info for this specific location
+    dispatch_s_core_info = get_core_info(inspector_data, vc, "getDispatchSCoreInfo")
+    # Try to get prefetch core info for this specific location
+    prefetch_core_info = get_core_info(inspector_data, vc, "getPrefetchCoreInfo")
+
+    # Override dispatch_core_info based on kernel
+    # If its a dispatch_subordinate kernel, use the dispatch_s_core_info
+    # instead of dispatch_core_info
+    if dispatcher_core_data.kernel_name == "cq_dispatch_subordinate":
+        dispatch_core_info = dispatch_s_core_info
+
+    # If there are no values and no dispatch/prefetch core info, return None
+    # All three should be None if the core is not a dispatch/dispatch_s/prefetch core
+    if not has_values and not any([dispatch_core_info, dispatch_s_core_info, prefetch_core_info]):
         return None
 
+    # Get the core info for the core
+    core_info = dispatch_core_info or prefetch_core_info
+
+    # BRISC = cq_prefetch + cq_dispatch
+    # NCRISC = cq_dispatch_subordinate
     return DumpWaitGlobalsData(
         location=location,
         risc_name=risc_name,
@@ -130,8 +160,12 @@ def read_wait_globals(
         cb_fence=circular_buffer_fence,
         cmd_ptr=command_pointer,
         last_event=last_event,
-        is_d_variant=is_d_variant,
-        is_h_variant=is_h_variant,
+        x=x,
+        y=y,
+        worker_type=getattr(core_info, "workType", None),
+        cq_id=getattr(core_info, "cqId", None),
+        servicing_device_id=getattr(core_info, "servicingDeviceId", None),
+        last_event_issued_to_cq=getattr(core_info, "eventID", None),
     )
 
 
@@ -140,9 +174,11 @@ def run(args, context: Context):
     run_checks = get_run_checks(args, context)
     dispatcher_data = get_dispatcher_data(args, context)
     elfs_cache = get_elfs_cache(args, context)
+    inspector_data = get_inspector_data(args, context)
+
     BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth"]
     return run_checks.run_per_core_check(
-        lambda location, risc_name: read_wait_globals(location, risc_name, dispatcher_data, elfs_cache),
+        lambda location, risc_name: read_wait_globals(location, risc_name, dispatcher_data, elfs_cache, inspector_data),
         block_filter=BLOCK_TYPES_TO_CHECK,
     )
 

@@ -6,9 +6,12 @@
 #include <stdexcept>
 #include "impl/debug/inspector/rpc_server_controller.hpp"
 #include "impl/debug/inspector/logger.hpp"
+#include "impl/dispatch/system_memory_manager.hpp"
 #include "impl/context/metal_context.hpp"
 #include "distributed/mesh_workload_impl.hpp"
 #include "jit_build/build_env_manager.hpp"
+#include <tt-metalium/device_pool.hpp>
+#include <tt_stl/reflection.hpp>
 
 namespace tt::tt_metal::inspector {
 
@@ -31,6 +34,18 @@ Data::Data()
             get_rpc_server().setGetKernelCallback(
                 [this](auto params, auto result) { this->rpc_get_kernel(params, result); });
             get_rpc_server().setGetAllBuildEnvsCallback([this](auto result) { this->rpc_get_all_build_envs(result); });
+            get_rpc_server().setGetDispatchCoreInfoCallback(
+                [this](auto params, auto result) { this->rpc_get_dispatch_core_info(params, result); });
+            get_rpc_server().setGetPrefetchCoreInfoCallback(
+                [this](auto params, auto result) { this->rpc_get_prefetch_core_info(params, result); });
+            get_rpc_server().setGetAllDispatchCoreInfosCallback(
+                [this](auto result) { this->rpc_get_all_dispatch_core_infos(result); });
+            get_rpc_server().setGetDispatchSCoreInfoCallback(
+                [this](auto params, auto result) { this->rpc_get_dispatch_s_core_info(params, result); });
+            get_rpc_server().setGetAllDispatchSCoreInfosCallback(
+                [this](auto result) { this->rpc_get_all_dispatch_s_core_infos(result); });
+            get_rpc_server().setGetAllPrefetchCoreInfosCallback(
+                [this](auto result) { this->rpc_get_all_prefetch_core_infos(result); });
         } catch (const std::exception& e) {
             TT_INSPECTOR_THROW("Failed to start Inspector RPC server: {}", e.what());
         }
@@ -150,32 +165,8 @@ void Data::rpc_get_mesh_workloads(rpc::Inspector::GetMeshWorkloadsResults::Build
 }
 
 void Data::rpc_get_devices_in_use(rpc::Inspector::GetDevicesInUseResults::Builder& results) {
-    std::scoped_lock locks(programs_mutex, mesh_devices_mutex, mesh_workloads_mutex);
-    std::set<uint64_t> device_ids;
-
-    // First add all devices from mesh workloads
-    for (const auto& [mesh_workload_id, mesh_workload_data] : mesh_workloads_data) {
-        for (const auto& [mesh_device_id, status] : mesh_workload_data.binary_status_per_device) {
-            if (status != ProgramBinaryStatus::NotSent) {
-                auto mesh_device_it = mesh_devices_data.find(mesh_device_id);
-                if (mesh_device_it != mesh_devices_data.end()) {
-                    auto* mesh_device = mesh_device_it->second.mesh_device;
-                    for (auto& device : mesh_device->get_devices()) {
-                        device_ids.insert(static_cast<uint64_t>(device->id()));
-                    }
-                }
-            }
-        }
-    }
-
-    // Add all devices from programs
-    for (const auto& [program_id, program_data] : programs_data) {
-        for (const auto& [device_id, status] : program_data.binary_status_per_device) {
-            if (status != ProgramBinaryStatus::NotSent) {
-                device_ids.insert(static_cast<uint64_t>(device_id));
-            }
-        }
-    }
+    // Get all active device ids
+    auto device_ids = DevicePool::instance().get_all_active_device_ids();
 
     // Write result
     auto result_device_ids = results.initDeviceIds(device_ids.size());
@@ -233,6 +224,218 @@ void Data::rpc_get_all_build_envs(rpc::Inspector::GetAllBuildEnvsResults::Builde
         build_info.setFirmwarePath(build_env.firmware_root_path);
         build_info.setFwCompileHash(fw_compile_hash);
     }
+}
+
+// Get dispatch core info by virtual core
+void Data::rpc_get_dispatch_core_info(
+    rpc::Inspector::GetDispatchCoreInfoParams::Reader params,
+    rpc::Inspector::GetDispatchCoreInfoResults::Builder results) {
+    // This populates the cq_to_event_by_device map with an on-demand snapshot
+    // of the command queue event info
+    this->rpc_all_command_queue_event_infos();
+    std::lock_guard<std::mutex> lock(dispatch_core_info_mutex);
+    const auto key = params.getKey();
+    const tt_cxy_pair key_cxy{key.getChip(), key.getX(), key.getY()};
+    const auto it = dispatch_core_info.find(key_cxy);
+    if (it == dispatch_core_info.end()) {
+        throw std::runtime_error("Dispatch core info not found");
+    }
+    const auto& info = it->second;
+    // Set default event_id to UINT32_MAX if not found in cq_to_event_by_device
+    uint32_t event_id = UINT32_MAX;
+    if (info.cq_id < cq_to_event_by_device[info.device_id].size()) {
+        event_id = cq_to_event_by_device[info.device_id][info.cq_id];
+    }
+
+    auto out = results.initInfo();
+    out.setDeviceId(info.device_id);
+    out.setServicingDeviceId(info.servicing_device_id);
+    // Convert enum to string
+    std::string worker_type_str(enchantum::to_string(info.worker_type));
+    out.setWorkType(worker_type_str);
+    out.setEventID(event_id);
+    out.setCqId(info.cq_id);
+}
+
+// Get dispatch_s core info by virtual core
+void Data::rpc_get_dispatch_s_core_info(
+    rpc::Inspector::GetDispatchSCoreInfoParams::Reader params,
+    rpc::Inspector::GetDispatchSCoreInfoResults::Builder results) {
+    // This populates the cq_to_event_by_device map with an on-demand snapshot
+    // of the command queue event info
+    this->rpc_all_command_queue_event_infos();
+    std::lock_guard<std::mutex> lock(dispatch_s_core_info_mutex);
+    const auto key = params.getKey();
+    const tt_cxy_pair key_cxy{key.getChip(), key.getX(), key.getY()};
+    const auto it = dispatch_s_core_info.find(key_cxy);
+    if (it == dispatch_s_core_info.end()) {
+        throw std::runtime_error("Dispatch_s core info not found");
+    }
+    const auto& info = it->second;
+    // Set default event_id to UINT32_MAX if not found in cq_to_event_by_device
+    uint32_t event_id = UINT32_MAX;
+    if (info.cq_id < cq_to_event_by_device[info.device_id].size()) {
+        event_id = cq_to_event_by_device[info.device_id][info.cq_id];
+    }
+
+    auto out = results.initInfo();
+    out.setDeviceId(info.device_id);
+    out.setServicingDeviceId(info.servicing_device_id);
+    // Convert enum to string
+    std::string worker_type_str(enchantum::to_string(info.worker_type));
+    out.setWorkType(worker_type_str);
+    out.setEventID(event_id);
+    out.setCqId(info.cq_id);
+}
+
+// Get prefetch core info by virtual core
+void Data::rpc_get_prefetch_core_info(
+    rpc::Inspector::GetPrefetchCoreInfoParams::Reader params,
+    rpc::Inspector::GetPrefetchCoreInfoResults::Builder results) {
+    // This populates the cq_to_event_by_device map with an on-demand snapshot
+    // of the command queue event info
+    this->rpc_all_command_queue_event_infos();
+    std::lock_guard<std::mutex> lock(prefetcher_core_info_mutex);
+    const auto key = params.getKey();
+    const tt_cxy_pair key_cxy{key.getChip(), key.getX(), key.getY()};
+    const auto it = prefetcher_core_info.find(key_cxy);
+    if (it == prefetcher_core_info.end()) {
+        throw std::runtime_error("Prefetcher core info not found");
+    }
+    const auto& info = it->second;
+    // Set default event_id to UINT32_MAX if not found in cq_to_event_by_device
+    uint32_t event_id = UINT32_MAX;
+    if (info.cq_id < cq_to_event_by_device[info.device_id].size()) {
+        event_id = cq_to_event_by_device[info.device_id][info.cq_id];
+    }
+
+    auto out = results.initInfo();
+    out.setDeviceId(info.device_id);
+    out.setServicingDeviceId(info.servicing_device_id);
+    // Convert enum to string
+    std::string worker_type_str(enchantum::to_string(info.worker_type));
+    out.setWorkType(worker_type_str);
+    out.setEventID(event_id);
+    out.setCqId(info.cq_id);
+}
+
+// Get all dispatch core info
+void Data::rpc_get_all_dispatch_core_infos(rpc::Inspector::GetAllDispatchCoreInfosResults::Builder results) {
+    // This populates the cq_to_event_by_device map with an on-demand snapshot
+    // of the command queue event info
+    this->rpc_all_command_queue_event_infos();
+    // Lock to protect cq_to_event_by_device and dispatch_core_info
+    std::scoped_lock locks(dispatch_core_info_mutex, cq_to_event_by_device_mutex);
+    // Populate the results with the dispatch core info  and corresponding cq_id event info
+    auto list = results.initEntries(dispatch_core_info.size());
+    size_t i = 0;
+    for (const auto& kv : dispatch_core_info) {
+        // Get key, value from dispatch_core_info
+        const tt_cxy_pair& k = kv.first;
+        const auto& info = kv.second;
+        int event_id = -1;
+        if (info.cq_id < cq_to_event_by_device[info.device_id].size()) {
+            event_id = cq_to_event_by_device[info.device_id][info.cq_id];
+        }
+        auto e = list[i++];
+        // Populate the key
+        auto key = e.initKey();
+        key.setChip(k.chip);
+        key.setX(k.x);
+        key.setY(k.y);
+        // Populate the info
+        auto out = e.initInfo();
+        out.setDeviceId(info.device_id);
+        out.setServicingDeviceId(info.servicing_device_id);
+        // Convert enum to string
+        std::string worker_type_str(enchantum::to_string(info.worker_type));
+        out.setWorkType(worker_type_str);
+        out.setEventID(event_id);
+        out.setCqId(info.cq_id);
+    }
+}
+
+// Get all dispatch_s core info
+void Data::rpc_get_all_dispatch_s_core_infos(rpc::Inspector::GetAllDispatchSCoreInfosResults::Builder results) {
+    // This populates the cq_to_event_by_device map with an on-demand snapshot
+    // of the command queue event info
+    this->rpc_all_command_queue_event_infos();
+    // Lock to protect cq_to_event_by_device and dispatch_core_info
+    std::scoped_lock locks(dispatch_s_core_info_mutex, cq_to_event_by_device_mutex);
+    // Populate the results with the dispatch core info  and corresponding cq_id event info
+    auto list = results.initEntries(dispatch_s_core_info.size());
+    size_t i = 0;
+    for (const auto& kv : dispatch_s_core_info) {
+        // Get key, value from dispatch_s_core_info
+        const tt_cxy_pair& k = kv.first;
+        const auto& info = kv.second;
+        int event_id = -1;
+        if (info.cq_id < cq_to_event_by_device[info.device_id].size()) {
+            event_id = cq_to_event_by_device[info.device_id][info.cq_id];
+        }
+        auto e = list[i++];
+        // Populate the key
+        auto key = e.initKey();
+        key.setChip(k.chip);
+        key.setX(k.x);
+        key.setY(k.y);
+        // Populate the info
+        auto out = e.initInfo();
+        out.setDeviceId(info.device_id);
+        out.setServicingDeviceId(info.servicing_device_id);
+        // Convert enum to string
+        std::string worker_type_str(enchantum::to_string(info.worker_type));
+        out.setWorkType(worker_type_str);
+        out.setEventID(event_id);
+        out.setCqId(info.cq_id);
+    }
+}
+
+// Get all prefetch core info
+void Data::rpc_get_all_prefetch_core_infos(rpc::Inspector::GetAllPrefetchCoreInfosResults::Builder results) {
+    // This populates the cq_to_event_by_device map with an on-demand snapshot
+    // of the command queue event info
+    this->rpc_all_command_queue_event_infos();
+    // Lock to protect cq_to_event_by_device and prefetcher_core_info
+    std::scoped_lock locks(prefetcher_core_info_mutex, cq_to_event_by_device_mutex);
+    // Populate the results with the dispatch core info  and corresponding cq_id event info
+    auto list = results.initEntries(prefetcher_core_info.size());
+    size_t i = 0;
+    for (const auto& kv : prefetcher_core_info) {
+        // Get key, value from prefetcher_core_info
+        const tt_cxy_pair& k = kv.first;
+        const auto& info = kv.second;
+        int event_id = -1;
+        if (info.cq_id < cq_to_event_by_device[info.device_id].size()) {
+            event_id = cq_to_event_by_device[info.device_id][info.cq_id];
+        }
+        auto e = list[i++];
+        // Populate the key
+        auto key = e.initKey();
+        key.setChip(k.chip);
+        key.setX(k.x);
+        key.setY(k.y);
+        // Populate the info
+        auto out = e.initInfo();
+        out.setDeviceId(info.device_id);
+        out.setServicingDeviceId(info.servicing_device_id);
+        // Convert enum to string
+        std::string worker_type_str(enchantum::to_string(info.worker_type));
+        out.setWorkType(worker_type_str);
+        out.setEventID(event_id);
+        out.setCqId(info.cq_id);
+    }
+}
+
+// Get all devices from mesh on-demand (snapshot)
+// For each device, get system manager queue
+// Get last issued event_id for each cq
+// Append to results
+void Data::rpc_all_command_queue_event_infos() {
+    // Get all active devices
+    auto map = DevicePool::instance().get_all_command_queue_event_infos();
+    std::lock_guard<std::mutex> lock(cq_to_event_by_device_mutex);
+    cq_to_event_by_device = std::move(map);
 }
 
 // Helper function to convert internal enum to Cap'n Proto enum
