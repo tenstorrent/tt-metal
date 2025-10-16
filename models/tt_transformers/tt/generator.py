@@ -34,9 +34,9 @@ class SamplingParams:
     The same data class exists in vLLM at vllm/worker/tt_model_runner.py.
     """
 
-    temperature: float
-    top_k: int
-    top_p: float
+    temperature: float | list[float]
+    top_k: int | list[int]
+    top_p: float | list[float]
 
 
 class Generator:
@@ -541,7 +541,9 @@ class Generator:
         empty_slots=None,
         **kwargs,
     ):
-        if self.model_args[0].checkpoint_type == CheckpointType.HuggingFace:
+        if (self.model_args[0].checkpoint_type == CheckpointType.HuggingFace) and (
+            not self.model_args[0].is_llama_vision()
+        ):
             logits = self.prefill_forward_text(
                 tokens,
                 page_table=page_table,
@@ -758,7 +760,9 @@ class Generator:
         enable_trace=True,
         read_from_device=True,
     ):
-        if self.model_args[0].checkpoint_type == CheckpointType.HuggingFace:
+        if (self.model_args[0].checkpoint_type == CheckpointType.HuggingFace) and (
+            not self.model_args[0].is_llama_vision()
+        ):
             return self.decode_forward_text(
                 tokens,
                 start_pos,
