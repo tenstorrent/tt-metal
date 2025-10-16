@@ -23,7 +23,7 @@ from models.experimental.stable_diffusion_xl_base.utils.clip_fid_ranges import (
     accuracy_check_clip,
     accuracy_check_fid,
     get_appr_delta_metric,
-    targets,
+    TARGET_JSON_PATH,
 )
 
 test_demo.__test__ = False
@@ -156,6 +156,12 @@ def test_accuracy_sdxl(
 
     avg_gen_end_to_end = profiler.get("end_to_end_generation")
     model_name = "sdxl-tp" if use_cfg_parallel else "sdxl"
+
+    with open(TARGET_JSON_PATH) as f:
+        targets = json.load(f)
+    if use_cfg_parallel:
+        for key in ["functional", "complete", "target"]:
+            targets["perf"][key] /= 2
 
     data = {
         "model": model_name,
