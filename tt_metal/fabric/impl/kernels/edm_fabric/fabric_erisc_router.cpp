@@ -25,6 +25,7 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_flow_control_helpers.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_packet_recorder.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/fabric_bandwidth_telemetry.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/fabric_code_profiling.hpp"
 
 #include "noc_overlay_parameters.h"
 #include "tt_metal/hw/inc/utils/utils.h"
@@ -1703,6 +1704,11 @@ void run_receiver_channel_step_impl(
     auto& wr_sent_counter = receiver_channel_pointers.wr_sent_counter;
     bool unwritten_packets = get_ptr_val<to_receiver_pkts_sent_id>() != 0;
 
+    // Code profiling timer for receiver channel forward
+    NamedProfiler<CodeProfilingTimerType::RECEIVER_CHANNEL_FORWARD, code_profiling_enabled_timers_bitfield, code_profiling_buffer_base_addr> receiver_forward_timer;
+    receiver_forward_timer.set_should_dump(unwritten_packets);
+    receiver_forward_timer.open();
+
     if (unwritten_packets) {
         invalidate_l1_cache();
         auto receiver_buffer_index = wr_sent_counter.get_buffer_index();
@@ -1792,6 +1798,9 @@ void run_receiver_channel_step_impl(
             increment_local_update_ptr_val<to_receiver_pkts_sent_id>(-1);
         }
     }
+
+    // Close the code profiling timer
+    receiver_forward_timer.close();
 
     if constexpr (!fuse_receiver_flush_and_completion_ptr) {
         auto& wr_flush_counter = receiver_channel_pointers.wr_flush_counter;
@@ -2394,6 +2403,10 @@ void kernel_main() {
         init_ptr_val<to_sender_packets_acked_streams[4]>(0);
         init_ptr_val<to_sender_packets_completed_streams[3]>(0);
         init_ptr_val<to_sender_packets_completed_streams[4]>(0);
+    }
+
+    if constexpr (code_profiling_enabled_timers_bitfield != 0) {
+        clear_code_profiling_buffer(code_profiling_buffer_base_addr);
     }
 
     // TODO: CONVERT TO SEMAPHORE
