@@ -42,6 +42,7 @@ void kernel_main() {
     constexpr uint32_t cb_l1_array = get_compile_time_arg_val(26);
 
 #ifdef SPLIT_READER_OVERLAPPED
+    constexpr bool split_reader_overlapped = true;
     const uint32_t act_split_reader_sync_first_semaphore_addr = get_semaphore(get_compile_time_arg_val(30));
     const uint32_t act_split_reader_sync_second_semaphore_addr = get_semaphore(get_compile_time_arg_val(31));
 
@@ -49,6 +50,10 @@ void kernel_main() {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(act_split_reader_sync_first_semaphore_addr);
     volatile tt_l1_ptr uint32_t* act_split_reader_sync_second_semaphore_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(act_split_reader_sync_second_semaphore_addr);
+#else
+    constexpr bool split_reader_overlapped = false;
+    volatile tt_l1_ptr uint32_t* act_split_reader_sync_first_semaphore_addr_ptr = nullptr;
+    volatile tt_l1_ptr uint32_t* act_split_reader_sync_second_semaphore_addr_ptr = nullptr;
 #endif
 
     if constexpr (needs_act_block_zero_out) {
@@ -104,9 +109,9 @@ void kernel_main() {
     // set_state uses just x/y from the get_noc_addr, addr is ignored
     uint32_t act_l1_read_addr = get_read_ptr(cb_id_sharded_act);
 
-#ifndef SPLIT_READER_OVERLAPPED
-    noc_async_read_one_packet_set_state(get_noc_addr(act_l1_read_addr), coalesced_read_bytes);
-#endif
+    if constexpr (!split_reader_overlapped) {
+        noc_async_read_one_packet_set_state(get_noc_addr(act_l1_read_addr), coalesced_read_bytes);
+    }
 
     constexpr uint32_t window_outer_offset = padded_conv_act_size_w * conv_act_c_read_bytes * dilation_h;
     constexpr uint32_t stride_h_bytes = padded_conv_act_size_w * conv_act_c_read_bytes * dilation_h;
@@ -120,17 +125,13 @@ void kernel_main() {
         uint32_t reader_offset = act_l1_read_addr;
         for (uint32_t outer = 0; outer < window_outer; outer++) {
             reader_idx = start_reader_idx;
-#ifndef SPLIT_READER_OVERLAPPED
             cb_reserve_back(cb_id_act_row_major_bfloat16, act_block_num_tiles_read);
-#else
-            cb_reserve_back(cb_id_act_row_major_bfloat16, act_block_num_tiles);
-#endif
             if (is_sender_core) {
                 uint32_t l1_write_addr_act = get_write_ptr(cb_id_act_row_major_bfloat16);
-#ifdef SPLIT_READER_OVERLAPPED
-                noc_semaphore_set(act_split_reader_sync_first_semaphore_addr_ptr, VALID);
-                noc_async_read_one_packet_set_state(get_noc_addr(act_l1_read_addr), coalesced_read_bytes);
-#endif
+                if constexpr (split_reader_overlapped) {
+                    noc_semaphore_set(act_split_reader_sync_first_semaphore_addr_ptr, VALID);
+                    noc_async_read_one_packet_set_state(get_noc_addr(act_l1_read_addr), coalesced_read_bytes);
+                }
                 read_activation_data<
                     sliced_inner_dim,
                     dilation_w,
@@ -148,16 +149,12 @@ void kernel_main() {
                     reader_idx,
                     act_l1_read_addr,
                     stride_h_bytes);
-#ifdef SPLIT_READER_OVERLAPPED
-                noc_semaphore_wait(act_split_reader_sync_second_semaphore_addr_ptr, VALID);
-                noc_semaphore_set(act_split_reader_sync_second_semaphore_addr_ptr, INVALID);
-#endif
+                if constexpr (split_reader_overlapped) {
+                    noc_semaphore_wait(act_split_reader_sync_second_semaphore_addr_ptr, VALID);
+                    noc_semaphore_set(act_split_reader_sync_second_semaphore_addr_ptr, INVALID);
+                }
             }
-#ifndef SPLIT_READER_OVERLAPPED
             cb_push_back(cb_id_act_row_major_bfloat16, act_block_num_tiles_read);
-#else
-            cb_push_back(cb_id_act_row_major_bfloat16, act_block_num_tiles);
-#endif
 
 #ifndef SKIP_MCAST
             // Round robin self-mcast and receive tilized act matrix in cb_id_act

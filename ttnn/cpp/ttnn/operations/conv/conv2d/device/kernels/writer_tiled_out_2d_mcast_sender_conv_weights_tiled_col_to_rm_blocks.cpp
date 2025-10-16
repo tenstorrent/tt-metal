@@ -50,6 +50,7 @@ void kernel_main() {
     constexpr uint32_t stride_w = get_compile_time_arg_val(26);
     constexpr uint32_t weight_size_h = get_compile_time_arg_val(27);  // Input filter window height
 #ifdef SPLIT_READER_OVERLAPPED
+    constexpr bool split_reader_overlapped = true;
     const uint32_t act_split_reader_sync_first_semaphore_addr = get_semaphore(get_compile_time_arg_val(28));
     const uint32_t act_split_reader_sync_second_semaphore_addr = get_semaphore(get_compile_time_arg_val(29));
     constexpr uint32_t act_write_offset = get_compile_time_arg_val(30);
@@ -66,6 +67,16 @@ void kernel_main() {
 
     constexpr uint32_t ct_arg_idx = 34;
 #else
+    constexpr bool split_reader_overlapped = false;
+    constexpr uint32_t act_write_offset = 0;
+    constexpr uint32_t act_block_size = 0;
+    constexpr uint32_t read_ind_stride = 0;
+    constexpr uint32_t act_cb_block_cnt = 0;
+
+    const uint32_t base_write_addr = 0;
+
+    volatile tt_l1_ptr uint32_t* act_split_reader_sync_first_semaphore_addr_ptr = nullptr;
+    volatile tt_l1_ptr uint32_t* act_split_reader_sync_second_semaphore_addr_ptr = nullptr;
     constexpr uint32_t ct_arg_idx = 28;
 #endif
 #else
@@ -163,6 +174,7 @@ void kernel_main() {
     // OUTER most loop is looping over out blocks in width dim because blocks from compute are in col major order.
     // Write out col major blocks in row major layout to output
     uint32_t weight_start_tile_id = out_start_tile_id_w;
+    uint32_t l1_write_addr_act = 0;
     for (uint32_t bw = 0; bw < out_num_blocks_w; bw++) {
         for (uint32_t bh = 0; bh < out_num_blocks_h; bh++) {
 #ifdef SPLIT_READER
@@ -171,17 +183,17 @@ void kernel_main() {
             for (uint32_t height_block_index = 0; height_block_index < num_blocks_weight_h; height_block_index++) {
 #ifdef SPLIT_READER
                 reader_idx = start_reader_idx;
-#ifndef SPLIT_READER_OVERLAPPED
-                cb_reserve_back(cb_id_act_second_reader, act_block_num_tiles_split_last);
-#endif
+                if constexpr (!split_reader_overlapped) {
+                    cb_reserve_back(cb_id_act_second_reader, act_block_num_tiles_split_last);
+                }
                 if (is_sender_core) {
-#ifdef SPLIT_READER_OVERLAPPED
-                    noc_semaphore_wait(act_split_reader_sync_first_semaphore_addr_ptr, VALID);
-                    noc_semaphore_set(act_split_reader_sync_first_semaphore_addr_ptr, INVALID);
-                    uint32_t l1_write_addr_act = get_write_ptr(cb_id_act_second_reader) + act_write_offset;
-#else
-                    uint32_t l1_write_addr_act = get_write_ptr(cb_id_act_second_reader);
-#endif
+                    if constexpr (split_reader_overlapped) {
+                        noc_semaphore_wait(act_split_reader_sync_first_semaphore_addr_ptr, VALID);
+                        noc_semaphore_set(act_split_reader_sync_first_semaphore_addr_ptr, INVALID);
+                        l1_write_addr_act = get_write_ptr(cb_id_act_second_reader) + act_write_offset;
+                    } else {
+                        l1_write_addr_act = get_write_ptr(cb_id_act_second_reader);
+                    }
                     noc_async_read_one_packet_set_state(get_noc_addr(act_l1_read_addr), coalesced_read_bytes);
                     read_activation_data<
                         sliced_inner_dim,
@@ -200,20 +212,20 @@ void kernel_main() {
                         reader_idx,
                         act_l1_read_addr,
                         stride_h_bytes);
-#ifdef SPLIT_READER_OVERLAPPED
-                    cb_ind_offset = (cb_ind_offset + read_ind_stride) % act_cb_block_cnt;
-                    get_local_cb_interface(cb_id_act_second_reader).fifo_wr_ptr =
-                        base_write_addr + cb_ind_offset * act_block_size;
-                    noc_semaphore_set(act_split_reader_sync_second_semaphore_addr_ptr, VALID);
-#endif
+                    if constexpr (split_reader_overlapped) {
+                        cb_ind_offset = (cb_ind_offset + read_ind_stride) % act_cb_block_cnt;
+                        get_local_cb_interface(cb_id_act_second_reader).fifo_wr_ptr =
+                            base_write_addr + cb_ind_offset * act_block_size;
+                        noc_semaphore_set(act_split_reader_sync_second_semaphore_addr_ptr, VALID);
+                    }
                 }
-#ifndef SPLIT_READER_OVERLAPPED
-                cb_push_back(cb_id_act_second_reader, act_block_num_tiles_split_last);
-#endif
-#endif
+                if constexpr (!split_reader_overlapped) {
+                    cb_push_back(cb_id_act_second_reader, act_block_num_tiles_split_last);
+                }
                 if (skip_work) {
                     continue;
                 }
+#endif
                 // Compute height block offset once per outer loop iteration
                 const uint32_t height_block_offset = height_block_index * height_stride_factor;
                 for (uint32_t weight_tile_h_outer_i = 0; weight_tile_h_outer_i < weight_block_height_num_outer;

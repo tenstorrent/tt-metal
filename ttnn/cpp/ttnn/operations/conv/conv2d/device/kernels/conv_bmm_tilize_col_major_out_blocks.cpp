@@ -282,6 +282,7 @@ void MAIN {
     constexpr bool split_reader = false;
     constexpr bool split_reader_overlapped = false;
     constexpr uint32_t in0_num_subblocks_read = reader_num_h_subblocks;
+    constexpr uint32_t in0_num_subblocks_read_last = 0;
 #endif
 
     // For block sharded conv2d, compute kernels may be scheduled on cores that only need tilize
@@ -339,12 +340,11 @@ void MAIN {
 #endif
                         tilize_in<true, !split_reader || split_reader_overlapped>(
                             in0_pretilize_cb_id, in0_block_w, in0_num_subblocks_read, tilized_in0_cb_id);
-#ifdef SPLIT_READER
-#ifndef SPLIT_READER_OVERLAPPED
-                        tilize_in<false, true>(
-                            in0_cb_second_reader_id, in0_block_w, in0_num_subblocks_read_last, tilized_in0_cb_id);
-#endif
-#endif
+
+                        if constexpr (split_reader && !split_reader_overlapped) {
+                            tilize_in<false, true>(
+                                in0_cb_second_reader_id, in0_block_w, in0_num_subblocks_read_last, tilized_in0_cb_id);
+                        }
                         mm_block_init_short_with_both_dt(
                             in0_cb_id,
                             in1_cb_id,
