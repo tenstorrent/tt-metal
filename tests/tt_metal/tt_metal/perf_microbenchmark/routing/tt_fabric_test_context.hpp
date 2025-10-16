@@ -1485,7 +1485,7 @@ private:
 
     // Golden CSV comparison statistics
     std::filesystem::path comparison_statistics_csv_file_path_;
-    
+
     // Ethernet core buffer readback helper
     std::unique_ptr<EthCoreBufferReadback> eth_readback_;
 
