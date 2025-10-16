@@ -18,20 +18,19 @@ void MAIN {
     constexpr uint32_t block_size = get_compile_time_arg_val(4);  // number of tiles along height that make up a block
 
     const uint32_t total_blocks = get_arg_val<uint32_t>(0);
+    compute_kernel_hw_startup(src_cb_id, out_cb_id0);
 
 #ifdef RUNTIME_TILES_PER_ROW
     const uint32_t tiles_per_row = get_arg_val<uint32_t>(1);  // number of tiles along width of shard
 
-    bool use_pack_untilize = false;
+    constexpr bool use_pack_untilize = false;
 
-    compute_kernel_hw_startup(src_cb_id, out_cb_id0);
     untilize_init(src_cb_id);
     const uint32_t tiles_per_block = block_size * tiles_per_row;
 #else
     constexpr uint32_t tiles_per_row = get_compile_time_arg_val(3);  // number of tiles along width of shard
     constexpr bool use_pack_untilize = tiles_per_row <= MAX_PACK_UNTILIZE_WIDTH;
 
-    compute_kernel_hw_startup(src_cb_id, out_cb_id0);
     if constexpr (use_pack_untilize) {
         pack_untilize_init<tiles_per_row>(src_cb_id, out_cb_id0);
     } else {
@@ -57,7 +56,7 @@ void MAIN {
         cb_push_back(out_cb_id, tiles_per_block);
         cb_pop_front(src_cb_id, tiles_per_block);
     }
-    if (use_pack_untilize) {
+    if constexpr (use_pack_untilize) {
         pack_untilize_uninit(out_cb_id0);
     }
 }
