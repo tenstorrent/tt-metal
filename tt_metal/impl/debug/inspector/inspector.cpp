@@ -290,6 +290,102 @@ void Inspector::mesh_workload_set_program_binary_status(
     }
 }
 
+// Set dispatch core info
+void Inspector::set_dispatch_core_info(
+    const tt_cxy_pair& virtual_core,
+    const tt::tt_metal::DispatchWorkerType& type,
+    const uint8_t cq_id,
+    const ChipId device_id,
+    const ChipId servicing_device_id) {
+    if (!is_enabled()) {
+        return;
+    }
+    try {
+        auto* data = get_inspector_data();
+        std::lock_guard<std::mutex> lock(data->dispatch_core_info_mutex);
+        data->dispatch_core_info[virtual_core] = {type, device_id, servicing_device_id, cq_id};
+        data->logger.log_dispatch_core_info(virtual_core, data->dispatch_core_info[virtual_core]);
+    } catch (const std::exception& e) {
+        TT_INSPECTOR_LOG("Failed to log dispatch core info: {}", e.what());
+    }
+}
+
+// Set dispatch_s core info
+void Inspector::set_dispatch_s_core_info(
+    const tt_cxy_pair& virtual_core,
+    const tt::tt_metal::DispatchWorkerType& type,
+    const uint8_t cq_id,
+    const ChipId device_id,
+    const ChipId servicing_device_id) {
+    if (!is_enabled()) {
+        return;
+    }
+    try {
+        auto* data = get_inspector_data();
+        std::lock_guard<std::mutex> lock(data->dispatch_s_core_info_mutex);
+        data->dispatch_s_core_info[virtual_core] = {type, device_id, servicing_device_id, cq_id};
+        data->logger.log_dispatch_s_core_info(virtual_core, data->dispatch_s_core_info[virtual_core]);
+    } catch (const std::exception& e) {
+        TT_INSPECTOR_LOG("Failed to log dispatch_s core info: {}", e.what());
+    }
+}
+
+// Set prefetcher core info
+void Inspector::set_prefetcher_core_info(
+    const tt_cxy_pair& virtual_core,
+    const tt::tt_metal::DispatchWorkerType& type,
+    const uint8_t cq_id,
+    const ChipId device_id,
+    const ChipId servicing_device_id) {
+    if (!is_enabled()) {
+        return;
+    }
+    try {
+        auto* data = get_inspector_data();
+        std::lock_guard<std::mutex> lock(data->prefetcher_core_info_mutex);
+        data->prefetcher_core_info[virtual_core] = {type, device_id, servicing_device_id, cq_id};
+        data->logger.log_prefetcher_core_info(virtual_core, data->prefetcher_core_info[virtual_core]);
+    } catch (const std::exception& e) {
+        TT_INSPECTOR_LOG("Failed to log prefetcher core info: {}", e.what());
+    }
+}
+
+// Clear dispatch core info to clear stale entries
+// Used in MetalContext::teardown() to clear stale entries
+void Inspector::clear_all_core_info() {
+    if (!is_enabled()) {
+        return;
+    }
+    try {
+        auto* data = get_inspector_data();
+        std::scoped_lock locks(
+            data->dispatch_core_info_mutex, data->dispatch_s_core_info_mutex, data->prefetcher_core_info_mutex);
+        data->dispatch_core_info.clear();
+        data->dispatch_s_core_info.clear();
+        data->prefetcher_core_info.clear();
+    } catch (const std::exception& e) {
+        TT_INSPECTOR_LOG("Failed to clear all core infos: {}", e.what());
+    }
+}
+
+void Inspector::set_command_queue_event_info(const ChipId device_id, const uint8_t cq_id, const uint32_t event_id) {
+    if (!is_enabled()) {
+        return;
+    }
+    try {
+        auto* data = get_inspector_data();
+        std::lock_guard<std::mutex> lock(data->cq_to_event_by_device_mutex);
+
+        // resizing efficiency can be improved here. e.g. resize in powers of 2
+        if (data->cq_to_event_by_device[device_id].size() <= cq_id) {
+            data->cq_to_event_by_device[device_id].resize(cq_id + 1);
+        }
+        data->cq_to_event_by_device[device_id][cq_id] = event_id;
+    } catch (const std::exception& e) {
+        TT_INSPECTOR_LOG("Failed to log command queue event info: {}", e.what());
+    }
+}
+
 inspector::RpcServer& Inspector::get_rpc_server() {
     if (is_enabled()) {
         try {

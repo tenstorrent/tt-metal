@@ -5,6 +5,7 @@
 #include "impl/debug/inspector/logger.hpp"
 #include "impl/debug/inspector/types.hpp"
 #include "impl/context/metal_context.hpp"
+#include <tt_stl/reflection.hpp>
 #include <iomanip>
 #include <chrono>
 
@@ -80,6 +81,27 @@ Logger::Logger(const std::filesystem::path& logging_path)
     if (!mesh_workloads_ostream.is_open()) {
         TT_INSPECTOR_THROW(
             "Failed to create inspector file: {}\n{}", (logging_path / "mesh_workloads_log.yaml").string(), additional_text);
+    }
+    dispatch_core_ostream.open(logging_path / "dispatch_core_log.yaml", std::ios::trunc);
+    if (!dispatch_core_ostream.is_open()) {
+        TT_INSPECTOR_THROW(
+            "Failed to create inspector file: {}\n{}",
+            (logging_path / "dispatch_core_log.yaml").string(),
+            additional_text);
+    }
+    dispatch_s_core_ostream.open(logging_path / "dispatch_s_core_log.yaml", std::ios::trunc);
+    if (!dispatch_s_core_ostream.is_open()) {
+        TT_INSPECTOR_THROW(
+            "Failed to create inspector file: {}\n{}",
+            (logging_path / "dispatch_s_core_log.yaml").string(),
+            additional_text);
+    }
+    prefetcher_core_ostream.open(logging_path / "prefetcher_core_log.yaml", std::ios::trunc);
+    if (!prefetcher_core_ostream.is_open()) {
+        TT_INSPECTOR_THROW(
+            "Failed to create inspector file: {}\n{}",
+            (logging_path / "prefetcher_core_log.yaml").string(),
+            additional_text);
     }
 
     initialized = true;
@@ -348,6 +370,66 @@ void Logger::log_mesh_workload_set_program_binary_status(const MeshWorkloadData&
         mesh_workloads_ostream.flush();
     } catch (const std::exception& e) {
         TT_INSPECTOR_LOG("Failed to log mesh workload set program binary status: {}", e.what());
+    }
+}
+
+void Logger::log_dispatch_core_info(const tt_cxy_pair& virtual_core, const CoreInfo& core_info) noexcept {
+    if (!initialized) {
+        return;
+    }
+    try {
+        dispatch_core_ostream << "- dispatch_core_info:\n";
+        dispatch_core_ostream << "    virtual_core: " << virtual_core.chip << ", " << virtual_core.x << ", "
+                              << virtual_core.y << "\n";
+        dispatch_core_ostream << "    device_id: " << core_info.device_id << "\n";
+        dispatch_core_ostream << "    servicing_device_id: " << core_info.servicing_device_id << "\n";
+        dispatch_core_ostream << "    worker_type: " << enchantum::to_string(core_info.worker_type) << "\n";
+        dispatch_core_ostream << "    cq_id: " << core_info.cq_id << "\n";
+        dispatch_core_ostream << "    timestamp_ns: " << convert_timestamp(std::chrono::high_resolution_clock::now())
+                              << "\n";
+        dispatch_core_ostream.flush();
+    } catch (const std::exception& e) {
+        TT_INSPECTOR_LOG("Failed to log dispatch core info: {}", e.what());
+    }
+}
+
+void Logger::log_dispatch_s_core_info(const tt_cxy_pair& virtual_core, const CoreInfo& core_info) noexcept {
+    if (!initialized) {
+        return;
+    }
+    try {
+        dispatch_s_core_ostream << "- dispatch_s_core_info:\n";
+        dispatch_s_core_ostream << "    virtual_core: " << virtual_core.chip << ", " << virtual_core.x << ", "
+                                << virtual_core.y << "\n";
+        dispatch_s_core_ostream << "    device_id: " << core_info.device_id << "\n";
+        dispatch_s_core_ostream << "    servicing_device_id: " << core_info.servicing_device_id << "\n";
+        dispatch_s_core_ostream << "    worker_type: " << enchantum::to_string(core_info.worker_type) << "\n";
+        dispatch_s_core_ostream << "    cq_id: " << core_info.cq_id << "\n";
+        dispatch_s_core_ostream << "    timestamp_ns: " << convert_timestamp(std::chrono::high_resolution_clock::now())
+                                << "\n";
+        dispatch_s_core_ostream.flush();
+    } catch (const std::exception& e) {
+        TT_INSPECTOR_LOG("Failed to log dispatch_s core info: {}", e.what());
+    }
+}
+
+void Logger::log_prefetcher_core_info(const tt_cxy_pair& virtual_core, const CoreInfo& core_info) noexcept {
+    if (!initialized) {
+        return;
+    }
+    try {
+        prefetcher_core_ostream << "- prefetcher_core_info:\n";
+        prefetcher_core_ostream << "    virtual_core: " << virtual_core.chip << ", " << virtual_core.x << ", "
+                                << virtual_core.y << "\n";
+        prefetcher_core_ostream << "    device_id: " << core_info.device_id << "\n";
+        prefetcher_core_ostream << "    servicing_device_id: " << core_info.servicing_device_id << "\n";
+        prefetcher_core_ostream << "    worker_type: " << enchantum::to_string(core_info.worker_type) << "\n";
+        prefetcher_core_ostream << "    cq_id: " << core_info.cq_id << "\n";
+        prefetcher_core_ostream << "    timestamp_ns: " << convert_timestamp(std::chrono::high_resolution_clock::now())
+                                << "\n";
+        prefetcher_core_ostream.flush();
+    } catch (const std::exception& e) {
+        TT_INSPECTOR_LOG("Failed to log prefetcher core info: {}", e.what());
     }
 }
 

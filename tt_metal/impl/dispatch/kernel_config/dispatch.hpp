@@ -14,6 +14,7 @@
 #include "mesh_graph.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
+#include "impl/debug/inspector/inspector.hpp"
 #include <umd/device/types/xy_pair.hpp>
 
 namespace tt {
@@ -108,16 +109,24 @@ public:
         static_config_.is_d_variant = d_variant;
         uint16_t channel =
             tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_id);
+
+        DispatchWorkerType type = DISPATCH;
         if (h_variant && d_variant) {
             this->logical_core_ = core_manager.dispatcher_core(device_id, channel, cq_id);
+            type = DISPATCH_HD;
         } else if (h_variant) {
             channel = tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(
                 servicing_device_id);
             this->logical_core_ = core_manager.dispatcher_core(servicing_device_id, channel, cq_id);
+            type = DISPATCH_H;
         } else if (d_variant) {
             this->logical_core_ = core_manager.dispatcher_d_core(device_id, channel, cq_id);
+            type = DISPATCH_D;
         }
         this->kernel_type_ = FDKernelType::DISPATCH;
+
+        auto virtual_core = this->GetVirtualCore();
+        tt::tt_metal::Inspector::set_dispatch_core_info(virtual_core, type, cq_id, device_id, servicing_device_id);
     }
 
     void CreateKernel() override;
