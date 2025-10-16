@@ -136,7 +136,7 @@ The **Model Trace to Test Automation** system automatically extracts real-world 
 
 - **Before**: Sweep tests used manually created configurations that might miss edge cases
 - **After**: Sweep tests automatically use configurations from EfficientNet, ResNet, BERT, etc.
-- **Result**: 100% pass rate with real-world model configurations (30/30 for sigmoid_accurate)
+- **Result**: Instant validation with real-world model configurations, results shown in Superset dashboard
 
 ---
 
@@ -1040,7 +1040,7 @@ Key optimizations captured:
 ✅ **Automatic Configuration Extraction**: From any model test
 ✅ **Centralized Storage**: Single master JSON with deduplication
 ✅ **Ultra-Simple Integration**: Just 3 lines of code to add traced configs
-✅ **Production Accuracy**: 100% pass rate with real configs
+✅ **Production Testing**: Validate with real model configurations, instant results
 ✅ **Analysis Tools**: Query and inspect configurations
 
 ### Workflow
