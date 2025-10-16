@@ -830,7 +830,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
     if (has_bias) {
         writer_defines["FUSE_BIAS"] = "1";
         writer_mcast_sender_defines["FUSE_BIAS"] = "1";
-        compute_defines["FUSE_BIAS"] = "1";
     }
     bool pack_relu = fused_activation.has_value() && fused_activation.value().op_type == unary::UnaryOpType::RELU;
     if (fused_activation.has_value() && !pack_relu) {
@@ -953,7 +952,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
         check_skip_compute,
         pack_relu,
         weight_block_w_ntiles <= 8,  // packer_untilize
-        packer_l1_acc_en};
+        packer_l1_acc_en,
+        has_bias};
 
     if (enable_activation_reuse) {
         compute_kernel_args.push_back(activation_reuse_config.image_width_tiles);

@@ -338,7 +338,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_width_sharded(
     if (has_bias) {
         writer_defines["FUSE_BIAS"] = "1";
         writer_mcast_sender_defines["FUSE_BIAS"] = "1";
-        compute_defines["FUSE_BIAS"] = "1";
     }
 
     bool pack_relu = fused_activation.has_value() && fused_activation.value().op_type == unary::UnaryOpType::RELU;
@@ -451,7 +450,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_width_sharded(
         false,            // check_skip_compute; not used in width sharded
         pack_relu,
         weight_block_w_ntiles <= 8,  // packer_untilize
-        packer_l1_acc};
+        packer_l1_acc,
+        has_bias};
 
     std::vector<uint32_t> activation_kernel_compile_args = {
         (uint32_t)stride_w,

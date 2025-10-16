@@ -240,13 +240,14 @@ void MAIN {
     constexpr bool pack_relu = get_compile_time_arg_val(29);
     constexpr bool packer_untilize = get_compile_time_arg_val(30);
     constexpr bool packer_l1_acc = get_compile_time_arg_val(31);
+    constexpr bool fuse_bias = get_compile_time_arg_val(32);
 
 #ifdef ACTIVATION_REUSE
-    constexpr uint32_t image_width_in_tiles = get_compile_time_arg_val(32);
-    constexpr uint32_t window_reuse_offset = get_compile_time_arg_val(33);
+    constexpr uint32_t image_width_in_tiles = get_compile_time_arg_val(33);
+    constexpr uint32_t window_reuse_offset = get_compile_time_arg_val(34);
 #ifdef SPLIT_READER
-    constexpr uint32_t tilized_cb_row_offset = get_compile_time_arg_val(34);
-    constexpr uint32_t tilized_cb_second_reader_offset = get_compile_time_arg_val(35);
+    constexpr uint32_t tilized_cb_row_offset = get_compile_time_arg_val(35);
+    constexpr uint32_t tilized_cb_second_reader_offset = get_compile_time_arg_val(36);
 #endif
 #endif
 
@@ -257,17 +258,9 @@ void MAIN {
     constexpr uint32_t untilize_mode_out_cb_id = untilize_out ? matmul_partials_cb : out_cb_id;
 
     uint32_t bias_block_offset = 0;
-#ifdef FUSE_BIAS
-    constexpr bool fuse_bias = true;
     constexpr uint32_t bias_ntiles_w = get_compile_time_arg_val(16);
     constexpr uint32_t bias_cb_id = get_compile_time_arg_val(17);
-    constexpr uint32_t mm_out_cb_id = matmul_partials_cb;
-#else
-    constexpr bool fuse_bias = false;
-    constexpr uint32_t bias_ntiles_w = 0;
-    constexpr uint32_t bias_cb_id = 0;
-    constexpr uint32_t mm_out_cb_id = untilize_mode_out_cb_id;
-#endif
+    constexpr uint32_t mm_out_cb_id = fuse_bias ? matmul_partials_cb : untilize_mode_out_cb_id;
 
     constexpr uint32_t mm_in0_cb_id = height_sharded ? tilized_in0_cb_id : in0_cb_id;
 
