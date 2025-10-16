@@ -28,12 +28,12 @@ jobs:
       matrix:
         test-group: [
           { name: "t3k fabric tests", arch: wormhole_b0, cmd: run_t3000_ttfabric_tests, timeout: 15, owner_id: UJ45FEC7M}, # Allan Liu
-          { name: "t3k ttnn multiprocess tests", arch: wormhole_b0, cmd: run_t3000_ttnn_multiprocess_tests, timeout: 5, owner_id: U013121KDH9}, #Austin Ho
+          { name: "t3k ttnn multiprocess tests", arch: wormhole_b0, cmd: run_t3000_ttnn_multiprocess_tests, timeout: 6, owner_id: UBHPP2NDP}, # Joseph Chu
           { name: "t3k ttnn ccl tests", arch: wormhole_b0, cmd: run_t3000_ccl_tests, timeout: 9, owner_id: U06LRK6JDGB}, #Saad Jameel
         ]
     name: ${{ matrix.test-group.name }}
     runs-on:
-      - tt-ubuntu-2204-N300-llmbox-stable
+      - tt-ubuntu-2204-N300-llmbox-metal
     container:
       image: harbor.ci.tenstorrent.net/${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
@@ -53,7 +53,7 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
