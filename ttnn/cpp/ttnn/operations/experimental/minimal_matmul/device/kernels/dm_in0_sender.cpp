@@ -41,6 +41,8 @@ void kernel_main() {
     const uint32_t N_start_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t N_end_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t defer_write_k_block = get_arg_val<uint32_t>(argidx++);
+    const uint32_t M_blocks_per_core = get_arg_val<uint32_t>(argidx++);
+    const uint32_t N_blocks_per_core = get_arg_val<uint32_t>(argidx++);
 
     // Tensor accessor for input tensor
     constexpr auto in0_args = TensorAccessorArgs<17>();
@@ -87,10 +89,10 @@ void kernel_main() {
      * reuse.
      */
 
-    const uint32_t M_tiles_per_core = M_end_tile - M_start_tile;
-    const uint32_t N_tiles_per_core = N_end_tile - N_start_tile;
-    const uint32_t N_num_blocks = div_up(N_tiles_per_core, N_block_tiles);
-    const uint32_t M_num_blocks = div_up(M_tiles_per_core, M_block_tiles);
+    // const uint32_t M_tiles_per_core = M_end_tile - M_start_tile;
+    // const uint32_t N_tiles_per_core = N_end_tile - N_start_tile;
+    const uint32_t M_num_blocks = M_blocks_per_core;  // div_up(N_tiles_per_core, N_block_tiles);
+    const uint32_t N_num_blocks = N_blocks_per_core;  // div_up(M_tiles_per_core, M_block_tiles);
 
     bool k_forward = true;
     bool n_forward = true;
