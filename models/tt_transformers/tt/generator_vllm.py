@@ -11,7 +11,11 @@ from loguru import logger
 from PIL.Image import Image
 from tqdm import tqdm
 from transformers import BatchFeature
-from vllm.model_executor.models.gemma3_mm import Gemma3ProcessingInfo
+from vllm.model_executor.models.gemma3_mm import (
+    Gemma3DummyInputsBuilder,
+    Gemma3MultiModalProcessor,
+    Gemma3ProcessingInfo,
+)
 from vllm.model_executor.models.interfaces import SupportsMultiModal, SupportsV0Only
 from vllm.model_executor.models.mllama import MllamaProcessingInfo
 from vllm.multimodal import MULTIMODAL_REGISTRY
@@ -515,8 +519,9 @@ class MultiModalProcessor(BaseMultiModalProcessor):
         return mm_inputs
 
 
-# TODO: Eventually replace MultiModalProcessor with vllm.model_executor.models.gemma3_mm::Gemma3MultiModalProcessor
-@MULTIMODAL_REGISTRY.register_processor(MultiModalProcessor, info=Gemma3ProcessingInfo, dummy_inputs=DummyInputsBuilder)
+@MULTIMODAL_REGISTRY.register_processor(
+    Gemma3MultiModalProcessor, info=Gemma3ProcessingInfo, dummy_inputs=Gemma3DummyInputsBuilder
+)
 class Gemma3ForConditionalGeneration(Generator, SupportsMultiModal):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -551,13 +556,7 @@ class Gemma3ForConditionalGeneration(Generator, SupportsMultiModal):
         return self.model_args[0].model_cache_path
 
     def prefill_forward(self, *args, **kwargs):
-        data = kwargs.get("images", None)
-        pixel_values = [im.pixel_values if hasattr(im, "pixel_values") else None for im in data] if data else None
-
-        return super().prefill_forward_text(
-            pixel_values=pixel_values,
-            **kwargs,
-        )
+        return super().prefill_forward_text(**kwargs)
 
     def allocate_kv_cache(self, *args, **kwargs):
         return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
