@@ -541,7 +541,7 @@ HostBuffer allocate_host_buffer(const TensorSpec& tensor_spec) {
         auto buffer_ptr = std::make_shared_for_overwrite<Type[]>(size_bytes / sizeof(Type));
         ttsl::Span<Type> span(buffer_ptr.get(), size_bytes / sizeof(Type));
         MemoryPin memory_pin(std::move(buffer_ptr));
-        return HostBuffer(span, memory_pin);
+        return HostBuffer(span, std::move(memory_pin));
     };
 
     switch (tensor_spec.data_type()) {
