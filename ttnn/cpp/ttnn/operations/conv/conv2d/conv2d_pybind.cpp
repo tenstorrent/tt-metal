@@ -62,7 +62,90 @@ void py_bind_conv2d(py::module& module) {
         :rtype: [ttnn.Tensor, Tuple[int, int]]: The output tensor, and it's height and width, if return_output_dim = True
         :rtype: [ttnn.Tensor, Tuple[ttnn.Tensor, Optional[ttnn.Tensor]]]: The output tensor, and preprocessed weight and bias tensors that are  both on device, if return_weights_and_bias = True
         :rtype: [ttnn.Tensor, Tuple[int, int], Tuple[ttnn.Tensor, Optional[ttnn.Tensor]]]: If true, the op also returns the preprocessed weight and bias on the device. Weight and bias should be used for the same convolution next time it is called to avoid preparing weights and bias multiple times. Defaults to false.
+
+        Note:
+            The :attr: `input_tensor` supports the following data type and layout:
+
+            .. list-table:: input_tensor
+                :header-rows: 1
+
+                * - dtype
+                  - layout
+                * - FLOAT32
+                  - ROW_MAJOR, TILE
+                * - BFLOAT16
+                  - ROW_MAJOR, TILE
+                * - BFLOAT8_B
+                  - TILE
+
+            The :attr: `output_tensor` supports the following data type and layout:
+
+            .. list-table:: output_tensor
+                :header-rows: 1
+
+                * - dtype
+                  - layout
+                * - FLOAT32
+                  - ROW_MAJOR, TILE
+                * - BFLOAT16
+                  - ROW_MAJOR, TILE
+                * - BFLOAT8_B
+                  - TILE
+
+            The :attr: `weights_tensor` on the host, supports the following data type and layout:
+
+            .. list-table:: weights_tensor (host)
+                :heaer-rows: 1
+
+                * - dtype
+                  - layout
+                * - FLOAT32
+                  - ROW_MAJOR
+                * - BFLOAT16
+                  - ROW_MAJOR
+
+            The :attr: `weights_tensor` prepared on device, supports the following data type and layout:
+
+            .. list-table:: weights_tensor (prepared on device)
+                :header-rows: 1
+        
+                * - dtype
+                  - layout
+                * - FLOAT32
+                  - TILE
+                * - BFLOAT16
+                  - TILE
+                * - BFLOAT8_B
+                  - TILE
+
+            The :attr: `bias_tensor` on the host, supports the following data type and layout:
+
+            .. list-table:: bias_tensor (host)
+                :header-rows: 1
+
+                * - dtype
+                  - layout
+                * - FLOAT32
+                  - ROW_MAJOR
+                * - BFLOAT16
+                  - ROW_MAJOR
+
+            The :attr: `bias_tensor` prepared on device, supports the following data type and layout:
+
+            .. list-table:: bias_tensor (prepared on device)
+                :header-rows: 1
+
+                * - dtype
+                  -layout
+                * - FLOAT32
+                  - TILE
+                * - BFLOAT16
+                  - TILE
+                * - BFLOAT8_B
+                  - TILE
+        
         )doc",
+        
         ttnn::pybind_overload_t{
             [](const decltype(ttnn::conv2d)& self,
                const ttnn::Tensor& input_tensor,
