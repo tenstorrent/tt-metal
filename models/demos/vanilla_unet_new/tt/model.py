@@ -49,54 +49,53 @@ class TtUNet:
 
         self.final_conv = TtConv2d(configs.final_conv, device)
 
-    def __call__(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
-        # Encoder 1
+    def preprocess_input_tensor(self, x, deallocate_input_activation):
+        out = ttnn.experimental.convert_to_hwc(x)
+        if deallocate_input_activation:
+            ttnn.deallocate(x)  # Some use-cases have a persistent input tensor that we don't want to delete
+        return out
+
+    def __call__(self, input_tensor: ttnn.Tensor, deallocate_input_activation: bool = True) -> ttnn.Tensor:
+        input_tensor = self.preprocess_input_tensor(input_tensor, deallocate_input_activation)
+
         enc1 = self.encoder1_conv1(input_tensor)
         enc1 = self.encoder1_conv2(enc1)
         skip1 = ttnn.to_memory_config(enc1, ttnn.DRAM_MEMORY_CONFIG)
         enc1 = self.encoder1_pool(enc1)
 
-        # Encoder 2
         enc2 = self.encoder2_conv1(enc1)
         enc2 = self.encoder2_conv2(enc2)
         skip2 = ttnn.to_memory_config(enc2, ttnn.DRAM_MEMORY_CONFIG)
         enc2 = self.encoder2_pool(enc2)
 
-        # Encoder 3
         enc3 = self.encoder3_conv1(enc2)
         enc3 = self.encoder3_conv2(enc3)
         skip3 = ttnn.to_memory_config(enc3, ttnn.DRAM_MEMORY_CONFIG)
         enc3 = self.encoder3_pool(enc3)
 
-        # Encoder 4
         enc4 = self.encoder4_conv1(enc3)
         enc4 = self.encoder4_conv2(enc4)
         skip4 = ttnn.to_memory_config(enc4, ttnn.DRAM_MEMORY_CONFIG)
         enc4 = self.encoder4_pool(enc4)
 
-        # Bottleneck
         bottleneck = self.bottleneck_conv1(enc4)
         bottleneck = self.bottleneck_conv2(bottleneck)
 
-        # Decoder 4
         dec4 = self._transpose_conv(bottleneck, self.upconv4_config, act_block_h_override=3 * 32)
         dec4 = self._concatenate_skip_connection(dec4, skip4)
         dec4 = self.decoder4_conv1(dec4)
         dec4 = self.decoder4_conv2(dec4)
 
-        # Decoder 3
         dec3 = self._transpose_conv(dec4, self.upconv3_config, act_block_h_override=5 * 32)
         dec3 = self._concatenate_skip_connection(dec3, skip3)
         dec3 = self.decoder3_conv1(dec3)
         dec3 = self.decoder3_conv2(dec3)
 
-        # Decoder 2
         dec2 = self._transpose_conv(dec3, self.upconv2_config, act_block_h_override=2 * 32)
         dec2 = self._concatenate_skip_connection(dec2, skip2)
         dec2 = self.decoder2_conv1(dec2)
         dec2 = self.decoder2_conv2(dec2)
 
-        # Decoder 1
         dec1 = self._transpose_conv(
             dec2, self.upconv1_config, fp32_dest_acc_en=False, packer_l1_acc=False, act_block_h_override=5 * 32
         )
@@ -114,16 +113,6 @@ class TtUNet:
         fp32_dest_acc_en=True,
         packer_l1_acc=True,
     ) -> ttnn.Tensor:
-        """
-        Perform transpose convolution using UpconvConfiguration
-
-        Args:
-            input_tensor: Input tensor
-            upconv_config: UpconvConfiguration with all parameters
-
-        Returns:
-            Upsampled tensor
-        """
         conv_config = ttnn.Conv2dConfig(
             weights_dtype=ttnn.bfloat8_b,
             shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,

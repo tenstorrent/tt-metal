@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-import torch
 from loguru import logger
 from ttnn.model_preprocessing import preprocess_model_parameters
 
@@ -16,6 +15,7 @@ from models.demos.vanilla_unet_new.tt.common import (
 )
 from models.demos.vanilla_unet_new.tt.config import create_unet_configs_from_parameters
 from models.demos.vanilla_unet_new.tt.model import create_unet_from_configs
+from models.experimental.functional_unet.tt.model_preprocessing import create_unet_input_tensors
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
@@ -26,7 +26,28 @@ def test_vanilla_unet_model(
 ):
     reference_model = load_reference_model(model_location_generator)
 
-    torch_input_tensor = torch.randn(batch, input_channels, input_height, input_width)
+    input_core_grid = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7)),
+        }
+    )
+    input_shard_shape = (input_channels, input_height * input_width // 64)
+    input_shard_spec = ttnn.ShardSpec(input_core_grid, input_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    input_sharded_memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, input_shard_spec
+    )
+    torch_input_tensor, ttnn_input_tensor = create_unet_input_tensors(
+        batch=batch,
+        input_channels=input_channels,
+        input_height=input_height,
+        input_width=input_width,
+        groups=1,
+        channel_order="first",
+        pad=False,
+        fold=True,
+        device=device,
+        memory_config=input_sharded_memory_config,
+    )
     torch_output_tensor = reference_model(torch_input_tensor)
 
     parameters = preprocess_model_parameters(
@@ -37,12 +58,7 @@ def test_vanilla_unet_model(
     )
     model = create_unet_from_configs(configs, device)
 
-    ttnn_input_host = ttnn.from_torch(
-        torch_input_tensor.permute(0, 2, 3, 1),  # NCHW -> NHWC
-        dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-    )
-    ttnn_output = model(ttnn_input_host)
+    ttnn_output = model(ttnn_input_tensor)
     ttnn_output = ttnn.to_torch(ttnn_output)
     ttnn_output = ttnn_output.permute(0, 3, 1, 2)  # NHWC -> NCHW
     ttnn_output = ttnn_output.reshape(torch_output_tensor.shape)
