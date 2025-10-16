@@ -1,5 +1,28 @@
 // Network Cabling Visualizer - Client-side JavaScript
-// Global variables
+
+// ===== Configuration Constants =====
+const LAYOUT_CONSTANTS = {
+    DEFAULT_RACK_WIDTH: 450,
+    MIN_START_X: 350,
+    MIN_START_Y: 450,
+    RACK_X_OFFSET: 100,
+    RACK_Y_OFFSET: 150,
+    NEW_RACK_DEFAULT_X: 250,
+    NEW_RACK_DEFAULT_Y: 300,
+    RACK_SPACING_BUFFER: 1.35  // 35% extra space
+};
+
+const CONNECTION_COLORS = {
+    INTRA_NODE: '#4CAF50',  // Green for same node
+    INTER_NODE: '#2196F3'   // Blue for different nodes
+};
+
+const DEFAULT_CABLE_CONFIG = {
+    type: 'QSFP_DD',
+    length: 'Unknown'
+};
+
+// ===== Global Variables =====
 let cy;
 let currentData = null;
 let selectedConnection = null;
@@ -63,7 +86,7 @@ function getEthChannelMapping(nodeType, portNumber) {
             break;
 
         case 'WH_GALAXY':
-            // WH_GALAXY: 6 ports per tray, 
+            // WH_GALAXY: 6 ports per tray,
             if (portNumber === 1) return 'ASIC: 5 Channel: 4-7';
             if (portNumber === 2) return 'ASIC: 1 Channel: 4-7';
             if (portNumber === 3) return 'ASIC: 1 Channel: 0-3';
@@ -73,7 +96,7 @@ function getEthChannelMapping(nodeType, portNumber) {
             break;
 
         case 'BH_GALAXY':
-            // BH_GALAXY: 14 ports per tray 
+            // BH_GALAXY: 14 ports per tray
             // TODO: seeing discrepancies in the channel mapping for BH_GALAXY. Need to verify with team.
             if (portNumber === 1) return 'ASIC: 5 Channel: 2-3';
             if (portNumber === 2) return 'ASIC: 1 Channel: 2-3';
@@ -119,6 +142,275 @@ function updateDeleteButtonState() {
     }
 }
 
+// ===== Utility Functions =====
+
+/**
+ * Format rack and shelf_u numbers with zero-padding
+ */
+function formatRackNum(rackNum) {
+    return rackNum !== undefined && rackNum !== null ? rackNum.toString().padStart(2, '0') : '';
+}
+
+function formatShelfU(shelfU) {
+    return shelfU !== undefined && shelfU !== null ? shelfU.toString().padStart(2, '0') : '';
+}
+
+/**
+ * Build hierarchical location label from location components
+ * @param {string} hall - Hall identifier
+ * @param {string} aisle - Aisle identifier
+ * @param {number|string} rackNum - Rack number
+ * @param {number|string} shelfU - Shelf U position (optional)
+ * @returns {string} Formatted location label (e.g., "H1A205" or "H1A205U12")
+ */
+function buildLocationLabel(hall, aisle, rackNum, shelfU = null) {
+    if (!hall || !aisle || rackNum === undefined || rackNum === null) {
+        return '';
+    }
+
+    const rackPadded = formatRackNum(rackNum);
+    const label = `${hall}${aisle}${rackPadded}`;
+
+    if (shelfU !== null && shelfU !== undefined && shelfU !== '') {
+        const shelfUPadded = formatShelfU(shelfU);
+        return `${label}U${shelfUPadded}`;
+    }
+
+    return label;
+}
+
+/**
+ * Get location data from a node or its parent hierarchy
+ * @param {Object} node - Cytoscape node
+ * @returns {Object} Location data {hall, aisle, rack_num, shelf_u, hostname}
+ */
+function getNodeLocationData(node) {
+    const data = node.data();
+
+    // If node has all location data, return it
+    if (data.hall && data.aisle && data.rack_num !== undefined) {
+        return {
+            hall: data.hall,
+            aisle: data.aisle,
+            rack_num: data.rack_num,
+            shelf_u: data.shelf_u,
+            hostname: data.hostname || ''
+        };
+    }
+
+    // Try to get from parent hierarchy (for tray/port nodes)
+    if (data.type === 'port' || data.type === 'tray') {
+        const parentNode = node.parent();
+        if (parentNode && parentNode.length > 0) {
+            if (data.type === 'port') {
+                // Port: go up to tray, then shelf
+                const shelfNode = parentNode.parent();
+                if (shelfNode && shelfNode.length > 0) {
+                    return getNodeLocationData(shelfNode);
+                }
+            } else {
+                // Tray: go up to shelf
+                return getNodeLocationData(parentNode);
+            }
+        }
+    }
+
+    // Return whatever we have
+    return {
+        hall: data.hall || '',
+        aisle: data.aisle || '',
+        rack_num: data.rack_num,
+        shelf_u: data.shelf_u,
+        hostname: data.hostname || ''
+    };
+}
+
+/**
+ * Get display label for a node based on priority:
+ * 1. Hostname (if available)
+ * 2. Location format (if all location data available)
+ * 3. Type-specific label (e.g., "Shelf {U}")
+ * 4. Existing label
+ * 5. Node ID
+ * @param {Object} nodeData - Node data object
+ * @returns {string} Display label
+ */
+function getNodeDisplayLabel(nodeData) {
+    // Priority 1: Hostname
+    if (nodeData.hostname) {
+        return nodeData.hostname;
+    }
+
+    // Priority 2: Location format (Hall-Aisle-Rack-ShelfU)
+    if (nodeData.hall && nodeData.aisle && nodeData.rack_num !== undefined) {
+        const shelfU = nodeData.shelf_u;
+        if (shelfU !== undefined && shelfU !== null && shelfU !== '') {
+            return buildLocationLabel(nodeData.hall, nodeData.aisle, nodeData.rack_num, shelfU);
+        } else {
+            return buildLocationLabel(nodeData.hall, nodeData.aisle, nodeData.rack_num);
+        }
+    }
+
+    // Priority 3: Type-specific labels
+    if (nodeData.type === 'shelf' && nodeData.shelf_u !== undefined) {
+        return `Shelf ${nodeData.shelf_u}`;
+    }
+
+    // Priority 4: Existing label
+    if (nodeData.label) {
+        return nodeData.label;
+    }
+
+    // Priority 5: Fallback to ID
+    return nodeData.id;
+}
+
+// ===== Event Handler Helpers =====
+
+/**
+ * Handle port click in editing mode
+ */
+function handlePortClickEditMode(node, evt) {
+    const portId = node.id();
+    const existingConnections = cy.edges(`[source="${portId}"], [target="${portId}"]`);
+
+    // If port is already connected, select the connection
+    if (existingConnections.length > 0) {
+        const edge = existingConnections[0]; // Only one connection per port
+
+        // Clear source port selection if any
+        if (sourcePort) {
+            sourcePort.removeClass('source-selected');
+            sourcePort = null;
+        }
+
+        // Select this connection
+        if (selectedConnection) {
+            selectedConnection.removeClass('selected-connection');
+        }
+        selectedConnection = edge;
+        edge.addClass('selected-connection');
+
+        // Show port info and update UI
+        showNodeInfo(node, evt.renderedPosition || evt.position);
+        updateDeleteButtonState();
+        return;
+    }
+
+    // Port is unconnected - handle connection creation
+    if (!sourcePort) {
+        // First click - select source port
+        sourcePort = node;
+        sourcePort.addClass('source-selected');
+    } else {
+        // Second click - create connection
+        const targetPort = node;
+
+        // Can't connect port to itself
+        if (sourcePort.id() === targetPort.id()) {
+            sourcePort.removeClass('source-selected');
+            sourcePort = null;
+            return;
+        }
+
+        // Create the connection
+        createConnection(sourcePort.id(), targetPort.id());
+
+        // Clear source port selection
+        sourcePort.removeClass('source-selected');
+        sourcePort = null;
+    }
+}
+
+/**
+ * Handle port click in view mode (not editing)
+ */
+function handlePortClickViewMode(node, evt) {
+    const portId = node.id();
+    const connectedEdges = cy.edges(`[source="${portId}"], [target="${portId}"]`);
+
+    if (connectedEdges.length > 0) {
+        // Port has connection - select it
+        const edge = connectedEdges[0]; // Only one connection per port
+
+        if (selectedConnection) {
+            selectedConnection.removeClass('selected-connection');
+        }
+
+        selectedConnection = edge;
+        edge.addClass('selected-connection');
+        showNodeInfo(node, evt.renderedPosition || evt.position);
+    } else {
+        // Port has no connection - just show info
+        if (selectedConnection) {
+            selectedConnection.removeClass('selected-connection');
+            selectedConnection = null;
+            updateDeleteButtonState();
+        }
+        showNodeInfo(node, evt.renderedPosition || evt.position);
+    }
+}
+
+/**
+ * Clear all selection state
+ */
+function clearAllSelections() {
+    hideNodeInfo();
+
+    if (sourcePort) {
+        sourcePort.removeClass('source-selected');
+        sourcePort = null;
+    }
+
+    if (selectedConnection) {
+        selectedConnection.removeClass('selected-connection');
+        selectedConnection = null;
+        updateDeleteButtonState();
+    }
+}
+
+// ===== End Event Handler Helpers =====
+
+function getPortLocationInfo(portNode) {
+    /**
+     * Build detailed location string for a port
+     * @param {Object} portNode - Cytoscape port node
+     * @returns {String} Formatted location string
+     */
+    const portLabel = portNode.data('label');
+    const trayNode = portNode.parent();
+    const shelfNode = trayNode.parent();
+
+    // Get location data from the hierarchy
+    const hostname = shelfNode.data('hostname') || '';
+    const hall = shelfNode.data('hall') || '';
+    const aisle = shelfNode.data('aisle') || '';
+    const rackNum = shelfNode.data('rack_num');
+    const shelfU = shelfNode.data('shelf_u');
+    const trayLabel = trayNode.data('label');
+
+    // Build location string
+    let locationParts = [];
+
+    // Prefer location format (Hall-Aisle-Rack-Shelf) as default
+    if (hall && aisle && rackNum !== undefined && shelfU !== undefined) {
+        // Use location format: HallAisle##U##
+        locationParts.push(buildLocationLabel(hall, aisle, rackNum, shelfU));
+    } else if (hostname) {
+        // Fallback to hostname if location info is unavailable
+        locationParts.push(hostname);
+    } else if (shelfNode.data('label')) {
+        // Final fallback to shelf label
+        locationParts.push(shelfNode.data('label'));
+    }
+
+    // Add tray and port info
+    locationParts.push(trayLabel);
+    locationParts.push(portLabel);
+
+    return locationParts.join(' › ');
+}
+
 function deleteSelectedConnection() {
     if (!selectedConnection || selectedConnection.length === 0) {
         alert('Please select a connection first by clicking on it.');
@@ -129,10 +421,10 @@ function deleteSelectedConnection() {
     const sourceNode = cy.getElementById(edge.data('source'));
     const targetNode = cy.getElementById(edge.data('target'));
 
-    const sourceInfo = `${sourceNode.data('label')} (${sourceNode.parent().data('label')})`;
-    const targetInfo = `${targetNode.data('label')} (${targetNode.parent().data('label')})`;
+    const sourceInfo = getPortLocationInfo(sourceNode);
+    const targetInfo = getPortLocationInfo(targetNode);
 
-    const message = `Delete connection between:\n${sourceInfo}\n↓\n${targetInfo}`;
+    const message = `Delete connection between:\n\nSource: ${sourceInfo}\n\nTarget: ${targetInfo}`;
 
     if (confirm(message)) {
         edge.remove();
@@ -186,9 +478,9 @@ function createConnection(sourceId, targetId) {
 
     let connectionColor;
     if (sourceGrandparent && targetGrandparent && sourceGrandparent.id() === targetGrandparent.id()) {
-        connectionColor = '#4CAF50';  // Green for intra-node connections (same node)
+        connectionColor = CONNECTION_COLORS.INTRA_NODE;
     } else {
-        connectionColor = '#2196F3';  // Blue for inter-node connections (different nodes)
+        connectionColor = CONNECTION_COLORS.INTER_NODE;
     }
 
     const edgeId = `edge_${sourceId}_${targetId}_${Date.now()}`;
@@ -198,9 +490,9 @@ function createConnection(sourceId, targetId) {
             id: edgeId,
             source: sourceId,
             target: targetId,
-            cable_type: 'QSFP_DD',
-            cable_length: 'Unknown',
-            label: connectionNumber.toString(),
+            cable_type: DEFAULT_CABLE_CONFIG.type,
+            cable_length: DEFAULT_CABLE_CONFIG.length,
+            label: `#${connectionNumber}`,
             connection_number: connectionNumber,
             color: connectionColor
         }
@@ -267,8 +559,193 @@ function createEmptyVisualization() {
     // Enable the Add Node button
     updateAddNodeButtonState();
 
+    // Open the Cabling Editor section
+    if (typeof toggleCollapsible === 'function') {
+        const cablingEditorContent = document.getElementById('cablingEditor');
+        if (cablingEditorContent && cablingEditorContent.classList.contains('collapsed')) {
+            toggleCollapsible('cablingEditor');
+        }
+    }
+
+    // Enable Connection Editing (suppress alert since we're showing custom success message)
+    const toggleBtn = document.getElementById('toggleEdgeHandlesBtn');
+    if (toggleBtn && toggleBtn.textContent.includes('Enable')) {
+        toggleEdgeHandles(true);
+    }
+
     // Show success message
-    showSuccess('Empty visualization created! You can now add nodes using the "Add New Node" section in the sidebar.');
+    showSuccess('Empty visualization created! Connection editing is enabled. You can now add nodes using the "Add New Node" section.');
+}
+
+function resetLayout() {
+    /**
+     * Reset and recalculate layout for all nodes based on rack/shelf hierarchy
+     */
+    if (!cy) {
+        alert('No visualization loaded. Please upload a CSV file first.');
+        return;
+    }
+
+    // Get all racks and sort by rack_num
+    const racks = cy.nodes('[type="rack"]');
+    if (racks.length === 0) {
+        // No racks - this might be 8-column format with standalone shelves
+        alert('No rack hierarchy found.');
+        return;
+    }
+
+    // Show status message
+    showExportStatus('Resetting layout...', 'info');
+
+    // Sort racks by rack number
+    const sortedRacks = [];
+    racks.forEach(function (rack) {
+        sortedRacks.push({
+            node: rack,
+            rack_num: parseInt(rack.data('rack_num')) || 0
+        });
+    });
+    sortedRacks.sort(function (a, b) {
+        return a.rack_num - b.rack_num;
+    });
+
+    // Dynamically calculate layout constants based on actual node sizes
+    // This ensures proper spacing regardless of node type (wh_galaxy, n300_lb, etc.)
+
+    // Calculate average/max rack width
+    let maxRackWidth = 0;
+    racks.forEach(function (rack) {
+        const bb = rack.boundingBox();
+        const width = bb.w;
+        if (width > maxRackWidth) maxRackWidth = width;
+    });
+    const rackWidth = maxRackWidth || LAYOUT_CONSTANTS.DEFAULT_RACK_WIDTH;
+
+    // Calculate average/max shelf height (including all descendants)
+    let maxShelfHeight = 0;
+    let totalShelfHeight = 0;
+    let shelfCount = 0;
+
+    racks.forEach(function (rack) {
+        rack.children('[type="shelf"]').forEach(function (shelf) {
+            // Get bounding box of shelf including all its children
+            const bb = shelf.boundingBox({ includeLabels: false, includeOverlays: false });
+            const height = bb.h;
+            totalShelfHeight += height;
+            shelfCount++;
+            if (height > maxShelfHeight) maxShelfHeight = height;
+        });
+    });
+
+    const avgShelfHeight = shelfCount > 0 ? totalShelfHeight / shelfCount : 300;
+
+    // Use max shelf height + 25% buffer for spacing to prevent any overlaps
+    const shelfSpacingBuffer = 1.25; // 25% extra space
+    const shelfSpacing = Math.max(maxShelfHeight, avgShelfHeight) * shelfSpacingBuffer;
+
+    // Rack spacing should be enough for the widest rack + buffer
+    const rackSpacing = rackWidth * LAYOUT_CONSTANTS.RACK_SPACING_BUFFER - rackWidth;
+
+    // Calculate appropriate starting positions with padding
+    const startX = Math.max(LAYOUT_CONSTANTS.MIN_START_X, rackWidth / 2 + LAYOUT_CONSTANTS.RACK_X_OFFSET);
+    const startY = Math.max(LAYOUT_CONSTANTS.MIN_START_Y, maxShelfHeight + LAYOUT_CONSTANTS.RACK_Y_OFFSET);
+
+    // First pass: calculate all new positions and deltas BEFORE making any changes
+    const positionUpdates = [];
+
+    sortedRacks.forEach(function (rackData, rackIndex) {
+        const rack = rackData.node;
+
+        // Calculate rack position (horizontal sequence)
+        const rackX = startX + (rackIndex * (rackWidth + rackSpacing));
+        const rackY = startY;
+
+        positionUpdates.push({
+            node: rack,
+            newPos: { x: rackX, y: rackY }
+        });
+
+        // Get all shelves in this rack and sort by shelf_u (descending - higher U at top)
+        const shelves = rack.children('[type="shelf"]');
+        const sortedShelves = [];
+        shelves.forEach(function (shelf) {
+            sortedShelves.push({
+                node: shelf,
+                shelf_u: parseInt(shelf.data('shelf_u')) || 0,
+                oldPos: { x: shelf.position().x, y: shelf.position().y }
+            });
+        });
+        sortedShelves.sort(function (a, b) {
+            return b.shelf_u - a.shelf_u; // Descending: higher shelf_u at top
+        });
+
+        // Calculate vertical positions for shelves (centered in rack)
+        const numShelves = sortedShelves.length;
+        if (numShelves > 0) {
+            const totalShelfHeight = (numShelves - 1) * shelfSpacing;
+            const shelfStartY = rackY - (totalShelfHeight / 2);
+
+            // Calculate position for each shelf and its descendants
+            sortedShelves.forEach(function (shelfData, shelfIndex) {
+                const shelf = shelfData.node;
+                const oldShelfPos = shelfData.oldPos;
+                const newShelfX = rackX;
+                const newShelfY = shelfStartY + (shelfIndex * shelfSpacing);
+
+                // Calculate deltas for repositioning child nodes
+                const deltaX = newShelfX - oldShelfPos.x;
+                const deltaY = newShelfY - oldShelfPos.y;
+
+                // Store shelf position update
+                positionUpdates.push({
+                    node: shelf,
+                    newPos: { x: newShelfX, y: newShelfY }
+                });
+
+                // Store position updates for all descendants (trays and ports)
+                shelf.descendants().forEach(function (child) {
+                    const childPos = child.position();
+                    positionUpdates.push({
+                        node: child,
+                        newPos: {
+                            x: childPos.x + deltaX,
+                            y: childPos.y + deltaY
+                        }
+                    });
+                });
+            });
+        }
+    });
+
+    // Second pass: apply all position updates in a batch
+    cy.startBatch();
+    positionUpdates.forEach(function (update) {
+        update.node.position(update.newPos);
+    });
+    cy.endBatch();
+
+    // Force a complete refresh of the cytoscape instance
+    cy.resize();
+    cy.forceRender();
+
+    // Small delay to ensure rendering is complete before fitting viewport and reapplying styles
+    setTimeout(function () {
+        // Reapply edge curve styles after repositioning
+        forceApplyCurveStyles();
+
+        // Update port connection status visual indicators
+        updatePortConnectionStatus();
+
+        // Fit the view to show all nodes with padding
+        cy.fit(50);
+        cy.center();
+
+        // Force another render to ensure everything is updated
+        cy.forceRender();
+
+        // Show success message
+        showExportStatus('Layout reset successfully! All nodes repositioned based on hierarchy.', 'success');
+    }, 100);
 }
 
 function addNewNode() {
@@ -327,16 +804,85 @@ function addNewNode() {
         return;
     }
 
-    // Find a good position for the new node (to the right of existing nodes)
-    const existingShelves = cy.nodes('.shelf');
-    let maxX = 0;
-    existingShelves.forEach(shelf => {
-        const pos = shelf.position();
-        if (pos.x > maxX) maxX = pos.x;
-    });
+    // If location data is provided, ensure a rack exists for it
+    let rackParentId = null;
+    if (hasLocation) {
+        const rackId = `rack_${rack.toString().padStart(2, '0')}`;
+        let rackNode = cy.getElementById(rackId);
 
-    const newX = maxX + 500; // Place 500px to the right
-    const newY = 200;
+        // Create rack if it doesn't exist
+        if (rackNode.length === 0) {
+            // Calculate position for new rack
+            let newRackX = 0;
+            let newRackY = 0;
+            const existingRacks = cy.nodes('[type="rack"]');
+
+            if (existingRacks.length > 0) {
+                // Position new rack to the right of the rightmost rack
+                let maxX = -Infinity;
+                existingRacks.forEach(function (rack) {
+                    const rackPos = rack.position();
+                    if (rackPos.x > maxX) {
+                        maxX = rackPos.x;
+                        newRackY = rackPos.y;
+                    }
+                });
+                newRackX = maxX + 500; // 500px spacing between racks
+            } else {
+                // First rack - place at a reasonable starting position
+                newRackX = LAYOUT_CONSTANTS.NEW_RACK_DEFAULT_X;
+                newRackY = LAYOUT_CONSTANTS.NEW_RACK_DEFAULT_Y;
+            }
+
+            const rackLabel = `Rack ${rack}`;
+            cy.add({
+                group: 'nodes',
+                data: {
+                    id: rackId,
+                    label: rackLabel,
+                    type: 'rack',
+                    rack_num: rack,
+                    hall: hall,
+                    aisle: aisle
+                },
+                classes: 'rack',
+                position: {
+                    x: newRackX,
+                    y: newRackY
+                }
+            });
+            rackNode = cy.getElementById(rackId);
+        }
+
+        rackParentId = rackId;
+    }
+
+    // Find a good position for the new node
+    let newX, newY;
+
+    if (rackParentId) {
+        // Position shelf within the rack
+        const rackNode = cy.getElementById(rackParentId);
+        const rackPos = rackNode.position();
+
+        // Get existing shelves in this rack to determine vertical position
+        const shelvesInRack = rackNode.children('[type="shelf"]');
+        const shelfCount = shelvesInRack.length;
+        const shelfSpacing = 140;
+
+        newX = rackPos.x;
+        newY = rackPos.y - (shelfCount * shelfSpacing / 2); // Position based on shelf count
+    } else {
+        // 8-column format or no rack - position to the right of existing shelves
+        const existingShelves = cy.nodes('.shelf');
+        let maxX = 0;
+        existingShelves.forEach(shelf => {
+            const pos = shelf.position();
+            if (pos.x > maxX) maxX = pos.x;
+        });
+        newX = maxX + 500;
+        newY = 200;
+    }
 
     // Create shelf node
     let shelfId, nodeLabel, nodeData;
@@ -362,9 +908,7 @@ function addNewNode() {
         }
     } else {
         // Format: HallAisle{2-digit Rack}U{2-digit Shelf U}
-        const rackPadded = rack.toString().padStart(2, '0');
-        const shelfUPadded = shelfU.toString().padStart(2, '0');
-        nodeLabel = `${hall}${aisle}${rackPadded}U${shelfUPadded}`;
+        nodeLabel = buildLocationLabel(hall, aisle, rack, shelfU);
         shelfId = nodeLabel; // Use the same format as the label
         nodeData = {
             id: shelfId,
@@ -376,6 +920,11 @@ function addNewNode() {
             shelf_u: shelfU,
             shelf_node_type: nodeType
         };
+    }
+
+    // Add parent rack if it exists
+    if (rackParentId) {
+        nodeData.parent = rackParentId;
     }
 
     const shelfNode = {
@@ -408,15 +957,28 @@ function addNewNode() {
             trayY = newY;
         }
 
+        const trayData = {
+            id: trayId,
+            parent: shelfId,
+            label: `T${trayNum}`,
+            type: 'tray',
+            tray: trayNum,
+            shelf_node_type: nodeType
+        };
+
+        // Add location data if available
+        if (hasLocation) {
+            trayData.rack_num = rack;
+            trayData.shelf_u = shelfU;
+            trayData.hall = hall;
+            trayData.aisle = aisle;
+        }
+        if (hasHostname) {
+            trayData.hostname = hostname;
+        }
+
         const trayNode = {
-            data: {
-                id: trayId,
-                parent: shelfId,
-                label: `T${trayNum}`,
-                type: 'tray',
-                tray: trayNum,
-                shelf_node_type: nodeType
-            },
+            data: trayData,
             position: { x: trayX, y: trayY },
             classes: 'tray'
         };
@@ -439,16 +1001,29 @@ function addNewNode() {
                 portY = trayY - 100 + (portNum - 1) * (portWidth + portSpacing);
             }
 
+            const portData = {
+                id: portId,
+                parent: trayId,
+                label: `P${portNum}`,
+                type: 'port',
+                tray: trayNum,
+                port: portNum,
+                shelf_node_type: nodeType
+            };
+
+            // Add location data if available
+            if (hasLocation) {
+                portData.rack_num = rack;
+                portData.shelf_u = shelfU;
+                portData.hall = hall;
+                portData.aisle = aisle;
+            }
+            if (hasHostname) {
+                portData.hostname = hostname;
+            }
+
             const portNode = {
-                data: {
-                    id: portId,
-                    parent: trayId,
-                    label: `P${portNum}`,
-                    type: 'port',
-                    tray: trayNum,
-                    port: portNum,
-                    shelf_node_type: nodeType
-                },
+                data: portData,
                 position: { x: portX, y: portY },
                 classes: 'port'
             };
@@ -467,6 +1042,7 @@ function addNewNode() {
         setTimeout(() => {
             forceApplyCurveStyles();
             updatePortConnectionStatus();
+            updatePortEditingHighlight(); // Highlight available ports if in editing mode
         }, 100);
 
         // Clear all inputs
@@ -478,7 +1054,7 @@ function addNewNode() {
 
         // Show success message
         const nodeDescription = hasHostname ? `"${hostname}"` : `"${nodeLabel}"`;
-        const locationInfo = hasHostname && hasLocation ? ` (with location: ${hall}${aisle}${rack.toString().padStart(2, '0')}U${shelfU.toString().padStart(2, '0')})` : '';
+        const locationInfo = hasHostname && hasLocation ? ` (with location: ${buildLocationLabel(hall, aisle, rack, shelfU)})` : '';
         alert(`Successfully added ${nodeType} node ${nodeDescription}${locationInfo} with ${config.tray_count} trays.`);
 
     } catch (error) {
@@ -504,23 +1080,38 @@ function toggleEdgeHandles() {
         // Show delete connection section
         document.getElementById('deleteConnectionSection').style.display = 'block';
 
+        // Show add node section
+        document.getElementById('addNodeSection').style.display = 'block';
+
         // Add visual feedback only for available (unconnected) ports
         updatePortEditingHighlight();
 
         // Show instruction
-        alert('Connection editing enabled!\n\n• Click unconnected port → Click another port = Create connection\n• Click connection to select it, then use Delete button or Backspace key\n• Click empty space = Cancel selection\n\nNote: Only unconnected ports are highlighted in orange');
+        alert('Connection editing enabled!\n\n• Click unconnected port → Click another port = Create connection\n• Click connection to select it, then use Delete button or Backspace/Delete key\n• Click empty space = Cancel selection\n\nNote: Only unconnected ports are highlighted in orange');
 
     } else {
         // Disable connection creation mode
         isEdgeCreationMode = false;
+
+        // Clear source port selection and remove styling
+        if (sourcePort) {
+            sourcePort.removeClass('source-selected');
+        }
         sourcePort = null;
+
         btn.textContent = '🔗 Enable Connection Editing';
         btn.style.backgroundColor = '#28a745';
 
         // Hide delete connection section
         document.getElementById('deleteConnectionSection').style.display = 'none';
 
-        // Clear any selected connection
+        // Hide add node section
+        document.getElementById('addNodeSection').style.display = 'none';
+
+        // Clear any selected connection and remove its styling
+        if (selectedConnection) {
+            selectedConnection.removeClass('selected-connection');
+        }
         selectedConnection = null;
         document.getElementById('deleteConnectionBtn').disabled = true;
         document.getElementById('deleteConnectionBtn').style.opacity = '0.5';
@@ -532,8 +1123,11 @@ function toggleEdgeHandles() {
             'border-opacity': 1.0
         });
 
-        // Remove any source port highlighting
+        // Remove any source port highlighting (redundant but safe)
         cy.nodes('.port').removeClass('source-selected');
+
+        // Remove selected-connection class from all edges
+        cy.edges().removeClass('selected-connection');
     }
 }
 
@@ -750,9 +1344,6 @@ function initVisualization(data) {
         console.log('Nodes count:', cy.nodes().length);
         console.log('Edges count:', cy.edges().length);
 
-        // Make trays and ports non-draggable
-        cy.nodes('.tray, .port').ungrabify();
-
         // Apply final curve styling
         setTimeout(() => {
             forceApplyCurveStyles();
@@ -806,22 +1397,14 @@ function forceApplyCurveStyles() {
 
             // Scale curve distance based on connection length and viewport
             let curveMultiplier;
-            if (distance < viewportWidth * 0.1) {
-                curveMultiplier = 0.25;  // 10% viewport width: 0.5x multiplier
-            } else if (distance < viewportWidth * 0.15) {
-                curveMultiplier = .75;  // 15% viewport width: 0.75x multiplier
-            } else if (distance < viewportWidth * 0.3) {
-                curveMultiplier = 1.0;  // 30% viewport width: 1.5x multiplier
-            } else {
-                curveMultiplier = 2.75;  // >30% viewport width: 2.75x multiplier
-            }
+            curveMultiplier = (Math.sqrt(distance) * 0.05);
 
             const curveDistance = `${Math.round(baseDistance * curveMultiplier)}px`;
 
             edge.style({
                 'curve-style': 'unbundled-bezier',
-                'control-point-distances': [curveDistance, curveDistance],
-                'control-point-weights': [0.5, 0.5]
+                'control-point-distances': [curveDistance],
+                'control-point-weights': [0.5]
             });
         } else {
             // Different shelf - use straight edges
@@ -874,13 +1457,14 @@ function getCytoscapeStyles() {
                 'line-color': 'data(color)',
                 'line-opacity': 1,
                 'curve-style': 'unbundled-bezier',
-                'control-point-distances': ['100px', '100px'],
-                'control-point-weights': [0.5, 0.5],
+                'control-point-distances': ['100px'],
+                'control-point-weights': [0.5],
                 'label': 'data(label)',
                 'font-size': 12,
                 'font-weight': 'bold',
                 'text-background-color': '#ffffff',
                 'text-background-opacity': 1.0,
+                'text-background-padding': 2,
                 'text-border-width': 2,
                 'text-border-color': '#333333',
                 'text-border-opacity': 1.0,
@@ -900,6 +1484,7 @@ function getCytoscapeStyles() {
                 'z-compound-depth': 'top',
                 'text-background-color': '#ffff99',
                 'text-background-opacity': 1.0,
+                'text-background-padding': 2,
                 'text-border-width': 2,
                 'text-border-color': '#ff6600',
                 'text-border-opacity': 1.0
@@ -915,6 +1500,20 @@ function getCytoscapeStyles() {
                 'line-style': 'dashed',
                 'opacity': 0.8,
                 'z-index': 200
+            }
+        },
+
+        // Style for selected connection (for deletion)
+        {
+            selector: '.selected-connection',
+            style: {
+                'line-color': '#ff0000',
+                'width': 5,
+                'line-opacity': 1,
+                'z-index': 190,
+                'overlay-color': '#ff0000',
+                'overlay-opacity': 0.3,
+                'overlay-padding': 3
             }
         },
 
@@ -960,7 +1559,7 @@ function getCytoscapeStyles() {
                 'text-border-color': '#333333',
                 'padding': 15,
                 'min-width': '380px',
-                'min-height': '500px',  // Increased to accommodate better shelf spacing
+                'min-height': '500px',
                 'z-index': 1
             }
         },
@@ -1056,31 +1655,72 @@ function getCytoscapeStyles() {
 }
 
 function addCytoscapeEventHandlers() {
-    // Node click handler for info display
+    // Node click handler for info display and port connection creation
     cy.on('tap', 'node', function (evt) {
         const node = evt.target;
 
-        // Only show info if not in editing mode and not clicking ports during editing
-        if (!isEdgeCreationMode || !node.hasClass('port')) {
+        // Handle port clicks
+        if (node.hasClass('port')) {
+            if (isEdgeCreationMode) {
+                handlePortClickEditMode(node, evt);
+            } else {
+                handlePortClickViewMode(node, evt);
+            }
+        } else {
+            // Non-port node clicked - clear connection selection
+            if (selectedConnection) {
+                selectedConnection.removeClass('selected-connection');
+                selectedConnection = null;
+                updateDeleteButtonState();
+            }
             showNodeInfo(node, evt.renderedPosition || evt.position);
         }
     });
 
-    // Double-click handler for inline editing of shelf node hostnames
+    // Double-click handler for inline editing of shelf node details
     cy.on('dbltap', 'node', function (evt) {
         const node = evt.target;
         const data = node.data();
 
-        // Only allow editing hostname for shelf nodes
+        // Only allow editing for shelf nodes
         if (data.type === 'shelf') {
-            enableHostnameEditing(node, evt.renderedPosition || evt.position);
+            enableShelfEditing(node, evt.renderedPosition || evt.position);
         }
     });
 
-    // Click on background to hide info
+    // Edge click handler for connection selection and info display
+    cy.on('tap', 'edge', function (evt) {
+        const edge = evt.target;
+        const position = evt.renderedPosition || evt.position;
+
+        // Clear source port selection if clicking on an edge (editing mode only)
+        if (isEdgeCreationMode && sourcePort) {
+            sourcePort.removeClass('source-selected');
+            sourcePort = null;
+        }
+
+        // Deselect previously selected connection (works in both editing and normal mode)
+        if (selectedConnection) {
+            selectedConnection.removeClass('selected-connection');
+        }
+
+        // Select this connection (works in both editing and normal mode)
+        selectedConnection = edge;
+        edge.addClass('selected-connection');
+
+        // Update delete button state (only relevant in editing mode)
+        if (isEdgeCreationMode) {
+            updateDeleteButtonState();
+        }
+
+        // Show connection info annotation for any edge click (editing mode or not)
+        showConnectionInfo(edge, position);
+    });
+
+    // Click on background to hide info, deselect connection, and clear source port
     cy.on('tap', function (evt) {
         if (evt.target === cy) {
-            hideNodeInfo();
+            clearAllSelections();
         }
     });
 }
@@ -1272,31 +1912,7 @@ function populateNodeFilterDropdown() {
         const nodeData = node.data();
         let nodeLabel;
 
-        // Priority 1: Use hostname if available
-        if (nodeData.hostname) {
-            nodeLabel = nodeData.hostname;
-        }
-        // Priority 2: If we have hall, aisle, rack info, use that
-        else if (nodeData.hall && nodeData.aisle && (nodeData.rack_num !== undefined || nodeData.rack !== undefined)) {
-            const hall = nodeData.hall;
-            const aisle = nodeData.aisle;
-            const rack = nodeData.rack_num || nodeData.rack;
-            const shelfU = nodeData.shelf_u;
-
-            if (shelfU !== undefined && shelfU !== null && shelfU !== '') {
-                nodeLabel = `${hall}-${aisle}-R${rack}-U${shelfU}`;
-            } else {
-                nodeLabel = `${hall}-${aisle}-R${rack}`;
-            }
-        }
-        // Priority 3: Use the existing label
-        else if (nodeData.label) {
-            nodeLabel = nodeData.label;
-        }
-        // Priority 4: Fallback to node ID
-        else {
-            nodeLabel = nodeId;
-        }
+        nodeLabel = getNodeDisplayLabel(nodeData);
 
         const option = document.createElement('option');
         option.value = nodeId;
@@ -1313,14 +1929,24 @@ function showNodeInfo(node, position) {
     let html = `<strong>${data.label || data.id}</strong><br>`;
     html += `Type: ${data.type || 'Unknown'}<br>`;
 
+    // Show location information for rack nodes
+    if (data.type === 'rack') {
+        if (data.hall || data.aisle || data.rack_num) {
+            html += `<br><strong>Location:</strong><br>`;
+            if (data.hall !== undefined && data.hall !== '') html += `Hall: ${data.hall}<br>`;
+            if (data.aisle !== undefined && data.aisle !== '') html += `Aisle: ${data.aisle}<br>`;
+            if (data.rack_num !== undefined) html += `Rack: ${data.rack_num}<br>`;
+        }
+    }
     // Show location information based on available data
-    if (data.type === 'shelf' || data.type === 'node') {
+    else if (data.type === 'shelf' || data.type === 'node') {
         // For shelf/node types, show location info
         if (data.rack_num !== undefined && data.shelf_u !== undefined) {
-            // 18-column format: show Hall, Aisle, Rack, Shelf_U info
+            // 20-column format: show Hostname, Hall, Aisle, Rack, Shelf_U info
             html += `<br><strong>Location:</strong><br>`;
-            if (data.hall !== undefined) html += `Hall: ${data.hall}<br>`;
-            if (data.aisle !== undefined) html += `Aisle: ${data.aisle}<br>`;
+            if (data.hostname !== undefined && data.hostname !== '') html += `Hostname: ${data.hostname}<br>`;
+            if (data.hall !== undefined && data.hall !== '') html += `Hall: ${data.hall}<br>`;
+            if (data.aisle !== undefined && data.aisle !== '') html += `Aisle: ${data.aisle}<br>`;
             html += `Rack: ${data.rack_num}<br>`;
             html += `Shelf U: ${data.shelf_u}<br>`;
         } else if (data.hostname !== undefined) {
@@ -1334,38 +1960,30 @@ function showNodeInfo(node, position) {
             html += `Node Type: ${data.shelf_node_type.toUpperCase()}<br>`;
         }
     } else {
-        // For other node types (tray, port), show parent info
-        if (data.parent) {
-            html += `Parent: ${data.parent}<br>`;
-        }
+        // For other node types (tray, port), show hierarchical location with individual fields
+        const locationData = getNodeLocationData(node);
 
-        // Show additional details for trays and ports
-        if (data.tray !== undefined) {
-            html += `Tray: ${data.tray}<br>`;
-        }
-        if (data.port !== undefined) {
-            html += `Port: ${data.port}<br>`;
+        html += `<br><strong>Location:</strong><br>`;
+        if (locationData.hostname) html += `Hostname: ${locationData.hostname}<br>`;
+        if (locationData.hall) html += `Hall: ${locationData.hall}<br>`;
+        if (locationData.aisle) html += `Aisle: ${locationData.aisle}<br>`;
+        if (locationData.rack_num !== undefined) html += `Rack: ${locationData.rack_num}<br>`;
+        if (locationData.shelf_u !== undefined) html += `Shelf U: ${locationData.shelf_u}<br>`;
+        if (data.tray !== undefined) html += `Tray: ${data.tray}<br>`;
+        if (data.port !== undefined) html += `Port: ${data.port}<br>`;
 
-            // Add Eth_Channel Mapping for ports
-            if (data.type === 'port') {
-                // Get node type from 2 levels above (shelf level)
-                let nodeType = null;
-                if (data.shelf_node_type) {
-                    nodeType = data.shelf_node_type;
-                } else {
-                    // Try to get from parent hierarchy
-                    const parentTray = cy.getElementById(data.parent);
-                    if (parentTray && parentTray.length > 0) {
-                        const parentShelf = cy.getElementById(parentTray.data('parent'));
-                        if (parentShelf && parentShelf.length > 0) {
-                            nodeType = parentShelf.data('shelf_node_type');
-                        }
-                    }
+        // Add Eth_Channel Mapping for ports
+        if (data.type === 'port') {
+            let nodeType = data.shelf_node_type;
+            if (!nodeType) {
+                const shelfNode = node.parent().parent();
+                if (shelfNode && shelfNode.length > 0) {
+                    nodeType = shelfNode.data('shelf_node_type');
                 }
-
-                const ethChannel = getEthChannelMapping(nodeType, data.port);
-                html += `Eth_Channel Mapping: ${ethChannel}<br>`;
             }
+
+            const ethChannel = getEthChannelMapping(nodeType, data.port);
+            html += `Eth_Channel Mapping: ${ethChannel}<br>`;
         }
     }
 
@@ -1380,26 +1998,96 @@ function hideNodeInfo() {
     document.getElementById('nodeInfo').style.display = 'none';
 }
 
-function enableHostnameEditing(node, position) {
-    const data = node.data();
+function showConnectionInfo(edge, position) {
+    /**
+     * Show detailed information about a connection
+     * @param {Object} edge - Cytoscape edge element
+     * @param {Object} position - Position to display the info panel
+     */
     const nodeInfo = document.getElementById('nodeInfo');
     const content = document.getElementById('nodeInfoContent');
 
-    // Create editing interface
-    let html = `<strong>Edit Hostname</strong><br>`;
-    html += `Node: ${data.label || data.id}<br><br>`;
-    html += `<input type="text" id="hostnameEditInput" value="${data.hostname || ''}" placeholder="Enter hostname" style="width: 200px; padding: 5px; margin: 5px 0;">`;
-    html += `<br><br>`;
-    html += `<button onclick="saveHostnameEdit('${node.id()}')" style="background: #007bff; color: white; border: none; padding: 5px 10px; margin-right: 5px; cursor: pointer;">Save</button>`;
-    html += `<button onclick="cancelHostnameEdit()" style="background: #6c757d; color: white; border: none; padding: 5px 10px; cursor: pointer;">Cancel</button>`;
+    const edgeData = edge.data();
+    const sourceNode = cy.getElementById(edgeData.source);
+    const targetNode = cy.getElementById(edgeData.target);
+
+    // Get detailed location info for both endpoints
+    const sourceInfo = getPortLocationInfo(sourceNode);
+    const targetInfo = getPortLocationInfo(targetNode);
+
+    // Build HTML content
+    let html = `<strong>Connection Details</strong><br><br>`;
+
+    html += `<strong>Source:</strong><br>`;
+    html += `${sourceInfo}<br><br>`;
+
+    html += `<strong>Target:</strong><br>`;
+    html += `${targetInfo}<br><br>`;
+
+    // Show cable information
+    html += `<strong>Cable Info:</strong><br>`;
+    html += `Type: ${edgeData.cable_type || 'Unknown'}<br>`;
+    html += `Length: ${edgeData.cable_length || 'Unknown'}<br>`;
+
+    // Show connection number if available
+    if (edgeData.connection_number !== undefined) {
+        html += `Connection #: ${edgeData.connection_number}<br>`;
+    }
 
     content.innerHTML = html;
 
     nodeInfo.style.left = `${position.x + 10}px`;
     nodeInfo.style.top = `${position.y + 10}px`;
     nodeInfo.style.display = 'block';
+}
 
-    // Focus on the input field
+
+function enableShelfEditing(node, position) {
+    const data = node.data();
+    const nodeInfo = document.getElementById('nodeInfo');
+    const content = document.getElementById('nodeInfoContent');
+
+    // Create editing interface for all shelf fields
+    let html = `<strong>Edit Shelf Node</strong><br>`;
+    html += `Node: ${data.label || data.id}<br><br>`;
+
+    html += `<div style="margin-bottom: 10px;">`;
+    html += `<label style="display: block; margin-bottom: 3px; font-weight: bold;">Hostname:</label>`;
+    html += `<input type="text" id="hostnameEditInput" value="${data.hostname || ''}" placeholder="Enter hostname" style="width: 200px; padding: 5px;">`;
+    html += `</div>`;
+
+    html += `<div style="margin-bottom: 10px;">`;
+    html += `<label style="display: block; margin-bottom: 3px; font-weight: bold;">Hall:</label>`;
+    html += `<input type="text" id="hallEditInput" value="${data.hall || ''}" placeholder="Enter hall" style="width: 200px; padding: 5px;">`;
+    html += `</div>`;
+
+    html += `<div style="margin-bottom: 10px;">`;
+    html += `<label style="display: block; margin-bottom: 3px; font-weight: bold;">Aisle:</label>`;
+    html += `<input type="text" id="aisleEditInput" value="${data.aisle || ''}" placeholder="Enter aisle" style="width: 200px; padding: 5px;">`;
+    html += `</div>`;
+
+    html += `<div style="margin-bottom: 10px;">`;
+    html += `<label style="display: block; margin-bottom: 3px; font-weight: bold;">Rack:</label>`;
+    html += `<input type="number" id="rackEditInput" value="${data.rack_num || ''}" placeholder="Enter rack number" style="width: 200px; padding: 5px;">`;
+    html += `</div>`;
+
+    html += `<div style="margin-bottom: 10px;">`;
+    html += `<label style="display: block; margin-bottom: 3px; font-weight: bold;">Shelf U:</label>`;
+    html += `<input type="number" id="shelfUEditInput" value="${data.shelf_u || ''}" placeholder="Enter shelf U" style="width: 200px; padding: 5px;">`;
+    html += `</div>`;
+
+    html += `<br>`;
+    html += `<button onclick="saveShelfEdit('${node.id()}')" style="background: #007bff; color: white; border: none; padding: 8px 15px; margin-right: 5px; cursor: pointer;">Save</button>`;
+    html += `<button onclick="cancelShelfEdit()" style="background: #6c757d; color: white; border: none; padding: 8px 15px; cursor: pointer;">Cancel</button>`;
+
+    content.innerHTML = html;
+
+    // Position editing form to the right of the node
+    nodeInfo.style.left = `${position.x + 20}px`;
+    nodeInfo.style.top = `${position.y - 10}px`;
+    nodeInfo.style.display = 'block';
+
+    // Focus on the hostname input field
     setTimeout(() => {
         const input = document.getElementById('hostnameEditInput');
         if (input) {
@@ -1410,46 +2098,202 @@ function enableHostnameEditing(node, position) {
 }
 
 // Make functions globally accessible for onclick handlers
-window.saveHostnameEdit = function (nodeId) {
-    const input = document.getElementById('hostnameEditInput');
-    const newHostname = input.value.trim();
+window.saveShelfEdit = function (nodeId) {
+    const hostnameInput = document.getElementById('hostnameEditInput');
+    const hallInput = document.getElementById('hallEditInput');
+    const aisleInput = document.getElementById('aisleEditInput');
+    const rackInput = document.getElementById('rackEditInput');
+    const shelfUInput = document.getElementById('shelfUEditInput');
 
-    if (!newHostname) {
-        alert('Hostname cannot be empty');
-        return;
-    }
+    const newHostname = hostnameInput.value.trim();
+    const newHall = hallInput.value.trim();
+    const newAisle = aisleInput.value.trim();
+    const newRack = rackInput.value ? parseInt(rackInput.value) : undefined;
+    const newShelfU = shelfUInput.value ? parseInt(shelfUInput.value) : undefined;
 
-    // Check if hostname already exists on another node
-    let hostnameExists = false;
-    cy.nodes().forEach(function (node) {
-        if (node.id() !== nodeId && node.data('hostname') === newHostname) {
-            hostnameExists = true;
-        }
-    });
-
-    if (hostnameExists) {
-        alert(`Hostname "${newHostname}" already exists on another node. Please choose a different hostname.`);
-        return;
-    }
-
-    // Update the node data
+    // Get the node to check for changes
     const node = cy.getElementById(nodeId);
-    node.data('hostname', newHostname);
+    const oldHostname = node.data('hostname') || '';
+    const oldHall = node.data('hall') || '';
+    const oldAisle = node.data('aisle') || '';
+    const oldRack = node.data('rack_num');
+    const oldShelfU = node.data('shelf_u');
 
-    // Update the node label to show the hostname
-    node.data('label', newHostname);
+    // Check if at least one field has changed
+    const hostnameChanged = newHostname !== oldHostname;
+    const hallChanged = newHall !== oldHall;
+    const aisleChanged = newAisle !== oldAisle;
+    const rackChanged = newRack !== oldRack && newRack !== undefined;
+    const shelfUChanged = newShelfU !== oldShelfU && newShelfU !== undefined;
 
-    // Refresh the visualization to update the label
-    cy.trigger('layoutstop');
+    if (!hostnameChanged && !hallChanged && !aisleChanged && !rackChanged && !shelfUChanged) {
+        alert('No changes detected. Please modify at least one field.');
+        return;
+    }
 
-    // Hide the editing interface
-    hideNodeInfo();
+    // Check if hostname already exists on another node (if hostname changed)
+    if (hostnameChanged && newHostname) {
+        let hostnameExists = false;
+        cy.nodes().forEach(function (n) {
+            if (n.id() !== nodeId && n.data('hostname') === newHostname) {
+                hostnameExists = true;
+            }
+        });
 
-    // Show success message
-    showExportStatus(`Hostname updated to: ${newHostname}`, 'success');
+        if (hostnameExists) {
+            alert(`Hostname "${newHostname}" already exists on another node. Please choose a different hostname.`);
+            return;
+        }
+    }
+
+    // Update the node data only with changed values
+    if (hostnameChanged) {
+        node.data('hostname', newHostname);
+        // Update hostname for all child nodes (trays and ports)
+        node.descendants().forEach(function (child) {
+            child.data('hostname', newHostname);
+        });
+    }
+    if (hallChanged) node.data('hall', newHall);
+    if (aisleChanged) node.data('aisle', newAisle);
+    if (rackChanged) node.data('rack_num', newRack);
+    if (shelfUChanged) {
+        node.data('shelf_u', newShelfU);
+        // Update shelf_u for all child nodes (trays and ports)
+        node.descendants().forEach(function (child) {
+            child.data('shelf_u', newShelfU);
+        });
+    }
+
+    // Update the node label - use the current state of the node after updates
+    let newLabel;
+    const currentHostname = node.data('hostname') || '';
+    const currentHall = node.data('hall') || '';
+    const currentAisle = node.data('aisle') || '';
+    const currentRack = node.data('rack_num');
+    const currentShelfU = node.data('shelf_u');
+
+    // Prefer hostname for display label, fall back to location format
+    if (currentHostname) {
+        newLabel = currentHostname;
+    } else if (currentHall && currentAisle && currentRack !== undefined && currentShelfU !== undefined) {
+        newLabel = buildLocationLabel(currentHall, currentAisle, currentRack, currentShelfU);
+    } else if (currentShelfU !== undefined) {
+        newLabel = `Shelf ${currentShelfU}`;
+    } else {
+        newLabel = node.data('label'); // Keep existing label
+    }
+    node.data('label', newLabel);
+
+    // Handle rack change - move shelf to new rack if rack number changed
+    const parent = node.parent();
+    if (rackChanged && currentRack !== undefined) {
+        // Need to move this shelf to a different rack
+        const newRackId = `rack_${currentRack.toString().padStart(2, '0')}`;
+        let newRackNode = cy.getElementById(newRackId);
+
+        // If the new rack doesn't exist, create it
+        if (newRackNode.length === 0) {
+            const rackLabel = `Rack ${currentRack}`;
+
+            // Calculate position for new rack - place it relative to existing racks
+            let newRackX = 0;
+            let newRackY = 0;
+            const existingRacks = cy.nodes('[type="rack"]');
+
+            if (existingRacks.length > 0) {
+                // Position new rack to the right of the rightmost rack
+                let maxX = -Infinity;
+                existingRacks.forEach(function (rack) {
+                    const rackPos = rack.position();
+                    if (rackPos.x > maxX) {
+                        maxX = rackPos.x;
+                        newRackY = rackPos.y; // Use same Y as existing racks
+                    }
+                });
+                newRackX = maxX + 500; // 500px spacing between racks (450 width + 50 spacing)
+            } else {
+                // First rack - place at a reasonable starting position
+                newRackX = LAYOUT_CONSTANTS.NEW_RACK_DEFAULT_X;
+                newRackY = LAYOUT_CONSTANTS.NEW_RACK_DEFAULT_Y;
+            }
+
+            cy.add({
+                group: 'nodes',
+                data: {
+                    id: newRackId,
+                    label: rackLabel,
+                    type: 'rack',
+                    rack_num: currentRack,
+                    hall: currentHall,
+                    aisle: currentAisle
+                },
+                classes: 'rack',
+                position: {
+                    x: newRackX,
+                    y: newRackY
+                }
+            });
+            newRackNode = cy.getElementById(newRackId);
+        } else {
+            // Update existing rack's label and data
+            if (currentHall && currentAisle) {
+                newRackNode.data('label', `Rack ${currentRack}`);
+                newRackNode.data('hall', currentHall);
+                newRackNode.data('aisle', currentAisle);
+            }
+        }
+
+        // Move the shelf node to the new rack
+        node.move({ parent: newRackId });
+
+        // Update all child nodes (trays and ports) with the new rack_num
+        node.descendants().forEach(function (child) {
+            if (rackChanged) child.data('rack_num', currentRack);
+            if (hallChanged && currentHall) child.data('hall', currentHall);
+            if (aisleChanged && currentAisle) child.data('aisle', currentAisle);
+        });
+    } else if (parent && parent.length > 0 && parent.data('type') === 'rack') {
+        // Just update parent rack label if hall/aisle changed (but not rack number)
+        if (hallChanged || aisleChanged) {
+            const rackNum = node.data('rack_num');
+            const hall = node.data('hall');
+            const aisle = node.data('aisle');
+
+            if (hall && aisle && rackNum !== undefined) {
+                parent.data('label', `Rack ${rackNum}`);
+                parent.data('hall', hall);
+                parent.data('aisle', aisle);
+            }
+
+            // Update all child nodes (trays and ports) with the new hall/aisle
+            node.descendants().forEach(function (child) {
+                if (hallChanged && currentHall) child.data('hall', currentHall);
+                if (aisleChanged && currentAisle) child.data('aisle', currentAisle);
+            });
+        }
+    }
+
+    // If rack or shelf_u changed, automatically reset layout to properly reposition nodes
+    if (rackChanged || shelfUChanged) {
+        // Hide the editing interface first
+        hideNodeInfo();
+
+        // Call resetLayout to recalculate positions
+        // Use setTimeout to ensure the DOM updates are complete
+        setTimeout(function () {
+            resetLayout();
+        }, 100);
+    } else {
+        // Hide the editing interface
+        hideNodeInfo();
+
+        // Show success message
+        showExportStatus('Shelf node updated successfully', 'success');
+    }
 };
 
-window.cancelHostnameEdit = function () {
+window.cancelShelfEdit = function () {
     hideNodeInfo();
 };
 
@@ -1660,6 +2504,21 @@ function clearConnectionRange() {
     statusDiv.style.color = '#666';
 }
 
+/**
+ * Validate that all shelf nodes have hostnames
+ * @returns {Array} Array of node labels that are missing hostnames (empty if all valid)
+ */
+function validateHostnames() {
+    const nodesWithoutHostname = [];
+    cy.nodes().forEach(function (node) {
+        const data = node.data();
+        if (data.type === 'shelf' && (!data.hostname || data.hostname.trim() === '')) {
+            nodesWithoutHostname.push(data.label || data.id);
+        }
+    });
+    return nodesWithoutHostname;
+}
+
 async function exportCablingDescriptor() {
     if (typeof cy === 'undefined' || !cy) {
         showExportStatus('No visualization data available', 'error');
@@ -1799,14 +2658,7 @@ async function generateCablingGuide() {
     }
 
     // Check for nodes without hostnames and show warning
-    const nodesWithoutHostname = [];
-    cy.nodes().forEach(function (node) {
-        const data = node.data();
-        if (data.type === 'shelf' && !data.hostname) {
-            nodesWithoutHostname.push(data.label || data.id);
-        }
-    });
-
+    const nodesWithoutHostname = validateHostnames();
     if (nodesWithoutHostname.length > 0) {
         showExportStatus(`Warning: The following nodes are missing hostnames: ${nodesWithoutHostname.join(', ')}. FSD generation will proceed but may have incomplete data.`, 'warning');
     }
@@ -1942,7 +2794,7 @@ document.addEventListener('keydown', function (event) {
         }
     }
 
-    // Backspace to delete selected connection (only in editing mode)
+    // Backspace or Delete to delete selected connection (only in editing mode)
     if (event.key === 'Backspace' || event.key === 'Delete') {
         // Only delete if we're in editing mode, have a selected connection, and not typing in an input
         if (isEdgeCreationMode && selectedConnection && selectedConnection.length > 0 &&
@@ -1968,9 +2820,6 @@ document.addEventListener('keydown', function (event) {
         createEmptyVisualization();
     }
 });
-
-// Helper function to get parent at a specific level
-// level 0 = self, level 1 = parent, level 2 = grandparent, etc.
 
 // Initialize node configurations when the page loads
 initializeNodeConfigs();

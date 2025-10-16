@@ -67,10 +67,12 @@
 
         .sidebar {
             width: 350px;
+            min-width: 280px;
             background-color: white;
             border-right: 1px solid #dee2e6;
             padding: 20px;
             overflow-y: auto;
+            flex-shrink: 0;
         }
 
         .sidebar h3 {
@@ -323,6 +325,48 @@
             display: none;
             z-index: 1000;
         }
+
+        /* Responsive design for smaller screens */
+        @media (max-width: 1200px) {
+            .sidebar {
+                width: 300px;
+                min-width: 250px;
+            }
+        }
+
+        @media (max-width: 900px) {
+            .sidebar {
+                width: 280px;
+                min-width: 220px;
+                padding: 15px;
+            }
+
+            .sidebar h3 {
+                font-size: 16px;
+            }
+
+            .upload-section {
+                padding: 15px;
+            }
+        }
+
+        @media (max-width: 768px) {
+            .container {
+                flex-direction: column;
+            }
+
+            .sidebar {
+                width: 100%;
+                min-width: unset;
+                height: 300px;
+                border-right: none;
+                border-bottom: 1px solid #dee2e6;
+            }
+
+            #cy {
+                height: calc(100vh - 360px);
+            }
+        }
     </style>
 </head>
 
@@ -378,6 +422,16 @@
                         style="width: 20px; height: 3px; background-color: #2196F3; margin-right: 10px; border-radius: 2px;">
                     </div>
                     <span style="font-size: 13px; color: #333;">Inter-node connections (different nodes)</span>
+                </div>
+            </div>
+
+            <div style="margin-bottom: 20px;">
+                <button id="resetLayoutBtn" onclick="resetLayout()"
+                    style="width: 100%; padding: 12px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; font-weight: bold;">
+                    🔄 Reset Layout
+                </button>
+                <div style="font-size: 11px; color: #666; margin-top: 5px; text-align: center;">
+                    Recalculate and reset all node positions based on rack/shelf hierarchy
                 </div>
             </div>
 
@@ -459,7 +513,7 @@
                 <div style="margin-bottom: 15px;">
                     <button id="toggleEdgeHandlesBtn" onclick="toggleEdgeHandles()"
                         style="width: 100%; padding: 12px; background: #28a745; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; font-weight: bold;">
-                        🔗 Enable Connection Editing
+                        🔗 Enable Cabling Editing
                     </button>
                     <div style="font-size: 11px; color: #666; margin-top: 5px; text-align: center;">
                         Click ports to create connections (2-click process)<br>
@@ -473,11 +527,13 @@
                         🗑️ Delete Selected Connection
                     </button>
                     <div style="font-size: 11px; color: #666; margin-top: 5px; text-align: center;">
-                        Select a connection first, then click to delete (or press Backspace)
+                        Select a connection or an associated port first, then click to delete (or press
+                        Backspace/Delete)
                     </div>
                 </div>
 
-                <div style="margin-bottom: 20px; border-top: 1px solid #ddd; padding-top: 15px;">
+                <div id="addNodeSection"
+                    style="margin-bottom: 20px; border-top: 1px solid #ddd; padding-top: 15px; display: none;">
                     <h4 style="margin-bottom: 10px; color: #333;">Add New Node</h4>
 
                     <div style="margin-bottom: 10px;">
@@ -610,39 +666,23 @@
             </div>
 
             <div class="info-panel">
-                <strong>How to Use:</strong><br>
-                1. Upload a CSV file OR click "Empty Canvas"<br>
-                2. Click "Generate Visualization" or start with empty canvas<br>
-                3. Use controls above to filter and adjust display<br>
-                4. Add new nodes using the "Add New Node" section<br><br>
+                <strong>Quick Start:</strong><br>
+                • Upload CSV to load existing topology OR click "Empty Canvas" to build from scratch<br>
+                • Pan: Click and drag | Zoom: Mouse wheel<br>
+                • Click elements to view details<br><br>
 
-                <strong>Getting Started:</strong><br>
-                • Upload CSV: Load existing network topology<br>
-                • Empty Canvas: Start building from scratch<br>
-                • Keyboard: Ctrl+E (create empty canvas)<br><br>
+                <strong>Editing:</strong><br>
+                • <u>Connections:</u> Enable edit mode → click two ports to connect | Click edge then delete
+                button/Backspace/Delete<br>
+                • <u>Shelf Nodes:</u> Double-click shelf to edit hostname, location (move to different rack)<br>
+                • <u>Add Nodes:</u> Enable Connection Editing to access "Add New Node" section<br><br>
 
-                <strong>Connection Controls:</strong><br>
-                • Click and drag to pan around<br>
-                • Mouse wheel to zoom in/out<br>
-                • Click elements to view details<br>
-                • Drag racks and shelves to reorganize<br><br>
+                <strong>Layout & Filtering:</strong><br>
+                • <u>Reset Layout:</u> Recalculates all positions (racks by number, shelves by U)<br>
+                • <u>Range Filter:</u> Show specific connections (e.g., "1-10", "5,8,12", "20-30,45")<br><br>
 
-                <strong>Node Creation:</strong><br>
-                • Select node type from dropdown<br>
-                • Enter unique hostname<br>
-                • Click "Add Node" to create with trays/ports<br>
-                • Keyboard: Ctrl+N (focus hostname input)<br><br>
-
-                <strong>Connection Editing:</strong><br>
-                • Enable editing mode, then click two ports to connect<br>
-                • Click existing connections to delete them<br>
-                • Each port can only have one connection<br>
-                • Orange highlighting shows available ports<br><br>
-
-                <strong>Filtering:</strong><br>
-                • Use range filter to show specific connections<br>
-                • Examples: "1-10", "5,8,12", "20-30,45"<br>
-                • Keyboard: Ctrl+Enter (apply), Esc (clear)<br><br>
+                <strong>Export:</strong><br>
+                • Export topology as CablingDescriptor, DeploymentDescriptor, or Cabling Guide CSV<br>
             </div>
         </div>
 
