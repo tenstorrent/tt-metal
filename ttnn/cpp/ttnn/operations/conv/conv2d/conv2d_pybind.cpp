@@ -36,7 +36,7 @@ void py_bind_conv2d(py::module& module) {
 
         For more information, refer to [CNNs on Tenstorrent Architectures](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/CNNs/ttcnn.md) tech report.
 
-        :param ttnn.Tensor input_tensor: The input tensor in [N, H, W, C] format.
+        :param ttnn.Tensor input_tensor: The input tensor in [N, H, W, C] format. The tensor can be on either the host or the device.
         :param ttnn.Tensor weight_tensor: The convolution weights, typically in [out_channels, in_channels // groups, kernel_height, kernel_width] format.
         :param ttnn.Tensor, optional bias_tensor: The bias tensor to be added. Defaults to None.
         :param int in_channels:  Number of channels in the input tensor.
@@ -48,6 +48,10 @@ void py_bind_conv2d(py::module& module) {
         :param tuple[int, int], optional dilation: The spacing between kernel elements. Defaults to (1, 1).
         :param int groups: Number of blocked connections from input channels to output channels. Defaults to 1.
         :param ttnn.DataType, optional dtype: The data type of the output tensor. If not provided, it is inferred from the input tensor.
+        :param ttnn.Conv2dConfig, None conv_config: Configuration for convolution. Default: None
+        :param ttnn.DeviceComputeKernelConfig, None compute_config: Configuration for compute kernel. Default: None
+        :param ttnn.MemoryConfig, None memory_config: Output Tensor's Memory Configuration. Default: None
+        :param ttnn.Conv2dSliceConfig, None slice_config: Configuration for slicing input & output tensors in DRAM. If set to None input is in DRAM, DRAM slicing is automatically enabled. Default: None
 
         :return: The output tensor, output height and width, and the preprocessed weights and bias.
 
