@@ -295,52 +295,45 @@ Notes:
     std::cerr << "[host] rx_xy=(" << (int)rx_xy.x << "," << (int)rx_xy.y << ") sem_l1=0x" << std::hex
               << gsem_done->address() << std::dec << "\n";
 
-    tt::tt_metal::Program local_prog = tt::tt_metal::CreateProgram();
-
-    // Recreate the same CB on the same core for this program
+    // --- Local self-copy path on a different core, inside the same sender_prog ---
     {
+        // Create a CB on p.receiver_core (separate from the fabric sender core)
         const uint32_t CB_ID = tt::CBIndex::c_0;
         auto cb_cfg_local = tt::tt_metal::CircularBufferConfig(8 * p.page_size, {{CB_ID, tt::DataFormat::Float16}})
                                 .set_page_size(CB_ID, p.page_size);
-        (void)tt::tt_metal::CreateCircularBuffer(local_prog, p.sender_core, cb_cfg_local);
+        (void)tt::tt_metal::CreateCircularBuffer(sender_prog, p.receiver_core, cb_cfg_local);
+
+        // Local reader (DRAM src_buf -> CB) on p.receiver_core / RISCV_0
+        std::vector<uint32_t> local_reader_cta;
+        tt::tt_metal::TensorAccessorArgs(*src_buf).append_to(local_reader_cta);
+        local_reader_cta.push_back(1u /*SRC_IS_DRAM*/);
+        local_reader_cta.push_back(NUM_PAGES);
+        local_reader_cta.push_back(p.page_size);
+        auto local_reader_k = tt::tt_metal::CreateKernel(
+            sender_prog,
+            std::string(KDIR) + "all_gather_tx_reader_to_cb.cpp",
+            p.receiver_core,
+            tt::tt_metal::DataMovementConfig{
+                .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+                .noc = tt::tt_metal::NOC::RISCV_0_default,
+                .compile_args = local_reader_cta});
+        tt::tt_metal::SetRuntimeArgs(sender_prog, local_reader_k, p.receiver_core, {(uint32_t)src_buf->address()});
+
+        // Local writer (CB -> dst_buf on THIS chip via NoC) on p.receiver_core / RISCV_1
+        std::vector<uint32_t> local_writer_cta;
+        tt::tt_metal::TensorAccessorArgs(*dst_buf).append_to(local_writer_cta);
+        local_writer_cta.push_back(NUM_PAGES);
+        local_writer_cta.push_back(p.page_size);
+        auto local_writer_k = tt::tt_metal::CreateKernel(
+            sender_prog,
+            std::string(KDIR) + "all_gather_local_writer_cb_to_self.cpp",
+            p.receiver_core,
+            tt::tt_metal::DataMovementConfig{
+                .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
+                .noc = tt::tt_metal::NOC::RISCV_0_default,
+                .compile_args = local_writer_cta});
+        tt::tt_metal::SetRuntimeArgs(sender_prog, local_writer_k, p.receiver_core, {(uint32_t)dst_buf->address()});
     }
-
-    // Reader (DRAM src_buf -> CB): same kernel/args as the sender's reader
-    std::vector<uint32_t> local_reader_cta;
-    tt::tt_metal::TensorAccessorArgs(*src_buf).append_to(local_reader_cta);
-    local_reader_cta.push_back(1u /*SRC_IS_DRAM*/);
-    local_reader_cta.push_back(NUM_PAGES);
-    local_reader_cta.push_back(p.page_size);
-
-    auto local_reader_k = tt::tt_metal::CreateKernel(
-        local_prog,
-        std::string(KDIR) + "all_gather_tx_reader_to_cb.cpp",
-        p.sender_core,
-        tt::tt_metal::DataMovementConfig{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt::tt_metal::NOC::RISCV_0_default,
-            .compile_args = local_reader_cta});
-    tt::tt_metal::SetRuntimeArgs(local_prog, local_reader_k, p.sender_core, {(uint32_t)src_buf->address()});
-
-    // Local writer (CB -> dst_buf on THIS chip via NoC)
-    std::vector<uint32_t> local_writer_cta;
-    tt::tt_metal::TensorAccessorArgs(*dst_buf).append_to(local_writer_cta);
-    local_writer_cta.push_back(NUM_PAGES);
-    local_writer_cta.push_back(p.page_size);
-
-    auto local_writer_k = tt::tt_metal::CreateKernel(
-        local_prog,
-        std::string(KDIR) + "all_gather_local_writer_cb_to_self.cpp",
-        p.sender_core,
-        tt::tt_metal::DataMovementConfig{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
-            .noc = tt::tt_metal::NOC::RISCV_0_default,
-            .compile_args = local_writer_cta});
-    tt::tt_metal::SetRuntimeArgs(local_prog, local_writer_k, p.sender_core, {(uint32_t)dst_buf->address()});
-
-    // Wrap as a workload on the *source* device
-    auto local_workload = Dist::MeshWorkload();
-    local_workload.add_program(Dist::MeshCoordinateRange(src_coord), std::move(local_prog));
 
     // -------------------------- end PROGRAM FACTORY --------------------------
 
@@ -516,29 +509,24 @@ Notes:
               << " leg_mask=" << leg_mask << " receivers=" << dst_coords.size() << "\n";
     tt::tt_metal::SetRuntimeArgs(sender_prog, writer_k, p.sender_core, writer_rt);
 
-    // Build two workloads so the RX wait kernel is always running before TX starts.
-    auto sender_workload = Dist::MeshWorkload();
-    auto receiver_workload = Dist::MeshWorkload();
-
-    sender_workload.add_program(Dist::MeshCoordinateRange(src_coord), std::move(sender_prog));
+    // Build one workload that contains both RX and TX so they run together.
+    auto workload = Dist::MeshWorkload();
+    workload.add_program(Dist::MeshCoordinateRange(src_coord), std::move(sender_prog));
     for (size_t i = 0; i < dst_coords.size(); ++i) {
-        receiver_workload.add_program(Dist::MeshCoordinateRange(dst_coords[i]), std::move(receiver_progs[i]));
+        workload.add_program(Dist::MeshCoordinateRange(dst_coords[i]), std::move(receiver_progs[i]));
     }
 
-    // 1) Warm-up outside capture: launch RX first so it's waiting, then TX
-    std::cerr << "[host] enqueue RX (warmup)\n";
-    Dist::EnqueueMeshWorkload(mcq, receiver_workload, /*blocking=*/false);
-    std::cerr << "[host] enqueue TX (warmup)\n";
-    Dist::EnqueueMeshWorkload(mcq, sender_workload, /*blocking=*/false);
+    // 1) Warm-up outside capture: enqueue unified workload (RX+TX together)
+    std::cerr << "[host] enqueue unified workload (warmup)\n";
+    Dist::EnqueueMeshWorkload(mcq, workload, /*blocking=*/false);
     std::cerr << "[host] finish warmup\n";
     Dist::Finish(mcq);  // if we hang here, TX/RX warmup didn’t complete
     std::cerr << "[host] warmup finished\n";
     // 2) Capture p.trace_iters enqueues back-to-back
     auto trace_id = Dist::BeginTraceCapture(mesh.get(), mcq.id());
     for (uint32_t i = 0; i < p.trace_iters; ++i) {
-        // Maintain RX→TX order inside the capture as well
-        Dist::EnqueueMeshWorkload(mcq, receiver_workload, /*blocking=*/false);
-        Dist::EnqueueMeshWorkload(mcq, sender_workload, /*blocking=*/false);
+        // Enqueue unified workload once per iteration
+        Dist::EnqueueMeshWorkload(mcq, workload, /*blocking=*/false);
     }
     Dist::EndTraceCapture(mesh.get(), mcq.id(), trace_id);
     // 3) Replay measured section
@@ -547,8 +535,6 @@ Notes:
     Dist::Finish(mcq);
     auto t1 = std::chrono::steady_clock::now();
     Dist::ReleaseTrace(mesh.get(), trace_id);
-
-    Dist::EnqueueMeshWorkload(mcq, local_workload, /*blocking=*/true);
 
     // Read back and verify
     std::vector<uint32_t> rx_self(n_words, 0u);
