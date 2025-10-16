@@ -547,6 +547,79 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
+namespace {
+void assert_subblock_compute_config_compatible(bool dst_full_sync_en, bool fp32_dest_acc_en, uint32_t subblock_wt) {
+    if (!dst_full_sync_en) {
+        if (fp32_dest_acc_en) {
+            TT_FATAL(
+                subblock_wt <= 4,
+                "subblock_wt={}, but subblock width must less than 4 tiles in fp32 mode when dst_full_sync_en is false",
+                subblock_wt);
+        } else {
+            TT_FATAL(
+                subblock_wt <= 8,
+                "subblock_wt={}, but subblock width must less than 8 tiles when dst_full_sync_en is false",
+                subblock_wt);
+        }
+    } else {
+        if (fp32_dest_acc_en) {
+            TT_FATAL(
+                subblock_wt <= 8,
+                "subblock_wt={}, but subblock width must less than 8 tiles in fp32 mode when dst_full_sync_en is true",
+                subblock_wt);
+        } else {
+            TT_FATAL(
+                subblock_wt <= 16,
+                "subblock_wt={}, but subblock width must less than 16 tiles when dst_full_sync_en is true",
+                subblock_wt);
+        }
+    }
+}
+
+std::tuple<tt::DataFormat, tt::DataFormat, tt::DataFormat, tt::DataFormat> get_cb_data_formats(
+    const Tensor& output,
+    const std::optional<const Tensor>& gamma,
+    const std::optional<const Tensor>& beta,
+    bool fp32_dest_acc_en) {
+    tt::DataFormat out_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
+    tt::DataFormat cb_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    tt::DataFormat gamma_cb_data_format = gamma.has_value()
+                                              ? tt::tt_metal::datatype_to_dataformat_converter(gamma.value().dtype())
+                                              : tt::DataFormat::Float16_b;
+    tt::DataFormat beta_cb_data_format = beta.has_value()
+                                             ? tt::tt_metal::datatype_to_dataformat_converter(beta.value().dtype())
+                                             : tt::DataFormat::Float16_b;
+    return {out_data_format, cb_data_format, gamma_cb_data_format, beta_cb_data_format};
+}
+
+bool should_use_two_stage_reduce(
+    bool mcast_1d, bool row_wise, CoreCoord grid_size, CoreCoord compute_with_storage_grid_size) {
+    if (mcast_1d) {
+        // only do this for row/col dim are full length
+        if (row_wise && grid_size.x > 1 && grid_size.x <= compute_with_storage_grid_size.x &&
+            grid_size.y > 1) {  // row major and multiple rows
+            return true;
+        } else if (!row_wise && grid_size.x > 1 && grid_size.y == compute_with_storage_grid_size.y) {  // col major and
+                                                                                                       // multiple cols
+            return true;
+        }
+    }
+    return false;
+}
+
+uint32_t get_num_blocks(bool mcast_1d, bool row_wise, CoreCoord grid_size, const ShardSpec& shard_spec) {
+    if (mcast_1d) {
+        return shard_spec.num_cores();
+    } else if (row_wise) {
+        return grid_size.x;
+    } else {
+        return grid_size.y;
+    }
+
+    return uint32_t{};
+}
+}  // namespace
+
 operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     const Tensor& a,
     const std::optional<const Tensor>& b,
@@ -584,40 +657,11 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 
-    if (!dst_full_sync_en) {
-        if (fp32_dest_acc_en) {
-            TT_FATAL(
-                subblock_wt <= 4,
-                "subblock_wt={}, but subblock width must less than 4 tiles in fp32 mode when dst_full_sync_en is false",
-                subblock_wt);
-        } else {
-            TT_FATAL(
-                subblock_wt <= 8,
-                "subblock_wt={}, but subblock width must less than 8 tiles when dst_full_sync_en is false",
-                subblock_wt);
-        }
-    } else {
-        if (fp32_dest_acc_en) {
-            TT_FATAL(
-                subblock_wt <= 8,
-                "subblock_wt={}, but subblock width must less than 8 tiles in fp32 mode when dst_full_sync_en is true",
-                subblock_wt);
-        } else {
-            TT_FATAL(
-                subblock_wt <= 16,
-                "subblock_wt={}, but subblock width must less than 16 tiles when dst_full_sync_en is true",
-                subblock_wt);
-        }
-    }
+    assert_subblock_compute_config_compatible(dst_full_sync_en, fp32_dest_acc_en, subblock_wt);
 
-    tt::DataFormat out_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
-    tt::DataFormat cb_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
-    tt::DataFormat gamma_cb_data_format = gamma.has_value()
-                                              ? tt::tt_metal::datatype_to_dataformat_converter(gamma.value().dtype())
-                                              : tt::DataFormat::Float16_b;
-    tt::DataFormat beta_cb_data_format = beta.has_value()
-                                             ? tt::tt_metal::datatype_to_dataformat_converter(beta.value().dtype())
-                                             : tt::DataFormat::Float16_b;
+    auto [out_data_format, cb_data_format, gamma_cb_data_format, beta_cb_data_format] =
+        get_cb_data_formats(output, gamma, beta, fp32_dest_acc_en);
+
     // tile sizes
     uint32_t in_single_tile_size = tt::tile_size(in_data_format);
     uint32_t single_tile_size = tt::tile_size(cb_data_format);
@@ -643,7 +687,6 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     // block
     uint32_t block_w = block_wt * TILE_WIDTH;
     uint32_t block_h = block_ht * TILE_HEIGHT;
-    uint32_t num_blocks = 0;
     ShardSpec shard_spec = a.shard_spec().value();
 
     bool mcast_1d = M == block_h;
@@ -654,27 +697,13 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     if (bbox.start_coord.x != 0 || bbox.start_coord.y != 0) {
         grid_offset = bbox.start_coord;
     }
-    if (mcast_1d) {
-        num_blocks = shard_spec.num_cores();
-    } else if (row_wise) {
-        num_blocks = grid_size.x;
-    } else {
-        num_blocks = grid_size.y;
-    }
+
+    uint32_t num_blocks = get_num_blocks(mcast_1d, row_wise, grid_size, shard_spec);
 
     // two-stage reduce
-    bool use_two_stage_reduce = false;
-    if (mcast_1d) {
-        // only do this for row/col dim are full length
-        if (row_wise && grid_size.x > 1 && grid_size.x <= device->compute_with_storage_grid_size().x &&
-            grid_size.y > 1) {  // row major and multiple rows
-            use_two_stage_reduce = true;
-        } else if (
-            !row_wise && grid_size.x > 1 &&
-            grid_size.y == device->compute_with_storage_grid_size().y) {  // col major and multiple cols
-            use_two_stage_reduce = true;
-        }
-    }
+    bool use_two_stage_reduce =
+        should_use_two_stage_reduce(mcast_1d, row_wise, grid_size, device->compute_with_storage_grid_size());
+
     uint32_t num_subblocks_w = block_wt / subblock_wt;
 
     // Get all storage cores
