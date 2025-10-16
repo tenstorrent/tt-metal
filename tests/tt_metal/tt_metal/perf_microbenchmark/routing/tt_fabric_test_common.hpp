@@ -100,7 +100,8 @@ public:
     }
 
     MeshCoordinateRange get_host_local_device_coordinates() const {
-        return control_plane_ptr_->get_coord_range(local_mesh_id_, MeshScope::LOCAL);
+        return tt::tt_metal::MetalContext::instance().get_control_plane().get_coord_range(
+            local_mesh_id_, MeshScope::LOCAL);
     }
 
     void open_devices(const TestFabricSetup& fabric_setup) {
@@ -182,7 +183,6 @@ public:
         tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED);
 
         // Clear all class members
-        control_plane_ptr_ = nullptr;
         local_available_node_ids_.clear();
         global_available_node_ids_.clear();
         available_mesh_ids_.clear();
@@ -198,21 +198,22 @@ public:
     // IDeviceInfoProvider methods
     // ======================================================================================
     FabricNodeId get_fabric_node_id(const chip_id_t physical_chip_id) const override {
-        return control_plane_ptr_->get_fabric_node_id_from_physical_chip_id(physical_chip_id);
+        return tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_node_id_from_physical_chip_id(
+            physical_chip_id);
     }
 
     FabricNodeId get_fabric_node_id(const MeshCoordinate& device_coord) const override {
-        const auto& mesh_graph = control_plane_ptr_->get_mesh_graph();
+        const auto& mesh_graph = tt::tt_metal::MetalContext::instance().get_control_plane().get_mesh_graph();
         return FabricNodeId(local_mesh_id_, mesh_graph.coordinate_to_chip(local_mesh_id_, device_coord));
     }
 
     FabricNodeId get_fabric_node_id(MeshId mesh_id, const MeshCoordinate& device_coord) const override {
-        const auto& mesh_graph = control_plane_ptr_->get_mesh_graph();
+        const auto& mesh_graph = tt::tt_metal::MetalContext::instance().get_control_plane().get_mesh_graph();
         return FabricNodeId(mesh_id, mesh_graph.coordinate_to_chip(mesh_id, device_coord));
     }
 
     MeshCoordinate get_device_coord(const FabricNodeId& node_id) const override {
-        const auto& mesh_graph = control_plane_ptr_->get_mesh_graph();
+        const auto& mesh_graph = tt::tt_metal::MetalContext::instance().get_control_plane().get_mesh_graph();
         return mesh_graph.chip_to_coordinate(node_id.mesh_id, node_id.chip_id);
     }
 
@@ -246,15 +247,21 @@ public:
     uint32_t get_l1_alignment() const override { return tt::tt_metal::hal::get_l1_alignment(); }
 
     uint32_t get_max_payload_size_bytes() const override {
-        return control_plane_ptr_->get_fabric_context().get_fabric_max_payload_size_bytes();
+        return tt::tt_metal::MetalContext::instance()
+            .get_control_plane()
+            .get_fabric_context()
+            .get_fabric_max_payload_size_bytes();
     }
 
     bool is_2D_routing_enabled() const override {
-        return control_plane_ptr_->get_fabric_context().is_2D_routing_enabled();
+        return tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context().is_2D_routing_enabled();
     }
 
     bool is_dynamic_routing_enabled() const override {
-        return control_plane_ptr_->get_fabric_context().is_dynamic_routing_enabled();
+        return tt::tt_metal::MetalContext::instance()
+            .get_control_plane()
+            .get_fabric_context()
+            .is_dynamic_routing_enabled();
     }
 
     /**
@@ -934,12 +941,14 @@ public:
     Topology get_topology() const { return topology_; }
 
     bool wrap_around_mesh(FabricNodeId node) const override {
-        return control_plane_ptr_->get_fabric_context().is_wrap_around_mesh(node.mesh_id);
+        return tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context().is_wrap_around_mesh(
+            node.mesh_id);
     }
 
     RoutingDirection get_forwarding_direction(
         const FabricNodeId& src_node_id, const FabricNodeId& dst_node_id) const override {
-        auto forwarding_direction = control_plane_ptr_->get_forwarding_direction(src_node_id, dst_node_id);
+        auto forwarding_direction = tt::tt_metal::MetalContext::instance().get_control_plane().get_forwarding_direction(
+            src_node_id, dst_node_id);
         TT_FATAL(
             forwarding_direction.has_value(), "No forwarding direction found for {} -> {}", src_node_id, dst_node_id);
         return forwarding_direction.value();
@@ -995,7 +1004,8 @@ public:
 
     FabricNodeId get_neighbor_node_id(
         const FabricNodeId& src_node_id, const RoutingDirection& direction) const override {
-        const auto& neighbors = control_plane_ptr_->get_chip_neighbors(src_node_id, direction);
+        const auto& neighbors =
+            tt::tt_metal::MetalContext::instance().get_control_plane().get_chip_neighbors(src_node_id, direction);
         TT_FATAL(neighbors.size() == 1, "Expected only neighbor mesh for {} in direction: {}", src_node_id, direction);
         TT_FATAL(
             !neighbors.begin()->second.empty(),
@@ -1297,8 +1307,9 @@ public:
 
         // Check all possible directions
         for (const auto& direction : FabricContext::routing_directions) {
-            size_t routing_planes =
-                control_plane_ptr_->get_num_available_routing_planes_in_direction(node_id, direction);
+            size_t routing_planes = tt::tt_metal::MetalContext::instance()
+                                        .get_control_plane()
+                                        .get_num_available_routing_planes_in_direction(node_id, direction);
             if (routing_planes > 0) {  // Only consider directions that have routing planes
                 min_routing_planes = std::min(min_routing_planes, static_cast<uint32_t>(routing_planes));
             }
@@ -1346,7 +1357,6 @@ public:
     }
 
 private:
-    ControlPlane* control_plane_ptr_{};
     Topology topology_{0};
     RoutingType routing_type_{0};
     MeshShape mesh_shape_;
@@ -1407,11 +1417,11 @@ private:
         // Now it's safe to initialize control plane (will use correct mesh graph descriptor)
         // first need to re-init contorl plane so that it checks out the latest fabric config.
         tt::tt_metal::MetalContext::instance().initialize_control_plane();
-        control_plane_ptr_ = &tt::tt_metal::MetalContext::instance().get_control_plane();
-        local_host_rank_ = control_plane_ptr_->get_local_host_rank_id_binding();
+        local_host_rank_ = tt::tt_metal::MetalContext::instance().get_control_plane().get_local_host_rank_id_binding();
 
         // Initialize mesh and device info that was deferred from init()
-        const auto user_meshes = control_plane_ptr_->get_user_physical_mesh_ids();
+        const auto user_meshes =
+            tt::tt_metal::MetalContext::instance().get_control_plane().get_user_physical_mesh_ids();
         TT_FATAL(
             user_meshes.size() == 1,
             "Only expected a single user mesh for a single host, but got: {}",
@@ -1420,9 +1430,10 @@ private:
         local_mesh_id_ = user_meshes[0];
 
         available_mesh_ids_.insert(local_mesh_id_);
-        mesh_shape_ = control_plane_ptr_->get_physical_mesh_shape(local_mesh_id_, MeshScope::GLOBAL);
+        mesh_shape_ = tt::tt_metal::MetalContext::instance().get_control_plane().get_physical_mesh_shape(
+            local_mesh_id_, MeshScope::GLOBAL);
 
-        const auto& mesh_graph = control_plane_ptr_->get_mesh_graph();
+        const auto& mesh_graph = tt::tt_metal::MetalContext::instance().get_control_plane().get_mesh_graph();
 
         for (auto mesh_id : mesh_graph.get_mesh_ids()) {
             if (mesh_id == local_mesh_id_) {  // Populate all nodes available locally. Note the use of host rank to
@@ -1439,7 +1450,9 @@ private:
         mesh_device_ = MeshDevice::create(MeshDeviceConfig(mesh_shape_));
 
         // Now fabric context should be initialized, safe to query wrap_around_mesh
-        wrap_around_mesh_ = control_plane_ptr_->get_fabric_context().is_wrap_around_mesh(user_meshes[0]);
+        wrap_around_mesh_ =
+            tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context().is_wrap_around_mesh(
+                user_meshes[0]);
 
         TT_FATAL(mesh_device_ != nullptr, "Failed to create MeshDevice with shape {}", mesh_shape_);
 
