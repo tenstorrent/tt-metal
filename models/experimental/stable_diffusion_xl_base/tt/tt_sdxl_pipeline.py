@@ -157,6 +157,9 @@ class TtSDXLPipeline(LightweightModule):
         )
         ttnn.copy_host_to_device_tensor(host_guidance_rescale, self.guidance_rescale)
 
+    def set_crop_coords_top_left(self, crop_coords_top_left: tuple):
+        self.pipeline_config.crop_coords_top_left = crop_coords_top_left
+
     def __validate_config(self):
         """
         Validates pipeline configuration parameters.
