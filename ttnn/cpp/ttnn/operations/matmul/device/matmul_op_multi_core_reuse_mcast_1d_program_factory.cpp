@@ -59,6 +59,21 @@ uint32_t get_preferred_noc(
     return use_dedicated_noc ? 1 : noc;
 }
 
+/**
+ * @brief Compute the last K tile width for input tensor A, taking transpose into account.
+ *
+ * @param a The input tensor A
+ * @param in0_tile The tile configuration for input tensor A
+ * @param transpose_a Whether tensor A is transposed
+ * @return uint32_t The last K tile width
+ */
+uint32_t compute_in0_last_ktile_w(const tt::tt_metal::Tensor& a, const tt::tt_metal::Tile& in0_tile, bool transpose_a) {
+    if (transpose_a) {
+        return a.logical_shape()[-2] % in0_tile.get_width();
+    }
+    return a.logical_shape()[-1] % in0_tile.get_width();
+}
+
 ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t
 process_mcast_in0_program_and_create_override_variables(
     tt_metal::Program& program,
@@ -146,8 +161,8 @@ process_mcast_in0_program_and_create_override_variables(
     uint32_t in0_shard_width_in_tiles = 0;
     uint32_t in0_shard_height_in_tiles = 0;
     if (in0_is_sharded) {
-        in0_shard_width_in_tiles = in0_buffer->shard_spec().shape()[1] / in0_tile.get_tile_shape()[1];
-        in0_shard_height_in_tiles = in0_buffer->shard_spec().shape()[0] / in0_tile.get_tile_shape()[0];
+        in0_shard_width_in_tiles = in0_buffer->shard_spec().shape()[1] / in0_tile.get_width();
+        in0_shard_height_in_tiles = in0_buffer->shard_spec().shape()[0] / in0_tile.get_height();
         in2_block_tiles = per_core_M * in0_shard_width_in_tiles;
     }
     uint32_t in2_CB_tiles = in2_block_tiles;
@@ -159,7 +174,7 @@ process_mcast_in0_program_and_create_override_variables(
         in1_CB_tiles *= ttnn::operations::matmul::MCAST_INPUT_BUFFERING_DEPTH;
     }
     if (in1_is_sharded) {
-        uint32_t in1_shard_height_in_tiles = in1_buffer->shard_spec().shape()[0] / in1_tile.get_tile_shape()[0];
+        uint32_t in1_shard_height_in_tiles = in1_buffer->shard_spec().shape()[0] / in1_tile.get_height();
         in1_CB_tiles = per_core_N * in1_shard_height_in_tiles;
     }
 
@@ -273,7 +288,7 @@ process_mcast_in0_program_and_create_override_variables(
 
     uint32_t in0_num_subblocks = (out_block_h / out_subblock_h);
     uint32_t in0_block_num_tiles = out_subblock_h * in0_block_w * in0_num_subblocks;
-    uint32_t in0_last_ktile_w = a.logical_shape()[-1] % in0_tile.get_tile_shape()[1];
+    uint32_t in0_last_ktile_w = compute_in0_last_ktile_w(a, in0_tile, transpose_a);
 
     std::vector<uint32_t> in0_sender_compile_time_args;
     if (in0_is_sharded) {
@@ -1052,14 +1067,14 @@ process_mcast_in1_program_and_create_override_variables(
     }
     uint32_t in0_CB_size = in0_CB_tiles * in0_single_tile_size;
 
-    uint32_t in0_last_ktile_w = a.logical_shape()[-1] % in0_tile.get_tile_shape()[1];
+    uint32_t in0_last_ktile_w = compute_in0_last_ktile_w(a, in0_tile, transpose_a);
 
     bool extract_shard_sub_blocks = false;
     uint32_t in0_shard_height_in_tiles = 0;
     uint32_t in0_shard_width_in_tiles = 0;
     if (in0_is_sharded) {
-        in0_shard_height_in_tiles = in0_buffer->shard_spec().shape()[0] / in0_tile.get_tile_shape()[0];
-        in0_shard_width_in_tiles = in0_buffer->shard_spec().shape()[1] / in0_tile.get_tile_shape()[1];
+        in0_shard_height_in_tiles = in0_buffer->shard_spec().shape()[0] / in0_tile.get_height();
+        in0_shard_width_in_tiles = in0_buffer->shard_spec().shape()[1] / in0_tile.get_width();
         // NOTE: Criteria for extract_shard_sub_blocks is different from mcast in0
         // In the reader kernel, always need to copy to cb0 even for height=1 shards since we may not always do mcast
         // In mcast in0 sharded reader kernel, this is handled by mcast with loopback src
@@ -1805,7 +1820,7 @@ process_gather_in0_program_and_create_override_variables(
     bool use_hop_cores = num_hop_cores > 0;
 
     /* Inner dim padding */
-    const uint32_t Kt_pad = in0_buffer->shard_spec().shape()[1] / in0_tile.get_tile_shape()[1] * num_cores;
+    const uint32_t Kt_pad = in0_buffer->shard_spec().shape()[1] / in0_tile.get_width() * num_cores;
     in0_block_w = Kt_pad / num_cores;
 
     uint32_t num_blocks = Kt_pad / in0_block_w;
@@ -1826,7 +1841,7 @@ process_gather_in0_program_and_create_override_variables(
     uint32_t interm0_single_tile_size = output_tile.get_tile_size(interm0_data_format);
 
     /* in0 */
-    uint32_t in0_shard_width_in_tiles = in0_buffer->shard_spec().shape()[1] / in0_tile.get_tile_shape()[1];
+    uint32_t in0_shard_width_in_tiles = in0_buffer->shard_spec().shape()[1] / in0_tile.get_width();
     uint32_t in0_CB_tiles = per_core_M * in0_shard_width_in_tiles;
     uint32_t in0_CB_size = in0_CB_tiles * in0_single_tile_size;
 
@@ -1834,14 +1849,13 @@ process_gather_in0_program_and_create_override_variables(
     uint32_t in1_shard_height_in_tiles = 0;
     uint32_t in1_shard_width_in_tiles = 0;
     uint32_t in1_CB_tiles = 0;
-    uint32_t in1_tensor_width_in_tiles = b.padded_shape()[-1] / in1_tile.get_tile_shape()[1];
+    uint32_t in1_tensor_width_in_tiles = b.padded_shape()[-1] / in1_tile.get_width();
 
     if (in1_is_dram_sharded || in1_is_dram_interleaved) {
         in1_CB_tiles = 2 * in0_shard_width_in_tiles * per_core_N;  // Double buffered
     } else {
-        in1_shard_height_in_tiles = in1_buffer->shard_spec().shape()[0] / in1_tile.get_tile_shape()[0];
-        in1_shard_width_in_tiles =
-            in1_buffer->shard_spec().shape()[1] / in1_tile.get_tile_shape()[1] / num_global_cb_receivers;
+        in1_shard_height_in_tiles = in1_buffer->shard_spec().shape()[0] / in1_tile.get_height();
+        in1_shard_width_in_tiles = in1_buffer->shard_spec().shape()[1] / in1_tile.get_width() / num_global_cb_receivers;
         in1_CB_tiles = in1_shard_height_in_tiles * in1_shard_width_in_tiles;
     }
     uint32_t in1_CB_size = in1_CB_tiles * in1_single_tile_size;
@@ -1855,7 +1869,7 @@ process_gather_in0_program_and_create_override_variables(
     uint32_t in1_block_width_num_pages = (per_core_N_size_bytes + in1_block_page_size - 1) / in1_block_page_size;
     uint32_t in1_shard_width_in_dram = 0;
     if (in1_is_dram_sharded) {
-        in1_shard_width_in_dram = in1_buffer->shard_spec().shape()[1] / in1_tile.get_tile_shape()[1];
+        in1_shard_width_in_dram = in1_buffer->shard_spec().shape()[1] / in1_tile.get_width();
     }
 
     /* in2 */
@@ -2615,14 +2629,12 @@ ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t matmul_mul
 
     TT_FATAL(output_tensors.size() == b_tensors.size(), "number of outputs must match number of inputs b");
 
-    const auto& ashape = a.padded_shape();
-    const auto& bshape = b.padded_shape();
-    auto in0_tile = a.tensor_spec().tile();
-    auto in1_tile = b.tensor_spec().tile();
+    const auto& ashape = get_matmul_tensor_padded_shape(a, transpose_a);
+    const auto& bshape = get_matmul_tensor_padded_shape(b, transpose_b);
+    auto in0_tile = get_matmul_tile(a, transpose_a);
+    auto in1_tile = get_matmul_tile(b, transpose_b);
     // cannot use the output tensor tile directly as that might be changed by user override
-    auto in0_tile_shape = in0_tile.get_tile_shape();
-    auto in1_tile_shape = in1_tile.get_tile_shape();
-    auto output_tile = tt::tt_metal::Tile({in0_tile_shape[0], in1_tile_shape[1]});
+    auto output_tile = tt::tt_metal::Tile({in0_tile.get_height(), in1_tile.get_width()});
 
     // CB dataformats
     tt::DataFormat in0_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());          // in0
@@ -2666,25 +2678,25 @@ ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t matmul_mul
         ashape[-1] == bshape[-2],
         "Dimension K (A.shape[-1] and B.shape[-2]) must match for A and B in bmm_op");  // A.K == B.K
     TT_FATAL(
-        ashape[-2] % in0_tile_shape[0] == 0,
-        "A.shape[-2] ({}) must be divisible by tile shape[0] ({})",
+        ashape[-2] % in0_tile.get_height() == 0,
+        "A.shape[-2] ({}) must be divisible by tile height ({})",
         ashape[-2],
-        in0_tile_shape[0]);
+        in0_tile.get_height());
     TT_FATAL(
-        ashape[-1] % in0_tile_shape[1] == 0,
-        "A.shape[-1] ({}) must be divisible by tile shape[1] ({})",
+        ashape[-1] % in0_tile.get_width() == 0,
+        "A.shape[-1] ({}) must be divisible by tile width ({})",
         ashape[-1],
-        in0_tile_shape[1]);
+        in0_tile.get_width());
     TT_FATAL(
-        bshape[-2] % in1_tile_shape[0] == 0,
-        "B.shape[-2] ({}) must be divisible by tile shape[0] ({})",
+        bshape[-2] % in1_tile.get_height() == 0,
+        "B.shape[-2] ({}) must be divisible by tile height ({})",
         bshape[-2],
-        in1_tile_shape[0]);
+        in1_tile.get_height());
     TT_FATAL(
-        bshape[-1] % in1_tile_shape[1] == 0,
-        "B.shape[-1] ({}) must be divisible by tile shape[1] ({})",
+        bshape[-1] % in1_tile.get_width() == 0,
+        "B.shape[-1] ({}) must be divisible by tile width ({})",
         bshape[-1],
-        in1_tile_shape[1]);
+        in1_tile.get_width());
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
@@ -2695,12 +2707,11 @@ ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t matmul_mul
     // NOTE: Pads matmul input dims to 512 x 512 multiples (ie. multiples of 16*32 x 16*32)
     // NOTE: Maximum number of tiles in output is 120 * 16^2 = 30,720 (eg. [1, 1, 5120, 6144])
     uint32_t B = get_batch_size(ashape);
-    uint32_t Mt = ashape[-2] / in0_tile_shape[0];
-    uint32_t Kt = ashape[-1] / in0_tile_shape[1];
-    uint32_t Nt = bshape[-1] / in1_tile_shape[1];
+    uint32_t Mt = get_M_dim(a, transpose_a, in0_tile, fuse_batch);
+    uint32_t Kt = get_K_dim(a, transpose_a, in0_tile);
+    uint32_t Nt = get_N_dim(b, transpose_b, in1_tile);
 
     if (fuse_batch) {
-        Mt = B * Mt;
         B = 1;
     }
     TT_FATAL(Kt % in0_block_w == 0, "Kt ({}) must be divisible by in0_block_w ({})", Kt, in0_block_w);
@@ -3067,15 +3078,13 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
     tt_metal::Program program{}; /* Create a program */
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> empty_fused_op_signaler;
 
-    const auto& ashape = a.padded_shape();
-    const auto& bshape = b.padded_shape();
-    const auto in0_tile = a.tensor_spec().tile();
-    const auto in1_tile = b.tensor_spec().tile();
+    const auto& ashape = get_matmul_tensor_padded_shape(a, /*transpose=*/false);
+    const auto& bshape = get_matmul_tensor_padded_shape(b, /*transpose=*/false);
+    const auto in0_tile = get_matmul_tile(a, /*transpose=*/false);
+    const auto in1_tile = get_matmul_tile(b, /*transpose=*/false);
 
     // cannot use the output tensor tile directly as that might be changed by user override
-    const auto in0_tile_shape = in0_tile.get_tile_shape();
-    const auto in1_tile_shape = in1_tile.get_tile_shape();
-    const auto output_tile = tt::tt_metal::Tile({in0_tile_shape[0], in1_tile_shape[1]});
+    const auto output_tile = tt::tt_metal::Tile({in0_tile.get_height(), in1_tile.get_width()});
 
     // CB dataformats
     const auto in0_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
@@ -3116,9 +3125,11 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
         batchA = get_batch_size(ashape);
     }
 
-    const uint32_t Mt = ashape[-2] / in0_tile_shape[0];
-    const uint32_t Kt = ashape[-1] / in0_tile_shape[1];
-    const uint32_t Nt = bshape[-1] / in1_tile_shape[1];
+    // NOTE: Pads matmul input dims to 512 x 512 multiples (ie. multiples of 16*32 x 16*32)
+    // NOTE: Maximum number of tiles in output is 120 * 16^2 = 30,720 (eg. [1, 1, 5120, 6144])
+    const uint32_t Mt = get_M_dim(a, /*transpose_a=*/false, in0_tile, /*fuse_batch=*/false);
+    const uint32_t Kt = get_K_dim(a, /*transpose_a=*/false, in0_tile);
+    const uint32_t Nt = get_N_dim(b, /*transpose_b=*/false, in1_tile);
 
     TT_FATAL(Kt % in0_block_w == 0, "Kt ({}) must be divisible by in0_block_w ({})", Kt, in0_block_w);
 
@@ -3246,7 +3257,7 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
 
     uint32_t in0_num_subblocks = (out_block_h / out_subblock_h);
     uint32_t in0_block_num_tiles = out_subblock_h * in0_block_w * in0_num_subblocks;
-    uint32_t in0_last_ktile_w = a.logical_shape()[-1] % in0_tile.get_tile_shape()[1];
+    uint32_t in0_last_ktile_w = reuse_mcast_1d_optimized_helpers::compute_in0_last_ktile_w(a, in0_tile, false);
 
     std::vector<uint32_t> in0_sender_compile_time_args;
     in0_sender_compile_time_args = {
