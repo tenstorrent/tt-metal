@@ -35,10 +35,10 @@ jobs:
         test-group:
           - name: fabric 1D unit tests
             cmd: |
-              TT_METAL_USE_MGD_2_0=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
+              ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
             timeout: 15
           - name: fabric 2D fixture unit tests
-            cmd: TT_METAL_USE_MGD_2_0=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
+            cmd: ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
             timeout: 15
           - name: fabric system health tests
             cmd: ./build/test/tt_metal/tt_fabric/test_system_health
@@ -50,6 +50,7 @@ jobs:
             cmd: |
               ./build/test/tt_metal/unit_tests_eth
               ./build/test/tt_metal/unit_tests_tunneling
+              TT_METAL_SLOW_DISPATCH_MODE=true ./build/test/tt_metal/unit_tests_eth
             timeout: 15
           - name: multi erisc tests
             cmd: |
@@ -112,6 +113,10 @@ jobs:
           else
             ${{ matrix.test-group.cmd }}
           fi
+      - name: Print tt-smi data on failure
+        if: ${{ failure() }}
+        run: |
+          tt-smi -s
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
