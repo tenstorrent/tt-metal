@@ -238,7 +238,7 @@ public:
 
     uint32_t get_l1_unreserved_base() const override {
         return tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
-            HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
+            tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::DEFAULT_UNRESERVED);
     }
 
     uint32_t get_l1_unreserved_size() const override { return tt::tt_metal::hal::get_max_worker_l1_unreserved_size(); }
@@ -321,18 +321,18 @@ public:
         auto all_cores = CoreRangeSet(all_cores_set);
         auto num_cores = all_cores_set.size();
         auto total_size = size_bytes * num_cores;
-        auto shard_params = ShardSpecBuffer(all_cores, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {num_cores, 1});
+        auto shard_params = tt::tt_metal::ShardSpecBuffer(all_cores, {1, 1}, tt::tt_metal::ShardOrientation::ROW_MAJOR, {1, 1}, {num_cores, 1});
 
         auto buffer_distribution_spec =
-            BufferDistributionSpec(Shape{num_cores, 1}, Shape{1, 1}, all_cores, ShardOrientation::ROW_MAJOR);
+            tt::tt_metal::BufferDistributionSpec(Shape{num_cores, 1}, Shape{1, 1}, all_cores, tt::tt_metal::ShardOrientation::ROW_MAJOR);
 
         auto buffer_page_mapping = buffer_distribution_spec.compute_page_mapping();
 
         DeviceLocalBufferConfig buffer_specs = {
             .page_size = size_bytes,
-            .buffer_type = BufferType::L1,
+            .buffer_type = tt::tt_metal::BufferType::L1,
             .sharding_args =
-                BufferShardingArgs(buffer_distribution_spec, shard_params, TensorMemoryLayout::HEIGHT_SHARDED),
+                tt::tt_metal::BufferShardingArgs(buffer_distribution_spec, shard_params, tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED),
             .bottom_up = std::nullopt,
             .sub_device_id = std::nullopt,
         };

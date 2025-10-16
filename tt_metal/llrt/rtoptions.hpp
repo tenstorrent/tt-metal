@@ -118,6 +118,11 @@ class RunTimeOptions {
 
     InspectorSettings inspector_settings;
 
+    // Fabric profiling settings
+    struct FabricProfilingSettings {
+        bool enable_rx_ch_fwd = false;
+    } fabric_profiling_settings;
+
     TargetSelection feature_targets[RunTimeDebugFeatureCount];
 
     bool test_mode_enabled = false;
@@ -503,6 +508,10 @@ public:
     // NOTE: Enabling this option will lead to a 0-2% performance degradation for fabric traffic.
     bool get_enable_fabric_telemetry() const { return enable_fabric_telemetry; }
     void set_enable_fabric_telemetry(bool enable) { enable_fabric_telemetry = enable; }
+
+    // If true, enables code profiling for receiver channel forward operations
+    bool get_enable_fabric_code_profiling_rx_ch_fwd() const { return fabric_profiling_settings.enable_rx_ch_fwd; }
+    void set_enable_fabric_code_profiling_rx_ch_fwd(bool enable) { fabric_profiling_settings.enable_rx_ch_fwd = enable; }
 
     // Reliability mode override accessor
     std::optional<tt::tt_fabric::FabricReliabilityMode> get_reliability_mode() const { return reliability_mode; }
