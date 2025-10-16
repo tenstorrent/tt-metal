@@ -158,9 +158,9 @@ def test_accuracy_sdxl(
     model_name = "sdxl-tp" if use_cfg_parallel else "sdxl"
 
     data = {
-        "model": "sdxl",
+        "model": model_name,
         "metadata": {
-            "model_name": "sdxl",
+            "model_name": model_name,
             "device": get_device_name(),
             "device_vae": vae_on_device,
             "capture_trace": capture_trace,
@@ -173,7 +173,7 @@ def test_accuracy_sdxl(
         },
         "benchmarks_summary": [
             {
-                "model": "sdxl",
+                "model": model_name,
                 "device": get_device_name(),
                 "avg_gen_time": avg_gen_end_to_end,
                 "target_checks": {
@@ -199,7 +199,7 @@ def test_accuracy_sdxl(
         ],
         "evals": [
             {
-                "model": "sdxl",
+                "model": model_name,
                 "device": get_device_name(),
                 "average_clip": average_clip_score,
                 "deviation_clip": deviation_clip_score,
