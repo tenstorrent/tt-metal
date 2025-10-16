@@ -3,6 +3,7 @@
 
 #include "ttnn/tensor/tensor_impl.hpp"
 #include <fmt/format.h>
+#include <memory>
 #include <optional>
 
 #include <sys/mman.h>
@@ -533,18 +534,28 @@ std::string to_string<bfloat4_b>(const Tensor& tensor) {
 
 HostBuffer allocate_host_buffer(const TensorSpec& tensor_spec) {
     ZoneScopedN("AllocateBuffer");
+
     const size_t size_bytes = tensor_spec.compute_packed_buffer_size_bytes();
+
+    auto create_host_buffer = [size_bytes]<typename Type>() {
+        auto buffer_ptr = std::make_shared_for_overwrite<Type[]>(size_bytes / sizeof(Type));
+        ttsl::Span<Type> span(buffer_ptr.get(), size_bytes / sizeof(Type));
+        MemoryPin memory_pin(std::move(buffer_ptr));
+        return HostBuffer(span, memory_pin);
+    };
+
     switch (tensor_spec.data_type()) {
-        case DataType::BFLOAT16: return HostBuffer(std::vector<bfloat16>(size_bytes / sizeof(bfloat16)));
-        case DataType::FLOAT32: return HostBuffer(std::vector<float>(size_bytes / sizeof(float)));
-        case DataType::INT32: return HostBuffer(std::vector<int32_t>(size_bytes / sizeof(int32_t)));
-        case DataType::UINT8: return HostBuffer(std::vector<uint8_t>(size_bytes / sizeof(uint8_t)));
-        case DataType::UINT16: return HostBuffer(std::vector<uint16_t>(size_bytes / sizeof(uint16_t)));
+        case DataType::BFLOAT16: return create_host_buffer.operator()<bfloat16>();
+        case DataType::FLOAT32: return create_host_buffer.operator()<float>();
+        case DataType::INT32: return create_host_buffer.operator()<int32_t>();
+        case DataType::UINT8: return create_host_buffer.operator()<uint8_t>();
+        case DataType::UINT16: return create_host_buffer.operator()<uint16_t>();
         case DataType::BFLOAT4_B:
         case DataType::BFLOAT8_B:
-        case DataType::UINT32: return HostBuffer(std::vector<uint32_t>(size_bytes / sizeof(uint32_t)));
+        case DataType::UINT32: return create_host_buffer.operator()<uint32_t>();
         case DataType::INVALID: TT_THROW("Invalid data type");
     }
+
     TT_THROW("Unreachable");
 }
 
