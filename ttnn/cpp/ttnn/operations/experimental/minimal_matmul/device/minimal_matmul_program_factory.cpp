@@ -213,16 +213,21 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
      *
      * In addition, we "pad" up the number of blocks in M, K, N in order to divide by the number of cores.
      */
-    uint32_t padded_M_tiles = tt::round_up(M_tiles, M_block_tiles);
-    uint32_t padded_N_tiles = tt::round_up(N_tiles, N_block_tiles);
+    // uint32_t padded_M_tiles = tt::round_up(M_tiles, M_block_tiles);
+    // uint32_t padded_N_tiles = tt::round_up(N_tiles, N_block_tiles);
+    uint32_t padded_M_tiles = tt::round_up(M_tiles, in0_parallel_axis_cores);
+    uint32_t padded_N_tiles = tt::round_up(N_tiles, in1_parallel_axis_cores);
     uint32_t padded_K_tiles = tt::round_up(K_tiles, K_block_tiles);
 
-    uint32_t M_blocks = padded_M_tiles / M_block_tiles;
-    uint32_t N_blocks = padded_N_tiles / N_block_tiles;
+    uint32_t M_tiles_per_core = padded_M_tiles / in0_parallel_axis_cores;
+    uint32_t N_tiles_per_core = padded_N_tiles / in1_parallel_axis_cores;
+
+    // uint32_t M_blocks = padded_M_tiles / M_block_tiles;
+    // uint32_t N_blocks = padded_N_tiles / N_block_tiles;
     uint32_t K_blocks = padded_K_tiles / K_block_tiles;
 
-    uint32_t M_blocks_per_core = tt::div_up(M_blocks, in0_parallel_axis_cores);
-    uint32_t N_blocks_per_core = tt::div_up(N_blocks, in1_parallel_axis_cores);
+    // uint32_t M_blocks_per_core = tt::div_up(M_blocks, in0_parallel_axis_cores);
+    // uint32_t N_blocks_per_core = tt::div_up(N_blocks, in1_parallel_axis_cores);
 
     uint32_t in0_block_num_tiles = M_block_tiles * K_block_tiles;
     uint32_t in1_block_num_tiles = K_block_tiles * N_block_tiles;
@@ -274,35 +279,35 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
         tt::tt_metal::create_cb(in2_cb_id, program, core_grid, in2_tile_size, in2_cb_num_tiles, in2_data_format);
     }
 
-    log_debug(tt::LogOp, "in0_cb_id: {}", in0_cb_id);
-    log_debug(tt::LogOp, "in1_cb_id: {}", in1_cb_id);
-    log_debug(tt::LogOp, "out_cb_id: {}", out_cb_id);
-    log_debug(tt::LogOp, "intermediate_cb_id: {}", intermediate_cb_id);
-    log_debug(tt::LogOp, "M_tiles: {}", M_tiles);
-    log_debug(tt::LogOp, "padded_M_tiles: {}", padded_M_tiles);
-    log_debug(tt::LogOp, "K_tiles: {}", K_tiles);
-    log_debug(tt::LogOp, "padded_K_tiles: {}", padded_K_tiles);
-    log_debug(tt::LogOp, "N_tiles: {}", N_tiles);
-    log_debug(tt::LogOp, "padded_N_tiles: {}", padded_N_tiles);
-    log_debug(tt::LogOp, "M_block_tiles: {}", M_block_tiles);
-    log_debug(tt::LogOp, "K_block_tiles: {}", K_block_tiles);
-    log_debug(tt::LogOp, "N_block_tiles: {}", N_block_tiles);
-    log_debug(tt::LogOp, "M_blocks: {}", M_blocks);
-    log_debug(tt::LogOp, "N_blocks: {}", N_blocks);
-    log_debug(tt::LogOp, "M_blocks_per_core: {}", M_blocks_per_core);
-    log_debug(tt::LogOp, "N_blocks_per_core: {}", N_blocks_per_core);
-    log_debug(tt::LogOp, "subblock_h: {}", subblock_h);
-    log_debug(tt::LogOp, "subblock_w: {}", subblock_w);
-    log_debug(tt::LogOp, "in0_tile_size: {}", in0_tile_size);
-    log_debug(tt::LogOp, "in1_tile_size: {}", in1_tile_size);
-    log_debug(tt::LogOp, "out_tile_size: {}", out_tile_size);
-    log_debug(tt::LogOp, "in2_tile_size: {}", in2_tile_size);
-    log_debug(tt::LogOp, "intermediate_tile_size: {}", intermediate_tile_size);
-    log_debug(tt::LogOp, "intermediate_data_format: {}", intermediate_data_format);
-    log_debug(tt::LogOp, "in0_cb_num_tiles: {}", in0_cb_num_tiles);
-    log_debug(tt::LogOp, "in1_cb_num_tiles: {}", in1_cb_num_tiles);
-    log_debug(tt::LogOp, "out_cb_num_tiles: {}", out_cb_num_tiles);
-    log_debug(tt::LogOp, "interm_cb_num_tiles: {}", interm_cb_num_tiles);
+    log_info(tt::LogOp, "in0_cb_id: {}", in0_cb_id);
+    log_info(tt::LogOp, "in1_cb_id: {}", in1_cb_id);
+    log_info(tt::LogOp, "out_cb_id: {}", out_cb_id);
+    log_info(tt::LogOp, "intermediate_cb_id: {}", intermediate_cb_id);
+    log_info(tt::LogOp, "M_tiles: {}", M_tiles);
+    log_info(tt::LogOp, "padded_M_tiles: {}", padded_M_tiles);
+    log_info(tt::LogOp, "K_tiles: {}", K_tiles);
+    log_info(tt::LogOp, "padded_K_tiles: {}", padded_K_tiles);
+    log_info(tt::LogOp, "N_tiles: {}", N_tiles);
+    log_info(tt::LogOp, "padded_N_tiles: {}", padded_N_tiles);
+    log_info(tt::LogOp, "M_block_tiles: {}", M_block_tiles);
+    log_info(tt::LogOp, "K_block_tiles: {}", K_block_tiles);
+    log_info(tt::LogOp, "N_block_tiles: {}", N_block_tiles);
+    // log_info(tt::LogOp, "M_blocks: {}", M_blocks);
+    // log_info(tt::LogOp, "N_blocks: {}", N_blocks);
+    // log_info(tt::LogOp, "M_blocks_per_core: {}", M_blocks_per_core);
+    // log_info(tt::LogOp, "N_blocks_per_core: {}", N_blocks_per_core);
+    log_info(tt::LogOp, "subblock_h: {}", subblock_h);
+    log_info(tt::LogOp, "subblock_w: {}", subblock_w);
+    log_info(tt::LogOp, "in0_tile_size: {}", in0_tile_size);
+    log_info(tt::LogOp, "in1_tile_size: {}", in1_tile_size);
+    log_info(tt::LogOp, "out_tile_size: {}", out_tile_size);
+    log_info(tt::LogOp, "in2_tile_size: {}", in2_tile_size);
+    log_info(tt::LogOp, "intermediate_tile_size: {}", intermediate_tile_size);
+    log_info(tt::LogOp, "intermediate_data_format: {}", intermediate_data_format);
+    log_info(tt::LogOp, "in0_cb_num_tiles: {}", in0_cb_num_tiles);
+    log_info(tt::LogOp, "in1_cb_num_tiles: {}", in1_cb_num_tiles);
+    log_info(tt::LogOp, "out_cb_num_tiles: {}", out_cb_num_tiles);
+    log_info(tt::LogOp, "interm_cb_num_tiles: {}", interm_cb_num_tiles);
 
     std::map<std::string, std::string> defines;
     if (use_bias) {
@@ -467,6 +472,11 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
 
     auto cores = corerange_to_cores(core_grid, num_cores, true);
 
+    // NOTE: Uniform per-core M/N ranges are required for DM forward handshakes to match across links.
+    // If neighboring cores along a forwarding chain iterate different (M,N) counts, the sender can wait
+    // for requests that the receiver will never issue, leading to deadlock. Keep the original uniform
+    // div_up-based ranges for M and N.
+
     for (uint32_t core_id = 0; core_id < num_cores; ++core_id) {
         CoreCoord core = cores.at(core_id);
         uint32_t in0_idx = transpose_core_grid ? core.x : core.y;
@@ -507,10 +517,10 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
          * We can't yet get rid of these blocks, since the receiver cores must ack
          * all blocks that sender cores are expected to send.
          */
-        uint32_t M_start_block = M_blocks_per_core * in0_idx;
-        uint32_t M_end_block = M_blocks_per_core * (in0_idx + 1) - 1;
-        uint32_t N_start_block = N_blocks_per_core * in1_idx;
-        uint32_t N_end_block = N_blocks_per_core * (in1_idx + 1) - 1;
+        uint32_t M_start_tile = M_tiles_per_core * in0_idx;
+        uint32_t M_end_tile = M_tiles_per_core * (in0_idx + 1);
+        uint32_t N_start_tile = N_tiles_per_core * in1_idx;
+        uint32_t N_end_tile = N_tiles_per_core * (in1_idx + 1);
 
         // Defer write to K block with same coordinate as core
         // The writer receiver cores always have core.x > 0
@@ -529,10 +539,10 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
             (std::uint32_t)in0_next_core_physical.y,  // in0_dest_noc_y
             (std::uint32_t)in0_prev_core_physical.x,  // in0_sender_noc_x
             (std::uint32_t)in0_prev_core_physical.y,  // in0_sender_noc_y
-            M_start_block,
-            M_end_block,
-            N_start_block,
-            N_end_block,
+            M_start_tile,
+            M_end_tile,
+            N_start_tile,
+            N_end_tile,
             defer_write_k_block,
         };
 
@@ -553,10 +563,10 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
             (std::uint32_t)in1_next_core_physical.y,  // in1_dest_noc_y
             (std::uint32_t)in1_prev_core_physical.x,  // in1_sender_noc_x
             (std::uint32_t)in1_prev_core_physical.y,  // in1_sender_noc_y
-            M_start_block,
-            M_end_block,
-            N_start_block,
-            N_end_block,
+            M_start_tile,
+            M_end_tile,
+            N_start_tile,
+            N_end_tile,
             defer_write_k_block,
         };
         if (in0_idx == 0) {
@@ -568,10 +578,10 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
         }
 
         std::vector<uint32_t> compute_runtime_args = {
-            M_start_block,
-            M_end_block,
-            N_start_block,
-            N_end_block,
+            M_start_tile,
+            M_end_tile,
+            N_start_tile,
+            N_end_tile,
         };
         SetRuntimeArgs(program, compute_kernels_id, core, compute_runtime_args);
     }
