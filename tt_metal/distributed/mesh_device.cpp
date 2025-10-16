@@ -57,6 +57,7 @@
 #include "sub_device/sub_device_manager_tracker.hpp"
 #include <umd/device/types/xy_pair.hpp>
 #include "impl/context/metal_context.hpp"
+#include "impl/dispatch/system_memory_manager.hpp"
 
 #include <umd/device/types/core_coordinates.hpp>
 
@@ -1039,6 +1040,14 @@ void MeshDevice::quiesce_submeshes() {
     for (auto& command_queue : mesh_command_queues_) {
         command_queue->wait_for_completion(!have_reset_launch_msg_state);
         have_reset_launch_msg_state = true;
+        uint32_t max_event_id = 0;
+        // TODO rollover
+        for (auto& device : get_devices()) {
+            max_event_id = std::max(max_event_id, device->sysmem_manager().get_next_event(command_queue->id()));
+        }
+        for (auto& device : get_devices()) {
+            device->sysmem_manager().set_next_event(command_queue->id(), max_event_id);
+        }
     }
 }
 

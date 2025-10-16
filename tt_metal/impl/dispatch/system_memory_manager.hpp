@@ -84,6 +84,8 @@ public:
 
     void fetch_queue_write(uint32_t command_size_B, uint8_t cq_id, bool stall_prefetcher = false);
 
+    void set_next_event(uint8_t cq_id, uint32_t event_id);
+
 private:
     chip_id_t device_id = 0;
     uint8_t num_hw_cqs = 0;

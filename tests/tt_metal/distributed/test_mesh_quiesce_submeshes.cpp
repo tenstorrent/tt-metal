@@ -39,7 +39,7 @@ TEST_F(MeshQuiesceTestSuite, QuiesceSubmeshesAllowsAlternatingWorkloads) {
 
     auto submeshes = mesh_device_->create_submeshes(*sub_shape);
     ASSERT_EQ(submeshes.size(), 2u);
-    auto submesh = submeshes.front();
+    auto submesh = submeshes.back();
 
     // Single-core no-op program for submesh
     Program submesh_program = CreateProgram();
@@ -56,6 +56,8 @@ TEST_F(MeshQuiesceTestSuite, QuiesceSubmeshesAllowsAlternatingWorkloads) {
 
     // 1) Run on submesh (non-blocking)
     EnqueueMeshWorkload(submesh->mesh_command_queue(), submesh_workload, /*blocking=*/false);
+
+    submesh->mesh_command_queue().enqueue_record_event();
 
     // 2) Quiesce all submeshes from the parent
     mesh_device_->quiesce_submeshes();
