@@ -107,8 +107,7 @@ class TtGemmaImageTransformerBlock(LightweightModule):
             attn_out = ttnn.mul(attn_out, ttnn.tanh(self.gate_attn))
 
         if self.num_devices > 1:
-            breakpoint()
-            assert False
+            print("mstojko - before")
             attn_out = ttnn.experimental.all_gather_async(
                 attn_out,
                 persistent_output_buffer=None,
@@ -121,6 +120,7 @@ class TtGemmaImageTransformerBlock(LightweightModule):
                 num_workers_per_link=2,
                 num_buffers_per_channel=2,
             )
+            print("mstojko - after")
 
         # Align x_11SH shape with attn_out
         x_11SH = ttnn.reshape(x_11SH, [batch_size, 1, seq_len, -1])
