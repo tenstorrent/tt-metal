@@ -396,7 +396,7 @@ void JitBuildState::compile_one(
     if (settings) {
         // Append user args
         settings->process_defines([&defines](const string& define, const string& value) {
-            defines += fmt::format("-D{}='{}' ", define, value);
+            defines += fmt::format("-D'{}={}' ", define, value);
         });
 
         settings->process_compile_time_args([&defines](const std::vector<uint32_t>& values) {
