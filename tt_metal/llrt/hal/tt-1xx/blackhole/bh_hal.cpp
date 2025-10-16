@@ -7,6 +7,7 @@
 #include <enchantum/enchantum.hpp>
 #include <numeric>
 #include <string>
+#include <string_view>
 
 #include "blackhole/bh_hal.hpp"
 #include "dev_mem_map.h"
@@ -164,60 +165,56 @@ public:
     }
 
     std::string common_flags(const Params& params) const override {
-        std::string cflags = "-mcpu=tt-bh -fno-rvtt-sfpu-replay ";
+        std::string cflags = params.core_type == HalProgrammableCoreType::TENSIX &&
+                                     params.processor_class == HalProcessorClassType::COMPUTE
+                                 ? "-mcpu=tt-bh-tensix "
+                                 : "-mcpu=tt-bh ";
+        cflags += "-fno-rvtt-sfpu-replay ";
         if (!(params.core_type == HalProgrammableCoreType::TENSIX &&
               params.processor_class == HalProcessorClassType::COMPUTE)) {
             cflags += "-fno-tree-loop-distribute-patterns ";  // don't use memcpy for cpy loops
+        }
+        // Unlike other core types, the stack on erisc0 is not dynamic because it's setup by base firmware.
+        // Trigger an error for kernels which may exceed the static stack usage to prevent difficult to debug issues
+        // 1536 B = stack size taken from the base firmware
+        // 72 B = Approx. stack usage at the time the kernel is launched
+        // 1536 B - 64 B = 1464 B free for kernel
+        if (params.core_type == HalProgrammableCoreType::ACTIVE_ETH && params.processor_id == 0 &&
+            blackhole::is_2_erisc_mode()) {
+            cflags += "-Werror=stack-usage=1464 ";
         }
         return cflags;
     }
 
     std::string linker_script(const Params& params) const override {
+        const std::string_view fork = params.is_fw ? "firmware" : "kernel";
+        const std::string_view path = "runtime/hw/toolchain/blackhole";
         switch (params.core_type) {
             case HalProgrammableCoreType::TENSIX:
                 switch (params.processor_class) {
-                    case HalProcessorClassType::DM: {
-                        return fmt::format(
-                            "runtime/hw/toolchain/blackhole/{}_{}risc.ld",
-                            params.is_fw ? "firmware" : "kernel",
-                            params.processor_id == 0 ? "b" : "nc");
-                    }
+                    case HalProcessorClassType::DM:
+                        return fmt::format("{}/{}_{}risc.ld", path, fork, params.processor_id == 0 ? "b" : "nc");
                     case HalProcessorClassType::COMPUTE:
-                        return fmt::format(
-                            "runtime/hw/toolchain/blackhole/{}_trisc{}.ld",
-                            params.is_fw ? "firmware" : "kernel",
-                            params.processor_id);
+                        return fmt::format("{}/{}_trisc{}.ld", path, fork, params.processor_id);
                 }
                 break;
             case HalProgrammableCoreType::ACTIVE_ETH:
-                switch (params.processor_id) {
-                    case 0:
-                        if (blackhole::is_2_erisc_mode()) {
-                            return params.is_fw ? "runtime/hw/toolchain/blackhole/firmware_main_aerisc.ld"
-                                                : "runtime/hw/toolchain/blackhole/kernel_main_aerisc.ld";
-                        } else {
-                            return params.is_fw ? "runtime/hw/toolchain/blackhole/firmware_aerisc.ld"
-                                                : "runtime/hw/toolchain/blackhole/kernel_aerisc.ld";
-                        }
-                    case 1:
-                        return params.is_fw ? "runtime/hw/toolchain/blackhole/firmware_subordinate_aerisc.ld"
-                                            : "runtime/hw/toolchain/blackhole/kernel_subordinate_aerisc.ld";
-                    default: TT_THROW("Invalid processor id {}", params.processor_id);
+                if (params.processor_id < 2) {
+                    return fmt::format(
+                        "{}/{}_{}aerisc.ld",
+                        path,
+                        fork,
+                        params.processor_id            ? "subordinate_"
+                        : blackhole::is_2_erisc_mode() ? "main_"
+                        : "");
                 }
+                break;
             case HalProgrammableCoreType::IDLE_ETH:
-                switch (params.processor_id) {
-                    case 0:
-                        return params.is_fw ? "runtime/hw/toolchain/blackhole/firmware_ierisc.ld"
-                                            : "runtime/hw/toolchain/blackhole/kernel_ierisc.ld";
-                    case 1:
-                        return params.is_fw ? "runtime/hw/toolchain/blackhole/firmware_subordinate_ierisc.ld"
-                                            : "runtime/hw/toolchain/blackhole/kernel_subordinate_ierisc.ld";
-                    default: TT_THROW("Invalid processor id {}", params.processor_id);
+                if (params.processor_id < 2) {
+                    return fmt::format("{}/{}_{}ierisc.ld", path, fork, params.processor_id ? "subordinate_" : "");
                 }
-            default:
-                TT_THROW(
-                    "Unsupported programmable core type {} to query linker script",
-                    enchantum::to_string(params.core_type));
+                break;
+            default: break;
         }
         TT_THROW(
             "Invalid processor id {} of processor class {} in programmable core type {}",
@@ -363,7 +360,6 @@ void Hal::initialize_bh() {
     this->virtual_worker_start_x_ = VIRTUAL_TENSIX_START_X;
     this->virtual_worker_start_y_ = VIRTUAL_TENSIX_START_Y;
     this->eth_fw_is_cooperative_ = false;
-    this->intermesh_eth_links_enabled_ = false;  // Intermesh routing is not enabled on Blackhole
     this->virtualized_core_types_ = {
         dev_msgs::AddressableCoreType::TENSIX,
         dev_msgs::AddressableCoreType::ETH,

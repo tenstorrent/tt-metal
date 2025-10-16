@@ -21,47 +21,78 @@ from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.firmware import ELF
 from ttexalens.parse_elf import mem_access
 from ttexalens.context import Context
-from triage import TTTriageError, combined_field, collection_serializer, triage_field, hex_serializer
+from triage import TTTriageError, collection_serializer, triage_field, hex_serializer
+from run_checks import run as get_run_checks
+from run_checks import RunChecks
 
 script_config = ScriptConfig(
     data_provider=True,
-    depends=["inspector_data", "elfs_cache"],
+    depends=["inspector_data", "elfs_cache", "run_checks"],
 )
 
 
 @dataclass
 class DispatcherCoreData:
-    launch_msg_rd_ptr: int = triage_field("RD PTR")
-    kernel_config_base: int = triage_field("Base", hex_serializer)
-    kernel_text_offset: int = triage_field("Offset", hex_serializer)
-    watcher_kernel_id: int = combined_field("kernel_name", "Kernel ID:Name", collection_serializer(":"))
-    watcher_previous_kernel_id: int = combined_field(
-        "previous_kernel_name", "Previous Kernel ID:Name", collection_serializer(":")
-    )
-    kernel_offset: int | None = triage_field("Kernel Offset", hex_serializer)
-    firmware_path: str = combined_field("kernel_path", "Firmware / Kernel Path", collection_serializer("\n"))
-    kernel_path: str | None = combined_field()
-    kernel_name: str | None = combined_field()
-    previous_kernel_name: str | None = combined_field()
+    # Level 0: Essential fields (always shown)
+    watcher_kernel_id: int = triage_field("Kernel ID")
+    kernel_name: str | None = triage_field("Kernel Name")
     subdevice: int = triage_field("Subdevice")
     go_message: str = triage_field("Go Message")
     preload: bool = triage_field("Preload")
     waypoint: str = triage_field("Waypoint")
 
+    # Level 1: Detailed fields
+    host_assigned_id: int | None = triage_field("Host Assigned ID", hex_serializer, verbose=1)
+    watcher_previous_kernel_id: int = triage_field("Previous Kernel ID", verbose=1)
+    previous_kernel_name: str | None = triage_field("Previous Kernel Name", verbose=1)
+    kernel_offset: int | None = triage_field("Kernel Offset", hex_serializer, verbose=1)
+    kernel_path: str = triage_field("Kernel Path", verbose=1)
+    firmware_path: str = triage_field("Firmware Path", verbose=1)
+
+    # Level 2: Internal debug fields
+    launch_msg_rd_ptr: int = triage_field("RD PTR", verbose=2)
+    kernel_config_base: int = triage_field("Base", hex_serializer, verbose=2)
+    kernel_text_offset: int = triage_field("Offset", hex_serializer, verbose=2)
+
 
 class DispatcherData:
-    def __init__(self, inspector_data: InspectorData, context: Context, elfs_cache: ElfsCache):
+    def __init__(self, inspector_data: InspectorData, context: Context, elfs_cache: ElfsCache, run_checks: RunChecks):
         self.inspector_data = inspector_data
         self.programs = inspector_data.getPrograms().programs
-        if self.programs is None or len(self.programs) == 0:
-            raise TTTriageError("No programs found in inspector data.")
         self.kernels = {kernel.watcherKernelId: kernel for program in self.programs for kernel in program.kernels}
         self.use_rpc_kernel_find = True
         if len(self.kernels) == 0:
             raise TTTriageError("No kernels found in inspector data.")
-        self._a_kernel_path = next(iter(self.kernels.values())).path
-        brisc_elf_path = DispatcherData.get_firmware_elf_path(self._a_kernel_path, "brisc")
-        idle_erisc_elf_path = DispatcherData.get_firmware_elf_path(self._a_kernel_path, "idle_erisc")
+        # Cache build_env per device to avoid multiple RPC calls
+        # Each device needs to have its own build_env to get the correct firmware path
+        self._build_env_cache = {}
+
+        # Get the firmware paths from Inspector RPC build environment instead of relative paths
+        # This ensures correct firmware paths for all devices and build configs
+        # Prefill cache from no-arg RPC (ok if this fails - we'll fall back)
+        try:
+            all_build_envs = inspector_data.getAllBuildEnvs().buildEnvs
+            for build_env in all_build_envs:
+                self._build_env_cache[build_env.deviceId] = build_env.buildInfo
+        except Exception:
+            pass
+
+        # Get the device ID from run_checks or inspector_data
+        try:
+            if not (run_checks and getattr(run_checks, "devices", None)):
+                raise TTTriageError("RunChecks.devices not available. Ensure run_checks is a dependency or pass --dev.")
+            device_id = run_checks.devices[0]._id
+
+            build_env = self._build_env_cache[device_id]
+            # Use build_env for initial firmware paths
+            brisc_elf_path = os.path.join(build_env.firmwarePath, "brisc", "brisc.elf")
+            idle_erisc_elf_path = os.path.join(build_env.firmwarePath, "idle_erisc", "idle_erisc.elf")
+        except Exception as e:
+            raise TTTriageError(
+                f"Failed to get firmware path from Inspector RPC: {e}\n"
+                "Make sure Inspector RPC is available or serialized RPC data exists.\n"
+                "Set TT_METAL_INSPECTOR_RPC=1 when running your Metal application."
+            )
 
         # Check if firmware elf paths exist
         if not os.path.exists(brisc_elf_path):
@@ -132,6 +163,16 @@ class DispatcherData:
         }
         self._launch_msg_buffer_num_entries = get_const_value("launch_msg_buffer_num_entries")
 
+    def _get_build_env_for_device(self, device_id: int):
+        """Get build_env for a specific device, with caching"""
+        if device_id not in self._build_env_cache:
+            raise TTTriageError(
+                "Failed to get firmware path from Inspector RPC. "
+                "Make sure Inspector RPC is available or serialized RPC data exists. "
+                "Set TT_METAL_INSPECTOR_RPC=1 when running your Metal application."
+            )
+        return self._build_env_cache[device_id]
+
     def find_kernel(self, watcher_kernel_id):
         # Try to get kernel from RPC inspector data first, then fallback to cached kernels
         # RPC kernel find won't work if we are not connected to RPC, but are reading serialized data or logs
@@ -158,6 +199,10 @@ class DispatcherData:
             programmable_core_type = self._ProgrammableCoreTypes_IDLE_ETH
             enum_values = self._enum_values_eth
 
+        # Get the build_env for the device to get the correct firmware path
+        # Each device may have different firmware paths based on its build configuration
+        device_id = location._device._id
+        build_env = self._get_build_env_for_device(device_id)
         proc_name = risc_name.upper()
         proc_type = enum_values["ProcessorTypes"][proc_name]
 
@@ -181,6 +226,7 @@ class DispatcherData:
         go_data = -1
         preload = False
         waypoint = ""
+        host_assigned_id = None
         try:
             # Indexed with enum ProgrammableCoreType - tt_metal/hw/inc/*/core_config.h
             kernel_config_base = mem_access(
@@ -245,17 +291,25 @@ class DispatcherData:
         except:
             pass
         try:
+            host_assigned_id = mem_access(
+                fw_elf, f"mailboxes->launch[{launch_msg_rd_ptr}].kernel_config.host_assigned_id", loc_mem_reader
+            )[0][0]
+        except:
+            pass
+        try:
             waypoint_int = mem_access(fw_elf, f"mailboxes->watcher.debug_waypoint[{proc_type}]", loc_mem_reader)[0][0]
             waypoint = waypoint_int.to_bytes(4, "little").rstrip(b"\x00").decode("utf-8", errors="replace")
         except:
             pass
 
+        # Construct the firmware path from the build_env instead of relative paths
+        # This ensures we get the correct firmware path for this device and build config
         if proc_name.lower() == "erisc" or proc_name.lower() == "erisc0":
-            firmware_path = self._a_kernel_path + "../../../firmware/idle_erisc/idle_erisc.elf"
+            firmware_path = os.path.join(build_env.firmwarePath, "idle_erisc", "idle_erisc.elf")
         elif proc_name.lower() == "erisc1":
-            firmware_path = self._a_kernel_path + "../../../firmware/subordinate_idle_erisc/subordinate_idle_erisc.elf"
+            firmware_path = os.path.join(build_env.firmwarePath, "subordinate_idle_erisc", "subordinate_idle_erisc.elf")
         else:
-            firmware_path = self._a_kernel_path + f"../../../firmware/{proc_name.lower()}/{proc_name.lower()}.elf"
+            firmware_path = os.path.join(build_env.firmwarePath, proc_name.lower(), f"{proc_name.lower()}.elf")
         firmware_path = os.path.realpath(firmware_path)
 
         if kernel:
@@ -279,6 +333,7 @@ class DispatcherData:
         return DispatcherCoreData(
             firmware_path=firmware_path,
             kernel_path=kernel_path,
+            host_assigned_id=host_assigned_id,
             previous_kernel_name=previous_kernel.name if previous_kernel else None,
             kernel_offset=kernel_offset,
             kernel_name=kernel.name if kernel else None,
@@ -293,17 +348,13 @@ class DispatcherData:
             waypoint=waypoint,
         )
 
-    @staticmethod
-    def get_firmware_elf_path(a_kernel_path: str, risc_name: str) -> str:
-        firmware_elf_path = a_kernel_path + f"../../../firmware/{risc_name.lower()}/{risc_name.lower()}.elf"
-        return os.path.realpath(firmware_elf_path)
-
 
 @triage_singleton
 def run(args, context: Context):
     inspector_data = get_inspector_data(args, context)
     elfs_cache = get_elfs_cache(args, context)
-    return DispatcherData(inspector_data, context, elfs_cache)
+    run_checks = get_run_checks(args, context)
+    return DispatcherData(inspector_data, context, elfs_cache, run_checks)
 
 
 if __name__ == "__main__":

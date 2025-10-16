@@ -44,6 +44,7 @@
 #include "tt_metal/impl/program/dispatch.hpp"
 #include "tt_metal/impl/trace/dispatch.hpp"
 #include "tt_metal/impl/program/program_command_sequence.hpp"
+#include "tt_metal/tools/profiler/tt_metal_tracy.hpp"
 #include "tt_metal/impl/device/dispatch.hpp"
 #include <umd/device/types/xy_pair.hpp>
 #include <tt-metalium/graph_tracking.hpp>
@@ -329,6 +330,7 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     // Iterate over all programs. Update dispatch commands per program to reflect
     // current device state. Write the finalized program command sequence to each
     // physical device tied to the program.
+    TracyTTMetalEnqueueMeshWorkloadTrace(mesh_device_, mesh_workload, this->trace_id());
     for (auto& [device_range, program] : mesh_workload.get_programs()) {
         auto& program_cmd_seq = mesh_workload.impl().get_dispatch_cmds_for_program(program, command_hash);
         TT_ASSERT(
@@ -978,7 +980,7 @@ void FDMeshCommandQueue::capture_program_trace_on_subgrid(
         program_cmd_seq, sysmem_manager_for_trace, id_, dispatch_core_type, stall_first, stall_before_program);
     auto mesh_trace_md = MeshTraceStagingMetadata{
         sub_grid,
-        sub_grid.start_coord(),
+        local_start_coord,
         sysmem_manager_offset,
         sysmem_manager_for_trace.get_issue_queue_write_ptr(id_) - sysmem_manager_offset};
     ordered_mesh_trace_md_.push_back(mesh_trace_md);

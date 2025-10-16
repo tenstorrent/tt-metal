@@ -6,7 +6,7 @@
 #include <chrono>
 #include <fmt/base.h>
 #include <stdint.h>
-#include <tt-metalium/command_queue.hpp>
+#include "impl/dispatch/command_queue.hpp"
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -487,7 +487,7 @@ MeshTraceId setup_trace_if_enabled(
         const std::size_t cq_id = 0;
         tid = BeginTraceCapture(mesh_device.get(), cq_id);
         executor.execute_programs();
-        EndTraceCapture(mesh_device.get(), cq_id, tid);
+        mesh_device->end_mesh_trace(cq_id, tid);
         Finish(mesh_device->mesh_command_queue(cq_id));
     }
     return tid;
@@ -507,7 +507,7 @@ void run_benchmark_timing_loop(
     for ([[maybe_unused]] auto _ : state) {
         auto start = std::chrono::system_clock::now();
         if (info.use_trace) {
-            ReplayTrace(mesh_device.get(), cq_id, tid, false);
+            mesh_device->replay_mesh_trace(cq_id, tid, false);
         } else {
             execute_func();
         }

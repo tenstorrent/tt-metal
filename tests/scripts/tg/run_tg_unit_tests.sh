@@ -23,6 +23,31 @@ run_tg_llama3.3-70b_tests() {
   fi
 }
 
+run_tg_gpt_oss_tests() {
+  # Record the start time
+  fail=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_tg_gpt_oss_tests"
+  pip install -r models/demos/gpt_oss/requirements.txt
+
+  # GPT-OSS weights for 20B and 120B
+  gpt_oss_20b=/mnt/MLPerf/tt_dnn-models/tt/GPT-OSS-20B/
+  gpt_oss_120b=/mnt/MLPerf/tt_dnn-models/tt/GPT-OSS-120B/
+
+  for gpt_oss_dir in "$gpt_oss_20b" "$gpt_oss_120b"; do
+    HF_MODEL=$gpt_oss_dir pytest -n auto models/demos/gpt_oss/tests/unit --timeout 600; fail+=$?
+  done
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_tg_gpt_oss_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
 run_tg_distributed_op_tests() {
   # Record the start time
   fail=0
@@ -63,7 +88,7 @@ run_tg_tests() {
   if [[ "$1" == "unit" ]]; then
     echo "LOG_METAL: running run_tg_unit_tests"
     TT_METAL_ENABLE_ERISC_IRAM=1 TT_METAL_ENABLE_REMOTE_CHIP=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="CommandQueueSingleCard*Fixture.*"
-    TT_METAL_ENABLE_ERISC_IRAM=1 TT_METAL_ENABLE_REMOTE_CHIP=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="UnitMeshCQSingleCard*Fixture.*"
+    # TT_METAL_ENABLE_ERISC_IRAM=1 TT_METAL_ENABLE_REMOTE_CHIP=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="UnitMeshCQSingleCard*Fixture.*" #See issue #29677
     TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_device --gtest_filter="GalaxyFixture.*:TGFixture.*"
     ./build/test/tt_metal/unit_tests_device --gtest_filter="GalaxyFixture.*:TGFixture.*"
     TT_METAL_ENABLE_ERISC_IRAM=1 TT_METAL_GTEST_NUM_HW_CQS=2 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="UnitMeshMultiCQMultiDevice*Fixture.*"
@@ -78,14 +103,17 @@ run_tg_tests() {
     ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric*MuxFixture.*"
 
     # MGD 2.0 Tests
-    TT_METAL_USE_MGD_2_0=1 TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=ControlPlaneFixture.*TG*
-    TT_METAL_USE_MGD_2_0=1 TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
+    TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=ControlPlaneFixture.*TG*
+    TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
 
-    TT_METAL_USE_MGD_2_0=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
-    TT_METAL_USE_MGD_2_0=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric*MuxFixture.*"
+    ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
+    ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric*MuxFixture.*"
 
   elif [[ "$1" == "llama3-70b" ]]; then
     run_tg_llama3.3-70b_tests
+
+  elif [[ "$1" == "gpt-oss" ]]; then
+    run_tg_gpt_oss_tests
 
   elif [[ "$1" == "prefetcher" ]]; then
     run_tg_prefetcher_tests
