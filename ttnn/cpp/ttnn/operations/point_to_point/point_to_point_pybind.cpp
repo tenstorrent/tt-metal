@@ -16,7 +16,7 @@ namespace py = pybind11;
 
 void py_bind_point_to_point(py::module& module) {
     auto doc =
-        R"doc(point_to_point(input_tensor: ttnn.Tensor, send_coord: ttnn.MeshCoordinate, receive_coord: ttnn.MeshCoordinate, topology: ttnn.Topology, receiver_semaphore: ttnn.GlobalSemaphore) -> ttnn.Tensor
+        R"doc(point_to_point(input_tensor: ttnn.Tensor, send_coord: ttnn.MeshCoordinate, receive_coord: ttnn.MeshCoordinate, topology: ttnn.Topology, optional_output_tensor: Optional[ttnn.Tensor] = None, optional_intermediate_tensor: Optional[ttnn.Tensor] = None) -> ttnn.Tensor
 
             Point-to-point send receive Op. Send a tensor from one device to another.
 
@@ -79,8 +79,8 @@ void py_bind_point_to_point(py::module& module) {
             py::arg("sender_coord"),
             py::arg("topology"),
             py::kw_only(),
-            py::arg("optional_output_tensor") = std::nullopt,
-            py::arg("optional_intermediate_tensor") = std::nullopt});
+            py::arg("output_tensor") = std::nullopt,
+            py::arg("intermediate_tensor") = std::nullopt});
     module.def(
         "p2p_compute_intermediate_tensor_spec",
         p2p_compute_intermediate_tensor_spec,

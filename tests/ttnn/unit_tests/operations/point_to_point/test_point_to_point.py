@@ -102,7 +102,7 @@ def test_point_to_point(mesh_device, shape_coords, layout, dtype):
         coord0,
         coord1,
         ttnn.Topology.Linear,
-        optional_output_tensor=return_tensor,
+        output_tensor=return_tensor,
     )
 
     torch_return_tensor = ttnn.to_torch(return_tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
@@ -238,7 +238,7 @@ def test_point_to_point_optional_intermediate(mesh_device):
     torch_intermediate = torch.zeros(tuple(spec.shape), dtype=torch.bfloat16)
     tt_intermediate = ttnn.from_torch(torch_intermediate, spec=spec, device=mesh_device)
     sent_tensor = ttnn.point_to_point(
-        input_tensor, coord1, coord0, ttnn.Topology.Linear, optional_intermediate_tensor=tt_intermediate
+        input_tensor, coord1, coord0, ttnn.Topology.Linear, intermediate_tensor=tt_intermediate
     )
     sent_tensor_torch = ttnn.to_torch(sent_tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
     assert_equal(input_tensor_torch[idx_start0:idx_end0, :, :, :], sent_tensor_torch[idx_start1:idx_end1, :, :, :])

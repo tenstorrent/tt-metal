@@ -18,7 +18,7 @@ namespace ttnn::operations::ccl {
 
 void py_bind_all_gather(py::module& module) {
     auto doc =
-        R"doc(all_gather(input_tensor: ttnn.Tensor, dim: int, cluster_axis: Optional[int] = None, topology: ttnn.Topology = ttnn.Topology.Linear, output_tensor: Optional[ttnn.Tensor] = None, memory_config: Optional[ttnn.MemoryConfig] = None, subdevice_id: Optional[ttnn.SubDeviceId] = None) -> ttnn.Tensor
+        R"doc(all_gather(input_tensor: ttnn.Tensor, dim: int, cluster_axis: Optional[int] = None, num_links: Optional[int] = None, topology: ttnn.Topology = None, output_tensor: Optional[ttnn.Tensor] = None, memory_config: Optional[ttnn.MemoryConfig] = None, subdevice_id: Optional[ttnn.SubDeviceId] = None) -> ttnn.Tensor
 
             All-gather operation across devices along a selected dimension and optional cluster axis. If cluster axis is specified then we gather across the cluster axis. All-gather is a collective operation that gathers data from all devices into a new output tensor, concatenated along the specified `dim`. When cluster_axis is specified, each of the non-cluster_axis dimensions are performing independent all-gathers along the devices on the cluster axis. When the layout is row-major or we have tile padding on the gather dim, we use the composite all-gather implementation that falls back to all-broadcast.
 
@@ -28,6 +28,7 @@ void py_bind_all_gather(py::module& module) {
 
             Keyword Args:
                 cluster_axis (int, optional): The axis on the mesh device to gather across. Defaults to `None`.
+                num_links (int, optional): The number of links to use for the all-gather operation. Defaults to `None`, for which the number of links is determined automatically.
                 topology (ttnn.Topology, optional): Fabric topology. Defaults to `None`.
                 output_tensor (ttnn.Tensor, optional): Preallocated output tensor.
                 memory_config (ttnn.MemoryConfig, optional): Output memory configuration.

@@ -39,10 +39,10 @@ void py_bind_all_to_all_combine(py::module& module) {
 
             Keyword Args:
                 local_reduce (bool, optional): whether or not the tokens are locally reduce prior to combining. The expectation is that the expert output tokens corresponding to the dispatched token are already reduced. Defaults to `False`.
-                num_links (number, optional): the number of cross-device links to use for combining the tokens. Defaults to `1`.
-                topology (ttnn.Topology, optional): the topology to use when combining the tokens. Defaults to what the mesh topology is initialized with. CAREFUL: no guarantees that the topology is valid for the given Fabric Init unless it matches the topology of the mesh.
+                num_links (number, optional): the number of cross-device links to use for combining the tokens. Defaults to `None`, for which the number of links is determined automatically.
+                topology (ttnn.Topology, optional): the topology to use when combining the tokens. Defaults to `None`, for which the topology is determined automatically.
                 memory_config (ttnn.MemoryConfig, optional): Output memory configuration for the output tensors. Defaults to `None`.
-                axis (int, optional): the cluster axis to combine along. Defaults to `None` though we assert out when it is not specified.
+                cluster_axis (int, optional): the cluster axis to combine along. Defaults to `None`, though we assert out when it is not specified.
                 subdevice_id (ttnn.SubDeviceId, optional): the subdevice id for the subdevice on which we allocate the worker cores. Defaults to `None`.
                 output_tensor (ttnn.Tensor, optional): the optional output tensor to use for the combined tokens. Defaults to `None`.
                 output_shard_dim (int, optional): the dimension to shard the output tokens along. Defaults to `1`, which is the batch dimension.
@@ -60,7 +60,7 @@ void py_bind_all_to_all_combine(py::module& module) {
                                         topology=topology,
                                         memory_config=output_memory_config,
                                         local_reduce=local_reduce,
-                                        axis=axis,
+                                        cluster_axis=cluster_axis,
                                         output_shard_dim=output_shard_dim)
             )doc";
 
