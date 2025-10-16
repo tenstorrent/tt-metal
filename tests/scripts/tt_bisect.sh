@@ -137,7 +137,7 @@ try_download_artifacts() {
     return 1
   fi
 
-  if [ "$runs" = "[]" ]; then
+  if [ -z "$runs"  ]; then
     echo "No workflow runs found for commit $commit_sha"
     return 1
   fi
@@ -148,11 +148,11 @@ try_download_artifacts() {
   build_run_id="$(echo "$runs" | jq -r '.[] | select(.workflowName == "All post-commit tests") | select(.conclusion == "success") | .databaseId' | head -1)"
 
   # If not found, fall back to other build workflow patterns
-  if [ -z "$build_run_id" ] || [ "$build_run_id" = "null" ]; then
+  if [ -z "$build_run_id" ]; then
     build_run_id="$(echo "$runs" | jq -r '.[] | select(.workflowName | test("build|Build|CI|build-wheels")) | select(.conclusion == "success") | .databaseId' | head -1)"
   fi
 
-  if [ -z "$build_run_id" ] || [ "$build_run_id" = "null" ]; then
+  if [ -z "$build_run_id" ]; then
     echo "No successful build workflow found for commit $commit_sha"
     return 1
   fi
