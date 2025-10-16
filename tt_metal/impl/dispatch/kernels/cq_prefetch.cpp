@@ -520,7 +520,7 @@ static uint32_t process_relay_inline_noflush_cmd(uint32_t cmd_ptr, uint32_t& dis
 // top of the first page At the end, do not grab page N+1
 template <int32_t round, bool test_for_nonzero>
 static uint32_t write_pages_to_dispatcher(
-    uint32_t& downstream_data_ptr, uint32_t& scratch_write_addr, uint32_t& amt_to_write) {
+    uint32_t& downstream_data_ptr, uint32_t scratch_write_addr, uint32_t amt_to_write) {
     uint32_t page_residual_space = downstream_cb_page_size - (downstream_data_ptr & (downstream_cb_page_size - 1));
     uint32_t npages = (amt_to_write - page_residual_space + downstream_cb_page_size - round) / downstream_cb_page_size;
 
@@ -1571,7 +1571,7 @@ bool process_cmd(
 /* Relay linear bytes to dispatch_hd or dispatch_d via prefetch_d */
 static uint32_t relay_linear_to_downstream(
     uint32_t& downstream_data_ptr, uint32_t& scratch_write_addr, uint32_t& amt_to_write) {
-    uint32_t page_residual_space = downstream_cb_page_size - (downstream_data_ptr & (downstream_cb_page_size - 1));
+    uint32_t page_residual_space = (downstream_cb_page_size - (downstream_data_ptr & (downstream_cb_page_size - 1))) & (downstream_cb_page_size - 1);
     // Following is fine if downstream cb block is bigger than scratch and there are at least a couple of them
     uint32_t npages = (amt_to_write - page_residual_space + downstream_cb_page_size - 1) / downstream_cb_page_size;
     if (npages != 0) {
@@ -1622,7 +1622,7 @@ uint32_t process_relay_linear_h_cmd(uint32_t cmd_ptr, uint32_t& downstream_data_
     uint64_t read_addr = cmd->relay_linear_h.addr;
 
     // DPRINT << "relay_linear_h: cmd_ptr:0x" << HEX() << (uint32_t)cmd_ptr << ", length:0x " << wlength << ", addr:0x"
-    // << read_addr << ", nocxy:0x" << noc_xy_addr << DEC() << ENDL();
+    // << read_addr << ", nocxy:0x" << noc_xy_addr << ", downstream_data_ptr:0x" << downstream_data_ptr << DEC() << ENDL();
 
     // First step - read into DB0
     uint32_t amt_to_read =
@@ -1671,7 +1671,8 @@ uint32_t process_relay_linear_h_cmd(uint32_t cmd_ptr, uint32_t& downstream_data_
     scratch_write_addr = scratch_db_top[db_toggle];
     uint32_t amt_to_write = amt_to_read;
     uint32_t npages = relay_linear_to_downstream(downstream_data_ptr, scratch_write_addr, amt_to_write);
-    relay_client.release_pages<my_noc_index, downstream_noc_xy, downstream_cb_sem_id>(npages + 1);
+    constexpr auto additional_page = is_d_variant ? 1 : 0;
+    relay_client.release_pages<my_noc_index, downstream_noc_xy, downstream_cb_sem_id>(npages + additional_page);
 
     downstream_data_ptr = round_up_pow2(downstream_data_ptr, downstream_cb_page_size);
 
@@ -1707,8 +1708,7 @@ static uint32_t process_relay_inline_all(uint32_t data_ptr, uint32_t fence, bool
     // Amount to write depends on how much free space
     uint32_t downstream_pages_left = (downstream_cb_end - downstream_data_ptr) >> downstream_cb_log_page_size;
     if (downstream_pages_left >= npages) {
-        // WAIT is not needed here because previous writes have already been flushed. Prefetch H only uses this
-        // function and this function always flushes before returning
+        // WAIT is not needed here because previous writes were flushed at the end of the loop in the caller (kernel_h)
         relay_client
             .write_atomic_inc_any_len<my_noc_index, downstream_noc_xy, downstream_cb_sem_id, false, NCRISC_WR_CMD_BUF>(
                 data_ptr, get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr), length, npages);
@@ -1732,8 +1732,6 @@ static uint32_t process_relay_inline_all(uint32_t data_ptr, uint32_t fence, bool
 
         downstream_data_ptr = downstream_cb_base + tail_pages * downstream_cb_page_size;
     }
-
-    noc_async_writes_flushed();
 
     return fence;
 }
@@ -1783,22 +1781,17 @@ inline void relay_raw_data_to_downstream(
         }
 
         // Release pages consumed by this chunk
-        uint32_t pages_to_release = npages;
-        if (pages_to_release != 0) {
+        if (npages != 0) {
             cb_release_pages<
                 my_noc_index,
                 RelayInlineState::downstream_noc_encoding,
-                RelayInlineState::downstream_cb_sem>(pages_to_release);
+                RelayInlineState::downstream_cb_sem>(npages);
         }
 
         // Advance pointers and wlength
         data_ptr += can_read_now;
         wlength -= can_read_now;
 
-        // Wrap upstream data_ptr if needed
-        if (data_ptr == cmddat_q_end) {
-            data_ptr = cmddat_q_base;
-        }
 
         // Release upstream pages so prefetch_h can make more available. Ensure to flush the writes just made to prevent
         // data race.
@@ -1823,8 +1816,7 @@ inline void relay_raw_data_to_downstream(
 // until commands are received.
 inline uint32_t relay_cb_get_cmds(uint32_t& fence, uint32_t& data_ptr, uint32_t& downstream_data_ptr) {
     while (true) {
-        // DPRINT << "get_commands: " << data_ptr << " " << fence << " " << cmddat_q_base << " " << cmddat_q_end <<
-        // ENDL();
+        // DPRINT << "get_commands: " << HEX() << data_ptr << " " << fence << " " << cmddat_q_base << " " << cmddat_q_end << ENDL();
         if (data_ptr == fence) {
             // Ensure header is present
             get_cb_page<cmddat_q_base, cmddat_q_blocks, cmddat_q_log_page_size, my_upstream_cb_sem_id>(
@@ -1866,7 +1858,7 @@ void kernel_main_h() {
     bool done = false;
     uint32_t heartbeat = 0;
 
-    // Fetch q uses read buf. Write buf for process_relay_inline_all can be setup once
+    // Fetch q uses read buf. Write buf for process_relay_inline_all/process_relay_linear_h_cmd can be setup once
     relay_client.init<
         my_noc_index,
         fabric_mux_x,
@@ -1905,6 +1897,7 @@ void kernel_main_h() {
         } else {
             cmd_ptr = process_relay_inline_all(cmd_ptr, fence, is_exec_buf);
         }
+        noc_async_writes_flushed();
 
         // Note: one fetch_q entry can contain multiple commands
         // The code below assumes these commands arrive individually, packing them would require parsing all cmds
