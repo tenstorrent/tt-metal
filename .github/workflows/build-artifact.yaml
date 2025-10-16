@@ -162,7 +162,7 @@ jobs:
     name: "🛠️ Build ${{ inputs.build-type }} ${{ inputs.distro }} ${{ inputs.version }}"
     needs: build-docker-image
     timeout-minutes: 100
-    runs-on: tt-ubuntu-2204-large-stable
+    runs-on: tt-ubuntu-2204-large-metal
     environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
     outputs:
       packages-artifact-name: ${{ steps.set-artifact-name.outputs.name }}
@@ -333,7 +333,7 @@ jobs:
     name: 🐍 Build wheel (Python ${{ inputs.version == '22.04' && '3.10' || '3.12' }})
     needs: build-docker-image
     timeout-minutes: 30
-    runs-on: tt-ubuntu-2204-large-stable
+    runs-on: tt-ubuntu-2204-large-metal
     environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
     outputs:
       wheel_artifact_name: ${{ steps.set_wheel_artifact_name.outputs.wheel_artifact_name }}

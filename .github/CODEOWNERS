@@ -178,6 +178,10 @@ ttnn/cpp/ttnn/operations/eltwise/ @patrickroberts @sjameelTT @ntarafdar @dchenTT
 ttnn/cpp/ttnn/operations/eltwise/**/CMakeLists.txt @patrickroberts @sjameelTT @ntarafdar @dchenTT @tenstorrent/metalium-developers-infra @tenstorrent/metalium-codeowners-large-changes
 ttnn/cpp/ttnn/operations/eltwise/quantization/ @wenbinlyuTT @patrickroberts @sjameelTT @tenstorrent/metalium-codeowners-large-changes
 ttnn/cpp/ttnn/operations/eltwise/quantization/**/CMakeLists.txt @wenbinlyuTT @patrickroberts @sjameelTT @tenstorrent/metalium-developers-infra @tenstorrent/metalium-codeowners-large-changes
+ttnn/ttnn/operations/unary* @patrickroberts @sjameelTT @ntarafdar @dchenTT @tenstorrent/metalium-codeowners-large-changes
+ttnn/ttnn/operations/binary* @patrickroberts @sjameelTT @ntarafdar @dchenTT @tenstorrent/metalium-codeowners-large-changes
+ttnn/ttnn/operations/ternary* @patrickroberts @sjameelTT @ntarafdar @dchenTT @tenstorrent/metalium-codeowners-large-changes
+ttnn/ttnn/operations/complex* @patrickroberts @sjameelTT @ntarafdar @dchenTT @tenstorrent/metalium-codeowners-large-changes
 ttnn/cpp/ttnn/operations/reduction/ @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/metalium-codeowners-large-changes
 ttnn/cpp/ttnn/operations/reduction/accumulation/ @aczajkowskiTT @sjameelTT @bbradelTT @mgajewskiTT @nmauriceTT @nsorabaTT @jbbieniekTT @tenstorrent/metalium-codeowners-large-changes
 ttnn/cpp/ttnn/operations/reduction/**/CMakeLists.txt @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/metalium-developers-infra @tenstorrent/metalium-codeowners-large-changes
@@ -251,6 +255,7 @@ models/common @yieldthought @mtairum @uaydonat @tenstorrent/metalium-codeowners-
 models/datasets/llm_dataset_utils.py @skhorasganiTT @uaydonat @tenstorrent/metalium-codeowners-large-changes
 models/demos @uaydonat @yieldthought @cglagovichTT @tenstorrent/metalium-codeowners-large-changes
 models/demos/deepseek_v3 @uaydonat @yieldthought @kpaigwar @barci2 @pprajapatiTT @tenstorrent/metalium-codeowners-large-changes
+models/demos/gpt_oss @uaydonat @mtairum @sraizada-tt @tenstorrent/metalium-codeowners-large-changes
 models/**/bert*/ @TT-BrianLiu @uaydonat @tenstorrent/metalium-codeowners-large-changes
 models/demos/metal_BERT_large_11 @tt-aho @TT-BrianLiu @tenstorrent/metalium-codeowners-large-changes
 models/**/distilbert/ @tt-aho @uaydonat @tenstorrent/metalium-codeowners-large-changes
