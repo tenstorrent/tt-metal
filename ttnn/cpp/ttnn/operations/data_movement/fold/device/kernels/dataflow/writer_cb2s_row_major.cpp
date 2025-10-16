@@ -28,8 +28,8 @@ void kernel_main() {
     constexpr uint32_t core_dst_offset = is_reader ? 0 : aligned_dst_pixel_size;
 
     constexpr bool is_aligned = (pixel_size == aligned_pixel_size);
-    constexpr uint32_t num_pixels = pixel_size / element_size;
-    constexpr uint32_t aligned_pixels = aligned_pixel_size / element_size;
+    constexpr uint32_t elements_per_pixel = pixel_size / element_size;
+    constexpr uint32_t elements_per_aligned_pixel = aligned_pixel_size / element_size;
 
     uint64_t src_noc_addr = get_noc_addr(get_read_ptr(src_cb));
     const uint32_t dst_addr_base = get_write_ptr(dst_cb);
@@ -63,12 +63,12 @@ void kernel_main() {
 
                     // Gather pixels along stride_w dimension
                     for (uint32_t w = 0; w < stride_w; ++w) {
-                        // Copy num_pixels (half-words) from source to destination
-                        for (uint32_t i = 0; i < num_pixels; ++i) {
+                        // Copy elements_per_pixel (half-words) from source to destination
+                        for (uint32_t i = 0; i < elements_per_pixel; ++i) {
                             dst_ptr[i] = src_ptr[i];
                         }
-                        src_ptr += aligned_pixels;
-                        dst_ptr += num_pixels;
+                        src_ptr += elements_per_aligned_pixel;
+                        dst_ptr += elements_per_pixel;
                     }
                     dst_pixel_addr += pixel_size * stride_w;
                 }
