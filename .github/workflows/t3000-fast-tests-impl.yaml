@@ -77,7 +77,7 @@ jobs:
       - name: Run t3k fabric tests
         id: t3k-fabric-tests
         timeout-minutes: 10
-        if: ${{ inputs.run-fabric-tests }}
+        if: ${{ inputs.run-fabric-tests == 'true' }}
         run: |
           mkdir -p generated/test_reports
           source tests/scripts/t3000/run_t3000_unit_tests.sh
@@ -90,7 +90,7 @@ jobs:
       - name: Run t3k ttnn multiprocess tests
         id: t3k-ttnn-multiprocess-tests
         timeout-minutes: 10
-        if: ${{ inputs.run-multiprocess-tests }}
+        if: ${{ inputs.run-multiprocess-tests == 'true' }}
         run: |
           mkdir -p generated/test_reports
           source tests/scripts/t3000/run_t3000_unit_tests.sh
@@ -104,7 +104,7 @@ jobs:
       - name: Run t3k ttnn ccl tests
         id: t3k-ttnn-ccl-tests
         timeout-minutes: 10
-        if: ${{ inputs.run-ccl-tests }}
+        if: ${{ inputs.run-ccl-tests == 'true' }}
         run: |
           mkdir -p generated/test_reports
           source tests/scripts/t3000/run_t3000_unit_tests.sh
