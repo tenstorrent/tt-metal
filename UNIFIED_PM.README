@@ -1,0 +1,177 @@
+# Unified Programming Model
+
+This document outlines the designs and features required to enable a unified programming model for both single- and multi-device Tensor and OP execution on Tenstorrent systems. The goal is to eliminate device boundaries from the user's perspective, allowing a program written for one device to "just work" across 2, 20, or 200 devices—without rewriting kernels or managing collectives manually.
+
+It builds on top of work for a unified DM interface. See: https://docs.google.com/document/d/1DltQArjcl6cCBl_nghk5ihm7u1av6YJPIJal9jFEM6o/edit?tab=t.0
+
+## Background
+
+### Multi-device Tensor
+
+Layouts of multi-device tensors are fully described by a global and local config. The global config enables reasoning of distribution across devices, while the local config captures all metadata describing the distribution of each shard on a device.
+
+#### GlobalConfig (TensorTopology)
+
+This defines how a tensor is partitioned or replicated across the entire MeshDevice. It captures the global sharding and replication strategy, specifying which dimensions are split across which devices and how the tensor is distributed across the mesh.
+
+#### Local Config (TensorSpec)
+
+For each device, TensorSpec describes the local configuration of its shard of the tensor. This includes shape, dtype, layout (RM/TILE), memory placement (DRAM/L1), and distribution (interleaved/sharded).
+
+## Programming Model
+
+Designing a programming model spans the full stack—from high-level model writers to low-level kernel execution—and requires tight integration between the following components:
+
+### Model Writers
+
+At the top level, users define models using a library of high-level operations (OPs), such as matmul, convolution, or layernorm. These OPs serve as the primary programming interface and encapsulate both computation and data movement logic.
+
+### OP Writers
+
+Each OP operates on some input tensor(s) to produce some output tensor(s), whose global layout (via TensorTopology) and local layout (via TensorSpec) describe how data is sharded, replicated, and locally distributed.
+
+### Tensor Access at the Kernel Level
+
+At the lowest level, device kernels access data through a unified TensorAccessor API. This API abstracts away the physical location of data and provides the necessary logic to perform arbitrary tile-based reads/writes. TensorAccessor is the backbone of generic OPs.
+
+Together, these components form a layered and unified programming model that supports both ease of use for model authors and flexibility and performance for OP/kernel developers.
+
+## Design
+
+### Goals
+
+A cohesive model should achieve the following:
+
+| Goal | Description |
+|------|-------------|
+| Ease of Use | Everything should "just work" for the user. No manual collectives, re-sharding, or layout hacks. |
+| Scalable by Default | OPs and kernels should be written once and scale automatically across device count and topology. |
+| Optimizable When Needed | There should be a clean path to incrementally optimize for data locality and minimal cross-chip/core communication, without rewriting the entire OP or kernel logic. |
+
+This approach enables rapid prototyping, large-scale model training, and flexible deployment while keeping low-level control and performance optimization within reach when needed.
+
+### Requirements
+
+To enable scalable, flexible, and maintainable multi-device programs, the programming model must meet the following requirements across the stack:
+
+#### Model Writers: "It Just Works"
+
+Model writers should be able to pass any multi-device tensor into an OP, regardless of how it's sharded or replicated. The OP must be capable of:
+
+- Producing a correct output tensor, automatically inferring required collective communication and reshaping.
+- Supporting an optional output tensor specification, allowing users to override defaults and control the output sharding when needed.
+- Falling back to a reasonable default layout, derived from inputs, if no output layout is specified.
+
+The user should not need to manually insert collectives or re-layouts. Multi-device tensor inputs should "just work."
+
+#### OP Writers: One Setup, Any Scale
+
+OP authors should be able to write an OP once and have it run correctly on 2, 20, or 200 devices, without rewriting for each topology. This requires:
+
+- Abstractions like TensorTopology and TensorSpec to handle device-aware layout logic.
+- A consistent programming interface for describing input/output layouts and deriving valid dataflow patterns (e.g., all-reduce, reduce-scatter) based on input topology.
+
+The goal is to separate correctness from optimization: correctness is automatic; performance tuning is optional and incremental.
+
+#### Kernel APIs: Universal Access
+
+At the lowest level, kernels should expose seamless APIs that support:
+
+- Generic read/write access to any tile on any core or device.
+- Abstraction over whether a tile is local or remote (with the system handling routing, collectives, or synchronization as needed).
+- A unified TensorAccessor model that encapsulates sharding, replication, and memory layout without requiring explicit fabric or NoC calls.
+
+This enables writing generic kernels that can operate over the global tensor namespace and be reused across different topologies.
+
+## Out of Scope
+
+There are other topics to explore for enabling rapid kernel prototyping that are either orthogonal or an extension of this proposal and will be considered out of scope:
+
+- **Unified Kernels Proposal**: https://docs.google.com/document/d/1I4zNe-fM3ybtMpf7IZbSea8DtGzOsLc-PLgLIxYGaqw/edit?tab=t.0
+  - Reduce complexity of writing a kernel by consolidating to one kernel per OP
+  - Abstract away as many unnecessary concepts as possible
+- **Python DSLs**
+  - Ability to prototype kernels natively in Python
+  - Example: https://github.com/tile-ai/tilelang/tree/main/examples/gemm
+
+## State of Things
+
+Today, the programming model is defined at the single-device level for almost all OPs other than CCLs. Here is what these OPs look like:
+
+Each program is written for a single device with local device access only. Examples of local device access include:
+
+- Using the TensorAccessor API to read and write data that is local to that device.
+- Working with data local to each core directly
+
+To run across multiple devices, the same single-device program is naively replicated (or "stamped") across all devices in the MeshDevice.
+
+For CCLs, there are some key differences that enable a slightly smarter programming model:
+
+- Each single-device program specializes on concepts like NESW neighbours, links, etc.. to reason about multi-device properties.
+- Communication with other devices is programmed explicitly with fabric APIs (currently all write-based).
+
+This programming model places the burden on the user of the OPs (ie. model writers) or higher-level systems to explicitly and manually manage the global layout of the tensors and cross-device communications (e.g., AllGather, ReduceScatter) to ensure correct behaviour. Here are some examples that highlight shortcomings of this approach:
+
+- If you AllGather on a replicated dim, should the CCL just error out? What's the user intent of performing such an operation?
+- If you AllGather on a sharded dim, should the output tensor be considered replicated along that dim?
+- If you call matmul, the user must carefully consider the resulting output based on the input tensor layouts and insert CCLs to get the correct result. Based on the desired output tensor, there is some sequence of pre-/post-matmul CCLs that must be inserted. Why do users have to figure this out?
+
+### Table of Issues
+
+This table summarizes top priority issues with our current programming model. It highlights a couple of key high-level issues with downstream impacts/side effects in a separate column.
+
+| Issues | Impact | Comments |
+|--------|--------|----------|
+| **Model/OP Writers** | | |
+| Programs are written per device and naively replicated across the mesh. | Manual tracking of global config + CCLs are required in models. | Need to leak multi-device logic as configurable params, which puts more burden on users. Instead, if lower-level concepts (eg. OPs, kernels) are multi-device native, users can not think about multi-device. |
+| OPs are not natively multi-device aware. Primarily, they do not consider TensorTopology for input and output tensors. | *Manual tracking of global config + CCLs are required in models.<br><br>Duplicate point as first issue, because you need to solve both to address this. | |
+| TensorTopology isn't consistently enforced or interpreted across OPs. Composition of OPs can lead to incorrect TensorTopology. | | |
+| Defaults exist for output tensors, but are they correct for OPs like TMs and CCLs? | | |
+| No option for specifying output TensorTopology. Need to insert CCLs to change global layout. | | Can we directly support arbitrary output tensor topology?<br><br>Or, decompose into pre-/post-OP CCLs + local OP? |
+| **Kernel APIs/OP Infra** | | |
+| Missing virtualization of device boundaries across OP infra | Cannot write a (set of) kernel(s) that work across any number of devices. | |
+| Missing concrete definition of global tensor shape | Hard to reason about work distribution at multi-device tensor level. We need to answer this question: "What is the shape of a replicated dim?" | |
+| TensorAccessor has no support for TensorTopology. | Only device-local read/writes are possible. This means, we cannot really virtualize device boundaries cleanly.<br><br>Unicasts should be doable, but how do you handle generic multicasts that span devices? | |
+| Cross-device reads/writes must use low-level fabric/NOC APIs.<br><br>Or, any-to-any core communication is simply not possible (yet) | Eg. Fabric reads are not possible yet<br><br>Cannot cleanly build TensorAccessor support for any generic TensorTopology. | Core proposal of this doc:<br>https://docs.google.com/document/d/1DltQArjcl6cCBl_nghk5ihm7u1av6YJPIJal9jFEM6o/edit?tab=t.0 |
+
+### Open Questions
+
+- What does it mean to iterate work over a multi-device tensor? How do you handle replication? What is the shape?
+- How do we support generic input and output TensorTopology? Native in kernels or decompose into pre-/post-OP CCLs + local OP?
+
+## Proposal
+
+### TODO
+
+Key ideas:
+
+- Distributed OPs with output tensor topology
+- Virtualize MeshDevice so we just get sea of cores
+- Write one (multi-device) kernel that targets sea of cores
+- RT/CT args are virtualized
+- Work distribution will be across full multi-device tensor
+- Under the hood, we need to lower this program into single-device programs for dispatch
+
+Assumptions/fundamental primitives that we need:
+
+- TensorAccessor supports TensorTopology as well
+- Build TensorAccessor with unified DM APIs
+
+Key deliverable/MVP:
+
+One distributed matmul that supports (all?) OP/kernel that:
+
+- Runs on any number of devices
+- Supports all input/output global layouts
+
+Constraints:
+
+- No mcasting primitives
+- Every core greedily reads from whatever data it needs
+- No re-use or blocking; purely single-tile based granularity
+  - ie. No performance guarantee whatsoever
+- Essentially, we are rewriting our DUMB_MULTI_CORE matmul but for multi-device
+
+Minor points:
+
+- For validation, we need to validate all shards of a multi-device tensor. Typically, for replicated dims, users manually use MeshComposer to extract just one shard/copy of replicated dims, but for testing we should check all replicated shards are actually the same
