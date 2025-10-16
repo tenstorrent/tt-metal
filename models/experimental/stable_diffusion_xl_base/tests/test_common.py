@@ -562,12 +562,11 @@ def run_tt_image_gen(
             else:
                 noise_pred_uncond, noise_pred_text = unet_outputs
 
-            if guidance_rescale > 0.0:
-                # ttnn.clone doesn't work with L1 sharded tensors
-                noise_pred_text_new = ttnn.to_memory_config(noise_pred_text, ttnn.L1_MEMORY_CONFIG)
-                ttnn.deallocate(noise_pred_text)
-                noise_pred_text = noise_pred_text_new
-                noise_pred_text_orig = ttnn.clone(noise_pred_text)
+            # ttnn.clone doesn't work with L1 sharded tensors
+            noise_pred_text_new = ttnn.to_memory_config(noise_pred_text, ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(noise_pred_text)
+            noise_pred_text = noise_pred_text_new
+            noise_pred_text_orig = ttnn.clone(noise_pred_text)
 
             # perform guidance
             noise_pred_text = ttnn.sub_(noise_pred_text, noise_pred_uncond)
@@ -577,29 +576,30 @@ def run_tt_image_gen(
             ttnn.deallocate(noise_pred_uncond)
             ttnn.deallocate(noise_pred_text)
 
-            if guidance_rescale > 0.0:
-                noise_pred_new = ttnn.to_memory_config(noise_pred, ttnn.L1_MEMORY_CONFIG)
-                ttnn.deallocate(noise_pred)
-                noise_pred = noise_pred_new
-                std_text = ttnn.std(noise_pred_text_orig, dim=[1, 2, 3], keepdim=True)
-                std_cfg = ttnn.std(noise_pred, dim=[1, 2, 3], keepdim=True)
+            noise_pred_new = ttnn.to_memory_config(noise_pred, ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(noise_pred)
+            noise_pred = noise_pred_new
 
-                std_ratio = ttnn.div(std_text, std_cfg)
+            # perform guidance rescale
+            std_text = ttnn.std(noise_pred_text_orig, dim=[1, 2, 3], keepdim=True)
+            std_cfg = ttnn.std(noise_pred, dim=[1, 2, 3], keepdim=True)
 
-                noise_pred_rescaled = ttnn.mul(noise_pred, std_ratio)
+            std_ratio = ttnn.div(std_text, std_cfg)
 
-                rescaled_term = ttnn.mul(noise_pred_rescaled, guidance_rescale)
-                original_term = ttnn.mul(noise_pred, (1.0 - guidance_rescale))
-                ttnn.deallocate(noise_pred)
-                noise_pred = ttnn.add(rescaled_term, original_term)
-                ttnn.deallocate(std_text)
-                ttnn.deallocate(std_cfg)
-                ttnn.deallocate(std_ratio)
-                ttnn.deallocate(noise_pred_rescaled)
-                ttnn.deallocate(rescaled_term)
-                ttnn.deallocate(original_term)
-                ttnn.deallocate(noise_pred_text_orig)
-                noise_pred = ttnn.move(noise_pred)
+            noise_pred_rescaled = ttnn.mul(noise_pred, std_ratio)
+
+            rescaled_term = ttnn.mul(noise_pred_rescaled, guidance_rescale)
+            original_term = ttnn.mul(noise_pred, (1.0 - guidance_rescale))
+            ttnn.deallocate(noise_pred)
+            noise_pred = ttnn.add(rescaled_term, original_term)
+            ttnn.deallocate(std_text)
+            ttnn.deallocate(std_cfg)
+            ttnn.deallocate(std_ratio)
+            ttnn.deallocate(noise_pred_rescaled)
+            ttnn.deallocate(rescaled_term)
+            ttnn.deallocate(original_term)
+            ttnn.deallocate(noise_pred_text_orig)
+            noise_pred = ttnn.move(noise_pred)
 
             tt_latents = tt_scheduler.step(noise_pred, None, tt_latents, **tt_extra_step_kwargs, return_dict=False)[0]
 
