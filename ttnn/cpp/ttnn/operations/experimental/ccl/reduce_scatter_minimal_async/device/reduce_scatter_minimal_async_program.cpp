@@ -1066,14 +1066,14 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
     // Tensor Info
     const auto& input_tensor_shape = input_tensor.padded_shape();
     TT_FATAL(
-        !(input_tensor_shape[2] % tt::constants::TILE_HEIGHT),
+        !(input_tensor_shape[-2] % tt::constants::TILE_HEIGHT),
         "Input tensor height ({}) must be divisible by tile height ({}).",
-        input_tensor_shape[2],
+        input_tensor_shape[-2],
         tt::constants::TILE_HEIGHT);
     TT_FATAL(
-        !(input_tensor_shape[3] % tt::constants::TILE_WIDTH),
+        !(input_tensor_shape[-1] % tt::constants::TILE_WIDTH),
         "Input tensor width ({}) must be divisible by tile width ({}).",
-        input_tensor_shape[3],
+        input_tensor_shape[-1],
         tt::constants::TILE_WIDTH);
 
     const uint32_t input_tensor_B = input_tensor_shape[0];
