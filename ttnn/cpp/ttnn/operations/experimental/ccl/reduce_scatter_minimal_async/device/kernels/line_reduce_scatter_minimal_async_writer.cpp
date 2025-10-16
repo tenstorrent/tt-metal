@@ -180,15 +180,13 @@ void kernel_main() {
         tt::tt_fabric::fabric_client_connect_start(*mux_connection_handle);
     }
 
-    auto pkt_scatter_hdr = PacketHeaderPool::allocate_header();
-    auto pkt_unicast_hdr = PacketHeaderPool::allocate_header();
-    auto pkt_hdr_seminc = PacketHeaderPool::allocate_header();
-    ccl_routing_utils::fabric_set_line_unicast_route(pkt_scatter_hdr, unicast_route_info);
-    ccl_routing_utils::fabric_set_line_unicast_route(pkt_unicast_hdr, unicast_route_info);
-
     if (mux_connection_valid) {
         tt::tt_fabric::fabric_client_connect_finish(*mux_connection_handle);
     }
+
+    auto pkt_scatter_hdr = PacketHeaderPool::allocate_header();
+    auto pkt_unicast_hdr = PacketHeaderPool::allocate_header();
+    auto pkt_hdr_seminc = PacketHeaderPool::allocate_header();
 
     if (use_barrier_sem) {
         if (num_targets_in_direction) {
@@ -228,27 +226,33 @@ void kernel_main() {
     uint64_t out_ready_sem_noc_addr_in_pkt =
         safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem, 0);
 
-    fabric_unicast_noc_scatter_write_set_state<
-        UnicastScatterWriteUpdateMask::ChunkSizes | UnicastScatterWriteUpdateMask::PayloadSize>(
-        pkt_scatter_hdr,
-        static_cast<uint8_t>(unicast_route_info.distance_in_hops),
-        NocUnicastScatterCommandHeader{
-            {0, 0},  // ignore
-            static_cast<uint16_t>(page_size)},
-        page_size * 2);
+    // only initialize if we're actually going to send anything over fabric
+    if (num_targets_in_direction) {
+        ccl_routing_utils::fabric_set_line_unicast_route(pkt_scatter_hdr, unicast_route_info);
+        ccl_routing_utils::fabric_set_line_unicast_route(pkt_unicast_hdr, unicast_route_info);
+        ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_seminc, unicast_route_info);
 
-    fabric_unicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::PayloadSize>(
-        pkt_unicast_hdr, static_cast<uint8_t>(unicast_route_info.distance_in_hops), nullptr, page_size);
+        fabric_unicast_noc_scatter_write_set_state<
+            UnicastScatterWriteUpdateMask::ChunkSizes | UnicastScatterWriteUpdateMask::PayloadSize>(
+            pkt_scatter_hdr,
+            static_cast<uint8_t>(unicast_route_info.distance_in_hops),
+            NocUnicastScatterCommandHeader{
+                {0, 0},  // ignore
+                static_cast<uint16_t>(page_size)},
+            page_size * 2);
 
-    fabric_unicast_noc_unicast_atomic_inc_set_state<
-        UnicastAtomicIncUpdateMask::Wrap | UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
-        pkt_hdr_seminc,
-        static_cast<uint8_t>(unicast_route_info.distance_in_hops),
-        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-            0,                         // ignore
-            static_cast<uint16_t>(1),  // increment 1
-            static_cast<uint16_t>(0xFFFF)});
-    ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_seminc, unicast_route_info);
+        fabric_unicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::PayloadSize>(
+            pkt_unicast_hdr, static_cast<uint8_t>(unicast_route_info.distance_in_hops), nullptr, page_size);
+
+        fabric_unicast_noc_unicast_atomic_inc_set_state<
+            UnicastAtomicIncUpdateMask::Wrap | UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
+            pkt_hdr_seminc,
+            static_cast<uint8_t>(unicast_route_info.distance_in_hops),
+            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+                0,                         // ignore
+                static_cast<uint16_t>(1),  // increment 1
+                static_cast<uint16_t>(0xFFFF)});
+    }
 
     constexpr uint32_t intermediate_full_offset = is_forward ? 0 : input_num_pages;
 
