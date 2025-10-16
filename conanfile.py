@@ -36,33 +36,30 @@ class TTNNConan(ConanFile):
         "enable_profiler": False,
     }
 
-    def export(self):
-        self.exports_sources = [
-            "CMakeLists.txt",
-            "ttnn/**",
-            "tt_metal/**",
-            "tt_stl/**",
-            "tools/**",
-            "CMakePresets.json",
-            "cmake/**",
-            "third_party/**",
-            "tools/**",
-            ".clang-tidy",
-            # exclude build artifacts
-            "!build*/**",
-            "!**/*.o",
-            "!**/*.out",
-            "!**/*.obj",
-            "!**/*.a",
-            "!**/*.lib",
-            "!**/*.so*",
-            "!**/*.dll",
-            "!**/*.dylib",
-            "!**/*.pdb",
-            "!**/*.ninja",
-            "!**/*.Dockerfile",
-            "!**/__pycache__/**",
-        ]
+    exports_sources = [
+        "CMakeLists.txt",
+        "ttnn/**",
+        "tt_metal/**",
+        "tt_stl/**",
+        "CMakePresets.json",
+        "cmake/**",
+        "third_party/**",
+        "tools/**",
+        ".clang-tidy",
+        # exclude build artifacts
+        "!**/*.o",
+        "!**/*.out",
+        "!**/*.obj",
+        "!**/*.a",
+        "!**/*.lib",
+        "!**/*.so*",
+        "!**/*.dll",
+        "!**/*.dylib",
+        "!**/*.pdb",
+        "!**/*.ninja",
+        "!**/*.Dockerfile",
+        "!**/__pycache__/**",
+    ]
 
     def set_version(self):
         _version = subprocess.check_output("git describe --abbrev=0 --tags", shell=True).decode().strip()
@@ -166,7 +163,54 @@ class TTNNConan(ConanFile):
             self.cpp_info.cxxflags = ["-fno-omit-frame-pointer"]
             self.cpp_info.link_options = ["-rdynamic"]
 
-        self.cpp_info.includedirs = ["include/metalium-thirdparty", "include"]
-        self.cpp_info.libs = ["tt_stl", "tt-nn", "tt_metal"]
+        # Check if we're in editable mode (package_folder points to source folder)
+        is_editable = not (Path(self.package_folder) / "bin").exists()
+
+        if is_editable:
+            # In editable mode, use a local install directory for proper header structure
+            build_folder = Path(self.package_folder) / ".conan-build" / str(self.settings.build_type)
+            local_install = Path(self.package_folder) / "install"
+
+            # Use the local install structure (must be created manually with cmake install)
+            if not (local_install / "include").exists():
+                self.output.warning(
+                    f"Local install not found at {local_install}/include. Please run: cd {build_folder} && cmake --install . --prefix {local_install}"
+                )
+
+            # Use the installed structure (same as package mode but from local install)
+            common_includedirs = [
+                str(local_install / "include" / "metalium-thirdparty"),
+                str(local_install / "include"),
+            ]
+            common_defines = ["SPDLOG_FMT_EXTERNAL", "FMT_HEADER_ONLY"]
+            # Add common lib directory for tracy, device, etc.
+            common_libdir = str(build_folder / "lib")
+
+            self.cpp_info.components["tt_stl"].libs = ["tt_stl"]
+            self.cpp_info.components["tt_stl"].libdirs = [str(build_folder / "tt_stl"), common_libdir]
+            self.cpp_info.components["tt_stl"].includedirs = common_includedirs
+            self.cpp_info.components["tt_stl"].defines = common_defines
+
+            self.cpp_info.components["tt_metal"].libs = ["tt_metal"]
+            self.cpp_info.components["tt_metal"].libdirs = [str(build_folder / "tt_metal"), common_libdir]
+            self.cpp_info.components["tt_metal"].includedirs = common_includedirs
+            self.cpp_info.components["tt_metal"].defines = common_defines
+            self.cpp_info.components["tt_metal"].requires = ["tt_stl"]
+
+            self.cpp_info.components["tt-nn"].libs = ["tt-nn"]
+            self.cpp_info.components["tt-nn"].libdirs = [str(build_folder / "ttnn"), common_libdir]
+            self.cpp_info.components["tt-nn"].includedirs = common_includedirs
+            self.cpp_info.components["tt-nn"].defines = common_defines
+            self.cpp_info.components["tt-nn"].requires = ["tt_metal", "tt_stl"]
+
+            self.cpp_info.bindirs = [str(build_folder)]
+            tt_metal_home = str(local_install / "bin" / "tt-metalium")
+        else:
+            # In package mode, use installed structure
+            self.output.info(f"In package mode, use installed structure: {self.package_folder}")
+            self.cpp_info.includedirs = ["include/metalium-thirdparty", "include"]
+            self.cpp_info.libs = ["tt_stl", "tt-nn", "tt_metal"]
+            tt_metal_home = str(self.package_folder) + "/bin/tt-metalium/"
+
         self.cpp_info.defines = ["SPDLOG_FMT_EXTERNAL", "FMT_HEADER_ONLY"]
-        self.runenv_info.define("TT_METAL_HOME", str(self.package_folder) + "/bin/tt-metalium/")
+        self.runenv_info.define("TT_METAL_HOME", tt_metal_home)
