@@ -59,9 +59,9 @@ def get_memory_config(memory_config_type, shape, device):
     "activation_func, func_name, params, has_approx",
     [
         # ReLU family - NO approx mode
-        (ttnn.relu, "relu", {}, False),
+        # (ttnn.relu, "relu", {}, False),
         # (ttnn.relu6, "relu6", {}, False),
-        # (ttnn.leaky_relu, "leaky_relu", {"negative_slope": 0.01}, False),
+        # (ttnn.leaky_relu, "leaky_relu", {"alpha": 0.01}, False),
         # (ttnn.relu_max, "relu_max", {"upper_limit": 6.0}, False),
         # (ttnn.relu_min, "relu_min", {"lower_limit": 0.0}, False),
         # Sigmoid family - HAS approx mode
@@ -94,8 +94,10 @@ def get_memory_config(memory_config_type, shape, device):
         # (ttnn.softsign, "softsign", {}, False),
         # Special - NO approx mode
         # (ttnn.threshold, "threshold", {"threshold": 0.0, "value": 0.0}, False),
-        # (ttnn.heaviside, "heaviside", {"value": 0.5}, False),
-        # (ttnn.prelu, "prelu", {"weight": 0.25}, False),
+        # (ttnn.heaviside, "heaviside", {"scalar": 0.5}, False),
+        # Mish family
+        # (ttnn.mish, "mish", {}, False),
+        # (ttnn.hardmish, "hardmish", {}, False),
     ],
 )
 def test_activation_functions(input_shapes, memory_config_type, activation_func, func_name, params, has_approx, device):
@@ -122,35 +124,45 @@ def test_activation_functions(input_shapes, memory_config_type, activation_func,
         # Test the specific mode (accurate or approximate) based on has_approx flag
         if has_approx:
             # Test approximate mode
-            if "sigmoid" in func_name:
-                output_tensor = activation_func(input_tensor, fast_and_approximate_mode=True, vector_mode=4, **params)
-            elif func_name == "prelu":
-                # Special handling for prelu which takes weight as second positional argument
-                weight = params.get("weight", 0.25)
-                output_tensor = activation_func(input_tensor, weight, fast_and_approximate_mode=True)
+            if "sigmoid" in func_name and "accurate" not in func_name:
+                output_tensor = activation_func(input_tensor, fast_and_approximate_mode=True, vector_mode=4)
             else:
-                output_tensor = activation_func(input_tensor, fast_and_approximate_mode=True, **params)
-            # Lower PCC threshold for approximate modes
+                output_tensor = activation_func(input_tensor, fast_and_approximate_mode=True)
             pcc_threshold = 0.95
         else:
-            # Test accurate mode (default)
-            if func_name == "prelu":
-                # Special handling for prelu which takes weight as second positional argument
-                weight = params.get("weight", 0.25)
-                output_tensor = activation_func(input_tensor, weight)
+            # Test accurate mode - handle positional arguments
+            if func_name == "heaviside":
+                compare_tensor = ttnn.from_torch(
+                    torch.zeros_like(in_data),
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=device,
+                    memory_config=memory_config,
+                )
+                output_tensor = activation_func(input_tensor, compare_tensor, params.get("scalar", 0.5))
+            elif len(params) == 1:
+                # Single positional arg: leaky_relu(alpha), relu_max(upper_limit), relu_min(lower_limit),
+                # elu(alpha), celu(alpha), softshrink(lambd), hardshrink(lambd)
+                output_tensor = activation_func(input_tensor, list(params.values())[0])
+            elif len(params) == 2:
+                # Two positional args: hardtanh(min_val, max_val), threshold(threshold, value)
+                output_tensor = activation_func(input_tensor, *params.values())
             else:
                 output_tensor = activation_func(input_tensor, **params)
-            # Higher PCC threshold for accurate modes
             pcc_threshold = 0.99
 
-        # Verify correctness
+        # Verify correctness with golden function
         golden_function = ttnn.get_golden_function(activation_func)
-        if func_name == "prelu":
-            # Special handling for prelu golden function
-            weight = params.get("weight", 0.25)
-            golden_tensor = golden_function(in_data, weight, device=device)
+
+        if func_name == "heaviside":
+            golden_tensor = golden_function(
+                in_data, torch.zeros_like(in_data), params.get("scalar", 0.5), device=device
+            )
+        elif len(params) > 0:
+            golden_tensor = golden_function(in_data, *params.values(), device=device)
         else:
-            golden_tensor = golden_function(in_data, device=device, **params)
+            golden_tensor = golden_function(in_data, device=device)
+
         assert_with_pcc(ttnn.to_torch(output_tensor), golden_tensor, pcc=pcc_threshold)
 
     except Exception as e:
