@@ -4,8 +4,6 @@
 
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/tt_fabric_test_context.hpp"
 
-#include <unordered_map>
-
 static double calc_bw_bytes_per_cycle(uint32_t total_words, uint64_t cycles) {
     constexpr uint32_t bytes_per_eth_word = 16;
     return (total_words * bytes_per_eth_word) / static_cast<double>(cycles);
@@ -263,8 +261,7 @@ std::vector<GoldenCsvEntry>::iterator TestContext::fetch_corresponding_golden_en
     return golden_it;
 }
 
-ComparisonResult TestContext::create_comparison_result(
-    const BandwidthResultSummary& test_result, double test_result_avg_bandwidth) {
+ComparisonResult TestContext::create_comparison_result(const BandwidthResultSummary& test_result) {
     std::string num_devices_str = convert_num_devices_to_string(test_result.num_devices);
     ComparisonResult comp_result;
     comp_result.test_name = test_result.test_name;
@@ -275,7 +272,6 @@ ComparisonResult TestContext::create_comparison_result(
     comp_result.num_links = test_result.num_links;
     comp_result.packet_size = test_result.packet_size;
     comp_result.num_iterations = test_result.num_iterations;
-    comp_result.current_bandwidth_GB_s = test_result_avg_bandwidth;
     return comp_result;
 }
 
@@ -317,4 +313,16 @@ std::string TestContext::generate_failed_test_format_string(const BandwidthResul
         + std::to_string(difference_percent) + ","
         + tolerance_stream.str();
     return csv_format_string;
+}
+
+void TestContext::set_comparison_statistics_csv_file_path() {
+    // Bandwidth summary CSV file is generated separately from Bandwidth CSV because we need to wait for all multirun
+    // tests to complete Generate detailed CSV filename
+    std::ostringstream comparison_statistics_oss;
+    auto arch_name = tt::tt_metal::hal::get_arch_name();
+    comparison_statistics_oss << "bandwidth_comparison_statistics_" << arch_name << ".csv";
+    // Output directory already set in initialize_bandwidth_results_csv_file()
+    std::filesystem::path output_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) / output_dir;
+    comparison_statistics_csv_file_path_ = output_path / comparison_statistics_oss.str();
 }

@@ -564,3 +564,58 @@ class Gemma3ForConditionalGeneration(Generator, SupportsMultiModal):
 
     def decode_forward(self, *args, **kwargs):
         return super().decode_forward_text(*args, **kwargs)
+
+
+class GptOssForCausalLM(Generator):
+    """GPT-OSS model for vLLM integration"""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    @classmethod
+    def initialize_vllm_model(
+        cls, hf_config, mesh_device, max_batch_size, max_seq_len, n_layers=None, tt_data_parallel=1
+    ):
+        from models.demos.gpt_oss.tt.common import create_tt_model
+
+        submesh_devices = create_submeshes(mesh_device, tt_data_parallel)
+
+        model_args = []
+        model = []
+        state_dict = None
+
+        for submesh in submesh_devices:
+            # Use the existing create_tt_model function
+            model_args_i, model_i, _, state_dict = create_tt_model(
+                mesh_device=submesh,
+                instruct=True,
+                max_batch_size=max_batch_size // tt_data_parallel,
+                optimizations=lambda model_args: DecodersPrecision.performance(
+                    model_args.n_layers, model_args.model_name
+                ),
+                max_seq_len=max_seq_len,
+                paged_attention_config=None,
+                dtype=ttnn.bfloat8_b,
+                state_dict=state_dict,
+                num_layers=n_layers,
+                mesh_config=None,
+                create_kv_cache=False,
+            )
+
+            model_args.append(model_args_i)
+            model.append(model_i)
+
+        return cls(model, model_args, mesh_device)
+
+    @property
+    def cache_path(self):
+        return self.model_args[0].weight_cache_path(ttnn.bfloat8_b)
+
+    def prefill_forward(self, *args, **kwargs):
+        return super().prefill_forward_text(*args, **kwargs)
+
+    def decode_forward(self, *args, **kwargs):
+        return super().decode_forward_text(*args, **kwargs)
+
+    def allocate_kv_cache(self, *args, **kwargs):
+        return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)

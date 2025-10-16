@@ -4,7 +4,8 @@
 
 import ttnn
 
-from models.experimental.oft.tt.common import Conv
+# from models.experimental.oft.tt.common import Conv
+from models.tt_cnn.tt.builder import TtConv2d
 from models.experimental.oft.tt.common import GroupNorm
 from models.experimental.oft.tt.tt_resnet import TTResNetFeatures
 from models.experimental.oft.tt.tt_oft import OFT as TtOFT
@@ -23,8 +24,8 @@ class TTOftNet:
     def __init__(
         self,
         device,
-        parameters,
-        conv_pt,
+        state_dict,
+        layer_args,
         block,
         layers,
         mean,
@@ -40,25 +41,19 @@ class TTOftNet:
         fallback_lateral=False,
         fallback_oft=False,
     ):
-        self.frontend = TTResNetFeatures(device, parameters.frontend, conv_pt.frontend, block, layers)
-        self.lat8 = Conv(
-            parameters.lat8, conv_pt.lat8, output_layout=ttnn.ROW_MAJOR_LAYOUT, weights_dtype=ttnn.bfloat16
-        )
-        self.bn8 = GroupNorm(parameters.bn8, num_groups=16, channels=256, eps=1e-5, dtype=ttnn.bfloat16)
+        self.frontend = TTResNetFeatures(device, state_dict.frontend, layer_args.frontend, block, layers)
+        self.lat8 = TtConv2d(layer_args.lat8["optimized_configuration"], device)
+        self.bn8 = GroupNorm(state_dict.bn8, layer_args.bn8)
 
-        self.lat16 = Conv(
-            parameters.lat16, conv_pt.lat16, output_layout=ttnn.ROW_MAJOR_LAYOUT, weights_dtype=ttnn.bfloat16
-        )
-        self.bn16 = GroupNorm(parameters.bn16, num_groups=16, channels=256, eps=1e-5, dtype=ttnn.bfloat16)
+        self.lat16 = TtConv2d(layer_args.lat16["optimized_configuration"], device)
+        self.bn16 = GroupNorm(state_dict.bn16, layer_args.bn16)
 
-        self.lat32 = Conv(
-            parameters.lat32, conv_pt.lat32, output_layout=ttnn.ROW_MAJOR_LAYOUT, weights_dtype=ttnn.bfloat16
-        )
-        self.bn32 = GroupNorm(parameters.bn32, num_groups=16, channels=256, eps=1e-5, dtype=ttnn.bfloat16)
+        self.lat32 = TtConv2d(layer_args.lat32["optimized_configuration"], device)
+        self.bn32 = GroupNorm(state_dict.bn32, layer_args.bn32)
 
         self.oft8 = TtOFT(
             device,
-            parameters.oft8,
+            state_dict.oft8,
             256,
             grid_res,
             grid_height,
@@ -67,10 +62,11 @@ class TTOftNet:
             grid,
             scale=1 / 8,
             use_precomputed_grid=True,
+            num_slices=18,
         )
         self.oft16 = TtOFT(
             device,
-            parameters.oft16,
+            state_dict.oft16,
             256,
             grid_res,
             grid_height,
@@ -79,10 +75,11 @@ class TTOftNet:
             grid,
             scale=1 / 16,
             use_precomputed_grid=True,
+            num_slices=12,
         )
         self.oft32 = TtOFT(
             device,
-            parameters.oft32,
+            state_dict.oft32,
             256,
             grid_res,
             grid_height,
@@ -91,22 +88,20 @@ class TTOftNet:
             grid,
             scale=1 / 32,
             use_precomputed_grid=True,
+            num_slices=11,
         )
-
+        ttnn.device.ReadDeviceProfiler(device)
         self.topdown = [
             block(
                 device,
-                parameters.topdown[i],
-                conv_pt.topdown[i],
-                256,
-                256,
-                stride=1,
+                state_dict.topdown[i],
+                state_dict.layer_args.topdown[i],
                 is_sliced=True,
             )
             for i in range(topdown_layers)
         ]
 
-        self.head = Conv(parameters.head, conv_pt.head, output_layout=ttnn.ROW_MAJOR_LAYOUT, is_sliced=True)
+        self.head = TtConv2d(layer_args.head["optimized_configuration"], device)
         self.mean = ttnn.from_torch(
             mean, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
@@ -135,26 +130,26 @@ class TTOftNet:
     def forward_lateral_layers(self, device, feats8, feats16, feats32):
         """Apply lateral layers to convert image features to common feature size"""
         # Apply lateral layers to convert image features to common feature size
-        lat8, lat8_h, lat8_w = self.lat8(device, feats8)
+        lat8 = self.lat8(feats8)
         if lat8.layout == ttnn.TILE_LAYOUT:
             lat8 = ttnn.to_layout(lat8, ttnn.ROW_MAJOR_LAYOUT)
-        lat8 = self.bn8(device, lat8, lat8_h, lat8_w, shard="HS")
+        lat8 = self.bn8(device, lat8, shard="HS")
         lat8 = ttnn.relu(lat8)
         lat8 = ttnn.sharded_to_interleaved(lat8, ttnn.DRAM_MEMORY_CONFIG)
         lat8 = ttnn.to_layout(lat8, ttnn.TILE_LAYOUT)
 
-        lat16, lat16_h, lat16_w = self.lat16(device, feats16)
+        lat16 = self.lat16(feats16)
         if lat16.layout == ttnn.TILE_LAYOUT:
             lat16 = ttnn.to_layout(lat16, ttnn.ROW_MAJOR_LAYOUT)
-        lat16 = self.bn16(device, lat16, lat16_h, lat16_w, shard="HS")
+        lat16 = self.bn16(device, lat16, shard="HS")
         lat16 = ttnn.relu(lat16)
         lat16 = ttnn.sharded_to_interleaved(lat16, ttnn.DRAM_MEMORY_CONFIG)
         lat16 = ttnn.to_layout(lat16, ttnn.TILE_LAYOUT)
 
-        lat32, lat32_h, lat32_w = self.lat32(device, feats32)
+        lat32 = self.lat32(feats32)
         if lat32.layout == ttnn.TILE_LAYOUT:
             lat32 = ttnn.to_layout(lat32, ttnn.ROW_MAJOR_LAYOUT)
-        lat32 = self.bn32(device, lat32, lat32_h, lat32_w, shard="BS")
+        lat32 = self.bn32(device, lat32, shard="BS")
         lat32 = ttnn.relu(lat32)
         lat32 = ttnn.sharded_to_interleaved(lat32, ttnn.DRAM_MEMORY_CONFIG)
         lat32 = ttnn.to_layout(lat32, ttnn.TILE_LAYOUT)
@@ -310,14 +305,16 @@ class TTOftNet:
         td = ortho
         for layer in self.topdown:
             logger.debug(f"Topdown layer {layer=}")
-            td = layer.forward(device, td, num_splits=3)
+            td = layer.forward(device, td, gn_shard="HS", num_splits=2)  # hangs on top down with these settings;
+            # td = layer.forward(device, td)
         signpost(header="Topdown finished")
         return td
 
     def forward_predict_encoded_outputs(self, device, td):
         """Predict encoded outputs and slice them"""
         signpost(header="Head started")
-        outputs, out_h, out_w = self.head(device, td)
+        out_h, out_w = 159, 159  # todo plumb return output shape from common conv wrapper
+        outputs = self.head(td)
         logger.debug(f"Head output shape: {outputs.shape}, dtype: {outputs.dtype} {out_h=} {out_w=}")
         outputs = ttnn.permute(outputs, (0, 3, 1, 2), memory_config=ttnn.L1_MEMORY_CONFIG)
         outputs = ttnn.reshape(outputs, (1, -1, 9, out_h, out_w))
@@ -499,18 +496,42 @@ class TTOftNet:
                     integral_img8,
                     integral_img16,
                     integral_img32,
-                    ttnn.to_torch(bbox_top_left8) if self.OFT_fallback == False else bbox_top_left8,
-                    ttnn.to_torch(bbox_btm_right8) if self.OFT_fallback == False else bbox_btm_right8,
-                    ttnn.to_torch(bbox_top_right8) if self.OFT_fallback == False else bbox_top_right8,
-                    ttnn.to_torch(bbox_btm_left8) if self.OFT_fallback == False else bbox_btm_left8,
-                    ttnn.to_torch(bbox_top_left16) if self.OFT_fallback == False else bbox_top_left16,
-                    ttnn.to_torch(bbox_btm_right16) if self.OFT_fallback == False else bbox_btm_right16,
-                    ttnn.to_torch(bbox_top_right16) if self.OFT_fallback == False else bbox_top_right16,
-                    ttnn.to_torch(bbox_btm_left16) if self.OFT_fallback == False else bbox_btm_left16,
-                    ttnn.to_torch(bbox_top_left32) if self.OFT_fallback == False else bbox_top_left32,
-                    ttnn.to_torch(bbox_btm_right32) if self.OFT_fallback == False else bbox_btm_right32,
-                    ttnn.to_torch(bbox_top_right32) if self.OFT_fallback == False else bbox_top_right32,
-                    ttnn.to_torch(bbox_btm_left32) if self.OFT_fallback == False else bbox_btm_left32,
+                    torch.cat([ttnn.to_torch(bbox_top_left8[i]) for i in range(len(bbox_top_left8))], dim=2)
+                    if self.OFT_fallback == False
+                    else bbox_top_left8,
+                    torch.cat([ttnn.to_torch(bbox_btm_right8[i]) for i in range(len(bbox_btm_right8))], dim=2)
+                    if self.OFT_fallback == False
+                    else bbox_btm_right8,
+                    torch.cat([ttnn.to_torch(bbox_top_right8[i]) for i in range(len(bbox_top_right8))], dim=2)
+                    if self.OFT_fallback == False
+                    else bbox_top_right8,
+                    torch.cat([ttnn.to_torch(bbox_btm_left8[i]) for i in range(len(bbox_btm_left8))], dim=2)
+                    if self.OFT_fallback == False
+                    else bbox_btm_left8,
+                    torch.cat([ttnn.to_torch(bbox_top_left16[i]) for i in range(len(bbox_top_left16))], dim=2)
+                    if self.OFT_fallback == False
+                    else bbox_top_left16,
+                    torch.cat([ttnn.to_torch(bbox_btm_right16[i]) for i in range(len(bbox_btm_right16))], dim=2)
+                    if self.OFT_fallback == False
+                    else bbox_btm_right16,
+                    torch.cat([ttnn.to_torch(bbox_top_right16[i]) for i in range(len(bbox_top_right16))], dim=2)
+                    if self.OFT_fallback == False
+                    else bbox_top_right16,
+                    torch.cat([ttnn.to_torch(bbox_btm_left16[i]) for i in range(len(bbox_btm_left16))], dim=2)
+                    if self.OFT_fallback == False
+                    else bbox_btm_left16,
+                    torch.cat([ttnn.to_torch(bbox_top_left32[i]) for i in range(len(bbox_top_left32))], dim=2)
+                    if self.OFT_fallback == False
+                    else bbox_top_left32,
+                    torch.cat([ttnn.to_torch(bbox_btm_right32[i]) for i in range(len(bbox_btm_right32))], dim=2)
+                    if self.OFT_fallback == False
+                    else bbox_btm_right32,
+                    torch.cat([ttnn.to_torch(bbox_top_right32[i]) for i in range(len(bbox_top_right32))], dim=2)
+                    if self.OFT_fallback == False
+                    else bbox_top_right32,
+                    torch.cat([ttnn.to_torch(bbox_btm_left32[i]) for i in range(len(bbox_btm_left32))], dim=2)
+                    if self.OFT_fallback == False
+                    else bbox_btm_left32,
                     ortho8,
                     ortho16,
                     ortho32,
