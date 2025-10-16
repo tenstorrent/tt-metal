@@ -262,7 +262,6 @@ class ResBlock:
             dim_2_1,
             use_multicore=True,
         )
-        ttnn.deallocate(dim_2_1)
         assert not (C % 32)
         if not (H * W * (C // 32) % 32):
             output = ttnn.reshape(residual, [N * T, 1, H * W * (C // 32), 32])
@@ -270,6 +269,7 @@ class ResBlock:
         else:
             output = ttnn.reshape(residual, [1, 1, N * T, H * W * C])
             gather_dim = 3
+        ttnn.deallocate(dim_2_1)
         return gather_dim, residual, output
 
     def pre_all_gather_reshape_norm_2(self, x, shape):
@@ -767,13 +767,17 @@ class MochiVAEDecoder:
             (N, padded_T, num_devices_H * num_devices_W, padded_H // num_devices_H, padded_W // num_devices_W, C),
         )
 
+        dims = [0, 0]
+        dims[self.parallel_config.time_parallel.mesh_axis] = 1
+        dims[self.parallel_config.w_parallel.mesh_axis] = 2
+
         tt_x_NTHWC = ttnn.from_torch(
             x_NTHWC,
             device=self.mesh_device,
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=[1, 2]),
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=dims),
         )
 
         tt_x_NTHWC = ttnn.squeeze(tt_x_NTHWC, 2)
@@ -783,11 +787,15 @@ class MochiVAEDecoder:
         N, C, T, H, W = input_shape
         tt_x_NTHWC = ttnn.unsqueeze(tt_x_NTHWC, 2)
 
+        dims = [0, 0]
+        dims[self.parallel_config.time_parallel.mesh_axis] = 1
+        dims[self.parallel_config.w_parallel.mesh_axis] = 2
+
         # Convert TT output to torch tensor
         x_NTHWC_torch = ttnn.to_torch(
             tt_x_NTHWC,
             mesh_composer=ttnn.ConcatMesh2dToTensor(
-                self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=[1, 2]
+                self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=dims
             ),
         )
         ttnn.deallocate(tt_x_NTHWC)
