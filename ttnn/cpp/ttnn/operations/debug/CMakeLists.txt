@@ -4,22 +4,11 @@ add_library(TTNN::Ops::Debug ALIAS ttnn_op_debug)
 target_precompile_headers(ttnn_op_debug REUSE_FROM TT::CommonPCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_debug)
 
-set_target_properties(
-    ttnn_op_debug
-    PROPERTIES
-        INTERFACE_HEADER_SETS_TO_VERIFY
-            api
-)
-
-file(GLOB_RECURSE kernels device/kernels/*)
+file(GLOB_RECURSE kernels kernels/*)
 
 target_sources(
     ttnn_op_debug
     PUBLIC
-        FILE_SET api
-        TYPE HEADERS
-        BASE_DIRS ${FixmeOpAPIDir}
-        FILES
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}

@@ -6,8 +6,8 @@ TT_ENABLE_UNITY_BUILD(ttnn_op_eltwise_binary_ng)
 set_target_properties(
     ttnn_op_eltwise_binary_ng
     PROPERTIES
-        INTERFACE_HEADER_SETS_TO_VERIFY
-            api
+        VERIFY_INTERFACE_HEADER_SETS
+            false
 )
 
 # Globbing non-build files is acceptable for now because devs don't generate packages.
@@ -19,10 +19,6 @@ file(
 target_sources(
     ttnn_op_eltwise_binary_ng
     PUBLIC
-        FILE_SET api
-        TYPE HEADERS
-        BASE_DIRS ${FixmeOpAPIDir}
-        FILES
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}

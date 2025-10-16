@@ -6,18 +6,14 @@ TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_padded_slice)
 set_target_properties(
     ttnn_op_experimental_padded_slice
     PROPERTIES
-        INTERFACE_HEADER_SETS_TO_VERIFY
-            api
+        VERIFY_INTERFACE_HEADER_SETS
+            false
 )
 
 file(GLOB_RECURSE kernels device/kernels/*)
 target_sources(
     ttnn_op_experimental_padded_slice
     PUBLIC
-        FILE_SET api
-        TYPE HEADERS
-        BASE_DIRS ${FixmeOpAPIDir}
-        FILES
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}

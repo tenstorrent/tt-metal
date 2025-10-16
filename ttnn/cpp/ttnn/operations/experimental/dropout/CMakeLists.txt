@@ -4,15 +4,6 @@ add_library(TTNN::Ops::Experimental::Dropout ALIAS ttnn_op_experimental_dropout)
 target_precompile_headers(ttnn_op_experimental_dropout REUSE_FROM TT::CommonPCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_dropout)
 
-set_target_properties(
-    ttnn_op_experimental_dropout
-    PROPERTIES
-        INTERFACE_HEADER_SETS_TO_VERIFY
-            api
-)
-
-file(GLOB_RECURSE kernels device/kernels/*)
-
 target_sources(
     ttnn_op_experimental_dropout
     PUBLIC
@@ -20,10 +11,6 @@ target_sources(
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
         FILES dropout.hpp
-        FILE_SET kernels
-        TYPE HEADERS
-        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
-        FILES ${kernels}
     PRIVATE
         device/dropout_device_operation.cpp
         device/dropout_program_factory.cpp

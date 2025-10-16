@@ -13,10 +13,7 @@ set_target_properties(
 # Globbing non-build files is acceptable for now because devs don't generate packages.
 file(
     GLOB_RECURSE kernels
-    batch_norm/device/kernels/*
-    groupnorm/device/kernels/*
     layernorm/device/kernels/*
-    layernorm_distributed/device/kernels/*
     softmax/device/kernels/*
 )
 target_sources(

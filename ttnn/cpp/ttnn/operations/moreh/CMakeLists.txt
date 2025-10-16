@@ -16,8 +16,6 @@ file(
     moreh_dot/device/kernels/*
     moreh_getitem/device/moreh_getitem_kernels/*
     moreh_getitem/device/moreh_getitem_tilized_kernels/*
-    moreh_group_norm_backward/device/gamma_beta_grad/kernels/*
-    moreh_group_norm_backward/device/input_grad/kernels/*
     moreh_group_norm/device/kernels/*
     moreh_matmul/device/kernels/*
 )
