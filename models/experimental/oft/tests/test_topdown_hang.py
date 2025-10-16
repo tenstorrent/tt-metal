@@ -222,28 +222,18 @@ class GroupNormDRAM:
         grid_x, grid_y = compute_grid.x, compute_grid.y
         logger.debug(f"DRAM {grid_x=}, {grid_y=}, {shard=}, {num_splits=} {self.is_sliced=}")
         grid_x = 4
+        grid_y = 1
         grid_size = ttnn.CoreGrid(y=grid_y, x=grid_x)
 
         # torch input tensor
-        unpadded_shape = input_tensor.shape
-        out_shape = [
-            unpadded_shape[0],
-            unpadded_shape[1],
-            _nearest_32_per_core(unpadded_shape[2], grid_x),
-            _nearest_32_per_core(unpadded_shape[3], grid_y),
-        ]
-        # input_tensor_tilized2 = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT) #if you enable this line it will pass without hang
-        input_tensor_tilized = ttnn.tilize_with_val_padding(
-            input_tensor, output_tensor_shape=out_shape, pad_value=0, use_multicore=True
-        )
+        input_tensor_tilized = ttnn.tilize_with_zero_padding(input_tensor, use_multicore=True)
+
         logger.debug(
             f"input_tensor_tilized shape: {input_tensor_tilized.shape} padded shape: {input_tensor_tilized.padded_shape}"
         )
         [gamma_t, beta_t], input_mask_tensor = ttnn.dram_group_norm_params_from_torch(
             [self.weight, self.bias], self.channels, self.num_groups, device, core_grid=grid_size, return_mask=True
         )
-        logger.debug(f"unpadded_shape: {unpadded_shape} out_shape: {out_shape}")
-
         # groupnorm
         logger.debug(f"DRAM {grid_size=}")
         output_tensor = ttnn.group_norm(
@@ -351,7 +341,7 @@ def test_tt_topdownblock_with_8_basicblocks(device, n, in_ch, out_ch, h, w, stri
     # Forward through TTBasicBlocks sequentially
     ttnn_out = ttnn_x
     for block in tt_blocks:
-        ttnn_out = block.forward(device, ttnn_out, gn_shard=sharding, num_splits=2)
+        ttnn_out = block.forward(device, ttnn_out, gn_shard=sharding, num_splits=8)
     ttnn_out = ttnn.to_torch(ttnn_out)
     # Compare output
     B, C, H, W = out_ref.shape
