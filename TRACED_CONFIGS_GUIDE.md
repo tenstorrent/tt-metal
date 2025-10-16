@@ -76,6 +76,46 @@ def run(
 
 **Note:** If you use `all_cases=True`, the `traced_config_name` parameter won't be used - the sweep framework will pass individual parameters (`input_shape`, `input_a_dtype`, etc.) directly via Cartesian product. The unpacking line will simply be skipped.
 
+### Integration Pattern for Binary Operations (2 inputs)
+
+**For binary operations like `add`, `multiply`, etc. that take 2 tensor inputs:**
+
+```python
+# 1. Import the loader and BINARY helper function
+from tests.sweep_framework.master_config_loader import MasterConfigLoader, unpack_binary_traced_config
+
+# 2. Load and add to parameters (same as unary)
+loader = MasterConfigLoader()
+model_traced_params = loader.get_suite_parameters("add")  # Automatically detects binary operation
+
+parameters = {
+    "nightly": { ... },
+    "model_traced": model_traced_params,  # Same as unary!
+}
+
+# 3. In your run() function, use unpack_BINARY_traced_config
+def run(
+    input_shape=None,  # IMPORTANT: All parameters must have default values!
+    input_a_dtype=None,
+    input_b_dtype=None,
+    input_a_layout=None,
+    input_b_layout=None,
+    input_a_memory_config=None,
+    input_b_memory_config=None,
+    traced_config_name=None,
+    *,
+    device,
+):
+    # Unpack BINARY config (7 values) in ONE line
+    if traced_config_name:
+        input_shape, input_a_dtype, input_b_dtype, input_a_layout, input_b_layout, \\
+            input_a_memory_config, input_b_memory_config = unpack_binary_traced_config(traced_config_name)
+
+    # Rest of test logic stays the same!
+```
+
+**Key Difference**: Use `unpack_binary_traced_config()` for binary ops, `unpack_traced_config()` for unary ops. The system automatically detects operation type!
+
 ---
 
 ## Overview

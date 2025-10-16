@@ -252,12 +252,39 @@ class MasterConfigLoader:
             print(f"⚠️ Error parsing memory config, using DRAM default: {e}")
             return ttnn.DRAM_MEMORY_CONFIG
 
+    def _is_binary_operation(self, configs: List) -> bool:
+        """
+        Detect if an operation is binary (2 tensor inputs) by checking the first config.
+
+        Args:
+            configs: List of operation configurations
+
+        Returns:
+            True if operation has 2 tensor inputs, False otherwise
+        """
+        if not configs or len(configs) == 0:
+            return False
+
+        # Check first config for number of tensor arguments
+        first_config = configs[0]
+        tensor_count = 0
+
+        for arg in first_config:
+            tensor_config = self.extract_tensor_config(arg)
+            if tensor_config:
+                tensor_count += 1
+                if tensor_count >= 2:
+                    return True
+
+        return False
+
     def get_suite_parameters(
         self, operation_name: str, suite_name: str = "model_traced", all_cases: bool = False
     ) -> Dict:
         """
         Get ready-to-use sweep test parameters for an operation.
         This is the simplified interface for sweep tests.
+        Automatically detects unary vs binary operations.
 
         Args:
             operation_name: Name of the operation (e.g., 'sigmoid_accurate', 'add')
@@ -268,13 +295,20 @@ class MasterConfigLoader:
         Returns:
             Dictionary with all necessary parameters ready to add to test parameters
 
-        Example:
+        Example (Unary):
             # Default: Run exact 30 traced configs
             loader = MasterConfigLoader()
             model_traced_params = loader.get_suite_parameters("sigmoid_accurate")
 
             # Or: Run all combinations (30 shapes × dtypes × layouts × memory_configs)
             model_traced_params = loader.get_suite_parameters("sigmoid_accurate", all_cases=True)
+
+        Example (Binary):
+            # Default: Run exact 6 traced configs for add (paired inputs)
+            model_traced_params = loader.get_suite_parameters("add")
+
+            # Or: Run all combinations
+            model_traced_params = loader.get_suite_parameters("add", all_cases=True)
 
             parameters = {
                 "model_traced": model_traced_params,
@@ -297,135 +331,282 @@ class MasterConfigLoader:
                     "output_memory_config": [],
                 }
 
-            # Extract PAIRED configurations (shape + dtype + layout + memory_config)
-            # This ensures we get N exact configs, not a Cartesian product
-            paired_configs = []
-            failed_configs = 0
+            # Detect if this is a binary operation
+            is_binary = self._is_binary_operation(configs)
 
-            for config_idx, config in enumerate(configs):
-                try:
-                    # Extract first tensor from each config
-                    # Config is a list of arguments: [{"UnparsedElement": ...}, {"arg1": "nullopt"}, ...]
-                    tensor_config = None
-                    for arg in config:
-                        # arg is a dict, could be {"UnparsedElement": ...} or {"arg0": {...}} etc.
-                        # Pass the entire arg dict to extract_tensor_config
-                        tensor_config = self.extract_tensor_config(arg)
-                        if tensor_config:
-                            break  # Found tensor, proceed to parse it
-
-                    if not tensor_config:
-                        failed_configs += 1
-                        continue
-
-                    # Parse the config to TTNN types
-                    try:
-                        parsed_dtype = self.parse_dtype(tensor_config.dtype)
-                        parsed_layout = self.parse_layout(tensor_config.layout)
-                        parsed_mem_config = self.parse_memory_config(tensor_config.memory_config, tensor_config.shape)
-
-                        if parsed_dtype and parsed_layout and parsed_mem_config:
-                            paired_configs.append(
-                                {
-                                    "shape": tensor_config.shape,
-                                    "dtype": parsed_dtype,
-                                    "layout": parsed_layout,
-                                    "memory_config": parsed_mem_config,
-                                    "output_memory_config": parsed_mem_config,  # For unary ops, output matches input
-                                }
-                            )
-                        else:
-                            failed_configs += 1
-                    except (AttributeError, Exception) as e:
-                        failed_configs += 1
-                except Exception as e:
-                    failed_configs += 1
-
-            # Build parameter dictionary based on all_cases flag
-            if paired_configs:
-                # Store configs in instance cache for lookup
-                self.traced_configs_cache[operation_name] = paired_configs
-
-                if all_cases:
-                    # Return separate lists for Cartesian product
-                    # Extract unique values for each parameter type
-                    shapes = []
-                    dtypes = set()
-                    layouts = set()
-                    memory_configs = []
-                    output_memory_configs = []
-
-                    for cfg in paired_configs:
-                        shapes.append(cfg["shape"])
-                        dtypes.add(cfg["dtype"])
-                        layouts.add(cfg["layout"])
-                        memory_configs.append(cfg["memory_config"])
-                        output_memory_configs.append(cfg["output_memory_config"])
-
-                    result = {
-                        "input_shape": shapes,
-                        "input_a_dtype": list(dtypes),
-                        "input_a_layout": list(layouts),
-                        "input_a_memory_config": memory_configs,
-                        "output_memory_config": output_memory_configs,
-                    }
-
-                    total_tests = (
-                        len(shapes) * len(dtypes) * len(layouts) * len(memory_configs) * len(output_memory_configs)
-                    )
-                    print(
-                        f"✅ Loaded {len(paired_configs)} traced configurations for {operation_name} ({suite_name} suite)"
-                    )
-                    print(f"   📊 all_cases=True: Will generate ~{total_tests} test vectors (Cartesian product)")
-                    if failed_configs > 0:
-                        print(f"⚠️ Failed to parse {failed_configs} configurations")
-                else:
-                    # Return config names for exact paired configs (default)
-                    traced_config_names = [f"{operation_name}_traced_{i}" for i in range(len(paired_configs))]
-
-                    result = {
-                        "traced_config_name": traced_config_names,
-                    }
-
-                    print(
-                        f"✅ Loaded {len(paired_configs)} traced configurations for {operation_name} ({suite_name} suite)"
-                    )
-                    print(f"   📊 Will generate {len(paired_configs)} test vectors (exact traced configs)")
-                    if failed_configs > 0:
-                        print(f"⚠️ Failed to parse {failed_configs} configurations")
-
-                return result
+            if is_binary:
+                print(f"🔧 Detected binary operation: {operation_name}")
+                return self._get_binary_suite_parameters(operation_name, configs, all_cases)
             else:
-                # No configs successfully parsed, return empty
-                print(f"⚠️ No configurations could be parsed for {operation_name} (TTNN may not be initialized)")
-                return {
-                    "traced_config": [],
-                }
+                print(f"🔧 Detected unary operation: {operation_name}")
+                return self._get_unary_suite_parameters(operation_name, configs, all_cases)
 
         except Exception as e:
-            print(f"⚠️ Error loading suite parameters for {operation_name}: {e}")
+            print(f"❌ Error loading configurations for {operation_name}: {e}")
             import traceback
 
             traceback.print_exc()
-            # Return empty lists - sweep tests will handle defaults
+            return {"traced_config_name": []}
+
+    def _get_unary_suite_parameters(self, operation_name: str, configs: List, all_cases: bool) -> Dict:
+        """
+        Get parameters for unary operations (single tensor input).
+        """
+        # Extract PAIRED configurations (shape + dtype + layout + memory_config)
+        # This ensures we get N exact configs, not a Cartesian product
+        paired_configs = []
+        failed_configs = 0
+
+        for config_idx, config in enumerate(configs):
+            try:
+                # Extract first tensor from each config
+                # Config is a list of arguments: [{"UnparsedElement": ...}, {"arg1": "nullopt"}, ...]
+                tensor_config = None
+                for arg in config:
+                    # arg is a dict, could be {"UnparsedElement": ...} or {"arg0": {...}} etc.
+                    # Pass the entire arg dict to extract_tensor_config
+                    tensor_config = self.extract_tensor_config(arg)
+                    if tensor_config:
+                        break  # Found tensor, proceed to parse it
+
+                if not tensor_config:
+                    failed_configs += 1
+                    continue
+
+                # Parse the config to TTNN types
+                try:
+                    parsed_dtype = self.parse_dtype(tensor_config.dtype)
+                    parsed_layout = self.parse_layout(tensor_config.layout)
+                    parsed_mem_config = self.parse_memory_config(tensor_config.memory_config, tensor_config.shape)
+
+                    if parsed_dtype and parsed_layout and parsed_mem_config:
+                        paired_configs.append(
+                            {
+                                "shape": tensor_config.shape,
+                                "dtype": parsed_dtype,
+                                "layout": parsed_layout,
+                                "memory_config": parsed_mem_config,
+                                "output_memory_config": parsed_mem_config,  # For unary ops, output matches input
+                            }
+                        )
+                    else:
+                        failed_configs += 1
+                except (AttributeError, Exception) as e:
+                    failed_configs += 1
+            except Exception as e:
+                failed_configs += 1
+
+        # Build parameter dictionary based on all_cases flag
+        if paired_configs:
+            # Store configs in instance cache for lookup
+            self.traced_configs_cache[operation_name] = paired_configs
+
+            if all_cases:
+                # Return separate lists for Cartesian product
+                # Extract unique values for each parameter type
+                shapes = []
+                dtypes = set()
+                layouts = set()
+                memory_configs = []
+                output_memory_configs = []
+
+                for cfg in paired_configs:
+                    shapes.append(cfg["shape"])
+                    dtypes.add(cfg["dtype"])
+                    layouts.add(cfg["layout"])
+                    memory_configs.append(cfg["memory_config"])
+                    output_memory_configs.append(cfg["output_memory_config"])
+
+                result = {
+                    "input_shape": shapes,
+                    "input_a_dtype": list(dtypes),
+                    "input_a_layout": list(layouts),
+                    "input_a_memory_config": memory_configs,
+                    "output_memory_config": output_memory_configs,
+                }
+
+                total_tests = (
+                    len(shapes) * len(dtypes) * len(layouts) * len(memory_configs) * len(output_memory_configs)
+                )
+                print(f"✅ Loaded {len(paired_configs)} traced configurations for {operation_name} (model_traced suite)")
+                print(f"   📊 all_cases=True: Will generate ~{total_tests} test vectors (Cartesian product)")
+                if failed_configs > 0:
+                    print(f"⚠️ Failed to parse {failed_configs} configurations")
+            else:
+                # Return config names for exact paired configs (default)
+                traced_config_names = [f"{operation_name}_traced_{i}" for i in range(len(paired_configs))]
+
+                result = {
+                    "traced_config_name": traced_config_names,
+                }
+
+                print(f"✅ Loaded {len(paired_configs)} traced configurations for {operation_name} (model_traced suite)")
+                print(f"   📊 Will generate {len(paired_configs)} test vectors (exact traced configs)")
+                if failed_configs > 0:
+                    print(f"⚠️ Failed to parse {failed_configs} configurations")
+
+            return result
+        else:
+            # No configs successfully parsed, return empty
+            print(f"⚠️ No configurations could be parsed for {operation_name} (TTNN may not be initialized)")
             return {
-                "input_shape": [[1, 32, 32]],
-                "input_a_dtype": [],
-                "input_a_layout": [],
-                "input_a_memory_config": [],
-                "output_memory_config": [],
+                "traced_config": [],
+            }
+
+    def _get_binary_suite_parameters(self, operation_name: str, configs: List, all_cases: bool) -> Dict:
+        """
+        Get parameters for binary operations (two tensor inputs).
+        Handles operations like add, multiply, etc. that take two tensors.
+        """
+        # Extract configurations for BOTH tensors (arg0 and arg1)
+        paired_configs = []
+        failed_configs = 0
+
+        for config_idx, config in enumerate(configs):
+            try:
+                # Extract BOTH tensors from each config
+                tensor_configs = []
+                for arg in config:
+                    tensor_config = self.extract_tensor_config(arg)
+                    if tensor_config:
+                        tensor_configs.append(tensor_config)
+                        if len(tensor_configs) >= 2:
+                            break  # We have both tensors
+
+                if len(tensor_configs) < 2:
+                    failed_configs += 1
+                    continue
+
+                # Parse both tensor configs
+                try:
+                    # First tensor (input_a)
+                    parsed_dtype_a = self.parse_dtype(tensor_configs[0].dtype)
+                    parsed_layout_a = self.parse_layout(tensor_configs[0].layout)
+                    parsed_mem_config_a = self.parse_memory_config(
+                        tensor_configs[0].memory_config, tensor_configs[0].shape
+                    )
+
+                    # Second tensor (input_b)
+                    parsed_dtype_b = self.parse_dtype(tensor_configs[1].dtype)
+                    parsed_layout_b = self.parse_layout(tensor_configs[1].layout)
+                    parsed_mem_config_b = self.parse_memory_config(
+                        tensor_configs[1].memory_config, tensor_configs[1].shape
+                    )
+
+                    if all(
+                        [
+                            parsed_dtype_a,
+                            parsed_layout_a,
+                            parsed_mem_config_a,
+                            parsed_dtype_b,
+                            parsed_layout_b,
+                            parsed_mem_config_b,
+                        ]
+                    ):
+                        paired_configs.append(
+                            {
+                                "shape_a": tensor_configs[0].shape,
+                                "shape_b": tensor_configs[1].shape,
+                                "dtype_a": parsed_dtype_a,
+                                "dtype_b": parsed_dtype_b,
+                                "layout_a": parsed_layout_a,
+                                "layout_b": parsed_layout_b,
+                                "memory_config_a": parsed_mem_config_a,
+                                "memory_config_b": parsed_mem_config_b,
+                            }
+                        )
+                    else:
+                        failed_configs += 1
+                except (AttributeError, Exception) as e:
+                    failed_configs += 1
+            except Exception as e:
+                failed_configs += 1
+
+        # Build parameter dictionary based on all_cases flag
+        if paired_configs:
+            # Store configs in instance cache for lookup (for binary ops)
+            self.traced_configs_cache[operation_name] = paired_configs
+
+            if all_cases:
+                # Return separate lists for Cartesian product
+                shapes_a = []
+                shapes_b = []
+                dtypes_a = set()
+                dtypes_b = set()
+                layouts_a = set()
+                layouts_b = set()
+                memory_configs_a = []
+                memory_configs_b = []
+
+                for cfg in paired_configs:
+                    shapes_a.append(cfg["shape_a"])
+                    shapes_b.append(cfg["shape_b"])
+                    dtypes_a.add(cfg["dtype_a"])
+                    dtypes_b.add(cfg["dtype_b"])
+                    layouts_a.add(cfg["layout_a"])
+                    layouts_b.add(cfg["layout_b"])
+                    memory_configs_a.append(cfg["memory_config_a"])
+                    memory_configs_b.append(cfg["memory_config_b"])
+
+                # For binary operations, input_shape is a dict with "self" and "other"
+                input_shapes = [{"self": sa, "other": sb} for sa, sb in zip(shapes_a, shapes_b)]
+
+                result = {
+                    "input_shape": input_shapes,
+                    "input_a_dtype": list(dtypes_a),
+                    "input_b_dtype": list(dtypes_b),
+                    "input_a_layout": list(layouts_a),
+                    "input_b_layout": list(layouts_b),
+                    "input_a_memory_config": memory_configs_a,
+                    "input_b_memory_config": memory_configs_b,
+                }
+
+                total_tests = (
+                    len(input_shapes)
+                    * len(dtypes_a)
+                    * len(dtypes_b)
+                    * len(layouts_a)
+                    * len(layouts_b)
+                    * len(memory_configs_a)
+                    * len(memory_configs_b)
+                )
+                print(f"✅ Loaded {len(paired_configs)} traced configurations for {operation_name} (model_traced suite)")
+                print(f"   📊 all_cases=True: Will generate ~{total_tests} test vectors (Cartesian product)")
+                if failed_configs > 0:
+                    print(f"⚠️ Failed to parse {failed_configs} configurations")
+            else:
+                # Return config names for exact paired configs (default)
+                traced_config_names = [f"{operation_name}_traced_{i}" for i in range(len(paired_configs))]
+
+                result = {
+                    "traced_config_name": traced_config_names,
+                }
+
+                print(f"✅ Loaded {len(paired_configs)} traced configurations for {operation_name} (model_traced suite)")
+                print(f"   📊 Will generate {len(paired_configs)} test vectors (exact traced configs)")
+                if failed_configs > 0:
+                    print(f"⚠️ Failed to parse {failed_configs} configurations")
+
+            return result
+        else:
+            # No configs successfully parsed, return empty
+            print(f"⚠️ No configurations could be parsed for {operation_name} (TTNN may not be initialized)")
+            return {
+                "traced_config_name": [],
             }
 
     def get_traced_config(self, traced_config_name: str) -> Optional[Dict]:
         """
         Look up a traced config by its name.
+        Handles both unary and binary operations.
 
         Args:
-            traced_config_name: String name like "sigmoid_accurate_traced_0"
+            traced_config_name: String name like "sigmoid_accurate_traced_0" or "add_traced_0"
 
         Returns:
-            Dictionary with 'shape', 'dtype', 'layout', 'memory_config', 'output_memory_config'
-            or None if not found
+            For unary ops: Dictionary with 'shape', 'dtype', 'layout', 'memory_config', 'output_memory_config'
+            For binary ops: Dictionary with 'shape_a', 'shape_b', 'dtype_a', 'dtype_b', etc.
+            Returns None if not found
         """
         if traced_config_name is None:
             return None
@@ -445,7 +626,13 @@ class MasterConfigLoader:
         if operation_name in self.traced_configs_cache:
             configs = self.traced_configs_cache[operation_name]
             if config_idx < len(configs):
-                return configs[config_idx]
+                config = configs[config_idx]
+                # Add a flag to indicate if it's binary
+                if "shape_a" in config and "shape_b" in config:
+                    config["is_binary"] = True
+                else:
+                    config["is_binary"] = False
+                return config
 
         return None
 
@@ -486,6 +673,15 @@ class MasterConfigLoader:
                             break
                 except Exception as e:
                     return None
+
+        # Handle nested structure like {arg0: {Tensor: ...}} or {arg1: {Tensor: ...}}
+        # Check if any of the keys are argument names (arg0, arg1, etc.)
+        if "Tensor" not in arg_data:
+            # Look for nested tensor in argument keys
+            for key, value in arg_data.items():
+                if key.startswith("arg") and isinstance(value, dict) and "Tensor" in value:
+                    arg_data = value
+                    break
 
         if "Tensor" not in arg_data:
             return None
@@ -678,7 +874,7 @@ def unpack_traced_config(
 ) -> Tuple[Optional[list], Optional[any], Optional[any], Optional[any], Optional[any]]:
     """
     Convenience function to unpack a traced config directly into values.
-    This is the SIMPLEST way to use traced configs in your sweep test.
+    This is the SIMPLEST way to use traced configs in UNARY operations.
 
     Args:
         traced_config_name: String name like "sigmoid_accurate_traced_0"
@@ -703,6 +899,10 @@ def unpack_traced_config(
     """
     cfg = get_traced_config(traced_config_name)
     if cfg:
+        # Check if it's binary - if so, return None to avoid confusion
+        if cfg.get("is_binary", False):
+            print(f"⚠️ Use unpack_binary_traced_config() for binary operation configs")
+            return (None, None, None, None, None)
         return (cfg["shape"], cfg["dtype"], cfg["layout"], cfg["memory_config"], cfg["output_memory_config"])
 
     if use_defaults:
@@ -716,6 +916,62 @@ def unpack_traced_config(
         )
 
     return (None, None, None, None, None)
+
+
+def unpack_binary_traced_config(traced_config_name: str, use_defaults: bool = False) -> Tuple:
+    """
+    Convenience function to unpack a traced config for BINARY operations (like add, multiply).
+
+    Args:
+        traced_config_name: String name like "add_traced_0"
+        use_defaults: If True and config not found, returns default values instead of None
+
+    Returns:
+        Tuple of (input_shape_dict, input_a_dtype, input_b_dtype, input_a_layout, input_b_layout,
+                  input_a_memory_config, input_b_memory_config)
+        where input_shape_dict is {"self": shape_a, "other": shape_b}
+
+    Example:
+        ```python
+        def run(input_shape=None, input_a_dtype=None, input_b_dtype=None, ...,
+                traced_config_name=None, *, device):
+            if traced_config_name:
+                input_shape, input_a_dtype, input_b_dtype, input_a_layout, input_b_layout, \\
+                    input_a_memory_config, input_b_memory_config = unpack_binary_traced_config(traced_config_name)
+        ```
+    """
+    cfg = get_traced_config(traced_config_name)
+    if cfg:
+        # Check if it's actually binary
+        if not cfg.get("is_binary", False):
+            print(f"⚠️ Use unpack_traced_config() for unary operation configs")
+            return (None, None, None, None, None, None, None)
+
+        # Return binary config
+        input_shape = {"self": cfg["shape_a"], "other": cfg["shape_b"]}
+        return (
+            input_shape,
+            cfg["dtype_a"],
+            cfg["dtype_b"],
+            cfg["layout_a"],
+            cfg["layout_b"],
+            cfg["memory_config_a"],
+            cfg["memory_config_b"],
+        )
+
+    if use_defaults:
+        # Return sensible defaults for binary operations
+        return (
+            {"self": [1, 32, 32], "other": [1, 32, 32]},  # input_shape
+            ttnn.bfloat16,  # input_a_dtype
+            ttnn.bfloat16,  # input_b_dtype
+            ttnn.TILE_LAYOUT,  # input_a_layout
+            ttnn.TILE_LAYOUT,  # input_b_layout
+            ttnn.DRAM_MEMORY_CONFIG,  # input_a_memory_config
+            ttnn.DRAM_MEMORY_CONFIG,  # input_b_memory_config
+        )
+
+    return (None, None, None, None, None, None, None)
 
 
 if __name__ == "__main__":
