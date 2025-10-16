@@ -52,7 +52,10 @@ void py_bind_conv2d(py::module& module) {
         :param ttnn.DeviceComputeKernelConfig, None compute_config: Configuration for compute kernel. Default: None
         :param ttnn.MemoryConfig, None memory_config: Output Tensor's Memory Configuration. Default: None
         :param ttnn.Conv2dSliceConfig, None slice_config: Configuration for slicing input & output tensors in DRAM. If set to None input is in DRAM, DRAM slicing is automatically enabled. Default: None
-
+        :param ttnn.IDevice device: This is a Tenstorrent-specific parameter. The device which will run the operation.
+        :param int input_height: This is a Tenstorrent-specific parameter. The height of the input tensor.
+        :param int input_width: This is a Tenstorrent-specific parameter. The width of the input tensor.
+    
         :return: The output tensor, output height and width, and the preprocessed weights and bias.
 
         :rtype: [ttnn.Tensor]: Default. The output tensor, when return_output_dim = False and return_weights_and_bias = False
