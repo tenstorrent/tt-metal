@@ -44,7 +44,7 @@ void MAIN {
     }
 
     cb_push_back(cb_out0, 1);
-    
+
     // Print the output tile for debugging
     // tt::compute::common::print_full_tile(cb_out0, 0, true);
 
