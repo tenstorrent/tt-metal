@@ -40,6 +40,11 @@ def is_sharded(tensor) -> bool:
     return tensor.is_sharded()
 
 
+# Python Alignment constraints
+L1_ALIGNMENT = 16
+DRAM_ALIGNMENT_WH = 16
+DRAM_ALIGNMENT_BH = 64
+
 get_memory_config = ttnn._ttnn.core.get_memory_config
 light_metal_begin_capture = ttnn._ttnn.core.light_metal_begin_capture
 light_metal_end_capture = ttnn._ttnn.core.light_metal_end_capture
@@ -255,7 +260,6 @@ def create_sharded_memory_config_(
     Example::
         >>> tensor = ttnn.create_sharded_memory_config((5, 8), (320,64), ttnn.ShardStrategy.BLOCK, ttnn.ShardOrientation.ROW_MAJOR)
     """
-    L1_ALLIGNMENT = 16
     TILE_ALLIGNMENT_REQUIREMENT = 32
 
     if not isinstance(shape, (list, tuple, ttnn.Shape)):
@@ -354,16 +358,16 @@ def create_sharded_memory_config_(
             tensor_width_padded = (
                 roundup(tensor_width, TILE_ALLIGNMENT_REQUIREMENT)
                 if tile_layout
-                else roundup(tensor_width, L1_ALLIGNMENT)
-            )  # Required for 16B alignment in L1 tile width, TODO: would be better if it were 16/dtype_bytes
+                else roundup(tensor_width, L1_ALIGNMENT)
+            )  # Required for 16B alignment in L1 tile width,
             shard_shape = divup(tensor_height_padded, total_num_cores), tensor_width_padded
         elif tensor_memory_layout == TensorMemoryLayout.WIDTH_SHARDED:
             tensor_height_padded = roundup(tensor_height, TILE_ALLIGNMENT_REQUIREMENT) if tile_layout else tensor_height
             tensor_width_padded = (
                 roundup(tensor_width, total_num_cores * TILE_ALLIGNMENT_REQUIREMENT)
                 if tile_layout
-                else roundup(tensor_width, total_num_cores * L1_ALLIGNMENT)
-            )  # Required for 16B alignment in L1 tile width, TODO: would be better if it were 16/dtype_bytes
+                else roundup(tensor_width, total_num_cores * L1_ALIGNMENT)
+            )  # Required for 16B alignment in L1 tile width
             shard_shape = tensor_height_padded, divup(tensor_width_padded, total_num_cores)
         else:
             raise RuntimeError("Invalid sharding scheme")
