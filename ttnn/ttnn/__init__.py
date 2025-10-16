@@ -410,6 +410,6 @@ def get_arch_name():
 
 from ttnn._ttnn.operations.data_movement import TileReshapeMapMode
 
-if "TT_METAL_HOME" not in os.environ:
+if "TT_METAL_RUNTIME_ROOT" not in os.environ:
     this_dir = os.path.dirname(__file__)
     SetRootDir(os.path.join(os.path.abspath(this_dir), "tt-metalium"))
