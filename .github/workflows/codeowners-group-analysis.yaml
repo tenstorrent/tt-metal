@@ -49,6 +49,7 @@ jobs:
       author-notes: ${{ steps.parse.outputs.author-notes }}
       direct-ping-users: ${{ steps.parse.outputs.direct-ping-users }}
       is-direct-ping: ${{ steps.parse.outputs.is-direct-ping }}
+      comment-author: ${{ steps.parse.outputs.comment-author }}
     steps:
       - name: Parse comment and get PR info
         id: parse
@@ -162,6 +163,7 @@ jobs:
                 fi
               fi
               echo "author-notes=$AUTHOR_NOTES" >> $GITHUB_OUTPUT
+              echo "comment-author=$COMMENT_AUTHOR" >> $GITHUB_OUTPUT
 
               # Add success reaction
               curl -s -X POST \
@@ -336,13 +338,15 @@ jobs:
 
   analyze-codeowners:
     needs: [find-pr, get-reviews]
-    if: always() && needs.find-pr.outputs.pr-exists == 'true' && needs.parse-comment.outputs.is-direct-ping != 'true'
+    if: always() && needs.find-pr.outputs.pr-exists == 'true'
     runs-on: ubuntu-latest
     outputs:
       codeowners-groups: ${{ steps.analyze.outputs.codeowners-groups }}
       codeowners-teams: ${{ steps.analyze.outputs.codeowners-teams }}
       codeowners-individuals: ${{ steps.analyze.outputs.codeowners-individuals }}
       changed-files: ${{ steps.analyze.outputs.changed-files }}
+      total-additions: ${{ steps.get-files.outputs.total-additions }}
+      total-deletions: ${{ steps.get-files.outputs.total-deletions }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -355,10 +359,12 @@ jobs:
           PR_NUMBER="${{ needs.find-pr.outputs.pr-number }}"
 
           # Get all changed files using GitHub API (handle pagination)
-          rm -f changed_files.txt
+          rm -f changed_files.txt changed_files_stats.txt
 
           PAGE=1
           TOTAL_FILES=0
+          TOTAL_ADDITIONS=0
+          TOTAL_DELETIONS=0
           while true; do
             FILES_API="https://api.github.com/repos/${{ github.repository }}/pulls/$PR_NUMBER/files?per_page=100&page=$PAGE"
             FILES_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
@@ -380,8 +386,15 @@ jobs:
             PAGE_COUNT=$(echo "$PAGE_FILES" | wc -l)
             TOTAL_FILES=$((TOTAL_FILES + PAGE_COUNT))
 
-            # Append to file
+            # Append filenames to file
             echo "$PAGE_FILES" >> changed_files.txt
+
+            # Extract and sum additions and deletions from this page
+            PAGE_ADDITIONS=$(echo "$FILES_DATA" | jq -r '[.[].additions] | add' 2>/dev/null || echo 0)
+            PAGE_DELETIONS=$(echo "$FILES_DATA" | jq -r '[.[].deletions] | add' 2>/dev/null || echo 0)
+
+            TOTAL_ADDITIONS=$((TOTAL_ADDITIONS + PAGE_ADDITIONS))
+            TOTAL_DELETIONS=$((TOTAL_DELETIONS + PAGE_DELETIONS))
 
             PAGE=$((PAGE + 1))
 
@@ -409,6 +422,8 @@ jobs:
             echo "changed-files<<EOF"
             cat changed_files.txt
             echo "EOF"
+            echo "total-additions=$TOTAL_ADDITIONS"
+            echo "total-deletions=$TOTAL_DELETIONS"
           } >> $GITHUB_OUTPUT
 
       - name: Install codeowners package and analyze
@@ -506,9 +521,11 @@ jobs:
               co = CodeOwners(codeowners_content)
 
               # Parse CODEOWNERS file - find all unique patterns that match changed files
-              # and collect their owners
+              # and collect their owners and associated files
               pattern_groups = {}  # pattern -> set of (username, full_name) tuples
+              pattern_files = {}   # pattern -> list of files
               team_groups = set()
+              team_patterns = {}   # team -> list of patterns (for aggregating files)
               processed_patterns = set()  # Track patterns we've already processed
 
               # First pass: find all unique patterns that match any changed files
@@ -535,11 +552,19 @@ jobs:
 
                               if pattern not in pattern_groups:
                                   pattern_groups[pattern] = set()
+                                  pattern_files[pattern] = []
+
+                              # Add this file to the pattern's file list
+                              pattern_files[pattern].append(file_path)
 
                               for owner_type, owner in owners_list:
                                   if owner_type == "TEAM":
                                       # This is a team
                                       team_groups.add(owner)
+                                      # Track which patterns this team owns
+                                      if owner not in team_patterns:
+                                          team_patterns[owner] = []
+                                      team_patterns[owner].append(pattern)
                                   elif owner_type in ["USERNAME", "EMAIL"]:
                                       # This is an individual - get full name and store both username and full name
                                       full_name = get_user_full_name(owner)
@@ -550,19 +575,33 @@ jobs:
                       print(f"No matches found for {file_path}")
 
               # Create output - teams are separate, individuals are grouped by pattern
-              teams_list = ",".join(sorted(team_groups))
+              teams_list = []
+              for team in sorted(team_groups):
+                  # Aggregate files from all patterns owned by this team
+                  team_files = set()
+                  for pattern in team_patterns.get(team, []):
+                      team_files.update(pattern_files.get(pattern, []))
+                  team_files_str = ",".join(sorted(team_files))
+                  teams_list.append(f"{team}:{team_files_str}")
+
+              teams_list = ",".join(teams_list)
 
               # For individuals, we need to group them by their patterns
               # Each pattern becomes a "group" that requires approval from any of its members
               pattern_groups_list = []
               for pattern, owners in pattern_groups.items():
                   if owners:  # Only include patterns that have individuals
-                      # Format: pattern:username1|full_name1,username2|full_name2,... (username|full_name pairs)
+                      # Format: pattern:username1|full_name1,username2|full_name2,...:file1,file2,file3
                       owners_pairs = []
                       for username, full_name in sorted(owners, key=lambda x: x[1]):  # Sort by full name
                           owners_pairs.append(f"{username}|{full_name}")
                       owners_str = ",".join(owners_pairs)
-                      pattern_groups_list.append(f"{pattern}:{owners_str}")
+
+                      # Get files for this pattern
+                      files_list = pattern_files.get(pattern, [])
+                      files_str = ",".join(files_list)
+
+                      pattern_groups_list.append(f"{pattern}:{owners_str}:{files_str}")
 
               individuals_list = "@@@".join(pattern_groups_list) if pattern_groups_list else ""
 
@@ -657,6 +696,8 @@ jobs:
           TEAMS="${{ needs.analyze-codeowners.outputs.codeowners-teams || '' }}"
           INDIVIDUALS="${{ needs.analyze-codeowners.outputs.codeowners-individuals || '' }}"
           APPROVED_REVIEWERS="${{ needs.get-reviews.outputs.approved-reviewers }}"
+          TOTAL_ADDITIONS="${{ needs.analyze-codeowners.outputs.total-additions || 0 }}"
+          TOTAL_DELETIONS="${{ needs.analyze-codeowners.outputs.total-deletions || 0 }}"
 
           # Determine parameters based on trigger type
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
@@ -673,7 +714,7 @@ jobs:
           fi
 
           # Use #tt-metal-pr-review-requests Slack channel
-          SLACK_CHANNEL="C07G47JMQHM"
+          SLACK_CHANNEL="C09HT5VSXRB"
 
           echo "Using parameters: CREATE_NEW=$CREATE_NEW, PING_OWNERS=$PING_OWNERS, SEND_SLACK=$SEND_SLACK, SLACK_CHANNEL=$SLACK_CHANNEL"
 
@@ -732,8 +773,26 @@ jobs:
 
           # Display teams with member information and approval status
           if [ -n "$TEAMS" ]; then
-            IFS=',' read -ra TEAM_ARRAY <<< "$TEAMS"
-            for team in "${TEAM_ARRAY[@]}"; do
+            # Teams are now in format: "@team:files@@@team2:files2,..."
+            # Need to parse this properly
+            TEAMS_WITH_FILES=""
+            while IFS=':' read -r team files || [ -n "$team" ]; do
+              if [ -n "$team" ]; then
+                # Remove @ prefix for processing
+                clean_team=$(echo "$team" | sed 's/^@//')
+                TEAMS_WITH_FILES="$TEAMS_WITH_FILES$team:$files,"
+              fi
+            done <<< "$TEAMS"
+
+            # Remove trailing comma
+            TEAMS_WITH_FILES=$(echo "$TEAMS_WITH_FILES" | sed 's/,$//')
+
+            IFS=',' read -ra TEAM_ARRAY <<< "$TEAMS_WITH_FILES"
+            for team_entry in "${TEAM_ARRAY[@]}"; do
+              # Extract team and files from team:files format
+              team=$(echo "$team_entry" | cut -d':' -f1)
+              team_files=$(echo "$team_entry" | cut -d':' -f2)
+
               # Skip the large-changes team as requested
               if [ "$team" = "@tenstorrent/metalium-codeowners-large-changes" ]; then
                 continue
@@ -812,13 +871,29 @@ jobs:
                   fi
                 fi
 
+                # Create collapsible file list for this team
+                team_file_list_html=""
+                if [ -n "$team_files" ] && [ "$team_files" != "null" ]; then
+                  # Create expandable details section with file list (using HTML entity for backticks to avoid shell issues)
+                  team_file_list_html="\n<details><summary>&#128193; Files owned by this team</summary>\n\n"
+                  IFS=',' read -ra TEAM_FILES_ARRAY <<< "$team_files"
+                  for file in "${TEAM_FILES_ARRAY[@]}"; do
+                    if [ -n "$file" ]; then
+                      # Escape special characters for HTML and use HTML entity for backticks
+                      escaped_file=$(echo "$file" | sed 's/\*/\\*/g' | sed 's/_/\\_/g' | sed 's/`/&#96;/g')
+                      team_file_list_html="$team_file_list_html- &#96;$escaped_file&#96;\n"
+                    fi
+                  done
+                  team_file_list_html="$team_file_list_html\n</details>"
+                fi
+
                 if [ -n "$approved_members" ]; then
                   # Remove trailing comma and space
                   approved_members=$(echo "$approved_members" | sed 's/, $//')
-                  APPROVED_GROUPS="$APPROVED_GROUPS\n- ✅ **$clean_team** (Team) - $team_members_info | **Approved by:** $approved_members"
+                  APPROVED_GROUPS="$APPROVED_GROUPS\n- ✅ **$clean_team** (Team) - $team_members_info | **Approved by:** $approved_members$team_file_list_html"
                   APPROVED_COUNT=$((APPROVED_COUNT + 1))
                 else
-                  PENDING_GROUPS="$PENDING_GROUPS\n- ⏳ **$clean_team** (Team) - $team_members_info | **Pending approval**"
+                  PENDING_GROUPS="$PENDING_GROUPS\n- ⏳ **$clean_team** (Team) - $team_members_info | **Pending approval**$team_file_list_html"
                   PENDING_COUNT=$((PENDING_COUNT + 1))
                 fi
               done
@@ -826,15 +901,16 @@ jobs:
 
             # Add pattern groups with member information and approval status
             if [ -n "$INDIVIDUALS" ]; then
-              # Individuals are now grouped by pattern: "pattern:username1|full_name1,username2|full_name2@@@pattern2:..."
+              # Individuals are now grouped by pattern: "pattern:username1|full_name1,username2|full_name2:file1,file2,file3@@@pattern2:..."
               IFS='@@@' read -ra PATTERN_GROUPS <<< "$INDIVIDUALS"
               for pattern_group in "${PATTERN_GROUPS[@]}"; do
                 # Skip empty groups
                 [ -z "$pattern_group" ] && continue
 
-                # Split pattern:owners
+                # Split pattern:owners:files
                 pattern=$(echo "$pattern_group" | cut -d':' -f1)
                 owners=$(echo "$pattern_group" | cut -d':' -f2)
+                files=$(echo "$pattern_group" | cut -d':' -f3)
 
                 # Parse owners - each is username|full_name
                 all_owners=""
@@ -865,29 +941,85 @@ jobs:
                   fi
                 done
 
+                # Create collapsible file list for this pattern
+                file_list_html=""
+                if [ -n "$files" ] && [ "$files" != "null" ]; then
+                  # Create expandable details section with file list (using HTML entity for backticks to avoid shell issues)
+                  file_list_html="\n<details><summary>&#128193; Files owned by this group</summary>\n\n"
+                  IFS=',' read -ra FILES_ARRAY <<< "$files"
+                  for file in "${FILES_ARRAY[@]}"; do
+                    if [ -n "$file" ]; then
+                      # Escape special characters for HTML and use HTML entity for backticks
+                      escaped_file=$(echo "$file" | sed 's/\*/\\*/g' | sed 's/_/\\_/g' | sed 's/`/&#96;/g')
+                      file_list_html="$file_list_html- &#96;$escaped_file&#96;\n"
+                    fi
+                  done
+                  file_list_html="$file_list_html\n</details>"
+                fi
+
                 if [ -n "$approved_owners" ]; then
                   # Remove trailing comma and space
                   approved_owners=$(echo "$approved_owners" | sed 's/, $//')
-                  APPROVED_GROUPS="$APPROVED_GROUPS\n- ✅ **$pattern** (Group) - Members: $all_owners | **Approved by:** $approved_owners"
+                  APPROVED_GROUPS="$APPROVED_GROUPS\n- ✅ **$pattern** (Group) - Members: $all_owners | **Approved by:** $approved_owners$file_list_html"
                   APPROVED_COUNT=$((APPROVED_COUNT + 1))
                 else
-                  PENDING_GROUPS="$PENDING_GROUPS\n- ⏳ **$pattern** (Group) - Members: $all_owners | **Pending approval**"
+                  PENDING_GROUPS="$PENDING_GROUPS\n- ⏳ **$pattern** (Group) - Members: $all_owners | **Pending approval**$file_list_html"
                   PENDING_COUNT=$((PENDING_COUNT + 1))
                 fi
               done
             fi
 
-            # Combine pending groups first, then approved groups
+            # Get requester information
+          REQUESTER_NAME=""
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            # For manual workflow dispatch, the requester is the person who triggered it
+            REQUESTER_LOGIN="${{ github.event.sender.login }}"
+            REQUESTER_NAME="${{ github.event.sender.login }}"
+          else
+            # For comment triggers, the requester is the comment author
+            REQUESTER_LOGIN="${{ needs.parse-comment.outputs.comment-author || '' }}"
+            REQUESTER_NAME="$REQUESTER_LOGIN"
+          fi
+
+          # Get full name for requester if available
+          if [ -n "$REQUESTER_LOGIN" ] && [ "$REQUESTER_LOGIN" != "$PR_AUTHOR_LOGIN" ]; then
+            REQUESTER_USER_API="https://api.github.com/users/$REQUESTER_LOGIN"
+            REQUESTER_USER_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.ORG_READ_GITHUB_TOKEN }}" \
+                                   -H "Accept: application/vnd.github.v3+json" \
+                                   "$REQUESTER_USER_API" 2>/dev/null)
+            REQUESTER_FULL_NAME=$(echo "$REQUESTER_USER_DATA" | jq -r '.name // empty' 2>/dev/null)
+            if [ -n "$REQUESTER_FULL_NAME" ] && [ "$REQUESTER_FULL_NAME" != "null" ]; then
+              REQUESTER_NAME="$REQUESTER_FULL_NAME"
+            fi
+          fi
+
+          # Combine pending groups first, then approved groups
             if [ -z "$TEAMS" ] && [ -z "$INDIVIDUALS" ]; then
               COMMENT="<!-- CodeOwners-Workflow-Bot -->\n## CodeOwners Analysis\n\nNo specific codeowners found for the changed files in this PR.\n\n**Required Approvals:** At least one maintainer approval is required."
             else
               COMMENT="<!-- CodeOwners-Workflow-Bot -->\n## CodeOwners Group Analysis\n\nThis PR requires approval from **one member of each** of the following groups:\n\n**Summary:** $PENDING_COUNT pending groups, $APPROVED_COUNT approved groups\n\n### Group Information:$PENDING_GROUPS$APPROVED_GROUPS\n\n**Note:** At least one approval from each group is sufficient."
             fi
 
+          # Add "Requested by" line if requester is different from PR author
+          if [ -n "$REQUESTER_LOGIN" ] && [ "$REQUESTER_LOGIN" != "$PR_AUTHOR_LOGIN" ]; then
+            COMMENT="$COMMENT\n\n**Requested by:** $REQUESTER_NAME (@$REQUESTER_LOGIN)"
+          fi
+
+          # Add changes count if available
+          if [ "$TOTAL_ADDITIONS" -gt 0 ] || [ "$TOTAL_DELETIONS" -gt 0 ]; then
+            CHANGES_COUNT="**Changes:** -$TOTAL_DELETIONS +$TOTAL_ADDITIONS"
+            COMMENT="$COMMENT\n\n$CHANGES_COUNT"
+          fi
+
+          # Add note if only PR author is available as codeowner
+          if [ "$NO_OWNERS_AVAILABLE" = "true" ]; then
+            COMMENT="$COMMENT\n\n**Note:** Only the PR author is available as a codeowner for this PR. No external review notifications will be sent."
+          fi
+
             # Output comment for next step
             {
               echo "comment<<EOF"
-              echo "$COMMENT"
+              printf '%s\n' "$COMMENT"
               echo "EOF"
             } >> $GITHUB_OUTPUT
 
@@ -929,6 +1061,9 @@ jobs:
           # Get the most recent one by sorting by created_at descending
           EXISTING_COMMENT_ID=$(echo "$EXISTING_COMMENTS" | jq -r "[.[] | select(.body | startswith(\"## CodeOwners\") or contains(\"CodeOwners-Workflow-Bot\"))] | sort_by(.created_at) | reverse | .[0].id")
 
+          # Escape the comment for JSON and shell
+          ESCAPED_COMMENT=$(echo "$COMMENT" | sed 's/"/\\"/g' | sed "s/'/\\'/g")
+
           if [ "$CREATE_NEW" = "true" ] || [ -z "$EXISTING_COMMENT_ID" ] || [ "$EXISTING_COMMENT_ID" = "null" ]; then
             # Create new comment
             echo "Creating new comment..."
@@ -936,7 +1071,7 @@ jobs:
               -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
               -H "Accept: application/vnd.github.v3+json" \
               -H "Content-Type: application/json" \
-              -d "{\"body\": \"$COMMENT\"}" \
+              -d "{\"body\": \"$ESCAPED_COMMENT\"}" \
               "$COMMENTS_API"
           else
             # Edit existing comment
@@ -945,7 +1080,7 @@ jobs:
               -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
               -H "Accept: application/vnd.github.v3+json" \
               -H "Content-Type: application/json" \
-              -d "{\"body\": \"$COMMENT\"}" \
+              -d "{\"body\": \"$ESCAPED_COMMENT\"}" \
               "https://api.github.com/repos/${{ github.repository }}/issues/comments/$EXISTING_COMMENT_ID"
           fi
 
@@ -957,9 +1092,26 @@ jobs:
           PR_NUMBER="${{ needs.find-pr.outputs.pr-number }}"
           DIRECT_PING_USERS="${{ needs.parse-comment.outputs.direct-ping-users }}"
           AUTHOR_NOTES="${{ needs.parse-comment.outputs.author-notes }}"
+          TOTAL_ADDITIONS="${{ needs.analyze-codeowners.outputs.total-additions }}"
+          TOTAL_DELETIONS="${{ needs.analyze-codeowners.outputs.total-deletions }}"
+          REQUESTER_LOGIN="${{ needs.parse-comment.outputs.comment-author }}"
+          REQUESTER_NAME="$REQUESTER_LOGIN"
+
+          # Get full name for requester if available
+          REQUESTER_LOGIN="${REQUESTER_LOGIN:-}"
+          if [ -n "$REQUESTER_LOGIN" ] && [ "$REQUESTER_LOGIN" != "$PR_AUTHOR_LOGIN" ]; then
+            REQUESTER_USER_API="https://api.github.com/users/$REQUESTER_LOGIN"
+            REQUESTER_USER_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.ORG_READ_GITHUB_TOKEN }}" \
+                                   -H "Accept: application/vnd.github.v3+json" \
+                                   "$REQUESTER_USER_API" 2>/dev/null)
+            REQUESTER_FULL_NAME=$(echo "$REQUESTER_USER_DATA" | jq -r '.name // empty' 2>/dev/null)
+            if [ -n "$REQUESTER_FULL_NAME" ] && [ "$REQUESTER_FULL_NAME" != "null" ]; then
+              REQUESTER_NAME="$REQUESTER_FULL_NAME"
+            fi
+          fi
 
           # Use #tt-metal-pr-review-requests Slack channel
-          SLACK_CHANNEL="C07G47JMQHM"
+          SLACK_CHANNEL="C09HT5VSXRB"
 
           # GitHub team to Slack group mapping (needed for author notes processing)
           get_slack_group_id() {
@@ -1190,6 +1342,19 @@ jobs:
           SLACK_MESSAGE="$SLACK_MESSAGE"$'\n\n'"Hi$SLACK_USER_MENTIONS!"
           SLACK_MESSAGE="$SLACK_MESSAGE"$'\n\n'"📋 *PR:* <${{ github.server_url }}/${{ github.repository }}/pull/$PR_NUMBER|$PR_TITLE>"
           SLACK_MESSAGE="$SLACK_MESSAGE"$'\n'"👤 *Author:* $PR_AUTHOR_MENTION"
+
+          # Add requested by information if different from author
+          if [ -n "$REQUESTER_LOGIN" ] && [ "$REQUESTER_LOGIN" != "$PR_AUTHOR_LOGIN" ]; then
+            SLACK_MESSAGE="$SLACK_MESSAGE"$'\n'"🔄 *Requested by:* $REQUESTER_NAME (@$REQUESTER_LOGIN)"
+          fi
+
+          # Add changes count if available
+          TOTAL_ADDITIONS="${TOTAL_ADDITIONS:-0}"
+          TOTAL_DELETIONS="${TOTAL_DELETIONS:-0}"
+          if [ "$TOTAL_ADDITIONS" -gt 0 ] || [ "$TOTAL_DELETIONS" -gt 0 ]; then
+            SLACK_MESSAGE="$SLACK_MESSAGE"$'\n'"📊 *Changes:* -$TOTAL_DELETIONS +$TOTAL_ADDITIONS"
+          fi
+
           SLACK_MESSAGE="$SLACK_MESSAGE"$'\n'"🔍 *Action Required:* This PR needs your code review/approval to proceed with merging."
 
           # Add author notes if provided
@@ -1356,6 +1521,7 @@ jobs:
           INDIVIDUALS="${{ needs.analyze-codeowners.outputs.codeowners-individuals || '' }}"
           APPROVED_REVIEWERS="${{ needs.get-reviews.outputs.approved-reviewers }}"
           MOREH_TEAM_MEMBERS="${{ steps.setup-notifications.outputs.moreh-team-members }}"
+          PR_AUTHOR_LOGIN="${{ steps.setup-notifications.outputs.pr-author-login }}"
 
           # Helper function to check if user is in thirdparty-moreh team
           is_moreh_member() {
@@ -1365,6 +1531,12 @@ jobs:
             else
               return 1
             fi
+          }
+
+          # Helper function to check if user is the PR author
+          is_pr_author() {
+            local username="$1"
+            [ "$username" = "$PR_AUTHOR_LOGIN" ]
           }
 
           # GitHub team to Slack group mapping
@@ -1471,13 +1643,16 @@ jobs:
 
                       # Only select owners from pending teams
                       if [ "$team_has_approval" = false ]; then
-                        # Collect unapproved members for this team, excluding moreh team members
+                        # Collect unapproved members for this team, excluding moreh team members and PR author
                         TEAM_UNAPPROVED=""
                         for member in "${MEMBERS_ARRAY[@]}"; do
                           if ! echo "$APPROVED_REVIEWERS" | grep -q "$member"; then
                             # Check if member is in moreh team and exclude them
                             if is_moreh_member "$member"; then
                               echo "Excluding $member (thirdparty-moreh team member) from selection"
+                            # Check if member is the PR author and exclude them
+                            elif is_pr_author "$member"; then
+                              echo "Excluding $member (PR author) from selection"
                             else
                               TEAM_UNAPPROVED="$TEAM_UNAPPROVED$member,"
                             fi
@@ -1532,7 +1707,7 @@ jobs:
 
               # Only select owners from pending patterns
               if [ "$pattern_has_approval" = false ]; then
-                # Collect unapproved owners for this pattern, excluding moreh team members
+                # Collect unapproved owners for this pattern, excluding moreh team members and PR author
                 PATTERN_UNAPPROVED=""
                 for owner_pair in "${OWNERS_ARRAY[@]}"; do
                   username=$(echo "$owner_pair" | cut -d'|' -f1)
@@ -1540,6 +1715,9 @@ jobs:
                     # Check if user is in moreh team and exclude them
                     if is_moreh_member "$username"; then
                       echo "Excluding $username (thirdparty-moreh team member) from pattern selection"
+                    # Check if user is the PR author and exclude them
+                    elif is_pr_author "$username"; then
+                      echo "Excluding $username (PR author) from pattern selection"
                     else
                       PATTERN_UNAPPROVED="$PATTERN_UNAPPROVED$username,"
                     fi
@@ -1580,8 +1758,15 @@ jobs:
             SELECTED_OWNERS=""
           fi
 
+          # Check if no owners are available for notification (only PR author was available)
+          NO_OWNERS_AVAILABLE=""
+          if [ -z "$SELECTED_OWNERS" ] && [ -z "$SELECTED_SLACK_GROUPS" ]; then
+            NO_OWNERS_AVAILABLE="true"
+          fi
+
           echo "selected-owners=$SELECTED_OWNERS" >> $GITHUB_OUTPUT
           echo "selected-slack-groups=$SELECTED_SLACK_GROUPS" >> $GITHUB_OUTPUT
+          echo "no-owners-available=$NO_OWNERS_AVAILABLE" >> $GITHUB_OUTPUT
 
       - name: Send notifications
         if: needs.parse-comment.outputs.is-direct-ping != 'true'
@@ -1602,7 +1787,7 @@ jobs:
           PR_TITLE=$(echo "$PR_DATA" | jq -r '.title')
 
           # Use #tt-metal-pr-review-requests Slack channel
-          SLACK_CHANNEL="C07G47JMQHM"
+          SLACK_CHANNEL="C09HT5VSXRB"
 
           # Define API endpoint
           COMMENTS_API="https://api.github.com/repos/${{ github.repository }}/issues/$PR_NUMBER/comments"
@@ -1699,6 +1884,7 @@ jobs:
           SEND_SLACK="${{ steps.generate-comment.outputs.send-slack }}"
           SELECTED_OWNERS="${{ steps.select-owners.outputs.selected-owners }}"
           SELECTED_SLACK_GROUPS="${{ steps.select-owners.outputs.selected-slack-groups }}"
+          NO_OWNERS_AVAILABLE="${{ steps.select-owners.outputs.no-owners-available }}"
           PR_AUTHOR_LOGIN="${{ steps.setup-notifications.outputs.pr-author-login }}"
           PR_AUTHOR_NAME="${{ steps.setup-notifications.outputs.pr-author-name }}"
           AUTHOR_NOTES="${{ steps.generate-comment.outputs.author-notes }}"
@@ -1712,7 +1898,7 @@ jobs:
           PR_TITLE=$(echo "$PR_DATA" | jq -r '.title')
 
           # Use #tt-metal-pr-review-requests Slack channel
-          SLACK_CHANNEL="C07G47JMQHM"
+          SLACK_CHANNEL="C09HT5VSXRB"
 
           # GitHub team to Slack group mapping (needed for author notes processing)
           get_slack_group_id() {
@@ -1733,8 +1919,8 @@ jobs:
             esac
           }
 
-          # Send Slack notification if enabled
-          if [ "$SEND_SLACK" = "true" ] && ([ -n "$SELECTED_OWNERS" ] || [ -n "$SELECTED_SLACK_GROUPS" ]); then
+          # Send Slack notification if enabled and owners are available
+          if [ "$SEND_SLACK" = "true" ] && ([ -n "$SELECTED_OWNERS" ] || [ -n "$SELECTED_SLACK_GROUPS" ]) && [ "$NO_OWNERS_AVAILABLE" != "true" ]; then
             echo "Sending Slack notification to channel: $SLACK_CHANNEL"
 
             # Function to find Slack user ID by full name (with pagination)
@@ -1909,6 +2095,17 @@ jobs:
 
             SLACK_MESSAGE="$SLACK_MESSAGE"$'\n\n'"📋 *PR:* <${{ github.server_url }}/${{ github.repository }}/pull/$PR_NUMBER|$PR_TITLE>"
             SLACK_MESSAGE="$SLACK_MESSAGE"$'\n'"👤 *Author:* $PR_AUTHOR_MENTION"
+
+            # Add requested by information if different from author (for general notifications)
+            # Note: REQUESTER_LOGIN and REQUESTER_NAME may not be available in general notifications context
+
+            # Add changes count if available
+            TOTAL_ADDITIONS="${TOTAL_ADDITIONS:-0}"
+            TOTAL_DELETIONS="${TOTAL_DELETIONS:-0}"
+            if [ "$TOTAL_ADDITIONS" -gt 0 ] || [ "$TOTAL_DELETIONS" -gt 0 ]; then
+              SLACK_MESSAGE="$SLACK_MESSAGE"$'\n'"📊 *Changes:* -$TOTAL_DELETIONS +$TOTAL_ADDITIONS"
+            fi
+
             SLACK_MESSAGE="$SLACK_MESSAGE"$'\n'"🔍 *Action Required:* This PR needs your code review/approval to proceed with merging."
 
             # Add author notes if provided
@@ -2035,6 +2232,8 @@ jobs:
             # Clean up temp file
             rm -f /tmp/slack_message.txt
 
+          elif [ "$SEND_SLACK" = "true" ] && [ "$NO_OWNERS_AVAILABLE" = "true" ]; then
+            echo "Slack notification enabled but no owners available for notification (only PR author is codeowner)"
           elif [ "$SEND_SLACK" = "true" ] && [ -z "$SELECTED_OWNERS" ] && [ -z "$SELECTED_SLACK_GROUPS" ]; then
             echo "Slack notification enabled but no pending owners or groups to notify"
           else
