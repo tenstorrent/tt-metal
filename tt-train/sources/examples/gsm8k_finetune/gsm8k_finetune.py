@@ -292,6 +292,9 @@ def generate_text_tt(
         generated_tokens.append(next_token)
         prompt_tokens.append(next_token)
 
+        if next_token == tokenizer.eos_token_id:
+            break
+
     # Decode once at the end
     gen_text = tokenizer.decode(generated_tokens)
     if return_with_prompt:
@@ -358,7 +361,7 @@ def validate(
             val_file.write(f"Generated Answer: {gen_text}\n")
             val_file.write("\n====================================\n")
 
-        val_file.write("Last validation loss: {:.4f}\n".format(np.mean(cur_val_losses)))
+        val_file.write("Last validation loss: {:.4f}\n\n\n".format(np.mean(cur_val_losses)))
 
     ttml.autograd.AutoContext.get_instance().set_gradient_mode(ttml.autograd.GradMode.ENABLED)
     tt_model.train()
