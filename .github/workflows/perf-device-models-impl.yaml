@@ -341,6 +341,16 @@ jobs:
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && !matrix.test-info.job-set1 && !matrix.test-info.job-blackhole-set1 }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
+      - name: panoptic_deeplab tests
+        env:
+          TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE: "4,3"
+        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
+        with:
+          device_perf_model_name: "panoptic_deeplab"
+          commands: |
+            pytest models/experimental/panoptic_deeplab/tests/test_device_perf_panoptic_deeplab.py -m models_device_performance_bare_metal --timeout=600
+        if: ${{ !cancelled() && matrix.test-info.civ2-compatible &&  matrix.test-info.job-blackhole-set1 }}
+
       - name: Merge test reports
         id: generate-device-perf-report
         if: ${{ !cancelled() }}
