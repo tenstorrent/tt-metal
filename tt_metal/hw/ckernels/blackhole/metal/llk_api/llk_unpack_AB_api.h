@@ -85,24 +85,16 @@ inline void llk_unpack_AB(
     WAYPOINT("UABD");
 }
 
-template <BroadcastType BType = BroadcastType::NONE>
-inline void llk_unpack_AB_but_fused_so_no_mop(
-    const std::uint32_t operandA,
-    const std::uint32_t operandB,
-    const std::uint32_t tile_index_a,
-    const std::uint32_t tile_index_b,
-    const bool transpose_of_faces = 0 /*not used*/) {
-    std::uint32_t operandA_id = get_operand_id(operandA);
-    std::uint32_t operandB_id = get_operand_id(operandB);
-    std::uint32_t base_address_a = get_local_cb_interface(operandA_id).fifo_rd_ptr - 1;
-    std::uint32_t offset_address_a = get_local_cb_interface(operandA_id).fifo_page_size * tile_index_a;
-    std::uint32_t address_a = base_address_a + offset_address_a;
-    std::uint32_t base_address_b = get_local_cb_interface(operandB_id).fifo_rd_ptr - 1;
-    std::uint32_t offset_address_b = get_local_cb_interface(operandB_id).fifo_page_size * tile_index_b;
-    std::uint32_t address_b = base_address_b + offset_address_b;
-
+/**
+ * Unpacks AB for fused operations where the math thread reuses destination registers as operands.
+ * This function resets counters and sets DVALID flags without performing MOP operations,
+ * allowing the math thread to use destination data as source operands for subsequent operations.
+ * Should be called in fused operations before the math thread accesses destination register data.
+ */
+inline void llk_unpack_AB_fused()
+{
     WAYPOINT("UABW");
-    _llk_unpack_AB_but_fused_so_no_mop_<BType>(address_a, address_b, transpose_of_faces > 0);
+    _llk_unpack_AB_fused_();
     WAYPOINT("UABD");
 }
 

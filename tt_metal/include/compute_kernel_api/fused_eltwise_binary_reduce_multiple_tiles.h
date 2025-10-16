@@ -94,7 +94,7 @@ ALWI void fused_eltwise_binary_reduce(
     MATH((_fused_eltwise_binary_uninit_()));
 
     // Step 3: Switch banks - UNPACK thread switches srcA/srcB banks for reduce
-    UNPACK((llk_unpack_AB_but_fused_so_no_mop(0, 0, 0, 0)));
+    UNPACK((llk_unpack_AB_fused()));
 
     MATH((llk_math_reduce_init<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY>()));
 
