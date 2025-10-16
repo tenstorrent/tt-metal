@@ -97,7 +97,7 @@ found=false
 while [[ "$found" == "false" ]]; do
   rev="$(git rev-parse --short=12 HEAD)"
   echo "::group::Building $rev"
-  echo "commit 6"
+  echo "commit 7"
 
   fresh_clean
 
