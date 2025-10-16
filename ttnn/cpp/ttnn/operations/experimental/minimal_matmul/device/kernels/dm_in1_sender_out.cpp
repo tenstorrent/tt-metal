@@ -90,28 +90,32 @@ void kernel_main() {
     bool reuse_block = false;
 
     uint32_t defer_write_m_tile = 0;
+    uint32_t defer_write_m_tile_end = 0;
     uint32_t defer_write_n_tile = 0;
+    uint32_t defer_write_n_tile_end = 0;
     bool defer_write = false;
 
     for (uint32_t m_block_iter = 0; m_block_iter < M_num_blocks; m_block_iter++) {
         uint32_t m_tile = M_start_tile + m_block_iter * M_block_tiles;
+        uint32_t m_tile_end = std::min(m_tile + M_block_tiles, M_end_tile);
         for (uint32_t n_block_iter = 0; n_block_iter < N_num_blocks; n_block_iter++) {
             uint32_t n_tile = n_forward ? N_start_tile + n_block_iter * N_block_tiles
                                         : N_start_tile + (N_num_blocks - 1 - n_block_iter) * N_block_tiles;
+            uint32_t n_tile_end = std::min(n_tile + N_block_tiles, N_end_tile);
             for (uint32_t k_block_iter = 0; k_block_iter < K_num_blocks; k_block_iter++) {
                 if (defer_write && k_block_iter == defer_write_k_block) {
                     if constexpr (is_output_writer) {
                         cb_wait_front(cb_id_out, out_block_num_tiles);
                         uint32_t out_read_ptr = get_read_ptr(cb_id_out);
-                        write_block_sync(
+                        write_block_sync<M_block_tiles, N_block_tiles>(
                             out_reader,
                             out_shape,
                             out_read_ptr,
                             out_tile_size,
                             defer_write_m_tile,
-                            defer_write_m_tile + M_block_tiles,
+                            defer_write_m_tile_end,
                             defer_write_n_tile,
-                            defer_write_n_tile + N_block_tiles);
+                            defer_write_n_tile_end);
                         cb_pop_front(cb_id_out, out_block_num_tiles);
                     }
                 }
@@ -125,7 +129,7 @@ void kernel_main() {
 
                 uint32_t in1_start_address = get_write_ptr(cb_id_in1);
                 if constexpr (is_injector_core) {
-                    read_in1_block_sync(
+                    read_in1_block_sync<K_block_tiles, N_block_tiles>(
                         in1_reader,
                         in1_shape,
                         in1_start_address,
@@ -133,7 +137,7 @@ void kernel_main() {
                         k_block * K_block_tiles,
                         (k_block + 1) * K_block_tiles,
                         n_tile,
-                        n_tile + N_block_tiles);
+                        n_tile_end);
                 } else {
                     noc_semaphore_set(in1_receiver_semaphore_addr_ptr, INVALID);
                     noc_semaphore_inc(in1_sender_semaphore_noc_addr, 1);
@@ -164,7 +168,7 @@ void kernel_main() {
                 cb_reserve_back(cb_id_in2, N_block_tiles);
 
                 uint32_t l1_write_addr_in2 = get_write_ptr(cb_id_in2);
-                for (uint32_t n_tile_id = n_tile; n_tile_id < n_tile + N_block_tiles; n_tile_id++) {
+                for (uint32_t n_tile_id = n_tile; n_tile_id < n_tile_end; n_tile_id++) {
                     noc_async_read_tile(n_tile_id, in2_reader, l1_write_addr_in2);
                     l1_write_addr_in2 += in2_tile_size;
                 }
@@ -178,7 +182,9 @@ void kernel_main() {
             // We have an output block to write out
 
             defer_write_m_tile = m_tile;
+            defer_write_m_tile_end = m_tile_end;
             defer_write_n_tile = n_tile;
+            defer_write_n_tile_end = n_tile_end;
             /**
              * If this isn't the last output block, defer writing until the defer_k_write_block iteration
              * of the next output block.
@@ -188,16 +194,8 @@ void kernel_main() {
 
             if (!defer_write) {
                 if constexpr (is_output_writer) {
-                    write_block_sync_granular(
-                        out_reader,
-                        out_shape,
-                        cb_id_out,
-                        N_block_tiles,
-                        out_tile_size,
-                        m_tile,
-                        m_tile + M_block_tiles,
-                        n_tile,
-                        n_tile + N_block_tiles);
+                    write_block_sync_granular<M_block_tiles, N_block_tiles>(
+                        out_reader, out_shape, cb_id_out, out_tile_size, m_tile, m_tile_end, n_tile, n_tile_end);
                 }
             }
         }
