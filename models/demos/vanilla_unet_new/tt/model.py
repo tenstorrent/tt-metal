@@ -74,7 +74,7 @@ def transpose_conv2d(
         fp32_dest_acc_en=fp32_dest_acc_en,
         packer_l1_acc=packer_l1_acc,
     )
-    return ttnn.conv_transpose2d(
+    output, [upconv_config.weight, upconv_config.bias] = ttnn.conv_transpose2d(
         input_tensor=input_tensor,
         weight_tensor=upconv_config.weight,
         bias_tensor=upconv_config.bias,
@@ -89,7 +89,10 @@ def transpose_conv2d(
         conv_config=conv_config,
         compute_config=compute_config,
         device=input_tensor.device(),
+        return_output_dim=False,
+        return_weights_and_bias=True,
     )
+    return output
 
 
 class TtUNetEncoder:
