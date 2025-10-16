@@ -28,6 +28,7 @@
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/distributed/tensor_topology.hpp"
 #include "distribution_mode.hpp"
+#include "ttnn/operations/distributed/matmul/distributed_matmul_pybind.hpp"
 
 // This is required for automatic conversions, as in the creation of mesh devices
 // https://github.com/tenstorrent/tt-metal/issues/18082
@@ -765,6 +766,9 @@ void py_module(py::module& module) {
                 Tensor: The combined tensor.
             )doc");
     module.def("using_distributed_env", &tt::tt_metal::distributed::UsingDistributedEnvironment);
+
+    // Bind distributed operations
+    ttnn::operations::distributed::py_bind_distributed_matmul(module);
 }
 
 }  // namespace ttnn::distributed
