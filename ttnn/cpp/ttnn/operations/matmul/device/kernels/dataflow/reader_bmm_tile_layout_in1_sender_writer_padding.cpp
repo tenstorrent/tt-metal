@@ -263,15 +263,19 @@ void kernel_main() {
                         uint32_t next_bank_id_and_dram_stride_index = 0;
 
                         for (uint32_t i = 0; i < num_dram_shards_to_read; ++i) {
-                            uint32_t in1_base_addr = noc_async_read_tile_dram_sharded_set_state<true>(
-                                in1_tensor_addr,
-                                in1_single_tile_size_bytes,
-                                current_dram_bank_id[next_bank_id_and_dram_stride_index],
-                                vc);
+                            uint64_t in1_base_addr = get_noc_addr_from_bank_id<true>(
+                                current_dram_bank_id[next_bank_id_and_dram_stride_index], in1_tensor_addr);
+                            // uint32_t in1_base_addr = noc_async_read_tile_dram_sharded_set_state<true>(
+                            //     in1_tensor_addr,
+                            //     in1_single_tile_size_bytes,
+                            //     current_dram_bank_id[next_bank_id_and_dram_stride_index],
+                            //     vc);
 
                             if (i == 0) {
                                 in1_base_addr += dram_tensor_start_offset;
                             }
+                            noc_async_read_one_packet_set_state<true>(
+                                in1_base_addr, in1_single_tile_size_bytes, vc = vc);
 
                             uint32_t l1_read_addr_in1 = l1_read_addr_in1_offset;
                             uint32_t l1_write_addr_in1 = get_write_ptr(cb_id_in1) + l1_write_addr_in1_offset;
@@ -283,8 +287,10 @@ void kernel_main() {
                                 uint32_t l1_read_addr_in1_temp = l1_read_addr_in1;
                                 uint32_t l1_write_addr_in1_temp = l1_write_addr_in1;
                                 for (uint32_t w = 0; w < in1_block_w_dram; ++w) {
-                                    noc_async_read_tile_dram_sharded_with_state(
-                                        in1_base_addr, l1_read_addr_in1_temp, l1_write_addr_in1_temp);
+                                    // noc_async_read_tile_dram_sharded_with_state(
+                                    //     in1_base_addr, l1_read_addr_in1_temp, l1_write_addr_in1_temp);
+                                    noc_async_read_one_packet_with_state<use_vc = true>(
+                                        in1_tensor_addr + l1_read_addr_in1_temp, l1_write_addr_in1_temp, vc = vc);
                                     l1_read_addr_in1_temp += in1_single_tile_size_bytes;
                                     l1_write_addr_in1_temp += in1_single_tile_size_bytes;
                                 }
@@ -402,15 +408,20 @@ void kernel_main() {
                         uint32_t next_bank_id_and_dram_stride_index = 0;
 
                         for (uint32_t i = 0; i < num_dram_shards_to_read; ++i) {
-                            uint32_t in3_base_addr = noc_async_read_tile_dram_sharded_set_state<true>(
-                                in3_tensor_addr,
-                                bias_single_tile_size_bytes,
-                                current_dram_bank_id[next_bank_id_and_dram_stride_index],
-                                vc);
+                            uint64_t in3_base_addr = get_noc_addr_from_bank_id<true>(
+                                current_dram_bank_id[next_bank_id_and_dram_stride_index], in3_tensor_addr);
+                            // uint32_t in3_base_addr = noc_async_read_tile_dram_sharded_set_state<true>(
+                            //     in3_tensor_addr,
+                            //     bias_single_tile_size_bytes,
+                            //     current_dram_bank_id[next_bank_id_and_dram_stride_index],
+                            //     vc);
 
                             if (i == 0) {
                                 in3_base_addr += dram_tensor_start_offset;
                             }
+
+                            noc_async_read_one_packet_set_state<true>(
+                                in3_base_addr, bias_single_tile_size_bytes, vc = vc);
 
                             uint32_t l1_read_addr_in3 = 0;
                             uint32_t l1_write_addr_in3 = get_write_ptr(cb_id_in3) + l1_write_addr_in3_offset;
@@ -419,8 +430,10 @@ void kernel_main() {
                                 bias_single_tile_size_bytes;
 
                             for (uint32_t w = 0; w < in3_block_w_dram; ++w) {
-                                noc_async_read_tile_dram_sharded_with_state(
-                                    in3_base_addr, l1_read_addr_in3, l1_write_addr_in3);
+                                noc_async_read_one_packet_with_state<use_vc = true>(
+                                    in3_tensor_addr + l1_read_addr_in3, l1_write_addr_in3, vc = vc);
+                                // noc_async_read_tile_dram_sharded_with_state(
+                                //     in3_base_addr, l1_read_addr_in3, l1_write_addr_in3);
                                 l1_read_addr_in3 += bias_single_tile_size_bytes;
                                 l1_write_addr_in3 += bias_single_tile_size_bytes;
                                 in3_block_size_bytes += bias_single_tile_size_bytes;

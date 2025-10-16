@@ -50,7 +50,9 @@ void kernel_main() {
 
     constexpr uint32_t cb_id = 0;
 
-    uint32_t src_base_addr = noc_async_read_tile_dram_sharded_set_state<true>(input_addr, page_size, bank_id, vc);
+    // uint32_t src_base_addr = noc_async_read_tile_dram_sharded_set_state<true>(input_addr, page_size, bank_id, vc);
+    uint64_t src_base_addr = get_noc_addr_from_bank_id<true>(bank_id, input_addr);
+    noc_async_read_one_packet_set_state<true>(src_base_addr, page_size, vc = vc);
     uint32_t l1_read_addr = 0;
 
     constexpr uint32_t total_num_blocks_in_buffer = 3;
@@ -66,8 +68,10 @@ void kernel_main() {
         noc_async_read_tile_dram_sharded_set_trid(curr_block_trid);
 
         for (uint32_t h = 0; h < num_pages; ++h) {
+            // noc_async_read_tile_dram_sharded_with_state_with_trid(
+            //     src_base_addr, l1_read_addr, l1_write_addr, curr_block_trid);
             noc_async_read_tile_dram_sharded_with_state_with_trid(
-                src_base_addr, l1_read_addr, l1_write_addr, curr_block_trid);
+                src_addr, l1_read_addr, l1_write_addr, curr_block_trid);
             l1_read_addr += page_size;
             l1_write_addr += page_size;
         }

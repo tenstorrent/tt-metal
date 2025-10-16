@@ -72,8 +72,10 @@ void kernel_main() {
         uint32_t curr_block_size_bytes = curr_num_pages * curr_page_size;
         uint32_t curr_layer_size_bytes = curr_num_blocks * curr_block_size_bytes;
 
-        uint32_t src_base_addr =
-            noc_async_read_tile_dram_sharded_set_state<true>(input_addr, curr_page_size, bank_id, vc);
+        // uint32_t src_base_addr =
+        //     noc_async_read_tile_dram_sharded_set_state<true>(input_addr, curr_page_size, bank_id, vc);
+        uint64_t src_base_addr = get_noc_addr_from_bank_id<true>(bank_id, input_addr);
+        noc_async_read_one_packet_set_state<true>(src_base_addr, curr_page_size, vc = vc);
         src_read_addr = src_read_addr_offset_bytes;
 
         // For debug purpose, use trivial DRAM read method
@@ -109,8 +111,10 @@ void kernel_main() {
 
             uint32_t temp_l1_write_addr = l1_write_addr;
             for (uint32_t h = 0; h < curr_num_pages; ++h) {
+                // noc_async_read_tile_dram_sharded_with_state_with_trid(
+                //     src_base_addr, src_read_addr, temp_l1_write_addr, curr_block_trid);
                 noc_async_read_tile_dram_sharded_with_state_with_trid(
-                    src_base_addr, src_read_addr, temp_l1_write_addr, curr_block_trid);
+                    input_addr, src_read_addr, temp_l1_write_addr, curr_block_trid);
                 src_read_addr += curr_page_size;
                 temp_l1_write_addr += curr_page_size;
             }
