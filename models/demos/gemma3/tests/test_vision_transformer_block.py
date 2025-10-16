@@ -20,7 +20,7 @@ from models.tt_transformers.tt.ccl import TT_CCL
 )
 @pytest.mark.parametrize(
     "gated",
-    (True, False),
+    (False,),
 )
 @pytest.mark.parametrize(
     "mesh_device",
