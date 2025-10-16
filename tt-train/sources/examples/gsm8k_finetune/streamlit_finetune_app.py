@@ -16,6 +16,7 @@ from pathlib import Path
 import yaml
 import subprocess
 import signal
+import json
 
 # Set page configuration
 st.set_page_config(page_title="LLM Fine-tuning Dashboard", layout="wide", initial_sidebar_state="expanded")
@@ -31,6 +32,12 @@ if "training_process" not in st.session_state:
     st.session_state.training_process = None
 if "training_running" not in st.session_state:
     st.session_state.training_running = False
+if "tt_smi_data" not in st.session_state:
+    st.session_state.tt_smi_data = None
+if "tt_smi_error" not in st.session_state:
+    st.session_state.tt_smi_error = None
+if "data_collection_paused" not in st.session_state:
+    st.session_state.data_collection_paused = False
 
 
 def parse_output_file(file_path="output.txt"):
@@ -168,7 +175,7 @@ def create_lr_plot(history_df):
     return fig
 
 
-def create_training_yaml(config_dict, output_path="training_overrides.yaml"):
+def create_training_yaml(config_dict, output_path="/home/ubuntu/tt-metal/tt-train/configs/training_overrides.yaml"):
     """Create a training YAML configuration file."""
     training_config = {
         "batch_size": config_dict["batch_size"],
@@ -207,8 +214,17 @@ def create_training_yaml(config_dict, output_path="training_overrides.yaml"):
 def start_training(config_dict):
     """Start the training process."""
     try:
+        # Get the YAML output directory from config, or use default
+        yaml_output_dir = config_dict.get("yaml_dir", "/home/ubuntu/tt-metal/tt-train/configs")
+
+        # Ensure the directory exists
+        os.makedirs(yaml_output_dir, exist_ok=True)
+
+        # Construct the full path with the fixed filename
+        yaml_output_path = os.path.join(yaml_output_dir, "training_overrides.yaml")
+
         # Create the YAML config file
-        yaml_path = create_training_yaml(config_dict)
+        yaml_path = create_training_yaml(config_dict, output_path=yaml_output_path)
         yaml_abs_path = os.path.abspath(yaml_path)
         st.success(f"Created configuration file: {yaml_abs_path}")
 
@@ -320,7 +336,7 @@ def main():
                 "Min Learning Rate",
                 min_value=1e-7,
                 max_value=1e-2,
-                value=1e-5,
+                value=3e-5,
                 format="%.2e",
                 help="Minimum learning rate (decay target)",
             )
@@ -329,26 +345,26 @@ def main():
                 "Max Learning Rate",
                 min_value=1e-6,
                 max_value=1e-2,
-                value=3e-4,
+                value=1e-4,
                 format="%.2e",
                 help="Maximum learning rate (peak value)",
             )
 
         col1, col2 = st.columns(2)
         with col1:
-            batch_size = st.number_input("Batch Size", min_value=1, max_value=64, value=4, step=1)
+            batch_size = st.number_input("Batch Size", min_value=1, max_value=64, value=1, step=1)
 
-            max_steps = st.number_input("Max Steps", min_value=100, max_value=100000, value=1000, step=100)
+            max_steps = st.number_input("Max Steps", min_value=10, max_value=100000, value=160, step=100)
 
         with col2:
             warmup_steps = st.number_input("Warmup Steps", min_value=0, max_value=1000, value=20, step=10)
 
-            hold_steps = st.number_input("Hold Steps", min_value=0, max_value=10000, value=0, step=10)
+            hold_steps = st.number_input("Hold Steps", min_value=0, max_value=10000, value=1000, step=10)
 
-        eval_every = st.number_input("Eval Every", min_value=10, max_value=1000, value=100, step=10)
+        eval_every = st.number_input("Eval Every", min_value=10, max_value=1000, value=20, step=10)
 
         gradient_accumulation = st.number_input(
-            "Gradient Accumulation Steps", min_value=1, max_value=32, value=1, step=1
+            "Gradient Accumulation Steps", min_value=1, max_value=128, value=64, step=1
         )
 
         max_seq_length = st.number_input("Max Sequence Length", min_value=128, max_value=4096, value=512, step=128)
@@ -357,6 +373,13 @@ def main():
 
         # Training Control
         st.subheader("Training Control")
+
+        # YAML output directory configuration
+        yaml_output_dir = st.text_input(
+            "Override YAML Directory",
+            value="/home/ubuntu/tt-metal/tt-train/configs",
+            help="Directory where training_overrides.yaml will be saved",
+        )
 
         # Check current training status
         is_running = check_training_status()
@@ -380,9 +403,11 @@ def main():
                     "eval_every": eval_every,
                     "gradient_accumulation": gradient_accumulation,
                     "max_seq_length": max_seq_length,
+                    "yaml_dir": yaml_output_dir,
                 }
                 success, message = start_training(config)
                 if success:
+                    st.session_state.data_collection_paused = False  # Resume data collection when training starts
                     st.success(message)
                     st.rerun()
                 else:
@@ -444,10 +469,36 @@ def main():
         # Refresh controls
         st.divider()
         auto_refresh = st.checkbox("Auto-refresh", value=True)
-        refresh_interval = st.slider("Refresh Interval (seconds)", min_value=1, max_value=10, value=2, step=1)
+        refresh_interval = st.slider("Refresh Interval (seconds)", min_value=1, max_value=10, value=5, step=1)
 
         if st.button("Refresh Now", use_container_width=True):
             st.session_state.last_update = 0  # Force update
+            st.rerun()
+
+        if st.button("Reset Dashboard", use_container_width=True, type="secondary"):
+            # Clear all training data
+            st.session_state.training_history = []
+            st.session_state.last_step = -1
+            st.session_state.last_update = time.time()
+            st.session_state.tt_smi_data = None
+            st.session_state.tt_smi_error = None
+            st.session_state.data_collection_paused = True
+
+            # Clear output.txt and validation.txt files
+            try:
+                # Clear output.txt
+                if os.path.exists(output_file):
+                    with open(output_file, "w") as f:
+                        f.write("")
+
+                # Clear validation.txt
+                if os.path.exists(validation_file):
+                    with open(validation_file, "w") as f:
+                        f.write("")
+            except Exception as e:
+                st.error(f"Error clearing files: {e}")
+
+            # Immediately rerun to refresh the display
             st.rerun()
 
         st.divider()
@@ -491,16 +542,25 @@ def main():
     tab1, tab2, tab3, tab4 = st.tabs(["Training Progress", "Validation Output", "Training Logs", "About"])
 
     with tab1:
-        # Parse current training data and update history
-        current_data = parse_output_file(output_file)
+        # Show data collection status and control
+        if st.session_state.data_collection_paused:
+            st.warning("Data collection is paused. Click 'Resume Data Collection' to start monitoring again.")
+            if st.button("Resume Data Collection", type="primary"):
+                st.session_state.data_collection_paused = False
+                st.rerun()
 
-        if current_data:
-            # Update history if this is a new step OR if we haven't recorded anything yet
-            if current_data["step"] >= st.session_state.last_step:
-                # Only append if it's actually a new step or first entry
-                if current_data["step"] > st.session_state.last_step or len(st.session_state.training_history) == 0:
-                    st.session_state.training_history.append(current_data)
-                st.session_state.last_step = current_data["step"]
+        # Parse current training data and update history (only if not paused)
+        current_data = None
+        if not st.session_state.data_collection_paused:
+            current_data = parse_output_file(output_file)
+
+            if current_data:
+                # Update history if this is a new step OR if we haven't recorded anything yet
+                if current_data["step"] >= st.session_state.last_step:
+                    # Only append if it's actually a new step or first entry
+                    if current_data["step"] > st.session_state.last_step or len(st.session_state.training_history) == 0:
+                        st.session_state.training_history.append(current_data)
+                    st.session_state.last_step = current_data["step"]
 
         # Current status metrics
         col1, col2, col3, col4 = st.columns(4)
@@ -548,7 +608,7 @@ def main():
             # Show statistics
             st.subheader("Training Statistics")
 
-            col1, col2, col3 = st.columns(3)
+            col1, col2, col3, col4 = st.columns(4)
 
             with col1:
                 st.metric(
@@ -566,6 +626,30 @@ def main():
 
             with col3:
                 st.metric("Total Steps", f"{len(history_df):,}")
+
+            with col4:
+                # Calculate tokens per second
+                if len(history_df) > 1:
+                    # Get time difference between first and last step
+                    time_diff = (history_df["timestamp"].iloc[-1] - history_df["timestamp"].iloc[0]).total_seconds()
+                    step_diff = history_df["step"].iloc[-1] - history_df["step"].iloc[0]
+
+                    if time_diff > 0 and step_diff > 0:
+                        # Calculate tokens per second
+                        # tokens_per_step = batch_size * max_seq_length * gradient_accumulation
+                        tokens_per_step = batch_size * max_seq_length * gradient_accumulation
+                        total_tokens = step_diff * tokens_per_step
+                        tokens_per_sec = total_tokens / time_diff
+
+                        # Format with appropriate units
+                        if tokens_per_sec >= 1000:
+                            st.metric("Rate", f"{tokens_per_sec/1000:.2f}k tokens/s")
+                        else:
+                            st.metric("Rate", f"{tokens_per_sec:.2f} tokens/s")
+                    else:
+                        st.metric("Rate", "N/A")
+                else:
+                    st.metric("Rate", "N/A")
 
             st.divider()
 
@@ -585,21 +669,28 @@ def main():
     with tab2:
         st.header("Latest Validation Output")
 
-        # Parse and display validation content
-        validation_content = parse_validation_file(validation_file)
-
-        if validation_content and validation_content != "No validation data available yet.":
-            st.text_area("Validation Results", validation_content, height=500, disabled=True)
-
-            # Download validation output
-            st.download_button(
-                label="Download Validation Output",
-                data=validation_content,
-                file_name=f"validation_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
-                mime="text/plain",
+        # Show data collection status if paused
+        if st.session_state.data_collection_paused:
+            st.warning(
+                "Data collection is paused. Click 'Resume Data Collection' in the Training Progress tab to start monitoring again."
             )
+            st.info("No validation data available (data collection paused).")
         else:
-            st.info("Waiting for validation data... Make sure `validation.txt` is being generated.")
+            # Parse and display validation content
+            validation_content = parse_validation_file(validation_file)
+
+            if validation_content and validation_content != "No validation data available yet.":
+                st.text_area("Validation Results", validation_content, height=500, disabled=True)
+
+                # Download validation output
+                st.download_button(
+                    label="Download Validation Output",
+                    data=validation_content,
+                    file_name=f"validation_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
+                    mime="text/plain",
+                )
+            else:
+                st.info("Waiting for validation data... Make sure `validation.txt` is being generated.")
 
     with tab3:
         st.header("Training Logs")
@@ -658,6 +749,102 @@ def main():
                         st.success("No errors reported")
             except Exception as e:
                 st.error(f"Error reading error log: {e}")
+
+        st.divider()
+
+        # Display TT-SMI output
+        st.subheader("TT-SMI System Status")
+
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            st.caption("Shows Tenstorrent board info and telemetry")
+        with col2:
+            refresh_smi = st.button("Refresh TT-SMI", use_container_width=True)
+
+        # Only run tt-smi when button is clicked
+        if refresh_smi:
+            try:
+                # Run tt-smi -s command
+                result = subprocess.run(["tt-smi", "-s"], capture_output=True, text=True, timeout=10)
+
+                if result.returncode == 0:
+                    smi_output = result.stdout
+                    if smi_output:
+                        try:
+                            # Parse JSON output
+                            smi_data = json.loads(smi_output)
+                            smi_data = smi_data["device_info"][0]
+                            # Extract board_info and telemetry
+                            filtered_data = {}
+                            if "board_info" in smi_data:
+                                filtered_data["board_info"] = smi_data["board_info"]
+                            if "telemetry" in smi_data:
+                                filtered_data["telemetry"] = smi_data["telemetry"]
+
+                            if filtered_data:
+                                # Store in session state
+                                st.session_state.tt_smi_data = filtered_data
+                                st.session_state.tt_smi_error = None
+                            else:
+                                st.session_state.tt_smi_data = None
+                                st.session_state.tt_smi_error = "No board_info or telemetry data found in tt-smi output"
+                        except json.JSONDecodeError as e:
+                            st.session_state.tt_smi_data = None
+                            st.session_state.tt_smi_error = (
+                                f"Failed to parse tt-smi output as JSON: {e}\n\nRaw Output:\n{smi_output}"
+                            )
+                    else:
+                        st.session_state.tt_smi_data = None
+                        st.session_state.tt_smi_error = "tt-smi produced no output"
+
+                    # Store stderr if there are warnings
+                    if result.stderr:
+                        if st.session_state.tt_smi_error:
+                            st.session_state.tt_smi_error += f"\n\nWarnings:\n{result.stderr}"
+                        else:
+                            st.session_state.tt_smi_error = f"Warnings:\n{result.stderr}"
+                else:
+                    st.session_state.tt_smi_data = None
+                    st.session_state.tt_smi_error = f"tt-smi command failed with return code {result.returncode}"
+                    if result.stderr:
+                        st.session_state.tt_smi_error += f"\n\nError Output:\n{result.stderr}"
+            except subprocess.TimeoutExpired:
+                st.session_state.tt_smi_data = None
+                st.session_state.tt_smi_error = "tt-smi command timed out after 10 seconds"
+            except FileNotFoundError:
+                st.session_state.tt_smi_data = None
+                st.session_state.tt_smi_error = (
+                    "tt-smi command not found. Make sure Tenstorrent tools are installed and in PATH."
+                )
+            except Exception as e:
+                st.session_state.tt_smi_data = None
+                st.session_state.tt_smi_error = f"Error running tt-smi: {str(e)}"
+
+        # Display the current TT-SMI data from session state
+        if st.session_state.tt_smi_data:
+            formatted_json = json.dumps(st.session_state.tt_smi_data, indent=2)
+            st.code(formatted_json, language="json")
+        elif st.session_state.tt_smi_error:
+            if "Failed to parse" in st.session_state.tt_smi_error or "Raw Output" in st.session_state.tt_smi_error:
+                parts = st.session_state.tt_smi_error.split("Raw Output:")
+                st.error(parts[0])
+                if len(parts) > 1:
+                    st.text_area("Raw Output", parts[1].strip(), height=300, disabled=True)
+            elif "Warnings:" in st.session_state.tt_smi_error or "Error Output:" in st.session_state.tt_smi_error:
+                parts = st.session_state.tt_smi_error.split("\n\n")
+                st.error(parts[0])
+                if len(parts) > 1:
+                    with st.expander("Details"):
+                        st.text("\n\n".join(parts[1:]))
+            else:
+                if "not found" in st.session_state.tt_smi_error:
+                    st.warning(st.session_state.tt_smi_error)
+                elif "No board_info" in st.session_state.tt_smi_error or "no output" in st.session_state.tt_smi_error:
+                    st.info(st.session_state.tt_smi_error)
+                else:
+                    st.error(st.session_state.tt_smi_error)
+        else:
+            st.info("Click 'Refresh TT-SMI' to view system status")
 
     with tab4:
         st.header("About This Dashboard")

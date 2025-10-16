@@ -86,7 +86,7 @@ class TrainingConfig:
         self.checkpoint_dir = tc.get("checkpoint_dir", self.checkpoint_dir)
 
         if "transformer_config" in tc:
-            self.transformer_config = self.transformer_config.update_config(tc.get("transformer_config", {}))
+            self.transformer_config.update_config(tc.get("transformer_config", {}))
             self.seq_len = int(self.transformer_config.max_sequence_length)
 
 
@@ -169,3 +169,15 @@ class SchedulerConfig:
         self.min_lr = float(sc.get("min_lr", 0.0))
         self.warmup_steps = int(sc.get("warmup_steps", 100))
         self.hold_steps = int(sc.get("hold_steps", 0))
+
+    def update_config(self, yaml_config: dict):
+        """Update scheduler configuration from another YAML config.
+
+        Args:
+            yaml_config: Dictionary containing configuration
+        """
+        sc = yaml_config.get("scheduler_config", {})
+        self.max_lr = float(sc.get("max_lr", self.max_lr))
+        self.min_lr = float(sc.get("min_lr", self.min_lr))
+        self.warmup_steps = int(sc.get("warmup_steps", self.warmup_steps))
+        self.hold_steps = int(sc.get("hold_steps", self.hold_steps))

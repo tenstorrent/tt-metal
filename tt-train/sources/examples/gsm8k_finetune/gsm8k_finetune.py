@@ -17,6 +17,7 @@ from matplotlib import pyplot as plt
 from tqdm import tqdm
 import debugpy
 from typing import List, Tuple, Dict, Optional
+import time
 
 # Add TT-Metal path
 sys.path.append(f"{os.environ['TT_METAL_HOME']}/tt-train/sources/ttml")
@@ -30,6 +31,10 @@ import tt_serialization  # noqa: F401
 
 # Configuration
 CONFIG = "training_shakespeare_tinyllama.yaml"
+
+debugpy.listen(5678)
+
+time.sleep(10)
 
 
 class GradientAccumulator:
@@ -310,6 +315,7 @@ def validate(
     causal_mask,
     logits_mask_tensor,
     max_sequence_length,
+    current_step,
 ):
     reduce = ttml.ops.ReduceType.NONE
     ttml.autograd.AutoContext.get_instance().set_gradient_mode(ttml.autograd.GradMode.DISABLED)
@@ -330,23 +336,29 @@ def validate(
         cur_val_losses.append(val_loss.to_numpy().item())
 
     checks_count = 4
-    for check in range(checks_count):
-        print("Validation check: ", check)
-        print("====================================")
-        print(f"Question: {testing_data[check]['question']}")
-        print("====================================")
 
-        generate_text_tt(
-            tt_model,
-            tokenizer,
-            testing_data[check]["question"],
-            max_sequence_length,
-            causal_mask,
-            0.0,
-            logits_mask_tensor,
-        )
+    with open("validation.txt", "a+") as val_file:
+        val_file.write(f"Validation at step {current_step}\n")
+        for check in range(checks_count):
+            val_file.write(f"Validation check: {check}\n")
+            val_file.write("====================================\n")
+            val_file.write(f"Question: {testing_data[check]['question']}\n")
+            val_file.write("====================================\n")
 
-        print("\n====================================")
+            gen_text = generate_text_tt(
+                tt_model,
+                tokenizer,
+                testing_data[check]["question"],
+                max_sequence_length,
+                causal_mask,
+                0.0,
+                logits_mask_tensor,
+            )
+
+            val_file.write(f"Generated Answer: {gen_text}\n")
+            val_file.write("\n====================================\n")
+
+        val_file.write("Last validation loss: {:.4f}\n".format(np.mean(cur_val_losses)))
 
     ttml.autograd.AutoContext.get_instance().set_gradient_mode(ttml.autograd.GradMode.ENABLED)
     tt_model.train()
@@ -401,13 +413,13 @@ def train():
     yaml_config = get_config(CONFIG)
 
     training_config = TrainingConfig(yaml_config)
-    scheduler_config = SchedulerConfig(yaml_config)
+    scheduler_config = ttml.common.config.SchedulerConfig(yaml_config)
 
     if os.path.isfile("training_overrides.yaml"):
         print("Applying training overrides...")
         override_config = get_config("training_overrides.yaml")
-        training_config = training_config.update_config(override_config)
-        scheduler_config = scheduler_config.update_config(override_config)
+        training_config.update_config(override_config)
+        scheduler_config.update_config(override_config)
 
     batch_size = training_config.batch_size
 
@@ -497,12 +509,18 @@ def train():
     )
     setter = OptimParamSetter(optim)
 
+    f = open("validation.txt", "w")
+    f.write("Validation log\n")
+    f.write("===============\n")
+    f.close()
+
     print(f"Starting training for {training_config.epochs} epochs, max {training_config.steps} steps...")
     bar = tqdm(range(1, training_config.steps + 1))
 
     total_steps = 0
     last_val_loss = 0
     accum_steps = training_config.gradient_accumulation_steps
+
     # ========== Training Loop ===========
     for opt_step in bar:
         # LR (and optional beta1) updated once per optimizer step
@@ -560,6 +578,7 @@ def train():
                 causal_mask,
                 logits_mask_tensor,
                 max_sequence_length,
+                total_steps,
             )
             val_losses.append(last_val_loss)
         """
@@ -569,6 +588,12 @@ def train():
             )
             print(f"[Checkpoint] Saved model to {ckpt_path}")
         """
+        f = open("output.txt", "w")
+        f.write(
+            f"LR: {lr_now:.6f}, training_loss: {step_loss:.4f}, val_loss: {last_val_loss:.4f}, step: {total_steps}, epoch: 1\n"
+        )
+        f.close()
+
         total_steps += 1
     print("Training completed!")
 
