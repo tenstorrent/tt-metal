@@ -98,10 +98,9 @@ ALWI void fused_eltwise_binary_reduce(
 
     MATH((llk_math_reduce_init<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY>()));
 
-    
     // Step 3a: Prepare data for reduce operation
     MATH(eltwise_binary_reuse_dest_as_src_tile<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(0));  // Move tile 0 to srcA
-    
+
     MATH(ckernel::sfpu::_populate_first_tile_with_ones_());                               // Fill tile 0 with ones
     MATH(eltwise_binary_reuse_dest_as_src_tile<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(0));  // Move tile 0 to srcB
 
