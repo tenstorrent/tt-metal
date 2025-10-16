@@ -104,8 +104,24 @@ Tensor invoke_impl(
     if (typecast_needed) {
         condition = ttnn::typecast(predicate, t_true.dtype());
     }
-    if (is_sharded(condition) || is_sharded(t_true) || is_sharded(t_false) || is_sharded(memory_config) ||
-        is_sharded(output) || is_invalid_bcast(broadcast_type)) {
+
+    // Use prim::where for sharded TTT variant, fallback to legacy for unsupported cases
+    bool use_prim_where =
+        !(is_sharded(condition) || is_sharded(t_true) || is_sharded(t_false) || is_sharded(memory_config) ||
+          is_sharded(output) || is_invalid_bcast(broadcast_type));
+
+    if (use_prim_where) {
+        std::optional<DataType> output_dtype = ternary_utils::determine_output_dtype(output, t_true.dtype());
+
+        log_debug(tt::LogOp, "Where LLK - TTT");
+        return ttnn::prim::where(
+            std::move(condition),
+            t_true,
+            t_false,
+            output_dtype,
+            ternary_utils::determine_memory_config(memory_config, t_true.memory_config()),
+            output);
+    } else {
         return ternary_utils::where_impl(
             condition,
             t_true,
@@ -113,16 +129,6 @@ Tensor invoke_impl(
             ternary_utils::determine_memory_config(memory_config, condition.memory_config()),
             output);
     }
-    std::optional<DataType> output_dtype = ternary_utils::determine_output_dtype(output, t_true.dtype());
-
-    log_debug(tt::LogOp, "Where LLK - TTT");
-    return ttnn::prim::where(
-        std::move(condition),
-        t_true,
-        t_false,
-        output_dtype,
-        ternary_utils::determine_memory_config(memory_config, t_true.memory_config()),
-        output);
 }
 
 // TTS: tensor, tensor, scalar
@@ -140,8 +146,22 @@ Tensor invoke_impl(
         condition = ttnn::typecast(predicate, t_true.dtype());
     }
 
-    if (is_sharded(condition) || is_sharded(t_true) || is_sharded(memory_config) || is_sharded(output) ||
-        is_invalid_bcast(broadcast_type)) {
+    // Use prim::where for non-sharded TTS variant, fallback to legacy for sharded cases
+    bool use_prim_where =
+        !(is_sharded(condition) || is_sharded(t_true) || is_sharded(memory_config) || is_sharded(output) ||
+          is_invalid_bcast(broadcast_type));
+
+    if (use_prim_where) {
+        std::optional<DataType> output_dtype = ternary_utils::determine_output_dtype(output, t_true.dtype());
+        log_debug(tt::LogOp, "Where LLK - TTS");
+        return ttnn::prim::where(
+            std::move(condition),
+            t_true,
+            scalar_false,
+            output_dtype,
+            ternary_utils::determine_memory_config(memory_config, t_true.memory_config()),
+            output);
+    } else {
         return ternary_utils::where_impl(
             condition,
             t_true,
@@ -149,16 +169,6 @@ Tensor invoke_impl(
             ternary_utils::determine_memory_config(memory_config, condition.memory_config()),
             output);
     }
-
-    std::optional<DataType> output_dtype = ternary_utils::determine_output_dtype(output, t_true.dtype());
-    log_debug(tt::LogOp, "Where LLK - TTS");
-    return ttnn::prim::where(
-        std::move(condition),
-        t_true,
-        scalar_false,
-        output_dtype,
-        ternary_utils::determine_memory_config(memory_config, t_true.memory_config()),
-        output);
 }
 
 // TST: tensor, scalar, tensor
@@ -175,8 +185,23 @@ Tensor invoke_impl(
     }
     auto broadcast_type =
         ttnn::operations::ternary::get_broadcast_type(condition.logical_shape(), t_false.logical_shape());
-    if (is_sharded(condition) || is_sharded(t_false) || is_sharded(memory_config) || is_sharded(output) ||
-        is_invalid_bcast(broadcast_type)) {
+
+    // Use prim::where for non-sharded TST variant, fallback to legacy for sharded cases
+    bool use_prim_where =
+        !(is_sharded(condition) || is_sharded(t_false) || is_sharded(memory_config) || is_sharded(output) ||
+          is_invalid_bcast(broadcast_type));
+
+    if (use_prim_where) {
+        std::optional<DataType> output_dtype = ternary_utils::determine_output_dtype(output, t_false.dtype());
+        log_debug(tt::LogOp, "Where LLK - TST");
+        return ttnn::prim::where(
+            std::move(condition),
+            scalar_true,
+            t_false,
+            output_dtype,
+            ternary_utils::determine_memory_config(memory_config, t_false.memory_config()),
+            output);
+    } else {
         return ternary_utils::where_impl(
             condition,
             scalar_true,
@@ -184,16 +209,6 @@ Tensor invoke_impl(
             ternary_utils::determine_memory_config(memory_config, condition.memory_config()),
             output);
     }
-
-    std::optional<DataType> output_dtype = ternary_utils::determine_output_dtype(output, t_false.dtype());
-    log_debug(tt::LogOp, "Where LLK - TST");
-    return ttnn::prim::where(
-        std::move(condition),
-        scalar_true,
-        t_false,
-        output_dtype,
-        ternary_utils::determine_memory_config(memory_config, t_false.memory_config()),
-        output);
 }
 
 // TSS: tensor, scalar, scalar
