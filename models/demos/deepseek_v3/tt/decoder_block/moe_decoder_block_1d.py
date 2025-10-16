@@ -161,8 +161,8 @@ class MoEDecoderBlock1D(DecoderBlock1DBase):
                     tt_input,
                     dest_coord,
                     source_coord,
-                    ttnn.Topology.Linear,
-                    optional_output_tensor=tt_input,
+                    topology=ttnn.Topology.Linear,
+                    output_tensor=tt_input,
                 )
 
         return tt_input

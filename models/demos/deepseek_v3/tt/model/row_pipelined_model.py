@@ -299,7 +299,7 @@ class RowPipelinedModel(SharedStateAddOn, AbstractModule):
                 x,
                 dst_coord,
                 src_coord,
-                optional_output_tensor=x,
+                output_tensor=x,
                 topology=topology,
             )
 

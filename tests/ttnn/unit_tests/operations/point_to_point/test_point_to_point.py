@@ -85,7 +85,7 @@ def test_point_to_point(mesh_device, shape_coords, layout, dtype):
         input_tensor,
         coord1,
         coord0,
-        ttnn.Topology.Linear,
+        topology=ttnn.Topology.Linear,
     )
     sent_tensor_torch = ttnn.to_torch(sent_tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
     assert_equal(input_tensor_torch[idx_start0:idx_end0, :, :, :], sent_tensor_torch[idx_start1:idx_end1, :, :, :])
@@ -101,7 +101,7 @@ def test_point_to_point(mesh_device, shape_coords, layout, dtype):
         sent_tensor,
         coord0,
         coord1,
-        ttnn.Topology.Linear,
+        topology=ttnn.Topology.Linear,
         output_tensor=return_tensor,
     )
 
@@ -160,7 +160,7 @@ def test_point_to_point_with_device_delay(mesh_device, shape_coords, layout, dty
         input_tensor,
         coord1,
         coord0,
-        ttnn.Topology.Linear,
+        topology=ttnn.Topology.Linear,
     )
     ttnn.apply_device_delay(
         mesh_device, delays
@@ -181,7 +181,7 @@ def test_point_to_point_with_device_delay(mesh_device, shape_coords, layout, dty
         input_tensor2,
         coord1,
         coord0,
-        ttnn.Topology.Linear,
+        topology=ttnn.Topology.Linear,
     )
     ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
     ttnn.synchronize_device(mesh_device)
@@ -238,7 +238,7 @@ def test_point_to_point_optional_intermediate(mesh_device):
     torch_intermediate = torch.zeros(tuple(spec.shape), dtype=torch.bfloat16)
     tt_intermediate = ttnn.from_torch(torch_intermediate, spec=spec, device=mesh_device)
     sent_tensor = ttnn.point_to_point(
-        input_tensor, coord1, coord0, ttnn.Topology.Linear, intermediate_tensor=tt_intermediate
+        input_tensor, coord1, coord0, topology=ttnn.Topology.Linear, intermediate_tensor=tt_intermediate
     )
     sent_tensor_torch = ttnn.to_torch(sent_tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
     assert_equal(input_tensor_torch[idx_start0:idx_end0, :, :, :], sent_tensor_torch[idx_start1:idx_end1, :, :, :])
