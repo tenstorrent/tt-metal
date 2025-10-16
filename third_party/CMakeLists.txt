@@ -362,8 +362,3 @@ CPMAddPackage(
     PATCHES
         capnproto_capture_this.patch
 )
-
-if(capnproto_ADDED)
-    target_compile_options(kj-async PRIVATE -Wno-deprecated-this-capture)
-    target_compile_options(kj-http PRIVATE -Wno-deprecated-this-capture)
-endif()
