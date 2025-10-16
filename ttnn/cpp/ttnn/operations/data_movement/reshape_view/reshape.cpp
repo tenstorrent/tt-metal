@@ -68,12 +68,13 @@ ttnn::Tensor perform_reshape_on_2D_RM(
     }
     // Guaranteed to be interleaved
     // We are guaranteed to be working 2D->2D in this function
-    auto temp_tensor2 = tt::tt_metal::operation::run(
-                            ReshapeDeviceOperation{logical_shape, padded_shape, intermediate_out_memory_config, false},
-                            {temp_tensor},
-                            {},
-                            {})
-                            .at(0);
+    auto temp_tensor2 =
+        tt::tt_metal::operation::run(
+            ttnn::ReshapeDeviceOperation{logical_shape, padded_shape, intermediate_out_memory_config, false},
+            {temp_tensor},
+            {},
+            {})
+            .at(0);
     if (memory_config.is_sharded()) {
     return ttnn::interleaved_to_sharded(temp_tensor2, memory_config, std::nullopt);
     } else {
@@ -231,7 +232,7 @@ ttnn::Tensor reshape_tiled(
 
     auto output_tensor_3d =
         tt::tt_metal::operation::run(
-            ReshapeDeviceOperation{
+            ttnn::ReshapeDeviceOperation{
                 requested_shape_3d, requested_padded_shape_3d, working_output_memory_config, recreate_mapping_tensor},
             {tensor3d},
             {},
