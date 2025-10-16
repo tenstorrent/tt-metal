@@ -56,6 +56,8 @@ public:
     tt_metal::IDevice* get_active_device(ChipId device_id) const;
     std::vector<tt_metal::IDevice*> get_all_active_devices() const;
     bool close_device(ChipId device_id);
+    std::vector<ChipId> get_all_active_device_ids() const;
+    std::unordered_map<ChipId, std::vector<uint32_t>> get_all_command_queue_event_infos() const;
     bool close_devices(const std::vector<tt_metal::IDevice*>& devices, bool skip_synchronize = false);
     bool is_device_active(ChipId id) const;
     // True if dispatch firmware is active on this device pool
@@ -81,7 +83,7 @@ private:
     // after the terimnate command is sent.
     bool dispatch_firmware_active_ = false;
 
-    std::mutex lock;
+    mutable std::mutex lock;
     std::vector<std::unique_ptr<tt_metal::IDevice>> devices;
 
     bool skip_remote_devices{};

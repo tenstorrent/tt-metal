@@ -80,6 +80,29 @@ struct BuildEnvPerDevice {
     buildInfo @1 :BuildEnvData;
 }
 
+# Per Dispatch Core Information
+struct CoreInfo {
+    workType @0: Text;
+    deviceId @1: Int32;
+    servicingDeviceId @2: Int32;
+    eventID @3: UInt32;
+    cqId @4: UInt8;
+}
+
+# Virtual core coordinates are used as a unique key to fetch dispatch/prefetch core information
+# Same as tt_cxy_pair
+struct VirtualCore {
+    chip @0: UInt64;
+    x @1: UInt64;
+    y @2: UInt64;
+}
+
+# Per entry information of
+struct CoreEntry {
+  key  @0 :VirtualCore;       # chip,x,y (virtual)
+  info @1 :CoreInfo;  # deviceId, servicingDeviceId, workType, cqId
+}
+
 interface Inspector {
     # Get programs currently alive
     getPrograms @0 () -> (programs :List(ProgramData));
@@ -101,4 +124,22 @@ interface Inspector {
     # This replaces the old approach of constructing relative paths,
     # providing correct firmware locations for each device
     getAllBuildEnvs @5 () -> (buildEnvs :List(BuildEnvPerDevice));
+
+    # Get dispatch core Info
+    getDispatchCoreInfo @6 (key: VirtualCore) -> (info: CoreInfo);
+
+    # Get all active dispatch core information
+    getAllDispatchCoreInfos @7 () -> (entries :List(CoreEntry));
+
+    # Get dispatch_s core Info
+    getDispatchSCoreInfo @8 (key: VirtualCore) -> (info: CoreInfo);
+
+    # Get all active dispatch_s core information
+    getAllDispatchSCoreInfos @9 () -> (entries :List(CoreEntry));
+
+    # Get prefetch core Info
+    getPrefetchCoreInfo @10 (key: VirtualCore) -> (info: CoreInfo);
+
+    # Get all active prefetch core information
+    getAllPrefetchCoreInfos @11 () -> (entries :List(CoreEntry));
 }

@@ -11,6 +11,7 @@
 #include "fd_kernel.hpp"
 #include "mesh_graph.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/debug/inspector/inspector.hpp"
 #include <umd/device/types/xy_pair.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include "dispatch/kernel_config/relay_mux.hpp"
@@ -102,16 +103,23 @@ public:
         uint16_t channel =
             tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_id);
 
+        DispatchWorkerType type = PREFETCH;
         if (h_variant && d_variant) {
             this->logical_core_ = core_manager.prefetcher_core(device_id, channel, cq_id);
+            type = PREFETCH_HD;
         } else if (h_variant) {
             channel = tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(
                 servicing_device_id);
             this->logical_core_ = core_manager.prefetcher_core(servicing_device_id, channel, cq_id);
+            type = PREFETCH_H;
         } else if (d_variant) {
             this->logical_core_ = core_manager.prefetcher_d_core(device_id, channel, cq_id);
+            type = PREFETCH_D;
         }
         this->kernel_type_ = FDKernelType::DISPATCH;
+
+        auto virtual_core = this->GetVirtualCore();
+        tt::tt_metal::Inspector::set_prefetcher_core_info(virtual_core, type, cq_id, device_id, servicing_device_id);
     }
 
     void CreateKernel() override;
