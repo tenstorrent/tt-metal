@@ -1904,6 +1904,7 @@ def test_unary_leaky_relu_ttnn(input_shapes, negative_slope, torch_dtype, ttnn_d
     else:
         assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=1)
 
+
 @pytest.mark.parametrize(
     "input_shapes",
     (
