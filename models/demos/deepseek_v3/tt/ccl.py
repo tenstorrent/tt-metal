@@ -15,6 +15,7 @@ class CCL:
         self.grid = mesh_device.compute_with_storage_grid_size()
         self.num_cores = self.grid.x * self.grid.y
         self.core_range_set = ttnn.num_cores_to_corerangeset(self.num_cores, self.grid, row_wise=True)
+        self.num_axes = len(list(self.mesh_device.shape))
         self.sems_per_axis = 2
 
         self.gather_sems = []
@@ -44,10 +45,10 @@ class CCL:
         # Synchronize the device to ensure that the semaphores are created
         ttnn.synchronize_device(self.mesh_device)
 
-        # Each semaphore type needs its own independent counter
-        self.gather_sem_cnt = [0, 0]
-        self.reduce_scatter_sem_cnt = [0, 0]
-        self.barrier_sem_cnt = [0, 0]
+        # Each semaphore type needs its own independent counter for each cluster axis
+        self.gather_sem_cnt = [0 for _ in range(self.num_axes)]
+        self.reduce_scatter_sem_cnt = [0 for _ in range(self.num_axes)]
+        self.barrier_sem_cnt = [0 for _ in range(self.num_axes)]
 
     def get_max_links(self, axis):
         """
