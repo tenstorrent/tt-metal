@@ -40,7 +40,7 @@ def prepare_inputs(perf):
 
 
 def prepare_torch_model():
-    torch_model = PETR(use_grid_mask=False)
+    torch_model = PETR(use_grid_mask=True)
     weights_state_dict = torch.load(
         "models/experimental/functional_petr/resources/petr_vovnet_gridmask_p4_800x320-e2191752.pth", weights_only=False
     )["state_dict"]
@@ -71,7 +71,7 @@ def verify_output(torch_output, ttnn_output):
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 def test_petr(device, reset_seeds):
-    perf = False
+    perf = True
     inputs, modified_batch_img_metas = prepare_inputs(perf)
 
     torch_model = prepare_torch_model()
@@ -135,7 +135,7 @@ def test_petr(device, reset_seeds):
     )
 
     ttnn_model = ttnn_PETR(
-        use_grid_mask=False,
+        use_grid_mask=True,
         parameters=parameters,
         query_embedding_input=query_embedding_input,
         device=device,
