@@ -808,7 +808,7 @@ test_sweep[model_traced-29] PASSED
 ### Example 4: Analyzing Sweep Results
 
 ```bash
-python analyze_sweep_results.py
+python model_tracer/analyze_sweep_results.py
 ```
 
 **Output:**
@@ -1032,43 +1032,6 @@ parameters = {"model_traced": loader.get_suite_parameters("your_op")}
 
 ---
 
-## Quick Reference
+**Questions or Issues?** Check the [Troubleshooting](#troubleshooting) section or examine the working examples in the codebase.
 
-### Common Commands
-
-```bash
-# Trace a model
-python model_tracer/generic_ops_tracer.py <test_path>
-
-# View configurations
-python model_tracer/analyze_operations.py <operation_name>
-
-# Generate and run sweep test with traced configs
-python3 tests/sweep_framework/sweeps_parameter_generator.py --module-name <op_name> --dump-file
-python3 tests/sweep_framework/sweeps_runner.py --module-name <op_name> --suite model_traced \
-  --vector-source vectors_export --result-dest results_export
-
-# Analyze sweep results
-python analyze_sweep_results.py
-```
-
-### Key Files
-
-- **Tracer**: `model_tracer/generic_ops_tracer.py`
-- **Master JSON**: `model_tracer/traced_operations/ttnn_operations_master.json`
-- **Analyzer**: `model_tracer/analyze_operations.py`
-- **Config Loader**: `tests/sweep_framework/master_config_loader.py`
-
-### Important Concepts
-
-- **Shard Shape**: Physical dimensions of data on each core
-- **Grid**: Core range (which cores are used)
-- **Memory Layout**: How data is distributed (SHARDED/INTERLEAVED)
-- **Deduplication**: Only unique configs stored (via MD5 hash)
-- **Config Lookup Pattern**: Avoid serialization issues in sweep framework
-
----
-
-**Questions or Issues?** Check the troubleshooting section or examine the working examples in the codebase.
-
-**Success!** 🎉 You now have a comprehensive system for model-driven sweep testing with real-world configurations.
+**Success!** 🎉 You now have a comprehensive system for model-driven sweep testing with real-world configurations!
