@@ -163,7 +163,11 @@ while [[ "$found" == "false" ]]; do
   fi
 
   echo "::group::Import sanity ($rev)"
-  if ! verify_import_path; then
+  echo "Debug: PYTHONPATH=$PYTHONPATH"
+  echo "Debug: LD_LIBRARY_PATH=$LD_LIBRARY_PATH"
+  echo "Debug: Checking if build/lib exists:"
+  ls -la build/lib/ 2>&1 | head -20 || echo "build/lib does not exist"
+  if ! verify_import_path 2>&1; then
     echo "Import path check failed; skipping this commit"
     git bisect skip
     echo "::endgroup::"
