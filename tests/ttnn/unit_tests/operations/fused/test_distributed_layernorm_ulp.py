@@ -8,7 +8,16 @@ import ttnn
 import numpy as np
 from loguru import logger
 
-from models.common.utility_functions import comp_pcc, comp_allclose_and_pcc
+from models.common.utility_functions import comp_pcc, comp_allclose_and_pcc, comp_ulp, calculate_detailed_ulp_stats
+
+
+# Maps from tuple of (mean, var, outlier_pct, outlier_var) to expected max delta ULP threshold with new reduction and rsqrt
+RMS_EXPECTED_MAX_ULP_THRESHOLD_WITH_NEW_REDUCTION = {
+    (0, 1, 0, 0): 4.0,
+    (0, 10, 0, 0): 3.0,
+    (-10, 10, 0, 0): 4.0,
+    (0, 1, 0.01, 10): 4.0,
+}
 
 
 def calculate_mse(expected, actual):
@@ -20,74 +29,6 @@ def calculate_mse(expected, actual):
 
     mse = torch.nn.functional.mse_loss(expected.float(), actual.float())
     return mse.item()
-
-
-def calculate_ulp_error_bf16(expected, actual):
-    """
-    Calculate ULP (Units in the Last Place) error for bfloat16 tensors.
-
-    ULP error measures how many representable floating-point numbers lie between
-    the expected and actual values. For bfloat16, this gives a precise measure
-    of numerical accuracy.
-
-    Args:
-        expected: Expected tensor values
-        actual: Actual tensor values
-
-    Returns:
-        float: Maximum ULP error across all elements
-    """
-    if isinstance(actual, ttnn.Tensor):
-        actual = ttnn.to_torch(actual)
-    if isinstance(expected, ttnn.Tensor):
-        expected = ttnn.to_torch(expected)
-
-    # Convert to bfloat16 if not already
-    expected = expected.to(torch.bfloat16)
-    actual = actual.to(torch.bfloat16)
-
-    # Handle special cases
-    if torch.allclose(expected, actual, rtol=0, atol=0, equal_nan=True):
-        return 0.0
-
-    # Convert bfloat16 to uint16 representation for bit manipulation
-    expected_bits = expected.view(torch.int16).to(torch.int32)
-    actual_bits = actual.view(torch.int16).to(torch.int32)
-
-    # Handle sign differences - if signs differ, we need to handle differently
-    expected_sign = expected_bits < 0
-    actual_sign = actual_bits < 0
-
-    # For same signs, ULP is just the absolute difference in bit representation
-    same_sign = expected_sign == actual_sign
-
-    # For different signs, we need to calculate distance through zero
-    # Distance = |expected| + |actual| in ULP terms
-    expected_abs_bits = torch.where(expected_sign, -expected_bits, expected_bits)
-    actual_abs_bits = torch.where(actual_sign, -actual_bits, actual_bits)
-
-    ulp_diff = torch.where(same_sign, torch.abs(expected_bits - actual_bits), expected_abs_bits + actual_abs_bits)
-
-    # Handle NaN and infinity cases
-    expected_finite = torch.isfinite(expected)
-    actual_finite = torch.isfinite(actual)
-    both_finite = expected_finite & actual_finite
-
-    # If both are finite, use calculated ULP difference
-    # If one is not finite, set ULP error to a large value
-    ulp_diff = torch.where(both_finite, ulp_diff, torch.tensor(float("inf")))
-
-    # Handle the case where both are the same non-finite value
-    both_nan = torch.isnan(expected) & torch.isnan(actual)
-    both_posinf = torch.isposinf(expected) & torch.isposinf(actual)
-    both_neginf = torch.isneginf(expected) & torch.isneginf(actual)
-    same_nonfinite = both_nan | both_posinf | both_neginf
-
-    ulp_diff = torch.where(same_nonfinite, torch.tensor(0.0), ulp_diff)
-
-    # Return maximum ULP error
-    max_ulp = torch.max(ulp_diff[torch.isfinite(ulp_diff)])
-    return max_ulp.item() if torch.isfinite(max_ulp) else float("inf")
 
 
 def calculate_max_error(expected, actual):
@@ -108,92 +49,6 @@ def calculate_max_error(expected, actual):
         "max_error": max_error.item(),
         "expected_value": expected.flatten()[max_idx].item(),
         "actual_value": actual.flatten()[max_idx].item(),
-    }
-
-
-def calculate_detailed_ulp_stats(expected, actual):
-    """
-    Calculate detailed ULP statistics for analysis.
-
-    Returns:
-        dict: Dictionary with ULP statistics including max, mean, std, and percentiles
-    """
-    if isinstance(actual, ttnn.Tensor):
-        actual = ttnn.to_torch(actual)
-    if isinstance(expected, ttnn.Tensor):
-        expected = ttnn.to_torch(expected)
-
-    # Convert to bfloat16 if not already
-    expected = expected.to(torch.bfloat16)
-    actual = actual.to(torch.bfloat16)
-
-    # Handle special cases
-    if torch.allclose(expected, actual, rtol=0, atol=0, equal_nan=True):
-        return {
-            "max_ulp": 0.0,
-            "mean_ulp": 0.0,
-            "median_ulp": 0.0,
-            "std_ulp": 0.0,
-            "p95_ulp": 0.0,
-            "p99_ulp": 0.0,
-            "perfect_matches": 1.0,
-        }
-
-    # Convert bfloat16 to uint16 representation for bit manipulation
-    expected_bits = expected.view(torch.int16).to(torch.int32)
-    actual_bits = actual.view(torch.int16).to(torch.int32)
-
-    # Handle sign differences
-    expected_sign = expected_bits < 0
-    actual_sign = actual_bits < 0
-    same_sign = expected_sign == actual_sign
-
-    # Calculate ULP differences
-    expected_abs_bits = torch.where(expected_sign, -expected_bits, expected_bits)
-    actual_abs_bits = torch.where(actual_sign, -actual_bits, actual_bits)
-
-    ulp_diff = torch.where(same_sign, torch.abs(expected_bits - actual_bits), expected_abs_bits + actual_abs_bits)
-
-    # Handle non-finite values
-    expected_finite = torch.isfinite(expected)
-    actual_finite = torch.isfinite(actual)
-    both_finite = expected_finite & actual_finite
-
-    ulp_diff = torch.where(both_finite, ulp_diff, torch.tensor(float("inf")))
-
-    # Handle same non-finite values
-    both_nan = torch.isnan(expected) & torch.isnan(actual)
-    both_posinf = torch.isposinf(expected) & torch.isposinf(actual)
-    both_neginf = torch.isneginf(expected) & torch.isneginf(actual)
-    same_nonfinite = both_nan | both_posinf | both_neginf
-
-    ulp_diff = torch.where(same_nonfinite, torch.tensor(0.0), ulp_diff)
-
-    # Calculate statistics only on finite ULP differences
-    finite_ulp = ulp_diff[torch.isfinite(ulp_diff)]
-
-    if len(finite_ulp) == 0:
-        return {
-            "max_ulp": float("inf"),
-            "mean_ulp": float("inf"),
-            "median_ulp": float("inf"),
-            "std_ulp": float("inf"),
-            "p95_ulp": float("inf"),
-            "p99_ulp": float("inf"),
-            "perfect_matches": 0.0,
-        }
-
-    finite_ulp_float = finite_ulp.float()
-    perfect_matches = (finite_ulp == 0).float().mean().item()
-
-    return {
-        "max_ulp": torch.max(finite_ulp).item(),
-        "mean_ulp": torch.mean(finite_ulp_float).item(),
-        "median_ulp": torch.median(finite_ulp_float).item(),
-        "std_ulp": torch.std(finite_ulp_float).item(),
-        "p95_ulp": torch.quantile(finite_ulp_float, 0.95).item(),
-        "p99_ulp": torch.quantile(finite_ulp_float, 0.99).item(),
-        "perfect_matches": perfect_matches,
     }
 
 
@@ -372,8 +227,13 @@ def test_distributed_norm_comparison(
 
     # Calculate metrics
     mse = calculate_mse(torch_output, ttnn_output_torch)
-    ulp_error = calculate_ulp_error_bf16(torch_output, ttnn_output_torch)
     ulp_stats = calculate_detailed_ulp_stats(torch_output, ttnn_output_torch)
+    if norm_type == "rms_norm":
+        ulp_passed = comp_ulp(
+            torch_output,
+            ttnn_output_torch,
+            ulp_threshold=RMS_EXPECTED_MAX_ULP_THRESHOLD_WITH_NEW_REDUCTION[(mean, var, outlier_pct, outlier_var)],
+        )
     pcc_passed, pcc_value = comp_pcc(torch_output, ttnn_output_torch, pcc=0.99)
     max_error = calculate_max_error(torch_output, ttnn_output_torch)
 
@@ -400,4 +260,6 @@ def test_distributed_norm_comparison(
     logger.info(f"")
     logger.info(f"Test Results:")
     logger.info(f"  PCC Passed (>0.99): {pcc_passed}")
+    if norm_type == "rms_norm":
+        logger.info(f"  ULP Passed: {ulp_passed}")
     logger.info(f"  Allclose Passed: {passes_allclose}")
