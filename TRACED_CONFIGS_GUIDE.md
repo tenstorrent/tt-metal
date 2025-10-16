@@ -209,38 +209,6 @@ python3 tests/sweep_framework/sweeps_runner.py \
 # Results appear in Superset dashboard
 ```
 
-**Complete Examples:**
-
-**For Unary Operations (e.g., sigmoid_accurate):**
-```bash
-# Generate vectors
-python3 tests/sweep_framework/sweeps_parameter_generator.py \
-  --module-name eltwise.unary.sigmoid_accurate.sigmoid_accurate \
-  --dump-file
-
-# Run test
-python3 tests/sweep_framework/sweeps_runner.py \
-  --module-name eltwise.unary.sigmoid_accurate.sigmoid_accurate \
-  --vector-source vectors_export \
-  --result-dest results_export \
-  --suite model_traced
-```
-
-**For Binary Operations (e.g., add):**
-```bash
-# Generate vectors
-python3 tests/sweep_framework/sweeps_parameter_generator.py \
-  --module-name eltwise.binary.add.add_all_pytorch2 \
-  --dump-file
-
-# Run test
-python3 tests/sweep_framework/sweeps_runner.py \
-  --module-name eltwise.binary.add.add_all_pytorch2 \
-  --vector-source vectors_export \
-  --result-dest results_export \
-  --suite model_traced
-```
-
 ---
 
 ## System Architecture
