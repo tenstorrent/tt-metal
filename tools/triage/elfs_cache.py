@@ -58,7 +58,7 @@ class ElfsCache:
             ParsedElfFile object for the given path
         """
         if not os.path.exists(elf_path):
-            raise TTTriageError(f"BRISC ELF file {elf_path} does not exist.")
+            raise TTTriageError(f"ELF file {elf_path} does not exist.")
         with self._lock:
             if elf_path not in self._cache:
                 parsed_elf = parse_elf(elf_path, self.context)

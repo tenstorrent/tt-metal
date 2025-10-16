@@ -16,6 +16,7 @@ from dataclasses import dataclass
 import os
 
 from ttexalens.hw.tensix.wormhole.wormhole import WormholeDevice
+from ttexalens.hw.tensix.blackhole.blackhole import BlackholeDevice
 from inspector_data import run as get_inspector_data, InspectorData
 from elfs_cache import run as get_elfs_cache, ElfsCache
 from triage import triage_singleton, ScriptConfig, run_script, log_check
@@ -90,19 +91,20 @@ class DispatcherData:
             active_erisc_elf_path = os.path.join(
                 build_env.firmwarePath, active_erisc_elf_name, active_erisc_elf_name + ".elf"
             )
+
+            # On blackhole we have 2 modes (1-ERISC and 2-ERISC)
+            # By checking if the subordinate active erisc elf exists, we can determine in which mode we are
+            if isinstance(context.devices[0], BlackholeDevice):
+                self._is_2_erisc_mode = os.path.exists(
+                    os.path.join(build_env.firmwarePath, "subordinate_active_erisc", "subordinate_active_erisc.elf")
+                )
+
         except Exception as e:
             raise TTTriageError(
                 f"Failed to get firmware path from Inspector RPC: {e}\n"
                 "Make sure Inspector RPC is available or serialized RPC data exists.\n"
                 "Set TT_METAL_INSPECTOR_RPC=1 when running your Metal application."
             )
-
-        # Check if firmware elf paths exist
-        if not os.path.exists(brisc_elf_path):
-            raise TTTriageError(f"BRISC ELF file {brisc_elf_path} does not exist.")
-
-        if not os.path.exists(idle_erisc_elf_path):
-            raise TTTriageError(f"IDLE ERISC ELF file {idle_erisc_elf_path} does not exist.")
 
         self._brisc_elf = elfs_cache[brisc_elf_path]
         self._idle_erisc_elf = elfs_cache[idle_erisc_elf_path]
@@ -133,10 +135,13 @@ class DispatcherData:
         }
 
         # EthProcessorTypes::DM1 is only available on blackhole
+        # ERISC1 BEHAVES LIKE DM0 if 1 ERISC mode is used
         if "EthProcessorTypes::DM1" in self._idle_erisc_elf.enumerators:
-            self._enum_values_eth["ProcessorTypes"]["ERISC1"] = self._idle_erisc_elf.enumerators[
-                "EthProcessorTypes::DM1"
-            ].value
+            self._enum_values_eth["ProcessorTypes"]["ERISC1"] = (
+                self._idle_erisc_elf.enumerators["EthProcessorTypes::DM1"].value
+                if self._is_2_erisc_mode
+                else self._idle_erisc_elf.enumerators["EthProcessorTypes::DM0"].value
+            )
 
         # Go message states are constant values in the firmware elf, so we cache them
         def empty_mem_reader(addr: int, size_bytes: int, elements_to_read: int) -> list[int]:
@@ -308,9 +313,12 @@ class DispatcherData:
             elif proc_name.lower() == "erisc0":
                 firmware_path = os.path.join(build_env.firmwarePath, "active_erisc", "active_erisc.elf")
             elif proc_name.lower() == "erisc1":
-                firmware_path = os.path.join(
-                    build_env.firmwarePath, "subordinate_active_erisc", "subordinate_active_erisc.elf"
+                firmware_path = (
+                    os.path.join(build_env.firmwarePath, "subordinate_active_erisc", "subordinate_active_erisc.elf")
+                    if self._is_2_erisc_mode
+                    else os.path.join(build_env.firmwarePath, "active_erisc", "active_erisc.elf")
                 )
+
         else:
             if proc_name.lower() == "erisc" or proc_name.lower() == "erisc0":
                 firmware_path = os.path.join(build_env.firmwarePath, "idle_erisc", "idle_erisc.elf")
@@ -327,9 +335,13 @@ class DispatcherData:
                 if proc_name.lower() == "erisc":
                     kernel_path = kernel.path + "/erisc/erisc.elf"
                 elif proc_name.lower() == "erisc0":
-                    kernel_path = kernel.path + "/active_erisc/active_erisc.elf"
+                    kernel_path = kernel.path + "/active_erisc/active_erisc.elf" if self._is_2_erisc_mode else None
                 elif proc_name.lower() == "erisc1":
-                    kernel_path = kernel.path + "/subordinate_active_erisc/subordinate_active_erisc.elf"
+                    kernel_path = (
+                        kernel.path + "/subordinate_active_erisc/subordinate_active_erisc.elf"
+                        if self._is_2_erisc_mode
+                        else kernel.path + "/active_erisc/active_erisc.elf"
+                    )
             else:
                 if proc_name.lower() == "erisc" or proc_name.lower() == "erisc0":
                     kernel_path = kernel.path + "/idle_erisc/idle_erisc.elf"
@@ -340,6 +352,7 @@ class DispatcherData:
             kernel_path = os.path.realpath(kernel_path)
             if proc_name == "NCRISC" and isinstance(location._device, WormholeDevice):
                 kernel_offset = 0xFFC00000
+            # In wormhole we only use text offset to calculate the kernel offset for active ETH
             elif location in location._device.active_eth_block_locations and isinstance(
                 location._device, WormholeDevice
             ):
