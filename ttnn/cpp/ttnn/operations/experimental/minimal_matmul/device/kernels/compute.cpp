@@ -12,6 +12,7 @@
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
+#include "common.hpp"
 
 void copy_block(uint32_t in_cb, uint32_t out_cb, uint32_t M_block_tiles, uint32_t N_block_tiles) {
     copy_tile_to_dst_init_short(in_cb);
@@ -118,10 +119,10 @@ void MAIN {
     constexpr uint32_t subblock_w = get_compile_time_arg_val(5);
 
     uint32_t argidx = 0;
-    const uint32_t M_start_block = get_arg_val<uint32_t>(argidx++);
-    const uint32_t M_end_block = get_arg_val<uint32_t>(argidx++);
-    const uint32_t N_start_block = get_arg_val<uint32_t>(argidx++);
-    const uint32_t N_end_block = get_arg_val<uint32_t>(argidx++);
+    const uint32_t M_start_tile = get_arg_val<uint32_t>(argidx++);
+    const uint32_t M_end_tile = get_arg_val<uint32_t>(argidx++);
+    const uint32_t N_start_tile = get_arg_val<uint32_t>(argidx++);
+    const uint32_t N_end_tile = get_arg_val<uint32_t>(argidx++);
 
     constexpr uint32_t in0_cb = tt::CBIndex::c_0;
     constexpr uint32_t in1_cb = tt::CBIndex::c_1;
@@ -144,10 +145,16 @@ void MAIN {
     constexpr uint32_t M_num_subblocks = M_block_tiles / subblock_h;
     constexpr uint32_t N_num_subblocks = N_block_tiles / subblock_w;
 
+    const uint32_t M_tiles_per_core = M_end_tile - M_start_tile;
+    const uint32_t N_tiles_per_core = N_end_tile - N_start_tile;
+    const uint32_t N_num_blocks = div_up(N_tiles_per_core, N_block_tiles);
+    const uint32_t M_num_blocks = div_up(M_tiles_per_core, M_block_tiles);
+
     bool reuse_in0_block = false;
     bool reuse_in1_block = false;
-    for (uint32_t m_block = M_start_block; m_block <= M_end_block; m_block++) {
-        for (uint32_t n_block = N_start_block; n_block <= N_end_block; n_block++) {
+    for (uint32_t m_block_iter = 0; m_block_iter < M_num_blocks; m_block_iter++) {
+        // uint32_t m_tile = M_start_tile + m_block_iter * M_block_tiles;
+        for (uint32_t n_block_iter = 0; n_block_iter < N_num_blocks; n_block_iter++) {
             mm_block_init_short(
                 in0_cb,
                 in1_cb,
@@ -181,7 +188,7 @@ void MAIN {
                      * Therefore you should not pop one of them
                      *
                      */
-                    if (n_block < N_end_block) {
+                    if (n_block_iter < N_num_blocks - 1) {
                         // going to stride on N, so reuse in0
                         reuse_in0_block = true;
                     } else {

@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 #include "matmul_dataflow_common.hpp"
+#include "common.hpp"
 
 void kernel_main() {
     constexpr uint32_t M_tiles = get_compile_time_arg_val(0);
@@ -35,10 +36,10 @@ void kernel_main() {
     const uint32_t in0_dest_noc_y = get_arg_val<uint32_t>(argidx++);
     const uint32_t in0_sender_noc_x = get_arg_val<uint32_t>(argidx++);
     const uint32_t in0_sender_noc_y = get_arg_val<uint32_t>(argidx++);
-    const uint32_t M_start_block = get_arg_val<uint32_t>(argidx++);
-    const uint32_t M_end_block = get_arg_val<uint32_t>(argidx++);
-    const uint32_t N_start_block = get_arg_val<uint32_t>(argidx++);
-    const uint32_t N_end_block = get_arg_val<uint32_t>(argidx++);
+    const uint32_t M_start_tile = get_arg_val<uint32_t>(argidx++);
+    const uint32_t M_end_tile = get_arg_val<uint32_t>(argidx++);
+    const uint32_t N_start_tile = get_arg_val<uint32_t>(argidx++);
+    const uint32_t N_end_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t defer_write_k_block = get_arg_val<uint32_t>(argidx++);
 
     // Tensor accessor for input tensor
@@ -86,20 +87,25 @@ void kernel_main() {
      * reuse.
      */
 
-    const uint32_t N_num_blocks = N_end_block - N_start_block + 1;
+    const uint32_t M_tiles_per_core = M_end_tile - M_start_tile;
+    const uint32_t N_tiles_per_core = N_end_tile - N_start_tile;
+    const uint32_t N_num_blocks = div_up(N_tiles_per_core, N_block_tiles);
+    const uint32_t M_num_blocks = div_up(M_tiles_per_core, M_block_tiles);
 
     bool k_forward = true;
     bool n_forward = true;
     bool reuse_block = false;
 
-    uint32_t defer_write_m_block = 0;
-    uint32_t defer_write_n_block = 0;
+    uint32_t defer_write_m_tile = 0;
+    uint32_t defer_write_n_tile = 0;
     bool defer_write = false;
 
-    for (uint32_t m_block = M_start_block; m_block <= M_end_block; m_block++) {
+    for (uint32_t m_block_iter = 0; m_block_iter < M_num_blocks; m_block_iter++) {
+        uint32_t m_tile = M_start_tile + m_block_iter * M_block_tiles;
         reuse_block = false;
         for (uint32_t n_block_iter = 0; n_block_iter < N_num_blocks; n_block_iter++) {
-            uint32_t n_block = n_forward ? N_start_block + n_block_iter : N_end_block - n_block_iter;
+            uint32_t n_tile = n_forward ? N_start_tile + n_block_iter * N_block_tiles
+                                        : N_start_tile + (N_num_blocks - 1 - n_block_iter) * N_block_tiles;
             for (uint32_t k_block_iter = 0; k_block_iter < K_num_blocks; k_block_iter++) {
                 if (defer_write && k_block_iter == defer_write_k_block) {
                     if constexpr (is_output_writer) {
@@ -110,10 +116,10 @@ void kernel_main() {
                             out_shape,
                             out_read_ptr,
                             out_tile_size,
-                            defer_write_m_block * M_block_tiles,
-                            (defer_write_m_block + 1) * M_block_tiles,
-                            defer_write_n_block * N_block_tiles,
-                            (defer_write_n_block + 1) * N_block_tiles);
+                            defer_write_m_tile,
+                            defer_write_m_tile + M_block_tiles,
+                            defer_write_n_tile,
+                            defer_write_n_tile + N_block_tiles);
                         cb_pop_front(cb_id_out, out_block_num_tiles);
                     }
                 }
@@ -133,8 +139,8 @@ void kernel_main() {
                         in0_shape,
                         in0_start_address,
                         in0_tile_size,
-                        m_block * M_block_tiles,
-                        (m_block + 1) * M_block_tiles,
+                        m_tile,
+                        m_tile + M_block_tiles,
                         k_block * K_block_tiles,
                         (k_block + 1) * K_block_tiles);
                 } else {
@@ -168,8 +174,7 @@ void kernel_main() {
                 cb_reserve_back(cb_id_in2, N_block_tiles);
 
                 uint32_t l1_write_addr_in2 = get_write_ptr(cb_id_in2);
-                for (uint32_t n_tile_id = n_block * N_block_tiles; n_tile_id < (n_block + 1) * N_block_tiles;
-                     n_tile_id++) {
+                for (uint32_t n_tile_id = n_tile; n_tile_id < n_tile + N_block_tiles; n_tile_id++) {
                     noc_async_read_tile(n_tile_id, in2_reader, l1_write_addr_in2);
                     l1_write_addr_in2 += in2_tile_size;
                 }
@@ -183,13 +188,13 @@ void kernel_main() {
             // We get reuse on in0 when striding N block
             reuse_block = true;
 
-            defer_write_m_block = m_block;
-            defer_write_n_block = n_block;
+            defer_write_m_tile = m_tile;
+            defer_write_n_tile = n_tile;
             /**
              * If this isn't the last output block, defer writing until the defer_k_write_block iteration
              * of the next output block.
              */
-            defer_write = !((m_block == M_end_block) && (n_block_iter == (N_num_blocks - 1)));
+            defer_write = !((m_block_iter == M_num_blocks - 1) && (n_block_iter == (N_num_blocks - 1)));
             defer_write = defer_write && !is_injector_core;
 
             if (!defer_write) {
@@ -200,10 +205,10 @@ void kernel_main() {
                         cb_id_out,
                         N_block_tiles,
                         out_tile_size,
-                        m_block * M_block_tiles,
-                        (m_block + 1) * M_block_tiles,
-                        n_block * N_block_tiles,
-                        (n_block + 1) * N_block_tiles);
+                        m_tile,
+                        m_tile + M_block_tiles,
+                        n_tile,
+                        n_tile + N_block_tiles);
                 }
             }
         }
