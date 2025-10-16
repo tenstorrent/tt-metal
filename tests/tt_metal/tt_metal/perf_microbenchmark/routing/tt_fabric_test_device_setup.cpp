@@ -369,6 +369,9 @@ void TestWorker::create_kernel(
 
     const auto device_info_provider_ptr = this->test_device_ptr_->get_device_info_provider();
     for (const auto& [address, num_bytes] : addresses_and_size_to_clear) {
+        if (address == 0 || num_bytes == 0) {
+            continue;
+        }
         device_info_provider_ptr->zero_out_buffer_on_cores(device_coord, {this->logical_core_}, address, num_bytes);
     }
 }
@@ -635,13 +638,6 @@ ConnectionKey TestDevice::register_fabric_connection(
 
     if (std::find(registered_keys.begin(), registered_keys.end(), connection_key) != registered_keys.end()) {
         // Connection already registered - reuse it
-        log_debug(
-            tt::LogTest,
-            "Worker type {} core {} reusing existing connection: direction={}, link_idx={}",
-            static_cast<int>(worker_type),
-            logical_core,
-            static_cast<int>(outgoing_direction),
-            link_idx);
         return connection_key;
     }
 
@@ -829,6 +825,7 @@ void TestDevice::create_sync_kernel() {
     local_args.insert(local_args.end(), mux_termination_local_args.begin(), mux_termination_local_args.end());
 
     std::vector<std::pair<size_t, size_t>> addresses_and_size_to_clear = {
+        {sender_memory_map_->get_result_buffer_address(), sender_memory_map_->get_result_buffer_size()},
         {sender_memory_map_->get_global_sync_address(), sender_memory_map_->get_global_sync_region_size()},
         {sender_memory_map_->get_local_sync_address(), sender_memory_map_->get_local_sync_region_size()},
     };
@@ -857,10 +854,10 @@ void TestDevice::create_sender_kernels() {
     const bool is_dynamic_routing_enabled = this->device_info_provider_->is_dynamic_routing_enabled();
     uint32_t num_local_sync_cores = static_cast<uint32_t>(this->senders_.size()) + 1;
 
-    for (const auto& [core, sender] : this->senders_) {
-        TT_FATAL(sender_memory_map_ != nullptr, "Sender memory map is required for creating sender kernels");
-        TT_FATAL(sender_memory_map_->is_valid(), "Sender memory map is invalid");
+    TT_FATAL(sender_memory_map_ != nullptr, "Sender memory map is required for creating sender kernels");
+    TT_FATAL(sender_memory_map_->is_valid(), "Sender memory map is invalid");
 
+    for (const auto& [core, sender] : this->senders_) {
         // Get connection count and generate all connection args via FabricConnectionManager
         size_t num_connections = connection_manager_.get_connection_count_for_core(core, TestWorkerType::SENDER);
 
@@ -918,7 +915,10 @@ void TestDevice::create_sender_kernels() {
             uint32_t array_idx =
                 connection_manager_.get_connection_array_index_for_key(core, TestWorkerType::SENDER, connection_key);
             TT_FATAL(
-                array_idx != UINT32_MAX, "Failed to find connection array index for traffic config on core {}", core);
+                array_idx < num_connections,
+                "Connection array idx should be < num_connections. Got idx {}, num_connections {}",
+                array_idx,
+                num_connections);
             local_args.push_back(array_idx);
         }
 
@@ -933,7 +933,8 @@ void TestDevice::create_sender_kernels() {
             connection_manager_.generate_mux_termination_local_args_for_core(core, device_info_provider_);
         local_args.insert(local_args.end(), mux_termination_local_args.begin(), mux_termination_local_args.end());
 
-        std::vector<std::pair<size_t, size_t>> addresses_and_size_to_clear;
+        std::vector<std::pair<size_t, size_t>> addresses_and_size_to_clear = {
+            {sender_memory_map_->get_result_buffer_address(), sender_memory_map_->get_result_buffer_size()}};
 
         // clear out local sync address (if line sync is enabled)
         if (global_sync_) {
@@ -964,10 +965,10 @@ void TestDevice::create_receiver_kernels() {
     const bool is_2D_routing_enabled = this->device_info_provider_->is_2D_routing_enabled();
     const bool is_dynamic_routing_enabled = this->device_info_provider_->is_dynamic_routing_enabled();
 
-    for (const auto& [core, receiver] : this->receivers_) {
-        TT_FATAL(receiver_memory_map_ != nullptr, "Receiver memory map is required for creating receiver kernels");
-        TT_FATAL(receiver_memory_map_->is_valid(), "Receiver memory map is invalid");
+    TT_FATAL(receiver_memory_map_ != nullptr, "Receiver memory map is required for creating receiver kernels");
+    TT_FATAL(receiver_memory_map_->is_valid(), "Receiver memory map is invalid");
 
+    for (const auto& [core, receiver] : this->receivers_) {
         // Get connection count and generate all connection args via FabricConnectionManager (for credit return)
         size_t num_connections = connection_manager_.get_connection_count_for_core(core, TestWorkerType::RECEIVER);
 
@@ -1004,20 +1005,19 @@ void TestDevice::create_receiver_kernels() {
                 uint32_t array_idx = connection_manager_.get_connection_array_index_for_key(
                     core, TestWorkerType::RECEIVER, credit_connection_key.value());
 
-                if (array_idx != UINT32_MAX) {
-                    connection_idx = static_cast<uint8_t>(array_idx);
-                } else {
-                    log_warning(
-                        tt::LogTest,
-                        "Could not find connection index for receiver credit return: core={}, key={{dir={}, link={}}}",
-                        core,
-                        static_cast<int>(credit_connection_key->direction),
-                        credit_connection_key->link_idx);
-                }
+                TT_FATAL(
+                    array_idx < num_connections,
+                    "Connection array idx should be < num_connections. Got idx {}, num_connections {}",
+                    array_idx,
+                    num_connections);
+                connection_idx = static_cast<uint8_t>(array_idx);
             }
 
             rt_args.push_back(connection_idx);
         }
+
+        std::vector<std::pair<size_t, size_t>> addresses_and_size_to_clear = {
+            {receiver_memory_map_->get_result_buffer_address(), receiver_memory_map_->get_result_buffer_size()}};
 
         // Local args for traffic configs
         std::vector<uint32_t> local_args;
@@ -1026,9 +1026,22 @@ void TestDevice::create_receiver_kernels() {
             local_args.reserve(local_args.size() + (receiver.configs_.size() * first_traffic_args.size()));
             local_args.insert(local_args.end(), first_traffic_args.begin(), first_traffic_args.end());
 
+            // clear out the atomic inc address if used
+            if (receiver.configs_[0].first.atomic_inc_address.has_value()) {
+                addresses_and_size_to_clear.push_back(
+                    {receiver.configs_[0].first.atomic_inc_address.value(), sizeof(uint32_t)});
+            }
+
             for (size_t i = 1; i < receiver.configs_.size(); ++i) {
-                const auto traffic_args = receiver.configs_[i].first.get_args();
+                const auto& traffic_config = receiver.configs_[i].first;
+                const auto traffic_args = traffic_config.get_args();
                 local_args.insert(local_args.end(), traffic_args.begin(), traffic_args.end());
+
+                // clear out the atomic inc address if used
+                if (traffic_config.atomic_inc_address.has_value()) {
+                    addresses_and_size_to_clear.push_back(
+                        {traffic_config.atomic_inc_address.value(), sizeof(uint32_t)});
+                }
             }
         }
 
@@ -1037,7 +1050,6 @@ void TestDevice::create_receiver_kernels() {
             connection_manager_.generate_mux_termination_local_args_for_core(core, device_info_provider_);
         local_args.insert(local_args.end(), mux_termination_local_args.begin(), mux_termination_local_args.end());
 
-        std::vector<std::pair<size_t, size_t>> addresses_and_size_to_clear;
         if (!mux_termination_local_args.empty()) {
             addresses_and_size_to_clear.push_back(
                 {receiver_memory_map_->get_mux_termination_sync_address(),

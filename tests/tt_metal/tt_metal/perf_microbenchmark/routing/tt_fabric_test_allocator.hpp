@@ -104,7 +104,7 @@ private:
         uint32_t chunk_size = this->payload_chunk_size;
         TT_FATAL(
             chunk_size > 0 && chunk_size % l1_alignment_ == 0,
-            "Payload chunk_size must be positive and a multiple of alignment");
+            "Payload chunk_size must be positive and a multiple of L1 alignment");
 
         available_payload_chunks_.clear();
         for (uint32_t addr = payload_region_.start; addr + chunk_size <= payload_region_.end(); addr += chunk_size) {
@@ -320,17 +320,9 @@ inline void TestDeviceResources::refill_pool(CorePool& pool) {
 inline void TestDeviceResources::initialize_credit_allocator(const SenderMemoryMap& sender_memory_map) {
     if (!credit_allocator_.has_value()) {
         credit_allocator_.emplace(
-            sender_memory_map.common.credit_addresses.start,
-            sender_memory_map.common.credit_addresses.size,
-            CommonMemoryMap::CREDIT_ADDRESS_STRIDE);
-
-        log_debug(
-            tt::LogTest,
-            "Initialized credit allocator for device {}: start={:#x}, size={}, stride={}",
-            node_id_,
-            sender_memory_map.common.credit_addresses.start,
-            sender_memory_map.common.credit_addresses.size,
-            CommonMemoryMap::CREDIT_ADDRESS_STRIDE);
+            sender_memory_map.get_credit_addresses_base(),
+            sender_memory_map.get_credit_addresses_size(),
+            SenderMemoryMap::CREDIT_ADDRESS_STRIDE);
     }
 }
 
@@ -489,14 +481,14 @@ inline void TestDeviceResources::reserve_core_internal(const CoreCoord& core, Co
  * Simple policy: Give sender full buffer capacity, receiver returns in 20% batches
  * @param buffer_capacity_bytes Receiver buffer size
  * @param packet_size_bytes Size of each packet
+ * @param num_packets Number of packets to be sent
  * @return Pair of (initial_credits, batch_size)
  */
 inline static std::pair<uint32_t, uint32_t> calculate_credit_config(
-    uint32_t buffer_capacity_bytes, uint32_t packet_size_bytes) {
+    uint32_t buffer_capacity_bytes, uint32_t packet_size_bytes, uint32_t num_packets) {
     uint32_t buffer_capacity_packets = buffer_capacity_bytes / packet_size_bytes;
-    uint32_t initial_credits = buffer_capacity_packets;
-    uint32_t batch_size = std::max(1u, buffer_capacity_packets / 5);
-
+    uint32_t initial_credits = std::min(buffer_capacity_packets, num_packets);
+    uint32_t batch_size = std::max(1u, initial_credits / 4);
     return {initial_credits, batch_size};
 }
 
@@ -807,7 +799,9 @@ inline void GlobalAllocator::allocate_resources(TestConfig& test_config) {
                 // Calculate credit configuration using simple policy
                 uint32_t buffer_capacity_bytes = policies_.default_payload_chunk_size;
                 uint32_t packet_size_bytes = pattern.size.value();
-                auto [initial_credits, batch_size] = calculate_credit_config(buffer_capacity_bytes, packet_size_bytes);
+                uint32_t num_packets = pattern.num_packets.value();
+                auto [initial_credits, batch_size] =
+                    calculate_credit_config(buffer_capacity_bytes, packet_size_bytes, num_packets);
 
                 // Populate sender credit info directly in pattern
                 pattern.sender_credit_info = SenderCreditInfo{

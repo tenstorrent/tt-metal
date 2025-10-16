@@ -70,7 +70,6 @@ struct CommonMemoryMap {
     static constexpr uint32_t LOCAL_ARGS_BUFFER_SIZE = 0x1000;  // 4KB
     static constexpr uint32_t KERNEL_CONFIG_BUFFER_SIZE = 0x2000;  // 8KB
     static constexpr uint32_t MUX_LOCAL_ADDRESSES_SIZE = 0x400;    // 1KB
-    static constexpr uint32_t CREDIT_ADDRESSES_SIZE = 0x400;       // 1KB
     static constexpr uint32_t MUX_TERMINATION_SYNC_SIZE = 64;  // Single semaphore with padding
 
     // Memory regions
@@ -78,7 +77,6 @@ struct CommonMemoryMap {
     BaseMemoryRegion local_args_buffer;
     BaseMemoryRegion kernel_config_buffer;
     BaseMemoryRegion mux_local_addresses;
-    BaseMemoryRegion credit_addresses;
     BaseMemoryRegion mux_termination_sync;
 
     // Explicit end address tracking (no assumptions about region order)
@@ -90,7 +88,6 @@ struct CommonMemoryMap {
         local_args_buffer(0, 0),
         kernel_config_buffer(0, 0),
         mux_local_addresses(0, 0),
-        credit_addresses(0, 0),
         mux_termination_sync(0, 0),
         end_address(0) {}
 
@@ -101,7 +98,6 @@ struct CommonMemoryMap {
         // [result_buffer]
         // [kernel_config_buffer]
         // [mux_local_addresses]
-        // [credit_addresses]
         // [mux_termination_sync]
         uint32_t current_addr = base_address;
 
@@ -125,11 +121,6 @@ struct CommonMemoryMap {
         current_addr += MUX_LOCAL_ADDRESSES_SIZE;
         mux_local_addresses = BaseMemoryRegion(mux_local_addresses_base, MUX_LOCAL_ADDRESSES_SIZE);
 
-        // Credit addresses
-        uint32_t credit_addresses_base = current_addr;
-        current_addr += CREDIT_ADDRESSES_SIZE;
-        credit_addresses = BaseMemoryRegion(credit_addresses_base, CREDIT_ADDRESSES_SIZE);
-
         // Mux termination sync
         uint32_t mux_termination_sync_base = current_addr;
         current_addr += MUX_TERMINATION_SYNC_SIZE;
@@ -148,7 +139,7 @@ struct CommonMemoryMap {
 
     bool is_valid() const {
         return result_buffer.is_valid() && local_args_buffer.is_valid() && kernel_config_buffer.is_valid() &&
-               mux_local_addresses.is_valid() && credit_addresses.is_valid() && mux_termination_sync.is_valid();
+               mux_local_addresses.is_valid() && mux_termination_sync.is_valid();
     }
 
     // Get the end address of the CommonMemoryMap allocation
@@ -182,6 +173,16 @@ struct CommonMemoryMap {
     // Mux termination sync address
     uint32_t get_mux_termination_sync_address() const { return mux_termination_sync.start; }
     uint32_t get_mux_termination_sync_size() const { return mux_termination_sync.size; }
+};
+
+/**
+ * Sender-specific memory layout (encapsulates common memory map)
+ */
+struct SenderMemoryMap {
+    // Constants for memory region sizes
+    static constexpr uint32_t CREDIT_ADDRESSES_SIZE = 0x1000;        // 4KB
+    static constexpr uint32_t PACKET_HEADER_BUFFER_SIZE = 0x1000;    // 4KB
+    static constexpr uint32_t MAX_PAYLOAD_SIZE_PER_CONFIG = 0x2800;  // 10KB per config
 
     // Helper to compute individual receiver credit address from chunk
     // Used by both per-device allocators and TestContext when assigning receiver addresses
@@ -190,18 +191,12 @@ struct CommonMemoryMap {
     }
 
     static constexpr uint32_t CREDIT_ADDRESS_STRIDE = 16;  // 16-byte alignment per receiver
-};
-
-/**
- * Sender-specific memory layout (encapsulates common memory map)
- */
-struct SenderMemoryMap {
-    // Constants for memory region sizes
-    static constexpr uint32_t PACKET_HEADER_BUFFER_SIZE = 0x1000;    // 4KB
-    static constexpr uint32_t MAX_PAYLOAD_SIZE_PER_CONFIG = 0x2800;  // 10KB per config
 
     // Encapsulated common memory map
     CommonMemoryMap common;
+
+    // Credit address region
+    BaseMemoryRegion credit_addresses;
 
     // Sender-specific memory regions
     BaseMemoryRegion packet_headers;
@@ -217,6 +212,7 @@ struct SenderMemoryMap {
     // Default constructor
     SenderMemoryMap() :
         common(),
+        credit_addresses(0, 0),
         packet_headers(0, 0),
         payload_buffers(0, 0),
         global_sync_region(0, 0),
@@ -227,15 +223,22 @@ struct SenderMemoryMap {
         common(
             l1_unreserved_base,
             l1_unreserved_base + l1_unreserved_size),  // Pass boundary for validation, not size
+        credit_addresses(0, 0),                        // Will be set below
         packet_headers(0, 0),                          // Will be set below
         payload_buffers(0, 0),                         // Will be set below
         highest_usable_address(l1_unreserved_base + l1_unreserved_size) {
         // Layout:
         // [CommonMemoryMap regions]
+        // [credit_addresses]
         // [packet_headers]
         // [payload_buffers]
         // [sync_regions]
         uint32_t current_addr = common.get_end_address();  // Continue from where CommonMemoryMap ended
+
+        // Credit addresses
+        uint32_t credit_addresses_base = current_addr;
+        current_addr += CREDIT_ADDRESSES_SIZE;
+        credit_addresses = BaseMemoryRegion(credit_addresses_base, CREDIT_ADDRESSES_SIZE);
 
         // Packet headers
         uint32_t packet_header_base = current_addr;
@@ -268,7 +271,10 @@ struct SenderMemoryMap {
             l1_unreserved_size);
     }
 
-    bool is_valid() const { return common.is_valid() && packet_headers.is_valid() && payload_buffers.is_valid(); }
+    bool is_valid() const {
+        return common.is_valid() && credit_addresses.is_valid() && packet_headers.is_valid() &&
+               payload_buffers.is_valid();
+    }
 
     std::vector<uint32_t> get_memory_map_args() const {
         std::vector<uint32_t> args = common.get_kernel_args();
@@ -279,6 +285,9 @@ struct SenderMemoryMap {
 
         return args;
     }
+
+    uint32_t get_credit_addresses_base() const { return credit_addresses.start; }
+    uint32_t get_credit_addresses_size() const { return credit_addresses.size; }
 
     uint32_t get_global_sync_address() const { return global_sync_region.start; }
     uint32_t get_local_sync_address() const { return local_sync_region.start; }

@@ -726,23 +726,21 @@ private:
         // CRITICAL: receiver_idx must be global across ALL receivers (local + remote)
         uint32_t receiver_idx = 0;
         for (const auto& dst_node_id : dst_node_ids) {
-            uint32_t credit_return_address = 0;  // Default to 0 if flow control is disabled
-            if (traffic_config.parameters.enable_flow_control && sender_config.sender_credit_info.has_value()) {
-                uint32_t credit_chunk_base = sender_config.sender_credit_info->credit_reception_address_base;
-                credit_return_address = CommonMemoryMap::get_receiver_credit_address(credit_chunk_base, receiver_idx);
-            }
-
             if (fixture_->is_local_fabric_node_id(dst_node_id)) {
                 const auto& dst_coord = this->fixture_->get_device_coord(dst_node_id);
                 TestTrafficReceiverConfig per_receiver_config = receiver_config;
 
                 if (traffic_config.parameters.enable_flow_control &&
                     per_receiver_config.receiver_credit_info.has_value()) {
+                    uint32_t credit_chunk_base = sender_config.sender_credit_info->credit_reception_address_base;
+                    uint32_t credit_return_address =
+                        SenderMemoryMap::get_receiver_credit_address(credit_chunk_base, receiver_idx);
+
                     per_receiver_config.receiver_credit_info->receiver_node_id = dst_node_id;
                     per_receiver_config.receiver_credit_info->credit_return_address = credit_return_address;
 
                     std::optional<std::unordered_map<RoutingDirection, uint32_t>> reverse_hops = std::nullopt;
-                    if (dst_node_id != src_node_id && !fixture_->is_dynamic_routing_enabled()) {
+                    if (!fixture_->is_dynamic_routing_enabled()) {
                         reverse_hops = fixture_->get_hops_to_chip(dst_node_id, src_node_id);
                     }
                     per_receiver_config.receiver_credit_info->hops = reverse_hops;

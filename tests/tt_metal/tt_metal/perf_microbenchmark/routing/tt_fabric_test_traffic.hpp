@@ -566,7 +566,6 @@ inline std::vector<uint32_t> TestTrafficReceiverConfig::get_args() const {
     if (has_credit_info) {
         // Add chip-level unicast routing info based on fabric type
         if (parameters.is_2D_routing_enabled) {
-            // 2D unicast: src=receiver's chip, dst=sender's chip (ChipUnicastFields2D)
             const auto& receiver_node = receiver_credit_info->receiver_node_id;
             const auto& sender_node = receiver_credit_info->sender_node_id;
             const auto& mesh_shape = parameters.mesh_shape;
@@ -580,16 +579,17 @@ inline std::vector<uint32_t> TestTrafficReceiverConfig::get_args() const {
             const auto unicast_args = unicast_fields.get_args();
             args.insert(args.end(), unicast_args.begin(), unicast_args.end());
         } else {
-            // 1D unicast: just num_hops (ChipUnicastFields1D)
+            TT_FATAL(receiver_credit_info->hops.has_value(), "1D credit return hops must be provided");
+
             uint32_t num_hops_1d = 0;
-            if (receiver_credit_info->hops.has_value()) {
-                for (const auto& [_, hops_in_dir] : receiver_credit_info->hops.value()) {
-                    if (hops_in_dir > 0) {
-                        num_hops_1d = hops_in_dir;
-                        break;
-                    }
+            for (const auto& [_, hops_in_dir] : receiver_credit_info->hops.value()) {
+                if (hops_in_dir > 0) {
+                    num_hops_1d = hops_in_dir;
+                    break;
                 }
             }
+            TT_FATAL(num_hops_1d > 0, "num_hops_1d must be > 0 for credit return");
+
             const auto unicast_fields = ChipUnicastFields1D(num_hops_1d);
             const auto unicast_args = unicast_fields.get_args();
             args.insert(args.end(), unicast_args.begin(), unicast_args.end());

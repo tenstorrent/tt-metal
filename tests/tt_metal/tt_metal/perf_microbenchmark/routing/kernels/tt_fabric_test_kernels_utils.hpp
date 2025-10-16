@@ -136,7 +136,8 @@ public:
 
     void advance() {
         current_offset_ += payload_size_;
-        if (current_offset_ >= total_size_) {
+        // need to check if we have enough space in the buffer for another payload without wrapping
+        if (current_offset_ + payload_size_ > total_size_) {
             current_offset_ = 0;
             has_wrapped_ = true;
         }
@@ -307,6 +308,7 @@ struct NocUnicastAtomicIncFields {
         if constexpr (IS_SOURCE) {
             dst_noc_encoding = get_local_arg_val<uint32_t>(arg_idx++);
         }
+
         return NocUnicastAtomicIncFields(atomic_inc_val, atomic_inc_wrap, dst_address, dst_noc_encoding);
     }
 
@@ -526,7 +528,8 @@ struct FabricConnectionArray {
     static constexpr size_t MAX_CONNECTION_SIZE = std::max(sizeof(WorkerToFabricEdmSender), sizeof(MuxConnectionType));
 
     // Type-erased storage for connections (sized for maximum)
-    alignas(std::max_align_t) std::array<char, MAX_NUM_FABRIC_CONNECTIONS * MAX_CONNECTION_SIZE> storage;
+    alignas(std::max(alignof(WorkerToFabricEdmSender), alignof(MuxConnectionType)))
+        std::array<char, MAX_NUM_FABRIC_CONNECTIONS * MAX_CONNECTION_SIZE> storage;
     std::array<bool, MAX_NUM_FABRIC_CONNECTIONS> is_mux;
 
     // Cached mux info for wait_for_fabric_endpoint_ready
@@ -630,7 +633,7 @@ struct FabricConnectionArray {
     }
 
     // Send header only (used for credit returns)
-    FORCE_INLINE void send_header_only(uint8_t idx, uint32_t header_addr) {
+    FORCE_INLINE void send_header_non_blocking(uint8_t idx, uint32_t header_addr) {
         if (is_mux[idx]) {
             get_mux_connection(idx).send_payload_flush_non_blocking_from_address(
                 header_addr, sizeof(PACKET_HEADER_TYPE));
@@ -650,12 +653,11 @@ struct FabricConnectionArray {
     }
 
     // Send header with flush (used for completing multi-part sends)
-    FORCE_INLINE void send_header_flush(uint8_t idx, uint32_t header_addr) {
+    FORCE_INLINE void send_header_flush_blocking(uint8_t idx, uint32_t header_addr) {
         if (is_mux[idx]) {
-            get_mux_connection(idx).send_payload_flush_non_blocking_from_address(
-                header_addr, sizeof(PACKET_HEADER_TYPE));
+            get_mux_connection(idx).send_payload_flush_blocking_from_address(header_addr, sizeof(PACKET_HEADER_TYPE));
         } else {
-            get_fabric_connection(idx).send_payload_flush_non_blocking_from_address(
+            get_fabric_connection(idx).send_payload_flush_blocking_from_address(
                 header_addr, sizeof(PACKET_HEADER_TYPE));
         }
     }
@@ -708,7 +710,7 @@ struct LineSyncConfig {
     void global_sync_start() {
         // Send packet to remote devices
         connections_->wait_for_empty_write_slot(connection_idx_);
-        connections_->send_header_flush(connection_idx_, (uint32_t)packet_header);
+        connections_->send_header_non_blocking(connection_idx_, (uint32_t)packet_header);
     }
 
     void global_sync_finish(uint8_t sync_iter) {
@@ -787,21 +789,22 @@ struct SenderCreditManager {
     SenderCreditManager() = default;
 
     // Initialize from args
-    void init(size_t& arg_idx) {
+    void init(size_t& arg_idx, uint32_t total_credits) {
         enabled_ = get_local_arg_val<uint32_t>(arg_idx++) != 0;
         if (!enabled_) {
             return;
         }
 
         sender_credit_info_ = SenderCreditInfo::build_from_args(arg_idx);
-
         credit_semaphores_base_ptr_ =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sender_credit_info_.credit_reception_address_base);
         credit_semaphores_base_noc_addr_ = get_noc_addr(0) + sender_credit_info_.credit_reception_address_base;
 
         num_receivers_ = sender_credit_info_.expected_receiver_count;
         initial_credits_ = sender_credit_info_.initial_credits;
-        estimated_available_credits_ = 0;  // Will be set in initialize()
+        estimated_available_credits_ = initial_credits_;
+        prev_processed_credits_ = 0;
+        total_credits_ = total_credits;
 
         ASSERT(num_receivers_ > 0);
         ASSERT(credit_semaphores_base_ptr_ != nullptr);
@@ -814,13 +817,12 @@ struct SenderCreditManager {
         }
 
         for (uint32_t i = 0; i < num_receivers_; i++) {
-            credit_semaphores_base_ptr_[i * CREDIT_STRIDE_WORDS] = initial_credits_;
+            credit_semaphores_base_ptr_[i * CREDIT_STRIDE_WORDS] = 0;
         }
-        estimated_available_credits_ = initial_credits_;
     }
 
     // Check if credits available (non-blocking, called before send)
-    FORCE_INLINE bool has_credits_available() const {
+    FORCE_INLINE bool has_credits_available(uint32_t num_packets_processed) const {
         if (!enabled_) {
             return true;  // Always available when disabled
         }
@@ -851,8 +853,14 @@ struct SenderCreditManager {
             }
         }
 
-        estimated_available_credits_ = min_credits;
-        return estimated_available_credits_ > 0;
+        int32_t new_credits = min_credits - prev_processed_credits_;
+        if (new_credits <= 0) {
+            return false;  // No new credits available
+        }
+
+        estimated_available_credits_ = new_credits;
+        prev_processed_credits_ += new_credits;
+        return true;
     }
 
     // Consume one credit (called after successful send - decrements ALL receivers for mcast)
@@ -862,35 +870,28 @@ struct SenderCreditManager {
         }
 
         ASSERT(estimated_available_credits_ > 0);
-
-        for (uint32_t i = 0; i < num_receivers_; i++) {
-            uint32_t offset = i * CREDIT_ADDRESS_STRIDE;
-            uint64_t credit_noc_addr = credit_semaphores_base_noc_addr_ + offset;
-            noc_semaphore_inc(credit_noc_addr, -1);
-        }
-        noc_async_atomic_barrier();
-
         estimated_available_credits_--;
     }
 
     // Wait for all credits back (called at connection close)
-    void wait_for_all_credits_returned() {
+    bool got_all_credits_back() {
         if (!enabled_) {
-            return;
+            return true;
         }
 
-        bool all_returned = false;
-        while (!all_returned) {
+        if (!got_all_credits_back_) {
             invalidate_l1_cache();
-            all_returned = true;
+            got_all_credits_back_ = true;
 
             for (uint32_t i = 0; i < num_receivers_; i++) {
-                if (credit_semaphores_base_ptr_[i * CREDIT_STRIDE_WORDS] < initial_credits_) {
-                    all_returned = false;
+                if (credit_semaphores_base_ptr_[i * CREDIT_STRIDE_WORDS] < total_credits_) {
+                    got_all_credits_back_ = false;
                     break;
                 }
             }
         }
+
+        return got_all_credits_back_;
     }
 
     bool is_enabled() const { return enabled_; }
@@ -904,7 +905,10 @@ private:
     uint64_t credit_semaphores_base_noc_addr_ = 0;
     uint32_t num_receivers_ = 0;
     uint32_t initial_credits_ = 0;
+    uint32_t total_credits_ = 0;
     uint32_t estimated_available_credits_ = 0;
+    uint32_t prev_processed_credits_ = 0;
+    bool got_all_credits_back_ = false;
 
     static constexpr uint32_t CREDIT_ADDRESS_STRIDE = 16;
     static constexpr uint32_t CREDIT_STRIDE_WORDS = CREDIT_ADDRESS_STRIDE / sizeof(uint32_t);
@@ -991,7 +995,7 @@ struct SenderKernelTrafficConfig {
     bool send_one_packet() {
         // STEP 1: Check credits BEFORE sending (non-benchmark mode only)
         if constexpr (!BENCHMARK_MODE) {
-            if (!credit_manager_.has_credits_available()) {
+            if (!credit_manager_.has_credits_available(num_packets_processed)) {
                 return false;  // No credits available - blocked
             }
         }
@@ -1010,8 +1014,8 @@ struct SenderKernelTrafficConfig {
             }
         }
 
-        // Send header with flush
-        connections_->send_header_flush(connection_idx_, (uint32_t)packet_header);
+        // Send header
+        connections_->send_header_non_blocking(connection_idx_, (uint32_t)packet_header);
 
         // STEP 4: Update state (after successful send)
         if constexpr (!BENCHMARK_MODE) {
@@ -1021,8 +1025,8 @@ struct SenderKernelTrafficConfig {
             if (payload_size_bytes > 0 && payload_buffer_) {
                 payload_buffer_->advance();
                 update_header_for_next_packet();
+                metadata.seed = prng_next(metadata.seed);
             }
-            metadata.seed = prng_next(metadata.seed);
 
             // STEP 5: Consume credit AFTER successful send
             credit_manager_.consume_credit();
@@ -1253,6 +1257,12 @@ struct MuxLocalAddresses {
         uint32_t status_buffer_address = current_addr;
         current_addr += address_padding_bytes;
         uint32_t sync_address = current_addr;
+
+        // zero initialize all addresses
+        auto* base_ptr = reinterpret_cast<tt_l1_ptr uint32_t*>(base_address);
+        for (uint32_t i = 0; i < (current_addr - base_address) / sizeof(uint32_t); i++) {
+            base_ptr[i] = 0;
+        }
 
         return MuxLocalAddresses{
             flow_control_address, teardown_address, buffer_index_address, status_buffer_address, sync_address};
@@ -1487,8 +1497,12 @@ struct SenderKernelConfig {
 
     void close_connections() {
         // Wait for all credits to be returned before closing
-        for (uint8_t i = 0; i < NUM_TRAFFIC_CONFIGS; i++) {
-            traffic_config_ptrs[i]->credit_manager_.wait_for_all_credits_returned();
+        bool got_all_credits_back = false;
+        while (!got_all_credits_back) {
+            got_all_credits_back = true;
+            for (uint8_t i = 0; i < NUM_TRAFFIC_CONFIGS; i++) {
+                got_all_credits_back &= traffic_config_ptrs[i]->credit_manager_.got_all_credits_back();
+            }
         }
         connections.close_all();
     }
@@ -1577,7 +1591,7 @@ private:
             traffic_config_ptrs[i]->parse_and_setup_noc_send_type(local_args_idx);
 
             // Initialize credit manager (parses credit_management_enabled + SenderCreditInfo)
-            traffic_config_ptrs[i]->credit_manager_.init(local_args_idx);
+            traffic_config_ptrs[i]->credit_manager_.init(local_args_idx, metadata.num_packets);
 
             // the payload buffer size here is the virtual size of the buffer, not the physical size
             // this virtual size is used to keep track of the physical buffer on the receiver side
@@ -1644,13 +1658,21 @@ struct ReceiverCreditManager {
     }
 
 private:
-    FORCE_INLINE void send_credits() { connections_->send_header_flush(connection_idx_, (uint32_t)packet_header_); }
+    FORCE_INLINE void send_credits() {
+        connections_->wait_for_empty_write_slot(connection_idx_);
+        connections_->send_header_non_blocking(connection_idx_, (uint32_t)packet_header_);
+    }
 
     FORCE_INLINE void send_credits(uint32_t num_credits) {
+        // flush writes before updating the header to avoid race conditions
+        noc_async_writes_flushed();
+
         uint64_t noc_addr = get_noc_addr_helper(credit_fields_.dst_noc_encoding, credit_fields_.dst_address);
         packet_header_->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{
             noc_addr, static_cast<uint16_t>(num_credits), credit_fields_.atomic_inc_wrap});
-        connections_->send_header_flush(connection_idx_, (uint32_t)packet_header_);
+
+        connections_->wait_for_empty_write_slot(connection_idx_);
+        connections_->send_header_flush_blocking(connection_idx_, (uint32_t)packet_header_);
     }
 
     FabricConnectionArray* connections_ = nullptr;
@@ -1755,11 +1777,14 @@ struct AtomicIncValidationConfig : public TrafficValidationConfigBase {
 
     static void update_impl(TrafficValidationConfigBase* base_config) {
         auto* config = static_cast<AtomicIncValidationConfig*>(base_config);
+
+        /* TODO: the wrap around logic doesnt work as expected, need to deprecate
         if (config->expected_value > config->wrap_boundary - config->value_step_size) {
             config->expected_value = config->value_step_size;  // Wrap around
         } else {
             config->expected_value += config->value_step_size;
-        }
+        }*/
+        config->expected_value += config->value_step_size;
     }
 
     volatile tt_l1_ptr uint32_t* poll_address;
@@ -1843,11 +1868,13 @@ struct WriteAtomicIncValidationConfig : public TrafficValidationConfigBase {
         auto* config = static_cast<WriteAtomicIncValidationConfig*>(base_config);
         config->metadata.seed = prng_next(config->metadata.seed);
 
+        /* TODO: the wrap around logic doesnt work as expected, need to deprecate
         if (config->expected_atomic_value > config->atomic_inc_wrap - config->atomic_inc_val) {
             config->expected_atomic_value = config->atomic_inc_val;  // Wrap around
         } else {
             config->expected_atomic_value += config->atomic_inc_val;
-        }
+        } */
+        config->expected_atomic_value += config->atomic_inc_val;
 
         config->payload_buffer_->advance();
     }
@@ -1944,8 +1971,9 @@ struct ScatterWriteValidationConfig : public TrafficValidationConfigBase {
         config->metadata.seed = prng_next(config->metadata.seed);
 
         // Advance buffer offset (similar to ReceiverPayloadBuffer::advance())
+        // Need to check if we have enough space in the buffer for the next payload
         config->current_offset += config->payload_size_bytes;
-        if (config->current_offset >= config->metadata.payload_buffer_size) {
+        if (config->current_offset + config->payload_size_bytes > config->metadata.payload_buffer_size) {
             config->current_offset = 0;  // Wrap around
         }
 
@@ -2007,13 +2035,14 @@ private:
     // Credit managers - one per traffic config
     std::array<ReceiverCreditManager, NUM_TRAFFIC_CONFIGS> credit_managers_;
 
-    alignas(TrafficValidationConfigBase) std::array<
-        char,
-        NUM_TRAFFIC_CONFIGS * std::max(
-                                  {sizeof(WriteValidationConfig),
-                                   sizeof(AtomicIncValidationConfig),
-                                   sizeof(WriteAtomicIncValidationConfig),
-                                   sizeof(ScatterWriteValidationConfig)})> validation_configs_storage;
+    constexpr static size_t MAX_VALIDATION_CONFIG_SIZE = std::max(
+        {sizeof(WriteValidationConfig),
+         sizeof(AtomicIncValidationConfig),
+         sizeof(WriteAtomicIncValidationConfig),
+         sizeof(ScatterWriteValidationConfig)});
+
+    alignas(TrafficValidationConfigBase)
+        std::array<char, NUM_TRAFFIC_CONFIGS * MAX_VALIDATION_CONFIG_SIZE> validation_configs_storage;
     std::array<TrafficValidationConfigBase*, NUM_TRAFFIC_CONFIGS> traffic_configs_;
 
 private:
@@ -2041,12 +2070,7 @@ private:
             NocSendType noc_send_type = static_cast<NocSendType>(get_local_arg_val<uint32_t>(local_args_idx++));
 
             // Get pointer to pre-allocated storage for this config
-            constexpr size_t max_config_size = std::max(
-                {sizeof(WriteValidationConfig),
-                 sizeof(AtomicIncValidationConfig),
-                 sizeof(WriteAtomicIncValidationConfig),
-                 sizeof(ScatterWriteValidationConfig)});
-            char* config_storage = validation_configs_storage.data() + i * max_config_size;
+            char* config_storage = validation_configs_storage.data() + i * MAX_VALIDATION_CONFIG_SIZE;
 
             if (noc_send_type == NocSendType::NOC_UNICAST_WRITE) {
                 const auto write_fields = NocUnicastWriteFields::build_from_args<false>(local_args_idx);

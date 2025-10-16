@@ -18,6 +18,7 @@
 #include <tt-metalium/routing_table_generator.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include "tt_metal/fabric/fabric_edm_packet_header.hpp"
+#include <tt-metalium/tt_align.hpp>
 
 namespace tt::tt_fabric::fabric_tests {
 
@@ -256,8 +257,9 @@ struct AllocatorPolicies {
             this->default_payload_chunk_size = default_payload_chunk_size.value();
         } else {
             // derive a reasonable default based on the number of configs served per receiver core
-            this->default_payload_chunk_size =
-                detail::DEFAULT_RECEIVER_L1_SIZE / this->receiver_config.max_configs_per_core;
+            auto payload_chunk_size = detail::DEFAULT_RECEIVER_L1_SIZE / this->receiver_config.max_configs_per_core;
+            // since L1 alignment is not available here, align to 64 bytes as a safe minimum
+            this->default_payload_chunk_size = tt::align(payload_chunk_size, 64);
         }
     }
 };

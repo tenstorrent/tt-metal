@@ -24,10 +24,11 @@ void TestContext::wait_for_programs_with_progress() {
 
     monitor.poll_until_complete();
 
-    // Now call wait_for_programs() to ensure proper cleanup
-    fixture_->wait_for_programs();
-
     log_info(tt::LogTest, "Progress monitoring complete");
+
+    // Now call wait_for_programs() to ensure proper cleanup
+    log_info(tt::LogTest, "Waiting for programs to complete...");
+    fixture_->wait_for_programs();
 }
 
 static double calc_bw_bytes_per_cycle(uint32_t total_words, uint64_t cycles) {

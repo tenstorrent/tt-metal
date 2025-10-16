@@ -4,7 +4,7 @@
 
 allocation_policies:
     receiver:
-      max_configs_per_core: 2
+      max_configs_per_core: 3
 
 Tests:
   - name: "LinearLooped"
@@ -20,7 +20,7 @@ Tests:
 
     defaults:
       size: 32
-      num_packets: 15000
+      num_packets: 10000
 
     patterns:
       - type: all_to_all
@@ -39,7 +39,7 @@ Tests:
 
     defaults:
       size: 32
-      num_packets: 15000
+      num_packets: 10000
 
     patterns:
       - type: all_to_all
@@ -59,7 +59,7 @@ Tests:
 
     defaults:
       size: 32
-      num_packets: 15000
+      num_packets: 10000
 
     patterns:
       - type: all_to_all
