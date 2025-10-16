@@ -41,6 +41,8 @@ bool is_input_batched(const ttnn::Shape& shape) {
  *
  * @param input_tensor_a First input tensor
  * @param input_tensor_b Second input tensor
+ * @param transpose_a Whether to transpose the first input tensor
+ * @param transpose_b Whether to transpose the second input tensor
  * @param memory_config Memory configuration for the output tensor
  * @param dtype Data type for the output tensor
  * @param bias Optional bias tensor to add to the result
@@ -51,9 +53,11 @@ Tensor handle_zero_volume_matmul(
     const Tensor& input_tensor_b,
     const MemoryConfig& memory_config,
     const std::optional<DataType>& dtype,
+    const bool transpose_a,
+    const bool transpose_b,
     const std::optional<const ttnn::Tensor>& bias = std::nullopt) {
     // Calculate the expected output shape
-    ttnn::Shape output_shape = compute_matmul_output_shape(input_tensor_a, input_tensor_b);
+    ttnn::Shape output_shape = compute_matmul_output_shape(input_tensor_a, input_tensor_b, transpose_a, transpose_b);
 
     // Use the appropriate data type (either from parameters or from input tensor)
     DataType output_dtype = dtype.value_or(input_tensor_a.dtype());
@@ -157,33 +161,19 @@ ttnn::Tensor bound_matmul(
     // Check for zero volume tensors
     if (input_tensor_a.logical_volume() == 0 || input_tensor_b.logical_volume() == 0) [[unlikely]] {
         return detail::handle_zero_volume_matmul(
-            input_tensor_a, input_tensor_b, parameters.output_mem_config, parameters.output_dtype, bias);
+            input_tensor_a,
+            input_tensor_b,
+            parameters.output_mem_config,
+            parameters.output_dtype,
+            parameters.transpose_a,
+            parameters.transpose_b,
+            bias);
     }
 
-    const auto& input_tensor_a_adjusted = parameters.transpose_a
-                                              ? ttnn::transpose(input_tensor_a, -1, -2, input_tensor_a.memory_config())
-                                              : input_tensor_a;
     const auto& input_tensor_b_adjusted =
         (input_tensor_b.logical_shape().rank() == 1)
             ? ttnn::reshape(input_tensor_b, ttnn::Shape({input_tensor_b.logical_shape()[-1], 1}))
-        : parameters.transpose_b ? ttnn::transpose(input_tensor_b, -1, -2, input_tensor_b.memory_config())
-                                 : input_tensor_b;
-
-    const auto input_tensor_a_shape = input_tensor_a_adjusted.logical_shape();
-    const auto input_tensor_b_shape = input_tensor_b_adjusted.logical_shape();
-
-    const auto width_a = input_tensor_a_shape[-1];
-    const auto height_b = input_tensor_b_shape[-2];
-
-    if (width_a != height_b) {
-        TT_THROW(
-            "ttnn.matmul: The width of the first tensor must be equal to the height of the second tensor ({} != {}). "
-            "The shape of first tensor was {} and the shape of second tensor was {})",
-            width_a,
-            height_b,
-            input_tensor_a_shape,
-            input_tensor_b_shape);
-    }
+            : input_tensor_b;
 
     bool post_process_bias = get_post_process_bias(
         bias,
@@ -194,7 +184,7 @@ ttnn::Tensor bound_matmul(
         input_tensor_b_adjusted);
 
     auto output_tensor = matmul(
-        input_tensor_a_adjusted,
+        input_tensor_a,
         input_tensor_b_adjusted,
         post_process_bias ? std::nullopt : bias,
         parameters,
@@ -202,7 +192,9 @@ ttnn::Tensor bound_matmul(
 
     if (input_tensor_b.logical_shape().rank() == 1) [[unlikely]] {
         output_tensor = ttnn::reshape(
-            output_tensor, ttnn::operations::matmul::compute_matmul_output_shape(input_tensor_a, input_tensor_b));
+            output_tensor,
+            ttnn::operations::matmul::compute_matmul_output_shape(
+                input_tensor_a, input_tensor_b, parameters.transpose_a, parameters.transpose_b));
     }
 
     // Apply bias as post-processing if needed

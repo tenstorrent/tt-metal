@@ -43,12 +43,16 @@ using ttnn::operations::unary::UnaryWithParam;
  * - For 2D tensors: [m, k] @ [k, n] -> [m, n]
  * - For tensors with batch dimensions, the batch dimensions are broadcast
  * - For vector-matrix multiplication (rank 1 @ rank 2), the result is a vector
+ *  Takes into account the transpose flags for the input tensors.
  *
  * @param input_tensor_a First input tensor
  * @param input_tensor_b Second input tensor
+ * @param transpose_a Whether to transpose the first input tensor
+ * @param transpose_b Whether to transpose the second input tensor
  * @return Shape of the resulting tensor after matmul
  */
-ttnn::Shape compute_matmul_output_shape(const Tensor& input_tensor_a, const Tensor& input_tensor_b);
+ttnn::Shape compute_matmul_output_shape(
+    const Tensor& input_tensor_a, const Tensor& input_tensor_b, bool transpose_a, bool transpose_b);
 
 /**
  * @brief Computes the output shape of a sparse matmul operation given two input tensors.
@@ -79,6 +83,8 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_o
     const std::optional<const Tensor>& bias,
     const std::vector<Tensor>& output_tensors,
     bool bcast_batch,
+    bool transpose_a,
+    bool transpose_b,
     CoreCoord compute_with_storage_grid_size,
     DeviceComputeKernelConfig compute_kernel_config,
     uint32_t in0_block_w,
