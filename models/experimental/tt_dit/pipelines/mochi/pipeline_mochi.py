@@ -218,7 +218,7 @@ class MochiPipeline(DiffusionPipeline):
             )
             assert os.path.exists(
                 cache_path
-            ), "Cache path does not exist. Run test_mochi_transformer_model_caching first with the desired parallel config."
+            ), f"Cache path: {cache_path} does not exist. Run test_mochi_transformer_model_caching first with the desired parallel config."
             cache_dict = load_cache_dict(cache_path)
             self.transformer.from_cached_state_dict(cache_dict)
         else:

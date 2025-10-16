@@ -111,9 +111,11 @@ def test_mochi_diffusers_pipeline():
 @pytest.mark.parametrize(
     "mesh_device, sp_axis, tp_axis, num_links",
     [
+        [(2, 4), 0, 1, 1],
         [(4, 8), 1, 0, 4],
     ],
     ids=[
+        "2x4sp0tp1",
         "4x8sp1tp0",
     ],
     indirect=["mesh_device"],
@@ -149,11 +151,11 @@ def test_tt_mochi_pipeline(
     )
     w_parallel_factor = 2
     vae_parallel_config = MochiVAEParallelConfig(
-        time_parallel=ParallelFactor(factor=mesh_device.shape[0], mesh_axis=0),
-        w_parallel=ParallelFactor(factor=w_parallel_factor, mesh_axis=1),
-        h_parallel=ParallelFactor(factor=mesh_device.shape[1] // w_parallel_factor, mesh_axis=1),
+        time_parallel=ParallelFactor(factor=mesh_device.shape[tp_axis], mesh_axis=tp_axis),
+        w_parallel=ParallelFactor(factor=w_parallel_factor, mesh_axis=sp_axis),
+        h_parallel=ParallelFactor(factor=mesh_device.shape[sp_axis] // w_parallel_factor, mesh_axis=sp_axis),
     )
-    assert vae_parallel_config.h_parallel.factor * vae_parallel_config.w_parallel.factor == mesh_device.shape[1]
+    assert vae_parallel_config.h_parallel.factor * vae_parallel_config.w_parallel.factor == mesh_device.shape[sp_axis]
     assert vae_parallel_config.h_parallel.mesh_axis == vae_parallel_config.w_parallel.mesh_axis
 
     # Create the TT Mochi pipeline

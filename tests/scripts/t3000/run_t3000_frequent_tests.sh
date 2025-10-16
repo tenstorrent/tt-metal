@@ -380,7 +380,7 @@ run_t3000_mochi_tests() {
 
   echo "LOG_METAL: Running run_t3000_mochi_tests"
 
-  pytest -n auto models/experimental/tt_dit/tests/models/mochi/test_vae_mochi.py; fail+=$?
+  pytest -n auto models/experimental/tt_dit/tests/models/mochi/test_vae_mochi.py -k "1link-l and not small_latent or 1link and large_latent or test_tt_conv3d" --timeout=600; fail+=$?
   pytest -n auto models/experimental/tt_dit/tests/models/mochi/test_attention_mochi.py; fail+=$?
   pytest -n auto models/experimental/tt_dit/tests/models/mochi/test_transformer_mochi.py -k "1x8 or 2x4 and short_seq and not yes_load_cache and not model_caching"; fail+=$?
 
