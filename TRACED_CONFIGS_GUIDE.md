@@ -22,8 +22,7 @@
 |------|---------|
 | **Trace a model** | `python generic_ops_tracer.py <test_path>` |
 | **View configurations** | `python analyze_operations.py <operation_name>` |
-| **Run model-traced suite** | `pytest tests/.../test.py -k model_traced` |
-| **Analyze sweep results** | `python analyze_sweep_results.py` |
+| **Run sweep test** | `pytest tests/sweep_framework/sweeps/.../test.py` (results in Superset dashboard) |
 
 ### Key Files
 
@@ -35,46 +34,47 @@
 
 ### Integration Pattern (Copy & Paste)
 
+**Just 3 simple changes to your sweep test:**
+
 ```python
-# For Unary Operations (sigmoid, relu, etc.)
-from tests.sweep_framework.sweep_config_utils import load_unary_op_configs
+# 1. Import the loader and helper function
+from tests.sweep_framework.master_config_loader import MasterConfigLoader, unpack_traced_config
 
-# Load configs
-master_traced_config = load_unary_op_configs("sigmoid_accurate")
+# 2. Load and add to parameters (before your parameters dict)
+loader = MasterConfigLoader()
+# Default: Run exact 30 traced configs
+model_traced_params = loader.get_suite_parameters("your_operation_name")
+# OR: Run all combinations (30 shapes × dtypes × layouts × memory_configs)
+# model_traced_params = loader.get_suite_parameters("your_operation_name", all_cases=True)
 
-# Create lookup
-_CONFIG_LOOKUP = {}
-_config_spec_names = []
-if "traced_config" in master_traced_config:
-    for idx, (shape, mem_config) in enumerate(master_traced_config["traced_config"]):
-        config_name = f"traced_{idx}"
-        _CONFIG_LOOKUP[config_name] = {
-            "shape": shape,
-            "memory_config": mem_config,
-            "output_memory_config": mem_config,  # Match input for unary ops
-            "layout": ttnn.TILE_LAYOUT,
-            "dtype": ttnn.bfloat8_b,
-        }
-        _config_spec_names.append(config_name)
-
-def get_traced_config(config_name):
-    return _CONFIG_LOOKUP.get(config_name, {"shape": [1, 32, 32], "memory_config": ttnn.DRAM_MEMORY_CONFIG})
-
-# Add to parameters
 parameters = {
-    "model_traced": {
-        "traced_config_name": _config_spec_names,
+    "nightly": {
+        # ... your existing nightly tests ...
     },
+    "model_traced": model_traced_params,  # Just add this line!
 }
 
-# Handle in run()
-def run(traced_config_name=None, *, device):
+# 3. In your run() function, add traced_config_name parameter and ONE line to unpack
+def run(
+    input_shape=None,
+    input_a_dtype=None,
+    input_a_layout=None,
+    input_a_memory_config=None,
+    output_memory_config=None,
+    traced_config_name=None,  # Add this parameter
+    *,
+    device,
+):
+    # Unpack all config values in ONE line
     if traced_config_name:
-        config = get_traced_config(traced_config_name)
-        input_shape = config["shape"]
-        input_a_memory_config = config["memory_config"]
-        # ... use config values ...
+        input_shape, input_a_dtype, input_a_layout, input_a_memory_config, output_memory_config = unpack_traced_config(traced_config_name)
+
+    # Rest of your test logic stays the same!
 ```
+
+**That's it!** Just **1 line** to unpack all values. No module-level dictionaries, no manual parsing, no boilerplate!
+
+**Note:** If you use `all_cases=True`, the `traced_config_name` parameter won't be used - the sweep framework will pass individual parameters (`input_shape`, `input_a_dtype`, etc.) directly via Cartesian product. The unpacking line will simply be skipped.
 
 ---
 
@@ -135,27 +135,25 @@ python analyze_operations.py matmul
 
 ### 3. Use in Sweep Tests
 
-Configurations are **automatically loaded** by sweep tests that import the config utilities:
+Configurations are **automatically loaded** with just 3 lines of code:
 
 ```python
 # In your sweep test file (e.g., sigmoid_accurate.py)
-from tests.sweep_framework.sweep_config_utils import load_unary_op_configs
+from tests.sweep_framework.master_config_loader import MasterConfigLoader
 
-# Load traced configs - automatically uses ttnn_operations_master.json
-master_traced_config = load_unary_op_configs("sigmoid_accurate")
+loader = MasterConfigLoader()
+model_traced_params = loader.get_suite_parameters("sigmoid_accurate")
 
 parameters = {
-    "model_traced": {
-        "traced_config_name": _config_spec_names,
-    },
+    "model_traced": model_traced_params,  # That's it!
 }
 ```
 
 ### 4. Run Sweep Tests
 
 ```bash
-# Run sweep test with model_traced suite
-pytest tests/sweep_framework/sweeps/eltwise/unary/sigmoid_accurate/sigmoid_accurate.py -k model_traced
+# Run sweep test normally - results appear in Superset dashboard
+pytest tests/sweep_framework/sweeps/eltwise/unary/sigmoid_accurate/sigmoid_accurate.py
 ```
 
 ---
@@ -294,51 +292,46 @@ python analyze_operations.py <operation_name>
 
 ### Integrating into Sweep Tests
 
-#### Step 1: Import Utilities
+Integration is **extremely simple** - just 3 changes!
+
+#### Step 1: Import Loader and Helper Function
 
 ```python
-from tests.sweep_framework.sweep_config_utils import load_unary_op_configs  # For unary ops
-# or
-from tests.sweep_framework.sweep_config_utils import load_binary_op_configs  # For binary ops
+from tests.sweep_framework.master_config_loader import MasterConfigLoader, unpack_traced_config
 ```
 
-#### Step 2: Load Configurations
+#### Step 2: Load and Add to Parameters
 
 ```python
-# Load traced configs for sigmoid_accurate
-master_traced_config = load_unary_op_configs("sigmoid_accurate")
+loader = MasterConfigLoader()
 
-# Create config lookup (avoids serialization issues)
-_CONFIG_LOOKUP = {}
-_config_spec_names = []
+# Option 1 (Default): Run exact traced configs (e.g., 30 tests)
+model_traced_params = loader.get_suite_parameters("your_operation_name")
 
-if "traced_config" in master_traced_config:
-    for idx, (shape, mem_config) in enumerate(master_traced_config["traced_config"]):
-        config_name = f"traced_{idx}"
-        _CONFIG_LOOKUP[config_name] = {
-            "shape": shape,
-            "memory_config": mem_config,
-            "output_memory_config": mem_config,  # Match input for unary ops
-            "layout": ttnn.TILE_LAYOUT,
-            "dtype": ttnn.bfloat8_b,
-        }
-        _config_spec_names.append(config_name)
-```
+# Option 2: Run all combinations (e.g., 30 shapes × unique dtypes × layouts × memory_configs)
+# model_traced_params = loader.get_suite_parameters("your_operation_name", all_cases=True)
 
-#### Step 3: Add to Parameters Dictionary
-
-```python
 parameters = {
     "nightly": {
-        # ... existing nightly tests ...
+        # ... your existing nightly tests ...
     },
-    "model_traced": {
-        "traced_config_name": _config_spec_names,  # List of config names
-    },
+    "model_traced": model_traced_params,  # Just add this line!
 }
 ```
 
-#### Step 4: Handle in Run Function
+**Choosing Between Modes:**
+- **Default (`all_cases=False`)**: Runs exactly N traced configs as they appeared in real models
+  - ✅ Fast - only 30 tests for 30 traced configs
+  - ✅ Tests real-world usage patterns
+  - ✅ Each test uses the exact config combination from production
+- **All Cases (`all_cases=True`)**: Runs all possible combinations (Cartesian product)
+  - 📊 Comprehensive - tests all combinations
+  - ⏱️ Slower - can generate hundreds or thousands of tests
+  - 🔬 Useful for finding edge cases across different parameter combinations
+
+#### Step 3: Update Your Run Function
+
+Add `traced_config_name` parameter and use the helper to unpack in ONE line:
 
 ```python
 def run(
@@ -347,25 +340,36 @@ def run(
     input_a_layout=None,
     input_a_memory_config=None,
     output_memory_config=None,
-    traced_config_name=None,  # New parameter
+    traced_config_name=None,  # Add this parameter
     *,
     device,
 ) -> list:
-    # Load config from lookup if traced_config_name provided
-    if traced_config_name is not None:
-        config = get_traced_config(traced_config_name)
-        input_shape = config["shape"]
-        input_a_memory_config = config["memory_config"]
-        output_memory_config = config["output_memory_config"]
-        input_a_layout = config["layout"]
-        input_a_dtype = config["dtype"]
+    # Unpack all config values in ONE line
+    if traced_config_name:
+        input_shape, input_a_dtype, input_a_layout, input_a_memory_config, output_memory_config = unpack_traced_config(traced_config_name)
 
-    # ... rest of test implementation ...
+    # Everything is now ready to use!
+    # ... your test implementation ...
 ```
+
+**Why this approach?**
+- ✅ **Ultra-minimal** - just 1 line to unpack all values
+- ✅ **No boilerplate** - no module-level dictionaries, no manual parsing
+- ✅ **Clean separation** - all complexity handled by the loader
+- ✅ **Easy to adopt** - just import, load, and unpack
+- ✅ **Generates exactly N test vectors** for N traced configs (no Cartesian product)
 
 #### Complete Example
 
 See `/home/ubuntu/tt-metal/tests/sweep_framework/sweeps/eltwise/unary/sigmoid_accurate/sigmoid_accurate.py` for a full working example.
+
+**That's all you need!** The master config loader handles:
+- ✅ Loading from master JSON
+- ✅ Parsing tensor configurations (including UnparsedElements)
+- ✅ Creating TTNN memory configs with exact shard specs
+- ✅ Pairing configs to avoid Cartesian product explosion
+- ✅ Formatting for sweep framework
+- ✅ Everything else!
 
 ---
 
@@ -827,19 +831,31 @@ class OperationsTracingPlugin:
 
 ### Adding New Sweep Tests
 
-1. **Create sweep test file** in appropriate directory:
-   ```python
-   # tests/sweep_framework/sweeps/eltwise/unary/my_op/my_op.py
-   from tests.sweep_framework.sweep_config_utils import load_unary_op_configs
+Integration is now just 3 lines! Here's the complete pattern:
 
-   master_traced_config = load_unary_op_configs("my_op")
-   ```
+```python
+# tests/sweep_framework/sweeps/eltwise/unary/my_op/my_op.py
+from tests.sweep_framework.master_config_loader import MasterConfigLoader
 
-2. **Set up config lookup** (follow sigmoid_accurate.py pattern)
+# Load traced configs (one line!)
+loader = MasterConfigLoader()
+model_traced_params = loader.get_suite_parameters("my_op")
 
-3. **Add model_traced suite** to parameters
+# Add to parameters (one line!)
+parameters = {
+    "nightly": {
+        # ... your existing tests ...
+    },
+    "model_traced": model_traced_params,  # Done!
+}
 
-4. **Handle traced_config_name** in run function
+# Your run function stays the same - no special handling needed!
+def run(input_shape=None, input_a_dtype=None, ..., *, device):
+    # Just use the parameters - everything is set up automatically
+    pass
+```
+
+That's it! The loader handles everything else.
 
 ### Tracing Custom Models
 
@@ -923,24 +939,32 @@ Key optimizations captured:
 
 ✅ **Automatic Configuration Extraction**: From any model test
 ✅ **Centralized Storage**: Single master JSON with deduplication
-✅ **Easy Integration**: Drop-in for existing sweep tests
+✅ **Ultra-Simple Integration**: Just 3 lines of code to add traced configs
 ✅ **Production Accuracy**: 100% pass rate with real configs
 ✅ **Analysis Tools**: Query and inspect configurations
 
 ### Workflow
 
 ```
-1. Trace Model → 2. Store in Master JSON → 3. Use in Sweep Tests
+1. Trace Model → 2. Store in Master JSON → 3. Use in Sweep Tests (3 lines!)
      ⬇️                      ⬇️                        ⬇️
    Real-world          Deduplicated           Model-driven
-   configs            configurations            testing
+   configs            configurations         model_traced
+```
+
+### Integration is Just 3 Lines
+
+```python
+from tests.sweep_framework.master_config_loader import MasterConfigLoader
+loader = MasterConfigLoader()
+parameters = {"model_traced": loader.get_suite_parameters("your_op")}
 ```
 
 ### Next Steps
 
 1. **Trace more models**: Add ResNet, BERT, Whisper, etc.
-2. **Expand coverage**: Add more operations to sweep tests
-3. **Monitor results**: Use `analyze_sweep_results.py` for CI/CD
+2. **Expand coverage**: Add `model_traced` suite to more sweep tests (3 lines each!)
+3. **Monitor results**: View in Superset dashboard
 4. **Iterate**: As models evolve, re-trace to update configs
 
 ---

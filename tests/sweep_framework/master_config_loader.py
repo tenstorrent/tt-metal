@@ -29,6 +29,7 @@ class MasterConfigLoader:
     def __init__(self, master_file_path: str = "/home/ubuntu/tt-metal/traced_operations/ttnn_operations_master.json"):
         self.master_file_path = master_file_path
         self.master_data = None
+        self.traced_configs_cache = {}  # Cache configs by operation name
 
     def load_master_data(self):
         """Load the master JSON file"""
@@ -251,9 +252,242 @@ class MasterConfigLoader:
             print(f"⚠️ Error parsing memory config, using DRAM default: {e}")
             return ttnn.DRAM_MEMORY_CONFIG
 
+    def get_suite_parameters(
+        self, operation_name: str, suite_name: str = "model_traced", all_cases: bool = False
+    ) -> Dict:
+        """
+        Get ready-to-use sweep test parameters for an operation.
+        This is the simplified interface for sweep tests.
+
+        Args:
+            operation_name: Name of the operation (e.g., 'sigmoid_accurate', 'add')
+            suite_name: Name of the test suite (default: 'model_traced')
+            all_cases: If False (default), returns exact traced configs (N tests).
+                      If True, returns all combinations as Cartesian product (N×M×... tests).
+
+        Returns:
+            Dictionary with all necessary parameters ready to add to test parameters
+
+        Example:
+            # Default: Run exact 30 traced configs
+            loader = MasterConfigLoader()
+            model_traced_params = loader.get_suite_parameters("sigmoid_accurate")
+
+            # Or: Run all combinations (30 shapes × dtypes × layouts × memory_configs)
+            model_traced_params = loader.get_suite_parameters("sigmoid_accurate", all_cases=True)
+
+            parameters = {
+                "model_traced": model_traced_params,
+            }
+        """
+        # Register this instance as global so get_traced_config() can access it
+        get_global_loader(self)
+
+        try:
+            configs = self.get_operation_configs(operation_name)
+
+            if not configs:
+                print(f"⚠️ No traced configurations found for {operation_name}")
+                # Return empty lists - sweep tests will handle defaults
+                return {
+                    "input_shape": [[1, 32, 32]],
+                    "input_a_dtype": [],
+                    "input_a_layout": [],
+                    "input_a_memory_config": [],
+                    "output_memory_config": [],
+                }
+
+            # Extract PAIRED configurations (shape + dtype + layout + memory_config)
+            # This ensures we get N exact configs, not a Cartesian product
+            paired_configs = []
+            failed_configs = 0
+
+            for config_idx, config in enumerate(configs):
+                try:
+                    # Extract first tensor from each config
+                    # Config is a list of arguments: [{"UnparsedElement": ...}, {"arg1": "nullopt"}, ...]
+                    tensor_config = None
+                    for arg in config:
+                        # arg is a dict, could be {"UnparsedElement": ...} or {"arg0": {...}} etc.
+                        # Pass the entire arg dict to extract_tensor_config
+                        tensor_config = self.extract_tensor_config(arg)
+                        if tensor_config:
+                            break  # Found tensor, proceed to parse it
+
+                    if not tensor_config:
+                        failed_configs += 1
+                        continue
+
+                    # Parse the config to TTNN types
+                    try:
+                        parsed_dtype = self.parse_dtype(tensor_config.dtype)
+                        parsed_layout = self.parse_layout(tensor_config.layout)
+                        parsed_mem_config = self.parse_memory_config(tensor_config.memory_config, tensor_config.shape)
+
+                        if parsed_dtype and parsed_layout and parsed_mem_config:
+                            paired_configs.append(
+                                {
+                                    "shape": tensor_config.shape,
+                                    "dtype": parsed_dtype,
+                                    "layout": parsed_layout,
+                                    "memory_config": parsed_mem_config,
+                                    "output_memory_config": parsed_mem_config,  # For unary ops, output matches input
+                                }
+                            )
+                        else:
+                            failed_configs += 1
+                    except (AttributeError, Exception) as e:
+                        failed_configs += 1
+                except Exception as e:
+                    failed_configs += 1
+
+            # Build parameter dictionary based on all_cases flag
+            if paired_configs:
+                # Store configs in instance cache for lookup
+                self.traced_configs_cache[operation_name] = paired_configs
+
+                if all_cases:
+                    # Return separate lists for Cartesian product
+                    # Extract unique values for each parameter type
+                    shapes = []
+                    dtypes = set()
+                    layouts = set()
+                    memory_configs = []
+                    output_memory_configs = []
+
+                    for cfg in paired_configs:
+                        shapes.append(cfg["shape"])
+                        dtypes.add(cfg["dtype"])
+                        layouts.add(cfg["layout"])
+                        memory_configs.append(cfg["memory_config"])
+                        output_memory_configs.append(cfg["output_memory_config"])
+
+                    result = {
+                        "input_shape": shapes,
+                        "input_a_dtype": list(dtypes),
+                        "input_a_layout": list(layouts),
+                        "input_a_memory_config": memory_configs,
+                        "output_memory_config": output_memory_configs,
+                    }
+
+                    total_tests = (
+                        len(shapes) * len(dtypes) * len(layouts) * len(memory_configs) * len(output_memory_configs)
+                    )
+                    print(
+                        f"✅ Loaded {len(paired_configs)} traced configurations for {operation_name} ({suite_name} suite)"
+                    )
+                    print(f"   📊 all_cases=True: Will generate ~{total_tests} test vectors (Cartesian product)")
+                    if failed_configs > 0:
+                        print(f"⚠️ Failed to parse {failed_configs} configurations")
+                else:
+                    # Return config names for exact paired configs (default)
+                    traced_config_names = [f"{operation_name}_traced_{i}" for i in range(len(paired_configs))]
+
+                    result = {
+                        "traced_config_name": traced_config_names,
+                    }
+
+                    print(
+                        f"✅ Loaded {len(paired_configs)} traced configurations for {operation_name} ({suite_name} suite)"
+                    )
+                    print(f"   📊 Will generate {len(paired_configs)} test vectors (exact traced configs)")
+                    if failed_configs > 0:
+                        print(f"⚠️ Failed to parse {failed_configs} configurations")
+
+                return result
+            else:
+                # No configs successfully parsed, return empty
+                print(f"⚠️ No configurations could be parsed for {operation_name} (TTNN may not be initialized)")
+                return {
+                    "traced_config": [],
+                }
+
+        except Exception as e:
+            print(f"⚠️ Error loading suite parameters for {operation_name}: {e}")
+            import traceback
+
+            traceback.print_exc()
+            # Return empty lists - sweep tests will handle defaults
+            return {
+                "input_shape": [[1, 32, 32]],
+                "input_a_dtype": [],
+                "input_a_layout": [],
+                "input_a_memory_config": [],
+                "output_memory_config": [],
+            }
+
+    def get_traced_config(self, traced_config_name: str) -> Optional[Dict]:
+        """
+        Look up a traced config by its name.
+
+        Args:
+            traced_config_name: String name like "sigmoid_accurate_traced_0"
+
+        Returns:
+            Dictionary with 'shape', 'dtype', 'layout', 'memory_config', 'output_memory_config'
+            or None if not found
+        """
+        if traced_config_name is None:
+            return None
+
+        # Extract operation name and index from name like "sigmoid_accurate_traced_0"
+        parts = traced_config_name.split("_traced_")
+        if len(parts) != 2:
+            return None
+
+        operation_name = parts[0]
+        try:
+            config_idx = int(parts[1])
+        except ValueError:
+            return None
+
+        # Look up in cache
+        if operation_name in self.traced_configs_cache:
+            configs = self.traced_configs_cache[operation_name]
+            if config_idx < len(configs):
+                return configs[config_idx]
+
+        return None
+
     def extract_tensor_config(self, arg_data: Dict) -> Optional[TensorConfig]:
         """Extract tensor configuration from argument data"""
-        if not isinstance(arg_data, dict) or "Tensor" not in arg_data:
+        if not isinstance(arg_data, dict):
+            return None
+
+        # Handle UnparsedElement by parsing its element_info string
+        if "UnparsedElement" in arg_data:
+            unparsed_data = arg_data["UnparsedElement"]
+            element_info = unparsed_data.get("element_info", "")
+
+            if element_info and element_info.startswith("{"):
+                try:
+                    # Apply regex fixes for C++ style formats
+                    fixed_json_str = element_info
+                    # Fix C++ style braces in values like "{32, 32}" -> "[32, 32]"
+                    fixed_json_str = re.sub(r':\s*"{\s*([^}]+)\s*}"', r': "[\1]"', fixed_json_str)
+                    # Fix grid format: "grid":{[...], [...]} -> "grid":[[...], [...]]
+                    # This handles CoreRangeSet structures with multiple ranges
+                    fixed_json_str = re.sub(
+                        r'"grid"\s*:\s*\{(\[.*?\](?:\s*,\s*\[.*?\])*)\}', r'"grid":[\1]', fixed_json_str
+                    )
+                    # Fix grid ranges like {"x":0,"y":0} - {"x":7,"y":7} -> {"x":0,"y":0}, {"x":7,"y":7}
+                    # Using a more specific pattern to handle coordinate objects
+                    fixed_json_str = re.sub(
+                        r'(\{"x":\d+,"y":\d+\})\s*-\s*(\{"x":\d+,"y":\d+\})', r"\1, \2", fixed_json_str
+                    )
+
+                    # Parse the fixed JSON
+                    parsed_data = json.loads(fixed_json_str)
+
+                    # Extract arg0 (first argument) which contains the tensor
+                    for key, value in parsed_data.items():
+                        if isinstance(value, dict) and "Tensor" in value:
+                            arg_data = value
+                            break
+                except Exception as e:
+                    return None
+
+        if "Tensor" not in arg_data:
             return None
 
         tensor_data = arg_data["Tensor"]
@@ -390,6 +624,98 @@ def create_master_based_sweep_test(operation_name: str):
     }
 
     return parameters
+
+
+# Global instance for easy access from sweep tests
+_global_loader = None
+
+
+def get_global_loader(instance: MasterConfigLoader = None) -> MasterConfigLoader:
+    """
+    Get or create the global MasterConfigLoader instance.
+
+    Args:
+        instance: If provided, sets this as the global instance
+
+    Returns:
+        The global MasterConfigLoader instance
+    """
+    global _global_loader
+    if instance is not None:
+        _global_loader = instance
+    if _global_loader is None:
+        _global_loader = MasterConfigLoader()
+    return _global_loader
+
+
+def get_traced_config(traced_config_name: str) -> Optional[Dict]:
+    """
+    Convenience function to look up traced config from global loader.
+    Use this in your sweep test's run() function.
+
+    Args:
+        traced_config_name: String name like "sigmoid_accurate_traced_0"
+
+    Returns:
+        Dictionary with 'shape', 'dtype', 'layout', 'memory_config', 'output_memory_config'
+        or None if not found
+
+    Example:
+        ```python
+        def run(traced_config_name=None, ...):
+            if traced_config_name:
+                cfg = get_traced_config(traced_config_name)
+                input_shape = cfg['shape']
+                input_a_dtype = cfg['dtype']
+                # ... etc
+        ```
+    """
+    return get_global_loader().get_traced_config(traced_config_name)
+
+
+def unpack_traced_config(
+    traced_config_name: str, use_defaults: bool = False
+) -> Tuple[Optional[list], Optional[any], Optional[any], Optional[any], Optional[any]]:
+    """
+    Convenience function to unpack a traced config directly into values.
+    This is the SIMPLEST way to use traced configs in your sweep test.
+
+    Args:
+        traced_config_name: String name like "sigmoid_accurate_traced_0"
+        use_defaults: If True and config not found, returns default values instead of None
+
+    Returns:
+        Tuple of (shape, dtype, layout, input_memory_config, output_memory_config)
+        or (None, None, None, None, None) if not found and use_defaults=False
+        or default values if not found and use_defaults=True
+
+    Example:
+        ```python
+        def run(input_shape=None, input_a_dtype=None, ..., traced_config_name=None, *, device):
+            # Unpack traced config if provided, otherwise use defaults
+            input_shape, input_a_dtype, input_a_layout, input_a_memory_config, output_memory_config = (
+                unpack_traced_config(traced_config_name) if traced_config_name
+                else (input_shape, input_a_dtype, input_a_layout, input_a_memory_config, output_memory_config)
+            )
+
+            # Or even simpler: let defaults be None and handle them later
+        ```
+    """
+    cfg = get_traced_config(traced_config_name)
+    if cfg:
+        return (cfg["shape"], cfg["dtype"], cfg["layout"], cfg["memory_config"], cfg["output_memory_config"])
+
+    if use_defaults:
+        # Return sensible defaults
+        return (
+            [1, 32, 32],  # shape
+            ttnn.bfloat16,  # dtype
+            ttnn.TILE_LAYOUT,  # layout
+            ttnn.DRAM_MEMORY_CONFIG,  # input_memory_config
+            ttnn.DRAM_MEMORY_CONFIG,  # output_memory_config
+        )
+
+    return (None, None, None, None, None)
 
 
 if __name__ == "__main__":
