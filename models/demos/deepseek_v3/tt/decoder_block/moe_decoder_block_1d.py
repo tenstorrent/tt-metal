@@ -159,8 +159,8 @@ class MoEDecoderBlock1D(DecoderBlock1DBase):
 
                 ttnn.point_to_point(
                     tt_input,
-                    dest_coord,
                     source_coord,
+                    dest_coord,
                     topology=ttnn.Topology.Linear,
                     output_tensor=tt_input,
                 )

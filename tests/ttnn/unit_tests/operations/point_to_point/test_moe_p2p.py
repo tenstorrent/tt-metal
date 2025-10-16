@@ -23,8 +23,8 @@ def run_test_col_step(mesh_shape, col_dim_idx, data_tensor):
 
         ttnn.point_to_point(
             data_tensor,
-            ttnn.MeshCoordinate(dest_coord),
             ttnn.MeshCoordinate(source_coord),
+            ttnn.MeshCoordinate(dest_coord),
             topology=ttnn.Topology.Linear,
             output_tensor=data_tensor,
         )
@@ -80,8 +80,8 @@ def _broadcast_through_column(source_col_dim_idx, row_dim_index, data_tensor, me
 
         ttnn.point_to_point(
             data_tensor,
-            dest_coord,
             source_coord,
+            dest_coord,
             topology=ttnn.Topology.Linear,
             output_tensor=data_tensor,
         )
