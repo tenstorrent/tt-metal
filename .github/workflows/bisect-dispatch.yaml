@@ -56,7 +56,7 @@ jobs:
     runs-on: >-
       ${{
         fromJSON(format('["{0}", "in-service", "cloud-virtual-machine"]', inputs.runner-label))
-        || format('tt-ubuntu-2204-{0}-viommu-metal', inputs.runner-label)
+        || format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label)
       }}
     container:
       image: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-dev-amd64:latest

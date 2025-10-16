@@ -22,7 +22,7 @@ on:
 
 jobs:
   ttsim-integration:
-    runs-on: tt-ubuntu-2204-small-metal
+    runs-on: tt-ubuntu-2204-small-stable
     name: "TTSim Integration - ${{ matrix.arch }}"
     strategy:
       fail-fast: false
