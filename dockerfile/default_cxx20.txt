@@ -1,7 +1,7 @@
 
 include(default)
 
-{% set clang_candidates = ["clang", "clang-15", "clang-16", "clang-17", "clang-18", "clang-19"] %}
+{% set clang_candidates = ["clang", "clang-19", "clang-18", "clang-17", "clang-16", "clang-15"] %}
 {% set vars = {'clang_info': None, 'clang_binary': None} %}
 {% for clang_bin in clang_candidates %}
   {% set candidate_info = detect_api.detect_clang_compiler(clang_bin) %}
