@@ -136,33 +136,33 @@ while [[ "$found" == "false" ]]; do
 
   fresh_clean
 
-  # build_rc=0
-  # if [ "$tracy_enabled" -eq 1 ]; then
-  #   ./build_metal.sh \
-  #     --build-all \
-  #     --enable-ccache \
-  #     --enable-profiler || build_rc=$?
-  # else
-  #   ./build_metal.sh \
-  #     --build-all \
-  #     --enable-ccache || build_rc=$?
-  # fi
+  build_rc=0
+  if [ "$tracy_enabled" -eq 1 ]; then
+    ./build_metal.sh \
+      --build-all \
+      --enable-ccache \
+      --enable-profiler || build_rc=$?
+  else
+    ./build_metal.sh \
+      --build-all \
+      --enable-ccache || build_rc=$?
+  fi
 
-  # echo "::endgroup::"
+  echo "::endgroup::"
 
-  # if [ $build_rc -ne 0 ]; then
-  #   echo "Build failed (rc=$build_rc); skipping this commit"
-  #   git bisect skip
-  #   continue
-  # fi
+  if [ $build_rc -ne 0 ]; then
+    echo "Build failed (rc=$build_rc); skipping this commit"
+    git bisect skip
+    continue
+  fi
 
   echo "::group::Import sanity ($rev)"
-  # if ! verify_import_path; then
-  #   echo "Import path check failed; skipping this commit"
-  #   git bisect skip
-  #   echo "::endgroup::"
-  #   continue
-  # fi
+  if ! verify_import_path; then
+    echo "Import path check failed; skipping this commit"
+    git bisect skip
+    echo "::endgroup::"
+    continue
+  fi
   echo "::endgroup::"
 
   echo "::group::Testing $rev"
