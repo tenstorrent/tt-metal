@@ -20,7 +20,7 @@ show_help() {
     echo "  -h, --help                       Show this help message."
     echo "  -e, --export-compile-commands    Enable CMAKE_EXPORT_COMPILE_COMMANDS."
     echo "  -c, --enable-ccache              Enable ccache for the build."
-    echo "  -b, --build-type build_type      Set the build type. Default is Release. Other options are Debug, RelWithDebInfo, ASan and TSan."
+    echo "  -b, --build-type build_type      Set the build type. Default is Release. Other options are Debug, RelWithDebInfo, ASan, TSan, ASanCoverage."
     echo "  -t, --enable-time-trace          Enable build time trace (clang only)."
     echo "  --disable-profiler               Disable Tracy profiler (enabled by default)."
     echo "  --install-prefix                 Where to install build artifacts."
@@ -48,7 +48,6 @@ show_help() {
     echo "  --ttnn-shared-sub-libs           Use shared libraries for ttnn."
     echo "  --toolchain-path                 Set path to CMake toolchain file."
     echo "  --configure-only                 Only configure the project, do not build."
-    echo "  --enable-coverage                Instrument the binaries for code coverage."
     echo "  --without-distributed            Disable distributed compute support (OpenMPI dependency). Enabled by default."
     echo "  --without-python-bindings        Disable Python bindings (ttnncpp will be available as standalone library, otherwise ttnn will include the cpp backend and the python bindings), Enabled by default"
     echo "  --enable-fake-kernels-target     Enable fake kernels target, to enable generation of compile_commands.json for the kernels to enable IDE support."
@@ -56,7 +55,7 @@ show_help() {
 
 clean() {
     echo "INFO: Removing build artifacts!"
-    rm -rf build_Release* build_Debug* build_RelWithDebInfo* build_ASan* build_TSan* build built .cpmcache
+    rm -rf build_Release* build_Debug* build_RelWithDebInfo* build_ASan* build_TSan* build_ASanCoverage build built .cpmcache
     rm -rf ~/.cache/tt-metal-cache /tmp/tt-metal-cache
     if [[ ! -z $TT_METAL_CACHE ]]; then
         echo "User has TT_METAL_CACHE set, please make sure you delete it in order to delete all artifacts!"
@@ -95,7 +94,6 @@ if [[ "$FLAVOR" == "ubuntu" && "$VERSION" == "20.04" ]]; then
 fi
 
 configure_only="OFF"
-enable_coverage="OFF"
 enable_distributed="ON"
 with_python_bindings="ON"
 enable_fake_kernels_target="OFF"
@@ -135,7 +133,6 @@ c-compiler-path:
 ttnn-shared-sub-libs
 toolchain-path:
 configure-only
-enable-coverage
 without-distributed
 without-python-bindings
 enable-fake-kernels-target
@@ -164,8 +161,6 @@ while true; do
             enable_ccache="ON";;
         -t|--enable-time-trace)
             enable_time_trace="ON";;
-        --enable-coverage)
-            enable_coverage="ON";;
         --without-distributed)
             enable_distributed="OFF";;
 	--build-dir)
@@ -244,9 +239,9 @@ if [ "$disable_profiler" = "ON" ]; then
 fi
 
 # Validate the build_type
-VALID_BUILD_TYPES=("Release" "Debug" "RelWithDebInfo" "ASan" "TSan")
+VALID_BUILD_TYPES=("Release" "Debug" "RelWithDebInfo" "ASan" "TSan" "ASanCoverage")
 if [[ ! " ${VALID_BUILD_TYPES[@]} " =~ " ${build_type} " ]]; then
-    echo "ERROR: Invalid build type '$build_type'. Allowed values are Release, Debug, RelWithDebInfo, ASan, TSan."
+    echo "ERROR: Invalid build type '$build_type'. Allowed values are Release, Debug, RelWithDebInfo, ASan, TSan, ASanCoverage."
     show_help
     exit 1
 fi
@@ -273,7 +268,6 @@ echo "INFO: Export compile commands: $export_compile_commands"
 echo "INFO: Enable ccache: $enable_ccache"
 echo "INFO: Build type: $build_type"
 echo "INFO: Enable time trace: $enable_time_trace"
-echo "INFO: Enable Coverage: $enable_coverage"
 echo "INFO: Build directory: $build_dir"
 echo "INFO: Install Prefix: $cmake_install_prefix"
 echo "INFO: Build tests: $build_tests"
@@ -314,10 +308,6 @@ fi
 
 if [ "$disable_profiler" = "ON" ]; then
     cmake_args+=("-DENABLE_TRACY=OFF")
-fi
-
-if [ "$enable_coverage" = "ON" ]; then
-    cmake_args+=("-DENABLE_COVERAGE=ON")
 fi
 
 if [ "$export_compile_commands" = "ON" ]; then
