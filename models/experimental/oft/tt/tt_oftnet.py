@@ -62,6 +62,7 @@ class TTOftNet:
             grid,
             scale=1 / 8,
             use_precomputed_grid=True,
+            num_slices=18,
         )
         self.oft16 = TtOFT(
             device,
@@ -74,6 +75,7 @@ class TTOftNet:
             grid,
             scale=1 / 16,
             use_precomputed_grid=True,
+            num_slices=12,
         )
         self.oft32 = TtOFT(
             device,
@@ -86,8 +88,9 @@ class TTOftNet:
             grid,
             scale=1 / 32,
             use_precomputed_grid=True,
+            num_slices=11,
         )
-
+        ttnn.device.ReadDeviceProfiler(device)
         self.topdown = [
             block(
                 device,
@@ -493,18 +496,42 @@ class TTOftNet:
                     integral_img8,
                     integral_img16,
                     integral_img32,
-                    ttnn.to_torch(bbox_top_left8) if self.OFT_fallback == False else bbox_top_left8,
-                    ttnn.to_torch(bbox_btm_right8) if self.OFT_fallback == False else bbox_btm_right8,
-                    ttnn.to_torch(bbox_top_right8) if self.OFT_fallback == False else bbox_top_right8,
-                    ttnn.to_torch(bbox_btm_left8) if self.OFT_fallback == False else bbox_btm_left8,
-                    ttnn.to_torch(bbox_top_left16) if self.OFT_fallback == False else bbox_top_left16,
-                    ttnn.to_torch(bbox_btm_right16) if self.OFT_fallback == False else bbox_btm_right16,
-                    ttnn.to_torch(bbox_top_right16) if self.OFT_fallback == False else bbox_top_right16,
-                    ttnn.to_torch(bbox_btm_left16) if self.OFT_fallback == False else bbox_btm_left16,
-                    ttnn.to_torch(bbox_top_left32) if self.OFT_fallback == False else bbox_top_left32,
-                    ttnn.to_torch(bbox_btm_right32) if self.OFT_fallback == False else bbox_btm_right32,
-                    ttnn.to_torch(bbox_top_right32) if self.OFT_fallback == False else bbox_top_right32,
-                    ttnn.to_torch(bbox_btm_left32) if self.OFT_fallback == False else bbox_btm_left32,
+                    torch.cat([ttnn.to_torch(bbox_top_left8[i]) for i in range(len(bbox_top_left8))], dim=2)
+                    if self.OFT_fallback == False
+                    else bbox_top_left8,
+                    torch.cat([ttnn.to_torch(bbox_btm_right8[i]) for i in range(len(bbox_btm_right8))], dim=2)
+                    if self.OFT_fallback == False
+                    else bbox_btm_right8,
+                    torch.cat([ttnn.to_torch(bbox_top_right8[i]) for i in range(len(bbox_top_right8))], dim=2)
+                    if self.OFT_fallback == False
+                    else bbox_top_right8,
+                    torch.cat([ttnn.to_torch(bbox_btm_left8[i]) for i in range(len(bbox_btm_left8))], dim=2)
+                    if self.OFT_fallback == False
+                    else bbox_btm_left8,
+                    torch.cat([ttnn.to_torch(bbox_top_left16[i]) for i in range(len(bbox_top_left16))], dim=2)
+                    if self.OFT_fallback == False
+                    else bbox_top_left16,
+                    torch.cat([ttnn.to_torch(bbox_btm_right16[i]) for i in range(len(bbox_btm_right16))], dim=2)
+                    if self.OFT_fallback == False
+                    else bbox_btm_right16,
+                    torch.cat([ttnn.to_torch(bbox_top_right16[i]) for i in range(len(bbox_top_right16))], dim=2)
+                    if self.OFT_fallback == False
+                    else bbox_top_right16,
+                    torch.cat([ttnn.to_torch(bbox_btm_left16[i]) for i in range(len(bbox_btm_left16))], dim=2)
+                    if self.OFT_fallback == False
+                    else bbox_btm_left16,
+                    torch.cat([ttnn.to_torch(bbox_top_left32[i]) for i in range(len(bbox_top_left32))], dim=2)
+                    if self.OFT_fallback == False
+                    else bbox_top_left32,
+                    torch.cat([ttnn.to_torch(bbox_btm_right32[i]) for i in range(len(bbox_btm_right32))], dim=2)
+                    if self.OFT_fallback == False
+                    else bbox_btm_right32,
+                    torch.cat([ttnn.to_torch(bbox_top_right32[i]) for i in range(len(bbox_top_right32))], dim=2)
+                    if self.OFT_fallback == False
+                    else bbox_top_right32,
+                    torch.cat([ttnn.to_torch(bbox_btm_left32[i]) for i in range(len(bbox_btm_left32))], dim=2)
+                    if self.OFT_fallback == False
+                    else bbox_btm_left32,
                     ortho8,
                     ortho16,
                     ortho32,
