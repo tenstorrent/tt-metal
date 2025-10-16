@@ -454,16 +454,40 @@ typename device_operation_t::tensor_return_value_t launch_on_device(
 
     auto first_tensor = tt::stl::reflection::get_first_object_of_type<Tensor>(tensor_args);
     auto mesh_device = first_tensor.device();
-    auto [output_topology_placements, output_topology_shape] =
-        detail::get_output_placements_and_shape<device_operation_t>(tensor_args, first_tensor);
 
-    tensor_return_value = tt::stl::reflection::transform_object_of_type<Tensor>(
-        [&output_topology_placements, &output_topology_shape](const Tensor& output_tensor) {
-            auto topology = tt::tt_metal::TensorTopology(
-                output_topology_shape, output_topology_placements, output_tensor.tensor_topology().mesh_coords());
-            return output_tensor.with_tensor_topology(topology);
-        },
-        tensor_return_value);
+    // Check if op provides custom output topologies
+    std::vector<tt::tt_metal::TensorTopology> custom_topologies;
+    if constexpr (requires {
+                      {
+                          device_operation_t::compute_output_topologies(operation_attributes, tensor_args)
+                      } -> std::same_as<std::vector<tt::tt_metal::TensorTopology>>;
+                  }) {
+        custom_topologies = device_operation_t::compute_output_topologies(operation_attributes, tensor_args);
+    }
+
+    if (!custom_topologies.empty()) {
+        // Use custom topologies provided by the op
+        tensor_return_value = tt::stl::reflection::transform_object_of_type<Tensor>(
+            [&custom_topologies, topology_idx = size_t{0}](const Tensor& output_tensor) mutable {
+                TT_FATAL(
+                    topology_idx < custom_topologies.size(),
+                    "Not enough custom topologies provided for output tensors");
+                return output_tensor.with_tensor_topology(custom_topologies[topology_idx++]);
+            },
+            tensor_return_value);
+    } else {
+        // Fall back to default topology imputation
+        auto [output_topology_placements, output_topology_shape] =
+            detail::get_output_placements_and_shape<device_operation_t>(tensor_args, first_tensor);
+
+        tensor_return_value = tt::stl::reflection::transform_object_of_type<Tensor>(
+            [&output_topology_placements, &output_topology_shape](const Tensor& output_tensor) {
+                auto topology = tt::tt_metal::TensorTopology(
+                    output_topology_shape, output_topology_placements, output_tensor.tensor_topology().mesh_coords());
+                return output_tensor.with_tensor_topology(topology);
+            },
+            tensor_return_value);
+    }
 
     launch_operation_with_adapter<MeshDeviceOperationAdapter<device_operation_t>>(
         operation_attributes, tensor_args, tensor_return_value, mesh_device);
