@@ -80,6 +80,10 @@ void kernel_main() {
     const uint64_t in1_receiver_semaphore_noc_addr =
         get_noc_addr(in1_dest_noc_x, in1_dest_noc_y, in1_receiver_semaphore_addr);
 
+    const uint64_t in1_unicast_data_base_addr = get_noc_addr(in1_dest_noc_x, in1_dest_noc_y, 0);
+
+    constexpr uint32_t full_N_tiles_bytes = N_block_tiles * in1_tile_size;
+
     // const uint32_t M_tiles_per_core = M_end_tile - M_start_tile;
     // const uint32_t N_tiles_per_core = N_end_tile - N_start_tile;
     const uint32_t N_num_blocks = N_blocks_per_core;  // div_up(N_tiles_per_core, N_block_tiles);
@@ -102,6 +106,8 @@ void kernel_main() {
             uint32_t n_tile = n_forward ? N_start_tile + n_block_iter * N_block_tiles
                                         : N_start_tile + (N_num_blocks - 1 - n_block_iter) * N_block_tiles;
             uint32_t n_tile_end = std::min(n_tile + N_block_tiles, N_end_tile);
+            uint32_t current_N_block_tiles = n_tile_end - n_tile;
+            uint32_t current_N_tiles_bytes = current_N_block_tiles * in1_tile_size;
             for (uint32_t k_block_iter = 0; k_block_iter < K_num_blocks; k_block_iter++) {
                 if (defer_write && k_block_iter == defer_write_k_block) {
                     if constexpr (is_output_writer) {
@@ -152,9 +158,11 @@ void kernel_main() {
                     noc_semaphore_wait(in1_sender_semaphore_addr_ptr, 1);
                     noc_semaphore_set(in1_sender_semaphore_addr_ptr, 0);
 
-                    uint64_t in1_unicast_data_addr = get_noc_addr(in1_dest_noc_x, in1_dest_noc_y, in1_start_address);
-
-                    noc_async_write(in1_start_address, in1_unicast_data_addr, in1_block_num_tiles * in1_tile_size);
+                    for (uint32_t i = 0; i < K_block_tiles; i++) {
+                        uint64_t in1_unicast_data_addr = in1_unicast_data_base_addr | in1_start_address;
+                        noc_async_write(in1_start_address, in1_unicast_data_addr, current_N_tiles_bytes);
+                        in1_start_address += full_N_tiles_bytes;
+                    }
 
 #ifdef ARCH_BLACKHOLE
                     noc_async_writes_flushed();
