@@ -158,12 +158,12 @@ jobs:
           gh auth status || echo "⚠️  Authentication check failed"
 
           echo "🔍 Testing gh CLI with current repository:"
-          echo "Repository: $(gh repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null || echo 'Failed to get repo info')"
+          echo "Repository: $(gh repo view --repo tenstorrent/tt-metal --json nameWithOwner --jq .nameWithOwner 2>/dev/null || echo 'Failed to get repo info')"
 
           echo "📋 Testing workflow run listing for current commit:"
           CURRENT_COMMIT=$(git rev-parse HEAD)
           echo "Current commit: $CURRENT_COMMIT"
-          gh run list --commit "$CURRENT_COMMIT" --json workflowName,conclusion,databaseId --limit 5 2>&1 || echo "⚠️  Failed to list runs for current commit"
+          gh run list --repo tenstorrent/tt-metal --commit "$CURRENT_COMMIT" --json workflowName,conclusion,databaseId --limit 5 2>&1 || echo "⚠️  Failed to list runs for current commit"
         shell: bash
 
       - name: Run Git Bisect

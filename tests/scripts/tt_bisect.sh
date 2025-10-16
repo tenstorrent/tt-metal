@@ -125,7 +125,7 @@ try_download_artifacts() {
   # Look for workflow runs for this commit
   echo "🔎 Searching for workflow runs for commit $commit_sha..."
   local runs
-  runs=$(gh run list --commit "$commit_sha" --json workflowName,conclusion,databaseId --limit 1000 2>/dev/null || echo "[]")
+  runs=$(gh run list --repo tenstorrent/tt-metal --commit "$commit_sha" --json workflowName,conclusion,databaseId --limit 1000 2>/dev/null || echo "[]")
 
   if [ "$runs" = "[]" ]; then
     echo "No workflow runs found for commit $commit_sha"
@@ -154,7 +154,7 @@ try_download_artifacts() {
 
   # Get list of all artifacts for this run
   local artifacts
-  artifacts=$(gh run view "$build_run_id" --json artifacts --jq '.artifacts[].name' 2>/dev/null || echo "")
+  artifacts=$(gh run view "$build_run_id" --repo tenstorrent/tt-metal --json artifacts --jq '.artifacts[].name' 2>/dev/null || echo "")
 
   if [ -z "$artifacts" ]; then
     echo "❌ Could not list artifacts for run $build_run_id"
@@ -185,7 +185,7 @@ try_download_artifacts() {
   # Clean up any previous artifact files
   rm -f ttm_any.tar.zst 2>/dev/null || true
 
-  if gh run download "$build_run_id" --name "$artifact_name" --dir . 2>&1; then
+  if gh run download "$build_run_id" --repo tenstorrent/tt-metal --name "$artifact_name" --dir . 2>&1; then
     echo "✅ Artifact downloaded successfully"
 
     # Debug: List what was actually downloaded
@@ -214,7 +214,7 @@ try_download_artifacts() {
   else
     # Try to list available artifacts to help debugging
     echo "Available artifacts for run $build_run_id:"
-    gh run view "$build_run_id" --json artifacts --jq '.artifacts[].name' 2>/dev/null || echo "  (failed to list artifacts)"
+    gh run view "$build_run_id" --repo tenstorrent/tt-metal --json artifacts --jq '.artifacts[].name' 2>/dev/null || echo "  (failed to list artifacts)"
     return 1
   fi
 }
