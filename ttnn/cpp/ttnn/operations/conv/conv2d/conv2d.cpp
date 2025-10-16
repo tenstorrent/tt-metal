@@ -240,11 +240,7 @@ Result conv2d_DRAM(
     std::optional<ttnn::Tensor> bias_tensor_on_device;
     if (mm_conv) {
         const uint32_t input_channels_alignment = get_input_channels_alignment(
-            tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
-            input_tensor.layout(),
-            BufferType::DRAM,
-            mm_conv,
-            std::nullopt);
+            tt::tt_metal::TensorMemoryLayout::INTERLEAVED, input_tensor.layout(), true, mm_conv, std::nullopt);
         // Configure weight and bias preparation parameters
         Conv2dWeightsBiasPrepConfig params(
             input_channels_alignment,
@@ -749,7 +745,7 @@ Result conv2d_L1(
     const uint32_t input_channels_alignment = get_input_channels_alignment(
         input_tensor_post_tm.memory_config().memory_layout(),
         input_tensor_post_tm.layout(),
-        input_tensor_post_tm.memory_config().buffer_type(),
+        false,
         mm_conv,
         input_tensor_post_tm.memory_config());
     const uint32_t in_channels_padded = tt::round_up(

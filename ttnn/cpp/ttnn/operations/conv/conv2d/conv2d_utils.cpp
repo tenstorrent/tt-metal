@@ -75,12 +75,11 @@ uint32_t find_closest_largest_divisor_with_num_padding_and_mult(uint32_t num, ui
 uint32_t get_input_channels_alignment(
     const TensorMemoryLayout input_tensor_memory_layout,
     Layout input_tensor_layout,
-    BufferType input_tensor_buffer_type,
+    bool sliced_op,
     bool is_mm_conv,
     const std::optional<MemoryConfig>& input_memory_config) {
     if (!is_mm_conv && input_tensor_memory_layout != TensorMemoryLayout::WIDTH_SHARDED &&
-        (input_tensor_layout == Layout::ROW_MAJOR ||
-         input_tensor_buffer_type == BufferType::DRAM /*DRAM inputs are always converted to RM by padded_slice*/)) {
+        (input_tensor_layout == Layout::ROW_MAJOR || sliced_op)) {
         if (input_memory_config.has_value() && input_memory_config->is_sharded()) {
             const uint32_t shard_width = input_memory_config->shard_spec()->shape[1];
             if (shard_width % tt::constants::TILE_WIDTH == 0) {
@@ -501,7 +500,7 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig> determine_input_memory_config(
     const std::optional<ParallelConfig>& input_tensor_parallel_config,
     std::optional<uint32_t> act_block_h_override) {
     const uint32_t input_channels_alignment = get_input_channels_alignment(
-        shard_layout, input_tensor_layout, input_tensor_buffer_type, is_mm_conv, std::nullopt);
+        shard_layout, input_tensor_layout, input_tensor_buffer_type == BufferType::DRAM, is_mm_conv, std::nullopt);
     ParallelConfig parallel_config;
     if (input_tensor_parallel_config.has_value()) {
         parallel_config = input_tensor_parallel_config.value();
@@ -574,7 +573,7 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_shape_an
     const ttnn::MemoryConfig& input_memory_config = input_tensor_.memory_config();
     const tt::tt_metal::TensorMemoryLayout input_shard_scheme = input_memory_config.memory_layout();
     const uint32_t input_channels_alignment = get_input_channels_alignment(
-        input_shard_scheme, input_tensor_.layout(), BufferType::L1, is_mm_conv, input_memory_config);
+        input_shard_scheme, input_tensor_.layout(), false, is_mm_conv, input_memory_config);
 
     ParallelConfig input_tensor_parallel_config;
     if (!input_tensor_on_device) {
@@ -903,7 +902,7 @@ Conv2dConfig determine_conv_config_for_auto_shard(
         }
 
         const uint32_t input_channels_alignment =
-            get_input_channels_alignment(shard_layout, input_layout, BufferType::L1, is_mm_conv, std::nullopt);
+            get_input_channels_alignment(shard_layout, input_layout, false, is_mm_conv, std::nullopt);
         const uint32_t in_channels_aligned = tt::round_up(in_channels, input_channels_alignment);
         const uint32_t output_channels_padded = tt::round_up(out_channels, tt::constants::TILE_WIDTH);
         // Note: These are not exact shapes for weights as prepare_conv_weights will pad the weights depending on the
@@ -1252,11 +1251,7 @@ static std::pair<uint32_t, Conv2dConfig> calculate_conv_dram_slice_L1_usage(
             .input_hw = {params.input_height, params.input_width},
             .window_hw = {params.kernel_size[0], params.kernel_size[1]}};
         const uint32_t input_channels_alignment = get_input_channels_alignment(
-            conv_config.shard_layout.value(),
-            conv_config.output_layout,
-            num_slices == 1 ? BufferType::L1 : BufferType::DRAM,
-            params.mm_conv,
-            std::nullopt);
+            conv_config.shard_layout.value(), conv_config.output_layout, num_slices > 1, params.mm_conv, std::nullopt);
         const uint32_t in_channels_padded = tt::round_up(
             params.in_channels,
             get_num_cores_channels_from_parallel_config(parallel_config) * input_channels_alignment);
