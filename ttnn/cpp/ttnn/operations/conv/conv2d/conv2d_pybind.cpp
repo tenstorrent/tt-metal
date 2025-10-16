@@ -61,7 +61,7 @@ void py_bind_conv2d(py::module& module) {
         :rtype: [ttnn.Tensor]: Default. The output tensor, when return_output_dim = False and return_weights_and_bias = False
         :rtype: [ttnn.Tensor, Tuple[int, int]]: The output tensor, and it's height and width, if return_output_dim = True
         :rtype: [ttnn.Tensor, Tuple[ttnn.Tensor, Optional[ttnn.Tensor]]]: The output tensor, and preprocessed weight and bias tensors that are  both on device, if return_weights_and_bias = True
-        :rtype: [ttnn.Tensor, Tuple[int, int], Tuple[ttnn.Tensor, Optional[ttnn.Tensor]]]: The output tensor, and it's height and width are preprocessed weight and bias tensors that are both on device, if return_output_dim = True and return_weights_and_bias = True
+        :rtype: [ttnn.Tensor, Tuple[int, int], Tuple[ttnn.Tensor, Optional[ttnn.Tensor]]]: If true, the op also returns the preprocessed weight and bias on the device. Weight and bias should be used for the same convolution next time it is called to avoid preparing weights and bias multiple times. Defaults to false.
         )doc",
         ttnn::pybind_overload_t{
             [](const decltype(ttnn::conv2d)& self,
