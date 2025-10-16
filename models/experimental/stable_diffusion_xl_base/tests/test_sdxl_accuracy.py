@@ -225,6 +225,7 @@ def test_accuracy_sdxl(
             }
         ],
     }
+    print(json.dumps(data, indent=4))
 
     os.makedirs(OUT_ROOT, exist_ok=True)
     trace_flag = "with_trace" if capture_trace else "no_trace"
