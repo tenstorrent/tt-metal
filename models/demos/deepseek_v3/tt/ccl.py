@@ -40,7 +40,13 @@ class CCL:
                 )
                 self.barrier_sems[-1].append(ttnn.create_global_semaphore(self.mesh_device, self.core_range_set, 0))
 
-        self.sem_cnt = [0, 0]
+        # Synchronize the device to ensure that the semaphores are created
+        ttnn.synchronize_device(self.mesh_device)
+
+        # Each semaphore type needs its own independent counter
+        self.gather_sem_cnt = [0, 0]
+        self.reduce_scatter_sem_cnt = [0, 0]
+        self.barrier_sem_cnt = [0, 0]
 
     def get_max_links(self, axis):
         """
@@ -60,8 +66,8 @@ class CCL:
         """
         Get a semaphore for the given axis.
         """
-        sem = self.gather_sems[axis][self.sem_cnt[axis]]
-        self.sem_cnt[axis] = (self.sem_cnt[axis] + 1) % 2
+        sem = self.gather_sems[axis][self.gather_sem_cnt[axis]]
+        self.gather_sem_cnt[axis] = (self.gather_sem_cnt[axis] + 1) % 2
         return sem
 
     def get_buffer(self, key):
@@ -76,16 +82,16 @@ class CCL:
         """
         Get a semaphore for the given axis.
         """
-        sem = self.reduce_scatter_sems[axis][self.sem_cnt[axis]]
-        self.sem_cnt[axis] = (self.sem_cnt[axis] + 1) % 2
+        sem = self.reduce_scatter_sems[axis][self.reduce_scatter_sem_cnt[axis]]
+        self.reduce_scatter_sem_cnt[axis] = (self.reduce_scatter_sem_cnt[axis] + 1) % 2
         return sem
 
     def get_barrier_sem(self, axis):
         """
         Get a semaphore for the given axis.
         """
-        sem = self.barrier_sems[axis][self.sem_cnt[axis]]
-        self.sem_cnt[axis] = (self.sem_cnt[axis] + 1) % 2
+        sem = self.barrier_sems[axis][self.barrier_sem_cnt[axis]]
+        self.barrier_sem_cnt[axis] = (self.barrier_sem_cnt[axis] + 1) % 2
         return sem
 
     def get_ccl_params_for_reduce_scatter(self, axis):
