@@ -105,7 +105,7 @@ void py_bind_all_to_all_dispatch(py::module& module) {
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensors") = std::nullopt,
             py::arg("num_links") = std::nullopt,
-            py::arg("topology") = std::nullopt});
+            py::arg("topology").noconvert() = std::nullopt});
 }
 
 }  // namespace ttnn::operations::ccl

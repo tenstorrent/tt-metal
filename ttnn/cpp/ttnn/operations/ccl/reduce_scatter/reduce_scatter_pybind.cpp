@@ -70,7 +70,7 @@ void py_bind_reduce_scatter(py::module& module) {
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
             py::arg("num_links") = std::nullopt,
-            py::arg("topology") = std::nullopt,
+            py::arg("topology").noconvert() = std::nullopt,
         });
 }
 
