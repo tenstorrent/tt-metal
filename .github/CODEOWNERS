@@ -7,8 +7,8 @@ METALIUM_GUIDE.md @davorchap @marty1885 @tenstorrent/metalium-codeowners-large-c
 # CI/CD
 .github/ @tenstorrent/metalium-developers-infra @tenstorrent/metalium-codeowners-large-changes
 .github/workflows/ttnn-run-sweeps.yaml @stevendae @cmaryanTT @sjameelTT @tenstorrent/metalium-codeowners-large-changes
-.github/workflows/galaxy-deepseek-tests.yaml @yieldthought @kpaigwar @barci2 @pprajapatiTT @tenstorrent/metalium-developers-infra @tenstorrent/metalium-codeowners-large-changes
-.github/workflows/galaxy-deepseek-tests-impl.yaml @yieldthought @kpaigwar @barci2 @pprajapatiTT @tenstorrent/metalium-developers-infra @tenstorrent/metalium-codeowners-large-changes
+.github/workflows/galaxy-deepseek-tests.yaml @yieldthought @kpaigwar @pprajapatiTT @tenstorrent/metalium-developers-infra @tenstorrent/metalium-codeowners-large-changes
+.github/workflows/galaxy-deepseek-tests-impl.yaml @yieldthought @kpaigwar @pprajapatiTT @tenstorrent/metalium-developers-infra @tenstorrent/metalium-codeowners-large-changes
 .github/workflows/vllm-nightly-tests.yaml @ppetrovicTT @skhorasganiTT @rdraskicTT @tenstorrent/metalium-developers-infra @tenstorrent/metalium-codeowners-large-changes
 .github/workflows/vllm-nightly-tests-impl.yaml @ppetrovicTT @skhorasganiTT @rdraskicTT @tenstorrent/metalium-developers-infra @tenstorrent/metalium-codeowners-large-changes
 .github/workflows/multi-host-physical.yaml @sjameelTT @aliuTT @cfjchu @omilyutin-tt @tenstorrent/metalium-codeowners-large-changes @tenstorrent/metalium-developers-infra
@@ -254,7 +254,7 @@ tests/ttnn/distributed/ @tenstorrent/metalium-developers-ttnn-core @tenstorrent/
 models/common @yieldthought @mtairum @uaydonat @tenstorrent/metalium-codeowners-large-changes
 models/datasets/llm_dataset_utils.py @skhorasganiTT @uaydonat @tenstorrent/metalium-codeowners-large-changes
 models/demos @uaydonat @yieldthought @cglagovichTT @tenstorrent/metalium-codeowners-large-changes
-models/demos/deepseek_v3 @uaydonat @yieldthought @kpaigwar @barci2 @pprajapatiTT @tenstorrent/metalium-codeowners-large-changes
+models/demos/deepseek_v3 @uaydonat @yieldthought @kpaigwar @pprajapatiTT @tenstorrent/metalium-codeowners-large-changes
 models/demos/gpt_oss @uaydonat @mtairum @sraizada-tt @tenstorrent/metalium-codeowners-large-changes
 models/**/bert*/ @TT-BrianLiu @uaydonat @tenstorrent/metalium-codeowners-large-changes
 models/demos/metal_BERT_large_11 @tt-aho @TT-BrianLiu @tenstorrent/metalium-codeowners-large-changes
@@ -284,10 +284,10 @@ models/demos/t3000/sentence_bert @atupe-tt @tenstorrent/cse-developer-ttnn @tens
 models/demos/tg/falcon7b @skhorasganiTT @djordje-tt @uaydonat @tenstorrent/metalium-codeowners-large-changes
 models/demos/whisper @skhorasganiTT @djordje-tt @uaydonat @tenstorrent/metalium-codeowners-large-changes
 models/demos/grayskull @uaydonat @yieldthought @cglagovichTT @tenstorrent/metalium-codeowners-large-changes
-models/demos/yolov4 @dvartaniansTT @mbahnasTT @rdraskicTT @mbezuljTT @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-codeowners-large-changes
+models/demos/yolov4 @dvartaniansTT @mbahnasTT @rdraskicTT @mbezuljTT @tenstorrent/metalium-codeowners-large-changes
 models/demos/**/*resnet* @tenstorrent/metalium-developers-convolutions @mradosavljevicTT @tenstorrent/metalium-codeowners-large-changes
 models/experimental/ @dgomezTT @jmalone-tt @ayerofieiev-tt @uaydonat @tenstorrent/metalium-codeowners-large-changes
-models/experimental/functional_unet @esmalTT @uaydonat @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-codeowners-large-changes
+models/experimental/functional_unet @esmalTT @uaydonat @tenstorrent/metalium-codeowners-large-changes
 models/demos/ufld_v2 @dvartaniansTT @tenstorrent/cse-developer-ttnn @tenstorrent/metalium-codeowners-large-changes
 models/demos/vgg_unet @dvartaniansTT @tenstorrent/cse-developer-ttnn @tenstorrent/metalium-codeowners-large-changes
 models/experimental/openpdn_mnist @tenstorrent/cse-developer-ttnn @tenstorrent/metalium-codeowners-large-changes
@@ -299,15 +299,15 @@ models/demos/gemma3* @ppetrovicTT @handrewsTT @mtairum @rdraskicTT @tenstorrent/
 models/demos/wormhole/vit @arginugaTT @tenstorrent/cse-developer-ttnn @uaydonat @tenstorrent/metalium-codeowners-large-changes
 models/demos/vit @arginugaTT @tenstorrent/cse-developer-ttnn @uaydonat @tenstorrent/metalium-codeowners-large-changes
 models/experimental/*yolo*/ @tenstorrent/cse-developer-ttnn @uaydonat @tenstorrent/metalium-codeowners-large-changes
-models/demos/yolo_eval @tenstorrent/cse-developer-ttnn @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-codeowners-large-changes
-models/demos/segformer @arginugaTT @tenstorrent/cse-developer-ttnn @uaydonat @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-codeowners-large-changes
+models/demos/yolo_eval @tenstorrent/cse-developer-ttnn @tenstorrent/metalium-codeowners-large-changes
+models/demos/segformer @arginugaTT @tenstorrent/cse-developer-ttnn @uaydonat @tenstorrent/metalium-codeowners-large-changes
 models/perf/ @yieldthought @uaydonat @tenstorrent/metalium-codeowners-large-changes
 models/perf/benchmarking_utils.py @skhorasganiTT @williamlyTT @uaydonat @tenstorrent/metalium-codeowners-large-changes
 models/demos/utils/llm_demo_utils.py @skhorasganiTT @mtairum @uaydonat @tenstorrent/metalium-codeowners-large-changes
 models/experimental/oft @bjanjicTT @mbezuljTT @pavlepopovic
 models/experimental/panoptic_deeplab @mbezuljTT @ianastasijevicTT @pavlepopovic
-models/experimental/stable_diffusion_xl_base @mbezuljTT @pavlepopovic @ipotkonjak-tt @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-codeowners-large-changes
-models/experimental/stable_diffusion_xl_refiner @mbezuljTT @pavlepopovic @ipotkonjak-tt @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-codeowners-large-changes
+models/experimental/stable_diffusion_xl_base @mbezuljTT @pavlepopovic @ipotkonjak-tt @tenstorrent/metalium-codeowners-large-changes
+models/experimental/stable_diffusion_xl_refiner @mbezuljTT @pavlepopovic @ipotkonjak-tt @tenstorrent/metalium-codeowners-large-changes
 models/demos/mobilenetv2 @dvartaniansTT @tenstorrent/cse-developer-ttnn @tenstorrent/metalium-codeowners-large-changes
 models/demos/yolov8s_world @ssinghalTT @tenstorrent/cse-developer-ttnn @tenstorrent/metalium-codeowners-large-changes
 models/demos/yolov10x @ssinghalTT @tenstorrent/cse-developer-ttnn @tenstorrent/metalium-codeowners-large-changes
