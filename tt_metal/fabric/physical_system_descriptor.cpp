@@ -270,6 +270,12 @@ void PhysicalSystemDescriptor::run_local_discovery() {
             TrayID{tray_id}, asic_location, cluster_desc->get_board_type(src_chip_id), src_unique_id, hostname};
     };
 
+    // Add physical descriptors for all ASICs on this host
+    for (const auto& [chip_id, unique_id] : chip_unique_ids) {
+        add_local_asic_descriptor(AsicID{unique_id}, chip_id);
+        asic_graph[AsicID{unique_id}] = {};
+    }
+
     for (const auto& [src, conn] : eth_connections) {
         auto src_unique_id = AsicID{chip_unique_ids.at(src)};
         // Populate ASIC Descriptor with Physical Information
