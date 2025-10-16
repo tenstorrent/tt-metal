@@ -55,6 +55,6 @@ fi
 
 # some environment does not have a compatible clang-format, in which case we should
 # ignore the failure
-if clang-format -i "${OUT_INTF_FILE}" "${OUT_IMPL_FILE}"; then
+if clang-format -i "${OUT_INTF_FILE}" "${OUT_IMPL_FILE}" 2> /dev/null; then
     :
 fi

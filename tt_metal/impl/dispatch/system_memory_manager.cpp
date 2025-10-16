@@ -27,7 +27,7 @@
 #include <umd/device/types/xy_pair.hpp>
 #include <tracy/Tracy.hpp>
 #include <umd/device/types/core_coordinates.hpp>
-#include "impl/debug/inspector.hpp"
+#include "impl/debug/inspector/inspector.hpp"
 
 namespace tt::tt_metal {
 

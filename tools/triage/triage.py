@@ -31,12 +31,19 @@ import inspect
 import os
 import utils
 from collections.abc import Iterable
+from pathlib import Path
+
+
+def find_install_debugger_script() -> str:
+    script_path = Path(__file__).resolve()
+    install_script = script_path.parent.parent.parent / "scripts" / "install_debugger.sh"
+    return str(install_script)
+
 
 try:
     from ttexalens.tt_exalens_init import init_ttexalens, init_ttexalens_remote
 except ImportError as e:
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    install_script = os.path.join(os.path.dirname(script_dir), "install_debugger.sh")
+    install_script = find_install_debugger_script()
     print(f"Module '{e}' not found. Please install tt-exalens by running:")
     print(f"  {utils.GREEN}{install_script}{utils.RST}")
     exit(1)
@@ -495,10 +502,8 @@ def _enforce_dependencies(args: ScriptArguments) -> None:
     except Exception:
         skip_check = False
 
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    ref_path = os.path.abspath(
-        os.path.join(os.path.dirname(os.path.dirname(script_dir)), "scripts", "ttexalens_ref.txt")
-    )
+    scripts_dir = os.path.dirname(find_install_debugger_script())
+    ref_path = os.path.abspath(os.path.join(scripts_dir, "ttexalens_ref.txt"))
 
     try:
         with open(ref_path, "r", encoding="utf-8") as f:
@@ -554,10 +559,8 @@ def _enforce_dependencies(args: ScriptArguments) -> None:
             raise TTTriageError(message)
 
 
-def _init_ttexalens(args: ScriptArguments | None = None) -> Context | None:
+def _init_ttexalens(args: ScriptArguments) -> Context:
     """Initialize the ttexalens context."""
-    if args is None:
-        return None
     if args["--remote-exalens"]:
         return init_ttexalens_remote(ip_address=args["--remote-server"], port=args["--remote-port"])
     return init_ttexalens(use_noc1=args["--initialize-with-noc1"])
@@ -627,7 +630,7 @@ class TTTriageError(Exception):
 
 def main():
     # Enumerate all scripts in application directory
-    application_path = os.path.dirname(__file__)
+    application_path = os.path.abspath(os.path.dirname(__file__))
     script_files = [f for f in os.listdir(application_path) if f.endswith(".py") and f != os.path.basename(__file__)]
 
     # To avoid multiple imports of this script, we add it to sys.modules

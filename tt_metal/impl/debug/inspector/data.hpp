@@ -22,8 +22,10 @@ private:
     void rpc_get_mesh_devices(rpc::Inspector::GetMeshDevicesResults::Builder& results);
     void rpc_get_mesh_workloads(rpc::Inspector::GetMeshWorkloadsResults::Builder& results);
     void rpc_get_devices_in_use(rpc::Inspector::GetDevicesInUseResults::Builder& results);
-    void rpc_get_kernel(rpc::Inspector::GetKernelParams::Reader params, rpc::Inspector::GetKernelResults::Builder results);
     void rpc_get_operations(rpc::Inspector::GetOperationsResults::Builder& results);
+    void rpc_get_kernel(
+        rpc::Inspector::GetKernelParams::Reader params, rpc::Inspector::GetKernelResults::Builder results);
+    void rpc_get_all_build_envs(rpc::Inspector::GetAllBuildEnvsResults::Builder results);
 
     static rpc::BinaryStatus convert_binary_status(ProgramBinaryStatus status);
 
@@ -50,6 +52,8 @@ private:
 
     void dbg_serialize_operations();
 
+    // fw_compile_hash needs to be atomic because it is set in MetalContext::initialize()
+    std::atomic<uint64_t> fw_compile_hash{};
     friend class tt::tt_metal::Inspector;
 };
 

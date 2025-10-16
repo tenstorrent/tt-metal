@@ -20,6 +20,7 @@
 #include <vector>
 
 #include <tt_stl/assert.hpp>
+#include <tt_stl/unreachable.hpp>
 #include "build.hpp"
 #include "hlk_desc.hpp"
 #include "jit_build_options.hpp"
@@ -49,20 +50,14 @@ void gen_kernel_cpp(const string& src, const string& dst_name) {
     gen_kernel_cpp(src, dst_name, empty_prolog);
 }
 
-string get_kernel_source_to_include(const KernelSource& kernel_src, const std::string& root_dir) {
+string get_kernel_source_to_include(const KernelSource& kernel_src) {
     switch (kernel_src.source_type_) {
         case KernelSource::FILE_PATH: {
-            std::filesystem::path p(kernel_src.path_);
-            if (!p.is_absolute()) {
-                p = std::filesystem::path(root_dir) / p;
-            }
-            return "#include \"" + fs::absolute(p).string() + "\"\n";
+            return "#include \"" + kernel_src.path_.string() + "\"\n";
         }
         case KernelSource::SOURCE_CODE: return kernel_src.source_;
-        default: {
-            TT_THROW("Unsupported kernel source type!");
-        }
     }
+    ttsl::unreachable();
 }
 
 }  // namespace
@@ -75,7 +70,7 @@ void jit_build_genfiles_kernel_include(
     string out_dir = env.get_out_kernel_root_path() + settings.get_full_kernel_name() + "/";
     string kernel_header = out_dir + "kernel_includes.hpp";
 
-    const string& kernel_src_to_include = get_kernel_source_to_include(kernel_src, env.get_root_path());
+    const string& kernel_src_to_include = get_kernel_source_to_include(kernel_src);
 
     gen_kernel_cpp(kernel_src_to_include, kernel_header);
 }
@@ -96,7 +91,7 @@ void jit_build_genfiles_triscs_src(
     string pack_cpp = pack_base + ".cpp";
     string pack_llk_args_h = pack_base + "_llk_args.h";
 
-    const string& kernel_src_to_include = get_kernel_source_to_include(kernel_src, env.get_root_path());
+    const string& kernel_src_to_include = get_kernel_source_to_include(kernel_src);
 
     vector<string> unpack_prolog;
     unpack_prolog.push_back("#define TRISC_UNPACK\n");

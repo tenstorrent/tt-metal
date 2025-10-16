@@ -6,11 +6,12 @@
 #include <stdexcept>
 #include <fstream>
 #include <sstream>
-#include "impl/debug/inspector.hpp"
+#include "impl/debug/inspector/inspector.hpp"
 #include "impl/debug/inspector/rpc_server_controller.hpp"
 #include "impl/debug/inspector/logger.hpp"
 #include "impl/context/metal_context.hpp"
 #include "distributed/mesh_workload_impl.hpp"
+#include "jit_build/build_env_manager.hpp"
 
 namespace tt::tt_metal::inspector {
 
@@ -30,8 +31,10 @@ Data::Data()
             get_rpc_server().setGetMeshDevicesCallback([this](auto result) { this->rpc_get_mesh_devices(result); });
             get_rpc_server().setGetMeshWorkloadsCallback([this](auto result) { this->rpc_get_mesh_workloads(result); });
             get_rpc_server().setGetDevicesInUseCallback([this](auto result) { this->rpc_get_devices_in_use(result); });
-            get_rpc_server().setGetKernelCallback([this](auto params, auto result) { this->rpc_get_kernel(params, result); });
             get_rpc_server().setGetOperationsCallback([this](auto result) { this->rpc_get_operations(result); });
+            get_rpc_server().setGetKernelCallback(
+                [this](auto params, auto result) { this->rpc_get_kernel(params, result); });
+            get_rpc_server().setGetAllBuildEnvsCallback([this](auto result) { this->rpc_get_all_build_envs(result); });
         } catch (const std::exception& e) {
             TT_INSPECTOR_THROW("Failed to start Inspector RPC server: {}", e.what());
         }
@@ -236,6 +239,31 @@ void Data::rpc_get_operations(rpc::Inspector::GetOperationsResults::Builder& res
         auto time_since_epoch = op.timestamp.time_since_epoch();
         auto nanos = std::chrono::duration_cast<std::chrono::nanoseconds>(time_since_epoch).count();
         capnp_op.setTimestamp(static_cast<uint64_t>(nanos));
+    }
+}
+
+// Get build environment information for all devices
+// This allows Inspector clients (e.g. tt-triage) to get the correct firmware path
+// for each device and build config, enabling correct firmware path resolution
+// without relying on relative paths
+// Declared here in Data to centralize Inspector RPC callback registration and
+// tie it to Inspector Data's lifetime
+void Data::rpc_get_all_build_envs(rpc::Inspector::GetAllBuildEnvsResults::Builder results) {
+    // Get build environment info for all devices
+    // Calls to BuildEnvManager::get_all_build_envs_info are thread-safe as it's protected by an internal mutex
+    const auto& build_envs_info = BuildEnvManager::get_instance().get_all_build_envs_info();
+    // Populate RPC response with build environment info for all devices
+    auto result_build_envs = results.initBuildEnvs(build_envs_info.size());
+    const auto fw_compile_hash = this->fw_compile_hash.load(std::memory_order_acquire);
+    size_t i = 0;
+    for (const auto& build_env : build_envs_info) {
+        auto item = result_build_envs[i++];
+        item.setDeviceId(build_env.device_id);
+        // Populate RPC response with build environment info
+        auto build_info = item.initBuildInfo();
+        build_info.setBuildKey(build_env.build_key);
+        build_info.setFirmwarePath(build_env.firmware_root_path);
+        build_info.setFwCompileHash(fw_compile_hash);
     }
 }
 

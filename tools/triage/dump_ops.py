@@ -702,8 +702,8 @@ def format_ops_table(ops_data: list[DumpOpsData], use_mapping: bool = False) -> 
             location_str = op.location.to_str("logical")
             result.append(f"Core Location: {location_str}")
             result.append(f"RISC Type: {op.risc_type}")
-            result.append(f"Kernel Config Host ID: {op.kernel_config_host_assigned_id}")
-            if op.host_info and op.host_info != str(op.kernel_config_host_assigned_id):
+            result.append(f"Kernel Config Host ID: {op.host_assigned_id}")
+            if op.host_info and op.host_info != str(op.host_assigned_id):
                 result.append("****HOST INFO****")
                 result.append(op.host_info.strip())
                 result.append("**** END HOST INFO ****")
@@ -717,7 +717,7 @@ def format_ops_table(ops_data: list[DumpOpsData], use_mapping: bool = False) -> 
         rows = []
         for op in ops_data:
             location_str = op.location.to_str("logical")
-            rows.append(f"{location_str:<15} {op.risc_type:<10} {op.kernel_config_host_assigned_id:<10}")
+            rows.append(f"{location_str:<15} {op.risc_type:<10} {op.host_assigned_id:<10}")
 
         return "\n".join([header, separator] + rows)
 
@@ -834,8 +834,8 @@ def dump_ops(
                 dispatcher_core_data = dispatcher_data.get_core_data(location, risc_name)
 
                 # Only include cores that have valid kernel config host assigned IDs (not -1 or 0)
-                if dispatcher_core_data.kernel_config_host_assigned_id not in [-1, 0]:
-                    kernel_config_host_id = dispatcher_core_data.kernel_config_host_assigned_id
+                if dispatcher_core_data.host_assigned_id not in [-1, 0]:
+                    kernel_config_host_id = dispatcher_core_data.host_assigned_id
                     break  # Data is the same across all RISCs, so use first valid one
 
             # If we found a valid kernel_config_host_id, add one entry for this location
@@ -844,7 +844,7 @@ def dump_ops(
                 if kernel_config_host_id not in seen_host_ids and kernel_config_host_id > 0:
                     seen_host_ids.add(kernel_config_host_id)
 
-                    # device_operation_id matches kernel_config_host_assigned_id directly
+                    # device_operation_id matches host_assigned_id directly
                     operation_id_key = str(kernel_config_host_id)
 
                     if operation_id_key in host_id_mapping:
@@ -853,7 +853,7 @@ def dump_ops(
                             op_name = mapping.get("operation_name", "unknown_op")
                             host_id_op_names.append((kernel_config_host_id, op_name))
 
-                # device_operation_id matches kernel_config_host_assigned_id directly
+                # device_operation_id matches host_assigned_id directly
                 operation_id_key = str(kernel_config_host_id)
 
                 # Get operation info from mapping if available
