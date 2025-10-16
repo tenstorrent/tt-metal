@@ -68,14 +68,15 @@ TEST_F(MeshDevice1x4Fixture, AllGatherReturnedTensor) {
 
     auto aggregated_tensor = ttnn::experimental::unit_mesh::aggregate(tensors);
 
+    // Quiesce parent mesh before all gather
+    mesh_device_->quiesce_submeshes();
+
     auto all_gathered_tensor = ttnn::all_gather(
         aggregated_tensor,
         /* dim */ 0);
 
-    // tt::tt_metal::distributed::Synchronize(aggregated_tensor.device(), std::nullopt, std::vector<SubDeviceId>());
-    // for (const auto& tensor : tensors) {
-    //     tt::tt_metal::distributed::Synchronize(tensor.device(), std::nullopt, std::vector<SubDeviceId>());
-    // }
+    // Quiesce parent mesh after all gather
+    mesh_device_->quiesce_submeshes();
 
     auto disaggregated_output_tensors = ttnn::experimental::unit_mesh::disaggregate(all_gathered_tensor);
     for (int dev_idx = 0; dev_idx < mesh_devices.size(); dev_idx++) {
@@ -84,9 +85,6 @@ TEST_F(MeshDevice1x4Fixture, AllGatherReturnedTensor) {
             float expected = static_cast<float>(i / tensor_spec.logical_shape().volume());
             EXPECT_EQ(static_cast<float>(data[i]), expected);
         }
-    }
-    for (const auto& tensor : disaggregated_output_tensors) {
-        tensor.print();
     }
 }
 
@@ -109,6 +107,9 @@ TEST_F(MeshDevice1x4Fixture, AllGatherPersistentOutput) {
     auto aggregated_tensor = ttnn::experimental::unit_mesh::aggregate(tensors);
     auto aggregated_output_tensor = ttnn::experimental::unit_mesh::aggregate(output_tensors);
 
+    // Quiesce parent mesh before all gather
+    mesh_device_->quiesce_submeshes();
+
     auto all_gathered_tensor = ttnn::all_gather(
         aggregated_tensor,
         /* dim */ 0,
@@ -117,15 +118,15 @@ TEST_F(MeshDevice1x4Fixture, AllGatherPersistentOutput) {
         std::nullopt,
         aggregated_output_tensor);
 
+    // Quiesce parent mesh after all gather
+    mesh_device_->quiesce_submeshes();
+
     for (int dev_idx = 0; dev_idx < mesh_devices.size(); dev_idx++) {
         auto data = output_tensors[dev_idx].to_vector<bfloat16>();
         for (int i = 0; i < data.size(); i++) {
             float expected = static_cast<float>(i / tensor_spec.logical_shape().volume());
             EXPECT_EQ(static_cast<float>(data[i]), expected);
         }
-    }
-    for (const auto& tensor : output_tensors) {
-        tensor.print();
     }
 }
 
@@ -147,6 +148,8 @@ TEST_F(MeshDevice1x4Fixture, ReduceScatter) {
     auto aggregated_tensor = ttnn::experimental::unit_mesh::aggregate(tensors);
     auto aggregated_output_tensor = ttnn::experimental::unit_mesh::aggregate(output_tensors);
 
+    // Quiesce parent mesh before reduce scatter
+    mesh_device_->quiesce_submeshes();
     auto reduced = ttnn::reduce_scatter(
         aggregated_tensor,
         /* dim */ 3,
@@ -154,7 +157,8 @@ TEST_F(MeshDevice1x4Fixture, ReduceScatter) {
         std::nullopt,
         std::nullopt,
         aggregated_output_tensor);
-    // reduced == aggregated_output_tensor
+    // Quiesce parent mesh after reduce scatter
+    mesh_device_->quiesce_submeshes();
 
     for (int dev_idx = 0; dev_idx < mesh_devices.size(); dev_idx++) {
         auto data = output_tensors[dev_idx].to_vector<bfloat16>();
@@ -162,9 +166,6 @@ TEST_F(MeshDevice1x4Fixture, ReduceScatter) {
             float expected = static_cast<float>(mesh_devices.size());
             EXPECT_EQ(static_cast<float>(data[i]), expected);
         }
-    }
-    for (const auto& tensor : output_tensors) {
-        tensor.print();
     }
 }
 
@@ -181,10 +182,14 @@ TEST_F(MeshDevice1x4Fixture, AllReduceAsync) {
 
     auto aggregated_tensor = ttnn::experimental::unit_mesh::aggregate(tensors);
 
+    // Quiesce parent mesh before all reduce
+    mesh_device_->quiesce_submeshes();
     auto all_reduced_tensor = ttnn::experimental::all_reduce_async(
         aggregated_tensor,
         /* cluster_axis */ 1,
         ttnn::operations::reduction::ReduceType::Sum);
+    // Quiesce parent mesh after all reduce
+    mesh_device_->quiesce_submeshes();
 
     auto disaggregated_output_tensors = ttnn::experimental::unit_mesh::disaggregate(all_reduced_tensor);
     for (int dev_idx = 0; dev_idx < mesh_devices.size(); dev_idx++) {
@@ -193,9 +198,6 @@ TEST_F(MeshDevice1x4Fixture, AllReduceAsync) {
             float expected = static_cast<float>(mesh_devices.size());
             EXPECT_EQ(static_cast<float>(data[i]), expected);
         }
-    }
-    for (const auto& tensor : disaggregated_output_tensors) {
-        tensor.print();
     }
 }
 
