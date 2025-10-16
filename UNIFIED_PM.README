@@ -141,7 +141,7 @@ This table summarizes top priority issues with our current programming model. It
 
 ## Proposal
 
-### TODO
+### Overview
 
 Key ideas:
 
@@ -175,3 +175,169 @@ Constraints:
 Minor points:
 
 - For validation, we need to validate all shards of a multi-device tensor. Typically, for replicated dims, users manually use MeshComposer to extract just one shard/copy of replicated dims, but for testing we should check all replicated shards are actually the same
+
+### Prototype Implementation Plan
+
+#### Goal
+
+Prototype a programming model where a MeshDevice can be programmed as a sea of cores without device boundaries. For example, a 2×4 grid of devices (each with 8×8 cores) is virtualized as a 16×32 sea of cores.
+
+- Write programs that iterate through a virtualized coordinate system (e.g., 16×32)
+- Use the same programming model as single-device programs (runtime/compile-time args, CBs, etc.)
+- Lower the virtualized program into valid single-device programs and mesh workload for dispatch
+
+#### 1. MeshDevice Virtual Coordinate APIs
+
+Extend `MeshDevice` directly with virtual coordinate methods:
+
+```cpp
+class MeshDevice {
+    // Existing methods...
+
+    // New virtual coordinate APIs
+    std::pair<size_t, size_t> get_virtual_core_grid() const;
+    // Returns (16, 32) for 2×4 mesh of 8×8 devices
+
+    std::tuple<Device*, size_t, size_t> virtual_to_physical(size_t vx, size_t vy) const;
+    // Returns (device_ptr, local_x, local_y)
+
+    std::pair<size_t, size_t> physical_to_virtual(Device* device, size_t lx, size_t ly) const;
+
+    bool is_valid_virtual_coord(size_t vx, size_t vy) const;
+};
+```
+
+**Design:**
+- No wrapper class needed - extend MeshDevice directly
+- Coordinate mapping: `device_id = (vx / 8) * 4 + (vy / 8)` for 2×4 mesh
+- Local coords: `local_x = vx % 8, local_y = vy % 8`
+
+#### 2. Virtualized Program Interface
+
+Users write programs targeting virtual coordinate space:
+
+```cpp
+// User writes this - targeting virtual 16×32 grid
+void configure_virtualized_program(MeshDevice& mesh) {
+    auto [vx_max, vy_max] = mesh.get_virtual_core_grid();
+
+    for (size_t vx = 0; vx < vx_max; vx++) {
+        for (size_t vy = 0; vy < vy_max; vy++) {
+            // Configure kernel using virtual coordinates
+            configure_kernel(
+                VirtualCoreCoord{vx, vy},
+                runtime_args,
+                compile_time_args,
+                cb_config
+            );
+        }
+    }
+}
+```
+
+#### 3. Program Lowering
+
+Transform virtualized programs into per-device programs:
+
+```cpp
+// Lowering process
+std::map<Device*, Program> lower_virtual_program(
+    MeshDevice& mesh,
+    const VirtualProgram& vprogram
+) {
+    std::map<Device*, Program> device_programs;
+    auto [vx_max, vy_max] = mesh.get_virtual_core_grid();
+
+    for (size_t vx = 0; vx < vx_max; vx++) {
+        for (size_t vy = 0; vy < vy_max; vy++) {
+            auto [device, lx, ly] = mesh.virtual_to_physical(vx, vy);
+
+            // Add this core's work to its device's program
+            device_programs[device].add_kernel_config(
+                CoreCoord{lx, ly},  // Physical local coords
+                transform_runtime_args(vprogram, vx, vy),
+                vprogram.compile_time_args
+            );
+        }
+    }
+
+    return device_programs;
+}
+```
+
+#### 4. Component Breakdown
+
+| Component | Description | Location |
+|-----------|-------------|----------|
+| Virtual coordinate APIs | `get_virtual_core_grid()`, `virtual_to_physical()`, etc. | MeshDevice class |
+| `VirtualCoreCoord` | Struct holding (vx, vy) | New lightweight type |
+| `VirtualProgram` | Program using virtual coords | New program type or builder |
+| Lowering pass | Transforms VirtualProgram → per-device Programs | New compiler pass |
+| Virtual TensorAccessor | TensorAccessor taking virtual coords | Extension of TensorAccessor |
+
+#### 5. Implementation Phases
+
+**Phase 1: MeshDevice Virtual Coord APIs (1 week)**
+- Add virtual coordinate methods to MeshDevice
+- Implement coordinate translation logic
+- Unit tests for various mesh configurations (2×4, 1×2, 4×4)
+
+**Phase 2: VirtualProgram Builder (1-2 weeks)**
+- Design VirtualProgram representation
+- API for configuring kernels with virtual coordinates
+- Maintain same structure as single-device Program
+
+**Phase 3: Simple Lowering (2 weeks)**
+- Implement lowering for stateless kernels (no cross-device reads)
+- Transform virtual coords → physical coords per device
+- Test with element-wise OP on replicated tensor
+
+**Phase 4: Cross-Device Access (3-4 weeks)**
+- Extend TensorAccessor to accept virtual coordinates
+- Use unified DM APIs for remote data access
+- Handle sharded tensors across device boundaries
+
+**Phase 5: Matmul Prototype (2-3 weeks)**
+- Implement "DUMB_MULTI_DEVICE" matmul
+- Single-tile granularity, no optimization
+- Validate correct output for various TensorTopology configurations
+
+#### 6. Example: Element-wise Kernel
+
+**Step 1: User writes virtualized program**
+```cpp
+Program create_eltwise_virtual_program(MeshDevice& mesh, ...) {
+    auto [vx_max, vy_max] = mesh.get_virtual_core_grid();
+
+    VirtualProgram vprogram;
+    for (size_t vx = 0; vx < vx_max; vx++) {
+        for (size_t vy = 0; vy < vy_max; vy++) {
+            vprogram.add_kernel(
+                VirtualCoreCoord{vx, vy},
+                "eltwise_kernel.cpp",
+                {input_cb, output_cb},
+                {/* runtime args based on vx, vy */}
+            );
+        }
+    }
+    return vprogram;
+}
+```
+
+**Step 2: Lowering produces per-device programs**
+```cpp
+auto device_programs = lower_to_mesh(mesh, vprogram);
+// Returns map: Device* → Program for that device's 8×8 cores
+```
+
+**Step 3: Dispatch to mesh**
+```cpp
+mesh.dispatch(device_programs);  // Existing dispatch infrastructure
+```
+
+#### 7. Key Design Decisions
+
+- **Virtual coordinate system**: Row-major layout (vx traverses row across devices, vy traverses column)
+- **API exposure**: Direct methods on MeshDevice (no wrapper class)
+- **Lowering timing**: Compile-time pass before dispatch
+- **Backward compatibility**: Existing single-device programs remain unchanged
