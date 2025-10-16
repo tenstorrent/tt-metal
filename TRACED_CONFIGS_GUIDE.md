@@ -145,9 +145,6 @@ The **Model Trace to Test Automation** system automatically extracts real-world 
 ### 1. Trace a Model Test
 
 ```bash
-# Activate environment (if using tt-metal)
-ttcd
-
 # Trace any model test to extract TTNN operations
 python generic_ops_tracer.py /path/to/model/test.py::test_function
 ```
@@ -175,7 +172,7 @@ python analyze_operations.py matmul
 
 ### 3. Use in Sweep Tests
 
-Configurations are **automatically loaded** with just 3 lines of code:
+Configurations are **automatically loaded**:
 
 ```python
 # In your sweep test file (e.g., sigmoid_accurate.py)
@@ -344,7 +341,7 @@ python analyze_operations.py <operation_name>
 
 ### Integrating into Sweep Tests
 
-Integration is **extremely simple** - just 3 changes!
+Integration is **extremely simple**:
 
 #### Step 1: Import Loader and Helper Function
 
@@ -508,7 +505,7 @@ for config in configs:
     memory_config = parse_memory_config(memory_config_dict, shape)
 ```
 
-#### Step 3: Critical - Parse Sharded Configs
+#### Step 3: Parse Sharded Configs
 
 ```python
 def parse_memory_config(self, memory_config: Dict, tensor_shape: list) -> Any:
@@ -527,8 +524,6 @@ def parse_memory_config(self, memory_config: Dict, tensor_shape: list) -> Any:
     # Create MemoryConfig
     return ttnn.MemoryConfig(memory_layout, buffer_type, shard_spec)
 ```
-
-**Key Insight:** We use the **exact traced `shard_shape`** values, not calculated ones!
 
 #### Step 4: Format for Sweep Framework
 
@@ -662,9 +657,6 @@ tt-metal/
 ### Example 1: Tracing EfficientNet
 
 ```bash
-# Activate environment
-ttcd
-
 # Trace EfficientNet model
 python generic_ops_tracer.py \
   models/experimental/efficientnetb0/tests/pcc/test_ttnn_efficientnetb0.py::test_efficientnetb0_model
@@ -899,7 +891,7 @@ class OperationsTracingPlugin:
 
 ### Adding New Sweep Tests
 
-Integration is now just 3 lines! Here's the complete pattern:
+Here's the complete pattern:
 
 ```python
 # tests/sweep_framework/sweeps/eltwise/unary/my_op/my_op.py
@@ -954,51 +946,6 @@ done
 # Results accumulated in ttnn_operations_master.json
 ```
 
-### Understanding Shard Configurations
-
-#### Height Sharded
-```
-Tensor shape: [1, 1, 12544, 32]
-Shard shape:  [224, 32]
-Grid:         [(0,0)→(7,6)]  # 8×7 = 56 cores
-
-Distribution: Tensor split by height
-- Each core gets 224 rows × 32 cols
-- 56 shards × 224 rows = 12544 total rows ✓
-```
-
-#### Width Sharded
-```
-Tensor shape: [1, 1, 196, 480]
-Shard shape:  [224, 32]
-Grid:         [(0,0)→(7,0), (0,1)→(6,1)]  # 15 cores
-
-Distribution: Tensor split by width
-- Each core gets 224 rows × 32 cols
-- 15 shards × 32 cols = 480 total cols ✓
-```
-
-#### Block Sharded
-```
-Tensor shape: [1, 1, 196, 672]
-Shard shape:  [32, 96]
-Grid:         [(0,0)→(6,6)]  # 7×7 = 49 cores
-
-Distribution: Tensor split by both dimensions
-- Each core gets 32 rows × 96 cols
-- Block distribution across 2D grid
-```
-
-### Performance Optimization
-
-**Traced configurations are already optimized!** They come from real models that have been tuned for performance.
-
-Key optimizations captured:
-- Optimal shard sizes for memory bandwidth
-- Efficient core utilization (grid layout)
-- Balanced workload distribution
-- Memory layout choices (SHARDED vs INTERLEAVED)
-
 ---
 
 ## Summary
@@ -1007,20 +954,20 @@ Key optimizations captured:
 
 ✅ **Automatic Configuration Extraction**: From any model test
 ✅ **Centralized Storage**: Single master JSON with deduplication
-✅ **Ultra-Simple Integration**: Just 3 lines of code to add traced configs
+✅ **Ultra-Simple Integration**: Easy to add traced configs to any sweep test
 ✅ **Production Testing**: Validate with real model configurations, instant results
 ✅ **Analysis Tools**: Query and inspect configurations
 
 ### Workflow
 
 ```
-1. Trace Model → 2. Store in Master JSON → 3. Use in Sweep Tests (3 lines!)
+1. Trace Model → 2. Store in Master JSON → 3. Use in Sweep Tests
      ⬇️                      ⬇️                        ⬇️
    Real-world          Deduplicated           Model-driven
    configs            configurations         model_traced
 ```
 
-### Integration is Just 3 Lines
+### Simple Integration
 
 ```python
 from tests.sweep_framework.master_config_loader import MasterConfigLoader
@@ -1031,7 +978,7 @@ parameters = {"model_traced": loader.get_suite_parameters("your_op")}
 ### Next Steps
 
 1. **Trace more models**: Add ResNet, BERT, Whisper, etc.
-2. **Expand coverage**: Add `model_traced` suite to more sweep tests (3 lines each!)
+2. **Expand coverage**: Add `model_traced` suite to more sweep tests
 3. **Monitor results**: View in Superset dashboard
 4. **Iterate**: As models evolve, re-trace to update configs
 
