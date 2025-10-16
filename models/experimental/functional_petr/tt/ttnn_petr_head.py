@@ -51,7 +51,7 @@ def ttnn_pos2posemb3d(pos, num_pos_feats=128, temperature=10000, device=None):  
 def pos2posemb3d(pos, num_pos_feats=128, temperature=10000):
     scale = 2 * math.pi
     pos = pos * scale
-    dim_t = torch.arange(num_pos_feats, dtype=torch.float32, device=pos.device)
+    dim_t = torch.arange(num_pos_feats, dtype=torch.bfloat16, device=pos.device)
     dim_t = temperature ** (2 * (dim_t // 2) / num_pos_feats)
     pos_x = pos[..., 0, None] / dim_t
     pos_y = pos[..., 1, None] / dim_t
@@ -220,7 +220,7 @@ class ttnn_PETRHead:
 
         coords = torch.stack(torch.meshgrid([coords_w, coords_h, coords_d])).permute(1, 2, 3, 0)  # W, H, D, 3
 
-        coords = ttnn.from_torch(coords, device=device)
+        coords = ttnn.from_torch(coords, dtype=ttnn.bfloat16, device=device)
 
         ones = ttnn.ones_like(coords[..., :1], dtype=ttnn.bfloat16)
         coords = ttnn.concat((coords, ones), dim=-1)
@@ -259,7 +259,7 @@ class ttnn_PETRHead:
         coords_mask = coords_mask.flatten(-2).sum(-1) > (D * 0.5)
         coords_mask = masks | coords_mask.permute(0, 1, 3, 2)
         coords3d = coords3d.permute(0, 1, 4, 5, 3, 2).contiguous().view(B * N, -1, H, W)
-        coords3d = ttnn.from_torch(coords3d, layout=ttnn.TILE_LAYOUT, device=device)
+        coords3d = ttnn.from_torch(coords3d, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
         coords3d = ttnn_inverse_sigmoid(coords3d)
 
         coords_position_embeding = coords3d
@@ -297,7 +297,7 @@ class ttnn_PETRHead:
         input_img_h, input_img_w = img_metas[0]["pad_shape"]
         x = ttnn.to_torch(x)
         masks = x.new_ones((batch_size, num_cams, input_img_h, input_img_w))
-        x = ttnn.from_torch(x, device=device)
+        x = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
         for img_id in range(batch_size):
             for cam_id in range(num_cams):
                 img_h, img_w = img_metas[img_id]["img_shape"][cam_id]
@@ -315,7 +315,7 @@ class ttnn_PETRHead:
             pos_embed = coords_position_embeding
             if self.with_multiview:
                 masks = masks.to(dtype=torch.float16)
-                masks = ttnn.from_torch(masks, layout=ttnn.TILE_LAYOUT, device=device)
+                masks = ttnn.from_torch(masks, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
                 sin_embed = self.positional_encoding(masks)
                 # sin_embed = self.adapt_pos3d(sin_embed.flatten(0, 1))
                 masks = ttnn.to_torch(masks)
@@ -381,18 +381,18 @@ class ttnn_PETRHead:
         reference_points = ttnn.reshape(reference_points, (1, reference_points.shape[0], reference_points.shape[1]))
         reference_points = ttnn.repeat_interleave(reference_points, batch_size, dim=0)  # .sigmoid()
         masks = masks.to(dtype=torch.float16)
-        masks = ttnn.from_torch(masks, device=device)
+        masks = ttnn.from_torch(masks, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
         outs_dec, _ = self.transformer(device, x, masks, query_embeds, pos_embed)  # , self.reg_branches)
 
-        outs_dec_torch = ttnn.to_torch(outs_dec).to(torch.float32)
-        outs_dec_torch = ttnn.to_torch(outs_dec).to(torch.float32)
+        outs_dec_torch = ttnn.to_torch(outs_dec).to(torch.bfloat16)
+        outs_dec_torch = ttnn.to_torch(outs_dec).to(torch.bfloat16)
         if torch.isnan(outs_dec_torch).any() or torch.isinf(outs_dec_torch).any():
             logger.warning(f"NaN/Inf detected in outs_dec! Applying nan_to_num")
             outs_dec_torch = torch.nan_to_num(outs_dec_torch, nan=0.0, posinf=1e6, neginf=-1e6)
             outs_dec = ttnn.from_torch(outs_dec_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
             outs_dec = ttnn.to_device(outs_dec, device)
-        outs_dec = ttnn.from_torch(outs_dec_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+        outs_dec = ttnn.from_torch(outs_dec_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
         outs_dec = ttnn.to_device(outs_dec, device)
         outputs_classes = []
         outputs_coords = []
@@ -408,7 +408,7 @@ class ttnn_PETRHead:
             assert reference.shape[-1] == 3
 
             outputs_class_f32 = ttnn.from_torch(
-                ttnn.to_torch(outs_dec[lvl : lvl + 1]).to(torch.float32),
+                ttnn.to_torch(outs_dec[lvl : lvl + 1]).to(torch.bfloat16),
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 device=device,
@@ -447,12 +447,12 @@ class ttnn_PETRHead:
                 elif operation == ttnn.relu:
                     tmp = operation(tmp)
 
-            tmp_torch = ttnn.to_torch(tmp).to(torch.float32)
+            tmp_torch = ttnn.to_torch(tmp).to(torch.bfloat16)
             if torch.isnan(tmp_torch).any() or torch.isinf(tmp_torch).any():
                 logger.warning(f"Layer {lvl}: NaN/Inf in tmp before sigmoid! Fixing...")
                 tmp_torch = torch.nan_to_num(tmp_torch, nan=0.0, posinf=10.0, neginf=-10.0)
 
-            reference = ttnn.to_torch(reference).to(torch.float32)
+            reference = ttnn.to_torch(reference).to(torch.bfloat16)
             tmp_torch[..., 0:2] = tmp_torch[..., 0:2] + reference[..., 0:2]
 
             # Safety clamp before sigmoid to prevent overflow
@@ -480,8 +480,8 @@ class ttnn_PETRHead:
         all_cls_scores = ttnn.concat(outputs_classes, dim=0)
         all_bbox_preds = ttnn.concat(outputs_coords, dim=0)
 
-        all_cls_scores = ttnn.to_torch(all_cls_scores).to(torch.float32)
-        all_bbox_preds = ttnn.to_torch(all_bbox_preds).to(torch.float32)
+        all_cls_scores = ttnn.to_torch(all_cls_scores).to(torch.bfloat16)
+        all_bbox_preds = ttnn.to_torch(all_bbox_preds).to(torch.bfloat16)
 
         if torch.isnan(all_bbox_preds).any() or torch.isinf(all_bbox_preds).any():
             logger.error("NaN/Inf detected in all_bbox_preds before scaling!")
@@ -495,9 +495,9 @@ class ttnn_PETRHead:
             logger.error("NaN/Inf still present after scaling!")
             all_bbox_preds = torch.nan_to_num(all_bbox_preds, nan=0.0, posinf=51.0, neginf=-51.0)
 
-        all_cls_scores = ttnn.from_torch(all_cls_scores, device=device)
+        all_cls_scores = ttnn.from_torch(all_cls_scores, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
         all_cls_scores = ttnn.to_device(all_cls_scores, device)
-        all_bbox_preds = ttnn.from_torch(all_bbox_preds, device=device)
+        all_bbox_preds = ttnn.from_torch(all_bbox_preds, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
         all_bbox_preds = ttnn.to_device(all_bbox_preds, device)
 
         outs = {

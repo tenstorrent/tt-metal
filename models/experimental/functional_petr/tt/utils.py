@@ -31,7 +31,7 @@ def inverse_sigmoid(x, eps: float = 1e-7):
         result = torch.nan_to_num(result, nan=0.0, posinf=10.0, neginf=-10.0)
 
     # Convert back to ttnn
-    result_ttnn = ttnn.from_torch(result, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
+    result_ttnn = ttnn.from_torch(result, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
     result_ttnn = ttnn.to_device(result_ttnn, device)
 
     return result_ttnn

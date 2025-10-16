@@ -484,7 +484,9 @@ def create_custom_preprocessor_petr_head(device):
                         child.bias, dtype=ttnn.bfloat16
                     )
             parameters["reference_points"] = {}
-            parameters["reference_points"]["weight"] = ttnn.from_torch(model.reference_points.weight, device=device)
+            parameters["reference_points"]["weight"] = ttnn.from_torch(
+                model.reference_points.weight, dtype=ttnn.bfloat16, device=device
+            )
 
         return parameters
 
