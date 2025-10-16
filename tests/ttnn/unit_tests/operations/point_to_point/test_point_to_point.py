@@ -172,7 +172,7 @@ def test_point_to_point_with_device_delay(mesh_device, shape_coords, layout, dty
         input_tensor,
         coord1,
         coord0,
-        ttnn.Topology.Linear,
+        topology=ttnn.Topology.Linear,
     )
     ttnn.apply_device_delay(
         mesh_device, delays
