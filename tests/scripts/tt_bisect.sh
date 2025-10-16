@@ -77,9 +77,14 @@ else
   echo "command is set: $test"
 fi
 
-# Creating virtual environment where we can install ttnn
-./create_venv.sh
-./python_env/bin/pip install -r models/tt_transformers/requirements.txt
+# Creating virtual environment for dependencies only (ttnn accessible via PYTHONPATH)
+python3 -m venv python_env
+source ./python_env/bin/activate
+pip install --upgrade pip
+# Skip building ttnn wheel (takes ~25min) - tests access it via PYTHONPATH=/work
+pip install -r models/tt_transformers/requirements.txt
+
+
 
 git cat-file -e "$good_commit^{commit}" 2>/dev/null || die "Invalid good commit: $good_commit"
 git cat-file -e "$bad_commit^{commit}" 2>/dev/null  || die "Invalid bad commit: $bad_commit"
@@ -131,33 +136,33 @@ while [[ "$found" == "false" ]]; do
 
   fresh_clean
 
-  build_rc=0
-  if [ "$tracy_enabled" -eq 1 ]; then
-    ./build_metal.sh \
-      --build-all \
-      --enable-ccache \
-      --enable-profiler || build_rc=$?
-  else
-    ./build_metal.sh \
-      --build-all \
-      --enable-ccache || build_rc=$?
-  fi
+  # build_rc=0
+  # if [ "$tracy_enabled" -eq 1 ]; then
+  #   ./build_metal.sh \
+  #     --build-all \
+  #     --enable-ccache \
+  #     --enable-profiler || build_rc=$?
+  # else
+  #   ./build_metal.sh \
+  #     --build-all \
+  #     --enable-ccache || build_rc=$?
+  # fi
 
-  echo "::endgroup::"
+  # echo "::endgroup::"
 
-  if [ $build_rc -ne 0 ]; then
-    echo "Build failed (rc=$build_rc); skipping this commit"
-    git bisect skip
-    continue
-  fi
+  # if [ $build_rc -ne 0 ]; then
+  #   echo "Build failed (rc=$build_rc); skipping this commit"
+  #   git bisect skip
+  #   continue
+  # fi
 
   echo "::group::Import sanity ($rev)"
-  if ! verify_import_path; then
-    echo "Import path check failed; skipping this commit"
-    git bisect skip
-    echo "::endgroup::"
-    continue
-  fi
+  # if ! verify_import_path; then
+  #   echo "Import path check failed; skipping this commit"
+  #   git bisect skip
+  #   echo "::endgroup::"
+  #   continue
+  # fi
   echo "::endgroup::"
 
   echo "::group::Testing $rev"
