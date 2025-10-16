@@ -219,17 +219,17 @@ Comprehensive performance benchmarking for OFT model components on TT device har
 **Usage:**
 ```bash
 # Run OFTNet performance test
-TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="4,3" pytest models/experimental/oft/tests/test_device_perf_oft.py::test_device_perf_oft_oftnet
+TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="4,3" pytest models/experimental/oft/tests/test_device_perf_oft.py::test_device_perf_oft -k device_perf_oft_oftnet
 ```
 ```bash
 # Run decoder performance test
-TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="4,3" pytest models/experimental/oft/tests/test_device_perf_oft.py::test_device_perf_oft_decoder
+TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="4,3" pytest models/experimental/oft/tests/test_device_perf_oft.py::test_device_perf_oft -k device_perf_oft_decoder
 ```
 ```bash
 # Run full oft performance test
-TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="4,3" pytest models/experimental/oft/tests/test_device_perf_oft.py::test_device_perf_oft_full
+TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="4,3" pytest models/experimental/oft/tests/test_device_perf_oft.py::test_device_perf_oft -k device_perf_oft_full
 ```
 ```bash
 # Run all performance tests
-TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="4,3" pytest models/experimental/oft/tests/test_device_perf_oft.py
+TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="4,3" pytest models/experimental/oft/tests/test_device_perf_oft.py::test_device_perf_oft
 ```
