@@ -123,24 +123,20 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
         // Only dispatch to cores that actually have work
         num_cores = std::min(actual_cores_needed, max_available_cores);
 
-        // Create core range set with only the cores that have work
         if (num_cores < max_available_cores) {
-            // Convert full core range to vector, then take only the needed cores
-            auto all_logical_cores = corerange_to_cores(
-                grid_shard_spec.grid,
-                max_available_cores,
-                grid_shard_spec.orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR);
+            // Split work only among the cores that need it
+            auto compute_grid_size = device->compute_with_storage_grid_size();
+            auto [num_cores_used, all_cores_range, core_group_1_range, core_group_2_range, num_sticks_1, num_sticks_2] =
+                tt::tt_metal::split_work_to_cores(compute_grid_size, total_grid_nsticks);
 
-            // Create logical_cores with only the first num_cores
-            logical_cores.assign(all_logical_cores.begin(), all_logical_cores.begin() + num_cores);
-
-            // Create a new core range set using span constructor
-            all_cores = CoreRangeSet(tt::stl::Span<const CoreCoord>(logical_cores.data(), num_cores));
+            // Only use the cores we actually need
+            num_cores = std::min(num_cores_used, num_cores);
+            all_cores = all_cores_range;
         } else {
             all_cores = grid_shard_spec.grid;
-            logical_cores = corerange_to_cores(
-                all_cores, num_cores, grid_shard_spec.orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR);
         }
+        logical_cores = corerange_to_cores(
+            all_cores, num_cores, grid_shard_spec.orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR);
     } else {
         const uint32_t grid_nsticks = grid_tensor.physical_volume() / grid_shape[-1];
         const auto compute_grid_size = device->compute_with_storage_grid_size();
