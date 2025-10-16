@@ -41,9 +41,7 @@ struct DataMovementConfig {
     NOC noc = NOC::RISCV_0_default;
     NOC_MODE noc_mode = NOC_MODE::DM_DEDICATED_NOC;
     std::vector<uint32_t> compile_args;
-    // Will cause CompileProgram to emit a file hlk_defines_generated.h
     // Each unique combination of defines will produce a unique compiled instantiation
-    // This file is then automatically included in the generated compiled kernel files
     std::map<std::string, std::string> defines;
     // Both compile_args and named_compile_args contain compile time arguments
     // The former is accessed by index, the latter by name
@@ -81,9 +79,7 @@ struct ComputeConfig {
     bool bfp8_pack_precise = false;
     bool math_approx_mode = false;
     std::vector<uint32_t> compile_args;
-    // Will cause CompileProgram to emit a file hlk_defines_generated.h
     // Each unique combination of defines will produce a unique compiled instantiation
-    // This file is then automatically included in the generated compiled kernel files
     std::map<std::string, std::string> defines;
     // Both compile_args and named_compile_args contain compile time arguments
     // The former is accessed by index, the latter by name
@@ -102,9 +98,7 @@ struct EthernetConfig {
     NOC noc = NOC::NOC_0;
     DataMovementProcessor processor = DataMovementProcessor::RISCV_0;
     std::vector<uint32_t> compile_args;
-    // Will cause CompileProgram to emit a file hlk_defines_generated.h
     // Each unique combination of defines will produce a unique compiled instantiation
-    // This file is then automatically included in the generated compiled kernel files
     std::map<std::string, std::string> defines;
     // Both compile_args and named_compile_args contain compile time arguments
     // The former is accessed by index, the latter by name

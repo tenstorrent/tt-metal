@@ -95,13 +95,10 @@ void jit_build_genfiles_triscs_src(
 
     vector<string> unpack_prolog;
     unpack_prolog.push_back("#define TRISC_UNPACK\n");
-    unpack_prolog.push_back("#include \"defines_generated.h\"\n");
     vector<string> math_prolog;
     math_prolog.push_back("#define TRISC_MATH\n");
-    math_prolog.push_back("#include \"defines_generated.h\"\n");
     vector<string> pack_prolog;
     pack_prolog.push_back("#define TRISC_PACK\n");
-    pack_prolog.push_back("#include \"defines_generated.h\"\n");
 
     // TODO(pgk) - is this really worth it?
     std::thread t0([&]() { gen_kernel_cpp(kernel_src_to_include, unpack_cpp, unpack_prolog); });
@@ -110,16 +107,6 @@ void jit_build_genfiles_triscs_src(
     t0.join();
     t1.join();
     t2.join();
-
-    // Here we generate an auxiliary header with defines added via add_define() call
-    // this header is then included from the kernel
-    // We also append the include path to generated dir to hlkc cmldline.
-    std::ofstream gen_defines_file;
-    string generated_defines_fname = out_dir + "/defines_generated.h";
-    gen_defines_file.open(generated_defines_fname, std::ios_base::out);
-    settings.process_defines([&gen_defines_file](const string& define, const string& value) {
-        gen_defines_file << "#define " << define << " " << value << endl;
-    });
 }
 
 namespace {

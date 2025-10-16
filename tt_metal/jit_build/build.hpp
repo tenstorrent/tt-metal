@@ -13,7 +13,6 @@
 #include <vector>
 
 #include "hal_types.hpp"
-#include "llrt/hal.hpp"
 #include "jit_build_options.hpp"
 
 namespace tt::tt_metal {
@@ -90,7 +89,6 @@ protected:
     int core_id_;
     int is_fw_;
     uint32_t dispatch_message_addr_;
-    bool process_defines_at_compile_{};
 
     std::string out_path_;
     std::string target_name_;

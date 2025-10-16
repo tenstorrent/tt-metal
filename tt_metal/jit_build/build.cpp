@@ -288,15 +288,13 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
     includes_(env.includes_),
     lflags_(env.lflags_),
     default_compile_opt_level_("Os"),
-    default_linker_opt_level_("Os"),
-    process_defines_at_compile_(true) {
+    default_linker_opt_level_("Os") {
     // Anything that is arch-specific should be added to HalJitBuildQueryInterface instead of here.
     if (build_config.core_type == HalProgrammableCoreType::TENSIX &&
         build_config.processor_class == HalProcessorClassType::COMPUTE) {
         this->default_compile_opt_level_ = "O3";
         this->default_linker_opt_level_ = "O3";
         this->includes_ += "-I" + env_.gpp_include_dir_ + " ";
-        this->process_defines_at_compile_ = false;
     } else if (build_config.core_type == HalProgrammableCoreType::ACTIVE_ETH && build_config.is_cooperative) {
         // Only cooperative active ethernet needs "-L <root>/tt_metal/hw/toolchain",
         // because its linker script depends on some files in that directory.
@@ -397,11 +395,9 @@ void JitBuildState::compile_one(
 
     if (settings) {
         // Append user args
-        if (process_defines_at_compile_) {
-            settings->process_defines([&defines](const string& define, const string& value) {
-                defines += fmt::format("-D{}='{}' ", define, value);
-            });
-        }
+        settings->process_defines([&defines](const string& define, const string& value) {
+            defines += fmt::format("-D{}='{}' ", define, value);
+        });
 
         settings->process_compile_time_args([&defines](const std::vector<uint32_t>& values) {
             if (values.empty()) {
