@@ -31,11 +31,21 @@ class ttnn_esemodule:
         input = x
         # x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
         # x = self.avg_pool(x)
-        # x = ttnn.global_avg_pool2d(x)
-        x_torch = ttnn.to_torch(x).to(torch.bfloat16)  # Convert to float32
-        x_torch = x_torch.mean(dim=(1, 2), keepdim=True)  # Global avg pool
-        x = ttnn.from_torch(x_torch, dtype=ttnn.bfloat16, device=device)
-        x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+        # y = x
+        # print(f"y.shape: {y.shape}")
+        # y = ttnn.global_avg_pool2d(y)
+        # print(f"y.shape: {y.shape}")
+        # x_torch = ttnn.to_torch(x).to(torch.bfloat16)  # Convert to float32
+        # x_torch = x_torch.mean(dim=(1, 2), keepdim=True)  # Global avg pool
+        # x = ttnn.from_torch(x_torch, dtype=ttnn.bfloat16, device=device)
+        # x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+        B, H, W, C = x.shape
+        # print(f"B: {B}, H: {H}, W: {W}, C: {C}")
+        x = ttnn.reshape(x, (B, H * W, C))
+        # print(f"x.shape: {x.shape}")
+        x = ttnn.mean(x, dim=1, keepdim=True)  # [B, 1, C]
+        x = ttnn.reshape(x, (B, 1, 1, C))
+        # print(f"x.shape: {x.shape}")
         x = self.fc(device, x)
         x = self.hsigmoid(x)
         if input.get_layout() != ttnn.TILE_LAYOUT:
@@ -296,7 +306,7 @@ class ttnn_osa_stage:
             original_dtype = x.dtype if hasattr(x, "dtype") else ttnn.bfloat16
 
             # Maxpool in torch
-            x_torch = ttnn.to_torch(x).to(torch.bfloat16)  # ← Use float32 in torch
+            x_torch = ttnn.to_torch(x).to(torch.bfloat16)
 
             # NHWC → NCHW
             x_torch = x_torch.permute(0, 3, 1, 2)
