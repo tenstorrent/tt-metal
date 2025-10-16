@@ -740,9 +740,6 @@ struct TensorPreparedConversion {
     DataType host_convert_data_type = DataType::INVALID;
 };
 
-#define py_log(...) \
-    std::cout << fmt::format("{}:{} {} {}", __FILE__, __LINE__, __func__, fmt::format(__VA_ARGS__)) << std::endl;
-
 template <typename T>
 Tensor create_typed_tt_tensor_from_host_data(
     const HostBuffer& host_data,
@@ -762,9 +759,6 @@ Tensor create_typed_tt_tensor_from_host_data(
         "Mismatch between the host buffer data type and the target tensor data: host buffer is {} and the target is {}",
         host_data.type_info().name(),
         typeid(T).name());
-
-    tt::stl::Span<T> pydata_span(
-        const_cast<T*>(reinterpret_cast<const T*>(host_data.view_bytes().data())), tensor_shape.volume());
 
     if (mesh_mapper == nullptr) {
         // Create a single tt tensor from the pydata.
@@ -787,8 +781,7 @@ Tensor create_typed_tt_tensor_from_host_data(
 
             if (is_custom_bfloat) {
                 // Using already implemented logic for the bfloat4/8
-                output =
-                    Tensor::from_span(tt::stl::make_const_span(pydata_span), tensor_spec, device, cq_id, pad_value);
+                output = Tensor::from_span(host_data.view_as<T>(), tensor_spec, device, cq_id, pad_value);
             } else {
                 // Otherwise construct the tensor from the host buffer directly, or through encoding. Calling
                 // `make_span` for other cases is inefficient here, as it will create a new host buffer from the span.
@@ -796,8 +789,7 @@ Tensor create_typed_tt_tensor_from_host_data(
                     output = Tensor(host_data, tensor_spec);
                 } else {
                     output = Tensor(
-                        HostBuffer(tensor_impl::encode_tensor_data(
-                            tt::stl::make_const_span(pydata_span), tensor_spec, pad_value)),
+                        HostBuffer(tensor_impl::encode_tensor_data(host_data.view_as<T>(), tensor_spec, pad_value)),
                         tensor_spec);
                 }
             }
@@ -810,7 +802,7 @@ Tensor create_typed_tt_tensor_from_host_data(
         // Shard pydata across mesh and apply `tensor_layout` at each shard.
         // Shapes of multi device shards will be derived automatically.
         return ttnn::distributed::create_distributed_tensor(
-            pydata_span,
+            const_cast<HostBuffer&>(host_data).view_as<T>(),
             tensor_shape,
             host_data.pin(),
             tensor_layout,
