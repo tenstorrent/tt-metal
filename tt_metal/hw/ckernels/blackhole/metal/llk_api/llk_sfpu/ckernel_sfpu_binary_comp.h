@@ -22,16 +22,16 @@ inline void calculate_binary_comp_int32(const uint dst_index_in0, const uint dst
         // operand B
         TT_SFPLOAD(p_sfpu::LREG1, INT32, ADDR_MOD_7, dst_index_in1 * dst_tile_size);
 
+        // Extract sign bits of A and B
+        TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG2, 0);
+        TTI_SFPMOV(0, p_sfpu::LREG1, p_sfpu::LREG3, 0);
+        TTI_SFPSHFT((-31) & 0xfff, p_sfpu::LREG2, p_sfpu::LREG2, 1);
+        TTI_SFPSHFT((-31) & 0xfff, p_sfpu::LREG3, p_sfpu::LREG3, 1);
+
+        // LREG_3 -> 0 for inputs of same sign, 1 for inputs of different signs
+        TTI_SFPXOR(0, p_sfpu::LREG2, p_sfpu::LREG3, 0);
+
         if constexpr (RELATIONAL_OP == SfpuType::lt) {
-            // Extract sign bits of A and B
-            TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG2, 0);
-            TTI_SFPMOV(0, p_sfpu::LREG1, p_sfpu::LREG3, 0);
-            TTI_SFPSHFT((-31) & 0xfff, p_sfpu::LREG2, p_sfpu::LREG2, 1);
-            TTI_SFPSHFT((-31) & 0xfff, p_sfpu::LREG3, p_sfpu::LREG3, 1);
-
-            // LREG_3 -> 0 for inputs of same sign, 1 for inputs of different signs
-            TTI_SFPXOR(0, p_sfpu::LREG2, p_sfpu::LREG3, 0);
-
             // if (LREG_3 == 0) -> use int32 subtract + extract sign
             TTI_SFPSETCC(0, p_sfpu::LREG3, 0 /*unused*/, SFPSETCC_MOD1_LREG_EQ0);
             // (A - B) -> Use 6 or LO16 as imod to convert operand B to 2's complement
@@ -49,15 +49,6 @@ inline void calculate_binary_comp_int32(const uint dst_index_in0, const uint dst
             TT_SFPSTORE(p_sfpu::LREG1, INT32, ADDR_MOD_7, dst_index_out * dst_tile_size);
 
         } else if constexpr (RELATIONAL_OP == SfpuType::gt) {
-            // Extract sign bits of A and B
-            TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG2, 0);
-            TTI_SFPMOV(0, p_sfpu::LREG1, p_sfpu::LREG3, 0);
-            TTI_SFPSHFT((-31) & 0xfff, p_sfpu::LREG2, p_sfpu::LREG2, 1);
-            TTI_SFPSHFT((-31) & 0xfff, p_sfpu::LREG3, p_sfpu::LREG3, 1);
-
-            // LREG_3 -> 0 for inputs of same sign, 1 for inputs of different signs
-            TTI_SFPXOR(0, p_sfpu::LREG2, p_sfpu::LREG3, 0);
-
             // if (LREG_3 == 0) -> use int32 subtract + extract sign
             TTI_SFPSETCC(0, p_sfpu::LREG3, 0, SFPSETCC_MOD1_LREG_EQ0);
             // (B - A) -> Use 6 or LO16 as imod to convert operand B to 2's complement
@@ -75,15 +66,6 @@ inline void calculate_binary_comp_int32(const uint dst_index_in0, const uint dst
             TT_SFPSTORE(p_sfpu::LREG0, INT32, ADDR_MOD_7, dst_index_out * dst_tile_size);
 
         } else if constexpr (RELATIONAL_OP == SfpuType::ge) {
-            // Extract sign bits of A and B
-            TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG2, 0);
-            TTI_SFPMOV(0, p_sfpu::LREG1, p_sfpu::LREG3, 0);
-            TTI_SFPSHFT((-31) & 0xfff, p_sfpu::LREG2, p_sfpu::LREG2, 1);
-            TTI_SFPSHFT((-31) & 0xfff, p_sfpu::LREG3, p_sfpu::LREG3, 1);
-
-            // LREG_3 -> 0 for inputs of same sign, 1 for inputs of different signs
-            TTI_SFPXOR(0, p_sfpu::LREG2, p_sfpu::LREG3, 0);
-
             // Implement GE by using LT logic and then inverting the result
             TTI_SFPSETCC(0, p_sfpu::LREG3, 0 /*unused*/, SFPSETCC_MOD1_LREG_EQ0);
             TTI_SFPIADD(0, p_sfpu::LREG0, p_sfpu::LREG1, 6);
@@ -102,15 +84,6 @@ inline void calculate_binary_comp_int32(const uint dst_index_in0, const uint dst
             TT_SFPSTORE(p_sfpu::LREG1, INT32, ADDR_MOD_7, dst_index_out * dst_tile_size);
 
         } else if constexpr (RELATIONAL_OP == SfpuType::le) {
-            // Extract sign bits of A and B
-            TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG2, 0);
-            TTI_SFPMOV(0, p_sfpu::LREG1, p_sfpu::LREG3, 0);
-            TTI_SFPSHFT((-31) & 0xfff, p_sfpu::LREG2, p_sfpu::LREG2, 1);
-            TTI_SFPSHFT((-31) & 0xfff, p_sfpu::LREG3, p_sfpu::LREG3, 1);
-
-            // LREG_3 -> 0 for inputs of same sign, 1 for inputs of different signs
-            TTI_SFPXOR(0, p_sfpu::LREG2, p_sfpu::LREG3, 0);
-
             // Implements LE by using GT logic and then inverting the result
             TTI_SFPSETCC(0, p_sfpu::LREG3, 0, SFPSETCC_MOD1_LREG_EQ0);
             TTI_SFPIADD(0, p_sfpu::LREG1, p_sfpu::LREG0, 6);
