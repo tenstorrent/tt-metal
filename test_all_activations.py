@@ -60,41 +60,6 @@ def get_memory_config(memory_config_type, shape, device):
     [
         # ReLU family - NO approx mode
         (ttnn.relu, "relu", {}, False),
-        # (ttnn.relu6, "relu6", {}, False),
-        # (ttnn.leaky_relu, "leaky_relu", {"negative_slope": 0.01}, False),
-        # (ttnn.relu_max, "relu_max", {"upper_limit": 6.0}, False),
-        # (ttnn.relu_min, "relu_min", {"lower_limit": 0.0}, False),
-        # Sigmoid family - HAS approx mode
-        # (ttnn.sigmoid, "sigmoid_accurate", {}, False),           # Accurate mode
-        # (ttnn.sigmoid, "sigmoid_approx", {}, True),              # Approximate mode
-        # (ttnn.sigmoid_accurate, "sigmoid_accurate_only", {}, False),  # Always accurate
-        # (ttnn.log_sigmoid, "log_sigmoid", {}, False),            # NO approx
-        # Tanh family - HAS approx mode
-        # (ttnn.tanh, "tanh_accurate", {}, False),                 # Accurate mode
-        # (ttnn.tanh, "tanh_approx", {}, True),                    # Approximate mode
-        # (ttnn.tanhshrink, "tanhshrink_accurate", {}, False),     # Accurate mode
-        # (ttnn.tanhshrink, "tanhshrink_approx", {}, True),        # Approximate mode
-        # GELU family - HAS approx mode
-        # (ttnn.gelu, "gelu_accurate", {}, False),                 # Accurate mode
-        # (ttnn.gelu, "gelu_approx", {}, True),                    # Approximate mode
-        # (ttnn.elu, "elu", {"alpha": 1.0}, False),               # NO approx
-        # (ttnn.celu, "celu", {"alpha": 1.0}, False),             # NO approx
-        # (ttnn.selu, "selu", {}, False),                         # NO approx
-        # (ttnn.silu, "silu", {}, False),                         # NO approx
-        # (ttnn.mish, "mish", {}, False),                         # NO approx - KEY COMPARISON!
-        # Math functions - NO approx mode
-        # (ttnn.sqrt, "sqrt", {}, False),                          # NO approx
-        # (ttnn.softplus, "softplus", {}, False),                  # NO approx
-        # Soft/Hard family - NO approx mode
-        # (ttnn.softshrink, "softshrink", {"lambd": 0.5}, False),
-        # (ttnn.hardshrink, "hardshrink", {"lambd": 0.5}, False),
-        # (ttnn.hardtanh, "hardtanh", {"min_val": -1.0, "max_val": 1.0}, False),
-        # (ttnn.hardsigmoid, "hardsigmoid", {}, False),
-        # (ttnn.hardswish, "hardswish", {}, False),
-        # (ttnn.softsign, "softsign", {}, False),
-        # Special - NO approx mode
-        # (ttnn.threshold, "threshold", {"threshold": 0.0, "value": 0.0}, False),
-        # (ttnn.heaviside, "heaviside", {"value": 0.5}, False),
         # (ttnn.prelu, "prelu", {"weight": 0.25}, False),
     ],
 )
