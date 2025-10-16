@@ -33,7 +33,7 @@ jobs:
         ]
     name: ${{ matrix.test-group.name }}
     runs-on:
-      - tt-ubuntu-2204-N300-llmbox-metal
+      - tt-ubuntu-2204-N300-llmbox-stable
     container:
       image: harbor.ci.tenstorrent.net/${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
