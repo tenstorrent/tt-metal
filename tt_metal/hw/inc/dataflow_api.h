@@ -567,7 +567,7 @@ inline void noc_async_read(
 // clang-format on
 template <bool use_vc = false>
 FORCE_INLINE void noc_async_read_one_packet_set_state(
-    uint64_t src_noc_addr, uint32_t size, uint8_t noc = noc_index, const uint32_t vc = 0) {
+    uint64_t src_noc_addr, uint32_t size, const uint32_t vc = 0, uint8_t noc = noc_index) {
     /*
         Read requests - use static VC
         Read responses - assigned VCs dynamically
@@ -597,7 +597,7 @@ FORCE_INLINE void noc_async_read_one_packet_set_state(
 // clang-format on
 template <bool inc_num_issued = true, bool use_vc = false>
 FORCE_INLINE void noc_async_read_one_packet_with_state(
-    uint32_t src_local_l1_addr, uint32_t dst_local_l1_addr, uint8_t noc = noc_index, const uint32_t vc = 0) {
+    uint32_t src_local_l1_addr, uint32_t dst_local_l1_addr, const uint32_t vc = 0, uint8_t noc = noc_index) {
     /*
         Read requests - use static VC
         Read responses - assigned VCs dynamically

@@ -164,11 +164,11 @@ void kernel_main() {
                         // in1_base_addr = noc_async_read_tile_dram_sharded_set_state<true>(
                         //     in1_tensor_addr, curr_page_size, dram_bank_id, vc);
                         uint64_t in1_base_addr = get_noc_addr_from_bank_id<true>(dram_bank_id, in1_tensor_addr);
-                        noc_async_read_one_packet_set_state<true>(in1_base_addr, curr_page_size, vc = vc);
+                        noc_async_read_one_packet_set_state<true>(in1_base_addr, curr_page_size, vc);
                         // noc_async_read_tile_dram_sharded_with_state(
                         //     in1_base_addr, curr_l1_read_addr_in1, l1_write_addr_in1);
                         noc_async_read_one_packet_with_state<use_vc = true>(
-                            in1_tensor_addr + curr_l1_read_addr_in1, l1_write_addr_in1, vc = vc);
+                            in1_tensor_addr + curr_l1_read_addr_in1, l1_write_addr_in1, vc);
                         curr_l1_read_addr_in1 += curr_page_size;
                         l1_write_addr_in1 += curr_page_size;
                     }

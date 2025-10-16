@@ -75,7 +75,7 @@ void kernel_main() {
         // uint32_t src_base_addr =
         //     noc_async_read_tile_dram_sharded_set_state<true>(input_addr, curr_page_size, bank_id, vc);
         uint64_t src_base_addr = get_noc_addr_from_bank_id<true>(bank_id, input_addr);
-        noc_async_read_one_packet_set_state<true>(src_base_addr, curr_page_size, vc = vc);
+        noc_async_read_one_packet_set_state<true>(src_base_addr, curr_page_size, vc);
         src_read_addr = src_read_addr_offset_bytes;
 
         // For debug purpose, use trivial DRAM read method
