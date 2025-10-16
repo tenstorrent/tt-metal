@@ -201,8 +201,8 @@ The tests require:
 ## Expected Outputs
 
 All tests generate:
-**Console logs**: Detailed PCC comparisons and validation results
-**Visualizations**: Debug plots and comparison images (saved to `outputs/` directories)
+- **Console logs**: Detailed PCC comparisons and validation results
+- **Visualizations**: Debug plots and comparison images (saved to `outputs/` directories)
 
 ## Section 3: Device Performance Tests
 
