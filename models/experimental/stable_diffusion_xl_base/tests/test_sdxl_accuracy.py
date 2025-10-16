@@ -155,6 +155,7 @@ def test_accuracy_sdxl(
     print(f"Standard Deviation of CLIP Scores: {deviation_clip_score}")
 
     avg_gen_end_to_end = profiler.get("end_to_end_generation")
+    model_name = "sdxl-tp" if use_cfg_parallel else "sdxl"
 
     data = {
         "model": "sdxl",
