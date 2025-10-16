@@ -154,11 +154,16 @@ jobs:
           jq --version
 
           # Check GitHub CLI authentication (GH_TOKEN is provided via env)
-          if gh auth status >/dev/null 2>&1; then
-            echo "✅ GitHub CLI is authenticated"
-          else
-            echo "⚠️  GitHub CLI authentication check failed, but GH_TOKEN is set"
-          fi
+          echo "🔐 Checking GitHub CLI authentication status:"
+          gh auth status || echo "⚠️  Authentication check failed"
+
+          echo "🔍 Testing gh CLI with current repository:"
+          echo "Repository: $(gh repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null || echo 'Failed to get repo info')"
+
+          echo "📋 Testing workflow run listing for current commit:"
+          CURRENT_COMMIT=$(git rev-parse HEAD)
+          echo "Current commit: $CURRENT_COMMIT"
+          gh run list --commit "$CURRENT_COMMIT" --json workflowName,conclusion,databaseId --limit 5 2>&1 || echo "⚠️  Failed to list runs for current commit"
         shell: bash
 
       - name: Run Git Bisect
