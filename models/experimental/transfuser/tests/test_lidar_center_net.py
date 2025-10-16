@@ -33,6 +33,8 @@ def create_lidar_center_net_head_preprocessor(device, weight_dtype=ttnn.bfloat16
             "velocity_head",
             "brake_head",
         ]:
+            if head_name == "heatmap_head":
+                weight_dtype = ttnn.float32
             if hasattr(torch_model, head_name):
                 head = getattr(torch_model, head_name)
 
@@ -227,7 +229,16 @@ def test_lidar_center_net(
     tt_brake_torch = tt2torch_tensor(tt_brake).permute(0, 3, 1, 2)
     tt_brake_torch = tt_brake_torch.reshape(ref_brake.shape)
 
+    # # Dump ref_center_heatmap to pickle file
+    # with open('ref_center_heatmap.pkl', 'wb') as f:
+    #     pickle.dump(ref_center_heatmap, f)
+    # logger.info("Dumped ref_center_heatmap to ref_center_heatmap.pkl")
+
+    # ttnn_function = ttnn.sigmoid
+    # golden_function = ttnn.get_golden_function(ttnn_function)
+    # tt_center_heatmap_torch = golden_function(tt_center_heatmap_torch, device=device)
     # Validate center heatmap
+
     does_pass, heatmap_pcc_message = check_with_pcc(ref_center_heatmap, tt_center_heatmap_torch, 0.90)
     logger.info(f"Center Heatmap PCC: {heatmap_pcc_message}")
     assert does_pass, f"Center Heatmap PCC check failed: {heatmap_pcc_message}"

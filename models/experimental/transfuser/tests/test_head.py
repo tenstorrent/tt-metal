@@ -30,6 +30,8 @@ def create_lidar_center_net_head_preprocessor(device, weight_dtype=ttnn.bfloat16
             "velocity_head",
             "brake_head",
         ]:
+            if head_name == "heatmap_head":
+                weight_dtype = ttnn.float32
             if hasattr(torch_model, head_name):
                 head = getattr(torch_model, head_name)
 
@@ -70,7 +72,7 @@ def create_lidar_center_net_head_preprocessor(device, weight_dtype=ttnn.bfloat16
     ],
 )
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
-@pytest.mark.parametrize("weight_dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("weight_dtype", [ttnn.float32])
 def test_lidar_center_net_head(
     device,
     batch_size,
@@ -145,7 +147,7 @@ def test_lidar_center_net_head(
     tt_feat_input = ttnn.from_torch(
         feat_input_flattened,  # Use flattened version
         device=device,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
+        layout=ttnn.TILE_LAYOUT,
         dtype=input_dtype,
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )

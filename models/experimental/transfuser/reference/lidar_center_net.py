@@ -133,7 +133,8 @@ class LidarCenterNetHead(BaseDenseHead, BBoxTestMixin):
             wh_pred (Tensor): wh predicts, the channels number is 2.
             offset_pred (Tensor): offset predicts, the channels number is 2.
         """
-        center_heatmap_pred = self.heatmap_head(feat)
+        center_heatmap_pred = self.heatmap_head(feat).sigmoid()
+        # center_heatmap_pred = self.heatmap_head(feat)
         wh_pred = self.wh_head(feat)
         offset_pred = self.offset_head(feat)
         yaw_class_pred = self.yaw_class_head(feat)

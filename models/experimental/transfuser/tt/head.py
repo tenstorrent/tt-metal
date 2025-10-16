@@ -66,7 +66,12 @@ class TTLidarCenterNetHead:
         Returns:
             Output tensor after applying the head
         """
-
+        compute_config = ttnn.init_device_compute_kernel_config(
+            self.device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
         # First conv: 3x3, padding=1
         x = ttnn.conv2d(
             input_tensor=feat,
@@ -81,6 +86,7 @@ class TTLidarCenterNetHead:
             batch_size=batch_size,
             input_height=height,
             input_width=width,
+            compute_config=compute_config,
         )
 
         # ReLU activation
@@ -100,6 +106,7 @@ class TTLidarCenterNetHead:
             batch_size=batch_size,
             input_height=height,
             input_width=width,
+            compute_config=compute_config,
         )
 
         return x
@@ -123,6 +130,10 @@ class TTLidarCenterNetHead:
             All outputs are in NHWC format
         """
         # Apply heatmap head (outputs num_classes channels)
+        # Convert device tensor from bfloat16 to float32
+        feat = ttnn.from_device(feat)  # Move to host
+        feat = ttnn.to_dtype(feat, ttnn.float32)  # Convert dtype on host
+        feat = ttnn.to_device(feat, self.device)  # Move back to device
         center_heatmap_pred = self._apply_head(
             feat,
             self.heatmap_head_params["conv1_weight"],
@@ -134,7 +145,7 @@ class TTLidarCenterNetHead:
             height,
             width,
         )
-        # center_heatmap_pred = ttnn.sigmoid(center_heatmap_pred)
+        center_heatmap_pred = ttnn.sigmoid(center_heatmap_pred, vector_mode=4, fast_and_approximate_mode=False)
 
         # Apply wh head (outputs 2 channels)
         wh_pred = self._apply_head(
