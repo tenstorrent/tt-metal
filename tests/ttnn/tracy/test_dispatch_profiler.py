@@ -44,7 +44,13 @@ def test_with_ops(device):
 
 
 @pytest.mark.parametrize("mesh_device", [pytest.param((1, 1), id="1x1_grid")], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"dispatch_core_type": ttnn.DispatchCoreType.WORKER}, {"dispatch_core_type": ttnn.DispatchCoreType.ETH}],
+    indirect=True,
+)
 def test_mesh_device(
     mesh_device,
+    device_params,
 ):
     logger.debug("Testing Mesh Device")
