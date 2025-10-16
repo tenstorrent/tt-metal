@@ -46,6 +46,7 @@ void kernel_main() {
     const uint32_t rx_noc_x = get_arg_val<uint32_t>(idx++);
     const uint32_t rx_noc_y = get_arg_val<uint32_t>(idx++);
     const uint32_t sem_l1_addr = get_arg_val<uint32_t>(idx++);
+    const uint32_t sem_noc_index = get_arg_val<uint32_t>(idx++);
 
     // DPRINT << "writer: rx=(" << rx_noc_x << "," << rx_noc_y << ") sem_l1=0x" << sem_l1_addr << ENDL();
 
@@ -234,7 +235,7 @@ void kernel_main() {
 
     // === Single multicast completion to identical mailboxes on all destination chips ===
     ASSERT(sem_l1_addr != 0);
-    const uint64_t sem_noc = safe_get_noc_addr(rx_noc_x, rx_noc_y, sem_l1_addr, 0);
+    const uint64_t sem_noc = safe_get_noc_addr(rx_noc_x, rx_noc_y, sem_l1_addr, sem_noc_index);
     const uint32_t sem_noc_hi = static_cast<uint32_t>(sem_noc >> 32);
     const uint32_t sem_noc_lo = static_cast<uint32_t>(sem_noc & 0xffffffffu);
     DPRINT << "writer: sem_noc[hi:lo]=0x" << sem_noc_hi << ":0x" << sem_noc_lo << ENDL();
