@@ -1,0 +1,52 @@
+allocation_policies:
+    receiver:
+      max_configs_per_core: 4
+
+Tests:
+  - name: "CodeProfilingLinearMulticast"
+    fabric_setup:
+      topology: Linear
+
+    parametrization_params:
+      num_links: [1]
+      ntype: [unicast_write]
+
+    defaults:
+      ftype: mcast
+      size: 1024
+      num_packets: 100
+
+    patterns:
+      - type: all_to_all
+
+  - name: "CodeProfilingFullRingMulticast"
+    fabric_setup:
+      topology: Ring
+
+    parametrization_params:
+      num_links: [1]
+      ntype: [unicast_write]
+
+    defaults:
+      ftype: mcast
+      size: 1024
+      num_packets: 100
+
+    patterns:
+      - type: full_ring
+
+  - name: "CodeProfilingMeshMulticast"
+    fabric_setup:
+      topology: Mesh
+
+    parametrization_params:
+      num_links: [1]
+      ntype: [unicast_write]
+
+    defaults:
+      ftype: mcast
+      size: 1024
+      num_packets: 100
+
+    patterns:
+      - type: all_to_all
