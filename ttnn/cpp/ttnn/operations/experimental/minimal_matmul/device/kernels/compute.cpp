@@ -65,7 +65,7 @@ void matmul_blocks(
     const uint32_t out_cb,
     const uint32_t M_block_tiles,
     const uint32_t N_block_tiles,
-    const uint32_t padded_N_block_tiles,
+    // const uint32_t padded_N_block_tiles,
     const uint32_t K_block_tiles,
     const uint32_t M_num_subblocks,
     const uint32_t N_num_subblocks,
@@ -86,7 +86,7 @@ void matmul_blocks(
                 matmul_block(
                     in0_cb, in1_cb, in0_index, in1_index, dst_index, false, subblock_w, subblock_h, K_block_tiles);
                 in0_index++;
-                in1_index += padded_N_block_tiles;
+                in1_index += N_block_tiles;
             }
             tile_regs_commit();
 
@@ -96,7 +96,7 @@ void matmul_blocks(
                 uint32_t h_tile_id = M_start + h;
                 for (uint32_t w = 0; w < subblock_w; w++) {
                     uint32_t w_tile_id = N_start + w;
-                    uint32_t out_tile_id = h_tile_id * padded_N_block_tiles + w_tile_id;
+                    uint32_t out_tile_id = h_tile_id * N_block_tiles + w_tile_id;
                     pack_tile<true>(write_dst_index, out_cb, out_tile_id);
                     write_dst_index++;
                     dst_index++;
@@ -124,6 +124,8 @@ void MAIN {
     const uint32_t M_end_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t N_start_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t N_end_tile = get_arg_val<uint32_t>(argidx++);
+    const uint32_t M_blocks_per_core = get_arg_val<uint32_t>(argidx++);
+    const uint32_t N_blocks_per_core = get_arg_val<uint32_t>(argidx++);
 
     constexpr uint32_t in0_cb = tt::CBIndex::c_0;
     constexpr uint32_t in1_cb = tt::CBIndex::c_1;
@@ -146,10 +148,10 @@ void MAIN {
     constexpr uint32_t M_num_subblocks = M_block_tiles / subblock_h;
     constexpr uint32_t N_num_subblocks = N_block_tiles / subblock_w;
 
-    const uint32_t M_tiles_per_core = M_end_tile - M_start_tile;
-    const uint32_t N_tiles_per_core = N_end_tile - N_start_tile;
-    const uint32_t N_num_blocks = div_up(N_tiles_per_core, N_block_tiles);
-    const uint32_t M_num_blocks = div_up(M_tiles_per_core, M_block_tiles);
+    // const uint32_t M_tiles_per_core = M_end_tile - M_start_tile;
+    // const uint32_t N_tiles_per_core = N_end_tile - N_start_tile;
+    const uint32_t N_num_blocks = N_blocks_per_core;  // div_up(N_tiles_per_core, N_block_tiles);
+    const uint32_t M_num_blocks = M_blocks_per_core;  // div_up(M_tiles_per_core, M_block_tiles);
 
     bool n_forward = true;
 
@@ -160,13 +162,13 @@ void MAIN {
 
     for (uint32_t m_block_iter = 0; m_block_iter < M_num_blocks; m_block_iter++) {
         uint32_t m_tile = M_start_tile + m_block_iter * M_block_tiles;
-        uint32_t m_tile_end = std::min(m_tile + M_block_tiles, M_end_tile);
-        current_M_block_tiles = m_tile_end - m_tile;
+        // uint32_t m_tile_end = std::min(m_tile + M_block_tiles, M_end_tile);
+        // current_M_block_tiles = m_tile_end - m_tile;
         for (uint32_t n_block_iter = 0; n_block_iter < N_num_blocks; n_block_iter++) {
             uint32_t n_tile = n_forward ? N_start_tile + n_block_iter * N_block_tiles
                                         : N_start_tile + (N_num_blocks - 1 - n_block_iter) * N_block_tiles;
-            uint32_t n_tile_end = std::min(n_tile + N_block_tiles, N_end_tile);
-            current_N_block_tiles = n_tile_end - n_tile;
+            // uint32_t n_tile_end = std::min(n_tile + N_block_tiles, N_end_tile);
+            // current_N_block_tiles = n_tile_end - n_tile;
             mm_block_init_short(
                 in0_cb,
                 in1_cb,
@@ -188,7 +190,7 @@ void MAIN {
                     intermediate_cb,
                     M_block_tiles,
                     N_block_tiles,
-                    N_block_tiles,
+                    // N_block_tiles,
                     K_block_tiles,
                     M_num_subblocks,
                     N_num_subblocks,

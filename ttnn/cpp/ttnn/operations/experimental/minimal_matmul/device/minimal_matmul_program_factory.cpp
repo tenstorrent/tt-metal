@@ -226,8 +226,12 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
     // uint32_t N_blocks = padded_N_tiles / N_block_tiles;
     uint32_t K_blocks = padded_K_tiles / K_block_tiles;
 
-    // uint32_t M_blocks_per_core = tt::div_up(M_blocks, in0_parallel_axis_cores);
-    // uint32_t N_blocks_per_core = tt::div_up(N_blocks, in1_parallel_axis_cores);
+    uint32_t M_blocks_per_core = tt::div_up(M_tiles_per_core, M_block_tiles);
+    uint32_t N_blocks_per_core = tt::div_up(N_tiles_per_core, N_block_tiles);
+    log_info(tt::LogOp, "M_tiles_per_core: {}", M_tiles_per_core);
+    log_info(tt::LogOp, "N_tiles_per_core: {}", N_tiles_per_core);
+    log_info(tt::LogOp, "M_blocks_per_core: {}", M_blocks_per_core);
+    log_info(tt::LogOp, "N_blocks_per_core: {}", N_blocks_per_core);
 
     uint32_t in0_block_num_tiles = M_block_tiles * K_block_tiles;
     uint32_t in1_block_num_tiles = K_block_tiles * N_block_tiles;
@@ -522,6 +526,9 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
         uint32_t N_start_tile = N_tiles_per_core * in1_idx;
         uint32_t N_end_tile = N_tiles_per_core * (in1_idx + 1);
 
+        // log_info(tt::LogOp, "core_id: {}, M_start_tile: {}, M_end_tile: {}, N_start_tile: {}, N_end_tile: {}",
+        // core_id, M_start_tile, M_end_tile, N_start_tile, N_end_tile);
+
         // Defer write to K block with same coordinate as core
         // The writer receiver cores always have core.x > 0
         uint32_t defer_write_k_block = core.y * k_blocks_per_core;
@@ -544,6 +551,8 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
             N_start_tile,
             N_end_tile,
             defer_write_k_block,
+            M_blocks_per_core,
+            N_blocks_per_core,
         };
 
         if (in1_idx == 0) {
@@ -568,6 +577,8 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
             N_start_tile,
             N_end_tile,
             defer_write_k_block,
+            M_blocks_per_core,
+            N_blocks_per_core,
         };
         if (in0_idx == 0) {
             // in1 sender
@@ -582,6 +593,8 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
             M_end_tile,
             N_start_tile,
             N_end_tile,
+            M_blocks_per_core,
+            N_blocks_per_core,
         };
         SetRuntimeArgs(program, compute_kernels_id, core, compute_runtime_args);
     }
