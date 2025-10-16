@@ -145,7 +145,7 @@ try_download_artifacts() {
   # Look for successful build workflows (prioritize "All post-commit tests")
   local build_run_id
   # First try to find "All post-commit tests" workflow specifically
-  build_run_id="$(echo "$runs" | jq -r '.[] | select(.workflowName == "All post-commit tests") | select(.conclusion == "success") | .databaseId' | head -1)"
+  build_run_id="$(echo "$runs" | jq -r '.[] | select(.workflowName == "All post-commit tests") | .databaseId' | head -1)"
 
   # If not found, fall back to other build workflow patterns
   if [ -z "$build_run_id" ]; then
