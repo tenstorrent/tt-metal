@@ -46,6 +46,14 @@ void kernel_main() {
     uint64_t tx_start;
     uint64_t tx_end;
 
+    uint64_t axi_disabled_addr = 0x100FFB20100;
+    uint64_t axi_disabled_addr_noc = get_noc_addr_from_bank_id<dram>(dram_channel, axi_disabled_addr);
+    uint32_t axi_disabled_data = 0x00006005;
+    volatile tt_l1_ptr std::uint32_t* axi_data_ptr = (volatile tt_l1_ptr uint32_t*)(0x100000);
+    *axi_data_ptr = axi_disabled_data;
+
+    noc_async_write(0x100000, axi_disabled_addr_noc, 4);
+
     {
         DeviceZoneScopedN("RISCV0");
         tx_start = get_timestamp();
