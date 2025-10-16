@@ -138,6 +138,51 @@ The **Model Trace to Test Automation** system automatically extracts real-world 
 - **After**: Sweep tests automatically use configurations from EfficientNet, ResNet, BERT, etc.
 - **Result**: Instant validation with real-world model configurations, results shown in Superset dashboard
 
+### Workflow Visualization
+
+```mermaid
+flowchart TB
+    Start([Model Test File]) --> Tracer[🔍 generic_ops_tracer.py]
+
+    Tracer --> |Captures Operations| Graph[TTNN Graph Trace]
+    Graph --> |Filters Valid Ops| Filter[Filter by Allops.txt]
+    Filter --> |Extracts Configs| Extract[Extract Shapes, Dtypes,<br/>Memory Configs, Layouts]
+
+    Extract --> Master[(📦 Master JSON<br/>ttnn_operations_master.json)]
+
+    Master --> |Deduplicated<br/>Unique Configs| Master
+
+    Master -.->|Query| Analyze[🔎 analyze_operations.py<br/>View Configs]
+
+    Master --> Loader[⚙️ master_config_loader.py<br/>Parse & Convert]
+
+    Loader --> |Provides Parameters| Sweep[📊 Sweep Test<br/>model_traced suite]
+
+    Sweep --> |Generate Vectors| VectorGen[sweeps_parameter_generator.py]
+    VectorGen --> Vectors[(Test Vectors)]
+
+    Vectors --> Runner[🚀 sweeps_runner.py]
+    Runner --> |Execute Tests| Device[🔲 TTNN Device]
+    Device --> |Results| Results[(✅ Test Results)]
+
+    Results --> Dashboard[📈 Superset Dashboard<br/>Pass/Fail Analytics]
+
+    style Start fill:#e1f5ff
+    style Master fill:#fff4e1
+    style Sweep fill:#e8f5e9
+    style Dashboard fill:#f3e5f5
+    style Tracer fill:#ffebee
+    style Loader fill:#fff9c4
+    style Runner fill:#e0f2f1
+```
+
+**Key Flow:**
+1. 🔍 **Trace** → Extract ops from model tests
+2. 📦 **Store** → Deduplicate & save to master JSON
+3. ⚙️ **Load** → Parse configs into TTNN objects
+4. 📊 **Test** → Run sweep tests with real configs
+5. 📈 **Analyze** → View results in dashboard
+
 ---
 
 ## Quick Start
