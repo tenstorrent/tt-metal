@@ -59,10 +59,8 @@ def test_vanilla_unet_model(
     model = create_unet_from_configs(configs, device)
 
     ttnn_output = model(ttnn_input_tensor)
-    ttnn_output = ttnn.to_torch(ttnn_output)
-    ttnn_output = ttnn_output.permute(0, 3, 1, 2)  # NHWC -> NCHW
-    ttnn_output = ttnn_output.reshape(torch_output_tensor.shape)
+    ttnn_output = ttnn.to_torch(ttnn_output).reshape(torch_output_tensor.shape)
 
-    assert ttnn_output.shape == torch_output_tensor.shape
+    assert ttnn_output.shape == torch_output_tensor.shape, "Expected output tensor shapes to match"
     pcc_passed, pcc_message = assert_with_pcc(torch_output_tensor, ttnn_output, pcc=VANILLA_UNET_PCC_WH)
     logger.info(f"PCC check was successful ({pcc_message:.5f} > {VANILLA_UNET_PCC_WH:.5f})")

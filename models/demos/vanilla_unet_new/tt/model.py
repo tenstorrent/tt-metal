@@ -103,7 +103,9 @@ class TtUNet:
         dec1 = self.decoder1_conv1(dec1)
         dec1 = self.decoder1_conv2(dec1)
 
-        return self.final_conv(dec1)
+        output = self.final_conv(dec1)
+
+        return ttnn.experimental.convert_to_chw(output, dtype=ttnn.bfloat16)
 
     def _transpose_conv(
         self,
