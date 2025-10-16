@@ -49,16 +49,10 @@ while IFS= read -r FILE; do
             ;;
         tests/tt_metal/**/*.h|tests/tt_metal/**/*.hpp|tests/tt_metal/**/*.c|tests/tt_metal/**/*.cpp|tests/tt_metal/**/*.py)
             TTMETALIUM_TESTS_CHANGED=true
-            TTMETALIUM_OR_TTNN_TESTS_CHANGED=true
             ANY_CODE_CHANGED=true
             ;;
         tests/ttnn/**/*.h|tests/ttnn/**/*.hpp|tests/ttnn/**/*.c|tests/ttnn/**/*.cpp|tests/ttnn/**/*.py)
             TTNN_TESTS_CHANGED=true
-            TTMETALIUM_OR_TTNN_TESTS_CHANGED=true
-            ANY_CODE_CHANGED=true
-            ;;
-        tests/**/*.h|tests/**/*.hpp|tests/**/*.c|tests/**/*.cpp|tests/**/*.py)
-            TTMETALIUM_OR_TTNN_TESTS_CHANGED=true
             ANY_CODE_CHANGED=true
             ;;
         tt-train/**/*.h|tt-train/**/*.hpp|tt-train/**/*.c|tt-train/**/*.cpp|tt-train/**/*.py)
@@ -97,12 +91,18 @@ if [[ "$SUBMODULE_CHANGED" = true ]]; then
     TTNN_CHANGED=true
     TTMETALIUM_TESTS_CHANGED=true
     TTNN_TESTS_CHANGED=true
-    TTMETALIUM_OR_TTNN_TESTS_CHANGED=true
     TTTRAIN_CHANGED=true
     # TODO: Well, this could likely just depend on the UMD submodule changing...
     # Something to make more efficient in future.
     TOOLS_CHANGED=true
     ANY_CODE_CHANGED=true
+fi
+
+# Derive combined tests-changed flag from isolated flags
+if [[ "$TTMETALIUM_TESTS_CHANGED" = true || "$TTNN_TESTS_CHANGED" = true ]]; then
+    TTMETALIUM_OR_TTNN_TESTS_CHANGED=true
+else
+    TTMETALIUM_OR_TTNN_TESTS_CHANGED=false
 fi
 
 declare -A changes=(
