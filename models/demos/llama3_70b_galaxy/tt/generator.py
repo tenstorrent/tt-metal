@@ -4,6 +4,7 @@
 
 import ttnn
 import torch
+from dataclasses import replace, fields
 from loguru import logger
 from typing import List
 from collections import defaultdict
@@ -116,6 +117,14 @@ class Generator:
                 )
         # trace_id_prefill dict check
         logger.info("Prefill traces warmup completed")
+
+    @staticmethod
+    def _clamp(value, min_value, max_value):
+        if value < min_value:
+            return min_value
+        elif value > max_value:
+            return max_value
+        return value
 
     def prefill_forward_text(
         self,
@@ -421,13 +430,46 @@ class Generator:
             "is_page_table_sharded": is_page_table_sharded,
         }
         if reset_inputs and sampling_params is not None:
-            if sampling_params.temperature == 0:  # argmax
-                sampling_params = SamplingParams(temperature=1.0, top_k=1, top_p=0.0)
+            if not isinstance(sampling_params.temperature, List):
+                # convert all sampling_params to lists
+                update_dict = {field.name: [getattr(sampling_params, field.name)] for field in fields(sampling_params)}
+                sampling_params = replace(sampling_params, **update_dict)
+
+            # must pad sampling_params to max_batch_size
+            default_params = {"temp": 0.0, "p": 1.0, "k": 0.0}
+            target_len = self.model_args.max_batch_size
+            for name, tensor in zip(
+                ("temp", "p", "k"), (sampling_params.temperature, sampling_params.top_p, sampling_params.top_k)
+            ):
+                current_len = len(tensor)
+                if current_len < target_len:
+                    tensor.extend([default_params[name]] * (target_len - current_len))
+
+            # we must clamp top-p in range [0.0, 1.0]
+            # cannot rely on external SamplingParams to be clamped
+            TOP_P_MIN = 0.0
+            TOP_P_MAX = 1.0
+
+            for i, (top_p, temp) in enumerate(zip(sampling_params.top_p, sampling_params.temperature)):
+                # Clamp top-p
+                clamped_top_p = self._clamp(top_p, TOP_P_MIN, TOP_P_MAX)
+                if clamped_top_p != top_p:
+                    logger.warning(f"Clamped Top-P value of {top_p} to {clamped_top_p}")
+                    sampling_params.top_p[i] = clamped_top_p
+
+                # Process temperature
+                if temp == 0:
+                    sampling_params.temperature[i] = 1.0
+                    sampling_params.top_k[i] = 1
+                else:
+                    sampling_params.temperature[i] = 1 / temp
+
             self.model.tt_sampling.reset_params(
-                k=[sampling_params.top_k] * 32,
-                p=[sampling_params.top_p] * 32,
-                temp=[1 / sampling_params.temperature] * 32,
+                k=sampling_params.top_k,
+                p=sampling_params.top_p,
+                temp=sampling_params.temperature,
             )
+
         if tt_out_logits_saved is not None:
             decode_kwargs["tt_out_logits_saved"] = tt_out_logits_saved
         if enable_trace:
