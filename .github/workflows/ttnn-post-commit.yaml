@@ -66,7 +66,7 @@ jobs:
         os: ["ubuntu-22.04"]
         test-group:
           - name: ttnn eltwise group 1
-            cmd: pytest -n auto --timeout 300 tests/ttnn/unit_tests -xv --splits 8 --group 1 -m "not disable_fast_runtime_mode"
+            cmd: pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations/eltwise -xv --splits 8 --group 1 -m "not disable_fast_runtime_mode"
           - name: ttnn eltwise group 2
             cmd: pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations/eltwise -xv --splits 8 --group 2 -m "not disable_fast_runtime_mode"
           - name: ttnn eltwise group 3
@@ -101,8 +101,8 @@ jobs:
             cmd: pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations/transformers -xv -m "not disable_fast_runtime_mode"
           - name: ttnn reduce and misc ops group
             cmd: pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations/reduce tests/ttnn/unit_tests/operations/rand tests/ttnn/unit_tests/operations/debug tests/ttnn/unit_tests/operations/ssm -xv -m "not disable_fast_runtime_mode"
-          - name: ttnn unit test group
-            cmd: pytest -n auto --timeout 300 tests/ttnn/unit_tests -xv -m "not disable_fast_runtime_mode"
+          - name: core ttnn unit test group
+            cmd: pytest -n auto --timeout 300 tests/ttnn/unit_tests/base_functionality tests/ttnn/unit_tests/benchmarks tests/ttnn/unit_tests/light_metal tests/ttnn/unit_tests/tensor -xv -m "not disable_fast_runtime_mode"
           - name: ttnn notebook
             cmd: TT_METAL_ENABLE_ERISC_IRAM=1 pytest -n auto --timeout 300 tests/ttnn/notebook_tests -xv -m "not disable_fast_runtime_mode"
           - name: ttnn fast runtime off
