@@ -7,6 +7,7 @@
 #include <wmmintrin.h>  // AES-NI
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <concepts>
 #include <cstdint>

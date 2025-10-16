@@ -18,35 +18,37 @@ namespace ttml::core::auto_dispatch {
 // Auto-Dispatching RNG (Runtime CPU Detection)
 // ============================================================================
 
+// Check if we have SIMD-optimized implementations for a given type and distribution
+template <typename T, typename Dist>
+inline constexpr bool has_simd_support =
+    // float: uniform and normal distributions
+    (std::same_as<T, float> && (std::same_as<Dist, std::uniform_real_distribution<float>> ||
+                                std::same_as<Dist, std::normal_distribution<float>>)) ||
+    // double: uniform distribution only
+    (std::same_as<T, double> && std::same_as<Dist, std::uniform_real_distribution<double>>) ||
+    // bfloat16: uniform and normal distributions (via float conversion)
+    (std::same_as<T, bfloat16> && (std::same_as<Dist, std::uniform_real_distribution<float>> ||
+                                   std::same_as<Dist, std::normal_distribution<float>>));
+
 // Sequential generate - automatically selects best implementation
 template <typename T, typename DistGenFunc>
 inline void sequential_generate(std::span<T> seq, DistGenFunc dist_factory, uint32_t seed) noexcept {
-    // Only optimize float uniform distributions
-    if constexpr (std::same_as<T, float>) {
-        auto dist = dist_factory();
+    using Dist = decltype(dist_factory());
 
-        // Check if this is a uniform distribution
-        using DistType = decltype(dist);
-        constexpr bool is_uniform = requires(DistType d) {
-            { d.param().a() } -> std::convertible_to<typename DistType::result_type>;
-            { d.param().b() } -> std::convertible_to<typename DistType::result_type>;
-        };
+    if constexpr (has_simd_support<T, Dist>) {
+        // Runtime dispatch based on CPU features
+        static const auto impl = CpuFeatures::get_recommended_rng();
 
-        if constexpr (is_uniform) {
-            // Runtime dispatch based on CPU features
-            static const auto impl = CpuFeatures::get_recommended_rng();
-
-            switch (impl) {
-                case CpuFeatures::RngImpl::AVX2: ttml::core::avx::sequential_generate(seq, dist_factory, seed); return;
-                case CpuFeatures::RngImpl::SSE: ttml::core::sse::sequential_generate(seq, dist_factory, seed); return;
-                default:
-                    // Fallback to MT19937
-                    break;
-            }
+        switch (impl) {
+            case CpuFeatures::RngImpl::AVX2: ttml::core::avx::sequential_generate(seq, dist_factory, seed); return;
+            case CpuFeatures::RngImpl::SSE: ttml::core::sse::sequential_generate(seq, dist_factory, seed); return;
+            default:
+                // Fallback to MT19937
+                break;
         }
     }
 
-    // Default: use MT19937
+    // Default: use MT19937 for unsupported types/distributions
     core::sequential_generate(seq, dist_factory, seed);
 }
 
@@ -57,32 +59,22 @@ inline void parallel_generate(
     DistGenFunc dist_factory,
     uint32_t seed,
     uint32_t max_threads = std::thread::hardware_concurrency()) noexcept {
-    // Only optimize float uniform distributions
-    if constexpr (std::same_as<T, float>) {
-        auto dist = dist_factory();
+    using Dist = decltype(dist_factory());
 
-        // Check if this is a uniform distribution
-        using DistType = decltype(dist);
-        constexpr bool is_uniform = requires(DistType d) {
-            { d.param().a() } -> std::convertible_to<typename DistType::result_type>;
-            { d.param().b() } -> std::convertible_to<typename DistType::result_type>;
-        };
+    if constexpr (has_simd_support<T, Dist>) {
+        // Runtime dispatch based on CPU features
+        static const auto impl = CpuFeatures::get_recommended_rng();
 
-        if constexpr (is_uniform) {
-            // Runtime dispatch based on CPU features
-            static const auto impl = CpuFeatures::get_recommended_rng();
-
-            switch (impl) {
-                case CpuFeatures::RngImpl::AVX2:
-                    ttml::core::avx::parallel_generate(seq, dist_factory, seed, max_threads);
-                    return;
-                case CpuFeatures::RngImpl::SSE:
-                    ttml::core::sse::parallel_generate(seq, dist_factory, seed, max_threads);
-                    return;
-                default:
-                    // Fallback to MT19937
-                    break;
-            }
+        switch (impl) {
+            case CpuFeatures::RngImpl::AVX2:
+                ttml::core::avx::parallel_generate(seq, dist_factory, seed, max_threads);
+                return;
+            case CpuFeatures::RngImpl::SSE:
+                ttml::core::sse::parallel_generate(seq, dist_factory, seed, max_threads);
+                return;
+            default:
+                // Fallback to MT19937
+                break;
         }
     }
 
