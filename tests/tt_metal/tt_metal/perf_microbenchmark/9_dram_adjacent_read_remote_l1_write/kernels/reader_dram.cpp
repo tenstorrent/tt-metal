@@ -65,7 +65,7 @@ void kernel_main() {
 
         for (uint32_t h = 0; h < num_pages; ++h) {
             // noc_async_read_tile_dram_sharded_with_state(src_base_addr, src_read_addr, l1_write_addr);
-            noc_async_read_one_packet_with_state<use_vc = true>(src_base_addr + src_read_addr, l1_write_addr, vc);
+            noc_async_read_one_packet_with_state<true, true>(src_base_addr + src_read_addr, l1_write_addr, vc);
             src_read_addr += page_size;
             l1_write_addr += page_size;
         }
