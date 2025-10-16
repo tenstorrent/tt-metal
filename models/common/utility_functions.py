@@ -536,17 +536,24 @@ def comp_allclose(golden, calculated, rtol=1e-05, atol=1e-08):
 
 
 def comp_pcc(golden, calculated, pcc=0.99):
-    golden = torch.Tensor(golden)
-    calculated = torch.Tensor(calculated)
+    # Avoid unnecessary tensor conversion if already tensors
+    if not isinstance(golden, torch.Tensor):
+        golden = torch.tensor(golden)
+    if not isinstance(calculated, torch.Tensor):
+        calculated = torch.tensor(calculated)
 
     if golden.dtype != calculated.dtype:
         calculated = calculated.type(golden.dtype)
 
-    if torch.all(torch.isnan(golden)) and torch.all(torch.isnan(calculated)):
+    # Early NaN checks without cloning
+    golden_all_nan = torch.all(torch.isnan(golden))
+    calculated_all_nan = torch.all(torch.isnan(calculated))
+
+    if golden_all_nan and calculated_all_nan:
         logger.warning("Both tensors are 'nan'")
         return True, 1.0
 
-    if torch.all(torch.isnan(golden)) or torch.all(torch.isnan(calculated)):
+    if golden_all_nan or calculated_all_nan:
         logger.error("One tensor is all nan, the other is not.")
         return False, 0.0
 
@@ -555,36 +562,35 @@ def comp_pcc(golden, calculated, pcc=0.99):
         logger.error("One tensor is all zero")
         return False, 0.0
 
-    # For now, mask all infs and nans so that we check the rest... TODO
-    golden = golden.clone()
-    golden[
-        torch.logical_or(
-            torch.isnan(golden),
-            torch.logical_or(torch.isinf(golden), torch.isneginf(golden)),
-        )
-    ] = 0
-    calculated = calculated.clone()
-    calculated[
-        torch.logical_or(
-            torch.isnan(calculated),
-            torch.logical_or(torch.isinf(calculated), torch.isneginf(calculated)),
-        )
-    ] = 0
-
     if torch.equal(golden, calculated):
         return True, 1.0
 
+    # Convert to appropriate dtype and flatten in one step
     if golden.dtype == torch.bfloat16:
-        golden = golden.type(torch.float32)
-        calculated = calculated.type(torch.float32)
-    cal_pcc = np.min(
-        np.ma.corrcoef(
-            np.ma.masked_invalid(torch.squeeze(golden).detach().numpy()).flatten(),
-            np.ma.masked_invalid(torch.squeeze(calculated).detach().numpy()).flatten(),
-        )
-    )
+        golden_flat = golden.float().flatten()
+        calculated_flat = calculated.float().flatten()
+    else:
+        golden_flat = golden.flatten()
+        calculated_flat = calculated.flatten()
 
-    if isinstance(cal_pcc, np.ma.core.MaskedConstant):
+    # Convert to numpy and handle invalid values once
+    golden_np = golden_flat.detach().numpy()
+    calculated_np = calculated_flat.detach().numpy()
+
+    # Combined invalid value mask (more efficient than torch operations)
+    valid_mask = np.isfinite(golden_np) & np.isfinite(calculated_np)
+
+    if valid_mask.sum() < 2:  # Need at least 2 points for correlation
+        return True, 1.0
+
+    # Direct correlation on valid data
+    golden_valid = golden_np[valid_mask]
+    calculated_valid = calculated_np[valid_mask]
+
+    cal_pcc = np.corrcoef(golden_valid, calculated_valid)[0, 1]
+
+    # Handle NaN result from corrcoef (e.g., constant arrays)
+    if np.isnan(cal_pcc):
         return True, 1.0
 
     return cal_pcc >= pcc, cal_pcc

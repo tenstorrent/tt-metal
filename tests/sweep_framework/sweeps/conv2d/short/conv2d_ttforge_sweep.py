@@ -535,11 +535,18 @@ def run(
     is_conv1d=False,
     *,
     device,
+    torch_tensor_map=None,
 ) -> list:
-    return run_conv2d_short_sweep(input_specs, device)
+    return run_conv2d_short_sweep(input_specs, device, torch_tensor_map=torch_tensor_map)
 
 
 import pytest
+
+
+@pytest.fixture(scope="module")
+def torch_tensor_map(request):
+    torch_tensor_map = {}
+    return torch_tensor_map
 
 
 @pytest.mark.parametrize("input_spec", parameters["ttforge_sweep_conv2d"]["input_specs"])
@@ -548,6 +555,7 @@ def test_conv2d_localrun(device, input_spec):
     pcc, messsage, perf, out, ref = run_conv2d_short_sweep(
         input_spec,
         device,
+        torch_tensor_map=torch_tensor_map,
     )
     assert pcc, messsage
 
@@ -566,5 +574,6 @@ def test_conv2d_localrun_fail_only(device, input_spec):
     pcc, messsage, perf, out, ref = run_conv2d_short_sweep(
         input_spec,
         device,
+        torch_tensor_map=torch_tensor_map,
     )
     assert pcc, messsage

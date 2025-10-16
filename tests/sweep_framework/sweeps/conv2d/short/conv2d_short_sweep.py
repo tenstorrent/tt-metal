@@ -1595,23 +1595,31 @@ def run(
     is_conv1d=False,
     *,
     device,
+    torch_tensor_map=None,
 ) -> list:
     if is_conv1d:
-        return run_conv1d_short_sweep(input_specs, device)
+        return run_conv1d_short_sweep(input_specs, device, torch_tensor_map=torch_tensor_map)
     else:
-        return run_conv2d_short_sweep(input_specs, device)
+        return run_conv2d_short_sweep(input_specs, device, torch_tensor_map=torch_tensor_map)
 
 
 import pytest
 
 
+@pytest.fixture(scope="module")
+def torch_tensor_map(request):
+    torch_tensor_map = {}
+    return torch_tensor_map
+
+
 @pytest.mark.parametrize("input_spec", parameters["short_sweep_suite_conv2d"]["input_specs"])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
-def test_conv2d_localrun(device, input_spec):
-    passed, pcc, perf, out, ref = run_conv2d_short_sweep(
+def test_conv2d_localrun(device, input_spec, torch_tensor_map):
+    passed, pcc, per, out, ref = run_conv2d_short_sweep(
         input_spec,
         device,
-    )
+        torch_tensor_map=torch_tensor_map,
+    )[0]
     print(pcc)
     assert passed, pcc
     assert pcc != 1, "Conv2d with ranndomized input and wegihts can't ligitimately return PCC of 1"
@@ -1628,6 +1636,7 @@ def test_conv2d_localrun_fail_only(device, input_spec):
     passed, pcc, perf, out, ref = run_conv2d_short_sweep(
         input_spec,
         device,
+        torch_tensor_map=torch_tensor_map,
     )
     print(pcc)
     assert passed, pcc
@@ -1636,10 +1645,11 @@ def test_conv2d_localrun_fail_only(device, input_spec):
 
 @pytest.mark.parametrize("input_spec", parameters["short_sweep_suite_conv1d"]["input_specs"])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
-def test_conv2d_localrun_conv1d(device, input_spec):
+def test_conv2d_localrun_conv1d(device, input_spec, torch_tensor_map):
     passed, pcc = run_conv1d_short_sweep(
         input_spec,
         device,
+        torch_tensor_map=torch_tensor_map,
     )[0]
     print(pcc)
     assert passed, pcc

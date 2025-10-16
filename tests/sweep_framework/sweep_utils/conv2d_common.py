@@ -21,6 +21,19 @@ from models.common.utility_functions import torch_random
 TIMEOUT = 30
 
 
+def randomize_torch_tensor(
+    torch_tensor_map,
+    tensor_shape,
+):
+    if tensor_shape in torch_tensor_map:
+        torch_tensor = torch_tensor_map[tensor_shape]
+    else:
+        torch_tensor = torch.randn(tensor_shape, dtype=torch.float32)
+        torch_tensor_map[tensor_shape] = torch_tensor
+
+    return torch_tensor
+
+
 def get_input_specs(
     batch_list: List[int],
     acts_list: List[int],
@@ -75,6 +88,7 @@ def run_conv2d_full_sweep(
     enable_auto_formatting,
     device,
     padded_input_channels=None,
+    torch_tensor_map=None,
 ) -> list:
     [
         batch_size,
@@ -91,12 +105,14 @@ def run_conv2d_full_sweep(
     conv_input_shape = [batch_size, input_channels, input_height, input_width]
     conv_weight_shape = [output_channels, input_channels // groups, kernel_height, kernel_width]
     conv_bias_shape = [1, 1, 1, output_channels]
-    torch_input_tensor_nchw = torch.randn(conv_input_shape, dtype=torch.bfloat16).float()
+    torch_input_tensor_nchw = randomize_torch_tensor(torch_tensor_map, conv_input_shape, dtype=torch.bfloat16)
 
     torch_input_tensor = torch.permute(torch_input_tensor_nchw, (0, 2, 3, 1))
-    torch_weight_tensor = torch.randn(conv_weight_shape, dtype=torch.bfloat16).float()
+    torch_weight_tensor = randomize_torch_tensor(torch_tensor_map, conv_weight_shape, dtype=torch.bfloat16)
 
-    torch_bias_tensor = torch.randn(conv_bias_shape, dtype=torch.bfloat16).float() if has_bias else None
+    torch_bias_tensor = (
+        randomize_torch_tensor(torch_tensor_map, conv_bias_shape, dtype=torch.bfloat16) if has_bias else None
+    )
     torch_out_golden_tensor = torch.nn.functional.conv2d(
         torch_input_tensor_nchw,
         torch_weight_tensor,
@@ -179,6 +195,7 @@ def run_conv2d_full_sweep(
 def run_conv2d_short_sweep(
     input_specs,
     device,
+    torch_tensor_map=None,
 ) -> list:
     # for tt-forge suite, extra arguments are tensor configs
     is_forge_suite = False
@@ -230,21 +247,19 @@ def run_conv2d_short_sweep(
     conv_input_shape = [batch_size, input_channels, input_height, input_width]
     conv_weight_shape = [output_channels, input_channels // groups, kernel_height, kernel_width]
     conv_bias_shape = [1, 1, 1, output_channels]
-    torch_input_tensor_nchw = torch.randn(
-        conv_input_shape, dtype=torch_input_dtype if is_forge_suite else torch.bfloat16
-    ).float()
+    torch_input_tensor_nchw = randomize_torch_tensor(
+        torch_tensor_map, conv_input_shape, dtype=torch_input_dtype if is_forge_suite else torch.bfloat16
+    )
 
     torch_input_tensor = torch.permute(torch_input_tensor_nchw, (0, 2, 3, 1))
-    torch_weight_tensor = torch.randn(
-        conv_weight_shape, dtype=torch_weight_dtype if is_forge_suite else torch.bfloat16
-    ).float()
+    torch_weight_tensor = randomize_torch_tensor(
+        torch_tensor_map, conv_weight_shape, dtype=torch_weight_dtype if is_forge_suite else torch.bfloat16
+    )
 
     torch_bias_tensor = None
     if has_bias:
-        torch_bias_tensor = (
-            torch.randn(conv_bias_shape, dtype=torch_weight_dtype if is_forge_suite else torch.bfloat16).float()
-            if has_bias
-            else None
+        torch_bias_tensor = randomize_torch_tensor(
+            torch_tensor_map, conv_bias_shape, dtype=torch_weight_dtype if is_forge_suite else torch.bfloat16
         )
     torch_out_golden_tensor = torch.nn.functional.conv2d(
         torch_input_tensor_nchw,
@@ -326,6 +341,7 @@ def run_conv2d_short_sweep(
 def run_conv1d_short_sweep(
     input_specs,
     device,
+    torch_tensor_map=None,
 ) -> list:
     [
         batch_size,
@@ -346,10 +362,12 @@ def run_conv1d_short_sweep(
     conv_input_shape = [batch_size, input_channels, input_length]
     conv_weight_shape = [output_channels, input_channels // groups, kernel_size]
     conv_bias_shape = [1, 1, 1, output_channels]
-    torch_input_tensor_ncl = torch.randn(conv_input_shape, dtype=torch.bfloat16).float()
+    torch_input_tensor_ncl = randomize_torch_tensor(torch_tensor_map, conv_input_shape, dtype=torch.bfloat16)
     torch_input_tensor = torch.permute(torch_input_tensor_ncl, (0, 2, 1))
-    torch_weight_tensor = torch.randn(conv_weight_shape, dtype=torch.bfloat16).float()
-    torch_bias_tensor = torch.randn(conv_bias_shape, dtype=torch.bfloat16).float() if has_bias else None
+    torch_weight_tensor = randomize_torch_tensor(torch_tensor_map, conv_weight_shape, dtype=torch.bfloat16)
+    torch_bias_tensor = (
+        randomize_torch_tensor(torch_tensor_map, conv_bias_shape, dtype=torch.bfloat16) if has_bias else None
+    )
     torch_out_golden_tensor = torch.nn.functional.conv1d(
         torch_input_tensor_ncl,
         torch_weight_tensor,
