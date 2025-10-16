@@ -713,7 +713,7 @@ void FabricEriscDatamoverBuilder::get_telemetry_compile_time_args(std::vector<ui
         // Enable RECEIVER_CHANNEL_FORWARD timer (bit 0)
         uint32_t code_profiling_enabled_timers = static_cast<uint32_t>(CodeProfilingTimerType::RECEIVER_CHANNEL_FORWARD);
         ct_args.push_back(code_profiling_enabled_timers);
-        
+
         // Add code profiling buffer address (16B aligned)
         ct_args.push_back(static_cast<uint32_t>(config.code_profiling_buffer_address));
     } else {

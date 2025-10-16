@@ -458,8 +458,8 @@ public:
     // Code profiling getters/setters
     bool get_code_profiling_enabled() const { return code_profiling_enabled_; }
     void set_code_profiling_enabled(bool enabled) { code_profiling_enabled_ = enabled; }
-    const std::vector<CodeProfilingEntry>& get_code_profiling_entries() const { 
-        return code_profiling_entries_; 
+    const std::vector<CodeProfilingEntry>& get_code_profiling_entries() const {
+        return code_profiling_entries_;
     }
 
     void set_global_sync(bool global_sync) { global_sync_ = global_sync; }
@@ -1488,7 +1488,7 @@ private:
     
     // Ethernet core buffer readback helper
     std::unique_ptr<EthCoreBufferReadback> eth_readback_;
-    
+
     // Getter for lazy initialization of eth_readback_
     EthCoreBufferReadback& get_eth_readback() {
         if (!eth_readback_) {

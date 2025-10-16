@@ -157,7 +157,7 @@ int main(int argc, char** argv) {
             // Set benchmark mode and line sync for this test group
             test_context.set_benchmark_mode(test_config.benchmark_mode);
             test_context.set_telemetry_enabled(test_config.benchmark_mode);
-            
+
             // Set code profiling enabled based on rtoptions
             auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
             test_context.set_code_profiling_enabled(
