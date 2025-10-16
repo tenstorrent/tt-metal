@@ -80,7 +80,6 @@ def transpose_conv2d(
         bias_tensor=upconv_config.bias,
         in_channels=upconv_config.in_channels,
         out_channels=upconv_config.out_channels,
-        device=input_tensor.device(),
         kernel_size=upconv_config.kernel_size,
         stride=upconv_config.stride,
         padding=upconv_config.padding,
@@ -89,7 +88,22 @@ def transpose_conv2d(
         input_width=upconv_config.input_width,
         conv_config=conv_config,
         compute_config=compute_config,
+        device=input_tensor.device(),
     )
+
+
+class TtUNetEncoder:
+    def __init__(self, conv1, conv2, pool, device):
+        self.conv1 = TtConv2d(conv1, device)
+        self.conv2 = TtConv2d(conv2, device)
+        self.pool = TtMaxPool2d(pool, device)
+
+    def __call__(self, x):
+        x = self.conv1(x)
+        x = self.conv2(x)
+        skip = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+        x = self.pool(x)
+        return x, skip
 
 
 class TtUNet:
@@ -97,21 +111,10 @@ class TtUNet:
         self.device = device
         self.configs = configs
 
-        self.encoder1_conv1 = TtConv2d(configs.encoder1_conv1, device)
-        self.encoder1_conv2 = TtConv2d(configs.encoder1_conv2, device)
-        self.encoder1_pool = TtMaxPool2d(configs.encoder1_pool, device)
-
-        self.encoder2_conv1 = TtConv2d(configs.encoder2_conv1, device)
-        self.encoder2_conv2 = TtConv2d(configs.encoder2_conv2, device)
-        self.encoder2_pool = TtMaxPool2d(configs.encoder2_pool, device)
-
-        self.encoder3_conv1 = TtConv2d(configs.encoder3_conv1, device)
-        self.encoder3_conv2 = TtConv2d(configs.encoder3_conv2, device)
-        self.encoder3_pool = TtMaxPool2d(configs.encoder3_pool, device)
-
-        self.encoder4_conv1 = TtConv2d(configs.encoder4_conv1, device)
-        self.encoder4_conv2 = TtConv2d(configs.encoder4_conv2, device)
-        self.encoder4_pool = TtMaxPool2d(configs.encoder4_pool, device)
+        self.downblock1 = TtUNetEncoder(configs.encoder1_conv1, configs.encoder1_conv2, configs.encoder1_pool, device)
+        self.downblock2 = TtUNetEncoder(configs.encoder2_conv1, configs.encoder2_conv2, configs.encoder2_pool, device)
+        self.downblock3 = TtUNetEncoder(configs.encoder3_conv1, configs.encoder3_conv2, configs.encoder3_pool, device)
+        self.downblock4 = TtUNetEncoder(configs.encoder4_conv1, configs.encoder4_conv2, configs.encoder4_pool, device)
 
         self.bottleneck_conv1 = TtConv2d(configs.bottleneck_conv1, device)
         self.bottleneck_conv2 = TtConv2d(configs.bottleneck_conv2, device)
@@ -143,25 +146,10 @@ class TtUNet:
     def __call__(self, input_tensor: ttnn.Tensor, deallocate_input_activation: bool = True) -> ttnn.Tensor:
         input_tensor = self.preprocess_input_tensor(input_tensor, deallocate_input_activation)
 
-        enc1 = self.encoder1_conv1(input_tensor)
-        enc1 = self.encoder1_conv2(enc1)
-        skip1 = ttnn.to_memory_config(enc1, ttnn.DRAM_MEMORY_CONFIG)
-        enc1 = self.encoder1_pool(enc1)
-
-        enc2 = self.encoder2_conv1(enc1)
-        enc2 = self.encoder2_conv2(enc2)
-        skip2 = ttnn.to_memory_config(enc2, ttnn.DRAM_MEMORY_CONFIG)
-        enc2 = self.encoder2_pool(enc2)
-
-        enc3 = self.encoder3_conv1(enc2)
-        enc3 = self.encoder3_conv2(enc3)
-        skip3 = ttnn.to_memory_config(enc3, ttnn.DRAM_MEMORY_CONFIG)
-        enc3 = self.encoder3_pool(enc3)
-
-        enc4 = self.encoder4_conv1(enc3)
-        enc4 = self.encoder4_conv2(enc4)
-        skip4 = ttnn.to_memory_config(enc4, ttnn.DRAM_MEMORY_CONFIG)
-        enc4 = self.encoder4_pool(enc4)
+        enc1, skip1 = self.downblock1(input_tensor)
+        enc2, skip2 = self.downblock2(enc1)
+        enc3, skip3 = self.downblock3(enc2)
+        enc4, skip4 = self.downblock4(enc3)
 
         bottleneck = self.bottleneck_conv1(enc4)
         bottleneck = self.bottleneck_conv2(bottleneck)

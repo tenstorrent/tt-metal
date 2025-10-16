@@ -32,6 +32,8 @@ class UpconvConfiguration:
 
 @dataclass
 class TtUNetLayerConfigs:
+    l1_input_memory_config: ttnn.MemoryConfig
+
     encoder1_conv1: Conv2dConfiguration
     encoder1_conv2: Conv2dConfiguration
     encoder1_pool: MaxPool2dConfiguration
@@ -89,9 +91,23 @@ class TtUNetConfigBuilder:
         self.batch_size = batch_size
         self.features = init_features
 
+        l1_input_core_grid = ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7)),
+            }
+        )
+        l1_input_shard_shape = (in_channels, input_height * input_width // l1_input_core_grid.num_cores())
+        self.l1_input_shard_spec = ttnn.ShardSpec(
+            l1_input_core_grid, l1_input_shard_shape, ttnn.ShardOrientation.ROW_MAJOR
+        )
+
     def build_configs(self) -> TtUNetLayerConfigs:
         return TtUNetLayerConfigs(
-            # Encoder 1 (480x640 = 307200)
+            # Input memory configurations
+            l1_input_memory_config=ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, self.l1_input_shard_spec
+            ),
+            # Encoder 1
             encoder1_conv1=self._create_conv_config_from_params(
                 self.input_height,
                 self.input_width,
@@ -115,7 +131,7 @@ class TtUNetConfigBuilder:
                 enable_weights_double_buffer=True,
             ),
             encoder1_pool=self._create_pool_config(self.input_height, self.input_width, self.features),
-            # Encoder 2 (240x320 = 76800)
+            # Encoder 2
             encoder2_conv1=self._create_conv_config_from_params(
                 self.input_height // 2,
                 self.input_width // 2,
@@ -138,7 +154,7 @@ class TtUNetConfigBuilder:
                 enable_weights_double_buffer=True,
             ),
             encoder2_pool=self._create_pool_config(self.input_height // 2, self.input_width // 2, self.features * 2),
-            # Encoder 3 (120x160 = 19200)
+            # Encoder 3
             encoder3_conv1=self._create_conv_config_from_params(
                 self.input_height // 4,
                 self.input_width // 4,
@@ -160,7 +176,7 @@ class TtUNetConfigBuilder:
                 enable_weights_double_buffer=True,
             ),
             encoder3_pool=self._create_pool_config(self.input_height // 4, self.input_width // 4, self.features * 4),
-            # Encoder 4 (60x80 = 4800)
+            # Encoder 4
             encoder4_conv1=self._create_conv_config_from_params(
                 self.input_height // 8,
                 self.input_width // 8,
@@ -182,7 +198,7 @@ class TtUNetConfigBuilder:
                 enable_weights_double_buffer=True,
             ),
             encoder4_pool=self._create_pool_config(self.input_height // 8, self.input_width // 8, self.features * 8),
-            # Bottleneck (30x40 = 1200)
+            # Bottleneck
             bottleneck_conv1=self._create_conv_config_from_params(
                 self.input_height // 16,
                 self.input_width // 16,
@@ -199,7 +215,7 @@ class TtUNetConfigBuilder:
                 self.parameters["bottleneck"][1],
                 sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=32),
             ),
-            # Decoder 4 (60x80 = 4800)
+            # Decoder 4
             decoder4_conv1=self._create_conv_config_from_params(
                 self.input_height // 8,
                 self.input_width // 8,
@@ -220,7 +236,7 @@ class TtUNetConfigBuilder:
                 activation_dtype=ttnn.bfloat8_b,
                 output_dtype=ttnn.bfloat8_b,
             ),
-            # Decoder 3 (120x160 = 19200)
+            # Decoder 3
             decoder3_conv1=self._create_conv_config_from_params(
                 self.input_height // 4,
                 self.input_width // 4,
@@ -237,7 +253,7 @@ class TtUNetConfigBuilder:
                 self.parameters["decoder3"][1],
                 sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=5 * 32),
             ),
-            # Decoder 2 (240x320 = 76800)
+            # Decoder 2
             decoder2_conv1=self._create_conv_config_from_params(
                 self.input_height // 2,
                 self.input_width // 2,
@@ -256,7 +272,7 @@ class TtUNetConfigBuilder:
                 output_dtype=ttnn.bfloat8_b,
                 sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=2 * 32),
             ),
-            # Decoder 1 (480x640 = 307200)
+            # Decoder 1
             decoder1_conv1=self._create_conv_config_from_params(
                 self.input_height,
                 self.input_width,
@@ -281,7 +297,7 @@ class TtUNetConfigBuilder:
                 packer_l1_acc=False,
                 sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=10 * 32),
             ),
-            # Final convolution (1x1 conv, 480x640 = 307200)
+            # Final convolution
             final_conv=self._create_conv_config_from_params(
                 self.input_height,
                 self.input_width,
@@ -368,13 +384,13 @@ class TtUNetConfigBuilder:
             activation_dtype=activation_dtype,
             output_dtype=output_dtype,
             weights_dtype=weights_dtype,
-            output_layout=ttnn.TILE_LAYOUT,
             enable_weights_double_buffer=enable_weights_double_buffer,
             enable_act_double_buffer=enable_act_double_buffer,
             math_fidelity=math_fidelity,
             fp32_dest_acc_en=fp32_dest_acc_en,
             packer_l1_acc=packer_l1_acc,
             slice_strategy=L1FullSliceStrategyConfiguration(),
+            output_layout=ttnn.TILE_LAYOUT,
         )
 
     def _create_pool_config(self, input_height: int, input_width: int, channels: int) -> MaxPool2dConfiguration:
@@ -403,11 +419,11 @@ class TtUNetConfigBuilder:
             in_channels=in_channels,
             out_channels=out_channels,
             batch_size=self.batch_size,
+            weight=weight,
+            bias=bias,
             kernel_size=(2, 2),
             stride=(2, 2),
             padding=(0, 0),
-            weight=weight,
-            bias=bias,
         )
 
 

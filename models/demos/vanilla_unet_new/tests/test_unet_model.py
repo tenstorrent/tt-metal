@@ -26,16 +26,13 @@ def test_vanilla_unet_model(
 ):
     reference_model = load_reference_model(model_location_generator)
 
-    input_core_grid = ttnn.CoreRangeSet(
-        {
-            ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7)),
-        }
+    parameters = preprocess_model_parameters(
+        initialize_model=lambda: reference_model, custom_preprocessor=create_unet_preprocessor(device), device=None
     )
-    input_shard_shape = (input_channels, input_height * input_width // 64)
-    input_shard_spec = ttnn.ShardSpec(input_core_grid, input_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
-    input_sharded_memory_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, input_shard_spec
+    configs = create_unet_configs_from_parameters(
+        parameters=parameters, input_height=input_height, input_width=input_width, batch_size=batch
     )
+
     torch_input_tensor, ttnn_input_tensor = create_unet_input_tensors(
         batch=batch,
         input_channels=input_channels,
@@ -46,21 +43,14 @@ def test_vanilla_unet_model(
         pad=False,
         fold=True,
         device=device,
-        memory_config=input_sharded_memory_config,
+        memory_config=configs.l1_input_memory_config,
     )
     torch_output_tensor = reference_model(torch_input_tensor)
 
-    parameters = preprocess_model_parameters(
-        initialize_model=lambda: reference_model, custom_preprocessor=create_unet_preprocessor(device), device=None
-    )
-    configs = create_unet_configs_from_parameters(
-        parameters=parameters, input_height=input_height, input_width=input_width, batch_size=batch
-    )
     model = create_unet_from_configs(configs, device)
+    ttnn_output_tensor = model(ttnn_input_tensor)
+    ttnn_output_tensor = ttnn.to_torch(ttnn_output_tensor).reshape(torch_output_tensor.shape)
 
-    ttnn_output = model(ttnn_input_tensor)
-    ttnn_output = ttnn.to_torch(ttnn_output).reshape(torch_output_tensor.shape)
-
-    assert ttnn_output.shape == torch_output_tensor.shape, "Expected output tensor shapes to match"
-    pcc_passed, pcc_message = assert_with_pcc(torch_output_tensor, ttnn_output, pcc=VANILLA_UNET_PCC_WH)
+    assert ttnn_output_tensor.shape == torch_output_tensor.shape, "Expected output tensor shapes to match"
+    pcc_passed, pcc_message = assert_with_pcc(torch_output_tensor, ttnn_output_tensor, pcc=VANILLA_UNET_PCC_WH)
     logger.info(f"PCC check was successful ({pcc_message:.5f} > {VANILLA_UNET_PCC_WH:.5f})")
