@@ -70,7 +70,7 @@ void py_bind_point_to_point(py::module& module) {
             py::kw_only(),
             py::arg("output_tensor") = std::nullopt,
             py::arg("intermediate_tensor") = std::nullopt,
-            py::arg("topology") = std::nullopt});
+            py::arg("topology") = ccl::Topology::Linear});
     module.def(
         "p2p_compute_intermediate_tensor_spec",
         p2p_compute_intermediate_tensor_spec,
