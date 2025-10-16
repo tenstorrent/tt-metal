@@ -20,59 +20,60 @@
 
 inline uint64_t get_t0_to_any_riscfw_end_cycle(tt::tt_metal::IDevice* device, const tt::tt_metal::Program& program) {
     uint64_t t0_to_any_riscfw_end = 0;
-    if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_enabled()) {
-        // TODO: use enums from profiler_common.h
-        enum BufferIndex { BUFFER_END_INDEX, DROPPED_MARKER_COUNTER, MARKER_DATA_START };
-        enum TimerDataIndex { TIMER_ID, TIMER_VAL_L, TIMER_VAL_H, TIMER_DATA_UINT32_SIZE };
-        const auto& hal = tt::tt_metal::MetalContext::instance().hal();
-        auto worker_cores_used_in_program = device->worker_cores_from_logical_cores(
-            program.impl()
+    if (!tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_enabled()) {
+        return t0_to_any_riscfw_end;
+    }
+    // TODO: use enums from profiler_common.h
+    enum BufferIndex { BUFFER_END_INDEX, DROPPED_MARKER_COUNTER, MARKER_DATA_START };
+    enum TimerDataIndex { TIMER_ID, TIMER_VAL_L, TIMER_VAL_H, TIMER_DATA_UINT32_SIZE };
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    auto worker_cores_used_in_program = device->worker_cores_from_logical_cores(
+        program.impl()
             .logical_cores()[hal.get_programmable_core_type_index(tt::tt_metal::HalProgrammableCoreType::TENSIX)]);
-        auto device_id = device->id();
-        uint64_t min_cycle = -1;
-        uint64_t max_cycle = 0;
-        tt::tt_metal::DeviceAddr dprint_msg_addr =
+    auto device_id = device->id();
+    uint64_t min_cycle = -1;
+    uint64_t max_cycle = 0;
+    tt::tt_metal::DeviceAddr dprint_msg_addr =
         hal.get_dev_addr(tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::DPRINT_BUFFERS);
 
-        // This works for tensix only, will need to be updated for eth
-        auto num_processors = hal.get_num_risc_processors(tt::tt_metal::HalProgrammableCoreType::TENSIX);
-        std::vector<uint64_t> print_buffer_addrs;
-        print_buffer_addrs.reserve(num_processors);
-        for (int i = 0; i < num_processors; i++) {
-            print_buffer_addrs.push_back(dprint_msg_addr + i * sizeof(DebugPrintMemLayout));
-        }
-        for (const auto& worker_core : worker_cores_used_in_program) {
-            for (const auto& buffer_addr : print_buffer_addrs) {
-                std::vector<std::uint32_t> profile_buffer;
-                uint32_t end_index;
-                profile_buffer = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-                    device_id, worker_core, buffer_addr, DPRINT_BUFFER_SIZE);
+    // This works for tensix only, will need to be updated for eth
+    auto num_processors = hal.get_num_risc_processors(tt::tt_metal::HalProgrammableCoreType::TENSIX);
+    std::vector<uint64_t> print_buffer_addrs;
+    print_buffer_addrs.reserve(num_processors);
+    for (int i = 0; i < num_processors; i++) {
+        print_buffer_addrs.push_back(dprint_msg_addr + i * sizeof(DebugPrintMemLayout));
+    }
+    for (const auto& worker_core : worker_cores_used_in_program) {
+        for (const auto& buffer_addr : print_buffer_addrs) {
+            std::vector<std::uint32_t> profile_buffer;
+            uint32_t end_index;
+            profile_buffer = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+                device_id, worker_core, buffer_addr, DPRINT_BUFFER_SIZE);
 
-                end_index = profile_buffer[BUFFER_END_INDEX];
+            end_index = profile_buffer[BUFFER_END_INDEX];
 
-                TT_ASSERT(end_index < (DPRINT_BUFFER_SIZE / sizeof(uint32_t)));
+            TT_ASSERT(end_index < (DPRINT_BUFFER_SIZE / sizeof(uint32_t)));
 
-                uint32_t step = (end_index - MARKER_DATA_START) / TIMER_DATA_UINT32_SIZE;
-                uint32_t timer_id = 1;
-                for (int i = MARKER_DATA_START; i < end_index; i += TIMER_DATA_UINT32_SIZE, timer_id++) {
-                    if (i + TIMER_VAL_H < profile_buffer.size()) {
-                        uint64_t cycle =
-                            ((static_cast<uint64_t>(profile_buffer[i + TIMER_VAL_H]) << 32) |
-                             profile_buffer[i + TIMER_VAL_L]);
-                        if (timer_id == 1 && cycle < min_cycle) {
-                            min_cycle = cycle;
-                        }
+            uint32_t step = (end_index - MARKER_DATA_START) / TIMER_DATA_UINT32_SIZE;
+            uint32_t timer_id = 1;
+            for (int i = MARKER_DATA_START; i < end_index; i += TIMER_DATA_UINT32_SIZE, timer_id++) {
+                if (i + TIMER_VAL_H < profile_buffer.size()) {
+                    uint64_t cycle =
+                        ((static_cast<uint64_t>(profile_buffer[i + TIMER_VAL_H]) << 32) |
+                         profile_buffer[i + TIMER_VAL_L]);
+                    if (timer_id == 1 && cycle < min_cycle) {
+                        min_cycle = cycle;
+                    }
 
-                        if (timer_id == step && cycle > max_cycle) {
-                            max_cycle = cycle;
-                        }
+                    if (timer_id == step && cycle > max_cycle) {
+                        max_cycle = cycle;
                     }
                 }
             }
         }
-
-        t0_to_any_riscfw_end = max_cycle - min_cycle;
     }
+
+    t0_to_any_riscfw_end = max_cycle - min_cycle;
 
     return t0_to_any_riscfw_end;
 }

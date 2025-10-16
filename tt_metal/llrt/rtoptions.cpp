@@ -97,8 +97,9 @@ RunTimeOptions::RunTimeOptions() {
     profiler_buffer_usage_enabled = false;
     profiler_trace_profiler = false;
     profiler_trace_tracking = false;
-#if defined(TRACY_ENABLE)
+
     const char* profiler_enabled_str = std::getenv("TT_METAL_DEVICE_PROFILER");
+#if defined(TRACY_ENABLE)
     if (profiler_enabled_str != nullptr && profiler_enabled_str[0] == '1') {
         profiler_enabled = true;
         const char* profile_dispatch_str = std::getenv("TT_METAL_DEVICE_PROFILER_DISPATCH");
@@ -138,6 +139,10 @@ RunTimeOptions::RunTimeOptions() {
     if (profile_buffer_usage_str != nullptr && profile_buffer_usage_str[0] == '1') {
         profiler_buffer_usage_enabled = true;
     }
+#else
+    TT_FATAL(
+        !(profiler_enabled_str != nullptr && profiler_enabled_str[0] == '1'),
+        "TT_METAL_DEVICE_PROFILER env var is set to 1. This requires a Tracy-enabled build of tt-metal.");
 #endif
     TT_FATAL(
         !(get_feature_enabled(RunTimeDebugFeatureDprint) && get_profiler_enabled()),

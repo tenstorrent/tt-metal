@@ -87,6 +87,7 @@ private:
 
 inline thread_safe_cached_ops_map cached_ops{};
 inline thread_safe_call_stack call_stack;
+inline bool op_profiler_is_enabled = false;
 
 template <typename device_operation_t>
 inline auto compute_program_hash(
@@ -108,8 +109,7 @@ inline auto compute_program_hash(
     }
 }
 
-inline bool is_op_profiler_enabled() {
-    bool op_profiler_is_enabled = false;
+inline bool is_op_profiler_env_var_set() {
     const char* op_profiler_enable_str = std::getenv("TTNN_OP_PROFILER");
     if (op_profiler_enable_str != nullptr && op_profiler_enable_str[0] == '1') {
         op_profiler_is_enabled = true;
@@ -410,7 +410,7 @@ inline json get_base_json(
     const typename device_operation_t::tensor_args_t& tensor_args,
     typename device_operation_t::tensor_return_value_t& tensor_return_value) {
 #if defined(TRACY_ENABLE)
-    if (!is_op_profiler_enabled()) {
+    if (!is_op_profiler_env_var_set()) {
         return json{};
     }
     ZoneScoped;
@@ -454,7 +454,7 @@ inline json get_base_json(
 inline std::string op_meta_data_serialized_json(
     uint32_t opID, const tt::tt_metal::operation::ExternalOperation& op, const std::vector<Tensor>& input_tensors) {
 #if defined(TRACY_ENABLE)
-    if (!is_op_profiler_enabled()) {
+    if (!is_op_profiler_env_var_set()) {
         return {};
     }
     auto j = get_base_json<true>(opID, op, input_tensors);
@@ -476,7 +476,7 @@ inline std::string op_meta_data_serialized_json(
     const auto& tensor_args,
     auto& tensor_return_value) {
 #if defined(TRACY_ENABLE)
-    if (!is_op_profiler_enabled()) {
+    if (!is_op_profiler_env_var_set()) {
         return {};
     }
     const bool useCachedOps = std::getenv("TT_METAL_PROFILER_NO_CACHE_OP_INFO") == nullptr;
@@ -537,7 +537,7 @@ inline std::string op_meta_data_serialized_json(
 
 #define TracyOpTTNNDevice(                                                                                        \
     operation, operation_id, device_id, program, operation_attributes, tensor_args, tensor_return_value)          \
-    if (tt::tt_metal::op_profiler::is_op_profiler_enabled()) {                                                    \
+    if (tt::tt_metal::op_profiler::is_op_profiler_env_var_set()) {                                                \
         std::string op_message = tt::tt_metal::op_profiler::op_meta_data_serialized_json(                         \
             operation, operation_id, device_id, program, operation_attributes, tensor_args, tensor_return_value); \
         std::string op_text = fmt::format("id:{}", operation_id);                                                 \
@@ -546,7 +546,7 @@ inline std::string op_meta_data_serialized_json(
     }
 
 #define TracyOpTTNNExternal(op, input_tensors, base_op_id)                                                          \
-    if (tt::tt_metal::op_profiler::is_op_profiler_enabled()) {                                                      \
+    if (tt::tt_metal::op_profiler::is_op_profiler_env_var_set()) {                                                  \
         /* This op runs entirely on host, but its ID must be generated using the same data-path as device-side */   \
         /* ops, for accurate reporting by the performance post-processor. */                                        \
         auto op_id = tt::tt_metal::detail::EncodePerDeviceProgramID(base_op_id, 0, true);                           \
@@ -558,7 +558,7 @@ inline std::string op_meta_data_serialized_json(
 
 #define TracyOpMeshWorkload(                                                                                       \
     mesh_device, mesh_workload, operation, operation_attributes, tensor_args, tensor_return_value)                 \
-    if (tt::tt_metal::op_profiler::is_op_profiler_enabled()) {                                                     \
+    if (tt::tt_metal::op_profiler::is_op_profiler_env_var_set()) {                                                 \
         for (const auto& [range, program] : (mesh_workload).get_programs()) {                                      \
             auto base_program_id = program.get_runtime_id();                                                       \
             for (auto coord : range) {                                                                             \
