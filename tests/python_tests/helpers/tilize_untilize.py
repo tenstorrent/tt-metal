@@ -7,7 +7,9 @@ from .format_arg_mapping import format_dict
 from .format_config import DataFormat
 
 
-def tilize_block(input_tensor, dimensions, stimuli_format=DataFormat.Float16_b):
+def tilize_block(
+    input_tensor, dimensions, stimuli_format=DataFormat.Float16_b, num_faces=4
+):
     if input_tensor.numel() != dimensions[0] * dimensions[1]:
         raise ValueError(
             f"Cannot reshape tensor of size {input_tensor.numel()} to shape {dimensions}."
@@ -41,30 +43,48 @@ def tilize_block(input_tensor, dimensions, stimuli_format=DataFormat.Float16_b):
     flat_blocks = all_blocks.reshape(total_blocks, -1)
 
     tilized_blocks = torch.stack(
-        [tilize(block, stimuli_format=stimuli_format) for block in flat_blocks]
+        [
+            tilize(block, stimuli_format=stimuli_format, num_faces=num_faces)
+            for block in flat_blocks
+        ]
     )
 
     # Reshape tilized blocks back to original dimensions
+    # Note: For num_faces < 4, the output size will be smaller
+    elements_per_face = 256  # 16x16
+    elements_per_tile = elements_per_face * num_faces
+    expected_elements = total_blocks * elements_per_tile
+
     tilized_output = (
-        tilized_blocks.flatten().reshape(rows, cols).to(format_dict[stimuli_format])
+        tilized_blocks.flatten()[:expected_elements]
+        .reshape(total_blocks, elements_per_tile)
+        .to(format_dict[stimuli_format])
     )
 
     return tilized_output
 
 
-def tilize(original_tensor, stimuli_format=DataFormat.Float16_b):
+def tilize(original_tensor, stimuli_format=DataFormat.Float16_b, num_faces=4):
+
+    if num_faces not in (1, 2, 4):
+        raise ValueError(f"num_faces must be 1, 2, or 4, got {num_faces}")
 
     if original_tensor.size(0) != 1024:
         raise ValueError("Input tensor must have 1024 elements.")
 
     matrix = original_tensor.view(32, 32)
 
-    f0 = matrix[:16, :16]
-    f1 = matrix[:16, 16:32]
-    f2 = matrix[16:32, :16]
-    f3 = matrix[16:32, 16:32]
+    # Define all face slices
+    face_slices = [
+        matrix[:16, :16],  # f0
+        matrix[:16, 16:],  # f1
+        matrix[16:, :16],  # f2
+        matrix[16:, 16:],  # f3
+    ]
 
-    result = torch.cat((f0.reshape(-1), f1.reshape(-1), f2.reshape(-1), f3.reshape(-1)))
+    # Select and flatten required faces
+    selected_faces = [face.flatten() for face in face_slices[:num_faces]]
+    result = torch.cat(selected_faces) if len(selected_faces) > 1 else selected_faces[0]
 
     return result.to(dtype=format_dict[stimuli_format])
 

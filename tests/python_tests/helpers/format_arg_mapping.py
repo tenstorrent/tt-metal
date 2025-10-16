@@ -199,6 +199,11 @@ class MathFidelity(Enum):
     HiFi4 = 3
 
 
+class NarrowTile(Enum):
+    Yes = "true"
+    No = "false"
+
+
 class DestSync(Enum):
     Half = 0
     Full = 1

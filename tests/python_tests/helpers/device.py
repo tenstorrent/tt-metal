@@ -142,10 +142,8 @@ def collect_results(
     tile_dimensions=[32, 32],
     num_faces: int = 4,
 ):
-    # Calculate tile elements based on tile dimensions instead of hardcoding 1024
+    # Calculate tile elements based on tile dimensions
     tile_elements = tile_dimensions[0] * tile_dimensions[1]
-
-    # Calculate bytes needed based on format and actual tile size
     read_bytes_cnt = (
         formats.output_format.num_bytes_per_tile(tile_elements) * tile_count
     )

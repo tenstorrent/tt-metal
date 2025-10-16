@@ -180,7 +180,7 @@ def generate_build_header(test_config):
         header_content.append(f"constexpr std::uint32_t NUM_FACES = {num_faces};")
 
     if "narrow_tile" in test_config:
-        narrow_tile = str(test_config["narrow_tile"]).lower()
+        narrow_tile = test_config["narrow_tile"].value
         header_content.append(f"constexpr bool NARROW_TILE = {narrow_tile};")
 
     # Math fidelity & Approximation mode
@@ -252,6 +252,10 @@ def generate_build_header(test_config):
         header_content.append(
             f"constexpr std::uint32_t TILE_SIZE_UNPACK_B = {unpack_size_b};"
         )
+
+        # Legacy TILE_SIZE for tests that still use it (e.g., tilize sweep)
+        tile_size = 16 * 16 * num_faces
+        header_content.append(f"constexpr std::uint32_t TILE_SIZE = {tile_size};")
 
     # Dest synchronisation mode
     dest_sync = test_config.get("dest_sync", DestSync.Half)
