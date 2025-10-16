@@ -153,23 +153,14 @@ def test_vovnetcp(
     with torch.no_grad():
         output = torch_model(torch_input_tensor)
 
-    logger.info(f"Torch output[0] (stage4): {output[0].shape}")
-    logger.info(f"Torch output[1] (stage5): {output[1].shape}")
-
     ttnn_model = ttnn_VoVNetCP(parameters, stem_parameters, device)
 
     ttnn_output = ttnn_model(device, ttnn_input_tensor)
-    logger.info(f"TTNN output[0]: {ttnn_output[0].shape}")
-    logger.info(f"TTNN output[1]: {ttnn_output[1].shape}")
 
     # Tensor Postprocessing
     #  Convert TTNN outputs to torch for comparison
     ttnn_out0_torch = ttnn.to_torch(ttnn_output[0]).permute(0, 3, 1, 2)
     ttnn_out1_torch = ttnn.to_torch(ttnn_output[1]).permute(0, 3, 1, 2)
-    logger.info(f"After permute - TTNN out0: {ttnn_out0_torch.shape}")
-    logger.info(f"After permute - TTNN out1: {ttnn_out1_torch.shape}")
-    logger.info(f"Torch out0: {output[0].shape}")
-    logger.info(f"Torch out1: {output[1].shape}")
 
     # Reshape if needed
     if ttnn_out0_torch.shape != output[0].shape:

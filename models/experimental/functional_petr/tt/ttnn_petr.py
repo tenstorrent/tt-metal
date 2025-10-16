@@ -47,47 +47,47 @@ class ttnn_PETR:
         self.device = device
         self.head_outs = None
 
-    def extract_img_feat(self, img, img_metas):
-        """Extract features of images."""
-        if isinstance(img, list):
-            img = torch.stack(img, dim=0)
+    # def extract_img_feat(self, img, img_metas):
+    #     """Extract features of images."""
+    #     if isinstance(img, list):
+    #         img = torch.stack(img, dim=0)
 
-        B = img.shape[0]
-        if img is not None:
-            input_shape = tuple((img.shape[-2], img.shape[-1]))
+    #     B = img.shape[0]
+    #     if img is not None:
+    #         input_shape = tuple((img.shape[-2], img.shape[-1]))
 
-            # update real input shape of each single img
-            for img_meta in img_metas:
-                img_meta.update(input_shape=input_shape)
-            if len(img.shape) == 5:
-                B, N, C, H, W = img.shape[0], img.shape[1], img.shape[2], img.shape[3], img.shape[4]
+    #         # update real input shape of each single img
+    #         for img_meta in img_metas:
+    #             img_meta.update(input_shape=input_shape)
+    #         if len(img.shape) == 5:
+    #             B, N, C, H, W = img.shape[0], img.shape[1], img.shape[2], img.shape[3], img.shape[4]
 
-                if B == 1 and N != 1:
-                    img = ttnn.reshape(img, (N, C, H, W))
-                else:
-                    B, N, C, H, W = img.shape[0], img.shape[1], img.shape[2], img.shape[3], img.shape[4]
-                    img = ttnn.reshape(img, (B * N, C, H, W))
-            if self.use_grid_mask:
-                img = self.grid_mask(img)
+    #             if B == 1 and N != 1:
+    #                 img = ttnn.reshape(img, (N, C, H, W))
+    #             else:
+    #                 B, N, C, H, W = img.shape[0], img.shape[1], img.shape[2], img.shape[3], img.shape[4]
+    #                 img = ttnn.reshape(img, (B * N, C, H, W))
+    #         if self.use_grid_mask:
+    #             img = self.grid_mask(img)
 
-            img_nhwc = ttnn.permute(img, (0, 2, 3, 1))
+    #         img_nhwc = ttnn.permute(img, (0, 2, 3, 1))
 
-            img_feats = self.img_backbone(
-                device=self.device, x=ttnn.permute(img, (0, 2, 3, 1))
-            )  # permute is done to change the input from NCHW to NHWC
-            if isinstance(img_feats, dict):
-                img_feats = list(img_feats.values())
-        else:
-            return None
-        if self.with_img_neck:
-            img_feats = self.img_neck(device=self.device, inputs=img_feats)
+    #         img_feats = self.img_backbone(
+    #             device=self.device, x=ttnn.permute(img, (0, 2, 3, 1))
+    #         )  # permute is done to change the input from NCHW to NHWC
+    #         if isinstance(img_feats, dict):
+    #             img_feats = list(img_feats.values())
+    #     else:
+    #         return None
+    #     if self.with_img_neck:
+    #         img_feats = self.img_neck(device=self.device, inputs=img_feats)
 
-        img_feats_reshaped = []
-        for img_feat in img_feats:
-            img_feat = ttnn.permute(img_feat, (0, 3, 1, 2))  # converting img_neck output from NHWC to NCHW
-            BN, C, H, W = img_feat.shape[0], img_feat.shape[1], img_feat.shape[2], img_feat.shape[3]
-            img_feats_reshaped.append(ttnn.reshape(img_feat, (B, int(BN / B), C, H, W)))
-        return img_feats_reshaped
+    #     img_feats_reshaped = []
+    #     for img_feat in img_feats:
+    #         img_feat = ttnn.permute(img_feat, (0, 3, 1, 2))  # converting img_neck output from NHWC to NCHW
+    #         BN, C, H, W = img_feat.shape[0], img_feat.shape[1], img_feat.shape[2], img_feat.shape[3]
+    #         img_feats_reshaped.append(ttnn.reshape(img_feat, (B, int(BN / B), C, H, W)))
+    #     return img_feats_reshaped
 
     def extract_img_feat(self, img, img_metas):
         """Extract features of images."""
@@ -123,6 +123,7 @@ class ttnn_PETR:
                 single_feats = self.img_backbone(device=self.device, x=single_img_nhwc)
 
                 img_feats_list.append(single_feats)
+                # ttnn.device.dump_device_profiler(self.device)
 
             # Combine features from all cameras
             img_feats = []
@@ -155,7 +156,7 @@ class ttnn_PETR:
         img_feats = self.extract_img_feat(img, img_metas)
         return img_feats
 
-    def predict(self, inputs=None, data_samples=None, **kwargs):
+    def predict(self, inputs=None, data_samples=None, skip_post_processing=False, **kwargs):
         img = inputs["imgs"]
         batch_img_metas = data_samples
         for var, name in [(batch_img_metas, "img_metas")]:
@@ -165,34 +166,31 @@ class ttnn_PETR:
 
         batch_img_metas = self.add_lidar2img(img, batch_img_metas)
 
-        results_list_3d = self.simple_test(batch_img_metas, img, **kwargs)
+        if skip_post_processing:
+            return self.simple_test(batch_img_metas, img, skip_post_processing, **kwargs)
+
+        results_list_3d = self.simple_test(batch_img_metas, img, skip_post_processing, **kwargs)
 
         return results_list_3d
 
-    def simple_test_pts(self, x, img_metas, rescale=False):
+    def simple_test_pts(self, x, img_metas, skip_post_processing=False, rescale=False):
         """Test function of point cloud branch."""
         outs = self.pts_bbox_head(x, img_metas, device=self.device)
-
-        self.head_outs = {
-            "all_cls_scores": ttnn.to_torch(outs["all_cls_scores"])
-            if "all_cls_scores" in outs and isinstance(outs["all_cls_scores"], ttnn.Tensor)
-            else outs.get("all_cls_scores"),
-            "all_bbox_preds": ttnn.to_torch(outs["all_bbox_preds"])
-            if "all_bbox_preds" in outs and isinstance(outs["all_bbox_preds"], ttnn.Tensor)
-            else outs.get("all_bbox_preds"),
-        }
-        for i in outs.keys():
-            if i in ["all_cls_scores", "all_bbox_preds"]:
-                outs[i] = ttnn.to_torch(outs[i])
+        if skip_post_processing:
+            return outs
         bbox_list = self.pts_bbox_head.get_bboxes(outs, img_metas, rescale=rescale)
         bbox_results = [bbox3d2result(bboxes, scores, labels) for bboxes, scores, labels in bbox_list]
         return bbox_results
 
-    def simple_test(self, img_metas, img=None, rescale=False):
+    def simple_test(self, img_metas, img=None, skip_post_processing=False, rescale=False):
         """Test function without augmentaiton."""
         img_feats = self.extract_feat(img=img, img_metas=img_metas)
 
         bbox_list = [dict() for i in range(len(img_metas))]
+        if skip_post_processing:
+            return self.simple_test_pts(
+                img_feats, img_metas, skip_post_processing=skip_post_processing, rescale=rescale
+            )
         bbox_pts = self.simple_test_pts(img_feats, img_metas, rescale=rescale)
         for result_dict, pts_bbox in zip(bbox_list, bbox_pts):
             result_dict["pts_bbox"] = pts_bbox

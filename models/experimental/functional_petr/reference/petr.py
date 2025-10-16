@@ -107,7 +107,7 @@ class PETR(nn.Module):
         img_feats = self.extract_img_feat(img, img_metas)
         return img_feats
 
-    def predict(self, inputs=None, data_samples=None, mode=None, **kwargs):
+    def predict(self, inputs=None, data_samples=None, mode=None, skip_post_processing=False, **kwargs):
         img = inputs["imgs"]
         batch_img_metas = data_samples  # the above is preprocessed outside
         for var, name in [(batch_img_metas, "img_metas")]:
@@ -117,31 +117,34 @@ class PETR(nn.Module):
 
         batch_img_metas = self.add_lidar2img(img, batch_img_metas)
 
+        if skip_post_processing:
+            return self.simple_test(batch_img_metas, img, skip_post_processing, **kwargs)
+
         results_list_3d = self.simple_test(batch_img_metas, img, **kwargs)
 
         return results_list_3d
 
-    def simple_test_pts(self, x, img_metas, rescale=False):
+    def simple_test_pts(self, x, img_metas, skip_post_processing=False, rescale=False):
         """Test function of point cloud branch."""
         outs = self.pts_bbox_head(x, img_metas)
-        self.head_outs = {
-            "all_cls_scores": outs["all_cls_scores"]
-            if "all_cls_scores" in outs and isinstance(outs["all_cls_scores"], torch.Tensor)
-            else outs.get("all_cls_scores"),
-            "all_bbox_preds": outs["all_bbox_preds"]
-            if "all_bbox_preds" in outs and isinstance(outs["all_bbox_preds"], torch.Tensor)
-            else outs.get("all_bbox_preds"),
-        }
+        # print("outs", outs)
+        if skip_post_processing:
+            return outs
         bbox_list = self.pts_bbox_head.get_bboxes(outs, img_metas, rescale=rescale)
         bbox_results = [bbox3d2result(bboxes, scores, labels) for bboxes, scores, labels in bbox_list]
         return bbox_results
 
-    def simple_test(self, img_metas, img=None, rescale=False):
+    def simple_test(self, img_metas, img=None, skip_post_processing=False, rescale=False):
         """Test function without augmentaiton."""
         img_feats = self.extract_feat(img=img, img_metas=img_metas)
 
         bbox_list = [dict() for i in range(len(img_metas))]
+        if skip_post_processing:
+            return self.simple_test_pts(
+                img_feats, img_metas, skip_post_processing=skip_post_processing, rescale=rescale
+            )
         bbox_pts = self.simple_test_pts(img_feats, img_metas, rescale=rescale)
+        # print("bbox_pts", bbox_pts)
         for result_dict, pts_bbox in zip(bbox_list, bbox_pts):
             result_dict["pts_bbox"] = pts_bbox
         return bbox_list

@@ -22,7 +22,7 @@ class ttnn_SinePositionalEncoding3D:
         self.torch_fallback = True
 
         # Pre-compute dim_t
-        self.dim_t_torch = torch.arange(num_feats, dtype=torch.float32)
+        self.dim_t_torch = torch.arange(num_feats, dtype=torch.bfloat16)
         self.dim_t_torch = temperature ** (2 * (self.dim_t_torch // 2) / num_feats)
 
     def __call__(self, mask):
@@ -39,9 +39,9 @@ class ttnn_SinePositionalEncoding3D:
 
         if self.torch_fallback:
             # Convert to torch for remaining operations
-            n_embed = ttnn.to_torch(n_embed).to(torch.float32)
-            y_embed = ttnn.to_torch(y_embed).to(torch.float32)
-            x_embed = ttnn.to_torch(x_embed).to(torch.float32)
+            n_embed = ttnn.to_torch(n_embed).to(torch.bfloat16)
+            y_embed = ttnn.to_torch(y_embed).to(torch.bfloat16)
+            x_embed = ttnn.to_torch(x_embed).to(torch.bfloat16)
 
             if self.normalize:
                 n_embed = (n_embed + self.offset) / (n_embed[:, -1:, :, :] + self.eps) * self.scale

@@ -32,7 +32,7 @@ class ttnn_esemodule:
         # x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
         # x = self.avg_pool(x)
         # x = ttnn.global_avg_pool2d(x)
-        x_torch = ttnn.to_torch(x).to(torch.float32)  # Convert to float32
+        x_torch = ttnn.to_torch(x).to(torch.bfloat16)  # Convert to float32
         x_torch = x_torch.mean(dim=(1, 2), keepdim=True)  # Global avg pool
         x = ttnn.from_torch(x_torch, dtype=ttnn.bfloat16, device=device)
         x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
@@ -296,7 +296,7 @@ class ttnn_osa_stage:
             original_dtype = x.dtype if hasattr(x, "dtype") else ttnn.bfloat16
 
             # Maxpool in torch
-            x_torch = ttnn.to_torch(x).to(torch.float32)  # ← Use float32 in torch
+            x_torch = ttnn.to_torch(x).to(torch.bfloat16)  # ← Use float32 in torch
 
             # NHWC → NCHW
             x_torch = x_torch.permute(0, 3, 1, 2)

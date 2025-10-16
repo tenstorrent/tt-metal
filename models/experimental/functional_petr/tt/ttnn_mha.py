@@ -127,10 +127,10 @@ class TTPETRMultiheadAttention:
         key_transposed = ttnn.permute(key, (0, 2, 1))
 
         if attn_mask is not None:
-            attn_output_weights = ttnn.matmul(q_scaled, key_transposed, dtype=ttnn.float32)
+            attn_output_weights = ttnn.matmul(q_scaled, key_transposed, dtype=ttnn.bfloat16)
             attn_output_weights = attn_output_weights + attn_mask
         else:
-            attn_output_weights = ttnn.matmul(q_scaled, key_transposed, dtype=ttnn.float32)
+            attn_output_weights = ttnn.matmul(q_scaled, key_transposed, dtype=ttnn.bfloat16)
 
         # TTNN Softmax
         compute_kernel_config = ttnn.WormholeComputeKernelConfig(
@@ -141,7 +141,7 @@ class TTPETRMultiheadAttention:
         )
 
         # TORCH Softmax as with TTNN Softmax gives better pcc
-        attn_weights_torch = ttnn.to_torch(attn_output_weights).to(torch.float32)
+        attn_weights_torch = ttnn.to_torch(attn_output_weights).to(torch.bfloat16)
         attn_weights_torch = torch.nn.functional.softmax(attn_weights_torch, dim=-1)
 
         # Convert back to ttnn
@@ -163,7 +163,7 @@ class TTPETRMultiheadAttention:
         attn_output = ttnn.linear(attn_output, self.attn_out_proj_weight, bias=self.attn_out_proj_bias)
         attn_output = ttnn.reshape(attn_output, (tgt_len, bsz, attn_output.shape[1]))
         attn_output_weights = ttnn.reshape(attn_output_weights, (bsz, self.num_heads, tgt_len, src_len))
-        attn_weights_torch = ttnn.to_torch(attn_output_weights).to(torch.float32)
+        attn_weights_torch = ttnn.to_torch(attn_output_weights).to(torch.bfloat16)
         attn_weights_avg = attn_weights_torch.mean(dim=1)
 
         # Convert back

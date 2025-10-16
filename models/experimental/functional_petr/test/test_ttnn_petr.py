@@ -11,6 +11,7 @@ from ttnn.model_preprocessing import (
     infer_ttnn_module_args,
 )
 
+
 from models.experimental.functional_petr.reference.petr import PETR
 from models.experimental.functional_petr.reference.petr_head import pos2posemb3d
 from models.experimental.functional_petr.tt.ttnn_petr import ttnn_PETR
@@ -22,6 +23,7 @@ from models.experimental.functional_petr.tt.common import (
     move_to_device,
 )
 from tests.ttnn.utils_for_testing import check_with_pcc, assert_with_pcc
+import tracy
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
@@ -33,7 +35,17 @@ def test_petr(device, reset_seeds):
         "models/experimental/functional_petr/resources/modified_input_batch_img_metas_sample1.pt", weights_only=False
     )
 
-    torch_model = PETR(use_grid_mask=True)
+    perf = False
+    print(f"perf: {perf}")
+    if perf:
+        ######################################
+        inputs["imgs"] = inputs["imgs"][:, 0:1, :, :, :]
+        for meta in modified_batch_img_metas:
+            meta["cam2img"] = [meta["cam2img"][0]]
+            meta["lidar2cam"] = [meta["lidar2cam"][0]]
+            meta["img_shape"] = [meta["img_shape"][0]] if isinstance(meta["img_shape"], list) else meta["img_shape"]
+        ######################################
+    torch_model = PETR(use_grid_mask=False)
     weights_state_dict = torch.load(
         "models/experimental/functional_petr/resources/petr_vovnet_gridmask_p4_800x320-e2191752.pth", weights_only=False
     )["state_dict"]
@@ -45,10 +57,11 @@ def test_petr(device, reset_seeds):
         imgs_path = inputs["imgs"]
 
     ttnn_inputs = dict()
-    ttnn_inputs["imgs"] = ttnn.from_torch(inputs["imgs"], device=device)
+    ttnn_inputs["imgs"] = ttnn.from_torch(inputs["imgs"], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
     ttnn_batch_img_metas = modified_batch_img_metas.copy()
-    output = torch_model.predict(inputs, modified_batch_img_metas)
+
+    torch_output = torch_model.predict(inputs, modified_batch_img_metas, skip_post_processing=True)
 
     parameters_petr_head = preprocess_model_parameters(
         initialize_model=lambda: torch_model.pts_bbox_head,
@@ -97,25 +110,53 @@ def test_petr(device, reset_seeds):
     query_embedding_input = torch_model.pts_bbox_head.reference_points.weight
     query_embedding_input = pos2posemb3d(query_embedding_input)
 
-    query_embedding_input = ttnn.from_torch(query_embedding_input, layout=ttnn.TILE_LAYOUT, device=device)
+    query_embedding_input = ttnn.from_torch(
+        query_embedding_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
 
     ttnn_model = ttnn_PETR(
-        use_grid_mask=True,
+        use_grid_mask=False,
         parameters=parameters,
         query_embedding_input=query_embedding_input,
         device=device,
     )
 
-    ttnn_output = ttnn_model.predict(ttnn_inputs, ttnn_batch_img_metas)
+    # import traceback
 
-    torch_outs = torch_model.head_outs
-    ttnn_outs = ttnn_model.head_outs
+    # # Monkey-patch to catch FLOAT32 usage
+    # original_from_torch = ttnn.from_torch
 
-    passed, pcc_cls = check_with_pcc(torch_outs["all_cls_scores"], ttnn_outs["all_cls_scores"], pcc=0.97)
-    logger.info(f"PETR all_cls_scores PCC: {float(pcc_cls):.6f}")
+    # def debug_from_torch(*args, **kwargs):
+    #     result = original_from_torch(*args, **kwargs)
+    #     if hasattr(result, 'dtype') and 'FLOAT32' in str(result.dtype):
+    #         print(f"WARNING: FLOAT32 tensor created!")
+    #         print(f"  Shape: {result.shape}")
+    #         traceback.print_stack(limit=10)
+    #     return result
 
-    passed, pcc_bbox = check_with_pcc(torch_outs["all_bbox_preds"], ttnn_outs["all_bbox_preds"], pcc=0.97)
-    logger.info(f"PETR all_bbox_preds PCC: {float(pcc_bbox):.6f}")
+    # ttnn.from_torch = debug_from_torch
 
-    assert_with_pcc(torch_outs["all_cls_scores"], ttnn_outs["all_cls_scores"], pcc=0.97)
-    assert_with_pcc(torch_outs["all_bbox_preds"], ttnn_outs["all_bbox_preds"], pcc=0.97)
+    tracy.signpost("start")
+    ttnn_output = ttnn_model.predict(ttnn_inputs, ttnn_batch_img_metas, skip_post_processing=True)
+    tracy.signpost("stop")
+
+    if not perf:
+        ttnn_output = {
+            "all_cls_scores": ttnn.to_torch(ttnn_output["all_cls_scores"])
+            if isinstance(ttnn_output["all_cls_scores"], ttnn.Tensor)
+            else ttnn_output["all_cls_scores"],
+            "all_bbox_preds": ttnn.to_torch(ttnn_output["all_bbox_preds"])
+            if isinstance(ttnn_output["all_bbox_preds"], ttnn.Tensor)
+            else ttnn_output["all_bbox_preds"],
+        }
+
+        passed, pcc_cls = check_with_pcc(torch_output["all_cls_scores"], ttnn_output["all_cls_scores"], pcc=0.97)
+        logger.info(f"PETR all_cls_scores PCC: {float(pcc_cls):.6f}")
+
+        passed, pcc_bbox = check_with_pcc(torch_output["all_bbox_preds"], ttnn_output["all_bbox_preds"], pcc=0.97)
+        logger.info(f"PETR all_bbox_preds PCC: {float(pcc_bbox):.6f}")
+
+        assert_with_pcc(torch_output["all_cls_scores"], ttnn_output["all_cls_scores"], pcc=0.97)
+        assert_with_pcc(torch_output["all_bbox_preds"], ttnn_output["all_bbox_preds"], pcc=0.97)
+
+    # ttnn.device.dump_device_profiler(device)

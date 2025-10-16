@@ -63,14 +63,26 @@ class TTPETRTransformerDecoderLayer(nn.Module):
         self.petr_mha = TTPETRMultiheadAttention(device, parameter.attentions[1])
         self.ffns = TTFFN(device, parameter.ffns[0].layers)
 
-        self.norm1_weight = ttnn.from_torch(parameter.norms[0].weight, layout=ttnn.TILE_LAYOUT, device=device)
-        self.norm1_bias = ttnn.from_torch(parameter.norms[0].bias, layout=ttnn.TILE_LAYOUT, device=device)
+        self.norm1_weight = ttnn.from_torch(
+            parameter.norms[0].weight, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+        )
+        self.norm1_bias = ttnn.from_torch(
+            parameter.norms[0].bias, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+        )
 
-        self.norm2_weight = ttnn.from_torch(parameter.norms[1].weight, layout=ttnn.TILE_LAYOUT, device=device)
-        self.norm2_bias = ttnn.from_torch(parameter.norms[1].bias, layout=ttnn.TILE_LAYOUT, device=device)
+        self.norm2_weight = ttnn.from_torch(
+            parameter.norms[1].weight, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+        )
+        self.norm2_bias = ttnn.from_torch(
+            parameter.norms[1].bias, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+        )
 
-        self.norm3_weight = ttnn.from_torch(parameter.norms[2].weight, layout=ttnn.TILE_LAYOUT, device=device)
-        self.norm3_bias = ttnn.from_torch(parameter.norms[2].bias, layout=ttnn.TILE_LAYOUT, device=device)
+        self.norm3_weight = ttnn.from_torch(
+            parameter.norms[2].weight, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+        )
+        self.norm3_bias = ttnn.from_torch(
+            parameter.norms[2].bias, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+        )
 
     def __call__(self, device, query, key, value, key_pos, query_pos, key_padding_mask):
         x, weight = self.mha(query, query, query, query_pos=query_pos, key_pos=query_pos)
@@ -98,10 +110,10 @@ class TTPETRTransformerDecoder(nn.Module):
         self.decoder5 = TTPETRTransformerDecoderLayer(device, parameter.decoder.module.layers[5])
 
         self.post_norm_weight = ttnn.from_torch(
-            parameter.decoder.module.post_norm.weight, layout=ttnn.TILE_LAYOUT, device=device
+            parameter.decoder.module.post_norm.weight, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
         )
         self.post_norm_bias = ttnn.from_torch(
-            parameter.decoder.module.post_norm.bias, layout=ttnn.TILE_LAYOUT, device=device
+            parameter.decoder.module.post_norm.bias, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
         )
 
     def __call__(self, device, query, key, value, key_pos, query_pos, key_padding_mask):
