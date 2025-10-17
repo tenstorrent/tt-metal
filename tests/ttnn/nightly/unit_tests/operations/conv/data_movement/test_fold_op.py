@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import ttnn
 import pytest
 from tests.ttnn.unit_tests.operations.conv.data_movement.test_fold_op import run_fold_sharded_test
 
@@ -31,3 +32,16 @@ from tests.ttnn.unit_tests.operations.conv.data_movement.test_fold_op import run
 )
 def test_fold_sharded(device, act_shape, stride_h, stride_w, padding, core_grid):
     run_fold_sharded_test(device, act_shape, stride_h, stride_w, padding, core_grid)
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize(
+    "act_shape,stride_h,stride_w,padding, core_grid",
+    [
+        ((1, 32, 32, 32), 2, 2, (0, 0), (2, 2)),
+        ((2, 32, 32, 32), 4, 4, (0, 0), (4, 4)),
+        ((1, 256, 256, 64), 8, 8, (0, 0), (8, 8)),
+    ],
+)
+def test_fold_sharded_tile_layout(device, act_shape, stride_h, stride_w, padding, core_grid):
+    run_fold_sharded_test(device, act_shape, stride_h, stride_w, padding, core_grid, ttnn.TILE_LAYOUT)
