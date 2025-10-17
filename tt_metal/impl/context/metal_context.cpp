@@ -1204,7 +1204,7 @@ dev_msgs::core_info_msg_t MetalContext::populate_core_info_msg(
     // Determine which noc-coords are harvested
     std::vector<uint32_t> harvested_axis_coord;
     CoreCoord logical_grid_size = cluster_->get_soc_desc(device_id).get_grid_size(CoreType::TENSIX);
-    uint32_t harvested_noc_coords = CoordinateManager::shuffle_tensix_harvesting_mask_to_noc0_coords(
+    uint32_t harvested_noc_coords = umd::CoordinateManager::shuffle_tensix_harvesting_mask_to_noc0_coords(
         cluster_->get_soc_desc(device_id).arch, cluster_->get_harvesting_mask(device_id));
     uint32_t max_along_axis =
         hal_->get_tensix_harvest_axis() == HalTensixHarvestAxis::ROW ? soc_d.grid_size.y : soc_d.grid_size.x;

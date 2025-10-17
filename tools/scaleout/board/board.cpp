@@ -117,7 +117,7 @@ Board::Board(
     if (board_type_ == BoardType::UBB_WORMHOLE || board_type_ == BoardType::UBB_BLACKHOLE) {
         expected_asic_indices = 8;
     } else {
-        expected_asic_indices = tt::umd::get_number_of_chips_from_board_type(board_type_);
+        expected_asic_indices = get_number_of_chips_from_board_type(board_type_);
     }
     if (asic_locations_.size() != expected_asic_indices) {
         throw std::runtime_error("Number of ASICs in board configuration does not match number of chips in board type");

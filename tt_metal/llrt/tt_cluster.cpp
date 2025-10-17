@@ -66,9 +66,9 @@ inline std::string get_soc_description_file(
     return path;
 }
 
-std::unique_ptr<ClusterDescriptor> get_mock_cluster_desc(const tt::llrt::RunTimeOptions& rtoptions) {
+std::unique_ptr<tt::umd::ClusterDescriptor> get_mock_cluster_desc(const tt::llrt::RunTimeOptions& rtoptions) {
     TT_FATAL(rtoptions.get_mock_enabled(), "Mock cluster descriptor not enabled");
-    std::unique_ptr<ClusterDescriptor> mock_cluster_desc =
+    std::unique_ptr<tt::umd::ClusterDescriptor> mock_cluster_desc =
         tt::umd::ClusterDescriptor::create_from_yaml(rtoptions.get_mock_cluster_desc_path());
     TT_FATAL(
         mock_cluster_desc != nullptr,
@@ -81,7 +81,7 @@ std::unique_ptr<ClusterDescriptor> get_mock_cluster_desc(const tt::llrt::RunTime
 namespace tt {
 
 tt::tt_metal::ClusterType Cluster::get_cluster_type_from_cluster_desc(
-    const llrt::RunTimeOptions& rtoptions, const ClusterDescriptor* cluster_desc) {
+    const llrt::RunTimeOptions& rtoptions, const umd::ClusterDescriptor* cluster_desc) {
     if (rtoptions.get_simulator_enabled() && !rtoptions.get_mock_enabled()) {
         auto soc_desc =
             tt::umd::SimulationChip::get_soc_descriptor_path_from_simulator_path(rtoptions.get_simulator_path());
@@ -96,7 +96,7 @@ tt::tt_metal::ClusterType Cluster::get_cluster_type_from_cluster_desc(
         return tt::tt_metal::ClusterType::INVALID;
     }
 
-    std::unique_ptr<ClusterDescriptor> temp_cluster_desc = nullptr;
+    std::unique_ptr<umd::ClusterDescriptor> temp_cluster_desc = nullptr;
     if (cluster_desc == nullptr) {
         temp_cluster_desc = rtoptions.get_mock_enabled() ? get_mock_cluster_desc(rtoptions)
                                                          : tt::umd::Cluster::create_cluster_descriptor();
@@ -271,9 +271,9 @@ void Cluster::generate_cluster_descriptor() {
 
 void Cluster::validate_harvesting_masks() const {
     // Metal expects all chips to have same number of harvested cores for a given core type
-    std::optional<tt::umd::HarvestingMasks> harvesting_mask_tracker = std::nullopt;
+    std::optional<HarvestingMasks> harvesting_mask_tracker = std::nullopt;
     for (const auto device_id : this->user_exposed_chip_ids()) {
-        tt::umd::HarvestingMasks masks = sdesc_per_chip_.at(device_id).harvesting_masks;
+        HarvestingMasks masks = sdesc_per_chip_.at(device_id).harvesting_masks;
         if (!harvesting_mask_tracker.has_value()) {
             harvesting_mask_tracker = masks;
         } else {
@@ -306,7 +306,7 @@ void Cluster::initialize_device_drivers() {
         this->assign_mem_channels_to_devices(mmio_device_id, controlled_devices);
     }
 
-    tt_device_params default_params;
+    umd::DeviceParams default_params;
     this->start_driver(default_params);
     this->generate_virtual_to_umd_coord_mapping();
     this->generate_virtual_to_profiler_flat_id_mapping();
@@ -359,7 +359,7 @@ void Cluster::open_driver(const bool &skip_driver_allocs) {
             .sdesc_path = sdesc_path,
         });
     } else if (this->target_type_ == TargetDevice::Simulator) {
-        std::unique_ptr<ClusterDescriptor> mock_cluster_desc;
+        std::unique_ptr<umd::ClusterDescriptor> mock_cluster_desc;
         if (rtoptions_.get_mock_enabled()) {
             mock_cluster_desc = get_mock_cluster_desc(rtoptions_);
             device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
@@ -379,7 +379,7 @@ void Cluster::open_driver(const bool &skip_driver_allocs) {
     } else if (this->target_type_ == TargetDevice::Mock) {
         // If a cluster descriptor was not provided via constructor, and mock is enabled via rtoptions,
         // load it from the YAML path and pass it into UMD for mock initialization.
-        std::unique_ptr<ClusterDescriptor> mock_cluster_desc = get_mock_cluster_desc(rtoptions_);
+        std::unique_ptr<umd::ClusterDescriptor> mock_cluster_desc = get_mock_cluster_desc(rtoptions_);
 
         device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
             .chip_type = tt::umd::ChipType::MOCK,
@@ -388,7 +388,7 @@ void Cluster::open_driver(const bool &skip_driver_allocs) {
         });
     }
 
-    barrier_address_params barrier_params;
+    umd::BarrierAddressParams barrier_params;
     barrier_params.tensix_l1_barrier_base =
         hal_.get_dev_addr(tt_metal::HalProgrammableCoreType::TENSIX, tt_metal::HalL1MemAddrType::BARRIER);
     barrier_params.dram_barrier_base = hal_.get_dev_addr(tt_metal::HalDramMemAddrType::BARRIER);
@@ -400,7 +400,7 @@ void Cluster::open_driver(const bool &skip_driver_allocs) {
     this->driver_ = std::move(device_driver);
 }
 
-void Cluster::start_driver(tt_device_params &device_params) const {
+void Cluster::start_driver(umd::DeviceParams& device_params) const {
     device_params.init_device = true;
 
     TT_FATAL(!this->sdesc_per_chip_.empty(), "Descriptor must be loaded. Try open_driver()");
@@ -837,7 +837,7 @@ void Cluster::read_sysmem(
 
 void Cluster::verify_sw_fw_versions(
     int device_id, std::uint32_t sw_version, std::vector<std::uint32_t> &fw_versions) const {
-    tt_version sw(sw_version), fw_first_eth_core(fw_versions.at(0));
+    umd::tt_version sw(sw_version), fw_first_eth_core(fw_versions.at(0));
     log_info(
         tt::LogDevice,
         "Software version {}, Ethernet FW version {} (Device {})",
@@ -845,7 +845,7 @@ void Cluster::verify_sw_fw_versions(
         fw_first_eth_core.str(),
         device_id);
     for (std::uint32_t &fw_version : fw_versions) {
-        tt_version fw(fw_version);
+        umd::tt_version fw(fw_version);
 
         TT_FATAL(fw == fw_first_eth_core, "FW versions are not the same across different ethernet cores");
         TT_FATAL(sw.major == fw.major, "SW/FW major version number out of sync");

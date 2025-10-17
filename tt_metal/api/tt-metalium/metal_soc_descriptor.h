@@ -21,7 +21,7 @@
 /*!
     Should only contain relevant configuration for SOC
 */
-struct metal_SocDescriptor : public SocDescriptor {
+struct metal_SocDescriptor : public tt::umd::SocDescriptor {
 public:
     std::vector<size_t> dram_view_channels;
     std::vector<std::vector<CoreCoord>>

@@ -64,7 +64,7 @@ class Cluster {
 public:
     // TODO: #21245: Remove these workaround APIs and instead refactor UMD component out of Cluster
     static tt::tt_metal::ClusterType get_cluster_type_from_cluster_desc(
-        const llrt::RunTimeOptions& rtoptions, const ClusterDescriptor* cluster_desc = nullptr);
+        const llrt::RunTimeOptions& rtoptions, const umd::ClusterDescriptor* cluster_desc = nullptr);
     static bool is_base_routing_fw_enabled(tt::tt_metal::ClusterType cluster_type);
     Cluster& operator=(const Cluster&) = delete;
     Cluster& operator=(Cluster&& other) noexcept = delete;
@@ -90,7 +90,7 @@ public:
 
     std::set<ChipId> all_pci_chip_ids() const { return this->driver_->get_target_mmio_device_ids(); }
 
-    ClusterDescriptor* get_cluster_desc() const {
+    umd::ClusterDescriptor* get_cluster_desc() const {
         TT_FATAL(this->cluster_desc_ != nullptr, "Cluster descriptor is not initialized.");
         return this->cluster_desc_;
     }

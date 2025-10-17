@@ -88,7 +88,7 @@ static uint64_t get_unique_chip_id(const std::unique_ptr<tt::umd::Cluster>& clus
 }
 
 static void test_print_link_health() {
-    std::cout << "Num PCIE devices: " << PCIDevice::enumerate_devices_info().size() << std::endl;
+    std::cout << "Num PCIE devices: " << tt::umd::PCIDevice::enumerate_devices_info().size() << std::endl;
     std::unique_ptr<tt::umd::Cluster> cluster = std::make_unique<tt::umd::Cluster>();
     std::unique_ptr<tt::tt_metal::Hal> hal = create_hal(cluster);
     uint32_t link_up_addr =
