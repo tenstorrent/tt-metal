@@ -49,6 +49,9 @@ std::string normalize_path(const char* path, const std::string& subdir = "") {
     std::filesystem::path p(path);
     if (!subdir.empty()) {
         p /= subdir;
+    }
+    return p.lexically_normal().string();
+}
 RunTimeOptions::RunTimeOptions() {
 // Default assume package install path
 #ifdef TT_METAL_INSTALL_ROOT
