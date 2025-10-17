@@ -50,6 +50,7 @@ tt::tt_metal::operation::ProgramWithCallbacks ema_multi_core(
     // ----------------------
     auto src_cb_index = tt::CBIndex::c_0;
     auto dst_cb_index = tt::CBIndex::c_1;
+    auto prev_cb_index = tt::CBIndex::c_2;
 
     auto src_data_format = datatype_to_dataformat_converter(a.dtype());
     auto dst_data_format = datatype_to_dataformat_converter(output.dtype());
@@ -59,6 +60,7 @@ tt::tt_metal::operation::ProgramWithCallbacks ema_multi_core(
 
     auto src_cb_size = src_tile_size * ema_buffer_depth;
     auto dst_cb_size = dst_tile_size * ema_buffer_depth;
+    auto prev_cb_size = src_tile_size;
 
     auto src_cb_cfg = tt::tt_metal::CircularBufferConfig(src_cb_size, {{src_cb_index, src_data_format}})
                           .set_page_size(src_cb_index, src_tile_size);
@@ -67,6 +69,10 @@ tt::tt_metal::operation::ProgramWithCallbacks ema_multi_core(
     auto dst_cb_cfg = tt::tt_metal::CircularBufferConfig(dst_cb_size, {{dst_cb_index, dst_data_format}})
                           .set_page_size(dst_cb_index, dst_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, core_grid, dst_cb_cfg);
+
+    auto prev_cb_cfg = tt::tt_metal::CircularBufferConfig(prev_cb_size, {{prev_cb_index, src_data_format}})
+                           .set_page_size(prev_cb_index, src_tile_size);
+    tt::tt_metal::CreateCircularBuffer(program, core_grid, prev_cb_cfg);
 
     // Compile time args for the kernels
     // ---------------------------------
