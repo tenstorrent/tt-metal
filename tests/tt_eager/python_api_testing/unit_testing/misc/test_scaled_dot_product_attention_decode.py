@@ -12,7 +12,12 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
 import ttnn
 from loguru import logger
 import pytest
-from models.common.utility_functions import skip_for_wormhole_b0, skip_for_blackhole, is_watcher_enabled
+from models.common.utility_functions import (
+    skip_for_wormhole_b0,
+    skip_for_blackhole,
+    is_watcher_enabled,
+    skip_with_watcher,
+)
 import math
 import numpy as np
 
@@ -1138,7 +1143,7 @@ def test_sdpa_decode_paged_attention(
         and q_dtype == ttnn.bfloat16
         and cur_pos_tensor == True
         and (
-            (block_size == 32 and b == 8 and nh == 16 and nkv == 4 and s == 4096 and d == 128 and grid_size == (8, 2))
+            (b == 8 and nh == 16 and nkv == 4 and s == 4096 and d == 128 and grid_size == (8, 2))
             or (
                 block_size == 64
                 and b == 1
