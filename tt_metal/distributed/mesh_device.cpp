@@ -1140,11 +1140,6 @@ std::unique_ptr<PinnedMemory> MeshDevice::pin_memory(
     auto bytes = host_buffer.view_bytes();
     void* host_ptr = static_cast<void*>(bytes.data());
     size_t buffer_size = bytes.size();
-    const auto device_arch = this->arch();
-    if (device_arch == tt::ARCH::BLACKHOLE) {
-        // On Blackhole, we can use 64-bit address space, so we don't need to use the iATU.
-        map_to_noc = false;
-    }
 
     return std::unique_ptr<PinnedMemory>(new PinnedMemory(devices, host_ptr, buffer_size, map_to_noc));
 }
