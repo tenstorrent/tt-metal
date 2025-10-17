@@ -52,6 +52,9 @@ void kernel_main() {
     uint32_t start_row_offset = get_arg_val<uint32_t>(arg_idx++);
 
     constexpr uint32_t ct_idx = 11;
+    while (true) {
+        ;
+    }
 
 #ifdef INPUT_IS_SHARDED
     constexpr uint32_t ct_offset = 7;
