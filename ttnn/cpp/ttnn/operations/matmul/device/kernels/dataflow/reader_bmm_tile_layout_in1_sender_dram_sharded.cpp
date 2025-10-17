@@ -73,7 +73,7 @@ void kernel_main() {
 
         for (uint32_t h = 0; h < in1_num_pages; ++h) {
             // noc_async_read_tile_dram_sharded_with_state(in1_base_addr, l1_read_addr_in1, l1_write_addr_in1);
-            noc_async_read_one_packet_with_state<true, true>(in1_tensor_addr + l1_read_addr_in1, l1_write_addr_in1, vc);
+            noc_async_read_one_packet_with_state<true, true>(in1_base_addr + l1_read_addr_in1, l1_write_addr_in1, vc);
             l1_read_addr_in1 += in1_page_size;
             l1_write_addr_in1 += in1_page_size;
         }
@@ -99,7 +99,7 @@ void kernel_main() {
             // noc_async_read_tile_dram_sharded_with_state_with_trid(
             //     in1_base_addr, l1_read_addr_in1, l1_write_addr_in1, curr_block_trid);
             noc_async_read_tile_dram_sharded_with_state_with_trid(
-                in1_tensor_addr, l1_read_addr_in1, l1_write_addr_in1, curr_block_trid);
+                in1_base_addr, l1_read_addr_in1, l1_write_addr_in1, curr_block_trid);
             l1_read_addr_in1 += in1_page_size;
             l1_write_addr_in1 += in1_page_size;
         }
@@ -142,7 +142,7 @@ void kernel_main() {
 
     for (uint32_t h = 0; h < in3_num_pages; ++h) {
         // noc_async_read_tile_dram_sharded_with_state(in3_base_addr, l1_read_addr_in3, l1_write_addr_in3);
-        noc_async_read_one_packet_with_state<true, true>(in3_tensor_addr + l1_read_addr_in3, l1_write_addr_in3, vc);
+        noc_async_read_one_packet_with_state<true, true>(in3_base_addr + l1_read_addr_in3, l1_write_addr_in3, vc);
         l1_read_addr_in3 += in3_page_size;
         l1_write_addr_in3 += in3_page_size;
     }

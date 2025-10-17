@@ -168,7 +168,7 @@ void kernel_main() {
                         // noc_async_read_tile_dram_sharded_with_state(
                         //     in1_base_addr, curr_l1_read_addr_in1, l1_write_addr_in1);
                         noc_async_read_one_packet_with_state<true, true>(
-                            in1_tensor_addr + curr_l1_read_addr_in1, l1_write_addr_in1, vc);
+                            in1_base_addr + curr_l1_read_addr_in1, l1_write_addr_in1, vc);
                         curr_l1_read_addr_in1 += curr_page_size;
                         l1_write_addr_in1 += curr_page_size;
                     }
