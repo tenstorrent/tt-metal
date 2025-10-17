@@ -4,7 +4,6 @@
 
 #include "unary_op_utils.hpp"
 
-#include <cstdint>
 #include <optional>
 #include <tt_stl/assert.hpp>
 #include "ttnn/tensor/types.hpp"
@@ -729,6 +728,8 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
                 op_init_and_name = {"lez_tile_init();", fmt::format("lez_tile({});", idst)};
             }
             break;
+        case UnaryOpType::SQRT: op_init_and_name = {"sqrt_tile_init();", fmt::format("sqrt_tile({});", idst)}; break;
+        case UnaryOpType::RSQRT: op_init_and_name = {"rsqrt_tile_init();", fmt::format("rsqrt_tile({});", idst)}; break;
         case UnaryOpType::EXP2: op_init_and_name = {"exp2_tile_init();", fmt::format("exp2_tile({});", idst)}; break;
         case UnaryOpType::EXPM1: op_init_and_name = {"expm1_tile_init();", fmt::format("expm1_tile({});", idst)}; break;
         case UnaryOpType::ASIN: op_init_and_name = {"asin_tile_init();", fmt::format("asin_tile({});", idst)}; break;

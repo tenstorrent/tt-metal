@@ -140,6 +140,8 @@ template struct ExecuteUnaryWithFastAndApproximateMode<UnaryOpType::LOG>;
 template struct ExecuteUnaryWithFastAndApproximateMode<UnaryOpType::LOG10>;
 template struct ExecuteUnaryWithFastAndApproximateMode<UnaryOpType::LOG2>;
 template struct ExecuteUnaryWithFastAndApproximateMode<UnaryOpType::LOG1P>;
+template struct ExecuteUnaryWithFastAndApproximateMode<UnaryOpType::RSQRT>;
+template struct ExecuteUnaryWithFastAndApproximateMode<UnaryOpType::SQRT>;
 
 template <UnaryOpType unary_op_type>
 Tensor ExecuteUnaryWithVectorAndFastAndApproximateMode<unary_op_type>::invoke(
@@ -236,24 +238,6 @@ Tensor Sigmoid_accurate::invoke(
          UnaryWithParam(UnaryOpType::RECIP)},
         memory_config,
         optional_output_tensor);
-}
-
-Tensor Sqrt::invoke(
-    const Tensor& input_tensor,
-    const bool fast_approx_mode,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& optional_output_tensor) {
-    return detail::unary_impl(
-        input_tensor, {UnaryWithParam{UnaryOpType::SQRT, fast_approx_mode}}, memory_config, optional_output_tensor);
-}
-
-Tensor Rsqrt::invoke(
-    const Tensor& input_tensor,
-    const bool fast_approx_mode,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& optional_output_tensor) {
-    return detail::unary_impl(
-        input_tensor, {UnaryWithParam{UnaryOpType::RSQRT, fast_approx_mode}}, memory_config, optional_output_tensor);
 }
 
 template struct ExecuteUnary<UnaryOpType::SIGMOID, UnaryOpType::LOG>;
