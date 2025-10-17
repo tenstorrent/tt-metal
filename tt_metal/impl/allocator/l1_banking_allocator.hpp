@@ -5,7 +5,7 @@
 #pragma once
 
 #include <tt-metalium/allocator.hpp>
-#include <tt-metalium/core_descriptor.hpp>
+#include "llrt/core_descriptor.hpp"
 #include <cstdint>
 
 #include "impl/allocator/allocator_types.hpp"
