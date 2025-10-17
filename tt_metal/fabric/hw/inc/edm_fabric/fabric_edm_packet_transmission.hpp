@@ -142,6 +142,8 @@ FORCE_INLINE
     DPRINT << "edm/local: enter type=" << (uint32_t)noc_send_type << " payload=" << payload_size_bytes
            << " trid=" << transaction_id << " rx_ch=" << (uint32_t)rx_channel_id << ENDL();
 
+    WATCHER_RING_BUFFER_PUSH(0xEC00A000u | (uint32_t)noc_send_type);
+
     if (noc_send_type > tt::tt_fabric::NocSendType::NOC_SEND_TYPE_LAST) {
         __builtin_unreachable();
     }
@@ -173,6 +175,10 @@ FORCE_INLINE
             if (header.command_fields.unicast_seminc.flush) {
                 flush_write_to_noc_pipeline(rx_channel_id);
             }
+
+            WATCHER_RING_BUFFER_PUSH((uint32_t)(dest_address >> 32));
+            WATCHER_RING_BUFFER_PUSH((uint32_t)(dest_address & 0xffffffffu));
+
             noc_semaphore_inc<true>(
                 dest_address,
                 increment,
@@ -219,6 +225,10 @@ FORCE_INLINE
             if (header.command_fields.unicast_seminc_fused.flush) {
                 flush_write_to_noc_pipeline(rx_channel_id);
             }
+
+            WATCHER_RING_BUFFER_PUSH((uint32_t)(semaphore_dest_address >> 32));
+            WATCHER_RING_BUFFER_PUSH((uint32_t)(semaphore_dest_address & 0xffffffffu));
+
             noc_semaphore_inc<true>(
                 semaphore_dest_address,
                 increment,

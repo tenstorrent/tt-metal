@@ -18,7 +18,7 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr);
 
     const uint32_t cur0 = *sem_ptr;
-    DPRINT << "rx_wait: enter sem@0x" << sem_addr << " exp=" << expected_value << " cur=" << cur0 << ENDL();
+    DPRINT << "rx_wait: enter sem@0x" << HEX() << sem_addr << " exp=" << expected_value << " cur=" << cur0 << ENDL();
 
     // Block here until the writer's atomic_inc arrives.
     noc_semaphore_wait(sem_ptr, expected_value);

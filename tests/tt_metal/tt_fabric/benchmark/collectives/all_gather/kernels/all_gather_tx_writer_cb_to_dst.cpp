@@ -73,6 +73,10 @@ void kernel_main() {
     const uint16_t s_hops = static_cast<uint16_t>(get_arg_val<uint32_t>(idx++));
     const uint32_t leg_mask = get_arg_val<uint32_t>(idx++);
 
+    constexpr uint32_t TAG_PAYLOAD = 0xEA000000u;
+    constexpr uint32_t TAG_SEM = 0xEB000000u;
+    constexpr uint32_t BR_W = 0x01, BR_E = 0x02, BR_N = 0x04, BR_S = 0x08;
+
     DPRINT << "P0 pre: hops E/W/N/S=" << (uint32_t)e_hops << "/" << (uint32_t)w_hops << "/" << (uint32_t)n_hops << "/"
            << (uint32_t)s_hops << " leg_mask=" << leg_mask << ENDL();
 
@@ -116,24 +120,24 @@ void kernel_main() {
     //        << ENDL();
 
     if (use_W) {
-        DPRINT << "P2W open enter" << ENDL();
+        // DPRINT << "P2W open enter" << ENDL();
         conn_W.open<true>();
-        DPRINT << "P2W open ok" << ENDL();
+        // DPRINT << "P2W open ok" << ENDL();
     }
     if (use_E) {
-        DPRINT << "P2E open enter" << ENDL();
+        // DPRINT << "P2E open enter" << ENDL();
         conn_E.open<true>();
-        DPRINT << "P2E open ok" << ENDL();
+        // DPRINT << "P2E open ok" << ENDL();
     }
     if (use_N) {
-        DPRINT << "P2N open enter" << ENDL();
+        // DPRINT << "P2N open enter" << ENDL();
         conn_N.open<true>();
-        DPRINT << "P2N open ok" << ENDL();
+        // DPRINT << "P2N open ok" << ENDL();
     }
     if (use_S) {
-        DPRINT << "P2S open enter" << ENDL();
+        // DPRINT << "P2S open enter" << ENDL();
         conn_S.open<true>();
-        DPRINT << "P2S open ok" << ENDL();
+        // DPRINT << "P2S open ok" << ENDL();
     }
 
     // --- One-shot config dump ---
@@ -180,6 +184,9 @@ void kernel_main() {
             hdr_N->to_noc_unicast_write(NocUnicastCommandHeader{dest_noc_addr}, PAGE_SIZE);
             conn_N.send_payload_without_header_non_blocking_from_address(page_l1_addr, PAGE_SIZE);
             conn_N.send_payload_flush_non_blocking_from_address((uint32_t)hdr_N, sizeof(PACKET_HEADER_TYPE));
+
+            WATCHER_RING_BUFFER_PUSH(TAG_PAYLOAD | BR_N);
+            WATCHER_RING_BUFFER_PUSH(i);
         }
         // SOUTH trunk
         if (use_S) {
@@ -195,6 +202,9 @@ void kernel_main() {
             DPRINT << "S: payload queued" << ENDL();
             conn_S.send_payload_flush_non_blocking_from_address((uint32_t)hdr_S, sizeof(PACKET_HEADER_TYPE));
             DPRINT << "S: header sent" << ENDL();
+
+            WATCHER_RING_BUFFER_PUSH(TAG_PAYLOAD | BR_S);
+            WATCHER_RING_BUFFER_PUSH(i);
         }
         // WEST branch on source row
         if (use_W) {
@@ -206,6 +216,9 @@ void kernel_main() {
             hdr_W->to_noc_unicast_write(NocUnicastCommandHeader{dest_noc_addr}, PAGE_SIZE);
             conn_W.send_payload_without_header_non_blocking_from_address(page_l1_addr, PAGE_SIZE);
             conn_W.send_payload_flush_non_blocking_from_address((uint32_t)hdr_W, sizeof(PACKET_HEADER_TYPE));
+
+            WATCHER_RING_BUFFER_PUSH(TAG_PAYLOAD | BR_W);
+            WATCHER_RING_BUFFER_PUSH(i);
         }
         // EAST branch on source row
         if (use_E) {
@@ -223,6 +236,9 @@ void kernel_main() {
             DPRINT << "writer:E after send_payload_without_header_non_blocking_from_address" << i << ENDL();
             conn_E.send_payload_flush_non_blocking_from_address((uint32_t)hdr_E, sizeof(PACKET_HEADER_TYPE));
             DPRINT << "writer:E after send_payload_blocking_from_address" << i << ENDL();
+
+            WATCHER_RING_BUFFER_PUSH(TAG_PAYLOAD | BR_E);
+            WATCHER_RING_BUFFER_PUSH(i);
         }
         // --- Loopback on this chip: write to receiver core's DRAM via NoC-0 using RX coords ---
         // Build a NoC-0 address for the destination page at (rx_noc_x, rx_noc_y).
@@ -261,6 +277,9 @@ void kernel_main() {
         } else {
             conn_N.send_payload_blocking_from_address((uint32_t)hdr_N, sizeof(PACKET_HEADER_TYPE));
         }
+
+        WATCHER_RING_BUFFER_PUSH(TAG_SEM | BR_N);
+        WATCHER_RING_BUFFER_PUSH(sem_l1_addr);
     }
     if (use_S) {
         conn_S.wait_for_empty_write_slot();
@@ -273,6 +292,9 @@ void kernel_main() {
         } else {
             conn_S.send_payload_blocking_from_address((uint32_t)hdr_S, sizeof(PACKET_HEADER_TYPE));
         }
+
+        WATCHER_RING_BUFFER_PUSH(TAG_SEM | BR_S);
+        WATCHER_RING_BUFFER_PUSH(sem_l1_addr);
     }
     if (use_W) {
         conn_W.wait_for_empty_write_slot();
@@ -285,6 +307,9 @@ void kernel_main() {
         } else {
             conn_W.send_payload_blocking_from_address((uint32_t)hdr_W, sizeof(PACKET_HEADER_TYPE));
         }
+
+        WATCHER_RING_BUFFER_PUSH(TAG_SEM | BR_W);
+        WATCHER_RING_BUFFER_PUSH(sem_l1_addr);
     }
     if (use_E) {
         conn_E.wait_for_empty_write_slot();
@@ -297,6 +322,9 @@ void kernel_main() {
         } else {
             conn_E.send_payload_blocking_from_address((uint32_t)hdr_E, sizeof(PACKET_HEADER_TYPE));
         }
+
+        WATCHER_RING_BUFFER_PUSH(TAG_SEM | BR_E);
+        WATCHER_RING_BUFFER_PUSH(sem_l1_addr);
     }
 
     if (use_W) {

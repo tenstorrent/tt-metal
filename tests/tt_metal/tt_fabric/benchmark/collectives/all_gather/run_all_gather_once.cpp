@@ -285,12 +285,7 @@ Notes:
 
     // Writer kernel RT args (short): dst_base, rx_x, rx_y, sem_l1
     std::vector<uint32_t> writer_rt = {
-        (uint32_t)dst_buf->address(),
-        (uint32_t)rx_xy.x,
-        (uint32_t)rx_xy.y,
-        (uint32_t)gsem_done->address(),
-        1u  // sem_noc_index: match EDM noc=1
-    };
+        (uint32_t)dst_buf->address(), (uint32_t)rx_xy.x, (uint32_t)rx_xy.y, (uint32_t)gsem_done->address(), 0u};
 
     std::cerr << "[host] rx_xy=(" << (int)rx_xy.x << "," << (int)rx_xy.y << ") sem_l1=0x" << std::hex
               << gsem_done->address() << std::dec << "\n";
