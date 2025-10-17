@@ -3,14 +3,22 @@
 
 import math
 import os
+from typing import Optional
 
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-# Import validation framework
-from tt_transformers_v2.src.testing import get_validation_registry
-
 import ttnn
+
+# Import validation framework
+# from tt_transformers_v2.src.testing import get_validation_registry
+
+# TODO)) accumulate prompts that instructs AI to use testing tools to validate the model
+# -- where, how, what to add to validate_against decorator
+# -- get us to the debug iteration starting point!
+# -- almost automatically debugging a model by probing tensors and checking their pcc against reference tensors, through one prompt?!
+# -- TTTv2 could be agent-first toolkit! -- a set of prompts and libraries that users who comes to us with TTNN model can use to debug their model, add demo, add vllm, add perf checks, etc.
+
 
 # ============================================================================
 # Model Implementation by claude-4.5-sonnet thinking
