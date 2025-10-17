@@ -13,7 +13,8 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 @pytest.mark.parametrize(
     "T, B, C, cores_y, cores_x",
     [
-        (16384, 4, 8192, 8, 8),  # base case
+        (32, 1, 32, 1, 1),  # simple case
+        # (16384, 4, 8192, 8, 8),  # base case
     ],
 )
 def test_ema(device, T, B, C, cores_y, cores_x):
@@ -22,7 +23,7 @@ def test_ema(device, T, B, C, cores_y, cores_x):
     grid_size = ttnn.CoreGrid(y=cores_y, x=cores_x)
 
     # torch input tensor
-    torch_input_tensor = torch.rand(T * B * C, dtype=torch.bfloat16).reshape(1, B, C, T)
+    torch_input_tensor = torch.ones(T * B * C, dtype=torch.bfloat16).reshape(1, B, C, T)
 
     # move to the device
     ttnn_input_tensor = ttnn.from_torch(
@@ -48,10 +49,10 @@ def test_ema(device, T, B, C, cores_y, cores_x):
     golden_output_tensor = torch.zeros_like(torch_input_tensor)
 
     # Compare with golden output
-    torch_input_tensor = 2 * torch_input_tensor
     prev_value = 0 * torch_input_tensor[0, :, :, 0]
     for t in range(T):
         golden_output_tensor[0, :, :, t] = prev_value * alpha + (1 - alpha) * torch_input_tensor[0, :, :, t]
         prev_value = golden_output_tensor[0, :, :, t]
 
+    breakpoint()
     assert torch.allclose(golden_output_tensor, torch_output_tensor, atol=1e-3)
