@@ -165,10 +165,23 @@ public:
     }
 
     std::string common_flags(const Params& params) const override {
-        std::string cflags = "-mcpu=tt-bh -fno-rvtt-sfpu-replay ";
+        std::string cflags = params.core_type == HalProgrammableCoreType::TENSIX &&
+                                     params.processor_class == HalProcessorClassType::COMPUTE
+                                 ? "-mcpu=tt-bh-tensix "
+                                 : "-mcpu=tt-bh ";
+        cflags += "-fno-rvtt-sfpu-replay ";
         if (!(params.core_type == HalProgrammableCoreType::TENSIX &&
               params.processor_class == HalProcessorClassType::COMPUTE)) {
             cflags += "-fno-tree-loop-distribute-patterns ";  // don't use memcpy for cpy loops
+        }
+        // Unlike other core types, the stack on erisc0 is not dynamic because it's setup by base firmware.
+        // Trigger an error for kernels which may exceed the static stack usage to prevent difficult to debug issues
+        // 1536 B = stack size taken from the base firmware
+        // 72 B = Approx. stack usage at the time the kernel is launched
+        // 1536 B - 64 B = 1464 B free for kernel
+        if (params.core_type == HalProgrammableCoreType::ACTIVE_ETH && params.processor_id == 0 &&
+            blackhole::is_2_erisc_mode()) {
+            cflags += "-Werror=stack-usage=1464 ";
         }
         return cflags;
     }
@@ -347,7 +360,6 @@ void Hal::initialize_bh() {
     this->virtual_worker_start_x_ = VIRTUAL_TENSIX_START_X;
     this->virtual_worker_start_y_ = VIRTUAL_TENSIX_START_Y;
     this->eth_fw_is_cooperative_ = false;
-    this->intermesh_eth_links_enabled_ = false;  // Intermesh routing is not enabled on Blackhole
     this->virtualized_core_types_ = {
         dev_msgs::AddressableCoreType::TENSIX,
         dev_msgs::AddressableCoreType::ETH,
