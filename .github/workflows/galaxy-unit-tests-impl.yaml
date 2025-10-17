@@ -78,11 +78,12 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          { name: "Galaxy unit tests", arch: wormhole_b0, model: unit, timeout: 45, owner_id: XXXXX},  # Add owner
+          { name: "Galaxy unit tests", arch: wormhole_b0, model: unit, timeout: 45, owner_id: XXXXX},  # Add owner #See issue #29677
           { name: "Galaxy Fabric tests", arch: wormhole_b0, model: fabric, timeout: 40, owner_id: UJ45FEC7M},  # Allan Liu
           { name: "Galaxy Llama3-70b unit tests", arch: wormhole_b0, model: llama3-70b, timeout: 30, owner_id: U053W15B6JF, mlperf: true}, # Djordje Ivanovic
           { name: "Galaxy DRAM Prefetcher unit tests", arch: wormhole_b0, model: prefetcher, timeout: 30, owner_id: U044T8U8DEF}, # Johanna Rock, Yu Gao
           { name: "Galaxy distributed ops tests", arch: wormhole_b0, model: distributed-ops, timeout: 15, owner_id: U044T8U8DEF},  # Johanna Rock
+          { name: "Galaxy GPT-OSS unit tests", arch: wormhole_b0, model: gpt-oss, timeout: 30, owner_id: U06F3ER8X9A, mlperf: true},  # Stuti Raizada
           #{ name: "Galaxy distributed runtime tests", arch: wormhole_b0, model: distributed-runtime, timeout: 45, owner_id: U03NG0A5ND7}, # Aditya Saigal #See issue #26105
         ]
     name: ${{ matrix.test-group.name }}
@@ -110,7 +111,7 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@6b36ef848f5f66ba0ae6f883ff69b09692e48ce9
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}

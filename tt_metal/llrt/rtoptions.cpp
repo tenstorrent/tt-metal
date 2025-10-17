@@ -15,6 +15,10 @@
 #include "tt_stl/assert.hpp"
 #include <umd/device/tt_core_coordinates.h>
 
+#include <tt-logger/tt-logger.hpp>
+#include <tt_stl/assert.hpp>
+#include <umd/device/types/core_coordinates.hpp>
+
 using std::vector;
 
 namespace tt {
@@ -31,6 +35,10 @@ const char* RunTimeDebugFeatureNames[RunTimeDebugFeatureCount] = {
 
 const char* RunTimeDebugClassNames[RunTimeDebugClassCount] = {"N/A", "worker", "dispatch", "all"};
 
+constexpr auto TT_METAL_RUNTIME_ROOT_ENV_VAR = "TT_METAL_RUNTIME_ROOT";
+constexpr auto TT_METAL_KERNEL_PATH_ENV_VAR = "TT_METAL_KERNEL_PATH";
+// Set this var to change the cache dir.
+constexpr auto TT_METAL_CACHE_ENV_VAR = "TT_METAL_CACHE";
 // Used for demonstration purposes and will be removed in the future.
 // Env variable to override the core grid configuration
 constexpr auto TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE_ENV_VAR = "TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE";
@@ -41,6 +49,60 @@ std::string normalize_path(const char* path, const std::string& subdir = "") {
     std::filesystem::path p(path);
     if (!subdir.empty()) {
         p /= subdir;
+RunTimeOptions::RunTimeOptions() {
+// Default assume package install path
+#ifdef TT_METAL_INSTALL_ROOT
+    if (std::filesystem::is_directory(std::filesystem::path(TT_METAL_INSTALL_ROOT))) {
+        this->root_dir = std::filesystem::path(TT_METAL_INSTALL_ROOT).string();
+    }
+    log_debug(tt::LogMetal, "initial root_dir: {}", this->root_dir);
+#endif
+
+    // ENV Can Override
+    const char* root_dir_str = std::getenv(TT_METAL_RUNTIME_ROOT_ENV_VAR);
+    if (root_dir_str != nullptr) {
+        this->root_dir = std::string(root_dir_str);
+        log_debug(tt::LogMetal, "ENV override root_dir: {}", this->root_dir);
+    } else if (!g_root_dir.empty()) {
+        this->root_dir = g_root_dir;
+        log_debug(tt::LogMetal, "API override root_dir: {}", this->root_dir);
+    } else if (this->root_dir.empty()) {
+        // If the current working directory contains a "tt_metal/" directory,
+        // treat the current working directory as the repository root.
+        std::filesystem::path current_working_directory = std::filesystem::current_path();
+        std::filesystem::path tt_metal_subdirectory = current_working_directory / "tt_metal";
+        if (std::filesystem::is_directory(tt_metal_subdirectory)) {
+            this->root_dir = current_working_directory.string();
+            log_debug(tt::LogMetal, "current working directory fallback root_dir: {}", this->root_dir);
+        }
+    }
+
+    TT_FATAL(!this->root_dir.empty(), "Root Directory is not set.");
+
+    {
+        std::filesystem::path p(root_dir);
+        p /= "";  // ensures trailing slash, never duplicates
+        this->root_dir = p.string();
+    }
+
+    // Check if user has specified a cache path.
+    const char* cache_dir_str = std::getenv(TT_METAL_CACHE_ENV_VAR);
+    if (cache_dir_str != nullptr) {
+        this->is_cache_dir_env_var_set = true;
+        this->cache_dir_ = std::string(cache_dir_str) + "/tt-metal-cache/";
+    }
+
+    const char* kernel_dir_str = std::getenv(TT_METAL_KERNEL_PATH_ENV_VAR);
+    if (kernel_dir_str != nullptr) {
+        this->is_kernel_dir_env_var_set = true;
+        this->kernel_dir = std::string(kernel_dir_str) + "/";
+    }
+    this->system_kernel_dir = "/usr/share/tenstorrent/kernels/";
+
+    const char* custom_fabric_mesh_graph_desc_path_str = std::getenv("TT_MESH_GRAPH_DESC_PATH");
+    if (custom_fabric_mesh_graph_desc_path_str != nullptr) {
+        this->is_custom_fabric_mesh_graph_desc_path_set = true;
+        this->custom_fabric_mesh_graph_desc_path = std::string(custom_fabric_mesh_graph_desc_path_str);
     }
     p /= "";  // Ensures trailing slash
     return p.string();
@@ -189,6 +251,10 @@ RunTimeOptions::RunTimeOptions() :
         enable_fabric_telemetry = true;
     }
 
+    if (getenv("TT_FABRIC_PROFILE_RX_CH_FWD")) {
+        fabric_profiling_settings.enable_rx_ch_fwd = true;
+    }
+
     if (getenv("TT_METAL_FORCE_REINIT")) {
         force_context_reinit = true;
     }
@@ -206,8 +272,8 @@ RunTimeOptions::RunTimeOptions() :
         this->log_kernels_compilation_commands = true;
     }
 
-    if (getenv("TT_METAL_USE_MGD_2_0")) {
-        this->use_mesh_graph_descriptor_2_0 = true;
+    if (getenv("TT_METAL_USE_MGD_1_0")) {
+        this->use_mesh_graph_descriptor_1_0 = true;
     }
 
     const char* timeout_duration_for_operations_value = std::getenv("TT_METAL_OPERATION_TIMEOUT_SECONDS");
@@ -220,13 +286,7 @@ void RunTimeOptions::set_root_dir(const std::string& root_dir) {
     std::call_once(g_root_once, [&] { g_root_dir = root_dir; });
 }
 
-const std::string& RunTimeOptions::get_root_dir() const {
-    if (!this->is_root_dir_specified()) {
-        TT_THROW("Root Directory is unspecified.");
-    }
-
-    return root_dir;
-}
+const std::string& RunTimeOptions::get_root_dir() const { return root_dir; }
 
 const std::string& RunTimeOptions::get_cache_dir() const {
     if (!this->is_cache_dir_specified()) {
@@ -932,6 +992,52 @@ void RunTimeOptions::ParseWatcherEnv() {
         TT_ASSERT(
             watcher_disabled_features.find(watcher_noc_sanitize_str) == watcher_disabled_features.end(),
             "TT_METAL_WATCHER_ENABLE_NOC_SANITIZE_LINKED_TRANSACTION requires TT_METAL_WATCHER_DISABLE_NOC_SANITIZE=0");
+    }
+}
+
+void RunTimeOptions::ParseInspectorEnv() {
+    const char* inspector_enable_str = getenv("TT_METAL_INSPECTOR");
+    if (inspector_enable_str != nullptr) {
+        inspector_settings.enabled = true;
+        if (strcmp(inspector_enable_str, "0") == 0) {
+            inspector_settings.enabled = false;
+        }
+    }
+
+    const char* inspector_log_path_str = getenv("TT_METAL_INSPECTOR_LOG_PATH");
+    if (inspector_log_path_str != nullptr) {
+        inspector_settings.log_path = std::filesystem::path(inspector_log_path_str);
+    } else {
+        inspector_settings.log_path = std::filesystem::path(get_root_dir()) / "generated/inspector";
+    }
+
+    const char* inspector_initialization_is_important_str = getenv("TT_METAL_INSPECTOR_INITIALIZATION_IS_IMPORTANT");
+    if (inspector_initialization_is_important_str != nullptr) {
+        inspector_settings.initialization_is_important = true;
+        if (strcmp(inspector_initialization_is_important_str, "0") == 0) {
+            inspector_settings.initialization_is_important = false;
+        }
+    }
+
+    const char* inspector_warn_on_write_exceptions_str = getenv("TT_METAL_INSPECTOR_WARN_ON_WRITE_EXCEPTIONS");
+    if (inspector_warn_on_write_exceptions_str != nullptr) {
+        inspector_settings.warn_on_write_exceptions = true;
+        if (strcmp(inspector_warn_on_write_exceptions_str, "0") == 0) {
+            inspector_settings.warn_on_write_exceptions = false;
+        }
+    }
+
+    const char* inspector_rpc_server_address_str = getenv("TT_METAL_INSPECTOR_RPC_SERVER_ADDRESS");
+    if (inspector_rpc_server_address_str != nullptr) {
+        inspector_settings.rpc_server_address = std::string(inspector_rpc_server_address_str);
+    }
+
+    const char* inspector_rpc_str = getenv("TT_METAL_INSPECTOR_RPC");
+    if (inspector_rpc_str != nullptr) {
+        inspector_settings.rpc_server_enabled = true;
+        if (std::strncmp(inspector_rpc_str, "0", 1) == 0) {
+            inspector_settings.rpc_server_enabled = false;
+        }
     }
 }
 
