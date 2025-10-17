@@ -263,16 +263,21 @@ int main(int argc, char* argv[]) {
 
     AsicTopology missing_asic_topology = {};
     bool first_iter = true;
+    bool links_reset = false;
     while (missing_asic_topology.size() or first_iter) {
         missing_asic_topology = validate_connectivity(input_args, physical_system_descriptor);
-        std::cout << "Resetting Ethernet Links" << std::endl;
+        if (missing_asic_topology.size() > 0) {
+            links_reset = true;
+        }
         reset_ethernet_links(physical_system_descriptor, missing_asic_topology);
-        std::cout << "Running Physical Discovery" << std::endl;
         physical_system_descriptor.run_discovery(true);
-        std::cout << "Physical Discovery Complete" << std::endl;
         first_iter = false;
     }
 
+    if (links_reset) {
+        std::cout << "Ethernet Links were reset, exiting test early" << std::endl;
+        return 0;
+    }
     eth_connections_healthy = generate_link_metrics(
         physical_system_descriptor,
         input_args.num_iterations,
