@@ -254,7 +254,6 @@ class Generator:
         toks = self.model.process_output_prefill(
             tt_out_trace, last_token_idx=last_token_idx, tt_out_logits_saved=tt_out_logits_saved
         )
-        print(toks)
         return toks
 
     def _capture_trace_prefill(
