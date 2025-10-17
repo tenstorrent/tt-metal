@@ -68,7 +68,7 @@ inline void _llk_unpack_untilize_init_(
     const std::uint32_t tile_size,
     const std::uint32_t face_r_dim                 = FACE_R_DIM,
     [[maybe_unused]] const std::uint32_t num_faces = 4,
-    const bool include_setup_calls                 = true)
+    const bool include_setup_calls                 = false)
 {
     if (include_setup_calls)
     {
