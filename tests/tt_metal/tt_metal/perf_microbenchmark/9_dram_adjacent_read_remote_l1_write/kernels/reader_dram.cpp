@@ -91,7 +91,7 @@ void kernel_main() {
             // noc_async_read_tile_dram_sharded_with_state_with_trid(
             //     src_base_addr, src_read_addr, l1_write_addr, curr_block_trid);
             noc_async_read_tile_dram_sharded_with_state_with_trid(
-                input_addr, src_read_addr, l1_write_addr, curr_block_trid);
+                src_base_addr, src_read_addr, l1_write_addr, curr_block_trid);
             src_read_addr += page_size;
             l1_write_addr += page_size;
         }
