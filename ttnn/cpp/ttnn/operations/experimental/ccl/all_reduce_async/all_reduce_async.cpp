@@ -170,7 +170,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
     const std::vector<GlobalSemaphore>& ag_global_semaphores,
     ttnn::operations::reduction::ReduceType math_op,
     const std::optional<ttnn::MemoryConfig>& memory_config,
-    ttnn::ccl::Topology topology,
+    const std::optional<ttnn::ccl::Topology> topology,
     const std::optional<size_t> num_preferred_links,
     std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt) {
     MemoryConfig out_memory_config = memory_config.value_or(input_tensor.memory_config());
@@ -281,7 +281,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
 
 ttnn::Tensor ExecuteAllReduceAsync::invoke(
     const ttnn::Tensor& input_tensor,
-    const uint32_t cluster_axis,
+    const std::optional<uint32_t> cluster_axis,
     const MeshDevice& mesh_device,
     const std::optional<std::vector<GlobalSemaphore>>& barrier_semaphores,
     const std::optional<std::vector<GlobalSemaphore>>& rs_global_semaphores,
@@ -293,28 +293,10 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
     std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt) {
     MemoryConfig out_memory_config = memory_config.value_or(input_tensor.memory_config());
     bool input_is_sharded = input_tensor.memory_config().is_sharded();
-    const auto& mesh_view = mesh_device.get_view();
-    std::vector<IDevice*> devices =
-        (cluster_axis == 0) ? mesh_view.get_devices_on_column(0) : mesh_view.get_devices_on_row(0);
-    uint32_t dim = finding_scatter_dim(input_tensor.padded_shape(), input_tensor.layout(), devices.size());
+    uint32_t num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
+    uint32_t dim = finding_scatter_dim(input_tensor.padded_shape(), input_tensor.layout(), num_devices);
     auto padded_tensor = input_tensor;
     auto initial_shape = input_tensor.logical_shape();
-    // force RS+AG by using dim 3 after padding
-    // temporary before adding support for RS dim 2
-    if (dim == 2 && input_tensor.layout() == Layout::TILE && input_tensor.dtype() != DataType::BFLOAT8_B) {
-        dim = 3;
-        uint32_t multiple = input_tensor.tensor_spec().tile().get_tile_shape()[1] * devices.size();
-        uint32_t next_aligned_tile = tt::div_up(input_tensor.padded_shape()[3], multiple) * multiple;
-        // pad with zeros to next aligned tile size
-        std::array<uint32_t, 4> new_padded_shape = {
-            input_tensor.padded_shape()[0],
-            input_tensor.padded_shape()[1],
-            input_tensor.padded_shape()[2],
-            input_tensor.padded_shape()[3]};
-        new_padded_shape[3] = next_aligned_tile;
-        padded_tensor =
-            ttnn::pad(input_tensor, tt::tt_metal::Array4D(new_padded_shape), tt::tt_metal::Array4D({0, 0, 0, 0}), 0);
-    }
 
     // convert sharded tensors to interleaved because the shard specs are not compatible with composite intermediates
     bool change_mem_config = input_is_sharded;
@@ -349,7 +331,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
         bool is_float32 = (input_tensor.dtype() == DataType::FLOAT32);
         auto sum_tensor =
             is_float32
-                ? local_sum_float32(gather_tensor, static_cast<int>(composite_dim), devices.size(), out_memory_config)
+                ? local_sum_float32(gather_tensor, static_cast<int>(composite_dim), num_devices, out_memory_config)
                 : local_sum(gather_tensor, static_cast<int>(composite_dim), out_memory_config);
         gather_tensor.deallocate();
 
