@@ -406,6 +406,7 @@ def run_all_reduce_with_mesh_tensor_along_row(
                     subdevice_id=worker_sub_device_id,
                     num_links=num_links,
                     memory_config=mem_config,
+                    topology=ttnn.Topology.Linear,
                 )
             else:
                 logger.info("Using experimental all-reduce implementation")
