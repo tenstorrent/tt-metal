@@ -12,6 +12,7 @@ from loguru import logger
 from tracy.common import PROFILER_LOGS_DIR
 from tracy.process_model_log import get_latest_ops_log_filename
 
+
 def compare_ops_logs(python_ops_perf_report=None, cpp_ops_perf_report=None):
     if not python_ops_perf_report:
         python_ops_perf_report = get_latest_ops_log_filename()
