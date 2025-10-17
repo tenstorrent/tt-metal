@@ -123,8 +123,6 @@ class TTOftNet:
         # Normalize by mean and std-dev
         input_tensor = input_tensor - self.mean
         input_tensor = ttnn.div(input_tensor, self.std)
-        if input_tensor.layout == ttnn.TILE_LAYOUT:
-            input_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return input_tensor
 
     def forward_lateral_layers(self, device, feats8, feats16, feats32):
