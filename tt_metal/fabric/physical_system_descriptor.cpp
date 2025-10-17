@@ -258,7 +258,7 @@ void PhysicalSystemDescriptor::run_local_discovery() {
     }
     const auto& cluster_to_use = get_cluster();
     auto target_devices = cluster_to_use->get_target_mmio_device_ids();
-    cluster_desc_ = tt::umd::Cluster::create_cluster_descriptor();
+    cluster_desc_ = tt::umd::Cluster::create_cluster_descriptor("", {}, umd::IODeviceType::PCIe);
     const auto& chip_unique_ids = cluster_desc_->get_chip_unique_ids();
     const auto& eth_connections = cluster_desc_->get_ethernet_connections();
     auto cross_host_eth_connections = cluster_desc_->get_ethernet_connections_to_remote_devices();

@@ -243,7 +243,7 @@ static void telemetry_thread(
             auto distributed_context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
             hal = create_hal(cluster);
             psd = std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(
-                cluster, distributed_context, hal.get(), rtoptions);
+                distributed_context, hal.get(), rtoptions, cluster);
             topology_translation = std::make_unique<TopologyHelper>(cluster, psd);
             log_info(tt::LogAlways, "Created cluster, physical system descriptor, and HAL");
 
