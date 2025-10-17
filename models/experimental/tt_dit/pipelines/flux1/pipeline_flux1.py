@@ -163,7 +163,7 @@ class Flux1Pipeline:
                 tuple(submesh_device.shape),
             ):
                 logger.info(f"Loading transformer weights from PyTorch state dict")
-                tt_transformer.load_state_dict(torch_transformer.state_dict())
+                tt_transformer.load_torch_state_dict(torch_transformer.state_dict())
 
             self.transformers.append(tt_transformer)
             ttnn.synchronize_device(submesh_device)
@@ -207,7 +207,17 @@ class Flux1Pipeline:
                 eos_token_id=2,  # default EOS token ID for CLIP
             )
 
-            self._text_encoder_1.load_state_dict(torch_text_encoder_1.state_dict())
+            # self._text_encoder_1.load_torch_state_dict(torch_text_encoder_1.state_dict())
+            if not cache.initialize_from_cache(
+                self._text_encoder_1,
+                torch_text_encoder_1,
+                model_name,
+                "text_encoder_1",
+                encoder_parallel_config,
+                tuple(encoder_device.shape),
+            ):
+                logger.info(f"Loading text encoder 1 weights from PyTorch state dict")
+                self._text_encoder_1.load_torch_state_dict(torch_text_encoder_1.state_dict())
 
         if enable_t5_text_encoder:
             if use_torch_t5_text_encoder:
@@ -244,7 +254,7 @@ class Flux1Pipeline:
                     tuple(encoder_device.shape),
                 ):
                     logger.info(f"Loading T5 text encoder weights from PyTorch state dict")
-                    self._t5_text_encoder.load_state_dict(torch_t5_text_encoder.state_dict())
+                    self._t5_text_encoder.load_torch_state_dict(torch_t5_text_encoder.state_dict())
         else:
             self._t5_text_encoder = None
 
@@ -623,8 +633,11 @@ class Flux1Pipeline:
                 # Sync because we don't pass a persistent buffer or a barrier semaphore.
                 ttnn.synchronize_device(self.vae_device)
 
-                tt_latents = self._ccl_managers[self.vae_submesh_idx].all_gather(
-                    tt_latents_step_list[self.vae_submesh_idx], dim=1, mesh_axis=sp_axis
+                tt_latents = self._ccl_managers[self.vae_submesh_idx].all_gather_persistent_buffer(
+                    tt_latents_step_list[self.vae_submesh_idx],
+                    dim=1,
+                    mesh_axis=sp_axis,
+                    use_hyperparams=True,
                 )
 
                 torch_latents = ttnn.to_torch(ttnn.get_device_tensors(tt_latents)[0])

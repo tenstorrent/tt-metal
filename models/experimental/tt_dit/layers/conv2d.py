@@ -9,7 +9,7 @@ from ..parallel.config import vae_all_gather, estimate_mesh_axis
 from .module import Module, Parameter
 
 
-# TODO: Add support for coll, row and Sequence parallel conv2d. SP would use a base of col or row parallel
+# TODO: Add support for coll and row parallel conv2d
 class Conv2d(Module):
     """
     Conv2d with support for tensor parallelism. Data and Seqence Parallelism TBD.

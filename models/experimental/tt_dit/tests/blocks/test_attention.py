@@ -19,39 +19,27 @@ from ...utils.tensor import bf16_tensor
 
 
 @pytest.mark.parametrize(
-    ("mesh_device", "sp_axis", "tp_axis", "num_links"),
+    ("mesh_device", "sp_axis", "tp_axis"),
     [
-        pytest.param((1, 2), 0, 1, 1, id="1x2sp0tp1"),
-        pytest.param((2, 1), 1, 0, 1, id="2x1sp1tp0"),
-        pytest.param((2, 1), 0, 1, 1, id="2x1sp0tp1"),
-        pytest.param((2, 2), 0, 1, 1, id="2x2sp0tp1"),
-        pytest.param((2, 2), 1, 0, 1, id="2x2sp1tp0"),
-        pytest.param((2, 4), 0, 1, 1, id="2x4sp0tp1"),
-        pytest.param((2, 4), 1, 0, 1, id="2x4sp1tp0"),
-        pytest.param((4, 4), 0, 1, 4, id="4x4sp0tp1"),
+        pytest.param((1, 1), 0, 1, id="1x1sp0tp1"),
+        pytest.param((1, 2), 0, 1, id="1x2sp0tp1"),
+        pytest.param((1, 2), 1, 0, id="1x2sp1tp0"),
+        pytest.param((2, 1), 0, 1, id="2x1sp0tp1"),
+        pytest.param((2, 1), 1, 0, id="2x1sp1tp0"),
+        pytest.param((2, 2), 0, 1, id="2x2sp0tp1"),
+        pytest.param((2, 2), 1, 0, id="2x2sp1tp0"),
+        pytest.param((2, 4), 0, 1, id="2x4sp0tp1"),
+        pytest.param((2, 4), 1, 0, id="2x4sp1tp0"),
+        pytest.param((4, 8), 0, 1, id="4x8sp0tp1"),
+        pytest.param((4, 8), 1, 0, id="4x8sp1tp0"),
     ],
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize(
-    (
-        # model
-        "query_dim",
-        "added_kv_proj_dim",
-        "head_dim",
-        "num_heads",
-        "out_dim",
-        "context_pre_only",
-        "pre_only",
-        # inputs
-        "batch_size",
-        "spatial_seq_len",
-        "prompt_seq_len",
-    ),
+    ("batch_size", "spatial_seq_len", "prompt_seq_len"),
     [
-        pytest.param(3072, 3072, 128, 24, 3072, False, False, 1, 4096, 512, id="flux1_joint"),
-        # flux1_single hangs, but it is currently not used, since we do not merge the spatial and
-        # prompt sequences in the transformer.
-        # pytest.param(3072, 0, 128, 24, 3072, True, True, 1, 4096 + 512, 0, id="flux1_single"),
+        (1, 4096, 512),
+        # (1, 4096 + 512, 0),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
@@ -60,19 +48,20 @@ def test_attention_flux(
     mesh_device: ttnn.MeshDevice,
     sp_axis: int,
     tp_axis: int,
-    num_links: int,
-    query_dim: int,
-    added_kv_proj_dim: int,
-    head_dim: int,
-    num_heads: int,
-    out_dim: int,
-    context_pre_only: bool,
-    pre_only: bool,
     batch_size: int,
     spatial_seq_len: int,
     prompt_seq_len: int,
 ) -> None:
     torch.manual_seed(0)
+
+    query_dim = 3072
+    added_kv_proj_dim = 3072
+    head_dim = 128
+    num_heads = 24
+    out_dim = 3072
+    context_pre_only = prompt_seq_len == 0
+    pre_only = prompt_seq_len == 0
+    batch_size = 1
 
     joint_attention = added_kv_proj_dim != 0
 
@@ -96,7 +85,7 @@ def test_attention_flux(
 
     ccl_manager = CCLManager(
         mesh_device=mesh_device,
-        num_links=num_links,
+        num_links=1,
         topology=ttnn.Topology.Linear,
     )
 

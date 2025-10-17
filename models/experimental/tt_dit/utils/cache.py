@@ -70,7 +70,7 @@ def initialize_from_cache(tt_model, torch_model, model_name, subfolder, parallel
             logger.info(
                 f"Cache does not exist. Creating cache: {cache_path} and loading {subfolder} from PyTorch state dict"
             )
-            tt_model.load_state_dict(torch_model.state_dict())
+            tt_model.load_torch_state_dict(torch_model.state_dict())
             save_cache_dict(tt_model.to_cached_state_dict(cache_path), cache_path)
         return True
     return False

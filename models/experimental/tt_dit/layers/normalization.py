@@ -282,9 +282,9 @@ class DistributedLayerNorm(Module):
             )
 
     def forward(self, x: ttnn.Tensor, compute_kernel_config=None) -> ttnn.Tensor:
-        assert self.weight is not None and self.bias is not None, (
-            "weight and bias must be initialized before calling forward"
-        )
+        assert (
+            self.weight is not None and self.bias is not None
+        ), "weight and bias must be initialized before calling forward"
         stats = ttnn.layer_norm_pre_all_gather(x)
 
         if tuple(self.mesh_device.shape)[self.mesh_axis] > 1:
@@ -366,9 +366,9 @@ class GroupNorm(Module):
         )
 
         # Assert group norm parameters
-        assert self.num_channels % 32 == 0 == self.num_channels % self.num_groups, (
-            f"num_channels must be divisible by 32 and num_groups"
-        )
+        assert (
+            self.num_channels % 32 == 0 == self.num_channels % self.num_groups
+        ), f"num_channels must be divisible by 32 and num_groups"
 
         weight_shape = [
             self.num_devices,

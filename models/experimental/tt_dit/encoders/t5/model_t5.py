@@ -92,12 +92,12 @@ class T5Encoder(Module):
             mesh_device=self.mesh_device,
         )
 
-    def load_state_dict(self, state_dict):
-        self.token_embeddings.load_state_dict(state_dict)
-        self.encoder.load_state_dict(substate(state_dict, "encoder"))
-        self.final_layer_norm.load_state_dict(substate(state_dict, "encoder.final_layer_norm"))
+    def load_torch_state_dict(self, state_dict):
+        self.token_embeddings.load_torch_state_dict(state_dict)
+        self.encoder.load_torch_state_dict(substate(state_dict, "encoder"))
+        self.final_layer_norm.load_torch_state_dict(substate(state_dict, "encoder.final_layer_norm"))
 
-    def __call__(
+    def forward(
         self, prompt: ttnn.Tensor, device: ttnn.Device, *, attention_mask: ttnn.Tensor | None = None
     ) -> ttnn.Tensor:
         embeddings, position_bias = self.token_embeddings(prompt, device)
@@ -132,13 +132,13 @@ class T5Stack(Module):
             for _ in range(self.config.num_hidden_layers)
         )
 
-    def load_state_dict(self, state_dict):
+    def load_torch_state_dict(self, state_dict):
         layer_states = indexed_substates(state_dict, "block")
 
         for idx, (layer, layer_state) in enumerate(zip(self.layers, layer_states)):
-            layer.load_state_dict(layer_state)
+            layer.load_torch_state_dict(layer_state)
 
-    def __call__(
+    def forward(
         self,
         hidden_states: ttnn.Tensor,
         position_bias: ttnn.Tensor,
@@ -175,11 +175,11 @@ class T5FF(Module):
 
         self.dense_gated_dense = T5DenseGatedActDense(config, mesh_device, ccl_manager, parallel_config)
 
-    def load_state_dict(self, state_dict):
-        self.layer_norm.load_state_dict(substate(state_dict, "layer_norm"))
-        self.dense_gated_dense.load_state_dict(substate(state_dict, "DenseReluDense"))
+    def load_torch_state_dict(self, state_dict):
+        self.layer_norm.load_torch_state_dict(substate(state_dict, "layer_norm"))
+        self.dense_gated_dense.load_torch_state_dict(substate(state_dict, "DenseReluDense"))
 
-    def __call__(
+    def forward(
         self, hidden_states: ttnn.Tensor, ccl_manager: CCLManager, parallel_config: EncoderParallelConfig
     ) -> ttnn.Tensor:
         normalized_hidden_states = self.layer_norm(hidden_states)
@@ -224,12 +224,12 @@ class T5DenseGatedActDense(Module):
             ccl_manager=self.ccl_manager,
         )
 
-    def load_state_dict(self, state_dict):
-        self.wi0.load_state_dict({"weight": state_dict["wi_0.weight"]})
-        self.wi1.load_state_dict({"weight": state_dict["wi_1.weight"]})
-        self.wo.load_state_dict({"weight": state_dict["wo.weight"]})
+    def load_torch_state_dict(self, state_dict):
+        self.wi0.load_torch_state_dict({"weight": state_dict["wi_0.weight"]})
+        self.wi1.load_torch_state_dict({"weight": state_dict["wi_1.weight"]})
+        self.wo.load_torch_state_dict({"weight": state_dict["wo.weight"]})
 
-    def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
+    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         # breakpoint()
         gelu = new_gelu_activation(self.wi0(x))
         linear = self.wi1(x)
@@ -279,11 +279,11 @@ class T5EncoderLayer(Module):
         self.self_attn = T5Attention(config, mesh_device, ccl_manager, parallel_config)
         self.ff = T5FF(config, mesh_device, ccl_manager, parallel_config)
 
-    def load_state_dict(self, state_dict):
-        self.self_attn.load_state_dict(substate(state_dict, "layer.0"))
-        self.ff.load_state_dict(substate(state_dict, "layer.1"))
+    def load_torch_state_dict(self, state_dict):
+        self.self_attn.load_torch_state_dict(substate(state_dict, "layer.0"))
+        self.ff.load_torch_state_dict(substate(state_dict, "layer.1"))
 
-    def __call__(self, hidden_states: ttnn.Tensor, position_bias: ttnn.Tensor) -> ttnn.Tensor:
+    def forward(self, hidden_states: ttnn.Tensor, position_bias: ttnn.Tensor) -> ttnn.Tensor:
         attn_output = self.self_attn(
             hidden_states,
             position_bias=position_bias,
@@ -353,15 +353,15 @@ class T5Attention(Module):
             mesh_device=self.mesh_device,
         )
 
-    def load_state_dict(self, state_dict):
-        self.q_proj.load_state_dict(substate(state_dict, "SelfAttention.q"))
-        self.k_proj.load_state_dict(substate(state_dict, "SelfAttention.k"))
-        self.v_proj.load_state_dict(substate(state_dict, "SelfAttention.v"))
-        self.o_proj.load_state_dict(substate(state_dict, "SelfAttention.o"))
+    def load_torch_state_dict(self, state_dict):
+        self.q_proj.load_torch_state_dict(substate(state_dict, "SelfAttention.q"))
+        self.k_proj.load_torch_state_dict(substate(state_dict, "SelfAttention.k"))
+        self.v_proj.load_torch_state_dict(substate(state_dict, "SelfAttention.v"))
+        self.o_proj.load_torch_state_dict(substate(state_dict, "SelfAttention.o"))
 
-        self.layer_norm.load_state_dict(substate(state_dict, "layer_norm"))
+        self.layer_norm.load_torch_state_dict(substate(state_dict, "layer_norm"))
 
-    def __call__(
+    def forward(
         self,
         hidden_states: ttnn.Tensor,
         position_bias: ttnn.Tensor,
@@ -507,7 +507,7 @@ class RelativeTextEmbeddings(Module):
             cache_dict["relative_attention_bias_weights"], device=self.mesh_device
         )
 
-    def load_state_dict(self, state_dict):
+    def load_torch_state_dict(self, state_dict):
         self.token_embedding_weights = bf16_tensor(
             state_dict["encoder.embed_tokens.weight"], device=self.mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT
         )
@@ -517,7 +517,7 @@ class RelativeTextEmbeddings(Module):
             device=self.mesh_device,
         )
 
-    def __call__(self, prompt: ttnn.Tensor, device: ttnn.Device) -> ttnn.Tensor:
+    def forward(self, prompt: ttnn.Tensor, device: ttnn.Device) -> ttnn.Tensor:
         input_embeddings = ttnn.embedding(prompt, self.token_embedding_weights, layout=ttnn.TILE_LAYOUT)
         position_bias = _compute_relative_position_bias(
             seq_length=prompt.shape[-1],

@@ -2,10 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from time import time
+
 import diffusers.models.transformers.transformer_flux
 import pytest
 import torch
 import ttnn
+from loguru import logger
 
 from ...blocks.transformer_block import TransformerBlock
 from ...models.transformers.transformer_motif import convert_motif_transformer_block_state
@@ -19,26 +22,24 @@ from ...utils.tensor import bf16_tensor, bf16_tensor_2dshard
 
 
 @pytest.mark.parametrize(
-    ("mesh_device", "submesh_shape", "sp_axis", "tp_axis", "num_links"),
+    ("mesh_device", "submesh_shape", "sp_axis", "tp_axis", "num_links", "mesh_id"),
     [
-        pytest.param((2, 4), (1, 2), 0, 1, 1, id="1x2sp0tp1"),
-        pytest.param((2, 4), (2, 1), 1, 0, 1, id="2x1sp1tp0"),
-        pytest.param((2, 4), (2, 2), 0, 1, 1, id="2x2sp0tp1"),
-        pytest.param((2, 4), (2, 2), 1, 0, 1, id="2x2sp1tp0"),
-        pytest.param((2, 4), (2, 4), 0, 1, 1, id="2x4sp0tp1"),
-        pytest.param((2, 4), (2, 4), 1, 0, 1, id="2x4sp1tp0"),
-        pytest.param((4, 8), (4, 4), 0, 1, 4, id="4x4sp0tp1"),
+        pytest.param((1, 8), (1, 8), 0, 1, 1, "1x8sp0tp1", id="1x8sp0tp1"),
+        pytest.param((2, 4), (2, 4), 0, 1, 1, "2x4sp0tp1", id="2x4sp0tp1"),
+        pytest.param((2, 4), (2, 4), 1, 0, 1, "2x4sp1tp0", id="2x4sp1tp0"),
+        pytest.param((4, 8), (4, 8), 0, 1, 4, "4x8sp0tp1", id="4x8sp0tp1"),
+        pytest.param((4, 8), (4, 8), 1, 0, 4, "4x8sp1tp0", id="4x8sp1tp0"),
     ],
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize(
     ("batch_size", "spatial_seq_len", "prompt_seq_len"),
     [
-        (1, 4096, 512),  # Flux.1 1024x1024
+        (1, 4096, 512),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
-def test_flux(
+def test_transformer_block_flux(
     *,
     mesh_device: ttnn.MeshDevice,
     submesh_shape: tuple[int, int],
@@ -48,6 +49,8 @@ def test_flux(
     batch_size: int,
     spatial_seq_len: int,
     prompt_seq_len: int,
+    mesh_id: str,
+    is_ci_env: bool,
 ) -> None:
     torch.manual_seed(0)
 
@@ -116,14 +119,38 @@ def test_flux(
             spatial, prompt, temb=time_embed, image_rotary_emb=(rope_cos, rope_sin)
         )
 
-    tt_spatial_out, tt_prompt_out = tt_model.forward(
-        tt_spatial,
-        tt_prompt,
-        tt_time_embed,
-        spatial_sequence_length=spatial_seq_len,
-        spatial_rope=(tt_spatial_rope_cos, tt_spatial_rope_sin),
-        prompt_rope=(tt_prompt_rope_cos, tt_prompt_rope_sin),
-    )
+    if not is_ci_env:
+        try:
+            from tracy import signpost
+
+            signpost("caching")
+            tt_spatial_out, tt_prompt_out = tt_model.forward(
+                tt_spatial,
+                tt_prompt,
+                tt_time_embed,
+                spatial_sequence_length=spatial_seq_len,
+                spatial_rope=(tt_spatial_rope_cos, tt_spatial_rope_sin),
+                prompt_rope=(tt_prompt_rope_cos, tt_prompt_rope_sin),
+            )
+
+            signpost("performance")
+        except ImportError:
+            logger.info("Tracy profiler not available, continuing without profiling")
+
+    itr = 1
+    start = time()
+    for _ in range(itr):
+        tt_spatial_out, tt_prompt_out = tt_model.forward(
+            tt_spatial,
+            tt_prompt,
+            tt_time_embed,
+            spatial_sequence_length=spatial_seq_len,
+            spatial_rope=(tt_spatial_rope_cos, tt_spatial_rope_sin),
+            prompt_rope=(tt_prompt_rope_cos, tt_prompt_rope_sin),
+        )
+
+    ttnn.synchronize_device(submesh_device)
+    logger.info(f"Time taken for {mesh_id}: {(time() - start) * 1000 / itr} ms")
 
     tt_spatial_torch = tensor.to_torch(tt_spatial_out, mesh_axes=[None, sp_axis, tp_axis])
     assert_quality(torch_spatial, tt_spatial_torch, pcc=0.99998, relative_rmse=0.006)

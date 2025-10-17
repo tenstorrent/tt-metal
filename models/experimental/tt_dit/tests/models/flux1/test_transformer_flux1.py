@@ -12,7 +12,6 @@ from loguru import logger
 from ....models.transformers.transformer_flux1 import (
     Flux1SingleTransformerBlock,
     Flux1Transformer,
-    Flux1TransformerBlock,
 )
 from ....parallel.config import DiTParallelConfig, ParallelFactor
 from ....parallel.manager import CCLManager
@@ -51,6 +50,7 @@ def test_single_transformer_block(
     prompt_seq_len: int,
     spatial_seq_len: int,
     id: str,
+    is_ci_env: bool,
 ) -> None:
     submesh_device = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
     sp_factor = tuple(submesh_device.shape)[sp_axis]
@@ -93,7 +93,7 @@ def test_single_transformer_block(
         parallel_config=parallel_config,
         padding_config=padding_config,
     )
-    tt_model.load_state_dict(torch_model.state_dict())
+    tt_model.load_torch_state_dict(torch_model.state_dict())
 
     torch.manual_seed(0)
     combined = torch.randn([batch_size, prompt_seq_len + spatial_seq_len, inner_dim])
@@ -118,22 +118,23 @@ def test_single_transformer_block(
             image_rotary_emb=(rope_cos, rope_sin),
         )
 
-    try:
-        from tracy import signpost
+    if not is_ci_env:
+        try:
+            from tracy import signpost
 
-        signpost("caching")
-        tt_spatial_out, tt_prompt_out = tt_model.forward(
-            spatial=tt_spatial,
-            prompt=tt_prompt,
-            time_embed=tt_time_embed,
-            spatial_rope=(tt_spatial_rope_cos, tt_spatial_rope_sin),
-            prompt_rope=(tt_prompt_rope_cos, tt_prompt_rope_sin),
-            spatial_sequence_length=spatial_seq_len,
-        )
+            signpost("caching")
+            tt_spatial_out, tt_prompt_out = tt_model.forward(
+                spatial=tt_spatial,
+                prompt=tt_prompt,
+                time_embed=tt_time_embed,
+                spatial_rope=(tt_spatial_rope_cos, tt_spatial_rope_sin),
+                prompt_rope=(tt_prompt_rope_cos, tt_prompt_rope_sin),
+                spatial_sequence_length=spatial_seq_len,
+            )
 
-        signpost("performance")
-    except ImportError:
-        logger.info("Tracy profiler not available, continuing without profiling")
+            signpost("performance")
+        except ImportError:
+            logger.info("Tracy profiler not available, continuing without profiling")
 
     itr = 1
     start = time()
@@ -167,148 +168,6 @@ def test_single_transformer_block(
     tt_combined_torch = torch.concat([tt_prompt_torch, tt_spatial_torch], dim=1)
 
     assert_quality(torch_combined, tt_combined_torch, pcc=0.99959, relative_rmse=6.3)
-
-
-@pytest.mark.parametrize(
-    ("mesh_device", "submesh_shape", "sp_axis", "tp_axis", "num_links", "id"),
-    [
-        pytest.param((1, 8), (1, 8), 0, 1, 1, "1x8sp0tp1", id="1x8sp0tp1"),
-        pytest.param((2, 4), (2, 4), 0, 1, 1, "2x4sp0tp1", id="2x4sp0tp1"),
-        pytest.param((2, 4), (2, 4), 1, 0, 1, "2x4sp1tp0", id="2x4sp1tp0"),
-        pytest.param((4, 8), (4, 8), 0, 1, 4, "4x8sp0tp1", id="4x8sp0tp1"),
-        pytest.param((4, 8), (4, 8), 1, 0, 4, "4x8sp1tp0", id="4x8sp1tp0"),
-    ],
-    indirect=["mesh_device"],
-)
-@pytest.mark.parametrize(
-    ("batch_size", "spatial_seq_len", "prompt_seq_len"),
-    [
-        (1, 4096, 512),
-    ],
-)
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
-def test_transformer_block(
-    mesh_device: ttnn.MeshDevice,
-    submesh_shape: tuple[int, int],
-    sp_axis: int,
-    tp_axis: int,
-    num_links: int,
-    batch_size: int,
-    spatial_seq_len: int,
-    prompt_seq_len: int,
-    id: str,
-) -> None:
-    submesh_device = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
-    sp_factor = tuple(submesh_device.shape)[sp_axis]
-    tp_factor = tuple(submesh_device.shape)[tp_axis]
-
-    parent_torch_model = reference.FluxTransformer2DModel.from_pretrained(
-        "black-forest-labs/FLUX.1-dev", subfolder="transformer"
-    )
-    torch_model = parent_torch_model.transformer_blocks[0]
-    assert isinstance(torch_model, reference.models.transformers.transformer_flux.FluxTransformerBlock)
-    torch_model.eval()
-
-    inner_dim = torch_model.attn.inner_dim
-    num_heads = torch_model.attn.heads
-    head_dim = inner_dim // num_heads
-
-    ccl_manager = CCLManager(
-        mesh_device=submesh_device,
-        num_links=num_links,
-        topology=ttnn.Topology.Linear,
-    )
-
-    parallel_config = DiTParallelConfig(
-        cfg_parallel=ParallelFactor(factor=0, mesh_axis=0),
-        tensor_parallel=ParallelFactor(factor=tp_factor, mesh_axis=tp_axis),
-        sequence_parallel=ParallelFactor(factor=sp_factor, mesh_axis=sp_axis),
-    )
-
-    if num_heads % tp_factor != 0:
-        padding_config = PaddingConfig.from_tensor_parallel_factor(num_heads, head_dim, tp_factor)
-    else:
-        padding_config = None
-
-    tt_model = Flux1TransformerBlock(
-        dim=inner_dim,
-        num_heads=num_heads,
-        head_dim=head_dim,
-        context_pre_only=False,
-        mesh_device=submesh_device,
-        ccl_manager=ccl_manager,
-        parallel_config=parallel_config,
-        padding_config=padding_config,
-    )
-    tt_model.load_state_dict(torch_model.state_dict())
-
-    torch.manual_seed(0)
-    spatial = torch.randn([batch_size, spatial_seq_len, inner_dim])
-    prompt = torch.randn([batch_size, prompt_seq_len, inner_dim])
-    time_embed = torch.randn([batch_size, inner_dim])
-    rope_cos = torch.randn([spatial_seq_len + prompt_seq_len, head_dim])
-    rope_sin = torch.randn([spatial_seq_len + prompt_seq_len, head_dim])
-
-    tt_spatial = bf16_tensor_2dshard(spatial, device=submesh_device, shard_mapping={sp_axis: 1, tp_axis: 2})
-    tt_prompt = bf16_tensor(prompt, device=submesh_device, mesh_axis=tp_axis, shard_dim=2)
-    tt_time_embed = bf16_tensor(time_embed.unsqueeze(1), device=submesh_device)
-    tt_spatial_rope_cos = bf16_tensor(rope_cos[prompt_seq_len:], device=submesh_device, mesh_axis=sp_axis, shard_dim=0)
-    tt_spatial_rope_sin = bf16_tensor(rope_sin[prompt_seq_len:], device=submesh_device, mesh_axis=sp_axis, shard_dim=0)
-    tt_prompt_rope_cos = bf16_tensor(rope_cos[:prompt_seq_len], device=submesh_device)
-    tt_prompt_rope_sin = bf16_tensor(rope_sin[:prompt_seq_len], device=submesh_device)
-
-    with torch.no_grad():
-        torch_prompt, torch_spatial = torch_model.forward(
-            spatial, prompt, temb=time_embed, image_rotary_emb=(rope_cos, rope_sin)
-        )
-
-    try:
-        from tracy import signpost
-
-        signpost("caching")
-        tt_spatial_out, tt_prompt_out = tt_model.forward(
-            tt_spatial,
-            tt_prompt,
-            tt_time_embed,
-            spatial_sequence_length=spatial_seq_len,
-            spatial_rope=(tt_spatial_rope_cos, tt_spatial_rope_sin),
-            prompt_rope=(tt_prompt_rope_cos, tt_prompt_rope_sin),
-        )
-
-        signpost("performance")
-    except ImportError:
-        logger.info("Tracy profiler not available, continuing without profiling")
-
-    itr = 1
-    start = time()
-    for _ in range(itr):
-        tt_spatial_out, tt_prompt_out = tt_model.forward(
-            tt_spatial,
-            tt_prompt,
-            tt_time_embed,
-            spatial_sequence_length=spatial_seq_len,
-            spatial_rope=(tt_spatial_rope_cos, tt_spatial_rope_sin),
-            prompt_rope=(tt_prompt_rope_cos, tt_prompt_rope_sin),
-        )
-        # ttnn.synchronize_device(submesh_device)
-    ttnn.synchronize_device(submesh_device)
-    logger.info(f"Time taken for {id}: {(time() - start)*1000/itr} ms")
-
-    shard_dims = [None, None]
-    shard_dims[sp_axis], shard_dims[tp_axis] = 1, 2
-    tt_spatial_torch = ttnn.to_torch(
-        tt_spatial_out,
-        mesh_composer=ttnn.create_mesh_composer(submesh_device, ttnn.MeshComposerConfig(shard_dims)),
-    )
-    assert_quality(torch_spatial, tt_spatial_torch, pcc=0.9999, relative_rmse=1.4)
-
-    shard_dims = [None, None]
-    shard_dims[sp_axis], shard_dims[tp_axis] = 0, 2
-    tt_prompt_torch = ttnn.to_torch(
-        tt_prompt_out,
-        mesh_composer=ttnn.create_mesh_composer(submesh_device, ttnn.MeshComposerConfig(shard_dims)),
-    )[:batch_size]
-    assert_quality(torch_prompt, tt_prompt_torch, pcc=0.99981, relative_rmse=2.0)
 
 
 @pytest.mark.parametrize(
@@ -401,7 +260,7 @@ def test_transformer(
         logger.info(
             "Loading transformer weights from PyTorch state dict. To use cache, set TT_DIT_CACHE_DIR environment variable."
         )
-        tt_model.load_state_dict(torch_model.state_dict())
+        tt_model.load_torch_state_dict(torch_model.state_dict())
 
     torch.manual_seed(0)
     spatial = torch.randn([batch_size, spatial_seq_len, in_channels])
