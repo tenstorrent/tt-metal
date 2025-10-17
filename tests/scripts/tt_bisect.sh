@@ -144,8 +144,7 @@ verify_import_path() {
     PY_BIN="./python_env/bin/python"
   fi
   "$PY_BIN" - <<'PY'
-import sys
-import ttnn
+import ttnn, sys
 print(ttnn.get_arch_name())
 print("ttnn imported from:", ttnn.__file__)
 PY
