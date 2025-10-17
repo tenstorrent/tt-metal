@@ -27,11 +27,11 @@ void py_bind_mesh_partition(py::module& module) {
                 memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
 
            Returns:
-               ttnn.Tensor: the output tensor.
+               ttnn.Tensor: The partitioned tensor, with output_shape = input_shape for all the unspecified dimensions, and output_shape[dim] = input_shape[dim] / num_devices, where num_devices is the number of devices along the `cluster_axis` if specified, else the total number of devices along the mesh.
 
             Example:
 
-                >>> tensor = ttnn.experimental.mesh_partition(
+                >>> tensor = ttnn.mesh_partition(
                                 tt_input_tensors_list[i],
                                 dim,
                                 cluster_axis=1,

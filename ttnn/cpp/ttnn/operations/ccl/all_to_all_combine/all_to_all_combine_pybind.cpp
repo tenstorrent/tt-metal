@@ -19,7 +19,7 @@ namespace ttnn::operations::ccl {
 
 void py_bind_all_to_all_combine(py::module& module) {
     auto doc =
-        R"doc(all_to_all_combine(input_tensor: ttnn.Tensor, expert_metadata_tensor: ttnn.Tensor, expert_mapping_tensor: ttnn.Tensor, local_reduce: bool = false, num_links: Optional[int] = None, topology: Optional[ttnn.Topology] = None, memory_config: Optional[ttnn.MemoryConfig] = None, cluster_axis: Optional[int] = None, subdevice_id: Optional[ttnn.SubDeviceId] = None, output_tensor: Optional[ttnn.Tensor] = None) -> ttnn.Tensor
+        R"doc(all_to_all_combine(input_tensor: ttnn.Tensor, expert_mapping_tensor: ttnn.Tensor, expert_metadata_tensor: ttnn.Tensor, local_reduce: bool = false, num_links: Optional[int] = None, topology: Optional[ttnn.Topology] = None, memory_config: Optional[ttnn.MemoryConfig] = None, cluster_axis: Optional[int] = None, subdevice_id: Optional[ttnn.SubDeviceId] = None, output_tensor: Optional[ttnn.Tensor] = None) -> ttnn.Tensor
 
             All to all combine operation for combining the output tokens from the experts, based on the expert metadata and expert mapping tensors. If cluster axis is specified then we combine the tokens only on that axis. This operation is the inverse of the all-to-all dispatch operation, used for returning the results of the experts back to the input tokens' originating devices.
             B = batch size
