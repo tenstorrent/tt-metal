@@ -10,6 +10,7 @@ from models.experimental.functional_petr.tt.ttnn_cp_fpn import ttnn_CPFPN
 from models.experimental.functional_petr.tt.ttnn_grid_mask import ttnn_GridMask
 
 from models.experimental.functional_petr.reference.utils import bbox3d2result
+import tracy
 
 
 class ttnn_PETR:
@@ -23,6 +24,7 @@ class ttnn_PETR:
         device=None,
     ):
         self.with_img_neck = True
+        tracy.signpost("head_start")
         self.pts_bbox_head = ttnn_PETRHead(
             num_classes=10,
             in_channels=256,
@@ -35,13 +37,18 @@ class ttnn_PETR:
             device=device,
             query_embedding_input=query_embedding_input,
         )
+        tracy.signpost("head_end")
+        tracy.signpost("backbone_start")
         self.img_backbone = ttnn_VoVNetCP(
             parameters=parameters["img_backbone"], stem_parameters=parameters["stem_parameters"], device=device
         )
+        tracy.signpost("backbone_end")
+
+        tracy.signpost("neck_start")
         self.img_neck = ttnn_CPFPN(
             in_channels=[768, 1024], out_channels=256, num_outs=2, parameters=parameters["img_neck"]
         )
-
+        tracy.signpost("neck_end")
         self.grid_mask = ttnn_GridMask(True, True, rotate=1, offset=False, ratio=0.5, mode=1, prob=0.7)
         self.use_grid_mask = use_grid_mask
         self.device = device
@@ -120,8 +127,9 @@ class ttnn_PETR:
                 single_img_nhwc = ttnn.permute(single_img, (0, 2, 3, 1))
 
                 # Process through backbone
+                tracy.signpost("backbone_start")
                 single_feats = self.img_backbone(device=self.device, x=single_img_nhwc)
-
+                tracy.signpost("backbone_end")
                 img_feats_list.append(single_feats)
                 # ttnn.device.dump_device_profiler(self.device)
 
@@ -140,9 +148,12 @@ class ttnn_PETR:
             return None
 
         if self.with_img_neck:
+            tracy.signpost("neck_start")
             img_feats = self.img_neck(device=self.device, inputs=img_feats)
+            tracy.signpost("neck_end")
 
         img_feats_reshaped = []
+        tracy.signpost("reshape_start")
         for img_feat in img_feats:
             img_feat = ttnn.permute(img_feat, (0, 3, 1, 2))  # NHWC → NCHW
             BN, C, H, W = img_feat.shape[0], img_feat.shape[1], img_feat.shape[2], img_feat.shape[3]
@@ -175,7 +186,9 @@ class ttnn_PETR:
 
     def simple_test_pts(self, x, img_metas, skip_post_processing=False, rescale=False):
         """Test function of point cloud branch."""
+        tracy.signpost("head_start")
         outs = self.pts_bbox_head(x, img_metas, device=self.device)
+        tracy.signpost("head_end")
         if skip_post_processing:
             return outs
         bbox_list = self.pts_bbox_head.get_bboxes(outs, img_metas, rescale=rescale)

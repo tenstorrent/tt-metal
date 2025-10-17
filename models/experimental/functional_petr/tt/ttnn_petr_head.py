@@ -290,14 +290,16 @@ class ttnn_PETRHead:
                 Shape [nb_dec, bs, num_query, 9].
         """
         for i in range(len(mlvl_feats)):
-            mlvl_feats[i] = ttnn.to_memory_config(mlvl_feats[i], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            mlvl_feats[i] = ttnn.to_memory_config(mlvl_feats[i], memory_config=ttnn.L1_MEMORY_CONFIG)
 
         x = mlvl_feats[0]
         batch_size, num_cams = x.shape[0], x.shape[1]
         input_img_h, input_img_w = img_metas[0]["pad_shape"]
         x = ttnn.to_torch(x)
         masks = x.new_ones((batch_size, num_cams, input_img_h, input_img_w))
-        x = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        x = ttnn.from_torch(
+            x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+        )
         for img_id in range(batch_size):
             for cam_id in range(num_cams):
                 img_h, img_w = img_metas[img_id]["img_shape"][cam_id]
@@ -315,7 +317,13 @@ class ttnn_PETRHead:
             pos_embed = coords_position_embeding
             if self.with_multiview:
                 masks = masks.to(dtype=torch.float16)
-                masks = ttnn.from_torch(masks, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+                masks = ttnn.from_torch(
+                    masks,
+                    layout=ttnn.TILE_LAYOUT,
+                    dtype=ttnn.bfloat16,
+                    device=device,
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                )
                 sin_embed = self.positional_encoding(masks)
                 # sin_embed = self.adapt_pos3d(sin_embed.flatten(0, 1))
                 masks = ttnn.to_torch(masks)

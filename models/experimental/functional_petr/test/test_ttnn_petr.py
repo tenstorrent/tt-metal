@@ -11,7 +11,7 @@ from ttnn.model_preprocessing import (
 )
 import tracy
 from models.experimental.functional_petr.reference.petr import PETR
-from models.experimental.functional_petr.reference.petr_head import pos2posemb3d
+from models.experimental.functional_petr.tt.ttnn_petr_head import pos2posemb3d
 from models.experimental.functional_petr.tt.ttnn_petr import ttnn_PETR
 from models.experimental.functional_petr.tt.common import (
     create_custom_preprocessor_petr_head,
@@ -71,7 +71,7 @@ def verify_output(torch_output, ttnn_output):
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 def test_petr(device, reset_seeds):
-    perf = True
+    perf = False
     inputs, modified_batch_img_metas = prepare_inputs(perf)
 
     torch_model = prepare_torch_model()
