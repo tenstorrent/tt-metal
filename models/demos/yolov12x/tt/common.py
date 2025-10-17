@@ -122,8 +122,12 @@ class TtYOLOv12xConv2D:
         hw = output_height * output_width
         if x.shape[2] != hw:
             if x.is_sharded():
+                x_old = x
                 x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
+                ttnn.deallocate(x_old)
+            x_old = x
             x = x[:, :, :hw, :]
+            ttnn.deallocate(x_old)
         return x
 
 

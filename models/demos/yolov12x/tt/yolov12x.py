@@ -187,8 +187,8 @@ class YoloV12x:
         x = self.c3k2_1(x, i=4)  # 2
         x = self.conv3(x)  # 3
         x = self.c3k2_2(x, i=6)  # 4
-        x4 = x
-        x = self.conv4(x)  # 5
+        x4 = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)  # Move to DRAM to free L1
+        x = self.conv4(x)  # 5 - deallocates input via deallocate_activation=True
         x = self.a2c2f_1(x, i=8)  # 6
         x6 = x
         x = self.conv5(x)  # 7
@@ -199,25 +199,39 @@ class YoloV12x:
         x = ttnn.upsample(x, scale_factor=2)  # 9
 
         x = ttnn.reshape(x, (1, 1, x.shape[0] * x.shape[1] * x.shape[2], x.shape[-1]))
-        x = concat(-1, True, x, x6)  # 10
+        x_old = x
+        x = concat(-1, True, x_old, x6)  # 10
+        ttnn.deallocate(x_old)
         ttnn.deallocate(x6)
         if x.is_sharded():
-            x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
+            x_old = x
+            x = ttnn.sharded_to_interleaved(x_old, ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(x_old)
         x = self.a2c2f_3(x, i=13)  # 11
         x11 = x
         x11 = ttnn.to_memory_config(x11, ttnn.DRAM_MEMORY_CONFIG)
 
         if x.is_sharded():
-            x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
+            x_old = x
+            x = ttnn.sharded_to_interleaved(x_old, ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(x_old)
         x = interleaved_to_sharded(x)
         x = ttnn.upsample(x, scale_factor=2)  # 12
         x = ttnn.reshape(x, (1, 1, x.shape[0] * x.shape[1] * x.shape[2], x.shape[-1]))
 
         if x.is_sharded():
-            x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
+            x_old = x
+            x = ttnn.sharded_to_interleaved(x_old, ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(x_old)
+        # Move x4 from DRAM back to L1 for concat
+        x4 = ttnn.to_memory_config(x4, ttnn.L1_MEMORY_CONFIG)
         if x4.is_sharded():
-            x4 = ttnn.sharded_to_interleaved(x4, ttnn.L1_MEMORY_CONFIG)
-        x = concat(-1, True, x, x4)  # 13
+            x4_old = x4
+            x4 = ttnn.sharded_to_interleaved(x4_old, ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(x4_old)
+        x_old = x
+        x = concat(-1, True, x_old, x4)  # 13
+        ttnn.deallocate(x_old)
         ttnn.deallocate(x4)
         x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
         x = self.a2c2f_4(x, i=16)  # 14
@@ -227,14 +241,18 @@ class YoloV12x:
 
         x11 = ttnn.to_memory_config(x11, ttnn.L1_MEMORY_CONFIG)
 
-        x = concat(-1, False, x, x11)  # 16
+        x_old = x
+        x = concat(-1, False, x_old, x11)  # 16
+        ttnn.deallocate(x_old)
         ttnn.deallocate(x11)
         x = self.a2c2f_5(x, i=19)  # 17
         x17 = x
         x17 = ttnn.to_memory_config(x17, ttnn.DRAM_MEMORY_CONFIG)
         x = self.conv7(x)  # 18
         x8 = ttnn.to_memory_config(x8, ttnn.L1_MEMORY_CONFIG)
-        x = concat(-1, False, x, x8)  # 19
+        x_old = x
+        x = concat(-1, False, x_old, x8)  # 19
+        ttnn.deallocate(x_old)
         ttnn.deallocate(x8)
         x = self.c3k2_3(x, i=22)  # 20
         x20 = x
@@ -243,4 +261,7 @@ class YoloV12x:
         # ttnn.ReadDeviceProfiler(self.device)
 
         x = self.detect(x14, x17, x20)  # 21
+        ttnn.deallocate(x14)
+        ttnn.deallocate(x17)
+        ttnn.deallocate(x20)
         return x

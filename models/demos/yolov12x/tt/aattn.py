@@ -3,6 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+from tracy import signpost
+
 import ttnn
 from models.demos.yolov12x.tt.common import TtYOLOv12xConv2D
 
@@ -43,24 +45,25 @@ class TtnnAattn:
         )
 
     def __call__(self, x, i=0, j=0):
+        signpost("Attn Start")
         batch_size, qkv_height, qkv_width, qkv_chan = x.shape
         qkv_n = qkv_height * qkv_width
         qkv = self.qkv(x)
-        # Optimize: Combine memory config and layout conversions
 
         if qkv.is_sharded():
             qkv = ttnn.sharded_to_interleaved(qkv, ttnn.L1_MEMORY_CONFIG, output_dtype=ttnn.bfloat8_b)
+        """
             # Convert to ROW_MAJOR if currently TILE layout
             if qkv.layout == ttnn.TILE_LAYOUT:
-                qkv = ttnn.to_layout(qkv, ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat8_b)
+                qkv = ttnn.to_layout(qkv, ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16)
         elif qkv.layout == ttnn.TILE_LAYOUT:
-            qkv = ttnn.to_layout(qkv, ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat8_b)
+            qkv = ttnn.to_layout(qkv, ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16)
+
 
         if self.area > 1:
             qkv = ttnn.reshape(qkv, (1, batch_size * self.area, qkv_chan * 3, qkv_n // self.area))
             _, batch_size, _, qkv_n = qkv.shape
 
-        # Optimize: Combine reshape and memory operations
         qkv = ttnn.reshape(qkv, (batch_size, qkv_n, self.num_heads, self.head_dim * 3))
         qkv = ttnn.permute(qkv, (0, 2, 3, 1))  # [B, H, 3*D, S]
         # Combine layout and memory config operations
@@ -70,10 +73,31 @@ class TtnnAattn:
         q, k, v = ttnn.split(qkv, qkv.shape[2] // 3, 2)  # each: [B, H, D, S]
         ttnn.deallocate(qkv)
 
+        q, k, v = ttnn.transformer.split_query_key_value_and_split_heads(qkv,
+        num_heads=self.num_heads,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(qkv)
+
+        print("🚀🚀🚀 QKV BEFORE RESHAPE:", qkv.shape, "🚀🚀🚀")
+        qkv = ttnn.reshape(qkv, (qkv.shape[0]*self.area, qkv.shape[1], qkv.shape[2]//self.area, qkv.shape[3]))
+        print("🚀🚀🚀 QKV AFTER RESHAPE:", qkv.shape, "🚀🚀🚀")
+        """
+
+        qkv = ttnn.to_layout(qkv, ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
+        q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+            qkv,
+            num_heads=self.num_heads,
+            num_kv_heads=self.num_heads,
+            transpose_k_heads=False,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        # print("🚀🚀🚀 Q K V SHAPES:", q.shape, k.shape, v.shape, "🚀🚀🚀")
+        ttnn.deallocate(qkv)
         # Prepare for SDPA: [B, H, S, D]
-        q = ttnn.permute(q, (0, 1, 3, 2))
-        k = ttnn.permute(k, (0, 1, 3, 2))
-        v = ttnn.permute(v, (0, 1, 3, 2))
+        # q = ttnn.permute(q, (0, 1, 3, 2))
+        # k = ttnn.permute(k, (0, 1, 3, 2))
+        # v = ttnn.permute(v, (0, 1, 3, 2))
 
         # Keep v_for_pe for positional embedding - avoid clone by reusing v later
         v_for_pe = v
@@ -158,5 +182,7 @@ class TtnnAattn:
         # Ensure output is in TILE layout to match input expectations
         if x.layout != ttnn.TILE_LAYOUT:
             x = ttnn.to_layout(x, ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
+
+        signpost("Attn end")
 
         return x

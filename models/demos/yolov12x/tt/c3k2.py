@@ -102,24 +102,28 @@ class TtnnC3k2:
             self.m_0 = TtnnC3k(device, parameter[0], conv_pt.m[0], block_sharded=block_sharded)
             self.m_1 = TtnnC3k(device, parameter[1], conv_pt.m[1], block_sharded=block_sharded)
 
-    def __call__(self, x, i=0):
-        x = self.cv1(x)
+    def __call__(self, x_in, i=0):
+        x = self.cv1(x_in)
+        ttnn.deallocate(x_in)
         if x.is_sharded():
             x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG, output_dtype=ttnn.bfloat8_b)
-
         y1 = x[:, :, :, : x.shape[-1] // 2]
         y2 = x[:, :, :, x.shape[-1] // 2 : x.shape[-1]]
+        ttnn.deallocate(x)
         if self.is_bk_enabled:
             y3 = self.m(y2)
             x = concat(-1, False, y1, y2, y3)
+            ttnn.deallocate(y1)
+            ttnn.deallocate(y2)
+            ttnn.deallocate(y3)
         else:
             y3 = self.m_0(y2, i=i, j=0)
             y4 = self.m_1(y3, i=i, j=1)
             x = concat(-1, False, y1, y2, y3, y4)
+            ttnn.deallocate(y1)
+            ttnn.deallocate(y2)
+            ttnn.deallocate(y3)
             ttnn.deallocate(y4)
 
-        ttnn.deallocate(y1)
-        ttnn.deallocate(y2)
-        ttnn.deallocate(y3)
         x = self.cv2(x)
         return x

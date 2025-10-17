@@ -98,17 +98,30 @@ class TtnnA2C2f:
                 y.append(out)
 
         y_concat = concat(-1, False, *y)
+        for tensor in y:
+            ttnn.deallocate(tensor)
         if y_concat.is_sharded():
-            y_concat = ttnn.sharded_to_interleaved(y_concat, ttnn.L1_MEMORY_CONFIG)
+            y_concat_old = y_concat
+            y_concat = ttnn.sharded_to_interleaved(y_concat_old, ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(y_concat_old)
         y = self.cv2(y_concat)
         ttnn.deallocate(y_concat)
 
         if self.gamma is not None:
             if x.is_sharded():
-                x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
+                x_old = x
+                x = ttnn.sharded_to_interleaved(x_old, ttnn.L1_MEMORY_CONFIG)
+                ttnn.deallocate(x_old)
             if y.is_sharded():
-                y = ttnn.sharded_to_interleaved(y, ttnn.L1_MEMORY_CONFIG)
+                y_old = y
+                y = ttnn.sharded_to_interleaved(y_old, ttnn.L1_MEMORY_CONFIG)
+                ttnn.deallocate(y_old)
             gamma = ttnn.unsqueeze_to_4D(self.gamma)
-            y = gamma * y
-            return x + y
+            y_old = y
+            y = gamma * y_old
+            ttnn.deallocate(y_old)
+            result = x + y
+            ttnn.deallocate(x)
+            ttnn.deallocate(y)
+            return result
         return y
