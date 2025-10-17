@@ -459,6 +459,8 @@ static uint32_t process_relay_inline_cmd(uint32_t cmd_ptr, uint32_t& local_downs
     cb_acquire_pages<my_noc_xy, RelayInlineState::my_downstream_cb_sem>(
         npages, RelayInlineState::downstream_cb_additional_count);
 
+    // DPRINT << "prefetch relay inline [" << (uint32_t)cmd->relay_inline.dispatcher_type << "]: dispatch cmd id:" << (uint32_t) ((CQDispatchCmd*)data_ptr)->base.cmd_id << ", cmd_ptr:0x" << HEX() << cmd_ptr << DEC() << ENDL();
+
     uint32_t remaining = cmddat_q_end - data_ptr;
     if (cmddat_wrap_enable && length > remaining) {
         // wrap cmddat
@@ -501,6 +503,7 @@ static uint32_t process_relay_inline_noflush_cmd(uint32_t cmd_ptr, uint32_t& dis
     if (dispatch_data_ptr == downstream_cb_end) {
         dispatch_data_ptr = downstream_cb_base;
     }
+    // DPRINT << "prefetch relay inline no flush: dispatch cmd id:" << (uint32_t) ((CQDispatchCmd*)data_ptr)->base.cmd_id << ", cmd_ptr:0x" << HEX() << cmd_ptr << DEC() << ENDL();
     uint32_t remaining = cmddat_q_end - data_ptr;
     if (cmddat_wrap_enable && length > remaining) {
         // wrap cmddat
@@ -1597,8 +1600,11 @@ static uint32_t relay_linear_to_downstream(
 
 // Used in prefetch_h upstream of a CQ_PREFETCH_CMD_RELAY_LINEAR_H command.
 uint32_t process_relay_linear_h_cmd(uint32_t cmd_ptr, uint32_t& downstream_data_ptr) {
-    // This ensures that a previous cmd using the scratch buf has finished
-    noc_async_writes_flushed();
+    if constexpr (is_d_variant) {
+        // This ensures that a previous cmd using the scratch buf has finished
+        // Unnecessary for prefetch_h because writes are flushed in the end
+        noc_async_writes_flushed();
+    }
 
     volatile CQPrefetchCmdLarge tt_l1_ptr* cmd = nullptr;
     if constexpr (not is_d_variant) {
@@ -1799,10 +1805,10 @@ inline void relay_raw_data_to_downstream(
         uint32_t pages_to_free = (can_read_now + cmddat_q_page_size - 1) >> cmddat_q_log_page_size;
         relay_client.release_pages<my_noc_index, upstream_noc_xy, upstream_cb_sem_id>(pages_to_free);
     }
-
+    // Release an extra page to account for the dispatch command (via CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH) that would have headed the first relayed segment
+    cb_release_pages<my_noc_index, RelayInlineState::downstream_noc_encoding, RelayInlineState::downstream_cb_sem>(1);
     // Align downstream write pointer
     local_downstream_data_ptr = round_up_pow2(local_downstream_data_ptr, RelayInlineState::downstream_page_size);
-
     // Round upstream pointer to next cmddat page boundary for next command
     data_ptr = round_up_pow2(data_ptr, cmddat_q_page_size);
 }
@@ -1816,7 +1822,7 @@ inline void relay_raw_data_to_downstream(
 // until commands are received.
 inline uint32_t relay_cb_get_cmds(uint32_t& fence, uint32_t& data_ptr, uint32_t& downstream_data_ptr) {
     while (true) {
-        // DPRINT << "get_commands: " << HEX() << data_ptr << " " << fence << " " << cmddat_q_base << " " << cmddat_q_end << ENDL();
+        // DPRINT << "[prefetch_d] get_commands top: data_ptr:0x" << HEX() << data_ptr << ", fence:0x" << fence << ", downstream_data_ptr:0x" << downstream_data_ptr << ENDL();
         if (data_ptr == fence) {
             // Ensure header is present
             get_cb_page<cmddat_q_base, cmddat_q_blocks, cmddat_q_log_page_size, my_upstream_cb_sem_id>(
@@ -1831,6 +1837,7 @@ inline uint32_t relay_cb_get_cmds(uint32_t& fence, uint32_t& data_ptr, uint32_t&
             data_ptr += sizeof(CQPrefetchHToPrefetchDHeader);
             relay_raw_data_to_downstream<DispatchRelayInlineState>(
                 fence, data_ptr, wlength - sizeof(CQPrefetchHToPrefetchDHeader), downstream_data_ptr);
+            // DPRINT << "[prefetch_d] get_cmds after relay_raw_data_to_downstream: data_ptr:0x" << data_ptr << ", fence:0x" << fence << ", downstream_data_ptr:0x" << downstream_data_ptr << ENDL();
         } else {
             uint32_t length = cmd_ptr->header.length;
             uint32_t pages_ready = (fence - data_ptr) >> cmddat_q_log_page_size;
@@ -1847,6 +1854,7 @@ inline uint32_t relay_cb_get_cmds(uint32_t& fence, uint32_t& data_ptr, uint32_t&
             }
 
             data_ptr += sizeof(CQPrefetchHToPrefetchDHeader);
+            // DPRINT << "[prefetch_d] get_cmds bottom: data_ptr:0x" << data_ptr << ", fence:0x" << fence << ", downstream_data_ptr:0x" << downstream_data_ptr << DEC() << ENDL();
             return length - sizeof(CQPrefetchHToPrefetchDHeader);
         }
     }
