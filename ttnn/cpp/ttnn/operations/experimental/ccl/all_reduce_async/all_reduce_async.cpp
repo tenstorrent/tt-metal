@@ -320,7 +320,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
     padded_tensor.deallocate();
     ttnn::Tensor scattered_tensor;
     if (rs_global_semaphores.has_value() && barrier_semaphores.has_value()) {
-        TT_FATAL(topology.has_value(), "Topology is required for experimentalreduce scatter");
+        TT_FATAL(topology.has_value(), "Topology is required for experimental reduce scatter");
         scattered_tensor = ttnn::operations::experimental::ccl::reduce_scatter_minimal_async(
             interleaved_tensor,
             std::nullopt,
