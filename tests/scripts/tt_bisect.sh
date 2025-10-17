@@ -231,7 +231,7 @@ try_download_artifacts() {
   # Process TTMetal artifact (tar.zst extraction)
   if [ -n "$ttmetal_artifact" ]; then
     echo "✅ Processing TTMetal artifact: $ttmetal_artifact..."
-    # gh run download automatically extracts the zip, look for tar.zst file
+    # gh run download automatically extracts the zip, look for tar file
     if [ -f "ttm_any.tar.zst" ]; then
       echo "✅ Found ttm_any.tar.zst, extracting..."
       if tar --zstd -xf ttm_any.tar.zst; then
@@ -241,8 +241,17 @@ try_download_artifacts() {
       else
         echo "❌ Failed to extract ttm_any.tar.zst"
       fi
+    elif [ -f "ttm_any.tar" ]; then
+      echo "✅ Found ttm_any.tar, extracting..."
+      if tar -xf ttm_any.tar; then
+        echo "✅ TTMetal build artifact extracted successfully"
+        rm -f ttm_any.tar
+        ttmetal_extracted=true
+      else
+        echo "❌ Failed to extract ttm_any.tar"
+      fi
     else
-      echo "❌ ttm_any.tar.zst not found after download"
+      echo "❌ Neither ttm_any.tar.zst nor ttm_any.tar found after download"
     fi
   fi
 
@@ -276,6 +285,12 @@ try_download_artifacts() {
     if [ "$wheel_installed" = true ]; then
       echo "   - Python wheel installed"
     fi
+
+    # Clean up any remaining artifact files and directories
+    echo "🧹 Cleaning up artifact files..."
+    rm -rf "$ttmetal_artifact" "$eagerdist_artifact" 2>/dev/null || true
+    find . -maxdepth 1 -name "*.whl" -type f -delete 2>/dev/null || true
+
     return 0
   else
     echo "❌ No artifacts were processed successfully"
