@@ -151,7 +151,7 @@ class PointToPointConfig(OpConfigBase):
     receiver_coord: ttnn.MeshCoordinate | None = None
     sender_coord: ttnn.MeshCoordinate | None = None
     topology: ttnn.Topology = ttnn.Topology.Linear
-    optional_output_tensor: ttnn.Tensor | None = None
+    output_tensor: ttnn.Tensor | None = None
 
 
 @dataclass
@@ -275,7 +275,7 @@ class AllToAllDispatchConfig(OpConfigBase):
 class AllToAllCombineConfig(OpConfigBase):
     """Common parameters for a ttnn.all_to_all_combine op"""
 
-    axis: int
+    cluster_axis: int
     memory_config: ttnn.MemoryConfig
     num_links: int | None = None
     topology: ttnn.Topology = ttnn.Topology.Linear
