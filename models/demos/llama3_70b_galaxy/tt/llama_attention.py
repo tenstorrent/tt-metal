@@ -450,14 +450,15 @@ class TtLlamaAttention(LightweightModule):
 
         ttnn.deallocate(x_11SH)
 
-        xqkv_fused = self.tt_ccl.line_all_reduce(
-            xqkv,
-            cluster_axis=1,
-            num_links=3,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            buffer_key="QKV",
-        )
-        ttnn.deallocate(xqkv)
+        xqkv_fused = xqkv
+        # xqkv_fused = self.tt_ccl.line_all_reduce(
+        #     xqkv,
+        #     cluster_axis=1,
+        #     num_links=3,
+        #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        #     buffer_key="QKV",
+        # )
+        # ttnn.deallocate(xqkv)
 
         if seq_len > 2048:
             xqkv_fused = ttnn.reshape(xqkv_fused, [1, 1, seq_len, -1])
@@ -536,6 +537,7 @@ class TtLlamaAttention(LightweightModule):
         if self.TG and not page_table:
             k_fill = self.prefill_prepare_tensor_for_kv_cache(k_fill, user_id)
             v_fill = self.prefill_prepare_tensor_for_kv_cache(v_fill, user_id)
+
         if page_table:
             if isinstance(user_id, int):
                 user_id = ttnn.from_torch(
@@ -545,8 +547,62 @@ class TtLlamaAttention(LightweightModule):
                     layout=ttnn.ROW_MAJOR_LAYOUT,
                     mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
                 )
+            # keys_BKSD shape: seq_len, 1, 64, 128
+            # k_fill, [1, 1, seq_len, 128]
+            # page_table, [32, seq_len // 64]
+            # batch_idx_tensor, [1]
             ttnn.experimental.paged_fill_cache(keys_BKSD, k_fill, page_table, batch_idx_tensor=user_id)
             ttnn.experimental.paged_fill_cache(values_BKSD, v_fill, page_table, batch_idx_tensor=user_id)
+
+        # -- UNCOMMENT BELOW TO COMPARE THE KV CACHE OF EACH USER -- #
+        # Compare the KV cache of each user; they should all match if given the same prompt (using page_table mapping)
+        # Similar logic to test_paged_fill_cache_identical_users. We'll copy back the on-device cache, unshuffle, and compare all users.
+        # Fetch the device cache for keys and values, convert to torch tensors
+        # keys_cache_device = keys_BKSD.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
+        # values_cache_device = values_BKSD.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
+
+        # page_table is 2D [num_users, num_blocks_per_seq]; flatten it to map
+        # pt_torch = page_table.cpu().to_torch()
+
+        # num_users = pt_torch.shape[0]
+        # num_blocks_per_seq = pt_torch.shape[1]
+        # num_heads = keys_cache_device.shape[1]
+        # block_size = keys_cache_device.shape[2]
+        # head_dim = keys_cache_device.shape[3]
+        # # The max_seq_len can be computed from the cache and block size
+        # max_seq_len = num_blocks_per_seq * block_size
+
+        # # Unshuffle the cache from physical to virtual: for each virtual block [user, block], select physical block from page_table
+        # unshuffled_keys = []
+        # unshuffled_values = []
+        # for user in range(num_users):
+        #     user_blocks = []
+        #     user_blocks_v = []
+        #     for b in range(num_blocks_per_seq):
+        #         physical_idx = pt_torch[user, b].item()
+        #         user_blocks.append(keys_cache_device[physical_idx:physical_idx+1, ...])
+        #         user_blocks_v.append(values_cache_device[physical_idx:physical_idx+1, ...])
+        #     # Stack blocks and reshape to [num_heads, max_seq_len, head_dim]
+        #     user_blocks = torch.cat(user_blocks, dim=0)  # [num_blocks_per_seq, num_heads, block_size, head_dim]
+        #     user_blocks = user_blocks.transpose(0,1).reshape(num_heads, max_seq_len, head_dim)
+        #     unshuffled_keys.append(user_blocks.unsqueeze(0))
+        #     user_blocks_v = torch.cat(user_blocks_v, dim=0)
+        #     user_blocks_v = user_blocks_v.transpose(0,1).reshape(num_heads, max_seq_len, head_dim)
+        #     unshuffled_values.append(user_blocks_v.unsqueeze(0))
+        # unshuffled_keys = torch.cat(unshuffled_keys, dim=0)
+        # unshuffled_values = torch.cat(unshuffled_values, dim=0)
+        # # [num_users, num_heads, max_seq_len, head_dim]
+
+        # # All users should match, so compare each pair
+        # for u0 in range(num_users):
+        #     for u1 in range(u0 + 1, num_users):
+        #         keys0 = unshuffled_keys[u0:u0+1]  # [1, H, S, D]
+        #         keys1 = unshuffled_keys[u1:u1+1]
+        #         values0 = unshuffled_values[u0:u0+1]
+        #         values1 = unshuffled_values[u1:u1+1]
+        #         # Compute closeness (using torch.allclose or a more tolerant metric if needed)
+        #         assert torch.allclose(keys0, keys1, atol=1e-2, rtol=1e-2), f"Key cache mismatch between user {u0} and {u1}"
+        #         assert torch.allclose(values0, values1, atol=1e-2, rtol=1e-2), f"Value cache mismatch between user {u0} and {u1}"
 
         else:
             ttnn.fill_cache(

@@ -623,6 +623,154 @@ def run_test_paged_fill_cache(
     assert eq
 
 
+def run_test_paged_fill_cache_identical_users(
+    block_size, head_dim, user_seq_len, max_seq_len, num_users, num_heads, input_dtype, cache_dtype, device
+):
+    """Test that all users get identical cache entries when given the same prompt using paged fill cache."""
+    torch.manual_seed(42)
+    max_num_blocks_per_seq = max_seq_len // block_size
+    assert max_num_blocks_per_seq * block_size == max_seq_len
+    max_num_blocks = num_users * max_seq_len // block_size
+    assert max_num_blocks * block_size == num_users * max_seq_len
+
+    input_shape = [1, num_heads, user_seq_len, head_dim]
+    cache_shape = [num_users, num_heads, max_seq_len, head_dim]
+
+    # Create cache and convert to paged format
+    cache = torch.randn(cache_shape).bfloat16().float()
+    paged_cache = (
+        cache.reshape(num_users, num_heads, max_num_blocks_per_seq, block_size, head_dim)
+        .transpose(1, 2)
+        .reshape(max_num_blocks, num_heads, block_size, head_dim)
+    )  # [num_users * max_num_blocks_per_seq, num_heads, block_size, head_dim]
+
+    # Shuffle paged KV cache according to some random page_table
+    permutation = torch.randperm(max_num_blocks)
+    shuffled_page_cache = paged_cache[permutation]
+    reverse_permutation = torch.argsort(permutation)
+    # page_table is the reverse permutation from shuffled -> unshuffled, and is used to map
+    # a virtual block to the physical block id.
+    page_table = reverse_permutation.reshape(num_users, max_num_blocks_per_seq)
+
+    # Verify that we can convert from normal to paged to normal
+    unshuffled_page_cache = shuffled_page_cache[reverse_permutation]
+    paged_cache_back = (
+        unshuffled_page_cache.reshape(num_users, max_num_blocks_per_seq, num_heads, block_size, head_dim)
+        .transpose(1, 2)
+        .reshape(num_users, num_heads, max_seq_len, head_dim)
+    )
+    assert torch.allclose(paged_cache_back, cache)
+
+    cachett = ttnn.Tensor(shuffled_page_cache, cache_dtype).to(ttnn.TILE_LAYOUT).to(device)
+    page_table_tt = ttnn.Tensor(page_table, ttnn.int32).to(device)
+
+    # Use the SAME input for all users (same prompt)
+    x = torch.randn(input_shape).bfloat16().float()
+    breakpoint()
+    # Fill cache for every user with the same input
+    for i in range(num_users):
+        xt = ttnn.Tensor(x, input_dtype).to(ttnn.TILE_LAYOUT).to(device)
+        user_id = ttnn.from_torch(
+            torch.tensor([i], dtype=torch.int32),
+            device=device,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+        )
+        cachett = ttnn.experimental.paged_fill_cache(cachett, xt, page_table_tt, batch_idx_tensor=user_id)
+        # Update the expected cache for this user
+        cache[i : i + 1, :, : x.shape[-2], :] = x
+
+    # Unshuffle paged cache and review it as unpaged cache
+    tt_got_back_shuffled = cachett.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
+    tt_got_back_unshuffled = tt_got_back_shuffled[reverse_permutation]
+    tt_got_back = (
+        tt_got_back_unshuffled.reshape(num_users, max_num_blocks_per_seq, num_heads, block_size, head_dim)
+        .transpose(1, 2)
+        .reshape(num_users, num_heads, max_seq_len, head_dim)
+    )
+
+    # Verify overall correctness first
+    if input_dtype == ttnn.bfloat16 and cache_dtype == input_dtype:
+        eq, output = comp_equal(cache, tt_got_back)
+    else:
+        eq, output = comp_pcc(cache, tt_got_back)
+    logger.info(f"Overall cache comparison: {output}")
+    assert eq, f"Overall cache comparison failed: {output}"
+
+    # Now specifically compare that all users have identical cache entries
+    # Since all users got the same prompt, their cache entries should be identical
+    for user_i in range(num_users):
+        for user_j in range(user_i + 1, num_users):
+            user_cache_i = cache[user_i : user_i + 1, :, :user_seq_len, :]  # Current user's cache
+            user_cache_j = cache[user_j : user_j + 1, :, :user_seq_len, :]  # Current user's cache
+            if input_dtype == ttnn.bfloat16 and cache_dtype == input_dtype:
+                eq_users, output_users = comp_equal(user_cache_i, user_cache_j)
+            else:
+                eq_users, output_users = comp_pcc(user_cache_i, user_cache_j)
+
+            # Also verify with the TT result
+            tt_user_cache_i = tt_got_back[user_i : user_i + 1, :, :user_seq_len, :]
+            tt_user_cache_j = tt_got_back[user_j : user_j + 1, :, :user_seq_len, :]
+
+            if input_dtype == ttnn.bfloat16 and cache_dtype == input_dtype:
+                eq_tt_users, output_tt_users = comp_equal(tt_user_cache_i, tt_user_cache_j)
+            else:
+                eq_tt_users, output_tt_users = comp_pcc(tt_user_cache_i, tt_user_cache_j)
+
+            logger.info(f"User {user_i} vs User {user_j} comparison: {output_users}")
+            assert (
+                eq_users
+            ), f"User cache entries should be identical but User {user_i} vs User {user_j} failed: {output_users}"
+
+            logger.info(f"TT User {user_i} vs TT User {user_j} comparison: {output_tt_users}")
+            assert (
+                eq_tt_users
+            ), f"TT User cache entries should be identical but User {user_i} vs User {user_j} failed: {output_tt_users}"
+
+
+@pytest.mark.parametrize("block_size", [64], ids=["block64"])
+@pytest.mark.parametrize("head_dim", [128])
+@pytest.mark.parametrize("user_seq_len", [128, 160, 1984, 2048])
+@pytest.mark.parametrize("max_seq_len", [2048])
+@pytest.mark.parametrize("num_users", [32])
+@pytest.mark.parametrize("num_heads", [1, 4, 8])
+@pytest.mark.parametrize("input_dtype", [ttnn.bfloat8_b])
+@pytest.mark.parametrize("cache_dtype", [ttnn.bfloat8_b])
+def test_paged_fill_cache_identical_users(
+    block_size, head_dim, user_seq_len, max_seq_len, num_users, num_heads, input_dtype, cache_dtype, device
+):
+    """Test that verifies all users get identical cache entries when given the same prompt."""
+    run_test_paged_fill_cache_identical_users(
+        block_size, head_dim, user_seq_len, max_seq_len, num_users, num_heads, input_dtype, cache_dtype, device
+    )
+
+
+@pytest.mark.skip("Test case covered by others")
+@pytest.mark.parametrize("block_size", [64, 128], ids=["block64", "block128"])
+@pytest.mark.parametrize("head_dim", [128])
+@pytest.mark.parametrize("user_seq_len", [128, 160, 1984, 2048])
+@pytest.mark.parametrize("max_seq_len", [2048])
+@pytest.mark.parametrize("num_users", [32])
+@pytest.mark.parametrize("num_heads", [1, 8])
+@pytest.mark.parametrize("input_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
+def test_paged_fill_cache_check_users(
+    block_size,
+    head_dim,
+    user_seq_len,
+    max_seq_len,
+    num_users,
+    num_heads,
+    input_dtype,
+    device,  # use_program_cache
+):
+    logger.warning("Forcing cache_dtype to be same as input_dtype. Change test case when this is not required")
+    cache_dtype = input_dtype
+    run_test_paged_fill_cache(
+        block_size, head_dim, user_seq_len, max_seq_len, num_users, num_heads, input_dtype, cache_dtype, device
+    )
+
+
 @pytest.mark.skip("Test case covered by others")
 @pytest.mark.parametrize("block_size", [64, 128], ids=["block64", "block128"])
 @pytest.mark.parametrize("head_dim", [128])

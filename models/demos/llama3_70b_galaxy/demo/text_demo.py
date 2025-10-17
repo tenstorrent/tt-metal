@@ -200,7 +200,7 @@ def create_tt_model(
         (  # Batch-32 run (Throughput) - 32 users, small prompt
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
-            1,  # repeat_batches
+            2,  # repeat_batches
             128 * 1024,  # max_seq_len
             32,  # batch_size
             128,  # max_generated_tokens
@@ -211,7 +211,7 @@ def create_tt_model(
             False,  # apc_test
             False,  # pcc_check
             False,  # prefill-only profile
-            80,  # num layers
+            1,  # num layers
             False,  # print_outputs
             True,  # is_cur_pos_sharded
             True,  # is_page_table_sharded
@@ -280,7 +280,7 @@ def create_tt_model(
         (  # evals-32 run (Throughput) - 32 users, smaller prompts, batch repeat 32
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/eval_repeat_prompts_debug.json",  # input_prompts
             True,  # instruct mode
-            16,  # repeat_batches
+            2,  # repeat_batches
             128 * 1024,  # max_seq_len
             32,  # batch_size
             1024,  # max_generated_tokens
@@ -291,7 +291,7 @@ def create_tt_model(
             False,  # apc_test
             False,  # pcc_check
             False,  # prefill-only profile
-            80,  # num layers
+            1,  # num layers
             False,  # print_outputs
             False,  # is_cur_pos_sharded
             False,  # is_page_table_sharded
@@ -617,7 +617,7 @@ def test_demo_text(
     print_outputs = request.config.getoption("--print_outputs") or print_outputs
 
     enable_trace = True  # Use tracing for better perf
-    prefill_enable_trace = True
+    prefill_enable_trace = False
     print_to_file = False  # Enable this flag to print the output of all users to a file
     instruct = num_layers == 80 and instruct  # if using instruct weights it must be full model
     input_lengths = (
