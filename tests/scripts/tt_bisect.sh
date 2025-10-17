@@ -231,8 +231,8 @@ try_download_artifacts() {
   # Process TTMetal artifact (tar.zst extraction)
   if [ -n "$ttmetal_artifact" ]; then
     echo "✅ Processing TTMetal artifact: $ttmetal_artifact..."
-    if unzip -q "$ttmetal_artifact"; then
-      echo "✅ $ttmetal_artifact unzipped successfully"
+    if tar -xf "$ttmetal_artifact"; then
+      echo "✅ $ttmetal_artifact extracted successfully"
       rm -f "$ttmetal_artifact"
 
       # Extract the tar.zst archive
@@ -247,15 +247,15 @@ try_download_artifacts() {
         fi
       fi
     else
-      echo "❌ Failed to unzip $ttmetal_artifact"
+      echo "❌ Failed to extract $ttmetal_artifact"
     fi
   fi
 
   # Process eager-dist artifact (Python wheel installation)
   if [ -n "$eagerdist_artifact" ]; then
     echo "✅ Processing eager-dist wheel: $eagerdist_artifact..."
-    if unzip -q "$eagerdist_artifact"; then
-      echo "✅ $eagerdist_artifact unzipped successfully"
+    if tar -xf "$eagerdist_artifact"; then
+      echo "✅ $eagerdist_artifact extracted successfully"
       rm -f "$eagerdist_artifact"
 
       # Find and install the wheel file
@@ -275,7 +275,7 @@ try_download_artifacts() {
         echo "❌ No wheel file found in eager-dist artifact"
       fi
     else
-      echo "❌ Failed to unzip $eagerdist_artifact"
+      echo "❌ Failed to extract $eagerdist_artifact"
     fi
   fi
 
