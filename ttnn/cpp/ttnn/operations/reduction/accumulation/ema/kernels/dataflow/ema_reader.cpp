@@ -21,9 +21,11 @@ void kernel_main() {
     const uint32_t src_start_tile = get_arg_val<uint32_t>(1);
 
     // Tensor accessor
+    // ---------------
     const auto src_accessor = TensorAccessor(s_src_args, src_base_addr, src_tile_size);
 
     // CB indices
+    // ----------
     constexpr auto src_cb = tt::CBIndex::c_0;
 
     //-------------------------------------------------------------------------

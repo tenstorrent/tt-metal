@@ -12,19 +12,19 @@
 
 namespace NAMESPACE {
 void MAIN {
-    //-------------------------------------------------------------------------
     // Compile time args
     // -----------------
     constexpr auto total_batches_per_core = get_compile_time_arg_val(0);
     constexpr auto tiles_per_channel = get_compile_time_arg_val(1);
 
-    //-------------------------------------------------------------------------
     // CB indices
-    // -----------------
+    // ----------
     constexpr auto src_cb = tt::CBIndex::c_0;
     constexpr auto dst_cb = tt::CBIndex::c_1;
     constexpr auto prev_cb = tt::CBIndex::c_2;
 
+    // DST indices
+    // -----------
     constexpr auto input_dst_index = 0;
     constexpr auto prev_dst_index = input_dst_index + 1;
     constexpr auto output_dst_index = prev_dst_index + 1;
