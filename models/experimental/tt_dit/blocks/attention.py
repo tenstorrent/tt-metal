@@ -10,7 +10,7 @@ import torch
 import ttnn
 
 from ..layers.linear import ColParallelLinear
-from ..layers.module import Module, Parameter
+from ..layers.module import Module, Parameter, UnregisteredModule
 from ..layers.normalization import RMSNorm
 from ..utils.padding import PaddingConfig, pad_weight_tensor
 from ..utils.substate import pop_substate
@@ -22,6 +22,8 @@ if TYPE_CHECKING:
 
 # adapted from https://github.com/huggingface/diffusers/blob/v0.31.0/src/diffusers/models/attention_processor.py
 class Attention(Module):
+    K_CHUNK_SIZE = 512
+
     def __init__(
         self,
         *,
@@ -69,10 +71,10 @@ class Attention(Module):
         )
 
         if use_spatial_weights_for_prompt:
-            self.add_qkv_proj = self.to_qkv
-            self.norm_added_q = self.norm_q
-            self.norm_added_k = self.norm_k
-            self.to_add_out = self.to_out
+            self.add_qkv_proj = UnregisteredModule(self.to_qkv)
+            self.norm_added_q = UnregisteredModule(self.norm_q)
+            self.norm_added_k = UnregisteredModule(self.norm_k)
+            self.to_add_out = UnregisteredModule(self.to_out) if self.to_out is not None else None
         elif added_kv_proj_dim > 0:
             self.add_qkv_proj = ColParallelLinear(
                 added_kv_proj_dim, 3 * padded_inner_dim, mesh_axis=tp_axis, **common_args
@@ -247,7 +249,7 @@ class Attention(Module):
         sdpa_program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=sdpa_worker_grid,
             q_chunk_size=128,
-            k_chunk_size=512,
+            k_chunk_size=self.K_CHUNK_SIZE,
             exp_approx_mode=False,  # NOTE: False is more correct
         )
         sdpa_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
@@ -286,9 +288,9 @@ class Attention(Module):
                 ccl_core_grid_offset=(0, sdpa_worker_grid[1]),
             )
         else:
-            assert spatial_sequence_length == spatial.shape[1], (
-                "spatial sequence must not be padded without sequence parallelism"
-            )
+            assert (
+                spatial_sequence_length == spatial.shape[1]
+            ), "spatial sequence must not be padded without sequence parallelism"
 
             spatial, prompt = ttnn.transformer.joint_scaled_dot_product_attention(
                 q,
@@ -325,7 +327,7 @@ class Attention(Module):
         if sp_factor == 1:
             return 0
 
-        divisor = 512 * sp_factor
+        divisor = cls.K_CHUNK_SIZE * sp_factor
         return -length % divisor
 
     @classmethod
