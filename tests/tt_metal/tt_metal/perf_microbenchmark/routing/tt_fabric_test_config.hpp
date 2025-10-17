@@ -291,6 +291,7 @@ public:
     bool dump_built_tests();
     std::string get_built_tests_dump_file_name(const std::string& default_file_name);
     bool has_help_option();
+    bool has_setup_only_option();
     void print_help();
 
 private:

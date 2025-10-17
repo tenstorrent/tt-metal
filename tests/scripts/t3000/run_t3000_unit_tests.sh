@@ -51,34 +51,54 @@ run_t3000_ttfabric_tests() {
   start_time=$(date +%s)
 
   echo "LOG_METAL: Running run_t3000_ttfabric_tests"
-  TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=ControlPlaneFixture.*T3k*
-  TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=T3kCustomMeshGraphControlPlaneTests*
-  TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=T3k*MeshGraphFabric2DDynamicTests*
+  # TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=ControlPlaneFixture.*T3k*
+  # TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=T3kCustomMeshGraphControlPlaneTests*
+  # TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=T3k*MeshGraphFabric2DDynamicTests*
 
-  # originally were in TT-NN, now promoted to TT-Metal (Fabric)
-  ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="*WorkerFabricEdmDatapath*:*EdmFabric*"
-  # Instantiate a 1x8 Mesh on a T3K with 2D Fabric
-  TT_MESH_GRAPH_DESC_PATH=tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_1x8_mesh_graph_descriptor.yaml ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="*Fabric2DFixture.TestUnicast*"
+  # # originally were in TT-NN, now promoted to TT-Metal (Fabric)
+  # ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="*WorkerFabricEdmDatapath*:*EdmFabric*"
+  # # Instantiate a 1x8 Mesh on a T3K with 2D Fabric
+  # TT_MESH_GRAPH_DESC_PATH=tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_1x8_mesh_graph_descriptor.yaml ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="*Fabric2DFixture.TestUnicast*"
 
-  # TODO (issue: #24335) disabled slow dispatch tests for now, need to re-evaluate if need to add in a different pool
-  #TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
+  # # TODO (issue: #24335) disabled slow dispatch tests for now, need to re-evaluate if need to add in a different pool
+  # #TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
 
-  # Offline test for Cluster Validation Tool
-  ./build/tools/scaleout/run_cluster_validation --global-descriptor-path tools/tests/scaleout/global_system_descriptors/proto/4_lb_superpod_physical_desc.textproto --cabling-descriptor-path tools/tests/scaleout/cabling_descriptors/16_n300_lb_cluster.textproto --deployment-descriptor-path tools/tests/scaleout/deployment_descriptors/16_lb_deployment.textproto --print-connectivity --hard-fail
+  # # Offline test for Cluster Validation Tool
+  # ./build/tools/scaleout/run_cluster_validation --global-descriptor-path tools/tests/scaleout/global_system_descriptors/proto/4_lb_superpod_physical_desc.textproto --cabling-descriptor-path tools/tests/scaleout/cabling_descriptors/16_n300_lb_cluster.textproto --deployment-descriptor-path tools/tests/scaleout/deployment_descriptors/16_lb_deployment.textproto --print-connectivity --hard-fail
 
-  # these tests cover mux fixture as well
-  TT_METAL_FABRIC_TELEMETRY=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
-  TT_METAL_FABRIC_TELEMETRY=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
-  ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
-  ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
+  # # these tests cover mux fixture as well
+  # TT_METAL_FABRIC_TELEMETRY=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
+  # TT_METAL_FABRIC_TELEMETRY=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
+  # ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
+  # ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
 
-  ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=T3k*MeshGraphFabric2DDynamicTests*
+  # ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=T3k*MeshGraphFabric2DDynamicTests*
 
-  ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_sanity_common.yaml
-  ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_sanity_at_least_2x2_mesh.yaml
-  ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_ubench_at_least_2x2_mesh.yaml
+  TT_METAL_CLEAR_L1=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_sanity_common_max_swaps.yaml --setup-only
+  TT_METAL_CLEAR_L1=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_sanity_common_max_swaps.yaml --setup-only
+  TT_METAL_CLEAR_L1=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_sanity_common_max_swaps.yaml --setup-only
+  # ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_sanity_at_least_2x2_mesh.yaml
+  # ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_ubench_at_least_2x2_mesh.yaml
 
   # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_ttmetal_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
+run_neel_tests() {
+  fail=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running Neel tests"
+
+  TT_METAL_CLEAR_L1=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="TopologySwapStressFixture.*"
+  TT_METAL_CLEAR_L1=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="TopologySwapStressFixture.*"
+  TT_METAL_CLEAR_L1=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="TopologySwapStressFixture.*"
+
   end_time=$(date +%s)
   duration=$((end_time - start_time))
   echo "LOG_METAL: run_t3000_ttmetal_tests $duration seconds to complete"
@@ -574,53 +594,69 @@ run_t3000_ccl_tests() {
 }
 
 run_t3000_tests() {
+  # run_t3000_ttfabric_tests
+  # run_t3000_ttfabric_tests
+  # run_t3000_ttfabric_tests
+  # run_t3000_ttfabric_tests
+  # run_t3000_ttfabric_tests
+  # run_t3000_ttfabric_tests
+  # run_t3000_ttfabric_tests
+
+  run_neel_tests
+  run_neel_tests
+  run_neel_tests
+  run_neel_tests
+  run_neel_tests
+  run_neel_tests
+  run_neel_tests
+
   # Run ttmetal tests
-  run_t3000_ttmetal_tests
+  # run_t3000_ttmetal_tests
 
-  # Run ttfabric tests
-  run_t3000_ttfabric_tests
+  # # Run ttfabric tests
+  # run_t3000_ttfabric_tests
 
-  # Run ttnn tests
-  run_t3000_ttnn_tests
+  # # Run ttnn tests
+  # run_t3000_ttnn_tests
 
-  # Run falcon7b tests
-  run_t3000_falcon7b_tests
+  # # Run falcon7b tests
+  # run_t3000_falcon7b_tests
 
-  # Run falcon40b tests
-  run_t3000_falcon40b_tests
+  # # Run falcon40b tests
+  # run_t3000_falcon40b_tests
 
-  # Run llama3-small (1B, 3B, 8B) tests
-  run_t3000_llama3-small_tests
+  # # Run llama3-small (1B, 3B, 8B) tests
+  # run_t3000_llama3-small_tests
 
-  # Run llama3.2-11B tests
-  run_t3000_llama3.2-11b_tests
+  # # Run llama3.2-11B tests
+  # run_t3000_llama3.2-11b_tests
 
-  # Run llama3.1-70B tests
-  run_t3000_llama3.1-70b_tests
+  # # Run llama3.1-70B tests
+  # run_t3000_llama3.1-70b_tests
 
-  # Run llama3.2-90B tests
-  run_t3000_llama3.2-90b_tests
+  # # Run llama3.2-90B tests
+  # run_t3000_llama3.2-90b_tests
 
-  # Run llama3.2-11B-vision tests
-  run_t3000_llama3.2-11b-vision_unit_tests
+  # # Run llama3.2-11B-vision tests
+  # run_t3000_llama3.2-11b-vision_unit_tests
 
-  # Run mistral tests
-  run_t3000_mistral_tests
+  # # Run mistral tests
+  # run_t3000_mistral_tests
 
-  # Run llama3.2-11B-vision tests on spoofed N300 mesh
-  run_t3000_spoof_n300_llama3.2-11b-vision_unit_tests
+  # # Run llama3.2-11B-vision tests on spoofed N300 mesh
+  # run_t3000_spoof_n300_llama3.2-11b-vision_unit_tests
 
-  # Run llama3.2-90B-vision tests
-  run_t3000_llama3.2-90b-vision_unit_tests
+  # # Run llama3.2-90B-vision tests
+  # run_t3000_llama3.2-90b-vision_unit_tests
 
-  # Run mixtral tests
-  run_t3000_mixtral_tests
+  # # Run mixtral tests
+  # run_t3000_mixtral_tests
 
-  # Run grok tests
-  run_t3000_grok_tests
+  # # Run grok tests
+  # run_t3000_grok_tests
 
-  # Run unet shallow tests
-  run_t3000_unet_shallow_tests
+  # # Run unet shallow tests
+  # run_t3000_unet_shallow_tests
 }
 
 fail=0

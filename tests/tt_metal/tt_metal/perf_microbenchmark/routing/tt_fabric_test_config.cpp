@@ -757,6 +757,8 @@ std::string CmdlineParser::get_built_tests_dump_file_name(const std::string& def
 
 bool CmdlineParser::has_help_option() { return test_args::has_command_option(input_args_, "--help"); }
 
+bool CmdlineParser::has_setup_only_option() { return test_args::has_command_option(input_args_, "--setup-only"); }
+
 void CmdlineParser::print_help() {
     log_info(LogTest, "Usage: test_tt_fabric [options]");
     log_info(LogTest, "This test can be run in two modes:");
@@ -767,6 +769,7 @@ void CmdlineParser::print_help() {
     log_info(LogTest, "");
     log_info(LogTest, "General Options:");
     log_info(LogTest, "  --help                                       Print this help message.");
+    log_info(LogTest, "  --setup-only                                 Initialize topology and exit without running tests.");
     log_info(
         LogTest,
         "  --test_config <path>                         Path to the YAML test configuration file. See "

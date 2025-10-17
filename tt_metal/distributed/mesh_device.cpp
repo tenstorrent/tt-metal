@@ -314,6 +314,7 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDevice::create_unit_meshes(
         dispatch_core_config);
     std::vector<tt::tt_fabric::FabricNodeId> fabric_node_ids;
     for (const auto& device_id : device_ids) {
+        log_info(tt::LogTest, "Getting fabric node id for device {}", device_id);
         auto fabric_node_id =
             MetalContext::instance().get_control_plane().get_fabric_node_id_from_physical_chip_id(device_id);
         fabric_node_ids.push_back(fabric_node_id);
@@ -334,6 +335,7 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDevice::create_unit_meshes(
         device_ids.size());
     std::map<int, std::shared_ptr<MeshDevice>> result;
     for (size_t i = 0; i < device_ids.size(); i++) {
+        log_info(tt::LogTest, "Adding device {} to result map", device_ids[i]);
         result[device_ids[i]] = submeshes[i];
     }
     // The Device Profiler must be initialized before Fabric is loaded on the Cluster

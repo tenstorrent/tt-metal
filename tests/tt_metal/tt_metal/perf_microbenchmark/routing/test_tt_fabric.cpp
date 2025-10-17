@@ -50,6 +50,11 @@ int main(int argc, char** argv) {
         cmdline_parser.print_help();
         return 0;
     }
+
+    bool setup_only_mode = cmdline_parser.has_setup_only_option();
+    if (setup_only_mode) {
+        log_info(tt::LogTest, "Setup-only mode enabled - will initialize topology and exit without running tests");
+    }
     std::vector<ParsedTestConfig> raw_test_configs;
     tt::tt_fabric::fabric_tests::AllocatorPolicies allocation_policies;
     std::optional<tt::tt_fabric::fabric_tests::PhysicalMeshConfig> physical_mesh_config = std::nullopt;
@@ -147,6 +152,18 @@ int main(int argc, char** argv) {
             fabric_tensix_config);
         test_context.open_devices(test_config.fabric_setup);
         device_opened = true;
+
+        // If in setup-only mode, skip test execution and continue to next config
+        if (setup_only_mode) {
+            log_info(tt::LogTest, "Topology initialized: {}, routing: {}, tensix config: {}", 
+                topology, routing_type, fabric_tensix_config);
+            log_info(tt::LogTest, "Setup-only mode: skipping test execution for this config.");
+            test_context.setup_devices();
+            fixture->barrier();
+            test_context.reset_devices();
+            test_context.close_devices();
+            continue;
+        }
 
         for (uint32_t iter = 0; iter < test_config.num_top_level_iterations; ++iter) {
             log_info(tt::LogTest, "Starting top-level iteration {}/{}", iter + 1, test_config.num_top_level_iterations);
