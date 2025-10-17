@@ -101,6 +101,7 @@ target_link_libraries(
     PRIVATE
         scaleout_tools
         protobuf::libprotobuf
+        cxxopts::cxxopts
 )
 
 add_executable(run_cabling_generator src/run_cabling_generator.cpp)
@@ -119,4 +120,5 @@ target_link_libraries(
     PRIVATE
         scaleout_tools
         protobuf::libprotobuf
+        cxxopts::cxxopts
 )

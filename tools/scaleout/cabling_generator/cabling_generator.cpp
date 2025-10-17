@@ -444,7 +444,8 @@ void CablingGenerator::emit_cabling_guide_csv(const std::string& output_path, bo
         {CableLength::UNKNOWN, "UNKNOWN"}};
 
     const std::unordered_map<tt::ARCH, std::string> speed_str = {
-        {tt::ARCH::WORMHOLE_B0, "400G"}, {tt::ARCH::BLACKHOLE, "800G"}, {tt::ARCH::Invalid, "UNKNOWN"}};
+        //TODO: BLACKHOLE cable speed 200G in early stages/validation, but should be able to support 800G in the future.
+        {tt::ARCH::WORMHOLE_B0, "400G"}, {tt::ARCH::BLACKHOLE, "400G"}, {tt::ARCH::Invalid, "UNKNOWN"}};
 
     // Unknown for lengths unable to be calculated (longer than avaiable cables, cross-aisle/hall, etc.)
 
@@ -492,7 +493,7 @@ void CablingGenerator::emit_cabling_guide_csv(const std::string& output_path, bo
         // This is validated in create_port_connection
         auto arch = host_id_to_node_.at(std::get<0>(start))->boards.at(std::get<1>(start)).get_arch();
 
-        CableLength cable_l = calc_cable_length(host1, host2);
+        CableLength cable_l = calc_cable_length(host1, tray_id1, host2, tray_id2, host1_node_type);
         if (loc_info) {
             output_file << host1.hostname << ",";
             output_file << host1.hall << "," << host1.aisle << "," << std::setw(2) << host1.rack << ",U" << std::setw(2)
@@ -698,23 +699,33 @@ void CablingGenerator::get_all_connections_of_type(
     }
 }
 
-CableLength calc_cable_length(const Host& host1, const Host& host2) {
+CableLength calc_cable_length(const Host& host1, const int tray_id1, const Host& host2, const int tray_id2, const std::string& node_type) {
     if (host1.hall != host2.hall) {
         return CableLength::UNKNOWN;
     } else if (host1.aisle != host2.aisle) {
         return CableLength::UNKNOWN;
     }
 
+
+    int tray_id_0 = tray_id1;
+    int tray_id_1 = tray_id2;
     int rack_0 = host1.rack;
-    int shelf_u_0 = host1.shelf_u;
     int rack_1 = host2.rack;
-    int shelf_u_1 = host2.shelf_u;
+
+    double tray_u_est_0 = host1.shelf_u;
+    double tray_u_est_1 = host2.shelf_u;
+    if (node_type.find("GALAXY") != std::string::npos) {
+        // 1.25 U per tray, 1 U at bottom of 6U shelf, BH_GALAXY has 8U shelves
+        tray_u_est_0 += (((4 - tray_id_0) * 1.25) + 1);
+        tray_u_est_1 += (((4 - tray_id_1) * 1.25) + 1);
+    }
+
 
     double standard_rack_w = 600.0;    // mm
     double standard_rack_u_h = 44.45;  // mm
 
     double rack_distance = std::abs(rack_0 - rack_1) * standard_rack_w;
-    double u_distance = std::abs(shelf_u_0 - shelf_u_1) * standard_rack_u_h;
+    double u_distance = std::abs(tray_u_est_0 - tray_u_est_1) * standard_rack_u_h;
 
     double cable_length = std::sqrt((rack_distance * rack_distance) + (u_distance * u_distance)) + 150;  // 150mm slack
 

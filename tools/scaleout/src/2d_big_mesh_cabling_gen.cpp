@@ -9,6 +9,7 @@
 #include <string>
 #include <stdexcept>
 #include <google/protobuf/text_format.h>
+#include <cxxopts.hpp>
 
 #include "protobuf/cluster_config.pb.h"
 #include "protobuf/node_config.pb.h"
@@ -23,106 +24,99 @@ struct InputConfig {
     std::string galaxy_type;
 };
 
-void print_usage(const char* program_name) {
-    std::cerr << "Usage: " << program_name << " <galaxy_structure> <topology> [galaxy_type]" << std::endl;
-    std::cerr << "       " << program_name << " --help" << std::endl;
-    std::cerr << std::endl;
-    std::cerr << "Arguments:" << std::endl;
-    std::cerr << "  galaxy_structure: Format 'NxM' where N and M are positive integers" << std::endl;
-    std::cerr << "                   N must be divisible by 8, M must be divisible by 4" << std::endl;
-    std::cerr << "                   Example: '8x4', '16x8', '32x16'" << std::endl;
-    std::cerr << "  topology:        Torus configuration - '10', '01', or '11'" << std::endl;
-    std::cerr << "                   '10' - torus in first dimension only" << std::endl;
-    std::cerr << "                   '01' - torus in second dimension only" << std::endl;
-    std::cerr << "                   '11' - torus in both dimensions" << std::endl;
-    std::cerr << "                   '00' - no torus (mesh topology)" << std::endl;
-    std::cerr << "  galaxy_type:     (Optional) Galaxy type - 'WH_GALAXY' or 'BH_GALAXY'" << std::endl;
-    std::cerr << "                   Defaults to 'WH_GALAXY' if not specified" << std::endl;
-}
-
 InputConfig parse_arguments(int argc, char** argv) {
-    // Handle help flag
-    if (argc == 2 && (std::string(argv[1]) == "--help" || std::string(argv[1]) == "-h")) {
-        print_usage(argv[0]);
-        exit(0);
-    }
-
-    // Validate argument count
-    if (argc != 3 && argc != 4) {
-        std::cerr << "Error: Expected 2 or 3 arguments, got " << (argc - 1) << std::endl;
-        print_usage(argv[0]);
-        exit(1);
-    }
-
-    InputConfig config;
-    config.galaxy_structure = argv[1];
-    config.topology = argv[2];
-
-    // Set galaxy_type with default value if not provided
-    if (argc == 3) {
-        config.galaxy_type = "WH_GALAXY";
-        std::cout << "Note: Using default galaxy type 'WH_GALAXY' (not specified)" << std::endl;
-    } else {
-        config.galaxy_type = argv[3];
-    }
-
-    // Parse galaxy structure "NxM"
-    size_t x_pos = config.galaxy_structure.find('x');
-    if (x_pos == std::string::npos) {
-        throw std::invalid_argument(
-            "Galaxy structure must be in format 'NxM' (e.g., '8x4'), got: '" + config.galaxy_structure + "'");
-    }
+    cxxopts::Options options("2d_big_mesh_cabling_gen", "Generate 2D big mesh cabling configuration");
+    
+    options.add_options()
+        ("g,galaxy-structure", "Galaxy structure in format 'NxM' where N and M are positive integers. N must be divisible by 8, M must be divisible by 4", cxxopts::value<std::string>())
+        ("t,topology", "Torus configuration: '10' (torus in first dimension), '01' (torus in second dimension), '11' (torus in both dimensions), '00' (mesh topology)", cxxopts::value<std::string>())
+        ("y,galaxy-type", "Galaxy type: 'WH_GALAXY' or 'BH_GALAXY'", cxxopts::value<std::string>()->default_value("WH_GALAXY"))
+        ("h,help", "Print usage information");
 
     try {
-        config.nodes_0 = std::stoi(config.galaxy_structure.substr(0, x_pos));
-        config.nodes_1 = std::stoi(config.galaxy_structure.substr(x_pos + 1));
-    } catch (const std::exception& e) {
-        throw std::invalid_argument(
-            "Invalid numbers in galaxy structure '" + config.galaxy_structure + "': " + e.what());
+        auto result = options.parse(argc, argv);
+
+        if (result.count("help")) {
+            std::cout << options.help() << std::endl;
+            exit(0);
+        }
+
+        if (!result.count("galaxy-structure")) {
+            throw std::invalid_argument("Galaxy structure is required");
+        }
+
+        if (!result.count("topology")) {
+            throw std::invalid_argument("Topology is required");
+        }
+
+        InputConfig config;
+        config.galaxy_structure = result["galaxy-structure"].as<std::string>();
+        config.topology = result["topology"].as<std::string>();
+        config.galaxy_type = result["galaxy-type"].as<std::string>();
+
+        // Parse galaxy structure "NxM"
+        size_t x_pos = config.galaxy_structure.find('x');
+        if (x_pos == std::string::npos) {
+            throw std::invalid_argument(
+                "Galaxy structure must be in format 'NxM' (e.g., '8x4'), got: '" + config.galaxy_structure + "'");
+        }
+
+        try {
+            config.nodes_0 = std::stoi(config.galaxy_structure.substr(0, x_pos));
+            config.nodes_1 = std::stoi(config.galaxy_structure.substr(x_pos + 1));
+        } catch (const std::exception& e) {
+            throw std::invalid_argument(
+                "Invalid numbers in galaxy structure '" + config.galaxy_structure + "': " + e.what());
+        }
+
+        // Validate node counts
+        if (config.nodes_0 <= 0 || config.nodes_1 <= 0) {
+            throw std::invalid_argument(
+                "Node counts must be positive integers, got: " + std::to_string(config.nodes_0) + "x" +
+                std::to_string(config.nodes_1));
+        }
+
+        if (config.nodes_0 % 8 != 0) {
+            throw std::invalid_argument(
+                "First dimension (" + std::to_string(config.nodes_0) + ") must be divisible by 8 for 8x4 Galaxy basis");
+        }
+
+        if (config.nodes_1 % 4 != 0) {
+            throw std::invalid_argument(
+                "Second dimension (" + std::to_string(config.nodes_1) + ") must be divisible by 4 for 8x4 Galaxy basis");
+        }
+
+        // Parse topology
+        config.torus_0 = false;
+        config.torus_1 = false;
+
+        if (config.topology == "10") {
+            config.torus_0 = true;
+        } else if (config.topology == "01") {
+            config.torus_1 = true;
+        } else if (config.topology == "11") {
+            config.torus_0 = true;
+            config.torus_1 = true;
+        } else if (config.topology == "00") {
+            // Mesh topology - no torus
+        } else {
+            throw std::invalid_argument(
+                "Invalid topology '" + config.topology + "'. Must be '10', '01', '11', or '00' (for mesh)");
+        }
+
+        // Validate galaxy type
+        if (config.galaxy_type != "WH_GALAXY" && config.galaxy_type != "BH_GALAXY") {
+            throw std::invalid_argument(
+                "Invalid galaxy type '" + config.galaxy_type + "'. Must be 'WH_GALAXY' or 'BH_GALAXY'");
+        }
+
+        return config;
+
+    } catch (const cxxopts::exceptions::exception& e) {
+        std::cerr << "Error parsing arguments: " << e.what() << std::endl;
+        std::cerr << options.help() << std::endl;
+        exit(1);
     }
-
-    // Validate node counts
-    if (config.nodes_0 <= 0 || config.nodes_1 <= 0) {
-        throw std::invalid_argument(
-            "Node counts must be positive integers, got: " + std::to_string(config.nodes_0) + "x" +
-            std::to_string(config.nodes_1));
-    }
-
-    if (config.nodes_0 % 8 != 0) {
-        throw std::invalid_argument(
-            "First dimension (" + std::to_string(config.nodes_0) + ") must be divisible by 8 for 8x4 Galaxy basis");
-    }
-
-    if (config.nodes_1 % 4 != 0) {
-        throw std::invalid_argument(
-            "Second dimension (" + std::to_string(config.nodes_1) + ") must be divisible by 4 for 8x4 Galaxy basis");
-    }
-
-    // Parse topology
-    config.torus_0 = false;
-    config.torus_1 = false;
-
-    if (config.topology == "10") {
-        config.torus_0 = true;
-    } else if (config.topology == "01") {
-        config.torus_1 = true;
-    } else if (config.topology == "11") {
-        config.torus_0 = true;
-        config.torus_1 = true;
-    } else if (config.topology == "00") {
-        // Mesh topology - no torus
-    } else {
-        throw std::invalid_argument(
-            "Invalid topology '" + config.topology + "'. Must be '10', '01', '11', or '00' (for mesh)");
-    }
-
-    // Validate galaxy type
-    if (config.galaxy_type != "WH_GALAXY" && config.galaxy_type != "BH_GALAXY") {
-        throw std::invalid_argument(
-            "Invalid galaxy type '" + config.galaxy_type + "'. Must be 'WH_GALAXY' or 'BH_GALAXY'");
-    }
-
-    return config;
 }
 
 int main(int argc, char** argv) {
@@ -236,7 +230,7 @@ int main(int argc, char** argv) {
             }
         }
 
-        std::string output_path = "out/scaleout/big_mesh_" + std::to_string(config.nodes_0) + "x" +
+        std::string output_path = "out/scaleout/" + std::string(config.galaxy_type) + "_" + "big_mesh_" + std::to_string(config.nodes_0) + "x" +
                                   std::to_string(config.nodes_1) + "_" + config.topology + ".textproto";
 
         std::filesystem::path output_file_path(output_path);
