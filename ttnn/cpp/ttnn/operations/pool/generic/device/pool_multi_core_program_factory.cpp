@@ -634,7 +634,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         sync_cb_id};                    // 26
 
     // Get device arch for compute kernel config initialization
-    auto device_arch = inputs[0].device()->arch();
+    auto device_arch = input.device()->arch();
 
     // Initialize device compute kernel config with user-provided config or defaults
     auto device_compute_kernel_config = init_device_compute_kernel_config(

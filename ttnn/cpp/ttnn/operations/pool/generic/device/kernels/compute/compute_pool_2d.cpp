@@ -243,22 +243,18 @@ void MAIN {
             for (uint32_t chunk = 0; chunk < interm_reduction_chunks; chunk++) {
                 cb_wait_front(curr_in_cb_id, 1);
                 if constexpr (return_indices) {
-                    {
-                        tilize_init_short_with_dt_no_pack(idx_tmp_cb_id, curr_in_cb_id, topk_output_tiles);
-                        pack_reconfig_data_format(curr_in_cb_id);
-                        tilize_block_no_pack(curr_in_cb_id, topk_output_tiles, data_dst_idx, topk_cb_tile_idx);
-                        tilize_uninit_with_dt_no_pack(curr_in_cb_id, idx_tmp_cb_id);
-                    }
-                    {
-                        copy_tile_to_dst_init_short(idx_tmp_cb_id);
-                        pack_reconfig_data_format(idx_tmp_cb_id);
-                        copy_tile(idx_tmp_cb_id, topk_cb_tile_idx, index_dst_idx);
-                        copy_tile(idx_tmp_cb_id, topk_cb_tile_idx, index_scratch_in_dst_idx);
-                    }
+                    tilize_init_short_with_dt_no_pack(idx_tmp_cb_id, curr_in_cb_id, topk_output_tiles);
+                    pack_reconfig_data_format(curr_in_cb_id);
+                    tilize_block_no_pack(curr_in_cb_id, topk_output_tiles, data_dst_idx, topk_cb_tile_idx);
+                    tilize_uninit_with_dt_no_pack(curr_in_cb_id, idx_tmp_cb_id);
+                    copy_tile_to_dst_init_short(idx_tmp_cb_id);
+                    pack_reconfig_data_format(idx_tmp_cb_id);
+                    copy_tile(idx_tmp_cb_id, topk_cb_tile_idx, index_dst_idx);
+                    copy_tile(idx_tmp_cb_id, topk_cb_tile_idx, index_scratch_in_dst_idx);
 
                     if constexpr (use_tilize_dest) {
                         tilize_dest_function<topk_output_tiles, data_dst_idx, index_dst_idx, topk_cb_tile_idx>(
-                            curr_in_cb_id, curr_in_idx_cb_id);
+                            curr_in_cb_id, idx_tmp_cb_id);
                     } else {
                         tilize_copy_function<
                             topk_output_tiles,
@@ -269,7 +265,7 @@ void MAIN {
                             tile_idx_tmp_cb_id,
                             out_cb_id,
                             num_out_sticks,
-                            pack_untilize_reinit>(curr_in_cb_id, curr_in_idx_cb_id, output_faces);
+                            pack_untilize_reinit>(curr_in_cb_id, idx_tmp_cb_id, output_faces);
                     }
 
                     if (first_c_block) {
