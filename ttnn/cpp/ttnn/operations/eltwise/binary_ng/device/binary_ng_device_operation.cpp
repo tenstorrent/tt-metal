@@ -150,7 +150,7 @@ void validate_sharding(
     SubtileBroadcastType subtile_broadcast_type) {
     switch (subtile_broadcast_type) {
         case SubtileBroadcastType::NONE:
-            TT_FATAL(shard_spec_x == shard_spec_y, "Operands to eltwise binary need to have the same shard spec");
+            // TT_FATAL(shard_spec_x == shard_spec_y, "Operands to eltwise binary need to have the same shard spec");
             break;
         default:
             TT_FATAL(
