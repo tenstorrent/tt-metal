@@ -97,38 +97,44 @@ class TtGemmaImageAttention(LightweightModule):
             else self.model_config["IMAGE_ATTN_QKV_PROGCFG"](seq_len, MAX_MM_SEQ_LEN)
         )
 
-        # for Gemma
-        self.wq = ttnn.as_tensor(
-            tensor=wq_padded,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
-            cache_file_name=cache_name("wq_sharded"),
-            preprocess=lambda x: x.transpose(-2, -1),
+        # Create merged QKV weight for fused operation
+        wq_chunked, wk_chunked, wv_chunked = (
+            torch.chunk(w, configuration.num_devices) for w in [wq_padded, wk_padded, wv_padded]
         )
 
-        self.wk = ttnn.as_tensor(
-            tensor=wk_padded,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
+        self.wqkv = ttnn.as_tensor(
+            torch.concat(
+                [
+                    torch.concat(
+                        [
+                            torch.transpose(
+                                wq_chunked[i],
+                                -2,
+                                -1,
+                            ),
+                            torch.transpose(
+                                wk_chunked[i],
+                                -2,
+                                -1,
+                            ),
+                            torch.transpose(
+                                wv_chunked[i],
+                                -2,
+                                -1,
+                            ),
+                        ],
+                        dim=-1,
+                    )
+                    for i in range(configuration.num_devices)
+                ],
+                dim=-1,
+            ),
             device=self.mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
-            cache_file_name=cache_name("wk_sharded"),
-            preprocess=lambda x: x.transpose(-2, -1),
-        )
-
-        self.wv = ttnn.as_tensor(
-            tensor=wv_padded,
-            dtype=ttnn.bfloat16,
+            dtype=self.dtype,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             layout=ttnn.TILE_LAYOUT,
-            device=self.mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
-            cache_file_name=cache_name("wv_sharded"),
-            preprocess=lambda x: x.transpose(-2, -1),
+            cache_file_name=cache_name("wqkv_sharded"),
         )
 
         bq_str = f"{state_dict_prefix}wq.bias"
@@ -162,37 +168,33 @@ class TtGemmaImageAttention(LightweightModule):
             bk_padded = pad_head_dim_bias(self.state_dict[bk_str])
             bv_padded = pad_head_dim_bias(self.state_dict[bv_str])
 
-            # for Gemma
-            self.bq = ttnn.as_tensor(
-                tensor=bq_padded,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.mesh_device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
-                cache_file_name=cache_name("bq_sharded"),
+            # Create merged QKV bias for fused operation
+            bq_chunked, bk_chunked, bv_chunked = (
+                torch.chunk(b, configuration.num_devices) for b in [bq_padded, bk_padded, bv_padded]
             )
 
-            self.bk = ttnn.as_tensor(
-                tensor=bk_padded,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
+            self.bqkv = ttnn.as_tensor(
+                torch.concat(
+                    [
+                        torch.concat(
+                            [
+                                bq_chunked[i],
+                                bk_chunked[i],
+                                bv_chunked[i],
+                            ],
+                            dim=-1,
+                        )
+                        for i in range(configuration.num_devices)
+                    ],
+                    dim=-1,
+                ),
                 device=self.mesh_device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
-                cache_file_name=cache_name("bk_sharded"),
-            )
-
-            self.bv = ttnn.as_tensor(
-                tensor=bv_padded,
-                dtype=ttnn.bfloat16,
+                dtype=self.dtype,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 layout=ttnn.TILE_LAYOUT,
-                device=self.mesh_device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
-                cache_file_name=cache_name("bv_sharded"),
+                cache_file_name=cache_name("bqkv_sharded"),
             )
-
         else:
             self.bqkv = None
 
@@ -235,41 +237,26 @@ class TtGemmaImageAttention(LightweightModule):
         if seq_len > MAX_MM_SEQ_LEN:
             x_11SH = ttnn.reshape(x_11SH, [batch_size, seq_len // MAX_MM_SEQ_LEN, MAX_MM_SEQ_LEN, -1])
 
-        # mstojko - x_11SH replicated
-        q_heads_1QSD = ttnn.linear(
+        # Single fused linear operation for QKV (more performant than 3 separate linears)
+        xqkv_fused = ttnn.linear(
             x_11SH,
-            self.wq,
-            bias=self.bq,
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_kernel_config_hifi4,
-            program_config=self.qkv_program_config(seq_len, MAX_MM_SEQ_LEN),
-        )
-        # mstojko - q_heads_1QS = sharded
-        q_heads_1QSD = ttnn.transpose(ttnn.reshape(q_heads_1QSD, (batch_size, seq_len, self.n_local_heads, -1)), 1, 2)
-
-        k_heads_1KSD = ttnn.linear(
-            x_11SH,
-            self.wk,
-            bias=self.bk,
+            self.wqkv,
+            bias=self.bqkv,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config_hifi4,
             program_config=self.qkv_program_config(seq_len, MAX_MM_SEQ_LEN),
         )
 
-        k_heads_1KSD = ttnn.transpose(ttnn.reshape(k_heads_1KSD, (batch_size, seq_len, self.n_local_heads, -1)), 1, 2)
-
-        v_heads_1VSD = ttnn.linear(
-            x_11SH,
-            self.wv,
-            bias=self.bv,
-            dtype=ttnn.bfloat16,
+        # Use nlp_create_qkv_heads to split and reshape QKV (more performant than reshape + transpose)
+        q_heads_1QSD, k_heads_1KSD, v_heads_1VSD = ttnn.experimental.nlp_create_qkv_heads(
+            xqkv_fused,
+            num_heads=self.n_local_heads,
+            num_kv_heads=self.n_local_kv_heads,
+            transpose_k_heads=False,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_kernel_config_hifi4,
-            program_config=self.qkv_program_config(seq_len, MAX_MM_SEQ_LEN),
         )
-        v_heads_1VSD = ttnn.transpose(ttnn.reshape(v_heads_1VSD, (batch_size, seq_len, self.n_local_heads, -1)), 1, 2)
+        ttnn.deallocate(xqkv_fused)
 
         # TODO: get this from model_config
         sdpa_cfg = ttnn.SDPAProgramConfig(
