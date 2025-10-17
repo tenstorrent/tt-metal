@@ -120,6 +120,8 @@ class WidthShardedStrategyConfiguration(ShardedStrategyConfiguration):
 class BlockShardedStrategyConfiguration(ShardedStrategyConfiguration):
     reshard_if_not_optimal: bool = False
     override_core_grid: Optional[ttnn.CoreRangeSet] = None
+    act_block_h_override: int = 0
+    act_block_w_div: int = 1
 
     def get_tensor_memory_layout(self):
         return ttnn.TensorMemoryLayout.BLOCK_SHARDED
@@ -166,6 +168,8 @@ class Conv2dConfiguration:
 
     deallocate_activation: bool = False
     reallocate_halo_output: bool = True
+
+    config_tensors_in_dram: bool = False
 
     @classmethod
     def convert_torch_weight_and_bias_to_ttnn(cls, weight, bias=None, mesh_mapper=None):
@@ -446,7 +450,8 @@ def sharding_strategy_to_conv2d_config(sharding_strategy: ShardingStrategy):
     elif isinstance(sharding_strategy, WidthShardedStrategyConfiguration):
         output["act_block_w_div"] = sharding_strategy.act_block_w_div
     elif isinstance(sharding_strategy, BlockShardedStrategyConfiguration):
-        ...
+        output["act_block_h_override"] = sharding_strategy.act_block_h_override
+        output["act_block_w_div"] = sharding_strategy.act_block_w_div
     else:
         raise ValueError(f"Invalid sharding ShardedStrategyConfiguration was encountered: {sharding_strategy}")
 
@@ -469,6 +474,7 @@ def to_conv2d_config(configuration: Conv2dConfiguration):
         ),
         reallocate_halo_output=configuration.reallocate_halo_output,
         enable_weights_double_buffer=configuration.enable_weights_double_buffer,
+        config_tensors_in_dram=configuration.config_tensors_in_dram,
         **parameters_from_sharding_configuration,
     )
 
