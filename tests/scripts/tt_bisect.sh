@@ -127,7 +127,7 @@ try_download_artifacts() {
   local runs
   echo "🔧 Debug: Running command - gh run list --repo tenstorrent/tt-metal --commit $commit_sha --json conclusion,databaseId,workflowName"
   gh run list --repo tenstorrent/tt-metal --commit "$commit_sha" --json conclusion,databaseId,workflowName
-  runs="$(gh run list --repo tenstorrent/tt-metal --commit "$commit_sha" --json conclusion,databaseId,workflowName)"
+  runs="$(gh run list --repo tenstorrent/tt-metal --commit "$commit_sha" --json conclusion,databaseId,workflowName --limit 1000)"
   echo "🔧 Debug: Command output:"
   echo "$runs"
   # Check if gh command failed
