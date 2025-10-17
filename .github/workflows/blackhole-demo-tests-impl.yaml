@@ -121,7 +121,7 @@ jobs:
     with:
       arch: blackhole
       runner-label: ${{ inputs.runner-label }}
-      docker-image: ${{ i nputs.docker-image }}
+      docker-image: ${{ inputs.docker-image }}
       build-artifact-name: ${{ inputs.build-artifact-name }}
       wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       iteration: ${{ inputs.iteration }}
