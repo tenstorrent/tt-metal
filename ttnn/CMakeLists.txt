@@ -2,6 +2,9 @@
 # Build TTNN and TTNNCPP
 ####################################################################################################
 
+# FIXME: Many lambda functions in ttnn capture variables and don't use them.
+add_compile_options("$<$<CXX_COMPILER_ID:Clang>:-Wno-unused-lambda-capture>")
+
 ##################################################
 # Set options
 ##################################################

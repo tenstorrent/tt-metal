@@ -655,7 +655,7 @@ int main(int argc, char **argv) {
         ttml::core::from_vector(mask, ttnn::Shape({1U, 1U, sequence_length, sequence_length}), device));
 
     std::function<BatchType(std::vector<DatasetSample> && samples)> collate_fn =
-        [sequence_length, num_heads, device, &cached_data, &device_config](std::vector<DatasetSample> &&samples) {
+        [sequence_length, device, &cached_data, &device_config](std::vector<DatasetSample> &&samples) {
             auto start_timer = std::chrono::high_resolution_clock::now();
             const uint32_t batch_size = samples.size();
             std::vector<uint32_t> &data = cached_data.data;
@@ -877,7 +877,7 @@ int main(int argc, char **argv) {
         return global_step * config.batch_size * config.gradient_accumulation_steps;
     };
 
-    auto get_loss_value = [device](const TensorPtr &loss) {
+    auto get_loss_value = [](const TensorPtr &loss) {
         auto loss_xtensors = ttml::core::to_xtensor(loss->get_value(), ttml::core::IdentityComposer{});
         // sum of loss xtensors
         float loss_float =
