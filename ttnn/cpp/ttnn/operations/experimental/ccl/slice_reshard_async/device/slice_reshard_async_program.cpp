@@ -77,7 +77,7 @@ tt::tt_metal::operation::ProgramWithCallbacks slice_reshard_async_minimal(
     uint32_t global_input_outer_dim_start = input_outer_dim_size * ring_index;
     uint32_t global_input_outer_dim_end = input_outer_dim_size * (ring_index + 1) - 1;
 
-    int32_t backward_device_end = std::max((int32_t)global_input_outer_dim_start - 1, 0);
+    int32_t backward_device_end = (int32_t)global_input_outer_dim_start - 1;
     uint32_t outer_dims_from_backward = std::max(backward_device_end - (int32_t)global_output_outer_dim_start + 1, 0);
     int32_t forward_device_start = global_input_outer_dim_end + 1;
     uint32_t outer_dims_from_forward = std::max((int32_t)global_output_outer_dim_end - forward_device_start + 1, 0);
