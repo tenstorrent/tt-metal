@@ -197,40 +197,63 @@ inline __attribute__((always_inline)) void risc_finished_profiling() {
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_ERISC) || \
     defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_AERISC)
 
-#if (defined(DISPATCH_KERNEL) && (PROFILE_KERNEL & PROFILER_OPT_DO_DISPATCH_CORES))
-
-// Saves several NoC register states that may be setup by dispatch kernels and restores them
-// when the NocDestinationStateSaver is destroyed
-struct NocDestinationStateSaver {
+// Saves several NoC register states restores them
+// when the NocRegisterStateSave is destroyed
+struct NocRegisterStateSave {
     uint32_t noc_ctrl_state;
     uint32_t noc_ret_addr_coord_state;
+    uint32_t noc_targ_addr_lo_state;
+    uint32_t noc_ret_addr_lo_state;
+    uint32_t noc_at_len_be_state;
+    uint32_t noc_targ_addr_coordinate_state;
+    uint32_t noc_targ_addr_mid_state;
+    uint32_t noc_packet_tag_state;
+    uint32_t noc_at_data_state;
+
 #ifdef ARCH_BLACKHOLE
     uint32_t noc_ret_addr_mid_state;
 #endif
 
-    inline __attribute__((always_inline)) NocDestinationStateSaver() {
+    inline __attribute__((always_inline)) NocRegisterStateSave() {
         noc_ctrl_state = NOC_CMD_BUF_READ_REG(noc_index, write_cmd_buf, NOC_CTRL);
+
+        // https://github.com/tenstorrent/tt-isa-documentation/blob/main/WormholeB0/NoC/MemoryMap.md#noc_ctrl
+        constexpr uint32_t reserved_bit_mask = ((1u << 27) - (1u << 18)) | (1u << 31);
+        noc_ctrl_state &= ~reserved_bit_mask;
+
         noc_ret_addr_coord_state = NOC_CMD_BUF_READ_REG(noc_index, write_cmd_buf, NOC_RET_ADDR_COORDINATE);
+        noc_targ_addr_lo_state = NOC_CMD_BUF_READ_REG(noc_index, write_cmd_buf, NOC_TARG_ADDR_LO);
+        noc_ret_addr_lo_state = NOC_CMD_BUF_READ_REG(noc_index, write_cmd_buf, NOC_RET_ADDR_LO);
+        noc_at_len_be_state = NOC_CMD_BUF_READ_REG(noc_index, write_cmd_buf, NOC_AT_LEN_BE);
+        noc_targ_addr_coordinate_state = NOC_CMD_BUF_READ_REG(noc_index, write_cmd_buf, NOC_TARG_ADDR_COORDINATE);
+        noc_targ_addr_mid_state = NOC_CMD_BUF_READ_REG(noc_index, write_cmd_buf, NOC_TARG_ADDR_MID);
+
+        noc_packet_tag_state = NOC_CMD_BUF_READ_REG(noc_index, write_cmd_buf, NOC_PACKET_TAG);
+        // reset the counter to zero before the push
+        NOC_CMD_BUF_WRITE_REG(noc_index, write_cmd_buf, NOC_PACKET_TAG, 0);
+
+        noc_at_data_state = NOC_CMD_BUF_READ_REG(noc_index, write_cmd_buf, NOC_AT_DATA);
 #ifdef ARCH_BLACKHOLE
         noc_ret_addr_mid_state = NOC_CMD_BUF_READ_REG(noc_index, write_cmd_buf, NOC_RET_ADDR_MID);
 #endif
     }
 
-    inline __attribute__((always_inline)) ~NocDestinationStateSaver() {
+    inline __attribute__((always_inline)) ~NocRegisterStateSave() {
         while (!noc_cmd_buf_ready(noc_index, write_cmd_buf));
         NOC_CMD_BUF_WRITE_REG(noc_index, write_cmd_buf, NOC_CTRL, noc_ctrl_state);
         NOC_CMD_BUF_WRITE_REG(noc_index, write_cmd_buf, NOC_RET_ADDR_COORDINATE, noc_ret_addr_coord_state);
+        NOC_CMD_BUF_WRITE_REG(noc_index, write_cmd_buf, NOC_TARG_ADDR_LO, noc_targ_addr_lo_state);
+        NOC_CMD_BUF_WRITE_REG(noc_index, write_cmd_buf, NOC_RET_ADDR_LO, noc_ret_addr_lo_state);
+        NOC_CMD_BUF_WRITE_REG(noc_index, write_cmd_buf, NOC_AT_LEN_BE, noc_at_len_be_state);
+        NOC_CMD_BUF_WRITE_REG(noc_index, write_cmd_buf, NOC_TARG_ADDR_COORDINATE, noc_targ_addr_coordinate_state);
+        NOC_CMD_BUF_WRITE_REG(noc_index, write_cmd_buf, NOC_TARG_ADDR_MID, noc_targ_addr_mid_state);
+        NOC_CMD_BUF_WRITE_REG(noc_index, write_cmd_buf, NOC_PACKET_TAG, noc_packet_tag_state);
+        NOC_CMD_BUF_WRITE_REG(noc_index, write_cmd_buf, NOC_AT_DATA, noc_at_data_state);
 #ifdef ARCH_BLACKHOLE
         NOC_CMD_BUF_WRITE_REG(noc_index, write_cmd_buf, NOC_RET_ADDR_MID, noc_ret_addr_mid_state);
 #endif
     }
 };
-
-#else
-
-struct NocDestinationStateSaver {};
-
-#endif
 
 inline void __attribute__((always_inline)) profiler_noc_async_write_posted(
     std::uint32_t src_local_l1_addr, std::uint64_t dst_noc_addr, std::uint32_t size, uint8_t noc = noc_index) {
@@ -267,7 +290,7 @@ __attribute__((noinline)) void finish_profiler() {
     uint32_t pageSize =
         PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC * MaxProcessorsPerCoreType * profiler_core_count_per_dram;
 
-    NocDestinationStateSaver noc_state;
+    NocRegisterStateSave noc_state;
     for (uint32_t riscID = 0; riscID < PROCESSOR_COUNT; riscID++) {
 #if defined(COMPILE_FOR_IDLE_ERISC)
         profiler_data_buffer[riscID].data[ID_LH] = ((core_flat_id & 0xFF) << 3) | riscID;
@@ -378,7 +401,7 @@ __attribute__((noinline)) void quick_push() {
     uint32_t currEndIndex = profiler_control_buffer[HOST_BUFFER_END_INDEX_BR_ER + myRiscID] + wIndex;
 
     if (currEndIndex <= PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC) {
-        NocDestinationStateSaver noc_state;
+        NocRegisterStateSave noc_state;
         profiler_noc_async_write_posted(
             reinterpret_cast<uint32_t>(profiler_data_buffer[myRiscID].data),
             dram_bank_dst_noc_addr,
