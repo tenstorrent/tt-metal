@@ -117,14 +117,13 @@ void TopologyMapper::build_mapping() {
 
         // Broadcast the mapping to all hosts
         broadcast_mapping_to_all_hosts();
-        // Build host rank containers now that mapping is complete
-        rebuild_host_rank_structs_from_mapping();
     } else {
         // Wait for the 1st host to build the mapping
         receive_mapping_from_host(0);
-        // Build host rank containers now that mapping is received
-        rebuild_host_rank_structs_from_mapping();
     }
+
+    // Build host rank containers now that mapping is complete
+    rebuild_host_rank_structs_from_mapping();
 }
 
 std::unordered_map<MeshId, std::unordered_set<HostName>> TopologyMapper::build_cross_host_mesh_mappings() {
@@ -189,6 +188,8 @@ std::unordered_map<std::string, std::unordered_set<tt::tt_metal::AsicID>> Topolo
     const {
     std::unordered_map<std::string, std::unordered_set<tt::tt_metal::AsicID>> host_corner_map;
 
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+
     for (const auto& host_name : physical_system_descriptor_.get_all_hostnames()) {
         // Build local adjacency degrees (count neighbors on the same host only)
         const auto& local_asics = physical_system_descriptor_.get_asics_connected_to_host(host_name);
@@ -202,7 +203,18 @@ std::unordered_map<std::string, std::unordered_set<tt::tt_metal::AsicID>> Topolo
             auto asic_neighbors = physical_system_descriptor_.get_asic_neighbors(asic_id);
             int neighbor_count = 0;
             for (const auto& asic_neighbor : asic_neighbors) {
-                if (physical_system_descriptor_.get_host_name_for_asic(asic_neighbor) == host_name) {
+                // Get the first one of the connection
+                auto channel_id =
+                    physical_system_descriptor_.get_eth_connections(asic_id, asic_neighbor).front().src_chan;
+
+                // Don't include Torus connections if on UBB
+                if (cluster.get_board_type(get_physical_chip_id_from_asic_id(asic_id)) == BoardType::UBB &&
+                    physical_system_descriptor_.is_external_eth_link(asic_id, channel_id)) {
+                    continue;
+                }
+
+                // Exclude cross-host connections
+                if (!physical_system_descriptor_.is_cross_host_eth_link(asic_id, channel_id)) {
                     neighbor_count++;
                 }
             }
@@ -295,6 +307,8 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
         return asics;
     };
 
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+
     // Helper: build adjacency within mesh (exclude remote chips)
     auto build_adjacency = [&](const std::unordered_set<tt::tt_metal::AsicID>& in_mesh_asics,
                                const std::unordered_set<HostName>& mesh_hosts) {
@@ -302,10 +316,19 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
         for (const auto& asic : in_mesh_asics) {
             std::vector<tt::tt_metal::AsicID> nbrs;
             for (const auto& n : physical_system_descriptor_.get_asic_neighbors(asic)) {
-                // exclude remote chips (hosts not in this mesh)
-                if (in_mesh_asics.find(n) == in_mesh_asics.end()) {
+                auto channel_id = physical_system_descriptor_.get_eth_connections(asic, n).front().src_chan;
+
+                // Exclude remote hosts
+                if (physical_system_descriptor_.is_cross_host_eth_link(asic, channel_id)) {
                     continue;
                 }
+
+                // If UBB galaxy, exclude external cables (torus connections)
+                if (cluster.get_board_type(get_physical_chip_id_from_asic_id(asic)) == BoardType::UBB &&
+                    physical_system_descriptor_.is_external_eth_link(asic, channel_id)) {
+                    continue;
+                }
+
                 const auto& host = physical_system_descriptor_.get_host_name_for_asic(n);
                 if (!mesh_hosts.contains(host)) {
                     continue;
