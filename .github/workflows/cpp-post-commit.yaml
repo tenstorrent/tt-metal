@@ -82,7 +82,6 @@ jobs:
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
         GTEST_OUTPUT: xml:/work/generated/test_reports/
-        TT_METAL_HOME: /work
         LSAN_OPTIONS: suppressions=/usr/share/tt-metalium/lsan.supp
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
@@ -92,7 +91,7 @@ jobs:
       run:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
-    # tools in N300 is timing out on CIv2: https://github.com/tenstorrent/tt-metal/issues/29443
+    # tools in N300 is timing out on CIv2-viommu: https://github.com/tenstorrent/tt-metal/issues/29443
     runs-on: >-
       ${{
         (inputs.runner-label == 'P100' || inputs.runner-label == 'P150') && fromJSON(format('["in-service", "cloud-virtual-machine", "{0}"]', inputs.runner-label))
@@ -101,7 +100,7 @@ jobs:
       }}
     steps:
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}

@@ -358,6 +358,7 @@ target_sources(
             inc/debug/dprint.h
             inc/debug/dprint_buffer.h
             inc/debug/dprint_pages.h
+            inc/debug/dprint_tensix.h
             inc/debug/dprint_tile.h
             inc/debug/eth_link_status.h
             inc/debug/fw_debug.h
