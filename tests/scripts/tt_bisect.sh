@@ -82,8 +82,11 @@ python3 -m venv python_env
 source ./python_env/bin/activate
 
 # Detect OS (like create_venv.sh does)
+# Temporarily disable unbound variable check for install_dependencies.sh
+set +u
 . ./install_dependencies.sh --source-only
 detect_os
+set -u
 
 # Match create_venv.sh pip/setuptools/wheel setup
 if [ "$OS_ID" = "ubuntu" ] && [ "$OS_VERSION" = "22.04" ]; then
