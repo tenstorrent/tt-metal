@@ -104,33 +104,6 @@ class ModelOptimisations:
         """Get the default output dtype for convolutions."""
         return self.conv_output_dtype
 
-    def setup_default_layer_overrides(self):
-        """
-        Setup commonly used layer-specific overrides for Panoptic-DeepLab model.
-
-        This method pre-configures slicing strategies and sharding strategies for
-        specific layers that benefit from custom configurations.
-        """
-        # STEM CONVOLUTIONS: Use width slicing for stem.conv2 and stem.conv3 (stem.conv1 uses HeightSharded from setup_resnet_test_configs)
-        for conv_name in ["stem.conv1", "stem.conv2", "stem.conv3"]:
-            self.register_layer_override(conv_name, slice_strategy=WidthSliceStrategyConfiguration(num_slices=4))
-
-        # RESNET BOTTLENECKS: Disable ReLU fusion for conv3 and shortcut layers (ReLU comes after residual add)
-        # ResNet50: res2 (3 blocks), res3 (4 blocks), res4 (6 blocks), res5 (3 blocks)
-        for stage, num_blocks in [("res2", 3), ("res3", 4), ("res4", 6), ("res5", 3)]:
-            for i in range(num_blocks):
-                self.register_layer_override(f"{stage}.{i}.conv3", activation=None)
-                # Only first block in each stage has a shortcut (downsample)
-                if i == 0:
-                    self.register_layer_override(f"{stage}.{i}.shortcut", activation=None)
-
-        # RESNET BOTTLENECKS: Use width slicing for res3.0 shortcut (only first block has shortcut)
-        self.register_layer_override(
-            "res3.0.shortcut",
-            slice_strategy=WidthSliceStrategyConfiguration(num_slices=2),
-            deallocate_activation=False,
-        )
-
     def setup_resnet_test_configs(self):
         """
         Setup ResNet layer configurations to match test_conv2d.py panoptic tests.
@@ -143,16 +116,35 @@ class ModelOptimisations:
         """
         from models.tt_cnn.tt.builder import HeightShardedStrategyConfiguration, BlockShardedStrategyConfiguration
 
-        # First apply default layer overrides (includes stem width slicing, activation settings, etc.)
-        self.setup_default_layer_overrides()
+        # STEM CONVOLUTIONS:
 
         # === STEM ===
-        # stem.conv1: 3->64, 512x1024, 3x3, stride 2, HS, act_block_h=1312
-        self.register_layer_override(
-            "stem.conv1",
-            sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=1312),  # 41 tiles
-        )
+        for conv_name in ["stem.conv1"]:
+            # stem.conv1: 3->64, 512x1024, 3x3, stride 2, HS, act_block_h=1312
+            self.register_layer_override(
+                conv_name,
+                #  slice_strategy=WidthSliceStrategyConfiguration(num_slices=0),
+                slice_strategy=L1FullSliceStrategyConfiguration(),
+                sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=1312),  # 41 tiles
+            )
 
+        for conv_name in ["stem.conv2", "stem.conv3"]:
+            self.register_layer_override(conv_name, slice_strategy=WidthSliceStrategyConfiguration(num_slices=0))
+
+        # RESNET BOTTLENECKS: Disable ReLU fusion for conv3 and shortcut layers (ReLU comes after residual add)
+        # ResNet50: res2 (3 blocks), res3 (4 blocks), res4 (6 blocks), res5 (3 blocks)
+        for stage, num_blocks in [("res2", 3), ("res3", 4), ("res4", 6), ("res5", 3)]:
+            for i in range(num_blocks):
+                self.register_layer_override(f"{stage}.{i}.conv3", activation=None)
+                # Only first block in each stage has a shortcut (downsample)
+                if i == 0:
+                    self.register_layer_override(f"{stage}.{i}.shortcut", activation=None, deallocate_activation=False)
+        # RESNET BOTTLENECKS: Use width slicing for res3.0 shortcut (only first block has shortcut)
+        self.register_layer_override(
+            "res3.0.shortcut",
+            slice_strategy=WidthSliceStrategyConfiguration(num_slices=2),
+            deallocate_activation=False,
+        )
         # === RES2 STAGE ===
         # res2.{0-2}.conv2: 64->64, 128x256, 3x3, stride 1, HS, act_block_h=128
         for i in range(3):
@@ -341,7 +333,6 @@ class ModelOptimisations:
 
         This is a convenience method that calls all the individual setup methods.
         """
-        self.setup_default_layer_overrides()
         self.setup_resnet_test_configs()
         self.setup_aspp_layer_overrides()
         self.setup_decoder_layer_overrides()

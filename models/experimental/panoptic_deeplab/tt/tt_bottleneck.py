@@ -169,18 +169,11 @@ class TtBottleneck(LightweightModule):
             # Blocks with shortcuts: conv1 won't deallocate x, so identity can reference it
             # (it will be replaced by shortcut output anyway)
             identity = x
-        # workaround for conv tilize issue with non-height shard
-        if identity.spec.layout != ttnn.TILE_LAYOUT:
-            identity = ttnn.tilize(identity)
 
         # Process shortcut if needed (BatchNorm is now fused into shortcut Conv)
         if self.has_shortcut:
             logger.debug(f"TtBottleneck {self.block_id} processing shortcut convolution")
             identity = self.shortcut(identity)
-            # TT CNN returns flattened [B, 1, H*W, C], reshape to pre-computed output shape
-            if identity.shape[1] == 1:  # Flattened format
-                identity = ttnn.reshape(identity, self.shortcut_out_shape)
-            # res3 shortcuts use width slicing, so move to DRAM. Others use ttnn.move()
             if "res3" in self.block_id:
                 identity = ttnn.to_memory_config(identity, ttnn.DRAM_MEMORY_CONFIG)
             else:
@@ -193,9 +186,6 @@ class TtBottleneck(LightweightModule):
         logger.debug(f"TtBottleneck {self.block_id} processing conv1 (1x1 reduction)")
         out = self.conv1(x)
         # TT CNN returns flattened [B, 1, H*W, C], reshape to pre-computed output shape
-        if out.shape[1] == 1:  # Flattened format
-            out = ttnn.reshape(out, self.conv1_out_shape)
-        # out = ttnn.relu(out)  # Separate ReLU
         if out.memory_config().buffer_type != ttnn.BufferType.DRAM:
             out = ttnn.move(out)
         logger.debug(f"TtBottleneck {self.block_id} conv1 complete, output shape: {out.shape}")
@@ -208,9 +198,6 @@ class TtBottleneck(LightweightModule):
         logger.debug(f"TtBottleneck {self.block_id} processing conv2 (3x3 spatial)")
         out = self.conv2(out)
         # TT CNN returns flattened [B, 1, H*W, C], reshape to pre-computed output shape
-        if out.shape[1] == 1:  # Flattened format
-            out = ttnn.reshape(out, self.conv2_out_shape)
-        # out = ttnn.relu(out)  # Separate ReLU
         if out.memory_config().buffer_type != ttnn.BufferType.DRAM:
             out = ttnn.move(out)
         logger.debug(f"TtBottleneck {self.block_id} conv2 complete, output shape: {out.shape}")
@@ -219,8 +206,6 @@ class TtBottleneck(LightweightModule):
         logger.debug(f"TtBottleneck {self.block_id} processing conv3 (1x1 expansion)")
         out = self.conv3(out)
         # TT CNN returns flattened [B, 1, H*W, C], reshape to pre-computed output shape
-        if out.shape[1] == 1:  # Flattened format
-            out = ttnn.reshape(out, self.conv3_out_shape)
         if out.memory_config().buffer_type != ttnn.BufferType.DRAM:
             out = ttnn.move(out)
         logger.debug(f"TtBottleneck {self.block_id} conv3 complete, output shape: {out.shape}")
