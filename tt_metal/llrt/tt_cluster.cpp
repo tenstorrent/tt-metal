@@ -9,12 +9,14 @@
 #include <tt-logger/tt-logger.hpp>
 #include <metal_soc_descriptor.h>
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <tuple>  // for get
 #include <unordered_map>
 #include <unordered_set>
@@ -414,7 +416,76 @@ void Cluster::start_driver(tt_device_params &device_params) const {
         }
     }
 
-    this->driver_->start_device(device_params);
+    // For Blackhole, add retry logic to handle intermittent AICLK settling timeouts.
+    // Issue: https://github.com/tenstorrent/tt-metal/issues/30159
+    // The UMD polls for AICLK to settle with a timeout. Sometimes (especially on Blackhole),
+    // the clock needs more time to stabilize. Retrying with delays gives the system more time.
+    constexpr int max_retries = 2;  // Total of 3 attempts
+    constexpr int retry_delay_ms = 2000;  // Wait 2 seconds between retries
+    
+    std::exception_ptr last_exception;
+    for (int attempt = 0; attempt <= max_retries; attempt++) {
+        try {
+            this->driver_->start_device(device_params);
+            if (attempt > 0) {
+                log_info(
+                    tt::LogDevice,
+                    "Device initialization succeeded on attempt {} (after {} retries)",
+                    attempt + 1,
+                    attempt);
+            }
+            return;  // Success, exit function
+        } catch (...) {
+            last_exception = std::current_exception();
+            
+            // Try to get error message for analysis
+            std::string error_msg;
+            try {
+                std::rethrow_exception(last_exception);
+            } catch (const std::exception& e) {
+                error_msg = e.what();
+            } catch (...) {
+                error_msg = "Unknown exception";
+            }
+            
+            // Check if this looks like a clock-related timeout error
+            bool is_clock_timeout = (error_msg.find("AICLK") != std::string::npos || 
+                                    error_msg.find("clock") != std::string::npos ||
+                                    error_msg.find("settle") != std::string::npos ||
+                                    error_msg.find("timeout") != std::string::npos);
+            
+            // Only retry on Blackhole for clock-related timeouts
+            if (is_clock_timeout && attempt < max_retries && this->arch_ == tt::ARCH::BLACKHOLE) {
+                log_warning(
+                    tt::LogDevice,
+                    "Device initialization failed with clock-related error (attempt {}/{}): {}. "
+                    "Waiting {} ms before retry...",
+                    attempt + 1,
+                    max_retries + 1,
+                    error_msg,
+                    retry_delay_ms);
+                std::this_thread::sleep_for(std::chrono::milliseconds(retry_delay_ms));
+                // Continue to next iteration to retry
+            } else {
+                // Not a clock timeout, or we've exhausted retries, or not Blackhole - rethrow
+                if (attempt >= max_retries && is_clock_timeout && this->arch_ == tt::ARCH::BLACKHOLE) {
+                    log_error(
+                        tt::LogDevice,
+                        "Device initialization failed after {} attempts with clock-related error. "
+                        "This may indicate a hardware issue or insufficient clock settling time. "
+                        "Last error: {}",
+                        max_retries + 1,
+                        error_msg);
+                }
+                std::rethrow_exception(last_exception);
+            }
+        }
+    }
+    
+    // Should not reach here, but if we do, rethrow the last exception
+    if (last_exception) {
+        std::rethrow_exception(last_exception);
+    }
 }
 
 Cluster::~Cluster() {
