@@ -14,6 +14,11 @@ on:
         type: boolean
         default: false
         description: "Build with tracy enabled"
+      nd-mode:
+        required: true
+        type: boolean
+        default: false
+        description: "Enable non-deterministic detection mode"
       runner-label:
         required: true
         type: choice
@@ -100,7 +105,7 @@ jobs:
           echo "CCACHE_REMOTE_STORAGE: ${CCACHE_REMOTE_STORAGE}"
 
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
         timeout-minutes: 10
         with:
           fetch-depth: 0
@@ -112,4 +117,17 @@ jobs:
           GIT_COMMITTER_NAME: "GitHub Actions"
           GIT_COMMITTER_EMAIL: "actions@github.com"
         run: |
-          ./tests/scripts/tt_bisect.sh -t ${{ inputs.timeout }} -f "${{ inputs.command }}" -b ${{ inputs.bad-commit }} -g ${{ inputs.good-commit }} ${{ inputs.tracy == 'true' && '-p' || '' }} -r ${{ inputs.retries }}
+          set -euo pipefail
+          trap 'rm -rf ./build_bisect' EXIT
+          mkdir -p ./build_bisect
+          cp ./tests/scripts/tt_bisect.sh ./build_bisect/
+          chmod +x ./build_bisect/tt_bisect.sh
+          ./build_bisect/tt_bisect.sh -t ${{ inputs.timeout }} -f '${{ inputs.command }}' -b ${{ inputs.bad-commit }} -g ${{ inputs.good-commit }} ${{ inputs.tracy == 'true' && '-p' || '' }} -r ${{ inputs.retries }} ${{ inputs.nd-mode == 'true' && '-n' || '' }}
+
+      - name: Upload ND results CSV
+        if: ${{ hashFiles('docker-job/bisect_nd_results.csv') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: bisect-nd-results
+          path: docker-job/bisect_nd_results.csv
+          if-no-files-found: ignore
