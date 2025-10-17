@@ -78,7 +78,7 @@ Tensor ExecuteMinimum::invoke(
     return BinaryOperationSfpu<operations::binary::BinaryOpType::MINIMUM>::invoke(
         input_tensor_a,
         input_tensor_b,
-        std::nullopt,
+        output_dtype,
         memory_config,
         optional_output_tensor,
         post_activations,
@@ -119,7 +119,7 @@ Tensor ExecuteMaximum::invoke(
     return BinaryOperationSfpu<operations::binary::BinaryOpType::MAXIMUM>::invoke(
         input_tensor_a,
         input_tensor_b,
-        std::nullopt,
+        output_dtype,
         memory_config,
         optional_output_tensor,
         post_activations,
