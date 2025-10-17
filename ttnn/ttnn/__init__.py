@@ -423,7 +423,7 @@ def _is_editable():
 
 
 if "TT_METAL_RUNTIME_ROOT" not in os.environ:
-    this_dir = Path(__file__).resolve().parent
+    this_dir = pathlib.Path(__file__).resolve().parent
 
     if _is_editable():
         # Go two levels up from the package's __init__.py location
@@ -431,3 +431,5 @@ if "TT_METAL_RUNTIME_ROOT" not in os.environ:
     else:
         # For installed packages, reference bundled data directory
         root_dir = this_dir / "tt-metalium"
+
+    ttnn._ttnn.SetRootDir(root_dir)
