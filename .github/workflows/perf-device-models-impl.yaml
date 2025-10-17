@@ -348,7 +348,7 @@ jobs:
         with:
           device_perf_model_name: "panoptic_deeplab"
           commands: |
-            pytest models/experimental/panoptic_deeplab/tests/test_device_perf_panoptic_deeplab.py -m models_device_performance_bare_metal --timeout=600
+            pytest models/experimental/panoptic_deeplab/tests/test_device_perf_pdl.py -m models_device_performance_bare_metal --timeout=600
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible &&  matrix.test-info.job-blackhole-set1 }}
 
       - name: Merge test reports
