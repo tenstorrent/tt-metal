@@ -424,12 +424,6 @@ def comp_allclose(impl, ref, rtol=1e-05, atol=1e-08):
         return False, "Error computing comp_allclose"
 
 
-# Back-compat alias names for underscore-prefixed APIs
-_compute_max_abs_error = compute_max_abs_error
-_compute_mean_abs_error = compute_mean_abs_error
-_compute_pcc = compute_pcc
-_compute_cosine_similarity = compute_cosine_similarity
-
 # Public API
 __all__ = [
     "compute_max_abs_error",
