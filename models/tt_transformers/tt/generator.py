@@ -189,6 +189,9 @@ class Generator:
     ):
         if page_table is not None:
             assert isinstance(page_table, torch.Tensor), "page_table mush be torch.Tensor"
+        else:
+            # Only paged attention is supported for prefill
+            enable_trace = False
 
         batch_size, batch_seq_len = tokens.shape
         max_batch_size_per_model = self.model_args[0].max_batch_size
