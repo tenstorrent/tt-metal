@@ -32,7 +32,7 @@ def vae_device_config(func):
     func = pytest.mark.parametrize(
         "mesh_device",
         [
-            {"N150": (1, 1), "N300": (1, 2), "T3K": (2, 4), "TG": (8, 4)}.get(
+            {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
                 os.environ.get("FAKE_DEVICE"), len(ttnn.get_device_ids())
             )
         ],
@@ -80,7 +80,12 @@ def test_tt_conv3d_1x1x1(mesh_device, N, C_in, C_out, T, H, W, reset_seeds):
     """Test forward pass of TtConv1x1 against Conv3d with 1x1x1 kernel."""
     reference_model, tt_model = create_random_conv3d_models(mesh_device, C_in, C_out)
 
-    w_parallel_factor = 2
+    # TODO:Need to improve test parameterization.
+    if mesh_device.shape[0] == 1:
+        w_parallel_factor = 1
+    else:
+        w_parallel_factor = 2
+
     vae_parallel_config = MochiVAEParallelConfig(
         time_parallel=ParallelFactor(factor=mesh_device.shape[1], mesh_axis=1),
         w_parallel=ParallelFactor(factor=w_parallel_factor, mesh_axis=0),
@@ -215,7 +220,13 @@ def test_tt_resblock_forward(mesh_device, N, C, T, H, W, reset_seeds, num_links)
     block_args["nonlinearity"] = "silu"
 
     ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear, num_links=num_links)
-    w_parallel_factor = 2
+
+    # TODO:Need to improve test parameterization.
+    if mesh_device.shape[0] == 1:
+        w_parallel_factor = 1
+    else:
+        w_parallel_factor = 2
+
     vae_parallel_config = MochiVAEParallelConfig(
         time_parallel=ParallelFactor(factor=mesh_device.shape[1], mesh_axis=1),
         w_parallel=ParallelFactor(factor=w_parallel_factor, mesh_axis=0),
@@ -439,7 +450,11 @@ def test_tt_upsample_forward(mesh_device, config, reset_seeds, num_links):
     N, C, T, H, W = input_shape
 
     ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear, num_links=num_links)
-    w_parallel_factor = 2
+    # TODO:Need to improve test parameterization.
+    if mesh_device.shape[0] == 1:
+        w_parallel_factor = 1
+    else:
+        w_parallel_factor = 2
     vae_parallel_config = MochiVAEParallelConfig(
         time_parallel=ParallelFactor(factor=mesh_device.shape[1], mesh_axis=1),
         w_parallel=ParallelFactor(factor=w_parallel_factor, mesh_axis=0),
@@ -664,7 +679,11 @@ def test_tt_decoder_forward(mesh_device, config, reset_seeds, load_dit_weights, 
     # Create models
     logger.info("Creating VAE decoder models")
     ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear, num_links=num_links)
-    w_parallel_factor = 2
+    # TODO:Need to improve test parameterization.
+    if mesh_device.shape[0] == 1:
+        w_parallel_factor = 1
+    else:
+        w_parallel_factor = 2
     vae_parallel_config = MochiVAEParallelConfig(
         time_parallel=ParallelFactor(factor=mesh_device.shape[1], mesh_axis=1),
         w_parallel=ParallelFactor(factor=w_parallel_factor, mesh_axis=0),
@@ -742,6 +761,8 @@ def test_tt_decoder_forward(mesh_device, config, reset_seeds, load_dit_weights, 
         tt_output,
         mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=[2, 1]),
     )
+
+    logger.info(f"TT Output shape {tt_output_torch.shape}")
 
     # Get reference output
     logger.info("Run RefDecoder forward")

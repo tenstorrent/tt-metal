@@ -343,7 +343,8 @@ class ResBlock:
 
         x_norm_tiled_NTHWC = self.norm1(x_tiled_NTHWC, num_out_blocks)
 
-        ttnn.deallocate(x_tiled_NTHWC)
+        if self.parallel_config.w_parallel.factor > 1:
+            ttnn.deallocate(x_tiled_NTHWC)
         x_norm_tiled_NTHWC = ttnn.silu(x_norm_tiled_NTHWC, output_tensor=x_norm_tiled_NTHWC)  # in-place
         x_NTHWC = self.untilize_reshape(x_norm_tiled_NTHWC, gathered_shapes)
         ttnn.deallocate(x_norm_tiled_NTHWC)
@@ -383,7 +384,10 @@ class ResBlock:
                     padding_right=1,
                     padding_mode="replicate",
                     secondary_cluster_axis=0,
-                    secondary_mesh_shape=(self.parallel_config.h_parallel.factor, self.parallel_config.w_parallel.factor),
+                    secondary_mesh_shape=(
+                        self.parallel_config.h_parallel.factor,
+                        self.parallel_config.w_parallel.factor,
+                    ),
                 )
             x_NTHWC = ttnn.unsqueeze(x_NTHWC, 0)
         elif self.parallel_config.h_parallel.factor > 1:
@@ -456,7 +460,10 @@ class ResBlock:
                     padding_right=1,
                     padding_mode="replicate",
                     secondary_cluster_axis=0,
-                    secondary_mesh_shape=(self.parallel_config.h_parallel.factor, self.parallel_config.w_parallel.factor),
+                    secondary_mesh_shape=(
+                        self.parallel_config.h_parallel.factor,
+                        self.parallel_config.w_parallel.factor,
+                    ),
                 )
             x_NTHWC = ttnn.unsqueeze(x_NTHWC, 0)
         elif self.parallel_config.h_parallel.factor > 1:
@@ -527,6 +534,12 @@ class CausalUpsampleBlock:
             packer_l1_acc=False,
         )
 
+        self.reshard_time_map = {
+            120 * 212: 84,
+            240 * 424: 168,
+            480 * 848: 168,
+        }
+
         # Swizzle conv1x1 weights
         def swizzle_weight(w):
             # X (C texp sexp sexp) -> X (texp sexp sexp C)
@@ -569,12 +582,14 @@ class CausalUpsampleBlock:
 
             return x_NTHWC
 
-    def reshard_output(self, x_NTHWC, input_T):
-        if self.parallel_config.time_parallel.factor > 1 and self.temporal_expansion > 1 and self.temporal_offset > 0:
-            HW = x_NTHWC.shape[2] * x_NTHWC.shape[3]
-            C = x_NTHWC.shape[4]
-            num_devices = self.parallel_config.time_parallel.factor
-            expected_T = input_T * self.temporal_expansion - self.temporal_offset
+    def reshard_output(self, x_NTHWC):
+        N, T, H, W, C = x_NTHWC.shape
+        num_devices = self.parallel_config.time_parallel.factor
+        expected_T = self.reshard_time_map[H * W]
+        input_is_padded = T * num_devices != expected_T
+        if (self.temporal_offset > 0 or input_is_padded) and (
+            self.parallel_config.time_parallel.factor > 1 and self.temporal_expansion > 1
+        ):
             padded_T = ((expected_T + num_devices - 1) // num_devices) * num_devices
             x_NTHWC = ttnn.squeeze(x_NTHWC, 0)
             x_NTHWC = vae_slice_reshard(
@@ -595,7 +610,7 @@ class CausalUpsampleBlock:
         x_NTHWO = self.proj(x_NTHWC)
         x_NTHWC = self.depth_to_spacetime(x_NTHWO)
         ttnn.deallocate(x_NTHWO)
-        x_NTHWC = self.reshard_output(x_NTHWC, T)
+        x_NTHWC = self.reshard_output(x_NTHWC)
         return x_NTHWC
 
 

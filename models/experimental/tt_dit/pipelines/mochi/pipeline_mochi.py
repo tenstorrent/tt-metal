@@ -160,6 +160,7 @@ class MochiPipeline(DiffusionPipeline):
 
         # Store device and config for model initialization
         self.mesh_device = mesh_device
+        self.vae_mesh_device = mesh_device  # on t3k this should be switched to (1, 8). Switch based on num_links?
         self.parallel_config = parallel_config
         self.vae_parallel_config = vae_parallel_config
         self.num_links = num_links
@@ -230,7 +231,7 @@ class MochiPipeline(DiffusionPipeline):
             self.vae = torch_vae
         else:
             self.vae = MochiVAEDecoder(
-                mesh_device=mesh_device,
+                mesh_device=self.vae_mesh_device,
                 torch_ref=torch_vae.decoder,
                 parallel_config=vae_parallel_config,
                 ccl_manager=self.ccl_manager,
