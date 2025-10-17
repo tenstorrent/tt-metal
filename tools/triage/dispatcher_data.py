@@ -274,7 +274,7 @@ class DispatcherData:
             else:
                 kernel_path = kernel.path + f"/{proc_name.lower()}/{proc_name.lower()}.elf"
             kernel_path = os.path.realpath(kernel_path)
-            if proc_name == "NCRISC" and location._device._arch == "wormhole_b0":
+            if proc_name == "NCRISC" and location._device.is_wormhole():
                 kernel_offset = 0xFFC00000
             else:
                 kernel_offset = kernel_config_base + kernel_text_offset

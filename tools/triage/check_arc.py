@@ -113,9 +113,9 @@ def check_arc(device: Device):
         (postcode & 0xFFFF0000) == 0xC0DE0000,
         f"ARC postcode: {RED}0x{postcode:08x}{RST}. Expected {BLUE}0xc0de____{RST}",
     )
-    if type(device) == WormholeDevice:
+    if device.is_wormhole():
         return check_wormhole_arc(arc, postcode)
-    elif type(device) == BlackholeDevice:
+    elif device.is_blackhole():
         return check_blackhole_arc(arc, postcode)
     else:
         utils.DEBUG(f"Unsupported architecture for check_arc: {device._arch}")
