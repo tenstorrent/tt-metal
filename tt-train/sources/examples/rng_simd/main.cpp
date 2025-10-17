@@ -5,11 +5,13 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <numeric>
 #include <random>
 #include <span>
+#include <string_view>
 #include <type_traits>
 #include <vector>
 
@@ -22,6 +24,13 @@
 using namespace std::chrono;
 using ttml::core::CpuFeatures;
 
+// Global configuration for CSV output
+struct CsvConfig {
+    bool enabled{false};
+    std::string filename;
+    std::ofstream file;
+} g_csv;
+
 // ============================================================================
 // Benchmark Infrastructure
 // ============================================================================
@@ -29,6 +38,8 @@ using ttml::core::CpuFeatures;
 struct BenchmarkResult {
     std::string name;
     std::string type;
+    std::string distribution;
+    size_t size{0};
     double time_ms{0.0};
     double throughput_gb_s{0.0};
     double elements_per_sec_m{0.0};
@@ -50,12 +61,74 @@ struct DistributionParams {
     bool has_simd_support{true};  // If false, skip SSE/AVX2 benchmarks
 };
 
+// ============================================================================
+// CSV Output Functions
+// ============================================================================
+
+// Helper function to escape CSV fields (quote if contains comma, quote, or newline)
+std::string escape_csv_field(const std::string& field) {
+    bool needs_quoting = false;
+    for (char c : field) {
+        if (c == ',' || c == '"' || c == '\n' || c == '\r') {
+            needs_quoting = true;
+            break;
+        }
+    }
+
+    if (!needs_quoting) {
+        return field;
+    }
+
+    // Quote the field and escape internal quotes
+    std::string escaped = "\"";
+    for (char c : field) {
+        if (c == '"') {
+            escaped += "\"\"";  // Escape quote by doubling it
+        } else {
+            escaped += c;
+        }
+    }
+    escaped += "\"";
+    return escaped;
+}
+
+void write_csv_header() {
+    if (!g_csv.enabled || !g_csv.file.is_open())
+        return;
+
+    g_csv.file << "implementation,data_type,distribution,num_elements,"
+               << "time_ms,throughput_gb_s,elements_per_sec_m,"
+               << "mean,stddev,median,q25,q75\n";
+}
+
+void write_csv_row(const BenchmarkResult& result) {
+    if (!g_csv.enabled || !g_csv.file.is_open())
+        return;
+
+    g_csv.file << escape_csv_field(result.name) << "," << escape_csv_field(result.type) << ","
+               << escape_csv_field(result.distribution) << "," << result.size << "," << std::fixed
+               << std::setprecision(6) << result.time_ms << "," << result.throughput_gb_s << ","
+               << result.elements_per_sec_m << "," << result.mean << "," << result.stddev << "," << result.median << ","
+               << result.q25 << "," << result.q75 << "\n";
+}
+
+// ============================================================================
+// Benchmark Functions
+// ============================================================================
+
 template <typename T, typename Func>
 BenchmarkResult run_benchmark(
-    const std::string& name, const std::string& type_name, Func& func, size_t size, int iterations = 10) {
+    const std::string& name,
+    const std::string& type_name,
+    const std::string& dist_name,
+    Func& func,
+    size_t size,
+    int iterations = 10) {
     BenchmarkResult result;
     result.name = name;
     result.type = type_name;
+    result.distribution = dist_name;
+    result.size = size;
 
     std::vector<double> times;
     times.reserve(iterations);
@@ -131,12 +204,14 @@ BenchmarkResult run_benchmark(
 template <typename T, typename DistFactory>
 void benchmark_distribution(
     const std::string& type_name, DistFactory dist_factory, size_t size, const DistributionParams& params) {
-    // Print header
-    std::cout << "\n\n" << (type_name + " - " + params.name + " (" + std::to_string(size) + " elements)") << "\n";
-    std::cout << std::string(80, '=') << "\n";
+    // Print header (skip in CSV-only mode)
+    if (!g_csv.enabled) {
+        std::cout << "\n\n" << (type_name + " - " + params.name + " (" + std::to_string(size) + " elements)") << "\n";
+        std::cout << std::string(80, '=') << "\n";
 
-    if (!params.has_simd_support) {
-        std::cout << "Note: SIMD benchmarks disabled (no optimization available for this distribution)\n";
+        if (!params.has_simd_support) {
+            std::cout << "Note: SIMD benchmarks disabled (no optimization available for this distribution)\n";
+        }
     }
 
     uint32_t seed = 42;
@@ -144,22 +219,22 @@ void benchmark_distribution(
     std::vector<BenchmarkResult> results;
 
     auto func_seq = [&](std::vector<T>& data) { ttml::core::sequential_generate(std::span{data}, dist_factory, seed); };
-    results.push_back(run_benchmark<T>("MT19937 (Sequential)", type_name, func_seq, size));
+    results.push_back(run_benchmark<T>("MT19937 (Sequential)", type_name, params.name, func_seq, size));
 
     auto func_par = [&](std::vector<T>& data) { ttml::core::parallel_generate(std::span{data}, dist_factory, seed); };
-    results.push_back(run_benchmark<T>("MT19937 (Parallel)", type_name, func_par, size));
+    results.push_back(run_benchmark<T>("MT19937 (Parallel)", type_name, params.name, func_par, size));
 
     // SSE Sequential and Parallel - only if SIMD is supported for this distribution
     if (params.has_simd_support && CpuFeatures::has_sse_support()) {
         auto func_seq = [&](std::vector<T>& data) {
             ttml::core::sse::sequential_generate(std::span{data}, dist_factory, seed);
         };
-        results.push_back(run_benchmark<T>("SSE (Sequential)", type_name, func_seq, size));
+        results.push_back(run_benchmark<T>("SSE (Sequential)", type_name, params.name, func_seq, size));
 
         auto func_par = [&](std::vector<T>& data) {
             ttml::core::sse::parallel_generate(std::span{data}, dist_factory, seed);
         };
-        results.push_back(run_benchmark<T>("SSE (Parallel)", type_name, func_par, size));
+        results.push_back(run_benchmark<T>("SSE (Parallel)", type_name, params.name, func_par, size));
     }
 
     // AVX2 Sequential and Parallel - only if SIMD is supported for this distribution
@@ -167,15 +242,24 @@ void benchmark_distribution(
         auto func_seq = [&](std::vector<T>& data) {
             ttml::core::avx::sequential_generate(std::span{data}, dist_factory, seed);
         };
-        results.push_back(run_benchmark<T>("AVX2 (Sequential)", type_name, func_seq, size));
+        results.push_back(run_benchmark<T>("AVX2 (Sequential)", type_name, params.name, func_seq, size));
 
         auto func_par = [&](std::vector<T>& data) {
             ttml::core::avx::parallel_generate(std::span{data}, dist_factory, seed);
         };
-        results.push_back(run_benchmark<T>("AVX2 (Parallel)", type_name, func_par, size));
+        results.push_back(run_benchmark<T>("AVX2 (Parallel)", type_name, params.name, func_par, size));
     }
 
-    // Print results in vertical format with verification for each run
+    // Write CSV rows if enabled
+    for (const auto& r : results) {
+        write_csv_row(r);
+    }
+
+    // Print results in vertical format with verification for each run (skip in CSV-only mode)
+    if (g_csv.enabled) {
+        return;  // Skip console output when CSV is enabled
+    }
+
     double baseline = results.empty() ? 1.0 : results[0].time_ms;
     constexpr int label_width = 18;
 
@@ -366,19 +450,74 @@ void benchmark_type(const std::string& type_name, size_t size) {
 // Main
 // ============================================================================
 
+void print_usage(const char* program_name) {
+    std::cout << "Usage: " << program_name << " [OPTIONS] [SIZE]\n\n";
+    std::cout << "Options:\n";
+    std::cout << "  --csv FILE    Write results to CSV file (e.g., --csv=results.csv)\n";
+    std::cout << "  --help        Show this help message\n\n";
+    std::cout << "Arguments:\n";
+    std::cout << "  SIZE          Number of elements to generate (default: 4194304)\n\n";
+    std::cout << "Example:\n";
+    std::cout << "  " << program_name << " 1000000\n";
+    std::cout << "  " << program_name << " --csv=benchmark.csv 2000000\n";
+}
+
 int main(int argc, const char** argv) {
-    std::cout << "CPU Features:\n";
-    std::cout << "  SSE4.2 + AES-NI: " << (CpuFeatures::has_sse_support() ? "✓" : "✗") << "\n";
-    std::cout << "  AVX2 + AES-NI:   " << (CpuFeatures::has_avx2_support() ? "✓" : "✗") << "\n";
-    std::cout << "  Hardware threads: " << std::thread::hardware_concurrency() << "\n";
+    // Parse command-line arguments
+    constexpr size_t default_size = 4194304;  // 4M elements
+    size_t size = default_size;
+
+    for (int i = 1; i < argc; ++i) {
+        std::string_view arg(argv[i]);
+
+        if (arg == "--help" || arg == "-h") {
+            print_usage(argv[0]);
+            return 0;
+        } else if (arg.starts_with("--csv=")) {
+            g_csv.enabled = true;
+            g_csv.filename = std::string(arg.substr(6));
+            g_csv.file.open(g_csv.filename);
+            if (!g_csv.file.is_open()) {
+                std::cerr << "Error: Failed to open CSV file: " << g_csv.filename << "\n";
+                return 1;
+            }
+        } else if (arg.starts_with("--csv")) {
+            std::cerr << "Error: --csv requires a filename (e.g., --csv=results.csv)\n";
+            return 1;
+        } else {
+            // Try to parse as size
+            try {
+                size = std::stoul(std::string(arg));
+            } catch (const std::exception&) {
+                std::cerr << "Error: Invalid argument: " << arg << "\n";
+                print_usage(argv[0]);
+                return 1;
+            }
+        }
+    }
+
+    // Write CSV header if CSV output is enabled
+    if (g_csv.enabled) {
+        write_csv_header();
+        std::cerr << "Writing benchmark results to: " << g_csv.filename << "\n";
+    } else {
+        // Print system info only in console mode
+        std::cout << "CPU Features:\n";
+        std::cout << "  SSE4.2 + AES-NI: " << (CpuFeatures::has_sse_support() ? "✓" : "✗") << "\n";
+        std::cout << "  AVX2 + AES-NI:   " << (CpuFeatures::has_avx2_support() ? "✓" : "✗") << "\n";
+        std::cout << "  Hardware threads: " << std::thread::hardware_concurrency() << "\n";
+    }
 
     // Run benchmarks
-    constexpr size_t default_size = 4194304;  // 4M elements
-    auto const size = argc > 1 ? std::stoul(argv[1]) : default_size;
+    benchmark_type<float>("float", size);
+    benchmark_type<double>("double", size);
+    benchmark_type<bfloat16>("bfloat16", size);
 
-    benchmark_type<float>("float (32-bit)", size);
-    benchmark_type<double>("double (64-bit)", size);
-    benchmark_type<bfloat16>("bfloat16 (16-bit)", size);
+    // Close CSV file if opened
+    if (g_csv.enabled && g_csv.file.is_open()) {
+        g_csv.file.close();
+        std::cerr << "Benchmark results written to: " << g_csv.filename << "\n";
+    }
 
     return 0;
 }

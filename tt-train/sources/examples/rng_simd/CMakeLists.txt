@@ -1,10 +1,10 @@
 project(linear_regression)
 
 set(SOURCES main.cpp)
-add_executable(benchmark_simd_vs_non ${SOURCES})
+add_executable(rng_simd ${SOURCES})
 find_package(Threads REQUIRED)
 target_link_libraries(
-    benchmark_simd_vs_non
+    rng_simd
     PRIVATE
         ttml
         Threads::Threads
