@@ -9,7 +9,7 @@
 #include "ttnn/global_semaphore.hpp"
 
 namespace ttnn {
-namespace operations::experimental::ccl {
+namespace operations::ccl {
 
 struct ExecuteBroadcast {
     static ttnn::Tensor invoke(
@@ -22,12 +22,8 @@ struct ExecuteBroadcast {
         std::optional<tt::tt_metal::SubDeviceId> subdevice_id = std::nullopt);
 };
 
-}  // namespace operations::experimental::ccl
+}  // namespace operations::ccl
 
-namespace experimental {
+constexpr auto broadcast = ttnn::register_operation<"ttnn::broadcast", ttnn::operations::ccl::ExecuteBroadcast>();
 
-constexpr auto broadcast =
-    ttnn::register_operation<"ttnn::experimental::broadcast", ttnn::operations::experimental::ccl::ExecuteBroadcast>();
-
-}  // namespace experimental
 }  // namespace ttnn

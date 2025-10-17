@@ -6,8 +6,8 @@
 
 #include "ttnn-pybind/pybind_fwd.hpp"
 
-namespace ttnn::operations::experimental::ccl {
+namespace ttnn::operations::ccl {
 
 void py_bind_broadcast(pybind11::module& module);
 
-}  // namespace ttnn::operations::experimental::ccl
+}  // namespace ttnn::operations::ccl

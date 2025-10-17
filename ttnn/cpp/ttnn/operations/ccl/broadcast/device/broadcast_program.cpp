@@ -8,7 +8,7 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/fabric.hpp>
 #include "ttnn/tensor/tensor_impl.hpp"
-#include "ttnn/operations/experimental/ccl/broadcast/device/broadcast_op.hpp"
+#include "ttnn/operations/ccl/broadcast/device/broadcast_op.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
@@ -192,9 +192,9 @@ tt::tt_metal::operation::ProgramWithCallbacks broadcast_multicore(
     }
     auto worker_sender_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        tilized ? "ttnn/cpp/ttnn/operations/experimental/ccl/broadcast/device/kernels/"
+        tilized ? "ttnn/cpp/ttnn/operations/ccl/broadcast/device/kernels/"
                   "broadcast_tile_reader.cpp"
-                : "ttnn/cpp/ttnn/operations/experimental/ccl/broadcast/device/kernels/"
+                : "ttnn/cpp/ttnn/operations/ccl/broadcast/device/kernels/"
                   "broadcast_rm_reader.cpp",
         sender_worker_core_range,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_args, kernel_defines));
@@ -202,9 +202,9 @@ tt::tt_metal::operation::ProgramWithCallbacks broadcast_multicore(
     // Writer
     auto worker_sender_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        tilized ? "ttnn/cpp/ttnn/operations/experimental/ccl/broadcast/device/kernels/"
+        tilized ? "ttnn/cpp/ttnn/operations/ccl/broadcast/device/kernels/"
                   "broadcast_tile_writer.cpp"
-                : "ttnn/cpp/ttnn/operations/experimental/ccl/broadcast/device/kernels/"
+                : "ttnn/cpp/ttnn/operations/ccl/broadcast/device/kernels/"
                   "broadcast_rm_writer.cpp",
         sender_worker_core_range,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_args, kernel_defines));

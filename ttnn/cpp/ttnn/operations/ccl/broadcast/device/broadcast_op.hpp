@@ -96,7 +96,7 @@ tt::tt_metal::operation::ProgramWithCallbacks broadcast_multicore(
     const GlobalSemaphore& barrier_semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id);
 
-namespace operations::experimental::ccl {
+namespace operations::ccl {
 
 Tensor broadcast(
     const Tensor& input_tensor,
@@ -107,6 +107,6 @@ Tensor broadcast(
     std::optional<uint32_t> cluster_axis = std::nullopt,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt);
 
-}  // namespace operations::experimental::ccl
+}  // namespace operations::ccl
 
 }  // namespace ttnn

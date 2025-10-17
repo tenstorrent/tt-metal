@@ -132,7 +132,7 @@ tt::tt_metal::operation::Hash Broadcast::compute_program_hash(const std::vector<
         input_memory_config);
 }
 
-namespace operations::experimental::ccl {
+namespace operations::ccl {
 
 Tensor broadcast_impl(
     const Tensor& input_tensor,
@@ -191,6 +191,6 @@ Tensor broadcast(
     return broadcast_impl(input_tensor, sender_coord, num_links, memory_config, topology, cluster_axis, sub_device_id);
 }
 
-}  // namespace operations::experimental::ccl
+}  // namespace operations::ccl
 
 }  // namespace ttnn

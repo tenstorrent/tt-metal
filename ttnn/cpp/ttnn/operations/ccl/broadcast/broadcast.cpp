@@ -4,11 +4,11 @@
 
 #include "broadcast.hpp"
 #include <utility>
-#include "ttnn/operations/experimental/ccl/broadcast/device/broadcast_op.hpp"
+#include "ttnn/operations/ccl/broadcast/device/broadcast_op.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/global_semaphore.hpp"
 
-namespace ttnn::operations::experimental::ccl {
+namespace ttnn::operations::ccl {
 
 ttnn::Tensor ExecuteBroadcast::invoke(
     const ttnn::Tensor& input_tensor,
@@ -18,8 +18,8 @@ ttnn::Tensor ExecuteBroadcast::invoke(
     const ttnn::ccl::Topology topology,
     std::optional<uint32_t> cluster_axis,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id) {
-    return ttnn::operations::experimental::ccl::broadcast(
+    return ttnn::operations::ccl::broadcast(
         input_tensor, sender_coord, num_links, memory_config, topology, cluster_axis, subdevice_id);
 }
 
-}  // namespace ttnn::operations::experimental::ccl
+}  // namespace ttnn::operations::ccl
