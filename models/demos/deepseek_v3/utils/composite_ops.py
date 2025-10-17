@@ -39,10 +39,10 @@ def mesh_scatter(
         for column_scatter_idx in range(num_mesh_cols):
             ttnn.point_to_point(
                 tensor,
-                ttnn.MeshCoordinate(to_row_scatter_idx, column_scatter_idx),
                 ttnn.MeshCoordinate(from_row_scatter_idx, column_scatter_idx),
-                ttnn.Topology.Linear,
-                optional_output_tensor=tensor,
+                ttnn.MeshCoordinate(to_row_scatter_idx, column_scatter_idx),
+                topology=ttnn.Topology.Linear,
+                output_tensor=tensor,
             )
 
     # Scatter column if needed
@@ -53,10 +53,10 @@ def mesh_scatter(
         for row_scatter_idx in range(num_mesh_rows):
             ttnn.point_to_point(
                 tensor,
-                ttnn.MeshCoordinate(row_scatter_idx, to_col_scatter_idx),
                 ttnn.MeshCoordinate(row_scatter_idx, from_col_scatter_idx),
-                ttnn.Topology.Linear,
-                optional_output_tensor=tensor,
+                ttnn.MeshCoordinate(row_scatter_idx, to_col_scatter_idx),
+                topology=ttnn.Topology.Linear,
+                output_tensor=tensor,
             )
 
     if old_memory_config is not None:  # TODO: Remove this once point2point supports sharded tensors
