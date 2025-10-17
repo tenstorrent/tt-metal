@@ -174,6 +174,10 @@ public:
 
     void register_kernel_elf_paths_with_watcher(IDevice& device) const;
 
+    bool get_is_runtime_kernel() const { return this->is_runtime_kernel_; }
+    // This can be set before compiling the kernel
+    void set_is_runtime_kernel(bool is_runtime_kernel) { this->is_runtime_kernel_ = is_runtime_kernel; }
+
     static KernelImpl& from(Kernel& kernel) {
         // KernelImpl and subclasses are the only implementations of Kernel.
         // NOLINTNEXTLINE(cppcoreguidelines-pro-type-static-cast-downcast)
@@ -202,13 +206,18 @@ protected:
             core_range_set,
             compile_args,
             defines,
-            named_compile_args) {}
+            named_compile_args),
+        is_runtime_kernel_{false} {}
     // DataMovement kernels have one binary each and Compute kernels have three binaries
     // Different set of binaries per device because kernel compilation is device dependent
     // TODO: break this dependency by https://github.com/tenstorrent/tt-metal/issues/3381
     std::unordered_map<ChipId, std::vector<const ll_api::memory*>> binaries_;
 
     std::vector<std::string> file_paths(IDevice& device) const;
+
+private:
+    // Dispatch / Fabric kernels
+    bool is_runtime_kernel_;
 };
 
 class DataMovementKernel : public KernelImpl {

@@ -354,6 +354,7 @@ void RunTimeOptions::ParseWatcherEnv() {
         watcher_settings.interval_ms = sleep_val;
     }
 
+    watcher_settings.fw_enabled = (getenv("TT_METAL_WATCHER_RUNTIME_KERNELS") != nullptr);
     watcher_settings.dump_all = (getenv("TT_METAL_WATCHER_DUMP_ALL") != nullptr);
     watcher_settings.append = (getenv("TT_METAL_WATCHER_APPEND") != nullptr);
     watcher_settings.noinline = (getenv("TT_METAL_WATCHER_NOINLINE") != nullptr);
@@ -620,6 +621,7 @@ uint32_t RunTimeOptions::get_watcher_hash() const {
     hash_str += std::to_string(watcher_feature_disabled(watcher_dispatch_str));
     hash_str += std::to_string(get_watcher_noc_sanitize_linked_transaction());
     hash_str += std::to_string(get_watcher_enabled());
+    hash_str += std::to_string(get_fw_watcher_enabled());
     std::hash<std::string> hash_fn;
     return hash_fn(hash_str);
 }

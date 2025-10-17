@@ -163,6 +163,18 @@ void GenerateBinaries(IDevice* device, JitBuildOptions& build_options, const std
     // ZoneScoped;
     // const std::string tracyPrefix = "GenerateBinaries_";
     // ZoneName((tracyPrefix + build_options.name).c_str(), build_options.name.length() + tracyPrefix.length());
+
+    // Setup Watcher
+    {
+        const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+        const auto& kernel_impl = tt::tt_metal::KernelImpl::from(*kernel);
+        // Enable for user kernels. Only enable for firmware kernels if watcher fw is enabled.
+        if (rtoptions.get_watcher_enabled() &&
+            (!kernel_impl.get_is_runtime_kernel() || rtoptions.get_fw_watcher_enabled())) {
+            kernel->add_defines({{"WATCHER_ENABLED", "1"}});
+        }
+    }
+
     try {
         jit_build_genfiles_descriptors(
             BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_env, build_options);

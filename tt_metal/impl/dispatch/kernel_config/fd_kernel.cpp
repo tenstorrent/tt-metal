@@ -15,10 +15,12 @@
 #include "dispatch_core_common.hpp"
 #include "dispatch_s.hpp"
 #include "hal_types.hpp"
+#include "tt_metal/impl/kernels/kernel_impl.hpp"
 #include "kernel_types.hpp"
 #include "prefetch.hpp"
 #include "impl/context/metal_context.hpp"
 #include <umd/device/types/core_coordinates.hpp>
+#include "tt_metal/impl/program/program_impl.hpp"
 
 using namespace tt::tt_metal;
 
@@ -158,8 +160,9 @@ KernelHandle FDKernel::configure_kernel_variant(
         defines["GALAXY_CLUSTER"] = "1";
     }
 
+    tt::tt_metal::KernelHandle kernel_handle;
     if (GetCoreType() == CoreType::WORKER) {
-        return tt::tt_metal::CreateKernel(
+        kernel_handle = tt::tt_metal::CreateKernel(
             *program_,
             path,
             logical_core_,
@@ -171,7 +174,7 @@ KernelHandle FDKernel::configure_kernel_variant(
                 .defines = defines,
                 .opt_level = opt_level});
     } else {
-        return tt::tt_metal::CreateKernel(
+        kernel_handle = tt::tt_metal::CreateKernel(
             *program_,
             path,
             logical_core_,
@@ -182,6 +185,11 @@ KernelHandle FDKernel::configure_kernel_variant(
                 .defines = defines,
                 .opt_level = opt_level});
     }
+
+    auto kernel = program_->impl().get_kernel(kernel_handle);
+    tt::tt_metal::KernelImpl::from(*kernel).set_is_runtime_kernel(true);
+
+    return kernel_handle;
 }
 
 void FDKernel::create_edm_connection_sems(FDKernelEdmConnectionAttributes& attributes) {

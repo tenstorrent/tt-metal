@@ -490,7 +490,7 @@ void PrefetchKernel::CreateKernel() {
         true,
         // TEMP: Disable function inlining on Prefetcher when watcher is enabled but no_inline is not specified to
         // respect code space
-        tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled() &&
+        tt::tt_metal::MetalContext::instance().rtoptions().get_fw_watcher_enabled() &&
             (not tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_noinline()),
         optimization_level);
 }

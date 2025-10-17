@@ -73,7 +73,10 @@ struct TargetSelection {
 };
 
 struct WatcherSettings {
+    // Enabled for user kernels
     bool enabled = false;
+    // Enabled for dispatch + fabric. If this is true then enabled must also be true.
+    bool fw_enabled = false;
     bool dump_all = false;
     bool append = false;
     bool auto_unpause = false;
@@ -251,6 +254,8 @@ public:
     void set_watcher_enabled(bool enabled) { watcher_settings.enabled = enabled; }
     // Return a hash of which watcher features are enabled
     uint32_t get_watcher_hash() const;
+    bool get_fw_watcher_enabled() const { return watcher_settings.fw_enabled; }
+    void set_fw_watcher_enabled(bool enabled) { watcher_settings.fw_enabled = enabled; }
     int get_watcher_interval() const { return watcher_settings.interval_ms; }
     void set_watcher_interval(int interval_ms) { watcher_settings.interval_ms = interval_ms; }
     int get_watcher_dump_all() const { return watcher_settings.dump_all; }
