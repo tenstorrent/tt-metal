@@ -60,7 +60,9 @@ protected:
     }
 };
 
-TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0) {
+// Tests in this file are disabled pending re-implementation with the tensor-aggregation and semaphore-free all-gather
+// APIs, which is blocked by #30692.
+TEST_F(MultiCQFabricMeshDevice2x4Fixture, DISABLED_AsyncExecutionWorksCQ0) {
     constexpr size_t test_expected_num_devices = 4;
 
     MeshDevice* mesh_device = this->mesh_device_.get();
@@ -220,7 +222,7 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0) {
     log_info(tt::LogTest, "Finished");
 }
 
-TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0CQ1) {
+TEST_F(MultiCQFabricMeshDevice2x4Fixture, DISABLED_AsyncExecutionWorksCQ0CQ1) {
     constexpr size_t test_expected_num_devices = 4;
 
     MeshDevice* mesh_device = this->mesh_device_.get();
@@ -422,7 +424,7 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0CQ1) {
     log_info(tt::LogTest, "Finished");
 }
 
-TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksMultithreadCQ0) {
+TEST_F(MultiCQFabricMeshDevice2x4Fixture, DISABLED_AsyncExecutionWorksMultithreadCQ0) {
     constexpr size_t test_expected_num_devices = 4;
 
     MeshDevice* mesh_device = this->mesh_device_.get();
