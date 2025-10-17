@@ -7,6 +7,7 @@ from time import sleep
 import torch
 import pytest
 from loguru import logger
+import random
 
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 import ttnn
@@ -179,6 +180,7 @@ def gen_tensors(
     local_reduce=False,
 ):
     torch.manual_seed(20)
+    random.seed(20)
     # create input tokens
     assert experts % devices == 0
     assert selected_experts_k < experts
