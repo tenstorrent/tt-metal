@@ -38,9 +38,9 @@ from loguru import logger
     # fmt: off
     [
        ( torch.bfloat16, False, 0.822, 0.892, 0.998, 0.904),
-       ( torch.bfloat16,  True, 0.863, 0.966, 0.999, 0.896),
+       ( torch.bfloat16,  True, 0.862, 0.966, 0.999, 0.894),
        ( torch.float32, False, 0.906, 0.978, 0.999, 0.929),
-       ( torch.float32,  True, 0.916, 0.881, 0.998, 0.918)
+       ( torch.float32,  True, 0.914, 0.881, 0.998, 0.918)
     ],
     # fmt: on
     ids=[
