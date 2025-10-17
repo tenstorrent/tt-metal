@@ -87,6 +87,9 @@ public:
         includes.push_back("tt_metal/hw/inc/tt-2xx/quasar");
         includes.push_back("tt_metal/hw/inc/tt-2xx/quasar/quasar_defines");
         includes.push_back("tt_metal/hw/inc/tt-2xx/quasar/noc");
+        includes.push_back("tt_metal/hw/inc/tt-2xx/quasar/noc/registers");
+        includes.push_back("tt_metal/hw/inc/tt-2xx/quasar/overlay");
+        includes.push_back("tt_metal/hw/inc/tt-2xx/quasar/overlay/meta/registers");
         includes.push_back("tt_metal/third_party/tt_llk/tt_llk_blackhole/common/inc");
         includes.push_back("tt_metal/third_party/tt_llk/tt_llk_blackhole/llk_lib");
 

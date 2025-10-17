@@ -164,6 +164,16 @@ HalProcessorSet Hal::parse_processor_set_spec(std::string_view spec) const {
         set.add(HalProgrammableCoreType::IDLE_ETH, 0);
         set.add(HalProgrammableCoreType::IDLE_ETH, 1);
     }
+    if (spec.find("DM0") != std::string_view::npos) {
+        set.add(HalProgrammableCoreType::TENSIX, 0);
+    }
+    if (spec.find("DM1") != std::string_view::npos) {
+        set.add(HalProgrammableCoreType::TENSIX, 1);
+    }
+    if (spec.find("DM*") != std::string_view::npos) {
+        set.add(HalProgrammableCoreType::TENSIX, 0);
+        set.add(HalProgrammableCoreType::TENSIX, 1);
+    }
     if (set.empty()) {
         TT_THROW("Invalid RISC selection: \"{}\". Valid values are BR,NC,TR0,TR1,TR2,TR*,ER0,ER1,ER*.", spec);
     }

@@ -5,6 +5,10 @@
 #include "firmware_common.h"
 // #include "risc_common.h"
 #include "risc_attribs.h"
+#include "overlay_addresses.h"
+#include "overlay_reg.h"
+#include "overlay_reg_defines_debug.h"
+#include "cmdbuff_api.hpp"
 #include "debug/watcher_common.h"
 #include "debug/waypoint.h"
 #include "debug/dprint.h"
@@ -12,18 +16,30 @@
 
 uint8_t noc_index;
 
+#define NUM_TRISC_CLUSTERS 4
+#define GENERATE_REG_ADDR(x) NEO_REGS_##x##__LOCAL_REGS_DEBUG_REGS_RISCV_IC_INVALIDATE_REG_ADDR
+
+constexpr uint32_t RISCV_IC_TRISC3_MASK = 0x0;
+constexpr uint32_t RISCV_IC_TRISC2_MASK = 0x1;
+constexpr uint32_t RISCV_IC_TRISC1_MASK = 0x2;
+constexpr uint32_t RISCV_IC_TRISC0_MASK = 0x4;
+constexpr uint32_t RISCV_IC_TRISC_ALL_MASK = RISCV_IC_TRISC0_MASK | RISCV_IC_TRISC1_MASK | RISCV_IC_TRISC2_MASK;
+
 uint8_t my_x[NUM_NOCS] __attribute__((used));
 uint8_t my_y[NUM_NOCS] __attribute__((used));
 uint8_t my_logical_x_ __attribute__((used));
 uint8_t my_logical_y_ __attribute__((used));
 uint8_t my_relative_x_ __attribute__((used));
 uint8_t my_relative_y_ __attribute__((used));
+std::uint64_t hartid_ __attribute__((used));
 
 uint32_t noc_reads_num_issued[NUM_NOCS] __attribute__((used));
 uint32_t noc_nonposted_writes_num_issued[NUM_NOCS] __attribute__((used));
 uint32_t noc_nonposted_writes_acked[NUM_NOCS] __attribute__((used));
 uint32_t noc_nonposted_atomics_acked[NUM_NOCS] __attribute__((used));
 uint32_t noc_posted_writes_num_issued[NUM_NOCS] __attribute__((used));
+
+CBInterface cb_interface[NUM_CIRCULAR_BUFFERS] __attribute__((used));
 
 uint32_t tt_l1_ptr* rta_l1_base __attribute__((used));
 uint32_t tt_l1_ptr* crta_l1_base __attribute__((used));
@@ -38,14 +54,59 @@ int32_t bank_to_l1_offset[NUM_L1_BANKS] __attribute__((used));
 
 tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE + MEM_L1_UNCACHED_BASE);
 
+void set_deassert_addresses() {
+    // WRITE_REG(NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_TRISC0_RESET_PC_REG_ADDR, MEM_TRISC0_FIRMWARE_BASE);
+    // WRITE_REG(NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_TRISC1_RESET_PC_REG_ADDR, MEM_TRISC1_FIRMWARE_BASE);
+    // WRITE_REG(NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_TRISC2_RESET_PC_REG_ADDR, MEM_TRISC2_FIRMWARE_BASE);
+    // WRITE_REG(NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_TRISC3_RESET_PC_REG_ADDR, MEM_TRISC3_FIRMWARE_BASE);
+    // WRITE_REG(NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_TRISC_RESET_PC_OVERRIDE_REG_ADDR, 0b1111);
+    // WRITE_REG(NEO_REGS_1__LOCAL_REGS_DEBUG_REGS_TRISC0_RESET_PC_REG_ADDR, MEM_TRISC0_FIRMWARE_BASE);
+    // WRITE_REG(NEO_REGS_1__LOCAL_REGS_DEBUG_REGS_TRISC1_RESET_PC_REG_ADDR, MEM_TRISC1_FIRMWARE_BASE);
+    // WRITE_REG(NEO_REGS_1__LOCAL_REGS_DEBUG_REGS_TRISC2_RESET_PC_REG_ADDR, MEM_TRISC2_FIRMWARE_BASE);
+    // WRITE_REG(NEO_REGS_1__LOCAL_REGS_DEBUG_REGS_TRISC3_RESET_PC_REG_ADDR, MEM_TRISC3_FIRMWARE_BASE);
+    // WRITE_REG(NEO_REGS_1__LOCAL_REGS_DEBUG_REGS_TRISC_RESET_PC_OVERRIDE_REG_ADDR, 0b1111);
+    // WRITE_REG(NEO_REGS_2__LOCAL_REGS_DEBUG_REGS_TRISC0_RESET_PC_REG_ADDR, MEM_TRISC0_FIRMWARE_BASE);
+    // WRITE_REG(NEO_REGS_2__LOCAL_REGS_DEBUG_REGS_TRISC1_RESET_PC_REG_ADDR, MEM_TRISC1_FIRMWARE_BASE);
+    // WRITE_REG(NEO_REGS_2__LOCAL_REGS_DEBUG_REGS_TRISC2_RESET_PC_REG_ADDR, MEM_TRISC2_FIRMWARE_BASE);
+    // WRITE_REG(NEO_REGS_2__LOCAL_REGS_DEBUG_REGS_TRISC3_RESET_PC_REG_ADDR, MEM_TRISC3_FIRMWARE_BASE);
+    // WRITE_REG(NEO_REGS_2__LOCAL_REGS_DEBUG_REGS_TRISC_RESET_PC_OVERRIDE_REG_ADDR, 0b1111);
+    // WRITE_REG(NEO_REGS_3__LOCAL_REGS_DEBUG_REGS_TRISC0_RESET_PC_REG_ADDR, MEM_TRISC0_FIRMWARE_BASE);
+    // WRITE_REG(NEO_REGS_3__LOCAL_REGS_DEBUG_REGS_TRISC1_RESET_PC_REG_ADDR, MEM_TRISC1_FIRMWARE_BASE);
+    // WRITE_REG(NEO_REGS_3__LOCAL_REGS_DEBUG_REGS_TRISC2_RESET_PC_REG_ADDR, MEM_TRISC2_FIRMWARE_BASE);
+    // WRITE_REG(NEO_REGS_3__LOCAL_REGS_DEBUG_REGS_TRISC3_RESET_PC_REG_ADDR, MEM_TRISC3_FIRMWARE_BASE);
+    // WRITE_REG(NEO_REGS_3__LOCAL_REGS_DEBUG_REGS_TRISC_RESET_PC_OVERRIDE_REG_ADDR, 0b1111);
+}
+
+void invalidate_trisc_instruction_cache() {
+    // invalidate TRISCs
+    // WRITE_REG(NEO_REGS_0_LOCAL_REGS_DEBUG_REGS_RISCV_IC_INVALIDATE_REG_ADDR, RISCV_IC_TRISC_ALL_MASK);
+    // WRITE_REG(NEO_REGS_1_LOCAL_REGS_DEBUG_REGS_RISCV_IC_INVALIDATE_REG_ADDR, RISCV_IC_TRISC_ALL_MASK);
+    // WRITE_REG(NEO_REGS_2_LOCAL_REGS_DEBUG_REGS_RISCV_IC_INVALIDATE_REG_ADDR, RISCV_IC_TRISC_ALL_MASK);
+    // WRITE_REG(NEO_REGS_3_LOCAL_REGS_DEBUG_REGS_RISCV_IC_INVALIDATE_REG_ADDR, RISCV_IC_TRISC_ALL_MASK);
+}
+
 void device_setup() {
     // instn_buf
     // pc_buf
     // clock gating
-    // NOC setup
-    // set_deassert_addresses
-    // wzeromem
-    // invalidate_l1_cache
+
+    reset_cmdbuf_0();
+    setup_as_copy_cmdbuf_0(false, false, {0}, false);
+    setup_ongoing_cmdbuf_0(false, false, false, false, false);
+    setup_vcs_cmdbuf_0(false);
+    setup_trids_cmdbuf_0(CMDBUF_DEF_TRID);
+    reset_cmdbuf_1();
+    setup_as_copy_cmdbuf_1(false, false, {0}, false);
+    setup_ongoing_cmdbuf_1(false, false, false, false, false);
+    setup_vcs_cmdbuf_1(false);
+    setup_trids_cmdbuf_1(CMDBUF_DEF_TRID);
+
+    set_deassert_addresses();
+    wzeromem(MEM_ZEROS_BASE, MEM_ZEROS_SIZE);
+    // invalidate instruction cache
+    asm("FENCE.i");
+    invalidate_trisc_instruction_cache();
+
     // clear_destination_registers
     // enable_cc_stack
     // set_default_sfpu_constant_register_state
@@ -86,6 +147,7 @@ int main() {
     configure_csr();
     std::uint64_t hartid;
     asm volatile("csrr %0, mhartid" : "=r"(hartid));
+    // asm volatile("csrr %0, mhartid" : "=r"(hartid_));
     WAYPOINT("I");
     // clear bss
     // handle noc_tobank ???
@@ -95,10 +157,13 @@ int main() {
     my_logical_y_ = mailboxes->core_info.absolute_logical_y;
 
     // risc_init();
-    device_setup();
+
     if (hartid > 0) {
         signal_subordinate_completion();
+        asm("wfi");
     } else {  // This is DM0
+        device_setup();
+        deassert_all_reset();
         wait_subordinates();
         mailboxes->go_messages[0].signal = RUN_MSG_DONE;
 
@@ -120,11 +185,15 @@ int main() {
                 // While the go signal for kernel execution is not sent, check if the worker was signalled
                 // to reset its launch message read pointer.
                 if ((go_message_signal == RUN_MSG_RESET_READ_PTR) ||
-                    (go_message_signal == RUN_MSG_RESET_READ_PTR_FROM_HOST)) {
+                    (go_message_signal == RUN_MSG_RESET_READ_PTR_FROM_HOST) ||
+                    (go_message_signal == RUN_MSG_REPLAY_TRACE)) {
                     // Set the rd_ptr on workers to specified value
                     mailboxes->launch_msg_rd_ptr = 0;
-                    if (go_message_signal == RUN_MSG_RESET_READ_PTR) {
-                        DeviceTraceProfilerInit();
+                    if (go_message_signal == RUN_MSG_RESET_READ_PTR || go_message_signal == RUN_MSG_REPLAY_TRACE) {
+                        if (go_message_signal == RUN_MSG_REPLAY_TRACE) {
+                            DeviceIncrementTraceCount();
+                            DeviceTraceOnlyProfilerInit();
+                        }
                         uint32_t go_message_index = mailboxes->go_message_index;
                         // Querying the noc_index is safe here, since the RUN_MSG_RESET_READ_PTR go signal is currently
                         // guaranteed to only be seen after a RUN_MSG_GO signal, which will set the noc_index to a valid
@@ -160,11 +229,10 @@ int main() {
                 uint32_t kernel_config_base =
                     firmware_config_init(mailboxes, ProgrammableCoreType::TENSIX, PROCESSOR_INDEX);
                 // Invalidate the i$ now the kernels have loaded and before running
-                // volatile tt_reg_ptr uint32_t* cfg_regs = core.cfg_regs_base(0);
-                // cfg_regs[RISCV_IC_INVALIDATE_InvalidateAll_ADDR32] =
-                //     RISCV_IC_BRISC_MASK | RISCV_IC_TRISC_ALL_MASK | RISCV_IC_NCRISC_MASK;
+                invalidate_trisc_instruction_cache();
+                asm("FENCE.i");
 
-                // run_triscs(enables);
+                // run_triscs(enables); // TODO, not running triscs atm
 
                 // noc_index = launch_msg_address->kernel_config.brisc_noc_id;
                 // noc_mode = launch_msg_address->kernel_config.brisc_noc_mode;
@@ -282,7 +350,45 @@ int main() {
     }
     // Subordinates run this
     while (1) {
-        WAYPOINT("GW");
+        WAYPOINT("W1");
+        while (true) {
+            if (mailboxes->subordinate_sync.dm1 == RUN_SYNC_MSG_GO ||
+                mailboxes->subordinate_sync.dm1 == RUN_SYNC_MSG_LOAD) {
+                break;
+            }
+            asm("nop; nop; nop; nop; nop");
+        }
+        uint32_t launch_msg_rd_ptr = mailboxes->launch_msg_rd_ptr;
+        launch_msg_t* launch_msg = &(mailboxes->launch[launch_msg_rd_ptr]);
+
+        uint32_t kernel_config_base = firmware_config_init(mailboxes, ProgrammableCoreType::TENSIX, PROCESSOR_INDEX);
+        int index = static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::DM1);
+
+        uint32_t kernel_lma = kernel_config_base + launch_msg->kernel_config.kernel_text_offset[index];
+
+        uint32_t tt_l1_ptr* cb_l1_base =
+            (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg->kernel_config.local_cb_offset);
+        uint32_t local_cb_mask = launch_msg->kernel_config.local_cb_mask;
+        // setup_local_cb_read_write_interfaces<true, true, false>(cb_l1_base, 0, local_cb_mask);
+
+        // cb_l1_base = (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg->kernel_config.remote_cb_offset);
+        // uint32_t end_cb_index = launch_msg->kernel_config.min_remote_cb_start_index;
+        // NOC argument is unused
+        // experimental::setup_remote_cb_interfaces<false>(cb_l1_base, end_cb_index, 0, 0, 0, 0);
+        my_relative_x_ = my_logical_x_ - launch_msg->kernel_config.sub_device_origin_x;
+        my_relative_y_ = my_logical_y_ - launch_msg->kernel_config.sub_device_origin_y;
+
+        WAYPOINT("R1");
+        while (mailboxes->subordinate_sync.dm1 != RUN_SYNC_MSG_GO) {
+            asm("nop; nop; nop; nop; nop");
+        }
+        asm("FENCE.i");
+        auto stack_free = reinterpret_cast<uint32_t (*)()>(kernel_lma)();
+
+        record_stack_usage(stack_free);
+        WAYPOINT("D1");
+
+        mailboxes->subordinate_sync.dm1 = RUN_SYNC_MSG_DONE;
     }
 
     return 0;
