@@ -18,8 +18,14 @@ For rmsnorm it computes E(x**2) and returns it as a one tile wide output
 #include "compute_kernel_api/layernorm.h"
 #include "debug/dprint.h"
 
-ALWI void ACQ() { acquire_dst(); }
-ALWI void REL() { release_dst(); }
+ALWI void ACQ() {
+    tile_regs_acquire();
+    tile_regs_wait();
+}
+ALWI void REL() {
+    tile_regs_commit();
+    tile_regs_release();
+}
 
 namespace NAMESPACE {
 void MAIN {
