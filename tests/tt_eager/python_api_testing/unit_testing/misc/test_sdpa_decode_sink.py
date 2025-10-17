@@ -10,7 +10,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
 import ttnn
 from loguru import logger
 import pytest
-from models.common.utility_functions import skip_for_blackhole
+from models.common.utility_functions import skip_for_blackhole, skip_with_watcher
 
 
 def flash_decode_sdpa(Q, K_cache, V_cache, sink, sm_scale, sliding_window=0, block_size=128):
@@ -325,6 +325,18 @@ def test_sdpa_decode(
 ):
     if nkv > 1 and q_dtype != ttnn.bfloat16:
         pytest.skip("Only bfloat16 is supported for multi-head queries")
+
+    # Skip specific test case when watcher is enabled, github issue #29225
+    if (
+        batch == 32
+        and seq_len == 128
+        and nh == 8
+        and nkv == 1
+        and dim == 128
+        and q_dtype == ttnn.bfloat16
+        and dtype == ttnn.bfloat8_b
+    ):
+        skip_with_watcher("Test case fails with watcher enabled")()
 
     run_sdpa_decode_impl(
         device,
