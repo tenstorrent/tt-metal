@@ -270,10 +270,14 @@ void PhysicalSystemDescriptor::run_local_discovery() {
             TrayID{tray_id}, asic_location, cluster_desc->get_board_type(src_chip_id), src_unique_id, hostname};
     };
 
+    // Add physical descriptors for all ASICs on this host
+    for (const auto& [chip_id, unique_id] : chip_unique_ids) {
+        add_local_asic_descriptor(AsicID{unique_id}, chip_id);
+        asic_graph[AsicID{unique_id}] = {};
+    }
+
     for (const auto& [src, conn] : eth_connections) {
         auto src_unique_id = AsicID{chip_unique_ids.at(src)};
-        // Populate ASIC Descriptor with Physical Information
-        add_local_asic_descriptor(src_unique_id, src);
         std::unordered_map<chip_id_t, size_t> visited_dst;
         // Populate ASIC Graph for Current Host
         for (auto& [chan, dst] : conn) {
@@ -294,11 +298,6 @@ void PhysicalSystemDescriptor::run_local_discovery() {
 
     for (const auto& [local_chip_id, eth_link_info] : cross_host_eth_connections) {
         auto local_unique_id = AsicID{chip_unique_ids.at(local_chip_id)};
-        // This ASIC has no local ethernet connections, but is connected to this host
-        // and to a remote host. Add it to the ASIC Descriptor List.
-        if (asic_descriptors_.find(local_unique_id) == asic_descriptors_.end()) {
-            add_local_asic_descriptor(local_unique_id, local_chip_id);
-        }
         std::unordered_map<AsicID, size_t> visited_dst;
         for (const auto& [eth_chan, remote_info] : eth_link_info) {
             auto dst_unique_id = AsicID{std::get<0>(remote_info)};
