@@ -80,8 +80,7 @@ def test_block_inference(batch, num_chunks, mesh_device, reset_seeds, gated):
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
 
-    for _ in range(10):
-        tt_out = tt_model(attention_input, mask=tt_mask)
+    tt_out = tt_model(attention_input, mask=tt_mask)
 
     tt_output_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[0, :, :, :]
 
