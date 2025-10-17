@@ -203,8 +203,8 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMShardedReadBaseCase) {
     unit_tests::dm::dram_sharded::DramShardedConfig test_config = {
         .test_id = 1000,
         .num_of_transactions = num_of_transactions,
-        .num_banks = 4,
-        .pages_per_bank = 1,
+        .num_banks = mesh_device->num_dram_channels(),
+        .pages_per_bank = 2,
         .page_size_bytes = page_size_bytes,
         .l1_data_format = l1_data_format,
         .cores = core_range_set};
