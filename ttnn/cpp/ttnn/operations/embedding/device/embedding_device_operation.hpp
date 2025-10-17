@@ -9,8 +9,6 @@
 #include "ttnn/run_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
-using namespace tt::constants;
-
 namespace ttnn::operations::embedding {
 
 enum class EmbeddingsType { GENERIC, PADDED, BINARY };

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,6 +10,8 @@
 #include <algorithm>
 #include <optional>
 #include <random>
+#include <string>
+#include <cstdlib>
 
 #include <tt-metalium/mesh_graph.hpp>
 #include <tt-metalium/device.hpp>
@@ -22,12 +24,15 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/system_mesh.hpp>
+#include "tt_align.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
 
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_fabric_test_interfaces.hpp"
 #include "tt_fabric_test_common_types.hpp"
+#include "tt_metal/distributed/fd_mesh_command_queue.hpp"
+#include "tt_metal/impl/dispatch/hardware_command_queue.hpp"
 
 using MeshDevice = tt::tt_metal::distributed::MeshDevice;
 using MeshCoordinate = tt::tt_metal::distributed::MeshCoordinate;
@@ -95,13 +100,26 @@ public:
     }
 
     MeshCoordinateRange get_host_local_device_coordinates() const {
-        return control_plane_ptr_->get_coord_range(local_mesh_id_, MeshScope::LOCAL);
+        return tt::tt_metal::MetalContext::instance().get_control_plane().get_coord_range(
+            local_mesh_id_, MeshScope::LOCAL);
     }
 
     void open_devices(const TestFabricSetup& fabric_setup) {
         const auto& topology = fabric_setup.topology;
         const auto& routing_type = fabric_setup.routing_type.value();
         const auto& fabric_tensix_config = fabric_setup.fabric_tensix_config.value();
+
+        // Fabric Reliability Mode
+        // Default to STRICT; if runtime option (from rtoptions) is set, it takes precedence over
+        // fabric_setup.fabric_reliability_mode
+        tt::tt_fabric::FabricReliabilityMode reliability_mode =
+            tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
+        auto reliability_mode_override = tt::tt_metal::MetalContext::instance().rtoptions().get_reliability_mode();
+        if (reliability_mode_override.has_value()) {
+            reliability_mode = reliability_mode_override.value();
+        } else if (fabric_setup.fabric_reliability_mode.has_value()) {
+            reliability_mode = fabric_setup.fabric_reliability_mode.value();
+        }
 
         FabricConfig new_fabric_config;
         if (topology == Topology::Torus) {
@@ -124,12 +142,14 @@ public:
             new_fabric_config = it->second;
         }
 
-        if (new_fabric_config != current_fabric_config_ || fabric_tensix_config != current_fabric_tensix_config_) {
+        if (new_fabric_config != current_fabric_config_ || fabric_tensix_config != current_fabric_tensix_config_ ||
+            reliability_mode != current_fabric_reliability_mode_) {
             if (are_devices_open_) {
                 log_info(tt::LogTest, "Closing devices and switching to new fabric config: {}", new_fabric_config);
                 close_devices();
             }
-            open_devices_internal(new_fabric_config, fabric_tensix_config);
+            log_info(tt::LogTest, "Opening devices with fabric reliability mode: {}", reliability_mode);
+            open_devices_internal(new_fabric_config, fabric_tensix_config, reliability_mode);
 
             topology_ = topology;
             routing_type_ = routing_type;
@@ -145,7 +165,7 @@ public:
 
     void enqueue_program(const MeshCoordinate& mesh_coord, tt::tt_metal::Program program) {
         MeshCoordinateRange device(mesh_coord, mesh_coord);
-        tt::tt_metal::distributed::AddProgramToMeshWorkload(*mesh_workload_, std::move(program), device);
+        mesh_workload_->add_program(device, std::move(program));
     }
 
     void run_programs() {
@@ -163,7 +183,6 @@ public:
         tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED);
 
         // Clear all class members
-        control_plane_ptr_ = nullptr;
         local_available_node_ids_.clear();
         global_available_node_ids_.clear();
         available_mesh_ids_.clear();
@@ -171,6 +190,7 @@ public:
         mesh_workload_.reset();
         current_fabric_config_ = tt::tt_fabric::FabricConfig::DISABLED;
         current_fabric_tensix_config_ = tt_fabric::FabricTensixConfig::DISABLED;
+        current_fabric_reliability_mode_ = tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
         are_devices_open_ = false;
     }
 
@@ -178,21 +198,22 @@ public:
     // IDeviceInfoProvider methods
     // ======================================================================================
     FabricNodeId get_fabric_node_id(const chip_id_t physical_chip_id) const override {
-        return control_plane_ptr_->get_fabric_node_id_from_physical_chip_id(physical_chip_id);
+        return tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_node_id_from_physical_chip_id(
+            physical_chip_id);
     }
 
     FabricNodeId get_fabric_node_id(const MeshCoordinate& device_coord) const override {
-        const auto& mesh_graph = control_plane_ptr_->get_mesh_graph();
+        const auto& mesh_graph = tt::tt_metal::MetalContext::instance().get_control_plane().get_mesh_graph();
         return FabricNodeId(local_mesh_id_, mesh_graph.coordinate_to_chip(local_mesh_id_, device_coord));
     }
 
     FabricNodeId get_fabric_node_id(MeshId mesh_id, const MeshCoordinate& device_coord) const override {
-        const auto& mesh_graph = control_plane_ptr_->get_mesh_graph();
+        const auto& mesh_graph = tt::tt_metal::MetalContext::instance().get_control_plane().get_mesh_graph();
         return FabricNodeId(mesh_id, mesh_graph.coordinate_to_chip(mesh_id, device_coord));
     }
 
     MeshCoordinate get_device_coord(const FabricNodeId& node_id) const override {
-        const auto& mesh_graph = control_plane_ptr_->get_mesh_graph();
+        const auto& mesh_graph = tt::tt_metal::MetalContext::instance().get_control_plane().get_mesh_graph();
         return mesh_graph.chip_to_coordinate(node_id.mesh_id, node_id.chip_id);
     }
 
@@ -218,7 +239,7 @@ public:
 
     uint32_t get_l1_unreserved_base() const override {
         return tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
-            HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
+            tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::DEFAULT_UNRESERVED);
     }
 
     uint32_t get_l1_unreserved_size() const override { return tt::tt_metal::hal::get_max_worker_l1_unreserved_size(); }
@@ -226,15 +247,21 @@ public:
     uint32_t get_l1_alignment() const override { return tt::tt_metal::hal::get_l1_alignment(); }
 
     uint32_t get_max_payload_size_bytes() const override {
-        return control_plane_ptr_->get_fabric_context().get_fabric_max_payload_size_bytes();
+        return tt::tt_metal::MetalContext::instance()
+            .get_control_plane()
+            .get_fabric_context()
+            .get_fabric_max_payload_size_bytes();
     }
 
     bool is_2D_routing_enabled() const override {
-        return control_plane_ptr_->get_fabric_context().is_2D_routing_enabled();
+        return tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context().is_2D_routing_enabled();
     }
 
     bool is_dynamic_routing_enabled() const override {
-        return control_plane_ptr_->get_fabric_context().is_dynamic_routing_enabled();
+        return tt::tt_metal::MetalContext::instance()
+            .get_control_plane()
+            .get_fabric_context()
+            .is_dynamic_routing_enabled();
     }
 
     /**
@@ -301,18 +328,18 @@ public:
         auto all_cores = CoreRangeSet(all_cores_set);
         auto num_cores = all_cores_set.size();
         auto total_size = size_bytes * num_cores;
-        auto shard_params = ShardSpecBuffer(all_cores, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {num_cores, 1});
+        auto shard_params = tt::tt_metal::ShardSpecBuffer(all_cores, {1, 1}, tt::tt_metal::ShardOrientation::ROW_MAJOR, {1, 1}, {num_cores, 1});
 
         auto buffer_distribution_spec =
-            BufferDistributionSpec(Shape{num_cores, 1}, Shape{1, 1}, all_cores, ShardOrientation::ROW_MAJOR);
+            tt::tt_metal::BufferDistributionSpec(Shape{num_cores, 1}, Shape{1, 1}, all_cores, tt::tt_metal::ShardOrientation::ROW_MAJOR);
 
         auto buffer_page_mapping = buffer_distribution_spec.compute_page_mapping();
 
         DeviceLocalBufferConfig buffer_specs = {
             .page_size = size_bytes,
-            .buffer_type = BufferType::L1,
+            .buffer_type = tt::tt_metal::BufferType::L1,
             .sharding_args =
-                BufferShardingArgs(buffer_distribution_spec, shard_params, TensorMemoryLayout::HEIGHT_SHARDED),
+                tt::tt_metal::BufferShardingArgs(buffer_distribution_spec, shard_params, tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED),
             .bottom_up = std::nullopt,
             .sub_device_id = std::nullopt,
         };
@@ -365,6 +392,58 @@ public:
 
         return results;
     }
+
+    // When blocking is enabled, results_out must be pre-allocated for each core
+    void read_buffer_from_ethernet_cores(
+        const MeshCoordinate& device_coord,
+        const std::vector<CoreCoord>& cores,
+        uint32_t address,
+        uint32_t size_bytes,
+        bool blocking,
+        std::unordered_map<CoreCoord, std::vector<uint32_t>>& results_out) const {
+        auto device = mesh_device_->get_device(device_coord);
+        auto num_elements = tt::align(size_bytes, sizeof(uint32_t));
+        for (const auto& logical_core : cores) {
+            auto virtual_core = device->ethernet_core_from_logical_core(logical_core);
+            if (!blocking) {
+                TT_FATAL(results_out.contains(logical_core), "read_buffer_from_ethernet_cores was called in non-blocking mode without pre-allocating the results_out container. Non-blocking mode requires preallocating the results entries for each core.");
+                results_out.at(logical_core).resize(num_elements, 0);
+            } else {
+                results_out[logical_core] = std::vector<uint32_t>(num_elements, 0);
+            }
+            dynamic_cast<tt::tt_metal::distributed::FDMeshCommandQueue&>(mesh_device_->mesh_command_queue())
+                    .enqueue_read_shard_from_core(
+                        tt::tt_metal::distributed::DeviceMemoryAddress{device_coord, virtual_core, address},
+                        results_out.at(logical_core).data(),
+                        size_bytes,
+                        blocking);
+
+        }
+    }
+
+    void barrier_reads() {
+        mesh_device_->mesh_command_queue().finish();
+    }
+
+    void write_buffer_to_ethernet_cores(
+        const MeshCoordinate& device_coord,
+        const std::vector<CoreCoord>& cores,
+        uint32_t address,
+        const std::vector<uint8_t>& data) const {
+        auto device = mesh_device_->get_device(device_coord);
+        for (const auto& logical_core : cores) {
+            auto virtual_core = device->ethernet_core_from_logical_core(logical_core);
+
+            dynamic_cast<tt::tt_metal::distributed::FDMeshCommandQueue&>(mesh_device_->mesh_command_queue())
+                    .enqueue_write_shard_to_core(
+                        tt::tt_metal::distributed::DeviceMemoryAddress{device_coord, virtual_core, address},
+                        data.data(),
+                        data.size(),
+                        false);
+        }
+        mesh_device_->mesh_command_queue().finish();
+    }
+
 
     void zero_out_buffer_on_cores(
         const MeshCoordinate& device_coord,
@@ -520,6 +599,27 @@ public:
                 }
                 pairs.push_back({src_node, dst_node});
             }
+        }
+        return pairs;
+    }
+
+    std::vector<std::pair<FabricNodeId, FabricNodeId>> get_all_to_one_unicast_pairs(
+        const uint32_t device_idx) const override {
+        // device_idx is used to deterministically select a destination node from all available global nodes
+        const auto device_ids = get_global_node_ids();
+        std::vector<std::pair<FabricNodeId, FabricNodeId>> pairs;
+        auto dst_node_id = device_ids[device_idx % device_ids.size()];
+        pairs.reserve(device_ids.size() - 1);
+        for (const auto& src_node : device_ids) {
+            if (src_node == dst_node_id) {
+                continue;
+            }
+            if (this->topology_ == Topology::Linear) {
+                if (!this->are_devices_linear({src_node, dst_node_id})) {
+                    continue;
+                }
+            }
+            pairs.push_back({src_node, dst_node_id});
         }
         return pairs;
     }
@@ -691,7 +791,7 @@ public:
 
         auto num_forward_hops = 0;
         auto num_backward_hops = 0;
-        uint32_t full_hop_count = 2 * (mesh_shape_[NS_DIM] - 1 + mesh_shape_[EW_DIM] - 1) - 1;
+        uint32_t full_hop_count = (2 * (mesh_shape_[NS_DIM] - 1 + mesh_shape_[EW_DIM] - 1)) - 1;
 
         if (pattern_type == HighLevelTrafficPattern::FullRing) {
             num_forward_hops = full_hop_count;
@@ -841,12 +941,14 @@ public:
     Topology get_topology() const { return topology_; }
 
     bool wrap_around_mesh(FabricNodeId node) const override {
-        return control_plane_ptr_->get_fabric_context().is_wrap_around_mesh(node.mesh_id);
+        return tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context().is_wrap_around_mesh(
+            node.mesh_id);
     }
 
     RoutingDirection get_forwarding_direction(
         const FabricNodeId& src_node_id, const FabricNodeId& dst_node_id) const override {
-        auto forwarding_direction = control_plane_ptr_->get_forwarding_direction(src_node_id, dst_node_id);
+        auto forwarding_direction = tt::tt_metal::MetalContext::instance().get_control_plane().get_forwarding_direction(
+            src_node_id, dst_node_id);
         TT_FATAL(
             forwarding_direction.has_value(), "No forwarding direction found for {} -> {}", src_node_id, dst_node_id);
         return forwarding_direction.value();
@@ -902,10 +1004,11 @@ public:
 
     FabricNodeId get_neighbor_node_id(
         const FabricNodeId& src_node_id, const RoutingDirection& direction) const override {
-        const auto& neighbors = control_plane_ptr_->get_chip_neighbors(src_node_id, direction);
+        const auto& neighbors =
+            tt::tt_metal::MetalContext::instance().get_control_plane().get_chip_neighbors(src_node_id, direction);
         TT_FATAL(neighbors.size() == 1, "Expected only neighbor mesh for {} in direction: {}", src_node_id, direction);
         TT_FATAL(
-            neighbors.begin()->second.size() >= 1,
+            !neighbors.begin()->second.empty(),
             "Expected at least 1 neighbor chip for {} in direction: {}",
             src_node_id,
             direction);
@@ -1204,8 +1307,9 @@ public:
 
         // Check all possible directions
         for (const auto& direction : FabricContext::routing_directions) {
-            size_t routing_planes =
-                control_plane_ptr_->get_num_available_routing_planes_in_direction(node_id, direction);
+            size_t routing_planes = tt::tt_metal::MetalContext::instance()
+                                        .get_control_plane()
+                                        .get_num_available_routing_planes_in_direction(node_id, direction);
             if (routing_planes > 0) {  // Only consider directions that have routing planes
                 min_routing_planes = std::min(min_routing_planes, static_cast<uint32_t>(routing_planes));
             }
@@ -1253,7 +1357,6 @@ public:
     }
 
 private:
-    ControlPlane* control_plane_ptr_{};
     Topology topology_{0};
     RoutingType routing_type_{0};
     MeshShape mesh_shape_;
@@ -1262,6 +1365,8 @@ private:
     std::vector<FabricNodeId> global_available_node_ids_;
     tt::tt_fabric::FabricConfig current_fabric_config_{FabricConfig::DISABLED};
     tt_fabric::FabricTensixConfig current_fabric_tensix_config_{tt_fabric::FabricTensixConfig::DISABLED};
+    tt_fabric::FabricReliabilityMode current_fabric_reliability_mode_{
+        tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE};
     std::shared_ptr<MeshDevice> mesh_device_;
     std::shared_ptr<MeshWorkload> mesh_workload_;
     MeshId local_mesh_id_;
@@ -1303,18 +1408,20 @@ private:
     }
 
     void open_devices_internal(
-        tt::tt_fabric::FabricConfig fabric_config, tt_fabric::FabricTensixConfig fabric_tensix_config) {
+        tt::tt_fabric::FabricConfig fabric_config,
+        tt_fabric::FabricTensixConfig fabric_tensix_config,
+        tt_fabric::FabricReliabilityMode reliability_mode) {
         // Set fabric config FIRST, before any control plane access, this will reset control plane in metal context
-        tt::tt_fabric::SetFabricConfig(
-            fabric_config, FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE, std::nullopt, fabric_tensix_config);
+        tt::tt_fabric::SetFabricConfig(fabric_config, reliability_mode, std::nullopt, fabric_tensix_config);
 
         // Now it's safe to initialize control plane (will use correct mesh graph descriptor)
         // first need to re-init contorl plane so that it checks out the latest fabric config.
         tt::tt_metal::MetalContext::instance().initialize_control_plane();
-        control_plane_ptr_ = &tt::tt_metal::MetalContext::instance().get_control_plane();
+        local_host_rank_ = tt::tt_metal::MetalContext::instance().get_control_plane().get_local_host_rank_id_binding();
 
         // Initialize mesh and device info that was deferred from init()
-        const auto user_meshes = control_plane_ptr_->get_user_physical_mesh_ids();
+        const auto user_meshes =
+            tt::tt_metal::MetalContext::instance().get_control_plane().get_user_physical_mesh_ids();
         TT_FATAL(
             user_meshes.size() == 1,
             "Only expected a single user mesh for a single host, but got: {}",
@@ -1323,9 +1430,10 @@ private:
         local_mesh_id_ = user_meshes[0];
 
         available_mesh_ids_.insert(local_mesh_id_);
-        mesh_shape_ = control_plane_ptr_->get_physical_mesh_shape(local_mesh_id_, MeshScope::GLOBAL);
+        mesh_shape_ = tt::tt_metal::MetalContext::instance().get_control_plane().get_physical_mesh_shape(
+            local_mesh_id_, MeshScope::GLOBAL);
 
-        const auto& mesh_graph = control_plane_ptr_->get_mesh_graph();
+        const auto& mesh_graph = tt::tt_metal::MetalContext::instance().get_control_plane().get_mesh_graph();
 
         for (auto mesh_id : mesh_graph.get_mesh_ids()) {
             if (mesh_id == local_mesh_id_) {  // Populate all nodes available locally. Note the use of host rank to
@@ -1342,12 +1450,15 @@ private:
         mesh_device_ = MeshDevice::create(MeshDeviceConfig(mesh_shape_));
 
         // Now fabric context should be initialized, safe to query wrap_around_mesh
-        wrap_around_mesh_ = control_plane_ptr_->get_fabric_context().is_wrap_around_mesh(user_meshes[0]);
+        wrap_around_mesh_ =
+            tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context().is_wrap_around_mesh(
+                user_meshes[0]);
 
         TT_FATAL(mesh_device_ != nullptr, "Failed to create MeshDevice with shape {}", mesh_shape_);
 
         current_fabric_config_ = fabric_config;
         current_fabric_tensix_config_ = fabric_tensix_config;
+        current_fabric_reliability_mode_ = reliability_mode;
         are_devices_open_ = true;
     }
 
@@ -1428,8 +1539,13 @@ private:
         }
 
         bool has_ns = false, has_ew = false;
-        bool opp_ns = (hops.count(RoutingDirection::N) > 0 && hops.count(RoutingDirection::S) > 0);
-        bool opp_ew = (hops.count(RoutingDirection::E) > 0 && hops.count(RoutingDirection::W) > 0);
+        bool opp_ns =
+            (hops.count(RoutingDirection::N) > 0 && hops.count(RoutingDirection::S) > 0 &&
+             hops.at(RoutingDirection::N) > 0 && hops.at(RoutingDirection::S) > 0);
+        bool opp_ew =
+            (hops.count(RoutingDirection::E) > 0 && hops.count(RoutingDirection::W) > 0 &&
+             hops.at(RoutingDirection::E) > 0 && hops.at(RoutingDirection::W) > 0);
+
         if (opp_ns || opp_ew) {
             TT_THROW("Unicast cannot have opposing directions in the same dimension");
         }

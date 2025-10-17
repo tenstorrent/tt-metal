@@ -6,18 +6,17 @@
 #include "ttnn/operations/math.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include "ttnn/operation.hpp"
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 namespace ttnn::operations::experimental::detail {
 
 using namespace tt::constants;
 
 tt::tt_metal::operation::ProgramWithCallbacks plusone_single_core(
-    const Tensor& input, const std::optional<CoreRangeSet>& sub_core_grids) {
+    const Tensor& input, const std::optional<CoreRangeSet>& sub_core_grids, bool skip_negative_entries) {
     tt::tt_metal::Program program{};
-
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     uint32_t input_unit_size = input.element_size();
 
@@ -53,13 +52,8 @@ tt::tt_metal::operation::ProgramWithCallbacks plusone_single_core(
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
     std::vector<uint32_t> reader_compile_time_args = {
-        src0_cb_index,
-        src_is_dram,
-        aligned_input_page_size,
-        W,
-        H,
-    };
-
+        src0_cb_index, src_is_dram, aligned_input_page_size, W, H, skip_negative_entries};
+    tt::tt_metal::TensorAccessorArgs(src_buffer).append_to(reader_compile_time_args);
     std::map<std::string, std::string> kernel_defines;
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program,

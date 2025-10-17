@@ -60,7 +60,7 @@ FullLikeOperation::ProgramFactory::cached_program_t FullLikeOperation::ProgramFa
     Program program{};
 
     auto data_format = datatype_to_dataformat_converter(dtype);
-    uint32_t single_tile_size = TileSize(data_format);
+    uint32_t single_tile_size = tt::tile_size(data_format);
 
     const auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     const uint32_t num_cores_y = compute_with_storage_grid_size.y;
@@ -93,7 +93,7 @@ FullLikeOperation::ProgramFactory::cached_program_t FullLikeOperation::ProgramFa
         }
     }
 
-    std::vector<uint32_t> writer_compile_time_args = {(uint32_t)cb_fill_value_id};
+    std::vector<uint32_t> writer_compile_time_args = {(uint32_t)cb_fill_value_id, TILE_HW, single_tile_size};
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
 
     auto writer_id = CreateKernel(

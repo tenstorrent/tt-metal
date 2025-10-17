@@ -28,7 +28,8 @@ CPMAddPackage(
 CPMAddPackage(
     NAME yaml-cpp
     GITHUB_REPOSITORY jbeder/yaml-cpp
-    GIT_TAG 0.8.0
+    GIT_TAG
+        2f86d13775d119edbb69af52e5f566fd65c6953b # 0.8.0 + patches
     OPTIONS
         "YAML_CPP_BUILD_TESTS OFF"
         "YAML_CPP_BUILD_TOOLS OFF"
@@ -78,14 +79,32 @@ CPMAddPackage(
 
 CPMAddPackage(NAME nlohmann_json GITHUB_REPOSITORY nlohmann/json GIT_TAG v3.11.3 OPTIONS "JSON_BuildTests OFF")
 
-CPMAddPackage(NAME xtl GITHUB_REPOSITORY xtensor-stack/xtl GIT_TAG 0.8.0 OPTIONS "XTL_ENABLE_TESTS OFF")
+CPMAddPackage(
+    NAME xtl
+    GITHUB_REPOSITORY xtensor-stack/xtl
+    GIT_TAG 0.8.0
+    PATCHES
+        xtl.patch
+    OPTIONS
+        "XTL_ENABLE_TESTS OFF"
+)
 
-CPMAddPackage(NAME xtensor GITHUB_REPOSITORY xtensor-stack/xtensor GIT_TAG 0.26.0 OPTIONS "XTENSOR_ENABLE_TESTS OFF")
+CPMAddPackage(
+    NAME xtensor
+    GITHUB_REPOSITORY xtensor-stack/xtensor
+    GIT_TAG 0.26.0
+    PATCHES
+        xtensor.patch
+    OPTIONS
+        "XTENSOR_ENABLE_TESTS OFF"
+)
 
 CPMAddPackage(
     NAME xtensor-blas
     GITHUB_REPOSITORY xtensor-stack/xtensor-blas
     GIT_TAG 0.22.0
+    PATCHES
+        xtensor-blas.patch
     OPTIONS
         "XTENSOR_ENABLE_TESTS OFF"
 )
@@ -122,6 +141,9 @@ CPMAddPackage(
     OPTIONS
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
 )
+if(tokenizers-cpp_ADDED)
+    target_compile_options(tokenizers_cpp PRIVATE -Wno-for-loop-analysis)
+endif()
 # gersemi: on
 
 ####################################################################################################################
@@ -146,8 +168,27 @@ set(CMAKE_INSTALL_DEFAULT_COMPONENT_NAME ${DEFAULT_COMPONENT_NAME})
 CPMAddPackage(
     NAME tt-logger
     GITHUB_REPOSITORY tenstorrent/tt-logger
-    VERSION 1.1.4
+    VERSION 1.1.6
     OPTIONS
         "TT_LOGGER_INSTALL ON"
         "TT_LOGGER_BUILD_TESTING OFF"
+)
+####################################################################################################################
+# nanobind
+####################################################################################################################
+find_package(
+    Python
+    COMPONENTS
+        Development
+        Development.Module
+        Interpreter
+    REQUIRED
+)
+CPMAddPackage(
+    NAME nanobind
+    GITHUB_REPOSITORY wjakob/nanobind
+    GIT_TAG v2.9.2
+    OPTIONS
+        "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
+        "NB_USE_SUBMODULE_DEPS ON"
 )

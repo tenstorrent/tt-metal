@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -15,10 +15,6 @@
 #include "hal_types.hpp"
 #include "llrt/hal.hpp"
 #include "jit_build_options.hpp"
-
-namespace tt {
-enum class ARCH;
-}  // namespace tt
 
 namespace tt::tt_metal {
 
@@ -51,12 +47,19 @@ class JitBuildEnv {
 
 public:
     JitBuildEnv();
-    void init(uint32_t build_key, tt::ARCH arch, const std::map<std::string, std::string>& device_kernel_defines);
+    void init(
+        uint32_t build_key,
+        size_t fw_compile_hash,
+        tt::ARCH arch,
+        const std::map<std::string, std::string>& device_kernel_defines);
 
     tt::ARCH get_arch() const { return arch_; }
     const std::string& get_root_path() const { return root_; }
     const std::string& get_out_root_path() const { return out_root_; }
     const std::string& get_out_kernel_root_path() const { return out_kernel_root_; }
+    const std::string& get_out_firmware_root_path() const {
+        return out_firmware_root_;
+    }  // Path to the firmware directory for this device
 
 private:
     tt::ARCH arch_{tt::ARCH::Invalid};

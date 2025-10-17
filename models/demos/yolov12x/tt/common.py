@@ -7,6 +7,7 @@ import math
 
 import ttnn
 from models.experimental.yolo_common.yolo_utils import determine_num_cores, get_core_grid_from_num_cores
+from tests.ttnn.ttnn_utility_fuction import get_shard_grid_from_num_cores
 
 
 class TtYOLOv12xConv2D:
@@ -16,7 +17,7 @@ class TtYOLOv12xConv2D:
         conv_pth,
         bn=None,
         device=None,
-        activation="",
+        activation=None,
         activation_dtype=ttnn.bfloat8_b,
         weights_dtype=ttnn.bfloat8_b,
         use_1d_systolic_array=True,
@@ -25,6 +26,10 @@ class TtYOLOv12xConv2D:
         is_dfl=False,
         config_override=None,
         deallocate_activation=False,
+        enable_act_double_buffer=True,
+        enable_split_reader=True,
+        enable_weights_double_buffer=True,
+        core_count=None,
     ):
         self.is_detect = is_detect
         self.is_dfl = is_dfl
@@ -39,6 +44,7 @@ class TtYOLOv12xConv2D:
         self.use_1d_systolic_array = use_1d_systolic_array
         self.deallocate_activation = False
         self.activation_dtype = activation_dtype
+        self.core_count = core_count
 
         if hasattr(self.padding, "__len__"):
             if len(self.padding) == 2:
@@ -52,7 +58,7 @@ class TtYOLOv12xConv2D:
 
         self.compute_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_fidelity=ttnn.MathFidelity.LoFi,
             fp32_dest_acc_en=False,
             packer_l1_acc=False if self.is_detect else True,
             math_approx_mode=True,
@@ -61,15 +67,20 @@ class TtYOLOv12xConv2D:
             weights_dtype=weights_dtype,
             shard_layout=shard_layout,
             deallocate_activation=self.deallocate_activation,
-            enable_act_double_buffer=False,
-            enable_split_reader=False,
+            enable_act_double_buffer=enable_act_double_buffer,
             reshard_if_not_optimal=True if self.use_1d_systolic_array else False,
             activation=activation,
+            enable_weights_double_buffer=enable_weights_double_buffer,
         )
         if config_override is None and conv.in_channels == 3:
             config_override = {"act_block_h": 64}
         if config_override and "act_block_h" in config_override:
             self.conv_config.act_block_h_override = config_override["act_block_h"]
+
+        if self.core_count is not None:
+            shard_grid = get_shard_grid_from_num_cores(self.core_count, self.device)
+            self.conv_config.core_grid = shard_grid
+            self.conv_config.override_sharding_config = True
 
         self.weight = ttnn.from_device(conv_pth.weight)
         self.bias = ttnn.from_device(conv_pth.bias) if "bias" in conv_pth else None
@@ -107,32 +118,51 @@ class TtYOLOv12xConv2D:
             return_output_dim=True,
             return_weights_and_bias=True,
             dtype=self.activation_dtype,
+            slice_config=ttnn.Conv2dL1FullSliceConfig,
         )
         hw = output_height * output_width
         if x.shape[2] != hw:
-            x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
+            if x.is_sharded():
+                x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
             x = x[:, :, :hw, :]
         return x
 
 
 class TtnnBottleneck:
-    def __init__(self, device, parameter, conv_pt):
+    def __init__(self, device, parameter, conv_pt, block_sharded=False):
+        self.block_sharded = block_sharded
         self.cv1 = TtYOLOv12xConv2D(
-            conv=parameter.cv1.conv, conv_pth=conv_pt.cv1.conv, device=device, activation="silu"
+            conv=parameter.cv1.conv,
+            conv_pth=conv_pt.cv1.conv,
+            device=device,
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
+            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED
+            if block_sharded
+            else ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         )
         self.cv2 = TtYOLOv12xConv2D(
-            conv=parameter.cv2.conv, conv_pth=conv_pt.cv2.conv, device=device, activation="silu"
+            conv=parameter.cv2.conv,
+            conv_pth=conv_pt.cv2.conv,
+            device=device,
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
+            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED
+            if block_sharded
+            else ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         )
 
     def __call__(self, x):
         input = x
         x = self.cv1(x)
         x = self.cv2(x)
+        # if self.block_sharded:
+        #     x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
+        #     input = ttnn.sharded_to_interleaved(input, ttnn.L1_MEMORY_CONFIG)
         return input + x
 
 
 def interleaved_to_sharded(x, num_cores=None):
-    x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
+    if x.layout == ttnn.TILE_LAYOUT:
+        x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
     x = ttnn.reshape(x, (x.shape[0], int(math.sqrt(x.shape[2])), int(math.sqrt(x.shape[2])), x.shape[3]))
     nhw = x.shape[0] * x.shape[1] * x.shape[2]
     num_cores = determine_num_cores(nhw, x.shape[2])

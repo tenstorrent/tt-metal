@@ -236,7 +236,14 @@ def model_location_generator(is_ci_v2_env):
     directory structure
     """
 
-    def model_location_generator_(model_version, model_subdir="", download_if_ci_v2=False, ci_v2_timeout_in_s=300):
+    def model_location_generator_(
+        model_version,
+        model_subdir="",
+        download_if_ci_v2=False,
+        ci_v2_timeout_in_s=300,
+        endpoint_prefix="http://large-file-cache.large-file-cache.svc.cluster.local//mldata/model_checkpoints/pytorch/huggingface",
+        download_dir_suffix="model_weights",
+    ):
         model_folder = Path("tt_dnn-models") / model_subdir
         internal_weka_path = Path("/mnt/MLPerf") / model_folder / model_version
         has_internal_weka = internal_weka_path.exists()
@@ -251,7 +258,10 @@ def model_location_generator(is_ci_v2_env):
                 not model_subdir
             ), f"model_subdir is set to {model_subdir}, but we don't support further levels of directories in the large file cache in CIv2"
             civ2_download_path = CIv2ModelDownloadUtils_.download_from_ci_v2_cache(
-                model_version, download_dir_suffix="model_weights", timeout_in_s=ci_v2_timeout_in_s
+                model_version,
+                download_dir_suffix=download_dir_suffix,
+                timeout_in_s=ci_v2_timeout_in_s,
+                endpoint_prefix=endpoint_prefix,
             )
             logger.info(f"For model location, using CIv2 large file cache: {civ2_download_path}")
             return civ2_download_path
@@ -359,12 +369,32 @@ def reset_fabric(fabric_config):
 # Set fabric config to passed in value
 # Do nothing if not set
 # Must be called before creating the mesh device
-def set_fabric(fabric_config):
+def set_fabric(fabric_config, reliability_mode=None, fabric_tensix_config=None):
     import ttnn
 
     # If fabric_config is not None, set it to fabric_config
     if fabric_config:
-        ttnn.set_fabric_config(fabric_config)
+        if reliability_mode is None:
+            reliability_mode = ttnn.FabricReliabilityMode.STRICT_INIT
+
+        # Apply default logic for fabric_tensix_config,
+        # fabric_tensix_config is used for enabling tensix extensions for the fabric router,
+        # some sender channels in the fabric router are moved to the fabric tensix extension
+        # (currently the extension is mux kernel, can have other kernels in future as well).
+        if fabric_tensix_config is None:
+            fabric_tensix_config = get_default_fabric_tensix_config()
+
+        ttnn.set_fabric_config(fabric_config, reliability_mode, None, fabric_tensix_config)  # num_planes
+
+
+def get_default_fabric_tensix_config():
+    import ttnn
+
+    # Default to MUX for Blackhole when fabric is enabled, DISABLED otherwise
+    if ttnn.device.is_blackhole():
+        return ttnn.FabricTensixConfig.MUX
+    else:
+        return ttnn.FabricTensixConfig.DISABLED
 
 
 @pytest.fixture(scope="function")
@@ -386,30 +416,31 @@ def mesh_device(request, silicon_arch_name, device_params):
     """
     import ttnn
 
-    device_ids = ttnn.get_device_ids()
+    request.node.pci_ids = ttnn.get_pcie_device_ids()
 
     try:
         param = request.param
     except (ValueError, AttributeError):
-        param = len(device_ids)  # Default to using all available devices
+        # Get number of devices from the system mesh descriptor.
+        param = ttnn._ttnn.multi_device.SystemMeshDescriptor().shape().mesh_size()
 
     if isinstance(param, tuple):
         grid_dims = param
         assert len(grid_dims) == 2, "Device mesh grid shape should have exactly two elements."
         num_devices_requested = grid_dims[0] * grid_dims[1]
-        if not ttnn.using_distributed_env() and num_devices_requested > len(device_ids):
+        if not ttnn.using_distributed_env() and num_devices_requested > ttnn.get_num_devices():
             pytest.skip("Requested more devices than available. Test not applicable for machine")
         mesh_shape = ttnn.MeshShape(*grid_dims)
     else:
-        num_devices_requested = min(param, len(device_ids))
-        mesh_shape = ttnn.MeshShape(1, num_devices_requested)
-
-    request.node.pci_ids = [ttnn.GetPCIeDeviceID(i) for i in device_ids[:num_devices_requested]]
+        if not ttnn.using_distributed_env() and param > ttnn.get_num_devices():
+            pytest.skip("Requested more devices than available. Test not applicable for machine")
+        mesh_shape = ttnn.MeshShape(1, param)
 
     updated_device_params = get_updated_device_params(device_params)
     fabric_config = updated_device_params.pop("fabric_config", None)
+    fabric_tensix_config = updated_device_params.pop("fabric_tensix_config", None)
     reliability_mode = updated_device_params.pop("reliability_mode", None)
-    set_fabric(fabric_config)
+    set_fabric(fabric_config, reliability_mode, fabric_tensix_config)
     mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape, **updated_device_params)
 
     logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")
@@ -468,8 +499,9 @@ def pcie_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, devic
 
     updated_device_params = get_updated_device_params(device_params)
     fabric_config = updated_device_params.pop("fabric_config", None)
+    fabric_tensix_config = updated_device_params.pop("fabric_tensix_config", None)
     reliability_mode = updated_device_params.pop("reliability_mode", None)
-    set_fabric(fabric_config)
+    set_fabric(fabric_config, reliability_mode, fabric_tensix_config)
     mesh_device = ttnn.open_mesh_device(
         mesh_shape=ttnn.MeshShape(2, 2),
         **updated_device_params,
@@ -497,8 +529,9 @@ def n300_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, devic
 
     updated_device_params = get_updated_device_params(device_params)
     fabric_config = updated_device_params.pop("fabric_config", None)
+    fabric_tensix_config = updated_device_params.pop("fabric_tensix_config", None)
     reliability_mode = updated_device_params.pop("reliability_mode", None)
-    set_fabric(fabric_config)
+    set_fabric(fabric_config, reliability_mode, fabric_tensix_config)
     mesh_device = ttnn.open_mesh_device(
         mesh_shape=ttnn.MeshShape(1, 2),
         **updated_device_params,
@@ -520,13 +553,14 @@ def t3k_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, device
     import ttnn
 
     if ttnn.get_num_devices() < 8:
-        pytest.skip()
+        pytest.skip("Not enough devices to run test")
 
     request.node.pci_ids = ttnn.get_pcie_device_ids()
     updated_device_params = get_updated_device_params(device_params)
     fabric_config = updated_device_params.pop("fabric_config", None)
+    fabric_tensix_config = updated_device_params.pop("fabric_tensix_config", None)
     reliability_mode = updated_device_params.pop("reliability_mode", None)
-    set_fabric(fabric_config)
+    set_fabric(fabric_config, reliability_mode, fabric_tensix_config)
     mesh_device = ttnn.open_mesh_device(
         mesh_shape=ttnn.MeshShape(1, 8),
         **updated_device_params,
@@ -544,20 +578,59 @@ def t3k_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, device
 
 
 @pytest.fixture(scope="function")
-def p150_mesh_device(request, silicon_arch_name, silicon_arch_blackhole, device_params):
+def bh_1d_mesh_device(request, silicon_arch_name, silicon_arch_blackhole, device_params):
+    # Generic blackhole configuration
+    # This configures an [m,n] blackhole mesh device to appear as a [1,m*n] line or ring
+    # Implements wraparound in rackboxes
     import ttnn
 
-    if ttnn.get_num_devices() not in [1, 2, 4, 8]:
+    if ttnn.get_num_devices() not in [1, 2, 4, 8, 32]:
         pytest.skip()
 
     request.node.pci_ids = ttnn.get_pcie_device_ids()
     updated_device_params = get_updated_device_params(device_params)
     fabric_config = updated_device_params.pop("fabric_config", None)
+    fabric_tensix_config = updated_device_params.pop("fabric_tensix_config", None)
     reliability_mode = updated_device_params.pop("reliability_mode", None)
-    set_fabric(fabric_config)
+    set_fabric(fabric_config, reliability_mode, fabric_tensix_config)
+    mesh_device = ttnn.open_mesh_device(
+        mesh_shape=ttnn.MeshShape(ttnn.get_num_devices(), 1),
+        **updated_device_params,
+    )
+    logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")
+    yield mesh_device
+
+    for submesh in mesh_device.get_submeshes():
+        ttnn.close_mesh_device(submesh)
+
+    ttnn.close_mesh_device(mesh_device)
+    reset_fabric(fabric_config)
+    del mesh_device
+
+
+@pytest.fixture(scope="function")
+def bh_2d_mesh_device(request, silicon_arch_name, silicon_arch_blackhole, device_params):
+    # Generic blackhole configuration
+    # This preserves the 2D mesh configuration in rackbox and galaxy
+    import ttnn
+
+    if ttnn.get_num_devices() not in [1, 2, 4, 8, 32]:
+        pytest.skip()
+
+    request.node.pci_ids = ttnn.get_pcie_device_ids()
+    updated_device_params = get_updated_device_params(device_params)
+    fabric_config = updated_device_params.pop("fabric_config", None)
+    fabric_tensix_config = updated_device_params.pop("fabric_tensix_config", None)
+    reliability_mode = updated_device_params.pop("reliability_mode", None)
+    set_fabric(fabric_config, reliability_mode, fabric_tensix_config)
     if ttnn.get_num_devices() == 8:
         mesh_device = ttnn.open_mesh_device(
             mesh_shape=ttnn.MeshShape(4, 2),
+            **updated_device_params,
+        )
+    elif ttnn.get_num_devices() == 32:
+        mesh_device = ttnn.open_mesh_device(
+            mesh_shape=ttnn.MeshShape(4, 8),
             **updated_device_params,
         )
     else:
@@ -897,47 +970,44 @@ def pytest_runtest_teardown(item, nextitem):
             reset_tensix(set(item.pci_ids))
 
 
-# This is overriding the timer setup hook from pytest-timeout
-# If --metal-timeout is passed, we define a new timeout method that spawns a timer process
-# At timeout, the process kills it's parent (the test process) and then itself
+def _metal_alarm_handler(signum, frame):
+    """Alarm handler for test timeouts; collects debug info then force-kills the process."""
+    try:
+        logger.warning("This test seems to have hung... Timing out test case")
+        run_debug_script()
+    except Exception as e:
+        logger.error(f"Failed to run debug script after timeout: {e}")
+    finally:
+        # Ensure the process is terminated even if debug collection fails
+        os.kill(os.getpid(), signal.SIGKILL)
+
+
+# This overrides the timer setup hook from pytest-timeout.
+# If --metal-timeout is passed or when using xdist, we arm a POSIX itimer.
+# On expiry, the alarm handler runs debug collection and kills the process.
 @pytest.hookimpl(tryfirst=True)
 def pytest_timeout_set_timer(item, settings):
     metal_timeout_enabled = item.config.getoption("--metal-timeout")
     using_xdist = int(os.getenv("PYTEST_XDIST_WORKER_COUNT", "0"))
 
     if metal_timeout_enabled is not None or using_xdist:
-        parent_pid = os.getpid()
-        logger.info(f"Metal timeout {settings.timeout} seconds {parent_pid} for {item.nodeid}")
+        current_pid = os.getpid()
+        logger.debug(f"Metal timeout {settings.timeout} seconds {current_pid} for {item.nodeid}")
 
-        def get_parent_status():
-            try:
-                parent = psutil.Process(parent_pid)
-            except:
-                return "already dead"
-            return parent.status()
+        # Install handler (idempotent is fine)
+        signal.signal(signal.SIGALRM, _metal_alarm_handler)
 
-        def run_timer(settings):
-            logger.info(f"Timer started for {item.nodeid}")
-            dead_status = ["zombie", "dead", "already dead"]
-            timeout = settings.timeout
-            parent_status = "running"
-            while parent_status not in dead_status and timeout > 0:
-                time.sleep(5)
-                timeout -= 5
-                parent_status = get_parent_status()
-            if parent_status != "already dead":
-                logger.warning(f"This test seems to have hung... Timing out test case")
-                os.kill(parent_pid, signal.SIGKILL)
-            logger.info(f"Killing timer")
-            os._exit(1)
+        # Arm the REAL timer for this test
+        secs = float(settings.timeout)
+        signal.setitimer(signal.ITIMER_REAL, secs, 0.0)
 
+        # Provide a canceller for pytest-timeout
         def cancel():
-            logger.info(f"Cancelling timer")
-            metal_timer.terminate()
+            logger.debug("Cancelling timer")
+            # Disarm the timer
+            signal.setitimer(signal.ITIMER_REAL, 0.0, 0.0)
 
-        metal_timer = multiprocess.Process(target=run_timer, args=(settings,), daemon=True)
         item.cancel_timeout = cancel
-        metal_timer.start()
     return True
 
 
@@ -947,6 +1017,41 @@ def pytest_timeout_set_timer(item, settings):
 @pytest.hookimpl(tryfirst=True)
 def pytest_handlecrashitem(crashitem, report, sched):
     reset_tensix()
+
+
+def run_debug_script():
+    """Run the tt-triage.py debug script to check system state before cleanup."""
+
+    # Check if ttexalens module is available
+    try:
+        import ttexalens
+    except ImportError:
+        logger.warning(
+            "ttexalens module not found. Debug script requires ttexalens to be installed. Skipping debug collection."
+        )
+        return
+
+    debug_script_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tools", "tt-triage.py")
+
+    if not os.path.exists(debug_script_path):
+        logger.warning(f"Debug script not found at {debug_script_path}. Skipping debug collection.")
+        return
+
+    try:
+        logger.info("Running debug script to check system state")
+        # Remove LD_LIBRARY_PATH to avoid conflicts with prebuilt libraries
+        extra_env = {
+            "LD_LIBRARY_PATH": None,
+        }
+        debug_result = run_process_and_get_result(f"python {debug_script_path}", extra_env)
+
+        logger.info(f"Debug script status: {debug_result.returncode}")
+        if debug_result.stdout:
+            logger.info(f"Debug script output: {debug_result.stdout.decode('utf-8')}")
+        if debug_result.stderr:
+            logger.info(f"Debug script stderr: {debug_result.stderr.decode('utf-8')}")
+    except Exception as e:
+        logger.error(f"Failed to run debug script: {e}")
 
 
 def reset_tensix(tt_open_devices=None):

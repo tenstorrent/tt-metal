@@ -5,7 +5,6 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
-#include "tt_metal/fabric/hw/inc/tt_fabric_interface.h"
 #include "ttnn/cpp/ttnn/operations/ccl/common/kernels/moe_utils.hpp"
 #include "ttnn/cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
@@ -48,55 +47,55 @@ void zero_buffer_barrier() { noc_async_read_barrier(); }
 using namespace ttnn::operations::ccl::common;
 
 void kernel_main() {
-    constexpr bool input_is_dram = (bool)get_compile_time_arg_val(0);
-    constexpr bool indices_is_dram = (bool)get_compile_time_arg_val(1);
-    constexpr bool mapping_is_dram = (bool)get_compile_time_arg_val(2);
-    constexpr bool output_is_dram = (bool)get_compile_time_arg_val(3);
-    constexpr bool metadata_is_dram = (bool)get_compile_time_arg_val(4);
+    constexpr uint32_t input_tensor_cb_id = get_compile_time_arg_val(0);
+    constexpr uint32_t indices_tensor_cb_id = get_compile_time_arg_val(1);
+    constexpr uint32_t mapping_tensor_cb_id = get_compile_time_arg_val(2);
+    constexpr uint32_t packet_header_cb_id = get_compile_time_arg_val(3);
+    constexpr uint32_t send_preparation_buffer_cb_id = get_compile_time_arg_val(4);
 
-    constexpr uint32_t input_tensor_cb_id = get_compile_time_arg_val(5);
-    constexpr uint32_t indices_tensor_cb_id = get_compile_time_arg_val(6);
-    constexpr uint32_t mapping_tensor_cb_id = get_compile_time_arg_val(7);
-    constexpr uint32_t packet_header_cb_id = get_compile_time_arg_val(8);
-    constexpr uint32_t send_preparation_buffer_cb_id = get_compile_time_arg_val(9);
+    constexpr uint32_t input_pages = get_compile_time_arg_val(5);
+    constexpr uint32_t indices_pages = get_compile_time_arg_val(6);
+    constexpr uint32_t mapping_pages = get_compile_time_arg_val(7);
+    constexpr uint32_t output_pages = get_compile_time_arg_val(8);
+    constexpr uint32_t metadata_pages = get_compile_time_arg_val(9);
 
-    constexpr uint32_t input_pages = get_compile_time_arg_val(10);
-    constexpr uint32_t indices_pages = get_compile_time_arg_val(11);
-    constexpr uint32_t mapping_pages = get_compile_time_arg_val(12);
-    constexpr uint32_t output_pages = get_compile_time_arg_val(13);
-    constexpr uint32_t metadata_pages = get_compile_time_arg_val(14);
+    constexpr uint32_t input_page_size = get_compile_time_arg_val(10);
+    constexpr uint32_t indices_page_size = get_compile_time_arg_val(11);
+    constexpr uint32_t mapping_page_size = get_compile_time_arg_val(12);
+    constexpr uint32_t output_page_size = get_compile_time_arg_val(13);
+    constexpr uint32_t metadata_page_size = get_compile_time_arg_val(14);
 
-    constexpr uint32_t input_page_size = get_compile_time_arg_val(15);
-    constexpr uint32_t indices_page_size = get_compile_time_arg_val(16);
-    constexpr uint32_t mapping_page_size = get_compile_time_arg_val(17);
-    constexpr uint32_t output_page_size = get_compile_time_arg_val(18);
-    constexpr uint32_t metadata_page_size = get_compile_time_arg_val(19);
+    constexpr uint32_t num_devices = get_compile_time_arg_val(15);
+    constexpr uint32_t hidden_size = get_compile_time_arg_val(16);
+    constexpr uint32_t batch_size = get_compile_time_arg_val(17);
+    constexpr uint32_t selected_experts_k = get_compile_time_arg_val(18);
+    constexpr uint32_t experts = get_compile_time_arg_val(19);
+    constexpr uint32_t tokens_per_device = get_compile_time_arg_val(20);
 
-    constexpr uint32_t num_devices = get_compile_time_arg_val(20);
-    constexpr uint32_t hidden_size = get_compile_time_arg_val(21);
-    constexpr uint32_t batch_size = get_compile_time_arg_val(22);
-    constexpr uint32_t selected_experts_k = get_compile_time_arg_val(23);
-    constexpr uint32_t experts = get_compile_time_arg_val(24);
-    constexpr uint32_t tokens_per_device = get_compile_time_arg_val(25);
+    constexpr uint32_t num_links = get_compile_time_arg_val(21);
+    constexpr tt::tt_fabric::Topology topology = (tt::tt_fabric::Topology)get_compile_time_arg_val(22);
 
-    constexpr uint32_t num_links = get_compile_time_arg_val(26);
-    constexpr tt::tt_fabric::Topology topology = (tt::tt_fabric::Topology)get_compile_time_arg_val(27);
+    constexpr uint32_t src_mesh_id = get_compile_time_arg_val(23);
+    constexpr uint32_t src_chip_id = get_compile_time_arg_val(24);
+    constexpr uint32_t mesh_rows = get_compile_time_arg_val(25);
+    constexpr uint32_t mesh_cols = get_compile_time_arg_val(26);  // ew_dim
+    constexpr uint32_t aligned_input_page_size = get_compile_time_arg_val(27);
+    constexpr uint32_t aligned_indices_page_size = get_compile_time_arg_val(28);
+    constexpr uint32_t aligned_mapping_page_size = get_compile_time_arg_val(29);
+    constexpr uint32_t aligned_output_page_size = get_compile_time_arg_val(30);
+    constexpr uint32_t aligned_metadata_page_size = get_compile_time_arg_val(31);
 
-    constexpr uint32_t src_mesh_id = get_compile_time_arg_val(28);
-    constexpr uint32_t src_chip_id = get_compile_time_arg_val(29);
-    constexpr uint32_t mesh_rows = get_compile_time_arg_val(30);
-    constexpr uint32_t mesh_cols = get_compile_time_arg_val(31);  // ew_dim
-    constexpr uint32_t aligned_input_page_size = get_compile_time_arg_val(32);
-    constexpr uint32_t aligned_indices_page_size = get_compile_time_arg_val(33);
-    constexpr uint32_t aligned_mapping_page_size = get_compile_time_arg_val(34);
-    constexpr uint32_t aligned_output_page_size = get_compile_time_arg_val(35);
-    constexpr uint32_t aligned_metadata_page_size = get_compile_time_arg_val(36);
+    constexpr uint32_t fabric_max_packet_size = get_compile_time_arg_val(32);
+    constexpr uint32_t alignment = get_compile_time_arg_val(33);
+    constexpr uint32_t metadata_buffer_id = get_compile_time_arg_val(34);
+    constexpr uint32_t write_page_by_page = get_compile_time_arg_val(35);
+    constexpr uint32_t linearized_mesh_coord = get_compile_time_arg_val(36);
 
-    constexpr uint32_t fabric_max_packet_size = get_compile_time_arg_val(37);
-    constexpr uint32_t alignment = get_compile_time_arg_val(38);
-    constexpr uint32_t metadata_buffer_id = get_compile_time_arg_val(39);
-    constexpr uint32_t write_page_by_page = get_compile_time_arg_val(40);
-    constexpr uint32_t linearized_mesh_coord = get_compile_time_arg_val(41);
+    constexpr auto input_args = TensorAccessorArgs<37>();
+    constexpr auto indices_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
+    constexpr auto mapping_args = TensorAccessorArgs<indices_args.next_compile_time_args_offset()>();
+    constexpr auto output_args = TensorAccessorArgs<mapping_args.next_compile_time_args_offset()>();
+    constexpr auto metadata_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
 
     size_t rt_args_idx = 0;
     uint32_t input_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);
@@ -149,8 +148,8 @@ void kernel_main() {
     constexpr uint32_t device_stride = 1;
 #endif
 
-    auto output_addr_gen = get_interleaved_addr_gen<output_is_dram, output_page_size>(output_tensor_address);
-    auto metadata_addr_gen = get_interleaved_addr_gen<metadata_is_dram, metadata_page_size>(metadata_tensor_address);
+    const auto output_addr_gen = TensorAccessor(output_args, output_tensor_address, output_page_size);
+    const auto metadata_addr_gen = TensorAccessor(metadata_args, metadata_tensor_address, metadata_page_size);
 
     uint32_t packet_header_buffer_address = get_read_ptr(packet_header_cb_id);
     auto* unicast_packet_header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_address);
@@ -220,11 +219,12 @@ void kernel_main() {
                                 mesh_rows,
                                 mesh_cols,
                                 fabric_max_packet_size>(
+                                output_addr_gen,
                                 fabric_connections,
                                 unicast_packet_header,
                                 d,
                                 input_token_read_addr,
-                                output_token_write_addr,
+                                global_token,
                                 (int)output_page_size,
                                 alignment);
                         } else {
@@ -233,12 +233,13 @@ void kernel_main() {
                                 mesh_rows,
                                 mesh_cols,
                                 fabric_max_packet_size>(
+                                output_addr_gen,
                                 fabric_connections,
                                 unicast_packet_header,
                                 dest_chip_ids[d],
                                 dest_mesh_ids[d],
                                 input_token_read_addr,
-                                output_token_write_addr,
+                                global_token,
                                 (int)output_page_size,
                                 alignment);
                         }
@@ -281,11 +282,12 @@ void kernel_main() {
                             mesh_rows,
                             mesh_cols,
                             fabric_max_packet_size>(
+                            metadata_addr_gen,
                             fabric_connections,
                             metadata_packet_header,
                             d,
                             token_indices_address,
-                            metadata_write_addr,
+                            global_token,
                             global_noc_semaphore_address,
                             (int)metadata_page_size,
                             alignment,
@@ -297,12 +299,13 @@ void kernel_main() {
                             mesh_rows,
                             mesh_cols,
                             fabric_max_packet_size>(
+                            metadata_addr_gen,
                             fabric_connections,
                             metadata_packet_header,
                             dest_chip_ids[d],
                             dest_mesh_ids[d],
                             token_indices_address,
-                            metadata_write_addr,
+                            global_token,
                             global_noc_semaphore_address,
                             (int)metadata_page_size,
                             alignment,
@@ -327,7 +330,7 @@ void kernel_main() {
                     base_indices_addr, noc_core_offset_md_write_addr, indices_size_per_core);
             } else if (is_configured_target<linearized_mesh_coord, mesh_rows, mesh_cols, axis>(d)) {
                 if constexpr (is_1d_topology<topology>()) {
-                    fabric_send_chip_unicast_noc_unicast_with_semaphore_1d<
+                    l1_only_fabric_send_chip_unicast_noc_unicast_with_semaphore_1d<
                         linearized_mesh_coord,
                         topology,
                         mesh_rows,
@@ -344,7 +347,7 @@ void kernel_main() {
                         1,
                         true);
                 } else {
-                    fabric_send_chip_unicast_noc_unicast_with_semaphore<
+                    l1_only_fabric_send_chip_unicast_noc_unicast_with_semaphore<
                         src_chip_id,
                         mesh_rows,
                         mesh_cols,

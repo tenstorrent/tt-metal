@@ -9,7 +9,6 @@
 
 #include "ttnn/operations/math.hpp"
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -19,13 +18,17 @@ namespace ttnn::operations::normalization {
 void GroupNorm::validate(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
+    TT_FATAL(input_tensors.size() == 1, "Must have exactly 1 input tensor, got {} tensors", input_tensors.size());
     TT_FATAL(
-        input_tensors.size() == 1 and optional_input_tensors.size() <= 4, "Must have between 1 to 5 input tensors");
+        optional_input_tensors.size() <= 5,
+        "Must have at most 5 optional input tensors (for a total of 1 to 6 input tensors), got {} optional tensors",
+        optional_input_tensors.size());
     auto& a = input_tensors.at(0);
     const auto& gamma = optional_input_tensors.at(0);
     const auto& beta = optional_input_tensors.at(1);
     const auto& input_mask = optional_input_tensors.at(2);
     const auto& negative_mask = optional_input_tensors.at(3);
+    const auto& reciprocals = optional_input_tensors.at(4);
     TT_FATAL(a.dtype() == DataType::BFLOAT16, "Input tensor must be BFLOAT16, got: {}", a.dtype());
     TT_FATAL(a.storage_type() == StorageType::DEVICE, "Operands to groupnorm need to be on device!");
     TT_FATAL(a.buffer() != nullptr, "Operands to groupnorm need to be allocated in buffers on device!");
@@ -161,6 +164,18 @@ void GroupNorm::validate(
             "If using negative mask, output tensor must be in ROW_MAJOR layout, but layout is {}",
             output_layout);
     }
+
+    // Reciprocals tensor validation
+    if (reciprocals.has_value()) {
+        TT_FATAL(this->use_welford, "Reciprocals tensor can only be provided when use_welford is True");
+        TT_FATAL(
+            reciprocals.value().dtype() == DataType::FLOAT32,
+            "Reciprocals tensor must be FLOAT32, got: {}",
+            reciprocals.value().dtype());
+        TT_FATAL(reciprocals.value().storage_type() == StorageType::DEVICE, "Reciprocals tensor must be on device");
+        TT_FATAL(reciprocals.value().buffer() != nullptr, "Reciprocals tensor must be allocated in buffers on device");
+        TT_FATAL(a.device() == reciprocals.value().device(), "Input and reciprocals tensors must be on same device");
+    }
 }
 std::vector<TensorSpec> GroupNorm::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
@@ -210,6 +225,7 @@ operation::ProgramWithCallbacks GroupNorm::create_program(
     const auto& beta = optional_input_tensors.at(1);
     const auto& input_mask = optional_input_tensors.at(2);
     const auto& negative_mask = optional_input_tensors.at(3);
+    const auto& reciprocals = optional_input_tensors.at(4);
     auto& output_tensor = output_tensors.at(0);
 
     return std::visit(
@@ -235,7 +251,8 @@ operation::ProgramWithCallbacks GroupNorm::create_program(
                     program_config.im_data_format,
                     program_config.compute_with_storage_grid_size,
                     inplace,
-                    this->compute_kernel_config);
+                    this->compute_kernel_config,
+                    this->use_welford);
             } else {
                 uint32_t num_cores_x = program_config.compute_with_storage_grid_size.x;
                 uint32_t num_cores_y = program_config.compute_with_storage_grid_size.y;
@@ -243,21 +260,52 @@ operation::ProgramWithCallbacks GroupNorm::create_program(
                 uint32_t num_out_blocks = program_config.num_out_blocks;
                 CoreCoord grid_size = CoreCoord(num_cores_x, num_cores_y);
                 uint32_t batch = a.padded_shape()[0];
-
-                return groupnorm_multi_core(
-                    a,
-                    gamma,
-                    beta,
-                    input_mask,
-                    output_tensor,
-                    this->eps,
-                    this->num_groups,
-                    batch,
-                    program_config.im_data_format,
-                    program_config.compute_with_storage_grid_size,
-                    inplace,
-                    num_out_blocks,
-                    this->compute_kernel_config);
+                uint32_t W = a.padded_shape()[3];
+                uint32_t num_virtual_cols = std::min<uint32_t>(grid_size.x, this->num_groups);
+                while (num_virtual_cols > 0 &&
+                       ((W / num_virtual_cols) % TILE_WIDTH != 0 || (this->num_groups % num_virtual_cols) != 0)) {
+                    num_virtual_cols -= 1;
+                }
+                if (num_virtual_cols == 0) {
+                    TT_THROW("Core Grid resulted in virtual cores x = 0, Please try another core grid");
+                }
+                uint32_t num_actual_rows = grid_size.y;
+                uint32_t num_virtual_rows = (grid_size.x / num_virtual_cols) * num_actual_rows;
+                if (batch >= num_virtual_rows) {
+                    return groupnorm_multi_core_no_mcast(
+                        a,
+                        gamma,
+                        beta,
+                        input_mask,
+                        reciprocals,
+                        output_tensor,
+                        this->eps,
+                        this->num_groups,
+                        batch,
+                        program_config.im_data_format,
+                        program_config.compute_with_storage_grid_size,
+                        inplace,
+                        num_out_blocks,
+                        this->compute_kernel_config,
+                        this->use_welford);
+                } else {
+                    return groupnorm_multi_core_mcast(
+                        a,
+                        gamma,
+                        beta,
+                        input_mask,
+                        reciprocals,
+                        output_tensor,
+                        this->eps,
+                        this->num_groups,
+                        batch,
+                        program_config.im_data_format,
+                        program_config.compute_with_storage_grid_size,
+                        inplace,
+                        num_out_blocks,
+                        this->compute_kernel_config,
+                        this->use_welford);
+                }
             }
         },
         this->program_config);

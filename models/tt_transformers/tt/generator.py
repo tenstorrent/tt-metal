@@ -24,6 +24,7 @@ from models.tt_transformers.tt.common import (
     get_padded_prefill_len,
     num_blocks_in_seq,
 )
+from models.tt_transformers.tt.model_config import CheckpointType
 
 
 @dataclass(frozen=True)
@@ -33,9 +34,9 @@ class SamplingParams:
     The same data class exists in vLLM at vllm/worker/tt_model_runner.py.
     """
 
-    temperature: float
-    top_k: int
-    top_p: float
+    temperature: float | list[float]
+    top_k: int | list[int]
+    top_p: float | list[float]
 
 
 class Generator:
@@ -88,6 +89,7 @@ class Generator:
             seq_len = int(prompt_lens[idx])
             last_token_idx = seq_len - 1
             prefill_seq_len = get_padded_prefill_len(seq_len)
+            local_kwargs = kwargs.copy()  # Avoid modifying original kwargs
 
             logger.info(f"Prefilling User {user_id + 1} up to {seq_len} tokens")
 
@@ -103,6 +105,12 @@ class Generator:
             )
             model_kv_cache = kv_cache[model_id] if kv_cache is not None else None
 
+            # Check if 'pixel_values' exists and index it safely
+            if local_kwargs.get("pixel_values", None) is not None:
+                local_kwargs["pixel_values"] = local_kwargs["pixel_values"][idx]
+                if "image_grid_thw" in local_kwargs:
+                    local_kwargs["image_grid_thw"] = local_kwargs["image_grid_thw"][idx]
+
             logits = self.prefill_forward_single_user_text(
                 prefill_ids,
                 page_table=page_table_user,
@@ -110,18 +118,30 @@ class Generator:
                 last_token_idx=last_token_idx,
                 kv_cache=model_kv_cache,
                 model_id=model_id,
-                **kwargs,
+                **local_kwargs,
             )
-            out_list.append(logits)
+            # if data parallel is greater than 1, we need to add logits to out_list and do the processing after all the prefill are done
+            # otherwise, we can process the logits after prefill immediately
+            if self.data_parallel > 1:
+                out_list.append(logits)
+            else:
+                output_logits[idx] = self.model[model_id].process_output_prefill(
+                    logits, last_token_idx=(last_token_idx % 32)
+                )
+                del logits
 
-        for idx, out in enumerate(out_list):
-            seq_len = int(prompt_lens[idx])
-            last_token_idx = seq_len - 1
-            user_id = empty_slots[idx]
-            model_id = user_id // max_batch_size_per_model
+        # Process the logits after all the prefill are done in data parallel mode
+        if self.data_parallel > 1:
+            for idx, out in enumerate(out_list):
+                seq_len = int(prompt_lens[idx])
+                last_token_idx = seq_len - 1
+                user_id = empty_slots[idx]
+                model_id = user_id // max_batch_size_per_model
 
-            # Since we give unpadded_seq_len, only the tile containing the last token is returned
-            output_logits[idx] = self.model[model_id].process_output_prefill(out, last_token_idx=(last_token_idx % 32))
+                # Since we give unpadded_seq_len, only the tile containing the last token is returned
+                output_logits[idx] = self.model[model_id].process_output_prefill(
+                    out, last_token_idx=(last_token_idx % 32)
+                )
 
         logger.info(f"Finished prefill for all users up to {batch_seq_len} tokens, Starting decode...")
         return output_logits
@@ -190,6 +210,7 @@ class Generator:
                     chunk_start_idx=chunk_start,
                     get_last_token=(last_token_idx_in_chunk // 32) * 32,
                     kv_cache=kv_cache,
+                    **kwargs,
                 )
 
                 if chunk_start == last_chunk_start:
@@ -275,33 +296,33 @@ class Generator:
 
         tt_tokens = []
         tt_current_pos = []
-        tt_rot_mat_idxs_global = []
-        tt_rot_mat_idxs_local = []
+        tt_rot_mat_idxs = []
         tt_page_table = []
-
         for i in range(self.data_parallel):
             user_page_table = page_table[i] if page_table is not None else None
             model_i = self.model[i]
             (
                 tt_tokens_i,
                 tt_current_pos_i,
-                tt_rot_mat_idxs_global_i,
-                tt_rot_mat_idxs_local_i,
+                tt_rot_mat_idxs_i,
                 tt_page_table_i,
             ) = model_i.prepare_inputs_decode(tokens[i], current_pos[i], user_page_table)
             tt_tokens.append(tt_tokens_i)
             tt_current_pos.append(tt_current_pos_i)
-            tt_rot_mat_idxs_global.append(tt_rot_mat_idxs_global_i)
-            tt_rot_mat_idxs_local.append(tt_rot_mat_idxs_local_i)
+            tt_rot_mat_idxs.append(tt_rot_mat_idxs_i)
             tt_page_table.append(tt_page_table_i)
+            if (
+                hasattr(self.model[i], "device_decode_sliding_mask")
+                and self.model[i].device_decode_sliding_mask is not None
+            ):
+                self.model[i].update_attention_masks(current_pos[i])
 
         for i in range(self.data_parallel):
             user_kv_cache = kv_cache[i] if kv_cache is not None else None
             tt_logits_i = self.model[i].ttnn_decode_forward(
                 tt_tokens[i],
                 tt_current_pos[i],
-                rot_mat_idxs_global=tt_rot_mat_idxs_global[i],
-                rot_mat_idxs_local=tt_rot_mat_idxs_local[i],
+                rot_mat_idxs=tt_rot_mat_idxs[i],
                 page_table=tt_page_table[i],
                 kv_cache=user_kv_cache,
                 argmax_on_device=argmax_on_device,
@@ -334,11 +355,17 @@ class Generator:
         trace_ids = {}
         for i in range(self.data_parallel):
             user_page_table = page_table[i] if page_table is not None else None
+
             host_inputs = self.model[i].prepare_decode_inputs_host(
                 tokens[i], current_pos[i], page_table=user_page_table
             )
 
             device_inputs_i = copy_host_to_device(host_inputs, mesh_device=self.model_args[i].mesh_device)
+            if (
+                hasattr(self.model[i], "device_decode_sliding_mask")
+                and self.model[i].device_decode_sliding_mask is not None
+            ):
+                self.model[i].update_attention_masks(current_pos[i])
             device_inputs.append(device_inputs_i)
 
         for i in range(self.data_parallel):
@@ -389,6 +416,13 @@ class Generator:
                     host_tensors=host_inputs_i,
                     device_tensors=self.trace_inputs_text[i],
                 )
+
+        for i in range(self.data_parallel):
+            if (
+                hasattr(self.model[i], "device_decode_sliding_mask")
+                and self.model[i].device_decode_sliding_mask is not None
+            ):
+                self.model[i].update_attention_masks(current_pos[i])
 
         for i, trace_id in self.trace_ids_text.items():
             ttnn.execute_trace(self.model_args[i].mesh_device, trace_id, cq_id=0, blocking=False)
@@ -497,6 +531,63 @@ class Generator:
         self,
         vision_images,
         vision_masks,
+        tokens,
+        xattn_caches,
+        total_lens,
+        prompt_lens,
+        page_table=None,
+        kv_cache=None,
+        cross_page_table=None,
+        empty_slots=None,
+        **kwargs,
+    ):
+        if (self.model_args[0].checkpoint_type == CheckpointType.HuggingFace) and (
+            not self.model_args[0].is_llama_vision()
+        ):
+            logits = self.prefill_forward_text(
+                tokens,
+                page_table=page_table,
+                kv_cache=kv_cache,
+                prompt_lens=prompt_lens,
+                pixel_values=vision_images,
+                **kwargs,
+            )
+
+            return logits, None, None, None, None
+
+        else:
+            (
+                output_logits,
+                prefill_output_xattn_masks,
+                prefill_output_full_text_row_masked_out_masks,
+                decode_output_xattn_masks,
+                decode_output_full_text_row_masked_out_masks,
+            ) = self.prefill_forward_llama_vision(
+                vision_images,
+                vision_masks,
+                tokens,
+                xattn_caches,
+                total_lens,
+                prompt_lens,
+                page_table=page_table,
+                kv_cache=kv_cache,
+                cross_page_table=cross_page_table,
+                empty_slots=empty_slots,
+            )
+
+            return (
+                output_logits,
+                prefill_output_xattn_masks,
+                prefill_output_full_text_row_masked_out_masks,
+                decode_output_xattn_masks,
+                decode_output_full_text_row_masked_out_masks,
+            )
+
+    # Note: This function is called by vLLM
+    def prefill_forward_llama_vision(
+        self,
+        vision_images,
+        vision_masks,
         tokens: torch.Tensor,
         xattn_caches,
         total_lens,
@@ -590,7 +681,7 @@ class Generator:
         )
 
     # Note: This function is called by vLLM
-    def decode_forward(
+    def decode_forward_llama_vision(
         self,
         start_pos,
         tokens,
@@ -653,6 +744,47 @@ class Generator:
             return self.process_decode_output_host(to_host)
         else:
             return tt_logits
+
+    def decode_forward(
+        self,
+        start_pos,
+        tokens,
+        prefill_cross_attention_masks,
+        prefill_full_text_row_masked_out_mask,
+        decode_cross_attention_masks,
+        decode_full_text_row_masked_out_mask,
+        xattn_caches=None,
+        page_table=None,
+        kv_cache=None,
+        cross_page_table=None,
+        enable_trace=True,
+        read_from_device=True,
+    ):
+        if (self.model_args[0].checkpoint_type == CheckpointType.HuggingFace) and (
+            not self.model_args[0].is_llama_vision()
+        ):
+            return self.decode_forward_text(
+                tokens,
+                start_pos,
+                enable_trace=enable_trace,
+                page_table=page_table,
+                kv_cache=kv_cache,
+            )
+        else:
+            return self.decode_forward_llama_vision(
+                start_pos,
+                tokens,
+                prefill_cross_attention_masks,
+                prefill_full_text_row_masked_out_mask,
+                decode_cross_attention_masks,
+                decode_full_text_row_masked_out_mask,
+                xattn_caches,
+                page_table,
+                kv_cache,
+                cross_page_table,
+                enable_trace,
+                read_from_device,
+            )
 
     # Note: This function is called by vLLM
     def read_decode_output(self, tt_out, async_read=False):

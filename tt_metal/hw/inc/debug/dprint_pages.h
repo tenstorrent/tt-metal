@@ -45,6 +45,17 @@ inline void print_u8_pages(uint32_t l1_addr, uint32_t bytes_per_page, uint32_t n
     }
 }
 
+inline void print_u16_pages(uint32_t l1_addr, uint32_t elts_per_page, uint32_t npages, uint32_t start = 0) {
+    volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_addr) + start * elts_per_page;
+    for (uint32_t page = 0; page < npages; ++page) {
+        DPRINT << start + page << ": ";
+        for (uint32_t j = 0; j < elts_per_page; ++j, ++ptr) {
+            DPRINT << (uint32_t)*ptr << " ";
+        }
+        DPRINT << ENDL();
+    }
+}
+
 }  // namespace tt::data_movement::common
 
 #endif

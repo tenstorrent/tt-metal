@@ -26,6 +26,10 @@ on:
       wheel-artifact-name:
         required: true
         type: string
+      enable-watcher:
+        required: false
+        type: boolean
+        default: false
 
   workflow_dispatch:
     inputs:
@@ -67,14 +71,17 @@ jobs:
         test-group:
           - name: tt-cnn pipeline unit tests
             cmd: pytest models/tt_cnn/tests/test_pipeline.py
+          - name: tt-cnn builder unit tests
+            cmd: pytest models/tt_cnn/tests/test_builder.py
     name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: >-
       ${{
-        (github.event.pull_request.head.repo.fork == true || contains('P150b, N150, N300', inputs.runner-label)) && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label)
-        || fromJSON(format('["{0}", "in-service", "cloud-virtual-machine"]', inputs.runner-label))
+        (inputs.runner-label == 'P100') && fromJSON(format('["in-service", "cloud-virtual-machine", "{0}"]', inputs.runner-label))
+        || (inputs.runner-label == 'P150b' && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label))
+        || format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label)
       }}
     container:
-      image: ${{ inputs.docker-image }}
+      image: ${{ ((inputs.runner-label != 'P100') && format('harbor.ci.tenstorrent.net/{0}', inputs.docker-image)) || inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         ARCH_NAME: ${{ inputs.arch }}
         LOGURU_LEVEL: INFO
@@ -89,10 +96,11 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
         timeout-minutes: 10
         with:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+          enable-watcher: ${{ inputs.enable-watcher || false }}
 
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ inputs.timeout }}
@@ -102,7 +110,7 @@ jobs:
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
-          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
           owner: U06ECNVR0EN # Evan Smal
 
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main

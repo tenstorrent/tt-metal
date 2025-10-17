@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -7,21 +7,26 @@ import random
 import string
 
 import torch
-from diffusers import AutoencoderKL, UNet2DConditionModel
 from loguru import logger
 from PIL import Image
-from transformers import CLIPTextModel, CLIPTokenizer
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
+from models.common.utility_functions import disable_persistent_kernel_cache, is_wormhole_b0
+from models.demos.wormhole.stable_diffusion.common import SD_L1_SMALL_SIZE, SD_TRACE_REGION_SIZE
 from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
-from models.demos.wormhole.stable_diffusion.sd_helper_funcs import compile_trace_sd
+from models.demos.wormhole.stable_diffusion.sd_helper_funcs import (
+    compile_trace_sd,
+    get_reference_clip_text_encoder,
+    get_reference_clip_tokenizer,
+    get_reference_unet,
+    get_reference_vae,
+)
 from models.demos.wormhole.stable_diffusion.sd_pndm_scheduler import TtPNDMScheduler
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_unet_2d_condition_model_new_conv import (
     UNet2DConditionModel as UNet2D,
 )
 from models.demos.wormhole.stable_diffusion.tt.vae.ttnn_vae import Vae
-from models.utility_functions import disable_persistent_kernel_cache
 
 
 def constant_prop_time_embeddings(timesteps, sample, time_proj):
@@ -35,11 +40,14 @@ def constant_prop_time_embeddings(timesteps, sample, time_proj):
 model_pipeline = None
 
 
-def create_model_pipeline(device, num_inference_steps, image_size=(256, 256)):
+def create_model_pipeline(
+    device, is_ci_env, is_ci_v2_env, model_location_generator, num_inference_steps, image_size=(256, 256)
+):
     disable_persistent_kernel_cache()
 
     # Until di/dt issues are resolved
-    os.environ["TT_MM_THROTTLE_PERF"] = "5"
+    if is_wormhole_b0():
+        os.environ["TT_MM_THROTTLE_PERF"] = "5"
     assert (
         num_inference_steps >= 4
     ), f"PNDMScheduler only supports num_inference_steps >= 4. Found num_inference_steps={num_inference_steps}"
@@ -48,16 +56,15 @@ def create_model_pipeline(device, num_inference_steps, image_size=(256, 256)):
 
     torch_device = "cpu"
     # 1. Load the autoencoder model which will be used to decode the latents into image space.
-    vae = AutoencoderKL.from_pretrained("CompVis/stable-diffusion-v1-4", subfolder="vae")
-    vae.to(torch_device)
+    vae = get_reference_vae(is_ci_env, is_ci_v2_env, model_location_generator)
     vae_scale_factor = 2 ** (len(vae.config.block_out_channels) - 1)
     tt_vae = Vae(torch_vae=vae, device=device)
     # 2. Load the tokenizer and text encoder to tokenize and encode the text.
-    tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-large-patch14")
-    text_encoder = CLIPTextModel.from_pretrained("openai/clip-vit-large-patch14")
+    tokenizer = get_reference_clip_tokenizer(is_ci_env, is_ci_v2_env, model_location_generator)
+    text_encoder = get_reference_clip_text_encoder(is_ci_env, is_ci_v2_env, model_location_generator)
 
     # 3. The UNet model for generating the latents.
-    unet = UNet2DConditionModel.from_pretrained("CompVis/stable-diffusion-v1-4", subfolder="unet")
+    unet = get_reference_unet(is_ci_env, is_ci_v2_env, model_location_generator)
 
     # 4. load the K-LMS scheduler with some fitting parameters.
     ttnn_scheduler = TtPNDMScheduler(
@@ -178,7 +185,7 @@ def create_model_pipeline(device, num_inference_steps, image_size=(256, 256)):
 def warmup_model():
     # create device, these constants are specific to n150 & n300
     device_id = 0
-    device_params = {"l1_small_size": 11 * 8192, "trace_region_size": 789835776}
+    device_params = {"l1_small_size": SD_L1_SMALL_SIZE, "trace_region_size": SD_TRACE_REGION_SIZE}
     device = ttnn.CreateDevice(device_id=device_id, **device_params)
     num_inference_steps = 50
     image_size = (512, 512)

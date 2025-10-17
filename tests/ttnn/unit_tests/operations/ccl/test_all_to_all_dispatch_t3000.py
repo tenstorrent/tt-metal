@@ -167,6 +167,20 @@ def gen_tensors(
     return input_tokens, expert_indices, expert_mapping, output_tensor, metadata_tensor
 
 
+def get_mesh_mapper(mesh_device, mesh_shape, cluster_axis, shard_dim):
+    if cluster_axis is None:
+        mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=shard_dim)
+    elif cluster_axis == 1:
+        mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=(None, shard_dim), mesh_shape=mesh_shape)
+    elif cluster_axis == 0:
+        mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=(shard_dim, None), mesh_shape=mesh_shape)
+    else:
+        raise ValueError(f"Invalid cluster_axis: {cluster_axis}")
+    return mesh_mapper
+
+
+# we import and use this function in tests.sweeps_framework.sweeps.ccl.generality.all_to_all_dispatch.py
+# so be sure to carry over interface changes!
 def run_all_to_all_dispatch_test(
     mesh_device,
     mesh_shape,
@@ -191,8 +205,10 @@ def run_all_to_all_dispatch_test(
     cluster_axis=1,
     use_optional_output_tensors=False,
     test_skew=False,
+    shard_dim=0,
 ):
     torch.manual_seed(2005)
+    random.seed(2005)
     mesh_device.enable_program_cache()
     devices = mesh_shape[0] * mesh_shape[1]
 
@@ -217,14 +233,7 @@ def run_all_to_all_dispatch_test(
 
     output_tensor_goldens_list = []
     output_metadata_goldens_list = []
-    if cluster_axis is None:
-        mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=0)
-    elif cluster_axis == 1:
-        mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=(None, 0), mesh_shape=mesh_shape)
-    elif cluster_axis == 0:
-        mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=(0, None), mesh_shape=mesh_shape)
-    else:
-        raise ValueError(f"Invalid cluster_axis: {cluster_axis}")
+    mesh_mapper = get_mesh_mapper(mesh_device, mesh_shape, cluster_axis, shard_dim)
 
     for iter in range(num_iters):
         input_tokens, expert_indices, expert_mapping, sparse_output_token_tensor, metadata_tensor = gen_tensors(
@@ -285,7 +294,7 @@ def run_all_to_all_dispatch_test(
             layout=ttnn.ROW_MAJOR_LAYOUT,
             dtype=dtype,
             memory_config=output_memory_config,
-            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=shard_dim),
         )
 
         tt_metadata_tensor = ttnn.from_torch(
@@ -294,7 +303,7 @@ def run_all_to_all_dispatch_test(
             layout=ttnn.ROW_MAJOR_LAYOUT,
             dtype=ttnn.uint16,
             memory_config=output_memory_config,
-            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=shard_dim),
         )
 
         if iter == 0:
@@ -425,17 +434,16 @@ def run_all_to_all_dispatch_test(
     first_failed_metadata_index = None
     failed_indices = []
     failed_metadata_indices = []
-    expected_pcc = get_pcc_threshold(dtype)
 
     for tensor_index in range(len(tt_out_tensor_list)):
         tt_torch_tensor = ttnn.to_torch(
             tt_out_tensor_list[tensor_index],
-            mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0),
+            mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=shard_dim),
         )
 
         tt_metadata_tensor = ttnn.to_torch(
             tt_metadata_list[tensor_index],
-            mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0),
+            mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=shard_dim),
         )
 
         batch = tt_torch_tensor.shape[1]
@@ -443,7 +451,8 @@ def run_all_to_all_dispatch_test(
         selected_experts_k = tt_metadata_tensor.shape[3]
 
         metadata_all_close = torch.allclose(tt_metadata_tensor, output_metadata_goldens_list[tensor_index])
-        if not metadata_all_close:
+        metadata_all_equal = torch.equal(tt_metadata_tensor, output_metadata_goldens_list[tensor_index])
+        if not metadata_all_close or not metadata_all_equal:
             metadata_passed = False
             first_failed_metadata_index = tensor_index
             failed_metadata_indices = torch.where(tt_metadata_tensor != output_metadata_goldens_list[tensor_index])
@@ -460,20 +469,15 @@ def run_all_to_all_dispatch_test(
                     expert_id = tt_metadata_tensor[0, b, s, k]
                     for d in range(devices):
                         if torch_expert_mappings[tensor_index][0, 0, expert_id, d] == 1:
-                            eq, output_results = comp_pcc(
-                                tt_torch_tensor[d, b, s, :],
-                                output_tensor_goldens_list[tensor_index][d, b, s, :],
-                                expected_pcc,
-                            )
-                            is_all_close = torch.allclose(
+                            is_all_equal = torch.equal(
                                 tt_torch_tensor[d, b, s, :], output_tensor_goldens_list[tensor_index][d, b, s, :]
                             )
-                            if not is_all_close:
+                            if not is_all_equal:
                                 logger.info(
                                     f"Output tensor {tensor_index} mismatch at batch {b}, sequence {s}, expert {expert_id}, device {d}"
                                 )
 
-                            if not eq or not is_all_close:
+                            if not is_all_equal:
                                 passed = False
                                 first_failed_tensor_index = tensor_index
                                 first_failed_batch_index = b
@@ -521,6 +525,7 @@ def run_all_to_all_dispatch_test(
         {"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_2D},
         {"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_1D},
     ],
+    ids=["fabric_2d", "fabric_1d_linear"],
     indirect=True,
 )
 @pytest.mark.parametrize("trace_mode", [False])
@@ -541,8 +546,12 @@ def run_all_to_all_dispatch_test(
 )
 @pytest.mark.parametrize("num_links", ["MAX_LINKS"])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
-@pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG], ids=["dram", "l1"])
-@pytest.mark.parametrize("output_memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG], ids=["dram", "l1"])
+@pytest.mark.parametrize(
+    "input_memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG], ids=["dram_input", "l1_input"]
+)
+@pytest.mark.parametrize(
+    "output_memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG], ids=["dram_output", "l1_output"]
+)
 def test_all_to_all_dispatch_no_trace(
     mesh_device,
     trace_mode,
@@ -606,13 +615,14 @@ def test_all_to_all_dispatch_no_trace(
             "trace_region_size": 500000,
         },
     ],
+    ids=["fabric_2d", "fabric_1d_linear"],
     indirect=True,
 )
 @pytest.mark.parametrize("trace_mode", [True])
 @pytest.mark.parametrize(
     "mesh_shape, mesh_device", [pytest.param((2, 4), (2, 4), id="2x4_grid")], indirect=["mesh_device"]
 )
-@pytest.mark.parametrize("cluster_axis", [0, 1])
+@pytest.mark.parametrize("cluster_axis", [0, 1], ids=["cluster_axis_0", "cluster_axis_1"])
 @pytest.mark.parametrize("batches_per_device", [8])
 @pytest.mark.parametrize("experts_per_device", [8])
 @pytest.mark.parametrize("select_experts_k", [8])
@@ -993,3 +1003,127 @@ def test_all_to_all_dispatch_skew(
         topology=topology,
         test_skew=True,
     )
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_1D},
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "mesh_shape, mesh_device", [pytest.param((2, 4), (2, 4), id="2x4_grid")], indirect=["mesh_device"]
+)
+@pytest.mark.parametrize("cluster_axis", [1], ids=["cluster_col"])
+@pytest.mark.parametrize("experts", [8])
+@pytest.mark.parametrize("select_experts_k", [2])
+@pytest.mark.parametrize("hidden_size", [7168])
+@pytest.mark.parametrize(
+    "batch, seq_len",
+    [
+        (1, 8),
+    ],
+    ids=["b1s8"],
+)
+@pytest.mark.parametrize("num_links", ["MAX_LINKS"])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
+@pytest.mark.parametrize("output_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
+def test_all_to_all_dispatch_no_trace_batch1(
+    mesh_device,
+    mesh_shape,
+    cluster_axis,
+    batch,
+    experts,
+    select_experts_k,
+    hidden_size,
+    seq_len,
+    num_links,
+    dtype,
+    input_memory_config,
+    output_memory_config,
+    device_params,
+):
+    if num_links == "MAX_LINKS":
+        num_links = get_max_links(cluster_axis, device_params["fabric_config"])
+    devices = mesh_shape[0] * mesh_shape[1]
+    input_tokens, expert_indices, expert_mapping, sparse_output_token_tensor, metadata_tensor = gen_tensors(
+        batch,
+        experts,
+        select_experts_k,
+        hidden_size,
+        seq_len,
+        mesh_shape,
+        devices,
+        scheme="random",
+        dtype=tt_to_torch_dtype(dtype),
+    )
+
+    logger.info(f"Batch = 1 input_tokens global shape: {input_tokens.shape}")
+    logger.info(f"Batch = 1 expert_indices global shape: {expert_indices.shape}")
+
+    mesh_mapper = get_mesh_mapper(mesh_device, mesh_shape, cluster_axis, 2)
+
+    tt_input_tokens = ttnn.from_torch(
+        input_tokens,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=dtype,
+        memory_config=input_memory_config,
+        mesh_mapper=mesh_mapper,
+    )
+
+    tt_expert_indices = ttnn.from_torch(
+        expert_indices,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.uint16,
+        memory_config=input_memory_config,
+        mesh_mapper=mesh_mapper,
+    )
+
+    tt_expert_mapping = ttnn.from_torch(
+        expert_mapping,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.uint16,
+        memory_config=input_memory_config,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, None), mesh_shape=mesh_shape),
+    )
+
+    logger.info(f"Batch = 1 tt_input_tokens per-device shape: {tt_input_tokens.shape}")
+    logger.info(f"Batch = 1 tt_expert_indices per-device shape: {tt_expert_indices.shape}")
+    logger.info(f"Batch = 1 tt_expert_mapping per-device shape: {tt_expert_mapping.shape}")
+
+    tt_output_tensor, tt_metadata_tensor = ttnn.all_to_all_dispatch(
+        tt_input_tokens,
+        tt_expert_indices,
+        tt_expert_mapping,
+        cluster_axis=cluster_axis,
+        num_links=num_links,
+        memory_config=output_memory_config,
+        output_concat_dim=2,
+    )
+
+    logger.info(f"Batch = 1 tt_output_tensor per-device shape: {tt_output_tensor.shape}")
+    logger.info(f"Batch = 1 tt_metadata_tensor per-device shape: {tt_metadata_tensor.shape}")
+
+    torch_tt_output_tensor = ttnn.to_torch(
+        tt_output_tensor,
+        mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=2),
+    )
+
+    torch_tt_metadata_tensor = ttnn.to_torch(
+        tt_metadata_tensor,
+        mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=2),
+    )
+
+    # reshape to (-1, H)/
+    torch_tt_output_tensor = torch_tt_output_tensor.reshape(-1, torch_tt_output_tensor.shape[-1])
+    torch_tt_metadata_tensor = torch_tt_metadata_tensor.reshape(-1, torch_tt_metadata_tensor.shape[-1])
+    sparse_output_token_tensor = sparse_output_token_tensor.reshape(-1, sparse_output_token_tensor.shape[-1])
+    metadata_tensor = metadata_tensor.reshape(-1, metadata_tensor.shape[-1])
+
+    torch.allclose(torch_tt_output_tensor, sparse_output_token_tensor)
+    torch.allclose(torch_tt_metadata_tensor, metadata_tensor)

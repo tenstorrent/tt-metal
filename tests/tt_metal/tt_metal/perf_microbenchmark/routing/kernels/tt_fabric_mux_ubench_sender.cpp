@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,7 +7,7 @@
 #include "debug/dprint.h"
 #include "debug/assert.h"
 #include "fabric/fabric_edm_packet_header.hpp"
-#include "tt_metal/fabric/hw/inc/tt_fabric.h" // zero_l1_buf
+#include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux_interface.hpp"
 // clang-format on
@@ -78,7 +78,7 @@ void kernel_main() {
 
     auto packet_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(packet_header_buffer_address);
     uint64_t noc_dest_address = get_noc_addr_helper(receiver_noc_xy_encoding, target_address);
-    packet_header->to_chip_unicast(static_cast<uint8_t>(num_hops));
+    fabric_set_unicast_route<false>((LowLatencyPacketHeader*)packet_header, num_hops);
     if constexpr (is_full_size_channel_sender) {
         packet_header->to_noc_unicast_write(NocUnicastCommandHeader{noc_dest_address}, packet_payload_size_bytes);
     } else {

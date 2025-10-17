@@ -1,0 +1,209 @@
+graph_templates {
+  key: "n300_lb_superpod"
+  value {
+    children {
+      name: "node1"
+      node_ref { node_descriptor: "N300_LB" }
+    }
+    children {
+      name: "node2"
+      node_ref { node_descriptor: "N300_LB" }
+    }
+    children {
+      name: "node3"
+      node_ref { node_descriptor: "N300_LB" }
+    }
+    children {
+      name: "node4"
+      node_ref { node_descriptor: "N300_LB" }
+    }
+    # Internal superpod connections
+    internal_connections {
+      key: "QSFP_DD"
+      value {
+        connections {
+          port_a { path: ["node1"] tray_id: 1 port_id: 2 }
+          port_b { path: ["node4"] tray_id: 1 port_id: 2 }
+        }
+        connections {
+          port_a { path: ["node1"] tray_id: 3 port_id: 1 }
+          port_b { path: ["node2"] tray_id: 3 port_id: 1 }
+        }
+        connections {
+          port_a { path: ["node1"] tray_id: 4 port_id: 2 }
+          port_b { path: ["node3"] tray_id: 4 port_id: 2 }
+        }
+        connections {
+          port_a { path: ["node2"] tray_id: 2 port_id: 1 }
+          port_b { path: ["node3"] tray_id: 2 port_id: 1 }
+        }
+        connections {
+          port_a { path: ["node2"] tray_id: 4 port_id: 2 }
+          port_b { path: ["node4"] tray_id: 2 port_id: 1 }
+        }
+        connections {
+          port_a { path: ["node3"] tray_id: 3 port_id: 1 }
+          port_b { path: ["node4"] tray_id: 3 port_id: 1 }
+        }
+      }
+    }
+  }
+}
+
+# Cluster template (4 superpods)
+graph_templates {
+  key: "n300_lb_cluster"
+  value {
+    children {
+      name: "superpod1"
+      graph_ref { graph_template: "n300_lb_superpod" }
+    }
+    children {
+      name: "superpod2"
+      graph_ref { graph_template: "n300_lb_superpod" }
+    }
+    children {
+      name: "superpod3"
+      graph_ref { graph_template: "n300_lb_superpod" }
+    }
+    children {
+      name: "superpod4"
+      graph_ref { graph_template: "n300_lb_superpod" }
+    }
+    # Inter-superpod connections
+    internal_connections {
+      key: "QSFP_DD"
+      value {
+        connections {
+          port_a { path: ["superpod1", "node1"] tray_id: 2 port_id: 1 }
+          port_b { path: ["superpod3", "node1"] tray_id: 2 port_id: 1 }
+        }
+        connections {
+          port_a { path: ["superpod1", "node3"] tray_id: 1 port_id: 2 }
+          port_b { path: ["superpod2", "node2"] tray_id: 1 port_id: 2 }
+        }
+        connections {
+          port_a { path: ["superpod1", "node4"] tray_id: 4 port_id: 2 }
+          port_b { path: ["superpod4", "node1"] tray_id: 2 port_id: 1 }
+        }
+        connections {
+          port_a { path: ["superpod3", "node3"] tray_id: 1 port_id: 2 }
+          port_b { path: ["superpod4", "node2"] tray_id: 1 port_id: 2 }
+        }
+        connections {
+          port_a { path: ["superpod3", "node4"] tray_id: 4 port_id: 2 }
+          port_b { path: ["superpod2", "node1"] tray_id: 2 port_id: 1 }
+        }
+        connections {
+          port_a { path: ["superpod2", "node4"] tray_id: 4 port_id: 2 }
+          port_b { path: ["superpod4", "node4"] tray_id: 4 port_id: 2 }
+        }
+      }
+    }
+  }
+}
+
+# Root instance with concrete host mappings
+root_instance {
+  template_name: "n300_lb_cluster"
+  child_mappings {
+    key: "superpod1"
+    value {
+      sub_instance {
+        template_name: "n300_lb_superpod"
+
+        child_mappings {
+          key: "node1"
+          value { host_id: 0 }
+        }
+        child_mappings {
+          key: "node2"
+          value { host_id: 1 }
+        }
+        child_mappings {
+          key: "node3"
+          value { host_id: 2 }
+        }
+        child_mappings {
+          key: "node4"
+          value { host_id: 3 }
+        }
+      }
+    }
+  }
+  child_mappings {
+    key: "superpod2"
+    value {
+      sub_instance {
+        template_name: "n300_lb_superpod"
+
+        child_mappings {
+          key: "node1"
+          value { host_id: 4 }
+        }
+        child_mappings {
+          key: "node2"
+          value { host_id: 5 }
+        }
+        child_mappings {
+          key: "node3"
+          value { host_id: 6 }
+        }
+        child_mappings {
+          key: "node4"
+          value { host_id: 7 }
+        }
+      }
+    }
+  }
+  child_mappings {
+    key: "superpod3"
+    value {
+      sub_instance {
+        template_name: "n300_lb_superpod"
+
+        child_mappings {
+          key: "node1"
+          value { host_id: 8 }
+        }
+        child_mappings {
+          key: "node2"
+          value { host_id: 9 }
+        }
+        child_mappings {
+          key: "node3"
+          value { host_id: 10 }
+        }
+        child_mappings {
+          key: "node4"
+          value { host_id: 11 }
+        }
+      }
+    }
+  }
+  child_mappings {
+    key: "superpod4"
+    value {
+      sub_instance {
+        template_name: "n300_lb_superpod"
+
+        child_mappings {
+          key: "node1"
+          value { host_id: 12 }
+        }
+        child_mappings {
+          key: "node2"
+          value { host_id: 13 }
+        }
+        child_mappings {
+          key: "node3"
+          value { host_id: 14 }
+        }
+        child_mappings {
+          key: "node4"
+          value { host_id: 15 }
+        }
+      }
+    }
+  }
+}

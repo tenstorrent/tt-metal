@@ -122,22 +122,26 @@ class AllGatherAsyncConfig(OpConfigBase):
     memory_config: ttnn._ttnn.tensor.MemoryConfig | None = None
     subdevice_id: ttnn._ttnn.device.SubDeviceId | None = None
     use_optimal_ccl_for_llama: bool | None = None
-    barrier_semaphore: ttnn._ttnn.global_semaphore.global_sempahore | None = None
+    barrier_semaphore: ttnn._ttnn.global_semaphore.global_semaphore | None = None
 
 
 @dataclass
-class ReduceScatterAsyncConfig(OpConfigBase):
-    """Common parameters for a ttnn.experimental.reduce_scatter_async op"""
+class ReduceScatterAsyncMinimalConfig(OpConfigBase):
+    """Common parameters for a ttnn.experimental.reduce_scatter_minimal_async op"""
 
-    mesh_device: ConfigDevice | None = None
-    cluster_axis: int | None = None
-    dim: int | None = None
-    from_remote_multi_device_global_semaphore: object | None = None
-    to_remote_multi_device_global_semaphore: object | None = None
-    math_op: ttnn.ReduceType | None = None
+    dim: int
+    multi_device_global_semaphore: ttnn._ttnn.global_semaphore.global_semaphore | None = None
     num_links: int | None = None
-    memory_config: ttnn.MemoryConfig | None = None
-    topology: ttnn.Topology | None = None
+    persistent_output_buffers: ttnn.Tensor | None = None
+    barrier_semaphore: ttnn._ttnn.global_semaphore.global_semaphore | None = None
+    memory_config: ttnn._ttnn.tensor.MemoryConfig | None = None
+    intermediate_memory_config: ttnn._ttnn.tensor.MemoryConfig | None = None
+    topology: ttnn.Topology = ttnn.Topology.Ring
+    subdevice_id: ttnn._ttnn.device.SubDeviceId | None = None
+    cluster_axis: int | None = None
+    chunks_per_sync: int | None = None
+    num_workers_per_link: int | None = None
+    num_buffers_per_channel: int | None = None
 
 
 @dataclass
@@ -147,7 +151,6 @@ class PointToPointConfig(OpConfigBase):
     receiver_coord: ttnn.MeshCoordinate | None = None
     sender_coord: ttnn.MeshCoordinate | None = None
     topology: ttnn.Topology = ttnn.Topology.Linear
-    semaphore: ttnn._ttnn.global_semaphore.global_sempahore | None = None
     optional_output_tensor: ttnn.Tensor | None = None
 
 

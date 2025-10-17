@@ -19,6 +19,7 @@
 #include <tt-metalium/fabric.hpp>
 #include <tt-metalium/mesh_graph.hpp>
 #include <tt-metalium/hal.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include <limits>
 
 namespace ttnn::operations::ccl {
@@ -136,7 +137,7 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
     const auto& output_tensor = tensor_return_value.at(0);
     const auto& metadata_tensor = tensor_return_value.at(1);
     auto num_links = operation_attributes.num_links;
-    auto topology = tt::tt_fabric::get_fabric_topology();
+    auto topology = operation_attributes.topology;
 
     auto mesh_device = input_tensor.device();
     const auto& mesh_view = mesh_device->get_view();
@@ -316,12 +317,6 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
     const auto l1_alignment = tt::tt_metal::hal::get_l1_alignment();
 
     std::vector<uint32_t> reader_compile_time_args = {
-        input_tensor.buffer()->is_dram(),
-        indices_tensor.buffer()->is_dram(),
-        mapping_tensor.buffer()->is_dram(),
-        output_tensor.buffer()->is_dram(),
-        metadata_tensor.buffer()->is_dram(),
-
         input_tensor_cb_id,
         indices_tensor_cb_id,
         mapping_tensor_cb_id,
@@ -368,6 +363,11 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
         operation_attributes.impl == AllToAllTransferType::PageByPage ? 1 : 0,
         linearized_mesh_coord,
     };
+    tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(indices_tensor.buffer()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(mapping_tensor.buffer()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(metadata_tensor.buffer()).append_to(reader_compile_time_args);
 
     const auto& writer_compile_time_args = reader_compile_time_args;
 

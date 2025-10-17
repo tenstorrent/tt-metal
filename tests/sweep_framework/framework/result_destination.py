@@ -7,7 +7,9 @@ from typing import List, Dict, Optional, Any
 import pathlib
 import json
 import datetime as dt
+import hashlib
 import os
+import math
 from elasticsearch import Elasticsearch
 from framework.database import (
     postgres_connection,
@@ -16,11 +18,19 @@ from framework.database import (
     update_run,
     generate_error_signature,
     map_test_status_to_run_status,
+    generate_error_hash,
 )
 from framework.serialize import serialize, serialize_structured
 from framework.serialize import deserialize, deserialize_structured
 from framework.sweeps_logger import sweeps_logger as logger
 from infra.data_collection.pydantic_models import OpTest, PerfMetric, TestStatus, OpParam, OpRun, RunStatus
+from framework.upload_sftp import upload_run_sftp
+
+# Optional numpy import for numeric handling in hot paths
+try:
+    import numpy as np
+except ImportError:
+    np = None
 
 
 class ResultDestination(ABC):
@@ -113,6 +123,7 @@ class PostgresResultDestination(ResultDestination):
                     testcase_name = f"{sweep_name}_{header_info[i].get('vector_id', 'unknown')}"
                     exception_text = result.get("exception", None)
                     error_sig = generate_error_signature(exception_text)
+                    error_hash = generate_error_hash(exception_text)
 
                     testcase_values = (
                         test_id,
@@ -173,6 +184,8 @@ class PostgresResultDestination(ResultDestination):
             TestStatus.FAIL_CRASH_HANG: "fail_crash_hang",
             TestStatus.FAIL_UNSUPPORTED_DEVICE_PERF: "fail_unsupported_device_perf",
             TestStatus.NOT_RUN: "skipped",
+            TestStatus.XFAIL: "xfail",  # Expected failure
+            TestStatus.XPASS: "xpass",  # Unexpected pass
         }
         return status_mapping.get(test_status, "error")
 
@@ -255,10 +268,14 @@ class FileResultDestination(ResultDestination):
         # Generate a simple deterministic run id based on host and start timestamp
         try:
             host = str(run_metadata.get("host", "unknown"))
+            # Use a short digest of run_contents to prevent overly long filenames
             run_contents = str(run_metadata.get("run_contents", "unknown"))
+            digest = hashlib.sha256(run_contents.encode("utf-8")).hexdigest()[:12]
             start_ts = run_metadata.get("start_time_ts") or run_metadata.get("run_start_ts") or dt.datetime.now()
             ts_str = start_ts.strftime("%Y%m%d_%H%M%S")
-            self._run_id = f"{host}_{run_contents}_{ts_str}"
+            # Sanitize host to avoid path issues and keep the filename short
+            safe_host = host.replace("/", "_")[:32]
+            self._run_id = f"{safe_host}_{digest}_{ts_str}"
         except Exception:
             self._run_id = None
 
@@ -273,7 +290,16 @@ class FileResultDestination(ResultDestination):
             return "success"
 
         sweep_name = header_info[0]["sweep_name"]
-        export_path = self.export_dir / f"{sweep_name}.json"
+        run_start_time = run_context.get("test_start_time")
+        if run_start_time:
+            timestamp = run_start_time.strftime("%Y%m%d_%H%M%S")
+        else:
+            # Fallback to current time if run_start_time is not available
+            timestamp = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
+        # Keep filenames short and safe: use sweep short name + digest
+        short_sweep = str(sweep_name).split(".")[0] if sweep_name else "sweep"
+        name_digest = hashlib.sha256(str(sweep_name).encode("utf-8")).hexdigest()[:12] if sweep_name else "na"
+        export_path = self.export_dir / f"{short_sweep}_{name_digest}_{timestamp}.json"
 
         git_hash = run_context.get("git_hash", "unknown")
 
@@ -297,6 +323,8 @@ class FileResultDestination(ResultDestination):
                         RunnerStatus.FAIL_L1_OUT_OF_MEM: "fail_l1_out_of_mem",
                         RunnerStatus.FAIL_WATCHER: "fail_watcher",
                         RunnerStatus.FAIL_UNSUPPORTED_DEVICE_PERF: "fail_unsupported_device_perf",
+                        RunnerStatus.XFAIL: "xfail",  # Expected failure
+                        RunnerStatus.XPASS: "xpass",  # Unexpected pass
                     }
                     return TestStatus(mapping.get(value, "error"))
             except Exception:
@@ -336,6 +364,34 @@ class FileResultDestination(ResultDestination):
                 metrics.add(PerfMetric(metric_name=str(k), metric_value=_to_float(v)))
             return metrics if metrics else None
 
+        def _coerce_to_optional_string(value: Any) -> Optional[str]:
+            """Convert any value to an optional string, handling common numeric types gracefully."""
+            if value is None:
+                return None
+            if isinstance(value, str):
+                return value
+
+            # Handle numpy numeric types first (before checking for regular float/int)
+            if np is not None and isinstance(value, np.number):
+                if np.isnan(value):
+                    return None
+                if np.isinf(value):
+                    return "inf" if value > 0 else "-inf"
+                return str(value)
+
+            # Handle regular Python numeric types
+            if isinstance(value, (int, float)):
+                # Handle special float cases
+                if isinstance(value, float):
+                    if math.isnan(value):
+                        return None
+                    if math.isinf(value):
+                        return "inf" if value > 0 else "-inf"
+                return str(value)
+
+            # For any other type, convert to string
+            return str(value)
+
         for i in range(len(results)):
             header = header_info[i]
             raw = results[i]
@@ -366,9 +422,6 @@ class FileResultDestination(ResultDestination):
                     # fallback to string representation for unsupported types
                     coerced_value = str(v)
 
-                if i == 0:
-                    logger.info(f"k: {k}, v:  {coerced_value}")
-
                 # Map value into appropriate OpParam field
                 if isinstance(coerced_value, (int, float)):
                     op_param_list.append(OpParam(param_name=k, param_value_numeric=float(coerced_value)))
@@ -379,19 +432,17 @@ class FileResultDestination(ResultDestination):
                 else:
                     op_param_list.append(OpParam(param_name=k, param_value_text=str(coerced_value)))
 
-            # Derive op_kind/op_name from full_test_name (sweep_name): first and second segments before dots
+            # Derive op_kind/op_name from full_test_name (sweep_name): first and last string segments
             full_name = header.get("sweep_name")
             try:
                 _parts = str(full_name).split(".") if full_name is not None else []
             except Exception:
                 _parts = []
             _op_kind = _parts[0] if len(_parts) > 0 and _parts[0] else (header.get("op_kind") or "unknown")
-            if len(_parts) > 1 and _parts[1]:
-                _op_name = _parts[1]
-            elif len(_parts) > 0 and _parts[0]:
-                _op_name = _parts[0]
-            else:
-                _op_name = header.get("op_name") or "unknown"
+            _op_name = _parts[-1] if len(_parts) > 0 and _parts[-1] else (header.get("op_name") or "unknown")
+
+            exception = str(raw.get("exception", None))
+            error_hash = generate_error_hash(exception)
 
             record = OpTest(
                 github_job_id=run_context.get("github_job_id", None),
@@ -402,7 +453,8 @@ class FileResultDestination(ResultDestination):
                 filepath=header.get("sweep_name"),
                 success=is_success,
                 skipped=is_skipped,
-                error_message=raw.get("exception", None),
+                error_message=exception,
+                error_hash=error_hash,
                 config=None,
                 frontend="ttnn.op",
                 model_name="n/a",
@@ -417,9 +469,9 @@ class FileResultDestination(ResultDestination):
                 card_type="n/a",
                 backend="n/a",
                 data_source="ttnn op test",
-                input_hash=header.get("input_hash"),
-                message=raw.get("message", None),
-                exception=raw.get("exception", None),
+                input_hash=raw.get("input_hash"),
+                message=_coerce_to_optional_string(raw.get("message", None)),
+                exception=_coerce_to_optional_string(raw.get("exception", None)),
                 metrics=raw.get("device_perf", None),
                 op_params_set=op_param_list,
             )
@@ -428,30 +480,6 @@ class FileResultDestination(ResultDestination):
             record_dict = record.model_dump(mode="json")
             record_dict = _flatten_serialized(record_dict)
             validated_records.append(record_dict)
-
-        # Append to existing file or create new one
-        if export_path.exists():
-            try:
-                with open(export_path, "r") as file:
-                    old_data = json.load(file)
-                if isinstance(old_data, list):
-                    validated_records = old_data + validated_records
-                else:
-                    logger.warning(
-                        f"Existing export file {export_path} is not a JSON list. Overwriting with validated records."
-                    )
-            except json.JSONDecodeError:
-                # Corrupt or non-JSON file: back it up and proceed with fresh records
-                try:
-                    backup_path = export_path.with_suffix(export_path.suffix + ".bak")
-                    export_path.rename(backup_path)
-                    logger.warning(
-                        f"Existing export file {export_path} contained invalid JSON. Backed up to {backup_path}."
-                    )
-                except Exception:
-                    logger.warning(
-                        f"Existing export file {export_path} contained invalid JSON and could not be backed up. Overwriting."
-                    )
 
         # Atomic write to avoid truncated/invalid JSON on interruptions
         tmp_path = export_path.with_suffix(export_path.suffix + ".tmp")
@@ -491,9 +519,7 @@ class FileResultDestination(ResultDestination):
 
         # Build OpRun record
         try:
-            run_start_ts = (
-                self._run_metadata.get("start_time_ts") or self._run_metadata.get("run_start_ts") or dt.datetime.now()
-            )
+            run_start_ts = self._run_metadata.get("run_start_ts")
             run_end_ts = dt.datetime.now()
             card_type = self._run_metadata.get("device") or self._run_metadata.get("card_type") or "unknown"
 
@@ -635,6 +661,40 @@ def _flatten_any_to_dotted(value: Any) -> Dict[str, Any]:
     return flat
 
 
+class SupersetResultDestination(FileResultDestination):
+    """Superset destination: file export plus SFTP upload of oprun_*.json."""
+
+    def __init__(self, export_dir: Optional[pathlib.Path] = None):
+        super().__init__(export_dir)
+
+    def finalize_run(self, run_id: Optional[str], final_status: str) -> None:
+        # First perform the standard file-based finalize to write oprun_*.json
+        super().finalize_run(run_id, final_status)
+
+        # Compute the path of the just-written oprun file
+        try:
+            run_id_str = run_id or self._run_id
+            run_path = self.export_dir / f"oprun_{run_id_str}.json"
+        except Exception as e:
+            logger.error(f"Superset: failed to determine oprun file path for upload: {e}")
+            return
+        print(f"Superset: run_path: {run_path}")
+        print(f"Superset: run_id: {run_id}")
+
+        # Upload via SFTP if environment/configuration is available
+        try:
+            success = upload_run_sftp(run_path)
+            if success:
+                logger.info(f"Superset: successfully uploaded '{run_path.name}' via SFTP")
+            else:
+                logger.warning(
+                    f"Superset: skipping SFTP upload for '{run_path.name}' (missing credentials or upload failed)"
+                )
+        except Exception as e:
+            logger.error(f"Superset: unexpected error during SFTP upload of '{run_path}': {e}")
+            # Do not raise; file export already succeeded
+
+
 class ResultDestinationFactory:
     """Factory to create appropriate result destination based on configuration"""
 
@@ -651,5 +711,8 @@ class ResultDestinationFactory:
         elif result_destination == "results_export":
             export_dir = kwargs.get("export_dir")
             return FileResultDestination(export_dir)
+        elif result_destination == "superset":
+            export_dir = kwargs.get("export_dir")
+            return SupersetResultDestination(export_dir)
         else:
             raise ValueError(f"Unknown result destination: {result_destination}")

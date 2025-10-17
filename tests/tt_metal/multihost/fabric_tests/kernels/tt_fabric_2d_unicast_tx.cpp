@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,11 +7,10 @@
 #include "debug/dprint.h"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/common/kernel_utils.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
-#include "tt_metal/fabric/hw/inc/tt_fabric.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_traffic_gen.hpp"
 #include "tt_metal/fabric/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
-#include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 
 // clang-format on
@@ -68,7 +67,7 @@ void set_mcast_header(
     }
 
     fabric_set_mcast_route(
-        (LowLatencyMeshPacketHeader*)packet_header, 0, 0, e_num_hops, w_num_hops, n_num_hops, s_num_hops);
+        (HybridMeshPacketHeader*)packet_header, 0, 0, e_num_hops, w_num_hops, n_num_hops, s_num_hops);
 }
 
 inline void teardown_connection(tt::tt_fabric::WorkerToFabricEdmSender& connection) { connection.close(); }

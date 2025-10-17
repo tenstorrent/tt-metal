@@ -1466,7 +1466,7 @@ Each `ttnn` operation has a unique program config class. Program configs configu
 Picking a matmul variant is a key decision in optimizing a model. The choice depends on the shapes of the inputs and outputs and how the matmul fits into the rest of the model. Choose a variant by providing a specific `program_config` to `ttnn.matmul`. The following presents three matmul variants that are commonly used in LLMs:
 
 ##### 4.3.2.1 Matmul 2D
-Matmul 2D is named because it parallelizes an `(M x K) @ (K x N)` matmul over the M and N dimensions. It is useful to have this 2D parallelization when M and N are largeer than or equal to 256.
+Matmul 2D is named because it parallelizes an `(M x K) @ (K x N)` matmul over the M and N dimensions. It is useful to have this 2D parallelization when M and N are larger than or equal to 256.
 
 > [!TIP]
 > Use matmul 2D for all matmuls in prefill mode. Inputs and output to matmul 2D are interleaved in DRAM because these matmuls should be compute bound rather than memory bound and the inputs may be too large to fit in L1.
@@ -1480,9 +1480,9 @@ Input tensors shapes are `(M x K)` and `(K x N)`. A core grid shape is `(cores_x
 ```python
 matmul_2d_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
   compute_with_storage_grid_size=(cores_x, cores_y),
-  in0_block_w=1,
-  out_subblock_h=1, # Must be divisible by per_core_M
-  out_subblock_w=1, # Must be divisible by per_core_N
+  in0_block_w=1,    # Must divide Kt evenly
+  out_subblock_h=1, # Must divide per_core_M evenly
+  out_subblock_w=1, # Must divide per_core_N evenly
   per_core_M=math.ceil(M / 32 / cores_y),  # M / TILE_HEIGHT / Grid_Size
   per_core_N=math.ceil(N / 32 / cores_x),  # N / TILE_WIDTH / grid width
   transpose_mcast=False,
@@ -1515,7 +1515,7 @@ fused_activation=None,
 fuse_batch=False,
 ```
 - If this matmul is part of an MLP with an activation, `fused_activation` will tell the kernel which activation to apply.
-- Set `fuse_batch` to `False`.
+- Set `fuse_batch` to `False` for DRAM inputs.
 
 Since we use matmul 2D for large matmuls, there might be issues where we run out of L1 space to store intermediate values in the kernel. When this happens, reduce `in0_block_w` and `out_subblock_h` and `out_subblock_w`.
 
@@ -1524,7 +1524,7 @@ DRAM-sharded matmul should be used in decode mode, where activations are small a
 
 DRAM-Sharded matmul is used for all matmuls in decode mode. The activation and output are width-sharded in L1, and the weights width-sharded in DRAM.
 
-To use DRAM-Sharded matmul, create the weight memory config with this helper function: [`model_config.py`](/../../models/tt_transformers/tt/model_config.py).
+To use DRAM-Sharded matmul, create the weight memory config with this helper function: [`model_config.py`](../../models/tt_transformers/tt/model_config.py).
 
 ```python
 weights_memory_config = create_dram_sharded_mem_config(k=K, n=N)
@@ -1724,7 +1724,7 @@ This produces a file with naming convention similar to `ops_perf_results_2024_11
 > Only use a single trace execution step when profiling. Profiler support with tracing is still a work-in-progress and more iterations will result in a `AssertionError: Device data mismatch error`.
 
 > [!Note]
-> If you see errors while running tracy, try this device-only profiling process instead: run with `TT_METAL_DEVICE_PROFILER=1 pytest path/to/test.py`. After the run completes, run `tt_metal/tools/profiler/process_ops_logs.py --date` to generate the CSV file.
+> If you see errors while running tracy, try this device-only profiling process instead: run with `TT_METAL_DEVICE_PROFILER=1 pytest path/to/test.py`. After the run completes, run `tools/tracy/process_ops_logs.py --date` to generate the CSV file.
 
 This CSV file contains information recorded from all devices during program execution. To summarize, we run the `tt-perf-report` tool:
 

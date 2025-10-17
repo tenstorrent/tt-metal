@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -30,13 +30,13 @@ constexpr uint32_t cb_gamma_idx = tt::CBIndex::c_3;
 constexpr uint32_t cb_rms_a_idx = tt::CBIndex::c_4;
 constexpr uint32_t cb_dL_out_idx = tt::CBIndex::c_5;
 constexpr uint32_t cb_mat_mul_reduce = tt::CBIndex::c_6;
+constexpr uint32_t cb_zero_idx = tt::CBIndex::c_7;
 // CBs with output data
-constexpr uint32_t cb_dL_da_idx = tt::CBIndex::c_7;
-constexpr uint32_t cb_dL_dgamma_components = tt::CBIndex::c_8;
+constexpr uint32_t cb_dL_da_idx = tt::CBIndex::c_8;
+constexpr uint32_t cb_dL_dgamma_components = tt::CBIndex::c_9;
 // CBs with intermediate computations
-constexpr uint32_t cb_recip_rms_a_bcasted_idx = tt::CBIndex::c_9;
-constexpr uint32_t cb_scale_idx = tt::CBIndex::c_10;
-constexpr uint32_t cb_scale_bcasted_idx = tt::CBIndex::c_11;
+constexpr uint32_t cb_recip_rms_a_bcasted_idx = tt::CBIndex::c_10;
+constexpr uint32_t cb_scale_idx = tt::CBIndex::c_11;
 
 constexpr uint32_t onetile = 1;
 
@@ -54,16 +54,23 @@ constexpr bool do_mask_w = false;
 inline void compute_gained_dL_dout(uint32_t col, uint32_t working_register, uint32_t tile_register) {
     // The output of this function is gained_dL_dout, which is stored in working_register.
 
+    // NOTE(maciek): We need to manually zero the working register, as mul_tiles_bcast_rows accumulates into
+    // the dst register.
+    copy_tile_init(cb_zero_idx);
+    copy_tile(cb_zero_idx, /* tile_idx */ 0, working_register);
+
     // Compute scaled_gain = gamma * 1/rms_a
-    // NOTE: cb_recip_rms_a_bcasted is ready to be used, so we do not need to wait for it.
-    mul_tiles_init(cb_gamma_idx, cb_recip_rms_a_bcasted_idx);
-    mul_tiles(cb_gamma_idx, cb_recip_rms_a_bcasted_idx, col, 0, working_register);
+    // NOTE: cb_recip_rms_a_bcasted is ready to be used, so we do not need to wait for it, but we need to broadcast
+    // gamma.
+    mul_bcast_rows_init_short(cb_recip_rms_a_bcasted_idx, cb_gamma_idx);
+    mul_tiles_bcast_rows(
+        cb_recip_rms_a_bcasted_idx, cb_gamma_idx, /* tile_idx */ 0, /* tile_idx */ col, working_register);
 
     // Compute gained_dL_dout = scaled_gain * dL_out
     copy_tile_init(cb_dL_out_idx);
     copy_tile(cb_dL_out_idx, col, tile_register);
     mul_binary_tile_init();
-    mul_binary_tile(working_register, tile_register);
+    mul_binary_tile(working_register, tile_register, working_register);
 }
 
 inline void compute_dL_da(
@@ -75,10 +82,21 @@ inline void compute_dL_da(
     // Formula: dL_da = gained_dL_dout - (scale * a) / (c * rms_a^2)
     // where gained_dL_dout = (gamma / rms_a) * dL_dout
 
+    // NOTE(maciek): We need to manually zero the rhs register, as mul_tiles_bcast_cols accumulates into
+    // the dst register.
+    copy_tile_init(cb_zero_idx);
+    copy_tile(cb_zero_idx, /* tile_idx */ 0, rhs_register);
+
     // Compute scaled_outer = scale * a (broadcasted multiplication)
-    reconfig_data_format(cb_input_idx, cb_scale_bcasted_idx);
-    mul_tiles_init(cb_input_idx, cb_scale_bcasted_idx);
-    mul_tiles(cb_input_idx, cb_scale_bcasted_idx, /* tile_idx */ input_tile_idx, /* tile_idx */ 0, rhs_register);
+    reconfig_data_format(cb_input_idx, cb_scale_idx);
+    mul_bcast_cols_init_short(cb_input_idx, cb_scale_idx);
+    mul_tiles_bcast_cols(
+        cb_input_idx,
+        cb_scale_idx,
+        /* tile_idx */
+        input_tile_idx,
+        /* tile_idx */ 0,
+        rhs_register);
 
     // Compute rhs = scaled_outer / (c * rms_a^2)
     // Uses pre-computed reciprocal of rms_a and scaler (1/c) for efficiency
@@ -86,17 +104,17 @@ inline void compute_dL_da(
     copy_tile_init(cb_recip_rms_a_bcasted_idx);
     copy_tile(cb_recip_rms_a_bcasted_idx, /* tile_idx */ 0, tile_register);
     mul_binary_tile_init();
-    mul_binary_tile(rhs_register, tile_register);
-    mul_binary_tile(rhs_register, tile_register);
+    mul_binary_tile(rhs_register, tile_register, rhs_register);
+    mul_binary_tile(rhs_register, tile_register, rhs_register);
     copy_tile_init(cb_scaler_idx);
     copy_tile(cb_scaler_idx, /* tile_idx */ 0, tile_register);
     mul_binary_tile_init();
-    mul_binary_tile(rhs_register, tile_register);
+    mul_binary_tile(rhs_register, tile_register, rhs_register);
 
     // Compute final result: dL_da = gained_dL_dout - rhs
     compute_gained_dL_dout(input_tile_idx, dL_da_register, tile_register);
     sub_binary_tile_init();
-    sub_binary_tile(dL_da_register, rhs_register);
+    sub_binary_tile(dL_da_register, rhs_register, dL_da_register);
 }
 
 inline void compute_dL_dgamma_components(
@@ -119,7 +137,7 @@ inline void compute_dL_dgamma_components(
     copy_tile_init(cb_dL_out_idx);
     copy_tile(cb_dL_out_idx, /* tile_idx */ input_tile_idx, tile_register);
     mul_binary_tile_init();
-    mul_binary_tile(dL_dg_components_register, tile_register);
+    mul_binary_tile(dL_dg_components_register, tile_register, dL_dg_components_register);
 }
 
 // ============================================================================
@@ -166,7 +184,7 @@ inline void compute_scale(const uint32_t row) {
         copy_tile_init(cb_input_idx);
         copy_tile(cb_input_idx, col, tile_register);
         mul_binary_tile_init();
-        mul_binary_tile(working_register, tile_register);
+        mul_binary_tile(working_register, tile_register, working_register);
 
         // Mask the tile if needed
         if constexpr (do_mask_w) {
@@ -185,7 +203,7 @@ inline void compute_scale(const uint32_t row) {
         // Add scale_components to scale
         if (col > 0) {
             add_binary_tile_init();
-            add_binary_tile(scale_register, working_register);
+            add_binary_tile(scale_register, working_register, scale_register);
         }
     }
     tile_regs_commit();
@@ -239,7 +257,7 @@ inline void compute_scale(const uint32_t row) {
             copy_tile_init(cb_input_idx);
             copy_tile(cb_input_idx, block_idx, tile_register);
             mul_binary_tile_init();
-            mul_binary_tile(working_register, tile_register);
+            mul_binary_tile(working_register, tile_register, working_register);
 
             // Mask the tile if needed
             if constexpr (do_mask_w) {
@@ -259,7 +277,7 @@ inline void compute_scale(const uint32_t row) {
             // Add scale_components to scale
             if (col > 0) {
                 add_binary_tile_init();
-                add_binary_tile(scale_register, working_register);
+                add_binary_tile(scale_register, working_register, scale_register);
             }
         }
         // Pop tiles that are not needed anymore.
@@ -296,26 +314,13 @@ inline void compute_scale(const uint32_t row) {
 }
 #endif  // EVERYTHING_FITS_IN_L1
 
-inline void bcast_scale() {
-    // Broadcasts the reduced scale factor across columns.
-    cb_reserve_back(cb_scale_bcasted_idx, onetile);
-    const uint32_t reg_scale_bcasted = 0;
-    tile_regs_acquire();
-    reconfig_data_format(cb_scale_idx, cb_scale_bcasted_idx);
-
-    unary_bcast_init<BroadcastType::COL>(cb_scale_idx, cb_scale_bcasted_idx);
-    unary_bcast<BroadcastType::COL>(cb_scale_idx, /* tile idx */ 0, /* reg tile idx */ reg_scale_bcasted);
-    tile_regs_commit();
-
-    pack_and_push(reg_scale_bcasted, cb_scale_bcasted_idx);
-}
-
 inline void MAIN {
     if constexpr (do_mask_w) {
         cb_wait_front(cb_mask_w_idx, onetile);
     }
     cb_wait_front(cb_scaler_idx, onetile);
     cb_wait_front(cb_mat_mul_reduce, onetile);
+    cb_wait_front(cb_zero_idx, onetile);
 
     init_sfpu(cb_input_idx, cb_dL_da_idx);
     binary_op_init_common(cb_input_idx, cb_gamma_idx, cb_dL_da_idx);
@@ -328,8 +333,6 @@ inline void MAIN {
         compute_scale(row);
         // Wait for the reduced cb_scale to be ready.
         cb_wait_front(cb_scale_idx, onetile);
-        bcast_scale();
-        cb_wait_front(cb_scale_bcasted_idx, onetile);
 
         for (uint32_t col = 0; col < Wt; col += block_size) {
             cb_reserve_back(cb_dL_da_idx, block_size);
@@ -397,13 +400,13 @@ inline void MAIN {
         cb_pop_front(cb_rms_a_idx, onetile);
         cb_pop_front(cb_recip_rms_a_bcasted_idx, onetile);
         cb_pop_front(cb_scale_idx, onetile);
-        cb_pop_front(cb_scale_bcasted_idx, onetile);
     }
 #ifdef EVERYTHING_FITS_IN_L1
     cb_pop_front(cb_gamma_idx, Wt);
 #endif
     cb_pop_front(cb_scaler_idx, onetile);
     cb_pop_front(cb_mat_mul_reduce, onetile);
+    cb_pop_front(cb_zero_idx, onetile);
     if constexpr (do_mask_w) {
         cb_pop_front(cb_mask_w_idx, onetile);
     }

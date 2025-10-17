@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,7 +6,7 @@
 
 #include <stdint.h>
 
-#include <umd/device/types/cluster_descriptor_types.h>
+#include <umd/device/types/cluster_descriptor_types.hpp>
 #include "device.hpp"
 #include "sub_device_types.hpp"
 

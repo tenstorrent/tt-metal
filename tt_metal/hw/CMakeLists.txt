@@ -2,6 +2,7 @@
 set(ARCHS
     wormhole
     blackhole
+    quasar
 )
 set(PROCS
     brisc
@@ -12,6 +13,9 @@ set(PROCS
     trisc=1
     trisc=2
     aerisc
+    main_aerisc
+    subordinate_aerisc
+    dm=0
 )
 set(TYPES
     firmware
@@ -30,7 +34,7 @@ set(IRAM_OPTIONS
 
 # Get the appropriate SFPI tarball
 file(STRINGS "../sfpi-version.sh" SFPI)
-set(SFPI_arch_os "${CMAKE_HOST_SYSTEM_PROCESSOR}_${CMAKE_HOST_SYSTEM_NAME}")
+set(SFPI_arch "${CMAKE_HOST_SYSTEM_PROCESSOR}")
 foreach(tuple ${SFPI})
     string(STRIP ${tuple} pair)
     string(REPLACE "=" ";" pair ${pair})
@@ -42,21 +46,21 @@ foreach(tuple ${SFPI})
             set(SFPI_VERSION "${value}")
         elseif(key STREQUAL "sfpi_url")
             set(SFPI_URL "${value}")
-        elseif(key STREQUAL "sfpi_${SFPI_arch_os}_txz_md5")
+        elseif(key STREQUAL "sfpi_${SFPI_arch}_txz_md5")
             set(SFPI_TXZ_MD5 "${value}")
         endif()
     endif()
 endforeach()
 
 if(NOT DEFINED SFPI_TXZ_MD5)
-    message(FATAL_ERROR "SFPI tarball for ${SFPI_arch_os} is not available")
+    message(FATAL_ERROR "SFPI tarball for ${SFPI_arch} is not available")
 endif()
 
 include(FetchContent)
 FetchContent_Declare(
     sfpi
     URL
-        "${SFPI_URL}/${SFPI_VERSION}/sfpi-${SFPI_arch_os}.txz"
+        "${SFPI_URL}/v${SFPI_VERSION}/sfpi_${SFPI_VERSION}_${SFPI_arch}.txz"
     URL_HASH "MD5=${SFPI_TXZ_MD5}"
     SOURCE_DIR
     "${PROJECT_SOURCE_DIR}/runtime/sfpi"
@@ -64,11 +68,17 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(sfpi)
 
 foreach(ARCH IN LISTS ARCHS)
+    if(ARCH STREQUAL "quasar")
+        set(HW_VERSION_PATH "tt-2xx")
+    else()
+        set(HW_VERSION_PATH "tt-1xx")
+    endif()
+
     set(DEV_MEM_MAPS
-        "${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/${ARCH}/dev_mem_map.h"
-        "${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/${ARCH}/tensix_dev_map.h"
+        "${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/${HW_VERSION_PATH}/${ARCH}/dev_mem_map.h"
+        "${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/${HW_VERSION_PATH}/${ARCH}/tensix_dev_map.h"
     )
-    set(HW_INCLUDES "${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/${ARCH}")
+    set(HW_INCLUDES "${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/${HW_VERSION_PATH}/${ARCH}")
     set(HW_OUTPUT_DIR "${PROJECT_SOURCE_DIR}/runtime/hw/toolchain/${ARCH}")
     string(TOUPPER ${ARCH} ARCH_DEFINE)
 
@@ -133,9 +143,9 @@ foreach(ARCH IN LISTS ARCHS)
 endforeach()
 
 if(TT_USE_SYSTEM_SFPI)
-    set(GPP_CMD "/opt/tenstorrent/sfpi/compiler/bin/riscv32-tt-elf-g++")
+    set(GPP_CMD "/opt/tenstorrent/sfpi/compiler/bin/riscv-tt-elf-g++")
 else()
-    set(GPP_CMD "${PROJECT_SOURCE_DIR}/runtime/sfpi/compiler/bin/riscv32-tt-elf-g++")
+    set(GPP_CMD "${PROJECT_SOURCE_DIR}/runtime/sfpi/compiler/bin/riscv-tt-elf-g++")
 endif()
 
 if(NOT EXISTS "${GPP_CMD}")
@@ -180,12 +190,17 @@ set(GPP_FLAGS_common
 
 # We are going to build 5 or 6 object files foreach ARCH
 foreach(ARCH IN LISTS ARCHS)
+    if(ARCH STREQUAL "quasar")
+        set(HW_VERSION_PATH "tt-2xx")
+    else()
+        set(HW_VERSION_PATH "tt-1xx")
+    endif()
     # These are the set of object files we are to build foreach ARCH
     set(HW_OBJ_SRC_PAIRS
-        "tmu-crt0.o:tt_metal/hw/toolchain/tmu-crt0.S"
         "substitutes.o:tt_metal/hw/toolchain/substitutes.cpp"
         "tdma_xmov.o:tt_metal/hw/firmware/src/tt-1xx/tdma_xmov.c"
-        "noc.o:tt_metal/hw/firmware/src/tt-1xx/${ARCH}/noc.c"
+        "noc.o:tt_metal/hw/firmware/src/${HW_VERSION_PATH}/${ARCH}/noc.c"
+        "tmu-crt0.o:tt_metal/hw/toolchain/tmu-crt0.S"
     )
     set(ARCH_ALIAS ${ARCH})
 
@@ -198,6 +213,13 @@ foreach(ARCH IN LISTS ARCHS)
             "wh-iram-trampoline.o:tt_metal/hw/toolchain/wh-iram-trampoline.S"
         )
     endif()
+
+    # TODO quasar should use crt0.S, missing some header file
+    # if(ARCH STREQUAL "quasar")
+    #     list(APPEND HW_OBJ_SRC_PAIRS "tmu-crt0.o:tt_metal/hw/firmware/src/${HW_VERSION_PATH}/${ARCH}/crt0.S")
+    # else()
+    #     list(APPEND HW_OBJ_SRC_PAIRS "tmu-crt0.o:tt_metal/hw/toolchain/tmu-crt0.S")
+    # endif()
 
     # Set GPP_FLAGS based on ARCH
     set(GPP_FLAGS
@@ -220,15 +242,17 @@ foreach(ARCH IN LISTS ARCHS)
         -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc
         -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/debug
         -I${PROJECT_SOURCE_DIR}/tt_metal/hw/firmware/src/tt-1xx
+        -I${PROJECT_SOURCE_DIR}/tt_metal/hw/firmware/src/tt-2xx
     )
 
     # Architecture specific include paths
     list(
         APPEND
         GPP_INCLUDES
-        -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/${ARCH}
-        -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/${ARCH}/${ARCH_ALIAS}_defines
-        -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/${ARCH}/noc
+        -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/${HW_VERSION_PATH}/${ARCH}
+        -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/${HW_VERSION_PATH}/${ARCH}/${ARCH_ALIAS}_defines
+        -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/${HW_VERSION_PATH}/${ARCH}/noc
+        -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/${HW_VERSION_PATH}/${ARCH}/overlay
         -I${PROJECT_SOURCE_DIR}/tt_metal/third_party/umd/device/${ARCH}
         -I${PROJECT_SOURCE_DIR}/tt_metal/hw/ckernels/${ARCH_ALIAS}/metal/common
         -I${PROJECT_SOURCE_DIR}/tt_metal/hw/ckernels/${ARCH_ALIAS}/metal/llk_io
@@ -302,25 +326,27 @@ target_sources(
             inc/accessor/tensor_accessor.h
             inc/accessor/tensor_accessor_args.h
             inc/accessor/shard_pages_address_iterator.h
+            inc/accessor/pages_address_iterator.h
+            inc/accessor/page.h
             inc/atomic_rwptr.h
             inc/bit_utils.h
-            inc/blackhole/c_tensix_core.h
-            inc/blackhole/cfg_defines.h
-            inc/blackhole/core_config.h
-            inc/blackhole/dev_mem_map.h
-            inc/blackhole/eth_chan_noc_mapping.h
-            inc/blackhole/eth_fw_api.h
-            inc/blackhole/eth_l1_address_map.h
-            inc/blackhole/noc/noc.h
-            inc/blackhole/noc/noc_overlay_parameters.h
-            inc/blackhole/noc/noc_parameters.h
-            inc/blackhole/noc_nonblocking_api.h
-            inc/blackhole/stream_interface.h
-            inc/blackhole/stream_io_map.h
-            inc/blackhole/tdma_xmov.h
-            inc/blackhole/tensix.h
-            inc/blackhole/tensix_dev_map.h
-            inc/blackhole/tensix_types.h
+            inc/tt-1xx/blackhole/c_tensix_core.h
+            inc/tt-1xx/blackhole/cfg_defines.h
+            inc/tt-1xx/blackhole/core_config.h
+            inc/tt-1xx/blackhole/dev_mem_map.h
+            inc/tt-1xx/blackhole/eth_chan_noc_mapping.h
+            inc/tt-1xx/blackhole/eth_fw_api.h
+            inc/tt-1xx/blackhole/eth_l1_address_map.h
+            inc/tt-1xx/blackhole/noc/noc.h
+            inc/tt-1xx/blackhole/noc/noc_overlay_parameters.h
+            inc/tt-1xx/blackhole/noc/noc_parameters.h
+            inc/tt-1xx/blackhole/noc_nonblocking_api.h
+            inc/tt-1xx/blackhole/stream_interface.h
+            inc/tt-1xx/blackhole/stream_io_map.h
+            inc/tt-1xx/blackhole/tdma_xmov.h
+            inc/tt-1xx/blackhole/tensix.h
+            inc/tt-1xx/blackhole/tensix_dev_map.h
+            inc/tt-1xx/blackhole/tensix_types.h
             inc/circular_buffer.h
             inc/circular_buffer_init.h
             inc/cmd_defs.h
@@ -332,6 +358,7 @@ target_sources(
             inc/debug/dprint.h
             inc/debug/dprint_buffer.h
             inc/debug/dprint_pages.h
+            inc/debug/dprint_tensix.h
             inc/debug/dprint_tile.h
             inc/debug/eth_link_status.h
             inc/debug/fw_debug.h
@@ -349,32 +376,49 @@ target_sources(
             inc/ethernet/tunneling.h
             inc/firmware_common.h
             inc/mod_div_lib.h
+            inc/tt-2xx/quasar/c_tensix_core.h
+            inc/tt-2xx/quasar/cfg_defines.h
+            inc/tt-2xx/quasar/core_config.h
+            inc/tt-2xx/quasar/dev_mem_map.h
+            inc/tt-2xx/quasar/eth_chan_noc_mapping.h
+            inc/tt-2xx/quasar/eth_fw_api.h
+            inc/tt-2xx/quasar/eth_l1_address_map.h
+            inc/tt-2xx/quasar/noc/noc.h
+            inc/tt-2xx/quasar/noc/noc_overlay_parameters.h
+            inc/tt-2xx/quasar/noc/noc_parameters.h
+            inc/tt-2xx/quasar/noc_nonblocking_api.h
+            inc/tt-2xx/quasar/stream_interface.h
+            inc/tt-2xx/quasar/stream_io_map.h
+            inc/tt-2xx/quasar/tdma_xmov.h
+            inc/tt-2xx/quasar/tensix.h
+            inc/tt-2xx/quasar/tensix_dev_map.h
+            inc/tt-2xx/quasar/tensix_types.h
             inc/remote_circular_buffer_api.h
             inc/risc_attribs.h
-            inc/risc_common.h
+            inc/tt-1xx/risc_common.h
             inc/tensix_functions.h
             inc/utils/bfloat16.h
             inc/utils/float32.h
             inc/utils/int32.h
             inc/utils/utils.h
             inc/vptr_uint.h
-            inc/wormhole/c_tensix_core.h
-            inc/wormhole/core_config.h
-            inc/wormhole/dev_mem_map.h
-            inc/wormhole/eth_chan_noc_mapping.h
-            inc/wormhole/eth_fw_api.h
-            inc/wormhole/eth_l1_address_map.h
-            inc/wormhole/noc/noc.h
-            inc/wormhole/noc/noc_overlay_parameters.h
-            inc/wormhole/noc/noc_parameters.h
-            inc/wormhole/noc_nonblocking_api.h
-            inc/wormhole/stream_interface.h
-            inc/wormhole/stream_io_map.h
-            inc/wormhole/tdma_xmov.h
-            inc/wormhole/tensix.h
-            inc/wormhole/tensix_dev_map.h
-            inc/wormhole/wormhole_b0_defines/cfg_defines.h
-            inc/wormhole/wormhole_b0_defines/tensix_types.h
+            inc/tt-1xx/wormhole/c_tensix_core.h
+            inc/tt-1xx/wormhole/core_config.h
+            inc/tt-1xx/wormhole/dev_mem_map.h
+            inc/tt-1xx/wormhole/eth_chan_noc_mapping.h
+            inc/tt-1xx/wormhole/eth_fw_api.h
+            inc/tt-1xx/wormhole/eth_l1_address_map.h
+            inc/tt-1xx/wormhole/noc/noc.h
+            inc/tt-1xx/wormhole/noc/noc_overlay_parameters.h
+            inc/tt-1xx/wormhole/noc/noc_parameters.h
+            inc/tt-1xx/wormhole/noc_nonblocking_api.h
+            inc/tt-1xx/wormhole/stream_interface.h
+            inc/tt-1xx/wormhole/stream_io_map.h
+            inc/tt-1xx/wormhole/tdma_xmov.h
+            inc/tt-1xx/wormhole/tensix.h
+            inc/tt-1xx/wormhole/tensix_dev_map.h
+            inc/tt-1xx/wormhole/wormhole_b0_defines/cfg_defines.h
+            inc/tt-1xx/wormhole/wormhole_b0_defines/tensix_types.h
             inc/dataflow_api_addrgen.h
             inc/dataflow_api_common.h
             inc/socket_api.h

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,9 +9,6 @@
 #pragma GCC diagnostic ignored "-Wdeprecated-volatile"
 #pragma GCC diagnostic ignored "-Wdeprecated-this-capture"
 
-#include <cpp/ttnn/operations/core/core.hpp>                                                               // NOLINT
-#include <cpp/ttnn/operations/moreh/moreh_softmax/moreh_softmax.hpp>                                       // NOLINT
-#include <cpp/ttnn/operations/moreh/moreh_softmax_backward/moreh_softmax_backward.hpp>                     // NOLINT
 #include <hostdevcommon/common_values.hpp>                                                                 // NOLINT
 #include <tt-metalium/base_types.hpp>                                                                      // NOLINT
 #include <tt-metalium/bfloat16.hpp>                                                                        // NOLINT
@@ -32,6 +29,7 @@
 #include <ttnn/distributed/types.hpp>                                                                      // NOLINT
 #include <ttnn/operations/copy/typecast/typecast.hpp>                                                      // NOLINT
 #include <ttnn/operations/core/compute_kernel/compute_kernel_config.hpp>                                   // NOLINT
+#include <ttnn/operations/core/core.hpp>                                                                   // NOLINT
 #include <ttnn/operations/core/to_dtype/to_dtype_op.hpp>                                                   // NOLINT
 #include <ttnn/operations/creation.hpp>                                                                    // NOLINT
 #include <ttnn/operations/data_movement/concat/concat.hpp>                                                 // NOLINT
@@ -52,11 +50,13 @@
 #include <ttnn/operations/embedding/embedding.hpp>                                                         // NOLINT
 #include <ttnn/operations/embedding_backward/embedding_backward.hpp>                                       // NOLINT
 #include <ttnn/operations/experimental/ccl/all_gather_async/all_gather_async.hpp>                          // NOLINT
+#include <ttnn/operations/experimental/ccl/all_reduce_async/all_reduce_async.hpp>                          // NOLINT
 #include <ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/reduce_scatter_minimal_async.hpp>  // NOLINT
 #include <ttnn/operations/experimental/dropout/dropout.hpp>                                                // NOLINT
 #include <ttnn/operations/experimental/transformer/nlp_concat_heads/nlp_concat_heads.hpp>                  // NOLINT
 #include <ttnn/operations/experimental/transformer/nlp_create_qkv_heads/nlp_create_qkv_heads.hpp>          // NOLINT
 #include <ttnn/operations/experimental/transformer/rotary_embedding_llama/rotary_embedding_llama.hpp>      // NOLINT
+#include <ttnn/operations/experimental/unary_backward/gelu_backward/gelu_backward.hpp>                     // NOLINT
 #include <ttnn/operations/full_like/full_like.hpp>                                                         // NOLINT
 #include <ttnn/operations/matmul/matmul.hpp>                                                               // NOLINT
 #include <ttnn/operations/moreh/moreh_adamw/moreh_adamw.hpp>                                               // NOLINT
@@ -69,11 +69,16 @@
 #include <ttnn/operations/moreh/moreh_mean_backward/moreh_mean_backward.hpp>                               // NOLINT
 #include <ttnn/operations/moreh/moreh_nll_loss/moreh_nll_loss.hpp>                                         // NOLINT
 #include <ttnn/operations/moreh/moreh_nll_loss_backward/moreh_nll_loss_backward.hpp>                       // NOLINT
+#include <ttnn/operations/moreh/moreh_softmax/moreh_softmax.hpp>                                           // NOLINT
+#include <ttnn/operations/moreh/moreh_softmax_backward/moreh_softmax_backward.hpp>                         // NOLINT
 #include <ttnn/operations/moreh/moreh_sum/moreh_sum.hpp>                                                   // NOLINT
 #include <ttnn/operations/normalization/softmax/softmax.hpp>                                               // NOLINT
+#include <ttnn/operations/rand/rand.hpp>                                                                   // NOLINT
+#include <ttnn/operations/reduction/argmax/argmax.hpp>                                                     // NOLINT
 #include <ttnn/operations/reduction/generic/generic_reductions.hpp>                                        // NOLINT
-#include <ttnn/tensor/enum_types.hpp>                                                                      // NOLINT
 #include <ttnn/tensor/host_buffer/functions.hpp>                                                           // NOLINT
+#include <ttnn/tensor/layout/layout.hpp>                                                                   // NOLINT
+#include <ttnn/tensor/memory_config/memory_config.hpp>                                                     // NOLINT
 #include <ttnn/tensor/tensor.hpp>                                                                          // NOLINT
 #include <ttnn/tensor/types.hpp>                                                                           // NOLINT
 #include <ttnn/tensor/xtensor/conversion_utils.hpp>                                                        // NOLINT

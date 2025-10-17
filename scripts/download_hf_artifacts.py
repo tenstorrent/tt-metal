@@ -4,6 +4,7 @@
 
 import argparse
 
+import evaluate
 from datasets import load_dataset
 from huggingface_hub import snapshot_download
 from loguru import logger
@@ -25,14 +26,6 @@ UPSTREAM_MODELS = [
     "meta-llama/Llama-3.3-70B-Instruct",
 ]
 
-CI_DISPATCH_MODELS = [
-    "meta-llama/Llama-3.2-1B-Instruct",
-    "meta-llama/Llama-3.2-3B-Instruct",
-    "meta-llama/Llama-3.2-8B-Instruct",
-    "meta-llama/Llama-3.2-11B-Vision-Instruct",
-    "mistralai/Mistral-7B-Instruct-v0.3",
-]
-
 PYTHON_MODELS = [
     "meta-llama/Llama-3.1-8B-Instruct",
     "meta-llama/Llama-3.2-1B-Instruct",
@@ -46,6 +39,7 @@ SINGLE_CARD_MODELS = [
     "distil-whisper/distil-large-v3",
     "emrecan/bert-base-turkish-cased-mean-nli-stsb-tr",
     "EleutherAI/gpt-neox-20b",
+    "google/gemma-3-4b-it",
     "google/vit-base-patch16-224",
     "meta-llama/Llama-3.1-8B-Instruct",
     "meta-llama/Llama-3.2-1B-Instruct",
@@ -54,6 +48,8 @@ SINGLE_CARD_MODELS = [
     "mistralai/Mistral-7B-Instruct-v0.3",
     "nvidia/mit-b0",
     "nvidia/segformer-b0-finetuned-ade-512-512",
+    "openai/clip-vit-large-patch14",
+    "openai/clip-vit-base-patch16",
     "state-spaces/mamba-130m",
     "state-spaces/mamba-370m",
     "state-spaces/mamba-2.8b",
@@ -63,6 +59,8 @@ SINGLE_CARD_MODELS = [
 ]
 
 T3K_MODELS = [
+    "emrecan/bert-base-turkish-cased-mean-nli-stsb-tr",
+    "google/gemma-3-27b-it",
     "meta-llama/Llama-3.1-8B-Instruct",
     "meta-llama/Llama-3.1-70B-Instruct",
     "meta-llama/Llama-3.2-1B-Instruct",
@@ -70,11 +68,15 @@ T3K_MODELS = [
     "meta-llama/Llama-3.2-11B-Vision-Instruct",
     "meta-llama/Llama-3.2-90B-Vision-Instruct",
     "mistralai/Mistral-7B-Instruct-v0.3",
+    "mistralai/Mixtral-8x7B-v0.1",
+    "stabilityai/stable-diffusion-3.5-large",
     "tiiuae/falcon-7b-instruct",
     "tiiuae/falcon-40b-instruct",
     "Qwen/Qwen2.5-7B-Instruct",
     "Qwen/Qwen2.5-72B-Instruct",
     "Qwen/Qwen2.5-Coder-32B",
+    "Qwen/Qwen2.5-VL-32B-Instruct",
+    "Qwen/Qwen2.5-VL-72B-Instruct",
     "Qwen/Qwen3-32B",
 ]
 
@@ -87,11 +89,17 @@ DATASETS = [
     "wikitext",
 ]
 
+METRICS = [
+    "accuracy",
+    "bertscore",
+    "mean_iou",
+    "squad_v2",
+]
+
 ARGUMENT_TO_MODELS = {
     "bh": BH_MODELS,
     "tg": TG_MODELS,
     "upstream": UPSTREAM_MODELS,
-    "cidispatch": CI_DISPATCH_MODELS,
     "python": PYTHON_MODELS,
     "single": SINGLE_CARD_MODELS,
     "t3k": T3K_MODELS,
@@ -130,12 +138,21 @@ def download_models(args):
 
 
 def download_datasets(args):
+    """Currently makes no sense to use it since datasets are loading in test-time"""
     logger.info("Downloading datasets...")
     # download(DATASETS, args, artifact_type="dataset")
     # datasets are using different structure then models/huggingface_hub and it's better use different API for downloading
     for dataset in DATASETS:
         _ = load_dataset(dataset, cache_dir=args.cache_dir, ignore_verifications=True)
     logger.info("Finished downloading datasets")
+
+
+def download_metrics(args):
+    """Currently makes no sense to use it since metrics are loading in test-time"""
+    logger.info("Downloading metrics...")
+    for metric in METRICS:
+        _ = evaluate.load(metric)
+    logger.info("Finished downloading metrics")
 
 
 def get_parser():
@@ -161,11 +178,11 @@ def get_parser():
     parser.add_argument("--bh", action="store_true", help="download BlackHole models")
     parser.add_argument("--tg", action="store_true", help="download TG models")
     parser.add_argument("--upstream", action="store_true", help="download Upstream models")
-    parser.add_argument("--cidispatch", action="store_true", help="download CI dispatch models")
     parser.add_argument("--python", action="store_true", help="download Python models")
     parser.add_argument("--single", action="store_true", help="download Single Card models")
     parser.add_argument("--t3k", action="store_true", help="download T3000 models")
     parser.add_argument("--datasets", action="store_true", help="download datasets")
+    parser.add_argument("--metrics", action="store_true", help="download metrics")
     return parser
 
 
@@ -175,6 +192,8 @@ def main():
     download_models(args)
     if args.datasets:
         download_datasets(args)
+    if args.metrics:
+        download_metrics(args)
 
 
 if __name__ == "__main__":

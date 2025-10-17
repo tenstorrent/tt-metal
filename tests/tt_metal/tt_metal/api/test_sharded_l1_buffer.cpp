@@ -24,7 +24,7 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
-#include "umd/device/types/xy_pair.h"
+#include <umd/device/types/xy_pair.hpp>
 
 using namespace tt::tt_metal;
 
@@ -54,7 +54,7 @@ struct L1Config {
     ShardSpecBuffer shard_spec() const {
         return ShardSpecBuffer(
             CoreRangeSet(std::set<CoreRange>(
-                {CoreRange(CoreCoord(0, 0), CoreCoord(0, num_cores_height * num_cores_width - 1))})),
+                {CoreRange(CoreCoord(0, 0), CoreCoord(0, (num_cores_height * num_cores_width) - 1))})),
             {(uint32_t)num_tiles_per_core_height * tt::constants::TILE_HEIGHT,
              (uint32_t)num_tiles_per_core_width * tt::constants::TILE_WIDTH},
             ShardOrientation::ROW_MAJOR,
@@ -72,6 +72,7 @@ struct L1Config {
         num_cores_height = std::min(min_dims.second, num_cores_height);
 
         // if core grid changes, we must recalculate the values that depend on it
+        // NOLINTNEXTLINE(cppcoreguidelines-prefer-member-initializer)
         size_bytes = 1 * num_cores_height * num_tiles_per_core_height * tt::constants::TILE_HEIGHT * num_cores_width *
                      num_tiles_per_core_width * tt::constants::TILE_WIDTH * element_size;
     }
@@ -85,7 +86,7 @@ namespace local_test_functions {
 /// @return
 template <typename T>
 std::pair<std::shared_ptr<Buffer>, std::vector<uint32_t>> l1_buffer_write_wait(
-    std::shared_ptr<distributed::MeshDevice> mesh_device, const L1Config<T>& test_config) {
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, const L1Config<T>& test_config) {
     auto device = mesh_device->get_devices()[0];
     auto buffer = test_config.sharded ? CreateBuffer(tt::tt_metal::ShardedBufferConfig{
                                             .device = device,
@@ -111,7 +112,9 @@ std::pair<std::shared_ptr<Buffer>, std::vector<uint32_t>> l1_buffer_write_wait(
 
 template <typename T>
 bool l1_buffer_read(
-    std::shared_ptr<distributed::MeshDevice> mesh_device, const L1Config<T>& test_config, const auto& write_info) {
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    const L1Config<T>& test_config,
+    const auto& write_info) {
     auto buffer = write_info.first;
     auto input = write_info.second;
     auto output = std::vector<uint32_t>(input.size());
@@ -138,7 +141,7 @@ bool l1_buffer_read(
 }
 
 template <typename T>
-bool l1_buffer_read_write(std::shared_ptr<distributed::MeshDevice> mesh_device, const L1Config<T>& test_config) {
+bool l1_buffer_read_write(const std::shared_ptr<distributed::MeshDevice>& mesh_device, const L1Config<T>& test_config) {
     auto write_info = l1_buffer_write_wait(mesh_device, test_config);
     return l1_buffer_read(mesh_device, test_config, write_info);
 }

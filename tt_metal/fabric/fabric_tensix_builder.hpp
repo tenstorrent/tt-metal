@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -56,6 +56,14 @@ public:
         return translated_fabric_or_dispatch_mux_cores_;
     }
 
+    const std::unordered_set<CoreCoord>& get_translated_fabric_mux_cores() const {
+        return translated_fabric_mux_cores_;
+    }
+
+    const std::unordered_set<CoreCoord>& get_translated_dispatch_mux_cores() const {
+        return translated_dispatch_mux_cores_;
+    }
+
     // Wrapper APIs for mux config access - these takes device_id, eth_chan_id and channel_id (channels inside a mux)
     size_t get_local_flow_control_semaphore_address(
         chip_id_t device_id, uint32_t eth_chan_id, uint32_t channel_id) const;
@@ -68,6 +76,8 @@ public:
 private:
     std::vector<CoreCoord> logical_fabric_mux_cores_;
     std::vector<CoreCoord> logical_dispatch_mux_cores_;
+    std::unordered_set<CoreCoord> translated_fabric_mux_cores_;
+    std::unordered_set<CoreCoord> translated_dispatch_mux_cores_;
     std::unordered_set<CoreCoord> translated_fabric_or_dispatch_mux_cores_;
 
     // based on the number of channels used, get the number of risc needed per tensix
@@ -92,7 +102,7 @@ private:
     std::unordered_map<size_t, std::shared_ptr<tt::tt_fabric::FabricMuxConfig>> mux_configs_;
 
     // Helper methods for initialization
-    void initialize_channel_mappings();
+    bool initialize_channel_mappings();
     void calculate_buffer_allocations();
     void create_mux_configs();
 };
@@ -142,6 +152,8 @@ public:
     uint32_t get_noc_y() const { return noc_y_; }
     eth_chan_directions get_direction() const { return direction_; }
 
+    void append_upstream_routers_noc_xy(uint32_t noc_x, uint32_t noc_y);
+
 private:
     // Core and fabric configuration
     CoreCoord my_core_logical_;
@@ -162,8 +174,11 @@ private:
     eth_chan_directions direction_;
 
     // Channel connection liveness check disable array
-    mutable std::array<bool, FabricEriscDatamoverConfig::num_sender_channels>
-        channel_connection_liveness_check_disable_array_{};
+    mutable std::array<bool, builder_config::num_sender_channels> channel_connection_liveness_check_disable_array_{};
+
+    // Upstream router coordinates for sync
+    std::vector<uint32_t> upstream_routers_noc_x_;
+    std::vector<uint32_t> upstream_routers_noc_y_;
 
     // Helper methods for kernel compilation
     std::vector<uint32_t> get_compile_time_args(tt::tt_metal::IDevice* device) const;

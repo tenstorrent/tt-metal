@@ -50,28 +50,28 @@ struct SocketTestConfig {
 };
 
 void test_multi_mesh_single_conn_bwd(
-    std::shared_ptr<tt_metal::distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<tt_metal::distributed::MeshDevice>& mesh_device,
     uint32_t socket_fifo_size,
     uint32_t socket_page_size,
     uint32_t data_size,
     SystemConfig system_config);
 
 void test_multi_mesh_single_conn_fwd(
-    std::shared_ptr<tt_metal::distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<tt_metal::distributed::MeshDevice>& mesh_device,
     uint32_t socket_fifo_size,
     uint32_t socket_page_size,
     uint32_t data_size,
     SystemConfig system_config);
 
 void test_multi_mesh_multi_conn_fwd(
-    std::shared_ptr<tt_metal::distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<tt_metal::distributed::MeshDevice>& mesh_device,
     uint32_t socket_fifo_size,
     uint32_t socket_page_size,
     uint32_t data_size,
     SystemConfig system_config);
 
 void test_multi_mesh_multi_conn_bidirectional(
-    std::shared_ptr<tt_metal::distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<tt_metal::distributed::MeshDevice>& mesh_device,
     uint32_t socket_fifo_size,
     uint32_t socket_page_size,
     uint32_t data_size,

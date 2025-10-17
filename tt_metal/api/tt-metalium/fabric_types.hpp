@@ -1,9 +1,10 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
+#include <stdint.h>
 #include <tt_stl/strong_type.hpp>
 
 namespace tt::tt_fabric {

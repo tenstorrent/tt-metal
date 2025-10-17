@@ -5,12 +5,17 @@
 
 import pytest
 import torch
-from diffusers import LMSDiscreteScheduler, StableDiffusionPipeline
+from diffusers import LMSDiscreteScheduler
 from tqdm.auto import tqdm
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
+from models.demos.wormhole.stable_diffusion.common import SD_L1_SMALL_SIZE
 from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
+from models.demos.wormhole.stable_diffusion.sd_helper_funcs import (
+    STABLE_DIFFUSION_V1_4_MODEL_LOCATION,
+    get_reference_stable_diffusion_pipeline,
+)
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_unet_2d_condition_model_new_conv import (
     UNet2DConditionModel as UNet2D,
 )
@@ -47,7 +52,7 @@ def unsqueeze_all_params_to_4d(params):
 
 
 @pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 32768}], ids=["device_params=l1_small_size_24576"], indirect=True
+    "device_params", [{"l1_small_size": SD_L1_SMALL_SIZE}], ids=["device_params=l1_small_size_24576"], indirect=True
 )
 @pytest.mark.parametrize(
     "batch_size, in_channels, input_height, input_width",
@@ -55,17 +60,22 @@ def unsqueeze_all_params_to_4d(params):
         (2, 4, 64, 64),
     ],
 )
-def test_unet_2d_condition_model_512x512(device, batch_size, in_channels, input_height, input_width):
+def test_unet_2d_condition_model_512x512(
+    device,
+    batch_size,
+    in_channels,
+    input_height,
+    input_width,
+    is_ci_env,
+    is_ci_v2_env,
+    model_location_generator,
+):
     ttnn.CONFIG.throw_exception_on_fallback = True
     # setup pytorch model
     torch.manual_seed(0)
-    model_name = "CompVis/stable-diffusion-v1-4"
     load_from_disk = False
     if not load_from_disk:
-        pipe = StableDiffusionPipeline.from_pretrained(model_name, torch_dtype=torch.float32)
-
-        model = pipe.unet
-        model.eval()
+        model = get_reference_stable_diffusion_pipeline(is_ci_env, is_ci_v2_env, model_location_generator).unet
         config = model.config
         torch.save(model, "unet.pt")
         torch.save(config, "unet_config.pt")
@@ -74,7 +84,10 @@ def test_unet_2d_condition_model_512x512(device, batch_size, in_channels, input_
         config = torch.load("unet_config.pt")
 
     parameters = preprocess_model_parameters(
-        model_name=model_name, initialize_model=lambda: model, custom_preprocessor=custom_preprocessor, device=device
+        model_name=STABLE_DIFFUSION_V1_4_MODEL_LOCATION,
+        initialize_model=lambda: model,
+        custom_preprocessor=custom_preprocessor,
+        device=device,
     )
 
     # unsqueeze weight tensors to 4D for generating perf dump

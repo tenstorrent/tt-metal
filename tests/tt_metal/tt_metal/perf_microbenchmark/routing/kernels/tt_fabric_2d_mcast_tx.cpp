@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,16 +7,12 @@
 #include "debug/dprint.h"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/common/kernel_utils.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
-#include "tt_metal/fabric/hw/inc/tt_fabric.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_traffic_gen.hpp"
 #include "fabric/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
-#include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
-
-#ifdef TEST_ENABLE_FABRIC_TRACING
 #include "tt_metal/tools/profiler/fabric_event_profiler.hpp"
-#endif
 
 // clang-format on
 
@@ -55,9 +51,7 @@ inline void send_packet(
         reinterpret_cast<tt_l1_ptr uint32_t*>(source_l1_buffer_address + packet_payload_size_bytes - 4);
 #endif
     connection.wait_for_empty_write_slot();
-#ifdef TEST_ENABLE_FABRIC_TRACING
     RECORD_FABRIC_HEADER(packet_header);
-#endif
     connection.send_payload_without_header_non_blocking_from_address(
         source_l1_buffer_address, packet_payload_size_bytes);
     connection.send_payload_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
@@ -81,7 +75,7 @@ void set_mcast_header(
         s_hops = 0;
     }
 
-    fabric_set_mcast_route((LowLatencyMeshPacketHeader*)packet_header, 0, 0, e_hops, w_hops, n_hops, s_hops);
+    fabric_set_mcast_route((HybridMeshPacketHeader*)packet_header, 0, 0, e_hops, w_hops, n_hops, s_hops);
 }
 
 inline void teardown_connection(tt::tt_fabric::WorkerToFabricEdmSender& connection) { connection.close(); }

@@ -8,7 +8,9 @@ from typing import List, Optional, Tuple, Union
 
 import numpy as np
 import torch
+from diffusers import AutoencoderKL, StableDiffusionPipeline, UNet2DConditionModel
 from tqdm.auto import tqdm
+from transformers import CLIPTextModel, CLIPTokenizer
 
 import ttnn
 
@@ -231,3 +233,108 @@ def compile_trace_sd(
     ttnn.synchronize_device(device)
 
     return ttnn_text_embeddings_device, output, tid
+
+
+def reshard_for_output_channels_divisibility(hidden_states, out_channels):
+    """
+    Reshard tensor to ensure output channels/32 are divisible by x dimension of shard grid.
+
+    Args:
+        hidden_states: Input tensor with block sharded memory layout
+        out_channels: Number of output channels for the convolution
+
+    Returns:
+        Resharded tensor if needed, otherwise original tensor
+    """
+    is_bs = hidden_states.memory_config().memory_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED
+
+    if is_bs:
+        out_channels_tiles = out_channels // ttnn.TILE_SIZE
+        current_grid = hidden_states.memory_config().shard_spec.grid
+        max_x = current_grid.bounding_box().grid_size().x
+        max_y = current_grid.bounding_box().grid_size().y
+
+        if out_channels_tiles % max_x != 0:
+            # Find the largest divisor of out_channels_tiles that is <= max_x
+            new_x = None
+            for candidate_x in range(min(out_channels_tiles, max_x), 0, -1):
+                if out_channels_tiles % candidate_x == 0:
+                    new_x = candidate_x
+                    break
+
+            if new_x is not None and new_x != max_x:
+                # Keep the original y dimension, only change x dimension
+                mem_cfg = ttnn.create_sharded_memory_config(
+                    hidden_states.shape, ttnn.CoreGrid(x=new_x, y=max_y), ttnn.ShardStrategy.BLOCK
+                )
+                hidden_states = ttnn.reshard(hidden_states, mem_cfg)
+
+    return hidden_states
+
+
+STABLE_DIFFUSION_V1_4_MODEL_LOCATION = "CompVis/stable-diffusion-v1-4"
+CLIP_VIT_LARGE_PATCH14_MODEL_LOCATION = "openai/clip-vit-large-patch14"
+STABLE_DIFFUSION_CIV2_MODEL_LOCATION = "stable-diffusion-v1-4"
+CLIP_VIT_LARGE_PATCH14_CIV2_MODEL_LOCATION = "clip-vit-large-patch14"
+
+
+def get_reference_vae(is_ci_env, is_ci_v2_env, model_location_generator):
+    model_location = model_location_generator(
+        f"{STABLE_DIFFUSION_CIV2_MODEL_LOCATION}/vae", download_if_ci_v2=True, ci_v2_timeout_in_s=1800
+    )
+    vae = AutoencoderKL.from_pretrained(
+        STABLE_DIFFUSION_V1_4_MODEL_LOCATION if not is_ci_v2_env else model_location,
+        subfolder="vae" if not is_ci_v2_env else None,
+        local_files_only=is_ci_env or is_ci_v2_env,
+        use_safetensors=True,
+    )
+    return vae.to("cpu")
+
+
+def get_reference_unet(is_ci_env, is_ci_v2_env, model_location_generator):
+    model_location = model_location_generator(
+        f"{STABLE_DIFFUSION_CIV2_MODEL_LOCATION}/unet", download_if_ci_v2=True, ci_v2_timeout_in_s=1800
+    )
+    unet = UNet2DConditionModel.from_pretrained(
+        STABLE_DIFFUSION_V1_4_MODEL_LOCATION if not is_ci_v2_env else model_location,
+        subfolder="unet" if not is_ci_v2_env else None,
+        local_files_only=is_ci_env or is_ci_v2_env,
+        use_safetensors=True,
+    )
+    return unet.to("cpu")
+
+
+def get_reference_clip_tokenizer(is_ci_env, is_ci_v2_env, model_location_generator):
+    model_location = model_location_generator(
+        CLIP_VIT_LARGE_PATCH14_CIV2_MODEL_LOCATION, download_if_ci_v2=True, ci_v2_timeout_in_s=1800
+    )
+    tokenizer = CLIPTokenizer.from_pretrained(
+        CLIP_VIT_LARGE_PATCH14_MODEL_LOCATION if not is_ci_v2_env else model_location,
+        local_files_only=is_ci_env or is_ci_v2_env,
+        use_safetensors=True,
+    )
+    return tokenizer
+
+
+def get_reference_clip_text_encoder(is_ci_env, is_ci_v2_env, model_location_generator):
+    model_location = model_location_generator(
+        CLIP_VIT_LARGE_PATCH14_CIV2_MODEL_LOCATION, download_if_ci_v2=True, ci_v2_timeout_in_s=1800
+    )
+    text_encoder = CLIPTextModel.from_pretrained(
+        CLIP_VIT_LARGE_PATCH14_MODEL_LOCATION if not is_ci_v2_env else model_location,
+        local_files_only=is_ci_env or is_ci_v2_env,
+        use_safetensors=True,
+    )
+    return text_encoder
+
+
+def get_reference_stable_diffusion_pipeline(is_ci_env, is_ci_v2_env, model_location_generator):
+    model_location = model_location_generator(
+        STABLE_DIFFUSION_CIV2_MODEL_LOCATION, download_if_ci_v2=True, ci_v2_timeout_in_s=1800
+    )
+    pipeline = StableDiffusionPipeline.from_pretrained(
+        STABLE_DIFFUSION_V1_4_MODEL_LOCATION if not is_ci_v2_env else model_location,
+        local_files_only=is_ci_env or is_ci_v2_env,
+        use_safetensors=True,
+    )
+    return pipeline.to("cpu")

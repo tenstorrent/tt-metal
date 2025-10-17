@@ -9,7 +9,6 @@
 namespace ttnn::operations::experimental {
 struct BcastTo {
     static Tensor invoke(
-        QueueId queue_id,
         const Tensor& input,
         const Shape& output_shape,
         const std::optional<MemoryConfig>& memory_config,

@@ -42,9 +42,14 @@ struct AllToAllDispatchDeviceOperation {
         const std::optional<uint32_t> axis;
         const uint32_t num_links;
         const tt::tt_fabric::Topology topology;
-        const std::optional<GlobalSemaphore> cross_device_semaphore;
         const AllToAllTransferType impl;
-        const std::optional<GlobalSemaphore> init_semaphore;
+        const uint32_t output_concat_dim;
+        static constexpr auto attribute_names = std::forward_as_tuple(
+            "worker_core_range_set", "output_mem_config", "axis", "num_links", "topology", "impl", "output_concat_dim");
+        auto attribute_values() const {
+            return std::forward_as_tuple(
+                worker_core_range_set, output_mem_config, axis, num_links, topology, impl, output_concat_dim);
+        };
     };
     struct tensor_args_t {
         const Tensor input_tensor;
@@ -119,7 +124,8 @@ struct AllToAllDispatchDeviceOperation {
         tt::tt_fabric::Topology topology,
         const ttnn::MemoryConfig& memory_config,
         const CoreRangeSet& worker_core_range_set,
-        AllToAllTransferType impl);
+        AllToAllTransferType impl,
+        uint32_t output_concat_dim);
 };
 }  // namespace ttnn::operations::ccl
 

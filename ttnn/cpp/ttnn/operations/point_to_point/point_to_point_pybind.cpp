@@ -25,11 +25,10 @@ void py_bind_point_to_point(py::module& module) {
                 send_coord (ttnn.MeshCoordinate): Coordinate of device containing input_tensor (shard).
                 receive_coord (ttnn.MeshCoordinate): Coordinate of device receiving input_tensor (shard).
                 topology (ttnn.Topology): Fabric topology.
-                semaphore (ttnn.GlobalSemaphore): Semaphore allocated on all devices
 
             Keyword Args:
-                queue_id (int, optional): command queue id. Defaults to `0`.
-                optional_output_tensoe (ttnn.Tensor,optional): Optional output tensor.
+                optional_output_tensor (ttnn.Tensor,optional): Optional output tensor.
+                optional_intermediate_tensor (ttnn.Tensor,optional): Optional intermediate tensor.
 
            Returns:
                ttnn.Tensor: the output tensor, with transferred shard on receiving device.
@@ -48,7 +47,6 @@ void py_bind_point_to_point(py::module& module) {
                         receiver_coord,
                         sender_coord,
                         ttnn.Topology.Linear,
-                        receiver_semaphore)
                 >>>  sent_tensor_torch = ttnn.to_torch(
                 >>>      sent_tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0)
                 >>>  )
@@ -66,20 +64,29 @@ void py_bind_point_to_point(py::module& module) {
                const MeshCoordinate& receiver_coord,
                const MeshCoordinate& sender_coord,
                const ccl::Topology topology,
-               const GlobalSemaphore& semaphore,
-               const std::optional<ttnn::Tensor> optional_output_tensor,
-               QueueId queue_id) {
+               const std::optional<ttnn::Tensor>& optional_output_tensor,
+               const std::optional<ttnn::Tensor>& optional_intermediate_tensor) {
                 return self(
-                    queue_id, input_tensor, receiver_coord, sender_coord, topology, semaphore, optional_output_tensor);
+                    input_tensor,
+                    receiver_coord,
+                    sender_coord,
+                    topology,
+                    optional_output_tensor,
+                    optional_intermediate_tensor);
             },
             py::arg("input_tensor").noconvert(),
             py::arg("receiver_coord"),
             py::arg("sender_coord"),
             py::arg("topology"),
-            py::arg("semaphore"),
             py::kw_only(),
             py::arg("optional_output_tensor") = std::nullopt,
-            py::arg("queue_id") = DefaultQueueId,
-        });
+            py::arg("optional_intermediate_tensor") = std::nullopt});
+    module.def(
+        "p2p_compute_intermediate_tensor_spec",
+        p2p_compute_intermediate_tensor_spec,
+        py::arg("input_tensor"),
+        py::arg("receiver_coord"),
+        py::arg("sender_coord"),
+        py::arg("topology"));
 }
 }  // namespace ttnn::operations::point_to_point

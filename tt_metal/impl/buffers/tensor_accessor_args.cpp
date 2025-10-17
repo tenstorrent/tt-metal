@@ -33,7 +33,7 @@ void append_sharded_args(
         TensorAccessorArgs::MAX_NUM_DIMENSIONS);
 
     size_t n_args =
-        add_rank + add_num_banks + rank * add_tensor_shape + rank * add_shard_shape + n_banks * add_bank_coords;
+        add_rank + add_num_banks + (rank * add_tensor_shape) + (rank * add_shard_shape) + (n_banks * add_bank_coords);
     if (!is_runtime) {
         n_args += 1;  // +1 for the args_config config
     }
@@ -91,6 +91,30 @@ TensorAccessorArgs::TensorAccessorArgs(const Buffer* buffer, tensor_accessor::Ar
     buffer_(buffer), args_config_(args_config) {
     update_args_config();
 }
+TensorAccessorArgs::TensorAccessorArgs(const std::shared_ptr<Buffer>& buffer, tensor_accessor::ArgsConfig args_config) :
+    TensorAccessorArgs(buffer.get(), args_config) {}
+
+TensorAccessorArgs::TensorAccessorArgs(const distributed::MeshBuffer& buffer, tensor_accessor::ArgsConfig args_config) :
+    buffer_(buffer.get_reference_buffer()), args_config_(args_config) {
+    update_args_config();
+}
+
+TensorAccessorArgs::TensorAccessorArgs(const distributed::MeshBuffer* buffer, tensor_accessor::ArgsConfig args_config) :
+    buffer_(buffer ? buffer->get_reference_buffer() : nullptr), args_config_(args_config) {
+    update_args_config();
+}
+
+TensorAccessorArgs::TensorAccessorArgs(
+    const std::shared_ptr<distributed::MeshBuffer>& buffer, tensor_accessor::ArgsConfig args_config) :
+    TensorAccessorArgs(buffer.get(), args_config) {}
+
+TensorAccessorArgs TensorAccessorArgs::create_dram_interleaved() {
+    TensorAccessorArgs args;
+    args.args_config_ = tensor_accessor::ArgConfig::IsDram;
+    return args;
+}
+
+TensorAccessorArgs TensorAccessorArgs::create_l1_interleaved() { return TensorAccessorArgs(); }
 
 void TensorAccessorArgs::update_args_config() {
     if (!buffer_) {

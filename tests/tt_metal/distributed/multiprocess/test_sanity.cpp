@@ -15,7 +15,6 @@
 #include <tt-metalium/fabric_types.hpp>
 #include <tt-metalium/host_buffer.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/distributed.hpp>
 
 #include <tt-metalium/tt_metal.hpp>
@@ -27,7 +26,6 @@ namespace tt::tt_metal::distributed {
 using ::testing::ElementsAre;
 using ::tt::tt_fabric::MeshHostRankId;
 using ::tt::tt_fabric::MeshId;
-using ::tt::tt_fabric::MeshScope;
 
 // Parameterized test fixture for mesh device validation
 class BigMeshDualRankMeshShapeSweepFixture : public MeshDeviceFixtureBase,
@@ -93,6 +91,12 @@ TEST(BigMeshDualRankTest, LocalRankBinding) {
 
     EXPECT_THAT(translated_ranks, ElementsAre(0, 1));
     EXPECT_NE(MetalContext::instance().global_distributed_context().id(), mesh_subcontext->id());
+
+    const auto local_subcontext = control_plane.get_host_local_context();
+    ASSERT_NE(local_subcontext, nullptr);
+    EXPECT_EQ(local_subcontext->rank(), multihost::Rank(0));
+    EXPECT_EQ(local_subcontext->size(), multihost::Size(1));
+    EXPECT_NE(MetalContext::instance().global_distributed_context().id(), local_subcontext->id());
 }
 
 TEST_P(BigMeshDualRankMeshShapeSweepFixture, MeshDeviceValidation) { EXPECT_EQ(mesh_device_->shape(), GetParam()); }
@@ -171,7 +175,7 @@ TEST_F(BigMeshDualRankTest2x4, DistributedHostBuffer) {
 
 TEST_F(BigMeshDualRankTest2x4, SimpleShardedBufferTest) {
     // Simple test with a 2x4 mesh, 64x128 buffer, 32x32 shards
-    uint32_t single_tile_size = ::tt::tt_metal::detail::TileSize(DataFormat::UInt32);
+    uint32_t single_tile_size = ::tt::tile_size(DataFormat::UInt32);
     DeviceLocalBufferConfig per_device_buffer_config{
         .page_size = single_tile_size, .buffer_type = BufferType::DRAM, .bottom_up = true};
 

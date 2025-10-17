@@ -8,7 +8,6 @@
 
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
@@ -32,9 +31,9 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
     tt::tt_metal::Program program{};
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
-    uint32_t single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
+    uint32_t single_tile_size = tt::tile_size(cb_data_format);
     tt::DataFormat cb_data_format_output = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
-    uint32_t single_tile_size_output = tt::tt_metal::detail::TileSize(cb_data_format_output);
+    uint32_t single_tile_size_output = tt::tile_size(cb_data_format_output);
 
     uint32_t num_tiles = input.physical_volume() / tt::constants::TILE_HW;
 
@@ -52,7 +51,7 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
     uint32_t tmp0_cb_index = tt::CBIndex::c_1;  // temporary buffer for intermediate results
-    if (ops_chain[0].op_type == UnaryOpType::HARDSHRINK) {
+    if (ops_chain[0].type() == UnaryOpType::HARDSHRINK || ops_chain[0].type() == UnaryOpType::CBRT) {
         tt::tt_metal::CircularBufferConfig cb_tmp0_config =
             tt::tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{tmp0_cb_index, cb_data_format}})
                 .set_page_size(tmp0_cb_index, single_tile_size);
@@ -99,14 +98,14 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
     }
 
     bool math_approx_mode = std::all_of(
-        args.op_chain.begin(), args.op_chain.end(), [](const auto& u) { return utils::get_op_approx_mode(u.op_type); });
+        args.op_chain.begin(), args.op_chain.end(), [](const auto& u) { return utils::get_op_approx_mode(u.type()); });
     std::map<std::string, std::string> unary_defines = utils::get_block_defines(args.op_chain, "0", "0", input.dtype());
-    if (!ops_chain[0].params.empty()) {
-        switch (ops_chain[0].op_type) {
-            case UnaryOpType::HARDSHRINK: value1 = ops_chain[0].params[0]; break;
+    if (!ops_chain[0].empty()) {
+        switch (ops_chain[0].type()) {
+            case UnaryOpType::HARDSHRINK: value1 = *ops_chain[0].get_param_if<float>(0); break;
             case UnaryOpType::WHERE_TSS:
-                value1 = ops_chain[0].params[0];
-                value2 = ops_chain[0].params[1];
+                value1 = *ops_chain[0].get_param_if<float>(0);
+                value2 = *ops_chain[0].get_param_if<float>(1);
                 if (input.dtype() == DataType::INT32) {
                     unary_defines["FILL_INT"] = "fill_tile_int";
                 } else {
@@ -115,8 +114,17 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
                 break;
             default: break;
         }
+    } else {
+        switch (ops_chain[0].type()) {
+            case UnaryOpType::CBRT:
+                if (input.dtype() == DataType::FLOAT32) {
+                    unary_defines["CBRT_FLOAT"] = "mul_binary_tile";
+                }
+                break;
+            default: break;
+        }
     }
-    auto path = utils::get_compute_kernel_path(ops_chain[0].op_type, compute_root, input.dtype());
+    auto path = utils::get_compute_kernel_path(ops_chain[0].type(), compute_root, input.dtype());
 
     auto eltwise_unary_kernel_group_1_id = tt::tt_metal::CreateKernel(
         program,

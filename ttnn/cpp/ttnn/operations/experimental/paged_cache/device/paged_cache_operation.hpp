@@ -49,11 +49,17 @@ struct PagedUpdateCacheDeviceOperation {
         std::vector<Tensor>& output_tensors) const;
 
     static constexpr auto attribute_names = std::forward_as_tuple(
-        "batch_idx_fallback", "update_idxs", "batch_offset", "op_type", "compute_kernel_config", "share_cache");
+        "batch_idx_fallback",
+        "update_idxs",
+        "batch_offset",
+        "op_type",
+        "compute_kernel_config",
+        "share_cache",
+        "mesh_coords");
 
     auto attribute_values() const {
         return std::forward_as_tuple(
-            batch_idx_fallback, update_idxs, batch_offset, op_type, compute_kernel_config, share_cache);
+            batch_idx_fallback, update_idxs, batch_offset, op_type, compute_kernel_config, share_cache, mesh_coords);
     }
 
     tt::tt_metal::operation::Hash compute_program_hash(

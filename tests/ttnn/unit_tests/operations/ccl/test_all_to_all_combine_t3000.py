@@ -133,7 +133,7 @@ def get_output_combined_contribs(
     else:
         local_contrib_idx_func = lambda d, local_idx: d * experts_per_device + local_idx
 
-    output_combined_contribs_tensor = torch.zeros(selected_experts_k, batch * replication_dim, seq, hidden)
+    output_combined_contribs_tensor = torch.zeros(selected_experts_k, batch * replication_dim, seq, hidden).bfloat16()
     real_data_map = torch.zeros(output_combined_contribs_tensor.shape[:-1])
 
     total_token_expert_count = 0
@@ -180,7 +180,6 @@ def gen_tensors(
 ):
     torch.manual_seed(20)
     # create input tokens
-    assert batch % devices == 0
     assert experts % devices == 0
     assert selected_experts_k < experts
 
@@ -436,6 +435,8 @@ def test_all_to_all_combine_trace(
     )
 
 
+# we import and use this function in tests.sweeps_framework.sweeps.ccl.generality.all_to_all_combine.py
+# so be sure to carry over interface changes!
 def run_all_to_all_combine_test(
     mesh_device,
     mesh_shape,
@@ -590,7 +591,10 @@ def check_results(test_tensor, ref_tensor, data_map):
         for b in range(ref_tensor.shape[1]):
             for s in range(ref_tensor.shape[2]):
                 if data_map[k, b, s].item() == 1:
-                    assert_with_pcc(test_tensor[k, b, s, :], ref_tensor[k, b, s, :])
+                    assert (
+                        torch.equal(test_tensor[k, b, s, :], ref_tensor[k, b, s, :]),
+                        f"Equal check failed for k={k}, b={b}, s={s} with test_tensor {test_tensor[k, b, s, :]} and ref_tensor {ref_tensor[k, b, s, :]}",
+                    )
 
 
 @pytest.mark.parametrize(
@@ -813,3 +817,192 @@ def test_perf(
         input_memory_config,
         output_memory_config,
     )
+
+
+@pytest.mark.parametrize(
+    "device_params, mesh_shape, mesh_device, axis, num_links, test_skew",
+    [
+        pytest.param(
+            {
+                "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "trace_region_size": 500000,
+            },
+            (2, 4),
+            (2, 4),
+            1,
+            1,
+            False,
+            id="fabric_1d_line_axis_1",
+        ),
+    ],
+    indirect=["device_params", "mesh_device"],
+)
+@pytest.mark.parametrize("batches_per_device", [8])
+@pytest.mark.parametrize("experts_per_device", [8])
+@pytest.mark.parametrize("select_experts_k", [8])
+@pytest.mark.parametrize("hidden_size", [7000])
+@pytest.mark.parametrize("seq", [2])
+@pytest.mark.parametrize("local_reduce", [False])
+@pytest.mark.parametrize("scheme", ["random"])
+@pytest.mark.parametrize("num_iters", [2])
+@pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
+@pytest.mark.parametrize("output_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
+@pytest.mark.parametrize("topology", [None])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+def test_all_to_all_combine_no_trace_submesh(
+    mesh_device,
+    mesh_shape,
+    axis,
+    batches_per_device,
+    seq,
+    local_reduce,
+    experts_per_device,
+    select_experts_k,
+    hidden_size,
+    num_iters,
+    scheme,
+    input_memory_config,
+    output_memory_config,
+    num_links,
+    topology,
+    dtype,
+    test_skew,
+):
+    submesh_device = mesh_device.create_submesh(ttnn.MeshShape((1, 4)))
+    devices = mesh_shape[0] * mesh_shape[1]
+    batch = batches_per_device * devices
+    experts = experts_per_device * devices
+
+    mesh_device.disable_and_clear_program_cache()
+
+    run_all_to_all_combine_test(
+        submesh_device,
+        submesh_device.shape,
+        axis,
+        batch,
+        seq,
+        local_reduce,
+        experts,
+        select_experts_k,
+        hidden_size,
+        num_iters,
+        num_links=num_links,
+        scheme=scheme,
+        topology=topology,
+        input_memory_config=input_memory_config,
+        output_memory_config=output_memory_config,
+        test_skew=test_skew,
+    )
+
+
+@pytest.mark.parametrize(
+    "device_params, mesh_shape, mesh_device, axis",
+    [
+        pytest.param(
+            {
+                "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "trace_region_size": 500000,
+            },
+            (2, 4),
+            (2, 4),
+            1,
+            id="fabric_1d_line_axis_1",
+        ),
+    ],
+    indirect=["device_params", "mesh_device"],
+)
+@pytest.mark.parametrize("batch", [1])
+@pytest.mark.parametrize("experts", [64])
+@pytest.mark.parametrize("select_experts_k", [8])
+@pytest.mark.parametrize("hidden_size", [7168])
+@pytest.mark.parametrize("seq", [8])
+@pytest.mark.parametrize("local_reduce", [False])
+@pytest.mark.parametrize("scheme", ["random"])
+@pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
+@pytest.mark.parametrize("output_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+def test_all_to_all_combine_batch_1(
+    mesh_device,
+    mesh_shape,
+    axis,
+    batch,
+    seq,
+    local_reduce,
+    experts,
+    select_experts_k,
+    hidden_size,
+    scheme,
+    input_memory_config,
+    output_memory_config,
+    dtype,
+):
+    mesh_device.disable_and_clear_program_cache()
+    devices = mesh_shape[0] * mesh_shape[1]
+    _, input_contrib, expert_mapping, metadata_tensor, output_contrib_tensor, data_map = gen_tensors(
+        batch,
+        experts,
+        select_experts_k,
+        hidden_size,
+        seq,
+        mesh_shape,
+        axis,
+        devices,
+        scheme=scheme,
+        local_reduce=local_reduce,
+    )
+    input_contrib.reshape(devices, -1, seq, hidden_size)
+
+    logger.info(f"Batch = 1 input_contrib shape: {input_contrib.shape}")
+    logger.info(f"Batch = 1 metadata_tensor shape: {metadata_tensor.shape}")
+
+    tt_input_contribs = ttnn.from_torch(
+        input_contrib,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=dtype,
+        memory_config=input_memory_config,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+    )
+
+    tt_expert_mapping = ttnn.from_torch(
+        expert_mapping,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.uint16,
+        memory_config=input_memory_config,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, None), mesh_shape=mesh_shape),
+    )
+
+    tt_metadata = ttnn.from_torch(
+        metadata_tensor,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.uint16,
+        memory_config=input_memory_config,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+    )
+
+    logger.info(f"Batch = 1 tt_input_contribs shape: {tt_input_contribs.shape}")
+    logger.info(f"Batch = 1 tt_metadata shape: {tt_metadata.shape}")
+
+    tt_output_tensor = ttnn.all_to_all_combine(
+        tt_input_contribs,
+        tt_expert_mapping,
+        tt_metadata,
+        local_reduce=local_reduce,
+        axis=axis,
+        output_shard_dim=2,
+        memory_config=output_memory_config,
+    )
+
+    logger.info(f"Batch = 1 tt_output_tensor shape: {tt_output_tensor.shape}")
+    torch_tt_output_tensor = ttnn.to_torch(tt_output_tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=2))
+    logger.info(f"Batch = 1 torch_tt_output_tensor shape: {torch_tt_output_tensor.shape}")
+
+    torch_tt_output_tensor = torch_tt_output_tensor.reshape(-1, torch_tt_output_tensor.shape[-1])
+
+    torch_ref_output_tensor = output_contrib_tensor.reshape(-1, output_contrib_tensor.shape[-1])
+
+    torch.allclose(torch_tt_output_tensor, torch_ref_output_tensor)

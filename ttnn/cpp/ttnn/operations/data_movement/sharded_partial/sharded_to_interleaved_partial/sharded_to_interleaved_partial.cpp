@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/common/queue_id.hpp"
 #include "ttnn/run_operation.hpp"
 #include "device/sharded_to_interleaved_partial_op.hpp"
 #include "sharded_to_interleaved_partial.hpp"
@@ -12,7 +11,6 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::data_movement {
 
 ttnn::Tensor ShardedToInterleavedPartialOperation::invoke(
-    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& cache_tensor,
     int64_t& num_slices,

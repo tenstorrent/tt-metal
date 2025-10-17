@@ -15,15 +15,13 @@ from models.demos.llama3_70b_galaxy.tt.llama_model import TtTransformer
 from models.demos.llama3_70b_galaxy.tt.sampling import TTSampling
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Transformer
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
-from models.utility_functions import (
+from models.common.utility_functions import (
     comp_pcc,
     comp_allclose,
 )
-from models.utility_functions import skip_for_grayskull
 
 
 @torch.no_grad()
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.timeout(1800)
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
@@ -249,6 +247,7 @@ def test_llama_model_inference(
         state_dict=state_dict,
         weight_cache_path=model_args.weight_cache_path(dtype),
         paged_attention_config=paged_attention_config,
+        decode_mode_only=True,
     )
     tt_sampling = TTSampling(
         args=model_args,

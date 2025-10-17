@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -64,10 +64,11 @@ FORCE_INLINE void wait_for_fabric_endpoint_ready(
     auto local_fabric_ep_status_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(local_fabric_ep_status_address);
 
     local_fabric_ep_status_ptr[0] = tt::tt_fabric::FabricEndpointStatus::TERMINATED;
-    while (local_fabric_ep_status_ptr[0] != tt::tt_fabric::FabricEndpointStatus::READY_FOR_TRAFFIC) {
+    do {
         noc_async_read_one_packet(noc_addr, local_fabric_ep_status_address, 4);
         noc_async_read_barrier();
-    }
+        invalidate_l1_cache();
+    } while (local_fabric_ep_status_ptr[0] != tt::tt_fabric::FabricEndpointStatus::READY_FOR_TRAFFIC);
 }
 
 template <uint8_t FABRIC_MUX_CHANNEL_NUM_BUFFERS = 0>

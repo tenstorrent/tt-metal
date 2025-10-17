@@ -1,17 +1,15 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/types/core_coordinates.hpp>
 #include <array>
 #include <cstdint>
 #include <string>
 #include <unordered_map>
 #include <vector>
-
-enum class CoreType;
 
 namespace tt {
 class Cluster;

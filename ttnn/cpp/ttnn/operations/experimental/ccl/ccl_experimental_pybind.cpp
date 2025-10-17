@@ -9,8 +9,9 @@
 #include "ttnn/operations/experimental/ccl/rms_allgather/rms_allgather_pybind.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_matmul_async/all_gather_matmul_async_pybind.hpp"
 #include "ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/matmul_reduce_scatter_async_pybind.hpp"
-#include "ttnn/operations/experimental/ccl/all_gather_async/all_gather_async_pybind.hpp"
 #include "ttnn/operations/experimental/ccl/llama_all_gather_matmul_async/llama_all_gather_matmul_async_pybind.hpp"
+#include "ttnn/operations/experimental/ccl/all_gather_async/all_gather_async_pybind.hpp"
+#include "ttnn/operations/experimental/ccl/all_gather_command_processor_async/all_gather_command_processor_async_pybind.hpp"
 #include "ttnn/operations/experimental/ccl/all_broadcast_async/all_broadcast_async_pybind.hpp"
 #include "ttnn/operations/experimental/ccl/all_to_all_async/all_to_all_async_pybind.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_concat_heads_fused/all_gather_concat_pybind.hpp"
@@ -23,14 +24,17 @@
 #include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async/ring_attention_all_gather_async_pybind.hpp"
 #include "ttnn/operations/experimental/ccl/send_recv_async/send_async/send_async_pybind.hpp"
 #include "ttnn/operations/experimental/ccl/send_recv_async/recv_async/recv_async_pybind.hpp"
+#include "ttnn/operations/experimental/ccl/neighbor_pad_async/neighbor_pad_async_pybind.hpp"
+#include "ttnn/operations/experimental/ccl/slice_reshard_async/slice_reshard_async_pybind.hpp"
 
 namespace ttnn::operations::experimental::ccl {
 
 void py_module(pybind11::module& module) {
     ccl::bind_fused_rms_1_1_32_8192(module);
     ccl::py_bind_all_gather_matmul_async(module);
-    ccl::py_bind_all_gather_async(module);
     ccl::py_bind_llama_all_gather_matmul_async(module);
+    ccl::py_bind_all_gather_async(module);
+    ccl::py_bind_all_gather_command_processor_async(module);
     ccl::py_bind_all_broadcast_async(module);
     ccl::py_bind_all_to_all_async(module);
     ccl::py_bind_all_gather_concat(module);
@@ -44,6 +48,8 @@ void py_module(pybind11::module& module) {
     ccl::py_bind_ring_attention_all_gather_async(module);
     ccl::py_bind_send_async(module);
     ccl::py_bind_recv_async(module);
+    ccl::py_bind_neighbor_pad_async(module);
+    ccl::py_bind_slice_reshard_async(module);
 }
 
 }  // namespace ttnn::operations::experimental::ccl

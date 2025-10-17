@@ -268,7 +268,7 @@ public:
     [[nodiscard]]
     std::vector<uint32_t> get_runtime_args() const {
         std::vector<uint32_t> args;
-        uint32_t size = 3 + active_channels.size() * 6;
+        uint32_t size = 3 + (active_channels.size() * 6);
         for (auto const& channel : active_channels) {
             size += channel.worker_coords.size();
         }
@@ -277,7 +277,7 @@ public:
         // Handshake address
         args.push_back(handshake_addr);
 
-        bool senders_below_receivers = active_channels.size() == 0 || this->active_channels.front().is_sender;
+        bool senders_below_receivers = active_channels.empty() || this->active_channels.front().is_sender;
 
         // Receiver channel args
         uint32_t receiver_channels_offset = senders_below_receivers ? this->num_senders : 0;

@@ -13,6 +13,8 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/fabric.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/tt_align.hpp>
 #include "ttnn/global_semaphore.hpp"
 
 namespace ttnn::operations::ccl {
@@ -96,9 +98,6 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
     const auto& metadata_spec = metadata_tensor.tensor_spec();
 
     const bool input_is_dram = input_tensor.buffer()->buffer_type() == BufferType::DRAM;
-    const bool output_is_dram = output_tensor.buffer()->buffer_type() == BufferType::DRAM;
-    const bool mapping_is_dram = mapping_tensor.buffer()->buffer_type() == BufferType::DRAM;
-    const bool metadata_is_dram = metadata_tensor.buffer()->buffer_type() == BufferType::DRAM;
 
     const auto input_page_size_bytes = input_spec.compute_page_size_bytes();
     const auto mapping_page_size_bytes = mapping_spec.compute_page_size_bytes();
@@ -178,7 +177,7 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
 
     const uint32_t flat_mesh_idx = common::get_linearized_index(mesh_coordinate, mesh_view);
 
-    const std::vector<uint32_t> reader_compile_time_args = {
+    std::vector<uint32_t> reader_compile_time_args = {
         mapping_tensor_cb_id,
         local_experts_cb_id,
         metadata_cb_id,
@@ -192,11 +191,11 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
         selected_experts_k,
         mapping_page_size_bytes,
         metadata_page_size_bytes,
-        input_is_dram,
-        mapping_is_dram,
-        metadata_is_dram,
         operation_attributes.locally_reduced,
     };
+    TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(mapping_tensor.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(metadata_tensor.buffer()).append_to(reader_compile_time_args);
 
     const DataMovementConfig reader_config{
         .processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_1, .compile_args = reader_compile_time_args};
@@ -213,7 +212,7 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
     const uint32_t max_packet_size_bytes =
         input_dtype == DataType::BFLOAT16 ? std::bit_floor(fabric_max_packet_size_bytes) : fabric_max_packet_size_bytes;
 
-    const std::vector<uint32_t> writer_compile_time_args = {
+    std::vector<uint32_t> writer_compile_time_args = {
         metadata_cb_id,
         local_experts_cb_id,
         client_interface_cb_id,
@@ -226,7 +225,6 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
         src_chip_id,
         input_page_size_bytes,
         l1_alignment,
-        output_is_dram,
         mesh_view.num_rows(),
         mesh_view.num_cols(),
         max_packet_size_bytes,
@@ -234,6 +232,7 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
         (uint32_t)topology,
         operation_attributes.locally_reduced,
     };
+    TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
 
     // fabric routing info
     std::vector<uint32_t> dest_mesh_id, dest_chip_id, route;
@@ -266,9 +265,9 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
         writer_config);
 
     std::vector<uint32_t> reader_runtime_args = {
-        mapping_tensor.mesh_buffer()->get_device_buffer(mesh_coordinate)->address(),
-        metadata_tensor.mesh_buffer()->get_device_buffer(mesh_coordinate)->address(),
-        input_tensor.mesh_buffer()->get_device_buffer(mesh_coordinate)->address(),
+        mapping_tensor.buffer()->address(),
+        metadata_tensor.buffer()->address(),
+        input_tensor.buffer()->address(),
         0,
         tokens_per_device,
     };
@@ -278,7 +277,7 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
     log_debug(tt::LogOp, "Runtime arguments are being calculated for MeshCoordinate {}", mesh_coordinate);
     for (uint32_t i = 0; i < sender_cores.size(); i++) {
         std::vector<uint32_t> writer_runtime_args = {
-            output_tensor.mesh_buffer()->get_device_buffer(mesh_coordinate)->address(),
+            output_tensor.buffer()->address(),
             (uint32_t)cross_device_semaphore.address(),
             (uint32_t)init_semaphore.address(),
             0,
@@ -334,11 +333,11 @@ void AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::override_runtime
             auto& reader_runtime_args = GetRuntimeArgs(program, ternary_reader_kernel_id, core);
             auto& writer_runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
 
-            reader_runtime_args.at(0) = tensor_args.mapping_tensor.mesh_buffer()->get_device_buffer(coord)->address();
-            reader_runtime_args.at(1) = tensor_args.metadata_tensor.mesh_buffer()->get_device_buffer(coord)->address();
-            reader_runtime_args.at(2) = tensor_args.input_tensor.mesh_buffer()->get_device_buffer(coord)->address();
+            reader_runtime_args.at(0) = tensor_args.mapping_tensor.buffer()->address();
+            reader_runtime_args.at(1) = tensor_args.metadata_tensor.buffer()->address();
+            reader_runtime_args.at(2) = tensor_args.input_tensor.buffer()->address();
 
-            writer_runtime_args.at(0) = tensor_return_value.mesh_buffer()->get_device_buffer(coord)->address();
+            writer_runtime_args.at(0) = tensor_return_value.buffer()->address();
             writer_runtime_args.at(1) = (uint32_t)shared_variables.cross_device_semaphore.address();
             writer_runtime_args.at(2) = (uint32_t)shared_variables.init_semaphore.address();
         }

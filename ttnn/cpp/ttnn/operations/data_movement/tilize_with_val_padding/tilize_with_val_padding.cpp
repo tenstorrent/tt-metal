@@ -5,7 +5,6 @@
 #include "tilize_with_val_padding.hpp"
 
 #include "device/tilize_with_val_padding_op.hpp"
-#include "ttnn/common/queue_id.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
@@ -53,18 +52,29 @@ ttnn::Shape squeeze_output_shape(const ttnn::Shape& output_shape) {
 }
 
 ttnn::Tensor ExecuteTilizeWithValPadding::invoke(
-    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const ttnn::Shape& output_padded_shape,
     const PadValue pad_value,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<DataType> output_dtype,
     bool use_multicore) {
+    // Handle empty tensors - no tiling needed for tensors with no data
+    if (input_tensor.physical_volume() == 0) {
+        // Create output tensor with same properties
+        TensorSpec spec(
+            output_padded_shape,
+            TensorLayout(
+                output_dtype.value_or(input_tensor.dtype()),
+                PageConfig(Layout::TILE),
+                memory_config.value_or(input_tensor.memory_config())));
+        return allocate_tensor_on_device(spec, input_tensor.device());
+    }
+
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
-    uint32_t input_single_tile_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
+    uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
     uint32_t output_single_tile_size =
         output_dtype.has_value()
-            ? tt::tt_metal::detail::TileSize(tt::tt_metal::datatype_to_dataformat_converter(output_dtype.value()))
+            ? tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(output_dtype.value()))
             : input_single_tile_size;
 
     uint32_t num_tiles_per_row = output_padded_shape[-1] / tt::constants::TILE_WIDTH;
@@ -87,33 +97,36 @@ ttnn::Tensor ExecuteTilizeWithValPadding::invoke(
                 enough_space_height},
             {input_tensor},
             {},
-            {},
-            queue_id)[0];
+            {})[0];
     };
 
     return build_ndiml_tilize_val(base_tilize)(input_tensor);
 }
 
 ttnn::Tensor ExecuteTilizeWithValPadding::invoke(
-    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const ttnn::SmallVector<uint32_t>& output_padded_shape,
     const PadValue pad_value,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<DataType> output_dtype,
     bool use_multicore) {
+    // Handle empty tensors - no tiling needed for tensors with no data
+    if (input_tensor.physical_volume() == 0) {
+        // Create output tensor with same properties
+        TensorSpec spec(
+            ttnn::Shape{output_padded_shape},
+            TensorLayout(
+                output_dtype.value_or(input_tensor.dtype()),
+                PageConfig(Layout::TILE),
+                memory_config.value_or(input_tensor.memory_config())));
+        return allocate_tensor_on_device(spec, input_tensor.device());
+    }
+
     return invoke(
-        queue_id,
-        input_tensor,
-        ttnn::Shape{output_padded_shape},
-        pad_value,
-        memory_config,
-        output_dtype,
-        use_multicore);
+        input_tensor, ttnn::Shape{output_padded_shape}, pad_value, memory_config, output_dtype, use_multicore);
 }
 
 ttnn::Tensor ExecuteTilizeWithZeroPadding::invoke(
-    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<DataType> output_dtype,
@@ -127,6 +140,18 @@ ttnn::Tensor ExecuteTilizeWithZeroPadding::invoke(
     padded_shape[-2] = tt::round_up(padded_shape[-2], input_tile_height);
     padded_shape[-1] = tt::round_up(padded_shape[-1], input_tile_width);
 
+    // Handle empty tensors - no tiling needed for tensors with no data
+    if (input_tensor.physical_volume() == 0) {
+        // Create output tensor with same properties
+        TensorSpec spec(
+            padded_shape,
+            TensorLayout(
+                output_dtype.value_or(input_tensor.dtype()),
+                PageConfig(Layout::TILE),
+                memory_config.value_or(input_tensor.memory_config())));
+        return allocate_tensor_on_device(spec, input_tensor.device());
+    }
+
     PadValue pad_value;
     if (input_tensor.dtype() == DataType::BFLOAT16 or input_tensor.dtype() == DataType::FLOAT32) {
         pad_value = 0.0f;
@@ -134,7 +159,7 @@ ttnn::Tensor ExecuteTilizeWithZeroPadding::invoke(
         pad_value = (uint32_t)0;
     }
     return ExecuteTilizeWithValPadding::invoke(
-        queue_id, input_tensor, padded_shape, pad_value, memory_config, output_dtype, use_multicore);
+        input_tensor, padded_shape, pad_value, memory_config, output_dtype, use_multicore);
 }
 
 }  // namespace ttnn::operations::data_movement

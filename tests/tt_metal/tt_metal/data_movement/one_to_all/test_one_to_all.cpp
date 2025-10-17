@@ -51,7 +51,7 @@ struct OneToAllConfig {
     //  response packets) (60, 45, 23, vs 60, 60, 60 at posted)
 };
 
-bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const OneToAllConfig& test_config) {
+bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OneToAllConfig& test_config) {
     IDevice* device = mesh_device->get_device(0);
     /* ================ SETUP ================ */
 
@@ -192,7 +192,7 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const OneToAllConfi
     /* ================ EXECUTION ================ */
 
     // Setup Input and Golden Output
-    size_t element_size_bytes = bfloat16::SIZEOF;
+    size_t element_size_bytes = sizeof(bfloat16);
     uint32_t num_elements = bytes_per_transaction / element_size_bytes;
     vector<uint32_t> packed_input = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
         -100.0f, 100.0f, num_elements, chrono::system_clock::now().time_since_epoch().count());
@@ -203,10 +203,10 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const OneToAllConfi
     MetalContext::instance().get_cluster().l1_barrier(device->id());
 
     // LAUNCH THE PROGRAM
-    auto mesh_workload = distributed::CreateMeshWorkload();
+    auto mesh_workload = distributed::MeshWorkload();
     vector<uint32_t> coord_data = {0, 0};
     auto target_devices = distributed::MeshCoordinateRange(distributed::MeshCoordinate(coord_data));
-    distributed::AddProgramToMeshWorkload(mesh_workload, std::move(program), target_devices);
+    mesh_workload.add_program(target_devices, std::move(program));
 
     auto& cq = mesh_device->mesh_command_queue();
     distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
@@ -237,7 +237,7 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const OneToAllConfi
 /* TEST TYPES */
 
 void directed_ideal_test(
-    shared_ptr<distributed::MeshDevice> mesh_device,
+    const shared_ptr<distributed::MeshDevice>& mesh_device,
     uint32_t test_case_id,
     bool is_multicast,
     bool is_linked,
@@ -280,7 +280,7 @@ void directed_ideal_test(
 }
 
 void packet_sizes_test(
-    shared_ptr<distributed::MeshDevice> mesh_device,
+    const shared_ptr<distributed::MeshDevice>& mesh_device,
     uint32_t test_case_id,
     bool is_multicast,
     bool is_linked,
@@ -336,7 +336,7 @@ void packet_sizes_test(
 }
 
 void virtual_channels_test(
-    shared_ptr<distributed::MeshDevice> mesh_device,
+    const shared_ptr<distributed::MeshDevice>& mesh_device,
     uint32_t test_case_id,
     bool is_multicast,
     bool is_linked,
@@ -398,7 +398,7 @@ void virtual_channels_test(
 }
 
 void custom_test(
-    shared_ptr<distributed::MeshDevice> mesh_device,
+    const shared_ptr<distributed::MeshDevice>& mesh_device,
     uint32_t test_case_id,
     bool is_multicast,
     bool is_linked,
@@ -456,7 +456,7 @@ void custom_test(
 /* ========== UNICAST ========== */
 
 /* ========== 2x2 ========== */
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllUnicast2x2PacketSizes) {
+TEST_F(GenericMeshDeviceFixture, NIGHTLY_TensixDataMovementOneToAllUnicast2x2PacketSizes) {
     // Parameters
     uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID + 0;
 
@@ -473,7 +473,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllUnicast2x2PacketSizes
 }
 
 /* ========== 5x5 ========== */
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllUnicast5x5PacketSizes) {
+TEST_F(GenericMeshDeviceFixture, NIGHTLY_TensixDataMovementOneToAllUnicast5x5PacketSizes) {
     // Parameters
     uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID + 1;
 
@@ -511,7 +511,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllUnicastPacketSizes) {
 /* ========== MULTICAST ========== */
 
 /* ========== 2x2 ========== */
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticast2x2PacketSizes) {
+TEST_F(GenericMeshDeviceFixture, NIGHTLY_TensixDataMovementOneToAllMulticast2x2PacketSizes) {
     // Parameters
     uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID + 3;
 
@@ -529,7 +529,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticast2x2PacketSiz
 }
 
 /* ========== 5x5 ========== */
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticast5x5PacketSizes) {
+TEST_F(GenericMeshDeviceFixture, NIGHTLY_TensixDataMovementOneToAllMulticast5x5PacketSizes) {
     // Parameters
     uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID + 4;
 
@@ -568,7 +568,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastPacketSizes)
 /* ========== MULTICAST LINKED ========== */
 
 /* ========== 2x2 ========= */
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastLinked2x2PacketSizes) {
+TEST_F(GenericMeshDeviceFixture, NIGHTLY_TensixDataMovementOneToAllMulticastLinked2x2PacketSizes) {
     // Parameters
     uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID + 6;
 
@@ -586,7 +586,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastLinked2x2Pac
 }
 
 /* ========== 5x5 ========== */
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastLinked5x5PacketSizes) {
+TEST_F(GenericMeshDeviceFixture, NIGHTLY_TensixDataMovementOneToAllMulticastLinked5x5PacketSizes) {
     // Parameters
     uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID + 7;
 

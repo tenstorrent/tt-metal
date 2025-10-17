@@ -32,9 +32,9 @@
 #include <tt-metalium/mesh_trace_id.hpp>
 #include <tt_stl/small_vector.hpp>
 #include <tt-metalium/sub_device_types.hpp>
-#include <umd/device/types/arch.h>
+#include <umd/device/types/arch.hpp>
+#include <umd/device/types/core_coordinates.hpp>
 
-enum class CoreType;
 namespace tt {
 namespace tt_metal {
 class Allocator;
@@ -56,13 +56,13 @@ namespace tt::tt_metal {
 
 class SubDeviceManagerTracker;
 class ThreadPool;
-class TraceDescriptor;
+struct TraceDescriptor;
 
 namespace distributed {
 
 class MeshCommandQueue;
 class MeshDeviceView;
-class MeshTraceBuffer;
+struct MeshTraceBuffer;
 
 using DeviceIds = std::vector<int>;
 
@@ -106,6 +106,7 @@ private:
     // protected by api_mutex_. Operations that reconfigure global state (e.g. setting subdevices or enabling tracing)
     // on the device may not be thread safe.
     std::mutex api_mutex_;
+    bool is_internal_state_initialized = false;
     std::shared_ptr<ScopedDevices> scoped_devices_;
     int mesh_id_;
     std::unique_ptr<MeshDeviceView> view_;
@@ -128,9 +129,6 @@ private:
 
     void mark_allocations_unsafe();
     void mark_allocations_safe();
-
-    // Returns the devices in row-major order for the new mesh shape
-    std::vector<IDevice*> get_row_major_devices(const MeshShape& new_shape) const;
 
     std::shared_ptr<MeshTraceBuffer>& create_mesh_trace(const MeshTraceId& trace_id);
 
@@ -197,9 +195,11 @@ public:
     uint32_t get_noc_unicast_encoding(uint8_t noc_index, const CoreCoord& core) const override;
     uint32_t get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& cores) const override;
     SystemMemoryManager& sysmem_manager() override;
-    CommandQueue& command_queue(size_t cq_id = 0) override;
+    CommandQueue& command_queue(std::optional<uint8_t> cq_id = std::nullopt) override;
 
     // MeshTrace Internal APIs - these should be used to deprecate the single device backed trace APIs
+    // If cq_id is not provided, the current command queue is returned from the current thread
+    MeshTraceId begin_mesh_trace(uint8_t cq_id);
     void begin_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id);
     void end_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id);
     void replay_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id, bool blocking);
@@ -207,9 +207,6 @@ public:
     std::shared_ptr<MeshTraceBuffer> get_mesh_trace(const MeshTraceId& trace_id);
     uint32_t get_trace_buffers_size() const override;
     void set_trace_buffers_size(uint32_t size) override;
-
-    bool using_slow_dispatch() const override;
-    bool using_fast_dispatch() const override;
 
     // Initialization APIs
     bool initialize(
@@ -238,7 +235,7 @@ public:
     SubDeviceManagerId get_active_sub_device_manager_id() const override;
     SubDeviceManagerId get_default_sub_device_manager_id() const override;
     SubDeviceManagerId create_sub_device_manager(
-        std::initializer_list<const SubDevice> sub_devices, DeviceAddr local_l1_size) override;
+        std::initializer_list<SubDevice> sub_devices, DeviceAddr local_l1_size) override;
     SubDeviceManagerId create_sub_device_manager(
         tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) override;
     void remove_sub_device_manager(SubDeviceManagerId sub_device_manager_id) override;
@@ -299,6 +296,7 @@ public:
     std::string to_string() const;
     bool is_parent_mesh() const;
 
+    const std::shared_ptr<MeshDevice>& get_parent_mesh() const;
     std::vector<std::shared_ptr<MeshDevice>> get_submeshes() const;
 
     std::shared_ptr<MeshDevice> create_submesh(
@@ -308,7 +306,8 @@ public:
 
     // This method will get removed once in favour of the ones in IDevice* and TT-Mesh bringup
     // These are prefixed with "mesh_" to avoid conflicts with the IDevice* methods
-    MeshCommandQueue& mesh_command_queue(std::size_t cq_id = 0) const;
+    // If cq_id is not provided, the current command queue is returned from the current thread
+    MeshCommandQueue& mesh_command_queue(std::optional<uint8_t> cq_id = std::nullopt) const;
 
     // Currently expose users to the dispatch thread pool through the MeshDevice
     void enqueue_to_thread_pool(std::function<void()>&& f);

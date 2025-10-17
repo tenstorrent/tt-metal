@@ -16,12 +16,12 @@
 #include <unordered_set>
 #include <vector>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/control_plane.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <umd/device/types/cluster_descriptor_types.h>
+#include <umd/device/types/cluster_descriptor_types.hpp>
 
 namespace tt {
 
@@ -73,7 +73,7 @@ private:
     size_t trace_region_size{};
     size_t worker_l1_size{};
     std::vector<uint32_t> l1_bank_remap;
-    bool using_fast_dispatch{};
+    bool using_fast_dispatch_ = false;
     bool init_profiler_ = true;
     bool initialize_fabric_and_dispatch_fw_ = false;
     // This variable tracks the state of dispatch firmware on device.
@@ -103,7 +103,7 @@ private:
     void init_fabric(const std::vector<tt_metal::IDevice*>& active_devices) const;
     void initialize_active_devices() const;
     void add_devices_to_pool(const std::vector<chip_id_t>& device_ids);
-    void wait_for_fabric_router_sync() const;
+    void wait_for_fabric_router_sync(uint32_t timeout_ms = 5000) const;
     tt_metal::IDevice* get_device(chip_id_t id) const;
     void teardown_fd(const std::unordered_set<chip_id_t>& devices_to_close);
 

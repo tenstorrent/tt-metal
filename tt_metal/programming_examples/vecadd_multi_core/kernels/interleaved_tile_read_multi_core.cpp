@@ -14,8 +14,10 @@ void kernel_main() {
     uint32_t start_tile_id = get_arg_val<uint32_t>(3);
 
     // The circular buffers to read the tiles into
+    // These buffers can be accessed using either the index or the name, since
+    // the mapping was defined in the CreateKernel call.
     constexpr uint32_t cb_in0 = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_in1 = get_compile_time_arg_val(1);
+    constexpr uint32_t cb_in1 = get_named_compile_time_arg_val("c_1");
 
     // Get the tile size used in the circular buffers. We assume the
     // circular buffers are created with the same tile size as the DRAM

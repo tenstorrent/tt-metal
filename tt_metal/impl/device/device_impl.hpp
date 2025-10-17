@@ -5,23 +5,19 @@
 #pragma once
 
 #include <memory>
-#include <utility>
 
 #include <tt-metalium/device.hpp>
 #include <hostdevcommon/common_values.hpp>
 #include <hostdevcommon/kernel_structs.h>  // Leaked up to ttnn level from here
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/command_queue_interface.hpp>
-#include <tt-metalium/command_queue.hpp>
+#include "impl/dispatch/command_queue.hpp"
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/sub_device.hpp>
 #include "trace/trace_buffer.hpp"
 #include <tt_stl/span.hpp>
 #include <tt-metalium/program_cache.hpp>
 
-class go_msg_t;
-class launch_msg_t;
 namespace tt::tt_metal {
 class SubDeviceManagerTracker;
 
@@ -46,8 +42,8 @@ public:
     Device(const Device& other) = delete;
     Device& operator=(const Device& other) = delete;
 
-    Device(Device&& other);
-    Device& operator=(Device&& other);
+    Device(Device&& other) noexcept;
+    Device& operator=(Device&& other) noexcept;
 
     tt::ARCH arch() const override;
 
@@ -119,14 +115,11 @@ public:
     uint32_t get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& cores) const override;
 
     SystemMemoryManager& sysmem_manager() override { return *sysmem_manager_; }
-    CommandQueue& command_queue(size_t cq_id = 0) override;
+    CommandQueue& command_queue(std::optional<uint8_t> cq_id = std::nullopt) override;
 
     // Metal trace device capture mode
     uint32_t get_trace_buffers_size() const override { return trace_buffers_size_; }
     void set_trace_buffers_size(uint32_t size) override { trace_buffers_size_ = size; }
-
-    bool using_slow_dispatch() const override;
-    bool using_fast_dispatch() const override;
 
     // Checks that the given arch is on the given pci_slot and that it's responding
     // Puts device into reset
@@ -164,7 +157,7 @@ public:
     SubDeviceManagerId get_active_sub_device_manager_id() const override;
     SubDeviceManagerId get_default_sub_device_manager_id() const override;
     SubDeviceManagerId create_sub_device_manager(
-        std::initializer_list<const SubDevice> sub_devices, DeviceAddr local_l1_size) override;
+        std::initializer_list<SubDevice> sub_devices, DeviceAddr local_l1_size) override;
     SubDeviceManagerId create_sub_device_manager(
         tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) override;
     void remove_sub_device_manager(SubDeviceManagerId sub_device_manager_id) override;
@@ -180,7 +173,9 @@ public:
     bool is_mmio_capable() const override;
     // TODO #20966: Remove these APIs
     std::shared_ptr<distributed::MeshDevice> get_mesh_device() override;
-    void set_mesh_device(std::shared_ptr<distributed::MeshDevice> mesh_device) { this->mesh_device = mesh_device; };
+    void set_mesh_device(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+        this->mesh_device = mesh_device;
+    };
 
 private:
     static constexpr uint32_t DEFAULT_NUM_SUB_DEVICES = 1;
@@ -215,6 +210,7 @@ private:
 
     std::vector<std::unique_ptr<Program>> command_queue_programs_;
     bool using_fast_dispatch_ = false;
+
     // TODO #20966: Remove this member
     std::weak_ptr<distributed::MeshDevice> mesh_device;
 

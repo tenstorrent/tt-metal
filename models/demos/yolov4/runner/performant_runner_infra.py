@@ -2,15 +2,24 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import torch
 from loguru import logger
 
 import ttnn
-from models.demos.yolov4.common import YOLOV4_BOXES_PCC, YOLOV4_CONFS_PCC, get_model_result, load_torch_model
+from models.common.utility_functions import divup, is_wormhole_b0
+from models.demos.yolov4.common import (
+    YOLOV4_BOXES_PCC,
+    YOLOV4_CONFS_PCC,
+    get_model_result,
+    image_to_tensor,
+    load_image,
+    load_torch_model,
+)
 from models.demos.yolov4.post_processing import gen_yolov4_boxes_confs, get_region_boxes
 from models.demos.yolov4.tt.model_preprocessing import create_yolov4_model_parameters
 from models.demos.yolov4.tt.yolov4 import TtYOLOv4
-from models.utility_functions import divup, is_wormhole_b0
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
@@ -41,12 +50,19 @@ class YOLOv4PerformanceRunnerInfra:
 
         self.torch_model = load_torch_model(self.model_location_generator)
 
-        input_shape = (batch_size * self.num_devices, *resolution, 3)
         torch_input_shape = (batch_size, *resolution, 3)
-        torch_input_tensor = torch.randn(input_shape, dtype=torch.float32)
+        imgfile = "models/demos/yolov4/resources/giraffe.jpg"
+        if os.path.exists(imgfile):
+            input_img = load_image(imgfile, resolution)
+            torch_img = image_to_tensor(input_img)
+            self.torch_input_tensor = torch.concatenate([torch_img] * self.num_devices, 0)
+        else:
+            input_shape = (batch_size * self.num_devices, *resolution, 3)
+            torch_input_tensor = torch.randn(input_shape, dtype=torch.float32)
+            self.input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16, mesh_mapper=self.inputs_mesh_mapper)
+            self.torch_input_tensor = torch_input_tensor.permute(0, 3, 1, 2)
+
         torch_input_tensor_params = torch.randn(torch_input_shape, dtype=torch.float32)
-        self.input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16, mesh_mapper=self.inputs_mesh_mapper)
-        self.torch_input_tensor = torch_input_tensor.permute(0, 3, 1, 2)
         self.torch_input_tensor_params = torch_input_tensor_params.permute(0, 3, 1, 2)
 
         parameters = create_yolov4_model_parameters(
@@ -54,7 +70,6 @@ class YOLOv4PerformanceRunnerInfra:
         )
 
         self.ttnn_yolov4_model = TtYOLOv4(parameters, device)
-
         self.torch_output_tensor = self.torch_model(self.torch_input_tensor)
         ref1, ref2, ref3 = gen_yolov4_boxes_confs(self.torch_output_tensor)
         self.ref_boxes, self.ref_confs = get_region_boxes([ref1, ref2, ref3])

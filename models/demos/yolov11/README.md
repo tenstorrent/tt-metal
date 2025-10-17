@@ -19,20 +19,20 @@ pytest --disable-warnings models/demos/yolov11/tests/pcc/test_ttnn_yolov11.py::t
 
 ### Model performant running with Trace+2CQ
 #### Single Device (BS=1):
-- For `640x640`, end-2-end perf is `145` FPS :
+
+- For `640x640`, end-2-end perf is `234` FPS (**On N150**), _On N300 single device, the FPS will be low as it uses ethernet dispatch_
 ```
 pytest --disable-warnings models/demos/yolov11/tests/perf/test_e2e_performant.py::test_e2e_performant
 ```
 
 ### Performant Demo with Trace+2CQ
 #### Multi Device (DP=2, N300):
-- For `640x640`, end-2-end perf is `275` FPS :
+- For `640x640`, end-2-end perf is `372` FPS :
   ```
   pytest --disable-warnings models/demos/yolov11/tests/test_e2e_performant.py::test_e2e_performant_dp
   ```
 
 ### Demo with Trace+2CQ
-Note: Output images will be saved in the `models/demos/yolov11/demo/runs` folder.
 
 #### Single Device (BS=1)
 ##### Custom Images:
@@ -62,11 +62,14 @@ Note: Output images will be saved in the `models/demos/yolov11/demo/runs` folder
   pytest --disable-warnings models/demos/yolov11/demo/demo.py::test_demo_dataset_dp
   ```
 
+Note: Output images will be saved in the `models/demos/yolov11/demo/runs` folder.
+
 ## Testing
 ### Performant evaluation with Trace+2CQ
+
 Use the following command to run the performant evaluation with Trace+2CQs:
 ```
-pytest models/experimental/yolo_eval/evaluate.py::test_yolov11n[res0-device_params0-tt_model]
+pytest models/demos/yolo_eval/evaluate.py::test_yolov11n[res0-device_params0-tt_model]
 ```
 Note: The model is evaluated with 500 samples.
 

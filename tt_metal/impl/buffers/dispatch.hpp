@@ -1,11 +1,10 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-#include <command_queue.hpp>
-#include <command_queue_interface.hpp>
+#include "dispatch/command_queue.hpp"
 #include <stdint.h>
 #include <sub_device_types.hpp>
 #include <atomic>
@@ -18,7 +17,8 @@
 #include <tt_stl/span.hpp>
 #include "dispatch/system_memory_manager.hpp"
 
-enum class CoreType;
+#include <umd/device/types/core_coordinates.hpp>
+
 namespace tt {
 namespace tt_metal {
 class IDevice;
@@ -35,14 +35,14 @@ struct ReadBufferDescriptor {
     std::shared_ptr<const BufferPageMapping> buffer_page_mapping;
     const BufferCorePageMapping* core_page_mapping;
     void* dst;
-    uint32_t dst_offset;
+    uint64_t dst_offset;
     uint32_t num_pages_read;
 
     ReadBufferDescriptor(
         uint32_t page_size,
         uint32_t padded_page_size,
         void* dst,
-        uint32_t dst_offset,
+        uint64_t dst_offset,
         uint32_t num_pages_read,
         const std::shared_ptr<const BufferPageMapping>& buffer_page_mapping = nullptr,
         const BufferCorePageMapping* core_page_mapping = nullptr) :
@@ -149,7 +149,7 @@ std::shared_ptr<::tt::tt_metal::CompletionReaderVariant> generate_sharded_buffer
 std::shared_ptr<::tt::tt_metal::CompletionReaderVariant> generate_interleaved_buffer_read_descriptor(
     void* dst, const BufferReadDispatchParams& dispatch_params, Buffer& buffer);
 
-bool are_pages_larger_than_max_prefetch_cmd_size(const Buffer& buffer);
+bool are_pages_larger_than_max_prefetch_cmd_size(const Buffer& buffer, uint32_t num_subdevices);
 
 PartialPageSpec calculate_partial_page_spec(const Buffer& buffer);
 }  // namespace buffer_dispatch

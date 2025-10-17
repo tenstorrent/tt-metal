@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,7 +10,7 @@
 #include <limits>
 #include <memory>
 #include <mutex>
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 
 // Use MPIX_ERR_PROC_FAILED as a proxy to detect whether OpenMPI was built with
 // ULFM extensions.
@@ -58,7 +58,7 @@ constexpr MPI_Datatype dtype_to_mpi(DType dt) noexcept {
     return MPI_DATATYPE_NULL;
 }
 
-constexpr inline int mpi_dtype_size(DType dt) noexcept {
+constexpr int mpi_dtype_size(DType dt) noexcept {
     switch (dt) {
         case DType::INT8:
         case DType::UINT8:
@@ -71,7 +71,7 @@ constexpr inline int mpi_dtype_size(DType dt) noexcept {
         case DType::FLOAT32: return 4;
         case DType::INT64:
         case DType::UINT64:
-        case DType::FLOAT64: return 8;
+        case DType::FLOAT64:
         case DType::COMPLEX_FLOAT: return 8;
         case DType::COMPLEX_DOUBLE: return 16;
     }

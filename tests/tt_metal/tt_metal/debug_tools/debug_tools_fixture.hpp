@@ -5,33 +5,38 @@
 #pragma once
 
 #include <gtest/gtest.h>
-#include "tt_metal/tt_metal/common/dispatch_fixture.hpp"
+#include "tt_metal/tt_metal/common/mesh_dispatch_fixture.hpp"
+
+#include "debug_tools_test_utils.hpp"
+#include "hal_types.hpp"
 
 namespace tt::tt_metal {
 
-class DebugToolsFixture : public DispatchFixture {
+class DebugToolsMeshFixture : public MeshDispatchFixture {
    protected:
        bool watcher_previous_enabled{};
 
-       void TearDown() override { DispatchFixture::TearDown(); }
+       void TearDown() override { MeshDispatchFixture::TearDown(); }
 
        template <typename T>
-       void RunTestOnDevice(const std::function<void(T*, IDevice*)>& run_function, IDevice* device) {
-           auto run_function_no_args = [=, this]() { run_function(static_cast<T*>(this), device); };
-           DispatchFixture::RunTestOnDevice(run_function_no_args, device);
+       void RunTestOnDevice(
+           const std::function<void(T*, std::shared_ptr<distributed::MeshDevice>)>& run_function,
+           const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+           auto run_function_no_args = [this, run_function, mesh_device]() { run_function(static_cast<T*>(this), mesh_device); };
+           MeshDispatchFixture::RunTestOnDevice(run_function_no_args, mesh_device);
        }
 };
 
-// A version of DispatchFixture with DPrint enabled on all cores.
-class DPrintFixture : public DebugToolsFixture {
+// A version of MeshDispatchFixture with DPrint enabled on all cores.
+class DPrintMeshFixture : public DebugToolsMeshFixture {
 public:
     inline static const std::string dprint_file_name = "gtest_dprint_log.txt";
 
     // A function to run a program, according to which dispatch mode is set.
-    void RunProgram(IDevice* device, Program& program) {
+    void RunProgram(const std::shared_ptr<distributed::MeshDevice>& mesh_device, distributed::MeshWorkload& workload) {
         // Only difference is that we need to wait for the print server to catch
         // up after running a test.
-        DebugToolsFixture::RunProgram(device, program);
+        DebugToolsMeshFixture::RunProgram(mesh_device, workload);
         MetalContext::instance().dprint_server()->await();
     }
 
@@ -59,12 +64,12 @@ protected:
         ExtraSetUp();
 
         // Parent class initializes devices and any necessary flags
-        DebugToolsFixture::SetUp();
+        DebugToolsMeshFixture::SetUp();
     }
 
     void TearDown() override {
         // Parent class tears down devices
-        DebugToolsFixture::TearDown();
+        DebugToolsMeshFixture::TearDown();
         ExtraTearDown();
 
         // Reset DPrint settings
@@ -83,12 +88,10 @@ protected:
     }
 
     void RunTestOnDevice(
-        const std::function<void(DPrintFixture*, IDevice*)>& run_function,
-        IDevice* device
-    ) {
-        DebugToolsFixture::RunTestOnDevice(run_function, device);
+        const std::function<void(DPrintMeshFixture*, std::shared_ptr<distributed::MeshDevice>)>& run_function,
+        const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+        DebugToolsMeshFixture::RunTestOnDevice(run_function, mesh_device);
         MetalContext::instance().dprint_server()->clear_log_file();
-        MetalContext::instance().dprint_server()->clear_signals();
     }
 
     // Override this function in child classes for additional setup commands between DPRINT setup
@@ -98,7 +101,7 @@ protected:
 };
 
 // For usage by tests that need the dprint server devices disabled.
-class DPrintDisableDevicesFixture : public DPrintFixture {
+class DPrintDisableMeshDevicesFixture : public DPrintMeshFixture {
 protected:
     void ExtraSetUp() override {
         // For this test, mute each devices using the environment variable
@@ -110,17 +113,50 @@ protected:
     }
 };
 
-// A version of DispatchFixture with watcher enabled
-class WatcherFixture : public DebugToolsFixture {
+class DPrintSeparateFilesFixture : public DPrintMeshFixture {
+public:
+    static constexpr std::array<std::string_view, 5> suffixes = {"BRISC", "NCRISC", "TRISC0", "TRISC1", "TRISC2"};
+    static void check_output(std::span<const std::string> expected) {
+        const auto& enabled_processors =
+            tt::tt_metal::MetalContext::instance().rtoptions().get_feature_processors(tt::llrt::RunTimeDebugFeatureDprint);
+        ASSERT_EQ(expected.size(), suffixes.size());
+        for (size_t i = 0; i < suffixes.size(); i++) {
+            if (!enabled_processors.contains(HalProgrammableCoreType::TENSIX, i)) {
+                continue;
+            }
+            auto filename = fmt::format("generated/dprint/device-0_worker-core-0-0_{}.txt", suffixes[i]);
+            EXPECT_TRUE(FilesMatchesString(filename, expected[i]));
+        }
+    }
+protected:
+    bool original_one_file_per_risc_{};
+    void ExtraSetUp() override {
+        // For this test, enable one file per risc
+        original_one_file_per_risc_ = tt::tt_metal::MetalContext::instance().rtoptions().get_feature_one_file_per_risc(
+            tt::llrt::RunTimeDebugFeatureDprint);
+        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_one_file_per_risc(
+            tt::llrt::RunTimeDebugFeatureDprint, true);
+    }
+    void ExtraTearDown() override {
+        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_one_file_per_risc(
+            tt::llrt::RunTimeDebugFeatureDprint, original_one_file_per_risc_);
+    }
+};
+
+// A version of MeshDispatchFixture with watcher enabled
+class MeshWatcherFixture : public DebugToolsMeshFixture {
 public:
     inline static const std::string log_file_name = "generated/watcher/watcher.log";
     inline static const int interval_ms = 250;
 
     // A function to run a program, according to which dispatch mode is set.
-    void RunProgram(IDevice* device, Program& program, bool wait_for_dump = false) {
+    void RunProgram(
+        const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+        distributed::MeshWorkload& workload,
+        bool wait_for_dump = false) {
         // Only difference is that we need to wait for the print server to catch
         // up after running a test.
-        DebugToolsFixture::RunProgram(device, program);
+        DebugToolsMeshFixture::RunProgram(mesh_device, workload);
 
         // Wait for watcher to run a full dump before finishing, need to wait for dump count to
         // increase because we'll likely check in the middle of a dump.
@@ -156,13 +192,13 @@ protected:
         tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_noc_sanitize_linked_transaction(true);
 
         // Parent class initializes devices and any necessary flags
-        DebugToolsFixture::SetUp();
+        DebugToolsMeshFixture::SetUp();
         MetalContext::instance().watcher_server()->clear_log();
     }
 
     void TearDown() override {
         // Parent class tears down devices
-        DebugToolsFixture::TearDown();
+        DebugToolsMeshFixture::TearDown();
 
         // Reset watcher settings to their previous values
         tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_interval(watcher_previous_interval);
@@ -175,10 +211,9 @@ protected:
     }
 
     void RunTestOnDevice(
-        const std::function<void(WatcherFixture*, IDevice*)>& run_function,
-        IDevice* device
-    ) {
-        DebugToolsFixture::RunTestOnDevice(run_function, device);
+        const std::function<void(MeshWatcherFixture*, std::shared_ptr<distributed::MeshDevice>)>& run_function,
+        const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+        DebugToolsMeshFixture::RunTestOnDevice(run_function, mesh_device);
         // Wait for a final watcher poll and then clear the log.
         std::this_thread::sleep_for(std::chrono::milliseconds(interval_ms));
         MetalContext::instance().watcher_server()->clear_log();
@@ -186,7 +221,7 @@ protected:
 };
 
 // A version of WatcherFixture with read and write debug delays enabled
-class WatcherDelayFixture : public WatcherFixture {
+class MeshWatcherDelayFixture : public MeshWatcherFixture {
 public:
     tt::llrt::TargetSelection saved_target_selection[tt::llrt::RunTimeDebugFeatureCount];
 
@@ -208,12 +243,12 @@ public:
         tt::tt_metal::MetalContext::instance().rtoptions().set_feature_cores(tt::llrt::RunTimeDebugFeatureWriteDebugDelay, delayed_cores);
 
         // Call parent
-        WatcherFixture::SetUp();
+        MeshWatcherFixture::SetUp();
     }
 
     void TearDown() override {
         // Call parent
-        WatcherFixture::TearDown();
+        MeshWatcherFixture::TearDown();
 
         // Restore
         tt::tt_metal::MetalContext::instance().rtoptions().set_feature_targets(tt::llrt::RunTimeDebugFeatureReadDebugDelay, saved_target_selection[tt::llrt::RunTimeDebugFeatureReadDebugDelay]);

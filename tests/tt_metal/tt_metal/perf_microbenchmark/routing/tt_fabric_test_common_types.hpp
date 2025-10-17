@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,9 +12,12 @@
 #include <cstdint>
 
 #include <tt-metalium/fabric_edm_types.hpp>
+#include <tt-metalium/fabric_types.hpp>
 #include <tt-metalium/mesh_graph.hpp>
 #include <tt-metalium/device.hpp>
-#include "umd/device/types/cluster_descriptor_types.h"
+#include <tt-metalium/routing_table_generator.hpp>
+#include <umd/device/types/cluster_descriptor_types.hpp>
+#include "tt_metal/fabric/fabric_edm_packet_header.hpp"
 
 namespace tt::tt_fabric::fabric_tests {
 
@@ -92,6 +95,8 @@ enum class RoutingType {
 enum class HighLevelTrafficPattern {
     AllToAll,
     OneToAll,
+    AllToOne,
+    AllToOneRandom,
     FullDeviceRandomPairing,
     UnidirectionalLinear,
     FullRing,
@@ -103,6 +108,7 @@ struct TestFabricSetup {
     tt::tt_fabric::Topology topology{0};
     std::optional<RoutingType> routing_type;
     std::optional<tt_fabric::FabricTensixConfig> fabric_tensix_config;
+    std::optional<tt_fabric::FabricReliabilityMode> fabric_reliability_mode;
     uint32_t num_links{};
     std::optional<std::string> torus_config;  // For Torus topology: "X", "Y", or "XY"
 };
@@ -113,8 +119,10 @@ struct HighLevelPatternConfig {
 };
 
 struct ParsedTestConfig {
-    std::string name;
+    std::string name;               // Original base name for golden lookup
+    std::string parametrized_name;  // Enhanced name for debugging and logging
     TestFabricSetup fabric_setup;
+    std::optional<std::vector<std::string>> skip;  // Platforms on which this test should be skipped
     std::optional<std::string> on_missing_param_policy;
     std::optional<ParsedTrafficPatternConfig> defaults;
     std::optional<ParametrizationOptionsMap> parametrization_params;
@@ -125,14 +133,18 @@ struct ParsedTestConfig {
     std::vector<ParsedSenderConfig> senders;
     std::optional<std::string> bw_calc_func;
     bool benchmark_mode = false;  // Enable benchmark mode for performance testing
+    bool telemetry_enabled = false;  // Enable telemetry for performance testing
     bool global_sync = false;     // Enable sync for device synchronization. Typically used for benchmarking to minimize
                                   // cross-chip start-skew effects
     uint32_t global_sync_val = 0;
     uint32_t seed{};
+    uint32_t num_top_level_iterations = 1;  // Number of times to repeat a built test
 };
 
 struct TestConfig {
-    std::string name;
+    std::string name;               // Original base name for golden lookup
+    std::string parametrized_name;  // Enhanced name for debugging and logging
+    uint32_t iteration_number = 0; // For multi-iteration tests, notes the specific iteration of this test
     TestFabricSetup fabric_setup;
     std::optional<std::string> on_missing_param_policy;
     std::optional<TrafficPatternConfig> defaults;
@@ -144,6 +156,7 @@ struct TestConfig {
     std::vector<SenderConfig> senders;
     std::optional<std::string> bw_calc_func;
     bool benchmark_mode = false;  // Enable benchmark mode for performance testing
+    bool telemetry_enabled = false;
     bool global_sync = false;     // Enable sync for device synchronization. Typically used for benchmarking to minimize
                                   // cross-chip start-skew effects
     uint32_t global_sync_val = 0;
@@ -240,10 +253,24 @@ struct PhysicalMeshConfig {
     std::string mesh_descriptor_path;
     std::vector<std::vector<eth_coord_t>> eth_coord_mapping;
 
-    PhysicalMeshConfig() {
-        mesh_descriptor_path = "";  // Default path to the mesh descriptor.
-        eth_coord_mapping = {};
+    PhysicalMeshConfig() : mesh_descriptor_path(""), eth_coord_mapping({}) {
+        // Default path to the mesh descriptor.
     }
 };
+
+// Helper functions for fetching pattern parameters
+TrafficPatternConfig fetch_first_traffic_pattern(const TestConfig& config);
+
+std::string fetch_pattern_test_type(const TrafficPatternConfig& pattern, auto lambda_test_type);
+
+std::string fetch_pattern_ftype(const TrafficPatternConfig& pattern);
+
+std::string fetch_pattern_ntype(const TrafficPatternConfig& pattern);
+
+uint32_t fetch_pattern_int(const TrafficPatternConfig& pattern, auto lambda_parameter);
+
+uint32_t fetch_pattern_num_packets(const TrafficPatternConfig& pattern);
+
+uint32_t fetch_pattern_packet_size(const TrafficPatternConfig& pattern);
 
 }  // namespace tt::tt_fabric::fabric_tests

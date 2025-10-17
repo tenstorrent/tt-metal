@@ -96,15 +96,15 @@ void kernel_main() {
             read_row_to_cb(cb_id_in1, src_b, src1_tile_bytes, offs + wt + tile_offset, blk);
 #endif
 #ifdef FUSE_GAMMA
-                {
-                    read_row_to_cb(cb_id_gamma, addrg, gamma_tile_bytes, wt, blk);
-                }
+            {
+                read_row_to_cb(cb_id_gamma, addrg, gamma_tile_bytes, wt, blk);
+            }
 #endif
 
 #ifdef FUSE_BETA
-                {
-                    read_row_to_cb(cb_id_beta, addrb, beta_tile_bytes, wt, blk);
-                }
+            {
+                read_row_to_cb(cb_id_beta, addrb, beta_tile_bytes, wt, blk);
+            }
 #endif
         }  // wt loop
         offs += Wt;

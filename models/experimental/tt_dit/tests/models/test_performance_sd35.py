@@ -6,12 +6,12 @@ import statistics
 import pytest
 import ttnn
 from loguru import logger
+from models.perf.benchmarking_utils import BenchmarkProfiler, BenchmarkData
 
 from ...pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large import (
-    StableDiffusion3Pipeline,
+    create_pipeline,
     TimingCollector,
 )
-from ...parallel.config import DiTParallelConfig, ParallelFactor
 
 
 @pytest.mark.parametrize(
@@ -53,62 +53,50 @@ def test_sd35_new_pipeline_performance(
     num_links,
     model_location_generator,
     use_cache,
+    is_ci_env,
+    galaxy_type,
 ) -> None:
     """Performance test for new SD35 pipeline with detailed timing analysis."""
 
-    cfg_factor, cfg_axis = cfg
-    sp_factor, sp_axis = sp
-    tp_factor, tp_axis = tp
+    benchmark_profiler = BenchmarkProfiler()
 
-    # Create parallel configuration for the new pipeline
-    parallel_config = DiTParallelConfig(
-        cfg_parallel=ParallelFactor(factor=cfg_factor, mesh_axis=cfg_axis),
-        tensor_parallel=ParallelFactor(factor=tp_factor, mesh_axis=tp_axis),
-        sequence_parallel=ParallelFactor(factor=sp_factor, mesh_axis=sp_axis),
-    )
+    # Process skips
+    if is_ci_env and use_cache:
+        pytest.skip("use_cache not necessary for performance test in CI. See pipeline test.")
 
-    # Determine guidance condition and T5 settings
-    if guidance_scale > 1 and cfg_factor == 1:
-        guidance_cond = 2
-    else:
-        guidance_cond = 1
+    # Skip 4U.
+    if galaxy_type == "4U":
+        # NOTE: Pipelines fail if a performance test is skipped without providing a benchmark output.
+        if is_ci_env:
+            with benchmark_profiler("run", iteration=0):
+                pass
 
-    # Calculate submesh shape to determine T5 availability
-    submesh_shape = list(mesh_device.shape)
-    submesh_shape[cfg_axis] //= cfg_factor
-    enable_t5_text_encoder = submesh_shape[1] == 4
+            benchmark_data = BenchmarkData()
+            benchmark_data.save_partial_run_json(
+                benchmark_profiler,
+                run_type="empty_run",
+                ml_model_name="empty_run",
+            )
+        pytest.skip("4U is not supported for this test")
 
-    logger.info(f"Performance test configuration:")
-    logger.info(f"  Mesh device shape: {mesh_device.shape}")
-    logger.info(f"  Submesh shape: {submesh_shape}")
-    logger.info(f"  Parallel config: {parallel_config}")
-    logger.info(f"  T5 enabled: {enable_t5_text_encoder}")
     logger.info(f"  Image size: {image_w}x{image_h}")
     logger.info(f"  Guidance scale: {guidance_scale}")
     logger.info(f"  Inference steps: {num_inference_steps}")
 
-    # Create pipeline
-    pipeline = StableDiffusion3Pipeline(
-        checkpoint_name=f"stabilityai/stable-diffusion-3.5-{model_name}",
+    pipeline = create_pipeline(
         mesh_device=mesh_device,
-        enable_t5_text_encoder=enable_t5_text_encoder,
-        guidance_cond=guidance_cond,
-        parallel_config=parallel_config,
-        num_links=num_links,
-        height=image_h,
-        width=image_w,
-        model_location_generator=model_location_generator,
-        use_cache=use_cache,
-    )
-
-    # Prepare pipeline
-    pipeline.prepare(
         batch_size=1,
-        width=image_w,
-        height=image_h,
+        image_w=image_w,
+        image_h=image_h,
         guidance_scale=guidance_scale,
-        prompt_sequence_length=333,
-        spatial_sequence_length=4096,
+        cfg_config=cfg,
+        sp_config=sp,
+        tp_config=tp,
+        num_links=num_links,
+        model_checkpoint_path=model_location_generator(
+            f"stabilityai/stable-diffusion-3.5-{model_name}", model_subdir="StableDiffusion_35_Large"
+        ),
+        use_cache=use_cache,
     )
 
     # Test prompts - diverse set for comprehensive performance testing
@@ -168,17 +156,18 @@ def test_sd35_new_pipeline_performance(
 
             # Run pipeline with different prompt
             prompt_idx = (i + 1) % len(prompts)
-            images = pipeline(
-                prompt_1=[prompts[prompt_idx]],
-                prompt_2=[prompts[prompt_idx]],
-                prompt_3=[prompts[prompt_idx]],
-                negative_prompt_1=[negative_prompt],
-                negative_prompt_2=[negative_prompt],
-                negative_prompt_3=[negative_prompt],
-                num_inference_steps=num_inference_steps,
-                seed=0,  # Different seed for each run
-                traced=True,
-            )
+            with benchmark_profiler("run", iteration=i):
+                images = pipeline(
+                    prompt_1=[prompts[prompt_idx]],
+                    prompt_2=[prompts[prompt_idx]],
+                    prompt_3=[prompts[prompt_idx]],
+                    negative_prompt_1=[negative_prompt],
+                    negative_prompt_2=[negative_prompt],
+                    negative_prompt_3=[negative_prompt],
+                    num_inference_steps=num_inference_steps,
+                    seed=0,  # Different seed for each run
+                    traced=True,
+                )
             images[0].save(f"sd35_new_{image_w}_{image_h}_perf_run{i}.png")
 
             # Collect timing data
@@ -204,6 +193,11 @@ def test_sd35_new_pipeline_performance(
         all_denoising_steps.extend(timing.denoising_step_times)
 
     # Report results
+    cfg_factor = pipeline.dit_parallel_config.cfg_parallel.factor
+    sp_factor = pipeline.dit_parallel_config.sequence_parallel.factor
+    tp_factor = pipeline.dit_parallel_config.tensor_parallel.factor
+    enable_t5_text_encoder = pipeline.t5_enabled()
+
     print("\n" + "=" * 80)
     print("STABLE DIFFUSION 3.5 NEW PIPELINE PERFORMANCE RESULTS")
     print("=" * 80)
@@ -288,6 +282,59 @@ def test_sd35_new_pipeline_performance(
 
     # Clean up
     pipeline.timing_collector = None
+
+    # Validate performance
+    measurements = {
+        "clip_encoding_time": statistics.mean(clip_times),
+        "t5_encoding_time": statistics.mean(t5_times),
+        "total_encoding_time": statistics.mean(total_encoding_times),
+        "denoising_steps_time": total_denoising_time,
+        "vae_decoding_time": statistics.mean(vae_times),
+        "total_time": statistics.mean(total_times),
+    }
+    if tuple(mesh_device.shape) == (2, 4):
+        expected_metrics = {
+            "clip_encoding_time": 0.1,
+            "t5_encoding_time": 0.1,
+            "total_encoding_time": 0.22,
+            "denoising_steps_time": 11,
+            "vae_decoding_time": 1.6,
+            "total_time": 12.6,
+        }
+    elif tuple(mesh_device.shape) == (4, 8):
+        expected_metrics = {
+            "clip_encoding_time": 0.2,
+            "t5_encoding_time": 0.12,
+            "total_encoding_time": 0.6,
+            "denoising_steps_time": 4.2,
+            "vae_decoding_time": 1.35,
+            "total_time": 5.9,
+        }
+    else:
+        assert False, f"Unknown mesh device for performance comparison: {mesh_device}"
+
+    if is_ci_env:
+        # In CI, dump a performance report
+        profiler_model_name = (
+            f"sd35_{'t3k' if tuple(mesh_device.shape) == (2, 4) else 'tg'}_cfg{cfg_factor}_sp{sp_factor}_tp{tp_factor}"
+        )
+        benchmark_data = BenchmarkData()
+        benchmark_data.save_partial_run_json(
+            benchmark_profiler,
+            run_type="sd35_traced",
+            ml_model_name=profiler_model_name,
+        )
+
+    pass_perf_check = True
+    assert_msgs = []
+    for k in expected_metrics.keys():
+        if measurements[k] > expected_metrics[k]:
+            assert_msgs.append(
+                f"Warning: {k} is outside of the tolerance range. Expected: {expected_metrics[k]}, Actual: {measurements[k]}"
+            )
+            pass_perf_check = False
+
+    assert pass_perf_check, "\n".join(assert_msgs)
 
     # Synchronize all devices
     for submesh_device in pipeline.submesh_devices:

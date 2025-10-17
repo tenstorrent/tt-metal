@@ -9,9 +9,9 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 import ttnn
 from models.demos.segformer.common import load_config, load_torch_model
 from models.demos.segformer.reference.segformer_mlp import SegformerMLP
-from models.demos.segformer.tt.common import get_mesh_mappers, preprocess_linear_bias, preprocess_linear_weight
+from models.demos.segformer.tt.common import preprocess_linear_bias, preprocess_linear_weight
 from models.demos.segformer.tt.ttnn_segformer_mlp import TtSegformerMLP
-from models.utility_functions import skip_for_grayskull
+from models.demos.utils.common_demo_utils import get_mesh_mappers
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
@@ -35,7 +35,6 @@ def create_custom_mesh_preprocessor(mesh_mapper=None):
     return custom_mesh_preprocessor
 
 
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "input_dim, mlp_id, batch_size, height, width,",
     [

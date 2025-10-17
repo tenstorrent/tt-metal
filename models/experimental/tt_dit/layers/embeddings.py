@@ -3,119 +3,62 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+
 import torch
 import ttnn
 
-from ..utils.tensor import bf16_tensor, bf16_tensor_2dshard
-from ..utils.substate import substate
+from ..utils.tensor import bf16_tensor
 from .linear import Linear
+from .module import Module, Parameter
 
 
 # Helper classes for SD35Transformer2DModel
-class TimestepEmbedding:
-    def __init__(self, in_channels, time_embed_dim, mesh_device=None, init=False):
+class TimestepEmbedding(Module):
+    def __init__(self, in_channels, time_embed_dim, mesh_device=None):
+        super().__init__()
+
         self.in_channels = in_channels
         self.time_embed_dim = time_embed_dim
         self.mesh_device = mesh_device
 
-        self.linear_1 = Linear(in_channels, time_embed_dim, bias=True, mesh_device=mesh_device, init=init)
-        self.linear_2 = Linear(time_embed_dim, time_embed_dim, bias=True, mesh_device=mesh_device, init=init)
+        self.linear_1 = Linear(in_channels, time_embed_dim, bias=True, mesh_device=mesh_device)
+        self.linear_2 = Linear(time_embed_dim, time_embed_dim, bias=True, mesh_device=mesh_device)
 
-    def to_cached_state_dict(self, path_prefix):
-        linear_1_cache = self.linear_1.to_cached_state_dict(path_prefix + "linear_1.")
-        linear_2_cache = self.linear_2.to_cached_state_dict(path_prefix + "linear_2.")
-        cache_dict = {}
-        # Add linear_1. prefix to all keys from linear_1_cache
-        for key, value in linear_1_cache.items():
-            cache_dict[f"linear_1.{key}"] = value
-        # Add linear_2. prefix to all keys from linear_2_cache
-        for key, value in linear_2_cache.items():
-            cache_dict[f"linear_2.{key}"] = value
-        return cache_dict
-
-    def from_cached_state_dict(self, cache_dict):
-        self.linear_1.from_cached_state_dict(substate(cache_dict, "linear_1"))
-        self.linear_2.from_cached_state_dict(substate(cache_dict, "linear_2"))
-
-    def load_state_dict(self, state_dict):
-        self.linear_1.load_state_dict(substate(state_dict, "linear_1"))
-        self.linear_2.load_state_dict(substate(state_dict, "linear_2"))
-
-    def __call__(self, x):
+    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         x = self.linear_1(x)
         x = ttnn.silu(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return self.linear_2(x)
 
 
-class PixartAlphaTextProjection:
-    def __init__(self, in_features, hidden_size, mesh_device=None, init=False):
+class PixartAlphaTextProjection(Module):
+    def __init__(self, in_features, hidden_size, mesh_device=None):
+        super().__init__()
+
         self.in_features = in_features
         self.hidden_size = hidden_size
         self.mesh_device = mesh_device
 
-        self.linear_1 = Linear(in_features, hidden_size, bias=True, mesh_device=mesh_device, init=init)
-        self.linear_2 = Linear(hidden_size, hidden_size, bias=True, mesh_device=mesh_device, init=init)
+        self.linear_1 = Linear(in_features, hidden_size, bias=True, mesh_device=mesh_device)
+        self.linear_2 = Linear(hidden_size, hidden_size, bias=True, mesh_device=mesh_device)
 
-    def to_cached_state_dict(self, path_prefix):
-        linear_1_cache = self.linear_1.to_cached_state_dict(path_prefix + "linear_1.")
-        linear_2_cache = self.linear_2.to_cached_state_dict(path_prefix + "linear_2.")
-        cache_dict = {}
-        # Add linear_1. prefix to all keys from linear_1_cache
-        for key, value in linear_1_cache.items():
-            cache_dict[f"linear_1.{key}"] = value
-        # Add linear_2. prefix to all keys from linear_2_cache
-        for key, value in linear_2_cache.items():
-            cache_dict[f"linear_2.{key}"] = value
-        return cache_dict
-
-    def from_cached_state_dict(self, cache_dict):
-        self.linear_1.from_cached_state_dict(substate(cache_dict, "linear_1"))
-        self.linear_2.from_cached_state_dict(substate(cache_dict, "linear_2"))
-
-    def load_state_dict(self, state_dict):
-        self.linear_1.load_state_dict(substate(state_dict, "linear_1"))
-        self.linear_2.load_state_dict(substate(state_dict, "linear_2"))
-
-    def __call__(self, x):
+    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         x = self.linear_1(x)
         x = ttnn.silu(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return self.linear_2(x)
 
 
-class SD35CombinedTimestepTextProjEmbeddings:
-    def __init__(self, embedding_dim, pooled_projection_dim, mesh_device=None, init=False):
+class SD35CombinedTimestepTextProjEmbeddings(Module):
+    def __init__(self, embedding_dim, pooled_projection_dim, mesh_device=None):
+        super().__init__()
+
         self.embedding_dim = embedding_dim
         self.pooled_projection_dim = pooled_projection_dim
         self.mesh_device = mesh_device
 
-        self.timestep_embedder = TimestepEmbedding(256, embedding_dim, mesh_device=mesh_device, init=init)
-        self.text_embedder = PixartAlphaTextProjection(
-            pooled_projection_dim, embedding_dim, mesh_device=mesh_device, init=init
-        )
+        self.timestep_embedder = TimestepEmbedding(256, embedding_dim, mesh_device=mesh_device)
+        self.text_embedder = PixartAlphaTextProjection(pooled_projection_dim, embedding_dim, mesh_device=mesh_device)
 
         self.time_proj_factor = self._create_time_proj_factor(256)
-
-    def to_cached_state_dict(self, path_prefix):
-        timestep_embedder_cache = self.timestep_embedder.to_cached_state_dict(path_prefix + "timestep_embedder.")
-        text_embedder_cache = self.text_embedder.to_cached_state_dict(path_prefix + "text_embedder.")
-
-        cache_dict = {}
-        # Add timestep_embedder. prefix to all keys from timestep_embedder_cache
-        for key, value in timestep_embedder_cache.items():
-            cache_dict[f"timestep_embedder.{key}"] = value
-        # Add text_embedder. prefix to all keys from text_embedder_cache
-        for key, value in text_embedder_cache.items():
-            cache_dict[f"text_embedder.{key}"] = value
-
-        return cache_dict
-
-    def from_cached_state_dict(self, cache_dict):
-        self.timestep_embedder.from_cached_state_dict(substate(cache_dict, "timestep_embedder"))
-        self.text_embedder.from_cached_state_dict(substate(cache_dict, "text_embedder"))
-
-    def load_state_dict(self, state_dict):
-        self.timestep_embedder.load_state_dict(substate(state_dict, "timestep_embedder"))
-        self.text_embedder.load_state_dict(substate(state_dict, "text_embedder"))
 
     def _create_time_proj_factor(self, num_channels) -> ttnn.Tensor:
         assert num_channels % 2 == 0
@@ -129,7 +72,7 @@ class SD35CombinedTimestepTextProjEmbeddings:
 
         return ttnn.unsqueeze_to_4D(bf16_tensor(factor, device=self.mesh_device))
 
-    def __call__(self, timestep, pooled_projection):
+    def forward(self, timestep: ttnn.Tensor, pooled_projection: ttnn.Tensor) -> ttnn.Tensor:
         # Time projection (sinusoidal embedding)
         emb = timestep * self.time_proj_factor
         c = ttnn.cos(emb)
@@ -140,7 +83,7 @@ class SD35CombinedTimestepTextProjEmbeddings:
         return timesteps_emb + text_emb
 
 
-class PatchEmbed:
+class PatchEmbed(Module):
     """
     Patch embedding with unfolded conv2d implementation.
     Converts input images to patch embeddings with positional encoding.
@@ -157,8 +100,9 @@ class PatchEmbed:
         tp_mesh_axis,
         sp_mesh_axis,
         mesh_device=None,
-        init=False,
     ):
+        super().__init__()
+
         self.height = height // patch_size
         self.width = width // patch_size
         self.patch_size = patch_size
@@ -169,16 +113,8 @@ class PatchEmbed:
         self.tp_mesh_axis = tp_mesh_axis
         self.sp_mesh_axis = sp_mesh_axis
 
-        # Conv2d projection weights (unfolded)
-        # Weight shape: (kernel_h * kernel_w * in_channels, out_channels)
-        conv_in_features = patch_size * patch_size * in_channels
-        self.proj_weight = None
-        self.proj_bias = None
-
         # Position embeddings
         self.pos_embed = None
-
-        assert not init, "PatchEmbed does not support initialization"
 
         # Compute kernel config for linear operations
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
@@ -187,6 +123,20 @@ class PatchEmbed:
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
+        )
+
+        self.proj_weight = Parameter(
+            total_shape=[in_channels * patch_size * patch_size, embed_dim],
+            mesh_axes=[None, tp_mesh_axis],
+            device=mesh_device,
+        )
+        self.proj_bias = Parameter(
+            total_shape=[1, 1, 1, embed_dim], mesh_axes=[None, None, None, tp_mesh_axis], device=mesh_device
+        )
+        self.pos_embed = Parameter(
+            total_shape=[1, self.height * self.width, embed_dim],
+            device=mesh_device,
+            mesh_axes=[None, sp_mesh_axis, tp_mesh_axis],
         )
 
     def _cropped_pos_embed(self, pos_embed_param):
@@ -198,68 +148,23 @@ class PatchEmbed:
         spatial_pos_embed = spatial_pos_embed[:, top : top + self.height, left : left + self.width, :]
         return spatial_pos_embed.reshape([1, -1, spatial_pos_embed.shape[-1]])
 
-    def to_cached_state_dict(self, path_prefix):
-        cache_dict = {}
+    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
+        conv_weight = state.pop("proj.weight", None)
+        if conv_weight is not None:
+            # Convert from (out_channels, in_channels, kh, kw) to (kh*kw*in_channels, out_channels)
+            out_channels, in_c, kh, kw = conv_weight.shape
+            conv_weight = conv_weight.permute(2, 3, 1, 0)  # (kh, kw, in_c, out_channels)
+            conv_weight = conv_weight.reshape(kh * kw * in_c, out_channels)
 
-        # Cache proj_weight
-        proj_weight_path = path_prefix + "proj_weight"
-        ttnn.dump_tensor(proj_weight_path, self.proj_weight)
-        cache_dict["proj_weight"] = proj_weight_path
+            state["proj_weight"] = conv_weight
 
-        # Cache proj_bias if it exists
-        if self.proj_bias is not None:
-            proj_bias_path = path_prefix + "proj_bias"
-            ttnn.dump_tensor(proj_bias_path, self.proj_bias)
-            cache_dict["proj_bias"] = proj_bias_path
+        if "proj.bias" in state:
+            state["proj_bias"] = state.pop("proj.bias").reshape(1, 1, 1, -1)
 
-        # Cache pos_embed
-        pos_embed_path = path_prefix + "pos_embed"
-        ttnn.dump_tensor(pos_embed_path, self.pos_embed)
-        cache_dict["pos_embed"] = pos_embed_path
+        if "pos_embed" in state:
+            state["pos_embed"] = self._cropped_pos_embed(state.pop("pos_embed"))
 
-        return cache_dict
-
-    def from_cached_state_dict(self, cache_dict):
-        self.proj_weight = ttnn.load_tensor(cache_dict["proj_weight"], device=self.mesh_device)
-        if "proj_bias" in cache_dict:
-            self.proj_bias = ttnn.load_tensor(cache_dict["proj_bias"], device=self.mesh_device)
-        self.pos_embed = ttnn.load_tensor(cache_dict["pos_embed"], device=self.mesh_device)
-
-    def load_state_dict(self, state_dict):
-        """Load weights from PyTorch state dict."""
-        # Load conv2d projection weights
-        conv_weight = state_dict["proj.weight"]
-        # Convert from (out_channels, in_channels, kh, kw) to (kh*kw*in_channels, out_channels)
-        out_channels, in_c, kh, kw = conv_weight.shape
-        conv_weight = conv_weight.permute(2, 3, 1, 0)  # (kh, kw, in_c, out_channels)
-        conv_weight = conv_weight.reshape(kh * kw * in_c, out_channels)
-
-        self.proj_weight = bf16_tensor(
-            conv_weight,
-            device=self.mesh_device,
-            mesh_axis=self.tp_mesh_axis,
-            shard_dim=1,
-        )
-
-        if "proj.bias" in state_dict:
-            bias = state_dict["proj.bias"].reshape(1, 1, 1, -1)
-            self.proj_bias = bf16_tensor(
-                bias,
-                device=self.mesh_device,
-                mesh_axis=self.tp_mesh_axis,
-                shard_dim=3,
-            )
-
-        # Load position embeddings
-        pos_embed_param = state_dict["pos_embed"]
-        cropped_pos_embed = self._cropped_pos_embed(pos_embed_param)
-        self.pos_embed = bf16_tensor_2dshard(
-            cropped_pos_embed,
-            device=self.mesh_device,
-            shard_mapping={self.sp_mesh_axis: 1, self.tp_mesh_axis: 2},
-        )
-
-    def __call__(self, latent):
+    def forward(self, latent: ttnn.Tensor) -> ttnn.Tensor:
         """
         Forward pass: apply patch projection and add position embeddings.
 
@@ -275,7 +180,7 @@ class PatchEmbed:
 
         # Apply unfolded conv2d projection
         latent = self._unfold_conv2d(latent)
-        return latent + self.pos_embed
+        return latent + self.pos_embed.data
 
     def _unfold_conv2d(self, x):
         """
@@ -309,8 +214,8 @@ class PatchEmbed:
         # Apply linear projection (equivalent to conv2d)
         out = ttnn.linear(
             x,
-            self.proj_weight,
-            bias=self.proj_bias,
+            self.proj_weight.data,
+            bias=self.proj_bias.data,
             dtype=ttnn.bfloat16,
             compute_kernel_config=self.compute_kernel_config,
         )
@@ -319,27 +224,20 @@ class PatchEmbed:
         return out
 
 
-class MochiPatchEmbed:
+class MochiPatchEmbed(Module):
     def __init__(
         self,
         patch_size,
         in_channels,
         embed_dim,
         mesh_device=None,
-        init=False,
     ):
+        super().__init__()
+
         self.patch_size = patch_size
         self.in_channels = in_channels
         self.embed_dim = embed_dim
         self.mesh_device = mesh_device
-
-        # Conv2d projection weights (unfolded)
-        # Weight shape: (kernel_h * kernel_w * in_channels, out_channels)
-        conv_in_features = patch_size * patch_size * in_channels
-        self.proj_weight = None
-        self.proj_bias = None
-
-        assert not init, "MochiPatchEmbed does not support initialization"
 
         # Compute kernel config for linear operations
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
@@ -350,49 +248,24 @@ class MochiPatchEmbed:
             packer_l1_acc=False,
         )
 
-    def to_cached_state_dict(self, path_prefix):
-        cache_dict = {}
+        # Conv2d projection weights (unfolded)
+        self.proj_weight = Parameter(total_shape=[in_channels * patch_size * patch_size, embed_dim], device=mesh_device)
+        self.proj_bias = Parameter(total_shape=[1, 1, 1, embed_dim], device=mesh_device)
 
-        # Cache proj_weight
-        proj_weight_path = path_prefix + "proj_weight"
-        ttnn.dump_tensor(proj_weight_path, self.proj_weight)
-        cache_dict["proj_weight"] = proj_weight_path
+    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
+        conv_weight = state.pop("proj.weight", None)
+        if conv_weight is not None:
+            # Convert from (out_channels, in_channels, kh, kw) to (kh*kw*in_channels, out_channels)
+            out_channels, in_c, kh, kw = conv_weight.shape
+            conv_weight = conv_weight.permute(2, 3, 1, 0)  # (kh, kw, in_c, out_channels)
+            conv_weight = conv_weight.reshape(kh * kw * in_c, out_channels)
+            state["proj_weight"] = conv_weight
 
-        # Cache proj_bias if it exists
-        if self.proj_bias is not None:
-            proj_bias_path = path_prefix + "proj_bias"
-            ttnn.dump_tensor(proj_bias_path, self.proj_bias)
-            cache_dict["proj_bias"] = proj_bias_path
+        conv_bias = state.pop("proj.bias", None)
+        if conv_bias is not None:
+            state["proj_bias"] = conv_bias.reshape([1, 1, 1, -1])
 
-        return cache_dict
-
-    def from_cached_state_dict(self, cache_dict):
-        self.proj_weight = ttnn.load_tensor(cache_dict["proj_weight"], device=self.mesh_device)
-        if "proj_bias" in cache_dict:
-            self.proj_bias = ttnn.load_tensor(cache_dict["proj_bias"], device=self.mesh_device)
-
-    def load_state_dict(self, state_dict):
-        """Load weights from PyTorch state dict."""
-        # Load conv2d projection weights
-        conv_weight = state_dict["proj.weight"]
-        # Convert from (out_channels, in_channels, kh, kw) to (kh*kw*in_channels, out_channels)
-        out_channels, in_c, kh, kw = conv_weight.shape
-        conv_weight = conv_weight.permute(2, 3, 1, 0)  # (kh, kw, in_c, out_channels)
-        conv_weight = conv_weight.reshape(kh * kw * in_c, out_channels)
-
-        self.proj_weight = bf16_tensor(
-            conv_weight,
-            device=self.mesh_device,
-        )
-
-        if "proj.bias" in state_dict:
-            bias = state_dict["proj.bias"].reshape(1, 1, 1, -1)
-            self.proj_bias = bf16_tensor(
-                bias,
-                device=self.mesh_device,
-            )
-
-    def __call__(self, latent_1BNI):
+    def forward(self, latent_1BNI: ttnn.Tensor) -> ttnn.Tensor:
         """
         latent_1BNI: (1, batch, T * patches_height * patches_width, patch_size * patch_size * in_channels
 
@@ -403,8 +276,88 @@ class MochiPatchEmbed:
         # Apply unfolded conv2d projection
         latent_1BND = ttnn.linear(
             latent_1BNI,
-            self.proj_weight,
-            bias=self.proj_bias,
+            self.proj_weight.data,
+            bias=self.proj_bias.data,
+            dtype=ttnn.bfloat16,
+            compute_kernel_config=self.compute_kernel_config,
+        )
+
+        return latent_1BND
+
+
+class WanPatchEmbed(Module):
+    def __init__(
+        self,
+        patch_size,
+        in_channels,
+        embed_dim,
+        mesh_device=None,
+        init=False,
+        tp_mesh_axis=None,
+    ):
+        super().__init__()
+
+        self.patch_size = patch_size
+        self.in_channels = in_channels
+        self.embed_dim = embed_dim
+        self.mesh_device = mesh_device
+        # Optionally output tensor parallel
+        self.tp_mesh_axis = tp_mesh_axis
+
+        assert not init, "WanPatchEmbed does not support initialization"
+
+        # Compute kernel config for linear operations
+        self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        )
+
+        self.proj_weight = Parameter(
+            total_shape=[in_channels * patch_size[0] * patch_size[1] * patch_size[2], embed_dim],
+            device=mesh_device,
+            mesh_axes=[None, self.tp_mesh_axis],
+        )
+        self.proj_bias = Parameter(
+            total_shape=[1, embed_dim],
+            device=mesh_device,
+            mesh_axes=[None, self.tp_mesh_axis],
+        )
+
+    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
+        conv_weight = state.pop("weight", None)
+        if conv_weight is not None:
+            out_channels, in_c, kt, kh, kw = conv_weight.shape
+            assert out_channels == self.embed_dim, "Output channels do not match embed_dim"
+            assert in_c == self.in_channels, "Input channels do not match in_channels"
+            assert kt == self.patch_size[0], "Patch size does not match patch_size[0]"
+            assert kh == self.patch_size[1], "Patch size does not match patch_size[1]"
+            assert kw == self.patch_size[2], "Patch size does not match patch_size[2]"
+
+            conv_weight = conv_weight.permute(2, 3, 4, 1, 0)  # (kt, kh, kw, in_c, out_channels)
+            conv_weight = conv_weight.reshape(kt * kh * kw * in_c, out_channels)
+
+            state["proj_weight"] = conv_weight
+
+        conv_weight = state.pop("bias", None)
+        if conv_weight is not None:
+            state["proj_bias"] = conv_weight.reshape(1, -1)
+
+    def forward(self, latent_1BNI: ttnn.Tensor) -> ttnn.Tensor:
+        """
+        latent_1BNI: (1, batch, pt * ph * pw, kt * kh * kw * in_channels
+
+        returns:
+        latent_1BND: (1, batch, pt * ph * pw, embed_dim), optionally fractured embed_dim on TP
+        """
+
+        # Apply unfolded conv2d projection
+        latent_1BND = ttnn.linear(
+            latent_1BNI,
+            self.proj_weight.data,
+            bias=self.proj_bias.data,
             dtype=ttnn.bfloat16,
             compute_kernel_config=self.compute_kernel_config,
         )

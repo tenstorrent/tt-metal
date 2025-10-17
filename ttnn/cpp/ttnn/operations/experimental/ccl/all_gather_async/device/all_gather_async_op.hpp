@@ -19,6 +19,7 @@
 #include "ttnn/run_operation.hpp"
 
 #include <optional>
+#include <utility>
 #include <vector>
 
 namespace ttnn {
@@ -26,13 +27,11 @@ namespace ttnn {
 using ccl::EriscDatamoverBuilder;
 
 enum class AllGatherAsyncVersion {
-    GENERIC = 0,
-    LLAMA_MINIMAL_SHARDED = 1,
-    MINIMAL_DEFAULT = 2,
+    LLAMA_MINIMAL_SHARDED = 0,
+    MINIMAL_DEFAULT = 1,
 };
 
 struct AllGatherAsync {
-    std::vector<IDevice*> devices;
     const uint32_t dim;
     const uint32_t num_links;
     const uint32_t ring_size;
@@ -48,9 +47,9 @@ struct AllGatherAsync {
     std::optional<uint32_t> chunks_per_sync;
     std::optional<uint32_t> num_workers_per_link;
     std::optional<uint32_t> num_buffers_per_channel;
+    bool reverse_order;
 
     AllGatherAsync(
-        std::vector<IDevice*> devices,
         uint32_t dim,
         uint32_t num_links,
         uint32_t ring_size,
@@ -65,14 +64,14 @@ struct AllGatherAsync {
         bool using_persistent_buffers,
         std::optional<uint32_t> chunks_per_sync,
         std::optional<uint32_t> num_workers_per_link,
-        std::optional<uint32_t> num_buffers_per_channel) :
-        devices(std::move(devices)),
+        std::optional<uint32_t> num_buffers_per_channel,
+        bool reverse_order = false) :
         dim(dim),
         num_links(num_links),
         ring_size(ring_size),
-        output_mem_config(output_mem_config),
+        output_mem_config(std::move(output_mem_config)),
         topology(topology),
-        semaphore(semaphore),
+        semaphore(std::move(semaphore)),
         sub_device_id(sub_device_id),
         cluster_axis(cluster_axis),
         use_all_gather_async_llama_sharded(use_all_gather_async_llama_sharded),
@@ -81,7 +80,8 @@ struct AllGatherAsync {
         using_persistent_buffers(using_persistent_buffers),
         chunks_per_sync(chunks_per_sync),
         num_workers_per_link(num_workers_per_link),
-        num_buffers_per_channel(num_buffers_per_channel) {}
+        num_buffers_per_channel(num_buffers_per_channel),
+        reverse_order(reverse_order) {}
 
     // Add attributes method for reflection
     auto attributes() const {
@@ -102,6 +102,7 @@ struct AllGatherAsync {
         attrs.emplace_back("chunks_per_sync", chunks_per_sync);
         attrs.emplace_back("num_worker_per_link", num_workers_per_link);
         attrs.emplace_back("num_buffers_per_channel", num_buffers_per_channel);
+        attrs.emplace_back("reverse_order", reverse_order);
         return attrs;
     }
 
@@ -124,31 +125,62 @@ struct AllGatherAsync {
     AllGatherAsyncVersion select_version(const Tensor& input_tensor) const;
 };
 
-// All Gather Variants
-std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
-    size_t num_links,
-    size_t num_workers_per_link,
-    IDevice* device,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-    CoreCoord core_grid_offset = CoreCoord(0, 0));
-tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_multi_core_with_workers(
+struct AllGatherProgramArtifacts {
+    std::vector<tt::tt_metal::KernelHandle> reader_kernel_ids;
+    std::vector<tt::tt_metal::KernelHandle> writer_kernel_ids;
+    std::vector<tt::tt_metal::CoreCoord> all_cores;
+    uint32_t num_directions_per_link;
+    uint32_t num_workers_per_direction;
+    uint32_t num_mux_cores_per_direction_per_link;
+    uint32_t num_cores_per_link;
+};
+
+// Builder function that creates kernels and returns artifacts
+AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifacts(
+    tt::tt_metal::Program& program,
     const Tensor& input_tensor,
-    IDevice* target_device,
-    std::optional<IDevice*> forward_device,
-    std::optional<IDevice*> backward_device,
+    const MeshCoordinate& sender_device_coord,
+    const std::optional<MeshCoordinate>& forward_coord,
+    const std::optional<MeshCoordinate>& backward_coord,
     Tensor& output_tensor,
     uint32_t dim,
     uint32_t num_links,
     uint32_t ring_size,
     uint32_t ring_index,
     ccl::Topology topology,
-    GlobalSemaphore semaphore,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id);
+    const std::vector<GlobalSemaphore>& semaphore,
+    const std::optional<GlobalSemaphore>& barrier_semaphore,
+    bool using_persistent_buffers,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    std::optional<experimental::ccl::AllGatherFusedOpSignaler>& fused_op_signaler,
+    std::optional<uint32_t> chunks_per_sync,
+    std::optional<uint32_t> num_workers_per_direction_opt,
+    std::optional<uint32_t> num_buffers_per_channel,
+    CoreCoord core_grid_offset,
+    bool reverse_order);
+
+// Runtime argument override function
+void all_gather_async_minimal_default_helper_override_runtime_arguments(
+    tt::tt_metal::Program& program,
+    const std::vector<tt::tt_metal::KernelHandle>& reader_kernel_ids,
+    const std::vector<tt::tt_metal::KernelHandle>& writer_kernel_ids,
+    const std::vector<tt::tt_metal::CoreCoord>& all_cores,
+    uint32_t num_links,
+    uint32_t num_directions_per_link,
+    uint32_t num_workers_per_direction,
+    uint32_t num_mux_cores_per_direction_per_link,
+    uint32_t num_cores_per_link,
+    const std::optional<GlobalSemaphore>& barrier_semaphore,
+    const std::vector<GlobalSemaphore>& semaphore,
+    const Tensor& input,
+    const Tensor& output);
+
+// All Gather Variants
 tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default(
     const Tensor& input_tensor,
-    IDevice* target_device,
-    std::optional<IDevice*> forward_device,
-    std::optional<IDevice*> backward_device,
+    const MeshCoordinate& sender_device_coord,
+    const std::optional<MeshCoordinate>& forward_coord,
+    const std::optional<MeshCoordinate>& backward_coord,
     Tensor& output_tensor,
     uint32_t dim,
     uint32_t num_links,
@@ -161,13 +193,15 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default(
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_link,
-    std::optional<uint32_t> num_buffers_per_channel);
+    std::optional<uint32_t> num_buffers_per_channel,
+    bool reverse_order = false);
+
 tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_helper(
     tt::tt_metal::Program& program,
     const Tensor& input_tensor,
-    IDevice* target_device,
-    std::optional<IDevice*> forward_device,
-    std::optional<IDevice*> backward_device,
+    const MeshCoordinate& sender_device_coord,
+    const std::optional<MeshCoordinate>& forward_coord,
+    const std::optional<MeshCoordinate>& backward_coord,
     Tensor& output_tensor,
     uint32_t dim,
     uint32_t num_links,
@@ -182,12 +216,13 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
     std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel,
-    CoreCoord core_grid_offset = CoreCoord(0, 0));
+    CoreCoord core_grid_offset = CoreCoord(0, 0),
+    bool reverse_order = false);
 tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
     const Tensor& input_tensor,
-    IDevice* target_device,
-    std::optional<IDevice*> forward_device,
-    std::optional<IDevice*> backward_device,
+    const MeshCoordinate& sender_device_coord,
+    const std::optional<MeshCoordinate>& forward_coord,
+    const std::optional<MeshCoordinate>& backward_coord,
     Tensor& output_tensor,
     uint32_t dim,
     uint32_t num_links,
@@ -212,9 +247,10 @@ Tensor all_gather_async(
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt,
-    bool use_all_gather_async_llama_sharded = false,
     bool use_optimal_ccl_for_llama = false,
-    const std::optional<GlobalSemaphore>& barrier_semaphore = std::nullopt);
+    bool use_all_gather_async_llama_sharded = false,
+    const std::optional<GlobalSemaphore>& barrier_semaphore = std::nullopt,
+    bool reverse_order = false);
 
 Tensor all_gather_async(
     const Tensor& input_tensor,
@@ -226,24 +262,32 @@ Tensor all_gather_async(
     ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt,
     std::optional<uint32_t> cluster_axis = std::nullopt,
-    bool use_all_gather_async_llama_sharded = false,
     bool use_optimal_ccl_for_llama = false,
+    bool use_all_gather_async_llama_sharded = false,
     const std::optional<GlobalSemaphore>& barrier_semaphore = std::nullopt,
     std::optional<uint32_t> chunks_per_sync = std::nullopt,
     std::optional<uint32_t> num_workers_per_link = std::nullopt,
-    std::optional<uint32_t> num_buffers_per_channel = std::nullopt);
+    std::optional<uint32_t> num_buffers_per_channel = std::nullopt,
+    bool reverse_order = false);
 
+// same as above but for vector of mesh
 std::vector<Tensor> all_gather_async(
     const std::vector<Tensor>& input_tensors,
+    const std::optional<ttnn::Tensor>& persistent_output_buffer,
     uint32_t dim,
     const std::vector<global_semaphore::MultiDeviceGlobalSemaphore>& multi_device_global_semaphore,
     uint32_t num_links = 1,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt,
+    std::optional<uint32_t> cluster_axis = std::nullopt,
     bool use_all_gather_async_llama_sharded = false,
     bool use_optimal_ccl_for_llama = false,
-    const std::optional<GlobalSemaphore>& barrier_semaphore = std::nullopt);
+    const std::optional<std::vector<GlobalSemaphore>>& barrier_semaphore = std::nullopt,
+    std::optional<uint32_t> chunks_per_sync = std::nullopt,
+    std::optional<uint32_t> num_workers_per_link = std::nullopt,
+    std::optional<uint32_t> num_buffers_per_channel = std::nullopt,
+    bool reverse_order = false);
 
 Tensor all_gather_async(
     const Tensor& input_tensor,
@@ -258,22 +302,8 @@ Tensor all_gather_async(
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt,
     bool use_all_gather_async_llama_sharded = false,
     bool use_optimal_ccl_for_llama = false,
-    const std::optional<GlobalSemaphore>& barrier_semaphore = std::nullopt);
-
-std::vector<Tensor> all_gather_async(
-    const std::vector<Tensor>& input_tensors,
-    int32_t dim,
-    uint32_t cluster_axis,
-    const MeshDevice& mesh_device,
-    ttnn::ccl::Topology topology,
-    const std::vector<global_semaphore::MultiDeviceGlobalSemaphore>& multi_device_global_semaphore,
-    const std::optional<ttnn::Tensor>& persistent_output_tensor = std::nullopt,
-    const std::optional<MemoryConfig>& memory_config = std::nullopt,
-    std::optional<size_t> num_preferred_links = std::nullopt,
-    std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt,
-    bool use_all_gather_async_llama_sharded = false,
-    bool use_optimal_ccl_for_llama = false,
-    const std::optional<GlobalSemaphore>& barrier_semaphore = std::nullopt);
+    const std::optional<GlobalSemaphore>& barrier_semaphore = std::nullopt,
+    bool reverse_order = false);
 
 }  // namespace ccl
 }  // namespace experimental

@@ -20,6 +20,7 @@
 
 #include "llrt/hal.hpp"
 #include "tt_metal/impl/context/metal_context.hpp"
+#include <variant>
 
 using namespace tt::tt_metal;  // test only
 
@@ -106,14 +107,15 @@ public:
     bool core_and_bank_present(CoreCoord core, uint32_t bank);
 };
 
-DeviceData::DeviceData(
+inline DeviceData::DeviceData(
     IDevice* device,
     CoreRange workers,
     uint32_t l1_data_addr,
     uint32_t dram_data_addr,
     void* pcie_data_addr,
     bool is_banked,
-    uint32_t dram_data_size_words) {
+    uint32_t dram_data_size_words) :
+    banked(is_banked), amt_written(0) {
     this->base_data_addr[static_cast<int>(CoreType::WORKER)] = l1_data_addr;
     this->base_data_addr[static_cast<int>(CoreType::PCIE)] = (uint64_t)pcie_data_addr;
     this->base_data_addr[static_cast<int>(CoreType::DRAM)] = dram_data_addr;
@@ -121,27 +123,19 @@ DeviceData::DeviceData(
     this->base_result_data_addr[static_cast<int>(CoreType::PCIE)] = (uint64_t)pcie_data_addr;
     this->base_result_data_addr[static_cast<int>(CoreType::DRAM)] = dram_data_addr;
 
-    this->banked = is_banked;
-    this->amt_written = 0;
-
-    const metal_SocDescriptor& soc_d = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device->id());
-    const std::vector<tt::umd::CoreCoord>& pcie_cores = soc_d.get_cores(CoreType::PCIE, soc_d.get_umd_coord_system());
-    for (const CoreCoord& core_coord : pcie_cores) {
-        CoreCoord core = {core_coord.x, core_coord.y};
-        // TODO: make this all work w/ phys coords
-        // this is really annoying
-        // the PCIE phys core conflicts w/ worker logical cores
-        // so we hack the physical core for tracking, blech
-        // no simple way to handle this, need to use phys cores
-        core = {100, 100};
-        this->all_data[core][0] = one_core_data_t();
-        this->all_data[core][0].logical_core = core;
-        this->all_data[core][0].phys_core = core;
-        this->all_data[core][0].core_type = CoreType::PCIE;
-        this->all_data[core][0].bank_id = 20;
-        this->all_data[core][0].bank_offset = 0;
-        this->host_core = core;
-    }
+    // TODO: make this all work w/ phys coords
+    // this is really annoying
+    // the PCIE phys core conflicts w/ worker logical cores
+    // so we hack the physical core for tracking, blech
+    // no simple way to handle this, need to use phys cores
+    CoreCoord core = {100, 100};
+    this->all_data[core][0] = one_core_data_t();
+    this->all_data[core][0].logical_core = core;
+    this->all_data[core][0].phys_core = core;
+    this->all_data[core][0].core_type = CoreType::PCIE;
+    this->all_data[core][0].bank_id = 20;
+    this->all_data[core][0].bank_offset = 0;
+    this->host_core = core;
 
     // Always populate DRAM
     auto num_banks = device->allocator()->get_num_banks(BufferType::DRAM);
@@ -190,7 +184,7 @@ DeviceData::DeviceData(
 }
 
 // Populate interleaved DRAM with data for later readback.  Can we extended to L1 if needed.
-void DeviceData::prepopulate_dram(IDevice* device, uint32_t size_words) {
+inline void DeviceData::prepopulate_dram(IDevice* device, uint32_t size_words) {
     uint32_t num_dram_banks = device->allocator()->get_num_banks(BufferType::DRAM);
 
     for (int bank_id = 0; bank_id < num_dram_banks; bank_id++) {
@@ -228,7 +222,7 @@ void DeviceData::prepopulate_dram(IDevice* device, uint32_t size_words) {
     }
 }
 
-bool DeviceData::core_and_bank_present(CoreCoord core, uint32_t bank) {
+inline bool DeviceData::core_and_bank_present(CoreCoord core, uint32_t bank) {
     if (this->all_data.find(core) != this->all_data.end()) {
         std::unordered_map<uint32_t, one_core_data_t>& core_data = this->all_data.find(core)->second;
         if (core_data.find(bank) != core_data.end()) {
@@ -238,7 +232,7 @@ bool DeviceData::core_and_bank_present(CoreCoord core, uint32_t bank) {
     return false;
 }
 
-void DeviceData::push_one(CoreCoord core, int bank, uint32_t datum) {
+inline void DeviceData::push_one(CoreCoord core, int bank, uint32_t datum) {
     if (core_and_bank_present(core, bank)) {
         this->amt_written++;
         this->all_data[core][bank].data.push_back(datum);
@@ -246,7 +240,7 @@ void DeviceData::push_one(CoreCoord core, int bank, uint32_t datum) {
     }
 }
 
-void DeviceData::push_one(CoreCoord core, uint32_t datum) {
+inline void DeviceData::push_one(CoreCoord core, uint32_t datum) {
     if (core_and_bank_present(core, 0)) {
         this->amt_written++;
         this->all_data[core][0].data.push_back(datum);
@@ -254,7 +248,7 @@ void DeviceData::push_one(CoreCoord core, uint32_t datum) {
     }
 }
 
-void DeviceData::push_range(const CoreRange& cores, uint32_t datum, bool is_mcast) {
+inline void DeviceData::push_range(const CoreRange& cores, uint32_t datum, bool is_mcast) {
     bool counted = false;
     for (auto y = cores.start_coord.y; y <= cores.end_coord.y; y++) {
         for (auto x = cores.start_coord.x; x <= cores.end_coord.x; x++) {
@@ -277,7 +271,7 @@ inline uint32_t padded_size(uint32_t size, uint32_t alignment) {
     return (size + alignment - 1) / alignment * alignment;
 }
 
-void DeviceData::pad(CoreCoord core, int bank, uint32_t alignment) {
+inline void DeviceData::pad(CoreCoord core, int bank, uint32_t alignment) {
     if (core_and_bank_present(core, bank)) {
         uint32_t padded = padded_size(this->all_data[core][bank].data.size(), alignment / sizeof(uint32_t));
         this->all_data[core][bank].data.resize(padded);
@@ -287,7 +281,7 @@ void DeviceData::pad(CoreCoord core, int bank, uint32_t alignment) {
 
 // Some tests write to the same address across multiple cores
 // This takes cores that match core_type and pads any that are "behind" with invalid data
-void DeviceData::relevel(CoreType core_type) {
+inline void DeviceData::relevel(CoreType core_type) {
     size_t max = 0;
     for (auto& [coord, bank_device_data] : this->all_data) {
         for (auto& [bank, one_core_data] : bank_device_data) {
@@ -306,7 +300,7 @@ void DeviceData::relevel(CoreType core_type) {
     }
 }
 
-void DeviceData::relevel(CoreRange range) {
+inline void DeviceData::relevel(CoreRange range) {
     size_t max = 0;
 
     constexpr uint32_t bank = 0;
@@ -329,7 +323,7 @@ void DeviceData::relevel(CoreRange range) {
 }
 
 // Result expected results
-void DeviceData::reset() {
+inline void DeviceData::reset() {
     this->amt_written = 0;
     for (auto& [coord, bank_device_data] : this->all_data) {
         for (auto& [bank, one_core_data] : bank_device_data) {
@@ -342,18 +336,18 @@ void DeviceData::reset() {
     }
 }
 
-uint32_t DeviceData::get_base_result_addr(CoreType core_type) {
+inline uint32_t DeviceData::get_base_result_addr(CoreType core_type) {
     return this->base_result_data_addr[static_cast<int>(core_type)];
 }
 
-uint32_t DeviceData::get_result_data_addr(CoreCoord core, int bank_id) {
+inline uint32_t DeviceData::get_result_data_addr(CoreCoord core, int bank_id) {
     uint32_t base_addr = this->base_result_data_addr[static_cast<int>(this->all_data[core][bank_id].core_type)];
-    return base_addr + this->all_data[core][bank_id].data.size() * sizeof(uint32_t);
+    return base_addr + (this->all_data[core][bank_id].data.size() * sizeof(uint32_t));
 }
 
-uint32_t DeviceData::size_at(CoreCoord core, int bank_id) { return this->all_data[core][bank_id].data.size(); }
+inline uint32_t DeviceData::size_at(CoreCoord core, int bank_id) { return this->all_data[core][bank_id].data.size(); }
 
-uint32_t DeviceData::at(CoreCoord core, int bank_id, uint32_t offset) {
+inline uint32_t DeviceData::at(CoreCoord core, int bank_id, uint32_t offset) {
     return this->all_data[core][bank_id].data[offset];
 }
 
@@ -446,7 +440,8 @@ inline bool DeviceData::validate_one_core(
     return fail_count;
 }
 
-bool DeviceData::validate_host(std::unordered_set<CoreCoord>& validated_cores, const one_core_data_t& host_data) {
+inline bool DeviceData::validate_host(
+    std::unordered_set<CoreCoord>& validated_cores, const one_core_data_t& host_data) {
     uint32_t size_bytes = host_data.data.size() * sizeof(uint32_t);
     log_info(tt::LogTest, "Validating {} bytes from hugepage", size_bytes);
 
@@ -484,13 +479,13 @@ bool DeviceData::validate_host(std::unordered_set<CoreCoord>& validated_cores, c
     return failed;
 }
 
-bool DeviceData::validate(IDevice* device) {
+inline bool DeviceData::validate(IDevice* device) {
     bool failed = false;
     std::unordered_set<CoreCoord> validated_cores;
 
     for (const auto& [core, bank_device_data] : this->all_data) {
         for (auto& [bank, one_core_data] : bank_device_data) {
-            if (one_core_data.data.size() == 0) {
+            if (one_core_data.data.empty()) {
                 continue;
             }
 
@@ -511,7 +506,7 @@ bool DeviceData::validate(IDevice* device) {
     return !failed;
 }
 
-void DeviceData::overflow_check(IDevice* device) {
+inline void DeviceData::overflow_check(IDevice* device) {
     for (const auto& [core, bank_device_data] : this->all_data) {
         for (auto& [bank, one_core_data] : bank_device_data) {
             if (one_core_data.core_type == CoreType::WORKER) {
@@ -533,7 +528,7 @@ void DeviceData::overflow_check(IDevice* device) {
 template <bool is_dram_variant, bool is_host_variant>
 void configure_kernel_variant(
     Program& program,
-    std::string path,
+    const std::string& path,
     const std::map<std::string, std::string>& defines_in,
     std::vector<uint32_t> compile_args,
     CoreCoord my_core,
@@ -619,21 +614,29 @@ inline void generate_random_payload(
     const CoreRange& workers,
     DeviceData& data,
     uint32_t length_words,
-    CQDispatchCmd cmd,
+    std::variant<CQDispatchCmd, CQDispatchCmdLarge> cmd,
     bool is_mcast = false,
     bool prepend_cmd = false) {
     static uint32_t coherent_count = 0;
 
+    auto num_uint32s = std::visit(
+        ttsl::overloaded{
+            [](const CQDispatchCmd& cmd1) { return sizeof(CQDispatchCmd) / sizeof(uint32_t); },
+            [](const CQDispatchCmdLarge& cmd1) { return sizeof(CQDispatchCmdLarge) / sizeof(uint32_t); }},
+        cmd);
+
     // Host data puts the command in the datastream...
     if (prepend_cmd) {
-        uint32_t datum = *(uint32_t*)&cmd;
-        data.push_range(workers, datum, is_mcast);
-        datum = *(((uint32_t*)&cmd) + 1);
-        data.push_range(workers, datum, is_mcast);
-        datum = *(((uint32_t*)&cmd) + 2);
-        data.push_range(workers, datum, is_mcast);
-        datum = *(((uint32_t*)&cmd) + 3);
-        data.push_range(workers, datum, is_mcast);
+        // just get a pointer
+        uint32_t* cmdp = std::visit(
+            ttsl::overloaded{
+                [](CQDispatchCmd& cmd1) { return reinterpret_cast<uint32_t*>(&cmd1); },
+                [](CQDispatchCmdLarge& cmd1) { return reinterpret_cast<uint32_t*>(&cmd1); }},
+            cmd);
+        TT_ASSERT(cmdp, "Obtaining pointer to the data in variant type failed");
+        for (int i = 0; i < num_uint32s; ++i) {
+            data.push_range(workers, cmdp[i], is_mcast);
+        }
     }
 
     // Note: the dst address marches in unison regardless of whether or not a core is written to
@@ -759,15 +762,27 @@ inline void generate_random_packed_large_payload(
     }
 }
 
-inline void add_bare_dispatcher_cmd(std::vector<uint32_t>& cmds, CQDispatchCmd cmd) {
+inline void add_bare_dispatcher_cmd(std::vector<uint32_t>& cmds, std::variant<CQDispatchCmd, CQDispatchCmdLarge> cmd) {
     static_assert(
         sizeof(CQDispatchCmd) % sizeof(uint32_t) == 0, "CQDispatchCmd size must be a multiple of uint32_t size");
-    const size_t num_uint32s = sizeof(CQDispatchCmd) / sizeof(uint32_t);
-    uint32_t buf[num_uint32s];
+    static_assert(
+        sizeof(CQDispatchCmdLarge) % sizeof(uint32_t) == 0,
+        "CQDispatchCmdLarge size must be a multiple of uint32_t size");
+    const size_t num_uint32s = std::visit(
+        ttsl::overloaded{
+            [](const CQDispatchCmd& cmd) { return sizeof(CQDispatchCmd) / sizeof(uint32_t); },
+            [](const CQDispatchCmdLarge& cmd) { return sizeof(CQDispatchCmdLarge) / sizeof(uint32_t); }},
+        cmd);
 
-    memcpy(buf, &cmd, sizeof(cmd));
+    // just get a pointer
+    uint32_t* cmdp = std::visit(
+        ttsl::overloaded{
+            [](CQDispatchCmd& cmd1) { return reinterpret_cast<uint32_t*>(&cmd1); },
+            [](CQDispatchCmdLarge& cmd1) { return reinterpret_cast<uint32_t*>(&cmd1); }},
+        cmd);
+    TT_ASSERT(cmdp, "Obtaining pointer to the data in variant type failed");
     for (size_t i = 0; i < num_uint32s; i++) {
-        cmds.push_back(buf[i]);
+        cmds.push_back(cmdp[i]);
     }
 }
 
@@ -798,7 +813,7 @@ inline void debug_epilogue(std::vector<uint32_t>& cmds, size_t prior_end) {
         // buffer wrap which then messes up the routines w/ the embedded insn - not worth it
         CQDispatchCmd* debug_cmd_ptr;
         debug_cmd_ptr = (CQDispatchCmd*)&cmds[prior_end];
-        uint32_t full_size = (cmds.size() - prior_end) * sizeof(uint32_t) - sizeof(CQDispatchCmd);
+        uint32_t full_size = ((cmds.size() - prior_end) * sizeof(uint32_t)) - sizeof(CQDispatchCmd);
         uint32_t max_size = dispatch_buffer_page_size_g - sizeof(CQDispatchCmd);
         uint32_t size = (full_size > max_size) ? max_size : full_size;
         debug_cmd_ptr->debug.size = size;
@@ -806,7 +821,8 @@ inline void debug_epilogue(std::vector<uint32_t>& cmds, size_t prior_end) {
     }
 }
 
-inline void add_dispatcher_cmd(std::vector<uint32_t>& cmds, CQDispatchCmd cmd, uint32_t length) {
+inline void add_dispatcher_cmd(
+    std::vector<uint32_t>& cmds, std::variant<CQDispatchCmd, CQDispatchCmdLarge> cmd, uint32_t length) {
     size_t prior_end = debug_prologue(cmds);
 
     add_bare_dispatcher_cmd(cmds, cmd);
@@ -820,7 +836,7 @@ inline void add_dispatcher_cmd(
     std::vector<uint32_t>& cmds,
     const CoreRange& workers,
     DeviceData& device_data,
-    CQDispatchCmd cmd,
+    std::variant<CQDispatchCmd, CQDispatchCmdLarge> cmd,
     uint32_t length,
     bool is_mcast = false,
     bool prepend_cmd = false) {
@@ -873,8 +889,8 @@ inline void add_dispatcher_packed_cmd(
 // bare: doesn't generate random payload data, for use w/ eg, dram reads
 inline void gen_bare_dispatcher_unicast_write_cmd(
     IDevice* device, std::vector<uint32_t>& cmds, CoreCoord worker_core, DeviceData& device_data, uint32_t length) {
-    CQDispatchCmd cmd{};
-    memset(&cmd, 0, sizeof(CQDispatchCmd));
+    CQDispatchCmdLarge cmd{};
+    memset(&cmd, 0, sizeof(CQDispatchCmdLarge));
 
     CoreCoord phys_worker_core = device->worker_core_from_logical_core(worker_core);
     const uint32_t bank_id = 0;  // No interleaved pages here.
@@ -894,8 +910,8 @@ inline void gen_bare_dispatcher_unicast_write_cmd(
 
 inline void gen_dispatcher_unicast_write_cmd(
     IDevice* device, std::vector<uint32_t>& cmds, CoreCoord worker_core, DeviceData& device_data, uint32_t length) {
-    CQDispatchCmd cmd{};
-    memset(&cmd, 0, sizeof(CQDispatchCmd));
+    CQDispatchCmdLarge cmd{};
+    memset(&cmd, 0, sizeof(CQDispatchCmdLarge));
 
     CoreCoord phys_worker_core = device->worker_core_from_logical_core(worker_core);
     const uint32_t bank_id = 0;  // No interleaved pages here.
@@ -920,8 +936,8 @@ inline void gen_dispatcher_multicast_write_cmd(
     // TODO Hmm, ideally only need to relevel the core range
     device_data.relevel(CoreType::WORKER);
 
-    CQDispatchCmd cmd{};
-    memset(&cmd, 0, sizeof(CQDispatchCmd));
+    CQDispatchCmdLarge cmd{};
+    memset(&cmd, 0, sizeof(CQDispatchCmdLarge));
 
     CoreCoord physical_start = device->worker_core_from_logical_core(worker_core_range.start_coord);
     CoreCoord physical_end = device->worker_core_from_logical_core(worker_core_range.end_coord);
@@ -1042,7 +1058,7 @@ inline void gen_rnd_dispatcher_packed_write_cmd(IDevice* device, std::vector<uin
     }
 
     std::vector<CoreCoord> gets_data;
-    while (gets_data.size() == 0) {
+    while (gets_data.empty()) {
         for (auto& [core, one_worker] : device_data.get_data()) {
             if (device_data.core_and_bank_present(core, 0) && one_worker[0].core_type == CoreType::WORKER) {
                 if (send_to_all_g || std::rand() % 2) {

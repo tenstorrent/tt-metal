@@ -42,12 +42,12 @@ jobs:
       - name: Set up dyanmic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         timeout-minutes: 10
         with:
           name: TTMetal_build_any
       - name: Extract files
-        run: tar -xvf ttm_any.tar
+        run: tar --zstd -xvf ttm_any.tar.zst
       - uses: ./.github/actions/install-python-deps
       - name: Run pre/post regression tests in a loop
         run: |

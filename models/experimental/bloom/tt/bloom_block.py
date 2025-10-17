@@ -10,7 +10,7 @@ from functools import partial
 import models.experimental.bloom.tt.bloom_attention as bloom_attention
 import models.experimental.bloom.tt.bloom_mlp as bloom_mlp
 from typing import Optional, Tuple
-from models.utility_functions import pad_by_zero
+from models.common.utility_functions import pad_by_zero
 
 
 class TtBloomBlock(torch.nn.Module):

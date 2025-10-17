@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 import gc
@@ -10,15 +10,15 @@ from models.experimental.stable_diffusion_xl_base.tt.model_configs import ModelO
 from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 from diffusers import AutoencoderKL
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import torch_random
+from models.common.utility_functions import torch_random
 
 
 @pytest.mark.parametrize(
     "input_shape, block_id, pcc",
     [
         ((1, 512, 128, 128), 0, 0.999),
-        ((1, 512, 256, 256), 1, 0.993),
-        ((1, 512, 512, 512), 2, 0.997),
+        ((1, 512, 256, 256), 1, 0.995),
+        ((1, 512, 512, 512), 2, 0.998),
         ((1, 256, 1024, 1024), 3, 0.999),
     ],
 )

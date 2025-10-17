@@ -1,11 +1,11 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt_metal/api/tt-metalium/core_coord.hpp>
 #include <tt_metal/api/tt-metalium/work_split.hpp>
 #include <tt_metal/api/tt-metalium/host_api.hpp>
-#include <tt_metal/api/tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -20,7 +20,7 @@
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/reduction/argmax/argmax.hpp"
-#include "umd/device/types/cluster_descriptor_types.h"
+#include <umd/device/types/cluster_descriptor_types.hpp>
 
 namespace ttnn::operations::generic::test {
 
@@ -157,8 +157,8 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpUnaryReluSharded) {
     log_info(tt::LogTest, "Running generic_op unary relu sharded");
     auto act_df = tt::tt_metal::datatype_to_dataformat_converter(device_input_tensor.dtype());
     auto out_df = tt::tt_metal::datatype_to_dataformat_converter(device_output_tensor.dtype());
-    uint32_t input_tile_size = tt::tt_metal::detail::TileSize(act_df);
-    uint32_t output_tile_size = tt::tt_metal::detail::TileSize(out_df);
+    uint32_t input_tile_size = tt::tile_size(act_df);
+    uint32_t output_tile_size = tt::tile_size(out_df);
     TT_FATAL(input_tile_size == output_tile_size, "input and output tile size should be the same");
 
     uint32_t num_tile_per_core = 0;
@@ -277,30 +277,30 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpBinaryEltwiseAdd) {
     CBFormatDescriptor in0_cb_format_descriptor = {
         .buffer_index = src0_cb_index,
         .data_format = input_a_cb_data_format,
-        .page_size = tt::tt_metal::detail::TileSize(input_a_cb_data_format),
+        .page_size = tt::tile_size(input_a_cb_data_format),
     };
     CBFormatDescriptor in1_cb_format_descriptor = {
         .buffer_index = src1_cb_index,
         .data_format = input_b_cb_data_format,
-        .page_size = tt::tt_metal::detail::TileSize(input_b_cb_data_format),
+        .page_size = tt::tile_size(input_b_cb_data_format),
     };
     CBFormatDescriptor out_cb_format_descriptor = {
         .buffer_index = dst_cb_index,
         .data_format = output_cb_data_format,
-        .page_size = tt::tt_metal::detail::TileSize(output_cb_data_format),
+        .page_size = tt::tile_size(output_cb_data_format),
     };
     CBDescriptor in0_cb_descriptor = {
-        .total_size = 2 * tt::tt_metal::detail::TileSize(input_a_cb_data_format),
+        .total_size = 2 * tt::tile_size(input_a_cb_data_format),
         .core_ranges = all_cores,
         .format_descriptors = {in0_cb_format_descriptor},
     };
     CBDescriptor in1_cb_descriptor = {
-        .total_size = 2 * tt::tt_metal::detail::TileSize(input_b_cb_data_format),
+        .total_size = 2 * tt::tile_size(input_b_cb_data_format),
         .core_ranges = all_cores,
         .format_descriptors = {in1_cb_format_descriptor},
     };
     CBDescriptor output_cb_descriptor = {
-        .total_size = 2 * tt::tt_metal::detail::TileSize(output_cb_data_format),
+        .total_size = 2 * tt::tile_size(output_cb_data_format),
         .core_ranges = all_cores,
         .format_descriptors = {out_cb_format_descriptor},
     };
@@ -501,9 +501,9 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpMatmul) {
     tt::DataFormat in0_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_a.dtype());
     tt::DataFormat in1_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_b.dtype());
     tt::DataFormat output_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
-    uint32_t in0_single_tile_size = tt::tt_metal::detail::TileSize(in0_data_format);
-    uint32_t in1_single_tile_size = tt::tt_metal::detail::TileSize(in1_data_format);
-    uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_data_format);
+    uint32_t in0_single_tile_size = tt::tile_size(in0_data_format);
+    uint32_t in1_single_tile_size = tt::tile_size(in1_data_format);
+    uint32_t output_single_tile_size = tt::tile_size(output_data_format);
 
     auto all_device_cores_set = CoreRangeSet({all_cores});
 
@@ -696,20 +696,20 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpEltwiseSFPU) {
     CBFormatDescriptor input_cb_format_descriptor = {
         .buffer_index = cb_in_id,
         .data_format = input_cb_data_format,
-        .page_size = tt::tt_metal::detail::TileSize(input_cb_data_format),
+        .page_size = tt::tile_size(input_cb_data_format),
     };
     CBFormatDescriptor output_cb_format_descriptor = {
         .buffer_index = cb_out_id,
         .data_format = input_cb_data_format,
-        .page_size = tt::tt_metal::detail::TileSize(input_cb_data_format),
+        .page_size = tt::tile_size(input_cb_data_format),
     };
     CBDescriptor input_cb_descriptor = {
-        .total_size = 2 * tt::tt_metal::detail::TileSize(input_cb_data_format),
+        .total_size = 2 * tt::tile_size(input_cb_data_format),
         .core_ranges = device_cores,
         .format_descriptors = {input_cb_format_descriptor},
     };
     CBDescriptor output_cb_descriptor = {
-        .total_size = 2 * tt::tt_metal::detail::TileSize(input_cb_data_format),
+        .total_size = 2 * tt::tile_size(input_cb_data_format),
         .core_ranges = device_cores,
         .format_descriptors = {output_cb_format_descriptor},
     };

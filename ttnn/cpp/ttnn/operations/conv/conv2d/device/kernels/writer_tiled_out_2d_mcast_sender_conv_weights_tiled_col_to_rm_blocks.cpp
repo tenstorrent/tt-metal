@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dataflow_api.h"
+#include "conv_reader_common.hpp"
 
 #define ENABLE_DEBUG 0
 
@@ -22,7 +23,6 @@ void kernel_main() {
     constexpr uint32_t weight_block_height_ntiles = get_compile_time_arg_val(9);
     constexpr uint32_t weight_block_width_ntiles = get_compile_time_arg_val(10);
     constexpr uint32_t weight_stride_h = get_compile_time_arg_val(11);
-    constexpr uint32_t weight_next_block_stride_h = get_compile_time_arg_val(12);
     constexpr uint32_t weight_next_block_stride_w = get_compile_time_arg_val(13);
 
     // Bias arg. Unused if bias fusion is not enabled.
@@ -30,8 +30,33 @@ void kernel_main() {
 
     constexpr uint32_t out_num_blocks_h = get_compile_time_arg_val(15);
     constexpr uint32_t out_num_blocks_w = get_compile_time_arg_val(16);
+    constexpr uint32_t weight_block_height_num_outer_in = get_compile_time_arg_val(17);
 
-    constexpr auto s_weight_args = TensorAccessorArgs<27>();
+#ifdef SPLIT_READER
+    constexpr bool split_reader_enabled = true;
+    constexpr uint32_t cb_id_act_second_reader = get_compile_time_arg_val(3);
+    constexpr uint32_t cb_id_sharded_act = get_compile_time_arg_val(4);
+    constexpr uint32_t cb_reader_indices = get_compile_time_arg_val(5);
+    constexpr uint32_t window_outer = get_compile_time_arg_val(6);  // num_blocks_act_w
+    constexpr bool sliced_inner_dim = num_blocks_weight_h > 1;      // Derived like block sharded reader
+    constexpr uint32_t act_block_num_tiles_split_last = get_compile_time_arg_val(18);  // This is what factory passes
+    constexpr uint32_t conv_act_c_read_bytes = get_compile_time_arg_val(19);
+    constexpr uint32_t weight_size_w = get_compile_time_arg_val(20);
+    constexpr uint32_t padded_conv_act_size_w = get_compile_time_arg_val(21);
+    constexpr uint32_t act_block_w_extra_align_bytes = get_compile_time_arg_val(22);
+    constexpr bool needs_act_block_zero_out = get_compile_time_arg_val(23) == 1;
+    constexpr uint32_t dilation_h = get_compile_time_arg_val(24);
+    constexpr uint32_t dilation_w = get_compile_time_arg_val(25);
+    constexpr uint32_t stride_w = get_compile_time_arg_val(26);
+    constexpr uint32_t weight_size_h = get_compile_time_arg_val(27);  // Input filter window height
+
+    constexpr uint32_t ct_arg_idx = 28;
+#else
+    constexpr bool split_reader_enabled = false;
+    constexpr uint32_t ct_arg_idx = 18;
+#endif
+
+    constexpr auto s_weight_args = TensorAccessorArgs<ct_arg_idx>();
     constexpr auto s_bias_args = TensorAccessorArgs<s_weight_args.next_compile_time_args_offset()>();
 
     uint32_t i = 0;
@@ -40,11 +65,6 @@ void kernel_main() {
     const uint32_t bias_addr = get_arg_val<uint32_t>(i++);
     const uint32_t out_start_tile_id_w = get_arg_val<uint32_t>(i++);
     const uint32_t bias_tile_offset = get_arg_val<uint32_t>(i++);
-
-    uint32_t noop = get_arg_val<uint32_t>(i++);
-    if (noop) {
-        return;
-    }
 
     // mcast args
     const uint32_t weights_mcast_dest_noc_start_x = get_arg_val<uint32_t>(i++);
@@ -55,6 +75,36 @@ void kernel_main() {
     const uint32_t weights_mcast_num_cores = get_arg_val<uint32_t>(i++);
     const uint32_t weights_mcast_sender_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(i++));
     const uint32_t weights_mcast_receiver_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(i++));
+    const bool is_sender_core = get_arg_val<uint32_t>(i++) > 0;
+    const bool skip_work = get_arg_val<uint32_t>(i++) > 0;
+
+    if (skip_work && !split_reader_enabled) {
+        return;
+    }
+
+#ifdef SPLIT_READER
+#ifdef CONFIG_TENSOR_IN_DRAM
+    cb_wait_front(cb_reader_indices, 1);
+#endif
+    if constexpr (needs_act_block_zero_out) {
+        zero_out_tiles<cb_id_act_second_reader>();
+    }
+    volatile tt_l1_ptr uint32_t* packed_reader_indices_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_reader_indices));
+
+    // Initial setup for second reader (starting from second reader's data)
+    uint32_t start_reader_idx = (uint32_t)(packed_reader_indices_ptr[0] & 0xffff) + 1;
+    uint32_t reader_idx = start_reader_idx;
+
+    constexpr uint32_t stride_w_bytes = dilation_w * conv_act_c_read_bytes;
+    constexpr uint32_t coalesced_read_bytes =
+        ((dilation_w == 1) ? weight_size_w * conv_act_c_read_bytes : conv_act_c_read_bytes);
+    constexpr uint32_t window_outer_offset = padded_conv_act_size_w * conv_act_c_read_bytes * dilation_h;
+    constexpr uint32_t stride_h_bytes = padded_conv_act_size_w * conv_act_c_read_bytes * dilation_h;
+
+    const uint32_t act_l1_read_addr = get_read_ptr(cb_id_sharded_act);
+
+#endif
 
 #ifndef SKIP_MCAST
     // Set ur local VALID value, to be mcasted to destinations flag address after the data has been mcasted
@@ -88,7 +138,7 @@ void kernel_main() {
 
     // Pre-compute constants used in tile_id calculation (preserving exact original logic)
     constexpr uint32_t tiles_per_full_block =
-        num_blocks_weight_h * weight_block_height_ntiles * weight_block_height_num_outer * weight_block_width_ntiles;
+        num_blocks_weight_h * weight_block_height_ntiles * weight_block_height_num_outer_in * weight_block_width_ntiles;
     constexpr uint32_t height_stride_factor = weight_block_height_ntiles * weight_stride_h;
 
     // OUTER most loop is looping over out blocks in width dim because blocks from compute are in col major order.
@@ -96,10 +146,41 @@ void kernel_main() {
     uint32_t weight_start_tile_id = out_start_tile_id_w;
     for (uint32_t bw = 0; bw < out_num_blocks_w; bw++) {
         for (uint32_t bh = 0; bh < out_num_blocks_h; bh++) {
+#ifdef SPLIT_READER
+            uint32_t reader_offset = act_l1_read_addr;
+#endif
             for (uint32_t height_block_index = 0; height_block_index < num_blocks_weight_h; height_block_index++) {
+#ifdef SPLIT_READER
+                noc_async_read_one_packet_set_state(get_noc_addr(act_l1_read_addr), coalesced_read_bytes);
+                reader_idx = start_reader_idx;
+                cb_reserve_back(cb_id_act_second_reader, act_block_num_tiles_split_last);
+                if (is_sender_core) {
+                    uint32_t l1_write_addr_act = get_write_ptr(cb_id_act_second_reader);
+                    read_activation_data<
+                        sliced_inner_dim,
+                        dilation_w,
+                        coalesced_read_bytes,
+                        conv_act_c_read_bytes,
+                        act_block_w_extra_align_bytes,
+                        stride_w_bytes,
+                        weight_size_w,
+                        stride_w,
+                        weight_size_h,
+                        window_outer_offset>(
+                        packed_reader_indices_ptr,
+                        reader_offset,
+                        l1_write_addr_act,
+                        reader_idx,
+                        act_l1_read_addr,
+                        stride_h_bytes);
+                }
+                cb_push_back(cb_id_act_second_reader, act_block_num_tiles_split_last);
+#endif
+                if (skip_work) {
+                    continue;
+                }
                 // Compute height block offset once per outer loop iteration
                 const uint32_t height_block_offset = height_block_index * height_stride_factor;
-
                 for (uint32_t weight_tile_h_outer_i = 0; weight_tile_h_outer_i < weight_block_height_num_outer;
                      weight_tile_h_outer_i++) {
                     cb_reserve_back(cb_id_weight, weight_block_num_tiles);
@@ -161,7 +242,10 @@ void kernel_main() {
                     cb_push_back(cb_id_weight, weight_block_num_tiles);
                 }  // for weight_block_height_num_outer
             }
-
+#ifdef SPLIT_READER
+            // Update reader index for next iteration (split reader increment)
+            start_reader_idx = reader_idx + static_cast<uint32_t>(packed_reader_indices_ptr[reader_idx] & 0xffff) + 1;
+#endif
 #ifdef FUSE_BIAS
             if (load_bias) {
                 cb_reserve_back(bias_cb_id, bias_ntiles);

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -47,6 +47,9 @@
 #include "tt_metal/test_utils/stimulus.hpp"
 #include <tt-metalium/distributed.hpp>
 
+// Access to internal API: ProgramImpl::validate_circular_buffer_region
+#include "tt_metal/impl/program/program_impl.hpp"
+
 namespace tt::tt_metal {
 
 constexpr uint32_t k_local_l1_size = 3200;
@@ -61,7 +64,7 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceCBAllocation) {
     DeviceAddr l1_max_size = mesh_device->get_devices()[0]->l1_size_per_core();
     DeviceAddr l1_total_size = l1_max_size - l1_unreserved_base;
     mesh_device->load_sub_device_manager(sub_device_manager_1);
-    uint32_t global_buffer_size = l1_total_size - k_local_l1_size * 2;
+    uint32_t global_buffer_size = l1_total_size - (k_local_l1_size * 2);
     ShardSpecBuffer global_shard_spec_buffer =
         ShardSpecBuffer(sharded_cores_1, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {sharded_cores_1.num_cores(), 1});
 
@@ -83,13 +86,13 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceCBAllocation) {
             .set_page_size(src0_cb_index, hal::get_l1_alignment());
     auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, sharded_cores_1, cb_src0_config);
 
-    program.allocate_circular_buffers(mesh_device.get());
-    detail::ValidateCircularBufferRegion(program, mesh_device.get());
+    program.impl().allocate_circular_buffers(mesh_device.get());
+    program.impl().validate_circular_buffer_region(mesh_device.get());
     UpdateCircularBufferTotalSize(program, cb_src0, k_local_l1_size * 3);
-    program.allocate_circular_buffers(mesh_device.get());
-    EXPECT_THROW(detail::ValidateCircularBufferRegion(program, mesh_device.get()), std::exception);
+    program.impl().allocate_circular_buffers(mesh_device.get());
+    EXPECT_THROW(program.impl().validate_circular_buffer_region(mesh_device.get()), std::exception);
     global_buffer.reset();
-    detail::ValidateCircularBufferRegion(program, mesh_device.get());
+    program.impl().validate_circular_buffer_region(mesh_device.get());
     ShardSpecBuffer local_shard_spec_buffer =
         ShardSpecBuffer(sharded_cores_1, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {sharded_cores_1.num_cores(), 1});
     distributed::DeviceLocalBufferConfig local_config_2 = {
@@ -100,10 +103,10 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceCBAllocation) {
     };
 
     auto local_buffer = distributed::MeshBuffer::create(replicated_config_1, local_config_2, mesh_device.get());
-    EXPECT_THROW(detail::ValidateCircularBufferRegion(program, mesh_device.get()), std::exception);
+    EXPECT_THROW(program.impl().validate_circular_buffer_region(mesh_device.get()), std::exception);
     UpdateCircularBufferTotalSize(program, cb_src0, k_local_l1_size / 4);
-    program.allocate_circular_buffers(mesh_device.get());
-    detail::ValidateCircularBufferRegion(program, mesh_device.get());
+    program.impl().allocate_circular_buffers(mesh_device.get());
+    program.impl().validate_circular_buffer_region(mesh_device.get());
 }
 
 void test_sub_device_synchronization(distributed::MeshDevice* device) {
@@ -141,10 +144,10 @@ void test_sub_device_synchronization(distributed::MeshDevice* device) {
     device->load_sub_device_manager(sub_device_manager);
 
     auto [program, syncer_core, global_semaphore] = create_single_sync_program(device, sub_device_2);
-    distributed::MeshWorkload mesh_workload = distributed::CreateMeshWorkload();
+    distributed::MeshWorkload mesh_workload;
     distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(device->shape().dims());
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    distributed::AddProgramToMeshWorkload(mesh_workload, std::move(program), device_range);
+    mesh_workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(device->mesh_command_queue(), mesh_workload, false);
     device->set_sub_device_stall_group(sub_device_ids_to_block);
 
@@ -158,7 +161,7 @@ void test_sub_device_synchronization(distributed::MeshDevice* device) {
 
     // Test record event won't cause a stall
 
-    auto event = distributed::EnqueueRecordEventToHost(device->mesh_command_queue());
+    auto event = device->mesh_command_queue().enqueue_record_event_to_host();
     distributed::Synchronize(device, std::nullopt);
 
     // Test blocking read buffer doesn't stall
@@ -206,25 +209,25 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceBasicPrograms) {
         auto [waiter_program, syncer_program, incrementer_program, global_sem] =
             create_basic_sync_program(mesh_device.get(), sub_device_1, sub_device_2);
 
-        distributed::MeshWorkload waiter_mesh_workload = distributed::CreateMeshWorkload();
-        distributed::AddProgramToMeshWorkload(waiter_mesh_workload, std::move(waiter_program), device_range);
+        distributed::MeshWorkload waiter_mesh_workload;
+        waiter_mesh_workload.add_program(device_range, std::move(waiter_program));
         distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), waiter_mesh_workload, false);
 
         mesh_device->set_sub_device_stall_group({{SubDeviceId{0}}});
 
         // Test blocking on one sub-device
-        distributed::MeshWorkload syncer_mesh_workload = distributed::CreateMeshWorkload();
-        distributed::AddProgramToMeshWorkload(syncer_mesh_workload, std::move(syncer_program), device_range);
+        distributed::MeshWorkload syncer_mesh_workload;
+        syncer_mesh_workload.add_program(device_range, std::move(syncer_program));
         distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), syncer_mesh_workload, true);
 
-        distributed::MeshWorkload incrementer_mesh_workload = distributed::CreateMeshWorkload();
-        distributed::AddProgramToMeshWorkload(incrementer_mesh_workload, std::move(incrementer_program), device_range);
+        distributed::MeshWorkload incrementer_mesh_workload;
+        incrementer_mesh_workload.add_program(device_range, std::move(incrementer_program));
         distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), incrementer_mesh_workload, false);
 
         mesh_device->reset_sub_device_stall_group();
     }
     distributed::Synchronize(mesh_device.get(), std::nullopt);
-    detail::ReadDeviceProfilerResults(mesh_device->get_devices()[0]);
+    ReadMeshDeviceProfilerResults(*mesh_device);
 }
 
 TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceBasicProgramsReuse) {
@@ -249,19 +252,19 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceBasicProgramsReuse) {
         auto [waiter_program, syncer_program, incrementer_program, global_sem] =
             create_basic_sync_program(mesh_device.get(), sub_device_1, sub_device_2);
 
-        distributed::MeshWorkload waiter_mesh_workload = distributed::CreateMeshWorkload();
-        distributed::AddProgramToMeshWorkload(waiter_mesh_workload, std::move(waiter_program), device_range);
+        distributed::MeshWorkload waiter_mesh_workload;
+        waiter_mesh_workload.add_program(device_range, std::move(waiter_program));
         distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), waiter_mesh_workload, false);
 
         mesh_device->set_sub_device_stall_group({{SubDeviceId{0}}});
 
         // Test blocking on one sub-device
-        distributed::MeshWorkload syncer_mesh_workload = distributed::CreateMeshWorkload();
-        distributed::AddProgramToMeshWorkload(syncer_mesh_workload, std::move(syncer_program), device_range);
+        distributed::MeshWorkload syncer_mesh_workload;
+        syncer_mesh_workload.add_program(device_range, std::move(syncer_program));
         distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), syncer_mesh_workload, true);
 
-        distributed::MeshWorkload incrementer_mesh_workload = distributed::CreateMeshWorkload();
-        distributed::AddProgramToMeshWorkload(incrementer_mesh_workload, std::move(incrementer_program), device_range);
+        distributed::MeshWorkload incrementer_mesh_workload;
+        incrementer_mesh_workload.add_program(device_range, std::move(incrementer_program));
         distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), incrementer_mesh_workload, false);
 
         mesh_device->reset_sub_device_stall_group();
@@ -275,25 +278,25 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceBasicProgramsReuse) {
         auto [waiter_program, syncer_program, incrementer_program, global_sem] =
             create_basic_sync_program(mesh_device.get(), sub_device_1, sub_device_2);
 
-        distributed::MeshWorkload waiter_mesh_workload = distributed::CreateMeshWorkload();
-        distributed::AddProgramToMeshWorkload(waiter_mesh_workload, std::move(waiter_program), device_range);
+        distributed::MeshWorkload waiter_mesh_workload;
+        waiter_mesh_workload.add_program(device_range, std::move(waiter_program));
         distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), waiter_mesh_workload, false);
 
         mesh_device->set_sub_device_stall_group({{SubDeviceId{1}}});
 
         // Test blocking on one sub-device
-        distributed::MeshWorkload syncer_mesh_workload = distributed::CreateMeshWorkload();
-        distributed::AddProgramToMeshWorkload(syncer_mesh_workload, std::move(syncer_program), device_range);
+        distributed::MeshWorkload syncer_mesh_workload;
+        syncer_mesh_workload.add_program(device_range, std::move(syncer_program));
         distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), syncer_mesh_workload, true);
 
-        distributed::MeshWorkload incrementer_mesh_workload = distributed::CreateMeshWorkload();
-        distributed::AddProgramToMeshWorkload(incrementer_mesh_workload, std::move(incrementer_program), device_range);
+        distributed::MeshWorkload incrementer_mesh_workload;
+        incrementer_mesh_workload.add_program(device_range, std::move(incrementer_program));
         distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), incrementer_mesh_workload, false);
 
         mesh_device->reset_sub_device_stall_group();
     }
     distributed::Synchronize(mesh_device.get(), std::nullopt);
-    detail::ReadDeviceProfilerResults(mesh_device->get_devices()[0]);
+    ReadMeshDeviceProfilerResults(*mesh_device);
 }
 
 // Ensure each core in the sub device aware of their own logical coordinate. Same binary used in multiple sub devices.
@@ -335,12 +338,12 @@ TEST_F(UnitMeshCQSingleCardProgramFixture, TensixTestSubDeviceMyLogicalCoordinat
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = compile_args});
 
-    distributed::MeshWorkload mesh_workload_1 = distributed::CreateMeshWorkload();
-    distributed::AddProgramToMeshWorkload(mesh_workload_1, std::move(program_1), device_range);
+    distributed::MeshWorkload mesh_workload_1;
+    mesh_workload_1.add_program(device_range, std::move(program_1));
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), mesh_workload_1, false);
 
-    distributed::MeshWorkload mesh_workload_2 = distributed::CreateMeshWorkload();
-    distributed::AddProgramToMeshWorkload(mesh_workload_2, std::move(program_2), device_range);
+    distributed::MeshWorkload mesh_workload_2;
+    mesh_workload_2.add_program(device_range, std::move(program_2));
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), mesh_workload_2, false);
 
     distributed::Finish(mesh_device->mesh_command_queue());
@@ -388,8 +391,8 @@ TEST_F(UnitMeshCQSingleCardProgramFixture, TensixTestSubDeviceMyLogicalCoordinat
                 .noc = NOC::RISCV_0_default,
                 .compile_args = compile_args});
 
-        distributed::MeshWorkload mesh_workload = distributed::CreateMeshWorkload();
-        distributed::AddProgramToMeshWorkload(mesh_workload, std::move(program), device_range);
+        distributed::MeshWorkload mesh_workload;
+        mesh_workload.add_program(device_range, std::move(program));
         distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), mesh_workload, false);
 
         distributed::Finish(mesh_device->mesh_command_queue());
@@ -450,12 +453,12 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceProgramReuseRtas) {
             };
 
             // Enqueue twice to ensure waits are correct.
-            distributed::MeshWorkload mesh_workload_1 = distributed::CreateMeshWorkload();
-            distributed::AddProgramToMeshWorkload(mesh_workload_1, create_program_with_args(), device_range);
+            distributed::MeshWorkload mesh_workload_1;
+            mesh_workload_1.add_program(device_range, create_program_with_args());
             distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), mesh_workload_1, false);
 
-            distributed::MeshWorkload mesh_workload_2 = distributed::CreateMeshWorkload();
-            distributed::AddProgramToMeshWorkload(mesh_workload_2, create_program_with_args(), device_range);
+            distributed::MeshWorkload mesh_workload_2;
+            mesh_workload_2.add_program(device_range, create_program_with_args());
             distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), mesh_workload_2, false);
 
             distributed::Synchronize(mesh_device.get(), std::nullopt);
@@ -503,16 +506,15 @@ TEST_F(UnitMeshMultiCQSingleDeviceFixture, TensixTestSubDeviceCQOwnership) {
         return program;
     };
 
-    distributed::MeshWorkload mesh_workload_1 = distributed::CreateMeshWorkload();
-    distributed::AddProgramToMeshWorkload(mesh_workload_1, create_program_1(), device_range);
+    distributed::MeshWorkload mesh_workload_1;
+    mesh_workload_1.add_program(device_range, create_program_1());
 
-    distributed::MeshWorkload mesh_workload_2 = distributed::CreateMeshWorkload();
-    distributed::AddProgramToMeshWorkload(mesh_workload_2, create_program_2(), device_range);
+    distributed::MeshWorkload mesh_workload_2;
+    mesh_workload_2.add_program(device_range, create_program_2());
 
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), mesh_workload_1, false);
     std::array sub_device_ids_for_event = {SubDeviceId{1}};
-    auto early_event =
-        distributed::EnqueueRecordEventToHost(mesh_device->mesh_command_queue(1), sub_device_ids_for_event);
+    auto early_event = mesh_device->mesh_command_queue(1).enqueue_record_event_to_host(sub_device_ids_for_event);
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(1), mesh_workload_2, false);
 
     // CQ 0 owns sub device 1, CQ 1 owns sub device 2.
@@ -529,15 +531,15 @@ TEST_F(UnitMeshMultiCQSingleDeviceFixture, TensixTestSubDeviceCQOwnership) {
     EXPECT_THROW(
         distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), mesh_workload_2, false), std::exception);
     // Waiting on an event before the last program was queued does not allow transferring ownership of sub device 2.
-    distributed::EnqueueWaitForEvent(mesh_device->mesh_command_queue(0), early_event);
+    mesh_device->mesh_command_queue(0).enqueue_wait_for_event(early_event);
     EXPECT_THROW(
         distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), mesh_workload_2, false), std::exception);
 
     // Later event allows transferring ownership of sub device 2 to CQ 0
-    auto event1 = distributed::EnqueueRecordEventToHost(mesh_device->mesh_command_queue(1), sub_device_ids_for_event);
-    auto event2 = distributed::EnqueueRecordEventToHost(mesh_device->mesh_command_queue(1), sub_device_ids_for_event);
+    auto event1 = mesh_device->mesh_command_queue(1).enqueue_record_event_to_host(sub_device_ids_for_event);
+    auto event2 = mesh_device->mesh_command_queue(1).enqueue_record_event_to_host(sub_device_ids_for_event);
     log_info(tt::LogTest, "waiting on event2");
-    distributed::EnqueueWaitForEvent(mesh_device->mesh_command_queue(0), event2);
+    mesh_device->mesh_command_queue(0).enqueue_wait_for_event(event2);
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), mesh_workload_2, false);
 
     distributed::Synchronize(mesh_device.get(), std::nullopt);

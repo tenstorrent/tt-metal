@@ -17,7 +17,7 @@ from tests.tt_eager.python_api_testing.sweep_tests import (
 from tests.tt_eager.python_api_testing.sweep_tests.run_pytorch_ci_tests import (
     run_single_pytorch_test,
 )
-from models.utility_functions import is_wormhole_b0, skip_for_grayskull
+from models.common.utility_functions import is_wormhole_b0
 
 shapes = [
     [[1, 1, 32, 32]],  # Single core
@@ -191,11 +191,9 @@ class TestEltwiseUnary:
             test_args,
         )
 
-    @pytest.mark.parametrize("fast_and_approx", [True, False])
     def test_run_eltwise_rsqrt_op(
         self,
         input_shapes,
-        fast_and_approx,
         device,
         function_level_defaults,
         input_mem_config,
@@ -205,7 +203,6 @@ class TestEltwiseUnary:
             generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, low=0, high=1e8), torch.bfloat16)
         ]
         test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
-        test_args["fast_and_approx"] = fast_and_approx
         comparison_func = comparison_funcs.comp_pcc
         run_single_pytorch_test(
             f"eltwise-rsqrt",
@@ -593,7 +590,6 @@ class TestEltwiseUnary:
         )
 
     @pytest.mark.parametrize("round_off_method", ["floor"])
-    @skip_for_grayskull("#ToDo: GS implementation needs to be done for Floor")
     def test_run_eltwise_round_off_ops(
         self,
         round_off_method,
@@ -649,7 +645,6 @@ class TestEltwiseUnary:
             test_args,
         )
 
-    @skip_for_grayskull("#ToDo: GS implementation needs to be done for remainder op")
     def test_run_unary_remainder(
         self,
         input_shapes,
@@ -680,7 +675,6 @@ class TestEltwiseUnary:
             ttnn_op=True,
         )
 
-    @skip_for_grayskull("#ToDo: GS implementation needs to be done for fmod op")
     def test_run_eltwise_unary_fmod(
         self,
         input_shapes,
@@ -871,7 +865,6 @@ class TestEltwiseUnary:
         )
 
     @pytest.mark.parametrize("weight", [-0.5, 1.0, 0.5])
-    @skip_for_grayskull()
     def test_run_eltwise_prelu(
         self,
         input_shapes,
@@ -1191,7 +1184,6 @@ class TestEltwiseUnary:
             test_args,
         )
 
-    @skip_for_grayskull("Softplus kernel not currently available for GS")
     @pytest.mark.parametrize("beta", [1.0, 5.0])
     @pytest.mark.parametrize("threshold", [10.0, 20.0])
     def test_run_eltwise_softplus(

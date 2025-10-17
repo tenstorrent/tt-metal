@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -8,7 +8,7 @@ from tests.sweep_framework.sweeps.conv2d.short.conv2d_short_sweep import (
     failing_parameters_conv1d as failing_parameters_ttnn_pytorch,
 )
 
-from models.utility_functions import (
+from models.common.utility_functions import (
     is_wormhole_b0,
 )
 

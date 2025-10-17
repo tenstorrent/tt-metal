@@ -2,15 +2,17 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from pathlib import Path
+
 import pytest
 
 import ttnn
+from models.common.utility_functions import disable_persistent_kernel_cache
 from models.demos.t3000.falcon40b.tests.test_falcon_end_to_end import run_test_FalconCausalLM_end_to_end
 from models.demos.t3000.falcon40b.tt.model_config import get_model_config
-from models.utility_functions import disable_persistent_kernel_cache, skip_for_grayskull
+from models.tt_transformers.tt.common import get_hf_tt_cache_path
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "num_loops",
     (10,),
@@ -62,7 +64,6 @@ def test_FalconCausalLM_prefill_end_to_end_t3000_ci_loops_10(
     data_type,
     memcfg,
     num_loops,
-    model_location_generator,
     get_tt_cache_path,
     t3k_mesh_device,
 ):
@@ -82,9 +83,7 @@ def test_FalconCausalLM_prefill_end_to_end_t3000_ci_loops_10(
     if compute_grid_size.x < model_config["MAX_GRID_SIZE"][0] or compute_grid_size.y < model_config["MAX_GRID_SIZE"][1]:
         pytest.skip(f"Requires grid size of at least {model_config['MAX_GRID_SIZE']} to run")
 
-    tt_cache_path = get_tt_cache_path(
-        model_version, model_subdir="Falcon", default_dir=model_config["DEFAULT_CACHE_PATH"]
-    )
+    tt_cache_path = Path(get_hf_tt_cache_path(model_version))
 
     assert llm_mode == "prefill" and num_layers == 60, "PCC tresholds only valid for prefill and 60 layers."
 
@@ -138,5 +137,4 @@ def test_FalconCausalLM_prefill_end_to_end_t3000_ci_loops_10(
         model_config,
         num_loops,
         tt_cache_path,
-        model_location_generator,
     )

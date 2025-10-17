@@ -10,8 +10,15 @@ from loguru import logger
 
 import ttnn
 from models.experimental.efficientnetb0.runner.performant_runner import EfficientNetb0PerformantRunner
-from models.utility_functions import run_for_wormhole_b0
+from models.common.utility_functions import run_for_wormhole_b0
 from models.demos.utils.common_demo_utils import get_mesh_mappers
+
+try:
+    from tracy import signpost
+
+    use_signpost = True
+except ModuleNotFoundError:
+    use_signpost = False
 
 
 def run_efficientnetb0_inference(
@@ -41,6 +48,8 @@ def run_efficientnetb0_inference(
     input_shape = (batch_size, 3, *resolution)
     torch_input_tensor = torch.randn(input_shape, dtype=torch.float32)
 
+    if use_signpost:
+        signpost(header="start")
     t0 = time.time()
     for _ in range(10):
         _ = performant_runner.run(torch_input_tensor)
@@ -48,6 +57,8 @@ def run_efficientnetb0_inference(
     # EfficientNetB0 model facing Low FPS using ttnn.synchronize_device
     ttnn.synchronize_device(device)
     t1 = time.time()
+    if use_signpost:
+        signpost(header="stop")
 
     performant_runner.release()
     inference_time_avg = round((t1 - t0) / 10, 6)

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,7 +6,6 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -29,6 +28,7 @@ static SliceWriteRuntimeArgs get_slice_write_runtime_args_rm(
     const Tensor& input_tensor,
     const Tensor& output_tensor,
     const ttnn::Shape& output_tensor_start,
+    const ttnn::Shape& stride,
     uint32_t num_cores_total,
     uint32_t num_cores,
     uint32_t num_cores_y,
@@ -49,11 +49,13 @@ static SliceWriteRuntimeArgs get_slice_write_runtime_args_rm(
 
     uint32_t output_row_size_bytes = output_shape[-1] * input_tensor.element_size();
     uint32_t input_row_size_bytes = input_shape[-1] * input_tensor.element_size();
+    bool strided = std::any_of(stride.cbegin(), stride.cend(), [](int val) { return val != 1; });
 
     std::uint32_t num_dims = static_cast<std::uint32_t>(input_shape.rank());
     std::vector<uint32_t> num_input_sticks_per_dim(num_dims);
     std::vector<uint32_t> num_output_sticks_per_dim(num_dims);
     std::vector<uint32_t> id_per_dim(num_dims);
+    std::vector<uint32_t> rev_stride(num_dims);
 
     std::vector<uint32_t> accumulated_total_per_dim(num_dims);
 
@@ -62,11 +64,21 @@ static SliceWriteRuntimeArgs get_slice_write_runtime_args_rm(
     num_input_sticks_per_dim[0] = 1;
     num_output_sticks_per_dim[0] = 0;
     accumulated_total_per_dim[0] = 1;
+    rev_stride[0] = stride[num_dims - 1];
 
     for (int32_t i = 1; i < num_dims; i++) {
         uint32_t num_unpadded_dim = input_shape[-(i + 1)];
         uint32_t num_total_dim = output_shape[-(i + 1)];
-        uint32_t num_padded_dim = (num_total_dim - num_unpadded_dim) * accumulated_total_per_dim[i - 1];
+        rev_stride[i] = stride[num_dims - (i + 1)];
+        uint32_t num_padded_dim;
+        if (strided) {
+            uint32_t dims_traversed = (rev_stride[i] * (num_unpadded_dim - 1));
+            uint32_t num_dims_to_skip = (num_total_dim - dims_traversed);
+            num_padded_dim = num_dims_to_skip * accumulated_total_per_dim[i - 1];
+        } else {
+            num_padded_dim = (num_total_dim - num_unpadded_dim) * accumulated_total_per_dim[i - 1];
+        }
+
         num_input_sticks_per_dim[i] = num_unpadded_dim;
         num_output_sticks_per_dim[i] = num_padded_dim;
         accumulated_total_per_dim[i] = num_total_dim * accumulated_total_per_dim[i - 1];
@@ -85,18 +97,19 @@ static SliceWriteRuntimeArgs get_slice_write_runtime_args_rm(
         accumulated_str += std::to_string(i) + ", ";
     }
 
+    std::string rev_stride_str = "";
+    for (auto& i : rev_stride) {
+        rev_stride_str += std::to_string(i) + ", ";
+    }
+
     using namespace tt::tt_metal::experimental;
     auto src_buffer_alignment = input_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
                                     ? hal::get_dram_alignment()
                                     : hal::get_l1_alignment();
     uint32_t input_row_size_bytes_offset = tt::round_up(input_row_size_bytes, src_buffer_alignment);
-    TT_FATAL(
-        output_tensor_start[-1] == 0,
-        "slice_write expects output start for the last dimension to be 0. Got {}",
-        output_tensor_start[-1]);
 
     std::vector<uint32_t> common_writer_kernel_args = {
-        output_buffer->address() + output_tensor_start[-1] * output_tensor.element_size(),
+        output_buffer->address(),
         output_row_size_bytes,
         input_row_size_bytes,
         input_row_size_bytes_offset,
@@ -130,19 +143,22 @@ static SliceWriteRuntimeArgs get_slice_write_runtime_args_rm(
         // issue more reads before calling barrier
         uint32_t num_sticks_per_core_read = 0, num_read_per_barrier = 0;
         if (num_sticks_per_core != 0) {
-            auto num_sticks_per_core_pad32 = num_sticks_per_core + (32 - num_sticks_per_core % 32) % 32;
+            auto num_sticks_per_core_pad32 = num_sticks_per_core + ((32 - num_sticks_per_core % 32) % 32);
             num_sticks_per_core_read =
                 tt::tt_metal::merge_num_sticks_to_read(num_sticks_per_core_pad32, input_row_size_bytes, max_read_size);
             num_read_per_barrier = num_sticks_per_core_pad32 / num_sticks_per_core_read;
         }
-        id_per_dim[0] = num_sticks_read % num_input_sticks_per_dim[0];
-        uint32_t unpadded_written = num_sticks_read / num_input_sticks_per_dim[0];
+        id_per_dim[0] = num_sticks_read %
+                        num_input_sticks_per_dim[0];  // if num_input_sticks_per_dim[0] is always 1, this is always 0
+        uint32_t unpadded_written =
+            num_sticks_read /
+            num_input_sticks_per_dim[0];  // if num_input_sticks_per_dim[0] is always 1, this is always num_sticks_read?
         uint32_t start_id = id_per_dim[0] + start_offset;
 
         for (uint32_t j = 1; j < num_dims; j++) {
             id_per_dim[j] = unpadded_written % num_input_sticks_per_dim[j];
             unpadded_written = unpadded_written / num_input_sticks_per_dim[j];
-            start_id += id_per_dim[j] * accumulated_total_per_dim[j - 1];
+            start_id += id_per_dim[j] * accumulated_total_per_dim[j - 1] * rev_stride[j];
         }
         std::vector<uint32_t> writer_kernel_args = common_writer_kernel_args;
 
@@ -152,6 +168,7 @@ static SliceWriteRuntimeArgs get_slice_write_runtime_args_rm(
         writer_kernel_args[addr_offset++] = num_sticks_per_core_read;
         writer_kernel_args[addr_offset] = num_read_per_barrier;
         writer_kernel_args.insert(writer_kernel_args.end(), id_per_dim.begin(), id_per_dim.end());
+        writer_kernel_args.insert(writer_kernel_args.end(), rev_stride.begin(), rev_stride.end());
 
         std::vector<uint32_t> reader_kernel_args = {
             input_buffer->address(),
@@ -198,7 +215,6 @@ static SliceWriteRuntimeArgs get_slice_write_runtime_args_rm_sharded_input(
 
     bool rm_orientation = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
     bool is_block_sharded = input_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
-    uint32_t num_cores_channels = get_num_cores_channels_from_sharded_tensor(input_tensor);
 
     uint32_t output_row_size_bytes = output_shape[-1] * input_tensor.element_size();
     uint32_t input_row_size_bytes = input_shard_shape[1] * input_tensor.element_size();
@@ -258,7 +274,7 @@ static SliceWriteRuntimeArgs get_slice_write_runtime_args_rm_sharded_input(
 
     log_debug(tt::LogOp, "Output Buffer adddress: {}", output_buffer->address());
     std::vector<uint32_t> common_writer_kernel_args = {
-        output_buffer->address() + output_tensor_start[-1] * output_tensor.element_size(),
+        output_buffer->address() + (output_tensor_start[-1] * output_tensor.element_size()),
         output_row_size_bytes,
         input_row_size_bytes,
         input_row_size_bytes_offset,
@@ -418,10 +434,8 @@ static operation::ProgramWithCallbacks slice_write_rm_sharded_input_multi_core(
 
     auto input_cb_handle = tt::tt_metal::CreateCircularBuffer(program, input_cores, cb_src0_config);
 
-    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-
     std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)src0_cb_index};
-    std::vector<uint32_t> writer_compile_time_args_vec = {(std::uint32_t)src0_cb_index};
+    std::vector<uint32_t> writer_compile_time_args_vec = {(std::uint32_t)src0_cb_index, 0};
     tt::tt_metal::TensorAccessorArgs(dst_buffer).append_to(writer_compile_time_args_vec);
 
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
@@ -496,7 +510,7 @@ static SliceWriteRuntimeArgs get_slice_write_runtime_args_tiled_sharded_input(
     log_debug(tt::LogOp, "Slice Write Output Shape: {}", output_shape);
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
-    uint32_t input_single_tile_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
+    uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
 
     auto shard_spec = input_tensor.shard_spec().value();
     auto input_cores = shard_spec.grid;
@@ -669,7 +683,7 @@ static operation::ProgramWithCallbacks slice_write_tiled_sharded_input_multi_cor
     }
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
-    uint32_t input_single_tile_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
+    uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
 
     log_debug(tt::LogOp, "Slice Write Input Shape : {} ,Actual Input Shape: {}", input_shape, input_shape);
@@ -732,10 +746,8 @@ static operation::ProgramWithCallbacks slice_write_tiled_sharded_input_multi_cor
         input_cb_data_format,
         input.buffer());
 
-    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-
     std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)src0_cb_index};
-    std::vector<uint32_t> writer_compile_time_args_vec = {(std::uint32_t)src0_cb_index};
+    std::vector<uint32_t> writer_compile_time_args_vec = {(std::uint32_t)src0_cb_index, 0};
     tt::tt_metal::TensorAccessorArgs(dst_buffer).append_to(writer_compile_time_args_vec);
     std::map<std::string, std::string> writer_defines;
     if (num_tiles_channel_per_core * TILE_WIDTH * num_cores_channels > output_shape[-1]) {
@@ -799,7 +811,8 @@ static operation::ProgramWithCallbacks slice_write_rm_interleaved_multi_core(
     const Tensor& input,
     const Tensor& output,
     const ttnn::Shape& output_tensor_start,
-    const ttnn::Shape& output_tensor_end) {
+    const ttnn::Shape& output_tensor_end,
+    const ttnn::Shape& stride) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
     // This should allocate a DRAM buffer on the device
     tt::tt_metal::IDevice* device = input.device();
@@ -825,10 +838,6 @@ static operation::ProgramWithCallbacks slice_write_rm_interleaved_multi_core(
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
-    bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-
-    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-
     uint32_t max_read_size = 4096;
 
     auto src_buffer_alignment = input.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
@@ -841,13 +850,16 @@ static operation::ProgramWithCallbacks slice_write_rm_interleaved_multi_core(
 
     // if begins is not aligned then we need to pad the cb size, so that we can read from the nearest aligned address
     uint32_t begins_bytes = output_tensor_start[-1] * input.element_size();
-    uint32_t misalignment = begins_bytes % src_buffer_alignment;
+    uint32_t page_alignment_offset = begins_bytes % src_buffer_alignment;
 
-    if (misalignment != 0) {
-        alignment *= 2;
+    // reader defines
+    std::map<std::string, std::string> reader_defines;
+    if (page_alignment_offset != 0) {
+        reader_defines["LAST_DIM"] = "1";
     }
 
-    const uint32_t src0_cb_index = tt::CBIndex::c_0;
+    const uint32_t src0_cb_index = tt::CBIndex::c_0;  // cb for reading in input
+    const uint32_t dst0_cb_index = tt::CBIndex::c_1;  // cb for reading in output pages for last dim striding
     uint32_t cb_page_size = tt::round_up(input_row_size_bytes, alignment);
 
     uint32_t num_input_pages = num_sticks_per_core_group_1 > num_sticks_per_core_group_2 ? num_sticks_per_core_group_1
@@ -865,8 +877,26 @@ static operation::ProgramWithCallbacks slice_write_rm_interleaved_multi_core(
             .set_page_size(src0_cb_index, cb_page_size);
     tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src0_config);
 
-    std::vector<uint32_t> reader_compile_time_args_vec = {(std::uint32_t)src0_cb_index};
-    std::vector<uint32_t> writer_compile_time_args_vec = {(std::uint32_t)src0_cb_index};
+    std::map<std::string, std::string> writer_defines;
+    if (stride[-1] != 1) {
+        writer_defines["LAST_DIM_STRIDED"] = "1";
+        uint32_t output_row_size_bytes = input_padded_shape[-1] * input.element_size();
+        cb_page_size = tt::round_up(output_row_size_bytes, alignment);
+        tt::tt_metal::CircularBufferConfig cb_dst0_config =
+            tt::tt_metal::CircularBufferConfig(
+                num_read_per_barrier * 2 * cb_page_size,
+                {{dst0_cb_index, cb_data_format}})  // input/output data_formats should be the same
+                .set_page_size(dst0_cb_index, cb_page_size);
+        tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_dst0_config);
+    }
+
+    std::vector<uint32_t> reader_compile_time_args_vec = {(std::uint32_t)src0_cb_index, page_alignment_offset};
+    std::vector<uint32_t> writer_compile_time_args_vec = {
+        (std::uint32_t)src0_cb_index,
+        page_alignment_offset,
+        (std::uint32_t)dst0_cb_index,
+        begins_bytes,
+        output.element_size()};
     tt::tt_metal::TensorAccessorArgs(src0_buffer).append_to(reader_compile_time_args_vec);
     tt::tt_metal::TensorAccessorArgs(dst_buffer).append_to(writer_compile_time_args_vec);
 
@@ -875,19 +905,20 @@ static operation::ProgramWithCallbacks slice_write_rm_interleaved_multi_core(
         "ttnn/cpp/ttnn/operations/experimental/slice_write/device/kernels/dataflow/"
         "slice_write_reader_interleaved.cpp",
         total_cores,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args_vec));
+        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args_vec, reader_defines));
 
     tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/slice_write/device/kernels/dataflow/"
-        "slice_write_writer_interleaved.cpp",
+        "slice_write_writer_interleaved_strided.cpp",
         total_cores,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args_vec));
+        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args_vec, writer_defines));
 
     auto all_runtime_args = get_slice_write_runtime_args_rm(
         input,
         output,
         output_tensor_start,
+        stride,
         num_cores_total,
         num_cores,
         num_cores_y,
@@ -927,10 +958,13 @@ static operation::ProgramWithCallbacks slice_write_rm_interleaved_multi_core(
 
             const auto tensor_start =
                 static_cast<const ttnn::operations::experimental::SliceWriteDeviceOperation*>(operation)->slice_start;
+            const auto stride =
+                static_cast<const ttnn::operations::experimental::SliceWriteDeviceOperation*>(operation)->step;
             auto all_runtime_args = get_slice_write_runtime_args_rm(
                 src_tensor,
                 dst_tensor,
                 tensor_start,
+                stride,
                 num_cores_total,
                 num_cores,
                 num_cores_y,
@@ -964,8 +998,8 @@ operation::ProgramWithCallbacks slice_write_multi_core(
         }
     }
     TT_FATAL(!output.is_sharded(), "Sharded output is not supported for slice_write operation");
-    TT_FATAL(!has_step, "Step is not supported for slice_write operation");
     if (a.is_sharded()) {  // Supports Height & Block Sharding
+        TT_FATAL(!has_step, "Step is not supported for sharded slice_write operation");
         if (a.layout() == Layout::ROW_MAJOR) {
             return slice_write_rm_sharded_input_multi_core(a, output, output_tensor_start, output_tensor_end);
         } else if (a.layout() == Layout::TILE) {
@@ -974,7 +1008,7 @@ operation::ProgramWithCallbacks slice_write_multi_core(
             TT_THROW("Unsupported output memory layout for slice_write operation");
         }
     } else if (!a.is_sharded()) {
-        return slice_write_rm_interleaved_multi_core(a, output, output_tensor_start, output_tensor_end);
+        return slice_write_rm_interleaved_multi_core(a, output, output_tensor_start, output_tensor_end, step);
     }
     TT_THROW("Unsupport input memory layout for slice_write operation");
 }

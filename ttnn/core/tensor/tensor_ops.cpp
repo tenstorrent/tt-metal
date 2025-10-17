@@ -5,6 +5,7 @@
 #include "tensor/tensor_ops.hpp"
 
 #include "tt_stl/overloaded.hpp"
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
@@ -33,7 +34,7 @@ Tensor tensor_to_device(
     const Tensor& input_tensor,
     distributed::MeshDevice* mesh_device,
     ttsl::optional_reference<const MemoryConfig> mem_config,
-    QueueId cq_id) {
+    std::optional<QueueId> cq_id) {
     ZoneScoped;
     GraphTracker::instance().track_function_start("Tensor::to_device", input_tensor, mesh_device, mem_config);
     if (input_tensor.storage_type() == StorageType::DEVICE) {
@@ -46,7 +47,7 @@ Tensor tensor_to_device(
     return device_tensor;
 }
 
-Tensor tensor_cpu(const Tensor& input_tensor, bool blocking, QueueId cq_id) {
+Tensor tensor_cpu(const Tensor& input_tensor, bool blocking, std::optional<QueueId> cq_id) {
     if (input_tensor.storage_type() != StorageType::DEVICE) {
         return input_tensor;
     }

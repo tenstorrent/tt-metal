@@ -15,12 +15,14 @@
 #include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/io_descriptors.hpp"
-#include "api/ttnn/tensor/enum_types.hpp"
 #include <cstdint>
 #include <utility>
+
+using namespace tt::tt_metal;
 
 using arg_idx_t = uint16_t;
 
@@ -448,7 +450,7 @@ void try_advance_inline_write_or_atomic_inc(command_context_t<Addrgen>& cmd_ctx)
 
         switch (cmd_ctx.current_cmd_header.dest_type) {
             case ttnn::ccl::cmd::CclCommandDestType::CHIP_UNICAST: {
-                pkt_hdr->to_chip_unicast(cmd_ctx.current_cmd_header.get_unicast_dest_args().distance_in_hops);
+                fabric_set_unicast_route<false>(pkt_hdr, cmd_ctx.current_cmd_header.get_unicast_dest_args().distance_in_hops);
 
                 auto& fabric_connection = cmd_ctx.current_cmd_header.get_unicast_dest_args().is_forward_direction
                                               ? cmd_ctx.fabric_connection.get_forward_connection()
@@ -575,7 +577,7 @@ void try_advance_read_tensor_to_cb(command_context_t<Addrgen>& cmd_ctx) {
     cb_push_back(cmd_ctx.cb_id, cmd_ctx.packet_size_in_pages);
 }
 #endif
-
+namespace command_processor {
 void write_and_advance_local_read_address_for_fabric_write(
     uint64_t noc0_dest_noc_addr,
     size_t packet_header_buffer_addr,
@@ -595,7 +597,7 @@ void write_and_advance_local_read_address_for_fabric_write(
             auto& fabric_conn = unicast_args.is_forward_direction ? fabric_connection.get_forward_connection()
                                                                   : fabric_connection.get_backward_connection();
 
-            pkt_hdr->to_chip_unicast(unicast_args.distance_in_hops);
+            fabric_set_unicast_route<false>(pkt_hdr, unicast_args.distance_in_hops);
 
             fabric_conn.wait_for_empty_write_slot();
             fabric_conn.send_payload_without_header_non_blocking_from_address(l1_read_addr, payload_size_bytes);
@@ -635,6 +637,7 @@ void write_and_advance_local_read_address_for_fabric_write(
 
     l1_read_addr += payload_size_bytes;
 }
+}
 
 FORCE_INLINE void write_payload_then_advance_read_address(
     uint64_t noc0_dest_noc_addr,
@@ -650,7 +653,7 @@ FORCE_INLINE void write_payload_then_advance_read_address(
     switch (current_cmd_header.dest_type) {
         case ttnn::ccl::cmd::CclCommandDestType::CHIP_UNICAST: [[fallthrough]];
         case ttnn::ccl::cmd::CclCommandDestType::CHIP_MULTICAST:
-            write_and_advance_local_read_address_for_fabric_write(
+            command_processor::write_and_advance_local_read_address_for_fabric_write(
                 noc0_dest_noc_addr,
                 packet_header_buffer_addr,
                 current_cmd_header,

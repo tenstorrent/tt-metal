@@ -13,17 +13,15 @@ from models.demos.llama3_70b_galaxy.tt.llama_common import (
     PagedAttentionConfig,
 )
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Attention
-from models.utility_functions import (
+from models.common.utility_functions import (
     comp_pcc,
     comp_allclose,
 )
-from models.utility_functions import skip_for_grayskull
 from models.demos.llama3_70b_galaxy.tt.prefetcher_common import TtLlamaPrefetcherSetup
 from models.demos.llama3_70b_galaxy.tt.llama_ccl import TT_CCL
 
 
 @torch.no_grad()
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -262,10 +260,7 @@ def test_llama_attention_inference(
             all_tests_pass = False
 
         # Increment position
-        ttnn.plus_one(
-            current_pos_tensor,
-            sub_core_grids=model_args.sub_core_grids,
-        )
+        ttnn.plus_one(current_pos_tensor, sub_core_grids=model_args.sub_core_grids, skip_negative_entries=True)
         check_kv_cache = True
         if check_kv_cache:
             # PyTorch output --------------------------------------------------------------------

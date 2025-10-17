@@ -15,7 +15,7 @@ class Conv:
         reshard=False,
         deallocate=True,
         height_sharding=True,
-        activation="relu",
+        activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
         dtype=ttnn.bfloat16,
         auto_shard=False,
         enable_act_double_buffer=False,
@@ -89,6 +89,7 @@ class Conv:
             return_output_dim=True,
             return_weights_and_bias=True,
             dtype=self.dtype,
+            slice_config=ttnn.Conv2dL1FullSliceConfig,
         )
 
         output_tensor = ttnn.reshape(
@@ -192,7 +193,7 @@ class ConvSplit:
         reshard=False,
         deallocate=True,
         height_sharding=True,
-        activation="",
+        activation=None,
         dtype=ttnn.bfloat16,
         auto_shard=True,
         split_factor=2,

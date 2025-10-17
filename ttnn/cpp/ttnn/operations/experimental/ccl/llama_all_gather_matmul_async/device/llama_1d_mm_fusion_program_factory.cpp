@@ -9,7 +9,6 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/math.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operation.hpp"
@@ -90,7 +89,7 @@ process_agmm_fusion_program_and_create_override_variables(
     }
     for (auto& cr : subdevice_cores.ranges()) {
         auto intersection = non_idle_cores.intersection(cr);
-        if (intersection.size() > 0) {
+        if (!intersection.empty()) {
             non_idle_cores_vec.push_back(intersection.bounding_box());
         }
     }
@@ -167,7 +166,6 @@ process_agmm_fusion_program_and_create_override_variables(
 
     /* in2 - not needed for multicast approach since all cores receive same data */
     uint32_t in2_single_tile_size = in0_single_tile_size;
-    uint32_t in2_CB_tiles = 0;  // No additional buffer needed for multicast
     uint32_t in2_CB_size = 0;
 
     /* out */
@@ -237,14 +235,14 @@ process_agmm_fusion_program_and_create_override_variables(
     tt_metal::CircularBufferConfig sync_cb_config =
         tt_metal::CircularBufferConfig(sync_cb_size_bytes, {{sync_cb_index, DataFormat::UInt16}})
             .set_page_size(sync_cb_index, sync_cb_size_bytes);
-    auto cb_sync = tt_metal::CreateCircularBuffer(program, all_cores, sync_cb_config);
+    tt_metal::CreateCircularBuffer(program, all_cores, sync_cb_config);
 
     uint32_t sync_cb2_index = base_cb_index + 4;
     uint32_t sync_cb2_size_bytes = 16;
     tt_metal::CircularBufferConfig sync_cb2_config =
         tt_metal::CircularBufferConfig(sync_cb2_size_bytes, {{sync_cb2_index, DataFormat::UInt16}})
             .set_page_size(sync_cb2_index, sync_cb2_size_bytes);
-    auto cb2_sync = tt_metal::CreateCircularBuffer(program, all_cores, sync_cb2_config);
+    tt_metal::CreateCircularBuffer(program, all_cores, sync_cb2_config);
 
     uint32_t output_cb_index = base_cb_index + 5;  // output operands start at index 16
     uint32_t interm0_cb_index = base_cb_index + 6;
@@ -265,7 +263,7 @@ process_agmm_fusion_program_and_create_override_variables(
                                 .set_page_size(interm0_cb_index, interm0_single_tile_size)
                                 .set_tile_dims(interm0_cb_index, output_tile);
 
-        auto cb_interm0 = tt_metal::CreateCircularBuffer(program, all_cores, interm0_cb_config);
+        tt_metal::CreateCircularBuffer(program, all_cores, interm0_cb_config);
 
         for (uint32_t i = 0; i < out_buffers.size(); ++i) {
             const auto& out_buffer = out_buffers[i];
@@ -430,8 +428,8 @@ process_agmm_fusion_program_and_create_override_variables(
         device->arch(), num_cores, mm_kernel_defines, throttle_level);
 
     // in1 is the reader of weights/output writer, and we choose to make it use the optimized reader noc
-    tt_metal::NOC in0_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(device->arch());
-    tt_metal::NOC in1_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(device->arch());
+    tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
+    tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
 
     bool use_dedicated_noc = true;
     tt_metal::NOC_MODE noc_mode =
@@ -550,10 +548,7 @@ process_agmm_fusion_program_and_create_override_variables(
     uint32_t bank_id = 0;
     std::vector<uint32_t> bank_ids;
     for (uint32_t i = 0; i < num_cores; ++i) {  // runtime args for mm cores
-        bool send_to_hop_core = i == 0 && use_hop_cores;
         const auto& core = worker_cores_vec[i];
-        const auto& core_noc = device->worker_core_from_logical_core(core);
-
         /* in0 - multicast receiver setup (no ring topology needed) */
         auto core_type = CORE_TYPE::WORKER_CORE;  // worker core
 
@@ -617,11 +612,8 @@ process_agmm_fusion_program_and_create_override_variables(
 
     // Runtime args for hop cores
     for (uint32_t i = 0; i < num_hop_cores; ++i) {
-        bool end_of_hop = i == num_hop_cores - 1;
-
         auto core_type = CORE_TYPE::HOP_CORE;  // hop core
         const auto& core = hop_cores_vec[i];
-        const auto& core_noc = device->worker_core_from_logical_core(core);
 
         /* in0 - hop cores not needed for multicast, but keeping for compatibility */
         std::vector<uint32_t> mm_in0_args = {
@@ -671,7 +663,6 @@ inline void override_agmm_fusion_program_parameters(
 
     auto src_buffer_a = input_tensors[0].buffer();
     auto src_buffer_b = input_tensors[1].buffer();
-    auto dst_buffer = output_tensors[0].buffer();
 
     bool src0_sharded = input_tensors[0].is_sharded();
     bool src1_sharded = input_tensors[1].is_sharded();
@@ -839,8 +830,8 @@ ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t matmul_mul
     uint32_t num_cores = num_cores_x * num_cores_y;
 
     // Calculate number of blocks along x and y; tensor dims are padded up to 512
-    uint32_t num_blocks_y = (Mt - 1) / per_core_M + 1;
-    uint32_t num_blocks_x = (Nt - 1) / per_core_N + 1;
+    uint32_t num_blocks_y = ((Mt - 1) / per_core_M) + 1;
+    uint32_t num_blocks_x = ((Nt - 1) / per_core_N) + 1;
     uint32_t num_blocks_total = num_blocks_y * num_blocks_x;
 
     // TODO: Max used grid can actually exceed mcast receiver grid if in0 is sharded
@@ -903,7 +894,7 @@ ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t matmul_mul
         global_cb,
         num_global_cb_receivers,
         sub_device_id,
-        restricted_cores,
+        std::move(restricted_cores),
         fused_op_signaler);
 }
 
@@ -956,10 +947,10 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_agmm_fusion(
         per_core_M,
         per_core_N,
         fuse_batch,
-        std::move(fused_activation),
+        fused_activation,
         mcast_in0,
         gather_in0,
-        std::move(hop_cores),
+        hop_cores,
         untilize_out,
         empty_fused_op_signaler,
         global_cb,
@@ -1031,7 +1022,7 @@ ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t matmul_mul
         config.num_global_cb_receivers,
         sub_device_id,
         start_cb_index,
-        restricted_cores);
+        std::move(restricted_cores));
 }
 
 tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_agmm_fusion_helper(

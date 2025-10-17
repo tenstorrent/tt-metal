@@ -353,7 +353,41 @@ Tests:
     patterns:
       - type: all_to_all
 
+  - name: AllToOneUnicastMesh
+    fabric_setup:
+      topology: Mesh
+
+    parametrization_params:
+      size: [1024, 2048, 4096]
+
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 100
+
+    patterns:
+      - type: all_to_one
+
+  - name: AllToOneRandomUnicastMesh
+    fabric_setup:
+      topology: Mesh
+
+    parametrization_params:
+      size: [1024, 2048, 4096]
+
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 100
+
+    patterns:
+      - type: all_to_one_random
+        iterations: 10
+
   - name: "FabricMuxSimpleUnicastWriteLinear"
+    skip: [GALAXY, BLACKHOLE_GALAXY]
     fabric_setup:
       topology: Linear
       fabric_tensix_config: Mux
@@ -369,6 +403,7 @@ Tests:
               device: [0, 1]
 
   - name: "FabricMuxAllToAllUnicastMesh"
+    skip: [GALAXY, BLACKHOLE_GALAXY]
     fabric_setup:
       topology: Mesh
       fabric_tensix_config: Mux
@@ -383,6 +418,7 @@ Tests:
       - type: all_to_all
 
   - name: "FabricMuxAllToAllUnicastMeshDynamic"
+    skip: [GALAXY, BLACKHOLE_GALAXY]
     fabric_setup:
       topology: Mesh
       routing_type: Dynamic

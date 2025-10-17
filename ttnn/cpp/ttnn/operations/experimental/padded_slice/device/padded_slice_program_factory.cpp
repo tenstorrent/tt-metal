@@ -4,7 +4,7 @@
 
 #include "hostdevcommon/kernel_structs.h"
 #include "optional"
-#include "tt-metalium/assert.hpp"
+#include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "tt-metalium/math.hpp"
 #include "ttnn/common/constants.hpp"
@@ -16,7 +16,6 @@
 #include <ranges>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -68,9 +67,12 @@ get_padded_slice_runtime_args_rm_sharded_output(
 
     bool rm_orientation = output_shard_spec.orientation == ShardOrientation::ROW_MAJOR;
     bool is_block_sharded = output_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
-    uint32_t num_cores_channels = get_num_cores_channels_from_sharded_tensor(output_tensor);
+    bool is_width_sharded = output_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
+
+    [[maybe_unused]] uint32_t num_cores_channels = get_num_cores_channels_from_sharded_tensor(output_tensor);
     uint32_t input_page_size = input_shape[-1] * input_tensor.element_size();
-    uint32_t input_row_size_bytes = tt::div_up(input_shape[-1], num_cores_channels) * input_tensor.element_size();
+    [[maybe_unused]] uint32_t input_row_size_bytes =
+        tt::div_up(input_shape[-1], num_cores_channels) * input_tensor.element_size();
 
     uint32_t output_row_size_bytes = output_shard_shape[1] * input_tensor.element_size();
     uint32_t output_row_size_elems = output_shard_shape[1];
@@ -153,6 +155,9 @@ get_padded_slice_runtime_args_rm_sharded_output(
         if (is_block_sharded) {
             core_w_index = rm_orientation ? core.x : core.y;
             core_h_index = rm_orientation ? core.y : core.x;
+        } else if (is_width_sharded) {
+            core_h_index = 0;
+            core_w_index = core_index;
         }
 
         const uint32_t num_sticks_written = core_h_index * num_sticks_per_core;
@@ -236,7 +241,6 @@ static operation::ProgramWithCallbacks padded_slice_rm_multi_core(
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
-    bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     TT_FATAL(
         dst_buffer->buffer_type() == tt::tt_metal::BufferType::L1,
         "Output buffer should be L1 for padded_slice operation with tiled inputs");
@@ -366,16 +370,9 @@ get_padded_slice_runtime_args_tile_sharded_output(
 
     bool rm_orientation = output_shard_spec.orientation == ShardOrientation::ROW_MAJOR;
     bool is_block_sharded = output_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
-    uint32_t num_cores_channels = 1;
-    auto total_cores = output_shard_spec.grid;
-    if (is_block_sharded) {
-        if (rm_orientation) {
-            num_cores_channels = total_cores.bounding_box().grid_size().x;
-        } else {
-            num_cores_channels = total_cores.bounding_box().grid_size().y;
-        }
-    }
+    bool is_width_sharded = output_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
 
+    uint32_t num_cores_channels = get_num_cores_channels_from_sharded_tensor(output_tensor);
     uint32_t num_tiles_per_channel = tt::div_up(input_padded_shape[3], tt::constants::TILE_WIDTH);
     num_tiles_per_channel = tt::div_up(num_tiles_per_channel, num_cores_channels);
     TT_FATAL(
@@ -479,6 +476,9 @@ get_padded_slice_runtime_args_tile_sharded_output(
         if (is_block_sharded) {
             core_w_index = rm_orientation ? core.x : core.y;
             core_h_index = rm_orientation ? core.y : core.x;
+        } else if (is_width_sharded) {
+            core_h_index = 0;
+            core_w_index = core_index;
         }
 
         const uint32_t num_sticks_written_start = core_h_index * num_sticks_per_core;
@@ -555,7 +555,6 @@ get_padded_slice_runtime_args_tile_sharded_output(
         }
         if (num_full_rows < 0) {
             num_full_rows = 0;
-            num_tiles_this_core = 0;
         }
         log_trace(
             tt::LogOp,
@@ -637,9 +636,9 @@ static operation::ProgramWithCallbacks padded_slice_tile_multi_core(
     TT_FATAL(
         input_padded_shape.rank() == 4, "Input tensor must be rank 4 for padded_slice operation with tiled inputs");
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
-    uint32_t input_single_tile_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
+    uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
-    uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_cb_data_format);
+    uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
 
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
@@ -675,7 +674,6 @@ static operation::ProgramWithCallbacks padded_slice_tile_multi_core(
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
-    bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     TT_FATAL(
         dst_buffer->buffer_type() == tt::tt_metal::BufferType::L1,
         "Output buffer should be L1 for padded_slice operation with tiled inputs");
@@ -728,7 +726,7 @@ static operation::ProgramWithCallbacks padded_slice_tile_multi_core(
         output_cb_data_format,
         output.buffer());
 
-    auto cb_padding_source_tuple = tt::tt_metal::create_cb(
+    tt::tt_metal::create_cb(
         cb_padding_index,
         program,
         total_cores,

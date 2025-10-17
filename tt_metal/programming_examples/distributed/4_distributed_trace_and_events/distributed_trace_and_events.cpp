@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,6 +6,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/sub_device.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -71,19 +72,28 @@ std::shared_ptr<Program> EltwiseBinaryProgramGenerator(
             .set_page_size(output_cb_index, single_tile_size);
     tt_metal::CreateCircularBuffer(*program, cores_for_program, cb_output_config);
 
+    std::vector<uint32_t> reader_compile_time_args;
+    tt::tt_metal::TensorAccessorArgs(src0_buf).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(src1_buf).append_to(reader_compile_time_args);
     auto binary_reader_kernel = tt_metal::CreateKernel(
         *program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_dual_8bank.cpp",
         cores_for_program,
         tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
+            .processor = tt_metal::DataMovementProcessor::RISCV_1,
+            .noc = tt_metal::NOC::RISCV_1_default,
+            .compile_args = reader_compile_time_args});
 
+    std::vector<uint32_t> writer_compile_time_args;
+    tt::tt_metal::TensorAccessorArgs(output_buf).append_to(writer_compile_time_args);
     auto unary_writer_kernel = tt_metal::CreateKernel(
         *program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank.cpp",
         cores_for_program,
         tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
+            .processor = tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt_metal::NOC::RISCV_0_default,
+            .compile_args = writer_compile_time_args});
 
     std::vector<uint32_t> compute_kernel_args = {};
 
@@ -199,18 +209,16 @@ int main() {
         SUBTRACT_OP_ID);
     // Create MeshWorkloads and add programs to them. A MeshWorkload allows a program to target
     // multiple Physical Devices in the Virtual Mesh.
-    auto add_mesh_workload = CreateMeshWorkload();
-    auto multiply_and_subtract_mesh_workload = CreateMeshWorkload();
-    AddProgramToMeshWorkload(
-        add_mesh_workload, std::move(*add_program), all_devices);  // Addition runs on the full grid (sub_device 1)
-    AddProgramToMeshWorkload(
-        multiply_and_subtract_mesh_workload,
-        std::move(*multiply_program),
-        top_row);  // Multiplication runs on the top row (sub_device 2)
-    AddProgramToMeshWorkload(
-        multiply_and_subtract_mesh_workload,
-        std::move(*subtract_program),
-        bottom_row);  // Subtraction runs on the bottom row (sub device 2)
+    auto add_mesh_workload = MeshWorkload();
+    auto multiply_and_subtract_mesh_workload = MeshWorkload();
+    add_mesh_workload.add_program(
+        all_devices, std::move(*add_program));  // Addition runs on the full grid (sub_device 1)
+    multiply_and_subtract_mesh_workload.add_program(
+        top_row,
+        std::move(*multiply_program));  // Multiplication runs on the top row (sub_device 2)
+    multiply_and_subtract_mesh_workload.add_program(
+        bottom_row,
+        std::move(*subtract_program));  // Subtraction runs on the bottom row (sub device 2)
 
     // =========== Step 4: Compile and Load Workloads on the Mesh ===========
     EnqueueMeshWorkload(mesh_device->mesh_command_queue(), add_mesh_workload, true);
@@ -219,7 +227,7 @@ int main() {
     auto trace_id = BeginTraceCapture(mesh_device.get(), workload_cq_id);
     EnqueueMeshWorkload(mesh_device->mesh_command_queue(), add_mesh_workload, false);
     EnqueueMeshWorkload(mesh_device->mesh_command_queue(), multiply_and_subtract_mesh_workload, false);
-    EndTraceCapture(mesh_device.get(), workload_cq_id, trace_id);
+    mesh_device->end_mesh_trace(workload_cq_id, trace_id);
 
     // =========== Step 6: Populate inputs ===========
     uint32_t workload_0_src0_val = 2;
@@ -244,13 +252,13 @@ int main() {
     EnqueueWriteMeshBuffer(data_movement_cq, mul_sub_src0_buf, mul_sub_src0_vec);
     EnqueueWriteMeshBuffer(data_movement_cq, mul_sub_src1_buf, mul_sub_src1_vec);
     // Synchronize
-    MeshEvent write_event = EnqueueRecordEvent(data_movement_cq);
-    EnqueueWaitForEvent(workload_cq, write_event);
+    MeshEvent write_event = data_movement_cq.enqueue_record_event();
+    workload_cq.enqueue_wait_for_event(write_event);
     // =========== Step 8: Run MeshTrace on MeshCQ0 ===========
-    ReplayTrace(mesh_device.get(), workload_cq_id, trace_id, false);
+    mesh_device->replay_mesh_trace(workload_cq_id, trace_id, false);
     // Synchronize
-    MeshEvent trace_event = EnqueueRecordEvent(workload_cq);
-    EnqueueWaitForEvent(data_movement_cq, trace_event);
+    MeshEvent trace_event = workload_cq.enqueue_record_event();
+    data_movement_cq.enqueue_wait_for_event(trace_event);
     // =========== Step 9: Read Outputs on MeshCQ1 ===========
     std::vector<bfloat16> add_dst_vec = {};
     std::vector<bfloat16> mul_sub_dst_vec = {};
@@ -260,16 +268,16 @@ int main() {
     // =========== Step 10: Verify Outputs ===========
     bool pass = true;
     for (int i = 0; i < add_dst_vec.size(); i++) {
-        pass &= (add_dst_vec[i].to_float() == workload_0_src0_val + workload_0_src1_val);
+        pass &= (static_cast<float>(add_dst_vec[i]) == workload_0_src0_val + workload_0_src1_val);
     }
     for (int i = 0; i < mul_sub_dst_vec.size(); i++) {
         if (i < mul_sub_dst_vec.size() / 2) {
-            pass &= (mul_sub_dst_vec[i].to_float() == workload_1_src0_val * workload_1_src1_val);
+            pass &= (static_cast<float>(mul_sub_dst_vec[i]) == workload_1_src0_val * workload_1_src1_val);
         } else {
-            pass &= (mul_sub_dst_vec[i].to_float() == workload_1_src0_val - workload_1_src1_val);
+            pass &= (static_cast<float>(mul_sub_dst_vec[i]) == workload_1_src0_val - workload_1_src1_val);
         }
     }
-    ReleaseTrace(mesh_device.get(), trace_id);
+    mesh_device->release_mesh_trace(trace_id);
     if (pass) {
         std::cout << "Running EltwiseBinary MeshTraces on 2 MeshCQs Passed!" << std::endl;
         return 0;

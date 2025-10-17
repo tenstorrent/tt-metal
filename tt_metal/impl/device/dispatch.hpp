@@ -1,10 +1,10 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-#include <command_queue.hpp>
+#include "dispatch/command_queue.hpp"
 #include "device.hpp"
 #include "dispatch/topology.hpp"
 #include "hal_types.hpp"
@@ -19,7 +19,7 @@ struct ReadCoreDataDescriptor {
     uint32_t size_bytes = 0;
 };
 
-uint32_t calculate_max_prefetch_data_size_bytes(const CoreType& dispatch_core_type);
+uint32_t calculate_max_prefetch_data_size_bytes(const CoreType& dispatch_core_type, uint32_t num_subdevices);
 
 namespace device_dispatch {
 

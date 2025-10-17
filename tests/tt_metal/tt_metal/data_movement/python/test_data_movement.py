@@ -15,7 +15,7 @@ import numpy as np
 from collections import defaultdict
 
 
-from tt_metal.tools.profiler.common import PROFILER_LOGS_DIR, PROFILER_DEVICE_SIDE_LOG
+from tracy.common import PROFILER_LOGS_DIR, PROFILER_DEVICE_SIDE_LOG
 
 from tests.tt_metal.tt_metal.data_movement.python.config import DataMovementConfig
 from tests.tt_metal.tt_metal.data_movement.python.test_metadata import TestMetadataLoader
@@ -46,7 +46,11 @@ def run_dm_tests(profile, verbose, gtest_filter, plot, report, arch_name):
 
     # Gather analysis stats
     stats_collector = StatsCollector(log_file_path, test_id_to_name, test_type_attributes, verbose=verbose)
-    dm_stats, aggregate_stats = stats_collector.gather_analysis_stats()
+    stats = stats_collector.gather_stats_from_csv()
+    if not stats.get("devices"):
+        logger.info("No profiling data available.")
+        return
+    dm_stats, aggregate_stats = stats_collector.gather_analysis_stats(stats)
 
     # Print stats if explicitly requested
     stats_reporter = StatsReporter(

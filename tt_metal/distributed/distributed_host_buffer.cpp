@@ -6,7 +6,7 @@
 #include <tt_stl/indestructible.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/distributed_host_buffer.hpp>
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/control_plane.hpp>
 
 #include <vector>
@@ -123,6 +123,7 @@ DistributedHostBuffer DistributedHostBuffer::transform(
 
     // Transform one HostBuffer per shard group
     if (policy == ProcessShardExecutionPolicy::SEQUENTIAL || indices_to_process.size() < 2) {
+        // NOLINTNEXTLINE(bugprone-nondeterministic-pointer-iteration-order)
         for (const auto& [key, group] : shard_group_indices) {
             HostBuffer out = fn(shards[group.front()]->buffer);
             for (size_t i : group) {

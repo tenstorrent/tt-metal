@@ -8,8 +8,8 @@
 #include <tt-metalium/fabric.hpp>
 #include <tt-metalium/fabric_edm_types.hpp>
 #include <tt-metalium/fabric_types.hpp>
-#include <tt-metalium/assert.hpp>
-#include <umd/device/types/cluster_descriptor_types.h>  // chip_id_t
+#include <tt_stl/assert.hpp>
+#include <umd/device/types/cluster_descriptor_types.hpp>  // chip_id_t
 #include <tt-metalium/metal_soc_descriptor.h>
 #include "impl/context/metal_context.hpp"
 #include "erisc_datamover_builder.hpp"
@@ -115,33 +115,14 @@ FabricType get_fabric_type(tt::tt_fabric::FabricConfig fabric_config) {
 std::vector<uint32_t> get_forwarding_link_indices_in_direction(
     const FabricNodeId& src_fabric_node_id, const FabricNodeId& dst_fabric_node_id, RoutingDirection direction) {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    const bool is_2d_fabric = control_plane.get_fabric_context().is_2D_routing_enabled();
 
     const std::vector<chan_id_t>& fabric_channels =
         control_plane.get_active_fabric_eth_channels_in_direction(src_fabric_node_id, direction);
 
     // the subset of routers that support forwarding b/w those chips
     std::vector<chan_id_t> forwarding_channels;
-    if (is_2d_fabric) {
-        forwarding_channels =
-            control_plane.get_forwarding_eth_chans_to_chip(src_fabric_node_id, dst_fabric_node_id, direction);
-    } else {
-        // TODO: not going to work for Big Mesh
-        const auto src_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(src_fabric_node_id);
-        const auto dst_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(dst_fabric_node_id);
-        // for 1D check if each port has an active connection to the dst_chip_id
-        const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-        const auto& soc_desc = cluster.get_soc_desc(src_chip_id);
-
-        for (const auto& channel : fabric_channels) {
-            const auto eth_core = soc_desc.get_eth_core_for_channel(channel, CoordSystem::LOGICAL);
-            auto [connected_chip_id, connected_eth_core] =
-                cluster.get_connected_ethernet_core(std::make_tuple(src_chip_id, CoreCoord{eth_core.x, eth_core.y}));
-            if (connected_chip_id == dst_chip_id) {
-                forwarding_channels.push_back(channel);
-            }
-        }
-    }
+    forwarding_channels =
+        control_plane.get_forwarding_eth_chans_to_chip(src_fabric_node_id, dst_fabric_node_id, direction);
 
     std::vector<uint32_t> link_indices;
     for (uint32_t i = 0; i < fabric_channels.size(); i++) {
@@ -211,67 +192,10 @@ void set_routing_mode(Topology topology, tt::tt_fabric::FabricConfig fabric_conf
     set_routing_mode(mode);
 }
 
-void get_optimal_noc_for_edm(
-    tt::tt_fabric::FabricEriscDatamoverBuilder& edm_builder1,
-    tt::tt_fabric::FabricEriscDatamoverBuilder& edm_builder2,
-    const uint32_t num_links,
-    const tt_fabric::Topology topology) {
-    constexpr uint32_t ring_noc_selection_link_threshold = 3;
-    constexpr uint32_t line_noc_selection_link_threshold = 2;
-    bool enable_noc_selection_opt = false;
-    if (topology == tt_fabric::Topology::Ring) {
-        enable_noc_selection_opt =
-            (num_links > ring_noc_selection_link_threshold) && (edm_builder1.my_noc_y != edm_builder2.my_noc_y);
-    } else {
-        enable_noc_selection_opt =
-            (num_links > line_noc_selection_link_threshold) && (edm_builder1.my_noc_y != edm_builder2.my_noc_y);
-    }
-    log_debug(
-        tt::LogTest,
-        "Fabric MeshId {} ChipId {} edm_builder1 {} {} is connecting to edm_builder2 {} {} num links {}",
-        *(edm_builder1.local_fabric_node_id.mesh_id),
-        edm_builder1.local_fabric_node_id.chip_id,
-        edm_builder1.my_noc_x,
-        edm_builder1.my_noc_y,
-        edm_builder2.my_noc_x,
-        edm_builder2.my_noc_y,
-        num_links);
-
-    if (enable_noc_selection_opt) {
-        if (edm_builder1.my_noc_x < edm_builder2.my_noc_x) {
-            for (uint32_t i = 0; i < edm_builder1.config.num_receiver_channels; i++) {
-                edm_builder1.config.receiver_channel_forwarding_noc_ids[i] = 0;
-                edm_builder2.config.receiver_channel_forwarding_noc_ids[i] = 1;
-            }
-            for (uint32_t i = 0; i < edm_builder1.config.num_receiver_channels; i++) {
-                edm_builder1.config.receiver_channel_local_write_noc_ids[i] = 1;
-                edm_builder2.config.receiver_channel_local_write_noc_ids[i] = 1;
-            }
-            for (uint32_t i = 0; i < edm_builder1.config.num_sender_channels; i++) {
-                edm_builder1.config.sender_channel_ack_noc_ids[i] = 1;
-                edm_builder2.config.sender_channel_ack_noc_ids[i] = 0;
-            }
-        } else if (edm_builder1.my_noc_x > edm_builder2.my_noc_x) {
-            for (uint32_t i = 0; i < edm_builder1.config.num_receiver_channels; i++) {
-                edm_builder1.config.receiver_channel_forwarding_noc_ids[i] = 1;
-                edm_builder2.config.receiver_channel_forwarding_noc_ids[i] = 0;
-            }
-            for (uint32_t i = 0; i < edm_builder1.config.num_receiver_channels; i++) {
-                edm_builder1.config.receiver_channel_local_write_noc_ids[i] = 1;
-                edm_builder2.config.receiver_channel_local_write_noc_ids[i] = 1;
-            }
-            for (uint32_t i = 0; i < edm_builder1.config.num_sender_channels; i++) {
-                edm_builder1.config.sender_channel_ack_noc_ids[i] = 0;
-                edm_builder2.config.sender_channel_ack_noc_ids[i] = 1;
-            }
-        }
-    }
-}
-
 IntraMeshAdjacencyMap build_mesh_adjacency_map(
     const std::set<chip_id_t>& user_chip_ids,
     const tt::tt_metal::distributed::MeshShape& mesh_shape,
-    std::function<std::vector<chip_id_t>(chip_id_t)> get_adjacent_chips_func,
+    const std::function<std::vector<chip_id_t>(chip_id_t)>& get_adjacent_chips_func,
     std::optional<chip_id_t> start_chip_id /* = std::nullopt */) {
     constexpr size_t CORNER_1D_ADJACENT_CHIPS = 1;
     constexpr size_t CORNER_ADJACENT_CHIPS = 2;
@@ -366,6 +290,29 @@ std::pair<std::unordered_map<chip_id_t, std::vector<chip_id_t>>, chip_id_t> sort
     return {adjacency_map, min_eth_chip->first};
 }
 
+std::pair<std::unordered_map<chip_id_t, std::vector<chip_id_t>>, chip_id_t> sort_adjacency_map_by_ubb_id(
+    const IntraMeshAdjacencyMap& topology_info) {
+    auto adjacency_map = topology_info.adjacency_map;
+    chip_id_t first_chip = 0;
+    for (auto& [chip_id, neighbors] : adjacency_map) {
+        auto ubb_id = tt::tt_fabric::get_ubb_id(chip_id);
+        if (ubb_id.tray_id == 1 && ubb_id.asic_id == 1) {
+            first_chip = chip_id;
+            break;
+        }
+    }
+
+    for (auto& [chip_id, neighbors] : adjacency_map) {
+        std::sort(neighbors.begin(), neighbors.end(), [&](chip_id_t a, chip_id_t b) {
+            auto ubb_id_a = tt::tt_fabric::get_ubb_id(a);
+            auto ubb_id_b = tt::tt_fabric::get_ubb_id(b);
+            return ubb_id_a.tray_id < ubb_id_b.tray_id ||
+                   (ubb_id_a.tray_id == ubb_id_b.tray_id && ubb_id_a.asic_id < ubb_id_b.asic_id);
+        });
+    }
+    return {adjacency_map, first_chip};
+}
+
 std::vector<chip_id_t> convert_1d_mesh_adjacency_to_row_major_vector(
     const IntraMeshAdjacencyMap& topology_info,
     std::optional<std::function<std::pair<AdjacencyMap, chip_id_t>(const IntraMeshAdjacencyMap&)>> graph_sorter) {
@@ -386,6 +333,14 @@ std::vector<chip_id_t> convert_1d_mesh_adjacency_to_row_major_vector(
             // User provided a sorting function. This is primarily done for testing.
             std::tie(adj_map, first_chip) = graph_sorter.value()(topology_info);
         }
+    } else if (cluster.get_board_type(0) == BoardType::UBB) {
+        if (!graph_sorter.has_value()) {
+            // Default behavior: sort adjacency map by Ethernet coordinates
+            std::tie(adj_map, first_chip) = sort_adjacency_map_by_ubb_id(topology_info);
+        } else {
+            // User provided a sorting function. This is primarily done for testing.
+            std::tie(adj_map, first_chip) = graph_sorter.value()(topology_info);
+        }
     } else if (topology_info.ns_size == 1 && topology_info.ew_size == 1) {
         // Single chip mesh
         first_chip = 0;
@@ -401,10 +356,12 @@ std::vector<chip_id_t> convert_1d_mesh_adjacency_to_row_major_vector(
 }
 
 std::vector<chip_id_t> convert_2d_mesh_adjacency_to_row_major_vector(
-    const IntraMeshAdjacencyMap& topology_info, std::optional<chip_id_t> nw_corner_chip_id) {
+    const IntraMeshAdjacencyMap& topology_info,
+    std::optional<chip_id_t> nw_corner_chip_id,
+    std::optional<chip_id_t> ne_corner_chip_id) {
     // Check number of corners for 2D meshes
     TT_FATAL(
-        topology_info.corners.size() == 4, "Expected 4 corners for 2D mesh, got {}.", topology_info.corners.size());
+        topology_info.corners.size() == 4, "Error during physical chip discovery: missing connections in 2D mesh. Please check ethernet connection status");
 
     // Determine the northwest corner
     chip_id_t nw_corner;
@@ -450,28 +407,38 @@ std::vector<chip_id_t> convert_2d_mesh_adjacency_to_row_major_vector(
     // 1) Distances from NW corner.
     auto dist_from_nw = compute_distances(nw_corner, topology_info.adjacency_map);
 
-    // 2) Identify the NE corner (distance of mesh_ew_size-1 from NW) and run a second
-    //    BFS from it to obtain dNE[chip].
+    // 2) Determine the NE corner: if provided, validate and use it; otherwise identify based on distances.
     chip_id_t ne_corner = nw_corner;  // initialise
     bool ne_found = false;
-    for (auto corner : topology_info.corners) {
-        if (corner == nw_corner) {
-            continue;
-        }
-        auto it = dist_from_nw.find(corner);
-        if (it != dist_from_nw.end() && it->second == topology_info.ew_size - 1) {
-            ne_corner = corner;
-            ne_found = true;
-            break;
-        }
-    }
-    if (!ne_found) {
-        // Fall back: pick any other corner; grid may be square so distance == mesh_ew_size-1 may not hold.
+    if (ne_corner_chip_id.has_value()) {
+        TT_FATAL(
+            std::find(topology_info.corners.begin(), topology_info.corners.end(), *ne_corner_chip_id) !=
+                topology_info.corners.end(),
+            "Provided NE corner chip {} is not a 2D corner",
+            *ne_corner_chip_id);
+        ne_corner = *ne_corner_chip_id;
+        ne_found = true;
+    } else {
+        // Identify the NE corner (distance of mesh_ew_size-1 from NW)
         for (auto corner : topology_info.corners) {
-            if (corner != nw_corner) {
+            if (corner == nw_corner) {
+                continue;
+            }
+            auto it = dist_from_nw.find(corner);
+            if (it != dist_from_nw.end() && it->second == topology_info.ew_size - 1) {
                 ne_corner = corner;
                 ne_found = true;
                 break;
+            }
+        }
+        if (!ne_found) {
+            // Fall back: pick any other corner; grid may be square so distance == mesh_ew_size-1 may not hold.
+            for (auto corner : topology_info.corners) {
+                if (corner != nw_corner) {
+                    ne_corner = corner;
+                    ne_found = true;
+                    break;
+                }
             }
         }
     }
@@ -500,7 +467,7 @@ std::vector<chip_id_t> convert_2d_mesh_adjacency_to_row_major_vector(
         TT_FATAL(row >= 0 && row < mesh_rows, "Row {} out of bounds.", row);
         TT_FATAL(col >= 0 && col < mesh_cols, "Col {} out of bounds.", col);
 
-        size_t idx = static_cast<size_t>(row) * static_cast<size_t>(mesh_cols) + static_cast<size_t>(col);
+        size_t idx = (static_cast<size_t>(row) * static_cast<size_t>(mesh_cols)) + static_cast<size_t>(col);
         TT_FATAL(physical_chip_ids[idx] == static_cast<chip_id_t>(-1), "Duplicate mapping at index {}.", idx);
         physical_chip_ids[idx] = chip;
     }

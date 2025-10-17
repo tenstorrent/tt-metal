@@ -4,9 +4,10 @@
 
 import pytest
 import torch
-from diffusers import AutoencoderKL
 
 import ttnn
+from models.demos.wormhole.stable_diffusion.common import SD_L1_SMALL_SIZE
+from models.demos.wormhole.stable_diffusion.sd_helper_funcs import get_reference_vae
 from models.demos.wormhole.stable_diffusion.tt.vae.ttnn_vae_configs import (
     GROUPNORM_DECODER_NUM_BLOCKS,
     MIDBLOCK_RESNET_CONV_CHANNEL_SPLIT_FACTORS,
@@ -19,7 +20,7 @@ from models.demos.wormhole.stable_diffusion.tt.vae.ttnn_vae_decoder import VaeDe
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 8 * 8192}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": SD_L1_SMALL_SIZE}], indirect=True)
 @pytest.mark.parametrize(
     """input_channels, input_height, input_width, out_channels, output_height, output_width,
     midblock_in_channels, midblock_resnet_norm_blocks, midblock_conv_channel_split_factors,
@@ -62,10 +63,13 @@ def test_decoder(
     upblock_resnet_conv_in_channel_split_factors,
     upblock_upsample_conv_channel_split_factors,
     norm_num_blocks,
+    is_ci_env,
+    is_ci_v2_env,
+    model_location_generator,
 ):
     torch.manual_seed(0)
 
-    vae = AutoencoderKL.from_pretrained("CompVis/stable-diffusion-v1-4", subfolder="vae")
+    vae = get_reference_vae(is_ci_env, is_ci_v2_env, model_location_generator)
     torch_decoder = vae.decoder
 
     # Run pytorch model

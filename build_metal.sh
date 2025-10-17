@@ -20,7 +20,7 @@ show_help() {
     echo "  -h, --help                       Show this help message."
     echo "  -e, --export-compile-commands    Enable CMAKE_EXPORT_COMPILE_COMMANDS."
     echo "  -c, --enable-ccache              Enable ccache for the build."
-    echo "  -b, --build-type build_type      Set the build type. Default is Release. Other options are Debug, RelWithDebInfo, ASan and TSan."
+    echo "  -b, --build-type build_type      Set the build type. Default is Release. Other options are Debug, RelWithDebInfo, ASan, TSan, ASanCoverage."
     echo "  -t, --enable-time-trace          Enable build time trace (clang only)."
     echo "  -p, --enable-profiler            Enable Tracy profiler."
     echo "  --install-prefix                 Where to install build artifacts."
@@ -32,6 +32,7 @@ show_help() {
     echo "  --build-programming-examples     Build programming examples."
     echo "  --build-tt-train                 Build tt-train."
     echo "  --build-packages                 Build installation packages (.deb)"
+    echo "  --build-telemetry                Build tt-telemetry server."
     echo "  --build-all                      Build all optional components."
     echo "  --release                        Set the build type as Release."
     echo "  --development                    Set the build type as RelWithDebInfo."
@@ -47,7 +48,6 @@ show_help() {
     echo "  --ttnn-shared-sub-libs           Use shared libraries for ttnn."
     echo "  --toolchain-path                 Set path to CMake toolchain file."
     echo "  --configure-only                 Only configure the project, do not build."
-    echo "  --enable-coverage                Instrument the binaries for code coverage."
     echo "  --without-distributed            Disable distributed compute support (OpenMPI dependency). Enabled by default."
     echo "  --without-python-bindings        Disable Python bindings (ttnncpp will be available as standalone library, otherwise ttnn will include the cpp backend and the python bindings), Enabled by default"
     echo "  --enable-fake-kernels-target     Enable fake kernels target, to enable generation of compile_commands.json for the kernels to enable IDE support."
@@ -55,7 +55,7 @@ show_help() {
 
 clean() {
     echo "INFO: Removing build artifacts!"
-    rm -rf build_Release* build_Debug* build_RelWithDebInfo* build_ASan* build_TSan* build built .cpmcache
+    rm -rf build_Release* build_Debug* build_RelWithDebInfo* build_ASan* build_TSan* build_ASanCoverage build built .cpmcache
     rm -rf ~/.cache/tt-metal-cache /tmp/tt-metal-cache
     if [[ ! -z $TT_METAL_CACHE ]]; then
         echo "User has TT_METAL_CACHE set, please make sure you delete it in order to delete all artifacts!"
@@ -75,6 +75,7 @@ build_metal_tests="OFF"
 build_umd_tests="OFF"
 build_programming_examples="OFF"
 build_tt_train="OFF"
+build_telemetry="OFF"
 build_static_libs="OFF"
 unity_builds="ON"
 light_metal_trace="ON"
@@ -93,7 +94,6 @@ if [[ "$FLAVOR" == "ubuntu" && "$VERSION" == "20.04" ]]; then
 fi
 
 configure_only="OFF"
-enable_coverage="OFF"
 enable_distributed="ON"
 with_python_bindings="ON"
 enable_fake_kernels_target="OFF"
@@ -118,6 +118,7 @@ build-umd-tests
 build-programming-examples
 build-tt-train
 build-packages
+build-telemetry
 build-static-libs
 disable-unity-builds
 disable-light-metal-trace
@@ -132,7 +133,6 @@ c-compiler-path:
 ttnn-shared-sub-libs
 toolchain-path:
 configure-only
-enable-coverage
 without-distributed
 without-python-bindings
 enable-fake-kernels-target
@@ -161,8 +161,6 @@ while true; do
             enable_ccache="ON";;
         -t|--enable-time-trace)
             enable_time_trace="ON";;
-        --enable-coverage)
-            enable_coverage="ON";;
         --without-distributed)
             enable_distributed="OFF";;
 	--build-dir)
@@ -187,6 +185,8 @@ while true; do
             build_tt_train="ON";;
         --build-packages)
             build_packages="ON";;
+        --build-telemetry)
+            build_telemetry="ON";;
         --build-static-libs)
             build_static_libs="ON";;
         --build-all)
@@ -233,9 +233,9 @@ if [[ $# -gt 0 ]]; then
 fi
 
 # Validate the build_type
-VALID_BUILD_TYPES=("Release" "Debug" "RelWithDebInfo" "ASan" "TSan")
+VALID_BUILD_TYPES=("Release" "Debug" "RelWithDebInfo" "ASan" "TSan" "ASanCoverage")
 if [[ ! " ${VALID_BUILD_TYPES[@]} " =~ " ${build_type} " ]]; then
-    echo "ERROR: Invalid build type '$build_type'. Allowed values are Release, Debug, RelWithDebInfo, ASan, TSan."
+    echo "ERROR: Invalid build type '$build_type'. Allowed values are Release, Debug, RelWithDebInfo, ASan, TSan, ASanCoverage."
     show_help
     exit 1
 fi
@@ -265,7 +265,6 @@ echo "INFO: Export compile commands: $export_compile_commands"
 echo "INFO: Enable ccache: $enable_ccache"
 echo "INFO: Build type: $build_type"
 echo "INFO: Enable time trace: $enable_time_trace"
-echo "INFO: Enable Coverage: $enable_coverage"
 echo "INFO: Build directory: $build_dir"
 echo "INFO: Install Prefix: $cmake_install_prefix"
 echo "INFO: Build tests: $build_tests"
@@ -307,10 +306,6 @@ if [ "$enable_profiler" = "ON" ]; then
     cmake_args+=("-DENABLE_TRACY=ON")
 fi
 
-if [ "$enable_coverage" = "ON" ]; then
-    cmake_args+=("-DENABLE_COVERAGE=ON")
-fi
-
 if [ "$export_compile_commands" = "ON" ]; then
     cmake_args+=("-DCMAKE_EXPORT_COMPILE_COMMANDS=ON")
 else
@@ -346,6 +341,10 @@ if [ "$build_tt_train" = "ON" ]; then
     cmake_args+=("-DBUILD_TT_TRAIN=ON")
 fi
 
+if [ "$build_telemetry" = "ON" ]; then
+    cmake_args+=("-DBUILD_TELEMETRY=ON")
+fi
+
 if [ "$build_static_libs" = "ON" ]; then
     cmake_args+=("-DBUILD_SHARED_LIBS=OFF")
     cmake_args+=("-DTT_INSTALL=OFF")
@@ -368,6 +367,7 @@ if [ "$build_all" = "ON" ]; then
     cmake_args+=("-DTTNN_BUILD_TESTS=ON")
     cmake_args+=("-DBUILD_PROGRAMMING_EXAMPLES=ON")
     cmake_args+=("-DBUILD_TT_TRAIN=ON")
+    cmake_args+=("-DBUILD_TELEMETRY=ON")
 fi
 
 if [ "$light_metal_trace" = "ON" ]; then

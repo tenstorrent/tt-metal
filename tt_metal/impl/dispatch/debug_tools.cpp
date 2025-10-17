@@ -12,7 +12,7 @@
 #include <utility>
 #include <vector>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "command_queue_common.hpp"
 #include "dispatch_settings.hpp"
 #include "hal_types.hpp"
@@ -34,10 +34,12 @@ namespace internal {
 using namespace tt::tt_metal;
 
 // force cast a reference to solid value. Works around binding packed references
+namespace {
 template <typename T>
-static T val(T v) {
+T val(T v) {
     return v;
 }
+}  // namespace
 
 void match_device_program_data_with_host_program_data(const char* host_file, const char* device_file) {
     std::ifstream host_dispatch_dump_file;
@@ -139,15 +141,17 @@ uint32_t dump_dispatch_cmd(CQDispatchCmd* cmd, uint32_t cmd_addr, std::ofstream&
         cq_file << fmt::format("{:#010x}: {}", cmd_addr, cmd_id);
         switch (cmd_id) {
             case CQ_DISPATCH_CMD_WRITE_LINEAR:
-            case CQ_DISPATCH_CMD_WRITE_LINEAR_H:
+            case CQ_DISPATCH_CMD_WRITE_LINEAR_H: {
+                CQDispatchCmdLarge* cmd_large = reinterpret_cast<CQDispatchCmdLarge*>(cmd);
+                stride = sizeof(CQDispatchCmdLarge);
                 cq_file << fmt::format(
                     " (num_mcast_dests={}, noc_xy_addr={:#010x}, addr={:#010x}, length={:#010x})",
-                    val(cmd->write_linear.num_mcast_dests),
-                    val(cmd->write_linear.noc_xy_addr),
-                    val(cmd->write_linear.addr),
-                    val(cmd->write_linear.length));
-                stride += cmd->write_linear.length;
-                break;
+                    val(cmd_large->write_linear.num_mcast_dests),
+                    val(cmd_large->write_linear.noc_xy_addr),
+                    val(cmd_large->write_linear.addr),
+                    val(cmd_large->write_linear.length));
+                stride += cmd_large->write_linear.length;
+            } break;
             case CQ_DISPATCH_CMD_WRITE_LINEAR_H_HOST:
                 if (cmd->write_linear_host.is_event) {
                     uint32_t* event_ptr = (uint32_t*)(cmd + 1);
@@ -206,12 +210,12 @@ uint32_t dump_dispatch_cmd(CQDispatchCmd* cmd, uint32_t cmd_addr, std::ofstream&
                 cq_file << fmt::format(" (num_words={})", val(cmd->set_go_signal_noc_data.num_words));
                 break;
             // These commands don't have any additional data to dump.
-            case CQ_DISPATCH_CMD_ILLEGAL: break;
-            case CQ_DISPATCH_CMD_SINK: break;
-            case CQ_DISPATCH_CMD_EXEC_BUF_END: break;
-            case CQ_DISPATCH_CMD_SEND_GO_SIGNAL: break;
-            case CQ_DISPATCH_NOTIFY_SUBORDINATE_GO_SIGNAL: break;
-            case CQ_DISPATCH_CMD_TERMINATE: break;
+            case CQ_DISPATCH_CMD_ILLEGAL:
+            case CQ_DISPATCH_CMD_SINK:
+            case CQ_DISPATCH_CMD_EXEC_BUF_END:
+            case CQ_DISPATCH_CMD_SEND_GO_SIGNAL:
+            case CQ_DISPATCH_NOTIFY_SUBORDINATE_GO_SIGNAL:
+            case CQ_DISPATCH_CMD_TERMINATE:
             case CQ_DISPATCH_CMD_SET_WRITE_OFFSET: break;
             default: TT_THROW("Unrecognized dispatch command: {}", cmd_id); break;
         }
@@ -228,13 +232,15 @@ uint32_t dump_prefetch_cmd(CQPrefetchCmd* cmd, uint32_t cmd_addr, std::ofstream&
     if (cmd_id < CQ_PREFETCH_CMD_MAX_COUNT) {
         iq_file << fmt::format("{:#010x}: {}", cmd_addr, cmd_id);
         switch (cmd_id) {
-            case CQ_PREFETCH_CMD_RELAY_LINEAR:
+            case CQ_PREFETCH_CMD_RELAY_LINEAR: {
+                CQPrefetchCmdLarge* cmd_large = (CQPrefetchCmdLarge*)cmd;
                 iq_file << fmt::format(
                     " (noc_xy_addr={:#010x}, addr={:#010x}, length={:#010x})",
-                    val(cmd->relay_linear.noc_xy_addr),
-                    val(cmd->relay_linear.addr),
-                    val(cmd->relay_linear.length));
+                    val(cmd_large->relay_linear.noc_xy_addr),
+                    val(cmd_large->relay_linear.addr),
+                    val(cmd_large->relay_linear.length));
                 break;
+            }
             case CQ_PREFETCH_CMD_RELAY_PAGED:
                 iq_file << fmt::format(
                     " (start_page={:#02x}, is_dram_and_length_adjust={:#x}, base_addr={:#010x}, page_size={:#010x}, "
@@ -279,9 +285,9 @@ uint32_t dump_prefetch_cmd(CQPrefetchCmd* cmd, uint32_t cmd_addr, std::ofstream&
                 stride = cmd->debug.stride;
                 break;
             // These commands don't have any additional data to dump.
-            case CQ_PREFETCH_CMD_ILLEGAL: break;
-            case CQ_PREFETCH_CMD_STALL: break;
-            case CQ_PREFETCH_CMD_TERMINATE: break;
+            case CQ_PREFETCH_CMD_ILLEGAL:
+            case CQ_PREFETCH_CMD_STALL:
+            case CQ_PREFETCH_CMD_TERMINATE:
             default: break;
         }
     }
@@ -382,7 +388,7 @@ void dump_completion_queue_entries(
                 cq_file << fmt::format(
                     "{:#010x}-{:#010x}: Data pages\n",
                     page_addr + DispatchSettings::TRANSFER_PAGE_SIZE,
-                    page_addr + (cmd_pages - 1) * DispatchSettings::TRANSFER_PAGE_SIZE);
+                    page_addr + ((cmd_pages - 1) * DispatchSettings::TRANSFER_PAGE_SIZE));
             } else if (cmd_pages == 2) {
                 cq_file << fmt::format("{:#010x}: Data page\n", page_addr + DispatchSettings::TRANSFER_PAGE_SIZE);
             }
@@ -396,7 +402,7 @@ void dump_completion_queue_entries(
             page_offset += DispatchSettings::TRANSFER_PAGE_SIZE;
         }
 
-        print_progress_bar((float)page_offset / completion_q_bytes + 0.005);
+        print_progress_bar(((float)page_offset / completion_q_bytes) + 0.005);
     }
     if (last_span_invalid) {
         cq_file << fmt::format(
@@ -532,7 +538,7 @@ void dump_issue_queue_entries(
             last_span_invalid = true;
             offset += hal.get_alignment(HalMemType::HOST);
         }
-        print_progress_bar((float)offset / issue_q_bytes + 0.005);
+        print_progress_bar(((float)offset / issue_q_bytes) + 0.005);
     }
     if (last_span_invalid) {
         iq_file << fmt::format(
@@ -603,7 +609,7 @@ void dump_command_queue_raw_data(
     print_progress_bar(0.0, true);
     for (uint32_t page_offset = 0; page_offset < bytes_to_read; page_offset += DispatchSettings::TRANSFER_PAGE_SIZE) {
         uint32_t page_addr = base_addr + page_offset;
-        print_progress_bar((float)page_offset / bytes_to_read + 0.005);
+        print_progress_bar(((float)page_offset / bytes_to_read) + 0.005);
 
         // Print in 16B per line
         tt::tt_metal::MetalContext::instance().get_cluster().read_sysmem(

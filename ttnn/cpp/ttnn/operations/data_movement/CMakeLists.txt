@@ -6,18 +6,39 @@ TT_ENABLE_UNITY_BUILD(ttnn_op_data_movement)
 set_target_properties(
     ttnn_op_data_movement
     PROPERTIES
-        VERIFY_INTERFACE_HEADER_SETS
-            FALSE
+        INTERFACE_HEADER_SETS_TO_VERIFY
+            api
 )
 
 # Globbing non-build files is acceptable for now because devs don't generate packages.
 file(
     GLOB_RECURSE kernels
+    bcast/device/kernels/*
+    concat/device/kernels/*
     common/kernels/*
+    fill_pad/device/kernels/*
+    fill_rm/device/kernels/*
+    fold/device/kernels/*
+    gather/device/kernels/*
+    copy/device/kernels/*
+    moe_expert_token_remap/device/kernels/*
+    non_zero_indices/device/kernels/*
     move/device/kernels/*
+    pad/device/kernels/*
     permute/device/kernels/*
+    reshape_on_device/device/kernels/*
+    repeat/device/device/*
+    reshape_view/device/device/*
+    scatter/device/kernels/*
+    sort/device/kernels/*
+    split/device/kernels/*
+    tilize/device/kernels/*
     sharded/device/kernels/*
+    slice/device/kernels/*
+    tilize_with_val_padding/device/kernels/*
     transpose/device/kernels/*
+    untilize/device/kernels/*
+    untilize_with_unpadding/device/kernels/*
 )
 target_sources(
     ttnn_op_data_movement
@@ -26,12 +47,26 @@ target_sources(
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
         FILES
-            sharded/reshard/device/reshard_op.hpp
-            sharded/interleaved_to_sharded/device/interleaved_to_sharded_op.hpp
-            sharded/sharded_to_interleaved/device/sharded_to_interleaved_op.hpp
+            bcast/bcast.hpp
+            bcast/bcast_types.hpp
+            concat/concat.hpp
+            copy/copy.hpp
             copy/device/copy_device_operation.hpp
+            pad/pad.hpp
+            permute/permute.hpp
+            repeat/repeat.hpp
             reshape_view/reshape.hpp
             reshape_view/reshape_common.hpp
+            sharded/interleaved_to_sharded/device/interleaved_to_sharded_op.hpp
+            sharded/reshard/device/reshard_op.hpp
+            sharded/sharded_to_interleaved/device/sharded_to_interleaved_op.hpp
+            slice/slice.hpp
+            tilize_with_val_padding/tilize_with_val_padding.hpp
+            tilize_with_val_padding/tilize_with_val_padding_common.hpp
+            tilize_with_val_padding/device/tilize_with_val_padding_op.hpp
+            transpose/transpose.hpp
+            untilize/untilize.hpp
+            untilize_with_unpadding/untilize_with_unpadding.hpp
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
@@ -90,6 +125,9 @@ target_sources(
         moe_expert_token_remap/moe_expert_token_remap.cpp
         moe_expert_token_remap/device/moe_expert_token_remap_device_operation.cpp
         moe_expert_token_remap/device/moe_expert_token_remap_program_factory.cpp
+        moe_routing_remap/moe_routing_remap.cpp
+        moe_routing_remap/device/moe_routing_remap_device_operation.cpp
+        moe_routing_remap/device/moe_routing_remap_program_factory.cpp
         move/device/move_device_operation.cpp
         move/device/move_program_factory.cpp
         move/move.cpp
@@ -136,6 +174,7 @@ target_sources(
         sharded_partial/sharded_to_interleaved_partial/sharded_to_interleaved_partial.cpp
         slice/device/slice_op.cpp
         slice/device/slice_program_factory.cpp
+        slice/device/slice_program_factory_stride.cpp
         slice/slice.cpp
         split/device/split_op.cpp
         split/device/split_program_factory.cpp
@@ -169,12 +208,7 @@ target_sources(
 )
 
 target_include_directories(ttnn_op_data_movement PRIVATE ${FixmeOpIncDirs})
-target_link_libraries(
-    ttnn_op_data_movement
-    PRIVATE
-        TT::Metalium
-        TTNN::Core
-)
+target_link_libraries(ttnn_op_data_movement PUBLIC TTNN::Core PRIVATE TT::Metalium)
 
 install(
     TARGETS

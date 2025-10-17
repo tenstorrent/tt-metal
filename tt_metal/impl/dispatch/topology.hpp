@@ -1,7 +1,9 @@
 // SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
+
 #pragma once
+
 #include <device.hpp>
 #include <stdint.h>
 #include <memory>
@@ -57,12 +59,6 @@ std::unique_ptr<tt::tt_metal::Program> get_compiled_cq_program(tt::tt_metal::IDe
 
 // Perform additional configuration (writing to specific L1 addresses, etc.) for FD kernels on this device.
 void configure_dispatch_cores(tt::tt_metal::IDevice* device);
-
-// Compile fabric kernels needed to support scaleout systems.
-std::unique_ptr<tt::tt_metal::Program> create_and_compile_fabric_program(tt::tt_metal::IDevice* device);
-
-// Perform additional configuration (writing to specific L1 addresses, etc.) for fabric kernels on this device.
-void configure_fabric_cores(tt::tt_metal::IDevice* device);
 
 // Return the virtual dispatch cores running on a given device
 const std::unordered_set<CoreCoord>& get_virtual_dispatch_cores(chip_id_t dev_id);

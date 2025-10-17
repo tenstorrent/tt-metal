@@ -6,9 +6,7 @@ from collections.abc import Callable
 from dataclasses import fields, is_dataclass
 from enum import Enum
 from types import NoneType
-from typing import Any, Callable, overload
-
-from loguru import logger
+from typing import Any, overload
 
 import ttnn
 from models.demos.deepseek_v3.utils.config_dataclass import FromWeightConfig, MeshDeviceStub, OpConfigBase, SavedWeight
@@ -16,9 +14,11 @@ from models.demos.deepseek_v3.utils.config_dataclass import FromWeightConfig, Me
 MESH_DEVICE_STATE_DICT_KEY = "mesh_device"
 
 WeightConfig = (
-    dict[str, "WeightConfig | SavedTensor | None"]
-    | list["WeightConfig | SavedTensor | None"]
-    | tuple["WeightConfig | SavedTensor | None"]  # TODO: bring regular tensor saving back once Issue #26763 is resolved
+    dict[str, "WeightConfig | SavedWeight | None"]
+    | list["WeightConfig | SavedWeight | None"]
+    | tuple[
+        "WeightConfig | SavedWeight | None", ...
+    ]  # TODO: bring regular tensor saving back once Issue #26763 is resolved
 )
 
 _PRIMITIVE_COPYABLE_TYPES = bool | int | float | complex | str | bytes | None | Enum
@@ -96,8 +96,6 @@ def create_run_config(model_config, weight_config, *model_states):
         mb_mesh_device=None,
     )
 
-    logger.info(f"run config: {_convert_run_config_to_pretty_print(run_config)}")
-
     return run_config
 
 
@@ -126,10 +124,12 @@ def _merge_model_config_state_items(model_config_item: Any, state_item: Any, mb_
 
 
 def _merge_run_config(model_state_config_item: Any, weight_config_item: Any, _: ttnn.Device | None) -> Any:
-    if isinstance(model_state_config_item, FromWeightConfig) and isinstance(
-        weight_config_item, SavedWeight
+    if isinstance(
+        model_state_config_item, FromWeightConfig
     ):  # TODO: bring regular tensor saving back once Issue #26763 is resolved
-        return load_weight(weight_config_item, model_state_config_item.mesh_device)
+        if isinstance(weight_config_item, SavedWeight):
+            return load_weight(weight_config_item, model_state_config_item.mesh_device)
+        return None
 
     if weight_config_item is None:
         assert not isinstance(
@@ -138,7 +138,7 @@ def _merge_run_config(model_state_config_item: Any, weight_config_item: Any, _: 
         return model_state_config_item
 
     raise ValueError(
-        f"Unsupported model and weight config items to merge: {model_state_config_item} and {weight_config_item}"
+        f"Unsupported model and weight config items to merge: {model_state_config_item} and {weight_config_item}. Try recalculating cached weights."
     )
 
 
@@ -167,12 +167,21 @@ def _merge_config_containers(
 
     # If both configs are lists/tuples of the same length or one of them is None, merge them as a list/tuple.
     if isinstance(cfg_a, (list, tuple, NoneType)) and isinstance(cfg_b, (list, tuple, NoneType)):
-        if cfg_a is None or cfg_b is None or (len(cfg_a) == len(cfg_b) and type(cfg_a) == type(cfg_b)):
+        if (
+            cfg_a is None
+            or cfg_b is None
+            or (len(cfg_a) == len(cfg_b) and type(cfg_a) == type(cfg_b))
+            or (len(cfg_a) == 1 or len(cfg_b) == 1 and type(cfg_a) == type(cfg_b))
+        ):
             container = type(cfg_a) if cfg_a is not None else type(cfg_b)
             if cfg_a is None:
                 cfg_a = container([None]) * len(cfg_b)
             if cfg_b is None:
                 cfg_b = container([None]) * len(cfg_a)
+            if len(cfg_a) == 1:
+                cfg_a *= len(cfg_b)
+            if len(cfg_b) == 1:
+                cfg_b *= len(cfg_a)
             return container(
                 _merge_config_containers(a, b, merge_config_specific_items, search_for_mesh_device, mb_mesh_device)
                 for a, b in zip(cfg_a, cfg_b, strict=True)
@@ -211,7 +220,7 @@ def _convert_run_config_to_pretty_print(run_config_item: Any, indent: int = 0) -
             return "{}"
 
         lines = ["{"]
-        for k, v in run_config_item.items():
+        for k, v in sorted(run_config_item.items(), key=lambda item: item[0]):
             value_str = _convert_run_config_to_pretty_print(v, indent + 1)
             lines.append(f"{next_indent_str}{k!r}: {value_str},")
         lines.append(f"{indent_str}}}")
@@ -338,10 +347,8 @@ def load_weight(saved_weight: SavedWeight, device: ttnn.Device) -> ttnn.Tensor:
     """
     Load a weight tensor from a SavedWeight object to a given mesh device.
     """
-
     return ttnn.load_tensor(
         saved_weight.path,
-        enable_multihost_format=True,
     ).to(
         device=device,
         mem_config=saved_weight.memory_config,

@@ -2,6 +2,12 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+try:
+    from tracy import signpost
+
+    use_signpost = True
+except ModuleNotFoundError:
+    use_signpost = False
 
 import ttnn
 
@@ -30,6 +36,7 @@ class TtVoVNet:
                 base_address=f"stem.0",
                 device=self.device,
                 parameters=parameters,
+                deallocate_activation=True,
             ),
             TtSeparableConvNormAct(
                 base_address=f"stem.1",
@@ -69,6 +76,9 @@ class TtVoVNet:
         )
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        if use_signpost:
+            signpost(header="vovnet")
+
         for i, module in enumerate(self.stem):
             x = module.forward(x)[0]
         for i, module in enumerate(self.stages):

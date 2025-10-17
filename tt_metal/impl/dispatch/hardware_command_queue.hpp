@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -17,7 +17,6 @@
 #include "buffer.hpp"
 #include "cq_shared_state.hpp"
 #include "command_queue.hpp"
-#include "command_queue_interface.hpp"
 #include "core_coord.hpp"
 #include "dispatch_settings.hpp"
 #include "event.hpp"
@@ -27,7 +26,7 @@
 #include <tt_stl/span.hpp>
 #include "sub_device_types.hpp"
 #include "trace/trace_buffer.hpp"
-#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/types/core_coordinates.hpp>
 #include "vector_aligned.hpp"
 #include "worker_config_buffer.hpp"
 #include "trace/trace_node.hpp"

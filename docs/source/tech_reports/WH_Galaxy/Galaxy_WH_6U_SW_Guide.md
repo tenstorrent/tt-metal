@@ -32,17 +32,17 @@ The following tests are short in runtime and loop over all chips to test for bas
 
 ![](https://github.com/tenstorrent/tt-metal/blob/main/docs/source/common/images/Ethernet_Link_Status_Test.png)
 
-- `TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="CommandQueueSingleCardFixture.*"` - This test ensures that basic Command Queue APIs function correctly.
+- `TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="UnitMeshCQSingleCardFixture.*"` - This test ensures that basic Command Queue APIs function correctly.
   The following expected output will appear upon completion of a successful Command Queue API test:
 
 ![](https://github.com/tenstorrent/tt-metal/blob/main/docs/source/common/images/CQ_API_Test.png)
 
-- `TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="CommandQueueSingleCardProgramFixture.*"` - This test ensures that Metal Program APIs function correctly.
+- `TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="UnitMeshCQSingleCardProgramFixture.*"` - This test ensures that Metal Program APIs function correctly.
   The following expected output will appear upon completion of a successful Program API test:
 
 ![](https://github.com/tenstorrent/tt-metal/blob/main/docs/source/common/images/Program_API_Test.png)
 
-- `TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="CommandQueueSingleCardBufferFixture.ShardedBufferLarge*ReadWrites"` - This test ensures that basic Metal Buffers read and write to both L1 and DRAM memory buffers.
+- `TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="UnitMeshCQSingleCardBufferFixture.ShardedBufferLarge*ReadWrites"` - This test ensures that basic Metal Buffers read and write to both L1 and DRAM memory buffers.
   The following expected output will appear upon completion of a successful Memory Buffer test:
 
 ![](https://github.com/tenstorrent/tt-metal/blob/main/docs/source/common/images/Memory_Buffer_Test.png)

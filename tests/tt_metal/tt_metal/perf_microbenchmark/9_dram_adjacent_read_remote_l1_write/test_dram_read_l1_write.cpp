@@ -13,7 +13,6 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/tt_metal_profiler.hpp>
-#include <tt-metalium/util.hpp>
 #include <algorithm>
 #include <array>
 #include <cstdint>
@@ -29,7 +28,7 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
@@ -45,9 +44,10 @@
 #include <tt_stl/span.hpp>
 #include "test_common.hpp"
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
-#include "umd/device/types/arch.h"
-#include "umd/device/types/xy_pair.h"
+#include <umd/device/types/arch.hpp>
+#include <umd/device/types/xy_pair.hpp>
 #include <tt-metalium/distributed.hpp>
+#include "tt_metal/test_utils/bfloat_utils.hpp"
 
 using namespace tt;
 using std::chrono::duration_cast;
@@ -249,12 +249,12 @@ bool validate_data(
     for (uint32_t r = 0; r < block_h; ++r) {
         for (uint32_t c = 0; c < block_w_per_receiver; ++c) {
             uint32_t one_row_bytes = block_w * datums_per_tile * num_banks;
-            uint32_t input_step = input_start_index_for_core + r * one_row_bytes + c * datums_per_tile * num_banks;
+            uint32_t input_step = input_start_index_for_core + (r * one_row_bytes) + (c * datums_per_tile * num_banks);
             auto input_begin = input_data.begin() + input_step;
             auto input_end = input_begin + datums_per_tile;
             std::vector<T> input_slice(input_begin, input_end);
 
-            uint32_t result_step = r * (datums_per_tile * block_w_per_receiver) + c * datums_per_tile;
+            uint32_t result_step = (r * (datums_per_tile * block_w_per_receiver)) + (c * datums_per_tile);
             auto result_begin = result_data.begin() + result_step;
             auto result_end = result_begin + datums_per_tile;
             std::vector<T> result_slice(result_begin, result_end);
@@ -515,7 +515,7 @@ int main(int argc, char** argv) {
         uint32_t block_w_per_receiver = block_w / 2;
         uint32_t num_datum_per_slice = 32 * 32;
 
-        uint32_t single_tile_size = tt_metal::detail::TileSize(tile_format);
+        uint32_t single_tile_size = tt::tile_size(tile_format);
         if (input_size % single_tile_size != 0) {
             auto align_to_single_tile = [=](uint64_t value) -> uint64_t {
                 return ((value + (single_tile_size - 1)) / single_tile_size) * single_tile_size;
@@ -594,9 +594,9 @@ int main(int argc, char** argv) {
 
         std::vector<uint32_t> input_vec;
         if (tile_format == tt::DataFormat::Bfp4_b) {
-            input_vec = create_random_vector_of_bfp4(input_size, false, 100, 1234);
+            input_vec = test_utils::create_random_vector_of_bfp4(input_size, false, 100, 1234);
         } else if (tile_format == tt::DataFormat::Bfp8_b) {
-            input_vec = create_random_vector_of_bfp8(input_size, false, 100, 1234);
+            input_vec = test_utils::create_random_vector_of_bfp8(input_size, false, 100, 1234);
         } else {
             input_vec = create_random_vector_of_bfloat16(input_size, 100, 1234);
         }
@@ -638,16 +638,15 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Execution Application
         ////////////////////////////////////////////////////////////////////////////
-        auto mesh_workload = tt_metal::distributed::CreateMeshWorkload();
-        tt_metal::distributed::AddProgramToMeshWorkload(
-            mesh_workload, std::move(program), tt::tt_metal::distributed::MeshCoordinateRange{{0, 0}, {0, 0}});
+        auto mesh_workload = tt_metal::distributed::MeshWorkload();
+        mesh_workload.add_program(tt::tt_metal::distributed::MeshCoordinateRange{{0, 0}, {0, 0}}, std::move(program));
 
         log_info(LogTest, "Num tests {}", num_tests);
         for (uint32_t i = 0; i < num_tests; ++i) {
             auto t_begin = std::chrono::steady_clock::now();
             tt_metal::distributed::EnqueueMeshWorkload(device->mesh_command_queue(), mesh_workload, false);
             tt_metal::distributed::Finish(device->mesh_command_queue());
-            tt_metal::detail::ReadDeviceProfilerResults(device->get_devices()[0]);
+            tt_metal::ReadMeshDeviceProfilerResults(*device);
             auto t_end = std::chrono::steady_clock::now();
             auto elapsed_us = duration_cast<microseconds>(t_end - t_begin).count();
             dram_bandwidth.push_back((input_size / 1024.0 / 1024.0 / 1024.0) / (elapsed_us / 1000.0 / 1000.0));

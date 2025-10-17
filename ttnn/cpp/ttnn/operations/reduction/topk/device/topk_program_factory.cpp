@@ -4,7 +4,6 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include "ttnn/operation.hpp"
 #include "topk_utils.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -41,10 +40,6 @@ operation::ProgramWithCallbacks topk_single_core_interleaved(
     auto input_buffer = input_tensor.buffer();
     auto values_buffer = value_tensor.buffer();
     auto index_buffer = index_tensor.buffer();
-
-    bool input_is_dram = input_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    bool values_is_dram = values_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    bool index_is_dram = index_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
     auto input_shape = input_tensor.padded_shape();
     uint32_t Ht = (input_shape[0] * input_shape[1] * input_shape[2]) / TILE_HEIGHT;
@@ -277,13 +272,6 @@ operation::ProgramWithCallbacks topk_multicore_interleaved(
     auto index_buffer = index_tensor.buffer();
     auto input_indices_buffer = input_indices_tensor.has_value() ? input_indices_tensor->buffer() : nullptr;
 
-    bool input_is_dram = input_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    bool values_is_dram = values_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    bool index_is_dram = index_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    bool input_indices_is_dram = input_indices_tensor.has_value()
-                                     ? input_indices_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM
-                                     : false;
-
     auto device = input_tensor.device();
 
     auto input_shape = input_tensor.padded_shape();
@@ -315,7 +303,7 @@ operation::ProgramWithCallbacks topk_multicore_interleaved(
 
     uint32_t Wt_local = local_topk_input_size / TILE_WIDTH;
     uint32_t Wt_final = final_topk_input_size / TILE_WIDTH;
-    uint32_t Kt = k % TILE_WIDTH == 0 ? k / TILE_WIDTH : k / TILE_WIDTH + 1;
+    uint32_t Kt = k % TILE_WIDTH == 0 ? k / TILE_WIDTH : (k / TILE_WIDTH) + 1;
 
     // for streaming in input
     uint32_t num_cb_unit = 2;

@@ -7,10 +7,10 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import divup, is_wormhole_b0
 from models.demos.yolov9c.common import load_torch_model
 from models.demos.yolov9c.tt.model_preprocessing import create_yolov9c_model_parameters
 from models.demos.yolov9c.tt.ttnn_yolov9c import YoloV9
-from models.utility_functions import divup, is_wormhole_b0
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
@@ -119,7 +119,7 @@ class YOLOv9PerformanceRunnerInfra:
         ttnn_output_tensor = self.output_tensor if output_tensor is None else output_tensor
         torch_output_tensor = self.torch_output_tensor if torch_output_tensor is None else torch_output_tensor
         output_tensor = ttnn.to_torch(ttnn_output_tensor[0], mesh_composer=self.mesh_composer)
-        self.pcc_passed, self.pcc_message = assert_with_pcc(self.torch_output_tensor[0], output_tensor, pcc=0.99)
+        self.pcc_passed, self.pcc_message = assert_with_pcc(torch_output_tensor[0], output_tensor, pcc=0.99)
 
         logger.info(
             f"Yolov9c - batch_size={self.batch_size}, act_dtype={self.act_dtype}, weight_dtype={self.weight_dtype}, PCC={self.pcc_message}"

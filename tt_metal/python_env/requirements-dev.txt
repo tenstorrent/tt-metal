@@ -5,7 +5,7 @@
 # Make it match pyproject.toml
 loguru==0.6.0
 
-git+https://github.com/tenstorrent/tt-smi.git@v3.0.27
+tt-smi==3.0.30; platform_machine == "x86_64"
 
 # For github workflow unit test failure annotations
 pytest-github-actions-annotate-failures==0.3.0
@@ -104,3 +104,4 @@ kagglehub==0.2.9
 efficientnet-pytorch==0.7.1
 mmcv==2.2.0 # Required for UniAD model
 casadi==3.7.1 # Required for UniAD model
+mmcv-full==1.7.2 #Required for UniAD model

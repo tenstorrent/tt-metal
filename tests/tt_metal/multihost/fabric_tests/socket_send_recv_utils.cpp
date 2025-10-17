@@ -16,6 +16,7 @@
 #include <algorithm>
 
 #include "tests/tt_metal/multihost/fabric_tests/socket_send_recv_utils.hpp"
+#include <tt-logger/tt-logger.hpp>
 
 namespace tt::tt_fabric {
 namespace fabric_router_tests::multihost {
@@ -117,9 +118,14 @@ bool test_socket_send_recv(
             const ReplicatedBufferConfig buffer_config{.size = sender_core_range_set.num_cores() * data_size};
 
             auto sender_data_buffer = MeshBuffer::create(buffer_config, sender_device_local_config, mesh_device_.get());
-            auto sender_mesh_workload = CreateMeshWorkload();
+            auto sender_mesh_workload = MeshWorkload();
+            std::unordered_set<MeshCoreCoord> mesh_core_coords;
 
             for (const auto& connection : socket.get_config().socket_connection_config) {
+                if (mesh_core_coords.find(connection.sender_core) != mesh_core_coords.end()) {
+                    continue;
+                }
+                mesh_core_coords.insert(connection.sender_core);
                 auto sender_core = connection.sender_core.core_coord;
                 WriteShard(
                     mesh_device_->mesh_command_queue(),
@@ -159,10 +165,8 @@ bool test_socket_send_recv(
                     sender_fabric_node_id, recv_fabric_node_id, 0, sender_program, {sender_core}, sender_rtas);
 
                 tt_metal::SetRuntimeArgs(sender_program, sender_kernel, sender_core, sender_rtas);
-                AddProgramToMeshWorkload(
-                    sender_mesh_workload,
-                    std::move(sender_program),
-                    MeshCoordinateRange(connection.sender_core.device_coord));
+                sender_mesh_workload.add_program(
+                    MeshCoordinateRange(connection.sender_core.device_coord), std::move(sender_program));
             }
             // Run workload performing Data Movement over the socket
             EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), sender_mesh_workload, false);
@@ -180,7 +184,7 @@ bool test_socket_send_recv(
             const ReplicatedBufferConfig buffer_config{.size = recv_core_range_set.num_cores() * data_size};
             auto recv_data_buffer = MeshBuffer::create(buffer_config, recv_device_local_config, mesh_device_.get());
 
-            auto recv_mesh_workload = CreateMeshWorkload();
+            auto recv_mesh_workload = MeshWorkload();
             for (const auto& connection : socket.get_config().socket_connection_config) {
                 auto recv_core = connection.receiver_core.core_coord;
                 auto sender_fabric_node_id =
@@ -210,10 +214,8 @@ bool test_socket_send_recv(
                 tt_fabric::append_fabric_connection_rt_args(
                     recv_fabric_node_id, sender_fabric_node_id, 0, recv_program, {recv_core}, recv_rtas);
                 tt_metal::SetRuntimeArgs(recv_program, recv_kernel, recv_core, recv_rtas);
-                AddProgramToMeshWorkload(
-                    recv_mesh_workload,
-                    std::move(recv_program),
-                    MeshCoordinateRange(connection.receiver_core.device_coord));
+                recv_mesh_workload.add_program(
+                    MeshCoordinateRange(connection.receiver_core.device_coord), std::move(recv_program));
             }
             // Run receiver workload using the created socket
             EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), recv_mesh_workload, false);
@@ -230,7 +232,7 @@ bool test_socket_send_recv(
                     recv_data_readback.begin() + idx * data_size / sizeof(uint32_t),
                     recv_data_readback.begin() + (idx + 1) * data_size / sizeof(uint32_t));
                 is_data_match &= (src_vec_per_core == recv_data_readback_per_core);
-                EXPECT_TRUE(is_data_match);
+                EXPECT_EQ(src_vec_per_core, recv_data_readback_per_core);
             }
         }
         // Increment the source vector for the next iteration
@@ -261,7 +263,7 @@ std::vector<uint32_t> get_neighbor_host_ranks(SystemConfig system_config) {
 }
 
 void test_multi_mesh_single_conn_bwd(
-    std::shared_ptr<tt_metal::distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<tt_metal::distributed::MeshDevice>& mesh_device,
     uint32_t socket_fifo_size,
     uint32_t socket_page_size,
     uint32_t data_size,
@@ -321,7 +323,7 @@ void test_multi_mesh_single_conn_bwd(
 }
 
 void test_multi_mesh_single_conn_fwd(
-    std::shared_ptr<tt_metal::distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<tt_metal::distributed::MeshDevice>& mesh_device,
     uint32_t socket_fifo_size,
     uint32_t socket_page_size,
     uint32_t data_size,
@@ -378,7 +380,7 @@ void test_multi_mesh_single_conn_fwd(
 }
 
 void test_multi_mesh_multi_conn_fwd(
-    std::shared_ptr<tt_metal::distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<tt_metal::distributed::MeshDevice>& mesh_device,
     uint32_t socket_fifo_size,
     uint32_t socket_page_size,
     uint32_t data_size,
@@ -438,7 +440,7 @@ void test_multi_mesh_multi_conn_fwd(
 }
 
 void test_multi_mesh_multi_conn_bidirectional(
-    std::shared_ptr<tt_metal::distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<tt_metal::distributed::MeshDevice>& mesh_device,
     uint32_t socket_fifo_size,
     uint32_t socket_page_size,
     uint32_t data_size,

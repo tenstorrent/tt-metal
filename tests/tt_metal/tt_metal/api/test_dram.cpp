@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -18,22 +18,23 @@
 #include <vector>
 
 #include <tt-metalium/allocator.hpp>
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/device.hpp>
+#include "context/metal_context.hpp"
 #include "mesh_dispatch_fixture.hpp"
-#include <tt-metalium/distributed.hpp>
 #include "gtest/gtest.h"
 #include <tt-metalium/hal.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_align.hpp>
-#include "umd/device/types/xy_pair.h"
+#include <umd/device/types/xy_pair.hpp>
 
 using namespace tt;
 
@@ -67,12 +68,12 @@ tt::tt_metal::KernelHandle CreateKernelFromVariant(tt::tt_metal::Program& progra
 }
 
 bool dram_single_core_db(
-    tt::tt_metal::MeshDispatchFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+    tt::tt_metal::MeshDispatchFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     tt_metal::Program program = tt_metal::CreateProgram();
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
 
     CoreCoord core = {0, 0};
@@ -133,7 +134,7 @@ bool dram_single_core_db(
 
 bool dram_single_core(
     tt::tt_metal::MeshDispatchFixture* fixture,
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const DRAMConfig& cfg) {
     std::vector<uint32_t> src_vec =
         create_random_vector_of_bfloat16(cfg.dram_buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
@@ -143,7 +144,7 @@ bool dram_single_core(
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     tt_metal::Program program = tt_metal::CreateProgram();
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
 
     distributed::DeviceLocalBufferConfig dram_config{
@@ -186,7 +187,7 @@ bool dram_single_core(
 
 bool dram_single_core_pre_allocated(
     tt::tt_metal::MeshDispatchFixture* fixture,
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const DRAMConfig& cfg) {
     std::vector<uint32_t> src_vec =
         create_random_vector_of_bfloat16(cfg.dram_buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
@@ -195,7 +196,7 @@ bool dram_single_core_pre_allocated(
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     tt_metal::Program program = tt_metal::CreateProgram();
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
 
     distributed::DeviceLocalBufferConfig dram_config{
@@ -253,7 +254,7 @@ TEST_F(MeshDispatchFixture, TensixDRAMLoopbackSingleCore) {
         .kernel_cfg =
             tt::tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default},
     };
-    for (auto mesh_device : devices_) {
+    for (const auto& mesh_device : devices_) {
         ASSERT_TRUE(unit_tests_common::dram::test_dram::dram_single_core(this, mesh_device, dram_test_config));
     }
 }
@@ -268,7 +269,7 @@ TEST_F(MeshDispatchFixture, TensixDRAMLoopbackSingleCorePreAllocated) {
         .kernel_cfg =
             tt::tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default},
     };
-    for (auto mesh_device : devices_) {
+    for (const auto& mesh_device : devices_) {
         ASSERT_TRUE(
             unit_tests_common::dram::test_dram::dram_single_core_pre_allocated(this, mesh_device, dram_test_config));
     }
@@ -279,18 +280,13 @@ TEST_F(MeshDispatchFixture, TensixDRAMLoopbackSingleCoreDB) {
         log_info(tt::LogTest, "This test is only supported in slow dispatch mode");
         GTEST_SKIP();
     }
-    for (auto mesh_device : devices_) {
+    for (const auto& mesh_device : devices_) {
         ASSERT_TRUE(unit_tests_common::dram::test_dram::dram_single_core_db(this, mesh_device));
     }
 }
 
 TEST_F(MeshDispatchFixture, ActiveEthDRAMLoopbackSingleCore) {
     constexpr uint32_t buffer_size = 2 * 1024 * 25;
-
-    if (!this->IsSlowDispatch()) {
-        log_info(tt::LogTest, "This test is only supported in slow dispatch mode");
-        GTEST_SKIP();
-    }
 
     unit_tests_common::dram::test_dram::DRAMConfig dram_test_config = {
         .core_range = {{0, 0}, {0, 0}},
@@ -299,15 +295,24 @@ TEST_F(MeshDispatchFixture, ActiveEthDRAMLoopbackSingleCore) {
         .l1_buffer_addr = tt::align(
             tt::tt_metal::hal::get_erisc_l1_unreserved_base(),
             MetalContext::instance().hal().get_alignment(HalMemType::DRAM)),
-        .kernel_cfg = tt_metal::EthernetConfig{.eth_mode = Eth::RECEIVER, .noc = tt_metal::NOC::NOC_0},
+        .kernel_cfg = tt_metal::EthernetConfig{},
     };
 
-    for (auto mesh_device : devices_) {
+    for (const auto& mesh_device : devices_) {
         auto device = mesh_device->get_devices()[0];
         for (auto active_eth_core : device->get_active_ethernet_cores(true)) {
             log_info(tt::LogTest, "Active Eth Loopback. Logical core {}", active_eth_core.str());
             dram_test_config.core_range = {active_eth_core, active_eth_core};
-            ASSERT_TRUE(unit_tests_common::dram::test_dram::dram_single_core(this, mesh_device, dram_test_config));
+            const auto erisc_count = tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(
+                HalProgrammableCoreType::ACTIVE_ETH);
+            for (uint32_t erisc_idx = 0; erisc_idx < erisc_count; ++erisc_idx) {
+                log_info(tt::LogTest, "Active Eth DM{} Loopback. Logical core {}", erisc_idx, active_eth_core.str());
+                dram_test_config.kernel_cfg = tt_metal::EthernetConfig{
+                    .eth_mode = Eth::RECEIVER,
+                    .noc = static_cast<tt_metal::NOC>(erisc_idx),
+                    .processor = static_cast<DataMovementProcessor>(erisc_idx)};
+                ASSERT_TRUE(unit_tests_common::dram::test_dram::dram_single_core(this, mesh_device, dram_test_config));
+            }
         }
     }
 }
@@ -327,15 +332,24 @@ TEST_F(MeshDispatchFixture, IdleEthDRAMLoopbackSingleCore) {
         .l1_buffer_addr = tt::align(
             tt::tt_metal::hal::get_erisc_l1_unreserved_base(),
             MetalContext::instance().hal().get_alignment(HalMemType::DRAM)),
-        .kernel_cfg = tt_metal::EthernetConfig{.eth_mode = Eth::IDLE, .noc = tt_metal::NOC::NOC_0},
+        .kernel_cfg = tt_metal::EthernetConfig{},
     };
 
-    for (auto mesh_device : devices_) {
+    for (const auto& mesh_device : devices_) {
         auto device = mesh_device->get_devices()[0];
         for (auto idle_eth_core : device->get_inactive_ethernet_cores()) {
             log_info(tt::LogTest, "Single Idle Eth Loopback. Logical core {}", idle_eth_core.str());
             dram_test_config.core_range = {idle_eth_core, idle_eth_core};
-            unit_tests_common::dram::test_dram::dram_single_core(this, mesh_device, dram_test_config);
+            const auto erisc_count =
+                tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(HalProgrammableCoreType::IDLE_ETH);
+            for (uint32_t erisc_idx = 0; erisc_idx < erisc_count; ++erisc_idx) {
+                log_info(tt::LogTest, "Single Idle Eth DM{} Loopback. Logical core {}", erisc_idx, idle_eth_core.str());
+                dram_test_config.kernel_cfg = tt_metal::EthernetConfig{
+                    .eth_mode = Eth::IDLE,
+                    .noc = static_cast<tt_metal::NOC>(erisc_idx),
+                    .processor = static_cast<DataMovementProcessor>(erisc_idx)};
+                ASSERT_TRUE(unit_tests_common::dram::test_dram::dram_single_core(this, mesh_device, dram_test_config));
+            }
         }
     }
 }
@@ -343,13 +357,17 @@ TEST_F(MeshDispatchFixture, IdleEthDRAMLoopbackSingleCore) {
 // This test will hang on BH when both nocs use the same DRAM endpoint due to SYS-1419, hang can be reproduced by
 // increasing `num_iterations` DRAM arbiter seems to drop requests from one noc when both nocs are issuing requests to
 // the same DRAM endpoint at a fast rate.
-TEST_F(MeshDispatchFixture, TensixLoopDRAMReadSingleCoreBothProcessors) {
+// This test should be kept to facilitate getting a scandump for root-causing SYS-1419 but keep it DISABLED so it doesn't run on CI
+TEST_F(MeshDispatchFixture, DISABLED_TensixLoopDRAMReadSingleCoreBothProcessors) {
+    if (this->arch_ != tt::ARCH::BLACKHOLE) {
+        GTEST_SKIP() << "This test has hardcoded parameters for Blackhole to repro hang described in SYS-1419";
+    }
     auto mesh_device = devices_.at(0);
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     tt_metal::Program program = tt_metal::CreateProgram();
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
     CoreCoord core = {0, 0};
 
@@ -365,12 +383,17 @@ TEST_F(MeshDispatchFixture, TensixLoopDRAMReadSingleCoreBothProcessors) {
     uint32_t brisc_num_pages_to_read = 43264;
     uint32_t ncrisc_num_pages_to_read = ((brisc_base_addr - ncrisc_base_addr) / page_size) * num_drams;
 
+    std::vector<uint32_t> brisc_compile_time_args = {};
+    tt_metal::TensorAccessorArgs::create_dram_interleaved().append_to(brisc_compile_time_args);
+
     tt_metal::KernelHandle brisc_kernel = tt_metal::CreateKernel(
         program_,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_arbiter_hang.cpp",
         core,
         tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
+            .processor = tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt_metal::NOC::RISCV_0_default,
+            .compile_args = brisc_compile_time_args});
 
     tt_metal::SetRuntimeArgs(
         program_,
@@ -378,12 +401,17 @@ TEST_F(MeshDispatchFixture, TensixLoopDRAMReadSingleCoreBothProcessors) {
         core,
         {brisc_base_addr, page_size, l1_address, brisc_num_pages_to_read, num_iterations});
 
+    std::vector<uint32_t> ncrisc_compile_time_args = {};
+    tt_metal::TensorAccessorArgs::create_dram_interleaved().append_to(ncrisc_compile_time_args);
+
     tt_metal::KernelHandle ncrisc_kernel = tt_metal::CreateKernel(
         program_,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_arbiter_hang.cpp",
         core,
         tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
+            .processor = tt_metal::DataMovementProcessor::RISCV_1,
+            .noc = tt_metal::NOC::RISCV_1_default,
+            .compile_args = ncrisc_compile_time_args});
 
     tt_metal::SetRuntimeArgs(
         program_,

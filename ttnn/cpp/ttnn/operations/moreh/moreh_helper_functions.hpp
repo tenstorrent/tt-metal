@@ -18,7 +18,7 @@ namespace operations {
 using namespace tt::tt_metal;
 
 inline bool is_dram(const Tensor& tensor) { return tensor.memory_config().buffer_type() == BufferType::DRAM; }
-inline bool is_dram(const std::optional<const Tensor> tensor) {
+inline bool is_dram(const std::optional<const Tensor>& tensor) {
     return tensor.has_value() ? is_dram(tensor.value()) : true;
 }
 inline bool is_dram(const std::optional<std::reference_wrapper<const Tensor>> tensor) {
@@ -129,9 +129,8 @@ struct CircularBufferArg {
     tt::DataFormat data_format;
     std::optional<std::variant<CoreCoord, CoreRange, CoreRangeSet>> core_range = std::nullopt;
 
-    CircularBufferArg(uint32_t buffer_index, uint32_t num_tiles) : buffer_index(buffer_index), num_tiles(num_tiles) {
-        data_format = tt::DataFormat::Invalid;
-    }
+    CircularBufferArg(uint32_t buffer_index, uint32_t num_tiles) :
+        buffer_index(buffer_index), num_tiles(num_tiles), data_format(tt::DataFormat::Invalid) {}
     CircularBufferArg(uint32_t buffer_index, uint32_t num_tiles, tt::DataFormat data_format) :
         buffer_index(buffer_index), num_tiles(num_tiles), data_format(data_format) {}
 };
@@ -222,7 +221,7 @@ auto create_override_runtime_arguments_callback(
     KernelHandle writer_kernel_id,
     uint32_t num_cores,
     uint32_t core_h,
-    CallbackArgMap arg_map) {
+    const CallbackArgMap& arg_map) {
     return [reader_kernel_id = reader_kernel_id, writer_kernel_id = writer_kernel_id, arg_map, num_cores, core_h](
                const void* operation,
                Program& program,

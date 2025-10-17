@@ -8,6 +8,8 @@
 #include <tt-metalium/fabric_types.hpp>
 #include <tt-metalium/metal_soc_descriptor.h>
 #include <tt-metalium/cluster.hpp>
+#include "llrt/rtoptions.hpp"
+#include "llrt/tt_target_device.hpp"
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -21,21 +23,20 @@
 #include <unordered_set>
 #include <vector>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "core_coord.hpp"
-#include <umd/device/cluster.h>
-#include <umd/device/device_api_metal.h>
-#include <umd/device/tt_cluster_descriptor.h>
-#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/cluster.hpp>
+#include <umd/device/driver_atomics.hpp>
+#include <umd/device/cluster_descriptor.hpp>
+#include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/tt_io.hpp>
-#include <umd/device/tt_silicon_driver_common.hpp>
-#include <umd/device/tt_soc_descriptor.h>
-#include <umd/device/tt_xy_pair.h>
-#include <umd/device/types/cluster_descriptor_types.h>
-#include <umd/device/types/harvesting.h>
+#include <umd/device/soc_descriptor.hpp>
+#include <umd/device/types/xy_pair.hpp>
+#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <umd/device/types/harvesting.hpp>
+#include <umd/device/types/cluster_types.hpp>
 
 namespace tt {
-enum class ARCH;
 namespace llrt {
 class RunTimeOptions;
 }
@@ -47,22 +48,12 @@ namespace tt_metal {
 class Hal;
 }
 }  // namespace tt
-struct tt_device_params;
 
 static constexpr std::uint32_t SW_VERSION = 0x00020000;
 
 using tt_target_dram = std::tuple<int, int, int>;
 
 namespace tt {
-
-/**
- * @brief Specifies the target devices on which the graph can be run.
- */
-enum class TargetDevice : std::uint8_t {
-    Silicon = 0,
-    Simulator = 1,
-    Invalid = 0xFF,
-};
 
 enum class EthRouterMode : uint32_t {
     IDLE = 0,
@@ -104,6 +95,11 @@ public:
         return this->cluster_desc_;
     }
 
+    const std::unique_ptr<tt::umd::Cluster>& get_driver() const {
+        TT_FATAL(driver_ != nullptr, "UMD driver is not initialized.");
+        return driver_;
+    }
+
     // TODO: UMD will eventually consolidate ethernet coordinates and unique ids, we can remove the ethernet coord
     // getter after that change is in
     const std::unordered_map<chip_id_t, uint64_t>& get_unique_chip_ids() const {
@@ -130,23 +126,18 @@ public:
         return this->driver_->get_soc_descriptor(chip).harvesting_masks.tensix_harvesting_mask;
     }
 
-    uint16_t get_bus_id(chip_id_t chip) const {
-        return this->driver_->get_chip(chip)->get_tt_device()->get_pci_device()->get_device_info().pci_bus;
-    }
+    uint16_t get_bus_id(chip_id_t chip) const;
 
-    std::optional<int> get_physical_slot(chip_id_t chip) const {
-        return this->driver_->get_chip(chip)->get_tt_device()->get_pci_device()->get_device_info().physical_slot;
-    }
+    std::optional<int> get_physical_slot(chip_id_t chip) const;
 
     //! device driver and misc apis
     void verify_sw_fw_versions(int device_id, std::uint32_t sw_version, std::vector<std::uint32_t>& fw_versions) const;
 
     void deassert_risc_reset_at_core(
         const tt_cxy_pair& physical_chip_coord,
-        const TensixSoftResetOptions& soft_resets = TENSIX_DEASSERT_SOFT_RESET) const;
-    void assert_risc_reset_at_core(
-        const tt_cxy_pair& physical_chip_coord,
-        const TensixSoftResetOptions& soft_resets = TENSIX_ASSERT_SOFT_RESET) const;
+        const tt::umd::RiscType& soft_resets,
+        bool staggered_start = true) const;
+    void assert_risc_reset_at_core(const tt_cxy_pair& physical_chip_coord, const tt::umd::RiscType& soft_resets) const;
 
     void write_dram_vec(
         const void* mem_ptr, uint32_t sz_in_bytes, chip_id_t device_id, int dram_view, uint64_t addr) const;
@@ -201,11 +192,6 @@ public:
         tt::umd::CoreCoord target_coord = get_soc_desc(target.chip).get_coord_at(target, CoordSystem::TRANSLATED);
         auto tlb_configuration = driver_->get_tlb_configuration(target.chip, target_coord);
         return std::tuple((uint32_t)tlb_configuration.tlb_offset, (uint32_t)tlb_configuration.size);
-    }
-
-    std::function<void(uint32_t, uint32_t, const uint8_t*)> get_fast_pcie_static_tlb_write_callable(int chip_id) const {
-        chip_id_t mmio_device_id = this->cluster_desc_->get_closest_mmio_capable_chip(chip_id);
-        return driver_->get_fast_pcie_static_tlb_write_callable(mmio_device_id);
     }
 
     // Returns a writer object which holds a pointer to a static tlb
@@ -299,13 +285,7 @@ public:
     }
 
     // Returns collection of devices that are controlled by the specified MMIO device inclusive of the MMIO device
-    const std::unordered_set<chip_id_t>& get_devices_controlled_by_mmio_device(chip_id_t mmio_device_id) const {
-        TT_ASSERT(
-            this->cluster_desc_->get_chips_grouped_by_closest_mmio().count(mmio_device_id),
-            "Expected device {} to be an MMIO device!",
-            mmio_device_id);
-        return this->cluster_desc_->get_chips_grouped_by_closest_mmio().at(mmio_device_id);
-    }
+    const std::unordered_set<chip_id_t>& get_devices_controlled_by_mmio_device(chip_id_t mmio_device_id) const;
 
     // Returns map of connected chip ids to active ethernet cores
     std::unordered_map<chip_id_t, std::vector<CoreCoord>> get_ethernet_cores_grouped_by_connected_chips(
@@ -324,13 +304,18 @@ public:
     void initialize_fabric_config(
         tt_fabric::FabricConfig fabric_config, tt_fabric::FabricReliabilityMode reliability_mode);
 
-    // Returns whether we are running on Galaxy.
+    // Returns whether we are running on Legacy Galaxy.
     bool is_galaxy_cluster() const;
+
+    // Returns whether we are running on UBB Galaxy.
+    bool is_ubb_galaxy() const;
 
     // Returns Wormhole chip board type.
     BoardType get_board_type(chip_id_t chip_id) const;
 
     tt::tt_metal::ClusterType get_cluster_type() const;
+
+    tt::TargetDevice get_target_device_type() const { return this->target_type_; }
 
     bool is_base_routing_fw_enabled() const;
 
@@ -403,9 +388,7 @@ private:
     // UMD static APIs `detect_available_device_ids` and `detect_number_of_chips` only returns number of MMIO mapped
     // devices
     tt_ClusterDescriptor* cluster_desc_ = nullptr;
-    // In case of mock cluster descriptor, the tt_cluster holds the ownership of the created object;
-    // This is obviously a design issue. This should go away once the design is fixed.
-    std::unique_ptr<tt_ClusterDescriptor> mock_cluster_desc_ptr_;
+
     // There is an entry for every device that can be targeted (MMIO and remote)
     std::unordered_map<chip_id_t, metal_SocDescriptor> sdesc_per_chip_;
 

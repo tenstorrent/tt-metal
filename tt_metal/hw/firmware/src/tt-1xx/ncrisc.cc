@@ -120,8 +120,7 @@ int main(int argc, char* argv[]) {
         uint32_t launch_msg_rd_ptr = mailboxes->launch_msg_rd_ptr;
         launch_msg_t* launch_msg = &(mailboxes->launch[launch_msg_rd_ptr]);
 
-        uint32_t kernel_config_base =
-            firmware_config_init(mailboxes, ProgrammableCoreType::TENSIX, DISPATCH_CLASS_TENSIX_DM1);
+        uint32_t kernel_config_base = firmware_config_init(mailboxes, ProgrammableCoreType::TENSIX, PROCESSOR_INDEX);
         int index = static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::DM1);
 
         uint32_t kernel_lma = kernel_config_base + launch_msg->kernel_config.kernel_text_offset[index];
@@ -163,6 +162,23 @@ int main(int argc, char* argv[]) {
         WAYPOINT("D");
 
         signal_ncrisc_completion();
+#if defined(ARCH_WORMHOLE)
+        // Ensure branch predictor will only ever predict into L1. Otherwise, the branch predictor may predict an IRAM
+        // address, which can cause an instruction to be fetched from IRAM while the mover is writing to IRAM, which can
+        // cause corruption.  See
+        // https://github.com/tenstorrent/tt-isa-documentation/blob/main/WormholeB0/TensixTile/BabyRISCV/InstructionRAM.md
+        // for more details.
+        // This loop unrolls to 54 instructions, taking 110 cycles (assuming all branches are mispredicted).
+        asm volatile(
+            ".rept 13\n"
+            "bne x0, x0, .\n"
+            "bne x0, x0, .\n"
+            "nop\n"
+            "nop\n"
+            ".endr\n"
+            "bne x0, x0, .\n"
+            "bne x0, x0, .");
+#endif
     }
 
     return 0;

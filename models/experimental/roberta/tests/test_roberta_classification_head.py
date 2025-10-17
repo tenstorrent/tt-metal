@@ -9,7 +9,7 @@ from transformers import RobertaForSequenceClassification
 
 
 from models.experimental.roberta.tt.roberta_classification_head import TtRobertaClassificationHead
-from models.utility_functions import (
+from models.common.utility_functions import (
     tt2torch_tensor,
     comp_allclose,
     comp_pcc,

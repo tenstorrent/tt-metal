@@ -123,6 +123,16 @@ class OperationArgument:
     value: str
 
 
+@dataclasses.dataclass
+class ErrorRecord:
+    operation_id: int
+    operation_name: str
+    error_type: str
+    error_message: str
+    stack_trace: str
+    timestamp: str
+
+
 def get_or_create_sqlite_db(report_path):
     global SQLITE_CONNECTION
     sqlite_db_path = report_path / SQLITE_DB_PATH
@@ -217,6 +227,10 @@ def get_or_create_sqlite_db(report_path):
     cursor.execute(
         """CREATE TABLE IF NOT EXISTS captured_graph
                 (operation_id int, captured_graph text)"""
+    )
+    cursor.execute(
+        """CREATE TABLE IF NOT EXISTS errors
+                (operation_id int, operation_name text, error_type text, error_message text, stack_trace text, timestamp text)"""
     )
     sqlite_connection.commit()
     return sqlite_connection
@@ -492,7 +506,7 @@ def store_tensor(report_path, tensor):
     tensors_path = report_path / TENSORS_PATH
     tensors_path.mkdir(parents=True, exist_ok=True)
     if isinstance(tensor, ttnn.Tensor):
-        tensor_file_name = tensors_path / f"{tensor.tensor_id}.bin"
+        tensor_file_name = tensors_path / f"{tensor.tensor_id}.tensorbin"
         if tensor_file_name.exists():
             return
         ttnn.dump_tensor(
@@ -524,7 +538,7 @@ def insert_captured_graph(report_path, operation_id, captured_graph):
 def get_tensor_file_name_by_id(report_path, tensor_id):
     tensors_path = report_path / TENSORS_PATH
     tensors_path.mkdir(parents=True, exist_ok=True)
-    tensor_path = tensors_path / f"{tensor_id}.bin"
+    tensor_path = tensors_path / f"{tensor_id}.tensorbin"
     if tensor_path.exists():
         return tensor_path
     tensor_path = tensors_path / f"{tensor_id}.pt"
@@ -538,7 +552,7 @@ def load_tensor_by_id(report_path, tensor_id, device=None):
 
     tensors_path = report_path / TENSORS_PATH
     tensors_path.mkdir(parents=True, exist_ok=True)
-    tensor_path = tensors_path / f"{tensor_id}.bin"
+    tensor_path = tensors_path / f"{tensor_id}.tensorbin"
     if tensor_path.exists():
         return ttnn.load_tensor(tensor_path, device=device)
     tensor_path = tensors_path / f"{tensor_id}.pt"
@@ -614,6 +628,15 @@ def insert_tensor_comparison_records(report_path, table_name, tensor_comparison_
                 {record.actual_pcc}
             )"""
         )
+    sqlite_connection.commit()
+
+
+def insert_error(report_path, operation_id, operation_name, error_type, error_message, stack_trace, timestamp):
+    sqlite_connection = ttnn.database.get_or_create_sqlite_db(report_path)
+    cursor = sqlite_connection.cursor()
+
+    statement = "INSERT INTO errors (operation_id, operation_name, error_type, error_message, stack_trace, timestamp) VALUES (?, ?, ?, ?, ?, ?)"
+    cursor.execute(statement, (operation_id, operation_name, error_type, error_message, stack_trace, timestamp))
     sqlite_connection.commit()
 
 

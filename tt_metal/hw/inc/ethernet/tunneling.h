@@ -9,6 +9,8 @@
 #include "eth_l1_address_map.h"
 #include "noc_nonblocking_api.h"
 #include "debug/eth_link_status.h"
+#include "tt_eth_ss_regs.h"
+#include "tt_eth_api.h"
 
 inline void RISC_POST_STATUS(uint32_t status) {
     volatile uint32_t* ptr = (volatile uint32_t*)(NOC_CFG(ROUTER_CFG_2));
@@ -152,7 +154,6 @@ void notify_dispatch_core_done(uint64_t dispatch_addr) {
     for (uint32_t n = 0; n < NUM_NOCS; n++) {
         while (!noc_cmd_buf_ready(n, NCRISC_AT_CMD_BUF));
     }
-    DEBUG_SANITIZE_NOC_ADDR(noc_index, dispatch_addr, 4);
     noc_fast_write_dw_inline<DM_DEDICATED_NOC>(
         noc_index,
         NCRISC_AT_CMD_BUF,

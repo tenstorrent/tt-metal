@@ -19,7 +19,11 @@ void AllGatherConcat::validate(const std::vector<Tensor>& input_tensors) const {
     const auto input_core_ranges = input_tensor.buffer()->shard_spec().grid().ranges();
     const auto& padded_input_shape = input_tensor.padded_shape();
     TT_FATAL(page_size % input_tensors[0].buffer()->alignment() == 0, "All Gather currently requires aligned pages");
-
+    TT_FATAL(
+        (tt::tt_metal::hal::get_arch_name() != "blackhole") ||
+            (input_tensor.memory_config().buffer_type() != BufferType::DRAM),
+        "This kernel does not support blackhole dram as it does not use an accessor to get the noc address as needed "
+        "by the fabric api");
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to all_gather need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands to all_gather need to be allocated in buffers on device!");
     TT_FATAL(this->num_links > 0, "Error, num_links should be more than 0 but has {}", this->num_links);

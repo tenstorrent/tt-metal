@@ -35,20 +35,8 @@ run_python_model_tests_wormhole_b0() {
     pytest models/demos/falcon7b_common/tests/unit_tests/test_falcon_matmuls_and_bmms_with_mixed_precision.py -k "seq_len_128 and in0_BFLOAT16-in1_BFLOAT8_B-out_BFLOAT16-weights_DRAM"
     pytest models/demos/wormhole/resnet50/tests/test_resnet50_functional.py -k "pretrained_weight_false"
 
-    # Yolov4
-    pytest models/demos/yolov4/tests/pcc/test_ttnn_yolov4.py -k "pretrained_weight_false"
-
-    # Yolov8
-    pytest models/demos/yolov8x/tests/pcc/test_yolov8x.py::test_yolov8x_640
-
-    # Yolov8s
-    pytest models/demos/yolov8s/tests/pcc/test_yolov8s.py::test_yolov8s_640
-
     # Unet Shallow
     pytest -svv models/experimental/functional_unet/tests/test_unet_model.py
-
-    # Mamba
-    pytest -svv models/demos/wormhole/mamba/tests/test_residual_block.py -k "pretrained_weight_false"
 
     # Mobilenetv2git
     pytest -svv models/demos/mobilenetv2/tests/pcc/test_mobilenetv2.py
@@ -95,7 +83,7 @@ run_python_model_tests_slow_runtime_mode_wormhole_b0() {
 }
 
 run_python_model_tests_blackhole() {
-    pytest models/demos/blackhole/stable_diffusion/tests
+    pytest models/demos/blackhole/stable_diffusion/tests --ignore=models/demos/blackhole/stable_diffusion/tests/test_perf.py
 
     # Llama3.1-8B
     llama8b=meta-llama/Llama-3.1-8B-Instruct

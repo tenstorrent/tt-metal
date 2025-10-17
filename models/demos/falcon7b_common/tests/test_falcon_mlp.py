@@ -7,10 +7,10 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import tt_tensors_to_torch_tensors
 from models.demos.falcon7b_common.tests.test_utils import get_num_devices, load_hf_model, tt_from_torch
 from models.demos.falcon7b_common.tt.falcon_mlp import TtFalconMLPDecode, TtFalconMLPPrefill
 from models.demos.falcon7b_common.tt.model_config import get_model_config
-from models.utility_functions import tt_tensors_to_torch_tensors
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc
 from ttnn import ShardTensorToMesh
 

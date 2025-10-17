@@ -69,7 +69,7 @@ jobs:
     uses: ./.github/workflows/code-analysis.yaml
     secrets: inherit
     with:
-      version: 22.04
+      version: 24.04
 
   fail-fast:
     if: failure()
@@ -162,7 +162,7 @@ jobs:
       matrix:
         platform: [
           "N300-viommu",
-          "N300-llmbox",
+          "N300-llmbox-viommu",
         ]
     uses: ./.github/workflows/smoke.yaml
     with:
@@ -185,7 +185,7 @@ jobs:
       matrix:
         platform: [
           "N300-viommu",
-          "N300-llmbox",
+          "N300-llmbox-viommu",
         ]
     uses: ./.github/workflows/smoke.yaml
     with:
@@ -278,12 +278,12 @@ jobs:
           optional-jobs: "build, build-docs, build-tsan, build-sweeps, metalium-smoke-tests, ttnn-smoke-tests, ttnn-basic-tests, metalium-basic-tests"
         env:
           NEEDS_CONTEXT: '${{ toJSON(needs) }}'
-      - if: (failure() && github.event_name == 'merge_group')
+      - if: (failure() && contains(join(needs.*.result, ','), 'failure') && github.event_name == 'merge_group')
         uses: tenstorrent/tt-metal/.github/actions/slack-report-merge-gate@main
         with:
           slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_WEBHOOK_URL }}
-          owner: "U08GTDV8MDH,U0908S3LUMD"
-      - if: (failure() && github.ref == 'refs/heads/main')
+          owner: "U08GTDV8MDH"
+      - if: (failure() && contains(join(needs.*.result, ','), 'failure') && github.ref == 'refs/heads/main')
         uses: tenstorrent/tt-metal/.github/actions/slack-report-merge-gate-main@main
         with:
           slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_WEBHOOK_URL }}

@@ -52,42 +52,104 @@ def process_perf_results(fname, expected_cols):
         logger.info(next(merge_res)[0].strip())
         cols = next(merge_res)
         cols = [c.strip() for c in cols]
-        logger.info(f"expected cols: {expected_cols}")
-        logger.info(f"file cols: {cols}")
-        assert len(expected_cols) == len(
-            cols
-        ), "the number of expected cols, and cols in the merge perf csv are not the same!"
+        assert len(expected_cols) == len(cols), "Mismatch between expected and actual columns in perf CSV"
         for expected_c, c in zip(expected_cols, cols):
-            assert expected_c == c, f"Expected column {expected_c}, instead got {c}"
-        logger.info("perf csv cols match the expected cols")
-        logger.info(cols)
+            assert expected_c == c, f"Expected column {expected_c} but instead got {c}"
         merge_res = list(merge_res)
     return cols, merge_res
 
 
-def check_perf_results(fname, expected_cols, check_cols):
+def check_perf_results(fname, expected_cols, check_cols, table_width=110, float_precision=4, threshold=0.80):
+    red_color_code = "\033[91m"
+    green_color_code = "\033[92m"
+    reset_color_code = "\033[0m"
+    bold_code = "\033[1m"
+    underline_code = "\033[4m"
+    fail_label = "[FAIL]"
+    pass_label = "[PASS]"
+
     cols, merge_res = process_perf_results(fname, expected_cols)
     visited_models = []
     slow_measured = {col: [] for col in check_cols}
+
+    logger.info(f"Checking perf results for {fname}...")
+    print("=" * table_width)
+    print(f"{bold_code}PERFORMANCE RESULTS{reset_color_code}")
+    print("=" * table_width)
+
     for models_info in merge_res:
         dict_info = {name: value for name, value in zip(cols, models_info)}
-        logger.info(dict_info)
         model_name = f"{dict_info['Model']}_{dict_info['Setting']}"
         visited_models.append(model_name)
+
+        print(f"\n{bold_code}{underline_code}Model: {dict_info['Model']}{reset_color_code}")
+        print(f"{bold_code}Setting: {dict_info['Setting']}{reset_color_code}")
+        print("-" * 60)
+
+        highlight = False
         for col in check_cols:
             model_expected_col = float(dict_info[f"Expected {col}"])
             model_measured_col = float(dict_info[col])
+            low_tolerance = (
+                model_expected_col * threshold
+            )  # fail if model is too fast so we can update the expected values
+
             if model_measured_col > model_expected_col:
                 slow_measured[col].append((model_name, model_measured_col, model_expected_col))
-                logger.error(f"{model_name} {col} is too slow with {model_measured_col}, expected {model_expected_col}")
+                print(
+                    f"  FAIL {col}: {red_color_code}{model_measured_col:.{float_precision}f} > {model_expected_col:.{float_precision}f} (performance regression){reset_color_code}"
+                )
+                highlight = True
+            elif model_measured_col < low_tolerance:
+                slow_measured[col].append((model_name, model_measured_col, model_expected_col))
+                improvement_pct = ((model_expected_col - model_measured_col) / model_expected_col) * 100
+                print(
+                    f"  FAIL {col}: {red_color_code}{model_measured_col:.{float_precision}f} < {low_tolerance:.{float_precision}f} ({improvement_pct:.1f}% better than expected - update baseline){reset_color_code}"
+                )
+                highlight = True
+            else:
+                print(
+                    f"  PASS {col}: {model_measured_col:.{float_precision}f} (within tolerance: {low_tolerance:.{float_precision}f} - {model_expected_col:.{float_precision}f})"
+                )
 
-    assert any(
-        len(slow) == 0 for slow in slow_measured.values()
-    ), f"Some model(s) {', '.join(slow_measured.keys())} are too slow, see above for details. {slow_measured}"
+        if highlight:
+            print(f"  {red_color_code}This model has performance issues{reset_color_code}")
+        else:
+            print(f"  {green_color_code}All performance targets met{reset_color_code}")
+
+    print("\n" + "=" * table_width)
+    print(f"{bold_code}SUMMARY{reset_color_code}")
+    print("=" * table_width)
+
+    all_passed = True
     for col in slow_measured:
-        assert (
-            len(slow_measured[col]) == 0
-        ), f"Some model(s) {col} are too slow, see above for details on slow models: {slow_measured[col]}"
+        if slow_measured[col]:
+            all_passed = False
+            print(f"{red_color_code}{fail_label} The following models failed '{col}' checks:{reset_color_code}")
+            for model_name, measured, expected in slow_measured[col]:
+                tolerance_range = f"[{expected * threshold:.{float_precision}f}, {expected:.{float_precision}f}]"
+                if measured > expected:
+                    status = "regression"
+                else:
+                    improvement_pct = ((expected - measured) / expected) * 100
+                    status = f"{improvement_pct:.1f}% improvement"
+                print(
+                    f"  - {model_name}: measured={measured:.{float_precision}f}, expected={expected:.{float_precision}f}, tolerance={tolerance_range} ({status})"
+                )
+        else:
+            print(f"{green_color_code}{pass_label} All models meet expected '{col}' performance.{reset_color_code}")
+
+    print("=" * table_width)
+    if all_passed:
+        print(f"{green_color_code}All performance checks passed!{reset_color_code}")
+    else:
+        print(f"{red_color_code}Some performance checks failed!{reset_color_code}")
+    print("=" * table_width)
+
+    if any(len(slow) > 0 for slow in slow_measured.values()):
+        raise Exception(
+            "Performance checks failed - see above for models with regressions or significant improvements requiring baseline updates"
+        )
 
 
 def prep_perf_report(

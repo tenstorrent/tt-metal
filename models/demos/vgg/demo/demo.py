@@ -10,9 +10,9 @@ from torchvision import models
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
+from models.common.utility_functions import disable_persistent_kernel_cache, profiler
 from models.demos.vgg.demo_utils import get_batch, get_data_loader
 from models.demos.vgg.tt import ttnn_vgg
-from models.utility_functions import disable_persistent_kernel_cache, profiler
 
 vgg_model_config = {
     "MATH_FIDELITY": ttnn.MathFidelity.LoFi,

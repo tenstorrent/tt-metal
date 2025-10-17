@@ -7,7 +7,6 @@ import pytest
 from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
-from models.utility_functions import skip_for_grayskull
 from tests.ttnn.unit_tests.operations.ccl.test_reduce_scatter_TG_nightly import (
     run_line_reduce_scatter_on_TG_with_mesh_tensor_along_rows,
 )
@@ -29,7 +28,7 @@ def is_unsupported_case(input_shape, dim, math_op, mem_config, num_devices, num_
 
 
 def run_with_trace(
-    t3k_mesh_device,
+    mesh_device,
     input_tensor_mesh,
     dim,
     num_links,
@@ -54,11 +53,11 @@ def run_with_trace(
         topology=topology,
         subdevice_id=worker_sub_device_id,
     )
-    ttnn.synchronize_device(t3k_mesh_device)
+    ttnn.synchronize_device(mesh_device)
 
     # Capture trace
     logger.info("Capturing trace")
-    trace_id = ttnn.begin_trace_capture(t3k_mesh_device, cq_id=0)
+    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
     for i in range(num_iters):
         output_tensor_mesh = ttnn.experimental.reduce_scatter_async(
             input_tensor_mesh,
@@ -73,14 +72,14 @@ def run_with_trace(
             topology=topology,
             subdevice_id=worker_sub_device_id,
         )
-    ttnn.end_trace_capture(t3k_mesh_device, trace_id, cq_id=0)
-    ttnn.synchronize_device(t3k_mesh_device)
+    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+    ttnn.synchronize_device(mesh_device)
 
     # Run the op
     logger.info("Starting Trace perf test...")
-    ttnn.execute_trace(t3k_mesh_device, trace_id, blocking=False)
-    ttnn.release_trace(t3k_mesh_device, trace_id)
-    ttnn.synchronize_device(t3k_mesh_device)
+    ttnn.execute_trace(mesh_device, trace_id, blocking=False)
+    ttnn.release_trace(mesh_device, trace_id)
+    ttnn.synchronize_device(mesh_device)
 
     return output_tensor_mesh
 
@@ -282,7 +281,6 @@ def run_reduce_scatter_test(
 
 
 # ~2:45 extra time in the current state
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.timeout(120)
 @pytest.mark.parametrize(
     "num_devices, num_links",
@@ -363,7 +361,6 @@ def test_line_reduce_scatter_async_post_commit(
     )
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "num_devices, num_links, per_chip_input_shape, dim, layout",
     [
@@ -429,7 +426,6 @@ def test_line_reduce_scatter_async_on_T3K_cols_post_commit(
     )
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "num_devices, num_links, per_chip_input_shape, dim, layout",
     [
@@ -491,7 +487,6 @@ def test_line_reduce_scatter_async_on_T3K_rows_post_commit(
     )
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.timeout(120)
 @pytest.mark.parametrize(
     "num_devices, num_links",

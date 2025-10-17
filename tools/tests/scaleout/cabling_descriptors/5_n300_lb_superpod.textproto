@@ -1,0 +1,71 @@
+graph_templates {
+  key: "5lb"
+  value {
+    children {
+      name: "node1"
+      node_ref { node_descriptor: "N300_LB" }
+    }
+    children {
+      name: "node2"
+      node_ref { node_descriptor: "N300_LB" }
+    }
+    children {
+      name: "node3"
+      node_ref { node_descriptor: "N300_LB" }
+    }
+    children {
+      name: "node4"
+      node_ref { node_descriptor: "N300_LB" }
+    }
+    children {
+      name: "node5"
+      node_ref { node_descriptor: "N300_LB" }
+    }
+    internal_connections {
+      key: "QSFP_DD"
+      value {
+        connections {
+          port_a { path: ["node1"] tray_id: 4 port_id: 2 }
+          port_b { path: ["node2"] tray_id: 1 port_id: 2 }
+        }
+        connections {
+          port_a { path: ["node1"] tray_id: 3 port_id: 1 }
+          port_b { path: ["node4"] tray_id: 1 port_id: 2 }
+        }
+        connections {
+          port_a { path: ["node1"] tray_id: 2 port_id: 1 }
+          port_b { path: ["node3"] tray_id: 1 port_id: 2 }
+        }
+        connections {
+          port_a { path: ["node1"] tray_id: 1 port_id: 2 }
+          port_b { path: ["node5"] tray_id: 1 port_id: 2 }
+        }
+      }
+    }
+  }
+}
+
+# Root instance - just one 5LB graph
+root_instance {
+  template_name: "5lb"
+  child_mappings {
+    key: "node1"
+    value { host_id: 0 }
+  }
+  child_mappings {
+    key: "node2"
+    value { host_id: 1 }
+  }
+  child_mappings {
+    key: "node3"
+    value { host_id: 2 }
+  }
+  child_mappings {
+    key: "node4"
+    value { host_id: 3 }
+  }
+  child_mappings {
+    key: "node5"
+    value { host_id: 4 }
+  }
+}

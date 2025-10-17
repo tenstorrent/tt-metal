@@ -3,24 +3,22 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dataflow_api.h"
-#include <tt-metalium/buffer_types.hpp>
 #include <cstdint>
 #include <utility>
 #include "ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
 #include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 
 using address_t = uint32_t;
-using tt::tt_metal::BufferType;
 
 ///////////////////////////////////////////////////
 // COMPILE TIME ARGS
 ///////////////////////////////////////////////////
 
-constexpr BufferType buffer0_type = static_cast<BufferType>(get_compile_time_arg_val(0));
-constexpr uint32_t cb0_id = get_compile_time_arg_val(1);
-constexpr uint32_t page_size = get_compile_time_arg_val(2);
-constexpr uint32_t row_size = get_compile_time_arg_val(3);
-constexpr uint32_t num_packets_per_row = get_compile_time_arg_val(4);
+constexpr uint32_t cb0_id = get_compile_time_arg_val(0);
+constexpr uint32_t page_size = get_compile_time_arg_val(1);
+constexpr uint32_t row_size = get_compile_time_arg_val(2);
+constexpr uint32_t num_rows_per_packet = get_compile_time_arg_val(3);
+constexpr uint32_t num_packets_per_page = get_compile_time_arg_val(4);
 constexpr uint32_t max_packet_size = get_compile_time_arg_val(5);
 
 /*
@@ -38,8 +36,6 @@ void kernel_main() {
     uint32_t row_id_start = get_arg_val<uint32_t>(arg_idx++);
     uint32_t row_id_end = get_arg_val<uint32_t>(arg_idx++);
 
-    constexpr bool is_dram = buffer0_type == tt::tt_metal::BufferType::DRAM;
-
 #ifdef SHARDED
     typedef ShardedInfo<
         get_compile_time_arg_val(6),
@@ -56,26 +52,28 @@ void kernel_main() {
     experimental::ShardedAddrGen<tensor_shard_info> tensor0_addrgen = {
         .bank_base_address = tensor_address0, .shard_array = mapping_table};
 #else
-    // interleaved addrgen
-    const auto tensor0_addrgen = get_interleaved_addr_gen<is_dram, row_size>(tensor_address0);
+    constexpr auto tensor0_args = TensorAccessorArgs<6>();
+    auto tensor0_addrgen = TensorAccessor(tensor0_args, tensor_address0, row_size);
 #endif
 
     uint32_t row_id = row_id_start;
     while (row_id < row_id_end) {
-        cb_reserve_back(cb0_id, 1);
+        cb_reserve_back(cb0_id, num_rows_per_packet);
         uint32_t l1_write_addr = get_write_ptr(cb0_id);
-        uint64_t noc_src_addr = get_noc_addr(row_id, tensor0_addrgen);
-
-        for (uint32_t j = 0; j < num_packets_per_row; j++) {
-            uint32_t packet_size = std::min(max_packet_size, page_size);
-            packet_size = std::min(packet_size, page_size - max_packet_size * j);
-            noc_async_read(noc_src_addr, l1_write_addr, packet_size);
-
-            l1_write_addr += packet_size;
-            noc_src_addr += packet_size;  // advance the noc address for the next packet
+        for (uint32_t i = 0; i < num_rows_per_packet && row_id < row_id_end; ++i) {
+            uint64_t noc_src_addr = get_noc_addr(row_id, tensor0_addrgen);
+            uint32_t bytes_remaining = page_size;
+            uint32_t offset = 0;
+            for (uint32_t pkt = 0; pkt < num_packets_per_page && bytes_remaining > 0; ++pkt) {
+                uint32_t packet_size = std::min(max_packet_size, bytes_remaining);
+                noc_async_read(noc_src_addr + offset, l1_write_addr + offset, packet_size);
+                offset += packet_size;
+                bytes_remaining -= packet_size;
+            }
+            l1_write_addr += page_size;
+            row_id++;
         }
-        row_id++;
         noc_async_read_barrier();
-        cb_push_back(cb0_id, 1);
+        cb_push_back(cb0_id, num_rows_per_packet);
     }
 }

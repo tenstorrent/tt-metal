@@ -48,7 +48,7 @@ struct AllToAllConfig {
 /// @param mesh_device The mesh device on which the test is executed.
 /// @param test_config Configuration of the test, defined by a specific struct.
 /// @return Status of the test execution (e.g., success or failure).
-bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const AllToAllConfig& test_config) {
+bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const AllToAllConfig& test_config) {
     // Get the actual device for this single-device test
     IDevice* device = mesh_device->get_device(0);
     /* ================ SETUP ================ */
@@ -162,7 +162,7 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const AllToAllConfi
     vector<uint32_t> packed_input = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
         -100.0f,
         100.0f,
-        bytes_per_transaction / bfloat16::SIZEOF,
+        bytes_per_transaction / sizeof(bfloat16),
         chrono::system_clock::now().time_since_epoch().count());
 
     vector<uint32_t> packed_golden = packed_input;
@@ -174,11 +174,11 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const AllToAllConfi
     }
 
     // LAUNCH PROGRAM - Use mesh workload approach
-    auto mesh_workload = distributed::CreateMeshWorkload();
+    auto mesh_workload = distributed::MeshWorkload();
     vector<uint32_t> coord_data = {0, 0};
     auto target_devices =
         distributed::MeshCoordinateRange(distributed::MeshCoordinate(coord_data));  // Single device at (0,0)
-    distributed::AddProgramToMeshWorkload(mesh_workload, std::move(program), target_devices);
+    mesh_workload.add_program(target_devices, std::move(program));
 
     auto& cq = mesh_device->mesh_command_queue();
     distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
@@ -209,7 +209,7 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const AllToAllConfi
 }
 
 void directed_ideal_test(
-    shared_ptr<distributed::MeshDevice> mesh_device,
+    const shared_ptr<distributed::MeshDevice>& mesh_device,
     uint32_t test_case_id,
     CoreCoord mst_start_coord,
     CoreCoord sub_start_coord,
@@ -249,7 +249,7 @@ void directed_ideal_test(
 }
 
 void packet_sizes_test(
-    shared_ptr<distributed::MeshDevice> mesh_device,
+    const shared_ptr<distributed::MeshDevice>& mesh_device,
     uint32_t test_case_id,
     CoreCoord mst_start_coord,
     CoreCoord sub_start_coord,
@@ -300,7 +300,7 @@ void packet_sizes_test(
     }
 }
 
-void virtual_channels_test(shared_ptr<distributed::MeshDevice> mesh_device, uint32_t test_case_id) {
+void virtual_channels_test(const shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t test_case_id) {
     auto device = mesh_device->get_device(0);
     // Physical Constraints
     auto [bytes_per_page, max_bytes_reservable, max_pages_reservable] =
@@ -353,13 +353,12 @@ void virtual_channels_test(shared_ptr<distributed::MeshDevice> mesh_device, uint
 }
 
 void custom_test(
-    shared_ptr<distributed::MeshDevice> mesh_device,
+    const shared_ptr<distributed::MeshDevice>& mesh_device,
     uint32_t test_case_id,
     uint32_t num_of_transactions,
     uint32_t pages_per_transaction,
     uint32_t num_virtual_channels) {
     auto device = mesh_device->get_device(0);
-    NOC noc_id = NOC::NOC_0;
 
     // Physical Constraints
     auto [bytes_per_page, max_bytes_reservable, max_pages_reservable] =
@@ -417,7 +416,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllToAllDirectedIdeal) {
     CoreCoord mst_grid_size = {device->compute_with_storage_grid_size().x, device->compute_with_storage_grid_size().y};
     CoreCoord sub_grid_size = {device->compute_with_storage_grid_size().x, device->compute_with_storage_grid_size().y};
 
-    unit_tests::dm::all_to_all::packet_sizes_test(
+    unit_tests::dm::all_to_all::directed_ideal_test(
         mesh_device, test_case_id, mst_start_coord, sub_start_coord, mst_grid_size, sub_grid_size);
 }
 
@@ -436,7 +435,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllToAllPacketSizes) {
     CoreCoord mst_grid_size = {device->compute_with_storage_grid_size().x, device->compute_with_storage_grid_size().y};
     CoreCoord sub_grid_size = {device->compute_with_storage_grid_size().x, device->compute_with_storage_grid_size().y};
 
-    unit_tests::dm::all_to_all::directed_ideal_test(
+    unit_tests::dm::all_to_all::packet_sizes_test(
         mesh_device, test_case_id, mst_start_coord, sub_start_coord, mst_grid_size, sub_grid_size);
 }
 

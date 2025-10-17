@@ -10,71 +10,75 @@ import inspect
 from typing import List, Optional, Union
 
 from ttnn.distributed.distributed import ConcatMeshToTensor
-from models.experimental.stable_diffusion_35_large.tt.clip_encoder import (
-    TtCLIPConfig,
-    TtCLIPTextTransformer,
-    TtCLIPTextTransformerParameters,
-)
-from models.utility_functions import profiler
+from models.experimental.tt_dit.encoders.clip.model_clip import CLIPEncoder, CLIPConfig
+from models.experimental.tt_dit.parallel.config import EncoderParallelConfig, ParallelFactor
+from models.common.utility_functions import profiler
 
 from tqdm import tqdm
 import ttnn
 
 from models.experimental.stable_diffusion_xl_base.vae.tt.tt_autoencoder_kl import TtAutoencoderKL
 
-SDXL_L1_SMALL_SIZE = 47000
+SDXL_L1_SMALL_SIZE = 23000
 SDXL_TRACE_REGION_SIZE = 34000000
 SDXL_CI_WEIGHTS_PATH = "/mnt/MLPerf/tt_dnn-models/hf_home"
+SDXL_FABRIC_CONFIG = ttnn.FabricConfig.FABRIC_1D
 
 
 def create_tt_clip_text_encoders(pipeline, ttnn_device):
-    tt_parameters_text_encoder = TtCLIPTextTransformerParameters.from_torch(
-        pipeline.text_encoder.state_dict(),
-        device=ttnn_device,
-        dtype=ttnn.bfloat16,
-        parallel_manager=None,
-        has_text_projection=False,  # Text encoder 1 does not have text projection
+    text_encoder_1 = pipeline.text_encoder
+    config_1 = CLIPConfig(
+        vocab_size=text_encoder_1.config.vocab_size,
+        embed_dim=text_encoder_1.config.hidden_size,
+        ff_dim=text_encoder_1.config.intermediate_size,
+        num_heads=text_encoder_1.config.num_attention_heads,
+        num_hidden_layers=text_encoder_1.config.num_hidden_layers,
+        max_prompt_length=77,
+        layer_norm_eps=text_encoder_1.config.layer_norm_eps,
+        attention_dropout=text_encoder_1.config.attention_dropout,
+        hidden_act=text_encoder_1.config.hidden_act,
     )
-    tt_config_text_encoder = TtCLIPConfig(
-        vocab_size=pipeline.text_encoder.config.vocab_size,
-        d_model=pipeline.text_encoder.config.hidden_size,
-        d_ff=pipeline.text_encoder.config.intermediate_size,
-        num_heads=pipeline.text_encoder.config.num_attention_heads,
-        num_layers=pipeline.text_encoder.config.num_hidden_layers,
-        max_position_embeddings=77,
-        layer_norm_eps=pipeline.text_encoder.config.layer_norm_eps,
-        attention_dropout=pipeline.text_encoder.config.attention_dropout,
-        hidden_act=pipeline.text_encoder.config.hidden_act,
-    )
-    tt_text_encoder = TtCLIPTextTransformer(tt_parameters_text_encoder, tt_config_text_encoder)
+    ccl_manager = None
 
-    # TT text encoder 2 setup
-    tt_parameters_text_encoder_2 = TtCLIPTextTransformerParameters.from_torch(
-        pipeline.text_encoder_2.state_dict(),
-        device=ttnn_device,
-        dtype=ttnn.bfloat16,
-        parallel_manager=None,
-        has_text_projection=True,  # Text encoder 2 has text projection
+    # Note: Factor for SDXL should always be 1; since we don't support TP
+    parallel_config_1 = EncoderParallelConfig(
+        tensor_parallel=ParallelFactor(factor=1, mesh_axis=1),
     )
 
-    tt_config_text_encoder_2 = TtCLIPConfig(
-        vocab_size=pipeline.text_encoder_2.config.vocab_size,
-        d_model=pipeline.text_encoder_2.config.hidden_size,
-        d_ff=pipeline.text_encoder_2.config.intermediate_size,
-        num_heads=pipeline.text_encoder_2.config.num_attention_heads,
-        num_layers=pipeline.text_encoder_2.config.num_hidden_layers,
-        max_position_embeddings=77,
-        layer_norm_eps=pipeline.text_encoder_2.config.layer_norm_eps,
-        attention_dropout=pipeline.text_encoder_2.config.attention_dropout,
-        hidden_act=pipeline.text_encoder_2.config.hidden_act,
+    tt_text_encoder = CLIPEncoder(
+        config_1, ttnn_device, ccl_manager, parallel_config_1, text_encoder_1.config.eos_token_id
     )
-    tt_text_encoder_2 = TtCLIPTextTransformer(tt_parameters_text_encoder_2, tt_config_text_encoder_2)
+    tt_text_encoder.load_state_dict(text_encoder_1.state_dict())
+
+    text_encoder_2 = pipeline.text_encoder_2
+    config_2 = CLIPConfig(
+        vocab_size=text_encoder_2.config.vocab_size,
+        embed_dim=text_encoder_2.config.hidden_size,
+        ff_dim=text_encoder_2.config.intermediate_size,
+        num_heads=text_encoder_2.config.num_attention_heads,
+        num_hidden_layers=text_encoder_2.config.num_hidden_layers,
+        max_prompt_length=77,
+        layer_norm_eps=text_encoder_2.config.layer_norm_eps,
+        attention_dropout=text_encoder_2.config.attention_dropout,
+        hidden_act=text_encoder_2.config.hidden_act,
+    )
+
+    # Note: Factor for SDXL should always be 1; since we don't support TP
+    parallel_config_2 = EncoderParallelConfig(
+        tensor_parallel=ParallelFactor(factor=1, mesh_axis=1),
+    )
+
+    tt_text_encoder_2 = CLIPEncoder(
+        config_2, ttnn_device, ccl_manager, parallel_config_2, text_encoder_2.config.eos_token_id
+    )
+    tt_text_encoder_2.load_state_dict(text_encoder_2.state_dict())
 
     return tt_text_encoder, tt_text_encoder_2
 
 
 def warmup_tt_text_encoders(tt_text_encoder, tt_text_encoder_2, tokenizer, tokenizer_2, ttnn_device, batch_size):
     logger.info("Performing warmup run on encoding, to make use of program caching in actual inference...")
+    batch_size = ttnn_device.get_num_devices()
     dummy_prompt = ["abc"] * batch_size
     dummy_ids = tokenizer(
         dummy_prompt,
@@ -106,8 +110,8 @@ def warmup_tt_text_encoders(tt_text_encoder, tt_text_encoder_2, tokenizer, token
         mesh_mapper=ttnn.ShardTensorToMesh(ttnn_device, dim=0),
     )
 
-    _, _ = tt_text_encoder(tt_tokens_1, ttnn_device, parallel_manager=None)
-    _, _ = tt_text_encoder_2(tt_tokens_2, ttnn_device, parallel_manager=None)
+    _, _ = tt_text_encoder(tt_tokens_1, ttnn_device, with_projection=False)
+    _, _ = tt_text_encoder_2(tt_tokens_2, ttnn_device, with_projection=True)
     ttnn.synchronize_device(ttnn_device)
 
 
@@ -131,6 +135,7 @@ def batch_encode_prompt_on_device(
     negative_pooled_prompt_embeds: Optional[torch.Tensor] = None,
     lora_scale: Optional[float] = None,
     clip_skip: Optional[int] = None,
+    use_cfg_parallel: bool = False,
 ):
     r"""
     Encodes the prompt into text encoder hidden states.
@@ -175,11 +180,17 @@ def batch_encode_prompt_on_device(
             the output of the pre-final layer will be used for computing the prompt embeddings.
     """
     prompt = [prompt] if isinstance(prompt, str) else prompt
+    prompt_2 = [prompt_2] if isinstance(prompt_2, str) else prompt_2
 
     num_devices = ttnn_device.get_num_devices()
+    num_prompts = len(prompt)
+    if use_cfg_parallel and num_prompts < num_devices:
+        # Pad prompts by appending empty strings to match num_devices
+        prompt = prompt + [""] * (num_devices - len(prompt))
+        if prompt_2 is not None:
+            prompt_2 = prompt_2 + [""] * (num_devices - len(prompt_2))
+
     assert len(prompt) == num_devices, "Prompt length must be equal to number of devices"
-    assert prompt_2 is None, "Prompt 2 is not supported currently"
-    assert negative_prompt is None, "Negative prompt is not tested currently with on device text encoders"
     assert lora_scale is None, "Lora scale is not supported currently with on device text encoders"
     assert clip_skip is None, "Clip skip is not supported currently with on device text encoders"
     assert prompt_embeds is None, "Prompt embeds is not supported currently with on device text encoders"
@@ -203,7 +214,6 @@ def batch_encode_prompt_on_device(
 
     if prompt_embeds is None:
         prompt_2 = prompt_2 or prompt
-        prompt_2 = [prompt_2] if isinstance(prompt_2, str) else prompt_2
 
         # textual inversion: process multi-vector tokens if necessary
         prompt_embeds_list = []
@@ -238,10 +248,10 @@ def batch_encode_prompt_on_device(
                 mesh_mapper=ttnn.ShardTensorToMesh(ttnn_device, dim=0),
             )
 
-            tt_sequence_output, tt_pooled_output = text_encoder(tt_tokens, ttnn_device, parallel_manager=None)
+            tt_sequence_output, tt_pooled_output = text_encoder(tt_tokens, ttnn_device, with_projection=(ind > 0))
 
             tt_sequence_output_torch = ttnn.to_torch(
-                tt_sequence_output.hidden_states[-2],
+                tt_sequence_output[-2],
                 mesh_composer=ConcatMeshToTensor(ttnn_device, dim=0),
             ).to(torch.float32)
             tt_pooled_output_torch = ttnn.to_torch(
@@ -255,7 +265,7 @@ def batch_encode_prompt_on_device(
             # I think this may be a bug in the reference implementation, but at the moment, we'll do the same (take the last hidden state of the first text encoder)
             if ind == 0:
                 tt_pooled_prompt_embeds = ttnn.to_torch(
-                    tt_sequence_output.hidden_states[-1],
+                    tt_sequence_output[-1],
                     mesh_composer=ConcatMeshToTensor(ttnn_device, dim=0),
                 ).to(torch.float32)
                 pooled_prompt_embeds = tt_pooled_prompt_embeds.to(torch.float32)
@@ -267,7 +277,7 @@ def batch_encode_prompt_on_device(
             else:
                 assert False, "Clip skip not none path not tested, use at your own risk!"
                 prompt_embeds = ttnn.to_torch(
-                    tt_sequence_output.hidden_states[-(clip_skip + 2)],
+                    tt_sequence_output[-(clip_skip + 2)],
                     mesh_composer=ConcatMeshToTensor(ttnn_device, dim=0),
                 ).to(torch.float32)
 
@@ -323,9 +333,11 @@ def batch_encode_prompt_on_device(
                 device=ttnn_device,
                 mesh_mapper=ttnn.ShardTensorToMesh(ttnn_device, dim=0),
             )
-            tt_sequence_output_neg, tt_pooled_output_neg = text_encoder(tt_tokens, ttnn_device, parallel_manager=None)
+            tt_sequence_output_neg, tt_pooled_output_neg = text_encoder(
+                tt_tokens, ttnn_device, with_projection=(ind > 0)
+            )
             tt_sequence_output_neg_torch = ttnn.to_torch(
-                tt_sequence_output_neg.hidden_states[-2],
+                tt_sequence_output_neg[-2],
                 mesh_composer=ConcatMeshToTensor(ttnn_device, dim=0),
             ).to(torch.float32)
             tt_pooled_output_neg_torch = ttnn.to_torch(
@@ -340,7 +352,7 @@ def batch_encode_prompt_on_device(
             if ind == 0:
                 tt_pooled_prompt_embeds = (
                     ttnn.to_torch(
-                        tt_sequence_output_neg.hidden_states[-1],
+                        tt_sequence_output_neg[-1],
                         mesh_composer=ConcatMeshToTensor(ttnn_device, dim=0),
                     )
                 ).to(torch.float32)
@@ -384,7 +396,13 @@ def batch_encode_prompt_on_device(
             bs_embed * num_images_per_prompt, -1
         )
 
-    return prompt_embeds, negative_prompt_embeds, pooled_prompt_embeds, negative_pooled_prompt_embeds
+    slice_to = num_prompts if use_cfg_parallel else None
+    return (
+        prompt_embeds[:slice_to],
+        negative_prompt_embeds[:slice_to],
+        pooled_prompt_embeds[:slice_to],
+        negative_pooled_prompt_embeds[:slice_to],
+    )
 
 
 # Copied from sdxl pipeline
@@ -490,44 +508,100 @@ def run_tt_image_gen(
     input_shape,
     vae,  # can be host vae or tt vae
     batch_size,
+    persistent_buffer,
+    semaphores,
     output_device=None,
     output_shape=None,
     tid=None,
     tid_vae=None,
     capture_trace=False,
+    use_cfg_parallel=False,
+    guidance_rescale=0.0,
 ):
     assert not (capture_trace and len(tt_timesteps) != 1), "Trace should capture only 1 iteration"
     profiler.start("image_gen")
     profiler.start("denoising_loop")
 
-    for i, t in tqdm(enumerate(tt_timesteps), total=len(tt_timesteps)):
+    for i, _ in tqdm(enumerate(tt_timesteps), total=len(tt_timesteps)):
         unet_outputs = []
         if tid is None or capture_trace:
             tid = ttnn.begin_trace_capture(ttnn_device, cq_id=0) if capture_trace else None
-            for unet_slice in range(len(tt_time_ids)):
+            for unet_slice in range(tt_prompt_embeds.shape[0]):
                 latent_model_input = tt_latents
                 noise_pred, _ = run_tt_iteration(
                     tt_unet,
                     tt_scheduler,
                     latent_model_input,
                     input_shape,
-                    tt_prompt_embeds[unet_slice],
-                    tt_time_ids[unet_slice],
-                    tt_text_embeds[unet_slice],
+                    tt_prompt_embeds[unet_slice] if not use_cfg_parallel else tt_prompt_embeds,
+                    tt_time_ids if use_cfg_parallel else tt_time_ids[unet_slice],
+                    ttnn.unsqueeze(tt_text_embeds[unet_slice], dim=0) if not use_cfg_parallel else tt_text_embeds,
                 )
 
                 unet_outputs.append(noise_pred)
 
+            if use_cfg_parallel:
+                noise_pred_interleaved = ttnn.to_memory_config(noise_pred, ttnn.L1_MEMORY_CONFIG)
+                ttnn.deallocate(noise_pred)
+                noise_pred = noise_pred_interleaved
+                noise_pred_out = ttnn.experimental.all_gather_async(
+                    noise_pred,
+                    dim=0,
+                    persistent_output_tensor=persistent_buffer,
+                    multi_device_global_semaphore=semaphores,
+                    num_links=1,
+                    cluster_axis=0,
+                    mesh_device=ttnn_device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    topology=ttnn.Topology.Linear,
+                )
+                ttnn.deallocate(noise_pred)
+                noise_pred = noise_pred_out
+                noise_pred = noise_pred[..., :4]
+                noise_pred_uncond, noise_pred_text = ttnn.unsqueeze(noise_pred[0], 0), ttnn.unsqueeze(noise_pred[1], 0)
+            else:
+                noise_pred_uncond, noise_pred_text = unet_outputs
+
+            # ttnn.clone doesn't work with L1 sharded tensors
+            noise_pred_text_new = ttnn.to_memory_config(noise_pred_text, ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(noise_pred_text)
+            noise_pred_text = noise_pred_text_new
+            noise_pred_text_orig = ttnn.clone(noise_pred_text)
+
             # perform guidance
-            noise_pred_uncond, noise_pred_text = unet_outputs
             noise_pred_text = ttnn.sub_(noise_pred_text, noise_pred_uncond)
             noise_pred_text = ttnn.mul_(noise_pred_text, guidance_scale)
-            noise_pred = ttnn.add_(noise_pred_uncond, noise_pred_text)
-
-            tt_latents = tt_scheduler.step(noise_pred, None, tt_latents, **tt_extra_step_kwargs, return_dict=False)[0]
+            noise_pred = ttnn.add(noise_pred_uncond, noise_pred_text)
 
             ttnn.deallocate(noise_pred_uncond)
             ttnn.deallocate(noise_pred_text)
+
+            noise_pred_new = ttnn.to_memory_config(noise_pred, ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(noise_pred)
+            noise_pred = noise_pred_new
+
+            # perform guidance rescale
+            std_text = ttnn.std(noise_pred_text_orig, dim=[1, 2, 3], keepdim=True)
+            std_cfg = ttnn.std(noise_pred, dim=[1, 2, 3], keepdim=True)
+
+            std_ratio = ttnn.div(std_text, std_cfg)
+
+            noise_pred_rescaled = ttnn.mul(noise_pred, std_ratio)
+
+            rescaled_term = ttnn.mul(noise_pred_rescaled, guidance_rescale)
+            original_term = ttnn.mul(noise_pred, (1.0 - guidance_rescale))
+            ttnn.deallocate(noise_pred)
+            noise_pred = ttnn.add(rescaled_term, original_term)
+            ttnn.deallocate(std_text)
+            ttnn.deallocate(std_cfg)
+            ttnn.deallocate(std_ratio)
+            ttnn.deallocate(noise_pred_rescaled)
+            ttnn.deallocate(rescaled_term)
+            ttnn.deallocate(original_term)
+            ttnn.deallocate(noise_pred_text_orig)
+            noise_pred = ttnn.move(noise_pred)
+
+            tt_latents = tt_scheduler.step(noise_pred, None, tt_latents, **tt_extra_step_kwargs, return_dict=False)[0]
 
             if capture_trace:
                 ttnn.end_trace_capture(ttnn_device, tid, cq_id=0)
@@ -553,7 +627,7 @@ def run_tt_image_gen(
             tt_latents = ttnn.div(tt_latents, scaling_factor)
 
             logger.info("Running TT VAE")
-            output_tensor, [C, H, W] = vae.forward(tt_latents, input_shape)
+            output_tensor, [C, H, W] = vae.decode(tt_latents, input_shape)
             ttnn.deallocate(tt_latents)
 
             if capture_trace:
@@ -567,7 +641,9 @@ def run_tt_image_gen(
         profiler.end("vae_decode")
 
         profiler.start("read_output_tensor")
-        output_tensor = ttnn.to_torch(output_device, mesh_composer=ttnn.ConcatMeshToTensor(ttnn_device, dim=0)).float()
+        output_tensor = ttnn.to_torch(output_device, mesh_composer=ttnn.ConcatMeshToTensor(ttnn_device, dim=0)).float()[
+            :batch_size, ...
+        ]
         ttnn.synchronize_device(ttnn_device)
         profiler.end("read_output_tensor")
 
@@ -576,7 +652,7 @@ def run_tt_image_gen(
         imgs = torch.permute(output_tensor, (0, 3, 1, 2))
     else:
         profiler.start("read_output_tensor")
-        latents = ttnn.to_torch(tt_latents, mesh_composer=ttnn.ConcatMeshToTensor(ttnn_device, dim=0))
+        latents = ttnn.to_torch(tt_latents, mesh_composer=ttnn.ConcatMeshToTensor(ttnn_device, dim=0))[:batch_size, ...]
         ttnn.synchronize_device(ttnn_device)
         profiler.end("read_output_tensor")
         profiler.start("vae_decode")

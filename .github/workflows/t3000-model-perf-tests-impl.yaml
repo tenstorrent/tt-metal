@@ -40,7 +40,7 @@ jobs:
       ARCH_NAME: ${{ matrix.test-group.arch }}
       LOGURU_LEVEL: INFO
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
-      HF_HOME: /mnt/MLPerf/huggingface
+      HF_HUB_CACHE: /mnt/MLPerf/huggingface/hub
     runs-on:
       - arch-wormhole_b0
       - config-t3000
@@ -53,14 +53,14 @@ jobs:
           submodules: recursive
       - uses: ./.github/actions/ensure-active-weka-mount
       - name: ⬇️ Download Build
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         timeout-minutes: 10
         with:
           name: ${{ inputs.build-artifact-name }}
       - name: Extract files
-        run: tar -xvf ttm_any.tar
+        run: tar --zstd -xvf ttm_any.tar.zst
       - name: ⬇️ Download Wheel
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         timeout-minutes: 10
         with:
           name: ${{ inputs.wheel-artifact-name }}
@@ -107,7 +107,7 @@ jobs:
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
-          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
           owner: ${{ matrix.test-group.owner_id }}
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
@@ -126,14 +126,14 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          { name: "t3k CCL perf tests", arch: wormhole_b0, cmd: run_t3000_ccl_all_gather_perf_tests && run_t3000_ccl_reduce_scatter_perf_tests, timeout: 75, owner_id: ULMEPM2MA}, # Sean Nijjar
+          { name: "t3k CCL perf tests", arch: wormhole_b0, cmd: run_t3000_ccl_all_gather_perf_tests && run_t3000_ccl_reduce_scatter_perf_tests, timeout: 75, owner_id: U05ACKAJTHS}, # Naif Tarafdar
         ]
     name: ${{ matrix.test-group.name }}
     env:
       ARCH_NAME: ${{ matrix.test-group.arch }}
       LOGURU_LEVEL: INFO
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
-      HF_HOME: /mnt/MLPerf/huggingface
+      HF_HUB_CACHE: /mnt/MLPerf/huggingface/hub
     runs-on:
       - arch-wormhole_b0
       - config-t3000
@@ -146,14 +146,14 @@ jobs:
           submodules: recursive
       - uses: ./.github/actions/ensure-active-weka-mount
       - name: ⬇️ Download Build
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         timeout-minutes: 10
         with:
           name: ${{ inputs.build-artifact-profiler-name }}
       - name: Extract files
-        run: tar -xvf ttm_any.tar
+        run: tar --zstd -xvf ttm_any.tar.zst
       - name: ⬇️ Download Wheel
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         timeout-minutes: 10
         with:
           name: ${{ inputs.wheel-artifact-profiler-name }}
@@ -172,7 +172,7 @@ jobs:
             -e TT_METAL_HOME=${{ github.workspace }}
             -e ARCH_NAME=${{ matrix.test-group.arch }}
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
-            -e HF_HOME=/mnt/MLPerf/huggingface
+            -e HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub
             -v /mnt/MLPerf:/mnt/MLPerf:ro
           install_wheel: true
           run_args: |
@@ -211,7 +211,7 @@ jobs:
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
-          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
           owner: ${{ matrix.test-group.owner_id }}
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10

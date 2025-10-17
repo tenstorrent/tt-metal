@@ -1,6 +1,8 @@
 #!/bin/bash
 set -eo pipefail
 
+TT_CACHE_HOME=/mnt/MLPerf/huggingface/tt_cache
+
 run_t3000_falcon7b_tests() {
   # Record the start time
   fail=0
@@ -26,8 +28,8 @@ run_t3000_mistral7b_perf_tests() {
 
   echo "LOG_METAL: Running run_t3000_mistral7b_perf_tests"
 
-  tt_cache_path="/mnt/MLPerf/tt_dnn-models/Mistral/TT_CACHE/Mistral-7B-Instruct-v0.3"
-  hf_model="mistralai/Mistral-7B-Instruct-v0.3"
+  hf_model=mistralai/Mistral-7B-Instruct-v0.3
+  tt_cache_path=$TT_CACHE_HOME/$hf_model
   TT_CACHE_PATH=$tt_cache_path HF_MODEL=$hf_model pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and batch-1" ; fail+=$?
 
   # Record the end time
@@ -64,7 +66,7 @@ run_t3000_resnet50_tests() {
 
   echo "LOG_METAL: Running run_t3000_resnet50_tests"
 
-  pytest models/demos/t3000/resnet50/tests/test_perf_e2e_resnet50.py -m "model_perf_t3000" ; fail+=$?
+  pytest models/demos/ttnn_resnet/tests/test_perf_e2e_resnet50.py -m "model_perf_t3000" ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -100,7 +102,7 @@ run_t3000_stable_diffusion_35_large_tests() {
 
   echo "LOG_METAL: Running run_t3000_stable_diffusion_35_large_tests"
 
-  env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/experimental/stable_diffusion_35_large/tests/test_performance.py -k "t3k_cfg2_sp2_tp2" ; fail+=$?
+  pytest models/experimental/tt_dit/tests/models/test_performance_sd35.py -k "2x4cfg1sp0tp1" ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)

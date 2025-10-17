@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -21,13 +21,13 @@
 #include <tt-metalium/host_api.hpp>
 #include "jit_build/build.hpp"
 #include "jit_build/build_env_manager.hpp"
-#include <tt-metalium/kernel.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/persistent_kernel_cache.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/utils.hpp>
 #include "impl/kernels/kernel_impl.hpp"
+// Access to internal API: ProgramImpl::get_kernels
+#include "impl/program/program_impl.hpp"
 
 using namespace tt::tt_metal;
 
@@ -54,7 +54,7 @@ TEST_F(MeshDeviceFixture, TensixTestIncompleteKernelBinaryWithPersistentCache) {
         const JitBuildState& build_state = BuildEnvManager::get_instance().get_kernel_build_state(
             device->build_id(), tensix_core_type, dm_class_idx, riscv_id);
 
-        const auto& kernels = program.get_kernels(static_cast<uint32_t>(HalProgrammableCoreType::TENSIX));
+        const auto& kernels = program.impl().get_kernels(static_cast<uint32_t>(HalProgrammableCoreType::TENSIX));
         const std::string full_kernel_name = KernelImpl::from(*kernels.at(kernel_handle)).get_full_kernel_name();
 
         const std::string successful_marker_path =
@@ -105,7 +105,7 @@ TEST_F(MeshDeviceFixture, TensixTestEquivalentDataMovementKernelsWithDifferentPr
         const JitBuildState& build_state_riscv_1 = BuildEnvManager::get_instance().get_kernel_build_state(
             device->build_id(), tensix_core_type, dm_class_idx, riscv_1_id);
 
-        const auto& kernels = program.get_kernels(static_cast<uint32_t>(HalProgrammableCoreType::TENSIX));
+        const auto& kernels = program.impl().get_kernels(static_cast<uint32_t>(HalProgrammableCoreType::TENSIX));
         const std::string full_kernel_name_riscv_0 =
             KernelImpl::from(*kernels.at(kernel_handle_riscv_0)).get_full_kernel_name();
         const std::string full_kernel_name_riscv_1 =

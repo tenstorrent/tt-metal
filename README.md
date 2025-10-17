@@ -21,18 +21,6 @@
 
 </div>
 
-## Latest Releases
-
-| Release | Release Date |
-|---------|--------------|
-| [0.62.2](https://github.com/tenstorrent/tt-metal/releases/tag/v0.62.2) | Aug 20, 2025 |
-| 0.61.0  | Skipped |
-| [0.60.1](https://github.com/tenstorrent/tt-metal/releases/tag/v0.60.1) | Jul 22, 2025 |
-| [0.59.0](https://github.com/tenstorrent/tt-metal/releases/tag/v0.59.0) | Jun 18, 2025 |
-| [0.58.0](https://github.com/tenstorrent/tt-metal/releases/tag/v0.58.0) | May 13, 2025 |
-| [0.57.0](https://github.com/tenstorrent/tt-metal/releases/tag/v0.57.0) | Apr 15, 2025 |
-| [0.56.0](https://github.com/tenstorrent/tt-metal/releases/tag/v0.56.0) | Mar 7, 2025  |
-
 ## Quick Links
 
 - [TT-Forge](https://github.com/tenstorrent/tt-forge/tree/main)
@@ -47,6 +35,9 @@
 
 The Models team is focused on developing the following models to a customer-ready state. Ongoing work includes optimizations for performance, accuracy, and compatibility. Follow each model link for more details.
 
+>[!IMPORTANT]
+> For a **full model list** see the **[Model Matrix](https://github.com/tenstorrent/tt-metal/tree/main/models/README.md)**, or visit the **[Developer Hub](https://tenstorrent.com/developers)**.
+
 >[!NOTE]
 > Performance Metrics:
 > - Time to First Token (TTFT) measures the time (in milliseconds) it takes to generate the first output token after input is received.
@@ -59,7 +50,7 @@ The Models team is focused on developing the following models to a customer-read
 ### [Llama 3.1 70B (TP=32)](./models/demos/llama3_70b_galaxy)
 | Batch | Hardware                                                     | TTFT (MS) | T/S/U | Target<br>T/S/U | T/S    | TT-Metalium Release                                                     | vLLM Tenstorrent Repo Release                                                                         |
 |-------|--------------------------------------------------------------|-----------|-------|-----------------|--------|-------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------|
-| 32    | [Galaxy (Wormhole)](https://tenstorrent.com/hardware/galaxy) | 53        | 72.5  | 80              | 2268.8 | [v0.62.2](https://github.com/tenstorrent/tt-metal/tree/v0.62.2) | [c348d08](https://github.com/tenstorrent/vllm/tree/c348d085a463340a66194bbee9cd4bfc5f9c697a/tt_metal) |
+| 32    | [Galaxy (Wormhole)](https://tenstorrent.com/hardware/galaxy) | 53        | 72.5  | 80              | 2268.8 | [v0.62.0-dev20251015](https://github.com/tenstorrent/tt-metal/tree/v0.62.0-dev20251015) | [1d799da](https://github.com/tenstorrent/vllm/tree/1d799da2ebc6a809d45a543debca89a92ed6a6d7/tt_metal) |
 
 ### [Qwen 3 32B (TP=8)](./models/tt_transformers)
 | Batch | Hardware                                                            | TTFT (MS) | T/S/U | Target<br>T/S/U | T/S    | TT-Metalium Release                                                       | vLLM Tenstorrent Repo Release                                                                         |
@@ -69,8 +60,6 @@ The Models team is focused on developing the following models to a customer-read
 Blackhole software optimization is under active development.  Please join us in shaping the future of open source AI! <br> [\[Discord\]](https://discord.gg/tenstorrent) [\[Developer Hub\]](https://tenstorrent.com/developers)
 
 For more information regarding vLLM installation and environment creation visit the [Tenstorrent vLLM repository](https://github.com/tenstorrent/vllm/blob/dev/tt_metal/README.md).
-
-See the [model matrix](https://github.com/tenstorrent/tt-metal/tree/main/models/README.md), or visit the [Developer Hub](https://tenstorrent.com/developers) for a full list of models.
 
 ## Model Updates
 
@@ -125,7 +114,6 @@ Get started with [simple kernels](https://docs.tenstorrent.com/tt-metal/latest/t
 - [Flash Attention on Wormhole](./tech_reports/FlashAttention/FlashAttention.md) (updated Sept 6th, 2024)
 - [CNNs on TT Architectures](./tech_reports/CNNs/ttcnn.md) (updated Sept 6th, 2024)
 - [Ethernet and Multichip Basics](./tech_reports/EthernetMultichip/BasicEthernetGuide.md) (Updated Sept 20th, 2024)
-- [Collective Communication Library (CCL)](./tech_reports/EthernetMultichip/CclDeveloperGuide.md) (Updated Sept 20th, 2024)
 - [Blackhole Bring-Up Programming Guide](./tech_reports/Blackhole/BlackholeBringUpProgrammingGuide.md) (Updated Dec 18th, 2024)
 - [Sub-Devices](./tech_reports/SubDevices/SubDevices.md) (Updated Jan 7th, 2025)
 
@@ -164,12 +152,31 @@ Get started with [simple kernels](https://docs.tenstorrent.com/tt-metal/latest/t
 
 ### Tools and Instruments
 
-#### [TT_NN Visualizer](https://github.com/tenstorrent/ttnn-visualizer)
+#### [TT-NN Visualizer](https://github.com/tenstorrent/ttnn-visualizer)
 A comprehensive tool for visualizing and analyzing model execution, offering interactive graphs, memory plots, tensor details, buffer overviews, operation flow graphs, and multi-instance support with file or SSH-based report loading.
 Install via pip or build from source:
 ```bash
 pip install ttnn-visualizer
 ```
+
+#### [TT-Exalens](https://github.com/tenstorrent/tt-exalens)
+The TT-Exalens repository describes TT-Lensium, a low-level debugging tool for Tenstorrent hardware. It allows developers to access and communicate with Wormhole and Blackhole devices.
+
+#### [Model Explorer](https://github.com/tenstorrent/model-explorer)
+The Model Explorer is an intuitive and hierarchical visualization tool using model graphs. It organizes model operations into nested layers and provides features for model exploration and debugging.
+
+#### [Tracy Profiler](https://github.com/tenstorrent/tracy)
+The Tracy Profiler is a real-time nanosecond resolution, remote telemetry, hybrid frame, and sampling tool. Tracy supports profiling CPU, GPU, memory allocation, locks, context switches, and more.
+
+#### [Kernel Print Debug](https://docs.tenstorrent.com/tt-metal/latest/tt-metalium/tools/kernel_print.html)
+DPRINT can print variables, addresses, and circular buffer data from kernels to the host terminal or log file. This feature is useful for debugging issues with kernels.
+
+#### [Watcher](https://github.com/tenstorrent/tt-metal/blob/main/docs/source/tt-metalium/tools/watcher.rst)
+Watcher monitors firmware and kernels for common programming errors, and overall device status. If an error or hang occurs, Watcher displays log data of that occurrence.
+
+#### [Inspector](https://github.com/tenstorrent/tt-metal/blob/main/docs/source/tt-metalium/tools/inspector.rst)
+Inspector provides insights into host runtime. It logs necessary data for investigation and allows queries to host runtime data.
+
 ## Related Tenstorrent Projects
 - [TT-Forge](https://github.com/tenstorrent/tt-forge/tree/main)
 - [TT-Forge-FE](https://github.com/tenstorrent/tt-forge-fe)
@@ -177,6 +184,22 @@ pip install ttnn-visualizer
 - [TT-XLA](https://github.com/tenstorrent/tt-xla)
 - [TT-MLIR](https://github.com/tenstorrent/tt-mlir)
 - [TT-TVM](https://github.com/tenstorrent/tt-tvm)
+
+## Latest Releases
+
+| Release | Release Date |
+|---------|--------------|
+| 0.64.0  | ETA Oct 15, 2025 |
+| [0.63.0](https://github.com/tenstorrent/tt-metal/releases/tag/v0.63.0) | Sep 22, 2025 |
+| [0.62.2](https://github.com/tenstorrent/tt-metal/releases/tag/v0.62.2) | Aug 20, 2025 |
+| 0.61.0  | Skipped |
+| [0.60.1](https://github.com/tenstorrent/tt-metal/releases/tag/v0.60.1) | Jul 22, 2025 |
+| [0.59.0](https://github.com/tenstorrent/tt-metal/releases/tag/v0.59.0) | Jun 18, 2025 |
+| [0.58.0](https://github.com/tenstorrent/tt-metal/releases/tag/v0.58.0) | May 13, 2025 |
+| [0.57.0](https://github.com/tenstorrent/tt-metal/releases/tag/v0.57.0) | Apr 15, 2025 |
+| [0.56.0](https://github.com/tenstorrent/tt-metal/releases/tag/v0.56.0) | Mar 7, 2025  |
+
+Visit the [releases](https://github.com/tenstorrent/tt-metal/tree/main/releases) folder for details on releases, release notes, and estimated release dates.
 
 ## Tenstorrent Bounty Program Terms and Conditions
 This repo is a part of Tenstorrent’s bounty program. If you are interested in helping to improve tt-metal, please make sure to read the [Tenstorrent Bounty Program Terms and Conditions](https://docs.tenstorrent.com/bounty_terms.html) before heading to the issues tab. Look for the issues that are tagged with both “bounty” and difficulty level!

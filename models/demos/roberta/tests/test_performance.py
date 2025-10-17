@@ -12,14 +12,19 @@ from loguru import logger
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
+from models.common.utility_functions import (
+    disable_persistent_kernel_cache,
+    enable_persistent_kernel_cache,
+    is_blackhole,
+    is_grayskull,
+)
 from models.demos.bert.tt import ttnn_optimized_bert
 from models.perf.perf_utils import prep_perf_report
-from models.utility_functions import disable_persistent_kernel_cache, enable_persistent_kernel_cache, is_grayskull
 
 
 def get_expected_times(bert):
     return {
-        ttnn_optimized_bert: (8.7, 0.15) if is_grayskull() else (12.5, 0.14),
+        ttnn_optimized_bert: (8.7, 0.15) if is_grayskull() else (12.5, 0.0215) if is_blackhole() else (12.5, 0.0513),
     }[bert]
 
 

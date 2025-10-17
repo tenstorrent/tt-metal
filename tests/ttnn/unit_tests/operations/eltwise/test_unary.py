@@ -14,7 +14,7 @@ from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import (
     data_gen_with_range_dtype,
     compare_pcc,
 )
-from models.utility_functions import torch_random, is_wormhole_b0, is_blackhole
+from models.common.utility_functions import torch_random, is_wormhole_b0, is_blackhole
 
 
 def create_full_range_tensor(input_shapes, dtype):
@@ -214,12 +214,6 @@ def test_exp(device, h, w):
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_tanh(device, h, w):
-    run_unary_test(device, h, w, ttnn.tanh, pcc=0.993)
-
-
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
 def test_gelu(device, h, w):
     run_unary_test(device, h, w, ttnn.gelu, pcc=0.9996)
 
@@ -228,6 +222,18 @@ def test_gelu(device, h, w):
 @pytest.mark.parametrize("w", [128])
 def test_relu(device, h, w):
     run_unary_test(device, h, w, ttnn.relu)
+
+
+@pytest.mark.parametrize("h", [64])
+@pytest.mark.parametrize("w", [128])
+def test_rsqrt(device, h, w):
+    run_unary_test(device, h, w, ttnn.rsqrt)
+
+
+@pytest.mark.parametrize("h", [64])
+@pytest.mark.parametrize("w", [128])
+def test_silu(device, h, w):
+    run_unary_test(device, h, w, ttnn.silu)
 
 
 @pytest.mark.parametrize("h", [64])
@@ -364,12 +370,6 @@ def test_sigmoid(device, h, w, vector_mode, approx_mode):
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_cosh(device, h, w):
-    run_unary_test(device, h, w, ttnn.cosh, pcc=0.999)
-
-
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
 def test_logical_not(device, h, w):
     run_unary_test(device, h, w, ttnn.logical_not)
 
@@ -462,42 +462,54 @@ def test_pow(device, h, w, scalar):
     run_unary_test_with_float(device, h, w, scalar, ttnn.pow, pcc=0.999)
 
 
-@pytest.mark.parametrize("lower_limit", [0, 1.0, 2])
+@pytest.mark.parametrize("lower_limit", [0, 1.0, 2, -5.5])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_relu_min(device, h, w, lower_limit):
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32])
+def test_relu_min(device, h, w, lower_limit, dtype):
     torch.manual_seed(0)
 
-    torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
+    if dtype == ttnn.bfloat16:
+        torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
+    elif dtype == ttnn.int32:
+        torch_input_tensor = torch.randint(
+            torch.iinfo(torch.int32).min, torch.iinfo(torch.int32).max, (h, w), dtype=torch.int32
+        )
+        lower_limit = int(lower_limit)
+
     golden_function = ttnn.get_golden_function(ttnn.relu_min)
     torch_output_tensor = golden_function(torch_input_tensor, lower_limit=lower_limit)
 
-    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
     output_tensor = ttnn.relu_min(input_tensor, lower_limit)
-    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
-    output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor)
+    assert torch.equal(torch_output_tensor, output_tensor)
 
 
-@pytest.mark.parametrize("upper_limit", [0, 1.0, 2])
+@pytest.mark.parametrize("upper_limit", [0, 1.0, 2, -5.5])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_relu_max(device, h, w, upper_limit):
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32])
+def test_relu_max(device, h, w, upper_limit, dtype):
     torch.manual_seed(0)
 
-    torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
+    if dtype == ttnn.bfloat16:
+        torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
+    elif dtype == ttnn.int32:
+        torch_input_tensor = torch.randint(
+            torch.iinfo(torch.int32).min, torch.iinfo(torch.int32).max, (h, w), dtype=torch.int32
+        )
+        upper_limit = int(upper_limit)
+
     golden_function = ttnn.get_golden_function(ttnn.relu_max)
     torch_output_tensor = golden_function(torch_input_tensor, upper_limit=upper_limit)
 
-    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
     output_tensor = ttnn.relu_max(input_tensor, upper_limit)
-    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
-    output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor)
+    assert torch.equal(torch_output_tensor, output_tensor)
 
 
 @pytest.mark.parametrize("scalar", [1.5, 2.0])
@@ -653,10 +665,12 @@ def test_unary_zero_comp_ttnn(input_shapes, low, high, ttnn_function, device):
     ),
 )
 @pytest.mark.parametrize(
-    "low, high",
+    "low, high, torch_dtype, ttnn_dtype",
     [
-        (0, 2),  # Small range
-        (0, 65535),  # Full uint16 range
+        (0, 2, torch.int32, ttnn.uint16),  # Small range
+        (0, 65535, torch.int32, ttnn.uint16),  # Full uint16 range
+        (0, 2, torch.uint32, ttnn.uint32),  # Small range
+        (0, 4294967295, torch.uint32, ttnn.uint32),  # Full uint32 range
     ],
 )
 @pytest.mark.parametrize(
@@ -666,21 +680,21 @@ def test_unary_zero_comp_ttnn(input_shapes, low, high, ttnn_function, device):
         ttnn.nez,
     ],
 )
-def test_unary_zero_comp_uint16_ttnn(input_shapes, low, high, ttnn_function, device):
-    in_data = torch.randint(low, high, input_shapes, dtype=torch.int32)
+def test_unary_zero_comp_uint_ttnn(input_shapes, low, high, torch_dtype, ttnn_dtype, ttnn_function, device):
+    in_data = torch.randint(low, high, input_shapes, dtype=torch_dtype)
     zeroize_prob = 0.50
     if zeroize_prob > 0:
         zero_mask = torch.rand(in_data.shape) < zeroize_prob
+        in_data = in_data.to(torch.int64) if ttnn_dtype == ttnn.uint32 else in_data
         in_data = in_data.masked_fill(zero_mask, 0)
-    input_tensor = ttnn.from_torch(in_data, dtype=ttnn.uint16, layout=ttnn.TILE_LAYOUT, device=device)
-
+        in_data = in_data.to(torch.uint32) if ttnn_dtype == ttnn.uint32 else in_data
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     cq_id = 0
     output_tensor = ttnn_function(input_tensor, queue_id=cq_id)
     golden_function = ttnn.get_golden_function(ttnn_function)
     golden_tensor = golden_function(in_data)
 
     output_tensor = ttnn.to_torch(output_tensor)
-
     assert torch.equal(golden_tensor, output_tensor)
 
 
@@ -775,22 +789,64 @@ def test_unary_comp_ops(input_shapes, scalar, ttnn_op, use_legacy, device):
 @pytest.mark.parametrize(
     "input_shapes",
     (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([100])),
+        (torch.Size([32, 32])),
+        (torch.Size([3, 128, 32])),
         (torch.Size([1, 3, 320, 384])),
+        (torch.Size([1, 1, 32, 320, 12])),
     ),
 )
-def test_unary_tanhshrink_ttnn(input_shapes, device):
-    in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device, seed=0)
-    _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
-    cq_id = 0
+@pytest.mark.parametrize(
+    "torch_dtype, ttnn_dtype, atol",
+    [
+        (torch.float32, ttnn.float32, 0.016),
+        (torch.bfloat16, ttnn.bfloat16, 0.012),
+    ],
+)
+def test_unary_tanhshrink_ttnn(input_shapes, torch_dtype, ttnn_dtype, atol, device):
+    in_data1 = torch.empty(input_shapes, dtype=torch_dtype).uniform_(-100, 100)
+    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    if ttnn_dtype == ttnn.bfloat8_b:
+        in_data1 = ttnn.to_torch(input_tensor1, dtype=torch_dtype)
 
-    ttnn.tanhshrink(input_tensor1, queue_id=cq_id, output_tensor=output_tensor)
+    output_tensor = ttnn.tanhshrink(input_tensor1)
     golden_function = ttnn.get_golden_function(ttnn.tanhshrink)
     golden_tensor = golden_function(in_data1)
 
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
+    assert_allclose(output_tensor, golden_tensor, rtol=1e-05, atol=atol)
+    assert_with_pcc(ttnn.to_torch(output_tensor), golden_tensor, pcc=0.999)
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([100])),
+        (torch.Size([32, 32])),
+        (torch.Size([3, 128, 32])),
+        (torch.Size([1, 3, 320, 384])),
+        (torch.Size([1, 1, 32, 320, 12])),
+    ),
+)
+@pytest.mark.parametrize(
+    "torch_dtype, ttnn_dtype",
+    [
+        (torch.float32, ttnn.float32),
+        (torch.bfloat16, ttnn.bfloat16),
+        (torch.bfloat16, ttnn.bfloat8_b),
+    ],
+)
+def test_unary_tanhshrink_approx_ttnn(input_shapes, torch_dtype, ttnn_dtype, device):
+    in_data1 = torch.empty(input_shapes, dtype=torch_dtype).uniform_(-100, 100)
+    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    if ttnn_dtype == ttnn.bfloat8_b:
+        in_data1 = ttnn.to_torch(input_tensor1, dtype=torch_dtype)
+
+    output_tensor = ttnn.tanhshrink(input_tensor1, fast_and_approximate_mode=True)
+    golden_function = ttnn.get_golden_function(ttnn.tanhshrink)
+    golden_tensor = golden_function(in_data1)
+
+    assert_allclose(output_tensor, golden_tensor, rtol=1e-05, atol=0.25)
+    assert_with_pcc(ttnn.to_torch(output_tensor), golden_tensor, pcc=0.999)
 
 
 @pytest.mark.parametrize(
@@ -798,7 +854,8 @@ def test_unary_tanhshrink_ttnn(input_shapes, device):
     ((torch.Size([1, 5, 512, 1024])),),
 )
 @pytest.mark.parametrize(
-    "ttnn_function", [ttnn.silu, ttnn.asinh, ttnn.tanhshrink, ttnn.rad2deg, ttnn.deg2rad, ttnn.acosh, ttnn.hardsigmoid]
+    "ttnn_function",
+    [ttnn.silu, ttnn.asinh, ttnn.tanhshrink, ttnn.rad2deg, ttnn.deg2rad, ttnn.acosh, ttnn.hardsigmoid, ttnn.cbrt],
 )
 def test_unary_edge_case_ttnn(input_shapes, ttnn_function, device):
     in_data = create_full_range_tensor(input_shapes, torch.bfloat16)
@@ -1462,3 +1519,474 @@ def test_unary_threshold_ttnn(input_shapes, threshold, value, device):
     golden_tensor = golden_function(in_data1, threshold, value)
 
     assert torch.equal(golden_tensor, ttnn.to_torch(output_tensor))
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([100])),
+        (torch.Size([64, 32])),
+        (torch.Size([3, 128, 32])),
+        (torch.Size([1, 3, 320, 384])),
+        (torch.Size([1, 1, 32, 320, 12])),
+    ),
+)
+@pytest.mark.parametrize(
+    "min_val, max_val",
+    [
+        (None, None),
+        (-29.4, None),
+        (None, 18.0),
+        (-10.5, 34.5),
+        (12.5, 82.5),
+        (1, -1),
+        (0, 0),
+        (0, 1),
+    ],
+)
+@pytest.mark.parametrize(
+    "torch_dtype, ttnn_dtype",
+    [
+        (torch.float32, ttnn.float32),
+        (torch.bfloat16, ttnn.bfloat16),
+    ],
+)
+def test_unary_clamp_tss_float_ttnn(input_shapes, min_val, max_val, torch_dtype, ttnn_dtype, device):
+    in_data1 = torch.empty(input_shapes, dtype=torch_dtype).uniform_(-100, 100)
+    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    min = min_val
+    max = max_val
+    if min is None and max is None:
+        with pytest.raises(RuntimeError, match="Only one of 'min' or 'max' can be None. Please provide one value"):
+            ttnn.clamp(input_tensor1, min, max)
+    else:
+        output_tensor = ttnn.clamp(input_tensor1, min, max)
+        golden_function = ttnn.get_golden_function(ttnn.clamp)
+        golden_tensor = golden_function(in_data1, min, max)
+        assert torch.equal(golden_tensor, ttnn.to_torch(output_tensor))
+        assert_with_pcc(ttnn.to_torch(output_tensor), golden_tensor)
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([100])),
+        (torch.Size([32, 32])),
+        (torch.Size([3, 128, 32])),
+        (torch.Size([1, 3, 320, 384])),
+        (torch.Size([1, 1, 32, 320, 12])),
+    ),
+)
+@pytest.mark.parametrize(
+    "torch_dtype, ttnn_dtype, atol",
+    [
+        (torch.float32, ttnn.float32, 0.002),
+        (torch.bfloat16, ttnn.bfloat16, 0.008),
+    ],
+)
+def test_unary_tanh_ttnn(input_shapes, torch_dtype, ttnn_dtype, atol, device):
+    in_data1 = torch.empty(input_shapes, dtype=torch_dtype).uniform_(-100, 100)
+    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    if ttnn_dtype == ttnn.bfloat8_b:
+        in_data1 = ttnn.to_torch(input_tensor1, dtype=torch_dtype)
+
+    output_tensor = ttnn.tanh(input_tensor1)
+    golden_function = ttnn.get_golden_function(ttnn.tanh)
+    golden_tensor = golden_function(in_data1)
+
+    assert_allclose(output_tensor, golden_tensor, rtol=1e-05, atol=atol)
+    assert_with_pcc(ttnn.to_torch(output_tensor), golden_tensor, pcc=0.999)
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([100])),
+        (torch.Size([32, 32])),
+        (torch.Size([3, 128, 32])),
+        (torch.Size([1, 3, 320, 384])),
+        (torch.Size([1, 1, 32, 320, 12])),
+    ),
+)
+@pytest.mark.parametrize(
+    "torch_dtype, ttnn_dtype",
+    [
+        (torch.float32, ttnn.float32),
+        (torch.bfloat16, ttnn.bfloat16),
+        (torch.bfloat16, ttnn.bfloat8_b),
+    ],
+)
+def test_unary_tanh_approx_ttnn(input_shapes, torch_dtype, ttnn_dtype, device):
+    in_data1 = torch.empty(input_shapes, dtype=torch_dtype).uniform_(-100, 100)
+    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    if ttnn_dtype == ttnn.bfloat8_b:
+        in_data1 = ttnn.to_torch(input_tensor1, dtype=torch_dtype)
+
+    output_tensor = ttnn.tanh(input_tensor1, fast_and_approximate_mode=True)
+    golden_function = ttnn.get_golden_function(ttnn.tanh)
+    golden_tensor = golden_function(in_data1)
+
+    assert_allclose(output_tensor, golden_tensor, rtol=1e-05, atol=0.15)
+    assert_with_pcc(ttnn.to_torch(output_tensor), golden_tensor, pcc=0.999)
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([100])),
+        (torch.Size([32, 32])),
+        (torch.Size([3, 128, 32])),
+        (torch.Size([1, 3, 320, 384])),
+        (torch.Size([1, 1, 32, 320, 12])),
+    ),
+)
+def test_unary_square_uint16_ttnn(input_shapes, device):
+    in_data = torch.randint(
+        0, 255, input_shapes, dtype=torch.int32
+    )  # Beyond 255 leads to overflow of uint16 range, since it a square op.
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn.uint16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    cq_id = 0
+    output_tensor = ttnn.square(input_tensor, queue_id=cq_id)
+    golden_function = ttnn.get_golden_function(ttnn.square)
+    golden_tensor = golden_function(in_data)
+    output_tensor = ttnn.typecast(output_tensor, dtype=ttnn.uint32)
+    output_tensor = ttnn.to_torch(output_tensor, dtype=torch.int32)
+
+    assert torch.equal(golden_tensor, output_tensor)
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([100])),
+        (torch.Size([64, 32])),
+        (torch.Size([3, 128, 32])),
+        (torch.Size([1, 3, 320, 384])),
+        (torch.Size([1, 1, 32, 320, 12])),
+    ),
+)
+@pytest.mark.parametrize(
+    "min_val, max_val",
+    [
+        (None, None),
+        (-29, None),
+        (None, 18),
+        (-10, 34),
+        (12, 82),
+        (1, -1),
+        (0, 0),
+        (0, 1),
+    ],
+)
+def test_unary_clamp_tss_int32_ttnn(input_shapes, min_val, max_val, device):
+    torch.manual_seed(0)
+    in_data1 = torch.randint(-100, 100, input_shapes, dtype=torch.int32)
+    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    min = min_val
+    max = max_val
+    if min is None and max is None:
+        with pytest.raises(RuntimeError, match="Only one of 'min' or 'max' can be None. Please provide one value"):
+            ttnn.clamp(input_tensor1, min, max)
+    else:
+        output_tensor = ttnn.clamp(input_tensor1, min, max)
+        golden_function = ttnn.get_golden_function(ttnn.clamp)
+        golden_tensor = golden_function(in_data1, min, max)
+        assert torch.equal(golden_tensor, ttnn.to_torch(output_tensor))
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([100])),
+        (torch.Size([32, 32])),
+        (torch.Size([3, 128, 32])),
+        (torch.Size([1, 3, 320, 384])),
+        (torch.Size([1, 1, 32, 320, 12])),
+    ),
+)
+@pytest.mark.parametrize(
+    "torch_dtype, ttnn_dtype",
+    [
+        (torch.float32, ttnn.float32),
+        (torch.bfloat16, ttnn.bfloat16),
+        (torch.bfloat16, ttnn.bfloat8_b),
+    ],
+)
+def test_unary_cosh_ttnn(input_shapes, torch_dtype, ttnn_dtype, device):
+    in_data = torch.empty(input_shapes, dtype=torch_dtype).uniform_(-9, 9)
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    if ttnn_dtype == ttnn.bfloat8_b:
+        in_data = ttnn.to_torch(input_tensor, dtype=torch_dtype)
+
+    output_tensor = ttnn.cosh(input_tensor)
+    golden_function = ttnn.get_golden_function(ttnn.cosh)
+    golden_tensor = golden_function(in_data)
+
+    if ttnn_dtype == ttnn.bfloat16:
+        assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=1)
+    else:
+        assert_with_pcc(ttnn.to_torch(output_tensor), golden_tensor, pcc=0.999)
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([100])),
+        (torch.Size([32, 32])),
+        (torch.Size([3, 128, 32])),
+        (torch.Size([1, 3, 320, 384])),
+        (torch.Size([1, 1, 32, 320, 12])),
+    ),
+)
+@pytest.mark.parametrize(
+    "torch_dtype, ttnn_dtype",
+    [
+        (torch.float32, ttnn.float32),
+        (torch.bfloat16, ttnn.bfloat16),
+        (torch.bfloat16, ttnn.bfloat8_b),
+    ],
+)
+def test_unary_sinh_ttnn(input_shapes, torch_dtype, ttnn_dtype, device):
+    in_data = torch.empty(input_shapes, dtype=torch_dtype).uniform_(-9, 9)
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    if ttnn_dtype == ttnn.bfloat8_b:
+        in_data = ttnn.to_torch(input_tensor, dtype=torch_dtype)
+
+    output_tensor = ttnn.sinh(input_tensor)
+    golden_function = ttnn.get_golden_function(ttnn.sinh)
+    golden_tensor = golden_function(in_data)
+
+    if ttnn_dtype == ttnn.bfloat16:
+        assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=5.0)
+
+    else:
+        assert_with_pcc(ttnn.to_torch(output_tensor), golden_tensor, pcc=0.999)
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([100])),
+        (torch.Size([32, 32])),
+        (torch.Size([3, 128, 32])),
+        (torch.Size([1, 3, 320, 384])),
+        (torch.Size([1, 1, 32, 320, 12])),
+    ),
+)
+@pytest.mark.parametrize("exponent", [0.5, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.5, 8.0, 9.0, 10.0])
+def test_unary_rpow_ttnn(input_shapes, exponent, device):
+    in_data1 = torch.empty(input_shapes, dtype=torch.bfloat16).uniform_(-30, 30)
+    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.rpow(input_tensor1, exponent)
+    golden_function = ttnn.get_golden_function(ttnn.rpow)
+    golden_tensor = golden_function(in_data1, exponent)
+
+    assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=8)  # ULP<=1 for exponents less than 5
+    assert_with_pcc(ttnn.to_torch(output_tensor), golden_tensor, pcc=0.99)
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([100])),
+        (torch.Size([64, 32])),
+        (torch.Size([3, 128, 32])),
+        (torch.Size([1, 3, 320, 384])),
+        (torch.Size([1, 1, 32, 320, 12])),
+    ),
+)
+@pytest.mark.parametrize(
+    "torch_dtype, ttnn_dtype, atol",
+    [
+        (torch.float32, ttnn.float32, 0.0094),
+        (torch.bfloat16, ttnn.bfloat16, 0.04),
+        (torch.bfloat16, ttnn.bfloat8_b, 0.05),
+    ],
+)
+def test_unary_cbrt_ttnn(input_shapes, torch_dtype, ttnn_dtype, atol, device):
+    in_data = torch.empty(input_shapes, dtype=torch_dtype).uniform_(-100, 100)
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    if ttnn_dtype == ttnn.bfloat8_b:
+        in_data = ttnn.to_torch(input_tensor, dtype=torch_dtype)
+
+    output_tensor = ttnn.cbrt(input_tensor)
+    golden_function = ttnn.get_golden_function(ttnn.cbrt)
+    golden_tensor = golden_function(in_data)
+
+    if ttnn_dtype == ttnn.bfloat16:
+        assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=2.0)
+    else:
+        assert_allclose(ttnn.to_torch(output_tensor), golden_tensor, rtol=1e-05, atol=atol)
+
+
+def test_cbrt_arange(device):
+    # Generate all possible bit patterns for bf16
+    all_bitpatterns = torch.arange(0, 2**16, dtype=torch.int32).to(torch.uint16)
+    input_tensor = all_bitpatterns.view(torch.bfloat16)
+    input_tensor = input_tensor.to(torch.float32)
+
+    # Mask NaN, special values where cbrt has ULP>1 (Covered in atol test below).
+    # Also mask values in range -1 to 1.
+    mask = torch.isnan(input_tensor) | torch.isinf(input_tensor) | ((input_tensor > -1.0) & (input_tensor < 1.0))
+    input_tensor[mask] = 1.0
+
+    tt_in = ttnn.from_torch(
+        input_tensor,
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    golden_function = ttnn.get_golden_function(ttnn.cbrt)
+    golden = golden_function(input_tensor, device=device)
+
+    tt_result = ttnn.cbrt(tt_in)
+    result = ttnn.to_torch(tt_result)
+    assert_with_ulp(golden, result, 2, allow_nonfinite=True)
+
+
+@pytest.mark.parametrize("ttnn_op", [ttnn.isinf, ttnn.isnan, ttnn.isposinf, ttnn.isneginf, ttnn.isfinite])
+@pytest.mark.parametrize(
+    "torch_dtype, ttnn_dtype",
+    [
+        (torch.float32, ttnn.float32),
+        (torch.bfloat16, ttnn.bfloat16),
+        (torch.bfloat16, ttnn.bfloat8_b),
+    ],
+)
+def test_inf_nan_check(ttnn_op, torch_dtype, ttnn_dtype, device):
+    in_data = torch.tensor(
+        [float("-inf"), float("inf"), float("nan"), 5.0, -5.0, 0.0, -0.0, 1e38, 1e-45, 3.4e38, -3.4e38],
+        dtype=torch_dtype,
+    )
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output_tensor = ttnn_op(input_tensor)
+    golden_function = ttnn.get_golden_function(ttnn_op)
+    golden_tensor = golden_function(in_data)
+
+    assert torch.equal(golden_tensor, ttnn.to_torch(output_tensor))
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([100])),
+        (torch.Size([64, 32])),
+        (torch.Size([3, 128, 32])),
+        (torch.Size([1, 3, 320, 384])),
+        (torch.Size([1, 1, 32, 320, 12])),
+    ),
+)
+@pytest.mark.parametrize(
+    "torch_dtype, ttnn_dtype",
+    [
+        (torch.float32, ttnn.float32),
+        (torch.bfloat16, ttnn.bfloat16),
+        (torch.bfloat16, ttnn.bfloat8_b),
+    ],
+)
+@pytest.mark.parametrize("negative_slope", [0.01, 0.1, 1.0, 5.75, 10.0])
+def test_unary_leaky_relu_ttnn(input_shapes, negative_slope, torch_dtype, ttnn_dtype, device):
+    in_data = torch.empty(input_shapes, dtype=torch_dtype).uniform_(-100, 100)
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    if ttnn_dtype == ttnn.bfloat8_b:
+        in_data = ttnn.to_torch(input_tensor, dtype=torch_dtype)
+
+    output_tensor = ttnn.leaky_relu(input_tensor, negative_slope=negative_slope)
+    golden_function = ttnn.get_golden_function(ttnn.leaky_relu)
+    golden_tensor = golden_function(in_data, negative_slope=negative_slope)
+
+    if ttnn_dtype == ttnn.bfloat8_b:
+        assert_with_pcc(ttnn.to_torch(output_tensor), golden_tensor, pcc=0.999)
+    else:
+        assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=1)
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([100])),
+        (torch.Size([10, 10])),
+        (torch.Size([3, 128, 32])),
+        (torch.Size([1, 1, 102400, 32])),
+        (torch.Size([1, 1, 102400, 64])),
+        (torch.Size([1, 1, 400, 512])),
+    ),
+)
+@pytest.mark.parametrize(
+    "torch_dtype, ttnn_dtype",
+    [
+        (torch.bfloat16, ttnn.bfloat16),
+        (torch.float32, ttnn.float32),
+    ],
+)
+def test_unary_hardmish(input_shapes, torch_dtype, ttnn_dtype, device):
+    in_data1 = create_full_range_tensor(input_shapes, torch_dtype)
+
+    # limit the range to avoid overflow in hardmish
+    in_data1 = in_data1[(in_data1 + 2.8).abs() < 3.3e38 / 5]
+
+    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output_tensor = ttnn.hardmish(input_tensor1)
+    golden_function = ttnn.get_golden_function(ttnn.hardmish)
+
+    golden_tensor = golden_function(in_data1, device=device)
+    tt_res = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(tt_res, golden_tensor, pcc=0.9999)
+
+
+def test_hardmish_bfloat16_ulp(device):
+    # Generate all possible bit pattersn for bf16
+    all_bitpatterns = torch.arange(0, 2**16, dtype=torch.int32).to(torch.uint16)
+    input_tensor = all_bitpatterns.view(torch.bfloat16)
+    input_tensor = input_tensor.to(torch.float32)
+
+    # Mask NaN, special values where hardmish has ULP>1 (Covered in atol test below).
+    mask = (
+        torch.isnan(input_tensor)
+        | ((input_tensor >= -2.0847e-23) & (input_tensor <= 2.0939e-23))
+        | (input_tensor == -0.0)
+        | (input_tensor >= 6.8122e37)
+        | (input_tensor == -torch.inf)
+    )
+    input_tensor[mask] = 0.0
+
+    tt_in = ttnn.from_torch(
+        input_tensor,
+        dtype=ttnn.float32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    golden_function = ttnn.get_golden_function(ttnn.hardmish)
+    golden = golden_function(input_tensor, device=device)
+
+    tt_result = ttnn.hardmish(tt_in)
+    result = ttnn.to_torch(tt_result)
+    assert_with_ulp(golden, result, 1, allow_nonfinite=True)
+
+
+def test_hardmish_bfloat16_allclose(device):
+    # Generate all possible bit pattersn for bf16
+    all_bitpatterns = torch.arange(0, 2**16, dtype=torch.int32).to(torch.uint16)
+    input_tensor = all_bitpatterns.view(torch.bfloat16)
+    input_tensor = input_tensor.to(torch.float32)
+
+    tt_in = ttnn.from_torch(
+        input_tensor,
+        dtype=ttnn.float32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    golden_function = ttnn.get_golden_function(ttnn.hardmish)
+    golden = golden_function(input_tensor, device=device)
+
+    tt_result = ttnn.hardmish(tt_in)
+    result = ttnn.to_torch(tt_result)
+    assert_allclose(golden, result, rtol=1e-05, atol=1e-35)

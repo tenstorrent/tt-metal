@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -27,21 +27,20 @@ DeviceInfo get_device_info(tt::tt_metal::distributed::MeshDevice* device) {
     info.num_x_cores = device->logical_grid_size().x;
     info.num_y_compute_cores = descriptor.compute_grid_size.y;
     info.num_x_compute_cores = descriptor.compute_grid_size.x;
-    info.worker_l1_size = device_allocator->get_config().worker_l1_size;
+    info.worker_l1_size = device_allocator->get_worker_l1_size();
     info.l1_num_banks = device_allocator->get_num_banks(tt::tt_metal::BufferType::L1);
     info.l1_bank_size = device_allocator->get_bank_size(tt::tt_metal::BufferType::L1);
     info.address_at_first_l1_bank = device_allocator->get_bank_offset(tt::tt_metal::BufferType::L1, 0);
     info.address_at_first_l1_cb_buffer = device_allocator->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-    info.num_banks_per_storage_core = device_allocator->get_config().worker_l1_size / info.l1_bank_size;
+    info.num_banks_per_storage_core = device_allocator->get_worker_l1_size() / info.l1_bank_size;
     info.num_storage_cores = descriptor.relative_storage_cores.size();
     info.num_compute_cores = descriptor.relative_compute_cores.size();
-    info.total_l1_memory =
-        (info.num_storage_cores + info.num_compute_cores) * device_allocator->get_config().worker_l1_size;
+    info.total_l1_memory = (info.num_storage_cores + info.num_compute_cores) * device_allocator->get_worker_l1_size();
     info.total_l1_for_interleaved_buffers =
         (info.num_storage_cores + info.num_compute_cores + (info.num_banks_per_storage_core * info.num_storage_cores)) *
         info.l1_bank_size;
     info.total_l1_for_sharded_buffers = info.num_compute_cores * info.l1_bank_size;
-    info.cb_limit = device_allocator->get_config().worker_l1_size -
+    info.cb_limit = device_allocator->get_worker_l1_size() -
                     device_allocator->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
     return info;
 }
@@ -50,6 +49,7 @@ std::vector<BufferInfo> get_buffers(const std::vector<tt::tt_metal::distributed:
     std::vector<BufferInfo> buffer_infos;
     for (auto device : devices) {
         const auto allocated_buffers = device->allocator()->get_allocated_buffers();
+        // NOLINTNEXTLINE(bugprone-nondeterministic-pointer-iteration-order)
         for (const auto& buffer : allocated_buffers) {
             auto device_id = device->id();
             auto address = buffer->address();
@@ -105,6 +105,7 @@ std::vector<BufferPageInfo> get_buffer_pages(const std::vector<tt::tt_metal::dis
     std::vector<BufferPageInfo> buffer_page_infos;
     for (auto device : devices) {
         const auto allocated_buffers = device->allocator()->get_allocated_buffers();
+        // NOLINTNEXTLINE(bugprone-nondeterministic-pointer-iteration-order)
         for (const auto& buffer : allocated_buffers) {
             if (not buffer->is_l1()) {
                 continue;
@@ -123,7 +124,7 @@ std::vector<BufferPageInfo> get_buffer_pages(const std::vector<tt::tt_metal::dis
                 for (auto mapped_page : buffer_page_mapping) {
                     auto core = buffer_page_mapping.all_cores[mapped_page.core_id];
                     auto bank_id = device->allocator()->get_bank_ids_from_logical_core(buffer_type, core)[0];
-                    auto page_address = buffer->address() + mapped_page.device_page * buffer->aligned_page_size();
+                    auto page_address = buffer->address() + (mapped_page.device_page * buffer->aligned_page_size());
                     buffer_page_infos.push_back(BufferPageInfo{
                         .device_id = device_id,
                         .address = address,

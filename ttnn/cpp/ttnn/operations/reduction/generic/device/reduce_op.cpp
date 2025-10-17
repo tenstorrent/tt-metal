@@ -10,6 +10,8 @@
 
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/unary_backward/unary_backward.hpp"
+#include "ttnn/operations/experimental/auto_format/auto_format.hpp"
+#include "ttnn/run_operation.hpp"
 
 using namespace tt::constants;
 
@@ -30,7 +32,7 @@ std::map<std::string, std::string> get_defines(
     defines["REDUCE_OP"] = (do_max ? "PoolType::MAX" : "PoolType::SUM");
     defines["REDUCE_DIM"] = reduce_dim_str;
     if (reduce_dim == tt::tt_metal::ReduceOpDim::W && reduce_op == tt::tt_metal::ReduceOpMath::SUM) {
-        defines["REDUCE_ROW_SUM_VIA_MM"] = 1;
+        defines["REDUCE_ROW_SUM_VIA_MM"] = "1";
     }
     return defines;
 }
@@ -162,6 +164,10 @@ Tensor reduce(
         Reduce{reduce_math, reduce_dim, scaler, output_mem_config}.get_parallelization_strategy({input_tensor});
     auto is_multicore_hw = parallelization_strategy == ReduceOpParallelizationStrategy::MULTI_CORE_HW;
     float pad_value = reduce_math == ReduceOpMath::MAX ? -std::numeric_limits<float>::infinity() : 0;
+
+    TT_FATAL(
+        input_tensor.device() != nullptr,
+        "input_tensor.device() == nullptr, No device found, move input_tensor to device");
 
     ttnn::DeviceComputeKernelConfig config = compute_kernel_config.value_or(ttnn::init_device_compute_kernel_config(
         input_tensor.device()->arch(),

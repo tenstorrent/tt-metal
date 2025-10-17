@@ -1,9 +1,9 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_metal/impl/dispatch/ringbuffer_cache.hpp"
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 // #include "tt_metal/hw/inc/dataflow_api.h"
 
 namespace tt::tt_metal {
@@ -114,7 +114,7 @@ std::optional<typename RingbufferCacheManager::CacheOffset> RingbufferCacheManag
     const int required_space = (lengthB + cache_block_sizeB_ - 1) / cache_block_sizeB_;
     if (required_space > cache_size_blocks_) [[unlikely]] {
         return std::nullopt;  // cannot fit in cache
-    } else if (manager_.entry.size() == 0) [[unlikely]] {
+    } else if (manager_.entry.empty()) [[unlikely]] {
         // first entry, so we can just add it
         valid_.resize(pgm_id + 1, RingbufferCacheManager::invalid_cache_entry_);
         manager_.entry.resize(std::min(cache_manager_initial_entry_size_, cache_size_blocks_));
@@ -198,7 +198,7 @@ void RingbufferCacheManager::reset() {
     this->valid_.swap(temp_valid);
 }
 
-void swap(RingbufferCacheManager& a, RingbufferCacheManager& b) {
+void swap(RingbufferCacheManager& a, RingbufferCacheManager& b) noexcept {
     TT_ASSERT(
         a.cache_block_sizeB_ == b.cache_block_sizeB_,
         "Ringbuffer cache block size mismatch: {} != {}",

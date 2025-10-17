@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -104,7 +104,7 @@ int main() {
     auto distributed_buffer_shape =
         Shape2D{shard_shape.height() * mesh_device->num_rows(), shard_shape.width() * mesh_device->num_cols()};
     auto num_tiles = 1;
-    auto tile_size_bytes = tt::tt_metal::detail::TileSize(tt::DataFormat::Float16_b);
+    auto tile_size_bytes = tt::tile_size(tt::DataFormat::Float16_b);
     auto distributed_buffer_size_bytes = mesh_device->num_rows() * mesh_device->num_cols() * tile_size_bytes;
 
     // Configure device-local buffer settings
@@ -136,10 +136,10 @@ int main() {
     auto program = CreateEltwiseAddProgram(a, b, c, tile_size_bytes, num_tiles);
 
     // Create mesh workload and broadcast the program across all devices
-    auto mesh_workload = CreateMeshWorkload();
+    auto mesh_workload = MeshWorkload();
     auto device_range = MeshCoordinateRange(mesh_device->shape());
 
-    AddProgramToMeshWorkload(mesh_workload, std::move(program), device_range);
+    mesh_workload.add_program(device_range, std::move(program));
     EnqueueMeshWorkload(cq, mesh_workload, false /* blocking */);
 
     // Read back results
@@ -147,7 +147,7 @@ int main() {
     EnqueueReadMeshBuffer(cq, result_data, c, true /* blocking */);
 
     // Verify results
-    auto transform_to_golden = [val_to_add](const bfloat16& a) { return bfloat16(a.to_float() + val_to_add); };
+    auto transform_to_golden = [val_to_add](const bfloat16& a) { return bfloat16(static_cast<float>(a) + val_to_add); };
     std::vector<uint32_t> golden_data =
         pack_bfloat16_vec_into_uint32_vec(unpack_uint32_vec_into_bfloat16_vec(a_data, transform_to_golden));
 
@@ -159,7 +159,7 @@ int main() {
     size_t num_failures = 0;
     auto total_values = result_data.size() * 2;
     for (int i = 0; i < total_values; i++) {
-        if (!is_close(c_bf16[i].to_float(), golden_bf16[i].to_float())) {
+        if (!is_close(static_cast<float>(c_bf16[i]), static_cast<float>(golden_bf16[i]))) {
             num_failures++;
         }
     }

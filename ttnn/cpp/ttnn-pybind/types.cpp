@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -20,7 +20,8 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 
-enum class CoreType;
+#include <umd/device/types/core_coordinates.hpp>
+
 namespace ttnn::types {
 
 void py_module_types(py::module& module) {

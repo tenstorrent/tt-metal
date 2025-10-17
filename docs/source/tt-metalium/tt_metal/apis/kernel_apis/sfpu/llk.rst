@@ -8,10 +8,8 @@ Overview
 
 SFPI is the programming interface to the SFPU.  It consists of a C++ wrapper
 around a RISCV GCC compiler base which has been extended with vector data types and
-__builtin intrinsics to generate SFPU instructions.  The wrapper provides a
+``__builtin`` intrinsics to generate SFPU instructions.  The wrapper provides a
 C++ like interface for programming.
-
-SFPI is supported on Grayskull and Wormhole.
 
 Compiler Options/Flags
 ======================
@@ -24,23 +22,22 @@ The following flags must be specified to compile SFPI kernels:
 
 where ``arch`` is one of:
 
-  * grayskull
   * wormhole
+  * blackhole
 
-Note that the arch specification above overrides any ``-march=<xyz>`` to either
-``-march=rv32iy`` for grayskull or ``-march=rv32iw`` for wormhole.
+Note that the arch specification above overrides any ``-march=<xyz>`` that comes after it on the command line.
 
 Further, the following options disable parts of the SFPI enabled compiler:
 
   * ``-fno-rvtt-sfpu-warn``: disable sfpu specific warnings/errors
   * ``-fno-rvtt-sfpu-combine``: disable sfpu instruction combining
   * ``-fno-rvtt-sfpu-cc``: disable sfpu CC optimizations
-  * ``-fno-rvtt-sfpu-replay``: disable sfpu REPLAY optimizations (wormhole only)
+  * ``-fno-rvtt-sfpu-replay``: disable sfpu REPLAY optimizations
 
 Example
 -------
 
-Before going into details, below is a simple example of SFPI code:
+Before going into details, below is a simple example of SFPI code showcasing the main capabilities of SFPI kernels (please refer to :ref:`Writing Custom SFPU Operations<custom_sfpu>` for details on writing and invoking them). The example itself is not particularly useful, but it does show a number of features of SFPI:
 
 .. code-block:: c++
 
@@ -49,8 +46,8 @@ Before going into details, below is a simple example of SFPI code:
         // dst_reg[n] loads into a temporary LREG
         vFloat a = dst_reg[0] + 2.0F;
 
-        // This emits a load, move, mad (on GS uses the "+/0 .5" feature of MAD)
-        dst_reg[3] = a * -dst_reg[1] + vConst0p6929 + 0.5F;
+        // This emits a load, move, mad
+        dst_reg[3] = a * -dst_reg[1] + vConstFloatPrgm0 + 0.5F;
 
         // This emits a load, loadi, mad (a * dst_reg[] goes down the mad path)
         dst_reg[4] = a * dst_reg[1] + 1.2F;
@@ -93,6 +90,12 @@ The main things to note from the example are:
   * Math expressions for vectors work across all enabled vector elements
   * Presently, ``v_endif`` is required to close out all ``v_if``/``v_elseif``/``v_else`` chains
 
+And also some implications
+
+  * Standard C++ ``if`` statements cannot be used to handle vector conditionals
+  * ``v_if`` implements condition via predication - only vector operations are predicated
+  * Same performance consideration apply SFPI as for any SIMT architecture - avoid divergent ``v_if`` execution paths
+
 Details
 =======
 
@@ -112,34 +115,14 @@ The following data types are visible to the programmer:
   * ``vUInt``
   * enum ``LRegs``
 
-Each of the ``v`` types is a strongly typed wrapper around the weakly typed compiler
-data type ``__rvtt_vec_t``.  On Grayskull this is a vector of 64 19 bit values while on Wormhole this is a vector of 32 32 bit values.
+Each of the ``v`` types is a strongly typed wrapper around the weakly typed compiler data type ``__rvtt_vec_t``. The width of this type depends on the target architecture. On Wormhole and Blackhole this is a vector of 32 32-bit values. Users should be aware that vector length may change with future architectures
 
-LRegs are the SFPU's general purpose vector registers.  ``LRegs`` enumerates
-these registers.
+LRegs are the SFPU's general purpose vector registers.  ``LRegs`` enumerates these registers.
 
 User Visible Constants
 ^^^^^^^^^^^^^^^^^^^^^^
 
-Constant registers are implemented as objects which can be referenced
-wherever a vector can be used.
-
-  * Grayskull:
-
-    * ``vConst0``
-    * ``vConst0p6929``
-    * ``vConstNeg1p0068``
-    * ``vConst1p4424``
-    * ``vConst0p8369``
-    * ``vConstNeg0p5``
-    * ``vConst1``
-    * ``vConstNeg1``
-    * ``vConst0p0020``
-    * ``vConstNeg0p6748``
-    * ``vConstNeg0p3447``
-    * ``vConstTileId``, enumerates the vector elements: [0..63]
-
-* Wormhole:
+Constant registers are implemented as objects which can be referenced wherever a vector can be used. On Wormhole and Blackhole the following variables are defined:
 
   * ``vConst0``
   * ``vConst1``
@@ -159,9 +142,7 @@ User Visible Objects
 Macros
 ^^^^^^
 
-The only macros used within the wrapper implement the predicated conditional
-processing mechanism.  These (of course) do not fall within the SFPI namespace
-and for brevity run some chance of a namespace collision.  They are:
+The only macros used within the wrapper implement the predicated conditional processing mechanism. These (of course) do not fall within the SFPI namespace and for brevity run some chance of a namespace collision. They are:
 
   * ``v_if()``
   * ``v_elseif()``
@@ -171,12 +152,36 @@ and for brevity run some chance of a namespace collision.  They are:
   * ``v_endblock``
   * ``v_and()``
 
-The conditionals work mostly as expected but note the required ``v_endif`` at
-the end of an if/else chain.  Forgetting this results in compilation
-errors as the ``v_if`` macro contains a ``{`` which is matched by the ``v_endif``.
+The conditionals work mostly as expected but note the required ``v_endif`` at the end of an if/else chain. Forgetting this results in compilation errors as the ``v_if`` macro contains a ``{`` which is matched by the ``v_endif``:
 
-``v_block`` and ``v_and`` allow for the following code to progressively "narrow" the CC
-state:
+.. code-block:: c++
+
+    v_if (a < b) {
+        dst_reg[0] = a;
+    } v_elseif (a > b) {
+        dst_reg[0] = b;
+    } v_else {
+        dst_reg[0] = a + b;
+    }
+    v_endif;
+
+``dst_reg[0]`` is assigned ``a`` where ``a < b``, ``b`` where ``a > b`` and ``a + b`` where ``a == b``.
+
+However note that ``v_if`` and alike works via predication. In other words, both sides of the conditional are executed and only the enabled vector elements are written. RISC-V instructions are executed normally. For example:
+
+.. code-block:: c++
+
+    v_if (a < b) {
+        DPRINT << "a < b\n";
+    } v_else {
+        dst_reg[0] = b;
+        DPRINT << "a >= b\n";
+    }
+    v_endif;
+
+Will result in both ``a < b`` and ``a >= b`` being printed, but only the elements where ``a >= b`` being written to ``dst_reg[0]``.
+
+``v_block`` and ``v_and`` allow for the following code to progressively "narrow" the CC state:
 
 .. code-block:: c++
 
@@ -189,8 +194,7 @@ state:
     }
     v_endblock;
 
-``v_and`` can be used inside any predicated conditional block (i.e., a ``v_block``
-or a ``v_if``).
+``v_and`` can be used inside any predicated conditional block (i.e., a ``v_block`` or a ``v_if``).
 
 Data Type Details
 -----------------
@@ -209,7 +213,7 @@ vInt
 
   * Assignment: from integer, dst_reg[n]
   * Conversion: ``reinterpret<AnotherVecType>()`` converts, in place, between vFloat and vUInt
-  * Operators: ``&``, ``&=``, ``|``, ``|=``, ``~``, ``^``, ``^=``, ``<<`` and ``+``, ``-``, ``+=``, ``-=``, ``++``, ``--``.  (there is no signed right shift on Grayskull or Wormhole)
+  * Operators: ``&``, ``&=``, ``|``, ``|=``, ``~``, ``^``, ``^=``, ``<<`` (Wormhole only) and ``+``, ``-``, ``+=``, ``-=``, ``++``, ``--``.  (there is no signed right shift)
   * Conditionals: all 6 (``<``, ``<=``, ``==``, ``!=``, ``>=``, ``>``) are supported.  Note that ``<=`` and ``>`` pay a performance penalty relative to the others
 
 vUInt
@@ -217,10 +221,10 @@ vUInt
 
   * Assignment: from unsigned integer, dst_reg[n]
   * Conversion: ``reinterpret<AnotherVecType>()`` converts, in place, between vFloat and vInt
-  * Operators: ``&``, ``&=``, ``|``, ``|=``, ``~``, ``^``, ``^=``, ``<<``, ``>>`` and ``+``, ``-``, ``+=``, ``-=``, ``++``, ``--``
+  * Operators: ``&``, ``&=``, ``|``, ``|=``, ``~``, ``^``, ``^=``, ``<<`` (Wormhole only), ``>>`` (Wormhole only) and ``+``, ``-``, ``+=``, ``-=``, ``++``, ``--``
   * Conditionals: all 6 (``<``, ``<=``, ``==``, ``!=``, ``>=``, ``>``) are supported.  Note that ``<=`` and ``>`` pay a performance penalty relative to the others
 
-Note that on Wormhole, the destination register format is always determined by the run time.  So, for example, reading a vInt when the format is set to float32 gives unexpected results.
+Note that, the destination register format is always determined by the runtime. So, for example, reading a vInt when the format is set to float32 gives unexpected results.
 
 Library
 -------
@@ -228,9 +232,6 @@ Library
 Below ``Vec`` means any vector type.
 
 Below is a list of library calls, further documentation is below.
-
-Grayskull and Wormhole
-^^^^^^^^^^^^^^^^^^^^^^
 
 .. code-block:: c++
 
@@ -279,21 +280,25 @@ Adds the 8-bit value in ''exp'' to the exponent of ''v'' and returns the result 
     vFloat lut(const vFloat v, const vUInt l0, const vUInt l1, const vUInt l2, const int offset)
     vFloat lut_sign(const vFloat v, const vUInt l0, const vUInt l1, const vUInt l2, const int offset)
 
-''l0'', ''l1'', ''l2'' each contain 2 8-bit floating point values ''A'' and ''B'' with ''A'' in bits 15:8 and ''B'' in bits 7:0. The 8-bit format is:
+``l0``, ``l1``, ``l2`` each contain 2 8-bit floating point values ``A`` and ``B`` with ``A`` in bits 15:8 and ``B`` in bits 7:0. The 8-bit format is:
+
   * 0xFF represents the value 0, otherwise
   * bit[7] is the sign bit, bit[6:4] is the unsigned exponent_extender and bit[3:0] is the mantissa
-Floating point representations of ''A'' and ''B'' (19-bit on GS and 32-bit on WH) are constructed by:
+
+Floating point representations of ``A`` and ``B`` (19-bit on GS and 32-bit on WH) are constructed by:
+
   * Using the sign bit
   * Generating an 8-bit exponent as (127 – exponent_extender)
   * Generating a mantissa by padding the right of the specified 4 bit mantissa with 0s
 
-''A'' and ''B'' are selected from one of ''l0'', ''l1'' or ''l2'' based on the value in ''v'' as follows:
-  * ''l0'' when ''v'' < 0
-  * ''l1'' when ''v'' == 0
-  * ''l2'' when ''v'' > 0
+``A`` and ``B`` are selected from one of ``l0``, ``l1`` or ``l2`` based on the value in ``v`` as follows:
 
-XXXX is this backwards?
-Returns the result of the computation ''A * ABS(v) + B''.  The ''lut_sgn'' variation discards the calculated sign bit and instead uses the sign of ''v''.
+  * ``l0`` when ``v`` < 0
+  * ``l1`` when ``v`` == 0
+  * ``l2`` when ``v`` > 0
+
+.. XXXX is this backwards?
+.. Returns the result of the computation ''A * ABS(v) + B''.  The ''lut_sgn'' variation discards the calculated sign bit and instead uses the sign of ''v''.
 
 .. code-block:: c++
 
@@ -313,9 +318,6 @@ Returns the absolute value of ''v''.
     vUInt shft(const vUInt v, const vInt amt)
 
 Performs a left shift (when ''amt'' is positive) or right shift (when ''amt'' is negative) of ''v'' by ''amt'' bits.
-
-Wormhole only
-^^^^^^^^^^^^^
 
 .. code-block:: c++
 
@@ -363,9 +365,7 @@ Returns the rounded value performing round-to-even when ''round_mode'' is 0 and 
 Immediate Floating Point Values
 -------------------------------
 
-Assigning a float to a vFloat behaves slightly different on Grayskull vs Wormhole.
-On Grayskull, the value is interpreted as an fp16b; use the conversion routines below
-to explicitly specify the format.  On Wormhole, the floating point value is converted
+Assigning a float to a ``vFloat``, the floating point value is converted
 to an fp16a, fp16b, or fp32 by first looking to see if the range fits in fp16b
 and if not using fp16a (or fp32).  If the value is not known at compile time,
 then it is loaded as an fp32.  Note that on Wormhole fp32 loads take 2 cycles.
@@ -400,7 +400,7 @@ All conditionals operating on base types can be combined with any of ``&&``, ``|
 vBool
 ^^^^^
 
-``vBool`` doesn't exist yet, but the functionality can be obtained by executing
+``vBool`` doesn't exist, but the functionality can be obtained by executing
 conditional instructions outside of a ``v_if`` and assigning the result to a
 ``vInt``.  This can be useful to, e.g., use RISCV code to conditionally generate
 an SFPU predicate.  For example, the following function evaluates different
@@ -434,7 +434,7 @@ the predication is determined at runtime.
 Assigning and Using Constant Registers
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-Programmable constant registers (Wormhole only) are accessed and assigned just
+Programmable constant registers are accessed and assigned just
 like any other variables, for example:
 
 .. code-block:: c++
@@ -447,6 +447,13 @@ then assigns the LReg to the constant register and so takes 1 cycle longer
 than just loading an LReg.  Accessing a constant register is just as fast as
 accessing an LReg.  Loading a constant register loads the same value into all
 vector elements.
+
+Using programmable constants reduces the mount of loads needed during kernel
+execution and so can improve performance. However, users should be aware that
+other functions may overwrite the constant registers (this is what some of the
+``init_*`` functions do).  Therefore, if a constant register is used, it
+should be placed in the initialization function and users needs to ensure
+no other function overwrites it before use.
 
 Assigning LRegs
 ^^^^^^^^^^^^^^^
@@ -489,8 +496,6 @@ The compiler does a reasonable job with lifetime analysis when assigning
 variables to registers.  Reloading or recalculating results helps the compiler
 free up and re-use registers and is a good way to correct a spilling error.
 
-Grayskull has 4 general purpose LRegs, Wormhole has 8.
-
 Optimizer
 ---------
 
@@ -501,11 +506,10 @@ implemented.  The optimizer will handle the following items:
 
   * MAD generation (from MUL/ADD)
   * MULI, ADDI generation (from MUL + const, or ADD + const)
-  * Adding a 0.5f to the end of ADD/MULL/MAD/MULI/ADDI (Grayskull only)
   * Swapping the order of arguments to instructions that use the destination-as-source, e.g., SFPOR to minimize the need for register moves
   * CC enables (PUSHC, POPC, etc.)
   * Instruction combining for comparison operations.  For example, a subtract of 5 followed by a compare against 0 gets combined into one operation
-  * Wormhole only: NOP insertion for instructions which must be followed by an independent instruction or NOP.  Note that this pass (presently) does not move instructions to fill the slot but will skip adding a NOP if the next instruction is independent.  In other words, reordering your code to reduce dependent chains of instructions may improve performance
+  * NOP insertion for instructions which must be followed by an independent instruction or ``SFPNOP``. Note that this pass (presently) does not move instructions to fill the slot but will skip adding a ``SFPNOP`` if the next instruction is independent. In other words, reordering your code to reduce dependent chains of instructions may improve performance
 
 There is a potential pitfall in the above in that the MAD generator could
 change code which would not run out of registers with, say, a MULI followed by
@@ -514,7 +518,7 @@ an ADDI into code that runs out of registers with a MAD.  (future todo to fix th
 SFPREPLAY
 ---------
 
-The ``SFPREPLAY`` instruction available on Wormhole allows the RISCV processor
+The ``SFPREPLAY`` instruction available on Wormhole and Blackhole allows the RISCV processor
 to submit up to 32 SFP instructions at once.  The compiler looks for sequences
 of instructions that repeat, stores these and then "replays" them later.
 
@@ -523,35 +527,17 @@ kernels with rolled up loops very well.  Best performance is typically attained 
 unrolling the top level loop and then letting the compiler find the repetitions
 and replace them with ``SFPREPLAY``.  This works well when the main loop
 contains < 32 instructions, but performance starts to degrade again as the
-number of instructions grows (future work).
+number of instructions grows.
 
 The other issue that can arise with ``SFPREPLAY`` is that sometimes the last
 unrolled loop of instructions uses different registers than the prior
 loops resulting in imperfect utilization of the replay.
 
 
-Emulation
----------
-
-There is an emulator for the SFPU that works at the __builtin level.
-Compilation and runtime are extremely fast (sub 1 second) so this may be
-useful during development.
-
-Look in the file main.cc in the ``sfpi`` submodule under ``src/ckernels``, there
-is an example kernel there to lead the way.
-
-The main difference between compilation and running on HW is that the emulator
-has an infinite number of registers and so code that runs there may fail on
-the HW due to spilling.  The ``Makefile`` builds for both rv32 (generating a
-``.S`` file) and x86 (to run through emulation) and so an "out of registers"
-message for rv32 tells you you have work to do.
-
-The emulator for WH is not fully implemented (missing some of the new WH specific instructions)
-
 Tools
 -----
 
-The sfpi submodule contains a ``tools`` directory.  ``cd`` into that directory and
+The `sfpi  repository<https://github.com/tenstorrent/sfpi>` contains a ``tools`` directory.  ``cd`` into that directory and
 type ``make`` to build ``fp16c`` which is a converter that converts floating point
 values to fp16a, fp16b and the LUT instruction's fp8 as well as the other way
 (integer to float/fp16a/fp16b/fp8).  This is useful for writing optimal code or
@@ -586,10 +572,14 @@ Therefore, all function calls must be inlined.  To ensure this use
 Register Spilling
 -----------------
 
-The compiler does not implement register spilling.  Since Grayskull only has 4
-LRegs, running out of registers is a common occurrence.  If you see the
+The compiler does not implement register spilling.  Since there are only 8 general purpose
+LRegs, running out of registers is not an uncommon occurrence.  If you see the
 following: ``error: cannot store SFPU register (reigster spill?) - exiting!``
 you have most likely run out of registers.
+
+You can potentially spill registers by storing values to ``l_reg[]`` and
+reloading them later. However this is not done automatically via the compiler
+as it does not know which of ``l_reg[]`` values need to be preserved.
 
 Error Messages
 --------------
@@ -603,5 +593,5 @@ Limitations
 
   * Forgetting a ``v_endif`` results in mismatched {} error which can be confusing (however, catches the case where a ``v_endif`` is missing!)
   * In general, incorrect use of vector operations (e.g., accidentally using a scalar argument instead of a vector) results in warnings/errors within the wrapper rather than in the calling code
-  * Keeping too many variables alive at once (4 on GS) requires register spilling which is not implemented and causes a compiler abort
+  * Keeping too many variables alive at once requires register spilling which is not implemented and causes a compiler abort
   * The gcc compiler occasionally moves a value from one register to another for no apparent reason.  At this point it appears there is nothing that can be done about this besides hoping that the issue is fixed in a future version of gcc.

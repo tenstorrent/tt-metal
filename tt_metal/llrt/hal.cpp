@@ -4,13 +4,13 @@
 
 #include "llrt/hal.hpp"
 
-#include <assert.hpp>
+#include <tt_stl/assert.hpp>
 
 #include <cstdint>
 #include <enchantum/iostream.hpp>
 
 #include "hal_types.hpp"
-#include <umd/device/types/arch.h>
+#include <umd/device/types/arch.hpp>
 
 namespace tt {
 
@@ -37,13 +37,17 @@ Hal::Hal(tt::ARCH arch, bool is_base_routing_fw_enabled) : arch_(arch) {
     switch (this->arch_) {
         case tt::ARCH::WORMHOLE_B0: initialize_wh(is_base_routing_fw_enabled); break;
 
-        case tt::ARCH::BLACKHOLE: initialize_bh(); break;
+        case tt::ARCH::QUASAR: initialize_qa(); break;
 
-        case tt::ARCH::QUASAR: TT_THROW("HAL doesn't support Quasar"); break;
+        case tt::ARCH::BLACKHOLE: initialize_bh(); break;
 
         default: /*TT_THROW("Unsupported arch for HAL")*/; break;
     }
 }
+
+uint64_t Hal::get_pcie_addr_lower_bound() const { return pcie_addr_lower_bound_; }
+
+uint64_t Hal::get_pcie_addr_upper_bound() const { return pcie_addr_upper_bound_; }
 
 uint32_t Hal::get_programmable_core_type_index(HalProgrammableCoreType programmable_core_type_index) const {
     uint32_t index = static_cast<uint32_t>(programmable_core_type_index);
@@ -65,23 +69,30 @@ uint32_t Hal::get_total_num_risc_processors() const {
     return num_riscs;
 }
 
-HalCoreInfoType::HalCoreInfoType(
-    HalProgrammableCoreType programmable_core_type,
-    CoreType core_type,
-    const std::vector<std::vector<HalJitBuildConfig>>& processor_classes,
-    const std::vector<DeviceAddr>& mem_map_bases,
-    const std::vector<uint32_t>& mem_map_sizes,
-    const std::vector<uint32_t>& eth_fw_mailbox_msgs,
-    bool supports_cbs,
-    bool supports_receiving_multicast_cmds) :
-    programmable_core_type_(programmable_core_type),
-    core_type_(core_type),
-    processor_classes_(processor_classes),
-    mem_map_bases_(mem_map_bases),
-    mem_map_sizes_(mem_map_sizes),
-    eth_fw_mailbox_msgs_{eth_fw_mailbox_msgs},
-    supports_cbs_(supports_cbs),
-    supports_receiving_multicast_cmds_(supports_receiving_multicast_cmds) {}
+uint32_t HalCoreInfoType::get_processor_index(
+    HalProcessorClassType processor_class, uint32_t processor_type_idx) const {
+    uint32_t processor_class_idx = ttsl::as_underlying_type<HalProcessorClassType>(processor_class);
+    uint32_t processor_index = 0;
+    for (uint32_t i = 0; i < processor_class_idx; i++) {
+        processor_index += this->get_processor_types_count(i);
+    }
+    TT_ASSERT(processor_type_idx < this->get_processor_types_count(processor_class_idx));
+    return processor_index + processor_type_idx;
+}
+
+std::pair<HalProcessorClassType, uint32_t> HalCoreInfoType::get_processor_class_and_type_from_index(
+    uint32_t processor_index) const {
+    uint32_t processor_class_idx = 0;
+    for (; processor_class_idx < this->processor_classes_.size(); processor_class_idx++) {
+        auto processor_count = get_processor_types_count(processor_class_idx);
+        if (processor_index < processor_count) {
+            break;
+        }
+        processor_index -= processor_count;
+    }
+    TT_ASSERT(processor_class_idx < this->processor_classes_.size());
+    return {static_cast<HalProcessorClassType>(processor_class_idx), processor_index};
+}
 
 uint32_t generate_risc_startup_addr(uint32_t firmware_base) {
     // Options for handling brisc fw not starting at mem[0]:
@@ -110,6 +121,67 @@ uint32_t generate_risc_startup_addr(uint32_t firmware_base) {
         jal_offset_bits_19_to_12;
 
     return jal_offset | opcode;
+}
+
+HalProcessorSet Hal::parse_processor_set_spec(std::string_view spec) const {
+    HalProcessorSet set;
+
+    // TODO: might need a new syntax for new architectures.
+    // Current syntax hardcodes the RISC-V names for WH/BH.
+    // Either keep this syntax but move it to hal/tt-1xx, and create the new one in hal/tt-2xx,
+    // or break compatibility and use the new syntax for all architectures.
+    if (spec.find("BR") != std::string_view::npos) {
+        set.add(HalProgrammableCoreType::TENSIX, 0);
+    }
+    if (spec.find("NC") != std::string_view::npos) {
+        set.add(HalProgrammableCoreType::TENSIX, 1);
+    }
+    if (spec.find("TR0") != std::string_view::npos) {
+        set.add(HalProgrammableCoreType::TENSIX, 2);
+    }
+    if (spec.find("TR1") != std::string_view::npos) {
+        set.add(HalProgrammableCoreType::TENSIX, 3);
+    }
+    if (spec.find("TR2") != std::string_view::npos) {
+        set.add(HalProgrammableCoreType::TENSIX, 4);
+    }
+    if (spec.find("TR*") != std::string_view::npos) {
+        set.add(HalProgrammableCoreType::TENSIX, 2);
+        set.add(HalProgrammableCoreType::TENSIX, 3);
+        set.add(HalProgrammableCoreType::TENSIX, 4);
+    }
+    if (spec.find("ER0") != std::string_view::npos) {
+        set.add(HalProgrammableCoreType::ACTIVE_ETH, 0);
+        set.add(HalProgrammableCoreType::IDLE_ETH, 0);
+    }
+    if (spec.find("ER1") != std::string_view::npos) {
+        set.add(HalProgrammableCoreType::ACTIVE_ETH, 1);
+        set.add(HalProgrammableCoreType::IDLE_ETH, 1);
+    }
+    if (spec.find("ER*") != std::string_view::npos) {
+        set.add(HalProgrammableCoreType::ACTIVE_ETH, 0);
+        set.add(HalProgrammableCoreType::ACTIVE_ETH, 1);
+        set.add(HalProgrammableCoreType::IDLE_ETH, 0);
+        set.add(HalProgrammableCoreType::IDLE_ETH, 1);
+    }
+    if (set.empty()) {
+        TT_THROW("Invalid RISC selection: \"{}\". Valid values are BR,NC,TR0,TR1,TR2,TR*,ER0,ER1,ER*.", spec);
+    }
+    return set;
+}
+
+uint32_t Hal::make_go_msg_u32(
+    uint8_t signal, uint8_t master_x, uint8_t master_y, uint8_t dispatch_message_offset) const {
+    uint32_t go_msg_u32_val = 0;
+    // We know go_msg_t is the same for all core types, so we can use TENSIX's factory.
+    auto go_msg = get_dev_msgs_factory(HalProgrammableCoreType::TENSIX)
+                      .create_view<dev_msgs::go_msg_t>(reinterpret_cast<std::byte*>(&go_msg_u32_val));
+    TT_ASSERT(go_msg.size() == sizeof(uint32_t));
+    go_msg.signal() = signal;
+    go_msg.master_x() = master_x;
+    go_msg.master_y() = master_y;
+    go_msg.dispatch_message_offset() = dispatch_message_offset;
+    return go_msg_u32_val;
 }
 
 }  // namespace tt_metal

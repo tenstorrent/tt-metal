@@ -15,7 +15,7 @@ class TtSppf:
             conv=model_params.cv1.block.conv,
             conv_pth=parameters.cv1.block.conv,
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-            activation="silu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
             deallocate_activation=True,
         )
         self.cv2 = Yolov6l_Conv2D(
@@ -23,8 +23,8 @@ class TtSppf:
             conv=model_params.cv2.block.conv,
             conv_pth=parameters.cv2.block.conv,
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-            activation="silu",
-            reshape=True,
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
+            deallocate_activation=True,
         )
 
     def __call__(self, x):
@@ -47,9 +47,9 @@ class TtSppf:
             y.append(output)
 
         for i in range(len(y)):
-            y[i] = ttnn.sharded_to_interleaved(y[i])
+            y[i] = ttnn.sharded_to_interleaved(y[i], memory_config=ttnn.L1_MEMORY_CONFIG)
             y[i] = ttnn.to_layout(y[i], ttnn.ROW_MAJOR_LAYOUT)
-        concat_output = ttnn.concat(y, dim=-1)
+        concat_output = ttnn.concat(y, dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         for i in range(len(y)):
             ttnn.deallocate(y[i])

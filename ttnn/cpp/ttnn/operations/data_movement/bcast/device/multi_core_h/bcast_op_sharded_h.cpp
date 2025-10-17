@@ -8,7 +8,6 @@
 #include <tt-metalium/host_api.hpp>
 
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 using namespace tt;
@@ -44,9 +43,9 @@ operation::ProgramWithCallbacks bcast_sharded_h(
     auto b_df = tt_metal::datatype_to_dataformat_converter(b.dtype());
     auto out_df = tt_metal::datatype_to_dataformat_converter(output.dtype());
 
-    uint32_t input_tile_size = tt::tt_metal::detail::TileSize(act_df);
-    uint32_t input1_tile_size = tt::tt_metal::detail::TileSize(b_df);
-    uint32_t output_tile_size = tt::tt_metal::detail::TileSize(out_df);
+    uint32_t input_tile_size = tt::tile_size(act_df);
+    uint32_t input1_tile_size = tt::tile_size(b_df);
+    uint32_t output_tile_size = tt::tile_size(out_df);
 
     TT_FATAL(input_tile_size == output_tile_size, "Input and output tile size should be same");
 
@@ -203,15 +202,15 @@ operation::ProgramWithCallbacks bcast_sharded_h(
         uint32_t N = ashape[0], C = ashape[1];
         uint32_t bN = input_tensors.at(1).padded_shape()[0];
         uint32_t NC = N * C;
-        if (a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
-            Wt = shard_spec.shape[1] / TILE_WIDTH;
-            Ht = shard_spec.shape[0] / TILE_HEIGHT;
-        } else if (a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
-            Wt = shard_spec.shape[1] / TILE_WIDTH;
-            Ht = shard_spec.shape[0] / TILE_HEIGHT;
-        } else {
-            TT_THROW("Unsupported memory layout");
+        switch (a.memory_config().memory_layout()) {
+            case TensorMemoryLayout::BLOCK_SHARDED:
+            case TensorMemoryLayout::WIDTH_SHARDED:
+                Wt = shard_spec.shape[1] / TILE_WIDTH;
+                Ht = shard_spec.shape[0] / TILE_HEIGHT;
+                break;
+            default: TT_THROW("Unsupported memory layout");
         }
+
         uint32_t Ht_per_core = 0, ncores_y = ncores / ncores_x;
         for (uint32_t i = 0; i < ncores; i++) {
             CoreCoord core;

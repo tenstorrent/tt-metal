@@ -4,6 +4,7 @@
 
 import os
 import glob
+import platform
 import shutil
 import subprocess
 import sys
@@ -14,6 +15,9 @@ from collections import namedtuple
 from pathlib import Path
 from setuptools import setup, Extension, find_packages
 from setuptools.command.build_ext import build_ext
+from setuptools.command.editable_wheel import editable_wheel
+from setuptools_scm.version import guess_next_dev_version as _guess_next_dev
+from wheel.wheelfile import WheelFile
 
 readme = None
 
@@ -22,14 +26,25 @@ readme_path = Path(__file__).absolute().parent / "README.md"
 readme = readme_path.read_text(encoding="utf-8")
 
 
-# Get the platform-specific lib directory name
-def get_lib_dir():
-    if sys.platform == "win32":
-        return "bin"  # Windows DLLs go in bin directory
-    elif sys.platform.startswith("linux"):
-        return "lib64" if os.path.exists("/usr/lib64") else "lib"
-    else:  # macOS and others
-        return "lib"
+def get_lib_dir() -> str:
+    """
+    Inspired by GNUInstallDirs logic:
+    default = 'lib'
+    upgrade to 'lib64' only on 64-bit Linux that is not Debian/Arch/Alpine.
+    """
+    libdir = "lib"
+
+    if platform.system() == "Linux":
+        # skip lib64 on Debian/Arch/Alpine
+        if not (
+            Path("/etc/debian_version").exists()
+            or Path("/etc/arch-release").exists()
+            or Path("/etc/alpine-release").exists()
+        ):
+            if platform.architecture()[0] == "64bit":
+                libdir = "lib64"
+
+    return libdir
 
 
 BUNDLE_SFPI = False
@@ -90,13 +105,6 @@ def attempt_get_env_var(env_var_name):
     return os.environ[env_var_name]
 
 
-def get_is_srcdir_build():
-    build_dir = CMakeBuild.get_working_dir()
-    assert build_dir.is_dir()
-    git_dir = build_dir / ".git"
-    return git_dir.exists()
-
-
 def get_metal_local_version_scheme(metal_build_config, version):
     if version.dirty:
         return f"+g{version.node}"
@@ -105,19 +113,16 @@ def get_metal_local_version_scheme(metal_build_config, version):
 
 
 def get_metal_main_version_scheme(metal_build_config, version):
-    is_release_version = version.distance is None or version.distance == 0
-    is_dirty = version.dirty
-    is_clean_prod_build = (not is_dirty) and is_release_version
+    # Safety net
+    if version is None:
+        return "0.0.0.dev0"
 
-    if is_clean_prod_build:
+    if getattr(version, "exact", False):
+        # Exact tag (release/rc/dev*) already normalized by packaging
         return version.format_with("{tag}")
-    elif is_dirty and not is_release_version:
-        return version.format_with("{tag}.dev{distance}")
-    elif is_dirty and is_release_version:
-        return version.format_with("{tag}")
-    else:
-        assert not is_dirty and not is_release_version
-        return version.format_with("{tag}.dev{distance}")
+
+    # Untagged commit → let setuptools_scm choose X.Y.Z.devN
+    return _guess_next_dev(version)
 
 
 def get_version(metal_build_config):
@@ -141,204 +146,45 @@ class MetaliumBuildConfig:
 metal_build_config = MetaliumBuildConfig()
 
 
-class CMakeBuild(build_ext):
-    @staticmethod
-    def get_build_env():
-        return {
-            **os.environ.copy(),
-            "CXX": "clang++-17",
-        }
+# WORKAROUND: make editable installation work
+#
+# The setuptools generates `MetaPathFinder` and hooks them to the python import machinery (via `sys.meta_path`),
+# to be able to resolve imports of packages in editable installation. These finders are used as a fallback
+# when python isn't able to find the package from the `sys.path`.
+#
+# However, their logic isn't able to resolve `import ttnn` properly. The problem is that the `ttnn` package
+# is contained in the `ttnn` directory, which is a subdirectory of the root of the repository. If we execute
+# `import ttnn` from the root of the repository, the `importlib` will find the top-level directory `ttnn` and
+# won't fallback to the `MetaPathFinder` logic.
+#
+# To workaround this, we create our `.pth` file and add it to the editable wheel. Python will automatically
+# load this file and populate the `sys.path` with the paths specified in the `.pth` file.
+#
+# NOTE: Needs `wheel` to be installed.
+class EditableWheel(editable_wheel):
+    def run(self):
+        # Build the editable wheel first.
+        super().run()
 
-    @staticmethod
-    def get_working_dir():
-        working_dir = Path(__file__).parent
-        assert working_dir.is_dir()
-        return working_dir
+        # Create a .pth file with paths to the repo root, ttnn and tools directories.
+        # This file gets loaded automatically by the python interpreter and its content gets populated into `sys.path`;
+        # i.e. as if these paths were added to the PYTHONPATH.
+        pth_filename = "ttnn-custom.pth"
+        pth_content = f"{Path(__file__).parent}\n{Path(__file__).parent / 'ttnn'}\n{Path(__file__).parent / 'tools'}\n"
 
-    # This should only run when building the wheel. Should not be running for any dev flow
-    # Taking advantage of the fact devs run editable pip install -> "pip install -e ."
-    def run(self) -> None:
-        if self.is_editable_install_():
-            assert get_is_srcdir_build(), f"Editable install detected in a non-srcdir environment, aborting"
-            return
+        print(f"EditableWheel.run: adding {pth_filename} to the wheel")
 
-        build_env = CMakeBuild.get_build_env()
-        source_dir = (
-            metal_build_config.from_precompiled_dir
-            if metal_build_config.from_precompiled_dir
-            else CMakeBuild.get_working_dir()
-        )
-        assert source_dir.is_dir(), f"Source dir {source_dir} seems to not exist"
+        # Find .whl file in the dist_dir (e.g. `ttnn-0.59.0rc42.dev21+gg66363d962a-0.editable-cp310-cp310-linux_x86_64.whl`)
+        wheel = next((f for f in os.listdir(self.dist_dir) if f.endswith(".whl") and "editable" in f), None)
 
-        if metal_build_config.from_precompiled_dir:
-            build_dir = source_dir / "build"
-            assert (build_dir / "lib").exists() and (
-                source_dir / "runtime"
-            ).exists(), "The precompiled option is selected via `TT_FROM_PRECOMPILED` \
-            env var. Please place files into `build/lib` and `runtime` folders."
-        else:
-            build_dir = source_dir / "build_Release"
-            # We indirectly set a wheel build for our CMake build by using BUILD_SHARED_LIBS. This does the following things:
-            # - Bundles (most) of our libraries into a static library to deal with a potential singleton bug error with tt_cluster (to fix)
-            build_script_args = ["--build-static-libs", "--release"]
+        assert wheel, f"Expected to see editable wheel in dist dir: {self.dist_dir}, but didn't find one"
 
-            if "CIBUILDWHEEL" in os.environ:
-                cmake_args = [
-                    "cmake",
-                    "-B",
-                    build_dir,
-                    "-G",
-                    "Ninja",
-                    "-DCMAKE_BUILD_TYPE=Release",
-                    "-DCMAKE_INSTALL_PREFIX=build_Release",
-                    "-DBUILD_SHARED_LIBS=ON",
-                    "-DTT_INSTALL=ON",
-                    "-DTT_UNITY_BUILDS=ON",
-                    "-DTT_ENABLE_LIGHT_METAL_TRACE=ON",
-                    "-DWITH_PYTHON_BINDINGS=ON",
-                    "-DTT_USE_SYSTEM_SFPI=ON",
-                    "-DENABLE_CCACHE=TRUE",
-                ]
-
-                # Add Tracy flags if enabled
-                if os.environ.get("CIBW_ENABLE_TRACY") == "ON":
-                    cmake_args.extend(
-                        [
-                            "-DENABLE_TRACY=ON",
-                        ]
-                    )
-                else:
-                    cmake_args.extend(
-                        [
-                            "-DENABLE_TRACY=OFF",
-                        ]
-                    )
-
-                cmake_args.extend(["-S", source_dir])
-
-                subprocess.check_call(cmake_args)
-                subprocess.check_call(
-                    [
-                        "cmake",
-                        "--build",
-                        build_dir,
-                    ]
-                )
-                subprocess.check_call(
-                    [
-                        "cmake",
-                        "--install",
-                        build_dir,
-                    ]
-                )
-            else:
-                subprocess.check_call(["./build_metal.sh", *build_script_args], cwd=source_dir, env=build_env)
-
-        # Some verbose sanity logging to see what files exist in the outputs
-        subprocess.check_call(["ls", "-hal"], cwd=source_dir, env=build_env)
-        subprocess.check_call(["ls", "-hal", str(build_dir / "lib")], cwd=source_dir, env=build_env)
-        subprocess.check_call(["ls", "-hal", "runtime"], cwd=source_dir, env=build_env)
-
-        # Copy needed C++ shared libraries and runtime assets into wheel (sfpi, FW etc)
-        lib_patterns = ["_ttnn.so", "_ttnncpp.so", "libtt_metal.so", "libdevice.so", "libtt_stl.so"]
-        runtime_patterns = [
-            "hw/**/*",
-        ]
-        runtime_exclude_files = []
-        if BUNDLE_SFPI:
-            runtime_patterns.append("sfpi/**/*")
-            runtime_exclude_files = [
-                "riscv32-unknown-elf-lto-dump",
-                "riscv32-unknown-elf-gdb",
-                "riscv32-unknown-elf-objdump",
-                "riscv32-unknown-elf-run",
-                "riscv32-unknown-elf-ranlib",
-                "riscv32-unknown-elf-gprof",
-                "riscv32-unknown-elf-strings",
-                "riscv32-unknown-elf-size",
-                "riscv32-unknown-elf-readelf",
-                "riscv32-unknown-elf-nm",
-                "riscv32-unknown-elf-c++filt",
-                "riscv32-unknown-elf-addr2line",
-                "riscv32-unknown-elf-gcov",
-                "riscv32-unknown-elf-gcov-tool",
-                "riscv32-unknown-elf-gcov-dump",
-                "riscv32-unknown-elf-elfedit",
-                "riscv32-unknown-elf-gcc-ranlib",
-                "riscv32-unknown-elf-gcc-nm",
-                "riscv32-unknown-elf-gdb-add-index",
-            ]
-        ttnn_patterns = [
-            # These weren't supposed to be in the JIT API, but one file currently is
-            "api/ttnn/tensor/enum_types.hpp",
-        ]
-        ttnn_cpp_patterns = [
-            "ttnn/deprecated/**/kernels/**/*",
-            "ttnn/operations/**/kernels/**/*",
-            "ttnn/operations/**/kernels_ng/**/*",
-            "ttnn/operations/kernel_helper_functions/*",
-            "ttnn/operations/ccl/**/*",
-            "ttnn/operations/data_movement/**/*",
-            "ttnn/operations/moreh/**/*",
-            "ttnn/kernel/*",
-        ]
-        tt_metal_patterns = [
-            "api/tt-metalium/buffer_constants.hpp",
-            "api/tt-metalium/buffer_types.hpp",
-            "api/tt-metalium/circular_buffer_constants.h",
-            "api/tt-metalium/constants.hpp",
-            "api/tt-metalium/dev_msgs.h",
-            "api/tt-metalium/fabric_edm_types.hpp",
-            "fabric/fabric_edm_packet_header.hpp",
-            "api/tt-metalium/edm_fabric_counters.hpp",
-            "core_descriptors/*.yaml",
-            "fabric/hw/**/*",
-            "fabric/mesh_graph_descriptors/*.yaml",
-            "fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp",
-            "fabric/impl/kernels/tt_fabric_mux.cpp",
-            "hw/**/*",
-            "hostdevcommon/api/hostdevcommon/**/*",
-            "impl/dispatch/kernels/**/*",
-            "include/**/*",
-            "kernels/**/*",
-            "third_party/tt_llk/**/*",
-            "tools/profiler/**/*",
-            "soc_descriptors/*.yaml",
-        ]
-        copy_tree_with_patterns(build_dir / get_lib_dir(), self.build_lib + f"/ttnn/build/lib", lib_patterns)
-        copy_tree_with_patterns(build_dir, self.build_lib + "/ttnn/build/lib", ["sfpi-version.json"])
-        copy_tree_with_patterns(
-            source_dir / "runtime", self.build_lib + "/ttnn/runtime", runtime_patterns, runtime_exclude_files
-        )
-        copy_tree_with_patterns(source_dir / "ttnn", self.build_lib + "/ttnn", ttnn_patterns)
-        copy_tree_with_patterns(source_dir / "ttnn/cpp", self.build_lib + "/ttnn/cpp", ttnn_cpp_patterns)
-        copy_tree_with_patterns(source_dir / "tt_metal", self.build_lib + "/ttnn/tt_metal", tt_metal_patterns)
-
-        # Move built final built _ttnn SO into appropriate location in ttnn Python tree in wheel
-        assert len(self.extensions) == 1, f"Detected {len(self.extensions)} extensions, but should be only 1: ttnn"
-        ext = list(self.extensions)[0]
-        fullname = self.get_ext_fullname(ext.name)
-        filename = self.get_ext_filename(fullname)
-
-        build_lib = self.build_lib
-        full_lib_path = build_lib + "/" + filename
-
-        dir_path = os.path.dirname(full_lib_path)
-        if not os.path.exists(dir_path):
-            os.makedirs(dir_path)
-
-        dest_ttnn_build_dir = self.build_lib + "/ttnn/build"
-        src = os.path.join(dest_ttnn_build_dir, build_constants_lookup[ext].so_src_location)
-        self.copy_file(src, full_lib_path)
-        os.remove(src)
-
-    def is_editable_install_(self):
-        return self.inplace
+        # Add the .pth file to the wheel archive.
+        WheelFile(os.path.join(self.dist_dir, wheel), mode="a").writestr(pth_filename, pth_content)
 
 
 packages = find_packages(where="ttnn", exclude=["ttnn.examples", "ttnn.examples.*"])
-
-print(("packaging: ", packages))
+packages += find_packages("tools")
 
 # Empty sources in order to force extension executions
 ttnn_lib_C = Extension("ttnn._ttnn", sources=[])
@@ -358,10 +204,13 @@ setup(
     packages=packages,
     package_dir={
         "": "ttnn",
+        "tracy": "tools/tracy",
+        "triage": "tools/triage",
     },
     ext_modules=ext_modules,
-    cmdclass=dict(build_ext=CMakeBuild),
+    cmdclass=dict(editable_wheel=EditableWheel),
     zip_safe=False,
     long_description=readme,
     long_description_content_type="text/markdown",
+    entry_points={"console_scripts": ["tt-triage = triage.triage:main"]},
 )

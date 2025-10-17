@@ -257,33 +257,33 @@ inline void deassert_ncrisc_trisc() {
     deassert_all_reset();
 }
 
-inline void run_triscs(dispatch_core_processor_masks enables) {
+inline void run_triscs(uint32_t enables) {
     // Wait for init_sync_registers to complete. Should always be done by the time we get here.
     while (mailboxes->subordinate_sync.trisc0 != RUN_SYNC_MSG_DONE) {
         invalidate_l1_cache();
     }
 
-    if (enables & DISPATCH_CLASS_MASK_TENSIX_ENABLE_COMPUTE) {
+    if (enables & (1u << static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::MATH0))) {
         mailboxes->subordinate_sync.trisc0 = RUN_SYNC_MSG_GO;
         mailboxes->subordinate_sync.trisc1 = RUN_SYNC_MSG_GO;
         mailboxes->subordinate_sync.trisc2 = RUN_SYNC_MSG_GO;
     }
 }
 
-inline void start_ncrisc_kernel_run_early(dispatch_core_processor_masks enables) {
+inline void start_ncrisc_kernel_run_early(uint32_t enables) {
     // On Wormhole, start_ncrisc_kernel_run will reset NCRISC to start the
     // kernel running. We delay it until later to give the NCRISC time to load
     // CBs before we wait on it.
 #if !defined(ARCH_WORMHOLE)
-    if (enables & DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM1) {
+    if (enables & (1u << static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::DM1))) {
         mailboxes->subordinate_sync.dm1 = RUN_SYNC_MSG_GO;
     }
 #endif
 }
 
-inline void start_ncrisc_kernel_run(dispatch_core_processor_masks enables) {
+inline void start_ncrisc_kernel_run(uint32_t enables) {
 #if defined(ARCH_WORMHOLE)
-    if (enables & DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM1) {
+    if (enables & (1u << static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::DM1))) {
         // The NCRISC behaves badly if it jumps from L1 to IRAM, so instead halt it and then reset it to the IRAM
         // address it provides.
         while (mailboxes->subordinate_sync.dm1 != RUN_SYNC_MSG_WAITING_FOR_RESET);
@@ -374,11 +374,15 @@ int main() {
             // While the go signal for kernel execution is not sent, check if the worker was signalled
             // to reset its launch message read pointer.
             if ((go_message_signal == RUN_MSG_RESET_READ_PTR) ||
-                (go_message_signal == RUN_MSG_RESET_READ_PTR_FROM_HOST)) {
+                (go_message_signal == RUN_MSG_RESET_READ_PTR_FROM_HOST) ||
+                (go_message_signal == RUN_MSG_REPLAY_TRACE)) {
                 // Set the rd_ptr on workers to specified value
                 mailboxes->launch_msg_rd_ptr = 0;
-                if (go_message_signal == RUN_MSG_RESET_READ_PTR) {
-                    DeviceTraceProfilerInit();
+                if (go_message_signal == RUN_MSG_RESET_READ_PTR || go_message_signal == RUN_MSG_REPLAY_TRACE) {
+                    if (go_message_signal == RUN_MSG_REPLAY_TRACE) {
+                        DeviceIncrementTraceCount();
+                        DeviceTraceOnlyProfilerInit();
+                    }
                     uint32_t go_message_index = mailboxes->go_message_index;
                     // Querying the noc_index is safe here, since the RUN_MSG_RESET_READ_PTR go signal is currently
                     // guaranteed to only be seen after a RUN_MSG_GO signal, which will set the noc_index to a valid
@@ -404,15 +408,15 @@ int main() {
             launch_msg_t* launch_msg_address = &(mailboxes->launch[launch_msg_rd_ptr]);
             DeviceValidateProfiler(launch_msg_address->kernel_config.enables);
             DeviceZoneSetCounter(launch_msg_address->kernel_config.host_assigned_id);
-            enum dispatch_core_processor_masks enables =
-                (enum dispatch_core_processor_masks)launch_msg_address->kernel_config.enables;
+            uint32_t enables = launch_msg_address->kernel_config.enables;
             // Trigger the NCRISC to start loading CBs and IRAM as soon as possible.
-            if (enables & DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM1) {
+            if (enables &
+                (1u << static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::DM1))) {
                 mailboxes->subordinate_sync.dm1 = RUN_SYNC_MSG_LOAD;
             }
             // Copies from L1 to IRAM on chips where NCRISC has IRAM
             uint32_t kernel_config_base =
-                firmware_config_init(mailboxes, ProgrammableCoreType::TENSIX, DISPATCH_CLASS_TENSIX_DM0);
+                firmware_config_init(mailboxes, ProgrammableCoreType::TENSIX, PROCESSOR_INDEX);
             // Invalidate the i$ now the kernels have loaded and before running
             volatile tt_reg_ptr uint32_t* cfg_regs = core.cfg_regs_base(0);
             cfg_regs[RISCV_IC_INVALIDATE_InvalidateAll_ADDR32] =
@@ -451,7 +455,8 @@ int main() {
 
             // Run the BRISC kernel
             WAYPOINT("R");
-            if (enables & DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM0) {
+            int index = static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::DM0);
+            if (enables & (1u << index)) {
                 uint32_t local_cb_mask = launch_msg_address->kernel_config.local_cb_mask;
                 setup_local_cb_read_write_interfaces<true, true, false>(cb_l1_base, 0, local_cb_mask);
                 cb_l1_base =
@@ -461,7 +466,6 @@ int main() {
                     cb_l1_base, end_cb_index, noc_index, noc_mode, true, cmd_buf);
                 barrier_remote_cb_interface_setup(noc_index, end_cb_index);
                 start_ncrisc_kernel_run(enables);
-                int index = static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::DM0);
                 uint32_t kernel_lma =
                     (kernel_config_base + launch_msg_address->kernel_config.kernel_text_offset[index]);
                 auto stack_free = reinterpret_cast<uint32_t (*)()>(kernel_lma)();
@@ -498,6 +502,7 @@ int main() {
                     WAYPOINT("NKFW");
                     // Assert that no noc transactions are outstanding, to ensure that all reads and writes have landed
                     // and the NOC interface is in a known idle state for the next kernel.
+                    invalidate_l1_cache();
                     for (int noc = 0; noc < NUM_NOCS; noc++) {
                         ASSERT(ncrisc_dynamic_noc_reads_flushed(noc));
                         ASSERT(ncrisc_dynamic_noc_nonposted_writes_sent(noc));

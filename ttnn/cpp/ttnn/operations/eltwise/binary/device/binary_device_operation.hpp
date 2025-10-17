@@ -8,8 +8,6 @@
 #include <optional>
 #include <variant>
 
-#include <tt-metalium/command_queue.hpp>
-#include "ttnn/common/queue_id.hpp"
 #include "ttnn/core.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/device_operation.hpp"
@@ -26,12 +24,12 @@ namespace ttnn::operations::binary {
 
 struct BinaryDeviceOperation {
     struct operation_attributes_t {
-        BinaryOpType binary_op_type;
-        const std::optional<unary::FusedActivations> activations;
-        const std::optional<unary::UnaryWithParam> input_tensor_a_activation;
+        BinaryOpType binary_op_type{};
+        const std::optional<unary::EltwiseFusedActivations> activations{};
+        const std::optional<unary::EltwiseUnaryWithParam> input_tensor_a_activation{};
         const std::optional<float> scalar;
         const MemoryConfig memory_config;
-        const DataType dtype;
+        const DataType dtype{};
         const CoreRangeSet worker_grid;
         std::optional<DeviceComputeKernelConfig> compute_kernel_config;
 
@@ -250,8 +248,8 @@ struct BinaryDeviceOperation {
         const std::optional<const DataType>& output_dtype,
         const std::optional<MemoryConfig>& memory_config,
         std::optional<Tensor> optional_output_tensor,
-        std::optional<unary::FusedActivations> activations,
-        std::optional<unary::UnaryWithParam> input_tensor_a_activation);
+        std::optional<unary::EltwiseFusedActivations> activations,
+        std::optional<unary::EltwiseUnaryWithParam> input_tensor_a_activation);
 
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const Tensor& input_tensor_a_arg,
@@ -260,8 +258,8 @@ struct BinaryDeviceOperation {
         const std::optional<const DataType>& output_dtype,
         const std::optional<MemoryConfig>& memory_config,
         std::optional<Tensor> optional_output_tensor,
-        std::optional<unary::FusedActivations> activations,
-        std::optional<unary::UnaryWithParam> input_tensor_a_activation);
+        std::optional<unary::EltwiseFusedActivations> activations,
+        std::optional<unary::EltwiseUnaryWithParam> input_tensor_a_activation);
 };
 
 }  // namespace ttnn::operations::binary

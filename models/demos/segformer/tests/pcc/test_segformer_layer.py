@@ -15,9 +15,9 @@ from models.demos.segformer.tests.pcc.test_segformer_attention import (
 from models.demos.segformer.tests.pcc.test_segformer_mix_ffn import (
     create_custom_mesh_preprocessor as create_custom_preprocessor_mix_ffn,
 )
-from models.demos.segformer.tt.common import get_mesh_mappers, preprocess_layernorm_parameter
+from models.demos.segformer.tt.common import preprocess_layernorm_parameter
 from models.demos.segformer.tt.ttnn_segformer_layer import TtSegformerLayer
-from models.utility_functions import skip_for_grayskull
+from models.demos.utils.common_demo_utils import get_mesh_mappers
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
@@ -73,7 +73,6 @@ def move_to_device(object, device):
         return object
 
 
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "batch_size, seq_len, hidden_size, height, width, num_attention_heads, drop_path, sequence_reduction_ratio, mlp_ratio, block_i, segformer_i",
     [

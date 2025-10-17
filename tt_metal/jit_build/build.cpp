@@ -20,19 +20,20 @@
 #include <fmt/ranges.h>
 #include <taskflow/core/async.hpp>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "common/executor.hpp"
 #include "env_lib.hpp"
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
 #include "jit_build/kernel_args.hpp"
 #include "jit_build_settings.hpp"
+#include "jit_build_utils.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include "profiler_paths.hpp"
 #include "profiler_state.hpp"
 #include "tt_cluster.hpp"
 #include "tt_metal/llrt/tt_elffile.hpp"
-#include <umd/device/types/arch.h>
+#include <umd/device/types/arch.hpp>
 
 namespace fs = std::filesystem;
 
@@ -51,7 +52,9 @@ void sync_events(auto& events) {
 
 namespace tt::tt_metal {
 
-static void build_failure(const string& target_name, const string& op, const string& cmd, const string& log_file) {
+namespace {
+
+void build_failure(const string& target_name, const string& op, const string& cmd, const string& log_file) {
     log_error(tt::LogBuildKernels, "{} {} failure -- cmd: {}", target_name, op, cmd);
     std::ifstream file{log_file};
     if (file.is_open()) {
@@ -62,17 +65,19 @@ static void build_failure(const string& target_name, const string& op, const str
     }
 }
 
-static void write_successful_jit_build_marker(const JitBuildState& build, const JitBuildSettings* settings) {
+void write_successful_jit_build_marker(const JitBuildState& build, const JitBuildSettings* settings) {
     const string out_dir = (settings == nullptr) ? build.get_out_path() + "/"
                                                  : build.get_out_path() + settings->get_full_kernel_name() + "/";
     std::ofstream file(out_dir + SUCCESSFUL_JIT_BUILD_MARKER_FILE_NAME);
 }
 
-static void check_built_dir(const std::filesystem::path& dir_path, const std::filesystem::path& git_hash_path) {
+void check_built_dir(const std::filesystem::path& dir_path, const std::filesystem::path& git_hash_path) {
     if (dir_path.compare(git_hash_path) != 0) {
         std::filesystem::remove_all(dir_path);
     }
 }
+
+}  // namespace
 
 std::string get_default_root_path() {
     const std::string emptyString("");
@@ -87,7 +92,10 @@ std::string get_default_root_path() {
 JitBuildEnv::JitBuildEnv() = default;
 
 void JitBuildEnv::init(
-    uint32_t build_key, tt::ARCH arch, const std::map<std::string, std::string>& device_kernel_defines) {
+    uint32_t build_key,
+    size_t fw_compile_hash,
+    tt::ARCH arch,
+    const std::map<std::string, std::string>& device_kernel_defines) {
     // Paths
     const auto& rtoptions = tt_metal::MetalContext::instance().rtoptions();
     this->root_ = rtoptions.get_root_dir();
@@ -112,9 +120,15 @@ void JitBuildEnv::init(
 
     this->out_root_ = this->out_root_  + git_hash + "/";
 #endif
-
-    this->out_firmware_root_ = this->out_root_ + to_string(build_key) + "/firmware/";
-    this->out_kernel_root_ = this->out_root_ + to_string(build_key) + "/kernels/";
+    // Firmware build path is a combination of build_key and fw_compile_hash
+    // If either change, the firmware build path will change and FW will be rebuilt
+    // if it's not already in MetalContext::firmware_built_keys_
+    const std::filesystem::path firmware_path = std::filesystem::path(this->out_root_) / std::to_string(build_key) /
+                                                std::to_string(fw_compile_hash) / "firmware/";
+    this->out_firmware_root_ = firmware_path.string();
+    const std::filesystem::path kernel_path =
+        std::filesystem::path(this->out_root_) / std::to_string(build_key) / "kernels/";
+    this->out_kernel_root_ = kernel_path.string();
 
     // Tools
     const static bool use_ccache = std::getenv("TT_METAL_CCACHE_KERNEL_SUPPORT") != nullptr;
@@ -134,7 +148,7 @@ void JitBuildEnv::init(
 
     bool sfpi_found = false;
     for (unsigned i = 0; i < 2; ++i) {
-        auto gxx = sfpi_roots[i] + "/compiler/bin/riscv32-tt-elf-g++";
+        auto gxx = sfpi_roots[i] + "/compiler/bin/riscv-tt-elf-g++";
         if (std::filesystem::exists(gxx)) {
             this->gpp_ += gxx + " ";
             this->gpp_include_dir_ = sfpi_roots[i] + "/include";
@@ -396,6 +410,25 @@ void JitBuildState::compile_one(
             defines += fmt::format("-DKERNEL_COMPILE_TIME_ARGS={} ", fmt::join(values, ","));
         });
 
+        // This creates a command-line define for named compile time args
+        // Ex. for named_args like {"buffer_size": 1024, "num_tiles": 64}
+        // This generates:
+        // -DKERNEL_COMPILE_TIME_ARG_MAP="{{\"buffer_size\",1024}, {\"num_tiles\",64}} "
+        // The macro expansion is defined in tt_metal/hw/inc/compile_time_args.h
+        settings->process_named_compile_time_args(
+            [&defines](const std::unordered_map<std::string, uint32_t>& named_args) {
+                if (named_args.empty()) {
+                    return;
+                }
+                std::ostringstream ss;
+                ss << "-DKERNEL_COMPILE_TIME_ARG_MAP=\"";
+                for (const auto& [name, value] : named_args) {
+                    ss << "{\\\"" << name << "\\\"," << value << "}, ";
+                }
+                ss << "\"";
+                defines += ss.str() + " ";
+            });
+
         cmd += fmt::format("-{} ", settings->get_compiler_opt_level());
     } else {
         cmd += fmt::format("-{} ", this->default_compile_opt_level_);
@@ -415,7 +448,7 @@ void JitBuildState::compile_one(
         log_kernel_defines_and_args(out_dir, settings->get_full_kernel_name(), defines);
     }
 
-    if (!tt::utils::run_command(cmd, log_file, false)) {
+    if (!tt::jit_build::utils::run_command(cmd, log_file, false)) {
         build_failure(this->target_name_, "compile", cmd, log_file);
     }
 }
@@ -463,7 +496,7 @@ void JitBuildState::link(const string& log_file, const string& out_dir, const Ji
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_log_kernels_compilation_commands()) {
         log_info(tt::LogBuildKernels, "    g++ link cmd: {}", cmd);
     }
-    if (!tt::utils::run_command(cmd, log_file, false)) {
+    if (!tt::jit_build::utils::run_command(cmd, log_file, false)) {
         build_failure(this->target_name_, "link", cmd, log_file);
     }
 }
@@ -494,13 +527,13 @@ void JitBuildState::extract_zone_src_locations(const string& log_file) const {
         }
 
         if (!std::filesystem::exists(tt::tt_metal::NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG)) {
-            tt::utils::create_file(tt::tt_metal::NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG);
+            tt::jit_build::utils::create_file(tt::tt_metal::NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG);
         }
 
         // Only interested in log entries with KERNEL_PROFILER inside them as device code
         // tags source location info with it using pragma messages
         string cmd = "cat " + log_file + " | grep KERNEL_PROFILER";
-        tt::utils::run_command(cmd, tt::tt_metal::NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG, false);
+        tt::jit_build::utils::run_command(cmd, tt::tt_metal::NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG, false);
     }
 }
 

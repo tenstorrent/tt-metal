@@ -9,10 +9,17 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import run_for_wormhole_b0
 from models.demos.utils.common_demo_utils import get_mesh_mappers
 from models.demos.yolov11.common import YOLOV11_L1_SMALL_SIZE
 from models.demos.yolov11.runner.performant_runner import YOLOv11PerformantRunner
-from models.utility_functions import run_for_wormhole_b0
+
+try:
+    from tracy import signpost
+
+    use_signpost = True
+except ModuleNotFoundError:
+    use_signpost = False
 
 
 def run_yolov11_inference(
@@ -42,15 +49,17 @@ def run_yolov11_inference(
 
     input_shape = (batch_size, 3, *resolution)
     torch_input_tensor = torch.randn(input_shape, dtype=torch.float32)
-
+    if use_signpost:
+        signpost(header="start")
     t0 = time.time()
-    for _ in range(10):
+    for _ in range(100):
         _ = performant_runner.run(torch_input_tensor=torch_input_tensor)
     ttnn.synchronize_device(device)
     t1 = time.time()
-
+    if use_signpost:
+        signpost(header="stop")
     performant_runner.release()
-    inference_time_avg = round((t1 - t0) / 10, 6)
+    inference_time_avg = round((t1 - t0) / 100, 6)
     logger.info(
         f"Model: ttnn_yolov11 - batch_size: {batch_size}. One inference iteration time (sec): {inference_time_avg}, FPS: {round(batch_size / inference_time_avg)}"
     )
@@ -66,7 +75,6 @@ def run_yolov11_inference(
         (640, 640),
     ],
 )
-@pytest.mark.models_performance_bare_metal
 @run_for_wormhole_b0()
 @pytest.mark.parametrize(
     "device_params",
@@ -103,6 +111,7 @@ def test_e2e_performant(
     ],
 )
 @pytest.mark.models_performance_bare_metal
+@pytest.mark.models_performance_virtual_machine
 @run_for_wormhole_b0()
 @pytest.mark.parametrize(
     "device_params",

@@ -114,7 +114,6 @@ void SliceDeviceOperation::validate_with_output_tensors(
     if (has_step) {  // if all ones modify before passing in to function
         TT_FATAL(input_tensor_a.layout() == Layout::ROW_MAJOR, "Strided slice is only supported for row major layout");
         TT_FATAL(!input_tensor_a.is_sharded(), "Strided slice is not supported for sharded tensor");
-        TT_FATAL(input_tensor_a.dtype() == DataType::BFLOAT16, "Strided slice is only supported for BFLOAT16");
         TT_FATAL(
             step.size() == this->slice_end.rank(),
             "Number of steps {} must match number of ends/starts {}",
@@ -172,7 +171,6 @@ operation::ProgramWithCallbacks SliceDeviceOperation::create_program(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
-
     return detail::slice_multi_core(input_tensor_a, output_tensor, this->slice_start, this->slice_end, this->step);
 }
 

@@ -28,9 +28,9 @@ class VAEParallelConfig:
     def __init__(
         self,
         device: ttnn.MeshDevice,
-        new_gather_handles: list[ttnn._ttnn.global_semaphore.global_sempahore],
-        reduce_from_semaphore: ttnn._ttnn.global_semaphore.global_sempahore,
-        reduce_to_semaphore: ttnn._ttnn.global_semaphore.global_sempahore,
+        new_gather_handles: list[ttnn._ttnn.global_semaphore.global_semaphore],
+        reduce_from_semaphore: ttnn._ttnn.global_semaphore.global_semaphore,
+        reduce_to_semaphore: ttnn._ttnn.global_semaphore.global_semaphore,
         num_links: int,
     ):
         self.device = device

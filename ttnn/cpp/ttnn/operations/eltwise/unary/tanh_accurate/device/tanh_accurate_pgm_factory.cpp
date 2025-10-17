@@ -6,7 +6,6 @@
 
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
@@ -22,13 +21,14 @@ TanhAccurateProgramFactory::cached_program_t TanhAccurateProgramFactory::create(
     using namespace tt::tt_metal;
 
     const auto& input = tensor_args.input;
+    const auto& ops_chain = args.op_chain;
 
     tt::tt_metal::Program program{};
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
-    uint32_t single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
+    uint32_t single_tile_size = tt::tile_size(cb_data_format);
     tt::DataFormat cb_data_format_output = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
-    uint32_t single_tile_size_output = tt::tt_metal::detail::TileSize(cb_data_format_output);
+    uint32_t single_tile_size_output = tt::tile_size(cb_data_format_output);
 
     uint32_t num_tiles = input.physical_volume() / tt::constants::TILE_HW;
 
@@ -135,7 +135,11 @@ TanhAccurateProgramFactory::cached_program_t TanhAccurateProgramFactory::create(
     } else {
         unary_defines["TANH_BF16"] = "1";
     }
+
     auto path = "ttnn/cpp/ttnn/operations/eltwise/unary/tanh_accurate/device/kernels/compute/tanh_accurate.cpp";
+    if (ops_chain[0].type() == UnaryOpType::TANHSHRINK) {
+        path = "ttnn/cpp/ttnn/operations/eltwise/unary/tanh_accurate/device/kernels/compute/tanhshrink.cpp";
+    }
 
     tt::tt_metal::CreateKernel(
         program,

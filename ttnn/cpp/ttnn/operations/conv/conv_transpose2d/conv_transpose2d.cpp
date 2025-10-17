@@ -19,7 +19,6 @@ namespace ttnn {
 namespace operations::conv {
 
 using namespace tt;
-using sliding_window::ParallelConfig;
 using sliding_window::SlidingWindowConfig;
 
 namespace conv_transpose2d {
@@ -40,7 +39,7 @@ Result conv_transpose2d(
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
     const std::optional<const DataType>& dtype,
-    std::optional<const ttnn::Tensor> bias_tensor,
+    const std::optional<const ttnn::Tensor>& bias_tensor,
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     const std::optional<const MemoryConfig>& memory_config,
@@ -68,18 +67,18 @@ Result conv_transpose2d(
     // The Conv2d u_op is then called with stride = 1, padding = 0.
     // SlidingWindowConfig has a is_transpose flag that is set to true to indicate that the Conv2d u_op & Halo u_op is
     // being called for ConvTranspose2d.
-    uint32_t output_height =
-        (input_height - 1) * stride[0] - 2 * padding[0] + dilation[0] * (kernel_size[0] - 1) + output_padding[0] + 1;
-    uint32_t output_width =
-        (input_width - 1) * stride[1] - 2 * padding[1] + dilation[1] * (kernel_size[1] - 1) + output_padding[1] + 1;
+    uint32_t output_height = ((input_height - 1) * stride[0]) - (2 * padding[0]) +
+                             (dilation[0] * (kernel_size[0] - 1)) + output_padding[0] + 1;
+    uint32_t output_width = ((input_width - 1) * stride[1]) - (2 * padding[1]) + (dilation[1] * (kernel_size[1] - 1)) +
+                            output_padding[1] + 1;
 
     // Dimensions of Input to Conv u_op
-    uint32_t full_input_height = output_height + dilation[0] * (kernel_size[0] - 1);
-    uint32_t full_input_width = output_width + dilation[1] * (kernel_size[1] - 1);
+    uint32_t full_input_height = output_height + (dilation[0] * (kernel_size[0] - 1));
+    uint32_t full_input_width = output_width + (dilation[1] * (kernel_size[1] - 1));
 
     // Size of input after adding interleaved 0s.
-    uint32_t strided_input_height = (input_height - 1) * stride[0] + 1;
-    uint32_t strided_input_width = (input_width - 1) * stride[1] + 1;
+    uint32_t strided_input_height = ((input_height - 1) * stride[0]) + 1;
+    uint32_t strided_input_width = ((input_width - 1) * stride[1]) + 1;
 
     uint32_t input_pad_top = (full_input_height - strided_input_height) / 2;
     uint32_t input_pad_bottom = full_input_height - strided_input_height - input_pad_top;
@@ -159,7 +158,6 @@ Result conv_transpose2d(
         sliding_window_config.snap_to_tile = true;
 
         halo_output = ttnn::halo(
-            DefaultQueueId,
             input_tensor_post_tm,
             sliding_window_config,
             0,
@@ -184,18 +182,16 @@ Result conv_transpose2d(
         output_parallel_config,
         round_up_size);
 
-    auto largest_parallel_config = output_parallel_config.grid.num_cores() > parallel_config.grid.num_cores()
-                                       ? output_parallel_config
-                                       : parallel_config;
-
     auto opt_conv_op_parallel_config = determine_conv_op_parallel_config_from_conv_output_mem_config(
         conv_out_memory_config,
-        get_num_cores_nhw_from_parallel_config(largest_parallel_config),
-        get_num_cores_channels_from_parallel_config(largest_parallel_config));
+        get_num_cores_nhw_from_parallel_config(parallel_config),
+        get_num_cores_channels_from_parallel_config(parallel_config),
+        get_num_cores_channels_from_parallel_config(output_parallel_config));
 
     const uint32_t input_channels_alignment = get_input_channels_alignment(
         input_tensor_post_tm.memory_config().memory_layout(),
         input_tensor.layout(),
+        input_tensor.memory_config().buffer_type(),
         mm_conv,
         input_tensor_post_tm.memory_config());
     uint32_t in_channels_padded = tt::round_up(
@@ -211,6 +207,7 @@ Result conv_transpose2d(
         conv_config.act_block_w_div,
         kernel_size[0],
         kernel_size[1],
+        output_width,
         get_fp32_dest_acc_en(compute_config),
         conv_config.full_inner_dim);
 
@@ -229,6 +226,7 @@ Result conv_transpose2d(
             groups,
             opt_conv_op_block_config.act_block_h_ntiles,
             input_width,
+            mm_conv && auto_shard,
             bias_tensor.has_value());
         tie(weight_tensor_on_device, bias_tensor_on_device) = prepare_conv_weights_biases_and_move_to_device(
             transform_weights_for_conv_transpose2d(weight_tensor, mirror_kernel), bias_tensor, params, device);
@@ -276,7 +274,7 @@ Result conv_transpose2d(
         return matmul_output;
     }
     // call conv micro op
-    auto conv_output = optimized_conv_new(
+    auto conv_output = ttnn::operations::conv::conv2d::conv2d(
         halo_output,
         weight_tensor_on_device,
         bias_tensor_on_device,
@@ -293,8 +291,10 @@ Result conv_transpose2d(
         compute_config,
         conv_config.enable_act_double_buffer,
         conv_config.enable_weights_double_buffer,
-        conv_config.full_inner_dim,
-        conv_config.enable_split_reader);
+        false,  // full_inner_dim
+        false,  // enable_activation_reuse
+        false,  // config_tensors_in_dram
+        conv_config.force_split_reader);
     if (memory_config.has_value() && memory_config.value() != conv_output.memory_config()) {
         conv_output = ttnn::to_memory_config(conv_output, memory_config.value(), std::nullopt);
     }
@@ -312,7 +312,6 @@ Result conv_transpose2d(
 }
 
 Result ConvTranpose2dOperation::invoke(
-    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
     MeshDevice* device,
@@ -328,7 +327,7 @@ Result ConvTranpose2dOperation::invoke(
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
     const std::optional<const DataType>& dtype,
-    std::optional<const ttnn::Tensor> bias_tensor,
+    const std::optional<const ttnn::Tensor>& bias_tensor,
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     const std::optional<const MemoryConfig>& memory_config,
@@ -350,11 +349,11 @@ Result ConvTranpose2dOperation::invoke(
         output_padding,
         dilation,
         groups,
-        std::move(dtype),
-        std::move(bias_tensor),
-        std::move(conv_config_),
-        std::move(compute_config_),
-        std::move(memory_config),
+        dtype,
+        bias_tensor,
+        conv_config_,
+        compute_config_,
+        memory_config,
         mirror_kernel,
         return_output_dim,
         return_weights_and_bias);

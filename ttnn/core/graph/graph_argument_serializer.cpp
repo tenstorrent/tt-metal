@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -62,10 +62,10 @@ std::ostream& operator<<(std::ostream& os, const std::optional<T>& optional_valu
 
 std::string graph_demangle(const std::string_view name) {
     int status = -4;
-    char* res = abi::__cxa_demangle(name.data(), NULL, NULL, &status);
+    char* res = abi::__cxa_demangle(name.data(), nullptr, nullptr, &status);
     const char* const demangled_name = (status == 0) ? res : name.data();
     std::string ret_val(demangled_name);
-    free(res);
+    free(res);  // NOLINT(cppcoreguidelines-no-malloc)
     return ret_val;
 }
 

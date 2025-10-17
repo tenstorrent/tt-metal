@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -29,36 +29,38 @@ void py_module_types(py::module& module) {
 void py_module(py::module& module) {
     module.def(
         "begin_trace_capture",
-        [](MeshDevice* device, QueueId cq_id) { return ttnn::operations::trace::begin_trace_capture(device, cq_id); },
+        [](MeshDevice* device, std::optional<ttnn::QueueId> cq_id) {
+            return ttnn::operations::trace::begin_trace_capture(device, cq_id);
+        },
         py::arg("mesh_device"),
         py::kw_only(),
-        py::arg("cq_id") = ttnn::DefaultQueueId);
+        py::arg("cq_id") = std::nullopt);
 
     module.def(
         "end_trace_capture",
-        [](MeshDevice* device, MeshTraceId trace_id, QueueId cq_id) {
-            return ttnn::operations::trace::end_trace_capture(device, trace_id, cq_id);
+        [](MeshDevice* device, MeshTraceId trace_id, std::optional<ttnn::QueueId> cq_id) {
+            ttnn::operations::trace::end_trace_capture(device, trace_id, cq_id);
         },
         py::arg("mesh_device"),
         py::arg("trace_id"),
         py::kw_only(),
-        py::arg("cq_id") = ttnn::DefaultQueueId);
+        py::arg("cq_id") = std::nullopt);
 
     module.def(
         "execute_trace",
-        [](MeshDevice* device, MeshTraceId trace_id, QueueId cq_id, bool blocking) {
-            return ttnn::operations::trace::execute_trace(device, trace_id, cq_id, blocking);
+        [](MeshDevice* device, MeshTraceId trace_id, std::optional<QueueId> cq_id, bool blocking) {
+            ttnn::operations::trace::execute_trace(device, trace_id, cq_id, blocking);
         },
         py::arg("mesh_device"),
         py::arg("trace_id"),
         py::kw_only(),
-        py::arg("cq_id") = ttnn::DefaultQueueId,
+        py::arg("cq_id") = std::nullopt,
         py::arg("blocking") = true);
 
     module.def(
         "release_trace",
         [](MeshDevice* device, MeshTraceId trace_id) {
-            return ttnn::operations::trace::release_trace(device, trace_id);
+            ttnn::operations::trace::release_trace(device, trace_id);
         },
         py::arg("mesh_device"),
         py::arg("trace_id"));

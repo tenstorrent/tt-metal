@@ -16,8 +16,6 @@ target_sources(
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES
             hw/inc/tt_fabric_api.h
-            hw/inc/tt_fabric.h
-            hw/inc/tt_fabric_interface.h
             hw/inc/tt_fabric_mux.hpp
             hw/inc/tt_fabric_mux_interface.hpp
             hw/inc/fabric_routing_mode.h
@@ -34,40 +32,53 @@ target_sources(
             fabric_edm_packet_header.hpp
     PRIVATE
         control_plane.cpp
+        mesh_graph_descriptor.cpp
         routing_table_generator.cpp
         mesh_graph.cpp
         erisc_datamover_builder.cpp
+        builder/fabric_core_placement.cpp
+        builder/fabric_channel_allocator.cpp
+        builder/fabric_static_sized_channels_allocator.cpp
+        builder/static_sized_channel_connection_writer_adapter.cpp
         fabric.cpp
+        fabric_init.cpp
         fabric_host_utils.cpp
         fabric_context.cpp
         fabric_mux_config.cpp
         fabric_tensix_builder.cpp
         compressed_routing_table.cpp
-        serialization/intermesh_link_table.cpp
+        compressed_routing_path.cpp
+        serialization/router_port_directions.cpp
+        serialization/physical_system_descriptor_serialization.cpp
+        serialization/intermesh_connections_serialization.cpp
+        serialization/port_descriptor_serialization.cpp
         erisc_datamover_builder_helper.cpp
         ccl/ccl_common.cpp
+        physical_system_descriptor.cpp
 )
 
-# Include helper functions and generate headers from flatbuffer schemas
-include(flatbuffers)
-set(FLATBUFFER_SCHEMAS ${CMAKE_CURRENT_SOURCE_DIR}/serialization/intermesh_link_table.fbs)
+# Include helper functions and generate headers from protobuf schemas
+include(protobuf)
+set(PROTO_SCHEMAS
+    ${CMAKE_CURRENT_SOURCE_DIR}/protobuf/mesh_graph_descriptor.proto
+    ${CMAKE_CURRENT_SOURCE_DIR}/protobuf/physical_system_descriptor.proto
+    ${CMAKE_CURRENT_SOURCE_DIR}/serialization/router_port_directions.proto
+    ${CMAKE_CURRENT_SOURCE_DIR}/protobuf/port_descriptor_table.proto
+    ${CMAKE_CURRENT_SOURCE_DIR}/protobuf/intermesh_connection_table.proto
+)
 
-# Collect all generated headers
-set(GENERATED_FBS_HEADERS)
-foreach(FBS_FILE ${FLATBUFFER_SCHEMAS})
-    GENERATE_FBS_HEADER(${FBS_FILE})
-    list(APPEND GENERATED_FBS_HEADERS ${FBS_GENERATED_HEADER_FILE})
+# Collect all generated protobuf files
+set(GENERATED_PROTO_SRCS)
+foreach(PROTO_FILE ${PROTO_SCHEMAS})
+    GENERATE_PROTO_FILES(${PROTO_FILE} OUTPUT_DIR ${CMAKE_CURRENT_BINARY_DIR})
+    list(APPEND GENERATED_PROTO_SRCS ${PROTO_SRCS})
 endforeach()
 
-# Add the generated headers to your target
-target_sources(fabric PRIVATE ${GENERATED_FBS_HEADERS})
+# Add the generated protobuf files to your target
+target_sources(fabric PRIVATE ${GENERATED_PROTO_SRCS})
 
-target_include_directories(
-    fabric
-    PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}
-        ${CMAKE_CURRENT_BINARY_DIR}/flatbuffers
-)
+target_include_directories(fabric PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(fabric SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 
 target_link_libraries(
     fabric
@@ -81,6 +92,7 @@ target_link_libraries(
         Metalium::Metal::Impl
         TT::Metalium::HostDevCommon
         FlatBuffers::FlatBuffers
+        protobuf::libprotobuf
 )
 
 target_precompile_headers(fabric REUSE_FROM TT::CommonPCH)

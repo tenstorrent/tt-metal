@@ -1,0 +1,32 @@
+syntax = "proto3";
+
+package tt.fabric.proto;
+
+// Represents a MeshId
+message MeshId {
+    uint32 value = 1;
+}
+
+// Represents a port descriptor with direction, channel, and connection hash
+message PortDescriptor {
+    uint32 port_direction = 1;  // RoutingDirection enum value
+    uint32 port_channel = 2;    // Channel number
+    uint64 connection_hash = 3;
+}
+
+// Entry containing destination mesh and associated port descriptors
+message PortDescriptorEntry {
+    MeshId dest_mesh_id = 1;
+    repeated PortDescriptor port_descriptors = 2;  // Vector of PortDescriptors
+}
+
+// Map from source mesh to its port descriptor entries
+message MeshPortDescriptorMap {
+    MeshId source_mesh_id = 1;
+    repeated PortDescriptorEntry entries = 2;
+}
+
+// Root table containing all mesh port descriptor maps
+message PortDescriptorTable {
+    repeated MeshPortDescriptorMap mesh_maps = 1;
+}

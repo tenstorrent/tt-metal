@@ -3,11 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-#include <tt-metalium/utils.hpp>
 
-#include "umd/device/device_api_metal.h"
-#include "umd/device/tt_cluster_descriptor.h"
-#include "umd/device/tt_simulation_device.h"
+#include <umd/device/driver_atomics.hpp>
+#include <umd/device/cluster_descriptor.hpp>
+#include <umd/device/simulation/simulation_device.hpp>
 #include "impl/context/metal_context.hpp"
 
 #include <string>
@@ -25,22 +24,21 @@ inline std::string get_string_lowercase(tt::ARCH arch) {
 namespace tt {
 namespace test_utils {
 inline std::string get_env_arch_name() {
-    constexpr std::string_view ARCH_NAME_ENV_VAR = "ARCH_NAME";
-    std::string arch_name;
+    constexpr auto ARCH_NAME_ENV_VAR = "ARCH_NAME";
 
-    if (const char* arch_name_ptr = std::getenv(ARCH_NAME_ENV_VAR.data())) {
-        arch_name = arch_name_ptr;
-    } else {
+    auto arch_name_ptr = std::getenv(ARCH_NAME_ENV_VAR);
+    if (!arch_name_ptr) {
         TT_THROW("Env var {} is not set.", ARCH_NAME_ENV_VAR);
     }
-    return arch_name;
+
+    return std::string(arch_name_ptr);
 }
 
 inline std::string get_umd_arch_name() {
 
     if(tt_metal::MetalContext::instance().rtoptions().get_simulator_enabled()) {
-        tt_SimulationDeviceInit init(tt_metal::MetalContext::instance().rtoptions().get_simulator_path());
-        return tt::arch_to_str(init.get_arch_name());
+        auto soc_desc = tt::umd::SimulationDevice::get_soc_descriptor_path_from_simulator_path(tt_metal::MetalContext::instance().rtoptions().get_simulator_path());
+        return tt::arch_to_str(tt::umd::SocDescriptor::get_arch_from_soc_descriptor_path(soc_desc));
     }
 
     auto cluster_desc = tt::umd::Cluster::create_cluster_descriptor();
