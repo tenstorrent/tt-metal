@@ -33,7 +33,7 @@ def run_device_perf_tests(
     [
         (
             "pytest models/experimental/panoptic_deeplab/tests/pcc/test_tt_model.py::test_panoptic_deeplab",
-            253_123_435,
+            50_583_415,
             "panoptic_deeplab",
             "panoptic_deeplab",
             1,
