@@ -386,6 +386,7 @@ def fuse_qkv_meta(state_dict):
     return state_dict
 
 
+
 def _is_hf_llama_vision(config):
     return hasattr(config, "text_config") and hasattr(config.text_config, "cross_attention_layers")
 
@@ -455,15 +456,16 @@ def rename_layers_to_cross_attn(state_dict, config):
 
     return new_state_dict
 
-
-def convert_meta_to_hf(state_dict, head_dim, fuse_qkv=False, fuse_mlp=False, config=None):
+def convert_meta_to_hf(
+    state_dict, head_dim, fuse_qkv=False, fuse_mlp=False, name_dense=False, name_ffn2=False, name_final_layernorm=False, config=None
+):
     state_dict = reindex_layers(state_dict, config)
     state_dict = convert_meta_qkv_to_hf_format(state_dict, head_dim)
     if fuse_qkv:
         state_dict = fuse_qkv_meta(state_dict)
     if fuse_mlp:
         state_dict = fuse_mlp_meta(state_dict)
-    state_dict = map_meta_to_hf_keys(state_dict)
+    state_dict = map_meta_to_hf_keys(state_dict, name_dense, name_ffn2, name_final_layernorm)
     state_dict = rename_layers_to_cross_attn(state_dict, config)
     return state_dict
 
@@ -659,19 +661,29 @@ def map_hf_to_meta_keys(loaded_weights):
         ("o_proj", "wo"),
         ("q_norm", "q_norm"),
         ("k_norm", "k_norm"),
+        # phi-1
+        ("dense", "wo"),
+        ("layernorm", "attention_norm"),
+        ("final_layernorm", "norm"),
+        ("fc1", "w1"),
+        ("fc2", "w2"),
     ]
+    # "weight": "emb.weight",  # For host embeddings
     return replace_keys(loaded_weights, replacements)
 
 
-def map_meta_to_hf_keys(loaded_weights, language_prefix=""):
+def map_meta_to_hf_keys(
+    loaded_weights, name_dense=False, name_ffn2=False, name_final_layernorm=False, language_prefix=""
+):
     # Define mappings at each level of the hierarchy
     meta_to_hf_mappings = {
         # Top level
         "tok_embeddings.weight": "model.embed_tokens.weight",
-        "norm.weight": "model.norm.weight",
         "output.weight": "lm_head.weight",
+        "output.bias": "lm_head.bias",
         # Layer level
         "attention_norm.weight": "input_layernorm.weight",
+        "attention_norm.bias": "input_layernorm.bias",
         "ffn_norm.weight": "post_attention_layernorm.weight",
         "pre_feedforward_layernorm.weight": "pre_feedforward_layernorm.weight",
         "post_feedforward_layernorm.weight": "post_feedforward_layernorm.weight",
@@ -679,7 +691,6 @@ def map_meta_to_hf_keys(loaded_weights, language_prefix=""):
         "attention.wq.weight": "self_attn.q_proj.weight",
         "attention.wk.weight": "self_attn.k_proj.weight",
         "attention.wv.weight": "self_attn.v_proj.weight",
-        "attention.wo.weight": "self_attn.o_proj.weight",
         "attention.wq.bias": "self_attn.q_proj.bias",
         "attention.wk.bias": "self_attn.k_proj.bias",
         "attention.wv.bias": "self_attn.v_proj.bias",
@@ -701,10 +712,6 @@ def map_meta_to_hf_keys(loaded_weights, language_prefix=""):
         "feed_forward.w2.bias": "mlp.down_proj.bias",
         "feed_forward.w1_w3.weight": "mlp.gate_up_proj.weight",
         # Direct mappings for when we get just the final components
-        "w1_w3.weight": "gate_up_proj.weight",
-        "w1.weight": "gate_proj.weight",
-        "w2.weight": "down_proj.weight",
-        "w3.weight": "up_proj.weight",
         "wq.weight": "q_proj.weight",
         "wk.weight": "k_proj.weight",
         "wv.weight": "v_proj.weight",
@@ -712,17 +719,65 @@ def map_meta_to_hf_keys(loaded_weights, language_prefix=""):
         "wq.bias": "q_proj.bias",
         "wk.bias": "k_proj.bias",
         "wv.bias": "v_proj.bias",
-        "wo.bias": "o_proj.bias",
-        # Direct MLP bias mappings
-        "w1.bias": "gate_proj.bias",
-        "w3.bias": "up_proj.bias",
-        "w2.bias": "down_proj.bias",
         # Fused qkv mapping
         "wqkv.weight": "qkv_proj.weight",
         "wqkv.bias": "qkv_proj.bias",
         # Host embeddings
         "emb.weight": "weight",
     }
+
+    if name_dense:
+        meta_to_hf_mappings["attention.wo.weight"] = "self_attn.dense.weight"
+        meta_to_hf_mappings["attention.wo.bias"] = "self_attn.dense.bias"
+        meta_to_hf_mappings["wo.weight"] = "dense.weight"
+        meta_to_hf_mappings["wo.bias"] = "dense.bias"
+    else:
+        meta_to_hf_mappings["attention.wo.weight"] = "self_attn.o_proj.weight"
+        meta_to_hf_mappings["attention.wo.bias"] = "self_attn.o_proj.bias"
+        meta_to_hf_mappings["wo.weight"] = "o_proj.weight"
+        meta_to_hf_mappings["wo.bias"] = "o_proj.bias"
+
+    if name_ffn2:
+        # Feed forward module
+        meta_to_hf_mappings["feed_forward.w1.weight"] = "mlp.fc1.weight"
+        meta_to_hf_mappings["feed_forward.w3.weight"] = "mlp.fc3.weight"
+        meta_to_hf_mappings["feed_forward.w2.weight"] = "mlp.fc2.weight"
+        # Feed forward bias mappings
+        meta_to_hf_mappings["feed_forward.w1.bias"] = "mlp.fc1.bias"
+        meta_to_hf_mappings["feed_forward.w3.bias"] = "mlp.fc3.bias"
+        meta_to_hf_mappings["feed_forward.w2.bias"] = "mlp.fc2.bias"
+        # Direct MLP weight mappings
+        meta_to_hf_mappings["w1.weight"] = "fc1.weight"
+        meta_to_hf_mappings["w2.weight"] = "fc2.weight"
+        meta_to_hf_mappings["w3.weight"] = "fc3.weight"
+        # Direct MLP bias mappings
+        meta_to_hf_mappings["w1.bias"] = "fc1.bias"
+        meta_to_hf_mappings["w3.bias"] = "fc3.bias"
+        meta_to_hf_mappings["w2.bias"] = "fc2.bias"
+    else:
+        # Feed forward module
+        meta_to_hf_mappings["feed_forward.w1.weight"] = "mlp.gate_proj.weight"
+        meta_to_hf_mappings["feed_forward.w3.weight"] = "mlp.up_proj.weight"
+        meta_to_hf_mappings["feed_forward.w2.weight"] = "mlp.down_proj.weight"
+        # Feed forward bias mappings
+        meta_to_hf_mappings["feed_forward.w1.bias"] = "mlp.gate_proj.bias"
+        meta_to_hf_mappings["feed_forward.w3.bias"] = "mlp.up_proj.bias"
+        meta_to_hf_mappings["feed_forward.w2.bias"] = "mlp.down_proj.bias"
+        # Direct MLP weight mappings
+        meta_to_hf_mappings["w1_w3.weight"] = "gate_up_proj.weight"
+        meta_to_hf_mappings["w1.weight"] = "gate_proj.weight"
+        meta_to_hf_mappings["w2.weight"] = "down_proj.weight"
+        meta_to_hf_mappings["w3.weight"] = "up_proj.weight"
+        # Direct MLP bias mappings
+        meta_to_hf_mappings["w1.bias"] = "gate_proj.bias"
+        meta_to_hf_mappings["w3.bias"] = "up_proj.bias"
+        meta_to_hf_mappings["w2.bias"] = "down_proj.bias"
+
+    if name_final_layernorm:
+        meta_to_hf_mappings["norm.weight"] = "model.final_layernorm.weight"
+        meta_to_hf_mappings["norm.bias"] = "model.final_layernorm.bias"
+    else:
+        meta_to_hf_mappings["norm.weight"] = "model.norm.weight"
 
     hf_state_dict = {}
     for key, tensor in loaded_weights.items():

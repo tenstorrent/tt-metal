@@ -200,7 +200,14 @@ def test_model_inference(
                 or any(
                     [
                         f"{state_dict_prefix}{name}" in k
-                        for name in ["tok_embeddings.weight", "norm.weight", "output.weight"]
+                        for name in [
+                            "tok_embeddings.weight",
+                            "norm.weight",
+                            "output.weight",
+                            "tok_embeddings.bias",
+                            "norm.bias",
+                            "output.bias",
+                        ]
                     ]
                 )
             )

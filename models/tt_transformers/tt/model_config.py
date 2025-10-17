@@ -34,6 +34,7 @@ from models.tt_transformers.tt.load_checkpoints import (
     load_hf_state_dict,
     load_meta_state_dict,
     reverse_permute,
+    split_hf_keys,
     standardize_hf_keys,
     standardize_hf_keys_multimodal,
 )
@@ -487,6 +488,7 @@ class ModelArgs:
 
         self.rms_norm_add_unit_offset = False
         self.embed_scale = None
+        self.layernorm = False
 
         assert not os.getenv(
             "FAKE_DEVICE"
@@ -728,6 +730,20 @@ class ModelArgs:
                     (
                         self.tile_padded_batch_rows,
                         self.dim // residual_grid.num_cores // self.num_devices,
+                    ),
+                    residual_grid,
+                    ttnn.ShardStrategy.WIDTH,
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                    use_height_and_width_as_shard_shape=True,
+                )
+            )
+            self.model_config["DECODE_RESIDUAL_MEMCFG_ALL_GATHER"] = (
+                ttnn.L1_MEMORY_CONFIG  # FIXME: when residual add support typecasting for sharded tensors
+                if self.is_galaxy
+                else ttnn.create_sharded_memory_config(
+                    (
+                        self.tile_padded_batch_rows,
+                        self.dim // residual_grid.num_cores // self.num_devices * 2,
                     ),
                     residual_grid,
                     ttnn.ShardStrategy.WIDTH,
@@ -1475,6 +1491,7 @@ class ModelArgs:
             "relu": ttnn.UnaryOpType.RELU,
             "silu": ttnn.UnaryOpType.SILU,
             "swish": ttnn.UnaryOpType.SILU,
+            "gelu_new": ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU, 0.0),
         }
 
         hidden_activation = config.get("hidden_act") or config.get("hidden_activation")
@@ -1519,11 +1536,12 @@ class ModelArgs:
         )
 
         self.full_model_n_layers = self.n_layers
-        self.norm_eps = text_config.get("norm_eps", text_config.get("rms_norm_eps"))
+        self.norm_eps = text_config.get("norm_eps", text_config.get("rms_norm_eps", text_config.get("layer_norm_eps")))
         self.vocab_size = text_config["vocab_size"]
         self.padded_vocab_size = 128 * 1024 if self.is_galaxy else None
         self.head_dim = text_config.get("head_dim", self.dim // self.n_heads) or self.dim // self.n_heads
         self.num_experts_per_tok = text_config.get("num_experts_per_tok", 0)
+        self.partial_rotary_factor = text_config.get("partial_rotary_factor", 1.0)
         if is_hf:
             self.max_context_len = text_config.get("max_position_embeddings")
         else:
@@ -1843,6 +1861,19 @@ class ModelArgs:
 
         return prefix + layer_prefix + module_map[module_name]
 
+    def get_ref_state_dict_prefix(self, module_name, layer_num):
+        text_prefix = self.state_dict_text_prefix
+        layer_prefix = f"model.layers.{layer_num}." if layer_num is not None else ""
+        module_map = {
+            "MLP": "feed_forward",
+            "mlp": "mlp",
+            "attention": "attention",
+            "self_attn": "self_attn",
+            "TransformerBlock": "",
+            "": "",  # If no module is given, just get layer prefix
+        }
+        return text_prefix + layer_prefix + module_map[module_name]
+
     def weight_cache_path(self, dtype):
         # Keep the weight cache separate for generative and instruct weights
         if self.instruct:
@@ -1928,6 +1959,8 @@ class ModelArgs:
             else:
                 self.fuse_qkv = any(["qkv" in layer_name for layer_name in state_dict.keys()])
                 self.fuse_mlp = any(["gate_up" in layer_name for layer_name in state_dict.keys()])
+                self.name_dense = any(["dense" in layer_name for layer_name in state_dict.keys()])
+                self.name_ffn2 = any(["fc2" in layer_name for layer_name in state_dict.keys()])
                 state_dict = standardize_hf_keys(state_dict)
                 state_dict = convert_hf_to_meta(state_dict, self.head_dim, self.n_heads, self.n_kv_heads)
 
@@ -2013,6 +2046,49 @@ class ModelArgs:
             fuse_batch=False,
         )
         # end Porting mixtral to llama
+
+    def load_state_dict_ref(self):
+        if self.dummy_weights:
+            if self.checkpoint_type == CheckpointType.HuggingFace:
+                from transformers import AutoConfig, AutoModelForCausalLM
+
+                config = AutoConfig.from_pretrained(self.LOCAL_HF_PARAMS[self.model_name])
+                config.num_layers = self.n_layers
+                config.num_hidden_layers = self.n_layers
+                model = AutoModelForCausalLM.from_config(config)
+                state_dict = model.state_dict()
+            else:
+                reference_model = Transformer(self)
+                state_dict = reference_model.state_dict()
+                state_dict_prefix = self.get_state_dict_prefix("", None)
+                state_dict = {f"{state_dict_prefix}{k}": torch.randn_like(v) for k, v in state_dict.items()}
+        elif self.checkpoint_type == CheckpointType.Meta:
+            state_dict = load_meta_state_dict(self.CKPT_DIR, self.n_layers)
+        else:
+            assert self.checkpoint_type == CheckpointType.HuggingFace
+            if self.from_hf_url:
+                from transformers import AutoConfig, AutoModelForCausalLM
+
+                model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR)
+                self.cached_hf_model = model
+                state_dict = model.state_dict()
+            else:
+                state_dict = load_hf_state_dict(self.CKPT_DIR)
+
+        state_dict_ref = state_dict.copy()
+
+        if self.checkpoint_type == CheckpointType.HuggingFace:
+            state_dict_ref = standardize_hf_keys(state_dict_ref)
+            # state_dict_ref = convert_hf_to_meta_ref(state_dict_ref, self.head_dim)
+            state_dict_ref = split_hf_keys(state_dict_ref)
+
+        keys_dict = list(state_dict_ref.keys())[:]
+        remv = [f"model.layers.{i}." for i in list(range(self.n_layers, self.full_model_n_layers))]
+        for k in keys_dict:
+            if any([r in k for r in remv]):
+                state_dict_ref.pop(k)
+
+        return state_dict_ref
 
     def create_dram_sharded_mem_config(self, k, n):
         """Create DRAM-sharded memory config for width-sharded tensors"""
@@ -2542,7 +2618,11 @@ class ModelArgs:
             return RMSNorm(self.dim, self.norm_eps)
         else:
             model = self.reference_transformer(wrap=False)
-            layer = model.model.norm
+            if hasattr(model.model, "final_layernorm"):
+                layer = model.model.final_layernorm
+                self.layernorm = True
+            else:
+                layer = model.model.norm
             layer._load_state_dict = layer.load_state_dict
             layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
             return layer
@@ -2582,7 +2662,7 @@ class ModelArgs:
             layer = model.model.layers[0].mlp
             layer._load_state_dict = layer.load_state_dict
             layer.load_state_dict = lambda x: layer._load_state_dict(
-                convert_meta_to_hf(x, self.head_dim, fuse_mlp=self.fuse_mlp)
+                convert_meta_to_hf(x, self.head_dim, fuse_mlp=self.fuse_mlp, name_ffn2=self.name_ffn2)
             )
             return layer
 
@@ -2632,9 +2712,7 @@ class ModelArgs:
             model = self.reference_transformer(wrap=False)
             layer = model.model.layers[0].self_attn
             use_position_embeddings = "position_embeddings" in inspect.signature(layer.forward).parameters
-            wrapper = HfAttentionWrapper(
-                layer, self.head_dim, model.model.rotary_emb if use_position_embeddings else None
-            )
+            wrapper = HfAttentionWrapper(layer, self.head_dim, model.model.rotary_emb)
             return wrapper
 
     def set_tg_attention_config(self):
@@ -2762,7 +2840,13 @@ class HfAttentionWrapper:
             fuse_qkv = hasattr(self.attention, "qkv_proj")
         except:
             fuse_qkv = False
-        return self.attention.load_state_dict(convert_meta_to_hf(state_dict, self.head_dim, fuse_qkv))
+        try:
+            name_dense = hasattr(self.attention, "dense")
+        except:
+            name_dense = False
+        return self.attention.load_state_dict(
+            convert_meta_to_hf(state_dict, self.head_dim, fuse_qkv=fuse_qkv, name_dense=name_dense)
+        )
 
     @property
     def cache_k(self):
@@ -2841,7 +2925,19 @@ class HfDecoderWrapper:
             fuse_mlp = hasattr(self.decoder.mlp, "gate_up_proj")
         except:
             fuse_qkv, fuse_mlp = False, False
-        return self.decoder.load_state_dict(convert_meta_to_hf(state_dict, self.head_dim, fuse_qkv, fuse_mlp))
+        try:
+            name_dense = hasattr(self.decoder.self_attn, "dense")
+        except:
+            name_dense = False
+        try:
+            name_ffn2 = hasattr(self.decoder.mlp, "fc2")
+        except:
+            name_ffn2 = False
+        return self.decoder.load_state_dict(
+            convert_meta_to_hf(
+                state_dict, self.head_dim, fuse_qkv, fuse_mlp, name_dense=name_dense, name_ffn2=name_ffn2
+            )
+        )
 
 
 class HfModelWrapper:
@@ -2877,8 +2973,29 @@ class HfModelWrapper:
             fuse_mlp = hasattr(self.model.model.layers[0].mlp, "gate_up_proj")
         except:
             fuse_qkv, fuse_mlp = False, False
+        try:
+            name_dense = hasattr(self.model.model.layers[0].self_attn, "dense")
+        except:
+            name_dense = False
+        try:
+            name_ffn2 = hasattr(self.model.model.layers[0].mlp, "fc2")
+        except:
+            name_ffn2 = False
+        try:
+            name_final_layernorm = hasattr(self.model.model, "final_layernorm")
+        except:
+            name_final_layernorm = False
         return self.model.load_state_dict(
-            convert_meta_to_hf(state_dict, self.head_dim, fuse_qkv, fuse_mlp, self.config)
+            convert_meta_to_hf(
+                state_dict,
+                self.head_dim,
+                fuse_qkv,
+                fuse_mlp,
+                name_dense=name_dense,
+                name_ffn2=name_ffn2,
+                name_final_layernorm=name_final_layernorm,
+                self.config
+            )
         )
 
     def eval(self):

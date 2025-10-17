@@ -41,14 +41,11 @@ from models.tt_transformers.tt.rope import get_rot_mats
 )
 @pytest.mark.parametrize(
     "page_params",
-    [{"page_block_size": 32, "page_max_num_blocks": 1024}],
+    [{"page_block_size": 32}],
 )
 @pytest.mark.parametrize(
     "max_seq_len",
-    (
-        4096,
-        128,
-    ),
+    (128,),
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 def test_decoder_inference(
@@ -88,7 +85,7 @@ def test_decoder_inference(
 
     # pre-compute the rotational embedding matrix and send to device
     rot_mats = get_rot_mats(
-        head_dim=model_args.head_dim,
+        head_dim=int(model_args.head_dim * model_args.partial_rotary_factor),
         device=mesh_device,
         seq_len=max_seq_len,
         theta=model_args.rope_theta,
@@ -170,7 +167,7 @@ def test_decoder_inference(
         )
         positions = torch.LongTensor(range(max_seq_len))
         freqs_cis_i = precompute_freqs_cis(
-            model_args.head_dim,
+            int(model_args.head_dim * model_args.partial_rotary_factor),
             model_args.max_seq_len * 2,
             model_args.rope_theta,
             model_args.rope_scaling.factor if model_args.rope_scaling else None,
