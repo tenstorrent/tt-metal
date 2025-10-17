@@ -1978,10 +1978,8 @@ def test_hardmish_bfloat16_allclose(device):
     tt_result = ttnn.hardmish(tt_in)
     result = ttnn.to_torch(tt_result)
     assert_allclose(golden, result, rtol=1e-05, atol=1e-35)
-        (torch.float32, ttnn.float32),
-        (torch.bfloat16, ttnn.bfloat16),
-    
-    
+
+
 @pytest.mark.parametrize(
     "input_shapes",
     (
