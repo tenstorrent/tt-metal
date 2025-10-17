@@ -18,6 +18,7 @@ import os
 import subprocess
 import json
 import tempfile
+import argparse
 from datetime import datetime
 
 # Set up environment
@@ -514,13 +515,14 @@ def pytest_configure(config):
     return plugin_file
 
 
-def run_test_with_tracing(test_path, output_dir):
+def run_test_with_tracing(test_path, output_dir, keep_traces=False):
     """
     Run pytest with operations tracing enabled.
 
     Args:
         test_path: Path to test (e.g., /path/to/test.py::test_function)
         output_dir: Directory to save trace outputs
+        keep_traces: If True, keep individual trace files after adding to master JSON
 
     Returns:
         dict: Results of the test run
@@ -567,31 +569,46 @@ def run_test_with_tracing(test_path, output_dir):
         "stdout": result.stdout,
         "stderr": result.stderr,
         "plugin_file": plugin_file,
+        "keep_traces": keep_traces,
     }
 
 
 def main():
-    if len(sys.argv) < 2:
-        print("Usage: python generic_ops_tracer.py <test_path> [output_dir]")
-        print("\\nExamples:")
-        print(
-            "  python generic_ops_tracer.py /home/ubuntu/tt-metal/models/demos/wormhole/distilbert/demo/demo.py::test_demo"
-        )
-        print(
-            "  python generic_ops_tracer.py /home/ubuntu/tt-metal/models/demos/wormhole/resnet50/demo/demo.py::test_demo_sample"
-        )
-        return 1
+    parser = argparse.ArgumentParser(
+        description="TTNN Operations Tracer - Extract operation configurations from model tests",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  python model_tracer/generic_ops_tracer.py /home/ubuntu/tt-metal/models/demos/wormhole/distilbert/demo/demo.py::test_demo
+  python model_tracer/generic_ops_tracer.py /path/to/test.py::test_function --store
+  python model_tracer/generic_ops_tracer.py /path/to/test.py::test_function --output-dir ./my_traces --store
+        """,
+    )
+    parser.add_argument("test_path", help="Path to test file (e.g., /path/to/test.py::test_function)")
+    parser.add_argument(
+        "--output-dir",
+        "-o",
+        default="./model_tracer/traced_operations",
+        help="Directory to save trace outputs (default: ./model_tracer/traced_operations)",
+    )
+    parser.add_argument(
+        "--store",
+        "--keep-traces",
+        action="store_true",
+        help="Keep individual trace files after adding to master JSON (default: delete them)",
+    )
 
-    test_path = sys.argv[1]
-    output_dir = sys.argv[2] if len(sys.argv) > 2 else "./model_tracer/traced_operations"
+    args = parser.parse_args()
 
     print("🚀 TTNN Operations Tracer")
     print("=" * 50)
-    print(f"📁 {os.path.basename(test_path)}")
+    print(f"📁 {os.path.basename(args.test_path)}")
+    if args.store:
+        print(f"💾 Keeping individual trace files")
     print("=" * 50)
 
     try:
-        result = run_test_with_tracing(test_path, output_dir)
+        result = run_test_with_tracing(args.test_path, args.output_dir, args.store)
 
         print("\\n" + "=" * 50)
         print("📋 RESULTS")
@@ -640,6 +657,24 @@ def main():
 
         if result["success"] and result["trace_files"]:
             print("\\n✅ Operations extracted successfully!")
+
+            # Cleanup individual trace files if --store flag not set
+            if not result["keep_traces"]:
+                print("\\n🧹 Cleaning up individual trace files...")
+                cleaned_count = 0
+                for trace_file in result["trace_files"]:
+                    try:
+                        # Only delete trace files (not master JSON)
+                        if "ttnn_operations_master.json" not in trace_file:
+                            os.remove(trace_file)
+                            cleaned_count += 1
+                            print(f"   Deleted: {os.path.basename(trace_file)}")
+                    except Exception as e:
+                        print(f"   ⚠️ Could not delete {os.path.basename(trace_file)}: {e}")
+
+                if cleaned_count > 0:
+                    print(f"✅ Cleaned up {cleaned_count} trace file(s)")
+                    print("💡 Tip: Use --store flag to keep individual trace files")
         elif result["success"] and not result["trace_files"]:
             print("\\n⚠️ Test passed but no operations captured")
         else:

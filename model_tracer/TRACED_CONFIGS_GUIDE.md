@@ -192,6 +192,9 @@ flowchart TB
 ```bash
 # Trace any model test to extract TTNN operations
 python model_tracer/generic_ops_tracer.py /path/to/model/test.py::test_function
+
+# Optional: Keep individual trace files (default: deleted after adding to master JSON)
+python model_tracer/generic_ops_tracer.py /path/to/model/test.py::test_function --store
 ```
 
 **Example:**
@@ -203,6 +206,7 @@ python model_tracer/generic_ops_tracer.py /home/ubuntu/tt-metal/models/experimen
 - Creates/updates `model_tracer/traced_operations/ttnn_operations_master.json`
 - Adds unique configurations from this model
 - Shows summary: "Added X new unique configurations"
+- Individual trace files are automatically cleaned up (use `--store` to keep them)
 
 ### 2. View Traced Configurations
 
@@ -347,6 +351,25 @@ The tracer automatically filters:
 - ✅ **Includes**: Valid TTNN operations from `Allops.txt`
 - ❌ **Excludes**: Infrastructure ops (to_device, from_device, deallocate, etc.)
 - ❌ **Excludes**: 36 utility operations (full list in `generic_ops_tracer.py`)
+
+#### Options and Flags
+
+```bash
+# Keep individual trace files (default: deleted after adding to master JSON)
+python model_tracer/generic_ops_tracer.py <test_path> --store
+
+# Custom output directory
+python model_tracer/generic_ops_tracer.py <test_path> --output-dir ./my_traces
+
+# Help and all options
+python model_tracer/generic_ops_tracer.py --help
+```
+
+**Why delete individual files?**
+- Individual trace files are redundant once configurations are in the master JSON
+- Saves disk space (each trace file can be 50KB-500KB)
+- Master JSON already has all unique configurations
+- Use `--store` flag if you need them for debugging
 
 ### Analyzing Traced Configurations
 
