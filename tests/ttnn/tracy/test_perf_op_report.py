@@ -123,7 +123,7 @@ class TestTensorIO:
 
 cpp_post_proc_test = {
     "name": "Ops",
-    "command": 'pytest "tests/ttnn/tracy/test_dispatch_profiler.py::test_with_ops"',
+    "command": 'pytest "tests/ttnn/tracy/test_trace_runs.py::test_with_ops"',
 }
 
 

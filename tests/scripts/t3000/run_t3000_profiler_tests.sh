@@ -13,7 +13,7 @@ run_mid_run_data_dump() {
     python -m tracy -v -r -p --cpp-post-process --sync-host-device --dump-device-data-mid-run -m pytest tests/ttnn/tracy/test_profiler_sync.py::test_all_devices
     runDate=$(ls $PROFILER_OUTPUT_DIR/)
     cat $PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv
-    python $PROFILER_SCRIPTS_ROOT/compare_ops_logs.py --python-ops-perf-report $PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv --cpp-ops-perf-report $PROFILER_ARTIFACTS_DIR/.logs/cpp_ops_device_perf_report.csv
+    python $PROFILER_SCRIPTS_ROOT/compare_ops_logs.py
 }
 
 run_async_test() {
@@ -32,7 +32,7 @@ run_async_test() {
             LINE_COUNT=1000 # Smoke test to see at least 1000 ops are reported
             res=$(verify_perf_line_count_floor "$PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv" "$LINE_COUNT")
             echo $res
-            python $PROFILER_SCRIPTS_ROOT/compare_ops_logs.py --python-ops-perf-report $PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv --cpp-ops-perf-report $PROFILER_ARTIFACTS_DIR/.logs/cpp_ops_device_perf_report.csv
+            python $PROFILER_SCRIPTS_ROOT/compare_ops_logs.py
         fi
     fi
 }
@@ -55,7 +55,7 @@ run_async_tracing_T3000_test() {
             LINE_COUNT=2700
             res=$(verify_perf_line_count_floor "$PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv" "$LINE_COUNT")
             echo $res
-            python $PROFILER_SCRIPTS_ROOT/compare_ops_logs.py --python-ops-perf-report $PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv --cpp-ops-perf-report $PROFILER_ARTIFACTS_DIR/.logs/cpp_ops_device_perf_report.csv
+            python $PROFILER_SCRIPTS_ROOT/compare_ops_logs.py
 
             # Testing device only report on the same artifacts
             rm -rf $PROFILER_OUTPUT_DIR/$runDate
@@ -88,7 +88,7 @@ run_ccl_T3000_test() {
         LINE_COUNT=8 #8 devices
         res=$(verify_perf_line_count "$PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv" "$LINE_COUNT" "AllGatherDeviceOperation")
         echo $res
-        python $PROFILER_SCRIPTS_ROOT/compare_ops_logs.py --python-ops-perf-report $PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv --cpp-ops-perf-report $PROFILER_ARTIFACTS_DIR/.logs/cpp_ops_device_perf_report.csv
+        python $PROFILER_SCRIPTS_ROOT/compare_ops_logs.py
     fi
 }
 
