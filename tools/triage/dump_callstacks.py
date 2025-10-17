@@ -24,6 +24,7 @@ Description:
 from dataclasses import dataclass
 
 from triage import ScriptConfig, TTTriageError, log_check, recurse_field, triage_field, hex_serializer, run_script
+from ttexalens.hw.tensix.wormhole.wormhole import WormholeDevice
 from dispatcher_data import run as get_dispatcher_data, DispatcherData, DispatcherCoreData
 from elfs_cache import run as get_elfs_cache, ElfsCache
 from run_checks import run as get_run_checks
@@ -204,24 +205,36 @@ def get_callstack(
             pc = location._device.get_block(location).get_risc_debug(risc_name).get_pc()
             try:
                 cs = top_callstack(pc, elfs, offsets, context)
-                error_message = "PC was not in range of any provided ELF files" if len(cs) == 0 else None
+                error_message = None
+                if len(cs) == 0:
+                    error_message = "PC was not in range of any provided ELF files."
+                    if location in location._device.active_eth_block_locations:
+                        error_message += " Probably context switch occurred and PC is contained in base ERISC firmware."
                 return KernelCallstackWithMessage(callstack=cs, message=error_message)
             except Exception as e:
                 return KernelCallstackWithMessage(callstack=[], message=str(e))
         else:
             try:
-                return KernelCallstackWithMessage(callstack=callstack(location, elfs, offsets, risc_name), message=None)
+                cs = callstack(location, elfs, offsets, risc_name)
+                error_message = None
+                if len(cs) == 0:
+                    error_message = "PC was not in range of any provided ELF files."
+                    if location in location._device.active_eth_block_locations:
+                        error_message += " Probably context switch occurred and PC is contained in base ERISC firmware."
+                return KernelCallstackWithMessage(callstack=cs, message=error_message)
             except Exception as e:
                 try:
                     # If full callstack failed, we default to top callstack
                     pc = location._device.get_block(location).get_risc_debug(risc_name).get_pc()
                     error_message = str(e) + " - defaulting to top callstack"
                     cs = top_callstack(pc, elfs, offsets, context)
-                    error_message = (
-                        "\n".join([error_message, "PC was not in range of any provided ELF files"])
-                        if len(cs) == 0
-                        else error_message
-                    )
+                    if len(cs) == 0:
+                        additional_message = "PC was not in range of any provided ELF files."
+                        if location in location._device.active_eth_block_locations:
+                            additional_message += (
+                                " Probably context switch occurred and PC is contained in base ERISC firmware."
+                            )
+                        error_message = "\n".join([error_message, additional_message])
                     return KernelCallstackWithMessage(callstack=cs, message=error_message)
                 except Exception as e:
                     # If top callstack failed too, print both error messages
@@ -431,7 +444,7 @@ def run(args, context: Context):
     verbose_level = args["-v"]
     set_verbose_level(verbose_level)
 
-    BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth"]
+    BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth", "active_eth"]
     elfs_cache = get_elfs_cache(args, context)
     run_checks = get_run_checks(args, context)
     dispatcher_data = get_dispatcher_data(args, context)
