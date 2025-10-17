@@ -11,7 +11,7 @@ from models.experimental.oft.reference.oft import OFT as ReferenceOFT
 from tests.ttnn.utils_for_testing import check_with_pcc
 from models.experimental.oft.tt.model_preprocessing import create_OFT_model_parameters_oft
 from models.experimental.oft.reference.utils import get_abs_and_relative_error, make_grid
-from tests.ttnn.unit_tests.test_bh_20_cores_sharding import skip_if_not_blackhole_20_cores
+from tests.ttnn.unit_tests.base_functionality.test_bh_20_cores_sharding import skip_if_not_blackhole_20_cores
 
 from loguru import logger
 

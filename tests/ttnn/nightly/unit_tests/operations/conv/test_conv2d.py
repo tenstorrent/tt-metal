@@ -12,7 +12,7 @@ from models.common.utility_functions import (
     is_blackhole,
 )
 from models.common.utility_functions import run_for_blackhole
-from tests.ttnn.unit_tests.test_bh_20_cores_sharding import skip_if_not_blackhole_20_cores
+from tests.ttnn.unit_tests.base_functionality.test_bh_20_cores_sharding import skip_if_not_blackhole_20_cores
 from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc_without_tensor_printout, assert_equal
 import ttnn
 from ttnn.operations.conv2d import get_torch_act_func_from_string

@@ -206,11 +206,6 @@ tests/ttnn/multidevice_perf_tests/ @tenstorrent/metalium-developers-ops-data-mov
 tests/nightly/t3000/ccl/test_all_reduce.py @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/metalium-codeowners-large-changes
 tests/nightly/tg/ccl/test_all_reduce.py @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/metalium-codeowners-large-changes
 tests/ttnn/unit_tests/gtests/ccl/ @cfjchu @omilyutin-tt @tt-aho @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/metalium-codeowners-large-changes
-tests/ttnn/unit_tests/operations/test_sort.py @aczajkowskiTT @sjameelTT @bbradelTT @mgajewskiTT @nmauriceTT @nsorabaTT @tenstorrent/metalium-codeowners-large-changes
-tests/ttnn/unit_tests/operations/test_tosa_gather.py @mgajewskiTT @aczajkowskiTT @bbradelTT @tenstorrent/metalium-codeowners-large-changes
-tests/ttnn/unit_tests/operations/test_tosa_scatter.py @jbbieniekTT @aczajkowskiTT @bbradelTT @tenstorrent/metalium-codeowners-large-changes
-tests/ttnn/unit_tests/operations/test_scatter.py @aczajkowskiTT @sjameelTT @bbradelTT @jbbieniekTT @tenstorrent/metalium-codeowners-large-changes
-tests/ttnn/unit_tests/operations/test_gather.py @aczajkowskiTT @mgajewskiTT @bbradelTT @tenstorrent/metalium-codeowners-large-changes
 tests/ttnn/unit_tests/operations/ccl/ @cfjchu @omilyutin-tt @tt-aho @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/metalium-codeowners-large-changes
 tests/ttnn/unit_tests/operations/eltwise/ @patrickroberts @sjameelTT @ntarafdar @dchenTT @tenstorrent/metalium-codeowners-large-changes
 tests/ttnn/unit_tests/operations/conv/ @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-codeowners-large-changes
