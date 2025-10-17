@@ -178,9 +178,9 @@ jobs:
 
           # Determine which script to run
           SCRIPT_PATH=""
-          if [ -n "${{ inputs.gist-url }}" ]; then
+          if [[ -n "${{ inputs.gist-url }}" ]]; then
             SCRIPT_PATH="/work/bisect_gist_script.sh"
-          elif [ -n "${{ inputs.command }}" ]; then
+          elif [[ -n "${{ inputs.command }}" ]]; then
             # Write command to a temporary script to avoid quoting issues
             cat > /work/bisect_command_script.sh << 'EOF'
           #!/bin/bash
@@ -191,15 +191,24 @@ jobs:
             SCRIPT_PATH="/work/bisect_command_script.sh"
           fi
 
-          # Run bisect with the script
-          ./build_bisect/tt_bisect.sh \
-            -t ${{ inputs.timeout }} \
-            -b ${{ inputs.bad-commit }} \
-            -g ${{ inputs.good-commit }} \
-            ${{ inputs.tracy == 'true' && '-p' || '' }} \
-            -r ${{ inputs.retries }} \
-            ${{ inputs.nd-mode == 'true' && '-n' || '' }} \
-            -s "$SCRIPT_PATH"
+          # Build arguments in an array to avoid empty string issues
+          declare -a bisect_args
+          bisect_args+=(-t "${{ inputs.timeout }}")
+          bisect_args+=(-b "${{ inputs.bad-commit }}")
+          bisect_args+=(-g "${{ inputs.good-commit }}")
+          bisect_args+=(-r "${{ inputs.retries }}")
+
+          if [[ "${{ inputs.tracy }}" == 'true' ]]; then
+            bisect_args+=(-p)
+          fi
+          if [[ "${{ inputs.nd-mode }}" == 'true' ]]; then
+            bisect_args+=(-n)
+          fi
+
+          bisect_args+=(-s "$SCRIPT_PATH")
+
+          # Run bisect with clean, properly quoted arguments
+          ./build_bisect/tt_bisect.sh "${bisect_args[@]}"
 
       - name: Upload ND results CSV
         if: ${{ hashFiles('docker-job/bisect_nd_results.csv') != '' }}
