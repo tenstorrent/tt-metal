@@ -81,9 +81,9 @@ fi
 python3 -m venv python_env
 source ./python_env/bin/activate
 pip install --upgrade pip
+pip install -e .
 # Skip building ttnn wheel (takes ~25min) - tests access it via PYTHONPATH=/work
 pip install -r models/tt_transformers/requirements.txt
-pip install -r $(pwd)/tt_metal/python_env/requirements-dev.txt
 
 
 
