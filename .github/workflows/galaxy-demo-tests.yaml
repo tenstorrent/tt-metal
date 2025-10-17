@@ -22,12 +22,3 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       topology: topology-6u
-  galaxy-deepseek-tests:
-    needs: build-artifact
-    secrets: inherit
-    uses: ./.github/workflows/galaxy-deepseek-tests-impl.yaml
-    with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      topology: topology-6u

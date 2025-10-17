@@ -196,8 +196,14 @@ demos_tg_device() {
     local pipeline_type=$2
     local dispatch_mode=$3
     local model=$4
-
-    ./tests/scripts/tg/run_tg_demo_tests.sh --model "$model"
+    case "$model" in
+        deepseek_v3)
+            ./tests/scripts/tg/run_tg_deepseek_v3_demo_tests.sh --model "$model"
+            ;;
+        *)
+            ./tests/scripts/tg/run_tg_demo_tests.sh --model "$model"
+            ;;
+    esac
 }
 
 # Run tg model perf tests
