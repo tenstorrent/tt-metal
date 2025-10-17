@@ -57,6 +57,6 @@ def test_ci_dispatch(hf_model_name, is_ci_env, is_ci_v2_env, model_location_gene
     exit_code = pytest.main(tests + ["-x"])
     if exit_code == pytest.ExitCode.TESTS_FAILED:
         pytest.fail(
-            f"One or more CI dispatch tests failed for {model_weights_path}. Please check the log above for more info",
+            f"One or more CI dispatch tests failed for {hf_model_name}. Please check the log above for more info",
             pytrace=False,
         )
