@@ -7,6 +7,7 @@
 #include <concepts>
 #include <optional>
 #include <random>
+#include <tt-logger/tt-logger.hpp>
 #include <tt_stl/overloaded.hpp>
 #include <tt_stl/indestructible.hpp>
 #include "ttnn/tensor/tensor.hpp"
@@ -374,6 +375,9 @@ get_output_placements_and_shape(
         max_distribution_rank, tt::tt_metal::distributed::MeshMapperConfig::Replicate{});
     std::unordered_set<int> shard_dims;
     bool dim_mismatch = false;
+
+    // TODO: #25340 - Add back logging / validation. Currently, this results in a lot of log spam.
+    constexpr bool kEnableLogging = false;
     tt::stl::reflection::visit_object_of_type<Tensor>(
         [&](const Tensor& tensor) {
             // Augment output tensor distribution shape with the max strides of all input tensors with the max
@@ -402,7 +406,7 @@ get_output_placements_and_shape(
 
                                 // If a different tensor dim is sharded across this distribution dim, keep the
                                 // earliest-seen shard dimension.
-                                if (new_shard_placement.dim != existing_shard_placement.dim) {
+                                if (new_shard_placement.dim != existing_shard_placement.dim && kEnableLogging) {
                                     log_warning(
                                         tt::LogOp,
                                         "Output tensor cannot shard different tensor dimensions across the same "
@@ -415,7 +419,7 @@ get_output_placements_and_shape(
                                 continue;
                             }
                             output_placement = new_shard_placement;
-                        } else {
+                        } else if (kEnableLogging) {
                             log_warning(
                                 tt::LogOp,
                                 "Duplicate tensor shard dimension {} across distribution dim {} replaced with "
@@ -431,7 +435,7 @@ get_output_placements_and_shape(
             }
         },
         tensor_args);
-    if (dim_mismatch) {
+    if (dim_mismatch && kEnableLogging) {
         log_warning(
             tt::LogOp,
             "Input tensors have different distribution ranks, only imputing output tensor topology with tensors that "
