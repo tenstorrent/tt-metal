@@ -16,8 +16,8 @@ from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.nightly.test_all_gather_n
 @pytest.mark.parametrize(
     "num_devices, ag_output_shape, dim, layout, all_gather_topology, cluster_axis",
     [
-        (8, [1, 1, 24000, 32768], 3, ttnn.TILE_LAYOUT, ttnn.Topology.Ring, 0),
-        (4, [1, 1, 20000, 32768], 3, ttnn.TILE_LAYOUT, ttnn.Topology.Ring, 1),
+        (4, [1, 1, 24000, 32768], 3, ttnn.TILE_LAYOUT, ttnn.Topology.Ring, 0),
+        (8, [1, 1, 20000, 32768], 3, ttnn.TILE_LAYOUT, ttnn.Topology.Ring, 1),
     ],
     ids=[
         "row_test",
@@ -120,8 +120,8 @@ def test_ccl_ddr_smoke_test(
 @pytest.mark.parametrize(
     "num_devices, ag_output_shape, dim, layout, all_gather_topology, cluster_axis",
     [
-        (8, [1, 1, 6016, 8192], 3, ttnn.TILE_LAYOUT, ttnn.Topology.Ring, 0),
-        (4, [1, 1, 6016, 4096], 3, ttnn.TILE_LAYOUT, ttnn.Topology.Ring, 1),
+        (4, [1, 1, 6016, 8192], 3, ttnn.TILE_LAYOUT, ttnn.Topology.Ring, 0),
+        (8, [1, 1, 6016, 4096], 3, ttnn.TILE_LAYOUT, ttnn.Topology.Ring, 1),
     ],
     ids=["horizontal_test", "vertical_test"],
 )

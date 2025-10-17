@@ -630,7 +630,7 @@ def bh_2d_mesh_device(request, silicon_arch_name, silicon_arch_blackhole, device
         )
     elif ttnn.get_num_devices() == 32:
         mesh_device = ttnn.open_mesh_device(
-            mesh_shape=ttnn.MeshShape(8, 4),
+            mesh_shape=ttnn.MeshShape(4, 8),
             **updated_device_params,
         )
     else:
