@@ -31,12 +31,15 @@ on:
         default: "*"
         type: string
         description: "Filter for gtest"
+      iteration:
+        required: true
+        type: string
 jobs:
   cpp-unit-tests:
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines
-      fail-fast: false
+      fail-fast: true
       matrix:
         test-group:
           - name: All C++
@@ -73,7 +76,7 @@ jobs:
           - name: data movement
             cmd: |
               ./build/test/tt_metal/unit_tests_data_movement --gtest_filter=$GTEST_FILTER
-    name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
+    name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }} iteration ${{ inputs.iteration }}
     container:
       image: ${{ (inputs.runner-label == 'N150' || inputs.runner-label == 'N300') && 'harbor.ci.tenstorrent.net/' || '' }}${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
