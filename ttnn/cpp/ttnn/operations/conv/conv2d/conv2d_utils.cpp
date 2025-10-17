@@ -611,7 +611,7 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_shape_an
             }
             // Additional check for mm convs to ensure shard height is multiple of TILE_HEIGHT since tiling requires
             // that
-            if (is_mm_conv && input_shard_spec.shape[0] % tt::constants::TILE_HEIGHT != 0) {
+            if (is_mm_conv && (input_shard_spec.shape[0] % tt::constants::TILE_HEIGHT != 0)) {
                 needs_shard_or_reshard = true;
             }
 
