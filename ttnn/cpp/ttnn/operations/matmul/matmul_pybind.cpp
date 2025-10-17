@@ -996,7 +996,7 @@ void py_module(py::module& module) {
         module,
         ::ttnn::sparse_matmul,
         R"doc(
-        ``ttnn.sparse_matmul(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, sparsity: ttnn.Tensor, nnz: Optional[int] = None, is_input_a_sparse: bool = False, memory_config: Optional[ttnn.MemoryConfig] = None, dtype: Optional[ttnn.DataType] = None, program_config: Optional[ttnn.MatmulProgramConfig] = None, compute_kernel_config: Optional[ttnn.DeviceComputeKernelConfig] = None, core_grid: Optional[ttnn.CoreGrid] = None, output_tile: Optional[list[int]] = None, optional_output_tensor: Optional[ttnn.Tensor] = None, global_cb: Optional[ttnn.GlobalCircularBuffer] = None, sub_device_id: Optional[ttnn.SubDeviceId] = None) -> ttnn.Tensor``
+        ``ttnn.sparse_matmul(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, sparsity: ttnn.Tensor, nnz: Optional[int] = None, is_input_a_sparse: bool = False, is_input_b_sparse: bool = True, memory_config: Optional[ttnn.MemoryConfig] = None, dtype: Optional[ttnn.DataType] = None, program_config: Optional[ttnn.MatmulProgramConfig] = None, compute_kernel_config: Optional[ttnn.DeviceComputeKernelConfig] = None, core_grid: Optional[ttnn.CoreGrid] = None, output_tile: Optional[list[int]] = None, optional_output_tensor: Optional[ttnn.Tensor] = None, global_cb: Optional[ttnn.GlobalCircularBuffer] = None, sub_device_id: Optional[ttnn.SubDeviceId] = None) -> ttnn.Tensor``
 
         Performs sparse matrix multiplication on input tensors based on sparsity tensor that has scale factor for each token.
 
@@ -1006,7 +1006,8 @@ void py_module(py::module& module) {
         Keyword Args:
             sparsity (ttnn.Tensor): the sparsity tensor containing the scale factor for each token for each expert. Needs to be on the device.
             nnz (int, optional): the number of non-zero values in the sparsity tensor. If not provided, it will be inferred from the sparsity tensor at runtime.
-            is_input_a_sparse (bool): boolean indicating whether input_tensor_a is sparse. If true, corresponding inputs in both input_tensor_a and input_tensor_b are skipped according to sparsity tensor. Defaults to `False`.
+            is_input_a_sparse (bool): boolean indicating whether input_tensor_a is sparse. If both a and b are true, corresponding inputs in both input_tensor_a and input_tensor_b are skipped according to sparsity tensor. Defaults to `False`.
+            is_input_b_sparse (bool): boolean indicating whether input_tensor_b is sparse. If both a and b are true, corresponding inputs in both input_tensor_a and input_tensor_b are skipped according to sparsity tensor. Defaults to `True`.
             memory_config (ttnn.MemoryConfig, optional): the memory configuration of the output tensor. Defaults to `None`, which will result in using `ttnn.DRAM_MEMORY_CONFIG`.
             dtype (ttnn.DataType, optional): the data type of the output tensor. Defaults to `None`.
             program_config (MatmulProgramConfig, optional): the program configuration for the matmul operation. Defaults to `None`.
@@ -1074,6 +1075,7 @@ void py_module(py::module& module) {
                const ttnn::Tensor& sparsity,
                const std::optional<uint32_t> nnz,
                const bool is_input_a_sparse,
+               const bool is_input_b_sparse,
                const std::optional<const ttnn::MemoryConfig>& memory_config,
                const std::optional<const DataType> dtype,
                const std::optional<const MatmulProgramConfig>& program_config,
@@ -1089,6 +1091,7 @@ void py_module(py::module& module) {
                     sparsity,
                     nnz,
                     is_input_a_sparse,
+                    is_input_b_sparse,
                     memory_config,
                     dtype,
                     program_config,
@@ -1105,6 +1108,7 @@ void py_module(py::module& module) {
             py::arg("sparsity"),
             py::arg("nnz") = std::nullopt,
             py::arg("is_input_a_sparse") = false,
+            py::arg("is_input_b_sparse") = true,
             py::arg("memory_config") = std::nullopt,
             py::arg("dtype") = std::nullopt,
             py::arg("program_config") = std::nullopt,
