@@ -170,7 +170,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
     const std::vector<GlobalSemaphore>& ag_global_semaphores,
     ttnn::operations::reduction::ReduceType math_op,
     const std::optional<ttnn::MemoryConfig>& memory_config,
-    const std::optional<ttnn::ccl::Topology> topology,
+    ttnn::ccl::Topology topology,
     const std::optional<size_t> num_preferred_links,
     std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt) {
     MemoryConfig out_memory_config = memory_config.value_or(input_tensor.memory_config());
@@ -182,22 +182,6 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
 
     auto padded_tensor = input_tensor;
     auto initial_shape = input_tensor.logical_shape();
-    // force RS+AG by using dim 3 after padding
-    // temporary before adding support for RS dim 2
-    if (dim == 2 && input_tensor.layout() == Layout::TILE && input_tensor.dtype() != DataType::BFLOAT8_B) {
-        dim = 3;
-        uint32_t multiple = input_tensor.tensor_spec().tile().get_tile_shape()[1] * num_devices;
-        uint32_t next_aligned_tile = tt::div_up(input_tensor.padded_shape()[3], multiple) * multiple;
-        // pad with zeros to next aligned tile size
-        std::array<uint32_t, 4> new_padded_shape = {
-            input_tensor.padded_shape()[0],
-            input_tensor.padded_shape()[1],
-            input_tensor.padded_shape()[2],
-            input_tensor.padded_shape()[3]};
-        new_padded_shape[3] = next_aligned_tile;
-        padded_tensor =
-            ttnn::pad(input_tensor, tt::tt_metal::Array4D(new_padded_shape), tt::tt_metal::Array4D({0, 0, 0, 0}), 0);
-    }
     auto composite_dim = (dim == padded_tensor.padded_shape().size()) ? 0 : dim;
     bool composite_all_gather =
         composite_common::use_composite_all_gather(padded_tensor, composite_dim, out_memory_config);
@@ -266,13 +250,6 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
         use_llama_sharded,
         barrier_semaphores[1]);
     scattered_tensor.deallocate();
-    // slice to inital shape if needed using slice
-    if (gathered.logical_shape() != initial_shape) {
-        ttnn::SmallVector<uint32_t> begins = {0, 0, 0, 0};
-        ttnn::SmallVector<uint32_t> ends = {initial_shape[0], initial_shape[1], initial_shape[2], initial_shape[3]};
-        ttnn::SmallVector<uint32_t> step = {1, 1, 1, 1};
-        gathered = ttnn::slice(gathered, begins, ends, step);
-    }
     if (change_mem_config) {
         gathered = ttnn::to_memory_config(gathered, out_memory_config, std::nullopt);
     }
@@ -288,7 +265,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
     const std::optional<std::vector<GlobalSemaphore>>& ag_global_semaphores,
     ttnn::operations::reduction::ReduceType math_op,
     const std::optional<ttnn::MemoryConfig>& memory_config,
-    ttnn::ccl::Topology topology,
+    const std::optional<ttnn::ccl::Topology> topology,
     const std::optional<size_t> num_preferred_links,
     std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt) {
     MemoryConfig out_memory_config = memory_config.value_or(input_tensor.memory_config());
@@ -343,6 +320,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
     padded_tensor.deallocate();
     ttnn::Tensor scattered_tensor;
     if (rs_global_semaphores.has_value() && barrier_semaphores.has_value()) {
+        TT_FATAL(topology.has_value(), "Topology is required for experimentalreduce scatter");
         scattered_tensor = ttnn::operations::experimental::ccl::reduce_scatter_minimal_async(
             interleaved_tensor,
             std::nullopt,
@@ -352,7 +330,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
             num_preferred_links.value_or(1),
             change_mem_config ? std::nullopt : std::optional<MemoryConfig>(out_memory_config),
             std::nullopt,
-            topology,
+            topology.value(),
             worker_subdevice_id_opt,
             cluster_axis);
     } else {
@@ -370,12 +348,14 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
     ttnn::Tensor gathered;
     if (ag_global_semaphores.has_value() && barrier_semaphores.has_value()) {
         TT_FATAL(barrier_semaphores.value().size() == 2, "Barrier semaphores must be of size 2");
+        TT_FATAL(topology.has_value(), "Topology is required for all gather");
+        TT_FATAL(cluster_axis.has_value(), "Cluster axis is required for all gather");
         gathered = ttnn::operations::experimental::ccl::all_gather_async(
             scattered_tensor,
             dim,
-            cluster_axis,
+            cluster_axis.value(),
             mesh_device,
-            topology,
+            topology.value(),
             ag_global_semaphores.value(),
             std::nullopt,
             change_mem_config ? std::nullopt : std::optional<MemoryConfig>(out_memory_config),
@@ -396,13 +376,6 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
             topology);
     }
     scattered_tensor.deallocate();
-    // slice to inital shape if needed using slice
-    if (gathered.logical_shape() != initial_shape) {
-        ttnn::SmallVector<uint32_t> begins = {0, 0, 0, 0};
-        ttnn::SmallVector<uint32_t> ends = {initial_shape[0], initial_shape[1], initial_shape[2], initial_shape[3]};
-        ttnn::SmallVector<uint32_t> step = {1, 1, 1, 1};
-        gathered = ttnn::slice(gathered, begins, ends, step);
-    }
     if (change_mem_config) {
         gathered = ttnn::to_memory_config(gathered, out_memory_config, std::nullopt);
     }

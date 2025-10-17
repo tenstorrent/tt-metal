@@ -33,14 +33,14 @@ struct ExecuteAllReduceAsync {
 
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
-        const std::optional<uint32_t> cluster_axis,
+        const std::optional<std::uint32_t> cluster_axis,
         const MeshDevice& mesh_device,
         const std::optional<std::vector<GlobalSemaphore>>& barrier_semaphores,
         const std::optional<std::vector<GlobalSemaphore>>& rs_global_semaphores,
         const std::optional<std::vector<GlobalSemaphore>>& ag_global_semaphores,
         ttnn::operations::reduction::ReduceType math_op,
         const std::optional<ttnn::MemoryConfig>& memory_config,
-        ttnn::ccl::Topology topology,
+        const std::optional<ttnn::ccl::Topology> topology,
         std::optional<size_t> num_preferred_links,
         std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt);
 
