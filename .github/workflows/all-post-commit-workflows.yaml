@@ -122,6 +122,7 @@ jobs:
           { arch: wormhole_b0, runner-label: N300 }
         ]
     if: ${{ needs.find-changed-files.outputs.cmake-changed == 'true' ||
+            needs.find-changed-files.outputs.tt-metalium-changed == 'true' ||
             needs.find-changed-files.outputs.tt-nn-changed == 'true' ||
             needs.find-changed-files.outputs.tt-nn-tests-changed == 'true'
         }}

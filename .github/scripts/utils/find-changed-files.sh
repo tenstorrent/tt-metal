@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+shopt -s extglob
 
 # Determine the merge-base between main and the current branch
 MERGE_BASE=$(git merge-base origin/main HEAD)
@@ -34,32 +35,32 @@ while IFS= read -r FILE; do
         .clang-tidy|**/.clang-tidy)
             CLANG_TIDY_CONFIG_CHANGED=true
             ;;
-        tt_stl/**/*.h|tt_stl/**/*.hpp|tt_stl/**/*.c|tt_stl/**/*.cpp)
+        tt_stl/**/*.@(h|hpp|c|cpp))
             # TT-STL is so small; not going to be so fine grained; just treat it as a TT-Metalium change
             TTMETALIUM_CHANGED=true
             ANY_CODE_CHANGED=true
             ;;
-        tt_metal/**/*.h|tt_metal/**/*.hpp|tt_metal/**/*.c|tt_metal/**/*.cpp|tt_metal/**/*.py)
+        tt_metal/**/*.@(h|hpp|c|cpp|cc|py))
             TTMETALIUM_CHANGED=true
             ANY_CODE_CHANGED=true
             ;;
-        ttnn/**/*.h|ttnn/**/*.hpp|ttnn/**/*.c|ttnn/**/*.cpp|ttnn/**/*.py)
+        ttnn/**/*.@(h|hpp|c|cpp|py))
             TTNN_CHANGED=true
             ANY_CODE_CHANGED=true
             ;;
-        tests/tt_metal/**/*.h|tests/tt_metal/**/*.hpp|tests/tt_metal/**/*.c|tests/tt_metal/**/*.cpp|tests/tt_metal/**/*.py)
+        tests/tt_metal/**/*.@(h|hpp|c|cpp|py))
             TTMETALIUM_TESTS_CHANGED=true
             ANY_CODE_CHANGED=true
             ;;
-        tests/ttnn/**/*.h|tests/ttnn/**/*.hpp|tests/ttnn/**/*.c|tests/ttnn/**/*.cpp|tests/ttnn/**/*.py)
+        tests/ttnn/**/*.@(h|hpp|c|cpp|py))
             TTNN_TESTS_CHANGED=true
             ANY_CODE_CHANGED=true
             ;;
-        tt-train/**/*.h|tt-train/**/*.hpp|tt-train/**/*.c|tt-train/**/*.cpp|tt-train/**/*.py)
+        tt-train/**/*.@(h|hpp|c|cpp|py))
             TTTRAIN_CHANGED=true
             ANY_CODE_CHANGED=true
             ;;
-        tools/**/*.h|tools/**/*.hpp|tools/**/*.c|tools/**/*.cpp)
+        tools/**/*.@(h|hpp|c|cpp))
             TOOLS_CHANGED=true
             ANY_CODE_CHANGED=true
             ;;
