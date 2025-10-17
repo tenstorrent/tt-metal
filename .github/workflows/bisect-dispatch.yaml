@@ -176,17 +176,30 @@ jobs:
           cp ./tests/scripts/tt_bisect.sh ./build_bisect/
           chmod +x ./build_bisect/tt_bisect.sh
 
-          BISECT_CMD="./build_bisect/tt_bisect.sh -t ${{ inputs.timeout }} -b ${{ inputs.bad-commit }} -g ${{ inputs.good-commit }} ${{ inputs.tracy == 'true' && '-p' || '' }} -r ${{ inputs.retries }} ${{ inputs.nd-mode == 'true' && '-n' || '' }}"
-
+          # Determine which script to run
+          SCRIPT_PATH=""
           if [ -n "${{ inputs.gist-url }}" ]; then
-            BISECT_CMD="$BISECT_CMD -s /work/bisect_gist_script.sh"
+            SCRIPT_PATH="/work/bisect_gist_script.sh"
+          elif [ -n "${{ inputs.command }}" ]; then
+            # Write command to a temporary script to avoid quoting issues
+            cat > /work/bisect_command_script.sh << 'EOF'
+          #!/bin/bash
+          set -eo pipefail
+          ${{ inputs.command }}
+          EOF
+            chmod +x /work/bisect_command_script.sh
+            SCRIPT_PATH="/work/bisect_command_script.sh"
           fi
 
-          if [ -n "${{ inputs.command }}" ]; then
-            BISECT_CMD="$BISECT_CMD -f '${{ inputs.command }}'"
-          fi
-
-          eval "$BISECT_CMD"
+          # Run bisect with the script
+          ./build_bisect/tt_bisect.sh \
+            -t ${{ inputs.timeout }} \
+            -b ${{ inputs.bad-commit }} \
+            -g ${{ inputs.good-commit }} \
+            ${{ inputs.tracy == 'true' && '-p' || '' }} \
+            -r ${{ inputs.retries }} \
+            ${{ inputs.nd-mode == 'true' && '-n' || '' }} \
+            -s "$SCRIPT_PATH"
 
       - name: Upload ND results CSV
         if: ${{ hashFiles('docker-job/bisect_nd_results.csv') != '' }}
