@@ -477,7 +477,6 @@ TEST_F(MeshDeviceFixture, VerifyLogicalToVirtualMap) {
 
 // Test to ensure writing from 16B aligned L1 address to 16B aligned pinned memory works using MeshDevice
 TEST_F(UnitMeshCQSingleCardFixture, MeshL1ToPinnedMemoryAt16BAlignedAddress) {
-    using tt::tt_metal::distributed::AddProgramToMeshWorkload;
     using tt::tt_metal::distributed::EnqueueMeshWorkload;
     using tt::tt_metal::distributed::MeshCoordinate;
     using tt::tt_metal::distributed::MeshCoordinateRange;
@@ -526,19 +525,32 @@ TEST_F(UnitMeshCQSingleCardFixture, MeshL1ToPinnedMemoryAt16BAlignedAddress) {
 
     // Create program and kernel for mesh workload
     tt_metal::Program program = tt_metal::CreateProgram();
+
+    // Compute PCIe NOC0 XY encoding for the MMIO device and split 64-bit PCIe address
+    chip_id_t mmio_device_id =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device->id());
+    const auto& soc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(mmio_device_id);
+    const auto& pcie_cores = soc.get_cores(CoreType::PCIE, tt::umd::CoordSystem::NOC0);
+    TT_ASSERT(!pcie_cores.empty());
+    auto pcie_xy = pcie_cores.front();
+    uint32_t pcie_xy_enc = tt::tt_metal::MetalContext::instance().hal().noc_xy_pcie64_encoding(pcie_xy.x, pcie_xy.y);
+
+    uint32_t dst_lo = static_cast<uint32_t>(pinned_memory_device_addr & 0xFFFFFFFFull);
+    uint32_t dst_hi = static_cast<uint32_t>(pinned_memory_device_addr >> 32);
+
     CreateKernel(
         program,
-        "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/pcie_write_16b.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/pcie_write_16b_wwrite.cpp",
         logical_core,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_1,
             .noc = NOC::RISCV_0_default,
-            .compile_args = {base_l1_src_address, (uint32_t)pinned_memory_device_addr, num_16b_writes}});
+            .compile_args = {base_l1_src_address, dst_lo, dst_hi, num_16b_writes, pcie_xy_enc}});
 
     // Create mesh workload and add program
     MeshWorkload mesh_workload;
     MeshCoordinateRange device_range(target_coord, target_coord);
-    AddProgramToMeshWorkload(mesh_workload, std::move(program), device_range);
+    mesh_workload.add_program(device_range, std::move(program));
 
     // Launch workload using mesh command queue
     auto& mesh_cq = mesh_device->mesh_command_queue();
