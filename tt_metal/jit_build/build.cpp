@@ -165,7 +165,7 @@ void JitBuildEnv::init(
     string common_flags = "-std=c++20 -flto=auto -ffast-math -fno-exceptions ";
 
     if (rtoptions.get_riscv_debug_info_enabled()) {
-        common_flags += "-g -fstack-usage ";
+        common_flags += "-g ";
     }
 
     this->cflags_ = common_flags;

@@ -28,7 +28,7 @@ jobs:
   smoke:
     runs-on: >-
       ${{
-        (format('tt-ubuntu-2204-{0}-metal', inputs.runner))
+        (format('tt-ubuntu-2204-{0}-stable', inputs.runner))
       }}
     container:
       image: ${{ (inputs.docker-image && format('harbor.ci.tenstorrent.net/{0}', inputs.docker-image)) || 'docker-image-unresolved!' }}
@@ -65,7 +65,6 @@ jobs:
         timeout-minutes: 2
         env:
           GTEST_COLOR: yes
-          TT_METAL_HOME: /usr/libexec/tt-metalium
           LSAN_OPTIONS: suppressions=/usr/share/tt-metalium/lsan.supp
           # TT_METAL_WATCHER: 5
           TT_METAL_WATCHER_TEST_MODE: 1
@@ -74,7 +73,7 @@ jobs:
           /usr/bin/${{ inputs.product }}-validation-smoke --gtest_filter="MeshDispatchFixture.TensixFailOnDuplicateKernelCreationDataflow" || true
 
       - name: Clear coverage from warmup
-        if: ${{ inputs.upload-coverage == 'true' }}
+        if: ${{ inputs.upload-coverage }}
         run: |
           rm -f /work/coverage/*.profraw || true
 
@@ -84,7 +83,6 @@ jobs:
         env:
           GTEST_COLOR: yes
           GTEST_OUTPUT: xml:/work/test-reports/
-          TT_METAL_HOME: /usr/libexec/tt-metalium # TODO: Need to get away from env vars!
           LSAN_OPTIONS: suppressions=/usr/share/tt-metalium/lsan.supp
           # TT_METAL_WATCHER: 5 TODO(#25305): Re-enable watcher after the race condition is fixed.
           TT_METAL_WATCHER_TEST_MODE: 1
@@ -92,7 +90,7 @@ jobs:
           /usr/bin/${{ inputs.product }}-validation-smoke
 
       - name: Merge LLVM coverage
-        if: ${{ inputs.upload-coverage == 'true' }}
+        if: ${{ inputs.upload-coverage }}
         run: |
           shopt -s nullglob || true
           files=(/work/coverage/*.profraw)
@@ -103,7 +101,7 @@ jobs:
           fi
 
       - name: Export LCOV (llvm-cov)
-        if: ${{ inputs.upload-coverage == 'true' }}
+        if: ${{ inputs.upload-coverage }}
         run: |
           if [ -f /work/coverage/coverage.profdata ]; then
             objects=(
@@ -123,14 +121,14 @@ jobs:
 
       - name: Checkout repository for Codecov mapping
         uses: actions/checkout@v4
-        if: ${{ inputs.upload-coverage == 'true' }}
+        if: ${{ inputs.upload-coverage }}
         with:
           submodules: recursive
           fetch-depth: 1
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
-        if: ${{ !cancelled() && inputs.upload-coverage == 'true' && (
+        if: ${{ !cancelled() && inputs.upload-coverage && (
               (github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false)
               || (github.event_name == 'push' && github.ref_name == 'main')
             ) }}
