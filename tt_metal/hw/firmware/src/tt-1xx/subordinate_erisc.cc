@@ -109,11 +109,10 @@ int main() {
         while (true) {
             // Wait for ERISC0 to signal that it has saved its state to L1
             if (mailboxes->ncrisc_halt.stack_save != 0) {
-                // Trigger a soft reset of ERISC0
-                static constexpr uint32_t TENSIX_SOFT_RESET_ADDR = 0xFFB121B0;
-                WRITE_REG(TENSIX_SOFT_RESET_ADDR, 1 << 11);
+                // Trigger a soft reset of ERISC0. Wait 100 cycles, and then deassert
+                WRITE_REG(RISCV_DEBUG_REG_SOFT_RESET_0, RISCV_SOFT_RESET_0_BRISC);
                 riscv_wait(100);
-                WRITE_REG(TENSIX_SOFT_RESET_ADDR, 0);
+                WRITE_REG(RISCV_DEBUG_REG_SOFT_RESET_0, RISCV_SOFT_RESET_0_NONE);
 
                 break;
             }
