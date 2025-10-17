@@ -8,6 +8,7 @@
 #include <numeric>
 #include <string>
 #include <string_view>
+#include <tt-logger/tt-logger.hpp>
 
 #include "blackhole/bh_hal.hpp"
 #include "dev_mem_map.h"
@@ -399,7 +400,8 @@ void Hal::initialize_bh() {
         if (blackhole::is_2_erisc_mode()) {
             tt::umd::tt_version min_version(1, 6, 2);
             if (!(fw_version >= min_version)) {
-                TT_THROW(
+                log_critical(
+                    tt::LogLLRuntime,
                     "In 2-erisc mode, the minimum supported ethernet firmware version is {}. Detected version is {}",
                     min_version.str(),
                     fw_version.str());
