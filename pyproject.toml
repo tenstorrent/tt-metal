@@ -52,7 +52,7 @@ skip = ["__init__.py"]
 line-length = 120
 
 [tool.scikit-build]
-build-dir = "build/{wheel_tag}"
+build-dir = "build"
 
 [tool.scikit-build.cmake]
 version = ">=3.24"
