@@ -52,7 +52,10 @@ void kernel_main() {
                     uint64_t src_noc_addr = get_noc_addr_from_bank_id<true>(bank_id, src_addr);
                     noc_async_read_one_packet_set_state(src_noc_addr, page_size_bytes);
                     for (uint32_t i = 0; i < pages_per_bank; i++) {
-                        noc_async_read_one_packet_with_state(src_addr + i * page_size_bytes, dst_addr);
+                        noc_async_read_one_packet_with_state(src_noc_addr + i * page_size_bytes, dst_addr);
+                        // noc_async_read_tile_dram_sharded_set_trid(1);
+                        // noc_async_read_tile_dram_sharded_with_state_with_trid(src_noc_addr, i * page_size_bytes,
+                        // dst_addr, 1);
                         dst_addr += page_size_bytes;
                     }
                 }
