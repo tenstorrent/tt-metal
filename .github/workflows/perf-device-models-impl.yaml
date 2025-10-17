@@ -30,9 +30,9 @@ jobs:
       matrix:
         test-info: [
           {name: "N300 WH B0 not yet ported", arch: wormhole_b0, runs-on: ["N300", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal", civ2-compatible: false, timeout: 30, job-set1: false},
-          {name: "N300 WH B0 Set 1", arch: wormhole_b0, runs-on: ["tt-ubuntu-2204-n300-metal"], machine-type: "CIv2", civ2-compatible: true, timeout: 120, job-set1: true},
-          {name: "N300 WH B0 Set 2", arch: wormhole_b0, runs-on: ["tt-ubuntu-2204-n300-metal"], machine-type: "CIv2", civ2-compatible: true, timeout: 120, job-set1: false},
-          {name: "P150 BH", arch: blackhole, runs-on: ["tt-ubuntu-2204-p150b-metal"], machine-type: "CIv2", civ2-compatible: true, timeout: 120, job-blackhole-set1: true},
+          {name: "N300 WH B0 Set 1", arch: wormhole_b0, runs-on: ["tt-ubuntu-2204-n300-stable"], machine-type: "CIv2", civ2-compatible: true, timeout: 120, job-set1: true},
+          {name: "N300 WH B0 Set 2", arch: wormhole_b0, runs-on: ["tt-ubuntu-2204-n300-stable"], machine-type: "CIv2", civ2-compatible: true, timeout: 120, job-set1: false},
+          {name: "P150 BH", arch: blackhole, runs-on: ["tt-ubuntu-2204-p150b-stable"], machine-type: "CIv2", civ2-compatible: true, timeout: 120, job-blackhole-set1: true},
         ]
     name: "${{ matrix.test-info.name }} device perf"
     runs-on: ${{ matrix.test-info.runs-on }}
@@ -354,6 +354,20 @@ jobs:
           cat Models_Device_Perf_${{ matrix.test-info.test-type }}_${CLEAN_NAME}_$(date +%Y_%m_%d).csv
           python3 models/perf/merge_device_perf_results.py $DEVICE_PERF_REPORT_FILENAME CHECK
           echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
+
+      - name: Save environment data
+        if: ${{ !cancelled() }}
+        run: python3 /work/.github/scripts/data_analysis/create_benchmark_with_environment_json.py
+
+      - name: Upload benchmark data
+        if: ${{ !cancelled() }}
+        uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
+        with:
+          ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
+          sftp-batchfile: /work/.github/actions/upload-data-via-sftp/benchmark_data_batchfile.txt
+          username: ${{ secrets.SFTP_BENCHMARK_WRITER_USERNAME }}
+          hostname: ${{ secrets.SFTP_BENCHMARK_WRITER_HOSTNAME }}
+          path: /work
 
       - name: Check device perf report exists
         id: check-device-perf-report
