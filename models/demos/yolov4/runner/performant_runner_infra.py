@@ -62,6 +62,9 @@ class YOLOv4PerformanceRunnerInfra:
             self.input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16, mesh_mapper=self.inputs_mesh_mapper)
             self.torch_input_tensor = torch_input_tensor.permute(0, 3, 1, 2)
 
+        torch_input_tensor_params = torch.randn(torch_input_shape, dtype=torch.float32)
+        self.torch_input_tensor_params = torch_input_tensor_params.permute(0, 3, 1, 2)
+
         parameters = create_yolov4_model_parameters(
             self.torch_model, self.torch_input_tensor_params, resolution, device
         )
