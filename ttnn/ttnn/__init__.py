@@ -432,4 +432,4 @@ if "TT_METAL_RUNTIME_ROOT" not in os.environ:
         # For installed packages, reference bundled data directory
         root_dir = this_dir / "tt-metalium"
 
-    ttnn._ttnn.SetRootDir(root_dir)
+    SetRootDir(root_dir)
