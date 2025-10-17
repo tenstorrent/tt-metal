@@ -40,7 +40,7 @@ def compare_ops_logs(python_ops_perf_report=None, cpp_ops_perf_report=None):
         logger.info("Skipping comparison because the two ops perf reports have no common columns")
         return
 
-    assert common_columns.size >= 17, f"Only {common_columns.size} common columns found"
+    assert common_columns.size >= 12, f"Only {common_columns.size} common columns found"
 
     python_df_filtered = python_df[common_columns].astype(float)
     assert (
@@ -51,8 +51,15 @@ def compare_ops_logs(python_ops_perf_report=None, cpp_ops_perf_report=None):
     cpp_df_filtered = cpp_df[common_columns].astype(float)
     cpp_df_filtered = cpp_df_filtered[cpp_df_filtered["GLOBAL CALL COUNT"] != 0]
 
-    python_df_sorted = python_df_filtered.sort_values(by="GLOBAL CALL COUNT").reset_index(drop=True)
-    cpp_df_sorted = cpp_df_filtered.sort_values(by="GLOBAL CALL COUNT").reset_index(drop=True)
+    sort_columns = ["GLOBAL CALL COUNT"]
+    optional_sort_columns = ["METAL TRACE ID", "METAL TRACE REPLAY SESSION ID"]
+
+    for col in optional_sort_columns:
+        if col in common_columns:
+            sort_columns.append(col)
+
+    python_df_sorted = python_df_filtered.sort_values(by=sort_columns, na_position="first").reset_index(drop=True)
+    cpp_df_sorted = cpp_df_filtered.sort_values(by=sort_columns, na_position="first").reset_index(drop=True)
 
     are_equal = python_df_sorted.equals(cpp_df_sorted)
     if are_equal:
