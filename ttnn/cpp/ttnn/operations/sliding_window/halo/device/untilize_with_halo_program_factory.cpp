@@ -533,7 +533,7 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core(
     const bool is_block_sharded = input_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
     const bool is_width_sharded = input_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
 
-    bool is_in_tiled = input_tensor.layout() == ttnn::TILE_LAYOUT;
+    bool is_in_tiled = input_tensor.layout() == ttnn::types::TILE_LAYOUT;
     const auto stick_delta = in_out_shard_size_delta * out_stick_nbytes;
     const auto buffer_delta =
         output_tensor.buffer()->aligned_size_per_bank() - input_tensor.buffer()->aligned_size_per_bank();
