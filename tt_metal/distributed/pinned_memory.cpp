@@ -103,6 +103,12 @@ void PinnedMemoryImpl::initialize_from_devices(
 
     // Create one buffer per unique MMIO device, all mapping the same aligned host memory
     std::unordered_map<chip_id_t, std::unique_ptr<tt::umd::SysmemBuffer>> mmio_buffers;
+    const auto device_arch = devices[0]->arch();
+    if (device_arch == tt::ARCH::BLACKHOLE) {
+        // On Blackhole, we can use 64-bit address space, so we don't need to use the iATU.
+        map_to_noc = false;
+        use_64bit_address_space_ = true;
+    }
 
     for (chip_id_t mmio_device_id : unique_mmio_devices) {
         auto buffer = cluster.map_sysmem_buffer(mmio_device_id, aligned_host_ptr, mapped_size, map_to_noc);
@@ -180,6 +186,10 @@ std::optional<PinnedMemory::NocAddr> PinnedMemoryImpl::get_noc_addr(chip_id_t de
     auto buffer_it = device_buffers_.find(mmio_device_id);
     if (buffer_it == device_buffers_.end()) {
         return std::nullopt;
+    }
+
+    if (use_64bit_address_space_) {
+        return PinnedMemory::NocAddr{buffer_it->second->get_device_io_addr(host_offset_), mmio_device_id};
     }
 
     auto noc_addr_opt = buffer_it->second->get_noc_addr();
