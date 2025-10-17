@@ -176,7 +176,7 @@ public:
     std::string my_host_name() const;
     uint32_t get_rank_for_hostname(const std::string& host_name) const;
     bool is_cross_host_eth_link(AsicID asic_id, uint8_t chan_id) const;
-    bool is_external_eth_link(
+    bool is_external_eth_link_for_ubb(
         AsicID asic_id, uint8_t chan_id) const;  // TODO: This should be removed once isomorphic graphing is supported
     std::vector<chip_id_t> get_adjacent_chips_from_ethernet_connections(chip_id_t chip_id) const;
 

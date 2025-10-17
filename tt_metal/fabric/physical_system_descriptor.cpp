@@ -752,14 +752,15 @@ bool PhysicalSystemDescriptor::is_cross_host_eth_link(AsicID asic_id, uint8_t ch
     return false;
 }
 
-bool PhysicalSystemDescriptor::is_external_eth_link(AsicID asic_id, uint8_t chan_id) const {
+bool PhysicalSystemDescriptor::is_external_eth_link_for_ubb(AsicID asic_id, uint8_t chan_id) const {
     bool is_external_cable = false;
-    auto chip_id = get_chip_id_for_asic(asic_id);
-    auto board_type = cluster_->get_cluster_description()->get_board_type(chip_id);
+
+    auto board_type = asic_descriptors_.at(asic_id).board_type;
+
     if (board_type == BoardType::UBB) {
         // Use UBB ID helper to determine ASIC position on UBB systems
-        auto ubb_id = tt::tt_fabric::get_ubb_id(chip_id);
-        auto ubb_asic_id = ubb_id.asic_id;
+        auto ubb_asic_id = *asic_descriptors_.at(asic_id).asic_location;
+
         if (ubb_asic_id == 1) {
             // UBB 1 has external cables on channels 0-7
             is_external_cable = (chan_id >= 0 and chan_id <= 7);
@@ -770,24 +771,10 @@ bool PhysicalSystemDescriptor::is_external_eth_link(AsicID asic_id, uint8_t chan
             // UBB 5 has external cables on channels 4-7
             is_external_cable = (chan_id >= 4 and chan_id <= 7);
         }
-    } else if (board_type == BoardType::N300) {
-        // N300 has external cables on channels 8-9 on MMIO chips and channels 0-1 on non-MMIO chips
-        auto mmio_device_id = cluster_->get_cluster_description()->get_closest_mmio_capable_chip(chip_id);
-        if (mmio_device_id == chip_id) {
-            is_external_cable = (chan_id != 8 and chan_id != 9);
-        } else {
-            is_external_cable = (chan_id != 0 and chan_id != 1);
-        }
-    } else if (board_type == BoardType::P150) {
-        is_external_cable = (4 <= chan_id && chan_id <= 11);
-    } else if (board_type == BoardType::P300) {
-        auto asic_loc = cluster_->get_cluster_description()->get_asic_location(chip_id);
-        if (asic_loc == 1) {
-            is_external_cable = (chan_id == 2 || chan_id == 3 || chan_id == 4 || chan_id == 6);
-        } else if (asic_loc == 0) {
-            is_external_cable = (chan_id == 4 || chan_id == 5 || chan_id == 7 || chan_id == 9);
-        }
+    } else {
+        TT_THROW("Currently not implemented for board type {}", board_type);
     }
+
     return is_external_cable;
 }
 
