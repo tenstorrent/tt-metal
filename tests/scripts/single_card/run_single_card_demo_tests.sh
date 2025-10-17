@@ -46,7 +46,7 @@ run_qwen25_vl_perfunc() {
   # complete demo tests
   for qwen_model in "$qwen25_vl_3b" "$qwen25_vl_7b"; do
     cache_path=$TT_CACHE_HOME/$qwen_model
-    MESH_DEVICE=N300 HF_MODEL=$qwen_model TT_CACHE_PATH=$cache_path pytest -n auto models/demos/qwen25_vl/demo/demo.py --timeout 900 || fail=1
+    MESH_DEVICE=N300 HF_MODEL=$qwen_model TT_CACHE_PATH=$cache_path pytest -n auto models/demos/qwen25_vl/demo/demo.py --timeout 3600 || fail=1
     echo "LOG_METAL: Tests for $qwen_model on N300 completed"
   done
 

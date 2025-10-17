@@ -221,7 +221,7 @@ jobs:
             -e ARCH_NAME=${{ inputs.arch }}
             ${{ matrix.test-group.civ2-compatible && '-e TT_GH_CI_INFRA=1' || '' }}
             ${{ !matrix.test-group.civ2-compatible && '-e HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub' || '' }}
-            -v /mnt/MLPerf:/mnt/MLPerf:ro
+            -v /mnt/MLPerf:/mnt/MLPerf
             --cap-add=ALL
             --security-opt seccomp=unconfined
             --ulimit nproc=65536:65536
