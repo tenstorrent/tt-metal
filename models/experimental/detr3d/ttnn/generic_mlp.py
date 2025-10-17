@@ -39,6 +39,7 @@ class TtnnGenericMLP(LightweightModule):
                         device,
                         activation=activation,
                         return_dims=True,
+                        shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
                     )
                 )
 

@@ -2,28 +2,86 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import math
 import torch
 import ttnn
 import numpy as np
 from models.common.lightweightmodule import LightweightModule
-from models.experimental.detr3d.ttnn.utils import shift_scale_points_ttnn
+
+
+def shift_scale_points_ttnn(pred_xyz, src_range, device=None):
+    """
+    pred_xyz: B x N x 3
+    src_range: [[B x 3], [B x 3]] - min and max XYZ coords
+    dst_range: [[B x 3], [B x 3]] - min and max XYZ coords
+    """
+
+    dst_range = [
+        ttnn.zeros((src_range[0].shape[0], 3), dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT),
+        ttnn.ones((src_range[0].shape[0], 3), dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT),
+    ]
+
+    assert src_range[0].shape[0] == pred_xyz.shape[0]
+    assert dst_range[0].shape[0] == pred_xyz.shape[0]
+    assert src_range[0].shape[-1] == pred_xyz.shape[-1]
+    assert src_range[0].shape == src_range[1].shape
+    assert dst_range[0].shape == dst_range[1].shape
+    assert src_range[0].shape == dst_range[1].shape
+
+    src_range[0] = ttnn.unsqueeze(src_range[0], 1)
+    src_range[1] = ttnn.unsqueeze(src_range[1], 1)
+    dst_range[0] = ttnn.unsqueeze(dst_range[0], 1)
+    dst_range[1] = ttnn.unsqueeze(dst_range[1], 1)
+
+    src_diff = src_range[1] - src_range[0]
+    dst_diff = dst_range[1] - dst_range[0]
+    prop_xyz = pred_xyz - src_range[0]
+    prop_xyz = prop_xyz * dst_diff
+    prop_xyz = ttnn.div(
+        prop_xyz,
+        src_diff,
+        accurate_mode=True,
+        round_mode=None,
+    )
+    prop_xyz = prop_xyz + dst_range[0]
+
+    ttnn.deallocate(src_diff)
+    ttnn.deallocate(dst_diff)
+    ttnn.deallocate(dst_range[0])
+    ttnn.deallocate(dst_range[1])
+
+    return prop_xyz
 
 
 class TtnnPositionEmbeddingCoordsSine(LightweightModule):
     def __init__(
         self,
+        temperature=10000,
         normalize=False,
+        scale=None,
         pos_type="fourier",
-        parameters=None,
+        d_pos=None,
+        d_in=3,
+        gauss_scale=1.0,
         device=None,
     ):
         super().__init__()
+        self.temperature = temperature
         self.normalize = normalize
         self.device = device
+        if scale is not None and normalize is False:
+            raise ValueError("normalize should be True if scale is passed")
+        if scale is None:
+            scale = 2 * math.pi
         self.pos_type = pos_type
+        self.scale = scale
         if self.pos_type == "fourier":
-            assert parameters is not None
-            self.gauss_B = parameters.gauss_B
+            assert d_pos is not None
+            assert d_pos % 2 == 0
+            # define a gaussian matrix input_ch -> output_ch
+            B = torch.empty((d_in, d_pos // 2)).normal_()
+            B *= gauss_scale
+            self.gauss_B = ttnn.from_torch(B, dtype=ttnn.bfloat16, device=self.device, layout=ttnn.TILE_LAYOUT)
         else:
             raise ValueError(f"Unknown {self.pos_type}, only fourier is currently supported")
 
@@ -72,10 +130,4 @@ class TtnnPositionEmbeddingCoordsSine(LightweightModule):
         else:
             input_range_ttnn = input_range
         assert len(xyz_ttnn.shape) == 3
-        embeddings = self.get_fourier_embeddings(xyz_ttnn, input_range_ttnn)
-        if isinstance(xyz, torch.Tensor):
-            ttnn.deallocate(xyz_ttnn)
-        if isinstance(input_range[0], torch.Tensor):
-            ttnn.deallocate(input_range_ttnn[0])
-            ttnn.deallocate(input_range_ttnn[1])
-        return embeddings
+        return self.get_fourier_embeddings(xyz_ttnn, input_range_ttnn)

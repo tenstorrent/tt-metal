@@ -8,7 +8,7 @@ import pytest
 
 from loguru import logger
 from ttnn.model_preprocessing import preprocess_model_parameters
-from models.common.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
+from models.common.utility_functions import comp_allclose, comp_pcc
 from models.experimental.detr3d.ttnn.custom_preprocessing import create_custom_mesh_preprocessor
 
 from models.experimental.detr3d.reference.model_3detr import (
@@ -38,7 +38,6 @@ def compute_mask(device, xyz, radius, dist=None):
 
 
 @torch.no_grad()
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "batch_size, seq_len, d_model, nhead, normalize_before, masking_radius, weight_key_prefix",
     [
@@ -145,7 +144,6 @@ def test_transformer_encoder_layer_inference(
 
 
 @torch.no_grad()
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "d_model, nhead, dim_feedforward, normalize_before, use_ffn",
     [
