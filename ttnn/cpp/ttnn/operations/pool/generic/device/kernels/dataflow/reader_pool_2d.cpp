@@ -251,7 +251,7 @@ ALWI void fill_scalar(
     // second half of the condition counter == scalar_start + 1 || counter == scalar_start + 3.
     if (counter < scalar_end && (counter == scalar_start || counter == scalar_start + 1 ||
                                  (split_reader && (counter == scalar_start + 2 || counter == scalar_start + 3)))) {
-        fill_with_val(get_write_ptr(in_scalar_cb_id), TILE_WIDTH, scalar_value, false);
+        fill_with_val(get_write_ptr(in_scalar_cb_id), FACE_WIDTH, scalar_value, false);
     }
     cb_push_back(in_scalar_cb_id, 1);
     counter++;
@@ -356,7 +356,7 @@ void kernel_main() {
 
     // initialize the scalar CB
     if constexpr (reader_id == 0 && one_scalar_per_core) {
-        fill_with_val(get_write_ptr(in_scalar_cb_id_0), TILE_WIDTH, bf16_scalar >> 16);
+        fill_with_val(get_write_ptr(in_scalar_cb_id_0), FACE_WIDTH, bf16_scalar >> 16);
         cb_push_back(in_scalar_cb_id_0, 1);
     }
 
