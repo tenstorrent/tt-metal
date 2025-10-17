@@ -166,10 +166,9 @@ jobs:
           # Create rich PR body
           cat > ../../../pr_body.md << EOF
           ╔═════════════════════════════════════════════════╗
-          ║   THIS IS AN AUTOMATED PULL REQUEST CREATED     ║
-          ║             BY THE LLK UPLIFT BOT               ║
+          ║    THIS IS AN AUTOMATED PULL REQUEST CREATED    ║
+          ║              BY THE LLK UPLIFT BOT              ║
           ╚═════════════════════════════════════════════════╝
-
           ## 📋 Summary
           This PR updates the LLK submodule to the latest version from the main branch.
 
