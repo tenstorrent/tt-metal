@@ -61,7 +61,6 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/graph_tracking.hpp
     api/tt-metalium/hal.hpp
     api/tt-metalium/hal_types.hpp
-    api/tt-metalium/hlk_desc.hpp
     api/tt-metalium/host_api.hpp
     api/tt-metalium/host_buffer.hpp
     api/tt-metalium/kernel_types.hpp
