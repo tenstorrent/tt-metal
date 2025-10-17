@@ -145,8 +145,10 @@ def generate_test_file(json_file, ref_file, ttnn_file, output_file="test_generat
         # Generate pytest test functions
         for func_name, input_lists in func_to_inputs.items():
             if func_name not in ref_sources:
+                print(func_name + " not found in reference sources, skipping...")
                 continue
-            if "torch." not in ref_sources[func_name] and "main" not in func_name:
+            if "COMPOSITE" not in func_name or not func_name.split("COMPOSITE_")[-1].isdigit():
+                print(func_name + " is not a composite function, skipping...")
                 continue
             # parametrize uses single argument: input_specs
             param_values = []
