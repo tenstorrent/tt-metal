@@ -153,9 +153,9 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
 
     auto in0_tensor_shape = input_tensor.padded_shape();
     auto in1_tensor_shape = weight_tensor.padded_shape();
-    uint32_t M = in0_tensor_shape[0];
-    uint32_t K = in0_tensor_shape[1];
-    uint32_t N = in1_tensor_shape[1];
+    uint32_t M = in0_tensor_shape[-2];
+    uint32_t K = in0_tensor_shape[-1];
+    uint32_t N = in1_tensor_shape[-1];
 
     uint32_t M_tiles = M / tt::constants::TILE_HEIGHT;
     uint32_t K_tiles = K / tt::constants::TILE_WIDTH;
