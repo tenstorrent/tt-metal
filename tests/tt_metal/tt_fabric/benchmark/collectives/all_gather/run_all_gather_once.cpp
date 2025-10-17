@@ -295,46 +295,6 @@ Notes:
     std::cerr << "[host] rx_xy=(" << (int)rx_xy.x << "," << (int)rx_xy.y << ") sem_l1=0x" << std::hex
               << gsem_done->address() << std::dec << "\n";
 
-    // --- Local self-copy path on a different core, inside the same sender_prog ---
-    {
-        // Create a CB on p.receiver_core (separate from the fabric sender core)
-        const uint32_t CB_ID = tt::CBIndex::c_0;
-        auto cb_cfg_local = tt::tt_metal::CircularBufferConfig(8 * p.page_size, {{CB_ID, tt::DataFormat::Float16}})
-                                .set_page_size(CB_ID, p.page_size);
-        (void)tt::tt_metal::CreateCircularBuffer(sender_prog, p.receiver_core, cb_cfg_local);
-
-        // Local reader (DRAM src_buf -> CB) on p.receiver_core / RISCV_0
-        std::vector<uint32_t> local_reader_cta;
-        tt::tt_metal::TensorAccessorArgs(*src_buf).append_to(local_reader_cta);
-        local_reader_cta.push_back(1u /*SRC_IS_DRAM*/);
-        local_reader_cta.push_back(NUM_PAGES);
-        local_reader_cta.push_back(p.page_size);
-        auto local_reader_k = tt::tt_metal::CreateKernel(
-            sender_prog,
-            std::string(KDIR) + "all_gather_tx_reader_to_cb.cpp",
-            p.receiver_core,
-            tt::tt_metal::DataMovementConfig{
-                .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-                .noc = tt::tt_metal::NOC::RISCV_0_default,
-                .compile_args = local_reader_cta});
-        tt::tt_metal::SetRuntimeArgs(sender_prog, local_reader_k, p.receiver_core, {(uint32_t)src_buf->address()});
-
-        // Local writer (CB -> dst_buf on THIS chip via NoC) on p.receiver_core / RISCV_1
-        std::vector<uint32_t> local_writer_cta;
-        tt::tt_metal::TensorAccessorArgs(*dst_buf).append_to(local_writer_cta);
-        local_writer_cta.push_back(NUM_PAGES);
-        local_writer_cta.push_back(p.page_size);
-        auto local_writer_k = tt::tt_metal::CreateKernel(
-            sender_prog,
-            std::string(KDIR) + "all_gather_local_writer_cb_to_self.cpp",
-            p.receiver_core,
-            tt::tt_metal::DataMovementConfig{
-                .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
-                .noc = tt::tt_metal::NOC::RISCV_0_default,
-                .compile_args = local_writer_cta});
-        tt::tt_metal::SetRuntimeArgs(sender_prog, local_writer_k, p.receiver_core, {(uint32_t)dst_buf->address()});
-    }
-
     // -------------------------- end PROGRAM FACTORY --------------------------
 
     // Phase A hops: bounding box of all receivers relative to sender
@@ -508,6 +468,15 @@ Notes:
     std::cerr << "[host] hops E/W/N/S=" << e_hops << "/" << w_hops << "/" << n_hops << "/" << s_hops
               << " leg_mask=" << leg_mask << " receivers=" << dst_coords.size() << "\n";
     tt::tt_metal::SetRuntimeArgs(sender_prog, writer_k, p.sender_core, writer_rt);
+
+    // Post a local receiver on the sender chip (waits on the same global semaphore)
+    auto rx_wait_self_k = tt::tt_metal::CreateKernel(
+        sender_prog,
+        std::string(KDIR) + "all_gather_rx.cpp",
+        p.receiver_core,
+        tt::tt_metal::DataMovementConfig{
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = tt::tt_metal::NOC::RISCV_0_default});
+    tt::tt_metal::SetRuntimeArgs(sender_prog, rx_wait_self_k, p.receiver_core, {gsem_done->address(), 1u});
 
     // Build one workload that contains both RX and TX so they run together.
     auto workload = Dist::MeshWorkload();

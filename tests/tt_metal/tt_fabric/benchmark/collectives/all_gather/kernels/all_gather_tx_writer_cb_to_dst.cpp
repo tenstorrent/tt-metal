@@ -224,6 +224,12 @@ void kernel_main() {
             conn_E.send_payload_flush_non_blocking_from_address((uint32_t)hdr_E, sizeof(PACKET_HEADER_TYPE));
             DPRINT << "writer:E after send_payload_blocking_from_address" << i << ENDL();
         }
+        // --- Loopback on this chip: write to receiver core's DRAM via NoC-0 using RX coords ---
+        // Build a NoC-0 address for the destination page at (rx_noc_x, rx_noc_y).
+        const uint32_t dst_page_byte_addr = dst_base + i * PAGE_SIZE;
+        const uint64_t self_noc0_addr = get_noc_addr(rx_noc_x, rx_noc_y, dst_page_byte_addr);
+        noc_async_write(page_l1_addr, self_noc0_addr, PAGE_SIZE);
+
         DPRINT << "writer: Before cb_pop_front" << i << ENDL();
         cb_pop_front(CB_ID, 1);
         DPRINT << "writer: After cb_pop_front" << i << ENDL();
@@ -305,5 +311,10 @@ void kernel_main() {
     if (use_S) {
         conn_S.close();
     }
+
+    // Also signal the local receiver on this (sender) chip.
+    // This bumps the same mailbox address on the local core so rx_wait can complete here too.
+    noc_semaphore_inc(sem_noc, 1);
+
     DPRINT << "writer:done" << ENDL();
 }
