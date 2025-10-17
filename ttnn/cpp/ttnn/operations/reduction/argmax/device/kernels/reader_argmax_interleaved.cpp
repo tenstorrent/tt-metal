@@ -6,6 +6,8 @@
 
 #include "dataflow_api.h"
 
+#include "argmax_common.hpp"
+
 void kernel_main() {
     // Runtime args
     // ------------
