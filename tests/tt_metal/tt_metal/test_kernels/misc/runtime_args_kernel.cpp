@@ -9,7 +9,6 @@
 #ifdef COMPILE_FOR_TRISC
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/matmul.h"
-#include "defines_generated.h"
 #endif
 
 #ifdef DATA_MOVEMENT
