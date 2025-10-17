@@ -194,7 +194,7 @@ try_download_artifacts() {
   if [ -n "$ttmetal_artifact" ]; then
     echo "✅ Found TTMetal artifact: $ttmetal_artifact"
     if gh run download "$build_run_id" --repo tenstorrent/tt-metal --name "$ttmetal_artifact" --dir . 2>&1; then
-      echo "✅ TTMetal artifact downloaded successfully"
+      echo "✅ TTMetal artifact downloaded successfully $ttmetal_artifact"
       downloaded_any=true
     else
       echo "❌ Failed to download TTMetal artifact"
@@ -204,7 +204,7 @@ try_download_artifacts() {
   if [ -n "$eagerdist_artifact" ]; then
     echo "✅ Found eager-dist artifact: $eagerdist_artifact"
     if gh run download "$build_run_id" --repo tenstorrent/tt-metal --name "$eagerdist_artifact" --dir . 2>&1; then
-      echo "✅ Eager-dist artifact downloaded successfully"
+      echo "✅ Eager-dist artifact downloaded successfully $eagerdist_artifact"
       downloaded_any=true
     else
       echo "❌ Failed to download eager-dist artifact"
@@ -221,7 +221,8 @@ try_download_artifacts() {
 
   # Debug: List what was actually downloaded
   echo "📂 Files in current directory after download:"
-  ls -la . | head -10
+  pwd
+  ls -la .
 
   # Process downloaded artifacts
   local ttmetal_extracted=false
@@ -262,7 +263,7 @@ try_download_artifacts() {
       wheel_file="$(find . -name "*.whl" -type f | head -1)"
       if [ -n "$wheel_file" ]; then
         echo "✅ Found wheel file: $wheel_file"
-        echo "� Installing wheel with pip..."
+        echo "📦 Installing wheel with pip..."
         if pip install --force-reinstall "$wheel_file"; then
           echo "✅ Python wheel installed successfully"
           wheel_installed=true
