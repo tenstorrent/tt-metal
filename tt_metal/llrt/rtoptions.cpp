@@ -11,7 +11,7 @@
 #include <filesystem>
 #include <stdexcept>
 #include <string>
-
+#include <enchantum/enchantum.hpp>
 #include "tt_stl/assert.hpp"
 #include <umd/device/tt_core_coordinates.h>
 
@@ -34,128 +34,10 @@ const char* RunTimeDebugClassNames[RunTimeDebugClassCount] = {"N/A", "worker", "
 // Used for demonstration purposes and will be removed in the future.
 // Env variable to override the core grid configuration
 constexpr auto TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE_ENV_VAR = "TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE";
-// ============================================================================
-// ENVIRONMENT VARIABLE MAPPING TABLE
-// ============================================================================
-// Maps environment variable names to their EnvVarID for efficient lookup
 
-struct EnvVarEntry {
-    const char* name;
-    EnvVarID id;
-};
-
-static const EnvVarEntry ENV_VAR_TABLE[] = {
-    // ========================================
-    // PATH CONFIGURATION
-    // ========================================
-    {"TT_METAL_HOME", EnvVarID::TT_METAL_HOME},
-    {"TT_METAL_CACHE", EnvVarID::TT_METAL_CACHE},
-    {"TT_METAL_KERNEL_PATH", EnvVarID::TT_METAL_KERNEL_PATH},
-    {"TT_METAL_SIMULATOR", EnvVarID::TT_METAL_SIMULATOR},
-    {"TT_METAL_MOCK_CLUSTER_DESC_PATH", EnvVarID::TT_METAL_MOCK_CLUSTER_DESC_PATH},
-    {"TT_METAL_VISIBLE_DEVICES", EnvVarID::TT_METAL_VISIBLE_DEVICES},
-    {"ARCH_NAME", EnvVarID::ARCH_NAME},
-    {"TT_MESH_GRAPH_DESC_PATH", EnvVarID::TT_MESH_GRAPH_DESC_PATH},
-    {"TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE", EnvVarID::TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE},
-
-    // ========================================
-    // KERNEL EXECUTION CONTROL
-    // ========================================
-    {"TT_METAL_NULL_KERNELS", EnvVarID::TT_METAL_NULL_KERNELS},
-    {"TT_METAL_KERNELS_EARLY_RETURN", EnvVarID::TT_METAL_KERNELS_EARLY_RETURN},
-
-    // ========================================
-    // MEMORY INITIALIZATION
-    // ========================================
-    {"TT_METAL_CLEAR_L1", EnvVarID::TT_METAL_CLEAR_L1},
-    {"TT_METAL_CLEAR_DRAM", EnvVarID::TT_METAL_CLEAR_DRAM},
-
-    // ========================================
-    // DEBUG & TESTING
-    // ========================================
-    {"TT_METAL_WATCHER_TEST_MODE", EnvVarID::TT_METAL_WATCHER_TEST_MODE},
-    {"TT_METAL_KERNEL_MAP", EnvVarID::TT_METAL_KERNEL_MAP},
-    {"TT_METAL_DISPATCH_DATA_COLLECTION", EnvVarID::TT_METAL_DISPATCH_DATA_COLLECTION},
-    {"TT_METAL_GTEST_ETH_DISPATCH", EnvVarID::TT_METAL_GTEST_ETH_DISPATCH},
-    {"TT_METAL_SKIP_LOADING_FW", EnvVarID::TT_METAL_SKIP_LOADING_FW},
-    {"TT_METAL_SKIP_DELETING_BUILT_CACHE", EnvVarID::TT_METAL_SKIP_DELETING_BUILT_CACHE},
-
-    // ========================================
-    // HARDWARE CONFIGURATION
-    // ========================================
-    {"TT_METAL_ENABLE_HW_CACHE_INVALIDATION", EnvVarID::TT_METAL_ENABLE_HW_CACHE_INVALIDATION},
-    {"TT_METAL_DISABLE_RELAXED_MEM_ORDERING", EnvVarID::TT_METAL_DISABLE_RELAXED_MEM_ORDERING},
-    {"TT_METAL_ENABLE_GATHERING", EnvVarID::TT_METAL_ENABLE_GATHERING},
-    {"TT_METAL_FABRIC_TELEMETRY", EnvVarID::TT_METAL_FABRIC_TELEMETRY},
-    {"TT_METAL_FORCE_REINIT", EnvVarID::TT_METAL_FORCE_REINIT},
-    {"TT_METAL_FABRIC_BLACKHOLE_TWO_ERISC", EnvVarID::TT_METAL_FABRIC_BLACKHOLE_TWO_ERISC},
-    {"TT_METAL_LOG_KERNELS_COMPILE_COMMANDS", EnvVarID::TT_METAL_LOG_KERNELS_COMPILE_COMMANDS},
-    {"TT_METAL_SLOW_DISPATCH_MODE", EnvVarID::TT_METAL_SLOW_DISPATCH_MODE},
-    {"TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN", EnvVarID::TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN},
-    {"TT_METAL_VALIDATE_PROGRAM_BINARIES", EnvVarID::TT_METAL_VALIDATE_PROGRAM_BINARIES},
-    {"TT_METAL_DISABLE_DMA_OPS", EnvVarID::TT_METAL_DISABLE_DMA_OPS},
-    {"TT_METAL_ENABLE_ERISC_IRAM", EnvVarID::TT_METAL_ENABLE_ERISC_IRAM},
-
-    // ========================================
-    // PROFILING & PERFORMANCE
-    // ========================================
-    {"TT_METAL_DEVICE_PROFILER", EnvVarID::TT_METAL_DEVICE_PROFILER},
-    {"TT_METAL_DEVICE_PROFILER_DISPATCH", EnvVarID::TT_METAL_DEVICE_PROFILER_DISPATCH},
-    {"TT_METAL_PROFILER_SYNC", EnvVarID::TT_METAL_PROFILER_SYNC},
-    {"TT_METAL_DEVICE_PROFILER_NOC_EVENTS", EnvVarID::TT_METAL_DEVICE_PROFILER_NOC_EVENTS},
-    {"TT_METAL_DEVICE_PROFILER_NOC_EVENTS_RPT_PATH", EnvVarID::TT_METAL_DEVICE_PROFILER_NOC_EVENTS_RPT_PATH},
-    {"TT_METAL_MEM_PROFILER", EnvVarID::TT_METAL_MEM_PROFILER},
-    {"TT_METAL_TRACE_PROFILER", EnvVarID::TT_METAL_TRACE_PROFILER},
-    {"TT_METAL_PROFILER_MID_RUN_DUMP", EnvVarID::TT_METAL_PROFILER_MID_RUN_DUMP},
-    {"TT_METAL_TRACY_MID_RUN_PUSH", EnvVarID::TT_METAL_TRACY_MID_RUN_PUSH},
-    {"TT_METAL_GTEST_NUM_HW_CQS", EnvVarID::TT_METAL_GTEST_NUM_HW_CQS},
-    {"TT_METAL_ARC_DEBUG_BUFFER_SIZE", EnvVarID::TT_METAL_ARC_DEBUG_BUFFER_SIZE},
-    {"TT_METAL_OPERATION_TIMEOUT_SECONDS", EnvVarID::TT_METAL_OPERATION_TIMEOUT_SECONDS},
-
-    // ========================================
-    // WATCHER SYSTEM
-    // ========================================
-    {"TT_METAL_WATCHER", EnvVarID::TT_METAL_WATCHER},
-    {"TT_METAL_WATCHER_DUMP_ALL", EnvVarID::TT_METAL_WATCHER_DUMP_ALL},
-    {"TT_METAL_WATCHER_APPEND", EnvVarID::TT_METAL_WATCHER_APPEND},
-    {"TT_METAL_WATCHER_NOINLINE", EnvVarID::TT_METAL_WATCHER_NOINLINE},
-    {"TT_METAL_WATCHER_PHYS_COORDS", EnvVarID::TT_METAL_WATCHER_PHYS_COORDS},
-    {"TT_METAL_WATCHER_TEXT_START", EnvVarID::TT_METAL_WATCHER_TEXT_START},
-    {"TT_METAL_WATCHER_SKIP_LOGGING", EnvVarID::TT_METAL_WATCHER_SKIP_LOGGING},
-    {"TT_METAL_WATCHER_DISABLE_ASSERT", EnvVarID::TT_METAL_WATCHER_DISABLE_ASSERT},
-    {"TT_METAL_WATCHER_DISABLE_PAUSE", EnvVarID::TT_METAL_WATCHER_DISABLE_PAUSE},
-    {"TT_METAL_WATCHER_DISABLE_RING_BUFFER", EnvVarID::TT_METAL_WATCHER_DISABLE_RING_BUFFER},
-    {"TT_METAL_WATCHER_DISABLE_STACK_USAGE", EnvVarID::TT_METAL_WATCHER_DISABLE_STACK_USAGE},
-    {"TT_METAL_WATCHER_DISABLE_SANITIZE_NOC", EnvVarID::TT_METAL_WATCHER_DISABLE_SANITIZE_NOC},
-    {"TT_METAL_WATCHER_DISABLE_SANITIZE_READ_ONLY_L1", EnvVarID::TT_METAL_WATCHER_DISABLE_SANITIZE_READ_ONLY_L1},
-    {"TT_METAL_WATCHER_DISABLE_SANITIZE_WRITE_ONLY_L1", EnvVarID::TT_METAL_WATCHER_DISABLE_SANITIZE_WRITE_ONLY_L1},
-    {"TT_METAL_WATCHER_DISABLE_WAYPOINT", EnvVarID::TT_METAL_WATCHER_DISABLE_WAYPOINT},
-    {"TT_METAL_WATCHER_DISABLE_DISPATCH", EnvVarID::TT_METAL_WATCHER_DISABLE_DISPATCH},
-    {"TT_METAL_WATCHER_ENABLE_NOC_SANITIZE_LINKED_TRANSACTION",
-     EnvVarID::TT_METAL_WATCHER_ENABLE_NOC_SANITIZE_LINKED_TRANSACTION},
-
-    // ========================================
-    // INSPECTOR SYSTEM
-    // ========================================
-    {"TT_METAL_INSPECTOR", EnvVarID::TT_METAL_INSPECTOR},
-    {"TT_METAL_INSPECTOR_LOG_PATH", EnvVarID::TT_METAL_INSPECTOR_LOG_PATH},
-    {"TT_METAL_INSPECTOR_INITIALIZATION_IS_IMPORTANT", EnvVarID::TT_METAL_INSPECTOR_INITIALIZATION_IS_IMPORTANT},
-    {"TT_METAL_INSPECTOR_WARN_ON_WRITE_EXCEPTIONS", EnvVarID::TT_METAL_INSPECTOR_WARN_ON_WRITE_EXCEPTIONS},
-    {"TT_METAL_RISCV_DEBUG_INFO", EnvVarID::TT_METAL_RISCV_DEBUG_INFO},
-
-    // ========================================
-    // DEBUG PRINTING (DPRINT)
-    // ========================================
-    {"TT_METAL_DPRINT_CORES", EnvVarID::TT_METAL_DPRINT_CORES},
-    {"TT_METAL_DPRINT_ETH_CORES", EnvVarID::TT_METAL_DPRINT_ETH_CORES},
-    {"TT_METAL_DPRINT_CHIPS", EnvVarID::TT_METAL_DPRINT_CHIPS},
-    {"TT_METAL_DPRINT_RISCVS", EnvVarID::TT_METAL_DPRINT_RISCVS},
-    {"TT_METAL_DPRINT_FILE", EnvVarID::TT_METAL_DPRINT_FILE},
-    {"TT_METAL_DPRINT_ONE_FILE_PER_RISC", EnvVarID::TT_METAL_DPRINT_ONE_FILE_PER_RISC},
-    {"TT_METAL_DPRINT_PREPEND_DEVICE_CORE_RISC", EnvVarID::TT_METAL_DPRINT_PREPEND_DEVICE_CORE_RISC},
-};
+namespace {
 // Helper function to normalize directory paths using std::filesystem
-static std::string normalize_path(const char* path, const std::string& subdir = "") {
+std::string normalize_path(const char* path, const std::string& subdir = "") {
     std::filesystem::path p(path);
     if (!subdir.empty()) {
         p /= subdir;
@@ -163,16 +45,16 @@ static std::string normalize_path(const char* path, const std::string& subdir = 
     p /= "";  // Ensures trailing slash
     return p.string();
 }
+}  // namespace
 
-RunTimeOptions::RunTimeOptions() {
-    this->system_kernel_dir = "/usr/share/tenstorrent/kernels/";
-
-    profiler_enabled = false;
-    profile_dispatch_cores = false;
-    profiler_sync_enabled = false;
-    profiler_mid_run_dump = false;
-    profiler_buffer_usage_enabled = false;
-    profiler_trace_profiler = false;
+RunTimeOptions::RunTimeOptions() :
+    system_kernel_dir("/usr/share/tenstorrent/kernels/"),
+    profiler_enabled(false),
+    profile_dispatch_cores(false),
+    profiler_sync_enabled(false),
+    profiler_mid_run_dump(false),
+    profiler_buffer_usage_enabled(false),
+    profiler_trace_profiler(false) {
 #if defined(TRACY_ENABLE)
 #endif
     TT_FATAL(
@@ -348,14 +230,14 @@ const std::string& RunTimeOptions::get_root_dir() const {
 
 const std::string& RunTimeOptions::get_cache_dir() const {
     if (!this->is_cache_dir_specified()) {
-        TT_THROW("Env var {} is not set.", "TT_METAL_CACHE_ENV_VAR");
+        TT_THROW("Env var {} is not set.", "TT_METAL_CACHE");
     }
     return this->cache_dir_;
 }
 
 const std::string& RunTimeOptions::get_kernel_dir() const {
     if (!this->is_kernel_dir_specified()) {
-        TT_THROW("Env var {} is not set.", "TT_METAL_KERNEL_PATH_ENV_VAR");
+        TT_THROW("Env var {} is not set.", "TT_METAL_KERNEL_PATH");
     }
 
     return this->kernel_dir;
@@ -383,11 +265,11 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // PATH CONFIGURATION
         // ========================================
 
-        // TT_METAL_HOME
+        // TT_METAL_RUNTIME_ROOT
         // Sets the root directory of the TT-Metal installation.
         // Default: No default (must be set)
-        // Usage: export TT_METAL_HOME=/path/to/tt-metal
-        case EnvVarID::TT_METAL_HOME:
+        // Usage: export TT_METAL_RUNTIME_ROOT=/path/to/tt-metal
+        case EnvVarID::TT_METAL_RUNTIME_ROOT:
             this->is_root_dir_set = true;
             this->root_dir = normalize_path(value);
             break;
@@ -403,7 +285,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
 
         // TT_METAL_KERNEL_PATH
         // Path to kernel source files.
-        // Default: Uses TT_METAL_HOME/tt_metal/kernels if not set
+        // Default: Uses TT_METAL_RUNTIME_ROOT/tt_metal/kernels if not set
         // Usage: export TT_METAL_KERNEL_PATH=/path/to/kernels
         case EnvVarID::TT_METAL_KERNEL_PATH:
             this->is_kernel_dir_env_var_set = true;
@@ -694,6 +576,8 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         case EnvVarID::TT_METAL_GTEST_NUM_HW_CQS: try { this->set_num_hw_cqs(std::stoi(value));
             } catch (const std::invalid_argument& ia) {
                 TT_THROW("Invalid TT_METAL_GTEST_NUM_HW_CQS: {}", value);
+            } catch (const std::out_of_range&) {
+                TT_THROW("TT_METAL_GTEST_NUM_HW_CQS value out of range: {}", value);
             }
             break;
 
@@ -866,7 +750,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
 
         // TT_METAL_INSPECTOR_LOG_PATH
         // Sets the log path for inspector output.
-        // Default: Defaults to {TT_METAL_HOME}/generated/inspector
+        // Default: Defaults to {TT_METAL_RUNTIME_ROOT}/generated/inspector
         // Usage: export TT_METAL_INSPECTOR_LOG_PATH=/path/to/inspector/logs
         case EnvVarID::TT_METAL_INSPECTOR_LOG_PATH:
             if (value != nullptr) {
@@ -990,13 +874,13 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
     }
 }
 void RunTimeOptions::InitializeFromEnvVars() {
-    // Iterate through the environment variable table
-    for (const auto& entry : ENV_VAR_TABLE) {
-        const char* value = std::getenv(entry.name);
+    // Use enchantum to automatically iterate over all EnvVarID enum values
+    for (const auto [id, name] : enchantum::entries_generator<EnvVarID>) {
+        const char* value = std::getenv(name.data());
 
         // Only process if the environment variable is set
         if (value != nullptr) {
-            HandleEnvVar(entry.id, value);
+            HandleEnvVar(id, value);
         }
     }
 
@@ -1013,16 +897,6 @@ void RunTimeOptions::InitializeFromEnvVars() {
 }
 
 void RunTimeOptions::ParseWatcherEnv() {
-    const char* watcher_enable_str = getenv("TT_METAL_WATCHER");
-    if (watcher_enable_str != nullptr) {
-        int sleep_val = 0;
-        sscanf(watcher_enable_str, "%d", &sleep_val);
-        if (strstr(watcher_enable_str, "ms") == nullptr) {
-            sleep_val *= 1000;
-        }
-        watcher_settings.enabled = true;
-        watcher_settings.interval_ms = sleep_val;
-    }
     // Auto unpause is for testing only, no env var.
     watcher_settings.auto_unpause = false;
 

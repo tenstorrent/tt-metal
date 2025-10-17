@@ -34,7 +34,7 @@ enum class EnvVarID {
     // ========================================
     // PATH CONFIGURATION
     // ========================================
-    TT_METAL_HOME,                            // Root directory of TT-Metal installation
+    TT_METAL_RUNTIME_ROOT,                    // Root directory of TT-Metal installation
     TT_METAL_CACHE,                           // Cache directory for compiled kernels
     TT_METAL_KERNEL_PATH,                     // Path to kernel source files
     TT_METAL_SIMULATOR,                       // Path to simulator executable
@@ -433,7 +433,7 @@ public:
         return feature_targets[feature].cores;
     }
     void set_feature_cores(RunTimeDebugFeatures feature, std::map<CoreType, std::vector<CoreCoord>> cores) {
-        feature_targets[feature].cores = cores;
+        feature_targets[feature].cores = std::move(cores);
     }
     // An alternative to setting cores by range, a flag to enable all.
     void set_feature_all_cores(RunTimeDebugFeatures feature, CoreType core_type, int all_cores) {
@@ -455,7 +455,7 @@ public:
         return feature_targets[feature].chip_ids;
     }
     void set_feature_chip_ids(RunTimeDebugFeatures feature, std::vector<int> chip_ids) {
-        feature_targets[feature].chip_ids = chip_ids;
+        feature_targets[feature].chip_ids = std::move(chip_ids);
     }
     // An alternative to setting cores by range, a flag to enable all.
     void set_feature_all_chips(RunTimeDebugFeatures feature, bool all_chips) {
@@ -470,7 +470,7 @@ public:
     }
     std::string get_feature_file_name(RunTimeDebugFeatures feature) const { return feature_targets[feature].file_name; }
     void set_feature_file_name(RunTimeDebugFeatures feature, std::string file_name) {
-        feature_targets[feature].file_name = file_name;
+        feature_targets[feature].file_name = std::move(file_name);
     }
     bool get_feature_one_file_per_risc(RunTimeDebugFeatures feature) const {
         return feature_targets[feature].one_file_per_risc;
@@ -486,7 +486,7 @@ public:
     }
     TargetSelection get_feature_targets(RunTimeDebugFeatures feature) const { return feature_targets[feature]; }
     void set_feature_targets(RunTimeDebugFeatures feature, TargetSelection targets) {
-        feature_targets[feature] = targets;
+        feature_targets[feature] = std::move(targets);
     }
 
     bool get_record_noc_transfers() const { return record_noc_transfer_data; }
@@ -650,6 +650,8 @@ public:
     TargetDevice get_target_device() const { return runtime_target_device_; }
 
     std::chrono::duration<float> get_timeout_duration_for_operations() const { return timeout_duration_for_operations; }
+    // Mesh graph descriptor version accessor
+    bool get_use_mesh_graph_descriptor_2_0() const { return use_mesh_graph_descriptor_2_0; }
 
     // Parse all feature-specific environment variables, after hal is initialized.
     // (Needed because syntax of some env vars is arch-dependent.)
@@ -668,7 +670,6 @@ private:
     void ParseFeatureFileName(RunTimeDebugFeatures feature, const std::string& env_var);
     void ParseFeatureOneFilePerRisc(RunTimeDebugFeatures feature, const std::string& env_var);
     void ParseFeaturePrependDeviceCoreRisc(RunTimeDebugFeatures feature, const std::string& env_var);
-    // New table-driven environment variable handling
     void HandleEnvVar(EnvVarID id, const char* value);  // Handle single environment variable
     void InitializeFromEnvVars();                       // Initialize all environment variables from table
     // Helper function to parse watcher-specific environment variables.
