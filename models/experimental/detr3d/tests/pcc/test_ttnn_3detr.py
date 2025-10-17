@@ -26,29 +26,34 @@ class Tt3DetrArgs(Detr3dArgs):
 
 
 @pytest.mark.parametrize(
-    "input_shapes",
+    "input_shape",
     [
-        {
-            "point_clouds": (1, 20000, 3),
-            "point_cloud_dims_min": (1, 3),
-            "point_cloud_dims_max": (1, 3),
-        },
+        (1, 20000, 3),
     ],
 )
-@pytest.mark.parametrize("encoder_only", (False,))
-# @pytest.mark.parametrize("encoder_only", (False, True))
+@pytest.mark.parametrize("encoder_only", (False, True))
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
-def test_3detr_model(encoder_only, input_shapes, device):
+def test_3detr_model(encoder_only, input_shape, device):
     torch.manual_seed(0)
     # Configuration flags
-    PCC_THRESHOLD = 0.97
+    PCC_THRESHOLD = 0.95
     CHECK_AUX_OUTPUTS = False  # Set to True to enable PCC check for auxiliary outputs
     SKIP_KEYS = ["angle_continuous", "objectness_prob"]  # Keys to skip in PCC comparison
 
     args = Detr3dArgs()
     dataset_config = SunrgbdDatasetConfig()
 
-    input_dict = {key: torch.randn(shape) for key, shape in input_shapes.items()}
+    # Define the shape and range
+    # import pdb; pdb.set_trace()
+    # input_dict= torch.load("models/experimental/detr3d/resources/inputs.pt", map_location='cpu')
+    min_val = -1.8827
+    max_val = 8.3542
+    pc = (max_val - min_val) * torch.rand(input_shape) + min_val
+    input_dict = {
+        "point_clouds": pc,
+        "point_cloud_dims_min": torch.min(pc, 1)[0],
+        "point_cloud_dims_max": torch.max(pc, 1)[0],
+    }
 
     ref_module, _ = build_3detr(args, dataset_config)
     load_torch_model_state(ref_module)

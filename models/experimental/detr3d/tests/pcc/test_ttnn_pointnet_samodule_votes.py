@@ -16,7 +16,7 @@ from models.experimental.detr3d.common import load_torch_model_state
 
 
 @pytest.mark.parametrize(
-    "mlp, npoint, radius, nsample, bn, use_xyz, pooling, sigma, normalize_xyz, sample_uniformly, ret_unique_cnt,xyz_shape,features_shape,inds_shape, weight_key_prefix",
+    "mlp, npoint, radius, nsample, bn, use_xyz, pooling, sigma, normalize_xyz, sample_uniformly, ret_unique_cnt,xyz_shape,features_shape, weight_key_prefix",
     [
         (
             [0, 64, 128, 256],  # mlp
@@ -32,7 +32,6 @@ from models.experimental.detr3d.common import load_torch_model_state
             False,  # ret_unique_cnt
             (1, 20000, 3),  # xyz
             None,  # features
-            None,  # inds
             "pre_encoder",
         ),
         (
@@ -49,7 +48,6 @@ from models.experimental.detr3d.common import load_torch_model_state
             False,  # ret_unique_cnt
             (1, 2048, 3),  # xyz
             (1, 256, 2048),  # features
-            None,  # inds
             "encoder.interim_downsampling",
         ),
     ],
@@ -69,7 +67,6 @@ def test_pointnet_samodule_votes(
     ret_unique_cnt,
     xyz_shape,
     features_shape,
-    inds_shape,
     weight_key_prefix,
     device,
 ):
@@ -85,28 +82,18 @@ def test_pointnet_samodule_votes(
         normalize_xyz=normalize_xyz,
         sample_uniformly=sample_uniformly,
         ret_unique_cnt=ret_unique_cnt,
-    ).to(torch.bfloat16)
+    )
     load_torch_model_state(torch_model, weight_key_prefix)
 
-    if xyz_shape is not None:
-        xyz = torch.randn(xyz_shape, dtype=torch.bfloat16)
-    else:
-        xyz = None
-
+    xyz = torch.randn(xyz_shape)
     if features_shape is not None:
-        features = torch.randn(features_shape, dtype=torch.bfloat16)
+        features = torch.randn(features_shape)
     else:
         features = None
-
-    if inds_shape is not None:
-        inds = torch.randn(inds_shape, dtype=torch.bfloat16)
-    else:
-        inds = None
-
-    ref_out = torch_model(xyz=xyz, features=features, inds=inds)
+    ref_out = torch_model(xyz=xyz, features=features, inds=None)
 
     parameters = preprocess_model_parameters(
-        initialize_model=lambda: torch_model.mlp_module,
+        initialize_model=lambda: torch_model.mlp_module.to(torch.bfloat16),
         custom_preprocessor=create_custom_mesh_preprocessor(),
         device=device,
     )
@@ -126,26 +113,14 @@ def test_pointnet_samodule_votes(
         device,
     )
 
-    ttnn_xyz = ttnn.from_torch(
-        xyz,
-        dtype=ttnn.bfloat16,
-        device=device,
-    )
-    ttnn_features = ttnn_inds = None
+    ttnn_features = None
     if features is not None:
         ttnn_features = ttnn.from_torch(
             features,
             dtype=ttnn.bfloat16,
             device=device,
         )
-    if inds is not None:
-        ttnn_inds = ttnn.from_torch(
-            inds,
-            dtype=ttnn.bfloat16,
-            device=device,
-        )
-
-    tt_output = ttnn_model(xyz=ttnn_xyz, features=ttnn_features, inds=ttnn_inds)
+    tt_output = ttnn_model(xyz=xyz, features=ttnn_features, inds=None)
 
     ttnn_torch_out = []
     all_passing = True

@@ -7,50 +7,7 @@ import torch
 import ttnn
 import numpy as np
 from models.common.lightweightmodule import LightweightModule
-
-
-def shift_scale_points_ttnn(pred_xyz, src_range, device=None):
-    """
-    pred_xyz: B x N x 3
-    src_range: [[B x 3], [B x 3]] - min and max XYZ coords
-    dst_range: [[B x 3], [B x 3]] - min and max XYZ coords
-    """
-
-    dst_range = [
-        ttnn.zeros((src_range[0].shape[0], 3), dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT),
-        ttnn.ones((src_range[0].shape[0], 3), dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT),
-    ]
-
-    assert src_range[0].shape[0] == pred_xyz.shape[0]
-    assert dst_range[0].shape[0] == pred_xyz.shape[0]
-    assert src_range[0].shape[-1] == pred_xyz.shape[-1]
-    assert src_range[0].shape == src_range[1].shape
-    assert dst_range[0].shape == dst_range[1].shape
-    assert src_range[0].shape == dst_range[1].shape
-
-    src_range[0] = ttnn.unsqueeze(src_range[0], 1)
-    src_range[1] = ttnn.unsqueeze(src_range[1], 1)
-    dst_range[0] = ttnn.unsqueeze(dst_range[0], 1)
-    dst_range[1] = ttnn.unsqueeze(dst_range[1], 1)
-
-    src_diff = src_range[1] - src_range[0]
-    dst_diff = dst_range[1] - dst_range[0]
-    prop_xyz = pred_xyz - src_range[0]
-    prop_xyz = prop_xyz * dst_diff
-    prop_xyz = ttnn.div(
-        prop_xyz,
-        src_diff,
-        accurate_mode=True,
-        round_mode=None,
-    )
-    prop_xyz = prop_xyz + dst_range[0]
-
-    ttnn.deallocate(src_diff)
-    ttnn.deallocate(dst_diff)
-    ttnn.deallocate(dst_range[0])
-    ttnn.deallocate(dst_range[1])
-
-    return prop_xyz
+from models.experimental.detr3d.ttnn.utils import shift_scale_points_ttnn
 
 
 class TtnnPositionEmbeddingCoordsSine(LightweightModule):
