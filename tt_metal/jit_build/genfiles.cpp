@@ -341,11 +341,13 @@ void generate_dst_accum_mode_descriptor(JitBuildOptions& options) {
 
     file_stream.open(dst_accum_format_descriptor);
 
+    file_stream << "#ifndef DST_ACCUM_MODE  // XXX:  Why is DST_ACCUM_MODE sometimes defined as a macro????" << endl;
     if (options.fp32_dest_acc_en == 0) {
         file_stream << "constexpr bool DST_ACCUM_MODE = false;" << endl;
     } else {
         file_stream << "constexpr bool DST_ACCUM_MODE = true;" << endl;
     }
+    file_stream << "#endif" << endl;
 
     file_stream.close();
 }
