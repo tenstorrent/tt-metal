@@ -241,22 +241,17 @@ using EthChannelBuffers = ChannelBuffersHelper<tt::tt_fabric::EthChannelBuffer, 
 template <typename HEADER_TYPE, auto& ChannelBuffers>
 using SenderEthChannelBuffers = ChannelBuffersHelper<tt::tt_fabric::SenderEthChannel, HEADER_TYPE, ChannelBuffers>;
 
-// Note that this class implements a mix of interfaces and will need to be separated to just be different
-// interface types altogether.
-//
-// The two types of interfaces implemented/supported here are hardcoded by producer type (EDM or Worker)
-// but they should be split based on credit exchange protocol (read/write counter vs free slots)
-// Additionally, a nice to have would be if we could further create types for different credit
-// storage mechanisms (e.g. L1 vs stream registers)
-//
-template <uint8_t WORKER_HANDSHAKE_NOC, uint8_t NUM_BUFFERS>
+// Base class for channel worker interfaces using CRTP (Curiously Recurring Template Pattern).
+// This base class contains members and methods that don't depend on NUM_BUFFERS.
+// Derived classes implement specific counter management strategies.
+template <uint8_t WORKER_HANDSHAKE_NOC, typename DERIVED>
 struct EdmChannelWorkerInterface {
     EdmChannelWorkerInterface() :
         worker_location_info_ptr(nullptr),
         cached_worker_semaphore_address(0),
         connection_live_semaphore(nullptr),
-        sender_sync_noc_cmd_buf(write_at_cmd_buf),
-        read_counter_update_src_address(0) {}
+        sender_sync_noc_cmd_buf(write_at_cmd_buf) {}
+
     EdmChannelWorkerInterface(
         // TODO: PERF: See if we can make this non-volatile and then only
         // mark it volatile when we know we need to reload it (i.e. after we receive a
@@ -266,19 +261,15 @@ struct EdmChannelWorkerInterface {
         // packet... Then we'll also be able to cache the uint64_t addr of the worker
         // semaphore directly (saving on regenerating it each time)
         volatile EDMChannelWorkerLocationInfo* worker_location_info_ptr,
-        volatile tt_l1_ptr uint32_t* const remote_producer_write_counter,
         volatile tt_l1_ptr uint32_t* const connection_live_semaphore,
         uint8_t sender_sync_noc_cmd_buf,
-        uint8_t edm_read_counter_initial_value,
-        uint32_t read_counter_update_src_address = 0) :
+        uint8_t edm_read_counter_initial_value) :
         worker_location_info_ptr(worker_location_info_ptr),
         cached_worker_semaphore_address(0),
         connection_live_semaphore(connection_live_semaphore),
-        sender_sync_noc_cmd_buf(sender_sync_noc_cmd_buf),
-        read_counter_update_src_address(read_counter_update_src_address) {
+        sender_sync_noc_cmd_buf(sender_sync_noc_cmd_buf) {
         *reinterpret_cast<volatile uint32_t*>(&(worker_location_info_ptr->edm_read_counter)) = edm_read_counter_initial_value;
-        local_write_counter.reset();
-        local_read_counter.reset();
+        static_cast<DERIVED*>(this)->reset_counters();
     }
 
     // Flow control methods
@@ -292,29 +283,22 @@ struct EdmChannelWorkerInterface {
 
     // Only used for persistent connections (i.e. upstream is EDM)
     template <bool enable_deadlock_avoidance>
-    FORCE_INLINE void update_persistent_connection_copy_of_free_slots(int32_t inc_val) {
-        auto packed_val = pack_value_for_inc_on_write_stream_reg_write(inc_val);
-        noc_inline_dw_write<InlineWriteDst::REG, true>(
-            this->cached_worker_semaphore_address, packed_val, 0xf, WORKER_HANDSHAKE_NOC);
+    FORCE_INLINE void notify_persistent_connection_of_free_space(int32_t inc_val) {
+        static_cast<DERIVED*>(this)
+            ->template notify_persistent_connection_of_free_space_impl<enable_deadlock_avoidance>(inc_val);
     }
 
     template <bool enable_noc_flush = true>
     FORCE_INLINE void notify_worker_of_read_counter_update() {
-        noc_inline_dw_write<InlineWriteDst::L1, true, enable_noc_flush>(
-            this->cached_worker_semaphore_address,
-            local_read_counter.counter,
-            0xf,
-            WORKER_HANDSHAKE_NOC,
-            NOC_UNICAST_WRITE_VC,
-            read_counter_update_src_address);
+        static_cast<DERIVED*>(this)->template notify_worker_of_read_counter_update_impl<enable_noc_flush>();
     }
 
     FORCE_INLINE void increment_local_read_counter(int32_t inc_val) {
-        local_read_counter.counter += inc_val;
+        static_cast<DERIVED*>(this)->increment_read_counter_impl(inc_val);
     }
 
     FORCE_INLINE void copy_read_counter_to_worker_location_info() const {
-        worker_location_info_ptr->edm_read_counter = local_read_counter.counter;
+        worker_location_info_ptr->edm_read_counter = static_cast<const DERIVED*>(this)->get_local_read_counter();
     }
 
     // Connection management methods
@@ -359,17 +343,136 @@ struct EdmChannelWorkerInterface {
     uint64_t cached_worker_semaphore_address = 0;
     volatile tt_l1_ptr uint32_t* const connection_live_semaphore;
     uint8_t sender_sync_noc_cmd_buf;
-    uint32_t read_counter_update_src_address;
+};
 
+// Derived class for static-sized sender channels with fixed number of buffer slots.
+// This implements the interface for channels with a known, fixed NUM_BUFFERS at compile time.
+template <uint8_t WORKER_HANDSHAKE_NOC, uint8_t NUM_BUFFERS>
+struct StaticSizedSenderChannelWorkerInterface
+    : public EdmChannelWorkerInterface<
+          WORKER_HANDSHAKE_NOC,
+          StaticSizedSenderChannelWorkerInterface<WORKER_HANDSHAKE_NOC, NUM_BUFFERS>> {
+    using Base = EdmChannelWorkerInterface<
+        WORKER_HANDSHAKE_NOC,
+        StaticSizedSenderChannelWorkerInterface<WORKER_HANDSHAKE_NOC, NUM_BUFFERS>>;
+
+    static constexpr uint8_t num_buffers = NUM_BUFFERS;
+
+    StaticSizedSenderChannelWorkerInterface() : Base(), read_counter_update_src_address(0) {}
+
+    StaticSizedSenderChannelWorkerInterface(
+        volatile EDMChannelWorkerLocationInfo* worker_location_info_ptr,
+        volatile tt_l1_ptr uint32_t* const remote_producer_write_counter,
+        volatile tt_l1_ptr uint32_t* const connection_live_semaphore,
+        uint8_t sender_sync_noc_cmd_buf,
+        uint8_t edm_read_counter_initial_value,
+        uint32_t read_counter_update_src_address = 0) :
+        Base(
+            worker_location_info_ptr,
+            connection_live_semaphore,
+            sender_sync_noc_cmd_buf,
+            edm_read_counter_initial_value),
+        read_counter_update_src_address(read_counter_update_src_address) {}
+
+    // CRTP implementation methods
+    FORCE_INLINE void reset_counters() {
+        local_write_counter.reset();
+        local_read_counter.reset();
+    }
+
+    [[nodiscard]] FORCE_INLINE uint32_t get_local_read_counter() const { return local_read_counter.counter; }
+
+    FORCE_INLINE void increment_read_counter_impl(int32_t inc_val) { local_read_counter.counter += inc_val; }
+
+    template <bool enable_noc_flush = true>
+    FORCE_INLINE void notify_worker_of_read_counter_update_impl() {
+        noc_inline_dw_write<InlineWriteDst::L1, true, enable_noc_flush>(
+            this->cached_worker_semaphore_address,
+            local_read_counter.counter,
+            0xf,
+            WORKER_HANDSHAKE_NOC,
+            NOC_UNICAST_WRITE_VC,
+            read_counter_update_src_address);
+    }
+
+    template <bool enable_deadlock_avoidance>
+    FORCE_INLINE void notify_persistent_connection_of_free_space_impl(int32_t inc_val) {
+        auto packed_val = pack_value_for_inc_on_write_stream_reg_write(inc_val);
+        noc_inline_dw_write<InlineWriteDst::REG, true>(
+            this->cached_worker_semaphore_address, packed_val, 0xf, WORKER_HANDSHAKE_NOC);
+    }
+
+    // Write counter management methods
+    template <bool SKIP_CONNECTION_LIVENESS_CHECK>
+    FORCE_INLINE void update_write_counter_for_send() {
+        if constexpr (SKIP_CONNECTION_LIVENESS_CHECK) {
+            // For persistent connections, only update buffer index
+            local_write_counter.index = BufferIndex{wrap_increment<NUM_BUFFERS>(local_write_counter.index.get())};
+        } else {
+            // For non-persistent connections, increment full counter
+            local_write_counter.increment();
+        }
+    }
+
+    [[nodiscard]] FORCE_INLINE BufferIndex get_write_buffer_index() const { return local_write_counter.index; }
+
+    uint32_t read_counter_update_src_address;
     ChannelCounter<NUM_BUFFERS> local_write_counter;
     ChannelCounter<NUM_BUFFERS> local_read_counter;
 };
 
-// A tuple of EDM channel worker interfaces
+// Stub for elastic-sized sender channels. This is a placeholder for future implementation
+// where channel buffer allocation can change dynamically at runtime.
+template <uint8_t WORKER_HANDSHAKE_NOC>
+struct ElasticSenderChannelWorkerInterface : public EdmChannelWorkerInterface<
+                                                 WORKER_HANDSHAKE_NOC,
+                                                 ElasticSenderChannelWorkerInterface<WORKER_HANDSHAKE_NOC>> {
+    using Base =
+        EdmChannelWorkerInterface<WORKER_HANDSHAKE_NOC, ElasticSenderChannelWorkerInterface<WORKER_HANDSHAKE_NOC>>;
+
+    ElasticSenderChannelWorkerInterface() : Base() {}
+
+    // CRTP implementation methods (stubs)
+    FORCE_INLINE void reset_counters() {
+        // TODO: Implement elastic counter management
+    }
+
+    [[nodiscard]] FORCE_INLINE uint32_t get_local_read_counter() const {
+        // TODO: Implement elastic counter management
+        return 0;
+    }
+
+    FORCE_INLINE void increment_read_counter_impl(int32_t inc_val) {
+        // TODO: Implement elastic counter management
+    }
+
+    template <bool enable_noc_flush = true>
+    FORCE_INLINE void notify_worker_of_read_counter_update_impl() {
+        // TODO: Implement elastic counter management
+    }
+
+    template <bool enable_deadlock_avoidance>
+    FORCE_INLINE void notify_persistent_connection_of_free_space_impl(int32_t inc_val) {
+        // TODO: Implement elastic counter management
+    }
+
+    // Write counter management methods (stubs)
+    template <bool SKIP_CONNECTION_LIVENESS_CHECK>
+    FORCE_INLINE void update_write_counter_for_send() {
+        // TODO: Implement elastic counter management
+    }
+
+    [[nodiscard]] FORCE_INLINE BufferIndex get_write_buffer_index() const {
+        // TODO: Implement elastic counter management
+        return BufferIndex{0};
+    }
+};
+
+// A tuple of EDM channel worker interfaces (using static-sized implementation)
 template <uint8_t WORKER_HANDSHAKE_NOC, size_t... BufferSizes>
 struct EdmChannelWorkerInterfaceTuple {
-    // tuple of EdmChannelWorkerInterface<BufferSizes>...
-    std::tuple<tt::tt_fabric::EdmChannelWorkerInterface<WORKER_HANDSHAKE_NOC, BufferSizes>...>
+    // tuple of StaticSizedSenderChannelWorkerInterface<BufferSizes>...
+    std::tuple<tt::tt_fabric::StaticSizedSenderChannelWorkerInterface<WORKER_HANDSHAKE_NOC, BufferSizes>...>
         channel_worker_interfaces;
 
     template <size_t I>
