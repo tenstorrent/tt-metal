@@ -149,7 +149,7 @@ inline void hash_hlk_args(size_t& seed, void* hlk_args, size_t hlk_args_size) {
 
 template <>
 struct std::hash<tt::tt_hlk_desc> {
-    std::size_t operator()(tt::tt_hlk_desc const& obj) const {
+    std::size_t operator()(const tt::tt_hlk_desc& obj) const {
         std::size_t hash_value = 0;
         for (int i = 0; i < NUM_CIRCULAR_BUFFERS; i++) {
             ttsl::hash::hash_combine(hash_value, hash<tt::DataFormat>{}(obj.get_buf_dataformat(i)));
