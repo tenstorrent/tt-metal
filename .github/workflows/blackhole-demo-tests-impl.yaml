@@ -37,7 +37,7 @@ jobs:
             name: "llama3-8b performance",
             arch: blackhole,
             # I think we can get rid of TT_CACHE_PATH here by using a NFS export
-            cmd:  HF_MODEL=meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance-ci and not performance-ci-stress-1",
+            cmd:  HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/tt_cache/meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance-ci and not performance-ci-stress-1",
             owner_id: U03PUAKE719 # Miguel Tairum
           },
           { # This should be moved to a BH perf regression pipeline in the future
@@ -61,6 +61,7 @@ jobs:
         PYTHONPATH: /work
         TT_METAL_HOME: /work
         HF_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
+        HF_HUB_CACHE: /localdev/blackhole_demos/huggingface_data
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G

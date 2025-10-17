@@ -11,8 +11,9 @@ from loguru import logger
 
 
 BH_MODELS = [
-    "meta-llama/Llama-3.1-8B-Instruct",
     "distil-whisper/distil-large-v3",
+    "meta-llama/Llama-3.1-8B-Instruct",
+    # "meta-llama/Llama-3.3-70B-Instruct",  # is loaded from different path (/mnt/MLPerf/...)
 ]
 
 TG_MODELS = [
