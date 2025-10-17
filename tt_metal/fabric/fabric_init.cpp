@@ -511,7 +511,7 @@ std::unique_ptr<tt::tt_metal::Program> create_and_compile_tt_fabric_program(tt::
                     .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
 
             auto kernel_ptr = fabric_program_ptr->impl().get_kernel(kernel);
-            tt::tt_metal::KernelImpl::from(*kernel_ptr).set_is_runtime_kernel(true);
+            tt::tt_metal::KernelImpl::from(*kernel_ptr).set_kernel_type(tt::tt_metal::KernelImpl::KernelType::FABRIC);
 
             tt::tt_metal::SetRuntimeArgs(*fabric_program_ptr, kernel, eth_logical_core, rt_args);
         }

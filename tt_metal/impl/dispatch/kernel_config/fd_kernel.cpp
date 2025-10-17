@@ -187,7 +187,7 @@ KernelHandle FDKernel::configure_kernel_variant(
     }
 
     auto kernel = program_->impl().get_kernel(kernel_handle);
-    tt::tt_metal::KernelImpl::from(*kernel).set_is_runtime_kernel(true);
+    tt::tt_metal::KernelImpl::from(*kernel).set_kernel_type(tt::tt_metal::KernelImpl::KernelType::DISPATCH);
 
     return kernel_handle;
 }

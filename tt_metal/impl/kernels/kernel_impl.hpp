@@ -156,6 +156,12 @@ private:
 
 class KernelImpl : public Kernel, public JitBuildSettings {
 public:
+    enum class KernelType : uint8_t {
+        USER,
+        DISPATCH,
+        FABRIC,
+    };
+
     const std::vector<const ll_api::memory*>& binaries(uint32_t build_key) const;
     uint32_t get_binary_packed_size(IDevice* device, int index) const override;
     uint32_t get_binary_text_size(IDevice* device, int index) const;
@@ -174,9 +180,10 @@ public:
 
     void register_kernel_elf_paths_with_watcher(IDevice& device) const;
 
-    bool get_is_runtime_kernel() const { return this->is_runtime_kernel_; }
-    // This can be set before compiling the kernel
-    void set_is_runtime_kernel(bool is_runtime_kernel) { this->is_runtime_kernel_ = is_runtime_kernel; }
+    KernelType get_kernel_type() const { return this->kernel_type_; }
+    // This needs to be set before compiling the kernel
+    void set_kernel_type(KernelType kernel_type);
+    bool is_watcher_enabled() const { return this->watcher_enabled_; }
 
     static KernelImpl& from(Kernel& kernel) {
         // KernelImpl and subclasses are the only implementations of Kernel.
@@ -206,8 +213,7 @@ protected:
             core_range_set,
             compile_args,
             defines,
-            named_compile_args),
-        is_runtime_kernel_{false} {}
+            named_compile_args) {}
     // DataMovement kernels have one binary each and Compute kernels have three binaries
     // Different set of binaries per device because kernel compilation is device dependent
     // TODO: break this dependency by https://github.com/tenstorrent/tt-metal/issues/3381
@@ -216,8 +222,10 @@ protected:
     std::vector<std::string> file_paths(IDevice& device) const;
 
 private:
-    // Dispatch / Fabric kernels
-    bool is_runtime_kernel_;
+    // The kernel type
+    KernelType kernel_type_ = KernelType::USER;
+    // If watcher is enabled for this kernel
+    bool watcher_enabled_ = false;
 };
 
 class DataMovementKernel : public KernelImpl {
