@@ -5,7 +5,7 @@
 import torch
 import ttnn
 from ....layers.normalization import DistributedRMSNorm
-from ....layers.linear import ColParallelLinear
+from ....layers.linear import MinimalColParallelLinear
 from ....utils.substate import substate
 from ....utils.tensor import bf16_tensor
 
@@ -51,7 +51,7 @@ class WanAttention:
         self.norm_k = DistributedRMSNorm(**rms_kwargs)
 
         # Unfused qkv because this might be cross attention
-        self.to_q = ColParallelLinear(
+        self.to_q = MinimalColParallelLinear(
             dim,
             dim,
             bias=True,
@@ -60,7 +60,7 @@ class WanAttention:
             fsdp_mesh_axis=fsdp_mesh_axis,
             ccl_manager=ccl_manager,
         )
-        self.to_k = ColParallelLinear(
+        self.to_k = MinimalColParallelLinear(
             dim,
             dim,
             bias=True,
@@ -69,7 +69,7 @@ class WanAttention:
             fsdp_mesh_axis=fsdp_mesh_axis,
             ccl_manager=ccl_manager,
         )
-        self.to_v = ColParallelLinear(
+        self.to_v = MinimalColParallelLinear(
             dim,
             dim,
             bias=True,
@@ -79,7 +79,7 @@ class WanAttention:
             ccl_manager=ccl_manager,
         )
 
-        self.to_out = ColParallelLinear(
+        self.to_out = MinimalColParallelLinear(
             dim,
             dim,
             bias=True,
@@ -206,9 +206,9 @@ class WanAttention:
         kv_input = prompt_1BLP if prompt_1BLP is not None else spatial_1BND
 
         # Project spatial
-        q_1BNF = self.to_q(spatial_1BND, core_grid=self.core_grid, compute_kernel_config=self.mm_compute_kernel_config)
-        k_1BNF = self.to_k(kv_input, core_grid=self.core_grid, compute_kernel_config=self.mm_compute_kernel_config)
-        v_1BNF = self.to_v(kv_input, core_grid=self.core_grid, compute_kernel_config=self.mm_compute_kernel_config)
+        q_1BNF = self.to_q(spatial_1BND, blocking=(8, 8, 8, 2, 2))
+        k_1BNF = self.to_k(kv_input, blocking=(8, 8, 8, 2, 2))
+        v_1BNF = self.to_v(kv_input, blocking=(8, 8, 8, 2, 2))
 
         # Norm spatial before splitting heads
         q_1BNF = self.norm_q(q_1BNF, compute_kernel_config=self.rmsnorm_compute_kernel_config)
@@ -304,8 +304,6 @@ class WanAttention:
                 spatial_1BND, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
             )
 
-        spatial_1BND = self.to_out(
-            spatial_1BND, core_grid=self.core_grid, compute_kernel_config=self.mm_compute_kernel_config
-        )
+        spatial_1BND = self.to_out(spatial_1BND, blocking=(8, 8, 8, 2, 2))
 
         return spatial_1BND

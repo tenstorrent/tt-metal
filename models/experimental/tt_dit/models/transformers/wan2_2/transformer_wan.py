@@ -7,7 +7,7 @@ import ttnn
 from .attention_wan import WanAttention
 from ....layers.normalization import DistributedLayerNorm
 from ....layers.linear import Linear
-from ....layers.feedforward import ParallelFeedForward
+from ....layers.feedforward import MinimalParallelFeedForward
 
 from ....layers.embeddings import WanPatchEmbed
 from ....utils.mochi import get_rot_transformation_mat
@@ -87,7 +87,7 @@ class WanTransformerBlock:
             else None
         )
 
-        self.ff = ParallelFeedForward(
+        self.ff = MinimalParallelFeedForward(
             dim,
             inner_dim=ffn_dim,
             activation_fn="gelu",
@@ -249,9 +249,7 @@ class WanTransformerBlock:
                 spatial_normed_1BND, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
             )
         # NOTE: Cannot set core_grid for FF or you get L1 OOM. Needs to be fixed.
-        spatial_ff_1BND = self.ff(
-            spatial_normed_1BND, core_grid=None, compute_kernel_config=self.ff_compute_kernel_config
-        )
+        spatial_ff_1BND = self.ff(spatial_normed_1BND, ff1_blocking=(16, 8, 4, 2, 2), ff2_blocking=(8, 8, 8, 2, 2))
 
         spatial_1BND = spatial_1BND + spatial_ff_1BND * c_gate_msa_1B1D
 
