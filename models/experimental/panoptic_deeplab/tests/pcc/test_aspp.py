@@ -83,6 +83,8 @@ def test_ttnn_aspp(device, model_location_generator):
             conv_act_dtype=ttnn.bfloat8_b,
             conv_w_dtype=ttnn.bfloat8_b,
         )
+        # Setup ASPP layer overrides to enable channel slicing for dilated convolutions
+        model_configs.setup_aspp_layer_overrides()
 
         # Create TTNN model with fused parameters and centralized configuration
         ttnn_model = TtPanopticDeepLab(

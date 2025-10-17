@@ -7,7 +7,7 @@ import ttnn
 from typing import Any
 from loguru import logger
 
-from models.tt_cnn.tt.builder import TtConv2d, TtUpsample
+from models.tt_cnn.tt.builder import TtConv2d
 from models.common.lightweightmodule import LightweightModule
 
 
@@ -119,8 +119,8 @@ class TtASPP(LightweightModule):
         self.model_configs = model_configs
         use_bias = False
 
-        self.activation = get_ttnn_activation(activation)
         self.device = device
+        self.activation = ttnn.relu  # For manual ReLU on channel-sliced branches
         self.pool_kernel_size = pool_kernel_size
 
         self.conv_branches = []
@@ -144,22 +144,6 @@ class TtASPP(LightweightModule):
         # Final Project convolution (BatchNorm fused)
         project_conv_params = parameters["project"]
         self.project_conv = self._create_conv_layer(project_conv_params, "aspp.project")
-
-        # Upsample for pooling branch (scale factor will be set dynamically)
-        # Use TT CNN Builder TtUpsample - parameters don't need config for bilinear upsample
-        from models.tt_cnn.tt.builder import UpsampleConfiguration
-
-        upsample_config = UpsampleConfiguration(
-            input_height=1,  # Will be set dynamically
-            input_width=1,  # Will be set dynamically
-            channels=out_channels,
-            batch_size=1,
-            scale_factor=(1, 1),  # Will be set dynamically
-            mode="bilinear",
-        )
-        self.pool_upsample = TtUpsample(upsample_config, device)
-        self.pool_upsample._mode = "bilinear"  # Allow dynamic mode changes
-        self.pool_upsample._scale_factor = (1, 1)  # Allow dynamic scale changes
 
         logger.debug("TtASPP initialization complete")
 
@@ -198,16 +182,24 @@ class TtASPP(LightweightModule):
                 "`pool_kernel_size` must be divisible by the shape of inputs. "
                 "Input size: {} `pool_kernel_size`: {}".format(input_shape, self.pool_kernel_size)
             )
-        res = []
-        for conv in self.conv_branches:
-            branch_out = conv(x)
-            branch_out = self.activation(branch_out)
-            res.append(branch_out)
-        input_shape = (1, 1, N * H * W, C)
-        ttnn_reshape = x.reshape(input_shape)
 
+        # Process conv branches
+        res = []
+        for i, conv in enumerate(self.conv_branches):
+            branch_out = conv(x)
+
+            # Channel-sliced convolutions may output in flattened format [N, 1, H*W, C]
+            # Reshape back to [N, H, W, C] and apply ReLU manually
+            if branch_out.shape[1] == 1 and branch_out.shape[2] == H * W:
+                branch_out = ttnn.reshape(branch_out, (N, H, W, branch_out.shape[3]))
+                # Apply ReLU manually (fused ReLU doesn't work with channel slicing)
+                branch_out = self.activation(branch_out)
+
+            res.append(branch_out)
+
+        # Global average pooling branch
         pooled = ttnn.avg_pool2d(
-            input_tensor=ttnn_reshape,
+            input_tensor=x,
             batch_size=N,
             input_h=H,
             input_w=W,
@@ -220,26 +212,34 @@ class TtASPP(LightweightModule):
 
         output_h = floor(H + 0 - self.pool_kernel_size[0]) + 1
         output_w = floor(W + 0 - self.pool_kernel_size[1]) + 1
-
         pooled = ttnn.reshape(pooled, (N, output_h, output_w, C))
 
+        # Move all branches to DRAM
         for i in range(len(res)):
             res[i] = ttnn.to_memory_config(res[i], ttnn.DRAM_MEMORY_CONFIG)
         pooled = ttnn.to_memory_config(pooled, ttnn.DRAM_MEMORY_CONFIG)
 
+        # Process pooled branch with conv
         pooled = self.pool_conv(pooled)
-        pooled = self.activation(pooled)
 
+        # Upsample pooled branch to match input spatial dimensions
         current_h, current_w = pooled.shape[1], pooled.shape[2]
         scale_factor = [H // current_h, W // current_w]
 
-        # Set appropriate mode and scale factor for upsample
-        if pooled.shape[1] == 1 and pooled.shape[2] == 1:
-            self.pool_upsample._mode = "nearest"
+        # Convert to interleaved and ROW_MAJOR for upsample
+        if pooled.is_sharded():
+            pooled = ttnn.sharded_to_interleaved(pooled, ttnn.DRAM_MEMORY_CONFIG)
         else:
-            self.pool_upsample._mode = "bilinear"
-        self.pool_upsample._scale_factor = scale_factor
-        pooled = self.pool_upsample(pooled)
+            pooled = ttnn.to_memory_config(pooled, ttnn.DRAM_MEMORY_CONFIG)
+
+        pooled = ttnn.to_layout(pooled, ttnn.ROW_MAJOR_LAYOUT)
+
+        # Choose upsample mode: nearest for 1x1, bilinear otherwise
+        upsample_mode = "nearest" if (current_h == 1 and current_w == 1) else "bilinear"
+        pooled = ttnn.upsample(pooled, scale_factor=tuple(scale_factor), mode=upsample_mode)
+
+        # Convert back to TILE_LAYOUT
+        pooled = ttnn.to_layout(pooled, ttnn.TILE_LAYOUT)
         pooled = ttnn.to_memory_config(pooled, ttnn.DRAM_MEMORY_CONFIG)
 
         res.append(pooled)
@@ -250,10 +250,12 @@ class TtASPP(LightweightModule):
             if res[i].dtype != target_dtype:
                 res[i] = ttnn.typecast(res[i], target_dtype)
 
+        # Concatenate all branches
         res = ttnn.concat(res, dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         logger.debug(f"TtASPP concatenated branches, shape: {res.shape}")
 
+        # Project to final output
         res = self.project_conv(res)
-        res = self.activation(res)
         logger.debug(f"TtASPP forward pass complete - output shape: {res.shape}")
+
         return res

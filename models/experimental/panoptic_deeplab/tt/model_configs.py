@@ -247,20 +247,23 @@ class ModelOptimisations:
         - Branches 1-3: Dilated convs (channel slicing with increasing num_slices)
         - Branch 4: Global pooling (no slicing)
         """
-        # Branch 0: 1x1 conv branch (no slicing)
-        self.register_layer_override("aspp.convs.0", slice_strategy=None)
+        # Branch 0: 1x1 conv branch (no slicing, no deallocation, fused ReLU)
+        self.register_layer_override("aspp.convs.0", slice_strategy=None, deallocate_activation=False)
 
-        # Branches 1-3: Dilated conv branches (channel slicing)
+        # Branches 1-3: Dilated conv branches (channel slicing, no deallocation, NO fused ReLU - apply manually after slicing)
         channel_slices = [2, 4, 8]
         for i, num_slices in enumerate(channel_slices, start=1):
             self.register_layer_override(
-                f"aspp.convs.{i}", slice_strategy=ChannelSliceStrategyConfiguration(num_slices=num_slices)
+                f"aspp.convs.{i}",
+                slice_strategy=ChannelSliceStrategyConfiguration(num_slices=num_slices),
+                deallocate_activation=False,
+                activation=None,  # Disable fused ReLU, apply manually after slicing
             )
 
-        # Branch 4: Global pooling branch (no slicing)
-        self.register_layer_override("aspp.convs.4", slice_strategy=None)
+        # Branch 4: Global pooling branch (no slicing, no deallocation, fused ReLU)
+        self.register_layer_override("aspp.convs.4", slice_strategy=None, deallocate_activation=False)
 
-        # Project layer
+        # Project layer (fused ReLU)
         self.register_layer_override("aspp.project", slice_strategy=None)
 
     def setup_decoder_layer_overrides(self, iteration_index=0):
