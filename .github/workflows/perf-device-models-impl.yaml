@@ -365,6 +365,20 @@ jobs:
           python3 models/perf/merge_device_perf_results.py $DEVICE_PERF_REPORT_FILENAME CHECK
           echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
 
+      - name: Save environment data
+        if: ${{ !cancelled() }}
+        run: python3 /work/.github/scripts/data_analysis/create_benchmark_with_environment_json.py
+
+      - name: Upload benchmark data
+        if: ${{ !cancelled() }}
+        uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
+        with:
+          ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
+          sftp-batchfile: /work/.github/actions/upload-data-via-sftp/benchmark_data_batchfile.txt
+          username: ${{ secrets.SFTP_BENCHMARK_WRITER_USERNAME }}
+          hostname: ${{ secrets.SFTP_BENCHMARK_WRITER_HOSTNAME }}
+          path: /work
+
       - name: Check device perf report exists
         id: check-device-perf-report
         if: ${{ !cancelled() }}
