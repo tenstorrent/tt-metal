@@ -18,11 +18,11 @@ on:
       ttsim-ref:
         required: false
         type: string
-        default: "8d6a0c997c4ba585c519c27f304b976b243d4bd9"
+        default: "af305dc11a2ca665261c95b8ee70f5cf3f53e5e8"
 
 jobs:
   ttsim-integration:
-    runs-on: tt-ubuntu-2204-small-metal
+    runs-on: tt-ubuntu-2204-small-stable
     name: "TTSim Integration - ${{ matrix.arch }}"
     strategy:
       fail-fast: false

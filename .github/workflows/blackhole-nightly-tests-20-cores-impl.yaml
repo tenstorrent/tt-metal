@@ -36,7 +36,7 @@ jobs:
           ]
     name: Nightly 20 cores ${{ matrix.test-group.model }}
     # CIv2 to get weights
-    runs-on: ${{ format('tt-ubuntu-2204-{0}-metal', inputs.runner-label) }}
+    runs-on: ${{ format('tt-ubuntu-2204-{0}-stable', inputs.runner-label) }}
     container:
       image: harbor.ci.tenstorrent.net/${{ inputs.docker-image || 'docker-image-unresolved!'}}
       env:

@@ -200,6 +200,7 @@ target_sources(
             soc_descriptors/wormhole_b0_80_arch.yaml
             tools/profiler/kernel_profiler.hpp
             tools/profiler/fabric_event_profiler.hpp
+            tools/profiler/noc_event_profiler.hpp
             # Kernel sources
             impl/dispatch/kernels/cq_dispatch.cpp
             impl/dispatch/kernels/cq_dispatch_subordinate.cpp
