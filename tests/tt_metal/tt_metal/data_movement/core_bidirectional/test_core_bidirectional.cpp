@@ -405,6 +405,8 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementCoreBidirectionalPacketSizesS
 }
 
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementCoreBidirectionalPacketSizesDifferentKernels) {
+    // Test failing with watcher enabled, github issue #29229
+    SKIP_FOR_WATCHER();
     // Test ID
     uint32_t test_id = 147;
     bool same_kernel = false;
