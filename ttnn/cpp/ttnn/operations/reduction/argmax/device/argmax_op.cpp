@@ -59,9 +59,9 @@ void ArgMax::validate_with_output_tensors(
             input_tensor_a.dtype() == DataType::INT32 || input_tensor_a.dtype() == DataType::UINT32 ||
             input_tensor_a.dtype() == DataType::UINT16,
         "Only BFLOAT16, FLOAT32, INT32, UINT32, and UINT16 are supported for inputs!");
-    TT_FATAL(input_tensor_a.layout() == Layout::ROW_MAJOR, "Only ROW_MAJOR layout is supported for inputs!");
 
     TT_FATAL(this->output_dtype == DataType::UINT32, "Only UINT32 is supported for outputs!");
+
     TT_FATAL(
         this->output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "Only INTERLEAVED memory layout is supported for outputs!");
@@ -73,6 +73,9 @@ void ArgMax::validate_with_output_tensors(
         TT_FATAL(
             optional_output_tensor.value().memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
             "Only INTERLEAVED memory layout is supported for outputs!");
+        TT_FATAL(
+            optional_output_tensor.value().layout() == input_tensor_a.layout(),
+            "Input and output tensor layouts must be the same!");
     }
 
     if (this->dim.has_value()) {
@@ -83,11 +86,16 @@ void ArgMax::validate_with_output_tensors(
         TT_FATAL(normalized_dim == (input_rank - 1), "Only argmax on last dim is supported!");
     }
 
-    if (this->use_multicore && this->sub_core_grids.has_value()) {
+    if (this->use_multicore) {
+        if (this->sub_core_grids.has_value()) {
+            TT_FATAL(
+                this->sub_core_grids->ranges().size() <= 2,
+                "Multicore argmax only supports up to 2 core grid ranges, but got {} ranges",
+                this->sub_core_grids->ranges().size());
+        }
         TT_FATAL(
-            this->sub_core_grids->ranges().size() <= 2,
-            "Multicore argmax only supports up to 2 core grid ranges, but got {} ranges",
-            this->sub_core_grids->ranges().size());
+            input_tensor_a.layout() == Layout::ROW_MAJOR,
+            "Multicore argmax only supports ROW_MAJOR layout for inputs!");
     }
 }
 
@@ -100,7 +108,7 @@ std::vector<TensorSpec> ArgMax::compute_output_specs(
     const auto& input_tensor = input_tensors[0];
     auto output_shape = this->get_output_shape(input_tensor);
     return {TensorSpec(
-        ttnn::Shape(output_shape), TensorLayout(output_dtype, PageConfig(input_tensor.layout()), output_mem_config))};
+        ttnn::Shape(output_shape), TensorLayout(output_dtype, PageConfig(Layout::ROW_MAJOR), output_mem_config))};
 }
 
 std::vector<Tensor> ArgMax::create_output_tensors(
@@ -108,7 +116,6 @@ std::vector<Tensor> ArgMax::create_output_tensors(
     if (output_tensors.at(0).has_value()) {
         return {output_tensors.at(0).value()};
     }
-
     return {create_device_tensor(compute_output_specs(input_tensors, output_tensors)[0], input_tensors[0].device())};
 }
 
@@ -118,11 +125,11 @@ operation::ProgramWithCallbacks ArgMax::create_program(
     const auto& output_tensor = output_tensors.at(0);
     const auto normalized_dim =
         this->dim.has_value() ? *this->dim + (input_tensor.padded_shape().rank() * (*this->dim < 0)) : this->dim;
+
     if (this->use_multicore) {
         return detail::argmax_multi_core(
             input_tensor, output_tensor, normalized_dim, this->keepdim, this->sub_core_grids);
     }
     return detail::argmax_single_core(input_tensor, output_tensor, normalized_dim, this->keepdim);
 }
-
 }  // namespace ttnn::operations::reduction

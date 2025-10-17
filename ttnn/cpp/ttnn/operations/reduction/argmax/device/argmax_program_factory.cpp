@@ -86,81 +86,179 @@ static inline std::tuple<CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uin
     return {all_cores, cores0, cores1, red_dim_units0, red_dim_units1};
 }
 
-operation::ProgramWithCallbacks argmax_single_core(
-    const Tensor& input, const Tensor& output, const std::optional<uint32_t> dim, const bool keepdim) {
-    tt::tt_metal::Program program{};
-
-    const tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
-    const uint32_t input_unit_size = input.element_size();
-    const tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
-    const uint32_t output_unit_size = output.element_size();
-
-    const tt::tt_metal::IDevice* device = output.device();
-
-    const auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    uint32_t num_cores_x = compute_with_storage_grid_size.x;
-    uint32_t num_cores_y = compute_with_storage_grid_size.y;
-    uint32_t num_units = 1;  // single-core
-    auto [num_cores, all_cores, core_group_1, core_group_2, num_units_per_core_group_1, num_units_per_core_group_2] =
-        tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_units);
+std::tuple<uint32_t, uint32_t> get_page_sizes_single_core(
+    const Tensor& input, const Tensor& output, bool keepdim, bool reduce_all) {
+    uint32_t src_page_size = 0;
+    uint32_t dst_page_size = 0;
 
     const auto& input_shape = input.padded_shape();
     const uint32_t rank = input_shape.size();
-    const bool reduce_all = not dim.has_value();
 
-    // Last dimension in input i.e. reduction dimension
-    const uint32_t red_dim_units = input_shape[rank - 1];
+    if (input.layout() == Layout::ROW_MAJOR) {
+        // Last dimension in input i.e. reduction dimension
+        const uint32_t red_dim_units = input_shape[rank - 1];
 
-    // Last dimension in output i.e. the dim left after reduction
-    const auto output_last_dim = reduce_all or keepdim or (rank < 2) ? 1 : input_shape[rank - 2];
+        const uint32_t input_unit_size = input.element_size();
+        const uint32_t output_unit_size = output.element_size();
 
-    // Create input CB to read reduction dim worth of data at once
-    const uint32_t src_cb_idx = tt::CBIndex::c_0;
-    const uint32_t src_page_size = red_dim_units * input_unit_size;
+        // Last dimension in output i.e. the dim left after reduction
+        const auto output_last_dim = reduce_all or keepdim or (rank < 2) ? 1 : input_shape[rank - 2];
+        src_page_size = red_dim_units * input_unit_size;
+        dst_page_size = output_last_dim * output_unit_size;
+    } else {
+        TT_FATAL(
+            output.layout() == Layout::ROW_MAJOR,
+            "For input tensor with TILE layout only ROW_MAJOR output is supported");
+        src_page_size = input.tensor_spec().compute_page_size_bytes();
+        dst_page_size = output.tensor_spec().compute_page_size_bytes();
+    }
+
+    return {src_page_size, dst_page_size};
+}
+
+void create_circular_buffers_single_core(
+    tt::tt_metal::Program& program,
+    auto& all_cores,
+    uint32_t src_cb_index,
+    uint32_t dst_cb_index,
+    uint32_t src_page_size,
+    uint32_t dst_page_size,
+    tt::DataFormat input_format,
+    tt::DataFormat output_format) {
+    // Create input CB
     tt::tt_metal::CircularBufferConfig src_cb_config =
-        tt::tt_metal::CircularBufferConfig(src_page_size, {{src_cb_idx, input_cb_data_format}})
-            .set_page_size(src_cb_idx, src_page_size);
+        tt::tt_metal::CircularBufferConfig(src_page_size, {{src_cb_index, input_format}})
+            .set_page_size(src_cb_index, src_page_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, src_cb_config);
 
-    // Create output CB based on the output shape's last dimension
-    const uint32_t dst_cb_idx = tt::CBIndex::c_1;
-    const uint32_t dst_page_size = output_last_dim * output_unit_size;
-    const tt::tt_metal::CircularBufferConfig dst_db_config =
-        tt::tt_metal::CircularBufferConfig(dst_page_size, {{dst_cb_idx, output_cb_data_format}})
-            .set_page_size(dst_cb_idx, dst_page_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, dst_db_config);
+    // Create output CB
+    const tt::tt_metal::CircularBufferConfig dst_cb_config =
+        tt::tt_metal::CircularBufferConfig(dst_page_size, {{dst_cb_index, output_format}})
+            .set_page_size(dst_cb_index, dst_page_size);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, dst_cb_config);
+}
+
+auto get_ctime_args_single_core(
+    const Tensor& input,
+    const Tensor& output,
+    uint32_t src_page_size,
+    uint32_t dst_page_size,
+    uint32_t src_cb_index,
+    uint32_t dst_cb_index,
+    bool keepdim,
+    bool reduce_all) {
+    std::vector<uint32_t> ctime_args;
+
+    const auto& input_shape = input.padded_shape();
+    const uint32_t rank = input_shape.size();
+
+    if (input.layout() == Layout::ROW_MAJOR) {
+        const uint32_t red_dim_units = input_shape[rank - 1];
+        const auto output_last_dim = reduce_all or keepdim or (rank < 2) ? 1 : input_shape[rank - 2];
+
+        const auto inner_dim_units = output_last_dim;
+        const auto outer_dim_units = input.logical_volume() / inner_dim_units / red_dim_units;
+
+        ctime_args.insert(
+            ctime_args.end(),
+            {
+                src_cb_index,
+                dst_cb_index,
+                src_page_size,
+                dst_page_size,
+                outer_dim_units,
+                inner_dim_units,
+                red_dim_units,
+                (uint32_t)(reduce_all),
+            });
+    } else {
+        const uint32_t logical_rank = input.logical_shape().size();
+        TT_FATAL(reduce_all == false, "reduce_all not supported with TILE_LAYOUT");
+
+        // With TILE layout, padded shape has always at least 2 dims (i.e., also for 1D input tensors).
+        TT_FATAL(rank > 1, "Invalid rank for tiled tensor");
+        TT_FATAL(input_shape[rank - 1] % TILE_WIDTH == 0, "Invalid input tensor shape");
+        TT_FATAL(input_shape[rank - 2] % TILE_HEIGHT == 0, "Invalid input tensor shape");
+
+        const uint32_t w_tiles = input_shape[rank - 1] / TILE_WIDTH;
+        const uint32_t h_tiles = input_shape[rank - 2] / TILE_HEIGHT;
+
+        const uint32_t w_logical = input.logical_shape()[logical_rank - 1];
+        const uint32_t h_logical = logical_rank > 1 ? input.logical_shape()[logical_rank - 2] : 1;
+
+        // The initial dims combined (excluding the two trailing dims)
+        const uint32_t outer_dim_units = input.logical_volume() / (h_logical * w_logical);
+
+        ctime_args.insert(
+            ctime_args.end(),
+            {src_cb_index,
+             dst_cb_index,
+             src_page_size,
+             dst_page_size,
+             TILE_HEIGHT,
+             TILE_WIDTH,
+             h_tiles,
+             w_tiles,
+             h_logical,
+             w_logical,
+             outer_dim_units,
+             (uint32_t)(reduce_all),
+             (uint32_t)(keepdim)});
+    }
+    return ctime_args;
+}
+
+operation::ProgramWithCallbacks argmax_single_core(
+    const Tensor& input, const Tensor& output, const std::optional<uint32_t> dim, const bool keepdim) {
+    tt::tt_metal::Program program{};
+    const tt::tt_metal::IDevice* device = output.device();
+    const bool reduce_all = not dim.has_value();
+
+    // Circular buffers
+    const auto src_cb_index = tt::CBIndex::c_0;
+    const auto dst_cb_index = tt::CBIndex::c_1;
+
+    const auto grid_size = device->compute_with_storage_grid_size();
+    const uint32_t num_units = 1;  // single-core
+    auto [num_cores, all_cores, unused_1, unused_2, unused_3, unused_4] =
+        tt::tt_metal::split_work_to_cores(grid_size, num_units);
+
+    const tt::DataFormat input_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
+    const tt::DataFormat output_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
+    const auto [src_page_size, dst_page_size] = get_page_sizes_single_core(input, output, keepdim, reduce_all);
+    create_circular_buffers_single_core(
+        program,
+        all_cores,
+        src_cb_index,
+        dst_cb_index,
+        src_page_size,
+        dst_page_size,
+        input_data_format,
+        output_data_format);
+
+    // Compile-time args
+    std::vector<uint32_t> ctime_args = get_ctime_args_single_core(
+        input, output, src_page_size, dst_page_size, src_cb_index, dst_cb_index, keepdim, reduce_all);
 
     const auto src_buffer = input.buffer();
     const auto dst_buffer = output.buffer();
+    tt::tt_metal::TensorAccessorArgs(src_buffer).append_to(ctime_args);
+    tt::tt_metal::TensorAccessorArgs(dst_buffer).append_to(ctime_args);
 
-    const auto inner_dim_units = output_last_dim;
-    const auto outer_dim_units = input.logical_volume() / inner_dim_units / red_dim_units;
-
-    std::vector<uint32_t> reader_compile_time_args = {
-        src_cb_idx,
-        dst_cb_idx,
-        src_page_size,
-        dst_page_size,
-        outer_dim_units,
-        inner_dim_units,
-        red_dim_units,
-        (uint32_t)(reduce_all),
-    };
-    tt::tt_metal::TensorAccessorArgs(src_buffer).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(dst_buffer).append_to(reader_compile_time_args);
+    // Kernel
+    std::string kernel_path =
+        input.layout() == Layout::ROW_MAJOR
+            ? "ttnn/cpp/ttnn/operations/reduction/argmax/device/kernels/reader_argmax_interleaved.cpp"
+            : "ttnn/cpp/ttnn/operations/reduction/argmax/device/kernels/reader_argmax_tile_layout.cpp";
 
     const std::map<std::string, std::string> kernel_defines;
     const tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/reduction/argmax/device/kernels/reader_argmax_interleaved.cpp",
-        all_cores,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, kernel_defines));
+        program, kernel_path.c_str(), all_cores, tt::tt_metal::ReaderDataMovementConfig(ctime_args, kernel_defines));
 
-    const auto cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, false);
-
+    // Runtime args
+    const auto cores = grid_to_cores(num_cores, grid_size.x, grid_size.y, false);
     for (uint32_t i = 0; i < cores.size(); ++i) {
         const CoreCoord& core = cores.at(i);
-
         tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, {src_buffer->address(), dst_buffer->address()});
     }
 
@@ -171,15 +269,11 @@ operation::ProgramWithCallbacks argmax_single_core(
                                               const std::vector<std::optional<const Tensor>>&,
                                               const std::vector<Tensor>& output_tensors) {
         auto src_buffer = input_tensors.at(0).buffer();
-
         auto dst_buffer = output_tensors.at(0).buffer();
-
         for (const auto& core : cores) {
-            {
-                auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-                runtime_args[0] = src_buffer->address();
-                runtime_args[1] = dst_buffer->address();
-            }
+            auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+            runtime_args[0] = src_buffer->address();
+            runtime_args[1] = dst_buffer->address();
         }
     };
 
