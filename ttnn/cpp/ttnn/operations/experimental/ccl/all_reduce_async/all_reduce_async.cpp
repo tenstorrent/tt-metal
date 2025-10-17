@@ -258,14 +258,14 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
 
 ttnn::Tensor ExecuteAllReduceAsync::invoke(
     const ttnn::Tensor& input_tensor,
-    const std::optional<uint32_t> cluster_axis,
+    std::optional<uint32_t> cluster_axis,
     const MeshDevice& mesh_device,
     const std::optional<std::vector<GlobalSemaphore>>& barrier_semaphores,
     const std::optional<std::vector<GlobalSemaphore>>& rs_global_semaphores,
     const std::optional<std::vector<GlobalSemaphore>>& ag_global_semaphores,
     ttnn::operations::reduction::ReduceType math_op,
     const std::optional<ttnn::MemoryConfig>& memory_config,
-    const std::optional<ttnn::ccl::Topology> topology,
+    std::optional<ttnn::ccl::Topology> topology,
     const std::optional<size_t> num_preferred_links,
     std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt) {
     MemoryConfig out_memory_config = memory_config.value_or(input_tensor.memory_config());
