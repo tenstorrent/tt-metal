@@ -448,7 +448,7 @@ uint32_t SystemMemoryManager::completion_queue_wait_front(
 
     // Body of the operation to be timed out
     auto wait_operation_body =
-        [this, cq_id, &exit_condition, &write_ptr_and_toggle, &write_ptr, &write_toggle, &cq_interface]() -> uint32_t {
+        [this, cq_id, &exit_condition, &write_ptr_and_toggle, &write_ptr, &write_toggle]() -> uint32_t {
         write_ptr_and_toggle = get_cq_completion_wr_ptr<true>(this->device_id, cq_id, this->cq_size);
         write_ptr = write_ptr_and_toggle & 0x7fffffff;
         write_toggle = write_ptr_and_toggle >> 31;

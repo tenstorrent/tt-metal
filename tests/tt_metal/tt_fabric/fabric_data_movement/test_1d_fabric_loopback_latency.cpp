@@ -259,15 +259,14 @@ inline void RunPersistent1dFabricLatencyTest(
     std::vector<size_t> per_device_global_sem_addr_rt_arg;
     size_t program_device_index = 0;
 
-    auto build_connection_args = [is_ring](
-                                     const std::shared_ptr<MeshDevice>& device,
-                                     const std::shared_ptr<MeshDevice>& forward_device,
-                                     const std::shared_ptr<MeshDevice>& backward_device,
-                                     Program& program,
-                                     CoreCoord worker_core_logical,
-                                     bool is_connected_in_direction,
-                                     tt::tt_fabric::EdmLineFabricOpInterface::Direction direction,
-                                     std::vector<uint32_t>& rt_args_out) {
+    auto build_connection_args = [](const std::shared_ptr<MeshDevice>& device,
+                                    const std::shared_ptr<MeshDevice>& forward_device,
+                                    const std::shared_ptr<MeshDevice>& backward_device,
+                                    Program& program,
+                                    CoreCoord worker_core_logical,
+                                    bool is_connected_in_direction,
+                                    tt::tt_fabric::EdmLineFabricOpInterface::Direction direction,
+                                    std::vector<uint32_t>& rt_args_out) {
         rt_args_out.push_back(is_connected_in_direction);
 
         if (is_connected_in_direction) {
