@@ -34,14 +34,15 @@ tt::tt_metal::operation::ProgramWithCallbacks ema_multi_core(
 
     // Args based on the tensor shape
     auto a_shape = a.padded_shape();
-    auto batch = a_shape[0];
-    auto channel = a_shape[1];
-    auto pages = a_shape[2];
+    auto num_batches = a_shape[1];
+    auto num_channels = a_shape[2];
 
-    auto total_pages = batch * channel * pages;
-    auto pages_per_core = total_pages / num_cores;
+    auto num_channel_tiles = num_channels / a.tensor_spec().tile().get_height();
+    auto tiles_per_channel = a_shape[3] / a.tensor_spec().tile().get_width();
 
-    auto batches_per_core = batch * channel / num_cores;
+    auto total_tiles = num_batches * num_channel_tiles * tiles_per_channel;
+    auto total_tiles_per_core = total_tiles / num_cores;
+    auto total_batches_per_core = total_tiles_per_core / tiles_per_channel;
 
     auto program = Program();
 
@@ -50,28 +51,31 @@ tt::tt_metal::operation::ProgramWithCallbacks ema_multi_core(
     auto src_cb_index = tt::CBIndex::c_0;
     auto dst_cb_index = tt::CBIndex::c_1;
 
-    auto a_data_format = datatype_to_dataformat_converter(a.dtype());
+    auto src_data_format = datatype_to_dataformat_converter(a.dtype());
     auto dst_data_format = datatype_to_dataformat_converter(output.dtype());
 
-    auto src_cb_size = a.buffer()->aligned_page_size() * ema_buffer_depth;
-    auto dst_cb_size = output.buffer()->aligned_page_size() * ema_buffer_depth;
+    auto src_tile_size = a.tensor_spec().tile().get_tile_size(src_data_format);
+    auto dst_tile_size = output.tensor_spec().tile().get_tile_size(dst_data_format);
 
-    auto src_cb_cfg = tt::tt_metal::CircularBufferConfig(src_cb_size, {{src_cb_index, a_data_format}})
-                          .set_page_size(src_cb_index, a.buffer()->aligned_page_size());
+    auto src_cb_size = src_tile_size * ema_buffer_depth;
+    auto dst_cb_size = dst_tile_size * ema_buffer_depth;
+
+    auto src_cb_cfg = tt::tt_metal::CircularBufferConfig(src_cb_size, {{src_cb_index, src_data_format}})
+                          .set_page_size(src_cb_index, src_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, core_grid, src_cb_cfg);
 
     auto dst_cb_cfg = tt::tt_metal::CircularBufferConfig(dst_cb_size, {{dst_cb_index, dst_data_format}})
-                          .set_page_size(dst_cb_index, output.buffer()->aligned_page_size());
+                          .set_page_size(dst_cb_index, dst_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, core_grid, dst_cb_cfg);
 
     // Compile time args for the kernels
     // ---------------------------------
-    std::vector<uint32_t> reader_compile_args = {pages_per_core, a.buffer()->aligned_page_size()};
+    std::vector<uint32_t> reader_compile_args = {total_tiles_per_core, src_tile_size};
     tt::tt_metal::TensorAccessorArgs(a.buffer()).append_to(reader_compile_args);
 
     std::vector<uint32_t> writer_compile_args = {
-        pages_per_core,
-        output.buffer()->aligned_page_size(),
+        total_tiles_per_core,
+        dst_tile_size,
     };
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_args);
 
@@ -106,26 +110,26 @@ tt::tt_metal::operation::ProgramWithCallbacks ema_multi_core(
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .dst_full_sync_en = dst_full_sync_en,
             .math_approx_mode = math_approx_mode,
-            .compile_args = {batches_per_core, pages}});
+            .compile_args = {total_batches_per_core, tiles_per_channel}});
 
     auto all_cores = grid_to_cores(CoreCoord(0, 0), CoreCoord(grid_size.x - 1, grid_size.y - 1), false);
     // Runtime args
     std::vector<uint32_t> reader_runtime_args = {
         a.buffer()->address(),
-        0,  // Placeholder for src_start_page
+        0,  // Placeholder for src_start_tile
     };
     std::vector<uint32_t> writer_runtime_args = {
         output.buffer()->address(),
-        0,  // Placeholder for dst_start_page
+        0,  // Placeholder for dst_start_tile
     };
 
-    uint32_t src_start_page = 0;
-    uint32_t dst_start_page = 0;
+    uint32_t src_start_tile = 0;
+    uint32_t dst_start_tile = 0;
     for (const auto& core : all_cores) {
-        reader_runtime_args[1] = src_start_page;
-        writer_runtime_args[1] = dst_start_page;
-        src_start_page += pages_per_core;
-        dst_start_page += pages_per_core;
+        reader_runtime_args[1] = src_start_tile;
+        writer_runtime_args[1] = dst_start_tile;
+        src_start_tile += total_tiles_per_core;
+        dst_start_tile += total_tiles_per_core;
 
         tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
         tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);

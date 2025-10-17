@@ -53,7 +53,7 @@ void bind_reduction_ema_operation(py::module& module) {
                  - Layouts
                  - Ranks
                * - BFLOAT16, FLOAT32
-                 - ROW MAJOR
+                 - TILE
                  - 4
 
         Memory Support:
