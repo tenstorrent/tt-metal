@@ -287,6 +287,7 @@ void Hal::initialize_wh(bool is_base_routing_fw_enabled) {
     this->noc_multicast_encoding_func_ = [](uint32_t x_start, uint32_t y_start, uint32_t x_end, uint32_t y_end) {
         return NOC_MULTICAST_ENCODING(x_start, y_start, x_end, y_end);
     };
+    this->noc_xy_pcie64_encoding_func_ = [](uint32_t x, uint32_t y) { return NOC_XY_PCIE_ENCODING(x, y) >> 32; };
     this->noc_mcast_addr_start_x_func_ = [](uint64_t addr) -> uint64_t { return NOC_MCAST_ADDR_START_X(addr); };
     this->noc_mcast_addr_start_y_func_ = [](uint64_t addr) -> uint64_t { return NOC_MCAST_ADDR_START_Y(addr); };
     this->noc_mcast_addr_end_x_func_ = [](uint64_t addr) -> uint64_t { return NOC_MCAST_ADDR_END_X(addr); };
