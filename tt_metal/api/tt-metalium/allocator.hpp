@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// REVERT ME
 #pragma once
 
 #include <cstdint>
