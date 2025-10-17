@@ -229,7 +229,7 @@ try_download_artifacts() {
   local wheel_installed=false
 
   # Process TTMetal artifact (tar.zst extraction)
-  if [ -n "$ttmetal_artifact" ] && [ -f "$ttmetal_artifact" ]; then
+  if [ -n "$ttmetal_artifact" ]; then
     echo "✅ Processing TTMetal artifact: $ttmetal_artifact..."
     if unzip -q "$ttmetal_artifact"; then
       echo "✅ $ttmetal_artifact unzipped successfully"
@@ -252,7 +252,7 @@ try_download_artifacts() {
   fi
 
   # Process eager-dist artifact (Python wheel installation)
-  if [ -n "$eagerdist_artifact" ] && [ -f "$eagerdist_artifact" ]; then
+  if [ -n "$eagerdist_artifact" ]; then
     echo "✅ Processing eager-dist wheel: $eagerdist_artifact..."
     if unzip -q "$eagerdist_artifact"; then
       echo "✅ $eagerdist_artifact unzipped successfully"
