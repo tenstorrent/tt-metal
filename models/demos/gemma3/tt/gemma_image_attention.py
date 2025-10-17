@@ -333,16 +333,17 @@ class TtGemmaImageAttention(LightweightModule):
         )
         if seq_len > MAX_MM_SEQ_LEN:
             output_11SH = ttnn.reshape(output_11SH, [batch_size, 1, seq_len, -1])
+        ttnn.deallocate(attn_output_11SH)
 
         # Then in your forward method, replace the all_reduce_async code with:
         if self.num_devices > 1:
             output_all_reduce = custom_all_reduce(self, output_11SH)
+            ttnn.deallocate(output_11SH)
         else:
             output_all_reduce = output_11SH
 
         output_after_bias = ttnn.add(output_all_reduce, self.bo)
-
-        ttnn.deallocate(attn_output_11SH)  # TODO mstojko - move this upwards if you keep this all_reduce impl.
+        ttnn.deallocate(output_all_reduce)
 
         return output_after_bias
 
@@ -364,5 +365,6 @@ def custom_all_reduce(caller, input_tensor):
     pre_bias_output = ttnn.experimental.fast_reduce_nc(
         w2_out_gathered, dims=[1], output=None, compute_kernel_config=None
     )
+    ttnn.deallocate(w2_out_gathered)
 
     return pre_bias_output
