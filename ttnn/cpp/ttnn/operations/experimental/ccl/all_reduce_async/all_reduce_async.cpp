@@ -23,6 +23,9 @@
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/moreh/moreh_sum/moreh_sum.hpp"
+#include "ttnn/operations/ccl/reduce_scatter/reduce_scatter.hpp"
+#include "ttnn/operations/ccl/all_gather/all_gather.hpp"
+#include "ttnn/operations/ccl/ccl_common.hpp"
 
 namespace {
 inline bool is_fabric_2d() {
@@ -280,9 +283,9 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
     const ttnn::Tensor& input_tensor,
     const uint32_t cluster_axis,
     const MeshDevice& mesh_device,
-    const std::vector<GlobalSemaphore>& barrier_semaphores,
-    const std::vector<GlobalSemaphore>& rs_global_semaphores,
-    const std::vector<GlobalSemaphore>& ag_global_semaphores,
+    const std::optional<std::vector<GlobalSemaphore>>& barrier_semaphores,
+    const std::optional<std::vector<GlobalSemaphore>>& rs_global_semaphores,
+    const std::optional<std::vector<GlobalSemaphore>>& ag_global_semaphores,
     ttnn::operations::reduction::ReduceType math_op,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     ttnn::ccl::Topology topology,
@@ -356,33 +359,60 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
     // Reduce scatter + all gather
     bool use_llama_sharded = composite_common::use_all_gather_async_llama_sharded(padded_tensor, out_memory_config);
     padded_tensor.deallocate();
-    ttnn::Tensor scattered_tensor = ttnn::operations::experimental::ccl::reduce_scatter_minimal_async(
-        interleaved_tensor,
-        std::nullopt,
-        dim,
-        rs_global_semaphores,
-        barrier_semaphores[0],
-        num_preferred_links.value_or(1),
-        change_mem_config ? std::nullopt : std::optional<MemoryConfig>(out_memory_config),
-        std::nullopt,
-        topology,
-        worker_subdevice_id_opt,
-        cluster_axis);
+    ttnn::Tensor scattered_tensor;
+    if (rs_global_semaphores.has_value() && barrier_semaphores.has_value()) {
+        scattered_tensor = ttnn::operations::experimental::ccl::reduce_scatter_minimal_async(
+            interleaved_tensor,
+            std::nullopt,
+            dim,
+            rs_global_semaphores.value(),
+            barrier_semaphores.value()[0],
+            num_preferred_links.value_or(1),
+            change_mem_config ? std::nullopt : std::optional<MemoryConfig>(out_memory_config),
+            std::nullopt,
+            topology,
+            worker_subdevice_id_opt,
+            cluster_axis);
+    } else {
+        scattered_tensor = ttnn::reduce_scatter(
+            interleaved_tensor,
+            dim,
+            cluster_axis,
+            worker_subdevice_id_opt,
+            out_memory_config,
+            std::nullopt,
+            num_preferred_links,
+            topology);
+    }
     interleaved_tensor.deallocate();
-    auto gathered = ttnn::operations::experimental::ccl::all_gather_async(
-        scattered_tensor,
-        dim,
-        cluster_axis,
-        mesh_device,
-        topology,
-        ag_global_semaphores,
-        std::nullopt,
-        change_mem_config ? std::nullopt : std::optional<MemoryConfig>(out_memory_config),
-        num_preferred_links.value_or(1),
-        worker_subdevice_id_opt,
-        false,
-        use_llama_sharded,
-        barrier_semaphores[1]);
+    ttnn::Tensor gathered;
+    if (ag_global_semaphores.has_value() && barrier_semaphores.has_value()) {
+        TT_FATAL(barrier_semaphores.value().size() == 2, "Barrier semaphores must be of size 2");
+        gathered = ttnn::operations::experimental::ccl::all_gather_async(
+            scattered_tensor,
+            dim,
+            cluster_axis,
+            mesh_device,
+            topology,
+            ag_global_semaphores.value(),
+            std::nullopt,
+            change_mem_config ? std::nullopt : std::optional<MemoryConfig>(out_memory_config),
+            num_preferred_links.value_or(1),
+            worker_subdevice_id_opt,
+            false,
+            use_llama_sharded,
+            barrier_semaphores.value()[1]);
+    } else {
+        gathered = ttnn::all_gather(
+            scattered_tensor,
+            dim,
+            cluster_axis,
+            worker_subdevice_id_opt,
+            out_memory_config,
+            std::nullopt,
+            num_preferred_links,
+            topology);
+    }
     scattered_tensor.deallocate();
     // slice to inital shape if needed using slice
     if (gathered.logical_shape() != initial_shape) {
@@ -395,6 +425,32 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
         gathered = ttnn::to_memory_config(gathered, out_memory_config, std::nullopt);
     }
     return gathered;
+}
+
+ttnn::Tensor ExecuteAllReduceAsync::invoke(
+    const ttnn::Tensor& input_tensor,
+    uint32_t cluster_axis,
+    ttnn::operations::reduction::ReduceType math_op,
+    std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
+    const std::optional<ttnn::MemoryConfig>& memory_config,
+    std::optional<size_t> num_preferred_links,
+    std::optional<ttnn::ccl::Topology> topology) {
+    auto topology_ = topology.value_or(
+        ttnn::ccl::get_usable_topology(input_tensor, tt::tt_fabric::get_fabric_topology(), cluster_axis));
+    auto mesh_device = input_tensor.device();
+    TT_FATAL(mesh_device != nullptr, "Mesh device is required");
+    return ExecuteAllReduceAsync::invoke(
+        input_tensor,
+        cluster_axis,
+        *mesh_device,
+        std::nullopt,
+        std::nullopt,
+        std::nullopt,
+        math_op,
+        std::nullopt,
+        topology_,
+        num_preferred_links,
+        subdevice_id);
 }
 
 ttnn::Tensor ExecuteAllReduceAsync::invoke(
