@@ -33,6 +33,51 @@ def fa_rand(*shape):
     return normal_1 + normal_2 * bernoulli
 
 
+def create_sliding_window_mask_prefill(b, nh, seq_len, sliding_window, is_causal=True):
+    """
+    Create attention mask for sliding window attention in prefill mode.
+
+    Args:
+        b: batch size
+        nh: number of heads
+        seq_len: sequence length
+        sliding_window: sliding window size
+        is_causal: whether to apply causal constraint
+
+    Returns:
+        attn_mask: [b, nh, seq_len, seq_len] mask with -inf for positions outside window
+    """
+    attn_mask = torch.zeros((b, nh, seq_len, seq_len))
+
+    for i in range(b):
+        for q_pos in range(seq_len):
+            if is_causal:
+                # Causal sliding window: spans from (q_pos - sliding_window + 1) to q_pos (inclusive)
+                window_end = q_pos + 1  # exclusive (causal constraint)
+                window_start = max(0, window_end - sliding_window)
+
+                # Mask positions before sliding window start
+                if window_start > 0:
+                    attn_mask[i, :, q_pos, :window_start] = torch.finfo(torch.float32).min
+
+                # Mask positions after current position (causal constraint)
+                if q_pos + 1 < seq_len:
+                    attn_mask[i, :, q_pos, q_pos + 1 :] = torch.finfo(torch.float32).min
+            else:
+                # Non-causal sliding window: centered on diagonal with half before and half after
+                half_window = sliding_window // 2
+                window_start = max(0, q_pos - half_window)
+                window_end = min(seq_len, q_pos + half_window + 1)  # exclusive
+
+                # Mask positions outside the sliding window
+                if window_start > 0:
+                    attn_mask[i, :, q_pos, :window_start] = torch.finfo(torch.float32).min
+                if window_end < seq_len:
+                    attn_mask[i, :, q_pos, window_end:] = torch.finfo(torch.float32).min
+
+    return attn_mask
+
+
 def run_test_sdpa_tt(
     device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, use_high_precision_compute=False, rmse_threshold=None
 ):
@@ -761,7 +806,8 @@ def test_joint_sdpa_program_cache(device, b, nh, seq_len, joint_seq_len, d, q_ch
 
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from models.perf.device_perf_utils import run_device_perf_detailed
-from tracy.process_model_log import run_device_profiler, get_latest_ops_log_filename
+
+# from tracy.process_model_log import run_device_profiler, get_latest_ops_log_filename
 
 
 @pytest.mark.skip()
@@ -1052,3 +1098,96 @@ def test_sdpa_benchmark(device):
                             logger.error(f"Error: {e}")
 
                 ttnn.ReadDeviceProfiler(device)
+
+
+def run_test_sdpa_sliding_window(
+    device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, sliding_window, is_causal=True, rmse_threshold=None
+):
+    """Test sliding window attention in prefill mode."""
+    torch.manual_seed(1234)
+
+    program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+        q_chunk_size=q_chunk_size,
+        k_chunk_size=k_chunk_size,
+        exp_approx_mode=True,
+    )
+
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=True,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+    )
+
+    Q = fa_rand(b, nh, s, d)
+    K = fa_rand(b, nkv, s, d)
+    V = fa_rand(b, nkv, s, d)
+
+    tt_Q = ttnn.from_torch(Q, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, pad_value=0.0)
+    tt_K = ttnn.from_torch(K, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, pad_value=0.0)
+    tt_V = ttnn.from_torch(V, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, pad_value=0.0)
+
+    tt_back = ttnn.transformer.scaled_dot_product_attention(
+        tt_Q,
+        tt_K,
+        tt_V,
+        is_causal=is_causal,
+        sliding_window_size=sliding_window,
+        program_config=program_config,
+        compute_kernel_config=compute_kernel_config,
+    )
+    tt_back = ttnn.to_torch(tt_back)
+    # Slice out any tile-padding
+    tt_back = tt_back[:, :, :s, :]
+
+    # Create reference with sliding window mask
+    K_repeated = torch.cat([K[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1)  # b, nh, s, s
+    V_repeated = torch.cat([V[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1)  # b, nh, s, s
+
+    # Create sliding window mask
+    sliding_window_mask = create_sliding_window_mask_prefill(b, nh, s, sliding_window, is_causal)
+
+    gt = torch.nn.functional.scaled_dot_product_attention(
+        Q, K_repeated, V_repeated, attn_mask=sliding_window_mask, is_causal=False
+    )
+
+    out_pass, out_pcc = comp_pcc(gt, tt_back, 0.994)
+    logger.debug(f"python vs pytorch: {out_pcc}")
+    rmse = torch.sqrt(((gt - tt_back) ** 2).mean()).item()
+    logger.debug(f"rmse: {rmse}")
+    if rmse_threshold is not None:
+        assert rmse < rmse_threshold
+    else:
+        assert out_pass
+
+
+@pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
+@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16], ids=["bfp8", "bf16"])
+@pytest.mark.parametrize("q_chunk_size", [128, 256], ids=["q128", "q256"])
+@pytest.mark.parametrize("k_chunk_size", [128, 256], ids=["k128", "k256"])
+@pytest.mark.parametrize(
+    "b, nh, nkv, s, d, sliding_window",
+    [
+        # Test different sliding window sizes
+        [1, 8, 1, 1024, 128, 64],  # Small window
+        [1, 8, 1, 1024, 128, 128],  # Medium window
+        [1, 8, 1, 1024, 128, 256],  # Large window
+        [1, 8, 1, 2048, 128, 128],  # Longer sequence
+        [2, 8, 1, 512, 128, 64],  # Batch size > 1
+        [1, 16, 2, 1024, 128, 128],  # GQA with sliding window
+        [1, 4, 2, 32 * 1024, 128, 1024],  # gemma
+    ],
+)
+def test_sdpa_sliding_window(device, b, nh, nkv, s, d, dtype, q_chunk_size, k_chunk_size, sliding_window):
+    """Test sliding window attention functionality in SDPA prefill."""
+    if (s % q_chunk_size != 0) or (s % k_chunk_size != 0):
+        pytest.skip("s must be divisible by q_chunk_size and k_chunk_size")
+    if sliding_window >= s:
+        pytest.skip("sliding_window must be smaller than sequence length")
+
+    ttnn.device.DisablePersistentKernelCache()
+    rmse_threshold = 0.01
+    run_test_sdpa_sliding_window(
+        device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, sliding_window, rmse_threshold=rmse_threshold
+    )
