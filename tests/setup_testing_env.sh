@@ -113,11 +113,11 @@ main() {
     trap cleanup EXIT
 
     # Get script directory and version file
-    local version_file="$SCRIPT_DIR/sfpi-version.sh"
+    local version_file="$SCRIPT_DIR/sfpi-info.sh"
 
     # Check if version file exists and is readable
     if [[ ! -r "$version_file" ]]; then
-        echo "ERROR: sfpi-version.sh not found or not readable at '$version_file'" >&2
+        echo "ERROR: sfpi-info.sh not found or not readable at '$version_file'" >&2
         exit 1
     fi
 
@@ -141,7 +141,7 @@ main() {
     setup_precommit
 
     # shellcheck source=/dev/null
-    local $(grep -v '^#' $version_file)
+    eval local $($version_file SHELL txz)
 
     # Check if SFPI is already installed and up to date
     if [[ -f "${SCRIPT_DIR}/sfpi/sfpi.version" ]] &&
@@ -150,27 +150,21 @@ main() {
         exit 0
     fi
 
-    local pkg=txz
-    # taken from tt-metal/install_dependencies.sh
-    local sfpi_arch=$(uname -m)
-    local sfpi_pkg_md5=$(eval echo "\$sfpi_${sfpi_arch}_${pkg}_md5")
-    if [[ -z $(eval echo "$sfpi_${pkg}_md5") ]] ; then
-	echo "[ERROR] SFPI $sfpi_version $pkg package for ${sfpi_arch} is not available" >&2
+    if [[ -z $sfpi_md5 ]] ; then
+	echo "[ERROR] SFPI $sfpi_version $sfpi_pkg package for $sfpi_arch $sfpi_dist is not available" >&2
 	exit 1
     fi
 
     # Download SFPI
     echo "SFPI not present or out of date. Fetching version ${sfpi_version}..."
     local TEMP_DIR=$(mktemp -d)
-    local filename="sfpi_${sfpi_version}_${sfpi_arch}.${pkg}"
-    local download_url="$sfpi_url/v$sfpi_version"
-    if ! wget -P $TEMP_DIR --waitretry=5 --retry-connrefused "$download_url/$filename" ; then
-        echo "ERROR: Failed to download $download_url/$filename" >&2
+    if ! wget -P $TEMP_DIR --waitretry=5 --retry-connrefused "$sfpi_url/$sfpi_filename" ; then
+        echo "ERROR: Failed to download $sfpi_url/$sfpi_filename" >&2
         exit 1
     fi
-    if [ $(md5sum -b "${TEMP_DIR}/$filename" | cut -d' ' -f1) \
-	     != "$sfpi_pkg_md5" ] ; then
-	echo "[ERROR] SFPI $filename md5 mismatch" >&2
+    if [ $(md5sum -b "${TEMP_DIR}/$sfpi_filename" | cut -d' ' -f1) \
+	     != "$sfpi_md5" ] ; then
+	echo "[ERROR] SFPI $sfpi_filename md5 mismatch" >&2
 	rm -rf $TEMP_DIR
 	exit 1
     fi
@@ -178,8 +172,8 @@ main() {
     # Remove old installation and extract the new one
     echo "Extracting SFPI release..."
     rm -rf "${SCRIPT_DIR}/sfpi"
-    if ! tar xJf "$TEMP_DIR/$filename" -C "${SCRIPT_DIR}"; then
-        echo "ERROR: Failed to extract SFPI release from $filename" >&2
+    if ! tar xJf "$TEMP_DIR/$sfpi_filename" -C "${SCRIPT_DIR}"; then
+        echo "ERROR: Failed to extract SFPI release from $sfpi_filename" >&2
 	rm -rf $TEMP_DIR
         exit 1
     fi
