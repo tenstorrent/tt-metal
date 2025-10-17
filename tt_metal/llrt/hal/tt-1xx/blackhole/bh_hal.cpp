@@ -322,6 +322,10 @@ void Hal::initialize_bh(bool enable_2_erisc_mode) {
     };
 
     this->noc_xy_encoding_func_ = [](uint32_t x, uint32_t y) { return NOC_XY_ENCODING(x, y); };
+    this->noc_xy_pcie64_encoding_func_ = [](uint32_t x, uint32_t y) {
+        // Use non-iATU range for 64-bit inputs.
+        return NOC_XY_ENCODING(x, y);
+    };
     this->noc_multicast_encoding_func_ = [](uint32_t x_start, uint32_t y_start, uint32_t x_end, uint32_t y_end) {
         return NOC_MULTICAST_ENCODING(x_start, y_start, x_end, y_end);
     };
