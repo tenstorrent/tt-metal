@@ -213,7 +213,6 @@ struct InspectorSettings {
 };
 
 class RunTimeOptions {
-    bool is_root_dir_set = false;
     std::string root_dir;
 
     bool is_cache_dir_env_var_set = false;
@@ -235,6 +234,11 @@ class RunTimeOptions {
     bool record_noc_transfer_data = false;
 
     InspectorSettings inspector_settings;
+
+    // Fabric profiling settings
+    struct FabricProfilingSettings {
+        bool enable_rx_ch_fwd = false;
+    } fabric_profiling_settings;
 
     TargetSelection feature_targets[RunTimeDebugFeatureCount];
 
@@ -339,8 +343,8 @@ class RunTimeOptions {
     // Timeout duration for operations
     std::chrono::duration<float> timeout_duration_for_operations = std::chrono::duration<float>(0.0f);
 
-    // Using MGD 2.0 syntax for mesh graph descriptor in Fabric Control Plane
-    bool use_mesh_graph_descriptor_2_0 = false;
+    // Using MGD 1.0 syntax for mesh graph descriptor in Fabric Control Plane
+    bool use_mesh_graph_descriptor_1_0 = false;
 
     // Reliability mode override parsed from environment (RELIABILITY_MODE)
     std::optional<tt::tt_fabric::FabricReliabilityMode> reliability_mode = std::nullopt;
@@ -350,7 +354,6 @@ public:
     RunTimeOptions(const RunTimeOptions&) = delete;
     RunTimeOptions& operator=(const RunTimeOptions&) = delete;
 
-    bool is_root_dir_specified() const { return this->is_root_dir_set; }
     static void set_root_dir(const std::string& root_dir);
     const std::string& get_root_dir() const;
 
@@ -639,6 +642,10 @@ public:
     bool get_enable_fabric_telemetry() const { return enable_fabric_telemetry; }
     void set_enable_fabric_telemetry(bool enable) { enable_fabric_telemetry = enable; }
 
+    // If true, enables code profiling for receiver channel forward operations
+    bool get_enable_fabric_code_profiling_rx_ch_fwd() const { return fabric_profiling_settings.enable_rx_ch_fwd; }
+    void set_enable_fabric_code_profiling_rx_ch_fwd(bool enable) { fabric_profiling_settings.enable_rx_ch_fwd = enable; }
+
     // Reliability mode override accessor
     std::optional<tt::tt_fabric::FabricReliabilityMode> get_reliability_mode() const { return reliability_mode; }
 
@@ -652,6 +659,10 @@ public:
     std::chrono::duration<float> get_timeout_duration_for_operations() const { return timeout_duration_for_operations; }
     // Mesh graph descriptor version accessor
     bool get_use_mesh_graph_descriptor_2_0() const { return use_mesh_graph_descriptor_2_0; }
+
+    // Using MGD 1.0 syntax for mesh graph descriptor in Fabric Control Plane
+    // TODO: This will be removed after MGD 1.0 is deprecated
+    bool get_use_mesh_graph_descriptor_1_0() const { return use_mesh_graph_descriptor_1_0; }
 
     // Parse all feature-specific environment variables, after hal is initialized.
     // (Needed because syntax of some env vars is arch-dependent.)

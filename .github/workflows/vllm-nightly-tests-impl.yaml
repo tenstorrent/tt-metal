@@ -47,6 +47,7 @@ jobs:
             tt-llama-text-ver: tt_transformers,
             override-tt-config: "{\"fabric_config\": \"FABRIC_1D\", \"trace_region_size\": 28467200}",
             multimodal: true,
+            additional-args: "--max_model_len 2048",
             co-owner-1-id: U07RY6B5FLJ, # Gongyu Wang
           },
           {
@@ -93,7 +94,7 @@ jobs:
             runner-label: topology-6u,
             mesh-device: TG,
             tt-llama-text-ver: llama3_70b_galaxy,
-            override-tt-config: "{\"dispatch_core_axis\": \"col\", \"sample_on_device_mode\": \"all\", \"fabric_config\": \"FABRIC_1D_RING\", \"worker_l1_size\": 1344544, \"trace_region_size\": 95693824}",
+            override-tt-config: "{\"dispatch_core_axis\": \"col\", \"sample_on_device_mode\": \"all\", \"fabric_config\": \"FABRIC_1D_RING\", \"worker_l1_size\": 1344544, \"trace_region_size\": 184915840}",
             multimodal: false,
             co-owner-1-id: U08E1JCDVNX, # Pavle Petrovic
             co-owner-2-id: U08CEGF78ET, # Salar Hosseini Khorasgani
@@ -156,7 +157,7 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: ⬇️ Setup Metal
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@6b36ef848f5f66ba0ae6f883ff69b09692e48ce9
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
@@ -208,6 +209,7 @@ jobs:
 
           python3 vllm/examples/server_example_tt.py \
             --model ${{ matrix.test-group.model }} \
+            ${{ matrix.test-group.additional-args }} \
             "${OVERRIDE_TT_CONFIG[@]}" \
             > "${FILE_SERVER_LOG}" 2>&1 &
 
