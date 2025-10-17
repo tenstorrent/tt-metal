@@ -77,12 +77,32 @@ else
   echo "command is set: $test"
 fi
 
-# Creating virtual environment for dependencies only (ttnn accessible via PYTHONPATH)
+# Creating virtual environment
 python3 -m venv python_env
 source ./python_env/bin/activate
-pip install --upgrade pip
+
+# Detect OS (like create_venv.sh does)
+. ./install_dependencies.sh --source-only
+detect_os
+
+# Match create_venv.sh pip/setuptools/wheel setup
+if [ "$OS_ID" = "ubuntu" ] && [ "$OS_VERSION" = "22.04" ]; then
+    echo "Ubuntu 22.04 detected: force pip/setuptools/wheel versions"
+    pip install --force-reinstall pip==25.1.1
+    python3 -m pip config set global.extra-index-url https://download.pytorch.org/whl/cpu
+    python3 -m pip install setuptools wheel==0.45.1
+else
+    echo "$OS_ID $OS_VERSION detected: updating wheel and setuptools to latest"
+    python3 -m pip install --upgrade wheel setuptools
+fi
+
+# Install dev dependencies (needed for building C++ extensions)
+python3 -m pip install -r $(pwd)/tt_metal/python_env/requirements-dev.txt
+
+# Install ttnn (builds wheel with C++ extensions)
 pip install -e .
-# Skip building ttnn wheel (takes ~25min) - tests access it via PYTHONPATH=/work
+
+# Install additional test requirements
 pip install -r models/tt_transformers/requirements.txt
 
 
