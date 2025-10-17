@@ -12,7 +12,7 @@ on:
       timeout:
         required: false
         type: number
-        default: 240
+        default: 560
       num-groups:
         required: false
         type: number
