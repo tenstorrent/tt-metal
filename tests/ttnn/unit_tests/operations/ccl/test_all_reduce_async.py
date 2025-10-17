@@ -770,4 +770,5 @@ def test_all_reduce_fabric_2d(
         num_iters=1,
         num_all_reduce_instances=1,
         cluster_axis=cluster_axis,
+        use_semaphore_free_all_reduce_impl=True,
     )
