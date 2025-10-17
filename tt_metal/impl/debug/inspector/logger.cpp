@@ -379,12 +379,12 @@ void Logger::log_dispatch_core_info(const tt_cxy_pair& virtual_core, const CoreI
     }
     try {
         dispatch_core_ostream << "- dispatch_core_info:\n";
-        dispatch_core_ostream << "    virtual_core: " << virtual_core.chip << ", " << virtual_core.x << ", "
-                              << virtual_core.y << "\n";
+        dispatch_core_ostream << "    virtual_core (chip, x, y): " << virtual_core.chip << ", " << virtual_core.x
+                              << ", " << virtual_core.y << "\n";
         dispatch_core_ostream << "    device_id: " << core_info.device_id << "\n";
         dispatch_core_ostream << "    servicing_device_id: " << core_info.servicing_device_id << "\n";
         dispatch_core_ostream << "    worker_type: " << enchantum::to_string(core_info.worker_type) << "\n";
-        dispatch_core_ostream << "    cq_id: " << core_info.cq_id << "\n";
+        dispatch_core_ostream << "    cq_id: " << static_cast<uint16_t>(core_info.cq_id) << "\n";
         dispatch_core_ostream << "    timestamp_ns: " << convert_timestamp(std::chrono::high_resolution_clock::now())
                               << "\n";
         dispatch_core_ostream.flush();
@@ -399,12 +399,12 @@ void Logger::log_dispatch_s_core_info(const tt_cxy_pair& virtual_core, const Cor
     }
     try {
         dispatch_s_core_ostream << "- dispatch_s_core_info:\n";
-        dispatch_s_core_ostream << "    virtual_core: " << virtual_core.chip << ", " << virtual_core.x << ", "
-                                << virtual_core.y << "\n";
+        dispatch_s_core_ostream << "    virtual_core (chip, x, y): " << virtual_core.chip << ", " << virtual_core.x
+                                << ", " << virtual_core.y << "\n";
         dispatch_s_core_ostream << "    device_id: " << core_info.device_id << "\n";
         dispatch_s_core_ostream << "    servicing_device_id: " << core_info.servicing_device_id << "\n";
         dispatch_s_core_ostream << "    worker_type: " << enchantum::to_string(core_info.worker_type) << "\n";
-        dispatch_s_core_ostream << "    cq_id: " << core_info.cq_id << "\n";
+        dispatch_s_core_ostream << "    cq_id: " << static_cast<uint16_t>(core_info.cq_id) << "\n";
         dispatch_s_core_ostream << "    timestamp_ns: " << convert_timestamp(std::chrono::high_resolution_clock::now())
                                 << "\n";
         dispatch_s_core_ostream.flush();
@@ -419,12 +419,12 @@ void Logger::log_prefetcher_core_info(const tt_cxy_pair& virtual_core, const Cor
     }
     try {
         prefetcher_core_ostream << "- prefetcher_core_info:\n";
-        prefetcher_core_ostream << "    virtual_core: " << virtual_core.chip << ", " << virtual_core.x << ", "
-                                << virtual_core.y << "\n";
+        prefetcher_core_ostream << "    virtual_core (chip, x, y): " << virtual_core.chip << ", " << virtual_core.x
+                                << ", " << virtual_core.y << "\n";
         prefetcher_core_ostream << "    device_id: " << core_info.device_id << "\n";
         prefetcher_core_ostream << "    servicing_device_id: " << core_info.servicing_device_id << "\n";
         prefetcher_core_ostream << "    worker_type: " << enchantum::to_string(core_info.worker_type) << "\n";
-        prefetcher_core_ostream << "    cq_id: " << core_info.cq_id << "\n";
+        prefetcher_core_ostream << "    cq_id: " << static_cast<uint16_t>(core_info.cq_id) << "\n";
         prefetcher_core_ostream << "    timestamp_ns: " << convert_timestamp(std::chrono::high_resolution_clock::now())
                                 << "\n";
         prefetcher_core_ostream.flush();

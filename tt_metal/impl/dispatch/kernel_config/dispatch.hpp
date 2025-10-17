@@ -124,7 +124,7 @@ public:
             type = DISPATCH_D;
         }
         this->kernel_type_ = FDKernelType::DISPATCH;
-
+        // Log dispatch core info based on virtual core to inspector
         auto virtual_core = this->GetVirtualCore();
         tt::tt_metal::Inspector::set_dispatch_core_info(virtual_core, type, cq_id, device_id, servicing_device_id);
     }
