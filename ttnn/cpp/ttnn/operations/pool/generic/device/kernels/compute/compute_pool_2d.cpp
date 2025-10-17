@@ -200,8 +200,6 @@ void MAIN {
                     constexpr uint32_t max_mpwi_kernel_size = 9;
                     max_reduce_with_indices<max_mpwi_kernel_size>(data_dst_idx, index_dst_idx);
 
-                    pack_reconfig_data_format(idx_tmp_cb_id);
-
                     // update the current index column
                     if (last_c_block) {
                         if (current_idx_col + right_inc + kernel_w > in_w_padded) {
