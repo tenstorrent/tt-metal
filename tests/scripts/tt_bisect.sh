@@ -134,7 +134,7 @@ while [[ "$found" == "false" ]]; do
       local smi_output=$(tt-smi -ls 2>/dev/null)
 
       if echo "$smi_output" | grep -q "Wormhole"; then
-          local device_count=$(echo "$smi_output" | grep -c "Device")
+          local device_count=$(echo "$smi_output" | grep -c "tt-galaxy-wh")
           if [[ "$device_count" -ge 32 ]]; then
               echo "topology-6u"
               return 0
@@ -164,7 +164,6 @@ while [[ "$found" == "false" ]]; do
       else
         tt-smi -r >/dev/null 2>&1 || true  # use regular reset mode
       fi
-      echo "Devices reset"
 
       echo "Run: $test"
       if timeout -k 10s "$timeout_duration_iteration" bash -lc "$test" 2>&1 | tee "$output_file"; then
