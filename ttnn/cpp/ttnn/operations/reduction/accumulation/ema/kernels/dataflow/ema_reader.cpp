@@ -9,23 +9,21 @@
 #include "debug/dprint.h"
 
 void kernel_main() {
-    // Runtime args
-    // ------------
-    const uint32_t src_base_addr = get_arg_val<uint32_t>(0);
-    const uint32_t src_start_tile = get_arg_val<uint32_t>(1);
-
     // Compile time args
     // -----------------
     constexpr uint32_t total_tiles_per_core = get_compile_time_arg_val(0);
     constexpr uint32_t src_tile_size = get_compile_time_arg_val(1);
     constexpr auto s_src_args = TensorAccessorArgs<2>();
 
-    //-------------------------------------------------------------------------
+    // Runtime args
+    // ------------
+    const uint32_t src_base_addr = get_arg_val<uint32_t>(0);
+    const uint32_t src_start_tile = get_arg_val<uint32_t>(1);
+
+    // Tensor accessor
     const auto src_accessor = TensorAccessor(s_src_args, src_base_addr, src_tile_size);
 
-    //-------------------------------------------------------------------------
     // CB indices
-    // -----------------
     constexpr auto src_cb = tt::CBIndex::c_0;
 
     //-------------------------------------------------------------------------

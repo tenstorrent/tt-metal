@@ -2,8 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <string>
-
 #include <tt-metalium/circular_buffer_config.hpp>
 #include "ema_op.hpp"
 #include <tt-metalium/work_split.hpp>
@@ -24,15 +22,18 @@ tt::tt_metal::operation::ProgramWithCallbacks ema_multi_core(
     float alpha,
     CoreCoord grid_size,
     const DeviceComputeKernelConfig& compute_kernel_config) {
-    // Args to size the grid
+    // Grid sizing
+    // ------------
     // If empty grid size, use all cores
     if ((grid_size.x == 0) && (grid_size.y == 0)) {
         grid_size = a.device()->compute_with_storage_grid_size();
     }
     auto num_cores = grid_size.x * grid_size.y;
     auto core_grid = CoreRange(CoreCoord(0, 0), CoreCoord(grid_size.x - 1, grid_size.y - 1));
+    auto all_cores = grid_to_cores(CoreCoord(0, 0), CoreCoord(grid_size.x - 1, grid_size.y - 1), false);
 
-    // Args based on the tensor shape
+    // Tensor sizing
+    // -------------
     auto a_shape = a.padded_shape();
     auto num_batches = a_shape[1];
     auto num_channels = a_shape[2];
@@ -44,6 +45,8 @@ tt::tt_metal::operation::ProgramWithCallbacks ema_multi_core(
     auto total_tiles_per_core = total_tiles / num_cores;
     auto total_batches_per_core = total_tiles_per_core / tiles_per_channel;
 
+    // Create program
+    // --------------
     auto program = Program();
 
     // Circular buffer config
@@ -118,8 +121,8 @@ tt::tt_metal::operation::ProgramWithCallbacks ema_multi_core(
             .math_approx_mode = math_approx_mode,
             .compile_args = {total_batches_per_core, tiles_per_channel}});
 
-    auto all_cores = grid_to_cores(CoreCoord(0, 0), CoreCoord(grid_size.x - 1, grid_size.y - 1), false);
-    // Runtime args
+    // Set runtime args
+    // ---------------
     std::vector<uint32_t> reader_runtime_args = {
         a.buffer()->address(),
         0,  // Placeholder for src_start_tile
@@ -141,6 +144,8 @@ tt::tt_metal::operation::ProgramWithCallbacks ema_multi_core(
         tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
     }
 
+    // runtime_args_callback: If only the tensor changes, invoke this callback and skip the rest
+    // -----------------------------------------------------------------------------------------
     auto override_runtime_args_callback = [reader_kernel_id, writer_kernel_id, all_cores](
                                               const void* operation,
                                               Program& program,
@@ -150,6 +155,7 @@ tt::tt_metal::operation::ProgramWithCallbacks ema_multi_core(
         auto src_buffer = input_tensors.at(0).buffer()->address();
         auto dst_buffer = output_tensors.at(0).buffer()->address();
 
+        // Update buffer addresses for all cores
         for (const auto& core : all_cores) {
             auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
             reader_runtime_args[0] = src_buffer;
