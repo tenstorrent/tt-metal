@@ -107,13 +107,14 @@ CoreType core_type_from_virtual_core(tt::ChipId device_id, const CoreCoord& virt
     const metal_SocDescriptor& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id);
 
     const std::vector<tt::umd::CoreCoord>& translated_dram_cores =
-        soc_desc.get_cores(CoreType::DRAM, CoordSystem::TRANSLATED);
+        soc_desc.get_cores(CoreType::DRAM, tt::CoordSystem::TRANSLATED);
     if (std::find(translated_dram_cores.begin(), translated_dram_cores.end(), virtual_coord) !=
         translated_dram_cores.end()) {
         return CoreType::DRAM;
     }
 
-    CoreType core_type = soc_desc.translate_coord_to(virtual_coord, CoordSystem::NOC0, CoordSystem::NOC0).core_type;
+    CoreType core_type =
+        soc_desc.translate_coord_to(virtual_coord, tt::CoordSystem::NOC0, tt::CoordSystem::NOC0).core_type;
     if (core_type == CoreType::TENSIX) {
         core_type = CoreType::WORKER;
     }

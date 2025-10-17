@@ -138,7 +138,7 @@ EthernetCRCErrorCountMetric::EthernetCRCErrorCountMetric(
     value_ = 0;
     tt::umd::TTDevice* device = cluster->get_tt_device(chip_id);
     TT_FATAL(device->get_arch() == tt::ARCH::WORMHOLE_B0, "Metric {} available only on Wormhole", __func__);
-    ethernet_core_ = cluster->get_soc_descriptor(chip_id).get_eth_core_for_channel(channel, CoordSystem::LOGICAL);
+    ethernet_core_ = cluster->get_soc_descriptor(chip_id).get_eth_core_for_channel(channel, tt::CoordSystem::LOGICAL);
     crc_addr_ = hal->get_dev_addr(
         tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::CRC_ERR);
 }
@@ -171,7 +171,7 @@ EthernetRetrainCountMetric::EthernetRetrainCountMetric(
     const std::unique_ptr<tt::tt_metal::Hal>& hal) :
     UIntMetric(), tray_id_(tray_id), asic_location_(asic_location), chip_id_(chip_id), channel_(channel) {
     value_ = 0;
-    ethernet_core_ = cluster->get_soc_descriptor(chip_id).get_eth_core_for_channel(channel, CoordSystem::LOGICAL);
+    ethernet_core_ = cluster->get_soc_descriptor(chip_id).get_eth_core_for_channel(channel, tt::CoordSystem::LOGICAL);
     retrain_count_addr_ = hal->get_dev_addr(
         tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::RETRAIN_COUNT);
 }
@@ -206,7 +206,7 @@ EthernetCorrectedCodewordCountMetric::EthernetCorrectedCodewordCountMetric(
     value_ = 0;
     tt::umd::TTDevice* device = cluster->get_tt_device(chip_id);
     TT_FATAL(device->get_arch() == tt::ARCH::WORMHOLE_B0, "Metric {} available only on Wormhole", __func__);
-    ethernet_core_ = cluster->get_soc_descriptor(chip_id).get_eth_core_for_channel(channel, CoordSystem::LOGICAL);
+    ethernet_core_ = cluster->get_soc_descriptor(chip_id).get_eth_core_for_channel(channel, tt::CoordSystem::LOGICAL);
     corr_addr_ = hal->get_dev_addr(
         tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::CORR_CW);
 }
@@ -243,7 +243,7 @@ EthernetUncorrectedCodewordCountMetric::EthernetUncorrectedCodewordCountMetric(
     value_ = 0;
     tt::umd::TTDevice* device = cluster->get_tt_device(chip_id);
     TT_FATAL(device->get_arch() == tt::ARCH::WORMHOLE_B0, "Metric {} available only on Wormhole", __func__);
-    ethernet_core_ = cluster->get_soc_descriptor(chip_id).get_eth_core_for_channel(channel, CoordSystem::LOGICAL);
+    ethernet_core_ = cluster->get_soc_descriptor(chip_id).get_eth_core_for_channel(channel, tt::CoordSystem::LOGICAL);
     uncorr_addr_ = hal->get_dev_addr(
         tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNCORR_CW);
 }
