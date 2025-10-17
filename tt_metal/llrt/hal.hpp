@@ -311,6 +311,7 @@ private:
     IramRelocateFunc erisc_iram_relocate_func_;
     ValidRegAddrFunc valid_reg_addr_func_;
     NOCXYEncodingFunc noc_xy_encoding_func_;
+    NOCXYEncodingFunc noc_xy_pcie64_encoding_func_;
     NOCMulticastEncodingFunc noc_multicast_encoding_func_;
     NOCAddrFunc noc_mcast_addr_start_x_func_;
     NOCAddrFunc noc_mcast_addr_start_y_func_;
@@ -361,6 +362,8 @@ public:
         return noc_index == 0 ? coord : (noc_size - 1 - coord);
     }
 
+    // Returns the NOC addr to be used with 64 bit PCIe address space.
+    uint32_t noc_xy_pcie64_encoding(uint32_t x, uint32_t y) const { return noc_xy_pcie64_encoding_func_(x, y); }
     uint32_t noc_xy_encoding(uint32_t x, uint32_t y) const { return noc_xy_encoding_func_(x, y); }
     uint32_t noc_multicast_encoding(uint32_t x_start, uint32_t y_start, uint32_t x_end, uint32_t y_end) const {
         return noc_multicast_encoding_func_(x_start, y_start, x_end, y_end);

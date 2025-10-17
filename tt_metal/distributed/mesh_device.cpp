@@ -252,11 +252,11 @@ MeshDevice::MeshDevice(
         memory_pinning_params_ = MemoryPinningParameters{0u, 0u, false};
     } else {
         const auto device_arch = this->arch();
-        const bool map_to_noc_supported = tt::umd::PCIDevice::is_mapping_buffer_to_noc_supported();
         if (device_arch == tt::ARCH::BLACKHOLE) {
             memory_pinning_params_ = MemoryPinningParameters{
-                std::numeric_limits<uint32_t>::max(), std::numeric_limits<uint64_t>::max(), map_to_noc_supported};
+                std::numeric_limits<uint32_t>::max(), std::numeric_limits<uint64_t>::max(), true};
         } else if (device_arch == tt::ARCH::WORMHOLE_B0) {
+            const bool map_to_noc_supported = tt::umd::PCIDevice::is_mapping_buffer_to_noc_supported();
             const uint64_t four_gb = 4ULL * 1024ULL * 1024ULL * 1024ULL;
             const uint64_t hugepage_size = static_cast<uint64_t>(tt::tt_metal::DispatchSettings::MAX_HUGEPAGE_SIZE);
             memory_pinning_params_ = MemoryPinningParameters{12u, four_gb - hugepage_size, map_to_noc_supported};
@@ -1139,6 +1139,11 @@ std::unique_ptr<PinnedMemory> MeshDevice::pin_memory(
     auto bytes = host_buffer.view_bytes();
     void* host_ptr = static_cast<void*>(bytes.data());
     size_t buffer_size = bytes.size();
+    const auto device_arch = this->arch();
+    if (device_arch == tt::ARCH::BLACKHOLE) {
+        // On Blackhole, we can use 64-bit address space, so we don't need to use the iATU.
+        map_to_noc = false;
+    }
 
     return std::unique_ptr<PinnedMemory>(new PinnedMemory(devices, host_ptr, buffer_size, map_to_noc));
 }
