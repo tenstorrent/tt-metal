@@ -18,28 +18,17 @@ ttnn::Tensor ExecuteAllReduce::invoke(
     const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<uint32_t> num_links,
-    std::optional<tt::tt_fabric::Topology> topology) {
+    std::optional<ttnn::ccl::Topology> topology) {
     // Get mesh device from input tensor
     auto mesh_device = input_tensor.device();
     TT_FATAL(mesh_device != nullptr, "Mesh device is required for all_reduce operation");
 
     // Determine topology
-    tt::tt_fabric::Topology topology_ = topology.value_or(
+    ttnn::ccl::Topology topology_ = topology.value_or(
         ::ttnn::ccl::get_usable_topology(input_tensor, tt::tt_fabric::get_fabric_topology(), cluster_axis));
 
-    // Convert tt::tt_fabric::Topology to ttnn::ccl::Topology
-    ttnn::ccl::Topology ccl_topology;
-    if (topology_ == tt::tt_fabric::Topology::Linear) {
-        ccl_topology = ttnn::ccl::Topology::Linear;
-    } else if (topology_ == tt::tt_fabric::Topology::Ring) {
-        ccl_topology = ttnn::ccl::Topology::Ring;
-    } else {
-        ccl_topology = ttnn::ccl::Topology::Linear;  // Default fallback
-    }
-
     // Call the experimental all_reduce_async with Sum operation
-    // Pass nullopt for all semaphores as requested
-    return ttnn::operations::experimental::ccl::ExecuteAllReduceAsync::invoke(
+    return ::ttnn::experimental::all_reduce_async(
         input_tensor,
         cluster_axis,
         *mesh_device,
@@ -48,7 +37,7 @@ ttnn::Tensor ExecuteAllReduce::invoke(
         std::nullopt,                                  // ag_global_semaphores
         ttnn::operations::reduction::ReduceType::Sum,  // Always use Sum
         memory_config,
-        ccl_topology,
+        topology_,
         num_links,
         subdevice_id);
 }
