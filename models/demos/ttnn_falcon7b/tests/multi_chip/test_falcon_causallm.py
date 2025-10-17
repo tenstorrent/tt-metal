@@ -9,6 +9,7 @@ from loguru import logger
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
+from models.common.utility_functions import skip_with_watcher
 from models.demos.ttnn_falcon7b.tt.common import create_custom_preprocessor, create_kv_cache
 from models.demos.ttnn_falcon7b.tt.falcon_causallm import TtFalconCausalLM
 from models.demos.ttnn_falcon7b.tt.model_config import get_model_config, get_tt_cache_path
@@ -53,6 +54,7 @@ PRETRAINED_MODEL_NAME = f"tiiuae/falcon-7b-instruct"
     indirect=True,
 )
 @pytest.mark.parametrize("num_loops", [20])
+@skip_with_watcher("Test is not passing with watcher enabled due to overflow of the code size")
 def test_falcon_causal_lm(
     mesh_device,
     model_version,
