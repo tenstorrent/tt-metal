@@ -30,7 +30,7 @@ struct DeviceBuildEnv {
 
 // A struct to hold device-specific build environment info (lightweight version of DeviceBuildEnv)
 struct BuildEnvInfo {
-    chip_id_t device_id;
+    ChipId device_id;
     uint32_t build_key;
     std::string firmware_root_path;
 };
