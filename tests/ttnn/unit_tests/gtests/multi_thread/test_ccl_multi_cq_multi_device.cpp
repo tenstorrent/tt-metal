@@ -60,8 +60,7 @@ protected:
     }
 };
 
-// Tests in this file are disabled pending re-implementation with the tensor-aggregation and semaphore-free all-gather
-// APIs, which is blocked by #30692.
+// TODO(#30692): Re-enable after migrating to aggregated tensor + semaphore-free all-gather APIs.
 TEST_F(MultiCQFabricMeshDevice2x4Fixture, DISABLED_AsyncExecutionWorksCQ0) {
     constexpr size_t test_expected_num_devices = 4;
 
