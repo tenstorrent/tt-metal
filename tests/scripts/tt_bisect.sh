@@ -277,7 +277,7 @@ try_download_artifacts() {
   fi
 
   # Check if we got at least one artifact processed successfully
-  if [ "$ttmetal_extracted" = true ] || [ "$wheel_installed" = true ]; then
+  if [ "$ttmetal_extracted" = true ] && [ "$wheel_installed" = true ]; then
     echo "✅ Artifact processing completed successfully"
     if [ "$ttmetal_extracted" = true ]; then
       echo "   - TTMetal build artifacts extracted"
@@ -293,6 +293,10 @@ try_download_artifacts() {
 
     return 0
   else
+    # Clean up any remaining artifact files and directories
+    echo "🧹 Cleaning up artifact files..."
+    rm -rf "$ttmetal_artifact" "$eagerdist_artifact" 2>/dev/null || true
+    find . -maxdepth 1 -name "*.whl" -type f -delete 2>/dev/null || true
     echo "❌ No artifacts were processed successfully"
     return 1
   fi
