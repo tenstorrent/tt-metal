@@ -61,7 +61,6 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/graph_tracking.hpp
     api/tt-metalium/hal.hpp
     api/tt-metalium/hal_types.hpp
-    api/tt-metalium/hlk_desc.hpp
     api/tt-metalium/host_api.hpp
     api/tt-metalium/host_buffer.hpp
     api/tt-metalium/kernel_types.hpp
@@ -175,6 +174,7 @@ target_sources(
             fabric/mesh_graph_descriptors/p150_x2_mesh_graph_descriptor.yaml
             fabric/mesh_graph_descriptors/p150_x4_mesh_graph_descriptor.yaml
             fabric/mesh_graph_descriptors/p150_x8_mesh_graph_descriptor.yaml
+            fabric/mesh_graph_descriptors/p300_mesh_graph_descriptor.yaml
             fabric/mesh_graph_descriptors/single_galaxy_mesh_graph_descriptor.yaml
             fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.yaml
             fabric/mesh_graph_descriptors/tg_mesh_graph_descriptor.yaml
@@ -200,6 +200,7 @@ target_sources(
             soc_descriptors/wormhole_b0_80_arch.yaml
             tools/profiler/kernel_profiler.hpp
             tools/profiler/fabric_event_profiler.hpp
+            tools/profiler/noc_event_profiler.hpp
             # Kernel sources
             impl/dispatch/kernels/cq_dispatch.cpp
             impl/dispatch/kernels/cq_dispatch_subordinate.cpp

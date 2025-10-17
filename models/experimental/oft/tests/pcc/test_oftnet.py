@@ -19,7 +19,7 @@ from models.experimental.oft.reference.utils import get_abs_and_relative_error
 
 from tests.ttnn.utils_for_testing import check_with_pcc
 from models.experimental.oft.tt.model_preprocessing import create_OFT_model_parameters
-from tests.ttnn.unit_tests.test_bh_20_cores_sharding import skip_if_not_blackhole_20_cores
+from tests.ttnn.unit_tests.base_functionality.test_bh_20_cores_sharding import skip_if_not_blackhole_20_cores
 from loguru import logger
 
 
@@ -28,8 +28,8 @@ from loguru import logger
     "input_image_path, calib_path",
     [
         (
-            os.path.abspath(os.path.join(os.path.dirname(__file__), "../resources/000013.jpg")),
-            os.path.abspath(os.path.join(os.path.dirname(__file__), "../resources/000013.txt")),
+            os.path.abspath(os.path.join(os.path.dirname(__file__), "../../resources/000013.jpg")),
+            os.path.abspath(os.path.join(os.path.dirname(__file__), "../../resources/000013.txt")),
         )
     ],
 )
