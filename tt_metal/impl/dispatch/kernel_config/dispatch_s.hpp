@@ -44,7 +44,7 @@ public:
         this->logical_core_ = tt::tt_metal::MetalContext::instance().get_dispatch_core_manager().dispatcher_s_core(
             device_id, channel, cq_id_);
         this->kernel_type_ = FDKernelType::DISPATCH;
-
+        // Log dispatch_s core info based on virtual core to inspector
         auto virtual_core = this->GetVirtualCore();
         tt::tt_metal::Inspector::set_dispatch_s_core_info(
             virtual_core, DISPATCH_S, cq_id, device_id, servicing_device_id);
