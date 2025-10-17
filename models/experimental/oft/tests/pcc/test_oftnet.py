@@ -28,8 +28,8 @@ from loguru import logger
     "input_image_path, calib_path",
     [
         (
-            os.path.abspath(os.path.join(os.path.dirname(__file__), "../resources/000013.jpg")),
-            os.path.abspath(os.path.join(os.path.dirname(__file__), "../resources/000013.txt")),
+            os.path.abspath(os.path.join(os.path.dirname(__file__), "../../resources/000013.jpg")),
+            os.path.abspath(os.path.join(os.path.dirname(__file__), "../../resources/000013.txt")),
         )
     ],
 )

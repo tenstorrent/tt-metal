@@ -29,7 +29,7 @@ from loguru import logger
 @pytest.mark.parametrize(
     "input_image_path",
     [
-        os.path.abspath(os.path.join(os.path.dirname(__file__), "../resources/000013.jpg")),
+        os.path.abspath(os.path.join(os.path.dirname(__file__), "../../resources/000013.jpg")),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16 * 1024}], indirect=True)
