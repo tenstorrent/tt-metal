@@ -50,7 +50,7 @@ public:
     CoreCoord get_logical_ethernet_core_from_physical(const CoreCoord& physical_coord) const;
     CoreCoord get_physical_tensix_core_from_logical(const CoreCoord& logical_coord) const;
     CoreCoord get_physical_dram_core_from_logical(const CoreCoord& logical_coord) const;
-    CoreCoord get_physical_core_from_logical_core(const CoreCoord& logical_coord, const CoreType& core_type) const;
+    CoreCoord get_physical_core_from_logical_core(const CoreCoord& logical_coord, const tt::CoreType& core_type) const;
 
     CoreCoord get_dram_grid_size() const;
 

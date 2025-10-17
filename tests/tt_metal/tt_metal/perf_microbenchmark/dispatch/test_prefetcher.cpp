@@ -80,9 +80,9 @@ constexpr uint32_t PCIE_TRANSFER_SIZE_DEFAULT = 4096;
 
 constexpr uint32_t host_data_dirty_pattern = 0xbaadf00d;
 
-constexpr CoreType DISPATCH_CORE_TYPE =
-    CoreType::WORKER;  // If this changes, need to pass it into CreateDevice. TODO: Clean this up when when we clean up
-                       // single device creation.
+constexpr tt::CoreType DISPATCH_CORE_TYPE =
+    tt::CoreType::WORKER;  // If this changes, need to pass it into CreateDevice. TODO: Clean this up when when we clean
+                           // up single device creation.
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // Test dispatch program performance

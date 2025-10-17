@@ -97,26 +97,26 @@ const char* get_riscv_name(HalProgrammableCoreType core_type, uint32_t processor
 }
 
 // Helper function to determine core type from virtual coord. TODO: Remove this once we fix code types.
-CoreType core_type_from_virtual_core(tt::ChipId device_id, const CoreCoord& virtual_coord) {
+tt::CoreType core_type_from_virtual_core(tt::ChipId device_id, const CoreCoord& virtual_coord) {
     if (tt::tt_metal::MetalContext::instance().get_cluster().is_worker_core(virtual_coord, device_id)) {
-        return CoreType::WORKER;
+        return tt::CoreType::WORKER;
     } else if (tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_core(virtual_coord, device_id)) {
-        return CoreType::ETH;
+        return tt::CoreType::ETH;
     }
 
     const metal_SocDescriptor& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id);
 
     const std::vector<tt::umd::CoreCoord>& translated_dram_cores =
-        soc_desc.get_cores(CoreType::DRAM, tt::CoordSystem::TRANSLATED);
+        soc_desc.get_cores(tt::CoreType::DRAM, tt::CoordSystem::TRANSLATED);
     if (std::find(translated_dram_cores.begin(), translated_dram_cores.end(), virtual_coord) !=
         translated_dram_cores.end()) {
-        return CoreType::DRAM;
+        return tt::CoreType::DRAM;
     }
 
-    CoreType core_type =
+    tt::CoreType core_type =
         soc_desc.translate_coord_to(virtual_coord, tt::CoordSystem::NOC0, tt::CoordSystem::NOC0).core_type;
-    if (core_type == CoreType::TENSIX) {
-        core_type = CoreType::WORKER;
+    if (core_type == tt::CoreType::TENSIX) {
+        core_type = tt::CoreType::WORKER;
     }
     return core_type;
 }
@@ -152,7 +152,7 @@ string get_noc_target_str(
     auto get_core_and_mem_type = [](tt::ChipId device_id, CoreCoord& noc_coord, int noc) -> std::pair<string, string> {
         // Get the virtual coord from the noc coord
         CoreCoord virtual_core = virtual_noc_coordinate(device_id, noc, noc_coord);
-        CoreType core_type;
+        tt::CoreType core_type;
         try {
             core_type = core_type_from_virtual_core(device_id, virtual_core);
         } catch (std::runtime_error& e) {
@@ -160,10 +160,10 @@ string get_noc_target_str(
             return {"Unknown", ""};
         }
         switch (core_type) {
-            case CoreType::DRAM: return {"DRAM", "DRAM"};
-            case CoreType::ETH: return {"Ethernet", "L1"};
-            case CoreType::PCIE: return {"PCIe", "PCIE"};
-            case CoreType::WORKER: return {"Tensix", "L1"};
+            case tt::CoreType::DRAM: return {"DRAM", "DRAM"};
+            case tt::CoreType::ETH: return {"Ethernet", "L1"};
+            case tt::CoreType::PCIE: return {"PCIe", "PCIE"};
+            case tt::CoreType::WORKER: return {"Tensix", "L1"};
             default: return {"Unknown", ""};
         }
     };

@@ -116,7 +116,7 @@ void validate_kernel_placement(IDevice* device, bool force_slow_dispatch, std::s
     bool slow_dispatch = std::getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr;
 
     const auto& dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
-    CoreType dispatch_core_type = dispatch_core_config.get_core_type();
+    tt::CoreType dispatch_core_type = dispatch_core_config.get_core_type();
     const std::vector<CoreCoord>& storage_cores =
         MetalContext::instance().get_dispatch_query_manager().get_logical_storage_cores_on_user_chips();
     bool on_storage_only_core =
