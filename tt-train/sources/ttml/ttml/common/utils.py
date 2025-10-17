@@ -42,7 +42,8 @@ def initialize_device(yaml_config: dict):
     from ttml.common.config import DeviceConfig
 
     device_config = DeviceConfig(yaml_config)
-    ttml.core.distributed.enable_fabric(device_config.total_devices())
+    if device_config.total_devices() > 1:
+        ttml.core.distributed.enable_fabric(device_config.total_devices())
     ttml.autograd.AutoContext.get_instance().open_device(device_config.mesh_shape, device_config.device_ids)
 
 
