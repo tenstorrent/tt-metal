@@ -151,12 +151,12 @@ void configure_static_tlbs(
         // use this on a perf path and the launch_msg "kernel config" needs to
         // arrive prior to the "go" message during device init and slow dispatch
         // Revisit this when we have a more flexible UMD api
-        device_driver.configure_tlb(mmio_device_id, core, tlb_index, address, TLB_DATA::Strict);
+        device_driver.configure_tlb(mmio_device_id, core, tlb_index, address, tt::umd::tlb_data::Strict);
     }
     // Setup static TLBs for all eth cores
     for (const tt::umd::CoreCoord& core : sdesc.get_cores(tt::CoreType::ETH, tt::CoordSystem::LOGICAL)) {
         auto tlb_index = get_static_tlb_index(core);
-        device_driver.configure_tlb(mmio_device_id, core, tlb_index, address, TLB_DATA::Strict);
+        device_driver.configure_tlb(mmio_device_id, core, tlb_index, address, tt::umd::tlb_data::Strict);
     }
 
     // TODO (#9932): Remove workaround for BH
@@ -179,7 +179,7 @@ void configure_static_tlbs(
             tt::umd::CoreCoord dram_core =
                 tt::umd::CoreCoord(blackhole::ddr_to_noc0(dram_channel), tt::CoreType::DRAM, tt::CoordSystem::NOC0);
             auto tlb_index = tt::umd::blackhole::TLB_COUNT_2M + dram_channel;
-            device_driver.configure_tlb(mmio_device_id, dram_core, tlb_index, dram_addr, TLB_DATA::Posted);
+            device_driver.configure_tlb(mmio_device_id, dram_core, tlb_index, dram_addr, tt::umd::tlb_data::Posted);
         }
     }
 }
