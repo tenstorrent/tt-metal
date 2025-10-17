@@ -253,9 +253,8 @@ void MetalContext::teardown() {
     dispatch_core_manager_.reset();
     tt::tt_metal::reset_topology_state();
 
-    // Clear dispatch and prefetcher core info in inspector data
+    // Clear dispatch, dispatch_s and prefetcher core info in inspector data
     tt::tt_metal::Inspector::clear_all_core_info();
-
     // Deinitialize inspector
     inspector_data_.reset();
 

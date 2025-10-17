@@ -240,23 +240,6 @@ int main(int argc, char** argv) {
         uint64_t pcie_offset = 1024 * 1024 * 50;  // beyond where FD will write...maybe
 
         const metal_SocDescriptor& soc_d = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id);
-
-        auto& dcm = tt::tt_metal::MetalContext::instance().get_dispatch_core_manager();
-        auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-        // uint16_t channel_id = cluster.get_assigned_channel_for_device(device_id);
-        for (size_t i = 0; i < mesh_device->num_hw_cqs(); i++) {
-            const auto log = dcm.dispatcher_core(device_id, channel, i);
-            const auto virtual_core =
-                cluster.get_virtual_coordinate_from_logical_coordinates(log, dcm.get_dispatch_core_type());
-            log_info(
-                LogTest,
-                "dispatch virtual chip={} x={} y={} cq={}\n",
-                virtual_core.chip,
-                virtual_core.x,
-                virtual_core.y,
-                i);
-        }
-
         switch (source_mem_g) {
             case 0:
             default: {
