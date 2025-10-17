@@ -83,6 +83,7 @@ private:
 
     size_t buffer_size_;
     bool map_to_noc_;
+    bool use_64bit_address_space_ = false;
     // Offset from the aligned mapped base to the actual host buffer start
     size_t host_offset_ = 0;
 
