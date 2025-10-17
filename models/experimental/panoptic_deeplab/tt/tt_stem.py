@@ -161,44 +161,11 @@ class TtStem(LightweightModule):
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         logger.debug(f"TtStem forward - input: {x.shape}")
 
-        # Conv1 + separate ReLU + Reshape
-        x = self._conv_relu_block(self.conv1, x, "Conv1", self.conv1_out_shape)
+        assert x.storage_type() == ttnn.StorageType.DEVICE, "Input tensor must be on device"
+        x = self.conv1(x)  # self._conv_relu_block(self.conv1, x, "Conv1", self.conv1_out_shape)
         x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)  # next conv is sliced
-
-        # Conv2 + separate ReLU + Reshape
-        x = self._conv_relu_block(self.conv2, x, "Conv2", self.conv2_out_shape)
-
-        # Conv3 + separate ReLU (NO reshape before maxpool - maxpool needs flattened input)
+        x = self.conv2(x)  # self._conv_relu_block(self.conv2, x, "Conv2", self.conv2_out_shape)
         x = self.conv3(x)
-        logger.debug(f"Conv3 - raw conv output shape: {x.shape}, expected: {self.conv3_out_shape}")
-        # Don't reshape yet - pass flattened to maxpool
-        # x = ttnn.relu(x)  # Separate ReLU
-        if x.memory_config().buffer_type != ttnn.BufferType.DRAM:
-            x = ttnn.move(x)  # Keep in current memory config
-        logger.debug(f"Conv3 + separate ReLU - output: {x.shape}")
-
-        # MaxPool (takes flattened input, returns flattened output)
-        # Maxpool uses channel slicing, so output goes to DRAM
         x = self.maxpool(x)
-        logger.debug(f"MaxPool raw output: {x.shape}, expected: {self.maxpool_out_shape}")
-        if list(x.shape) != list(self.maxpool_out_shape):
-            logger.debug(f"Reshaping maxpool from {x.shape} to {self.maxpool_out_shape}")
-            x = ttnn.reshape(x, self.maxpool_out_shape)
-        x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
-        logger.debug(f"TtStem complete - output: {x.shape}")
 
-        return x
-
-    def _conv_relu_block(self, conv_layer, x: ttnn.Tensor, layer_name: str, output_shape) -> ttnn.Tensor:
-        """Helper method for conv + separate relu operations"""
-        x = conv_layer(x)
-        logger.debug(f"{layer_name} - raw conv output shape: {x.shape}, expected: {output_shape}")
-        # TT CNN Builder returns flattened [B, 1, H*W, C], reshape to [B, H, W, C]
-        if list(x.shape) != list(output_shape):
-            logger.debug(f"Reshaping {layer_name} from {x.shape} to {output_shape}")
-            # x = ttnn.reshape(x, output_shape)
-        # x = ttnn.relu(x)  # Separate ReLU
-        if x.memory_config().buffer_type != ttnn.BufferType.DRAM:
-            x = ttnn.move(x)  # Keep in current memory config
-        logger.debug(f"{layer_name} + separate ReLU - output: {x.shape}")
         return x
