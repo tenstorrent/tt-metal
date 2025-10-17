@@ -395,7 +395,7 @@ def test_fold(act_shape, stride_h, stride_w, device):
     torch.testing.assert_close(actual, expected)
 
 
-def run_fold_sharded_test(device, act_shape, stride_h, stride_w, padding, core_grid):
+def run_fold_sharded_test(device, act_shape, stride_h, stride_w, padding, core_grid, layout=ttnn.ROW_MAJOR_LAYOUT):
     torch.manual_seed(0)
 
     N, H, W, C = act_shape
@@ -444,7 +444,7 @@ def run_fold_sharded_test(device, act_shape, stride_h, stride_w, padding, core_g
         tt_input = torch2tt_tensor(
             torch_input,
             device,
-            ttnn.ROW_MAJOR_LAYOUT,
+            layout,
             tt_memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec),
         )
         tt_out = ttnn.fold(tt_input, stride_h=stride_h, stride_w=stride_w, padding=list(padding))
