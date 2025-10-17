@@ -178,10 +178,14 @@ jobs:
 
           # Determine which script to run
           SCRIPT_PATH=""
-          if [[ -n "${{ inputs.gist-url }}" ]]; then
+
+          # Check gist-url first
+          GIST_URL='${{ inputs.gist-url }}'
+          if [ -n "$GIST_URL" ]; then
             SCRIPT_PATH="/work/bisect_gist_script.sh"
-          elif [[ -n "${{ inputs.command }}" ]]; then
+          else
             # Write command to a temporary script to avoid quoting issues
+            # Note: using heredoc with 'EOF' prevents variable expansion
             cat > /work/bisect_command_script.sh << 'EOF'
           #!/bin/bash
           set -eo pipefail
