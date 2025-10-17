@@ -21,9 +21,9 @@ TopologyHelper::TopologyHelper(
     const std::unique_ptr<tt::tt_metal::PhysicalSystemDescriptor>& psd) :
     my_host_name(psd->my_host_name()) {
     // Get mapping of chip ID <-> ASIC unique ID. This is only valid for the local host!
-    const std::unordered_map<tt::ChipId, uint64_t>& ChipIdo_unique_id =
+    const std::unordered_map<tt::ChipId, uint64_t>& chip_id_to_unique_id =
         cluster->get_cluster_description()->get_chip_unique_ids();
-    std::unordered_map<uint64_t, tt::ChipId> unique_id_to_chip_id = invert_map(ChipIdo_unique_id);
+    std::unordered_map<uint64_t, tt::ChipId> unique_id_to_chip_id = invert_map(chip_id_to_unique_id);
 
     // Produce the following maps (all valid only for the local host because chip ID is not
     // globally unique):

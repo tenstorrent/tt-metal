@@ -21,11 +21,11 @@ using namespace tt;
 
 void CloseDevicesInPool() {
     auto devices = DevicePool::instance().get_all_active_devices();
-    std::map<ChipId, IDevice*> ChipIdo_device;
+    std::map<ChipId, IDevice*> chip_id_to_device;
     for (const auto& dev : devices) {
-        ChipIdo_device[dev->id()] = dev;
+        chip_id_to_device[dev->id()] = dev;
     }
-    detail::CloseDevices(ChipIdo_device);
+    detail::CloseDevices(chip_id_to_device);
 }
 
 TEST(DevicePool, DevicePoolOpenClose) {
