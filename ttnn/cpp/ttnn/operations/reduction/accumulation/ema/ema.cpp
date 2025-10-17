@@ -21,8 +21,12 @@ Tensor EmaOperation::invoke(
                    .alpha = alpha,
                    .grid_size = core_grid.value_or(CoreGrid(0, 0)).to_CoreCoord(),
                    .output_mem_config = memory_config.value_or(input_tensor.memory_config()),
-                   .compute_kernel_config =
-                       init_device_compute_kernel_config(input_tensor.device()->arch(), compute_kernel_config),
+                   .compute_kernel_config = init_device_compute_kernel_config(
+                       input_tensor.device()->arch(),
+                       compute_kernel_config,
+                       /*math_fidelity=*/MathFidelity::HiFi4,
+                       /*default_approx_mode=*/false,
+                       /*fp32_acc=*/true),
                },
                {input_tensor},
                {},

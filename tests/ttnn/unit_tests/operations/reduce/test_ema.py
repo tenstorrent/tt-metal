@@ -24,12 +24,12 @@ def test_ema(device, T, B, C, cores_y, cores_x):
 
     grid_size = ttnn.CoreGrid(y=cores_y, x=cores_x)
     # torch input tensor
-    torch_input_tensor = torch.rand(T * B * C, dtype=torch.bfloat16).reshape(B, C, T // 1024, 1024)
+    torch_input_tensor = torch.rand(T * B * C, dtype=torch.bfloat16).reshape(1, B, C, T)
     # input tensor
     ttnn_input_tensor = ttnn.from_torch(
         torch_input_tensor,
         dtype=ttnn.DataType.BFLOAT16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
+        layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
@@ -37,7 +37,7 @@ def test_ema(device, T, B, C, cores_y, cores_x):
     ttnn_output_tensor = ttnn.from_torch(
         torch_input_tensor * 0,
         dtype=ttnn.DataType.BFLOAT16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
+        layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
