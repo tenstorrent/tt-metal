@@ -216,9 +216,8 @@ class GroupNorm:
             grid_x *= grid_y
             grid_y = 1
 
-        if negative_mask:
-            self.num_groups = self.num_groups // 2
-            self.channels = self.channels // 2
+        self.num_groups = self.num_groups // num_splits
+        self.channels = self.channels // num_splits
 
         # Generate input mask
         input_mask_tensor = ttnn.create_group_norm_input_mask(self.channels, self.num_groups, grid_y)
@@ -275,10 +274,12 @@ class GroupNorm:
             sharded_mem_config = ttnn.MemoryConfig(
                 ttnn.types.TensorMemoryLayout.BLOCK_SHARDED, ttnn.types.BufferType.L1, shard_spec
             )
-        # logger.debug(
-        #     f"input tensor shape: {input_tensor.shape}, layout: {input_tensor.layout} memory config: {input_tensor.memory_config}"
-        # )
+
         input_tensor = ttnn.to_memory_config(input_tensor, memory_config=sharded_mem_config)
+        if negative_mask and input_tensor.layout != ttnn.ROW_MAJOR_LAYOUT:
+            input_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
+            input_tensor = ttnn.move(input_tensor)
+
         tt_output_tensor = ttnn.group_norm(
             input_tensor,
             num_groups=self.num_groups,
@@ -292,9 +293,8 @@ class GroupNorm:
             inplace=True if input_tensor.layout == ttnn.ROW_MAJOR_LAYOUT else False,
         )
 
-        if negative_mask:
-            self.num_groups = self.num_groups * 2
-            self.channels = self.channels * 2
+        self.num_groups = self.num_groups * num_splits
+        self.channels = self.channels * num_splits
         return tt_output_tensor
 
 
