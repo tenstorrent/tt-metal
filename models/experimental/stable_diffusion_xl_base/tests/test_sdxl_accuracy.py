@@ -115,22 +115,45 @@ def test_accuracy_sdxl(
     )
 
     logger.info(f"Start inference from prompt index: {start_from} to {start_from + num_prompts}")
+    data = {
+        "model": "sdxl",
+        "metadata": {
+            "model_name": "sdxl",
+            "device": get_device_name(),
+            "device_vae": vae_on_device,
+            "capture_trace": capture_trace,
+            "encoders_on_device": encoders_on_device,
+            "use_cfg_parallel": use_cfg_parallel,
+            "num_inference_steps": num_inference_steps,
+            "start_from": start_from,
+            "num_prompts": num_prompts,
+            "negative_prompt": negative_prompt,
+            "guidance_scale": guidance_scale,
+        },
+        "benchmarks_summary": [{"model": "sdxl", "device": get_device_name()}],
+    }
 
-    images = test_demo(
-        validate_fabric_compatibility,
-        mesh_device,
-        is_ci_env,
-        prompts,
-        negative_prompt,
-        num_inference_steps,
-        vae_on_device,
-        encoders_on_device,
-        capture_trace,
-        evaluation_range,
-        guidance_scale,
-        use_cfg_parallel=use_cfg_parallel,
-        fixed_seed_for_batch=True,
-    )
+    try:
+        images = test_demo(
+            validate_fabric_compatibility,
+            mesh_device,
+            is_ci_env,
+            prompts,
+            negative_prompt,
+            num_inference_steps,
+            vae_on_device,
+            encoders_on_device,
+            capture_trace,
+            evaluation_range,
+            guidance_scale,
+            use_cfg_parallel=use_cfg_parallel,
+            fixed_seed_for_batch=True,
+        )
+    except Exception as e:
+        data["benchmarks_summary"][0]["stability_check"] = 3
+        save_json_results(data, capture_trace, vae_on_device, encoders_on_device, use_cfg_parallel, num_inference_steps)
+        logger.warning(f"Error detected during inference")
+        raise
 
     clip = CLIPEncoder()
 
@@ -155,94 +178,64 @@ def test_accuracy_sdxl(
     print(f"Standard Deviation of CLIP Scores: {deviation_clip_score}")
 
     avg_gen_end_to_end = profiler.get("end_to_end_generation")
+    if use_cfg_parallel:
+        for key in ["functional", "complete", "target"]:
+            targets["perf"][key] /= 2
 
-    data = {
-        "model": "sdxl",
-        "metadata": {
-            "model_name": "sdxl",
-            "device": get_device_name(),
-            "device_vae": vae_on_device,
-            "capture_trace": capture_trace,
-            "encoders_on_device": encoders_on_device,
-            "num_inference_steps": num_inference_steps,
-            "start_from": start_from,
-            "num_prompts": num_prompts,
-            "negative_prompt": negative_prompt,
-            "guidance_scale": guidance_scale,
-        },
-        "benchmarks_summary": [
-            {
-                "model": "sdxl",
-                "device": get_device_name(),
-                "avg_gen_time": avg_gen_end_to_end,
-                "target_checks": {
-                    "functional": {
-                        "avg_gen_time": targets["perf"]["functional"],
-                        "avg_gen_time_check": 2 if targets["perf"]["functional"] >= avg_gen_end_to_end else 3,
-                    },
-                    "complete": {
-                        "avg_gen_time": targets["perf"]["complete"],
-                        "avg_gen_time_check": 2 if targets["perf"]["complete"] >= avg_gen_end_to_end else 3,
-                    },
-                    "target": {
-                        "avg_gen_time": targets["perf"]["target"],
-                        "avg_gen_time_check": 2 if targets["perf"]["target"] >= avg_gen_end_to_end else 3,
-                    },
+    data["benchmarks_summary"][0]["stability_check"] = 2
+    data["benchmarks_summary"][0].update(
+        {
+            "avg_gen_time": avg_gen_end_to_end,
+            "target_checks": {
+                "functional": {
+                    "avg_gen_time": targets["perf"]["functional"],
+                    "avg_gen_time_check": 2 if targets["perf"]["functional"] >= avg_gen_end_to_end else 3,
                 },
-                "average_denoising_time": profiler.get("denoising_loop"),
-                "average_vae_time": profiler.get("vae_decode"),
-                "min_gen_time": min(profiler.times["end_to_end_generation"]),
-                "max_gen_time": max(profiler.times["end_to_end_generation"]),
-                "average_encoding_time": profiler.get("encode_prompts"),
-            }
-        ],
-        "evals": [
-            {
-                "model": "sdxl",
-                "device": get_device_name(),
-                "average_clip": average_clip_score,
-                "deviation_clip": deviation_clip_score,
-                "approx_clip_accuracy_check": accuracy_check_clip(average_clip_score, num_prompts, mode="approx"),
-                "average_clip_accuracy_check": accuracy_check_clip(average_clip_score, num_prompts, mode="valid"),
-                "delta_clip": get_appr_delta_metric(average_clip_score, num_prompts, score_type="clip"),
-                "fid_score": fid_score,
-                "approx_fid_accuracy_check": accuracy_check_fid(fid_score, num_prompts, mode="approx"),
-                "fid_score_accuracy_check": accuracy_check_fid(fid_score, num_prompts, mode="valid"),
-                "delta_fid": get_appr_delta_metric(fid_score, num_prompts, score_type="fid"),
-                "accuracy_check_approx": min(
-                    accuracy_check_fid(fid_score, num_prompts, mode="approx"),
-                    accuracy_check_clip(average_clip_score, num_prompts, mode="approx"),
-                ),
-                "accuracy_check_delta": min(
-                    accuracy_check_fid(fid_score, num_prompts, mode="delta"),
-                    accuracy_check_clip(average_clip_score, num_prompts, mode="delta"),
-                ),
-                "accuracy_check_valid": min(
-                    accuracy_check_fid(fid_score, num_prompts, mode="valid"),
-                    accuracy_check_clip(average_clip_score, num_prompts, mode="valid"),
-                ),
-            }
-        ],
-    }
-
-    os.makedirs(OUT_ROOT, exist_ok=True)
-    trace_flag = "with_trace" if capture_trace else "no_trace"
-    vae_flag = "device_vae" if vae_on_device else "host_vae"
-    encoders_flag = "device_encoders" if encoders_on_device else "host_encoders"
-    new_file_name = (
-        f"sdxl_test_results_{trace_flag}_{vae_flag}_{encoders_flag}_{use_cfg_parallel}_{num_inference_steps}.json"
+                "complete": {
+                    "avg_gen_time": targets["perf"]["complete"],
+                    "avg_gen_time_check": 2 if targets["perf"]["complete"] >= avg_gen_end_to_end else 3,
+                },
+                "target": {
+                    "avg_gen_time": targets["perf"]["target"],
+                    "avg_gen_time_check": 2 if targets["perf"]["target"] >= avg_gen_end_to_end else 3,
+                },
+            },
+            "average_denoising_time": profiler.get("denoising_loop"),
+            "average_vae_time": profiler.get("vae_decode"),
+            "min_gen_time": min(profiler.times["end_to_end_generation"]),
+            "max_gen_time": max(profiler.times["end_to_end_generation"]),
+            "average_encoding_time": profiler.get("encode_prompts"),
+        }
     )
-    with open(f"{OUT_ROOT}/{new_file_name}", "w") as f:
-        json.dump(data, f, indent=4)
+    data["evals"] = [
+        {
+            "model": "sdxl",
+            "device": get_device_name(),
+            "average_clip": average_clip_score,
+            "deviation_clip": deviation_clip_score,
+            "approx_clip_accuracy_check": accuracy_check_clip(average_clip_score, num_prompts, mode="approx"),
+            "average_clip_accuracy_check": accuracy_check_clip(average_clip_score, num_prompts, mode="valid"),
+            "delta_clip": get_appr_delta_metric(average_clip_score, num_prompts, score_type="clip"),
+            "fid_score": fid_score,
+            "approx_fid_accuracy_check": accuracy_check_fid(fid_score, num_prompts, mode="approx"),
+            "fid_score_accuracy_check": accuracy_check_fid(fid_score, num_prompts, mode="valid"),
+            "delta_fid": get_appr_delta_metric(fid_score, num_prompts, score_type="fid"),
+            "accuracy_check_approx": min(
+                accuracy_check_fid(fid_score, num_prompts, mode="approx"),
+                accuracy_check_clip(average_clip_score, num_prompts, mode="approx"),
+            ),
+            "accuracy_check_delta": min(
+                accuracy_check_fid(fid_score, num_prompts, mode="delta"),
+                accuracy_check_clip(average_clip_score, num_prompts, mode="delta"),
+            ),
+            "accuracy_check_valid": min(
+                accuracy_check_fid(fid_score, num_prompts, mode="valid"),
+                accuracy_check_clip(average_clip_score, num_prompts, mode="valid"),
+            ),
+        }
+    ]
 
-    logger.info(f"Test results saved to {OUT_ROOT}/{new_file_name}")
-
-    with open(
-        f"{OUT_ROOT}/{RESULTS_FILE_NAME}", "w"
-    ) as f:  # this is for CI and test_sdxl_accuracy_with_reset.py compatibility
-        json.dump(data, f, indent=4)
-
-    logger.info(f"Test results saved to {OUT_ROOT}/{RESULTS_FILE_NAME}")
+    save_json_results(data, capture_trace, vae_on_device, encoders_on_device, use_cfg_parallel, num_inference_steps)
 
     check_clip_scores(start_from, num_prompts, prompts, clip_scores)
 
@@ -294,3 +287,23 @@ def check_clip_scores(start_from, num_prompts, prompts, clip_scores):
                 )
 
     assert num_of_very_low_clip_scores == 0, f"Found {num_of_very_low_clip_scores} images with very low CLIP scores"
+
+
+def save_json_results(data, capture_trace, vae_on_device, encoders_on_device, use_cfg_parallel, num_inference_steps):
+    os.makedirs(OUT_ROOT, exist_ok=True)
+    trace_flag = "with_trace" if capture_trace else "no_trace"
+    vae_flag = "device_vae" if vae_on_device else "host_vae"
+    encoders_flag = "device_encoders" if encoders_on_device else "host_encoders"
+    new_file_name = (
+        f"sdxl_test_results_{trace_flag}_{vae_flag}_{encoders_flag}_{use_cfg_parallel}_{num_inference_steps}.json"
+    )
+
+    with open(f"{OUT_ROOT}/{new_file_name}", "w") as f:
+        json.dump(data, f, indent=4)
+    logger.info(f"Test results saved to {OUT_ROOT}/{new_file_name}")
+
+    with open(
+        f"{OUT_ROOT}/{RESULTS_FILE_NAME}", "w"
+    ) as f:  # this is for CI and test_sdxl_accuracy_with_reset.py compatibility
+        json.dump(data, f, indent=4)
+    logger.info(f"Test results saved to {OUT_ROOT}/{RESULTS_FILE_NAME}")
