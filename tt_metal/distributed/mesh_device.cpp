@@ -255,7 +255,8 @@ MeshDevice::MeshDevice(
             memory_pinning_params_ = MemoryPinningParameters{
                 std::numeric_limits<uint32_t>::max(), std::numeric_limits<uint64_t>::max(), true};
         } else if (device_arch == tt::ARCH::WORMHOLE_B0) {
-            const bool map_to_noc_supported = tt::umd::PCIDevice::is_mapping_buffer_to_noc_supported();
+            // Disable NOC mapping for until this is tested.
+            const bool map_to_noc_supported = false;
             const uint64_t four_gb = 4ULL * 1024ULL * 1024ULL * 1024ULL;
             const uint64_t hugepage_size = static_cast<uint64_t>(tt::tt_metal::DispatchSettings::MAX_HUGEPAGE_SIZE);
             memory_pinning_params_ = MemoryPinningParameters{12u, four_gb - hugepage_size, map_to_noc_supported};
