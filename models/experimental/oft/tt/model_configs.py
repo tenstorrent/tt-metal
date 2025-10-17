@@ -132,6 +132,17 @@ class ModelOptimizations:
             config_tensors_in_dram=True,
             output_layout=ttnn.TILE_LAYOUT,
         )
+        self.conv_configs["HS_ABH_128_TILE"] = ttnn.Conv2dConfig(
+            weights_dtype=conv_w_dtype,
+            shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            deallocate_activation=False,
+            enable_act_double_buffer=False,
+            reshard_if_not_optimal=True,
+            act_block_w_div=1,
+            act_block_h_override=32 * 4,
+            config_tensors_in_dram=True,
+            output_layout=ttnn.TILE_LAYOUT,
+        )
         self.conv_configs["HS_ABH_32_TILE_DEALLOC"] = ttnn.Conv2dConfig(
             weights_dtype=conv_w_dtype,
             shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
@@ -179,6 +190,10 @@ class ModelOptimizations:
             slice_type=ttnn.Conv2dDRAMSliceHeight,
             num_slices=4,
         )
+        self.conv_slice_configs["HSLICE_8"] = ttnn.Conv2dSliceConfig(
+            slice_type=ttnn.Conv2dDRAMSliceHeight,
+            num_slices=8,
+        )
 
         # CONFIGURATION COMPUTE KERNEL
         self.compute_configs["DEFAULT_CONV_COMPUTE_CONFIG"] = ttnn.WormholeComputeKernelConfig(
@@ -205,8 +220,8 @@ class ModelOptimizations:
         # Frontend ResNet feature extractor convolutions
         if conv_path == "frontend.conv1":
             return (
-                self.conv_configs["DEFAULT"],
-                self.conv_slice_configs["DEFAULT"],
+                self.conv_configs["HS_ABH_128_TILE"],
+                self.conv_slice_configs["HSLICE_4"],
                 self.compute_configs["DEFAULT_CONV_COMPUTE_CONFIG"],
                 self.conv_output_dtype,
             )
