@@ -54,7 +54,6 @@ def test_forward_pass(
     reference_layernorm_path,
     model_path,
     hf_config,
-    tmp_path,
     cache_path,
     mesh_device,
     ccl,
@@ -79,7 +78,6 @@ def test_forward_pass(
         reference_output = reference_model(torch_input)
 
         # Do not cache random weights
-        cache_path = tmp_path
         force_recalculate_weight_config = True
     else:
         state_dict = load_state_dict(model_path, reference_layernorm_path)
