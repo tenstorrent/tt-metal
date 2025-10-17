@@ -399,20 +399,16 @@ def run_all_reduce_with_mesh_tensor_along_row(
         # Run the op
         for i in range(num_iters):
             if use_semaphore_free_all_reduce_impl:
-                output_tensor_mesh = ttnn.experimental.all_reduce_async(
+                logger.info("Using semaphore-free all-reduce implementation")
+                output_tensor_mesh = ttnn.all_reduce(
                     input_tensor_mesh,
-                    cluster_axis,
-                    mesh_device,
-                    None,
-                    None,
-                    None,
-                    math_op=math_op,
+                    cluster_axis=cluster_axis,
+                    subdevice_id=worker_sub_device_id,
                     num_links=num_links,
                     memory_config=mem_config,
-                    topology=ttnn.Topology.Linear,
-                    subdevice_id=worker_sub_device_id,
                 )
             else:
+                logger.info("Using experimental all-reduce implementation")
                 output_tensor_mesh = ttnn.experimental.all_reduce_async(
                     input_tensor_mesh,
                     cluster_axis=cluster_axis,
