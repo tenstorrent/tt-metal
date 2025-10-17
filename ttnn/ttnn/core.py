@@ -42,7 +42,7 @@ def is_sharded(tensor) -> bool:
 
 # Python Alignment constraints
 L1_ALIGNMENT = 16
-DRAM_ALIGNMENT_WH = 16
+DRAM_ALIGNMENT_WH = 32
 DRAM_ALIGNMENT_BH = 64
 
 get_memory_config = ttnn._ttnn.core.get_memory_config
