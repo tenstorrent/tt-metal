@@ -255,7 +255,109 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     const uint32_t bf16_scalar = get_bf16_pool_scalar(pool_type, kernel_h, kernel_w, divisor_override);
     const uint32_t bf16_init_value = get_bf16_pool_init_value(pool_type);
     FactoryParameters params = get_factory_parameters(
-        num_shards_c, inputs[0].dtype(), outputs[0].dtype(), kernel_h, kernel_w, in_c, pool_type, return_indices, output_layout);
+        num_shards_c,
+        inputs[0].dtype(),
+        outputs[0].dtype(),
+        kernel_h,
+        kernel_w,
+        in_c,
+        pool_type,
+        return_indices,
+        output_layout);
+
+    // DST Optimization: Initialize L1 usage (even for SEQUENTIAL mode)
+    // Calculate baseline L1 usage for all modes
+    params.actual_l1_usage_bytes = pool::calculate_L1_usage(
+        inputs[0],
+        in_c,
+        pad_t + pad_b,
+        pad_l + pad_r,
+        ceil_pad_h,
+        ceil_pad_w,
+        ceil_mode,
+        return_indices,
+        kernel_h,
+        kernel_w,
+        out_h,
+        out_w,
+        inputs[0].memory_config(),
+        outputs[0].memory_config(),
+        pool_type,
+        count_include_pad,
+        divisor_override,
+        output_layout,
+        outputs[0].dtype());
+
+    // Only do additional DST optimization validation if not forced to SEQUENTIAL
+    if (params.dst_optimization_mode != pool::DSTOptimizationMode::SEQUENTIAL) {
+        // Calculate estimated L1 usage with DST optimization
+        uint32_t estimated_l1_usage = pool::calculate_L1_usage_with_dst_optimization(
+            inputs[0],                    // input tensor
+            in_c,                         // in_channels
+            pad_t + pad_b,                // pad_h
+            pad_l + pad_r,                // pad_w
+            ceil_pad_h,                   // ceil_pad_h
+            ceil_pad_w,                   // ceil_pad_w
+            ceil_mode,                    // ceil_mode
+            return_indices,               // return_indices
+            kernel_h,                     // kernel_h
+            kernel_w,                     // kernel_w
+            out_h,                        // out_h
+            out_w,                        // out_w
+            inputs[0].memory_config(),    // in_memory_config
+            outputs[0].memory_config(),   // out_memory_config
+            pool_type,                    // pool_type
+            count_include_pad,            // count_include_pad
+            divisor_override,             // divisor_override
+            output_layout,                // output_layout
+            outputs[0].dtype(),           // output_dtype
+            params.dst_optimization_mode  // dst_mode
+        );
+
+        // Check if DST optimization is viable with current memory constraints
+        bool optimization_viable =
+            pool::is_dst_optimization_viable(params.in_ntiles_c, estimated_l1_usage, params.dst_optimization_mode);
+
+        // TEMPORARY: Disable DST optimization for complex sharding scenarios
+        // Our 4-way parallel algorithm currently only supports simple split_reader coordination
+        // Updated threshold: Wormhole N150/N300 commonly use 72-80 cores in normal configurations
+        bool is_block_sharded = (inputs[0].memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED);
+        bool has_complex_sharding = (ncores > 120) || (num_shards_c > 8) || is_block_sharded;
+        if (has_complex_sharding) {
+            log_warning(
+                tt::LogOp,
+                "DST optimization disabled for complex sharding (ncores={}, num_shards_c={}, block_sharded={}) - "
+                "thresholds: max_cores=120, max_shards_c=8",
+                ncores,
+                num_shards_c,
+                is_block_sharded);
+            optimization_viable = false;
+        }
+
+        if (!optimization_viable) {
+            log_warning(
+                tt::LogOp,
+                "DST optimization mode {} not viable (L1 usage: {}B, channel tiles: {}). Falling back to sequential.",
+                static_cast<uint32_t>(params.dst_optimization_mode),
+                estimated_l1_usage,
+                params.in_ntiles_c);
+
+            // Fallback to sequential mode
+            params.dst_optimization_mode = pool::DSTOptimizationMode::SEQUENTIAL;
+            params.l1_memory_constrained = true;
+            params.positions_per_iteration = 1;
+            params.dst_tiles_per_iteration = params.in_ntiles_c;
+        } else {
+            params.l1_memory_constrained = false;
+            params.actual_l1_usage_bytes = estimated_l1_usage;
+            log_debug(
+                tt::LogOp,
+                "DST optimization mode {} enabled (L1 usage: {}B, DST tiles: {})",
+                static_cast<uint32_t>(params.dst_optimization_mode),
+                estimated_l1_usage,
+                params.dst_tiles_per_iteration);
+        }
+    }
     uint32_t pad_h = pad_t + pad_b;
     uint32_t pad_w = pad_l + pad_r;
     const bool one_scalar_per_core = is_pool_op_one_scalar_per_core(
@@ -443,8 +545,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
 
     if (is_output_tiled) {
         out_cb_pagesize = tt::tile_size(params.output_data_format);
-        out_cb_npages =
-            outputs[0].shard_spec().value().shape[0] * outputs[0].shard_spec().value().shape[1] / tt::constants::TILE_HW;
+        out_cb_npages = outputs[0].shard_spec().value().shape[0] * outputs[0].shard_spec().value().shape[1] /
+                        tt::constants::TILE_HW;
     } else {
         out_cb_pagesize =
             std::min(static_cast<uint32_t>(tt::constants::FACE_WIDTH), outputs[0].shard_spec().value().shape[1]) *
@@ -625,7 +727,11 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         (uint32_t)return_indices,       // 18
         pre_tilize_cb_id,               // 19
         is_output_tiled,                // 20
-        is_output_block_format};        // 21
+        is_output_block_format,         // 21
+
+        // DST Optimization parameters
+        static_cast<uint32_t>(params.dst_optimization_mode),  // 22
+        params.positions_per_iteration};                      // 23
 
     // Get device arch for compute kernel config initialization
     auto device_arch = inputs[0].device()->arch();
