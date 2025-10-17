@@ -56,7 +56,11 @@ class SD35CombinedTimestepTextProjEmbeddings(Module):
         self.mesh_device = mesh_device
 
         self.timestep_embedder = TimestepEmbedding(256, embedding_dim, mesh_device=mesh_device)
-        self.text_embedder = PixartAlphaTextProjection(pooled_projection_dim, embedding_dim, mesh_device=mesh_device)
+        self.text_embedder = (
+            PixartAlphaTextProjection(pooled_projection_dim, embedding_dim, mesh_device=mesh_device)
+            if pooled_projection_dim > 0
+            else None
+        )
 
         self.time_proj_factor = self._create_time_proj_factor(256)
 
@@ -72,13 +76,17 @@ class SD35CombinedTimestepTextProjEmbeddings(Module):
 
         return ttnn.unsqueeze_to_4D(bf16_tensor(factor, device=self.mesh_device))
 
-    def forward(self, timestep: ttnn.Tensor, pooled_projection: ttnn.Tensor) -> ttnn.Tensor:
+    def forward(self, timestep: ttnn.Tensor, pooled_projection: ttnn.Tensor | None = None) -> ttnn.Tensor:
         # Time projection (sinusoidal embedding)
         emb = timestep * self.time_proj_factor
         c = ttnn.cos(emb)
         s = ttnn.sin(emb)
         timesteps_proj = ttnn.concat([c, s], dim=-1)
         timesteps_emb = self.timestep_embedder(timesteps_proj)
+
+        if self.text_embedder is None:
+            return timesteps_emb
+
         text_emb = self.text_embedder(pooled_projection)
         return timesteps_emb + text_emb
 
