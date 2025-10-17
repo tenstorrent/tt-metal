@@ -27,7 +27,7 @@ from models.tt_transformers.tt.common import get_hf_tt_cache_path
         "ttt-mistral-7B-v0.3",
     ],
 )
-def test_ci_dispatch(model_weights, get_tt_cache_path):
+def test_ci_dispatch(model_weights):
     logger.info(f"Running fast dispatch tests for {model_weights}")
 
     if os.getenv("LLAMA_DIR"):
