@@ -201,7 +201,7 @@ void metal_SocDescriptor::generate_physical_routing_to_profiler_flat_id() {
 // removing the harvested physical coordiniates Metal needs the true harvesting state so we generate physical
 // descriptors from virtual coordinates We also initialize additional lookup tables to translate physical coordinates to
 // virtual coordinates because UMD APIs expect virtual coordinates.
-metal_SocDescriptor::metal_SocDescriptor(const SocDescriptor& other, const BoardType& /*board_type*/) :
+metal_SocDescriptor::metal_SocDescriptor(const SocDescriptor& other, const tt::BoardType& /*board_type*/) :
     SocDescriptor(other) {
     this->load_dram_metadata_from_device_descriptor();
     this->generate_logical_eth_coords_mapping();

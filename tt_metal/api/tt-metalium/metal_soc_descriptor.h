@@ -34,7 +34,7 @@ public:
 
     std::map<CoreCoord, int> logical_eth_core_to_chan_map;
 
-    metal_SocDescriptor(const SocDescriptor& other, const BoardType& board_type);
+    metal_SocDescriptor(const SocDescriptor& other, const tt::BoardType& board_type);
     metal_SocDescriptor() = default;
 
     CoreCoord get_preferred_worker_core_for_dram_view(int dram_view, uint8_t noc) const;
