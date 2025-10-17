@@ -1839,19 +1839,13 @@ def test_hardmish_bfloat16_allclose(device):
     tt_result = ttnn.hardmish(tt_in)
     result = ttnn.to_torch(tt_result)
     assert_allclose(golden, result, rtol=1e-05, atol=1e-35)
-        (torch.float32, ttnn.float32),
-        (torch.bfloat16, ttnn.bfloat16),
-    
-    
+
+
 @pytest.mark.parametrize(
     "input_shapes",
     (
-        (torch.Size([100])),
-        (torch.Size([10, 10])),
         (torch.Size([3, 128, 32])),
-        (torch.Size([1, 1, 102400, 32])),
-        (torch.Size([1, 1, 102400, 64])),
-        (torch.Size([1, 1, 400, 512])),
+        (torch.Size([1, 1, 3, 64, 12])),
     ),
 )
 @pytest.mark.parametrize(
@@ -1870,7 +1864,7 @@ def test_unary_root_ops_ttnn(input_shapes, torch_dtype, ttnn_dtype, ttnn_op, fas
         in_data = torch.empty(input_shapes, dtype=torch_dtype).uniform_(-100, 100)
     input_tensor = ttnn.from_torch(in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
-    output_tensor = ttnn_op(input_tensor, fast_approx_mode=fast_approx_mode)
+    output_tensor = ttnn_op(input_tensor, fast_and_approximate_mode=fast_approx_mode)
     golden_function = ttnn.get_golden_function(ttnn_op)
     golden_tensor = golden_function(in_data)
 

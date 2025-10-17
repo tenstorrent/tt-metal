@@ -326,22 +326,6 @@ struct Rsub {
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
 
-struct Rsqrt {
-    static Tensor invoke(
-        const Tensor& input_tensor,
-        bool fast_approx_mode = false,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
-};
-
-struct Sqrt {
-    static Tensor invoke(
-        const Tensor& input_tensor,
-        bool fast_approx_mode = false,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
-};
-
 }  // namespace operations::unary
 
 // NOLINTBEGIN(bugprone-macro-parentheses)
@@ -444,6 +428,8 @@ REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(log, LOG);
 REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(log10, LOG10);
 REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(log2, LOG2);
 REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(log1p, LOG1P);
+REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(rsqrt, RSQRT);
+REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(sqrt, SQRT);
 
 // Unaries with vector mode and fast and approximate mode
 REGISTER_UNARY_OPERATION_WITH_VECTOR_AND_FAST_AND_APPROXIMATE_MODE(sigmoid, SIGMOID);
@@ -483,8 +469,6 @@ constexpr auto softplus = ttnn::register_operation<"ttnn::softplus", ttnn::opera
 constexpr auto tanh = ttnn::register_operation<"ttnn::tanh", ttnn::operations::unary::Tanh>();
 constexpr auto tanhshrink = ttnn::register_operation<"ttnn::tanhshrink", ttnn::operations::unary::Tanhshrink>();
 constexpr auto prelu_sfpu = ttnn::register_operation<"ttnn::prelu_sfpu", ttnn::operations::unary::Prelu>();
-constexpr auto sqrt = ttnn::register_operation<"ttnn::sqrt", ttnn::operations::unary::Sqrt>();
-constexpr auto rsqrt = ttnn::register_operation<"ttnn::rsqrt", ttnn::operations::unary::Rsqrt>();
 constexpr auto selu = ttnn::register_operation<"ttnn::selu", ttnn::operations::unary::Selu>();
 constexpr auto fill = ttnn::register_operation<
     "ttnn::fill",
