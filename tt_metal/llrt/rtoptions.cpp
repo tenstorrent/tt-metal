@@ -154,7 +154,7 @@ RunTimeOptions::RunTimeOptions() {
     }
 #endif
     TT_FATAL(
-        !(get_feature_enabled(RunTimeDebugFeatureDprint) && get_profiler_enabled()),
+        !(get_feature_enabled(RunTimeDebugFeatureDprint) && is_profiler_enabled()),
         "Cannot enable both debug printing and profiling");
 
     null_kernels = (std::getenv("TT_METAL_NULL_KERNELS") != nullptr);
