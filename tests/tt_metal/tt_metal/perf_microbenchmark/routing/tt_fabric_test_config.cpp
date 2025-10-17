@@ -1317,6 +1317,8 @@ void TestConfigBuilder::expand_patterns_into_test(
             expand_full_device_random_pairing(test, defaults);
         } else if (pattern.type == "unidirectional_linear") {
             expand_unidirectional_linear_unicast_or_multicast(test, defaults);
+        } else if (pattern.type == "perimeter_linear") {
+            expand_perimeter_linear_unicast_or_multicast(test, defaults);
         } else if (pattern.type == "full_ring" || pattern.type == "half_ring") {
             HighLevelTrafficPattern pattern_type =
                 detail::high_level_traffic_pattern_mapper.from_string(pattern.type, "HighLevelTrafficPattern");
@@ -1451,6 +1453,37 @@ void TestConfigBuilder::expand_unidirectional_linear_unicast_or_multicast(
 
             ParsedTrafficPatternConfig specific_pattern;
             specific_pattern.destination = ParsedDestinationConfig{.hops = hops};
+
+            auto merged_pattern = merge_patterns(base_pattern, specific_pattern);
+            test.senders.push_back(ParsedSenderConfig{.device = src_node, .patterns = {merged_pattern}});
+        }
+    }
+}
+
+void TestConfigBuilder::expand_perimeter_linear_unicast_or_multicast(
+    ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern) {
+    log_debug(LogTest, "Expanding perimeter_linear pattern for test: {}", test.name);
+    std::vector<FabricNodeId> devices = device_info_provider_.get_local_node_ids();
+    TT_FATAL(!devices.empty(), "Cannot expand perimeter_linear because no devices were found.");
+
+    // The test pattern resembles a unidirectional_linear test pattern, but only for devices on the perimeter.
+    for (const auto& src_node : devices) {
+        // instantiate N/S E/W traffic on separate senders to avoid bottlenecking on sender.
+        for (uint32_t dim = 0; dim < this->route_manager_.get_num_mesh_dims(); ++dim) {
+            // Skip dimensions with only one device
+            if (this->route_manager_.get_mesh_shape()[dim] < 2) {
+                continue;
+            }
+
+            auto hops = this->route_manager_.get_perimeter_linear_mcast_hops(src_node, dim);
+            // Skip this device/dimension combination because device is not on the perimeter,
+            // or because this device will not send packets in the requested dimension
+            if (!hops.has_value()) {
+                continue;
+            }
+
+            ParsedTrafficPatternConfig specific_pattern;
+            specific_pattern.destination = ParsedDestinationConfig{.hops = hops.value()};
 
             auto merged_pattern = merge_patterns(base_pattern, specific_pattern);
             test.senders.push_back(ParsedSenderConfig{.device = src_node, .patterns = {merged_pattern}});

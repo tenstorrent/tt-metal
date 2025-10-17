@@ -124,6 +124,7 @@ static const StringEnumMapper<HighLevelTrafficPattern> high_level_traffic_patter
     {"all_to_one_random", HighLevelTrafficPattern::AllToOneRandom},
     {"full_device_random_pairing", HighLevelTrafficPattern::FullDeviceRandomPairing},
     {"unidirectional_linear", HighLevelTrafficPattern::UnidirectionalLinear},
+    {"perimeter_linear", HighLevelTrafficPattern::PerimeterLinear},
     {"full_ring", HighLevelTrafficPattern::FullRing},
     {"half_ring", HighLevelTrafficPattern::HalfRing},
     {"all_devices_uniform_pattern", HighLevelTrafficPattern::AllDevicesUniformPattern},
@@ -452,6 +453,9 @@ private:
         ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern, HighLevelTrafficPattern pattern_type);
 
     void expand_unidirectional_linear_unicast_or_multicast(
+        ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern);
+
+    void expand_perimeter_linear_unicast_or_multicast(
         ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern);
 
     void expand_full_or_half_ring_unicast_or_multicast(
