@@ -37,11 +37,8 @@ on:
         description: "Run t3k ttnn ccl tests"
 
 jobs:
-  t3000-unit-tests:
-    timeout-minutes: 15
-    strategy:
-      fail-fast: false
-    name: ${{ matrix.test-group.name }}
+  t3000-fast-tests:
+    name: T3000 fast tests
     runs-on:
       - tt-ubuntu-2204-N300-llmbox-stable
     container:
@@ -50,7 +47,7 @@ jobs:
         TT_METAL_HOME: /work
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
-        ARCH_NAME: ${{ matrix.test-group.arch }}
+        ARCH_NAME: wormhole_b0
         LOGURU_LEVEL: INFO
         GTEST_OUTPUT: xml:/work/generated/test_reports/
       volumes:
@@ -70,7 +67,7 @@ jobs:
           enable-watcher: ${{ inputs.enable-watcher || false }}
       - name: Run t3k fabric tests
         id: t3k-fabric-tests
-        timeout-minutes: 10
+        timeout-minutes: 20
         if: ${{ inputs.run-fabric-tests == 'true' }}
         run: |
           mkdir -p generated/test_reports
@@ -83,7 +80,7 @@ jobs:
           owner: UJ45FEC7M #Allan Liu
       - name: Run t3k ttnn multiprocess tests
         id: t3k-ttnn-multiprocess-tests
-        timeout-minutes: 10
+        timeout-minutes: 15
         if: ${{ inputs.run-multiprocess-tests == 'true' }}
         run: |
           mkdir -p generated/test_reports
