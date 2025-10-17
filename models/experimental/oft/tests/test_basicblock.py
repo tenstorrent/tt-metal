@@ -5,13 +5,15 @@
 import torch
 import ttnn
 import pytest
+import torch.nn as nn
 from models.experimental.oft.reference.resnet import BasicBlock
+from models.experimental.oft.tt.model_configs import ModelOptimizations
 from models.experimental.oft.tt.tt_resnet import TTBasicBlock
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 # from ttnn.model_preprocessing import preprocess_model_parameters
 from models.experimental.oft.tt.model_preprocessing import create_OFT_model_parameters_resnet
-from tests.ttnn.unit_tests.test_bh_20_cores_sharding import skip_if_not_blackhole_20_cores
+from tests.ttnn.unit_tests.base_functionality.test_bh_20_cores_sharding import skip_if_not_blackhole_20_cores
 from loguru import logger
 
 
@@ -20,32 +22,29 @@ from loguru import logger
     [(1, 256, 256, 159, 159, 1, "HS", True)],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 8 * 1024}], indirect=True)
-def test_tt_topdownblock_with_8_basicblocks(device, n, in_ch, out_ch, h, w, stride, sharding, is_sliced):
+def test_tt_topdown_network(device, n, in_ch, out_ch, h, w, stride, sharding, is_sliced):
     skip_if_not_blackhole_20_cores(device)
     device.disable_and_clear_program_cache()  # test hangs without this line on P150
     torch.manual_seed(42)
+
     input_tensor = torch.randn(n, in_ch, h, w)
-    # Create 8 BasicBlock modules from oft
-    blocks = []
-    params_list = []
-    for i in range(8):
-        block = BasicBlock(inplanes=in_ch, planes=out_ch, stride=stride)
-        blocks.append(block)
-        params = create_OFT_model_parameters_resnet(block, input_tensor, device)
-        params_list.append(params)
-    # Reference output using PyTorch blocks sequentially
-    out_ref = input_tensor
-    for block in blocks:
-        out_ref = block(out_ref)
-    # Create 8 TTBasicBlock modules
+
+    # Create a sequence of 8 BasicBlocks to simulate a topdown network
+    torch_model = nn.Sequential(*[BasicBlock(inplanes=in_ch, planes=out_ch) for _ in range(8)])
+    state_dict = create_OFT_model_parameters_resnet(torch_model, input_tensor, device)
+
+    # Get reference output
+    out_ref = torch_model(input_tensor)
+
+    # Apply model optimizations
+    model_opt = ModelOptimizations()
+    model_opt.apply(state_dict, "topdown")
+
     tt_blocks = [
         TTBasicBlock(
             device,
-            params_list[i],
-            params_list[i].conv_args,
-            inplanes=in_ch,
-            planes=out_ch,
-            stride=stride,
+            state_dict[i],
+            state_dict.layer_args[i],
             is_sliced=is_sliced,
         )
         for i in range(8)
@@ -73,17 +72,20 @@ def test_tt_topdownblock_with_8_basicblocks(device, n, in_ch, out_ch, h, w, stri
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 8 * 1024}], indirect=True)
-def test_tt_basicblock(device, n, in_ch, out_ch, h, w, stride, sharding, is_sliced):
+def test_tt_basicblock_single(device, n, in_ch, out_ch, h, w, stride, sharding, is_sliced):
     skip_if_not_blackhole_20_cores(device)
     torch.manual_seed(42)
     input_tensor = torch.randn(n, in_ch, h, w)
     torch_model = BasicBlock(inplanes=in_ch, planes=out_ch, stride=stride)
 
     out = torch_model.forward(input_tensor)
-    params = create_OFT_model_parameters_resnet(torch_model, input_tensor, device)
-    block = TTBasicBlock(
-        device, params, params.conv_args, inplanes=in_ch, planes=out_ch, stride=stride, is_sliced=is_sliced
-    )
+    state_dict = create_OFT_model_parameters_resnet(torch_model, input_tensor, device)
+
+    # Apply model optimizations
+    model_opt = ModelOptimizations()
+    model_opt.apply(state_dict, "topdown.0")  # to update path to real one
+
+    block = TTBasicBlock(device, state_dict, state_dict.layer_args, is_sliced=is_sliced)
 
     n, c, h, w = input_tensor.shape
     x_for_ttnn = input_tensor.permute(0, 2, 3, 1).view(1, 1, n * h * w, c)
