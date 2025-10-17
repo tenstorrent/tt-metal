@@ -97,7 +97,7 @@ def tt_all_reduce(
         if input_tensor.is_sharded() and not sharded:
             input_tensor_sharded = input_tensor
             input_tensor = ttnn.sharded_to_interleaved(input_tensor_sharded, ttnn.L1_MEMORY_CONFIG)
-            input_tensor_sharded.deallocate(True)
+            # input_tensor_sharded.deallocate(False)
 
         reduced = ttnn.experimental.reduce_scatter_minimal_async(
             input_tensor,
@@ -113,7 +113,7 @@ def tt_all_reduce(
             num_workers_per_link=2,
             num_buffers_per_channel=2,
         )
-        input_tensor.deallocate(True)
+        # input_tensor.deallocate(False)
         return reduced
 
     # TG: all_reduce
