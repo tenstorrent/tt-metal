@@ -1422,6 +1422,7 @@ void kernel_main() {
     bool done = false;
     uint32_t heartbeat = 0;
     while (!done) {
+        // DPRINT << "[dispatch_" << is_h_variant << is_d_variant << "] top: cmd_ptr:0x" << HEX() << cmd_ptr << ", fence:0x" << cb_fence << ENDL();
         if (cmd_ptr == cb_fence) {
             if constexpr (is_h_variant && !is_d_variant) {
                 get_cb_page_and_release_pages_remote<
@@ -1467,6 +1468,7 @@ void kernel_main() {
 
         // Move to next page
         cmd_ptr = round_up_pow2(cmd_ptr, dispatch_cb_page_size);
+        // DPRINT << "[dispatch_" << is_h_variant << is_d_variant << "] bottom: cmd_ptr:0x" << HEX() << cmd_ptr << ", fence:0x" << cb_fence << ENDL();
     }
 
     // Release any held pages from the previous block
