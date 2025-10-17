@@ -13,8 +13,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 @pytest.mark.parametrize(
     "T, B, C, cores_y, cores_x",
     [
-        (32, 1, 32, 1, 1),  # simple case
-        # (16384, 4, 8192, 8, 8),  # base case
+        (16384, 4, 8192, 8, 8),  # base case
     ],
 )
 def test_ema(device, T, B, C, cores_y, cores_x):
@@ -54,5 +53,4 @@ def test_ema(device, T, B, C, cores_y, cores_x):
         golden_output_tensor[0, :, :, t] = prev_value * alpha + (1 - alpha) * torch_input_tensor[0, :, :, t]
         prev_value = golden_output_tensor[0, :, :, t]
 
-    breakpoint()
     assert torch.allclose(golden_output_tensor, torch_output_tensor, atol=1e-3)
