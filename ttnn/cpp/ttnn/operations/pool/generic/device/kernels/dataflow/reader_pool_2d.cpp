@@ -6,7 +6,7 @@
 #include <cstdint>
 #include "dataflow_api.h"
 
-#define ENABLE_DEBUG_PRINT 1
+#define ENABLE_DEBUG_PRINT 0
 
 #if ENABLE_DEBUG_PRINT == 1
 #include "debug/dprint.h"
@@ -326,10 +326,12 @@ void kernel_main() {
     constexpr uint32_t out_cb_id = get_compile_time_arg_val(42);
     constexpr uint32_t out_idx_cb_id = get_compile_time_arg_val(43);
 
+    constexpr bool use_split_reader = split_reader && !return_indices;
+
     constexpr uint32_t in_w_padded = in_w + pad_w + ceil_pad_w;
     constexpr bool last_tile_is_partial = in_c % TILE_WIDTH != 0;
     constexpr uint32_t in_scalar_cb_id =
-        split_reader && reader_id == 1 && !one_scalar_per_core ? in_scalar_cb_id_1 : in_scalar_cb_id_0;
+        use_split_reader && reader_id == 1 && !one_scalar_per_core ? in_scalar_cb_id_1 : in_scalar_cb_id_0;
 
     uint32_t scalar_index = 0;
     uint32_t scalar_start = 0;
@@ -401,6 +403,23 @@ void kernel_main() {
             init_index = (start_row - (uint16_t)pad_t) * in_w + (start_col - (uint16_t)pad_l);
         }
 
+        // initialize the index CB
+        volatile tt_l1_ptr uint16_t* idx_ptr =
+            reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(idx_tmp_cb_id));
+        uint16_t kernel_idx = 0;
+        for (uint32_t h = 0; h < window_h; ++h) {
+            for (uint32_t w = 0; w < window_w; ++w) {
+                uint16_t hw = h * window_w + w;
+                const uint32_t fill_c = in_c <= TILE_WIDTH ? in_c : TILE_WIDTH;
+                for (uint32_t c = 0; c < fill_c; ++c) {
+                    uint16_t index = init_index + kernel_idx;
+                    idx_ptr[hw * TILE_WIDTH + c] = index;
+                }
+                kernel_idx++;
+            }
+            kernel_idx += in_w - window_w;
+        }
+
         // initialize the right inc tile
         cb_reserve_back(right_inc_tmp_cb_id, 1);
         volatile tt_l1_ptr uint16_t* right_ptr =
@@ -418,37 +437,6 @@ void kernel_main() {
             down_left_ptr[i] = down_left_wrap_inc;
         }
         cb_push_back(down_left_wrap_inc_tmp_cb_id, 1);
-
-        // initialize the index CB
-        cb_reserve_back(idx_tmp_cb_id, 1);
-        volatile tt_l1_ptr uint16_t* idx_ptr =
-            reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(idx_tmp_cb_id));
-        uint32_t write_inc = TILE_WIDTH;
-#ifdef ARCH_BLACKHOLE
-        if (in_c <= FACE_WIDTH) {
-            write_inc = FACE_WIDTH;
-        }
-#endif
-        uint16_t kernel_idx = 0;
-        for (uint32_t h = 0; h < window_h; ++h) {
-            for (uint32_t w = 0; w < window_w; ++w) {
-                uint16_t hw = h * window_w + w;
-                const uint32_t fill_c = in_c <= TILE_WIDTH ? in_c : TILE_WIDTH;
-                for (uint32_t c = 0; c < fill_c; ++c) {
-                    uint32_t face_h = hw / FACE_HEIGHT;
-                    uint32_t face_w = c / FACE_WIDTH;
-                    uint32_t face_offset = (face_w + face_h * FACES_PER_TILE_WIDTH) * FACE_SIZE;
-                    uint32_t intra_face_h = hw % FACE_HEIGHT;
-                    uint32_t intra_face_w = c % FACE_WIDTH;
-                    uint32_t intra_face_offset = intra_face_w + intra_face_h * FACE_WIDTH;
-                    uint16_t index = init_index + kernel_idx;
-                    idx_ptr[face_offset + intra_face_offset] = index;
-                }
-                kernel_idx++;
-            }
-            kernel_idx += in_w - window_w;
-        }
-        cb_push_back(idx_tmp_cb_id, 1);
     }
 
     // initialize the scalar CB
@@ -483,7 +471,7 @@ void kernel_main() {
 
     uint32_t reader_indices_on_core = 0;
 
-    if (split_reader) {
+    if (use_split_reader) {
         if (reader_id == 0) {
             reader_indices_on_core = (reader_nindices + 1) / 2;
         } else {
@@ -503,10 +491,10 @@ void kernel_main() {
             first_row_value = true;
         }
 
-        constexpr uint32_t stride_multiple = split_reader ? 2 : 1;
+        constexpr uint32_t stride_multiple = use_split_reader ? 2 : 1;
         for (uint16_t ind = start; ind <= end; ind += stride_multiple * stride_w) {
             if constexpr (!one_scalar_per_core) {
-                fill_scalar<one_scalar_per_core, in_scalar_cb_id, reader_nindices, split_reader>(
+                fill_scalar<one_scalar_per_core, in_scalar_cb_id, reader_nindices, use_split_reader>(
                     scalar_start, scalar_end, scalar_value, scalar_index, counter, config_ptr);
             }
             reader_indices_on_core--;
@@ -537,7 +525,7 @@ void kernel_main() {
                 reader_id,
                 tile_tmp_cb_id,
                 tile_idx_tmp_cb_id>(ind, in_l1_read_base_addr);
-            if (split_reader && ind == end) {
+            if (use_split_reader && ind == end) {
                 first_row_value = false;
             }
         }
@@ -545,7 +533,7 @@ void kernel_main() {
 
     while (reader_indices_on_core--) {
         if constexpr (!one_scalar_per_core) {
-            fill_scalar<one_scalar_per_core, in_scalar_cb_id, reader_nindices, split_reader>(
+            fill_scalar<one_scalar_per_core, in_scalar_cb_id, reader_nindices, use_split_reader>(
                 scalar_start, scalar_end, scalar_value, scalar_index, counter, config_ptr);
         }
         read_window_with_top_left_index<

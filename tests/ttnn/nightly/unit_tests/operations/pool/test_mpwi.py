@@ -140,11 +140,6 @@ def test_max_pool2d_with_indices(device, in_c):
         return_indices=True,
     )
 
-    print("Torch result:")
-    print(torch_output.flatten())
-    print("TTNNresult:")
-    print(ttnn.to_torch(ttnn_output).flatten())
-
     # Reshape torch output to match TTNN format (NCHW -> NHWC)
     torch_output_reshaped = torch_output.permute(0, 2, 3, 1)  # N, H, W, C
     torch_indices_reshaped = torch_indices.permute(0, 2, 3, 1)  # N, H, W, C
@@ -167,10 +162,14 @@ def test_max_pool2d_with_indices(device, in_c):
     print("Indices shape:", ttnn_indices_reshaped.shape)
     # print("Indices:\n", ttnn.to_torch(indices))
 
-    # print("TTNN:")
-    # print(ttnn_indices_reshaped[0, :, :, 0])
-    # print("PyTorch:")
-    # print(torch_indices_reshaped[0, :, :, 0])
+    print("Torch data result:")
+    print(torch_output_reshaped.flatten())
+    print("TTNN data result:")
+    print(ttnn_output_reshaped.flatten())
+    print("Torch index result:")
+    print(torch_indices_reshaped.flatten())
+    print("TTNN index result:")
+    print(ttnn_indices_reshaped.flatten())
 
     atol, rtol = torch.testing._comparison.default_tolerances(torch.bfloat16)
     if ttnn_dtype == ttnn.bfloat8_b:

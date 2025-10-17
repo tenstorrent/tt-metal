@@ -12,7 +12,7 @@
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/add_int_sfpu.h"
 
-#define DEBUG_PRINT 1
+#define DEBUG_PRINT 0
 
 #if DEBUG_PRINT == 1
 #include "debug/dprint.h"
@@ -136,7 +136,10 @@ void MAIN {
 
         cb_wait_front(right_inc_tmp_cb_id, 1);
         cb_wait_front(down_left_wrap_inc_tmp_cb_id, 1);
-        cb_wait_front(idx_tmp_cb_id, 1);
+        // idx_tmp_cb_id is populated by the reader, but this happens after the inc CBs are populated
+        // so idx_tmp is protected here, and we intend to have PACK act as the sole producer, hence
+        // why the reader cannot push_back here
+        cb_push_back(idx_tmp_cb_id, 1);
     }
 
     uint32_t tilize_stick_counter = 0;
@@ -176,13 +179,19 @@ void MAIN {
                     reconfig_data_format_srca(curr_in_cb_id);
                     copy_tile(curr_in_cb_id, topk_cb_tile_idx, data_dst_idx);
 
+                    if (first_c_block) {
+                        cb_wait_front(idx_tmp_cb_id, 1);
+                    }
                     reconfig_data_format_srca(idx_tmp_cb_id);
                     copy_tile(idx_tmp_cb_id, topk_cb_tile_idx, index_dst_idx);
+                    copy_tile(idx_tmp_cb_id, topk_cb_tile_idx, index_scratch_in_dst_idx);
+                    if (last_c_block) {
+                        cb_pop_front(idx_tmp_cb_id, 1);
+                    }
 
                     if (first_c_block) {
                         max_reduce_with_indices_init();
                     }
-                    pack_reconfig_data_format(curr_in_cb_id);
                     // the max_reduce_with_indices LLK function only supports kernel_size=9, pending
                     // https://github.com/tenstorrent/tt-metal/issues/28141 but, since for return_indices the in_cb is
                     // oversized (equal to 1 tile), and since this CB is filled with padding values in the beginning of
@@ -191,17 +200,17 @@ void MAIN {
                     constexpr uint32_t max_mpwi_kernel_size = 9;
                     max_reduce_with_indices<max_mpwi_kernel_size>(data_dst_idx, index_dst_idx);
 
+                    pack_reconfig_data_format(idx_tmp_cb_id);
+
                     // update the current index column
                     if (last_c_block) {
                         if (current_idx_col + right_inc + kernel_w > in_w_padded) {
                             // we reached the edge, wrap down and to the left
                             current_idx_col = pad_l;
-                            reconfig_data_format_srca(down_left_wrap_inc_tmp_cb_id);
                             copy_tile(down_left_wrap_inc_tmp_cb_id, topk_cb_tile_idx, inc_dst_idx);
                         } else {
                             // we are still in the same row, move to the right
                             current_idx_col += right_inc;
-                            reconfig_data_format_srca(right_inc_tmp_cb_id);
                             copy_tile(right_inc_tmp_cb_id, topk_cb_tile_idx, inc_dst_idx);
                         }
 
@@ -299,7 +308,9 @@ void MAIN {
                 cb_push_back(tile_idx_tmp_cb_id, 1);
 
                 if (last_c_block) {
+                    cb_reserve_back(idx_tmp_cb_id, 1);
                     pack_tile<true>(index_scratch_out_dst_idx, idx_tmp_cb_id, topk_cb_tile_idx);
+                    cb_push_back(idx_tmp_cb_id, 1);
                 }
                 tile_regs_release();
             }
