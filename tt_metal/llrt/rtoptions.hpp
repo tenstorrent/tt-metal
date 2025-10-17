@@ -210,6 +210,7 @@ struct InspectorSettings {
     std::string rpc_server_host = "localhost";
     uint16_t rpc_server_port = 50051;
     bool rpc_server_enabled = true;
+    std::string rpc_server_address() const { return rpc_server_host + ":" + std::to_string(rpc_server_port); }
 };
 
 class RunTimeOptions {
@@ -308,9 +309,6 @@ class RunTimeOptions {
     // Forces MetalContext re-init on Device creation. Workaround for upstream issues that require re-init each time
     // (#25048) TODO: Once all of init is moved to MetalContext, investigate removing this option.
     bool force_context_reinit = false;
-
-    bool force_reinit = false;
-
     // Comma-separated list of device IDs to make visible to the runtime
     std::string visible_devices = "";
 
