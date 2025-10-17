@@ -22,10 +22,10 @@ void bind_reduction_ema_operation(py::module& module) {
 
         Returns the exponential moving average of `input` along the last dimension.
 
-        For a given `input` of size N along the last dimension, the `output` will also contain N elements and be such that:
+        For a given `input` of size T along the last dimension, the `output` will also contain T elements and be such that:
 
         .. math::
-            \mathrm{{output}}_i = \alpha \times \mathrm{{input}}_i + (1 - \alpha) \times \mathrm{{output}}_{i-1}
+            \mathrm{{output}}_t = \alpha \times \mathrm{{input}}_t + (1 - \alpha) \times \mathrm{{output}}_{t-1}
 
         with \mathrm{{output}}_0 = \mathrm{{input}}_0
 

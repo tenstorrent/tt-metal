@@ -2,8 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <utility>
-
 #include "ema.hpp"
 #include "ema_op.hpp"
 
