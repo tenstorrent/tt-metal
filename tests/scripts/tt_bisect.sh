@@ -143,12 +143,8 @@ verify_import_path() {
   if [ -x "./python_env/bin/python" ]; then
     PY_BIN="./python_env/bin/python"
   fi
-  echo "Debug: Using Python: $PY_BIN"
-  echo "Debug: PYTHONPATH=$PYTHONPATH"
-  echo "Debug: LD_LIBRARY_PATH=$LD_LIBRARY_PATH"
   "$PY_BIN" - <<'PY'
 import sys
-print("Debug: sys.path =", sys.path)
 import ttnn
 print(ttnn.get_arch_name())
 print("ttnn imported from:", ttnn.__file__)
@@ -186,10 +182,6 @@ while [[ "$found" == "false" ]]; do
   fi
 
   echo "::group::Import sanity ($rev)"
-  echo "Debug: PYTHONPATH=$PYTHONPATH"
-  echo "Debug: LD_LIBRARY_PATH=$LD_LIBRARY_PATH"
-  echo "Debug: Checking if build/lib exists:"
-  ls -la build/lib/ 2>&1 | head -20 || echo "build/lib does not exist"
   if ! verify_import_path 2>&1; then
     echo "Import path check failed; skipping this commit"
     git bisect skip
