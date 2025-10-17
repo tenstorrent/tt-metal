@@ -1288,7 +1288,7 @@ void FabricEriscDatamoverBuilder::connect_to_downstream_edm_impl(
             std::visit(
                 [this, ds_index, vc1_send_chan](auto&& vc1_builder_ref) {
                     auto& vc1_builder = vc1_builder_ref.get();
-                    setup_downstream_vc_connection(vc1_builder, ds_index, vc1_send_chan, true);
+                    this->setup_downstream_vc_connection(vc1_builder, ds_index, vc1_send_chan, true);
                 },
                 vc1_edm_builder);
         },
