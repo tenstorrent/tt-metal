@@ -2886,6 +2886,10 @@ void kernel_main() {
         }
     }
 
+    if constexpr (NUM_ACTIVE_ERISCS > 1) {
+        wait_for_other_local_erisc();
+    }
+
     // if enable the tensix extension, then before open downstream connection, need to wait for downstream tensix ready
     // for connection.
     if constexpr (num_downstream_tensix_connections) {
@@ -2933,6 +2937,10 @@ void kernel_main() {
                     DOWNSTREAM_SENDER_NUM_BUFFERS_VC1);
             }
         }
+    }
+
+    if constexpr (NUM_ACTIVE_ERISCS > 1) {
+        wait_for_other_local_erisc();
     }
 
     if constexpr (is_receiver_channel_serviced[0] and NUM_ACTIVE_ERISCS > 1) {
