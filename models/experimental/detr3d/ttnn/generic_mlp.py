@@ -5,7 +5,7 @@
 import ttnn
 import torch
 from models.common.lightweightmodule import LightweightModule
-from models.experimental.detr3d.ttnn.common import TtnnConv1D
+from models.experimental.detr3d.ttnn.utils import TtnnConv1D
 
 
 class TtnnGenericMLP(LightweightModule):

@@ -311,7 +311,7 @@ def build_encoder(args):
         masking_radius = [math.pow(x, 2) for x in [0.4, 0.8, 1.2]]
         encoder = MaskedTransformerEncoder(
             encoder_layer=encoder_layer,
-            num_layers=3,
+            num_layers=args.enc_nlayers,
             interim_downsampling=interim_downsampling,
             masking_radius=masking_radius,
         )

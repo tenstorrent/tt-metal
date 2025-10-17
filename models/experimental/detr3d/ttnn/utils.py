@@ -3,6 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
+import torch
+import numpy as np
 from models.common.lightweightmodule import LightweightModule
 
 
@@ -184,3 +186,110 @@ class TtnnConv2D(LightweightModule):
             return x, shape
         else:
             return x
+
+
+def shift_scale_points_ttnn(pred_xyz, src_range, device=None):
+    """
+    pred_xyz: B x N x 3
+    src_range: [[B x 3], [B x 3]] - min and max XYZ coords
+    dst_range: [[B x 3], [B x 3]] - min and max XYZ coords
+    """
+
+    dst_range = [
+        ttnn.zeros((src_range[0].shape[0], 3), dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT),
+        ttnn.ones((src_range[0].shape[0], 3), dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT),
+    ]
+
+    assert src_range[0].shape[0] == pred_xyz.shape[0]
+    assert dst_range[0].shape[0] == pred_xyz.shape[0]
+    assert src_range[0].shape[-1] == pred_xyz.shape[-1]
+    assert src_range[0].shape == src_range[1].shape
+    assert dst_range[0].shape == dst_range[1].shape
+    assert src_range[0].shape == dst_range[1].shape
+
+    src_range[0] = ttnn.unsqueeze(src_range[0], 1)
+    src_range[1] = ttnn.unsqueeze(src_range[1], 1)
+    dst_range[0] = ttnn.unsqueeze(dst_range[0], 1)
+    dst_range[1] = ttnn.unsqueeze(dst_range[1], 1)
+
+    src_diff = src_range[1] - src_range[0]
+    dst_diff = dst_range[1] - dst_range[0]
+    prop_xyz = pred_xyz - src_range[0]
+    prop_xyz = prop_xyz * dst_diff
+    prop_xyz = ttnn.div(
+        prop_xyz,
+        src_diff,
+        accurate_mode=True,
+        round_mode=None,
+    )
+    prop_xyz = prop_xyz + dst_range[0]
+
+    ttnn.deallocate(src_diff)
+    ttnn.deallocate(dst_diff)
+    ttnn.deallocate(dst_range[0])
+    ttnn.deallocate(dst_range[1])
+
+    return prop_xyz
+
+
+def scale_points(pred_xyz, mult_factor):
+    if len(pred_xyz.shape) == 4:
+        mult_factor = ttnn.unsqueeze(mult_factor, 1)
+    mult_factor = ttnn.unsqueeze(mult_factor, 1)
+    scaled_xyz = pred_xyz * mult_factor
+    return scaled_xyz
+
+
+class TtnnBoxProcessor(object):
+    """
+    Class to convert 3DETR MLP head outputs into bounding boxes
+    """
+
+    def __init__(self, dataset_config, device):
+        self.dataset_config = dataset_config
+        self.device = device
+
+    def compute_predicted_center(self, center_offset, query_xyz, point_cloud_dims):
+        center_unnormalized = query_xyz + center_offset
+        center_normalized = shift_scale_points_ttnn(center_unnormalized, src_range=point_cloud_dims)
+        return center_normalized, center_unnormalized
+
+    def compute_predicted_size(self, size_normalized, point_cloud_dims):
+        scene_scale = point_cloud_dims[1] - point_cloud_dims[0]
+        scene_scale = ttnn.clamp(scene_scale, min=1e-1)
+        size_unnormalized = scale_points(size_normalized, mult_factor=scene_scale)
+        ttnn.deallocate(scene_scale)
+        return size_unnormalized
+
+    def compute_predicted_angle(self, angle_logits, angle_residual):
+        if angle_logits.shape[-1] == 1:
+            # special case for datasets with no rotation angle
+            # we still use the predictions so that model outputs are used
+            # in the backwards pass (DDP may complain otherwise)
+            angle = angle_logits * 0 + angle_residual * 0
+            angle = ttnn.squeeze(angle, -1)
+            angle = ttnn.clamp(angle, min=0)
+        else:
+            angle_per_cls = (2 * np.pi) / self.dataset_config.num_angle_bin
+            pred_angle_class = ttnn.argmax(angle_logits, dim=-1)
+            angle_center = angle_per_cls * pred_angle_class
+            pred_angle_class = ttnn.unsqueeze(pred_angle_class, -1)
+            angle_residual_gathered = ttnn.gather(angle_residual, 2, pred_angle_class)
+            angle = angle_center + ttnn.squeeze(angle_residual_gathered, -1)
+            mask = angle > np.pi
+            angle[mask] = angle[mask] - (2 * np.pi)
+        return angle
+
+    def compute_objectness_and_cls_prob(self, cls_logits):
+        assert cls_logits.shape[-1] == self.dataset_config.num_semcls + 1
+        cls_prob = ttnn.softmax(cls_logits, dim=-1)
+        objectness_prob = 1 - cls_prob[..., -1]
+        return cls_prob[..., :-1], objectness_prob
+
+    def box_parametrization_to_corners(self, box_center_unnorm, box_size_unnorm, box_angle):
+        torch_box_center_unnorm = ttnn.to_torch(box_center_unnorm, dtype=torch.float32)
+        torch_box_size_unnorm = ttnn.to_torch(box_size_unnorm, dtype=torch.float32)
+        torch_box_angle = ttnn.to_torch(box_angle, dtype=torch.float32)
+        return self.dataset_config.box_parametrization_to_corners(
+            torch_box_center_unnorm, torch_box_size_unnorm, torch_box_angle
+        )

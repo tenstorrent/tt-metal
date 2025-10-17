@@ -6,7 +6,7 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.experimental.detr3d.ttnn.shared_mlp import TtnnSharedMLP
-from models.experimental.detr3d.reference.model_utils import (
+from models.experimental.detr3d.reference.torch_pointnet2_ops import (
     QueryAndGroup,
     GatherOperation,
     FurthestPointSampling,
@@ -277,9 +277,9 @@ class TtnnPointnetSAModuleVotes(LightweightModule):
 
     def forward(self, xyz, features=None, inds=None):
         if not isinstance(xyz, torch.Tensor):
-            xyz = ttnn.to_torch(xyz)
+            xyz = ttnn.to_torch(xyz, dtype=torch.float32)
         if not isinstance(features, torch.Tensor) and features is not None:
-            features = ttnn.to_torch(features)
+            features = ttnn.to_torch(features, dtype=torch.float32)
         if not isinstance(inds, torch.Tensor) and inds is not None:
             inds = ttnn.to_torch(inds)
 
@@ -366,13 +366,6 @@ class TtnnPointnetSAModuleVotes(LightweightModule):
                 new_features = ttnn.reshape(new_features, (B, H, 1, C))
                 new_features = ttnn.permute(new_features, (0, 3, 1, 2))
                 new_features = ttnn.squeeze(new_features, -1)  # (B, mlp[-1], npoint)
-                # new_features = ttnn.to_torch(new_features)
-                # new_features = torch.permute(new_features, (0, 3, 1, 2))
-                # new_features = torch.nn.functional.max_pool2d(
-                #     new_features, kernel_size=[1, new_features.size(3)]
-                # )  # (B, mlp[-1], npoint, 1)
-                # new_features = torch.squeeze(new_features, -1)
-                # new_features = ttnn.from_torch(new_features, dtype=ttnn.bfloat16, device=self.device)
         else:
             raise NotImplementedError("Currently only Maxpool is supported")
 

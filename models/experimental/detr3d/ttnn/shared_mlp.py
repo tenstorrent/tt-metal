@@ -4,7 +4,7 @@
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.experimental.detr3d.ttnn.common import TtnnConv2D
+from models.experimental.detr3d.ttnn.utils import TtnnConv2D
 
 
 class TtnnSharedMLP(LightweightModule):

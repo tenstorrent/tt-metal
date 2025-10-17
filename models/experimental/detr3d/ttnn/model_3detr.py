@@ -29,94 +29,6 @@ from models.experimental.detr3d.ttnn.generic_mlp import TtnnGenericMLP
 from models.experimental.detr3d.ttnn.position_embedding import TtnnPositionEmbeddingCoordsSine
 
 
-def build_ttnn_preencoder(args):
-    mlp_dims = [3 * int(args.use_color), 64, 128, args.enc_dim]
-    preencoder = TtnnPointnetSAModuleVotes(
-        radius=0.2,
-        nsample=64,
-        npoint=args.preenc_npoints,
-        mlp=mlp_dims,
-        normalize_xyz=True,
-        module=args.modules.pre_encoder,
-        parameters=args.parameters.pre_encoder.mlp_module,
-        device=args.device,
-    )
-    return preencoder
-
-
-def build_ttnn_encoder(args):
-    if args.enc_type in ["masked"]:
-        encoder_layer = TtnnTransformerEncoderLayer
-        interim_downsampling = TtnnPointnetSAModuleVotes(
-            radius=0.4,
-            nsample=32,
-            npoint=args.preenc_npoints // 2,
-            mlp=[args.enc_dim, 256, 256, args.enc_dim],
-            normalize_xyz=True,
-            module=args.modules.encoder.interim_downsampling,
-            parameters=args.parameters.encoder.interim_downsampling.mlp_module,
-            device=args.device,
-        )
-
-        masking_radius = [math.pow(x, 2) for x in [0.4, 0.8, 1.2]]
-        encoder = TtnnMaskedTransformerEncoder(
-            encoder_layer=encoder_layer,
-            num_layers=args.enc_nlayers,
-            interim_downsampling=interim_downsampling,
-            masking_radius=masking_radius,
-            device=args.device,
-            encoder_args=EncoderLayerArgs(
-                d_model=args.enc_dim,
-                nhead=args.enc_nhead,
-                dim_feedforward=args.enc_ffn_dim,
-            ),
-            parameters=args.parameters.encoder,
-        )
-    else:
-        raise ValueError(f"Unknown encoder type {args.enc_type}")
-    return encoder
-
-
-def build_ttnn_decoder(args):
-    decoder = TtnnTransformerDecoder(
-        decoder_layer=TtnnTransformerDecoderLayer,
-        num_layers=args.dec_nlayers,
-        device=args.device,
-        return_intermediate=True,
-        decoder_args=DecoderLayerArgs(
-            d_model=args.dec_dim,
-            nhead=args.dec_nhead,
-            dim_feedforward=args.dec_ffn_dim,
-            normalize_before=True,
-        ),
-        parameters=args.parameters.decoder,
-    )
-    return decoder
-
-
-def build_ttnn_3detr(args, dataset_config):
-    pre_encoder = build_ttnn_preencoder(args)
-    encoder = build_ttnn_encoder(args)
-    decoder = build_ttnn_decoder(args)
-    model = TtnnModel3DETR(
-        pre_encoder,
-        encoder,
-        decoder,
-        dataset_config,
-        encoder_dim=args.enc_dim,
-        decoder_dim=args.dec_dim,
-        num_queries=args.nqueries,
-        torch_module=args.modules,
-        parameters=args.parameters,
-        device=args.device,
-    )
-    output_processor = BoxProcessor(dataset_config)
-    return model, output_processor
-
-
-# 9: Detr3d model
-
-
 class TtnnModel3DETR(LightweightModule):
     """
     Main 3DETR model. Consists of the following learnable sub-models
@@ -172,6 +84,7 @@ class TtnnModel3DETR(LightweightModule):
 
         self.num_queries = num_queries
         self.box_processor = BoxProcessor(dataset_config)
+        # self.box_processor = TtnnBoxProcessor(dataset_config, device=self.device)
         self.furthest_point_sample = FurthestPointSampling()
 
     def build_mlp_heads(self):
@@ -305,11 +218,10 @@ class TtnnModel3DETR(LightweightModule):
 
             # below are not used in computing loss (only for matching/mAP eval)
             # we compute them with no_grad() so that distributed training does not complain about unused variables
-            with torch.no_grad():
-                (
-                    semcls_prob,
-                    objectness_prob,
-                ) = self.box_processor.compute_objectness_and_cls_prob(cls_logits[l])
+            (
+                semcls_prob,
+                objectness_prob,
+            ) = self.box_processor.compute_objectness_and_cls_prob(cls_logits[l])
 
             box_prediction = {
                 "sem_cls_logits": cls_logits[l],
@@ -368,3 +280,90 @@ class TtnnModel3DETR(LightweightModule):
         box_features = self.decoder(tgt, enc_features, query_pos=query_embed, pos=enc_pos)[0]
         box_predictions = self.get_box_predictions(torch_query_xyz, torch_point_cloud_dims, box_features)
         return box_predictions
+
+
+def build_ttnn_preencoder(args):
+    mlp_dims = [3 * int(args.use_color), 64, 128, args.enc_dim]
+    preencoder = TtnnPointnetSAModuleVotes(
+        radius=0.2,
+        nsample=64,
+        npoint=args.preenc_npoints,
+        mlp=mlp_dims,
+        normalize_xyz=True,
+        module=args.modules.pre_encoder,
+        parameters=args.parameters.pre_encoder.mlp_module,
+        device=args.device,
+    )
+    return preencoder
+
+
+def build_ttnn_encoder(args):
+    if args.enc_type in ["masked"]:
+        encoder_layer = TtnnTransformerEncoderLayer
+        interim_downsampling = TtnnPointnetSAModuleVotes(
+            radius=0.4,
+            nsample=32,
+            npoint=args.preenc_npoints // 2,
+            mlp=[args.enc_dim, 256, 256, args.enc_dim],
+            normalize_xyz=True,
+            module=args.modules.encoder.interim_downsampling,
+            parameters=args.parameters.encoder.interim_downsampling.mlp_module,
+            device=args.device,
+        )
+
+        masking_radius = [math.pow(x, 2) for x in [0.4, 0.8, 1.2]]
+        # masking_radius = [math.pow(x, 2) for x in [0.4]]
+        encoder = TtnnMaskedTransformerEncoder(
+            encoder_layer=encoder_layer,
+            num_layers=args.enc_nlayers,
+            interim_downsampling=interim_downsampling,
+            masking_radius=masking_radius,
+            device=args.device,
+            encoder_args=EncoderLayerArgs(
+                d_model=args.enc_dim,
+                nhead=args.enc_nhead,
+                dim_feedforward=args.enc_ffn_dim,
+            ),
+            parameters=args.parameters.encoder,
+        )
+    else:
+        raise ValueError(f"Unknown encoder type {args.enc_type}")
+    return encoder
+
+
+def build_ttnn_decoder(args):
+    decoder = TtnnTransformerDecoder(
+        decoder_layer=TtnnTransformerDecoderLayer,
+        num_layers=args.dec_nlayers,
+        device=args.device,
+        return_intermediate=True,
+        decoder_args=DecoderLayerArgs(
+            d_model=args.dec_dim,
+            nhead=args.dec_nhead,
+            dim_feedforward=args.dec_ffn_dim,
+            normalize_before=True,
+        ),
+        parameters=args.parameters.decoder,
+    )
+    return decoder
+
+
+def build_ttnn_3detr(args, dataset_config):
+    pre_encoder = build_ttnn_preencoder(args)
+    encoder = build_ttnn_encoder(args)
+    decoder = build_ttnn_decoder(args)
+    model = TtnnModel3DETR(
+        pre_encoder,
+        encoder,
+        decoder,
+        dataset_config,
+        encoder_dim=args.enc_dim,
+        decoder_dim=args.dec_dim,
+        num_queries=args.nqueries,
+        torch_module=args.modules,
+        parameters=args.parameters,
+        device=args.device,
+    )
+    output_processor = BoxProcessor(dataset_config)
+    # output_processor = TtnnBoxProcessor(dataset_config, device=args.device)
+    return model, output_processor
