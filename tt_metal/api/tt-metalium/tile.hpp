@@ -75,4 +75,6 @@ struct Tile {
     auto attribute_values() const { return std::forward_as_tuple(tile_shape, face_shape, num_faces); }
 };
 
+std::ostream& operator<<(std::ostream& os, const Tile& tile);
+
 }  // namespace tt::tt_metal
