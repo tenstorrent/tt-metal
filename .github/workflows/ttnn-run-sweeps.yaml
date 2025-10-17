@@ -609,7 +609,7 @@ jobs:
     strategy:
       matrix:
         arch:
-          - input.arch
+          - ${{ inputs.arch }}
     container:
       image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       env:
