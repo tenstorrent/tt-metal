@@ -71,7 +71,7 @@ if [ "$tracy_enabled" -eq 1 ]; then
   echo "Tracy profiling enabled for builds."
 fi
 
-if [ "$script_path" ]; then
+if [ -n "$script_path" ]; then
   echo "script path is set: $script_path"
 else
   echo "command is set: $test"
