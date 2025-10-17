@@ -362,6 +362,9 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementCoreBidirectionalWriteVCSweep
 }
 
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementCoreBidirectionalWriteVCSweepDifferentKernels) {
+    // Test failing with watcher enabled, github issue #29229
+    SKIP_FOR_WATCHER();
+
     // Test ID base
     uint32_t test_id_base = 145;
     bool same_kernel = false;
