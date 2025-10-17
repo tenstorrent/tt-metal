@@ -41,14 +41,14 @@ void create_ethernet_metrics(
         uint32_t channel = endpoint.chan_id();
         tt::tt_metal::ASICLocation asic_location = tt::tt_metal::ASICLocation(endpoint.asic_location());
         tt::tt_metal::TrayID tray_id = tt::tt_metal::TrayID(endpoint.tray_id());
-        std::optional<ChipId> chip_id_optional =
+        std::optional<tt::ChipId> chip_id_optional =
             topology_translation->get_local_chip_id_for_asic_location_and_tray(asic_location, tray_id);
         TT_FATAL(
             chip_id_optional.has_value(),
             "Unable to map ASIC location {} and tray {} to a chip ID",
             *asic_location,
             *tray_id);
-        ChipId chip_id = chip_id_optional.value();
+        tt::ChipId chip_id = chip_id_optional.value();
 
         bool_metrics.push_back(
             std::make_unique<EthernetEndpointUpMetric>(tray_id, asic_location, chip_id, channel, hal));
@@ -87,7 +87,7 @@ static std::vector<std::string> endpoint_telemetry_path(
 EthernetEndpointUpMetric::EthernetEndpointUpMetric(
     tt::tt_metal::TrayID tray_id,
     tt::tt_metal::ASICLocation asic_location,
-    ChipId chip_id,
+    tt::ChipId chip_id,
     uint32_t channel,
     const std::unique_ptr<tt::tt_metal::Hal>& hal) :
     BoolMetric(),
@@ -130,7 +130,7 @@ void EthernetEndpointUpMetric::update(
 EthernetCRCErrorCountMetric::EthernetCRCErrorCountMetric(
     tt::tt_metal::TrayID tray_id,
     tt::tt_metal::ASICLocation asic_location,
-    ChipId chip_id,
+    tt::ChipId chip_id,
     uint32_t channel,
     const std::unique_ptr<tt::umd::Cluster>& cluster,
     const std::unique_ptr<tt::tt_metal::Hal>& hal) :
@@ -165,7 +165,7 @@ void EthernetCRCErrorCountMetric::update(
 EthernetRetrainCountMetric::EthernetRetrainCountMetric(
     tt::tt_metal::TrayID tray_id,
     tt::tt_metal::ASICLocation asic_location,
-    ChipId chip_id,
+    tt::ChipId chip_id,
     uint32_t channel,
     const std::unique_ptr<tt::umd::Cluster>& cluster,
     const std::unique_ptr<tt::tt_metal::Hal>& hal) :
@@ -198,7 +198,7 @@ void EthernetRetrainCountMetric::update(
 EthernetCorrectedCodewordCountMetric::EthernetCorrectedCodewordCountMetric(
     tt::tt_metal::TrayID tray_id,
     tt::tt_metal::ASICLocation asic_location,
-    ChipId chip_id,
+    tt::ChipId chip_id,
     uint32_t channel,
     const std::unique_ptr<tt::umd::Cluster>& cluster,
     const std::unique_ptr<tt::tt_metal::Hal>& hal) :
@@ -235,7 +235,7 @@ void EthernetCorrectedCodewordCountMetric::update(
 EthernetUncorrectedCodewordCountMetric::EthernetUncorrectedCodewordCountMetric(
     tt::tt_metal::TrayID tray_id,
     tt::tt_metal::ASICLocation asic_location,
-    ChipId chip_id,
+    tt::ChipId chip_id,
     uint32_t channel,
     const std::unique_ptr<tt::umd::Cluster>& cluster,
     const std::unique_ptr<tt::tt_metal::Hal>& hal) :

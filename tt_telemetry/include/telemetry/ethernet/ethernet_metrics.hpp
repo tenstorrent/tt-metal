@@ -34,7 +34,7 @@ public:
     EthernetEndpointUpMetric(
         tt::tt_metal::TrayID tray_id,
         tt::tt_metal::ASICLocation asic_location,
-        ChipId chip_id,
+        tt::ChipId chip_id,
         uint32_t channel,
         const std::unique_ptr<tt::tt_metal::Hal>& hal);
     const std::vector<std::string> telemetry_path() const override;
@@ -45,7 +45,7 @@ public:
 private:
     tt::tt_metal::TrayID tray_id_;
     tt::tt_metal::ASICLocation asic_location_;
-    ChipId chip_id_;
+    tt::ChipId chip_id_;
     uint32_t channel_;
     std::chrono::steady_clock::time_point last_force_refresh_time_;
     uint32_t link_up_addr_;
@@ -56,7 +56,7 @@ public:
     EthernetCRCErrorCountMetric(
         tt::tt_metal::TrayID tray_id,
         tt::tt_metal::ASICLocation asic_location,
-        ChipId chip_id,
+        tt::ChipId chip_id,
         uint32_t channel,
         const std::unique_ptr<tt::umd::Cluster>& cluster,
         const std::unique_ptr<tt::tt_metal::Hal>& hal);
@@ -69,7 +69,7 @@ public:
 private:
     tt::tt_metal::TrayID tray_id_;
     tt::tt_metal::ASICLocation asic_location_;
-    ChipId chip_id_;
+    tt::ChipId chip_id_;
     uint32_t channel_;
     tt::umd::CoreCoord ethernet_core_;
     uint32_t crc_addr_;
@@ -80,7 +80,7 @@ public:
     EthernetRetrainCountMetric(
         tt::tt_metal::TrayID tray_id,
         tt::tt_metal::ASICLocation asic_location,
-        ChipId chip_id,
+        tt::ChipId chip_id,
         uint32_t channel,
         const std::unique_ptr<tt::umd::Cluster>& cluster,
         const std::unique_ptr<tt::tt_metal::Hal>& hal);
@@ -93,7 +93,7 @@ public:
 private:
     tt::tt_metal::TrayID tray_id_;
     tt::tt_metal::ASICLocation asic_location_;
-    ChipId chip_id_;
+    tt::ChipId chip_id_;
     uint32_t channel_;
     tt::umd::CoreCoord ethernet_core_;
     uint32_t retrain_count_addr_;
@@ -104,7 +104,7 @@ public:
     EthernetCorrectedCodewordCountMetric(
         tt::tt_metal::TrayID tray_id,
         tt::tt_metal::ASICLocation asic_location,
-        ChipId chip_id,
+        tt::ChipId chip_id,
         uint32_t channel,
         const std::unique_ptr<tt::umd::Cluster>& cluster,
         const std::unique_ptr<tt::tt_metal::Hal>& hal);
@@ -117,7 +117,7 @@ public:
 private:
     tt::tt_metal::TrayID tray_id_;
     tt::tt_metal::ASICLocation asic_location_;
-    ChipId chip_id_;
+    tt::ChipId chip_id_;
     uint32_t channel_;
     tt::umd::CoreCoord ethernet_core_;
     uint32_t corr_addr_;
@@ -128,7 +128,7 @@ public:
     EthernetUncorrectedCodewordCountMetric(
         tt::tt_metal::TrayID tray_id,
         tt::tt_metal::ASICLocation asic_location,
-        ChipId chip_id,
+        tt::ChipId chip_id,
         uint32_t channel,
         const std::unique_ptr<tt::umd::Cluster>& cluster,
         const std::unique_ptr<tt::tt_metal::Hal>& hal);
@@ -141,7 +141,7 @@ public:
 private:
     tt::tt_metal::TrayID tray_id_;
     tt::tt_metal::ASICLocation asic_location_;
-    ChipId chip_id_;
+    tt::ChipId chip_id_;
     uint32_t channel_;
     tt::umd::CoreCoord ethernet_core_;
     uint32_t uncorr_addr_;

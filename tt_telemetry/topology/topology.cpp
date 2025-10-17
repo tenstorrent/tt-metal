@@ -21,9 +21,9 @@ TopologyHelper::TopologyHelper(
     const std::unique_ptr<tt::tt_metal::PhysicalSystemDescriptor>& psd) :
     my_host_name(psd->my_host_name()) {
     // Get mapping of chip ID <-> ASIC unique ID. This is only valid for the local host!
-    const std::unordered_map<ChipId, uint64_t>& ChipIdo_unique_id =
+    const std::unordered_map<tt::ChipId, uint64_t>& ChipIdo_unique_id =
         cluster->get_cluster_description()->get_chip_unique_ids();
-    std::unordered_map<uint64_t, ChipId> unique_id_to_chip_id = invert_map(ChipIdo_unique_id);
+    std::unordered_map<uint64_t, tt::ChipId> unique_id_to_chip_id = invert_map(ChipIdo_unique_id);
 
     // Produce the following maps (all valid only for the local host because chip ID is not
     // globally unique):
@@ -35,7 +35,7 @@ TopologyHelper::TopologyHelper(
         if (it == unique_id_to_chip_id.end()) {
             continue;
         }
-        ChipId chip_id = it->second;
+        tt::ChipId chip_id = it->second;
 
         auto key = std::make_pair(asic_descriptor.asic_location, asic_descriptor.tray_id);
         TT_FATAL(
@@ -48,7 +48,7 @@ TopologyHelper::TopologyHelper(
     }
 }
 
-std::optional<ChipId> TopologyHelper::get_local_chip_id_for_asic_location_and_tray(
+std::optional<tt::ChipId> TopologyHelper::get_local_chip_id_for_asic_location_and_tray(
     tt::tt_metal::ASICLocation asic_location, tt::tt_metal::TrayID tray_id) {
     auto it = asic_location_and_tray_id_to_local_chip_id_.find({asic_location, tray_id});
     if (it == asic_location_and_tray_id_to_local_chip_id_.end()) {
@@ -57,7 +57,7 @@ std::optional<ChipId> TopologyHelper::get_local_chip_id_for_asic_location_and_tr
     return it->second;
 }
 
-std::optional<tt::tt_metal::ASICDescriptor> TopologyHelper::get_asic_descriptor_for_local_chip(ChipId chip_id) {
+std::optional<tt::tt_metal::ASICDescriptor> TopologyHelper::get_asic_descriptor_for_local_chip(tt::ChipId chip_id) {
     auto it = local_chip_id_to_asic_descriptor_.find(chip_id);
     if (it == local_chip_id_to_asic_descriptor_.end()) {
         return std::nullopt;

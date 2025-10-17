@@ -112,7 +112,7 @@ tt_xy_pair ddr_to_noc0(unsigned i) {
 }  // namespace blackhole
 
 void configure_static_tlbs(
-    tt::ARCH arch, ChipId mmio_device_id, const metal_SocDescriptor& sdesc, tt::umd::Cluster& device_driver) {
+    tt::ARCH arch, tt::ChipId mmio_device_id, const metal_SocDescriptor& sdesc, tt::umd::Cluster& device_driver) {
     using get_static_tlb_index_ptr = std::int32_t (*)(tt::umd::CoreCoord);
     get_static_tlb_index_ptr get_static_tlb_index;
 

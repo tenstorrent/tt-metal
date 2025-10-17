@@ -33,7 +33,7 @@ std::unique_ptr<tt::tt_fabric::ControlPlane> make_control_plane(const std::files
 
 std::unique_ptr<tt::tt_fabric::ControlPlane> make_control_plane(
     const std::filesystem::path& graph_desc,
-    const std::map<tt::tt_fabric::FabricNodeId, ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping) {
+    const std::map<tt::tt_fabric::FabricNodeId, tt::ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping) {
     auto control_plane = std::make_unique<tt::tt_fabric::ControlPlane>(
         graph_desc.string(), logical_mesh_chip_id_to_physical_chip_id_mapping);
     control_plane->initialize_fabric_context(kFabricConfig);

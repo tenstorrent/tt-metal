@@ -76,8 +76,8 @@ std::vector<std::string> split_comma_separated(const std::string& input) {
  Main
 **************************************************************************************************/
 
-static uint64_t get_unique_chip_id(const std::unique_ptr<tt::umd::Cluster>& cluster, ChipId chip_id) {
-    const std::unordered_map<ChipId, uint64_t>& chip_to_unique_id =
+static uint64_t get_unique_chip_id(const std::unique_ptr<tt::umd::Cluster>& cluster, tt::ChipId chip_id) {
+    const std::unordered_map<tt::ChipId, uint64_t>& chip_to_unique_id =
         cluster->get_cluster_description()->get_chip_unique_ids();
     try {
         return chip_to_unique_id.at(chip_id);

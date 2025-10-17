@@ -33,7 +33,7 @@ lite_fabric::FabricLiteConfig GetInitFabricLiteConfig(const lite_fabric::SystemD
 
 namespace lite_fabric {
 
-uint32_t GetEthChannelMask(ChipId device_id) {
+uint32_t GetEthChannelMask(tt::ChipId device_id) {
     auto& cp = tt::tt_metal::MetalContext::instance().get_control_plane();
 
     uint32_t mask = 0;
@@ -44,7 +44,7 @@ uint32_t GetEthChannelMask(ChipId device_id) {
     return mask;
 }
 
-SystemDescriptor GetSystemDescriptorFromMmio(tt::Cluster& cluster, ChipId mmio_device_id) {
+SystemDescriptor GetSystemDescriptorFromMmio(tt::Cluster& cluster, tt::ChipId mmio_device_id) {
     SystemDescriptor desc;
 
     // Get the eth mask for each device

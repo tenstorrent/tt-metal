@@ -34,7 +34,7 @@ void create_arc_metrics(
     tt::umd::ClusterDescriptor* cluster_descriptor = cluster->get_cluster_description();
 
     // Iterate through all chips and create ARC metrics for MMIO-capable ones
-    for (ChipId chip_id : cluster_descriptor->get_all_chips()) {
+    for (tt::ChipId chip_id : cluster_descriptor->get_all_chips()) {
         // Check if this chip has MMIO capability (is a local chip)
         if (cluster_descriptor->is_chip_mmio_capable(chip_id)) {
             tt::umd::TTDevice* device = cluster->get_tt_device(chip_id);

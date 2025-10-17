@@ -193,8 +193,8 @@ bool parse_cli_or_usage(
     }
 
     p.mesh_id = src_mesh;  // assume same mesh
-    p.src_chip = static_cast<ChipId>(src_chip);
-    p.dst_chip = static_cast<ChipId>(dst_chip);
+    p.src_chip = static_cast<tt::ChipId>(src_chip);
+    p.dst_chip = static_cast<tt::ChipId>(dst_chip);
 
     return true;
 }

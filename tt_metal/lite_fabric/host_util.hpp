@@ -14,11 +14,11 @@
 namespace lite_fabric {
 
 struct TunnelDescriptor {
-    ChipId mmio_id{0xffffffff};
+    tt::ChipId mmio_id{0xffffffff};
     CoreCoord mmio_core_virtual{-1, -1};
     CoreCoord mmio_core_logical{-1, -1};
 
-    ChipId connected_id{0xffffffff};
+    tt::ChipId connected_id{0xffffffff};
     CoreCoord connected_core_virtual{-1, -1};
     CoreCoord connected_core_logical{-1, -1};
 
@@ -30,13 +30,13 @@ struct TunnelDescriptor {
 };
 
 struct SystemDescriptor {
-    std::map<ChipId, uint32_t> enabled_eth_channels;
+    std::map<tt::ChipId, uint32_t> enabled_eth_channels;
     std::vector<TunnelDescriptor> tunnels_from_mmio;
 };
 
-uint32_t GetEthChannelMask(ChipId device_id);
+uint32_t GetEthChannelMask(tt::ChipId device_id);
 
-SystemDescriptor GetSystemDescriptorFromMmio(tt::Cluster& cluster, ChipId mmio_device_id);
+SystemDescriptor GetSystemDescriptorFromMmio(tt::Cluster& cluster, tt::ChipId mmio_device_id);
 
 void SetResetState(tt::Cluster& cluster, tt_cxy_pair virtual_core, bool assert_reset);
 

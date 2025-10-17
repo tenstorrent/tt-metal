@@ -35,14 +35,17 @@ public:
     TopologyHelper(
         const std::unique_ptr<tt::umd::Cluster>& cluster,
         const std::unique_ptr<tt::tt_metal::PhysicalSystemDescriptor>& psd);
-    std::optional<ChipId> get_local_chip_id_for_asic_location_and_tray(
+    std::optional<tt::ChipId> get_local_chip_id_for_asic_location_and_tray(
         tt::tt_metal::ASICLocation asic_location, tt::tt_metal::TrayID tray_id);
-    std::optional<tt::tt_metal::ASICDescriptor> get_asic_descriptor_for_local_chip(ChipId chip_id);
+    std::optional<tt::tt_metal::ASICDescriptor> get_asic_descriptor_for_local_chip(tt::ChipId chip_id);
 
     const std::string my_host_name;
 
 private:
-    std::unordered_map<std::pair<tt::tt_metal::ASICLocation, tt::tt_metal::TrayID>, ChipId, ASICLocationAndTrayIDHash>
+    std::unordered_map<
+        std::pair<tt::tt_metal::ASICLocation, tt::tt_metal::TrayID>,
+        tt::ChipId,
+        ASICLocationAndTrayIDHash>
         asic_location_and_tray_id_to_local_chip_id_;
-    std::unordered_map<ChipId, tt::tt_metal::ASICDescriptor> local_chip_id_to_asic_descriptor_;
+    std::unordered_map<tt::ChipId, tt::tt_metal::ASICDescriptor> local_chip_id_to_asic_descriptor_;
 };

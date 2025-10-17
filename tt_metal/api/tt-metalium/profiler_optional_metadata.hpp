@@ -15,10 +15,10 @@ class ProfilerOptionalMetadata {
     using RuntimeID = uint32_t;
 
 public:
-    ProfilerOptionalMetadata(std::map<std::pair<ChipId, RuntimeID>, std::string>&& runtime_map) :
+    ProfilerOptionalMetadata(std::map<std::pair<tt::ChipId, RuntimeID>, std::string>&& runtime_map) :
         runtime_id_to_opname_(std::move(runtime_map)) {}
 
-    const std::string& get_op_name(ChipId device_id, RuntimeID runtime_id) const {
+    const std::string& get_op_name(tt::ChipId device_id, RuntimeID runtime_id) const {
         static const std::string empty_string;
         auto key = std::make_pair(device_id, runtime_id);
         auto it = runtime_id_to_opname_.find(key);
@@ -29,5 +29,5 @@ public:
     }
 
 private:
-    std::map<std::pair<ChipId, RuntimeID>, std::string> runtime_id_to_opname_;
+    std::map<std::pair<tt::ChipId, RuntimeID>, std::string> runtime_id_to_opname_;
 };

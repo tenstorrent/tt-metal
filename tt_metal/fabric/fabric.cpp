@@ -43,8 +43,8 @@ bool is_TG_gateway_connection(
         return false;
     }
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    ChipId src_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(src_fabric_node_id);
-    ChipId dst_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(dst_fabric_node_id);
+    tt::ChipId src_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(src_fabric_node_id);
+    tt::ChipId dst_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(dst_fabric_node_id);
     const auto mmio_chip_id1 =
         tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(src_chip_id);
     const auto mmio_chip_id2 =

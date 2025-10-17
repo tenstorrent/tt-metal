@@ -129,7 +129,7 @@ private:
     uint32_t num_senders;
     uint32_t num_receivers;
     std::size_t num_buffers_per_channel;
-    ChipId chip_id;
+    tt::ChipId chip_id;
 
     bool enable_sender;
     bool enable_receiver;
@@ -149,7 +149,7 @@ public:
         ccl::EriscDataMoverBufferSharingMode buffer_sharing_mode,
         ccl::EriscDataMoverTerminationMode termination_mode = ccl::EriscDataMoverTerminationMode::MESSAGE_COUNT_REACHED,
         std::size_t num_buffers_per_channel = 1,
-        ChipId chip_id = -1) :
+        tt::ChipId chip_id = -1) :
         local_semaphore_addresses(local_semaphore_addresses),
         local_buffer_addresses(local_buffer_addresses),
         eth_buffer_size_bytes(eth_buffer_size),

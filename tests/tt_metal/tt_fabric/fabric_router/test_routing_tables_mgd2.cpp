@@ -110,7 +110,9 @@ void expect_get_host_ranks_equal(
 }
 
 void expect_get_chip_ids_equal(
-    const tt::tt_fabric::MeshContainer<ChipId>& lhs, const tt::tt_fabric::MeshContainer<ChipId>& rhs, int mesh_id) {
+    const tt::tt_fabric::MeshContainer<tt::ChipId>& lhs,
+    const tt::tt_fabric::MeshContainer<tt::ChipId>& rhs,
+    int mesh_id) {
     // Test get_chip_ids function comparison for specified mesh ID
     EXPECT_EQ(lhs.size(), rhs.size()) << "Mesh " << mesh_id << " chip count should be equal between MGD versions";
     EXPECT_EQ(lhs.shape(), rhs.shape()) << "Mesh " << mesh_id << " chip shape should be equal between MGD versions";
@@ -128,7 +130,9 @@ void expect_get_chip_ids_equal(
 }
 
 void expect_get_chip_ids_submesh_equal(
-    const tt::tt_fabric::MeshContainer<ChipId>& lhs, const tt::tt_fabric::MeshContainer<ChipId>& rhs, int mesh_id) {
+    const tt::tt_fabric::MeshContainer<tt::ChipId>& lhs,
+    const tt::tt_fabric::MeshContainer<tt::ChipId>& rhs,
+    int mesh_id) {
     // Test get_chip_ids function comparison for specified mesh ID submesh
     EXPECT_EQ(lhs.size(), rhs.size()) << "Mesh " << mesh_id
                                       << " submesh chip count should be equal between MGD versions";

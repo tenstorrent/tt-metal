@@ -92,9 +92,9 @@ operation::ProgramWithCallbacks barrier_with_workers(
     const bool is_starting_core,
     const uint32_t ring_size,
     const uint32_t ring_index,
-    ChipId target_device_id,
-    const std::optional<ChipId> receiver_device_id,
-    const std::optional<ChipId> sender_device_id,
+    tt::ChipId target_device_id,
+    const std::optional<tt::ChipId> receiver_device_id,
+    const std::optional<tt::ChipId> sender_device_id,
     ttnn::ccl::Topology topology) {
     // Configurable params
     const uint32_t num_links = 1;

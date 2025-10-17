@@ -37,9 +37,9 @@ tt::tt_metal::operation::ProgramWithCallbacks barrier_with_workers(
     bool is_starting_core,
     uint32_t ring_size,
     uint32_t ring_index,
-    ChipId target_device_id,
-    std::optional<ChipId> receiver_device_id,
-    std::optional<ChipId> sender_device_id,
+    tt::ChipId target_device_id,
+    std::optional<tt::ChipId> receiver_device_id,
+    std::optional<tt::ChipId> sender_device_id,
     ttnn::ccl::Topology topology);
 
 };  // namespace ccl::barrier::detail
