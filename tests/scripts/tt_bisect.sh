@@ -231,51 +231,39 @@ try_download_artifacts() {
   # Process TTMetal artifact (tar.zst extraction)
   if [ -n "$ttmetal_artifact" ]; then
     echo "✅ Processing TTMetal artifact: $ttmetal_artifact..."
-    if unzip -q "$ttmetal_artifact"; then
-      echo "✅ $ttmetal_artifact unzipped successfully"
-      rm -f "$ttmetal_artifact"
-
-      # Extract the tar.zst archive
-      if [ -f "ttm_any.tar.zst" ]; then
-        echo "✅ Found ttm_any.tar.zst, extracting..."
-        if tar --zstd -xf ttm_any.tar.zst; then
-          echo "✅ TTMetal build artifact extracted successfully"
-          rm -f ttm_any.tar.zst
-          ttmetal_extracted=true
-        else
-          echo "❌ Failed to extract ttm_any.tar.zst"
-        fi
+    # gh run download automatically extracts the zip, look for tar.zst file
+    if [ -f "ttm_any.tar.zst" ]; then
+      echo "✅ Found ttm_any.tar.zst, extracting..."
+      if tar --zstd -xf ttm_any.tar.zst; then
+        echo "✅ TTMetal build artifact extracted successfully"
+        rm -f ttm_any.tar.zst
+        ttmetal_extracted=true
+      else
+        echo "❌ Failed to extract ttm_any.tar.zst"
       fi
     else
-      echo "❌ Failed to unzip $ttmetal_artifact"
+      echo "❌ ttm_any.tar.zst not found after download"
     fi
   fi
 
   # Process eager-dist artifact (Python wheel installation)
   if [ -n "$eagerdist_artifact" ]; then
     echo "✅ Processing eager-dist wheel: $eagerdist_artifact..."
-    if unzip -q "$eagerdist_artifact"; then
-      echo "✅ $eagerdist_artifact unzipped successfully"
-      rm -f "$eagerdist_artifact"
-
-      # Find and install the wheel file
-      local wheel_file
-      wheel_file="$(find . -name "*.whl" -type f | head -1)"
-      if [ -n "$wheel_file" ]; then
-        echo "✅ Found wheel file: $wheel_file"
-        echo "📦 Installing wheel with pip..."
-        if pip install --force-reinstall "$wheel_file"; then
-          echo "✅ Python wheel installed successfully"
-          wheel_installed=true
-          rm -f "$wheel_file"
-        else
-          echo "❌ Failed to install Python wheel"
-        fi
+    # gh run download automatically extracts the zip, look for wheel file
+    local wheel_file
+    wheel_file="$(find . -name "*.whl" -type f | head -1)"
+    if [ -n "$wheel_file" ]; then
+      echo "✅ Found wheel file: $wheel_file"
+      echo "📦 Installing wheel with pip..."
+      if pip install --force-reinstall "$wheel_file"; then
+        echo "✅ Python wheel installed successfully"
+        wheel_installed=true
+        rm -f "$wheel_file"
       else
-        echo "❌ No wheel file found in eager-dist artifact"
+        echo "❌ Failed to install Python wheel"
       fi
     else
-      echo "❌ Failed to unzip $eagerdist_artifact"
+      echo "❌ No wheel file found in eager-dist artifact"
     fi
   fi
 

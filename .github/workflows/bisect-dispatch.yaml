@@ -150,14 +150,14 @@ jobs:
             echo "✅ GitHub CLI is already installed"
           fi
 
-          # Check and install jq, zstd, and unzip
-          if ! command -v jq >/dev/null 2>&1 || ! command -v zstd >/dev/null 2>&1 || ! command -v unzip >/dev/null 2>&1; then
-            echo "Installing jq, zstd, and unzip..."
+          # Check and install jq and zstd
+          if ! command -v jq >/dev/null 2>&1 || ! command -v zstd >/dev/null 2>&1; then
+            echo "Installing jq and zstd..."
             apt-get update
-            apt-get install -y --no-install-recommends jq zstd unzip
-            echo "✅ jq, zstd, and unzip installed successfully"
+            apt-get install -y --no-install-recommends jq zstd
+            echo "✅ jq and zstd installed successfully"
           else
-            echo "✅ jq, zstd, and unzip are already installed"
+            echo "✅ jq and zstd are already installed"
           fi
 
           # Verify installations
@@ -165,7 +165,6 @@ jobs:
           gh --version
           jq --version
           zstd --version
-          unzip -v | head -1
 
           # Check GitHub CLI authentication (GH_TOKEN is provided via env)
           echo "🔐 Checking GitHub CLI authentication status:"
