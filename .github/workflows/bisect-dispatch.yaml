@@ -181,6 +181,13 @@ jobs:
 
           # Check gist-url first
           GIST_URL='${{ inputs.gist-url }}'
+          COMMAND='${{ inputs.command }}'
+
+          if [ -z "$GIST_URL" ] && [ -z "$COMMAND" ]; then
+            echo "ERROR: Either gist-url or command must be provided"
+            exit 1
+          fi
+
           if [ -n "$GIST_URL" ]; then
             SCRIPT_PATH="/work/bisect_gist_script.sh"
           else
