@@ -119,6 +119,8 @@ private:
     // Output directory for noc trace data
     std::filesystem::path noc_trace_data_output_dir;
 
+    FabricRoutingLookup* routing_lookup;
+
     // Read all control buffers
     void readControlBuffers(IDevice* device, const std::vector<CoreCoord>& virtual_cores);
 
@@ -247,6 +249,8 @@ public:
     void dumpRoutingInfo() const;
 
     void dumpClusterCoordinates() const;
+
+    void storeRoutingLookup();
 
     // Dump device results to files and tracy
     void dumpDeviceResults(bool is_mid_run_dump = false);
