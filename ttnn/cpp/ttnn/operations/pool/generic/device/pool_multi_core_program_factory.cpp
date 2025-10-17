@@ -254,8 +254,6 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     const uint32_t ncores = all_cores.num_cores();
     const uint32_t num_cores_x = input.memory_config().shard_spec()->grid.bounding_box().grid_size().x;
     const uint32_t rectangular_x = is_block_sharded ? all_cores.ranges()[0].end_coord.x + 1 : num_cores_x;
-    printf("num_cores_x: %d\n", num_cores_x);
-    printf("rectangular_x: %d\n", rectangular_x);
     const uint32_t out_nhw_per_core = outputs[0].shard_spec()->shape[0];
 
     const uint32_t bf16_scalar = get_bf16_pool_scalar(pool_type, kernel_h, kernel_w, divisor_override);
@@ -377,9 +375,6 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     const uint32_t in_cb_pagesize = params.nbytes * in_cb_page_padded;
     const uint32_t in_cb_npages = params.multi_buffering_factor;
 
-    printf("in_cb_pagesize: %d\n", in_cb_pagesize);
-    printf("in_cb_npages: %d\n", in_cb_npages);
-
     tt::tt_metal::create_cb(in_cb_id_0, program, all_cores, in_cb_pagesize, in_cb_npages, params.data_format);
     log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", in_cb_id_0, in_cb_pagesize, in_cb_npages);
 
@@ -458,9 +453,6 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
                             // block of c if its greater than 8 tiles)
         out_cb_npages = outputs[0].shard_spec().value().shape[0] * params.out_ntiles_c;
     }
-
-    printf("out_cb_pagesize: %d\n", out_cb_pagesize);
-    printf("out_cb_npages: %d\n", out_cb_npages);
 
     const auto [out_cb_id, out_cb] = tt::tt_metal::create_cb(
         next_cb_index++,
@@ -676,8 +668,6 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
 
     // set the starting indices for each core as runtime args
     if (return_indices) {
-        printf("ncores: %d\n", ncores);
-        printf("core_starting_indices size: %zu\n", core_starting_indices.size());
         TT_FATAL(core_starting_indices.size() == ncores, "core starting indices size should match number of cores");
         for (uint32_t core_i = 0; core_i < ncores; core_i++) {
             const uint32_t core_x_i = core_i % rectangular_x;
@@ -688,15 +678,6 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
             const uint32_t start_mod_batch = start_index % (in_w_padded * in_h_padded);
             const uint32_t start_row = start_mod_batch / in_w_padded;
             const uint32_t start_col = start_mod_batch % in_w_padded;
-
-            printf(
-                "core %d (x,y) = (%d,%d) start_index: %d start_row: %d start_col: %d\n",
-                core_i,
-                core_x_i,
-                core_y_i,
-                start_index,
-                start_row,
-                start_col);
 
             std::vector<uint32_t> args = {(uint32_t)(start_row), (uint32_t)(start_col)};
             SetRuntimeArgs(program, reader0_kernel, core, args);
@@ -848,7 +829,11 @@ Pool2D::MultiCore::cached_program_t Pool2D::MultiCore::create(
         sliding_window::generate_sliding_window_op_config(op_trace_metadata, shard_boundaries, stride_w);
     std::vector<uint16_t> core_starting_indices;
     if (return_indices) {
-        core_starting_indices = sliding_window::generate_core_starting_indices(op_trace_metadata, shard_boundaries);
+        const uint32_t num_cores_x = input.memory_config().shard_spec()->grid.bounding_box().grid_size().x;
+        const uint32_t ncores = input.shard_spec().value().grid.num_cores();
+        const TensorMemoryLayout shard_scheme = input.memory_config().memory_layout();
+        core_starting_indices = sliding_window::generate_core_starting_indices(
+            op_trace_metadata, shard_boundaries, shard_scheme, num_cores_x, ncores);
     }
 
     Tensor reader_indices = sliding_window::construct_on_host_config_tensor(top_left_indices, parallel_config);

@@ -166,7 +166,11 @@ std::vector<std::vector<uint16_t>> generate_sliding_window_op_config(
     bool pad_cores = true);
 
 std::vector<uint16_t> generate_core_starting_indices(
-    const std::vector<uint32_t>& op_trace_metadata, const std::vector<ShardBoundary>& shard_boundaries);
+    const std::vector<uint32_t>& op_trace_metadata,
+    const std::vector<ShardBoundary>& shard_boundaries,
+    const tt::tt_metal::TensorMemoryLayout shard_scheme,
+    const uint32_t num_cores_x,
+    const uint32_t ncores);
 
 std::vector<uint16_t> flatten(const std::vector<std::vector<uint16_t>>& input, uint32_t extend_with_zeroes = 0);
 
