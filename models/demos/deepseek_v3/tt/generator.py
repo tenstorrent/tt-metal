@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import difflib
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, List, Tuple
@@ -43,6 +45,51 @@ def _strip_model_prefix(state_dict: dict[str, torch.Tensor]) -> dict[str, torch.
         else:
             out[k] = v
     return out
+
+
+_WORD_RE = re.compile(r"\w+('\w+)?|\S", flags=re.UNICODE)
+
+
+def _normalize_text(s: str, ignore_case: bool = False, strip_punct: bool = False):
+    if ignore_case:
+        s = s.lower()
+    toks = _WORD_RE.findall(s)
+    if strip_punct:
+        toks = [t for t in toks if re.search(r"\w", t)]
+    return toks
+
+
+def _compare_texts(gen: str, ref: str):
+    """Strict comparison: exact match required, case- and punctuation-sensitive."""
+    gen_toks = _normalize_text(gen)
+    ref_toks = _normalize_text(ref)
+    sm = difflib.SequenceMatcher(a=ref_toks, b=gen_toks, autojunk=False)
+    opcodes = sm.get_opcodes()
+
+    subs = sum(1 for tag, *_ in opcodes if tag == "replace")
+    dels = sum((i2 - i1) for tag, i1, i2, *_ in opcodes if tag == "delete")
+    ins = sum((j2 - j1) for tag, *_, j1, j2 in opcodes if tag == "insert")
+    N = max(1, len(ref_toks))
+    wer = (subs + dels + ins) / N
+
+    exact = (wer == 0.0) and (len(gen_toks) == len(ref_toks))
+    if exact:
+        return True, ""
+
+    # compact diff report
+    diff_lines = []
+    for i, (tag, i1, i2, j1, j2) in enumerate(opcodes[:10]):
+        if tag == "equal":
+            continue
+        diff_lines.append(
+            f"  [{i}] {tag.upper()}: ref='{ ' '.join(ref_toks[i1:i2]) }', gen='{ ' '.join(gen_toks[j1:j2]) }'"
+        )
+
+    report = (
+        f"Exact match required (WER==0). Got WER={wer:.4f} "
+        f"(ref_tokens={len(ref_toks)}, gen_tokens={len(gen_toks)})\n" + "\n".join(diff_lines)
+    )
+    return False, report
 
 
 class DeepseekGenerator:
@@ -385,6 +432,9 @@ class DeepseekGenerator:
         sampling: SamplingParams | None = None,
         teacher_forcing=None,
         early_print_first_user: bool = True,
+        num_runs: int = 1,
+        validate_against_ref: bool = False,
+        reference_texts: dict[str, str] | None = None,
     ) -> List[List[int]]:
         """Generate tokens for the given prompts using greedy decode by default.
 
@@ -396,70 +446,95 @@ class DeepseekGenerator:
         prompts = list(prompts)
         assert 1 <= len(prompts) <= USERS_PER_ROW, f"Supports 1..{USERS_PER_ROW} prompts"
 
+        if validate_against_ref:
+            assert reference_texts is not None, "reference_texts must be provided when validate_against_ref=True"
+
         # Tokenize using HF chat template
         encoded: List[List[int]] = [self._encode_prompt(p) for p in prompts]
         tokens_batched, lengths = self._pad_batch(encoded)  # [USERS_PER_ROW, seq_len]
 
         logger.info(f"Lengths of (encoded) prompts: {lengths}")
-        # Prefill
-        self._prepare_run_configs("prefill")
-        num_of_users = tokens_batched.shape[0]
-        last_logits = []
-        for user_id in range(num_of_users):
-            if lengths[user_id] == 0:
-                logger.info(f"Skipping prefill for user {user_id} as prompt length is 0")
-                last_logits.append(torch.zeros(self.hf_config.vocab_size))
-                continue
-            logger.info(f"Running prefill for {user_id}")
-            logger.info(
-                f"Input to the prefill: {self.tokenizer.decode(tokens_batched[user_id].tolist(), skip_special_tokens=True)}"
-            )
-            user_out = self._prefill(tokens_batched[user_id], user_id)
-            last_logits.append(user_out)
-        last_logits = torch.stack(last_logits)
+        # running for num_runs times
+        for run_idx in range(num_runs):
+            logger.info(f"Starting generation run {run_idx + 1}/{num_runs}...")
 
-        self._cleanup_run_configs("prefill")
-        assert len(last_logits) == num_of_users
+            # Prefill
+            self._prepare_run_configs("prefill")
+            num_of_users = tokens_batched.shape[0]
+            last_logits = []
+            for user_id in range(num_of_users):
+                if lengths[user_id] == 0:
+                    logger.info(f"Skipping prefill for user {user_id} as prompt length is 0")
+                    last_logits.append(torch.zeros(self.hf_config.vocab_size))
+                    continue
+                logger.info(f"Running prefill for {user_id}")
+                logger.info(
+                    f"Input to the prefill: {self.tokenizer.decode(tokens_batched[user_id].tolist(), skip_special_tokens=True)}"
+                )
+                user_out = self._prefill(tokens_batched[user_id], user_id)
+                last_logits.append(user_out)
+            last_logits = torch.stack(last_logits)
 
-        logger.info(f"Finished prefill for all users...")
+            self._cleanup_run_configs("prefill")
+            assert len(last_logits) == num_of_users
 
-        # First sampled token after prompt
-        next_tokens = self._sample_greedy(last_logits)
+            logger.info(f"Finished prefill for all users...")
 
-        # Decode
-        self._prepare_run_configs("decode")
-        positions = torch.zeros(USERS_PER_ROW, dtype=torch.int32) + lengths
+            # First sampled token after prompt
+            next_tokens = self._sample_greedy(last_logits)
 
-        # If teacher forcing is enabled, collect the model's predicted token and force GT for next step (single prompt)
-        if teacher_forcing is not None:
-            # Only enforce for the first user to keep scope minimal
-            forced = teacher_forcing.collect_predicted_tokens(int(next_tokens[0].item()))
-            next_tokens[0] = int(forced)
+            # Decode
+            self._prepare_run_configs("decode")
+            positions = torch.zeros(USERS_PER_ROW, dtype=torch.int32) + lengths
 
-        generations: List[List[int]] = [[] for _ in range(len(prompts))]
-        if early_print_first_user:
-            logger.info("===== Generation for first user =====")
-        for gen_idx in range(max_new_tokens):
-            # Decode one step with previous next_tokens
-            logits = self._decode_step(next_tokens, positions).squeeze(0).squeeze(0)
-            pred_tokens = self._sample_greedy(logits)
+            # If teacher forcing is enabled, collect the model's predicted token and force GT for next step (single prompt)
             if teacher_forcing is not None:
-                forced = teacher_forcing.collect_predicted_tokens(int(pred_tokens[0].item()))
-                pred_tokens[0] = int(forced)
-            next_tokens = pred_tokens
-            positions += 1
+                # Only enforce for the first user to keep scope minimal
+                forced = teacher_forcing.collect_predicted_tokens(int(next_tokens[0].item()))
+                next_tokens[0] = int(forced)
 
-            # Collect only for the original batch size
-            for i in range(len(prompts)):
-                token_value = int(next_tokens[i].item())
-                generations[i].append(token_value)
-                if early_print_first_user and i == 0:
-                    print(self.tokenizer.decode(token_value, skip_special_tokens=True), end="", flush=True)
+            generations: List[List[int]] = [[] for _ in range(len(prompts))]
+            if early_print_first_user:
+                logger.info("===== Generation for first user =====")
+            for gen_idx in range(max_new_tokens):
+                # Decode one step with previous next_tokens
+                logits = self._decode_step(next_tokens, positions).squeeze(0).squeeze(0)
+                pred_tokens = self._sample_greedy(logits)
+                if teacher_forcing is not None:
+                    forced = teacher_forcing.collect_predicted_tokens(int(pred_tokens[0].item()))
+                    pred_tokens[0] = int(forced)
+                next_tokens = pred_tokens
+                positions += 1
 
-        if early_print_first_user:
-            logger.info("\n===== Done =====")
+                # Collect only for the original batch size
+                for i in range(len(prompts)):
+                    token_value = int(next_tokens[i].item())
+                    generations[i].append(token_value)
+                    if early_print_first_user and i == 0:
+                        print(self.tokenizer.decode(token_value, skip_special_tokens=True), end="", flush=True)
 
-        self._cleanup_run_configs("decode")
+            if early_print_first_user:
+                logger.info("\n===== Done =====")
+
+            self._cleanup_run_configs("decode")
+
+            ### FAST VALIDATION AGAINST REFERENCE TEXTS ###
+            if validate_against_ref and self.tokenizer is not None:
+                for i, prompt in enumerate(prompts):
+                    gen_text = self.tokenizer.decode(generations[i], skip_special_tokens=True)
+                    ref_text = reference_texts.get(prompt)
+                    if ref_text is None:
+                        continue
+
+                    ok, report = _compare_texts(gen_text, ref_text)
+                    if not ok:
+                        msg = (
+                            f"[FAST-VALIDATE] Mismatch at run {run_idx+1}, prompt idx {i}\n"
+                            f"Prompt: {prompt!r}\n{report}"
+                        )
+                        logger.error(msg)
+                        raise AssertionError(msg)
+
         return generations
 
     def _encode_prompt(self, prompt: str) -> List[int]:

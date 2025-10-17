@@ -120,6 +120,9 @@ def run_demo(
     reference_file: str | Path | None = None,
     tf_prompt_len: int | None = None,
     early_print_first_user: bool = True,
+    num_runs: int = 1,
+    validate_against_ref: bool = False,
+    reference_texts: dict[str, str] | None = None,
 ) -> dict:
     """Programmatic entrypoint for the DeepSeek-V3 demo.
 
@@ -206,6 +209,9 @@ def run_demo(
             max_new_tokens=max_new_tokens,
             teacher_forcing=token_acc,
             early_print_first_user=early_print_first_user,
+            num_runs=num_runs,
+            validate_against_ref=validate_against_ref,
+            reference_texts=reference_texts,
         )
         # Process all generations
         results = []

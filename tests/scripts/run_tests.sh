@@ -198,7 +198,7 @@ demos_tg_device() {
     local model=$4
     case "$model" in
         deepseek_v3)
-            ./tests/scripts/tg/run_tg_deepseek_v3_demo_tests.sh --model "$model"
+            ./tests/scripts/tg/run_tg_deepseek_tests.sh --model "$model"
             ;;
         *)
             ./tests/scripts/tg/run_tg_demo_tests.sh --model "$model"
