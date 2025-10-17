@@ -3,9 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/transpose_wh.h"
-#include "compute_kernel_api/transpose_wh_dest.h"
 #include "compute_kernel_api/ema.h"
 #include "debug/dprint_pages.h"
 #include "debug/dprint_tensix.h"
@@ -31,8 +29,6 @@ void MAIN {
 
     //-------------------------------------------------------------------------
     // Main loop - compute ema for each batch
-    binary_op_init_common(src_cb, src_cb, dst_cb);
-    add_tiles_init(src_cb, src_cb);
     ema_init();
     transpose_wh_init(src_cb, dst_cb);
 
@@ -40,7 +36,7 @@ void MAIN {
         // For the first tile (we don't need to load the previous data from CB)
         cb_wait_front(src_cb, 1);
         tile_regs_acquire();
-        transpose_wh_init_short(src_cb);
+        // transpose_wh_init_short(src_cb);
         transpose_wh_tile(src_cb, 0, input_dst_index);
         // tt::compute::common::print_tile_rows(src_cb, 32, 0);
         ema_tile<input_dst_index>(/*first_sample=*/true);
@@ -64,7 +60,7 @@ void MAIN {
             cb_wait_front(src_cb, 1);
             cb_wait_front(prev_cb, 1);
             tile_regs_acquire();
-            transpose_wh_init_short(src_cb);
+            // transpose_wh_init_short(src_cb);
             transpose_wh_tile(src_cb, 0, input_dst_index);
             // tt::compute::common::print_tile_rows(src_cb, 32, 0);
             ema_tile<input_dst_index>(/*first_sample=*/false);
