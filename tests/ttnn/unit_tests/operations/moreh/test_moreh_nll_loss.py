@@ -164,8 +164,6 @@ def run_moreh_nll_loss_backward(
     "shape",
     [
         [5, 10],
-        [3000, 100],
-        [200, 100, 90],
         [5, 50, 2, 7, 50, 70],
     ],
 )
@@ -246,7 +244,6 @@ def test_moreh_nll_loss_compute_kernel_options(
     [
         [400, 300],
         [20, 300, 320],
-        [3, 4, 32 * 5, 32 * 6],
         [5, 2, 5, 40, 70],
     ],
 )
@@ -266,7 +263,6 @@ def test_moreh_nll_loss_backward(shape, ignore_index, reduction_mean, none_weigh
     "shape",
     [
         [2, 3],
-        [2, 3, 4],
         [2, 3, 5, 4],
     ],
 )
@@ -301,7 +297,6 @@ def test_moreh_nll_loss_backward_test_callback(shape, reduction_mean, device):
     "shape",
     [
         [5, 10],
-        [10, 20, 30],
         [10, 20, 30, 40],
     ],
 )

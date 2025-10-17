@@ -15,7 +15,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc
 
 # from ttnn.model_preprocessing import preprocess_model_parameters
 from models.experimental.oft.tt.model_preprocessing import create_OFT_model_parameters_resnet
-from tests.ttnn.unit_tests.test_bh_20_cores_sharding import skip_if_not_blackhole_20_cores
+from tests.ttnn.unit_tests.base_functionality.test_bh_20_cores_sharding import skip_if_not_blackhole_20_cores
 from loguru import logger
 
 
@@ -29,7 +29,7 @@ from loguru import logger
 @pytest.mark.parametrize(
     "input_image_path",
     [
-        os.path.abspath(os.path.join(os.path.dirname(__file__), "../resources/000013.jpg")),
+        os.path.abspath(os.path.join(os.path.dirname(__file__), "../../resources/000013.jpg")),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16 * 1024}], indirect=True)

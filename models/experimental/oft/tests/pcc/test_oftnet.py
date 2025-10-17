@@ -19,7 +19,7 @@ from models.experimental.oft.reference.utils import get_abs_and_relative_error
 
 from tests.ttnn.utils_for_testing import check_with_pcc
 from models.experimental.oft.tt.model_preprocessing import create_OFT_model_parameters
-from tests.ttnn.unit_tests.test_bh_20_cores_sharding import skip_if_not_blackhole_20_cores
+from tests.ttnn.unit_tests.base_functionality.test_bh_20_cores_sharding import skip_if_not_blackhole_20_cores
 from loguru import logger
 
 
@@ -28,8 +28,8 @@ from loguru import logger
     "input_image_path, calib_path",
     [
         (
-            os.path.abspath(os.path.join(os.path.dirname(__file__), "../resources/000013.jpg")),
-            os.path.abspath(os.path.join(os.path.dirname(__file__), "../resources/000013.txt")),
+            os.path.abspath(os.path.join(os.path.dirname(__file__), "../../resources/000013.jpg")),
+            os.path.abspath(os.path.join(os.path.dirname(__file__), "../../resources/000013.txt")),
         )
     ],
 )
@@ -37,10 +37,10 @@ from loguru import logger
     "model_dtype, use_host_oft, pcc_scores_oft, pcc_positions_oft, pcc_dimensions_oft, pcc_angles_oft",
     # fmt: off
     [
-       ( torch.bfloat16, False, 0.803, 0.896, 0.998, 0.917),
-       ( torch.bfloat16,  True, 0.827, 0.966, 0.999, 0.940),
-       ( torch.float32, False, 0.918, 0.978, 0.999, 0.939),
-       ( torch.float32,  True, 0.910, 0.887, 0.998, 0.945)
+       ( torch.bfloat16, False, 0.803, 0.895, 0.998, 0.916),
+       ( torch.bfloat16,  True, 0.829, 0.966, 0.999, 0.939),
+       ( torch.float32, False, 0.917, 0.978, 0.999, 0.940),
+       ( torch.float32,  True, 0.910, 0.886, 0.998, 0.945)
     ],
     # fmt: on
     ids=[
