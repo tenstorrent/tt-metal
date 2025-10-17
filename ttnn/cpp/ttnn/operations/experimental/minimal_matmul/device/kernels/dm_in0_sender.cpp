@@ -5,7 +5,6 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 #include "matmul_dataflow_common.hpp"
-#include "common.hpp"
 
 void kernel_main() {
     constexpr uint32_t M_tiles = get_compile_time_arg_val(0);
@@ -17,14 +16,16 @@ void kernel_main() {
     constexpr uint32_t M_block_tiles = get_compile_time_arg_val(6);
     constexpr uint32_t K_block_tiles = get_compile_time_arg_val(7);
     constexpr uint32_t N_block_tiles = get_compile_time_arg_val(8);
-    constexpr uint32_t in0_tile_size = get_compile_time_arg_val(9);
-    constexpr uint32_t out_tile_size = get_compile_time_arg_val(10);
-    constexpr uint32_t in2_tile_size = get_compile_time_arg_val(11);
-    uint32_t in0_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(12));
-    uint32_t in0_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(13));
-    uint32_t in0_valid_semaphore_addr = get_semaphore(get_compile_time_arg_val(14));
-    constexpr uint32_t is_output_writer = get_compile_time_arg_val(15);
-    constexpr uint32_t is_injector_core = get_compile_time_arg_val(16);
+    constexpr uint32_t M_blocks_per_core = get_compile_time_arg_val(9);
+    constexpr uint32_t N_blocks_per_core = get_compile_time_arg_val(10);
+    constexpr uint32_t in0_tile_size = get_compile_time_arg_val(11);
+    constexpr uint32_t out_tile_size = get_compile_time_arg_val(12);
+    constexpr uint32_t in2_tile_size = get_compile_time_arg_val(13);
+    uint32_t in0_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(14));
+    uint32_t in0_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(15));
+    uint32_t in0_valid_semaphore_addr = get_semaphore(get_compile_time_arg_val(16));
+    constexpr uint32_t is_output_writer = get_compile_time_arg_val(17);
+    constexpr uint32_t is_injector_core = get_compile_time_arg_val(18);
 
     // Load input/output addresses and range parameters
     uint32_t argidx = 0;
@@ -41,11 +42,9 @@ void kernel_main() {
     const uint32_t N_start_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t N_end_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t defer_write_k_block = get_arg_val<uint32_t>(argidx++);
-    const uint32_t M_blocks_per_core = get_arg_val<uint32_t>(argidx++);
-    const uint32_t N_blocks_per_core = get_arg_val<uint32_t>(argidx++);
 
     // Tensor accessor for input tensor
-    constexpr auto in0_args = TensorAccessorArgs<17>();
+    constexpr auto in0_args = TensorAccessorArgs<19>();
     const auto in0_reader = TensorAccessor(in0_args, in0_addr, in0_tile_size);
     constexpr auto out_args = TensorAccessorArgs<in0_args.next_compile_time_args_offset()>();
     const auto out_reader = TensorAccessor(out_args, out_addr, out_tile_size);
@@ -89,11 +88,6 @@ void kernel_main() {
      * reuse.
      */
 
-    // const uint32_t M_tiles_per_core = M_end_tile - M_start_tile;
-    // const uint32_t N_tiles_per_core = N_end_tile - N_start_tile;
-    const uint32_t M_num_blocks = M_blocks_per_core;  // div_up(N_tiles_per_core, N_block_tiles);
-    const uint32_t N_num_blocks = N_blocks_per_core;  // div_up(M_tiles_per_core, M_block_tiles);
-
     bool k_forward = true;
     bool n_forward = true;
     bool reuse_block = false;
@@ -104,16 +98,19 @@ void kernel_main() {
     uint32_t defer_write_n_tile_end = 0;
     bool defer_write = false;
 
-    for (uint32_t m_block_iter = 0; m_block_iter < M_num_blocks; m_block_iter++) {
+    for (uint32_t m_block_iter = 0; m_block_iter < M_blocks_per_core; m_block_iter++) {
         uint32_t m_tile = M_start_tile + m_block_iter * M_block_tiles;
         uint32_t m_tile_end = std::min(m_tile + M_block_tiles, M_end_tile);
         uint32_t current_M_block_tiles = m_tile_end - m_tile;
         uint32_t current_block_bytes = current_M_block_tiles * K_block_tiles * in0_tile_size;
+
+        // When striding M block, in0 gets no reuse
         reuse_block = false;
-        for (uint32_t n_block_iter = 0; n_block_iter < N_num_blocks; n_block_iter++) {
+        for (uint32_t n_block_iter = 0; n_block_iter < N_blocks_per_core; n_block_iter++) {
             uint32_t n_tile = n_forward ? N_start_tile + n_block_iter * N_block_tiles
-                                        : N_start_tile + (N_num_blocks - 1 - n_block_iter) * N_block_tiles;
+                                        : N_start_tile + (N_blocks_per_core - 1 - n_block_iter) * N_block_tiles;
             uint32_t n_tile_end = std::min(n_tile + N_block_tiles, N_end_tile);
+
             for (uint32_t k_block_iter = 0; k_block_iter < K_num_blocks; k_block_iter++) {
                 if (defer_write && k_block_iter == defer_write_k_block) {
                     if constexpr (is_output_writer) {
@@ -168,6 +165,10 @@ void kernel_main() {
 
                     uint64_t in0_unicast_data_addr = get_noc_addr(in0_dest_noc_x, in0_dest_noc_y, in0_start_address);
 
+                    /**
+                     * in0 is M_block_tiles x K_block_tiles. When M block is partial, we don't need to write the
+                     * padded tiles. Use `current_block_bytes`.
+                     */
                     noc_async_write(in0_start_address, in0_unicast_data_addr, current_block_bytes);
 
 #ifdef ARCH_BLACKHOLE
@@ -204,7 +205,7 @@ void kernel_main() {
              * If this isn't the last output block, defer writing until the defer_k_write_block iteration
              * of the next output block.
              */
-            defer_write = !((m_block_iter == M_num_blocks - 1) && (n_block_iter == (N_num_blocks - 1)));
+            defer_write = !((m_block_iter == M_blocks_per_core - 1) && (n_block_iter == (N_blocks_per_core - 1)));
             defer_write = defer_write && !is_injector_core;
 
             if (!defer_write) {
