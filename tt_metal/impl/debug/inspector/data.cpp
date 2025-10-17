@@ -233,7 +233,7 @@ void Data::rpc_get_dispatch_core_info(
     // This populates the cq_to_event_by_device map with an on-demand snapshot
     // of the command queue event info
     this->rpc_all_command_queue_event_infos();
-    std::lock_guard<std::mutex> lock(dispatch_core_info_mutex);
+    std::scoped_lock locks(dispatch_core_info_mutex, cq_to_event_by_device_mutex);
     const auto key = params.getKey();
     const tt_cxy_pair key_cxy{key.getChip(), key.getX(), key.getY()};
     const auto it = dispatch_core_info.find(key_cxy);
@@ -241,8 +241,8 @@ void Data::rpc_get_dispatch_core_info(
         throw std::runtime_error("Dispatch core info not found");
     }
     const auto& info = it->second;
-    // Set default event_id to UINT32_MAX if not found in cq_to_event_by_device
-    uint32_t event_id = UINT32_MAX;
+    // Set default event_id to std::numeric_limits<uint32_t>::max() if not found in cq_to_event_by_device
+    uint32_t event_id = std::numeric_limits<uint32_t>::max();
     if (info.cq_id < cq_to_event_by_device[info.device_id].size()) {
         event_id = cq_to_event_by_device[info.device_id][info.cq_id];
     }
@@ -264,7 +264,7 @@ void Data::rpc_get_dispatch_s_core_info(
     // This populates the cq_to_event_by_device map with an on-demand snapshot
     // of the command queue event info
     this->rpc_all_command_queue_event_infos();
-    std::lock_guard<std::mutex> lock(dispatch_s_core_info_mutex);
+    std::scoped_lock locks(dispatch_s_core_info_mutex, cq_to_event_by_device_mutex);
     const auto key = params.getKey();
     const tt_cxy_pair key_cxy{key.getChip(), key.getX(), key.getY()};
     const auto it = dispatch_s_core_info.find(key_cxy);
@@ -272,8 +272,8 @@ void Data::rpc_get_dispatch_s_core_info(
         throw std::runtime_error("Dispatch_s core info not found");
     }
     const auto& info = it->second;
-    // Set default event_id to UINT32_MAX if not found in cq_to_event_by_device
-    uint32_t event_id = UINT32_MAX;
+    // Set default event_id to std::numeric_limits<uint32_t>::max() if not found in cq_to_event_by_device
+    uint32_t event_id = std::numeric_limits<uint32_t>::max();
     if (info.cq_id < cq_to_event_by_device[info.device_id].size()) {
         event_id = cq_to_event_by_device[info.device_id][info.cq_id];
     }
@@ -295,7 +295,7 @@ void Data::rpc_get_prefetch_core_info(
     // This populates the cq_to_event_by_device map with an on-demand snapshot
     // of the command queue event info
     this->rpc_all_command_queue_event_infos();
-    std::lock_guard<std::mutex> lock(prefetcher_core_info_mutex);
+    std::scoped_lock locks(prefetcher_core_info_mutex, cq_to_event_by_device_mutex);
     const auto key = params.getKey();
     const tt_cxy_pair key_cxy{key.getChip(), key.getX(), key.getY()};
     const auto it = prefetcher_core_info.find(key_cxy);
@@ -303,8 +303,8 @@ void Data::rpc_get_prefetch_core_info(
         throw std::runtime_error("Prefetcher core info not found");
     }
     const auto& info = it->second;
-    // Set default event_id to UINT32_MAX if not found in cq_to_event_by_device
-    uint32_t event_id = UINT32_MAX;
+    // Set default event_id to std::numeric_limits<uint32_t>::max() if not found in cq_to_event_by_device
+    uint32_t event_id = std::numeric_limits<uint32_t>::max();
     if (info.cq_id < cq_to_event_by_device[info.device_id].size()) {
         event_id = cq_to_event_by_device[info.device_id][info.cq_id];
     }
@@ -333,7 +333,7 @@ void Data::rpc_get_all_dispatch_core_infos(rpc::Inspector::GetAllDispatchCoreInf
         // Get key, value from dispatch_core_info
         const tt_cxy_pair& k = kv.first;
         const auto& info = kv.second;
-        int event_id = -1;
+        uint32_t event_id = std::numeric_limits<uint32_t>::max();
         if (info.cq_id < cq_to_event_by_device[info.device_id].size()) {
             event_id = cq_to_event_by_device[info.device_id][info.cq_id];
         }
@@ -369,7 +369,7 @@ void Data::rpc_get_all_dispatch_s_core_infos(rpc::Inspector::GetAllDispatchSCore
         // Get key, value from dispatch_s_core_info
         const tt_cxy_pair& k = kv.first;
         const auto& info = kv.second;
-        int event_id = -1;
+        uint32_t event_id = std::numeric_limits<uint32_t>::max();
         if (info.cq_id < cq_to_event_by_device[info.device_id].size()) {
             event_id = cq_to_event_by_device[info.device_id][info.cq_id];
         }
@@ -405,7 +405,7 @@ void Data::rpc_get_all_prefetch_core_infos(rpc::Inspector::GetAllPrefetchCoreInf
         // Get key, value from prefetcher_core_info
         const tt_cxy_pair& k = kv.first;
         const auto& info = kv.second;
-        int event_id = -1;
+        uint32_t event_id = std::numeric_limits<uint32_t>::max();
         if (info.cq_id < cq_to_event_by_device[info.device_id].size()) {
             event_id = cq_to_event_by_device[info.device_id][info.cq_id];
         }
