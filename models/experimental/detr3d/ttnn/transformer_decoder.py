@@ -113,10 +113,10 @@ class TtnnTransformerDecoderLayer(LightweightModule):
         return_attn_weights=False,
     ):
         q = k = self.with_pos_embed(tgt, query_pos)
+        tgt = ttnn.to_memory_config(tgt, ttnn.L1_MEMORY_CONFIG)
 
         # Self-attention using proper QKV projections
         tgt2 = self.self_attn(q, k, tgt, tgt_mask)
-        # tgt2 = self.self_attention(q, k, tgt, query_pos, tgt_mask)
         tgt = ttnn.add(tgt, tgt2)
         tgt = ttnn.layer_norm(tgt, weight=self.norm1_weights, bias=getattr(self, "norm1_bias", None))
 
@@ -131,9 +131,15 @@ class TtnnTransformerDecoderLayer(LightweightModule):
         tgt = ttnn.layer_norm(tgt, weight=self.norm2_weights, bias=getattr(self, "norm2_bias", None))
 
         # Feedforward
-        tgt2 = ttnn.linear(tgt, self.ff_weights1, bias=getattr(self, "ff1_bias", None))
+        tgt = ttnn.to_memory_config(tgt, ttnn.L1_MEMORY_CONFIG)
+        tgt2 = ttnn.linear(
+            tgt, self.ff_weights1, bias=getattr(self, "ff1_bias", None), memory_config=ttnn.L1_MEMORY_CONFIG
+        )
         tgt2 = ttnn.relu(tgt2)
-        tgt2 = ttnn.linear(tgt2, self.ff_weights2, bias=getattr(self, "ff2_bias", None))
+        tgt2 = ttnn.to_memory_config(tgt2, ttnn.L1_MEMORY_CONFIG)
+        tgt2 = ttnn.linear(
+            tgt2, self.ff_weights2, bias=getattr(self, "ff2_bias", None), memory_config=ttnn.L1_MEMORY_CONFIG
+        )
         tgt = ttnn.add(tgt, tgt2)
         tgt = ttnn.layer_norm(tgt, weight=self.norm3_weights, bias=getattr(self, "norm3_bias", None))
 
@@ -151,12 +157,12 @@ class TtnnTransformerDecoderLayer(LightweightModule):
         query_pos=None,
         return_attn_weights=False,
     ):
+        tgt = ttnn.to_memory_config(tgt, ttnn.L1_MEMORY_CONFIG)
+
         # Pre-norm self-attention
         tgt2 = ttnn.layer_norm(tgt, weight=self.norm1_weights, bias=getattr(self, "norm1_bias", None))
         q = k = self.with_pos_embed(tgt2, query_pos)
-        # q=k=v=tgt2=tgt
         tgt2 = self.self_attn(q, k, value=tgt2, attn_mask=tgt_mask)
-        # return tgt2, None
         tgt = ttnn.add(tgt, tgt2)
 
         # Pre-norm cross-attention
@@ -170,10 +176,17 @@ class TtnnTransformerDecoderLayer(LightweightModule):
         tgt = ttnn.add(tgt, tgt2)
 
         # Pre-norm feedforward
+        tgt = ttnn.to_memory_config(tgt, ttnn.L1_MEMORY_CONFIG)
         tgt2 = ttnn.layer_norm(tgt, weight=self.norm3_weights, bias=getattr(self, "norm3_bias", None))
-        tgt2 = ttnn.linear(tgt2, self.ff_weights1, bias=getattr(self, "ff1_bias", None))
+        tgt2 = ttnn.to_memory_config(tgt2, ttnn.L1_MEMORY_CONFIG)
+        tgt2 = ttnn.linear(
+            tgt2, self.ff_weights1, bias=getattr(self, "ff1_bias", None), memory_config=ttnn.L1_MEMORY_CONFIG
+        )
         tgt2 = ttnn.relu(tgt2)
-        tgt2 = ttnn.linear(tgt2, self.ff_weights2, bias=getattr(self, "ff2_bias", None))
+        tgt2 = ttnn.to_memory_config(tgt2, ttnn.L1_MEMORY_CONFIG)
+        tgt2 = ttnn.linear(
+            tgt2, self.ff_weights2, bias=getattr(self, "ff2_bias", None), memory_config=ttnn.L1_MEMORY_CONFIG
+        )
         tgt = ttnn.add(tgt, tgt2)
 
         if return_attn_weights:
@@ -267,12 +280,12 @@ class TtnnTransformerDecoder(LightweightModule):
         # Stack results if needed
         if return_attn_weights and attns:
             # TTNN doesn't support torch.stack directly, using ttnn.concat for now
-            attns = [ttnn.reshape(t, (1, *t.shape)) for t in attns]
+            attns = [ttnn.unsqueeze(t, 0) for t in attns]
             attns = ttnn.concat(attns, dim=0, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         if self.return_intermediate:
             # TTNN doesn't support torch.stack directly, using ttnn.concat for now
-            intermediate = [ttnn.reshape(t, (1, *t.shape)) for t in intermediate]
+            intermediate = [ttnn.unsqueeze(t, 0) for t in intermediate]
             intermediate = ttnn.concat(intermediate, dim=0, memory_config=ttnn.L1_MEMORY_CONFIG)
             return intermediate, attns if return_attn_weights else None
 

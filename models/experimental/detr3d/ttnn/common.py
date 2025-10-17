@@ -22,6 +22,7 @@ class TtnnConv1D(LightweightModule):
         math_fidelity=ttnn.MathFidelity.LoFi,
         return_dims=False,
         reshape_output=False,
+        memory_config=None,
     ):
         super().__init__()
         self.conv = conv
@@ -52,6 +53,7 @@ class TtnnConv1D(LightweightModule):
         self.activation_dtype = activation_dtype
         self.return_dims = return_dims
         self.reshape_output = reshape_output
+        self.memory_config = memory_config
 
     def forward(self, x, shape=None):
         if shape is not None:
@@ -78,7 +80,7 @@ class TtnnConv1D(LightweightModule):
             groups=self.groups,
             return_output_dim=True,
             return_weights_and_bias=True,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=self.memory_config,
             dtype=self.activation_dtype,
         )
         shape = (batch_size, out_length, tt_output_tensor_on_device.shape[-1])
@@ -103,6 +105,7 @@ class TtnnConv2D(LightweightModule):
         is_dealloc_act=False,
         return_dims=False,
         reshape_output=False,
+        memory_config=None,
     ):
         super().__init__()
         self.conv = conv
@@ -127,7 +130,7 @@ class TtnnConv2D(LightweightModule):
             shard_layout=shard_layout,
             deallocate_activation=self.is_dealloc_act,
             enable_act_double_buffer=False,
-            reshard_if_not_optimal=False,
+            reshard_if_not_optimal=True,
             activation=activation,
         )
         if conv_pth.bias is not None:
@@ -140,6 +143,7 @@ class TtnnConv2D(LightweightModule):
         self.return_dims = return_dims
         self.reshape_output = reshape_output
         self.weight = ttnn.from_device(conv_pth.weight)
+        self.memory_config = memory_config
 
     def forward(self, x, shape=None):
         if shape is not None:
@@ -171,6 +175,7 @@ class TtnnConv2D(LightweightModule):
             return_output_dim=True,
             return_weights_and_bias=True,
             dtype=self.activation_dtype,
+            memory_config=self.memory_config,
         )
         shape = (batch_size, _out_height, _out_width, x.shape[-1])
         if self.reshape_output:

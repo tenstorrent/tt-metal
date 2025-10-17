@@ -12,13 +12,15 @@ class TtnnSharedMLP(LightweightModule):
         super().__init__()
         self.device = device
         self.parameters = parameters
+        shard_layout = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
         self.conv1 = TtnnConv2D(
             module.layer0.conv,
             parameters.layer0.conv,
             device,
             activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
-            is_dealloc_act=False,
+            is_dealloc_act=True,
             return_dims=True,
+            shard_layout=shard_layout,
         )
         self.conv2 = TtnnConv2D(
             module.layer1.conv,
@@ -27,6 +29,8 @@ class TtnnSharedMLP(LightweightModule):
             activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
             is_dealloc_act=True,
             return_dims=True,
+            shard_layout=shard_layout,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         self.conv3 = TtnnConv2D(
             module.layer2.conv,
@@ -35,6 +39,8 @@ class TtnnSharedMLP(LightweightModule):
             activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
             is_dealloc_act=True,
             return_dims=True,
+            shard_layout=shard_layout,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
     def forward(self, features):

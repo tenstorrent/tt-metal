@@ -101,9 +101,15 @@ class TtnnTransformerEncoderLayer(LightweightModule):
 
         # Feedforward network
         if self.use_ffn:
-            src2 = ttnn.linear(src, self.ff_weights1, bias=getattr(self, "ff1_bias", None))
+            src = ttnn.to_memory_config(src, ttnn.L1_MEMORY_CONFIG)
+            src2 = ttnn.linear(
+                src, self.ff_weights1, bias=getattr(self, "ff1_bias", None), memory_config=ttnn.L1_MEMORY_CONFIG
+            )
             src2 = ttnn.relu(src2)
-            src2 = ttnn.linear(src2, self.ff_weights2, bias=getattr(self, "ff2_bias", None))
+            src2 = ttnn.to_memory_config(src2, ttnn.L1_MEMORY_CONFIG)
+            src2 = ttnn.linear(
+                src2, self.ff_weights2, bias=getattr(self, "ff2_bias", None), memory_config=ttnn.L1_MEMORY_CONFIG
+            )
             src = ttnn.add(src, src2)
             src = ttnn.layer_norm(src, weight=self.norm2_weights, bias=getattr(self, "norm2_bias", None))
 
@@ -128,10 +134,17 @@ class TtnnTransformerEncoderLayer(LightweightModule):
 
         # Pre-norm feedforward
         if self.use_ffn:
+            src = ttnn.to_memory_config(src, ttnn.L1_MEMORY_CONFIG)
             src2 = ttnn.layer_norm(src, weight=self.norm2_weights, bias=getattr(self, "norm2_bias", None))
-            src2 = ttnn.linear(src2, self.ff_weights1, bias=getattr(self, "ff1_bias", None))
+            src2 = ttnn.to_memory_config(src2, ttnn.L1_MEMORY_CONFIG)
+            src2 = ttnn.linear(
+                src2, self.ff_weights1, bias=getattr(self, "ff1_bias", None), memory_config=ttnn.L1_MEMORY_CONFIG
+            )
             src2 = ttnn.relu(src2)
-            src2 = ttnn.linear(src2, self.ff_weights2, bias=getattr(self, "ff2_bias", None))
+            src2 = ttnn.to_memory_config(src2, ttnn.L1_MEMORY_CONFIG)
+            src2 = ttnn.linear(
+                src2, self.ff_weights2, bias=getattr(self, "ff2_bias", None), memory_config=ttnn.L1_MEMORY_CONFIG
+            )
             src = ttnn.add(src, src2)
 
         if return_attn_weights:
@@ -277,7 +290,7 @@ class TtnnMaskedTransformerEncoder(LightweightModule):
         for idx, layer in enumerate(self.layers):
             attn_mask = None
             if self.masking_radius[idx] > 0:
-                # attn_mask, xyz_dist_torch = self.compute_mask(xyz, self.masking_radius[idx], xyz_dist)
+                # attn_mask, xyz_dist = self.compute_mask(xyz, self.masking_radius[idx], xyz_dist)
                 attn_mask, xyz_dist = self.compute_mask_ttnn(xyz, self.masking_radius[idx], xyz_dist)
                 attn_mask = ttnn.unsqueeze(attn_mask, 1)
 

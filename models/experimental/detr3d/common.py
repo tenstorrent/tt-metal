@@ -66,6 +66,6 @@ def load_torch_model_state(torch_model: torch.nn.Module = None, layer_name: str 
         torch_model.load_state_dict(state_dict, strict=True)
     else:
         raise NotImplementedError("Unknown torch model. Weight loading not implemented")
-    logger.info(f"Successfully loaded weights: {layer_name}")
+    logger.info(f"Successfully loaded weights: 3Detr {layer_name}")
 
     return torch_model.eval()

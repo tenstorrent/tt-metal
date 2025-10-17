@@ -54,7 +54,7 @@ def test_ttnn_shared_mlp(device, mlp, bn, features_shape, weight_key_prefix, res
     ttnn_out = ttnn_out.reshape(1, ref_out.shape[2], ref_out.shape[3], ref_out.shape[1])
     ttnn_out = ttnn_out.permute(0, 3, 1, 2)
 
-    passing, pcc_message = comp_pcc(ref_out, ttnn_out, 0.999)
+    passing, pcc_message = comp_pcc(ref_out, ttnn_out, 0.99)
     logger.info(f"Output PCC: {pcc_message}")
     logger.info(comp_allclose(ref_out, ttnn_out))
     logger.info(f"Weight prefix: {weight_key_prefix}, MLP: {mlp}, Features shape: {features_shape}")

@@ -26,7 +26,7 @@ from models.experimental.detr3d.ttnn.transformer_decoder import (
     DecoderLayerArgs,
 )
 from models.experimental.detr3d.ttnn.generic_mlp import TtnnGenericMLP
-from models.experimental.detr3d.reference.model_3detr import PositionEmbeddingCoordsSine
+from models.experimental.detr3d.ttnn.position_embedding import TtnnPositionEmbeddingCoordsSine
 
 
 def build_ttnn_preencoder(args):
@@ -159,7 +159,9 @@ class TtnnModel3DETR(LightweightModule):
             parameters.encoder_to_decoder_projection,
             device,
         )
-        self.pos_embedding = PositionEmbeddingCoordsSine(d_pos=decoder_dim, pos_type=position_embedding, normalize=True)
+        self.pos_embedding = TtnnPositionEmbeddingCoordsSine(
+            d_pos=decoder_dim, pos_type=position_embedding, normalize=True, device=self.device
+        )
         self.query_projection = TtnnGenericMLP(
             torch_module.query_projection,
             parameters.query_projection,
@@ -208,12 +210,21 @@ class TtnnModel3DETR(LightweightModule):
         query_xyz = torch.stack(query_xyz)
         query_xyz = query_xyz.permute(1, 2, 0)
 
+        enc_xyz_ttnn = ttnn.from_torch(encoder_xyz, dtype=ttnn.bfloat16, device=self.device, layout=ttnn.TILE_LAYOUT)
+        query_inds_ttnn = ttnn.from_torch(query_inds, dtype=ttnn.uint32, device=self.device, layout=ttnn.TILE_LAYOUT)
+
+        query_xyz_ttnn = [ttnn.gather(enc_xyz_ttnn[..., x], 1, query_inds_ttnn) for x in range(3)]
+        query_xyz_ttnn = [ttnn.unsqueeze(t, 0) for t in query_xyz_ttnn]
+        query_xyz_ttnn = ttnn.concat(query_xyz_ttnn, 0)
+        query_xyz_ttnn = ttnn.permute(query_xyz_ttnn, (1, 2, 0))
+
         # Gater op above can be replaced by the three lines below from the pointnet2 codebase
         # xyz_flipped = encoder_xyz.transpose(1, 2).contiguous()
         # query_xyz = gather_operation(xyz_flipped, query_inds.int())
         # query_xyz = query_xyz.transpose(1, 2)
-        pos_embed = self.pos_embedding(query_xyz, input_range=point_cloud_dims)
-        pos_embed = ttnn.from_torch(pos_embed.permute(0, 2, 1), device=self.device, dtype=ttnn.bfloat16)
+
+        # query_xyz_ttnn = ttnn.from_torch(query_xyz, dtype=ttnn.bfloat16, device=self.device, layout=ttnn.TILE_LAYOUT)
+        pos_embed = self.pos_embedding(query_xyz_ttnn, input_range=point_cloud_dims)
         query_embed = self.query_projection(pos_embed)
         return query_xyz, query_embed
 
@@ -342,12 +353,17 @@ class TtnnModel3DETR(LightweightModule):
             inputs["point_cloud_dims_min"],
             inputs["point_cloud_dims_max"],
         ]
-        torch_query_xyz, query_embed = self.get_query_embeddings(torch_enc_xyz, torch_point_cloud_dims)
+        ttnn_point_cloud_dims = [
+            ttnn.from_torch(t, dtype=ttnn.bfloat16, device=self.device, layout=ttnn.TILE_LAYOUT)
+            for t in torch_point_cloud_dims
+        ]
+
+        torch_query_xyz, query_embed = self.get_query_embeddings(torch_enc_xyz, ttnn_point_cloud_dims)
         # query_embed: batch x channel x npoint
-        torch_enc_pos = self.pos_embedding(torch_enc_xyz, input_range=torch_point_cloud_dims)
+        enc_xyz_ttnn = ttnn.from_torch(torch_enc_xyz, dtype=ttnn.bfloat16, device=self.device, layout=ttnn.TILE_LAYOUT)
+        enc_pos = self.pos_embedding(enc_xyz_ttnn, input_range=ttnn_point_cloud_dims)
 
         # decoder expects: npoints x batch x channel
-        enc_pos = ttnn.from_torch(torch_enc_pos.permute(0, 2, 1), device=self.device, dtype=ttnn.bfloat16)
         tgt = ttnn.zeros_like(query_embed, dtype=ttnn.bfloat16)
         box_features = self.decoder(tgt, enc_features, query_pos=query_embed, pos=enc_pos)[0]
         box_predictions = self.get_box_predictions(torch_query_xyz, torch_point_cloud_dims, box_features)
