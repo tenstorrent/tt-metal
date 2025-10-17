@@ -335,7 +335,8 @@ def run_all_reduce_with_mesh_tensor_along_row(
     memory_config=None,
     num_all_reduce_instances: int = 1,
     num_iters: int = 1,
-    cluster_axis: int = 0,
+    cluster_axis=None,
+    use_semaphore_free_all_reduce_impl: bool = False,
 ):
     mem_config = memory_config or ttnn.MemoryConfig(buffer_type=buffer_type)
 
@@ -397,19 +398,34 @@ def run_all_reduce_with_mesh_tensor_along_row(
 
         # Run the op
         for i in range(num_iters):
-            output_tensor_mesh = ttnn.experimental.all_reduce_async(
-                input_tensor_mesh,
-                cluster_axis=cluster_axis,
-                mesh_device=mesh_device,
-                barrier_semaphores=barrier_semaphores,
-                rs_global_semaphores=rs_global_semaphores,
-                ag_global_semaphores=ag_global_semaphores,
-                math_op=math_op,
-                num_links=num_links,
-                memory_config=mem_config,
-                topology=ttnn.Topology.Linear,
-                subdevice_id=worker_sub_device_id,
-            )
+            if use_semaphore_free_all_reduce_impl:
+                output_tensor_mesh = ttnn.experimental.all_reduce_async(
+                    input_tensor_mesh,
+                    cluster_axis,
+                    mesh_device,
+                    None,
+                    None,
+                    None,
+                    math_op=math_op,
+                    num_links=num_links,
+                    memory_config=mem_config,
+                    topology=ttnn.Topology.Linear,
+                    subdevice_id=worker_sub_device_id,
+                )
+            else:
+                output_tensor_mesh = ttnn.experimental.all_reduce_async(
+                    input_tensor_mesh,
+                    cluster_axis=cluster_axis,
+                    mesh_device=mesh_device,
+                    barrier_semaphores=barrier_semaphores,
+                    rs_global_semaphores=rs_global_semaphores,
+                    ag_global_semaphores=ag_global_semaphores,
+                    math_op=math_op,
+                    num_links=num_links,
+                    memory_config=mem_config,
+                    topology=ttnn.Topology.Linear,
+                    subdevice_id=worker_sub_device_id,
+                )
             ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
         ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
     except Exception as e:

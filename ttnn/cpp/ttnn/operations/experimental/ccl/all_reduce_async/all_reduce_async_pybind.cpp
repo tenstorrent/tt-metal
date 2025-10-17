@@ -63,7 +63,7 @@ void bind_all_reduce_async(pybind11::module& module, const ccl_operation_t& oper
         ttnn::pybind_overload_t{
             [](const ccl_operation_t& self,
                const ttnn::Tensor& input_tensor,
-               const uint32_t cluster_axis,
+               const std::optional<uint32_t> cluster_axis,
                const MeshDevice& mesh_device,
                const std::optional<std::vector<GlobalSemaphore>>& barrier_semaphores,
                const std::optional<std::vector<GlobalSemaphore>>& rs_global_semaphores,
