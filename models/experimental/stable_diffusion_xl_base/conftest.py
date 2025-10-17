@@ -82,8 +82,6 @@ def get_device_name():
         return "n150"
     elif num_devices == 2:
         return "n300"
-    elif num_devices == 4:
-        return "n150x4"
     elif num_devices == 8:
         return "t3k"
 
