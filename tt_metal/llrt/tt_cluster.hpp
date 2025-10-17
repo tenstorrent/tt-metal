@@ -351,7 +351,7 @@ private:
     void assert_risc_reset();
     void assign_mem_channels_to_devices(ChipId mmio_device_id, const std::unordered_set<ChipId>& controlled_device_ids);
     void open_driver(const bool& skip_driver_allocs = false);
-    void start_driver(tt_device_params& device_params) const;
+    void start_driver(umd::DeviceParams& device_params) const;
     void validate_harvesting_masks() const;
 
     void get_metal_desc_from_tt_desc();
@@ -381,7 +381,7 @@ private:
     // Need to hold reference to cluster descriptor to detect total number of devices available in cluster
     // UMD static APIs `detect_available_device_ids` and `detect_number_of_chips` only returns number of MMIO mapped
     // devices
-    ClusterDescriptor* cluster_desc_ = nullptr;
+    umd::ClusterDescriptor* cluster_desc_ = nullptr;
 
     // There is an entry for every device that can be targeted (MMIO and remote)
     std::unordered_map<ChipId, metal_SocDescriptor> sdesc_per_chip_;
