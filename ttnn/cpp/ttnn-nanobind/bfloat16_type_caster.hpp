@@ -24,11 +24,11 @@ struct type_caster<bfloat16> {
 
     bool from_python(handle src, uint8_t, cleanup_list*) {
         if (isinstance<nanobind::float_>(src)) {
-            value = bfloat16(nanobind::cast<float>(src));
+            this->value = bfloat16(nanobind::cast<float>(src));
             return true;
         } else if (isinstance<nanobind::int_>(src)) {
             int32_t int_value = nanobind::cast<int32_t>(src);
-            value = bfloat16(int_value);
+            this->value = bfloat16(int_value);
             return true;
         }
 

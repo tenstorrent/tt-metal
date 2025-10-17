@@ -21,6 +21,8 @@ public:
     using ShapeBase::operator[];
     using ShapeBase::cbegin;
     using ShapeBase::cend;
+    using ShapeBase::Container;
+    using ShapeBase::coord_type;
     using ShapeBase::empty;
     using ShapeBase::size;
     using ShapeBase::view;

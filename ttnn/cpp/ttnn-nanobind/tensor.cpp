@@ -23,52 +23,17 @@
 #include <nanobind/stl/set.h>
 #include <nanobind/stl/tuple.h>
 
-#include "ttnn-nanobind/json_class.hpp"
+#include "ttnn-nanobind/bfloat_dtype_traits.hpp"
 #include "ttnn-nanobind/export_enum.hpp"
-
-#include <tt-metalium/host_buffer.hpp>
-#include <tt-metalium/base_types.hpp>
+#include "ttnn-nanobind/json_class.hpp"
+#include "ttnn/distributed/types.hpp"
 #include "ttnn/tensor/serialization.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
-#include "ttnn/distributed/types.hpp"
-
+#include <tt-metalium/base_types.hpp>
 #include <tt-metalium/bfloat16.hpp>
-
-// TODO_NANOBIND: move to the dedicated caster header(s)
-// TODO_NANOBIND: use the namespace macros (see small_vector_caster.hpp)
-namespace nanobind::detail {
-template <>
-struct dtype_traits<::bfloat16> {
-    static constexpr dlpack::dtype value{
-        static_cast<uint8_t>(nanobind::dlpack::dtype_code::Bfloat),  // type code
-        16,                                                          // size in bits
-        1                                                            // lanes (simd), usually set to 1
-    };
-    static constexpr auto name = const_name("bfloat16");
-};
-
-template <>
-struct dtype_traits<tt::tt_metal::tensor_impl::bfloat8_b> {
-    static constexpr dlpack::dtype value{
-        static_cast<uint8_t>(nanobind::dlpack::dtype_code::Bfloat),  // type code
-        8,                                                           // size in bits
-        1                                                            // lanes (simd), usually set to 1
-    };
-    static constexpr auto name = const_name("bfloat8_b");
-};
-
-template <>
-struct dtype_traits<tt::tt_metal::tensor_impl::bfloat4_b> {
-    static constexpr dlpack::dtype value{
-        static_cast<uint8_t>(nanobind::dlpack::dtype_code::Bfloat),  // type code
-        4,                                                           // size in bits
-        1                                                            // lanes (simd), usually set to 1
-    };
-    static constexpr auto name = const_name("bfloat4_b");
-};
-}  // namespace nanobind::detail
+#include <tt-metalium/host_buffer.hpp>
 
 using namespace tt::tt_metal;
 
@@ -98,24 +63,6 @@ void tensor_mem_config_module_types(nb::module_& m_tensor) {
     export_enum<DataType>(m_tensor);
     export_enum<StorageType>(m_tensor);
     export_enum<MathFidelity>(m_tensor);
-
-    // TODO_NANOBIND: See if this problem goes away now that we are on enchantum
-
-    // for whatever reason using magic_enum for this in particular just threw
-    // std::bad_cast errors in the binding code when trying to import ttnn
-    // in python. It threw the error in ttnn-nanobind/operations/core.cpp
-    // when setting a default arg to MathFidelity::Invalid.
-    // The problem went away locally when I did this manually.
-    // Why? I have no idea. There might be some UB buried in export_enum
-    // or magic_enum.
-    // nb::enum_<MathFidelity>(m_tensor, "MathFidelity")
-    //    .value("LoFi", MathFidelity::LoFi)
-    //    .value("HiFi2", MathFidelity::HiFi2)
-    //    .value("HiFi3", MathFidelity::HiFi3)
-    //    .value("HiFi4", MathFidelity::HiFi4)
-    //    .value("Invalid", MathFidelity::Invalid)
-    //    .export_values();
-
     export_enum<TensorMemoryLayout>(m_tensor);
     export_enum<ShardOrientation>(m_tensor);
     export_enum<ShardMode>(m_tensor);
@@ -212,7 +159,13 @@ void tensor_mem_config_module_types(nb::module_& m_tensor) {
             "__array__",  // TODO_NANOBIND: what is the interface/function name here? try __array__
             [](HostBuffer& self) -> nb::ndarray<> {
                 return nb::ndarray(self.view_bytes().data(), {self.view_bytes().size()});
-            });
+            })
+        .def(
+            "__dlpack__",
+            [](HostBuffer& self, const nb::kwargs& kwargs) -> nb::ndarray<> {
+                return nb::ndarray(self.view_bytes().data(), {self.view_bytes().size()});
+            })
+        .def("__dlpack_device__", []() { return std::make_pair(nb::device::cpu::value, 0); });
 }
 
 void tensor_mem_config_module(nb::module_& m_tensor) {
@@ -229,15 +182,6 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
                 new (t) CoreCoord(
                     static_cast<std::size_t>(core_coord.get<0>()), static_cast<std::size_t>(core_coord.get<1>()));
             })
-        //[](CoreCoord* t, nb::tuple core_coord) {
-        //    new (t) CoreCoord(
-        //        static_cast<std::size_t>(core_coord[0]), static_cast<std::size_t>(core_coord[1]));
-        //})
-        //.def("__init__",
-        //    [](CoreCoord* t, nb::slice core_coord) {
-        //        new (t) CoreCoord(static_cast<std::size_t>(core_coord.get<0>()),
-        //                          static_cast<std::size_t>(core_coord.get<1>()));
-        //    })
         .def("__repr__", [](const CoreCoord& self) -> std::string { return self.str(); })
         .def_ro("x", &CoreCoord::x)
         .def_ro("y", &CoreCoord::y);
