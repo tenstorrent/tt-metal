@@ -2964,6 +2964,7 @@ class HfModelWrapper:
                 name_dense=name_dense,
                 name_ffn2=name_ffn2,
                 name_final_layernorm=name_final_layernorm,
+                self.config,
             )
         )
 

@@ -386,15 +386,94 @@ def fuse_qkv_meta(state_dict):
     return state_dict
 
 
+def _is_hf_llama_vision(config):
+    return hasattr(config, "text_config") and hasattr(config.text_config, "cross_attention_layers")
+
+
+def reindex_layers(state_dict, config):
+    """Only for Llama-Vision models
+    Same functionality as in https://github.com/huggingface/transformers/blob/41980ce93e775f6c88500c51c8db7946fc6a2add/src/transformers/models/mllama/convert_mllama_weights_to_hf.py#L365-L369
+    """
+
+    if not _is_hf_llama_vision(config):
+        return state_dict
+
+    new_state_dict = {k: v for k, v in state_dict.items()}
+    idx_cross_attn = len(config.text_config.cross_attention_layers) - 1
+    idx_self_attn = config.text_config.num_hidden_layers - len(config.text_config.cross_attention_layers) - 1
+    for i in range(config.text_config.num_hidden_layers - 1, -1, -1):
+        if i in config.text_config.cross_attention_layers:
+            keys = [k for k in new_state_dict if f"cross_attention_layers.{idx_cross_attn}." in k]
+            for key in keys:
+                new_key = key.replace(f"cross_attention_layers.{idx_cross_attn}.", f"layers.{i}.")
+                new_state_dict[new_key] = new_state_dict.pop(key)
+            idx_cross_attn -= 1
+        else:
+            keys = [k for k in new_state_dict if f"layers.{idx_self_attn}." in k]
+            for key in keys:
+                new_key = key.replace(f"layers.{idx_self_attn}.", f"layers.{i}.")
+                new_state_dict[new_key] = new_state_dict.pop(key)
+            idx_self_attn -= 1
+    return new_state_dict
+
+
+def rename_layers_to_cross_attn(state_dict, config):
+    if not _is_hf_llama_vision(config):
+        return state_dict
+
+    mapping = {
+        "self_attn.q_proj.weight": "cross_attn.q_proj.weight",
+        "self_attn.k_proj.weight": "cross_attn.k_proj.weight",
+        "self_attn.v_proj.weight": "cross_attn.v_proj.weight",
+        "self_attn.o_proj.weight": "cross_attn.o_proj.weight",
+        "self_attn.q_proj.bias": "cross_attn.q_proj.bias",
+        "self_attn.k_proj.bias": "cross_attn.k_proj.bias",
+        "self_attn.v_proj.bias": "cross_attn.v_proj.bias",
+        "self_attn.o_proj.bias": "cross_attn.o_proj.bias",
+        "self_attn.q_norm.weight": "cross_attn.q_norm.weight",
+        "self_attn.k_norm.weight": "cross_attn.k_norm.weight",
+    }
+
+    new_state_dict = {}
+    for key, tensor in state_dict.items():
+        matched = False
+
+        for idx in config.text_config.cross_attention_layers:
+            if matched:
+                break
+            for self_attn, cross_attn in mapping.items():
+                self_pattern = f"layers.{idx}.{self_attn}"
+                cross_pattern = f"layers.{idx}.{cross_attn}"
+                if self_pattern in key:
+                    key = key.replace(self_pattern, cross_pattern)
+                    new_state_dict[key] = tensor
+                    matched = True
+                    break
+
+        if not matched:
+            new_state_dict[key] = tensor
+
+    return new_state_dict
+
+
 def convert_meta_to_hf(
-    state_dict, head_dim, fuse_qkv=False, fuse_mlp=False, name_dense=False, name_ffn2=False, name_final_layernorm=False
+    state_dict,
+    head_dim,
+    fuse_qkv=False,
+    fuse_mlp=False,
+    name_dense=False,
+    name_ffn2=False,
+    name_final_layernorm=False,
+    config=None,
 ):
+    state_dict = reindex_layers_to_cross_attn(state_dict, config)
     state_dict = convert_meta_qkv_to_hf_format(state_dict, head_dim)
     if fuse_qkv:
         state_dict = fuse_qkv_meta(state_dict)
     if fuse_mlp:
         state_dict = fuse_mlp_meta(state_dict)
     state_dict = map_meta_to_hf_keys(state_dict, name_dense, name_ffn2, name_final_layernorm)
+    state_dict = rename_layers_to_cross_attn(state_dict, config)
     return state_dict
 
 
