@@ -136,7 +136,7 @@ jobs:
       - name: 🔧 Setup GitHub CLI and jq
         if: ${{ inputs.download-artifacts == true }}
         run: |
-          echo "📦 Checking GitHub CLI and jq installation..."
+          echo "📦 Checking GitHub CLI, jq, and zstd installation..."
 
           # Check and install GitHub CLI
           if ! command -v gh >/dev/null 2>&1; then
@@ -150,20 +150,21 @@ jobs:
             echo "✅ GitHub CLI is already installed"
           fi
 
-          # Check and install jq
-          if ! command -v jq >/dev/null 2>&1; then
-            echo "Installing jq..."
+          # Check and install jq and zstd
+          if ! command -v jq >/dev/null 2>&1 || ! command -v zstd >/dev/null 2>&1; then
+            echo "Installing jq and zstd..."
             apt-get update
-            apt-get install -y --no-install-recommends jq
-            echo "✅ jq installed successfully"
+            apt-get install -y --no-install-recommends jq zstd
+            echo "✅ jq and zstd installed successfully"
           else
-            echo "✅ jq is already installed"
+            echo "✅ jq and zstd are already installed"
           fi
 
           # Verify installations
           echo "🔍 Verifying installations:"
           gh --version
           jq --version
+          zstd --version
 
           # Check GitHub CLI authentication (GH_TOKEN is provided via env)
           echo "🔐 Checking GitHub CLI authentication status:"
