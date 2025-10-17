@@ -81,6 +81,13 @@ def get_tensors(
 
 
 def run_moreh_dot_backward(input_shape, requires_grad, device, dtype=ttnn.bfloat16, use_randint=True):
+    # Test failing with watcher enabled, github issue #29547
+    if (
+        is_watcher_enabled()
+        and requires_grad == [False, True]
+        and (input_shape == [1, 1, 1, 352] or input_shape == [1, 1, 1, 323])
+    ):
+        pytest.skip("Test is not passing with watcher enabled")
     torch.manual_seed(3072)
     require_input_grad, require_other_grad = requires_grad
     output_shape = [1, 1, 1, 1]
@@ -153,14 +160,6 @@ def run_moreh_dot_backward(input_shape, requires_grad, device, dtype=ttnn.bfloat
 @pytest.mark.parametrize("use_randint", (True, False))
 @pytest.mark.parametrize("dtype", ([ttnn.bfloat16, ttnn.bfloat8_b]))
 def test_moreh_dot_backward(input_shape, requires_grad, dtype, use_randint, device):
-    # Test failing with watcher enabled, github issue #29547
-    if (
-        is_watcher_enabled()
-        and requires_grad == [False, True]
-        and (input_shape == [1, 1, 1, 352] or input_shape == [1, 1, 1, 323])
-    ):
-        pytest.skip("Test is not passing with watcher enabled")
-
     run_moreh_dot_backward(input_shape, requires_grad, device, dtype, use_randint)
 
 

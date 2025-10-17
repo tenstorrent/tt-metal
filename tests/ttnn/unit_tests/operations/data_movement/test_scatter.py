@@ -7,7 +7,7 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_allclose
-from models.common.utility_functions import is_watcher_enabled
+from models.common.utility_functions import is_watcher_enabled, skip_with_watcher
 
 
 def select_torch_dtype(ttnn_dtype):
@@ -117,6 +117,9 @@ def test_scatter_spec(input_shape, dim, index_and_source_shape, input_dtype, ind
         ([10, 20], 0, [9, 19], [11, 21], ttnn.bfloat16, ttnn.uint32, ttnn.Layout.TILE, 10),
     ],
 )
+@skip_with_watcher(
+    "Test case fails with watcher enabled"
+)  # Skip specific test case when watcher is enabled, github issue #30516
 def test_scatter_partial(
     input_shape, dim, index_shape, source_shape, input_dtype, index_dtype, layout, expected_num_cache_entries, device
 ):
