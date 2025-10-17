@@ -11,6 +11,7 @@ from models.tt_cnn.tt.builder import (
     WidthSliceStrategyConfiguration,
     ChannelSliceStrategyConfiguration,
     L1FullSliceStrategyConfiguration,
+    BlockShardedStrategyConfiguration,
 )
 
 
@@ -250,15 +251,34 @@ class ModelOptimisations:
         # Branch 0: 1x1 conv branch (no slicing, no deallocation, fused ReLU)
         self.register_layer_override("aspp.convs.0", slice_strategy=None, deallocate_activation=False)
 
-        # Branches 1-3: Dilated conv branches (channel slicing, no deallocation, NO fused ReLU - apply manually after slicing)
-        channel_slices = [2, 4, 8]
-        for i, num_slices in enumerate(channel_slices, start=1):
-            self.register_layer_override(
-                f"aspp.convs.{i}",
-                slice_strategy=ChannelSliceStrategyConfiguration(num_slices=num_slices),
-                deallocate_activation=False,
-                activation=None,  # Disable fused ReLU, apply manually after slicing
-            )
+        # Branches 1-3: Dilated conv branches
+        # Use BlockSharded strategy with optimized parameters from test_conv2d_panoptic tests
+        # Branch 1: dilation 6  -> BlockSharded, act_block_h=128, channel_slices=2
+        self.register_layer_override(
+            "aspp.convs.1",
+            slice_strategy=ChannelSliceStrategyConfiguration(num_slices=2),
+            sharding_strategy=BlockShardedStrategyConfiguration(act_block_h_override=128),
+            deallocate_activation=False,
+            activation=None,  # Disable fused ReLU, apply manually after slicing
+        )
+
+        # Branch 2: dilation 12 -> BlockSharded, act_block_h=128, channel_slices=4
+        self.register_layer_override(
+            "aspp.convs.2",
+            slice_strategy=ChannelSliceStrategyConfiguration(num_slices=4),
+            sharding_strategy=BlockShardedStrategyConfiguration(act_block_h_override=128),
+            deallocate_activation=False,
+            activation=None,  # Disable fused ReLU, apply manually after slicing
+        )
+
+        # Branch 3: dilation 18 -> BlockSharded, act_block_h=64, channel_slices=4 (NOT 8!)
+        self.register_layer_override(
+            "aspp.convs.3",
+            slice_strategy=ChannelSliceStrategyConfiguration(num_slices=4),
+            sharding_strategy=BlockShardedStrategyConfiguration(act_block_h_override=64),
+            deallocate_activation=False,
+            activation=None,  # Disable fused ReLU, apply manually after slicing
+        )
 
         # Branch 4: Global pooling branch (no slicing, no deallocation, fused ReLU)
         self.register_layer_override("aspp.convs.4", slice_strategy=None, deallocate_activation=False)
