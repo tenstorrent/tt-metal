@@ -12,6 +12,8 @@ import torch
 import ttnn
 
 from tt_transformers_v2.src.testing import (
+    compute_max_abs_error,
+    compute_pcc,
     device_validate_against,
     enable_validation,
     get_validation_registry,
@@ -109,12 +111,12 @@ class ValidatedRMSNormOldStyle:
     input_to_torch=lambda args, kwargs: ((ttnn.to_torch(args[0]).squeeze(0), ttnn.to_torch(args[1]).squeeze(0)), {}),
     output_to_torch=lambda x: ttnn.to_torch(x).squeeze(0),
     metrics={
-        "max_abs_error": lambda impl, ref: (impl - ref).abs().max().item(),
-        "relative_error": lambda impl, ref: ((impl - ref).abs() / (ref.abs() + 1e-8)).mean().item(),
+        "max_abs_error": compute_max_abs_error,
+        "pcc": compute_pcc,
     },
     tolerances={
         "max_abs_error": 1e-1,
-        "relative_error": 1e-2,
+        "pcc": 0.99,
     },
 )
 def ttnn_matmul(a, b):
