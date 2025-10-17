@@ -150,15 +150,24 @@ jobs:
                 echo "Command: update existing comment"
               fi
 
-              # Extract author notes from /codeowners ping command if provided (format: "quoted text" after command)
+              # Extract author notes from /codeowners ping command if provided
               if [ -z "$AUTHOR_NOTES" ]; then
-                # Look for quoted text after /codeowners ping
+                # Look for author notes after /codeowners ping
                 if echo "$COMMENT_BODY" | grep -E "^/codeowners?\s+ping\s+" > /dev/null; then
-                  # Extract text between quotes after the command
+                  # First, try to extract text between quotes (format: /codeowners ping "text here")
                   QUOTED_TEXT=$(echo "$COMMENT_BODY" | sed -n 's/^\/codeowners\?\s\+ping\s\+.*"\([^"]*\)".*/\1/p')
+
                   if [ -n "$QUOTED_TEXT" ]; then
                     AUTHOR_NOTES="$QUOTED_TEXT"
-                    echo "Found author notes: $AUTHOR_NOTES"
+                    echo "Found quoted author notes: $AUTHOR_NOTES"
+                  else
+                    # If no quotes, extract everything after /codeowners ping as plain text
+                    # This captures text without requiring quotes
+                    PLAIN_TEXT=$(echo "$COMMENT_BODY" | sed -n 's/^\/codeowners\?\s\+ping\s\+\(.*\)$/\1/p')
+                    if [ -n "$PLAIN_TEXT" ]; then
+                      AUTHOR_NOTES="$PLAIN_TEXT"
+                      echo "Found plain text author notes: $AUTHOR_NOTES"
+                    fi
                   fi
                 fi
               fi
@@ -347,6 +356,7 @@ jobs:
       changed-files: ${{ steps.analyze.outputs.changed-files }}
       total-additions: ${{ steps.get-files.outputs.total-additions }}
       total-deletions: ${{ steps.get-files.outputs.total-deletions }}
+      changed-files-count: ${{ steps.get-files.outputs.changed-files-count }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -424,6 +434,7 @@ jobs:
             echo "EOF"
             echo "total-additions=$TOTAL_ADDITIONS"
             echo "total-deletions=$TOTAL_DELETIONS"
+            echo "changed-files-count=$FILE_COUNT"
           } >> $GITHUB_OUTPUT
 
       - name: Install codeowners package and analyze
@@ -714,7 +725,7 @@ jobs:
           fi
 
           # Use #tt-metal-pr-review-requests Slack channel
-          SLACK_CHANNEL="C09HT5VSXRB"
+          SLACK_CHANNEL="C07G47JMQHM"
 
           echo "Using parameters: CREATE_NEW=$CREATE_NEW, PING_OWNERS=$PING_OWNERS, SEND_SLACK=$SEND_SLACK, SLACK_CHANNEL=$SLACK_CHANNEL"
 
@@ -1016,6 +1027,11 @@ jobs:
             COMMENT="$COMMENT\n\n**Note:** Only the PR author is available as a codeowner for this PR. No external review notifications will be sent."
           fi
 
+          # Add helpful tip if triggered via comment and ping was not used
+          if [ "${{ github.event_name }}" = "issue_comment" ] && [ "$PING_OWNERS" = "false" ] && [ "$SEND_SLACK" = "false" ]; then
+            COMMENT="$COMMENT\n\n---\n💡 **Tip:** Use \\\`/codeowners ping\\\` to notify pending owners via Slack, or \\\`/ping @username\\\` to ping specific users."
+          fi
+
             # Output comment for next step
             {
               echo "comment<<EOF"
@@ -1092,14 +1108,15 @@ jobs:
           PR_NUMBER="${{ needs.find-pr.outputs.pr-number }}"
           DIRECT_PING_USERS="${{ needs.parse-comment.outputs.direct-ping-users }}"
           AUTHOR_NOTES="${{ needs.parse-comment.outputs.author-notes }}"
-          TOTAL_ADDITIONS="${{ needs.analyze-codeowners.outputs.total-additions }}"
-          TOTAL_DELETIONS="${{ needs.analyze-codeowners.outputs.total-deletions }}"
+          TOTAL_ADDITIONS="${{ needs.analyze-codeowners.outputs.total-additions || 0 }}"
+          TOTAL_DELETIONS="${{ needs.analyze-codeowners.outputs.total-deletions || 0 }}"
           REQUESTER_LOGIN="${{ needs.parse-comment.outputs.comment-author }}"
           REQUESTER_NAME="$REQUESTER_LOGIN"
 
           # Get full name for requester if available
-          REQUESTER_LOGIN="${REQUESTER_LOGIN:-}"
+          echo "DEBUG: REQUESTER_LOGIN='$REQUESTER_LOGIN', PR_AUTHOR_LOGIN='$PR_AUTHOR_LOGIN'"
           if [ -n "$REQUESTER_LOGIN" ] && [ "$REQUESTER_LOGIN" != "$PR_AUTHOR_LOGIN" ]; then
+            echo "DEBUG: Requester and PR author are different users"
             REQUESTER_USER_API="https://api.github.com/users/$REQUESTER_LOGIN"
             REQUESTER_USER_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.ORG_READ_GITHUB_TOKEN }}" \
                                    -H "Accept: application/vnd.github.v3+json" \
@@ -1108,10 +1125,12 @@ jobs:
             if [ -n "$REQUESTER_FULL_NAME" ] && [ "$REQUESTER_FULL_NAME" != "null" ]; then
               REQUESTER_NAME="$REQUESTER_FULL_NAME"
             fi
+          else
+            echo "DEBUG: Requester and PR author are the same user (or REQUESTER_LOGIN is empty)"
           fi
 
           # Use #tt-metal-pr-review-requests Slack channel
-          SLACK_CHANNEL="C09HT5VSXRB"
+          SLACK_CHANNEL="C07G47JMQHM"
 
           # GitHub team to Slack group mapping (needed for author notes processing)
           get_slack_group_id() {
@@ -1344,15 +1363,21 @@ jobs:
           SLACK_MESSAGE="$SLACK_MESSAGE"$'\n'"👤 *Author:* $PR_AUTHOR_MENTION"
 
           # Add requested by information if different from author
+          echo "DEBUG: Checking requested by - REQUESTER_LOGIN='$REQUESTER_LOGIN', PR_AUTHOR_LOGIN='$PR_AUTHOR_LOGIN'"
           if [ -n "$REQUESTER_LOGIN" ] && [ "$REQUESTER_LOGIN" != "$PR_AUTHOR_LOGIN" ]; then
+            echo "DEBUG: Adding 'Requested by' to Slack message"
             SLACK_MESSAGE="$SLACK_MESSAGE"$'\n'"🔄 *Requested by:* $REQUESTER_NAME (@$REQUESTER_LOGIN)"
+          else
+            echo "DEBUG: Not adding 'Requested by' (same user or empty)"
           fi
 
           # Add changes count if available
-          TOTAL_ADDITIONS="${TOTAL_ADDITIONS:-0}"
-          TOTAL_DELETIONS="${TOTAL_DELETIONS:-0}"
-          if [ "$TOTAL_ADDITIONS" -gt 0 ] || [ "$TOTAL_DELETIONS" -gt 0 ]; then
+          echo "DEBUG: TOTAL_ADDITIONS='$TOTAL_ADDITIONS', TOTAL_DELETIONS='$TOTAL_DELETIONS'"
+          if [ -n "$TOTAL_ADDITIONS" ] && [ "$TOTAL_ADDITIONS" -gt 0 ] || [ -n "$TOTAL_DELETIONS" ] && [ "$TOTAL_DELETIONS" -gt 0 ]; then
+            echo "DEBUG: Adding changes count to Slack message"
             SLACK_MESSAGE="$SLACK_MESSAGE"$'\n'"📊 *Changes:* -$TOTAL_DELETIONS +$TOTAL_ADDITIONS"
+          else
+            echo "DEBUG: Not adding changes count (no changes or empty values)"
           fi
 
           SLACK_MESSAGE="$SLACK_MESSAGE"$'\n'"🔍 *Action Required:* This PR needs your code review/approval to proceed with merging."
@@ -1787,7 +1812,7 @@ jobs:
           PR_TITLE=$(echo "$PR_DATA" | jq -r '.title')
 
           # Use #tt-metal-pr-review-requests Slack channel
-          SLACK_CHANNEL="C09HT5VSXRB"
+          SLACK_CHANNEL="C07G47JMQHM"
 
           # Define API endpoint
           COMMENTS_API="https://api.github.com/repos/${{ github.repository }}/issues/$PR_NUMBER/comments"
@@ -1889,6 +1914,12 @@ jobs:
           PR_AUTHOR_NAME="${{ steps.setup-notifications.outputs.pr-author-name }}"
           AUTHOR_NOTES="${{ steps.generate-comment.outputs.author-notes }}"
           PR_NUMBER="${{ steps.generate-comment.outputs.pr-number }}"
+          # ... existing code ...
+          TOTAL_ADDITIONS="${{ needs.analyze-codeowners.outputs.total-additions || 0 }}"
+          TOTAL_DELETIONS="${{ needs.analyze-codeowners.outputs.total-deletions || 0 }}"
+          CHANGED_FILES_COUNT="${{ needs.analyze-codeowners.outputs.changed-files-count || 0 }}"
+          REQUESTER_LOGIN="${{ needs.parse-comment.outputs.comment-author || '' }}"
+          REQUESTER_NAME="$REQUESTER_LOGIN"
 
           # Fetch PR title safely to avoid shell injection
           PR_API="https://api.github.com/repos/${{ github.repository }}/pulls/$PR_NUMBER"
@@ -1898,7 +1929,7 @@ jobs:
           PR_TITLE=$(echo "$PR_DATA" | jq -r '.title')
 
           # Use #tt-metal-pr-review-requests Slack channel
-          SLACK_CHANNEL="C09HT5VSXRB"
+          SLACK_CHANNEL="C07G47JMQHM"
 
           # GitHub team to Slack group mapping (needed for author notes processing)
           get_slack_group_id() {
@@ -2097,13 +2128,33 @@ jobs:
             SLACK_MESSAGE="$SLACK_MESSAGE"$'\n'"👤 *Author:* $PR_AUTHOR_MENTION"
 
             # Add requested by information if different from author (for general notifications)
-            # Note: REQUESTER_LOGIN and REQUESTER_NAME may not be available in general notifications context
+            if [ -n "$REQUESTER_LOGIN" ] && [ "$REQUESTER_LOGIN" != "$PR_AUTHOR_LOGIN" ]; then
+              # Get full name for requester if available
+              REQUESTER_USER_API="https://api.github.com/users/$REQUESTER_LOGIN"
+              REQUESTER_USER_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.ORG_READ_GITHUB_TOKEN }}" \
+                                     -H "Accept: application/vnd.github.v3+json" \
+                                     "$REQUESTER_USER_API" 2>/dev/null)
+              REQUESTER_FULL_NAME=$(echo "$REQUESTER_USER_DATA" | jq -r '.name // empty' 2>/dev/null)
+              if [ -n "$REQUESTER_FULL_NAME" ] && [ "$REQUESTER_FULL_NAME" != "null" ]; then
+                REQUESTER_NAME="$REQUESTER_FULL_NAME"
+              fi
+
+              # Find Slack user ID for requester and create mention
+              REQUESTER_SLACK_ID=$(find_slack_user_id "$REQUESTER_NAME" "$REQUESTER_LOGIN")
+              if [ -n "$REQUESTER_SLACK_ID" ]; then
+                REQUESTER_MENTION="<@$REQUESTER_SLACK_ID>"
+                echo "✅ Found Slack user for requester: $REQUESTER_NAME -> $REQUESTER_SLACK_ID"
+              else
+                REQUESTER_MENTION="$REQUESTER_NAME (@$REQUESTER_LOGIN)"
+                echo "⚠️  Slack user not found for requester: $REQUESTER_NAME (@$REQUESTER_LOGIN), using fallback"
+              fi
+
+              SLACK_MESSAGE="$SLACK_MESSAGE"$'\n'"🔄 *Requested by:* $REQUESTER_MENTION"
+            fi
 
             # Add changes count if available
-            TOTAL_ADDITIONS="${TOTAL_ADDITIONS:-0}"
-            TOTAL_DELETIONS="${TOTAL_DELETIONS:-0}"
-            if [ "$TOTAL_ADDITIONS" -gt 0 ] || [ "$TOTAL_DELETIONS" -gt 0 ]; then
-              SLACK_MESSAGE="$SLACK_MESSAGE"$'\n'"📊 *Changes:* -$TOTAL_DELETIONS +$TOTAL_ADDITIONS"
+            if ([ -n "$TOTAL_ADDITIONS" ] && [ "$TOTAL_ADDITIONS" -gt 0 ]) || ([ -n "$TOTAL_DELETIONS" ] && [ "$TOTAL_DELETIONS" -gt 0 ]); then
+              SLACK_MESSAGE="$SLACK_MESSAGE"$'\n'"📊 *Changes:* ($CHANGED_FILES_COUNT files) +$TOTAL_ADDITIONS -$TOTAL_DELETIONS"
             fi
 
             SLACK_MESSAGE="$SLACK_MESSAGE"$'\n'"🔍 *Action Required:* This PR needs your code review/approval to proceed with merging."
@@ -2115,6 +2166,16 @@ jobs:
               # Process author notes to convert @username to full names or Slack mentions
               PROCESSED_NOTES="$AUTHOR_NOTES"
 
+              # First, convert markdown links [text](url) to Slack format <url|text>
+              # This regex matches [text](url) and converts to Slack format
+              PROCESSED_NOTES=$(python3 -c "import sys; text=sys.stdin.read(); import re; print(re.sub(r'\[([^\]]+)\]\(([^)]+)\)', r'<\2|\1>', text))" <<< "$PROCESSED_NOTES")
+              echo "Converted markdown links to Slack format"
+
+              # Also detect plain URLs (http:// or https://) and convert them to clickable Slack links
+              # Use negative lookbehind to avoid matching URLs already in Slack format (<url|text> or <url>)
+              PROCESSED_NOTES=$(python3 -c "import sys, re; text=sys.stdin.read(); print(re.sub(r'(?<![<])(\bhttps?://[^\s<>]+)(?![|>])', r'<\1>', text))" <<< "$PROCESSED_NOTES")
+              echo "Converted plain URLs to Slack links"
+
               # Find all GitHub usernames in author notes (pattern: @username, but NOT @org/team)
               # This regex matches @username but excludes @org/team-name patterns
               GITHUB_USERNAMES=$(echo "$AUTHOR_NOTES" | grep -oE '@[a-zA-Z0-9_-]+' | grep -v '@.*/' | sort | uniq)
@@ -2122,7 +2183,6 @@ jobs:
               if [ -n "$GITHUB_USERNAMES" ]; then
                 echo "Found GitHub usernames in author notes: $GITHUB_USERNAMES"
 
-                # Process each username
                 for github_mention in $GITHUB_USERNAMES; do
                   if [ -n "$github_mention" ]; then
                     # Remove @ prefix to get clean username
@@ -2169,7 +2229,7 @@ jobs:
               fi
 
               # Find GitHub team mentions and optionally convert to Slack groups
-              GITHUB_TEAMS=$(echo "$AUTHOR_NOTES" | grep -oE '@[a-zA-Z0-9_-]+/[a-zA-Z0-9_-]+' | sort | uniq)
+              GITHUB_TEAMS=$(echo "$PROCESSED_NOTES" | grep -oE '@[a-zA-Z0-9_-]+/[a-zA-Z0-9_-]+' | sort | uniq)
               if [ -n "$GITHUB_TEAMS" ]; then
                 echo "Found GitHub team mentions: $GITHUB_TEAMS"
                 for team_mention in $GITHUB_TEAMS; do
@@ -2181,12 +2241,15 @@ jobs:
                     echo "✅ Converting team $team_mention to Slack group: $SLACK_GROUP_ID"
                     ESCAPED_TEAM=$(echo "$team_mention" | sed 's/[[\.*^$()+?{|]/\\&/g')
                     ESCAPED_TEAM_REPLACEMENT=$(echo "$TEAM_REPLACEMENT" | sed 's/[[\.*^$()+?{|\\]/\\&/g')
-                    AUTHOR_NOTES=$(echo "$AUTHOR_NOTES" | sed "s/$ESCAPED_TEAM/$ESCAPED_TEAM_REPLACEMENT/g")
+                    PROCESSED_NOTES=$(echo "$PROCESSED_NOTES" | sed "s/$ESCAPED_TEAM/$ESCAPED_TEAM_REPLACEMENT/g")
                   else
                     echo "⚠️  No Slack group found for team: $team_mention"
                   fi
                 done
               fi
+
+              # Update AUTHOR_NOTES with final processed version for use in Slack message
+              AUTHOR_NOTES="$PROCESSED_NOTES"
 
               SLACK_MESSAGE="$SLACK_MESSAGE"$'\n\n'"💬 *Author Notes:* $AUTHOR_NOTES"
             fi
