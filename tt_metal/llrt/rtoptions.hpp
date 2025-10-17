@@ -95,7 +95,6 @@ struct InspectorSettings {
 };
 
 class RunTimeOptions {
-    bool is_root_dir_set = false;
     std::string root_dir;
 
     bool is_cache_dir_env_var_set = false;
@@ -117,6 +116,11 @@ class RunTimeOptions {
     bool record_noc_transfer_data = false;
 
     InspectorSettings inspector_settings;
+
+    // Fabric profiling settings
+    struct FabricProfilingSettings {
+        bool enable_rx_ch_fwd = false;
+    } fabric_profiling_settings;
 
     TargetSelection feature_targets[RunTimeDebugFeatureCount];
 
@@ -222,7 +226,6 @@ public:
     RunTimeOptions(const RunTimeOptions&) = delete;
     RunTimeOptions& operator=(const RunTimeOptions&) = delete;
 
-    bool is_root_dir_specified() const { return this->is_root_dir_set; }
     static void set_root_dir(const std::string& root_dir);
     const std::string& get_root_dir() const;
 
@@ -503,6 +506,10 @@ public:
     // NOTE: Enabling this option will lead to a 0-2% performance degradation for fabric traffic.
     bool get_enable_fabric_telemetry() const { return enable_fabric_telemetry; }
     void set_enable_fabric_telemetry(bool enable) { enable_fabric_telemetry = enable; }
+
+    // If true, enables code profiling for receiver channel forward operations
+    bool get_enable_fabric_code_profiling_rx_ch_fwd() const { return fabric_profiling_settings.enable_rx_ch_fwd; }
+    void set_enable_fabric_code_profiling_rx_ch_fwd(bool enable) { fabric_profiling_settings.enable_rx_ch_fwd = enable; }
 
     // Reliability mode override accessor
     std::optional<tt::tt_fabric::FabricReliabilityMode> get_reliability_mode() const { return reliability_mode; }

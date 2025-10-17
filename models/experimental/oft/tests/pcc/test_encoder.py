@@ -16,7 +16,7 @@ from models.experimental.oft.reference.utils import (
 )
 from models.experimental.oft.tt.model_preprocessing import create_decoder_model_parameters
 from models.experimental.oft.tests.common import GRID_RES, GRID_SIZE, Y_OFFSET, NMS_THRESH
-from tests.ttnn.unit_tests.test_bh_20_cores_sharding import skip_if_not_blackhole_20_cores
+from tests.ttnn.unit_tests.base_functionality.test_bh_20_cores_sharding import skip_if_not_blackhole_20_cores
 import matplotlib.pyplot as plt
 from loguru import logger
 import os
