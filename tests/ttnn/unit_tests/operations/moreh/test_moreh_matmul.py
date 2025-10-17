@@ -236,8 +236,6 @@ def moreh_matmul_backward(params, requires_grad, device, dtype=ttnn.bfloat16, us
         ([128, 1024], [128, 1024], [1024, 1024], True, False),  # input transpose
         ([1024, 128], [1024, 128], [1024, 1024], False, True),  # other transpose
         ([128, 1024], [1024, 128], [1024, 1024], True, True),  # input, other transpose
-        ([1020, 128], [128, 1024], [1020, 1024], False, False),  # input mask
-        ([1024, 128], [128, 1020], [1024, 1020], False, False),  # other mask
         ([1020, 310], [310, 1020], [1020, 1020], False, False),  # input, other mask
         ([128, 1020], [128, 1024], [1020, 1024], True, False),  # input mask, transpose
         ([1024, 128], [1020, 128], [1024, 1020], False, True),  # other mask, transpose

@@ -12,7 +12,7 @@ import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.common.utility_functions import comp_pcc, is_blackhole, run_for_blackhole
-from tests.ttnn.unit_tests.test_bh_20_cores_sharding import skip_if_not_blackhole_20_cores
+from tests.ttnn.unit_tests.base_functionality.test_bh_20_cores_sharding import skip_if_not_blackhole_20_cores
 
 
 # Helper function to get welford parameters based on device type

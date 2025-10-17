@@ -9,7 +9,7 @@ import torch
 import ttnn
 from models.common.utility_functions import is_grayskull, is_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from .test_utils import round_up
+from tests.ttnn.unit_tests.operations.test_utils import round_up
 import math
 
 
