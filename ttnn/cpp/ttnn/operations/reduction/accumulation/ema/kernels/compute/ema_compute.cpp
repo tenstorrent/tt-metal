@@ -34,29 +34,26 @@ void MAIN {
     binary_op_init_common(src_cb, src_cb, dst_cb);
     add_tiles_init(src_cb, src_cb);
     ema_init();
-    // transpose_wh_init(src_cb, dst_cb);
-    // copy_tile_init(src_cb);
+    transpose_wh_init(src_cb, dst_cb);
 
     for (uint32_t batch_id = 0; batch_id < total_batches_per_core; ++batch_id) {
         // For the first tile (we don't need to load the previous data from CB)
         cb_wait_front(src_cb, 1);
         tile_regs_acquire();
-        // transpose_wh_init_short(src_cb);
-        // transpose_wh_tile(src_cb, 0, 0);
-        // transpose_wh_dest_init_short();
-        // transpose_wh_dest(0);
-        // copy_tile(src_cb, 0, 0);
+        transpose_wh_init_short(src_cb);
+        transpose_wh_tile(src_cb, 0, input_dst_index);
         // tt::compute::common::print_tile_rows(src_cb, 32, 0);
-        add_tiles(src_cb, src_cb, 0, 0, input_dst_index);
         ema_tile<input_dst_index>(/*first_sample=*/true);
-        // dprint_tensix_dest_reg(0);
+        dprint_tensix_dest_reg(input_dst_index);
+        dprint_tensix_dest_reg(prev_dst_index);
+        dprint_tensix_dest_reg(output_dst_index);
         tile_regs_commit();
         cb_pop_front(src_cb, 1);
 
         cb_reserve_back(dst_cb, 1);
         cb_reserve_back(prev_cb, 1);
         tile_regs_wait();
-        pack_tile(prev_dst_index, prev_cb);
+        // pack_tile(prev_dst_index, prev_cb);
         pack_tile(output_dst_index, dst_cb);
         tile_regs_release();
         cb_push_back(dst_cb, 1);
@@ -67,15 +64,13 @@ void MAIN {
             cb_wait_front(src_cb, 1);
             cb_wait_front(prev_cb, 1);
             tile_regs_acquire();
-            // transpose_wh_init_short(src_cb);
-            // transpose_wh_tile(src_cb, 0, 0);
-            // transpose_wh_dest_init_short();
-            // transpose_wh_dest(0);
-            // copy_tile(src_cb, 0, 0);
+            transpose_wh_init_short(src_cb);
+            transpose_wh_tile(src_cb, 0, input_dst_index);
             // tt::compute::common::print_tile_rows(src_cb, 32, 0);
-            add_tiles(src_cb, src_cb, 0, 0, input_dst_index);
             ema_tile<input_dst_index>(/*first_sample=*/false);
-            // dprint_tensix_dest_reg(0);
+            dprint_tensix_dest_reg(input_dst_index);
+            dprint_tensix_dest_reg(prev_dst_index);
+            dprint_tensix_dest_reg(output_dst_index);
             tile_regs_commit();
             cb_pop_front(src_cb, 1);
             cb_pop_front(prev_cb, 1);
@@ -83,7 +78,7 @@ void MAIN {
             cb_reserve_back(dst_cb, 1);
             cb_reserve_back(prev_cb, 1);
             tile_regs_wait();
-            pack_tile(prev_dst_index, prev_cb);
+            // pack_tile(prev_dst_index, prev_cb);
             pack_tile(output_dst_index, dst_cb);
             tile_regs_release();
             cb_push_back(dst_cb, 1);
