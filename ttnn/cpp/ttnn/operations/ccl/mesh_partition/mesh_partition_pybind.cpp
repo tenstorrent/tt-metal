@@ -16,7 +16,7 @@ void py_bind_mesh_partition(py::module& module) {
     auto doc =
         R"doc(mesh_partition(input_tensor: ttnn.Tensor, dim: int, cluster_axis: Optional[int] = None, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
 
-            Partitions the input tensor across the mesh such that each device has the i/num_devices-th partition of the input tensor along the specified dimension. This is the inverse of all_gather
+            Partitions the input tensor across the mesh such that each device has the i/num_devices-th partition of the input tensor along the specified dimension. This is the inverse of all_gather. When cluster axis is specified, we partition along the cluster axis.
 
             Args:
                 input_tensor (ttnn.Tensor): the input tensor.

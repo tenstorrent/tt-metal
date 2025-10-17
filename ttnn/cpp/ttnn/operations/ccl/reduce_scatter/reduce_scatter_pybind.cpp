@@ -20,7 +20,7 @@ void py_bind_reduce_scatter(py::module& module) {
     auto doc =
         R"doc(reduce_scatter(input_tensor: ttnn.Tensor, dim: int, cluster_axis: Optional[int] = None, subdevice_id: Optional[ttnn.SubDeviceId] = None, memory_config: Optional[ttnn.MemoryConfig] = None, output_tensor: Optional[ttnn.Tensor] = None, num_links: Optional[int] = None, topology: Optional[ttnn.Topology] = None) -> ttnn.Tensor
 
-            Reduce-scatter operation across devices along a selected dimension and optional cluster axis.
+            Reduce-scatter operation across devices along a selected dimension and optional cluster axis. This operation reduces the mesh tensor across the devices in the mesh, along the specified dimension. It then scatters the reduced tensor back to the devices in the mesh, along the same dimension. When cluster axis is specified, we reduce and scatter along the cluster axis. When the layout is row-major or the scatter breaks apart tiles, we use the composite reduce-scatter implementation that falls back to all-broadcast.
 
             Args:
                 input_tensor (ttnn.Tensor): Input tensor to be reduced and scattered.

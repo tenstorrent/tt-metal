@@ -18,7 +18,7 @@ void py_bind_point_to_point(py::module& module) {
     auto doc =
         R"doc(point_to_point(input_tensor: ttnn.Tensor, sender_coord: ttnn.MeshCoordinate, receiver_coord: ttnn.MeshCoordinate, topology: ttnn.Topology, output_tensor: Optional[ttnn.Tensor] = None, intermediate_tensor: Optional[ttnn.Tensor] = None) -> ttnn.Tensor
 
-            Point-to-point send receive Op. Send a tensor from one device to another.
+            Point-to-point send and receive operation. Send a tensor from one device to another.
 
             Args:
                 input_tensor (ttnn.Tensor): the input tensor.
@@ -41,12 +41,12 @@ void py_bind_point_to_point(py::module& module) {
                 >>> input_tensor = ttnn.from_torch(
                 >>>     input_tensor_torch, device=mesh_device, mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0)
                 >>> )
-                >>> sender_coord, receiver_coord = (ttnn.MeshCoordinate(c) for c in ((0,0), (0,1)))
+                >>> sender_coord, receiver_coord = ttnn.MeshCoordinate((0,0)), ttnn.MeshCoordinate((0,1))
                 >>> sent_tensor = ttnn.point_to_point(
                         input_tensor,
                         sender_coord,
                         receiver_coord,
-                        ttnn.Topology.Linear)
+                        topology=ttnn.Topology.Linear)
             )doc";
 
     using OperationType = decltype(ttnn::point_to_point);
