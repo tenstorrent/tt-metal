@@ -1676,7 +1676,7 @@ uint32_t process_relay_linear_h_cmd(uint32_t cmd_ptr, uint32_t& downstream_data_
 
     downstream_data_ptr = round_up_pow2(downstream_data_ptr, downstream_cb_page_size);
 
-    return CQ_PREFETCH_CMD_BARE_MIN_SIZE;
+    return is_d_variant ? CQ_PREFETCH_CMD_BARE_MIN_SIZE : 2 * CQ_PREFETCH_CMD_BARE_MIN_SIZE;
 }
 
 // This function is only valid when called on the H variant
