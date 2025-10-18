@@ -234,6 +234,7 @@ void Data::rpc_get_dispatch_core_info(
     // of the command queue event info
     this->rpc_all_command_queue_event_infos();
     std::scoped_lock locks(dispatch_core_info_mutex, cq_to_event_by_device_mutex);
+    // Get the key and find the core info
     const auto key = params.getKey();
     const tt_cxy_pair key_cxy{key.getChip(), key.getX(), key.getY()};
     const auto it = dispatch_core_info.find(key_cxy);
@@ -241,20 +242,11 @@ void Data::rpc_get_dispatch_core_info(
         throw std::runtime_error("Dispatch core info not found");
     }
     const auto& info = it->second;
-    // Set default event_id to std::numeric_limits<uint32_t>::max() if not found in cq_to_event_by_device
-    uint32_t event_id = std::numeric_limits<uint32_t>::max();
-    if (info.cq_id < cq_to_event_by_device[info.device_id].size()) {
-        event_id = cq_to_event_by_device[info.device_id][info.cq_id];
-    }
-
+    // Get the event id for the core's command queue
+    uint32_t event_id = this->get_event_id_for_core(info);
+    // Populate the results
     auto out = results.initInfo();
-    out.setDeviceId(info.device_id);
-    out.setServicingDeviceId(info.servicing_device_id);
-    // Convert enum to string
-    std::string worker_type_str(enchantum::to_string(info.worker_type));
-    out.setWorkType(worker_type_str);
-    out.setEventID(event_id);
-    out.setCqId(info.cq_id);
+    this->populate_core_info(out, info, event_id);
 }
 
 // Get dispatch_s core info by virtual core
@@ -272,20 +264,11 @@ void Data::rpc_get_dispatch_s_core_info(
         throw std::runtime_error("Dispatch_s core info not found");
     }
     const auto& info = it->second;
-    // Set default event_id to std::numeric_limits<uint32_t>::max() if not found in cq_to_event_by_device
-    uint32_t event_id = std::numeric_limits<uint32_t>::max();
-    if (info.cq_id < cq_to_event_by_device[info.device_id].size()) {
-        event_id = cq_to_event_by_device[info.device_id][info.cq_id];
-    }
-
+    // Get the event id for the core's command queue
+    uint32_t event_id = this->get_event_id_for_core(info);
+    // Populate the results
     auto out = results.initInfo();
-    out.setDeviceId(info.device_id);
-    out.setServicingDeviceId(info.servicing_device_id);
-    // Convert enum to string
-    std::string worker_type_str(enchantum::to_string(info.worker_type));
-    out.setWorkType(worker_type_str);
-    out.setEventID(event_id);
-    out.setCqId(info.cq_id);
+    this->populate_core_info(out, info, event_id);
 }
 
 // Get prefetch core info by virtual core
@@ -303,20 +286,11 @@ void Data::rpc_get_prefetch_core_info(
         throw std::runtime_error("Prefetcher core info not found");
     }
     const auto& info = it->second;
-    // Set default event_id to std::numeric_limits<uint32_t>::max() if not found in cq_to_event_by_device
-    uint32_t event_id = std::numeric_limits<uint32_t>::max();
-    if (info.cq_id < cq_to_event_by_device[info.device_id].size()) {
-        event_id = cq_to_event_by_device[info.device_id][info.cq_id];
-    }
-
+    // Get the event id for the core's command queue
+    uint32_t event_id = this->get_event_id_for_core(info);
+    // Populate the results
     auto out = results.initInfo();
-    out.setDeviceId(info.device_id);
-    out.setServicingDeviceId(info.servicing_device_id);
-    // Convert enum to string
-    std::string worker_type_str(enchantum::to_string(info.worker_type));
-    out.setWorkType(worker_type_str);
-    out.setEventID(event_id);
-    out.setCqId(info.cq_id);
+    this->populate_core_info(out, info, event_id);
 }
 
 // Get all dispatch core info
@@ -333,25 +307,11 @@ void Data::rpc_get_all_dispatch_core_infos(rpc::Inspector::GetAllDispatchCoreInf
         // Get key, value from dispatch_core_info
         const tt_cxy_pair& k = kv.first;
         const auto& info = kv.second;
-        uint32_t event_id = std::numeric_limits<uint32_t>::max();
-        if (info.cq_id < cq_to_event_by_device[info.device_id].size()) {
-            event_id = cq_to_event_by_device[info.device_id][info.cq_id];
-        }
-        auto e = list[i++];
-        // Populate the key
-        auto key = e.initKey();
-        key.setChip(k.chip);
-        key.setX(k.x);
-        key.setY(k.y);
-        // Populate the info
-        auto out = e.initInfo();
-        out.setDeviceId(info.device_id);
-        out.setServicingDeviceId(info.servicing_device_id);
-        // Convert enum to string
-        std::string worker_type_str(enchantum::to_string(info.worker_type));
-        out.setWorkType(worker_type_str);
-        out.setEventID(event_id);
-        out.setCqId(info.cq_id);
+        // Get the event id for the core's command queue
+        uint32_t event_id = this->get_event_id_for_core(info);
+        // Populate the core entry with the key, info, and event id
+        auto entry = list[i++];
+        this->populate_core_entry(entry, k, info, event_id);
     }
 }
 
@@ -369,25 +329,11 @@ void Data::rpc_get_all_dispatch_s_core_infos(rpc::Inspector::GetAllDispatchSCore
         // Get key, value from dispatch_s_core_info
         const tt_cxy_pair& k = kv.first;
         const auto& info = kv.second;
-        uint32_t event_id = std::numeric_limits<uint32_t>::max();
-        if (info.cq_id < cq_to_event_by_device[info.device_id].size()) {
-            event_id = cq_to_event_by_device[info.device_id][info.cq_id];
-        }
-        auto e = list[i++];
-        // Populate the key
-        auto key = e.initKey();
-        key.setChip(k.chip);
-        key.setX(k.x);
-        key.setY(k.y);
-        // Populate the info
-        auto out = e.initInfo();
-        out.setDeviceId(info.device_id);
-        out.setServicingDeviceId(info.servicing_device_id);
-        // Convert enum to string
-        std::string worker_type_str(enchantum::to_string(info.worker_type));
-        out.setWorkType(worker_type_str);
-        out.setEventID(event_id);
-        out.setCqId(info.cq_id);
+        // Get the event id for the core's command queue
+        uint32_t event_id = this->get_event_id_for_core(info);
+        // Populate the core entry with the key, info, and event id
+        auto entry = list[i++];
+        this->populate_core_entry(entry, k, info, event_id);
     }
 }
 
@@ -405,25 +351,11 @@ void Data::rpc_get_all_prefetch_core_infos(rpc::Inspector::GetAllPrefetchCoreInf
         // Get key, value from prefetcher_core_info
         const tt_cxy_pair& k = kv.first;
         const auto& info = kv.second;
-        uint32_t event_id = std::numeric_limits<uint32_t>::max();
-        if (info.cq_id < cq_to_event_by_device[info.device_id].size()) {
-            event_id = cq_to_event_by_device[info.device_id][info.cq_id];
-        }
-        auto e = list[i++];
-        // Populate the key
-        auto key = e.initKey();
-        key.setChip(k.chip);
-        key.setX(k.x);
-        key.setY(k.y);
-        // Populate the info
-        auto out = e.initInfo();
-        out.setDeviceId(info.device_id);
-        out.setServicingDeviceId(info.servicing_device_id);
-        // Convert enum to string
-        std::string worker_type_str(enchantum::to_string(info.worker_type));
-        out.setWorkType(worker_type_str);
-        out.setEventID(event_id);
-        out.setCqId(info.cq_id);
+        // Get the event id for the core's command queue
+        uint32_t event_id = this->get_event_id_for_core(info);
+        // Populate the core entry with the key, info, and event id
+        auto entry = list[i++];
+        this->populate_core_entry(entry, k, info, event_id);
     }
 }
 
@@ -452,5 +384,38 @@ rpc::BinaryStatus Data::convert_binary_status(ProgramBinaryStatus status) {
     }
 }
 
+// Helper function to populate the core info
+void Data::populate_core_info(rpc::CoreInfo::Builder& out, const CoreInfo& info, uint32_t event_id) {
+    out.setDeviceId(info.device_id);
+    out.setServicingDeviceId(info.servicing_device_id);
+    // Convert enum to string
+    std::string worker_type_str(enchantum::to_string(info.worker_type));
+    out.setWorkType(worker_type_str);
+    out.setEventID(event_id);
+    out.setCqId(info.cq_id);
+}
+
+// Helper function to get the event id for a core
+// If not found, return std::numeric_limits<uint32_t>::max()
+uint32_t Data::get_event_id_for_core(const CoreInfo& info) const {
+    auto device_it = cq_to_event_by_device.find(info.device_id);
+    if (device_it != cq_to_event_by_device.end() && info.cq_id < device_it->second.size()) {
+        return device_it->second[info.cq_id];
+    }
+    return std::numeric_limits<uint32_t>::max();
+}
+
+// Helper function to populate the core entry
+void Data::populate_core_entry(
+    rpc::CoreEntry::Builder& entry, const tt_cxy_pair& k, const CoreInfo& info, uint32_t event_id) {
+    // Populate the key
+    auto key = entry.initKey();
+    key.setChip(k.chip);
+    key.setX(k.x);
+    key.setY(k.y);
+    // Populate the info
+    auto out = entry.initInfo();
+    this->populate_core_info(out, info, event_id);
+}
 
 }  // namespace tt::tt_metal::inspector

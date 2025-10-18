@@ -76,7 +76,7 @@ def get_core_info(inspector_data: InspectorData, vc: VirtualCore, method_name: s
     try:
         result = getattr(inspector_data, method_name)(vc)
         core_info = result.info
-    except:
+    except Exception:
         pass
     return core_info
 
@@ -160,8 +160,7 @@ def read_wait_globals(
     if dispatcher_core_data.kernel_name == "cq_dispatch_subordinate":
         dispatch_core_info = dispatch_s_core_info
 
-    # If there are no values and no dispatch/prefetch core info, return None
-    # All three should be None if the core is not a dispatch/dispatch_s/prefetch core
+    # If there are no values and no dispatch/dispatch_s/prefetch core info, return None
     if not has_values and not any([dispatch_core_info, dispatch_s_core_info, prefetch_core_info]):
         return None
 
