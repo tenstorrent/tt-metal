@@ -156,9 +156,8 @@ std::string KernelSource::generate_elf_path(
         // Construct full path matching JIT structure: prefix/kernel_full_name/processor_dir/processor_dir.elf
         // kernel_full_name already contains trailing slash
         return fmt::format(
-            "{}/{}/kernels/{}{}/{}.elf",
+            "{}/{}{}/{}.elf",
             device_prefix,
-            BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key,
             kernel_full_name,
             processor_dir,
             processor_dir);
@@ -325,6 +324,10 @@ bool KernelImpl::binaries_exist_on_disk(const IDevice* device) const {
             int processor_index = this->get_kernel_processor_type(i);
             if (!std::filesystem::exists(
                     this->kernel_src_.generate_elf_path(device, this, processor_index, this->kernel_src_.path_))) {
+                log_info(
+                    LogLoader,
+                    "Binary does not exist on disk: {}",
+                    this->kernel_src_.generate_elf_path(device, this, processor_index, this->kernel_src_.path_));
                 return false;
             }
         }
