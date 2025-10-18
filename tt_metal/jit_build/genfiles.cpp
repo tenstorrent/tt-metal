@@ -69,6 +69,9 @@ void jit_build_genfiles_kernel_include(
 
     string out_dir = env.get_out_kernel_root_path() + settings.get_full_kernel_name() + "/";
     string kernel_header = out_dir + "kernel_includes.hpp";
+    if (fs::exists(kernel_header)) {
+        return;
+    }
 
     const string& kernel_src_to_include = get_kernel_source_to_include(kernel_src);
 
@@ -91,6 +94,9 @@ void jit_build_genfiles_triscs_src(
     string pack_cpp = pack_base + ".cpp";
     string pack_llk_args_h = pack_base + "_llk_args.h";
 
+    if (fs::exists(unpack_cpp) && fs::exists(math_cpp) && fs::exists(pack_cpp)) {
+        return;
+    }
     const string& kernel_src_to_include = get_kernel_source_to_include(kernel_src);
 
     vector<string> unpack_prolog;
@@ -411,6 +417,9 @@ void jit_build_genfiles_descriptors(const JitBuildEnv& env, JitBuildOptions& opt
     //ZoneScoped;
     //const std::string tracyPrefix = "generate_descriptors_";
     //ZoneName((tracyPrefix + options.name).c_str(), options.name.length() + tracyPrefix.length());
+    if (fs::is_directory(options.path)) {
+        return;
+    }
     fs::create_directories(options.path);
     try {
         std::thread td( [&]() { generate_data_format_descriptors(options, env.get_arch()); } );

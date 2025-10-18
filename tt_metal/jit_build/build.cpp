@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -33,7 +34,9 @@
 #include "profiler_state.hpp"
 #include "tt_cluster.hpp"
 #include "tt_metal/llrt/tt_elffile.hpp"
+#include <tracy/Tracy.hpp>
 #include <umd/device/types/arch.hpp>
+#include <unordered_map>
 
 namespace fs = std::filesystem;
 
@@ -170,6 +173,7 @@ void JitBuildEnv::init(
 
     this->cflags_ = common_flags;
     this->cflags_ +=
+        "-MMD "
         "-fno-use-cxa-atexit "
         "-Wall -Werror -Wno-unknown-pragmas "
         "-Wno-deprecated-declarations "
@@ -379,7 +383,99 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
     }
 }
 
-void JitBuildState::compile_one(
+namespace {
+
+auto file_mtime(std::string_view out_dir, const std::string& file_path) {
+    std::filesystem::path path{file_path};
+    if (!path.is_absolute()) {
+        path = std::filesystem::path{out_dir} / path;
+    }
+    return std::filesystem::last_write_time(path);
+}
+
+std::unordered_map<std::string, bool> dependency_rebuild(
+    std::string_view out_dir, std::string_view obj_file, std::string_view depend_file) {
+    std::ifstream file{std::string(depend_file)};
+    if (!file.is_open()) {
+        log_info(tt::LogBuildKernels, "depend file {} not found", depend_file);
+        return {};
+    }
+    enum class ParseState { FileName, Dependency };
+    ParseState parse_state = ParseState::FileName;
+    bool* current_file_rebuild = nullptr;
+    std::filesystem::file_time_type current_file_mtime{};
+    std::unordered_map<std::string, bool> file_to_rebuild;
+    std::string line;
+    while (std::getline(file, line)) {
+        // std::cerr << "line: " << line << std::endl;
+    again:
+        switch (parse_state) {
+            case ParseState::FileName: {
+                auto colon_pos = line.find(':');
+                if (colon_pos == std::string::npos) {
+                    TT_THROW("couldn't find colon after filename");
+                }
+                std::string file = line.substr(0, colon_pos);
+                current_file_mtime = file_mtime(out_dir, file);
+                current_file_rebuild = &file_to_rebuild[std::move(file)];
+                *current_file_rebuild = false;
+                line = line.substr(colon_pos + 1);
+                parse_state = ParseState::Dependency;
+                goto again;
+            }
+            case ParseState::Dependency:
+                // Extract the dependency
+                for (;;) {
+                    line.erase(0, line.find_first_not_of(" \t"));
+                    if (line.empty()) {
+                        // end of dependencies
+                        parse_state = ParseState::FileName;
+                        break;
+                    }
+                    if (line == "\\") {
+                        break;
+                    }
+                    auto end_of_depend_file = line.find_first_of(" \t\\");
+                    auto depend_file = line.substr(0, end_of_depend_file);
+                    auto depend_file_mtime = file_mtime(out_dir, depend_file);
+                    if (depend_file_mtime > current_file_mtime) {
+                        *current_file_rebuild = true;
+                    }
+                    if (end_of_depend_file == std::string::npos) {
+                        // end of dependencies
+                        parse_state = ParseState::FileName;
+                        break;
+                    }
+                    line = line.substr(end_of_depend_file);
+                }
+                break;
+        }
+    }
+    return file_to_rebuild;
+}
+
+bool check_compile_needed(std::string_view out_dir, std::string_view obj) {
+    auto base_name = obj.substr(0, obj.find_last_of('.'));
+    std::string depend_file = fmt::format("{}{}.d", out_dir, base_name);
+    auto dependency_rebuilds = dependency_rebuild(out_dir, obj, depend_file);
+
+    auto iter = dependency_rebuilds.find(std::string(obj));
+    if (iter == dependency_rebuilds.end()) {
+        log_debug(tt::LogBuildKernels, "object {} not found in depend file {}", obj, depend_file);
+        return true;
+    }
+    if (!iter->second) {
+        log_debug(tt::LogBuildKernels, "object {} is up to date", obj);
+        return false;
+    } else {
+        log_debug(tt::LogBuildKernels, "object {} is out of date", obj);
+        return true;
+    }
+}
+
+}  // namespace
+
+bool JitBuildState::compile_one(
     const string& log_file,
     const string& out_dir,
     const JitBuildSettings* settings,
@@ -388,6 +484,9 @@ void JitBuildState::compile_one(
     // ZoneScoped;
     fs::create_directories(out_dir);
 
+    if (!check_compile_needed(out_dir, obj)) {
+        return false;
+    }
     string cmd{"cd " + out_dir + " && " + env_.gpp_};
     string defines = this->defines_;
 
@@ -451,15 +550,19 @@ void JitBuildState::compile_one(
     if (!tt::jit_build::utils::run_command(cmd, log_file, false)) {
         build_failure(this->target_name_, "compile", cmd, log_file);
     }
+    return true;
 }
 
-void JitBuildState::compile(const string& log_file, const string& out_dir, const JitBuildSettings* settings) const {
+bool JitBuildState::compile(const string& log_file, const string& out_dir, const JitBuildSettings* settings) const {
     // ZoneScoped;
+    std::atomic<bool> any_compiled = false;
     std::vector<std::shared_future<void>> events;
     for (size_t i = 0; i < this->srcs_.size(); ++i) {
         launch_build_step(
-            [this, &log_file, &out_dir, settings, i] {
-                this->compile_one(log_file, out_dir, settings, this->srcs_[i], this->objs_[i]);
+            [this, &any_compiled, &log_file, &out_dir, settings, i] {
+                if (this->compile_one(log_file, out_dir, settings, this->srcs_[i], this->objs_[i])) {
+                    any_compiled.store(true);
+                }
             },
             events);
     }
@@ -469,6 +572,7 @@ void JitBuildState::compile(const string& log_file, const string& out_dir, const
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled()) {
         dump_kernel_defines_and_args(env_.get_out_kernel_root_path());
     }
+    return any_compiled;
 }
 
 void JitBuildState::link(const string& log_file, const string& out_dir, const JitBuildSettings* settings) const {
@@ -506,7 +610,7 @@ void JitBuildState::link(const string& log_file, const string& out_dir, const Ji
 // same name don't result in duplicate symbols but B can reference A's symbols. Force the fw_export symbols to remain
 // strong so to propogate link addresses
 void JitBuildState::weaken(const string& /*log_file*/, const string& out_dir) const {
-    // ZoneScoped;
+    ZoneScoped;
 
     std::string pathname_in = out_dir + target_name_ + ".elf";
     std::string pathname_out = out_dir + target_name_ + "_weakened.elf";
@@ -519,7 +623,7 @@ void JitBuildState::weaken(const string& /*log_file*/, const string& out_dir) co
 }
 
 void JitBuildState::extract_zone_src_locations(const string& log_file) const {
-    // ZoneScoped;
+    ZoneScoped;
     static std::atomic<bool> new_log = true;
     if (tt::tt_metal::getDeviceProfilerState()) {
         if (new_log.exchange(false) && std::filesystem::exists(tt::tt_metal::NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG)) {
@@ -547,7 +651,9 @@ void JitBuildState::build(const JitBuildSettings* settings) const {
     if (fs::exists(log_file)) {
         std::remove(log_file.c_str());
     }
-    compile(log_file, out_dir, settings);
+    if (!compile(log_file, out_dir, settings)) {
+        return;
+    }
     link(log_file, out_dir, settings);
     if (this->is_fw_) {
         weaken(log_file, out_dir);
