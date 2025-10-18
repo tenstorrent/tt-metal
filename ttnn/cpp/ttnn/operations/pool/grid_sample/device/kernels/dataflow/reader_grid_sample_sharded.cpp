@@ -14,7 +14,7 @@
 #include "debug/dprint.h"
 #endif
 
-ALWI void advance_grid_index(
+ALWI void advance_grid_index_bounded(
     uint32_t& in_grid_row_idx,
     uint32_t& grid_stick_idx,
     uint32_t& l1_grid_addr,
@@ -89,7 +89,7 @@ void kernel_main() {
 
     // Advance at start if needed
     if constexpr (split_reader && reader_id == 1) {
-        advance_grid_index(
+        advance_grid_index_bounded(
             in_grid_row_idx,
             grid_stick_idx,
             l1_grid_addr,
@@ -117,7 +117,7 @@ void kernel_main() {
             scalar_cb_index>(grid_stick_ptr, in_grid_row_idx, input_tensor_accessor, batch_offset);
 
         // Always advance once after processing
-        advance_grid_index(
+        advance_grid_index_bounded(
             in_grid_row_idx,
             grid_stick_idx,
             l1_grid_addr,
@@ -131,7 +131,7 @@ void kernel_main() {
 
         // For split reader, advance one more time to skip the coordinate that the other reader will process
         if constexpr (split_reader) {
-            advance_grid_index(
+            advance_grid_index_bounded(
                 in_grid_row_idx,
                 grid_stick_idx,
                 l1_grid_addr,

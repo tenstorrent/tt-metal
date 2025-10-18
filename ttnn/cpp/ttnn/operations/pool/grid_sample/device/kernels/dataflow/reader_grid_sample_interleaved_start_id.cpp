@@ -26,7 +26,7 @@ void kernel_main() {
     constexpr uint32_t scalar_cb_index = get_compile_time_arg_val(2);
     constexpr uint32_t input_stick_nbytes = get_compile_time_arg_val(3);
     constexpr uint32_t grid_stick_nbytes = get_compile_time_arg_val(4);
-    constexpr uint32_t input_batch = get_compile_time_arg_val(5);
+
     constexpr uint32_t input_height = get_compile_time_arg_val(6);
     constexpr uint32_t input_width = get_compile_time_arg_val(7);
     constexpr uint32_t grid_batches = get_compile_time_arg_val(8);
