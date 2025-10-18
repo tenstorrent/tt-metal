@@ -280,6 +280,7 @@ class TtGemmaImageAttention(LightweightModule):
         ###
         # Output matmul
         ###
+        attn_output_1QSD = attn_output_1QSD[:, :, :, : self.head_dim]
         attn_output_11SH = ttnn.experimental.nlp_concat_heads(
             attn_output_1QSD,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -321,12 +322,13 @@ class TtGemmaImageAttention(LightweightModule):
             ))
         """
 
-        # print('a')
-        k = attn_output_11SH.shape[-2]
-        attn_output_11SH = attn_output_11SH.reshape((-1, self.n_heads, nearest_32(self.head_dim)))[
-            :, :, : self.head_dim
-        ]
-        attn_output_11SH = attn_output_11SH.reshape((1, 1, k, -1))
+        # # print('a')
+        # k = attn_output_11SH.shape[-2]
+        # attn_output_11SH = attn_output_11SH.reshape((-1, self.n_heads, nearest_32(self.head_dim)))[
+        #     :, :, : self.head_dim
+        # ]
+        # attn_output_11SH = attn_output_11SH.reshape((1, 1, k, -1))
+
         output_11SH = ttnn.linear(
             attn_output_11SH,
             self.wo,
