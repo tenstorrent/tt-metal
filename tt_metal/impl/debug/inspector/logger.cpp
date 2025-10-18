@@ -379,15 +379,7 @@ void Logger::log_dispatch_core_info(const tt_cxy_pair& virtual_core, const CoreI
     }
     try {
         dispatch_core_ostream << "- dispatch_core_info:\n";
-        dispatch_core_ostream << "    virtual_core (chip, x, y): " << virtual_core.chip << ", " << virtual_core.x
-                              << ", " << virtual_core.y << "\n";
-        dispatch_core_ostream << "    device_id: " << core_info.device_id << "\n";
-        dispatch_core_ostream << "    servicing_device_id: " << core_info.servicing_device_id << "\n";
-        dispatch_core_ostream << "    worker_type: " << enchantum::to_string(core_info.worker_type) << "\n";
-        dispatch_core_ostream << "    cq_id: " << static_cast<uint16_t>(core_info.cq_id) << "\n";
-        dispatch_core_ostream << "    timestamp_ns: " << convert_timestamp(std::chrono::high_resolution_clock::now())
-                              << "\n";
-        dispatch_core_ostream.flush();
+        log_core_info_to_stream(dispatch_core_ostream, virtual_core, core_info);
     } catch (const std::exception& e) {
         TT_INSPECTOR_LOG("Failed to log dispatch core info: {}", e.what());
     }
@@ -399,15 +391,7 @@ void Logger::log_dispatch_s_core_info(const tt_cxy_pair& virtual_core, const Cor
     }
     try {
         dispatch_s_core_ostream << "- dispatch_s_core_info:\n";
-        dispatch_s_core_ostream << "    virtual_core (chip, x, y): " << virtual_core.chip << ", " << virtual_core.x
-                                << ", " << virtual_core.y << "\n";
-        dispatch_s_core_ostream << "    device_id: " << core_info.device_id << "\n";
-        dispatch_s_core_ostream << "    servicing_device_id: " << core_info.servicing_device_id << "\n";
-        dispatch_s_core_ostream << "    worker_type: " << enchantum::to_string(core_info.worker_type) << "\n";
-        dispatch_s_core_ostream << "    cq_id: " << static_cast<uint16_t>(core_info.cq_id) << "\n";
-        dispatch_s_core_ostream << "    timestamp_ns: " << convert_timestamp(std::chrono::high_resolution_clock::now())
-                                << "\n";
-        dispatch_s_core_ostream.flush();
+        log_core_info_to_stream(dispatch_s_core_ostream, virtual_core, core_info);
     } catch (const std::exception& e) {
         TT_INSPECTOR_LOG("Failed to log dispatch_s core info: {}", e.what());
     }
@@ -419,18 +403,22 @@ void Logger::log_prefetcher_core_info(const tt_cxy_pair& virtual_core, const Cor
     }
     try {
         prefetcher_core_ostream << "- prefetcher_core_info:\n";
-        prefetcher_core_ostream << "    virtual_core (chip, x, y): " << virtual_core.chip << ", " << virtual_core.x
-                                << ", " << virtual_core.y << "\n";
-        prefetcher_core_ostream << "    device_id: " << core_info.device_id << "\n";
-        prefetcher_core_ostream << "    servicing_device_id: " << core_info.servicing_device_id << "\n";
-        prefetcher_core_ostream << "    worker_type: " << enchantum::to_string(core_info.worker_type) << "\n";
-        prefetcher_core_ostream << "    cq_id: " << static_cast<uint16_t>(core_info.cq_id) << "\n";
-        prefetcher_core_ostream << "    timestamp_ns: " << convert_timestamp(std::chrono::high_resolution_clock::now())
-                                << "\n";
-        prefetcher_core_ostream.flush();
+        log_core_info_to_stream(prefetcher_core_ostream, virtual_core, core_info);
     } catch (const std::exception& e) {
         TT_INSPECTOR_LOG("Failed to log prefetcher core info: {}", e.what());
     }
 }
 
+// Helper function to log core info to the given output stream
+void Logger::log_core_info_to_stream(
+    std::ostream& outstream, const tt_cxy_pair& virtual_core, const CoreInfo& core_info) noexcept {
+    outstream << "    virtual_core (chip, x, y): " << virtual_core.chip << ", " << virtual_core.x << ", "
+              << virtual_core.y << "\n";
+    outstream << "    device_id: " << core_info.device_id << "\n";
+    outstream << "    servicing_device_id: " << core_info.servicing_device_id << "\n";
+    outstream << "    worker_type: " << enchantum::to_string(core_info.worker_type) << "\n";
+    outstream << "    cq_id: " << static_cast<uint16_t>(core_info.cq_id) << "\n";
+    outstream << "    timestamp_ns: " << convert_timestamp(std::chrono::high_resolution_clock::now()) << "\n";
+    outstream.flush();
+}
 }  // namespace tt::tt_metal::inspector

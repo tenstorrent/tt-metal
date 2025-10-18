@@ -65,6 +65,9 @@ public:
     void log_dispatch_core_info(const tt_cxy_pair& virtual_core, const CoreInfo& core_info) noexcept;
     void log_dispatch_s_core_info(const tt_cxy_pair& virtual_core, const CoreInfo& core_info) noexcept;
     void log_prefetcher_core_info(const tt_cxy_pair& virtual_core, const CoreInfo& core_info) noexcept;
+
+    void log_core_info_to_stream(
+        std::ostream& outstream, const tt_cxy_pair& virtual_core, const CoreInfo& core_info) noexcept;
 };
 
 }  // namespace tt::tt_metal::inspector

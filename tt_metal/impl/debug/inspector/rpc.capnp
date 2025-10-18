@@ -97,7 +97,8 @@ struct VirtualCore {
     y @2: UInt64;
 }
 
-# Per entry information of
+# Per entry information of a dispatch/dispatch_s/prefetch core
+# Contains virtual coordinates and associated information
 struct CoreEntry {
   key  @0 :VirtualCore;       # chip,x,y (virtual)
   info @1 :CoreInfo;  # deviceId, servicingDeviceId, workType, cqId
