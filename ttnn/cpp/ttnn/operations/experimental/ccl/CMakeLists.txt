@@ -88,6 +88,9 @@ target_sources(
         send_recv_async/recv_async/recv_async.cpp
         send_recv_async/recv_async/device/recv_async_op.cpp
         send_recv_async/recv_async/device/recv_async_program.cpp
+        strided_all_gather_async/strided_all_gather_async.cpp
+        strided_all_gather_async/device/strided_all_gather_async_op.cpp
+        strided_all_gather_async/device/strided_all_gather_async_program.cpp
 )
 
 target_include_directories(ttnn_op_experimental_ccl PRIVATE ${FixmeOpIncDirs})
