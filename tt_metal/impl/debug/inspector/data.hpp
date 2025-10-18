@@ -40,6 +40,10 @@ private:
     void rpc_get_all_dispatch_s_core_infos(rpc::Inspector::GetAllDispatchSCoreInfosResults::Builder results);
     void rpc_all_command_queue_event_infos();
 
+    void populate_core_info(rpc::CoreInfo::Builder& out, const CoreInfo& info, uint32_t event_id);
+    void populate_core_entry(
+        rpc::CoreEntry::Builder& entry, const tt_cxy_pair& k, const CoreInfo& info, uint32_t event_id);
+    uint32_t get_event_id_for_core(const CoreInfo& info) const;
     static rpc::BinaryStatus convert_binary_status(ProgramBinaryStatus status);
 
     inspector::Logger logger;
