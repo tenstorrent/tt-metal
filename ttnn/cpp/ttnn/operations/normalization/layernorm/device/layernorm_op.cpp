@@ -188,6 +188,16 @@ void LayerNorm::validate(
                     TT_FATAL(!program_config.use_welford, "Welford's algorithm is not supported for RMSNorm");
                 }
             } else if constexpr (std::is_same_v<ProgramConfigType, LayerNormShardedMultiCoreProgramConfig>) {
+                if (program_config.use_welford) {
+                    TT_FATAL(
+                        this->norm_type != LayerNormType::RMSNORM, "Welford's algorithm is not supported for RMSNorm");
+                    TT_FATAL(
+                        a.device()->arch() == tt::ARCH::WORMHOLE_B0,
+                        "Welford's algorithm for Layernorm is only supported on Wormhole");
+                    TT_FATAL(
+                        this->distributed_norm_stage == DistributedLayerNormStage::NOT_DISTRIBUTED,
+                        "Welford's algorithm is not supported for distributed layernorm");
+                }
                 if (program_config.inplace) {
                     TT_FATAL(
                         this->output_mem_config.is_sharded(),
@@ -237,11 +247,14 @@ void LayerNorm::validate(
                 if (mcast_1d) {
                     TT_FATAL(
                         tt::div_up(Kt, shard_spec.num_cores()) == program_config.block_w,
-                        "block_w ({}) must equal to K / num_cores ({})",
+                        "block_w ({}) must equal to K (in tiles) / num_cores ({})",
                         program_config.block_w,
                         tt::div_up(Kt, shard_spec.num_cores()));
                     TT_FATAL(
-                        Mt == program_config.block_h, "block_h ({}) must equal to M ({})", program_config.block_h, Mt);
+                        Mt == program_config.block_h,
+                        "block_h ({}) must equal to M (in tiles) ({})",
+                        program_config.block_h,
+                        Mt);
                     TT_FATAL(
                         a.memory_config().memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED,
                         "Height sharded memory layout is not supported, got: {}",
@@ -250,23 +263,23 @@ void LayerNorm::validate(
                     if (row_wise) {
                         TT_FATAL(
                             tt::div_up(Kt, (bbox.end_coord.x + 1)) == program_config.block_w,
-                            "block_w ({}) must equal to K / num_cores_c ({})",
+                            "block_w ({}) must equal to K (in tiles) / num_cores_c ({})",
                             program_config.block_w,
                             tt::div_up(Kt, (bbox.end_coord.x + 1)));
                         TT_FATAL(
                             Mt / (bbox.end_coord.y + 1) == program_config.block_h,
-                            "block_h ({}) must equal to M / num_cores_r ({})",
+                            "block_h ({}) must equal to M (in tiles)/ num_cores_r ({})",
                             program_config.block_h,
                             Mt / (bbox.end_coord.y + 1));
                     } else {
                         TT_FATAL(
                             tt::div_up(Kt, (bbox.end_coord.y + 1)) == program_config.block_w,
-                            "block_w ({}) must equal to K / num_cores_r ({})",
+                            "block_w ({}) must equal to K (in tiles) / num_cores_r ({})",
                             program_config.block_w,
                             tt::div_up(Kt, (bbox.end_coord.y + 1)));
                         TT_FATAL(
                             Mt / (bbox.end_coord.x + 1) == program_config.block_h,
-                            "block_h ({}) must equal to M / num_cores_c ({})",
+                            "block_h ({}) must equal to M (in tiles) / num_cores_c ({})",
                             program_config.block_h,
                             Mt / (bbox.end_coord.x + 1));
                     }
@@ -425,6 +438,7 @@ operation::ProgramWithCallbacks LayerNorm::create_program(
                     program_config.block_w,
                     program_config.legacy_reduction,
                     program_config.legacy_rsqrt,
+                    program_config.use_welford,
                     this->compute_kernel_config);
             } else if constexpr (std::is_same_v<ProgramConfigType, LayerNormDefaultProgramConfig>) {
                 TT_FATAL(
