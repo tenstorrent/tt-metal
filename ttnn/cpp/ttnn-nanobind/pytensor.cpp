@@ -178,7 +178,13 @@ ttnn::DataType ndarray_dtype_to_ttnn(const nb::ndarray<Ts...>& arr) {
     }
 
     if (ttnn_dt == ttnn::DataType::INVALID) {
-        TT_THROW("Unsupported {} bit datatype: {}", dt.bits, dtype_str);
+        TT_THROW(
+            "Unsupported {} bit datatype: {}. Code: {}. Lanes: {}. Framework: {}",
+            dt.bits,
+            dtype_str,
+            dt.code,
+            dt.lanes,
+            std::string(nb::detail::ndarray_config_t<int, Ts...>::Framework::name.text));
     }
 
     return ttnn_dt;
