@@ -1069,8 +1069,9 @@ jobs:
           # Get the most recent one by sorting by created_at descending
           EXISTING_COMMENT_ID=$(echo "$EXISTING_COMMENTS" | jq -r "[.[] | select(.body | startswith(\"## CodeOwners\") or contains(\"CodeOwners-Workflow-Bot\"))] | sort_by(.created_at) | reverse | .[0].id")
 
-          # Escape the comment for JSON and shell
-          ESCAPED_COMMENT=$(echo "$COMMENT" | sed 's/"/\\"/g' | sed "s/'/\\'/g")
+          # Use jq to properly escape the comment for JSON
+          TEMP_JSON_FILE=$(mktemp)
+          jq -n --arg body "$COMMENT" '{"body": $body}' > "$TEMP_JSON_FILE"
 
           if [ "$CREATE_NEW" = "true" ] || [ -z "$EXISTING_COMMENT_ID" ] || [ "$EXISTING_COMMENT_ID" = "null" ]; then
             # Create new comment
@@ -1079,7 +1080,7 @@ jobs:
               -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
               -H "Accept: application/vnd.github.v3+json" \
               -H "Content-Type: application/json" \
-              -d "{\"body\": \"$ESCAPED_COMMENT\"}" \
+              --data-binary @"$TEMP_JSON_FILE" \
               "$COMMENTS_API"
           else
             # Edit existing comment
@@ -1088,10 +1089,11 @@ jobs:
               -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
               -H "Accept: application/vnd.github.v3+json" \
               -H "Content-Type: application/json" \
-              -d "{\"body\": \"$ESCAPED_COMMENT\"}" \
+              --data-binary @"$TEMP_JSON_FILE" \
               "https://api.github.com/repos/${{ github.repository }}/issues/comments/$EXISTING_COMMENT_ID"
           fi
 
+          rm -f "$TEMP_JSON_FILE"
           echo "Comment updated for PR #$PR_NUMBER"
 
       - name: Direct Ping Notification
@@ -1600,16 +1602,22 @@ jobs:
 
           # Process pending teams - check for Slack groups first, then individual selection
           if [ -n "$TEAMS" ]; then
+            echo "DEBUG: Processing TEAMS='$TEAMS'"
             IFS='@@@' read -ra TEAM_ARRAY <<< "$TEAMS"
+            echo "DEBUG: Split into ${#TEAM_ARRAY[@]} team entries"
             for team_entry in "${TEAM_ARRAY[@]}"; do
+              echo "DEBUG: Processing team_entry='$team_entry'"
               # Extract team name from team:files format
               team=$(echo "$team_entry" | cut -d':' -f1)
+              echo "DEBUG: Extracted team='$team'"
               if [ "$team" = "@tenstorrent/metalium-codeowners-large-changes" ]; then
+                echo "DEBUG: Skipping large-changes team"
                 continue
               fi
 
               # Check if this team has a Slack group
               SLACK_GROUP_ID=$(get_slack_group_id "$team")
+              echo "DEBUG: Slack group ID for $team = '$SLACK_GROUP_ID'"
 
               if [ -n "$SLACK_GROUP_ID" ]; then
                 echo "Team $team has Slack group: $SLACK_GROUP_ID"
@@ -1774,6 +1782,9 @@ jobs:
           TEMP_SELECTED_OWNERS=$(echo "$TEMP_SELECTED_OWNERS" | sed 's/,$//')
           SELECTED_SLACK_GROUPS=$(echo "$SELECTED_SLACK_GROUPS" | sed 's/,$//')
 
+          echo "DEBUG: TEMP_SELECTED_OWNERS='$TEMP_SELECTED_OWNERS'"
+          echo "DEBUG: SELECTED_SLACK_GROUPS='$SELECTED_SLACK_GROUPS'"
+
           if [ -n "$TEMP_SELECTED_OWNERS" ]; then
             # Sort and deduplicate individual owners
             SELECTED_OWNERS=$(echo "$TEMP_SELECTED_OWNERS" | tr ',' '\n' | sort | uniq | tr '\n' ',' | sed 's/,$//')
@@ -1786,6 +1797,10 @@ jobs:
           if [ -z "$SELECTED_OWNERS" ] && [ -z "$SELECTED_SLACK_GROUPS" ]; then
             NO_OWNERS_AVAILABLE="true"
           fi
+
+          echo "DEBUG: Final SELECTED_OWNERS='$SELECTED_OWNERS'"
+          echo "DEBUG: Final SELECTED_SLACK_GROUPS='$SELECTED_SLACK_GROUPS'"
+          echo "DEBUG: NO_OWNERS_AVAILABLE='$NO_OWNERS_AVAILABLE'"
 
           echo "selected-owners=$SELECTED_OWNERS" >> $GITHUB_OUTPUT
           echo "selected-slack-groups=$SELECTED_SLACK_GROUPS" >> $GITHUB_OUTPUT
@@ -1918,6 +1933,11 @@ jobs:
           CHANGED_FILES_COUNT="${{ needs.analyze-codeowners.outputs.changed-files-count || 0 }}"
           REQUESTER_LOGIN="${{ needs.parse-comment.outputs.comment-author || '' }}"
           REQUESTER_NAME="$REQUESTER_LOGIN"
+
+          echo "DEBUG Slack: SEND_SLACK='$SEND_SLACK'"
+          echo "DEBUG Slack: SELECTED_OWNERS='$SELECTED_OWNERS'"
+          echo "DEBUG Slack: SELECTED_SLACK_GROUPS='$SELECTED_SLACK_GROUPS'"
+          echo "DEBUG Slack: NO_OWNERS_AVAILABLE='$NO_OWNERS_AVAILABLE'"
 
           # Fetch PR title safely to avoid shell injection
           PR_API="https://api.github.com/repos/${{ github.repository }}/pulls/$PR_NUMBER"
