@@ -329,8 +329,8 @@ tt::umd::CoreCoord translateNocCoordinatesToNoc0(
 }
 
 bool skipReadingDeviceTraceCounter() {
-    return tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_do_dispatch_cores() ||
-           tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_trace_only();
+    return tt::tt_metal::MetalContext::instance().rtoptions().is_profiler_do_dispatch_cores() ||
+           tt::tt_metal::MetalContext::instance().rtoptions().is_profiler_trace_only();
 }
 
 bool isMarkerAZoneEndpoint(const tracy::TTDeviceMarker& marker) {
@@ -379,7 +379,7 @@ std::unordered_map<RuntimeID, nlohmann::json::array_t> convertNocTracePacketsToJ
     const std::unordered_set<tracy::TTDeviceMarker>& device_markers,
     chip_id_t device_id,
     const FabricRoutingLookup& routing_lookup) {
-    if (!MetalContext::instance().rtoptions().get_profiler_noc_events_enabled()) {
+    if (!MetalContext::instance().rtoptions().is_profiler_noc_events_enabled()) {
         return std::unordered_map<RuntimeID, nlohmann::json::array_t>();
     }
 
@@ -1189,7 +1189,7 @@ void DeviceProfiler::readRiscProfilerResults(
 
     const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
 
-    if (!rtoptions.get_profiler_trace_only()) {
+    if (!rtoptions.is_profiler_trace_only()) {
         if ((control_buffer[kernel_profiler::HOST_BUFFER_END_INDEX_BR_ER] == 0) &&
             (control_buffer[kernel_profiler::HOST_BUFFER_END_INDEX_NC] == 0)) {
             return;
@@ -1216,7 +1216,7 @@ void DeviceProfiler::readRiscProfilerResults(
     HalProgrammableCoreType CoreType = tt::llrt::get_core_type(device_id, worker_core);
     int riscCount = 1;
 
-    if (!rtoptions.get_profiler_trace_only() && CoreType == HalProgrammableCoreType::TENSIX) {
+    if (!rtoptions.is_profiler_trace_only() && CoreType == HalProgrammableCoreType::TENSIX) {
         riscCount = 5;
     }
 
@@ -1231,7 +1231,7 @@ void DeviceProfiler::readRiscProfilerResults(
             bufferEndIndex = control_buffer[riscEndIndex + kernel_profiler::DEVICE_BUFFER_END_INDEX_BR_ER];
         }
         tracy::RiscType riscType;
-        if (rtoptions.get_profiler_trace_only() && CoreType == HalProgrammableCoreType::TENSIX) {
+        if (rtoptions.is_profiler_trace_only() && CoreType == HalProgrammableCoreType::TENSIX) {
             riscType = tracy::RiscType::CORE_AGG;
         } else if (CoreType == HalProgrammableCoreType::TENSIX) {
             riscType = static_cast<tracy::RiscType>(riscEndIndex);
@@ -1535,7 +1535,7 @@ void DeviceProfiler::processDeviceMarkerData(std::set<tracy::TTDeviceMarker>& de
         auto next_device_marker_it = std::next(device_marker_it);
 
         if (isMarkerAZoneEndpoint(marker)) {
-            if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_trace_only() &&
+            if (tt::tt_metal::MetalContext::instance().rtoptions().is_profiler_trace_only() &&
                 marker.risc == tracy::RiscType::CORE_AGG) {
                 if (marker_details.marker_name_keyword_flags[static_cast<uint16_t>(
                         tracy::MarkerDetails::MarkerNameKeyword::BRISC_FW)] ||
@@ -1578,7 +1578,7 @@ void DeviceProfiler::processDeviceMarkerData(std::set<tracy::TTDeviceMarker>& de
 
                 const auto& start_marker_it = start_marker_stack.top();
 
-                if (!tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_trace_only()) {
+                if (!tt::tt_metal::MetalContext::instance().rtoptions().is_profiler_trace_only()) {
                     TT_FATAL(
                         start_marker_it->marker_id == marker.marker_id,
                         "Start {} and end {} markers do not match",
@@ -1820,7 +1820,7 @@ void DeviceProfiler::processResults(
 
     const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
 
-    if (rtoptions.get_profiler_noc_events_enabled()) {
+    if (rtoptions.is_profiler_noc_events_enabled()) {
         log_warning(
             tt::LogAlways, "Profiler NoC events are enabled; this can add 1-15% cycle overhead to typical operations!");
     }
@@ -1829,7 +1829,7 @@ void DeviceProfiler::processResults(
         readRiscProfilerResults(device, virtual_core, data_source, metadata);
     }
 
-    if (rtoptions.get_profiler_noc_events_enabled() &&
+    if (rtoptions.is_profiler_noc_events_enabled() &&
         (state == ProfilerReadState::NORMAL || state == ProfilerReadState::LAST_FD_READ)) {
         FabricRoutingLookup routing_lookup(device);
 
@@ -2081,7 +2081,7 @@ void DeviceProfiler::destroyTracyContexts() {
 #endif
 }
 
-bool getDeviceProfilerState() { return tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_enabled(); }
+bool getDeviceProfilerState() { return tt::tt_metal::MetalContext::instance().rtoptions().is_profiler_enabled(); }
 
 }  // namespace tt_metal
 

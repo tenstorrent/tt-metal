@@ -410,13 +410,13 @@ public:
     bool get_test_mode_enabled() const { return test_mode_enabled; }
     void set_test_mode_enabled(bool enable) { test_mode_enabled = enable; }
 
-    bool get_profiler_enabled() const { return profiler_enabled; }
-    bool get_profiler_do_dispatch_cores() const { return profile_dispatch_cores; }
-    bool get_profiler_sync_enabled() const { return profiler_sync_enabled; }
-    bool get_profiler_trace_only() const { return profiler_trace_profiler; }
-    bool get_profiler_mid_run_dump() const { return profiler_mid_run_dump; }
-    bool get_profiler_buffer_usage_enabled() const { return profiler_buffer_usage_enabled; }
-    bool get_profiler_noc_events_enabled() const { return profiler_noc_events_enabled; }
+    bool is_profiler_enabled() const { return profiler_enabled; }
+    bool is_profiler_do_dispatch_cores() const { return profile_dispatch_cores; }
+    bool is_profiler_sync_enabled() const { return profiler_sync_enabled; }
+    bool is_profiler_trace_only() const { return profiler_trace_profiler; }
+    bool is_profiler_mid_run_dump() const { return profiler_mid_run_dump; }
+    bool is_profiler_buffer_usage_enabled() const { return profiler_buffer_usage_enabled; }
+    bool is_profiler_noc_events_enabled() const { return profiler_noc_events_enabled; }
     std::string get_profiler_noc_events_report_path() const { return profiler_noc_events_report_path; }
 
     void set_kernels_nullified(bool v) { null_kernels = v; }

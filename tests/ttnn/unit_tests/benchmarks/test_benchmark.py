@@ -132,7 +132,7 @@ def get_profiler_data():
 
 
 # Check if test is run with profiler build enabled.
-def get_profiler_build_enabled():
+def is_profiler_build_enabled():
     return os.getenv("TT_METAL_DEVICE_PROFILER") != None
 
 
@@ -228,7 +228,7 @@ def test_matmul_2d_host_perf(
 
     # Calculate device utilization only when profiler build is enabled.
     # If profiler build is enabled, kernel execution time is available in profiler log by default.
-    calc_device_utilization = get_profiler_build_enabled()
+    calc_device_utilization = is_profiler_build_enabled()
 
     # Get maximum available grid size for compute from device
     compute_grid_size = device.compute_with_storage_grid_size()
@@ -561,7 +561,7 @@ def test_matmul_2d_host_perf_out_of_box(
 
     # Calculate device utilization only when profiler build is enabled.
     # If profiler build is enabled, kernel execution time is available in profiler log by default.
-    calc_device_utilization = get_profiler_build_enabled()
+    calc_device_utilization = is_profiler_build_enabled()
 
     # Get maximum available grid size for compute from device
     compute_grid_size = device.compute_with_storage_grid_size()
