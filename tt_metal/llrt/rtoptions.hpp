@@ -343,6 +343,8 @@ class RunTimeOptions {
 
     // Using MGD 1.0 syntax for mesh graph descriptor in Fabric Control Plane
     bool use_mesh_graph_descriptor_1_0 = false;
+    // Using MGD 2.0 syntax for mesh graph descriptor
+    bool use_mesh_graph_descriptor_2_0 = false;
 
     // Reliability mode override parsed from environment (RELIABILITY_MODE)
     std::optional<tt::tt_fabric::FabricReliabilityMode> reliability_mode = std::nullopt;
@@ -642,7 +644,9 @@ public:
 
     // If true, enables code profiling for receiver channel forward operations
     bool get_enable_fabric_code_profiling_rx_ch_fwd() const { return fabric_profiling_settings.enable_rx_ch_fwd; }
-    void set_enable_fabric_code_profiling_rx_ch_fwd(bool enable) { fabric_profiling_settings.enable_rx_ch_fwd = enable; }
+    void set_enable_fabric_code_profiling_rx_ch_fwd(bool enable) {
+        fabric_profiling_settings.enable_rx_ch_fwd = enable;
+    }
 
     // Reliability mode override accessor
     std::optional<tt::tt_fabric::FabricReliabilityMode> get_reliability_mode() const { return reliability_mode; }
