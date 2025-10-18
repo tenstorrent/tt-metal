@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -6,8 +7,8 @@ import pytest
 from models.demos.deepseek_v3.demo.demo import run_demo
 
 # Paths
-MODEL_PATH = Path("/proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528")
-CACHE_DIR = Path("/proj_sw/user_dev/deepseek-v3-cache")
+MODEL_PATH = Path(os.getenv("DEEPSEEK_V3_HF_MODEL", "models/demos/deepseek_v3/reference"))
+CACHE_DIR = Path(os.getenv("DEEPSEEK_V3_CACHE", "generated/deepseek_v3"))
 REFERENCE_JSON = Path("models/demos/deepseek_v3/demo/deepseek_32_prompts_outputs.json")
 
 # Limit of prompts to pass in one run (demo supports up to 32)
