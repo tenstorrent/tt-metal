@@ -865,11 +865,15 @@ def create_module_if_not_exists(module_name):
 
 
 def register_cpp_operation(target_module: types.ModuleType, func_name: str, function: Callable):
+    override_func = False
+    if hasattr(function, "operation_type") and function.operation_type == "ttnn_lightweight":
+        override_func = True
+
     operation_class = FastOperation if ttnn.CONFIG.enable_fast_runtime_mode else Operation
 
     operation = operation_class(
         python_fully_qualified_name=function.python_fully_qualified_name,
-        function=function,
+        function=function if not override_func else getattr(function, "operation").__call__,
         golden_function=None,
         preprocess_golden_function_inputs=None,
         postprocess_golden_function_outputs=None,
