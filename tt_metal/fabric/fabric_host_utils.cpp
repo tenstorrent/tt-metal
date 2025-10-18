@@ -112,6 +112,35 @@ FabricType get_fabric_type(tt::tt_fabric::FabricConfig fabric_config) {
     }
 }
 
+bool requires_more_connectivity(FabricType requested_type, FabricType available_type) {
+    // If requested is MESH, it's always valid (can restrict anything to MESH)
+    if (requested_type == FabricType::MESH) {
+        return false;
+    }
+
+    // If available is MESH but requested is any torus type, that's invalid
+    if (available_type == FabricType::MESH) {
+        return true;
+    }
+
+    // TORUS_XY requires both X and Y wrap-around
+    if (requested_type == FabricType::TORUS_XY) {
+        return available_type != FabricType::TORUS_XY;
+    }
+
+    // TORUS_X requires X wrap-around
+    if (requested_type == FabricType::TORUS_X) {
+        return !has_flag(available_type, FabricType::TORUS_X);
+    }
+
+    // TORUS_Y requires Y wrap-around
+    if (requested_type == FabricType::TORUS_Y) {
+        return !has_flag(available_type, FabricType::TORUS_Y);
+    }
+
+    return false;
+}
+
 std::vector<uint32_t> get_forwarding_link_indices_in_direction(
     const FabricNodeId& src_fabric_node_id, const FabricNodeId& dst_fabric_node_id, RoutingDirection direction) {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
