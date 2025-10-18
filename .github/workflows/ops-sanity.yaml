@@ -25,9 +25,6 @@ on:
       docker-image:
         required: true
         type: string
-  push:
-    branches:
-      ["roseli/28975-pipeline-reorg-apc-ops"]
 
 jobs:
   load-test-matrix:
