@@ -732,12 +732,17 @@ jobs:
           # Get team members for teams that need approval
           TEAM_MEMBERS=""
           if [ -n "$TEAMS" ]; then
+            echo "DEBUG get-team-members: TEAMS='$TEAMS'"
             IFS='@@@' read -ra TEAM_ARRAY <<< "$TEAMS"
+            echo "DEBUG get-team-members: Split into ${#TEAM_ARRAY[@]} entries"
             for team_entry in "${TEAM_ARRAY[@]}"; do
+              echo "DEBUG get-team-members: Processing team_entry='$team_entry'"
               # Extract team name from team:files format
               team=$(echo "$team_entry" | cut -d':' -f1)
+              echo "DEBUG get-team-members: Extracted team='$team'"
               # Remove @org/ prefix for API call
               clean_team=$(echo "$team" | sed 's/^@[^\/]*\///')
+              echo "DEBUG get-team-members: clean_team='$clean_team' (for API call)"
 
               # Get team members using GitHub API (using ORG_READ_GITHUB_TOKEN for org access)
               MEMBERS_API="https://api.github.com/orgs/tenstorrent/teams/$clean_team/members"
@@ -754,8 +759,10 @@ jobs:
                 # Extract member logins successfully
                 TEAM_MEMBER_LOGINS=$(echo "$MEMBERS_DATA" | jq -r '.[].login' 2>/dev/null | tr '\n' ',' | sed 's/,$//')
                 if [ -n "$TEAM_MEMBER_LOGINS" ]; then
+                  echo "DEBUG get-team-members: Successfully got members for $team: $TEAM_MEMBER_LOGINS"
                   TEAM_MEMBERS="$TEAM_MEMBERS$team:$TEAM_MEMBER_LOGINS|"
                 else
+                  echo "DEBUG get-team-members: Team $team has no members"
                   TEAM_MEMBERS="$TEAM_MEMBERS$team:no-members|"
                 fi
               elif [ "$MEMBERS_HTTP_CODE" = "404" ]; then
