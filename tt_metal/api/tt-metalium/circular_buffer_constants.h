@@ -6,4 +6,4 @@
 
 #include <cstdint>
 
-constexpr static std::uint32_t NUM_CIRCULAR_BUFFERS = 32;
+[[deprecated("Please use architecture agonistic interfaces")]] constexpr static std::uint32_t NUM_CIRCULAR_BUFFERS = 32;
