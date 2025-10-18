@@ -109,39 +109,23 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
     uint32_t num_cores, grid_nsticks_per_core, output_nsticks_per_core = 0;
     uint32_t num_sticks_per_core_group_1 = 0, num_sticks_per_core_group_2 = 0;
     std::vector<CoreCoord> logical_cores;
+    // Calculate total work and determine actual cores needed
+    const uint32_t total_grid_nsticks = grid_tensor.physical_volume() / grid_shape[-1];
 
     if (is_sharded) {
         const auto grid_shard_spec = grid_tensor.shard_spec().value();
         grid_nsticks_per_core = grid_shard_spec.shape[0];
         output_nsticks_per_core = output_tensor.shard_spec().value().shape[0];
 
-        // Calculate total work and determine actual cores needed
-        const uint32_t total_grid_nsticks = grid_tensor.physical_volume() / grid_shape[-1];
-        const uint32_t actual_cores_needed = (total_grid_nsticks + grid_nsticks_per_core - 1) / grid_nsticks_per_core;
-        const uint32_t max_available_cores = grid_shard_spec.num_cores();
-
-        // Only dispatch to cores that actually have work
-        num_cores = std::min(actual_cores_needed, max_available_cores);
-
-        if (num_cores < max_available_cores) {
-            // Split work only among the cores that need it
-            auto compute_grid_size = device->compute_with_storage_grid_size();
-            auto [num_cores_used, all_cores_range, core_group_1_range, core_group_2_range, num_sticks_1, num_sticks_2] =
-                tt::tt_metal::split_work_to_cores(compute_grid_size, total_grid_nsticks);
-
-            // Only use the cores we actually need
-            num_cores = std::min(num_cores_used, num_cores);
-            all_cores = all_cores_range;
-        } else {
-            all_cores = grid_shard_spec.grid;
-        }
+        num_cores = (total_grid_nsticks + grid_nsticks_per_core - 1) / grid_nsticks_per_core;
+        all_cores = grid_shard_spec.grid;
         logical_cores = corerange_to_cores(
             all_cores, num_cores, grid_shard_spec.orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR);
+
     } else {
-        const uint32_t grid_nsticks = grid_tensor.physical_volume() / grid_shape[-1];
         const auto compute_grid_size = device->compute_with_storage_grid_size();
         auto [num_cores_used, all_cores_range, core_group_1_range, core_group_2_range, num_sticks_1, num_sticks_2] =
-            tt::tt_metal::split_work_to_cores(compute_grid_size, grid_nsticks);
+            tt::tt_metal::split_work_to_cores(compute_grid_size, total_grid_nsticks);
 
         std::tie(num_cores, all_cores, core_group_1, core_group_2) =
             std::make_tuple(num_cores_used, all_cores_range, core_group_1_range, core_group_2_range);
