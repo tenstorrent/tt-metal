@@ -55,7 +55,6 @@ def test_embedding_forward_pass(
     mesh_device,
     ccl,
     model_path,
-    tmp_path,
     cache_path,
     force_recalculate_weight_config,
     set_deterministic_env,
@@ -75,7 +74,6 @@ def test_embedding_forward_pass(
         reference_output = reference_model(torch_input)
 
         # Do not cache random weights
-        cache_path = tmp_path
         force_recalculate_weight_config = True
     else:
         state_dict = load_state_dict(model_path, module_path)

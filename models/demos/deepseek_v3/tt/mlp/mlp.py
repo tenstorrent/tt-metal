@@ -26,11 +26,9 @@ from models.demos.deepseek_v3.utils.config_helpers import (
     COMPUTE_KERNEL_CONFIG_LOFI,
     SEQ_LEN_CHUNK_SIZE,
     USERS_PER_ROW,
-    dram_sharded_weight_config,
     even_int_div,
     find_largest_divisor,
     get_activation_sharding_core_counts_for_dram_matmul,
-    get_dram_sharded_matmul_config,
     get_state_dicts,
     shard_and_save,
 )
@@ -137,11 +135,12 @@ class MLP(AbstractModule):
             remove_dims=(True, False),
             dtype=cls.WEIGHT_DTYPE,
             layout=ttnn.TILE_LAYOUT,
-            memory_config=dram_sharded_weight_config(
-                per_device_in_features,
-                per_device_out_features,
-                mesh_device.dram_grid_size(),
-            ),
+            # memory_config=dram_sharded_weight_config(
+            #     per_device_in_features,
+            #     per_device_out_features,
+            #     mesh_device.dram_grid_size(),
+            # ),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
     @final
@@ -279,29 +278,29 @@ class MLP(AbstractModule):
             "w1": LinearConfig(
                 input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
                 memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
-                program_config=get_dram_sharded_matmul_config(
-                    USERS_PER_ROW, dim, even_int_div(hidden_dim, mesh_width), input_num_cores, inner_num_cores
-                ),
+                # program_config=get_dram_sharded_matmul_config(
+                #     USERS_PER_ROW, dim, even_int_div(hidden_dim, mesh_width), input_num_cores, inner_num_cores
+                # ),
                 compute_kernel_config=COMPUTE_KERNEL_CONFIG_LOFI,
             ),
             "w2": LinearConfig(
                 input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
                 memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
-                program_config=get_dram_sharded_matmul_config(
-                    USERS_PER_ROW,
-                    even_int_div(hidden_dim, mesh_width),
-                    dim,
-                    inner_num_cores,
-                    output_num_cores,
-                ),
+                # program_config=get_dram_sharded_matmul_config(
+                #     USERS_PER_ROW,
+                #     even_int_div(hidden_dim, mesh_width),
+                #     dim,
+                #     inner_num_cores,
+                #     output_num_cores,
+                # ),
                 compute_kernel_config=COMPUTE_KERNEL_CONFIG_LOFI,
             ),
             "w3": LinearConfig(
                 input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
                 memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
-                program_config=get_dram_sharded_matmul_config(
-                    USERS_PER_ROW, dim, even_int_div(hidden_dim, mesh_width), input_num_cores, inner_num_cores
-                ),
+                # program_config=get_dram_sharded_matmul_config(
+                #     USERS_PER_ROW, dim, even_int_div(hidden_dim, mesh_width), input_num_cores, inner_num_cores
+                # ),
                 compute_kernel_config=COMPUTE_KERNEL_CONFIG_LOFI,
             ),
             "mul": MulConfig(
