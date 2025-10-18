@@ -25,6 +25,7 @@
 #include <umd/device/types/core_coordinates.hpp>
 #include "impl/kernels/kernel_impl.hpp"
 #include "impl/program/program_impl.hpp"
+#include <tt-metalium/allocator.hpp>
 
 namespace tt::tt_metal {
 
@@ -152,6 +153,84 @@ TEST_F(CompileProgramWithKernelPathEnvVarFixture, TensixTestDifferentUnpackToDes
     // The hashes should be different across two kernels due to the difference in unpack_to_dest_mode
     EXPECT_NE(hash_default, hash_fp32)
         << "unpack_to_dest_mode is not accounted for in computing ComputeKernel::config_hash()";
+}
+
+// Testing experimental CreateKernelFromBinary function.
+// All steps required are in this test, even though not all are required for a binary kernel.
+// 1. Run a program with the kernels to generate the binaries.
+// 2. Call the function ComputeKernelOriginalPathHash to get the hash of the original kernel file.
+// 3. Set the binary path prefix for the device and call CreateKernelFromBinary for each kernel.
+// This test uses a precompiled binary for the kernel for step 3, instead of copying from the cache.
+// But the method is the same.
+TEST_F(MeshDispatchFixture, TestCreateKernelFromBinary) {
+    const std::string kernel_file = "tests/tt_metal/tt_metal/test_kernels/compute/simple_add.cpp";
+    std::string binary_kernel_path;
+    
+    for (const auto& mesh_device : this->devices_) {
+        CoreCoord core = {0, 0};
+        CoreCoord binary_core = {1, 1};
+        auto zero_coord = distributed::MeshCoordinate(0, 0);
+        auto device_range = distributed::MeshCoordinateRange(zero_coord);
+        distributed::MeshWorkload workload;
+        distributed::MeshWorkload binary_workload;
+
+        // Prepare to run the original kernel.
+        Program program;
+        workload.add_program(device_range, std::move(program));
+        auto& program_ = workload.get_programs().at(device_range);
+        auto device = mesh_device->get_devices()[0];
+
+        if (device->arch() == tt::ARCH::WORMHOLE_B0) {
+            binary_kernel_path = "tests/tt_metal/tt_metal/api/simple_add_binaries/wormhole/kernels";
+        } else if (device->arch() == tt::ARCH::BLACKHOLE) {
+            binary_kernel_path = "tests/tt_metal/tt_metal/api/simple_add_binaries/blackhole/kernels";
+        } else {
+            TT_THROW("arch not supported");
+        }
+
+        const uint32_t table_address = mesh_device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
+        uint32_t input_a = 1;
+        uint32_t input_b = 2;
+
+        // 1. Run the original kernel to generate the binary.
+        auto kernel_handle = CreateKernel(program_, kernel_file, core,  tt_metal::DataMovementConfig{ .processor = tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt_metal::NOC::NOC_0,
+            .compile_args = { }});
+        SetRuntimeArgs(program_, kernel_handle, core, {table_address, input_a, input_b});
+        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
+        distributed::Finish(mesh_device->mesh_command_queue());
+        std::vector<uint32_t> result;
+        tt_metal::detail::ReadFromDeviceL1(device, core, table_address, sizeof(uint32_t), result);
+        EXPECT_EQ(result[0], input_a + input_b);
+
+        // Now prepare to run the binary kernel.
+        Program binary_program;
+        binary_workload.add_program(device_range, std::move(binary_program));
+        auto& binary_program_ = binary_workload.get_programs().at(device_range);
+        input_a = 3;
+        input_b = 4;
+
+        // 2. Compute the hash of the original kernel file, for use in CreateKernelFromBinary.
+        auto binary_hash = tt_metal::experimental::ComputeKernelOriginalPathHash(kernel_file);
+
+        // 3a. Set the binary path prefix for the device.
+        tt_metal::experimental::SetKernelBinaryPathPrefix(mesh_device.get(), binary_kernel_path);
+
+        // 3b. Call CreateKernelFromBinary to create each kernel from the binaries.
+        auto kernel_handle_binary = tt_metal::experimental::CreateKernelFromBinary(
+            binary_program_,
+            "simple_add",
+            binary_core,
+            tt_metal::DataMovementConfig{
+                .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::NOC_0, .compile_args = {}},
+            binary_hash);
+        SetRuntimeArgs(binary_program_, kernel_handle_binary, binary_core, {table_address, input_a, input_b});
+        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), binary_workload, false);
+        distributed::Finish(mesh_device->mesh_command_queue());
+        tt_metal::detail::ReadFromDeviceL1(device, binary_core, table_address, sizeof(uint32_t), result);
+        EXPECT_EQ(result[0], input_a + input_b);
+
+    }
 }
 
 }  // namespace tt::tt_metal

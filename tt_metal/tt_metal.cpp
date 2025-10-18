@@ -1428,7 +1428,6 @@ KernelHandle CreateKernelFromBinary(
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
     const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig>& config,
     const std::variant<std::string, size_t>& original_path_or_hash) {
-    
     KernelSource kernel_src(KernelSource::BINARY_PATH, kernel_name, original_path_or_hash);
     CoreRangeSet core_ranges = GetCoreRangeSet(core_spec);
     return std::visit(

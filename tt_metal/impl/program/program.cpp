@@ -168,13 +168,14 @@ size_t KernelCompileHash(const std::shared_ptr<Kernel>& kernel, JitBuildOptions&
     // configuration (necessary for dispatch kernels).
     // Also account for watcher/dprint enabled in hash because they enable additional code to
     // be compiled into the kernel.
-
+    // Account for architecture in hash because binaries are different for different architectures, but
+    // the same for different devices of the same architecture.
     std::string compile_hash_str = fmt::format(
         "{}_{}_{}_{}",
-        build_key,
         std::to_string(std::hash<tt_hlk_desc>{}(build_options.hlk_desc)),
         kernel->compute_hash(),
-        tt::tt_metal::MetalContext::instance().rtoptions().get_compile_hash_string());
+        tt::tt_metal::MetalContext::instance().rtoptions().get_compile_hash_string(),
+        build_key);
     size_t compile_hash = std::hash<std::string>{}(compile_hash_str);
 
 #ifdef GENERATE_HASH_LOG
@@ -182,8 +183,8 @@ size_t KernelCompileHash(const std::shared_ptr<Kernel>& kernel, JitBuildOptions&
     static std::mutex mutex_;
     {
         std::unique_lock<std::mutex> lock(mutex_);
-        f << kernel->name() << " :: " << build_key << "::" << std::hash<tt_hlk_desc>{}(build_options.hlk_desc)
-          << " :: " << kernel->compute_hash() << " :: " << compile_hash_str << " " << compile_hash << std::endl
+        f << kernel->name() << "::" << std::hash<tt_hlk_desc>{}(build_options.hlk_desc)
+          << " :: " << kernel->compute_hash() << "::" << arch << " :: " << compile_hash_str << " " << compile_hash << std::endl
           << std::flush;
     }
 #endif
@@ -242,7 +243,8 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
     }
 
     for (auto& kernel_descriptor : descriptor.kernels) {
-        bool is_file = kernel_descriptor.source_type == KernelDescriptor::SourceType::FILE_PATH;
+        bool is_src_file = kernel_descriptor.source_type == KernelDescriptor::SourceType::FILE_PATH;
+        bool is_binary = kernel_descriptor.source_type == KernelDescriptor::SourceType::EXPERIMENTAL_BINARY_PATH;
         std::vector<uint32_t> compile_args(
             kernel_descriptor.compile_time_args.begin(), kernel_descriptor.compile_time_args.end());
         std::map<std::string, std::string> defines(kernel_descriptor.defines.begin(), kernel_descriptor.defines.end());
@@ -306,9 +308,11 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
             kernel_descriptor.config);
 
         auto kernel_handle =
-            is_file
+            is_src_file
                 ? CreateKernel(*this, kernel_descriptor.kernel_source, kernel_descriptor.core_ranges, config)
-                : CreateKernelFromString(*this, kernel_descriptor.kernel_source, kernel_descriptor.core_ranges, config);
+                : (is_binary
+                    ? tt_metal::experimental::CreateKernelFromBinary(*this, kernel_descriptor.kernel_source, kernel_descriptor.core_ranges, config, kernel_descriptor.binary_hash)
+                    : CreateKernelFromString(*this, kernel_descriptor.kernel_source, kernel_descriptor.core_ranges, config));
 
         for (size_t i = 0; i < kernel_descriptor.runtime_args.size(); i++) {
             for (size_t j = 0; j < kernel_descriptor.runtime_args[i].size(); j++) {

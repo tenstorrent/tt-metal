@@ -772,4 +772,294 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpEltwiseSFPU) {
     ASSERT_TRUE(allclose);
 }
 
+// Testing experimental CreateKernelFromBinary function.
+// Steps:
+//
+// 1. Set the binary path prefix for the device.
+//
+// 2. Call the function ComputeKernelOriginalPathHash to get the hash of the original kernel file.
+// This can either be done externally or internally in the program.
+//
+// 3. Setup the KernelDescriptor to include:
+//    a. kernel_source = <kernel_name>
+//    b. binary_hash = <hash from step 1>
+//    c. source_type = tt::tt_metal::KernelDescriptor::SourceType::BINARY_PATH
+TEST_F(TTNNFixtureWithDevice, TestGenericOpMatmulFromBinary) {
+    std::string binary_kernel_path;
+    auto device = this->device_;
+
+    if (device->arch() == tt::ARCH::WORMHOLE_B0) {
+        binary_kernel_path = "tests/ttnn/unit_tests/matmul_binaries/wormhole/kernels";
+    } else if (device->arch() == tt::ARCH::BLACKHOLE) {
+        binary_kernel_path = "tests/ttnn/unit_tests/matmul_binaries/blackhole/kernels";
+    } else {
+        TT_THROW("arch not supported");
+    }
+
+    // 1. Set the binary path prefix for the device.
+    tt::tt_metal::experimental::SetKernelBinaryPathPrefix(device, binary_kernel_path);
+
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0) == tt::umd::BoardType::P150) {
+        GTEST_SKIP();
+    }
+    log_info(tt::LogTest, "Running ttnn matmul");
+    uint32_t Mt_original = 10;
+    uint32_t Kt_original = 2;
+    uint32_t Nt_original = 4;
+    uint32_t B_original = 3;
+
+    ttnn::Shape shapea(
+        {B_original, 1, Mt_original * tt::constants::TILE_HEIGHT, Kt_original * tt::constants::TILE_WIDTH});
+    ttnn::Shape shapeb(
+        {B_original, 1, Kt_original * tt::constants::TILE_HEIGHT, Nt_original * tt::constants::TILE_WIDTH});
+    Tensor input_tensor_a = ttnn::random::random(shapea).to_layout(Layout::TILE).to_device(this->device_);
+    Tensor input_tensor_b = ttnn::random::random(shapeb).to_layout(Layout::TILE).to_device(this->device_);
+
+    Tensor golden = ttnn::matmul(
+        input_tensor_a,
+        input_tensor_b,
+        false,                                  // transpose_a
+        false,                                  // transpose_b
+        std::nullopt,                           // memory_config
+        std::nullopt,                           // dtype
+        matmul::MatmulMultiCoreProgramConfig{}  // program_config to indicate we want multi-core
+    );
+
+    log_info(tt::LogTest, "Running matmul generic test");
+
+    // Parameters for matmul call - copy paste from matmul_multi_core in bmm_op_multi_core.cpp
+    bool bcast_batch = false;
+
+    ttnn::Shape output_shape =
+        ttnn::Shape{B_original, 1, Mt_original * tt::constants::TILE_HEIGHT, Nt_original * tt::constants::TILE_WIDTH};
+    auto output = tt::tt_metal::create_device_tensor(
+        output_shape,
+        input_tensor_a.dtype(),
+        input_tensor_a.layout(),
+        input_tensor_a.device(),
+        input_tensor_a.memory_config());
+
+    tt::tt_metal::Buffer* src0_buffer = input_tensor_a.buffer();
+    tt::tt_metal::Buffer* src1_buffer = input_tensor_b.buffer();
+
+    ttnn::Shape cshape = output.logical_shape();  // C=A*B, N1MK*11KN->N1MN
+
+    auto compute_with_storage_grid_size = this->device_->compute_with_storage_grid_size();
+    uint32_t num_cores_x = compute_with_storage_grid_size.x;
+    uint32_t num_cores_y = compute_with_storage_grid_size.y;
+    uint32_t c_batch_size = get_batch_size(cshape);
+    auto num_output_tiles_total = c_batch_size * cshape[-2] * cshape[-1] / tt::constants::TILE_HW;
+    auto
+        [num_cores,
+         all_cores,
+         core_group_1,
+         core_group_2,
+         num_output_tiles_per_core_group_1,
+         num_output_tiles_per_core_group_2] =
+            tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_output_tiles_total);
+
+    TT_FATAL(
+        !core_group_2.ranges().empty(),
+        "Core group 2 for matmul generic test is empty. We should never hit this case.");
+
+    tt::tt_metal::Buffer* dst_buffer = output.buffer();
+    TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
+
+    const auto &ashape = input_tensor_a.logical_shape(), bshape = input_tensor_b.logical_shape();
+    uint32_t B = get_batch_size(ashape);
+    uint32_t Mt = ashape[-2] / tt::constants::TILE_HEIGHT;
+    uint32_t Kt = ashape[-1] / tt::constants::TILE_WIDTH;
+    uint32_t Nt = bshape[-1] / tt::constants::TILE_WIDTH;
+    uint32_t KtNt = Kt * Nt;
+    uint32_t MtKt = Mt * Kt;
+    uint32_t MtNt = Mt * Nt;
+
+    uint32_t src0_addr = src0_buffer->address();
+    uint32_t src1_addr = src1_buffer->address();
+    uint32_t dst_addr = dst_buffer->address();
+
+    auto src0_cb_index = tt::CBIndex::c_0;
+    auto src1_cb_index = tt::CBIndex::c_1;
+    auto output_cb_index = tt::CBIndex::c_16;
+    uint32_t num_input_tiles = 2;
+    uint32_t num_output_tiles = 2;
+
+    tt::DataFormat in0_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_a.dtype());
+    tt::DataFormat in1_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_b.dtype());
+    tt::DataFormat output_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
+    uint32_t in0_single_tile_size = tt::tile_size(in0_data_format);
+    uint32_t in1_single_tile_size = tt::tile_size(in1_data_format);
+    uint32_t output_single_tile_size = tt::tile_size(output_data_format);
+
+    auto all_device_cores_set = CoreRangeSet({all_cores});
+
+    tt::tt_metal::CBFormatDescriptor in0_format_descriptor = {
+        .buffer_index = src0_cb_index,
+        .data_format = in0_data_format,
+        .page_size = in0_single_tile_size,
+    };
+    tt::tt_metal::CBFormatDescriptor in1_format_descriptor = {
+        .buffer_index = src1_cb_index,
+        .data_format = in1_data_format,
+        .page_size = in1_single_tile_size,
+    };
+    tt::tt_metal::CBFormatDescriptor output_format_descriptor = {
+        .buffer_index = output_cb_index,
+        .data_format = output_data_format,
+        .page_size = output_single_tile_size,
+    };
+
+    tt::tt_metal::CBDescriptor in0_cb_descriptor = {
+        .total_size = num_input_tiles * in0_single_tile_size,
+        .core_ranges = all_device_cores_set,
+        .format_descriptors = {in0_format_descriptor},
+    };
+    tt::tt_metal::CBDescriptor in1_cb_descriptor = {
+        .total_size = num_input_tiles * in1_single_tile_size,
+        .core_ranges = all_device_cores_set,
+        .format_descriptors = {in1_format_descriptor},
+    };
+    tt::tt_metal::CBDescriptor output_cb_descriptor = {
+        .total_size = num_output_tiles * output_single_tile_size,
+        .core_ranges = all_device_cores_set,
+        .format_descriptors = {output_format_descriptor},
+    };
+
+    uint32_t last_ktile_w = input_tensor_a.logical_shape()[-1] % tt::constants::TILE_WIDTH;
+    KernelDescriptor::CompileTimeArgs reader_compile_time_args = {last_ktile_w};
+    TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
+    TensorAccessorArgs(*src1_buffer).append_to(reader_compile_time_args);
+
+    KernelDescriptor::CompileTimeArgs writer_compile_time_args = {(uint32_t)output_cb_index};
+    TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
+
+    log_info(tt::LogTest, "num_cores: {}, num_core_x: {}, num_core_y: {}", num_cores, num_cores_x, num_cores_y);
+    KernelDescriptor::RuntimeArgs reader_rt_args_per_core(
+        num_cores_x, std::vector<KernelDescriptor::CoreRuntimeArgs>(num_cores_y));
+    KernelDescriptor::RuntimeArgs writer_rt_args_per_core(
+        num_cores_x, std::vector<KernelDescriptor::CoreRuntimeArgs>(num_cores_y));
+
+    // setup reader/writer runtime args
+    for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++) {
+        uint32_t core_x = i / num_cores_y;
+        uint32_t core_y = i % num_cores_y;
+        CoreCoord core = {core_x, core_y};
+
+        uint32_t num_output_tiles_per_core = 0;
+        if (core_group_1.contains(core)) {
+            num_output_tiles_per_core = num_output_tiles_per_core_group_1;
+        } else if (core_group_2.contains(core)) {
+            num_output_tiles_per_core = num_output_tiles_per_core_group_2;
+        } else {
+            TT_FATAL(false, "Core not in specified core ranges");
+        }
+
+        reader_rt_args_per_core[core_x][core_y] = {
+            src0_addr,
+            src1_addr,
+            Mt,
+            Kt,
+            Nt,
+            MtKt,
+            KtNt,
+            B,
+            uint32_t(bcast_batch),
+            num_tiles_written,
+            num_output_tiles_per_core,
+            MtNt};
+
+        writer_rt_args_per_core[core_x][core_y] = {dst_addr, num_output_tiles_per_core, num_tiles_written};
+
+        log_info(
+            tt::LogTest,
+            "core: {}, reader_rt_args {}, writer_rt_args {}",
+            core,
+            reader_rt_args_per_core[core_x][core_y],
+            writer_rt_args_per_core[core_x][core_y]);
+
+        num_tiles_written += num_output_tiles_per_core;
+    }
+
+    // 2. Compute the hash of the original kernel file.
+    auto binary_hash = tt::tt_metal::experimental::ComputeKernelOriginalPathHash("ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_8bank_output_tiles_partitioned.cpp");
+
+    // 3. Setup the KernelDescriptor to read the binary. Repeat step 2 & 3 for the other kernels.
+    tt::tt_metal::KernelDescriptor reader_kernel_descriptor = {
+        .kernel_source = "reader_bmm_8bank_output_tiles_partitioned",
+        .source_type = tt::tt_metal::KernelDescriptor::SourceType::EXPERIMENTAL_BINARY_PATH,
+        .binary_hash = binary_hash,
+        .core_ranges = all_device_cores_set,
+        .compile_time_args = reader_compile_time_args,
+        .runtime_args = reader_rt_args_per_core,
+        .common_runtime_args = {},
+        .config = tt::tt_metal::ReaderConfigDescriptor{},
+    };
+    binary_hash = tt::tt_metal::experimental::ComputeKernelOriginalPathHash("ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp");
+    tt::tt_metal::KernelDescriptor writer_kernel_descriptor = {
+        .kernel_source = "writer_unary_interleaved_start_id",
+        .source_type = tt::tt_metal::KernelDescriptor::SourceType::EXPERIMENTAL_BINARY_PATH,
+        .binary_hash = binary_hash,
+        .core_ranges = all_device_cores_set,
+        .compile_time_args = writer_compile_time_args,
+        .runtime_args = writer_rt_args_per_core,
+        .common_runtime_args = {},
+        .config = tt::tt_metal::WriterConfigDescriptor{},
+    };
+
+    const KernelDescriptor::CompileTimeArgs compute_ct_args_group_1 = {
+        1,                                 // B
+        1,                                 // Mt
+        Kt,                                // Kt
+        num_output_tiles_per_core_group_1  // Nt
+    };  // bmm compute kernel the B, Mt, Nt are just 3 for loops that technically act as 1 large loop, so only set Nt
+        // for simplicity
+    const KernelDescriptor::CompileTimeArgs compute_ct_args_group_2 = {
+        1,                                 // B
+        1,                                 // Mt
+        Kt,                                // Kt
+        num_output_tiles_per_core_group_2  // Nt
+    };
+    log_info(tt::LogTest, "core_group_1: {}, core_group_2: {}", core_group_1.ranges(), core_group_2.ranges());
+    binary_hash = tt::tt_metal::experimental::ComputeKernelOriginalPathHash("ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm.cpp");
+    tt::tt_metal::KernelDescriptor compute_kernel_descriptor_1 = {
+        .kernel_source = "bmm",
+        .source_type = tt::tt_metal::KernelDescriptor::SourceType::EXPERIMENTAL_BINARY_PATH,
+        .binary_hash = binary_hash,
+        .core_ranges = core_group_1,
+        .compile_time_args = compute_ct_args_group_1,
+        .defines = {},
+        .runtime_args = {{{}}},
+        .common_runtime_args = {},
+        .config = tt::tt_metal::ComputeConfigDescriptor{.dst_full_sync_en = true},
+    };
+    binary_hash = tt::tt_metal::experimental::ComputeKernelOriginalPathHash("ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm.cpp");
+    tt::tt_metal::KernelDescriptor compute_kernel_descriptor_2 = {
+        .kernel_source = "bmm",
+        .source_type = tt::tt_metal::KernelDescriptor::SourceType::EXPERIMENTAL_BINARY_PATH,
+        .binary_hash = binary_hash,
+        .core_ranges = core_group_2,
+        .compile_time_args = compute_ct_args_group_2,
+        .defines = {},
+        .runtime_args = {{{}}},
+        .common_runtime_args = {},
+        .config = tt::tt_metal::ComputeConfigDescriptor{.dst_full_sync_en = true},
+    };
+
+    tt::tt_metal::ProgramDescriptor program_descriptor = {
+        .kernels =
+            {reader_kernel_descriptor,
+             writer_kernel_descriptor,
+             compute_kernel_descriptor_1,
+             compute_kernel_descriptor_2},
+        .semaphores = {},
+        .cbs = {in0_cb_descriptor, in1_cb_descriptor, output_cb_descriptor},
+    };
+
+    ttnn::generic_op(std::vector<Tensor>{input_tensor_a, input_tensor_b, output}, program_descriptor);
+    auto output_tensor = output.cpu();
+    auto allclose = ttnn::allclose<bfloat16>(golden.cpu(), output_tensor, 1e-1f, 1e-5f);
+
+    ASSERT_TRUE(allclose);
+}
+
 }  // namespace ttnn::operations::generic::test

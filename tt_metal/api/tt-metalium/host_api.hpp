@@ -685,14 +685,14 @@ namespace experimental {
  * Create a kernel from pre-compiled binaries.
  * Pre-compiled binaries are obtained from the tt-metal cache after a successful run.
  * User should copy ~/.cache/tt-metal-cache/<build_hash> to <destination_path> and preserve its internal structure.
- * 
+ *
  * <destination_path>/4097/kernels/cq_dispatch/11716257026492908183/brisc/brisc.elf
  * ^^^^^^^^^^^^^^^^^^ ^^^^^^^^^^^^ ^^^^^^^^^^^
  * Binary path prefix  int. dirs.  kernel name
- * 
+ *
  * Binary path prefix must be set via SetKernelBinaryPathPrefix before calling this function.
  * To help identify the correct pre-compiled binary, user must provide either path to kernel's original .cpp path or its hash returned by ComputeKernelOriginalPathHash.
- * 
+ *
  * | Argument               | Description                                                                                                    | Type                                                                     | Valid Range | Required |
  * |------------------------|----------------------------------------------------------------------------------------------------------------|--------------------------------------------------------------------------|-------------|----------|
  * | program                | The program to which this kernel will be added to                                                              | Program &                                                                |             | Yes      |
