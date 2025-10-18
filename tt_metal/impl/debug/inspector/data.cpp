@@ -239,7 +239,8 @@ void Data::rpc_get_dispatch_core_info(
     const tt_cxy_pair key_cxy{key.getChip(), key.getX(), key.getY()};
     const auto it = dispatch_core_info.find(key_cxy);
     if (it == dispatch_core_info.end()) {
-        throw std::runtime_error("Dispatch core info not found");
+        throw std::runtime_error(fmt::format(
+            "Dispatch core (chip: {}, x: {}, y: {}) info not found", key.getChip(), key.getX(), key.getY()));
     }
     const auto& info = it->second;
     // Get the event id for the core's command queue
@@ -261,7 +262,8 @@ void Data::rpc_get_dispatch_s_core_info(
     const tt_cxy_pair key_cxy{key.getChip(), key.getX(), key.getY()};
     const auto it = dispatch_s_core_info.find(key_cxy);
     if (it == dispatch_s_core_info.end()) {
-        throw std::runtime_error("Dispatch_s core info not found");
+        throw std::runtime_error(fmt::format(
+            "Dispatch_s core (chip: {}, x: {}, y: {}) info not found", key.getChip(), key.getX(), key.getY()));
     }
     const auto& info = it->second;
     // Get the event id for the core's command queue
@@ -283,7 +285,8 @@ void Data::rpc_get_prefetch_core_info(
     const tt_cxy_pair key_cxy{key.getChip(), key.getX(), key.getY()};
     const auto it = prefetcher_core_info.find(key_cxy);
     if (it == prefetcher_core_info.end()) {
-        throw std::runtime_error("Prefetcher core info not found");
+        throw std::runtime_error(fmt::format(
+            "Prefetcher core (chip: {}, x: {}, y: {}) info not found", key.getChip(), key.getX(), key.getY()));
     }
     const auto& info = it->second;
     // Get the event id for the core's command queue
