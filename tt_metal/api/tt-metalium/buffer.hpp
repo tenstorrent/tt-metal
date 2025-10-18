@@ -217,47 +217,60 @@ public:
     void set_page_size(DeviceAddr page_size);
 
     uint32_t num_pages() const;
+
+    // Internal
     uint32_t num_dev_pages() const;
 
     BufferType buffer_type() const { return buffer_type_; }
+    // Internal
     HalMemType memory_type() const;
     CoreType core_type() const;
 
     bool is_l1() const;
     bool is_dram() const;
+    // Internal/ removal
     bool is_trace() const;
 
+    // Internal
     bool is_valid_region(const BufferRegion& region) const;
+    // Internal/ removal
     bool is_valid_partial_region(const BufferRegion& region) const;
 
     TensorMemoryLayout buffer_layout() const { return buffer_layout_; }
 
+    // Internal
     bool bottom_up() const { return bottom_up_; }
 
     DeviceAddr page_address(DeviceAddr bank_id, DeviceAddr page_index) const;
 
     uint32_t alignment() const;
     DeviceAddr aligned_page_size() const;
+    // Internal
     DeviceAddr aligned_size() const;
     DeviceAddr aligned_size_per_bank() const;
 
     // SHARDED API STARTS HERE
     const std::optional<BufferDistributionSpec>& buffer_distribution_spec() const;
+    // removal?
     bool has_shard_spec() const { return shard_spec_.has_value(); }
     ShardSpecBuffer shard_spec() const;
     void set_shard_spec(const ShardSpecBuffer& shard_spec);
     std::optional<uint32_t> num_cores() const;
     const std::shared_ptr<const BufferPageMapping>& get_buffer_page_mapping();
 
+    // Internal
     // Returns the buffer that owns the underlying device memory.
     // Typically returns itself unless the buffer was created with a view method.
     std::shared_ptr<Buffer> root_buffer();
+    // Internal
     BufferRegion root_buffer_region() const { return BufferRegion(root_buffer_offset_, size_); }
 
+    // Internal/ Removal
     std::optional<SubDeviceId> sub_device_id() const { return sub_device_id_; }
 
     size_t unique_id() const { return unique_id_; }
 
+    // Internal
     // Mark the buffer as deallocated, without releasing underlying device memory
     void mark_as_deallocated();
 

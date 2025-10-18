@@ -506,7 +506,6 @@ CoreType Buffer::core_type() const {
 
 bool Buffer::is_l1() const { return is_l1_impl(buffer_type()); }
 bool Buffer::is_dram() const { return buffer_type() == BufferType::DRAM || buffer_type() == BufferType::TRACE; }
-bool Buffer::is_trace() const { return buffer_type() == BufferType::TRACE; }
 
 bool Buffer::is_valid_region(const BufferRegion& region) const { return region.offset + region.size <= this->size(); }
 
