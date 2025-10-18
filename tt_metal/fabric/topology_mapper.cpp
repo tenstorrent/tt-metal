@@ -8,7 +8,6 @@
 #include <unordered_set>
 #include <limits>
 #include <queue>
-#include <stack>
 #include <functional>
 
 #include <tt-logger/tt-logger.hpp>
@@ -420,7 +419,7 @@ std::unordered_map<MeshId, std::unordered_set<tt::tt_metal::AsicID>> TopologyMap
     auto get_local_adjacents_corners = [&](tt::tt_metal::AsicID asic_id, MeshId mesh_id, const std::unordered_set<tt::tt_metal::AsicID>& all_corners) {
         std::vector<tt::tt_metal::AsicID> adjacents;
         // Only get adjacents that are in the mesh
-        auto mesh_hostnames = mesh_id_to_host_names.at(mesh_id);
+        const auto& mesh_hostnames = mesh_id_to_host_names.at(mesh_id);
         for (const auto& neighbor : physical_system_descriptor_.get_asic_neighbors(asic_id)) {
             auto current_host_name = physical_system_descriptor_.get_host_name_for_asic(asic_id);
             auto neighbor_host_name = physical_system_descriptor_.get_host_name_for_asic(neighbor);
@@ -552,6 +551,13 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
         size_t n_log = log_nodes.size();
         size_t n_phys = phys_nodes.size();
 
+        log_debug(
+            tt::LogFabric,
+            "TopologyMapper: mesh {} mapping start: logical={}, physical={}",
+            mesh_id.get(),
+            n_log,
+            n_phys);
+
         TT_FATAL(
             n_log <= n_phys,
             "Graph specified in MGD is larger than the discovered physical topology for mesh {}, please modify your "
@@ -587,54 +593,254 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
             std::sort(phys_adj_idx[i].begin(), phys_adj_idx[i].end());
         }
 
+        // mapping[logical_index] = physical_index
         std::vector<int> mapping(n_log, -1);
         std::vector<bool> used(n_phys, false);
 
-        std::function<bool(size_t)> dfs = [&](size_t pos) -> bool {
-            if (pos == n_log) {
-                for (size_t i = 0; i < n_log; ++i) {
-                    size_t pi = mapping[i];
-                    std::vector<size_t> mapped_neighs;
-                    for (size_t pk : phys_adj_idx[pi]) {
-                        auto it = std::find(mapping.begin(), mapping.end(), static_cast<int>(pk));
-                        if (it != mapping.end()) {
-                            size_t log_k = std::distance(mapping.begin(), it);
-                            mapped_neighs.push_back(log_k);
-                        }
-                    }
-                    std::sort(mapped_neighs.begin(), mapped_neighs.end());
-                    if (mapped_neighs != log_adj_idx[i]) {
-                        return false;
+        // Precompute degrees for pruning
+        std::vector<size_t> log_deg(n_log, 0);
+        for (size_t i = 0; i < n_log; ++i) {
+            log_deg[i] = log_adj_idx[i].size();
+        }
+        std::vector<size_t> phys_deg(n_phys, 0);
+        for (size_t j = 0; j < n_phys; ++j) {
+            phys_deg[j] = phys_adj_idx[j].size();
+        }
+
+        auto minmax = [](const std::vector<size_t>& v) {
+            size_t mn = (std::numeric_limits<size_t>::max)();
+            size_t mx = 0;
+            for (auto x : v) {
+                mn = std::min(mn, x);
+                mx = std::max(mx, x);
+            }
+            return std::pair<size_t, size_t>{mn, mx};
+        };
+        auto [log_min_deg, log_max_deg] = minmax(log_deg);
+        auto [phys_min_deg, phys_max_deg] = minmax(phys_deg);
+        log_debug(
+            tt::LogFabric,
+            "TopologyMapper: mesh {} degree ranges: logical[min={},max={}] physical[min={},max={}]",
+            mesh_id.get(),
+            log_min_deg,
+            log_max_deg,
+            phys_min_deg,
+            phys_max_deg);
+
+        // We'll select the next logical node dynamically: pick the unmapped node
+        // with the most already-mapped neighbors (most-constraining), tie-break by MRV.
+        auto select_next_logical = [&](const std::vector<int>& mapping_ref, const std::vector<bool>& used_ref) {
+            size_t best_li = n_log;
+            size_t best_mapped_neigh = 0;
+            size_t best_cand_count = (std::numeric_limits<size_t>::max)();
+
+            for (size_t li = 0; li < n_log; ++li) {
+                if (mapping_ref[li] != -1) {
+                    continue;
+                }
+                size_t mapped_neigh_count = 0;
+                for (size_t v : log_adj_idx[li]) {
+                    if (mapping_ref[v] != -1) {
+                        mapped_neigh_count++;
                     }
                 }
-                return true;
-            }
-
-            for (size_t j = 0; j < n_phys; ++j) {
-                if (!used[j] && phys_adj_idx[j].size() >= log_adj_idx[pos].size()) {
-                    bool ok = true;
-                    for (size_t prev = 0; prev < pos; ++prev) {
-                        size_t p_prev = mapping[prev];
-                        bool log_connected = std::binary_search(log_adj_idx[pos].begin(), log_adj_idx[pos].end(), prev);
-                        bool phys_connected =
-                            std::binary_search(phys_adj_idx[j].begin(), phys_adj_idx[j].end(), p_prev);
-                        if (log_connected != phys_connected) {
-                            ok = false;
+                // Compute candidate count under current partial assignment
+                size_t cand_count = 0;
+                for (size_t j = 0; j < n_phys; ++j) {
+                    if (used_ref[j] || phys_deg[j] < log_deg[li]) {
+                        continue;
+                    }
+                    bool ok_local = true;
+                    for (size_t v : log_adj_idx[li]) {
+                        int pj = mapping_ref[v];
+                        if (pj == -1) {
+                            continue;
+                        }
+                        // logical edge must be present physically
+                        if (!std::binary_search(
+                                phys_adj_idx[j].begin(), phys_adj_idx[j].end(), static_cast<size_t>(pj))) {
+                            ok_local = false;
                             break;
                         }
                     }
-                    if (!ok) {
-                        continue;
+                    if (ok_local) {
+                        cand_count++;
                     }
-
-                    used[j] = true;
-                    mapping[pos] = static_cast<int>(j);
-                    if (dfs(pos + 1)) {
-                        return true;
-                    }
-                    used[j] = false;
+                }
+                if (best_li == n_log || mapped_neigh_count > best_mapped_neigh ||
+                    (mapped_neigh_count == best_mapped_neigh && cand_count < best_cand_count)) {
+                    best_li = li;
+                    best_mapped_neigh = mapped_neigh_count;
+                    best_cand_count = cand_count;
                 }
             }
+            return best_li;
+        };
+
+        // Memoization of failed states: include prefix mapping to avoid false negatives
+        std::unordered_set<std::uint64_t> failed_states;
+        auto hash_state = [&](size_t /*pos*/) -> std::uint64_t {
+            const std::uint64_t fnv_offset = 1469598103934665603ull;
+            const std::uint64_t fnv_prime = 1099511628211ull;
+            std::uint64_t h = fnv_offset;
+            for (size_t li = 0; li < n_log; ++li) {
+                if (mapping[li] != -1) {
+                    std::uint64_t pairh =
+                        (static_cast<std::uint64_t>(li) << 32) ^ static_cast<std::uint64_t>(mapping[li] + 1);
+                    h ^= pairh;
+                    h *= fnv_prime;
+                }
+            }
+            return h;
+        };
+
+        std::function<bool(size_t)> dfs = [&](size_t pos) -> bool {
+            if (pos == n_log) {
+                return true;
+            }
+
+            std::uint64_t key = hash_state(pos);
+            if (failed_states.find(key) != failed_states.end()) {
+                return false;
+            }
+
+            // Select next logical node dynamically
+            size_t li = (pos == 0) ? 0 : select_next_logical(mapping, used);
+            if (li == n_log) {
+                return false;
+            }
+
+            // Candidate generation with symmetry breaking for first two assignments
+            std::vector<size_t> candidates;
+            candidates.reserve(n_phys);
+
+            if (pos == 0) {
+                // Try all viable anchors; rely on consistency + forward checking to prune
+                for (size_t j = 0; j < n_phys; ++j) {
+                    if (!used[j] && phys_deg[j] >= log_deg[li]) {
+                        candidates.push_back(j);
+                    }
+                }
+            } else {
+                for (size_t j = 0; j < n_phys; ++j) {
+                    if (used[j] || phys_deg[j] < log_deg[li]) {
+                        continue;
+                    }
+                    candidates.push_back(j);
+                }
+            }
+
+            // Order candidates by degree gap, then index for determinism
+            std::sort(candidates.begin(), candidates.end(), [&](size_t a, size_t b) {
+                size_t da =
+                    (phys_deg[a] >= log_deg[li]) ? (phys_deg[a] - log_deg[li]) : (std::numeric_limits<size_t>::max)();
+                size_t db =
+                    (phys_deg[b] >= log_deg[li]) ? (phys_deg[b] - log_deg[li]) : (std::numeric_limits<size_t>::max)();
+                if (da != db) {
+                    return da < db;
+                }
+                return a < b;
+            });
+
+            log_debug(
+                tt::LogFabric,
+                "TopologyMapper: mesh {} pos {} logical-index {} candidates {}",
+                mesh_id.get(),
+                pos,
+                li,
+                candidates.size());
+
+            if (candidates.empty()) {
+                log_debug(
+                    tt::LogFabric, "TopologyMapper: mesh {} dead-end at pos {} (no candidates)", mesh_id.get(), pos);
+            }
+
+            for (size_t j : candidates) {
+                // Local consistency: enforce that logical edges are present physically (allow extra phys edges)
+                bool ok = true;
+                for (size_t lk = 0; lk < n_log; ++lk) {
+                    int pk_i = mapping[lk];
+                    if (pk_i == -1) {
+                        continue;
+                    }
+                    size_t pk = static_cast<size_t>(pk_i);
+                    bool log_connected = std::binary_search(log_adj_idx[li].begin(), log_adj_idx[li].end(), lk);
+                    bool phys_connected = std::binary_search(phys_adj_idx[j].begin(), phys_adj_idx[j].end(), pk);
+                    if (log_connected && !phys_connected) {
+                        ok = false;
+                        break;
+                    }
+                }
+                if (!ok) {
+                    continue;
+                }
+
+                // Forward checking: ensure candidate has enough unused neighbors to satisfy future edges
+                // Count unassigned logical neighbors of li
+                std::vector<size_t> unassigned_neighbors;
+                for (size_t v : log_adj_idx[li]) {
+                    if (mapping[v] == -1) {
+                        unassigned_neighbors.push_back(v);
+                    }
+                }
+                // Collect unused physical neighbors of j
+                std::vector<size_t> unused_phys_neighbors;
+                for (size_t pj : phys_adj_idx[j]) {
+                    if (!used[pj]) {
+                        unused_phys_neighbors.push_back(pj);
+                    }
+                }
+                if (unused_phys_neighbors.size() < unassigned_neighbors.size()) {
+                    continue;  // not enough capacity to satisfy pending logical edges
+                }
+                // For each future logical neighbor v, verify there exists at least one viable unused physical neighbor
+                for (size_t v : unassigned_neighbors) {
+                    bool has_candidate = false;
+                    for (size_t pj : unused_phys_neighbors) {
+                        // Degree feasibility
+                        if (phys_deg[pj] < log_deg[v]) {
+                            continue;
+                        }
+                        // Check consistency with already assigned neighbors of v
+                        bool consistent = true;
+                        for (size_t lv = 0; lv < n_log; ++lv) {
+                            int pk2_i = mapping[lv];
+                            if (pk2_i == -1) {
+                                continue;
+                            }
+                            size_t pk2 = static_cast<size_t>(pk2_i);
+                            bool log_conn2 = std::binary_search(log_adj_idx[v].begin(), log_adj_idx[v].end(), lv);
+                            bool phys_conn2 = std::binary_search(phys_adj_idx[pj].begin(), phys_adj_idx[pj].end(), pk2);
+                            if (log_conn2 && !phys_conn2) {
+                                consistent = false;
+                                break;
+                            }
+                        }
+                        if (consistent) {
+                            has_candidate = true;
+                            break;
+                        }
+                    }
+                    if (!has_candidate) {
+                        ok = false;
+                        break;
+                    }
+                }
+                if (!ok) {
+                    continue;
+                }
+
+                used[j] = true;
+                mapping[li] = static_cast<int>(j);
+                if (dfs(pos + 1)) {
+                    return true;
+                }
+                mapping[li] = -1;
+                used[j] = false;
+            }
+
+            failed_states.insert(key);
+            log_debug(tt::LogFabric, "TopologyMapper: mesh {} memoize failure at pos {}", mesh_id.get(), pos);
             return false;
         };
 
@@ -989,10 +1195,12 @@ void TopologyMapper::receive_mapping_from_host(int rank) {
 
 std::map<FabricNodeId, chip_id_t> TopologyMapper::get_local_logical_mesh_chip_id_to_physical_chip_id_mapping() const {
     std::map<FabricNodeId, chip_id_t> mapping;
-    // Only return the mapping for local logical mesh ids
-    for (const auto& asic_id :
-         physical_system_descriptor_.get_asics_connected_to_host(physical_system_descriptor_.my_host_name())) {
-        mapping[get_fabric_node_id_from_asic_id(asic_id)] = get_physical_chip_id_from_asic_id(asic_id);
+    const auto& my_host = physical_system_descriptor_.my_host_name();
+    // Only include ASICs that are part of the current fabric mapping and reside on this host
+    for (const auto& [asic_id, fabric_node_id] : asic_id_to_fabric_node_id_) {
+        if (physical_system_descriptor_.get_host_name_for_asic(asic_id) == my_host) {
+            mapping[fabric_node_id] = get_physical_chip_id_from_asic_id(asic_id);
+        }
     }
     return mapping;
 }
@@ -1122,18 +1330,26 @@ void TopologyMapper::rebuild_host_rank_structs_from_mapping() {
         auto col_index = [&](std::uint32_t c) {
             return std::distance(col_list.begin(), std::find(col_list.begin(), col_list.end(), c));
         };
-        MeshHostRankId next_rank{0};
+        // Map host -> normalized host-rank id aligned with distributed ranks for this mesh
+        std::unordered_map<HostName, std::uint32_t> host_to_rank;
+        std::uint32_t base_rank = std::numeric_limits<std::uint32_t>::max();
+        for (const auto& [host, _] : range_map) {
+            std::uint32_t rank = physical_system_descriptor_.get_rank_for_hostname(host);
+            host_to_rank[host] = rank;
+            base_rank = std::min(base_rank, rank);
+        }
         for (std::uint32_t r : row_list) {
             for (std::uint32_t c : col_list) {
                 // find host whose range starts at (r,c)
                 for (const auto& [host, range] : range_map) {
                     if (range.start_coord()[0] == r && range.start_coord()[1] == c) {
                         std::size_t idx = (row_index(r) * host_grid_shape[1]) + col_index(c);
+                        std::uint32_t norm_rank = host_to_rank[host] - base_rank;
+                        MeshHostRankId host_rank_val{norm_rank};
                         if (idx < host_rank_values.size()) {
-                            host_rank_values[idx] = next_rank;
+                            host_rank_values[idx] = host_rank_val;
                         }
-                        mesh_host_rank_coord_ranges_.insert({{mesh_id, next_rank}, range});
-                        next_rank = MeshHostRankId{*next_rank + 1};
+                        mesh_host_rank_coord_ranges_.insert({{mesh_id, host_rank_val}, range});
                         break;
                     }
                 }
