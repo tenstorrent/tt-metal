@@ -68,7 +68,8 @@ class TtGemmaImageAttention(LightweightModule):
         assert self.n_kv_heads % configuration.num_devices == 0
 
         # Pad head_dim to multiple of 32
-        def pad_head_dim(weight, heads_out=True):
+        def pad_head_dim(weight, heads_out=False):
+            return weight
             # Pad head dim to multiple of 32
             # heads_out means that the output dim of this weight contains heads.
             dim = weight.shape[1]
@@ -76,14 +77,10 @@ class TtGemmaImageAttention(LightweightModule):
             padded_head_dim = nearest_32(self.head_dim)
             padding_size = padded_head_dim - self.head_dim
             if padding_size > 0:
-                if heads_out:
-                    weight = weight.transpose(-1, -2)
                 weight = weight.reshape(dim, self.n_heads, self.head_dim)
                 padding = torch.zeros(dim, self.n_heads, padding_size, dtype=weight.dtype)
                 weight = torch.cat([weight, padding], dim=-1)
                 weight = weight.reshape(dim, self.n_heads * padded_head_dim)
-                if heads_out:
-                    weight = weight.transpose(-1, -2)
             return weight
 
         wq_padded = pad_head_dim(self.state_dict[wq_str])
@@ -147,6 +144,7 @@ class TtGemmaImageAttention(LightweightModule):
         if bq_str in self.state_dict:
 
             def pad_head_dim_bias(bias):
+                return bias
                 # Pad 1D bias to match padded head dim
                 dim = bias.shape[0]
                 assert (
@@ -323,6 +321,12 @@ class TtGemmaImageAttention(LightweightModule):
             ))
         """
 
+        # print('a')
+        k = attn_output_11SH.shape[-2]
+        attn_output_11SH = attn_output_11SH.reshape((-1, self.n_heads, nearest_32(self.head_dim)))[
+            :, :, : self.head_dim
+        ]
+        attn_output_11SH = attn_output_11SH.reshape((1, 1, k, -1))
         output_11SH = ttnn.linear(
             attn_output_11SH,
             self.wo,
