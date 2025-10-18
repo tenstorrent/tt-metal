@@ -59,6 +59,28 @@ def _read_symbol_value(elf_obj: ParsedElfFile, symbol: str, mem_access: MemoryAc
         return None
 
 
+<<<<<<< HEAD
+=======
+def _get_mem_reader(location: OnChipCoordinate, risc_name: str):
+    """Get a mem_reader for the given RISC at the location, falling back to default if needed."""
+    try:
+        return ELF.get_mem_reader(location, risc_name)
+    except Exception:
+        return ELF.get_mem_reader(location)
+
+
+# Try to get core info for this specific location using the given method name
+def get_core_info(inspector_data: InspectorData, vc: VirtualCore, method_name: str):
+    core_info = None
+    try:
+        result = getattr(inspector_data, method_name)(vc)
+        core_info = result.info
+    except Exception:
+        pass
+    return core_info
+
+
+>>>>>>> 23bcf8b710 (refactor(inspector): deduplicate core info RPC methods and fix map access)
 def read_wait_globals(
     location: OnChipCoordinate,
     risc_name: str,
@@ -140,8 +162,7 @@ def read_wait_globals(
     if dispatcher_core_data.kernel_name == "cq_dispatch_subordinate":
         dispatch_core_info = dispatch_s_core_info
 
-    # If there are no values and no dispatch/prefetch core info, return None
-    # All three should be None if the core is not a dispatch/dispatch_s/prefetch core
+    # If there are no values and no dispatch/dispatch_s/prefetch core info, return None
     if not has_values and not any([dispatch_core_info, dispatch_s_core_info, prefetch_core_info]):
         return None
 
