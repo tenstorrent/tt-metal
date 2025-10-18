@@ -778,6 +778,8 @@ jobs:
             done
           fi
 
+          echo "DEBUG generate-comment: Final TEAM_MEMBERS='$TEAM_MEMBERS'"
+
           # Collect pending and approved groups separately
           PENDING_GROUPS=""
           APPROVED_GROUPS=""
@@ -787,20 +789,36 @@ jobs:
           # Display teams with member information and approval status
           if [ -n "$TEAMS" ]; then
             # Teams are now in format: "@team1:files1@@@team2:files2"
+            echo "DEBUG generate-comment: TEAMS='$TEAMS'"
             IFS='@@@' read -ra TEAM_ARRAY <<< "$TEAMS"
+            echo "DEBUG generate-comment: Split into ${#TEAM_ARRAY[@]} team entries"
             for team_entry in "${TEAM_ARRAY[@]}"; do
+              echo "DEBUG generate-comment: Processing team_entry='$team_entry'"
+              # Skip empty entries
+              [ -z "$team_entry" ] && continue
+
               # Extract team and files from team:files format
               team=$(echo "$team_entry" | cut -d':' -f1)
+              echo "DEBUG generate-comment: Extracted team='$team'"
+
+              # Skip if team name is empty
+              if [ -z "$team" ]; then
+                echo "DEBUG generate-comment: Skipping empty team name"
+                continue
+              fi
+
               # Get everything after first colon as files (in case there are colons in file paths)
               team_files=$(echo "$team_entry" | cut -d':' -f2-)
 
               # Skip the large-changes team as requested
               if [ "$team" = "@tenstorrent/metalium-codeowners-large-changes" ]; then
+                echo "DEBUG generate-comment: Skipping large-changes team"
                 continue
               fi
 
               # Remove @ prefix for display
               clean_team=$(echo "$team" | sed 's/^@//')
+              echo "DEBUG generate-comment: clean_team='$clean_team'"
 
               # Get team members
               team_members_info=""
@@ -808,12 +826,15 @@ jobs:
 
               # Check team members against approved reviewers
               if [ -n "$TEAM_MEMBERS" ]; then
+                echo "DEBUG generate-comment: TEAM_MEMBERS data available, looking for $team"
                 # Find this team's members (extract just this team's entry)
                 team_members_entry=$(echo "$TEAM_MEMBERS" | tr '|' '\n' | grep "^$team:" | head -1)
+                echo "DEBUG generate-comment: Found team_members_entry='$team_members_entry'"
                 if [ -n "$team_members_entry" ]; then
                   team_owners=$(echo "$team_members_entry" | cut -d':' -f2)
+                  echo "DEBUG generate-comment: team_owners='$team_owners'"
 
-                    if [ "$team_owners" = "insufficient-permissions" ]; then
+                  if [ "$team_owners" = "insufficient-permissions" ]; then
                       # Token doesn't have permission to read team members
                       team_members_info="Members: (insufficient token permissions)"
                     elif [ "$team_owners" = "team-not-found" ]; then
@@ -869,7 +890,15 @@ jobs:
                         fi
                       done
                     fi
+                  else
+                    # No team_members_entry found - team data wasn't fetched
+                    echo "DEBUG generate-comment: Setting team not found message"
+                    team_members_info="Members: (team not found)"
                   fi
+                else
+                  # TEAM_MEMBERS variable is empty
+                  echo "DEBUG generate-comment: TEAM_MEMBERS variable is empty"
+                  team_members_info="Members: (no team data)"
                 fi
 
                 # Create collapsible file list for this team
