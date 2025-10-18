@@ -37,7 +37,7 @@ run_qwen25_vl_perfunc() {
   # Qwen2.5-VL-3B-Instruct
   qwen25_vl_3b=Qwen/Qwen2.5-VL-3B-Instruct
   # Qwen2.5-VL-7B-Instruct
-  qwen25_vl_7b=Qwen/Qwen2.5-VL-7B-Instruct/
+  qwen25_vl_7b=Qwen/Qwen2.5-VL-7B-Instruct
 
   # simple generation-accuracy tests for qwen25_vl_3b
   MESH_DEVICE=N300 HF_MODEL=$qwen25_vl_3b TT_CACHE_PATH=$TT_CACHE_HOME/$qwen25_vl_3b pytest -n auto models/demos/qwen25_vl/demo/combined.py -k tt_vision --timeout 1200 || fail=1
