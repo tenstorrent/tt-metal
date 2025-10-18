@@ -476,7 +476,7 @@ TEST_F(MeshDeviceFixture, VerifyLogicalToVirtualMap) {
 }
 
 // Test to ensure writing from 16B aligned L1 address to 16B aligned pinned memory works using MeshDevice
-TEST_F(UnitMeshCQSingleCardFixture, MeshL1ToPinnedMemoryAt16BAlignedAddress) {
+TEST_F(MeshDeviceFixture, MeshL1ToPinnedMemoryAt16BAlignedAddress) {
     using tt::tt_metal::distributed::EnqueueMeshWorkload;
     using tt::tt_metal::distributed::MeshCoordinate;
     using tt::tt_metal::distributed::MeshCoordinateRange;
