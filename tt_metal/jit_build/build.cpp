@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -33,7 +34,9 @@
 #include "profiler_state.hpp"
 #include "tt_cluster.hpp"
 #include "tt_metal/llrt/tt_elffile.hpp"
+#include "tt_stl/reflection.hpp"
 #include <umd/device/types/arch.hpp>
+#include <unordered_map>
 
 namespace fs = std::filesystem;
 
@@ -170,6 +173,7 @@ void JitBuildEnv::init(
 
     this->cflags_ = common_flags;
     this->cflags_ +=
+        "-MMD "
         "-fno-use-cxa-atexit "
         "-Wall -Werror -Wno-unknown-pragmas "
         "-Wno-deprecated-declarations "
@@ -379,6 +383,110 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
     }
 }
 
+namespace {
+
+uint64_t hash_file_contents(std::string_view out_dir, const std::string& file_path) {
+    std::filesystem::path path{file_path};
+    std::hash<std::string> hasher;
+    if (!path.is_absolute()) {
+        path = std::filesystem::path{out_dir} / path;
+    }
+    std::ifstream file{path, std::ios::binary};
+    if (!file.is_open()) {
+        TT_THROW("file {} not found", path);
+    }
+    std::string contents((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+    return hasher(contents);
+}
+
+std::unordered_map<std::string, uint64_t> dependency_hash(std::string_view out_dir, std::string_view depend_file) {
+    std::ifstream file{std::string(depend_file)};
+    if (!file.is_open()) {
+        log_info(tt::LogBuildKernels, "depend file {} not found", depend_file);
+        return {};
+    }
+    enum class ParseState { FileName, Dependency };
+    ParseState parse_state = ParseState::FileName;
+    uint64_t* current_file_hash = nullptr;
+    std::unordered_map<std::string, uint64_t> file_to_hash;
+    std::string line;
+    while (std::getline(file, line)) {
+        // std::cerr << "line: " << line << std::endl;
+    again:
+        switch (parse_state) {
+            case ParseState::FileName: {
+                auto colon_pos = line.find(':');
+                if (colon_pos == std::string::npos) {
+                    TT_THROW("couldn't find colon after filename");
+                }
+                std::string file = line.substr(0, colon_pos);
+                uint64_t hash = 0;
+                current_file_hash = &file_to_hash[std::move(file)];
+                *current_file_hash = hash;
+                line = line.substr(colon_pos + 1);
+                parse_state = ParseState::Dependency;
+                goto again;
+            }
+            case ParseState::Dependency:
+                // Extract the dependency
+                for (;;) {
+                    line.erase(0, line.find_first_not_of(" \t"));
+                    if (line.empty()) {
+                        // end of dependencies
+                        parse_state = ParseState::FileName;
+                        break;
+                    }
+                    if (line == "\\") {
+                        break;
+                    }
+                    auto end_of_depend_file = line.find_first_of(" \t\\");
+                    auto depend_file = line.substr(0, end_of_depend_file);
+                    // Hash the dependency file
+                    uint64_t depend_file_hash = hash_file_contents(out_dir, depend_file);
+                    ttsl::hash::hash_combine(*current_file_hash, depend_file_hash);
+                    if (end_of_depend_file == std::string::npos) {
+                        // end of dependencies
+                        parse_state = ParseState::FileName;
+                        break;
+                    }
+                    line = line.substr(end_of_depend_file);
+                }
+                break;
+        }
+    }
+    return file_to_hash;
+}
+
+bool check_compile_needed(std::string_view out_dir, std::string_view obj) {
+    auto base_name = obj.substr(0, obj.find_last_of('.'));
+    std::string depend_file = fmt::format("{}{}.d", out_dir, base_name);
+    std::string hash_file = fmt::format("{}{}.hash", out_dir, base_name);
+    auto dependency_hashes = dependency_hash(out_dir, depend_file);
+
+    std::ifstream file{hash_file};
+    uint64_t hash{};
+    if (file.is_open()) {
+        file >> std::hex >> hash;
+        auto iter = dependency_hashes.find(std::string(obj));
+        if (iter == dependency_hashes.end()) {
+            log_debug(tt::LogBuildKernels, "object {} not found in depend file {}", obj, depend_file);
+            return true;
+        }
+        if (iter->second == hash) {
+            log_debug(tt::LogBuildKernels, "object {} is up to date", obj);
+            return false;
+        } else {
+            log_debug(tt::LogBuildKernels, "object {} is out of date", obj);
+            return true;
+        }
+    } else {
+        log_debug(tt::LogBuildKernels, "hash file {} not found", hash_file);
+        return true;
+    }
+}
+
+}  // namespace
+
 void JitBuildState::compile_one(
     const string& log_file,
     const string& out_dir,
@@ -388,6 +496,9 @@ void JitBuildState::compile_one(
     // ZoneScoped;
     fs::create_directories(out_dir);
 
+    if (!check_compile_needed(out_dir, obj)) {
+        return;
+    }
     string cmd{"cd " + out_dir + " && " + env_.gpp_};
     string defines = this->defines_;
 
@@ -450,6 +561,19 @@ void JitBuildState::compile_one(
 
     if (!tt::jit_build::utils::run_command(cmd, log_file, false)) {
         build_failure(this->target_name_, "compile", cmd, log_file);
+    } else {
+        // On successful compilation, write out the dependency hash file
+        auto base_name = obj.substr(0, obj.find_last_of('.'));
+        std::string depend_file = fmt::format("{}{}.d", out_dir, base_name);
+        std::string hash_file = fmt::format("{}{}.hash", out_dir, base_name);
+        auto dependency_hashes = dependency_hash(out_dir, depend_file);
+        auto iter = dependency_hashes.find(obj);
+        if (iter == dependency_hashes.end()) {
+            log_critical(tt::LogBuildKernels, "object {} not found in depend file {}", obj, depend_file);
+        } else {
+            std::ofstream file{hash_file};
+            file << std::hex << iter->second;
+        }
     }
 }
 
