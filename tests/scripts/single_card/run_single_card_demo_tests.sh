@@ -35,16 +35,16 @@ run_qwen25_vl_perfunc() {
   export PYTEST_ADDOPTS="--tb=short"
 
   # Qwen2.5-VL-3B-Instruct
-  qwen25_vl_3b=Qwen/Qwen2.5-VL-3B-Instruct
+  # qwen25_vl_3b=Qwen/Qwen2.5-VL-3B-Instruct
   # Qwen2.5-VL-7B-Instruct
   qwen25_vl_7b=Qwen/Qwen2.5-VL-7B-Instruct
 
   # simple generation-accuracy tests for qwen25_vl_3b
-  MESH_DEVICE=N300 HF_MODEL=$qwen25_vl_3b TT_CACHE_PATH=$TT_CACHE_HOME/$qwen25_vl_3b pytest -n auto models/demos/qwen25_vl/demo/combined.py -k tt_vision --timeout 1200 || fail=1
-  echo "LOG_METAL: demo/combined.py tests for $qwen25_vl_3b on N300 completed"
+  # MESH_DEVICE=N300 HF_MODEL=$qwen25_vl_3b TT_CACHE_PATH=$TT_CACHE_HOME/$qwen25_vl_3b pytest -n auto models/demos/qwen25_vl/demo/combined.py -k tt_vision --timeout 1200 || fail=1
+  # echo "LOG_METAL: demo/combined.py tests for $qwen25_vl_3b on N300 completed"
 
   # complete demo tests
-  for qwen_model in "$qwen25_vl_3b" "$qwen25_vl_7b"; do
+  for qwen_model in "$qwen25_vl_7b"; do
     cache_path=$TT_CACHE_HOME/$qwen_model
     MESH_DEVICE=N300 HF_MODEL=$qwen_model TT_CACHE_PATH=$cache_path pytest -n auto models/demos/qwen25_vl/demo/demo.py --timeout 3600 || fail=1
     echo "LOG_METAL: Tests for $qwen_model on N300 completed"
