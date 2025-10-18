@@ -918,10 +918,12 @@ jobs:
                 # Skip empty groups
                 [ -z "$pattern_group" ] && continue
 
-                # Split pattern:owners:files
-                pattern=$(echo "$pattern_group" | cut -d':' -f1)
-                owners=$(echo "$pattern_group" | cut -d':' -f2)
-                files=$(echo "$pattern_group" | cut -d':' -f3)
+                # Split pattern:owners:files - use robust parsing to handle colons in patterns
+                # Split on last colon to separate files, then split remaining on first colon to separate pattern from owners
+                files=$(echo "$pattern_group" | rev | cut -d':' -f1 | rev)
+                pattern_and_owners=$(echo "$pattern_group" | rev | cut -d':' -f2- | rev)
+                pattern=$(echo "$pattern_and_owners" | cut -d':' -f1)
+                owners=$(echo "$pattern_and_owners" | cut -d':' -f2-)
 
                 # Parse owners - each is username|full_name
                 all_owners=""
@@ -1716,8 +1718,12 @@ jobs:
             IFS='@@@' read -ra PATTERN_GROUPS <<< "$INDIVIDUALS"
             for pattern_group in "${PATTERN_GROUPS[@]}"; do
               [ -z "$pattern_group" ] && continue
-              pattern=$(echo "$pattern_group" | cut -d':' -f1)
-              owners=$(echo "$pattern_group" | cut -d':' -f2)
+              # Parse pattern:owners:files format - extract owners (second to second-last colon section)
+              # Split on last colon to separate files, then split remaining on first colon to separate pattern from owners
+              files_part=$(echo "$pattern_group" | rev | cut -d':' -f1 | rev)
+              pattern_and_owners=$(echo "$pattern_group" | rev | cut -d':' -f2- | rev)
+              pattern=$(echo "$pattern_and_owners" | cut -d':' -f1)
+              owners=$(echo "$pattern_and_owners" | cut -d':' -f2-)
               IFS=',' read -ra OWNERS_ARRAY <<< "$owners"
 
               # Check if any owner in this pattern has approved
