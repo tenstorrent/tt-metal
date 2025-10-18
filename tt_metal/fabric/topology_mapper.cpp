@@ -206,14 +206,10 @@ void TopologyMapper::build_mapping() {
 
     // Only 1 host builds the mapping the rest will wait and use the mapping from the 1st host
     if (*tt::tt_metal::MetalContext::instance().global_distributed_context().rank() == 0) {
-        // Find corners per host: map<host, set<AsicID>>
-        auto host_corners_map = build_host_corner_mappings();
+        auto adjacency_map_logical = build_adjacency_map_logical(mesh_id_host_names);
+        auto adjacency_map_physical = build_adjacency_map_physical(mesh_id_host_names);
 
-        // Locate mesh corners per mesh
-        auto mesh_corners_map = build_mesh_corners_mappings(host_corners_map, mesh_id_host_names);
-
-        // Populate fabric_node_id_to_asic_id mapping for each mesh
-        populate_fabric_node_id_to_asic_id_mappings(mesh_corners_map, mesh_id_host_names);
+        populate_fabric_node_id_to_asic_id_mappings(adjacency_map_physical, adjacency_map_logical);
 
         // Broadcast the mapping to all hosts
         broadcast_mapping_to_all_hosts();
@@ -286,6 +282,61 @@ std::unordered_map<MeshId, std::unordered_set<HostName>> TopologyMapper::build_c
     }
 
     return mesh_id_to_hosts;
+}
+
+std::unordered_map<MeshId, LogicalAdjacencyMap> TopologyMapper::build_adjacency_map_logical(
+    HostMeshMapping& mesh_id_to_host_names) const {
+    std::unordered_map<MeshId, LogicalAdjacencyMap> adjacency_map;
+
+    auto get_local_adjacents = [&](tt::tt_fabric::FabricNodeId fabric_node_id, MeshId mesh_id) {
+        auto adjacent_map = mesh_graph_.get_intra_mesh_connectivity()[*mesh_id][fabric_node_id.chip_id];
+
+        std::vector<tt::tt_fabric::FabricNodeId> adjacents;
+        for (const auto& [neighbor_chip_id, edge] : adjacent_map) {
+            adjacents.push_back(tt::tt_fabric::FabricNodeId(mesh_id, neighbor_chip_id));
+        }
+        return adjacents;
+    };
+
+    for (const auto& [mesh_id, _] : mesh_id_to_host_names) {
+        LogicalAdjacencyMap logical_adjacency_map;
+        for (const auto& [_, chip_id] : mesh_graph_.get_chip_ids(mesh_id)) {
+            auto fabric_node_id = tt::tt_fabric::FabricNodeId(mesh_id, chip_id);
+            logical_adjacency_map[fabric_node_id] = get_local_adjacents(fabric_node_id, mesh_id);
+        }
+        adjacency_map[mesh_id] = logical_adjacency_map;
+    }
+
+    return adjacency_map;
+}
+
+std::unordered_map<MeshId, PhysicalAdjacencyMap> TopologyMapper::build_adjacency_map_physical(
+    HostMeshMapping& mesh_id_to_host_names) const {
+    std::unordered_map<MeshId, PhysicalAdjacencyMap> adjacency_map;
+
+    auto get_local_adjacents =
+        [&](tt::tt_metal::AsicID asic_id, MeshId mesh_id, const std::unordered_set<HostName>& mesh_hostnames) {
+            std::vector<tt::tt_metal::AsicID> adjacents;
+            for (const auto& neighbor : physical_system_descriptor_.get_asic_neighbors(asic_id)) {
+                // Make sure that the neighbor is in the mesh
+                if (mesh_hostnames.contains(physical_system_descriptor_.get_host_name_for_asic(neighbor))) {
+                    adjacents.push_back(neighbor);
+                }
+            }
+            return adjacents;
+        };
+
+    for (const auto& [mesh_id, mesh_hostnames] : mesh_id_to_host_names) {
+        PhysicalAdjacencyMap physical_adjacency_map;
+        for (const auto& host_name : mesh_hostnames) {
+            for (const auto& asic_id : physical_system_descriptor_.get_asics_connected_to_host(host_name)) {
+                physical_adjacency_map[asic_id] = get_local_adjacents(asic_id, mesh_id, mesh_hostnames);
+            }
+        }
+        adjacency_map[mesh_id] = physical_adjacency_map;
+    }
+
+    return adjacency_map;
 }
 
 std::unordered_map<std::string, std::unordered_set<tt::tt_metal::AsicID>> TopologyMapper::build_host_corner_mappings()
@@ -480,6 +531,127 @@ std::unordered_map<MeshId, std::unordered_set<tt::tt_metal::AsicID>> TopologyMap
     }
 
     return mesh_corner_map;
+}
+
+void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
+    const std::unordered_map<MeshId, PhysicalAdjacencyMap>& adjacency_map_physical,
+    const std::unordered_map<MeshId, LogicalAdjacencyMap>& adjacency_map_logical) {
+    for (const auto& [mesh_id, log_adj] : adjacency_map_logical) {
+        auto& phys_adj = adjacency_map_physical.at(mesh_id);
+
+        std::vector<FabricNodeId> log_nodes;
+        for (const auto& p : log_adj) {
+            log_nodes.push_back(p.first);
+        }
+
+        std::vector<tt::tt_metal::AsicID> phys_nodes;
+        for (const auto& p : phys_adj) {
+            phys_nodes.push_back(p.first);
+        }
+
+        size_t n_log = log_nodes.size();
+        size_t n_phys = phys_nodes.size();
+
+        TT_FATAL(
+            n_log <= n_phys,
+            "Graph specified in MGD is larger than the discovered physical topology for mesh {}, please modify your "
+            "MGD or use ./build/test/tt_metal/tt_fabric/test_system_health to check if all chips are connected",
+            mesh_id.get());
+
+        std::unordered_map<FabricNodeId, size_t> log_to_idx;
+        for (size_t i = 0; i < n_log; ++i) {
+            log_to_idx[log_nodes[i]] = i;
+        }
+
+        std::vector<std::vector<size_t>> log_adj_idx(n_log);
+        for (size_t i = 0; i < n_log; ++i) {
+            for (const auto& neigh : log_adj.at(log_nodes[i])) {
+                log_adj_idx[i].push_back(log_to_idx.at(neigh));
+            }
+            std::sort(log_adj_idx[i].begin(), log_adj_idx[i].end());
+        }
+
+        std::unordered_map<tt::tt_metal::AsicID, size_t> phys_to_idx;
+        for (size_t i = 0; i < n_phys; ++i) {
+            phys_to_idx[phys_nodes[i]] = i;
+        }
+
+        std::vector<std::vector<size_t>> phys_adj_idx(n_phys);
+        for (size_t i = 0; i < n_phys; ++i) {
+            for (const auto& neigh : phys_adj.at(phys_nodes[i])) {
+                auto it = phys_to_idx.find(neigh);
+                if (it != phys_to_idx.end()) {
+                    phys_adj_idx[i].push_back(it->second);
+                }
+            }
+            std::sort(phys_adj_idx[i].begin(), phys_adj_idx[i].end());
+        }
+
+        std::vector<int> mapping(n_log, -1);
+        std::vector<bool> used(n_phys, false);
+
+        std::function<bool(size_t)> dfs = [&](size_t pos) -> bool {
+            if (pos == n_log) {
+                for (size_t i = 0; i < n_log; ++i) {
+                    size_t pi = mapping[i];
+                    std::vector<size_t> mapped_neighs;
+                    for (size_t pk : phys_adj_idx[pi]) {
+                        auto it = std::find(mapping.begin(), mapping.end(), static_cast<int>(pk));
+                        if (it != mapping.end()) {
+                            size_t log_k = std::distance(mapping.begin(), it);
+                            mapped_neighs.push_back(log_k);
+                        }
+                    }
+                    std::sort(mapped_neighs.begin(), mapped_neighs.end());
+                    if (mapped_neighs != log_adj_idx[i]) {
+                        return false;
+                    }
+                }
+                return true;
+            }
+
+            for (size_t j = 0; j < n_phys; ++j) {
+                if (!used[j] && phys_adj_idx[j].size() >= log_adj_idx[pos].size()) {
+                    bool ok = true;
+                    for (size_t prev = 0; prev < pos; ++prev) {
+                        size_t p_prev = mapping[prev];
+                        bool log_connected = std::binary_search(log_adj_idx[pos].begin(), log_adj_idx[pos].end(), prev);
+                        bool phys_connected =
+                            std::binary_search(phys_adj_idx[j].begin(), phys_adj_idx[j].end(), p_prev);
+                        if (log_connected != phys_connected) {
+                            ok = false;
+                            break;
+                        }
+                    }
+                    if (!ok) {
+                        continue;
+                    }
+
+                    used[j] = true;
+                    mapping[pos] = static_cast<int>(j);
+                    if (dfs(pos + 1)) {
+                        return true;
+                    }
+                    used[j] = false;
+                }
+            }
+            return false;
+        };
+
+        bool found = dfs(0);
+        TT_FATAL(
+            found,
+            "Graph specified in MGD could not fit in the discovered physical topology for mesh {}, please modify your "
+            "MGD or use ./build/test/tt_metal/tt_fabric/test_system_health to check if all chips are connected",
+            mesh_id.get());
+
+        for (size_t i = 0; i < n_log; ++i) {
+            FabricNodeId fn = log_nodes[i];
+            tt::tt_metal::AsicID asic = phys_nodes[mapping[i]];
+            fabric_node_id_to_asic_id_.emplace(fn, asic);
+            asic_id_to_fabric_node_id_.emplace(asic, fn);
+        }
+    }
 }
 
 void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(

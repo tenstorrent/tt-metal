@@ -35,6 +35,10 @@ struct LocalMeshBinding;
  * The mapping is based on the mesh IDs and fabric chip IDs from the mesh_container and maps
  * them to the ASIC IDs of the physical descriptor.
  */
+
+using HostMeshMapping = std::unordered_map<MeshId, std::unordered_set<HostName>>;
+using LogicalAdjacencyMap = std::unordered_map<tt::tt_fabric::FabricNodeId, std::vector<tt::tt_fabric::FabricNodeId>>;
+using PhysicalAdjacencyMap = std::unordered_map<tt::tt_metal::AsicID, std::vector<tt::tt_metal::AsicID>>;
 class TopologyMapper {
 public:
     /**
@@ -188,7 +192,7 @@ private:
      * to the ASIC IDs of the physical descriptor. Uses MPI through distributed context
      * to gather the mappings from all ranks.
      */
-    std::unordered_map<MeshId, std::unordered_set<HostName>> build_cross_host_mesh_mappings();
+    HostMeshMapping build_cross_host_mesh_mappings();
 
     /**
      * @brief Build the mapping between host names and corner ASIC IDs
@@ -198,6 +202,16 @@ private:
      * to the host names and corner ASIC IDs.
      */
     std::unordered_map<std::string, std::unordered_set<tt::tt_metal::AsicID>> build_host_corner_mappings() const;
+
+    std::unordered_map<MeshId, LogicalAdjacencyMap> build_adjacency_map_logical(
+        HostMeshMapping& mesh_id_to_host_names) const;
+
+    std::unordered_map<MeshId, PhysicalAdjacencyMap> build_adjacency_map_physical(
+        HostMeshMapping& mesh_id_to_host_names) const;
+
+    void populate_fabric_node_id_to_asic_id_mappings(
+        const std::unordered_map<MeshId, PhysicalAdjacencyMap>& adjacency_map_physical,
+        const std::unordered_map<MeshId, LogicalAdjacencyMap>& adjacency_map_logical);
 
     /**
      * @brief Build the mapping between mesh IDs and corner ASIC IDs
