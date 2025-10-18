@@ -30,7 +30,7 @@ ttnn::Tensor ExecuteScaledDotProductAttention::invoke(
             ? input_tensor_q.device()->arch()
             : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
     auto kernel_config_val = init_device_compute_kernel_config(
-        input_tensor_q.device()->arch(), compute_kernel_config, MathFidelity::HiFi2, true, false, false);
+        input_tensor_q.device()->arch(), compute_kernel_config, MathFidelity::HiFi2, false, true, false);
 
     return tt::tt_metal::operation::run(
                ScaledDotProductAttention{
@@ -62,7 +62,7 @@ ttnn::Tensor ExecuteChunkedScaledDotProductAttention::invoke(
             ? input_tensor_q.device()->arch()
             : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
     auto kernel_config_val = init_device_compute_kernel_config(
-        input_tensor_q.device()->arch(), compute_kernel_config, MathFidelity::HiFi2, true, false, false);
+        input_tensor_q.device()->arch(), compute_kernel_config, MathFidelity::HiFi2, false, true, false);
 
     return tt::tt_metal::operation::run(
                ScaledDotProductAttention{
@@ -95,7 +95,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ExecuteJointAttention::invoke(
             ? input_tensor_q.device()->arch()
             : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
     auto kernel_config_val = init_device_compute_kernel_config(
-        input_tensor_q.device()->arch(), compute_kernel_config, MathFidelity::HiFi2, true, false, false);
+        input_tensor_q.device()->arch(), compute_kernel_config, MathFidelity::HiFi2, false, true, false);
 
     auto results = tt::tt_metal::operation::run(
         JointScaledDotProductAttention{
@@ -138,7 +138,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteRingJointAttention::
             ? input_tensor_q.device()->arch()
             : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
     auto kernel_config_val = init_device_compute_kernel_config(
-        input_tensor_q.device()->arch(), compute_kernel_config, MathFidelity::HiFi2, true, false, false);
+        input_tensor_q.device()->arch(), compute_kernel_config, MathFidelity::HiFi2, false, true, false);
 
     /**
      * Create RingAttentionAllGatherAsync struct.
@@ -214,7 +214,7 @@ ttnn::Tensor ExecuteFlashMLAPrefill::invoke(
             ? input_tensor_q.device()->arch()
             : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
     auto kernel_config_val = init_device_compute_kernel_config(
-        input_tensor_q.device()->arch(), compute_kernel_config, MathFidelity::HiFi2, true, false, false);
+        input_tensor_q.device()->arch(), compute_kernel_config, MathFidelity::HiFi2, false, true, false);
 
     return tt::tt_metal::operation::run(
                ScaledDotProductAttention{
@@ -247,7 +247,7 @@ ttnn::Tensor ExecuteChunkedFlashMLAPrefill::invoke(
             ? input_tensor_q.device()->arch()
             : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
     auto kernel_config_val = init_device_compute_kernel_config(
-        input_tensor_q.device()->arch(), compute_kernel_config, MathFidelity::HiFi2, true, false, false);
+        input_tensor_q.device()->arch(), compute_kernel_config, MathFidelity::HiFi2, false, true, false);
 
     return tt::tt_metal::operation::run(
                ScaledDotProductAttention{

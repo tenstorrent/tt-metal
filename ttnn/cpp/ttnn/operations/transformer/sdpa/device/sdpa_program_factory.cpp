@@ -163,8 +163,8 @@ operation::ProgramWithCallbacks sdpa_multi_core(
                                                      : device->compute_with_storage_grid_size();
     bool exp_approx_mode =
         program_config.has_value()
-            ? (program_config->exp_approx_mode.has_value() ? program_config->exp_approx_mode.value() : true)
-            : true;
+            ? (program_config->exp_approx_mode.has_value() ? program_config->exp_approx_mode.value() : false)
+            : false;
 
     auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
     uint32_t num_cores = grid_size.x * grid_size.y;
@@ -468,7 +468,7 @@ operation::ProgramWithCallbacks sdpa_multi_core(
     tt::DataFormat scalar_df = tt::DataFormat::Float16_b;
     tt::DataFormat im_df = tt::DataFormat::Float16_b;  // need to disable fp32 cbs (Issue #13364) fp32_dest_acc_en ?
                                                        // tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
-    tt::DataFormat stats_df = im_df;
+    tt::DataFormat stats_df = tt::DataFormat::Float16_b;
 
     uint32_t q_tile_size = tt::tile_size(q_df);
     uint32_t k_tile_size = tt::tile_size(k_df);

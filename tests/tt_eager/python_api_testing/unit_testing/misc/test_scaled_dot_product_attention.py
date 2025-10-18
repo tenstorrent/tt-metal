@@ -34,7 +34,18 @@ def fa_rand(*shape):
 
 
 def run_test_sdpa_tt(
-    device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, use_high_precision_compute=False, rmse_threshold=None
+    device,
+    b,
+    nh,
+    nkv,
+    s,
+    d,
+    q_chunk_size,
+    k_chunk_size,
+    dtype,
+    compute_kernel_config=None,
+    rmse_threshold=None,
+    PCC_threshold=0.994,
 ):
     torch.manual_seed(1234)
 
@@ -42,23 +53,8 @@ def run_test_sdpa_tt(
         compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
         q_chunk_size=q_chunk_size,
         k_chunk_size=k_chunk_size,
-        exp_approx_mode=True,
+        exp_approx_mode=False,
     )
-
-    if use_high_precision_compute:
-        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=False,
-        )
-    else:
-        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=True,
-            fp32_dest_acc_en=False,
-            packer_l1_acc=False,
-        )
 
     Q = fa_rand(b, nh, s, d)
     K = fa_rand(b, nkv, s, d)
@@ -78,7 +74,7 @@ def run_test_sdpa_tt(
     V_repeated = torch.cat([V[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1)  # b, nh, d, S
     gt = torch.nn.functional.scaled_dot_product_attention(Q, K_repeated, V_repeated, is_causal=True)
 
-    out_pass, out_pcc = comp_pcc(gt, tt_back, 0.994)
+    out_pass, out_pcc = comp_pcc(gt, tt_back, PCC_threshold)
     logger.debug(f"python vs pytorch: {out_pcc}")
     rmse = torch.sqrt(((gt - tt_back) ** 2).mean()).item()
     logger.debug(f"rmse: {rmse}")
@@ -89,7 +85,20 @@ def run_test_sdpa_tt(
 
 
 def run_sdpa_noncausal(
-    device, b, nh, nkv, sq, d, q_chunk_size, k_chunk_size, dtype, sk=None, use_mask=True, rmse_threshold=None
+    device,
+    b,
+    nh,
+    nkv,
+    sq,
+    d,
+    q_chunk_size,
+    k_chunk_size,
+    dtype,
+    sk=None,
+    use_mask=True,
+    compute_kernel_config=None,
+    rmse_threshold=None,
+    PCC_threshold=0.994,
 ):
     torch.manual_seed(1234)
     if sk is None:
@@ -99,14 +108,7 @@ def run_sdpa_noncausal(
         compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
         q_chunk_size=q_chunk_size,
         k_chunk_size=k_chunk_size,
-        exp_approx_mode=True,
-    )
-
-    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.HiFi2,
-        math_approx_mode=False,
-        fp32_dest_acc_en=False,
-        packer_l1_acc=False,
+        exp_approx_mode=False,
     )
 
     Q = fa_rand(b, nh, sq, d)
@@ -153,7 +155,7 @@ def run_sdpa_noncausal(
 
     gt = torch.nn.functional.scaled_dot_product_attention(Q, K, V, is_causal=False, attn_mask=mask)
 
-    out_pass, out_pcc = comp_pcc(gt, tt_back, 0.994)
+    out_pass, out_pcc = comp_pcc(gt, tt_back, PCC_threshold)
     logger.debug(f"python vs pytorch: {out_pcc}")
     rmse = torch.sqrt(((gt - tt_back) ** 2).mean()).item()
     logger.debug(f"rmse: {rmse}")
@@ -186,12 +188,27 @@ def test_sdpa_tt_padded(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dt
         pytest.skip("nkv must divide nh")
     if is_ci_env and (b == 1 or nh == 1 or s == 1 or q_chunk_size == 512 or k_chunk_size == 512):
         pytest.skip("Skipping to avoid CI timeout")
-    ttnn.device.DisablePersistentKernelCache()
+
+    MAX_RMSE = 0.0102
+    MIN_PCC = 0.9988
     if is_causal:
-        run_test_sdpa_tt(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, rmse_threshold=0.033)
+        run_test_sdpa_tt(
+            device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, rmse_threshold=MAX_RMSE, PCC_threshold=MIN_PCC
+        )
     else:
         run_sdpa_noncausal(
-            device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, use_mask=False, rmse_threshold=0.033
+            device,
+            b,
+            nh,
+            nkv,
+            s,
+            d,
+            q_chunk_size,
+            k_chunk_size,
+            dtype,
+            use_mask=False,
+            rmse_threshold=MAX_RMSE,
+            PCC_threshold=MIN_PCC,
         )
 
 
@@ -216,11 +233,20 @@ def test_sdpa_tt(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype):
         pytest.skip("just need to single test case for sanity-check bfp4")
     if (s % q_chunk_size != 0) or (s % k_chunk_size != 0):
         pytest.skip("s must be divisible by q_chunk_size and k_chunk_size")
-    if nh == 8 and q_chunk_size == 128 and k_chunk_size == 128:
-        pytest.skip("Can cause OOM if profiling is enabled.")
-    rmse_threshold = 0.0092 if (dtype == ttnn.bfloat8_b or dtype == ttnn.bfloat4_b) else 0.0093
-    ttnn.device.DisablePersistentKernelCache()
-    run_test_sdpa_tt(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, rmse_threshold=rmse_threshold)
+
+    if dtype == ttnn.bfloat4_b:
+        MAX_RMSE = 0.062
+        MIN_PCC = 0.9986
+    elif dtype == ttnn.bfloat8_b:
+        MAX_RMSE = 0.0070
+        MIN_PCC = 0.9986
+    elif dtype == ttnn.bfloat16:
+        MAX_RMSE = 0.0064
+        MIN_PCC = 0.9988
+
+    run_test_sdpa_tt(
+        device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, rmse_threshold=MAX_RMSE, PCC_threshold=MIN_PCC
+    )
 
 
 @pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
@@ -237,7 +263,7 @@ def test_sdpa_tt_small_chunks(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_si
         pytest.skip("s must be divisible by q_chunk_size and k_chunk_size")
     if nh == 8 and q_chunk_size == 128 and k_chunk_size == 128:
         pytest.skip("Can cause OOM if profiling is enabled.")
-    ttnn.device.DisablePersistentKernelCache()
+
     run_test_sdpa_tt(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype)
 
 
@@ -258,8 +284,28 @@ def test_sdpa_perf(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype):
         pytest.skip("s must be divisible by q_chunk_size and k_chunk_size")
     if nh == 8 and q_chunk_size == 128 and k_chunk_size == 128:
         pytest.skip("Can cause OOM if profiling is enabled.")
-    ttnn.device.DisablePersistentKernelCache()
-    run_sdpa_noncausal(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, use_mask=False)
+
+    perf_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+    )
+
+    run_sdpa_noncausal(
+        device,
+        b,
+        nh,
+        nkv,
+        s,
+        d,
+        q_chunk_size,
+        k_chunk_size,
+        dtype,
+        use_mask=False,
+        compute_kernel_config=perf_compute_kernel_config,
+    )
 
 
 @pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
@@ -272,12 +318,16 @@ def test_sdpa_perf(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype):
 )
 @pytest.mark.timeout(120)
 def test_sdpa_tt_large_seq(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype):
-    if (s % q_chunk_size != 0) or (s % k_chunk_size != 0):
-        pytest.skip("s must be divisible by q_chunk_size and k_chunk_size")
-    if nh == 8 and q_chunk_size == 128 and k_chunk_size == 128:
-        pytest.skip("Can cause OOM if profiling is enabled.")
-    ttnn.device.DisablePersistentKernelCache()
-    rmse_threshold = 0.0094
+    correct_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+    MAX_RMSE = 0.0094
+    MIN_PCC = 0.9992
+
     run_test_sdpa_tt(
         device,
         b,
@@ -288,8 +338,9 @@ def test_sdpa_tt_large_seq(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size,
         q_chunk_size,
         k_chunk_size,
         dtype,
-        use_high_precision_compute=True,
-        rmse_threshold=rmse_threshold,
+        rmse_threshold=MAX_RMSE,
+        PCC_threshold=MIN_PCC,
+        compute_kernel_config=correct_compute_kernel_config,
     )
 
 
@@ -361,8 +412,15 @@ def test_sdpa_noncausal(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dt
     if s > 2048 and (q_chunk_size == 128 or k_chunk_size == 128):
         pytest.skip("Bad PCC for small chunks")
     ttnn.device.DisablePersistentKernelCache()
-    rmse_threshold = 0.0069
-    run_sdpa_noncausal(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, rmse_threshold=rmse_threshold)
+    if dtype == ttnn.bfloat16:
+        MAX_RMSE = 0.0060
+        MIN_PCC = 0.9988
+    else:
+        MAX_RMSE = 0.0063
+        MIN_PCC = 0.9986
+    run_sdpa_noncausal(
+        device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, rmse_threshold=MAX_RMSE, PCC_threshold=MIN_PCC
+    )
 
 
 @pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
@@ -404,7 +462,7 @@ def run_test_chunked_sdpa(
         compute_with_storage_grid_size=grid_size or device.compute_with_storage_grid_size(),
         q_chunk_size=q_chunk_size,
         k_chunk_size=k_chunk_size,
-        exp_approx_mode=True,
+        exp_approx_mode=False,
     )
 
     if use_high_precision_compute:
@@ -415,12 +473,7 @@ def run_test_chunked_sdpa(
             packer_l1_acc=False,
         )
     else:
-        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=True,
-            fp32_dest_acc_en=False,
-            packer_l1_acc=False,
-        )
+        compute_kernel_config = None
 
     Q = fa_rand(b, nh, s, d)
     K = fa_rand(b, nkv, s, d)
@@ -625,7 +678,7 @@ def run_test_joint_sdpa(
         compute_with_storage_grid_size=grid_size or device.compute_with_storage_grid_size(),
         q_chunk_size=q_chunk_size,
         k_chunk_size=k_chunk_size,
-        exp_approx_mode=True,
+        exp_approx_mode=False,
     )
 
     if use_high_precision_compute:
@@ -636,12 +689,7 @@ def run_test_joint_sdpa(
             packer_l1_acc=False,
         )
     else:
-        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=True,
-            fp32_dest_acc_en=False,
-            packer_l1_acc=False,
-        )
+        compute_kernel_config = None
 
     Q = fa_rand(b, nh, seq_len, d)
     K = fa_rand(b, nh, seq_len, d)
