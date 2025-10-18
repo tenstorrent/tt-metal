@@ -229,6 +229,37 @@ struct tensix_fabric_connections_l1_info_t {
     fabric_aligned_connection_info_t read_write[MAX_FABRIC_ENDPOINTS];
 };
 
+enum class FSMType : uint8_t {
+    NONE = 0,
+    REMOTE_HEARTBEAT = 1,
+    REROUTE = 2,
+};
+
+enum class RemoteHeartbeatFSMState : uint8_t {
+    INVALID = 0,
+    INIT = 1,
+    WAITING_FOR_HEARTBEAT = 2,
+    COMPLETED = 3,
+};
+
+enum class RerouteFSMState : uint8_t {
+    INVALID = 0,
+    INIT = 1,
+    COMPLETED = 2,
+};
+
+struct CommonFSMLog {
+    FSMType current_fsm_type;
+    uint8_t padding_0[3];
+    uint32_t last_processed_sequence_id;
+};
+
+struct FSMLog {
+    uint8_t current_state;
+    uint8_t padding_0[3];
+    uint32_t counter;
+};
+
 }  // namespace tt::tt_fabric
 
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)

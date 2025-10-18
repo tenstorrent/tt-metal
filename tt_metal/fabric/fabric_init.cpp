@@ -455,6 +455,10 @@ std::unique_ptr<tt::tt_metal::Program> create_and_compile_tt_fabric_program(tt::
         return nullptr;
     }
 
+    for (const auto& [eth_chan, _] : edm_builders) {
+        fabric_context.initialize_router_comm_context(device->id(), eth_chan);
+    }
+
     // Compile all fabric tensix builders
     if (tt::tt_metal::MetalContext::instance().get_fabric_tensix_config() !=
         tt::tt_fabric::FabricTensixConfig::DISABLED) {

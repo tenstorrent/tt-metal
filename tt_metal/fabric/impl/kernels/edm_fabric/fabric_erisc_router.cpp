@@ -27,6 +27,8 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/fabric_bandwidth_telemetry.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/fabric_code_profiling.hpp"
 
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_control_channel.hpp"
+
 #include "noc_overlay_parameters.h"
 #include "tt_metal/hw/inc/utils/utils.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_txq_setup.h"
@@ -38,7 +40,7 @@
 #include <type_traits>
 
 using namespace tt::tt_fabric;
-
+using namespace tt::tt_fabric::control_channel;
 /*
 
 The fabric Erisc Data Mover (EDM) is a component that can be used to build *very* simple linear topology fabrics.
@@ -655,8 +657,11 @@ FORCE_INLINE bool downstreams_have_space(
         downstream_edm_interfaces_vc0,
     RouterToRouterSender<DOWNSTREAM_SENDER_NUM_BUFFERS_VC1>& downstream_edm_interface_vc1) {
     return (
-        ... && check_downstream_has_space<rx_channel_id, DOWNSTREAM_SENDER_NUM_BUFFERS_VC0, DOWNSTREAM_SENDER_NUM_BUFFERS_VC1, DIRECTIONS>(
-                   downstream_edm_interfaces_vc0, downstream_edm_interface_vc1));
+        ... && check_downstream_has_space<
+                   rx_channel_id,
+                   DOWNSTREAM_SENDER_NUM_BUFFERS_VC0,
+                   DOWNSTREAM_SENDER_NUM_BUFFERS_VC1,
+                   DIRECTIONS>(downstream_edm_interfaces_vc0, downstream_edm_interface_vc1));
 }
 
 template <uint8_t rx_channel_id, uint8_t DOWNSTREAM_SENDER_NUM_BUFFERS_VC0, uint8_t DOWNSTREAM_SENDER_NUM_BUFFERS_VC1>
@@ -675,84 +680,146 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) bool can_forward_packet_co
     switch (hop_cmd) {
         case LowLatencyMeshRoutingFields::NOOP: break;
         case LowLatencyMeshRoutingFields::FORWARD_EAST:
-            ret_val = downstreams_have_space<rx_channel_id, DOWNSTREAM_SENDER_NUM_BUFFERS_VC0, DOWNSTREAM_SENDER_NUM_BUFFERS_VC1, EAST>(
-                downstream_edm_interfaces_vc0, downstream_edm_interface_vc1);
+            ret_val = downstreams_have_space<
+                rx_channel_id,
+                DOWNSTREAM_SENDER_NUM_BUFFERS_VC0,
+                DOWNSTREAM_SENDER_NUM_BUFFERS_VC1,
+                EAST>(downstream_edm_interfaces_vc0, downstream_edm_interface_vc1);
             break;
         case LowLatencyMeshRoutingFields::FORWARD_WEST:
-            ret_val = downstreams_have_space<rx_channel_id, DOWNSTREAM_SENDER_NUM_BUFFERS_VC0, DOWNSTREAM_SENDER_NUM_BUFFERS_VC1, WEST>(
-                downstream_edm_interfaces_vc0, downstream_edm_interface_vc1);
+            ret_val = downstreams_have_space<
+                rx_channel_id,
+                DOWNSTREAM_SENDER_NUM_BUFFERS_VC0,
+                DOWNSTREAM_SENDER_NUM_BUFFERS_VC1,
+                WEST>(downstream_edm_interfaces_vc0, downstream_edm_interface_vc1);
             break;
         case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_EW:
             // Line Mcast East<->West
-            ret_val = downstreams_have_space<rx_channel_id, DOWNSTREAM_SENDER_NUM_BUFFERS_VC0, DOWNSTREAM_SENDER_NUM_BUFFERS_VC1, EAST, WEST>(
-                downstream_edm_interfaces_vc0, downstream_edm_interface_vc1);
+            ret_val = downstreams_have_space<
+                rx_channel_id,
+                DOWNSTREAM_SENDER_NUM_BUFFERS_VC0,
+                DOWNSTREAM_SENDER_NUM_BUFFERS_VC1,
+                EAST,
+                WEST>(downstream_edm_interfaces_vc0, downstream_edm_interface_vc1);
             break;
         case LowLatencyMeshRoutingFields::FORWARD_NORTH:
-            ret_val = downstreams_have_space<rx_channel_id, DOWNSTREAM_SENDER_NUM_BUFFERS_VC0, DOWNSTREAM_SENDER_NUM_BUFFERS_VC1, NORTH>(
-                downstream_edm_interfaces_vc0, downstream_edm_interface_vc1);
+            ret_val = downstreams_have_space<
+                rx_channel_id,
+                DOWNSTREAM_SENDER_NUM_BUFFERS_VC0,
+                DOWNSTREAM_SENDER_NUM_BUFFERS_VC1,
+                NORTH>(downstream_edm_interfaces_vc0, downstream_edm_interface_vc1);
             break;
         case LowLatencyMeshRoutingFields::FORWARD_SOUTH:
-            ret_val = downstreams_have_space<rx_channel_id, DOWNSTREAM_SENDER_NUM_BUFFERS_VC0, DOWNSTREAM_SENDER_NUM_BUFFERS_VC1, SOUTH>(
-                downstream_edm_interfaces_vc0, downstream_edm_interface_vc1);
+            ret_val = downstreams_have_space<
+                rx_channel_id,
+                DOWNSTREAM_SENDER_NUM_BUFFERS_VC0,
+                DOWNSTREAM_SENDER_NUM_BUFFERS_VC1,
+                SOUTH>(downstream_edm_interfaces_vc0, downstream_edm_interface_vc1);
             break;
         case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NS:
             // Line Mcast North<->South
-            ret_val = downstreams_have_space<rx_channel_id, DOWNSTREAM_SENDER_NUM_BUFFERS_VC0, DOWNSTREAM_SENDER_NUM_BUFFERS_VC1, NORTH, SOUTH>(
-                downstream_edm_interfaces_vc0, downstream_edm_interface_vc1);
+            ret_val = downstreams_have_space<
+                rx_channel_id,
+                DOWNSTREAM_SENDER_NUM_BUFFERS_VC0,
+                DOWNSTREAM_SENDER_NUM_BUFFERS_VC1,
+                NORTH,
+                SOUTH>(downstream_edm_interfaces_vc0, downstream_edm_interface_vc1);
             break;
         case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NSEW:
             // 2D Mcast Trunk: North<->South
             // 2D Mcast Branch: East and West
-            ret_val = downstreams_have_space<rx_channel_id, DOWNSTREAM_SENDER_NUM_BUFFERS_VC0, DOWNSTREAM_SENDER_NUM_BUFFERS_VC1, EAST, WEST, NORTH, SOUTH>(
-                downstream_edm_interfaces_vc0, downstream_edm_interface_vc1);
+            ret_val = downstreams_have_space<
+                rx_channel_id,
+                DOWNSTREAM_SENDER_NUM_BUFFERS_VC0,
+                DOWNSTREAM_SENDER_NUM_BUFFERS_VC1,
+                EAST,
+                WEST,
+                NORTH,
+                SOUTH>(downstream_edm_interfaces_vc0, downstream_edm_interface_vc1);
             break;
         case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NSE:
             // 2D Mcast Trunk: North<->South
             // 2D Mcast Branch: East
-            ret_val = downstreams_have_space<rx_channel_id, DOWNSTREAM_SENDER_NUM_BUFFERS_VC0, DOWNSTREAM_SENDER_NUM_BUFFERS_VC1, EAST, NORTH, SOUTH>(
-                downstream_edm_interfaces_vc0, downstream_edm_interface_vc1);
+            ret_val = downstreams_have_space<
+                rx_channel_id,
+                DOWNSTREAM_SENDER_NUM_BUFFERS_VC0,
+                DOWNSTREAM_SENDER_NUM_BUFFERS_VC1,
+                EAST,
+                NORTH,
+                SOUTH>(downstream_edm_interfaces_vc0, downstream_edm_interface_vc1);
             break;
         case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NSW:
             // 2D Mcast Trunk: North<->South
             // 2D Mcast Branch: West
-            ret_val = downstreams_have_space<rx_channel_id, DOWNSTREAM_SENDER_NUM_BUFFERS_VC0, DOWNSTREAM_SENDER_NUM_BUFFERS_VC1, WEST, NORTH, SOUTH>(
-                downstream_edm_interfaces_vc0, downstream_edm_interface_vc1);
+            ret_val = downstreams_have_space<
+                rx_channel_id,
+                DOWNSTREAM_SENDER_NUM_BUFFERS_VC0,
+                DOWNSTREAM_SENDER_NUM_BUFFERS_VC1,
+                WEST,
+                NORTH,
+                SOUTH>(downstream_edm_interfaces_vc0, downstream_edm_interface_vc1);
             break;
         case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_SEW:
             // 2D Mcast Trunk: Last hop North
             // 2D Mcast Branch: East and West
-            ret_val = downstreams_have_space<rx_channel_id, DOWNSTREAM_SENDER_NUM_BUFFERS_VC0, DOWNSTREAM_SENDER_NUM_BUFFERS_VC1, EAST, WEST, SOUTH>(
-                downstream_edm_interfaces_vc0, downstream_edm_interface_vc1);
+            ret_val = downstreams_have_space<
+                rx_channel_id,
+                DOWNSTREAM_SENDER_NUM_BUFFERS_VC0,
+                DOWNSTREAM_SENDER_NUM_BUFFERS_VC1,
+                EAST,
+                WEST,
+                SOUTH>(downstream_edm_interfaces_vc0, downstream_edm_interface_vc1);
             break;
         case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NEW:
             // 2D Mcast Trunk: Last hop South
             // 2D Mcast Branch: East and West
-            ret_val = downstreams_have_space<rx_channel_id, DOWNSTREAM_SENDER_NUM_BUFFERS_VC0, DOWNSTREAM_SENDER_NUM_BUFFERS_VC1, EAST, WEST, NORTH>(
-                downstream_edm_interfaces_vc0, downstream_edm_interface_vc1);
+            ret_val = downstreams_have_space<
+                rx_channel_id,
+                DOWNSTREAM_SENDER_NUM_BUFFERS_VC0,
+                DOWNSTREAM_SENDER_NUM_BUFFERS_VC1,
+                EAST,
+                WEST,
+                NORTH>(downstream_edm_interfaces_vc0, downstream_edm_interface_vc1);
             break;
         case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_SE:
             // 2D Mcast Trunk: Last hop North
             // 2D Mcast Branch: East
-            ret_val = downstreams_have_space<rx_channel_id, DOWNSTREAM_SENDER_NUM_BUFFERS_VC0, DOWNSTREAM_SENDER_NUM_BUFFERS_VC1, EAST, SOUTH>(
-                downstream_edm_interfaces_vc0, downstream_edm_interface_vc1);
+            ret_val = downstreams_have_space<
+                rx_channel_id,
+                DOWNSTREAM_SENDER_NUM_BUFFERS_VC0,
+                DOWNSTREAM_SENDER_NUM_BUFFERS_VC1,
+                EAST,
+                SOUTH>(downstream_edm_interfaces_vc0, downstream_edm_interface_vc1);
             break;
         case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_SW:
             // 2D Mcast Trunk: Last hop North
             // 2D Mcast Branch: West
-            ret_val = downstreams_have_space<rx_channel_id, DOWNSTREAM_SENDER_NUM_BUFFERS_VC0, DOWNSTREAM_SENDER_NUM_BUFFERS_VC1, WEST, SOUTH>(
-                downstream_edm_interfaces_vc0, downstream_edm_interface_vc1);
+            ret_val = downstreams_have_space<
+                rx_channel_id,
+                DOWNSTREAM_SENDER_NUM_BUFFERS_VC0,
+                DOWNSTREAM_SENDER_NUM_BUFFERS_VC1,
+                WEST,
+                SOUTH>(downstream_edm_interfaces_vc0, downstream_edm_interface_vc1);
             break;
         case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NE:
             // 2D Mcast Trunk: Last hop South
             // 2D Mcast Branch: East
-            ret_val = downstreams_have_space<rx_channel_id, DOWNSTREAM_SENDER_NUM_BUFFERS_VC0, DOWNSTREAM_SENDER_NUM_BUFFERS_VC1, EAST, NORTH>(
-                downstream_edm_interfaces_vc0, downstream_edm_interface_vc1);
+            ret_val = downstreams_have_space<
+                rx_channel_id,
+                DOWNSTREAM_SENDER_NUM_BUFFERS_VC0,
+                DOWNSTREAM_SENDER_NUM_BUFFERS_VC1,
+                EAST,
+                NORTH>(downstream_edm_interfaces_vc0, downstream_edm_interface_vc1);
             break;
         case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NW:
             // 2D Mcast Trunk: Last hop South
             // 2D Mcast Branch: West
-            ret_val = downstreams_have_space<rx_channel_id, DOWNSTREAM_SENDER_NUM_BUFFERS_VC0, DOWNSTREAM_SENDER_NUM_BUFFERS_VC1, WEST, NORTH>(
-                downstream_edm_interfaces_vc0, downstream_edm_interface_vc1);
+            ret_val = downstreams_have_space<
+                rx_channel_id,
+                DOWNSTREAM_SENDER_NUM_BUFFERS_VC0,
+                DOWNSTREAM_SENDER_NUM_BUFFERS_VC1,
+                WEST,
+                NORTH>(downstream_edm_interfaces_vc0, downstream_edm_interface_vc1);
             break;
         default: __builtin_unreachable();
     }
@@ -1734,12 +1801,18 @@ void run_receiver_channel_step_impl(
             //  mcast)
 #if defined(FABRIC_2D) && defined(DYNAMIC_ROUTING_ENABLED)
             // need this ifdef since the 2D dynamic routing packet header contains unique fields
-            can_send_to_all_local_chip_receivers = can_forward_packet_completely<receiver_channel, DOWNSTREAM_SENDER_NUM_BUFFERS_VC0, DOWNSTREAM_SENDER_NUM_BUFFERS_VC1>(
+            can_send_to_all_local_chip_receivers = can_forward_packet_completely<
+                receiver_channel,
+                DOWNSTREAM_SENDER_NUM_BUFFERS_VC0,
+                DOWNSTREAM_SENDER_NUM_BUFFERS_VC1>(
                 packet_header, downstream_edm_interfaces_vc0, downstream_edm_interface_vc1, port_direction_table);
 #elif defined(FABRIC_2D)
             // need this ifdef since the packet header for 1D does not have router_buffer field in it.
             hop_cmd = packet_header->route_buffer[cached_routing_fields.hop_index];
-            can_send_to_all_local_chip_receivers = can_forward_packet_completely<receiver_channel, DOWNSTREAM_SENDER_NUM_BUFFERS_VC0, DOWNSTREAM_SENDER_NUM_BUFFERS_VC1>(
+            can_send_to_all_local_chip_receivers = can_forward_packet_completely<
+                receiver_channel,
+                DOWNSTREAM_SENDER_NUM_BUFFERS_VC0,
+                DOWNSTREAM_SENDER_NUM_BUFFERS_VC1>(
                 hop_cmd, downstream_edm_interfaces_vc0, downstream_edm_interface_vc1);
 #endif
         } else {
@@ -1747,8 +1820,8 @@ void run_receiver_channel_step_impl(
                 can_send_to_all_local_chip_receivers = can_forward_packet_completely<DOWNSTREAM_SENDER_NUM_BUFFERS_VC0>(
                     cached_routing_fields, downstream_edm_interfaces_vc0[receiver_channel]);
             } else {
-                can_send_to_all_local_chip_receivers =
-                    can_forward_packet_completely<DOWNSTREAM_SENDER_NUM_BUFFERS_VC1>(cached_routing_fields, downstream_edm_interface_vc1);
+                can_send_to_all_local_chip_receivers = can_forward_packet_completely<DOWNSTREAM_SENDER_NUM_BUFFERS_VC1>(
+                    cached_routing_fields, downstream_edm_interface_vc1);
             }
         }
         if constexpr (enable_trid_flush_check_on_noc_txn) {
@@ -1761,7 +1834,10 @@ void run_receiver_channel_step_impl(
                 receiver_buffer_index);
             if constexpr (is_2d_fabric) {
 #if defined(FABRIC_2D) && defined(DYNAMIC_ROUTING_ENABLED)
-                receiver_forward_packet<receiver_channel, DOWNSTREAM_SENDER_NUM_BUFFERS_VC0, DOWNSTREAM_SENDER_NUM_BUFFERS_VC1>(
+                receiver_forward_packet<
+                    receiver_channel,
+                    DOWNSTREAM_SENDER_NUM_BUFFERS_VC0,
+                    DOWNSTREAM_SENDER_NUM_BUFFERS_VC1>(
                     packet_header,
                     cached_routing_fields,
                     downstream_edm_interfaces_vc0,
@@ -1769,7 +1845,10 @@ void run_receiver_channel_step_impl(
                     trid,
                     port_direction_table);
 #elif defined(FABRIC_2D)
-                receiver_forward_packet<receiver_channel, DOWNSTREAM_SENDER_NUM_BUFFERS_VC0, DOWNSTREAM_SENDER_NUM_BUFFERS_VC1>(
+                receiver_forward_packet<
+                    receiver_channel,
+                    DOWNSTREAM_SENDER_NUM_BUFFERS_VC0,
+                    DOWNSTREAM_SENDER_NUM_BUFFERS_VC1>(
                     packet_header,
                     cached_routing_fields,
                     downstream_edm_interfaces_vc0,
@@ -1864,7 +1943,13 @@ FORCE_INLINE void run_receiver_channel_step(
     std::array<uint8_t, num_eth_ports>& port_direction_table,
     std::array<ReceiverChannelResponseCreditSender, NUM_RECEIVER_CHANNELS>& receiver_channel_response_credit_senders) {
     if constexpr (is_receiver_channel_serviced[receiver_channel]) {
-        run_receiver_channel_step_impl<receiver_channel, to_receiver_packets_sent_streams[receiver_channel], WriteTridTracker, RECEIVER_NUM_BUFFERS, DOWNSTREAM_SENDER_NUM_BUFFERS_VC0, DOWNSTREAM_SENDER_NUM_BUFFERS_VC1>(
+        run_receiver_channel_step_impl<
+            receiver_channel,
+            to_receiver_packets_sent_streams[receiver_channel],
+            WriteTridTracker,
+            RECEIVER_NUM_BUFFERS,
+            DOWNSTREAM_SENDER_NUM_BUFFERS_VC0,
+            DOWNSTREAM_SENDER_NUM_BUFFERS_VC1>(
             local_receiver_channels.template get<receiver_channel>(),
             downstream_edm_interfaces_vc0,
             downstream_edm_interface_vc1,
@@ -1908,6 +1993,7 @@ template <
 void run_fabric_edm_main_loop(
     EthReceiverChannels& local_receiver_channels,
     EthSenderChannels& local_sender_channels,
+    FabricControlChannel& control_channel,
     EdmChannelWorkerIFs& local_sender_channel_worker_interfaces,
     std::array<RouterToRouterSender<DOWNSTREAM_SENDER_NUM_BUFFERS_VC0>, NUM_USED_RECEIVER_CHANNELS_VC0>&
         downstream_edm_noc_interfaces_vc0,
@@ -2050,6 +2136,8 @@ void run_fabric_edm_main_loop(
                     inner_loop_perf_telemetry_collector);
             }
         }
+
+        control_channel.run_control_channel_step();
 
         if constexpr (enable_context_switch) {
             // shouldn't do noc counter sync since we are not incrementing them
@@ -2461,6 +2549,8 @@ void kernel_main() {
             tt::tt_fabric::EdmFabricSenderChannelCounters();
     }
 
+    FabricControlChannel control_channel;
+
     size_t arg_idx = 0;
     ///////////////////////
     // Common runtime args:
@@ -2545,6 +2635,8 @@ void kernel_main() {
             *sender4_worker_semaphore_ptr = 0;
         }
     }
+
+    control_channel.init();
 
     *edm_status_ptr = tt::tt_fabric::EDMStatus::STARTED;
 
@@ -2988,9 +3080,14 @@ void kernel_main() {
     //        MAIN LOOP
     //////////////////////////////
     //////////////////////////////
-    run_fabric_edm_main_loop<enable_packet_header_recording, NUM_RECEIVER_CHANNELS, DOWNSTREAM_SENDER_NUM_BUFFERS_VC0, DOWNSTREAM_SENDER_NUM_BUFFERS_VC1>(
+    run_fabric_edm_main_loop<
+        enable_packet_header_recording,
+        NUM_RECEIVER_CHANNELS,
+        DOWNSTREAM_SENDER_NUM_BUFFERS_VC0,
+        DOWNSTREAM_SENDER_NUM_BUFFERS_VC1>(
         local_receiver_channels,
         local_sender_channels,
+        control_channel,
         local_sender_channel_worker_interfaces,
         downstream_edm_noc_interfaces_vc0,
         downstream_edm_noc_interface_vc1,
@@ -3017,6 +3114,9 @@ void kernel_main() {
 
     // make sure all the noc transactions are acked before re-init the noc counters
     teardown(termination_signal_ptr, edm_status_ptr, receiver_channel_0_trid_tracker, receiver_channel_1_trid_tracker);
+
+    // only for intial bringup - remove later
+    control_channel.teardown((uint32_t)edm_status_ptr);
 
     set_l1_data_cache<false>();
     WAYPOINT("DONE");

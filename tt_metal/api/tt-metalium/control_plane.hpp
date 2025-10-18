@@ -35,6 +35,8 @@ namespace tt::tt_fabric {
  UbbId get_ubb_id(chip_id_t chip_id);
 
 class FabricContext;
+class ControlChannelInterface;
+class HostToRouterCommInterface;
 
 // This struct provides information for how a process binds to a particular
 // mesh and local mesh rank (MeshHostRankId rename - #24178) in the mesh graph
@@ -173,6 +175,8 @@ public:
     FabricContext& get_fabric_context() const;
 
     void clear_fabric_context();
+
+    ControlChannelInterface& get_control_channel_interface() const;
 
     // Initialize fabric tensix config (call after routing tables are configured)
     void initialize_fabric_tensix_datamover_config();
@@ -359,7 +363,11 @@ private:
     // Generate intermesh connections for the local host.
     AnnotatedIntermeshConnections generate_intermesh_connections_on_local_host();
 
+    void initialize_control_channel_interface();
+
     std::unique_ptr<FabricContext> fabric_context_;
+    std::unique_ptr<ControlChannelInterface> control_channel_interface_;
+    std::unique_ptr<HostToRouterCommInterface> host_to_router_comm_interface_;
     LocalMeshBinding local_mesh_binding_;
 
     // Distributed contexts for each multi-host mesh, that this host is part of - this is typically a single mesh.

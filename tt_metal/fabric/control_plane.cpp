@@ -44,6 +44,7 @@
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include "tt_metal/fabric/fabric_context.hpp"
+#include "tt_metal/fabric/control_channel_interface.hpp"
 #include "tt_metal/fabric/serialization/router_port_directions.hpp"
 #include "tt_stl/small_vector.hpp"
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
@@ -2065,6 +2066,8 @@ uint16_t ControlPlane::get_routing_mode() const { return this->routing_mode_; }
 void ControlPlane::initialize_fabric_context(tt_fabric::FabricConfig fabric_config) {
     TT_FATAL(this->fabric_context_ == nullptr, "Trying to re-initialize fabric context");
     this->fabric_context_ = std::make_unique<FabricContext>(fabric_config);
+
+    this->initialize_control_channel_interface();
 }
 
 FabricContext& ControlPlane::get_fabric_context() const {
@@ -2073,6 +2076,20 @@ FabricContext& ControlPlane::get_fabric_context() const {
 }
 
 void ControlPlane::clear_fabric_context() { this->fabric_context_.reset(nullptr); }
+
+void ControlPlane::initialize_control_channel_interface() {
+    TT_FATAL(this->fabric_context_ != nullptr, "Fabric context must be initialized before control channel interface");
+    TT_FATAL(this->control_channel_interface_ == nullptr, "Trying to re-initialize control channel interface");
+
+    this->host_to_router_comm_interface_ = std::make_unique<HostToRouterCommInterface>();
+    this->control_channel_interface_ =
+        std::make_unique<ControlChannelInterface>(this->host_to_router_comm_interface_.get());
+}
+
+tt::tt_fabric::ControlChannelInterface& ControlPlane::get_control_channel_interface() const {
+    TT_FATAL(this->control_channel_interface_ != nullptr, "Trying to get un-initialized control channel interface");
+    return *this->control_channel_interface_;
+}
 
 void ControlPlane::initialize_fabric_tensix_datamover_config() {
     TT_FATAL(this->fabric_context_ != nullptr, "Fabric context must be initialized first");

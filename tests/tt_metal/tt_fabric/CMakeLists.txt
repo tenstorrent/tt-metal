@@ -9,6 +9,7 @@ set(UNIT_TESTS_FABRIC_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_data_movement/test_basic_fabric_apis.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_data_movement/test_basic_1d_fabric.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_data_movement/test_basic_fabric_mux.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/fabric_control_channel/test_basic_fabric_control_channel.cpp
 )
 
 add_executable(fabric_unit_tests ${UNIT_TESTS_FABRIC_SRC})

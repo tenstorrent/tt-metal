@@ -691,6 +691,55 @@ static_assert(
     sizeof(LowLatencyPacketHeader) == sizeof(PacketHeader), "sizeof(LowLatencyPacketHeader) is not equal to 32B");
 static_assert(sizeof(MeshPacketHeader) == 48, "sizeof(MeshPacketHeader) is not equal to 48B");
 
+enum ControlPacketType : uint8_t {
+    REMOTE_HEARTBEAT = 0,
+    REROUTE = 1,
+};
+
+enum ControlPacketSubType : uint8_t {
+    INIT = 0,
+    ACK_REQUEST = 1,
+    ACK_RESPONSE = 2,
+};
+
+union NodeId {
+    struct {
+        uint16_t mesh_id;
+        uint16_t chip_id;
+    };
+    uint32_t node_id_32;
+};
+
+struct RemoteHeartbeatPacketContext {
+    NodeId target_node_id;
+    uint8_t target_channel_id;
+    uint8_t reserved[3];
+};
+
+struct ReroutePacketContext {
+    uint8_t reserved[8];
+};
+
+union ControlPacketContext {
+    RemoteHeartbeatPacketContext remote_heartbeat_packet_context;
+    ReroutePacketContext reroute_packet_context;
+    uint8_t context[8];
+};
+
+struct ControlPacketHeader {
+    NodeId src_node_id;
+    NodeId dst_node_id;
+    uint8_t src_channel_id;
+    uint8_t dst_channel_id;
+    ControlPacketType type;
+    ControlPacketSubType sub_type;
+    ControlPacketContext context;
+    uint32_t sequence_id;
+    uint8_t reserved[8];
+};
+
+static_assert(sizeof(ControlPacketHeader) == 32, "sizeof(ControlPacketHeader) is not equal to 32B");
+
 #define STRINGIFY(x) #x
 #define TOSTRING(x) STRINGIFY(x)
 

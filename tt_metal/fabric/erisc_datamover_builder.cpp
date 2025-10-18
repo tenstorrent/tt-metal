@@ -15,6 +15,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/device_pool.hpp>
 #include <algorithm>
 #include <array>
 #include <cstddef>
@@ -34,6 +35,7 @@
 #include "fabric_edm_types.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <umd/device/types/core_coordinates.hpp>
+#include "hostdevcommon/fabric_common.h"
 
 namespace tt {
 namespace tt_metal {
@@ -166,7 +168,6 @@ size_t get_num_riscv_cores() {
     }
 }
 
-
 }  // anonymous namespace
 
 FabricRiscConfig::FabricRiscConfig(uint32_t risc_id) :
@@ -187,6 +188,92 @@ FabricRiscConfig::FabricRiscConfig(uint32_t risc_id) :
         this->enable_interrupts_,
         this->is_sender_channel_serviced_,
         this->is_receiver_channel_serviced_);
+}
+
+FabricControlChannelConfig::FabricControlChannelConfig() = default;
+
+// TODO: find a way to get this from the hal or somewhere else before control plane is initialized
+std::size_t get_max_num_eth_cores() {
+    if (tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::BLACKHOLE) {
+        return 10;
+    } else {
+        return 16;
+    }
+}
+
+std::size_t FabricControlChannelConfig::setup_addresses(std::size_t l1_start_addr) {
+    std::size_t next_l1_addr = l1_start_addr;
+
+    this->max_num_eth_cores = get_max_num_eth_cores();
+    log_info(tt::LogMetal, "Max num eth cores: {}", this->max_num_eth_cores);
+
+    log_info(tt::LogMetal, "buffer slot size: {}", FabricControlChannelConfig::buffer_slot_size);
+
+    // host buffer
+    this->host_buffer_base_address = next_l1_addr;
+    next_l1_addr += FabricControlChannelConfig::num_host_buffer_slots * FabricControlChannelConfig::buffer_slot_size;
+    this->host_buffer_remote_write_counter_address = next_l1_addr;
+    next_l1_addr += FabricControlChannelConfig::field_size;
+    this->host_buffer_remote_read_counter_address = next_l1_addr;
+    next_l1_addr += FabricControlChannelConfig::field_size;
+
+    // eth buffer
+    this->eth_buffer_base_address = next_l1_addr;
+    next_l1_addr += FabricControlChannelConfig::num_eth_buffer_slots * FabricControlChannelConfig::buffer_slot_size;
+    this->eth_buffer_remote_write_counter_address = next_l1_addr;
+    next_l1_addr += FabricControlChannelConfig::field_size;
+    this->eth_buffer_remote_read_counter_address = next_l1_addr;
+    next_l1_addr += FabricControlChannelConfig::field_size;
+    this->eth_buffer_local_write_counter_address = next_l1_addr;
+    next_l1_addr += FabricControlChannelConfig::field_size;
+    this->eth_buffer_local_read_counter_address = next_l1_addr;
+    next_l1_addr += FabricControlChannelConfig::field_size;
+
+    // local buffer
+    this->local_buffer_base_address = next_l1_addr;
+    next_l1_addr += this->max_num_eth_cores * FabricControlChannelConfig::num_local_buffer_slots *
+                    FabricControlChannelConfig::buffer_slot_size;
+    this->local_buffer_remote_write_counter_base_address = next_l1_addr;
+    next_l1_addr += this->max_num_eth_cores * FabricControlChannelConfig::field_size;
+    this->local_buffer_remote_read_counter_base_address = next_l1_addr;
+    next_l1_addr += this->max_num_eth_cores * FabricControlChannelConfig::field_size;
+
+    this->staging_packet_buffer_address = next_l1_addr;
+    next_l1_addr += FabricControlChannelConfig::buffer_slot_size;
+
+    this->common_fsm_log_address = next_l1_addr;
+    next_l1_addr += sizeof(tt::tt_fabric::CommonFSMLog);
+    this->heartbeat_fsm_log_address = next_l1_addr;
+    next_l1_addr += sizeof(tt::tt_fabric::FSMLog);
+    this->reroute_fsm_log_address = next_l1_addr;
+    next_l1_addr += sizeof(tt::tt_fabric::FSMLog);
+
+    next_l1_addr = tt::align(next_l1_addr, FabricControlChannelConfig::field_size);
+    return next_l1_addr;
+}
+
+void FabricControlChannelConfig::get_compile_time_args(std::vector<uint32_t>& ct_args) const {
+    std::vector<uint32_t> control_channel_args = {
+        this->num_host_buffer_slots,
+        this->num_eth_buffer_slots,
+        this->num_local_buffer_slots,
+        this->max_num_eth_cores,
+        this->host_buffer_base_address,
+        this->eth_buffer_base_address,
+        this->local_buffer_base_address,
+        this->host_buffer_remote_write_counter_address,
+        this->host_buffer_remote_read_counter_address,
+        this->eth_buffer_remote_write_counter_address,
+        this->eth_buffer_remote_read_counter_address,
+        this->eth_buffer_local_write_counter_address,
+        this->eth_buffer_local_read_counter_address,
+        this->local_buffer_remote_write_counter_base_address,
+        this->local_buffer_remote_read_counter_base_address,
+        this->staging_packet_buffer_address,
+        this->common_fsm_log_address,
+        this->heartbeat_fsm_log_address,
+        this->reroute_fsm_log_address};
+    ct_args.insert(ct_args.end(), control_channel_args.begin(), control_channel_args.end());
 }
 
 namespace {
@@ -231,6 +318,13 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topo
 
     this->handshake_addr = next_l1_addr;
     next_l1_addr += eth_channel_sync_size;
+
+    // setup control channel addresses
+    const auto start_addr = next_l1_addr;
+    next_l1_addr = this->control_channel_config.setup_addresses(next_l1_addr);
+    const auto end_addr = next_l1_addr;
+    log_info(
+        tt::LogMetal, "Control channel addresses: [{}, {}), size: {}", start_addr, end_addr, end_addr - start_addr);
 
     // issue: https://github.com/tenstorrent/tt-metal/issues/29073. TODO: Re-enable after hang is resolved.
     // Ethernet txq IDs on WH are 0,1 and on BH are 0,1,2.
@@ -352,7 +446,8 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topo
     this->available_buffer_memory_regions.emplace_back(buffer_region_start, available_channel_buffering_space);
 }
 
-void FabricEriscDatamoverConfig::configure_skip_connection_flags(Topology topology, FabricEriscDatamoverOptions const& options) {
+void FabricEriscDatamoverConfig::configure_skip_connection_flags(
+    Topology topology, const FabricEriscDatamoverOptions& options) {
     if (topology == Topology::Ring) {
         auto buffer_config = options.edm_buffer_config;
         switch (options.edm_type) {
@@ -469,7 +564,6 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
         size_t{0},
         [](size_t sum, const MemoryRegion& region) { return sum + region.get_size(); });
 
-
     configure_skip_connection_flags(topology, options);
     this->channel_allocator = std::make_shared<tt::tt_fabric::FabricStaticSizedChannelsAllocator>(
         topology,
@@ -489,7 +583,8 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
         this->receiver_channel_local_write_cmd_buf_ids[i] = FabricEriscDatamoverConfig::WR_CMD_BUF;
 
         if (requires_forced_assignment_to_noc1()) {
-            this->receiver_channel_forwarding_noc_ids[i] = FabricEriscDatamoverConfig::BLACKHOLE_SINGLE_ERISC_MODE_RECEIVER_FORWARDING_NOC;
+            this->receiver_channel_forwarding_noc_ids[i] =
+                FabricEriscDatamoverConfig::BLACKHOLE_SINGLE_ERISC_MODE_RECEIVER_FORWARDING_NOC;
             this->receiver_channel_local_write_noc_ids[i] =
                 FabricEriscDatamoverConfig::BLACKHOLE_SINGLE_ERISC_MODE_RECEIVER_LOCAL_WRITE_NOC;
             this->receiver_channel_forwarding_data_cmd_buf_ids[i] = FabricEriscDatamoverConfig::WR_CMD_BUF;
@@ -695,9 +790,17 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
         sender_channel_connection_liveness_check_disable_array.end(),
         false);
 
-    TT_FATAL(config.channel_allocator.get() != nullptr, "Channel allocator is not set. Failed to build TT-Fabric router. Internal error.");
-    TT_FATAL(dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(config.channel_allocator.get()) != nullptr, "Channel allocator is not a FabricStaticSizedChannelsAllocator. Failed to build TT-Fabric router. Internal error.");
-    this->receiver_channel_to_downstream_adapter = std::make_shared<tt::tt_fabric::StaticSizedChannelConnectionWriterAdapter>(*dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(config.channel_allocator.get()), config.topology);
+    TT_FATAL(
+        config.channel_allocator.get() != nullptr,
+        "Channel allocator is not set. Failed to build TT-Fabric router. Internal error.");
+    TT_FATAL(
+        dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(config.channel_allocator.get()) != nullptr,
+        "Channel allocator is not a FabricStaticSizedChannelsAllocator. Failed to build TT-Fabric router. Internal "
+        "error.");
+    this->receiver_channel_to_downstream_adapter =
+        std::make_shared<tt::tt_fabric::StaticSizedChannelConnectionWriterAdapter>(
+            *dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(config.channel_allocator.get()),
+            config.topology);
 }
 
 void FabricEriscDatamoverBuilder::get_telemetry_compile_time_args(std::vector<uint32_t>& ct_args) const {
@@ -1003,7 +1106,12 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         ct_args.push_back(config.receiver_channel_remote_completion_counters_base_addr);
     }
 
+    // Special marker 3
     ct_args.push_back(0x30c0ffee);
+
+    this->config.control_channel_config.get_compile_time_args(ct_args);
+
+    ct_args.push_back(0x40c0ffee);
     return ct_args;
 }
 
@@ -1329,9 +1437,11 @@ void FabricEriscDatamoverBuilder::setup_downstream_vc_connection(
     TT_FATAL(
         dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(channel_allocator) != nullptr,
         "Only FabricStaticSizedChannelsAllocator is supported currently.");
-    auto adapter_ptr = receiver_channel_to_downstream_adapter.get();//receiver_channel_to_downstream_adapter.at(vc_idx);
+    auto adapter_ptr =
+        receiver_channel_to_downstream_adapter.get();  // receiver_channel_to_downstream_adapter.at(vc_idx);
     TT_FATAL(adapter_ptr != nullptr, "Adapter is not set. Failed to build TT-Fabric router. Internal error.");
-    adapter_ptr->add_downstream_connection(adapter_spec, vc_idx, ds_dir, CoreCoord(ds_noc_x, ds_noc_y), is_2D_routing, is_vc1);
+    adapter_ptr->add_downstream_connection(
+        adapter_spec, vc_idx, ds_dir, CoreCoord(ds_noc_x, ds_noc_y), is_2D_routing, is_vc1);
 }
 
 eth_chan_directions FabricEriscDatamoverBuilder::get_direction() const { return this->direction; }

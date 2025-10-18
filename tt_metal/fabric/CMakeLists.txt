@@ -48,6 +48,8 @@ target_sources(
         fabric_tensix_builder.cpp
         compressed_routing_table.cpp
         compressed_routing_path.cpp
+        control_channel_interface.cpp
+        host_to_router_comm.cpp
         serialization/router_port_directions.cpp
         serialization/physical_system_descriptor_serialization.cpp
         serialization/intermesh_connections_serialization.cpp

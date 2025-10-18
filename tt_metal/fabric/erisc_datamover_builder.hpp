@@ -202,6 +202,49 @@ struct StreamRegAssignments {
     }
 };
 
+struct FabricControlChannelConfig {
+    static constexpr std::size_t field_size = 16;
+    static constexpr std::size_t num_host_buffer_slots = 2;
+    static constexpr std::size_t num_eth_buffer_slots = 4;
+    static constexpr std::size_t num_local_buffer_slots = 4;
+    static constexpr std::size_t buffer_slot_size = sizeof(tt::tt_fabric::ControlPacketHeader);
+
+    std::size_t max_num_eth_cores = 0;
+
+    // buffer addresses
+    std::size_t host_buffer_base_address = 0;
+    std::size_t eth_buffer_base_address = 0;
+    std::size_t local_buffer_base_address = 0;
+
+    // flow control addresses - host buffer
+    std::size_t host_buffer_remote_write_counter_address = 0;
+    std::size_t host_buffer_remote_read_counter_address = 0;
+
+    // flow control addresses - eth buffer
+    std::size_t eth_buffer_remote_write_counter_address = 0;
+    std::size_t eth_buffer_remote_read_counter_address = 0;
+    std::size_t eth_buffer_local_write_counter_address = 0;
+    std::size_t eth_buffer_local_read_counter_address = 0;
+
+    // flow control addresses - local buffer
+    std::size_t local_buffer_remote_write_counter_base_address = 0;
+    std::size_t local_buffer_remote_read_counter_base_address = 0;
+
+    // staging packet address
+    std::size_t staging_packet_buffer_address = 0;
+
+    // FSM logging
+    std::size_t common_fsm_log_address = 0;
+    std::size_t heartbeat_fsm_log_address = 0;
+    std::size_t reroute_fsm_log_address = 0;
+
+    FabricControlChannelConfig();
+
+    std::size_t setup_addresses(std::size_t l1_start_address);
+
+    void get_compile_time_args(std::vector<uint32_t>& ct_args) const;
+};
+
 struct FabricEriscDatamoverConfig {
     static constexpr uint32_t WR_CMD_BUF = 0;      // for large writes
     static constexpr uint32_t RD_CMD_BUF = 1;      // for all reads
@@ -323,8 +366,8 @@ struct FabricEriscDatamoverConfig {
 
     std::size_t channel_buffer_size_bytes = 0;
 
-    std::size_t num_used_sender_channels = 0;   // duplicate in allocator... don't modify
-    std::size_t num_used_receiver_channels = 0; // duplicate in allocator... don't modify
+    std::size_t num_used_sender_channels = 0;    // duplicate in allocator... don't modify
+    std::size_t num_used_receiver_channels = 0;  // duplicate in allocator... don't modify
     std::size_t num_fwd_paths = 0;
     std::size_t sender_txq_id = 0;
     std::size_t receiver_txq_id = 0;
@@ -350,11 +393,14 @@ struct FabricEriscDatamoverConfig {
     // emd vcs
     std::size_t edm_noc_vc = 0;
 
+    // control channel config
+    FabricControlChannelConfig control_channel_config;
+
     // Fabric channel allocator for L1 memory management
     std::shared_ptr<FabricChannelAllocator> channel_allocator;
 
 private:
-    void configure_skip_connection_flags(Topology topology, FabricEriscDatamoverOptions const& options);
+    void configure_skip_connection_flags(Topology topology, const FabricEriscDatamoverOptions& options);
 
     FabricEriscDatamoverConfig(Topology topology = Topology::Linear);
 };
@@ -376,6 +422,7 @@ struct FabricRiscConfig {
     }
 
     void set_configured_noc(tt::tt_metal::NOC noc) { noc_ = noc; };
+
 private:
     tt::tt_metal::NOC noc_ = tt::tt_metal::NOC::NOC_0;
     size_t iterations_between_ctx_switch_and_teardown_checks_ = 0;
@@ -521,7 +568,8 @@ public:
     size_t channel_buffer_size = 0;
 
     std::shared_ptr<tt::tt_fabric::ChannelConnectionWriterAdapter> receiver_channel_to_downstream_adapter = {};
-    std::array<std::shared_ptr<tt::tt_fabric::FabricChannelAllocator>, FabricEriscDatamoverConfig::max_downstream_edms> downstream_allocators = {};
+    std::array<std::shared_ptr<tt::tt_fabric::FabricChannelAllocator>, FabricEriscDatamoverConfig::max_downstream_edms>
+        downstream_allocators = {};
 
     std::array<size_t, builder_config::num_receiver_channels> receiver_channels_num_buffers = {};
     std::array<size_t, builder_config::num_receiver_channels> remote_receiver_channels_num_buffers = {};
