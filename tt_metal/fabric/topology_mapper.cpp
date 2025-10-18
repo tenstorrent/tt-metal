@@ -212,14 +212,6 @@ void TopologyMapper::build_mapping() {
         // Locate mesh corners per mesh
         auto mesh_corners_map = build_mesh_corners_mappings(host_corners_map, mesh_id_host_names);
 
-        log_critical(tt::LogFabric, "Mesh corners map:");
-        for (const auto& [mesh, corners] : mesh_corners_map) {
-            log_critical(tt::LogFabric, "Mesh {}:", mesh);
-            for (const auto& corner : corners) {
-                log_critical(tt::LogFabric, "  - {}", corner);
-            }
-        }
-
         // Populate fabric_node_id_to_asic_id mapping for each mesh
         populate_fabric_node_id_to_asic_id_mappings(mesh_corners_map, mesh_id_host_names);
 
@@ -382,7 +374,8 @@ std::unordered_map<MeshId, std::unordered_set<tt::tt_metal::AsicID>> TopologyMap
             auto current_host_name = physical_system_descriptor_.get_host_name_for_asic(asic_id);
             auto neighbor_host_name = physical_system_descriptor_.get_host_name_for_asic(neighbor);
             // Only get adjacents that are in the mesh and not on the same host
-            if (mesh_hostnames.contains(neighbor_host_name) && all_corners.contains(neighbor)) {
+            if (mesh_hostnames.contains(neighbor_host_name) && current_host_name != neighbor_host_name &&
+                all_corners.contains(neighbor)) {
                 adjacents.push_back(neighbor);
             }
         }
@@ -521,9 +514,11 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
                     continue;
                 }
 
-                if (mesh_corners.contains(n) && physical_system_descriptor_.is_cross_host_eth_link(asic, channel_id)) {
-                    continue;
-                }
+                // THis doesn't work
+                // if (mesh_corners.contains(n) && physical_system_descriptor_.is_cross_host_eth_link(asic, channel_id))
+                // {
+                //    continue;
+                //}
 
                 const auto& host = physical_system_descriptor_.get_host_name_for_asic(n);
                 if (!mesh_hosts.contains(host)) {
