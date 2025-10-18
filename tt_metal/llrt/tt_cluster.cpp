@@ -15,7 +15,7 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
-#include <tuple>                                                     // for get
+#include <tuple>  // for get
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -46,32 +46,43 @@ static constexpr uint32_t HOST_MEM_CHANNELS_MASK = HOST_MEM_CHANNELS - 1;
 namespace {
 
 inline std::string get_soc_description_file(
-    const tt::ARCH& arch, tt::TargetDevice target_device, const std::string& root_dir) {
-    // Ability to skip this runtime opt, since trimmed SOC desc limits which DRAM channels are available.
-    std::string path = root_dir;
+    const tt::ARCH& arch, tt::TargetDevice target_device, const tt::llrt::RunTimeOptions& rtoptions) {
+    if (target_device == tt::TargetDevice::Simulator) {
+        return tt::umd::SimulationDevice::get_soc_descriptor_path_from_simulator_path(rtoptions.get_simulator_path());
+    }
+    std::string path = rtoptions.get_root_dir();
     if (path.back() != '/') {
         path.push_back('/');
     }
     path += "tt_metal/soc_descriptors/";
-    bool is_sim = target_device == tt::TargetDevice::Simulator;
     const char* file = nullptr;
     switch (arch) {
-        case tt::ARCH::WORMHOLE_B0: file = is_sim ? "wormhole_b0_versim.yaml" : "wormhole_b0_80_arch.yaml"; break;
-        case tt::ARCH::BLACKHOLE:
-            file = is_sim ? "blackhole_simulation_1x2_arch.yaml" : "blackhole_140_arch.yaml";
-            break;
-        case tt::ARCH::QUASAR: file = "quasar_simulation_1x3_arch.yaml"; break;
+        case tt::ARCH::WORMHOLE_B0: file = "wormhole_b0_80_arch.yaml"; break;
+        case tt::ARCH::BLACKHOLE: file = "blackhole_140_arch.yaml"; break;
+        case tt::ARCH::QUASAR:  // Quasar is currently only supported for simulation
         default: throw std::runtime_error("Unsupported device arch");
     }
     path += file;
     return path;
 }
+
+std::unique_ptr<tt_ClusterDescriptor> get_mock_cluster_desc(const tt::llrt::RunTimeOptions& rtoptions) {
+    TT_FATAL(rtoptions.get_mock_enabled(), "Mock cluster descriptor not enabled");
+    std::unique_ptr<tt_ClusterDescriptor> mock_cluster_desc =
+        tt::umd::tt_ClusterDescriptor::create_from_yaml(rtoptions.get_mock_cluster_desc_path());
+    TT_FATAL(
+        mock_cluster_desc != nullptr,
+        "Failed to load mock cluster descriptor from {}",
+        rtoptions.get_mock_cluster_desc_path());
+    return mock_cluster_desc;
+}
+
 }  // namespace
 namespace tt {
 
 tt::tt_metal::ClusterType Cluster::get_cluster_type_from_cluster_desc(
     const llrt::RunTimeOptions& rtoptions, const tt_ClusterDescriptor* cluster_desc) {
-    if (rtoptions.get_simulator_enabled()) {
+    if (rtoptions.get_simulator_enabled() && !rtoptions.get_mock_enabled()) {
         auto soc_desc =
             tt::umd::SimulationDevice::get_soc_descriptor_path_from_simulator_path(rtoptions.get_simulator_path());
         auto arch = tt::umd::SocDescriptor::get_arch_from_soc_descriptor_path(soc_desc);
@@ -84,9 +95,12 @@ tt::tt_metal::ClusterType Cluster::get_cluster_type_from_cluster_desc(
         }
         return tt::tt_metal::ClusterType::INVALID;
     }
+
+    std::unique_ptr<tt_ClusterDescriptor> temp_cluster_desc = nullptr;
     if (cluster_desc == nullptr) {
-        return Cluster::get_cluster_type_from_cluster_desc(
-            rtoptions, tt::umd::Cluster::create_cluster_descriptor().get());
+        temp_cluster_desc = rtoptions.get_mock_enabled() ? get_mock_cluster_desc(rtoptions)
+                                                         : tt::umd::Cluster::create_cluster_descriptor();
+        cluster_desc = temp_cluster_desc.get();
     }
     tt::tt_metal::ClusterType cluster_type = tt::tt_metal::ClusterType::INVALID;
     for (const auto& chip_id : cluster_desc->get_all_chips()) {
@@ -334,6 +348,7 @@ const std::unordered_map<CoreCoord, int32_t>& Cluster::get_virtual_routing_to_pr
 
 void Cluster::open_driver(const bool &skip_driver_allocs) {
     std::unique_ptr<tt::umd::Cluster> device_driver;
+    std::string sdesc_path = get_soc_description_file(this->arch_, this->target_type_, rtoptions_);
     if (this->target_type_ == TargetDevice::Silicon) {
         // This is the target/desired number of mem channels per arch/device.
         // Silicon driver will attempt to open this many hugepages as channels per mmio chip,
@@ -343,25 +358,34 @@ void Cluster::open_driver(const bool &skip_driver_allocs) {
         uint32_t num_host_mem_ch_per_mmio_device = std::min(HOST_MEM_CHANNELS, num_devices);
         device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
             .num_host_mem_ch_per_mmio_device = num_host_mem_ch_per_mmio_device,
-            .sdesc_path = get_soc_description_file(this->arch_, this->target_type_, rtoptions_.get_root_dir()),
+            .sdesc_path = sdesc_path,
         });
     } else if (this->target_type_ == TargetDevice::Simulator) {
-        device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
-            .chip_type = tt::umd::ChipType::SIMULATION,
-            .target_devices = {0},
-            .simulator_directory = rtoptions_.get_simulator_path(),
-        });
+        std::unique_ptr<tt_ClusterDescriptor> mock_cluster_desc;
+        if (rtoptions_.get_mock_enabled()) {
+            mock_cluster_desc = get_mock_cluster_desc(rtoptions_);
+            device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
+                .chip_type = tt::umd::ChipType::SIMULATION,
+                .sdesc_path = sdesc_path,
+                .target_devices = mock_cluster_desc->get_all_chips(),
+                .cluster_descriptor = mock_cluster_desc.get(),
+                .simulator_directory = rtoptions_.get_simulator_path(),
+            });
+        } else {
+            device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
+                .chip_type = tt::umd::ChipType::SIMULATION,
+                .target_devices = {0},
+                .simulator_directory = rtoptions_.get_simulator_path(),
+            });
+        }
     } else if (this->target_type_ == TargetDevice::Mock) {
         // If a cluster descriptor was not provided via constructor, and mock is enabled via rtoptions,
         // load it from the YAML path and pass it into UMD for mock initialization.
-        std::unique_ptr<tt_ClusterDescriptor> mock_cluster_desc;
-        if (rtoptions_.get_mock_enabled()) {
-            mock_cluster_desc = tt::umd::tt_ClusterDescriptor::create_from_yaml(rtoptions_.get_mock_cluster_desc_path());
-            TT_FATAL(mock_cluster_desc != nullptr, "Failed to load mock cluster descriptor from {}", rtoptions_.get_mock_cluster_desc_path());
-        }
+        std::unique_ptr<tt_ClusterDescriptor> mock_cluster_desc = get_mock_cluster_desc(rtoptions_);
+
         device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
             .chip_type = tt::umd::ChipType::MOCK,
-            .sdesc_path = get_soc_description_file(this->arch_, this->target_type_, rtoptions_.get_root_dir()),
+            .sdesc_path = sdesc_path,
             .cluster_descriptor = mock_cluster_desc.get(),
         });
     }
@@ -622,16 +646,17 @@ std::optional<int> Cluster::get_physical_slot(chip_id_t chip) const {
     return this->driver_->get_chip(chip)->get_tt_device()->get_pci_device()->get_device_info().physical_slot;
 }
 
-void Cluster::deassert_risc_reset_at_core(const tt_cxy_pair& core, const TensixSoftResetOptions& soft_resets) const {
+void Cluster::deassert_risc_reset_at_core(
+    const tt_cxy_pair& core, const tt::umd::RiscType& soft_resets, bool staggered_start) const {
     const metal_SocDescriptor &soc_desc = this->get_soc_desc(core.chip);
     tt::umd::CoreCoord core_coord = soc_desc.get_coord_at(core, CoordSystem::TRANSLATED);
-    this->driver_->deassert_risc_reset_at_core(core.chip, core_coord, soft_resets);
+    this->driver_->deassert_risc_reset(core.chip, core_coord, soft_resets, staggered_start);
 }
 
-void Cluster::assert_risc_reset_at_core(const tt_cxy_pair& core, const TensixSoftResetOptions& soft_resets) const {
+void Cluster::assert_risc_reset_at_core(const tt_cxy_pair& core, const tt::umd::RiscType& soft_resets) const {
     const metal_SocDescriptor &soc_desc = this->get_soc_desc(core.chip);
     tt::umd::CoreCoord core_coord = soc_desc.get_coord_at(core, CoordSystem::TRANSLATED);
-    this->driver_->assert_risc_reset_at_core(core.chip, core_coord, soft_resets);
+    this->driver_->assert_risc_reset(core.chip, core_coord, soft_resets);
 }
 
 void Cluster::write_dram_vec(

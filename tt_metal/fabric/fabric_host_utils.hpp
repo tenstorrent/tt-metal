@@ -54,6 +54,8 @@ std::vector<chip_id_t> convert_1d_mesh_adjacency_to_row_major_vector(
 
 // Helper: Convert 2D mesh adjacency map to row-major vector representation
 std::vector<chip_id_t> convert_2d_mesh_adjacency_to_row_major_vector(
-    const IntraMeshAdjacencyMap& topology_info, std::optional<chip_id_t> nw_corner_chip_id = std::nullopt);
+    const IntraMeshAdjacencyMap& topology_info,
+    std::optional<chip_id_t> nw_corner_chip_id = std::nullopt,
+    std::optional<chip_id_t> ne_corner_chip_id = std::nullopt);
 
 }  // namespace tt::tt_fabric

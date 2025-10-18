@@ -9,6 +9,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/allocator.hpp>
+#include <tt-metalium/tt_align.hpp>
 
 #include "ttnn/operations/data_movement/sharded/sharded_common.hpp"
 

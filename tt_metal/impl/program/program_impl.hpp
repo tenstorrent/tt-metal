@@ -46,6 +46,8 @@ class JitBuildOptions;
 class HWCommandQueue;
 class EnqueueProgramCommand;
 
+class Kernel;
+
 namespace distributed {
 class MeshWorkload;
 class MeshWorkloadImpl;

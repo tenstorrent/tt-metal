@@ -39,7 +39,6 @@
 namespace ttnn {
 namespace operations::conv {
 using namespace tt;
-using sliding_window::ParallelConfig;
 using sliding_window::SlidingWindowConfig;
 
 namespace conv2d {
@@ -663,10 +662,18 @@ Result conv2d_L1(
     if (conv_config.enable_activation_reuse) {
         if (conv_config.enable_act_double_buffer) {
             conv_config.enable_act_double_buffer = false;
-            log_warning(
+            log_debug(
                 tt::LogOp,
                 "Activation double buffering is currently not supported when activation reuse optimization is enabled, "
                 "disabling double buffering.");
+        }
+
+        if (conv_config.enable_weights_double_buffer) {
+            conv_config.enable_weights_double_buffer = false;
+            log_debug(
+                tt::LogOp,
+                "Weights are already fully buffered when activation reuse optimization is enabled, disabling weights "
+                "double buffering.");
         }
     }
     auto [output_height, output_width] =
