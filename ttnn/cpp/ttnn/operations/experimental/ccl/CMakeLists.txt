@@ -101,6 +101,9 @@ target_sources(
         slice_reshard_async/slice_reshard_async.cpp
         slice_reshard_async/device/slice_reshard_async_op.cpp
         slice_reshard_async/device/slice_reshard_async_program.cpp
+        strided_all_gather_async/strided_all_gather_async.cpp
+        strided_all_gather_async/device/strided_all_gather_async_op.cpp
+        strided_all_gather_async/device/strided_all_gather_async_program.cpp
 )
 
 target_include_directories(ttnn_op_experimental_ccl PRIVATE ${FixmeOpIncDirs})
