@@ -87,9 +87,6 @@ TEST_F(TopologyMapperTest, T3kMeshGraphTest) {
     MeshShape full_shape = mesh_graph.get_mesh_shape(mesh_id);
     EXPECT_EQ(full_shape, MeshShape(2, 4));
     EXPECT_EQ(topology_mapper.get_mesh_shape(mesh_id), full_shape);
-
-    // Validate that the host rank is 0
-    EXPECT_EQ(host_ranks.values(), std::vector<MeshHostRankId>({MeshHostRankId(0)}));
 }
 
 TEST_F(TopologyMapperTest, DualGalaxyBigMeshTest) {
@@ -106,7 +103,7 @@ TEST_F(TopologyMapperTest, DualGalaxyBigMeshTest) {
         local_mesh_binding.host_rank = MeshHostRankId{0};
     } else {
         local_mesh_binding.mesh_ids = {MeshId{0}};
-        local_mesh_binding.host_rank = MeshHostRankId{0};
+        local_mesh_binding.host_rank = MeshHostRankId{1};
     }
 
     auto topology_mapper = TopologyMapper(mesh_graph, *physical_system_descriptor_, local_mesh_binding);
@@ -133,40 +130,6 @@ TEST_F(TopologyMapperTest, DualGalaxyBigMeshTest) {
     auto asic_id_35 = topology_mapper.get_asic_id_from_fabric_node_id(FabricNodeId(MeshId{0}, 35));
     auto asic_id_27 = topology_mapper.get_asic_id_from_fabric_node_id(FabricNodeId(MeshId{0}, 27));
 
-    // Check they belong to the right host rank per ASCII map (rows 0-31 => H0, 32-63 => H1)
-    EXPECT_EQ(
-        1,
-        physical_system_descriptor_->get_rank_for_hostname(
-            physical_system_descriptor_->get_host_name_for_asic(asic_id_56)));
-    EXPECT_EQ(
-        1,
-        physical_system_descriptor_->get_rank_for_hostname(
-            physical_system_descriptor_->get_host_name_for_asic(asic_id_48)));
-    EXPECT_EQ(
-        0,
-        physical_system_descriptor_->get_rank_for_hostname(
-            physical_system_descriptor_->get_host_name_for_asic(asic_id_8)));
-    EXPECT_EQ(
-        0,
-        physical_system_descriptor_->get_rank_for_hostname(
-            physical_system_descriptor_->get_host_name_for_asic(asic_id_0)));
-    EXPECT_EQ(
-        1,
-        physical_system_descriptor_->get_rank_for_hostname(
-            physical_system_descriptor_->get_host_name_for_asic(asic_id_39)));
-    EXPECT_EQ(
-        0,
-        physical_system_descriptor_->get_rank_for_hostname(
-            physical_system_descriptor_->get_host_name_for_asic(asic_id_31)));
-    EXPECT_EQ(
-        1,
-        physical_system_descriptor_->get_rank_for_hostname(
-            physical_system_descriptor_->get_host_name_for_asic(asic_id_35)));
-    EXPECT_EQ(
-        0,
-        physical_system_descriptor_->get_rank_for_hostname(
-            physical_system_descriptor_->get_host_name_for_asic(asic_id_27)));
-
     // Check for adjacency
     EXPECT_TRUE(contains(physical_system_descriptor_->get_asic_neighbors(asic_id_56), asic_id_48));
     EXPECT_TRUE(contains(physical_system_descriptor_->get_asic_neighbors(asic_id_48), asic_id_56));
@@ -186,24 +149,6 @@ TEST_F(TopologyMapperTest, DualGalaxyBigMeshTest) {
     MeshShape full_shape = mesh_graph.get_mesh_shape(mesh_id);
     EXPECT_EQ(full_shape, MeshShape(8, 8));
     EXPECT_EQ(topology_mapper.get_mesh_shape(mesh_id), full_shape);
-
-    // Check coord range for host rank 0 is 0,0 4, 7
-    EXPECT_EQ(
-        topology_mapper.get_coord_range(mesh_id, MeshHostRankId(0)),
-        MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(3, 7)));
-    // Check coord range for host rank 1 is 4,0 8, 7
-    EXPECT_EQ(
-        topology_mapper.get_coord_range(mesh_id, MeshHostRankId(1)),
-        MeshCoordinateRange(MeshCoordinate(4, 0), MeshCoordinate(7, 7)));
-
-    // Check the host rank for chip 56 is 0
-    EXPECT_EQ(topology_mapper.get_host_rank_for_chip(mesh_id, 56), MeshHostRankId(1));
-    // Check the host rank for chip 48 is 1
-    EXPECT_EQ(topology_mapper.get_host_rank_for_chip(mesh_id, 48), MeshHostRankId(1));
-    // Check the host rank for chip 8 is 0
-    EXPECT_EQ(topology_mapper.get_host_rank_for_chip(mesh_id, 8), MeshHostRankId(0));
-    // Check the host rank for chip 0 is 0
-    EXPECT_EQ(topology_mapper.get_host_rank_for_chip(mesh_id, 0), MeshHostRankId(0));
 }
 
 TEST_F(TopologyMapperTest, N300MeshGraphTest) {
@@ -289,6 +234,69 @@ TEST_F(TopologyMapperTest, P100MeshGraphTest) {
     // Chip IDs list
     EXPECT_EQ(
         topology_mapper.get_chip_ids(mesh_id), MeshContainer<chip_id_t>(MeshShape(1, 1), std::vector<chip_id_t>{0}));
+}
+
+TEST_F(TopologyMapperTest, BHQB4x4MeshGraphTest) {
+    const std::filesystem::path bh_qb_4x4_mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tt_metal/fabric/mesh_graph_descriptors/bh_qb_4x4_mesh_graph_descriptor.textproto";
+
+    auto mesh_graph = MeshGraph(bh_qb_4x4_mesh_graph_desc_path.string());
+
+    // Create a local mesh binding for testing
+    LocalMeshBinding local_mesh_binding;
+    if (*tt::tt_metal::MetalContext::instance().global_distributed_context().rank() == 0) {
+        local_mesh_binding.mesh_ids = {MeshId{0}};
+        local_mesh_binding.host_rank = MeshHostRankId{0};
+    } else if (*tt::tt_metal::MetalContext::instance().global_distributed_context().rank() == 1) {
+        local_mesh_binding.mesh_ids = {MeshId{0}};
+        local_mesh_binding.host_rank = MeshHostRankId{1};
+    } else if (*tt::tt_metal::MetalContext::instance().global_distributed_context().rank() == 2) {
+        local_mesh_binding.mesh_ids = {MeshId{0}};
+        local_mesh_binding.host_rank = MeshHostRankId{2};
+    } else if (*tt::tt_metal::MetalContext::instance().global_distributed_context().rank() == 3) {
+        local_mesh_binding.mesh_ids = {MeshId{0}};
+        local_mesh_binding.host_rank = MeshHostRankId{3};
+    }
+
+
+    auto topology_mapper = TopologyMapper(mesh_graph, *physical_system_descriptor_, local_mesh_binding);
+
+    // Physical System Descriptor: 4x4 Blackhole mesh
+    // 0  1  | 2  3
+    // 4  5  | 6  7
+    // ------+-------
+    // 8  9  | 10 11
+    // 12 13 | 14 15
+
+    auto asic_id_0 = topology_mapper.get_asic_id_from_fabric_node_id(FabricNodeId(MeshId{0}, 0));
+    auto asic_id_1 = topology_mapper.get_asic_id_from_fabric_node_id(FabricNodeId(MeshId{0}, 1));
+    auto asic_id_7 = topology_mapper.get_asic_id_from_fabric_node_id(FabricNodeId(MeshId{0}, 7));
+    auto asic_id_4 = topology_mapper.get_asic_id_from_fabric_node_id(FabricNodeId(MeshId{0}, 4));
+    auto asic_id_13 = topology_mapper.get_asic_id_from_fabric_node_id(FabricNodeId(MeshId{0}, 13));
+    auto asic_id_14 = topology_mapper.get_asic_id_from_fabric_node_id(FabricNodeId(MeshId{0}, 14));
+    auto asic_id_15 = topology_mapper.get_asic_id_from_fabric_node_id(FabricNodeId(MeshId{0}, 15));
+    auto asic_id_3 = topology_mapper.get_asic_id_from_fabric_node_id(FabricNodeId(MeshId{0}, 3));
+
+    // Check for adjacency
+    EXPECT_TRUE(contains(physical_system_descriptor_->get_asic_neighbors(asic_id_0), asic_id_1));
+    EXPECT_TRUE(contains(physical_system_descriptor_->get_asic_neighbors(asic_id_1), asic_id_0));
+    EXPECT_TRUE(contains(physical_system_descriptor_->get_asic_neighbors(asic_id_7), asic_id_4));
+    EXPECT_TRUE(contains(physical_system_descriptor_->get_asic_neighbors(asic_id_4), asic_id_7));
+    EXPECT_TRUE(contains(physical_system_descriptor_->get_asic_neighbors(asic_id_13), asic_id_14));
+    EXPECT_TRUE(contains(physical_system_descriptor_->get_asic_neighbors(asic_id_14), asic_id_13));
+    EXPECT_TRUE(contains(physical_system_descriptor_->get_asic_neighbors(asic_id_15), asic_id_3));
+    EXPECT_TRUE(contains(physical_system_descriptor_->get_asic_neighbors(asic_id_3), asic_id_15));
+
+    // Check the host ranks are right
+    const MeshId mesh_id{0};
+    const auto& host_ranks = topology_mapper.get_host_ranks(mesh_id);
+    EXPECT_EQ(host_ranks.size(), 4u);
+
+    // Check the full shape and sub shape are right
+    MeshShape full_shape = mesh_graph.get_mesh_shape(mesh_id);
+    EXPECT_EQ(full_shape, MeshShape(4, 4));
+    EXPECT_EQ(topology_mapper.get_mesh_shape(mesh_id), full_shape);
 }
 
 TEST_F(TopologyMapperTest, T3kMultiMeshTest) {

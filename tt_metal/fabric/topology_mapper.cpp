@@ -8,6 +8,8 @@
 #include <unordered_set>
 #include <limits>
 #include <queue>
+#include <stack>
+#include <functional>
 
 #include <tt-logger/tt-logger.hpp>
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
@@ -15,6 +17,10 @@
 #include <tt-metalium/fabric_types.hpp>
 #include "tt_metal/impl/context/metal_context.hpp"
 #include <tt-metalium/distributed_context.hpp>
+#include <chrono>
+#include <thread>
+#include <atomic>
+#include <cstdlib>
 
 namespace tt::tt_fabric {
 
@@ -40,6 +46,100 @@ FabricNodeId decode_fabric_node_id(std::uint64_t encoded_value) {
     return FabricNodeId(
         MeshId{static_cast<std::uint32_t>(encoded_value >> 32)},
         static_cast<std::uint32_t>(encoded_value & 0xFFFFFFFF));
+}
+
+// Helper function to get timeout duration for topology mapping operations
+std::chrono::duration<float> get_topology_mapping_timeout() {
+    auto timeout = tt::tt_metal::MetalContext::instance().rtoptions().get_timeout_duration_for_operations();
+    if (timeout.count() <= 0.0f) {
+        const char* env_override = std::getenv("TT_FABRIC_BUILD_MAP_TIMEOUT_SECONDS");
+        float seconds = env_override ? std::strtof(env_override, nullptr) : 60.0f;
+        timeout = std::chrono::duration<float>(seconds);
+    }
+    return timeout;
+}
+
+// Generic timeout mechanism that can handle different types of operations
+template <typename OperationType, typename... Args>
+void execute_with_timeout(OperationType&& operation, const std::string& operation_description, Args&&... args) {
+    auto timeout = get_topology_mapping_timeout();
+    std::atomic<bool> operation_completed{false};
+    std::atomic<bool> operation_failed{false};
+    std::exception_ptr exception_ptr{nullptr};
+
+    // Run operation in a separate thread
+    std::thread operation_thread([&]() {
+        try {
+            operation(std::forward<Args>(args)...);
+            operation_completed = true;
+        } catch (...) {
+            exception_ptr = std::current_exception();
+            operation_failed = true;
+        }
+    });
+
+    // Wait for completion or timeout
+    auto start = std::chrono::steady_clock::now();
+    while (!operation_completed && !operation_failed) {
+        std::this_thread::yield();
+        if (timeout.count() > 0.0f) {
+            auto now = std::chrono::steady_clock::now();
+            float elapsed = std::chrono::duration<float>(now - start).count();
+            if (elapsed >= timeout.count()) {
+                // Timeout occurred - detach the thread and throw an error
+                operation_thread.detach();
+                TT_THROW(
+                    "Timeout while waiting for {} operation. One or more hosts may have failed.",
+                    operation_description);
+            }
+        }
+    }
+
+    // Wait for thread to complete
+    if (operation_thread.joinable()) {
+        operation_thread.join();
+    }
+
+    // Re-throw any exception that occurred in the thread
+    if (operation_failed && exception_ptr) {
+        std::rethrow_exception(exception_ptr);
+    }
+}
+
+// Specialized wrapper for request-based operations (like irecv)
+template<typename RequestType>
+void wait_for_request_with_timeout(RequestType& req, const std::string& operation_description, int rank) {
+    auto timeout = get_topology_mapping_timeout();
+    auto start = std::chrono::steady_clock::now();
+
+    while (!req->test()) {
+        std::this_thread::yield();
+        if (timeout.count() > 0.0f) {
+            auto now = std::chrono::steady_clock::now();
+            float elapsed = std::chrono::duration<float>(now - start).count();
+            if (elapsed >= timeout.count()) {
+                req->cancel();
+                TT_THROW(
+                    "Timeout while waiting for {} from rank {}. Controller likely failed.",
+                    operation_description,
+                    rank);
+            }
+        }
+    }
+}
+
+// Wrapper for all_gather operations
+void all_gather_with_timeout(
+    const std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext>& context,
+    tt::stl::Span<std::byte> send_buf,
+    tt::stl::Span<std::byte> recv_buf,
+    const std::string& operation_description) {
+    execute_with_timeout(
+        [&context](tt::stl::Span<std::byte> send, tt::stl::Span<std::byte> recv) {
+            context->all_gather(send, recv);
+        },
+        operation_description,
+        send_buf, recv_buf);
 }
 }  // namespace
 
@@ -112,6 +212,14 @@ void TopologyMapper::build_mapping() {
         // Locate mesh corners per mesh
         auto mesh_corners_map = build_mesh_corners_mappings(host_corners_map, mesh_id_host_names);
 
+        log_critical(tt::LogFabric, "Mesh corners map:");
+        for (const auto& [mesh, corners] : mesh_corners_map) {
+            log_critical(tt::LogFabric, "Mesh {}:", mesh);
+            for (const auto& corner : corners) {
+                log_critical(tt::LogFabric, "  - {}", corner);
+            }
+        }
+
         // Populate fabric_node_id_to_asic_id mapping for each mesh
         populate_fabric_node_id_to_asic_id_mappings(mesh_corners_map, mesh_id_host_names);
 
@@ -145,10 +253,12 @@ std::unordered_map<MeshId, std::unordered_set<HostName>> TopologyMapper::build_c
     // 1) All-gather counts (how many meshes each rank owns)
     const std::uint32_t local_count = static_cast<std::uint32_t>(local_mesh_binding_.mesh_ids.size());
     std::vector<std::uint32_t> counts(world_size, 0);
-    global_context->all_gather(
+    all_gather_with_timeout(
+        global_context,
         ttsl::Span<std::byte>(
             reinterpret_cast<std::byte*>(const_cast<std::uint32_t*>(&local_count)), sizeof(std::uint32_t)),
-        ttsl::as_writable_bytes(ttsl::Span<std::uint32_t>(counts.data(), counts.size())));
+        ttsl::as_writable_bytes(ttsl::Span<std::uint32_t>(counts.data(), counts.size())),
+        "mesh count all_gather");
 
     const std::uint32_t max_count = counts.empty() ? 0 : *std::max_element(counts.begin(), counts.end());
 
@@ -161,10 +271,12 @@ std::unordered_map<MeshId, std::unordered_set<HostName>> TopologyMapper::build_c
 
     std::vector<std::uint64_t> gathered(static_cast<std::size_t>(world_size) * max_count, sentinel);
     if (max_count > 0) {
-        global_context->all_gather(
+        all_gather_with_timeout(
+            global_context,
             ttsl::Span<std::byte>(
                 reinterpret_cast<std::byte*>(send_values.data()), send_values.size() * sizeof(std::uint64_t)),
-            ttsl::as_writable_bytes(ttsl::Span<std::uint64_t>(gathered.data(), gathered.size())));
+            ttsl::as_writable_bytes(ttsl::Span<std::uint64_t>(gathered.data(), gathered.size())),
+            "mesh binding all_gather");
     }
 
     // 3) Populate mesh_id_to_hosts using gathered data and counts
@@ -262,11 +374,68 @@ std::unordered_map<MeshId, std::unordered_set<tt::tt_metal::AsicID>> TopologyMap
     const std::unordered_map<MeshId, std::unordered_set<HostName>>& mesh_id_to_host_names) const {
     std::unordered_map<MeshId, std::unordered_set<tt::tt_metal::AsicID>> mesh_corner_map;
 
+    auto get_local_adjacents_corners = [&](tt::tt_metal::AsicID asic_id, MeshId mesh_id, const std::unordered_set<tt::tt_metal::AsicID>& all_corners) {
+        std::vector<tt::tt_metal::AsicID> adjacents;
+        // Only get adjacents that are in the mesh
+        auto mesh_hostnames = mesh_id_to_host_names.at(mesh_id);
+        for (const auto& neighbor : physical_system_descriptor_.get_asic_neighbors(asic_id)) {
+            auto current_host_name = physical_system_descriptor_.get_host_name_for_asic(asic_id);
+            auto neighbor_host_name = physical_system_descriptor_.get_host_name_for_asic(neighbor);
+            // Only get adjacents that are in the mesh and not on the same host
+            if (mesh_hostnames.contains(neighbor_host_name) && all_corners.contains(neighbor)) {
+                adjacents.push_back(neighbor);
+            }
+        }
+        return adjacents;
+    };
+
+    std::function<void(
+        tt::tt_metal::AsicID,
+        std::unordered_set<tt::tt_metal::AsicID>&,
+        std::unordered_set<HostName>&,
+        const std::unordered_set<tt::tt_metal::AsicID>&,
+        const unsigned int,
+        const std::unordered_set<HostName>&,
+        const unsigned int)>
+        dfs = [&](tt::tt_metal::AsicID current,
+                  std::unordered_set<tt::tt_metal::AsicID>& visited_asics,
+                  std::unordered_set<HostName>& visited_hosts,
+                  const std::unordered_set<tt::tt_metal::AsicID>& all_corners,
+                  const unsigned int mesh_id,
+                  const std::unordered_set<HostName>& mesh_hostnames,
+                  const unsigned int num_corners) {
+            visited_asics.insert(current);
+            visited_hosts.insert(physical_system_descriptor_.get_host_name_for_asic(current));
+
+            // If it overshoots the number of corners return
+            if (visited_asics.size() == num_corners) {
+                if (visited_hosts.size() != mesh_hostnames.size()) {
+                    // Incorrect!
+                    visited_asics.erase(current);
+                    visited_hosts.erase(physical_system_descriptor_.get_host_name_for_asic(current));
+                }
+                return;
+            }
+
+            for (const auto& adj_asic : get_local_adjacents_corners(current, MeshId(mesh_id), all_corners)) {
+                if (!visited_asics.contains(adj_asic)) {
+                    dfs(adj_asic, visited_asics, visited_hosts, all_corners, mesh_id, mesh_hostnames, num_corners);
+                }
+            }
+        };
+
     // Populate corners per mesh
     for (const auto& [mesh_id, mesh_hostnames] : mesh_id_to_host_names) {
+        auto mesh_shape = mesh_graph_.get_mesh_shape(mesh_id);
+        bool is_1d = mesh_shape[0] == 1 || mesh_shape[1] == 1;
+
+        const unsigned int num_corners = is_1d ? 2 : 4;
+
         // Ensure an entry exists even if no corners are discovered (e.g., 1x1 meshes)
         (void)mesh_corner_map[mesh_id];
-        // Get the corners for each host
+
+        // Collect all corners from all hosts in the mesh
+        std::unordered_set<tt::tt_metal::AsicID> all_corners;
         for (const auto& host_name : mesh_hostnames) {
             auto hc_it = host_corners.find(host_name);
             if (hc_it == host_corners.end()) {
@@ -274,21 +443,47 @@ std::unordered_map<MeshId, std::unordered_set<tt::tt_metal::AsicID>> TopologyMap
                 continue;
             }
             for (const auto& corner : hc_it->second) {
-                bool is_mesh_corner = true;
-                // Check if the corner is a mesh corner
-                // The mesh corner is the one that is not connected to any other host in the mesh
-                for (const auto& adj_asic : physical_system_descriptor_.get_asic_neighbors(corner)) {
-                    const auto& adj_host = physical_system_descriptor_.get_host_name_for_asic(adj_asic);
-                    if (adj_host != host_name && mesh_hostnames.contains(adj_host)) {
-                        is_mesh_corner = false;
-                        break;
-                    }
-                }
-                if (is_mesh_corner) {
-                    mesh_corner_map[mesh_id].insert(corner);
-                }
+                all_corners.insert(corner);
             }
         }
+
+        // If there is only one host, then all corners are in the mesh
+        if (mesh_hostnames.size() == 1) {
+            mesh_corner_map[mesh_id].insert(all_corners.begin(), all_corners.end());
+            continue;
+        }
+
+        // If there are any corners that aren't connected to other corners, then its a corner of the mesh
+        for (const auto& corner : all_corners) {
+            bool is_mesh_corner = true;
+            for (const auto& neighbor : physical_system_descriptor_.get_asic_neighbors(corner)) {
+                if (all_corners.contains(neighbor)) {
+                    is_mesh_corner = false;
+                    break;
+                }
+            }
+            if (is_mesh_corner) {
+                mesh_corner_map[mesh_id].insert(corner);
+            }
+        }
+        if (mesh_corner_map[mesh_id].size() == num_corners) {
+            continue;
+        }
+
+        // Try to find 4 connected corners starting from each corner
+        for (const auto& start_corner : all_corners) {
+            std::unordered_set<tt::tt_metal::AsicID> visited_asics;
+            std::unordered_set<HostName> visited_hosts;
+
+            dfs(start_corner, visited_asics, visited_hosts, all_corners, mesh_id.get(), mesh_hostnames, num_corners);
+
+            if (visited_asics.size() == num_corners) {
+                mesh_corner_map[mesh_id].insert(visited_asics.begin(), visited_asics.end());
+                break;
+            }
+        }
+
+        TT_FATAL(mesh_corner_map[mesh_id].size() == num_corners, "Missing connections to form a uniform 2D mesh, run build/test/tt_metal/tt_fabric/test_system_health to check if all chips are connected", mesh_id, mesh_corner_map[mesh_id].size());
     }
 
     return mesh_corner_map;
@@ -309,7 +504,8 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
 
     // Helper: build adjacency within mesh (exclude remote chips)
     auto build_adjacency = [&](const std::unordered_set<tt::tt_metal::AsicID>& in_mesh_asics,
-                               const std::unordered_set<HostName>& mesh_hosts) {
+                               const std::unordered_set<HostName>& mesh_hosts,
+                               const std::unordered_set<tt::tt_metal::AsicID>& mesh_corners) {
         std::unordered_map<tt::tt_metal::AsicID, std::vector<tt::tt_metal::AsicID>> adj;
         for (const auto& asic : in_mesh_asics) {
             std::vector<tt::tt_metal::AsicID> nbrs;
@@ -322,6 +518,10 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
                 if (board_type == BoardType::UBB &&
                     physical_system_descriptor_.is_external_eth_link_for_ubb(asic, channel_id) &&
                     !physical_system_descriptor_.is_cross_host_eth_link(asic, channel_id)) {
+                    continue;
+                }
+
+                if (mesh_corners.contains(n) && physical_system_descriptor_.is_cross_host_eth_link(asic, channel_id)) {
                     continue;
                 }
 
@@ -380,7 +580,7 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
 
         // Collect ASICs belonging to this mesh and build adjacency (intra-mesh only)
         auto in_mesh_asics = gather_mesh_asics(mesh_hosts);
-        auto adj = build_adjacency(in_mesh_asics, mesh_hosts);
+        auto adj = build_adjacency(in_mesh_asics, mesh_hosts, corner_set);
 
         // Special case 1x1
         if (ns == 1 && ew == 1) {
@@ -574,10 +774,14 @@ void TopologyMapper::receive_mapping_from_host(int rank) {
 
     // Receive count, then 'count' fixed-size records
     std::uint32_t count = 0;
-    distributed_context.recv(
-        tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&count), sizeof(count)),
-        Rank{static_cast<uint32_t>(rank)},
-        Tag{0});
+    {
+        auto req = distributed_context.irecv(
+            tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&count), sizeof(count)),
+            Rank{static_cast<uint32_t>(rank)},
+            Tag{0});
+
+        wait_for_request_with_timeout(req, "topology mapping header", rank);
+    }
 
     fabric_node_id_to_asic_id_.clear();
     asic_id_to_fabric_node_id_.clear();
@@ -593,10 +797,13 @@ void TopologyMapper::receive_mapping_from_host(int rank) {
 
     for (std::uint32_t i = 0; i < count; ++i) {
         std::vector<uint8_t> record(16);
-        distributed_context.recv(
+        auto req = distributed_context.irecv(
             tt::stl::as_writable_bytes(tt::stl::Span<uint8_t>(record.data(), record.size())),
             Rank{static_cast<uint32_t>(rank)},
             Tag{0});
+
+        wait_for_request_with_timeout(
+            req, "topology mapping record " + std::to_string(i + 1) + " of " + std::to_string(count), rank);
 
         std::size_t idx = 0;
         const auto asic_val = read_u64_from(record, idx);
