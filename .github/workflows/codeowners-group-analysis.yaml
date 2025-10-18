@@ -595,7 +595,7 @@ jobs:
                   team_files_str = ",".join(sorted(team_files))
                   teams_list.append(f"{team}:{team_files_str}")
 
-              teams_list = ",".join(teams_list)
+              teams_list = "@@@".join(teams_list)
 
               # For individuals, we need to group them by their patterns
               # Each pattern becomes a "group" that requires approval from any of its members
@@ -616,9 +616,9 @@ jobs:
 
               individuals_list = "@@@".join(pattern_groups_list) if pattern_groups_list else ""
 
-              # Combine all groups
+              # Combine all groups - now using @@@  as delimiter for both teams and individuals
               if teams_list and individuals_list:
-                  all_groups = teams_list + "," + individuals_list
+                  all_groups = teams_list + "@@@" + individuals_list
               elif teams_list:
                   all_groups = teams_list
               else:
@@ -732,8 +732,10 @@ jobs:
           # Get team members for teams that need approval
           TEAM_MEMBERS=""
           if [ -n "$TEAMS" ]; then
-            IFS=',' read -ra TEAM_ARRAY <<< "$TEAMS"
-            for team in "${TEAM_ARRAY[@]}"; do
+            IFS='@@@' read -ra TEAM_ARRAY <<< "$TEAMS"
+            for team_entry in "${TEAM_ARRAY[@]}"; do
+              # Extract team name from team:files format
+              team=$(echo "$team_entry" | cut -d':' -f1)
               # Remove @org/ prefix for API call
               clean_team=$(echo "$team" | sed 's/^@[^\/]*\///')
 
@@ -784,25 +786,13 @@ jobs:
 
           # Display teams with member information and approval status
           if [ -n "$TEAMS" ]; then
-            # Teams are now in format: "@team:files@@@team2:files2,..."
-            # Need to parse this properly
-            TEAMS_WITH_FILES=""
-            while IFS=':' read -r team files || [ -n "$team" ]; do
-              if [ -n "$team" ]; then
-                # Remove @ prefix for processing
-                clean_team=$(echo "$team" | sed 's/^@//')
-                TEAMS_WITH_FILES="$TEAMS_WITH_FILES$team:$files,"
-              fi
-            done <<< "$TEAMS"
-
-            # Remove trailing comma
-            TEAMS_WITH_FILES=$(echo "$TEAMS_WITH_FILES" | sed 's/,$//')
-
-            IFS=',' read -ra TEAM_ARRAY <<< "$TEAMS_WITH_FILES"
+            # Teams are now in format: "@team1:files1@@@team2:files2"
+            IFS='@@@' read -ra TEAM_ARRAY <<< "$TEAMS"
             for team_entry in "${TEAM_ARRAY[@]}"; do
               # Extract team and files from team:files format
               team=$(echo "$team_entry" | cut -d':' -f1)
-              team_files=$(echo "$team_entry" | cut -d':' -f2)
+              # Get everything after first colon as files (in case there are colons in file paths)
+              team_files=$(echo "$team_entry" | cut -d':' -f2-)
 
               # Skip the large-changes team as requested
               if [ "$team" = "@tenstorrent/metalium-codeowners-large-changes" ]; then
@@ -1610,8 +1600,10 @@ jobs:
 
           # Process pending teams - check for Slack groups first, then individual selection
           if [ -n "$TEAMS" ]; then
-            IFS=',' read -ra TEAM_ARRAY <<< "$TEAMS"
-            for team in "${TEAM_ARRAY[@]}"; do
+            IFS='@@@' read -ra TEAM_ARRAY <<< "$TEAMS"
+            for team_entry in "${TEAM_ARRAY[@]}"; do
+              # Extract team name from team:files format
+              team=$(echo "$team_entry" | cut -d':' -f1)
               if [ "$team" = "@tenstorrent/metalium-codeowners-large-changes" ]; then
                 continue
               fi
