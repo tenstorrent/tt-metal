@@ -85,6 +85,19 @@ inline void llk_unpack_AB(
     WAYPOINT("UABD");
 }
 
+/**
+ * Unpacks AB for fused operations where the math thread reuses destination registers as operands.
+ * This function resets counters and sets DVALID flags without performing MOP operations,
+ * allowing the math thread to use destination data as source operands for subsequent operations.
+ * Should be called in fused operations before the math thread accesses destination register data.
+ */
+inline void llk_unpack_AB_fused()
+{
+    WAYPOINT("UABW");
+    _llk_unpack_AB_fused_();
+    WAYPOINT("UABD");
+}
+
 template <ReduceDim dim, BroadcastType BType = BroadcastType::NONE, bool enforce_fp32_accumulation = false>
 inline void llk_unpack_AB_reduce_init(
     const std::uint32_t operandA,
