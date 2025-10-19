@@ -930,16 +930,16 @@ jobs:
                   # Remove trailing comma and space
                   approved_members=$(echo "$approved_members" | sed 's/, $//')
                   if [ -n "$APPROVED_GROUPS" ]; then
-                    APPROVED_GROUPS="$APPROVED_GROUPS\n- ✅ **$clean_team** (Team) - $team_members_info | **Approved by:** $approved_members$team_file_list_html"
+                    APPROVED_GROUPS="$APPROVED_GROUPS\n- ✅ **$clean_team** (Team) - $team_members_info | **Approved by:** $approved_members$team_file_list_html\n"
                   else
-                    APPROVED_GROUPS="- ✅ **$clean_team** (Team) - $team_members_info | **Approved by:** $approved_members$team_file_list_html"
+                    APPROVED_GROUPS="- ✅ **$clean_team** (Team) - $team_members_info | **Approved by:** $approved_members$team_file_list_html\n"
                   fi
                   APPROVED_COUNT=$((APPROVED_COUNT + 1))
                 else
                   if [ -n "$PENDING_GROUPS" ]; then
-                    PENDING_GROUPS="$PENDING_GROUPS\n- ⏳ **$clean_team** (Team) - $team_members_info | **Pending approval**$team_file_list_html"
+                    PENDING_GROUPS="$PENDING_GROUPS\n- ⏳ **$clean_team** (Team) - $team_members_info | **Pending approval**$team_file_list_html\n"
                   else
-                    PENDING_GROUPS="- ⏳ **$clean_team** (Team) - $team_members_info | **Pending approval**$team_file_list_html"
+                    PENDING_GROUPS="- ⏳ **$clean_team** (Team) - $team_members_info | **Pending approval**$team_file_list_html\n"
                   fi
                   PENDING_COUNT=$((PENDING_COUNT + 1))
                 fi
@@ -1011,16 +1011,16 @@ jobs:
                   # Remove trailing comma and space
                   approved_owners=$(echo "$approved_owners" | sed 's/, $//')
                   if [ -n "$APPROVED_GROUPS" ]; then
-                    APPROVED_GROUPS="$APPROVED_GROUPS\n- ✅ **$pattern** (Group) - Members: $all_owners | **Approved by:** $approved_owners$file_list_html"
+                    APPROVED_GROUPS="$APPROVED_GROUPS\n- ✅ **$pattern** (Group) - Members: $all_owners | **Approved by:** $approved_owners$file_list_html\n"
                   else
-                    APPROVED_GROUPS="- ✅ **$pattern** (Group) - Members: $all_owners | **Approved by:** $approved_owners$file_list_html"
+                    APPROVED_GROUPS="- ✅ **$pattern** (Group) - Members: $all_owners | **Approved by:** $approved_owners$file_list_html\n"
                   fi
                   APPROVED_COUNT=$((APPROVED_COUNT + 1))
                 else
                   if [ -n "$PENDING_GROUPS" ]; then
-                    PENDING_GROUPS="$PENDING_GROUPS\n- ⏳ **$pattern** (Group) - Members: $all_owners | **Pending approval**$file_list_html"
+                    PENDING_GROUPS="$PENDING_GROUPS\n- ⏳ **$pattern** (Group) - Members: $all_owners | **Pending approval**$file_list_html\n"
                   else
-                    PENDING_GROUPS="- ⏳ **$pattern** (Group) - Members: $all_owners | **Pending approval**$file_list_html"
+                    PENDING_GROUPS="- ⏳ **$pattern** (Group) - Members: $all_owners | **Pending approval**$file_list_html\n"
                   fi
                   PENDING_COUNT=$((PENDING_COUNT + 1))
                 fi
@@ -1069,16 +1069,9 @@ jobs:
               COMMENT="<!-- CodeOwners-Workflow-Bot -->\n## CodeOwners Group Analysis\n\nThis PR requires approval from **one member of each** of the following groups:\n\n**Summary:** $PENDING_COUNT pending groups, $APPROVED_COUNT approved groups\n\n### Group Information:\n\n$ALL_GROUPS\n\n**Note:** At least one approval from each group is sufficient."
             fi
 
-          # Add "Requested by" line if requester is different from PR author
-          if [ -n "$REQUESTER_LOGIN" ] && [ "$REQUESTER_LOGIN" != "$PR_AUTHOR_LOGIN" ]; then
-            COMMENT="$COMMENT\n\n**Requested by:** $REQUESTER_NAME (@$REQUESTER_LOGIN)"
-          fi
-
-          # Add changes count if available
-          if [ "$TOTAL_ADDITIONS" -gt 0 ] || [ "$TOTAL_DELETIONS" -gt 0 ]; then
-            CHANGES_COUNT="**Changes:** -$TOTAL_DELETIONS +$TOTAL_ADDITIONS"
-            COMMENT="$COMMENT\n\n$CHANGES_COUNT"
-          fi
+          # Note: "Requested by" and "Changes" info removed from GitHub comment as they're
+          # already visible in the PR UI. These details are included in Slack notifications
+          # where they provide important context.
 
           # Add note if only PR author is available as codeowner
           if [ "$NO_OWNERS_AVAILABLE" = "true" ]; then
