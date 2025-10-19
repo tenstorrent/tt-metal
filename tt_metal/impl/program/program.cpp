@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
 #include <allocator.hpp>
 #include <circular_buffer.hpp>
 #include <circular_buffer_config.hpp>
@@ -520,18 +521,12 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
         const auto& handle_to_kernel = kernels_[programmable_core_type_index];
         for (const auto& [id, kernel] : handle_to_kernel) {
             for (auto core : kernel->logical_cores()) {
-                if (core.x > grid_extent_[programmable_core_type_index].x) {
-                    grid_extent_[programmable_core_type_index].x = core.x;
-                }
-                if (core.y > grid_extent_[programmable_core_type_index].y) {
-                    grid_extent_[programmable_core_type_index].y = core.y;
-                }
-                if (core.x < base.x) {
-                    base.x = core.x;
-                }
-                if (core.y < base.y) {
-                    base.y = core.y;
-                }
+                grid_extent_[programmable_core_type_index].x =
+                    std::max(core.x, grid_extent_[programmable_core_type_index].x);
+                grid_extent_[programmable_core_type_index].y =
+                    std::max(core.y, grid_extent_[programmable_core_type_index].y);
+                base.x = std::min(core.x, base.x);
+                base.y = std::min(core.y, base.y);
             }
         }
         grid_extent_[programmable_core_type_index].x++;

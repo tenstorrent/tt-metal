@@ -4,6 +4,7 @@
 
 #include "hostdevcommon/kernel_structs.h"
 #include "optional"
+#include <algorithm>
 #include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "tt-metalium/math.hpp"
@@ -553,9 +554,7 @@ get_padded_slice_runtime_args_tile_sharded_output(
                                     TILE_HEIGHT) *
                                    num_output_tiles_per_dim[0];
         }
-        if (num_full_rows < 0) {
-            num_full_rows = 0;
-        }
+        num_full_rows = std::max(num_full_rows, 0);
         log_trace(
             tt::LogOp,
             "For Core {}, Input Start ID {}, End ID {}, Output Start Coord: {}, End Coord : {}, Input Start Coord: {}, "

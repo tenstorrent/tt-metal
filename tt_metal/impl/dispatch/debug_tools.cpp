@@ -6,6 +6,7 @@
 
 #include <stdint.h>
 #include <stdlib.h>
+#include <algorithm>
 #include <iomanip>
 #include <iostream>
 #include <string>
@@ -295,9 +296,7 @@ uint32_t dump_prefetch_cmd(CQPrefetchCmd* cmd, uint32_t cmd_addr, std::ofstream&
 }
 
 void print_progress_bar(float progress, bool init = false) {
-    if (progress > 1.0) {
-        progress = 1.0;
-    }
+    progress = std::min<double>(progress, 1.0);
     static int prev_bar_position = -1;
     if (init) {
         prev_bar_position = -1;

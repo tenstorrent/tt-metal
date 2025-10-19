@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/data_movement/common/common.hpp"
+
+#include <algorithm>
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/data_movement/squeeze/squeeze.hpp"
 #include "ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
@@ -116,9 +118,7 @@ uint32_t get_effective_l1_cores(
     auto aggregate_bw = max_bw * num_nocs;
     float achieved_l1_bw = get_transaction_noc_bw(transaction_size, is_write ? l1_write_bw : l1_read_bw, index);
     uint32_t effective_cores = std::ceil((float)aggregate_bw / (float)achieved_l1_bw);
-    if (effective_cores > num_cores) {
-        effective_cores = num_cores;  // Limit to available cores
-    }
+    effective_cores = std::min(effective_cores, num_cores);
     return effective_cores;
 }
 
@@ -131,9 +131,7 @@ uint32_t get_effective_dram_cores(
     auto aggregate_bw = single_noc == 1 ? 190 : 265;
     float achieved_dram_bw = get_transaction_noc_bw(transaction_size, dram_bw, index);
     uint32_t effective_cores = std::ceil((float)aggregate_bw / (float)achieved_dram_bw);
-    if (effective_cores > num_cores) {
-        effective_cores = num_cores;  // Limit to available cores
-    }
+    effective_cores = std::min(effective_cores, num_cores);
     return effective_cores;
 }
 
@@ -454,9 +452,7 @@ int common_tm_bw_model(
             output_only ? total_write_cycles_not_local
                         : std::max(total_read_cycles_not_local, total_write_cycles_not_local);
         ideal_dev_clock_cycles = output_only ? total_write_cycles : std::max(total_read_cycles, total_write_cycles);
-        if (ideal_dev_clock_cycles_not_local < ideal_dev_clock_cycles) {
-            ideal_dev_clock_cycles = ideal_dev_clock_cycles_not_local;
-        }
+        ideal_dev_clock_cycles = std::min<unsigned int>(ideal_dev_clock_cycles_not_local, ideal_dev_clock_cycles);
     }
     // latency for llk compute kernels
     int total_compute_cycles = 0;

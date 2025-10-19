@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
 #include <chrono>
 #include <emmintrin.h>
 #include <fmt/base.h>
@@ -885,18 +886,14 @@ void gen_rnd_dram_paged_cmd(
     uint32_t start_page = std::rand() % num_dram_banks_g;
     uint32_t max_page_size = big_g ? MAX_PAGE_SIZE : 4096;
     uint32_t page_size = (std::rand() % (max_page_size + 1)) & ~(dram_alignment - 1);
-    if (page_size < dram_alignment) {
-        page_size = dram_alignment;
-    }
+    page_size = std::max(page_size, dram_alignment);
     uint32_t max_data = big_g ? DEVICE_DATA_SIZE : DEVICE_DATA_SIZE / 8;
     uint32_t max = DEVICE_DATA_SIZE - (device_data.size() * sizeof(uint32_t));
     max = (max > max_data) ? max_data : max;
     // start in bottom half of valid dram data to not worry about overflowing valid data
     uint32_t base_addr = (std::rand() % (DRAM_DATA_SIZE_BYTES / 2)) & ~(dram_alignment - 1);
     uint32_t size = std::rand() % max;
-    if (size < page_size) {
-        size = page_size;
-    }
+    size = std::max(size, page_size);
     uint32_t pages = size / page_size;
     TT_ASSERT(base_addr + (start_page * page_size + pages * page_size / num_dram_banks_g) < DRAM_DATA_SIZE_BYTES);
 
