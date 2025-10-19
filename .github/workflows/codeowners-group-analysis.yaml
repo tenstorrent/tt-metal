@@ -726,7 +726,7 @@ jobs:
           fi
 
           # Use #tt-metal-pr-review-requests Slack channel
-          SLACK_CHANNEL="C09HT5VSXRB"
+          SLACK_CHANNEL="C07G47JMQHM"
 
           echo "Using parameters: CREATE_NEW=$CREATE_NEW, PING_OWNERS=$PING_OWNERS, SEND_SLACK=$SEND_SLACK, SLACK_CHANNEL=$SLACK_CHANNEL"
 
@@ -1191,7 +1191,7 @@ jobs:
           fi
 
           # Use #tt-metal-pr-review-requests Slack channel
-          SLACK_CHANNEL="C09HT5VSXRB"
+          SLACK_CHANNEL="C07G47JMQHM"
 
           # GitHub team to Slack group mapping (needed for author notes processing)
           get_slack_group_id() {
@@ -1907,7 +1907,7 @@ jobs:
           PR_TITLE=$(echo "$PR_DATA" | jq -r '.title')
 
           # Use #tt-metal-pr-review-requests Slack channel
-          SLACK_CHANNEL="C09HT5VSXRB"
+          SLACK_CHANNEL="C07G47JMQHM"
 
           # Define API endpoint
           COMMENTS_API="https://api.github.com/repos/${{ github.repository }}/issues/$PR_NUMBER/comments"
@@ -2029,7 +2029,7 @@ jobs:
           PR_TITLE=$(echo "$PR_DATA" | jq -r '.title')
 
           # Use #tt-metal-pr-review-requests Slack channel
-          SLACK_CHANNEL="C09HT5VSXRB"
+          SLACK_CHANNEL="C07G47JMQHM"
 
           # GitHub team to Slack group mapping (needed for author notes processing)
           get_slack_group_id() {
