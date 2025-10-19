@@ -165,6 +165,27 @@ public:
     }
 };
 
+// Elastic sender channel implementation (stub for now)
+// Issue #26311
+template <typename HEADER_TYPE>
+class ElasticSenderEthChannel : public SenderEthChannelInterface<HEADER_TYPE, 0, ElasticSenderEthChannel<HEADER_TYPE>> {
+public:
+    explicit ElasticSenderEthChannel() = default;
+
+    void init_impl(size_t channel_base_address, size_t max_eth_payload_size_in_bytes, size_t header_size_bytes) {
+        // TODO: Issue #26311
+    }
+
+    size_t get_cached_next_buffer_slot_addr_impl() const {
+        // TODO: Issue #26311
+        return 0;
+    }
+
+    void advance_to_next_cached_buffer_slot_addr_impl() {
+        // TODO: Issue #26311
+    }
+};
+
 // Elastic channel buffer implementation (stub for now)
 // Issue #26311
 template <typename HEADER_TYPE>
