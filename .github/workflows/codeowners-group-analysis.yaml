@@ -596,7 +596,7 @@ jobs:
                   # Keep the @ prefix in team name for consistency
                   teams_list.append(f"{team}:{team_files_str}")
 
-              teams_list = "|||".join(teams_list)
+              teams_list = "§".join(teams_list)
 
               # For individuals, we need to group them by their patterns
               # Each pattern becomes a "group" that requires approval from any of its members
@@ -615,11 +615,11 @@ jobs:
 
                       pattern_groups_list.append(f"{pattern}:{owners_str}:{files_str}")
 
-              individuals_list = "|||".join(pattern_groups_list) if pattern_groups_list else ""
+              individuals_list = "§".join(pattern_groups_list) if pattern_groups_list else ""
 
-              # Combine all groups - now using ||| as delimiter for both teams and individuals
+              # Combine all groups - now using § as delimiter for both teams and individuals
               if teams_list and individuals_list:
-                  all_groups = teams_list + "|||" + individuals_list
+                  all_groups = teams_list + "§" + individuals_list
               elif teams_list:
                   all_groups = teams_list
               else:
@@ -734,7 +734,7 @@ jobs:
           TEAM_MEMBERS=""
           if [ -n "$TEAMS" ]; then
             echo "DEBUG get-team-members: TEAMS='$TEAMS'"
-            IFS='|||' read -ra TEAM_ARRAY <<< "$TEAMS"
+            IFS='§' read -ra TEAM_ARRAY <<< "$TEAMS"
             echo "DEBUG get-team-members: Split into ${#TEAM_ARRAY[@]} entries"
             for team_entry in "${TEAM_ARRAY[@]}"; do
               echo "DEBUG get-team-members: Processing team_entry='$team_entry'"
@@ -796,9 +796,9 @@ jobs:
 
           # Display teams with member information and approval status
           if [ -n "$TEAMS" ]; then
-            # Teams are now in format: "@team1:files1|||team2:files2"
+            # Teams are now in format: "@team1:files1§@team2:files2"
             echo "DEBUG generate-comment: TEAMS='$TEAMS'"
-            IFS='|||' read -ra TEAM_ARRAY <<< "$TEAMS"
+            IFS='§' read -ra TEAM_ARRAY <<< "$TEAMS"
             echo "DEBUG generate-comment: Split into ${#TEAM_ARRAY[@]} team entries"
             for team_entry in "${TEAM_ARRAY[@]}"; do
               echo "DEBUG generate-comment: Processing team_entry='$team_entry'"
@@ -939,8 +939,8 @@ jobs:
 
             # Add pattern groups with member information and approval status
             if [ -n "$INDIVIDUALS" ]; then
-              # Individuals are now grouped by pattern: "pattern:username1|full_name1,username2|full_name2:file1,file2,file3|||pattern2:..."
-              IFS='|||' read -ra PATTERN_GROUPS <<< "$INDIVIDUALS"
+              # Individuals are now grouped by pattern: "pattern:username1|full_name1,username2|full_name2:file1,file2,file3§pattern2:..."
+              IFS='§' read -ra PATTERN_GROUPS <<< "$INDIVIDUALS"
               for pattern_group in "${PATTERN_GROUPS[@]}"; do
                 # Skip empty groups
                 [ -z "$pattern_group" ] && continue
@@ -1640,7 +1640,7 @@ jobs:
           # Process pending teams - check for Slack groups first, then individual selection
           if [ -n "$TEAMS" ]; then
             echo "DEBUG: Processing TEAMS='$TEAMS'"
-            IFS='|||' read -ra TEAM_ARRAY <<< "$TEAMS"
+            IFS='§' read -ra TEAM_ARRAY <<< "$TEAMS"
             echo "DEBUG: Split into ${#TEAM_ARRAY[@]} team entries"
             for team_entry in "${TEAM_ARRAY[@]}"; do
               echo "DEBUG: Processing team_entry='$team_entry'"
@@ -1752,7 +1752,7 @@ jobs:
 
           # Process pending individual patterns - select up to 2 owners from each pending pattern
           if [ -n "$INDIVIDUALS" ]; then
-            IFS='|||' read -ra PATTERN_GROUPS <<< "$INDIVIDUALS"
+            IFS='§' read -ra PATTERN_GROUPS <<< "$INDIVIDUALS"
             for pattern_group in "${PATTERN_GROUPS[@]}"; do
               [ -z "$pattern_group" ] && continue
               # Parse pattern:owners:files format - extract owners (second to second-last colon section)
