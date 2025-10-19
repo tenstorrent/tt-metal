@@ -1061,7 +1061,7 @@ jobs:
               # Add separator between pending and approved groups if both exist
               ALL_GROUPS="$PENDING_GROUPS"
               if [ -n "$PENDING_GROUPS" ] && [ -n "$APPROVED_GROUPS" ]; then
-                ALL_GROUPS="$ALL_GROUPS\n$APPROVED_GROUPS"
+                ALL_GROUPS="$ALL_GROUPS\n---\n\n$APPROVED_GROUPS"
               elif [ -n "$APPROVED_GROUPS" ]; then
                 ALL_GROUPS="$APPROVED_GROUPS"
               fi
@@ -1413,15 +1413,15 @@ jobs:
           SLACK_MESSAGE="🔔 *CodeOwners Review Request*"
           SLACK_MESSAGE="$SLACK_MESSAGE"$'\n\n'"Hi$SLACK_USER_MENTIONS!"
           SLACK_MESSAGE="$SLACK_MESSAGE"$'\n\n'"📋 *PR:* <${{ github.server_url }}/${{ github.repository }}/pull/$PR_NUMBER|$PR_TITLE>"
-          SLACK_MESSAGE="$SLACK_MESSAGE"$'\n'"👤 *Author:* $PR_AUTHOR_MENTION"
 
-          # Add requested by information if different from author
+          # Add author and requested by information (combine on same line if different)
           echo "DEBUG: Checking requested by - REQUESTER_LOGIN='$REQUESTER_LOGIN', PR_AUTHOR_LOGIN='$PR_AUTHOR_LOGIN'"
           if [ -n "$REQUESTER_LOGIN" ] && [ "$REQUESTER_LOGIN" != "$PR_AUTHOR_LOGIN" ]; then
-            echo "DEBUG: Adding 'Requested by' to Slack message"
-            SLACK_MESSAGE="$SLACK_MESSAGE"$'\n'"🔄 *Requested by:* $REQUESTER_NAME (@$REQUESTER_LOGIN)"
+            echo "DEBUG: Adding combined Author and Requested by line"
+            SLACK_MESSAGE="$SLACK_MESSAGE"$'\n'"👤 *Author:* $PR_AUTHOR_MENTION │ 🔄 *Requested by:* $REQUESTER_NAME (@$REQUESTER_LOGIN)"
           else
-            echo "DEBUG: Not adding 'Requested by' (same user or empty)"
+            echo "DEBUG: Adding Author only (requester same as author or empty)"
+            SLACK_MESSAGE="$SLACK_MESSAGE"$'\n'"👤 *Author:* $PR_AUTHOR_MENTION"
           fi
 
           # Add changes count if available
@@ -2202,9 +2202,8 @@ jobs:
             fi
 
             SLACK_MESSAGE="$SLACK_MESSAGE"$'\n\n'"📋 *PR:* <${{ github.server_url }}/${{ github.repository }}/pull/$PR_NUMBER|$PR_TITLE>"
-            SLACK_MESSAGE="$SLACK_MESSAGE"$'\n'"👤 *Author:* $PR_AUTHOR_MENTION"
 
-            # Add requested by information if different from author (for general notifications)
+            # Add author and requested by information (combine on same line if different)
             if [ -n "$REQUESTER_LOGIN" ] && [ "$REQUESTER_LOGIN" != "$PR_AUTHOR_LOGIN" ]; then
               # Get full name for requester if available
               REQUESTER_USER_API="https://api.github.com/users/$REQUESTER_LOGIN"
@@ -2226,7 +2225,11 @@ jobs:
                 echo "⚠️  Slack user not found for requester: $REQUESTER_NAME (@$REQUESTER_LOGIN), using fallback"
               fi
 
-              SLACK_MESSAGE="$SLACK_MESSAGE"$'\n'"🔄 *Requested by:* $REQUESTER_MENTION"
+              # Combine Author and Requested by on same line with separator
+              SLACK_MESSAGE="$SLACK_MESSAGE"$'\n'"👤 *Author:* $PR_AUTHOR_MENTION │ 🔄 *Requested by:* $REQUESTER_MENTION"
+            else
+              # Just author
+              SLACK_MESSAGE="$SLACK_MESSAGE"$'\n'"👤 *Author:* $PR_AUTHOR_MENTION"
             fi
 
             # Add changes count if available
