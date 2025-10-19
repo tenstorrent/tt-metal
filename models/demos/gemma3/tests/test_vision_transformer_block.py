@@ -58,7 +58,7 @@ def test_block_inference(batch, num_chunks, mesh_device, reset_seeds, gated):
         tt_ccl=TT_CCL(mesh_device),
         state_dict=state_dict,
         state_dict_prefix=first_layer_prefix,
-        weight_cache_path=model_args.weight_cache_path(dtype),
+        weight_cache_path=None,
         dtype=dtype,
         configuration=model_args,
         gated=gated,
