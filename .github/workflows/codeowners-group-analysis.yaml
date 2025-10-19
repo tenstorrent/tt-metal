@@ -913,16 +913,17 @@ jobs:
                 team_file_list_html=""
                 if [ -n "$team_files" ] && [ "$team_files" != "null" ]; then
                   # Create expandable details section with file list (using HTML entity for backticks to avoid shell issues)
-                  team_file_list_html="\n<details><summary>&#128193; Files owned by this team</summary>\n\n"
+                  # Indent with 2 spaces to be part of the list item
+                  team_file_list_html="\n  <details><summary>&#128193; Files owned by this team</summary>\n\n"
                   IFS=',' read -ra TEAM_FILES_ARRAY <<< "$team_files"
                   for file in "${TEAM_FILES_ARRAY[@]}"; do
                     if [ -n "$file" ]; then
                       # Escape special characters for HTML and use HTML entity for backticks
                       escaped_file=$(echo "$file" | sed 's/\*/\\*/g' | sed 's/_/\\_/g' | sed 's/`/&#96;/g')
-                      team_file_list_html="$team_file_list_html- &#96;$escaped_file&#96;\n"
+                      team_file_list_html="$team_file_list_html  - &#96;$escaped_file&#96;\n"
                     fi
                   done
-                  team_file_list_html="$team_file_list_html\n</details>"
+                  team_file_list_html="$team_file_list_html\n  </details>"
                 fi
 
                 if [ -n "$approved_members" ]; then
@@ -993,16 +994,17 @@ jobs:
                 file_list_html=""
                 if [ -n "$files" ] && [ "$files" != "null" ]; then
                   # Create expandable details section with file list (using HTML entity for backticks to avoid shell issues)
-                  file_list_html="\n<details><summary>&#128193; Files owned by this group</summary>\n\n"
+                  # Indent with 2 spaces to be part of the list item
+                  file_list_html="\n  <details><summary>&#128193; Files owned by this group</summary>\n\n"
                   IFS=',' read -ra FILES_ARRAY <<< "$files"
                   for file in "${FILES_ARRAY[@]}"; do
                     if [ -n "$file" ]; then
                       # Escape special characters for HTML and use HTML entity for backticks
                       escaped_file=$(echo "$file" | sed 's/\*/\\*/g' | sed 's/_/\\_/g' | sed 's/`/&#96;/g')
-                      file_list_html="$file_list_html- &#96;$escaped_file&#96;\n"
+                      file_list_html="$file_list_html  - &#96;$escaped_file&#96;\n"
                     fi
                   done
-                  file_list_html="$file_list_html\n</details>"
+                  file_list_html="$file_list_html\n  </details>"
                 fi
 
                 if [ -n "$approved_owners" ]; then
