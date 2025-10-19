@@ -1177,6 +1177,8 @@ jobs:
             REQUESTER_FULL_NAME=$(echo "$REQUESTER_USER_DATA" | jq -r '.name // empty' 2>/dev/null)
             if [ -n "$REQUESTER_FULL_NAME" ] && [ "$REQUESTER_FULL_NAME" != "null" ]; then
               REQUESTER_NAME="$REQUESTER_FULL_NAME"
+            else
+              REQUESTER_NAME="$REQUESTER_LOGIN"
             fi
           else
             echo "DEBUG: Requester and PR author are the same user (or REQUESTER_LOGIN is empty)"
@@ -1362,6 +1364,21 @@ jobs:
             echo "⚠️  PR author not found in Slack: $PR_AUTHOR_FULL_NAME (@$PR_AUTHOR_LOGIN), using fallback"
           fi
 
+          # Find Slack user ID for requester if different from author
+          REQUESTER_MENTION=""
+          if [ -n "$REQUESTER_LOGIN" ] && [ "$REQUESTER_LOGIN" != "$PR_AUTHOR_LOGIN" ]; then
+            echo "Looking up requester in Slack: $REQUESTER_NAME"
+            REQUESTER_SLACK_ID=$(find_slack_user_id "$REQUESTER_NAME" "$REQUESTER_LOGIN")
+
+            if [ -n "$REQUESTER_SLACK_ID" ]; then
+              REQUESTER_MENTION="<@$REQUESTER_SLACK_ID>"
+              echo "✅ Found requester in Slack: $REQUESTER_NAME -> $REQUESTER_SLACK_ID"
+            else
+              REQUESTER_MENTION="$REQUESTER_NAME (@$REQUESTER_LOGIN)"
+              echo "⚠️  Requester not found in Slack: $REQUESTER_NAME (@$REQUESTER_LOGIN), using fallback"
+            fi
+          fi
+
           # Process each user/team to ping
           SLACK_USER_MENTIONS=""
           if [ -n "$DIRECT_PING_USERS" ]; then
@@ -1416,9 +1433,9 @@ jobs:
 
           # Add author and requested by information (combine on same line if different)
           echo "DEBUG: Checking requested by - REQUESTER_LOGIN='$REQUESTER_LOGIN', PR_AUTHOR_LOGIN='$PR_AUTHOR_LOGIN'"
-          if [ -n "$REQUESTER_LOGIN" ] && [ "$REQUESTER_LOGIN" != "$PR_AUTHOR_LOGIN" ]; then
+          if [ -n "$REQUESTER_MENTION" ]; then
             echo "DEBUG: Adding combined Author and Requested by line"
-            SLACK_MESSAGE="$SLACK_MESSAGE"$'\n'"👤 *Author:* $PR_AUTHOR_MENTION │ 🔄 *Requested by:* $REQUESTER_NAME (@$REQUESTER_LOGIN)"
+            SLACK_MESSAGE="$SLACK_MESSAGE"$'\n'"👤 *Author:* $PR_AUTHOR_MENTION │ 🔄 *Requested by:* $REQUESTER_MENTION"
           else
             echo "DEBUG: Adding Author only (requester same as author or empty)"
             SLACK_MESSAGE="$SLACK_MESSAGE"$'\n'"👤 *Author:* $PR_AUTHOR_MENTION"
