@@ -1,0 +1,8 @@
+hosts: {
+  hall: "120"
+  aisle: "A"
+  rack: 4
+  shelf_u: 8
+  node_type: "WH_GALAXY_XY_TORUS"
+  host: "wh-glx-a03u02"
+}
