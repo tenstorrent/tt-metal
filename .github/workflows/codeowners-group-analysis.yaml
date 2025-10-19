@@ -1064,7 +1064,7 @@ jobs:
             # Output comment for next step
             {
               echo "comment<<EOF"
-              printf '%s\n' "$COMMENT"
+              printf '%b\n' "$COMMENT"
               echo "EOF"
             } >> $GITHUB_OUTPUT
 
