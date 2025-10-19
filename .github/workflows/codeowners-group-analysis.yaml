@@ -918,9 +918,9 @@ jobs:
                   IFS=',' read -ra TEAM_FILES_ARRAY <<< "$team_files"
                   for file in "${TEAM_FILES_ARRAY[@]}"; do
                     if [ -n "$file" ]; then
-                      # Escape special characters for markdown
+                      # Escape special characters for HTML
                       escaped_file=$(echo "$file" | sed 's/\*/\\*/g' | sed 's/_/\\_/g')
-                      team_file_list_html="$team_file_list_html  - \`$escaped_file\`\n"
+                      team_file_list_html="$team_file_list_html  - <code>$escaped_file</code>\n"
                     fi
                   done
                   team_file_list_html="$team_file_list_html\n  </details>"
@@ -999,9 +999,9 @@ jobs:
                   IFS=',' read -ra FILES_ARRAY <<< "$files"
                   for file in "${FILES_ARRAY[@]}"; do
                     if [ -n "$file" ]; then
-                      # Escape special characters for markdown
+                      # Escape special characters for HTML
                       escaped_file=$(echo "$file" | sed 's/\*/\\*/g' | sed 's/_/\\_/g')
-                      file_list_html="$file_list_html  - \`$escaped_file\`\n"
+                      file_list_html="$file_list_html  - <code>$escaped_file</code>\n"
                     fi
                   done
                   file_list_html="$file_list_html\n  </details>"
