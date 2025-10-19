@@ -63,8 +63,9 @@ FORCE_INLINE void send_block(
 void kernel_main() {
     const uint32_t input_base_addr = get_arg_val<uint32_t>(0);
     constexpr auto ctas = get_ctas();
-    constexpr uint32_t tensor_size = ctas.num_batches * ctas.input_depth * ctas.input_height * ctas.num_channels;
-    const auto input_addr_gtor = TensorAccessor(ctas.input_args, input_base_addr, tensor_size);
+    using input_number_type = std_type_t<get_dataformat(ctas.input_cb)>;
+    // constexpr uint32_t tensor_size = ctas.num_batches * ctas.input_depth * 32 * 32;
+    const auto input_addr_gtor = TensorAccessor(ctas.input_args, input_base_addr, get_tile_size(ctas.input_cb));
     const uint32_t num_slices_along_channels = block_depth_ceil(
         ctas.num_channels, ctas.block_depth);  // block_depth is expected to be a power of 2 (the default is the regular
                                                // 32x32 tile's width/height size, that is, 32)
@@ -72,7 +73,6 @@ void kernel_main() {
     const uint32_t num_blocks_in_column = block_depth_ceil(ctas.input_height, ctas.block_depth);
     DPRINT << "channel blocks: " << num_slices_along_channels << ", row blocks: " << num_blocks_in_row
            << ", column_blocks: " << num_blocks_in_column << ENDL();
-    using input_number_type = std_type_t<get_dataformat(ctas.input_cb)>;
 
     for (uint32_t batch_i = 0; batch_i < ctas.num_batches;
          ++batch_i) {  // only one batch expected, unit tests don't cover more, also not everything is implemented in
