@@ -71,10 +71,8 @@ def test_attention_inference(batch, num_chunks, mesh_device, reset_seeds):
 
     tt_out = tt_model(attention_input)
 
-    # Doing contract in tt is correct!!
-    tt_output_torch = ttnn.to_torch(
-        tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1), device=mesh_device
-    )[0, :, :, :]
+    # Tensor is replicated, so just get from first device
+    tt_output_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0])[0, :, :, :]
 
     reference_output = reference_model(pt_attention_input)[0]
     tt_output_torch = tt_output_torch[:, :4097, :]
