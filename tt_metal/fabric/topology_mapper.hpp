@@ -195,45 +195,53 @@ private:
     HostMeshMapping build_cross_host_mesh_mappings();
 
     /**
-     * @brief Build the mapping between host names and corner ASIC IDs
+     * @brief Build logical adjacency maps from mesh graph connectivity
      *
-     * This method iterates through all hosts in the physical system descriptor and creates mappings
-     * based on the host names and corner ASIC IDs from the physical descriptor, mapping them
-     * to the host names and corner ASIC IDs.
+     * Creates adjacency maps for each mesh based on the logical connectivity defined in the mesh graph.
+     * For each fabric node in a mesh, this function identifies its logical neighbors by examining
+     * the intra-mesh connectivity from the mesh graph and creates a mapping of FabricNodeId to
+     * its vector of adjacent FabricNodeIds.
+     *
+     * @param mesh_id_to_host_names Mapping of mesh IDs to the set of host names participating in each mesh
+     * @return std::unordered_map<MeshId, LogicalAdjacencyMap> Map from mesh ID to logical adjacency map
      */
-    std::unordered_map<std::string, std::unordered_set<tt::tt_metal::AsicID>> build_host_corner_mappings() const;
-
     std::unordered_map<MeshId, LogicalAdjacencyMap> build_adjacency_map_logical(
         HostMeshMapping& mesh_id_to_host_names) const;
 
+    /**
+     * @brief Build physical adjacency maps from system descriptor connectivity
+     *
+     * Creates adjacency maps for each mesh based on the physical connectivity defined in the physical system
+     * descriptor. For each ASIC in a mesh, this function identifies its physical neighbors by examining the ASIC
+     * neighbors from the physical system descriptor and filters them to only include neighbors that are also part of
+     * the same mesh. The resulting map contains ASIC IDs mapped to their vectors of adjacent ASIC IDs within the mesh.
+     *
+     * @param mesh_id_to_host_names Mapping of mesh IDs to the set of host names participating in each mesh
+     * @return std::unordered_map<MeshId, PhysicalAdjacencyMap> Map from mesh ID to physical adjacency map
+     */
     std::unordered_map<MeshId, PhysicalAdjacencyMap> build_adjacency_map_physical(
         HostMeshMapping& mesh_id_to_host_names) const;
 
+    /**
+     * @brief Create bidirectional mappings between logical fabric nodes and physical ASIC IDs
+     *
+     * This function performs the core topology mapping by creating bidirectional mappings between logical fabric nodes
+     * (from the mesh graph) and physical ASIC IDs (from the physical system descriptor). It uses a constraint
+     * satisfaction algorithm to find valid mappings that preserve the logical connectivity structure in the physical
+     * topology.
+     *
+     * The algorithm:
+     * 1. Validates that the logical graph can fit within the physical topology
+     * 2. Uses degree-based pruning and forward checking to efficiently search for valid mappings
+     * 3. Maintains consistency by ensuring logical edges are present in the physical topology
+     * 4. Creates bidirectional mappings in both fabric_node_id_to_asic_id_ and asic_id_to_fabric_node_id_
+     *
+     * @param adjacency_map_physical Physical adjacency maps for each mesh
+     * @param adjacency_map_logical Logical adjacency maps for each mesh
+     */
     void populate_fabric_node_id_to_asic_id_mappings(
         const std::unordered_map<MeshId, PhysicalAdjacencyMap>& adjacency_map_physical,
         const std::unordered_map<MeshId, LogicalAdjacencyMap>& adjacency_map_logical);
-
-    /**
-     * @brief Build the mapping between mesh IDs and corner ASIC IDs
-     *
-     * This method iterates through all meshes in the mesh graph and creates mappings
-     * based on the mesh IDs and fabric chip IDs from the mesh_container, mapping them
-     * to the ASIC IDs of the physical descriptor.
-     */
-    std::unordered_map<MeshId, std::unordered_set<tt::tt_metal::AsicID>> build_mesh_corners_mappings(
-        const std::unordered_map<std::string, std::unordered_set<tt::tt_metal::AsicID>>& host_corners,
-        const std::unordered_map<MeshId, std::unordered_set<HostName>>& mesh_id_to_host_names) const;
-
-    /**
-     * @brief Build the mapping between fabric node IDs and ASIC IDs
-     *
-     * This method iterates through all meshes in the mesh graph and creates mappings
-     * based on the mesh IDs and fabric chip IDs from the mesh_container, mapping them
-     * to the ASIC IDs of the physical descriptor.
-     */
-    void populate_fabric_node_id_to_asic_id_mappings(
-        const std::unordered_map<MeshId, std::unordered_set<tt::tt_metal::AsicID>>& mesh_corners_map,
-        const std::unordered_map<MeshId, std::unordered_set<HostName>>& mesh_id_to_host_names);
 
     /**
      * @brief Broadcast the mapping to all hosts
