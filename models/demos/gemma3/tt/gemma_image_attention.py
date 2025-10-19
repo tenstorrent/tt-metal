@@ -237,8 +237,6 @@ class TtGemmaImageAttention(LightweightModule):
         if seq_len > MAX_MM_SEQ_LEN:
             x_11SH = ttnn.reshape(x_11SH, [batch_size, seq_len // MAX_MM_SEQ_LEN, MAX_MM_SEQ_LEN, -1])
 
-        # Single fused linear operation for QKV (more performant than 3 separate linears)
-        print(x_11SH.shape, self.wqkv.shape, self.bqkv.shape)
         xqkv_fused = ttnn.linear(
             x_11SH,
             self.wqkv,
