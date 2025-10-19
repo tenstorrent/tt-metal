@@ -746,6 +746,7 @@ class MochiTransformer3DModel:
         pH, pW = H // self.patch_size, W // self.patch_size
         logger.info(f"Postprocessing spatial output with shape {spatial_1BND.shape}")
 
+        #FIXME: This asserts with some configurations... maybe when sequence_parallel_factor == 1?
         # AllGather hanging for large seqlen
         # # Gather sequence-parallel output
         spatial_1BND = ttnn.experimental.all_gather_async(

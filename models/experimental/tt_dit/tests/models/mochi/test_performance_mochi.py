@@ -19,14 +19,14 @@ from ....parallel.config import DiTParallelConfig, MochiVAEParallelConfig, Paral
     ],
 )
 @pytest.mark.parametrize(
-    "mesh_device, cfg, sp, tp, topology, num_links",
+    "mesh_device, sp, tp, topology, num_links",
     [
-        [(2, 4), (2, 1), (2, 0), (2, 1), ttnn.Topology.Linear, 1],
-        [(4, 8), (2, 1), (4, 0), (4, 1), ttnn.Topology.Linear, 4],
+        [(2, 4), 0, 1, ttnn.Topology.Linear, 1],
+        [(4, 8), 1, 0, ttnn.Topology.Linear, 4],
     ],
     ids=[
-        "2x4cfg1sp0tp1",
-        "4x8cfg1sp0tp1",
+        "2x4sp0tp1",
+        "4x8sp1tp0",
     ],
     indirect=["mesh_device"],
 )
@@ -36,7 +36,7 @@ from ....parallel.config import DiTParallelConfig, MochiVAEParallelConfig, Paral
     indirect=True,
 )
 @pytest.mark.parametrize("use_cache", [True, False], ids=["yes_use_cache", "no_use_cache"])
-def test_sd35_new_pipeline_performance(
+def test_mochi_pipeline_performance(
     *,
     mesh_device: ttnn.MeshDevice,
     model_name,
@@ -44,6 +44,7 @@ def test_sd35_new_pipeline_performance(
     image_h,
     guidance_scale,
     num_inference_steps,
+    num_frames,
     cfg,
     sp_axis,
     tp_axis,
@@ -80,8 +81,7 @@ def test_sd35_new_pipeline_performance(
     logger.info(f"  Image size: {image_w}x{image_h}")
     logger.info(f"  Guidance scale: {guidance_scale}")
     logger.info(f"  Inference steps: {num_inference_steps}")
-
-    ################
+    logger.info(f"  Number frames: {num_frames}")
 
     sp_factor = tuple(mesh_device.shape)[sp_axis]
     tp_factor = tuple(mesh_device.shape)[tp_axis]
@@ -221,7 +221,7 @@ def test_sd35_new_pipeline_performance(
     enable_t5_text_encoder = pipeline.t5_enabled()
 
     print("\n" + "=" * 80)
-    print("STABLE DIFFUSION 3.5 NEW PIPELINE PERFORMANCE RESULTS")
+    print("MOCHI PERFORMANCE RESULTS")
     print("=" * 80)
     print(f"Model: {model_name}")
     print(f"Image Size: {image_w}x{image_h}")
@@ -334,12 +334,12 @@ def test_sd35_new_pipeline_performance(
     if is_ci_env:
         # In CI, dump a performance report
         profiler_model_name = (
-            f"sd35_{'t3k' if tuple(mesh_device.shape) == (2, 4) else 'tg'}_cfg{cfg_factor}_sp{sp_factor}_tp{tp_factor}"
+            f"mochi_{'t3k' if tuple(mesh_device.shape) == (2, 4) else 'tg'}_sp{sp_factor}_tp{tp_factor}"
         )
         benchmark_data = BenchmarkData()
         benchmark_data.save_partial_run_json(
             benchmark_profiler,
-            run_type="sd35_traced",
+            run_type="mochi_traced",
             ml_model_name=profiler_model_name,
         )
 

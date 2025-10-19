@@ -651,6 +651,66 @@ decoder_test_configs = [
 ]
 
 
+def load_mochi_dit(
+        mesh_device: ttnn.MeshDevice,
+        ccl_manager: CCLManager,
+        use_cache: bool,
+        model_name: str = "genmo/mochi-1-preview",
+):
+
+    # Load pretrained Mochi Transformer (TT)
+    # First load the torch version to get the config and state dict
+    from diffusers import MochiTransformer3DModel as TorchMochiTransformer3DModel
+    from ....models.transformers.transformer_mochi import MochiTransformer3DModel
+    from ....parallel.config import DiTParallelConfig, ParallelFactor
+    from ....utils.cache import get_cache_path, load_cache_dict
+
+    torch_transformer = TorchMochiTransformer3DModel.from_pretrained(
+        model_name, subfolder="transformer", torch_dtype=torch.float32
+    )
+
+    parallel_config = DiTParallelConfig(
+        cfg_parallel=ParallelFactor(factor=1, mesh_axis=0),
+        tensor_parallel=ParallelFactor(factor=mesh_device.shape[1], mesh_axis=1),
+        sequence_parallel=ParallelFactor(factor=mesh_device.shape[0], mesh_axis=0),
+    )
+
+    # Create TT version with the same config
+    transformer = MochiTransformer3DModel(
+        patch_size=torch_transformer.config.patch_size,
+        num_attention_heads=torch_transformer.config.num_attention_heads,
+        attention_head_dim=torch_transformer.config.attention_head_dim,
+        num_layers=torch_transformer.config.num_layers,
+        pooled_projection_dim=torch_transformer.config.pooled_projection_dim,
+        in_channels=torch_transformer.config.in_channels,
+        text_embed_dim=torch_transformer.config.text_embed_dim,
+        time_embed_dim=torch_transformer.config.time_embed_dim,
+        activation_fn=torch_transformer.config.activation_fn,
+        mesh_device=mesh_device,
+        ccl_manager=ccl_manager,
+        parallel_config=parallel_config,
+        is_fsdp=True,
+    )
+
+    # Load state dict into TT transformer
+    if use_cache:
+        cache_path = get_cache_path(
+            model_name="mochi-1-preview",
+            subfolder="transformer",
+            parallel_config=parallel_config,
+            dtype="bf16",
+        )
+        assert os.path.exists(
+            cache_path
+        ), f"Cache path: {cache_path} does not exist. Run test_mochi_transformer_model_caching first with the desired parallel config."
+        cache_dict = load_cache_dict(cache_path)
+        transformer.from_cached_state_dict(cache_dict)
+    else:
+        transformer.load_state_dict(torch_transformer.state_dict())
+
+    return transformer
+
+
 @pytest.mark.parametrize(
     "config",
     decoder_test_configs,
@@ -669,16 +729,15 @@ def test_tt_decoder_forward(mesh_device, config, reset_seeds, load_dit_weights, 
         f"channel_multipliers={config['channel_multipliers']}, "
     )
 
-    # TODO after the new model creation API is set
-    # if load_dit_weights:
-    #     # Load DiT weights to device to account for real world DRAM usage, checking for OOM.
-    #     logger.info("Loading DiT weights")
-    #     reference_model, tt_model_dit, state_dict = create_models(mesh_device, n_layers=48)
-    #     del reference_model
+    ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear, num_links=num_links)
+
+    if load_dit_weights:
+        # Load DiT weights to device to account for real world DRAM usage, checking for OOM.
+        logger.info("Loading DiT weights")
+        tt_model_dit = load_mochi_dit(mesh_device, ccl_manager, use_cache=False)
 
     # Create models
     logger.info("Creating VAE decoder models")
-    ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear, num_links=num_links)
     # TODO:Need to improve test parameterization.
     if mesh_device.shape[0] == 1:
         w_parallel_factor = 1

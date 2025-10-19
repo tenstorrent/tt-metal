@@ -109,14 +109,16 @@ def test_mochi_diffusers_pipeline():
 
 
 @pytest.mark.parametrize(
-    "mesh_device, sp_axis, tp_axis, num_links",
+    "mesh_device, sp_axis, tp_axis, vae_mesh_shape, vae_sp_axis, vae_tp_axis, num_links",
     [
-        [(2, 4), 0, 1, 1],
-        [(4, 8), 1, 0, 4],
+        [(1, 8), 1, 0, (1, 8), 0, 1, 1],
+        [(2, 4), 0, 1, (1, 8), 0, 1, 1],
+        [(4, 8), 1, 0, (4, 8), 1, 0, 4],
     ],
     ids=[
-        "2x4sp0tp1",
-        "4x8sp1tp0",
+        "dit_1x8sp1tp0_vae_1x8sp0tp1",
+        "dit_2x4sp0tp1_vae_1x8sp0tp1",
+        "dit_4x8sp1tp0_vae_4x8sp1tp0",
     ],
     indirect=["mesh_device"],
 )
@@ -125,6 +127,9 @@ def test_tt_mochi_pipeline(
     mesh_device: ttnn.MeshDevice,
     sp_axis: int,
     tp_axis: int,
+    vae_mesh_shape: tuple,
+    vae_sp_axis: int,
+    vae_tp_axis: int,
     num_links: int,
 ):
     """
@@ -140,8 +145,9 @@ def test_tt_mochi_pipeline(
     sp_factor = tuple(mesh_device.shape)[sp_axis]
     tp_factor = tuple(mesh_device.shape)[tp_axis]
 
-    logger.info(f"Creating TT Mochi pipeline on mesh device with shape {mesh_device.shape}")
-    logger.info(f"SP factor: {sp_factor}, TP factor: {tp_factor}")
+    logger.info(f"Creating TT Mochi pipeline with DiT mesh device shape {mesh_device.shape}, VAE mesh device shape {vae_mesh_shape}")
+    logger.info(f"DiT SP axis: {sp_axis}, TP axis: {tp_axis}")
+    logger.info(f"VAE SP axis: {vae_sp_axis}, TP axis: {tp_axis}")
 
     # Create parallel config
     parallel_config = DiTParallelConfig(
@@ -149,18 +155,25 @@ def test_tt_mochi_pipeline(
         tensor_parallel=ParallelFactor(factor=tp_factor, mesh_axis=tp_axis),
         sequence_parallel=ParallelFactor(factor=sp_factor, mesh_axis=sp_axis),
     )
-    w_parallel_factor = 2
+
+    # TODO:Need to improve test parameterization.
+    if vae_mesh_shape[0] == 1:
+        w_parallel_factor = 1
+    else:
+        w_parallel_factor = 2
+
     vae_parallel_config = MochiVAEParallelConfig(
-        time_parallel=ParallelFactor(factor=mesh_device.shape[tp_axis], mesh_axis=tp_axis),
-        w_parallel=ParallelFactor(factor=w_parallel_factor, mesh_axis=sp_axis),
-        h_parallel=ParallelFactor(factor=mesh_device.shape[sp_axis] // w_parallel_factor, mesh_axis=sp_axis),
+        time_parallel=ParallelFactor(factor=vae_mesh_shape[vae_tp_axis], mesh_axis=vae_tp_axis),
+        w_parallel=ParallelFactor(factor=w_parallel_factor, mesh_axis=vae_sp_axis),
+        h_parallel=ParallelFactor(factor=vae_mesh_shape[vae_sp_axis] // w_parallel_factor, mesh_axis=vae_sp_axis),
     )
-    assert vae_parallel_config.h_parallel.factor * vae_parallel_config.w_parallel.factor == mesh_device.shape[sp_axis]
+    assert vae_parallel_config.h_parallel.factor * vae_parallel_config.w_parallel.factor == vae_mesh_shape[vae_sp_axis]
     assert vae_parallel_config.h_parallel.mesh_axis == vae_parallel_config.w_parallel.mesh_axis
 
     # Create the TT Mochi pipeline
     tt_pipe = TTMochiPipeline(
         mesh_device=mesh_device,
+        vae_mesh_shape=vae_mesh_shape,
         parallel_config=parallel_config,
         vae_parallel_config=vae_parallel_config,
         num_links=num_links,

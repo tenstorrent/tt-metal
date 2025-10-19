@@ -138,6 +138,7 @@ class MochiPipeline(DiffusionPipeline):
     def __init__(
         self,
         mesh_device: ttnn.MeshDevice,
+        vae_mesh_shape: tuple,
         parallel_config: DiTParallelConfig,
         vae_parallel_config: MochiVAEParallelConfig,
         num_links: int,
@@ -160,11 +161,13 @@ class MochiPipeline(DiffusionPipeline):
 
         # Store device and config for model initialization
         self.mesh_device = mesh_device
-        self.vae_mesh_device = mesh_device  # on t3k this should be switched to (1, 8). Switch based on num_links?
+        self.dit_mesh_shape = tuple(mesh_device.shape)
+        self.vae_mesh_shape = vae_mesh_shape
         self.parallel_config = parallel_config
         self.vae_parallel_config = vae_parallel_config
         self.num_links = num_links
         self.use_cache = use_cache
+        self.reload_dit_model = True  #TODO:Only required if VAE is memory-constrained.
 
         # Create CCL manager
         self.ccl_manager = CCLManager(
@@ -172,6 +175,17 @@ class MochiPipeline(DiffusionPipeline):
             num_links=num_links,
             topology=ttnn.Topology.Linear,
         )
+
+        # Create VAE CCL manager using the VAE mesh shape.
+        if tuple(self.mesh_device.shape) != self.vae_mesh_shape:
+            self.mesh_device.reshape(ttnn.MeshShape(self.vae_mesh_shape))
+        self.vae_ccl_manager = CCLManager(
+            mesh_device=mesh_device,
+            num_links=num_links,
+            topology=ttnn.Topology.Linear,
+        )
+        if tuple(self.mesh_device.shape) != self.dit_mesh_shape:
+            self.mesh_device.reshape(ttnn.MeshShape(self.dit_mesh_shape))
 
         # Load scheduler (Torch)
         self.scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(model_name, subfolder="scheduler")
@@ -230,11 +244,15 @@ class MochiPipeline(DiffusionPipeline):
         if use_reference_vae:
             self.vae = torch_vae
         else:
+            # Reshape the device mesh to the VAE mesh shape:
+            if tuple(self.mesh_device.shape) != self.vae_mesh_shape:
+                self.mesh_device.reshape(ttnn.MeshShape(self.vae_mesh_shape))
+
             self.vae = MochiVAEDecoder(
-                mesh_device=self.vae_mesh_device,
+                mesh_device=self.mesh_device,
                 torch_ref=torch_vae.decoder,
                 parallel_config=vae_parallel_config,
-                ccl_manager=self.ccl_manager,
+                ccl_manager=self.vae_ccl_manager,
                 out_channels=torch_vae.config.out_channels,
                 base_channels=torch_vae.config.decoder_block_out_channels[0],
                 channel_multipliers=[
@@ -252,6 +270,10 @@ class MochiPipeline(DiffusionPipeline):
                 latents_std=torch_vae.config.latents_std,
                 scaling_factor=torch_vae.config.scaling_factor,
             )
+
+            # Reshape the device mesh back to the DiT mesh shape:
+            if tuple(self.mesh_device.shape) != self.dit_mesh_shape:
+                self.mesh_device.reshape(ttnn.MeshShape(self.dit_mesh_shape))
 
         # Update tokenizer max length
         self.tokenizer_max_length = self.tokenizer.model_max_length if self.tokenizer is not None else 256
@@ -584,10 +606,49 @@ class MochiPipeline(DiffusionPipeline):
             max_sequence_length=max_sequence_length,
             device=device,
         )
+
         print(f"prompt_embeds.shape: {prompt_embeds.shape}")
         print(f"prompt_attention_mask.shape: {prompt_attention_mask.shape}")
         print(f"negative_prompt_embeds.shape: {negative_prompt_embeds.shape}")
         print(f"negative_prompt_attention_mask.shape: {negative_prompt_attention_mask.shape}")
+
+        # 3b. If the transformer was destroyed, recreate it.
+        if self.transformer is None:
+            logger.info("Recreating MochiTransformer3DModel")
+            self.transformer = MochiTransformer3DModel(
+                patch_size=self.torch_transformer.config.patch_size,
+                num_attention_heads=self.torch_transformer.config.num_attention_heads,
+                attention_head_dim=self.torch_transformer.config.attention_head_dim,
+                num_layers=self.torch_transformer.config.num_layers,
+                pooled_projection_dim=self.torch_transformer.config.pooled_projection_dim,
+                in_channels=self.torch_transformer.config.in_channels,
+                text_embed_dim=self.torch_transformer.config.text_embed_dim,
+                time_embed_dim=self.torch_transformer.config.time_embed_dim,
+                activation_fn=self.torch_transformer.config.activation_fn,
+                mesh_device=mesh_device,
+                ccl_manager=self.ccl_manager,
+                parallel_config=self.parallel_config,
+                is_fsdp=True,
+            )
+
+            # Load state dict into TT transformer
+            logger.info("Loading MochiTransformer3DModel state_dict")
+            if use_cache:
+                cache_path = get_cache_path(
+                    model_name="mochi-1-preview",
+                    subfolder="transformer",
+                    parallel_config=parallel_config,
+                    dtype="bf16",
+                )
+                assert os.path.exists(
+                    cache_path
+                ), f"Cache path: {cache_path} does not exist. Run test_mochi_transformer_model_caching first with the desired parallel config."
+                cache_dict = load_cache_dict(cache_path)
+                self.transformer.from_cached_state_dict(cache_dict)
+            else:
+                ReleaseAssertNotImplemented()
+            logger.info("Recreated MochiTransformer3DModel")
+
         # 4. Prepare latent variables
         num_channels_latents = self.transformer_config.in_channels
         latents = self.prepare_latents(
@@ -716,7 +777,21 @@ class MochiPipeline(DiffusionPipeline):
             else:
                 latents = latents / self.vae.config.scaling_factor
 
+            # If the VAE is memory-constrained, free the transformer.
+            if self.reload_dit_model:
+                logger.info("Freeing MochiTransformer3DModel")
+                self.transformer = None
+
+            # Reshape the device mesh to the VAE mesh shape:
+            if tuple(self.mesh_device.shape) != self.vae_mesh_shape:
+                self.mesh_device.reshape(ttnn.MeshShape(self.vae_mesh_shape))
+
             video = self.vae.decode(latents, return_dict=False)[0]
+
+            # Reshape the device mesh back to the DiT mesh shape:
+            if tuple(self.mesh_device.shape) != self.dit_mesh_shape:
+                self.mesh_device.reshape(ttnn.MeshShape(self.dit_mesh_shape))
+
             video = self.video_processor.postprocess_video(video, output_type=output_type)
 
         if not return_dict:
