@@ -145,7 +145,9 @@ def test_tt_mochi_pipeline(
     sp_factor = tuple(mesh_device.shape)[sp_axis]
     tp_factor = tuple(mesh_device.shape)[tp_axis]
 
-    logger.info(f"Creating TT Mochi pipeline with DiT mesh device shape {mesh_device.shape}, VAE mesh device shape {vae_mesh_shape}")
+    logger.info(
+        f"Creating TT Mochi pipeline with DiT mesh device shape {mesh_device.shape}, VAE mesh device shape {vae_mesh_shape}"
+    )
     logger.info(f"DiT SP axis: {sp_axis}, TP axis: {tp_axis}")
     logger.info(f"VAE SP axis: {vae_sp_axis}, TP axis: {tp_axis}")
 
@@ -182,6 +184,9 @@ def test_tt_mochi_pipeline(
         model_name="genmo/mochi-1-preview",
     )
 
+    # Use a generator for deterministic results.
+    generator = torch.Generator("cpu").manual_seed(0)
+
     # Define test prompt (same as the diffusers test)
     prompt = "A close-up of a beautiful butterfly landing on a flower, wings gently moving in the breeze."
 
@@ -195,6 +200,7 @@ def test_tt_mochi_pipeline(
         num_frames=168,  # Reduced for faster testing
         height=480,  # Reduced resolution for faster testing
         width=848,  # Reduced resolution for faster testing
+        generator=generator,
     ).frames[0]
 
     # Validate output

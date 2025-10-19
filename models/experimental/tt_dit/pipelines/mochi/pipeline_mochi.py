@@ -167,7 +167,7 @@ class MochiPipeline(DiffusionPipeline):
         self.vae_parallel_config = vae_parallel_config
         self.num_links = num_links
         self.use_cache = use_cache
-        self.reload_dit_model = True  #TODO:Only required if VAE is memory-constrained.
+        self.reload_dit_model = True  # TODO:Only required if VAE is memory-constrained.
 
         # Create CCL manager
         self.ccl_manager = CCLManager(
@@ -506,7 +506,7 @@ class MochiPipeline(DiffusionPipeline):
                 f" size of {batch_size}. Make sure the batch size matches the length of the generators."
             )
 
-        latents = randn_tensor(shape, generator=generator, device=device, dtype=torch.float32)
+        latents = randn_tensor(shape, generator=generator, device=torch.device(device), dtype=torch.float32)
         latents = latents.to(dtype)
         return latents
 
