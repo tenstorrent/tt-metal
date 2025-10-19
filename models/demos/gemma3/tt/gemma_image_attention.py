@@ -193,7 +193,7 @@ class TtGemmaImageAttention(LightweightModule):
                 dtype=self.dtype,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 layout=ttnn.TILE_LAYOUT,
-                cache_file_name=cache_name("bqkv_sharded"),
+                # cache_file_name=cache_name("bqkv_sharded"),
             )
         else:
             self.bqkv = None
@@ -238,6 +238,7 @@ class TtGemmaImageAttention(LightweightModule):
             x_11SH = ttnn.reshape(x_11SH, [batch_size, seq_len // MAX_MM_SEQ_LEN, MAX_MM_SEQ_LEN, -1])
 
         # Single fused linear operation for QKV (more performant than 3 separate linears)
+        print(x_11SH.shape, self.wqkv.shape, self.bqkv.shape)
         xqkv_fused = ttnn.linear(
             x_11SH,
             self.wqkv,

@@ -102,6 +102,10 @@ class TtGemmaImageTransformerBlock(LightweightModule):
         assert seq_len % 32 == 0 and seq_len > 0, "Seqlen must be divisible by 32"
         batch_size = x_11SH.shape[0]
 
+        if len(x_11SH.shape) == 3:
+            assert x_11SH.shape[0] == 1
+            x_11SH = ttnn.unsqueeze(x_11SH, 1)
+
         #         # Sharded weights
         # self.c_fc_weight = as_interleaved_tensor("c_fc", "weight", dtype, dim=-1)
         # self.c_fc_bias = as_interleaved_tensor("c_fc", "bias", ttnn.bfloat16, dim=-1)

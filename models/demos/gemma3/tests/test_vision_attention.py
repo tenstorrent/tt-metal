@@ -75,7 +75,7 @@ def test_attention_inference(batch, num_chunks, mesh_device, reset_seeds):
     tt_output_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0])[0, :, :, :]
 
     reference_output = reference_model(pt_attention_input)[0]
-    tt_output_torch = tt_output_torch[:, :4097, :]
+    tt_output_torch = tt_output_torch[:, :seq_len, :]
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
 
     logger.info(comp_allclose(reference_output, tt_output_torch))
