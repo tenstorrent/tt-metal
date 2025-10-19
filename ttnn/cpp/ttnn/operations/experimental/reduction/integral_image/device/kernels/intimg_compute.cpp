@@ -31,45 +31,6 @@ constexpr uint32_t ONE_TILE{1};
 constexpr uint32_t FIRST_TILE{0};
 constexpr uint32_t WORKING_REG{0};
 
-// choose the right C++ POD type at compile-time
-template <DataFormat df>
-struct df_to_std {
-    using std_type = void;
-};
-
-template <>
-struct df_to_std<DataFormat::Float32> {
-    using std_type = float;
-};
-
-template <>
-struct df_to_std<DataFormat::Float16_b> {
-    using std_type = uint16_t;
-};
-
-template <>
-struct df_to_std<DataFormat::Int32> {
-    using std_type = uint32_t;
-};
-
-template <>
-struct df_to_std<DataFormat::UInt32> {
-    using std_type = uint32_t;
-};
-
-template <>
-struct df_to_std<DataFormat::UInt16> {
-    using std_type = uint16_t;
-};
-
-template <>
-struct df_to_std<DataFormat::UInt8> {
-    using std_type = uint8_t;
-};
-
-template <DataFormat df>
-using std_type_t = typename df_to_std<df>::std_type;
-
 class ReadCBGuard {
     uint32_t cb;
     uint32_t tiles;
@@ -192,20 +153,19 @@ FORCE_INLINE IntImgComputeCTAs get_ctas() {
 
 FORCE_INLINE void save_last_tile(
     uint32_t cb_axis_2_buffer, uint32_t cb_cumsum_stage_a, uint32_t cb_cumsum_stage_b, uint32_t block_depth = 32) {
-    ReadCBGuard cb_cumsum_stage_a_guard{cb_cumsum_stage_a, block_depth};
-    WriteCBGuard cb_cumsum_stage_b_guard{cb_cumsum_stage_b, block_depth};
-
     for (uint32_t tile_i = 0; tile_i < block_depth; ++tile_i) {
+        ReadCBGuard cb_cumsum_stage_a_guard{cb_cumsum_stage_a, ONE_TILE};
+        WriteCBGuard cb_cumsum_stage_b_guard{cb_cumsum_stage_b, ONE_TILE};
         tile_regs_acquire();
 
         copy_tile_init(cb_cumsum_stage_a);
-        copy_tile(cb_cumsum_stage_a, tile_i, WORKING_REG);
+        copy_tile(cb_cumsum_stage_a, FIRST_TILE, WORKING_REG);
 
         tile_regs_commit();
         tile_regs_wait();
 
         pack_reconfig_data_format(cb_cumsum_stage_b);
-        pack_tile(WORKING_REG, cb_cumsum_stage_b, tile_i);
+        pack_tile(WORKING_REG, cb_cumsum_stage_b, FIRST_TILE);
         if (tile_i == block_depth - 1) {
             WriteCBGuard axis_2_buffer_cb_guard{cb_axis_2_buffer, ONE_TILE};
             pack_reconfig_data_format(cb_axis_2_buffer);
@@ -217,7 +177,13 @@ FORCE_INLINE void save_last_tile(
 }
 
 FORCE_INLINE void cumsum_cube_axis_2(
-    uint32_t cb_start, uint32_t cb_acc, uint32_t cb_input, uint32_t cb_cumsum_stage_0, uint32_t block_depth = 32) {
+    uint32_t cb_start,
+    uint32_t cb_acc,
+    uint32_t cb_input,
+    uint32_t cb_cumsum_stage_0,
+    uint32_t cb_axis_2_buffer,
+    bool save_last_tile,
+    uint32_t block_depth = 32) {
     ReadCBGuard start_cb_read_guard{cb_start, ONE_TILE};  // consume cb_start 1t
 
     bool enable_reload = false;
@@ -265,7 +231,13 @@ FORCE_INLINE void cumsum_cube_axis_2(
         tile_regs_wait();
 
         pack_reconfig_data_format(cb_cumsum_stage_0);
-        pack_tile(WORKING_REG, cb_cumsum_stage_0, tile_i);
+        pack_tile(WORKING_REG, cb_cumsum_stage_0, FIRST_TILE);
+
+        if ((tile_i == block_depth - 1) && save_last_tile) {
+            WriteCBGuard axis_2_buffer_cb_guard{cb_axis_2_buffer, ONE_TILE};
+            pack_reconfig_data_format(cb_axis_2_buffer);
+            pack_tile(WORKING_REG, cb_axis_2_buffer, FIRST_TILE);
+        }
 
         tile_regs_release();
 
@@ -277,25 +249,26 @@ FORCE_INLINE void cumsum_cube_axis_2(
 
 FORCE_INLINE void cumsum_cube_axis_3(
     uint32_t cb_cumsum_stage_wip, uint32_t cb_cumsum_output, uint32_t block_depth = 32) {
-    cumsum_tile_init();
-    ReadCBGuard read_cumsum_guard{cb_cumsum_stage_wip, block_depth};
-    WriteCBGuard cumsum_output_write_guard{cb_cumsum_output, block_depth};
     for (uint32_t tile_i = 0; tile_i < block_depth; ++tile_i) {
+        ReadCBGuard read_cumsum_guard{cb_cumsum_stage_wip, ONE_TILE};
+        WriteCBGuard cumsum_output_write_guard{cb_cumsum_output, ONE_TILE};
         tile_regs_acquire();
         copy_tile_init(cb_cumsum_stage_wip);
-        copy_tile(cb_cumsum_stage_wip, tile_i, WORKING_REG);
+        copy_tile(cb_cumsum_stage_wip, FIRST_TILE, WORKING_REG);
 
         // if (tile_i == 1) {
         //     dprint_tensix_dest_reg(WORKING_REG);
         // }
 
+        cumsum_tile_init();
         cumsum_tile(WORKING_REG);
+        // DPRINT << "CUMSUM " << tile_i << ENDL();
 
         tile_regs_commit();
         tile_regs_wait();
 
         pack_reconfig_data_format(cb_cumsum_output);
-        pack_tile(WORKING_REG, cb_cumsum_output, tile_i);
+        pack_tile(WORKING_REG, cb_cumsum_output, FIRST_TILE);
 
         tile_regs_release();
     }
@@ -303,22 +276,31 @@ FORCE_INLINE void cumsum_cube_axis_3(
 
 // TODO(jbbieniek): finish
 FORCE_INLINE void propagate_tile_into_cube(
-    uint32_t cb_axis_2_buffer, uint32_t cb_cumsum_stage_a, uint32_t cb_cumsum_stage_b, uint32_t block_depth = 32) {
-    ReadCBGuard cb_cumsum_stage_0_guard{cb_cumsum_stage_a, block_depth};
-    WriteCBGuard cb_cumsum_stage_1_guard{cb_cumsum_stage_b, block_depth};
+    uint32_t cb_axis_2_buffer,
+    uint32_t cb_cumsum_stage_a,
+    uint32_t cb_cumsum_stage_b,
+    bool save_last_tile,
+    uint32_t block_depth = 32) {
     ReadCBGuard cb_axis_2_buffer_guard{cb_axis_2_buffer, ONE_TILE};
     for (uint32_t tile_i = 0; tile_i < block_depth; ++tile_i) {
+        ReadCBGuard cb_cumsum_stage_0_guard{cb_cumsum_stage_a, ONE_TILE};
+        WriteCBGuard cb_cumsum_stage_1_guard{cb_cumsum_stage_b, ONE_TILE};
         tile_regs_acquire();
 
         binary_op_init_common(cb_axis_2_buffer, cb_cumsum_stage_a, cb_cumsum_stage_b);
         add_tiles_init(cb_axis_2_buffer, cb_cumsum_stage_a);
-        add_tiles(cb_axis_2_buffer, cb_cumsum_stage_a, FIRST_TILE, tile_i, WORKING_REG);
+        add_tiles(cb_axis_2_buffer, cb_cumsum_stage_a, FIRST_TILE, FIRST_TILE, WORKING_REG);
 
         tile_regs_commit();
         tile_regs_wait();
 
         pack_reconfig_data_format(cb_cumsum_stage_b);
-        pack_tile(WORKING_REG, cb_cumsum_stage_b, tile_i);
+        pack_tile(WORKING_REG, cb_cumsum_stage_b, FIRST_TILE);
+        if ((tile_i == block_depth - 1) && save_last_tile) {
+            WriteCBGuard axis_2_buffer_cb_guard{cb_axis_2_buffer, ONE_TILE};
+            pack_reconfig_data_format(cb_axis_2_buffer);
+            pack_tile(WORKING_REG, cb_axis_2_buffer, FIRST_TILE);
+        }
 
         tile_regs_release();
     }
@@ -327,16 +309,16 @@ FORCE_INLINE void propagate_tile_into_cube(
 FORCE_INLINE void get_and_propagate_adder_cube(
     uint32_t cb_cumsum_stage_X, uint32_t cb_axis_3_buffer_read, uint32_t cb_output, uint32_t block_depth = 32) {
     // there is the necessity to receive a block
-    ReadCBGuard cb_cumsum_stage_X_read_guard{cb_cumsum_stage_X, block_depth};
-    ReadCBGuard cb_axis_3_buffer_read_guard{cb_axis_3_buffer_read, block_depth};
 
     for (uint32_t tile_i = 0; tile_i < block_depth; ++tile_i) {
+        ReadCBGuard cb_cumsum_stage_X_read_guard{cb_cumsum_stage_X, ONE_TILE};
+        ReadCBGuard cb_axis_3_buffer_read_guard{cb_axis_3_buffer_read, ONE_TILE};
         WriteCBGuard cb_output_write_guard{cb_output, ONE_TILE};
         tile_regs_acquire();
 
-        binary_op_init_common(cb_cumsum_stage_X, cb_axis_3_buffer_read, cb_output);
+        // binary_op_init_common(cb_cumsum_stage_X, cb_axis_3_buffer_read, cb_output);
         add_tiles_init(cb_cumsum_stage_X, cb_output);
-        add_tiles(cb_cumsum_stage_X, cb_axis_3_buffer_read, tile_i, tile_i, WORKING_REG);
+        add_tiles(cb_cumsum_stage_X, cb_axis_3_buffer_read, FIRST_TILE, FIRST_TILE, WORKING_REG);
 
         tile_regs_wait();
         tile_regs_commit();
@@ -352,7 +334,7 @@ template <typename ctas_t>
 FORCE_INLINE void perform_intimg_along_row_chunk(
     const ctas_t& ctas, uint32_t num_blocks_in_row, uint32_t rows_block_i) {
     for (uint32_t column_block_i = 0; column_block_i < num_blocks_in_row; ++column_block_i) {  // go along a row
-        DPRINT << "num_blocks_in_row: " << num_blocks_in_row << ENDL();
+        // DPRINT << "num_blocks_in_row: " << num_blocks_in_row << ENDL();
         // consume: cb_start 1t, cb_acc 1t, cb_input 1t x32
         // produce: cb_cumsum_stage_0 32t
         const uint32_t block_depth = std::min(ctas.input_depth - column_block_i * ctas.block_depth, ctas.block_depth);
@@ -361,6 +343,8 @@ FORCE_INLINE void perform_intimg_along_row_chunk(
             ctas.acc_cb,
             ctas.input_cb,
             ctas.cumsum_stage_0_cb,
+            ctas.axis_2_buffer_cb,
+            column_block_i != 0,
             block_depth);  // -> output goes to cb_cumsum, working with cb_input, cb_start, cb_acc, cb_axis_2_buffer
         if (column_block_i > 0) {
             // axis 2/4's propagation...
@@ -370,42 +354,44 @@ FORCE_INLINE void perform_intimg_along_row_chunk(
                 ctas.axis_2_buffer_cb,
                 ctas.cumsum_stage_0_cb,
                 ctas.cumsum_stage_1_cb,
+                column_block_i != 0,
                 block_depth);  // working with cb_axis_2_buffer and cb_cumsum
             // consume: cb_cumsum_stage_1 32t
             // produce: axis_2_buffer_cb 1t, cb_cumsum_stage_2 32t
-            save_last_tile(ctas.axis_2_buffer_cb, ctas.cumsum_stage_1_cb, ctas.cumsum_stage_2_cb, block_depth);
+            // save_last_tile(ctas.axis_2_buffer_cb, ctas.cumsum_stage_1_cb, ctas.cumsum_stage_2_cb, block_depth);
             if (rows_block_i > 0) {
                 // axis 3/4's propagation...
                 // consume: cb_cumsum_stage_2 32t
                 // produce: cb_cumsum_stage_3 32t
-                cumsum_cube_axis_3(ctas.cumsum_stage_2_cb, ctas.cumsum_stage_3_cb, block_depth);
-                // consume: cb_cumsum_stage_3 32t
+                cumsum_cube_axis_3(ctas.cumsum_stage_1_cb, ctas.cumsum_stage_2_cb, block_depth);
+                // consume: cb_cumsum_stage_3 32tm axis_3_buffer_1_cb 32t
                 // produce: cb_output 1t x32
                 get_and_propagate_adder_cube(
-                    ctas.cumsum_stage_3_cb, ctas.axis_3_buffer_0_cb, ctas.output_cb, block_depth);
+                    ctas.cumsum_stage_2_cb, ctas.axis_3_buffer_1_cb, ctas.output_cb, block_depth);
             } else {
                 // consume: cb_cumsum_stage_2 32t
                 // produce: cb_output 1t x32
-                cumsum_cube_axis_3(ctas.cumsum_stage_2_cb, ctas.output_cb, block_depth);
+                cumsum_cube_axis_3(ctas.cumsum_stage_1_cb, ctas.output_cb, block_depth);
             }
         } else {
             // !!!! DIFFERENT PARAMS THAN THE IF ABOVE !!!! (!!!!!!!!one stage less!!!!!!!!!)
             // consume: cb_cumsum_stage_0 32t
             // produce: cb_axis_2_buffer 1t, cb_cumsum_stage_1 32t
-            save_last_tile(ctas.axis_2_buffer_cb, ctas.cumsum_stage_0_cb, ctas.cumsum_stage_1_cb, block_depth);
+            // save_last_tile(ctas.axis_2_buffer_cb, ctas.cumsum_stage_0_cb, ctas.cumsum_stage_1_cb, block_depth);
             if (rows_block_i > 0) {
                 // axis 3/4's propagation...
                 // consume: cb_cumsum_stage_1 32t
                 // produce: cumsummed down cube (cb_cumsum_stage_2 32t)
-                cumsum_cube_axis_3(ctas.cumsum_stage_1_cb, ctas.cumsum_stage_2_cb, block_depth);
-                // consume: cb_cumsum_stage_2 32t
+                cumsum_cube_axis_3(ctas.cumsum_stage_0_cb, ctas.cumsum_stage_1_cb, block_depth);
+                // consume: cb_cumsum_stage_2 32t, axis_3_buffer_1_cb 32t
                 // produce: cb_output 1t x32
                 get_and_propagate_adder_cube(
-                    ctas.cumsum_stage_2_cb, ctas.axis_3_buffer_0_cb, ctas.output_cb, block_depth);
+                    ctas.cumsum_stage_1_cb, ctas.axis_3_buffer_1_cb, ctas.output_cb, block_depth);
             } else {
+                // DPRINT << "ROW BLOCK I: " << rows_block_i << ENDL();
                 // consume: cb_cumsum_stage_1 32t
                 // produce: cumsummed down cube (cb_output 1t x32)
-                cumsum_cube_axis_3(ctas.cumsum_stage_1_cb, ctas.output_cb, block_depth);
+                cumsum_cube_axis_3(ctas.cumsum_stage_0_cb, ctas.output_cb, block_depth);
             }
         }
     }
@@ -426,6 +412,7 @@ void MAIN {
 
     for (uint32_t channels_block_i = 0; channels_block_i < num_slices_along_channels; ++channels_block_i) {
         for (uint32_t rows_block_i = 0; rows_block_i < num_blocks_in_column; ++rows_block_i) {
+            // DPRINT << "CHANNEL: " << channels_block_i << ENDL();
             perform_intimg_along_row_chunk(ctas, num_blocks_in_row, rows_block_i);
         }
     }

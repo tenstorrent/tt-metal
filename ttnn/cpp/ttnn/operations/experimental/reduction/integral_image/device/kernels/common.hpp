@@ -14,7 +14,7 @@ struct df_to_std {
 
 template <>
 struct df_to_std<DataFormat::Float32> {
-    using std_type = float;
+    using std_type = uint32_t;
 };
 
 template <>
