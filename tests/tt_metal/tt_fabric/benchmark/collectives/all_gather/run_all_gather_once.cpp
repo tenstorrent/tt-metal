@@ -320,24 +320,24 @@ Notes:
         return 0 <= r && r < (int)shape[0] && 0 <= c && c < (int)shape[1] && (view.get_device({r, c}) != nullptr);
     };
 
-    auto dev_id_at = [&](int r, int c) -> uint16_t {
-        auto* d = view.get_device({r, c});
-        TT_FATAL(d != nullptr, "No device at mesh coord [{},{}]", r, c);
-        return static_cast<uint16_t>(d->id());
-    };
-    auto pick_adjacent = [&](bool use, int r, int c, const char* dir) -> uint16_t {
-        if (!use) {
-            return 0;
-        }
-        TT_FATAL(in_mesh(r, c), "Start-node out of mesh for {} leg at [{},{}]", dir, r, c);
-        uint16_t dev = dev_id_at(r, c);
-        TT_FATAL(
-            dev != static_cast<uint16_t>(src_phys),
-            "Start-node for {} leg equals source dev ({}). This will hang.",
-            dir,
-            dev);
-        return dev;
-    };
+    // auto dev_id_at = [&](int r, int c) -> uint16_t {
+    //     auto* d = view.get_device({r, c});
+    //     TT_FATAL(d != nullptr, "No device at mesh coord [{},{}]", r, c);
+    //     return static_cast<uint16_t>(d->id());
+    // };
+    // auto pick_adjacent = [&](bool use, int r, int c, const char* dir) -> uint16_t {
+    //     if (!use) {
+    //         return 0;
+    //     }
+    //     TT_FATAL(in_mesh(r, c), "Start-node out of mesh for {} leg at [{},{}]", dir, r, c);
+    //     uint16_t dev = dev_id_at(r, c);
+    //     TT_FATAL(
+    //         dev != static_cast<uint16_t>(src_phys),
+    //         "Start-node for {} leg equals source dev ({}). This will hang.",
+    //         dir,
+    //         dev);
+    //     return dev;
+    // };
 
     auto fabric_id_of = [&](Dist::MeshCoordinate mc) -> tt::tt_fabric::FabricNodeId {
         auto* d = view.get_device(mc);
@@ -430,37 +430,57 @@ Notes:
     tt::tt_fabric::append_fabric_connection_rt_args(
         src_fid, (want_S ? *dstS : any_dst), ROUTING_PLANE_ID, sender_prog, p.sender_core, writer_rt);
 
-    uint16_t dev_W = pick_adjacent(want_W, src_coord[0], src_coord[1] - 1, "W");
-    uint16_t dev_E = pick_adjacent(want_E, src_coord[0], src_coord[1] + 1, "E");
-    uint16_t dev_N = pick_adjacent(want_N, src_coord[0] - 1, src_coord[1], "N");
-    uint16_t dev_S = pick_adjacent(want_S, src_coord[0] + 1, src_coord[1], "S");
-    auto mesh_or_zero = [&](bool use) -> uint16_t { return use ? static_cast<uint16_t>(p.mesh_id) : 0; };
-    uint16_t mesh_W = mesh_or_zero(want_W);
-    uint16_t mesh_E = mesh_or_zero(want_E);
-    uint16_t mesh_N = mesh_or_zero(want_N);
-    uint16_t mesh_S = mesh_or_zero(want_S);
+    // uint16_t dev_W = pick_adjacent(want_W, src_coord[0], src_coord[1] - 1, "W");
+    // uint16_t dev_E = pick_adjacent(want_E, src_coord[0], src_coord[1] + 1, "E");
+    // uint16_t dev_N = pick_adjacent(want_N, src_coord[0] - 1, src_coord[1], "N");
+    // uint16_t dev_S = pick_adjacent(want_S, src_coord[0] + 1, src_coord[1], "S");
+    // auto mesh_or_zero = [&](bool use) -> uint16_t { return use ? static_cast<uint16_t>(p.mesh_id) : 0; };
+    // uint16_t mesh_W = mesh_or_zero(want_W);
+    // uint16_t mesh_E = mesh_or_zero(want_E);
+    // uint16_t mesh_N = mesh_or_zero(want_N);
+    // uint16_t mesh_S = mesh_or_zero(want_S);
 
-    // Push (dev,mesh) pairs for W,E,N,S — kernel expects this order
-    writer_rt.push_back((uint32_t)dev_W);
-    writer_rt.push_back((uint32_t)mesh_W);
-    writer_rt.push_back((uint32_t)dev_E);
-    writer_rt.push_back((uint32_t)mesh_E);
-    writer_rt.push_back((uint32_t)dev_N);
-    writer_rt.push_back((uint32_t)mesh_N);
-    writer_rt.push_back((uint32_t)dev_S);
-    writer_rt.push_back((uint32_t)mesh_S);
+    // ---- Choose exactly one delivery mode ----
+    // (A) Multi-row: single trunk (prefer NORTH if any N hops, else SOUTH)
+    // (B) Single-row: single horizontal leg (E or W). No trunks.
+    uint16_t send_e = 0, send_w = 0, send_n = 0, send_s = 0;
+    uint32_t leg_mask = 0;  // 1=W, 2=E, 4=N, 8=S (matches writer)
 
-    std::cerr << "[host] start_nodes (mesh,dev) W/E/N/S=(" << mesh_W << "," << dev_W << ")/(" << mesh_E << "," << dev_E
-              << ")/(" << mesh_N << "," << dev_N << ")/(" << mesh_S << "," << dev_S << ")\n";
+    const bool multi_row = (n_hops > 0) || (s_hops > 0);
+    if (multi_row) {
+        // One trunk only
+        if (n_hops > 0) {
+            send_n = n_hops;
+            leg_mask |= 4u;  // enable N
+        } else {
+            send_s = s_hops;
+            leg_mask |= 8u;  // enable S
+        }
+        // Trunk can carry both E and W branch fans (like the reference)
+        send_e = e_hops;
+        send_w = w_hops;
+        // Do NOT enable direct E/W legs when a trunk is used
+    } else {
+        // Single row → pick exactly one of E or W
+        if (e_hops > 0) {
+            send_e = e_hops;
+            leg_mask |= 2u;  // enable E only
+        } else if (w_hops > 0) {
+            send_w = w_hops;
+            leg_mask |= 1u;  // enable W only
+        } else {
+            TT_FATAL(false, "No hops to any receiver (same chip?)");
+        }
+    }
 
-    // Pack hop extents and leg mask after connections + first-hop ids.
-    writer_rt.push_back((uint32_t)e_hops);
-    writer_rt.push_back((uint32_t)w_hops);
-    writer_rt.push_back((uint32_t)n_hops);
-    writer_rt.push_back((uint32_t)s_hops);
-    uint32_t leg_mask = (want_W ? 1u : 0u) | (want_E ? 2u : 0u) | (want_N ? 4u : 0u) | (want_S ? 8u : 0u);
+    // Pack adjusted hop extents + final leg mask
+    writer_rt.push_back((uint32_t)send_e);
+    writer_rt.push_back((uint32_t)send_w);
+    writer_rt.push_back((uint32_t)send_n);
+    writer_rt.push_back((uint32_t)send_s);
     writer_rt.push_back(leg_mask);
     std::cerr << "[host] hops E/W/N/S=" << e_hops << "/" << w_hops << "/" << n_hops << "/" << s_hops
+              << " => send E/W/N/S=" << send_e << "/" << send_w << "/" << send_n << "/" << send_s
               << " leg_mask=" << leg_mask << " receivers=" << dst_coords.size() << "\n";
     tt::tt_metal::SetRuntimeArgs(sender_prog, writer_k, p.sender_core, writer_rt);
 
