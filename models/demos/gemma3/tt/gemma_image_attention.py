@@ -134,7 +134,7 @@ class TtGemmaImageAttention(LightweightModule):
             dtype=self.dtype,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             layout=ttnn.TILE_LAYOUT,
-            cache_file_name=cache_name("wqkv_sharded"),
+            # cache_file_name=cache_name("wqkv_sharded"),
         )
 
         bq_str = f"{state_dict_prefix}wq.bias"
