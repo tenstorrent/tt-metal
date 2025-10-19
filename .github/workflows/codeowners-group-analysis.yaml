@@ -930,16 +930,16 @@ jobs:
                   # Remove trailing comma and space
                   approved_members=$(echo "$approved_members" | sed 's/, $//')
                   if [ -n "$APPROVED_GROUPS" ]; then
-                    APPROVED_GROUPS="$APPROVED_GROUPS\n- ✅ **$clean_team** (Team) - $team_members_info | **Approved by:** $approved_members$team_file_list_html\n"
+                    APPROVED_GROUPS="$APPROVED_GROUPS\n---\n\n- ✅ **$clean_team** (Team) - $team_members_info | **Approved by:** $approved_members$team_file_list_html"
                   else
-                    APPROVED_GROUPS="- ✅ **$clean_team** (Team) - $team_members_info | **Approved by:** $approved_members$team_file_list_html\n"
+                    APPROVED_GROUPS="- ✅ **$clean_team** (Team) - $team_members_info | **Approved by:** $approved_members$team_file_list_html"
                   fi
                   APPROVED_COUNT=$((APPROVED_COUNT + 1))
                 else
                   if [ -n "$PENDING_GROUPS" ]; then
-                    PENDING_GROUPS="$PENDING_GROUPS\n- ⏳ **$clean_team** (Team) - $team_members_info | **Pending approval**$team_file_list_html\n"
+                    PENDING_GROUPS="$PENDING_GROUPS\n---\n\n- ⏳ **$clean_team** (Team) - $team_members_info | **Pending approval**$team_file_list_html"
                   else
-                    PENDING_GROUPS="- ⏳ **$clean_team** (Team) - $team_members_info | **Pending approval**$team_file_list_html\n"
+                    PENDING_GROUPS="- ⏳ **$clean_team** (Team) - $team_members_info | **Pending approval**$team_file_list_html"
                   fi
                   PENDING_COUNT=$((PENDING_COUNT + 1))
                 fi
@@ -1011,16 +1011,16 @@ jobs:
                   # Remove trailing comma and space
                   approved_owners=$(echo "$approved_owners" | sed 's/, $//')
                   if [ -n "$APPROVED_GROUPS" ]; then
-                    APPROVED_GROUPS="$APPROVED_GROUPS\n- ✅ **$pattern** (Group) - Members: $all_owners | **Approved by:** $approved_owners$file_list_html\n"
+                    APPROVED_GROUPS="$APPROVED_GROUPS\n---\n\n- ✅ **$pattern** (Group) - Members: $all_owners | **Approved by:** $approved_owners$file_list_html"
                   else
-                    APPROVED_GROUPS="- ✅ **$pattern** (Group) - Members: $all_owners | **Approved by:** $approved_owners$file_list_html\n"
+                    APPROVED_GROUPS="- ✅ **$pattern** (Group) - Members: $all_owners | **Approved by:** $approved_owners$file_list_html"
                   fi
                   APPROVED_COUNT=$((APPROVED_COUNT + 1))
                 else
                   if [ -n "$PENDING_GROUPS" ]; then
-                    PENDING_GROUPS="$PENDING_GROUPS\n- ⏳ **$pattern** (Group) - Members: $all_owners | **Pending approval**$file_list_html\n"
+                    PENDING_GROUPS="$PENDING_GROUPS\n---\n\n- ⏳ **$pattern** (Group) - Members: $all_owners | **Pending approval**$file_list_html"
                   else
-                    PENDING_GROUPS="- ⏳ **$pattern** (Group) - Members: $all_owners | **Pending approval**$file_list_html\n"
+                    PENDING_GROUPS="- ⏳ **$pattern** (Group) - Members: $all_owners | **Pending approval**$file_list_html"
                   fi
                   PENDING_COUNT=$((PENDING_COUNT + 1))
                 fi
