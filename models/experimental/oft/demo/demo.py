@@ -32,11 +32,12 @@ from models.experimental.oft.tests.common import (
     visualize_tensor_distributions,
 )
 from models.experimental.oft.tt.model_preprocessing import create_OFT_model_parameters, create_decoder_model_parameters
+from models.experimental.oft.tt.model_configs import ModelOptimizations
 from models.experimental.oft.tt.tt_oftnet import TTOftNet
 from models.experimental.oft.tt.tt_encoder import TTObjectEncoder
 from models.experimental.oft.tt.tt_resnet import TTBasicBlock
 from tests.ttnn.utils_for_testing import check_with_pcc
-from tests.ttnn.unit_tests.test_bh_20_cores_sharding import skip_if_not_blackhole_20_cores
+from tests.ttnn.unit_tests.base_functionality.test_bh_20_cores_sharding import skip_if_not_blackhole_20_cores
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16 * 1024}], indirect=True)
@@ -53,7 +54,7 @@ from tests.ttnn.unit_tests.test_bh_20_cores_sharding import skip_if_not_blackhol
     "model_dtype, fallback_feedforward, fallback_lateral, fallback_oft, use_host_decoder, pcc_scores_oft, pcc_positions_oft, pcc_dimensions_oft, pcc_angles_oft",
     # fmt: off
     [
-       ( torch.float32, False, False, False, False, 0.92, .98, 0.99, 0.94),
+       ( torch.float32, False, False, False, False, 0.917, .978, 0.999, 0.939),
     ],
     # fmt: on
 )
@@ -74,6 +75,8 @@ def test_demo_inference(
     model_location_generator,
 ):
     skip_if_not_blackhole_20_cores(device)
+    device.disable_and_clear_program_cache()  # test hangs without this line on P150
+
     assert use_host_decoder == False, "Only use_host_decoder=False is supported for now"
     # Create output directory for saving visualizations
     output_dir = os.path.join(os.path.dirname(__file__), "outputs")
@@ -103,7 +106,10 @@ def test_demo_inference(
     )
 
     ref_model = load_checkpoint(ref_model, model_location_generator)
-    parameters = create_OFT_model_parameters(ref_model, (input_tensor, calib, grid), device=device)
+    state_dict = create_OFT_model_parameters(ref_model, (input_tensor, calib, grid), device=device)
+    # Apply model optimizations
+    model_opt = ModelOptimizations()
+    model_opt.apply(state_dict)
 
     # 3 Create reference encoder
     ref_encoder = ObjectEncoder(nms_thresh=NMS_THRESH, dtype=model_dtype)
@@ -141,8 +147,8 @@ def test_demo_inference(
     # 2 Create tt OFTnet
     tt_model = TTOftNet(
         device,
-        parameters,
-        parameters.conv_args,
+        state_dict,
+        state_dict.layer_args,
         TTBasicBlock,
         [2, 2, 2, 2],
         ref_model.mean,
@@ -180,7 +186,6 @@ def test_demo_inference(
         device, tt_scores, tt_pos_offsets, tt_dim_offsets, tt_ang_offsets, tt_grid_
     )
     tt_objects = tt_encoder.create_objects(*tt_outs)
-
     # ========================================================
     # Compare results
 

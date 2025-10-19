@@ -8,7 +8,7 @@
 #include <tt_stl/indestructible.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
 #include <tt-metalium/distributed_context.hpp>
-#include <tt-metalium/core_descriptor.hpp>
+#include "llrt/core_descriptor.hpp"
 #include <tt-metalium/hal_types.hpp>
 #include <llrt/tt_cluster.hpp>
 #include <llrt/hal.hpp>
@@ -150,7 +150,7 @@ private:
     size_t fw_compile_hash_ = 0;  // To check if FW recompilation is needed
 
     // Used to track which FW has been built already
-    std::unordered_set<uint32_t> firmware_built_keys_;
+    std::unordered_set<uint64_t> firmware_built_keys_;
 
     // Written to device as part of FW init, device-specific
     std::unordered_map<chip_id_t, std::vector<int32_t>> dram_bank_offset_map_;
