@@ -920,7 +920,10 @@ jobs:
                     if [ -n "$file" ]; then
                       # Escape special characters for HTML
                       escaped_file=$(echo "$file" | sed 's/\*/\\*/g' | sed 's/_/\\_/g')
-                      team_file_list_html="$team_file_list_html  - <code>$escaped_file</code>\n"
+                      # Create clickable link to file in PR (GitHub uses SHA256 hash of file path)
+                      file_hash=$(echo -n "$file" | sha256sum | cut -d' ' -f1)
+                      file_url="${{ github.server_url }}/${{ github.repository }}/pull/$PR_NUMBER/files#diff-$file_hash"
+                      team_file_list_html="$team_file_list_html  - [<code>$escaped_file</code>]($file_url)\n"
                     fi
                   done
                   team_file_list_html="$team_file_list_html\n  </details>"
@@ -1001,7 +1004,10 @@ jobs:
                     if [ -n "$file" ]; then
                       # Escape special characters for HTML
                       escaped_file=$(echo "$file" | sed 's/\*/\\*/g' | sed 's/_/\\_/g')
-                      file_list_html="$file_list_html  - <code>$escaped_file</code>\n"
+                      # Create clickable link to file in PR (GitHub uses SHA256 hash of file path)
+                      file_hash=$(echo -n "$file" | sha256sum | cut -d' ' -f1)
+                      file_url="${{ github.server_url }}/${{ github.repository }}/pull/$PR_NUMBER/files#diff-$file_hash"
+                      file_list_html="$file_list_html  - [<code>$escaped_file</code>]($file_url)\n"
                     fi
                   done
                   file_list_html="$file_list_html\n  </details>"
