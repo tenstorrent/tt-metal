@@ -1050,6 +1050,9 @@ jobs:
           fi
 
           # Combine pending groups first, then approved groups
+            echo "DEBUG: PENDING_GROUPS first 200 chars: ${PENDING_GROUPS:0:200}"
+            echo "DEBUG: APPROVED_GROUPS first 200 chars: ${APPROVED_GROUPS:0:200}"
+
             if [ -z "$TEAMS" ] && [ -z "$INDIVIDUALS" ]; then
               COMMENT="<!-- CodeOwners-Workflow-Bot -->\n## CodeOwners Analysis\n\nNo specific codeowners found for the changed files in this PR.\n\n**Required Approvals:** At least one maintainer approval is required."
             else
@@ -1060,7 +1063,8 @@ jobs:
               elif [ -n "$APPROVED_GROUPS" ]; then
                 ALL_GROUPS="$APPROVED_GROUPS"
               fi
-              COMMENT="<!-- CodeOwners-Workflow-Bot -->\n## CodeOwners Group Analysis\n\nThis PR requires approval from **one member of each** of the following groups:\n\n**Summary:** $PENDING_COUNT pending groups, $APPROVED_COUNT approved groups\n\n### Group Information:\n$ALL_GROUPS\n\n**Note:** At least one approval from each group is sufficient."
+              echo "DEBUG: ALL_GROUPS first 200 chars: ${ALL_GROUPS:0:200}"
+              COMMENT="<!-- CodeOwners-Workflow-Bot -->\n## CodeOwners Group Analysis\n\nThis PR requires approval from **one member of each** of the following groups:\n\n**Summary:** $PENDING_COUNT pending groups, $APPROVED_COUNT approved groups\n\n### Group Information:\n\n$ALL_GROUPS\n\n**Note:** At least one approval from each group is sufficient."
             fi
 
           # Add "Requested by" line if requester is different from PR author
