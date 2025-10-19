@@ -165,31 +165,4 @@ class UnitMeshMultiCQMultiDeviceBufferFixture : public UnitMeshMultiCQMultiDevic
 
 class UnitMeshMultiCQMultiDeviceEventFixture : public UnitMeshMultiCQMultiDeviceFixture {};
 
-class DISABLED_UnitMeshMultiCQMultiDeviceOnFabricFixture
-    : public UnitMeshMultiCQMultiDeviceFixture,
-      public ::testing::WithParamInterface<tt::tt_fabric::FabricConfig> {
-private:
-    // Save the result to reduce UMD calls
-    inline static bool should_skip_ = false;
-
-protected:
-    void SetUp() override {
-        if (tt::get_arch_from_string(tt::test_utils::get_umd_arch_name()) != tt::ARCH::WORMHOLE_B0) {
-            GTEST_SKIP() << "Dispatch on Fabric tests only applicable on Wormhole B0";
-        }
-        // Skip for TG as it's still being implemented
-        if (tt::tt_metal::IsGalaxyCluster()) {
-            GTEST_SKIP();
-        }
-        // This will force dispatch init to inherit the FabricConfig param
-        tt::tt_fabric::SetFabricConfig(GetParam(), tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE, 1);
-        UnitMeshMultiCQMultiDeviceFixture::SetUp();
-    }
-
-    void TearDown() override {
-        UnitMeshMultiCQMultiDeviceFixture::TearDown();
-        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED);
-    }
-};
-
 }  // namespace tt::tt_metal
