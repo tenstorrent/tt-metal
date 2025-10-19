@@ -928,10 +928,18 @@ jobs:
                 if [ -n "$approved_members" ]; then
                   # Remove trailing comma and space
                   approved_members=$(echo "$approved_members" | sed 's/, $//')
-                  APPROVED_GROUPS="$APPROVED_GROUPS\n- ✅ **$clean_team** (Team) - $team_members_info | **Approved by:** $approved_members$team_file_list_html"
+                  if [ -n "$APPROVED_GROUPS" ]; then
+                    APPROVED_GROUPS="$APPROVED_GROUPS\n- ✅ **$clean_team** (Team) - $team_members_info | **Approved by:** $approved_members$team_file_list_html"
+                  else
+                    APPROVED_GROUPS="- ✅ **$clean_team** (Team) - $team_members_info | **Approved by:** $approved_members$team_file_list_html"
+                  fi
                   APPROVED_COUNT=$((APPROVED_COUNT + 1))
                 else
-                  PENDING_GROUPS="$PENDING_GROUPS\n- ⏳ **$clean_team** (Team) - $team_members_info | **Pending approval**$team_file_list_html"
+                  if [ -n "$PENDING_GROUPS" ]; then
+                    PENDING_GROUPS="$PENDING_GROUPS\n- ⏳ **$clean_team** (Team) - $team_members_info | **Pending approval**$team_file_list_html"
+                  else
+                    PENDING_GROUPS="- ⏳ **$clean_team** (Team) - $team_members_info | **Pending approval**$team_file_list_html"
+                  fi
                   PENDING_COUNT=$((PENDING_COUNT + 1))
                 fi
               done
@@ -1000,10 +1008,18 @@ jobs:
                 if [ -n "$approved_owners" ]; then
                   # Remove trailing comma and space
                   approved_owners=$(echo "$approved_owners" | sed 's/, $//')
-                  APPROVED_GROUPS="$APPROVED_GROUPS\n- ✅ **$pattern** (Group) - Members: $all_owners | **Approved by:** $approved_owners$file_list_html"
+                  if [ -n "$APPROVED_GROUPS" ]; then
+                    APPROVED_GROUPS="$APPROVED_GROUPS\n- ✅ **$pattern** (Group) - Members: $all_owners | **Approved by:** $approved_owners$file_list_html"
+                  else
+                    APPROVED_GROUPS="- ✅ **$pattern** (Group) - Members: $all_owners | **Approved by:** $approved_owners$file_list_html"
+                  fi
                   APPROVED_COUNT=$((APPROVED_COUNT + 1))
                 else
-                  PENDING_GROUPS="$PENDING_GROUPS\n- ⏳ **$pattern** (Group) - Members: $all_owners | **Pending approval**$file_list_html"
+                  if [ -n "$PENDING_GROUPS" ]; then
+                    PENDING_GROUPS="$PENDING_GROUPS\n- ⏳ **$pattern** (Group) - Members: $all_owners | **Pending approval**$file_list_html"
+                  else
+                    PENDING_GROUPS="- ⏳ **$pattern** (Group) - Members: $all_owners | **Pending approval**$file_list_html"
+                  fi
                   PENDING_COUNT=$((PENDING_COUNT + 1))
                 fi
               done
@@ -1037,7 +1053,14 @@ jobs:
             if [ -z "$TEAMS" ] && [ -z "$INDIVIDUALS" ]; then
               COMMENT="<!-- CodeOwners-Workflow-Bot -->\n## CodeOwners Analysis\n\nNo specific codeowners found for the changed files in this PR.\n\n**Required Approvals:** At least one maintainer approval is required."
             else
-              COMMENT="<!-- CodeOwners-Workflow-Bot -->\n## CodeOwners Group Analysis\n\nThis PR requires approval from **one member of each** of the following groups:\n\n**Summary:** $PENDING_COUNT pending groups, $APPROVED_COUNT approved groups\n\n### Group Information:\n$PENDING_GROUPS$APPROVED_GROUPS\n\n**Note:** At least one approval from each group is sufficient."
+              # Add separator between pending and approved groups if both exist
+              ALL_GROUPS="$PENDING_GROUPS"
+              if [ -n "$PENDING_GROUPS" ] && [ -n "$APPROVED_GROUPS" ]; then
+                ALL_GROUPS="$ALL_GROUPS\n$APPROVED_GROUPS"
+              elif [ -n "$APPROVED_GROUPS" ]; then
+                ALL_GROUPS="$APPROVED_GROUPS"
+              fi
+              COMMENT="<!-- CodeOwners-Workflow-Bot -->\n## CodeOwners Group Analysis\n\nThis PR requires approval from **one member of each** of the following groups:\n\n**Summary:** $PENDING_COUNT pending groups, $APPROVED_COUNT approved groups\n\n### Group Information:\n$ALL_GROUPS\n\n**Note:** At least one approval from each group is sufficient."
             fi
 
           # Add "Requested by" line if requester is different from PR author
