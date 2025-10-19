@@ -78,6 +78,8 @@ namespace nb = nanobind;
 namespace ttnn::operations {
 
 void py_module(nb::module_& mod) {
+    nb::set_leak_warnings(false);  // TODO_NANOBIND: REENABLE THIS
+
     auto m_core = mod.def_submodule("core", "core operations");
     core::py_module_types(m_core);
     core::py_module(m_core);

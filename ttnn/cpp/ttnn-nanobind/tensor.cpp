@@ -156,14 +156,14 @@ void tensor_mem_config_module_types(nb::module_& m_tensor) {
             },
             nb::keep_alive<0, 1>())
         .def(
-            "__array__",  // TODO_NANOBIND: what is the interface/function name here? try __array__
-            [](HostBuffer& self) -> nb::ndarray<> {
-                return nb::ndarray(self.view_bytes().data(), {self.view_bytes().size()});
+            "__array__",            // TODO_NANOBIND: what is the interface/function name here? try __array__
+            [](HostBuffer& self) {  // nb::ndarray<> {
+                return nb::ndarray(self.view_bytes().data(), {self.view_bytes().size()}).cast();
             })
         .def(
             "__dlpack__",
-            [](HostBuffer& self, const nb::kwargs& kwargs) -> nb::ndarray<> {
-                return nb::ndarray(self.view_bytes().data(), {self.view_bytes().size()});
+            [](HostBuffer& self, const nb::kwargs& kwargs) {  //-> nb::ndarray<> {
+                return nb::ndarray(self.view_bytes().data(), {self.view_bytes().size()}).cast();
             })
         .def("__dlpack_device__", []() { return std::make_pair(nb::device::cpu::value, 0); });
 }
