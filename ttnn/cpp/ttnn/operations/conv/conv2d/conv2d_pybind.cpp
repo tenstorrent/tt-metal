@@ -52,14 +52,14 @@ void py_bind_conv2d(py::module& module) {
         :param ttnn.Tensor, optional bias_tensor: The bias tensor to be added. Default: None.
         :param ttnn.Conv2dConfig, None conv_config: Configuration for convolution. Default: None.
         :param ttnn.DeviceComputeKernelConfig, None compute_config: Configuration for compute kernel. Default: None.
-        :param ttnn.MemoryConfig, None memory_config: Output Tensor's Memory Configuration. Default: None
-        :param ttnn.Conv2dSliceConfig, None slice_config: Configuration for slicing input & output tensors in DRAM. If set to None input is in DRAM, DRAM slicing is automatically enabled. Default: None
-    
+        :param ttnn.MemoryConfig, None memory_config: Output Tensor's Memory Configuration. Default: None.
+        :param ttnn.Conv2dSliceConfig, None slice_config: Configuration for slicing input & output tensors in DRAM. If set to None input is in DRAM, DRAM slicing is automatically enabled. Default: None.
+
         :return: The output tensor, output height and width, and the preprocessed weights and bias.
 
         :rtype: [ttnn.Tensor]: Default. The output tensor, when return_output_dim = False and return_weights_and_bias = False
         :rtype: [ttnn.Tensor, Tuple[int, int]]: The output tensor, and it's height and width, if return_output_dim = True
-        :rtype: [ttnn.Tensor, Tuple[ttnn.Tensor, Optional[ttnn.Tensor]]]: The output tensor, and preprocessed weight and bias tensors that are  both on device, if return_weights_and_bias = True
+        :rtype: [ttnn.Tensor, Tuple[ttnn.Tensor, Optional[ttnn.Tensor]]]: The output tensor, and preprocessed weight and bias tensors that are both on device, if return_weights_and_bias = True
         :rtype: [ttnn.Tensor, Tuple[int, int], Tuple[ttnn.Tensor, Optional[ttnn.Tensor]]]: If true, the op also returns the preprocessed weight and bias on the device. Weight and bias should be used for the same convolution next time it is called to avoid preparing weights and bias multiple times. Default: false.
 
         Note:
@@ -143,7 +143,7 @@ void py_bind_conv2d(py::module& module) {
                 * - BFLOAT8_B
                   - TILE
         )doc",
-        
+
         ttnn::pybind_overload_t{
             [](const decltype(ttnn::conv2d)& self,
                const ttnn::Tensor& input_tensor,
