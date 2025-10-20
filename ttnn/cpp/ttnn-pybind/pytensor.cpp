@@ -418,6 +418,18 @@ HostBuffer convert_py_tensor_to_host_buffer(const py::handle& py_tensor, DataTyp
         }
     };
 
+    auto get_py_dtype_name = [](DataType target_dtype) -> const char* {
+        switch (target_dtype) {
+            case DataType::BFLOAT16: return "bfloat16";
+            case DataType::FLOAT32: return "float32";
+            case DataType::UINT32: return "int32";
+            case DataType::UINT8: return "uint8";
+            case DataType::UINT16: return "int16";
+            case DataType::INT32: return "int32";
+            default: TT_THROW("Unsupported target DataType!");
+        }
+    };
+
     TT_FATAL(
         target_dtype != DataType::BFLOAT4_B && target_dtype != DataType::BFLOAT8_B,
         "BFLOAT4_B and BFLOAT8_B data types are not supported for tensor conversion!");
@@ -427,21 +439,9 @@ HostBuffer convert_py_tensor_to_host_buffer(const py::handle& py_tensor, DataTyp
         py::object cont_tensor = py_tensor.attr("contiguous")();
         const auto py_dtype = cont_tensor.attr("dtype");
 
-        auto maybe_convert = [&cont_tensor, &py_dtype, &torch](const char* target_py_dtype) {
-            if (not py_dtype.equal(torch.attr(target_py_dtype))) {
-                cont_tensor = cont_tensor.attr("to")(torch.attr(target_py_dtype));
-            }
-        };
-
-        // Convert to target dtype
-        switch (target_dtype) {
-            case DataType::BFLOAT16: maybe_convert("bfloat16"); break;
-            case DataType::FLOAT32: maybe_convert("float32"); break;
-            case DataType::UINT32: maybe_convert("int32"); break;
-            case DataType::UINT8: maybe_convert("uint8"); break;
-            case DataType::UINT16: maybe_convert("int16"); break;
-            case DataType::INT32: maybe_convert("int32"); break;
-            default: TT_THROW("Unsupported target DataType!");
+        const char* target_py_dtype = get_py_dtype_name(target_dtype);
+        if (not py_dtype.equal(torch.attr(target_py_dtype))) {
+            cont_tensor = cont_tensor.attr("to")(torch.attr(target_py_dtype));
         }
 
         auto numel = py::cast<std::size_t>(cont_tensor.attr("numel")());
@@ -456,20 +456,9 @@ HostBuffer convert_py_tensor_to_host_buffer(const py::handle& py_tensor, DataTyp
         py::object cont_tensor = np.attr("ascontiguousarray")(py_tensor);
         const auto py_dtype = cont_tensor.attr("dtype");
 
-        auto maybe_convert = [&cont_tensor, &py_dtype, &np](const char* target_py_dtype) {
-            if (not py_dtype.equal(np.attr(target_py_dtype))) {
-                cont_tensor = cont_tensor.attr("astype")(np.attr(target_py_dtype));
-            }
-        };
-
-        // Convert to target dtype
-        switch (target_dtype) {
-            case DataType::FLOAT32: maybe_convert("float32"); break;
-            case DataType::UINT32: maybe_convert("uint32"); break;
-            case DataType::UINT8: maybe_convert("uint8"); break;
-            case DataType::UINT16: maybe_convert("uint16"); break;
-            case DataType::INT32: maybe_convert("int32"); break;
-            default: TT_THROW("Unsupported target DataType!");
+        const char* target_py_dtype = get_py_dtype_name(target_dtype);
+        if (not py_dtype.equal(np.attr(target_py_dtype))) {
+            cont_tensor = cont_tensor.attr("astype")(np.attr(target_py_dtype));
         }
 
         auto numel = py::cast<std::size_t>(cont_tensor.attr("size"));
