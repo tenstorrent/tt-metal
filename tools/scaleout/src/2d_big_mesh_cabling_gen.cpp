@@ -26,7 +26,7 @@ struct InputConfig {
 
 InputConfig parse_arguments(int argc, char** argv) {
     cxxopts::Options options("2d_big_mesh_cabling_gen", "Generate 2D big mesh cabling configuration");
-    
+
     options.add_options()
         ("g,galaxy-structure", "Galaxy structure in format 'NxM' where N and M are positive integers. N must be divisible by 8, M must be divisible by 4", cxxopts::value<std::string>())
         ("t,topology", "Torus configuration: '10' (torus in first dimension), '01' (torus in second dimension), '11' (torus in both dimensions), '00' (mesh topology)", cxxopts::value<std::string>())
