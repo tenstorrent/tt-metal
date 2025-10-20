@@ -259,6 +259,7 @@ class PETRHead(nn.Module):
         masks = x.new_ones((batch_size, num_cams, input_img_h, input_img_w))
         for img_id in range(batch_size):
             for cam_id in range(num_cams):
+                # print(f"img_metas[img_id]: {img_metas[img_id]}")
                 img_h, img_w = img_metas[img_id]["img_shape"][cam_id]
                 masks[img_id, cam_id, :img_h, :img_w] = 0
         x = self.input_proj(x.flatten(0, 1))

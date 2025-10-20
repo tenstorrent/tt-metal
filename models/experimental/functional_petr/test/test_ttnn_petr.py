@@ -71,7 +71,7 @@ def verify_output(torch_output, ttnn_output):
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 def test_petr(device, reset_seeds):
-    perf = True
+    perf = False
     inputs, modified_batch_img_metas = prepare_inputs(perf)
 
     torch_model = prepare_torch_model()

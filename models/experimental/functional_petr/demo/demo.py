@@ -1239,6 +1239,21 @@ class MockDet3DDataPreprocessor:
             metainfo.setdefault("img_shape", (h, w))
             metainfo.setdefault("pad_shape", (h + pad_h, w + pad_w))
             metainfo.setdefault("ori_shape", [(h, w)] * 6)
+            # if "img_shape" not in metainfo:
+            #     metainfo["img_shape"] = [(h, w)] * 6  # List of tuples
+            # elif not isinstance(metainfo["img_shape"], list):
+            #     # Convert single tuple to list
+            #     metainfo["img_shape"] = [metainfo["img_shape"]] * 6
+
+            # # Ensure ori_shape is also a list
+            # if "ori_shape" not in metainfo:
+            #     metainfo["ori_shape"] = [(h, w)] * 6
+            # elif not isinstance(metainfo["ori_shape"], list):
+            #     metainfo["ori_shape"] = [metainfo["ori_shape"]] * 6
+
+            # # pad_shape can be a single tuple (it's not indexed by camera)
+            # metainfo.setdefault("pad_shape", (h + pad_h, w + pad_w))
+
             metainfo["box_type_3d"] = LiDARInstance3DBoxes
             metainfo.setdefault("sample_idx", i)
 
@@ -1844,7 +1859,7 @@ def load_real_nuscenes_images(data_root="models/experimental/functional_petr/res
     img_metas = [
         {
             "filename": cam_names,
-            "ori_shape": [(320, 800)] * 6,
+            "ori_shape": [(320, 800)],
             "img_shape": (320, 800),
             "pad_shape": (320, 800),
             "lidar2img": lidar2img_list,
@@ -2126,15 +2141,45 @@ def test_demo(device, reset_seeds):
     print("=" * 60)
 
     # Load data
-    # print("\n1. Loading nuScenes images with calibration...")
-    # input_data, camera_images = load_real_nuscenes_images(
-    #     "models/experimental/functional_petr/resources/nuscenes"
+    print("\n1. Loading nuScenes images with calibration...")
+    input_data, camera_images = load_real_nuscenes_images("models/experimental/functional_petr/resources/nuscenes")
+    # print("\n1. Loading single camera image...")
+    # input_data, camera_images = load_single_camera_image(
+    #     "models/experimental/functional_petr/resources/nuscenes", camera_name="CAM_FRONT"
     # )
-    print("\n1. Loading single camera image...")
-    input_data, camera_images = load_single_camera_image(
-        "models/experimental/functional_petr/resources/nuscenes", camera_name="CAM_FRONT"
-    )
+    #####################################################################################
     print(f"   Images shape: {input_data['imgs'].shape}")
+    print("\n" + "=" * 60)
+    print("DEBUG: Input Comparison")
+    print("=" * 60)
+
+    # Load golden test input for comparison
+    golden_inputs = torch.load(
+        "models/experimental/functional_petr/resources/golden_input_inputs_sample1.pt", weights_only=False
+    )
+
+    print(f"Real input shape: {input_data['imgs'].shape}")
+    print(f"Golden input shape: {golden_inputs['imgs'].shape}")
+    print(f"Real input range: [{input_data['imgs'].min():.4f}, {input_data['imgs'].max():.4f}]")
+    print(f"Golden input range: [{golden_inputs['imgs'].min():.4f}, {golden_inputs['imgs'].max():.4f}]")
+    print(f"Real input mean/std: {input_data['imgs'].mean():.4f} / {input_data['imgs'].std():.4f}")
+    print(f"Golden input mean/std: {golden_inputs['imgs'].mean():.4f} / {golden_inputs['imgs'].std():.4f}")
+    print("=" * 60 + "\n")
+
+    # After showing input comparison, add this:
+    print("\n" + "=" * 60)
+    print("VERIFICATION: PyTorch Baseline Comparison")
+    print("=" * 60)
+
+    # Load golden inputs
+    golden_inputs = torch.load(
+        "models/experimental/functional_petr/resources/golden_input_inputs_sample1.pt", weights_only=False
+    )
+    golden_metas = torch.load(
+        "models/experimental/functional_petr/resources/modified_input_batch_img_metas_sample1.pt", weights_only=False
+    )
+
+    ##############################################################
 
     # Initialize preprocessor
     print("\n2. Initializing data preprocessor...")
@@ -2156,17 +2201,55 @@ def test_demo(device, reset_seeds):
     # Run PyTorch inference
     print("\n5. Running PyTorch inference...")
     with torch.no_grad():
-        torch_output = torch_model.predict(output_after_preprocess["inputs"], batch_img_metas)
+        torch_output = torch_model.predict(
+            output_after_preprocess["inputs"], batch_img_metas, skip_post_processing=True
+        )
+
+    ###############
+    # Run PyTorch on golden input
+    print("Running PyTorch on GOLDEN input...")
+    with torch.no_grad():
+        torch_output_golden = torch_model.predict(golden_inputs, golden_metas, skip_post_processing=True)
+
+    # Run PyTorch on real input
+    print("Running PyTorch on REAL input...")
+    # with torch.no_grad():
+    #     torch_output_real = torch_model.predict(
+    #         output_after_preprocess["inputs"],
+    #         batch_img_metas,
+    #         skip_post_processing=True
+    #     )
+
+    # Compare PyTorch outputs (baseline)
+    from tests.ttnn.utils_for_testing import check_with_pcc
+
+    passed_cls, pcc_cls = check_with_pcc(
+        torch_output_golden["all_cls_scores"], torch_output["all_cls_scores"], pcc=0.90
+    )
+    print(f"PyTorch: Golden vs Real cls_scores PCC: {float(pcc_cls):.6f}")
+
+    passed_bbox, pcc_bbox = check_with_pcc(
+        torch_output_golden["all_bbox_preds"], torch_output["all_bbox_preds"], pcc=0.90
+    )
+    print(f"PyTorch: Golden vs Real bbox_preds PCC: {float(pcc_bbox):.6f}")
+
+    print("\nThis shows how much PyTorch outputs differ between scenes.")
+    print("TTNN should match PyTorch's behavior on the SAME input.")
+    print("=" * 60 + "\n")
+
+    # Continue with normal TTNN inference on real input...
+    # torch_output = torch_output_real
+    ############
 
     # print(f"   PyTorch detections: {len(torch_output[0]['pts_bbox']['bboxes_3d'])}")
-    print(f"   PyTorch detections: {len(torch_output[0]['pts_bbox']['bboxes_3d'].tensor)}")
+    # print(f"   PyTorch detections: {len(torch_output[0]['pts_bbox']['bboxes_3d'].tensor)}")
 
-    # [Rest of the TTNN conversion code - same as original]
+    # # [Rest of the TTNN conversion code - same as original]
 
-    if torch_output and len(torch_output) > 0:
-        print(f"   PyTorch output: {len(torch_output)} predictions")
-        if "boxes_3d" in torch_output[0]:
-            print(f"   Number of detected boxes: {len(torch_output[0]['boxes_3d'])}")
+    # if torch_output and len(torch_output) > 0:
+    #     print(f"   PyTorch output: {len(torch_output)} predictions")
+    #     if "boxes_3d" in torch_output[0]:
+    #         print(f"   Number of detected boxes: {len(torch_output[0]['boxes_3d'])}")
 
     # Convert to TTNN
     print("\n7. Converting to TTNN format...")
@@ -2248,7 +2331,50 @@ def test_demo(device, reset_seeds):
 
     # Run TTNN inference
     print("\n11. Running TTNN inference...")
-    ttnn_output = ttnn_model.predict(ttnn_inputs, ttnn_batch_img_metas)
+    ttnn_output = ttnn_model.predict(ttnn_inputs, ttnn_batch_img_metas, skip_post_processing=True)
+
+    print("torch_output::", torch_output)
+    print("ttnn_output::", ttnn_output)
+
+    from tests.ttnn.utils_for_testing import check_with_pcc, assert_with_pcc
+
+    # Compare ttnn_output with torch_output using PCC check
+    print("\n12. Verifying TTNN output with PCC check against torch model...")
+    # torch_output = torch_model.predict(output_after_preprocess["inputs"], batch_img_metas, skip_post_processing=True)
+
+    ttnn_output_for_pcc = {
+        "all_cls_scores": ttnn.to_torch(ttnn_output["all_cls_scores"])
+        if isinstance(ttnn_output["all_cls_scores"], ttnn.Tensor)
+        else ttnn_output["all_cls_scores"],
+        "all_bbox_preds": ttnn.to_torch(ttnn_output["all_bbox_preds"])
+        if isinstance(ttnn_output["all_bbox_preds"], ttnn.Tensor)
+        else ttnn_output["all_bbox_preds"],
+    }
+
+    # def check_with_pcc(a, b, pcc=0.97):
+    #     from scipy.stats import pearsonr
+    #     a = a.detach().cpu().float().flatten()
+    #     b = b.detach().cpu().float().flatten()
+    #     corr, _ = pearsonr(a.numpy(), b.numpy())
+    #     return corr >= pcc, corr
+
+    passed_cls, pcc_cls = check_with_pcc(
+        torch_output["all_cls_scores"], ttnn_output_for_pcc["all_cls_scores"], pcc=0.97
+    )
+    print(f"PETR all_cls_scores PCC: {float(pcc_cls):.6f}")
+
+    passed_bbox, pcc_bbox = check_with_pcc(
+        torch_output["all_bbox_preds"], ttnn_output_for_pcc["all_bbox_preds"], pcc=0.97
+    )
+    print(f"PETR all_bbox_preds PCC: {float(pcc_bbox):.6f}")
+
+    if not (passed_cls and passed_bbox):
+        print("Warning: TTNN output did not pass PCC check with thresholds (0.97).")
+    else:
+        print("TTNN output passed PCC check!")
+
+    assert_with_pcc(torch_output["all_cls_scores"], ttnn_output_for_pcc["all_cls_scores"], pcc=0.97)
+    assert_with_pcc(torch_output["all_bbox_preds"], ttnn_output_for_pcc["all_bbox_preds"], pcc=0.97)
 
     # Display results
     print("\n" + "=" * 60)
@@ -2285,10 +2411,10 @@ def test_demo(device, reset_seeds):
 
 
 if __name__ == "__main__":
-    device = ttnn.open_device(device_id=0, l1_small_size=32768)
+    device = ttnn.open_device(device_id=0, l1_small_size=24576)
     try:
         output, images, metas = test_demo(device, None)
-        # save_petr_visualizations(output, images, metas)
-        save_single_camera_visualization(output, images, metas, camera_name="CAM_FRONT")
+        save_petr_visualizations(output, images, metas)
+        # save_single_camera_visualization(output, images, metas, camera_name="CAM_FRONT")
     finally:
         ttnn.close_device(device)
