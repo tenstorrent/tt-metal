@@ -148,6 +148,9 @@ class TTResNetFeatures:
         )
         self.return_intermediates = return_intermediates
 
+        self.num_splits_gn = 2  # Number of splits for GroupNorm to fit into L1
+        self.num_slices = 2  # Number of slices used for partial sharding during concatenation of GN outputs
+
     def _make_layer(self, device, parameters, conv_pt, block, blocks):
         layers = []
         layers.append(
@@ -195,22 +198,20 @@ class TTResNetFeatures:
         host_conv1f = ttnn.to_torch(conv1).permute(0, 3, 1, 2)
 
         # Split the tensor into multiple slices to fit into L1 for GN
-        num_splits = 2
-        splits = ttnn.split(conv1, conv1.shape[-1] // num_splits, dim=3)
+        splits = ttnn.split(conv1, conv1.shape[-1] // self.num_splits_gn, dim=3)
         compute_grid = device.compute_with_storage_grid_size()
         core_grid = ttnn.CoreGrid(y=compute_grid.y, x=compute_grid.x)
 
         # GN on each split
         processed_splits = []
         for split in splits:
-            split = self.bn1(device, split, shard="HS", num_splits=num_splits, negative_mask=True)
+            split = self.bn1(device, split, shard="HS", num_splits=self.num_splits_gn, negative_mask=True)
             split = ttnn.to_layout(split, ttnn.TILE_LAYOUT)
             split = ttnn.to_memory_config(split, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             processed_splits.append(split)
 
         # Concat back the splits and ReLU
-        num_slices = 2
-        shard_height = conv1.shape[2] // (core_grid.x * core_grid.y * num_slices)
+        shard_height = conv1.shape[2] // (core_grid.x * core_grid.y * self.num_slices)
         shard_width = conv1.shape[3]
 
         sharded_mem_config = ttnn.create_sharded_memory_config(
@@ -221,12 +222,12 @@ class TTResNetFeatures:
             use_height_and_width_as_shard_shape=True,
         )
 
-        for i in range(num_slices):
+        for i in range(self.num_slices):
             slice_0 = ttnn.interleaved_to_sharded_partial(
                 processed_splits[0],
                 (core_grid.x, core_grid.y),
-                [shard_height, shard_width // num_splits],
-                num_slices,
+                [shard_height, shard_width // self.num_splits_gn],
+                self.num_slices,
                 i,
                 ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED,
                 ttnn.ShardOrientation.ROW_MAJOR,
@@ -234,8 +235,8 @@ class TTResNetFeatures:
             slice_1 = ttnn.interleaved_to_sharded_partial(
                 processed_splits[1],
                 (core_grid.x, core_grid.y),
-                [shard_height, shard_width // num_splits],
-                num_slices,
+                [shard_height, shard_width // self.num_splits_gn],
+                self.num_slices,
                 i,
                 ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED,
                 ttnn.ShardOrientation.ROW_MAJOR,
@@ -244,7 +245,7 @@ class TTResNetFeatures:
             slice_1 = ttnn.concat([slice_0, slice_1], dim=3, memory_config=sharded_mem_config)
             slice_1 = ttnn.relu(slice_1, output_tensor=slice_1)
 
-            ttnn.sharded_to_interleaved_partial(slice_1, conv1, num_slices, i, memory_config=ttnn.L1_MEMORY_CONFIG)
+            ttnn.sharded_to_interleaved_partial(slice_1, conv1, self.num_slices, i, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(slice_1)
         ttnn.deallocate(slice_0)
 
