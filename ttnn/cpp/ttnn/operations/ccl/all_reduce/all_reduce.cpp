@@ -18,13 +18,13 @@ ttnn::Tensor ExecuteAllReduce::invoke(
     const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<uint32_t> num_links,
-    std::optional<ttnn::ccl::Topology> topology) {
+    std::optional<tt::tt_fabric::Topology> topology) {
     // Get mesh device from input tensor
     auto mesh_device = input_tensor.device();
     TT_FATAL(mesh_device != nullptr, "Mesh device is required for all_reduce operation");
 
     // Determine topology
-    ttnn::ccl::Topology topology_ = topology.value_or(
+    tt::tt_fabric::Topology topology_ = topology.value_or(
         ::ttnn::ccl::get_usable_topology(input_tensor, tt::tt_fabric::get_fabric_topology(), cluster_axis));
 
     // Call the experimental all_reduce_async with Sum operation

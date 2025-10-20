@@ -62,7 +62,7 @@ void py_bind_all_reduce(py::module& module) {
                const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<uint32_t> num_links,
-               const std::optional<ccl::Topology> topology) {
+               const std::optional<tt::tt_fabric::Topology> topology) {
                 return self(input_tensor, cluster_axis, subdevice_id, memory_config, num_links, topology);
             },
             py::arg("input_tensor").noconvert(),
