@@ -24,6 +24,7 @@ void enable_program_cache(IDevice& device);
 void disable_and_clear_program_cache(IDevice& device);
 bool is_wormhole_or_blackhole(tt::ARCH arch);
 void deallocate_buffers(IDevice* device);
+void synchronize(std::shared_ptr<MeshDevice> device);
 
 }  // namespace device
 

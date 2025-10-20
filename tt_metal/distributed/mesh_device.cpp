@@ -183,6 +183,12 @@ uint8_t MeshDevice::num_hw_cqs() const {
         this->get_devices(), [](const auto* device) { return device->num_hw_cqs(); });
 }
 
+void MeshDevice::synchronize() {
+    for (uint8_t cq_id = 0; cq_id < num_hw_cqs(); ++cq_id) {
+        mesh_command_queue(cq_id).finish();
+    }
+}
+
 bool MeshDevice::is_initialized() const {
     // TODO: Revisit whether we can simplify this when `MeshDevice` initialization isn't so coupled
     // with individual device initialization.

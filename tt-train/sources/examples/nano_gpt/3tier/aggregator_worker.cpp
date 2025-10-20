@@ -37,6 +37,7 @@ void send_aggregated_gradients_from_workers_to_optimizer(
 
         // TODO: allow usage of tensor from model parameters (avoids redundant storage of a model)
         auto tensor = ttnn::empty_like(tensor_ptr->get_value());
+        // fmt::println("Receiving gradients with name {} and shape: {}", name, tensor.logical_shape());
         tensor = socket_manager.recv(tensor, workers_and_aggregator_ctx, ttml::core::distributed::Rank{0});
         for (int worker_id = 1; worker_id < workers; ++worker_id) {
             auto tensor_to_add = ttnn::empty_like(tensor_ptr->get_value());
@@ -44,12 +45,48 @@ void send_aggregated_gradients_from_workers_to_optimizer(
                 tensor_to_add, workers_and_aggregator_ctx, ttml::core::distributed::Rank{worker_id});
             tensor = ttnn::add(tensor, tensor_to_add);
         }
+
         tensor = ttnn::multiply(tensor, 1.0F / static_cast<float>(workers));
-        if (is_ddp) {
-            tensor = ttml::ttnn_fixed::distributed::all_reduce(tensor);
-        }
-        socket_manager.send(tensor, aggregator_and_optimizer_ctx, optimizer_rank);
+
+        tensor_ptr->set_grad(tensor);
+
+        // if (is_ddp) {
+        //     fmt::println("Running all_reduce on tensor with name: {} and shape: {}", name, tensor.logical_shape());
+        //     tensor = ttml::ttnn_fixed::distributed::all_reduce(tensor);
+        // }
+        // socket_manager.send(tensor, aggregator_and_optimizer_ctx, optimizer_rank);
+        // fmt::println("Sent gradients with name: {} and shape: {}", name, tensor.logical_shape());
     }
+
+    if (is_ddp) {
+        for (auto &[name, tensor_ptr] : sorted_model_parameters) {
+            if (!tensor_ptr->get_requires_grad()) {
+                continue;
+            }
+            // fmt::println("Running all_reduce on tensor with name: {} and shape: {}", name,
+            // tensor_ptr->get_grad().logical_shape());
+
+            auto tensor = tensor_ptr->get_grad();
+            tensor = ttml::ttnn_fixed::distributed::all_reduce(tensor);
+            tensor_ptr->set_grad(tensor);
+        }
+    }
+
+    for (auto &[name, tensor_ptr] : sorted_model_parameters) {
+        if (!tensor_ptr->get_requires_grad()) {
+            continue;
+        }
+
+        auto tensor = tensor_ptr->get_grad();
+        socket_manager.send(tensor, aggregator_and_optimizer_ctx, optimizer_rank);
+        // fmt::println("Sent gradients with name: {} and shape: {}", name, tensor.logical_shape());
+    }
+
+    // std::cout << "Synchronizing device after gradients are sent" << std::endl;
+    // ttnn::synchronize(ttml::autograd::ctx().get_device_ptr());
+    // std::cout << "Device synchronized after gradients are sent" << std::endl;
+
+    fmt::println("Gradients to optimizer sent!");
 }
 
 void send_weights_from_optimizer_to_workers(
@@ -60,6 +97,7 @@ void send_weights_from_optimizer_to_workers(
     int workers) {
     Rank optimizer_rank{aggregator_and_optimizer_ctx->rank().get() + 1};
     for (auto &[name, tensor_ptr] : sorted_model_parameters) {
+        // fmt::println("Receiving weights with name: {} and shape: {}", name, tensor_ptr->get_value().logical_shape());
         auto tensor = tensor_ptr->get_value();
         tensor =
             socket_manager.recv(tensor, aggregator_and_optimizer_ctx, ttml::core::distributed::Rank{optimizer_rank});
@@ -88,10 +126,14 @@ int main(int argc, char **argv) {
     three_tier_arch::TrainingConfig config = three_tier_arch::parse_config(yaml_config);
     three_tier_arch::DeviceConfig device_config = three_tier_arch::parse_device_config(yaml_config);
 
-    if (config.socket_type == ttnn::distributed::SocketType::FABRIC) {
+    {
         auto num_devices = device_config.mesh_shape[0] * device_config.mesh_shape[1];
         ttml::ttnn_fixed::distributed::enable_fabric(num_devices);
     }
+    // if (config.socket_type == ttnn::distributed::SocketType::FABRIC) {
+    //     auto num_devices = device_config.mesh_shape[0] * device_config.mesh_shape[1];
+    //     ttml::ttnn_fixed::distributed::enable_fabric(num_devices);
+    // }
     three_tier_arch::initialize_device(device_config.mesh_shape, device_config.device_ids);
     ttml::autograd::ctx().initialize_socket_manager(config.socket_type);
     auto &socket_manager = ttml::autograd::ctx().get_socket_manager();

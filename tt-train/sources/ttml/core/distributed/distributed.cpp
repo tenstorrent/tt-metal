@@ -31,6 +31,8 @@ ttnn::Tensor synchronize_tensor(const ttnn::Tensor& tensor) {
 
 void synchronize_parameters(const serialization::NamedParameters& parameters) {
     for (auto& [name, tensor] : parameters) {
+        fmt::println(
+            "[tt-train] Synchronizing parameter: {} with shape: {}", name, tensor->get_value().logical_shape());
         if (tensor->is_grad_initialized()) {
             tensor->set_grad(synchronize_tensor(tensor->get_grad()));
         }

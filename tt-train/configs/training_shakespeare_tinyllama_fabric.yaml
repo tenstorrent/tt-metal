@@ -3,7 +3,7 @@ training_config:
   model_type: "llama"
   seed: 5489
   model_save_interval: 500
-  batch_size: 32  # if enable_ddp is false, make it 1, otherwise make it 32
+  batch_size: 32
   num_epochs: 1
   max_steps: 5000
   learning_rate: 0.0003
@@ -25,10 +25,10 @@ training_config:
     runner_type: memory_efficient
     theta: 10000.0
 
-multihost_config:
-  enabled: true
-  num_workers: 3
-  socket_type: fabric
+# multihost_config:
+#   enabled: true
+#   num_workers: 1
+#   socket_type: fabric
 
 eval_config:
   repetition_penalty: 1.0

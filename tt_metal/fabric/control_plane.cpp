@@ -506,6 +506,11 @@ void ControlPlane::init_control_plane(
     if (routing_table_generator_->mesh_graph->is_legacy_mode()) {
         this->generate_intermesh_connectivity();
     }
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+
+    for (const auto chip : cluster.all_chip_ids()) {
+        std::cout << "Chip: " << chip << " Node: " << this->get_fabric_node_id_from_physical_chip_id(chip) << std::endl;
+    }
 
     // Printing, only enabled with log_debug
     this->routing_table_generator_->mesh_graph->print_connectivity();
@@ -2611,7 +2616,7 @@ AnnotatedIntermeshConnections ControlPlane::pair_logical_intermesh_ports(const P
                     if (dest_port.connection_hash == connection_hash) {
                         auto src_port_id = src_port.port_id;
                         auto dest_port_id = dest_port.port_id;
-                        log_debug(
+                        log_info(
                             tt::LogDistributed,
                             "Connecting Meshes {} {} over Logical Ports {} {}",
                             *src_mesh,

@@ -73,10 +73,14 @@ int main(int argc, char **argv) {
     three_tier_arch::TrainingConfig config = three_tier_arch::parse_config(yaml_config);
     three_tier_arch::DeviceConfig device_config = three_tier_arch::parse_device_config(yaml_config);
 
-    if (config.socket_type == ttnn::distributed::SocketType::FABRIC) {
+    {
         auto num_devices = device_config.mesh_shape[0] * device_config.mesh_shape[1];
         ttml::ttnn_fixed::distributed::enable_fabric(num_devices);
     }
+    // if (config.socket_type == ttnn::distributed::SocketType::FABRIC) {
+    //     auto num_devices = device_config.mesh_shape[0] * device_config.mesh_shape[1];
+    //     ttml::ttnn_fixed::distributed::enable_fabric(num_devices);
+    // }
 
     three_tier_arch::initialize_device(device_config.mesh_shape, device_config.device_ids);
     ttml::autograd::ctx().initialize_socket_manager(config.socket_type);
@@ -152,9 +156,13 @@ int main(int argc, char **argv) {
     uint32_t global_step = 0;
     for (uint32_t epoch = 0; epoch < config.num_epochs; ++epoch) {
         for (uint32_t step = 0; step < steps_per_dataset; ++step, ++global_step) {
+            std::cout << "Receiving gradients from aggregator" << std::endl;
             receive_gradients_from_aggregator(socket_manager, aggregator_and_optimizer_ctx, sorted_model_parameters);
+            std::cout << "Run Local Optimizer Step" << std::endl;
             optimizer->step();
+            std::cout << "Sending weights to aggregator" << std::endl;
             send_weights_to_aggregator(socket_manager, aggregator_and_optimizer_ctx, sorted_model_parameters);
+            std::cout << "Weights sent to aggregator" << std::endl;
             if (global_step >= config.max_steps) {
                 break;
             }

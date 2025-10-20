@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ====== Configuration ======
-USER="ttuser"
+USER="local-rfurko"
 SESSION_NAME="docker"
 CONTAINER_NAME="$USER-host-mapped"
 IMAGE="ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-dev-amd64:latest"
@@ -9,10 +9,11 @@ BUILD_DIR="/home/$USER/git/tt-metal"
 DEST_DIR="/home/$USER/git/"
 
 MACHINES=(
-    metal-wh-03
-    metal-wh-04
-    metal-wh-05
-    metal-wh-06
+    wh-glx-a03u02
+    wh-glx-a03u08
+    wh-glx-a03u14
+    wh-glx-a04u08
+    wh-glx-a04u14
 )
 
 DOCKER_CMD="sudo docker run -it \
