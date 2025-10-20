@@ -125,6 +125,17 @@ class PostgresResultDestination(ResultDestination):
                     error_sig = generate_error_signature(exception_text)
                     error_hash = generate_error_hash(exception_text)
 
+                    # Handle device perf - combine all formats into a single JSON field
+                    device_perf_data = None
+                    if result.get("device_perf"):
+                        device_perf_data = result.get("device_perf")
+                    elif result.get("device_perf_uncached") or result.get("device_perf_cached"):
+                        # Combine separate cached/uncached fields into single structure
+                        device_perf_data = {
+                            "uncached": result.get("device_perf_uncached"),
+                            "cached": result.get("device_perf_cached"),
+                        }
+
                     testcase_values = (
                         test_id,
                         testcase_name,
@@ -136,7 +147,7 @@ class PostgresResultDestination(ResultDestination):
                         result.get("message", None),
                         exception_text,
                         result.get("e2e_perf", None),
-                        json.dumps(result.get("device_perf")) if result.get("device_perf") else None,
+                        json.dumps(device_perf_data) if device_perf_data else None,
                         error_sig,
                     )
                     batch_values.append(testcase_values)
@@ -219,7 +230,8 @@ class ElasticResultDestination(ResultDestination):
         for i in range(len(results)):
             result = header_info[i].copy()
             for elem in results[i].keys():
-                if elem == "device_perf":
+                # Handle device performance fields (both old and new formats)
+                if elem in ["device_perf", "device_perf_uncached", "device_perf_cached"]:
                     result[elem] = results[i][elem]
                     continue
                 # Skip problematic fields that were added for PostgreSQL functionality
@@ -388,17 +400,56 @@ class FileResultDestination(ResultDestination):
             # Collect device performance metrics
             device_perf_raw = raw.get("device_perf")
             if device_perf_raw is not None:
-                # If list of dicts, merge or take first
-                if isinstance(device_perf_raw, list):
-                    device_perf_raw = next((d for d in device_perf_raw if isinstance(d, dict)), None)
+                # Check if it's the new cached/uncached structure
+                if isinstance(device_perf_raw, dict) and ("cached" in device_perf_raw or "uncached" in device_perf_raw):
+                    # New structure with separate cached/uncached device perf
+                    uncached_perf = device_perf_raw.get("uncached")
+                    if uncached_perf and isinstance(uncached_perf, dict):
+                        for k, v in uncached_perf.items():
+                            float_val = _to_float(v)
+                            if float_val is not None:
+                                # Add uncached suffix to distinguish from cached
+                                metric_name = f"device_{k}_uncached" if not k.startswith("device_") else f"{k}_uncached"
+                                metrics.add(PerfMetric(metric_name=metric_name, metric_value=float_val))
 
-                if isinstance(device_perf_raw, dict):
-                    for k, v in device_perf_raw.items():
-                        float_val = _to_float(v)
-                        if float_val is not None:
-                            # Prefix device metrics to distinguish from e2e metrics
-                            metric_name = f"device_{k}" if not k.startswith("device_") else k
-                            metrics.add(PerfMetric(metric_name=metric_name, metric_value=float_val))
+                    cached_perf = device_perf_raw.get("cached")
+                    if cached_perf and isinstance(cached_perf, dict):
+                        for k, v in cached_perf.items():
+                            float_val = _to_float(v)
+                            if float_val is not None:
+                                # Add cached suffix to distinguish from uncached
+                                metric_name = f"device_{k}_cached" if not k.startswith("device_") else f"{k}_cached"
+                                metrics.add(PerfMetric(metric_name=metric_name, metric_value=float_val))
+                else:
+                    # Original structure - single device perf dict or list
+                    # If list of dicts, merge or take first
+                    if isinstance(device_perf_raw, list):
+                        device_perf_raw = next((d for d in device_perf_raw if isinstance(d, dict)), None)
+
+                    if isinstance(device_perf_raw, dict):
+                        for k, v in device_perf_raw.items():
+                            float_val = _to_float(v)
+                            if float_val is not None:
+                                # Prefix device metrics to distinguish from e2e metrics
+                                metric_name = f"device_{k}" if not k.startswith("device_") else k
+                                metrics.add(PerfMetric(metric_name=metric_name, metric_value=float_val))
+
+            # Also check for separate device_perf_uncached and device_perf_cached fields
+            device_perf_uncached = raw.get("device_perf_uncached")
+            if device_perf_uncached and isinstance(device_perf_uncached, dict):
+                for k, v in device_perf_uncached.items():
+                    float_val = _to_float(v)
+                    if float_val is not None:
+                        metric_name = f"device_{k}_uncached" if not k.startswith("device_") else f"{k}_uncached"
+                        metrics.add(PerfMetric(metric_name=metric_name, metric_value=float_val))
+
+            device_perf_cached = raw.get("device_perf_cached")
+            if device_perf_cached and isinstance(device_perf_cached, dict):
+                for k, v in device_perf_cached.items():
+                    float_val = _to_float(v)
+                    if float_val is not None:
+                        metric_name = f"device_{k}_cached" if not k.startswith("device_") else f"{k}_cached"
+                        metrics.add(PerfMetric(metric_name=metric_name, metric_value=float_val))
 
             return metrics if metrics else None
 
