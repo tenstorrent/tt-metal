@@ -18,6 +18,7 @@
 #include "risc_attribs.h"
 #include "fabric/fabric_edm_packet_header.hpp"
 #include "fabric_edm_types.hpp"
+#include "fabric_static_channels_ct_args.hpp"
 #include "edm_fabric_flow_control_helpers.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_interface.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp"
@@ -405,6 +406,210 @@ using EthChannelBuffers = std::conditional_t<
     ElasticEthChannelBuffers<HEADER_TYPE, ChannelBuffers>
 >;
 
+// Generic channel type selector - works for ANY channel type (sender or receiver)
+template <typename HEADER_TYPE, FabricChannelPoolType PoolType, size_t NumBuffers,
+          template<typename, size_t> class StaticType, typename ElasticType>
+struct GenericChannelTypeSelector {
+    using type = std::conditional_t<
+        PoolType == FabricChannelPoolType::STATIC,
+        StaticType<HEADER_TYPE, NumBuffers>,
+        ElasticType
+    >;
+};
+
+// Backward compatibility alias for existing code
+template <typename HEADER_TYPE, FabricChannelPoolType PoolType, size_t NumBuffers>
+using ChannelTypeSelector = GenericChannelTypeSelector<
+    HEADER_TYPE, PoolType, NumBuffers,
+    StaticSizedSenderEthChannel, ElasticSenderEthChannel<HEADER_TYPE>
+>;
+
+// Helper to extract buffer count from pool for static channels
+template <typename PoolType>
+struct BufferCountExtractor {
+    static constexpr size_t value = 0; // Default for elastic channels
+};
+
+// Generic buffer count extractor for any static pool
+template <size_t CT_ARG_IDX>
+struct BufferCountExtractor<StaticChannelPool<CT_ARG_IDX>> {
+    static constexpr size_t value = StaticChannelPool<CT_ARG_IDX>::num_slots;
+};
+
+template <typename HEADER_TYPE, typename ChannelPoolCollection,
+          template<typename, size_t> class StaticChannelType, typename ElasticChannelType,
+          auto& ChannelToPoolIndex,
+          typename IndexSequence>
+struct HeterogeneousChannelBuilder {
+    using type = std::tuple<>;
+};
+
+template <typename HEADER_TYPE, typename ChannelPoolCollection,
+          template<typename, size_t> class StaticChannelType, typename ElasticChannelType,
+          auto& ChannelToPoolIndex,
+          size_t... Indices>
+struct HeterogeneousChannelBuilder<HEADER_TYPE, ChannelPoolCollection,
+                                   StaticChannelType, ElasticChannelType,
+                                   ChannelToPoolIndex,
+                                   std::index_sequence<Indices...>> {
+    // Extract pool type for each channel using provided mapping
+    template <size_t ChannelIdx>
+    static constexpr FabricChannelPoolType get_channel_pool_type() {
+        constexpr size_t pool_idx = ChannelToPoolIndex[ChannelIdx];
+        return static_cast<FabricChannelPoolType>(ChannelPoolCollection::channel_pool_types[pool_idx]);
+    }
+    
+    // Get buffer count for static channels by extracting from pool data
+    template <size_t ChannelIdx>
+    static constexpr size_t get_buffer_count() {
+        constexpr auto pool_type = get_channel_pool_type<ChannelIdx>();
+        if constexpr (pool_type == FabricChannelPoolType::STATIC) {
+            // Get the pool index for this channel
+            constexpr size_t pool_idx = ChannelToPoolIndex[ChannelIdx];
+            
+            // Extract the actual pool from the PoolsTuple
+            using PoolType = std::tuple_element_t<pool_idx, typename ChannelPoolCollection::PoolsTuple>;
+            
+            // Return the actual num_slots from the pool
+            return PoolType::num_slots;
+        } else {
+            return 0; // Elastic channels don't use compile-time buffer counts
+        }
+    }
+    
+    // Build the heterogeneous tuple using the generic selector
+    using type = std::tuple<typename GenericChannelTypeSelector<
+        HEADER_TYPE, 
+        get_channel_pool_type<Indices>(), 
+        get_buffer_count<Indices>(),
+        StaticChannelType,
+        ElasticChannelType
+    >::type...>;
+};
+
+// Generic heterogeneous channel tuple wrapper - works for any channel mapping
+template <typename HEADER_TYPE, typename ChannelPoolCollection, typename ChannelTypes, auto& ChannelToPoolIndex>
+struct HeterogeneousChannelTuple {
+    ChannelTypes channel_buffers;
+
+    explicit HeterogeneousChannelTuple() = default;
+
+    template <typename PoolCollection>
+    void init(size_t buffer_size_bytes, size_t header_size_bytes) {
+        // Note: removed channel_base_id parameter - it was never used
+        
+        std::apply([&](auto&... chans) {
+            size_t ch_idx = 0;
+            ((init_single_channel<PoolCollection>(
+                chans, 
+                ch_idx++,
+                buffer_size_bytes,
+                header_size_bytes)), ...);
+        }, channel_buffers);
+    }
+
+    template <size_t I>
+    auto& get() {
+        return std::get<I>(channel_buffers);
+    }
+
+private:
+    template <typename PoolCollection, typename Channel>
+    void init_single_channel(Channel& chan, 
+                             size_t channel_idx,
+                             size_t buffer_size_bytes,
+                             size_t header_size_bytes) {
+        // Get pool index for this channel using provided mapping
+        constexpr size_t pool_idx = ChannelToPoolIndex[channel_idx];
+        constexpr auto pool_type = static_cast<FabricChannelPoolType>(
+            PoolCollection::channel_pool_types[pool_idx]);
+        
+        if constexpr (pool_type == FabricChannelPoolType::STATIC) {
+            // Static channel: get base address from the pool
+            using PoolType = std::tuple_element_t<pool_idx, typename PoolCollection::PoolsTuple>;
+            constexpr size_t base_address = PoolType::base_address;
+            
+            // Calculate channel offset within pool (for multiple channels sharing a pool)
+            constexpr size_t channels_before = count_channels_in_pool_before<PoolCollection>(channel_idx, pool_idx);
+            size_t channel_address = base_address + (channels_before * buffer_size_bytes * PoolType::num_slots);
+            
+            chan.init(channel_address, buffer_size_bytes, header_size_bytes);
+        } else {
+            // Elastic channel: get address from elastic pool chunks
+            using PoolType = std::tuple_element_t<pool_idx, typename PoolCollection::PoolsTuple>;
+            // For now, use first chunk address (elastic channel logic TBD)
+            constexpr size_t chunk_address = PoolType::chunk_base_addresses[0];
+            chan.init(chunk_address, buffer_size_bytes, header_size_bytes);
+        }
+    }
+
+    // Helper to count how many channels are mapped to the same pool before this channel
+    template <typename PoolCollection>
+    static constexpr size_t count_channels_in_pool_before(size_t channel_idx, size_t pool_idx) {
+        size_t count = 0;
+        for (size_t i = 0; i < channel_idx; ++i) {
+            constexpr size_t idx_pool = ChannelToPoolIndex[i];
+            if (idx_pool == pool_idx) {
+                count++;
+            }
+        }
+        return count;
+    }
+};
+
+template <typename HEADER_TYPE, 
+          typename ChannelPoolCollection, 
+          auto& PoolTypes,  // Keep for validation
+          template<typename, size_t> class StaticChannelType,
+          typename ElasticChannelType,
+          auto& ChannelToPoolIndex>
+struct MultiPoolChannelBuffers {
+    static constexpr size_t num_channels = ChannelToPoolIndex.size();
+    
+    // Compile-time validation
+    static_assert(num_channels > 0, "Must have at least one channel");
+    static_assert(num_channels == PoolTypes.size(), "PoolTypes array size must match number of channels");
+    
+    using ChannelTypes = typename HeterogeneousChannelBuilder<
+        HEADER_TYPE, 
+        ChannelPoolCollection, 
+        StaticChannelType,
+        ElasticChannelType,
+        ChannelToPoolIndex,
+        std::make_index_sequence<num_channels>
+    >::type;
+    
+    template <size_t... Is>
+    static auto make(std::index_sequence<Is...>) {
+        return HeterogeneousChannelTuple<HEADER_TYPE, ChannelPoolCollection, ChannelTypes, ChannelToPoolIndex>{};
+    }
+    
+    static auto make() {
+        return make(std::make_index_sequence<num_channels>{});
+    }
+    
+    // Access individual channels by index
+    template <size_t Index>
+    static constexpr auto get_channel_type() {
+        static_assert(Index < num_channels, "Channel index out of bounds");
+        return std::tuple_element_t<Index, ChannelTypes>{};
+    }
+};
+
+// Template aliases for specific channel types
+template <typename HEADER_TYPE, typename ChannelPoolCollection, auto& PoolTypes, auto& ChannelToPoolIndex>
+using MultiPoolSenderEthChannelBuffers = MultiPoolChannelBuffers<
+    HEADER_TYPE, ChannelPoolCollection, PoolTypes,
+    StaticSizedSenderEthChannel, ElasticSenderEthChannel<HEADER_TYPE>,
+    ChannelToPoolIndex>;
+
+template <typename HEADER_TYPE, typename ChannelPoolCollection, auto& PoolTypes, auto& ChannelToPoolIndex>
+using MultiPoolEthChannelBuffers = MultiPoolChannelBuffers<
+    HEADER_TYPE, ChannelPoolCollection, PoolTypes,
+    StaticSizedEthChannelBuffer, ElasticEthChannelBuffer<HEADER_TYPE>,
+    ChannelToPoolIndex>;
+
+// Backward compatibility: keep the old interface for existing code
 template <typename HEADER_TYPE, auto& ChannelBuffers>
 using SenderEthChannelBuffers = std::conditional_t<
     USE_STATIC_SIZED_CHANNEL_BUFFERS,

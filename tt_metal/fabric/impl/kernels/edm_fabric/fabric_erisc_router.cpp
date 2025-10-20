@@ -264,6 +264,13 @@ write to the same receiver channel.
 template <typename HEADER_TYPE, uint8_t NUM_BUFFERS>
 using SenderEthChannel = StaticSizedSenderEthChannel<HEADER_TYPE, NUM_BUFFERS>;
 
+// using sender_channels_chunk_pool_t = ChannelBuffersPool<
+//     FWDED_SENDER_ELASTIC_CHANNELS_INFO::N_CHUNKS,
+//     FWDED_SENDER_ELASTIC_CHANNELS_INFO::N_SLOTS_PER_CHUNK>;
+
+// using elastic_sender_channel_t =
+//     tt::tt_fabric::CircularBuffer<sender_channels_chunk_pool_t::chunk_t*, sender_channels_chunk_pool_t::N_CHUNKS>;
+
 static constexpr bool PERF_TELEMETRY_DISABLED = perf_telemetry_mode == PerfTelemetryRecorderType::NONE;
 static constexpr bool PERF_TELEMETRY_LOW_RESOLUTION_BANDWIDTH =
     perf_telemetry_mode == PerfTelemetryRecorderType::LOW_RESOLUTION_BANDWIDTH;
@@ -1905,13 +1912,13 @@ void run_fabric_edm_main_loop(
     size_t did_nothing_count = 0;
     *termination_signal_ptr = tt::tt_fabric::TerminationSignal::KEEP_RUNNING;
 
-    sender_channels_chunk_pool_t fwded_sender_elastic_channels;
-    fwded_sender_elastic_channels.init(
-        FWDED_SENDER_ELASTIC_CHANNELS_INFO::CHUNK_BASE_ADDRESSES,
-        buffer_slot::size_bytes,
-        buffer_slot::header_size_bytes);
+    // sender_channels_chunk_pool_t fwded_sender_elastic_channels;
+    // fwded_sender_elastic_channels.init(
+    //     FWDED_SENDER_ELASTIC_CHANNELS_INFO::CHUNK_BASE_ADDRESSES,
+    //     buffer_slot::size_bytes,
+    //     buffer_slot::header_size_bytes);
 
-    std::array<tt::tt_fabric::elastic_sender_channel_t, NUM_FORWARDED_SENDER_CHANNELS> elastic_sender_channels;
+    // std::array<tt::tt_fabric::elastic_sender_channel_t, NUM_FORWARDED_SENDER_CHANNELS> elastic_sender_channels;
 
     // May want to promote to part of the handshake but for now we just initialize in this standalone way
     // TODO: flatten all of these arrays into a single object (one array lookup) OR
@@ -2547,30 +2554,10 @@ void kernel_main() {
 
     std::array<uint32_t, NUM_SENDER_CHANNELS> local_sender_channel_free_slots_stream_ids_ordered;
 
-    const auto& local_sender_buffer_addresses =
-        take_first_n_elements<NUM_SENDER_CHANNELS, MAX_NUM_SENDER_CHANNELS, size_t>(
-            std::array<size_t, MAX_NUM_SENDER_CHANNELS>{
-                local_sender_0_channel_address,
-                local_sender_1_channel_address,
-                local_sender_2_channel_address,
-                local_sender_3_channel_address,
-                local_sender_4_channel_address});
-    const auto& remote_sender_buffer_addresses =
-        take_first_n_elements<NUM_SENDER_CHANNELS, MAX_NUM_SENDER_CHANNELS, size_t>(
-            std::array<size_t, MAX_NUM_SENDER_CHANNELS>{
-                remote_sender_0_channel_address,
-                remote_sender_1_channel_address,
-                remote_sender_2_channel_address,
-                remote_sender_3_channel_address,
-                remote_sender_4_channel_address});
-    const auto& local_receiver_buffer_addresses =
-        take_first_n_elements<NUM_RECEIVER_CHANNELS, MAX_NUM_RECEIVER_CHANNELS, size_t>(
-            std::array<size_t, MAX_NUM_RECEIVER_CHANNELS>{
-                local_receiver_0_channel_buffer_address, local_receiver_1_channel_buffer_address});
-    const auto& remote_receiver_buffer_addresses =
-        take_first_n_elements<NUM_RECEIVER_CHANNELS, MAX_NUM_RECEIVER_CHANNELS, size_t>(
-            std::array<size_t, MAX_NUM_RECEIVER_CHANNELS>{
-                remote_receiver_0_channel_buffer_address, remote_receiver_1_channel_buffer_address});
+    // REMOVED: receiver buffer address arrays - no longer needed
+    // Addresses now come directly from channel pools in HeterogeneousChannelTuple::init()
+    // const auto& local_receiver_buffer_addresses = ...
+    // const auto& remote_receiver_buffer_addresses = ...
 
     const auto& local_sender_channel_connection_buffer_index_id =
         take_first_n_elements<NUM_SENDER_CHANNELS, MAX_NUM_SENDER_CHANNELS, size_t>(
@@ -2590,20 +2577,30 @@ void kernel_main() {
                 my_sem_for_teardown_from_edm_3,
                 my_sem_for_teardown_from_edm_4});
 
-    // create the remote receiver channel buffers with input array of number of buffers
+    // create the remote receiver channel buffers using multi-pool system
     auto remote_receiver_channels =
-        tt::tt_fabric::EthChannelBuffers<PACKET_HEADER_TYPE, REMOTE_RECEIVER_NUM_BUFFERS_ARRAY>::make(
-            std::make_index_sequence<NUM_RECEIVER_CHANNELS>{});
+        tt::tt_fabric::MultiPoolEthChannelBuffers<
+            PACKET_HEADER_TYPE,
+            channel_pools_args,
+            RECEIVER_TO_POOL_TYPE,
+            RECEIVER_TO_POOL_IDX
+        >::make();
 
-    // create the local receiver channel buffers with input array of number of buffers
     auto local_receiver_channels =
-        tt::tt_fabric::EthChannelBuffers<PACKET_HEADER_TYPE, RECEIVER_NUM_BUFFERS_ARRAY>::make(
-            std::make_index_sequence<NUM_RECEIVER_CHANNELS>{});
+        tt::tt_fabric::MultiPoolEthChannelBuffers<
+            PACKET_HEADER_TYPE,
+            channel_pools_args,
+            RECEIVER_TO_POOL_TYPE,
+            RECEIVER_TO_POOL_IDX
+        >::make();
 
-    // create the sender channel buffers with input array of number of buffers
     auto local_sender_channels =
-        tt::tt_fabric::SenderEthChannelBuffers<PACKET_HEADER_TYPE, SENDER_NUM_BUFFERS_ARRAY>::make(
-            std::make_index_sequence<NUM_SENDER_CHANNELS>{});
+        tt::tt_fabric::MultiPoolSenderEthChannelBuffers<
+            PACKET_HEADER_TYPE, 
+            channel_pools_args, 
+            SENDER_TO_POOL_TYPE,
+            SENDER_TO_POOL_IDX
+        >::make();
 
     std::array<size_t, NUM_SENDER_CHANNELS> local_sender_flow_control_semaphores =
         take_first_n_elements<NUM_SENDER_CHANNELS, MAX_NUM_SENDER_CHANNELS, size_t>(
@@ -2761,22 +2758,21 @@ void kernel_main() {
     }
 
     // initialize the local receiver channel buffers
-    local_receiver_channels.init(
-        local_receiver_buffer_addresses.data(),
+    // NEW WAY (multi-pool support): addresses come directly from pools
+    local_receiver_channels.init<channel_pools_args>(
         channel_buffer_size,
-        sizeof(PACKET_HEADER_TYPE),
-        receiver_channel_base_id);
+        sizeof(PACKET_HEADER_TYPE));
 
-    // initialize the remote receiver channel buffers
-    remote_receiver_channels.init(
-        remote_receiver_buffer_addresses.data(),
+    // initialize the remote receiver channel buffers  
+    // NEW WAY (multi-pool support): addresses come directly from pools
+    remote_receiver_channels.init<channel_pools_args>(
         channel_buffer_size,
-        sizeof(PACKET_HEADER_TYPE),
-        receiver_channel_base_id);
+        sizeof(PACKET_HEADER_TYPE));
 
     // initialize the local sender channel worker interfaces
-    local_sender_channels.init(
-        local_sender_buffer_addresses.data(), channel_buffer_size, sizeof(PACKET_HEADER_TYPE), sender_channel_base_id);
+    local_sender_channels.init<channel_pools_args>(
+        channel_buffer_size,
+        sizeof(PACKET_HEADER_TYPE));
 
     // initialize the local sender channel worker interfaces
     constexpr auto sender_channel = is_2d_fabric ? my_direction : 0;

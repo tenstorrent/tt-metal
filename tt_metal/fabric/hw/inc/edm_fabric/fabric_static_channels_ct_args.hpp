@@ -169,3 +169,27 @@ struct ChannelPoolCollection
                CT_ARG_IDX_BASE;
     }
 };
+
+template <size_t NumPools, typename CHANNEL_POOL_COLLECTION>
+struct ChannelPoolLookup {
+    // Index into CHANNEL_POOL_COLLECTION::PoolsTuple using PoolTypes
+    using pools_tuple_full = typename CHANNEL_POOL_COLLECTION::PoolsTuple;
+    
+    // Helper to get pool type at index
+    template <size_t Index>
+    using GetPoolType = typename std::tuple_element<Index, pools_tuple_full>::type;
+    
+    // Build tuple from pool types
+    template <typename IndexSequence>
+    struct BuildTuple;
+    
+    template <size_t... Indices>
+    struct BuildTuple<index_sequence<Indices...>> {
+        using type = std::tuple<GetPoolType<Indices>...>;
+    };
+    
+    // Final type alias
+    using pools_tuple = typename BuildTuple<
+        typename make_index_sequence<NumPools>::type
+    >::type;
+};

@@ -503,17 +503,14 @@ struct BufferSlot {
     static constexpr size_t size_bytes = SLOT_SIZE_BYTES;
     static constexpr size_t header_size_bytes = PACKET_HEADER_SIZE_BYTES;
     static constexpr size_t max_payload_size_bytes = size_bytes - header_size_bytes;
-} using buffer_slot = BufferSlot<PACKET_HEADER_SIZE_BYTES, PACKET_HEADER_SIZE_BYTES>;
+};
+
+using buffer_slot = BufferSlot<channel_buffer_size, sizeof(PACKET_HEADER_TYPE)>;
 
 constexpr uint32_t ELASTIC_CHANNELS_CT_ARG_START_IDX = HOST_SIGNAL_ARGS_START_IDX + 4;
-constexpr auto FWDED_SENDER_ELASTIC_CHANNELS_INFO =
-    RouterElasticChannelsCtArgs<ELASTIC_CHANNELS_CT_ARG_START_IDX, channel_buffer_size>;
-using sender_channels_chunk_pool_t = ChannelBuffersPool<
-    FWDED_SENDER_ELASTIC_CHANNELS_INFO::N_CHUNKS,
-    FWDED_SENDER_ELASTIC_CHANNELS_INFO::N_SLOTS_PER_CHUNK>;
+using FWDED_SENDER_ELASTIC_CHANNELS_INFO =
+    tt::tt_fabric::elastic_channels::RouterElasticChannelsCtArgs<ELASTIC_CHANNELS_CT_ARG_START_IDX, buffer_slot::size_bytes>;
 
-using elastic_sender_channel_t =
-    tt::tt_fabric::CircularBuffer<sender_channels_chunk_pool_t::chunk_t*, sender_channels_chunk_pool_t::N_CHUNKS>;
 
 constexpr size_t NUM_FORWARDED_SENDER_CHANNELS = NUM_SENDER_CHANNELS - 1;
 
@@ -586,5 +583,17 @@ static constexpr uint8_t forward_and_local_write_noc_vc = get_compile_time_arg_v
 constexpr size_t CHUNK_N_PKTS = 0;
 constexpr std::array<bool, NUM_SENDER_CHANNELS> IS_ELASTIC_SENDER_CHANNEL =
     initialize_array<NUM_SENDER_CHANNELS, bool, false>();
+
+// Backward compatibility arrays - no longer used by multi-pool implementation
+// These are kept for backward compatibility with code that hasn't migrated yet
+// The actual buffer counts are now extracted directly from pool data
+constexpr std::array<size_t, NUM_SENDER_CHANNELS> SENDER_NUM_BUFFERS_ARRAY = 
+    initialize_array<NUM_SENDER_CHANNELS, size_t, 0>(); 
+
+constexpr std::array<size_t, NUM_RECEIVER_CHANNELS> RECEIVER_NUM_BUFFERS_ARRAY = 
+    initialize_array<NUM_RECEIVER_CHANNELS, size_t, 0>();
+
+constexpr std::array<size_t, NUM_RECEIVER_CHANNELS> REMOTE_RECEIVER_NUM_BUFFERS_ARRAY = 
+    initialize_array<NUM_RECEIVER_CHANNELS, size_t, 0>();
 
 }  // namespace tt::tt_fabric
