@@ -76,8 +76,8 @@ std::vector<std::string> split_comma_separated(const std::string& input) {
  Main
 **************************************************************************************************/
 
-static uint64_t get_unique_chip_id(const std::unique_ptr<tt::umd::Cluster>& cluster, chip_id_t chip_id) {
-    const std::unordered_map<chip_id_t, uint64_t>& chip_to_unique_id =
+static uint64_t get_unique_chip_id(const std::unique_ptr<tt::umd::Cluster>& cluster, tt::ChipId chip_id) {
+    const std::unordered_map<tt::ChipId, uint64_t>& chip_to_unique_id =
         cluster->get_cluster_description()->get_chip_unique_ids();
     try {
         return chip_to_unique_id.at(chip_id);
@@ -88,7 +88,7 @@ static uint64_t get_unique_chip_id(const std::unique_ptr<tt::umd::Cluster>& clus
 }
 
 static void test_print_link_health() {
-    std::cout << "Num PCIE devices: " << PCIDevice::enumerate_devices_info().size() << std::endl;
+    std::cout << "Num PCIE devices: " << tt::umd::PCIDevice::enumerate_devices_info().size() << std::endl;
     std::unique_ptr<tt::umd::Cluster> cluster = std::make_unique<tt::umd::Cluster>();
     std::unique_ptr<tt::tt_metal::Hal> hal = create_hal(cluster);
     uint32_t link_up_addr =
@@ -96,9 +96,7 @@ static void test_print_link_health() {
 
     std::cout << "Internal Connections" << std::endl << "--------------------" << std::endl;
 
-    const std::map<
-        tt::umd::chip_id_t,
-        std::map<tt::umd::ethernet_channel_t, std::tuple<tt::umd::chip_id_t, tt::umd::ethernet_channel_t>>>
+    const std::map<tt::ChipId, std::map<tt::EthernetChannel, std::tuple<tt::ChipId, tt::EthernetChannel>>>
         ethernet_connections = get_ordered_ethernet_connections(cluster);
 
     for (const auto& [chip_id, remote_chip_and_channel_by_channel] : ethernet_connections) {
@@ -108,8 +106,8 @@ static void test_print_link_health() {
         // Iterate each channel and its remote endpoints
         for (const auto& [channel, remote_chip_and_channel] : remote_chip_and_channel_by_channel) {
             // Remote chip...
-            tt::umd::chip_id_t remote_chip_id;
-            tt::umd::ethernet_channel_t remote_channel;
+            tt::ChipId remote_chip_id;
+            tt::EthernetChannel remote_channel;
             std::tie(remote_chip_id, remote_channel) = remote_chip_and_channel;
 
             // Print
@@ -127,9 +125,7 @@ static void test_print_link_health() {
     // Remote off-cluster links
     std::cout << std::endl << "External Connections" << std::endl << "--------------------" << std::endl;
 
-    const std::map<
-        tt::umd::chip_id_t,
-        std::map<tt::umd::ethernet_channel_t, std::tuple<uint64_t, tt::umd::ethernet_channel_t>>>
+    const std::map<tt::ChipId, std::map<tt::EthernetChannel, std::tuple<uint64_t, tt::EthernetChannel>>>
         remote_ethernet_connections = get_ordered_ethernet_connections_to_remote_devices(cluster);
 
     for (const auto& [chip_id, remote_chip_and_channel_by_channel] : remote_ethernet_connections) {
@@ -142,7 +138,7 @@ static void test_print_link_health() {
         for (const auto& [channel, remote_chip_and_channel] : remote_chip_and_channel_by_channel) {
             // Remote chip...
             uint64_t remote_chip_unique_id;
-            tt::umd::ethernet_channel_t remote_channel;
+            tt::EthernetChannel remote_channel;
             std::tie(remote_chip_unique_id, remote_channel) = remote_chip_and_channel;
 
             // Print
