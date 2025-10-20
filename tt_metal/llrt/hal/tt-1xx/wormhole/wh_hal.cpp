@@ -153,10 +153,7 @@ public:
     }
 
     std::string common_flags(const Params& params) const override {
-        std::string cflags = params.core_type == HalProgrammableCoreType::TENSIX &&
-                                     params.processor_class == HalProcessorClassType::COMPUTE
-                                 ? "-mcpu=tt-wh-tensix "
-                                 : "-mcpu=tt-wh ";
+        std::string cflags = "-mcpu=tt-wh ";
         if (params.core_type == HalProgrammableCoreType::ACTIVE_ETH) {
             cflags += "-fno-delete-null-pointer-checks ";
         } else if (
