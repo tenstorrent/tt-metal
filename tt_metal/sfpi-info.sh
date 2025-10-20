@@ -18,21 +18,25 @@
 # eval $($FILE RELEASE $version) -- generate sfpi variables for release
 # $FILE *.md5 -- emit variable initializations from md5 file(s)
 
+# For the realm of dwarves, building the toolchain
+# $FILE BUILD [$DIR]
+
 set -e
 
-if [[ ${#1} = 0 ]] ; then
+if [[ ${#1} = 0 ]]; then
     cat >&2 <<EOF
 Usage:
 $0 *.md5	 - generate release information
 $0 RELEASE \$VER - generate release names
 $0 SHELL [\$PKG] - shell use for PKG
 $0 CMAKE [\$PKG] - CMAKE use for PKG
+$0 BUILD [\$DIR] - clone and build a toolchain
 EOF
     exit 1
 fi
 
 version_file="sfpi-version"
-if [[ ${1-} =~ '.md5'$ ]] ; then
+if [[ ${1-} =~ '.md5'$ ]]; then
     # convert md5 files into sfpi-version file
     version=
     exit_code=0
@@ -42,8 +46,8 @@ if [[ ${1-} =~ '.md5'$ ]] ; then
     do
 	ver="${file##*/sfpi_}"
 	ver="${ver%%_*}"
-	if [[ $ver != $version ]] ; then
-	    if [[ -n $version ]] ; then
+	if [[ $ver != $version ]]; then
+	    if [[ -n $version ]]; then
 	       echo "ERROR: Multiple versions" >&2
 	       exit_code=1
 	    fi
@@ -51,11 +55,12 @@ if [[ ${1-} =~ '.md5'$ ]] ; then
 	    echo sfpi_version=$version >>$version_file
 	fi
     done
-   sed 's/^\([0-9a-f]*\) \*sfpi_[^_]*_\([^.]*\)\.\(.*\)$/sfpi_\2_\3_md5=\1/' "$@" >>$version_file
-   exit $exit_code
+    sed 's/^\([0-9a-f]*\) \*sfpi_[^_]*_\([^.]*\)\.\(.*\)$/sfpi_\2_\3_md5=\1/' "$@" >>$version_file
+    echo "$version_file for $version created"
+    exit $exit_code
 fi
 
-if [[ ${1-} = RELEASE ]] ; then
+if [[ ${1-} = RELEASE ]]; then
     # releaser of sfpi
     sfpi_version=$2
 else
@@ -65,7 +70,7 @@ fi
 # define host system
 sfpi_dist=unknown
 sfpi_pkg=
-if [[ -r /etc/os-release ]] ; then
+if [[ -r /etc/os-release ]]; then
     source /etc/os-release
     # See if ID_LIKE indicates a debian or fedora clone
     for like in $ID_LIKE
@@ -76,7 +81,7 @@ if [[ -r /etc/os-release ]] ; then
 	esac
     done
 
-    if [[ ${1-} = RELEASE ]] ; then
+    if [[ ${1-} = RELEASE ]]; then
 	sfpi_releaser=$ID
     fi
 
@@ -95,9 +100,11 @@ sfpi_arch=$(uname -m)
 sfpi_url=$sfpi_repo/releases/download/$sfpi_version
 sfpi_filename=sfpi_${sfpi_version}_${sfpi_arch}_${sfpi_dist}
 
-if [[ ${1-} != RELEASE ]] ; then
+if [[ ${1-} != RELEASE ]]; then
     # querier of sfpi-version
-    if [[ -n $2 ]] ; then
+    if [[ ${1-} = BUILD ]]; then
+	sfpi_pkg=txz
+    elif [[ -n $2 ]]; then
 	sfpi_pkg=$2
     fi
     sfpi_filename+=".$sfpi_pkg"
@@ -105,14 +112,67 @@ if [[ ${1-} != RELEASE ]] ; then
     unset sfpi_builton
 fi
 
-# now emit definitions
-for var in $(set -o posix ; set | sed -e '/^sfpi_/{s/=.*//;p}' -e d)
-do
-    eval val="\$$var"
-    # relies on no inserted quoting for meta-characters
-    if [[ ${1-} = CMAKE ]] ; then
-	echo "set(SFPI${var#sfpi} \"$val\")"
-    else
-	echo "${var}='$val'"
-    fi
-done
+if [[ ${1-} != BUILD ]]; then
+    # now emit definitions
+    for var in $(set -o posix ; set | sed -e '/^sfpi_/{s/=.*//;p}' -e d)
+    do
+	eval val="\$$var"
+	# relies on no inserted quoting for meta-characters
+	if [[ ${1-} = CMAKE ]]; then
+	    echo "set(SFPI${var#sfpi} \"$val\")"
+	else
+	    echo "${var}='$val'"
+	fi
+    done
+    exit 0
+fi
+
+# Now clone and build into $2
+src=${2-}
+if [[ -z $src ]]; then
+    src=$(pwd)/sfpi-src
+fi
+
+mkdir -p $src
+cd $src
+
+cat >&1 >&2 <<EOF
+Building SFPI $sfpi_version
+Working Directory: $src
+
+Install (or otherwise provide) the following components:
+Common names: autoconf automake bison expect flex gawk patchutils python3 texinfo
+Debian names: gcc g++ libgmp-dev libmpc-dev libmpfr-dev
+Fedora names: gcc gcc-c++ gmp-devel libmpc-devel mpfr-devel
+
+This script cannot install them as it knows neither your system's
+packaging system, nor how it might have named them. You will have to
+research that from the above clues. If required components are missing
+the build will fail, sometimes with a clueful message. Please report
+any additional packages you discover are necessary.
+EOF
+
+echo >&1 >&2
+echo "Fetching the repository ..." >&1 >&2
+if ! [[ -d .git ]]; then
+    (set -x; \
+     git clone -b $sfpi_version --depth 1 $sfpi_repo .; \
+     git submodules update --depth 1 --init --recursive; \
+     )
+else
+    (set -x; \
+     git fetch --depth 1 $sfpi_repo $sfpi_version; \
+     git checkout $sfpi_version; \
+     git submodules update --depth 1 --init --recursive; \
+     )
+fi
+
+echo >&1 >&2
+echo "Building ..." >&1 >&2
+(set -x; rm -rf build)
+(set -x; scripts/build.sh --test-tt 2>&1)
+(set -x; scripts/release.sh --txz-only 1>&2)
+
+cp build/release/$sfpi_filename ..
+
+echo "SFPI build completed" >&1 >&2
