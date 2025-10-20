@@ -89,30 +89,10 @@ run_ccl_T3000_test() {
     fi
 }
 
-run_async_ccl_T3000_test() {
-    remove_default_log_locations
-    mkdir -p $PROFILER_ARTIFACTS_DIR
-
-    ./tools/tracy/profile_this.py -c "'pytest tests/ttnn/unit_tests/operations/ccl/test_new_all_gather.py::test_all_gather_sharded_ring'" | tee $PROFILER_ARTIFACTS_DIR/test_out.log
-
-    if cat $PROFILER_ARTIFACTS_DIR/test_out.log | grep "SKIPPED"
-    then
-        echo "No verification as test was skipped"
-    else
-        echo "Verifying test results"
-        runDate=$(ls $PROFILER_OUTPUT_DIR/)
-        LINE_COUNT=128 #8 devices x 16 iterations
-        res=$(verify_perf_line_count "$PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv" "$LINE_COUNT" "AllGatherCommandProcessorAsync")
-        echo $res
-    fi
-}
-
 run_profiling_test() {
     run_async_test
 
     run_ccl_T3000_test
-
-    run_async_ccl_T3000_test
 
     run_async_tracing_T3000_test
 

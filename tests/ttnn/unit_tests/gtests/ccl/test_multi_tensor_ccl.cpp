@@ -4,7 +4,6 @@
 
 #include "gtest/gtest.h"
 
-#include "ttnn/operations/experimental/ccl/all_gather_command_processor_async/all_gather_command_processor_async.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_async/all_gather_async.hpp"
 #include "ttnn/operations/experimental/ccl/reduce_scatter_async/reduce_scatter.hpp"
 #include "ttnn/operations/experimental/ccl/all_reduce_async/all_reduce_async.hpp"
@@ -59,6 +58,7 @@ protected:
     }
 };
 
+/*
 TEST_F(MultiCQFabricMeshDevice2x4Fixture, AllGatherCommandProcessorAsync) {
     auto mesh_devices = CMAKE_UNIQUE_NAMESPACE::get_line_devices(mesh_device_.get());
     auto devices = CMAKE_UNIQUE_NAMESPACE::get_line_devices_as_idevice(mesh_devices);
@@ -92,9 +92,10 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AllGatherCommandProcessorAsync) {
         }
     }
 }
+*/
 
-// TODO: uncomment this once the composite implementation is completed (#28556)
-TEST_F(MultiCQFabricMeshDevice2x4Fixture, DISABLED_AllGatherMinimalAsyncComposite) {
+    // TODO: uncomment this once the composite implementation is completed (#28556)
+    TEST_F(MultiCQFabricMeshDevice2x4Fixture, DISABLED_AllGatherMinimalAsyncComposite) {
     auto mesh_devices = CMAKE_UNIQUE_NAMESPACE::get_line_devices(mesh_device_.get());
     auto devices = CMAKE_UNIQUE_NAMESPACE::get_line_devices_as_idevice(mesh_devices);
 

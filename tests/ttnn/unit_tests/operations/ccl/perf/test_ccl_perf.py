@@ -11,9 +11,6 @@ from tests.ttnn.unit_tests.operations.ccl.test_all_gather import (
 from tests.ttnn.unit_tests.operations.ccl.test_reduce_scatter_post_commit import (
     run_reduce_scatter_test,
 )
-from tests.ttnn.unit_tests.operations.ccl.test_all_gather_TG_post_commit import (
-    run_line_all_gather_on_TG_with_mesh_tensor_along_rows,
-)
 from tests.ttnn.unit_tests.operations.ccl.test_reduce_scatter_TG_nightly import (
     run_line_reduce_scatter_on_TG_with_mesh_tensor_along_rows,
 )
@@ -245,65 +242,6 @@ def test_reduce_scatter_on_n300(
         mem_config,
         function_level_defaults,
         num_iters=num_iters,
-        trace_mode=True,
-    )
-
-
-@pytest.mark.parametrize(
-    "num_devices, num_links, per_chip_output_shape, dim, layout",
-    [
-        (4, 3, [4, 1, 32, 1280], 0, ttnn.TILE_LAYOUT),
-        (4, 3, [1, 1, 32, 16384 * 4], 3, ttnn.TILE_LAYOUT),
-        (4, 3, [1, 4, 32, 6656], 1, ttnn.TILE_LAYOUT),
-    ],
-)
-@pytest.mark.parametrize(
-    "input_dtype",
-    [
-        ttnn.bfloat16,
-        ttnn.bfloat8_b,
-    ],
-)
-@pytest.mark.parametrize(
-    "buffer_type",
-    [
-        ttnn.BufferType.DRAM,
-        ttnn.BufferType.L1,
-    ],
-)
-@pytest.mark.parametrize("replication_factor", [8])
-@pytest.mark.parametrize("num_iters", [20])
-@pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
-@pytest.mark.parametrize("device_params", [{"trace_region_size": 532480}], indirect=True)
-def test_all_gather_on_tg(
-    mesh_device,
-    num_devices,
-    per_chip_output_shape,
-    dim,
-    num_links,
-    input_dtype,
-    layout,
-    buffer_type,
-    function_level_defaults,
-    replication_factor,
-    num_iters,
-):
-    if mesh_device.get_num_devices() != 32:
-        pytest.skip("Not TG!")
-    run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
-        mesh_device,
-        num_devices,
-        per_chip_output_shape,
-        ttnn.TensorMemoryLayout.INTERLEAVED,
-        dim,
-        num_links,
-        input_dtype,
-        layout,
-        buffer_type,
-        function_level_defaults,
-        num_iters=num_iters,
-        num_all_gather_instances=replication_factor,
-        cluster_axis=1,
         trace_mode=True,
     )
 
