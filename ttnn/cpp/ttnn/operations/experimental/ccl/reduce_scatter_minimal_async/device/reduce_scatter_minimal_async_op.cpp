@@ -27,8 +27,7 @@ void reduce_scatter_common_validates(
         page_size % input_tensor.buffer()->alignment() == 0,
         "reduce_scatter_minimal_async currently requires aligned pages");
 
-    TT_FATAL(
-        dim == 1 || dim == 2 || dim == 3, "reduce_scatter_minimal_async only supports scattering on dim 1, 2, or 3");
+    TT_FATAL(dim != 0, "reduce_scatter_minimal_async does not support scattering on 0th dimension, got: {}", dim);
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to all_gather need to be on device!");
     TT_FATAL(

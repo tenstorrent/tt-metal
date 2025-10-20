@@ -1076,19 +1076,59 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
         input_tensor_shape[-1],
         tt::constants::TILE_WIDTH);
 
-    const uint32_t input_tensor_B = input_tensor_shape[0];
-    const uint32_t input_tensor_C = input_tensor_shape[1];
-    const uint32_t input_tensor_Ht = input_tensor_shape[2] / tt::constants::TILE_HEIGHT;
-    const uint32_t input_tensor_Wt = input_tensor_shape[3] / tt::constants::TILE_WIDTH;
+    auto map_nd_to_4d = [&]() {
+        // Here we do a couple of tricks so that the kernels can handle ND tensors
+        // implicitly reshape lower dims so it is treated as 4D
+        uint32_t input_tensor_B =
+            std::accumulate(input_tensor_shape.cbegin(), input_tensor_shape.cend() - 3, 1, std::multiplies<uint32_t>());
+        auto dim_normalization = static_cast<int32_t>(input_tensor_shape.rank()) - 4;
+        uint32_t normalized_dim = (dim < std::abs(dim_normalization)) ? dim : dim - dim_normalization;
+        // if the gather dim is 4D normalized to 0,2,3 we can proceed as if nothing has changed
+        // if not we have to roll up the lower dims from the gather dim up to 1 into C and gather on 1.
+
+        uint32_t c_includes_dim;
+        if (dim_normalization >= 1 && dim <= dim_normalization) {
+            // gather dim to rank-3 accumulated into C
+            c_includes_dim = dim;
+            normalized_dim = 1;
+        } else {
+            // C will be 4D normalized dim 1
+            c_includes_dim = 1 + dim_normalization;
+        }
+
+        uint32_t input_tensor_C = std::accumulate(
+            input_tensor_shape.view().rbegin() + 2,
+            input_tensor_shape.view().rend() - c_includes_dim,
+            1,
+            std::multiplies<uint32_t>());
+
+        // uint32_t output_tensor_C = std::accumulate(
+        //             output_tensor_shape.view().rbegin() + 2,
+        //             output_tensor_shape.view().rend() - c_includes_dim,
+        //             1,
+        //             std::multiplies<uint32_t>());
+
+        return std::make_tuple(normalized_dim, input_tensor_C, input_tensor_B);
+    };
+
+    const auto [normalized_dim, input_tensor_C, input_tensor_B] = map_nd_to_4d();
+
+    // const uint32_t input_tensor_B = input_tensor_shape[0];
+    //  const uint32_t input_tensor_C = input_tensor_shape[-3];
+    const uint32_t input_tensor_Ht = input_tensor_shape[-2] / tt::constants::TILE_HEIGHT;
+    const uint32_t input_tensor_Wt = input_tensor_shape[-1] / tt::constants::TILE_WIDTH;
+
+    std::cout << "Norm dim: " << normalized_dim << " C: " << input_tensor_C << " B: " << input_tensor_B
+              << " H: " << input_tensor_Ht << " W: " << input_tensor_Wt << std::endl;
 
     uint32_t slice_C = input_tensor_C;
     uint32_t slice_Ht = input_tensor_Ht;
     uint32_t slice_Wt = input_tensor_Wt;
-    if (dim == 1) {
+    if (normalized_dim == 1) {
         slice_C /= ring_size;
-    } else if (dim == 2) {
+    } else if (normalized_dim == 2) {
         slice_Ht /= ring_size;
-    } else if (dim == 3) {
+    } else if (normalized_dim == 3) {
         slice_Wt /= ring_size;
     } else {
         TT_FATAL(false, "reduce_scatter_minimal_async line implementation only supports scattering on dim 1, 2, or 3");
@@ -1252,7 +1292,7 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
                     do_final_reduction,            // do_final_reduction
                     sync_with_other_direction,     // sync_with_other_direction
                     chunks_per_sync_val,           // chunks_per_sync
-                    dim,                           // dim
+                    normalized_dim,                // dim
                     start_pages_read_in_row,       // start_pages_read_in_row
                     start_row_offset,              // start_row_offset
                     start_tiles_read,              // start_tiles_read
@@ -1327,7 +1367,7 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
                     do_final_reduction,            // do_final_reduction
                     sync_with_other_direction,     // sync_with_other_direction
                     chunks_per_sync_val,           // chunks_per_sync
-                    dim,                           // dim
+                    normalized_dim,                // dim
                     start_pages_read_in_row,       // start_pages_read_in_row
                     start_row_offset,              // start_row_offset
                     start_tiles_read,              // start_tiles_read

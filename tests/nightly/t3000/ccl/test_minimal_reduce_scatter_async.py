@@ -317,9 +317,10 @@ def run_reduce_scatter_impl(
 @pytest.mark.parametrize(
     "ones_tensor",
     [
+        True,
         False,
     ],
-    ids=["random"],
+    ids=["ones", "random"],
 )
 @pytest.mark.parametrize(
     "use_barrier, use_persistent_buffers",
@@ -434,9 +435,10 @@ def test_reduce_scatter_async(
 @pytest.mark.parametrize(
     "ones_tensor",
     [
+        True,
         False,
     ],
-    ids=["random"],
+    ids=["ones", "random"],
 )
 @pytest.mark.parametrize(
     "device_params, rs_topology",
@@ -1089,10 +1091,10 @@ def _get_tensors(
 
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 @pytest.mark.parametrize("mesh_device", [MESH_SHAPE], indirect=True)
-@pytest.mark.parametrize("input_shape", [[8, 8, 32, 32], [8, 8, 32], [8, 8, 8, 32, 32], [8, 8, 8, 8, 32, 32]])
+@pytest.mark.parametrize("input_shape", [[8, 8, 128, 128], [8, 128, 128], [8, 8, 8, 8, 128, 128], [8, 8, 8, 16, 16]])
 @pytest.mark.parametrize("dtype", [torch.bfloat16])
 @pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG])
-@pytest.mark.parametrize("dim", [1, 2, 3, 4, 5])
+@pytest.mark.parametrize("dim", [0, 1, 2, 3, 4, 5])
 @pytest.mark.parametrize("cluster_axis", [0])
 @pytest.mark.parametrize("topology", [ttnn.Topology.Linear])
 def test_nd(mesh_device, input_shape, dim, cluster_axis, dtype, memory_config, topology):
@@ -1115,6 +1117,8 @@ def test_nd(mesh_device, input_shape, dim, cluster_axis, dtype, memory_config, t
         {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
     )
     semaphores = [ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(3)]
+
+    print(f"{tt_input.shape=}")
 
     for i in range(NUM_ITERS):
         tt_out_tensor = ttnn.experimental.reduce_scatter_minimal_async(

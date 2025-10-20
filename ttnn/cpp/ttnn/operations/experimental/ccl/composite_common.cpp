@@ -7,6 +7,14 @@
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/ccl/mesh_partition/mesh_partition.hpp"
 
+namespace {
+uint32_t normalize_dim_4d(const uint32_t dim, const uint32_t rank) {
+    constexpr int32_t RANK_4D = 4;
+    const auto dim_normalization = static_cast<int32_t>(rank) - RANK_4D;
+    return (dim < std::abs(dim_normalization)) ? dim : dim - dim_normalization;
+}
+}  // namespace
+
 namespace composite_common {
 
 bool is_fabric_2d() {
@@ -26,6 +34,8 @@ bool use_composite_reduce_scatter(
     int32_t rank = input_tensor.logical_shape().rank();
     int32_t scatter_dim = (dim < 0) ? rank + dim : dim;
 
+    const auto normalized_scatter_dim = normalize_dim_4d(scatter_dim, rank);
+
     uint32_t num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
 
     // Must scatter evenly
@@ -40,15 +50,15 @@ bool use_composite_reduce_scatter(
     }
 
     // Use composite if we don't support scattering on the provided dim
-    if (scatter_dim != 1 && scatter_dim != 2 && scatter_dim != 3) {
+    if (normalized_scatter_dim != 1 && normalized_scatter_dim != 2 && normalized_scatter_dim != 3) {
         return true;
     }
 
     // Use composite if tiled and scattering on padded dim 2 or 3
     auto output_shape = input_shape;
     output_shape[scatter_dim] /= num_devices;
-    return (scatter_dim == 3 && output_shape[scatter_dim] % tile_width != 0) ||
-           (scatter_dim == 2 && output_shape[scatter_dim] % tile_height != 0);
+    return (normalized_scatter_dim == 3 && output_shape[scatter_dim] % tile_width != 0) ||
+           (normalized_scatter_dim == 2 && output_shape[scatter_dim] % tile_height != 0);
 }
 
 ttnn::Tensor composite_reduce_scatter(
@@ -70,7 +80,7 @@ ttnn::Tensor composite_reduce_scatter(
     auto output_shape = input_tensor.logical_shape();
     output_shape[scatter_dim] /= num_devices;
     bool is_tiled_and_not_tile_aligned = input_tensor.layout() == ttnn::Layout::TILE &&
-                                         (output_shape[2] % tile_height != 0 || output_shape[3] % tile_width != 0);
+                                         (output_shape[-2] % tile_height != 0 || output_shape[-1] % tile_width != 0);
 
     auto input_memory_config = input_tensor.memory_config();
     TT_FATAL(
