@@ -13,8 +13,8 @@ using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement {
 
-ttnn::Tensor SplitDeviceOperation::invoke(std::vector<Tensor> input_tensors) {
-    return tt::tt_metal::operation::run(*this, input_tensors).at(0);
+std::vector<ttnn::Tensor> SplitDeviceOperation::invoke(std::vector<Tensor> input_tensors) {
+    return tt::tt_metal::operation::run(*this, input_tensors);
 }
 
 void SplitDeviceOperation::validate(const std::vector<Tensor>& input_tensors) const {
@@ -46,11 +46,12 @@ std::vector<ttnn::TensorSpec> SplitDeviceOperation::compute_output_specs(
     const auto& input_tensor = input_tensors.at(0);
     auto input_shape_array = input_tensor.padded_shape().to_array_4D();
     auto output_shape_array = input_shape_array;
-    output_shape_array[this->dim] /= this->num_splits;
+    auto split_size = output_shape_array[this->dim] /= this->num_splits;
+    output_shape_array[this->dim] /= split_size;
     TensorSpec spec(
         Shape(output_shape_array),
         TensorLayout(input_tensor.dtype(), PageConfig(input_tensor.layout()), output_mem_config));
-    return std::vector<ttnn::TensorSpec>(this->num_splits, spec);
+    return std::vector<ttnn::TensorSpec>(split_size, spec);
 }
 
 operation::ProgramWithCallbacks SplitDeviceOperation::create_program(
@@ -58,6 +59,7 @@ operation::ProgramWithCallbacks SplitDeviceOperation::create_program(
     const auto& input_tensor = input_tensors.at(0);
     return detail::split_last_dim_two_chunks_tiled(input_tensor, output_tensors, this->output_mem_config);
 }
+
 tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>>
 SplitDeviceOperation::create_op_performance_model(
     const std::vector<Tensor>& input_tensors,

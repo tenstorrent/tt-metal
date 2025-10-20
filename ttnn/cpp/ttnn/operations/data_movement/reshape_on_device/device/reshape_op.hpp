@@ -41,7 +41,7 @@ struct ReshapeDeviceOperation : public ttnn::experimental::jit::IDeviceOperation
             logical_output_shape, padded_output_shape, output_mem_config);
     }
 
-    Tensor invoke(std::vector<Tensor> input_tensors) override;
+    std::vector<Tensor> invoke(std::vector<Tensor> input_tensors) override;
 
     void validate(const std::vector<Tensor>& input_tensors) const override;
 

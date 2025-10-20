@@ -10,8 +10,9 @@
 #include "ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
 #include "ttnn/operations/data_movement/reshape_on_device/device/reshape_op.hpp"
 #include "ttnn/experimental/jit/context.hpp"
+#include "ttnn/operations/operation_binder.hpp"
 #include "ttnn/types.hpp"
-#pragma optimize("", off)
+
 namespace ttnn::operations::data_movement {
 
 void py_bind_reshape(pybind11::module& module) {
@@ -38,30 +39,11 @@ void py_bind_reshape(pybind11::module& module) {
             // Create ReshapeDeviceOperation struct
             ReshapeDeviceOperation reshape_op{logical_shape, padded_shape, output_mem_config};
 
-            // Use Context to add a node with the args
-            auto& context = ttnn::experimental::jit::Context::instance();
-
             // Create inputs vector for the node
             std::vector<ttnn::Tensor> inputs = {input_tensor};
-
-            // Create shared_ptr to hold the args
-            auto args_ptr = std::make_shared<ReshapeDeviceOperation>(reshape_op);
-
-            // Add node to context
-            auto node_id = context.create_node(
-                inputs,
-                "ttnn::reshape_on_device",
-                std::static_pointer_cast<ttnn::experimental::jit::IDeviceOperation>(args_ptr));
-
-            // For lazy JIT: return a tensor with computed specs that can be used as input to other operations
-            auto output_specs = args_ptr->compute_output_specs(inputs);
-
-            // Create output tensor with the computed specs and same storage/topology
-            auto output_tensor = Tensor(input_tensor.storage(), output_specs[0], input_tensor.tensor_topology());
-            output_tensor = tt::tt_metal::set_tensor_id(output_tensor);
-            output_tensor.set_producer_node(node_id);
-
-            return output_tensor;
+            auto result = ttnn::operations::bind_operation(
+                inputs, "ttnn::reshape_on_device", std::make_shared<ReshapeDeviceOperation>(reshape_op));
+            return result[0];
         },
         py::arg("input_tensor"),
         py::arg("W"),
