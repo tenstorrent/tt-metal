@@ -726,7 +726,7 @@ jobs:
           fi
 
           # Use #tt-metal-pr-review-requests Slack channel
-          SLACK_CHANNEL="C07G47JMQHM"
+          SLACK_CHANNEL="C09HT5VSXRB"
 
           echo "Using parameters: CREATE_NEW=$CREATE_NEW, PING_OWNERS=$PING_OWNERS, SEND_SLACK=$SEND_SLACK, SLACK_CHANNEL=$SLACK_CHANNEL"
 
@@ -1172,6 +1172,47 @@ jobs:
           REQUESTER_LOGIN="${{ needs.parse-comment.outputs.comment-author }}"
           REQUESTER_NAME="$REQUESTER_LOGIN"
 
+          # Fetch ALL Slack users once (with pagination) to avoid rate limiting
+          echo "Fetching all Slack users (this may take a moment)..."
+          ALL_SLACK_USERS=""
+          CURSOR=""
+          PAGE_COUNT=0
+
+          while true; do
+            if [ -n "$CURSOR" ]; then
+              API_URL="https://slack.com/api/users.list?limit=1000&cursor=$CURSOR"
+            else
+              API_URL="https://slack.com/api/users.list?limit=1000"
+            fi
+
+            USER_SEARCH_RESPONSE=$(curl -s -X GET \
+              -H "Authorization: Bearer ${{ secrets.CODEOWNERS_PING_BOT }}" \
+              -H "Content-Type: application/json" \
+              "$API_URL")
+
+            if [ "$(echo "$USER_SEARCH_RESPONSE" | jq -r '.ok')" = "true" ]; then
+              USERS_PAGE=$(echo "$USER_SEARCH_RESPONSE" | jq -r '.members')
+              if [ "$ALL_SLACK_USERS" = "" ]; then
+                ALL_SLACK_USERS="$USERS_PAGE"
+              else
+                ALL_SLACK_USERS=$(echo "$ALL_SLACK_USERS $USERS_PAGE" | jq -s 'add')
+              fi
+
+              PAGE_COUNT=$((PAGE_COUNT + 1))
+              CURSOR=$(echo "$USER_SEARCH_RESPONSE" | jq -r '.response_metadata.next_cursor // empty')
+              if [ -z "$CURSOR" ] || [ "$CURSOR" = "null" ]; then
+                break
+              fi
+            else
+              ERROR_MSG=$(echo "$USER_SEARCH_RESPONSE" | jq -r '.error // "Unknown error"')
+              echo "Error: Failed to fetch Slack users: $ERROR_MSG"
+              break
+            fi
+          done
+
+          USER_COUNT=$(echo "$ALL_SLACK_USERS" | jq '. | length')
+          echo "✅ Successfully fetched $USER_COUNT Slack users across $PAGE_COUNT pages"
+
           # Get full name for requester if available
           echo "DEBUG: REQUESTER_LOGIN='$REQUESTER_LOGIN', PR_AUTHOR_LOGIN='$PR_AUTHOR_LOGIN'"
           if [ -n "$REQUESTER_LOGIN" ] && [ "$REQUESTER_LOGIN" != "$PR_AUTHOR_LOGIN" ]; then
@@ -1191,7 +1232,7 @@ jobs:
           fi
 
           # Use #tt-metal-pr-review-requests Slack channel
-          SLACK_CHANNEL="C07G47JMQHM"
+          SLACK_CHANNEL="C09HT5VSXRB"
 
           # GitHub team to Slack group mapping (needed for author notes processing)
           get_slack_group_id() {
@@ -1263,44 +1304,11 @@ jobs:
             fi
           fi
 
-          # Define the find_slack_user_id function (same as in Send notifications step)
+          # Define the find_slack_user_id function (uses pre-fetched user list)
           find_slack_user_id() {
             local full_name="$1"
             local github_username="$2"
-
-            # Fetch ALL users using pagination
-            ALL_USERS=""
-            CURSOR=""
-
-            while true; do
-              if [ -n "$CURSOR" ]; then
-                API_URL="https://slack.com/api/users.list?limit=1000&cursor=$CURSOR"
-              else
-                API_URL="https://slack.com/api/users.list?limit=1000"
-              fi
-
-              USER_SEARCH_RESPONSE=$(curl -s -X GET \
-                -H "Authorization: Bearer ${{ secrets.CODEOWNERS_PING_BOT }}" \
-                -H "Content-Type: application/json" \
-                "$API_URL")
-
-              if [ "$(echo "$USER_SEARCH_RESPONSE" | jq -r '.ok')" = "true" ]; then
-                USERS_PAGE=$(echo "$USER_SEARCH_RESPONSE" | jq -r '.members')
-                if [ "$ALL_USERS" = "" ]; then
-                  ALL_USERS="$USERS_PAGE"
-                else
-                  ALL_USERS=$(echo "$ALL_USERS $USERS_PAGE" | jq -s 'add')
-                fi
-
-                CURSOR=$(echo "$USER_SEARCH_RESPONSE" | jq -r '.response_metadata.next_cursor // empty')
-                if [ -z "$CURSOR" ] || [ "$CURSOR" = "null" ]; then
-                  break
-                fi
-              else
-                echo "Error: Failed to search Slack users: $(echo "$USER_SEARCH_RESPONSE" | jq -r '.error // "Unknown error"')" >&2
-                return
-              fi
-            done
+            local ALL_USERS="$3"  # Pre-fetched user list passed as parameter
 
             # Try exact matching first
             USER_ID=$(echo "$ALL_USERS" | jq -r --arg name "$full_name" '.[] | select(.real_name == $name or .profile.real_name == $name) | .id' | head -n1)
@@ -1360,7 +1368,7 @@ jobs:
 
           # Find Slack user ID for PR author
           echo "Looking up PR author in Slack: $PR_AUTHOR_FULL_NAME"
-          PR_AUTHOR_SLACK_ID=$(find_slack_user_id "$PR_AUTHOR_FULL_NAME" "$PR_AUTHOR_LOGIN")
+          PR_AUTHOR_SLACK_ID=$(find_slack_user_id "$PR_AUTHOR_FULL_NAME" "$PR_AUTHOR_LOGIN" "$ALL_SLACK_USERS")
 
           if [ -n "$PR_AUTHOR_SLACK_ID" ]; then
             PR_AUTHOR_MENTION="<@$PR_AUTHOR_SLACK_ID>"
@@ -1374,7 +1382,7 @@ jobs:
           REQUESTER_MENTION=""
           if [ -n "$REQUESTER_LOGIN" ] && [ "$REQUESTER_LOGIN" != "$PR_AUTHOR_LOGIN" ]; then
             echo "Looking up requester in Slack: $REQUESTER_NAME"
-            REQUESTER_SLACK_ID=$(find_slack_user_id "$REQUESTER_NAME" "$REQUESTER_LOGIN")
+            REQUESTER_SLACK_ID=$(find_slack_user_id "$REQUESTER_NAME" "$REQUESTER_LOGIN" "$ALL_SLACK_USERS")
 
             if [ -n "$REQUESTER_SLACK_ID" ]; then
               REQUESTER_MENTION="<@$REQUESTER_SLACK_ID>"
@@ -1418,7 +1426,7 @@ jobs:
                   fi
 
                   # Find Slack user ID
-                  SLACK_USER_ID=$(find_slack_user_id "$USER_NAME" "$clean_item")
+                  SLACK_USER_ID=$(find_slack_user_id "$USER_NAME" "$clean_item" "$ALL_SLACK_USERS")
 
                   if [ -n "$SLACK_USER_ID" ]; then
                     SLACK_USER_MENTIONS="$SLACK_USER_MENTIONS <@$SLACK_USER_ID>"
@@ -1489,7 +1497,7 @@ jobs:
                     USER_NAME="$clean_username"
                   fi
 
-                  SLACK_USER_ID=$(find_slack_user_id "$USER_NAME" "$clean_username")
+                  SLACK_USER_ID=$(find_slack_user_id "$USER_NAME" "$clean_username" "$ALL_SLACK_USERS")
 
                   if [ -n "$SLACK_USER_ID" ]; then
                     REPLACEMENT="<@$SLACK_USER_ID>"
@@ -1599,6 +1607,47 @@ jobs:
           PR_AUTHOR_LOGIN=$(echo "$PR_DATA" | jq -r '.user.login')
           PR_AUTHOR_NAME=$(echo "$PR_DATA" | jq -r '.user.name // .user.login')
 
+          # Fetch ALL Slack users once (with pagination) to avoid rate limiting
+          echo "Fetching all Slack users (this may take a moment)..."
+          ALL_SLACK_USERS=""
+          CURSOR=""
+          PAGE_COUNT=0
+
+          while true; do
+            if [ -n "$CURSOR" ]; then
+              API_URL="https://slack.com/api/users.list?limit=1000&cursor=$CURSOR"
+            else
+              API_URL="https://slack.com/api/users.list?limit=1000"
+            fi
+
+            USER_SEARCH_RESPONSE=$(curl -s -X GET \
+              -H "Authorization: Bearer ${{ secrets.CODEOWNERS_PING_BOT }}" \
+              -H "Content-Type: application/json" \
+              "$API_URL")
+
+            if [ "$(echo "$USER_SEARCH_RESPONSE" | jq -r '.ok')" = "true" ]; then
+              USERS_PAGE=$(echo "$USER_SEARCH_RESPONSE" | jq -r '.members')
+              if [ "$ALL_SLACK_USERS" = "" ]; then
+                ALL_SLACK_USERS="$USERS_PAGE"
+              else
+                ALL_SLACK_USERS=$(echo "$ALL_SLACK_USERS $USERS_PAGE" | jq -s 'add')
+              fi
+
+              PAGE_COUNT=$((PAGE_COUNT + 1))
+              CURSOR=$(echo "$USER_SEARCH_RESPONSE" | jq -r '.response_metadata.next_cursor // empty')
+              if [ -z "$CURSOR" ] || [ "$CURSOR" = "null" ]; then
+                break
+              fi
+            else
+              ERROR_MSG=$(echo "$USER_SEARCH_RESPONSE" | jq -r '.error // "Unknown error"')
+              echo "Error: Failed to fetch Slack users: $ERROR_MSG"
+              break
+            fi
+          done
+
+          USER_COUNT=$(echo "$ALL_SLACK_USERS" | jq '. | length')
+          echo "✅ Successfully fetched $USER_COUNT Slack users across $PAGE_COUNT pages"
+
           # Output for next steps
           {
             echo "pr-author-login<<EOF"
@@ -1609,6 +1658,9 @@ jobs:
             echo "EOF"
             echo "moreh-team-members<<EOF"
             echo "$MOREH_TEAM_MEMBERS"
+            echo "EOF"
+            echo "all-slack-users<<EOF"
+            echo "$ALL_SLACK_USERS"
             echo "EOF"
           } >> $GITHUB_OUTPUT
 
@@ -1907,7 +1959,7 @@ jobs:
           PR_TITLE=$(echo "$PR_DATA" | jq -r '.title')
 
           # Use #tt-metal-pr-review-requests Slack channel
-          SLACK_CHANNEL="C07G47JMQHM"
+          SLACK_CHANNEL="C09HT5VSXRB"
 
           # Define API endpoint
           COMMENTS_API="https://api.github.com/repos/${{ github.repository }}/issues/$PR_NUMBER/comments"
@@ -2016,10 +2068,14 @@ jobs:
           REQUESTER_LOGIN="${{ needs.parse-comment.outputs.comment-author || '' }}"
           REQUESTER_NAME="$REQUESTER_LOGIN"
 
+          # Get pre-fetched Slack users list (from setup-notifications step)
+          ALL_SLACK_USERS='${{ steps.setup-notifications.outputs.all-slack-users }}'
+
           echo "DEBUG Slack: SEND_SLACK='$SEND_SLACK'"
           echo "DEBUG Slack: SELECTED_OWNERS='$SELECTED_OWNERS'"
           echo "DEBUG Slack: SELECTED_SLACK_GROUPS='$SELECTED_SLACK_GROUPS'"
           echo "DEBUG Slack: NO_OWNERS_AVAILABLE='$NO_OWNERS_AVAILABLE'"
+          echo "DEBUG Slack: Using cached Slack users ($(echo "$ALL_SLACK_USERS" | jq '. | length') users)"
 
           # Fetch PR title safely to avoid shell injection
           PR_API="https://api.github.com/repos/${{ github.repository }}/pulls/$PR_NUMBER"
@@ -2029,7 +2085,7 @@ jobs:
           PR_TITLE=$(echo "$PR_DATA" | jq -r '.title')
 
           # Use #tt-metal-pr-review-requests Slack channel
-          SLACK_CHANNEL="C07G47JMQHM"
+          SLACK_CHANNEL="C09HT5VSXRB"
 
           # GitHub team to Slack group mapping (needed for author notes processing)
           get_slack_group_id() {
@@ -2054,47 +2110,11 @@ jobs:
           if [ "$SEND_SLACK" = "true" ] && ([ -n "$SELECTED_OWNERS" ] || [ -n "$SELECTED_SLACK_GROUPS" ]) && [ "$NO_OWNERS_AVAILABLE" != "true" ]; then
             echo "Sending Slack notification to channel: $SLACK_CHANNEL"
 
-            # Function to find Slack user ID by full name (with pagination)
+            # Function to find Slack user ID by full name (uses pre-fetched user list)
             find_slack_user_id() {
               local full_name="$1"
               local github_username="$2"
-
-              # Fetch ALL users using pagination
-              ALL_USERS=""
-              CURSOR=""
-
-              while true; do
-                if [ -n "$CURSOR" ]; then
-                  API_URL="https://slack.com/api/users.list?limit=1000&cursor=$CURSOR"
-                else
-                  API_URL="https://slack.com/api/users.list?limit=1000"
-                fi
-
-                USER_SEARCH_RESPONSE=$(curl -s -X GET \
-                  -H "Authorization: Bearer ${{ secrets.CODEOWNERS_PING_BOT }}" \
-                  -H "Content-Type: application/json" \
-                  "$API_URL")
-
-                if [ "$(echo "$USER_SEARCH_RESPONSE" | jq -r '.ok')" = "true" ]; then
-                  # Append users from this page
-                  USERS_PAGE=$(echo "$USER_SEARCH_RESPONSE" | jq -r '.members')
-                  if [ "$ALL_USERS" = "" ]; then
-                    ALL_USERS="$USERS_PAGE"
-                  else
-                    # Merge arrays
-                    ALL_USERS=$(echo "$ALL_USERS $USERS_PAGE" | jq -s 'add')
-                  fi
-
-                  # Check if there's a next page
-                  CURSOR=$(echo "$USER_SEARCH_RESPONSE" | jq -r '.response_metadata.next_cursor // empty')
-                  if [ -z "$CURSOR" ] || [ "$CURSOR" = "null" ]; then
-                    break
-                  fi
-                else
-                  echo "Error: Failed to search Slack users: $(echo "$USER_SEARCH_RESPONSE" | jq -r '.error // "Unknown error"')" >&2
-                  return
-                fi
-              done
+              local ALL_USERS="$3"  # Pre-fetched user list passed as parameter
 
               # Try exact matching first
               USER_ID=$(echo "$ALL_USERS" | jq -r --arg name "$full_name" '.[] | select(.real_name == $name or .profile.real_name == $name) | .id' | head -n1)
@@ -2189,7 +2209,7 @@ jobs:
                   fi
 
                   # Find Slack user ID
-                  SLACK_USER_ID=$(find_slack_user_id "$USER_NAME" "$owner")
+                  SLACK_USER_ID=$(find_slack_user_id "$USER_NAME" "$owner" "$ALL_SLACK_USERS")
 
                   if [ -n "$SLACK_USER_ID" ]; then
                     SLACK_USER_MENTIONS="$SLACK_USER_MENTIONS <@$SLACK_USER_ID>"
@@ -2217,7 +2237,7 @@ jobs:
               fi
             fi
 
-            PR_AUTHOR_SLACK_ID=$(find_slack_user_id "$PR_AUTHOR_FULL_NAME" "$PR_AUTHOR_LOGIN")
+            PR_AUTHOR_SLACK_ID=$(find_slack_user_id "$PR_AUTHOR_FULL_NAME" "$PR_AUTHOR_LOGIN" "$ALL_SLACK_USERS")
             if [ -n "$PR_AUTHOR_SLACK_ID" ]; then
               PR_AUTHOR_MENTION="<@$PR_AUTHOR_SLACK_ID>"
             else
@@ -2239,7 +2259,7 @@ jobs:
               fi
 
               # Find Slack user ID for requester and create mention
-              REQUESTER_SLACK_ID=$(find_slack_user_id "$REQUESTER_NAME" "$REQUESTER_LOGIN")
+              REQUESTER_SLACK_ID=$(find_slack_user_id "$REQUESTER_NAME" "$REQUESTER_LOGIN" "$ALL_SLACK_USERS")
               if [ -n "$REQUESTER_SLACK_ID" ]; then
                 REQUESTER_MENTION="<@$REQUESTER_SLACK_ID>"
                 echo "✅ Found Slack user for requester: $REQUESTER_NAME -> $REQUESTER_SLACK_ID"
@@ -2308,7 +2328,7 @@ jobs:
                     fi
 
                     # Try to find Slack user ID
-                    SLACK_USER_ID=$(find_slack_user_id "$USER_NAME" "$clean_username")
+                    SLACK_USER_ID=$(find_slack_user_id "$USER_NAME" "$clean_username" "$ALL_SLACK_USERS")
 
                     if [ -n "$SLACK_USER_ID" ]; then
                       # Use Slack mention for direct ping
