@@ -143,8 +143,7 @@ class RotarySetup:
         interleaved = position_idxs.shape[1] == self.batch_size_per_row
 
         # If any element of position_idxs is < 0, set it to 0. This is needed for vLLM.
-        if torch.any(position_idxs < 0):
-            position_idxs = torch.maximum(position_idxs, torch.tensor(0))
+        position_idxs = position_idxs.clamp_min(0)
 
         assert torch.min(position_idxs) >= 0, "position idxs must be non-negative"
 

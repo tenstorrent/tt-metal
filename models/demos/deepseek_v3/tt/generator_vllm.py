@@ -66,7 +66,9 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
         last_logits = []
         for user_id in range(num_of_users):
             if lengths[user_id] == 0:
-                last_logits.append(torch.zeros(self.hf_config.vocab_size))
+                last_logits.append(
+                    torch.zeros(tokens.shape[1], self.hf_config.vocab_size, device=tokens.device, dtype=tokens.dtype)
+                )
                 continue
             user_out = self._prefill(tokens[user_id], user_id)
             last_logits.append(user_out.squeeze(0).squeeze(0))  # [1, 1, S, V] -> [S, V]
@@ -76,14 +78,11 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
         return last_logits
 
     def decode_forward(self, *args, **kwargs):
-        kwargs["tokens"] = kwargs["tokens"].squeeze(1)
+        tokens_step = kwargs["tokens"].squeeze(1)
         return_value = (
-            self._decode_step(tokens_step=kwargs["tokens"], positions=kwargs["start_pos"])
-            .squeeze(0)
-            .squeeze(0)
-            .unsqueeze(1)
+            self._decode_step(tokens_step=tokens_step, positions=kwargs["start_pos"]).squeeze(0).squeeze(0).unsqueeze(1)
         )  # [1,1,B,V] -> [B, 1, V]
         return return_value
 
     def allocate_kv_cache(self, kv_cache_shape, dtype, num_layers):
-        return [None] * self.hf_config.num_hidden_layers
+        return [None] * num_layers

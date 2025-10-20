@@ -72,6 +72,7 @@ class DeepseekGenerator:
         self.mesh_device = mesh_device
         self.model_path = str(model_path)
         self.batch_size = min(USERS_PER_ROW, batch_size)
+        self.cache_dir = cache_dir
 
         # Load HF config + tokenizer
         self.hf_config = (
@@ -79,7 +80,6 @@ class DeepseekGenerator:
         )
         # self._ensure_max_seq_len(self.hf_config)
         self.hf_config.max_seq_len = 4096  # TODO: Change this when needed?
-        # self.hf_config.num_hidden_layers = 4  # TODO: Change this when needed?
         # Optional overrides for layer counts before building states
         if override_num_layers is not None:
             try:
