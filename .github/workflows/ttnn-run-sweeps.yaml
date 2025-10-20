@@ -608,7 +608,7 @@ jobs:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     timeout-minutes: 30
-    runs-on: tt-ubuntu-2204-n150-metal
+    runs-on: tt-ubuntu-2204-n150-stable
     steps:
       - name: ⬇️  Setup Job
         uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
@@ -704,13 +704,13 @@ jobs:
             {
               name: "wormhole-n150-sweeps",
               arch: wormhole_b0,
-              runs-on: tt-ubuntu-2204-n150-metal,
+              runs-on: tt-ubuntu-2204-n150-stable,
               tt-smi-cmd: "tt-smi -r"
             },
             # {
             #   name: "Wormhole N300 Sweeps",
             #   arch: wormhole_b0,
-            #   runs-on: tt-ubuntu-2204-n300-metal,
+            #   runs-on: tt-ubuntu-2204-n300-stable,
             #   tt-smi-cmd: "tt-smi-metal -r 0"
             # }
           ]
@@ -781,13 +781,13 @@ jobs:
             {
               name: "wormhole-n150-sweeps",
               arch: wormhole_b0,
-              runs-on: tt-ubuntu-2204-n150-metal,
+              runs-on: tt-ubuntu-2204-n150-stable,
               tt-smi-cmd: "tt-smi -r"
             },
             # {
             #   name: "Wormhole N300 Sweeps",
             #   arch: wormhole_b0,
-            #   runs-on: tt-ubuntu-2204-n300-metal,
+            #   runs-on: tt-ubuntu-2204-n300-stable,
             #   tt-smi-cmd: "tt-smi-metal -r 0"
             # }
           ]
@@ -886,7 +886,7 @@ jobs:
       run:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
-    runs-on: tt-ubuntu-2204-large-metal
+    runs-on: tt-ubuntu-2204-large-stable
     steps:
       - name: ⬇️  Setup Job
         uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115

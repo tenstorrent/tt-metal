@@ -42,18 +42,18 @@ def run_max_pool2d_with_indices(
     torch.manual_seed(0)
     torch.set_printoptions(precision=3, sci_mode=False, linewidth=500, threshold=10000, edgeitems=32)
 
-    act_shape = [in_n, in_c, in_h, in_w]
-    act = torch.randn(act_shape, dtype=torch.bfloat16)
-    act_permuted = torch.permute(act, (0, 2, 3, 1))
+    activation_shape = [in_n, in_c, in_h, in_w]
+    activation = torch.randn(activation_shape, dtype=torch.bfloat16)
+    activation_permuted = torch.permute(activation, (0, 2, 3, 1))
 
     if dtype == ttnn.bfloat8_b:
-        act_shape = (1, 1, in_n * in_h * in_w, in_c)
-        act_reshaped = act_permuted.reshape(act_shape)
-        ttact = ttnn.from_torch(act_reshaped, dtype, layout=ttnn.TILE_LAYOUT)
+        activation_shape = (1, 1, in_n * in_h * in_w, in_c)
+        activation_reshaped = activation_permuted.reshape(activation_shape)
+        ttnn_activation = ttnn.from_torch(activation_reshaped, dtype, layout=ttnn.TILE_LAYOUT)
     else:
-        ttact = ttnn.from_torch(act_permuted, dtype)
+        ttnn_activation = ttnn.from_torch(activation_permuted, dtype)
 
-    ttact_device = ttnn.to_device(ttact, device)
+    ttnn_activation_device = ttnn.to_device(ttnn_activation, device)
     start_time = start_measuring_time()
 
     # Use auto sharding as recommended by colleague for sweep tests
@@ -62,7 +62,7 @@ def run_max_pool2d_with_indices(
 
     # Call max_pool2d with return_indices=True
     output, indices = ttnn.max_pool2d(
-        input_tensor=ttact_device,
+        input_tensor=ttnn_activation_device,
         batch_size=in_n,
         input_h=in_h,
         input_w=in_w,
@@ -86,7 +86,7 @@ def run_max_pool2d_with_indices(
 
     ## reference
     golden_pytorch, golden_indices = torch.nn.functional.max_pool2d(
-        act,
+        activation,
         kernel_size,
         stride=stride,
         padding=padding,
@@ -210,7 +210,7 @@ def run_max_pool2d_with_indices(
             return False, 0, 1
 
     indices_valid, tie_breaking_diffs, actual_errors = validate_indices(
-        act, golden_indices, indices_pytorch, kernel_size, stride, padding, dilation, dtype
+        activation, golden_indices, indices_pytorch, kernel_size, stride, padding, dilation, dtype
     )
 
     # Assert all validations as requested by colleague:

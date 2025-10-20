@@ -73,7 +73,7 @@ TEST(PhysicalDiscovery, TestPhysicalSystemDescriptor) {
     auto my_host_neighbors = physical_system_desc.get_host_neighbors(my_host);
 
     auto unique_chip_ids = cluster.get_unique_chip_ids();
-    std::unordered_map<AsicID, chip_id_t> asic_id_to_chip_id;
+    std::unordered_map<AsicID, ChipId> asic_id_to_chip_id;
 
     for (const auto& [chip_id, asic_id] : unique_chip_ids) {
         asic_id_to_chip_id[AsicID{asic_id}] = chip_id;
