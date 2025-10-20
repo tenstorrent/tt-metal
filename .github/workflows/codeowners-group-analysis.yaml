@@ -1194,17 +1194,10 @@ jobs:
           rm -f "$TEMP_JSON_FILE"
           echo "Comment updated for PR #$PR_NUMBER"
 
-      - name: Direct Ping Notification
+      - name: Fetch Slack users for direct ping
         if: needs.parse-comment.outputs.is-direct-ping == 'true'
+        id: fetch-slack-users-direct
         run: |
-          PR_NUMBER="${{ needs.find-pr.outputs.pr-number }}"
-          DIRECT_PING_USERS="${{ needs.parse-comment.outputs.direct-ping-users }}"
-          AUTHOR_NOTES="${{ needs.parse-comment.outputs.author-notes }}"
-          TOTAL_ADDITIONS="${{ needs.analyze-codeowners.outputs.total-additions || 0 }}"
-          TOTAL_DELETIONS="${{ needs.analyze-codeowners.outputs.total-deletions || 0 }}"
-          REQUESTER_LOGIN="${{ needs.parse-comment.outputs.comment-author }}"
-          REQUESTER_NAME="$REQUESTER_LOGIN"
-
           # Fetch ALL Slack users once (with pagination) to avoid rate limiting
           echo "Fetching all Slack users (this may take a moment)..."
           ALL_SLACK_USERS=""
@@ -1245,6 +1238,40 @@ jobs:
 
           USER_COUNT=$(echo "$ALL_SLACK_USERS" | jq '. | length')
           echo "✅ Successfully fetched $USER_COUNT Slack users across $PAGE_COUNT pages"
+
+          # Save Slack users to file for next step (too large for outputs)
+          echo "$ALL_SLACK_USERS" > /tmp/slack_users_direct.json
+          echo "Saved Slack users to /tmp/slack_users_direct.json"
+
+      - name: Upload Slack users cache for direct ping
+        if: needs.parse-comment.outputs.is-direct-ping == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: slack-users-cache-direct
+          path: /tmp/slack_users_direct.json
+          retention-days: 1
+
+      - name: Download Slack users for direct ping
+        if: needs.parse-comment.outputs.is-direct-ping == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: slack-users-cache-direct
+          path: /tmp
+
+      - name: Send direct ping notification
+        if: needs.parse-comment.outputs.is-direct-ping == 'true'
+        run: |
+          PR_NUMBER="${{ needs.find-pr.outputs.pr-number }}"
+          DIRECT_PING_USERS="${{ needs.parse-comment.outputs.direct-ping-users }}"
+          AUTHOR_NOTES="${{ needs.parse-comment.outputs.author-notes }}"
+          TOTAL_ADDITIONS="${{ needs.analyze-codeowners.outputs.total-additions || 0 }}"
+          TOTAL_DELETIONS="${{ needs.analyze-codeowners.outputs.total-deletions || 0 }}"
+          REQUESTER_LOGIN="${{ needs.parse-comment.outputs.comment-author }}"
+          REQUESTER_NAME="$REQUESTER_LOGIN"
+
+          # Load pre-fetched Slack users
+          ALL_SLACK_USERS=$(cat /tmp/slack_users_direct.json)
+          echo "Loaded $(echo "$ALL_SLACK_USERS" | jq '. | length') Slack users from cache"
 
           # Get full name for requester if available
           echo "DEBUG: REQUESTER_LOGIN='$REQUESTER_LOGIN', PR_AUTHOR_LOGIN='$PR_AUTHOR_LOGIN'"
@@ -1681,6 +1708,10 @@ jobs:
           USER_COUNT=$(echo "$ALL_SLACK_USERS" | jq '. | length')
           echo "✅ Successfully fetched $USER_COUNT Slack users across $PAGE_COUNT pages"
 
+          # Save Slack users to file for later steps (too large for outputs)
+          echo "$ALL_SLACK_USERS" > /tmp/slack_users.json
+          echo "Saved Slack users to /tmp/slack_users.json"
+
           # Output for next steps
           {
             echo "pr-author-login<<EOF"
@@ -1692,10 +1723,14 @@ jobs:
             echo "moreh-team-members<<EOF"
             echo "$MOREH_TEAM_MEMBERS"
             echo "EOF"
-            echo "all-slack-users<<EOF"
-            echo "$ALL_SLACK_USERS"
-            echo "EOF"
           } >> $GITHUB_OUTPUT
+
+      - name: Upload Slack users cache
+        uses: actions/upload-artifact@v4
+        with:
+          name: slack-users-cache
+          path: /tmp/slack_users.json
+          retention-days: 1
 
       - name: Select owners for notification
         if: needs.parse-comment.outputs.is-direct-ping != 'true'
@@ -2083,6 +2118,13 @@ jobs:
             echo "No pending owners to ping"
           fi
 
+      - name: Download Slack users cache
+        if: needs.parse-comment.outputs.is-direct-ping != 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: slack-users-cache
+          path: /tmp
+
       - name: Send Slack notifications
         if: needs.parse-comment.outputs.is-direct-ping != 'true'
         run: |
@@ -2101,8 +2143,8 @@ jobs:
           REQUESTER_LOGIN="${{ needs.parse-comment.outputs.comment-author || '' }}"
           REQUESTER_NAME="$REQUESTER_LOGIN"
 
-          # Get pre-fetched Slack users list (from setup-notifications step)
-          ALL_SLACK_USERS='${{ steps.setup-notifications.outputs.all-slack-users }}'
+          # Load pre-fetched Slack users list from artifact
+          ALL_SLACK_USERS=$(cat /tmp/slack_users.json)
 
           echo "DEBUG Slack: SEND_SLACK='$SEND_SLACK'"
           echo "DEBUG Slack: SELECTED_OWNERS='$SELECTED_OWNERS'"
