@@ -43,7 +43,6 @@ fi
 
 # Look for workflow runs for this commit
 echo "Searching for workflow runs for commit $commit_sha..."
-local runs
 runs="$(gh run list --repo tenstorrent/tt-metal --commit "$commit_sha" --json conclusion,databaseId,workflowName --limit 1000)"
 
 # Check if gh command failed
@@ -58,8 +57,6 @@ if [ -z "$runs" ]; then
   exit 1
 fi
 
-# Look for successful build workflows (prioritize "All post-commit tests")
-local build_run_id
 # First try to find "All post-commit tests" workflow specifically
 build_run_id="$(echo "$runs" | jq -r '.[] | select(.workflowName == "All post-commit tests") | .databaseId' | head -1)"
 
@@ -79,7 +76,6 @@ echo "Found successful build run: $build_run_id"
 echo "Looking for build artifacts..."
 
 # Get list of all artifacts for this run using GitHub API
-local artifacts
 artifacts="$(gh api repos/tenstorrent/tt-metal/actions/runs/"$build_run_id"/artifacts --jq '.artifacts[].name' 2>/dev/null || echo "")"
 
 if [ -z "$artifacts" ]; then
@@ -91,8 +87,8 @@ echo "Available artifacts:"
 echo "$artifacts"
 
 # Search for build artifacts - collect both TTMetal and eager-dist patterns
-local ttmetal_artifact=""
-local eagerdist_artifact=""
+ttmetal_artifact=""
+eagerdist_artifact=""
 
 if [ "$tracy_enabled" -eq 1 ]; then
   # Look for artifacts with profiler in the name
@@ -105,7 +101,7 @@ else
 fi
 
 # Download available artifacts
-local downloaded_any=false
+downloaded_any=false
 
 if [ -n "$ttmetal_artifact" ]; then
   echo "Found TTMetal artifact: $ttmetal_artifact"
@@ -148,8 +144,8 @@ cleanup_artifacts() {
 }
 
 # Process downloaded artifacts
-local ttmetal_extracted=false
-local wheel_installed=false
+ttmetal_extracted=false
+wheel_installed=false
 
 # Process TTMetal artifact (tar.zst extraction)
 if [ -n "$ttmetal_artifact" ]; then
@@ -182,7 +178,6 @@ fi
 if [ -n "$eagerdist_artifact" ]; then
   echo "Processing eager-dist wheel: $eagerdist_artifact..."
   # gh run download automatically extracts the zip, look for wheel file
-  local wheel_file
   wheel_file="$(find . -name "*.whl" -type f | head -1)"
   if [ -n "$wheel_file" ]; then
     echo "Found wheel file: $wheel_file"
