@@ -29,7 +29,11 @@ namespace {
 
 // This reimplements tt::Cluster::get_bus_id() and should be moved to tt::umd::Cluster
 inline uint16_t get_bus_id(const std::unique_ptr<tt::umd::Cluster>& cluster, chip_id_t chip) {
-    return cluster->get_chip(chip)->get_tt_device()->get_pci_device()->get_device_info().pci_bus;
+    // Prefer cached value from cluster descriptor (available for silicon and our simulator/mock descriptors)
+    auto cluster_desc = cluster->get_cluster_description();
+    uint16_t bus_id = cluster_desc->get_bus_id(chip);
+
+    return bus_id;
 }
 
 // This reimplements tt::Cluster::get_arch() and should be moved to tt::umd::Cluster
