@@ -793,8 +793,8 @@ jobs:
             AUTHOR_NOTES="${{ needs.parse-comment.outputs.author-notes }}"
           fi
 
-          # Use #tt-metal-pr-review-requests Slack channel
-          SLACK_CHANNEL="C07G47JMQHM"
+          # Use private testing Slack channel
+          SLACK_CHANNEL="C09HT5VSXRB"
 
           echo "Using parameters: CREATE_NEW=$CREATE_NEW, PING_OWNERS=$PING_OWNERS, SEND_SLACK=$SEND_SLACK, SLACK_CHANNEL=$SLACK_CHANNEL"
 
@@ -1262,8 +1262,8 @@ jobs:
             echo "DEBUG: Requester and PR author are the same user (or REQUESTER_LOGIN is empty)"
           fi
 
-          # Use #tt-metal-pr-review-requests Slack channel
-          SLACK_CHANNEL="C07G47JMQHM"
+          # Use private testing Slack channel
+          SLACK_CHANNEL="C09HT5VSXRB"
 
           # GitHub team to Slack group mapping (needed for author notes processing)
           get_slack_group_id() {
@@ -1956,8 +1956,8 @@ jobs:
                          "$PR_API")
           PR_TITLE=$(echo "$PR_DATA" | jq -r '.title')
 
-          # Use #tt-metal-pr-review-requests Slack channel
-          SLACK_CHANNEL="C07G47JMQHM"
+          # Use private testing Slack channel
+          SLACK_CHANNEL="C09HT5VSXRB"
 
           # Define API endpoint
           COMMENTS_API="https://api.github.com/repos/${{ github.repository }}/issues/$PR_NUMBER/comments"
@@ -2081,8 +2081,8 @@ jobs:
                          "$PR_API")
           PR_TITLE=$(echo "$PR_DATA" | jq -r '.title')
 
-          # Use #tt-metal-pr-review-requests Slack channel
-          SLACK_CHANNEL="C07G47JMQHM"
+          # Use private testing Slack channel
+          SLACK_CHANNEL="C09HT5VSXRB"
 
           # GitHub team to Slack group mapping (needed for author notes processing)
           get_slack_group_id() {
