@@ -9,6 +9,7 @@
 #include "ttnn/operations/embedding/device/embedding_device_operation.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp"
+#include <ttnn/operations/copy/typecast/typecast.hpp>
 
 namespace ttnn::operations::embedding {
 
@@ -70,6 +71,9 @@ ttnn::Tensor EmbeddingOperation::invoke(
         embeddings = ttnn::reshape(embeddings, Shape({batch_size, sentence_size, hidden_embedding_dim}));
     }
     embeddings = ttnn::to_layout(embeddings, layout.value_or(weight_arg.layout()));
+    if (embeddings.layout() == ttnn::TILE_LAYOUT) {
+        embeddings = ttnn::typecast(embeddings, dtype.value_or(weight.dtype()));
+    }
     return embeddings;
 }
 
