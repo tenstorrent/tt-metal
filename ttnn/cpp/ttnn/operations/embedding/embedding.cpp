@@ -52,6 +52,8 @@ ttnn::Tensor EmbeddingOperation::invoke(
             }
         } else if (weight_arg.layout() == ttnn::TILE_LAYOUT) {
             fused_tilized = true;
+        } else {
+            TT_FATAL(!dtype.has_value(), "Can only typecast output embeddings when producing TILE_LAYOUT output");
         }
     }
 
@@ -61,7 +63,7 @@ ttnn::Tensor EmbeddingOperation::invoke(
                               .tilized = fused_tilized,
                               .embeddings_type = embeddings_type,
                               .pad_token = pad_token,
-                              .output_dtype = dtype.value_or(weight.dtype())},
+                          },
                           {input_tensor, weight})
                           .at(0);
     // Don't include batch_size if there was none
