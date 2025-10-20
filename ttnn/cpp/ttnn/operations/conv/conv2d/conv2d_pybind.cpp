@@ -95,7 +95,7 @@ void py_bind_conv2d(py::module& module) {
             The :attr: `weights_tensor` on the host, supports the following data type and layout:
 
             .. list-table:: weights_tensor (host)
-                :heaer-rows: 1
+                :header-rows: 1
 
                 * - dtype
                   - layout
