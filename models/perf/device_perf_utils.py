@@ -292,7 +292,7 @@ def check_device_perf_results(fname, expected_cols, check_cols):
 
 def run_model_device_perf_test(
     command: str,
-    expected_device_perf_cycles_per_iteration: float,
+    expected_device_perf_ns_per_iteration: float,
     subdir: str,
     model_name: str,
     num_iterations: int = 1,
@@ -309,7 +309,7 @@ def run_model_device_perf_test(
 
     Args:
         command (str): The command to execute for running the model.
-        expected_device_perf_cycles_per_iteration (float): Expected device kernel duration in nanoseconds.
+        expected_device_perf_ns_per_iteration (float): Expected device kernel duration in nanoseconds.
         subdir (str): Subdirectory where performance logs will be stored.
         model_name (str): Name of the model being tested.
         num_iterations (int, optional): Number of iterations to run. Defaults to 1.
@@ -326,7 +326,7 @@ def run_model_device_perf_test(
     post_processed_results = run_device_perf(
         command, subdir=subdir, num_iterations=num_iterations, cols=cols, batch_size=batch_size
     )
-    expected_perf_cols = {inference_time_key: expected_device_perf_cycles_per_iteration}
+    expected_perf_cols = {inference_time_key: expected_device_perf_ns_per_iteration}
     expected_results = check_device_perf(
         post_processed_results, margin=margin, expected_perf_cols=expected_perf_cols, assert_on_fail=True
     )
