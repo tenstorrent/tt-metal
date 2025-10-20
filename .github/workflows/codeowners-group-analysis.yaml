@@ -354,6 +354,7 @@ jobs:
       codeowners-teams: ${{ steps.analyze.outputs.codeowners-teams }}
       codeowners-individuals: ${{ steps.analyze.outputs.codeowners-individuals }}
       changed-files: ${{ steps.analyze.outputs.changed-files }}
+      files-without-owners: ${{ steps.analyze.outputs.files-without-owners }}
       total-additions: ${{ steps.get-files.outputs.total-additions }}
       total-deletions: ${{ steps.get-files.outputs.total-deletions }}
       changed-files-count: ${{ steps.get-files.outputs.changed-files-count }}
@@ -538,6 +539,7 @@ jobs:
               team_groups = set()
               team_patterns = {}   # team -> list of patterns (for aggregating files)
               processed_patterns = set()  # Track patterns we've already processed
+              files_without_owners = []  # Track files that have no codeowners
 
               # First pass: find all unique patterns that match any changed files
               for file_path in changed_files:
@@ -557,16 +559,17 @@ jobs:
                           owners_list = best_match[0]  # First element is the owners list
                           pattern = best_match[2]  # Third element is the pattern
 
-                          # Only process this pattern if we haven't seen it before
+                          # Initialize pattern data structures if this is the first time seeing this pattern
+                          if pattern not in pattern_groups:
+                              pattern_groups[pattern] = set()
+                              pattern_files[pattern] = []
+
+                          # Always add this file to the pattern's file list
+                          pattern_files[pattern].append(file_path)
+
+                          # Only process owners if we haven't seen this pattern before
                           if pattern not in processed_patterns:
                               processed_patterns.add(pattern)
-
-                              if pattern not in pattern_groups:
-                                  pattern_groups[pattern] = set()
-                                  pattern_files[pattern] = []
-
-                              # Add this file to the pattern's file list
-                              pattern_files[pattern].append(file_path)
 
                               for owner_type, owner in owners_list:
                                   if owner_type == "TEAM":
@@ -584,6 +587,7 @@ jobs:
                                       pattern_groups[pattern].add((username, full_name))
                   else:
                       print(f"No matches found for {file_path}")
+                      files_without_owners.append(file_path)
 
               # Create output - teams are separate, individuals are grouped by pattern
               teams_list = []
@@ -628,12 +632,14 @@ jobs:
               print(f"Found {len(team_groups)} team groups and {len(pattern_groups)} pattern groups")
               print(f"Teams: {teams_list}")
               print(f"Individuals: {individuals_list}")
+              print(f"Files without owners: {len(files_without_owners)}")
 
               return {
                   "all_groups": all_groups,
                   "teams": teams_list,
                   "individuals": individuals_list,
                   "changed_files": "\n".join(changed_files),
+                  "files_without_owners": "\n".join(files_without_owners) if files_without_owners else "",
               }
 
 
@@ -676,6 +682,10 @@ jobs:
                       f.write("codeowners-individuals<<EOF\n")
                       f.write(result["individuals"])
                       f.write("\nEOF\n")
+
+                      f.write("files-without-owners<<EOF\n")
+                      f.write(result["files_without_owners"])
+                      f.write("\nEOF\n")
               else:
                   # When run outside GitHub Actions, print results to stdout
                   print("\n" + "=" * 50)
@@ -707,6 +717,7 @@ jobs:
           # Handle cases where analyze-codeowners job might be skipped (direct ping)
           TEAMS="${{ needs.analyze-codeowners.outputs.codeowners-teams || '' }}"
           INDIVIDUALS="${{ needs.analyze-codeowners.outputs.codeowners-individuals || '' }}"
+          FILES_WITHOUT_OWNERS="${{ needs.analyze-codeowners.outputs.files-without-owners || '' }}"
           APPROVED_REVIEWERS="${{ needs.get-reviews.outputs.approved-reviewers }}"
           TOTAL_ADDITIONS="${{ needs.analyze-codeowners.outputs.total-additions || 0 }}"
           TOTAL_DELETIONS="${{ needs.analyze-codeowners.outputs.total-deletions || 0 }}"
@@ -1087,6 +1098,28 @@ jobs:
           # Add helpful tip if triggered via comment and ping was not used
           if [ "${{ github.event_name }}" = "issue_comment" ] && [ "$PING_OWNERS" = "false" ] && [ "$SEND_SLACK" = "false" ]; then
             COMMENT="$COMMENT\n\n---\n💡 **Tip:** Use \\\`/codeowners ping\\\` to notify pending owners via Slack, or \\\`/ping @username\\\` to ping specific users."
+          fi
+
+          # Add section for files without codeowners if any exist
+          if [ -n "$FILES_WITHOUT_OWNERS" ]; then
+            COMMENT="$COMMENT\n\n---\n\n### ⚠️ Files Without CodeOwners\n\nThe following files have no designated code owners:"
+
+            # Build file list with clickable links
+            FILES_WITHOUT_OWNERS_LIST=""
+            IFS=$'\n' read -ra FILES_ARRAY <<< "$FILES_WITHOUT_OWNERS"
+            for file in "${FILES_ARRAY[@]}"; do
+              if [ -n "$file" ]; then
+                # Escape special characters for markdown
+                escaped_file=$(echo "$file" | sed 's/\*/\\*/g' | sed 's/_/\\_/g')
+                # Create clickable link to file in PR
+                file_hash=$(echo -n "$file" | sha256sum | cut -d' ' -f1)
+                file_url="${{ github.server_url }}/${{ github.repository }}/pull/$PR_NUMBER/files#diff-$file_hash"
+                FILES_WITHOUT_OWNERS_LIST="$FILES_WITHOUT_OWNERS_LIST\n- [<code>$escaped_file</code>]($file_url)"
+              fi
+            done
+
+            COMMENT="$COMMENT$FILES_WITHOUT_OWNERS_LIST"
+            COMMENT="$COMMENT\n\n💡 **Suggestion:** Consider adding these files to the CODEOWNERS file for better review coverage."
           fi
 
             # Output comment for next step
