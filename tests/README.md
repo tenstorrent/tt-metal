@@ -130,10 +130,10 @@ export POSTGRES_USER="your-username"
 export POSTGRES_PASSWORD="your-password"
 
 # Run a single test file
-python tests/ttnn/unit_test_runner.py tests/ttnn/unit_tests/operations/test_concat.py
+python tests/ttnn/unit_test_runner.py tests/ttnn/unit_tests/operations/data_movement/test_concat.py
 
 # Run multiple test files
-python tests/ttnn/unit_test_runner.py "tests/ttnn/unit_tests/operations/test_concat.py,tests/ttnn/unit_tests/operations/test_add.py"
+python tests/ttnn/unit_test_runner.py "tests/ttnn/unit_tests/operations/data_movement/test_concat.py,tests/ttnn/unit_tests/operations/eltwise/test_add.py"
 
 # Run all tests in a directory
 python tests/ttnn/unit_test_runner.py tests/ttnn/unit_tests/operations/
