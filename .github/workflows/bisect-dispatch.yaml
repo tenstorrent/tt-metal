@@ -291,6 +291,9 @@ jobs:
           if [[ "${{ inputs.nd-mode }}" == 'true' ]]; then
             bisect_args+=(-n)
           fi
+          if [[ "${{ inputs.download-artifacts }}" == 'true' ]]; then
+            bisect_args+=(-a)
+          fi
 
           bisect_args+=(-s "$SCRIPT_PATH")
 
