@@ -83,6 +83,7 @@ class TTSampling(LightweightModule):
             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(None, None), mesh_shape=self.args.cluster_shape),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        self.warmup_done = False
 
     def reset_params(self, k, p, temp):
         self.k_tensor_new = ttnn.from_torch(
@@ -114,6 +115,10 @@ class TTSampling(LightweightModule):
         seed: int = 0,
         tt_out_tok: ttnn.Tensor = None,
     ):
+        if self.warmup_done is False:
+            self.warmup_done = True
+            self.forward(x, seed=42, tt_out_tok=tt_out_tok)
+
         x_bf16 = ttnn.typecast(x, dtype=ttnn.bfloat16, sub_core_grids=self.args.sub_core_grids)
 
         # Local top k
