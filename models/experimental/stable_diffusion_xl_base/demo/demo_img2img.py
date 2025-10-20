@@ -92,14 +92,17 @@ def run_demo_inference(
     if encoders_on_device:
         tt_sdxl.compile_text_encoding()
 
-    images = tt_sdxl.torch_pipeline.image_processor.preprocess(
-        images, height=1024, width=1024, crops_coords=None, resize_mode="default"
-    )
-    images = images.to(dtype=torch.float32)
-    old_imgs = images.clone()
+    images = [
+        tt_sdxl.torch_pipeline.image_processor.preprocess(
+            image, height=1024, width=1024, crops_coords=None, resize_mode="default"
+        ).to(dtype=torch.float32)
+        for image in images
+    ]
+
+    images = torch.cat(images, dim=0)  # [batch_size, 3, 1024, 1024]
 
     tt_latents, tt_prompt_embeds, tt_add_text_embeds = tt_sdxl.generate_input_tensors(
-        torch_image=images,
+        torch_image=torch.randn(batch_size, 3, 1024, 1024),
         all_prompt_embeds_torch=torch.randn(batch_size, 2, MAX_SEQUENCE_LENGTH, CONCATENATED_TEXT_EMBEDINGS_SIZE),
         torch_add_text_embeds=torch.randn(batch_size, 2, TEXT_ENCODER_2_PROJECTION_DIM),
     )
@@ -118,7 +121,6 @@ def run_demo_inference(
 
     out_images = []
     logger.info("Starting ttnn inference...")
-    images = old_imgs
     for iter in range(len(prompts) // batch_size):
         profiler.start("end_to_end_generation")
         logger.info(
@@ -139,7 +141,7 @@ def run_demo_inference(
 
         tt_sdxl.set_num_inference_steps(num_inference_steps)
         tt_latents, tt_prompt_embeds, tt_add_text_embeds = tt_sdxl.generate_input_tensors(
-            torch_image=images,  # [iter: iter + 1],
+            torch_image=images[iter * batch_size : (iter + 1) * batch_size],
             all_prompt_embeds_torch=all_prompt_embeds_torch,
             torch_add_text_embeds=torch_add_text_embeds,
             start_latent_seed=0,
@@ -290,7 +292,7 @@ def test_demo(
         mesh_device,
         is_ci_env,
         prompt,
-        img,
+        [img],  # , img],
         negative_prompt,
         num_inference_steps,
         vae_on_device,

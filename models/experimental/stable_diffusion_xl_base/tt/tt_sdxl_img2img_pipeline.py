@@ -86,30 +86,25 @@ class TtSDXLImg2ImgPipeline(TtSDXLPipeline):
             start_latent_seed, int
         ), "start_latent_seed must be an integer or None"
 
-        img_latents_list = []
-        for index in range(self.batch_size):
-            if start_latent_seed is not None:
-                torch.manual_seed(start_latent_seed if fixed_seed_for_batch else start_latent_seed + index)
-            img_latents = prepare_image_latents(
-                self.torch_pipeline,
-                self,
-                1,
-                num_channels_image_latents,
-                height,
-                width,
-                self.cpu_device,
-                all_prompt_embeds_torch.dtype,
-                torch_image,
-                False,  # No max strength path in ref img2img implementation
-                True,  # Make this configurable
-                None,  # passed in latents
-            )
-            B, C, H, W = img_latents.shape  # 1, 4, 128, 128
-            img_latents = torch.permute(img_latents, (0, 2, 3, 1))  # [1, H, W, C]
-            img_latents = img_latents.reshape(B, 1, H * W, C)  # [1, 1, H*W, C]
-            img_latents_list.append(img_latents)
-
-        tt_img_latents = torch.cat(img_latents_list, dim=0)  # [batch_size, 1, H*W, C]
+        if start_latent_seed is not None:
+            torch.manual_seed(start_latent_seed if fixed_seed_for_batch else start_latent_seed)
+        img_latents = prepare_image_latents(
+            self.torch_pipeline,
+            self,
+            torch_image.shape[0],
+            num_channels_image_latents,
+            height,
+            width,
+            self.cpu_device,
+            all_prompt_embeds_torch.dtype,
+            torch_image,
+            False,  # No max strength path in ref img2img implementation
+            True,  # Make this configurable
+            None,  # passed in latents
+        )
+        B, C, H, W = img_latents.shape  # 1, 4, 128, 128
+        img_latents = torch.permute(img_latents, (0, 2, 3, 1))  # [1, H, W, C]
+        tt_img_latents = img_latents.reshape(B, 1, H * W, C)  # [1, 1, H*W, C]
 
         self.extra_step_kwargs = self.torch_pipeline.prepare_extra_step_kwargs(None, 0.0)
         text_encoder_projection_dim = self.torch_pipeline.text_encoder_2.config.projection_dim

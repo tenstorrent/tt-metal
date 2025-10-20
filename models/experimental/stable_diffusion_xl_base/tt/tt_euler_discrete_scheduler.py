@@ -80,7 +80,8 @@ class TtEulerDiscreteScheduler(LightweightModule):
 
     def set_begin_index(self, begin_index: int):
         self.begin_index = begin_index
-        self.set_step_index(self.begin_index)
+        if self.begin_index < len(self.sigmas) - 1:
+            self.set_step_index(self.begin_index)
 
     def inc_step_index(self):
         self.set_step_index(self.step_index + 1)

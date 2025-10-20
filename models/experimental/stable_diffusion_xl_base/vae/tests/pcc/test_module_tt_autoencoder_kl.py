@@ -71,7 +71,7 @@ def test_vae(device, input_shape, vae_block, pcc, is_ci_env, reset_seeds, is_ci_
     if vae_block == "encoder":
         output_tensor = tt_vae.encode(ttnn_input_tensor)
 
-        output_tensor = output_tensor.latent_dist.sample()
+        output_tensor = output_tensor.latent_dist[0].sample()
         torch_output_tensor = torch_output_tensor.sample()
     else:
         output_tensor, [C, H, W] = tt_vae.decode(ttnn_input_tensor, [B, C, H, W])

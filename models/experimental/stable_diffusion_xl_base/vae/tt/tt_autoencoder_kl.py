@@ -69,7 +69,9 @@ class TtAutoencoderKL(LightweightModule):
             device=self.device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.device, list(self.device.shape), dims=(None, 0)),
         )
+        B = hidden_states.shape[0]
 
         hidden_states, [C, H, W] = self.encoder(hidden_states, [B, C, H, W])
         hidden_states = ttnn.linear(
@@ -79,10 +81,12 @@ class TtAutoencoderKL(LightweightModule):
         )
 
         h = ttnn.to_torch(hidden_states, mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0)).float()
+        B = h.shape[0]
         h = h.reshape(B, H, W, C)
         h = torch.permute(h, (0, 3, 1, 2))
 
-        posterior = DiagonalGaussianDistribution(h)
+        h = h.chunk(B, dim=0)
+        posterior = [DiagonalGaussianDistribution(h_i) for h_i in h]
         return AutoencoderKLOutput(latent_dist=posterior)
 
     def decode(self, hidden_states, input_shape):

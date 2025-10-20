@@ -487,12 +487,11 @@ def prepare_image_latents(
     assert image is not None, "Image is not provided"
     assert image.shape[1] == 3, "Image is not 3 channels"
     assert add_noise is True, "Add noise should be True"
-    assert batch_size == 1, "Batch size should be 1"
     assert torch_pipeline.vae_scale_factor == 8, "Vae scale factor should be 8"
     assert latents is None, "Latents are not supported for inpainting pipeline atm"
 
     shape = (
-        batch_size,
+        1,
         num_channels_latents,
         int(height) // torch_pipeline.vae_scale_factor,
         int(width) // torch_pipeline.vae_scale_factor,
@@ -502,25 +501,44 @@ def prepare_image_latents(
     image = image.to(device=cpu_device, dtype=dtype)
 
     if tt_pipeline.pipeline_config.vae_on_device == True:
-        image_latents = tt_pipeline.tt_vae.encode(image).latent_dist.sample()
+        image_latents = [latent.sample() for latent in tt_pipeline.tt_vae.encode(image).latent_dist]
+        image_latents = torch.cat(image_latents, dim=0)
     else:
         image_latents = torch_pipeline.vae.encode(image).latent_dist.sample()
     image_latents = tt_pipeline.torch_pipeline.vae.config.scaling_factor * image_latents
     image_latents = image_latents.repeat(batch_size // image_latents.shape[0], 1, 1, 1)
 
     torch_noise = torch.randn(shape, generator=None, device=cpu_device, dtype=dtype)
+    torch_noise = torch_noise.repeat(batch_size // torch_noise.shape[0], 1, 1, 1)
     if is_strength_max:
         return torch_noise * tt_pipeline.tt_scheduler.init_noise_sigma
 
     tt_noise = ttnn.from_torch(
-        torch_noise, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=tt_pipeline.ttnn_device
+        torch_noise,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=tt_pipeline.ttnn_device,
+        mesh_mapper=ttnn.ShardTensor2dMesh(
+            tt_pipeline.ttnn_device, list(tt_pipeline.ttnn_device.shape), dims=(None, 0)
+        ),
     )
     tt_image_latents = ttnn.from_torch(
-        image_latents, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=tt_pipeline.ttnn_device
+        image_latents,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=tt_pipeline.ttnn_device,
+        mesh_mapper=ttnn.ShardTensor2dMesh(
+            tt_pipeline.ttnn_device, list(tt_pipeline.ttnn_device.shape), dims=(None, 0)
+        ),
     )
     latents = tt_pipeline.tt_scheduler.add_noise(tt_image_latents, tt_noise)
 
-    return ttnn.to_torch(latents)
+    return ttnn.to_torch(
+        latents,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(
+            tt_pipeline.ttnn_device, dims=(-1, 0), mesh_shape=tuple(tt_pipeline.ttnn_device.shape)
+        ),
+    )
 
 
 # adapted from sdxl inpaint pipeline: diffusers/pipelines/stable_diffusion_xl/pipeline_stable_diffusion_xl_inpaint.py
