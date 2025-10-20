@@ -109,21 +109,25 @@ class CollateFn:
         self.padded_vocab_size = padded_vocab_size
 
     def collate_fn(self, batch):
-        X = batch["question"]
-        Y = batch["answer"]
+        # X = [sample['question'] for sample in batch]
+        # Y = [sample['answer'] for sample in batch]
+        X = [sample[0] for sample in batch]
+        Y = [sample[1] for sample in batch]
 
         batch_size = len(X)
 
         # Batch tokenize questions and answers
-        x_tokens_batch = self.tokenizer(X, return_tensors="np", add_special_tokens=False)["input_ids"]
-        y_tokens_batch = self.tokenizer(Y, return_tensors="np", add_special_tokens=False)["input_ids"]
+        # x_tokens_batch = self.tokenizer(X, return_tensors="np", add_special_tokens=False)["input_ids"]
+        # y_tokens_batch = self.tokenizer(Y, return_tensors="np", add_special_tokens=False)["input_ids"]
 
         data_np = np.full((batch_size, self.max_sequence_length), self.tokenizer.eos_token_id, dtype=np.uint32)
         mask_lens = []
 
         for i in range(batch_size):
-            x_tokens = x_tokens_batch[i]
-            y_tokens = y_tokens_batch[i]
+            # x_tokens = x_tokens_batch[i]
+            # y_tokens = y_tokens_batch[i]
+            x_tokens = X[i]
+            y_tokens = Y[i]
 
             # Concatenate question + answer
             combined_length = len(x_tokens) + len(y_tokens)
@@ -196,72 +200,15 @@ def get_batch_generator(dataloader, batch_size, max_sequence_length, padded_voca
     
     while True:
         for batch in dataloader:
-            # batch = next(iter(dataloader))
-            X = batch["question"]
-            Y = batch["answer"]
+            X_np, y_np, logits_mask_np, logits_add_mask_np, scaler_np = batch
 
-            # Batch tokenize questions and answers
-            x_tokens_batch = tokenizer(X, return_tensors="np", add_special_tokens=False)["input_ids"]
-            y_tokens_batch = tokenizer(Y, return_tensors="np", add_special_tokens=False)["input_ids"]
-
-            data_np = np.full((batch_size, max_sequence_length), tokenizer.eos_token_id, dtype=np.uint32)
-            mask_lens = []
-
-            for i in range(batch_size):
-                x_tokens = x_tokens_batch[i]
-                y_tokens = y_tokens_batch[i]
-
-                # Concatenate question + answer
-                combined_length = len(x_tokens) + len(y_tokens)
-                if combined_length > max_sequence_length:
-                    # Truncate if too long, prioritizing keeping the answer
-                    available_space = max_sequence_length - len(y_tokens)
-                    if available_space > 0:
-                        x_tokens = x_tokens[:available_space]
-                        data_np[i, : len(x_tokens)] = x_tokens
-                        data_np[i, len(x_tokens) : len(x_tokens) + len(y_tokens)] = y_tokens
-                    else:
-                        # If answer is too long, just use the answer
-                        data_np[i, :max_sequence_length] = y_tokens[:max_sequence_length]
-                        x_tokens = []
-                else:
-                    # Normal case: concatenate question + answer
-                    data_np[i, : len(x_tokens)] = x_tokens
-                    data_np[i, len(x_tokens) : len(x_tokens) + len(y_tokens)] = y_tokens
-
-                mask_lens.append(len(x_tokens))
-
-            # Shape: [batch_size, 1, 1, max_sequence_length]
-            X_np = np.expand_dims(data_np, axis=(1, 2))
-
-            y_np = np.full(
-                (batch_size, max_sequence_length), tokenizer.eos_token_id, dtype=np.uint32
-            )  # Shape: [batch, seq_len]
-            y_np[:, 0:-1] = X_np[:, 0, 0, 1:]  # Shift left by 1
-
-            logits_mask_np = np.ones((batch_size, 1, max_sequence_length, padded_vocab_size), dtype=np.float32)
-
-            for i, mask_len in enumerate(mask_lens):
-                # Mask out the question tokens (first mask_len tokens)
-                logits_mask_np[i, :, : mask_len - 1, :] = 0.0
-                # Also mask padding tokens
-                pad_positions = X_np[i, 0, 0, :] == tokenizer.eos_token_id
-                logits_mask_np[i, :, pad_positions, :] = 0.0
-
-            scaler_np = logits_mask_np[..., 0].sum(axis=-1, keepdims=True)  # Shape: [batch_size, 1, 1]
-            scaler_np = max_sequence_length / scaler_np
-            scaler_np = np.expand_dims(scaler_np, axis=-1)
-            scaler_np = np.repeat(scaler_np, max_sequence_length, axis=2)
-
-            logits_add_mask_np = np.zeros_like(logits_mask_np, dtype=np.float32)
-
-            # Find positions where mask is 0 (question tokens)
-            mask_positions = logits_mask_np[:, 0, :, 0] == 0.0  # Shape: [batch_size, max_sequence_length]
-
-            # Use advanced indexing to set the corresponding target token positions to 1e3
-            batch_indices, seq_indices = np.where(mask_positions)
-            target_tokens = y_np[batch_indices, seq_indices]
-            logits_add_mask_np[batch_indices, 0, seq_indices, target_tokens] = 1e3
+            # X_np_size = X_np.shape[0] * X_np.shape[1] * X_np.shape[2] * X_np.shape[3] * X_np.itemsize
+            # y_np_size = y_np.shape[0] * y_np.shape[1] * y_np.itemsize
+            # logits_mask_np_size = logits_mask_np.shape[0] * logits_mask_np.shape[1] * logits_mask_np.shape[2] * logits_mask_np.shape[3] * logits_mask_np.itemsize
+            # logits_add_mask_np_size = logits_add_mask_np.shape[0] * logits_add_mask_np.shape[1] * logits_add_mask_np.shape[2] * logits_add_mask_np.shape[3] * logits_add_mask_np.itemsize
+            # scaler_np_size = scaler_np.shape[0] * scaler_np.shape[1] * scaler_np.shape[2] * scaler_np.itemsize
+            # print(f"X_np_size: {X_np_size}, y_np_size: {y_np_size}, logits_mask_np_size: {logits_mask_np_size}, logits_add_mask_np_size: {logits_add_mask_np_size}, scaler_np_size: {scaler_np_size}")
+            # exit(0)
 
             logits_add_mask = ttml.autograd.Tensor.from_numpy(
                 logits_add_mask_np, ttml.Layout.TILE, ttml.autograd.DataType.BFLOAT16, mapper
@@ -273,9 +220,21 @@ def get_batch_generator(dataloader, batch_size, max_sequence_length, padded_voca
 
             scaler = ttml.autograd.Tensor.from_numpy(scaler_np, ttml.Layout.TILE, ttml.autograd.DataType.BFLOAT16, mapper)
 
+
+            # logits_add_mask = ttml.autograd.Tensor.from_numpy(
+            #     logits_add_mask_np, ttml.Layout.TILE, ttml.autograd.DataType.BFLOAT16, mapper
+            # )
+
+            # logits_mask = ttml.autograd.Tensor.from_numpy(
+            #     logits_mask_np, ttml.Layout.TILE, ttml.autograd.DataType.BFLOAT16, mapper
+            # )
+
+            # scaler = ttml.autograd.Tensor.from_numpy(scaler_np, ttml.Layout.TILE, ttml.autograd.DataType.BFLOAT16, mapper)
+
             X = ttml.autograd.Tensor.from_numpy(X_np, ttml.Layout.ROW_MAJOR, ttml.autograd.DataType.UINT32, mapper)
             y = ttml.autograd.Tensor.from_numpy(y_np, ttml.Layout.ROW_MAJOR, ttml.autograd.DataType.UINT32, mapper)
 
+            # yield (X, y, logits_mask, logits_add_mask, scaler)
             yield (X, y, logits_mask, logits_add_mask, scaler)
 
 
@@ -466,8 +425,34 @@ def get_loss_over_devices(loss):
     loss_numpy = loss.to_numpy(composer=composer)
     return loss_numpy.mean()
 
+def tokenize_dataset(data, tokenizer):
+    X = [sample['question'] for sample in data]
+    y = [sample['answer'] for sample in data]
+
+    X = tokenizer(X, return_tensors="np", add_special_tokens=False)["input_ids"]
+    y = tokenizer(y, return_tensors="np", add_special_tokens=False)["input_ids"]
+    return X, y
+
+
+class TokenizedDataset(torch.utils.data.Dataset):
+    def __init__(self, X, y):
+        self.X = X
+        self.y = y
+        self.len = len(X)
+
+    def __len__(self):
+        return self.len
+    
+    def __getitem__(self, idx):
+        return self.X[idx], self.y[idx]
+
+
+
+
 def train():
     print("Loading tokenizer and config...")
+    os.environ["TOKENIZERS_PARALLELISM"] = "true"
+    # Disable tokenizer parallelism to avoid conflicts with DataLoader multiprocessing
     tokenizer = AutoTokenizer.from_pretrained("TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T")
     yaml_config = get_config(CONFIG)
 
@@ -542,11 +527,19 @@ def train():
     training_data = datasets.load_dataset("gsm8k", "main", split="train")
     testing_data = datasets.load_dataset("gsm8k", "main", split="test")
 
+    training_data_x, training_data_y = tokenize_dataset(training_data, tokenizer)
+    testing_data_x, testing_data_y = tokenize_dataset(testing_data, tokenizer)
+    training_data = TokenizedDataset(training_data_x, training_data_y)
+    testing_data = TokenizedDataset(testing_data_x, testing_data_y)
+
     training_dataloader = DataLoader(
         training_data,
         batch_size=batch_size,
         shuffle=True,  # Shuffle the dataset for each epoch
         drop_last=True,
+        num_workers=0,
+        collate_fn=CollateFn(tokenizer, max_sequence_length, padded_vocab_size),
+        # persistent_workers=True,
     )
 
     num_devices = device_config.total_devices()
@@ -558,6 +551,9 @@ def train():
         batch_size=VALIDATION_BATCH_SIZE_PER_DEVICE * num_devices,
         shuffle=False,  # Disable shuffling for validation
         drop_last=True,
+        num_workers=0,
+        collate_fn=CollateFn(tokenizer, max_sequence_length, padded_vocab_size),
+        # persistent_workers=True,
     )
 
     # Setup training
@@ -582,6 +578,18 @@ def train():
     train_batch_generator = get_batch_generator(
         training_dataloader, batch_size, max_sequence_length, padded_vocab_size, tokenizer, device_config
     )
+
+    from time import time
+
+    iter_dl = iter(train_batch_generator)
+    for _ in range(1000):
+        before = time()
+        X, y, logits_mask, logits_add_mask, loss_scaler = next(iter_dl)
+        after = time()
+        print(f"Time taken: {after - before} seconds")
+
+    exit(0)
+
     val_batch_generator = get_batch_generator(testing_dataloader, VALIDATION_BATCH_SIZE_PER_DEVICE * num_devices, max_sequence_length, padded_vocab_size, tokenizer, device_config)
 
     tokens_per_batch = batch_size * max_sequence_length
@@ -614,7 +622,6 @@ def train():
     last_val_loss = 0
     accum_steps = training_config.gradient_accumulation_steps
 
-    from time import time
 
     # ========== Training Loop ===========
     for opt_step in bar:
