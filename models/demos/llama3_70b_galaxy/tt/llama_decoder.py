@@ -151,7 +151,9 @@ class TtTransformerBlock(LightweightModule):
 
         else:
             # In subsequent Layers we take the h tensor from before and modify it in place
-            attn_in_sharded, _ = self.attention_norm(x, h, mode)
+            h = ttnn.add(x, h)
+            attn_in_sharded, _ = self.attention_norm(h, None, mode)
+
         attn_out = self.attention.forward(
             attn_in_sharded,
             current_pos,
@@ -170,12 +172,16 @@ class TtTransformerBlock(LightweightModule):
             ff_in_sharded, _ = self.ff_norm(h, None, mode)
 
         if mode == "decode":
-            ff_in_sharded, _ = self.ff_norm(attn_out, h, mode)
+            # ff_in_sharded, _ = self.ff_norm(attn_out, h, mode)
+            h = ttnn.add(attn_out, h)
+            ff_in_sharded, _ = self.ff_norm(h, None, mode)
             attn_out.deallocate(True)
 
         # MLP takes replicated inputs and produces fractured outputs
         ff_out = self.feed_forward.forward(ff_in_sharded, mode)
         if self.layer_num == self.n_layers - 1 or mode == "prefill":
+            if self.args.qk_norm:
+                h = ttnn.to_memory_config(h, skip_mem_cfg)
             out = ttnn.add(ff_out, h, memory_config=skip_mem_cfg)  # , dtype=ttnn.bfloat16)
             if mode == "decode":
                 ff_out.deallocate(True)

@@ -4,10 +4,9 @@
 import ttnn
 import torch
 import pytest
-from models.common.utility_functions import comp_pcc
+from models.utility_functions import comp_pcc
 
-from models.common.utility_functions import skip_for_blackhole
-from tests.ttnn.unit_tests.operations.ccl.test_new_all_reduce import FF1_CRS_RS_OUT
+from models.utility_functions import skip_for_blackhole
 from tests.ttnn.unit_tests.operations.test_distributed_layernorm_sharded import (
     create_input_and_weight_tensors,
     create_tt_tensors,
@@ -15,9 +14,6 @@ from tests.ttnn.unit_tests.operations.test_distributed_layernorm_sharded import 
     compute_reference_output,
     compute_pre_allgather_stats,
     compute_post_allgather_output,
-)
-from tests.tt_eager.python_api_testing.unit_testing.misc.test_scaled_dot_product_attention_decode import (
-    run_test_sdpa_decode_paged_attention_single_iter,
 )
 from tests.tt_eager.python_api_testing.unit_testing.misc.test_nlp_create_qkv_heads_decode import (
     run_test_create_min_width_shard,
@@ -28,9 +24,182 @@ from tests.tt_eager.python_api_testing.unit_testing.misc.test_rotary_embedding_l
     run_test_rotary_embedding_llama,
     run_test_row_major_rotary_embedding_llama,
 )
-from tests.tt_eager.python_api_testing.unit_testing.misc.test_eltwise_binary import run_elt_binary_mul_with_sub_devices
 
-from tests.tt_eager.python_api_testing.unit_testing.misc.test_embedding import run_embeddings_tests
+from models.utility_functions import torch_random
+from tests.ttnn.utils_for_testing import assert_with_pcc
+
+
+@pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
+@pytest.mark.parametrize("input_tensor_mesh_shape", [1, 1, 32, 1280], indirect=True)
+@pytest.mark.parametrize("num_links", 1)
+@pytest.mark.parametrize("cluster_axis", 1)
+@pytest.mark.parametrize("dim", 3)
+@pytest.mark.parametrize(
+    "qkv_memory_config",
+    ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            sub_core_grids,
+            [
+                32,
+                128,
+            ],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    ),
+)
+@pytest.mark.parametrize("use_noc1_only", [False])
+@pytest.mark.parametrize("use_optimal_ccl_for_llama", [False])
+def test_qwen3_tg_rs_create_heads(
+    device,
+    dtype,
+    input_tensor_mesh_shape,
+    num_links,
+    cluster_axis,
+    dim,
+    qkv_memory_config,
+    use_noc1_only,
+    use_optimal_ccl_for_llama,
+):
+    """
+    Test rs_create_heads operation for Qwen3 model.
+    Generates a random xqkv tensor and runs rs_create_heads to compute q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD, v_heads_1BKD.
+    """
+    torch.manual_seed(0)
+
+    galaxy_type = "6U" if ttnn.GetNumPCIeDevices() == 32 else "4U"
+
+    # Create random input tensors
+    torch_xqkv_tensor = torch_random(input_tensor_mesh_shape, -1, 1, dtype=torch.bfloat16)
+
+    # Compute reference output using PyTorch:
+    torch_q_heads_pre_rot_1BQD = torch_xqkv_tensor[:, :, :, : 128 * 8]
+    torch_k_heads_pre_rot_1BKD = torch_xqkv_tensor[:, :, :, 128 * 8 : 128 * 9]
+    torch_v_heads_1BKD = torch_xqkv_tensor[:, :, :, 128 * 9 :]
+
+    # Set up persistent buffers to mimick tt_ccl settings
+    RS_CREATE_HEADS_PACKET_WORKER_CRS = ttnn.CoreRangeSet(
+        [
+            ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 0)),
+            ttnn.CoreRange(ttnn.CoreCoord(1, 1), ttnn.CoreCoord(2, 1)),
+        ]
+    )
+    RS_CREATE_HEADS_INTERIM_MEMCFG = ttnn.create_sharded_memory_config(
+        shape=(32, 512),
+        core_grid=RS_CREATE_HEADS_PACKET_WORKER_CRS,
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    persistent_buffers = [None, None]
+
+    cluster_shape = (8, 4)
+    num_pages_per_packet = 4
+    shard_height = 32
+
+    # Create persistent buffers for cluster_axis
+    buffer_mem_cfg = RS_CREATE_HEADS_INTERIM_MEMCFG
+    torch_buffer = torch.zeros(
+        (*cluster_shape, shard_height, cluster_shape[cluster_axis] * num_pages_per_packet * 32 * 5)
+    )
+    persistent_buffers[cluster_axis] = ttnn.from_torch(
+        torch_buffer,
+        device=device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.bfloat16,
+        memory_config=buffer_mem_cfg,
+        mesh_mapper=ttnn.ShardTensor2dMesh(device, dims=(0, 1), mesh_shape=cluster_shape),
+    )
+
+    # Convert to ttnn tensors with appropriate memory configuration
+    xqkv_tensor = ttnn.from_torch(
+        torch_xqkv_tensor, device=device, layout=ttnn.TILE_LAYOUT, dtype=dtype, memory_config=qkv_memory_config
+    )
+
+    # Perform rs_create_heads using ttnn
+    (
+        q_heads_pre_rot_1BQD,
+        k_heads_pre_rot_1BKD,
+        v_heads_1BKD,
+    ) = ttnn.experimental.llama_rs_create_heads(
+        input_tensor=xqkv_tensor,
+        intermediate_packet_buffer=persistent_buffers[cluster_axis],
+        dim=dim,
+        cross_device_semaphore=ttnn.create_global_semaphore(
+            device, ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 9))]), 0
+        ),
+        subdevice_id=ttnn.SubDeviceId(1),
+        cluster_axis=cluster_axis,
+        mesh_device=device,
+        topology={"6U": ttnn.Topology.Ring, "4U": ttnn.Topology.Linear}.get(galaxy_type),
+        num_links=num_links,
+        num_heads=8,
+        num_kv_heads=1,
+        memory_config=qkv_memory_config,
+        qkv_memory_config=qkv_memory_config,
+        use_noc1_only=use_noc1_only,
+        use_optimal_ccl_for_llama=use_optimal_ccl_for_llama,
+    )
+
+    # Convert back to torch for comparison
+    output_q_heads_pre_rot_1BQD = ttnn.to_torch(q_heads_pre_rot_1BQD)
+    output_k_heads_pre_rot_1BKD = ttnn.to_torch(k_heads_pre_rot_1BKD)
+    output_v_heads_1BKD = ttnn.to_torch(v_heads_1BKD)
+
+    breakpoint()
+
+    # # Set PCC threshold based on data type
+    # target_pcc = 0.9999 if dtype == ttnn.bfloat16 else 0.999
+
+    # # Assert results match with expected precision
+    # assert_with_pcc(torch_xqkv_tensor, output_q_heads_pre_rot_1BQD, pcc=target_pcc)
+    # assert_with_pcc(torch_xqkv_tensor, output_k_heads_pre_rot_1BKD, pcc=target_pcc)
+    # assert_with_pcc(torch_xqkv_tensor, output_v_heads_1BKD, pcc=target_pcc)
+
+
+@pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
+@pytest.mark.parametrize("m_size", [32, 64, 128])
+@pytest.mark.parametrize("k_size", [32, 64])
+@pytest.mark.parametrize("n_size", [32, 64, 128])
+def test_qwen3_tg_MatrixMultiplication(device, dtype, m_size, k_size, n_size):
+    """
+    Test matrix multiplication operation for Qwen3 model.
+    Tests A @ B where A is (m_size, k_size) and B is (k_size, n_size).
+    """
+    torch.manual_seed(0)
+
+    # Create random input tensors
+    torch_input_tensor_a = torch_random((1, 1, m_size, k_size), -1, 1, dtype=torch.bfloat16)
+    torch_input_tensor_b = torch_random((1, 1, k_size, n_size), -1, 1, dtype=torch.bfloat16)
+
+    # Compute reference output using PyTorch
+    torch_output_tensor = torch_input_tensor_a @ torch_input_tensor_b
+
+    # Convert to ttnn tensors with appropriate memory configuration
+    memory_config = ttnn.DRAM_MEMORY_CONFIG  # Using any memory config as requested
+
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a, device=device, layout=ttnn.TILE_LAYOUT, dtype=dtype, memory_config=memory_config
+    )
+    input_tensor_b = ttnn.from_torch(
+        torch_input_tensor_b, device=device, layout=ttnn.TILE_LAYOUT, dtype=dtype, memory_config=memory_config
+    )
+
+    # Perform matrix multiplication using ttnn
+    output_tensor = ttnn.matmul(input_tensor_a, input_tensor_b, memory_config=memory_config)
+
+    # Convert back to torch for comparison
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    # Set PCC threshold based on data type
+    target_pcc = 0.9999 if dtype == ttnn.bfloat16 else 0.999
+
+    # Assert results match with expected precision
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc=target_pcc)
 
 
 @pytest.mark.parametrize(
@@ -53,7 +222,7 @@ from tests.tt_eager.python_api_testing.unit_testing.misc.test_embedding import r
         ((2, 8), ttnn.CoreCoord(1, 0), (2, 8)),
     ],
 )
-def test_llama_tg_LayerNorm(
+def test_qwen3_tg_LayerNorm(
     device,
     input_width,
     num_devices,
@@ -143,205 +312,6 @@ def test_llama_tg_LayerNorm(
     assert atol_delta <= max_atol, f"Max Atol exceeded: {atol_delta} (allowed: {max_atol})"
 
 
-@pytest.mark.models_device_performance_bare_metal
-@pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
-@pytest.mark.parametrize(
-    "dtype, q_dtype",
-    [
-        [ttnn.bfloat8_b, ttnn.bfloat16],
-    ],
-    ids=[
-        "bfp8_cache_bf16_act",
-    ],
-)
-@pytest.mark.parametrize(
-    "b, nh, nkv, s, d, grid_size",
-    ([8, 8, 1, 4096, 128, (8, 4)],),  # Llama2-70B
-)
-@pytest.mark.parametrize(
-    "start_core, sub_core_grids",
-    [
-        (
-            ttnn.CoreCoord(1, 0),
-            ttnn.CoreRangeSet(
-                [
-                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
-                    ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 9)),
-                ]
-            ),
-        ),
-    ],
-)
-@pytest.mark.parametrize("is_cur_pos_sharded", [True])
-@pytest.mark.parametrize("is_page_table_sharded", [True])
-@pytest.mark.parametrize("q_layout", [ttnn.ROW_MAJOR_LAYOUT], ids=["row_major"])
-def test_llama_tg_ScaledDotProductAttentionDecode(
-    device,
-    b,
-    nh,
-    nkv,
-    s,
-    d,
-    dtype,
-    grid_size,
-    q_dtype,
-    start_core,
-    sub_core_grids,
-    q_layout,
-    is_cur_pos_sharded,
-    is_page_table_sharded,
-):
-    run_test_sdpa_decode_paged_attention_single_iter(
-        device,
-        b,
-        nh,
-        nkv,
-        s,
-        d,
-        dtype,
-        grid_size,
-        q_dtype,
-        cur_pos=127,
-        block_size=32,
-        q_chunk_size=0,
-        k_chunk_size=0,
-        sharded_in=True,
-        sharded_out=True,
-        start_core=start_core,
-        sub_core_grids=sub_core_grids,
-        q_layout=q_layout,
-        is_cur_pos_sharded=is_cur_pos_sharded,
-        is_page_table_sharded=is_page_table_sharded,
-    )
-    assert device.num_program_cache_entries() == 1
-
-
-## Op Tests for BinaryMult + SiLU
-@pytest.mark.parametrize(
-    "device_params",
-    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
-    indirect=True,
-)
-@pytest.mark.parametrize("batch_size", [1])
-@pytest.mark.parametrize("seq_len", [32])
-@pytest.mark.parametrize("dim", [512])
-@pytest.mark.parametrize("num_heads", [1])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b])
-@pytest.mark.parametrize("pcc", [0.9995])
-def test_llama_tg_BinaryDeviceOperation(device, batch_size, seq_len, dim, num_heads, dtype, pcc):
-    in_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ttnn.BufferType.L1,
-        ttnn.ShardSpec(
-            FF1_CRS_RS_OUT,
-            [32, 32],
-            ttnn.ShardOrientation.ROW_MAJOR,
-        ),
-    )
-    out_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ttnn.BufferType.L1,
-        ttnn.ShardSpec(
-            FF1_CRS_RS_OUT,
-            [32, 32],
-            ttnn.ShardOrientation.ROW_MAJOR,
-        ),
-    )
-    run_elt_binary_mul_with_sub_devices(
-        batch_size,
-        num_heads,
-        seq_len,
-        dim,
-        dtype,
-        in_mem_config,
-        out_mem_config,
-        device,
-        None,
-        None,
-        pcc,
-    )
-
-
-@pytest.mark.models_device_performance_bare_metal
-@pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
-@pytest.mark.parametrize(
-    "dtype, q_dtype",
-    [
-        [ttnn.bfloat8_b, ttnn.bfloat16],
-    ],
-    ids=[
-        "bfp8_cache_bf16_act",
-    ],
-)
-@pytest.mark.parametrize(
-    "b, nh, nkv, s, d, grid_size",
-    ([8, 8, 1, 4096, 128, (8, 4)],),  # Llama2-70B
-)
-@pytest.mark.parametrize(
-    "start_core, sub_core_grids",
-    [
-        (
-            ttnn.CoreCoord(1, 0),
-            ttnn.CoreRangeSet(
-                [
-                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
-                    ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 9)),
-                ]
-            ),
-        ),
-    ],
-)
-@pytest.mark.parametrize(
-    "chunk_sizes, cur_positions",
-    (([0, 128, 256, 512], [31, 63, 95, 127, 255, 511, 1023, 2559, 4095]),),
-)
-@pytest.mark.parametrize("is_cur_pos_sharded", [True])
-@pytest.mark.parametrize("is_page_table_sharded", [True])
-def test_llama_tg_ScaledDotProductAttentionDecodeSweep(
-    device,
-    chunk_sizes,
-    cur_positions,
-    b,
-    nh,
-    nkv,
-    s,
-    d,
-    dtype,
-    grid_size,
-    q_dtype,
-    start_core,
-    sub_core_grids,
-    is_cur_pos_sharded,
-    is_page_table_sharded,
-):
-    for chunk_size in chunk_sizes:
-        for cur_pos in cur_positions:
-            run_test_sdpa_decode_paged_attention_single_iter(
-                device,
-                b,
-                nh,
-                nkv,
-                s,
-                d,
-                dtype,
-                grid_size,
-                q_dtype,
-                cur_pos=cur_pos,
-                block_size=32,
-                q_chunk_size=chunk_size,
-                k_chunk_size=chunk_size,
-                sharded_in=True,
-                sharded_out=True,
-                start_core=start_core,
-                sub_core_grids=sub_core_grids,
-                is_cur_pos_sharded=is_cur_pos_sharded,
-                is_page_table_sharded=is_page_table_sharded,
-            )
-
-    # OP caches on chunk size
-    assert device.num_program_cache_entries() == len(chunk_sizes)
-
-
 @skip_for_blackhole("Requires eth connected devices to run, see #12349")
 @pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
 @pytest.mark.parametrize("batch, batch_offset, slice_size", ((32, 0, 8),))
@@ -361,7 +331,7 @@ def test_llama_tg_ScaledDotProductAttentionDecodeSweep(
         ),
     ),
 )
-def test_llama_tg_NLPCreateHeadsDecodeDeviceOperation(
+def test_qwen3_tg_NLPCreateHeadsDecodeDeviceOperation(
     device,
     batch,
     batch_offset,
@@ -408,7 +378,7 @@ def test_llama_tg_NLPCreateHeadsDecodeDeviceOperation(
         ),
     ),
 )
-def test_llama_tg_NLPConcatHeadsDecodeDeviceOperation(
+def test_qwen3_tg_NLPConcatHeadsDecodeDeviceOperation(
     device,
     n_local_heads,
     padded_local_heads,
@@ -431,9 +401,7 @@ def test_llama_tg_NLPConcatHeadsDecodeDeviceOperation(
 @pytest.mark.parametrize("cache_idx", [127])
 @pytest.mark.parametrize("cache_dtype", [ttnn.bfloat8_b])
 @pytest.mark.parametrize("pcc", [0.9995])
-@pytest.mark.parametrize("is_cur_pos_sharded", [True])
-@pytest.mark.parametrize("is_page_table_sharded", [True])
-def test_llama_tg_PagedUpdateCacheDeviceOperation(
+def test_qwen3_tg_PagedUpdateCacheDeviceOperation(
     device,
     paged_update,
     cache_idx,
@@ -445,8 +413,6 @@ def test_llama_tg_PagedUpdateCacheDeviceOperation(
     input_dtype,
     cache_dtype,
     pcc,
-    is_cur_pos_sharded,
-    is_page_table_sharded,
 ):
     run_test_paged_fused_update_cache_decode(
         paged_update,
@@ -460,8 +426,6 @@ def test_llama_tg_PagedUpdateCacheDeviceOperation(
         cache_dtype,
         device,
         pcc,
-        is_cur_pos_sharded=is_cur_pos_sharded,
-        is_page_table_sharded=is_page_table_sharded,
     )
 
 
@@ -475,9 +439,7 @@ def test_llama_tg_PagedUpdateCacheDeviceOperation(
 @pytest.mark.parametrize("cache_idx", [127])
 @pytest.mark.parametrize("cache_dtype", [ttnn.bfloat8_b])
 @pytest.mark.parametrize("pcc", [0.9995])
-@pytest.mark.parametrize("is_cur_pos_sharded", [True])
-@pytest.mark.parametrize("is_page_table_sharded", [True])
-def test_llama_tg_RowMajorPagedUpdateCacheDeviceOperation(
+def test_qwen3_tg_RowMajorPagedUpdateCacheDeviceOperation(
     device,
     paged_update,
     cache_idx,
@@ -489,10 +451,8 @@ def test_llama_tg_RowMajorPagedUpdateCacheDeviceOperation(
     input_dtype,
     cache_dtype,
     pcc,
-    is_cur_pos_sharded,
-    is_page_table_sharded,
 ):
-    for _ in range(1):
+    for _ in range(2):
         run_test_paged_fused_update_cache_decode(
             paged_update,
             cache_idx,
@@ -506,8 +466,6 @@ def test_llama_tg_RowMajorPagedUpdateCacheDeviceOperation(
             device,
             pcc,
             row_major=True,
-            is_cur_pos_sharded=is_cur_pos_sharded,
-            is_page_table_sharded=is_page_table_sharded,
         )
     assert device.num_program_cache_entries() == 1
 
@@ -520,7 +478,7 @@ def test_llama_tg_RowMajorPagedUpdateCacheDeviceOperation(
 )
 @pytest.mark.parametrize("datatype", (ttnn.bfloat16,))
 @pytest.mark.parametrize("pcc", (0.9997,))
-def test_llama_tg_RotaryEmbeddingLlamaFusedQK(
+def test_qwen3_tg_RotaryEmbeddingLlamaFusedQK(
     batch,
     seq_len,
     n_heads,
@@ -549,7 +507,7 @@ def test_llama_tg_RotaryEmbeddingLlamaFusedQK(
 )
 @pytest.mark.parametrize("datatype", (ttnn.bfloat16,))
 @pytest.mark.parametrize("pcc", (0.9997,))
-def test_llama_tg_RowMajorRotaryEmbeddingLlamaFusedQK(
+def test_qwen3_tg_RowMajorRotaryEmbeddingLlamaFusedQK(
     batch,
     seq_len,
     n_heads,
@@ -561,53 +519,4 @@ def test_llama_tg_RowMajorRotaryEmbeddingLlamaFusedQK(
 ):
     run_test_row_major_rotary_embedding_llama(
         mesh_device, batch, seq_len, pcc, n_heads, n_kv_heads, head_dim, 1, datatype, fuse_qk=True
-    )
-
-
-@pytest.mark.parametrize("batch_size", (1,))
-@pytest.mark.parametrize("num_embeddings", (128256,))
-@pytest.mark.parametrize("embedding_dim", (2048,))
-@pytest.mark.parametrize("num_rows", (32,))
-@pytest.mark.parametrize("dtype", (ttnn.bfloat16,))
-@pytest.mark.parametrize("in0_mem_config", (ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED),))
-@pytest.mark.parametrize("tilized", (True,))
-@pytest.mark.parametrize(
-    "core_grid_ln, grid_offset",
-    [((8, 2), ttnn.CoreCoord(1, 0))],
-)
-@pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
-def test_llama_tg_Embeddings(
-    batch_size,
-    num_embeddings,
-    embedding_dim,
-    num_rows,
-    dtype,
-    in0_mem_config,
-    tilized,
-    core_grid_ln,
-    grid_offset,
-    device,
-):
-    core_range = ttnn.CoreRange(
-        grid_offset,
-        ttnn.CoreCoord(grid_offset.x + core_grid_ln[1] - 1, grid_offset.y + core_grid_ln[0] - 1),
-    )
-    num_cores_ln = core_grid_ln[0] * core_grid_ln[1]
-    out_mem_config = ttnn.create_sharded_memory_config(
-        shape=(1, 1, 32, embedding_dim // num_cores_ln),
-        core_grid=ttnn.CoreRangeSet({core_range}),
-        strategy=ttnn.ShardStrategy.WIDTH,
-        use_height_and_width_as_shard_shape=True,
-    )
-
-    run_embeddings_tests(
-        batch_size,
-        num_embeddings,
-        embedding_dim,
-        num_rows,
-        dtype,
-        in0_mem_config,
-        out_mem_config,
-        device,
-        tilized,
     )

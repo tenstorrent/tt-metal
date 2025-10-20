@@ -8,7 +8,7 @@ import ttnn
 
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from models.perf.device_perf_utils import run_device_perf_detailed
-from tests.ttnn.unit_tests.operations.transformers.test_prefetcher_TG import (
+from tests.ttnn.unit_tests.operations.test_prefetcher_TG import (
     LLAMA_INPUT_SHAPES,
     LLAMA_INPUT_DTYPES,
 )
@@ -41,9 +41,7 @@ def test_dram_prefetcher_perf(
     step_name = f"dram_prefetcher"
 
     subdir = "llama_tg_perf"
-    command = (
-        f"pytest tests/ttnn/unit_tests/operations/transformers/test_prefetcher_TG.py::test_run_prefetcher_llama_perf"
-    )
+    command = f"pytest tests/ttnn/unit_tests/operations/test_prefetcher_TG.py::test_run_prefetcher_llama_perf"
     cols = ["DEVICE NCRISC KERNEL"]
     op_name = "DramPrefetcher"
 

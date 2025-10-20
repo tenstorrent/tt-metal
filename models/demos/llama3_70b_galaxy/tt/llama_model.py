@@ -11,10 +11,11 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.llama3_70b_galaxy.tt.distributed_norm import DistributedNorm
 from models.demos.llama3_70b_galaxy.tt.lm_head import LMHead
-from models.demos.llama3_70b_galaxy.tt.llama_common import copy_host_to_device, get_prefill_rot_mat
+from models.demos.llama3_70b_galaxy.tt.llama_common import copy_host_to_device
+from models.tt_transformers.tt.rope import get_rot_mats
 from models.demos.llama3_70b_galaxy.tt.llama_rope import TtLlamaRotarySetup
-from models.demos.llama3_70b_galaxy.tt.llama_embedding import TtLlamaEmbedding
 from models.demos.llama3_70b_galaxy.tt.prefetcher_common import TtLlamaPrefetcherSetup
+from models.demos.llama3_70b_galaxy.tt.llama_embedding import TtLlamaEmbedding
 from models.demos.llama3_70b_galaxy.tt.llama_ccl import TT_CCL
 from models.demos.llama3_70b_galaxy.tt.sampling import TTSampling
 
@@ -114,6 +115,8 @@ class TtTransformer(LightweightModule):
             ccl_topology=self.model_config["CCL_TOPOLOGY"],
         )
 
+        state_dict_prefix = args.get_state_dict_prefix("", None)
+
         self.lm_head = LMHead(
             args=args,
             mesh_device=mesh_device,
@@ -128,7 +131,7 @@ class TtTransformer(LightweightModule):
             # First initialization of prefill CCLs and prefetcher. It needs to be after initialization of layers, norm and lm_head since those switch modes as well
             # This initialization is required to avoid race condition due to all buffers and semaphores not being allocated at initialization
             self.switch_mode("prefill")
-            self.setup_prefill()
+            # self.setup_prefill()
             self.is_prefill_setup = True
 
         if mode == "decode":
@@ -153,6 +156,7 @@ class TtTransformer(LightweightModule):
                 self.prefetcher_setup.worker_sub_device_id,
                 mode="prefill",
                 allocate_prefill_buffers=self.allocate_prefill_buffers,
+                use_qwen_mlp=True,
             )
         else:
             self.tt_ccl = self.tt_ccl_prefill
@@ -170,7 +174,12 @@ class TtTransformer(LightweightModule):
             [self.prefetcher_setup.prefetcher_sub_device_id, self.prefetcher_setup.worker_sub_device_id]
         )
         if mesh_sub_device_manager_id_decode is None:
-            self.tt_ccl = TT_CCL(self.mesh_device, self.args, self.prefetcher_setup.worker_sub_device_id)
+            self.tt_ccl = TT_CCL(
+                self.mesh_device,
+                self.args,
+                self.prefetcher_setup.worker_sub_device_id,
+                use_qwen_mlp=True,
+            )
             self.tt_sampling = TTSampling(
                 args=self.args,
                 mesh_device=self.mesh_device,
@@ -199,12 +208,19 @@ class TtTransformer(LightweightModule):
 
         # Slice the rot mats to the prefill seqlen
         if tt_rot_mats_prefill is None and self.tt_rot_mats_prefill is None:
-            tt_rot_mats_prefill = get_prefill_rot_mat(
-                self.args.head_dim,
-                self.args.max_seq_len,
-                self.mesh_device,
+            # tt_rot_mats_prefill = get_prefill_rot_mat(
+            #     self.args.head_dim,
+            #     self.args.max_seq_len,
+            #     self.mesh_device,
+            #     seq_len=self.args.max_seq_len,
+            #     scale_factor=self.args.rope_scaling_factor,
+            # )
+            tt_rot_mats_prefill = get_rot_mats(
+                head_dim=self.args.head_dim,
+                device=self.mesh_device,
                 seq_len=self.args.max_seq_len,
-                scale_factor=self.args.rope_scaling_factor,
+                theta=self.args.rope_theta,
+                rope_scaling=self.args.rope_scaling_factor,
             )
             self.tt_rot_mats_prefill = tt_rot_mats_prefill
         else:
@@ -561,7 +577,7 @@ class TtTransformer(LightweightModule):
                     self.mesh_device, dims=(3, 1), mesh_shape=self.args.cluster_shape
                 ),
             )
-            tt_out_logits = tt_out_logits[0, 0, 0, :128256]
+            tt_out_logits = tt_out_logits[0, 0, 0, :155648]
             tt_out_logits_saved.copy_(tt_out_logits)
 
         # Increment current position and rot_mat_idxs

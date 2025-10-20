@@ -4,9 +4,9 @@
 import ttnn
 import torch
 import pytest
-from models.common.utility_functions import comp_pcc
+from models.utility_functions import comp_pcc
 
-from models.common.utility_functions import skip_for_blackhole
+from models.utility_functions import skip_for_blackhole
 from tests.ttnn.unit_tests.operations.ccl.test_new_all_reduce import FF1_CRS_RS_OUT
 from tests.ttnn.unit_tests.operations.test_distributed_layernorm_sharded import (
     create_input_and_weight_tensors,
@@ -42,7 +42,7 @@ from tests.tt_eager.python_api_testing.unit_testing.misc.test_embedding import r
 @pytest.mark.parametrize("seed", [0])
 @pytest.mark.parametrize("eps", [1e-6])
 @pytest.mark.parametrize(("min_pcc", "max_atol"), ((0.9997, 0.45),))
-@pytest.mark.parametrize("input_width", [2048])
+@pytest.mark.parametrize("input_width", [1280])  # Qwen dim_per_tp
 @pytest.mark.parametrize("num_devices", [1])
 @pytest.mark.parametrize("input_df", [ttnn.bfloat16])
 @pytest.mark.parametrize("weights_df", [ttnn.bfloat16])
@@ -50,10 +50,10 @@ from tests.tt_eager.python_api_testing.unit_testing.misc.test_embedding import r
 @pytest.mark.parametrize(
     "core_grid, grid_offset, output_core_grid",
     [
-        ((2, 8), ttnn.CoreCoord(1, 0), (2, 8)),
+        ((2, 5), ttnn.CoreCoord(1, 0), (2, 5)),  # Adjusted for Qwen dimensions
     ],
 )
-def test_llama_tg_LayerNorm(
+def test_qwen_tg_LayerNorm(
     device,
     input_width,
     num_devices,
@@ -156,7 +156,7 @@ def test_llama_tg_LayerNorm(
 )
 @pytest.mark.parametrize(
     "b, nh, nkv, s, d, grid_size",
-    ([8, 8, 1, 4096, 128, (8, 4)],),  # Llama2-70B
+    ([8, 8, 1, 4096, 128, (8, 4)],),  # Qwen uses same attention config as Llama3-70B
 )
 @pytest.mark.parametrize(
     "start_core, sub_core_grids",
@@ -175,7 +175,7 @@ def test_llama_tg_LayerNorm(
 @pytest.mark.parametrize("is_cur_pos_sharded", [True])
 @pytest.mark.parametrize("is_page_table_sharded", [True])
 @pytest.mark.parametrize("q_layout", [ttnn.ROW_MAJOR_LAYOUT], ids=["row_major"])
-def test_llama_tg_ScaledDotProductAttentionDecode(
+def test_qwen_tg_ScaledDotProductAttentionDecode(
     device,
     b,
     nh,
@@ -216,7 +216,7 @@ def test_llama_tg_ScaledDotProductAttentionDecode(
     assert device.num_program_cache_entries() == 1
 
 
-## Op Tests for BinaryMult + SiLU
+## Op Tests for BinaryMult + SiLU (Qwen uses same config)
 @pytest.mark.parametrize(
     "device_params",
     [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
@@ -224,11 +224,11 @@ def test_llama_tg_ScaledDotProductAttentionDecode(
 )
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("seq_len", [32])
-@pytest.mark.parametrize("dim", [512])
+@pytest.mark.parametrize("dim", [400])  # Adjusted for Qwen intermediate dim per shard
 @pytest.mark.parametrize("num_heads", [1])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b])
 @pytest.mark.parametrize("pcc", [0.9995])
-def test_llama_tg_BinaryDeviceOperation(device, batch_size, seq_len, dim, num_heads, dtype, pcc):
+def test_qwen_tg_BinaryDeviceOperation(device, batch_size, seq_len, dim, num_heads, dtype, pcc):
     in_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ttnn.BufferType.L1,
@@ -275,7 +275,7 @@ def test_llama_tg_BinaryDeviceOperation(device, batch_size, seq_len, dim, num_he
 )
 @pytest.mark.parametrize(
     "b, nh, nkv, s, d, grid_size",
-    ([8, 8, 1, 4096, 128, (8, 4)],),  # Llama2-70B
+    ([8, 8, 1, 4096, 128, (8, 4)],),  # Qwen uses same attention config
 )
 @pytest.mark.parametrize(
     "start_core, sub_core_grids",
@@ -297,7 +297,7 @@ def test_llama_tg_BinaryDeviceOperation(device, batch_size, seq_len, dim, num_he
 )
 @pytest.mark.parametrize("is_cur_pos_sharded", [True])
 @pytest.mark.parametrize("is_page_table_sharded", [True])
-def test_llama_tg_ScaledDotProductAttentionDecodeSweep(
+def test_qwen_tg_ScaledDotProductAttentionDecodeSweep(
     device,
     chunk_sizes,
     cur_positions,
@@ -361,7 +361,7 @@ def test_llama_tg_ScaledDotProductAttentionDecodeSweep(
         ),
     ),
 )
-def test_llama_tg_NLPCreateHeadsDecodeDeviceOperation(
+def test_qwen_tg_NLPCreateHeadsDecodeDeviceOperation(
     device,
     batch,
     batch_offset,
@@ -408,7 +408,7 @@ def test_llama_tg_NLPCreateHeadsDecodeDeviceOperation(
         ),
     ),
 )
-def test_llama_tg_NLPConcatHeadsDecodeDeviceOperation(
+def test_qwen_tg_NLPConcatHeadsDecodeDeviceOperation(
     device,
     n_local_heads,
     padded_local_heads,
@@ -433,7 +433,7 @@ def test_llama_tg_NLPConcatHeadsDecodeDeviceOperation(
 @pytest.mark.parametrize("pcc", [0.9995])
 @pytest.mark.parametrize("is_cur_pos_sharded", [True])
 @pytest.mark.parametrize("is_page_table_sharded", [True])
-def test_llama_tg_PagedUpdateCacheDeviceOperation(
+def test_qwen_tg_PagedUpdateCacheDeviceOperation(
     device,
     paged_update,
     cache_idx,
@@ -477,7 +477,7 @@ def test_llama_tg_PagedUpdateCacheDeviceOperation(
 @pytest.mark.parametrize("pcc", [0.9995])
 @pytest.mark.parametrize("is_cur_pos_sharded", [True])
 @pytest.mark.parametrize("is_page_table_sharded", [True])
-def test_llama_tg_RowMajorPagedUpdateCacheDeviceOperation(
+def test_qwen_tg_RowMajorPagedUpdateCacheDeviceOperation(
     device,
     paged_update,
     cache_idx,
@@ -520,7 +520,7 @@ def test_llama_tg_RowMajorPagedUpdateCacheDeviceOperation(
 )
 @pytest.mark.parametrize("datatype", (ttnn.bfloat16,))
 @pytest.mark.parametrize("pcc", (0.9997,))
-def test_llama_tg_RotaryEmbeddingLlamaFusedQK(
+def test_qwen_tg_RotaryEmbeddingLlamaFusedQK(
     batch,
     seq_len,
     n_heads,
@@ -549,7 +549,7 @@ def test_llama_tg_RotaryEmbeddingLlamaFusedQK(
 )
 @pytest.mark.parametrize("datatype", (ttnn.bfloat16,))
 @pytest.mark.parametrize("pcc", (0.9997,))
-def test_llama_tg_RowMajorRotaryEmbeddingLlamaFusedQK(
+def test_qwen_tg_RowMajorRotaryEmbeddingLlamaFusedQK(
     batch,
     seq_len,
     n_heads,
@@ -565,18 +565,18 @@ def test_llama_tg_RowMajorRotaryEmbeddingLlamaFusedQK(
 
 
 @pytest.mark.parametrize("batch_size", (1,))
-@pytest.mark.parametrize("num_embeddings", (128256,))
-@pytest.mark.parametrize("embedding_dim", (2048,))
+@pytest.mark.parametrize("num_embeddings", (155648,))  # Qwen padded vocab size
+@pytest.mark.parametrize("embedding_dim", (1280,))  # Qwen dim_per_tp
 @pytest.mark.parametrize("num_rows", (32,))
 @pytest.mark.parametrize("dtype", (ttnn.bfloat16,))
 @pytest.mark.parametrize("in0_mem_config", (ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED),))
 @pytest.mark.parametrize("tilized", (True,))
 @pytest.mark.parametrize(
     "core_grid_ln, grid_offset",
-    [((8, 2), ttnn.CoreCoord(1, 0))],
+    [((5, 2), ttnn.CoreCoord(1, 0))],  # Adjusted for Qwen dimensions
 )
 @pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
-def test_llama_tg_Embeddings(
+def test_qwen_tg_Embeddings(
     batch_size,
     num_embeddings,
     embedding_dim,

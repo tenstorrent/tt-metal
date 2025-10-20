@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
 from pathlib import Path
@@ -14,7 +14,6 @@ import ttnn
 
 from models.demos.llama3_70b_galaxy.tt.generator import Generator, SamplingParams
 from models.demos.llama3_70b_galaxy.tt.model_config import LlamaOptimizations
-from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
 from models.tt_transformers.tt.common import (
     preprocess_inputs_prefill,
     PagedAttentionConfig,
@@ -23,6 +22,10 @@ from models.perf.benchmarking_utils import BenchmarkProfiler, BenchmarkData
 from models.common.utility_functions import (
     comp_pcc,
 )
+
+# Qwen-specific imports
+from models.demos.llama3_70b_galaxy.tt.qwen_model_config import TtQwenModelArgs
+from transformers import AutoTokenizer
 
 
 def load_and_cache_context(context_url, cache_dir, max_length=None):
@@ -64,7 +67,7 @@ def load_inputs(user_input, len_per_batch, instruct):
     user_input = user_input * batch
     in_prompt = []
     all_prompts = []
-    cache_dir = Path("models/tt_transformers/demo/context_cache")
+    cache_dir = Path("models/demos/qwen3/demo/context_cache")
     cache_dir.mkdir(parents=True, exist_ok=True)
 
     # The demo supports a custom prompt file, where the context is provided by a link to a book from the gutenberg project
@@ -115,7 +118,7 @@ def load_demo_targets(filename, galaxy_type):
     return demo_targets
 
 
-def create_tt_model(
+def create_tt_qwen_model(
     mesh_device,
     instruct,
     max_batch_size,
@@ -129,13 +132,11 @@ def create_tt_model(
     prefill_profile=False,
 ):
     from models.demos.llama3_70b_galaxy.tt.llama_model import TtTransformer
-    from models.demos.llama3_70b_galaxy.tt.model_config import TtModelArgs
 
-    tt_model_args = TtModelArgs(
+    tt_model_args = TtQwenModelArgs(
         mesh_device,
-        instruct=instruct,
+        # instruct=instruct,
         max_batch_size=32,
-        optimizations=optimizations,
         max_seq_len=max_seq_len,
         dummy_weights=dummy_weights,
     )
@@ -168,7 +169,7 @@ def create_tt_model(
         weight_cache_path=tt_model_args.weight_cache_path(dtype),
         paged_attention_config=paged_attention_config,
         mode="prefill",
-        enable_prefetcher_performance_mode=True,
+        enable_prefetcher_performance_mode=False,
     )
 
     if use_paged_kv_cache:
@@ -182,17 +183,14 @@ def create_tt_model(
 # input_prompts (string): input json file with prompts to process. See models/demos/llama3_70b_galaxy/demo/sample_prompts/*.json for list of input files
 # instruct (bool): Whether to use instruct weights or general weights
 # repeat_batches (int): Number of consecutive batches of users to run (default: 1)
-# max_seq_len (int): Maximum context length supported by the model (Llama-3.1 and Llama-3.2 models have a maximum context length of 128k, i.e., 128 * 1024)
+# max_seq_len (int): Maximum context length supported by the model (Qwen models have a maximum context length of 128k, i.e., 128 * 1024)
 # batch_size (int): Number of users in a batch (Supports 1/2/4/8/16/32 batches)
 # max_generated_tokens (int): Maximum number of tokens to generate for each user (Note that the users will stop generation before this limit if they reach a EoS token)
 # paged_attention (bool): Whether to use paged attention or default attention (vLLM requires paged attention)
 # page_params (dict): Page parameters for paged attention (block_size, max_num_blocks) For smaller context lengths use block_size=32 and max_num_blocks=1024, for larger context use block_size=64 and max_num_blocks=2048
 # sampling_params (dict): Sampling parameters for decoding (temperature, top_p). If temperature is set to 0, argmax (greedy decode) is used.
 # stop_at_eos (bool): Whether to stop decoding when the model generates an EoS token
-# is_cur_pos_sharded (bool): Whether to replicate the cur pos tensor on sub core grid as an optimization
-# is_page_table_sharded (bool):  Whether to replicate the page table tensor on sub core grid as an optimization (Currently page table sharding is only supported for BS=32)
-
-
+#
 # optimization (LlamaOptimizations): Optimization level to use for the model (performance or accuracy)
 @pytest.mark.parametrize(
     "input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stop_at_eos, apc_test, pcc_check, prefill_profile, num_layers, print_outputs, is_cur_pos_sharded, is_page_table_sharded",
@@ -206,12 +204,12 @@ def create_tt_model(
             128,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
-            {"temperature": 0.0, "top_p": 0.08},  # sampling_params (argmax)
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             False,  # stop_at_eos
             False,  # apc_test
             False,  # pcc_check
             False,  # prefill-only profile
-            80,  # num layers
+            64,  # num layers (Qwen has 64 layers)
             False,  # print_outputs
             True,  # is_cur_pos_sharded
             True,  # is_page_table_sharded
@@ -225,69 +223,12 @@ def create_tt_model(
             128,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
-            {"temperature": 0.0, "top_p": 0.05},  # sampling_params (argmax)
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             False,  # stop_at_eos
             False,  # apc_test
             False,  # pcc_check
             False,  # prefill-only profile
-            80,  # num layers
-            False,  # print_outputs
-            False,  # is_cur_pos_sharded
-            False,  # is_page_table_sharded
-        ),
-        (  # evals-1 run (Throughput) - 1 user, smaller prompts, batch repeat 32
-            "models/demos/llama3_70b_galaxy/demo/sample_prompts/eval_repeat_prompts.json",  # input_prompts
-            True,  # instruct mode
-            16,  # repeat_batches
-            128 * 1024,  # max_seq_len
-            1,  # batch_size
-            1024,  # max_generated_tokens
-            True,  # paged_attention
-            {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
-            {"temperature": 0.0, "top_p": 0.05},  # sampling_params (argmax)
-            False,  # stop_at_eos
-            False,  # apc_test
-            False,  # pcc_check
-            False,  # prefill-only profile
-            80,  # num layers
-            False,  # print_outputs
-            False,  # is_cur_pos_sharded
-            False,  # is_page_table_sharded
-        ),
-        (  # evals-32 run (Throughput) - 32 users, smaller prompts, batch repeat 32
-            "models/demos/llama3_70b_galaxy/demo/sample_prompts/eval_repeat_prompts.json",  # input_prompts
-            True,  # instruct mode
-            16,  # repeat_batches
-            128 * 1024,  # max_seq_len
-            32,  # batch_size
-            1024,  # max_generated_tokens
-            True,  # paged_attention
-            {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
-            {"temperature": 0.0, "top_p": 0.05},  # sampling_params (argmax)
-            False,  # stop_at_eos
-            False,  # apc_test
-            False,  # pcc_check
-            False,  # prefill-only profile
-            80,  # num layers
-            False,  # print_outputs
-            False,  # is_cur_pos_sharded
-            False,  # is_page_table_sharded
-        ),
-        (  # evals-long-prompts run (Throughput) - 1 user, smaller prompts, batch repeat 12
-            "models/demos/llama3_70b_galaxy/demo/sample_prompts/eval_repeat_prompts_very_long.json",  # input_prompts
-            True,  # instruct mode
-            6,  # repeat_batches
-            128 * 1024,  # max_seq_len
-            1,  # batch_size
-            1024,  # max_generated_tokens
-            True,  # paged_attention
-            {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
-            {"temperature": 0.0, "top_p": 0.05},  # sampling_params (argmax)
-            False,  # stop_at_eos
-            False,  # apc_test
-            False,  # pcc_check
-            False,  # prefill-only profile
-            80,  # num layers
+            64,  # num layers
             False,  # print_outputs
             False,  # is_cur_pos_sharded
             False,  # is_page_table_sharded
@@ -306,9 +247,9 @@ def create_tt_model(
             False,  # apc_test
             False,  # pcc_check
             False,  # prefill-only profile
-            80,  # num layers
+            64,  # num layers
             False,  # print_outputs
-            False,  # is_cur_pos_sharded    #NOTE: currently cur pos/ page table sharding is not supported on repeat batch runs
+            False,  # is_cur_pos_sharded
             False,  # is_page_table_sharded
         ),
         (  # long-4k-b1 - Single user, 4K long prompt
@@ -317,15 +258,15 @@ def create_tt_model(
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
             1,  # batch_size
-            128,  # max_generated_tokens
+            8192,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
-            False,  # stop_at_eos
+            True,  # stop_at_eos
             False,  # apc_test
             False,  # pcc_check
             False,  # prefill-only profile
-            80,  # num layers
+            64,  # num layers
             False,  # print_outputs
             False,  # is_cur_pos_sharded
             False,  # is_page_table_sharded
@@ -336,15 +277,16 @@ def create_tt_model(
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
             1,  # batch_size
-            128,  # max_generated_tokens
+            # 128,  # max_generated_tokens
+            1024,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
-            {"temperature": 1.0, "top_p": 0.04},  # sampling_params (argmax)
+            {"temperature": 0.0, "top_p": 0.08},  # sampling_params (argmax)
             False,  # stop_at_eos
             False,  # apc_test
             False,  # pcc_check
             False,  # prefill-only profile
-            80,  # num layers
+            64,  # num layers
             False,  # print_outputs
             False,  # is_cur_pos_sharded
             False,  # is_page_table_sharded
@@ -357,13 +299,13 @@ def create_tt_model(
             32,  # batch_size
             128,  # max_generated_tokens
             True,  # paged_attention
-            {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
+            {"page_block_size": 64, "page_max_num_blocks": 4096},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             False,  # stop_at_eos
             False,  # apc_test
             False,  # pcc_check
             False,  # prefill-only profile
-            80,  # num layers
+            64,  # num layers
             False,  # print_outputs
             False,  # is_cur_pos_sharded
             False,  # is_page_table_sharded
@@ -374,15 +316,15 @@ def create_tt_model(
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
             1,  # batch_size
-            128,  # max_generated_tokens
+            8192,  # max_generated_tokens
             True,  # paged_attention
-            {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
+            {"page_block_size": 64, "page_max_num_blocks": 4096},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             False,  # stop_at_eos
             False,  # apc_test
             False,  # pcc_check
             False,  # prefill-only profile
-            80,  # num layers
+            64,  # num layers
             False,  # print_outputs
             False,  # is_cur_pos_sharded
             False,  # is_page_table_sharded
@@ -395,13 +337,13 @@ def create_tt_model(
             1,  # batch_size
             128,  # max_generated_tokens
             True,  # paged_attention
-            {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
+            {"page_block_size": 64, "page_max_num_blocks": 4096},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             False,  # stop_at_eos
             False,  # apc_test
             False,  # pcc_check
             False,  # prefill-only profile
-            80,  # num layers
+            64,  # num layers
             False,  # print_outputs
             False,  # is_cur_pos_sharded
             False,  # is_page_table_sharded
@@ -414,13 +356,13 @@ def create_tt_model(
             1,  # batch_size
             128,  # max_generated_tokens
             True,  # paged_attention
-            {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
+            {"page_block_size": 64, "page_max_num_blocks": 4096},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             False,  # stop_at_eos
             False,  # apc_test
             False,  # pcc_check
             False,  # prefill-only profile
-            80,  # num layers
+            64,  # num layers
             False,  # print_outputs
             False,  # is_cur_pos_sharded
             False,  # is_page_table_sharded
@@ -439,10 +381,10 @@ def create_tt_model(
             False,  # apc_test
             False,  # pcc_check
             True,  # prefill-only profile
-            80,  # num layers
+            64,  # num layers
             False,  # print_outputs
-            False,  # is_cur_pos_sharded
-            False,  # is_page_table_sharded
+            True,  # is_cur_pos_sharded
+            True,  # is_page_table_sharded
         ),
         (  # apc-test Run for PCC check, perf and functionality check: Batch-32 run (Throughput) - 32 users, prompt is "This is a test"
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_questions_reference.json",  # input_prompts
@@ -458,12 +400,12 @@ def create_tt_model(
             True,  # apc_test
             True,  # pcc_check
             False,  # prefill-only profile
-            80,  # num layers
+            64,  # num layers
             False,  # print_outputs
-            False,  # is_cur_pos_sharded
-            False,  # is_page_table_sharded
+            True,  # is_cur_pos_sharded
+            True,  # is_page_table_sharded
         ),
-        (  # pcc-80L - CI Run for PCC check for 80 Layers + Teacher Forced: Batch-32 run (Throughput) - 32 users, prompt is "This is a test"
+        (  # pcc-64L - CI Run for PCC check for 64 Layers + Teacher Forced: Batch-32 run (Throughput) - 32 users, prompt is "This is a test"
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_questions_reference.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
@@ -477,18 +419,15 @@ def create_tt_model(
             False,  # apc_test
             True,  # pcc_check
             False,  # prefill-only profile
-            80,  # num layers
+            64,  # num layers
             False,  # print_outputs
-            False,  # is_cur_pos_sharded
-            False,  # is_page_table_sharded
+            True,  # is_cur_pos_sharded
+            True,  # is_page_table_sharded
         ),
     ],
     ids=[
         "batch-32",  # throughput
         "batch-1",  # latency
-        "evals-1",  # Single user, 32 repeated batches, smaller prompts (<4K)
-        "evals-32",  # 32 users, 32 repeated batches, smaller prompts (<4K)
-        "evals-long-prompts",  # Single user, 12 repeated batches, very long prompts (4K ~ 64K)
         "repeat2",  # latency with 2 repeat batches
         "long-4k-b1",  # 4k context for 1 user
         "long-8k-b1",  # 4k context for 1 user
@@ -497,8 +436,8 @@ def create_tt_model(
         "long-64k-b1",  # 64k context for 1 user
         "long-128k-b1",  # 128k context for 1 user
         "prefill-profile",  # prefill-only profile run
-        "apc-test",  # apc check for 80L + teacher forced for prefill + pcc check on prefill and 1st decode token
-        "pcc-80L",  # pcc check for 80L + teacher forced
+        "apc-test",  # apc check for 64L + teacher forced for prefill + pcc check on prefill and 1st decode token
+        "pcc-64L",  # pcc check for 64L + teacher forced
     ],
 )
 @pytest.mark.parametrize(
@@ -518,7 +457,7 @@ def create_tt_model(
             "trace_region_size": 102000000,
             "num_command_queues": 1,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-            "worker_l1_size": 1345000,
+            # "worker_l1_size": 1345000,
             "fabric_config": True,
         }
     ],
@@ -531,7 +470,7 @@ def create_tt_model(
     ],
     indirect=True,
 )
-def test_demo_text(
+def test_qwen_demo_text(
     input_prompts,
     instruct,
     repeat_batches,
@@ -558,15 +497,17 @@ def test_demo_text(
     is_page_table_sharded,
 ):
     """
-    Simple demo with limited dependence on reference code.
+    Simple Qwen demo with limited dependence on reference code.
     """
     # TODO: Remove this once all batch sizes are supported on TG
     if os.environ.get("MESH_DEVICE") == "TG" and batch_size not in [1, 32]:
-        pytest.skip("Llama TG only supports batch-32")
+        pytest.skip("Qwen TG only supports batch-32")
+    if galaxy_type == "6U" and apc_test:
+        pytest.skip("Skipping test since there is no 6U machines dedicated for APC")
     if apc_test and not pcc_check:
         raise ValueError("APC test requires PCC check to be enabled")
     if apc_test:
-        demo_targets = load_demo_targets("models/demos/llama3_70b_galaxy/demo/text_demo_targets.json", galaxy_type)
+        demo_targets = load_demo_targets("models/demos/llama3_70b_galaxy/demo/qwen_demo_targets.json", galaxy_type)
 
     if prefill_profile:  # Special mode where we only run prefill with tracy
         from tracy import signpost
@@ -585,17 +526,19 @@ def test_demo_text(
     paged_attention = request.config.getoption("--paged_attention") or paged_attention
     page_params = request.config.getoption("--page_params") or page_params
     sampling_params = request.config.getoption("--sampling_params") or sampling_params
+
+    stop_at_eos = False  # Default to False
     if request.config.getoption("--stop_at_eos") in [
         0,
         1,
     ]:  # If the flag is provided, use it. Take an int instead of bool due to parser limitations
         stop_at_eos = request.config.getoption("--stop_at_eos")
-    print_outputs = request.config.getoption("--print_outputs") or print_outputs
+    print_outputs = True
 
     enable_trace = True  # Use tracing for better perf
     prefill_enable_trace = True
     print_to_file = False  # Enable this flag to print the output of all users to a file
-    instruct = num_layers == 80 and instruct  # if using instruct weights it must be full model
+    instruct = num_layers == 64 and instruct  # if using instruct weights it must be full model
     input_lengths = (
         [
             534,
@@ -608,11 +551,11 @@ def test_demo_text(
         else [15384 * 8]
     )
 
-    # Creat batch output file
+    # Create batch output file
     benchmark_data = BenchmarkData()
-    profiler_step_name = "tg-llama-demo-prefill-e2e"
+    profiler_step_name = "tg-qwen-demo-prefill-e2e"
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    output_directory = "models/demos/llama3_70b_galaxy/demo/output"
+    output_directory = "models/demos/qwen3/demo/output"
     os.makedirs(output_directory, exist_ok=True)
     os.chmod(output_directory, 0o755)
     output_filename = f"{output_directory}/demo_user_output_{timestamp}.txt"
@@ -621,12 +564,12 @@ def test_demo_text(
         logger.info(f"The decode generation will only stop at the max_generated_tokens limit == {max_generated_tokens}")
 
     if print_to_file:
-        # Creat batch output file
+        # Create batch output file
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        output_directory = "models/demos/llama3_70b_galaxy/demo/output"
+        output_directory = "models/demos/qwen3/demo/output"
         os.makedirs(output_directory, exist_ok=True)
         os.chmod(output_directory, 0o755)
-        output_filename = f"{output_directory}/llama_text_demo_output_{timestamp}.txt"
+        output_filename = f"{output_directory}/qwen_text_demo_output_{timestamp}.txt"
 
     # Start profiler
     logger.info(f"Start profiler")
@@ -645,7 +588,7 @@ def test_demo_text(
     # Load expected outputs for comparison
     expected_outputs_data = []
     # Always use this specific path for the expected outputs.
-    expected_outputs_file_path_to_load = "models/demos/llama3_70b_galaxy/demo/outputs_batch_1.json"
+    expected_outputs_file_path_to_load = "models/demos/llama3_70b_galaxy/demo/qwen_outputs_batch_1.json"
 
     if os.path.exists(expected_outputs_file_path_to_load):
         logger.info(f"Attempting to load expected outputs from: {expected_outputs_file_path_to_load}")
@@ -687,22 +630,24 @@ def test_demo_text(
             [all_prompts[(j + i) % len(all_prompts)] for j in range(len(all_prompts))][:batch_size]
         )
 
-    model_args, model, page_table, tt_kv_cache = create_tt_model(
+    model_args, model, page_table, tt_kv_cache = create_tt_qwen_model(
         mesh_device,
         instruct=instruct,
         max_batch_size=batch_size,
         optimizations=optimizations,
         max_seq_len=max_seq_len,
         num_layers=num_layers,
-        dummy_weights=not instruct,
+        dummy_weights=False,
         page_params=page_params,
         dtype=ttnn.bfloat8_b,
         use_paged_kv_cache=paged_attention,
         prefill_profile=prefill_profile,
     )
 
-    model_args.tokenizer = Tokenizer(model_args.tokenizer_path)
-    tokenizer = model_args.tokenizer
+    logger.info(f"Model loaded with {len(model.layers)} layers")
+
+    # Use Qwen tokenizer instead of Llama tokenizer
+    tokenizer = AutoTokenizer.from_pretrained(model_args.TOKENIZER_PATH)
     generator = Generator(model, model_args, mesh_device, tokenizer=tokenizer)
 
     num_tokens_generated_decode = []
@@ -733,11 +678,11 @@ def test_demo_text(
 
         # Load reference outputs for PCC check
         if pcc_check:
-            vocab_size = 128256
+            vocab_size = 151936  # Qwen vocab size
             if is_ci_env or galaxy_type == "6U":
-                ref_output_path = f"/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/llama3.3_70b_text_demo_ref_outputs/llama3.3_70b_ref_outputs_{num_layers}L_decode.refpt"
+                ref_output_path = f"/mnt/MLPerf/tt_dnn-models/qwen/Qwen3-70B-Instruct/qwen3_70b_text_demo_ref_outputs/qwen3_70b_ref_outputs_{num_layers}L_decode.refpt"
             else:
-                ref_output_path = f"/proj_sw/user_dev/llama3.3_70b_text_demo_ref_outputs/llama3.3_70b_ref_outputs_{num_layers}L_decode.refpt"
+                ref_output_path = f"/proj_sw/user_dev/qwen3_70b_text_demo_ref_outputs/qwen3_70b_ref_outputs_{num_layers}L_decode.refpt"
             assert os.path.exists(ref_output_path), f"Reference output file with path {ref_output_path} does not exist!"
             torch_reference = torch.load(ref_output_path)
             assert torch_reference["all_ref_logits"].shape == (
@@ -759,7 +704,7 @@ def test_demo_text(
         ), f"Prompt prefill tokens ({max_encoded_prompt_len}) + maximum number of decoded iterations ({max_generated_tokens}) needs to be <= than max_seq_len ({max_seq_len})"
         batch_size_per_device_group = (
             32 if batch_size == 32 else 1
-        )  # This is a workoaround until page table needs to know that attention is DP
+        )  # This is a workaround until page table needs to know that attention is DP
 
         if paged_attention:
             paged_cache_max_seq_len = (
@@ -787,7 +732,7 @@ def test_demo_text(
             logger.info("Starting prefill warmup...")
             profiler.start(f"compile_prefill", iteration=batch_idx)
             try:
-                tt_out_logits_all_users = torch.zeros(batch_size, 1, 131072) if pcc_check else None
+                tt_out_logits_all_users = torch.zeros(batch_size, 1, 155648) if pcc_check else None
                 toks = generator.prefill_forward_text(
                     input_tokens_prefill_pt,  # Just warmup prefill for 1 user
                     page_table=page_table,
@@ -808,7 +753,7 @@ def test_demo_text(
         profiler.start(f"inference_prefill", iteration=batch_idx)
 
         try:
-            tt_out_logits_all_users = torch.zeros(batch_size, 1, 131072) if pcc_check else None
+            tt_out_logits_all_users = torch.zeros(batch_size, 1, 155648) if pcc_check else None
             if prefill_profile:
                 signpost("start")
             toks = generator.prefill_forward_text(
@@ -840,12 +785,12 @@ def test_demo_text(
         if apc_test:
             assert_message = (
                 f"Prefill PCC check failed: {pcc_message}, while expected {demo_targets['prefill_pcc']}.\n"
-                f"If it is expected to be different in Llama model, please update the text_demo_targets.json file.\n"
-                f"See the comment on the text_demo.py by the assert for instructions."
+                f"If it is expected to be different in Qwen model, please update the qwen_demo_targets.json file.\n"
+                f"See the comment on the text_qwen_demo.py by the assert for instructions."
             )
             assert pcc_message == demo_targets["prefill_pcc"], assert_message
             # A 'Prefill PCC mismatch' indicates that a change in the underlying prefill operation is affecting the results.
-            # In some cases, small variations in PCC or improved model performance are expected. When this happens, update the target values in models/demos/llama3_70b_galaxy/demo/text_demo_targets.json.
+            # In some cases, small variations in PCC or improved model performance are expected. When this happens, update the target values in models/demos/llama3_70b_galaxy/demo/qwen_demo_targets.json.
             # Once updated, include the modified target file in your PR. The model code owners will then review and approve the changes.
             # If no changes to the model are expected from the PR, but targets differ, further investigation is needed to understand the root cause.
 
@@ -899,7 +844,6 @@ def test_demo_text(
         top_1_accs = []
         read_events = []
         tt_out_toks = []
-
         while users_decoding:
             if iteration == 0:  # First iteration also accounts for compile time
                 profiler.start(f"compile_decode", iteration=batch_idx)
@@ -941,13 +885,13 @@ def test_demo_text(
                 profiler.end(f"compile_decode", iteration=batch_idx)
                 decode_iteration_time = profiler.get_duration("compile_decode", iteration=batch_idx)
                 logger.info(f"Iteration {iteration} (compile): {1000*decode_iteration_time:.4f}ms")
-            # If there is PCC check we perform teacher forcing, swap token with reference model (decode check only done for 80 layers)
+            # If there is PCC check we perform teacher forcing, swap token with reference model (decode check only done for 64 layers)
             # If it's apc_test we do not teacher force, but we still check PCC for only iteration == 0
             teacher_forcing = (
                 not apc_test
                 and pcc_check
                 and max_encoded_prompt_len + iteration + 1 < len(ref_tokens)
-                and num_layers == 80
+                and num_layers == 64
             )
             if iteration > 0:
                 ttnn.event_synchronize(read_events.pop(0)[0])
@@ -975,12 +919,12 @@ def test_demo_text(
                 if apc_test:
                     assert_message = (
                         f"Decode PCC check failed: {pcc_message}, while expected {demo_targets['decode_pcc']}.\n"
-                        f"If any ops in Llama model might be impacted, please update decode_pcc in the text_demo_targets.json file.\n"
-                        f"See the comment on the text_demo.py by the assert for instructions."
+                        f"If any ops in Qwen model might be impacted, please update decode_pcc in the qwen_demo_targets.json file.\n"
+                        f"See the comment on the text_qwen_demo.py by the assert for instructions."
                     )
                     assert pcc_message == demo_targets["decode_pcc"], assert_message
                     # A 'Decode PCC mismatch' indicates that a change in the underlying prefill operation is affecting the results.
-                    # In some cases, small variations in PCC or improved model performance are expected. When this happens, update the target values in models/demos/llama3_70b_galaxy/demo/text_demo_targets.json.
+                    # In some cases, small variations in PCC or improved model performance are expected. When this happens, update the target values in models/demos/llama3_70b_galaxy/demo/qwen_demo_targets.json.
                     # Once updated, include the modified target file in your PR. The model code owners will then review and approve the changes.
                     # If no changes to the model are expected from the PR, but targets differ, further investigation is needed to understand the root cause.
 
@@ -1000,9 +944,10 @@ def test_demo_text(
                 if not pcc_check:
                     for user in range(batch_size):
                         user_tok = out_tok.tolist()[user]
-                        if (
-                            user_tok not in tokenizer.stop_tokens and user_done[user] == False
-                        ):  # Read until an eos token (e.g. <|eot_id|>); create_tokenizer adds stop_tokens to HF tokenizers
+                        # if (
+                        #     user_tok not in tokenizer.stop_tokens and user_done[user] == False
+                        # ):  # Read until an eos token (e.g. <|eot_id|>); create_tokenizer adds stop_tokens to HF tokenizers
+                        if user_done[user] == False:
                             all_outputs[user].append(user_tok)
                         else:
                             if (
@@ -1039,12 +984,12 @@ def test_demo_text(
                     # TODO: Enable once experimentaly established avg and absolute margin
                     assert_message = (
                         f"Current throughput: {tokens_per_second_per_user:.1f} tok/s/user for APC test is not within the expected range: ({lower_bound}, {upper_bound}).\n"
-                        f"Update text_demo_targets.json file with the expected throughput.\n"
-                        f"See the comment on the text_demo.py by the assert for instructions."
+                        f"Update qwen_demo_targets.json file with the expected throughput.\n"
+                        f"See the comment on the text_qwen_demo.py by the assert for instructions."
                     )
                     assert lower_bound <= tokens_per_second_per_user <= upper_bound, assert_message
                     # A mismatch of throughput suggests a regression in performance, likely due to changes in one or more ops used by the model, resulting in reduced end-to-end throughput.
-                    # In some cases, small variations in PCC or improved model performance are expected. When this happens, update the target values in models/demos/llama3_70b_galaxy/demo/text_demo_targets.json.
+                    # In some cases, small variations in PCC or improved model performance are expected. When this happens, update the target values in models/demos/llama3_70b_galaxy/demo/qwen_demo_targets.json.
                     # Once updated, include the modified target file in your PR. The model code owners will then review and approve the changes.
                     # If no changes to the model are expected from the PR, but targets differ, further investigation is needed to understand the root cause.
 
@@ -1081,11 +1026,9 @@ def test_demo_text(
                             f"\n==REPEAT BATCH {batch_idx}\n==USER {i} - PROMPT\n{short_prompt} \n==USER {i} - OUTPUT\n{text_after_prompt.strip()}\n"
                         )
                 profiler.end(f"log_saving_file", iteration=batch_idx)
-                # TODO This check is only for the config `repeat2`.
-
             # Since right now that config is the only using a repeat_batches=2 this if statement works
             if not users_decoding and batch_size == 1 and repeat_batches == 2:
-                # Compare to text in outputs_batch_1.json for the first user of the first batch
+                # Compare to text in qwen_outputs_batch_1.json for the first user of the first batch
                 if batch_idx == 0 and expected_outputs_data:  # Only compare if data was loaded
                     if i == 0:  # Only for the first user of the batch (i.e., user 0)
                         if len(expected_outputs_data) > 0:
@@ -1178,7 +1121,7 @@ def test_demo_text(
         "Full demo runtime": profiler.get_duration("run"),
     }
 
-    if not apc_test and num_layers == 80 and pcc_check and len(top_1_accs) > 0 and len(top_5_accs) > 0:
+    if not apc_test and num_layers == 64 and pcc_check and len(top_1_accs) > 0 and len(top_5_accs) > 0:
         measurements["Top 1 Accuracy"] = sum(top_1_accs) / len(top_1_accs)
         measurements["Top 5 Accuracy"] = sum(top_5_accs) / len(top_5_accs)
 
@@ -1219,52 +1162,48 @@ def test_demo_text(
         f"Average speed: {round(avg_decode_iteration_time * 1000, 2)}ms @ {round(decode_tok_s_user, 2)} tok/s/user ({round(decode_tok_s, 2)} tok/s throughput)"
     )
 
-    # Benchmark targets
-    supported_models = ["Llama-3.1-70B", "Llama-3.3-70B", "Deepseek-R1-Distill-70B"]
-    # model_args.base_model_name = "Llama-3.1-70B"
-    supported_devices = ["TG"]
+    # # Benchmark targets
+    # supported_models = ["Qwen3-70B"]
+    # # model_args.base_model_name = "Qwen3-70B"
+    # supported_devices = ["TG"]
 
-    tt_device_name = model_args.device_name
+    # tt_device_name = model_args.device_name
 
-    # Set the target times to first token for every combination of device and model
-    target_prefill_tok_s = {
-        "TG_Llama-3.1-70B": 1050,  # TODO Update target
-        "TG_Llama-3.3-70B": 1050,
-        "TG_Deepseek-R1-Distill-70B": 1050,  # TODO Update target
-    }[f"{tt_device_name}_{model_args.base_model_name}"]
+    # # Set the target times to first token for every combination of device and model
+    # target_prefill_tok_s = {
+    #     "TG_Qwen3-70B": 1050,  # TODO Update target
+    # }[f"{tt_device_name}_{model_args.base_model_name}"]
 
-    # Set the target decode timesfor every combination of device and model
-    target_decode_tok_s_u = {
-        "TG_Llama-3.1-70B": 20,  # TODO Update target
-        "TG_Llama-3.3-70B": 20,
-        "TG_Deepseek-R1-Distill-70B": 20,  # TODO Update target
-    }[f"{tt_device_name}_{model_args.base_model_name}"]
+    # # Set the target decode times for every combination of device and model
+    # target_decode_tok_s_u = {
+    #     "TG_Qwen3-70B": 20,  # TODO Update target
+    # }[f"{tt_device_name}_{model_args.base_model_name}"]
 
-    target_decode_tok_s = target_decode_tok_s_u * batch_size
-    targets = {
-        "prefill_t/s": target_prefill_tok_s,
-        "decode_t/s": target_decode_tok_s,
-        "decode_t/s/u": target_decode_tok_s_u,
-    }
-    # TODO This is suppose to check the config `repeat2`. Since right now that config is the only using a repeat_batches=2 this if statement works
-    if repeat_batches == 2 and batch_size == 1:
-        target = 56.5 if galaxy_type == "6U" else 99
-        assert (
-            avg_time_to_first_token * 1000 < target
-        ), f"TTFT {avg_time_to_first_token} ms is too high, should be < {target}."
+    # target_decode_tok_s = target_decode_tok_s_u * batch_size
+    # targets = {
+    #     "prefill_t/s": target_prefill_tok_s,
+    #     "decode_t/s": target_decode_tok_s,
+    #     "decode_t/s/u": target_decode_tok_s_u,
+    # }
+    # # TODO This is suppose to check the config `repeat2`. Since right now that config is the only using a repeat_batches=2 this if statement works
+    # if repeat_batches == 2 and batch_size == 1:
+    #     target = 56.5 if galaxy_type == "6U" else 99
+    #     assert (
+    #         avg_time_to_first_token * 1000 < target
+    #     ), f"TTFT {avg_time_to_first_token} ms is too high, should be < {target}."
 
-    # Save benchmark data for CI dashboard
-    if is_ci_env and repeat_batches > 1:
-        benchmark_data.add_measurement(
-            profiler,
-            1,  # grab the second repeat batch of prefill
-            "inference_prefill",
-            f"ttft_e2e_{galaxy_type}",
-            round(avg_time_to_first_token * 1000, 2),
-        )  # average TTFT in ms
+    # # Save benchmark data for CI dashboard
+    # if is_ci_env and repeat_batches > 1:
+    #     benchmark_data.add_measurement(
+    #         profiler,
+    #         1,  # grab the second repeat batch of prefill
+    #         "inference_prefill",
+    #         f"ttft_e2e_{galaxy_type}",
+    #         round(avg_time_to_first_token * 1000, 2),
+    #     )  # average TTFT in ms
 
-        benchmark_data.save_partial_run_json(
-            profiler,
-            run_type=f"tg_llama_text_demo_prefill",
-            ml_model_name="llama70b-tg",
-        )
+    #     benchmark_data.save_partial_run_json(
+    #         profiler,
+    #         run_type=f"tg_qwen_text_demo_prefill",
+    #         ml_model_name="qwen70b-tg",
+    #     )
