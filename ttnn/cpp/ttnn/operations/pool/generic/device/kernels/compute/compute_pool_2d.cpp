@@ -62,7 +62,7 @@ void MAIN {
     constexpr uint32_t right_inc = get_compile_time_arg_val(23);
     constexpr uint32_t down_left_wrap_inc = get_compile_time_arg_val(24);
     constexpr uint32_t in_w_padded = get_compile_time_arg_val(25);
-    constexpr uint32_t kernel_w = get_compile_time_arg_val(26);
+    constexpr uint32_t eff_kernel_w = get_compile_time_arg_val(26);
     constexpr uint32_t pad_l = get_compile_time_arg_val(27);
     constexpr uint32_t sync_cb_id = get_compile_time_arg_val(28);
 
@@ -202,7 +202,7 @@ void MAIN {
 
                     // update the current index column
                     if (last_c_block) {
-                        if (current_idx_col + right_inc + kernel_w > in_w_padded) {
+                        if (current_idx_col + right_inc + eff_kernel_w > in_w_padded) {
                             // we reached the edge, wrap down and to the left
                             current_idx_col = 0;
                             copy_tile(down_left_wrap_inc_tmp_cb_id, topk_cb_tile_idx, inc_dst_idx);
