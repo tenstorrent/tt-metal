@@ -1868,3 +1868,125 @@ def test_inf_nan_check(ttnn_op, torch_dtype, ttnn_dtype, device):
     golden_tensor = golden_function(in_data)
 
     assert torch.equal(golden_tensor, ttnn.to_torch(output_tensor))
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([100])),
+        (torch.Size([64, 32])),
+        (torch.Size([3, 128, 32])),
+        (torch.Size([1, 3, 320, 384])),
+        (torch.Size([1, 1, 32, 320, 12])),
+    ),
+)
+@pytest.mark.parametrize(
+    "torch_dtype, ttnn_dtype",
+    [
+        (torch.float32, ttnn.float32),
+        (torch.bfloat16, ttnn.bfloat16),
+        (torch.bfloat16, ttnn.bfloat8_b),
+    ],
+)
+@pytest.mark.parametrize("negative_slope", [0.01, 0.1, 1.0, 5.75, 10.0])
+def test_unary_leaky_relu_ttnn(input_shapes, negative_slope, torch_dtype, ttnn_dtype, device):
+    in_data = torch.empty(input_shapes, dtype=torch_dtype).uniform_(-100, 100)
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    if ttnn_dtype == ttnn.bfloat8_b:
+        in_data = ttnn.to_torch(input_tensor, dtype=torch_dtype)
+
+    output_tensor = ttnn.leaky_relu(input_tensor, negative_slope=negative_slope)
+    golden_function = ttnn.get_golden_function(ttnn.leaky_relu)
+    golden_tensor = golden_function(in_data, negative_slope=negative_slope)
+
+    if ttnn_dtype == ttnn.bfloat8_b:
+        assert_with_pcc(ttnn.to_torch(output_tensor), golden_tensor, pcc=0.999)
+    else:
+        assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=1)
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([100])),
+        (torch.Size([10, 10])),
+        (torch.Size([3, 128, 32])),
+        (torch.Size([1, 1, 102400, 32])),
+        (torch.Size([1, 1, 102400, 64])),
+        (torch.Size([1, 1, 400, 512])),
+    ),
+)
+@pytest.mark.parametrize(
+    "torch_dtype, ttnn_dtype",
+    [
+        (torch.bfloat16, ttnn.bfloat16),
+        (torch.float32, ttnn.float32),
+    ],
+)
+def test_unary_hardmish(input_shapes, torch_dtype, ttnn_dtype, device):
+    in_data1 = create_full_range_tensor(input_shapes, torch_dtype)
+
+    # limit the range to avoid overflow in hardmish
+    in_data1 = in_data1[(in_data1 + 2.8).abs() < 3.3e38 / 5]
+
+    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output_tensor = ttnn.hardmish(input_tensor1)
+    golden_function = ttnn.get_golden_function(ttnn.hardmish)
+
+    golden_tensor = golden_function(in_data1, device=device)
+    tt_res = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(tt_res, golden_tensor, pcc=0.9999)
+
+
+def test_hardmish_bfloat16_ulp(device):
+    # Generate all possible bit pattersn for bf16
+    all_bitpatterns = torch.arange(0, 2**16, dtype=torch.int32).to(torch.uint16)
+    input_tensor = all_bitpatterns.view(torch.bfloat16)
+    input_tensor = input_tensor.to(torch.float32)
+
+    # Mask NaN, special values where hardmish has ULP>1 (Covered in atol test below).
+    mask = (
+        torch.isnan(input_tensor)
+        | ((input_tensor >= -2.0847e-23) & (input_tensor <= 2.0939e-23))
+        | (input_tensor == -0.0)
+        | (input_tensor >= 6.8122e37)
+        | (input_tensor == -torch.inf)
+    )
+    input_tensor[mask] = 0.0
+
+    tt_in = ttnn.from_torch(
+        input_tensor,
+        dtype=ttnn.float32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    golden_function = ttnn.get_golden_function(ttnn.hardmish)
+    golden = golden_function(input_tensor, device=device)
+
+    tt_result = ttnn.hardmish(tt_in)
+    result = ttnn.to_torch(tt_result)
+    assert_with_ulp(golden, result, 1, allow_nonfinite=True)
+
+
+def test_hardmish_bfloat16_allclose(device):
+    # Generate all possible bit pattersn for bf16
+    all_bitpatterns = torch.arange(0, 2**16, dtype=torch.int32).to(torch.uint16)
+    input_tensor = all_bitpatterns.view(torch.bfloat16)
+    input_tensor = input_tensor.to(torch.float32)
+
+    tt_in = ttnn.from_torch(
+        input_tensor,
+        dtype=ttnn.float32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    golden_function = ttnn.get_golden_function(ttnn.hardmish)
+    golden = golden_function(input_tensor, device=device)
+
+    tt_result = ttnn.hardmish(tt_in)
+    result = ttnn.to_torch(tt_result)
+    assert_allclose(golden, result, rtol=1e-05, atol=1e-35)

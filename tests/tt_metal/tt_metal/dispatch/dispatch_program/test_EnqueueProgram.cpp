@@ -1463,31 +1463,6 @@ TEST_F(UnitMeshCQFixture, TensixTestRuntimeArgsCorrectlySentSingleCore) {
     }
 }
 
-auto CQFabricConfigsToTest = ::testing::Values(
-    tt::tt_fabric::FabricConfig::FABRIC_1D,
-    tt::tt_fabric::FabricConfig::FABRIC_1D_RING,
-    tt::tt_fabric::FabricConfig::FABRIC_2D,
-    tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC);
-
-INSTANTIATE_TEST_SUITE_P(CommandQueueMultiDevice, DISABLED_CQMultiDeviceOnFabricFixture, CQFabricConfigsToTest);
-
-INSTANTIATE_TEST_SUITE_P(
-    MultiCommandQueueMultiDevice, DISABLED_UnitMeshMultiCQMultiDeviceOnFabricFixture, CQFabricConfigsToTest);
-
-TEST_P(DISABLED_CQMultiDeviceOnFabricFixture, TensixTestBasicDispatchFunctions) {
-    for (const auto& device : devices_) {
-        local_test_functions::test_basic_dispatch_functions(device, 0);
-    }
-}
-
-TEST_P(DISABLED_UnitMeshMultiCQMultiDeviceOnFabricFixture, TensixTestBasicDispatchFunctions) {
-    for (const auto& device : devices_) {
-        for (uint32_t cq_id = 0; cq_id < device->num_hw_cqs(); ++cq_id) {
-            local_test_functions::test_basic_dispatch_functions(device, cq_id);
-        }
-    }
-}
-
 }  // end namespace single_core_tests
 
 namespace multicore_tests {
