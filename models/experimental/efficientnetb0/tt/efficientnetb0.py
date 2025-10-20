@@ -482,9 +482,10 @@ class Efficientnetb0:
 
         x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
         # Global average pooling: use avg_pool2d with kernel_size = input spatial dimensions
-        N, H, W, C = x.shape
+        N, _, HW, C = x.shape
+        H = int(math.sqrt(HW))
         x = ttnn.avg_pool2d(
-            x, batch_size=N, input_h=H, input_w=W, channels=C, kernel_size=(H, W), stride=(H, W), padding=(0, 0)
+            x, batch_size=N, input_h=H, input_w=H, channels=C, kernel_size=(H, H), stride=(1, 1), padding=(0, 0)
         )
 
         x = ttnn.reshape(x, (1, -1))

@@ -109,10 +109,11 @@ static std::vector<Tensor> pool2d_invoke(
     // Check if this is a global pooling case that can use reduce operations directly
     bool bypass_to_reduce = is_global_pool(input_h, input_w, kernel_size, stride, padding_4d, count_include_pad);
 
-    if (bypass_to_reduce) {
+    // Reduce op does not support batch size greater than 1
+    if (bypass_to_reduce && batch_size == 1) {
         return {ttnn::operations::reduction::pool(
             pool_type,
-            input_tensor,
+            input_tensor_flattened,
             int(input_shape.rank() - 2),
             memory_config,
             std::nullopt,
