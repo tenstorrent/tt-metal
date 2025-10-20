@@ -7,9 +7,18 @@ import pytest
 from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
-from tests.nightly.t3000.ccl.test_minimal_all_gather_async import is_unsupported_case_t3k
+from tests.nightly.t3000.ccl.test_minimal_all_gather_async import is_unsupported_case
 from tests.tests_common.skip_reasons import LEGACY_CCL_SKIP
 from ttnn.distributed.distributed import ShardTensorToMesh
+
+
+def is_unsupported_case_t3k(input_shape, dim, mem_config, num_devices, num_links, input_dtype, layout, tile):
+    if num_devices < 2:
+        return True, "Requires multiple devices to run"
+    elif num_devices == 2 and num_links <= 2:
+        return True, "Not enough links to run"
+
+    return is_unsupported_case(input_shape, dim, mem_config, num_devices, num_links, input_dtype, layout, tile)
 
 
 def sharded_impl(
