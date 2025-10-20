@@ -786,7 +786,7 @@ void FDMeshCommandQueue::copy_buffer_data_to_user_space(MeshBufferReadDescriptor
     auto reader_lambda = [this](IDevice* device, uint32_t num_reads) {
         ZoneScopedN("copy_buffer_data_to_user_space lambda");
         auto& read_descriptor_queue = this->get_read_descriptor_queue(device);
-        chip_id_t mmio_device_id =
+        ChipId mmio_device_id =
             tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device->id());
         uint16_t channel =
             tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device->id());
@@ -826,7 +826,7 @@ void FDMeshCommandQueue::read_completion_queue_event(MeshReadEventDescriptor& re
     auto& device_range = read_event_descriptor.device_range;
     for_each_local(mesh_device_, device_range, [&](const auto& coord) {
         auto device = mesh_device_->get_device(coord);
-        chip_id_t mmio_device_id =
+        ChipId mmio_device_id =
             tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device->id());
         uint16_t channel =
             tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device->id());
@@ -847,7 +847,7 @@ void FDMeshCommandQueue::read_l1_data_from_completion_queue(MeshCoreDataReadDesc
         return;
     }
     IDevice* device = mesh_device_->get_device(read_l1_data_descriptor.device_coord);
-    const chip_id_t mmio_device_id =
+    const ChipId mmio_device_id =
         tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device->id());
     const uint16_t channel =
         tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device->id());

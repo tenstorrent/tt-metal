@@ -684,7 +684,7 @@ static int pgm_dispatch(T& state, TestInfo info) {
     bool pass = true;
     std::shared_ptr<MeshDevice> mesh_device;
     try {
-        const chip_id_t device_id = 0;
+        const ChipId device_id = 0;
         const std::size_t cq_id = 0;
         DispatchCoreType dispatch_core_type = info.dispatch_from_eth ? DispatchCoreType::ETH : DispatchCoreType::WORKER;
         mesh_device = MeshDevice::create_unit_mesh(

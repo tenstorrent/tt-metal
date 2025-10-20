@@ -954,7 +954,7 @@ std::shared_ptr<tt::tt_metal::CompletionReaderVariant> generate_interleaved_buff
 
 void copy_completion_queue_data_into_user_space(
     const ReadBufferDescriptor& read_buffer_descriptor,
-    chip_id_t mmio_device_id,
+    ChipId mmio_device_id,
     uint16_t channel,
     uint32_t cq_id,
     SystemMemoryManager& sysmem_manager,
